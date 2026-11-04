@@ -1,0 +1,18 @@
+.env
+.env.*
+!.env.example
+node_modules/
+dist/
+.next/
+coverage/
+*.log
+
+# Real financial data must never be committed.
+data/
+imports/
+exports/
+fixtures/private/
+
+# Mock v2: anything derived from real exports stays local.
+/mock-v2/private/
+/sample-data/private/

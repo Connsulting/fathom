@@ -1,0 +1,125 @@
+/* Review harness and figure popover. A review tool, not product UI.
+   Everything is scoped under .fx-harness and .fx-pop, except the three page-level rules
+   directly below (body reset, dark color scheme, #app offset for the fixed bar). */
+
+:root { --fx-harness-h: 40px; }
+html { color-scheme: dark; }
+body { margin: 0; background: #0b0c0e; }
+body > #app { box-sizing: border-box; padding-top: var(--fx-harness-h); }
+
+/* ---------- harness bar ---------- */
+
+.fx-harness {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 9000;
+  height: var(--fx-harness-h); box-sizing: border-box;
+  background: #0e0f12; color: #8a909b;
+  border-bottom: 1px dashed #2f333b;
+  font: 11px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  letter-spacing: 0.01em;
+}
+.fx-harness *, .fx-harness *::before, .fx-harness *::after { box-sizing: border-box; }
+
+.fx-harness .fx-h-row {
+  display: flex; align-items: center; gap: 12px;
+  height: 100%; padding: 0 12px;
+}
+.fx-harness .fx-h-tag {
+  flex: none; padding: 3px 6px; border: 1px solid #3a3f48; border-radius: 3px;
+  color: #aab0ba; font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase;
+}
+.fx-harness .fx-h-group { display: flex; align-items: center; gap: 7px; flex: none; margin: 0; }
+.fx-harness .fx-h-lab { color: #5f6570; text-transform: uppercase; font-size: 9.5px; letter-spacing: 0.08em; }
+
+.fx-harness select.fx-h-design {
+  height: 26px; padding: 0 22px 0 8px; margin: 0; max-width: 100%;
+  background-color: #15171b; color: #c9cdd4;
+  border: 1px solid #2a2e36; border-radius: 4px;
+  font: inherit; font-size: 11.5px;
+  appearance: none; -webkit-appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, #7b8190 50%), linear-gradient(135deg, #7b8190 50%, transparent 50%);
+  background-position: calc(100% - 12px) 11px, calc(100% - 8px) 11px;
+  background-size: 4px 4px, 4px 4px; background-repeat: no-repeat;
+}
+.fx-harness select.fx-h-design option { background: #15171b; color: #c9cdd4; }
+
+.fx-harness .fx-h-rest { display: flex; align-items: center; gap: 14px; flex: 1; min-width: 0; }
+
+.fx-harness .fx-h-seg { display: flex; border: 1px solid #2a2e36; border-radius: 4px; overflow: hidden; }
+.fx-harness .fx-h-seg button {
+  all: unset; box-sizing: border-box; cursor: pointer;
+  padding: 0 8px; height: 24px; line-height: 24px; white-space: nowrap;
+  color: #8a909b; font: inherit; font-size: 11px; border-right: 1px solid #2a2e36;
+}
+.fx-harness .fx-h-seg button:last-child { border-right: 0; }
+.fx-harness .fx-h-seg button:hover { color: #c9cdd4; background: #15171b; }
+.fx-harness .fx-h-seg button[aria-pressed="true"] { background: #252932; color: #eceef2; }
+
+.fx-harness .fx-h-btn {
+  all: unset; box-sizing: border-box; cursor: pointer; flex: none;
+  height: 26px; line-height: 24px; padding: 0 10px; white-space: nowrap;
+  border: 1px solid #2a2e36; border-radius: 4px; color: #aab0ba; font: inherit; font-size: 11px;
+}
+.fx-harness .fx-h-btn:hover { color: #eceef2; background: #15171b; }
+.fx-harness .fx-h-eng[aria-pressed="true"]::before,
+.fx-harness .fx-h-eng[aria-pressed="false"]::before {
+  content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+  margin-right: 7px; vertical-align: 0;
+}
+.fx-harness .fx-h-eng[aria-pressed="true"]::before { background: #6fae82; }
+.fx-harness .fx-h-eng[aria-pressed="false"]::before { background: #c58467; }
+
+.fx-harness .fx-h-src {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: #6c727d; text-align: right;
+}
+
+.fx-harness .fx-h-more {
+  all: unset; box-sizing: border-box; cursor: pointer; display: none;
+  margin-left: auto; height: 26px; min-width: 34px; line-height: 22px; padding: 0 9px; text-align: center;
+  border: 1px solid #2a2e36; border-radius: 4px; color: #aab0ba; font: inherit; font-size: 13px; letter-spacing: 0.1em;
+}
+.fx-harness .fx-h-more[aria-expanded="true"] { background: #252932; color: #eceef2; }
+
+.fx-harness button:focus-visible, .fx-harness select:focus-visible {
+  outline: 1px solid #8b94a5; outline-offset: 1px;
+}
+
+/* Collapsed: design dropdown plus a "..." button; the rest opens as a panel under the bar. */
+@media (max-width: 1099px) {
+  .fx-harness .fx-h-more { display: inline-block; }
+  .fx-harness .fx-h-design-group { flex: 1; min-width: 0; }
+  .fx-harness select.fx-h-design { flex: 1; min-width: 0; }
+  .fx-harness .fx-h-rest {
+    display: none; position: absolute; top: var(--fx-harness-h); left: 0; right: 0;
+    flex-wrap: wrap; align-items: flex-start; gap: 10px; padding: 12px;
+    background: #0e0f12; border-bottom: 1px dashed #2f333b;
+  }
+  .fx-harness.fx-open .fx-h-rest { display: flex; }
+  .fx-harness .fx-h-group.fx-h-state { flex-direction: column; align-items: stretch; width: 100%; gap: 6px; }
+  .fx-harness .fx-h-seg { flex-wrap: wrap; border: 0; border-radius: 0; overflow: visible; gap: 6px; }
+  .fx-harness .fx-h-seg button { border: 1px solid #2a2e36; border-radius: 4px; }
+  .fx-harness .fx-h-src { order: 3; flex: 1 1 100%; text-align: left; white-space: normal; line-height: 1.5; }
+}
+@media (max-width: 520px) {
+  .fx-harness .fx-h-row { gap: 8px; padding: 0 8px; }
+  .fx-harness .fx-h-design-group .fx-h-lab { display: none; }
+}
+
+/* ---------- figure popover ---------- */
+
+.fx-pop {
+  position: fixed; z-index: 9500; box-sizing: border-box;
+  width: max-content; max-width: min(280px, calc(100vw - 16px));
+  padding: 10px 12px; border-radius: 8px;
+  background: #14161a; color: #d8dce3; border: 1px solid #2c3039;
+  font: 12.5px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  text-align: left; font-weight: 400; letter-spacing: 0; text-transform: none;
+}
+.fx-pop .fx-pop-label { color: #9aa1ad; font-size: 11.5px; }
+.fx-pop .fx-pop-val {
+  margin: 2px 0 8px; color: #f1f3f6; font-size: 17px; line-height: 1.2;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-variant-numeric: tabular-nums;
+}
+.fx-pop .fx-pop-row { display: flex; gap: 10px; margin-top: 3px; }
+.fx-pop .fx-pop-k { flex: none; width: 44px; color: #6c727d; font-size: 11px; padding-top: 1px; }
+.fx-pop .fx-pop-v { flex: 1; min-width: 0; color: #c4c9d1; }

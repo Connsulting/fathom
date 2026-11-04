@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Fathom</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="core/harness.css">
+<!-- A missing design stylesheet is harmless: the link simply 404s. -->
+<link rel="stylesheet" href="designs/ledger/design.css">
+<link rel="stylesheet" href="designs/console/design.css">
+<link rel="stylesheet" href="designs/horizon/design.css">
+<link rel="stylesheet" href="designs/thread/design.css">
+</head>
+<body>
+<div class="fx-harness"></div>
+<div id="app"></div>
+
+<!-- Scenario: the real one (gitignored) first, the synthetic one when it is absent or fails.
+     document.write keeps this synchronous so the modules below always see the scenario. -->
+<script>
+  window.addEventListener('error', function (e) {
+    if (e.filename && /private\/scenario\.js/.test(e.filename)) window.__fxPrivateFailed = true;
+  });
+</script>
+<script src="private/scenario.js" onerror="window.__fxPrivateFailed = true"></script>
+<script>
+  if (window.__fxPrivateFailed || !window.FATHOM_SCENARIO) {
+    window.FATHOM_SCENARIO = undefined;
+    window.FATHOM_SCENARIO_SOURCE = undefined;
+    document.write('<script src="scenario/example.js"><\/script>');
+  }
+</script>
+
+<!-- Core first, then every design. A design file that is missing or throws does not stop the others. -->
+<script type="module" src="core/core.js"></script>
+<script type="module" src="designs/ledger/design.js"></script>
+<script type="module" src="designs/console/design.js"></script>
+<script type="module" src="designs/horizon/design.js"></script>
+<script type="module" src="designs/thread/design.js"></script>
+</body>
+</html>
