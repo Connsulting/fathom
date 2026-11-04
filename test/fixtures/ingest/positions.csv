@@ -1,8 +1,8 @@
 Account number,Account name,Symbol,Description,Quantity,Last price,Last price change,Current value,Today's gain/loss dollar,Today's gain/loss percent,Total gain/loss dollar,Total gain/loss percent,Percent of account,Cost basis total,Average cost basis,Type
 Z8877665544,Long term,DEMO,Example Fund,3.125,$24.00,+0.20,$75.00,0,0,0,0,50%,$65.25,$20.88,Cash
-Z8877665544,Long term,CASH**,HELD IN MONEY MARKET,,,$0.00,$125.75,,,,,,,Cash
-Z8877665544,Long term,,Pending activity,,,,($5.25),,,,,,,Cash
-Z8877665544,Long term,BAD,Broken position,nope,$10.00,0,$10.00,,,,,,,
+Z8877665544,Long term,CASH**,HELD IN MONEY MARKET,,,$0.00,$125.75,,,,,,,Cash,
+Z8877665544,Long term,,Pending activity,,,,($5.25),,,,,,,Cash,
+Z8877665544,Long term,BAD,Broken position,nope,$10.00,0,$10.00,,,,,,,,
 
 Informational footer only
 Date downloaded Mar-05-2032 10:00 a.m ET

@@ -79,6 +79,13 @@ test('malformed CSV records warn and leave valid neighboring rows intact', () =>
   assert.ok(!JSON.stringify(result.warnings).includes('Unclosed'));
 });
 
+test('exporter trailing empty columns are accepted, nonempty extra columns warn', () => {
+  const file = textFile('Chase7766_Activity.csv', 'Details,Posting Date,Description,Amount,Type,Balance,Check or Slip #\nDEBIT,03/01/2032,Valid,-1,OTHER,,,\nDEBIT,03/02/2032,Invalid,-2,OTHER,,,extra\n');
+  const result = pickParser(file).parse(file);
+  assert.equal(result.rows.length, 1);
+  assert.equal(result.warnings[0].code, 'column_count');
+});
+
 test('missing bank mask warns without storing filename or inventing identity', () => {
   const file = fixture('Chase7766_Activity_20320305.csv');
   file.name = 'activity.csv';
@@ -113,6 +120,14 @@ test('positions accept filename as-of dates and reject ungrounded dates', () => 
   assert.ok(result.warnings.some((w) => w.code === 'missing_as_of'));
 });
 
+test('pending activity may appear in the brokerage symbol column', () => {
+  const file = fixture('positions.csv');
+  file.bytes = new TextEncoder().encode(new TextDecoder().decode(file.bytes).replace(',,Pending activity,', ',Pending activity,,'));
+  const result = pickParser(file).parse(file);
+  assert.equal(result.rows.length, 2);
+  assert.ok(result.warnings.some((w) => w.code === 'pending_activity'));
+});
+
 test('P&L aggregates actual detailed sheets by entity, category and month', () => {
   const { rows, warnings } = run('business-pnl.xlsx');
   assert.equal(rows.length, 3);
@@ -136,6 +151,33 @@ test('monthly tax matrix keeps both payers, ignores safe-harbor totals and recor
   assert.equal(rows.filter((row) => row.taxYear === 2031).length, 2);
   assert.ok(warnings.some((w) => w.code === 'month_precision'));
   assert.ok(warnings.some((w) => w.code === 'invalid_tax_payment'));
+  const payment = rows.find((row) => row.payer === 'Owner');
+  assert.notEqual(dedupeKey(payment), dedupeKey({ ...payment, payer: 'Spouse' }));
+});
+
+test('Excel date epochs and cached formulas produce grounded monthly figures', () => {
+  for (const name of ['pnl-epoch-1900.xlsx', 'pnl-epoch-1904.xlsx']) {
+    const { rows, warnings } = run(name);
+    assert.equal(rows.length, 2);
+    assert.equal(rows[0].period, '2032-02');
+    assert.equal(rows[0].amount, 400);
+    assert.equal(rows[1].period, '2032-03');
+    assert.equal(rows[1].amount, 125.25);
+    assert.equal(warnings.length, 0);
+  }
+});
+
+test('invalid XML and corrupt archives fall back, while valid workbooks remain live', () => {
+  for (const name of ['invalid-xml.xlsx', 'corrupt-archive.xlsx']) {
+    const file = fixture(name);
+    assert.equal(pickParser(file), null);
+    for (const id of ['pnl-workbook', 'tax-payments']) {
+      const result = parsers.find((parser) => parser.id === id).parse(file);
+      assert.deepEqual(result.rows, []);
+      assert.equal(result.warnings[0].code, 'malformed_workbook');
+    }
+  }
+  assert.equal(pickParser(fixture('business-pnl.xlsx')).id, 'pnl-workbook');
 });
 
 test('balances use actual month end including leap years and expose account metadata', () => {
