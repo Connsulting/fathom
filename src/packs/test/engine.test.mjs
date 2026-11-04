@@ -13,7 +13,7 @@ const manifest = (overrides = {}) => ({
   reviewed: '2026-01-01', curator: 'Synthetic editorial fixture', covers: ['Planning'],
   appliesWhen: rule('income.sCorp'), suggestWhen: rule('income.selfEmployed'),
   whatIf: { prompt: 'What changes if the owner becomes self-employed?' },
-  entries: [{ file: 'overview.md', title: 'Overview', cites: [cite] }], ...overrides,
+  entries: [{ file: 'overview.md', title: 'Overview', cites: [{ ...cite }] }], ...overrides,
 });
 function scratch(t) {
   const root = mkdtempSync(join(tmpdir(), 'pack-tests-'));
@@ -43,7 +43,7 @@ test('discovers immediate packs, direct packs and a synthetic mounted private pa
   const packs = loadPacks([root, privateDir]);
   assert.deepEqual(packs.map((p) => p.id), ['a-pack', 'b-pack', 'your-plans']);
   assert.equal(loadPacks([join(root, 'a')])[0].id, 'a-pack');
-  assert.deepEqual(loadPacks([join(root, 'unrelated', 'nested', 'empty')].filter(() => false)), []);
+  assert.deepEqual(loadPacks([]), []);
   const empty = join(root, 'empty');
   mkdirSync(empty);
   assert.deepEqual(loadPacks([empty]), []);
@@ -160,7 +160,7 @@ test('invalid tagged unions and operands fail even in short-circuited branches',
     { fact: '', op: 'eq', value: true }, { fact: 'x', op: 'execute', value: true },
     { fact: 'x', op: 'eq' }, { fact: 'x', op: 'exists', value: true },
     rule('x', 'in', 1), rule('x', 'gt', '1'), rule('x', 'gt', Infinity),
-    { ...rule('x'), extra: true }, rule('x', 'eq', undefined)];
+    { ...rule('x'), extra: true }, { fact: 'x', op: 'eq', value: undefined }];
   for (const condition of invalid) {
     assert.throws(() => evaluate(condition, { x: true }));
     assert.throws(() => evaluate({ any: [rule('x'), condition] }, { x: true }));

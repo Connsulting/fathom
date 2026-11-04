@@ -71,7 +71,7 @@ test('public entries cover the frozen required subjects without imposing file st
 });
 
 test('frozen synthetic facts activate relevant packs and suggest giving for high AGI without giving', () => {
-  const facts = { 'household.state': 'VA', 'household.filingStatus': 'married-joint', 'household.dependents': 1,
+  const facts = { 'household.state': 'VA', 'household.filingStatus': 'mfj', 'household.dependents': 1,
     'household.expectingChild': true, 'household.dependentAges': [4], 'income.w2': true, 'income.sCorp': true,
     'income.selfEmployed': true, 'income.partnership': true, 'income.agiEstimate': 400000,
     'benefits.hsa': true, 'benefits.employer401k': true, 'retirement.solo401k': true, 'retirement.ira': true,
