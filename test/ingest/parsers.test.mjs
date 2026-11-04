@@ -1,0 +1,192 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { parsers, listParsers, pickParser } from '../../src/ingest/registry.mjs';
+import { dedupeKey } from '../../src/ingest/dedupe.mjs';
+
+const fixture = (name) => ({ name, bytes: readFileSync(new URL(`../fixtures/ingest/${name}`, import.meta.url)) });
+const textFile = (name, text, mime) => ({ name, bytes: new TextEncoder().encode(text), mime });
+const run = (name) => pickParser(fixture(name)).parse(fixture(name));
+
+const cases = [
+  ['aggregator.csv', 'aggregator'],
+  ['Chase7766_Activity_20320305.csv', 'chase-activity'],
+  ['positions.csv', 'brokerage-positions'],
+  ['business-pnl.xlsx', 'pnl-workbook'],
+  ['tax-payments.xlsx', 'tax-payments'],
+  ['month-end-balances.csv', 'balances'],
+  ['account-map.csv', 'account-map'],
+  ['notes.md', 'notes'],
+];
+
+for (const [name, id] of cases) {
+  test(`registry discriminates ${id} and exposes frozen interface`, () => {
+    const file = fixture(name);
+    const parser = pickParser(file);
+    assert.equal(parser.id, id);
+    assert.equal(typeof parser.label, 'string');
+    assert.equal(typeof parser.sourceKind, 'string');
+    for (const candidate of parsers) {
+      const score = candidate.sniff(file);
+      assert.ok(Number.isFinite(score) && score >= 0 && score <= 1);
+    }
+    const result = parser.parse(file);
+    assert.ok(result.rows.length > 0);
+    assert.ok(result.rows.every((row) => row.kind && row.locator));
+    assert.deepEqual(Object.keys(result.period).sort(), ['from', 'to']);
+  });
+}
+
+test('aggregator converts outflows, preserves posted date and masks account numbers', () => {
+  const { rows, warnings, period } = run('aggregator.csv');
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].kind, 'transaction');
+  assert.equal(rows[0].amount, -42.35);
+  assert.equal(rows[1].amount, 900.50);
+  assert.equal(rows[0].date, '2032-02-29');
+  assert.equal(rows[0].account.mask, '7766');
+  assert.equal(rows[0].category, 'Shopping');
+  assert.equal(rows[0].locator.row, 2);
+  assert.equal(warnings.length, 2);
+  assert.deepEqual(period, { from: '2032-02-29', to: '2032-03-01' });
+  assert.ok(!JSON.stringify(rows).includes('9911227766'));
+});
+
+test('bank retains signed transactions and running balance provenance', () => {
+  const { rows, warnings } = run('Chase7766_Activity_20320305.csv');
+  const tx = rows.filter((row) => row.kind === 'transaction');
+  const balances = rows.filter((row) => row.kind === 'balance');
+  assert.deepEqual(tx.map((row) => row.amount), [-42.35, 900.50, -10]);
+  assert.deepEqual(balances.map((row) => row.amount), [1400.25, 2300.75]);
+  assert.equal(tx[0].account.mask, '7766');
+  assert.equal(balances[0].locator.row, 2);
+  assert.ok(warnings.length >= 2);
+});
+
+test('CSV handles BOM, CRLF, casing, quoted commas and embedded newlines', () => {
+  const file = textFile('Chase7766_Activity.csv', '\ufeffdetails,posting date,description,amount,type,balance,check or slip #\r\nDEBIT,03/04/2032,"A, ""quoted""\nshop",-12.50,OTHER,,\r\n');
+  const result = pickParser(file).parse(file);
+  assert.equal(result.rows.length, 1);
+  assert.equal(result.rows[0].description, 'A, "quoted"\nshop');
+  assert.equal(result.warnings.length, 0);
+});
+
+test('malformed CSV records warn and leave valid neighboring rows intact', () => {
+  const file = textFile('Chase7766_Activity.csv', 'Details,Posting Date,Description,Amount,Type,Balance,Check or Slip #\nDEBIT,03/01/2032,Valid,-1,OTHER,,\nDEBIT,03/02/2032,Too short\nDEBIT,03/03/2032,"Unclosed,-2,OTHER,,');
+  const result = pickParser(file).parse(file);
+  assert.equal(result.rows.length, 1);
+  assert.ok(result.warnings.length >= 2);
+  assert.ok(!JSON.stringify(result.warnings).includes('Unclosed'));
+});
+
+test('missing bank mask warns without storing filename or inventing identity', () => {
+  const file = fixture('Chase7766_Activity_20320305.csv');
+  file.name = 'activity.csv';
+  const result = pickParser(file).parse(file);
+  assert.equal(result.rows[0].account.mask, '');
+  assert.ok(result.warnings.some((w) => w.code === 'missing_account_mask'));
+});
+
+test('positions handle fractional shares, cash, pending rows and content as-of date', () => {
+  const { rows, warnings, period } = run('positions.csv');
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].account.mask, '5544');
+  assert.equal(rows[0].asOf, '2032-03-05');
+  assert.equal(rows[0].quantity, 3.125);
+  assert.equal(rows[0].price, 24);
+  assert.equal(rows[0].costBasis, 65.25);
+  assert.equal(rows[1].value, 125.75);
+  assert.equal(rows[1].symbol, 'CASH');
+  assert.ok(warnings.some((w) => w.code === 'pending_activity'));
+  assert.ok(warnings.some((w) => w.code === 'invalid_position'));
+  assert.deepEqual(period, { from: '2032-03-05', to: '2032-03-05' });
+});
+
+test('positions accept filename as-of dates and reject ungrounded dates', () => {
+  const file = fixture('positions.csv');
+  file.bytes = new TextEncoder().encode(new TextDecoder().decode(file.bytes).replace(/Date downloaded[^\n]+/, ''));
+  file.name = 'positions-2032-04-30.csv';
+  assert.equal(pickParser(file).parse(file).rows[0].asOf, '2032-04-30');
+  file.name = 'positions.csv';
+  const result = pickParser(file).parse(file);
+  assert.equal(result.rows.length, 0);
+  assert.ok(result.warnings.some((w) => w.code === 'missing_as_of'));
+});
+
+test('P&L aggregates actual detailed sheets by entity, category and month', () => {
+  const { rows, warnings } = run('business-pnl.xlsx');
+  assert.equal(rows.length, 3);
+  assert.deepEqual(rows.map((row) => row.kind), ['pnl_line', 'pnl_line', 'pnl_line']);
+  assert.equal(rows.find((row) => row.entity === 'Example Studio' && row.category === 'Income').amount, 400);
+  assert.equal(rows.find((row) => row.category === 'Office supplies').amount, -35);
+  assert.equal(rows.find((row) => row.entity === 'Example Shop').amount, 175.25);
+  assert.ok(rows.every((row) => row.locator.cells.length > 0));
+  assert.ok(warnings.some((w) => w.code === 'formula_without_cache'));
+  assert.ok(warnings.some((w) => w.code === 'invalid_pnl_row'));
+});
+
+test('monthly tax matrix keeps both payers, ignores safe-harbor totals and records precision', () => {
+  const { rows, warnings } = run('tax-payments.xlsx');
+  assert.equal(rows.length, 10);
+  assert.ok(rows.every((row) => row.kind === 'tax_payment' && row.paymentKind === 'paid'));
+  assert.ok(rows.every((row) => row.datePrecision === 'month'));
+  assert.equal(rows.find((row) => row.locator.cell === 'C5').date, '2032-02-29');
+  assert.equal(rows.find((row) => row.locator.cell === 'C6').amount, 425);
+  assert.equal(rows.find((row) => row.locator.cell === 'E6').amount, -10);
+  assert.equal(rows.filter((row) => row.taxYear === 2031).length, 2);
+  assert.ok(warnings.some((w) => w.code === 'month_precision'));
+  assert.ok(warnings.some((w) => w.code === 'invalid_tax_payment'));
+});
+
+test('balances use actual month end including leap years and expose account metadata', () => {
+  const balances = run('month-end-balances.csv');
+  assert.equal(balances.rows.length, 2);
+  assert.equal(balances.rows[0].date, '2032-02-29');
+  assert.equal(balances.rows[0].account.name, 'daily');
+  assert.equal(balances.warnings.length, 2);
+  const metadata = run('account-map.csv');
+  assert.equal(metadata.rows.length, 2);
+  assert.equal(metadata.rows[0].kind, 'document');
+  assert.equal(metadata.rows[0].docType, 'account_metadata');
+  assert.deepEqual(metadata.rows[0].fields, { account: { inst: '', mask: '', name: 'daily', kind: 'checking' }, source: 'direct_export' });
+  assert.equal(metadata.warnings.length, 1);
+});
+
+test('notes retain text as a document without extracting financial facts', () => {
+  const file = fixture('notes.md');
+  const { rows, period, warnings } = pickParser(file).parse(file);
+  assert.deepEqual(rows, [{ kind: 'document', docType: 'notes', fields: { text: new TextDecoder().decode(file.bytes) }, locator: { row: 1 } }]);
+  assert.deepEqual(period, { from: null, to: null });
+  assert.deepEqual(warnings, []);
+});
+
+test('registry declines PDFs, unknowns, broken workbooks, and extension-only claims', () => {
+  for (const file of [textFile('paystub.pdf', '%PDF-1.7'), textFile('trick.md', '%PDF-1.7'), textFile('export.csv', 'x,y\na,b'), textFile('business-pnl.xlsx', 'not a zip'), textFile('tax-payments.xlsx', ''), textFile('notes.md', '\0binary')]) {
+    assert.equal(pickParser(file), null);
+    for (const parser of parsers) assert.doesNotThrow(() => parser.parse(file));
+  }
+  assert.equal(listParsers().length, cases.length);
+  assert.equal(pickParser(fixture('notes.md'), { threshold: 1 }), null);
+});
+
+test('overlapping bank and aggregator transactions collide despite description differences', () => {
+  const aggregator = run('aggregator.csv').rows;
+  const bank = run('Chase7766_Activity_20320305.csv').rows.filter((row) => row.kind === 'transaction');
+  assert.equal(dedupeKey(aggregator[0]), dedupeKey(bank[0]));
+  assert.equal(dedupeKey(aggregator[1]), dedupeKey(bank[1]));
+  const changed = { ...bank[0], amount: -42.36 };
+  assert.notEqual(dedupeKey(changed), dedupeKey(bank[0]));
+  assert.notEqual(dedupeKey({ ...bank[0], date: '2032-03-01' }), dedupeKey(bank[0]));
+  assert.notEqual(dedupeKey({ ...bank[0], account: { inst: 'Chase', mask: '8899' } }), dedupeKey(bank[0]));
+});
+
+test('dedupe supports every row kind, ignores locators, and canonicalizes document fields', () => {
+  const rows = cases.flatMap(([name]) => run(name).rows);
+  rows.push({ kind: 'fact', key: 'household.state', value: 'ZZ', locator: { row: 1 } });
+  for (const row of rows) {
+    assert.match(dedupeKey(row), /^[a-z_]+:[a-f0-9]{64}$/);
+    assert.equal(dedupeKey(row), dedupeKey({ ...row, locator: { row: 900 }, parser: 'other', fileId: 'another' }));
+  }
+  assert.equal(dedupeKey({ kind: 'document', docType: 'test', fields: { b: 2, a: 1 } }), dedupeKey({ kind: 'document', docType: 'test', fields: { a: 1, b: 2 } }));
+  assert.throws(() => dedupeKey({ kind: 'unknown' }), /Unsupported row kind/);
+});
