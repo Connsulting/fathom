@@ -1,10 +1,14 @@
-// Routing: the JSON API under /api plus /healthz, and static files for everything else.
+// Routing: the JSON API under /api plus /healthz, the MCP endpoint at exactly /mcp, and static
+// files for everything else.
 // `routes` is the route table (docs/architecture.md lists every entry; test/docs.test.mjs checks).
 
 import { fileURLToPath } from 'node:url';
 import { HttpError, setSecurityHeaders, sendJson, sendError, guardPost, readJsonBody } from './http.mjs';
 import { createStatic } from './static.mjs';
 import * as h from './handlers.mjs';
+import * as k from './keys.mjs';
+import { createKeyService, loadServerSecret } from '../mcp/keys.mjs';
+import { createMcpHandler } from '../mcp/index.mjs';
 
 const TABLE = [
   { method: 'GET', path: '/healthz', handler: h.healthz },
@@ -17,6 +21,10 @@ const TABLE = [
   { method: 'POST', path: '/api/ask', handler: h.ask },
   { method: 'POST', path: '/api/onboarding', handler: h.onboarding },
   { method: 'POST', path: '/api/demo/reset', handler: h.demoReset },
+  { method: 'GET', path: '/api/keys', handler: k.listKeys },
+  { method: 'POST', path: '/api/keys', handler: k.createKey },
+  { method: 'POST', path: '/api/keys/:id/revoke', handler: k.revokeKey },
+  { method: 'GET', path: '/api/mcp', handler: k.mcpInfo },
 ];
 
 export const routes = TABLE.map(({ method, path }) => ({ method, path }));
@@ -55,14 +63,24 @@ function findRoute(method, rawPath) {
   return hit;
 }
 
-export function createHandler({ db, config, answerer, webDir = WEB_DIR, sharedDir = SHARED_DIR }) {
+// `keys` (key service) and `mcp` (the /mcp handler) are built from config.dataDir on first use
+// when not passed in.
+export function createHandler({ db, config, answerer, keys, mcp, webDir = WEB_DIR, sharedDir = SHARED_DIR }) {
   const serveStatic = createStatic({ webDir, sharedDir });
+  let keyService = keys;
+  let mcpHandler = mcp;
+  const getKeys = () => (keyService ??= createKeyService({ db, serverSecret: loadServerSecret(config.dataDir) }));
+  const getMcp = () => (mcpHandler ??= createMcpHandler({ db, keys: getKeys(), config }));
   return async function handle(req, res) {
     setSecurityHeaders(res);
     const url = req.url || '/';
     const q = url.indexOf('?');
     const rawPath = q >= 0 ? url.slice(0, q) : url;
     try {
+      if (rawPath === '/mcp') {
+        await getMcp()(req, res);
+        return;
+      }
       if (rawPath === '/healthz' || rawPath === '/api' || rawPath.startsWith('/api/')) {
         const { r, params } = findRoute(req.method, rawPath);
         let body = {};
@@ -70,7 +88,7 @@ export function createHandler({ db, config, answerer, webDir = WEB_DIR, sharedDi
           guardPost(req);
           body = await readJsonBody(req);
         }
-        const out = await r.handler({ db, config, answerer, params, body, req });
+        const out = await r.handler({ db, config, answerer, params, body, req, get keys() { return getKeys(); } });
         sendJson(res, 200, out);
         return;
       }

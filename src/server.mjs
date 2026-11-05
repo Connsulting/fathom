@@ -14,6 +14,8 @@ import { loadConfig } from './config.mjs';
 import { openMigrated, readStoreMode, createStoreFile, setSetting, DB_FILE } from './store/db.mjs';
 import { createHandler } from './api/router.mjs';
 import { createCannedAnswerer } from './api/answerer.mjs';
+import { createKeyService, loadServerSecret } from './mcp/keys.mjs';
+import { createMcpHandler } from './mcp/index.mjs';
 import { seedDemo } from '../demo/seed.mjs';
 
 export class StartupError extends Error {}
@@ -40,8 +42,16 @@ export function openStore(config) {
 
 export async function startServer(config = loadConfig()) {
   const db = openStore(config);
+  let keys;
+  try {
+    keys = createKeyService({ db, serverSecret: loadServerSecret(config.dataDir) });
+  } catch (e) {
+    db.close();
+    throw new StartupError(`API key secret: ${e.message}`);
+  }
+  const mcp = createMcpHandler({ db, keys, config });
   const answerer = createCannedAnswerer();
-  const server = http.createServer(createHandler({ db, config, answerer }));
+  const server = http.createServer(createHandler({ db, config, answerer, keys, mcp }));
   try {
     await new Promise((resolveListen, reject) => {
       server.once('error', reject);

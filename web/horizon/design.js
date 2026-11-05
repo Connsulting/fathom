@@ -3,6 +3,8 @@
    Every figure, name and date comes from api.s; nothing here names a person or an amount.
    Reading notes on ambiguous contract points are at the bottom of this file. */
 
+import * as connect from './screens/connect.js';
+
 const MS = 864e5;
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const MONTH_FULL = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -32,9 +34,10 @@ let onResize = null;
 let onDocKey = null;
 let onScroll = null;
 let bodyLocked = false;
+let connectOn = false;
 
 const freshUi = () => ({
-  scopes: {}, curve: {}, prio: {}, connected: {}, modal: null, copied: false,
+  curve: {}, prio: {}, connected: {}, modal: null,
   packet: false, pick: { salary: null, deferral: null }, signing: false, build: 0,
   buildTimer: 0, draft: {}, dumped: null, files: null,
   more: false, under: null, inApp: false, closing: false, ret: null, y: 0, msgN: {}, det: {}
@@ -927,25 +930,8 @@ function pYearend() {
 
 /* ---------- connect ---------- */
 
-function pConnect() {
-  const cn = api.s.connect || {};
-  const scopes = arr(cn.scopes);
-  const isOn = (s) => ui.scopes[s.id] ?? s.on;
-  const scopeHtml = scopes.map((s) => `<li><button type="button" class="h-toggle${isOn(s) ? ' on' : ''}" data-scope="${esc(s.id)}" role="switch" aria-checked="${isOn(s)}"><i></i></button><div><b>${T(s.label)}</b><span>${s.access === 'write' ? 'Write' : 'Read'}</span></div></li>`).join('');
-  const tools = arr(cn.tools).map((t) => `<li><code>${X(t.name)}</code><p>${T(t.desc)}</p></li>`).join('');
-  const who = { me: 'You', claude: 'Your AI', tool: 'Tool' };
-  const tr = arr(cn.transcript).map((m) => `<div class="h-tr ${esc(m.role)}"><span>${who[m.role] || esc(m.role)}</span><div>${T(m.text)}</div></div>`).join('');
-  const onN = scopes.filter(isOn).length;
-  return shell(`${pageHead('Connect', 'Bring your own AI', 'Point any MCP client at your plan. It sees what you allow, and nothing else.')}
-    <div class="h-url"><code>${X(cn.url)}</code>${btn(ui.copied ? 'Copied' : 'Copy', 'data-copy="1"', ui.copied ? '' : 'ghost')}</div>
-    <div class="h-cols"><div class="h-col-main">
-      ${tr ? section('From a session', `<div class="h-trs">${tr}</div>`) : ''}
-      ${cn.config ? section('Client config', `<pre class="h-pre">${X(cn.config)}</pre>`) : ''}
-    </div><div class="h-col-side">
-      ${section('Access', `<ul class="h-scopes">${scopeHtml}</ul>`, `${onN} of ${scopes.length} on`)}
-      ${tools ? section('Tools', `<ul class="h-tools">${tools}</ul>`) : ''}
-    </div></div>`, 'connect');
-}
+// The screen lives in screens/connect.js; these are the helpers it renders with.
+const connectH = { esc, btn, section, pageHead, shell, icon, redraw: () => draw() };
 
 /* ---------- engine ---------- */
 
@@ -1195,6 +1181,10 @@ function draw() {
   const scrollers = [...page.querySelectorAll('.h-tl-scroll')].map((el) => el.scrollLeft);
   const active = document.activeElement;
   const focusDraft = active && page.contains(active) ? active.getAttribute('data-draft') : null;
+  if ((r.name === 'connect') !== connectOn) {
+    connectOn = r.name === 'connect';
+    if (connectOn) connect.enter(connectH); else connect.leave();
+  }
   let html;
   switch (r.name) {
     case 'onboarding': html = pOnboarding(Number(r.params?.step ?? onboardStep())); break;
@@ -1206,7 +1196,7 @@ function draw() {
     case 'advisor': html = pAdvisor(); break;
     case 'packs': html = pPacks(r.params?.id); break;
     case 'yearend': html = pYearend(); break;
-    case 'connect': html = pConnect(); break;
+    case 'connect': html = connect.render(connectH); break;
     case 'engine': html = pEngine(); break;
     case 'email': html = pEmail(); break;
     default: html = pBrief();
@@ -1271,7 +1261,9 @@ function closeRec() {
 
 function onClick(e) {
   if (ui.more && !e.target.closest('.h-more-wrap')) setMore(false);
-  const sel = '[data-go],[data-act],[data-ask],[data-askrec],[data-wg],[data-onboard],[data-inst],[data-allow],[data-modal],[data-scope],[data-copy],[data-packet],[data-attach],[data-whatif],[data-packtoggle],[data-more],[data-dlg]';
+  const cn = e.target.closest('[data-conn]');
+  if (cn && root.contains(cn)) { e.preventDefault(); connect.onClick(cn, connectH); return; }
+  const sel = '[data-go],[data-act],[data-ask],[data-askrec],[data-wg],[data-onboard],[data-inst],[data-allow],[data-modal],[data-packet],[data-attach],[data-whatif],[data-packtoggle],[data-more],[data-dlg]';
   let t = e.target.closest(`${sel},.fx-fig`);
   if (!t || !root.contains(t)) return;
   // A figure inside a button or link is part of its label: the control takes the click, and the
@@ -1298,11 +1290,6 @@ function onClick(e) {
   if (d.inst != null && d.inst !== '') { ui.modal = Number(d.inst); draw(); return; }
   if (d.allow != null && d.allow !== '') { ui.connected[Number(d.allow)] = true; ui.modal = null; draw(); return; }
   if (d.modal === 'close') { ui.modal = null; draw(); return; }
-  if (d.scope) { const s = arr(api.s.connect?.scopes).find((x) => x.id === d.scope); ui.scopes[d.scope] = !(ui.scopes[d.scope] ?? s?.on); draw(); return; }
-  if (d.copy) {
-    try { navigator.clipboard?.writeText(api.txt(api.s.connect?.url || '')).catch(() => {}); } catch (err) { /* clipboard is optional */ }
-    ui.copied = true; draw(); setTimeout(() => { ui.copied = false; draw(); }, 1600); return;
-  }
   if (d.packet != null) { ui.packet = d.packet === '1'; draw(); return; }
   if (d.attach) {
     const base = ui.files || arr(api.s.onboarding?.files);
@@ -1326,6 +1313,7 @@ function askRec(recId, i) {
 
 function onSubmit(e) {
   const f = e.target;
+  if (f.dataset.connForm) { e.preventDefault(); connect.onSubmit(f, connectH); return; }
   if (f.dataset.signin) {
     e.preventDefault();
     if (ui.signing) return;
@@ -1345,6 +1333,7 @@ function onSubmit(e) {
 
 function onInput(e) {
   const t = e.target;
+  if (t.dataset.connInput) { connect.onInput(t); return; }
   if (t.dataset.draft) { ui.draft[t.dataset.draft] = t.value; return; }
   if (t.dataset.dump) { ui.dumped = t.value; return; }
   if (t.dataset.curve) {
@@ -1391,7 +1380,7 @@ function onDocumentKey(e) {
 }
 
 function mount(r, a) {
-  api = a; root = r; ui = freshUi(); lastKey = '';
+  api = a; root = r; ui = freshUi(); lastKey = ''; connectOn = false;
   root.innerHTML = '<div class="h-root"></div><div class="h-dlg-host" hidden></div>';
   ui.y = window.scrollY;
   root.addEventListener('click', onClick);
@@ -1407,7 +1396,7 @@ function mount(r, a) {
   window.addEventListener('scroll', onScroll, { passive: true });
   let lastDemo = api.demo();
   unsub = api.on(() => {
-    if (api.demo() !== lastDemo) { lastDemo = api.demo(); const keep = ui; ui = freshUi(); clearTimeout(keep.buildTimer); }
+    if (api.demo() !== lastDemo) { lastDemo = api.demo(); const keep = ui; ui = freshUi(); clearTimeout(keep.buildTimer); if (connectOn) { connectOn = false; connect.leave(); } }
     draw();
   });
   draw();
@@ -1429,6 +1418,7 @@ function unmount() {
   if (onScroll) window.removeEventListener('scroll', onScroll);
   onDocKey = null; onScroll = null;
   lockBody(false);
+  if (connectOn) { connectOn = false; connect.leave(); }
   if (ui?.buildTimer) clearTimeout(ui.buildTimer);
   api = null; root = null;
 }
