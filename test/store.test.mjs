@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { openDb, migrate, listTables, MIGRATIONS_DIR, getSetting, setSetting, DB_FILE } from '../src/store/db.mjs';
+import { openDb, migrate, listTables, listMigrations, MIGRATIONS_DIR, getSetting, setSetting, DB_FILE } from '../src/store/db.mjs';
 import { tempDb, tempDir, withServer, request, SERVER_TIMEOUT } from './helpers/server.mjs';
 
 const TABLES = [
@@ -158,8 +158,8 @@ test('migration files are NNN-name.sql numbered from 001 without gaps', () => {
 // AC15 (merge-gate blocker 7): main's latest store before the chat branch is schema 005
 // (002-ingest, 003-ingest-recipients, 004-ingest-survivor, 005-pack-manifest). Starting the server
 // on such a store applies 006-chat: messages.provenance exists, existing messages survive. The
-// later 007-planner applies in the same startup, so the schema reports 7 and the applied list
-// ends with it.
+// later migrations apply in the same startup, so the schema reports the latest id and the applied
+// list ends with every later migration.
 const MAIN_MIGRATIONS = ['001-foundation.sql', '002-ingest.sql', '003-ingest-recipients.sql', '004-ingest-survivor.sql', '005-pack-manifest.sql'];
 
 test('a store migrated to exactly 005 upgrades to 006-chat on startup and keeps its messages', { timeout: SERVER_TIMEOUT * 2 }, async () => {
@@ -187,14 +187,14 @@ test('a store migrated to exactly 005 upgrades to 006-chat on startup and keeps 
   await withServer({ dataDir, env: { FATHOM_DEMO: '0', FATHOM_ENGINE: 'off' } }, async s => {
     const h = await request(s.baseUrl, { path: '/healthz' });
     assert.equal(h.status, 200);
-    assert.equal(h.json.schema, 7, 'the schema version reports 7 after startup');
+    assert.equal(h.json.schema, listMigrations().at(-1).id, 'the schema version reports the latest migration after startup');
   });
 
   const db = openDb(file);
   try {
     assert.ok(db.prepare('PRAGMA table_info(messages)').all().some(c => c.name === 'provenance'), 'messages.provenance exists');
     const applied = db.prepare('SELECT id, name FROM schema_migrations ORDER BY id').all().map(r => `${r.id}-${r.name}`);
-    assert.deepEqual(applied, ['1-foundation', '2-ingest', '3-ingest-recipients', '4-ingest-survivor', '5-pack-manifest', '6-chat', '7-planner']);
+    assert.deepEqual(applied, listMigrations().map(m => `${m.id}-${m.name}`));
     const rows = db.prepare("SELECT role, text, provenance FROM messages WHERE conversation_key = 'ask' ORDER BY id").all().map(r => ({ ...r }));
     assert.deepEqual(rows, [
       { role: 'me', text: '<p>Synthetic question before the upgrade</p>', provenance: null },

@@ -86,8 +86,8 @@ test('MGI3: a 006 store upgraded to 007 keeps its data and gains the planner tab
   const cols = seed(db);
   const before = snapshot(db, cols);
 
-  assert.deepEqual(migrate(db), { applied: [7] });
-  assert.equal(schemaVersion(db), 7);
+  assert.deepEqual(migrate(db), { applied: listMigrations().filter(m => m.id >= 7).map(m => m.id) });
+  assert.equal(schemaVersion(db), listMigrations().at(-1).id);
   assert.deepEqual(snapshot(db, cols), before, 'every seeded row keeps its old columns unchanged');
 
   assert.ok(listTables(db).includes('planner_recs'));
