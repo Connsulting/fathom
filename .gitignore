@@ -12,6 +12,8 @@ data/
 imports/
 exports/
 fixtures/private/
+# The private Your plans pack is built into the data volume, never the checkout.
+packs/your-plans/
 
 # Mock v2: anything derived from real exports stays local.
 /mock-v2/private/

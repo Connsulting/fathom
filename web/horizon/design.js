@@ -1,8 +1,13 @@
 /* Horizon. Time is the interface: the calendar year is the spine, recommendations sit at their
    windows, and today is a line you can see. Everything else hangs off the timeline.
    Every figure, name and date comes from api.s; nothing here names a person or an amount.
-   Reading notes on ambiguous contract points are at the bottom of this file. */
+   Reading notes on ambiguous contract points are at the bottom of this file.
+   The packs, engine and chat Sources screens live in ./screens/ and get this file's helpers
+   through the kit below. */
 
+import * as chatScreen from './screens/chat.js';
+import * as packsScreen from './screens/packs.js';
+import * as engineScreen from './screens/engine.js';
 import * as connect from './screens/connect.js';
 import { ingestScreens } from './screens/ingest.js';
 
@@ -477,8 +482,10 @@ function thread(msgs, selfId = '') {
   return `<div class="h-thread">${msgs.map((m) => {
     const who = m.role === 'me' ? 'You' : m.role === 'advisor' ? T(api.s.advisor?.name || api.s.names?.advisor || 'Advisor') : m.role === 'claude' ? 'Claude' : T(api.s.meta.product || 'Fathom');
     const refs = arr(m.refs).filter((id) => id !== selfId).map((id) => recById(id)).filter(Boolean);
-    return `<div class="h-msg ${esc(m.role)}"><div class="h-msg-who">${who}${m.ts ? `<time>${X(m.ts)}</time>` : ''}</div><div class="h-msg-b">${m.html || ''}</div>`
+    return `<div class="h-msg ${esc(m.role)}${m.notice ? ' notice' : ''}"><div class="h-msg-who">${who}${m.ts ? `<time>${X(m.ts)}</time>` : ''}</div><div class="h-msg-b">${m.html || ''}</div>`
       + (refs.length ? `<div class="h-refs">${refs.map((r) => `<a href="${href('rec', { id: r.id })}" data-go="rec" data-id="${esc(r.id)}"><span>${T(r.title)}</span><em>${T(r.window?.label || '')}</em>${icon('arrow')}</a>`).join('')}</div>` : '')
+      + chatScreen.proposalHtml(m)
+      + chatScreen.sourcesHtml(m)
       + '</div>';
   }).join('')}</div>`;
 }
@@ -493,7 +500,7 @@ function composer(key, placeholder) {
   return `<form class="h-compose" data-free="${esc(key)}">
     <input name="q" type="text" autocomplete="off" placeholder="${esc(placeholder)}" value="${esc(ui.draft[key] || '')}" data-draft="${esc(key)}">
     <button type="submit" class="h-btn pri" aria-label="Send">${icon('send')}</button>
-  </form>${off ? '<p class="h-mute sm">Engine off. Answers come from what is already on file.</p>' : ''}`;
+  </form>${off ? '<p class="h-mute sm">Engine off. Answers are paused until it is back on.</p>' : ''}`;
 }
 
 function packName(id) {
@@ -850,56 +857,7 @@ function pAdvisor() {
 
 /* ---------- packs ---------- */
 
-function packCard(p) {
-  const on = p.status === 'active';
-  const recs = arr(p.recIds).map((id) => recById(id)).filter(Boolean);
-  const st = { active: 'On', suggested: 'Suggested', available: 'Available', exploring: 'Exploring' }[p.status] || esc(p.status);
-  return `<article class="h-pack ${esc(p.status)}">
-    <div class="h-pack-h"><a href="${href('packs', { id: p.id })}" data-go="packs" data-id="${esc(p.id)}"><b>${T(p.name)}</b></a><span class="h-pack-st">${on ? '<i></i>' : ''}${st}</span></div>
-    <p>${T(p.why)}</p>
-    ${arr(p.covers).length ? `<p class="h-mute sm">Covers ${arr(p.covers).map((c) => T(c)).join(', ')}</p>` : ''}
-    <div class="h-meta"><span>${plural(p.entries || 0, 'entry', 'entries')}</span>${p.curator ? `<span>${T(p.curator)}</span>` : ''}${p.updated ? `<span>Updated ${T(p.updated)}</span>` : ''}${on ? `<span>Powers ${plural(recs.length, 'item')}</span>` : ''}</div>
-    <div class="h-acts">${on ? goA('packs', `Open${icon('arrow')}`, { id: p.id }, 'h-more') : btn('What if', `data-whatif="${esc(p.id)}"`, '')}</div>
-  </article>`;
-}
-
-function pPacks(id) {
-  const packs = arr(api.packs());
-  const p = id ? packs.find((x) => x.id === id) : null;
-  if (p) {
-    const on = p.status === 'active';
-    const recs = arr(p.recIds).map((rid) => recById(rid)).filter(Boolean);
-    const msgs = arr(api.conversation('pack:' + p.id));
-    const explored = msgs.length > 0 || p.status === 'exploring';
-    const unlocks = arr(p.whatIf?.unlocks);
-    const st = { active: 'On', suggested: 'Suggested', available: 'Available', exploring: 'Exploring' }[p.status] || esc(p.status);
-    return shell(`<div class="h-rec">
-      <a class="h-back" href="${href('packs')}" data-go="packs">${icon('back')}Packs</a>
-      <div class="h-rec-head"><div class="h-kicker">Knowledge pack<span>${st}</span></div><h1>${T(p.name)}</h1><p class="h-lede">${T(p.why)}</p>
-      <div class="h-meta"><span>${plural(p.entries || 0, 'curated entry', 'curated entries')}</span>${p.curator ? `<span>Curated by ${T(p.curator)}</span>` : ''}${p.updated ? `<span>Updated ${T(p.updated)}</span>` : ''}</div></div>
-      ${on ? `<div class="h-acts big">${btn('Turn off', `data-packtoggle="${esc(p.id)}"`, 'ghost')}</div>` : explored ? '' : `<div class="h-acts big">${btn('What if', `data-whatif="${esc(p.id)}"`, '')}${btn('Turn this pack on', `data-packtoggle="${esc(p.id)}"`, 'pri')}</div>`}
-      <div class="h-cols rec"><div class="h-col-main">
-        ${!on || explored ? section('What if', explored
-          ? `${thread(msgs)}${unlocks.length ? `<div class="h-unlocks"><div class="h-sub-h">Would add to your plan</div><ul>${unlocks.map((u) => {
-            const r = u.recId ? api.rec(u.recId) : null;
-            const live = r && r.status !== 'hidden';
-            return `<li><div><b>${live ? goA('rec', T(u.title), { id: r.id }) : T(u.title)}</b><p>${T(u.text)}</p></div>${live ? `<em>${T(r.window?.label || '')}</em>` : ''}</li>`;
-          }).join('')}</ul>${on ? `<p class="h-acc">${icon('check')}Pack is on. These are on your plan.</p>` : `<div class="h-acts">${btn('Turn this pack on', `data-packtoggle="${esc(p.id)}"`, 'pri')}</div>`}</div>` : (on ? '' : `<div class="h-acts">${btn('Turn this pack on', `data-packtoggle="${esc(p.id)}"`, 'pri')}</div>`)}`
-          : `<p class="h-mute">Talk through what changes if this applied to you. Nothing turns on until you say so.</p><button type="button" class="h-chip" data-whatif="${esc(p.id)}">${T(p.whatIf?.prompt || 'What if')}</button>`) : ''}
-        ${on ? section('Powers on your plan', recs.length ? `<div class="h-refs wide">${recs.map((r) => `<a href="${href('rec', { id: r.id })}" data-go="rec" data-id="${esc(r.id)}"><span>${T(r.title)}</span><em>${T(r.window?.label || '')}</em>${icon('arrow')}</a>`).join('')}</div>` : '<p class="h-mute">Nothing on the plan right now. It still informs answers.</p>') : ''}
-      </div><div class="h-col-side">
-        ${section('Covers', arr(p.covers).length ? `<ul class="h-cross">${arr(p.covers).map((c) => `<li>${T(c)}</li>`).join('')}</ul>` : '<p class="h-mute">Not listed.</p>')}
-      </div></div></div>`, 'packs');
-  }
-  const act = packs.filter((x) => x.status === 'active');
-  const sug = packs.filter((x) => x.status === 'suggested' || x.status === 'exploring');
-  const av = packs.filter((x) => x.status === 'available');
-  return shell(`${pageHead('Packs', 'What Fathom knows', 'Curated knowledge that grounds answers and recommendations. Packs turn on when your facts make them apply. Explore the rest with a what-if.')}
-    ${act.length ? section(`On <em>${act.length}</em>`, `<div class="h-packs">${act.map(packCard).join('')}</div>`) : ''}
-    ${sug.length ? section(`Might apply <em>${sug.length}</em>`, `<div class="h-packs">${sug.map(packCard).join('')}</div>`) : ''}
-    ${av.length ? section(`Available <em>${av.length}</em>`, `<div class="h-packs">${av.map(packCard).join('')}</div>`) : ''}
-    ${packs.length ? '' : '<p class="h-mute">No packs.</p>'}`, 'packs');
-}
+/* The packs screen lives in screens/packs.js. */
 
 /* ---------- year end ---------- */
 
@@ -946,34 +904,7 @@ const usd = (n) => {
   return '$' + w.replace(/\B(?=(\d{3})+(?!\d))/g, ',') + (f ? '.' + f : '');
 };
 
-function pEngine() {
-  const en = api.s.engine || {};
-  const b = en.budget || {};
-  const on = api.engineOn();
-  const used = Number(b.used) || 0, mo = Number(b.monthly) || 0;
-  const p = mo ? Math.min(1, used / mo) : 0;
-  const jobsList = arr(en.jobs);
-  const cost = (j) => (typeof j.cost === 'number' ? figHtml(`engine.job.${j.id}.cost`, { cents: true }) : T(j.cost));
-  const rows = jobsList.map((j) => `<div class="h-jt-r" role="row">
-      <div class="h-jt-n" role="cell"><b>${T(j.name)}</b><p>${T(j.does)}</p></div>
-      <div class="h-jt-c" role="cell" data-l="Cadence">${T(j.cadence)}</div>
-      <div class="h-jt-c" role="cell" data-l="Last run">${T(j.last)}</div>
-      <div class="h-jt-c${on ? '' : ' off'}" role="cell" data-l="Next run">${on ? T(j.next) : 'Paused'}</div>
-      <div class="h-jt-c r mono" role="cell" data-l="Cost per run">${cost(j)}</div>
-    </div>`).join('');
-  const summary = `<div class="h-eng-sum">
-      <div class="h-eng-c"><span class="h-eng-l">Status</span><b class="h-eng-v${on ? ' acc' : ''}">${on ? 'On' : 'Off'}</b><div class="h-eng-s"><button type="button" class="h-btn" data-fx-engine>${on ? 'Turn the engine off' : 'Turn the engine on'}</button></div></div>
-      <div class="h-eng-c"><span class="h-eng-l">Spent this month</span><b class="h-eng-v"><span class="mono">${figHtml('engine.budget.used', { cents: true })}</span> <em>of ${figHtml('engine.budget.monthly', { cents: true })}</em></b>
-        <div class="h-eng-s col"><svg class="h-eng-meter" viewBox="0 0 100 4" preserveAspectRatio="none" role="img" aria-label="${Math.round(p * 100)} percent of the monthly budget used"><rect class="bg" width="100" height="4" rx="2"/><rect class="fg" width="${p * 100}" height="4" rx="2"/></svg>
-        <div class="h-eng-sub"><span class="mono">${figHtml('engine.budget.left', { cents: true })} left</span><span class="mono">${Math.round(p * 100)}% used</span></div></div></div>
-      <div class="h-eng-c"><span class="h-eng-l">Chat engine</span><b class="h-eng-v">${T(en.chat?.model)}</b>${en.chat?.note ? `<div class="h-eng-s"><p>${T(en.chat.note)}</p></div>` : ''}</div>
-    </div>`;
-  const table = jobsList.length ? `<div class="h-card h-jt" role="table" aria-label="Scheduled jobs">
-      <div class="h-jt-h" role="row"><span role="columnheader">Job</span><span role="columnheader">Cadence</span><span role="columnheader">Last run</span><span role="columnheader">Next run</span><span role="columnheader" class="r">Cost per run</span></div>${rows}</div>` : '<p class="h-mute">No jobs scheduled.</p>';
-  return shell(`${pageHead('Engine', on ? 'Running' : 'Paused', on ? 'Proactive jobs run on schedule and stay inside the monthly budget.' : 'Proactive jobs are paused. Chat answers only from what is on file. Turn it back on here.')}
-    <div class="h-card">${summary}</div>
-    ${section('Jobs', table, `${jobsList.length} scheduled`)}`, 'engine');
-}
+/* The engine screen lives in screens/engine.js; usd() stays for figHtml. */
 
 /* ---------- email ---------- */
 
@@ -1197,10 +1128,10 @@ function draw() {
     case 'accounts': html = pAccounts(); break;
     case 'confirm': html = ingest.confirmPage(); break;
     case 'advisor': html = pAdvisor(); break;
-    case 'packs': html = pPacks(r.params?.id); break;
+    case 'packs': html = packsScreen.render(r.params?.id); break;
     case 'yearend': html = pYearend(); break;
     case 'connect': html = connect.render(connectH); break;
-    case 'engine': html = pEngine(); break;
+    case 'engine': html = engineScreen.render(); break;
     case 'email': html = pEmail(); break;
     default: html = pBrief();
   }
@@ -1264,6 +1195,7 @@ function closeRec() {
 
 function onClick(e) {
   if (ui.more && !e.target.closest('.h-more-wrap')) setMore(false);
+  if (SCREENS.some((s) => s.onClick?.(e))) return;
   const cn = e.target.closest('[data-conn]');
   if (cn && root.contains(cn)) { e.preventDefault(); connect.onClick(cn, connectH); return; }
   if (ingest.handleClick(e)) return;
@@ -1311,6 +1243,7 @@ function askRec(recId, i) {
 }
 
 function onSubmit(e) {
+  if (SCREENS.some((s) => s.onSubmit?.(e))) return;
   const f = e.target;
   if (f.dataset.connForm) { e.preventDefault(); connect.onSubmit(f, connectH); return; }
   if (f.dataset.signin) {
@@ -1326,11 +1259,12 @@ function onSubmit(e) {
     const v = (f.q?.value || '').trim();
     if (!v) return;
     ui.draft[key] = '';
-    api.askFree(v, key.startsWith('rec:') ? key.slice(4) : 'ask');
+    api.askFree(v, key.startsWith('rec:') ? key.slice(4) : key.startsWith('pack:') ? key : 'ask');
   }
 }
 
 function onInput(e) {
+  if (SCREENS.some((s) => s.onInput?.(e))) return;
   if (ingest.handleChange(e)) return;
   const t = e.target;
   if (t.dataset.connInput) { connect.onInput(t); return; }
@@ -1381,8 +1315,18 @@ function onDocumentKey(e) {
   }
 }
 
+// Helpers the screen modules use. Getters, because api, root and ui change on mount.
+const SCREENS = [chatScreen, packsScreen, engineScreen];
+const KIT = {
+  get api() { return api; }, get root() { return root; }, get ui() { return ui; },
+  draw: () => draw(),
+  esc, T, X, arr, plural, icon, btn, goA, href, shell, section, pageHead, thread, composer, figHtml, recById
+};
+SCREENS.forEach((s) => s.bind(KIT));
+
 function mount(r, a) {
   api = a; root = r; ui = freshUi(); lastKey = ''; connectOn = false;
+  SCREENS.forEach((s) => s.reset?.());
   ingest = ingestScreens({ api, shell, section, pageHead, btn, icon, esc, T, X, draw, goA });
   root.innerHTML = '<div class="h-root"></div><div class="h-dlg-host" hidden></div>';
   ui.y = window.scrollY;
