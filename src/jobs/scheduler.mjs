@@ -434,7 +434,7 @@ export function createScheduler({
 // whole planner result as `planning` (the scheduler ignores it; npm run plan prints its warning
 // codes). On a demo store it plans nothing and the run is recorded skipped. `confirm-guess` runs
 // guessPending until nothing is left: skipped with the pending count when it skips (engine off,
-// not live, nothing pending), else ok with the batch cost sum, also when an engine error stopped it.
+// not live, nothing pending), else ok with the run's confirm ledger spend, also when an engine error stopped it.
 export function defaultHandlers({ publicUrl = null } = {}) {
   return {
     async plan(ctx) {
@@ -472,7 +472,7 @@ export function defaultHandlers({ publicUrl = null } = {}) {
       }
       const sum = (key) => out.batches.reduce((n, b) => n + (Number(b[key]) || 0), 0);
       return {
-        costUsd: Number(sum('costUsd').toFixed(12)),
+        costUsd: out.costUsd,
         note: { batches: out.batches.length, items: sum('items'), guessed: sum('guessed'), stopped: Boolean(out.stopped) },
       };
     },

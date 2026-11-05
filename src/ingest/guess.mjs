@@ -51,10 +51,11 @@ const payloadOf = (item) => ({
   file: item.file ?? null,
 });
 
-// One quantity: optional sign (only when not glued to a letter or digit, so W-2 is plain 2),
-// optional currency symbol, digits with thousands commas and decimals, optional scale or percent
-// suffix that must end a word.
-const QUANTITY = /(?:(?<![A-Za-z0-9])([-−]))?[$€£]?(\d[\d,]*(?:\.\d+)?)(?:\s?(thousand|million|billion|trillion|percent)|(bn|k|m|b|%))?(?![A-Za-z0-9])/gi;
+// One quantity: optional sign (only when not glued to a letter or digit, so W-2 is plain 2), an
+// optional currency symbol, a sign after it, digits with thousands commas and decimals or a
+// leading-dot decimal, and an optional scale or percent suffix that must end a word. Whitespace
+// is allowed between sign, currency, number and suffix.
+const QUANTITY = /(?:(?<![A-Za-z0-9])([-−])\s*)?(?:[$€£]\s*(?:([-−])\s*)?)?(\d[\d,]*(?:\.\d+)?|\.\d+)(?:\s*(thousand|million|billion|trillion|percent)|\s*(bn|k|m|b|%))?(?![A-Za-z0-9])/gi;
 const SCALE = { k: 1e3, thousand: 1e3, m: 1e6, million: 1e6, bn: 1e9, b: 1e9, billion: 1e9, trillion: 1e12 };
 
 // Each quantity in the text normalized to "sign value|percent": 100.00 and $100 equal 100, while
@@ -62,16 +63,17 @@ const SCALE = { k: 1e3, thousand: 1e3, m: 1e6, million: 1e6, bn: 1e9, b: 1e9, bi
 function quantitiesIn(text) {
   const out = [];
   for (const m of String(text).matchAll(QUANTITY)) {
-    const unit = (m[3] ?? m[4] ?? '').toLowerCase();
+    const unit = (m[4] ?? m[5] ?? '').toLowerCase();
     const percent = unit === '%' || unit === 'percent';
-    const value = Number(m[2].replace(/,/g, '')) * (SCALE[unit] ?? 1);
-    out.push(`${m[1] ? '-' : '+'}${value}|${percent ? 'pct' : 'num'}`);
+    const value = Number(m[3].replace(/,/g, '')) * (SCALE[unit] ?? 1);
+    out.push(`${m[1] || m[2] ? '-' : '+'}${value}|${percent ? 'pct' : 'num'}`);
   }
   return out;
 }
 
-// Spelled-out magnitude words ("one hundred thousand") lowercase.
-const magnitudesIn = (text) => (String(text).toLowerCase().match(/\b(?:hundred|thousand|million|billion|trillion)\b/g) ?? []);
+// Spelled-out number words ("ten", "one hundred thousand"), lowercase.
+const SPELLED = /\b(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million|billion|trillion|dozen)\b/gi;
+const spelledIn = (text) => (String(text).toLowerCase().match(SPELLED) ?? []);
 
 // The item's own text: question, option labels, context and file metadata.
 function itemText(item) {
@@ -81,7 +83,7 @@ function itemText(item) {
 
 // Accepted guesses: the item is in the batch, the option is one of its options, and the reason
 // is one nonempty line of at most REASON_MAX characters quoting only whole quantities (sign,
-// scale and percent included) and magnitude words from that item.
+// scale and percent included) and spelled number words from that item, with no digit left over.
 export function validateGuesses(batchItems, parsed) {
   const byId = new Map(batchItems.map((i) => [i.id, i]));
   const seen = new Set();
@@ -95,8 +97,9 @@ export function validateGuesses(batchItems, parsed) {
     if (typeof reason !== 'string' || !reason.trim() || reason.length > REASON_MAX || /[\r\n\u2028\u2029]/.test(reason)) continue;
     const text = itemText(item);
     const known = new Set(quantitiesIn(text));
-    const words = new Set(magnitudesIn(text));
-    if (!quantitiesIn(reason).every((q) => known.has(q)) || !magnitudesIn(reason).every((w) => words.has(w))) continue;
+    const words = new Set(spelledIn(text));
+    if (!quantitiesIn(reason).every((q) => known.has(q)) || !spelledIn(reason).every((w) => words.has(w))) continue;
+    if (/\d/.test(reason.replace(QUANTITY, ' '))) continue;
     seen.add(item.id);
     out.push({ item: item.id, option: g.option, reason });
   }
@@ -140,12 +143,17 @@ function storeBatch(db, items, accepted, { model, ts }) {
 }
 
 // Returns {skipped: 'engine_off' | 'not_live' | 'none_pending'} or {batches: [{items, guessed,
-// costUsd, model}], stopped?: code}. `fake` is one per-call fake script per batch (tests).
+// costUsd, model}], costUsd, stopped?: code}. costUsd is the run spend: the larger of the confirm
+// ledger rows added during the run (failed calls included) and the completed batch costs. `fake` is one per-call fake script per batch (tests).
 export async function guessPending(db, engine, { now, batchSize = 20, maxBatches = Infinity, fake } = {}) {
   if (!engine || !engine.isOn()) return { skipped: 'engine_off' };
   if (fake === undefined && engine.mode !== 'live') return { skipped: 'not_live' };
   const size = Number.isInteger(batchSize) && batchSize > 0 ? batchSize : 20;
   const batches = [];
+  const mark = db.prepare('SELECT coalesce(max(id), 0) AS id FROM spend_ledger').get().id;
+  const spend = db.prepare("SELECT coalesce(sum(cost_usd), 0) AS s FROM spend_ledger WHERE purpose = 'confirm' AND id > ?");
+  const costUsd = () => Number(Math.max(Number(spend.get(mark).s) || 0,
+    batches.reduce((n, b) => n + (Number(b.costUsd) || 0), 0)).toFixed(12));
   for (let k = 0; k < maxBatches; k++) {
     const items = nextBatch(db, size);
     if (!items.length) break;
@@ -157,14 +165,14 @@ export async function guessPending(db, engine, { now, batchSize = 20, maxBatches
         ...(fake === undefined ? {} : { fake: fake[k] ?? [] }),
       });
     } catch (error) {
-      return { batches, stopped: codeOf(error) };
+      return { batches, costUsd: costUsd(), stopped: codeOf(error) };
     }
     let parsed;
-    try { parsed = JSON.parse(response.text); } catch { return { batches, stopped: 'bad_response' }; }
+    try { parsed = JSON.parse(response.text); } catch { return { batches, costUsd: costUsd(), stopped: 'bad_response' }; }
     const ts = now || new Date().toISOString();
     const guessed = storeBatch(db, items, validateGuesses(items, parsed), { model: response.model, ts });
     batches.push({ items: items.length, guessed, costUsd: response.costUsd, model: response.model });
   }
   if (!batches.length) return { skipped: 'none_pending' };
-  return { batches };
+  return { batches, costUsd: costUsd() };
 }
