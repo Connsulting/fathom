@@ -10,7 +10,7 @@ import { sepRoom } from '../../src/calc/index.mjs';
 import { recAction } from '../../src/api/handlers.mjs';
 import { createCannedAnswerer } from '../../src/api/answerer.mjs';
 import {
-  scratch, ingestFile, addDocument, addFact, accountIdByMask, figureRow, recRow, plannerRec, activeRecIds,
+  scratch, ingestFile, addDocument, addFact, accountIdByMask, contentValue, figureRow, recRow, plannerRec, activeRecIds,
   recEvents, PACKS_DIR, SCORP, SOLE_PROP, MASKS, INST,
 } from '../helpers/real-store.mjs';
 
@@ -237,5 +237,78 @@ describe('review fixes', () => {
     assert.ok(activeRecIds(db).includes('va529'), 'the eligible account still has deduction room');
     assert.equal(figureRow(db, 'va529.deductionLeft').v, 4000);
     check(db);
+  });
+});
+
+describe('review fixes, round two', () => {
+  test('AC3: a spouse W-2 from the household S corp adds exactly its box 1 wages to agi.est (G1)', async () => {
+    const spouseWages = 30000;
+    const base = S.store();
+    const withSpouse = S.store({ variant: { documents: [{ docType: 'w2', taxYear: 2026, fields: { employer: SCORP.name, person: 'spouse', wages: spouseWages } }] } });
+    await plan(base);
+    await plan(withSpouse);
+    near(r2(figureRow(withSpouse, 'agi.est').v - figureRow(base, 'agi.est').v), spouseWages, 'agi.est rises by the spouse wages');
+    // the owner's own-corp wages come from the P&L: an owner W-2 from the same corp is not added again
+    const withOwner = S.store({ variant: { documents: [{ docType: 'w2', taxYear: 2026, fields: { employer: SCORP.name, person: 'owner', wages: 12 * SCORP.expenses['Officer salary'] } }] } });
+    await plan(withOwner);
+    near(figureRow(withOwner, 'agi.est').v, figureRow(base, 'agi.est').v, 'owner own-corp wages not double counted');
+  });
+
+  test('AC4: SEP room alone does not raise the year-end retirement rec (G2)', async () => {
+    const db = S.store({
+      variant: {
+        entities: [SOLE_PROP],
+        documents: [{ docType: 'w2', taxYear: 2026, fields: { employer: 'Example Employer Inc', person: 'spouse', wages: 50000, deferral401k: 24500 } }],
+        facts: { 'business.salaryRange': undefined },
+      },
+    });
+    await plan(db);
+    assert.ok(figureRow(db, 'room.sep') && figureRow(db, 'room.sep').v > 0, 'the sole prop has SEP room');
+    const employee = figureRow(db, 'room.solo401k.employee');
+    assert.ok(!employee || employee.v === 0, 'no employee deferral room left');
+    assert.ok(!activeRecIds(db).includes('year-end-retirement'), 'SEP has no year-end deadline');
+    assert.equal(recRow(db, 'year-end-retirement'), null);
+  });
+
+  test('AC4: a solo 401(k) calculator failure parks year-end-retirement as waiting even with spouse SEP room (G2)', async () => {
+    const db = S.store();
+    await plan(db);
+    assert.ok(activeRecIds(db).includes('year-end-retirement'));
+    assert.ok(figureRow(db, 'room.sep').v > 0, 'the spouse has SEP room');
+    const before = recRow(db, 'year-end-retirement').def;
+    addFact(db, 'household.ownerAge', 200); // outside the calculator age range
+    await plan(db);
+    const row = recRow(db, 'year-end-retirement');
+    assert.equal(row.status, 'waiting');
+    assert.equal(row.waiting_on, 'data');
+    assert.deepEqual(row.def, before, 'def unchanged while blocked');
+    assert.equal(plannerRec(db, 'year-end-retirement').retired_at, null);
+    const ev = recEvents(db, 'year-end-retirement').at(-1);
+    assert.deepEqual([ev.action, ev.actor, ev.from_status, ev.to_status], ['block', 'planner', 'proposed', 'waiting']);
+    addFact(db, 'household.ownerAge', 45);
+    await plan(db);
+    assert.equal(recRow(db, 'year-end-retirement').status, 'proposed');
+    assert.equal(recEvents(db, 'year-end-retirement').at(-1).action, 'unblock');
+  });
+
+  test('AC6: every salary war-game point stays inside an approved range that is not on thousands (G3)', async () => {
+    const range = { min: 50400, max: 110400 };
+    const db = S.store({ variant: { facts: { 'business.salaryRange': range } } });
+    await plan(db);
+    const salary = contentValue(db, 'wargame').salary;
+    assert.ok(salary && salary.points.length >= 2, 'salary war game built');
+    const ids = salary.points.map(p => p.id);
+    assert.equal(new Set(ids).size, ids.length, 'point ids distinct');
+    const values = [];
+    for (const p of salary.points) {
+      const s = figureRow(db, `wg.salary.${p.id}.salary`);
+      assert.ok(s, `wg.salary.${p.id}.salary`);
+      assert.ok(s.v >= range.min && s.v <= range.max, `${p.id} salary ${s.v} inside the range`);
+      values.push(s.v);
+      const x = figureRow(db, `wg.salary.${p.id}.x`);
+      const comp = x && x.locator && x.locator.inputs && x.locator.inputs.compensation;
+      if (comp != null) assert.ok(comp >= range.min && comp <= range.max, `${p.id} x computed on ${comp} inside the range`);
+    }
+    assert.equal(new Set(values).size, values.length, 'salaries distinct');
   });
 });
