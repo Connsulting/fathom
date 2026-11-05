@@ -112,8 +112,10 @@ const digitRuns = text => new Set([...String(text ?? '').replace(/(\d),(?=\d{3}(
 // title and body is in the excerpt, and some occurrence of the excerpt is on the row's page.
 // The number check has no prose exemptions: every digit run of the title and body, years and
 // dates included, must be a digit run of the excerpt. On top of that checkGrounding (with the
-// excerpt as the only data) must find nothing but number words, and a number word counts as in
-// the excerpt when the excerpt has the same words, since data strings only ground digits.
+// excerpt as the only data) must find nothing but non-percent number words, and such a word counts
+// as in the excerpt only when the excerpt has the same words not followed by a percent marker.
+// Percent-marked word phrases are grounded by checkGrounding itself, so a percent violation is a
+// real mismatch.
 function matchesSource(row, source) {
   const excerpt = normalize(row.excerpt);
   if (!excerpt) return false;
@@ -122,7 +124,10 @@ function matchesSource(row, source) {
   const runs = digitRuns(excerpt);
   if (![...digitRuns(stated)].every(run => runs.has(run))) return false;
   const { violations } = checkGrounding(stated, { data: [excerpt] });
-  if (!violations.every(v => v.reason === 'numeric word absent from sources' && new RegExp(`\\b${v.text.toLowerCase()}\\b`).test(lower))) return false;
+  const plain = v => v.reason === 'numeric word absent from sources'
+    && !/^\s*(?:percent\b|%)/i.test(stated.slice(v.index + v.text.length))
+    && new RegExp(`\\b${v.text.toLowerCase()}\\b(?!\\s*(?:percent\\b|%))`).test(lower);
+  if (!violations.every(plain)) return false;
   for (let at = source.norm.indexOf(excerpt); at >= 0; at = source.norm.indexOf(excerpt, at + 1)) {
     if (pageAt(source.breaks, at) === row.page) return true;
   }

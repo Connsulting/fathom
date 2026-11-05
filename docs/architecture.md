@@ -616,7 +616,7 @@ included.
    be a digit run of the excerpt, with thousands separators removed on both sides (1,500 and 1500
    are the same run) and a date or year taken as its digit runs (2026-12-15 is 2026, 12 and 15);
    `checkGrounding` with the excerpt as the only data must also pass, where a number word counts
-   when the excerpt has the same words. So "The benefit is 2099 dollars" from a numberless source
+   when the excerpt has the same words with the same unit kind (percent-marked or not). So "The benefit is 2099 dollars" from a numberless source
    is dropped; and (c) an
    occurrence of the excerpt is on `row.page`, counting `Page N` marker lines before it (1 when there
    are none). A PDF source cannot be checked (the code holds no PDF text), so all its rows are
