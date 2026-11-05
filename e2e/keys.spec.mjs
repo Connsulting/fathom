@@ -1,7 +1,7 @@
 // Keyboard layer: Ctrl+K quick switcher, G sequences, Plan list ring and rec action keys, the
 // shortcut sheet and the typing guard. Rec ids and titles come from demo/scenario.mjs.
 
-import { test, expect, resetDemo, visibleRecs, liveStatus, plain, gotoRoute, expectH1, recDialog, closeDialogWithX } from './helpers.mjs';
+import { test, expect, resetDemo, visibleRecs, liveStatus, plain, gotoRoute, expectH1, recDialog, closeDialogWithX, ASK_HELLO, askInput, askOnAsk } from './helpers.mjs';
 
 const switcher = (page) => page.getByRole('dialog', { name: 'Quick switcher' });
 const sheet = (page) => page.getByRole('dialog', { name: 'Keyboard shortcuts' });
@@ -25,6 +25,12 @@ async function openSwitcher(page) {
   await page.keyboard.press('Control+k');
   await expect(switcher(page)).toBeVisible();
   await expect(qsInput(page)).toBeFocused();
+}
+
+async function postJson(request, path, data = {}) {
+  const res = await request.post(path, { headers: { 'content-type': 'application/json' }, data });
+  expect(res.status(), `POST ${path}`).toBe(200);
+  return res.json();
 }
 
 async function recStatusOf(request, id) {
@@ -158,7 +164,7 @@ test.describe('keys', () => {
   });
 
   // 8
-  test('no match: Enter starts an Ask with the typed text', async ({ page }) => {
+  test('no match: Enter starts a conversation and sends the typed text', async ({ page }) => {
     const text = 'zzqxv nothing';
     await gotoRoute(page, 'brief');
     await blur(page);
@@ -167,9 +173,58 @@ test.describe('keys', () => {
     await expect(options(page)).toHaveCount(0);
     await expect(page.locator('.h-qs-empty')).toHaveText(`No matches. Press Enter to ask "${text}".`);
     await page.keyboard.press('Enter');
-    await expect(page).toHaveURL(/#\/ask$/);
+    await expect(page).toHaveURL(/#\/ask\/[a-f0-9]{12}$/);
     await expect(switcher(page)).toBeHidden();
-    await expect(page.locator('[data-draft="ask"]')).toHaveValue(text);
+    await expect(page.locator('.h-askx .h-msg.me')).toContainText(text);
+    await expect(page.locator('.h-askx .h-msg.fathom')).toHaveCount(1);
+  });
+
+  // 8b
+  test('the switcher lists active conversations newest first and Enter opens one', async ({ page, request }) => {
+    const a = (await postJson(request, '/api/threads', { text: 'Synthetic question alpha about cash' })).thread;
+    const b = (await postJson(request, '/api/threads', { text: 'Synthetic question beta about taxes' })).thread;
+    const c = (await postJson(request, '/api/threads', { text: 'Synthetic question gamma about goals' })).thread;
+    await postJson(request, `/api/threads/${b.id}/archive`);
+
+    // Ask again in the oldest active one (a) so it becomes the newest.
+    await gotoRoute(page, `ask/${a.id}`);
+    const followUp = 'Synthetic follow up about the next quarter';
+    expect(await askOnAsk(page, followUp)).toBe(a.id);
+
+    await gotoRoute(page, 'brief');
+    await blur(page);
+    await openSwitcher(page);
+    const convKeys = await options(page).evaluateAll((els) => els.map((e) => e.getAttribute('data-qs-key')).filter((k) => /^conv:/.test(k)));
+    expect(convKeys).toEqual([`conv:${a.id}`, `conv:${c.id}`]);
+    await expect(headers(page).filter({ hasText: /^Conversations$/ })).toHaveCount(1);
+    await expect(page.locator(`#h-qs-list li.h-qs-o[data-qs-key="conv:${b.id}"]`)).toHaveCount(0);
+    await expect(page.locator(`#h-qs-list li.h-qs-o[data-qs-key="conv:${a.id}"] .h-qs-t`)).toHaveText('New conversation');
+
+    // Move to the second conversation option (c) and open it.
+    const target = page.locator(`#h-qs-list li.h-qs-o[data-qs-key="conv:${c.id}"]`);
+    await target.hover();
+    await expect(target).toHaveAttribute('aria-selected', 'true');
+    await page.keyboard.press('Enter');
+    await expect(page).toHaveURL(new RegExp(`#/ask/${c.id}$`));
+    await expect(switcher(page)).toBeHidden();
+    await expect(page.locator('.h-askx .h-msg.me')).toContainText('Synthetic question gamma about goals');
+    await expect(page.locator('.h-askx .h-msg.fathom')).toHaveCount(1);
+  });
+
+  // 8c
+  test('a conversation title with markup characters shows literally in the switcher', async ({ page, request }) => {
+    const name = 'Plan & review "Q"';
+    const t = (await postJson(request, '/api/threads', { text: 'Synthetic question for the title test' })).thread;
+    await postJson(request, `/api/threads/${t.id}/rename`, { title: name });
+    await gotoRoute(page, 'brief');
+    await blur(page);
+    await openSwitcher(page);
+    const opt = page.locator(`#h-qs-list li.h-qs-o[data-qs-key="conv:${t.id}"]`);
+    await expect(opt.locator('.h-qs-t')).toHaveText(name);
+    await expect(opt.locator('.h-qs-t > *')).toHaveCount(0);
+    await qsInput(page).fill('Plan & review');
+    await expect(opt.locator('.h-qs-t')).toHaveText(name);
+    await expect(opt.locator('.h-qs-t').locator('*:not(mark)')).toHaveCount(0);
   });
 
   // 9
@@ -252,7 +307,7 @@ test.describe('keys', () => {
     await expect(sheet(page)).toBeHidden();
 
     await gotoRoute(page, 'ask');
-    await expectH1(page, 'Ask about your money');
+    await expectH1(page, ASK_HELLO);
     await blur(page);
     await page.keyboard.press('?');
     await expect(sheet(page)).toBeVisible();
@@ -261,6 +316,10 @@ test.describe('keys', () => {
     expect(askGroups).toContain('Go to');
     expect(askGroups).not.toContain('Recommendation');
     await expect(sheet(page).locator('.h-ks-l', { hasText: /^Accept/ })).toHaveCount(0);
+    // The Ask keys come from the registry (labels from ASK_KEYS in web/horizon/screens/chat.js).
+    await expect(sheet(page).locator('.h-ks-l', { hasText: /^New conversation/ })).toHaveCount(1);
+    await expect(sheet(page).locator('.h-ks-l', { hasText: /^Focus the question box/ })).toHaveCount(2);
+    await expect(sheet(page).locator('section.h-ks-g', { has: page.locator('.h-ks-l', { hasText: /^New conversation/ }) })).toHaveCount(1);
     await page.keyboard.press('Escape');
     await expect(sheet(page)).toBeHidden();
   });
@@ -268,8 +327,8 @@ test.describe('keys', () => {
   // 12
   test('typing in the Ask composer is not hijacked; Control+K still opens the switcher', async ({ page }) => {
     await gotoRoute(page, 'ask');
-    await expectH1(page, 'Ask about your money');
-    const box = page.locator('[data-draft="ask"]');
+    await expectH1(page, ASK_HELLO);
+    const box = askInput(page);
     await box.focus();
     await page.keyboard.type('gp?');
     await page.waitForTimeout(300);
