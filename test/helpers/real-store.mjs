@@ -377,6 +377,8 @@ export const priorReturn = ({ agi = SYNTH.prior.agi, totalTax = SYNTH.prior.fede
 //                 relation?, document?, conflict?}] (see addPayroll)
 //   facts:        owner facts to add or override; a value of undefined leaves the fact out
 //   hints:        account answers merged over HINTS ({'<inst>|<mask>': {kind, owner, entity}})
+//   files:        false to leave out every default file (P&L, tax payment workbook, bank, aggregator
+//                 and positions exports), for a household that only has its payroll documents
 //   taxPayments:  false to leave out the tax payment workbook, or taxPaymentsWorkbook options
 //   taxYear:      the tax_year answer for the workbook sheet ('tax_year' by default; null leaves
 //                 it pending)
@@ -387,7 +389,7 @@ export async function buildRealStore(dataDir, { clock = CLOCK, variant = {} } = 
   const entities = variant.entities || ENTITIES;
   const hints = { ...HINTS, ...(variant.hints || {}) };
   const taxYear = variant.taxYear === undefined ? 'tax_year' : variant.taxYear;
-  const files = [
+  const files = variant.files === false ? [] : [
     pnlWorkbook(entities, variant.pnlExtra || []),
     ...(variant.taxPayments === false ? [] : [taxPaymentsWorkbook(typeof variant.taxPayments === 'object' ? variant.taxPayments : {})]),
     personalCheckingCsv(),
@@ -411,7 +413,7 @@ export async function buildRealStore(dataDir, { clock = CLOCK, variant = {} } = 
     ...(listed.length ? { 'business.entities': listed } : {}),
     ...(Object.keys(businessEntity).length ? { 'accounts.businessEntity': businessEntity } : {}),
     ...(variant.priorReturn !== false ? { 'tax.prior.virginia': SYNTH.prior.virginiaTax } : {}),
-    'accounts.va529': { [collegeId]: { virginiaPlan: true, ownerAge70Plus: false, carryforward: 0 } },
+    ...(collegeId ? { 'accounts.va529': { [collegeId]: { virginiaPlan: true, ownerAge70Plus: false, carryforward: 0 } } } : {}),
     ...(variant.facts || {}),
   };
   for (const [key, value] of Object.entries(facts)) {

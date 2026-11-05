@@ -10,6 +10,8 @@ import { test, expect, S as DEMO } from './helpers.mjs';
 const DIR = fileURLToPath(new URL('../.e2e-data-planner/', import.meta.url));
 const CLOCK = '2026-11-05';
 const REMOTE = !!process.env.BASE_URL;
+const OWNER = 'owner@example.test';
+const AUTH = Object.freeze({ 'Tailscale-User-Login': OWNER });
 
 const PLANNER_SOURCES = /^(acct:|pnl$|tax-payments$|transactions$|docs$|calc:|plan-projection$|wargame-model$)/;
 const DEMO_NAMES = [...Object.values(DEMO.names), DEMO.meta.household].filter(Boolean);
@@ -23,7 +25,7 @@ let plain = (s) => String(s ?? '');
 let needs = [];
 
 async function fetchScenario() {
-  const res = await fetch(`${base}/api/scenario`);
+  const res = await fetch(`${base}/api/scenario`, { headers: AUTH });
   expect(res.status).toBe(200);
   return res.json();
 }
@@ -36,6 +38,15 @@ async function go(page, route) {
 test.describe('AC7: planner on a real store', () => {
   test.skip(REMOTE, 'needs a local real-mode server; BASE_URL targets a remote one');
   test.describe.configure({ mode: 'serial' });
+  // Real mode admits only FATHOM_OWNER_LOGINS: every request carries the matching identity header
+  // (as e2e/identity.spec.mjs does). The browser sends it on cross-origin font requests too, whose
+  // CORS preflight would refuse it, so the font hosts are served locally (empty).
+  test.use({ extraHTTPHeaders: AUTH });
+  test.beforeEach(async ({ context }) => {
+    await context.route(/^https:\/\/fonts\.(googleapis|gstatic)\.com\//, (route) => route.fulfill({
+      status: 200, body: '', headers: { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*' },
+    }));
+  });
 
   test.beforeAll(async () => {
     const { buildRealStore } = await import('../test/helpers/real-store.mjs');
@@ -53,7 +64,7 @@ test.describe('AC7: planner on a real store', () => {
     } finally {
       db.close();
     }
-    app = await startServer({ ...loadConfig({ FATHOM_DATA: DIR, FATHOM_DEMO: '0', FATHOM_ENGINE: 'off', FATHOM_CLOCK: CLOCK }), port: 0 });
+    app = await startServer({ ...loadConfig({ FATHOM_DATA: DIR, FATHOM_DEMO: '0', FATHOM_ENGINE: 'off', FATHOM_CLOCK: CLOCK, FATHOM_OWNER_LOGINS: OWNER }), port: 0 });
     base = app.url;
     scenario = await fetchScenario();
     plain = (s) => resolveTokens(scenario, s, false);
@@ -72,7 +83,8 @@ test.describe('AC7: planner on a real store', () => {
     await go(page, 'brief');
     const headline = plain(scenario.verdict.attention.headline).replace(/\{count\}/g, String(needs.length));
     await expect(page.locator('h1.h-verdict')).toHaveText(headline);
-    await expect(page.locator('.h-hero .h-lede')).toHaveText(plain(scenario.verdict.attention.sub));
+    // Main's brief adds a second hero lede linking to Add more files; the verdict sub is the other one.
+    await expect(page.locator('.h-hero .h-lede').filter({ hasNotText: 'Add more files' })).toHaveText(plain(scenario.verdict.attention.sub));
     for (const r of needs) {
       const link = page.locator(`.h-ny-list a[data-go="rec"][data-id="${r.id}"]`);
       await expect(link).toBeVisible();

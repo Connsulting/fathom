@@ -12,6 +12,8 @@ import { test, expect } from './helpers.mjs';
 const DIR = fileURLToPath(new URL('../.e2e-data-planner-mg/', import.meta.url));
 const CLOCK = '2026-11-05';
 const REMOTE = !!process.env.BASE_URL;
+const OWNER = 'owner@example.test';
+const AUTH = Object.freeze({ 'Tailscale-User-Login': OWNER });
 const ADVISOR = 'Lee & Park <img src=x onerror=alert(1)>';
 const THREAD_REC = 'fed-q4-estimate';
 const AGI_NOTE = 'Adjusted gross income stands in for modified adjusted gross income.';
@@ -38,6 +40,15 @@ function recWithFigure(want) {
 
 test.skip(REMOTE, 'needs a local real-mode server; BASE_URL targets a remote one');
 test.describe.configure({ mode: 'serial' });
+// Real mode admits only FATHOM_OWNER_LOGINS: every request carries the matching identity header
+// (as e2e/identity.spec.mjs does). The browser sends it on cross-origin font requests too, whose
+// CORS preflight would refuse it, so the font hosts are served locally (empty).
+test.use({ extraHTTPHeaders: AUTH });
+test.beforeEach(async ({ context }) => {
+  await context.route(/^https:\/\/fonts\.(googleapis|gstatic)\.com\//, (route) => route.fulfill({
+    status: 200, body: '', headers: { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*' },
+  }));
+});
 
 test.beforeAll(async () => {
   const { buildRealStore, addFact, accountIdByMask, MASKS } = await import('../test/helpers/real-store.mjs');
@@ -58,9 +69,9 @@ test.beforeAll(async () => {
   } finally {
     db.close();
   }
-  app = await startServer({ ...loadConfig({ FATHOM_DATA: DIR, FATHOM_DEMO: '0', FATHOM_ENGINE: 'off', FATHOM_CLOCK: CLOCK }), port: 0 });
+  app = await startServer({ ...loadConfig({ FATHOM_DATA: DIR, FATHOM_DEMO: '0', FATHOM_ENGINE: 'off', FATHOM_CLOCK: CLOCK, FATHOM_OWNER_LOGINS: OWNER }), port: 0 });
   base = app.url;
-  const res = await fetch(`${base}/api/scenario`);
+  const res = await fetch(`${base}/api/scenario`, { headers: AUTH });
   expect(res.status).toBe(200);
   scenario = await res.json();
   plain = (s) => resolveTokens(scenario, s, false);
@@ -104,7 +115,7 @@ test('MG12: an unavailable war game is listed as history on Decide and cannot be
   await expect(row.getByRole('link', { name: 'War game', exact: true })).toHaveCount(0);
 
   const pick = await fetch(`${base}/api/wargame/salary/pick`, {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ index: 0 }),
+    method: 'POST', headers: { ...AUTH, 'content-type': 'application/json' }, body: JSON.stringify({ index: 0 }),
   });
   expect(pick.status).toBe(409);
 });

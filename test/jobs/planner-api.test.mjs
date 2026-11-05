@@ -11,7 +11,7 @@ import { createHandler, routes } from '../../src/api/router.mjs';
 import { loadConfig } from '../../src/config.mjs';
 import { openStore } from '../../src/server.mjs';
 import { openDb, listTables, DB_FILE } from '../../src/store/db.mjs';
-import { postJson, runCommand } from '../helpers/server.mjs';
+import { postJson, runCommand, TEST_OWNER } from '../helpers/server.mjs';
 import { scratch, buildRealStore, dumpTables, activeRecIds, parseJson, PACKS_DIR } from '../helpers/real-store.mjs';
 
 const NOW = '2026-11-05';
@@ -19,7 +19,8 @@ const S = scratch();
 after(() => S.cleanup());
 
 const plan = (db, opts = {}) => runPlanning(db, opts.engine ?? null, { now: opts.now ?? NOW, packDirs: opts.packDirs ?? [PACKS_DIR] });
-const realConfig = dir => loadConfig({ FATHOM_DATA: dir, FATHOM_DEMO: '0', FATHOM_ENGINE: 'off', FATHOM_CLOCK: NOW });
+// Real mode admits only FATHOM_OWNER_LOGINS; postJson sends TEST_OWNER as Tailscale-User-Login.
+const realConfig = dir => loadConfig({ FATHOM_DATA: dir, FATHOM_DEMO: '0', FATHOM_ENGINE: 'off', FATHOM_CLOCK: NOW, FATHOM_OWNER_LOGINS: TEST_OWNER });
 
 // Amounts from the synthetic dataset and its main results; none may leak into counts or notes.
 const AMOUNTS = ['143175', '143,175', '171810', '171,810', '18000', '18,000', '25000', '25,000', '40000', '40,000', '50000', '50,000', '290147', '290,147', '6000', '15000'];

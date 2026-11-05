@@ -31,6 +31,7 @@ import { loadPlanningData, resolveEntities } from '../../src/jobs/planner/data.m
 import { deriveFacts, mergeFacts, ownerFactsOf } from '../../src/jobs/planner/facts.mjs';
 import { notesFor } from '../../src/jobs/planner/assumptions.mjs';
 import { reasonText } from '../../src/jobs/triggers/missing-data.mjs';
+import { confirmTask } from '../../src/jobs/triggers/common.mjs';
 import { nameKey } from '../../src/ingest/extract.mjs';
 import {
   scratch, addFact, addFile, addNotes, addPayroll, factRow, answerPending, figureRow, plannerFigures, recRow, activeRecIds, parseJson, pnlWorkbook,
@@ -441,6 +442,109 @@ test('MGI1: D13 a document-sourced key the planner does not derive is never over
   unchanged(db, 'benefits.employer401k', before);
   await plan(db);
   unchanged(db, 'benefits.employer401k', before);
+});
+
+// Final review E1 and E2. A wage-only single filer: no default files (no business, account or
+// estimate), no prior return, no dependents, so federal tax is income tax on box 1 less the 2026
+// single standard deduction (16,100, OBBBA as indexed) plus Additional Medicare Tax.
+// 2026 single brackets (Rev. Proc. 2025-32): 10% to 12,400; 12% to 50,400; 22% to 105,700; 24% to
+// 201,775; 32% above, to 256,225.
+const SINGLE_WAGES = Object.freeze({
+  files: false, priorReturn: false, entities: [],
+  facts: { 'household.filingStatus': 'single', 'household.dependents': 0, 'household.dependentAges': [], 'household.expectingChild': false },
+});
+const errorsOf = info => [...(info.blocked || []), ...Object.values(info.withheld || {})].filter(c => typeof c === 'string');
+const missingDataText = db => JSON.stringify((recRow(db, 'missing-data') || {}).def || {});
+
+// E1. Box 1 190,000, box 5 214,500, box 12 not read (the field is absent). Box 1 already excludes
+// pretax deferrals and box 5 is Medicare wages as the employer reported them, so AGI and federal
+// tax need nothing from box 12 and publish; Medicare wages are never rebuilt from box 1 plus
+// deferrals assumed to be zero (the bug: 190,000 + 0 = 190,000 Medicare wages, no Additional
+// Medicare Tax, federal tax 34,334). Single filer, Form 8959 Part I and its instructions:
+//   taxable = 190,000 - 16,100 = 173,900.
+//   income tax = 1,240 + 12% * 38,000 + 22% * 55,300 + 24% * 68,200
+//              = 1,240 + 4,560 + 12,166 + 16,368 = 34,334.
+//   Additional Medicare = 0.9% * (214,500 - 200,000) = 0.9% * 14,500 = 130.50.
+//   federal tax = 34,334 + 130.50 = 34,464.50.
+// Only what needs the year's actual deferrals is blocked: the owner's 402(g) total is unknown, so
+// the owner's solo 401(k) room (base household, S corp owned by the owner) is withheld with a
+// visible reason (the retirement rec's question), while AGI still publishes.
+const E1_W2 = box12 => W2(OUT_A, { wages: 190000, medicareWages: 214500, socialSecurityWages: 184500, federalWithheld: 38000, ...(box12 ? { box12 } : {}) }, OUTSIDE_OWNER);
+
+test('MGI1: E1 an unread box 12 still publishes AGI and federal tax from boxes 1 and 5', async () => {
+  const { db } = await planned({ ...SINGLE_WAGES, payroll: [E1_W2(null)] });
+  assert.equal(db.prepare("SELECT fields FROM documents WHERE doc_type = 'w2'").all().map(r => parseJson(r.fields, {}).box12).filter(b => b !== undefined).length, 0, 'ingest stored no box 12');
+  near(fig(db, 'agi.est').v, 190000, 'AGI is box 1');
+  near(fig(db, 'tax.fed.taxable').v, 173900, 'taxable income');
+  near(fig(db, 'tax.fed.proj').v, 34464.5, 'federal tax with 130.50 of Additional Medicare Tax on box 5');
+});
+
+test('MGI1: E1 an unread box 12 blocks only the deferral-dependent retirement room', async () => {
+  const { db, info } = await planned({ payroll: [E1_W2(null)] });
+  fig(db, 'agi.est');
+  fig(db, 'tax.fed.proj');
+  for (const k of ['room.solo401k', 'room.solo401k.employee']) assert.equal(figureRow(db, k), null, `${k} is not published on assumed-zero deferrals`);
+  const code = (info.withheld || {})['room.solo401k.employee'];
+  assert.ok(typeof code === 'string' && code, `room.solo401k.employee withheld with a code: ${JSON.stringify(info.withheld)}`);
+  assert.notEqual(reasonText({ info, entities: [] }, code), GENERIC, `${code} has its own reason text`);
+  // An owner-answerable gap is shown on the retirement rec as the question to answer.
+  const task = confirmTask(code);
+  assert.ok(JSON.stringify((recRow(db, 'year-end-retirement') || {}).def || {}).includes(task), `the retirement rec asks: ${task}`);
+});
+
+// Liveness, box 12 read. Form 8959 Part I: Additional Medicare Tax is 0.9% of Medicare wages (box 5)
+// above the 200,000 single threshold.
+//   Matching inputs, box 12 D 24,500 (401(k) deferrals are in box 5, not box 1):
+//     taxable = 190,000 - 16,100 = 173,900.
+//     income tax = 1,240 + 12% * 38,000 + 22% * 55,300 + 24% * 68,200
+//                = 1,240 + 4,560 + 12,166 + 16,368 = 34,334.
+//     Additional Medicare = 0.9% * (214,500 - 200,000) = 0.9% * 14,500 = 130.50.
+//     federal tax = 34,334 + 130.50 = 34,464.50 (the reviewer's figure).
+//   Box 5 read on its own: box 12 D 20,000 and Y 4,500 (409A deferrals, out of box 1 but in box 5
+//   under IRC 3121(v)(2)). Box 1 plus the box 12 pretax codes is 210,000, but box 5 is 214,500, so
+//   Additional Medicare is still 130.50 and federal tax 34,464.50 (rebuilding gives 90 and 34,424).
+test('MGI1: E1 with box 12 read, federal tax includes Additional Medicare Tax on box 5', async () => {
+  for (const box12 of [[{ code: 'D', amount: 24500 }], [{ code: 'D', amount: 20000 }, { code: 'Y', amount: 4500 }]]) {
+    const { db } = await planned({ ...SINGLE_WAGES, payroll: [E1_W2(box12)] });
+    const what = `box 12 ${box12.map(b => b.code).join('+')}`;
+    near(fig(db, 'agi.est').v, 190000, `${what}: AGI is box 1`);
+    near(fig(db, 'tax.fed.taxable').v, 173900, `${what}: taxable income`);
+    near(fig(db, 'tax.fed.proj').v, 34464.5, `${what}: federal tax with 130.50 of Additional Medicare Tax`);
+  }
+});
+
+// E2. Two outside employers, each with one paystub paid 2026-10-31 showing year-to-date gross
+// 100,000 and a 500 deferral this period: projected gross = 100,000 * 12 / 10 = 120,000 each.
+// The owner's confirmed answer gives Alpha's year deferral of 6,000 only. Beta's stays unknown, so
+// AGI and federal tax block with a reason naming Beta; Alpha's answer never applies to Beta (the
+// bug: 240,000 - 6,000 - 6,000 = 228,000).
+// Liveness: Beta answered 3,000. Elective deferrals (IRC 402(g)(3)) are excluded from gross income
+// (IRC 402(e)(3)): AGI = (120,000 - 6,000) + (120,000 - 3,000) = 231,000.
+//   taxable = 231,000 - 16,100 = 214,900.
+//   income tax = 1,240 + 4,560 + 12,166 + 24% * 96,075 + 32% * 13,125
+//              = 1,240 + 4,560 + 12,166 + 23,058 + 4,200 = 45,224.
+//   Medicare wages are gross pay (401(k) deferrals stay in them): 240,000; Additional Medicare =
+//   0.9% * 40,000 = 360. federal tax = 45,224 + 360 = 45,584 (the reviewer's figure).
+const ALPHA = 'Alpha Example Systems';
+const BETA = 'Beta Example Labs';
+const E2_STUB = employer => STUB(employer, { payDate: '2026-10-31', periodStart: '2026-10-01', periodEnd: '2026-10-31', gross: 10000, federalWithholding: 1800, ytdGross: 100000, retirementDeferral: 500, hsaDeferral: 0 }, OUTSIDE_OWNER);
+const deferralAnswer = (employer, amount) => ({ person: 'owner', plan: 'outside-401k', type: 'deferral', amount, employer });
+
+test('MGI1: E2 a deferral answer applies only to its own employer', async () => {
+  const facts = { ...SINGLE_WAGES.facts, 'retirement.contributions': [deferralAnswer(ALPHA, 6000)] };
+  const { db, info } = await planned({ ...SINGLE_WAGES, facts, payroll: [E2_STUB(ALPHA), E2_STUB(BETA)] });
+  assertBlocked(db, info, 'paystub_deferrals_unknown', ['agi.est', 'tax.fed.proj']);
+  const md = missingDataText(db);
+  assert.ok(md.includes(BETA), 'the reason names the unresolved employer');
+  assert.ok(!md.includes(ALPHA), 'the answered employer is not listed as unresolved');
+});
+
+test('MGI1: E2 liveness: with both employers answered AGI is 231,000', async () => {
+  const facts = { ...SINGLE_WAGES.facts, 'retirement.contributions': [deferralAnswer(ALPHA, 6000), deferralAnswer(BETA, 3000)] };
+  const { db, info } = await planned({ ...SINGLE_WAGES, facts, payroll: [E2_STUB(ALPHA), E2_STUB(BETA)] });
+  assertNotBlocked(info, 'paystub_deferrals_unknown');
+  near(fig(db, 'agi.est').v, 231000, 'AGI = 114,000 + 117,000');
+  near(fig(db, 'tax.fed.proj').v, 45584, 'federal tax with 360 of Additional Medicare Tax');
 });
 
 // ================================================================ MGI2: payments counted once, by kind and jurisdiction
