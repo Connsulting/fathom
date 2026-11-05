@@ -296,6 +296,35 @@ describe('guessPending', () => {
       assert.equal(verdict(batch, w2.id, 'The W-2 names this employer.'), true, 'kept: W-2 from its own question');
     }));
 
+    test('a reason with a fraction, percent, basis point or multiplier word is rejected unless the item carries that word', () => withStore(async (s) => {
+      const { plain } = queueQuantities(s.db);
+      const w2 = C.ask(s.db, { kind: 'account_kind', subject: 'acct-quantity-w2', question: 'Does the W-2 name this employer?', options: OPTIONS, context: {}, now: NOW });
+      assert.equal(w2.queued, true);
+      const pct = C.ask(s.db, { kind: 'account_kind', subject: 'acct-quantity-pct', question: 'What percent of the payment is withheld?', options: OPTIONS, context: { rate: '12.5%' }, now: NOW });
+      assert.equal(pct.queued, true);
+      const batch = C.pendingItems(s.db);
+      for (const reason of [
+        'The withholding rate is half a percent.',
+        'The withholding rate is a quarter percent.',
+        'The withholding rate is 100 per cent.',
+        'The rate is 100 pct.',
+        'The rate rose 25 basis points.',
+        'The rate rose 25 bps.',
+        'About a third of the payments match.',
+        'Payments doubled to twice the usual.',
+        'It is the percentage the file shows.',
+        'Two thirds of rows match.',
+      ]) assert.equal(verdict(batch, plain, reason), false, `rejected: ${reason}`);
+      for (const reason of [
+        'The import lists 100 for this account.',
+        'The import lists $100 for this account.',
+        'Held at the same broker as your other accounts.',
+      ]) assert.equal(verdict(batch, plain, reason), true, `kept: ${reason}`);
+      assert.equal(verdict(batch, w2.id, 'The W-2 names this employer.'), true, 'kept: W-2 from its own question');
+      assert.equal(verdict(batch, pct.id, 'The file shows 12.5% withheld.'), true, 'kept: 12.5% held by the item');
+      assert.equal(verdict(batch, pct.id, 'The file shows 12.5 per cent withheld.'), false, 'rejected: per cent is not in the item');
+    }));
+
     test('an item holding -250 and 12.5% keeps those quantities and rejects 250 with the sign dropped', () => withStore(async (s) => {
       const { signed } = queueQuantities(s.db);
       const batch = C.pendingItems(s.db);
