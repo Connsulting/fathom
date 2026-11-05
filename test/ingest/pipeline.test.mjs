@@ -4,7 +4,7 @@
 
 import test, { describe, before } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { src } from '../helpers/server.mjs';
 import { writeXlsx } from '../helpers/xlsx.mjs';
@@ -902,6 +902,28 @@ describe('no plaintext notes (D2)', () => {
     assert.equal(count(s.db, 'documents', "doc_type = 'notes'"), 1);
     assert.equal(JSON.parse(one(s.db, "SELECT fields FROM documents WHERE doc_type = 'notes'").fields).ref, first.fileId);
     assertNoText(s);
+  }));
+});
+
+// A pack refresh failure after the rows commit leaves the file imported (deploy finding: a missing
+// or broken pack dir marked fact-changing uploads failed after their rows were stored).
+describe('pack refresh failure after commit', () => {
+  test('a broken your-plans pack does not mark a fact-changing file failed', () => withStore(async (s) => {
+    const plans = join(s.dataDir, 'packs', 'your-plans');
+    mkdirSync(plans, { recursive: true });
+    writeFileSync(join(plans, 'manifest.json'), '{"id": "Broken Pack"}');
+    const note = textFile('household-notes.md', '# Synthetic notes\n\nWe keep two dependents in mind.\n', 'text/markdown');
+    const first = await P.ingestFile(s.db, note, s.opts(await offEngine()));
+    const engine = await recordingEngine([[{ facts: [{ key: 'household.dependents', value: '2', confidence: 0.95 }], goals: [] }]]);
+    const errors = [];
+    const original = console.error;
+    console.error = (...args) => { errors.push(args.join(' ')); };
+    let retried;
+    try { retried = await P.retryFile(s.db, first.fileId, s.opts(engine)); } finally { console.error = original; }
+    assert.equal(retried.status, 'imported');
+    assert.equal(one(s.db, 'SELECT status FROM files WHERE id = ?', first.fileId).status, 'imported');
+    assert.equal(one(s.db, "SELECT value FROM facts WHERE key = 'household.dependents'").value, '2');
+    assert.ok(errors.some((e) => e.includes('pack refresh failed')), 'the refresh failure is logged');
   }));
 });
 
