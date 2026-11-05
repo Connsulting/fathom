@@ -47,7 +47,8 @@ const FACTS = {
 
 // Children before parents so foreign keys hold while clearing.
 const CLEAR_ORDER = [
-  'messages', 'conversations', 'rec_events', 'job_runs', 'jobs', 'transactions', 'balances', 'positions',
+  'messages', 'conversations', 'rec_events', 'job_runs', 'jobs', 'superseded_rows', 'confirm_items', 'held_facts',
+  'column_mappings', 'entity_aliases', 'transactions', 'balances', 'positions',
   'pnl_lines', 'tax_payments', 'documents', 'figures', 'accounts', 'facts', 'sources', 'recs', 'goals',
   'deadlines', 'events', 'packs_state', 'decisions', 'api_keys', 'spend_ledger', 'content', 'settings', 'files',
 ];

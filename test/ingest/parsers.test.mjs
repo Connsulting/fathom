@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { parsers, listParsers, pickParser } from '../../src/ingest/registry.mjs';
+import { writeXlsx } from '../helpers/xlsx.mjs';
 import { dedupeKey } from '../../src/ingest/dedupe.mjs';
 
 const fixture = (name) => ({ name, bytes: readFileSync(new URL(`../fixtures/ingest/${name}`, import.meta.url)) });
@@ -118,6 +119,22 @@ test('positions accept filename as-of dates and reject ungrounded dates', () => 
   const result = pickParser(file).parse(file);
   assert.equal(result.rows.length, 0);
   assert.ok(result.warnings.some((w) => w.code === 'missing_as_of'));
+});
+
+// G5: a nonblank record with fewer than three cells whose first cell holds an account number of the
+// file is a truncated position; other short lines (footers) stay silent.
+test('positions warn truncated_position for a short record of a file account; footers stay silent', () => {
+  const file = fixture('positions.csv');
+  const body = new TextDecoder().decode(file.bytes);
+  assert.ok(!pickParser(file).parse(file).warnings.some((w) => w.code === 'truncated_position'), 'the fixture footers are silent');
+  const lines = body.split('\n');
+  lines.splice(2, 0, 'Z8877665544,Long term');
+  lines.splice(lines.length - 2, 0, 'Totals,1');
+  file.bytes = new TextEncoder().encode(lines.join('\n'));
+  const { rows, warnings } = pickParser(file).parse(file);
+  assert.equal(rows.length, 2);
+  assert.equal(warnings.filter((w) => w.code === 'truncated_position').length, 1);
+  assert.deepEqual(warnings.find((w) => w.code === 'truncated_position').locator, { row: 3 });
 });
 
 test('pending activity may appear in the brokerage symbol column', () => {
@@ -324,4 +341,78 @@ test('dedupe supports every row kind, ignores locators, and canonicalizes docume
   }
   assert.equal(dedupeKey({ kind: 'document', docType: 'test', fields: { b: 2, a: 1 } }), dedupeKey({ kind: 'document', docType: 'test', fields: { a: 1, b: 2 } }));
   assert.throws(() => dedupeKey({ kind: 'unknown' }), /Unsupported row kind/);
+});
+
+test('an uncached formula in a tax Month cell warns invalid_tax_month with its locator', () => {
+  const head = [[null, 'Federal', null, 'State'], ['Month', 'Owner Paid', 'Spouse Paid', 'Owner Paid', 'Spouse Paid']];
+  const file = { name: 'tax-month.xlsx', bytes: new Uint8Array(writeXlsx([{ name: '2032', rows: [...head, ['January', 100, 50, 30, 20], [{ formula: 'A2' }, 120, 60, null, null]] }])) };
+  const { rows, warnings } = pickParser(file).parse(file);
+  assert.equal(rows.length, 4, 'the readable month still parses');
+  const warn = warnings.find((w) => w.code === 'invalid_tax_month');
+  assert.ok(warn, 'invalid_tax_month warning present');
+  assert.deepEqual(warn.locator, { sheet: '2032', cell: 'A4' });
+});
+
+// Review finding F8: a Month label that is blank or not a month name, with populated Paid cells,
+// must warn invalid_tax_month. Summary-row labels stay silent.
+{
+  const taxSheet = (labelCell, name) => {
+    const head = [[null, 'Federal', null, 'State'], ['Month', 'Owner Paid', 'Spouse Paid', 'Owner Paid', 'Spouse Paid']];
+    const file = { name, bytes: new Uint8Array(writeXlsx([{ name: '2032', rows: [...head, ['January', 100, 50, 30, 20], [labelCell, 120, 60, null, null]] }])) };
+    return pickParser(file).parse(file);
+  };
+
+  test('a tax Month label that is not a month name warns invalid_tax_month with its locator', () => {
+    const { rows, warnings } = taxSheet('not a month', 'tax-month-text.xlsx');
+    assert.equal(rows.length, 4, 'the readable month still parses');
+    const warn = warnings.filter((w) => w.code === 'invalid_tax_month');
+    assert.equal(warn.length, 1);
+    assert.deepEqual(warn[0].locator, { sheet: '2032', cell: 'A4' });
+  });
+
+  test('a blank tax Month label with populated Paid cells warns invalid_tax_month at the Month column address', () => {
+    for (const blank of [null, '']) {
+      const { rows, warnings } = taxSheet(blank, 'tax-month-blank.xlsx');
+      assert.equal(rows.length, 4);
+      const warn = warnings.filter((w) => w.code === 'invalid_tax_month');
+      assert.equal(warn.length, 1, `blank ${JSON.stringify(blank)}`);
+      assert.deepEqual(warn[0].locator, { sheet: '2032', cell: 'A4' });
+    }
+  });
+
+  test('a Total summary row in a tax sheet is skipped silently', () => {
+    const { rows, warnings } = taxSheet('Total', 'tax-month-total.xlsx');
+    assert.equal(rows.length, 4);
+    assert.equal(warnings.filter((w) => w.code === 'invalid_tax_month').length, 0);
+  });
+
+  test('the tax fixtures produce no invalid_tax_month warning', () => {
+    for (const name of ['tax-payments.xlsx', 'tax-payments-revised.xlsx']) {
+      assert.equal(run(name).warnings.filter((w) => w.code === 'invalid_tax_month').length, 0, name);
+    }
+  });
+}
+
+// D7: a Unicode minus form before an amount parses as negative in CSV and workbook cells.
+test('format.number and a bank CSV read Unicode minus forms as negative', async () => {
+  const { number } = await import('../../src/ingest/format.mjs');
+  for (const m of ['\u2212', '\u2012', '\u2013', '\u2014', '\uFE63', '\uFF0D']) {
+    const hex = m.codePointAt(0).toString(16);
+    assert.equal(number(`${m}12.50`), -12.5, `U+${hex}`);
+    assert.equal(number(`${m}$1,234.50`), -1234.5, `U+${hex} before $`);
+  }
+  assert.equal(number('12\u201314'), null, 'a dash between digits is still not a number');
+  const file = textFile('Chase4321_Activity_minus.csv', 'Details,Posting Date,Description,Amount,Type,Balance,Check or Slip #\nDEBIT,03/05/2032,Synthetic card,\u221242.35,OTHER,\u2212957.65,\n', 'text/csv');
+  const parsed = pickParser(file).parse(file);
+  assert.deepEqual(parsed.warnings, []);
+  assert.deepEqual(parsed.rows.map((r) => [r.kind, r.amount]), [['transaction', -42.35], ['balance', -957.65]]);
+});
+
+test('a workbook text amount with a Unicode minus reads as negative', () => {
+  const file = { name: 'minus-pnl.xlsx', bytes: new Uint8Array(writeXlsx([
+    { name: 'Example Studio Income', rows: [['Payment Date', 'Payment Amount'], ['2032-02-10', '\u2212400.00']] },
+  ])) };
+  const parsed = pickParser(file).parse(file);
+  assert.deepEqual(parsed.warnings, []);
+  assert.deepEqual(parsed.rows.map((r) => [r.kind, r.category, r.amount]), [['pnl_line', 'Income', -400]]);
 });

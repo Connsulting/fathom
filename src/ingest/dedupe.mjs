@@ -12,10 +12,11 @@ function accountKey(row) {
   return [inst, 'source', row.locator.source];
 }
 const transactionSlot = (row) => [accountKey(row), row.date, cents(row.amount)];
+const externalId = (row) => String(row.externalId ?? '').trim();
 const canonical = (value) => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonical(value[key])])) : value;
 
 export function identifyAccountRows(parsed, file) {
-  const occurrences = new Map();
+  const occurrences = new Map(), extOccurrences = new Map();
   let source;
   for (const row of parsed.rows) {
     if (row.account && !row.account.mask && !normalize(row.account.name)) {
@@ -23,9 +24,17 @@ export function identifyAccountRows(parsed, file) {
       row.locator = { ...row.locator, source };
     }
     if (row.kind !== 'transaction') continue;
+    // Every transaction counts toward its date and amount slot, so rows without an external id
+    // keep the occurrence (and key) they had before external ids existed.
     const slot = JSON.stringify(transactionSlot(row));
     row.occurrence = (occurrences.get(slot) ?? 0) + 1;
     occurrences.set(slot, row.occurrence);
+    // A repeated external id and amount within one file stays a second row.
+    if (externalId(row)) {
+      const ext = JSON.stringify([accountKey(row), externalId(row), cents(row.amount)]);
+      row.extOccurrence = (extOccurrences.get(ext) ?? 0) + 1;
+      extOccurrences.set(ext, row.extOccurrence);
+    }
   }
   return parsed;
 }
@@ -33,7 +42,12 @@ export function identifyAccountRows(parsed, file) {
 export function dedupeKey(row) {
   let identity;
   switch (row.kind) {
-    case 'transaction': identity = [...transactionSlot(row), row.occurrence]; break;
+    // A transaction with an external id (check or slip number) is identified by it and its signed
+    // amount, so the same check posted on different dates or by another export still dedupes, while
+    // a check and its return (opposite amounts) in separate uploads never collide.
+    case 'transaction': identity = externalId(row)
+      ? [accountKey(row), 'ext', externalId(row), cents(row.amount), ...(row.extOccurrence > 1 ? [row.extOccurrence] : [])]
+      : [...transactionSlot(row), row.occurrence]; break;
     case 'balance': identity = [accountKey(row), row.date, cents(row.amount)]; break;
     case 'position': identity = [accountKey(row), row.asOf, normalize(row.symbol)]; break;
     case 'pnl_line': identity = [normalize(row.entity), row.period, normalize(row.category)]; break;
