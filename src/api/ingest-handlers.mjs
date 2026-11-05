@@ -3,17 +3,17 @@
 // HttpError. Pipeline, vault and confirm errors map to statuses here with fixed messages, so no
 // file name contents or row values reach a response or a log.
 
-import { getSetting, parseJson as parse } from '../store/db.mjs';
+import { getSetting } from '../store/db.mjs';
 import { buildScenario } from '../scenario/build.mjs';
 import { loadDataKey, VaultError } from '../ingest/vault.mjs';
 import { ingestFiles, retryFile as retryIngest } from '../ingest/pipeline.mjs';
 import { answerItem, pendingItems, listItems, ConfirmError } from '../ingest/confirm.mjs';
+import { fileOf } from '../ingest/freshness.mjs';
 import { refreshPackState } from '../packs/state.mjs';
 import { HttpError } from './http.mjs';
 
 const UPLOAD_FIELD = 'files';
 const LIST_STATUSES = ['pending', 'answered', 'all'];
-const CONFIRM_STATUS = { not_found: 404, bad_option: 400, answered: 409, stale: 409 };
 const CONFIRM_MESSAGE = {
   not_found: 'no such question',
   bad_option: 'answer must be one of the offered options',
@@ -56,17 +56,7 @@ export async function uploadFiles(ctx) {
 
 export function listFiles(ctx) {
   const rows = ctx.db.prepare('SELECT id, name, status, source_kind, parser, counts, uploaded_at FROM files ORDER BY uploaded_at DESC, rowid DESC').all();
-  return {
-    files: rows.map(f => ({
-      id: f.id,
-      name: f.name,
-      status: f.status,
-      sourceKind: f.source_kind,
-      parser: f.parser,
-      counts: parse(f.counts, null),
-      uploadedAt: f.uploaded_at,
-    })),
-  };
+  return { files: rows.map(fileOf) };
 }
 
 export async function retryFile(ctx) {
@@ -103,8 +93,8 @@ export function answerConfirm(ctx) {
   try {
     out = answerItem(ctx.db, Number(raw), optionId, { now: nowIso() });
   } catch (err) {
-    if (err instanceof ConfirmError && Object.hasOwn(CONFIRM_STATUS, err.code)) {
-      throw new HttpError(CONFIRM_STATUS[err.code], CONFIRM_MESSAGE[err.code]);
+    if (err instanceof ConfirmError && Object.hasOwn(CONFIRM_MESSAGE, err.code)) {
+      throw new HttpError(err.status, CONFIRM_MESSAGE[err.code]);
     }
     throw err;
   }

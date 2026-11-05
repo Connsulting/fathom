@@ -6,7 +6,8 @@
 
 import { createHash } from 'node:crypto';
 import { redactForExtraction } from './redact.mjs';
-import { isoDate, number, cents, institution } from './format.mjs';
+import { isoDate, number, cents, institution, text as decodeText } from './format.mjs';
+import { normalizeName } from './confirm.mjs';
 
 export const DOC_TYPES = Object.freeze(['paystub', 'w2', '1099-int', '1099-div', '1099-b', '1099-nec', '1099-misc', 'k1', 'form1040', 'statement', 'plan', 'notes', 'other']);
 
@@ -100,9 +101,8 @@ const extractSystem = (docType) => `Extract the fields of this ${labelOf(docType
   + 'Where an amount appears as a token like #A1#, return the token string itself for that amount. '
   + 'Business names only: never return a person\'s name, an address or an identifying number.';
 
-const normalize = (value) => String(value ?? '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
 // First 12 hex of sha256 of a normalized business name; an absent name hashes 'unknown'.
-export const nameKey = (name) => createHash('sha256').update(normalize(name) || 'unknown').digest('hex').slice(0, 12);
+export const nameKey = (name) => createHash('sha256').update(normalizeName(name) || 'unknown').digest('hex').slice(0, 12);
 const centsOf = (value) => (Number.isFinite(value) ? String(Math.round(value * 100)) : 'na');
 const isIso = (value) => typeof value === 'string' && isoDate(value) === value;
 const positive = (value) => Number.isFinite(value) && value > 0;
@@ -162,7 +162,7 @@ const fact = (key, value, confidence, locator, extra = {}) => ({ kind: 'fact', k
 function withholding({ docType, jurisdiction, amount, date, datePrecision, taxYear, basis, payer, slotKey, field }) {
   return {
     kind: 'tax_payment', jurisdiction, amount: cents(amount), paymentKind: 'withholding', date, datePrecision, taxYear, sheetYear: taxYear,
-    taxYearBasis: basis, payer, sourceSlot: `wh:${slotKey}:${taxYear}:${normalize(jurisdiction)}`, locator: { document: docType, field },
+    taxYearBasis: basis, payer, sourceSlot: `wh:${slotKey}:${taxYear}:${normalizeName(jurisdiction)}`, locator: { document: docType, field },
   };
 }
 
@@ -173,7 +173,7 @@ function employerFacts(docType, x, { entities = [] }, benefits) {
   const key = nameKey(name);
   const confidence = x.confidence;
   const locator = { document: docType, field: 'employerName' };
-  const household = Boolean(name) && entities.some((e) => normalize(e) === normalize(name));
+  const household = Boolean(name) && entities.some((e) => normalizeName(e) === normalizeName(name));
   if (household) return [fact('income.sCorp', true, confidence, locator)];
   const hold = { hold: `employer:${key}`, employerKey: key, employerName: name };
   return [
@@ -298,7 +298,7 @@ export const isPdf = (file) => /\.pdf$/i.test(file.name ?? '') || /application\/
 // Decoded UTF-8 text without control characters, or null.
 export function plainText(file) {
   try {
-    const text = new TextDecoder('utf-8', { fatal: true }).decode(file.bytes).replace(/^﻿/, '');
+    const text = decodeText(file);
     return /[\x00-\x08\x0B\x0E-\x1F\x7F]/.test(text) ? null : text;
   } catch { return null; }
 }

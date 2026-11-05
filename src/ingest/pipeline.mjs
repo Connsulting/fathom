@@ -12,7 +12,7 @@ import { identifyAccountRows, dedupeKey } from './dedupe.mjs';
 import { readWorkbook, ledgerHeader, taxHeader } from './workbook.mjs';
 import { entityOf } from './parsers/pnl-workbook.mjs';
 import { header as headerText, cents, institution, isoDate } from './format.mjs';
-import { readTable, mapTabular, sourceKindOf as mappedSourceKind, id as MAPPED_ID, label as MAPPED_LABEL } from './mapping.mjs';
+import { readTable, mapTabular, isZip, sourceKindOf as mappedSourceKind, id as MAPPED_ID, label as MAPPED_LABEL } from './mapping.mjs';
 import { extractDocument, isPdf, plainText, labelOf } from './extract.mjs';
 import {
   ask, recordFact, archive, normalizeName, OWNER_OPTIONS, KIND_OPTIONS, NEAR_DUPLICATE_OPTIONS, EMPLOYER_OPTIONS, taxYearOptions,
@@ -37,7 +37,6 @@ const emptyCounts = () => ({ rows: {}, duplicates: 0, revised: 0, superseded: 0,
 const baseName = (name) => String(name ?? '').split(/[\\/]/).pop().slice(0, 255) || 'upload';
 const toBytes = (bytes) => (bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes ?? []));
 const json = (value) => (value === undefined || value === null ? null : JSON.stringify(value));
-const isZip = (b) => b.length >= 4 && b[0] === 0x50 && b[1] === 0x4b && b[2] === 0x03 && b[3] === 0x04;
 const moneyEq = (a, b) => (a == null && b == null) || (a != null && b != null && Math.round(a * 100) === Math.round(b * 100));
 const numEq = (a, b) => (a == null && b == null) || (a != null && b != null && Math.abs(a - b) < 1e-9);
 const addDays = (iso, n) => new Date(Date.parse(`${iso}T00:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
@@ -329,13 +328,13 @@ function closingBalances(rows) {
   return keep;
 }
 
+const periodTo = (db, fileId) => db.prepare('SELECT period_to FROM files WHERE id = ?').get(fileId)?.period_to ?? null;
 // Newer or equal file period (unknown oldest) holds authority over a revision slot.
 function newerOrEqual(db, incomingTo, existingFileId) {
-  const existingTo = existingFileId ? db.prepare('SELECT period_to FROM files WHERE id = ?').get(existingFileId)?.period_to ?? null : null;
+  const existingTo = existingFileId ? periodTo(db, existingFileId) : null;
   if (existingTo == null) return true;
   return incomingTo != null && incomingTo >= existingTo;
 }
-const periodTo = (db, fileId) => db.prepare('SELECT period_to FROM files WHERE id = ?').get(fileId)?.period_to ?? null;
 
 function putBalance(ctx, row, parser, locator) {
   const { db, fileId, counts, now } = ctx;
@@ -468,9 +467,10 @@ function putTax(ctx, row, parser, locator, workbook) {
     counts.revised += 1;
   }
   if (slot && payer?.startsWith('w2:')) {
+    const remove = db.prepare('DELETE FROM tax_payments WHERE id = ?');
     for (const r of db.prepare("SELECT * FROM tax_payments WHERE source_slot = ? AND payer LIKE 'paystub:%' ORDER BY id").all(slot)) {
       archive(db, 'tax_payments', { ...r }, { by: fileId, reason: 'summarized', now });
-      db.prepare('DELETE FROM tax_payments WHERE id = ?').run(r.id);
+      remove.run(r.id);
       counts.superseded += 1;
     }
   }
@@ -587,12 +587,13 @@ function incompleteParts(db, file, parser, warnings) {
 function supersede(ctx, coverage) {
   const { db, fileId, counts, now } = ctx;
   for (const [table, prefix] of [['pnl_lines', 'pnl:'], ['tax_payments', 'tax:']]) {
+    const remove = db.prepare(`DELETE FROM ${table} WHERE id = ?`);
     for (const slot of coverage.filter((s) => s.startsWith(prefix) && !ctx.incomplete.tax.has(s))) {
       for (const r of db.prepare(`SELECT * FROM ${table} WHERE source_slot = ? AND (file_id IS NULL OR file_id != ?) ORDER BY id`).all(slot, fileId)) {
         if (ctx.keys.has(r.dedupe_key)) continue;
         if (table === 'pnl_lines' && ctx.incomplete.pnl(r.entity, r.category, r.period)) continue;
         archive(db, table, { ...r }, { by: fileId, reason: 'removed', now });
-        db.prepare(`DELETE FROM ${table} WHERE id = ?`).run(r.id);
+        remove.run(r.id);
         counts.superseded += 1;
       }
     }
@@ -638,9 +639,10 @@ function askTaxYears(ctx, rows) {
 // Account figures: the latest balance, else the holdings total at the latest as-of date.
 function refreshFigures(ctx, accountIds) {
   const { db, now } = ctx;
-  const ids = new Set(accountIds.map((id) => db.prepare('SELECT id FROM accounts WHERE id = ?').get(id)?.id).filter(Boolean));
-  for (const id of ids) {
-    const acct = db.prepare('SELECT id, name, source_id FROM accounts WHERE id = ?').get(id);
+  const accountOf = db.prepare('SELECT id, name, source_id FROM accounts WHERE id = ?');
+  for (const id of accountIds) {
+    const acct = accountOf.get(id);
+    if (!acct) continue;
     let fig = db.prepare(`SELECT b.amount AS v, b.file_id, b.parser, b.locator, f.source_id FROM balances b LEFT JOIN files f ON f.id = b.file_id
                           WHERE b.account_id = ? ORDER BY b.date DESC, b.id DESC LIMIT 1`).get(id);
     if (!fig) {

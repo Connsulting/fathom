@@ -7,7 +7,7 @@
 import { existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getSetting, parseJson } from '../store/db.mjs';
+import { getSetting, parseJson, tx } from '../store/db.mjs';
 import { getFacts } from '../store/facts.mjs';
 import { escapeUserText } from '../shared/tokens.mjs';
 import { activePacks, loadPacks } from './index.mjs';
@@ -73,9 +73,6 @@ export function refreshPackState(db, { packDirs, dataDir, now } = {}) {
     }
   };
   if (db.isTransaction) run();
-  else {
-    db.exec('BEGIN');
-    try { run(); db.exec('COMMIT'); } catch (e) { db.exec('ROLLBACK'); throw e; }
-  }
+  else tx(db, run);
   return { updated, inserted };
 }

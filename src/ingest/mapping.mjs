@@ -3,7 +3,8 @@
 // file with the same headers needs no model call. The model never sees a long digit run.
 
 import { createHash } from 'node:crypto';
-import { csv, isoDate, money, number, mask, institution, warning, result } from './format.mjs';
+import { parseJson } from '../store/db.mjs';
+import { csv, header, isoDate, money, number, mask, institution, warning, result } from './format.mjs';
 import { readWorkbook } from './workbook.mjs';
 import { identifyAccountRows } from './dedupe.mjs';
 import { redact } from './redact.mjs';
@@ -36,10 +37,9 @@ const SYSTEM = [
   'Leave out any field no column holds. Long numbers in the sample are masked on purpose.',
 ].join(' ');
 
-const normalizeHeader = (h) => String(h ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
-export const headerSignature = (headers) => createHash('sha256').update(JSON.stringify(headers.map(normalizeHeader))).digest('hex');
+export const headerSignature = (headers) => createHash('sha256').update(JSON.stringify(headers.map(header))).digest('hex');
 
-const isZip = (bytes) => bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04;
+export const isZip = (bytes) => bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04;
 const isCsvName = (file) => /\.(csv|tsv)$/i.test(file.name ?? '') || /csv/i.test(file.mime ?? '');
 
 // {headers, rows: [{values, locator}]} for a CSV or the first workbook sheet with a header row of
@@ -63,7 +63,7 @@ function workbookTable(file) {
     if (at < 0) continue;
     const head = sheet.rows[at];
     const columns = [...head.cells.keys()];
-    const headers = columns.map((c) => normalizeHeader(head.cells.get(c).value));
+    const headers = columns.map((c) => header(head.cells.get(c).value));
     if (new Set(headers).size !== headers.length || headers.some((h) => !h)) return null;
     const rows = sheet.rows.slice(at + 1)
       .map((row) => ({ values: columns.map((c) => { const v = row.cells.get(c)?.value; return v === undefined || v === null ? '' : v; }), locator: { sheet: sheet.name, row: row.number } }))
@@ -162,10 +162,9 @@ export function applyMapping(mapping, table, file) {
 
 // Prompt text: the headers and at most SAMPLE_ROWS data rows, every cell redacted.
 export function sampleText(table) {
-  const line = (cells) => redactCellsText(cells).map((c) => JSON.stringify(c)).join(',');
+  const line = (cells) => cells.map((c) => JSON.stringify(redact(c))).join(',');
   return [line(table.headers), ...table.rows.slice(0, SAMPLE_ROWS).map((r) => line(r.values))].join('\n');
 }
-const redactCellsText = (cells) => cells.map((c) => redact(c === null || c === undefined ? '' : String(c)));
 
 // The engine's mapping for this table, or null when the engine is off, fails or proposes an
 // invalid mapping.
@@ -187,8 +186,7 @@ export async function mapTabular(db, engine, file, { now } = {}) {
   const signature = headerSignature(table.headers);
   const stored = db.prepare('SELECT mapping FROM column_mappings WHERE signature = ?').get(signature);
   if (stored) {
-    let mapping = null;
-    try { mapping = JSON.parse(stored.mapping); } catch { /* unusable stored mapping */ }
+    const mapping = parseJson(stored.mapping, null);
     if (mapping && validateMapping(mapping, table.headers).ok) {
       db.prepare('UPDATE column_mappings SET uses = uses + 1 WHERE signature = ?').run(signature);
       return { status: 'imported', result: applyMapping(mapping, table, file), signature, mapping };

@@ -5,6 +5,7 @@
 import { getSetting, parseJson } from '../store/db.mjs';
 import { escapeUserText } from '../shared/tokens.mjs';
 import { howToFor, listHowTo } from './howto.mjs';
+import { pendingItems } from './confirm.mjs';
 
 const MONTHLY = Object.freeze({ label: 'monthly', staleAfterDays: 45 });
 
@@ -86,22 +87,8 @@ export function recordSource(db, { id, label, kind, asOf, now } = {}) {
   return { id, asOf: latest };
 }
 
-function itemOf(row) {
-  return {
-    id: row.id,
-    kind: row.kind,
-    subject: row.subject,
-    question: row.question,
-    options: parseJson(row.options, []),
-    context: parseJson(row.context, {}),
-    status: row.status,
-    answer: row.answer ?? null,
-    fileId: row.file_id ?? null,
-    createdAt: row.created_at,
-  };
-}
-
-function fileOf(row) {
+// A files row as the API returns it.
+export function fileOf(row) {
   return {
     id: row.id,
     name: row.name,
@@ -121,7 +108,7 @@ function clockOf(db, clock) {
 
 export function ingestState(db, { clock } = {}) {
   const at = clockOf(db, clock);
-  const items = db.prepare("SELECT * FROM confirm_items WHERE status = 'pending' ORDER BY id").all().map(itemOf);
+  const items = pendingItems(db);
   // Uploaded files always have stored bytes; the demo seed's provenance row does not.
   const files = db.prepare(`SELECT id, name, status, source_kind, parser, counts, uploaded_at FROM files
                             WHERE stored_path IS NOT NULL ORDER BY uploaded_at DESC, rowid DESC LIMIT ?`)
