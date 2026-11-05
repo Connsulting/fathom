@@ -303,6 +303,58 @@ describe('unsupported inputs', () => {
   }));
 });
 
+describe('interrupted ingest', () => {
+  const csv = () => aggregatorFile('export.csv', [
+    { date: '2032-03-02', amount: '7.25', description: 'Synthetic first' },
+    { date: '2032-03-03', amount: '8.75', description: 'Synthetic second' },
+  ]);
+
+  // The state a restart mid-parse leaves: the encrypted bytes and a 'pending' files row, no rows.
+  async function interrupted(s, file) {
+    const hash = sha256(file.bytes);
+    const fileId = fileIdOf(file.bytes);
+    const storedPath = await V.storeFile({ dataDir: s.config.dataDir, key: s.key, id: fileId, bytes: file.bytes });
+    s.db.prepare(`INSERT INTO files (id, name, mime, size, sha256, uploaded_at, stored_path, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')`)
+      .run(fileId, file.name, file.mime ?? null, file.bytes.length, hash, NOW, storedPath);
+    return fileId;
+  }
+
+  test('re-uploading the same bytes of a pending file that is not in flight re-routes it and imports its rows', () => withStore(async (s) => {
+    const file = csv();
+    const fileId = await interrupted(s, file);
+    assert.equal(count(s.db, 'transactions'), 0);
+    const r = await P.ingestFile(s.db, { ...file }, s.opts(await offEngine()));
+    assert.equal(r.status, 'imported');
+    assert.equal(r.fileId, fileId);
+    assert.equal(inserted(r, 'transaction'), 2);
+    assert.equal(count(s.db, 'transactions'), 2);
+    assert.equal(count(s.db, 'files'), 1);
+    assert.equal(one(s.db, 'SELECT status FROM files WHERE id = ?', fileId).status, 'imported');
+  }));
+
+  test('retryFile accepts a pending file that is not in flight and imports it', () => withStore(async (s) => {
+    const file = csv();
+    const fileId = await interrupted(s, file);
+    const r = await P.retryFile(s.db, fileId, s.opts(await offEngine()));
+    assert.equal(r.status, 'imported');
+    assert.equal(r.fileId, fileId);
+    assert.equal(count(s.db, 'transactions'), 2);
+    assert.equal(one(s.db, 'SELECT status FROM files WHERE id = ?', fileId).status, 'imported');
+  }));
+
+  test('two concurrent uploads of identical bytes import once and the other is a duplicate', () => withStore(async (s) => {
+    const file = csv();
+    const eng = await offEngine();
+    const results = await Promise.all([
+      P.ingestFile(s.db, { ...file }, s.opts(eng)),
+      P.ingestFile(s.db, { ...file }, s.opts(eng)),
+    ]);
+    assert.deepEqual(results.map((x) => x.status).sort(), ['duplicate', 'imported']);
+    assert.equal(count(s.db, 'files'), 1);
+    assert.equal(count(s.db, 'transactions'), 2);
+  }));
+});
+
 describe('supersede', () => {
   test('business-pnl then the revised workbook: revised amount replaces the old one; a recut removes a slot row', () => withStore(async (s) => {
     const off = await offEngine();
