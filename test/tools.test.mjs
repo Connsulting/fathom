@@ -119,6 +119,25 @@ describe('read tools', () => {
     }
   });
 
+  test('list_accounts returns imported account strings verbatim and still resolves demo tokens', async () => {
+    t.db.prepare(`INSERT INTO accounts (id, inst, mask, name, owner, kind, mirror, note, fig_key, file_id, parser, locator)
+                  VALUES ('acct_imported', 'Inst {n:owner}', '9876', 'Bank {f:nope} <b>x</b>', 'Owner {n:owner}', 'checking', 'aggregator', 'Note {f:nope}', NULL, NULL, 'aggregator', 'row 0')`).run();
+    try {
+      const rows = await call('list_accounts');
+      const got = rows.find(x => x.id === 'acct_imported');
+      assert.ok(got);
+      assert.equal(got.name, 'Bank {f:nope} <b>x</b>');
+      assert.equal(got.inst, 'Inst {n:owner}');
+      assert.equal(got.owner, 'Owner {n:owner}');
+      assert.equal(got.note, 'Note {f:nope}');
+      const seeded = t.db.prepare("SELECT id, name FROM accounts WHERE parser = 'demo-seed'").all();
+      assert.ok(seeded.length > 0);
+      for (const a of demo.accounts) assert.ok(rows.find(x => x.id === a.id), a.id);
+    } finally {
+      t.db.prepare("DELETE FROM accounts WHERE id = 'acct_imported'").run();
+    }
+  });
+
   test('list_positions with an account filter', async () => {
     const all = await call('list_positions');
     assert.ok(all.length > 0);

@@ -168,10 +168,12 @@ export const tools = [
       const latest = ctx.db.prepare('SELECT date, amount FROM balances WHERE account_id = ? ORDER BY date DESC LIMIT 1');
       return ctx.db.prepare('SELECT * FROM accounts ORDER BY sort, id').all().map(a => {
         const b = latest.get(a.id);
-        return plainDeep(scope, {
+        const out = {
           id: a.id, inst: a.inst, mask: a.mask, name: a.name, owner: a.owner, kind: a.kind, mirror: a.mirror,
           note: a.note || '', balance: b ? b.amount : null, asOf: b ? b.date : null,
-        });
+        };
+        // Imported accounts carry text from uploaded files: verbatim, never token-resolved.
+        return a.parser === 'demo-seed' ? plainDeep(scope, out) : out;
       });
     },
   },

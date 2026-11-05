@@ -1,4 +1,4 @@
-import { csv, csvScore, text, isoDate, money, number, mask, warning, result, empty } from '../format.mjs';
+import { csv, csvScore, text, isoDate, money, number, mask, warning, result, empty, LimitError } from '../format.mjs';
 
 export const id = 'brokerage-positions';
 export const label = 'Brokerage positions';
@@ -24,9 +24,17 @@ export function parse(file) {
     if (!required.every((key) => headers.includes(key))) return empty('missing_headers');
     const date = asOf(file);
     if (!date) return empty('missing_as_of');
+    // A short record that starts with an account number of the file is a truncated position of
+    // that account (its warning carries the account, so only that account's snapshot is
+    // incomplete); other short lines, such as footers, are not positions.
+    const accounts = new Set(records.flatMap(({ values }) => values.length >= 3 && values[0].trim() ? [values[0].trim()] : []));
     const rows = [];
     for (const { values, locator } of records) {
-      if (values.length < 3) continue;
+      if (values.length < 3) {
+        const number = values[0].trim();
+        if (accounts.has(number)) warnings.push({ code: 'truncated_position', locator, account: { inst: '', mask: mask(number) } });
+        continue;
+      }
       while (values.length > headers.length && !values.at(-1).trim()) values.pop();
       const record = Object.fromEntries(headers.map((key, i) => [key, values[i]?.trim() ?? '']));
       if (/pending/i.test(`${record.symbol} ${record.description}`)) { warning(warnings, 'pending_activity', locator); continue; }
@@ -36,11 +44,17 @@ export function parse(file) {
       const quantity = cash && !record.quantity ? value : number(record.quantity);
       const price = cash && !record['last price'] ? 1 : money(record['last price']);
       const account = { inst: '', mask: mask(record['account number']), name: record['account name'] };
-      if (!account.mask || value === null || quantity === null || price === null || !record.symbol || values.length !== headers.length) { warning(warnings, 'invalid_position', locator); continue; }
+      if (!account.mask || value === null || quantity === null || price === null || !record.symbol || values.length !== headers.length) {
+        warnings.push({ code: 'invalid_position', locator, ...(account.mask ? { account: { inst: '', mask: account.mask } } : {}) });
+        continue;
+      }
       const costBasis = money(record['cost basis total']);
       if (record['cost basis total'] && costBasis === null) warning(warnings, 'invalid_cost_basis', locator);
       rows.push({ kind: 'position', account, asOf: date, symbol: cash ? 'CASH' : record.symbol, name: record.description, quantity, price, value, ...(costBasis !== null ? { costBasis } : {}), locator });
     }
     return result(rows, warnings);
-  } catch { return empty('malformed_csv'); }
+  } catch (e) {
+    if (e instanceof LimitError) throw e;
+    return empty('malformed_csv');
+  }
 }

@@ -1,4 +1,4 @@
-// API handlers. Each takes { db, config, answerer, params, body } and returns the JSON response
+// API handlers. Each takes { db, config, answerer, engine, params, body } and returns the JSON response
 // body (status 200) or throws HttpError. Every action writes the store and answers with the
 // fresh scenario, so the browser swaps it in.
 
@@ -7,6 +7,7 @@ import { buildScenario, loadContent, defaultPicks, wargameLists } from '../scena
 import { ACTION_STATUS, packStatus } from '../shared/rules.mjs';
 import { escapeUserText } from '../shared/tokens.mjs';
 import { seedDemo } from '../../demo/seed.mjs';
+import { clearStoredFiles } from '../ingest/vault.mjs';
 import { HttpError } from './http.mjs';
 import { findQuestion, isIndex } from './questions.mjs';
 
@@ -243,8 +244,9 @@ export function onboarding(ctx) {
   return { scenario: scenarioOf(ctx) };
 }
 
-export function demoReset(ctx) {
+export async function demoReset(ctx) {
   if (getSetting(ctx.db, 'mode', null) !== 'demo') throw new HttpError(404, 'not found');
   seedDemo(ctx.db);
+  await clearStoredFiles(ctx.config.dataDir);
   return { scenario: scenarioOf(ctx) };
 }

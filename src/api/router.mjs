@@ -1,15 +1,19 @@
 // Routing: the JSON API under /api plus /healthz, the MCP endpoint at exactly /mcp, and static
 // files for everything else.
 // `routes` is the route table (docs/architecture.md lists every entry; test/docs.test.mjs checks).
+// `upload: true` routes take multipart bodies (read by the handler through ctx.readUpload);
+// `ingest: true` routes never log error details, which could carry file contents.
 
 import { fileURLToPath } from 'node:url';
 import { HttpError, setSecurityHeaders, sendJson, sendError, guardPost, readJsonBody } from './http.mjs';
+import { guardUpload, readMultipart } from './upload.mjs';
 import { createStatic } from './static.mjs';
 import * as h from './handlers.mjs';
 import * as k from './keys.mjs';
 import { createKeyService, loadServerSecret } from '../mcp/keys.mjs';
 import { createMcpHandler } from '../mcp/index.mjs';
 import { isAllowedHost } from '../mcp/guard.mjs';
+import * as ih from './ingest-handlers.mjs';
 
 const TABLE = [
   { method: 'GET', path: '/healthz', handler: h.healthz },
@@ -26,6 +30,12 @@ const TABLE = [
   { method: 'POST', path: '/api/keys', handler: k.createKey },
   { method: 'POST', path: '/api/keys/:id/revoke', handler: k.revokeKey },
   { method: 'GET', path: '/api/mcp', handler: k.mcpInfo },
+  { method: 'POST', path: '/api/files', handler: ih.uploadFiles, upload: true, ingest: true },
+  { method: 'GET', path: '/api/files', handler: ih.listFiles, ingest: true },
+  { method: 'POST', path: '/api/files/:id/retry', handler: ih.retryFile, ingest: true },
+  { method: 'GET', path: '/api/confirm', handler: ih.listPendingConfirm, ingest: true },
+  { method: 'POST', path: '/api/confirm/list', handler: ih.listConfirm, ingest: true },
+  { method: 'POST', path: '/api/confirm/:id/answer', handler: ih.answerConfirm, ingest: true },
 ];
 
 export const routes = TABLE.map(({ method, path }) => ({ method, path }));
@@ -64,9 +74,13 @@ function findRoute(method, rawPath) {
   return hit;
 }
 
+// A log-safe error code: the error's code or class name when it is a plain identifier.
+const IDENT = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
+const safeCode = err => [err && err.code, err && err.name].find(v => typeof v === 'string' && IDENT.test(v)) || 'unknown';
+
 // `keys` (key service) and `mcp` (the /mcp handler) are built from config.dataDir on first use
 // when not passed in.
-export function createHandler({ db, config, answerer, keys, mcp, webDir = WEB_DIR, sharedDir = SHARED_DIR }) {
+export function createHandler({ db, config, answerer, engine = null, keys, mcp, webDir = WEB_DIR, sharedDir = SHARED_DIR }) {
   const serveStatic = createStatic({ webDir, sharedDir });
   let keyService = keys;
   let mcpHandler = mcp;
@@ -77,6 +91,7 @@ export function createHandler({ db, config, answerer, keys, mcp, webDir = WEB_DI
     const url = req.url || '/';
     const q = url.indexOf('?');
     const rawPath = q >= 0 ? url.slice(0, q) : url;
+    let route = null;
     try {
       if (rawPath === '/mcp') {
         await getMcp()(req, res);
@@ -91,12 +106,17 @@ export function createHandler({ db, config, answerer, keys, mcp, webDir = WEB_DI
           throw new HttpError(403, 'forbidden host');
         }
         const { r, params } = findRoute(req.method, rawPath);
+        route = r;
         let body = {};
-        if (r.method === 'POST') {
+        let readUpload = null;
+        if (r.upload) {
+          guardUpload(req);
+          readUpload = () => readMultipart(req);
+        } else if (r.method === 'POST') {
           guardPost(req);
           body = await readJsonBody(req);
         }
-        const out = await r.handler({ db, config, answerer, params, body, req, get keys() { return getKeys(); } });
+        const out = await r.handler({ db, config, answerer, engine, params, body, readUpload, req, get keys() { return getKeys(); } });
         sendJson(res, 200, out);
         return;
       }
@@ -105,7 +125,10 @@ export function createHandler({ db, config, answerer, keys, mcp, webDir = WEB_DI
       }
       await serveStatic(req, res, rawPath);
     } catch (err) {
-      if (!(err instanceof HttpError)) console.error(err);
+      if (!(err instanceof HttpError)) {
+        if (route && route.ingest) console.error('fathom: ingest request failed', safeCode(err));
+        else console.error(err);
+      }
       if (req.readable) req.resume();
       sendError(res, err);
     }
