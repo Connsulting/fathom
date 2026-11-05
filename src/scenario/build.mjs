@@ -347,6 +347,8 @@ export function buildScenario(db, { clock } = {}) {
       return {
         id: a.id, inst: a.inst, name: a.name, owner: a.owner, kind: a.kind, fig: a.fig_key, mirror: a.mirror, note: a.note || '', mask: a.mask,
         asOf: f.asOf || '', fresh: f.fresh || 'unknown', sourceId: f.sourceId || null,
+        // Text that came from an uploaded file: render as plain text, never as tokens or markup.
+        imported: a.parser !== 'demo-seed',
       };
     }),
     advisor: section(content, 'advisor'),

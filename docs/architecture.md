@@ -309,6 +309,8 @@ live state merged in, plus `live`. It only reads.
 7. Ingest freshness: `live.ingest` is `ingestState(db, {clock})` from `src/ingest/freshness.mjs`.
    Each account gains `asOf` (its last data date, or ''), `fresh` (`fresh`, `stale` or `unknown`)
    and `sourceId` (its ingest source id, or null); demo accounts read '', `unknown` and null.
+   `imported` is false only for demo seeded accounts; the UI renders every other account's name,
+   institution, owner and note as plain escaped text, never through token resolution.
    `domains` pass through `applyFreshness`: a stale ingest source appends "<label> data is <n>
    days old. Export a fresh copy." to its domain's note, moves a `covered` domain to `waiting`, and
    adds the domain (status `waiting`) when the store has none with that id.

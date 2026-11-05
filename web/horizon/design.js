@@ -801,11 +801,13 @@ function pAccounts() {
   accs.forEach((a) => { const k = KIND[a.kind] || 'Other'; (groups[k] = groups[k] || []).push(a); });
   const keys = Object.keys(groups).sort((a, b) => (order.indexOf(a) + 99) % 99 - (order.indexOf(b) + 99) % 99);
   const mirror = { connected: 'Mirrored', manual: 'Manual', missing: 'Not connected' };
+  // Imported accounts carry text from uploaded files: plain text, no tokens or markup.
+  const lbl = (a, s) => (a.imported === false ? T(s) : esc(s));
   const list = keys.map((k) => section(k, `<div class="h-accs">${groups[k].map((a) => `<div class="h-acc ${a.mirror}">
-      <div class="h-acc-n"><b>${T(a.name)}</b><span>${T(a.inst)}${a.owner ? `, ${T(a.owner)}` : ''}</span></div>
+      <div class="h-acc-n"><b>${lbl(a, a.name)}</b><span>${lbl(a, a.inst)}${a.owner ? `, ${lbl(a, a.owner)}` : ''}</span></div>
       <div class="h-acc-v">${a.fig ? figHtml(a.fig) : '<span class="h-mute">No balance</span>'}</div>
       <div class="h-acc-m"><i></i>${mirror[a.mirror] || esc(a.mirror)}</div>
-      ${ingest.accountMeta(a)}${a.note ? `<p>${T(a.note)}</p>` : ''}</div>`).join('')}</div>`)).join('');
+      ${ingest.accountMeta(a)}${a.note ? `<p>${lbl(a, a.note)}</p>` : ''}</div>`).join('')}</div>`)).join('');
   const series = Object.entries(api.s.series || {});
   const evs = arr(api.s.events).filter((e) => ['income', 'account'].includes(e.kind));
   const conn = accs.filter((a) => a.mirror === 'connected').length;
