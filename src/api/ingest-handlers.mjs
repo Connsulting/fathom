@@ -1,13 +1,12 @@
 // Ingest API handlers: file uploads, the file list, retries and the confirm queue. Each takes the
 // router ctx ({db, config, engine, scheduler, params, body, readUpload}) and returns the JSON body or
-// throws HttpError. A request that imports a file triggers the plan job through ctx.scheduler. Pipeline, vault and confirm errors map to statuses here with fixed messages, so no
+// throws HttpError. A request that imports a file triggers the plan and confirm-guess jobs through ctx.scheduler. Pipeline, vault and confirm errors map to statuses here with fixed messages, so no
 // file name contents or row values reach a response or a log.
 
 import { getSetting } from '../store/db.mjs';
 import { loadDataKey, VaultError } from '../ingest/vault.mjs';
 import { ingestFiles, retryFile as retryIngest } from '../ingest/pipeline.mjs';
 import { answerItem, reviseItem, reopenItem, finalReason, pendingItems, listItems, ConfirmError } from '../ingest/confirm.mjs';
-import { scheduleGuesses } from '../ingest/guess.mjs';
 import { fileOf } from '../ingest/freshness.mjs';
 import { refreshPackState } from '../packs/state.mjs';
 import { HttpError } from './http.mjs';
@@ -48,16 +47,18 @@ const IDENT = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 const safeCode = err => [err && err.code, err && err.name].find(v => typeof v === 'string' && IDENT.test(v)) || 'unknown';
 
 // Fire and forget: a trigger failure logs a code and never fails the request.
-function triggerPlan(ctx) {
+function triggerJob(ctx, jobId) {
   if (!ctx.scheduler) return;
-  const failed = err => console.error('fathom: plan trigger failed', safeCode(err));
+  const failed = err => console.error(`fathom: ${jobId} trigger failed`, safeCode(err));
   try {
-    const p = ctx.scheduler.trigger('plan', 'ingest');
+    const p = ctx.scheduler.trigger(jobId, 'ingest');
     if (p && typeof p.then === 'function') p.then(null, failed);
   } catch (err) {
     failed(err);
   }
 }
+const triggerPlan = ctx => triggerJob(ctx, 'plan');
+const triggerGuesses = ctx => triggerJob(ctx, 'confirm-guess');
 
 const ingestOpts = (ctx, key) => ({ engine: ctx.engine, config: ctx.config, now: nowIso(), key });
 
@@ -74,7 +75,7 @@ export async function uploadFiles(ctx) {
     throw err;
   }
   if (results.some(r => r && r.status === 'imported')) triggerPlan(ctx);
-  if (results.some(r => r.status === 'imported')) scheduleGuesses(ctx.db, ctx.engine);
+  if (results.some(r => r && r.status === 'imported')) triggerGuesses(ctx);
   const scenario = scenarioOf(ctx);
   return { scenario, files: results, pending: scenario.live.ingest.pending };
 }
@@ -97,7 +98,7 @@ export async function retryFile(ctx) {
     throw err;
   }
   if (file && file.status === 'imported') triggerPlan(ctx);
-  if (file && file.status === 'imported') scheduleGuesses(ctx.db, ctx.engine);
+  if (file && file.status === 'imported') triggerGuesses(ctx);
   return { scenario: scenarioOf(ctx), file };
 }
 

@@ -17,7 +17,7 @@ over every module's test directory (`npm test`), end-to-end tests with Playwrigh
 
 | Path | Owner and purpose |
 |---|---|
-| `package.json` | Scripts `start`, `test`, `seed:demo`, `e2e`, `e2e:smoke` (names are frozen), plus `plan` (`npm run plan`, one planning run over the real store) and `confirm:guess` (`npm run confirm:guess`, backfills engine guesses for pending confirm questions). |
+| `package.json` | Scripts `start`, `test`, `seed:demo`, `e2e`, `e2e:smoke` (names are frozen), plus `plan` (`npm run plan`, one planning run over the real store) and `confirm:guess` (`npm run confirm:guess`, one run of the `confirm-guess` job: engine guesses for pending confirm questions). |
 | `src/server.mjs` | HTTP entry: store mode rules, then serves the UI, `/shared/` and the API. |
 | `src/config.mjs` | `loadConfig(env)`: every environment key, paths only. |
 | `src/store/` | `db.mjs` plus `migrations/NNN-name.sql`. Owned by the foundation item. |
@@ -603,7 +603,8 @@ serves) and stops it before closing the store.
 1. Periods are computed in the owner's zone (`settings.timezone`, default `America/New_York`; an
    invalid zone falls back to the default). `plan` daily at 02:00 (key `YYYY-MM-DD`),
    `brief-email` monthly on the 1st at 07:00 (`YYYY-MM`), `deadline-alerts` daily at 07:00
-   (`YYYY-MM-DD`), `freshness` weekly on Monday at 06:00 (that Monday's date). The due key is the
+   (`YYYY-MM-DD`), `freshness` weekly on Monday at 06:00 (that Monday's date), `confirm-guess`
+   daily at 03:00 (`YYYY-MM-DD`). The due key is the
    latest period whose start is at or before now. With `FATHOM_CLOCK` set, the clock date at 12:00
    is now, so every period of that day is due.
 2. Idempotence: one attempt per (`job_id`, `period_key`), enforced by the unique index. A failed
@@ -634,10 +635,20 @@ serves) and stops it before closing the store.
    refused with 409 before the scheduler, so nothing changes. `npm run plan` builds a scheduler
    with only the plan handler and runs it now; it exits 3, telling the owner to use Run now in the
    app or `POST /api/jobs/plan/run`, when another process (the running server) holds the lease.
-8. Triggers during a run: `trigger(jobId, reason)` for a job that is already running remembers the
+8. Confirm-guess job: `defaultHandlers` includes `confirm-guess`, the only code path that asks the
+   engine for confirm guesses. Nightly at 03:00, manual (Run now, `POST /api/jobs/confirm-guess/run`,
+   `npm run confirm:guess`) and ingest (`trigger('confirm-guess', 'ingest')` beside the plan trigger
+   after an upload or retry imports a file) runs share it. It calls `guessPending(db, engine, {now:
+   ctx.now})` until nothing is left. When that skips (engine off, not a live engine, nothing
+   pending) the run is `skipped` with note `{pending}`; otherwise it is `ok` with the batch cost
+   sum and note `{batches, items, guessed, stopped}`, also when an engine error stopped it.
+   `npm run confirm:guess` builds a scheduler with only this handler, runs it now and prints one
+   JSON line `{status, note}`; it exits 1 when there is no store and 3 when another process holds
+   the lease.
+9. Triggers during a run: `trigger(jobId, reason)` for a job that is already running remembers the
    request, and when the current run finishes exactly one more run starts with that reason, so
    several triggers during one run coalesce into one rerun. `trigger` never rejects.
-9. Stop: `stop()` is graceful and never rejects. It stops ticking, refuses new runs (409) and
+10. Stop: `stop()` is graceful and never rejects. It stops ticking, refuses new runs (409) and
    drops queued reruns, waits for active runs to finish (at most `drainMs`, default 30 seconds),
    then releases the lease; the server awaits it before closing the store.
 
@@ -1088,11 +1099,9 @@ parser, period). A guess is kept only when its item is in the batch, its option 
 item's options, and its reason is one line of at most 160 characters whose every number appears
 in that item; every item sent gets a row (`option_id` NULL otherwise). It runs only on a live
 engine (or with a per-call fake script in tests) that is on; engine errors stop the run as
-`stopped`. Guesses never answer. After an upload or retry imports a file the handler calls
-`scheduleGuesses(db, engine)` in the background (single flight per store, one rerun if triggered
-meanwhile, failures logged as a code). `npm run confirm:guess` (`src/jobs/guess-cli.mjs`) runs the
-backfill on the store in `FATHOM_DATA` and prints one JSON line (`{skipped}` or `{batches, items,
-guessed, costUsd, stopped?}`); it exits 1 when there is no store.
+`stopped`. Guesses never answer. It runs only as the scheduler job `confirm-guess` (see "Jobs"):
+daily at 03:00, after an upload or retry that imports a file, Run now, and `npm run confirm:guess`
+(`src/jobs/guess-cli.mjs`).
 
 ### Freshness
 

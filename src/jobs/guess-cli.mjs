@@ -1,13 +1,18 @@
-// `npm run confirm:guess`: backfill engine guesses for every pending confirm question in the store
-// in $FATHOM_DATA (plan D7). Prints one JSON line, {skipped} or {batches, items, guessed, costUsd,
-// stopped?}, never a question or a value. Exit 0 when the run finishes or is skipped, 1 when there
-// is no store (nothing is created) or the run fails.
+// `npm run confirm:guess`: one manual run of the confirm-guess job over the store in $FATHOM_DATA,
+// through a scheduler that has only the confirm-guess handler (guesses run only through the
+// scheduler, so the run takes the job lease and gets its job_runs row like any other). Prints one
+// JSON line {status, note} (counts only, never a question or a value). Exit 0 when the run is ok
+// or skipped, 1 when there is no store (nothing is created) or the run fails, 3 when another
+// process (the server) holds the job lease.
 
 import { join } from 'node:path';
 import { loadConfig } from '../config.mjs';
 import { openMigrated, readStoreMode, DB_FILE } from '../store/db.mjs';
 import { createRuntimeEngine } from '../engine/runtime.mjs';
-import { guessPending } from '../ingest/guess.mjs';
+import { createScheduler, defaultHandlers, SchedulerError } from './scheduler.mjs';
+
+const JOB = 'confirm-guess';
+const quiet = { log() {} };
 
 async function main() {
   let config;
@@ -23,24 +28,28 @@ async function main() {
     return 1;
   }
   const db = openMigrated(file);
+  let scheduler = null;
   try {
     const engine = createRuntimeEngine({ db, config });
     await engine.init();
-    const out = await guessPending(db, engine);
-    if (out.skipped) {
-      console.log(JSON.stringify({ skipped: out.skipped }));
-      return 0;
+    const handlers = { [JOB]: defaultHandlers({ publicUrl: config.publicUrl })[JOB] };
+    scheduler = createScheduler({ db, config, engine, handlers, log: quiet });
+    const run = await scheduler.runNow(JOB);
+    if (!run || !['ok', 'skipped'].includes(run.status)) {
+      console.error(`confirm:guess: run failed (${(run && run.errorClass) || 'Error'})`);
+      return 1;
     }
-    const sum = (key) => out.batches.reduce((n, b) => n + (Number(b[key]) || 0), 0);
-    console.log(JSON.stringify({
-      batches: out.batches.length, items: sum('items'), guessed: sum('guessed'), costUsd: Number(sum('costUsd').toFixed(6)),
-      ...(out.stopped ? { stopped: out.stopped } : {}),
-    }));
+    console.log(JSON.stringify({ status: run.status, note: run.note }));
     return 0;
   } catch (e) {
+    if (e instanceof SchedulerError && e.code === 'locked') {
+      console.error(`confirm:guess: another Fathom process (likely the running server) holds the job lease; use Run now on the ${JOB} job in the app, or POST /api/jobs/${JOB}/run.`);
+      return 3;
+    }
     console.error(`confirm:guess: run failed (${e && e.constructor ? e.constructor.name : 'Error'})`);
     return 1;
   } finally {
+    if (scheduler) await scheduler.stop();
     db.close();
   }
 }

@@ -2,7 +2,8 @@
 // questions with no guess row in batches, one engine call each (purpose 'confirm'), and stores a
 // row for every question sent: the option when the guess passes validateGuesses, else NULL, so a
 // question is never sent twice. A guess never answers anything. Only a live engine, or a per-call
-// fake script (tests), is called; engine errors stop the run and are returned as `stopped`.
+// fake script (tests), is called; engine errors stop the run and are returned as `stopped`. The
+// scheduler job 'confirm-guess' (src/jobs/scheduler.mjs) is the only caller outside tests.
 
 import { parseJson, tx } from '../store/db.mjs';
 
@@ -166,33 +167,4 @@ export async function guessPending(db, engine, { now, batchSize = 20, maxBatches
   }
   if (!batches.length) return { skipped: 'none_pending' };
   return { batches };
-}
-
-// Fire and forget after an import (D7): one run per store at a time; a trigger that arrives
-// while one runs makes it run once more after. Never throws; returns the run's promise.
-const flights = new WeakMap();
-export function scheduleGuesses(db, engine) {
-  const running = flights.get(db);
-  if (running) {
-    running.again = true;
-    return running.promise;
-  }
-  const flight = { again: false };
-  flight.promise = (async () => {
-    try {
-      do {
-        flight.again = false;
-        try {
-          const out = await guessPending(db, engine);
-          if (out.stopped) console.error('fathom: guess run failed', out.stopped);
-        } catch (error) {
-          console.error('fathom: guess run failed', codeOf(error));
-        }
-      } while (flight.again);
-    } finally {
-      flights.delete(db);
-    }
-  })();
-  flights.set(db, flight);
-  return flight.promise;
 }
