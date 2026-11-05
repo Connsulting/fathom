@@ -1295,6 +1295,81 @@ describe('withholding recipients (D4, G4)', () => {
       assert.equal(items(s.db, 'withholding_conflict').length, 0);
     }));
   }
+
+  // Review finding N1: a remembered first or second answer names the form it kept, not a position.
+  // A re-downloaded copy (new bytes, same extracted data) of either form, imported after the answer
+  // and resolved to the same recipient, collapses against the kept row: the kept rows stay active,
+  // the copy is never active (archived as withholding_conflict or duplicate, or counted as a
+  // duplicate without being stored), the total is not double counted and nothing new is asked.
+  const N1_CASES = [
+    {
+      name: 'K1 1099-INT original and correction with equal interest',
+      slot: payerSlot,
+      docs: { first: int1099Of('n1-original', 200), second: int1099Of('n1-corrected', 240) },
+      amounts: { first: 200, second: 240 },
+      resolve: (s) => answerDocs(s, () => 'owner'),
+    },
+    {
+      name: 'K1 W-2 original and correction with equal wages',
+      slot: employerSlot,
+      docs: { first: w2Of('n1-first', W2_FIRST), second: w2Of('n1-second', W2_SECOND) },
+      amounts: { first: 12000, second: 13000 },
+      resolve: (s) => answerEmployer(s.db, 'owner'),
+    },
+    {
+      name: 'M1 1099-INT corrected with different interest',
+      slot: payerSlot,
+      docs: { first: formOf('1099-int', 'n1-m1-original', { interest: 1200, federalWithheld: 200 }), second: formOf('1099-int', 'n1-m1-corrected', { interest: 1000, federalWithheld: 150 }) },
+      amounts: { first: 200, second: 150 },
+      resolve: (s) => answerDocs(s, () => 'owner'),
+    },
+    {
+      name: 'M1 W-2 corrected with different wages',
+      slot: employerSlot,
+      docs: { first: w2Of('n1-m1-first', W2_FIRST), second: w2Of('n1-m1-corrected', W2_CORRECTED) },
+      amounts: { first: 12000, second: 11500 },
+      resolve: (s) => answerEmployer(s.db, 'owner'),
+    },
+  ];
+  const N1_SCENARIOS = [
+    { option: 'second', copy: 'first', keep: ['second'], label: 'keep the correction, then a re-downloaded original' },
+    { option: 'first', copy: 'second', keep: ['first'], label: 'keep the original, then a re-downloaded correction' },
+    { option: 'second', copy: 'second', keep: ['second'], label: 'keep the correction, then a re-downloaded correction' },
+    { option: 'both', copy: 'first', keep: ['first', 'second'], label: 'keep both, then a re-downloaded original' },
+  ];
+  const archivedOf = (db, fileId) => all(db, "SELECT * FROM superseded_rows WHERE table_name = 'tax_payments' AND file_id = ? ORDER BY id", fileId);
+
+  for (const c of N1_CASES) {
+    for (const sc of N1_SCENARIOS) {
+      const left = sc.keep.reduce((sum, k) => sum + c.amounts[k], 0);
+      test(`N1: ${c.name}: ${sc.label} keeps ${sc.keep.join(' and ')} (${left}) and asks nothing new`, () => withStore(async (s) => {
+        const ids = { first: await importDoc(s, c.docs.first), second: await importDoc(s, c.docs.second) };
+        c.resolve(s);
+        answerConflict(s, sc.option);
+        const expected = sc.keep.map((k) => [c.amounts[k], ids[k]]);
+        assert.deepEqual(inSlot(s.db, c.slot()).map((t) => [t.amount, t.file_id]), expected, 'the answer is applied');
+        const conflicts = items(s.db, 'withholding_conflict').length;
+        const pending = C.pendingItems(s.db).map((i) => i.id);
+        const keptArchives = sc.keep.map((k) => archivedOf(s.db, ids[k]).length);
+
+        const d = c.docs[sc.copy];
+        const r = await P.ingestFile(s.db, d.file('-again'), s.opts(await d.engine()));
+        assert.equal(r.status, 'imported', 'new bytes are a new file');
+        answerDocs(s, () => 'owner');
+        assert.equal(recipientQuestions(s.db).length, 0, 'the copy is resolved to the owner');
+
+        const rows = inSlot(s.db, c.slot());
+        assert.deepEqual(rows.map((t) => [t.amount, t.file_id]), expected, `${sc.keep.join(' and ')} stay active and the copy collapses`);
+        assert.equal(totalOf(rows), left, 'the payer\'s active federal withholding total');
+        assert.ok(!active(s.db).some((t) => t.file_id === r.fileId), 'the copy is never active');
+        for (const x of archivedOf(s.db, r.fileId)) assert.ok(['withholding_conflict', 'duplicate'].includes(x.reason), `the copy is archived as withholding_conflict or duplicate, not ${x.reason}`);
+        assert.deepEqual(sc.keep.map((k) => archivedOf(s.db, ids[k]).length), keptArchives, 'no kept row is archived');
+        assert.equal(pendingOf(s.db, 'withholding_conflict').length, 0, 'no withholding_conflict is pending');
+        assert.equal(items(s.db, 'withholding_conflict').length, conflicts, 'no new withholding_conflict is queued');
+        assert.deepEqual(C.pendingItems(s.db).map((i) => i.id), pending, 'nothing new is pending');
+      }));
+    }
+  }
 });
 
 // D6 with G6 to G8: a PDF whose text layer has any text is read with pdfjs (in a worker) and goes
