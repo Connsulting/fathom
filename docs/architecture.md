@@ -123,6 +123,7 @@ Row kinds:
 | pnl_line | `entity, period: 'YYYY-MM', category, amount` | `pnl_lines` |
 | tax_payment | `jurisdiction, taxYear, date, amount, kind` | `tax_payments` |
 | document | `docType, taxYear?, fields` | `documents` |
+| snapshot | `account, asOf` (a statement's holdings list, even empty: the account's complete holdings on that date) | none (drives position removal) |
 | fact | `key, value` | `facts` |
 
 Each row carries a `locator` (row number or cell) from the parser; the pipeline adds
@@ -249,7 +250,7 @@ Money columns are dollars rounded to cents; JSON columns hold JSON text. The pro
 | `job_runs` | `id` PK, `job_id`, `started_at`, `finished_at`, `status`, `cost_usd`, `note` |
 | `api_keys` | `id` PK, `name`, `key_hash`, `scopes` JSON, `created_at`, `last_used_at`, `revoked_at` |
 | `spend_ledger` | `id` PK, `ts`, `yyyymm` `'YYYY-MM'`, `purpose`, `cost_usd`, `model`, `tokens` JSON |
-| `superseded_rows` | `id` PK, `table_name`, `dedupe_key`, `row` JSON (the archived row), `file_id`, `superseded_by` (references `files.id`), `reason` (`revised`, `removed`, `older_snapshot`, `alias_merged`, `duplicate_confirmed`, `summarized`), `at` |
+| `superseded_rows` | `id` PK, `table_name`, `dedupe_key`, `row` JSON (the archived row), `file_id`, `superseded_by` (references `files.id`), `reason` (`revised`, `removed`, `older_snapshot`, `alias_merged`, `duplicate_confirmed`, `duplicate_cross_format`, `duplicate`, `summarized`), `at` |
 | `confirm_items` | `id` PK, `kind`, `subject`, `question`, `options` JSON `[{id, label}]`, `context` JSON, `status` in pending, answered, `answer`, `file_id`, `created_at`, `answered_at`; unique (`kind`, `subject`) |
 | `column_mappings` | `signature` PK (header signature), `mapping` JSON, `src`, `created_at`, `uses` |
 | `entity_aliases` | `alias` PK (normalized alias name), `entity` (canonical display name), `created_at` |
@@ -448,34 +449,39 @@ and anything ambiguous becomes a short question in the confirm queue.
    never the text) and are then extracted as `notes` from the decrypted bytes (on retry, from the
    vault).
    Parsing is bounded by `src/ingest/format.mjs` `LIMITS` (200000 rows, 512 columns, 2000000
-   cells, 32768 characters per cell, for CSV and workbooks; CSV sniffing reads only the header
-   within 64 KiB). A reader past a limit throws `LimitError` (`limit_exceeded`); the pipeline
+   cells, 32768 characters per cell; CSV sniffing reads only the header within 64 KiB).
+   Workbooks use `XLSX_LIMITS` for cells (250000 worksheet cells, shared strings and rich-text
+   runs together) and are checked on their raw XML bytes before any part is read. A reader past a limit throws `LimitError` (`limit_exceeded`); the pipeline
    records the file as `too_large` with note `limit_exceeded` and counts `{warnings: 1,
    warningCodes: {limit_exceeded: 1}}`, keeps its encrypted bytes and stores nothing else.
 3. Rows get `dedupe_key`s (`src/ingest/dedupe.mjs`) and provenance (`file_id`, `parser`,
    `locator` JSON); `transactions.occurrence` keeps the occurrence counter. A transaction with an
-   `externalId` (check or slip number, or a mapped column) is keyed by account and that id, with
-   no date or amount. A key collision from another file compares normalized descriptions: equal
+   `externalId` (check or slip number, or a mapped column) is keyed
+   `[accountKey, 'ext', externalId, signed cents, occurrence]`, with no date (occurrence only for
+   a repeat within one file). A key collision from another file compares normalized descriptions: equal
    is a duplicate; different from the same parser stores a second transaction under
    `<key>:d:<16 hex of the description hash>` and asks `near_duplicate`; different from another
-   parser is a cross-format duplicate (`counts.crossFormat`). Accounts are upserted
+   parser is a cross-format duplicate (`counts.crossFormat`, archived as
+   `duplicate_cross_format`). Accounts are upserted
    by `identity` (`acct-` plus 16 hex of its hash), with `mirror` `manual` and masks of 4 digits
    only.
 4. Revisions: P and L and tax workbook rows carry a `source_slot`; a later workbook replaces the
    rows of every slot in its `files.coverage` (changed amounts archive as `revised`, missing rows
    as `removed`). Balances and positions compare `files.period_to`: a newer file wins
    (`revised`), an older one is archived as `older_snapshot`, equal values advance provenance.
-   A positions file or extracted statement is a complete snapshot per (account, as-of): stored
-   positions it omits are archived as `removed` and deleted when it holds period authority,
-   unless the parse was partial (any warning other than `pending_activity` or
-   `invalid_cost_basis`), which never removes. Withholding slots are
+   A positions file, or a statement extraction with a `holdings` key (a `snapshot` row), is a
+   complete snapshot per (account, as-of): stored positions it omits are archived as `removed`
+   and deleted when it holds period authority. A warning other than `pending_activity` or
+   `invalid_cost_basis` makes the account it names incomplete, or the whole file when it names
+   none; an incomplete snapshot never removes. A recipient answer that rekeys withholding onto
+   a row of the same recipient archives the newer as `duplicate`. Withholding slots are
    `wh:<employerKey>:<taxYear>:<jurisdiction>:<recipient>`; W-2 withholding summarizes paystub
    withholding in the same slot (`summarized`) only once the recipient is known, at import or
    when a recipient answer recomputes the slots. Every replaced row is kept in `superseded_rows`.
 5. Each file records `parser`, `source_kind`, `source_id`, `period_from`, `period_to`, `status`
    and `counts` JSON `{rows: {kind: n}, duplicates, crossFormat, revised, superseded, incomplete,
    warnings, warningCodes: {code: n}, queued, extractPath?}`; `extractPath` (`text`,
-   `pdf_text_layer` or `pdf_document`) is set when extraction ran. Ingest sources (`sources` ids starting `ing:`) keep the latest `as_of`
+   `pdf_text_layer`, `pdf_document` or `pdf_withheld`) is set when extraction ran. Ingest sources (`sources` ids starting `ing:`) keep the latest `as_of`
    and `last_ingest_at`; account balance figures follow the latest stored balance.
 6. When facts change, `refreshPackState` runs. The pipeline logs only an error code.
 
@@ -505,10 +511,12 @@ Schema that never asks for SSNs, EINs, full account numbers, names of people or 
 is redacted first (`src/ingest/redact.mjs`): SSN and EIN patterns are masked, money-shaped
 numbers become opaque references that code resolves back, and every other digit run longer than
 4 keeps only its last 4 digits. A PDF's text layer is read first by `src/ingest/pdftext.mjs`
-`pdfText(bytes) -> {text, pages, usable}` (pdfjs-dist 6.4.299 legacy build in process,
-`isEvalSupported: false`, `disableFontFace: true`, no system fonts, no worker fetch, at most 50
-pages, never throws; usable with at least 200 letters): a usable layer is redacted and sent as
-text like a text file, and any other PDF is sent as a document. Extracted values become rows by
+`pdfText(bytes) -> {status, text, pages}` (pdfjs-dist in a `worker_threads` Worker with bounded
+heaps, a 20 s timeout, a 2 MB text cap and its output discarded; never rejects). `text` (any
+text with a letter) is redacted and sent as text (`pdf_text_layer`); `image_only` (no text on
+any page) is sent as a document (`pdf_document`); `incomplete` (over 50 pages, timeout, cap or
+out of memory) and `failed` (a parse error) wait as `needs_extraction` with note
+`pdf_unreadable`, and nothing is sent (`pdf_withheld`). Extracted values become rows by
 deterministic code; facts below 0.8 confidence wait for a `fact_check`, and employer-dependent
 facts wait in `held_facts` until the employer relation is known. With the engine off the file is
 `needs_extraction`.

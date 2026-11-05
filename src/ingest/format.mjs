@@ -53,6 +53,9 @@ export function monthEnd(period) {
 // more than this: rows (records, header included), columns (cells in one record), cells (total),
 // cellChars (characters in one cell).
 export const LIMITS = Object.freeze({ rows: 200000, columns: 512, cells: 2000000, cellChars: 32768 });
+// Workbooks keep LIMITS but a lower cell budget (worksheet cells, shared strings and rich-text
+// runs together), because every cell of a workbook is held in memory once it is read.
+export const XLSX_LIMITS = Object.freeze({ cells: 250000 });
 export class LimitError extends Error {
   code = 'limit_exceeded';
   constructor(message = 'Input exceeds parse limits') { super(message); this.name = 'LimitError'; }
@@ -122,7 +125,7 @@ export function csv(file, { limits = LIMITS } = {}) {
   const records = [], warnings = [];
   let headers = null;
   const scan = scanCsv(input, limits, true, (values, locator) => {
-    if (headers) records.push({ values, locator });
+    if (headers) records.push({ values: values.slice(), locator }); // exact length: held near the limit
     else headers = headersOf(values);
   }, (locator) => warning(warnings, 'malformed_csv', locator));
   if (scan.unclosed) warning(warnings, 'unclosed_csv_quote', { row: scan.start });

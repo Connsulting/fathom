@@ -1,9 +1,10 @@
 // PDFs and unknown text: one classify call, then one extraction call with a per-type JSON Schema.
 // Text reaches the model through redactForExtraction (identifiers masked, long money amounts
-// swapped for opaque tokens that code resolves back). A PDF with a usable text layer (pdftext.mjs)
-// is read the same way; a PDF without one cannot be redacted and goes as a document, so no schema
-// ever asks for an identifier (SSN, EIN, TIN, account numbers, people's names, addresses). Extracted
-// values become rows only through the deterministic code below, after schema and code validation.
+// swapped for opaque tokens that code resolves back). A PDF whose text layer holds any text
+// (pdftext.mjs) is read the same way; an image-only PDF cannot be redacted and goes as a document,
+// so no schema ever asks for an identifier (SSN, EIN, TIN, account numbers, people's names,
+// addresses). A PDF that cannot be read completely is withheld and never sent. Extracted values
+// become rows only through the deterministic code below, after schema and code validation.
 
 import { createHash } from 'node:crypto';
 import { redactForExtraction } from './redact.mjs';
@@ -256,6 +257,9 @@ export function toRows(docType, extracted, ctx = {}) {
       doc(x);
       const account = () => ({ inst: institution(x.institution ?? ''), mask: x.accountLast4 ?? '', ...(x.accountKind ? { kind: x.accountKind } : {}) });
       if (Number.isFinite(x.endingBalance)) rows.push({ kind: 'balance', account: account(), date: x.periodEnd, amount: cents(x.endingBalance), locator: { document: docType, field: 'endingBalance' } });
+      // G5: a holdings list (even an empty one) is a snapshot of the account on periodEnd; without
+      // the key the statement says nothing about holdings.
+      if (Array.isArray(x.holdings)) rows.push({ kind: 'snapshot', account: account(), asOf: x.periodEnd, locator: { document: docType, field: 'holdings' } });
       (x.holdings ?? []).forEach((h, i) => {
         const symbol = String(h.symbol ?? '').trim();
         if (!symbol || !Number.isFinite(h.value)) { warnings.push({ code: 'invalid_holding', locator: { document: docType, holding: i } }); return; }
@@ -321,10 +325,11 @@ const redactedText = (text) => {
 };
 
 // Classify (unless opts.docType forces a type), then extract with the type's schema. The path is
-// text (a text file), pdf_text_layer (a PDF whose text layer is usable, sent as redacted text) or
-// pdf_document (any other PDF, sent as a document).
+// text (a text file), pdf_text_layer (a PDF with any text, sent as redacted text), pdf_document (an
+// image-only PDF, sent as a document) or pdf_withheld (a PDF read incompletely or not at all: it
+// waits with reason pdf_unreadable and nothing is sent).
 // Returns {status: 'imported', docType, rows, sourceKind, period, warnings, extractPath} or
-// {status: 'needs_extraction', reason: 'engine_off' | 'engine_error' | 'invalid', extractPath?, ...}.
+// {status: 'needs_extraction', reason: 'engine_off' | 'engine_error' | 'invalid' | 'pdf_unreadable', extractPath?, ...}.
 export async function extractDocument(engine, file, { docType: forced, households = { entities: [] }, fileId = null } = {}) {
   let document;
   let refs = {};
@@ -332,9 +337,13 @@ export async function extractDocument(engine, file, { docType: forced, household
   if (isPdf(file)) {
     if (engineOff(engine)) return waiting('engine_off');
     const layer = await pdfText(file.bytes);
-    if (layer.usable) ({ document, refs } = redactedText(layer.text));
-    else document = { type: 'pdf', data: file.bytes };
-    extractPath = layer.usable ? 'pdf_text_layer' : 'pdf_document';
+    if (layer.status === 'text') {
+      ({ document, refs } = redactedText(layer.text));
+      extractPath = 'pdf_text_layer';
+    } else if (layer.status === 'image_only') {
+      document = { type: 'pdf', data: file.bytes };
+      extractPath = 'pdf_document';
+    } else return waiting('pdf_unreadable', 'pdf_withheld');
   } else {
     const text = plainText(file);
     if (text === null) return waiting('invalid');

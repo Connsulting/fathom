@@ -45,9 +45,19 @@ const isCsvName = (file) => /\.(csv|tsv)$/i.test(file.name ?? '') || /csv/i.test
 
 // {headers, rows: [{values, locator}]} for a CSV or the first workbook sheet with a header row of
 // at least two text cells; null for anything else. Both readers are bounded: an input past
-// LIMITS throws LimitError instead of returning null.
+// LIMITS throws LimitError instead of returning null. The table is cached per file bytes, so a
+// caller that reads it again (routing, then mapping) never holds two copies.
+const tables = new WeakMap();
 export function readTable(file) {
   if (!file || !(file.bytes instanceof Uint8Array) || file.bytes.length === 0) return null;
+  const cached = tables.get(file.bytes);
+  if (cached && cached.name === file.name && cached.mime === file.mime) return cached.table;
+  const table = tableOf(file);
+  tables.set(file.bytes, { name: file.name, mime: file.mime, table });
+  return table;
+}
+
+function tableOf(file) {
   if (isZip(file.bytes) || /\.xlsx$/i.test(file.name ?? '')) {
     try { return workbookTable(file); } catch (e) { if (e instanceof LimitError) throw e; return null; }
   }
@@ -55,7 +65,9 @@ export function readTable(file) {
   try {
     const { headers, records } = csv(file);
     if (headers.filter(Boolean).length < 2 || !records.length) return null;
-    return { headers, rows: records.map(({ values, locator }) => ({ values: values.map((v) => v.trim()), locator })) };
+    // Trimmed in place: a table near the cell limit is held once.
+    for (const { values } of records) for (let i = 0; i < values.length; i++) values[i] = values[i].trim();
+    return { headers, rows: records };
   } catch (e) { if (e instanceof LimitError) throw e; return null; }
 }
 

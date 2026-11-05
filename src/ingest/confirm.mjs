@@ -219,13 +219,14 @@ function applyFactCheck(db, item, optionId, { now }) {
   return {};
 }
 
-// near_duplicate same: the newer row (higher id) is archived and removed; its key is skipped later.
+// near_duplicate same: the newer row (higher id) is archived and removed. The tombstone keeps the
+// row's normalized description, so a later row with its key is skipped only when it is that posting.
 function confirmDuplicate(db, item, { now }) {
   const keys = item.subject.split('|');
   const rows = keys.map((k) => db.prepare('SELECT * FROM transactions WHERE dedupe_key = ?').get(k)).filter(Boolean);
   if (rows.length < 2) return;
   const [keep, drop] = rows.sort((a, b) => a.id - b.id);
-  archive(db, 'transactions', drop, { by: keep.file_id, reason: 'duplicate_confirmed', now });
+  archive(db, 'transactions', { ...drop, normalized_description: normalizeName(drop.description) }, { by: keep.file_id, reason: 'duplicate_confirmed', now });
   db.prepare('DELETE FROM transactions WHERE id = ?').run(drop.id);
 }
 
@@ -256,8 +257,13 @@ function applyEmployer(db, employerKey, optionId, { now }) {
 // Withholding recipients (D4). An employer's withholding rows are paystub and W-2 rows whose slot
 // is wh:<employerKey>:...; the recipient is the slot's last segment.
 export const withRecipient = (slot, recipient) => String(slot).replace(/:[^:]*$/, `:${recipient}`);
+// G4: the payer identity of an employer withholding row. While the recipient is unknown it is
+// <R10 payer>:doc:<file id>, so two members' identical documents never collapse; once resolved it
+// is <R10 payer>:<recipient>.
+export const recipientPayer = (payer, recipient, fileId) => (recipient === 'unknown' ? `${payer}:doc:${fileId}` : `${payer}:${recipient}`);
+const unresolvedPayer = (payer) => String(payer).replace(/:doc:[^:]*$/, '');
 const employerRows = (db, employerKey) => db.prepare(`SELECT * FROM tax_payments WHERE source_slot LIKE ?
-  AND (payer LIKE 'paystub:%' OR payer LIKE 'w2:%') ORDER BY id`).all(`wh:${employerKey}:%`);
+  AND (payer LIKE 'paystub:%' OR payer LIKE 'w2:%') ORDER BY id`).all(`wh:${employerKey}:%:unknown`);
 
 function documentQuestion(payer, employer) {
   const [kind, , when] = String(payer).split(':');
@@ -302,14 +308,30 @@ export function summarizeSlot(db, slot, { now } = {}) {
   return rows.length;
 }
 
-// Set the recipient of stored withholding rows, recompute their slots, then summarize each slot.
+// Set the recipient of stored unresolved withholding rows: recompute slot and payer identity and
+// rekey each row, then summarize each slot. A rekeyed row whose key another row already holds is
+// the same document of the same person: the newer row (higher id) is archived as duplicate.
 function setRecipient(db, rows, recipient, { now }) {
-  const update = db.prepare('UPDATE tax_payments SET recipient = ?, source_slot = ? WHERE id = ?');
+  const update = db.prepare('UPDATE tax_payments SET recipient = ?, source_slot = ?, payer = ?, dedupe_key = ? WHERE id = ?');
+  const holder = db.prepare('SELECT * FROM tax_payments WHERE dedupe_key = ? AND id != ?');
+  const remove = db.prepare('DELETE FROM tax_payments WHERE id = ?');
   const slots = new Set();
   for (const r of rows) {
-    if (!String(r.source_slot ?? '').startsWith('wh:')) continue;
+    if (!String(r.source_slot ?? '').startsWith('wh:') || !r.source_slot.endsWith(':unknown')) continue;
     const slot = withRecipient(r.source_slot, recipient);
-    update.run(recipient, slot, r.id);
+    const payer = `${unresolvedPayer(r.payer)}:${recipient}`;
+    const key = dedupeKey({ kind: 'tax_payment', jurisdiction: r.jurisdiction, sheetYear: r.tax_year, date: r.date, payer });
+    const other = holder.get(key, r.id);
+    if (other && other.id < r.id) {
+      archive(db, 'tax_payments', { ...r, recipient, source_slot: slot, payer, dedupe_key: key }, { by: other.file_id, reason: 'duplicate', now });
+      remove.run(r.id);
+      continue;
+    }
+    if (other) {
+      archive(db, 'tax_payments', { ...other }, { by: r.file_id, reason: 'duplicate', now });
+      remove.run(other.id);
+    }
+    update.run(recipient, slot, payer, key, r.id);
     slots.add(slot);
   }
   for (const slot of slots) summarizeSlot(db, slot, { now });

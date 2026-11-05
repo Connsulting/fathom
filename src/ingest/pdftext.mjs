@@ -1,48 +1,56 @@
-// The text layer of a PDF, read with pdfjs-dist's legacy build in this process: no eval, no font
-// loading, no system fonts, no worker fetched from outside the package, at most MAX_PAGES pages.
-// Never throws: an unreadable PDF reads as no text. The text is returned to the caller only; it is
-// never logged or stored here.
+// The text layer of a PDF. pdfjs never runs in this thread: it reads an owned copy of the bytes in a
+// worker_threads Worker (pdftext-worker.mjs) with bounded heaps, a wall timeout and a text output
+// cap, and its stdout and stderr are discarded. Only a fixed status code, the page count and the
+// text cross back. The text is returned to the caller only; it is never logged or stored here.
+//
+// pdfText(bytes: Buffer | Uint8Array) -> Promise<{status, text, pages}>, never rejects for a bad PDF.
+//   text:       the extracted text has at least one letter, however short.
+//   image_only: no extracted text characters on any page.
+//   incomplete: more than MAX_PAGES pages, the TIMEOUT_MS wall timeout, the MAX_TEXT output cap,
+//               or the worker ran out of memory.
+//   failed:     any parse error (no partial text), or the worker died any other way.
+// text is '' for every status but text; pages is the page count when the document opened, else 0.
 
-import * as worker from 'pdfjs-dist/legacy/build/pdf.worker.mjs';
+import { Worker } from 'node:worker_threads';
 
 export const MAX_PAGES = 50;
-// A text layer with at least this many letters is worth sending as text instead of the PDF.
-export const MIN_LETTERS = 200;
+export const MAX_TEXT = 2 * 1024 * 1024;
+export const TIMEOUT_MS = 20000;
+const RESOURCE_LIMITS = { maxOldGenerationSizeMb: 256, maxYoungGenerationSizeMb: 32 };
+const CODES = new Set(['text', 'image_only', 'incomplete', 'failed']);
+const WORKER = new URL('./pdftext-worker.mjs', import.meta.url);
 
-// pdfjs runs its worker in this thread when the worker module is already loaded on globalThis,
-// so it never resolves or fetches a worker script.
-globalThis.pdfjsWorker ??= worker;
-
-let pdfjs;
-const load = async () => (pdfjs ??= await import('pdfjs-dist/legacy/build/pdf.mjs'));
-
-const letters = (text) => (text.match(/\p{L}/gu) ?? []).length;
-
-// bytes -> {text, pages, usable}. pages is the document's page count (0 when unreadable).
-export async function pdfText(bytes) {
-  let task;
-  try {
-    const lib = await load();
-    // A copy: pdfjs may transfer (detach) the buffer it is given.
-    const data = new Uint8Array(bytes);
-    task = lib.getDocument({
-      data, isEvalSupported: false, disableFontFace: true, useSystemFonts: false, useWorkerFetch: false,
-      isOffscreenCanvasSupported: false, stopAtErrors: false, verbosity: 0,
+export function pdfText(bytes) {
+  if (!(bytes instanceof Uint8Array)) throw new TypeError('pdfText takes a Buffer or Uint8Array');
+  // An owned copy, transferred to the worker: the caller's buffer never reaches pdfjs.
+  const data = new Uint8Array(bytes);
+  return new Promise((resolve) => {
+    const worker = new Worker(WORKER, {
+      workerData: { data, maxPages: MAX_PAGES, maxText: MAX_TEXT },
+      transferList: [data.buffer],
+      resourceLimits: RESOURCE_LIMITS,
+      stdout: true,
+      stderr: true,
     });
-    const doc = await task.promise;
-    const pages = doc.numPages;
-    const parts = [];
-    for (let n = 1; n <= Math.min(pages, MAX_PAGES); n += 1) {
-      const page = await doc.getPage(n);
-      const content = await page.getTextContent();
-      parts.push(content.items.map((item) => (item.str ?? '') + (item.hasEOL ? '\n' : '')).join(''));
-      page.cleanup();
-    }
-    const text = parts.join('\n\n');
-    return { text, pages, usable: letters(text) >= MIN_LETTERS };
-  } catch {
-    return { text: '', pages: 0, usable: false };
-  } finally {
-    try { await task?.destroy(); } catch { /* already gone */ }
-  }
+    worker.stdout.resume();
+    worker.stderr.resume();
+    let settled = false;
+    const settle = (status, pages = 0, text = '') => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ status, text: status === 'text' ? text : '', pages });
+      worker.terminate().catch(() => {});
+    };
+    const timer = setTimeout(() => settle('incomplete'), TIMEOUT_MS);
+    worker.on('message', (m) => {
+      const ok = m && CODES.has(m.code) && Number.isInteger(m.pages) && typeof m.text === 'string';
+      if (!ok) settle('failed');
+      else if (m.code === 'text' && m.text.length > MAX_TEXT) settle('incomplete', m.pages);
+      else settle(m.code, m.pages, m.text);
+    });
+    // The error carries pdfjs or V8 text; only its code is read.
+    worker.on('error', (err) => settle(err?.code === 'ERR_WORKER_OUT_OF_MEMORY' ? 'incomplete' : 'failed'));
+    worker.on('exit', () => settle('failed'));
+  });
 }

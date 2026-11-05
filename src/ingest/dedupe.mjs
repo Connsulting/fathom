@@ -29,9 +29,9 @@ export function identifyAccountRows(parsed, file) {
     const slot = JSON.stringify(transactionSlot(row));
     row.occurrence = (occurrences.get(slot) ?? 0) + 1;
     occurrences.set(slot, row.occurrence);
-    // A repeated external id within one file (a check and its return) stays a second row.
+    // A repeated external id and amount within one file stays a second row.
     if (externalId(row)) {
-      const ext = JSON.stringify([accountKey(row), externalId(row)]);
+      const ext = JSON.stringify([accountKey(row), externalId(row), cents(row.amount)]);
       row.extOccurrence = (extOccurrences.get(ext) ?? 0) + 1;
       extOccurrences.set(ext, row.extOccurrence);
     }
@@ -42,10 +42,11 @@ export function identifyAccountRows(parsed, file) {
 export function dedupeKey(row) {
   let identity;
   switch (row.kind) {
-    // A transaction with an external id (check or slip number) is identified by it alone, so
-    // the same check posted on different dates or by another export still dedupes.
+    // A transaction with an external id (check or slip number) is identified by it and its signed
+    // amount, so the same check posted on different dates or by another export still dedupes, while
+    // a check and its return (opposite amounts) in separate uploads never collide.
     case 'transaction': identity = externalId(row)
-      ? [accountKey(row), 'ext', externalId(row), ...(row.extOccurrence > 1 ? [row.extOccurrence] : [])]
+      ? [accountKey(row), 'ext', externalId(row), cents(row.amount), ...(row.extOccurrence > 1 ? [row.extOccurrence] : [])]
       : [...transactionSlot(row), row.occurrence]; break;
     case 'balance': identity = [accountKey(row), row.date, cents(row.amount)]; break;
     case 'position': identity = [accountKey(row), row.asOf, normalize(row.symbol)]; break;
