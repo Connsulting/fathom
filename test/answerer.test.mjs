@@ -1281,6 +1281,18 @@ test('R3 B (F1): inline citations (IRS Publication 560) in the active demo packs
   assert.ok(!active.provenance.grounding.unverified.includes('$24,500'), 'the marked limit in the same entry still grounds');
 });
 
+test('a magnitude word followed by percent never grounds on the $1,000 in the self-employed-partnership entry', async t => {
+  const s = await demoStore(t);
+  const body = readFileSync(join(ROOT, 'packs', 'self-employed-partnership', 'estimated-tax.md'), 'utf8');
+  assert.ok(body.includes('$1,000'), 'the pack entry carries $1,000');
+  const answerer = createLiveAnswerer({ engine: always(s.runtime, 'The change is 1 thousand percent.').engine, packs: s.packs });
+  const reply = await answerer.answer({ db: s.db, key: 'ask', text: 'Synthetic percent question' });
+  assert.ok(!reply.notice);
+  assert.ok(reply.provenance.packIds.includes('self-employed-partnership'), 'the pack is active');
+  assert.ok(reply.provenance.grounding.unverified.includes('1 thousand percent'),
+    `1 thousand percent must be ungrounded: ${JSON.stringify(reply.provenance.grounding)}`);
+});
+
 // A synthetic active pack: bare prose numbers and marked quantities, values nothing in the demo states.
 const PROSE_PACK = {
   id: 'synthetic-prose',

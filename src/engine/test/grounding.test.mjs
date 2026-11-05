@@ -129,3 +129,17 @@ test('a worded magnitude is one quantity: 8.7 million grounds on 8700000, never 
   assert.equal(checkGrounding('about 8.7 million', { data: [8700000] }).ok, true);
   assert.equal(checkGrounding('about 8.7 million', { data: [8.7] }).ok, false);
 });
+
+test('a magnitude word followed by percent is one percent quantity and needs percent evidence', () => {
+  const cases = [['1 thousand percent', 1000], ['2.5 million %', 2500000], ['3 billion percent', 3000000000]];
+  for (const [text, value] of cases) {
+    assert.equal(checkGrounding(text, { data: [value] }).ok, false, `${text} must not ground on the plain number`);
+    assert.equal(checkGrounding(text, { data: [{ note: `The change is ${text}.` }] }).ok, true, `${text} grounds on matching percent text`);
+  }
+  assert.equal(checkGrounding('1 thousand percent', { data: [{ value: 1000, unit: 'percent' }] }).ok, true);
+  assert.equal(checkGrounding('about 1 thousand percent', { data: [{ value: 1000 }] }).ok, false);
+  // Plain scaled amounts and plain percents are unchanged.
+  assert.equal(checkGrounding('$1 thousand', { data: [1000] }).ok, true);
+  assert.equal(checkGrounding('12%', { data: [{ rate_pct: 12 }] }).ok, true);
+  assert.equal(checkGrounding('12%', { data: [12] }).ok, false);
+});
