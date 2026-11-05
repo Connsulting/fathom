@@ -1,6 +1,6 @@
 // Virginia 529 deduction: deduction room left on Virginia plan accounts before Dec 31 (S8, T5).
 
-import { isTrue, mineOf, padTasks, confirmTasks, yearOf } from './common.mjs';
+import { isTrue, mineOf, padTasks, confirmTasks, yearOf, dataText } from './common.mjs';
 
 export const id = 'va529';
 export const domain = 'family';
@@ -47,7 +47,7 @@ export function build(ctx, hit) {
       'Decide how much to add before Dec 31',
       'Transfer it into the Virginia plan account',
       'Keep the contribution confirmation for the return',
-      ...(hit.age70 || []).map(name => `Ask your advisor how the older-owner exception applies to ${name}`),
+      ...(hit.age70 || []).map(name => `Ask your advisor how the older-owner exception applies to ${dataText(name)}`),
     ]),
   };
 }
@@ -60,8 +60,9 @@ export function template(ctx, hit) {
       qa: [],
     };
   }
+  const worth = ctx.fig['va529.taxSaved'] ? ', worth about {f:va529.taxSaved} in Virginia tax' : '';
   return {
-    summary: 'You can still deduct {f:va529.deductionLeft} of Virginia 529 contributions this year, worth about {f:va529.taxSaved} in Virginia tax.',
+    summary: `You can still deduct {f:va529.deductionLeft} of Virginia 529 contributions this year${worth}.`,
     why: [
       'Virginia allows a deduction of up to {l:va529Cap} per account each year; you have contributed {f:va529.contrib.ytd} so far.',
       'Contributions above the limit carry forward to later years, so nothing is lost by putting in more.',

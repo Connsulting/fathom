@@ -2,7 +2,7 @@
 // tax inputs (R1, R14, R19, T9.5). Evaluated last so it sees every other trigger's block.
 
 import { addDays } from '../planner/data.mjs';
-import { padTasks } from './common.mjs';
+import { padTasks, dataText } from './common.mjs';
 
 export const id = 'missing-data';
 export const domain = 'data';
@@ -13,17 +13,27 @@ export const calcs = [];
 export const kb = [];
 
 const BUSINESS_FACTS = ['income.sCorp', 'income.selfEmployed', 'income.partnership'];
-const TAX_CODES = new Set(['pnl', 'tax_payments', 'prior_year_missing', 'filing_status_assumed', 'partnership_incomplete', 'va_itemized_missing']);
+const TAX_CODES = new Set(['pnl', 'tax_payments', 'prior_year_missing', 'filing_status_assumed', 'partnership_incomplete', 'va_itemized_missing', 'mfs_unsupported', 'calc_failed']);
 
 function reasonItem(ctx, reason) {
   if (reason.startsWith('entity_unclassified:')) {
     const slug = reason.slice('entity_unclassified:'.length);
     const e = (ctx.entities || []).find(x => x.slug === slug);
-    const name = e ? e.name : 'a business in your profit and loss';
+    const name = e ? dataText(e.name) : 'a business in your profit and loss';
     return { code: reason, tax: true, text: `We do not know how ${name} is taxed.`, task: `Tell us how ${name} is taxed` };
   }
   if (reason === 'partnership_incomplete') {
-    return { code: reason, tax: true, text: 'A partnership K-1 or partnership estimate is missing an amount we need.', task: 'Add the ordinary income, guaranteed payments and self-employment earnings from the K-1' };
+    const names = (ctx.info.partnershipsMissing || []).map(dataText);
+    const text = names.length
+      ? `We do not have a complete K-1 or partnership estimate for ${names.join(', ')}.`
+      : 'A partnership K-1 or partnership estimate is missing an amount we need.';
+    return { code: reason, tax: true, text, task: 'Add the ordinary income, guaranteed payments and self-employment earnings from each K-1, or a partnership estimate' };
+  }
+  if (reason === 'mfs_unsupported') {
+    return { code: reason, tax: true, text: 'Tax figures for married filing separately are not supported yet, so tax projections are on hold.', task: 'Check your filing status, and ask your accountant for this year projection while filing separately' };
+  }
+  if (reason === 'calc_failed') {
+    return { code: reason, tax: false, text: 'A calculator could not use one of your answers, so some figures are on hold.', task: 'Check your household answers, such as ages, for typos' };
   }
   if (reason === 'va_itemized_missing') {
     return { code: reason, tax: true, text: 'You itemize federally, so Virginia needs your Virginia itemized estimate too.', task: 'Enter your Virginia itemized deduction estimate' };

@@ -9,7 +9,7 @@
 import { estimatedPaymentSafeHarbor, solo401kRoom, sepRoom, hsaLimit } from '../../calc/index.mjs';
 import { cents } from '../../store/db.mjs';
 import {
-  pnlSums, ytd, dateLabel, monthLabel, cleanLabel, sum, addDays,
+  pnlSums, ytd, dateLabel, monthLabel, cleanLabel, sum, addDays, sameName,
 } from './data.mjs';
 import { law, stdDeduction } from './law.mjs';
 import { householdTax, payrollRecords, contributions, stepsOf, num } from './household.mjs';
@@ -19,7 +19,8 @@ import { buildWargames } from './wargame.mjs';
 export const ASSUMES_CONFIRMED = 'assumes plan terms and eligibility are confirmed with your advisor';
 const CASH_KINDS = ['checking', 'savings', 'cash', 'business'];
 const PERSONAL_CASH = ['checking', 'savings', 'cash'];
-const IRA_PRETAX = a => /\bIRA\b/i.test(a.name) && !/roth/i.test(a.name);
+const IRA_ANY = a => /\bIRA\b/i.test(a.name) || a.kind === 'roth';
+const IRA_PRETAX = a => /\bIRA\b/i.test(a.name) && !/roth/i.test(a.name) && a.kind !== 'roth';
 
 export const SOURCES = Object.freeze({
   pnl: { label: 'Business profit and loss', kind: 'pnl' },
@@ -31,12 +32,13 @@ export const SOURCES = Object.freeze({
   'calc:cash': { label: 'Cash model', kind: 'calculator' },
   'plan-projection': { label: 'Straight-line projection of this year', kind: 'projection' },
   'wargame-model': { label: 'War-game model: salary, tax and cash calculators', kind: 'model' },
+  'calc:income': { label: 'Income received, summed from your records', kind: 'calculator' },
 });
 
 // ---------------------------------------------------------------- output helpers
 
 export function createOut(clock) {
-  const out = { clock, figures: {}, sources: {}, warnings: new Set(), info: { confirm: {}, blocked: [] }, model: {} };
+  const out = { clock, figures: {}, sources: {}, warnings: new Set(), info: { confirm: {}, blocked: [], calcFailed: [] }, model: {} };
   out.warn = code => out.warnings.add(code);
   out.source = (id, label, asOf, kind) => { out.sources[id] = { label, asOf, kind }; };
   out.put = (key, v, kind, label, src, locator, fileId = null) => {
@@ -51,7 +53,11 @@ export function createOut(clock) {
   // A calculator call that may throw on unusable inputs: warn calc_failed:<fn> and go on.
   out.safe = (fn, call) => {
     try { return call(); } catch (e) {
-      if (e instanceof RangeError || e instanceof TypeError) { out.warn(`calc_failed:${fn}`); return null; }
+      if (e instanceof RangeError || e instanceof TypeError) {
+        out.warn(`calc_failed:${fn}`);
+        if (!out.info.calcFailed.includes(fn)) out.info.calcFailed.push(fn);
+        return null;
+      }
       throw e;
     }
   };
@@ -169,8 +175,10 @@ export function computeFigures(data, facts, ctx) {
   }
   const collegeAccts = accounts.filter(a => a.kind === '529' || /529/.test(a.name));
   const collegeRows = inflows(collegeAccts);
-  if (collegeRows.length) {
-    txnSource();
+  if (collegeAccts.length) {
+    // Zero when nothing went in this year, so every rec that names it resolves (F10).
+    if (collegeRows.length) txnSource();
+    else if (!out.sources.transactions) out.source('transactions', SOURCES.transactions.label, dateLabel(clock), SOURCES.transactions.kind);
     out.put('va529.contrib.ytd', sum(collegeRows.map(t => t.amount)), 'a', 'College 529 contributions this year', 'transactions', rowsLoc('transactions', collegeRows.map(t => t.id)));
   }
 
@@ -182,14 +190,18 @@ export function computeFigures(data, facts, ctx) {
     out.put(`ira.pretax.${p}`, sum(mine.map(a => a.latest.amount)), 'a', p === 'owner' ? 'Your pre-tax IRA balance' : "Your spouse's pre-tax IRA balance",
       `acct:${mine[0].id}`, rowsLoc(mine[0].latest.source, mine.flatMap(a => a.latest.ids)));
   }
+  // A pre-tax IRA with no balance or position on file leaves that person's pro-rata status unknown.
+  const noBalance = accounts.filter(a => IRA_PRETAX(a) && !a.latest);
   out.info.ira = {
-    unknownOwner: iraAccts.some(a => a.owner !== 'owner' && a.owner !== 'spouse'),
+    unknownOwner: [...iraAccts, ...noBalance].some(a => a.owner !== 'owner' && a.owner !== 'spouse'),
     owner: iraAccts.some(a => a.owner === 'owner'),
     spouse: iraAccts.some(a => a.owner === 'spouse'),
+    noBalance: { owner: noBalance.some(a => a.owner === 'owner'), spouse: noBalance.some(a => a.owner === 'spouse') },
   };
 
   if (!TY) {
     out.warn('unsupported_tax_year');
+    incomeTotal(out);
     return finish(out);
   }
 
@@ -200,7 +212,14 @@ export function computeFigures(data, facts, ctx) {
   const inUnit = p => persons.includes(p);
   const records = payrollRecords(data, entities, out);
   const contrib = contributions(persons, records, corps, owner);
-  for (const t of inflows(accounts.filter(IRA_PRETAX), t => /contribution/i.test(t.category ?? ''))) {
+  // inc.ytd.w2 (F8): outside-employer wages received in the tax year (payroll records are already
+  // limited to it), the W-2 box or the latest paystub's year-to-date wages.
+  const outsideYtd = records.filter(r => !r.household);
+  if (outsideYtd.length) {
+    out.source('docs', SOURCES.docs.label, dateLabel(clock), SOURCES.docs.kind);
+    out.put('inc.ytd.w2', sum(outsideYtd.map(r => r.ytdWages)), 'a', 'Outside employer wages received this year', 'docs', rowsLoc('documents', outsideYtd.map(r => r.docId)), outsideYtd[0].fileId);
+  }
+  for (const t of inflows(accounts.filter(IRA_ANY), t => /contribution/i.test(t.category ?? ''))) {
     const a = accounts.find(x => x.id === t.account_id);
     if (a && contrib[a.owner]) contrib[a.owner].ira = cents(contrib[a.owner].ira + t.amount);
   }
@@ -213,6 +232,7 @@ export function computeFigures(data, facts, ctx) {
 
   // Inputs (parts) and what blocks them.
   const blocked = [];
+  if (f === 'mfs') { blocked.push('mfs_unsupported'); out.warn('mfs_unsupported'); }
   const w2 = [];
   const biz = [];
   for (const c of corps) {
@@ -227,7 +247,13 @@ export function computeFigures(data, facts, ctx) {
     c.pretax = pretax;
   }
   for (const r of records) {
-    if (r.household || !inUnit(r.person)) continue;
+    if (!inUnit(r.person)) continue;
+    // Wages from a classified household S corp with no P&L still count as own-corp wages (F3).
+    if (r.corp && !corps.some(c => c.entity.slug === r.corp)) {
+      w2.push({ person: r.person, src: `corp:${r.corp}`, gross: cents(r.wages + r.pretax), agi: r.wages, pretax: r.pretax });
+      continue;
+    }
+    if (r.household) continue;
     w2.push({ person: r.person, src: 'outside', gross: cents(r.wages + r.pretax), agi: r.wages });
   }
   for (const e of pnlEntities) {
@@ -237,17 +263,41 @@ export function computeFigures(data, facts, ctx) {
       biz.push({ id: e.slug, kind: 'sole', person: e.owner, agi: S, qbi: S, seInput: S, w2Wages: 0, sstb: sstbOf(e) });
     }
   }
+  // Partnerships (S1, F2): every partnership entity needs its own K-1 (matched by the K-1's
+  // partnership, entity or payer name; an unnamed K-1 covers one unmatched partnership) or, for a
+  // single partnership without one, income.partnershipEstimate. Every K-1 and estimate must be
+  // complete; anything missing blocks household tax.
   const k1s = data.documents.filter(d => d.docType === 'k1' && Number(d.taxYear) === TY);
   const partnerships = entities.filter(e => e.classified && e.type === 'partnership');
-  const k1Inputs = k1s.map(d => ({ ...d.fields, id: `k1-${d.id}` }));
-  if (!k1Inputs.length && partnerships.length) {
-    const est = owner['income.partnershipEstimate'];
-    if (est && typeof est === 'object') k1Inputs.push({ ...est, id: `${partnerships[0].slug}` });
-    else blocked.push('partnership_incomplete');
+  const k1Name = d => [d.fields.partnership, d.fields.entity, d.fields.payer].filter(v => typeof v === 'string' && v.trim());
+  const used = new Set();
+  const uncovered = [];
+  for (const e of partnerships) {
+    const named = k1s.filter(d => k1Name(d).some(n => sameName(n, e.name)));
+    named.forEach(d => used.add(d.id));
+    if (!named.length) uncovered.push(e);
   }
+  for (const d of k1s) {
+    if (used.has(d.id) || k1Name(d).length || !uncovered.length) continue;
+    used.add(d.id);
+    uncovered.shift();
+  }
+  const k1Inputs = k1s.map(d => ({ ...d.fields, id: `k1-${d.id}` }));
+  const est = owner['income.partnershipEstimate'];
+  const missingPartners = [];
+  if (uncovered.length === 1 && est && typeof est === 'object') k1Inputs.push({ ...est, id: uncovered[0].slug });
+  else missingPartners.push(...uncovered);
+  for (const e of missingPartners) if (inUnit(e.owner)) blocked.push('partnership_incomplete');
+  const fields = ['ordinaryIncome', 'guaranteedPayments', 'seEarnings'];
+  const complete = k => fields.every(x => k[x] !== null && k[x] !== '' && k[x] !== undefined && Number.isFinite(Number(k[x])));
+  const incompleteK1 = k1Inputs.filter(k => !complete(k));
+  out.info.partnershipsMissing = [
+    ...missingPartners.filter(e => inUnit(e.owner)).map(e => e.name),
+    ...incompleteK1.map(k => k1Name({ fields: k })[0]).filter(Boolean),
+  ];
+  if (blocked.includes('partnership_incomplete') || incompleteK1.length) out.warn('partnership_incomplete');
   for (const k of k1Inputs) {
-    const fields = ['ordinaryIncome', 'guaranteedPayments', 'seEarnings'];
-    if (!fields.every(x => Number.isFinite(Number(k[x])) && k[x] !== null && k[x] !== '')) { blocked.push('partnership_incomplete'); continue; }
+    if (!complete(k)) { blocked.push('partnership_incomplete'); continue; }
     const person = k.person === 'spouse' ? 'spouse' : 'owner';
     if (k.person !== 'owner' && k.person !== 'spouse') out.warn('person_assumed');
     if (!inUnit(person)) continue;
@@ -293,6 +343,7 @@ export function computeFigures(data, facts, ctx) {
   if (hasIncome && !blocked.length) {
     hh = out.safe('householdTax', () => householdTax(parts));
     if (hh) for (const w of hh.warnings) out.warn(w);
+    else out.info.blocked = ['calc_failed'];
   }
   if (hh) writeTax(data, out, { hh, parts, records, owner, f, isVa, fedPay, vaPay });
   out.info.taxComputed = !!hh;
@@ -325,8 +376,10 @@ export function computeFigures(data, facts, ctx) {
       }
     }
     if (!retireMissing.length) {
+      const wagesOf = p => sum(w2.filter(w => w.person === p).map(w => w.gross));
       const seps = persons.filter(p => soleByPerson(p) > 0).map(p => out.safe('sepRoom', () => sepRoom({
-        kind: 'self-employed', netProfit: soleByPerson(p), filingStatus: f, employerContributions: contrib[p].sep, ...conf,
+        kind: 'self-employed', netProfit: soleByPerson(p), filingStatus: f, w2SocialSecurityWages: wagesOf(p), w2MedicareWages: wagesOf(p),
+        employerContributions: contrib[p].sep, ...conf,
       }))).filter(Boolean);
       if (!seps.length && corpInUnit) {
         const env = out.safe('sepRoom', () => sepRoom({ kind: 'w2', compensation: corpInUnit.gross, employerContributions: contrib[corpInUnit.person].sep, ...conf }));
@@ -343,6 +396,7 @@ export function computeFigures(data, facts, ctx) {
   if (hh) iraRoom(out, { hh, persons, w2, biz, contrib, ageOf, f });
   hsaRoom(out, { facts, owner, records, hsaPersonal, hsaAccts, ageOf, ageKey, inUnit });
   if (hh && isVa && out.info.va529.eligible > 0) va529Figures(out, { hh, parts, college });
+  incomeTotal(out);
 
   // War games.
   if (hh) {
@@ -352,6 +406,15 @@ export function computeFigures(data, facts, ctx) {
     });
   }
   return finish(out);
+}
+
+// inc.ytd.total (F8): every income-received figure, P&L entities plus outside wages.
+function incomeTotal(out) {
+  const keys = Object.keys(out.figures).filter(k => k.startsWith('inc.ytd.') && k !== 'inc.ytd.total').sort();
+  if (!keys.length) return;
+  const total = sum(keys.map(k => out.figures[k].v));
+  out.put('inc.ytd.total', total, 'a', 'Income received this year', 'calc:income',
+    { ...rowsLoc('figures', keys), calc: 'sum', inputs: Object.fromEntries(keys.map(k => [k, out.figures[k].v])), steps: [{ label: 'Income received', formula: 'sum of income received per business plus outside wages', value: total }] });
 }
 
 function finish(out) {

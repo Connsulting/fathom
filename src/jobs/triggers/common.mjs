@@ -4,6 +4,11 @@
 
 import { isIsoDate } from '../../scenario/build.mjs';
 import { dayLabel } from '../planner/data.mjs';
+import { esc } from '../../shared/tokens.mjs';
+
+// Data-derived text (entity and account names) as stored rec HTML: escaped, braces included, so it
+// can never carry markup or a scenario token.
+export const dataText = v => esc(v).replace(/\{/g, '&#123;').replace(/\}/g, '&#125;');
 
 export const isTrue = fact => ({ fact, op: 'eq', value: true });
 export const absentOrFalse = fact => ({ any: [{ not: { fact, op: 'exists' } }, { fact, op: 'eq', value: false }] });
@@ -27,7 +32,7 @@ export { dayLabel };
 
 // Grounded figures for `mine`: existing ones only, at most five; confirm forms show actuals only.
 export function mineOf(ctx, keys, { actualOnly = false } = {}) {
-  return keys.filter(k => k && ctx.fig[k] && (!actualOnly || ctx.fig[k].kind === 'a')).slice(0, 5).map(k => ({ label: ctx.fig[k].label, fig: k }));
+  return keys.filter(k => k && ctx.fig[k] && (!actualOnly || ctx.fig[k].kind === 'a')).slice(0, 5).map(k => ({ label: dataText(ctx.fig[k].label), fig: k }));
 }
 
 const GENERIC_TASKS = ['Review the figures behind this on the plan', 'Mark it done once it is handled', 'Ask a follow-up question if anything looks off'];

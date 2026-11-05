@@ -1,6 +1,7 @@
 // The trigger catalog, in order. A trigger hits when its gate holds over the facts, its window has
 // not closed, and evaluate(ctx) returns hit vars. evaluate may also return {blocked: reason} when a
-// figure it needs could not be computed; missing-data runs last and lists those reasons.
+// figure it needs could not be computed, and a null evaluation after one of the trigger's
+// calculators threw is blocked as calc_failed; missing-data runs last and lists those reasons.
 //
 // evaluateCatalog(ctx) -> [{trigger, state: 'hit'|'blocked'|'none', hit?, reason?, closed?}]
 // evaluateTriggers(ctx) -> hits only: [{trigger, rec, window, grounding, packId, vars}]
@@ -49,12 +50,19 @@ function recOf(ctx, t, hit, window) {
 
 export function evaluateCatalog(ctx) {
   ctx.blockedReasons = [];
+  const failed = new Set((ctx.info && ctx.info.calcFailed) || []);
   const results = [];
   for (const t of triggers) {
     if (!evaluateRule(t.gate, ctx.facts)) { results.push({ trigger: t, state: 'none' }); continue; }
     const window = t.window(ctx);
     if (window && window.close < ctx.clock) { results.push({ trigger: t, state: 'none', closed: true }); continue; }
     const out = t.evaluate(ctx);
+    // A calculator that threw is missing data, not a closed condition (R14, S12).
+    if (!out && t.calcs.some(c => failed.has(c))) {
+      ctx.blockedReasons.push({ id: t.id, reason: 'calc_failed' });
+      results.push({ trigger: t, state: 'blocked', reason: 'calc_failed' });
+      continue;
+    }
     if (!out) { results.push({ trigger: t, state: 'none' }); continue; }
     if (out.blocked) {
       ctx.blockedReasons.push({ id: t.id, reason: out.blocked });

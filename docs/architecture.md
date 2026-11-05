@@ -475,7 +475,9 @@ Kinds: `a` actual, `p` projection, `e` estimate, `m` model output.
 | `tax.fed.withheld`, `tax.va.withheld` | a | `docs` |
 | `sh.fed.required`, `.remaining`; `sh.va.required`, `.remaining` | m (e without a prior year) | `calc:tax` |
 | `room.solo401k`, `.employee`, `.employer`; `room.sep`; `room.ira.owner`, `.spouse`, `.household`; `room.hsa` | m | `calc:retirement` |
-| `hsa.contrib.ytd`, `va529.contrib.ytd`, `giving.trailing`, `giving.ytd` | a | `transactions` |
+| `hsa.contrib.ytd`, `va529.contrib.ytd` (zero when a college account had no deposit this year), `giving.trailing`, `giving.ytd` | a | `transactions` |
+| `inc.ytd.w2` (outside-employer W-2 or latest paystub wages this year) | a | `docs` |
+| `inc.ytd.total` (every `inc.ytd.*` figure) | a | `calc:income` |
 | `ira.pretax.owner`, `ira.pretax.spouse` | a | `acct:<accountId>` |
 | `va529.deductionLeft`, `va529.taxSaved`, `giving.twoYear` | m | `calc:tax` |
 | `wg.salary.<point>.salary`, `.payroll`, `.dist`, `.tax`, `.x`, `.y`; `wg.deferral.<option>.amount`, `.tax2026`, `.tax2027`, `.net`, `.decCash`, `.need`, `.gap`; `wg.deferral.base.income` | m | `wargame-model` |
@@ -484,9 +486,15 @@ The household liability (`householdTax`) projects each P and L entity from its o
 computes self-employment tax per person with filing-unit Additional Medicare, allocates the
 deductible half to each business, caps QBI at 20 percent of taxable income before QBI, applies the
 child tax credit for children under 17 (omitted above the phase-out threshold), and computes
-Virginia tax with the Virginia 529 deduction (personal exemptions omitted). An unclassified P and L
-entity, an incomplete partnership input or a missing Virginia itemized estimate blocks the tax
-figures that need it. A planner figure not produced by a run is deleted unless a rec def (text or
+Virginia tax with the Virginia 529 deduction (personal exemptions omitted). W-2 or paystub wages
+from a classified household S corp count as that person's own-corp wages even without its P and L.
+Every partnership entity needs its own complete K-1 (matched by the K-1's `partnership`, `entity`
+or `payer` name) or, for a single partnership without one, `income.partnershipEstimate`. An
+unclassified P and L entity, an incomplete partnership input, filing status mfs
+(`mfs_unsupported`), a household tax calculator throw (`calc_failed`) or a missing Virginia
+itemized estimate blocks the tax figures that need it. IRA room counts traditional and Roth IRA
+contributions; SEP room for a sole proprietor passes that person's W-2 wages; a pre-tax IRA with
+no balance on file leaves that person's pro-rata status unknown. A planner figure not produced by a run is deleted unless a rec def (text or
 `mine`), message, decision note or content row references it, or a kept war-game entry names its
 point or option. `src/scenario/build.mjs` serves a stored `wg.*` figure in place of the value it
 would derive from `content.wargame`.
@@ -496,7 +504,8 @@ would derive from `content.wargame`.
 Each module in `src/jobs/triggers/` exports `id`, `domain`, `trigger`, `packs`, `gate` (a pack
 rule over facts that tolerates absent facts), `calcs`, `kb`, `window(ctx)`, `evaluate(ctx)` (null,
 a hit, or `{blocked: reason}`), `build(ctx, hit)` and `template(ctx, hit)`. A trigger hits when its
-gate holds, its window has not closed and `evaluate` returns a hit.
+gate holds, its window has not closed and `evaluate` returns a hit. A null evaluation after one of
+the trigger's `calcs` threw is blocked as `calc_failed`, never retired.
 
 | Id | Domain / class | Window |
 |---|---|---|
@@ -528,7 +537,9 @@ with warning `rec_id_taken`.
 ### Prose rules
 
 Templates contain no digits outside tokens and no number words; amounts are `{f:}`/`{fk:}`
-figure tokens, statutory amounts `{l:}`, percents `{p:}`, names `{n:}`. Model prose (one `job` call
+figure tokens, statutory amounts `{l:}`, percents `{p:}`, names `{n:}`; a figure token appears only
+when that figure was produced. Data-derived text (entity and account names, `mine` labels) is
+HTML-escaped, braces included, before it enters a title, task or prose. Model prose (one `job` call
 per changed rec, `maxTokens` 1500, grounding allow list) is accepted only when the reply is JSON
 `{summary, why[1..4], qa[0..4]{q, a[1..3]}}`, every token names an allowed key for its scope,
 `checkGrounding` with token-only sources finds no literal number, and the engine's grounding check
