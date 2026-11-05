@@ -13,6 +13,11 @@ export const REMOTE = !!process.env.BASE_URL;
 
 const FONT_HOSTS = ['fonts.googleapis.com', 'fonts.gstatic.com'];
 
+// The Email screen's preview iframe is sandboxed (sandbox="" with srcdoc) on purpose, so Chromium
+// logs this message when the init script below runs inside it. It is expected and harmless; only
+// this exact message is ignored.
+const SANDBOX_SCRIPT_BLOCKED = /^Blocked script execution in 'about:srcdoc' because the document's frame is sandboxed and the 'allow-scripts' permission is not set\.?$/;
+
 // Every spec imports `test` from here. It fails the test on any console error, uncaught page
 // error or CSP violation. Failed font loads are ignored so an offline runner can still pass;
 // a font blocked by CSP is still reported through the securitypolicyviolation event.
@@ -26,6 +31,7 @@ export const test = base.extend({
     });
     page.on('console', (msg) => {
       if (msg.type() !== 'error') return;
+      if (SANDBOX_SCRIPT_BLOCKED.test(msg.text().trim())) return;
       const url = (msg.location() && msg.location().url) || '';
       if (/Failed to load resource/.test(msg.text()) && FONT_HOSTS.some((h) => url.startsWith(`https://${h}/`))) return;
       problems.push(`console error: ${msg.text()}${url ? ` (${url})` : ''}`);

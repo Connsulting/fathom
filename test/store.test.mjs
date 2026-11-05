@@ -158,7 +158,7 @@ test('migration files are NNN-name.sql numbered from 001 without gaps', () => {
 // AC15 (merge-gate blocker 7): main's latest store before the chat branch is schema 005
 // (002-ingest, 003-ingest-recipients, 004-ingest-survivor, 005-pack-manifest). Starting the server
 // on such a store applies 006-chat: messages.provenance exists, existing messages survive. Every
-// later migration (007-planner, 008-ask-threads, ...) applies in the same startup, so the schema
+// later migration (007-planner, 008-jobs-email, 009-ask-threads, ...) applies in the same startup, so the schema
 // reports the newest migration and the old 'ask' conversation's messages now live in one Ask
 // thread.
 const LATEST = Math.max(...listMigrations().map(m => m.id));
@@ -189,7 +189,8 @@ test('a store migrated to exactly 005 upgrades to 006-chat on startup and keeps 
   await withServer({ dataDir, env: { FATHOM_DEMO: '0', FATHOM_ENGINE: 'off' } }, async s => {
     const h = await request(s.baseUrl, { path: '/healthz' });
     assert.equal(h.status, 200);
-    assert.equal(h.json.schema, LATEST, 'the schema version reports the newest migration after startup');
+    const latest = Math.max(...readdirSync(MIGRATIONS_DIR).filter(f => f.endsWith('.sql')).map(f => Number(f.slice(0, 3))));
+    assert.equal(h.json.schema, latest, 'the schema version reports the highest migration after startup');
   });
 
   const db = openDb(file);

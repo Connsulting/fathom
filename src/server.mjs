@@ -1,7 +1,9 @@
 // Fathom server: one process serving web/ (the Horizon UI), /shared/ (browser-safe shared
 // logic) and the JSON API, backed by SQLite at $FATHOM_DATA/fathom.sqlite. One runtime engine
 // (src/engine/runtime.mjs) and one live pack view (src/packs/live.mjs) are built at startup and
-// handed to the API as ctx.engine and ctx.packs.
+// handed to the API as ctx.engine and ctx.packs. After them, the
+// email transport and the job scheduler are built and handed to the API as ctx.transport and
+// ctx.scheduler; the scheduler starts once the server listens and stops before the store closes.
 //
 // Store mode (settings.mode, set when the store is created, never inferred from contents):
 // no store file: create it; demo unless FATHOM_DEMO=0 (then real and empty). Demo stores are
@@ -24,6 +26,8 @@ import { createRuntimeEngine } from './engine/runtime.mjs';
 import { createLivePacks } from './packs/live.mjs';
 import { clockNow } from './scenario/build.mjs';
 import { purgeTrash } from './api/threads.mjs';
+import { createTransport } from './email/transport.mjs';
+import { createScheduler, defaultHandlers } from './jobs/scheduler.mjs';
 import { seedDemo } from '../demo/seed.mjs';
 
 export class StartupError extends Error {}
@@ -92,11 +96,18 @@ export async function startServer(config = loadConfig()) {
     throw new StartupError(`API key secret: ${e.message}`);
   }
   const mcp = createMcpHandler({ db, keys, config });
+  const transport = createTransport(config);
+  let scheduler = null;
+  try {
+    scheduler = createScheduler({ db, config, engine, handlers: defaultHandlers({ publicUrl: config.publicUrl }), transport });
+  } catch (err) {
+    console.error('fathom: scheduler unavailable', codeOf(err));
+  }
   const answerer = createLiveAnswerer({ engine, packs });
   // Real stores need an owner login list; a problem never stops startup, it fails closed (401).
   const owners = loadOwnerLogins(config);
   if (getSetting(db, 'mode', null) !== 'demo' && owners.problem) console.error(ownerLoginsProblemLine(owners.problem));
-  const server = http.createServer(createHandler({ db, config, answerer, engine, packs, keys, mcp, owners }));
+  const server = http.createServer(createHandler({ db, config, answerer, engine, packs, keys, mcp, owners, scheduler, transport }));
   try {
     await new Promise((resolveListen, reject) => {
       server.once('error', reject);
@@ -112,6 +123,14 @@ export async function startServer(config = loadConfig()) {
     }
     throw e;
   }
+  if (scheduler) {
+    try {
+      const started = scheduler.start();
+      if (started && typeof started.then === 'function') started.then(null, err => console.error('fathom: scheduler start failed', codeOf(err)));
+    } catch (err) {
+      console.error('fathom: scheduler start failed', codeOf(err));
+    }
+  }
   const { port } = server.address();
   const host = config.host.includes(':') ? `[${config.host}]` : config.host;
   let closed = false;
@@ -122,10 +141,14 @@ export async function startServer(config = loadConfig()) {
     close() {
       if (closed) return Promise.resolve();
       closed = true;
-      return new Promise(done => {
+      let stopped = Promise.resolve();
+      try {
+        if (scheduler) stopped = Promise.resolve(scheduler.stop()).catch(() => {});
+      } catch { /* stop failed; close anyway */ }
+      return stopped.then(() => new Promise(done => {
         server.close(() => { db.close(); done(); });
         server.closeAllConnections();
-      });
+      }));
     },
   };
 }

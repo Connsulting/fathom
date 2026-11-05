@@ -1,5 +1,5 @@
 // Ask threads (item 13): ChatGPT-style conversations. Schema and routes with the owner gate (AC9),
-// the 008 migration of the old single 'ask' conversation and per-rec isolation (AC6), reopening
+// the 009 migration of the old single 'ask' conversation and per-rec isolation (AC6), reopening
 // and continuing a thread with only its own history (AC5), archive, trash, restore, delete and the
 // 30 day purge (AC4), and naming over HTTP (AC3). Every fixture is synthetic.
 

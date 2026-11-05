@@ -5,20 +5,20 @@
 
 import test, { before, after, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { runPlanning } from '../../src/jobs/planner.mjs';
+import { planRun } from '../helpers/plan.mjs';
 import { buildScenario, loadRecs, loadContent } from '../../src/scenario/build.mjs';
 import { needsYou } from '../../src/shared/rules.mjs';
 import { solo401kRoom, payrollTax } from '../../src/calc/index.mjs';
 import { openStore } from '../../src/server.mjs';
 import demo from '../../demo/scenario.mjs';
 import {
-  scratch, addFact, contentValue, figureRow, recRow, activeRecIds, PACKS_DIR, SCORP, SYNTH,
+  scratch, addFact, contentValue, figureRow, recRow, activeRecIds, SCORP, SYNTH,
 } from '../helpers/real-store.mjs';
 
 const NOW = '2026-11-05';
 const S = scratch();
 after(() => S.cleanup());
-const plan = (db, now = NOW) => runPlanning(db, null, { now, packDirs: [PACKS_DIR] });
+const plan = (db, now = NOW) => planRun(db, { now });
 const r2 = n => Math.round((n + Number.EPSILON) * 100) / 100;
 const near = (actual, expected, what) =>
   assert.ok(typeof actual === 'number' && Math.abs(actual - expected) <= 0.011, `${what}: expected ${expected}, got ${actual}`);

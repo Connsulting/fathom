@@ -11,6 +11,7 @@ import {
   ROOT, DB_FILE, SERVER_TIMEOUT, tempDir, tempDb, runCommand, openStore, dumpStore, withServer, postJson,
 } from './helpers/server.mjs';
 import { setSetting, getSetting } from '../src/store/db.mjs';
+import { JOBS } from '../src/jobs/scheduler.mjs';
 
 const T = { timeout: SERVER_TIMEOUT };
 const seed = dataDir => runCommand('npm', ['run', 'seed:demo'], { env: { FATHOM_DATA: dataDir } });
@@ -34,7 +35,23 @@ test('demo/scenario.mjs is a faithful port of mock-v2/scenario/example.js', () =
   const sandbox = { window: {} };
   vm.runInNewContext(code, sandbox);
   const mock = JSON.parse(JSON.stringify(sandbox.window.FATHOM_SCENARIO));
-  assert.deepStrictEqual(demo, mock);
+  // engine.jobs is exempt: the demo seeds the scheduler's four real jobs while mock-v2 stays
+  // untouched and keeps its original mock job list.
+  const { jobs: demoJobs, ...demoEngine } = demo.engine;
+  const { jobs: mockJobs, ...mockEngine } = mock.engine;
+  assert.ok(Array.isArray(mockJobs) && Array.isArray(demoJobs));
+  assert.deepStrictEqual({ ...demo, engine: demoEngine }, { ...mock, engine: mockEngine });
+});
+
+test('demo engine.jobs are the scheduler jobs, by id, name, cadence and does', () => {
+  assert.deepEqual(demo.engine.jobs.map(j => j.id), ['plan', 'brief-email', 'deadline-alerts', 'freshness']);
+  assert.deepEqual(demo.engine.jobs.map(j => j.id), JOBS.map(j => j.id));
+  for (const job of demo.engine.jobs) {
+    const real = JOBS.find(j => j.id === job.id);
+    assert.equal(job.name, real.name, `${job.id}.name`);
+    assert.equal(job.cadence, real.cadence, `${job.id}.cadence`);
+    assert.equal(job.does, real.does, `${job.id}.does`);
+  }
 });
 
 test('demo/ does not import from or reference mock-v2', () => {
