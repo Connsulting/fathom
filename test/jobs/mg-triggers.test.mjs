@@ -11,7 +11,7 @@
 
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
-import { runPlanning } from '../../src/jobs/planner.mjs';
+import { planRun } from '../helpers/plan.mjs';
 import { evaluateCatalog } from '../../src/jobs/triggers/index.mjs';
 import * as yearEnd from '../../src/jobs/triggers/year-end-retirement.mjs';
 import * as solo401kSetup from '../../src/jobs/triggers/solo401k-setup.mjs';
@@ -30,13 +30,13 @@ import { callTool } from '../../src/tools/index.mjs';
 import { esc, resolveTokens } from '../../src/shared/tokens.mjs';
 import {
   scratch, addFact, removeFact, addPayroll, addFile, w2Doc, factRow, pnlWorkbook, accountIdByMask, contentValue, recRow,
-  plannerRec, recEvents, activeRecIds, parseJson, PACKS_DIR, MASKS,
+  plannerRec, recEvents, activeRecIds, parseJson, MASKS,
 } from '../helpers/real-store.mjs';
 
 const NOW = '2026-11-05';
 const S = scratch();
 after(() => S.cleanup());
-const plan = (db, now = NOW, engine = null) => runPlanning(db, engine, { now, packDirs: [PACKS_DIR] });
+const plan = (db, now = NOW, engine = null) => planRun(db, { engine, now });
 const api = (db, { clock = NOW, params = {}, body = {} } = {}) => ({ db, config: { clock }, params, body });
 
 const EVIL = '<img src=x onerror=alert(1)>';

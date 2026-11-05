@@ -14,13 +14,17 @@
 //    trigger during a run is remembered and coalesced into one rerun after it), and
 //    ticks never overlap. A handler that throws never stops the scheduler.
 // 5. job_runs rows record status (ok, skipped, error), duration, trigger, cost and a counts-only
-//    note; error_class is an identifier (the error's code, else its class name), never a message.
-//    Logs are only `fathom: job <id> <status> [error_class]`.
+//    note (numbers and booleans, top level or one object deep); error_class is an identifier (the
+//    error's code, else its class name), never a message. Logs are only
+//    `fathom: job <id> <status> [error_class]`.
 // 6. stop() is graceful and never rejects: it clears the timers, then ticks run nothing, runNow is
 //    `locked` and pending reruns are dropped; it waits for active runs up to drainMs (default 30 s)
 //    and then releases the lease.
 // 7. ensureJobs writes a jobs row for every JOBS entry, wired or not; only handled jobs are
 //    scheduled and listed by jobs(). An unhandled job's row has no next label.
+// 8. Planning runs only here: the default `plan` handler calls runPlanning with this run's id, so
+//    nightly, manual (Run now, POST /api/jobs/plan/run, npm run plan) and ingest runs share the
+//    lease and job_runs. On a demo store it records the run skipped and plans nothing.
 
 import { getSetting } from '../store/db.mjs';
 import { isIsoDate } from '../scenario/build.mjs';
@@ -28,6 +32,8 @@ import { ingestState } from '../ingest/freshness.mjs';
 import { composeBrief } from '../email/brief.mjs';
 import { sendEmail } from '../email/send.mjs';
 import { runDeadlineAlerts } from './alerts.mjs';
+import { runPlanning } from './planner.mjs';
+import { defaultPackDirs } from '../packs/state.mjs';
 
 export const DEFAULT_TIMEZONE = 'America/New_York';
 const DAY = 86400000;
@@ -166,15 +172,31 @@ function noteOf(raw) {
   try { return JSON.parse(raw); } catch { return null; }
 }
 
-// A counts-only note: finite numbers and booleans from an object or JSON object text, else null.
+const isCount = (x) => (typeof x === 'number' && Number.isFinite(x)) || typeof x === 'boolean';
+const isPlain = (x) => !!x && typeof x === 'object' && !Array.isArray(x);
+
+// Identifier keys whose values are counts, plus (when nested) objects of the same one level deep.
+function countsOf(v, nested) {
+  const out = {};
+  for (const [k, x] of Object.entries(v)) {
+    if (!IDENT.test(k)) continue;
+    if (isCount(x)) out[k] = x;
+    else if (nested && isPlain(x)) {
+      const inner = countsOf(x, false);
+      if (Object.keys(inner).length) out[k] = inner;
+    }
+  }
+  return out;
+}
+
+// A counts-only note from an object or JSON object text, else null: finite numbers and booleans,
+// at the top level or in an object one level down (the planner's recs and prose counts). Strings,
+// arrays and anything deeper are dropped.
 function countsNote(note) {
   let v = note;
   if (typeof v === 'string') { try { v = JSON.parse(v); } catch { return null; } }
-  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
-  const out = {};
-  for (const [k, x] of Object.entries(v)) {
-    if (IDENT.test(k) && ((typeof x === 'number' && Number.isFinite(x)) || typeof x === 'boolean')) out[k] = x;
-  }
+  if (!isPlain(v)) return null;
+  const out = countsOf(v, true);
   return Object.keys(out).length ? JSON.stringify(out) : null;
 }
 
@@ -405,9 +427,19 @@ export function createScheduler({
 
 // ---------------------------------------------------------------- default handlers
 
-// The server's handlers. `plan` joins when the planner lands (plan Pinned decision 7).
+// The server's handlers. `plan` is the only path that plans: on a real store it runs the planner
+// with this run's id and the run's clock, and returns the planner's counts as the note plus the
+// whole planner result as `planning` (the scheduler ignores it; npm run plan prints its warning
+// codes). On a demo store it plans nothing and the run is recorded skipped.
 export function defaultHandlers({ publicUrl = null } = {}) {
   return {
+    async plan(ctx) {
+      if (getSetting(ctx.db, 'mode', null) === 'demo') return { status: 'skipped' };
+      const planning = await runPlanning(ctx.db, ctx.engine || null, {
+        now: ctx.clock, packDirs: defaultPackDirs(ctx.config && ctx.config.dataDir), runId: ctx.jobRunId,
+      });
+      return { costUsd: planning.costUsd, note: planning.counts, planning };
+    },
     async 'brief-email'(ctx) {
       const brief = await composeBrief(ctx.db, { clock: ctx.clock, publicUrl, engine: ctx.engine });
       const send = await sendEmail(ctx.db, {

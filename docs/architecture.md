@@ -451,7 +451,6 @@ response is `{scenario, ...}` with the fresh scenario.
 | `POST /api/keys` | `{name, scopes?: ('read' or 'write:recs')[]}` | `{key, record, keys}`. The only time the key is shown. Name trimmed, 1 to 80 characters, no control characters; scopes always include `read`; else 400. |
 | `POST /api/keys/:id/revoke` | `{}` | `{record, keys}`. Sets `revokedAt` once (a second revoke keeps it); 404 unknown id. |
 | `GET /api/mcp` | | `{url, publicUrlSet, tools: [{name, description, scope}], scopes: [{id, label, access}]}`. `url` is `FATHOM_PUBLIC_URL` with `/mcp` appended unless it already ends in it, else `<proto>://<Host>/mcp` with proto from `X-Forwarded-Proto` (http or https only), then the socket. |
-| `POST /api/jobs/plan/run` | `{}` | `{scenario, run}`. Runs the planner (`runPlanning`) with the server's runtime engine and `FATHOM_CLOCK`; 409 `{error: 'planning runs on real stores only'}` on a demo store, which it leaves unchanged. |
 | `POST /api/files` | multipart/form-data, field `files` (one or more) | `{scenario, files: [result], pending}`. A result is `{fileId, name, status, sourceKind, parser, counts, duplicateOf?}` with status `imported`, `duplicate`, `needs_mapping`, `needs_extraction`, `unsupported`, `too_large` (past a parse limit, see Ingest) or `failed`. 400 no files or malformed body, 409 a real store without `FATHOM_DATA_KEY_FILE` (nothing stored), 413 over a size cap, 415 not multipart with a boundary. |
 | `GET /api/files` | | `{files: [{id, name, status, sourceKind, parser, counts, uploadedAt}]}`, newest first. |
 | `POST /api/files/:id/retry` | `{}` | `{scenario, file: result}`. Routes a `needs_mapping` or `needs_extraction` file again under the same id; 404 unknown file, 409 a file that is not waiting. |
@@ -462,7 +461,7 @@ response is `{scenario, ...}` with the fresh scenario.
 | `POST /api/email/test` | `{}` | `{send, history}`. Sends a fixed test email (kind `test`) through the configured transport; a failed send is a 200 with `send.status` `failed` and `send.errorCode`. |
 | `POST /api/email/brief` | `{}` | `{send, history}`. Composes and sends the brief now (kind `brief`); failures as above. |
 | `GET /api/jobs` | | `{jobs: [{id, name, cadence, does, lastRun, next, nextAt}], runs, timezone}`. Only jobs with a handler are listed; `runs` are recent `job_runs`. |
-| `POST /api/jobs/:id/run` | `{}` | `{run, jobs}`. Runs the job now under the lease (trigger `manual`). 404 unknown job, 409 already running or the lease is held by another scheduler. |
+| `POST /api/jobs/:id/run` | `{}` | `{scenario, run, jobs}`. Runs the job now through the scheduler under the lease (trigger `manual`); `run` is the scheduler's run (`{id, jobId, status, trigger, periodKey, startedAt, finishedAt, durationMs, errorClass, costUsd, note}`) and `scenario` the fresh scenario. `POST /api/jobs/plan/run` is this route: the manual planning run with the server's runtime engine and clock; on a demo store it answers 409 `{error: 'planning runs on real stores only'}` before the scheduler, leaving the store unchanged. 404 unknown job, 409 already running or the lease is held by another scheduler. |
 
 Key responses carry no `scenario`, the one exception to the rule above.
 
@@ -612,13 +611,21 @@ serves) and stops it before closing the store.
    transport, now, clock, periodKey, trigger, jobRunId}`. Only jobs with a handler are scheduled
    and listed, but every `JOBS` entry has a row in the `jobs` table even before its handler is
    wired (with no next label). A run's row goes `running` then `ok`, `skipped` or `error` with `finished_at`,
-   `duration_ms`, `error_class` (identifier only) and `cost_usd`.
+   `duration_ms`, `error_class` (identifier only), `cost_usd` and a counts-only `note`: numbers and
+   booleans with identifier keys, at the top level or in an object one level down (the planner's
+   `recs` and `prose` counts); strings, arrays and deeper values are dropped.
 6. Engine: every model call goes through the runtime engine. With the engine off, over its cap, in
    fake mode with no script, or when the summary fails grounding, the brief uses its template
    summary and still sends.
-7. Plan job: the planner is not wired yet, so the server's handler registry has no `plan` handler
-   and `trigger('plan', 'ingest')` is a no-op. When the planner lands it is wired as the `plan`
-   handler, so nightly, manual and ingest runs share one path, the lease and `job_runs`.
+7. Plan job: `defaultHandlers` includes `plan`, the only code path that plans. Nightly, manual
+   (Run now, `POST /api/jobs/plan/run`, `npm run plan`) and ingest (`trigger('plan', 'ingest')`
+   after an import) runs share it, the lease and `job_runs`. On a real store it calls
+   `runPlanning(db, engine, {now: ctx.clock, packDirs: defaultPackDirs(dataDir), runId:
+   ctx.jobRunId})` and returns the planner's cost and its counts as the note. On a demo store it
+   plans nothing: scheduled and ingest runs are recorded `skipped`, and a manual run over HTTP is
+   refused with 409 before the scheduler, so nothing changes. `npm run plan` builds a scheduler
+   with only the plan handler and runs it now; it exits 3, telling the owner to use Run now in the
+   app or `POST /api/jobs/plan/run`, when another process (the running server) holds the lease.
 8. Triggers during a run: `trigger(jobId, reason)` for a job that is already running remembers the
    request, and when the current run finishes exactly one more run starts with that reason, so
    several triggers during one run coalesce into one rerun. `trigger` never rejects.
@@ -1104,16 +1111,19 @@ configuration the caller has.
 
 ## Planner
 
-`src/jobs/planner.mjs` exports `runPlanning(db, engine, {now, packDirs})`, `PlannerError` and
-`PLAN_JOB_ID` (`'plan'`). It is the real-mode brain: a deterministic run that reads the ledger,
+`src/jobs/planner.mjs` exports `runPlanning(db, engine, {now, packDirs, runId})`, `PlannerError`
+and `PLAN_JOB_ID` (`'plan'`). It is the real-mode brain: a deterministic run that reads the ledger,
 derives facts and figures, evaluates the trigger catalog and rewrites the planner-owned parts of
-the plan and brief. `POST /api/jobs/plan/run` and `npm run plan` (`src/jobs/plan-cli.mjs`, exit 2
-on a missing or demo store, prints counts and warning codes only) call it.
+the plan and brief. Its only caller is the scheduler's `plan` handler (see Jobs), so every run has
+the `job_runs` row the scheduler claimed and `runId` (required, an integer; a `TypeError` without
+it) is that row's id. `POST /api/jobs/plan/run` (the generic `POST /api/jobs/:id/run`) and `npm run
+plan` (`src/jobs/plan-cli.mjs`: exit 2 on a missing or demo store, 3 when another process holds the
+job lease, 1 when the run fails; prints counts and warning codes only) run the plan job.
 
 ### Run steps
 
-1. Refuse a demo store (`PlannerError` code `demo_store`). Insert the `jobs` row `plan` when
-   missing and a `job_runs` row with status `running`.
+1. Refuse a demo store (`PlannerError` code `demo_store`). The `jobs` row and the `job_runs` row
+   are the scheduler's.
 2. Clock: `now` (a Date, ISO string or epoch ms), else `settings.clock`, else today. The tax year
    is the latest supported year (2026 today) whose return is not yet due (clock on or before
    Apr 15 of the next year); without one, tax, retirement and war-game figures are skipped with
@@ -1130,10 +1140,10 @@ on a missing or demo store, prints counts and warning codes only) call it.
    rules below; otherwise the template.
 7. One write transaction: facts, sources, figures, recs (`planner/recs.mjs`), `refreshPackState`
    and pack `recIds`, the brief (`planner/brief.mjs`), then pruning of planner figures nothing references.
-8. Finish `job_runs` with `ok`, the engine cost and a note of counts only. On any throw the row is
-   `error` with note `{error: <class name>, code: <PlannerError code or null>}` and the error is
-   rethrown. Runs are serialized per db handle, and every write compares first, so a second run
-   over the same data changes no row.
+8. Return the result. The scheduler finishes the `job_runs` row: `ok` with the engine cost and the
+   counts as a counts-only note, or on a throw `error` with an identifier-only `error_class`. Runs
+   are serialized per db handle, and every write compares first, so a second run over the same
+   data changes no row.
 
 Result: `{runId, status: 'ok', counts: {factsDerived, factsWritten, figures, recs: {active, new,
 updated, retired, unchanged}, byTrigger: {<id>: new|updated|unchanged|retired}, prose: {model,
@@ -1369,9 +1379,10 @@ and an optional `entity` on `retirement.contributions` entries.
 
 ### Job rows
 
-`jobs` row `{id: 'plan', name: 'Planning run', cadence: 'On demand', cost: 0, enabled: 1}`, inserted
-when missing (real stores only). Each run adds one `job_runs` row with ISO `started_at` and
-`finished_at`, status `running` then `ok` or `error`, `cost_usd` and a counts-only `note`.
+The scheduler owns both: the `jobs` row `plan` comes from its `JOBS` table (`Nightly plan
+refresh`, daily at 02:00), and each run adds one `job_runs` row (status `running` then `ok`,
+`skipped` or `error`, with trigger, period key, duration, `cost_usd` and a counts-only `note`) whose
+id the planner writes to `planner_recs.first_run` and `last_run`.
 
 ### Planner seams
 

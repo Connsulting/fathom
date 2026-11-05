@@ -1,5 +1,6 @@
 // Email and jobs API handlers: transport status, the brief preview and send history, a test send,
-// a brief send, the job list and manual job runs. Each takes the router ctx ({db, config, engine,
+// a brief send, the job list and manual job runs (POST /api/jobs/plan/run is the manual plan run:
+// planning runs only through the scheduler). Each takes the router ctx ({db, config, engine,
 // scheduler, transport, params, body}) and returns the JSON body or throws HttpError. Responses
 // never carry an email body in history, the credential or a full address (the recipient is
 // masked by emailStatus). The router logs errors on these routes as a code only.
@@ -8,6 +9,9 @@ import { emailStatus } from '../email/transport.mjs';
 import { sendEmail, listSends } from '../email/send.mjs';
 import { composeBrief } from '../email/brief.mjs';
 import { SchedulerError, ownerTimezone } from '../jobs/scheduler.mjs';
+import { PLAN_JOB_ID } from '../jobs/planner.mjs';
+import { getSetting } from '../store/db.mjs';
+import { scenarioOf } from './handlers.mjs';
 import { HttpError } from './http.mjs';
 
 const HISTORY_LIMIT = 50;
@@ -72,10 +76,13 @@ export function listJobs(ctx) {
   return jobsBody(ctx);
 }
 
+// A manual run under the lease. Planning on a demo store is refused here, before the scheduler, so
+// the store is left unchanged (scheduled and ingest plan runs on a demo store record skipped).
 export async function runJob(ctx) {
+  const { id } = ctx.params;
+  if (id === PLAN_JOB_ID && getSetting(ctx.db, 'mode', null) === 'demo') throw new HttpError(409, 'planning runs on real stores only');
   const s = ctx.scheduler;
   if (!s) throw new HttpError(503, 'scheduler unavailable');
-  const { id } = ctx.params;
   let run;
   try {
     run = await s.runNow(id);
@@ -85,6 +92,5 @@ export async function runJob(ctx) {
     }
     throw err;
   }
-  const body = jobsBody(ctx);
-  return { run: run ?? null, jobs: body.jobs };
+  return { scenario: scenarioOf(ctx), run: run ?? null, jobs: jobsBody(ctx).jobs };
 }

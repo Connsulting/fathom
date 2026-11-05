@@ -1,24 +1,28 @@
-// AC1: runPlanning, its job bookkeeping, the HTTP endpoint, the CLI, serialization of concurrent
-// runs and idempotence. Refusals (demo store, missing store) each have a working counterpart.
+// AC1: the planning run through the scheduler's plan handler (test/helpers/plan.mjs), its job
+// bookkeeping (written by the scheduler), the HTTP endpoint (POST /api/jobs/plan/run, the generic
+// POST /api/jobs/:id/run), the CLI, serialization of concurrent runPlanning calls and idempotence.
+// Refusals (demo store, missing store, a held lease) each have a working counterpart.
 
 import test, { after, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runPlanning, PlannerError, PLAN_JOB_ID } from '../../src/jobs/planner.mjs';
+import { createScheduler, defaultHandlers, JOBS } from '../../src/jobs/scheduler.mjs';
 import { createHandler, routes } from '../../src/api/router.mjs';
 import { loadConfig } from '../../src/config.mjs';
 import { openStore } from '../../src/server.mjs';
 import { openDb, listTables, DB_FILE } from '../../src/store/db.mjs';
 import { postJson, runCommand, TEST_OWNER } from '../helpers/server.mjs';
 import { scratch, buildRealStore, dumpTables, activeRecIds, parseJson, PACKS_DIR } from '../helpers/real-store.mjs';
+import { planRun, claimPlanRun } from '../helpers/plan.mjs';
 
 const NOW = '2026-11-05';
 const S = scratch();
 after(() => S.cleanup());
 
-const plan = (db, opts = {}) => runPlanning(db, opts.engine ?? null, { now: opts.now ?? NOW, packDirs: opts.packDirs ?? [PACKS_DIR] });
+const plan = (db, opts = {}) => planRun(db, { engine: opts.engine ?? null, now: opts.now ?? NOW, dataDir: opts.dataDir ?? null });
 // Real mode admits only FATHOM_OWNER_LOGINS; postJson sends TEST_OWNER as Tailscale-User-Login.
 const realConfig = dir => loadConfig({ FATHOM_DATA: dir, FATHOM_DEMO: '0', FATHOM_ENGINE: 'off', FATHOM_CLOCK: NOW, FATHOM_OWNER_LOGINS: TEST_OWNER });
 
@@ -36,12 +40,17 @@ function allTables(db) {
   return dumpTables(db, listTables(db));
 }
 
+// The in-process router with the server's scheduler (default handlers, not started).
 async function serve(db, config, engine = null) {
-  const server = http.createServer(createHandler({ db, config, engine }));
+  const scheduler = createScheduler({ db, config, engine, handlers: defaultHandlers({ publicUrl: null }), tickMs: 3600000, log: { log() {} } });
+  const server = http.createServer(createHandler({ db, config, engine, scheduler }));
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   return {
     baseUrl: `http://127.0.0.1:${server.address().port}`,
-    close: () => new Promise(resolve => { server.close(resolve); server.closeAllConnections(); }),
+    close: async () => {
+      await new Promise(resolve => { server.close(resolve); server.closeAllConnections(); });
+      await scheduler.stop();
+    },
   };
 }
 
@@ -52,6 +61,7 @@ describe('runPlanning', () => {
     const result = await plan(db);
     assert.equal(result.status, 'ok');
     assert.ok(Number.isInteger(result.runId));
+    assert.equal(result.runId, result.run.id, 'the planner ran under the scheduler run');
     const c = result.counts;
     for (const k of ['factsDerived', 'factsWritten', 'figures', 'warnings']) assert.equal(typeof c[k], 'number', `counts.${k}`);
     for (const k of ['active', 'new', 'updated', 'retired', 'unchanged']) assert.equal(typeof c.recs[k], 'number', `counts.recs.${k}`);
@@ -73,7 +83,8 @@ describe('runPlanning', () => {
     const second = await plan(db);
     const job = db.prepare("SELECT * FROM jobs WHERE id = 'plan'").get();
     assert.ok(job, 'jobs row plan');
-    assert.deepEqual([job.name, job.cadence, job.enabled], ['Planning run', 'On demand', 1]);
+    const def = JOBS.find(j => j.id === 'plan');
+    assert.deepEqual([job.name, job.cadence, job.enabled], [def.name, def.cadence, 1], 'the scheduler writes the plan jobs row');
     assert.equal(db.prepare("SELECT count(*) AS n FROM jobs WHERE id = 'plan'").get().n, 1);
     const runs = db.prepare("SELECT * FROM job_runs WHERE job_id = 'plan' ORDER BY id").all();
     assert.equal(runs.length, 2);
@@ -92,17 +103,19 @@ describe('runPlanning', () => {
 
   test('AC1: a failing run marks its job_runs row error with the class name only, and rethrows', async () => {
     const db = await S.store();
-    const missing = join(S.dir(), 'no-such-packs');
-    await assert.rejects(plan(db, { packDirs: [missing] }));
+    // A data directory whose Your plans pack has a broken manifest: loading packs throws.
+    const dataDir = S.dir();
+    const broken = join(dataDir, 'packs', 'your-plans');
+    mkdirSync(broken, { recursive: true });
+    writeFileSync(join(broken, 'manifest.json'), '{ not json');
+    await assert.rejects(plan(db, { dataDir }));
     const run = db.prepare("SELECT * FROM job_runs WHERE job_id = 'plan' ORDER BY id DESC").get();
     assert.ok(run, 'the run was recorded');
     assert.equal(run.status, 'error');
     assert.ok(run.finished_at);
-    const note = parseJson(run.note, null);
-    assert.equal(typeof note.error, 'string');
-    assert.ok(note.error.length > 0);
-    assert.ok('code' in note);
-    assert.ok(!run.note.includes('no-such-packs'), 'no message text from the failure');
+    assert.match(run.error_class, /^[A-Za-z_][A-Za-z0-9_]*$/, 'error_class is an identifier');
+    assert.equal(run.note, null, 'a failed run has no note');
+    for (const [col, v] of Object.entries(run)) assert.ok(!String(v ?? '').includes('your-plans'), `job_runs.${col} carries no message text from the failure`);
     // liveness: the same store plans fine with a valid pack directory
     assert.equal((await plan(db)).status, 'ok');
   });
@@ -110,7 +123,9 @@ describe('runPlanning', () => {
   test('AC1: runPlanning refuses a demo store with PlannerError demo_store and changes nothing', async () => {
     const { db } = demoStore();
     const before = allTables(db);
-    await assert.rejects(plan(db), err => err instanceof PlannerError && err.code === 'demo_store');
+    // The planner core directly: the refusal comes before any write, and claiming a job_runs row
+    // would itself change the store, so the run id here is a placeholder.
+    await assert.rejects(runPlanning(db, null, { now: NOW, packDirs: [PACKS_DIR], runId: 1 }), err => err instanceof PlannerError && err.code === 'demo_store');
     assert.deepEqual(allTables(db), before, 'demo store unchanged');
     // liveness: a real store is accepted
     assert.equal((await plan(await S.store())).status, 'ok');
@@ -121,11 +136,15 @@ describe('runPlanning', () => {
     const one = await S.store();
     await plan(one, { engine: slow });
     const two = await S.store();
-    const results = await Promise.all([plan(two, { engine: slow }), plan(two, { engine: slow })]);
+    // The planner core directly with two claimed runs: its per-db chain serializes them.
+    const ids = [claimPlanRun(two), claimPlanRun(two)];
+    const core = (runId) => runPlanning(two, slow, { now: NOW, packDirs: [PACKS_DIR], runId });
+    const results = await Promise.all([core(ids[0]), core(ids[1])]);
     assert.deepEqual(results.map(r => r.status), ['ok', 'ok']);
     assert.notEqual(results[0].runId, results[1].runId);
-    const runs = two.prepare("SELECT status FROM job_runs WHERE job_id = 'plan'").all().map(r => r.status);
-    assert.deepEqual(runs, ['ok', 'ok']);
+    assert.deepEqual(results.map(r => r.runId), ids, 'each run carries the run id it was given');
+    const firstRuns = [...new Set(two.prepare('SELECT first_run FROM planner_recs').all().map(r => r.first_run))];
+    assert.deepEqual(firstRuns, [ids[0]], 'the first call ran first and created every planner rec');
     const tables = ['facts', 'figures', 'sources', 'recs', 'rec_events', 'planner_recs', 'content', 'deadlines', 'decisions', 'events', 'packs_state', 'conversations', 'messages'];
     // Timestamps, autoincrement ids and run ids differ between stores by construction.
     const omit = ['updated_at', 'ts', 'created_at', 'last_ingest_at', 'id', 'first_run', 'last_run'];
@@ -152,8 +171,9 @@ describe('runPlanning', () => {
 });
 
 describe('POST /api/jobs/plan/run', () => {
-  test('AC1: the route is in the route table', () => {
-    assert.ok(routes.some(r => r.method === 'POST' && r.path === '/api/jobs/plan/run'));
+  test('AC1: the route is the generic job run route in the route table', () => {
+    assert.ok(routes.some(r => r.method === 'POST' && r.path === '/api/jobs/:id/run'));
+    assert.ok(!routes.some(r => r.path === '/api/jobs/plan/run'), 'no dedicated plan route');
   });
 
   test('AC1: on a real store the endpoint plans and returns the scenario with planner recs and the run', async () => {
@@ -164,7 +184,9 @@ describe('POST /api/jobs/plan/run', () => {
       const r = await postJson(app.baseUrl, '/api/jobs/plan/run', {});
       assert.equal(r.status, 200, r.text.slice(0, 300));
       assert.equal(r.json.run.status, 'ok');
-      assert.ok(Number.isInteger(r.json.run.runId));
+      assert.equal(r.json.run.jobId, 'plan');
+      assert.ok(Number.isInteger(r.json.run.id));
+      assert.ok(Array.isArray(r.json.jobs) && r.json.jobs.some(j => j.id === 'plan'), 'jobs lists the plan job');
       const ids = r.json.scenario.recs.map(x => x.id);
       for (const id of ['fed-q4-estimate', 'scorp-salary', 'va529']) assert.ok(ids.includes(id), `scenario has ${id}`);
       assert.equal(r.json.scenario.live.mode, 'real');
@@ -221,5 +243,24 @@ describe('npm run plan (src/jobs/plan-cli.mjs)', () => {
     const out = await cli({ FATHOM_DATA: dir });
     assert.equal(out.code, 2);
     assert.equal(existsSync(join(dir, DB_FILE)), false);
+  });
+
+  test('the CLI exits 3 while another process holds the job lease, and plans once it is released', async () => {
+    const dir = S.dir();
+    const db = S.track(await buildRealStore(dir));
+    // Another scheduler (as the running server would) takes the lease on its tick.
+    const holder = createScheduler({ db, config: { clock: NOW, dataDir: dir }, handlers: {}, tickMs: 3600000, holder: 'server-holder', log: { log() {} } });
+    await holder.tick();
+    assert.equal(db.prepare('SELECT holder FROM job_lock').get().holder, 'server-holder');
+    const out = await cli({ FATHOM_DATA: dir });
+    assert.equal(out.code, 3, out.stderr);
+    assert.match(out.stderr, /Run now/);
+    assert.match(out.stderr, /POST \/api\/jobs\/plan\/run/);
+    assert.equal(db.prepare("SELECT count(*) AS n FROM job_runs WHERE job_id = 'plan'").get().n, 0, 'nothing ran');
+    // liveness: once the lease is released the CLI plans
+    await holder.stop();
+    const again = await cli({ FATHOM_DATA: dir });
+    assert.equal(again.code, 0, again.stderr);
+    assert.equal(db.prepare("SELECT count(*) AS n FROM job_runs WHERE job_id = 'plan' AND status = 'ok'").get().n, 1);
   });
 });

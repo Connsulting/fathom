@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { spawnServer, request, postJson, openStore, src, tempDb, SERVER_TIMEOUT } from '../helpers/server.mjs';
+import { spawnServer, request, postJson, openStore, src, tempDb, SERVER_TIMEOUT, TEST_OWNER, IDENTITY_HEADER } from '../helpers/server.mjs';
 import { seedDemo } from '../../demo/seed.mjs';
 import { fixturePath, textFile, realStore, offEngine } from '../helpers/ingest.mjs';
 
@@ -87,8 +87,7 @@ describe('email and jobs routes on a demo server', () => {
     const r = await request(s.baseUrl, { path: '/api/jobs' });
     assert.equal(r.status, 200, r.text.slice(0, 300));
     const ids = r.json.jobs.map((j) => j.id);
-    for (const id of ['brief-email', 'deadline-alerts', 'freshness']) assert.ok(ids.includes(id), id);
-    assert.ok(!ids.includes('plan'), 'no plan handler on this branch');
+    for (const id of ['plan', 'brief-email', 'deadline-alerts', 'freshness']) assert.ok(ids.includes(id), id);
     for (const j of r.json.jobs) {
       for (const k of ['name', 'cadence', 'does', 'next']) assert.equal(typeof j[k], 'string', `${j.id}.${k}`);
       assert.ok('lastRun' in j, `${j.id}.lastRun`);
@@ -189,7 +188,8 @@ describe('ingest triggers the plan job (in-process router, fake scheduler)', () 
   async function upload(base, files) {
     const fd = new FormData();
     for (const f of files) fd.append('files', new Blob([f.bytes], { type: f.mime || 'text/csv' }), f.name);
-    const res = await fetch(`${base}/api/files`, { method: 'POST', body: fd });
+    // Real mode: the owner identity header, as every real-mode request carries.
+    const res = await fetch(`${base}/api/files`, { method: 'POST', body: fd, headers: { [IDENTITY_HEADER]: TEST_OWNER } });
     return { status: res.status, json: await res.json() };
   }
 
@@ -200,7 +200,7 @@ describe('ingest triggers the plan job (in-process router, fake scheduler)', () 
     const scheduler = fakeScheduler();
     const transport = { name: 'capture', async send() { return { id: 'unused' }; } };
     const server = http.createServer(createHandler({
-      db: st.db, config: st.config, engine: await offEngine(), scheduler, transport,
+      db: st.db, config: { ...st.config, ownerLogins: TEST_OWNER, ownerLoginsFile: null }, engine: await offEngine(), scheduler, transport,
     }));
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
     const base = `http://127.0.0.1:${server.address().port}`;
