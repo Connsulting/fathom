@@ -1,4 +1,4 @@
--- 005 jobs and email: scheduler state on job_runs (period key, trigger, duration, error class),
+-- 006 jobs and email: scheduler state on job_runs (period key, trigger, duration, error class),
 -- one attempt per (job_id, period_key) through a partial unique index (rows with no period key,
 -- such as the planner's own runs, may repeat), the single-row job_lock lease, the email_sends
 -- history (no bodies, no addresses) and deadline_alerts dedupe by (key, threshold).
@@ -37,3 +37,13 @@ CREATE TABLE deadline_alerts (
   send_id INTEGER,
   PRIMARY KEY (key, threshold)
 );
+
+-- Demo stores only: the demo now seeds the scheduler's own jobs, so the five retired mock jobs and
+-- their runs go, leaving one jobs list. settings.value is JSON text, so demo mode is '"demo"'. A
+-- real store keeps any job that happens to share one of these ids.
+DELETE FROM job_runs
+WHERE job_id IN ('sync', 'sweep', 'triggers', 'brief', 'packet')
+  AND EXISTS (SELECT 1 FROM settings WHERE key = 'mode' AND value = '"demo"');
+DELETE FROM jobs
+WHERE id IN ('sync', 'sweep', 'triggers', 'brief', 'packet')
+  AND EXISTS (SELECT 1 FROM settings WHERE key = 'mode' AND value = '"demo"');

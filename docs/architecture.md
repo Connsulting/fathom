@@ -298,7 +298,9 @@ Migration 006 (`006-jobs-email.sql`) adds the scheduler columns `job_runs.period
 `duration_ms` and `error_class` with the partial unique index on (`job_id`, `period_key`) (rows
 with no period key, such as the planner's own runs, may repeat), and the tables `job_lock`,
 `email_sends` and `deadline_alerts`. The new tables have no foreign keys, so the demo seed clears
-them freely.
+them freely. In a demo store only (`settings.mode` is `demo`) it also deletes the five retired mock
+jobs (`sync`, `sweep`, `triggers`, `brief`, `packet`) and their `job_runs` rows, because the demo now
+seeds the scheduler's jobs and there is one jobs list.
 
 ### Adding a migration
 
@@ -547,10 +549,13 @@ serves) and stops it before closing the store.
 3. Catch-up: each tick (every minute) runs a job only when its latest due key has no row, so a
    restart runs at most the latest missed period of each job, never a backfill.
 4. Lease: `job_lock` holds one row (holder, expires_at), a 5 minute lease renewed each tick. A
-   scheduler without the lease runs nothing, and a manual run without it is 409.
+   scheduler without the lease runs nothing, and a manual run without it is 409. While any handler
+   runs, a timer renews the lease every third of its length, but only while this scheduler still
+   holds it, so a long run never loses the lease to another scheduler.
 5. Handlers: `(ctx) -> {costUsd?, note?, status?: 'skipped'}` with ctx `{db, config, engine,
    transport, now, clock, periodKey, trigger, jobRunId}`. Only jobs with a handler are scheduled
-   and listed. A run's row goes `running` then `ok`, `skipped` or `error` with `finished_at`,
+   and listed, but every `JOBS` entry has a row in the `jobs` table even before its handler is
+   wired (with no next label). A run's row goes `running` then `ok`, `skipped` or `error` with `finished_at`,
    `duration_ms`, `error_class` (identifier only) and `cost_usd`.
 6. Engine: every model call goes through the runtime engine. With the engine off, over its cap, in
    fake mode with no script, or when the summary fails grounding, the brief uses its template
@@ -561,6 +566,9 @@ serves) and stops it before closing the store.
 8. Triggers during a run: `trigger(jobId, reason)` for a job that is already running remembers the
    request, and when the current run finishes exactly one more run starts with that reason, so
    several triggers during one run coalesce into one rerun. `trigger` never rejects.
+9. Stop: `stop()` is graceful and never rejects. It stops ticking, refuses new runs (409) and
+   drops queued reruns, waits for active runs to finish (at most `drainMs`, default 30 seconds),
+   then releases the lease; the server awaits it before closing the store.
 
 ## Email
 

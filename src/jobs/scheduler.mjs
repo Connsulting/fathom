@@ -7,14 +7,20 @@
 //    refuses a second claim, so a failed run is not retried that period. A tick runs only the
 //    latest due period of each job, so catch-up after downtime is one run, never a backfill.
 //    Manual and ingest runs use `manual:<iso ts>` and `ingest:<iso ts>` keys.
-// 3. The single-row job_lock lease gates every run: taken when free or expired, renewed on every
-//    tick and run, released on stop(). Without it a tick runs nothing and runNow is `locked`.
+// 3. The single-row job_lock lease gates every run: taken when free or expired on every tick and
+//    run, and while any handler runs an unref'd timer (every leaseMs / 3) extends it, only while
+//    this holder still holds it. Without it a tick runs nothing and runNow is `locked`.
 // 4. A job runs at most once at a time in this process (runNow of a running job is `running`; a
 //    trigger during a run is remembered and coalesced into one rerun after it), and
 //    ticks never overlap. A handler that throws never stops the scheduler.
 // 5. job_runs rows record status (ok, skipped, error), duration, trigger, cost and a counts-only
 //    note; error_class is an identifier (the error's code, else its class name), never a message.
 //    Logs are only `fathom: job <id> <status> [error_class]`.
+// 6. stop() is graceful and never rejects: it clears the timers, then ticks run nothing, runNow is
+//    `locked` and pending reruns are dropped; it waits for active runs up to drainMs (default 30 s)
+//    and then releases the lease.
+// 7. ensureJobs writes a jobs row for every JOBS entry, wired or not; only handled jobs are
+//    scheduled and listed by jobs(). An unhandled job's row has no next label.
 
 import { getSetting } from '../store/db.mjs';
 import { isIsoDate } from '../scenario/build.mjs';
@@ -184,7 +190,7 @@ const isUniqueViolation = (e) => e && (e.errcode === 2067 || e.errcode === 1555 
 
 export function createScheduler({
   db, config = {}, engine = null, handlers = {}, transport = null, now = () => new Date(),
-  tickMs = 60000, leaseMs = 300000, holder = `fathom-${process.pid}`, log = console,
+  tickMs = 60000, leaseMs = 300000, drainMs = 30000, holder = `fathom-${process.pid}`, log = console,
 } = {}) {
   if (!db) throw new TypeError('A store is required');
   const handled = JOBS.filter((j) => typeof handlers[j.id] === 'function');
@@ -193,9 +199,13 @@ export function createScheduler({
   const running = new Set();
   // Triggers that arrived while their job was running: jobId -> reason, coalesced to one rerun.
   const pending = new Map();
+  // Promises of executions in flight, awaited by stop().
+  const active = new Set();
   let ticking = null;
   let timer = null;
   let first = null;
+  let renewer = null;
+  let stopping = false;
 
   const q = {
     ensure: db.prepare('INSERT OR IGNORE INTO jobs (id, name, cadence, does, cost, next_label, last_label, enabled, sort) VALUES (?, ?, ?, ?, NULL, ?, ?, 1, ?)'),
@@ -204,6 +214,7 @@ export function createScheduler({
     take: db.prepare(`INSERT INTO job_lock (id, holder, expires_at) VALUES (1, ?, ?)
                       ON CONFLICT(id) DO UPDATE SET holder = excluded.holder, expires_at = excluded.expires_at
                       WHERE job_lock.holder = excluded.holder OR job_lock.expires_at <= ? RETURNING holder`),
+    renew: db.prepare('UPDATE job_lock SET expires_at = ? WHERE id = 1 AND holder = ?'),
     release: db.prepare('DELETE FROM job_lock WHERE id = 1 AND holder = ?'),
     claim: db.prepare("INSERT INTO job_runs (job_id, started_at, status, period_key, trigger) VALUES (?, ?, 'running', ?, ?) RETURNING id"),
     finish: db.prepare('UPDATE job_runs SET status = ?, finished_at = ?, duration_ms = ?, error_class = ?, cost_usd = ?, note = ? WHERE id = ?'),
@@ -229,18 +240,36 @@ export function createScheduler({
     return !!q.take.get(holder, new Date(t.getTime() + leaseMs).toISOString(), iso);
   }
 
+  // Extends the lease only while this holder holds it; taking a lease is lease()'s job.
+  function renew() {
+    try { q.renew.run(new Date(at().getTime() + leaseMs).toISOString(), holder); } catch { /* store closed */ }
+  }
+
+  function stopRenewing() {
+    if (renewer) clearInterval(renewer);
+    renewer = null;
+  }
+
   function ensureJobs(t = at()) {
     const zone = tz();
-    handled.forEach((j, i) => {
+    JOBS.forEach((j, i) => {
       q.ensure.run(j.id, j.name, j.cadence, j.does, null, null, JOB_SORT + i);
       q.define.run(j.name, j.cadence, j.does, j.id, j.name, j.cadence, j.does);
       const last = q.last.get(j.id);
-      q.labels.run(timeLabel(nextRunAt(j.schedule, t, zone, fixed), zone), last ? timeLabel(last.started_at, zone) : null, j.id);
+      const next = byId.has(j.id) ? timeLabel(nextRunAt(j.schedule, t, zone, fixed), zone) : null;
+      q.labels.run(next, last ? timeLabel(last.started_at, zone) : null, j.id);
     });
   }
 
+  function execute(job, opts) {
+    const p = executeOnce(job, opts);
+    active.add(p);
+    p.then(() => active.delete(p), () => active.delete(p));
+    return p;
+  }
+
   // Claims (jobId, key) and runs the handler. Returns the finished run, or null when already claimed.
-  async function execute(job, { key, trigger, t, zone }) {
+  async function executeOnce(job, { key, trigger, t, zone }) {
     let id;
     try {
       id = q.claim.get(job.id, t.toISOString(), key, trigger).id;
@@ -249,6 +278,10 @@ export function createScheduler({
       throw e;
     }
     running.add(job.id);
+    if (!renewer && !stopping) {
+      renewer = setInterval(renew, Math.max(1, Math.floor(leaseMs / 3)));
+      renewer.unref?.();
+    }
     const started = performance.now();
     let status = 'ok';
     let errorClass = null;
@@ -266,13 +299,14 @@ export function createScheduler({
       if (Number.isFinite(e && e.costUsd) && e.costUsd >= 0) cost = e.costUsd;
     } finally {
       running.delete(job.id);
+      if (!running.size) stopRenewing();
     }
     q.finish.run(status, at().toISOString(), Math.max(0, Math.round(performance.now() - started)), errorClass, cost, note, id);
     log.log(`fathom: job ${job.id} ${status}${errorClass ? ` ${errorClass}` : ''}`);
     try { ensureJobs(); } catch { /* labels refresh on the next tick */ }
     const result = runOut(q.run.get(id));
     const again = pending.get(job.id);
-    if (again) {
+    if (again && !stopping) {
       pending.delete(job.id);
       // Not awaited: the finished run's caller must not wait on the rerun.
       runOff(job.id, again).catch(() => { log.log(`fathom: job ${job.id} error store`); });
@@ -281,11 +315,13 @@ export function createScheduler({
   }
 
   async function tickOnce() {
+    if (stopping) return;
     const t = at();
     ensureJobs(t);
     if (!lease(t)) return;
     const zone = tz();
     for (const job of handled) {
+      if (stopping) break;
       if (running.has(job.id)) continue;
       try {
         await execute(job, { key: periodKey(job.schedule, partsAt(t, zone)), trigger: 'scheduled', t, zone });
@@ -306,7 +342,7 @@ export function createScheduler({
     if (!job) throw new SchedulerError('unknown_job');
     if (running.has(jobId)) throw new SchedulerError('running');
     const t = at();
-    if (!lease(t)) throw new SchedulerError('locked');
+    if (stopping || !lease(t)) throw new SchedulerError('locked');
     ensureJobs(t);
     const zone = tz();
     const base = `${reason}:${t.toISOString()}`;
@@ -324,7 +360,7 @@ export function createScheduler({
     // Fire-and-forget friendly: resolves to the run, or null when there is no handler or it cannot run now.
     async trigger(jobId, reason = 'ingest') {
       if (!byId.has(jobId) || !TRIGGERS.has(reason)) return null;
-      if (running.has(jobId)) { pending.set(jobId, reason); return null; }
+      if (running.has(jobId)) { if (!stopping) pending.set(jobId, reason); return null; }
       try { return await runOff(jobId, reason); } catch { return null; }
     },
     start() {
@@ -334,16 +370,27 @@ export function createScheduler({
       timer = setInterval(() => { tick().catch(() => {}); }, tickMs);
       timer.unref?.();
     },
-    stop() {
+    // Resolves once active runs settle (or drainMs passes) and the lease is released. Never rejects.
+    async stop() {
+      stopping = true;
       if (first) clearTimeout(first);
       if (timer) clearInterval(timer);
       first = null;
       timer = null;
+      stopRenewing();
+      pending.clear();
+      let drain;
+      await Promise.race([
+        Promise.allSettled([...active]),
+        new Promise((r) => { drain = setTimeout(r, drainMs); drain.unref?.(); }),
+      ]);
+      clearTimeout(drain);
       try { q.release.run(holder); } catch { /* store already closed */ }
     },
     jobs() {
       const t = at();
       const zone = tz();
+      try { ensureJobs(t); } catch { /* listing does not depend on the rows */ }
       return handled.map((j) => {
         const nextAt = nextRunAt(j.schedule, t, zone, fixed);
         return { id: j.id, name: j.name, cadence: j.cadence, does: j.does, lastRun: runOut(q.last.get(j.id)), next: timeLabel(nextAt, zone), nextAt: nextAt.toISOString() };
