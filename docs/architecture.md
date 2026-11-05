@@ -496,7 +496,8 @@ itemized estimate blocks the tax figures that need it. IRA room counts tradition
 contributions; SEP room for a sole proprietor passes that person's W-2 wages; payroll records are kept per
 person and employer, and a household S corp W-2 for anyone but its owner counts as that person's
 wages; owner-set non-Roth own-corp 401(k) deferral and catch-up records lower that person's
-wages only for types no payroll document carries; salary war-game points are clamped into
+P&L officer salary wages only for types no payroll document carries (document wages are box 1
+and never reduced); salary war-game points are clamped into
 `business.salaryRange`, and an S corp with no officer salary yet still gets the war game (no
 current point, measured against the range midpoint); `scorp-salary` and `invoice-deferral` are
 blocked, not retired, while household or Virginia tax is blocked; a pre-tax IRA with

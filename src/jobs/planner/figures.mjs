@@ -239,7 +239,10 @@ export function computeFigures(data, facts, ctx) {
     if (!inUnit(c.person)) continue;
     const ownRec = records.find(r => r.corp === c.entity.slug && r.person === c.person);
     const gross = c.sums.salary > 0 ? c.proj(c.sums.salary) : ownRec ? cents(ownRec.wages + ownRec.pretax) : 0;
-    const pretax = gross > 0 ? Math.min(gross, cents((ownRec ? ownRec.pretax : 0) + factPretax(owner, c.person, ownRec))) : 0;
+    // I1: owner-set deferral records lower only gross taken from the P&L officer salary; payroll
+    // document wages are box 1 and already exclude pretax deferrals.
+    const fromPnl = c.sums.salary > 0;
+    const pretax = gross > 0 ? Math.min(gross, cents((ownRec ? ownRec.pretax : 0) + (fromPnl ? factPretax(owner, c.person, ownRec) : 0))) : 0;
     if (gross > 0) w2.push({ person: c.person, src: `corp:${c.entity.slug}`, gross, agi: Math.max(0, cents(gross - pretax)), pretax });
     const K = c.proj(c.sums.net);
     biz.push({ id: c.entity.slug, kind: 'scorp', person: c.person, agi: K, qbi: K, seInput: null, w2Wages: gross, sstb: sstbOf(c.entity) });
@@ -257,8 +260,7 @@ export function computeFigures(data, facts, ctx) {
       if (c && c.person === r.person) continue;
       const own = !c && entities.some(e => e.slug === r.corp && e.owner === r.person);
       const src = own ? `corp:${r.corp}` : `corp:${r.corp}:${r.person}`;
-      const extra = own ? Math.min(r.wages, factPretax(owner, r.person, r)) : 0;
-      w2.push({ person: r.person, src, gross: cents(r.wages + r.pretax), agi: cents(r.wages - extra), pretax: cents(r.pretax + extra) });
+      w2.push({ person: r.person, src, gross: cents(r.wages + r.pretax), agi: r.wages, pretax: r.pretax });
       continue;
     }
     if (r.household) continue;
