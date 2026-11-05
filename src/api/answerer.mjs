@@ -190,8 +190,10 @@ function noticeReply(text) {
   return { paragraphs: [text], refs: [], notice: true };
 }
 
+const offNotice = engine => noticeReply(engine.mode === 'off' ? NOTICES.configOff : NOTICES.engineOff);
+
 function noticeFor(error, engine) {
-  if (error instanceof EngineOffError) return noticeReply(engine.mode === 'off' ? NOTICES.configOff : NOTICES.engineOff);
+  if (error instanceof EngineOffError) return offNotice(engine);
   if (error instanceof BudgetExceededError) return noticeReply(NOTICES.overCap);
   if (!(error instanceof ModelCallError || error instanceof ModelAccountingError || error instanceof RoundLimitError)) {
     console.error(`fathom: answer failed (${error && error.name ? error.name : 'error'})`);
@@ -230,7 +232,7 @@ export function createLiveAnswerer({ engine, packs } = {}) {
 
   // One grounded model answer: call, ground, retry once with a corrective turn, render.
   async function run({ db, scenario, key, question, context, history, baseRefs, fakeArgs }) {
-    if (!engine.isOn()) return noticeReply(engine.mode === 'off' ? NOTICES.configOff : NOTICES.engineOff);
+    if (!engine.isOn()) return offNotice(engine);
     if (packs) packs.refreshIfFactsChanged();
     const summary = await callTool('household_summary', {}, { db, now: engine.now() });
     const active = activeManifestPacks(db, packs);

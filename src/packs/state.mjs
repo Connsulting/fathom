@@ -15,7 +15,7 @@ import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadPacks, activePacks } from './index.mjs';
+import { loadPacks, activePacks, getEntry } from './index.mjs';
 import { getFacts } from '../store/facts.mjs';
 import { getSetting, tx, parseJson } from '../store/db.mjs';
 
@@ -153,7 +153,7 @@ export function createPackRefresher(db, { dataDir } = {}) {
       const row = db.prepare('SELECT def FROM packs_state WHERE id = ?').get(rowId);
       const def = row ? parseJson(row.def, null) : null;
       if (!def || typeof def.manifest !== 'string') return null;
-      const found = packs.find(p => p.id === def.manifest)?.entries.find(e => e.id === entryId);
+      const found = getEntry(packs, def.manifest, entryId);
       return found ? { id: found.id, title: found.title, body: found.body, cites: found.cites.map(c => ({ label: c.label, url: c.url })) } : null;
     },
   };

@@ -3,6 +3,8 @@
    Entry bodies are markdown from the pack files; renderMarkdown keeps a small subset and escapes
    everything else. */
 
+import { escapeUserText } from '/shared/tokens.mjs';
+
 let H = null;
 
 export function bind(kit) { H = kit; }
@@ -21,7 +23,7 @@ const S = {
 
 const ekey = (pack, entry) => `${pack}/${entry}`;
 // Plain escaping for manifest-derived text: no markup, no scenario tokens.
-const lit = (s) => H.esc(String(s ?? '')).replace(/'/g, '&#39;').replace(/\{/g, '&#123;').replace(/\}/g, '&#125;');
+const lit = (s) => escapeUserText(String(s ?? ''));
 // Manifest-backed rows render literally; demo rows may carry tokens.
 const mt = (p, s) => (p.manifest ? lit(s) : H.T(s));
 const nameOf = (p) => (p.label ? H.T(p.label) : mt(p, p.name));

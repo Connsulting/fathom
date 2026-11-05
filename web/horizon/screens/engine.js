@@ -21,7 +21,7 @@ function capForm(b) {
 
 function ledgerHtml(en) {
   const { arr, esc, figHtml, section } = H;
-  const rows = arr(en.ledger).filter((r) => r && r.id != null);
+  const rows = arr(en.ledger);
   const body = rows.length
     ? `<div class="h-ledger-h" role="row"><span role="columnheader">Time</span><span role="columnheader">Purpose</span><span role="columnheader">Model</span><span role="columnheader" class="r">Cost</span></div>`
       + rows.map((r) => `<div class="h-ledger-r" role="row">
@@ -68,17 +68,16 @@ export function render() {
 
 /* ---------- events ---------- */
 
-// Returns true when the submit was handled here. The form has novalidate so an out-of-range value
-// still posts and the server's refusal shows as the error line.
+// Returns true when the submit was handled here. The form has novalidate; api.setCap checks the
+// range itself and shows the error toast, and the server validates again.
 export function onSubmit(e) {
   const f = e.target;
   if (!f || !f.matches || !f.matches('form.h-cap')) return false;
   e.preventDefault();
   const raw = String(f.usd?.value ?? '').trim();
   const usd = raw === '' ? null : Number(raw);
-  if (typeof H.api.setCap !== 'function') return true;
-  Promise.resolve(H.api.setCap(usd)).then((res) => {
-    if (res) { S.cap = null; if (H.api) H.draw(); }
+  H.api.setCap(usd).then((res) => {
+    if (res) { S.cap = null; H.draw(); }
   });
   return true;
 }

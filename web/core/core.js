@@ -437,7 +437,7 @@ function setCap(usd) {
 }
 
 function buildYourPlans(fileIds) {
-  const ids = arr(fileIds).filter(x => x != null && x !== '').map(String).slice(0, 50);
+  const ids = arr(fileIds).filter(x => x != null && x !== '').map(String);
   return send('/api/your-plans/build', { fileIds: ids }, d => (d.result && typeof d.result === 'object' ? d.result : null));
 }
 
