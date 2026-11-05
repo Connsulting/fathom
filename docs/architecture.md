@@ -518,7 +518,9 @@ is reachable only on the owner's private network.
    currency sign before it, is one quantity on both sides: in evidence `8.7 million` is collected
    as 8,700,000 and never as 8.7, and in the answer `$8.7 million` is checked as 8,700,000 with
    the magnitude word not judged again on its own. So evidence saying `8.7 million` grounds
-   `$8.7 million` and `$8,700,000`, never `$8.70` or `8.7`. Number-word phrases (`two million`)
+   `$8.7 million` and `$8,700,000`, never `$8.70` or `8.7`. A scaled quantity followed by a percent
+   sign or the word `percent` (`1 thousand percent`) is one percent quantity of the full value on
+   both sides, so it needs percent evidence, not number evidence. Number-word phrases (`two million`)
    are still read word by word.
 5. One corrective retry (same `system`, the first answer plus a corrective user turn). An answer
    still ungrounded is stored with each violation in `<span class="fx-unverified" title="Not found

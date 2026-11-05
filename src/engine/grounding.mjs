@@ -6,7 +6,7 @@ const wordPattern = [...words.keys(), 'hundred', ...scales.keys()].join('|');
 // A hyphen glued to a preceding letter or digit (K-12, 2026-01) joins words; it is not a minus sign.
 // A magnitude word after the number (8.7 million, $2 thousand) is part of the one quantity, so the
 // coefficient is never read on its own.
-export const numberPattern = /(?:(?<![\p{L}\d])-\s*\$|\$\s*-?|(?<![\p{L}\d])-|\+)?(?:\d(?:[\d,]*\d)?(?:\.\d+)?|\.\d+)(?:[eE][-+]?\d+)?(?:\s*(?:thousand|million|billion)\b|\s*(?:[kKmMbB]\b|%|percent\b))?/giu;
+export const numberPattern = /(?:(?<![\p{L}\d])-\s*\$|\$\s*-?|(?<![\p{L}\d])-|\+)?(?:\d(?:[\d,]*\d)?(?:\.\d+)?|\.\d+)(?:[eE][-+]?\d+)?(?:\s*(?:(?:thousand|million|billion)\b|[kKmMbB]\b)(?:\s*(?:%|percent\b))?|\s*(?:%|percent\b))?/giu;
 const months = '(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)';
 const dates = [
   /\b\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:[Zz]|[-+]\d{2}:?\d{2})?)?\b/g,
@@ -46,12 +46,16 @@ function maskContext(text, prose = false) {
 
 function literal(text) {
   const normalized = text.replaceAll(',', '').replaceAll('$', '').replace(/\s/g, '').toLowerCase();
-  const suffix = /(?:percent|thousand|million|billion|[%kmb])$/.exec(normalized)?.[0] ?? '';
+  // A scaled quantity followed by a percent sign or the word percent is one percent quantity of the full value.
+  const tail = /(?:percent|%)$/.exec(normalized)?.[0] ?? '';
+  const rest = tail ? normalized.slice(0, -tail.length) : normalized;
+  const scale = /(?:thousand|million|billion|[kmb])$/.exec(rest)?.[0] ?? '';
+  const suffix = scale + tail;
   const numeric = suffix ? normalized.slice(0, -suffix.length) : normalized;
-  const magnitude = ({ k: 1000, thousand: 1000, m: 1e6, million: 1e6, b: 1e9, billion: 1e9 })[suffix] ?? 1;
+  const magnitude = ({ k: 1000, thousand: 1000, m: 1e6, million: 1e6, b: 1e9, billion: 1e9 })[scale] ?? 1;
   const decimals = /\.(\d+)/.exec(numeric)?.[1].length ?? 0;
   const exponent = Number(/[eE]([-+]?\d+)$/.exec(numeric)?.[1] ?? 0);
-  return { value: Number(numeric), magnitude, percent: suffix === '%' || suffix === 'percent',
+  return { value: Number(numeric), magnitude, percent: tail !== '',
     precision: Math.max(0, decimals - exponent) };
 }
 
