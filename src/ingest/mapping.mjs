@@ -4,7 +4,7 @@
 
 import { createHash } from 'node:crypto';
 import { parseJson } from '../store/db.mjs';
-import { csv, header, isoDate, money, number, mask, institution, warning, result, LimitError } from './format.mjs';
+import { csv, header, isoDate, money, number, mask, institution, warning, result, LIMITS, LimitError } from './format.mjs';
 import { readWorkbook } from './workbook.mjs';
 import { identifyAccountRows } from './dedupe.mjs';
 import { redact } from './redact.mjs';
@@ -79,6 +79,10 @@ function workbookTable(file) {
     const columns = [...head.cells.keys()];
     const headers = columns.map((c) => header(head.cells.get(c).value));
     if (new Set(headers).size !== headers.length || headers.some((h) => !h)) return null;
+    // Every row is widened to the header, so the widened table is budgeted before it is built.
+    let filled = 0;
+    for (let r = at + 1; r < sheet.rows.length; r++) if (sheet.rows[r].cells.size) filled++;
+    if (filled * columns.length > LIMITS.cells) throw new LimitError('Workbook table has too many cells');
     const rows = sheet.rows.slice(at + 1)
       .map((row) => ({ values: columns.map((c) => { const v = row.cells.get(c)?.value; return v === undefined || v === null ? '' : v; }), locator: { sheet: sheet.name, row: row.number } }))
       .filter((r) => r.values.some((v) => String(v).trim()));

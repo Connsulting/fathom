@@ -350,6 +350,9 @@ function samePosting(list, description, parser) {
   return shared ? { match: 'cross_words', observation: shared } : null;
 }
 
+const NEAR_DATES = 'Two imports show the same amount on this account within three days. Are they the same transaction?';
+const NEAR_KEY = 'Two imports show the same amount and date or reference number on this account with different descriptions. Are they the same transaction?';
+
 function putTransaction(ctx, row, parser, locator) {
   const { db, fileId, counts, now } = ctx;
   const values = {
@@ -367,12 +370,14 @@ function putTransaction(ctx, row, parser, locator) {
     }
   };
   let key = dedupeKey(row);
+  let collided = null;
   let seen = observations(db, key);
   if (seen.some((o) => o.stored && o.file_id === fileId)) { counts.duplicates += 1; return; }
   if (seen.length) {
     const found = samePosting(seen, row.description, parser);
     if (found) return duplicate(found, key);
     // Another posting under the same key: kept under an alt key and asked about below.
+    collided = key;
     key = `${key}:d:${sha256(normalizeName(row.description)).slice(0, 16)}`;
     seen = observations(db, key);
     if (seen.length) return duplicate(samePosting(seen, row.description, parser) ?? { match: 'same', observation: seen[0] }, key);
@@ -384,10 +389,15 @@ function putTransaction(ctx, row, parser, locator) {
   const near = db.prepare(`SELECT dedupe_key FROM transactions WHERE account_id = ? AND round(amount * 100) = ? AND date BETWEEN ? AND ?
                            AND (file_id IS NULL OR file_id != ?) AND dedupe_key != ? ORDER BY id`)
     .all(row.accountId, Math.round(row.amount * 100), addDays(row.date, -3), addDays(row.date, 3), fileId, key);
-  for (const other of near) {
-    const subject = [key, other.dedupe_key].sort().join('|');
+  const others = near.map((other) => [other.dedupe_key, NEAR_DATES]);
+  // A key collision kept under the alt key is asked about whatever the distance between the dates.
+  if (collided && !near.some((other) => other.dedupe_key === collided) && db.prepare('SELECT 1 FROM transactions WHERE dedupe_key = ?').get(collided)) {
+    others.push([collided, NEAR_KEY]);
+  }
+  for (const [other, question] of others) {
+    const subject = [key, other].sort().join('|');
     tally(ctx, ask(db, {
-      kind: 'near_duplicate', subject, question: 'Two imports show the same amount on this account within three days. Are they the same transaction?',
+      kind: 'near_duplicate', subject, question,
       options: NEAR_DUPLICATE_OPTIONS, context: { accountId: row.accountId, keys: subject.split('|') }, fileId, now,
     }));
   }

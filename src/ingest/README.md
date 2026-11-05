@@ -52,7 +52,10 @@ Parsing is bounded (`format.mjs` `LIMITS`): at most 200000 rows, 512 columns per
 record, 2000000 cells in total and 32768 characters per cell. Workbooks keep
 those limits except cells: `XLSX_LIMITS` allows 250000, counted over worksheet
 cells, shared strings and rich-text runs together, with an XML element budget
-sized from it. Readers count while they scan and throw `LimitError` (code
+sized from it; the metadata parts read into a tree (`xl/workbook.xml` and its
+rels) also have their own budget of 20000 elements each. An unknown xlsx table
+is budgeted as filled rows times header width against `LIMITS.cells` before its
+rows are widened. Readers count while they scan and throw `LimitError` (code
 `limit_exceeded`) before passing a limit; a workbook part is checked on its raw
 XML bytes before it is read. `csvHeader(file)`
 reads only the first record within a 64 KiB window, so `csvScore` and sniffing
@@ -127,12 +130,16 @@ status `imported`, `duplicate`, `needs_mapping`, `needs_extraction`,
    owner, and for its kind when the export does not name a known one.
 4. Transactions skip a confirmed duplicate key. A stored key from another file
    is compared by normalized description (lowercase letters and digits): equal is
-   a duplicate; different from the same parser is a second transaction stored
-   under `<key>:d:<first 16 hex of SHA256 of the normalized description>`; different
-   from another parser is a cross-format overlap, a duplicate counted under
-   `counts.crossFormat` and archived as `duplicate_cross_format`. An alt key already stored or confirmed duplicate is a
-   duplicate with no new question. The same amount within three days from another
-   file asks `near_duplicate` (subject: the two keys sorted). Balances and
+   a duplicate. From another parser, equal normalized descriptions or a shared
+   distinctive word (a run of 3 or more letters outside card and payment
+   boilerplate) make a cross-format overlap, a duplicate counted under
+   `counts.crossFormat` when only a word is shared and archived as
+   `duplicate_cross_format`. Any other description is another transaction: it is
+   stored under `<key>:d:<first 16 hex of SHA256 of the normalized description>`
+   and asks `near_duplicate` whatever the distance between the dates. An alt key
+   already stored or confirmed duplicate is a duplicate with no new question. The
+   same amount within three days from another file asks `near_duplicate` too,
+   once per pair (subject: the two keys sorted). Balances and
    positions keep one row per slot; the file whose period ends later (unknown is
    oldest) holds authority: equal values advance provenance, a different value
    is `revised`, an older file's value is archived as `older_snapshot`. A

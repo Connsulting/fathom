@@ -451,18 +451,23 @@ and anything ambiguous becomes a short question in the confirm queue.
    Parsing is bounded by `src/ingest/format.mjs` `LIMITS` (200000 rows, 512 columns, 2000000
    cells, 32768 characters per cell; CSV sniffing reads only the header within 64 KiB).
    Workbooks use `XLSX_LIMITS` for cells (250000 worksheet cells, shared strings and rich-text
-   runs together) and are checked on their raw XML bytes before any part is read. A reader past a limit throws `LimitError` (`limit_exceeded`); the pipeline
+   runs together) and are checked on their raw XML bytes before any part is read; the metadata
+   parts read into a tree (`xl/workbook.xml` and its rels) have their own budget of 20000
+   elements each, and an unknown xlsx table is budgeted as filled rows times header width
+   against `LIMITS.cells` before its rows are widened. A reader past a limit throws `LimitError` (`limit_exceeded`); the pipeline
    records the file as `too_large` with note `limit_exceeded` and counts `{warnings: 1,
    warningCodes: {limit_exceeded: 1}}`, keeps its encrypted bytes and stores nothing else.
 3. Rows get `dedupe_key`s (`src/ingest/dedupe.mjs`) and provenance (`file_id`, `parser`,
    `locator` JSON); `transactions.occurrence` keeps the occurrence counter. A transaction with an
    `externalId` (check or slip number, or a mapped column) is keyed
    `[accountKey, 'ext', externalId, signed cents, occurrence]`, with no date (occurrence only for
-   a repeat within one file). A key collision from another file compares normalized descriptions: equal
-   is a duplicate; different from the same parser stores a second transaction under
-   `<key>:d:<16 hex of the description hash>` and asks `near_duplicate`; different from another
-   parser is a cross-format duplicate (`counts.crossFormat`, archived as
-   `duplicate_cross_format`). Accounts are upserted
+   a repeat within one file). A key collision from another file compares descriptions. From the
+   same parser, equal normalized descriptions are a duplicate. From another parser, equal
+   normalized descriptions or a shared distinctive word are a cross-format duplicate (archived as
+   `duplicate_cross_format`; `counts.crossFormat` when only a word is shared). Any other
+   description stores a second transaction under `<key>:d:<16 hex of the description hash>` and
+   asks `near_duplicate` whatever the distance between the dates, once per pair even when the
+   three-day proximity question also applies. Accounts are upserted
    by `identity` (`acct-` plus 16 hex of its hash), with `mirror` `manual` and masks of 4 digits
    only.
 4. Revisions: P and L and tax workbook rows carry a `source_slot`; a later workbook replaces the

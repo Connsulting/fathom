@@ -180,8 +180,10 @@ function worksheetRows(bytes, strings) {
 // is counted in UTF-16 units, an entity as the character it stands for: per shared or inline
 // string (si, is) summed across its runs, and per element elsewhere. One tag longer than
 // cellChars is past the limit too. Namespace prefixes are ignored; tags inside comments or CDATA
-// count, which only errs toward rejecting.
+// count, which only errs toward rejecting. A metadata part (workbook, relationships) also has its
+// own budget of META_ELEMENTS start tags, since it is read into an element tree.
 const NODE_FACTOR = 3;
+const META_ELEMENTS = 20000;
 const NAME_BYTE = new Uint8Array(256);
 for (let b = 0; b < 256; b++) NAME_BYTE[b] = /[\w:.-]/.test(String.fromCharCode(b)) || b >= 0x80 ? 1 : 0;
 const ascii = (value) => [...value].map((ch) => ch.charCodeAt(0));
@@ -202,9 +204,9 @@ function entityWidth(bytes, from, to) {
   return point > 0xffff ? 2 : 1;
 }
 
-function scanXml(bytes, limits, totals) {
+function scanXml(bytes, limits, totals, elementLimit = Infinity) {
   const nodeLimit = NODE_FACTOR * limits.cells + limits.rows;
-  let rowCells = 0, text = 0, inString = false;
+  let rowCells = 0, text = 0, inString = false, elements = 0;
   const addText = (width) => { if ((text += width) > limits.cellChars) throw new LimitError('Workbook text is too long'); };
   const addChars = (from, to) => {
     for (let k = from; k < to; k++) {
@@ -243,7 +245,7 @@ function scanXml(bytes, limits, totals) {
       if (closing) {
         if (string) inString = false;
       } else {
-        if (++totals.nodes > nodeLimit) throw new LimitError('Workbook has too many XML nodes');
+        if (++totals.nodes > nodeLimit || ++elements > elementLimit) throw new LimitError('Workbook has too many XML nodes');
         if (isName(bytes, local, j, C)) {
           if (++rowCells > limits.columns) throw new LimitError('Workbook row has too many cells');
           cell();
@@ -268,12 +270,13 @@ export function readWorkbook(file, { limits = WORKBOOK_LIMITS } = {}) {
   const parts = unzip(file.bytes);
   // Every part is checked on its raw bytes before it is parsed, and every worksheet and the
   // shared strings before any of them is, so an oversized workbook is never read. Worksheets and
-  // shared strings are read without an element tree.
+  // shared strings are read without an element tree; the metadata parts that are read into one
+  // have their own small element budget.
   const totals = { rows: 0, cells: 0, nodes: 0 };
   const part = (name) => { const bytes = parts.get(name); if (!bytes) throw new Error('Missing workbook part'); return bytes; };
-  const scanned = (name) => { const bytes = part(name); scanXml(bytes, limits, totals); return bytes; };
-  const workbook = xml(scanned('xl/workbook.xml'));
-  const relations = new Map(children(xml(scanned('xl/_rels/workbook.xml.rels')), 'Relationship').filter((item) => item.attrs.TargetMode !== 'External').map((item) => [item.attrs.Id, item.attrs.Target]));
+  const scanned = (name, elementLimit) => { const bytes = part(name); scanXml(bytes, limits, totals, elementLimit); return bytes; };
+  const workbook = xml(scanned('xl/workbook.xml', META_ELEMENTS));
+  const relations = new Map(children(xml(scanned('xl/_rels/workbook.xml.rels', META_ELEMENTS)), 'Relationship').filter((item) => item.attrs.TargetMode !== 'External').map((item) => [item.attrs.Id, item.attrs.Target]));
   const date1904 = ['1', 'true'].includes(child(workbook, 'workbookPr')?.attrs.date1904);
   const sheetParts = children(child(workbook, 'sheets'), 'sheet').map((sheet) => {
     const target = relations.get(sheet.attrs['r:id']);
