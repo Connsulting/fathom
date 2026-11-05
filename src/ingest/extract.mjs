@@ -1,11 +1,13 @@
 // PDFs and unknown text: one classify call, then one extraction call with a per-type JSON Schema.
 // Text reaches the model through redactForExtraction (identifiers masked, long money amounts
-// swapped for opaque tokens that code resolves back); PDFs cannot be redacted, so no schema ever
-// asks for an identifier (SSN, EIN, TIN, account numbers, people's names, addresses). Extracted
+// swapped for opaque tokens that code resolves back). A PDF with a usable text layer (pdftext.mjs)
+// is read the same way; a PDF without one cannot be redacted and goes as a document, so no schema
+// ever asks for an identifier (SSN, EIN, TIN, account numbers, people's names, addresses). Extracted
 // values become rows only through the deterministic code below, after schema and code validation.
 
 import { createHash } from 'node:crypto';
 import { redactForExtraction } from './redact.mjs';
+import { pdfText } from './pdftext.mjs';
 import { isoDate, number, cents, institution, text as decodeText } from './format.mjs';
 import { normalizeName } from './confirm.mjs';
 
@@ -159,10 +161,14 @@ function parseFactValue(key, raw) {
 
 const fact = (key, value, confidence, locator, extra = {}) => ({ kind: 'fact', key, value, confidence, locator, ...extra });
 
-function withholding({ docType, jurisdiction, amount, date, datePrecision, taxYear, basis, payer, slotKey, field }) {
+// Withholding slot wh:<payerKey>:<taxYear>:<jurisdiction>:<recipient>. The recipient starts
+// unknown; for employer withholding (paystub, W-2) the pipeline resolves it from the
+// employer_recipient and document_recipient answers (employerKey and employer carry what it needs).
+function withholding({ docType, jurisdiction, amount, date, datePrecision, taxYear, basis, payer, slotKey, field, employer }) {
   return {
     kind: 'tax_payment', jurisdiction, amount: cents(amount), paymentKind: 'withholding', date, datePrecision, taxYear, sheetYear: taxYear,
-    taxYearBasis: basis, payer, sourceSlot: `wh:${slotKey}:${taxYear}:${normalizeName(jurisdiction)}`, locator: { document: docType, field },
+    taxYearBasis: basis, payer, recipient: 'unknown', sourceSlot: `wh:${slotKey}:${taxYear}:${normalizeName(jurisdiction)}:unknown`,
+    ...(employer !== undefined ? { employerKey: slotKey, employer } : {}), locator: { document: docType, field },
   };
 }
 
@@ -197,7 +203,7 @@ export function toRows(docType, extracted, ctx = {}) {
       doc(x, year);
       const key = nameKey(x.employerName);
       const payer = `paystub:${key}:${x.payDate}:${centsOf(x.gross)}`;
-      const base = { docType, date: x.payDate, datePrecision: 'day', taxYear: year, basis: 'pay_date', payer, slotKey: key };
+      const base = { docType, date: x.payDate, datePrecision: 'day', taxYear: year, basis: 'pay_date', payer, slotKey: key, employer: String(x.employerName ?? '').trim() };
       if (positive(x.federalWithholding)) rows.push(withholding({ ...base, jurisdiction: 'federal', amount: x.federalWithholding, field: 'federalWithholding' }));
       if (positive(x.stateWithholding)) rows.push(withholding({ ...base, jurisdiction: stateCode(x.state), amount: x.stateWithholding, field: 'stateWithholding' }));
       rows.push(...employerFacts(docType, x, households, {
@@ -210,7 +216,7 @@ export function toRows(docType, extracted, ctx = {}) {
       doc(x, x.taxYear);
       const key = nameKey(x.employerName);
       const payer = `w2:${key}:${x.taxYear}:${centsOf(x.wages)}`;
-      const base = { docType, date: `${x.taxYear}-12-31`, datePrecision: 'year', taxYear: x.taxYear, basis: 'annual_total', payer, slotKey: key };
+      const base = { docType, date: `${x.taxYear}-12-31`, datePrecision: 'year', taxYear: x.taxYear, basis: 'annual_total', payer, slotKey: key, employer: String(x.employerName ?? '').trim() };
       if (positive(x.federalWithheld)) rows.push(withholding({ ...base, jurisdiction: 'federal', amount: x.federalWithheld, field: 'federalWithheld' }));
       if (positive(x.stateWithheld)) rows.push(withholding({ ...base, jurisdiction: stateCode(x.state), amount: x.stateWithheld, field: 'stateWithheld' }));
       const codes = (x.box12 ?? []).filter((b) => positive(b.amount)).map((b) => String(b.code).trim().toUpperCase());
@@ -265,7 +271,7 @@ export function toRows(docType, extracted, ctx = {}) {
       if (x.planType === 'hsa') rows.push(fact('benefits.hsa', true, x.confidence, { document: docType, field: 'planType' }));
       break;
     case 'notes':
-      // The notes parser already stored the note itself; extraction adds facts and goals.
+      // The pipeline stores the note as a reference to its encrypted file; extraction adds facts and goals.
       (x.facts ?? []).forEach((f, i) => {
         const value = FACT_TYPES[f.key] ? parseFactValue(f.key, f.value) : undefined;
         if (value === undefined) { warnings.push({ code: 'invalid_fact', locator: { document: docType, fact: i } }); return; }
@@ -303,48 +309,64 @@ export function plainText(file) {
   } catch { return null; }
 }
 
-const waiting = (reason) => ({ status: 'needs_extraction', reason, docType: null, rows: [], sourceKind: null, period: { from: null, to: null }, warnings: [] });
+const waiting = (reason, extractPath) => ({
+  status: 'needs_extraction', reason, docType: null, rows: [], sourceKind: null, period: { from: null, to: null }, warnings: [], ...(extractPath ? { extractPath } : {}),
+});
 const reasonOf = (error) => (error?.name === 'EngineOffError' ? 'engine_off' : 'engine_error');
 
-// Classify (unless opts.docType forces a type), then extract with the type's schema.
-// Returns {status: 'imported', docType, rows, sourceKind, period, warnings} or
-// {status: 'needs_extraction', reason: 'engine_off' | 'engine_error' | 'invalid', ...}.
+const engineOff = (engine) => !engine || (typeof engine.isOn === 'function' && !engine.isOn());
+const redactedText = (text) => {
+  const redacted = redactForExtraction(text);
+  return { document: { type: 'text', text: redacted.text }, refs: redacted.refs };
+};
+
+// Classify (unless opts.docType forces a type), then extract with the type's schema. The path is
+// text (a text file), pdf_text_layer (a PDF whose text layer is usable, sent as redacted text) or
+// pdf_document (any other PDF, sent as a document).
+// Returns {status: 'imported', docType, rows, sourceKind, period, warnings, extractPath} or
+// {status: 'needs_extraction', reason: 'engine_off' | 'engine_error' | 'invalid', extractPath?, ...}.
 export async function extractDocument(engine, file, { docType: forced, households = { entities: [] }, fileId = null } = {}) {
   let document;
   let refs = {};
-  if (isPdf(file)) document = { type: 'pdf', data: file.bytes };
-  else {
+  let extractPath;
+  if (isPdf(file)) {
+    if (engineOff(engine)) return waiting('engine_off');
+    const layer = await pdfText(file.bytes);
+    if (layer.usable) ({ document, refs } = redactedText(layer.text));
+    else document = { type: 'pdf', data: file.bytes };
+    extractPath = layer.usable ? 'pdf_text_layer' : 'pdf_document';
+  } else {
     const text = plainText(file);
     if (text === null) return waiting('invalid');
-    const redacted = redactForExtraction(text);
-    refs = redacted.refs;
-    document = { type: 'text', text: redacted.text };
+    ({ document, refs } = redactedText(text));
+    extractPath = 'text';
   }
-  if (!engine || (typeof engine.isOn === 'function' && !engine.isOn())) return waiting('engine_off');
+  if (engineOff(engine)) return waiting('engine_off', extractPath);
+  const failed = (reason) => waiting(reason, extractPath);
   let docType = forced;
   let classifiedYear;
   try {
     if (!docType) {
       const [c] = await engine.extract({ document, schema: CLASSIFY_SCHEMA, system: CLASSIFY_SYSTEM, maxTokens: 256 });
-      if (!c || !DOC_TYPES.includes(c.docType)) return waiting('invalid');
+      if (!c || !DOC_TYPES.includes(c.docType)) return failed('invalid');
       docType = c.docType;
       classifiedYear = c.taxYear;
     }
-    if (!DOC_TYPES.includes(docType)) return waiting('invalid');
+    if (!DOC_TYPES.includes(docType)) return failed('invalid');
     const warnings = [];
     if (docType === 'other') {
       const sha = createHash('sha256').update(file.bytes).digest('hex');
       const fields = { sha256: sha };
       return { status: 'imported', docType, rows: [{ kind: 'document', docType: 'other', ...(Number.isInteger(classifiedYear) ? { taxYear: classifiedYear } : {}), fields, locator: { document: 'other' } }],
-        sourceKind: 'other', period: { from: null, to: null }, warnings };
+        sourceKind: 'other', period: { from: null, to: null }, warnings, extractPath };
     }
     const [raw] = await engine.extract({ document, schema: SCHEMAS[docType], system: extractSystem(docType), maxTokens: 4096 });
-    if (!raw) return waiting('invalid');
+    if (!raw) return failed('invalid');
     const extracted = resolveTokens(raw, refs, warnings);
-    if (!validateExtraction(docType, extracted)) return waiting('invalid');
+    if (!validateExtraction(docType, extracted)) return failed('invalid');
     const rows = toRows(docType, extracted, { fileId, households, warnings });
-    return { status: 'imported', docType, rows, sourceKind: sourceKindOf(docType), period: periodOf(docType, extracted), warnings };
+    return { status: 'imported', docType, rows, sourceKind: sourceKindOf(docType), period: periodOf(docType, extracted), warnings, extractPath };
   } catch (error) {
-    return waiting(reasonOf(error));
+    return failed(reasonOf(error));
   }
 }

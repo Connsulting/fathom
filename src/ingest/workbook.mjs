@@ -1,6 +1,6 @@
 import { inflateRawSync } from 'node:zlib';
 import { posix } from 'node:path';
-import { header } from './format.mjs';
+import { header, LIMITS, LimitError } from './format.mjs';
 
 const cache = new WeakMap();
 const MAX_PART = 32 * 1024 * 1024;
@@ -98,19 +98,52 @@ const child = (node, name) => node.children.find((item) => item.name === name);
 const children = (node, name) => node?.children.filter((item) => item.name === name) ?? [];
 const allText = (node) => node ? node.text + node.children.map(allText).join('') : '';
 
-export function readWorkbook(file) {
+// Counts row, cell and shared string (si) start tags in raw XML bytes without decoding or
+// allocating, and throws LimitError as soon as a count passes its limit. Namespace prefixes are
+// ignored; tags inside comments or CDATA count too, which only errs toward rejecting.
+const NAME_BYTE = new Uint8Array(256);
+for (let b = 0; b < 256; b++) NAME_BYTE[b] = /[\w:.-]/.test(String.fromCharCode(b)) || b >= 0x80 ? 1 : 0;
+function countTags(bytes, limits, totals) {
+  let rowCells = 0;
+  for (let i = 0; i < bytes.length; i++) {
+    if (bytes[i] !== 0x3c) continue;
+    let j = i + 1, local = j;
+    while (j < bytes.length && NAME_BYTE[bytes[j]]) { if (bytes[j] === 0x3a) local = j + 1; j++; }
+    const length = j - local;
+    if (length === 1 && bytes[local] === 0x63) { // c
+      if (++rowCells > limits.columns) throw new LimitError('Workbook row has too many cells');
+      if (++totals.cells > limits.cells) throw new LimitError('Workbook has too many cells');
+    } else if (length === 3 && bytes[local] === 0x72 && bytes[local + 1] === 0x6f && bytes[local + 2] === 0x77) { // row
+      rowCells = 0;
+      if (++totals.rows > limits.rows) throw new LimitError('Workbook has too many rows');
+    } else if (length === 2 && bytes[local] === 0x73 && bytes[local + 1] === 0x69) { // si
+      if (++totals.cells > limits.cells) throw new LimitError('Workbook has too many cells');
+    }
+    if (j > i + 1) i = j - 1;
+  }
+}
+
+export function readWorkbook(file, { limits = LIMITS } = {}) {
   if (cache.has(file.bytes)) return cache.get(file.bytes);
   const parts = unzip(file.bytes);
   const read = (name) => { const part = parts.get(name); if (!part) throw new Error('Missing workbook part'); return xml(part); };
   const workbook = read('xl/workbook.xml');
   const relations = new Map(children(read('xl/_rels/workbook.xml.rels'), 'Relationship').filter((item) => item.attrs.TargetMode !== 'External').map((item) => [item.attrs.Id, item.attrs.Target]));
-  const strings = parts.has('xl/sharedStrings.xml') ? children(read('xl/sharedStrings.xml'), 'si').map(allText) : [];
   const date1904 = ['1', 'true'].includes(child(workbook, 'workbookPr')?.attrs.date1904);
-  const sheets = children(child(workbook, 'sheets'), 'sheet').map((sheet) => {
+  const sheetParts = children(child(workbook, 'sheets'), 'sheet').map((sheet) => {
     const target = relations.get(sheet.attrs['r:id']);
     if (!target) throw new Error('Missing worksheet relation');
     const path = posix.normalize(target.startsWith('/') ? target.slice(1) : posix.join('xl', target));
     if (!path.startsWith('xl/')) throw new Error('Invalid worksheet path');
+    return { sheet, path };
+  });
+  // Every part is counted before any is parsed, so an oversized workbook never builds a tree.
+  const totals = { rows: 0, cells: 0 };
+  for (const name of ['xl/sharedStrings.xml', ...sheetParts.map((item) => item.path)]) if (parts.has(name)) countTags(parts.get(name), limits, totals);
+  const strings = parts.has('xl/sharedStrings.xml') ? children(read('xl/sharedStrings.xml'), 'si').map(allText) : [];
+  const capped = (value) => { if (value.length > limits.cellChars) throw new LimitError('Workbook cell is too long'); return value; };
+  strings.forEach(capped);
+  const sheets = sheetParts.map(({ sheet, path }) => {
     const rows = children(child(read(path), 'sheetData'), 'row').map((row) => {
       const cells = new Map();
       for (const cell of children(row, 'c')) {
@@ -118,11 +151,11 @@ export function readWorkbook(file) {
         if (!/^[A-Z]+[1-9]\d*$/.test(address ?? '')) throw new Error('Invalid cell address');
         const raw = child(cell, 'v'), type = cell.attrs.t;
         const formula = child(cell, 'f');
-        let value = raw?.text ?? '';
+        let value = capped(raw?.text ?? '');
         if (type === 's') {
           if (!/^\d+$/.test(value) || Number(value) >= strings.length) throw new Error('Invalid shared string');
           value = strings[Number(value)];
-        } else if (type === 'inlineStr') value = allText(child(cell, 'is'));
+        } else if (type === 'inlineStr') value = capped(allText(child(cell, 'is')));
         else if ((!type || type === 'n') && raw && value.trim()) value = Number(value);
         cells.set(address.replace(/\d/g, ''), { value, address, missingCache: Boolean(formula && !raw), error: type === 'e' });
       }

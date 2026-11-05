@@ -4,7 +4,7 @@
 
 import { createHash } from 'node:crypto';
 import { parseJson } from '../store/db.mjs';
-import { csv, header, isoDate, money, number, mask, institution, warning, result } from './format.mjs';
+import { csv, header, isoDate, money, number, mask, institution, warning, result, LimitError } from './format.mjs';
 import { readWorkbook } from './workbook.mjs';
 import { identifyAccountRows } from './dedupe.mjs';
 import { redact } from './redact.mjs';
@@ -13,7 +13,7 @@ export const id = 'mapped';
 export const label = 'Mapped export';
 export const SAMPLE_ROWS = 5;
 
-const COLUMNS = ['date', 'amount', 'description', 'category', 'accountName', 'accountNumber', 'institution', 'symbol', 'quantity', 'price', 'value', 'debit', 'credit'];
+const COLUMNS = ['date', 'amount', 'description', 'category', 'accountName', 'accountNumber', 'institution', 'symbol', 'quantity', 'price', 'value', 'debit', 'credit', 'externalId'];
 const TARGETS = ['transaction', 'balance', 'position'];
 const SIGNS = ['as_is', 'negate'];
 const ORDERS = ['ymd', 'mdy', 'dmy'];
@@ -33,6 +33,7 @@ export const MAPPING_SCHEMA = {
 const SYSTEM = [
   'You map the columns of a tabular financial export.',
   'Name each column by its exact header text. Choose target transaction, balance or position.',
+  'Use externalId only for a check, slip or reference number column that identifies a transaction.',
   'Use amountSign negate only when outflows are positive numbers. Choose the date order the sample dates use.',
   'Leave out any field no column holds. Long numbers in the sample are masked on purpose.',
 ].join(' ');
@@ -43,18 +44,19 @@ export const isZip = (bytes) => bytes.length >= 4 && bytes[0] === 0x50 && bytes[
 const isCsvName = (file) => /\.(csv|tsv)$/i.test(file.name ?? '') || /csv/i.test(file.mime ?? '');
 
 // {headers, rows: [{values, locator}]} for a CSV or the first workbook sheet with a header row of
-// at least two text cells; null for anything else.
+// at least two text cells; null for anything else. Both readers are bounded: an input past
+// LIMITS throws LimitError instead of returning null.
 export function readTable(file) {
   if (!file || !(file.bytes instanceof Uint8Array) || file.bytes.length === 0) return null;
   if (isZip(file.bytes) || /\.xlsx$/i.test(file.name ?? '')) {
-    try { return workbookTable(file); } catch { return null; }
+    try { return workbookTable(file); } catch (e) { if (e instanceof LimitError) throw e; return null; }
   }
   if (!isCsvName(file)) return null;
   try {
     const { headers, records } = csv(file);
     if (headers.filter(Boolean).length < 2 || !records.length) return null;
     return { headers, rows: records.map(({ values, locator }) => ({ values: values.map((v) => v.trim()), locator })) };
-  } catch { return null; }
+  } catch (e) { if (e instanceof LimitError) throw e; return null; }
 }
 
 function workbookTable(file) {
@@ -155,7 +157,8 @@ export function applyMapping(mapping, table, file) {
     amount = money(sign * amount) || 0;
     if (mapping.target === 'balance') { rows.push({ kind: 'balance', account, date, amount, locator }); continue; }
     const category = text(values, 'category');
-    rows.push({ kind: 'transaction', account, date, amount, description: text(values, 'description'), ...(category ? { category } : {}), locator });
+    const externalId = text(values, 'externalId');
+    rows.push({ kind: 'transaction', account, date, amount, description: text(values, 'description'), ...(category ? { category } : {}), ...(externalId ? { externalId } : {}), locator });
   }
   return identifyAccountRows(result(rows, warnings), file);
 }

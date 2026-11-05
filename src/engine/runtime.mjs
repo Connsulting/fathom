@@ -2,11 +2,12 @@
 // Before every call it re-reads settings.engine.on (false throws EngineOffError) and settings.cap.usd
 // (default 200), rebuilding the inner engine when the cap changes. Once any call throws
 // ModelAccountingError the runtime refuses every further call. The live credential is read once
-// (passed in by the server, or loaded lazily from config.claudeCredentialFile on the first live
-// call); a failure logs a fixed line with no value and live calls then fail.
+// exactly once, by init() at startup, from config.claudeCredentialFile. credentialState is 'loaded',
+// 'failed' or 'none' (fake and off modes never read it). After a failure every live call rejects
+// with ModelCallError('engine credential unavailable') and the file is never read again.
 
 import { getSetting } from '../store/db.mjs';
-import { createEngine, loadCredential, EngineOffError, ModelAccountingError } from './index.mjs';
+import { createEngine, loadCredential, EngineOffError, ModelAccountingError, ModelCallError } from './index.mjs';
 
 export const DEFAULT_CAP_USD = 200;
 const MONTH = /^(\d{4})-?(\d{2})$/;
@@ -43,7 +44,7 @@ function capOf(db) {
 
 const settingOn = (db) => getSetting(db, 'engine', { on: true })?.on !== false;
 
-export function createRuntimeEngine({ db, config = {}, credential, now } = {}) {
+export function createRuntimeEngine({ db, config = {}, now } = {}) {
   if (!db) throw new TypeError('A store is required');
   const mode = config.engine ?? 'off';
   if (!['live', 'fake', 'off'].includes(mode)) throw new TypeError('Invalid engine mode');
@@ -51,25 +52,32 @@ export function createRuntimeEngine({ db, config = {}, credential, now } = {}) {
   let inner = null;
   let innerCap = null;
   let refused = false;
-  let auth = credential ?? null;
-  let authLoad = null;
+  let auth = null;
+  let initPromise = null;
+  const state = { credentialState: 'none' };
 
-  async function liveCredential() {
-    if (auth || mode !== 'live' || !config.claudeCredentialFile) return auth;
-    authLoad ??= loadCredential(config.claudeCredentialFile).then((c) => { auth = c; return c; }, () => {
-      console.error('fathom: engine credential unavailable');
-      return null;
-    });
-    return authLoad;
+  // Idempotent: the credential is read on the first call only, never retried.
+  function init() {
+    initPromise ??= (async () => {
+      if (mode !== 'live') return;
+      try {
+        auth = await loadCredential(config.claudeCredentialFile);
+        state.credentialState = 'loaded';
+      } catch {
+        state.credentialState = 'failed';
+      }
+    })();
+    return initPromise;
   }
 
   async function engine() {
     if (refused) throw new ModelAccountingError();
     if (!settingOn(db)) throw new EngineOffError();
     const cap = capOf(db);
-    const cred = await liveCredential();
+    await init();
+    if (state.credentialState === 'failed') throw new ModelCallError('engine credential unavailable');
     if (!inner || cap !== innerCap) {
-      inner = createEngine({ mode, ledger, capUsd: cap, credential: cred ?? undefined, ...(now ? { now } : {}) });
+      inner = createEngine({ mode, ledger, capUsd: cap, credential: auth ?? undefined, ...(now ? { now } : {}) });
       innerCap = cap;
     }
     return inner;
@@ -86,6 +94,8 @@ export function createRuntimeEngine({ db, config = {}, credential, now } = {}) {
 
   return {
     mode,
+    init,
+    get credentialState() { return state.credentialState; },
     isOn: () => mode !== 'off' && !refused && settingOn(db),
     call: (req) => guarded((e) => e.call(req)),
     extract: (req) => guarded((e) => e.extract(req)),

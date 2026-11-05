@@ -6,6 +6,8 @@
 // `refs`, so extracted amounts resolve deterministically in code while the model never sees a
 // long digit run.
 
+import { asciiMinus } from './format.mjs';
+
 const SSN = /\b\d{3}-\d{2}-\d{4}\b/g;
 const EIN = /\b\d{2}-\d{7}\b/g;
 const LONG_RUN = /\d{5,}/g;
@@ -52,7 +54,8 @@ export function redactForExtraction(text) {
     }
     return token;
   };
-  const out = maskIds(String(text ?? '')).replace(SCAN, (match, open1, minus1, dollar, minus2, num1, close1, open2, minus3, num2, close2) => {
+  // Unicode minus and dash forms directly before a digit or `$` read as an ASCII minus first.
+  const out = maskIds(asciiMinus(String(text ?? ''))).replace(SCAN, (match, open1, minus1, dollar, minus2, num1, close1, open2, minus3, num2, close2) => {
     const money = num1 ?? num2;
     if (money === undefined) return match.length > 4 ? maskRun(match) : match;
     const open = open1 ?? open2;

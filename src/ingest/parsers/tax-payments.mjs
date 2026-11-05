@@ -1,12 +1,12 @@
 import { readWorkbook, taxHeader } from '../workbook.mjs';
-import { money, monthEnd, header, warning, result, empty } from '../format.mjs';
+import { money, monthEnd, header, warning, result, empty, LimitError } from '../format.mjs';
 
 export const id = 'tax-payments';
 export const label = 'Estimated tax payments';
 export const sourceKind = 'tax_payments';
 const SUMMARY = /total|sum|required|safe harbor|ytd|year to date|annual/i;
 export function sniff(file) {
-  try { return readWorkbook(file).sheets.some((sheet) => taxHeader(sheet)) ? 0.99 : 0; } catch { return 0; }
+  try { return readWorkbook(file).sheets.some((sheet) => taxHeader(sheet)) ? 0.99 : 0; } catch (e) { if (e instanceof LimitError) throw e; return 0; }
 }
 
 export function parse(file) {
@@ -51,7 +51,10 @@ export function parse(file) {
       }
     }
     return result(rows, warnings);
-  } catch { return empty('malformed_workbook'); }
+  } catch (e) {
+    if (e instanceof LimitError) throw e;
+    return empty('malformed_workbook');
+  }
 }
 
 function columnOrder(column) {

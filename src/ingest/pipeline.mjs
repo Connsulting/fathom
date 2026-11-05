@@ -2,7 +2,8 @@
 // model extraction, and persist its rows with provenance in one transaction per file: accounts by
 // identity, deduplication, revisions and supersede by coverage, confirm questions, sources and
 // account figures. Deterministic code decides every stored value. Nothing here logs file contents
-// or values; a failure logs an error code only.
+// or values; a failure logs an error code only. File text is never stored: a note is kept as a
+// reference to its encrypted file, and an input past the parse limits is recorded as too_large.
 
 import { createHash } from 'node:crypto';
 import { tx, getSetting } from '../store/db.mjs';
@@ -11,16 +12,17 @@ import { pickParser } from './registry.mjs';
 import { identifyAccountRows, dedupeKey } from './dedupe.mjs';
 import { readWorkbook, ledgerHeader, taxHeader } from './workbook.mjs';
 import { entityOf } from './parsers/pnl-workbook.mjs';
-import { header as headerText, cents, institution, isoDate } from './format.mjs';
+import { header as headerText, cents, institution, isoDate, LimitError } from './format.mjs';
 import { readTable, mapTabular, isZip, sourceKindOf as mappedSourceKind, id as MAPPED_ID, label as MAPPED_LABEL } from './mapping.mjs';
 import { extractDocument, isPdf, plainText, labelOf } from './extract.mjs';
 import {
   ask, recordFact, archive, normalizeName, OWNER_OPTIONS, KIND_OPTIONS, NEAR_DUPLICATE_OPTIONS, EMPLOYER_OPTIONS, taxYearOptions,
+  withholdingRecipient, withRecipient, summarizeSlot,
 } from './confirm.mjs';
 import { storeFile, readStoredFile, loadDataKey } from './vault.mjs';
 import { recordSource } from './freshness.mjs';
 
-export const STATUSES = Object.freeze(['imported', 'duplicate', 'needs_mapping', 'needs_extraction', 'unsupported', 'failed']);
+export const STATUSES = Object.freeze(['imported', 'duplicate', 'needs_mapping', 'needs_extraction', 'unsupported', 'too_large', 'failed']);
 const WAITING = ['needs_mapping', 'needs_extraction'];
 
 export class IngestError extends Error {
@@ -33,7 +35,7 @@ export class IngestError extends Error {
 }
 
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
-const emptyCounts = () => ({ rows: {}, duplicates: 0, revised: 0, superseded: 0, incomplete: 0, warnings: 0, warningCodes: {}, queued: 0 });
+const emptyCounts = () => ({ rows: {}, duplicates: 0, crossFormat: 0, revised: 0, superseded: 0, incomplete: 0, warnings: 0, warningCodes: {}, queued: 0 });
 const baseName = (name) => String(name ?? '').split(/[\\/]/).pop().slice(0, 255) || 'upload';
 const toBytes = (bytes) => (bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes ?? []));
 const json = (value) => (value === undefined || value === null ? null : JSON.stringify(value));
@@ -116,10 +118,26 @@ async function route(db, fileId, file, opts) {
     if (out.factsChanged) refreshPackState(db, { dataDir: dataDirOf(opts), now: opts.now });
     return out.result;
   } catch (error) {
+    if (error instanceof LimitError) return tooLarge(db, fileId, file);
     console.error('fathom: ingest failed', error?.code ?? error?.name ?? 'error');
     db.prepare("UPDATE files SET status = 'failed' WHERE id = ?").run(fileId);
     return { fileId, name: file.name, status: 'failed', sourceKind: null, parser: null, counts: emptyCounts() };
   }
+}
+
+// D1: an input past a parse limit (format.LIMITS) is recorded, not parsed. Its encrypted bytes stay
+// in the vault; nothing else is stored.
+function tooLarge(db, fileId, file) {
+  const counts = { ...emptyCounts(), warnings: 1, warningCodes: { limit_exceeded: 1 } };
+  db.prepare("UPDATE files SET status = 'too_large', note = 'limit_exceeded', counts = ? WHERE id = ?").run(JSON.stringify(counts), fileId);
+  return { fileId, name: file.name, status: 'too_large', sourceKind: null, parser: null, counts };
+}
+
+// D2: a note is stored as a reference to its encrypted file, never as text.
+function noteReference(fileId, bytes, text) {
+  const body = String(text ?? '');
+  const lines = body ? body.split(/\r\n|\r|\n/).length - (/(\r\n|\r|\n)$/.test(body) ? 1 : 0) : 0;
+  return { ref: fileId, sha256: sha256(bytes), chars: body.length, lines };
 }
 
 function householdEntities(db) {
@@ -135,14 +153,19 @@ async function planFile(db, fileId, file, opts) {
   if (parser) {
     const parsed = parser.parse(file);
     let status = 'imported';
+    let extractPath;
     if (parser.id === 'notes') {
+      for (const row of parsed.rows) {
+        if (row.kind === 'document' && row.docType === 'notes') row.fields = noteReference(fileId, file.bytes, row.fields?.text);
+      }
       const ex = await extractDocument(engine, file, { docType: 'notes', households: { entities: householdEntities(db) }, fileId });
+      extractPath = ex.extractPath;
       if (ex.status === 'imported') {
         parsed.rows.push(...ex.rows.map((r) => ({ ...r, parser: 'extract-notes' })));
         parsed.warnings.push(...ex.warnings);
       } else status = 'needs_extraction';
     }
-    return { status, parser: parser.id, label: parser.label, sourceKind: parser.sourceKind, parsed };
+    return { status, parser: parser.id, label: parser.label, sourceKind: parser.sourceKind, parsed, extractPath };
   }
   const table = readTable(file);
   if (table) {
@@ -153,8 +176,11 @@ async function planFile(db, fileId, file, opts) {
   if (isZip(file.bytes) || /\.xlsx$/i.test(file.name ?? '')) return { status: 'unsupported', warnings: [{ code: 'unsupported_workbook', locator: {} }] };
   if (isPdf(file) || plainText(file) !== null) {
     const ex = await extractDocument(engine, file, { households: { entities: householdEntities(db) }, fileId });
-    if (ex.status !== 'imported') return { status: 'needs_extraction' };
-    return { status: 'imported', parser: `extract-${ex.docType}`, label: labelOf(ex.docType), sourceKind: ex.sourceKind, parsed: { rows: ex.rows, warnings: ex.warnings, period: ex.period } };
+    if (ex.status !== 'imported') return { status: 'needs_extraction', extractPath: ex.extractPath };
+    return {
+      status: 'imported', parser: `extract-${ex.docType}`, label: labelOf(ex.docType), sourceKind: ex.sourceKind,
+      parsed: { rows: ex.rows, warnings: ex.warnings, period: ex.period }, extractPath: ex.extractPath,
+    };
   }
   return { status: 'unsupported', warnings: [{ code: 'unsupported_format', locator: {} }] };
 }
@@ -163,6 +189,7 @@ async function planFile(db, fileId, file, opts) {
 function persist(db, fileId, file, plan, opts) {
   const now = opts.now;
   const counts = emptyCounts();
+  if (plan.extractPath) counts.extractPath = plan.extractPath;
   const ctx = { db, fileId, now, counts, parser: plan.parser ?? null, factsChanged: false, keys: new Set() };
   const warn = (list) => {
     for (const w of list ?? []) {
@@ -236,6 +263,7 @@ function persist(db, fileId, file, plan, opts) {
   }
 
   if (coverage?.length) supersede(ctx, coverage);
+  removeOmittedPositions(ctx, rows, parsed.warnings);
   askEntityAliases(ctx, pnlRows ?? []);
   if (plan.parser === 'tax-payments') askTaxYears(ctx, rows);
   for (const [employerKey, employerName] of holds) {
@@ -286,12 +314,20 @@ function upsertAccounts(ctx, accountRows) {
 
 function putTransaction(ctx, row, parser, locator) {
   const { db, fileId, counts, now } = ctx;
-  const key = dedupeKey(row);
-  if (db.prepare('SELECT 1 FROM transactions WHERE dedupe_key = ?').get(key)
-    || db.prepare("SELECT 1 FROM superseded_rows WHERE dedupe_key = ? AND reason = 'duplicate_confirmed'").get(key)) {
-    counts.duplicates += 1;
-    return;
+  let key = dedupeKey(row);
+  const stored = db.prepare('SELECT description, parser, file_id FROM transactions WHERE dedupe_key = ?').get(key);
+  const skip = (crossFormat = false) => { counts.duplicates += 1; if (crossFormat) counts.crossFormat += 1; };
+  if (stored) {
+    // D3: a key collision from another file. Same normalized description: the same posting. Other
+    // parser: a cross-format overlap describing one posting differently. Same parser: a second
+    // transaction, stored under an alt key and asked about below.
+    const description = normalizeName(row.description);
+    if (stored.file_id === fileId || normalizeName(stored.description) === description) return skip();
+    if ((stored.parser ?? null) !== (parser ?? null)) return skip(true);
+    key = `${key}:d:${sha256(description).slice(0, 16)}`;
+    if (db.prepare('SELECT 1 FROM transactions WHERE dedupe_key = ?').get(key)) return skip();
   }
+  if (db.prepare("SELECT 1 FROM superseded_rows WHERE dedupe_key = ? AND reason = 'duplicate_confirmed'").get(key)) return skip();
   db.prepare(`INSERT INTO transactions (account_id, date, amount, description, category, external_id, dedupe_key, file_id, parser, locator, occurrence)
               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .run(row.accountId, row.date, cents(row.amount), row.description ?? null, row.category ?? null, row.externalId ?? null, key, fileId, parser, locator, row.occurrence ?? null);
@@ -435,15 +471,24 @@ function putTax(ctx, row, parser, locator, workbook) {
   const { db, fileId, counts, now } = ctx;
   const key = dedupeKey(row);
   ctx.keys.add(key);
-  const slot = workbook ? `tax:${row.sheetYear}:${normalizeName(row.jurisdiction)}:${normalizeName(row.payer)}` : (row.sourceSlot ?? null);
+  let slot = workbook ? `tax:${row.sheetYear}:${normalizeName(row.jurisdiction)}:${normalizeName(row.payer)}` : (row.sourceSlot ?? null);
+  let recipient = workbook ? null : (row.recipient ?? null);
+  if (!workbook && slot && row.employerKey) {
+    // D4: employer withholding belongs to a recipient; remembered answers decide it at import.
+    const r = withholdingRecipient(db, { employerKey: row.employerKey, employer: row.employer ?? '', payer: row.payer, fileId, now });
+    tally(ctx, r.outcome);
+    recipient = r.recipient;
+    slot = withRecipient(slot, recipient);
+  }
+  const summarizes = Boolean(slot?.startsWith('wh:')) && !slot.endsWith(':unknown');
   const amount = cents(row.amount);
   const payer = row.payer ?? null;
   const shaped = {
     jurisdiction: row.jurisdiction, tax_year: row.taxYear ?? null, date: row.date, amount, kind: row.paymentKind ?? row.kind ?? null, payer,
-    date_precision: row.datePrecision ?? null, tax_year_basis: row.taxYearBasis ?? null, dedupe_key: key, source_slot: slot, file_id: fileId, parser, locator,
+    date_precision: row.datePrecision ?? null, tax_year_basis: row.taxYearBasis ?? null, dedupe_key: key, source_slot: slot, recipient, file_id: fileId, parser, locator,
   };
-  // R15: a W-2 total for the slot summarizes paystub withholding.
-  if (slot && payer?.startsWith('paystub:')) {
+  // R15: a W-2 total for the slot summarizes paystub withholding, only once the recipient is known.
+  if (summarizes && payer?.startsWith('paystub:')) {
     const w2 = db.prepare("SELECT file_id FROM tax_payments WHERE source_slot = ? AND payer LIKE 'w2:%' LIMIT 1").get(slot);
     if (w2) {
       if (db.prepare("SELECT 1 FROM superseded_rows WHERE dedupe_key = ? AND reason = 'summarized'").get(key)) counts.duplicates += 1;
@@ -453,9 +498,9 @@ function putTax(ctx, row, parser, locator, workbook) {
   }
   const stored = db.prepare('SELECT * FROM tax_payments WHERE dedupe_key = ?').get(key);
   if (!stored) {
-    db.prepare(`INSERT INTO tax_payments (jurisdiction, tax_year, date, amount, kind, file_id, parser, locator, dedupe_key, source_slot, payer, date_precision, tax_year_basis)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(shaped.jurisdiction, shaped.tax_year, shaped.date, amount, shaped.kind, fileId, parser, locator, key, slot, payer, shaped.date_precision, shaped.tax_year_basis);
+    db.prepare(`INSERT INTO tax_payments (jurisdiction, tax_year, date, amount, kind, file_id, parser, locator, dedupe_key, source_slot, payer, date_precision, tax_year_basis, recipient)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(shaped.jurisdiction, shaped.tax_year, shaped.date, amount, shaped.kind, fileId, parser, locator, key, slot, payer, shaped.date_precision, shaped.tax_year_basis, recipient);
     bump(ctx, 'tax_payment');
   } else if (moneyEq(stored.amount, amount)) {
     counts.duplicates += 1;
@@ -466,14 +511,7 @@ function putTax(ctx, row, parser, locator, workbook) {
     db.prepare('UPDATE tax_payments SET amount = ?, file_id = ?, parser = ?, locator = ? WHERE id = ?').run(amount, fileId, parser, locator, stored.id);
     counts.revised += 1;
   }
-  if (slot && payer?.startsWith('w2:')) {
-    const remove = db.prepare('DELETE FROM tax_payments WHERE id = ?');
-    for (const r of db.prepare("SELECT * FROM tax_payments WHERE source_slot = ? AND payer LIKE 'paystub:%' ORDER BY id").all(slot)) {
-      archive(db, 'tax_payments', { ...r }, { by: fileId, reason: 'summarized', now });
-      remove.run(r.id);
-      counts.superseded += 1;
-    }
-  }
+  if (summarizes && payer?.startsWith('w2:')) counts.superseded += summarizeSlot(db, slot, { now });
 }
 
 function putDocument(ctx, row, parser, locator) {
@@ -596,6 +634,36 @@ function supersede(ctx, coverage) {
         remove.run(r.id);
         counts.superseded += 1;
       }
+    }
+  }
+}
+
+// D5: a positions file or an extracted statement is a complete snapshot of each (account, as-of)
+// it lists, unless the parse was partial: any warning other than pending activity or an unreadable
+// cost basis (an invalid position row cannot always be tied to its account, so it makes every
+// account of the file incomplete). A complete snapshot archives (reason removed) and removes the
+// stored positions of that account and date it no longer lists, where it holds period authority.
+const SNAPSHOT_PARSERS = new Set(['brokerage-positions', 'extract-statement']);
+const SNAPSHOT_HARMLESS = new Set(['pending_activity', 'invalid_cost_basis']);
+function removeOmittedPositions(ctx, rows, warnings) {
+  const { db, fileId, counts, now } = ctx;
+  if (!SNAPSHOT_PARSERS.has(ctx.parser)) return;
+  if ((warnings ?? []).some((w) => !SNAPSHOT_HARMLESS.has(w.code))) return;
+  const snapshots = new Map();
+  for (const r of rows) {
+    if (r.kind !== 'position' || !r.accountId || !r.asOf) continue;
+    const id = JSON.stringify([r.accountId, r.asOf]);
+    if (!snapshots.has(id)) snapshots.set(id, { accountId: r.accountId, asOf: r.asOf, keys: new Set() });
+    snapshots.get(id).keys.add(dedupeKey(r));
+  }
+  const incomingTo = periodTo(db, fileId);
+  const remove = db.prepare('DELETE FROM positions WHERE id = ?');
+  for (const { accountId, asOf, keys } of snapshots.values()) {
+    for (const p of db.prepare('SELECT * FROM positions WHERE account_id = ? AND as_of = ? ORDER BY id').all(accountId, asOf)) {
+      if (keys.has(p.dedupe_key) || p.file_id === fileId || !newerOrEqual(db, incomingTo, p.file_id)) continue;
+      archive(db, 'positions', { ...p }, { by: fileId, reason: 'removed', now });
+      remove.run(p.id);
+      counts.superseded += 1;
     }
   }
 }

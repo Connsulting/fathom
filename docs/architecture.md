@@ -225,7 +225,7 @@ Money columns are dollars rounded to cents; JSON columns hold JSON text. The pro
 | `schema_migrations` | `id` PK, `name`, `applied_at` |
 | `settings` | `key` PK, `value` JSON, `updated_at`. Keys: `mode`, `engine` `{on}`, `cap` `{usd}` (default 200), `clock`, `onboarding` `{done, step}`, `wargame.picks` `{salary, deferral}`, `seeded` `{at, scenario_sha}` |
 | `content` | `key` PK, `value` JSON, `src`, `updated_at`. Narrative sections with no data table yet: `meta` (product, household, dataThrough), `names`, `law`, `pct`, `series`, `verdict`, `domains`, `curve`, `wargame`, `ask`, `advisor`, `yearend`, `connect`, `engine.chat`, `onboarding`, `email` |
-| `files` | `id` PK, `name`, `mime`, `size`, `sha256` (unique when set), `source_kind`, `uploaded_at`, `stored_path`, `status`, `note`, `parser`, `counts` JSON, `source_id`, `header_signature`, `period_from`, `period_to`, `coverage` JSON (the slots a workbook authoritatively covers) |
+| `files` | `id` PK, `name`, `mime`, `size`, `sha256` (unique when set), `source_kind`, `uploaded_at`, `stored_path`, `status` (an ingest status, `pending` while routing), `note` (`limit_exceeded` for a `too_large` file), `parser`, `counts` JSON, `source_id`, `header_signature`, `period_from`, `period_to`, `coverage` JSON (the slots a workbook authoritatively covers) |
 | `sources` | `id` PK, `label`, `as_of`, `kind`, `last_ingest_at`, `note` |
 | `facts` | `key` PK, `value` JSON, `src`, `as_of`, `confirmed`, provenance, `updated_at` |
 | `accounts` | `id` PK, `inst`, `mask` (4 digits or NULL), `name`, `owner`, `kind`, `mirror`, `note`, `fig_key`, provenance, `sort`, `source_id`, `identity` (unique when set: `inst|mask:<mask>`, `inst|name:<name>` or `source:<hash>`) |
@@ -233,8 +233,8 @@ Money columns are dollars rounded to cents; JSON columns hold JSON text. The pro
 | `balances` | `id` PK, `account_id`, `date`, `amount`, `dedupe_key` (unique when set), provenance; unique (`account_id`, `date`) |
 | `positions` | `id` PK, `account_id`, `as_of`, `symbol`, `name`, `quantity`, `price`, `value`, `cost_basis`, `dedupe_key` (unique when set), provenance |
 | `pnl_lines` | `id` PK, `entity`, `period` `'YYYY-MM'`, `category`, `amount`, `dedupe_key` (unique when set), `source_slot`, provenance |
-| `tax_payments` | `id` PK, `jurisdiction`, `tax_year`, `date`, `amount`, `kind` (the row's payment kind), `dedupe_key` (unique when set), `source_slot`, `payer`, `date_precision`, `tax_year_basis`, provenance |
-| `documents` | `id` PK, `doc_type`, `tax_year`, `fields` JSON, `dedupe_key` (unique when set), provenance |
+| `tax_payments` | `id` PK, `jurisdiction`, `tax_year`, `date`, `amount`, `kind` (the row's payment kind), `dedupe_key` (unique when set), `source_slot`, `payer`, `date_precision`, `tax_year_basis`, `recipient` (withholding: `owner`, `spouse` or `unknown`, the last segment of its `wh:` slot; NULL for workbook rows), provenance |
+| `documents` | `id` PK, `doc_type`, `tax_year`, `fields` JSON (extracted values only; a `notes` document holds the reference `{ref, sha256, chars, lines}`, never the text), `dedupe_key` (unique when set), provenance |
 | `figures` | `key` PK, `v`, `src` (references `sources.id`), `kind` in a, p, e, m, `label`, provenance, `updated_at` |
 | `recs` | `id` PK, `def` JSON (the CONTRACT rec minus live fields), `status`, `waiting_on`, `wake`, `tasks_done` JSON, `window_close` ISO date, `window_label`, `pack_id`, `sort`, `updated_at`, provenance |
 | `rec_events` | `id` PK, `rec_id`, `ts`, `action`, `arg`, `from_status`, `to_status`, `actor` (`ui`, `tool`, ...) |
@@ -259,7 +259,8 @@ Migration 002 (`002-ingest.sql`) adds the ingest columns above (`files.parser` t
 `files.coverage`, `accounts.source_id` and `identity`, `transactions.occurrence`, every
 `dedupe_key` and `source_slot`, `tax_payments.payer`, `date_precision` and `tax_year_basis`) and
 the tables `superseded_rows`, `confirm_items`, `column_mappings`, `entity_aliases` and
-`held_facts`. `demo/seed.mjs` clears them with the rest of the store.
+`held_facts`. `demo/seed.mjs` clears them with the rest of the store. Migration 003
+(`003-ingest-recipients.sql`) adds `tax_payments.recipient`.
 
 ### Adding a migration
 
@@ -365,7 +366,7 @@ response is `{scenario, ...}` with the fresh scenario.
 | `POST /api/ask` | `{key?: 'ask', a rec id or 'pack:<id>', questionId? or text?}` | `{scenario, message}`. Exactly one of `questionId` or `text`; empty text, both or neither are 400; unknown question or conversation 404. Appends the owner's message and the answer (or the engine-off notice when the engine is off). |
 | `POST /api/onboarding` | `{step}` | `{scenario}`. 0 to 5 set the step, 6 completes onboarding; anything else 400. |
 | `POST /api/demo/reset` | `{}` | `{scenario}`. Rebuilds the demo store and removes stored uploads (`$FATHOM_DATA/files/*.bin`, the demo key stays); 404 unless the store is a demo store. |
-| `POST /api/files` | multipart/form-data, field `files` (one or more) | `{scenario, files: [result], pending}`. A result is `{fileId, name, status, sourceKind, parser, counts, duplicateOf?}` with status `imported`, `duplicate`, `needs_mapping`, `needs_extraction`, `unsupported` or `failed`. 400 no files or malformed body, 409 a real store without `FATHOM_DATA_KEY_FILE` (nothing stored), 413 over a size cap, 415 not multipart with a boundary. |
+| `POST /api/files` | multipart/form-data, field `files` (one or more) | `{scenario, files: [result], pending}`. A result is `{fileId, name, status, sourceKind, parser, counts, duplicateOf?}` with status `imported`, `duplicate`, `needs_mapping`, `needs_extraction`, `unsupported`, `too_large` (past a parse limit, see Ingest) or `failed`. 400 no files or malformed body, 409 a real store without `FATHOM_DATA_KEY_FILE` (nothing stored), 413 over a size cap, 415 not multipart with a boundary. |
 | `GET /api/files` | | `{files: [{id, name, status, sourceKind, parser, counts, uploadedAt}]}`, newest first. |
 | `POST /api/files/:id/retry` | `{}` | `{scenario, file: result}`. Routes a `needs_mapping` or `needs_extraction` file again under the same id; 404 unknown file, 409 a file that is not waiting. |
 | `GET /api/confirm` | | `{items: [pending confirm items]}`. |
@@ -443,20 +444,38 @@ and anything ambiguous becomes a short question in the confirm queue.
 2. The encrypted bytes are stored first, then a `files` row, then the file is routed: a known
    parser (`pickParser`), else an unknown table (`readTable` then `mapTabular`), else a PDF or
    UTF-8 text (`extractDocument`), else `unsupported`. Markdown notes keep the notes parser's
-   document and are then extracted as `notes`.
+   document as a reference to the encrypted file (`fields: {ref: fileId, sha256, chars, lines}`,
+   never the text) and are then extracted as `notes` from the decrypted bytes (on retry, from the
+   vault).
+   Parsing is bounded by `src/ingest/format.mjs` `LIMITS` (200000 rows, 512 columns, 2000000
+   cells, 32768 characters per cell, for CSV and workbooks; CSV sniffing reads only the header
+   within 64 KiB). A reader past a limit throws `LimitError` (`limit_exceeded`); the pipeline
+   records the file as `too_large` with note `limit_exceeded` and counts `{warnings: 1,
+   warningCodes: {limit_exceeded: 1}}`, keeps its encrypted bytes and stores nothing else.
 3. Rows get `dedupe_key`s (`src/ingest/dedupe.mjs`) and provenance (`file_id`, `parser`,
-   `locator` JSON); `transactions.occurrence` keeps the occurrence counter. Accounts are upserted
+   `locator` JSON); `transactions.occurrence` keeps the occurrence counter. A transaction with an
+   `externalId` (check or slip number, or a mapped column) is keyed by account and that id, with
+   no date or amount. A key collision from another file compares normalized descriptions: equal
+   is a duplicate; different from the same parser stores a second transaction under
+   `<key>:d:<16 hex of the description hash>` and asks `near_duplicate`; different from another
+   parser is a cross-format duplicate (`counts.crossFormat`). Accounts are upserted
    by `identity` (`acct-` plus 16 hex of its hash), with `mirror` `manual` and masks of 4 digits
    only.
 4. Revisions: P and L and tax workbook rows carry a `source_slot`; a later workbook replaces the
    rows of every slot in its `files.coverage` (changed amounts archive as `revised`, missing rows
    as `removed`). Balances and positions compare `files.period_to`: a newer file wins
    (`revised`), an older one is archived as `older_snapshot`, equal values advance provenance.
-   W-2 withholding summarizes paystub withholding in the same `wh:` slot (`summarized`). Every
-   replaced row is kept in `superseded_rows`.
+   A positions file or extracted statement is a complete snapshot per (account, as-of): stored
+   positions it omits are archived as `removed` and deleted when it holds period authority,
+   unless the parse was partial (any warning other than `pending_activity` or
+   `invalid_cost_basis`), which never removes. Withholding slots are
+   `wh:<employerKey>:<taxYear>:<jurisdiction>:<recipient>`; W-2 withholding summarizes paystub
+   withholding in the same slot (`summarized`) only once the recipient is known, at import or
+   when a recipient answer recomputes the slots. Every replaced row is kept in `superseded_rows`.
 5. Each file records `parser`, `source_kind`, `source_id`, `period_from`, `period_to`, `status`
-   and `counts` JSON `{rows: {kind: n}, duplicates, revised, superseded, warnings, warningCodes:
-   {code: n}, queued}`. Ingest sources (`sources` ids starting `ing:`) keep the latest `as_of`
+   and `counts` JSON `{rows: {kind: n}, duplicates, crossFormat, revised, superseded, incomplete,
+   warnings, warningCodes: {code: n}, queued, extractPath?}`; `extractPath` (`text`,
+   `pdf_text_layer` or `pdf_document`) is set when extraction ran. Ingest sources (`sources` ids starting `ing:`) keep the latest `as_of`
    and `last_ingest_at`; account balance figures follow the latest stored balance.
 6. When facts change, `refreshPackState` runs. The pipeline logs only an error code.
 
@@ -485,7 +504,11 @@ target) before it is stored and applied. With the engine off or an invalid propo
 Schema that never asks for SSNs, EINs, full account numbers, names of people or addresses. Text
 is redacted first (`src/ingest/redact.mjs`): SSN and EIN patterns are masked, money-shaped
 numbers become opaque references that code resolves back, and every other digit run longer than
-4 keeps only its last 4 digits. PDFs are sent as documents. Extracted values become rows by
+4 keeps only its last 4 digits. A PDF's text layer is read first by `src/ingest/pdftext.mjs`
+`pdfText(bytes) -> {text, pages, usable}` (pdfjs-dist 6.4.299 legacy build in process,
+`isEvalSupported: false`, `disableFontFace: true`, no system fonts, no worker fetch, at most 50
+pages, never throws; usable with at least 200 letters): a usable layer is redacted and sent as
+text like a text file, and any other PDF is sent as a document. Extracted values become rows by
 deterministic code; facts below 0.8 confidence wait for a `fact_check`, and employer-dependent
 facts wait in `held_facts` until the employer relation is known. With the engine off the file is
 `needs_extraction`.
@@ -495,9 +518,13 @@ facts wait in `held_facts` until the employer relation is known. With the engine
 `src/ingest/confirm.mjs` keeps `confirm_items` (one per `kind` and `subject`) with
 `ask`, `answer(db, id, optionId, {now})`, `pendingItems` and `listItems`. Item shape: `{id, kind,
 subject, question, options: [{id, label}], context, status, answer, fileId, createdAt}`. Kinds:
-`account_owner`, `account_kind`, `entity_alias`, `tax_year`, `fact_check`, `near_duplicate` and
-`employer_relation`. An answered subject is remembered and applied to later imports without a new
-question. `ConfirmError` codes map to HTTP: `not_found` 404, `bad_option` 400, `answered` 409,
+`account_owner`, `account_kind`, `entity_alias`, `tax_year`, `fact_check`, `near_duplicate`,
+`employer_relation`, `employer_recipient` (subject the employer key; options `owner` "You",
+`spouse` "Your spouse", `both` "Both of you") and `document_recipient` (subject a paystub or W-2
+payer identity; options `owner`, `spouse`; asked per document after `both`). A recipient answer
+sets `tax_payments.recipient` on the matching withholding rows, recomputes their `wh:` slots and
+summarizes per slot; while a row's recipient is unknown nothing summarizes it. An answered
+subject is remembered and applied to later imports without a new question. `ConfirmError` codes map to HTTP: `not_found` 404, `bad_option` 400, `answered` 409,
 `stale` 409.
 
 ### Freshness

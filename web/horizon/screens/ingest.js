@@ -10,6 +10,7 @@ const STATUS = {
   needs_mapping: 'Needs a mapping',
   needs_extraction: 'Needs the engine to read it',
   unsupported: 'Not a supported file',
+  too_large: 'Too large to read',
   failed: 'Could not import'
 };
 
@@ -92,7 +93,7 @@ export function ingestScreens(h) {
     if (st.results) list = `<ul class="h-ing-files" aria-live="polite">${st.results.map(fileRow).join('')}</ul>`;
     else if (onboarding) {
       const files = arr(api.s?.onboarding?.files);
-      if (files.length) list = `<ul class="h-files">${files.map((f) => `<li>${icon('doc')}<span>${h.X(f.name)}</span><em>${h.X(f.status)}</em></li>`).join('')}</ul>`;
+      if (files.length) list = `<ul class="h-files">${files.map((f) => `<li>${icon('doc')}<span>${esc(f.name)}</span><em>${esc(STATUS[f.status] || f.status)}</em></li>`).join('')}</ul>`;
     }
     const control = `<div class="h-ing-ctl">${btn(label, `data-upload-open="1"${busy ? ' disabled aria-busy="true"' : ''}`, onboarding ? 'ghost' : '')}
       <input type="file" multiple data-upload="1" hidden tabindex="-1"></div>`;
@@ -135,7 +136,7 @@ export function ingestScreens(h) {
   function waitingList() {
     const waiting = ing().waiting;
     if (!waiting.length) return '';
-    return `<ul class="h-ing-files">${waiting.map((f) => `<li class="${esc(f.status)}">${icon('doc')}<div class="h-ing-f"><div class="h-ing-f-h"><span class="h-ing-f-n">${esc(f.name)}</span><em>${esc(STATUS[f.status])}</em></div></div>${btn(st.retrying[f.id] ? 'Retrying' : 'Retry', `data-retry="${esc(f.id)}"${st.retrying[f.id] ? ' disabled' : ''}`, 'ghost')}</li>`).join('')}</ul>`;
+    return `<ul class="h-ing-files">${waiting.map((f) => `<li class="${esc(f.status)}">${icon('doc')}<div class="h-ing-f"><div class="h-ing-f-h"><span class="h-ing-f-n">${esc(f.name)}</span><em>${esc(STATUS[f.status] || f.status)}</em></div></div>${btn(st.retrying[f.id] ? 'Retrying' : 'Retry', `data-retry="${esc(f.id)}"${st.retrying[f.id] ? ' disabled' : ''}`, 'ghost')}</li>`).join('')}</ul>`;
   }
 
   function confirmPage() {

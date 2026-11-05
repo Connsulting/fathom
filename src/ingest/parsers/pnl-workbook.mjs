@@ -1,11 +1,11 @@
 import { readWorkbook, ledgerHeader } from '../workbook.mjs';
-import { header, isoDate, money, cents, warning, result, empty } from '../format.mjs';
+import { header, isoDate, money, cents, warning, result, empty, LimitError } from '../format.mjs';
 
 export const id = 'pnl-workbook';
 export const label = 'Business profit and loss';
 export const sourceKind = 'pnl_workbook';
 export function sniff(file) {
-  try { return readWorkbook(file).sheets.some((sheet) => ledgerHeader(sheet)) ? 0.98 : 0; } catch { return 0; }
+  try { return readWorkbook(file).sheets.some((sheet) => ledgerHeader(sheet)) ? 0.98 : 0; } catch (e) { if (e instanceof LimitError) throw e; return 0; }
 }
 
 // The entity a ledger sheet belongs to: its name without a trailing Income or Expenses label
@@ -47,5 +47,8 @@ export function parse(file) {
       }
     }
     return monthly.size ? result([...monthly.values()], warnings) : { ...empty('no_pnl_rows'), warnings: [...warnings, ...empty('no_pnl_rows').warnings] };
-  } catch { return empty('malformed_workbook'); }
+  } catch (e) {
+    if (e instanceof LimitError) throw e;
+    return empty('malformed_workbook');
+  }
 }

@@ -15,7 +15,6 @@ import { loadConfig } from './config.mjs';
 import { openMigrated, readStoreMode, createStoreFile, getSetting, setSetting, DB_FILE } from './store/db.mjs';
 import { createHandler } from './api/router.mjs';
 import { createCannedAnswerer } from './api/answerer.mjs';
-import { loadCredential } from './engine/index.mjs';
 import { createRuntimeEngine } from './engine/runtime.mjs';
 import { refreshPackState } from './packs/state.mjs';
 import { seedDemo } from '../demo/seed.mjs';
@@ -45,18 +44,6 @@ export function openStore(config) {
 // Log-safe code for a startup failure: never the message, which could carry a value.
 const codeOf = err => [err && err.code, err && err.name].find(v => typeof v === 'string' && /^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(v)) || 'unknown';
 
-// The live credential, read once and only in live mode. A failure is logged without the value
-// and leaves the credential unset, so live calls fail while everything else keeps working.
-async function engineCredential(config) {
-  if (config.engine !== 'live') return undefined;
-  try {
-    return await loadCredential(config.claudeCredentialFile);
-  } catch {
-    console.error('fathom: engine credential unavailable');
-    return undefined;
-  }
-}
-
 // Real stores rebuild pack definitions from the pack manifests and the stored facts at startup
 // (demo pack definitions are the seeded scenario). A pack load failure never stops startup.
 async function refreshPacks(db, config) {
@@ -73,8 +60,9 @@ export async function startServer(config = loadConfig()) {
   let engine;
   try {
     await refreshPacks(db, config);
-    const credential = await engineCredential(config);
-    engine = createRuntimeEngine({ db, config, credential });
+    engine = createRuntimeEngine({ db, config });
+    await engine.init();
+    if (engine.credentialState === 'failed') console.error('fathom: engine credential unavailable');
   } catch (e) {
     db.close();
     throw e;

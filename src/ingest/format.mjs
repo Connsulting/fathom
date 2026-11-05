@@ -10,7 +10,7 @@ export function result(rows, warnings = []) {
 
 export function number(value) {
   if (typeof value === 'number') return Number.isFinite(value) ? value : null;
-  let valueText = String(value ?? '').trim();
+  let valueText = asciiMinus(String(value ?? '').trim());
   if (!valueText) return null;
   const parentheses = /^\(.*\)$/.test(valueText);
   if (parentheses) valueText = valueText.slice(1, -1).trim();
@@ -49,46 +49,108 @@ export function monthEnd(period) {
   return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
 }
 
-export function csv(file) {
-  const input = text(file);
-  const records = [], warnings = [];
+// Parse limits. Every reader counts while it scans and throws LimitError before it would hold
+// more than this: rows (records, header included), columns (cells in one record), cells (total),
+// cellChars (characters in one cell).
+export const LIMITS = Object.freeze({ rows: 200000, columns: 512, cells: 2000000, cellChars: 32768 });
+export class LimitError extends Error {
+  code = 'limit_exceeded';
+  constructor(message = 'Input exceeds parse limits') { super(message); this.name = 'LimitError'; }
+}
+const HEADER_WINDOW = 64 * 1024;
+
+// Unicode minus and dash forms directly before a digit or `$` become an ASCII minus.
+const MINUS_FORMS = /[\u2212\u2012\u2013\u2014\uFE63\uFF0D](?=[\d$])/g;
+export const asciiMinus = (value) => String(value).replace(MINUS_FORMS, '-');
+
+// Scans CSV text record by record. onRecord(values, locator) returns true to stop. A malformed
+// record goes to onBad(locator). The trailing record is finished only when `complete` (the text
+// is the whole input). Returns {stopped, unclosed, start}.
+function scanCsv(input, limits, complete, onRecord, onBad) {
   let cells = [], cell = '', quoted = false, closed = false, bad = false, line = 1, start = 1;
-  const finish = () => {
+  let rows = 0, total = 0, stopped = false;
+  const push = () => {
+    if (cells.length >= limits.columns) throw new LimitError('CSV record has too many columns');
     cells.push(cell);
+  };
+  const finish = () => {
+    push();
     if (cells.some((value) => value.trim())) {
-      if (bad) warning(warnings, 'malformed_csv', { row: start });
-      else records.push({ values: cells, locator: { row: start } });
+      if (++rows > limits.rows) throw new LimitError('CSV has too many rows');
+      if (bad) onBad({ row: start });
+      else {
+        total += cells.length;
+        if (total > limits.cells) throw new LimitError('CSV has too many cells');
+        stopped = onRecord(cells, { row: start }) === true;
+      }
     }
     cells = []; cell = ''; closed = false; bad = false; start = line + 1;
   };
-  for (let i = 0; i < input.length; i++) {
+  const add = (ch) => {
+    if (cell.length >= limits.cellChars) throw new LimitError('CSV cell is too long');
+    cell += ch;
+  };
+  for (let i = 0; i < input.length && !stopped; i++) {
     const ch = input[i];
     if (quoted) {
-      if (ch === '"' && input[i + 1] === '"') { cell += '"'; i++; }
+      if (ch === '"' && input[i + 1] === '"') { add('"'); i++; }
       else if (ch === '"') { quoted = false; closed = true; }
-      else { cell += ch; if (ch === '\n') line++; }
-    } else if (ch === ',') { cells.push(cell); cell = ''; closed = false; }
+      else { add(ch); if (ch === '\n') line++; }
+    } else if (ch === ',') { push(); cell = ''; closed = false; }
     else if (ch === '\n' || ch === '\r') {
       if (ch === '\r' && input[i + 1] === '\n') i++;
       finish(); line++; start = line;
     } else if (ch === '"' && !cell && !closed) quoted = true;
     else if (closed && /\s/.test(ch)) continue;
-    else { if (closed || ch === '"') bad = true; cell += ch; }
+    else { if (closed || ch === '"') bad = true; add(ch); }
   }
-  if (quoted) warning(warnings, 'unclosed_csv_quote', { row: start });
-  else if (cell || cells.length) finish();
-  const first = records.shift();
-  const headers = first?.values.map(header) ?? [];
+  if (stopped) return { stopped, unclosed: false, start };
+  if (complete && !quoted && (cell || cells.length)) finish();
+  return { stopped, unclosed: quoted, start };
+}
+
+const headersOf = (values) => {
+  const headers = values.map(header);
   if (new Set(headers).size !== headers.length) throw new Error('Duplicate CSV headers');
-  return { headers, records, warnings };
+  return headers;
+};
+
+export function csv(file, { limits = LIMITS } = {}) {
+  const input = text(file);
+  // A counting pass keeps nothing, so an input past a limit is rejected before any record is held.
+  scanCsv(input, limits, true, () => {}, () => {});
+  const records = [], warnings = [];
+  let headers = null;
+  const scan = scanCsv(input, limits, true, (values, locator) => {
+    if (headers) records.push({ values, locator });
+    else headers = headersOf(values);
+  }, (locator) => warning(warnings, 'malformed_csv', locator));
+  if (scan.unclosed) warning(warnings, 'unclosed_csv_quote', { row: scan.start });
+  return { headers: headers ?? [], records, warnings };
+}
+
+// The normalized headers of the first well-formed nonempty record, reading at most the first
+// 64 KiB. A header record that does not end inside that window is a LimitError.
+export function csvHeader(file, { limits = LIMITS } = {}) {
+  const bytes = file.bytes;
+  const complete = bytes.length <= HEADER_WINDOW;
+  const input = new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(0, HEADER_WINDOW), { stream: !complete }).replace(/^\uFEFF/, '');
+  let headers = null;
+  scanCsv(input, limits, complete, (values) => { headers = headersOf(values); return true; }, () => {});
+  if (headers) return headers;
+  if (!complete) throw new LimitError('CSV header exceeds the scan window');
+  return [];
 }
 
 export function csvScore(file, required) {
   try {
     if (!/\.csv$/i.test(file.name ?? '') && !/csv/i.test(file.mime ?? '')) return 0;
-    const { headers } = csv(file);
+    const headers = csvHeader(file);
     return required.every((key) => headers.includes(key)) ? 0.98 : 0;
-  } catch { return 0; }
+  } catch (e) {
+    if (e instanceof LimitError) throw e;
+    return 0;
+  }
 }
 
 export function csvParse(file, required, convert) {
@@ -102,5 +164,8 @@ export function csvParse(file, required, convert) {
       convert(Object.fromEntries(headers.map((key, i) => [key, values[i].trim()])), locator, rows, warnings);
     }
     return result(rows, warnings);
-  } catch { return empty('malformed_csv'); }
+  } catch (e) {
+    if (e instanceof LimitError) throw e;
+    return empty('malformed_csv');
+  }
 }

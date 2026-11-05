@@ -1,4 +1,4 @@
-import { csv, csvScore, text, isoDate, money, number, mask, warning, result, empty } from '../format.mjs';
+import { csv, csvScore, text, isoDate, money, number, mask, warning, result, empty, LimitError } from '../format.mjs';
 
 export const id = 'brokerage-positions';
 export const label = 'Brokerage positions';
@@ -42,5 +42,8 @@ export function parse(file) {
       rows.push({ kind: 'position', account, asOf: date, symbol: cash ? 'CASH' : record.symbol, name: record.description, quantity, price, value, ...(costBasis !== null ? { costBasis } : {}), locator });
     }
     return result(rows, warnings);
-  } catch { return empty('malformed_csv'); }
+  } catch (e) {
+    if (e instanceof LimitError) throw e;
+    return empty('malformed_csv');
+  }
 }

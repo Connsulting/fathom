@@ -7,7 +7,9 @@ import { upsertFact, deleteFact } from '../store/facts.mjs';
 import { dedupeKey } from './dedupe.mjs';
 import { cents } from './format.mjs';
 
-export const KINDS = Object.freeze(['account_owner', 'account_kind', 'entity_alias', 'tax_year', 'fact_check', 'near_duplicate', 'employer_relation']);
+export const KINDS = Object.freeze([
+  'account_owner', 'account_kind', 'entity_alias', 'tax_year', 'fact_check', 'near_duplicate', 'employer_relation', 'employer_recipient', 'document_recipient',
+]);
 
 export const OWNER_OPTIONS = Object.freeze([
   { id: 'owner', label: 'You' }, { id: 'spouse', label: 'Your spouse' }, { id: 'joint', label: 'Joint' }, { id: 'business', label: 'Business' },
@@ -20,6 +22,10 @@ export const KIND_OPTIONS = Object.freeze([
 export const FACT_CHECK_OPTIONS = Object.freeze([{ id: 'yes', label: 'Yes, that is right' }, { id: 'no', label: 'No, ignore it' }]);
 export const NEAR_DUPLICATE_OPTIONS = Object.freeze([{ id: 'same', label: 'Same transaction, keep one' }, { id: 'different', label: 'Different, keep both' }]);
 export const EMPLOYER_OPTIONS = Object.freeze([{ id: 'outside', label: 'An outside employer' }, { id: 'household', label: 'Our own business' }]);
+export const EMPLOYER_RECIPIENT_OPTIONS = Object.freeze([{ id: 'owner', label: 'You' }, { id: 'spouse', label: 'Your spouse' }, { id: 'both', label: 'Both of you' }]);
+export const DOCUMENT_RECIPIENT_OPTIONS = Object.freeze([{ id: 'owner', label: 'You' }, { id: 'spouse', label: 'Your spouse' }]);
+// Who a withholding row belongs to: the last segment of its wh: slot and tax_payments.recipient.
+export const RECIPIENTS = Object.freeze(['owner', 'spouse', 'unknown']);
 export const taxYearOptions = (year) => [
   { id: 'tax_year', label: `Tax year ${year}` },
   { id: 'payment_year', label: `Paid during ${year}; January counts toward ${year - 1}` },
@@ -149,6 +155,14 @@ export function applyAnswer(db, item, optionId, { now } = {}) {
       return {};
     case 'employer_relation':
       return applyEmployer(db, item.subject, optionId, { now });
+    case 'employer_recipient':
+      applyEmployerRecipient(db, item, optionId, { now });
+      return {};
+    case 'document_recipient':
+      if (optionId === 'owner' || optionId === 'spouse') {
+        setRecipient(db, db.prepare('SELECT * FROM tax_payments WHERE payer = ? ORDER BY id').all(item.subject), optionId, { now });
+      }
+      return {};
     default:
       return {};
   }
@@ -237,6 +251,79 @@ function applyEmployer(db, employerKey, optionId, { now }) {
   }
   if (optionId === 'outside' || optionId === 'household') db.prepare('DELETE FROM held_facts WHERE hold = ?').run(hold);
   return { factsChanged };
+}
+
+// Withholding recipients (D4). An employer's withholding rows are paystub and W-2 rows whose slot
+// is wh:<employerKey>:...; the recipient is the slot's last segment.
+export const withRecipient = (slot, recipient) => String(slot).replace(/:[^:]*$/, `:${recipient}`);
+const employerRows = (db, employerKey) => db.prepare(`SELECT * FROM tax_payments WHERE source_slot LIKE ?
+  AND (payer LIKE 'paystub:%' OR payer LIKE 'w2:%') ORDER BY id`).all(`wh:${employerKey}:%`);
+
+function documentQuestion(payer, employer) {
+  const [kind, , when] = String(payer).split(':');
+  const from = employer ? ` from ${employer}` : '';
+  return kind === 'w2' ? `Whose ${when} W-2${from} is this?` : `Whose paystub${from} paid on ${when} is this?`;
+}
+const askDocument = (db, { employerKey, employer = '', payer, fileId = null, now }) => ask(db, {
+  kind: 'document_recipient', subject: payer, question: documentQuestion(payer, employer), options: DOCUMENT_RECIPIENT_OPTIONS,
+  context: { employerKey, employer, payer }, fileId, now,
+});
+
+// The recipient of an employer withholding row at import. Remembered answers decide it; otherwise
+// it is unknown and the open question (employer, or per document after "both") is asked.
+// Returns {recipient, outcome} where outcome is ask()'s result when a question was asked.
+export function withholdingRecipient(db, { employerKey, employer = '', payer, fileId = null, now } = {}) {
+  const byEmployer = findItem(db, 'employer_recipient', employerKey);
+  if (byEmployer?.status === 'answered' && byEmployer.answer !== 'both') return { recipient: byEmployer.answer };
+  if (byEmployer?.status === 'answered') {
+    const byDocument = findItem(db, 'document_recipient', payer);
+    if (byDocument?.status === 'answered') return { recipient: byDocument.answer };
+    return { recipient: 'unknown', outcome: askDocument(db, { employerKey, employer: employer || byEmployer.context.employer, payer, fileId, now }) };
+  }
+  const question = employer ? `Who is paid by ${employer}?` : 'Who is paid by this employer?';
+  return {
+    recipient: 'unknown',
+    outcome: ask(db, { kind: 'employer_recipient', subject: employerKey, question, options: EMPLOYER_RECIPIENT_OPTIONS, context: { employerKey, employer }, fileId, now }),
+  };
+}
+
+// R15 per recipient slot: a W-2 row in a slot with a known recipient summarizes that slot's paystub
+// rows (archived as summarized, then removed). An unknown slot never summarizes. Returns the count.
+export function summarizeSlot(db, slot, { now } = {}) {
+  if (!String(slot ?? '').startsWith('wh:') || slot.endsWith(':unknown')) return 0;
+  const w2 = db.prepare("SELECT file_id FROM tax_payments WHERE source_slot = ? AND payer LIKE 'w2:%' ORDER BY id LIMIT 1").get(slot);
+  if (!w2) return 0;
+  const rows = db.prepare("SELECT * FROM tax_payments WHERE source_slot = ? AND payer LIKE 'paystub:%' ORDER BY id").all(slot);
+  const remove = db.prepare('DELETE FROM tax_payments WHERE id = ?');
+  for (const r of rows) {
+    archive(db, 'tax_payments', { ...r }, { by: w2.file_id, reason: 'summarized', now });
+    remove.run(r.id);
+  }
+  return rows.length;
+}
+
+// Set the recipient of stored withholding rows, recompute their slots, then summarize each slot.
+function setRecipient(db, rows, recipient, { now }) {
+  const update = db.prepare('UPDATE tax_payments SET recipient = ?, source_slot = ? WHERE id = ?');
+  const slots = new Set();
+  for (const r of rows) {
+    if (!String(r.source_slot ?? '').startsWith('wh:')) continue;
+    const slot = withRecipient(r.source_slot, recipient);
+    update.run(recipient, slot, r.id);
+    slots.add(slot);
+  }
+  for (const slot of slots) summarizeSlot(db, slot, { now });
+}
+
+// employer_recipient: owner or spouse sets every withholding row of the employer; both asks per
+// document (a remembered document answer applies at once).
+function applyEmployerRecipient(db, item, optionId, { now }) {
+  const rows = employerRows(db, item.subject);
+  if (optionId === 'owner' || optionId === 'spouse') { setRecipient(db, rows, optionId, { now }); return; }
+  if (optionId !== 'both') return;
+  const payers = new Map();
+  for (const r of rows) if (!payers.has(r.payer)) payers.set(r.payer, r.file_id);
+  for (const [payer, fileId] of payers) askDocument(db, { employerKey: item.subject, employer: item.context.employer ?? '', payer, fileId, now });
 }
 
 // Write one extracted fact under the fact-check rules (R5). The subject names the logical source,
