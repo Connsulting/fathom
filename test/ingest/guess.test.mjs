@@ -205,7 +205,7 @@ describe('guessPending', () => {
     await G.guessPending(s.db, engine, { now: NOW, fake: [script(guesses)] });
     assert.equal(engine.calls.length, 1);
 
-    const kept = { [id(7)]: 'checking', [id(8)]: '529', [id(10)]: 'checking', [id(11)]: 'cash' };
+    const kept = { [id(10)]: 'checking', [id(11)]: 'cash' };
     const rows = guessRows(s.db);
     assert.deepEqual(rows.map((r) => r.item_id), ids, 'a row for every item sent and none for items outside the batch');
     for (const r of rows) {
@@ -213,8 +213,9 @@ describe('guessPending', () => {
       assert.equal(r.model, 'fake');
       assert.equal(r.ts, NOW);
     }
-    assert.equal(rowOf(s.db, id(7)).reason, 'Ends in 4007 like the checking export', 'a number from its own context is kept');
-    assert.equal(rowOf(s.db, id(8)).reason, 'Reads like a 529 plan', 'a number from its own option labels is kept');
+    assert.equal(rowOf(s.db, id(7)).reason, null, 'a numeral is rejected even when the item carries it');
+    assert.equal(rowOf(s.db, id(8)).reason, null, 'a numeral is rejected even when an option label carries it');
+    assert.equal(rowOf(s.db, id(10)).reason, 'Named like a checking account');
     assert.equal(rowOf(s.db, 999999), undefined);
     assert.equal(rowOf(s.db, answered), undefined);
 
@@ -230,11 +231,11 @@ describe('guessPending', () => {
     const [a, b] = queue(s.db, 2);
     const batch = C.pendingItems(s.db);
     const accepted = G.validateGuesses(batch, { guesses: [
-      { item: a, option: 'checking', reason: 'Ends in 4001' },
+      { item: a, option: 'checking', reason: 'Named like a checking account' },
       { item: b, option: 'checking', reason: 'Ends in 4001' },
       { item: 999999, option: 'checking', reason: 'Synthetic reason' },
     ] });
-    assert.deepEqual(accepted, [{ item: a, option: 'checking', reason: 'Ends in 4001' }]);
+    assert.deepEqual(accepted, [{ item: a, option: 'checking', reason: 'Named like a checking account' }]);
   }));
 
   describe('validateGuesses compares complete quantities, not digit runs', () => {
@@ -250,7 +251,7 @@ describe('guessPending', () => {
     }
     const verdict = (batch, id, reason) => G.validateGuesses(batch, { guesses: [{ item: id, option: 'checking', reason }] }).length === 1;
 
-    test('an item whose only number is 100 rejects scaled, signed, percent and spelled-out amounts and keeps plain 100', () => withStore(async (s) => {
+    test('an item whose only number is 100 rejects scaled, signed, percent, spelled-out and plain numeric amounts and keeps plain prose', () => withStore(async (s) => {
       const { plain } = queueQuantities(s.db);
       const batch = C.pendingItems(s.db);
       for (const reason of [
@@ -266,11 +267,13 @@ describe('guessPending', () => {
         'The import lists 100 for this account.',
         'The import lists $100 for this account.',
         'Matches the 100.00 amount in the file.',
+      ]) assert.equal(verdict(batch, plain, reason), false, `rejected: ${reason}`);
+      for (const reason of [
         'Reads like a checking account',
       ]) assert.equal(verdict(batch, plain, reason), true, `kept: ${reason}`);
     }));
 
-    test('an item whose only number is 100 rejects spaced, dotted, spelled-out and any leftover-digit reasons and still keeps grounded ones', () => withStore(async (s) => {
+    test('an item whose only number is 100 rejects spaced, dotted, spelled-out and any leftover-digit reasons and plain numeric reasons, and still keeps plain prose', () => withStore(async (s) => {
       const { plain } = queueQuantities(s.db);
       const w2 = C.ask(s.db, { kind: 'account_kind', subject: 'acct-quantity-w2', question: 'Does the W-2 name this employer?', options: OPTIONS, context: {}, now: NOW });
       assert.equal(w2.queued, true);
@@ -291,9 +294,10 @@ describe('guessPending', () => {
         'The import lists 100 for this account.',
         'The import lists $100 for this account.',
         'Matches the 100.00 amount in the file.',
-        'Held at the same broker as your other accounts.',
-      ]) assert.equal(verdict(batch, plain, reason), true, `kept: ${reason}`);
-      assert.equal(verdict(batch, w2.id, 'The W-2 names this employer.'), true, 'kept: W-2 from its own question');
+      ]) assert.equal(verdict(batch, plain, reason), false, `rejected: ${reason}`);
+      assert.equal(verdict(batch, plain, 'Held at the same broker as your other accounts.'), true, 'kept: plain prose');
+      assert.equal(verdict(batch, w2.id, 'The W-2 names this employer.'), false, 'rejected: W-2 holds a digit');
+      assert.equal(verdict(batch, w2.id, 'The form names this employer as the payer.'), true, 'kept: plain prose');
     }));
 
     test('a reason with a fraction, percent, basis point or multiplier word is rejected unless the item carries that word', () => withStore(async (s) => {
@@ -322,22 +326,31 @@ describe('guessPending', () => {
         'Tens of thousands.',
         'Doubles the value.',
         'Tripling the total.',
+        '100 grand.',
+        '100 bucks.',
+        'Quintuple the amount.',
+        'Halved since then.',
+        'A hundredfold rise.',
       ]) assert.equal(verdict(batch, plain, reason), false, `rejected: ${reason}`);
       for (const reason of [
         'The import lists 100 for this account.',
         'The import lists $100 for this account.',
+      ]) assert.equal(verdict(batch, plain, reason), false, `rejected: ${reason}`);
+      for (const reason of [
         'Held at the same broker as your other accounts.',
+        'Same institution and account type as your other checking account.',
       ]) assert.equal(verdict(batch, plain, reason), true, `kept: ${reason}`);
-      assert.equal(verdict(batch, w2.id, 'The W-2 names this employer.'), true, 'kept: W-2 from its own question');
-      assert.equal(verdict(batch, pct.id, 'The file shows 12.5% withheld.'), true, 'kept: 12.5% held by the item');
+      assert.equal(verdict(batch, w2.id, 'The W-2 names this employer.'), false, 'rejected: W-2 holds a digit');
+      assert.equal(verdict(batch, w2.id, 'The form names this employer as the payer.'), true, 'kept: plain prose');
+      assert.equal(verdict(batch, pct.id, 'The file shows 12.5% withheld.'), false, 'rejected: no numerals, even one the item holds');
       assert.equal(verdict(batch, pct.id, 'The file shows 12.5 per cent withheld.'), false, 'rejected: per cent is not in the item');
     }));
 
-    test('an item holding -250 and 12.5% keeps those quantities and rejects 250 with the sign dropped', () => withStore(async (s) => {
+    test('an item holding -250 and 12.5% still rejects those quantities and 250 with the sign dropped', () => withStore(async (s) => {
       const { signed } = queueQuantities(s.db);
       const batch = C.pendingItems(s.db);
-      assert.equal(verdict(batch, signed, 'A charge of -250 matches.'), true);
-      assert.equal(verdict(batch, signed, 'The rate is 12.5% in the file.'), true);
+      assert.equal(verdict(batch, signed, 'A charge of -250 matches.'), false);
+      assert.equal(verdict(batch, signed, 'The rate is 12.5% in the file.'), false);
       assert.equal(verdict(batch, signed, 'A charge of 250 matches.'), false);
     }));
 
@@ -346,7 +359,7 @@ describe('guessPending', () => {
       const engine = runtimeEngine(s.db);
       await G.guessPending(s.db, engine, { now: NOW, fake: [script([
         { item: plain, option: 'checking', reason: 'The import reports $100k of income.' },
-        { item: signed, option: 'checking', reason: 'A charge of -250 matches.' },
+        { item: signed, option: 'checking', reason: 'Named like a checking account' },
       ])] });
       assert.equal(count(s.db, 'confirm_guesses'), 2, 'a row for every item sent');
       assert.deepEqual(rowOf(s.db, plain).option_id, null);
