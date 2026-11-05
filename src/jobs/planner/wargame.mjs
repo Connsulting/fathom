@@ -2,16 +2,17 @@
 // December invoice deferral, each value written as a model figure (kind m, src wargame-model) whose
 // locator holds the calculator inputs and steps. brief.mjs stores the returned content.
 //
-// buildWargames(data, out, ctx) -> {salary?, deferral?}; a game whose inputs fail records
-// out.info.wargameInvalid[name] = code (R3-7). Input checks run before any season check.
+// buildWargames(data, out, ctx) -> {salary?, deferral?}; a game whose inputs fail, or any of whose
+// tax runs is blocked (K2: every householdTax run validates retirement contributions at its own
+// income), records out.info.wargameInvalid[name] = code (R3-7) and is not offered. Validity runs
+// before any season check (K3).
 
 import { payrollTax, solo401kRoom, TAX_2026 } from '../../calc/index.mjs';
 import { cents } from '../../store/db.mjs';
 import { sameName, monthOf, yearOf, sum } from './data.mjs';
-import { stepsOf, employerPaid } from './household.mjs';
+import { stepsOf, planInputs, RETIREMENT_BLOCKS } from './household.mjs';
 
 const PLAN_TERMS = 'plan_terms_confirmed';
-const ZERO_PLAN = Object.freeze({ deferral: 0, catchUp: 0, roth: 0, employer: 0, sep: 0 });
 const round1000 = v => Math.round(v / 1000) * 1000;
 const pointId = s => (s % 1000 === 0 ? `s${s / 1000}` : `s${Math.round(s)}`);
 
@@ -65,7 +66,7 @@ function salaryGame(data, out, ctx) {
   const P = corp.P;
   const slug = corp.entity.slug;
   const age = ageOf(corp.person);
-  const plan = c.byPlan[slug] || ZERO_PLAN;
+  const plan = c.byPlan[slug];
   const otherMedicare = f === 'mfj' ? sum(parts.w2.filter(w => w.person !== corp.person).map(w => w.gross)) : 0;
   // MG6, R2-5, R3-5: x is pre-tax room. An affected participant (prior-year sponsor Social Security
   // wages over the threshold) makes catch-ups only as Roth, and none without a confirmed Roth feature.
@@ -75,6 +76,8 @@ function salaryGame(data, out, ctx) {
   const catchOff = affected && rothFact !== true;
   const rothCodes = catchOff ? [rothFact === false ? 'roth_catch_up_unavailable' : 'roth_catch_up_unconfirmed'] : [];
 
+  // K2: a point whose tax run is blocked (a contribution over its limit at that salary, IRC
+  // 404(a)(3), 402(g), 415(c)) returns {blocked} and makes the game invalid; it is never dropped.
   const evaluate = s => out.safe('salaryPoint', () => {
     const pay = payrollTax({ wages: s, filingStatus: f, spouseMedicareWages: otherMedicare });
     const K = cents(P - s - pay.value.employerTotal);
@@ -84,12 +87,11 @@ function salaryGame(data, out, ctx) {
       : [...parts.w2, { person: corp.person, src: `corp:${slug}`, gross: s, agi: s }];
     const biz = parts.biz.map(b => (b.id === slug && b.kind === 'scorp' ? { ...b, agi: K, qbi: K, w2Wages: s } : b));
     const hh = householdTax({ ...parts, w2, biz });
-    if (hh.blocked) return null;
+    if (hh.blocked) return { s, blocked: hh.blocked };
     const payrollNet = cents(pay.value.total - pay.value.additionalMedicare);
     const total = cents(hh.fedTotal + (hh.va ?? 0) + payrollNet);
     const room = solo401kRoom({
-      compensation: s, kind: 'w2', age, allPlanDeferrals: c.all401k, thisPlanDeferrals: cents(plan.deferral + plan.catchUp),
-      thisPlanCatchUp: plan.catchUp, employerContributions: employerPaid(plan), planConfirmed: true, aggregationConfirmed: true,
+      compensation: s, kind: 'w2', age, ...planInputs(c, plan), planConfirmed: true, aggregationConfirmed: true,
       ...(priorWages != null ? { priorYearSponsorWages: priorWages } : {}), ...(catchOff ? { catchUpAllowed: false } : {}),
     });
     const roth = affected && !catchOff ? room.value.catchUp : 0;
@@ -98,7 +100,11 @@ function salaryGame(data, out, ctx) {
     return { s, pay, payrollNet, K, total, x: cents(room.value.total - roth), roth, room, steps };
   });
 
-  const points = salaries.map(evaluate).filter(Boolean);
+  const blockedCode = code => (RETIREMENT_BLOCKS.has(code) ? 'wargame_salary_contribution_over_limit' : code);
+  const evaluated = salaries.map(evaluate);
+  const blockedPoint = evaluated.find(p => p && p.blocked);
+  if (blockedPoint) return invalid(blockedCode(blockedPoint.blocked));
+  const points = evaluated.filter(Boolean);
   // MG6: catch-up treatment unknown until last year's Social Security wages from the business are known.
   if (priorWages == null && points.some(p => p.room.value.catchUp > 0)) {
     out.info.confirm.salary = ['retirement.priorYearFicaWages'];
@@ -108,6 +114,7 @@ function salaryGame(data, out, ctx) {
   let ref = inRange ? points.find(p => p.s === current) : null;
   if (!ref) ref = evaluate(clamp(round1000((lo + hi) / 2)));
   if (!ref) return invalid('inputs_changed');
+  if (ref.blocked) return invalid(blockedCode(ref.blocked));
 
   const content = [];
   for (const p of points) {
@@ -156,47 +163,46 @@ function salaryGame(data, out, ctx) {
 
 // ---------------------------------------------------------------- deferral (S13, R16)
 
+// K3: validity (inputs and every tax run, always executed in every season, writing
+// wargameInvalid) is separate from offering (season, balance year, months left), which is checked
+// only after validity passes.
 function deferralGame(data, out, ctx) {
-  const { clock, owner, parts, entities, accounts, householdTax, retireOver } = ctx;
-  const TY = data.taxYear;
   const invalid = code => { out.info.wargameInvalid.deferral = code; return null; };
-  const inSeason = yearOf(clock) === TY && monthOf(clock) >= 10;
-  // R3-7: input checks first, so a season never hides invalid inputs.
-  if (parts.vaBlocked) return invalid(parts.vaBlocked);
+  const valid = deferralValidity(data, ctx);
+  if (valid.invalid) {
+    if (valid.confirm) out.info.confirm.deferral = valid.confirm;
+    return invalid(valid.invalid);
+  }
+  if (!deferralOffered(data, ctx.clock, valid.cashAccts)) return null;
+  return deferralModel(data, out, ctx, valid);
+}
+
+// Inputs and all runs: the current-year base, next-year base and both runs of each option. Every
+// run goes through householdTax, which validates the retirement contributions at that run's income
+// (this year shifted down, next year shifted up with the same contributions under
+// parameters_2026_proxy); any blocked run makes the game invalid.
+function deferralValidity(data, ctx) {
+  const { owner, parts, entities, accounts, householdTax } = ctx;
+  if (parts.vaBlocked) return { invalid: parts.vaBlocked };
   const corpBiz = parts.biz.find(b => b.kind === 'scorp');
   const soles = parts.biz.filter(b => b.kind === 'sole').sort((a, b) => b.agi - a.agi);
   const b = corpBiz || soles[0];
-  if (!b) return invalid('inputs_changed');
+  if (!b) return { invalid: 'inputs_changed' };
   const e = entities.find(x => x.slug === b.id);
-  if (!e || !(e.sums.income > 0)) return invalid('inputs_changed');
+  if (!e || !(e.sums.income > 0)) return { invalid: 'inputs_changed' };
   if (owner['business.cashBasis'] !== true) {
     if (owner['business.cashBasis'] == null) {
-      if (inSeason) out.info.confirm.deferral = ['business.cashBasis'];
-      return invalid('business.cashBasis');
+      return { invalid: 'business.cashBasis', ...(deferralSeason(data, ctx.clock) ? { confirm: ['business.cashBasis'] } : {}) };
     }
-    return invalid('inputs_changed');
+    return { invalid: 'inputs_changed' };
   }
   const bizAccts = accounts.filter(a => a.kind === 'business' && a.latest);
   const named = bizAccts.filter(a => a.entity && sameName(a.entity, e.name));
   const businesses = entities.filter(x => x.classified && x.lines.length);
   const cashAccts = named.length ? named : businesses.length === 1 ? bizAccts : [];
-  if (!cashAccts.length) return invalid('inputs_changed');
-  // Season checks: outside the last quarter of the tax year the game is simply not offered.
-  if (!inSeason) return null;
-  const cash = sum(cashAccts.map(a => a.latest.amount));
-  const balDate = cashAccts.map(a => a.latest.date).sort().at(-1);
-  if (yearOf(balDate) !== TY) return null;
-  const monthsLeft = 12 - monthOf(balDate);
-  if (monthsLeft < 1) return null;
+  if (!cashAccts.length) return { invalid: 'inputs_changed' };
 
-  const isCorp = b.kind === 'scorp';
-  const m = e.months;
-  const A = cents(e.sums.income / m);
-  const avgPre = (e.sums.net + (isCorp ? e.sums.salary + e.sums.payrollTax : 0)) / m;
-  const monthlyPayroll = isCorp ? cents((e.proj(e.sums.salary) + e.proj(e.sums.payrollTax)) / 12) : 0;
-  const monthlyOut = out.figures['cash.monthlyOut'] ? out.figures['cash.monthlyOut'].v : 0;
-  const need = isCorp ? monthlyPayroll : monthlyOut;
-
+  const A = cents(e.sums.income / e.months);
   const shift = (base, delta) => ({
     ...parts,
     biz: parts.biz.map(x => (x.id === b.id && x.kind === b.kind
@@ -205,27 +211,48 @@ function deferralGame(data, out, ctx) {
   });
   const T = p => {
     const h = householdTax(p);
-    return { total: cents(h.fedTotal + (h.va ?? 0)), steps: h.steps, blocked: h.blocked };
+    return h.blocked ? { blocked: h.blocked } : { total: cents(h.fedTotal + (h.va ?? 0)), steps: h.steps };
   };
   const next = owner['plan.nextYearBusinessIncome'];
   const base27 = typeof next === 'number' && Number.isFinite(next) ? next : b.agi;
-  const codes26 = ['agi_as_magi_proxy'];
-  const codes27 = ['parameters_2026_proxy', ...(base27 === b.agi && typeof next !== 'number' ? ['next_year_flat'] : [])];
-  const t26Base = T(shift(b.agi, 0));
-  const t27Base = T(shift(base27, 0));
   const OPTIONS = [
     { id: 'd0', label: 'Bill it all now', amount: 0 },
     { id: 'd50', label: 'Move half to January', amount: cents(A / 2) },
     { id: 'd100', label: 'Move it all to January', amount: A },
   ];
-  // MG3: every one of the seven tax runs must be complete, or no option is shown.
+  // MG3, K2: every one of the seven tax runs must be complete and valid, or no option is shown.
+  const t26Base = T(shift(b.agi, 0));
+  const t27Base = T(shift(base27, 0));
   const runs = OPTIONS.map(o => ({ o, t26: T(shift(b.agi, -o.amount)), t27: T(shift(base27, o.amount)) }));
   const blockedRun = [t26Base, t27Base, ...runs.flatMap(r => [r.t26, r.t27])].find(t => t.blocked);
-  if (blockedRun) return invalid(blockedRun.blocked);
-  // C2: the stored self-employed plan contributions must stay within the worksheet limit at each
-  // option's lower income this year (IRC 62(a)(6), 404(a)(8), Pub 560); an option that pushes them
-  // over cannot claim the tax cut, so the game is not a current choice.
-  if (runs.some(r => retireOver(shift(b.agi, -r.o.amount)))) return invalid('wargame_contribution_over_limit');
+  if (blockedRun) return { invalid: RETIREMENT_BLOCKS.has(blockedRun.blocked) ? 'wargame_contribution_over_limit' : blockedRun.blocked };
+  return { b, e, A, cashAccts, next, base27, t26Base, t27Base, runs };
+}
+
+const deferralSeason = (data, clock) => yearOf(clock) === data.taxYear && monthOf(clock) >= 10;
+
+// Offering: outside the last quarter of the tax year, or without a balance from this year with a
+// month left, the game is simply not offered.
+function deferralOffered(data, clock, cashAccts) {
+  if (!deferralSeason(data, clock)) return false;
+  const balDate = cashAccts.map(a => a.latest.date).sort().at(-1);
+  return yearOf(balDate) === data.taxYear && 12 - monthOf(balDate) >= 1;
+}
+
+function deferralModel(data, out, ctx, valid) {
+  const { b, e, A, cashAccts, next, base27, t26Base, t27Base, runs } = valid;
+  const TY = data.taxYear;
+  const cash = sum(cashAccts.map(a => a.latest.amount));
+  const balDate = cashAccts.map(a => a.latest.date).sort().at(-1);
+  const monthsLeft = 12 - monthOf(balDate);
+  const isCorp = b.kind === 'scorp';
+  const m = e.months;
+  const avgPre = (e.sums.net + (isCorp ? e.sums.salary + e.sums.payrollTax : 0)) / m;
+  const monthlyPayroll = isCorp ? cents((e.proj(e.sums.salary) + e.proj(e.sums.payrollTax)) / 12) : 0;
+  const monthlyOut = out.figures['cash.monthlyOut'] ? out.figures['cash.monthlyOut'].v : 0;
+  const need = isCorp ? monthlyPayroll : monthlyOut;
+  const codes26 = ['agi_as_magi_proxy'];
+  const codes27 = ['parameters_2026_proxy', ...(base27 === b.agi && typeof next !== 'number' ? ['next_year_flat'] : [])];
 
   put(out, 'wg.deferral.base.income', A, 'Invoice deferral: monthly invoices', {
     calc: 'deferralBase', inputs: { incomeYtd: e.sums.income, months: m },

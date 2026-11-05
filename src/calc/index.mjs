@@ -133,17 +133,51 @@ export function solo401kRoom(inputs) {
   const catchUpAllowed = inputs.catchUpAllowed !== false;
   const catchLimit = !catchUpAllowed || age < p.catchUpAge ? 0 : age >= p.enhancedCatchUpStart && age <= p.enhancedCatchUpEnd ? p.enhancedCatchUp : p.catchUp;
   const catchUp = round(Math.min(positive(catchLimit - positive(allDeferrals - p.employeeDeferral)), positive(availableComp - employee)));
-  const rate = kind === 'w2' ? p.employerRate : p.selfEmployedRate;
-  const employerIncomeCap = kind === 'self-employed'
-    ? positive((base - thisDeferrals - employee - catchUp) / 2 - employerPaid)
-    : positive(base - thisDeferrals - employee - catchUp - employerPaid);
-  const employer = round(Math.min(positive(base * rate - employerPaid), positive(additions - employee), employerIncomeCap));
+  // K1: the employer room is the shared worksheet maximum with this plan's deferrals and catch-ups,
+  // the new room included, less the employer contributions already made.
+  const employerMax = employerLimit({ kind, compensation, regular: regularThisPlan + employee, catchUp: thisCatchUp + catchUp });
+  const employer = round(positive(employerMax.limit - employerPaid));
   return envelope(inputs, { employee, employer, catchUp, total: round(employee + employer + catchUp),
     rothCatchUp: priorWages > p.rothCatchUpPriorWages ? catchUp : 0 },
   [step('Employee regular room', 'minimum of all-plan deferral, compensation and annual-additions headroom', employee),
     step('Catch-up room', 'age-specific catch-up less all-plan catch-ups already made', catchUp),
     step('Employer room', 'minimum of employer rate, compensation and annual-additions headroom', employer),
     ...(catchUpAllowed ? [] : [step('Catch-up not allowed under this plan', 'catch-up limit set to zero', 0)])], ['retirement', 'solo', 'sep']);
+}
+
+// Employer contribution maximum for one sponsor's plans (K1), the one worksheet every room
+// calculator and the self-employed deduction worksheet use. Inputs are the sponsor's plan
+// aggregate: compensation (W-2 wages, or for the self-employed net profit less the deductible half
+// of SE tax, Pub 560 step 3), regular elective deferrals and catch-ups to that employer's plans.
+// Self-employed: IRS Publication 560 chapter 5, Deduction Worksheet for Self-Employed, step 7
+// (min(compensation * reduced rate, compensation limit * plan rate)), step 10 (415(c) dollar limit
+// less deferrals), step 12 (half of compensation less deferrals) and step 13 (the smallest).
+// W-2: IRC 404(a)(3)(A)(i) (plan rate times compensation up to the 401(a)(17) limit), 415(c)(1)
+// (annual additions within the dollar limit and compensation, less deferrals).
+// `limit` is step 13 further held to the compensation left after deferrals and catch-ups (IRC
+// 415(c)(1)(B), 414(v)(2)(A)(ii)); it is below zero when deferrals already exceed compensation.
+export function employerLimit({ kind, compensation, regular = 0, catchUp = 0 }) {
+  if (!['w2', 'self-employed'].includes(kind)) throw new TypeError('Unsupported compensation kind');
+  const p = P.retirement;
+  const comp = money(compensation, 'compensation');
+  const D = money(regular, 'regular');
+  const K = money(catchUp, 'catchUp');
+  const self = kind === 'self-employed';
+  const s7 = round(self ? Math.min(comp * p.selfEmployedRate, p.compensationCeiling * p.employerRate) : Math.min(comp, p.compensationCeiling) * p.employerRate);
+  const s10 = round((self ? p.annualAdditions : Math.min(p.annualAdditions, comp)) - D);
+  const s12 = round(self ? (comp - D) / 2 : comp - D);
+  const s13 = Math.min(s7, s10, s12);
+  const left = round(comp - D - K);
+  const limit = Math.min(s13, left);
+  return {
+    s7, s10, s12, s13, limit,
+    steps: [
+      step('Employer limit by plan rate', self ? 'min(compensation * reduced plan rate, compensation limit * plan rate)' : 'min(compensation, compensation limit) * plan rate', s7),
+      step('Annual additions left for the employer', self ? 'annual additions limit - deferrals' : 'min(annual additions limit, compensation) - deferrals', s10),
+      step('Compensation limit for the employer', self ? 'half of (compensation - deferrals)' : 'compensation - deferrals', s12),
+      step('Employer maximum', 'smallest of the limits above, within compensation - deferrals - catch-ups', limit),
+    ],
+  };
 }
 
 export function sepRoom(inputs) {
@@ -153,12 +187,18 @@ export function sepRoom(inputs) {
   if (!['w2', 'self-employed'].includes(kind)) throw new TypeError('Unsupported compensation kind');
   const halfTax = kind === 'self-employed' ? selfEmploymentTax(inputs).value.deductibleHalf : 0;
   const compensation = kind === 'self-employed' ? positive(money(inputs.netProfit, 'netProfit') - halfTax) : money(inputs.compensation, 'compensation');
-  const rate = kind === 'self-employed' ? P.retirement.selfEmployedRate : P.retirement.employerRate;
   const contributed = money(inputs.employerContributions ?? 0, 'employerContributions');
-  const limit = Math.min(P.retirement.annualAdditions, Math.min(compensation, P.retirement.compensationCeiling) * rate);
-  return envelope(inputs, round(positive(limit - contributed)),
+  const thisDeferrals = money(inputs.thisPlanDeferrals ?? 0, 'thisPlanDeferrals');
+  const thisCatchUp = money(inputs.thisPlanCatchUp ?? 0, 'thisPlanCatchUp');
+  if (thisCatchUp > thisDeferrals) throw new RangeError('thisPlanCatchUp exceeds thisPlanDeferrals');
+  // K1, Pub 560 multiple plans, IRC 415(f): a SEP shares the employer limit with the same
+  // employer's 401(k), so its deferrals there reduce the SEP room.
+  const max = employerLimit({ kind, compensation, regular: thisDeferrals - thisCatchUp, catchUp: thisCatchUp });
+  const room = round(positive(max.limit - contributed));
+  return envelope(inputs, room,
     [step('Adjusted compensation', 'net profit less deductible half SE tax, or eligible wages', compensation),
-      step('SEP room', 'min(annual additions, compensation * applicable rate) less contributions', positive(limit - contributed))], ['retirement', 'sep', 'selfEmployment']);
+      ...max.steps,
+      step('SEP room', 'employer maximum less employer contributions already made', room)], ['retirement', 'sep', 'selfEmployment']);
 }
 
 export function estimatedPaymentSafeHarbor(inputs) {

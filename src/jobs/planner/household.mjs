@@ -4,18 +4,23 @@
 // deduction worksheet.
 //
 // householdTax(parts) -> {agi, deduction, pre, qbi, qbiCarryforward, taxable, fedIncome, ctc, se,
-//   seTotal, addlMedicare, retire, fedTotal, va, vaTaxable, blocked, steps, warnings}
+//   seTotal, addlMedicare, retire, retireByBiz, fedTotal, va, vaTaxable, blocked, steps, warnings};
+//   a run whose retirement contributions fail validation returns only {blocked, steps, warnings}
 // parts: {f, state, persons, w2: [{person, src, gross, agi}], biz: [{id, kind, person, agi, qbi,
-//   seInput, w2Wages, sstb, retire?}], hsaPersonal, itemized, vaItemized, va529Deduction, children,
-//   vaBlocked, qbiLossCarryforward?}
+//   seInput, w2Wages, sstb}], retirement: {person: {byPlan, allRegular, allCatchUp, outsideKnown,
+//   catchUpLimit}}, hsaPersonal, itemized, vaItemized, va529Deduction, children, vaBlocked,
+//   qbiLossCarryforward?}
+// RETIREMENT_BLOCKS: the blocked codes householdTax reports for retirement contributions
 // seTaxByPerson(parts) -> {se: {person: selfEmploymentTax value}, dhByBiz: {bizId: deductible half}, steps}
 // seRetirementWorksheet(inputs) -> {over: false, deduction, s3, steps} | {over: true, failed, steps}
 // employerPaid(plan) -> employer plus SEP contributions already made to one sponsor's plans
+// planInputs(person, plan) -> the room calculators' plan aggregate inputs for one sponsor
 // attributeContributions(owner, businesses) -> {entries: [{...entry, sponsor: {kind, slug}}], unattributed}
+// recordedTypes(sources, person, slug) -> Set of contribution types records already carry
 // contributions(records, corps, attributed, owner) -> {owner|spouse: {allRegular, allCatchUp, all401k,
 //   outsideKnown, byPlan: {slug: {deferral, catchUp, roth, employer, sep}}, ira}}
 
-import { federalIncomeTax, payrollTax, selfEmploymentTax, qbiDeduction, virginiaIncomeTax, TAX_2026 } from '../../calc/index.mjs';
+import { federalIncomeTax, payrollTax, selfEmploymentTax, qbiDeduction, virginiaIncomeTax, employerLimit, TAX_2026 } from '../../calc/index.mjs';
 import { cents } from '../../store/db.mjs';
 import { sameName, monthOf, yearOf, sum } from './data.mjs';
 import { law, stdDeduction, vaStdDeduction } from './law.mjs';
@@ -85,17 +90,25 @@ export function householdTax(parts) {
     if (addlMedicare > 0) steps.push({ label: 'Additional Medicare on wages', formula: 'household wages above the filing threshold * rate', value: addlMedicare });
   }
 
+  // K2: every run validates the retirement contributions against its own income and blocks when
+  // any is over its limit or depends on unknown inputs; the deduction comes from that validation.
+  const plans = retirementPlans(parts, dhByBiz);
+  steps.push(...plans.steps);
+  if (plans.blocked) return { blocked: plans.blocked, steps, warnings };
+  const retireByBiz = plans.byBiz;
+  const biz = parts.biz.map(b => ({ ...b, retire: retireByBiz[b.id] || 0 }));
+
   // MG5: the self-employed plan deduction (IRC 62(a)(6), 404) is above the line, once.
   const dhTotal = cents(Object.values(se).reduce((s, v) => s + v.deductibleHalf, 0));
-  const retire = cents(sum(parts.biz.map(b => b.retire || 0)));
+  const retire = cents(sum(biz.map(b => b.retire)));
   if (retire > 0) steps.push({ label: 'Self-employed retirement deduction', formula: 'deductible plan contributions for self-employed businesses', value: retire });
-  const agi = cents(sum(parts.w2.map(w => w.agi)) + sum(parts.biz.map(b => b.agi)) - dhTotal - retire - (parts.hsaPersonal || 0));
+  const agi = cents(sum(parts.w2.map(w => w.agi)) + sum(biz.map(b => b.agi)) - dhTotal - retire - (parts.hsaPersonal || 0));
   steps.push({ label: 'Adjusted gross income', formula: 'wages + business income - deductible half of SE tax - self-employed retirement deduction - personal HSA contributions', value: agi });
   const deduction = Math.max(stdDeduction(f), parts.itemized || 0);
   const pre = Math.max(0, cents(agi - deduction));
   steps.push({ label: 'Deduction', formula: 'greater of the standard deduction and your itemized estimate', value: deduction });
 
-  const q = qbiComponent(parts, { pre, dhByBiz });
+  const q = qbiComponent({ ...parts, biz }, { pre, dhByBiz });
   steps.push(...q.steps);
   if (q.carryforward > 0) warnings.push('qbi_loss_carryforward');
   const qbi = q.qbi;
@@ -136,7 +149,7 @@ export function householdTax(parts) {
     steps.push(...stepsOf('Virginia income tax', vaEnv));
   }
   return {
-    agi, deduction, pre, qbi, qbiCarryforward: q.carryforward, taxable, fedIncome, ctc, se, seTotal, addlMedicare, retire,
+    agi, deduction, pre, qbi, qbiCarryforward: q.carryforward, taxable, fedIncome, ctc, se, seTotal, addlMedicare, retire, retireByBiz,
     fedTotal, va, vaTaxable, blocked, steps, warnings,
   };
 }
@@ -151,7 +164,7 @@ function qbiComponent(parts, { pre, dhByBiz }) {
   const steps = [];
   const phase = Math.min(1, Math.max(0, pre - Q.threshold[f]) / Q.phaseIn[f]);
   const items = parts.biz.filter(b => b.qbi != null).map(b => {
-    const q = cents(b.qbi - (dhByBiz[b.id] || 0) - (b.retire || 0));
+    const q = cents(b.qbi - (dhByBiz[b.id] || 0) - b.retire);
     const applicable = b.sstb ? 1 - phase : 1;
     const e = cents(q * applicable) || 0;
     steps.push({ label: `QBI (${b.id}): applicable percentage`, formula: b.sstb ? 'specified service business: one - phase-in share' : 'not a specified service business: all of it', value: cents(applicable * 100) });
@@ -200,14 +213,10 @@ export function seRetirementWorksheet({
   const D = num(deferral);
   const K = num(catchUp);
   const s3 = cents(num(netProfit) - num(seDeduction));
-  const s5 = cents(s3 * R.selfEmployedRate);
-  const s6 = cents(R.compensationCeiling * R.employerRate);
-  const s7 = Math.min(s5, s6);
+  // Steps 7, 10, 12 and 13 come from the shared employer worksheet (K1).
   const s9 = Math.min(D, R.employeeDeferral);
-  const s10 = cents(R.annualAdditions - s9);
-  const s11 = cents(s3 - s9);
-  const s12 = cents(s11 / 2);
-  const s13 = Math.min(s7, s10, s12);
+  const lim = employerLimit({ kind: 'self-employed', compensation: Math.max(0, s3), regular: s9, catchUp: K });
+  const s13 = lim.s13;
   const s14 = cents(s3 - s13);
   const s15 = Math.min(s9, s14);
   const s16 = cents(s14 - s15);
@@ -217,14 +226,14 @@ export function seRetirementWorksheet({
   const deduction = cents(E + D + K - num(roth));
   const steps = [
     { label: 'Worksheet step three: net profit less deductible half of SE tax', formula: 'net profit - deductible half of SE tax', value: s3 },
-    { label: 'Worksheet step seven: employer limit', formula: 'min(step three * reduced plan rate, compensation limit * plan rate)', value: s7 },
+    { label: 'Worksheet step seven: employer limit', formula: 'min(step three * reduced plan rate, compensation limit * plan rate)', value: lim.s7 },
     { label: 'Worksheet step thirteen: employer maximum', formula: 'min(step seven, annual additions - deferrals, half of step three less deferrals)', value: s13 },
     { label: 'Worksheet step twenty-one: maximum deductible contribution', formula: 'employer maximum + deferrals + catch-ups that fit - Roth amounts', value: s21 },
   ];
   const tol = 0.005;
-  const le = (a, b) => a <= b + tol;
+  const le = (x, y) => x <= y + tol;
   const checks = [
-    ['employer within the plan rate', le(E, s7)],
+    ['employer within the employer maximum', le(E, s13)],
     ['employer within the annual additions limit', le(E, R.annualAdditions - D)],
     ['employer within half of compensation after deferrals', le(E, (s3 - D) / 2)],
     ['deferrals within compensation after the employer contribution', le(D, s3 - E)],
@@ -239,10 +248,68 @@ export function seRetirementWorksheet({
   return { over: false, deduction, s3, steps };
 }
 
+export const RETIREMENT_BLOCKS = Object.freeze(new Set(['retirement_contribution_over_limit', 'retirement_other_deferrals_missing']));
+
+// K2: retirement contributions validated for one tax run. Each person's plan aggregate per sponsor:
+// a sole proprietorship or partnership plan runs the Publication 560 worksheet on that business's
+// net profit and deductible half of SE tax in this run (its deduction is above the line, IRC
+// 62(a)(6), 404(a)(8)); an S corp plan (or any sponsor paying W-2 wages) is held to the shared
+// employer maximum on the W-2 wages from that sponsor in this run (IRC 404(a)(3)(A)(i), 415(c)),
+// deferrals within those wages, and, when the person's other deferrals are known, the 402(g) and
+// catch-up limits across plans. Elective contributions to a self-employed plan with unknown other
+// deferrals block the run, since the deduction depends on them.
+function retirementPlans(parts, dhByBiz) {
+  const R = TAX_2026.retirement;
+  const byBiz = {};
+  const steps = [];
+  const tol = 0.005;
+  const le = (x, y) => x <= y + tol;
+  for (const p of parts.persons) {
+    const c = parts.retirement && parts.retirement[p];
+    if (!c) continue;
+    for (const [slug, plan] of Object.entries(c.byPlan || {})) {
+      const E = employerPaid(plan);
+      const D = num(plan.deferral);
+      const K = num(plan.catchUp);
+      if (!(E > 0 || D > 0 || K > 0)) continue;
+      const b = parts.biz.find(x => x.id === slug && x.person === p);
+      if (b && b.kind !== 'scorp') {
+        if ((D > 0 || K > 0) && !c.outsideKnown) return { blocked: 'retirement_other_deferrals_missing', steps };
+        const ws = seRetirementWorksheet({
+          netProfit: b.seInput ?? 0, seDeduction: dhByBiz[b.id] || 0, employer: E, deferral: D, catchUp: K, roth: plan.roth,
+          otherDeferrals: cents(c.allRegular - D), otherCatchUp: cents(c.allCatchUp - K), catchUpLimit: c.catchUpLimit,
+        });
+        steps.push(...ws.steps.map(st => ({ ...st, label: `Self-employed plan (${b.id}): ${st.label}` })));
+        if (ws.over) return { blocked: 'retirement_contribution_over_limit', steps };
+        byBiz[b.id] = ws.deduction;
+        continue;
+      }
+      const wages = cents(sum(parts.w2.filter(w => w.person === p && (w.src === `corp:${slug}` || w.src === `corp:${slug}:${p}`)).map(w => w.gross)));
+      const lim = employerLimit({ kind: 'w2', compensation: wages, regular: D, catchUp: K });
+      steps.push(...lim.steps.map(st => ({ ...st, label: `Employer plan (${slug}): ${st.label}`, formula: `${st.formula}, on this run's wages` })));
+      const ok = le(E, lim.limit) && le(D + K, wages)
+        && (!c.outsideKnown || (le(c.allRegular, R.employeeDeferral) && le(c.allCatchUp, c.catchUpLimit)));
+      if (!ok) return { blocked: 'retirement_contribution_over_limit', steps };
+    }
+  }
+  return { byBiz, steps };
+}
+
 // Employer contributions already made to a sponsor's plans (MG5, C1): a SEP and a 401(k) of the same
 // business share one employer limit (Pub 560 deduction limit for multiple plans; IRC 404(a)(7),
 // 415(f)), so every room and worksheet check counts both.
 export const employerPaid = plan => cents(num(plan && plan.employer) + num(plan && plan.sep));
+
+// K1: the whole plan aggregate for one sponsor, as every room calculator takes it: the person's
+// deferrals across all plans, this sponsor's deferrals and catch-ups, and its employer and SEP
+// contributions together.
+export function planInputs(person, plan) {
+  const pl = plan || {};
+  return {
+    allPlanDeferrals: person.all401k, thisPlanDeferrals: cents(num(pl.deferral) + num(pl.catchUp)),
+    thisPlanCatchUp: num(pl.catchUp), employerContributions: employerPaid(pl),
+  };
+}
 
 // Catch-up limit by age (IRC 414(v)(2)(B), Notice 2025-67); unknown age allows none.
 export function catchUpLimitFor(age) {
@@ -327,24 +394,31 @@ export function attributeContributions(owner, businesses) {
   return { entries, unattributed };
 }
 
-// Documents win per sponsor (R3-1): an own-plan fact attributed to S corp X is skipped for the
-// elective types X's payroll documents already carry.
-function coveredTypes(docs) {
-  return new Set([...(docs.some(r => r.deferral > 0 || r.roth > 0) ? ['deferral'] : []), ...(docs.some(r => r.catchUp > 0) ? ['catchup'] : [])]);
+// K4, the one precedence table for fact-versus-record reads: documents and P&L records win. An
+// owner fact of a contribution type already recorded for that person and sponsor is skipped:
+//   deferral  payroll documents (W-2 or paystub) from the sponsor carrying deferrals or Roth deferrals
+//   catchup   payroll documents from the sponsor carrying catch-ups
+//   employer  P&L employer contribution lines of the sponsor; a SEP is the same type
+// Prior-year Social Security wages follow the same rule (priorFicaWages in figures.mjs).
+// sources: {records, corps}.
+export function recordedTypes({ records, corps = [] }, person, slug) {
+  const docs = records.filter(r => r.person === person && r.corp === slug);
+  const types = new Set();
+  if (docs.some(r => r.deferral > 0 || r.roth > 0)) types.add('deferral');
+  if (docs.some(r => r.catchUp > 0)) types.add('catchup');
+  if (corps.some(c => c.person === person && c.entity.slug === slug && c.sums.employer401k > 0)) types.add('employer');
+  return types;
 }
 
 const elective = c => c.type === 'deferral' || c.type === 'catchup';
-
-function corpFacts(attributed, records, person, slug) {
-  const covered = coveredTypes(records.filter(r => r.person === person && r.corp === slug));
-  return attributed.entries.filter(c => c.person === person && c.plan === 'own-corp-401k' && c.sponsor.kind === 'scorp'
-    && c.sponsor.slug === slug && elective(c) && !covered.has(c.type));
-}
+const factType = c => (c.plan === 'sep' || c.type === 'employer' ? 'employer' : c.type);
 
 // Pre-tax owner-set deferrals to S corp `slug` that its payroll documents do not carry (I1). Roth
 // records never lower wages.
-export function factPretax(attributed, records, person, slug) {
-  return cents(sum(corpFacts(attributed, records, person, slug).filter(c => c.roth !== true).map(c => Number(c.amount))));
+export function factPretax(attributed, sources, person, slug) {
+  const recorded = recordedTypes(sources, person, slug);
+  return cents(sum(attributed.entries.filter(c => c.person === person && c.plan === 'own-corp-401k' && c.sponsor.kind === 'scorp'
+    && c.sponsor.slug === slug && elective(c) && !recorded.has(c.type) && c.roth !== true).map(c => Number(c.amount))));
 }
 
 export function contributions(records, corps, attributed, owner) {
@@ -366,11 +440,11 @@ export function contributions(records, corps, attributed, owner) {
     for (const c of facts) {
       const s = c.sponsor;
       if (s.kind === 'ira' || s.kind === 'outside') continue;
+      if (factType(c) !== 'employer' && !elective(c)) continue;
+      if (recordedTypes({ records, corps }, p, s.slug).has(factType(c))) continue;
       const b = plan(s.slug);
       if (c.plan === 'sep') { b.sep += amt(c); continue; }
       if (c.type === 'employer') { b.employer += amt(c); continue; }
-      if (!elective(c)) continue;
-      if (s.kind === 'scorp' && coveredTypes(household.filter(r => r.corp === s.slug)).has(c.type)) continue;
       if (c.type === 'deferral') b.deferral += amt(c); else b.catchUp += amt(c);
       if (c.roth === true) b.roth += amt(c);
     }

@@ -13,8 +13,8 @@ import {
 } from './data.mjs';
 import { law, stdDeduction } from './law.mjs';
 import {
-  householdTax, seTaxByPerson, seRetirementWorksheet, catchUpLimitFor, attributeContributions, payrollRecords, contributions,
-  factPretax, stepsOf, employerPaid,
+  householdTax, seTaxByPerson, catchUpLimitFor, attributeContributions, payrollRecords, contributions,
+  factPretax, stepsOf, planInputs, RETIREMENT_BLOCKS,
 } from './household.mjs';
 import { notesFor } from './assumptions.mjs';
 import { trailingCharitable } from './facts.mjs';
@@ -351,7 +351,7 @@ export function computeFigures(data, facts, ctx) {
   if (attributed.unattributed.some(c => inUnit(c.person))) { blocked.push('retirement_contribution_unattributed'); out.warn('retirement_contribution_unattributed'); }
   for (const c of corps) {
     if (!c.w2 || !c.fromPnl) continue;
-    const pretax = Math.min(c.gross, cents(c.pretax + factPretax(attributed, records, c.person, c.entity.slug)));
+    const pretax = Math.min(c.gross, cents(c.pretax + factPretax(attributed, { records, corps }, c.person, c.entity.slug)));
     c.w2.agi = Math.max(0, cents(c.gross - pretax));
     c.w2.pretax = pretax;
     c.pretax = pretax;
@@ -404,6 +404,11 @@ export function computeFigures(data, facts, ctx) {
     va529Deduction: isVa ? va529Deduction : 0,
     children: ages.filter(a => typeof a === 'number' && a < 17).length,
     vaBlocked,
+    // K2: each person's plan aggregate per sponsor; every householdTax run validates it.
+    retirement: Object.fromEntries(persons.map(p => [p, {
+      byPlan: contrib[p].byPlan, allRegular: contrib[p].allRegular, allCatchUp: contrib[p].allCatchUp,
+      outsideKnown: contrib[p].outsideKnown, catchUpLimit: catchUpLimitFor(ageOf(p)),
+    }])),
     ...(typeof qbiCarry === 'number' && Number.isFinite(qbiCarry) && qbiCarry >= 0 ? { qbiLossCarryforward: qbiCarry } : {}),
   };
   const hasIncome = biz.length > 0 || w2.length > 0;
@@ -411,27 +416,6 @@ export function computeFigures(data, facts, ctx) {
   // Self-employment tax, computed on its own so retirement sizing never depends on the household
   // tax result (R3-6).
   const seInfo = hasIncome ? out.safe('selfEmploymentTax', () => seTaxByPerson(parts)) : null;
-
-  // Self-employed plan deduction per sole or partnership sponsor (MG5, R2-3, R3-2): Publication 560
-  // worksheet on the actual mix; S corp plans never deduct on the 1040.
-  const retireSteps = [];
-  const sePlans = { contrib, inUnit, ageOf };
-  if (seInfo) {
-    for (const { b, missing, ws } of selfEmployedPlans(biz, seInfo, sePlans)) {
-      if (missing) {
-        blocked.push('retirement_other_deferrals_missing');
-        out.warn('retirement_other_deferrals_missing');
-        out.confirm('retirement', 'retirement.otherPlanDeferrals');
-        continue;
-      }
-      if (ws.over) { blocked.push('retirement_contribution_over_limit'); out.warn('retirement_contribution_over_limit'); continue; }
-      b.retire = ws.deduction;
-      retireSteps.push(...ws.steps.map(st => ({ ...st, label: `Self-employed plan (${b.id}): ${st.label}` })));
-    }
-  }
-  // C2: a war game that changes business income re-checks the stored contributions against the
-  // worksheet at the modeled income (IRC 404(a)(8), Pub 560); true when any is over its limit.
-  const retireOver = modeled => selfEmployedPlans(modeled.biz, seTaxByPerson(modeled), sePlans).some(r => r.missing || r.ws.over);
 
   out.info.blocked = [...new Set(blocked)];
   out.info.vaBlocked = vaBlocked;
@@ -456,20 +440,24 @@ export function computeFigures(data, facts, ctx) {
         : soleAny ? { person: soleAny.person, kind: 'sole', entity: soleAny.id }
           : partFirst ? { person: partFirst.person, kind: 'partnership', entity: partFirst.id } : null;
 
+  // The current-year run (K2: it validates the retirement contributions itself; the self-employed
+  // plan deduction, MG5, R2-3, R3-2, comes from that validation).
+  let run = null;
   let hh = null;
   if (hasIncome && !blocked.length) {
-    hh = out.safe('householdTax', () => householdTax(parts));
-    if (!hh) out.info.blocked = ['calc_failed'];
+    run = out.safe('householdTax', () => householdTax(parts));
+    if (!run) out.info.blocked = ['calc_failed'];
     else {
-      for (const w of hh.warnings) out.warn(w);
-      if (hh.blocked) {
-        out.info.blocked = [hh.blocked];
-        out.warn(hh.blocked);
-        hh = null;
-      }
+      for (const w of run.warnings) out.warn(w);
+      if (run.blocked) {
+        out.info.blocked = [run.blocked];
+        out.warn(run.blocked);
+        if (run.blocked === 'retirement_other_deferrals_missing') out.confirm('retirement', 'retirement.otherPlanDeferrals');
+      } else hh = run;
     }
   }
-  if (hh) writeTax(data, out, { hh, parts, records, owner, f, isVa, fedPay, vaPay, retireSteps });
+  const retireBlocked = !!run && RETIREMENT_BLOCKS.has(run.blocked);
+  if (hh) writeTax(data, out, { hh, parts, records, owner, f, isVa, fedPay, vaPay });
   out.info.taxComputed = !!hh;
 
   // Retirement room (R5, R6, S5, S6, MG6, R2-5, R3-3, R3-5, R3-6).
@@ -477,7 +465,7 @@ export function computeFigures(data, facts, ctx) {
   const conf = { planConfirmed: true, aggregationConfirmed: true };
   const zeroPlan = { deferral: 0, catchUp: 0, roth: 0, employer: 0, sep: 0 };
   const planSum = list => list.reduce((acc, b) => Object.fromEntries(Object.keys(zeroPlan).map(k => [k, cents(acc[k] + (b ? b[k] : 0))])), zeroPlan);
-  const sizing = hasIncome && !blocked.length && !!seInfo;
+  const sizing = hasIncome && !blocked.length && !!seInfo && !retireBlocked;
   if (sizing) {
     const soloPerson = corpInUnit ? corpInUnit.person : solePerson;
     if (soloPerson) {
@@ -499,15 +487,17 @@ export function computeFigures(data, facts, ctx) {
     }
     if (!retireMissing.length) {
       const wagesOf = p => sum(w2.filter(w => w.person === p).map(w => w.gross));
-      // C1b: SEP room nets every employer contribution already made by the person's businesses.
-      const sepPaid = p => employerPaid(planSum(soleBizOf(p).map(b => contrib[p].byPlan[b.id])));
+      // C1b, K1: SEP room shares the employer limit with every plan of the same businesses, so it
+      // takes their whole aggregate: deferrals, catch-ups and employer contributions.
       const seps = persons.filter(p => soleByPerson(p) > 0).map(p => out.safe('sepRoom', () => sepRoom({
         kind: 'self-employed', netProfit: soleByPerson(p), filingStatus: f, w2SocialSecurityWages: wagesOf(p), w2MedicareWages: wagesOf(p),
-        employerContributions: sepPaid(p), ...conf,
+        ...planInputs(contrib[p], planSum(soleBizOf(p).map(b => contrib[p].byPlan[b.id]))), ...conf,
       }))).filter(Boolean);
       if (!seps.length && corpInUnit) {
-        const sep = employerPaid(contrib[corpInUnit.person].byPlan[corpInUnit.entity.slug] || zeroPlan);
-        const env = out.safe('sepRoom', () => sepRoom({ kind: 'w2', compensation: corpInUnit.gross, employerContributions: sep, ...conf }));
+        const c = contrib[corpInUnit.person];
+        const env = out.safe('sepRoom', () => sepRoom({
+          kind: 'w2', compensation: corpInUnit.gross, ...planInputs(c, c.byPlan[corpInUnit.entity.slug]), ...conf,
+        }));
         if (env) seps.push(env);
       }
       if (seps.length) {
@@ -517,7 +507,7 @@ export function computeFigures(data, facts, ctx) {
     } else {
       out.confirm('retirement', ...retireMissing);
     }
-    iraRoom(out, { seInfo, persons, w2, biz, contrib, ageOf, f });
+    if (run) iraRoom(out, { seInfo, persons, w2, biz, retireByBiz: run.retireByBiz, contrib, ageOf, f });
   }
   hsaRoom(out, { facts, owner, records, hsaPersonal, hsaAccts, ageOf, ageKey, inUnit });
   if (hh && isVa && hh.va != null && college.some(c => c.capped || c.age70)) va529Figures(out, { hh, parts, college });
@@ -530,7 +520,7 @@ export function computeFigures(data, facts, ctx) {
     const gameCorp = corpInUnit || corps.find(c => inUnit(c.person) && c.P > 0) || null;
     out.model = buildWargames(data, out, {
       clock, f, parts, hh, corp: gameCorp, corps, entities: pnlEntities, owner, facts, contrib, ageOf, ageKey,
-      retireMissing, accounts, householdTax, retireOver,
+      retireMissing, accounts, householdTax,
       priorWages: gameCorp ? priorFicaWages(data, owner, gameCorp.person, gameCorp.entity.name) : null,
     });
   } else {
@@ -548,29 +538,6 @@ export function computeFigures(data, facts, ctx) {
   return finish(out);
 }
 
-// Self-employed plan worksheets (MG5, R2-3, R3-2): one per sole or partnership sponsor with
-// contributions, on that sponsor's net profit and deductible half of SE tax. `missing` when elective
-// contributions meet unknown outside deferrals; otherwise the worksheet result.
-function selfEmployedPlans(biz, seInfo, { contrib, inUnit, ageOf }) {
-  const results = [];
-  for (const b of biz) {
-    if (b.kind === 'scorp' || !inUnit(b.person)) continue;
-    const c = contrib[b.person];
-    const plan = c.byPlan[b.id];
-    if (!plan) continue;
-    const E = employerPaid(plan);
-    const D = plan.deferral;
-    const K = plan.catchUp;
-    if (!(E > 0 || D > 0 || K > 0)) continue;
-    if ((D > 0 || K > 0) && !c.outsideKnown) { results.push({ b, missing: true }); continue; }
-    results.push({ b, ws: seRetirementWorksheet({
-      netProfit: b.seInput ?? 0, seDeduction: seInfo.dhByBiz[b.id] || 0, employer: E, deferral: D, catchUp: K, roth: plan.roth,
-      otherDeferrals: cents(c.allRegular - D), otherCatchUp: cents(c.allCatchUp - K), catchUpLimit: catchUpLimitFor(ageOf(b.person)),
-    }) });
-  }
-  return results;
-}
-
 // MG6, R2-5, R3-3, R3-5: solo 401(k) room for the sized participant. Catch-up treatment follows IRC
 // 414(v)(7)(A): an S corp owner whose prior-year Social Security wages (W-2 box 3, T.D. 10033) from
 // the plan sponsor exceeded the threshold may make catch-ups only as Roth, and none at all without a
@@ -580,8 +547,7 @@ function soloRoomFigures(out, { data, owner, person, corp, compensation, age, co
   const kind = corp ? 'w2' : 'self-employed';
   const priorWages = corp ? priorFicaWages(data, owner, person, corp.entity.name) : 0;
   const base = {
-    compensation, kind, age, allPlanDeferrals: contrib.all401k, thisPlanDeferrals: cents(plan.deferral + plan.catchUp),
-    thisPlanCatchUp: plan.catchUp, employerContributions: employerPaid(plan), ...conf,
+    compensation, kind, age, ...planInputs(contrib, plan), ...conf,
     ...(priorWages != null ? { priorYearSponsorWages: priorWages } : {}),
   };
   const allowed = out.safe('solo401kRoom', () => solo401kRoom(base));
@@ -632,17 +598,18 @@ function soloRoomFigures(out, { data, owner, person, corp, compensation, age, co
   out.put('room.solo401k', cents(pretax + roth), 'm', 'Solo 401(k) room left this year', 'calc:retirement', loc([]));
 }
 
-// MG6: prior-year Social Security wages (box 3) for `person` from the S corp named `corpName`: the
-// owner fact first, else the latest prior-year W-2 from that employer. Box 1 is never used.
+// MG6: prior-year Social Security wages (box 3) for `person` from the S corp named `corpName`. K4
+// precedence (recordedTypes in household.mjs): the latest prior-year W-2 from that employer wins,
+// else the owner fact. Box 1 is never used.
 export function priorFicaWages(data, owner, person, corpName) {
-  const fact = owner['retirement.priorYearFicaWages'];
-  const fv = fact && typeof fact === 'object' ? fact[person] : undefined;
-  if (typeof fv === 'number' && Number.isFinite(fv) && fv >= 0) return fv;
+  const amount = v => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null);
   const docs = data.documents.filter(d => d.docType === 'w2' && Number(d.taxYear) === data.taxYear - 1
     && (d.fields.person === person || (person === 'owner' && d.fields.person == null)) && sameName(d.fields.employer, corpName));
   const doc = docs.at(-1);
-  const v = doc ? doc.fields.socialSecurityWages : undefined;
-  return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null;
+  const recorded = doc ? amount(doc.fields.socialSecurityWages) : null;
+  if (recorded != null) return recorded;
+  const fact = owner['retirement.priorYearFicaWages'];
+  return amount(fact && typeof fact === 'object' ? fact[person] : undefined);
 }
 
 // inc.ytd.total (F8): every income-received figure, P&L entities plus outside wages.
@@ -708,13 +675,13 @@ function monthlyOutflow(data, out) {
   }
 }
 
-function writeTax(data, out, { hh, parts, records, owner, f, isVa, fedPay, vaPay, retireSteps }) {
+function writeTax(data, out, { hh, parts, records, owner, f, isVa, fedPay, vaPay }) {
   // MGN1, D2, D6: per-figure assumption codes.
   const planRate = hh.retire > 0 ? ['plan_rate_max'] : [];
   const fedCodes = ['agi_as_magi_proxy', 'qbi_material_participation', ...(parts.qbiLossCarryforward == null ? ['qbi_no_prior_loss'] : []), ...planRate];
   const vaCodes = ['va_exemptions_omitted', ...planRate];
-  const summary = summarizeParts(parts);
-  const steps = [...retireSteps, ...hh.steps];
+  const summary = summarizeParts(parts, hh);
+  const steps = hh.steps;
   const loc = { calc: 'householdTax', parts: summary, steps, assumptions: fedCodes };
   const vaLoc = { calc: 'householdTax', parts: summary, steps, assumptions: vaCodes };
   out.put('agi.est', hh.agi, 'e', 'Estimated adjusted gross income', 'calc:tax', loc);
@@ -797,11 +764,11 @@ function writeTax(data, out, { hh, parts, records, owner, f, isVa, fedPay, vaPay
   }
 }
 
-function summarizeParts(parts) {
+function summarizeParts(parts, hh) {
   return {
     filingStatus: parts.f, state: parts.state,
     wages: parts.w2.map(w => ({ person: w.person, source: w.src.startsWith('corp:') ? 'own S corp' : 'outside employer', gross: w.gross, agi: w.agi })),
-    businesses: parts.biz.map(b => ({ id: b.id, kind: b.kind, person: b.person, income: b.agi, qbi: b.qbi, seInput: b.seInput, retire: b.retire || 0 })),
+    businesses: parts.biz.map(b => ({ id: b.id, kind: b.kind, person: b.person, income: b.agi, qbi: b.qbi, seInput: b.seInput, retire: hh.retireByBiz[b.id] || 0 })),
     hsaPersonal: parts.hsaPersonal, itemized: parts.itemized || null, va529Deduction: parts.va529Deduction, children: parts.children,
     qbiLossCarryforward: parts.qbiLossCarryforward ?? null,
   };
@@ -820,13 +787,13 @@ function priorYear(data, owner) {
 
 // IRA room (IRC 219(b)(1), (b)(5), 219(c), 219(f)(1) with 401(c)(2)): compensation is wages plus
 // self-employment earnings after the deductible half of SE tax and the self-employed plan deduction.
-function iraRoom(out, { seInfo, persons, w2, biz, contrib, ageOf, f }) {
+function iraRoom(out, { seInfo, persons, w2, biz, retireByBiz, contrib, ageOf, f }) {
   const comp = p => {
     const wages = sum(w2.filter(w => w.person === p).map(w => w.agi));
     const mine = biz.filter(b => b.person === p && b.seInput != null);
     const se = sum(mine.map(b => b.seInput));
     const dh = seInfo.se[p] ? seInfo.se[p].deductibleHalf : 0;
-    const retire = sum(mine.map(b => b.retire || 0));
+    const retire = sum(mine.map(b => retireByBiz[b.id] || 0));
     return cents(wages + Math.max(0, se - dh - retire));
   };
   const joint = f === 'mfj' ? sum(persons.map(comp)) : null;

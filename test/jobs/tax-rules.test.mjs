@@ -340,17 +340,19 @@ const bizLine = (db, id) => fig(db, 'agi.est').locator.parts.businesses.find(b =
 
 describe('MG5 self-employed retirement deduction', () => {
   test('MG5: a 10,000 SEP contribution lowers AGI and QBI for a sole proprietor', () => {
-    // MFJ; spouse wages 150,000; owner sole prop 100,000 with retire 10,000.
+    // MFJ; spouse wages 150,000; owner sole prop 100,000 with a 10,000 SEP in its plan aggregate.
+    // Worksheet (Pub 560): step 3 100,000 - 7,064.78 = 92,935.22; 20% = 18,587.04 >= 10,000, valid.
     // SE: 100,000 x 0.9235 = 92,350; Social Security 11,451.40; Medicare 2,678.15; total 14,129.55;
     // deductible half 7,064.78; no Additional Medicare (92,350 + 150,000 < 250,000).
     // AGI = 250,000 - 7,064.78 - 10,000 = 232,935.22; taxable before QBI 200,735.22.
     // QBI = 100,000 - 7,064.78 - 10,000 = 82,935.22; 20% = 16,587.04; cap 40,147.04.
     // Taxable 184,148.18; tax 2,480 + 9,120 + 83,348.18 x 22% (18,336.60) = 29,936.60.
-    // fedTotal 29,936.60 + 14,129.55 = 44,066.15. (Ignoring retire: AGI 242,935.22, qbi 18,587.04,
+    // fedTotal 29,936.60 + 14,129.55 = 44,066.15. (Ignoring the SEP: AGI 242,935.22, qbi 18,587.04,
     // tax 31,696.60.)
     const hh = H.householdTax(parts({
       w2: [wage('spouse', 150000)],
-      biz: [{ id: 'sole', kind: 'sole', person: 'owner', agi: 100000, qbi: 100000, seInput: 100000, w2Wages: 0, sstb: false, retire: 10000 }],
+      biz: [{ id: 'sole', kind: 'sole', person: 'owner', agi: 100000, qbi: 100000, seInput: 100000, w2Wages: 0, sstb: false }],
+      retirement: { owner: { byPlan: { sole: { sep: 10000 } }, allRegular: 0, allCatchUp: 0, outsideKnown: true, catchUpLimit: 0 } },
     }));
     assert.equal(hh.seTotal, 14129.55);
     assert.equal(hh.agi, 232935.22);

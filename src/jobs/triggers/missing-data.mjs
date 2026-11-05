@@ -27,14 +27,15 @@ const REASONS = Object.freeze({
   va_itemized_missing: ['You itemize federally, so Virginia needs your Virginia itemized estimate too.', 'Enter your Virginia itemized deduction estimate'],
   ctc_refundable_unsupported: ['Your child tax credit is larger than your income tax, and the refundable part is not modeled yet, so tax projections are on hold.', 'Ask your accountant for this year projection, including the refundable child tax credit'],
   retirement_contribution_unattributed: ['A retirement contribution does not say which of your businesses sponsors the plan, so tax projections are on hold.', 'Tell us which business sponsors each retirement contribution'],
-  retirement_contribution_over_limit: ['A self-employed retirement contribution is above what the plan rules allow for your earnings, so tax projections are on hold.', 'Check your retirement contribution amounts with your plan provider or accountant'],
+  retirement_contribution_over_limit: ['A retirement contribution is above what the plan rules allow for your earnings or wages, so tax projections are on hold.', 'Check your retirement contribution amounts with your plan provider or accountant'],
   retirement_other_deferrals_missing: ['We need your deferrals to other workplace plans this year before your self-employed retirement deduction can be figured.', confirmTask('retirement.otherPlanDeferrals')],
   va529_answers_missing: ["We need each college savings account's Virginia answers, including any carryforward, before projecting Virginia tax.", confirmTask('accounts.va529')],
   ira_room_missing: ['IRA contribution room could not be figured for everyone in the household, so the backdoor Roth recommendation is on hold.', 'Check the household ages and income on file'],
   'retirement.otherPlanDeferrals': ['We need your deferrals to other workplace plans this year before sizing retirement room.', confirmTask('retirement.otherPlanDeferrals')],
   'retirement.priorYearFicaWages': ["We need last year's Social Security wages from your business before sizing catch-up room.", confirmTask('retirement.priorYearFicaWages')],
   'retirement.planOffersRoth': ['We need to know whether your plan offers Roth deferrals before sizing catch-up room.', confirmTask('retirement.planOffersRoth')],
-  wargame_contribution_over_limit: ['Moving income to January would leave a self-employed retirement contribution above what the plan rules allow for this year, so this comparison is not a current choice.', 'Check your retirement contribution amounts with your plan provider or accountant'],
+  wargame_contribution_over_limit: ['At one of the incomes this comparison models, this year or next, a retirement contribution would be above what the plan rules allow, so this comparison is not a current choice.', 'Check your retirement contribution amounts with your plan provider or accountant'],
+  wargame_salary_contribution_over_limit: ['At one of the salaries in the approved range, a retirement contribution would be above what the plan rules allow for that salary, so this comparison is not a current choice.', 'Check your retirement contribution amounts with your plan provider or accountant'],
   inputs_changed: ['Its inputs changed, so it is kept for reference and is not a current choice.', 'Review the latest data on your plan'],
 });
 const RETAINED = 'No longer computed from your current data, so it is shown for reference only.';
