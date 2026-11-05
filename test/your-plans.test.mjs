@@ -448,6 +448,54 @@ test('B5: a document with no numbers and a row inventing an amount gives no entr
   assert.ok(reply.provenance.grounding.unverified.includes('$4,250'), JSON.stringify(reply.provenance.grounding));
 });
 
+// A section that states a year, a date, a percent and an amount, for rows that must still be kept.
+const ENROLLMENT = 'Open enrollment for plan year 2027 closes on 2026-12-15. The synthetic plan pays 80 percent after a $1,500 deductible.';
+
+test('B5: a row inventing a year-shaped amount, a year-shaped title number or a date absent from its excerpt is dropped and counted', async t => {
+  const { db, dataDir } = store(t);
+  assert.ok(!/\d/.test(TWO_SECTIONS), 'the first source has no numbers at all');
+  addPlanFile(db, dataDir, { text: TWO_SECTIONS });
+  addPlanFile(db, dataDir, { id: 'file-enrollment', name: 'synthetic-enrollment.md', text: `# Enrollment window\n\n${ENROLLMENT}\n` });
+  const engine = extractScripted(engineFor(db, dataDir), [
+    [
+      row('Dental plan', DENTAL, DENTAL),
+      row('Vision benefit', 'The benefit is 2099 dollars.', VISION),
+      row('Dental plan 2087', DENTAL, DENTAL),
+      row('Vision claims', `${VISION} Claims are due by 2031-04-15.`, VISION),
+      row('Vision deadline', `${VISION} Claims close on April 15, 2031.`, VISION),
+    ],
+    [row('Enrollment window 2027',
+      'For plan year 2027, enrollment closes on 2026-12-15, and the plan pays 80 percent after a $1,500 deductible.', ENROLLMENT)],
+  ]);
+  const result = await buildYourPlans({ db, engine, dataDir, clock: CLOCK });
+  assert.equal(result.written, true);
+  assert.equal(result.dropped, 4, `the four invented rows are dropped: ${JSON.stringify(result.warnings)}`);
+  assert.equal(result.entries, 2);
+  assert.deepEqual(loadPacks([result.dir])[0].entries.map(e => e.title).sort(), ['Dental plan', 'Enrollment window 2027'],
+    'a row whose numbers, dates and years all appear in its excerpt is kept');
+  const bodies = builtBodies(result.dir);
+  for (const invented of ['2099', '2087', '2031-04-15', 'April 15']) assert.ok(!bodies.includes(invented), `no entry carries ${invented}`);
+  const warning = result.warnings.find(w => DROP_WARNING.test(w));
+  assert.ok(warning && /\b4\b/.test(warning), JSON.stringify(result.warnings));
+  assert.equal(getSetting(db, 'yourPlans', null).dropped, 4);
+});
+
+test('B5: after a build drops a row inventing a year-shaped amount, an answer stating it is ungrounded', async t => {
+  const { db, dataDir } = demoPlanStore(t);
+  addPlanFile(db, dataDir, { text: TWO_SECTIONS });
+  const engine = extractScripted(engineFor(db, dataDir), [[
+    row('Dental plan', DENTAL, DENTAL),
+    row('Vision benefit', 'The synthetic vision benefit is 2099 dollars.', VISION),
+  ]]);
+  const result = await buildYourPlans({ db, engine, dataDir, clock: CLOCK });
+  assert.equal(result.written, true);
+  assert.equal(result.dropped, 1, 'the invented row is dropped');
+  assert.ok(!builtBodies(result.dir).includes('2099'));
+  const reply = await answerAfterBuild(db, dataDir, 'Your vision benefit is $2,099.');
+  assert.ok(reply.provenance.packIds.includes('your-plans'));
+  assert.ok(reply.provenance.grounding.unverified.includes('$2,099'), JSON.stringify(reply.provenance.grounding));
+});
+
 test('B3: a document file name with digits never grounds that number in an answer', async t => {
   const { db, dataDir } = demoPlanStore(t);
   const name = 'plan_4821.md';

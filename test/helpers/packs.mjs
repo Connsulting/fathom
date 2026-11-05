@@ -13,11 +13,13 @@ export const NEVER = { fact: 'synthetic.never', op: 'eq', value: true };
 // Always matches: the pack is active with no facts at all.
 export const ALWAYS = { all: [] };
 
-// writeSyntheticPack(dataDir, { id, name, prompt, appliesWhen, covers, entries: [{ file, title, body }] }) -> dir
+// writeSyntheticPack(dataDir, { id, name, version, curator, prompt, appliesWhen, covers, entries: [{ file, title, body }] }) -> dir
 // Replaces any pack already in the data volume pack directory.
 export function writeSyntheticPack(dataDir, {
   id = 'synthetic-pack',
   name = 'Synthetic pack',
+  version = '1.0.0',
+  curator = 'Synthetic test fixture',
   prompt = 'What would change for a synthetic household?',
   appliesWhen = NEVER,
   covers = ['synthetic coverage'],
@@ -28,7 +30,7 @@ export function writeSyntheticPack(dataDir, {
   mkdirSync(dir, { recursive: true });
   for (const e of entries) writeFileSync(join(dir, e.file), e.body);
   const manifest = {
-    id, name, version: '1.0.0', taxYear: 2026, reviewed: '2026-11-05', curator: 'Synthetic test fixture',
+    id, name, version, taxYear: 2026, reviewed: '2026-11-05', curator,
     covers, appliesWhen, whatIf: { prompt },
     entries: entries.map(e => ({ file: e.file, title: e.title, cites: [{ label: 'Synthetic citation', url: 'https://example.invalid/synthetic' }] })),
   };

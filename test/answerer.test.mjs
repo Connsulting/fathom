@@ -306,6 +306,128 @@ test('B3: in a pack conversation, metadata lines of context.entries never ground
   assert.deepEqual(reply.provenance.grounding.unverified, ['4821']);
 });
 
+// ---------------------------------------------------------------- B3: context metadata and account identifiers
+
+// The runtime with every chat call answered by `text`, the first answer and any corrective retry.
+const always = (runtime, text) => scripted(runtime, Array.from({ length: 8 }, () => [{ text }]));
+
+// A synthetic manifest pack whose identifiers and labels carry digits its entry bodies never state.
+const DIGIT_PACK = {
+  id: 'plan4821',
+  name: 'Synthetic plan 7316',
+  version: '3.1.0',
+  curator: 'Synthetic curator 5093',
+  prompt: 'What would a synthetic allowance change?',
+  covers: ['synthetic allowance'],
+  entries: [{
+    file: 'synthetic-allowance.md',
+    title: 'Synthetic allowance',
+    body: '# Synthetic allowance\n\nThe synthetic allowance is $6,175 per year.\n',
+  }],
+};
+
+test('B3: pack id and labels in the conversation context never ground a number in a What if or a follow-up; entry bodies do', async t => {
+  const s = await demoStore(t, {}, { prepare: dataDir => writeSyntheticPack(dataDir, DIGIT_PACK) });
+  assert.ok(s.db.prepare("SELECT id FROM packs_state WHERE id = 'plan4821'").get(), 'the manifest pack has its own packs_state row');
+  for (const e of DIGIT_PACK.entries) {
+    for (const n of ['4821', '4,821', '7316', '7,316', '5093', '5,093']) assert.ok(!e.body.includes(n), `entry bodies are free of ${n}`);
+  }
+  const said = 'Plan 7316 by curator 5093 is worth $4,821, and the allowance is $6,175.';
+  const { engine, requests } = always(s.runtime, said);
+  const answerer = createLiveAnswerer({ engine, packs: s.packs });
+
+  const whatIf = await answerer.whatIf({ db: s.db, packId: 'plan4821' });
+  assert.ok(!whatIf.notice);
+  assert.ok(!whatIf.provenance.packIds.includes('plan4821'), 'the pack is not active, so only the context carries it');
+  assert.ok(requests[0].systemDynamic.includes('plan4821'), 'the model still sees the pack id');
+  const followUp = await answerer.answer({ db: s.db, key: 'pack:plan4821', text: 'Synthetic follow-up' });
+  assert.ok(!followUp.notice);
+
+  for (const [label, reply] of [['What if', whatIf], ['follow-up', followUp]]) {
+    const { unverified } = reply.provenance.grounding;
+    assert.ok(unverified.includes('$4,821'), `${label}: the pack id plan4821 grounds $4,821: ${JSON.stringify(reply.provenance.grounding)}`);
+    assert.ok(unverified.includes('7316'), `${label}: the pack name grounds 7316: ${JSON.stringify(unverified)}`);
+    assert.ok(unverified.includes('5093'), `${label}: the pack curator grounds 5093: ${JSON.stringify(unverified)}`);
+    assert.ok(!unverified.includes('$6,175'), `${label}: the entry body amount still grounds`);
+    const literal = reply.provenance.literals.find(l => l.text === '$6,175');
+    assert.equal(literal && literal.source, 'conversation context', JSON.stringify(reply.provenance.literals));
+  }
+});
+
+test('B3: a rec id in a rec conversation context never grounds a number; its value data does', async t => {
+  const s = await demoStore(t);
+  const base = s.db.prepare("SELECT * FROM recs WHERE id = 'deferral'").get();
+  const recId = 'rec8263';
+  const def = { ...JSON.parse(base.def), id: recId, title: 'Synthetic invoicing review',
+    value: [{ cls: 'cash', text: 'About $2,750 of synthetic cash arrives early' }] };
+  s.db.prepare(`INSERT INTO recs (id, def, status, waiting_on, wake, tasks_done, window_close, window_label, pack_id, sort, updated_at, file_id, parser, locator)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(recId, JSON.stringify(def), base.status, base.waiting_on, base.wake, base.tasks_done, base.window_close, base.window_label,
+      base.pack_id, 999, base.updated_at, base.file_id, base.parser, base.locator);
+  const scenario = buildScenario(s.db);
+  assert.ok(scenario.recs.some(r => r.id === recId), 'the synthetic rec is visible');
+  // Self-check: without its id, the rec context has no 8263 to ground.
+  const { id: _id, ...rest } = await callTool('get_recommendation', { id: recId }, { db: s.db, now: '2026-11-05' });
+  assert.equal(groundAnswer('$8,263', { scenario, data: [rest] }).ok, false, 'only the id carries 8263');
+
+  const said = 'This one is worth $8,263, and about $2,750 arrives early.';
+  const { engine, requests } = always(s.runtime, said);
+  const reply = await createLiveAnswerer({ engine, packs: s.packs }).answer({ db: s.db, key: recId, text: 'Synthetic rec question' });
+  assert.ok(!reply.notice);
+  assert.ok(requests[0].systemDynamic.includes(recId), 'the model still sees the rec id');
+  const { unverified } = reply.provenance.grounding;
+  assert.ok(unverified.includes('$8,263'), `the rec id grounds $8,263: ${JSON.stringify(reply.provenance.grounding)}`);
+  assert.ok(!unverified.includes('$2,750'), 'the value data amount still grounds');
+  const literal = reply.provenance.literals.find(l => l.text === '$2,750');
+  assert.equal(literal && literal.source, 'conversation context', JSON.stringify(reply.provenance.literals));
+});
+
+const asAmount = n => `$${Number(n).toLocaleString('en-US', { maximumFractionDigits: 2 })}`;
+
+test('B3: an account mask from the real list_accounts result never grounds a number; that account balance does', async t => {
+  const s = await demoStore(t);
+  const scenario = buildScenario(s.db);
+  const now = '2026-11-05';
+  const accounts = await callTool('list_accounts', {}, { db: s.db, now });
+  const masked = accounts.filter(a => typeof a.mask === 'string' && /^\d+$/.test(a.mask) && Number.isFinite(a.balance) && a.balance > 0);
+  assert.ok(masked.length > 0, 'the demo store has masked accounts with balances');
+
+  // The household summary carries no masks or account ids, so only the tool result could leak one.
+  const summaryJson = JSON.stringify(await callTool('household_summary', {}, { db: s.db, now }));
+  assert.ok(!/"(?:masks?|accountIds?|account_ids?)"/i.test(summaryJson), 'no mask or account id keys in the summary');
+  for (const a of accounts) assert.ok(!summaryJson.includes(`"${a.id}"`), `the summary does not name account ${a.id}`);
+
+  // Masks nothing else grounds: a baseline answer with no tool call states them all.
+  const baselineText = `Synthetic amounts: ${masked.map(a => asAmount(a.mask)).join(', ')}.`;
+  const baseline = await createLiveAnswerer({ engine: always(s.runtime, baselineText).engine, packs: s.packs })
+    .answer({ db: s.db, key: 'ask', text: 'Synthetic baseline' });
+  const free = new Set(baseline.provenance.grounding.unverified);
+  // ...and that no other field of the tool result states.
+  const stripped = accounts.map(({ mask: _mask, ...rest }) => rest);
+  const account = masked.find(a => free.has(asAmount(a.mask)) && Number(a.mask) !== a.balance
+    && !groundAnswer(asAmount(a.mask), { scenario, toolResults: [{ name: 'list_accounts', args: {}, result: stripped }] }).ok);
+  assert.ok(account, 'some masked account has a mask nothing else grounds');
+  const mask = asAmount(account.mask);
+  const balance = asAmount(account.balance);
+
+  const said = `The account holds ${balance}, and ${mask} is worth noting.`;
+  const { engine, responses } = scripted(s.runtime, [
+    [{ toolCalls: [{ name: 'list_accounts', args: {} }] }, { text: said }],
+    [{ text: said }],
+  ]);
+  const reply = await createLiveAnswerer({ engine, packs: s.packs }).answer({ db: s.db, key: 'ask', text: 'Synthetic accounts question' });
+  assert.ok(!reply.notice);
+  const listed = responses[0].toolResults.find(r => r.name === 'list_accounts');
+  assert.ok(listed && !listed.isError, JSON.stringify(responses[0].toolResults));
+  const real = listed.result.find(a => a.id === account.id);
+  assert.ok(real && real.mask === account.mask, 'the scripted round ran the real tool and its result carries the mask');
+  const { unverified } = reply.provenance.grounding;
+  assert.ok(unverified.includes(mask), `the account mask ${account.mask} grounds ${mask}: ${JSON.stringify(reply.provenance.grounding)}`);
+  assert.ok(!unverified.includes(balance), `the balance ${balance} still grounds`);
+  const literal = reply.provenance.literals.find(l => l.text === balance);
+  assert.equal(literal && literal.source, 'list_accounts', JSON.stringify(reply.provenance.literals));
+});
+
 // ---------------------------------------------------------------- rendering
 
 test('renderAnswer escapes markup, quotes and stray braces, keeps valid tokens, and splits paragraphs on blank lines', () => {
