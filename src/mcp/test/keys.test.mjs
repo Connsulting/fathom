@@ -203,13 +203,21 @@ describe('key service', () => {
   test('verify compares against every stored row with timingSafeEqual', () => {
     const total = rows().length;
     assert.ok(total > 5);
+    // The key under test is created first and several rows are created after it, so a verifier
+    // that returns on the first match would stop before reaching them.
     const firstKey = svc.create({ name: 'First of many' });
+    for (let i = 0; i < 5; i++) {
+      tick();
+      svc.create({ name: `Later key ${i}` });
+    }
     const all = rows().length;
+    assert.ok(all >= total + 6);
+    assert.equal(rows().findIndex(r => r.id === firstKey.record.id), total, 'the matched key sits before the later rows');
     const spy = mock.method(crypto, 'timingSafeEqual');
     syncBuiltinESMExports();
     try {
-      assert.ok(svc.verify(firstKey.key));
-      assert.ok(spy.mock.callCount() >= all, `matched key: ${spy.mock.callCount()} compares for ${all} rows`);
+      assert.equal(svc.verify(firstKey.key).id, firstKey.record.id);
+      assert.ok(spy.mock.callCount() >= all, `matched earlier key: ${spy.mock.callCount()} compares for ${all} rows`);
       spy.mock.resetCalls();
       assert.equal(svc.verify('fathom_' + 'Z'.repeat(43)), null);
       assert.ok(spy.mock.callCount() >= all, `unknown key: ${spy.mock.callCount()} compares for ${all} rows`);
