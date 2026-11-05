@@ -1145,8 +1145,9 @@ maxBatches, fake})` sends pending items with no `confirm_guesses` row in batches
 with purpose `confirm` each (a single structured Messages round with no tools), carrying each
 item's kind, question, options, context without locators and file metadata (name, source kind,
 parser, period). A guess is kept only when its item is in the batch, its option is one of that
-item's options, and its reason is one line of at most 160 characters whose every number appears
-in that item; every item sent gets a row (`option_id` NULL otherwise). It runs only on a live
+item's options, and its basis is one of six fixed codes (`REASON_CODES`); the stored reason is
+the fixed sentence for that code (`REASON_TEXT`), never model text, so no model-written figure
+reaches the card; every item sent gets a row (`option_id` NULL otherwise). It runs only on a live
 engine (or with a per-call fake script in tests) that is on; engine errors stop the run as
 `stopped`. Guesses never answer. It runs only as the scheduler job `confirm-guess` (see "Jobs"):
 daily at 03:00, after an upload or retry that imports a file, Run now, and `npm run confirm:guess`

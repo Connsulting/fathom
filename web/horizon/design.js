@@ -32,6 +32,9 @@ const MORE = [
   ['Household', [['goals', 'Goals'], ['accounts', 'Accounts'], ['advisor', 'Advisor'], ['yearend', 'Year end']]],
   ['System', [['connect', 'Connect'], ['engine', 'Engine'], ['email', 'Email']]]
 ];
+// Phone width: these NAV entries move to the bottom tab bar, in NAV order, with these icons. NAV
+// entries not listed here go to the More menu instead.
+const TAB_ICON = { brief: 'year', plan: 'cal', wargame: 'fork', ask: 'chat', confirm: 'check' };
 
 let api = null;
 let root = null;
@@ -151,7 +154,9 @@ function icon(name) {
     search: '<circle cx="7" cy="7" r="4.25"/><path d="M10.2 10.2L13.5 13.5"/>',
     cal: '<rect x="2.5" y="3.5" width="11" height="10" rx="1.5"/><path d="M2.5 6.5h11M5.5 2v3M10.5 2v3"/>',
     fork: '<circle cx="5" cy="3.5" r="1.5"/><circle cx="11" cy="3.5" r="1.5"/><circle cx="5" cy="12.5" r="1.5"/><path d="M5 5v6M11 5c0 3.5-6 2.5-6 6"/>',
-    stack: '<path d="M8 2.5l5.5 3-5.5 3-5.5-3z"/><path d="M2.5 8.5l5.5 3 5.5-3"/>'
+    stack: '<path d="M8 2.5l5.5 3-5.5 3-5.5-3z"/><path d="M2.5 8.5l5.5 3 5.5-3"/>',
+    year: '<path d="M3.5 10.5a4.5 4.5 0 019 0"/><path d="M1.5 10.5h13M4.5 13h7"/>',
+    chat: '<path d="M2.5 3.5h11v7.5H7l-3 2.5V11H2.5z"/>'
   }[name] || '';
   return `<svg class="h-i" viewBox="0 0 16 16" aria-hidden="true">${p}</svg>`;
 }
@@ -370,16 +375,29 @@ function whoLine() {
   return `<div class="h-who">Signed in as ${esc(name)}${id.login && id.login !== name ? `<span>${esc(id.login)}</span>` : ''}</div>`;
 }
 
+// The label a NAV entry shows, in the top nav and the tab bar alike.
+function navLabel(k, l) {
+  const pending = k === 'confirm' ? Number(api.ingest().pending) || 0 : 0;
+  return pending > 0 ? `${l}<span class="h-nav-n">${pending}</span>` : l;
+}
+
+// Phone-width bottom tab bar: the NAV entries in TAB_ICON, hidden above 720px by CSS.
+function tabBar(active) {
+  const tabs = NAV.filter(([k]) => TAB_ICON[k]).map(([k, l]) =>
+    `<a href="${href(k)}" data-go="${k}" class="${active === k ? 'on' : ''}"${active === k ? ' aria-current="page"' : ''}>${icon(TAB_ICON[k])}<span>${navLabel(k, l)}</span></a>`).join('');
+  return `<nav class="h-tabs" aria-label="Tabs">${tabs}</nav>`;
+}
+
 function shell(inner, active) {
-  const pending = Number(api.ingest().pending) || 0;
-  const badge = (k) => (k === 'confirm' && pending > 0 ? `<span class="h-nav-n">${pending}</span>` : '');
   const link = (k, l) => {
     const hint = switcher.goHint(k);
-    return `<a href="${href(k)}" data-go="${k}" class="${active === k ? 'on' : ''}"${active === k ? ' aria-current="page"' : ''}${hint ? ` title="${esc(`${l} (${hint})`)}"` : ''}>${l}${badge(k)}</a>`;
+    return `<a href="${href(k)}" data-go="${k}" class="${active === k ? 'on' : ''}"${active === k ? ' aria-current="page"' : ''}${hint ? ` title="${esc(`${l} (${hint})`)}"` : ''}>${navLabel(k, l)}</a>`;
   };
   const nav = NAV.map(([k, l]) => link(k, l)).join('');
-  const moreOn = MORE.some((g) => g[1].some((i) => i[0] === active));
-  const groups = MORE.map(([title, items]) => `<div class="h-more-g"><div class="h-more-h">${title}</div>${items.map(([k, l]) => link(k, l)).join('')}</div>`).join('');
+  const rest = NAV.filter(([k]) => !TAB_ICON[k]);
+  const moreOn = MORE.some((g) => g[1].some((i) => i[0] === active)) || rest.some(([k]) => k === active);
+  const screens = rest.length ? `<div class="h-more-g h-more-phone"><div class="h-more-h">Screens</div>${rest.map(([k, l]) => link(k, l)).join('')}</div>` : '';
+  const groups = screens + MORE.map(([title, items]) => `<div class="h-more-g"><div class="h-more-h">${title}</div>${items.map(([k, l]) => link(k, l)).join('')}</div>`).join('');
   const more = `<div class="h-more-wrap"><button type="button" class="h-more-btn${moreOn ? ' on' : ''}" data-more="toggle" aria-expanded="${ui.more}" aria-controls="h-more-p">More${icon('chev')}</button>
     <div class="h-more-p" id="h-more-p" aria-label="More"${ui.more ? '' : ' hidden'}>${whoLine()}${groups}</div></div>`;
   const off = api.engineOn() ? '' : `<div class="h-engine-off">${icon('clock')}Engine off. Proactive jobs are paused. ${goA('engine', 'Engine settings')}</div>`;
@@ -387,7 +405,7 @@ function shell(inner, active) {
     <a class="h-mark" href="${href('brief')}" data-go="brief" aria-label="${esc(api.s.meta.product || 'Fathom')}">${MARK}<span>${esc(api.s.meta.product || 'Fathom')}</span></a>
     <div class="h-navbar"><nav class="h-nav" aria-label="Main">${nav}</nav><span class="h-nav-sep"></span>${more}</div>
     <button type="button" class="h-search-btn" data-keys="switcher" aria-label="Search" title="Search (Ctrl+K)">${icon('search')}</button>
-  </div></header>${off}<main class="h-main">${inner}</main>`;
+  </div></header>${off}<main class="h-main">${inner}</main>${tabBar(active)}`;
 }
 
 function section(title, body, aside = '', cls = '') {
