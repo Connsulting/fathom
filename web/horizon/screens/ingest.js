@@ -50,7 +50,32 @@ export const DECK_KEYS = [
   { key: 'u', label: 'Undo the last answer', action: 'undo' },
   { key: 'Escape', label: 'Back to Year', action: 'leave' }
 ];
-const DECK_ACTION = new Map(DECK_KEYS.map((r) => [r.key, r.action]));
+
+// The deck keys as keyboard registry rows (web/horizon/keys.js), one row per action in DECK_KEYS
+// order, keys in normalizeKey form. run(actionName, event) does the work.
+const DECK_LABEL = {
+  pick: 'Answer with that option', guess: "Take Fathom's guess", next: 'Next card',
+  prev: 'Previous card', undo: 'Undo the last answer', leave: 'Back to Year'
+};
+const active = () => (typeof document === 'undefined' ? null : document.activeElement);
+const typing = (el) => !!el && (el.isContentEditable === true || /^(INPUT|TEXTAREA|SELECT)$/.test(String(el.tagName || '').toUpperCase()));
+const DECK_WHEN = {
+  // Enter on a focused button or link is its native activation.
+  guess: { when: () => !active()?.closest?.('button,a[href]'), sheetWhen: () => true },
+  // Escape closes an open More menu (the global row) and never leaves from a text field.
+  leave: {
+    when: () => !typing(active()) && !(typeof document !== 'undefined' && document.querySelector('.h-more-btn[aria-expanded="true"]')),
+    sheetWhen: () => true
+  }
+};
+export function deckBindings(run) {
+  const rows = new Map();
+  for (const { key, action } of DECK_KEYS) {
+    if (!rows.has(action)) rows.set(action, { keys: [], label: DECK_LABEL[action], group: 'Confirm', ...DECK_WHEN[action], action: (e) => run(action, e) });
+    rows.get(action).keys.push(key.length === 1 ? key : key.toLowerCase());
+  }
+  return [...rows.values()];
+}
 
 // Year banner copy: about five seconds per check, at least a minute.
 export const quickCheckMinutes = (n) => Math.max(1, Math.ceil((n * 5) / 60));
@@ -269,7 +294,7 @@ export function ingestScreens(h) {
       }
       const allDone = !dk.ids.some((id) => unanswered(dk, id));
       const canNext = dk.cur != null && (at < n - 1 || allDone);
-      const hint = '<p class="h-deck-hint"><span class="kb">1 to 9 answer, Enter takes the guess, J and K move, Z undoes, Esc goes to Year</span><span class="tch">Swipe right for the next card, left for the previous one</span></p>';
+      const hint = '<p class="h-deck-hint"><span class="kb">1 to 9 answer, Enter takes the guess, J and K move, Z undoes, Esc goes to Year, ? for all shortcuts</span><span class="tch">Swipe right for the next card, left for the previous one</span></p>';
       const nav = `<div class="h-deck-nav">${btn('← Prev', `data-deck="prev"${at > 0 ? '' : ' disabled'}`, 'ghost')}${hint}${btn('Next →', `data-deck="next"${canNext ? '' : ' disabled'}`, 'ghost')}</div>`;
       deck = `<div class="h-deck">${top}${stack}${nav}</div>`;
     }
@@ -348,21 +373,15 @@ export function ingestScreens(h) {
     return true;
   }
 
-  // Screen keys for the deck; true when the key was handled (the caller prevents the default).
-  function deckKey(e) {
-    if (api.route?.name !== 'confirm' || e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return false;
-    const t = e.target;
-    if (t && (t.isContentEditable || t.matches?.('input,textarea,select'))) return false;
-    const key = e.key && e.key.length === 1 ? e.key.toLowerCase() : e.key;
-    const action = DECK_ACTION.get(key);
-    if (!action) return false;
-    if (key === 'Enter' && t?.closest?.('button,a[href]')) return false;
+  // Runs a deck action from the key registry (rows from deckBindings). Held keys never repeat an answer or an undo.
+  function deckAction(action, e) {
+    if (api.route?.name !== 'confirm') return false;
     const dk = st.deck;
     const cur = dk.cur != null ? dk.data[dk.cur] : null;
-    if (e.repeat && ['pick', 'guess', 'undo'].includes(action)) return true;
+    if (e?.repeat && ['pick', 'guess', 'undo'].includes(action)) return true;
     switch (action) {
       case 'pick': {
-        const o = cur && arr(cur.options)[Number(key) - 1];
+        const o = cur && arr(cur.options)[Number(e?.key) - 1];
         return o ? pick(dk.cur, o.id) : false;
       }
       case 'guess': {
@@ -468,5 +487,5 @@ export function ingestScreens(h) {
     return true;
   }
 
-  return { confirmPage, pendingBanner, addFiles, accountMeta, sourcesSection, handleClick, handleChange, deckKey, handlePointer };
+  return { confirmPage, pendingBanner, addFiles, accountMeta, sourcesSection, handleClick, handleChange, deckAction, handlePointer };
 }

@@ -1371,7 +1371,7 @@ function onDocumentKey(e) {
 // Helpers the screen modules use. Getters, because api, root and ui change on mount.
 const SCREENS = [switcher, chatScreen, packsScreen, engineScreen];
 const KIT = {
-  get api() { return api; }, get root() { return root; }, get ui() { return ui; }, get keys() { return keys; },
+  get api() { return api; }, get root() { return root; }, get ui() { return ui; }, get keys() { return keys; }, get ingest() { return ingest; },
   draw: () => draw(),
   esc, T, X, arr, plural, icon, btn, goA, href, shell, section, pageHead, thread, composer, figHtml, recById,
   openRec, closeRec, decisionList, statusText, setMore, routeNow, visibleRecs
