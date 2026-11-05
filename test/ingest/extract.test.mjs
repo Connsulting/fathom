@@ -807,7 +807,7 @@ describe('withholding recipients (D4, G4)', () => {
     const base = base1099(docType);
     const rows = active(s.db);
     assert.equal(rows.length, 2, `both members' ${docType} withholding rows are kept`);
-    assert.deepEqual(rows.map((t) => [t.payer, t.recipient, t.amount]).sort(), [[`${base}:doc:${ids.a}`, 'unknown', 240], [`${base}:doc:${ids.b}`, 'unknown', 240]]);
+    assert.deepEqual(rows.map((t) => [t.payer, t.recipient, t.amount]).sort(), [[`${base}:doc:${ids.a}`, 'unknown', 240], [`${base}:doc:${ids.b}`, 'unknown', 240]].sort());
     assert.equal(new Set(rows.map((t) => t.dedupe_key)).size, 2);
     for (const t of rows) assert.match(t.source_slot, new RegExp(`^wh:${X.nameKey(PAYER_NAME)}:2032:federal:unknown$`));
     const docs = pendingOf(s.db, 'document_recipient');
