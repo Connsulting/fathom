@@ -10,6 +10,8 @@
 //               or the worker ran out of memory.
 //   failed:     any parse error (no partial text), or the worker died any other way.
 // text is '' for every status but text; pages is the page count when the document opened, else 0.
+// Pages are separated by '\n\f\n' and a form feed appears nowhere else, so
+// text.split('\f') gives one string per page.
 
 import { Worker } from 'node:worker_threads';
 

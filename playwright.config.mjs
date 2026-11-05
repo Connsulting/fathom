@@ -1,14 +1,17 @@
 // Playwright config for the Fathom end-to-end suite.
 // BASE_URL set: run against that server, start nothing locally (smoke receipts).
-// BASE_URL unset: start two demo servers through e2e/serve.mjs, the main one and a January one
-// whose clock is pinned to 2027-01-05 for e2e/january.spec.mjs.
+// BASE_URL unset: start three demo servers through e2e/serve.mjs: the main one, a January one
+// whose clock is pinned to 2027-01-05 for e2e/january.spec.mjs, and a Your plans one whose data
+// directory sits outside the checkout (in the temp directory) for e2e/your-plans.spec.mjs.
 
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { defineConfig } from '@playwright/test';
 
 function portFrom(value, fallback) {
   if (value == null || value === '') return fallback;
   const n = Number(value);
-  if (!Number.isInteger(n) || n < 1 || n > 65534) throw new Error(`E2E_PORT must be an integer port, got ${value}`);
+  if (!Number.isInteger(n) || n < 1 || n > 65533) throw new Error(`E2E_PORT must be an integer port, got ${value}`);
   return n;
 }
 
@@ -16,10 +19,17 @@ const CI = !!process.env.CI;
 const BASE_URL = process.env.BASE_URL || '';
 const PORT = portFrom(process.env.E2E_PORT, 4173);
 const JAN_PORT = PORT + 1;
+const YP_PORT = PORT + 2;
 const baseURL = BASE_URL || `http://127.0.0.1:${PORT}`;
 // Specs read this from testInfo.config.metadata.janBaseURL. Empty means no January server, and
 // e2e/january.spec.mjs skips. JAN_BASE_URL lets a caller point it at a server of its own.
 const janBaseURL = process.env.JAN_BASE_URL || (BASE_URL ? '' : `http://127.0.0.1:${JAN_PORT}`);
+// Specs read these from testInfo.config.metadata. The Your plans server's data directory is
+// deterministic so every evaluation of this config agrees on it. Both are empty when BASE_URL is
+// set, and e2e/your-plans.spec.mjs skips.
+const ypDataDirLocal = join(tmpdir(), 'fathom-e2e-yp-' + PORT);
+const ypBaseURL = BASE_URL ? '' : `http://127.0.0.1:${YP_PORT}`;
+const ypDataDir = BASE_URL ? '' : ypDataDirLocal;
 
 function demoServer(port, dataDir, extraEnv = {}) {
   return {
@@ -43,7 +53,7 @@ export default defineConfig({
   reporter: 'list',
   timeout: 60_000,
   expect: { timeout: 10_000 },
-  metadata: { janBaseURL },
+  metadata: { janBaseURL, ypBaseURL, ypDataDir },
   use: {
     baseURL,
     browserName: 'chromium',
@@ -66,6 +76,7 @@ export default defineConfig({
     ? undefined
     : [
         demoServer(PORT, '.e2e-data'),
-        demoServer(JAN_PORT, '.e2e-data-jan', { FATHOM_CLOCK: '2027-01-05' })
+        demoServer(JAN_PORT, '.e2e-data-jan', { FATHOM_CLOCK: '2027-01-05' }),
+        demoServer(YP_PORT, ypDataDirLocal, { E2E_EXTERNAL: '1' })
       ]
 });

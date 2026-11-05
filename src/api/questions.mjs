@@ -1,6 +1,6 @@
 // The canned question catalog the UI offers as chips: a rec's own follow-ups (rec.qa) in a rec
 // conversation, the suggested Ask questions everywhere else. Used by the ask endpoint to word
-// the owner's question, and by the canned answerer to answer it.
+// the owner's question, and by the fake answer source to script deterministic answers.
 
 import { resolveTokens } from '../shared/tokens.mjs';
 
