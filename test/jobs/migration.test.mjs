@@ -13,8 +13,8 @@ import { openDb, migrate, setSetting, listMigrations, listTables, schemaVersion 
 
 // The latest migration before the jobs-email one: the highest-numbered one below it (later
 // migrations, such as 009-confirm-deck, come after it and are applied by migrate() too).
-const JOBS_EMAIL = listMigrations().find((m) => /jobs-email/.test(m.name)).id;
-const MAIN_LATEST = Math.max(...listMigrations().filter((m) => m.id < JOBS_EMAIL).map((m) => m.id));
+const JOBS_EMAIL = listMigrations().find((m) => /jobs-email/.test(m.name));
+const MAIN_LATEST = Math.max(...listMigrations().filter((m) => m.id < JOBS_EMAIL.id).map((m) => m.id));
 
 // Apply migrations through `last` exactly as migrate() would, recording them in schema_migrations.
 function applyThrough(db, last) {
