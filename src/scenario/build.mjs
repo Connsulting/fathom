@@ -308,6 +308,10 @@ export function buildScenario(db, { clock } = {}) {
 
   const packs = loadPacks(db);
   const onboarding = getSetting(db, 'onboarding', { done: false, step: 0 }) || { done: false, step: 0 };
+  const mode = getSetting(db, 'mode', null) === 'demo' ? 'demo' : 'real';
+  // A real store that already holds data (an imported file or an account) is a returning owner:
+  // it builds as november so the owner lands in the app, not first-run onboarding.
+  const hasData = !!db.prepare('SELECT EXISTS (SELECT 1 FROM files) OR EXISTS (SELECT 1 FROM accounts) AS x').get().x;
   const picks = { ...defaultPicks(wargame), ...(getSetting(db, 'wargame.picks', null) || {}) };
   const engineOn = getSetting(db, 'engine', { on: true });
   const ingest = ingestState(db, { clock: clk });
@@ -359,8 +363,8 @@ export function buildScenario(db, { clock } = {}) {
     email: section(content, 'email'),
     packs: packs.map(p => p.def),
     live: {
-      mode: getSetting(db, 'mode', null) === 'demo' ? 'demo' : 'real',
-      demo: onboarding.done ? 'november' : 'fresh',
+      mode,
+      demo: onboarding.done || (mode === 'real' && hasData) ? 'november' : 'fresh',
       engine: !(engineOn && engineOn.on === false),
       onboardStep: Number.isInteger(onboarding.step) ? onboarding.step : 0,
       picks,

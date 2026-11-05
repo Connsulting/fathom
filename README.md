@@ -34,12 +34,26 @@ November state) and keeps its state across restarts.
 | `FATHOM_EMAIL_TRANSPORT` | `dev` | `dev`, `gmail`, `resend` or `postmark`. |
 | `FATHOM_PUBLIC_URL` | unset | URL MCP clients use to reach this server (http or https, no credentials, query or fragment). Its host is allowed on `/mcp` and every `/api` route. |
 | `FATHOM_ALLOWED_HOSTS` | unset | Comma separated extra host names (`host` or `host:port`) allowed on `/mcp` and every `/api` route. A deployment reached by a DNS name must set this or `FATHOM_PUBLIC_URL`. |
+| `FATHOM_OWNER_LOGINS` | unset | Comma separated Tailscale logins allowed into a real store. Unset on a real store, every page and `/api` route answers 401. |
+| `FATHOM_OWNER_LOGINS_FILE` | unset | Path to a file with the same list, instead of `FATHOM_OWNER_LOGINS` (not both). |
 
 Rebuild the demo store (refuses a real store):
 
 ```bash
 npm run seed:demo
 ```
+
+## Access
+
+Reach the app through `tailscale serve`, which adds `Tailscale-User-Login` to every request. On a
+real store, every page and `/api` route needs a login listed in `FATHOM_OWNER_LOGINS` (or
+`FATHOM_OWNER_LOGINS_FILE`); without a usable list everything but `/healthz` answers 401. `/mcp`
+uses its own bearer keys, and demo stores are open. Also allow the tailnet name through
+`FATHOM_PUBLIC_URL` or `FATHOM_ALLOWED_HOSTS`.
+
+The limit: the header is only trustworthy when `tailscale serve` is the sole path to the app.
+Anything that reaches the pod or a port-forward directly could forge it, so keep ingress
+default-deny and bind any port-forward to loopback.
 
 ## Test
 

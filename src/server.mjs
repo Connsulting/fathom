@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { loadConfig } from './config.mjs';
 import { openMigrated, readStoreMode, createStoreFile, getSetting, setSetting, DB_FILE } from './store/db.mjs';
 import { createHandler } from './api/router.mjs';
+import { loadOwnerLogins, ownerLoginsProblemLine } from './api/identity.mjs';
 import { createCannedAnswerer } from './api/answerer.mjs';
 import { createKeyService, loadServerSecret } from './mcp/keys.mjs';
 import { createMcpHandler } from './mcp/index.mjs';
@@ -78,7 +79,10 @@ export async function startServer(config = loadConfig()) {
   }
   const mcp = createMcpHandler({ db, keys, config });
   const answerer = createCannedAnswerer();
-  const server = http.createServer(createHandler({ db, config, answerer, engine, keys, mcp }));
+  // Real stores need an owner login list; a problem never stops startup, it fails closed (401).
+  const owners = loadOwnerLogins(config);
+  if (getSetting(db, 'mode', null) !== 'demo' && owners.problem) console.error(ownerLoginsProblemLine(owners.problem));
+  const server = http.createServer(createHandler({ db, config, answerer, engine, keys, mcp, owners }));
   try {
     await new Promise((resolveListen, reject) => {
       server.once('error', reject);

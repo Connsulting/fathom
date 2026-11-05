@@ -16,7 +16,7 @@ import { ask, OWNER_OPTIONS } from '../src/ingest/confirm.mjs';
 const REPO = fileURLToPath(new URL('..', import.meta.url));
 const DATA_DIR = join(REPO, '.e2e-data-identity');
 const DB_FILE = join(DATA_DIR, 'fathom.sqlite');
-const PORT = Number(process.env.E2E_IDENTITY_PORT || 4190);
+const PORT = Number(process.env.E2E_IDENTITY_PORT || 4185);
 const BASE = `http://127.0.0.1:${PORT}`;
 const OWNER = 'owner@example.test';
 const HEADER_LOGIN = ' Owner@Example.test ';
@@ -112,6 +112,14 @@ test.describe('without the identity header', () => {
 
 test.describe('signed in through the identity header', () => {
   test.use({ extraHTTPHeaders: { 'Tailscale-User-Login': HEADER_LOGIN, 'Tailscale-User-Name': HEADER_NAME } });
+  // In production tailscale serve adds these headers on the server side; here the browser sends
+  // them on every request, including the cross-origin font requests, whose CORS preflight would
+  // refuse them. Serve the font hosts locally (empty) so only Fathom's own requests matter.
+  test.beforeEach(async ({ context }) => {
+    await context.route(/^https:\/\/fonts\.(googleapis|gstatic)\.com\//, (route) => route.fulfill({
+      status: 200, body: '', headers: { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*' },
+    }));
+  });
 
   test('an empty real store shows onboarding without the sign-in step', async ({ page }) => {
     const res = await page.goto(`${BASE}/`);

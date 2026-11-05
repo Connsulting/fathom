@@ -63,6 +63,11 @@ export function healthz(ctx) {
   return { ok: true, schema: schemaVersion(ctx.db) };
 }
 
+// The owner identity the gate admitted (null on a demo store, which is not gated).
+export function getIdentity(ctx) {
+  return { identity: ctx.identity || null };
+}
+
 export function getScenario(ctx) {
   return scenarioOf(ctx);
 }

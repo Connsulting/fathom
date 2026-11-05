@@ -207,6 +207,8 @@ secrets are read there.
 | `FATHOM_EMAIL_TRANSPORT` | `dev` | `dev`, `gmail`, `resend` or `postmark`. |
 | `FATHOM_PUBLIC_URL` | unset | The URL MCP clients reach this server at (an `http` or `https` URL with no credentials, query or fragment; anything else refuses to start). Its host is allowed on `/mcp` and every `/api` route, and `GET /api/mcp` advertises it with `/mcp` appended. |
 | `FATHOM_ALLOWED_HOSTS` | unset | Comma separated extra `Host` names allowed on `/mcp` and every `/api` route: `host` (any port) or `host:port`. |
+| `FATHOM_OWNER_LOGINS` | unset | Comma or newline separated Tailscale logins admitted on a real store (trimmed, case-insensitive). Unset or blank on a real store fails closed: every page and `/api` route answers 401. See "Owner identity". |
+| `FATHOM_OWNER_LOGINS_FILE` | unset | Path to a file holding the same list (comma or newline separated). Use instead of `FATHOM_OWNER_LOGINS`; setting both, or an unreadable file, fails closed. |
 
 ## Store
 
@@ -341,7 +343,7 @@ live state merged in, plus `live`. It only reads.
 ```
 live = {
   mode: 'demo' | 'real',
-  demo: 'november' | 'fresh',          // 'fresh' while onboarding is not done; the UI forces onboarding
+  demo: 'november' | 'fresh',          // see the live.demo rule below; the UI forces onboarding on 'fresh'
   engine: boolean,                      // settings.engine.on, default true
   onboardStep: int,
   picks: { salary: int, deferral: int },  // war-game selections; default the current/recommended point
@@ -366,9 +368,17 @@ with `api.t` at read time), `refs` are rec ids, `ts` is a display label such as 
 `notice` is true only for the engine-off notice. The demo seed opens each rec conversation with one
 fathom message holding its summary.
 
+### The `live.demo` rule
+
+`live.demo` is `november` when onboarding is done, or when the store is real and `hasData`
+(`EXISTS (SELECT 1 FROM files) OR EXISTS (SELECT 1 FROM accounts)`); otherwise `fresh`. A real store
+that already holds data is a returning owner and lands in the app, not first-run onboarding. Demo
+stores follow onboarding alone.
+
 ## API
 
-All JSON. Every `/api` route (any path equal to `/api` or under `/api/`, including unknown paths,
+All JSON. On a real store every path except `/healthz` and `/mcp` first passes the owner identity
+gate (see "Owner identity"), before the Host allowlist, route matching and static files. Every `/api` route (any path equal to `/api` or under `/api/`, including unknown paths,
 wrong methods and the ingest upload and confirm routes) first passes the Host allowlist described
 under "MCP server": a foreign `Host` gets 403 `{error: 'forbidden host'}` before route matching.
 `/healthz` and static files are exempt. A deployment reached by a DNS name must set
@@ -383,6 +393,7 @@ response is `{scenario, ...}` with the fresh scenario.
 |---|---|---|
 | `GET /healthz` | | `{ok: true, schema: <latest migration id>}` |
 | `GET /api/scenario` | | the scenario with `live` |
+| `GET /api/identity` | | `{identity: {login, name} or null}`. The admitted owner: `login` is the trimmed `Tailscale-User-Login`, `name` the trimmed `Tailscale-User-Name` or else the login. Always `null` on a demo store. |
 | `POST /api/recs/:id/action` | `{action: accept, start, snooze, dismiss, complete, reopen or task, arg?}` | `{scenario}`. `task` toggles task `arg`; `snooze` takes a wake label (default "Next month"). 400 bad action or task index, 404 unknown or hidden rec. Writes `rec_events` (actor `ui`). |
 | `POST /api/wargame/:name/pick` | `{index}` (an index or an option id) | `{scenario}`. `name` is salary or deferral (404 otherwise); 400 out of range. |
 | `POST /api/packs/:id/toggle` | `{}` | `{scenario, status}`. Turning a pack on lifts its hidden recs to proposed; turning it off hides again only the recs it lifted that no other active pack powers. |
@@ -426,8 +437,31 @@ only: any `.` or `..` segment (raw or percent-encoded), dotfile, backslash or sy
 CSP: `default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com;
 style-src-attr 'unsafe-inline'; font-src https://fonts.gstatic.com; img-src 'self' data:;
 connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'`.
-API responses also set `Cache-Control: no-store`. There is no authentication in this item: the app
-is reachable only on the owner's private network.
+API responses also set `Cache-Control: no-store`.
+
+### Owner identity
+
+Trust model. The app is reached through `tailscale serve`, which proxies each request and adds
+`Tailscale-User-Login` and `Tailscale-User-Name` for the signed-in tailnet user. On a real store
+(`settings.mode` is not `demo`, so a store with no mode row is real) every page, static file and
+`/api` route requires a `Tailscale-User-Login` listed in `FATHOM_OWNER_LOGINS` or
+`FATHOM_OWNER_LOGINS_FILE`, compared trimmed and case-insensitively; a header Node joined from
+duplicates never matches. `src/api/identity.mjs` holds the check and the router runs it once, first,
+for every path except exactly `/healthz` (open for probes) and `/mcp` (bearer keys only; it never
+reads the identity header). Demo stores are open. With no usable list (unset, blank, both keys set,
+an unreadable file) the gate fails closed: startup logs one `fathom:` line naming the problem (never
+the file contents, path or error) and every gated request is 401. A refused `/api` request gets
+`{error: 'unauthorized'}`; any other path gets a static Not authorized page with
+`Cache-Control: no-store` (no body for HEAD). Neither echoes the header. Handlers see the admitted
+identity as `ctx.identity` (null on a demo store).
+
+Limit. The header is trustworthy only when the sole path to the app is `tailscale serve`. Anything
+that reaches the pod, its Service or a port-forward directly could forge it. The homelab deployment
+keeps ingress default-deny and binds its port-forward to loopback only; a misconfigured Service or a
+second ingress would break this. The Host allowlist still applies after the gate, so the tailnet
+name must be allowed through `FATHOM_PUBLIC_URL` or `FATHOM_ALLOWED_HOSTS`. Scripts that post
+without the header (such as `scripts/dump.mjs`) get 401 from a real-mode server unless they go
+through `tailscale serve`.
 
 ### MCP server
 
