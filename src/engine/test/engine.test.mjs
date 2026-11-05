@@ -4,6 +4,7 @@ import { createEngine, createMemoryLedger, EngineOffError, BudgetExceededError, 
 import { createRegistryServer } from '../tools.mjs';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { federalIncomeTax } from '../../calc/index.mjs';
 
 const request = { purpose: 'chat', system: 'Use stored figures.', messages: [{ role: 'user', content: 'What is the balance?' }], maxTokens: 128 };
 const now = () => new Date('2026-06-15T12:00:00Z');
@@ -118,4 +119,20 @@ test('concurrent calls sharing a ledger check spend after the prior round record
   const results = await Promise.allSettled([engine.call(request), engine.call(request)]);
   assert.equal(results.filter(r => r.status === 'fulfilled').length, 1);
   assert.equal(ledger.entries.length, 1);
+});
+
+test('public gateway drives a real deterministic calculator through registry, ledger and grounding', async () => {
+  const ledger = createMemoryLedger();
+  const engine = createEngine({ mode: 'fake', ledger, responses: [
+    { toolCalls: [{ name: 'tax', args: { taxableIncome: 50400, filingStatus: 'single' } }], costUsd: 0.01 },
+    { text: 'The federal income tax is $5,800.', costUsd: 0.01 },
+  ] });
+  const tool = { name: 'tax', description: 'Calculate ordinary federal tax on synthetic taxable income.', scope: 'read',
+    inputSchema: { type: 'object', properties: { taxableIncome: { type: 'number', minimum: 0 }, filingStatus: { const: 'single' } },
+      required: ['taxableIncome', 'filingStatus'], additionalProperties: false }, handler: args => federalIncomeTax(args) };
+  const result = await engine.call({ ...request, tools: [tool] });
+  assert.equal(result.toolResults[0].result.value, 5800);
+  assert.ok(result.toolResults[0].result.lawRefs.length);
+  assert.equal(result.grounding.ok, true);
+  assert.equal(ledger.entries.length, 2);
 });

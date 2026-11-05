@@ -96,6 +96,17 @@ test('SEP room has hand-checked employee, self-employed, annual-cap and low-inco
   assert.throws(() => sepRoom({ kind: 'w2', compensation: 100000 }), /confirmed/);
 });
 
+test('retirement separates this-plan catch-ups from annual additions and keeps SE compensation limits', () => {
+  const v = solo401kRoom({ ...confirmed, compensation: 300000, age: 51,
+    allPlanDeferrals: 32500, thisPlanDeferrals: 8000, thisPlanCatchUp: 8000 }).value;
+  assert.equal(v.employee, 0);
+  assert.equal(v.employer, 72000);
+  assert.equal(v.catchUp, 0);
+  const self = solo401kRoom({ ...confirmed, compensation: 30000, age: 40, kind: 'self-employed' }).value;
+  assert.equal(self.employee, 24500);
+  assert.equal(self.employer, 2750);
+});
+
 test('safe harbor deliberately preserves archived annual arithmetic and applicability gates', () => {
   const inputs = { currentYearTax: 68000, priorYearTax: 52000, priorYearAgi: 180000,
     filingStatus: 'mfj', withholding: 22000, paymentsMade: 24000,

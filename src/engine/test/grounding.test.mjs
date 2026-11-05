@@ -27,3 +27,11 @@ test('grounding reports offsets and does not learn numbers from the prose being 
   assert.ok(result.violations.every(v => Number.isInteger(v.index)));
   assert.equal(checkGrounding('Ask the advisor.').ok, true);
 });
+
+test('compound numeric words are checked as an amount and Unicode minus retains sign', () => {
+  assert.equal(checkGrounding('one hundred twenty-five', { data: { amount: 125 } }).ok, true);
+  assert.equal(checkGrounding('twenty-three', { data: [20, 3] }).ok, false);
+  assert.equal(checkGrounding('thirty', { data: [30] }).ok, true);
+  assert.equal(checkGrounding('\u221225', { data: [25] }).ok, false);
+  assert.equal(checkGrounding('\u221225', { data: [-25] }).ok, true);
+});
