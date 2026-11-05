@@ -369,3 +369,37 @@ describe('review fixes, round three', () => {
     }
   });
 });
+
+describe('review fixes, round four', () => {
+  test('AC3: an own-corp deferral record does not reduce W-2 box 1 wages that already exclude it (I1)', async () => {
+    const record = { person: 'owner', plan: 'own-corp-401k', type: 'deferral', roth: false, amount: 10000 };
+    const agiPair = async variant => {
+      const without = S.store({ variant });
+      const withRecord = S.store({ variant: { ...variant, facts: { ...(variant.facts || {}), 'retirement.contributions': [record] } } });
+      await plan(without);
+      await plan(withRecord);
+      const a = figureRow(without, 'agi.est');
+      const b = figureRow(withRecord, 'agi.est');
+      assert.ok(a && b, 'both stores have agi.est');
+      return [a.v, b.v];
+    };
+
+    // A classified S corp with no P&L lines; its wages come only from the W-2.
+    const cedar = 'Cedar Holdings';
+    const [docOnly, docOnlyWithRecord] = await agiPair({
+      entities: [SOLE_PROP],
+      documents: [
+        { docType: 'entity', taxYear: null, fields: { name: cedar, type: 's_corp', owner: 'owner' } },
+        { docType: 'w2', taxYear: 2026, fields: { employer: cedar, person: 'owner', wages: 60000 } },
+      ],
+    });
+    near(docOnlyWithRecord, docOnly, 'S corp without P&L: the record leaves agi.est unchanged');
+
+    // The S corp has P&L lines but no officer salary; wages again come from the W-2.
+    const [noSalary, noSalaryWithRecord] = await agiPair({
+      entities: [{ ...SCORP, expenses: { Software: SCORP.expenses.Software } }, SOLE_PROP],
+      documents: [{ docType: 'w2', taxYear: 2026, fields: { employer: SCORP.name, person: 'owner', wages: 60000 } }],
+    });
+    near(noSalaryWithRecord, noSalary, 'S corp with zero P&L salary: the record leaves agi.est unchanged');
+  });
+});
