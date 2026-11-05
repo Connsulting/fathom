@@ -40,6 +40,17 @@ function typeOk(type, v) {
 }
 
 function check(schema, v, path) {
+  if (schema.anyOf) {
+    let first = null;
+    const ok = schema.anyOf.some(branch => {
+      try { check(branch, v, path); return true; } catch (e) {
+        if (!(e instanceof ToolError)) throw e;
+        first = first || e;
+        return false;
+      }
+    });
+    if (!ok) throw first || new ToolError('bad_input', `${path} does not match any allowed shape`);
+  }
   const types = schema.type == null ? null : [].concat(schema.type);
   if (types && !types.some(t => typeOk(t, v))) throw new ToolError('bad_input', `${path} must be ${types.join(' or ')}`);
   if (schema.enum && !schema.enum.includes(v)) throw new ToolError('bad_input', `${path} must be one of ${schema.enum.join(', ')}`);
@@ -227,7 +238,12 @@ export const tools = [
     name: 'list_recommendations',
     description: 'Recommendations with live status, window and tasks. Optionally only the given status or statuses. Hidden recommendations are never listed.',
     inputSchema: obj({
-      status: { type: ['string', 'array'], items: { type: 'string', enum: STATUSES.filter(s => s !== 'hidden') } },
+      status: {
+        anyOf: [
+          { type: 'string' },
+          { type: 'array', items: { type: 'string', enum: STATUSES.filter(s => s !== 'hidden') } },
+        ],
+      },
     }),
     scope: 'read',
     handler(args, ctx) {
