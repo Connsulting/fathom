@@ -31,6 +31,12 @@ unknown CSVs and broken workbooks return null for model extraction.
    the source's classification without assuming withholding or estimated status.
    `payer` retains the Paid column label so equal payments from two payers survive
    deduplication.
+   `sheetYear` is grounded in the sheet label. The frozen `taxYear` field retains
+   that label with `taxYearBasis: 'sheet_label'` and a `tax_year_assumed` warning.
+   `dateBasis: 'sheet_label'` marks the reporting anchor's year as assumed too.
+   The source does not establish whether sheets mean payment year or tax year.
+   January can contain a prior-year Q4 payment. Neither tax year nor calendar
+   year is confirmed; consumers must resolve the convention before tax math.
 6. Account maps emit `document` rows with `docType: 'account_metadata'` and
    `fields: {account, source}`. Alias-only balances retain the alias as account
    name and leave institution and mask empty for later explicit mapping.
@@ -45,8 +51,11 @@ same-account, same-day, same-amount payments also collide. Callers must retain
 source evidence and review multiplicity before discarding rows. Account mapping
 is explicit; aliases and differently named institutions are not inferred.
 Balance identities include cents so different intraday balances survive. Position
-identity is account, day and symbol. P&L and tax identities include their semantic
-dimensions and amounts. Document fields use canonical key ordering; facts use
+identity is account, day and symbol. P&L identity is entity, month and category;
+tax identity is jurisdiction, sheet year, month and payer. Amount corrections
+retain the same slot key. A same-key, different-amount row is a revision, not an
+additional amount. The pipeline must resolve import order and preserve both
+versions as evidence; this module only computes keys. Document fields use canonical key ordering; facts use
 key and value. No key includes a locator, parser or file identity.
 
 The dependency-free OOXML reader supports ordinary stored or deflated XLSX ZIP

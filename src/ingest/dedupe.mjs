@@ -11,8 +11,8 @@ export function dedupeKey(row) {
     case 'transaction': identity = [accountKey(row.account), row.date, cents(row.amount)]; break;
     case 'balance': identity = [accountKey(row.account), row.date, cents(row.amount)]; break;
     case 'position': identity = [accountKey(row.account), row.asOf, normalize(row.symbol)]; break;
-    case 'pnl_line': identity = [normalize(row.entity), row.period, normalize(row.category), cents(row.amount)]; break;
-    case 'tax_payment': identity = [normalize(row.jurisdiction), row.taxYear, row.date, row.paymentKind, normalize(row.payer), cents(row.amount)]; break;
+    case 'pnl_line': identity = [normalize(row.entity), row.period, normalize(row.category)]; break;
+    case 'tax_payment': identity = [normalize(row.jurisdiction), row.sheetYear, row.date.slice(5, 7), normalize(row.payer)]; break;
     case 'document': identity = [row.docType, row.taxYear, row.fields]; break;
     case 'fact': identity = [row.key, row.value]; break;
     default: throw new TypeError('Unsupported row kind');

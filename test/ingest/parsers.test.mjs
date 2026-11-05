@@ -155,6 +155,36 @@ test('monthly tax matrix keeps both payers, ignores safe-harbor totals and recor
   assert.notEqual(dedupeKey(payment), dedupeKey({ ...payment, payer: 'Spouse' }));
 });
 
+test('January tax rows retain sheet years and mark both year interpretations as assumptions', () => {
+  const { rows, warnings } = run('tax-payments.xlsx');
+  const january = rows.filter((row) => row.date === '2032-01-31');
+  assert.equal(january.length, 4);
+  for (const row of january) {
+    assert.equal(row.sheetYear, 2032);
+    assert.equal(row.taxYearBasis, 'sheet_label');
+    assert.equal(row.dateBasis, 'sheet_label');
+    assert.ok(warnings.some((w) => w.code === 'tax_year_assumed' && w.locator.cell === row.locator.cell));
+  }
+});
+
+test('revised P&L and tax workbook cells retain slot identity across reimports', () => {
+  for (const [originalName, revisedName, category, cell, before, after] of [
+    ['business-pnl.xlsx', 'business-pnl-revised.xlsx', 'Office supplies', null, -35, -50],
+    ['tax-payments.xlsx', 'tax-payments-revised.xlsx', null, 'C5', 225, 250],
+  ]) {
+    const original = run(originalName).rows;
+    const revised = run(revisedName).rows;
+    const matches = (row) => category ? row.category === category : row.locator.cell === cell && row.sheetYear === 2032;
+    const oldRow = original.find(matches), newRow = revised.find(matches);
+    assert.equal(oldRow.amount, before);
+    assert.equal(newRow.amount, after);
+    assert.equal(dedupeKey(oldRow), dedupeKey(newRow));
+    const current = new Map([...original, ...revised].map((row) => [dedupeKey(row), row]));
+    assert.equal(current.size, original.length);
+    assert.equal(current.get(dedupeKey(oldRow)).amount, after);
+  }
+});
+
 test('Excel date epochs and cached formulas produce grounded monthly figures', () => {
   for (const name of ['pnl-epoch-1900.xlsx', 'pnl-epoch-1904.xlsx']) {
     const { rows, warnings } = run(name);

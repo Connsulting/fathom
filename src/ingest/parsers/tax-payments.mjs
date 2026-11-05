@@ -33,8 +33,9 @@ export function parse(file) {
           const date = monthEnd(`${sheet.name}-${String(month).padStart(2, '0')}`);
           if (!date) { warning(warnings, 'invalid_tax_payment', locator); continue; }
           const payer = String(sheet.rows[found.index].cells.get(column).value).trim().replace(/\s+paid$/i, '');
-          rows.push({ kind: 'tax_payment', jurisdiction: group.jurisdiction, taxYear: Number(sheet.name), date, datePrecision: 'month', amount, paymentKind: 'paid', payer, locator });
+          rows.push({ kind: 'tax_payment', jurisdiction: group.jurisdiction, sheetYear: Number(sheet.name), taxYear: Number(sheet.name), taxYearBasis: 'sheet_label', date, datePrecision: 'month', dateBasis: 'sheet_label', amount, paymentKind: 'paid', payer, locator });
           warning(warnings, 'month_precision', locator);
+          warning(warnings, 'tax_year_assumed', locator);
         }
       }
     }
