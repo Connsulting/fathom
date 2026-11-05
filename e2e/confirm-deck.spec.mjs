@@ -1,6 +1,8 @@
 // Confirm deck on the demo build: the nav badge, the Year banner with Start, the card anatomy,
 // the screen keys (pick, guess, next, prev, undo, leave), revisiting and changing an answer,
 // Fathom's stored guess, keys ignored in text inputs, the All caught up state and touch swipes.
+// The deck keys run through the product keyboard registry: the ? sheet lists them, G then C opens
+// the deck, and the quick switcher offers Start confirming while items are pending.
 // Ids, kinds, options and labels come from GET /api/confirm; answers are verified through
 // POST /api/confirm/list. Nothing is hard-coded beyond the pinned copy.
 
@@ -22,6 +24,11 @@ const confirmPost = (r, id, verb) => r.request().method() === 'POST' && new URL(
 const navConfirm = (page) => page.locator('.h-nav a[data-go="confirm"]');
 const option = (page, id, optionId) => page.locator(`button[data-answer="${id}"][data-option="${optionId}"]`);
 const caughtUp = (page) => page.locator('.h-empty', { hasText: 'All caught up' });
+const sheet = (page) => page.getByRole('dialog', { name: 'Keyboard shortcuts' });
+const switcher = (page) => page.getByRole('dialog', { name: 'Quick switcher' });
+const qsInput = (page) => page.locator('.h-qs-host input.h-qs-in');
+const qsOptions = (page) => page.locator('#h-qs-list li.h-qs-o[role="option"]');
+const startConfirming = (page) => qsOptions(page).filter({ has: page.locator('.h-qs-t', { hasText: /^Start confirming$/ }) });
 
 async function pending(request) {
   const res = await request.get('/api/confirm');
@@ -333,6 +340,108 @@ test('answering every card from the keyboard ends at All caught up and clears th
   // Prev from the empty state returns to the last card.
   await page.keyboard.press('k');
   await expect(deckCard(page)).toHaveAttribute('data-item', String(last));
+});
+
+test('? on Confirm lists the deck keys in a Confirm group beside the global keys', async ({ page, request }) => {
+  await openDeck(page, request);
+  await page.keyboard.press('?');
+  const dlg = sheet(page);
+  await expect(dlg).toBeVisible();
+  const groups = (await dlg.locator('section.h-ks-g h3').allTextContents()).map((t) => t.trim());
+  for (const g of ['Global', 'Go to', 'Confirm']) expect(groups, g).toContain(g);
+
+  // One row per deck action, in order, each with its keys as the sheet renders them.
+  const confirm = dlg.locator('section.h-ks-g', { has: page.locator('h3', { hasText: /^Confirm$/ }) });
+  await expect(confirm).toHaveCount(1);
+  const rows = confirm.locator('li.h-ks-r');
+  const expected = [
+    ['answer', ['1', '2', '3', '4', '5', '6', '7', '8', '9']],
+    ['guess', ['Enter']],
+    ['next', ['J', 'Right']],
+    ['previous', ['K', 'Left']],
+    ['undo', ['Z', 'U']],
+    ['leave', ['Esc']]
+  ];
+  await expect(rows).toHaveCount(expected.length);
+  for (const [i, [name, kbds]] of expected.entries()) {
+    await expect(rows.nth(i).locator('.h-ks-l'), `${name} row label`).toHaveText(/\S/);
+    await expect(rows.nth(i).locator('kbd'), `${name} row keys`).toHaveText(kbds);
+  }
+
+  // The global rows are still listed.
+  const global = dlg.locator('section.h-ks-g', { has: page.locator('h3', { hasText: /^Global$/ }) });
+  for (const label of ['Open the quick switcher', 'Show keyboard shortcuts', 'Close or go back']) {
+    await expect(global.locator('.h-ks-l', { hasText: label }), label).toHaveCount(1);
+  }
+  const goTo = dlg.locator('section.h-ks-g', { has: page.locator('h3', { hasText: /^Go to$/ }) });
+  await expect(goTo.locator('li.h-ks-r', { has: page.locator('.h-ks-l', { hasText: /^Confirm$/ }) }).locator('kbd')).toHaveText(['G then C']);
+
+  await page.keyboard.press('Escape');
+  await expect(sheet(page)).toBeHidden();
+  await expect(page).toHaveURL(/#\/confirm$/);
+});
+
+test('G then C from Year opens the deck', async ({ page, request }) => {
+  const items = await pending(request);
+  await gotoRoute(page, 'brief');
+  await blur(page);
+  await page.keyboard.press('g');
+  await page.keyboard.press('c');
+  await expect(page).toHaveURL(/#\/confirm$/);
+  await expect(page.locator('.h-deck')).toBeVisible();
+  await expect(deckProgress(page)).toHaveText(`1 of ${items.length}`);
+});
+
+test('the quick switcher offers Start confirming with the pending count and opens the deck', async ({ page, request }) => {
+  const items = await pending(request);
+  expect(items.length).toBeGreaterThanOrEqual(1);
+  await gotoRoute(page, 'brief');
+  await blur(page);
+  await page.keyboard.press('Control+k');
+  await expect(switcher(page)).toBeVisible();
+  await expect(qsInput(page)).toBeFocused();
+  await qsInput(page).fill('start conf');
+  const row = startConfirming(page);
+  await expect(row).toHaveCount(1);
+  await expect(qsOptions(page).first()).toHaveText(/^Start confirming/);
+  await expect(row.locator('.h-qs-s')).toHaveText(`${items.length} to check`);
+  await page.keyboard.press('Enter');
+  await expect(switcher(page)).toBeHidden();
+  await expect(page).toHaveURL(/#\/confirm$/);
+  await expect(page.locator('.h-deck')).toBeVisible();
+  await expect(deckProgress(page)).toHaveText(`1 of ${items.length}`);
+});
+
+test('Start confirming is absent from the quick switcher when nothing is pending', async ({ page, request }) => {
+  await answerAllViaApi(request);
+  expect(await pending(request)).toEqual([]);
+  await gotoRoute(page, 'brief');
+  await page.reload();
+  await expect(page.locator('header.h-top')).toBeVisible();
+  await blur(page);
+  await page.keyboard.press('Control+k');
+  await expect(switcher(page)).toBeVisible();
+  // Liveness: the Actions group still renders its other rows.
+  await expect(qsOptions(page).filter({ has: page.locator('.h-qs-t', { hasText: /^Show keyboard shortcuts$/ }) })).toHaveCount(1);
+  await expect(startConfirming(page)).toHaveCount(0);
+  await qsInput(page).fill('start conf');
+  await expect(startConfirming(page)).toHaveCount(0);
+});
+
+test('one key press answers exactly one item: the deck keys have a single handler', async ({ page, request }) => {
+  const { items } = await openDeck(page, request);
+  const first = items[0];
+  const answers = [];
+  page.on('request', (r) => {
+    if (r.method() === 'POST' && /^\/api\/confirm\/[^/]+\/answer$/.test(new URL(r.url()).pathname)) answers.push(new URL(r.url()).pathname);
+  });
+  await pressToAnswer(page, '1', first.id);
+  // Give a second handler time to post before counting.
+  await page.waitForTimeout(500);
+  expect(answers).toEqual([`/api/confirm/${first.id}/answer`]);
+  const answered = (await allItems(request)).filter((i) => i.status === 'answered');
+  expect(answered.map((i) => i.id), 'one answered item').toEqual([first.id]);
+  expect(answered[0].answer).toBe(first.options[0].id);
 });
 
 test.describe('confirm deck on a phone', { tag: ['@mobile', '@mobile-only'] }, () => {
