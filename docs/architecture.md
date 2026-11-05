@@ -656,9 +656,18 @@ included.
    written. `packs/your-plans/` is gitignored.
 2. Sources: `documents` with `doc_type` plan or benefits (their file, or `fields.text` named
    `document-<id>` when the row has no file) plus the files named in `fileIds` (an unknown id warns).
-   `stored_path` resolves against `dataDir` and must stay inside it after symlinks. Text (`text/*`,
-   `.md`, `.txt`) and PDF (`application/pdf` or `%PDF-` magic) are read; anything else warns.
-   Warnings never carry document text.
+   Stored files are read the way ingest reads its own uploads: through the vault
+   (`readStoredFile`, `stored_path` must be `files/<id>.bin`, the file id is the associated data)
+   under the data key, which the builder takes as `key` (the API handler and the CLI load it with
+   `loadDataKey` from `FATHOM_DATA_KEY_FILE` or the demo store's generated key, as the ingest
+   handlers do; a missing key is a 409 or a CLI failure with the vault's message). A file that
+   fails authentication, or cannot be read, is skipped with a warning naming it, and nothing from it
+   reaches the engine. Text (`text/*`, `.md`, `.txt`) is read as UTF-8. A PDF (`application/pdf`
+   or `%PDF-` magic) is read through ingest's `pdfText`: with a text layer, its pages (separated by
+   a form feed in `pdfText`'s text) go to the engine as one text document with a `Page N` line
+   opening each page; an `image_only` PDF is skipped with one warning that it has no text layer,
+   and an `incomplete` or `failed` one with one warning that its text layer could not be read,
+   both before any model call. Anything else warns. Warnings never carry document text.
 3. Each source goes through `engine.extract` with rows `{title, body, excerpt, page, taxYear?}`,
    `excerpt` the verbatim source text the row is drawn from. Extracted entries must match the
    document. For a text source a row is kept only when (a) its excerpt, whitespace-normalized
@@ -671,9 +680,9 @@ included.
    when the excerpt has the same words with the same unit kind (percent-marked or not). So "The benefit is 2099 dollars" from a numberless source
    is dropped; and (c) an
    occurrence of the excerpt is on `row.page`, counting `Page N` marker lines before it (1 when there
-   are none). A PDF source cannot be checked (the code holds no PDF text), so all its rows are
-   dropped with one warning that PDF sections cannot be checked against the document yet and a text
-   copy can be uploaded instead. Every dropped row is counted in `dropped`, a warning per source says
+   are none). A PDF's rows get the same three checks against its text layer, and its page check
+   uses the PDF's own page boundaries: only the `Page N` lines the builder inserts at each page
+   start count, so a `Page N` line printed inside a page never moves it. Every dropped row is counted in `dropped`, a warning per source says
    how many sections did not match the document (no document text), `settings.yourPlans` records
    `dropped`, and the Packs Your plans result line shows "N sections were dropped because they did
    not match the document." when N > 0. Each kept row becomes `NN-<slug>.md` holding `# <title>`, the body, `Source: <file name>, page <n>`, `Tax year`

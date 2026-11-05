@@ -9,7 +9,7 @@ import { buildScenario, clockNow, loadContent, defaultPicks, wargameLists } from
 import { ACTION_STATUS, packStatus } from '../shared/rules.mjs';
 import { escapeUserText } from '../shared/tokens.mjs';
 import { seedDemo } from '../../demo/seed.mjs';
-import { clearStoredFiles } from '../ingest/vault.mjs';
+import { clearStoredFiles, loadDataKey, VaultError } from '../ingest/vault.mjs';
 import { HttpError } from './http.mjs';
 import { findQuestion, isIndex } from './questions.mjs';
 import { whatIfOwnerText } from './answerer.mjs';
@@ -234,8 +234,9 @@ export function setCap(ctx) {
 }
 
 // POST /api/your-plans/build: extract the owner's plan and benefits documents into the private
-// Your plans pack. Refused (409) while the engine is off, over the cap, or when the data
-// directory is inside the repository.
+// Your plans pack. Refused (409) while the engine is off, over the cap, when the data key is
+// unavailable (the vault's message), or when the data directory is inside the repository. The data
+// key is loaded the way the ingest handlers load it, so stored uploads are read through the vault.
 export async function yourPlansBuild(ctx) {
   const engine = need(ctx, 'engine');
   const { fileIds = [] } = ctx.body;
@@ -243,9 +244,16 @@ export async function yourPlansBuild(ctx) {
     throw new HttpError(400, `fileIds must be at most ${MAX_FILE_IDS} file id strings`);
   }
   if (!engine.isOn()) throw new HttpError(409, 'The engine is off, so Your plans cannot be built. Switch it on first.');
+  let key;
+  try {
+    key = await loadDataKey({ dataDir: ctx.config.dataDir, keyFile: ctx.config.dataKeyFile, mode: getSetting(ctx.db, 'mode', null) === 'demo' ? 'demo' : 'real' });
+  } catch (e) {
+    if (e instanceof VaultError) throw new HttpError(409, e.message);
+    throw e;
+  }
   let result;
   try {
-    result = await buildYourPlans({ db: ctx.db, engine, dataDir: ctx.config.dataDir, fileIds,
+    result = await buildYourPlans({ db: ctx.db, engine, dataDir: ctx.config.dataDir, key, fileIds,
       clock: (ctx.config && ctx.config.clock) || undefined });
   } catch (e) {
     if (e instanceof YourPlansRefusal) throw new HttpError(409, e.message);

@@ -1,24 +1,28 @@
 // The private "Your plans" knowledge pack, built from the owner's own plan and benefits documents
 // into <dataDir>/packs/your-plans/ (the data volume, never the repository).
 //
-// buildYourPlans({ db, engine, dataDir, fileIds, clock }) -> { written, dir, entries, sources: [{fileId, name}], warnings, dropped }
+// buildYourPlans({ db, engine, dataDir, key, fileIds, clock }) -> { written, dir, entries, sources: [{fileId, name}], warnings, dropped }
 // fakeExtractRows(text) -> [{ title, body, excerpt, page }]   (the fake engine's extraction)
 //
 // Sources are documents with doc_type plan or benefits (their file, or fields.text when a row has
-// no file) plus any extra files named by id. A stored_path resolves against dataDir and must stay
-// inside it after symlinks. Each source goes through engine.extract; each row becomes one entry
-// citing `<file name>, page <n>` at https://your-plans.invalid/<fileId>?page=<n> (a reserved host
-// that never resolves; the UI shows it as plain text). A row is kept only when its verbatim excerpt
-// is in the source text (whitespace-normalized), every number in its title and body is in the
-// excerpt (every digit run, years and dates included, with no prose exemptions), and the excerpt
-// sits on the row's page (Page N markers before it); every other row is
-// dropped and counted. PDF sources cannot be checked yet, so their rows are all dropped with one
-// warning asking for a text copy. The pack is written to a temporary sibling,
+// no file) plus any extra files named by id. Files are read the way ingest reads its own uploads:
+// through the vault (readStoredFile) under the data key `key`, with the file id as associated
+// data, so a stored file that fails authentication is skipped with a warning and nothing from it
+// reaches the engine. A PDF is read through ingest's text layer (pdfText): its pages go to the
+// engine as one text document with a `Page N` line opening each page, and the page check uses the
+// PDF's own page boundaries; an image-only PDF (no text layer) or an unreadable one is skipped with
+// one warning before any model call. Each source goes through engine.extract; each row becomes one
+// entry citing `<file name>, page <n>` at https://your-plans.invalid/<fileId>?page=<n> (a reserved
+// host that never resolves; the UI shows it as plain text). A row is kept only when its verbatim
+// excerpt is in the source text (whitespace-normalized), every number in its title and body is in
+// the excerpt (every digit run, years and dates included, with no prose exemptions), and the
+// excerpt sits on the row's page (Page N markers before it in a text file, the page boundaries in
+// a PDF); every other row is dropped and counted. The pack is written to a temporary sibling,
 // validated with loadPacks, then swapped in, and settings['packs.generation'] is bumped so every
 // running server refreshes. The target must resolve outside the repository entirely. Warnings
 // never carry document text.
 
-import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadPacks } from './index.mjs';
@@ -26,6 +30,8 @@ import { yourPlansDir } from './live.mjs';
 import { getSetting, setSetting, parseJson } from '../store/db.mjs';
 import { resolveClock } from '../scenario/build.mjs';
 import { checkGrounding } from '../engine/grounding.mjs';
+import { readStoredFile, VaultError } from '../ingest/vault.mjs';
+import { pdfText } from '../ingest/pdftext.mjs';
 
 const REPO_ROOT = fileURLToPath(new URL('../../', import.meta.url)).replace(/[\\/]$/, '');
 const CITE_HOST = 'https://your-plans.invalid/';
@@ -79,20 +85,43 @@ export function fakeExtractRows(text) {
 
 // ---------------------------------------------------------------- the excerpt check
 
-// The source text whitespace-normalized (runs collapsed to one space, trimmed), with the page each
-// stretch is on: breaks[i] = [normalized index where page starts, page].
-function normalizedSource(text) {
+// The source lines whitespace-normalized (runs collapsed to one space, trimmed) into one string,
+// with the page each stretch is on: breaks[i] = [normalized index where page starts, page].
+// pageOf(line, index) is the page a line opens, or null.
+function normalizedSource(lines, pageOf) {
   let norm = '';
   const breaks = [[0, 1]];
-  for (const line of String(text ?? '').split(/\r?\n/)) {
+  lines.forEach((line, index) => {
     const words = line.trim().split(/\s+/).filter(Boolean);
-    if (!words.length) continue;
+    if (!words.length) return;
     if (norm) norm += ' ';
-    const mark = PAGE_MARK.exec(line);
-    if (mark) breaks.push([norm.length, Math.max(1, Number(mark[1]))]);
+    const page = pageOf(line, index);
+    if (page) breaks.push([norm.length, page]);
     norm += words.join(' ');
-  }
+  });
   return { norm, breaks };
+}
+
+const lines = text => String(text ?? '').split(/\r?\n/);
+
+// A text file's pages: `Page N` marker lines.
+function textSource(text) {
+  const markOf = line => { const mark = PAGE_MARK.exec(line); return mark ? Math.max(1, Number(mark[1])) : null; };
+  return { document: { type: 'text', text }, checked: normalizedSource(lines(text), markOf) };
+}
+
+// A PDF text layer's pages (pdfText separates them with a form feed): the engine sees each page
+// opened by a `Page N` line, and only those lines are page breaks, so a `Page 3` line printed
+// inside a page never moves the page check.
+function pdfSource(layerText) {
+  const all = [];
+  const opens = new Map();
+  layerText.split('\f').forEach((page, i) => {
+    if (all.length) all.push('');
+    opens.set(all.length, i + 1);
+    all.push(`Page ${i + 1}`, '', ...lines(page.trim()));
+  });
+  return { document: { type: 'text', text: all.join('\n') }, checked: normalizedSource(all, (_, index) => opens.get(index) ?? null) };
 }
 
 const normalize = s => String(s ?? '').replace(/\s+/g, ' ').trim();
@@ -172,44 +201,56 @@ function guardTarget(dataDir) {
 
 const isText = (mime, name) => /^text\//i.test(mime || '') || ['.md', '.txt', '.markdown'].includes(extname(name || '').toLowerCase());
 const isPdf = (mime, bytes) => (mime || '').toLowerCase() === 'application/pdf' || bytes.subarray(0, 5).toString('latin1') === '%PDF-';
+const AUTH_FAILED = 'file failed authentication';
 
-function readFileSource(file, dataDir, warnings) {
+// One stored upload, decrypted by the vault exactly as ingest reads its own files (the stored path
+// must be files/<id>.bin and the file id is the associated data). Text files are read as UTF-8 and
+// PDFs through their text layer; anything else, or any read, authentication or text layer failure,
+// warns (naming the file, never its text) and yields no source.
+async function readFileSource(file, dataDir, key, warnings) {
   const label = file.name || file.id;
   if (!file.stored_path) { warnings.push(`File ${label} has no stored copy and was skipped.`); return null; }
-  const root = realpathSync(dataDir);
-  const path = isAbsolute(file.stored_path) ? file.stored_path : resolve(dataDir, file.stored_path);
-  let real;
-  try { real = realpathSync(path); } catch { warnings.push(`File ${label} could not be found and was skipped.`); return null; }
-  if (!inside(root, real)) { warnings.push(`File ${label} is outside the data directory and was skipped.`); return null; }
   let bytes;
-  try { bytes = readFileSync(real); } catch { warnings.push(`File ${label} could not be read and was skipped.`); return null; }
-  if (isText(file.mime, file.name)) return { fileId: file.id, name: label, document: { type: 'text', text: bytes.toString('utf8') } };
-  if (isPdf(file.mime, bytes)) return { fileId: file.id, name: label, document: { type: 'pdf', data: bytes } };
-  warnings.push(`File ${label} is not a text or PDF document and was skipped.`);
+  try {
+    bytes = await readStoredFile({ dataDir, key, id: file.id, storedPath: file.stored_path });
+  } catch (e) {
+    if (!(e instanceof VaultError)) throw e;
+    warnings.push(e.message === AUTH_FAILED
+      ? `File ${label} failed its integrity check (it was changed or is not this store's file) and was skipped.`
+      : `File ${label} could not be read from the data directory and was skipped.`);
+    return null;
+  }
+  if (isText(file.mime, file.name)) return { fileId: file.id, name: label, ...textSource(bytes.toString('utf8')) };
+  if (!isPdf(file.mime, bytes)) { warnings.push(`File ${label} is not a text or PDF document and was skipped.`); return null; }
+  const layer = await pdfText(bytes);
+  if (layer.status === 'text') return { fileId: file.id, name: label, ...pdfSource(layer.text) };
+  warnings.push(layer.status === 'image_only'
+    ? `File ${label} is an image-only PDF with no text layer, so it was skipped. Upload a copy with a text layer or a text file instead.`
+    : `File ${label} is a PDF whose text layer could not be read in full, so it was skipped.`);
   return null;
 }
 
-function gatherSources(db, dataDir, fileIds, warnings) {
+async function gatherSources(db, dataDir, key, fileIds, warnings) {
   const sources = [];
   const fileRow = db.prepare('SELECT id, name, mime, stored_path FROM files WHERE id = ?');
   const seen = new Set();
-  const addFile = id => {
+  const addFile = async id => {
     if (seen.has(id)) return;
     seen.add(id);
     const file = fileRow.get(id);
     if (!file) { warnings.push(`No file with id ${id}; it was skipped.`); return; }
-    const source = readFileSource(file, dataDir, warnings);
+    const source = await readFileSource(file, dataDir, key, warnings);
     if (source) sources.push(source);
   };
   const docs = db.prepare("SELECT id, fields, file_id FROM documents WHERE doc_type IN ('plan', 'benefits') ORDER BY id").all();
   for (const doc of docs) {
-    if (doc.file_id) { addFile(doc.file_id); continue; }
+    if (doc.file_id) { await addFile(doc.file_id); continue; }
     const fields = parseJson(doc.fields, {});
     if (fields && typeof fields.text === 'string' && fields.text.trim()) {
-      sources.push({ fileId: null, name: `document-${doc.id}`, document: { type: 'text', text: fields.text } });
+      sources.push({ fileId: null, name: `document-${doc.id}`, ...textSource(fields.text) });
     }
   }
-  for (const id of fileIds) addFile(id);
+  for (const id of fileIds) await addFile(id);
   return sources;
 }
 
@@ -267,35 +308,26 @@ function writePack(dir, { entries, clock }) {
 
 // ---------------------------------------------------------------- build
 
-export async function buildYourPlans({ db, engine, dataDir, fileIds = [], clock } = {}) {
+export async function buildYourPlans({ db, engine, dataDir, key, fileIds = [], clock } = {}) {
   if (!db || !engine || typeof dataDir !== 'string' || !dataDir) throw new TypeError('buildYourPlans needs db, engine and dataDir');
+  if (!(key instanceof Uint8Array) || key.length !== 32) throw new TypeError('buildYourPlans needs the 32 byte data key as key');
   if (!Array.isArray(fileIds) || !fileIds.every(id => typeof id === 'string')) throw new TypeError('fileIds must be strings');
   guardTarget(dataDir);
   const day = resolveClock(db, clock);
   const dir = yourPlansDir(resolve(dataDir));
   const warnings = [];
-  const sources = gatherSources(db, resolve(dataDir), fileIds, warnings);
+  const sources = await gatherSources(db, resolve(dataDir), key, fileIds, warnings);
   const entries = [];
   let dropped = 0;
   for (const source of sources) {
-    const text = source.document.type === 'text';
-    const fake = engine.mode === 'fake'
-      ? [{ text: JSON.stringify({ rows: text ? fakeExtractRows(source.document.text) : [] }) }]
-      : undefined;
+    const fake = engine.mode === 'fake' ? [{ text: JSON.stringify({ rows: fakeExtractRows(source.document.text) }) }] : undefined;
     const rows = await engine.extract({ document: source.document, schema: ROW_SCHEMA, system: EXTRACT_SYSTEM, maxTokens: 4096,
       ...(fake ? { fake } : {}) });
-    if (!text) {
-      // The code holds no PDF text, so nothing extracted from a PDF can be checked against it.
-      dropped += rows.length;
-      warnings.push(`PDF sections of ${source.name} cannot be checked against the document yet, so ${rows.length === 1 ? 'its 1 section was' : `its ${rows.length} sections were`} dropped. Upload a text copy of it instead.`);
-      continue;
-    }
-    const checked = normalizedSource(source.document.text);
     let mismatched = 0;
     for (const row of rows) {
       const clean = cleanRow(row, warnings, source.name);
       if (!clean) continue;
-      if (!matchesSource(clean, checked)) { mismatched++; continue; }
+      if (!matchesSource(clean, source.checked)) { mismatched++; continue; }
       entries.push({ title: clean.title, body: clean.body, page: clean.page, taxYear: clean.taxYear, fileId: source.fileId, name: source.name });
     }
     if (mismatched) {
