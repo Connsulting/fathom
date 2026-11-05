@@ -139,8 +139,8 @@ describe('guessPending', () => {
     assert.ok(owner && kind);
     const engine = runtimeEngine(s.db);
     const guesses = [
-      { item: owner.id, option: 'owner', reason: 'Named like a personal account' },
-      { item: kind.id, option: 'checking', reason: 'The export reads like a checking account' },
+      { item: owner.id, option: 'owner', basis: 'account_name' },
+      { item: kind.id, option: 'checking', basis: 'source_file' },
     ];
     const out = await G.guessPending(s.db, engine, { now: NOW, fake: [script(guesses)] });
 
@@ -157,14 +157,14 @@ describe('guessPending', () => {
     assert.equal(out.batches[0].guessed, 2);
     assert.equal(out.batches[0].model, 'fake');
     assert.equal(rowOf(s.db, owner.id).option_id, 'owner');
-    assert.deepEqual(rowOf(s.db, kind.id), { item_id: kind.id, option_id: 'checking', reason: guesses[1].reason, model: 'fake', ts: NOW });
+    assert.deepEqual(rowOf(s.db, kind.id), { item_id: kind.id, option_id: 'checking', reason: G.REASON_TEXT.source_file, model: 'fake', ts: NOW });
     assert.equal(count(s.db, 'confirm_guesses'), pending.length, 'a row for every item sent');
     assert.equal(count(s.db, 'spend_ledger', "purpose = 'confirm'"), 1, 'the cost is recorded under confirm');
 
     const items = FR.ingestState(s.db).items;
     const byId = (id) => items.find((i) => i.id === id);
-    assert.deepEqual(byId(owner.id).guess, { option: 'owner', label: 'You', reason: guesses[0].reason, model: 'fake', ts: NOW });
-    assert.deepEqual(byId(kind.id).guess, { option: 'checking', label: 'Checking', reason: guesses[1].reason, model: 'fake', ts: NOW });
+    assert.deepEqual(byId(owner.id).guess, { option: 'owner', label: 'You', reason: G.REASON_TEXT.account_name, model: 'fake', ts: NOW });
+    assert.deepEqual(byId(kind.id).guess, { option: 'checking', label: 'Checking', reason: G.REASON_TEXT.source_file, model: 'fake', ts: NOW });
     for (const i of items) assert.equal(i.fileName, 'Chase7766_Activity_20320305.csv');
   }));
 
@@ -188,24 +188,24 @@ describe('guessPending', () => {
     const [answered] = queue(s.db, 1, { start: 12 });
     C.answerItem(s.db, answered, 'checking', { now: NOW });
     const guesses = [
-      { item: id(1), option: 'not-an-option', reason: 'Synthetic reason' },
-      { item: 999999, option: 'checking', reason: 'Not in the batch' },
-      { item: answered, option: 'card', reason: 'Answered items are not in the batch' },
-      { item: id(3), option: 'checking', reason: 'First line\nsecond line' },
-      { item: id(4), option: 'checking', reason: '' },
-      { item: id(5), option: 'checking', reason: 'x'.repeat(161) },
-      { item: id(6), option: 'card', reason: 'Ends in 9999 like a card' },
-      { item: id(7), option: 'checking', reason: 'Ends in 4007 like the checking export' },
-      { item: id(8), option: '529', reason: 'Reads like a 529 plan' },
-      { item: id(9), option: 'checking', reason: 'Ends in 4007 like another account' },
-      { item: id(10), option: 'checking', reason: 'Named like a checking account' },
-      { item: id(11), option: 'cash', reason: 'y'.repeat(160) },
+      { item: id(1), option: 'not-an-option', basis: 'question' },
+      { item: 999999, option: 'checking', basis: 'question' },
+      { item: answered, option: 'card', basis: 'question' },
+      { item: id(3), option: 'checking', basis: 'made_up' },
+      { item: id(4), option: 'checking' },
+      { item: id(5), option: 'checking', basis: 7 },
+      { item: id(6), option: 'card', basis: 'account-name' },
+      { item: id(7), option: 'checking', basis: 'imported_values', reason: 'Ends in 4007 like the checking export' },
+      { item: id(8), option: '529', basis: 'question' },
+      { item: id(9), option: 'checking', basis: null, reason: 'Named like another account' },
+      { item: id(10), option: 'checking', basis: 'account_name' },
+      { item: id(11), option: 'cash', basis: 'document_type' },
     ];
     const engine = runtimeEngine(s.db);
     await G.guessPending(s.db, engine, { now: NOW, fake: [script(guesses)] });
     assert.equal(engine.calls.length, 1);
 
-    const kept = { [id(10)]: 'checking', [id(11)]: 'cash' };
+    const kept = { [id(7)]: 'checking', [id(8)]: '529', [id(10)]: 'checking', [id(11)]: 'cash' };
     const rows = guessRows(s.db);
     assert.deepEqual(rows.map((r) => r.item_id), ids, 'a row for every item sent and none for items outside the batch');
     for (const r of rows) {
@@ -213,9 +213,10 @@ describe('guessPending', () => {
       assert.equal(r.model, 'fake');
       assert.equal(r.ts, NOW);
     }
-    assert.equal(rowOf(s.db, id(7)).reason, null, 'a numeral is rejected even when the item carries it');
-    assert.equal(rowOf(s.db, id(8)).reason, null, 'a numeral is rejected even when an option label carries it');
-    assert.equal(rowOf(s.db, id(10)).reason, 'Named like a checking account');
+    assert.equal(rowOf(s.db, id(7)).reason, G.REASON_TEXT.imported_values, 'free text next to a valid basis is not stored');
+    assert.equal(rowOf(s.db, id(8)).reason, G.REASON_TEXT.question);
+    assert.equal(rowOf(s.db, id(10)).reason, G.REASON_TEXT.account_name);
+    assert.equal(rowOf(s.db, id(11)).reason, G.REASON_TEXT.document_type);
     assert.equal(rowOf(s.db, 999999), undefined);
     assert.equal(rowOf(s.db, answered), undefined);
 
@@ -231,140 +232,92 @@ describe('guessPending', () => {
     const [a, b] = queue(s.db, 2);
     const batch = C.pendingItems(s.db);
     const accepted = G.validateGuesses(batch, { guesses: [
-      { item: a, option: 'checking', reason: 'Named like a checking account' },
-      { item: b, option: 'checking', reason: 'Ends in 4001' },
-      { item: 999999, option: 'checking', reason: 'Synthetic reason' },
+      { item: a, option: 'checking', basis: 'account_name' },
+      { item: b, option: 'checking', basis: 'made_up' },
+      { item: 999999, option: 'checking', basis: 'question' },
     ] });
-    assert.deepEqual(accepted, [{ item: a, option: 'checking', reason: 'Named like a checking account' }]);
+    assert.deepEqual(accepted, [{ item: a, option: 'checking', reason: G.REASON_TEXT.account_name }]);
   }));
 
-  describe('validateGuesses compares complete quantities, not digit runs', () => {
+  describe('validateGuesses takes a fixed basis code and never stores model-written text', () => {
     const OPTIONS = [{ id: 'checking', label: 'Checking' }, { id: 'cash', label: 'Savings or cash' }];
-    // Two synthetic items whose questions, option labels and file metadata hold no number.
-    function queueQuantities(db) {
-      const mk = (subject, context) => {
-        const r = C.ask(db, { kind: 'account_kind', subject, question: 'What kind of account is this synthetic account?', options: OPTIONS, context, now: NOW });
-        assert.equal(r.queued, true);
-        return r.id;
-      };
-      return { plain: mk('acct-quantity-plain', { amount: '100' }), signed: mk('acct-quantity-signed', { change: '-250', rate: '12.5%' }) };
+    const EXPECTED = {
+      account_name: 'The account name suggests this answer.',
+      institution: 'The institution and account details suggest this answer.',
+      source_file: 'The source file suggests this answer.',
+      question: 'The wording of the question suggests this answer.',
+      imported_values: 'The values imported with this question suggest this answer.',
+      document_type: 'The type of document suggests this answer.',
+    };
+    function queueOne(db, subject = 'acct-basis') {
+      const r = C.ask(db, { kind: 'account_kind', subject, question: 'What kind of account is this synthetic account?', options: OPTIONS, context: { amount: '100' }, now: NOW });
+      assert.equal(r.queued, true);
+      return r.id;
     }
-    const verdict = (batch, id, reason) => G.validateGuesses(batch, { guesses: [{ item: id, option: 'checking', reason }] }).length === 1;
+    const keptWith = (batch, id, extra) => G.validateGuesses(batch, { guesses: [{ item: id, option: 'checking', ...extra }] });
 
-    test('an item whose only number is 100 rejects scaled, signed, percent, spelled-out and plain numeric amounts and keeps plain prose', () => withStore(async (s) => {
-      const { plain } = queueQuantities(s.db);
+    test('every basis code renders its fixed text and no text holds a numeral', () => {
+      assert.deepEqual([...G.REASON_CODES].sort(), Object.keys(EXPECTED).sort());
+      assert.deepEqual(Object.fromEntries(G.REASON_CODES.map((c) => [c, G.REASON_TEXT[c]])), EXPECTED);
+      for (const [code, text] of Object.entries(G.REASON_TEXT)) assert.ok(!/\p{N}/u.test(text), `no numeral in ${code}`);
+    });
+
+    test('GUESS_SCHEMA requires a basis enum of the reason codes and has no reason field', () => {
+      const item = G.GUESS_SCHEMA.properties.guesses.items;
+      assert.deepEqual(item.properties.basis.enum, [...G.REASON_CODES]);
+      assert.ok(item.required.includes('basis'));
+      assert.equal('reason' in item.properties, false);
+      assert.equal(item.required.includes('reason'), false);
+    });
+
+    test('a guess with a valid basis keeps the fixed text for each code', () => withStore(async (s) => {
+      const id = queueOne(s.db);
       const batch = C.pendingItems(s.db);
-      for (const reason of [
-        'The import reports $100k of income.',
-        'The import reports 100 thousand of income.',
-        'A refund of -100 is listed.',
-        'Withholding is 100% of the payment.',
-        'About one hundred thousand dollars came in.',
-        'Around 100 million in the account.',
-        '1,000 shares are listed.',
-      ]) assert.equal(verdict(batch, plain, reason), false, `rejected: ${reason}`);
-      for (const reason of [
-        'The import lists 100 for this account.',
-        'The import lists $100 for this account.',
-        'Matches the 100.00 amount in the file.',
-      ]) assert.equal(verdict(batch, plain, reason), false, `rejected: ${reason}`);
-      for (const reason of [
-        'Reads like a checking account',
-      ]) assert.equal(verdict(batch, plain, reason), true, `kept: ${reason}`);
+      for (const code of G.REASON_CODES) {
+        assert.deepEqual(keptWith(batch, id, { basis: code }), [{ item: id, option: 'checking', reason: EXPECTED[code] }], code);
+      }
     }));
 
-    test('an item whose only number is 100 rejects spaced, dotted, spelled-out and any leftover-digit reasons and plain numeric reasons, and still keeps plain prose', () => withStore(async (s) => {
-      const { plain } = queueQuantities(s.db);
-      const w2 = C.ask(s.db, { kind: 'account_kind', subject: 'acct-quantity-w2', question: 'Does the W-2 name this employer?', options: OPTIONS, context: {}, now: NOW });
-      assert.equal(w2.queued, true);
+    test('an unknown, missing or wrongly typed basis is dropped', () => withStore(async (s) => {
+      const id = queueOne(s.db);
       const batch = C.pendingItems(s.db);
-      for (const reason of [
-        'The withholding rate is 100 %.',
-        'The import reports $100 k of income.',
-        'A refund of - 100 is listed.',
-        'A charge of $ 100 k is listed.',
-        'A charge of -$100 is listed.',
-        'The share is .100 of the total.',
-        'About ten dollars came in.',
-        'Twelve payments are listed.',
-        'One hundred is listed.',
-        'Around a dozen rows.',
-      ]) assert.equal(verdict(batch, plain, reason), false, `rejected: ${reason}`);
-      for (const reason of [
-        'The import lists 100 for this account.',
-        'The import lists $100 for this account.',
-        'Matches the 100.00 amount in the file.',
-      ]) assert.equal(verdict(batch, plain, reason), false, `rejected: ${reason}`);
-      assert.equal(verdict(batch, plain, 'Held at the same broker as your other accounts.'), true, 'kept: plain prose');
-      assert.equal(verdict(batch, w2.id, 'The W-2 names this employer.'), false, 'rejected: W-2 holds a digit');
-      assert.equal(verdict(batch, w2.id, 'The form names this employer as the payer.'), true, 'kept: plain prose');
+      for (const basis of ['made_up', 'Question', 'account-name', '', ' question', 'question ', 7, null, true, ['question'], { code: 'question' }]) {
+        assert.deepEqual(keptWith(batch, id, { basis }), [], `dropped: ${JSON.stringify(basis)}`);
+      }
+      assert.deepEqual(keptWith(batch, id, {}), [], 'dropped: no basis');
+      assert.deepEqual(keptWith(batch, id, { reason: 'Named like a checking account' }), [], 'dropped: free text without a basis');
     }));
 
-    test('a reason with a fraction, percent, basis point or multiplier word is rejected unless the item carries that word', () => withStore(async (s) => {
-      const { plain } = queueQuantities(s.db);
-      const w2 = C.ask(s.db, { kind: 'account_kind', subject: 'acct-quantity-w2', question: 'Does the W-2 name this employer?', options: OPTIONS, context: {}, now: NOW });
-      assert.equal(w2.queued, true);
-      const pct = C.ask(s.db, { kind: 'account_kind', subject: 'acct-quantity-pct', question: 'What percent of the payment is withheld?', options: OPTIONS, context: { rate: '12.5%' }, now: NOW });
-      assert.equal(pct.queued, true);
+    test('free text sent next to a valid basis is ignored and only the fixed text is stored', () => withStore(async (s) => {
+      const id = queueOne(s.db);
       const batch = C.pendingItems(s.db);
-      for (const reason of [
-        'The withholding rate is half a percent.',
-        'The withholding rate is a quarter percent.',
-        'The withholding rate is 100 per cent.',
-        'The rate is 100 pct.',
-        'The rate rose 25 basis points.',
-        'The rate rose 25 bps.',
-        'About a third of the payments match.',
-        'Payments doubled to twice the usual.',
-        'It is the percentage the file shows.',
-        'Two thirds of rows match.',
-        'About ½ of it.',
-        'Roughly １００ dollars.',
-        'Thousands of dollars came in.',
-        'Hundreds of rows.',
-        'Millions in the account.',
-        'Tens of thousands.',
-        'Doubles the value.',
-        'Tripling the total.',
-        '100 grand.',
-        '100 bucks.',
-        'Quintuple the amount.',
-        'Halved since then.',
-        'A hundredfold rise.',
-      ]) assert.equal(verdict(batch, plain, reason), false, `rejected: ${reason}`);
-      for (const reason of [
-        'The import lists 100 for this account.',
-        'The import lists $100 for this account.',
-      ]) assert.equal(verdict(batch, plain, reason), false, `rejected: ${reason}`);
-      for (const reason of [
-        'Held at the same broker as your other accounts.',
-        'Same institution and account type as your other checking account.',
-      ]) assert.equal(verdict(batch, plain, reason), true, `kept: ${reason}`);
-      assert.equal(verdict(batch, w2.id, 'The W-2 names this employer.'), false, 'rejected: W-2 holds a digit');
-      assert.equal(verdict(batch, w2.id, 'The form names this employer as the payer.'), true, 'kept: plain prose');
-      assert.equal(verdict(batch, pct.id, 'The file shows 12.5% withheld.'), false, 'rejected: no numerals, even one the item holds');
-      assert.equal(verdict(batch, pct.id, 'The file shows 12.5 per cent withheld.'), false, 'rejected: per cent is not in the item');
+      const out = keptWith(batch, id, { basis: 'imported_values', reason: 'The import lists 100, $100, 12.5% and one hundred thousand.', note: 'extra 250' });
+      assert.deepEqual(out, [{ item: id, option: 'checking', reason: EXPECTED.imported_values }]);
+      assert.equal(/\p{N}/u.test(out[0].reason), false);
+      assert.deepEqual(Object.keys(out[0]).sort(), ['item', 'option', 'reason']);
     }));
 
-    test('an item holding -250 and 12.5% still rejects those quantities and 250 with the sign dropped', () => withStore(async (s) => {
-      const { signed } = queueQuantities(s.db);
-      const batch = C.pendingItems(s.db);
-      assert.equal(verdict(batch, signed, 'A charge of -250 matches.'), false);
-      assert.equal(verdict(batch, signed, 'The rate is 12.5% in the file.'), false);
-      assert.equal(verdict(batch, signed, 'A charge of 250 matches.'), false);
-    }));
-
-    test('guessPending stores option_id NULL for a rejected reason and the option for a kept one', () => withStore(async (s) => {
-      const { plain, signed } = queueQuantities(s.db);
+    test('guessPending stores the fixed text, drops a bad basis to a null row, and ignores model-written text', () => withStore(async (s) => {
+      const good = queueOne(s.db, 'acct-basis-good');
+      const noisy = queueOne(s.db, 'acct-basis-noisy');
+      const bad = queueOne(s.db, 'acct-basis-bad');
       const engine = runtimeEngine(s.db);
       await G.guessPending(s.db, engine, { now: NOW, fake: [script([
-        { item: plain, option: 'checking', reason: 'The import reports $100k of income.' },
-        { item: signed, option: 'checking', reason: 'Named like a checking account' },
+        { item: good, option: 'checking', basis: 'account_name' },
+        { item: noisy, option: 'cash', basis: 'source_file', reason: 'The import reports $100k of income, 100 thousand.' },
+        { item: bad, option: 'checking', basis: 'not_a_code', reason: 'Named like a checking account' },
       ])] });
-      assert.equal(count(s.db, 'confirm_guesses'), 2, 'a row for every item sent');
-      assert.deepEqual(rowOf(s.db, plain).option_id, null);
-      assert.equal(rowOf(s.db, plain).reason, null);
-      assert.equal(rowOf(s.db, signed).option_id, 'checking');
+      assert.equal(count(s.db, 'confirm_guesses'), 3, 'a row for every item sent');
+      assert.deepEqual(rowOf(s.db, good), { item_id: good, option_id: 'checking', reason: EXPECTED.account_name, model: 'fake', ts: NOW });
+      assert.deepEqual(rowOf(s.db, noisy), { item_id: noisy, option_id: 'cash', reason: EXPECTED.source_file, model: 'fake', ts: NOW });
+      assert.equal(rowOf(s.db, bad).option_id, null);
+      assert.equal(rowOf(s.db, bad).reason, null);
+      for (const r of guessRows(s.db)) if (r.reason !== null) assert.equal(/\p{N}/u.test(r.reason), false);
+      const items = FR.ingestState(s.db).items;
+      const byId = (id) => items.find((i) => i.id === id);
+      assert.deepEqual(byId(good).guess, { option: 'checking', label: 'Checking', reason: EXPECTED.account_name, model: 'fake', ts: NOW });
+      assert.deepEqual(byId(noisy).guess, { option: 'cash', label: 'Savings or cash', reason: EXPECTED.source_file, model: 'fake', ts: NOW });
+      assert.equal(byId(bad).guess, null);
     }));
   });
 
@@ -442,7 +395,7 @@ describe('guessPending', () => {
   test('a guess never answers: every item stays pending', () => withStore(async (s) => {
     const ids = queue(s.db, 3);
     const engine = runtimeEngine(s.db);
-    await G.guessPending(s.db, engine, { now: NOW, fake: [script(ids.map((item) => ({ item, option: 'checking', reason: 'Named like a checking account' })))] });
+    await G.guessPending(s.db, engine, { now: NOW, fake: [script(ids.map((item) => ({ item, option: 'checking', basis: 'question' })))] });
     assert.equal(count(s.db, 'confirm_guesses', 'option_id IS NOT NULL'), 3, 'precondition: every guess was kept');
     for (const id of ids) {
       assert.deepEqual(one(s.db, 'SELECT status, answer, answered_at FROM confirm_items WHERE id = ?', id), { status: 'pending', answer: null, answered_at: null });
@@ -476,7 +429,7 @@ describe('guessPending makes no guess when it must not', () => {
   test('engine mode off gives no guess', () => withStore(async (s) => {
     const ids = queue(s.db, 2);
     const engine = runtimeEngine(s.db, 'off');
-    const out = await G.guessPending(s.db, engine, { now: NOW, fake: [script(ids.map((item) => ({ item, option: 'checking', reason: 'Synthetic reason' })))] });
+    const out = await G.guessPending(s.db, engine, { now: NOW, fake: [script(ids.map((item) => ({ item, option: 'checking', basis: 'question' })))] });
     assert.equal(out.skipped, 'engine_off');
     assert.equal(engine.calls.length, 0);
     assert.equal(count(s.db, 'confirm_guesses'), 0);
@@ -486,7 +439,7 @@ describe('guessPending makes no guess when it must not', () => {
   test('a zero monthly cap stops the run with no stored guesses', () => withStore(async (s) => {
     const ids = queue(s.db, 2);
     DB.setSetting(s.db, 'cap', { usd: 0 });
-    const out = await G.guessPending(s.db, runtimeEngine(s.db), { now: NOW, fake: [script(ids.map((item) => ({ item, option: 'checking', reason: 'Synthetic reason' })))] });
+    const out = await G.guessPending(s.db, runtimeEngine(s.db), { now: NOW, fake: [script(ids.map((item) => ({ item, option: 'checking', basis: 'question' })))] });
     assert.equal(typeof out.stopped, 'string', JSON.stringify(out));
     assert.equal(count(s.db, 'confirm_guesses'), 0);
     assert.equal(count(s.db, 'spend_ledger'), 0);
@@ -496,7 +449,7 @@ describe('guessPending makes no guess when it must not', () => {
     const ids = queue(s.db, 2);
     s.db.prepare('INSERT INTO spend_ledger (ts, yyyymm, purpose, cost_usd, model, tokens) VALUES (?, ?, ?, ?, ?, ?)')
       .run(NOW, NOW.slice(0, 7), 'chat', 250, 'fake', '{}');
-    const out = await G.guessPending(s.db, runtimeEngine(s.db), { now: NOW, fake: [script(ids.map((item) => ({ item, option: 'checking', reason: 'Synthetic reason' })))] });
+    const out = await G.guessPending(s.db, runtimeEngine(s.db), { now: NOW, fake: [script(ids.map((item) => ({ item, option: 'checking', basis: 'question' })))] });
     assert.equal(typeof out.stopped, 'string', JSON.stringify(out));
     assert.equal(count(s.db, 'confirm_guesses'), 0);
     assert.equal(count(s.db, 'spend_ledger'), 1, 'nothing more is spent');

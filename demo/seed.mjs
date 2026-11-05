@@ -15,6 +15,7 @@ import { buildLedger, isoFromLabel } from './ledger.mjs';
 import { openMigrated, getSetting, setSetting, listTables, readStoreMode, createStoreFile, tx, cents, DB_FILE } from '../src/store/db.mjs';
 import { addDays, defaultPicks, BUILTIN_SOURCES, DEFAULT_CAP_USD } from '../src/scenario/build.mjs';
 import { loadConfig } from '../src/config.mjs';
+import { REASON_TEXT } from '../src/ingest/guess.mjs';
 import { ask, canonicalJson, OWNER_OPTIONS, KIND_OPTIONS, FACT_CHECK_OPTIONS, taxYearOptions } from '../src/ingest/confirm.mjs';
 
 export const SEED_ID = 'demo-seed';
@@ -75,7 +76,7 @@ const CLEAR_ORDER = [
 // workbook rows, so answering it changes no payment. One stored guess, on the owner question.
 const CONFIRM_FACT = { key: 'retirement.planOffersRoth', value: true };
 const CONFIRM_TAX_YEAR = 2025;
-const CONFIRM_GUESS = { option: 'owner', reason: 'Held at the same broker as your other individual accounts' };
+const CONFIRM_GUESS = { option: 'owner', reason: REASON_TEXT.institution };
 
 function seedConfirm(db, { clock, now }) {
   const base = { fileId: SEED_ID, now };

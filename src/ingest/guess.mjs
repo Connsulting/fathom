@@ -7,6 +7,17 @@
 
 import { parseJson, tx } from '../store/db.mjs';
 
+// Why a guess was made, as a fixed code the engine picks and the text shown for it.
+export const REASON_CODES = ['account_name', 'institution', 'source_file', 'question', 'imported_values', 'document_type'];
+export const REASON_TEXT = Object.freeze({
+  account_name: 'The account name suggests this answer.',
+  institution: 'The institution and account details suggest this answer.',
+  source_file: 'The source file suggests this answer.',
+  question: 'The wording of the question suggests this answer.',
+  imported_values: 'The values imported with this question suggest this answer.',
+  document_type: 'The type of document suggests this answer.',
+});
+
 export const GUESS_SCHEMA = Object.freeze({
   type: 'object',
   properties: {
@@ -14,8 +25,8 @@ export const GUESS_SCHEMA = Object.freeze({
       type: 'array',
       items: {
         type: 'object',
-        properties: { item: { type: 'integer' }, option: { type: 'string' }, reason: { type: 'string' } },
-        required: ['item', 'option', 'reason'],
+        properties: { item: { type: 'integer' }, option: { type: 'string' }, basis: { type: 'string', enum: REASON_CODES } },
+        required: ['item', 'option', 'basis'],
         additionalProperties: false,
       },
     },
@@ -24,14 +35,13 @@ export const GUESS_SCHEMA = Object.freeze({
   additionalProperties: false,
 });
 
-export const REASON_MAX = 160;
 const MAX_TOKENS = 2048;
 
 const SYSTEM = [
   'You help a household owner answer short questions about their imported financial files.',
   'For each item, pick the single most likely option id from that item\'s own options, using only that item\'s question, options, context and file metadata.',
-  `Give a one-line reason of at most ${REASON_MAX} characters. The reason must contain no numbers at all: no digits and no numeric characters of any kind.`,
-  'Return JSON matching the schema: {"guesses": [{"item": <item id>, "option": <option id>, "reason": <reason>}]}. Leave out an item you cannot judge.',
+  `Give the basis for each guess as one code from this list: ${REASON_CODES.join(', ')}.`,
+  'Return JSON matching the schema: {"guesses": [{"item": <item id>, "option": <option id>, "basis": <basis code>}]}. Leave out an item you cannot judge.',
 ].join(' ');
 
 // Drop every locator (cell or row references into the file) from a context value.
@@ -51,43 +61,8 @@ const payloadOf = (item) => ({
   file: item.file ?? null,
 });
 
-// Quantity-word vocabulary: number words, fractions and ordinals, percent words and multipliers.
-// Any word ending in -fold also counts.
-// A reason may use one only if the item's own text does. Matched as whole words, case-insensitive,
-// in any inflected form (plural, -d, -ed, -ing); a space in an entry matches any run of whitespace.
-const QUANTITY_WORDS = [
-  'zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve',
-  'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen',
-  'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety',
-  'hundred', 'thousand', 'million', 'billion', 'trillion',
-  'half', 'quarter', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth', 'tenth',
-  'percent', 'per cent', 'pct', 'percentage', 'basis point', 'bps',
-  'twice', 'double', 'triple', 'quadruple', 'quintuple', 'sextuple', 'septuple', 'octuple', 'dozen', 'halve',
-];
-// Every inflected form mapped to its base word ("thousands" -> "thousand", "tripling" -> "triple").
-const BASE_OF = new Map([['halves', 'half']]);
-for (const base of QUANTITY_WORDS) {
-  const stem = base.replace(/[ey]$/, '');
-  const forms = [base, `${base}s`, `${base}es`, `${base}d`, `${base}ed`, `${base}ing`, `${stem}ing`];
-  if (base.endsWith('y')) forms.push(`${stem}ies`);
-  for (const f of forms) if (!BASE_OF.has(f)) BASE_OF.set(f, base);
-}
-const SPELLED = new RegExp(`\\b(?:[a-z]*fold|${[...BASE_OF.keys()].map((w) => w.replace(' ', '\\s+')).join('|')})\\b`, 'gi');
-// Vocabulary words in the text, each normalized to its lowercase base word.
-const spelledIn = (text) => (String(text).match(SPELLED) ?? []).map((w) => {
-  const word = w.toLowerCase().replace(/\s+/g, ' ');
-  return BASE_OF.get(word) ?? word;
-});
-
-// The item's own text: question, option labels, context and file metadata.
-function itemText(item) {
-  const p = payloadOf(item);
-  return JSON.stringify([p.question, p.options.map((o) => o.label), p.context, p.file]);
-}
-
-// Accepted guesses: the item is in the batch, the option is one of its options, and the reason
-// is one nonempty line of at most REASON_MAX characters with no numeric character at all and no
-// quantity word (see QUANTITY_WORDS) that the item's own text lacks.
+// Accepted guesses: the item is in the batch, the option is one of its options and the basis is
+// a known code. The stored reason is the fixed text for that code, never engine prose.
 export function validateGuesses(batchItems, parsed) {
   const byId = new Map(batchItems.map((i) => [i.id, i]));
   const seen = new Set();
@@ -97,13 +72,9 @@ export function validateGuesses(batchItems, parsed) {
     const item = byId.get(g.item);
     if (!item || seen.has(item.id)) continue;
     if (typeof g.option !== 'string' || !item.options.some((o) => o.id === g.option)) continue;
-    const reason = g.reason;
-    if (typeof reason !== 'string' || !reason.trim() || reason.length > REASON_MAX || /[\r\n\u2028\u2029]/.test(reason)) continue;
-    const text = itemText(item);
-    const words = new Set(spelledIn(text));
-    if (/\p{N}/u.test(reason) || !spelledIn(reason).every((w) => words.has(w))) continue;
+    if (!REASON_CODES.includes(g.basis)) continue;
     seen.add(item.id);
-    out.push({ item: item.id, option: g.option, reason });
+    out.push({ item: item.id, option: g.option, reason: REASON_TEXT[g.basis] });
   }
   return out;
 }

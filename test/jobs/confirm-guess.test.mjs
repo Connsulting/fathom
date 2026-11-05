@@ -49,7 +49,7 @@ function queue(db, n, { start = 1 } = {}) {
   return ids;
 }
 
-// A live-mode stub engine: each call guesses every item's first option with a number-free reason
+// A live-mode stub engine: each call guesses every item's first option with a fixed basis code
 // and costs costs[n - 1]. failAt: call n throws. hold: the first call waits for release().
 function liveEngine({ costs = [], failAt = null, hold = false } = {}) {
   const calls = [];
@@ -67,7 +67,7 @@ function liveEngine({ costs = [], failAt = null, hold = false } = {}) {
       if (failAt === n) { const e = new Error('synthetic model failure'); e.name = 'SyntheticEngineError'; throw e; }
       if (hold && n === 1) await gate;
       const { items } = JSON.parse(req.messages[0].content);
-      const guesses = items.map((i) => ({ item: i.id, option: i.options[0].id, reason: 'Named like this kind of account' }));
+      const guesses = items.map((i) => ({ item: i.id, option: i.options[0].id, basis: 'account_name' }));
       return { text: JSON.stringify({ guesses }), model: 'stub-live', costUsd: costs[n - 1] ?? 0 };
     },
     async extract() { throw new Error('no extraction in this test'); },
