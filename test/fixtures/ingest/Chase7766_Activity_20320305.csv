@@ -1,0 +1,5 @@
+Details,Posting Date,Description,Amount,Type,Balance,Check or Slip #
+DEBIT,02/29/2032,EXAMPLE SHOP CARD 9988,-42.35,DEBIT_CARD,1400.25,
+CREDIT,03/01/2032,Deposit,900.50,ACH_CREDIT,2300.75,
+DEBIT,03/02/2032,Broken amount,abc,OTHER,2290.75,
+DEBIT,03/03/2032,Valid debit,-10.00,OTHER,bad,
