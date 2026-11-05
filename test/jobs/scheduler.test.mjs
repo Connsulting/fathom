@@ -305,6 +305,79 @@ test('plan handler: scheduled, manual and ingest triggers each run through the s
   } finally { t.done(); }
 });
 
+// A plan handler whose runs wait on a promise the test resolves.
+function gatedPlan() {
+  const g = { started: [], gates: [], release(i = g.gates.length - 1) { g.gates[i](); } };
+  g.handler = async (ctx) => {
+    g.started.push(ctx.trigger);
+    await new Promise((r) => { g.gates.push(r); });
+    return {};
+  };
+  return g;
+}
+const settle = (ms = 40) => new Promise((r) => setTimeout(r, ms));
+
+test('trigger when idle runs immediately', async () => {
+  const t = await store();
+  try {
+    const plan = counter();
+    const s = schedulerFor(t, { handlers: { plan }, clock: clockAt('2026-11-05T15:00:00Z') });
+    const run = await s.trigger('plan', 'ingest');
+    assert.equal(run.trigger, 'ingest');
+    assert.equal(plan.calls.length, 1);
+  } finally { t.done(); }
+});
+
+test('trigger during a plan run queues exactly one ingest rerun after it finishes', async () => {
+  const t = await store();
+  try {
+    const g = gatedPlan();
+    const clock = clockAt('2026-11-05T15:00:00Z');
+    const s = schedulerFor(t, { handlers: { plan: g.handler }, clock });
+    const first = s.runNow('plan');
+    await settle();
+    assert.deepEqual(g.started, ['manual']);
+    const queued = s.trigger('plan', 'ingest');
+    await assert.doesNotReject(queued);
+    clock.set('2026-11-05T15:00:05Z');
+    await settle();
+    assert.deepEqual(g.started, ['manual'], 'the rerun waits for the current run');
+    g.release(0);
+    await first;
+    for (let i = 0; i < 50 && g.started.length < 2; i++) await settle(20);
+    assert.deepEqual(g.started, ['manual', 'ingest'], 'one ingest rerun starts after the run finishes');
+    g.release(1);
+    await settle();
+    assert.equal(g.started.length, 2, 'no further run');
+    const rows = runsOf(t.db, 'plan');
+    assert.deepEqual(rows.map((r) => r.trigger), ['manual', 'ingest']);
+    assert.ok(rows.every((r) => r.status === 'ok'));
+  } finally { t.done(); }
+});
+
+test('several triggers during one plan run coalesce into a single rerun; trigger never rejects', async () => {
+  const t = await store();
+  try {
+    const g = gatedPlan();
+    const clock = clockAt('2026-11-05T15:00:00Z');
+    const s = schedulerFor(t, { handlers: { plan: g.handler }, clock });
+    const first = s.trigger('plan', 'ingest');
+    await settle();
+    assert.deepEqual(g.started, ['ingest']);
+    const extra = [s.trigger('plan', 'ingest'), s.trigger('plan', 'ingest'), s.trigger('plan', 'ingest')];
+    clock.set('2026-11-05T15:00:05Z');
+    g.release(0);
+    await first;
+    for (let i = 0; i < 50 && g.started.length < 2; i++) await settle(20);
+    assert.deepEqual(g.started, ['ingest', 'ingest'], 'exactly one more run');
+    g.release(1);
+    await Promise.all(extra.map((p) => assert.doesNotReject(p)));
+    await settle(80);
+    assert.equal(g.started.length, 2, 'the coalesced triggers did not add runs');
+    assert.equal(runsOf(t.db, 'plan').length, 2);
+  } finally { t.done(); }
+});
+
 test('fixed clock: config.clock makes every period of that date due, whatever now says', async () => {
   const t = await store();
   try {

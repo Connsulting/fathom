@@ -162,6 +162,16 @@ test('every [n] marker ties back to a scenario figure, and no amount appears out
   }
 }));
 
+test('a publicUrl with a trailing slash builds links with no double slash', () => withSeeded(async (db) => {
+  const model = buildBrief(db, { clock: CLOCK, publicUrl: `${URL_BASE}/` });
+  assert.ok(model.links.length > 0);
+  const linked = renderBrief(model, await briefSummary(model, { engine: offEngine() }));
+  assert.ok(linked.text.includes(`${URL_BASE}/#/brief`));
+  assert.ok(linked.html.includes(`href="${URL_BASE}/#/brief"`));
+  assert.ok(!/[^:]\/\//.test(linked.text.replace(/https?:\/\//g, '')), 'no double slash in the text');
+  for (const l of model.links) assert.ok(!JSON.stringify(l).includes(`${URL_BASE}//`), 'no double slash in a link');
+}));
+
 test('links appear only when publicUrl is set', () => withSeeded(async (db) => {
   const off = offEngine();
   const plain = renderBrief(buildBrief(db, { clock: CLOCK, publicUrl: null }), await briefSummary(buildBrief(db, { clock: CLOCK, publicUrl: null }), { engine: off }));

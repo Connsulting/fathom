@@ -10,13 +10,16 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { spawnServer, request, postJson, openStore, src, SERVER_TIMEOUT } from '../helpers/server.mjs';
+import { spawnServer, request, postJson, openStore, src, tempDb, SERVER_TIMEOUT } from '../helpers/server.mjs';
+import { seedDemo } from '../../demo/seed.mjs';
 import { fixturePath, textFile, realStore, offEngine } from '../helpers/ingest.mjs';
 
 const T = { timeout: SERVER_TIMEOUT * 2 };
 const BODY_KEYS = ['text', 'html', 'body'];
 
 const outbox = (dir) => (existsSync(join(dir, 'outbox')) ? readdirSync(join(dir, 'outbox')).filter((f) => f.endsWith('.json')).sort() : []);
+
+const outboxSubject = (dir, f) => JSON.parse(readFileSync(join(dir, 'outbox', f), 'utf8')).subject;
 
 function assertHistoryRow(row) {
   for (const k of ['kind', 'subject', 'status']) assert.ok(k in row, `history row has ${k}`);
@@ -57,10 +60,9 @@ describe('email and jobs routes on a demo server', () => {
     assert.equal(r.json.send.status, 'sent');
     assert.equal(r.json.send.transport, 'dev');
     const after = outbox(s.dataDir);
-    const added = after.filter((f) => !before.includes(f));
-    assert.equal(added.length, 1, 'one outbox file');
-    const msg = JSON.parse(readFileSync(join(s.dataDir, 'outbox', added[0]), 'utf8'));
-    assert.equal(msg.subject, r.json.send.subject);
+    // The scheduler's startup catch-up may send the brief at the same time, so other new files are allowed.
+    const added = after.filter((f) => !before.includes(f)).filter((f) => outboxSubject(s.dataDir, f) === r.json.send.subject);
+    assert.equal(added.length, 1, 'exactly one new outbox file carries the test email subject');
     assert.equal(r.json.history[0].id, r.json.send.id, 'newest first');
     r.json.history.forEach(assertHistoryRow);
     const g = await request(s.baseUrl, { path: '/api/email' });
@@ -73,10 +75,9 @@ describe('email and jobs routes on a demo server', () => {
     assert.equal(r.status, 200, r.text.slice(0, 300));
     assert.equal(r.json.send.kind, 'brief');
     assert.equal(r.json.send.status, 'sent');
-    const added = outbox(s.dataDir).filter((f) => !before.includes(f));
-    assert.equal(added.length, 1);
+    const added = outbox(s.dataDir).filter((f) => !before.includes(f)).filter((f) => outboxSubject(s.dataDir, f) === r.json.send.subject);
+    assert.equal(added.length, 1, 'exactly one new outbox file carries the brief subject');
     const msg = JSON.parse(readFileSync(join(s.dataDir, 'outbox', added[0]), 'utf8'));
-    assert.equal(msg.subject, r.json.send.subject);
     assert.ok(msg.html.length > 0 && msg.text.length > 0);
     assert.equal(r.json.history[0].kind, 'brief');
     assertHistoryRow(r.json.history[0]);
@@ -139,6 +140,31 @@ describe('email and jobs routes on a demo server', () => {
     }
     const same = await postJson(s.baseUrl, '/api/email/test', {}, { origin: s.baseUrl });
     assert.equal(same.status, 200, 'same-origin POST is accepted');
+  });
+});
+
+describe('GET /api/email preview (in-process router, fake engine)', () => {
+  test('never calls the engine for the preview and uses the template summary', T, async () => {
+    const t = await tempDb();
+    seedDemo(t.db);
+    let calls = 0;
+    const engine = { isOn: () => true, call: () => { calls++; throw new Error('should not be called'); } };
+    const { createHandler } = await src('src/api/router.mjs');
+    const { createCannedAnswerer } = await src('src/api/answerer.mjs');
+    const config = { dataDir: t.dataDir, clock: '2026-11-05', demo: true, engine: 'fake', port: 0, host: '127.0.0.1', claudeCredentialFile: null, emailTransport: 'dev', publicUrl: null };
+    const transport = { name: 'capture', async send() { return { id: 'unused' }; } };
+    const server = http.createServer(createHandler({ db: t.db, config, answerer: createCannedAnswerer(), engine, transport }));
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    try {
+      const r = await request(`http://127.0.0.1:${server.address().port}`, { path: '/api/email' });
+      assert.equal(r.status, 200, r.text.slice(0, 300));
+      assert.equal(calls, 0, 'the engine was not called');
+      assert.equal(r.json.preview.summarySrc, 'template');
+    } finally {
+      await new Promise((r) => { server.close(r); server.closeAllConnections(); });
+      try { t.db.close(); } catch { /* closed */ }
+      rmSync(t.dataDir, { recursive: true, force: true });
+    }
   });
 });
 

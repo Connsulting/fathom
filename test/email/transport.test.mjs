@@ -7,7 +7,7 @@
 
 import test, { describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, readFileSync, readdirSync, statSync, rmSync, existsSync } from 'node:fs';
+import { writeFileSync, chmodSync, readFileSync, readdirSync, statSync, rmSync, existsSync } from 'node:fs';
 import { readFile as fsReadFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tempDir, tempDb } from '../helpers/server.mjs';
@@ -114,12 +114,58 @@ describe('config', () => {
     for (const p of ['25', '2525', 'abc', '465.5']) assert.throws(() => loadConfig({ FATHOM_EMAIL_SMTP_PORT: p }), ConfigError, p);
   });
 
-  test('FATHOM_PUBLIC_URL is an http or https URL without a trailing slash', () => {
-    assert.equal(loadConfig({ FATHOM_PUBLIC_URL: 'https://fathom.example.invalid' }).publicUrl, 'https://fathom.example.invalid');
-    assert.equal(loadConfig({ FATHOM_PUBLIC_URL: 'http://fathom.example.invalid:8080' }).publicUrl, 'http://fathom.example.invalid:8080');
-    for (const u of ['https://fathom.example.invalid/', 'ftp://fathom.example.invalid', 'javascript:alert(1)', 'not a url', 'fathom.example.invalid']) {
+  test('FATHOM_PUBLIC_URL is an http or https URL, normalized with URL.href', () => {
+    assert.equal(loadConfig({ FATHOM_PUBLIC_URL: 'https://fathom.example.invalid' }).publicUrl, 'https://fathom.example.invalid/');
+    assert.equal(loadConfig({ FATHOM_PUBLIC_URL: 'http://fathom.example.invalid:8080' }).publicUrl, 'http://fathom.example.invalid:8080/');
+    for (const u of ['https://fathom.example.invalid/', 'https://fathom.example.invalid/app/']) {
+      assert.equal(loadConfig({ FATHOM_PUBLIC_URL: u }).publicUrl, new URL(u).href, `a trailing slash is accepted: ${u}`);
+    }
+    for (const u of [
+      'https://user:pass@fathom.example.invalid', 'https://user@fathom.example.invalid',
+      'https://fathom.example.invalid/?a=1', 'https://fathom.example.invalid/#frag',
+      'ftp://fathom.example.invalid', 'javascript:alert(1)', 'not a url', 'fathom.example.invalid',
+    ]) {
       assert.throws(() => loadConfig({ FATHOM_PUBLIC_URL: u }), ConfigError, u);
     }
+  });
+});
+
+describe('credential file mode', () => {
+  // Group access is allowed (a Kubernetes secret mounted with fsGroup is 0440); other access is not.
+  const ACCEPTED = [0o600, 0o400, 0o640, 0o440];
+  const REJECTED = [0o644, 0o604, 0o444];
+
+  async function envWithMode(s, mode) {
+    const file = s.file(`key-${mode.toString(8)}`, `${KEY}\n`);
+    chmodSync(file, mode);
+    return { FATHOM_EMAIL_TRANSPORT: 'resend', FATHOM_EMAIL_FROM: FROM, FATHOM_EMAIL_TO: TO, FATHOM_EMAIL_CREDENTIAL_FILE: file };
+  }
+
+  test('modes 0600, 0400, 0640 and 0440 are accepted by status and send', async () => {
+    const s = await secretsDir();
+    try {
+      for (const mode of ACCEPTED) {
+        const config = await configFor(await envWithMode(s, mode), s);
+        assert.equal((await emailStatus(config)).state, 'configured', mode.toString(8));
+        const fetch = fakeFetch([200, { id: 'x' }]);
+        const t = await createTransport(config, { fetch, log: captureLog() });
+        await t.send(MSG);
+        assert.equal(fetch.calls.length, 1, `send reached the provider with mode ${mode.toString(8)}`);
+      }
+    } finally { s.done(); }
+  });
+
+  test('modes 0644, 0604 and 0444 are missing_credential for status and send', async () => {
+    const s = await secretsDir();
+    try {
+      for (const mode of REJECTED) {
+        const config = await configFor(await envWithMode(s, mode), s);
+        assert.equal((await emailStatus(config)).state, 'missing_credential', mode.toString(8));
+        const fetch = fakeFetch([200, { id: 'x' }]);
+        await assert.rejects(async () => { const t = await createTransport(config, { fetch, log: captureLog() }); await t.send(MSG); }, emailErr('missing_credential'), mode.toString(8));
+        assert.equal(fetch.calls.length, 0, `no request with mode ${mode.toString(8)}`);
+      }
+    } finally { s.done(); }
   });
 });
 
