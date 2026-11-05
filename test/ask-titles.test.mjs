@@ -346,6 +346,31 @@ test('AC3 quarterly in owner text does not admit quarter in a model title', () =
   assert.equal(validateTitle('Quarterly estimates', { fromModel: true, ownerWords }), 'Quarterly estimates');
 });
 
+test('AC3 fraction and multiplier words never pass in a model title, even in the owner\'s words', async t => {
+  const ownerWords = new Set(titleWords('How much income should I save this quarter? What about taxes?'));
+  assert.equal(validateTitle('Save a quarter of income', { fromModel: true, ownerWords }), null);
+  const maj = new Set(titleWords('Save the majority of income'));
+  assert.equal(validateTitle('Save the majority of income', { fromModel: true, ownerWords: maj }), null);
+  const dbl = new Set(titleWords('Double the savings'));
+  assert.equal(validateTitle('Double the savings', { fromModel: true, ownerWords: dbl }), null);
+  for (const w of ['quarter', 'quarters', 'third', 'thirds', 'fourth', 'fourths', 'fifth', 'fifths', 'sixth', 'seventh', 'eighth', 'ninth',
+    'tenth', 'tenths', 'halves', 'double', 'triple', 'quadruple', 'twice', 'thrice', 'fraction', 'majority', 'minority', 'most', 'bulk']) {
+    assert.equal(validateTitle(`Save ${w} income`, { fromModel: true, ownerWords: new Set(titleWords(`Save ${w} income`)) }), null, w);
+  }
+  const live = new Set(titleWords('Our quarterly estimates'));
+  assert.equal(validateTitle('Quarterly estimates', { fromModel: true, ownerWords: live }), 'Quarterly estimates');
+  const { db, thread, add } = await namingStore(t);
+  const first = 'How much income should I save this quarter?';
+  add(thread.key, 'me', first);
+  add(thread.key, 'fathom', '<p>Synthetic estimate answer one</p>');
+  add(thread.key, 'me', 'What about taxes?');
+  add(thread.key, 'fathom', '<p>Synthetic estimate answer two</p>');
+  const { engine, calls } = stubEngine({ title: 'Save a quarter of income' });
+  await nameThread({ db, engine, key: thread.key, clock: CLOCK });
+  assert.equal(calls.length, 1);
+  assert.deepEqual(rowOf(db, thread.key), { title: fallbackTitle(SC, first), title_source: 'auto' });
+});
+
 test('AC3 titleWords normalizes case, plurals, possessives and hyphens', () => {
   assert.deepEqual(titleWords("Owner's S-corp Taxes, estimates!"), ['owner', 's', 'corp', 'tax', 'estimate']);
 });

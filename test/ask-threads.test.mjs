@@ -595,8 +595,8 @@ test('AC4 the default trash-purge handler purges at the clock date and the run t
     assert.equal(typeof handler, 'function');
     // Built the way the scheduler builds it; ctx.now is a real instant on another date.
     const ctx = {
-      db, config: { dataDir: t.dataDir, clock: null, demo: false, engine: 'off', emailTransport: 'dev', publicUrl: null },
-      engine: null, transport: null, now: '2027-03-01T12:00:00.000Z', clock: '2026-11-05', periodKey: '2026-11-05', trigger: 'scheduled', jobRunId: 1,
+      db, config: { dataDir: t.dataDir, clock: '2026-11-05', demo: false, engine: 'off', emailTransport: 'dev', publicUrl: null },
+      engine: null, transport: null, now: '2027-03-01T12:00:00.000Z', clock: '2027-03-01', periodKey: '2026-11-05', trigger: 'scheduled', jobRunId: 1,
     };
     assert.deepEqual(await handler(ctx), { costUsd: 0, note: { purged: 1 } });
     const keys = db.prepare("SELECT key FROM conversations WHERE substr(key, 1, 4) = 'ask:'").all().map(r => r.key).sort();
@@ -604,6 +604,31 @@ test('AC4 the default trash-purge handler purges at the clock date and the run t
     assert.equal(countWhere(db, 'messages', 'conversation_key', exact.key), 0);
     assert.equal(db.prepare('SELECT count(*) AS n FROM messages').get().n, 2);
     assert.deepEqual(await handler(ctx), { costUsd: 0, note: { purged: 0 } }, 'a second run finds nothing');
+  } finally {
+    t.close();
+  }
+});
+
+test('AC4 the trash purge never runs ahead of the trash clock in a far east timezone', async () => {
+  const t = await tempDb();
+  try {
+    const db = t.db;
+    setSetting(db, 'timezone', 'Asia/Tokyo');
+    const kept = createThread(db, '2026-09-01T09:00:00.000Z');
+    const gone = createThread(db, '2026-09-01T09:00:00.000Z');
+    const set = db.prepare('UPDATE conversations SET trashed_at = ? WHERE key = ?');
+    set.run('2026-10-07T12:00:00.000Z', kept.key);
+    set.run('2026-10-06T17:59:59.000Z', gone.key);
+    const handler = defaultHandlers()['trash-purge'];
+    // Built the way the scheduler builds it in Tokyo: the local date is already the next day.
+    const ctx = {
+      db, config: {}, engine: null, transport: null,
+      now: '2026-11-05T18:00:00.000Z', clock: '2026-11-06', periodKey: '2026-11-06', trigger: 'scheduled', jobRunId: 1,
+    };
+    assert.deepEqual(await handler(ctx), { costUsd: 0, note: { purged: 1 } });
+    const keys = db.prepare("SELECT key FROM conversations WHERE substr(key, 1, 4) = 'ask:'").all().map(r => r.key);
+    assert.ok(keys.includes(kept.key), 'trashed 29 days 6 hours ago is kept');
+    assert.ok(!keys.includes(gone.key), 'trashed 30 days ago is purged');
   } finally {
     t.close();
   }
