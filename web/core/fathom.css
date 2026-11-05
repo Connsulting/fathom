@@ -1,0 +1,51 @@
+/* Fathom core styles: page reset, the figure provenance popover and the request error line.
+   Design styles live in their own sheet, scoped under .d-<id>. */
+
+html { color-scheme: dark; }
+body { margin: 0; background: #0a0c0d; color: #e6eaeb; }
+
+/* ---------- boot states ---------- */
+
+.fx-boot {
+  box-sizing: border-box; max-width: 640px; margin: 0 auto; padding: 64px 16px;
+  color: #8f999c; font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+.fx-boot b { display: block; margin-bottom: 6px; color: #e6eaeb; font-weight: 500; }
+
+/* ---------- figure popover ---------- */
+
+.fx-pop {
+  position: fixed; z-index: 9500; box-sizing: border-box;
+  width: max-content; max-width: min(280px, calc(100vw - 16px));
+  padding: 10px 12px; border-radius: 8px;
+  background: #14161a; color: #d8dce3; border: 1px solid #2c3039;
+  font: 12.5px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  text-align: left; font-weight: 400; letter-spacing: 0; text-transform: none;
+}
+.fx-pop .fx-pop-label { color: #9aa1ad; font-size: 11.5px; }
+.fx-pop .fx-pop-val {
+  margin: 2px 0 8px; color: #f1f3f6; font-size: 17px; line-height: 1.2;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-variant-numeric: tabular-nums;
+}
+.fx-pop .fx-pop-row { display: flex; gap: 10px; margin-top: 3px; }
+.fx-pop .fx-pop-k { flex: none; width: 44px; color: #6c727d; font-size: 11px; padding-top: 1px; }
+.fx-pop .fx-pop-v { flex: 1; min-width: 0; color: #c4c9d1; }
+
+/* ---------- request error line ---------- */
+
+.fx-err {
+  position: fixed; z-index: 9600; left: 50%; bottom: 16px; transform: translateX(-50%);
+  box-sizing: border-box; width: max-content; max-width: calc(100vw - 32px);
+  display: flex; align-items: center; gap: 12px;
+  padding: 8px 8px 8px 14px; border-radius: 8px;
+  background: #1a1414; color: #e8cfcb; border: 1px solid #4a2c2a;
+  font: 13px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+.fx-err[hidden] { display: none; }
+.fx-err .fx-err-t { min-width: 0; overflow-wrap: anywhere; }
+.fx-err .fx-err-x {
+  all: unset; box-sizing: border-box; flex: none; cursor: pointer;
+  padding: 4px 10px; border-radius: 6px; color: #c9b1ad; font-size: 12.5px;
+}
+.fx-err .fx-err-x:hover { background: #2a1e1d; color: #f3e3e0; }
+.fx-err .fx-err-x:focus-visible { outline: 2px solid #3fcfae; outline-offset: 1px; }

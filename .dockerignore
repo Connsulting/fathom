@@ -1,0 +1,12 @@
+.git
+.github
+node_modules
+data
+.e2e-data*
+mock-v2/private
+sample-data
+test-results
+playwright-report
+.env
+.env.*
+*.log

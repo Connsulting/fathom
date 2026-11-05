@@ -1,0 +1,604 @@
+// Fathom client core: window.Fathom, hash router, API-backed store, figure popover.
+// Port of mock-v2/core/core.js. Keeps every `api` member of mock-v2/CONTRACT.md (Core API) with the
+// same semantics, plus api.src and api.figPopover. Designs only touch window.Fathom.api.
+//
+// Differences from the mock:
+//  - No review harness, no demo switcher, no design switcher, nothing in localStorage.
+//  - The scenario comes from GET /api/scenario at boot. The server has already merged live state
+//    (rec status, tasks, wake) and adds `scenario.live`; api.state is derived from it.
+//  - Actions POST to the API, replace the scenario with the one in the response, then notify. They
+//    return a Promise (designs may ignore it). Requests run one at a time, in order. A failed
+//    request keeps the old state and shows a dismissible error line (role=alert).
+//  - api.go(name, params, opts) accepts opts.replace to replace the current history entry.
+//  - The figure popover shows cents when the value has a nonzero cents part.
+//
+// Reading notes kept from the mock:
+//  - api.verdict() returns raw strings with tokens (only {count} is replaced). Render via api.t().
+//  - api.rec(id) also returns recs whose live status is 'hidden'; api.recs() and api.needsYou() never do.
+//  - api.go(name, params): params is an object ({id}, {step}, {name}) or a bare value for the route's
+//    primary param (rec->id, onboarding->step, wargame->name, packs->id).
+//  - api.scenarioPick(name, idx): idx is a point/option index or its id string.
+//  - api.ask(questionId, key?): index (or id) into rec.qa when the conversation is a rec, otherwise an
+//    id into ask.suggested. Default conversation = rec on the rec route, else 'ask'.
+//  - Messages are { id, role, html, refs, ts, notice }. 'fathom' html is a series of <p>.
+
+import { money, resolveTokens, esc, KIND_WORDS } from '/shared/tokens.mjs';
+import { needsYou as needsYouOf, packStatus } from '/shared/rules.mjs';
+
+const ROUTES = new Set(['onboarding', 'brief', 'plan', 'rec', 'ask', 'wargame', 'goals', 'accounts',
+  'advisor', 'yearend', 'connect', 'engine', 'email', 'packs']);
+const PARAM_KEY = { rec: 'id', onboarding: 'step', wargame: 'name', packs: 'id' };
+const LAST_STEP = 5;
+
+// ---------------------------------------------------------------- small helpers
+
+const arr = v => (Array.isArray(v) ? v : []);
+
+// Whole dollars as api.money does, or dollars and cents when the value has a nonzero cents part.
+const moneyCents = n => (Math.round(Math.abs(Number(n)) * 100) % 100 ? money(n, { cents: true }) : money(n));
+
+const warned = new Set();
+const tokenOpts = {
+  onMissing(msg) {
+    if (warned.has(msg)) return;
+    warned.add(msg);
+    try { console.warn('[fathom] ' + msg); } catch (e) { /* no console */ }
+  },
+};
+
+// ---------------------------------------------------------------- scenario and derived state
+
+let S = null;           // scenario object from the API (replaced after every action)
+let version = 0;        // bumped on every change; caches key off it
+let routeStep = null;   // onboarding step of the current route (route state, not stored)
+const pendingPicks = {}; // war-game picks sent but not yet answered (shown immediately)
+
+const live = () => (S && S.live) || {};
+const recList = () => arr(S && S.recs);
+const rawRec = id => recList().find(r => r.id === id) || null;
+const packList = () => arr(S && S.packs);
+const rawPack = id => packList().find(p => p.id === id) || null;
+const demoId = () => (live().demo === 'fresh' ? 'fresh' : 'november');
+
+function figOf(key) {
+  const f = S && S.fig && key != null ? S.fig[key] : null;
+  if (f && typeof f === 'object') return f;
+  return { v: 0, src: null, kind: 'e', label: String(key == null ? '' : key), missing: true };
+}
+function srcOf(id) {
+  const s = S && S.src && id != null ? S.src[id] : null;
+  return { id: id == null ? null : id, label: (s && s.label) || 'Unknown source', asOf: (s && s.asOf) || '' };
+}
+
+const t = s => resolveTokens(S, s, true, tokenOpts);
+const txt = s => resolveTokens(S, s, false, tokenOpts);
+
+let stateCache = { ver: -1, val: null };
+function stateView() {
+  if (stateCache.ver === version && stateCache.val) return stateCache.val;
+  const L = live();
+  const val = {
+    demo: demoId(),
+    engine: !!L.engine,
+    onboardStep: routeStep != null ? routeStep : (Number.isFinite(Number(L.onboardStep)) ? Number(L.onboardStep) : 0),
+    picks: Object.assign({}, L.picks || {}, pendingPicks),
+    convs: L.conversations || {},
+  };
+  stateCache = { ver: version, val };
+  return val;
+}
+
+let convCache = { ver: -1, map: new Map() };
+function mapMsg(m) {
+  return {
+    id: m.id,
+    role: m.role,
+    html: t(m.text),
+    refs: arr(m.refs),
+    ts: m.ts == null ? '' : String(m.ts), // the server already labels it ('Nov 5, 9:04 AM')
+    notice: !!m.notice,
+  };
+}
+function conversation(key) {
+  const k = key == null || key === '' ? 'ask' : String(key);
+  if (convCache.ver !== version) convCache = { ver: version, map: new Map() };
+  if (convCache.map.has(k)) return convCache.map.get(k);
+  const list = arr((live().conversations || {})[k]).map(mapMsg);
+  convCache.map.set(k, list);
+  return list;
+}
+
+function needsYou() {
+  return needsYouOf(recList());
+}
+
+function verdict() {
+  const n = needsYou().length;
+  const v = (S && S.verdict) || {};
+  if (!n) {
+    const c = v.clear || {};
+    return { level: 'clear', count: 0, headline: c.headline || '', sub: c.sub || '' };
+  }
+  const a = v.attention || {};
+  const sub = x => String(x == null ? '' : x).replace(/\{count\}/g, String(n));
+  return { level: 'attention', count: n, headline: sub(a.headline), sub: sub(a.sub) };
+}
+
+// Pack live status from the base status plus live.packs overrides, exactly as the mock computed it.
+function livePack(p) {
+  const o = (live().packs || {})[p.id] || {};
+  const base = p.baseStatus || p.status;
+  return Object.assign({}, p, { status: packStatus(base, o), baseStatus: base });
+}
+function packs() { return packList().map(livePack); }
+function pack(id) { const p = rawPack(id); return p ? livePack(p) : null; }
+
+// ---------------------------------------------------------------- subscriptions and design registry
+
+const coreSubs = [];
+let designSubs = [];
+const designs = new Map();
+let current = null;     // { id, def }
+let booted = false;
+let cur = null;         // current route { name, params }
+let suppressHash = null;
+let root = null;
+
+function notify() {
+  version += 1;
+  coreSubs.slice().forEach(fn => { try { fn(); } catch (e) { console.error(e); } });
+  designSubs.slice().forEach(fn => { try { fn(stateView(), cur); } catch (e) { console.error(e); } });
+  if (current && current.def && typeof current.def.render === 'function') {
+    try { current.def.render(cur); } catch (e) { console.error(e); }
+  }
+}
+
+function on(fn) {
+  if (typeof fn !== 'function') return () => {};
+  designSubs.push(fn);
+  return () => { designSubs = designSubs.filter(f => f !== fn); };
+}
+
+// ---------------------------------------------------------------- routes
+
+function defaultRoute() {
+  if (demoId() === 'fresh') return { name: 'onboarding', params: { step: stateView().onboardStep || 0 } };
+  return { name: 'brief', params: {} };
+}
+const clampStep = n => Math.max(0, Math.min(LAST_STEP, Number.isFinite(n) ? Math.floor(n) : 0));
+
+function normalizeRoute(r) {
+  if (!r || !ROUTES.has(r.name)) return defaultRoute();
+  const p = r.params || {};
+  if (demoId() === 'fresh') {
+    const step = r.name === 'onboarding' && p.step != null && p.step !== '' ? clampStep(Number(p.step)) : stateView().onboardStep;
+    return { name: 'onboarding', params: { step } };
+  }
+  if (r.name === 'onboarding') return defaultRoute();
+  if (r.name === 'rec') return p.id && rawRec(String(p.id)) ? { name: 'rec', params: { id: String(p.id) } } : { name: 'plan', params: {} };
+  if (r.name === 'packs') return p.id && rawPack(String(p.id)) ? { name: 'packs', params: { id: String(p.id) } } : { name: 'packs', params: {} };
+  if (r.name === 'wargame') {
+    const n = p.name != null ? String(p.name) : '';
+    return { name: 'wargame', params: n === 'salary' || n === 'deferral' ? { name: n } : {} };
+  }
+  return { name: r.name, params: {} };
+}
+
+function parseHash(hash) {
+  const parts = String(hash || '').replace(/^#\/?/, '').split('/').filter(Boolean);
+  if (!parts.length) return null;
+  const name = parts[0];
+  const key = PARAM_KEY[name];
+  let val = parts[1];
+  if (val != null) { try { val = decodeURIComponent(val); } catch (e) { /* keep raw */ } }
+  return { name, params: key && val != null ? { [key]: val } : {} };
+}
+
+function routeHash(r) {
+  if (!r) return '';
+  const key = PARAM_KEY[r.name];
+  const v = key && r.params ? r.params[key] : null;
+  return '#/' + r.name + (v != null && v !== '' ? '/' + encodeURIComponent(v) : '');
+}
+
+function urlWith(hash) {
+  return window.location.pathname + window.location.search + hash;
+}
+
+function applyRoute(r, opts) {
+  opts = opts || {};
+  const next = normalizeRoute(r);
+  const h = routeHash(next);
+  const changed = h !== routeHash(cur);
+  cur = next;
+  routeStep = next.name === 'onboarding' ? next.params.step : null;
+  stateCache.ver = -1;
+  if (window.location.hash !== h) {
+    if (opts.replace) {
+      try { window.history.replaceState(null, '', urlWith(h)); } catch (e) { /* ignore */ }
+    } else {
+      suppressHash = h;
+      window.location.hash = h;
+    }
+  }
+  if (opts.silent) return changed;
+  if (changed || opts.force) {
+    closePopover();
+    if (changed) { try { window.scrollTo(0, 0); } catch (e) { /* ignore */ } }
+    notify();
+  }
+  return changed;
+}
+
+function go(name, params, opts) {
+  let p = params;
+  if (p != null && typeof p !== 'object') p = { [PARAM_KEY[name] || 'id']: p };
+  applyRoute({ name, params: p || {} }, { replace: !!(opts && opts.replace) });
+}
+
+function onHashChange() {
+  if (suppressHash && window.location.hash === suppressHash) { suppressHash = null; return; }
+  suppressHash = null;
+  const parsed = parseHash(window.location.hash);
+  const before = routeHash(cur);
+  applyRoute(parsed, { replace: true, silent: true });
+  if (routeHash(cur) !== before) {
+    closePopover();
+    try { window.scrollTo(0, 0); } catch (e) { /* ignore */ }
+    notify();
+  }
+}
+
+// ---------------------------------------------------------------- API requests
+
+let queue = Promise.resolve();
+let errEl = null;
+
+function hideError() {
+  if (errEl) { errEl.remove(); errEl = null; }
+}
+
+function showError(message) {
+  hideError();
+  const el = document.createElement('div');
+  el.className = 'fx-err';
+  el.setAttribute('role', 'alert');
+  const span = document.createElement('span');
+  span.className = 'fx-err-t';
+  span.textContent = message;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'fx-err-x';
+  btn.textContent = 'Dismiss';
+  btn.addEventListener('click', hideError);
+  el.appendChild(span);
+  el.appendChild(btn);
+  document.body.appendChild(el);
+  errEl = el;
+}
+
+async function postJson(path, body) {
+  let res;
+  try {
+    res = await fetch(path, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json' },
+      body: JSON.stringify(body || {}),
+      credentials: 'same-origin',
+    });
+  } catch (e) {
+    throw new Error('The server could not be reached.');
+  }
+  let data = null;
+  try { data = await res.json(); } catch (e) { data = null; }
+  if (!res.ok) throw new Error((data && typeof data.error === 'string' && data.error) || 'The server answered ' + res.status + '.');
+  if (!data || !data.scenario || typeof data.scenario !== 'object') throw new Error('The server sent an unexpected reply.');
+  return data;
+}
+
+// Swap in a new scenario and keep the route valid for it (for example onboarding finishing).
+function applyScenario(next) {
+  S = next;
+  version += 1;
+  if (cur) {
+    const before = routeHash(cur);
+    applyRoute(cur, { replace: true, silent: true });
+    if (routeHash(cur) !== before) {
+      closePopover();
+      try { window.scrollTo(0, 0); } catch (e) { /* ignore */ }
+    }
+  }
+}
+
+// POST in order; on success replace the scenario and notify; on failure keep the old state.
+// Resolves with onOk(data) or null; never rejects.
+function send(path, body, onOk, onDone) {
+  const run = () => postJson(path, body).then(
+    data => {
+      if (onDone) onDone();
+      applyScenario(data.scenario);
+      hideError();
+      let out = data;
+      try { out = onOk ? onOk(data) : data; } catch (e) { out = null; }
+      notify();
+      return out;
+    },
+    err => {
+      if (onDone) { onDone(); notify(); }
+      showError('Could not save that change. ' + (err && err.message ? err.message : ''));
+      return null;
+    }
+  );
+  const p = queue.then(run);
+  queue = p;
+  return p;
+}
+
+const done = v => Promise.resolve(v === undefined ? null : v);
+
+// ---------------------------------------------------------------- actions
+
+const ACTIONS = new Set(['accept', 'start', 'complete', 'dismiss', 'snooze', 'reopen']);
+
+function act(recId, action, arg) {
+  const r = rawRec(recId);
+  if (!r || r.status === 'hidden') return done();
+  const body = { action };
+  if (action === 'task') {
+    const i = Number(arg);
+    if (!Number.isInteger(i) || i < 0 || i >= arr(r.tasks).length) return done();
+    body.arg = i;
+  } else {
+    if (!ACTIONS.has(action)) return done();
+    if (action === 'snooze') body.arg = arg != null && arg !== '' ? String(arg) : 'Next month';
+  }
+  return send('/api/recs/' + encodeURIComponent(recId) + '/action', body);
+}
+
+function activeKey() {
+  return cur && cur.name === 'rec' && cur.params && cur.params.id ? cur.params.id : 'ask';
+}
+
+function ask(questionId, convKey) {
+  if (questionId == null || questionId === '') return done();
+  const key = convKey || activeKey();
+  const qid = typeof questionId === 'string' && /^\d+$/.test(questionId) ? Number(questionId) : questionId;
+  return send('/api/ask', { key, questionId: qid }, d => (d.message ? mapMsg(d.message) : null));
+}
+
+function askFree(text, convKey) {
+  const clean = String(text == null ? '' : text).trim();
+  if (!clean) return done();
+  const key = convKey || activeKey();
+  return send('/api/ask', { key, text: clean }, d => (d.message ? mapMsg(d.message) : null));
+}
+
+function whatIf(id) {
+  const p = rawPack(id);
+  if (!p || !p.whatIf) return done();
+  return send('/api/packs/' + encodeURIComponent(id) + '/whatif', {});
+}
+
+function packToggle(id) {
+  if (!rawPack(id)) return done();
+  return send('/api/packs/' + encodeURIComponent(id) + '/toggle', {}, d => {
+    if (typeof d.status === 'string') return d.status;
+    const p = pack(id);
+    return p ? p.status : null;
+  });
+}
+
+function scenarioPick(name, idx) {
+  if (name !== 'salary' && name !== 'deferral') return done();
+  const w = S && S.wargame && S.wargame[name];
+  if (!w) return done();
+  const list = arr(name === 'salary' ? w.points : w.options);
+  const i = typeof idx === 'string' && !/^\d+$/.test(idx) ? list.findIndex(x => x && x.id === idx) : Number(idx);
+  if (!Number.isInteger(i) || i < 0 || i >= list.length) return done();
+  pendingPicks[name] = i;
+  notify();
+  return send('/api/wargame/' + name + '/pick', { index: i }, null, () => {
+    if (pendingPicks[name] === i) delete pendingPicks[name];
+  });
+}
+
+function onboard(step) {
+  const n = Number(step);
+  if (!Number.isFinite(n)) return done();
+  if (n > LAST_STEP) return send('/api/onboarding', { step: LAST_STEP + 1 });
+  const s = clampStep(n);
+  routeStep = s;
+  go('onboarding', { step: s });
+  return send('/api/onboarding', { step: s });
+}
+
+function setEngine(v) {
+  return send('/api/engine', { on: !!v });
+}
+
+const api = {
+  get s() { return S; },
+  get state() { return stateView(); },
+  get route() { return cur; },
+  go,
+  on,
+  t,
+  txt,
+  fig: figOf,
+  src: srcOf,
+  money,
+  recs: () => recList().filter(r => r.status !== 'hidden'),
+  rec: id => rawRec(id),
+  needsYou,
+  verdict,
+  act,
+  ask,
+  askFree,
+  conversation,
+  scenarioPick,
+  onboard,
+  engineOn: () => !!live().engine,
+  setEngine,
+  demo: demoId,
+  packs,
+  pack,
+  whatIf,
+  packToggle,
+  figPopover: el => openPopover(el),
+};
+
+// ---------------------------------------------------------------- figure popover
+
+let pop = null;   // { el, anchor }
+
+function closePopover() {
+  if (pop) { pop.el.remove(); pop = null; }
+}
+
+function openPopover(anchor) {
+  if (!anchor || !anchor.getBoundingClientRect) return;
+  const same = pop && pop.anchor === anchor;
+  closePopover();
+  if (same) return;
+  const key = anchor.getAttribute('data-fig');
+  const f = figOf(key);
+  const src = srcOf(f.src);
+  const kind = KIND_WORDS[f.kind] || KIND_WORDS.e;
+  const el = document.createElement('div');
+  el.className = 'fx-pop';
+  el.setAttribute('role', 'dialog');
+  el.setAttribute('aria-label', 'Figure source');
+  el.innerHTML =
+    '<div class="fx-pop-label">' + esc(f.label || key) + '</div>' +
+    '<div class="fx-pop-val">' + esc(moneyCents(f.v)) + '</div>' +
+    '<div class="fx-pop-row"><span class="fx-pop-k">Source</span><span class="fx-pop-v">' + esc(src.label) + '</span></div>' +
+    (src.asOf ? '<div class="fx-pop-row"><span class="fx-pop-k">As of</span><span class="fx-pop-v">' + esc(src.asOf) + '</span></div>' : '') +
+    '<div class="fx-pop-row"><span class="fx-pop-k">Kind</span><span class="fx-pop-v">' + esc(kind) + '</span></div>';
+  document.body.appendChild(el);
+  const r = anchor.getBoundingClientRect();
+  const w = el.offsetWidth;
+  const h = el.offsetHeight;
+  const vw = document.documentElement.clientWidth;
+  const vh = window.innerHeight;
+  const left = Math.min(Math.max(8, r.left + r.width / 2 - w / 2), vw - w - 8);
+  let top = r.bottom + 8;
+  if (top + h > vh - 8 && r.top - h - 8 >= 8) top = r.top - h - 8;
+  el.style.left = Math.round(left) + 'px';
+  el.style.top = Math.round(Math.max(8, top)) + 'px';
+  pop = { el, anchor };
+}
+
+document.addEventListener('click', e => {
+  if (!pop) return;
+  if (pop.el.contains(e.target) || pop.anchor.contains(e.target)) return;
+  closePopover();
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closePopover();
+});
+// A re-render replaces the anchor; a popover for a figure that is gone closes.
+coreSubs.push(() => { if (pop && !pop.anchor.isConnected) closePopover(); });
+
+// ---------------------------------------------------------------- design lifecycle
+
+function bootMessage(title, body, retry) {
+  if (!root) return;
+  root.className = '';
+  root.innerHTML = '<div class="fx-boot" role="alert"><b>' + esc(title) + '</b>' + esc(body) +
+    (retry ? ' <button type="button" data-fx-retry>Try again</button>' : '') + '</div>';
+  const b = root.querySelector('[data-fx-retry]');
+  if (b) b.addEventListener('click', () => { window.location.reload(); });
+}
+
+function unmountCurrent() {
+  if (current && current.def && typeof current.def.unmount === 'function') {
+    try { current.def.unmount(); } catch (e) { console.error(e); }
+  }
+  designSubs = [];
+  closePopover();
+  current = null;
+}
+
+function mountDesign(def) {
+  unmountCurrent();
+  root.innerHTML = '';
+  root.className = 'd-' + def.id;
+  current = { id: def.id, def };
+  try {
+    def.mount(root, api);
+  } catch (e) {
+    console.error(e);
+    bootMessage('Fathom could not start.', 'The interface failed to load: ' + (e && e.message ? e.message : 'unknown error') + '.');
+    return;
+  }
+  if (typeof def.render === 'function') {
+    try { def.render(cur); } catch (e) { console.error(e); }
+  }
+}
+
+function pickDesign() {
+  if (designs.has('horizon')) return designs.get('horizon');
+  const first = designs.values().next();
+  return first.done ? null : first.value;
+}
+
+function registerDesign(def) {
+  if (!def || !def.id || typeof def.mount !== 'function') {
+    console.error('[fathom] registerDesign needs { id, mount }');
+    return;
+  }
+  designs.set(def.id, def);
+  if (booted && !current) mountDesign(def);
+}
+
+// ---------------------------------------------------------------- boot
+
+async function loadScenario() {
+  const res = await fetch('/api/scenario', { headers: { accept: 'application/json' }, credentials: 'same-origin', cache: 'no-store' });
+  if (!res.ok) throw new Error('The server answered ' + res.status + '.');
+  const data = await res.json();
+  if (!data || typeof data !== 'object' || !data.meta) throw new Error('The server sent an unexpected reply.');
+  return data;
+}
+
+async function boot() {
+  root = document.getElementById('app');
+  if (!root) {
+    root = document.createElement('div');
+    root.id = 'app';
+    document.body.appendChild(root);
+  }
+  try {
+    S = await loadScenario();
+  } catch (e) {
+    bootMessage('Fathom could not load your plan.', (e && e.message ? e.message : 'Unknown error.'), true);
+    return;
+  }
+  version += 1;
+  applyRoute(parseHash(window.location.hash), { replace: true, silent: true });
+  booted = true;
+  window.addEventListener('hashchange', onHashChange);
+  const def = pickDesign();
+  if (def) mountDesign(def);
+  else bootMessage('Fathom could not start.', 'No interface is registered.');
+  // Engine switches and provenance popovers for any .fx-fig, unless a design handles the click
+  // and calls preventDefault.
+  root.addEventListener('click', e => {
+    if (e.defaultPrevented) return;
+    const sw = e.target.closest && e.target.closest('[data-fx-engine]');
+    if (sw && root.contains(sw)) { e.preventDefault(); setEngine(!live().engine); return; }
+    const el = e.target.closest && e.target.closest('.fx-fig');
+    if (el && root.contains(el)) openPopover(el);
+  });
+  root.addEventListener('keydown', e => {
+    if (e.defaultPrevented || (e.key !== 'Enter' && e.key !== ' ')) return;
+    const el = e.target.closest && e.target.closest('.fx-fig');
+    if (el && root.contains(el)) { e.preventDefault(); openPopover(el); }
+  });
+}
+
+window.Fathom = { registerDesign, api };
+
+function start() { Promise.resolve().then(boot); }
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
+else start();
