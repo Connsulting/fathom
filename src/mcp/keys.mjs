@@ -9,7 +9,11 @@ import { parseJson } from '../store/db.mjs';
 import { tools } from '../tools/index.mjs';
 
 export const KEY_PREFIX = 'fathom_';
-export const SCOPES = Object.freeze(['read', 'write:recs']);
+export const SCOPE_INFO = Object.freeze([
+  { id: 'read', label: 'Read', access: 'Read household facts, accounts, transactions, recommendations, deadlines, goals, figures and knowledge packs.' },
+  { id: 'write:recs', label: 'Change recommendation status', access: 'Set a recommendation status (accept, start, finish, dismiss, snooze). Nothing else is writable.' },
+]);
+export const SCOPES = Object.freeze(SCOPE_INFO.map(s => s.id));
 export const SECRET_FILE = 'api-key-secret';
 
 const KEY_LENGTH = KEY_PREFIX.length + 43;
@@ -78,7 +82,6 @@ function cleanName(name) {
 export function createKeyService({ db, serverSecret, now = () => new Date() }) {
   const byId = db.prepare('SELECT * FROM api_keys WHERE id = ?');
   const all = db.prepare('SELECT * FROM api_keys ORDER BY created_at, id');
-  const hashes = db.prepare('SELECT id, key_hash, revoked_at FROM api_keys');
   const insert = db.prepare('INSERT INTO api_keys (id, name, key_hash, scopes, created_at) VALUES (?, ?, ?, ?, ?)');
   const revokeStmt = db.prepare('UPDATE api_keys SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL');
   const touchStmt = db.prepare('UPDATE api_keys SET last_used_at = ? WHERE id = ?');
@@ -110,13 +113,13 @@ export function createKeyService({ db, serverSecret, now = () => new Date() }) {
       if (typeof presented !== 'string' || presented.length !== KEY_LENGTH || !presented.startsWith(KEY_PREFIX)) return null;
       const want = Buffer.from(hashKey(presented, serverSecret), 'hex');
       let match = null;
-      for (const row of hashes.all()) {
+      for (const row of all.all()) {
         const have = Buffer.from(String(row.key_hash), 'hex');
         const same = have.length === want.length && crypto.timingSafeEqual(have, want);
         if (same && match === null) match = row;
       }
       if (!match || match.revoked_at !== null) return null;
-      return toRecord(byId.get(match.id));
+      return toRecord(match);
     },
 
     touch(id) {

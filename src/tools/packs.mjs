@@ -2,16 +2,13 @@
 // Packs load from ctx.packDirs, else the repo packs/ plus `<ctx.dataDir>/packs/your-plans` when it
 // exists. Status comes from the stored facts, with a packs_state row whose `active` is set
 // overriding it (1 active, 0 available).
-//
-// Load this module through ./index.mjs only: it imports ToolError from there, and index.mjs
-// spreads `packTools` into the registry at load time.
 
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadPacks, activePacks } from '../packs/index.mjs';
 import { parseJson } from '../store/db.mjs';
-import { ToolError } from './index.mjs';
+import { ToolError } from './errors.mjs';
 
 export const REPO_PACKS_DIR = fileURLToPath(new URL('../../packs/', import.meta.url)).replace(/[\\/]$/, '');
 

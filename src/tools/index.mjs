@@ -11,17 +11,11 @@ import { getSetting, tx, cents, parseJson as parse } from '../store/db.mjs';
 import { loadRecs, loadContent, loadPacks, tokenScope, recFromRow, resolveClock, todayUtc } from '../scenario/build.mjs';
 import { needsYou, verdictLevel, packStatus, STATUSES } from '../shared/rules.mjs';
 import { resolveTokens } from '../shared/tokens.mjs';
+import { ToolError } from './errors.mjs';
 import { packTools } from './packs.mjs';
 
+export { ToolError };
 export { packDirsFor } from './packs.mjs';
-
-export class ToolError extends Error {
-  constructor(code, message) {
-    super(message);
-    this.name = 'ToolError';
-    this.code = code;
-  }
-}
 
 const SETTABLE = ['accepted', 'doing', 'done', 'dismissed', 'snoozed', 'proposed'];
 const DATE = '^\\d{4}-\\d{2}-\\d{2}$';

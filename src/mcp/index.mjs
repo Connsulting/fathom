@@ -5,7 +5,6 @@
 
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { HttpError, sendJson, sendError, readJsonBody } from '../api/http.mjs';
-import { packDirsFor } from '../tools/index.mjs';
 import { isAllowedHost, isAllowedOrigin } from './guard.mjs';
 import { createToolServer } from './server.mjs';
 
@@ -27,8 +26,6 @@ function authenticate(req, keys) {
 }
 
 export function createMcpHandler({ db, keys, config }) {
-  const packDirs = packDirsFor(config.dataDir);
-
   return async function handleMcp(req, res) {
     const host = req.headers.host;
     if (!isAllowedHost(host, config)) return refuse(req, res, 403, { error: 'forbidden host' });
@@ -46,7 +43,7 @@ export function createMcpHandler({ db, keys, config }) {
     }
 
     keys.touch(record.id);
-    const ctx = { db, now: new Date(), packDirs, clock: config.clock };
+    const ctx = { db, now: new Date(), dataDir: config.dataDir, clock: config.clock };
     const server = createToolServer({ scopes: record.scopes, ctx });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     res.on('close', () => {

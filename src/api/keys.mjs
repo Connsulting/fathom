@@ -3,12 +3,7 @@
 
 import { HttpError } from './http.mjs';
 import { tools } from '../tools/index.mjs';
-import { KeyError } from '../mcp/keys.mjs';
-
-export const SCOPE_INFO = [
-  { id: 'read', label: 'Read', access: 'Read household facts, accounts, transactions, recommendations, deadlines, goals, figures and knowledge packs.' },
-  { id: 'write:recs', label: 'Change recommendation status', access: 'Set a recommendation status (accept, start, finish, dismiss, snooze). Nothing else is writable.' },
-];
+import { KeyError, SCOPE_INFO } from '../mcp/keys.mjs';
 
 function keyCall(fn) {
   try {
