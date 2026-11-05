@@ -300,7 +300,7 @@ tags the seven manifest-backed demo pack rows with `def.manifest` in demo stores
 only, sets `def.label` to the demo name on those tagged rows and adds the synthetic fact
 `income.agiEstimate` when absent.
 
-Migration 007 (`007-jobs-email.sql`) adds the scheduler columns `job_runs.period_key`, `trigger`,
+Migration 008 (`008-jobs-email.sql`) adds the scheduler columns `job_runs.period_key`, `trigger`,
 `duration_ms` and `error_class` with the partial unique index on (`job_id`, `period_key`) (rows
 with no period key, such as the planner's own runs, may repeat), and the tables `job_lock`,
 `email_sends` and `deadline_alerts`. The new tables have no foreign keys, so the demo seed clears
