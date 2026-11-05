@@ -510,8 +510,8 @@ would derive from `content.wargame`.
 
 Each module in `src/jobs/triggers/` exports `id`, `domain`, `trigger`, `packs`, `gate` (a pack
 rule over facts that tolerates absent facts), `calcs`, `kb`, `window(ctx)`, `evaluate(ctx)` (null,
-a hit, or `{blocked: reason}`), `build(ctx, hit)` and `template(ctx, hit)`. A trigger hits when its
-gate holds, its window has not closed and `evaluate` returns a hit. A null evaluation after one of
+a hit, or `{blocked: reason}`), `build(ctx, hit)` and `template(ctx, hit)`, plus an optional `needsYear` flag: a trigger with it
+is skipped (state none) when no planning tax year is known. A trigger hits when its gate holds, its window has not closed and `evaluate` returns a hit. A null evaluation after one of
 the trigger's `calcs` threw is blocked as `calc_failed`, never retired.
 
 | Id | Domain / class | Window |
