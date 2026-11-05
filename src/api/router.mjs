@@ -36,6 +36,7 @@ const TABLE = [
   { method: 'POST', path: '/api/keys', handler: k.createKey },
   { method: 'POST', path: '/api/keys/:id/revoke', handler: k.revokeKey },
   { method: 'GET', path: '/api/mcp', handler: k.mcpInfo },
+  { method: 'POST', path: '/api/jobs/plan/run', handler: h.planRun },
   { method: 'POST', path: '/api/files', handler: ih.uploadFiles, upload: true, ingest: true },
   { method: 'GET', path: '/api/files', handler: ih.listFiles, ingest: true },
   { method: 'POST', path: '/api/files/:id/retry', handler: ih.retryFile, ingest: true },

@@ -5,10 +5,17 @@ export function upsertFact(db, { key, value, src = null, asOf = null, confirmed 
   if (typeof key !== 'string' || key.trim() === '') throw new TypeError('A fact key is required');
   const json = JSON.stringify(value);
   if (json === undefined) throw new TypeError('A fact value must be JSON');
-  const existing = db.prepare('SELECT value, confirmed FROM facts WHERE key = ?').get(key);
+  const existing = db.prepare('SELECT value, src, as_of, confirmed, file_id, parser, locator FROM facts WHERE key = ?').get(key);
   if (existing && existing.confirmed && !confirmed) return { written: false, reason: 'confirmed' };
   const { fileId = null, parser = null, locator = null } = provenance || {};
   const loc = locator == null || typeof locator === 'string' ? locator : JSON.stringify(locator);
+  // An identical write (value and every provenance column) is a no-op: no statement, no
+  // updated_at churn.
+  if (existing && existing.value === json && existing.src === src && existing.as_of === asOf
+    && existing.confirmed === (confirmed ? 1 : 0) && existing.file_id === fileId && existing.parser === parser
+    && existing.locator === loc) {
+    return { written: false, changed: false, reason: 'unchanged' };
+  }
   db.prepare(`INSERT INTO facts (key, value, src, as_of, confirmed, file_id, parser, locator, updated_at)
               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
               ON CONFLICT(key) DO UPDATE SET value = excluded.value, src = excluded.src, as_of = excluded.as_of,

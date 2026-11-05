@@ -24,6 +24,7 @@ export const LAW_REFS = freeze({
   qbiThresholds: source('IRS Revenue Procedure 2025-32', 'https://www.irs.gov/irb/2025-45_IRB', '4.26 qualified business income'),
   qbi: source('26 USC 199A', 'https://uscode.house.gov/view.xhtml?req=granuleid:USC-prelim-title26-section199A&num=0&edition=prelim', 'Subsections (a), (b), (d) and (i)'),
   salary: source('IRS S corporation compensation', 'https://www.irs.gov/businesses/small-businesses-self-employed/s-corporation-compensation-and-medical-insurance-issues', 'Reasonable compensation before non-wage distributions'),
+  childTaxCredit: source('26 USC 24', 'https://www.law.cornell.edu/uscode/text/26/24', '(b)(1) reduction and (h)(3) threshold'),
 });
 
 export const TAX_2026 = freeze({
@@ -55,6 +56,7 @@ export const TAX_2026 = freeze({
   virginia: { ceilings: [3000, 5000, 17000], rates: [0.02, 0.03, 0.05, 0.0575] },
   hsa: { self: 4400, family: 8750, catchUp: 1000, catchUpAge: 55 },
   dependentCare: { annual: 7500, mfs: 3750 },
+  childTaxCredit: { phaseOutStep: 1000, phaseOutReduction: 50 },
   qbi: {
     rate: 0.20, wageRate: 0.50, alternativeWageRate: 0.25, propertyRate: 0.025,
     threshold: { single: 201750, mfj: 403500, mfs: 201775, hoh: 201750, qss: 201750 },

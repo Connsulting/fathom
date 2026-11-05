@@ -84,7 +84,8 @@ test('upsertFact never lets an unconfirmed value overwrite a confirmed one, and 
   assert.equal(upsertFact(db, { key: 'household.dependents', value: 4, src: 'parser',
     provenance: { fileId: 'file-synthetic', parser: 'synthetic', locator: 'row 2' } }).written, false);
   assert.equal(getFacts(db)['household.dependents'], 3, 'the confirmed value stands');
-  assert.deepEqual(upsertFact(db, { key: 'household.dependents', value: 3, src: 'you', confirmed: true }), { written: true, changed: false }, 'same value');
+  // An identical write (same value and provenance) is a no-op (test/store-facts.test.mjs MGI4).
+  assert.deepEqual(upsertFact(db, { key: 'household.dependents', value: 3, src: 'you', confirmed: true }), { written: false, changed: false, reason: 'unchanged' }, 'same value');
   assert.deepEqual(upsertFact(db, { key: 'household.dependents', value: 5, src: 'you', confirmed: true }), { written: true, changed: true }, 'confirmed over confirmed');
 
   upsertFact(db, { key: 'household.state', value: 'VA', asOf: '2026-11-01',
