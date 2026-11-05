@@ -460,7 +460,7 @@ test('B3 r2: a figure reference in a scripted get_recommendation result never gr
 test('B3 r2: an identifier-like string under an unremarkable key never grounds its digits', async t => {
   const s = await demoStore(t);
   const scenario = buildScenario(s.db);
-  for (const [text, value] of [['8263', 'rec8263'], ['529', 'plan529'], ['4821', 'acct4821x']]) {
+  for (const [text, value] of [['8263', 'rec8263'], ['$529', 'plan529'], ['4821', 'acct4821x']]) {
     for (const key of ['ref', 'note', 'fig', 'detail', 'tag']) {
       const result = { title: 'Synthetic', entry: { [key]: value, v: 12 } };
       const r = groundAnswer(`The amount is ${text}.`, { scenario, data: [], toolResults: [{ name: 'get_recommendation', args: {}, result }] });
