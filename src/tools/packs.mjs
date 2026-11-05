@@ -7,7 +7,7 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadPacks, activePacks } from '../packs/index.mjs';
+import { loadPacks, activePacks, manifestIdOf } from '../packs/index.mjs';
 import { parseJson } from '../store/db.mjs';
 import { getFacts } from '../store/facts.mjs';
 import { packStatus } from '../shared/rules.mjs';
@@ -32,14 +32,14 @@ export function packDirsFor(dataDir) {
 
 const compare = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 
-// packs_state rows by the manifest id they stand for: def.manifest when it is a string, else the
-// row's own id. The first row in display order wins.
+// packs_state rows by the manifest id they stand for (manifestIdOf). The first row in display
+// order wins.
 function rowsByManifest(db) {
   const rows = new Map();
   for (const r of db.prepare('SELECT id, def, active, exploring FROM packs_state ORDER BY sort, id').all()) {
     const parsed = parseJson(r.def, null);
     const def = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
-    const key = typeof def.manifest === 'string' && def.manifest ? def.manifest : r.id;
+    const key = manifestIdOf(r.id, def);
     if (!rows.has(key)) rows.set(key, { def, active: r.active, exploring: r.exploring });
   }
   return rows;
@@ -169,7 +169,8 @@ export const packTools = [
         }
       }
       matches.sort((a, b) => b.score - a.score || compare(a.packId, b.packId) || compare(a.id, b.id));
-      return { query: args.query, results: matches.slice(0, limit), total: matches.length, truncated: matches.length > limit };
+      // The query is not echoed: no tool returns an argument outside identifier keys.
+      return { results: matches.slice(0, limit), total: matches.length, truncated: matches.length > limit };
     },
   },
 ];

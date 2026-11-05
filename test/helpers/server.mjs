@@ -98,7 +98,15 @@ async function healthy(baseUrl) {
 
 const pause = ms => new Promise(r => setTimeout(r, ms));
 
-// Start `node src/server.mjs` (or `npm start` with npm: true) and wait for GET /healthz.
+// True once this child printed its own listening line naming `port`. freePort can hand out a
+// port another process binds before the child does, so a healthy /healthz alone may belong to a
+// foreign server; the child's own line proves the port is its own.
+function listeningOn(text, port) {
+  return new RegExp(`fathom listening on \\S*:${port}(?![0-9])`).test(text);
+}
+
+// Start `node src/server.mjs` (or `npm start` with npm: true) and wait for the child's own
+// `fathom listening on` line naming its port, then GET /healthz. Fails if the child exits first.
 // Returns { baseUrl, port, dataDir, dbFile, child, output(), stop() }.
 export async function spawnServer({ dataDir, env = {}, npm = false, timeoutMs = 20000 } = {}) {
   dataDir = dataDir || await tempDir();
@@ -110,7 +118,7 @@ export async function spawnServer({ dataDir, env = {}, npm = false, timeoutMs = 
     if (exited(child)) {
       throw new Error(`server exited early (code ${child.exitCode}):\n${output()}`);
     }
-    if (await healthy(baseUrl)) break;
+    if (listeningOn(output(), port) && await healthy(baseUrl)) break;
     if (Date.now() > deadline) {
       killGroup(child, 'SIGKILL');
       throw new Error(`server not healthy after ${timeoutMs} ms:\n${output()}`);
@@ -146,7 +154,7 @@ export async function expectServerExit({ dataDir, env = {}, timeoutMs = 15000 } 
   const { child, output } = launch({ dataDir, port, env, npm: false });
   const deadline = Date.now() + timeoutMs;
   while (!exited(child)) {
-    if (await healthy(baseUrl) || Date.now() > deadline) {
+    if ((listeningOn(output(), port) && await healthy(baseUrl)) || Date.now() > deadline) {
       killGroup(child, 'SIGKILL');
       await waitExit(child, 5000);
       return { code: null, started: true, output: output() };

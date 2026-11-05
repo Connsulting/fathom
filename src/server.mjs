@@ -1,6 +1,7 @@
 // Fathom server: one process serving web/ (the Horizon UI), /shared/ (browser-safe shared
 // logic) and the JSON API, backed by SQLite at $FATHOM_DATA/fathom.sqlite. One runtime engine
-// (src/engine/runtime.mjs) is built at startup and handed to the API as ctx.engine.
+// (src/engine/runtime.mjs) and one live pack view (src/packs/live.mjs) are built at startup and
+// handed to the API as ctx.engine and ctx.packs.
 //
 // Store mode (settings.mode, set when the store is created, never inferred from contents):
 // no store file: create it; demo unless FATHOM_DEMO=0 (then real and empty). Demo stores are
@@ -12,14 +13,15 @@ import { mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from './config.mjs';
-import { openMigrated, readStoreMode, createStoreFile, getSetting, setSetting, DB_FILE } from './store/db.mjs';
+import { openMigrated, readStoreMode, createStoreFile, setSetting, DB_FILE } from './store/db.mjs';
 import { createHandler } from './api/router.mjs';
 import { loadOwnerLogins, ownerLoginsProblemLine } from './api/identity.mjs';
-import { createCannedAnswerer } from './api/answerer.mjs';
+import { createLiveAnswerer } from './api/answerer.mjs';
 import { createKeyService, loadServerSecret } from './mcp/keys.mjs';
 import { createMcpHandler } from './mcp/index.mjs';
 import { createRuntimeEngine } from './engine/runtime.mjs';
-import { refreshPackState } from './packs/state.mjs';
+import { createLivePacks } from './packs/live.mjs';
+import { clockNow } from './scenario/build.mjs';
 import { seedDemo } from '../demo/seed.mjs';
 
 export class StartupError extends Error {}
@@ -48,11 +50,11 @@ export function openStore(config) {
 const codeOf = err => [err && err.code, err && err.name].find(v => typeof v === 'string' && /^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(v)) || 'unknown';
 
 // Real stores rebuild pack definitions from the pack manifests and the stored facts at startup
-// (demo pack definitions are the seeded scenario). A pack load failure never stops startup.
-async function refreshPacks(db, config) {
-  if (getSetting(db, 'mode', null) === 'demo') return;
+// (demo pack definitions are the seeded scenario; a demo store only gains a row for a Your plans
+// pack no row backs). A pack load failure never stops startup.
+function refreshPacks(packs) {
   try {
-    await refreshPackState(db, { dataDir: config.dataDir });
+    packs.refresh();
   } catch (err) {
     console.error('fathom: pack state refresh failed', codeOf(err));
   }
@@ -60,10 +62,14 @@ async function refreshPacks(db, config) {
 
 export async function startServer(config = loadConfig()) {
   const db = openStore(config);
+  // One runtime engine per process, on the scenario clock so spend lands in the month the Engine
+  // screen shows; packs load from the repository and the data volume.
   let engine;
+  let packs;
   try {
-    await refreshPacks(db, config);
-    engine = createRuntimeEngine({ db, config });
+    packs = createLivePacks(db, { dataDir: config.dataDir });
+    refreshPacks(packs);
+    engine = createRuntimeEngine({ db, config, now: () => new Date(clockNow(db, config.clock)) });
     await engine.init();
     if (engine.credentialState === 'failed') console.error('fathom: engine credential unavailable');
   } catch (e) {
@@ -78,11 +84,11 @@ export async function startServer(config = loadConfig()) {
     throw new StartupError(`API key secret: ${e.message}`);
   }
   const mcp = createMcpHandler({ db, keys, config });
-  const answerer = createCannedAnswerer();
+  const answerer = createLiveAnswerer({ engine, packs });
   // Real stores need an owner login list; a problem never stops startup, it fails closed (401).
   const owners = loadOwnerLogins(config);
   if (getSetting(db, 'mode', null) !== 'demo' && owners.problem) console.error(ownerLoginsProblemLine(owners.problem));
-  const server = http.createServer(createHandler({ db, config, answerer, engine, keys, mcp, owners }));
+  const server = http.createServer(createHandler({ db, config, answerer, engine, packs, keys, mcp, owners }));
   try {
     await new Promise((resolveListen, reject) => {
       server.once('error', reject);

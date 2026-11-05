@@ -37,6 +37,15 @@ November state) and keeps its state across restarts.
 | `FATHOM_OWNER_LOGINS` | unset | Comma separated Tailscale logins allowed into a real store. Unset on a real store, every page and `/api` route answers 401. |
 | `FATHOM_OWNER_LOGINS_FILE` | unset | Path to a file with the same list, instead of `FATHOM_OWNER_LOGINS` (not both). |
 
+With `FATHOM_ENGINE=fake` (the demo default), Ask, recommendation chats and What if answer from a
+deterministic scripted source through the same grounding and provenance path as the live engine.
+`live` needs `FATHOM_CLAUDE_CREDENTIAL_FILE`.
+
+Your plans: `npm run build:your-plans` (or the button on Packs) builds the private Your plans pack
+from uploaded plan and benefits documents into `$FATHOM_DATA/packs/your-plans/`. It refuses to
+write inside the repository, so set `FATHOM_DATA` to a directory outside the checkout to use it
+(the default `./data` is inside the checkout).
+
 Rebuild the demo store (refuses a real store):
 
 ```bash
@@ -60,7 +69,8 @@ default-deny and bind any port-forward to loopback.
 ```bash
 npm test                     # unit tests (node --test): app, packs, engine and calc
 npx playwright install chromium
-npm run e2e                  # Playwright against two local demo servers it starts itself
+npm run e2e                  # Playwright against three local demo servers it starts itself (one keeps its data outside the checkout)
+FATHOM_LIVE=1 FATHOM_CLAUDE_CREDENTIAL_FILE=<path> npm run smoke:live   # opt-in live engine smoke; makes real model calls and spends against the cap
 BASE_URL=http://127.0.0.1:8080 npm run e2e:smoke   # read-only @smoke subset against a running server
 ```
 

@@ -20,7 +20,12 @@
 //  - api.scenarioPick(name, idx): idx is a point/option index or its id string.
 //  - api.ask(questionId, key?): index (or id) into rec.qa when the conversation is a rec, otherwise an
 //    id into ask.suggested. Default conversation = rec on the rec route, else 'ask'.
-//  - Messages are { id, role, html, refs, ts, notice }. 'fathom' html is a series of <p>.
+//  - Messages are { id, role, html, refs, ts, notice, provenance }. 'fathom' html is a series of <p>.
+//    provenance is the stored object (tools, figures, literals, packEntries, packIds, grounding)
+//    or null for messages that have none.
+//  - api.askFree(text, key) takes 'ask', a rec id or 'pack:<id>' (the pack's What if thread).
+//  - api.packEntry(packId, entryId) GETs one pack entry and resolves { id, title, body, cites } or
+//    null; it never touches the scenario or the error line.
 
 import { money, resolveTokens, esc, KIND_WORDS } from '/shared/tokens.mjs';
 import { needsYou as needsYouOf, packStatus } from '/shared/rules.mjs';
@@ -100,6 +105,7 @@ function mapMsg(m) {
     refs: arr(m.refs),
     ts: m.ts == null ? '' : String(m.ts), // the server already labels it ('Nov 5, 9:04 AM')
     notice: !!m.notice,
+    provenance: m.provenance && typeof m.provenance === 'object' && !Array.isArray(m.provenance) ? m.provenance : null,
   };
 }
 function conversation(key) {
@@ -368,7 +374,9 @@ function act(recId, action, arg) {
 }
 
 function activeKey() {
-  return cur && cur.name === 'rec' && cur.params && cur.params.id ? cur.params.id : 'ask';
+  if (cur && cur.name === 'rec' && cur.params && cur.params.id) return cur.params.id;
+  if (cur && cur.name === 'packs' && cur.params && cur.params.id) return 'pack:' + cur.params.id;
+  return 'ask';
 }
 
 function ask(questionId, convKey) {
@@ -382,6 +390,7 @@ function askFree(text, convKey) {
   const clean = String(text == null ? '' : text).trim();
   if (!clean) return done();
   const key = convKey || activeKey();
+  if (key.startsWith('pack:') && !rawPack(key.slice(5))) return done();
   return send('/api/ask', { key, text: clean }, d => (d.message ? mapMsg(d.message) : null));
 }
 
@@ -426,6 +435,38 @@ function onboard(step) {
 
 function setEngine(v) {
   return send('/api/engine', { on: !!v });
+}
+
+// The monthly engine cap in dollars, 0 to 10000, rounded to cents. Checked here first so an
+// invalid value shows the error line without a request (the server keeps its own 400 check).
+function setCap(usd) {
+  const n = typeof usd === 'number' ? usd : (usd == null || usd === '' ? NaN : Number(usd));
+  if (!Number.isFinite(n) || n < 0 || n > 10000) {
+    showError('Enter a monthly cap between 0 and 10,000 dollars.');
+    return done();
+  }
+  return send('/api/engine/cap', { usd: Math.round(n * 100) / 100 }, d => d);
+}
+
+function buildYourPlans(fileIds) {
+  const ids = arr(fileIds).filter(x => x != null && x !== '').map(String);
+  return send('/api/your-plans/build', { fileIds: ids }, d => (d.result && typeof d.result === 'object' ? d.result : null));
+}
+
+async function packEntry(packId, entryId) {
+  if (packId == null || entryId == null || packId === '' || entryId === '') return null;
+  try {
+    const res = await fetch('/api/packs/' + encodeURIComponent(packId) + '/entries/' + encodeURIComponent(entryId), {
+      headers: { accept: 'application/json' }, credentials: 'same-origin', cache: 'no-store',
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const e = data && data.entry;
+    if (!e || typeof e !== 'object' || typeof e.body !== 'string') return null;
+    return { id: String(e.id == null ? entryId : e.id), title: String(e.title || ''), body: e.body, cites: arr(e.cites) };
+  } catch (e) {
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------- ingest
@@ -484,11 +525,14 @@ const api = {
   onboard,
   engineOn: () => !!live().engine,
   setEngine,
+  setCap,
   demo: demoId,
   packs,
   pack,
   whatIf,
   packToggle,
+  packEntry,
+  buildYourPlans,
   ingest,
   identity: () => (IDENT ? { login: IDENT.login, name: IDENT.name } : null),
   upload,

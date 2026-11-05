@@ -84,3 +84,77 @@ test('compound numeric words are checked as an amount and Unicode minus retains 
   assert.equal(checkGrounding('.5', { data: [0.5] }).ok, true);
   assert.equal(checkGrounding('1e3', { data: [1000] }).ok, true);
 });
+
+test('a hyphen glued to a preceding letter or digit is not a minus sign, in the answer and in evidence', () => {
+  // Answer side: K-12 is not -12.
+  assert.ok(!checkGrounding('Private K-12 tuition can qualify.').violations.some(v => v.text.startsWith('-')));
+  assert.equal(checkGrounding('Private K-12 tuition can qualify.', { data: [{ count: 12 }] }).ok, true);
+  // Evidence side: K-12 and 2026-01 never yield a negative.
+  for (const text of ['-12', '−12', '-$12']) {
+    assert.equal(checkGrounding(text, { data: ['K-12'] }).ok, false, `K-12 grounds ${text}`);
+    assert.equal(checkGrounding(text, { toolResults: [{ note: 'Private K-12 tuition can qualify.' }] }).ok, false, `K-12 prose grounds ${text}`);
+  }
+  for (const text of ['-1', '−1', '-$1']) {
+    assert.equal(checkGrounding(text, { toolResults: [{ period: '2026-01' }] }).ok, false, `2026-01 grounds ${text}`);
+  }
+  // A real minus sign still reads as one on both sides.
+  assert.equal(checkGrounding('a change of -12', { data: [{ change: -12 }] }).ok, true);
+  assert.equal(checkGrounding('a change of -12', { data: [{ change: 12 }] }).ok, false);
+  assert.equal(checkGrounding('-$12', { data: ['a change of -$12 this year'] }).ok, true);
+  assert.equal(checkGrounding('-$25', { toolResults: [{ note: 'a loss of -$25' }] }).ok, true);
+  assert.equal(checkGrounding('-$25', { toolResults: [{ note: 'a loss of $25' }] }).ok, false);
+});
+
+test('only recognized letter-code vocabulary is masked; arbitrary short codes are checked numbers', () => {
+  for (const text of ['Your benefit is X-873 dollars.', 'Your benefit is AB-500 dollars.', 'You get Q-12 more.', 'The credit is ZZ-40 this year.']) {
+    const result = checkGrounding(text);
+    assert.equal(result.ok, false, text);
+    assert.ok(!result.violations.some(v => v.text.startsWith('-')), `the glued hyphen is not a minus sign: ${text}`);
+  }
+  assert.deepEqual(checkGrounding('Your benefit is X-873 dollars.').violations.map(v => v.text), ['873']);
+  assert.equal(checkGrounding('Your benefit is X-873 dollars.', { data: [873] }).ok, true);
+  for (const text of ['K-12', 'K-1', 'I-9', 'W-2', 'W-4', '1099-K', 'Private K-12 tuition', 'Schedule K-1', 'Form I-9']) {
+    assert.equal(checkGrounding(text).ok, true, text);
+  }
+});
+
+test('a numeric expression in evidence is one quantity: exponents and decimals never split', () => {
+  // literal() parses the exponent, so $1e3 in evidence is 1000.
+  const evidence = [{ note: 'The allowance is $1e3.' }, { note: 'The fee is $4.50 a month.' }, { note: 'The rate is 12.5% now.' }];
+  for (const text of ['$1,000', '$4.50', '12.5%']) assert.equal(checkGrounding(text, { toolResults: evidence }).ok, true, text);
+  for (const text of ['$1', '$3', '$4', '50', '12%', '5%']) assert.equal(checkGrounding(text, { toolResults: evidence }).ok, false, text);
+});
+
+test('a worded magnitude is one quantity: 8.7 million grounds on 8700000, never on 8.7', () => {
+  assert.equal(checkGrounding('about 8.7 million', { data: [8700000] }).ok, true);
+  assert.equal(checkGrounding('about 8.7 million', { data: [8.7] }).ok, false);
+});
+
+test('a magnitude word followed by percent is one percent quantity and needs percent evidence', () => {
+  const cases = [['1 thousand percent', 1000], ['2.5 million %', 2500000], ['3 billion percent', 3000000000]];
+  for (const [text, value] of cases) {
+    assert.equal(checkGrounding(text, { data: [value] }).ok, false, `${text} must not ground on the plain number`);
+    assert.equal(checkGrounding(text, { data: [{ note: `The change is ${text}.` }] }).ok, true, `${text} grounds on matching percent text`);
+  }
+  assert.equal(checkGrounding('1 thousand percent', { data: [{ value: 1000, unit: 'percent' }] }).ok, true);
+  assert.equal(checkGrounding('about 1 thousand percent', { data: [{ value: 1000 }] }).ok, false);
+  // Plain scaled amounts and plain percents are unchanged.
+  assert.equal(checkGrounding('$1 thousand', { data: [1000] }).ok, true);
+  assert.equal(checkGrounding('12%', { data: [{ rate_pct: 12 }] }).ok, true);
+  assert.equal(checkGrounding('12%', { data: [12] }).ok, false);
+});
+
+test('a spelled number followed by a percent sign is one percent quantity and needs percent evidence', () => {
+  const cases = [['one thousand %', 1000], ['one thousand%', 1000], ['twenty %', 20], ['two million %', 2000000]];
+  for (const [phrase, value] of cases) {
+    const text = `The change is ${phrase}.`;
+    assert.equal(checkGrounding(text, { data: [value] }).ok, false, `${phrase} must not ground on the plain number`);
+    assert.equal(checkGrounding(text, { data: [{ value, unit: 'percent' }] }).ok, true, `${phrase} grounds on a percent unit`);
+    assert.equal(checkGrounding(text, { data: [{ note: `The change is ${phrase}.` }] }).ok, true, `${phrase} grounds on matching percent text`);
+  }
+  assert.equal(checkGrounding('The change is one thousand %.', { data: [{ note: 'The change is one thousand percent.' }] }).ok, true);
+  assert.equal(checkGrounding('The change is twenty %.', { data: [{ note: 'The change is 20%.' }] }).ok, true);
+  // Existing word-number behavior is unchanged.
+  assert.equal(checkGrounding('twenty percent', { data: [{ value: 20, unit: 'percent' }] }).ok, true);
+  assert.equal(checkGrounding('one thousand', { data: [1000] }).ok, true);
+});

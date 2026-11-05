@@ -1,33 +1,37 @@
-// API handlers. Each takes { db, config, answerer, engine, params, body } and returns the JSON response
-// body (status 200) or throws HttpError. Every action writes the store and answers with the
-// fresh scenario, so the browser swaps it in.
+// API handlers. Each takes { db, config, engine, packs, answerer, params, body } and returns the
+// JSON response body (status 200) or throws HttpError. Every action writes the store and answers
+// with the fresh scenario, so the browser swaps it in. Model calls are awaited before any write
+// transaction opens; only the writes run inside tx(). ctx.packs is the live pack view
+// (src/packs/live.mjs).
 
-import { getSetting, setSetting, schemaVersion, tx, parseJson as parse } from '../store/db.mjs';
-import { buildScenario, loadContent, defaultPicks, wargameLists } from '../scenario/build.mjs';
+import { getSetting, setSetting, schemaVersion, tx, cents, parseJson as parse } from '../store/db.mjs';
+import { buildScenario, clockNow, loadContent, defaultPicks, wargameLists } from '../scenario/build.mjs';
 import { ACTION_STATUS, packStatus } from '../shared/rules.mjs';
 import { escapeUserText } from '../shared/tokens.mjs';
 import { seedDemo } from '../../demo/seed.mjs';
-import { clearStoredFiles } from '../ingest/vault.mjs';
+import { clearStoredFiles, loadDataKey, VaultError } from '../ingest/vault.mjs';
 import { HttpError } from './http.mjs';
 import { findQuestion, isIndex } from './questions.mjs';
+import { whatIfOwnerText } from './answerer.mjs';
+import { buildYourPlans, YourPlansRefusal } from '../packs/your-plans.mjs';
+import { EngineOffError, BudgetExceededError } from '../engine/index.mjs';
+import { refreshLivePacks } from '../packs/live.mjs';
 
-export const ENGINE_OFF_HTML = '<p>Engine is off, so answers are paused. Switch it back on to get an answer.</p>';
 const MAX_TEXT = 4000;
 const MAX_LABEL = 200;
+const MAX_FILE_IDS = 50;
+const MAX_CAP_USD = 10000;
+const TOGGLE_NOTE = 'Recommendations update on the next planning run.';
 
 const paragraphs = list => (Array.isArray(list) ? list : []).map(p => `<p>${p}</p>`).join('');
 const nowIso = () => new Date().toISOString();
 
-function scenarioOf(ctx) {
-  return buildScenario(ctx.db, { clock: ctx.config && ctx.config.clock });
+export function scenarioOf(ctx) {
+  return buildScenario(ctx.db, { clock: ctx.config && ctx.config.clock, engineMode: ctx.config && ctx.config.engine, packs: ctx.packs || null });
 }
 
 // The current "today" for message timestamps: the scenario clock's date at the current time.
-function stamp(ctx) {
-  const clock = (ctx.config && ctx.config.clock) || getSetting(ctx.db, 'clock', null);
-  const now = nowIso();
-  return clock ? `${clock}T${now.slice(11)}` : now;
-}
+const stamp = ctx => clockNow(ctx.db, ctx.config && ctx.config.clock);
 
 function visibleRec(db, id) {
   const row = db.prepare('SELECT * FROM recs WHERE id = ?').get(id);
@@ -41,6 +45,12 @@ function packRow(db, id) {
   return row;
 }
 
+// A pack row's definition with its manifest fields when a loaded manifest backs it.
+function packDef(ctx, row) {
+  const def = parse(row.def, {});
+  return ctx.packs ? ctx.packs.view(row.id, def) : def;
+}
+
 function recEvent(db, recId, action, arg, from, to, actor = 'ui') {
   db.prepare(`INSERT INTO rec_events (rec_id, ts, action, arg, from_status, to_status, actor) VALUES (?, ?, ?, ?, ?, ?, ?)`)
     .run(recId, nowIso(), action, arg == null ? null : String(arg), from, to, actor);
@@ -50,11 +60,24 @@ function ensureConversation(db, key) {
   db.prepare('INSERT OR IGNORE INTO conversations (key, created_at) VALUES (?, ?)').run(key, nowIso());
 }
 
-function pushMessage(ctx, key, role, text, { refs = [], notice = false } = {}) {
+function pushMessage(ctx, key, role, text, { refs = [], notice = false, provenance = null } = {}) {
   ensureConversation(ctx.db, key);
-  const r = ctx.db.prepare('INSERT INTO messages (conversation_key, role, text, refs, notice, ts) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(key, role, text, JSON.stringify(refs), notice ? 1 : 0, stamp(ctx));
+  const r = ctx.db.prepare('INSERT INTO messages (conversation_key, role, text, refs, notice, ts, provenance) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(key, role, text, JSON.stringify(refs), notice ? 1 : 0, stamp(ctx), provenance ? JSON.stringify(provenance) : null);
   return Number(r.lastInsertRowid);
+}
+
+// The seams the engine-backed handlers need; static-only fixtures construct the router without them.
+function need(ctx, name) {
+  if (!ctx[name]) throw new HttpError(503, 'engine not configured');
+  return ctx[name];
+}
+
+// An answerer reply as a stored fathom message.
+function pushReply(ctx, key, reply) {
+  return pushMessage(ctx, key, 'fathom', paragraphs(reply.paragraphs), {
+    refs: reply.refs || [], notice: !!reply.notice, provenance: reply.notice ? null : reply.provenance || null,
+  });
 }
 
 // ---------------------------------------------------------------- handlers
@@ -162,27 +185,28 @@ export function packToggle(ctx) {
   });
   const after = packRow(db, row.id);
   const status = packStatus(def.status, { active: !!after.active, exploring: !!after.exploring });
-  return { scenario: scenarioOf(ctx), status };
+  return { scenario: scenarioOf(ctx), status, note: TOGGLE_NOTE };
 }
 
-export function packWhatIf(ctx) {
+export async function packWhatIf(ctx) {
   const { db } = ctx;
-  const row = packRow(db, ctx.params.id);
-  const def = parse(row.def, {});
-  if (!def.whatIf) throw new HttpError(400, `pack ${row.id} has no what-if`);
-  const key = 'pack:' + row.id;
-  const engineOn = getSetting(db, 'engine', { on: true }).on !== false;
+  const first = packRow(db, ctx.params.id);
+  const def = packDef(ctx, first);
+  if (!def.whatIf) throw new HttpError(400, `pack ${first.id} has no what-if`);
+  const key = 'pack:' + first.id;
+  const reply = first.what_if_done ? null
+    : await need(ctx, 'answerer').whatIf({ db, packId: first.id, clock: ctx.config && ctx.config.clock });
   tx(db, () => {
+    const row = packRow(db, first.id);
     let asked = !!row.what_if_asked;
     let done = !!row.what_if_done;
-    if (!asked) { pushMessage(ctx, key, 'me', def.whatIf.prompt || ''); asked = true; }
-    if (!done) {
-      if (!engineOn) {
+    if (!asked) { pushMessage(ctx, key, 'me', whatIfOwnerText(def)); asked = true; }
+    if (!done && reply) {
+      if (reply.notice) {
         const last = db.prepare('SELECT notice FROM messages WHERE conversation_key = ? ORDER BY id DESC LIMIT 1').get(key);
-        if (!(last && last.notice)) pushMessage(ctx, key, 'fathom', ENGINE_OFF_HTML, { notice: true });
+        if (!(last && last.notice)) pushReply(ctx, key, reply);
       } else {
-        const refs = (def.whatIf.unlocks || []).map(u => u && u.recId).filter(Boolean);
-        pushMessage(ctx, key, 'fathom', paragraphs(def.whatIf.a), { refs });
+        pushReply(ctx, key, reply);
         done = true;
       }
     }
@@ -192,10 +216,59 @@ export function packWhatIf(ctx) {
   return { scenario: scenarioOf(ctx) };
 }
 
+// GET /api/packs/:id/entries/:entryId: one entry of a manifest-backed pack, from the loaded packs.
+export function packEntry(ctx) {
+  const entry = need(ctx, 'packs').entry(ctx.params.id, ctx.params.entryId);
+  if (!entry) throw new HttpError(404, `no entry ${ctx.params.entryId} in pack ${ctx.params.id}`);
+  return { entry };
+}
+
 export function setEngine(ctx) {
   if (typeof ctx.body.on !== 'boolean') throw new HttpError(400, 'on must be true or false');
   setSetting(ctx.db, 'engine', { on: ctx.body.on });
   return { scenario: scenarioOf(ctx) };
+}
+
+export function setCap(ctx) {
+  const { usd } = ctx.body;
+  if (typeof usd !== 'number' || !Number.isFinite(usd) || usd < 0 || usd > MAX_CAP_USD) {
+    throw new HttpError(400, `usd must be a number from 0 to ${MAX_CAP_USD}`);
+  }
+  setSetting(ctx.db, 'cap', { usd: cents(usd) });
+  return { scenario: scenarioOf(ctx) };
+}
+
+// POST /api/your-plans/build: extract the owner's plan and benefits documents into the private
+// Your plans pack. Refused (409) while the engine is off, over the cap, when the data key is
+// unavailable (the vault's message), or when the data directory is inside the repository. The data
+// key is loaded the way the ingest handlers load it, so stored uploads are read through the vault.
+export async function yourPlansBuild(ctx) {
+  const engine = need(ctx, 'engine');
+  const { fileIds = [] } = ctx.body;
+  if (!Array.isArray(fileIds) || fileIds.length > MAX_FILE_IDS || !fileIds.every(id => typeof id === 'string' && id.length > 0 && id.length <= 200)) {
+    throw new HttpError(400, `fileIds must be at most ${MAX_FILE_IDS} file id strings`);
+  }
+  if (!engine.isOn()) throw new HttpError(409, 'The engine is off, so Your plans cannot be built. Switch it on first.');
+  let key;
+  try {
+    key = await loadDataKey({ dataDir: ctx.config.dataDir, keyFile: ctx.config.dataKeyFile, mode: getSetting(ctx.db, 'mode', null) === 'demo' ? 'demo' : 'real' });
+  } catch (e) {
+    if (e instanceof VaultError) throw new HttpError(409, e.message);
+    throw e;
+  }
+  let result;
+  try {
+    result = await buildYourPlans({ db: ctx.db, engine, dataDir: ctx.config.dataDir, key, fileIds,
+      clock: (ctx.config && ctx.config.clock) || undefined });
+  } catch (e) {
+    if (e instanceof YourPlansRefusal) throw new HttpError(409, e.message);
+    if (e instanceof EngineOffError) throw new HttpError(409, 'The engine is off, so Your plans cannot be built. Switch it on first.');
+    if (e instanceof BudgetExceededError) throw new HttpError(409, "This month's engine budget is used up, so Your plans cannot be built. Raise the cap first.");
+    throw e;
+  }
+  if (result.written) refreshLivePacks(ctx.db, { dataDir: ctx.config.dataDir });
+  const { written, entries, sources, warnings, dropped } = result;
+  return { scenario: scenarioOf(ctx), result: { written, entries, sources, warnings, dropped } };
 }
 
 export async function ask(ctx) {
@@ -224,17 +297,12 @@ export async function ask(ctx) {
     mine = escapeUserText(clean);
   }
 
-  const engineOn = scenario.live.engine;
-  let reply = null;
-  if (engineOn) {
-    reply = await ctx.answerer.answer({ db, key, questionId: hasQ ? questionId : undefined, text: hasT ? clean : undefined });
-    if (!reply) throw new HttpError(404, `no question ${questionId}`);
-  }
+  const reply = await need(ctx, 'answerer').answer({ db, key, questionId: hasQ ? questionId : undefined,
+    text: hasT ? clean : undefined, clock: ctx.config && ctx.config.clock });
+  if (!reply) throw new HttpError(404, `no question ${questionId}`);
   const id = tx(db, () => {
     pushMessage(ctx, key, 'me', mine);
-    return engineOn
-      ? pushMessage(ctx, key, 'fathom', paragraphs(reply.paragraphs), { refs: reply.refs || [], notice: !!reply.notice })
-      : pushMessage(ctx, key, 'fathom', ENGINE_OFF_HTML, { notice: true });
+    return pushReply(ctx, key, reply);
   });
   const fresh = scenarioOf(ctx);
   const message = (fresh.live.conversations[key] || []).find(m => m.id === 'm' + id);
@@ -253,5 +321,6 @@ export async function demoReset(ctx) {
   if (getSetting(ctx.db, 'mode', null) !== 'demo') throw new HttpError(404, 'not found');
   seedDemo(ctx.db);
   await clearStoredFiles(ctx.config.dataDir);
+  if (ctx.packs) ctx.packs.refresh();
   return { scenario: scenarioOf(ctx) };
 }

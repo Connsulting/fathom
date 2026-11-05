@@ -410,6 +410,9 @@ describe('owner overrides on the demo rows reach the pack tools', () => {
   });
 
   test('a row def with no string status falls back to the facts-derived status', async () => {
+    // The demo seed's income.agiEstimate makes the facts suggest charitable-giving, like its row;
+    // without it the facts leave the pack available, so a fallback is visible.
+    run("DELETE FROM facts WHERE key = 'income.agiEstimate'");
     const facts = activePacks(loadPacks([REPO_PACKS]), getFacts(t.db));
     const byFacts = facts.find(v => v.pack.id === 'charitable-giving');
     assert.equal(byFacts.status, 'available', 'precondition: the demo facts leave charitable-giving available');
@@ -437,6 +440,8 @@ describe('owner overrides on the demo rows reach the pack tools', () => {
 
   test('a manifest pack with no linked row falls back to the facts-derived activation status', async () => {
     const byFacts = id => activePacks(loadPacks([REPO_PACKS]), getFacts(t.db)).find(v => v.pack.id === id);
+    // As above: without the seed's income.agiEstimate the facts leave charitable-giving available.
+    run("DELETE FROM facts WHERE key = 'income.agiEstimate'");
     run("DELETE FROM packs_state WHERE id = 'giving'");
     let p = await listed(ctx, 'charitable-giving');
     assert.equal(p.status, byFacts('charitable-giving').status);
@@ -643,7 +648,7 @@ describe('synthetic pack dir via ctx.packDirs', () => {
 
   test('search scores title hits over body hits and orders deterministically', async () => {
     const r = await callTool('search_pack_entries', { query: 'widget' }, ctx);
-    assert.equal(r.query, 'widget');
+    assert.ok(!Object.hasOwn(r, 'query'), 'the query argument is not echoed');
     assert.deepEqual(r.results.map(x => x.id), ['quarterly-widgets', 'zebra-notes']);
     assert.deepEqual(r.results.map(x => x.score), [6, 3]);
     assert.equal(r.total, 2);
