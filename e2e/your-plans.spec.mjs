@@ -107,7 +107,9 @@ test('a plan document builds the Your plans pack, and entries cite file and page
 // CR1: a heading carrying markup and a real figure token (true_reserve is in demo/scenario.mjs).
 const HOSTILE_KEY = 'true_reserve';
 const HOSTILE_NAME = 'hostile-plan-notes.txt';
-const HOSTILE_HEADING = `<img src=x onerror=alert(1)> Plan {f:${HOSTILE_KEY}}`;
+// B5: every number in a title must appear in the section text it was drawn from, so the heading
+// uses the same alert(2) markup as the body (the number check runs on the neutralized title).
+const HOSTILE_HEADING = `<img src=x onerror=alert(2)> Plan {f:${HOSTILE_KEY}}`;
 const HOSTILE_TEXT = [
   `# ${HOSTILE_HEADING}`,
   '',
@@ -213,4 +215,42 @@ test('an optional uploaded file alone enables Build and builds the Your plans pa
   await build.click();
   await expect(page.locator('.h-yp-result')).toContainText(/\b[1-9]\d* entr(y|ies)\b/, { timeout: 30_000 });
   await expect(page.locator('.fx-err')).toHaveCount(0);
+});
+
+// B5: sections whose title carries a number the section text does not are dropped, and the build
+// result line says how many. The fake engine draws each title from the heading and the excerpt
+// from the section text, so these two headings are a scripted mismatch.
+const MISMATCH_NAME = 'mismatch-plan-notes.txt';
+const MISMATCH_TEXT = [
+  '# Dental coverage',
+  '',
+  'The employer dental plan covers routine cleanings and exams.',
+  '',
+  '# Tier 3 vision coverage',
+  '',
+  'The employer vision plan covers frames and lenses.',
+  '',
+  '# Option 4 hearing coverage',
+  '',
+  'The employer hearing plan covers hearing exams.',
+  ''
+].join('\n');
+
+test('B5: the build result line reports the sections dropped because they did not match the document', async ({ page }, testInfo) => {
+  const { base, dataDir } = yp(testInfo);
+  addPlanDocument(dataDir, MISMATCH_NAME, MISMATCH_TEXT);
+
+  await gotoYp(page, base, 'packs');
+  await page.locator(`.h-yp input[data-yp-file="${FILE_ID}"]`).check();
+  await page.locator('.h-yp button[data-yp-build]').click();
+  const result = page.locator('.h-yp-result');
+  await expect(result).toContainText(/\b1 entry\b/, { timeout: 30_000 });
+  await expect(result).toContainText('2 sections were dropped because they did not match the document.');
+  await expect(result).not.toContainText('Tier 3');
+  await expect(page.locator('.fx-err')).toHaveCount(0);
+
+  await gotoYp(page, base, 'packs/your-plans');
+  const entries = page.locator('.h-entries button.h-entry[data-pack="your-plans"]');
+  await expect(entries).toHaveCount(1);
+  await expect(entries.first()).toHaveText('Dental coverage');
 });

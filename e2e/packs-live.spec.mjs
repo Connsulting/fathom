@@ -6,7 +6,8 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { test, expect, S, resetDemo, plain, gotoRoute, expectH1, bareDollarNodes } from './helpers.mjs';
+import { test, expect, S, resetDemo, plain, gotoRoute, expectH1, bareDollarNodes, money } from './helpers.mjs';
+import { writeSyntheticPack, removeSyntheticPack, NEVER } from '../test/helpers/packs.mjs';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const TOGGLE_NOTE = 'Recommendations update on the next planning run.';
@@ -155,4 +156,53 @@ test('Turn this pack on shows the planning run note, and it stays after reload',
 
   await page.reload();
   await expect(page.locator('.h-pack-note')).toContainText(TOGGLE_NOTE);
+});
+
+// B4: a manifest-backed What if prompt is literal text. A synthetic manifest pack goes in the data
+// volume pack directory of the Your plans server (its data lives in the temp directory, never the
+// repository); its prompt carries markup and a real figure token (true_reserve is a demo figure).
+const HOSTILE_ID = 'synthetic-whatif';
+const HOSTILE_NAME = 'Synthetic what if';
+const HOSTILE_PROMPT = 'Would <img src=x onerror=alert(1)> change {f:true_reserve} for us?';
+
+test('B4: a manifest What if prompt shows as literal text in the chip and the thread', async ({ page, request }, testInfo) => {
+  const md = testInfo.config.metadata || {};
+  test.skip(!md.ypBaseURL || !md.ypDataDir, 'no data-volume server (BASE_URL set)');
+  expect(S.fig.true_reserve, 'figure true_reserve in demo/scenario.mjs').toBeTruthy();
+  const figure = money(S.fig.true_reserve.v);
+  const dialogs = [];
+  page.on('dialog', async (d) => { dialogs.push(d.message()); await d.dismiss(); });
+
+  writeSyntheticPack(md.ypDataDir, { id: HOSTILE_ID, name: HOSTILE_NAME, prompt: HOSTILE_PROMPT, appliesWhen: NEVER, covers: ['synthetic choices'] });
+  try {
+    // The reset refreshes the packs, so the server loads the synthetic one.
+    await resetDemo(request, md.ypBaseURL);
+    await page.goto(new URL(`/#/packs/${HOSTILE_ID}`, md.ypBaseURL).href);
+    await expect(page.locator('header.h-top')).toBeVisible();
+    await expectH1(page, HOSTILE_NAME);
+
+    const chip = page.locator(`button.h-chip[data-whatif="${HOSTILE_ID}"]`);
+    await expect(chip).toHaveText(HOSTILE_PROMPT);
+    await expect(chip.locator('.fx-fig')).toHaveCount(0);
+    await expect(chip).not.toContainText(figure);
+    await expect(page.locator('img')).toHaveCount(0);
+
+    await chip.click();
+    const mine = page.locator('.h-thread .h-msg.me');
+    await expect(mine).toHaveCount(1);
+    await expect(mine).toContainText(HOSTILE_PROMPT);
+    await expect(mine.locator('.fx-fig')).toHaveCount(0);
+    await expect(mine).not.toContainText(figure);
+    await expect(page.locator('.h-thread .h-msg.fathom')).toHaveCount(1);
+    await expect(page.locator('img')).toHaveCount(0);
+
+    // Stored, not page state.
+    await page.reload();
+    await expect(page.locator('.h-thread .h-msg.me')).toContainText(HOSTILE_PROMPT);
+    await expect(page.locator('img')).toHaveCount(0);
+    expect(dialogs, 'script dialogs opened by rendered markup').toEqual([]);
+  } finally {
+    removeSyntheticPack(md.ypDataDir);
+    await resetDemo(request, md.ypBaseURL);
+  }
 });

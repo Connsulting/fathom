@@ -3,7 +3,7 @@
 // unverified, and a switched-off engine answers with a notice instead of making anything up.
 // Demo mode runs the live pipeline with the deterministic fake answer source.
 
-import { test, expect, S, resetDemo, visibleRecs, plain, gotoRoute, expectH1, recDialog, bareDollarNodes } from './helpers.mjs';
+import { test, expect, S, resetDemo, visibleRecs, plain, gotoRoute, expectH1, recDialog, bareDollarNodes, rec, liveStatus } from './helpers.mjs';
 
 const ENGINE_OFF_NOTICE = 'Engine is off, so answers are paused. Switch it back on to get an answer.';
 const GROUNDED = 'Every number is from your data or a tool result.';
@@ -147,4 +147,51 @@ test('with the engine switched off an ask gets the notice message', async ({ pag
 
   await page.reload();
   await expect(page.locator('.h-thread .h-msg.fathom.notice')).toHaveCount(1);
+});
+
+// B2: chat never writes. An explicit command in a rec conversation comes back as a confirm card
+// inside the Fathom message; the rec changes only when the owner clicks Confirm, and the card then
+// shows Done in place of the button.
+async function recStatusOf(request, id) {
+  const res = await request.get('/api/scenario');
+  expect(res.status()).toBe(200);
+  const sc = await res.json();
+  return sc.recs.find((x) => x.id === id).status;
+}
+
+test('B2: "dismiss this" in a rec conversation proposes; Confirm dismisses the rec and the card shows Done', async ({ page, request }) => {
+  const id = 'dcfsa';
+  const r = rec(id);
+  expect(liveStatus(r), 'a proposed rec to dismiss').toBe('proposed');
+
+  await gotoRoute(page, `rec/${id}`);
+  const dlg = recDialog(page);
+  await expect(dlg.locator('#h-dlg-t')).toHaveText(plain(r.title));
+  await askFree(dlg, `rec:${id}`, 'dismiss this');
+  await expect(answers(dlg)).toHaveCount(1);
+  const msg = answers(dlg).last();
+  await expect(msg).not.toHaveClass(/\bnotice\b/);
+
+  const confirm = msg.locator(`button.h-propose[data-propose-rec="${id}"][data-propose-action="dismiss"]`);
+  await expect(confirm).toHaveCount(1);
+  await expect(confirm).toHaveText('Confirm');
+  await expect(msg).toContainText('Dismiss');
+  await expect(msg).toContainText(plain(r.title));
+
+  // Nothing is written until the owner confirms.
+  expect(await recStatusOf(request, id)).toBe('proposed');
+  await expect(dlg.locator('.h-rec-head .h-st')).not.toHaveText('Dismissed');
+
+  await confirm.click();
+  await expect(dlg.locator('.h-rec-head .h-st')).toHaveText('Dismissed');
+  await expect.poll(() => recStatusOf(request, id)).toBe('dismissed');
+  const done = answers(dlg).last();
+  await expect(done.locator('button.h-propose')).toHaveCount(0);
+  await expect(done).toContainText('Done');
+
+  // The card state follows the stored rec status, so it survives a reload.
+  await page.reload();
+  const again = answers(recDialog(page)).last();
+  await expect(again.locator('button.h-propose')).toHaveCount(0);
+  await expect(again).toContainText('Done');
 });

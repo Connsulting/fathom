@@ -96,3 +96,15 @@ test('each listed ledger row has a provenance figure for its cost', T, () => wit
     assert.match(row.ts, /^[A-Z][a-z]{2} \d{1,2}, \d{1,2}:\d{2} (AM|PM)$/, 'ts is a display label');
   }
 }));
+
+// Non-blocker 2: the scenario carries the configured engine mode so the Engine screen can show
+// "Off in configuration" when FATHOM_ENGINE is off while the switch is on.
+test('the scenario engine section carries the configured mode', T2, async () => {
+  for (const mode of ['fake', 'off']) {
+    await withServer({ env: { FATHOM_ENGINE: mode } }, async s => {
+      const sc = await getScenario(s.baseUrl);
+      assert.equal(sc.engine.mode, mode);
+      assert.equal(sc.live.engine, true, 'the switch is still on');
+    });
+  }
+});

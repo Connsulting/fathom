@@ -159,3 +159,32 @@ test('each answer records spend rows in the clock month that the scenario ledger
   assert.ok(added.every(row => listed.has(String(row.id))), 'the newest rows are in the scenario ledger');
   assert.ok(sc.engine.budget.used >= first.engine.budget.used);
 }));
+
+// B2: chat never writes. A negated command, plain status commands in ask and rec conversations
+// and a What if on a pack leave every rec status unchanged; an explicit command comes back as a
+// proposal in provenance for the owner to confirm, and nothing is written until they do.
+const statuses = scenario => Object.fromEntries(scenario.recs.map(r => [r.id, r.status]));
+const toolRows = file => readDb(file, db => db.prepare("SELECT count(*) AS n FROM rec_events WHERE actor = 'tool'").get().n);
+
+test('B2: chat commands and a What if never change a rec status; an explicit command is a proposal', T, () => withServer({ env: FAKE }, async s => {
+  const before = statuses(await getScenario(s.baseUrl));
+  const events = await toolRows(s.dbFile);
+  for (const key of ['ask', 'deferral']) {
+    for (const text of ['Do not mark anything done', 'mark this done', 'Please mark this done', 'Snooze this until next month']) {
+      const r = await ask(s, { key, text });
+      assert.ok(!toolNames(r.message).includes('set_recommendation_status'), `${key}: ${text}`);
+    }
+  }
+  const proposed = await ask(s, { key: 'deferral', text: 'dismiss this' });
+  assert.deepEqual(proposed.message.provenance.proposal, { recId: 'deferral', action: 'dismiss' });
+  assert.equal(statuses(proposed.scenario).deferral, before.deferral, 'a proposal writes nothing');
+
+  await ok(postJson(s.baseUrl, '/api/packs/giving/whatif', {}));
+  await ask(s, { key: 'pack:giving', text: 'dismiss this' });
+  assert.deepEqual(statuses(await getScenario(s.baseUrl)), before, 'every rec status is unchanged');
+  assert.equal(await toolRows(s.dbFile), events, 'no tool-made status change in the rec history');
+
+  // The owner's confirmation goes through the ordinary rec action endpoint.
+  const confirmed = await ok(postJson(s.baseUrl, '/api/recs/deferral/action', { action: 'dismiss' }));
+  assert.equal(statuses(confirmed.scenario).deferral, 'dismissed');
+}));

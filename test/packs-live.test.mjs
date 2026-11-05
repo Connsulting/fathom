@@ -6,9 +6,17 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { ROOT, SERVER_TIMEOUT, withServer, request, postJson, getScenario, openStore } from './helpers/server.mjs';
+import { ROOT, SERVER_TIMEOUT, withServer, request, postJson, getScenario, openStore, tempDir, tempDb } from './helpers/server.mjs';
+import { writeSyntheticPack, NEVER } from './helpers/packs.mjs';
+import { escapeUserText, money } from '../src/shared/tokens.mjs';
+import { seedDemo } from '../demo/seed.mjs';
+import { loadConfig } from '../src/config.mjs';
+import { createRuntimeEngine } from '../src/engine/runtime.mjs';
+import { createPackRefresher } from '../src/packs/state.mjs';
+import { createLiveAnswerer } from '../src/api/answerer.mjs';
+import { buildScenario } from '../src/scenario/build.mjs';
 
 const T = { timeout: SERVER_TIMEOUT };
 const FAKE = { FATHOM_ENGINE: 'fake' };
@@ -104,4 +112,88 @@ test('a fact change through the db followed by a POST flips activation in that r
   await writeDb(s.dbFile, db => db.prepare("UPDATE facts SET value = '\"MD\"' WHERE key = 'household.state'").run());
   const r = await ok(postJson(s.baseUrl, '/api/engine', { on: true }));
   assert.equal(packOf(r.scenario, 'virginia').status, 'suggested');
+}));
+
+// ---------------------------------------------------------------- B4: a manifest What if prompt is literal text
+
+// A synthetic manifest pack in the data volume pack directory whose What if prompt carries markup
+// and a real figure token (true_reserve is a demo figure). It is never active, so What if is offered.
+const HOSTILE_ID = 'synthetic-whatif';
+const HOSTILE_PROMPT = 'Would <img src=x onerror=alert(1)> change {f:true_reserve} for us?';
+const HOSTILE_PACK = { id: HOSTILE_ID, name: 'Synthetic what if', prompt: HOSTILE_PROMPT, appliesWhen: NEVER, covers: ['synthetic choices'] };
+
+test('B4: POST /api/packs/:id/whatif stores a manifest prompt as escaped literal text', T, async t => {
+  const dataDir = await tempDir();
+  t.after(() => rmSync(dataDir, { recursive: true, force: true }));
+  writeSyntheticPack(dataDir, HOSTILE_PACK);
+  await withServer({ dataDir, env: FAKE }, async s => {
+    const def = packOf(await getScenario(s.baseUrl), HOSTILE_ID);
+    assert.ok(def, 'the synthetic pack is loaded from the data volume');
+    assert.equal(def.manifest, HOSTILE_ID);
+    assert.notEqual(def.status, 'active');
+    assert.equal(def.whatIf.prompt, HOSTILE_PROMPT);
+
+    const { scenario } = await ok(postJson(s.baseUrl, `/api/packs/${HOSTILE_ID}/whatif`, {}));
+    const conv = scenario.live.conversations[`pack:${HOSTILE_ID}`];
+    assert.equal(conv[0].role, 'me');
+    const stored = conv[0].text;
+    assert.equal(stored, escapeUserText(HOSTILE_PROMPT));
+    assert.ok(stored.includes('&lt;img'), stored);
+    assert.ok(!stored.includes('<img'), stored);
+    assert.ok(stored.includes('&#123;f:'), stored);
+    assert.ok(!stored.includes('{f:true_reserve}'), stored);
+    assert.equal(conv[1].role, 'fathom');
+    assert.equal(conv[1].notice, false);
+    const db = await openStore(s.dbFile);
+    try {
+      const row = db.prepare("SELECT text FROM messages WHERE conversation_key = ? AND role = 'me'").get(`pack:${HOSTILE_ID}`);
+      assert.equal(row.text, escapeUserText(HOSTILE_PROMPT));
+    } finally { db.close(); }
+  });
+});
+
+test('B4: the What if question for a manifest pack is the raw prompt, and its stored form is dropped from history', async t => {
+  const s = await tempDb();
+  t.after(() => { s.close(); rmSync(s.dataDir, { recursive: true, force: true }); });
+  seedDemo(s.db);
+  writeSyntheticPack(s.dataDir, HOSTILE_PACK);
+  const runtime = createRuntimeEngine({ db: s.db, config: loadConfig({ FATHOM_DATA: s.dataDir, FATHOM_ENGINE: 'fake' }) });
+  const packs = createPackRefresher(s.db, { dataDir: s.dataDir });
+  packs.refresh();
+  const requests = [];
+  const engine = new Proxy(runtime, {
+    get(target, key) {
+      if (key === 'call') return async request => { requests.push(request); return target.call(request); };
+      const value = Reflect.get(target, key, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+  const answerer = createLiveAnswerer({ engine, packs });
+  const figure = money(buildScenario(s.db).fig.true_reserve.v);
+
+  const first = await answerer.whatIf({ db: s.db, packId: HOSTILE_ID });
+  assert.ok(!first.notice);
+  const question = requests[0].messages.at(-1);
+  assert.equal(question.role, 'user');
+  assert.equal(question.content, HOSTILE_PROMPT, 'the literal token text reaches the engine unresolved');
+  assert.ok(!question.content.includes(figure), 'the figure value never replaces the token');
+
+  // A prior notice round stored the owner message in its stored (escaped) form.
+  const key = `pack:${HOSTILE_ID}`;
+  s.db.prepare('INSERT OR IGNORE INTO conversations (key, created_at) VALUES (?, ?)').run(key, '2026-11-05T09:00:00.000Z');
+  const insert = s.db.prepare('INSERT INTO messages (conversation_key, role, text, refs, notice, ts, provenance) VALUES (?, ?, ?, ?, ?, ?, NULL)');
+  insert.run(key, 'me', escapeUserText(HOSTILE_PROMPT), '[]', 0, 'Nov 5, 9:00 AM');
+  insert.run(key, 'fathom', '<p>Engine is off, so answers are paused.</p>', '[]', 1, 'Nov 5, 9:00 AM');
+  await answerer.whatIf({ db: s.db, packId: HOSTILE_ID });
+  const turns = requests[1].messages.filter(m => String(m.content).includes('onerror'));
+  assert.equal(turns.length, 1, 'the earlier copy of the prompt is dropped; only the question remains');
+  assert.equal(requests[1].messages.at(-1).content, HOSTILE_PROMPT);
+});
+
+test('B4: an illustrative demo pack What if keeps its token form in the stored message', T, () => withServer({ env: FAKE }, async s => {
+  const def = packOf(await getScenario(s.baseUrl), 'contractor');
+  assert.equal(def.manifest, undefined, 'contractor is illustrative');
+  assert.ok(def.whatIf.prompt.includes('{n:'), 'its prompt carries a token');
+  const { scenario } = await ok(postJson(s.baseUrl, '/api/packs/contractor/whatif', {}));
+  assert.equal(scenario.live.conversations['pack:contractor'][0].text, def.whatIf.prompt);
 }));

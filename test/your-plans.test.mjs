@@ -18,6 +18,9 @@ import { loadPacks, activePacks } from '../src/packs/index.mjs';
 import { createRuntimeEngine } from '../src/engine/runtime.mjs';
 import { loadConfig } from '../src/config.mjs';
 import { openDb, migrate, getSetting, setSetting } from '../src/store/db.mjs';
+import { createPackRefresher } from '../src/packs/state.mjs';
+import { createLiveAnswerer } from '../src/api/answerer.mjs';
+import { seedDemo } from '../demo/seed.mjs';
 import {
   ROOT, SERVER_TIMEOUT, withServer, request, postJson, getScenario, openStore, runCommand,
 } from './helpers/server.mjs';
@@ -95,6 +98,7 @@ test('a synthetic plan document builds a valid, always-active pack citing its fi
   assert.equal(result.entries, 2);
   assert.deepEqual(result.sources, [{ fileId: FILE_ID, name: FILE_NAME }]);
   assert.deepEqual(result.warnings, []);
+  assert.equal(result.dropped, 0, 'B5: every fake row matches its document');
 
   const [pack] = loadPacks([result.dir]);
   assert.equal(pack.id, 'your-plans');
@@ -124,6 +128,7 @@ test('a synthetic plan document builds a valid, always-active pack citing its fi
 
   const built = getSetting(db, 'yourPlans', null);
   assert.equal(built.entries, 2);
+  assert.equal(built.dropped, 0, 'B5: settings.yourPlans records the dropped count');
   assert.deepEqual(built.sources, [FILE_NAME]);
   assert.equal(typeof built.builtAt, 'string');
   assert.equal(getSetting(db, 'packs.generation', 0), 1);
@@ -221,7 +226,10 @@ const listTree = dir => (existsSync(dir) ? readdirSync(dir, { recursive: true })
 test('a model title with markup or token syntax is neutralized in the manifest covers and entry titles', async t => {
   const { db, dataDir } = store(t);
   const heading = '<img src=x onerror=alert(1)> Plan {f:true_reserve}';
-  addPlanFile(db, dataDir, { text: `# ${heading}\n\nThe synthetic plan section text for the owner.\n` });
+  // B5: every number in a title must appear in the excerpt (for the fake path, the section text),
+  // so the section quotes the same markup. The number check runs on the neutralized title and body,
+  // where the brace syntax is no longer a token.
+  addPlanFile(db, dataDir, { text: `# ${heading}\n\nThe synthetic plan section quotes <img src=x onerror=alert(1)> for the owner.\n` });
   const result = await buildYourPlans({ db, engine: engineFor(db, dataDir), dataDir, clock: CLOCK });
   assert.equal(result.written, true);
   const manifest = JSON.parse(readFileSync(join(result.dir, 'manifest.json'), 'utf8'));
@@ -277,6 +285,183 @@ test('the Dockerfile copies packs and scripts into the image', () => {
   assert.match(dockerfile, /^COPY scripts \.\/scripts\s*$/m);
 });
 
+// ---------------------------------------------------------------- B5: entries must match the document
+
+// The runtime with extract() scripted: each call takes the next rows list as its fake response
+// (text and PDF sources alike); once the list is used up, calls pass through unchanged.
+function extractScripted(runtime, rowsPerCall) {
+  const queue = [...rowsPerCall];
+  return new Proxy(runtime, {
+    get(target, key) {
+      if (key === 'extract') {
+        return async request => {
+          const rows = queue.shift();
+          return target.extract(rows ? { ...request, fake: [{ text: JSON.stringify({ rows }) }] } : request);
+        };
+      }
+      const value = Reflect.get(target, key, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+}
+
+const DENTAL = 'The synthetic dental plan covers routine cleanings and exams.';
+const VISION = 'The synthetic vision plan covers frames and lenses.';
+const TWO_SECTIONS = `# Dental plan\n\n${DENTAL}\n\n# Vision plan\n\n${VISION}\n`;
+const row = (title, body, excerpt, page = 1) => ({ title, body, excerpt, page });
+const builtBodies = dir => loadPacks([dir])[0].entries.map(e => e.body).join('\n');
+const DROP_WARNING = /did not match the document/;
+
+test('fakeExtractRows emits an excerpt equal to the section text it read', () => {
+  const rows = fakeExtractRows(PLAN_TEXT, { fileName: FILE_NAME });
+  assert.equal(rows.length, 2);
+  for (const r of rows) {
+    assert.equal(typeof r.excerpt, 'string');
+    assert.equal(r.excerpt, r.body);
+    assert.ok(PLAN_TEXT.includes(r.excerpt));
+  }
+});
+
+test('B5: a row inventing an amount or a title number absent from its excerpt is dropped and counted', async t => {
+  const { db, dataDir } = store(t);
+  addPlanFile(db, dataDir, { text: TWO_SECTIONS });
+  const engine = extractScripted(engineFor(db, dataDir), [[
+    row('Dental plan', DENTAL, DENTAL),
+    row('Vision plan', 'The synthetic vision plan pays $4,250 toward frames and lenses.', VISION),
+    row('Tier 3 vision', VISION, VISION),
+  ]]);
+  const result = await buildYourPlans({ db, engine, dataDir, clock: CLOCK });
+  assert.equal(result.written, true);
+  assert.equal(result.entries, 1);
+  assert.equal(result.dropped, 2);
+  const [pack] = loadPacks([result.dir]);
+  assert.deepEqual(pack.entries.map(e => e.title), ['Dental plan']);
+  assert.ok(!builtBodies(result.dir).includes('4,250'), 'no entry carries the invented amount');
+  const warning = result.warnings.find(w => DROP_WARNING.test(w));
+  assert.ok(warning, JSON.stringify(result.warnings));
+  assert.match(warning, /\b2\b/, 'the warning counts the dropped sections');
+  for (const w of result.warnings) {
+    assert.ok(!w.includes('synthetic vision') && !w.includes('4,250') && !w.includes('Tier 3'), `no document text in: ${w}`);
+  }
+  assert.equal(getSetting(db, 'yourPlans', null).dropped, 2);
+});
+
+test('B5: a row whose excerpt is not in the document, or is empty, is dropped; whitespace differences still match', async t => {
+  const { db, dataDir } = store(t);
+  addPlanFile(db, dataDir, { text: TWO_SECTIONS });
+  const engine = extractScripted(engineFor(db, dataDir), [[
+    row('Acupuncture', 'The synthetic plan covers acupuncture.', 'The synthetic plan covers acupuncture.'),
+    row('Blank excerpt', DENTAL, '   '),
+    row('Dental plan', DENTAL, '  The synthetic dental plan   covers routine\ncleanings and exams.  '),
+  ]]);
+  const result = await buildYourPlans({ db, engine, dataDir, clock: CLOCK });
+  assert.equal(result.written, true);
+  assert.equal(result.entries, 1);
+  assert.equal(result.dropped, 2);
+  assert.deepEqual(loadPacks([result.dir])[0].entries.map(e => e.title), ['Dental plan']);
+  assert.ok(!builtBodies(result.dir).includes('acupuncture'));
+});
+
+test('B5: a row is kept only when its page matches the Page markers before its excerpt', async t => {
+  const { db, dataDir } = store(t);
+  const paged = `Page 1\n\n# Dental plan\n\n${DENTAL}\n\nPage 2\n\n# Vision plan\n\n${VISION}\n`;
+  addPlanFile(db, dataDir, { text: paged });
+  addPlanFile(db, dataDir, { id: 'file-unpaged', name: 'synthetic-unpaged.md', text: TWO_SECTIONS });
+  const engine = extractScripted(engineFor(db, dataDir), [
+    // The paged document comes first: sources follow the documents rows in insertion order.
+    [row('Dental plan', DENTAL, DENTAL, 1), row('Vision plan', VISION, VISION, 2),
+      row('Dental again', DENTAL, DENTAL, 2), row('Vision again', VISION, VISION, 1)],
+    // A document with no markers is all page 1.
+    [row('Unpaged dental', DENTAL, DENTAL, 1), row('Unpaged vision', VISION, VISION, 3)],
+  ]);
+  const result = await buildYourPlans({ db, engine, dataDir, clock: CLOCK });
+  assert.equal(result.written, true);
+  assert.equal(result.dropped, 3);
+  assert.equal(result.entries, 3);
+  const [pack] = loadPacks([result.dir]);
+  const cite = title => pack.entries.find(e => e.title === title)?.cites[0].label;
+  assert.deepEqual(pack.entries.map(e => e.title).sort(), ['Dental plan', 'Unpaged dental', 'Vision plan']);
+  assert.equal(cite('Dental plan'), `${FILE_NAME}, page 1`);
+  assert.equal(cite('Vision plan'), `${FILE_NAME}, page 2`);
+  assert.equal(cite('Unpaged dental'), 'synthetic-unpaged.md, page 1');
+});
+
+test('B5: a PDF source yields no entries, one warning and every row counted as dropped', async t => {
+  const { db, dataDir } = store(t);
+  addPlanFile(db, dataDir, { id: 'file-synthetic-pdf', name: 'synthetic-plan.pdf', mime: 'application/pdf',
+    text: '%PDF-1.4\n% synthetic placeholder, no real content\n' });
+  const engine = extractScripted(engineFor(db, dataDir), [[
+    row('Dental plan', DENTAL, DENTAL), row('Vision plan', VISION, VISION),
+  ]]);
+  const result = await buildYourPlans({ db, engine, dataDir, clock: CLOCK });
+  assert.equal(result.written, false);
+  assert.equal(result.entries, 0);
+  assert.equal(result.dropped, 2);
+  assert.equal(result.warnings.length, 1, JSON.stringify(result.warnings));
+  assert.match(result.warnings[0], /PDF/);
+  assert.match(result.warnings[0], /text copy/i);
+  assert.ok(!result.warnings[0].includes('synthetic dental'));
+  assert.equal(existsSync(yourPlansDir(dataDir)), false);
+});
+
+// A demo-seeded store (for the answerer) whose data dir is outside the repository.
+function demoPlanStore(t) {
+  const dataDir = scratch(t);
+  const db = openDb(join(dataDir, 'fathom.sqlite'));
+  t.after(() => db.close());
+  migrate(db);
+  seedDemo(db);
+  setSetting(db, 'clock', CLOCK);
+  return { db, dataDir };
+}
+
+// The runtime with every chat call answered by `text` (first answer and corrective retry).
+function sayingEngine(runtime, text) {
+  return new Proxy(runtime, {
+    get(target, key) {
+      if (key === 'call') return async request => target.call({ ...request, fake: [{ text }] });
+      const value = Reflect.get(target, key, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+}
+
+async function answerAfterBuild(db, dataDir, text) {
+  const packs = createPackRefresher(db, { dataDir });
+  packs.refresh();
+  const engine = sayingEngine(engineFor(db, dataDir), text);
+  return createLiveAnswerer({ engine, packs }).answer({ db, key: 'ask', text: 'What do our plan documents say' });
+}
+
+test('B5: a document with no numbers and a row inventing an amount gives no entry with it, and an answer stating it is ungrounded', async t => {
+  const { db, dataDir } = demoPlanStore(t);
+  addPlanFile(db, dataDir, { text: TWO_SECTIONS });
+  const engine = extractScripted(engineFor(db, dataDir), [[
+    row('Dental plan', DENTAL, DENTAL),
+    row('Vision plan', 'The synthetic vision plan pays $4,250 toward frames and lenses.', VISION),
+  ]]);
+  const result = await buildYourPlans({ db, engine, dataDir, clock: CLOCK });
+  assert.equal(result.written, true);
+  assert.ok(!builtBodies(result.dir).includes('4,250'));
+  const reply = await answerAfterBuild(db, dataDir, 'Your vision plan pays $4,250 toward frames.');
+  assert.ok(reply.provenance.packIds.includes('your-plans'));
+  assert.ok(reply.provenance.grounding.unverified.includes('$4,250'), JSON.stringify(reply.provenance.grounding));
+});
+
+test('B3: a document file name with digits never grounds that number in an answer', async t => {
+  const { db, dataDir } = demoPlanStore(t);
+  const name = 'plan_4821.md';
+  const text = `# Vision benefit\n\n${VISION}\n`;
+  assert.ok(!text.includes('4821'), 'the document text has no 4821');
+  addPlanFile(db, dataDir, { id: 'file-plan-digits', name, text });
+  const result = await buildYourPlans({ db, engine: engineFor(db, dataDir), dataDir, clock: CLOCK });
+  assert.equal(result.written, true);
+  assert.ok(builtBodies(result.dir).includes(`Source: ${name}, page 1`), 'the entry still cites the file');
+  const reply = await answerAfterBuild(db, dataDir, 'Your plan document number is 4821.');
+  assert.ok(reply.provenance.packIds.includes('your-plans'));
+  assert.ok(reply.provenance.grounding.unverified.includes('4821'), JSON.stringify(reply.provenance.grounding));
+});
+
 // ---------------------------------------------------------------- server
 
 async function ok(resPromise) {
@@ -304,6 +489,7 @@ test('POST /api/your-plans/build builds the pack, which is live for entries and 
   assert.equal(r.result.entries, 2);
   assert.deepEqual(r.result.sources, [{ fileId: FILE_ID, name: FILE_NAME }]);
   assert.ok(Array.isArray(r.result.warnings));
+  assert.equal(r.result.dropped, 0, 'B5: the API passes the dropped count through');
   const pack = yourPlansPack(r.scenario);
   assert.ok(pack, 'the pack is in the response scenario');
   assert.equal(pack.status, 'active');
@@ -345,6 +531,7 @@ test('npm run build:your-plans against a running server is picked up on its next
   const cli = await runCommand('npm', ['run', 'build:your-plans'], { env: { FATHOM_DATA: s.dataDir, FATHOM_ENGINE: 'fake' } });
   assert.equal(cli.code, 0, cli.stderr || cli.stdout);
   assert.match(cli.stdout, /\b2\b/, 'reports the entry count');
+  assert.match(cli.stdout, /\b0\b[^\n]*dropped|dropped[^\n]*\b0\b/i, 'B5: reports the dropped count');
   assert.ok(!cli.stdout.includes('standard tier') && !cli.stderr.includes('standard tier'), 'prints counts only, never document text');
 
   const pack = yourPlansPack(await getScenario(s.baseUrl));
