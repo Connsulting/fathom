@@ -13,7 +13,9 @@ import { fileURLToPath } from 'node:url';
 import { loadConfig } from './config.mjs';
 import { openMigrated, readStoreMode, createStoreFile, setSetting, DB_FILE } from './store/db.mjs';
 import { createHandler } from './api/router.mjs';
-import { createCannedAnswerer } from './api/answerer.mjs';
+import { createLiveAnswerer } from './api/answerer.mjs';
+import { createRuntimeEngine } from './engine/runtime.mjs';
+import { createPackRefresher } from './packs/state.mjs';
 import { seedDemo } from '../demo/seed.mjs';
 
 export class StartupError extends Error {}
@@ -40,8 +42,17 @@ export function openStore(config) {
 
 export async function startServer(config = loadConfig()) {
   const db = openStore(config);
-  const answerer = createCannedAnswerer();
-  const server = http.createServer(createHandler({ db, config, answerer }));
+  // One runtime engine per process; packs load from the repository and the data volume.
+  const engine = createRuntimeEngine({ db, config });
+  const packs = createPackRefresher(db, { dataDir: config.dataDir });
+  try {
+    packs.refresh();
+  } catch (e) {
+    db.close();
+    throw new StartupError(`knowledge packs failed to load: ${e.message}`);
+  }
+  const answerer = createLiveAnswerer({ engine, packs });
+  const server = http.createServer(createHandler({ db, config, engine, packs, answerer }));
   try {
     await new Promise((resolveListen, reject) => {
       server.once('error', reject);

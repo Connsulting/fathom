@@ -1,0 +1,133 @@
+/* Horizon screens: chat Sources, live packs, Your plans and the engine ledger and cap.
+   Same tokens as design.css, plus one warning tone for unverified numbers. Every selector is scoped. */
+
+.d-horizon {
+  --warn: #d9b25f;
+  --warnd: rgba(217, 178, 95, 0.55);
+}
+
+/* ---------- chat: grounding marks ---------- */
+.d-horizon .fx-unverified {
+  color: var(--warn);
+  text-decoration: underline dotted var(--warnd);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  cursor: help;
+}
+.d-horizon .fx-src { border-bottom: 1px dotted var(--line2); cursor: help; }
+.d-horizon .h-msg.notice .h-msg-b { color: var(--mu); padding-left: 12px; border-left: 2px solid var(--line2); }
+
+/* ---------- chat: Sources disclosure ---------- */
+.d-horizon .h-src { margin-top: 10px; max-width: 70ch; font-size: 12.5px; color: var(--fa); }
+.d-horizon .h-src summary {
+  display: inline-flex; align-items: center; gap: 6px; cursor: pointer; list-style: none;
+  color: var(--fa); font-size: 12px; padding: 2px 0; border-radius: 4px;
+}
+.d-horizon .h-src summary::-webkit-details-marker { display: none; }
+.d-horizon .h-src summary::before {
+  content: ''; width: 5px; height: 5px; border-right: 1.4px solid currentColor; border-bottom: 1.4px solid currentColor;
+  transform: rotate(-45deg); transition: transform 0.15s; margin-right: 2px;
+}
+.d-horizon .h-src[open] summary::before { transform: rotate(45deg); }
+.d-horizon .h-src summary:hover { color: var(--tx2); }
+.d-horizon .h-src-b { margin-top: 8px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; display: flex; flex-direction: column; gap: 10px; }
+.d-horizon .h-src-ok { color: var(--tx2); }
+.d-horizon .h-src-ok::before { content: ''; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--ac); margin-right: 8px; vertical-align: 1px; }
+.d-horizon .h-src-warn { color: var(--warn); }
+.d-horizon .h-src-warn::before { content: ''; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--warn); margin-right: 8px; vertical-align: 1px; }
+.d-horizon .h-src-h { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--fa); margin-bottom: 4px; }
+.d-horizon .h-src-g li { display: flex; flex-wrap: wrap; gap: 2px 10px; align-items: baseline; padding: 3px 0; color: var(--mu); min-width: 0; }
+.d-horizon .h-src-g li + li { border-top: 1px solid var(--line); }
+.d-horizon .h-src-tool code { font-family: var(--mono); font-size: 12px; color: var(--ac2); }
+.d-horizon .h-src-tool span { font-family: var(--mono); font-size: 11.5px; color: var(--fa); overflow-wrap: anywhere; min-width: 0; }
+.d-horizon .h-src-fig { justify-content: space-between; }
+.d-horizon .h-src-fig > span:first-child { flex: 1 1 12ch; min-width: 0; }
+.d-horizon .h-src-lit .fx-src { color: var(--tx2); font-family: var(--mono); font-size: 12px; }
+.d-horizon .h-src-pack { color: var(--tx2); }
+.d-horizon .h-src-note { color: var(--fa); }
+
+/* ---------- packs: meta, note, entries ---------- */
+.d-horizon .h-pack-note { display: flex; gap: 8px; align-items: center; margin: 4px 0 0; color: var(--mu); font-size: 13px; }
+.d-horizon .h-pack-note .h-i { color: var(--ac); }
+.d-horizon .h-entries { display: flex; flex-direction: column; border: 1px solid var(--line2); border-radius: 10px; overflow: hidden; }
+.d-horizon .h-entry-i + .h-entry-i { border-top: 1px solid var(--line); }
+.d-horizon .h-entry {
+  all: unset; box-sizing: border-box; cursor: pointer; width: 100%;
+  display: flex; justify-content: space-between; align-items: center; gap: 12px;
+  padding: 12px 16px; color: var(--tx2); font-size: 14px;
+}
+.d-horizon .h-entry:hover { color: var(--tx); background: var(--s1); }
+.d-horizon .h-entry:focus-visible { outline: 2px solid var(--ac); outline-offset: -2px; }
+.d-horizon .h-entry .h-i { color: var(--fa); transition: transform 0.15s; }
+.d-horizon .h-entry-i.open .h-entry { color: var(--tx); background: var(--s1); }
+.d-horizon .h-entry-i.open .h-entry .h-i { transform: rotate(180deg); color: var(--ac); }
+.d-horizon .h-entry-x { padding: 6px 16px 18px; background: var(--s1); }
+.d-horizon .h-entry-body { color: var(--tx2); font-size: 14px; max-width: 72ch; overflow-wrap: anywhere; }
+.d-horizon .h-entry-body > * + * { margin-top: 10px; }
+.d-horizon .h-entry-body h4 { margin: 14px 0 0; font-size: 13.5px; font-weight: 500; color: var(--tx); }
+.d-horizon .h-entry-body ul, .d-horizon .h-entry-body ol { padding-left: 20px; }
+.d-horizon .h-entry-body ul { list-style: disc; }
+.d-horizon .h-entry-body ol { list-style: decimal; }
+.d-horizon .h-entry-body li + li { margin-top: 4px; }
+.d-horizon .h-entry-body a, .d-horizon .h-entry-cites a { color: var(--ac); }
+.d-horizon .h-entry-body a:hover, .d-horizon .h-entry-cites a:hover { color: var(--ac2); }
+.d-horizon .h-entry-body strong { font-weight: 500; color: var(--tx); }
+.d-horizon .h-entry-body code { font-family: var(--mono); font-size: 0.92em; }
+.d-horizon .h-entry-body .h-entry-m { color: var(--fa); font-size: 12.5px; }
+.d-horizon .h-entry-ch { margin: 16px 0 6px; }
+.d-horizon .h-entry-cites li { position: relative; padding: 0 0 6px 18px; color: var(--mu); font-size: 13px; overflow-wrap: anywhere; }
+.d-horizon .h-entry-cites li::before { content: ''; position: absolute; left: 2px; top: 10px; width: 7px; height: 1px; background: var(--fa); }
+
+/* ---------- packs: Your plans ---------- */
+.d-horizon .h-yp { padding: 18px 20px; display: flex; flex-direction: column; gap: 14px; max-width: 720px; }
+.d-horizon .h-yp-lede { color: var(--tx2); font-size: 13.5px; max-width: 64ch; }
+.d-horizon .h-yp-files li + li { border-top: 1px solid var(--line); }
+.d-horizon .h-yp-files label { display: flex; align-items: center; gap: 10px; padding: 9px 0; cursor: pointer; min-width: 0; }
+.d-horizon .h-yp-files input { flex: none; width: 16px; height: 16px; margin: 0; accent-color: var(--ac); }
+.d-horizon .h-yp-files span { flex: 1; min-width: 0; overflow-wrap: anywhere; color: var(--tx2); }
+.d-horizon .h-yp-files em { font-style: normal; color: var(--fa); font-size: 12px; white-space: nowrap; }
+.d-horizon .h-yp .h-acts { gap: 12px; }
+.d-horizon .h-yp .h-btn[disabled] { opacity: 0.5; cursor: default; }
+.d-horizon .h-yp-result { color: var(--tx); }
+.d-horizon .h-yp-result.none { color: var(--mu); }
+.d-horizon .h-yp-result span { color: var(--fa); }
+.d-horizon .h-yp .h-mute a { display: inline-flex; gap: 5px; align-items: center; }
+
+/* ---------- engine: cap ---------- */
+.d-horizon .h-cap { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; padding-top: 12px; border-top: 1px solid var(--line); }
+.d-horizon .h-cap label { color: var(--fa); font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; }
+.d-horizon .h-cap-row { display: flex; gap: 8px; align-items: center; }
+.d-horizon .h-cap-in { position: relative; flex: 1 1 auto; min-width: 0; max-width: 180px; }
+.d-horizon .h-cap-in::before { content: '$'; position: absolute; left: 11px; top: 50%; transform: translateY(-50%); color: var(--fa); font-family: var(--mono); font-size: 13px; pointer-events: none; }
+.d-horizon .h-cap input {
+  width: 100%; height: 32px; padding: 0 10px 0 22px; background: var(--bg); color: var(--tx);
+  border: 1px solid var(--line2); border-radius: 7px; font-family: var(--mono); font-size: 13px; font-variant-numeric: tabular-nums;
+}
+.d-horizon .h-cap input:focus { outline: none; border-color: var(--ac); }
+.d-horizon .h-cap .h-mute { margin-top: 2px; }
+
+/* ---------- engine: Recent spend ledger ---------- */
+.d-horizon .h-ledger-h, .d-horizon .h-ledger-r {
+  display: grid; grid-template-columns: 170px minmax(0, 1fr) minmax(0, 1.2fr) 96px; gap: 0 28px; padding: 0 26px; align-items: start;
+}
+.d-horizon .h-ledger-h { padding-top: 12px; padding-bottom: 12px; background: var(--s1); border-bottom: 1px solid var(--line); color: var(--fa); font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; }
+.d-horizon .h-ledger-r { padding-top: 12px; padding-bottom: 12px; }
+.d-horizon .h-ledger-r + .h-ledger-r { border-top: 1px solid var(--line); }
+.d-horizon .h-ledger-c { color: var(--tx2); font-size: 13.5px; line-height: 1.4; min-width: 0; overflow-wrap: anywhere; }
+.d-horizon .h-ledger-c.mono { font-size: 13px; }
+.d-horizon .h-ledger-e { padding: 16px 26px; }
+
+@media (max-width: 1100px) {
+  .d-horizon .h-ledger-h, .d-horizon .h-ledger-r { grid-template-columns: 150px minmax(0, 1fr) minmax(0, 1.2fr) 84px; gap: 0 18px; padding-left: 20px; padding-right: 20px; }
+}
+@media (max-width: 720px) {
+  .d-horizon .h-ledger-h { display: none; }
+  .d-horizon .h-ledger-r { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; padding: 14px 20px; }
+  .d-horizon .h-ledger-c::before { content: attr(data-l); display: block; color: var(--fa); font-size: 11.5px; letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 3px; font-family: var(--sans); }
+  .d-horizon .h-ledger-c.r { text-align: left; }
+  .d-horizon .h-ledger-e { padding: 14px 20px; }
+  .d-horizon .h-cap-in { max-width: none; }
+  .d-horizon .h-yp { padding: 16px; }
+  .d-horizon .h-entry { padding: 12px 14px; }
+  .d-horizon .h-entry-x { padding: 4px 14px 16px; }
+}

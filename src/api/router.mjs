@@ -13,7 +13,10 @@ const TABLE = [
   { method: 'POST', path: '/api/wargame/:name/pick', handler: h.wargamePick },
   { method: 'POST', path: '/api/packs/:id/toggle', handler: h.packToggle },
   { method: 'POST', path: '/api/packs/:id/whatif', handler: h.packWhatIf },
+  { method: 'GET', path: '/api/packs/:id/entries/:entryId', handler: h.packEntry },
   { method: 'POST', path: '/api/engine', handler: h.setEngine },
+  { method: 'POST', path: '/api/engine/cap', handler: h.setCap },
+  { method: 'POST', path: '/api/your-plans/build', handler: h.yourPlansBuild },
   { method: 'POST', path: '/api/ask', handler: h.ask },
   { method: 'POST', path: '/api/onboarding', handler: h.onboarding },
   { method: 'POST', path: '/api/demo/reset', handler: h.demoReset },
@@ -55,7 +58,9 @@ function findRoute(method, rawPath) {
   return hit;
 }
 
-export function createHandler({ db, config, answerer, webDir = WEB_DIR, sharedDir = SHARED_DIR }) {
+// engine, packs and answerer are optional for static-only fixtures: handlers that need them answer
+// 503, and the pack refresh check is skipped without packs.
+export function createHandler({ db, config, engine, packs, answerer, webDir = WEB_DIR, sharedDir = SHARED_DIR }) {
   const serveStatic = createStatic({ webDir, sharedDir });
   return async function handle(req, res) {
     setSecurityHeaders(res);
@@ -70,7 +75,10 @@ export function createHandler({ db, config, answerer, webDir = WEB_DIR, sharedDi
           guardPost(req);
           body = await readJsonBody(req);
         }
-        const out = await r.handler({ db, config, answerer, params, body, req });
+        // Facts or a Your plans build may have changed since the last request (another process,
+        // the CLI, a direct write): refresh pack state first so this response reflects it.
+        if (packs && rawPath !== '/healthz') packs.refreshIfFactsChanged();
+        const out = await r.handler({ db, config, engine, packs, answerer, params, body, req });
         sendJson(res, 200, out);
         return;
       }

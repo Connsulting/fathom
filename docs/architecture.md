@@ -22,7 +22,7 @@ over every module's test directory (`npm test`), end-to-end tests with Playwrigh
 | `src/config.mjs` | `loadConfig(env)`: every environment key, paths only. |
 | `src/store/` | `db.mjs` plus `migrations/NNN-name.sql`. Owned by the foundation item. |
 | `src/scenario/build.mjs` | Store to CONTRACT.md scenario object (`buildScenario`). |
-| `src/api/` | Router, handlers, HTTP guards, static serving, the canned answerer. |
+| `src/api/` | Router, handlers, HTTP guards, static serving, the live answerer and its fake answer source. |
 | `src/shared/` | Browser-safe logic used by the server and the UI (`rules.mjs`, `tokens.mjs`). |
 | `src/tools/` | Tool registry shared by the chat engine and the MCP server. |
 | `src/calc/` | Deterministic calculators (tax, payroll, retirement room, cash). |
@@ -223,7 +223,7 @@ Money columns are dollars rounded to cents; JSON columns hold JSON text. The pro
 | Table | Columns |
 |---|---|
 | `schema_migrations` | `id` PK, `name`, `applied_at` |
-| `settings` | `key` PK, `value` JSON, `updated_at`. Keys: `mode`, `engine` `{on}`, `cap` `{usd}` (default 200), `clock`, `onboarding` `{done, step}`, `wargame.picks` `{salary, deferral}`, `seeded` `{at, scenario_sha}` |
+| `settings` | `key` PK, `value` JSON, `updated_at`. Keys: `mode`, `engine` `{on}`, `cap` `{usd}` (default 200), `clock`, `onboarding` `{done, step}`, `wargame.picks` `{salary, deferral}`, `seeded` `{at, scenario_sha}`, `packs.generation` (integer, bumped by every Your plans build), `yourPlans` `{builtAt, entries, sources: [file names]}` (the last build) |
 | `content` | `key` PK, `value` JSON, `src`, `updated_at`. Narrative sections with no data table yet: `meta` (product, household, dataThrough), `names`, `law`, `pct`, `series`, `verdict`, `domains`, `curve`, `wargame`, `ask`, `advisor`, `yearend`, `connect`, `engine.chat`, `onboarding`, `email` |
 | `files` | `id` PK, `name`, `mime`, `size`, `sha256`, `source_kind`, `uploaded_at`, `stored_path`, `status`, `note` |
 | `sources` | `id` PK, `label`, `as_of`, `kind`, `last_ingest_at`, `note` |
@@ -239,16 +239,16 @@ Money columns are dollars rounded to cents; JSON columns hold JSON text. The pro
 | `recs` | `id` PK, `def` JSON (the CONTRACT rec minus live fields), `status`, `waiting_on`, `wake`, `tasks_done` JSON, `window_close` ISO date, `window_label`, `pack_id`, `sort`, `updated_at`, provenance |
 | `rec_events` | `id` PK, `rec_id`, `ts`, `action`, `arg`, `from_status`, `to_status`, `actor` (`ui`, `tool`, ...) |
 | `conversations` | `key` PK (`ask`, a rec id, or `pack:<id>`), `created_at` |
-| `messages` | `id` PK, `conversation_key`, `role` in me, fathom, advisor, claude, `text` (token-bearing HTML), `refs` JSON, `notice`, `ts` |
+| `messages` | `id` PK, `conversation_key`, `role` in me, fathom, advisor, claude, `text` (token-bearing HTML), `refs` JSON, `notice`, `ts`, `provenance` JSON or NULL (migration 002; see "Answer provenance") |
 | `goals` | `id` PK, `def` JSON, `sort` |
 | `deadlines` | `id` PK, `date`, `label`, `title`, `rec_id`, `hard` |
 | `events` | `id` PK, `date` (label as in the scenario), `kind`, `title`, `body`, `sort` |
-| `packs_state` | `id` PK, `def` JSON (the pack with its base status), `active` (NULL means no override), `exploring`, `what_if_asked`, `what_if_done`, `unhid` JSON, `sort`, `updated_at` |
+| `packs_state` | `id` PK, `def` JSON (the pack with its base status; manifest-backed rows carry `def.manifest`, and optionally `def.label`), `active` (NULL means no override), `exploring`, `what_if_asked`, `what_if_done`, `unhid` JSON, `sort`, `updated_at` |
 | `decisions` | `id` PK, `title`, `status` in open, decided, upcoming, `wargame`, `rec_id`, `opens_on`, `when_label`, `note`, `decided_line`, `sort` |
 | `jobs` | `id` PK, `name`, `cadence`, `does`, `cost`, `next_label`, `last_label`, `enabled`, `sort` |
 | `job_runs` | `id` PK, `job_id`, `started_at`, `finished_at`, `status`, `cost_usd`, `note` |
 | `api_keys` | `id` PK, `name`, `key_hash`, `scopes` JSON, `created_at`, `last_used_at`, `revoked_at` |
-| `spend_ledger` | `id` PK, `ts`, `yyyymm` `'YYYY-MM'`, `purpose`, `cost_usd`, `model`, `tokens` JSON |
+| `spend_ledger` | `id` PK, `ts`, `yyyymm` `'YYYY-MM'`, `purpose`, `cost_usd` (rounded up to whole cents on write), `model`, `tokens` JSON (usage counts only, never prompt text) |
 
 ### Adding a migration
 
@@ -287,14 +287,18 @@ live state merged in, plus `live`. It only reads.
    stored text when a stored decided decision names it, else the line of the first derived decided
    decision.
 5. Engine: `budget.monthly` is `settings.cap.usd` (default 200); `budget.used` is the sum of
-   `spend_ledger.cost_usd` for the clock's month; jobs come from `jobs`; `chat` from content.
+   `spend_ledger.cost_usd` for the clock's month; jobs come from `jobs`; `chat` from content;
+   `ledger` is the latest 8 spend rows, newest first, as `[{id, ts, purpose, model, cost}]` (`ts`
+   a display label, no token or prompt fields).
 6. Derived provenance figures, registered at build time and never stored:
    `wg.salary.<pointId>.x|y` and `wg.deferral.<optionId>.amount|tax2026|tax2027|net|decCash|need|gap`
    (kind m, source `wargame-model`, "War-game model, from your plan");
    `series.<key>.<index>` (the point's kind, source the series `src` or `plan`);
    `engine.budget.used` (a, `spend-ledger`), `engine.budget.monthly` (p, `settings`),
-   `engine.budget.left` (e, `spend-ledger`), and `engine.job.<jobId>.cost` (e, `job-estimates`,
-   "Per-run cost estimate"). Built-in sources cover these ids when the store has no row for them.
+   `engine.budget.left` (e, `spend-ledger`), `engine.job.<jobId>.cost` (e, `job-estimates`,
+   "Per-run cost estimate") and `engine.ledger.<id>.cost` (a, `spend-ledger`, label
+   `<purpose>, <ts label>`) for each listed ledger row. Built-in sources cover these ids when the
+   store has no row for them.
 
 ### The `live` key
 
@@ -305,16 +309,22 @@ live = {
   engine: boolean,                      // settings.engine.on, default true
   onboardStep: int,
   picks: { salary: int, deferral: int },  // war-game selections; default the current/recommended point
-  conversations: { <key>: [ { id, role, text, refs, ts, notice } ] },
+  conversations: { <key>: [ { id, role, text, refs, ts, notice, provenance } ] },
   packs: { <id>: { active: boolean | null, exploring: boolean, whatIfDone: boolean } },
+  yourPlans: { sources: [ { fileId, name, docType } ], files: [ { id, name } ], built: settings.yourPlans | null },
   clock: 'YYYY-MM-DD'
 }
 ```
 
+`yourPlans.sources` are the plan and benefits documents (a text-only document row is named
+`document-<id>` with `fileId` null); `files` are the stored files a build can read (text or PDF).
+
 Conversation keys are `ask`, a rec id, or `pack:<id>`; `ask` is always present. Message `id` is a
 string (`m<rowid>`), `text` is token-bearing HTML source (paragraphs as `<p>...</p>`; resolve it
 with `api.t` at read time), `refs` are rec ids, `ts` is a display label such as "Nov 5, 9:04 AM",
-`notice` is true only for the engine-off notice. The demo seed opens each rec conversation with one
+`notice` is true for every notice the answerer stores instead of an answer (engine off, off by
+configuration, over the cap, model error). `provenance` is the stored answer provenance or null
+(owner messages, notices and seeded messages). The demo seed opens each rec conversation with one
 fathom message holding its summary.
 
 ## API
@@ -331,10 +341,13 @@ response is `{scenario, ...}` with the fresh scenario.
 | `GET /api/scenario` | | the scenario with `live` |
 | `POST /api/recs/:id/action` | `{action: accept, start, snooze, dismiss, complete, reopen or task, arg?}` | `{scenario}`. `task` toggles task `arg`; `snooze` takes a wake label (default "Next month"). 400 bad action or task index, 404 unknown or hidden rec. Writes `rec_events` (actor `ui`). |
 | `POST /api/wargame/:name/pick` | `{index}` (an index or an option id) | `{scenario}`. `name` is salary or deferral (404 otherwise); 400 out of range. |
-| `POST /api/packs/:id/toggle` | `{}` | `{scenario, status}`. Turning a pack on lifts its hidden recs to proposed; turning it off hides again only the recs it lifted that no other active pack powers. |
-| `POST /api/packs/:id/whatif` | `{}` | `{scenario}`. Marks the pack exploring and appends the canned prompt and answer once to `pack:<id>`; with the engine off it appends a single notice and does not mark it done. |
+| `POST /api/packs/:id/toggle` | `{}` | `{scenario, status, note}`. Turning a pack on lifts its hidden recs to proposed; turning it off hides again only the recs it lifted that no other active pack powers. `note` is "Recommendations update on the next planning run." |
+| `POST /api/packs/:id/whatif` | `{}` | `{scenario}`. Marks the pack exploring and appends the pack's what-if prompt and a live answer (with provenance) once to `pack:<id>`; a notice reply (engine off, over the cap, model error) is appended once and does not mark it done. |
+| `GET /api/packs/:id/entries/:entryId` | | `{entry: {id, title, body, cites}}` for an entry of a manifest-backed pack row, from the loaded packs; 404 otherwise. |
 | `POST /api/engine` | `{on: boolean}` | `{scenario}`; 400 when `on` is not boolean. |
-| `POST /api/ask` | `{key?: 'ask', a rec id or 'pack:<id>', questionId? or text?}` | `{scenario, message}`. Exactly one of `questionId` or `text`; empty text, both or neither are 400; unknown question or conversation 404. Appends the owner's message and the answer (or the engine-off notice when the engine is off). |
+| `POST /api/engine/cap` | `{usd}` | `{scenario}`. `usd` a finite number from 0 to 10000, rounded to cents and stored as `settings.cap`; anything else 400. |
+| `POST /api/ask` | `{key?: 'ask', a rec id or 'pack:<id>', questionId? or text?}` | `{scenario, message}`. Exactly one of `questionId` or `text`; empty text, both or neither are 400; unknown question or conversation 404. Appends the owner's message and the live answer with its provenance, or a notice. |
+| `POST /api/your-plans/build` | `{fileIds?: string[]}` (at most 50) | `{scenario, result: {written, entries, sources, warnings}}`. Builds the Your plans pack; 400 for a bad body; 409 while the engine is off, over the cap, or when the data directory is inside the repository. |
 | `POST /api/onboarding` | `{step}` | `{scenario}`. 0 to 5 set the step, 6 completes onboarding; anything else 400. |
 | `POST /api/demo/reset` | `{}` | `{scenario}`. Rebuilds the demo store; 404 unless the store is a demo store. |
 
@@ -355,22 +368,162 @@ is reachable only on the owner's private network.
 
 ## Seams later items plug into
 
-1. Answerer: `src/api/answerer.mjs` exports `createCannedAnswerer()` returning
-   `{answer({db, key, questionId?, text?}) -> {paragraphs, refs, notice?} | null}`. `src/server.mjs`
-   constructs it and the router passes it to handlers as `ctx.answerer`. The ask endpoint only calls
-   it while the engine is on and words the owner's question itself from `src/api/questions.mjs`.
-   Free text that exactly matches a canned question (the rec's own follow-ups first, then the
-   suggested Ask questions; tokens resolved, trimmed, case-insensitive) gets that answer, else the
-   fallback. The live engine replaces this object with the same interface.
-2. Packs: `src/packs` replaces the seeded `packs_state.def` rows with loaded manifests and sets the
-   base status from `activePacks(packs, facts)`; overrides in `packs_state` keep working.
+1. Answerer: `src/api/answerer.mjs` exports `createLiveAnswerer({engine, packs})` returning
+   `{answer({db, key, questionId?, text?, clock?}), whatIf({db, packId, clock?})}`, each resolving to
+   `{paragraphs, refs, notice?, provenance?}` (`answer` is null for an unknown `questionId`).
+   `src/server.mjs` constructs it and the router passes it to handlers as `ctx.answerer`. Every Ask,
+   rec conversation, pack follow-up and What if goes through it; the ask endpoint words the owner's
+   question itself from `src/api/questions.mjs`. See "Chat over the data" below.
+2. Packs: `src/packs/state.mjs` replaces the manifest-backed `packs_state.def` rows with loaded
+   manifests and sets the base status from `activePacks(packs, facts)`; overrides in `packs_state`
+   keep working. See "Live pack state" below.
 3. Ingest: parsers write rows with provenance into the ledger tables, `facts` and `files`; figures
    and sources follow from them. Narrative `content` rows are replaced as data takes over.
 4. Engine: `src/engine` records spend in `spend_ledger`, which already feeds `engine.budget.used`,
-   and reads the cap from `settings.cap`.
+   and reads the cap from `settings.cap`. See "Runtime engine" below.
 5. MCP: `src/mcp` exposes `src/tools` with scopes checked against `api_keys`.
 6. Jobs: `src/jobs` schedules from `jobs` and records `job_runs`.
 7. Email: `src/email` renders the `email` content (later derived) through `FATHOM_EMAIL_TRANSPORT`.
+
+## Runtime engine
+
+`src/engine/runtime.mjs` exports `createSpendLedger(db)` and `createRuntimeEngine({db, config, clock?})`.
+`src/server.mjs` builds ONE runtime per process, so accounting poison lasts for the process.
+
+1. Ledger adapter: `monthSpendUsd('YYYYMM')` reads `yyyymm = 'YYYY-MM'` (any other key is a
+   TypeError); `record({ts, purpose, costUsd, model, tokens})` stores `yyyymm = ts` month, the cost
+   rounded up to whole cents (sub-cent calls are never undercounted against the cap) and the usage
+   counts as `tokens`; `recent(limit = 10)` lists `{id, ts, purpose, model, costUsd}` newest first.
+2. Runtime: `{mode, ledger, isOn(), capUsd(), now(), call(request), extract(request)}`. `mode` is
+   `config.engine`. The effective engine state is `isOn()` = `settings.engine.on !== false &&
+   config.engine !== 'off'`. `capUsd()` is `settings.cap.usd` when it is a finite number of at least
+   0, else 200. `now()` is the clock date (`clock`, `FATHOM_CLOCK`, else `settings.clock`) at the
+   current UTC time, so spend lands in the month the Engine screen shows.
+3. `createEngine` gains two optional hooks used by the runtime: `controls: () => ({on, capUsd})`,
+   read inside the serialized check before every model round (on false throws `EngineOffError`; a
+   finite `capUsd` replaces the constructed cap), and a per-call `request.fake` script list used in
+   fake mode instead of the constructor queue. The runtime's fake default is one text round ("The
+   fake engine has no scripted answer for this request.") for `call` and `{"rows":[]}` for `extract`.
+4. `call` takes an optional `systemDynamic`: the SDK system prompt is `[system, engine rules,
+   SYSTEM_PROMPT_DYNAMIC_BOUNDARY, systemDynamic]`, so `system` is prompt cached and the dynamic part
+   is not; the Messages round sends it as a second, uncached system block; the unknown-cost
+   estimate counts it.
+5. Live mode reads `FATHOM_CLAUDE_CREDENTIAL_FILE` once at construction; a missing or unreadable
+   credential makes every call throw `ModelCallError('Live engine has no credential')` before any
+   spend. Credential contents and read errors are never logged.
+
+## Chat over the data
+
+`src/api/answerer.mjs`, with the deterministic fake answer source in `src/api/fake-answers.mjs`.
+
+1. Before a model call: off by the switch answers with the engine-off notice, off by configuration
+   with "The engine is off in this deployment's configuration, so answers are paused." The answerer
+   then re-checks the pack fingerprint, reads `household_summary`, and for a rec conversation the
+   rec (`get_recommendation`) or for `pack:<id>` the pack metadata and entries, as conversation
+   context.
+2. Prompt (`buildChatPrompt`): `system` = `PRODUCT_RULES` plus `<knowledge_packs>` holding
+   `packContext` of the effectively active manifest packs (base status plus overrides), with no
+   household data; `systemDynamic` = `<household_summary>`, optional `<conversation_context>` and
+   today; `messages` = the last 20 non-notice messages as plain text turns plus the question.
+   `PRODUCT_RULES` states: advisory only, no tax filing, no money movement or account changes, no
+   securities selection, no number not taken from a tool result or the provided data, stored
+   figures as `{f:key}` tokens from `get_figures`, cite pack entries by title, plain text paragraphs,
+   and `set_recommendation_status` only on the owner's explicit request.
+3. Tools: every read tool of the registry; `set_recommendation_status` is offered only when the
+   owner's message matches a status intent (accept, start, snooze, dismiss, set aside, mark, done,
+   complete, reopen, wake) and does not end in "?".
+4. Grounding (`groundAnswer`): every `{f|fk|l|p|n:key}` token is validated against `fig`, `law`,
+   `pct` and `names` (key characters `[A-Za-z0-9_.-]`), recorded once as a violation when invalid,
+   and masked; then `checkGrounding` checks the remaining numbers and number words against tool
+   results and context data only (household summary, conversation context, active pack entry
+   bodies), never stored figure values, so a stored figure typed as a literal is a violation
+   ("stored figure written as a literal"). Each grounded literal is bound to the first single source
+   that grounds it (a tool by name, else the context datum).
+5. One corrective retry (same `system`, the first answer plus a corrective user turn). An answer
+   still ungrounded is stored with each violation in `<span class="fx-unverified" title="Not found
+   in your data or tool results">`; if the retry call itself fails, the first answer is kept,
+   marked.
+6. Rendering (`renderAnswer`): model text is untrusted. Everything is HTML-escaped (quotes and
+   apostrophes included) with `{` and `}` as `&#123;` and `&#125;`, except valid tokens; bound
+   literals are wrapped in `<span class="fx-src" data-src="<literal index>" title="From <source>">`;
+   paragraphs split on blank lines.
+7. Notices (stored with `notice = 1`, no provenance): engine off, off by configuration, over the cap
+   ("This month's engine budget of {f:engine.budget.monthly} is used up, so answers are paused. Raise
+   the cap on the Engine screen or wait for next month."), and any other model error, including a
+   missing live credential ("The model could not answer just now, so nothing was made up. Try again
+   in a moment."). Model calls are awaited before the write transaction opens.
+8. Refs: the canned question's refs when the question matches one, the rec of a rec conversation,
+   a what-if's unlock recs, and recs the answer read or changed through tools.
+9. Fake answer source (`fakeAnswerScript`, `FATHOM_ENGINE=fake`): one tool round
+   (`household_summary`, `get_figures` with the answer's figure keys, `get_recommendation` in a rec
+   conversation) and one text round: the canned demo answer for a suggested or rec question (by id
+   or exact free text), the pack's canned what-if answer (else a numberless sentence naming the pack
+   and its covers), or "From your household summary, N items need you right now." with N from the
+   summary. Numbers in the owner's free text are echoed first ("You asked about ..."), so an
+   invented amount is marked unverified after the retry.
+
+### Answer provenance
+
+Stored in `messages.provenance` and returned on the message: `{engine: mode, model, tools: [{name,
+args}], figures: [figure keys], packIds: [active manifest ids in the prompt], packEntries: [entry
+titles named in the answer], literals: [{text, source}], grounding: {ok, retried, unverified:
+[texts]}, costUsd}`. No prompt text is ever stored.
+
+## Live pack state
+
+`src/packs/state.mjs` exports `REPO_PACKS_DIR`, `yourPlansDir(dataDir)` (`<dataDir>/packs/your-plans`),
+`defaultPackDirs(dataDir)` (the repository `packs/` plus the Your plans dir when it exists),
+`refreshPackState(db, {packDirs})` returning `{packs, activation, warnings}`, and
+`createPackRefresher(db, {dataDir})` returning `{refresh(), refreshIfFactsChanged(), loaded(),
+entry(rowId, entryId)}`. `src/store/facts.mjs` exports `upsertFact(db, {key, value, src, asOf,
+confirmed, provenance: {fileId, parser, locator}}) -> {changed}` (an unconfirmed value never
+overwrites a confirmed one) and `getFacts(db)` (flat `{key: value}`).
+
+1. Each loaded manifest maps to the `packs_state` row whose `def.manifest` names it, else a new row
+   whose id is the manifest id. The def is rewritten from the manifest: `id`, `manifest`, `name`
+   (`def.label` when set, else the manifest name), base `status` and `why` from
+   `activePacks(packs, getFacts(db))`, `covers`, `entries` (count), `entryList` `[{id, title,
+   cites}]`, `curator`, `version`, `taxYear`, `reviewed`, `updated` ("Nov 2026"), `recIds` (kept,
+   else the recs whose `pack_id` is the row), and `whatIf` `{prompt, a, unlocks}` (prompt from the
+   manifest, `a` and `unlocks` kept). Override columns are kept. Rows never manifest-backed (the
+   demo's illustrative packs) are untouched; manifest-backed rows whose manifest is gone are deleted.
+2. The demo seed tags its seven manifest-backed packs with `manifest` and `label`; migration 002
+   applies the same tags to existing demo stores only (real stores are never tagged, so their
+   manifests get their own rows).
+3. Repository pack errors throw (startup fails loudly). A broken Your plans pack is skipped with a
+   warning that carries none of its contents.
+4. The refresher recomputes `defaultPackDirs(dataDir)` on every refresh and fingerprints the facts
+   (`key, value, confirmed`) plus `settings['packs.generation']`. The router calls
+   `refreshIfFactsChanged()` before every API handler and the answerer again before prompt assembly,
+   so a fact written by any process or a Your plans build from the CLI shows on the next request.
+   Startup, demo reset and the build action call `refresh()`.
+
+## Your plans
+
+`src/packs/your-plans.mjs` exports `buildYourPlans({db, engine, dataDir, fileIds, clock})` returning
+`{written, dir, entries, sources: [{fileId, name}], warnings}`, and `fakeExtractRows(text,
+{fileName})` (sections split on `# Heading` lines and `Page N` markers). `npm run build:your-plans
+[-- --file <id>]...` (`scripts/build-your-plans.mjs`) runs it against the existing store (refusing
+when there is none) and prints counts only.
+
+1. The target `<dataDir>/packs/your-plans/` must resolve (realpath of its nearest existing ancestor,
+   so symlinks count) outside the repository entirely; otherwise the build refuses with "FATHOM_DATA
+   is inside the repository; set it to a directory outside the checkout" before anything is read or
+   written. `packs/your-plans/` is gitignored.
+2. Sources: `documents` with `doc_type` plan or benefits (their file, or `fields.text` named
+   `document-<id>` when the row has no file) plus the files named in `fileIds` (an unknown id warns).
+   `stored_path` resolves against `dataDir` and must stay inside it after symlinks. Text (`text/*`,
+   `.md`, `.txt`) and PDF (`application/pdf` or `%PDF-` magic) are read; anything else warns.
+   Warnings never carry document text.
+3. Each source goes through `engine.extract` with rows `{title, body, page, taxYear?}`. Each row
+   becomes `NN-<slug>.md` holding `# <title>`, the body, `Source: <file name>, page <n>`, `Tax year`
+   and `Reviewed`. Private entries cite `https://your-plans.invalid/<encodeURIComponent(fileId)>?page=<n>`
+   with label `<file name>, page <n>`: the frozen manifest requires absolute http(s) cites, and the
+   reserved `.invalid` host never resolves; the UI shows these cites as plain text, never links.
+4. The manifest is `your-plans` "Your plans", version 1.0.0, the clock year and date, curator "Built
+   from your documents", `appliesWhen: {all: []}` (always active). It is written to a temporary
+   sibling, validated with `loadPacks`, then swapped in. Zero rows write nothing. A successful build
+   sets `settings.yourPlans` and increments `settings['packs.generation']`.
 
 ## Demo data
 
@@ -386,7 +539,8 @@ tax payments. Every seeded row carries `file_id` and `parser` `demo-seed` and a 
 
 ## Container
 
-The `Dockerfile` builds on `node:24-slim`, installs with `npm ci --omit=dev`, runs as the built-in
+The `Dockerfile` builds on `node:24-slim`, installs with `npm ci --omit=dev`, copies `src`, `web`,
+`demo`, `packs` and `scripts`, runs as the built-in
 non-root `node` user (uid 1000) with `/data` owned by it, sets `FATHOM_DATA=/data`,
 `FATHOM_PORT=8080` and `FATHOM_HOST=0.0.0.0`, exposes 8080, and health checks `GET /healthz` with
 node's `fetch`. Mount a named volume at `/data`; a host bind mount directory must be writable by

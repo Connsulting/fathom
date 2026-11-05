@@ -43,7 +43,20 @@ const FACTS = {
   'retirement.backdoorRothCandidate': true,
   'accounts.has529': true,
   'giving.charitable': false,
+  'income.agiEstimate': 380000,
 };
+
+// Demo packs backed by a repository manifest (packs/<manifest id>/). The seed tags them so the
+// pack refresh rewrites them in place under their demo ids, keeping the demo name as a label.
+export const DEMO_PACK_MANIFESTS = Object.freeze({
+  scorp: 's-corp-owner',
+  selfemp: 'self-employed-partnership',
+  w2: 'w2-benefits',
+  virginia: 'virginia-resident',
+  kids: 'kids-dependents',
+  retire: 'advanced-retirement',
+  giving: 'charitable-giving',
+});
 
 // Children before parents so foreign keys hold while clearing.
 const CLEAR_ORDER = [
@@ -155,7 +168,10 @@ export function seedDemo(db) {
     S.events.forEach((e, i) => event.run(e.date, e.kind, e.title, e.body, i));
     const packState = db.prepare(`INSERT INTO packs_state (id, def, active, exploring, what_if_asked, what_if_done, unhid, sort, updated_at)
                                   VALUES (?, ?, NULL, 0, 0, 0, '[]', ?, ?)`);
-    S.packs.forEach((p, i) => packState.run(p.id, JSON.stringify(p), i, now));
+    S.packs.forEach((p, i) => {
+      const def = DEMO_PACK_MANIFESTS[p.id] ? { ...p, manifest: DEMO_PACK_MANIFESTS[p.id], label: p.name } : p;
+      packState.run(p.id, JSON.stringify(def), i, now);
+    });
     const decision = db.prepare(`INSERT INTO decisions (id, title, status, wargame, rec_id, opens_on, when_label, note, decided_line, sort)
                                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`);
     S.decisions.forEach((d, i) => decision.run(d.id, d.title, d.status, d.wargame || null, d.recId || null, OPENS_ON[d.id] || null, d.when || '', d.note || '', i));

@@ -149,6 +149,7 @@ export function messageOut(row) {
     refs: parse(row.refs, []),
     ts: tsLabel(row.ts),
     notice: !!row.notice,
+    provenance: parse(row.provenance, null),
   };
 }
 
@@ -185,6 +186,26 @@ export function loadPacks(db) {
       unhid: parse(r.unhid, []),
     },
   }));
+}
+
+// The latest spend rows for the Engine screen: no tokens, no prompt fields.
+export const LEDGER_ROWS = 8;
+export function loadLedger(db) {
+  return db.prepare('SELECT id, ts, purpose, model, cost_usd FROM spend_ledger ORDER BY id DESC LIMIT ?').all(LEDGER_ROWS)
+    .map(r => ({ id: r.id, ts: tsLabel(r.ts), purpose: r.purpose, model: r.model, cost: cents(r.cost_usd) }));
+}
+
+// Your plans inputs: plan and benefits documents, the files a build can read (text or PDF), and
+// the last build (settings.yourPlans) or null.
+const READABLE = "(mime LIKE 'text/%' OR mime = 'application/pdf' OR lower(name) LIKE '%.md' OR lower(name) LIKE '%.txt' OR lower(name) LIKE '%.pdf')";
+export function loadYourPlans(db) {
+  const sources = db.prepare(`SELECT d.id, d.doc_type, d.fields, d.file_id, f.name FROM documents d LEFT JOIN files f ON f.id = d.file_id
+                              WHERE d.doc_type IN ('plan', 'benefits') ORDER BY d.id`).all()
+    .filter(r => r.file_id ? r.name != null : typeof parse(r.fields, {})?.text === 'string')
+    .map(r => ({ fileId: r.file_id || null, name: r.file_id ? r.name : `document-${r.id}`, docType: r.doc_type }));
+  const files = db.prepare(`SELECT id, name FROM files WHERE ${READABLE} ORDER BY uploaded_at, id`).all()
+    .map(r => ({ id: r.id, name: r.name }));
+  return { sources, files, built: getSetting(db, 'yourPlans', null) };
 }
 
 // ---------------------------------------------------------------- Decide
@@ -262,6 +283,9 @@ function deriveFigures(fig, { wargame, series, engine }, scope) {
       };
     });
   }
+  for (const r of engine.ledger) {
+    fig[`engine.ledger.${r.id}.cost`] = { v: r.cost, src: 'spend-ledger', kind: 'a', label: `${r.purpose}, ${r.ts}` };
+  }
   fig['engine.budget.used'] = { v: engine.budget.used, src: 'spend-ledger', kind: 'a', label: 'Engine spend this month' };
   fig['engine.budget.monthly'] = { v: engine.budget.monthly, src: 'settings', kind: 'p', label: 'Monthly engine cap' };
   fig['engine.budget.left'] = {
@@ -301,7 +325,7 @@ export function buildScenario(db, { clock } = {}) {
   const jobs = db.prepare('SELECT * FROM jobs ORDER BY sort, id').all().map(j => ({
     id: j.id, name: j.name, cadence: j.cadence || '', last: j.last_label || '', next: j.next_label || '', does: j.does || '', cost: j.cost,
   }));
-  const engine = { budget: { monthly, used }, chat: section(content, 'engine.chat'), jobs };
+  const engine = { budget: { monthly, used }, chat: section(content, 'engine.chat'), jobs, ledger: loadLedger(db) };
 
   deriveFigures(fig, { wargame, series, engine }, { names, law, pct, fig });
 
@@ -357,6 +381,7 @@ export function buildScenario(db, { clock } = {}) {
       picks,
       conversations: loadConversations(db),
       packs: Object.fromEntries(packs.map(p => [p.def.id, { active: p.live.active, exploring: p.live.exploring, whatIfDone: p.live.whatIfDone }])),
+      yourPlans: loadYourPlans(db),
       clock: clk,
     },
   };
