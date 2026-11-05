@@ -1,0 +1,18 @@
+{
+  "name": "fathom",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node src/server.mjs",
+    "test": "node --test \"test/**/*.test.mjs\"",
+    "seed:demo": "node demo/seed.mjs",
+    "e2e": "playwright test",
+    "e2e:smoke": "playwright test --grep @smoke"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1"
+  }
+}
