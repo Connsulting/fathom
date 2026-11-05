@@ -50,19 +50,37 @@ const payloadOf = (item) => ({
   file: item.file ?? null,
 });
 
-// Digit runs with optional thousands commas and decimals (2026, 4,521, 12.50), commas removed.
-const numbersIn = (text) => (String(text).match(/\d[\d,]*(?:\.\d+)?/g) ?? []).map((n) => n.replace(/,/g, ''));
+// One quantity: optional sign (only when not glued to a letter or digit, so W-2 is plain 2),
+// optional currency symbol, digits with thousands commas and decimals, optional scale or percent
+// suffix that must end a word.
+const QUANTITY = /(?:(?<![A-Za-z0-9])([-−]))?[$€£]?(\d[\d,]*(?:\.\d+)?)(?:\s?(thousand|million|billion|trillion|percent)|(bn|k|m|b|%))?(?![A-Za-z0-9])/gi;
+const SCALE = { k: 1e3, thousand: 1e3, m: 1e6, million: 1e6, bn: 1e9, b: 1e9, billion: 1e9, trillion: 1e12 };
 
-// Every number in the item's question, option labels, context and file metadata, as written and
-// as a numeric value (12.50 and 12.5).
-function itemNumbers(item) {
+// Each quantity in the text normalized to "sign value|percent": 100.00 and $100 equal 100, while
+// 100k, 100 million, -100, 100% and 1,000 are all different from 100.
+function quantitiesIn(text) {
+  const out = [];
+  for (const m of String(text).matchAll(QUANTITY)) {
+    const unit = (m[3] ?? m[4] ?? '').toLowerCase();
+    const percent = unit === '%' || unit === 'percent';
+    const value = Number(m[2].replace(/,/g, '')) * (SCALE[unit] ?? 1);
+    out.push(`${m[1] ? '-' : '+'}${value}|${percent ? 'pct' : 'num'}`);
+  }
+  return out;
+}
+
+// Spelled-out magnitude words ("one hundred thousand") lowercase.
+const magnitudesIn = (text) => (String(text).toLowerCase().match(/\b(?:hundred|thousand|million|billion|trillion)\b/g) ?? []);
+
+// The item's own text: question, option labels, context and file metadata.
+function itemText(item) {
   const p = payloadOf(item);
-  const nums = numbersIn(JSON.stringify([p.question, p.options.map((o) => o.label), p.context, p.file]));
-  return new Set([...nums, ...nums.map((n) => String(Number(n)))]);
+  return JSON.stringify([p.question, p.options.map((o) => o.label), p.context, p.file]);
 }
 
 // Accepted guesses: the item is in the batch, the option is one of its options, and the reason
-// is one nonempty line of at most REASON_MAX characters quoting only numbers from that item.
+// is one nonempty line of at most REASON_MAX characters quoting only whole quantities (sign,
+// scale and percent included) and magnitude words from that item.
 export function validateGuesses(batchItems, parsed) {
   const byId = new Map(batchItems.map((i) => [i.id, i]));
   const seen = new Set();
@@ -74,8 +92,10 @@ export function validateGuesses(batchItems, parsed) {
     if (typeof g.option !== 'string' || !item.options.some((o) => o.id === g.option)) continue;
     const reason = g.reason;
     if (typeof reason !== 'string' || !reason.trim() || reason.length > REASON_MAX || /[\r\n\u2028\u2029]/.test(reason)) continue;
-    const known = itemNumbers(item);
-    if (!numbersIn(reason).every((n) => known.has(n) || known.has(String(Number(n))))) continue;
+    const text = itemText(item);
+    const known = new Set(quantitiesIn(text));
+    const words = new Set(magnitudesIn(text));
+    if (!quantitiesIn(reason).every((q) => known.has(q)) || !magnitudesIn(reason).every((w) => words.has(w))) continue;
     seen.add(item.id);
     out.push({ item: item.id, option: g.option, reason });
   }
