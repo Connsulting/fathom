@@ -143,3 +143,18 @@ test('a magnitude word followed by percent is one percent quantity and needs per
   assert.equal(checkGrounding('12%', { data: [{ rate_pct: 12 }] }).ok, true);
   assert.equal(checkGrounding('12%', { data: [12] }).ok, false);
 });
+
+test('a spelled number followed by a percent sign is one percent quantity and needs percent evidence', () => {
+  const cases = [['one thousand %', 1000], ['one thousand%', 1000], ['twenty %', 20], ['two million %', 2000000]];
+  for (const [phrase, value] of cases) {
+    const text = `The change is ${phrase}.`;
+    assert.equal(checkGrounding(text, { data: [value] }).ok, false, `${phrase} must not ground on the plain number`);
+    assert.equal(checkGrounding(text, { data: [{ value, unit: 'percent' }] }).ok, true, `${phrase} grounds on a percent unit`);
+    assert.equal(checkGrounding(text, { data: [{ note: `The change is ${phrase}.` }] }).ok, true, `${phrase} grounds on matching percent text`);
+  }
+  assert.equal(checkGrounding('The change is one thousand %.', { data: [{ note: 'The change is one thousand percent.' }] }).ok, true);
+  assert.equal(checkGrounding('The change is twenty %.', { data: [{ note: 'The change is 20%.' }] }).ok, true);
+  // Existing word-number behavior is unchanged.
+  assert.equal(checkGrounding('twenty percent', { data: [{ value: 20, unit: 'percent' }] }).ok, true);
+  assert.equal(checkGrounding('one thousand', { data: [1000] }).ok, true);
+});
