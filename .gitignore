@@ -16,3 +16,8 @@ fixtures/private/
 # Mock v2: anything derived from real exports stays local.
 /mock-v2/private/
 /sample-data/private/
+
+# Test and e2e output.
+.e2e-data*/
+test-results/
+playwright-report/

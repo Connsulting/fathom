@@ -1,0 +1,155 @@
+// AC2: the store opens SQLite, applies numbered migrations once, and owns the foundation tables.
+
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readdirSync } from 'node:fs';
+import { openDb, migrate, listTables, MIGRATIONS_DIR, getSetting, setSetting } from '../src/store/db.mjs';
+import { tempDb } from './helpers/server.mjs';
+
+const TABLES = [
+  'schema_migrations', 'settings', 'content', 'files', 'sources', 'facts', 'accounts', 'transactions',
+  'balances', 'positions', 'pnl_lines', 'tax_payments', 'documents', 'figures', 'recs', 'rec_events',
+  'conversations', 'messages', 'goals', 'deadlines', 'events', 'packs_state', 'decisions', 'jobs',
+  'job_runs', 'api_keys', 'spend_ledger',
+];
+const PROVENANCE_TABLES = [
+  'accounts', 'transactions', 'balances', 'positions', 'pnl_lines', 'tax_payments', 'documents', 'facts', 'figures',
+];
+
+const columns = (db, table) => db.prepare(`PRAGMA table_info("${table}")`).all().map(c => c.name);
+
+function insertAccount(db, id, mask) {
+  db.prepare(`INSERT INTO accounts (id, inst, mask, name, owner, kind, mirror, note, fig_key, file_id, parser, locator)
+              VALUES (?, 'Test Bank', ?, 'Checking', 'Household', 'checking', 'manual', '', NULL, NULL, 'test', 'row 1')`)
+    .run(id, mask);
+}
+
+test('migrate on an empty db creates every foundation table', async () => {
+  const t = await tempDb();
+  try {
+    const tables = listTables(t.db);
+    for (const name of TABLES) assert.ok(tables.includes(name), `missing table ${name}`);
+    assert.deepEqual([...tables].sort(), tables, 'listTables is sorted');
+    assert.ok(!tables.some(n => n.startsWith('sqlite_')), 'listTables excludes sqlite internals');
+  } finally {
+    t.close();
+  }
+});
+
+test('migrate reports what it applied and a rerun is a no-op', async () => {
+  const t = await tempDb();
+  try {
+    const before = t.db.prepare('SELECT id, name FROM schema_migrations ORDER BY id').all().map(r => ({ ...r }));
+    assert.ok(before.length >= 1);
+    assert.equal(before[0].id, 1);
+    const again = migrate(t.db);
+    assert.deepEqual(again.applied, []);
+    const after = t.db.prepare('SELECT id, name FROM schema_migrations ORDER BY id').all().map(r => ({ ...r }));
+    assert.deepEqual(after, before);
+  } finally {
+    t.close();
+  }
+});
+
+test('a first migrate returns the applied migration ids in order', async () => {
+  const t = await tempDb();
+  t.close();
+  const raw = openDb(t.file + '.fresh');
+  try {
+    const res = migrate(raw);
+    assert.ok(res.applied.length >= 1);
+    assert.equal(res.applied[0], 1);
+    assert.deepEqual([...res.applied].sort((a, b) => a - b), res.applied);
+  } finally {
+    raw.close();
+  }
+});
+
+test('openDb enables foreign keys and WAL', async () => {
+  const t = await tempDb();
+  try {
+    assert.equal(t.db.prepare('PRAGMA foreign_keys').get().foreign_keys, 1);
+    assert.equal(String(t.db.prepare('PRAGMA journal_mode').get().journal_mode).toLowerCase(), 'wal');
+  } finally {
+    t.close();
+  }
+});
+
+test('every data-derived table carries provenance columns', async () => {
+  const t = await tempDb();
+  try {
+    for (const table of PROVENANCE_TABLES) {
+      const cols = columns(t.db, table);
+      for (const c of ['file_id', 'parser', 'locator']) assert.ok(cols.includes(c), `${table}.${c}`);
+    }
+  } finally {
+    t.close();
+  }
+});
+
+test('accounts keep only a four digit mask', async () => {
+  const t = await tempDb();
+  try {
+    assert.throws(() => insertAccount(t.db, 'a1', '123456789'));
+    assert.throws(() => insertAccount(t.db, 'a2', '12a4'));
+    assert.throws(() => insertAccount(t.db, 'a3', '123'));
+    assert.throws(() => insertAccount(t.db, 'a6', '1234\u00005678901'), 'an embedded NUL must not smuggle extra digits past the check');
+    assert.throws(() => insertAccount(t.db, 'a7', Buffer.from('1234')), 'a blob mask is rejected');
+    insertAccount(t.db, 'a4', '1234');
+    insertAccount(t.db, 'a5', null);
+    const masks = t.db.prepare('SELECT id, mask FROM accounts ORDER BY id').all().map(r => [r.id, r.mask]);
+    assert.deepEqual(masks, [['a4', '1234'], ['a5', null]]);
+  } finally {
+    t.close();
+  }
+});
+
+test('enumerated columns reject unknown values and accept known ones', async () => {
+  const t = await tempDb();
+  try {
+    const db = t.db;
+    db.prepare(`INSERT INTO sources (id, label, as_of, kind, last_ingest_at, note)
+                VALUES ('s1', 'Test source', '2026-08-30', 'other', NULL, '')`).run();
+    const fig = db.prepare(`INSERT INTO figures (key, v, src, kind, label, file_id, parser, locator, updated_at)
+                            VALUES (?, 1.5, ?, ?, ?, NULL, 'test', 'row 1', '2026-11-05T09:00:00Z')`);
+    assert.throws(() => fig.run('f_bad', 's1', 'z', 'Bad kind'));
+    for (const k of ['a', 'p', 'e', 'm']) fig.run('f_' + k, 's1', k, 'Kind ' + k);
+
+    db.prepare("INSERT INTO conversations (key, created_at) VALUES ('ask', '2026-11-05T09:00:00Z')").run();
+    const msg = db.prepare("INSERT INTO messages (conversation_key, role, text, refs, notice, ts) VALUES ('ask', ?, '<p>x</p>', '[]', 0, '2026-11-05T09:00:00Z')");
+    assert.throws(() => msg.run('bot'));
+    for (const role of ['me', 'fathom', 'advisor', 'claude']) msg.run(role);
+
+    const dec = db.prepare(`INSERT INTO decisions (id, title, status, wargame, rec_id, opens_on, when_label, note, decided_line, sort)
+                            VALUES (?, 'A decision', ?, NULL, NULL, NULL, 'Soon', 'A note', NULL, 0)`);
+    assert.throws(() => dec.run('d_bad', 'maybe'));
+    for (const st of ['open', 'decided', 'upcoming']) dec.run('d_' + st, st);
+  } finally {
+    t.close();
+  }
+});
+
+test('settings hold JSON values with a fallback', async () => {
+  const t = await tempDb();
+  try {
+    assert.deepEqual(getSetting(t.db, 'cap', { usd: 200 }), { usd: 200 });
+    setSetting(t.db, 'cap', { usd: 150 });
+    assert.deepEqual(getSetting(t.db, 'cap', { usd: 200 }), { usd: 150 });
+    setSetting(t.db, 'clock', '2026-11-05');
+    assert.equal(getSetting(t.db, 'clock', null), '2026-11-05');
+    setSetting(t.db, 'engine', { on: false });
+    assert.deepEqual(getSetting(t.db, 'engine', null), { on: false });
+  } finally {
+    t.close();
+  }
+});
+
+test('migration files are NNN-name.sql numbered from 001 without gaps', () => {
+  const files = readdirSync(MIGRATIONS_DIR).filter(f => f.endsWith('.sql')).sort();
+  assert.ok(files.length >= 1);
+  assert.equal(files[0], '001-foundation.sql');
+  files.forEach((f, i) => {
+    assert.match(f, /^\d{3}-[a-z0-9-]+\.sql$/);
+    assert.equal(Number(f.slice(0, 3)), i + 1, `${f} is numbered ${i + 1}`);
+  });
+});
