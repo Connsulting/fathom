@@ -140,3 +140,91 @@
   .d-horizon .h-entry { padding: 12px 14px; }
   .d-horizon .h-entry-x { padding: 4px 14px 16px; }
 }
+
+/* ---------- keys: header search button ---------- */
+.d-horizon .h-search-btn {
+  all: unset; box-sizing: border-box; cursor: pointer; flex: none; width: 32px; height: 32px;
+  display: grid; place-items: center; border-radius: 7px; color: var(--mu); border: 1px solid var(--line2);
+}
+.d-horizon .h-search-btn:hover { color: var(--tx); background: var(--s2); }
+.d-horizon .h-search-btn:focus-visible { outline: 2px solid var(--ac); outline-offset: 2px; }
+.d-horizon .h-search-btn .h-i { width: 15px; height: 15px; vertical-align: 0; }
+
+/* ---------- keys: list focus ring ---------- */
+.d-horizon .h-kfocus { outline: 2px solid var(--ac); outline-offset: 4px; border-radius: 8px; scroll-margin: 72px 0 24px; }
+.d-horizon .h-kfocus:focus { outline: 2px solid var(--ac); }
+
+/* ---------- keys: hints ---------- */
+.d-horizon kbd, .d-horizon .h-qs-k {
+  display: inline-block; font-family: var(--mono); font-size: 11px; line-height: 1; color: var(--mu);
+  padding: 3px 6px; border: 1px solid var(--line2); border-radius: 5px; white-space: nowrap; background: transparent;
+}
+
+/* ---------- keys: overlays (quick switcher and shortcut sheet) ---------- */
+.d-horizon .h-qs-host, .d-horizon .h-ks-host {
+  position: fixed; z-index: 120; inset: 0; display: flex; justify-content: center; align-items: flex-start;
+  padding: 12vh 16px 16px;
+}
+.d-horizon .h-qs-host[hidden], .d-horizon .h-ks-host[hidden] { display: none; }
+.d-horizon .h-qs-back, .d-horizon .h-ks-back { position: absolute; inset: 0; background: rgba(4, 6, 7, 0.78); }
+.d-horizon .h-qs, .d-horizon .h-ks {
+  position: relative; width: min(640px, 100%); max-height: 100%; display: flex; flex-direction: column; min-width: 0;
+  background: var(--bg); border: 1px solid var(--line2); border-radius: 14px; overflow: hidden; outline: none;
+}
+
+/* switcher */
+.d-horizon .h-qs-bar { flex: none; display: flex; align-items: center; gap: 10px; padding: 0 16px; border-bottom: 1px solid var(--line); }
+.d-horizon .h-qs-bar .h-i { width: 16px; height: 16px; color: var(--fa); vertical-align: 0; }
+.d-horizon .h-qs-in {
+  flex: 1 1 auto; min-width: 0; height: 52px; padding: 0; background: transparent; border: 0; outline: none;
+  color: var(--tx); font: inherit; font-size: 15.5px;
+}
+.d-horizon .h-qs-in::placeholder { color: var(--fa); }
+.d-horizon .h-qs-list {
+  flex: 1 1 auto; min-height: 0; max-height: min(60vh, 460px); overflow-y: auto; overscroll-behavior: contain; padding: 6px;
+  scrollbar-width: thin; scrollbar-color: var(--line2) transparent;
+}
+.d-horizon .h-qs-list[hidden] { display: none; }
+.d-horizon .h-qs-g { padding: 10px 10px 4px; font-size: 11.5px; letter-spacing: 0.07em; text-transform: uppercase; color: var(--fa); }
+.d-horizon .h-qs-o {
+  display: flex; align-items: center; gap: 12px; padding: 8px 10px; border-radius: 8px; cursor: pointer; min-width: 0;
+  scroll-margin: 6px;
+}
+.d-horizon .h-qs-o[aria-selected="true"] { background: var(--s2); }
+.d-horizon .h-qs-o[aria-selected="true"] .h-qs-ic { color: var(--ac); }
+.d-horizon .h-qs-ic { flex: none; width: 16px; display: grid; place-items: center; color: var(--fa); }
+.d-horizon .h-qs-x { flex: 1 1 auto; min-width: 0; display: flex; align-items: baseline; gap: 10px; }
+.d-horizon .h-qs-t { min-width: 0; color: var(--tx); font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.d-horizon .h-qs-t mark { background: transparent; color: var(--ac2); }
+.d-horizon .h-qs-s { flex: 0 1 auto; min-width: 0; color: var(--fa); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.d-horizon .h-qs-k { flex: none; }
+.d-horizon .h-qs-empty { padding: 18px 16px; color: var(--mu); font-size: 13.5px; overflow-wrap: anywhere; }
+.d-horizon .h-qs-empty[hidden] { display: none; }
+.d-horizon .h-qs-foot {
+  flex: none; display: flex; gap: 16px; flex-wrap: wrap; padding: 9px 16px; border-top: 1px solid var(--line);
+  color: var(--fa); font-size: 12px;
+}
+.d-horizon .h-qs-foot span { display: inline-flex; align-items: center; gap: 4px; }
+.d-horizon .h-qs-foot kbd { margin-right: 2px; }
+
+/* sheet */
+.d-horizon .h-ks { overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--line2) transparent; }
+.d-horizon .h-ks-bar { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 10px 10px 20px; border-bottom: 1px solid var(--line); }
+.d-horizon .h-ks-bar h2 { font-size: 15px; }
+.d-horizon .h-ks-x { all: unset; box-sizing: border-box; cursor: pointer; width: 32px; height: 32px; display: grid; place-items: center; border-radius: 7px; color: var(--mu); }
+.d-horizon .h-ks-x:hover { color: var(--tx); background: var(--s2); }
+.d-horizon .h-ks-x:focus-visible { outline: 2px solid var(--ac); outline-offset: 1px; }
+.d-horizon .h-ks-body { padding: 6px 20px 18px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 32px; }
+.d-horizon .h-ks-g h3 { margin: 14px 0 4px; font-size: 11.5px; letter-spacing: 0.07em; text-transform: uppercase; color: var(--fa); font-weight: 500; }
+.d-horizon .h-ks-r { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 0; min-width: 0; }
+.d-horizon .h-ks-r + .h-ks-r { border-top: 1px solid var(--line); }
+.d-horizon .h-ks-l { min-width: 0; color: var(--tx2); font-size: 13.5px; }
+.d-horizon .h-ks-ks { flex: none; display: inline-flex; gap: 4px; }
+
+@media (max-width: 720px) {
+  .d-horizon .h-qs-host, .d-horizon .h-ks-host { padding: 16px; }
+  .d-horizon .h-qs-foot { display: none; }
+  .d-horizon .h-qs-s { display: none; }
+  .d-horizon .h-ks-body { grid-template-columns: minmax(0, 1fr); padding: 4px 16px 16px; }
+  .d-horizon .h-ks-bar { padding-left: 16px; }
+}
