@@ -11,6 +11,8 @@ import * as engineScreen from './screens/engine.js';
 import * as connect from './screens/connect.js';
 import { ingestScreens } from './screens/ingest.js';
 import { emailScreen } from './screens/email.js';
+import * as switcher from './screens/switcher.js';
+import { createKeys } from './keys.js';
 
 const MS = 864e5;
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -41,6 +43,7 @@ let lastKey = '';
 let resizeTimer = 0;
 let onResize = null;
 let onDocKey = null;
+let keys = null;
 let onScroll = null;
 let bodyLocked = false;
 let connectOn = false;
@@ -144,7 +147,11 @@ function icon(name) {
     lock: '<rect x="3.5" y="7" width="9" height="6.5" rx="1"/><path d="M5.5 7V5a2.5 2.5 0 015 0v2"/>',
     send: '<path d="M3 8h9M8.5 4.5L12 8l-3.5 3.5"/>',
     plus: '<path d="M8 3.5v9M3.5 8h9"/>',
-    doc: '<path d="M4.5 2.5h5l2.5 2.5v8.5h-7.5z"/><path d="M9.5 2.5V5H12"/>'
+    doc: '<path d="M4.5 2.5h5l2.5 2.5v8.5h-7.5z"/><path d="M9.5 2.5V5H12"/>',
+    search: '<circle cx="7" cy="7" r="4.25"/><path d="M10.2 10.2L13.5 13.5"/>',
+    cal: '<rect x="2.5" y="3.5" width="11" height="10" rx="1.5"/><path d="M2.5 6.5h11M5.5 2v3M10.5 2v3"/>',
+    fork: '<circle cx="5" cy="3.5" r="1.5"/><circle cx="11" cy="3.5" r="1.5"/><circle cx="5" cy="12.5" r="1.5"/><path d="M5 5v6M11 5c0 3.5-6 2.5-6 6"/>',
+    stack: '<path d="M8 2.5l5.5 3-5.5 3-5.5-3z"/><path d="M2.5 8.5l5.5 3 5.5-3"/>'
   }[name] || '';
   return `<svg class="h-i" viewBox="0 0 16 16" aria-hidden="true">${p}</svg>`;
 }
@@ -162,8 +169,14 @@ function href(route, params = {}) {
 
 function snoozeLabel() { return fmt(addDays(clock(), 14)); }
 
+// Key hints for the rec actions; the keys themselves live in screens/switcher.js.
+const ACT_KEY = { accept: 'A', snooze: 'S', complete: 'E', dismiss: 'Shift+X' };
+
 function actionsFor(r, compact) {
-  const a = (act, label, cls = '', arg) => btn(label, `data-act="${act}" data-rec="${esc(r.id)}"${arg != null ? ` data-arg="${esc(arg)}"` : ''}`, cls);
+  const a = (act, label, cls = '', arg) => {
+    const hint = ACT_KEY[act] ? ` title="${esc(`${label} (${ACT_KEY[act]})`)}"` : '';
+    return btn(label, `data-act="${act}" data-rec="${esc(r.id)}"${arg != null ? ` data-arg="${esc(arg)}"` : ''}${hint}`, cls);
+  };
   const sz = a('snooze', compact ? 'Snooze' : `Snooze to ${snoozeLabel()}`, 'ghost', snoozeLabel());
   switch (r.status) {
     case 'proposed': return [a('accept', 'Accept', 'pri'), a('complete', 'Done', ''), sz, a('dismiss', 'Dismiss', 'ghost')];
@@ -358,7 +371,10 @@ function whoLine() {
 }
 
 function shell(inner, active) {
-  const link = (k, l) => `<a href="${href(k)}" data-go="${k}" class="${active === k ? 'on' : ''}"${active === k ? ' aria-current="page"' : ''}>${l}</a>`;
+  const link = (k, l) => {
+    const hint = switcher.goHint(k);
+    return `<a href="${href(k)}" data-go="${k}" class="${active === k ? 'on' : ''}"${active === k ? ' aria-current="page"' : ''}${hint ? ` title="${esc(`${l} (${hint})`)}"` : ''}>${l}</a>`;
+  };
   const nav = NAV.map(([k, l]) => link(k, l)).join('');
   const moreOn = MORE.some((g) => g[1].some((i) => i[0] === active));
   const groups = MORE.map(([title, items]) => `<div class="h-more-g"><div class="h-more-h">${title}</div>${items.map(([k, l]) => link(k, l)).join('')}</div>`).join('');
@@ -368,6 +384,7 @@ function shell(inner, active) {
   return `<header class="h-top"><div class="h-top-in">
     <a class="h-mark" href="${href('brief')}" data-go="brief" aria-label="${esc(api.s.meta.product || 'Fathom')}">${MARK}<span>${esc(api.s.meta.product || 'Fathom')}</span></a>
     <div class="h-navbar"><nav class="h-nav" aria-label="Main">${nav}</nav><span class="h-nav-sep"></span>${more}</div>
+    <button type="button" class="h-search-btn" data-keys="switcher" aria-label="Search" title="Search (Ctrl+K)">${icon('search')}</button>
   </div></header>${off}<main class="h-main">${inner}</main>`;
 }
 
@@ -1172,6 +1189,7 @@ function draw() {
     if (el) el.focus({ preventScroll: true });
     ui.ret = null;
   }
+  switcher.afterDraw(rr.name);
 }
 
 function setMore(on) {
@@ -1317,13 +1335,12 @@ function onKey(e) {
   if (e.key === 'Escape' && ui.modal != null) { ui.modal = null; draw(); }
 }
 
+// One document listener: the key registry (Escape, Ctrl+K, G sequences, list and rec keys; the
+// tables live in screens/switcher.js), then the Tab trap for the rec modal.
 function onDocumentKey(e) {
-  if (!root || !api) return;
-  if (e.key === 'Escape') {
-    if (ui.more) { setMore(false); root.querySelector('.h-more-btn')?.focus(); return; }
-    if (api.route?.name === 'rec') { e.preventDefault(); closeRec(); }
-    return;
-  }
+  if (!root || !api || !keys) return;
+  if (switcher.captures(e)) return;
+  if (!e.defaultPrevented && keys.handle(e, document.activeElement)) { e.preventDefault(); return; }
   if (e.key === 'Tab' && api.route?.name === 'rec') {
     const host = root.querySelector('.h-dlg-host');
     if (!host || host.hidden) return;
@@ -1337,11 +1354,12 @@ function onDocumentKey(e) {
 }
 
 // Helpers the screen modules use. Getters, because api, root and ui change on mount.
-const SCREENS = [chatScreen, packsScreen, engineScreen];
+const SCREENS = [switcher, chatScreen, packsScreen, engineScreen];
 const KIT = {
-  get api() { return api; }, get root() { return root; }, get ui() { return ui; },
+  get api() { return api; }, get root() { return root; }, get ui() { return ui; }, get keys() { return keys; },
   draw: () => draw(),
-  esc, T, X, arr, plural, icon, btn, goA, href, shell, section, pageHead, thread, composer, figHtml, recById
+  esc, T, X, arr, plural, icon, btn, goA, href, shell, section, pageHead, thread, composer, figHtml, recById,
+  openRec, closeRec, decisionList, statusText, setMore, routeNow, visibleRecs
 };
 SCREENS.forEach((s) => s.bind(KIT));
 
@@ -1351,6 +1369,8 @@ function mount(r, a) {
   ingest = ingestScreens({ api, shell, section, pageHead, btn, icon, esc, T, X, draw, goA });
   email = emailScreen({ shell, section, pageHead, btn, esc, draw });
   root.innerHTML = '<div class="h-root"></div><div class="h-dlg-host" hidden></div>';
+  keys = createKeys();
+  switcher.mount();
   ui.y = window.scrollY;
   root.addEventListener('click', onClick);
   root.addEventListener('submit', onSubmit);
@@ -1382,6 +1402,7 @@ function unmount() {
     root.removeEventListener('change', onChange);
     root.removeEventListener('keydown', onKey);
     root.removeEventListener('toggle', onToggle, true);
+    switcher.unmount();
     root.innerHTML = '';
   }
   window.removeEventListener('resize', onResize);
@@ -1391,7 +1412,7 @@ function unmount() {
   lockBody(false);
   if (connectOn) { connectOn = false; connect.leave(); }
   if (ui?.buildTimer) clearTimeout(ui.buildTimer);
-  api = null; root = null;
+  api = null; root = null; keys = null;
 }
 
 function register() {
