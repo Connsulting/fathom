@@ -454,6 +454,35 @@ describe('bounded parsing on a 128 MB heap', () => {
     assert.deepEqual(r.json.files.map((f) => [f.name, f.status]), [[name, 'needs_mapping']]);
   }));
 
+  // E1: a sparse table is budgeted as rows times header width before any row is widened to the
+  // header: a 512-wide header over 199999 one-cell rows would hold about 102M values.
+  const wideHeader = Array.from({ length: 512 }, (_, c) => `synthetic column ${c}`);
+
+  test('E1: a sparse xlsx with a 512-cell header and 199999 one-cell rows answers too_large; the server stays up', T, () => withSmallHeap(async (s) => {
+    const rows = [wideHeader, ...Array.from({ length: 199999 }, (_, r) => [r + 1])];
+    await tooLarge(s, 'sparse-wide-export.xlsx', writeXlsx([{ name: 'Synthetic export', rows }], { deflate: true }));
+  }));
+
+  test('E1 guard: a sparse CSV with a 512-column header and 199999 one-value rows stays sparse and waits for a mapping; the server stays up', T, () => withSmallHeap(async (s) => {
+    const name = 'sparse-wide-export.csv';
+    const bytes = Buffer.from(`${wideHeader.join(',')}\n${'1\n'.repeat(199999)}`);
+    const r = await upload(s.baseUrl, [{ name, bytes, type: 'text/csv' }]);
+    assert.equal(r.status, 200, r.text.slice(0, 300));
+    assert.deepEqual(r.json.files.map((f) => [f.name, f.status]), [[name, 'needs_mapping']]);
+  }));
+
+  // E2: workbook metadata parts (workbook.xml and its rels) have their own small element budget,
+  // checked on the raw bytes, so 900000 empty elements under the worksheet node cap never become a tree.
+  const manyEmpty = '<x/>'.repeat(900000);
+
+  test('E2: an xlsx whose workbook.xml carries 900000 empty elements answers too_large; the server stays up', T, () => withSmallHeap(async (s) => {
+    await tooLarge(s, 'bloated-workbook.xlsx', writeXlsx(oneCell, { sharedStrings: '<si><t>x</t></si>', workbookExtra: manyEmpty, deflate: true }));
+  }));
+
+  test('E2: an xlsx whose workbook rels carry 900000 empty elements answers too_large; the server stays up', T, () => withSmallHeap(async (s) => {
+    await tooLarge(s, 'bloated-rels.xlsx', writeXlsx(oneCell, { sharedStrings: '<si><t>x</t></si>', relsExtra: manyEmpty, deflate: true }));
+  }));
+
   test('G3: a CSV just under the cell limit maps without error on a 128 MB heap', T, () => withSmallHeap(async (s) => {
     const cols = Array.from({ length: 10 }, (_, i) => `synthetic column ${i}`);
     const bytes = Buffer.from(`${cols.join(',')}\n${'a,b,c,d,e,f,g,h,i,j\n'.repeat(199998)}`); // 199999 records, 1999990 cells

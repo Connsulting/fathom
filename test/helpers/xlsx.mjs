@@ -10,6 +10,8 @@
 //
 // Options: { sharedStrings: '<si>...</si>...' } writes xl/sharedStrings.xml with that body inside
 // <sst>; { deflate: true } stores every entry deflated (method 8) instead of stored.
+// { workbookExtra: '<x/>' } and { relsExtra: '<x/>' } append that raw XML inside the root element
+// of xl/workbook.xml and xl/_rels/workbook.xml.rels.
 
 import { deflateRawSync } from 'node:zlib';
 
@@ -116,7 +118,7 @@ function zip(entries, { deflate = false } = {}) {
   return Buffer.concat([...locals, directory, end]);
 }
 
-export function writeXlsx(sheets, { sharedStrings, deflate = false } = {}) {
+export function writeXlsx(sheets, { sharedStrings, deflate = false, workbookExtra = '', relsExtra = '' } = {}) {
   if (!Array.isArray(sheets) || !sheets.length) throw new TypeError('at least one sheet is required');
   const contentTypes = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
     + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
@@ -133,11 +135,13 @@ export function writeXlsx(sheets, { sharedStrings, deflate = false } = {}) {
   const workbook = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
     + '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
     + `<sheets>${sheets.map((s, i) => `<sheet name="${xmlEscape(s.name)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('')}</sheets>`
+    + workbookExtra
     + '</workbook>';
   const workbookRels = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
     + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
     + sheets.map((_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('')
     + (sharedStrings !== undefined ? `<Relationship Id="rId${sheets.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>` : '')
+    + relsExtra
     + '</Relationships>';
   const entries = [
     { name: '[Content_Types].xml', data: enc.encode(contentTypes) },

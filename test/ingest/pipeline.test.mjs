@@ -1051,6 +1051,24 @@ describe('no silently dropped transactions (D3)', () => {
     }
     assert.equal(count(s.db, 'transactions'), 2);
   }));
+
+  // E3: an external-id key collision kept under the alt key (other description) is asked about
+  // whatever the distance between the dates.
+  test('E3: same check id and amount 9 days apart with different descriptions: both rows are kept with exactly one question', () => withStore(async (s) => {
+    const off = await offEngine();
+    await P.ingestFile(s.db, activityFile('Chase0042_Activity_E3_A.csv', [{ ...check('03/01/2032', '-125.00'), description: 'CHECK 1042 SYNTH LANDLORD' }]), s.opts(off));
+    const b = await P.ingestFile(s.db, activityFile('Chase0042_Activity_E3_B.csv', [{ ...check('03/10/2032', '-125.00'), description: 'CHECK 1042 SYNTH PLUMBER' }]), s.opts(off));
+    assert.equal(b.counts.duplicates, 0, 'another description is another transaction');
+    assert.equal(inserted(b, 'transaction'), 1);
+    const tx = all(s.db, 'SELECT * FROM transactions ORDER BY id');
+    assert.deepEqual(tx.map((t) => [t.date, t.amount, t.external_id, t.description]), [
+      ['2032-03-01', -125, '1042', 'CHECK 1042 SYNTH LANDLORD'],
+      ['2032-03-10', -125, '1042', 'CHECK 1042 SYNTH PLUMBER'],
+    ]);
+    const q = items(s.db, 'near_duplicate');
+    assert.equal(q.length, 1, 'exactly one question');
+    assert.equal(q[0].subject, tx.map((t) => t.dedupe_key).sort().join('|'));
+  }));
 });
 
 // D5: a complete positions snapshot removes same-account, same-day holdings it no longer lists.
