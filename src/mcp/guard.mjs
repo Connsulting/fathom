@@ -1,4 +1,4 @@
-// DNS rebinding guards for /mcp. A browser page on a rebound name reaches this server with its own
+// DNS rebinding guards for /mcp and every /api route. A browser page on a rebound name reaches this server with its own
 // name in the Host header, so only names that cannot be rebound (IP literals, localhost) and names
 // the operator configured are accepted. A browser also sends Origin, which must match the Host.
 

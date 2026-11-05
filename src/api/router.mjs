@@ -82,13 +82,15 @@ export function createHandler({ db, config, answerer, keys, mcp, webDir = WEB_DI
         await getMcp()(req, res);
         return;
       }
-      if (rawPath === '/healthz' || rawPath === '/api' || rawPath.startsWith('/api/')) {
-        const { r, params } = findRoute(req.method, rawPath);
-        // Key management gets the same DNS-rebinding Host allowlist as /mcp.
-        // Decided on the matched route, not the raw path, so encoded spellings are covered.
-        if ((r.path === '/api/keys' || r.path.startsWith('/api/keys/')) && !isAllowedHost(req.headers.host, config)) {
+      const isApi = rawPath === '/api' || rawPath.startsWith('/api/');
+      if (isApi || rawPath === '/healthz') {
+        // Every /api path gets the DNS-rebinding Host allowlist (as /mcp does), decided on the raw
+        // path before route matching so encoded spellings, unknown paths and wrong methods are covered.
+        // /healthz stays open for container probes.
+        if (isApi && !isAllowedHost(req.headers.host, config)) {
           throw new HttpError(403, 'forbidden host');
         }
+        const { r, params } = findRoute(req.method, rawPath);
         let body = {};
         if (r.method === 'POST') {
           guardPost(req);

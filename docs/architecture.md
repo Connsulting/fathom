@@ -197,8 +197,8 @@ secrets are read there.
 | `FATHOM_CLAUDE_CREDENTIAL_FILE` | unset | Path to the mounted Claude credential. |
 | `FATHOM_DATA_KEY_FILE` | unset | Path to the raw file encryption key. |
 | `FATHOM_EMAIL_TRANSPORT` | `dev` | `dev`, `gmail`, `resend` or `postmark`. |
-| `FATHOM_PUBLIC_URL` | unset | The URL MCP clients reach this server at (an `http` or `https` URL with no credentials, query or fragment; anything else refuses to start). Its host is allowed on `/mcp` and `GET /api/mcp` advertises it with `/mcp` appended. |
-| `FATHOM_ALLOWED_HOSTS` | unset | Comma separated extra `Host` names allowed on `/mcp`: `host` (any port) or `host:port`. |
+| `FATHOM_PUBLIC_URL` | unset | The URL MCP clients reach this server at (an `http` or `https` URL with no credentials, query or fragment; anything else refuses to start). Its host is allowed on `/mcp` and every `/api` route, and `GET /api/mcp` advertises it with `/mcp` appended. |
+| `FATHOM_ALLOWED_HOSTS` | unset | Comma separated extra `Host` names allowed on `/mcp` and every `/api` route: `host` (any port) or `host:port`. |
 
 ## Store
 
@@ -331,7 +331,10 @@ fathom message holding its summary.
 
 ## API
 
-All JSON. Every POST requires `content-type: application/json` (charset allowed), else 415; when an
+All JSON. Every `/api` route (any path equal to `/api` or under `/api/`, including unknown paths and
+wrong methods) first passes the Host allowlist described under "MCP server": a foreign `Host` gets
+403 `{error: 'forbidden host'}` before route matching. `/healthz` and static files are exempt. A
+deployment reached by a DNS name must set `FATHOM_PUBLIC_URL` or `FATHOM_ALLOWED_HOSTS`. Every POST requires `content-type: application/json` (charset allowed), else 415; when an
 `Origin` header is present its host must equal the `Host` header, else 403; bodies are capped at
 64 KiB (413); malformed JSON or a non-object body is 400. Errors are `{error: '<message>'}`. Unknown
 paths under `/api` are a JSON 404 and a known path with the wrong method is 405. Every action
@@ -380,7 +383,9 @@ and JSON responses, closed when the response closes. Checks run in this order:
 1. Host: 403 `{error: 'forbidden host'}` unless the `Host` header is an IP literal, `localhost` or
    `*.localhost`, the host of `FATHOM_PUBLIC_URL`, or an entry of `FATHOM_ALLOWED_HOSTS`. This
    blocks DNS rebinding; it runs before authentication. The same Host allowlist guards every
-   `/api/keys` route (list, create, revoke), since those hand out credentials.
+   `/api` route (not only `/api/keys`), decided on the raw path before route matching; `/healthz`
+   and static files are exempt. A deployment reached by a DNS name must set `FATHOM_PUBLIC_URL` or
+   `FATHOM_ALLOWED_HOSTS`.
 2. Origin: when present it must be `http` or `https` with the same host as `Host`, else 403
    `{error: 'forbidden origin'}`.
 3. Auth: `Authorization: Bearer <key>` (scheme case-insensitive, one token). Missing, malformed,

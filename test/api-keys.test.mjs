@@ -203,7 +203,8 @@ describe('key routes: Host allowlist (DNS rebinding)', () => {
 
 describe('GET /api/mcp', () => {
   let s;
-  before(async () => { s = await spawnServer({ env: { FATHOM_ENGINE: 'fake' } }); }, T);
+  // The Host allowlist covers every /api route, so the DNS name these tests send is configured.
+  before(async () => { s = await spawnServer({ env: { FATHOM_ENGINE: 'fake', FATHOM_ALLOWED_HOSTS: 'fathom.example.test' } }); }, T);
   after(async () => { if (s) await s.stop(); });
 
   test('url defaults to http on the request Host; tools and scopes are listed', async () => {
@@ -242,7 +243,7 @@ describe('GET /api/mcp', () => {
       ['http://fathom.example.test:9000/mcp', 'http://fathom.example.test:9000/mcp'],
     ];
     for (const [publicUrl, want] of cases) {
-      await withServer({ env: { FATHOM_ENGINE: 'fake', FATHOM_PUBLIC_URL: publicUrl } }, async p => {
+      await withServer({ env: { FATHOM_ENGINE: 'fake', FATHOM_PUBLIC_URL: publicUrl, FATHOM_ALLOWED_HOSTS: 'other.example.test' } }, async p => {
         const r = await ok(mcpInfo(p, { host: 'other.example.test', 'x-forwarded-proto': 'http' }));
         assert.equal(r.json.url, want, publicUrl);
         assert.equal(r.json.publicUrlSet, true);
