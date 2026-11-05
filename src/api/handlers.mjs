@@ -1,4 +1,4 @@
-// API handlers. Each takes { db, config, answerer, params, body } and returns the JSON response
+// API handlers. Each takes { db, config, answerer, engine, params, body } and returns the JSON response
 // body (status 200) or throws HttpError. Every action writes the store and answers with the
 // fresh scenario, so the browser swaps it in.
 
@@ -7,6 +7,8 @@ import { buildScenario, loadContent, defaultPicks, wargameLists } from '../scena
 import { ACTION_STATUS, packStatus } from '../shared/rules.mjs';
 import { escapeUserText } from '../shared/tokens.mjs';
 import { seedDemo } from '../../demo/seed.mjs';
+import { runPlanning, PlannerError } from '../jobs/planner.mjs';
+import { defaultPackDirs } from '../packs/state.mjs';
 import { HttpError } from './http.mjs';
 import { findQuestion, isIndex } from './questions.mjs';
 
@@ -247,4 +249,21 @@ export function demoReset(ctx) {
   if (getSetting(ctx.db, 'mode', null) !== 'demo') throw new HttpError(404, 'not found');
   seedDemo(ctx.db);
   return { scenario: scenarioOf(ctx) };
+}
+
+export const REAL_ONLY = 'planning runs on real stores only';
+
+export async function planRun(ctx) {
+  if (getSetting(ctx.db, 'mode', null) === 'demo') throw new HttpError(409, REAL_ONLY);
+  let run;
+  try {
+    run = await runPlanning(ctx.db, ctx.engine || null, {
+      now: (ctx.config && ctx.config.clock) || undefined,
+      packDirs: defaultPackDirs(ctx.config && ctx.config.dataDir),
+    });
+  } catch (e) {
+    if (e instanceof PlannerError && e.code === 'demo_store') throw new HttpError(409, REAL_ONLY);
+    throw e;
+  }
+  return { scenario: scenarioOf(ctx), run };
 }

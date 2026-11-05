@@ -17,6 +17,7 @@ const TABLE = [
   { method: 'POST', path: '/api/ask', handler: h.ask },
   { method: 'POST', path: '/api/onboarding', handler: h.onboarding },
   { method: 'POST', path: '/api/demo/reset', handler: h.demoReset },
+  { method: 'POST', path: '/api/jobs/plan/run', handler: h.planRun },
 ];
 
 export const routes = TABLE.map(({ method, path }) => ({ method, path }));
@@ -55,7 +56,7 @@ function findRoute(method, rawPath) {
   return hit;
 }
 
-export function createHandler({ db, config, answerer, webDir = WEB_DIR, sharedDir = SHARED_DIR }) {
+export function createHandler({ db, config, answerer, engine = null, webDir = WEB_DIR, sharedDir = SHARED_DIR }) {
   const serveStatic = createStatic({ webDir, sharedDir });
   return async function handle(req, res) {
     setSecurityHeaders(res);
@@ -70,7 +71,7 @@ export function createHandler({ db, config, answerer, webDir = WEB_DIR, sharedDi
           guardPost(req);
           body = await readJsonBody(req);
         }
-        const out = await r.handler({ db, config, answerer, params, body, req });
+        const out = await r.handler({ db, config, answerer, engine, params, body, req });
         sendJson(res, 200, out);
         return;
       }

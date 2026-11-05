@@ -11,10 +11,12 @@ import { mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from './config.mjs';
-import { openMigrated, readStoreMode, createStoreFile, setSetting, DB_FILE } from './store/db.mjs';
+import { openMigrated, readStoreMode, createStoreFile, setSetting, getSetting, DB_FILE } from './store/db.mjs';
 import { createHandler } from './api/router.mjs';
 import { createCannedAnswerer } from './api/answerer.mjs';
 import { seedDemo } from '../demo/seed.mjs';
+import { createRuntimeEngine } from './engine/runtime.mjs';
+import { refreshPackState, defaultPackDirs } from './packs/state.mjs';
 
 export class StartupError extends Error {}
 
@@ -40,8 +42,18 @@ export function openStore(config) {
 
 export async function startServer(config = loadConfig()) {
   const db = openStore(config);
+  // Real stores get pack state from the loaded packs and stored facts; demo pack defs are the
+  // synthetic scenario's and stay as seeded. A pack error is logged and startup continues.
+  if (getSetting(db, 'mode', null) !== 'demo') {
+    try {
+      refreshPackState(db, { packDirs: defaultPackDirs(config.dataDir) });
+    } catch (e) {
+      console.error(`fathom: pack refresh failed: ${e.message}`);
+    }
+  }
   const answerer = createCannedAnswerer();
-  const server = http.createServer(createHandler({ db, config, answerer }));
+  const engine = createRuntimeEngine({ db, config });
+  const server = http.createServer(createHandler({ db, config, answerer, engine }));
   try {
     await new Promise((resolveListen, reject) => {
       server.once('error', reject);

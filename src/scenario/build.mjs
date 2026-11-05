@@ -234,11 +234,13 @@ function deriveWargame(wargame, decisions, rows) {
 
 function deriveFigures(fig, { wargame, series, engine }, scope) {
   const plain = s => resolveTokens(scope, s, false);
+  // A stored war-game figure (the planner writes them with calculator locators) wins.
+  const setWg = (key, value) => { if (!fig[key]) fig[key] = value; };
   const salary = wargame.salary;
   if (salary) {
     for (const p of arr(salary.points)) {
-      fig[`wg.salary.${p.id}.x`] = { v: p.x, src: 'wargame-model', kind: 'm', label: `${plain(p.label)}: ${plain(salary.xLabel || 'x')}` };
-      fig[`wg.salary.${p.id}.y`] = { v: p.y, src: 'wargame-model', kind: 'm', label: `${plain(p.label)}: ${plain(salary.yLabel || 'y')}` };
+      setWg(`wg.salary.${p.id}.x`, { v: p.x, src: 'wargame-model', kind: 'm', label: `${plain(p.label)}: ${plain(salary.xLabel || 'x')}` });
+      setWg(`wg.salary.${p.id}.y`, { v: p.y, src: 'wargame-model', kind: 'm', label: `${plain(p.label)}: ${plain(salary.yLabel || 'y')}` });
     }
   }
   const deferral = wargame.deferral;
@@ -251,7 +253,7 @@ function deriveFigures(fig, { wargame, series, engine }, scope) {
       const vals = { amount: o.amount, tax2026: o.tax2026, tax2027: o.tax2027, net: o.net, decCash: o.decCash, need: o.need, gap: cents(o.need - o.decCash) };
       for (const [field, label] of Object.entries(fields)) {
         if (typeof vals[field] !== 'number' || Number.isNaN(vals[field])) continue;
-        fig[`wg.deferral.${o.id}.${field}`] = { v: vals[field], src: 'wargame-model', kind: 'm', label: `${plain(o.label)}: ${label}` };
+        setWg(`wg.deferral.${o.id}.${field}`, { v: vals[field], src: 'wargame-model', kind: 'm', label: `${plain(o.label)}: ${label}` });
       }
     }
   }
