@@ -31,13 +31,23 @@ November state) and keeps its state across restarts.
 | `FATHOM_CLOCK` | unset | ISO date that overrides "today", for demos and tests. |
 | `FATHOM_CLAUDE_CREDENTIAL_FILE` | unset | Path to the mounted Claude credential. |
 | `FATHOM_DATA_KEY_FILE` | unset | Path to the file encryption key. |
-| `FATHOM_EMAIL_TRANSPORT` | `dev` | `dev`, `gmail`, `resend` or `postmark`. |
+| `FATHOM_EMAIL_TRANSPORT` | `dev` | `dev`, `smtp`, `resend`, `postmark` or `agentmail`. |
 
 Rebuild the demo store (refuses a real store):
 
 ```bash
 npm run seed:demo
 ```
+
+## Email
+
+Fathom sends a monthly brief and short deadline alerts. The default `dev` transport writes each
+message to `outbox/` in the data directory and sends nothing. For real delivery set
+`FATHOM_EMAIL_TRANSPORT` (AgentMail is the production target), the sender and recipients
+(`FATHOM_EMAIL_FROM`, `FATHOM_EMAIL_TO` or their `_FILE` forms) and mount the API key as a private
+file (mode 0400 or 0600) named by `FATHOM_EMAIL_CREDENTIAL_FILE`. The Email screen shows the
+status, a preview, the send history and the scheduled jobs. `FATHOM_LIVE_EMAIL=1 npm run
+email:test` sends one real test email; every key is listed in `docs/architecture.md`.
 
 ## Test
 

@@ -2913,49 +2913,40 @@ export default {
     },
     "jobs": [
       {
-        "id": "sync",
-        "name": "Account mirror sync",
-        "cadence": "Daily, 6:00 AM",
-        "last": "Today 6:00 AM",
-        "next": "Tomorrow 6:00 AM",
-        "does": "Pull balances and transactions read-only. No model call unless something looks unusual.",
-        "cost": 0.02
-      },
-      {
-        "id": "sweep",
-        "name": "Deadline sweep",
-        "cadence": "Weekly, Monday",
-        "last": "Mon, Nov 2",
-        "next": "Mon, Nov 9",
-        "does": "Check every window in the next 60 days against the plan and the checklists.",
-        "cost": 0.15
-      },
-      {
-        "id": "triggers",
-        "name": "Life event and income triggers",
-        "cadence": "On new data",
-        "last": "Wed, Nov 4",
-        "next": "On next change",
-        "does": "Re-plan the recommendations a new fact touches. Turns knowledge packs on or off.",
+        "id": "plan",
+        "name": "Nightly plan refresh",
+        "cadence": "Daily, 2:00 AM",
+        "last": "Today 2:00 AM",
+        "next": "Tomorrow 2:00 AM",
+        "does": "Re-plan recommendations and deadlines from the latest data.",
         "cost": 0.4
       },
       {
-        "id": "brief",
-        "name": "Monthly brief and email",
-        "cadence": "Monthly, 1st",
+        "id": "brief-email",
+        "name": "Monthly brief email",
+        "cadence": "Monthly, 1st at 7:00 AM",
         "last": "Sun, Nov 1",
         "next": "Tue, Dec 1",
-        "does": "Write the brief, the verdict and the email. Nothing goes out if nothing changed.",
+        "does": "Compose the monthly brief and email it.",
         "cost": 1.8
       },
       {
-        "id": "packet",
-        "name": "Advisor packet",
-        "cadence": "Before each check-in",
-        "last": "Sep 8",
-        "next": "Dec 8",
-        "does": "Summarise conversations and pending recommendations for the human review.",
-        "cost": 2.5
+        "id": "deadline-alerts",
+        "name": "Deadline alerts",
+        "cadence": "Daily, 7:00 AM",
+        "last": "Today 7:00 AM",
+        "next": "Tomorrow 7:00 AM",
+        "does": "Email one alert when a deadline or window is 14, 7 or 1 days away.",
+        "cost": 0.05
+      },
+      {
+        "id": "freshness",
+        "name": "Data freshness check",
+        "cadence": "Weekly, Monday 6:00 AM",
+        "last": "Mon, Nov 2",
+        "next": "Mon, Nov 9",
+        "does": "Count stale and waiting uploads.",
+        "cost": 0.02
       }
     ]
   },

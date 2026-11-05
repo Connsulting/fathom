@@ -31,7 +31,7 @@ over every module's test directory (`npm test`), end-to-end tests with Playwrigh
 | `src/packs/` | Knowledge pack loading and activation. |
 | `src/mcp/` | MCP server over the tool registry. |
 | `src/jobs/` | In-process scheduler and proactive jobs. |
-| `src/email/` | Monthly email rendering and transports. |
+| `src/email/` | Email transports, send history and the monthly brief. |
 | `web/` | The Horizon UI (`index.html`, `core/core.js`, `horizon/design.js`, `horizon/design.css`). |
 | `demo/` | Synthetic demo scenario, seed and ledger. |
 | `packs/<id>/` | Pack content. |
@@ -187,7 +187,17 @@ secrets are read there.
 | `FATHOM_CLOCK` | unset | ISO date that overrides "today" (`settings.clock`) for demos and tests. Never written to the store. |
 | `FATHOM_CLAUDE_CREDENTIAL_FILE` | unset | Path to the mounted Claude credential. |
 | `FATHOM_DATA_KEY_FILE` | unset | Path to the raw file encryption key. |
-| `FATHOM_EMAIL_TRANSPORT` | `dev` | `dev`, `gmail`, `resend` or `postmark`. |
+| `FATHOM_EMAIL_TRANSPORT` | `dev` | `dev`, `smtp`, `resend`, `postmark` or `agentmail` (see Email). |
+| `FATHOM_EMAIL_FROM` | unset (`dev` uses `fathom@example.invalid`) | Sender address; for `agentmail` the inbox id. Not with `FATHOM_EMAIL_FROM_FILE`. |
+| `FATHOM_EMAIL_FROM_FILE` | unset | Path to a file holding the sender address. Not with `FATHOM_EMAIL_FROM`. |
+| `FATHOM_EMAIL_TO` | unset (`dev` uses `owner@example.invalid`) | Recipient addresses, comma separated. Not with `FATHOM_EMAIL_TO_FILE`. |
+| `FATHOM_EMAIL_TO_FILE` | unset | Path to a file of recipient addresses (comma or newline separated). Not with `FATHOM_EMAIL_TO`. |
+| `FATHOM_EMAIL_CREDENTIAL_FILE` | unset | Path to the mounted email credential (API key or SMTP password); must be private (mode 0400 or 0600). Required by every transport but `dev`. |
+| `FATHOM_EMAIL_SMTP_USER` | unset | SMTP user name for `smtp`. |
+| `FATHOM_EMAIL_SMTP_HOST` | `smtp.gmail.com` | SMTP host for `smtp`. |
+| `FATHOM_EMAIL_SMTP_PORT` | `465` | `465` (TLS) or `587` (STARTTLS, TLS required); anything else is a config error. |
+| `FATHOM_PUBLIC_URL` | unset | The app's own http or https URL with no trailing slash, used for links in emails; unset means emails carry no links. |
+| `FATHOM_LIVE_EMAIL` | unset | `1` lets `npm run email:test` send a real email (see Email); read only by that script. |
 
 ## Store
 
@@ -224,7 +234,7 @@ Money columns are dollars rounded to cents; JSON columns hold JSON text. The pro
 | Table | Columns |
 |---|---|
 | `schema_migrations` | `id` PK, `name`, `applied_at` |
-| `settings` | `key` PK, `value` JSON, `updated_at`. Keys: `mode`, `engine` `{on}`, `cap` `{usd}` (default 200), `clock`, `onboarding` `{done, step}`, `wargame.picks` `{salary, deferral}`, `seeded` `{at, scenario_sha}` |
+| `settings` | `key` PK, `value` JSON, `updated_at`. Keys: `mode`, `engine` `{on}`, `cap` `{usd}` (default 200), `clock`, `timezone` (IANA zone for job schedules, default `America/New_York`), `onboarding` `{done, step}`, `wargame.picks` `{salary, deferral}`, `seeded` `{at, scenario_sha}` |
 | `content` | `key` PK, `value` JSON, `src`, `updated_at`. Narrative sections with no data table yet: `meta` (product, household, dataThrough), `names`, `law`, `pct`, `series`, `verdict`, `domains`, `curve`, `wargame`, `ask`, `advisor`, `yearend`, `connect`, `engine.chat`, `onboarding`, `email` |
 | `files` | `id` PK, `name`, `mime`, `size`, `sha256` (unique when set), `source_kind`, `uploaded_at`, `stored_path`, `status` (an ingest status, `pending` while routing), `note` (`limit_exceeded` for a `too_large` file), `parser`, `counts` JSON, `source_id`, `header_signature`, `period_from`, `period_to`, `coverage` JSON (the slots a workbook authoritatively covers) |
 | `sources` | `id` PK, `label`, `as_of`, `kind`, `last_ingest_at`, `note` |
@@ -247,7 +257,10 @@ Money columns are dollars rounded to cents; JSON columns hold JSON text. The pro
 | `packs_state` | `id` PK, `def` JSON (the pack with its base status), `active` (NULL means no override), `exploring`, `what_if_asked`, `what_if_done`, `unhid` JSON, `sort`, `updated_at` |
 | `decisions` | `id` PK, `title`, `status` in open, decided, upcoming, `wargame`, `rec_id`, `opens_on`, `when_label`, `note`, `decided_line`, `sort` |
 | `jobs` | `id` PK, `name`, `cadence`, `does`, `cost`, `next_label`, `last_label`, `enabled`, `sort` |
-| `job_runs` | `id` PK, `job_id`, `started_at`, `finished_at`, `status`, `cost_usd`, `note` |
+| `job_runs` | `id` PK, `job_id`, `started_at`, `finished_at`, `status` (`running`, `ok`, `skipped` or `error`), `cost_usd`, `note` (counts JSON only), `period_key`, `trigger` (`scheduled`, `manual` or `ingest`), `duration_ms`, `error_class` (an error code or class name, never a message); unique (`job_id`, `period_key`) where `period_key` is set |
+| `job_lock` | `id` PK (always 1), `holder`, `expires_at`: the scheduler lease |
+| `email_sends` | `id` PK, `ts`, `kind` in brief, alert, test, `subject`, `status` in sent, failed, `error_code`, `transport`, `recipients` (a count), `message_id`, `job_run_id`. No bodies and no addresses. |
+| `deadline_alerts` | `key`, `threshold` (14, 7 or 1), `deadline_date`, `sent_at`, `send_id`; PK (`key`, `threshold`) |
 | `api_keys` | `id` PK, `name`, `key_hash`, `scopes` JSON, `created_at`, `last_used_at`, `revoked_at` |
 | `spend_ledger` | `id` PK, `ts`, `yyyymm` `'YYYY-MM'`, `purpose`, `cost_usd`, `model`, `tokens` JSON |
 | `superseded_rows` | `id` PK, `table_name`, `dedupe_key`, `row` JSON (the archived row), `file_id`, `superseded_by` (references `files.id`), `reason` (`revised`, `removed`, `older_snapshot`, `alias_merged`, `duplicate_confirmed`, `duplicate_cross_format`, `duplicate`, `summarized`), `at`, `survivor_key` (for `duplicate_confirmed`, the dedupe key of the row it was confirmed against) |
@@ -262,6 +275,12 @@ Migration 002 (`002-ingest.sql`) adds the ingest columns above (`files.parser` t
 the tables `superseded_rows`, `confirm_items`, `column_mappings`, `entity_aliases` and
 `held_facts`. `demo/seed.mjs` clears them with the rest of the store. Migration 003
 (`003-ingest-recipients.sql`) adds `tax_payments.recipient`.
+
+Migration 005 (`005-jobs-email.sql`) adds the scheduler columns `job_runs.period_key`, `trigger`,
+`duration_ms` and `error_class` with the partial unique index on (`job_id`, `period_key`) (rows
+with no period key, such as the planner's own runs, may repeat), and the tables `job_lock`,
+`email_sends` and `deadline_alerts`. The new tables have no foreign keys, so the demo seed clears
+them freely.
 
 ### Adding a migration
 
@@ -373,6 +392,11 @@ response is `{scenario, ...}` with the fresh scenario.
 | `GET /api/confirm` | | `{items: [pending confirm items]}`. |
 | `POST /api/confirm/list` | `{status?: pending (default), answered or all}` | `{items}`; 400 for another status. |
 | `POST /api/confirm/:id/answer` | `{answer: optionId}` | `{scenario, item}`. 404 unknown item, 400 an option not offered, 409 already answered or stale (the value changed since the question was asked). |
+| `GET /api/email` | | `{status: {transport, state, recipient, recipients, detail}, preview: {subject, text, html, summarySrc}, history}`. `recipient` is masked (`o***@e***.invalid`); `history` is `email_sends` rows newest first with no bodies. The preview is the brief composed now over the store with the runtime engine (template summary when the engine cannot answer). |
+| `POST /api/email/test` | `{}` | `{send, history}`. Sends a fixed test email (kind `test`) through the configured transport; a failed send is a 200 with `send.status` `failed` and `send.errorCode`. |
+| `POST /api/email/brief` | `{}` | `{send, history}`. Composes and sends the brief now (kind `brief`); failures as above. |
+| `GET /api/jobs` | | `{jobs: [{id, name, cadence, does, lastRun, next, nextAt}], runs, timezone}`. Only jobs with a handler are listed; `runs` are recent `job_runs`. |
+| `POST /api/jobs/:id/run` | `{}` | `{run, jobs}`. Runs the job now under the lease (trigger `manual`). 404 unknown job, 409 already running or the lease is held by another scheduler. |
 
 Uploads: `POST /api/files` takes `multipart/form-data` with a boundary (else 415) under the same
 Origin rule as JSON posts. A request is capped at 200 MB (`UPLOAD_REQUEST_LIMIT`) and each file at
@@ -381,7 +405,11 @@ cap is refused with 413 and `Connection: close` before the body is read, and bot
 enforced again while the body streams. Error messages name the limit, never contents. File names
 keep only their base name (directories of either slash style stripped), at most 255 characters.
 The parser has no dependencies. Every other route keeps the 64 KiB JSON cap. Errors on ingest
-routes log `fathom: ingest request failed` and an error code only, never the error object.
+routes log `fathom: ingest request failed` and an error code only, never the error object; errors
+on the email and jobs routes log `fathom: request failed` and a code the same way. An upload with
+any `imported` result, and a retry whose file ends `imported`, call
+`ctx.scheduler.trigger('plan', 'ingest')` without waiting; a trigger failure logs a code and never
+fails the request.
 
 Free text is stored HTML-escaped with `{` and `}` escaped as `&#123;` and `&#125;`, so a user can
 never inject a scenario token or markup.
@@ -425,8 +453,78 @@ is reachable only on the owner's private network.
    `FATHOM_CLAUDE_CREDENTIAL_FILE`; a failure logs "fathom: engine credential unavailable"
    (never the value) and live calls then fail.
 5. MCP: `src/mcp` exposes `src/tools` with scopes checked against `api_keys`.
-6. Jobs: `src/jobs` schedules from `jobs` and records `job_runs`.
-7. Email: `src/email` renders the `email` content (later derived) through `FATHOM_EMAIL_TRANSPORT`.
+6. Jobs: `src/jobs` schedules from `jobs` and records `job_runs`; see "Jobs" below. The router
+   passes the scheduler to handlers as `ctx.scheduler` (null when it could not be built).
+7. Email: `src/email` sends through `FATHOM_EMAIL_TRANSPORT` and the router passes the transport
+   as `ctx.transport`; see "Email" below.
+
+## Jobs
+
+`src/jobs/scheduler.mjs` runs in process. `src/server.mjs` builds it after the engine is
+initialized with `createScheduler({db, config, engine, handlers: defaultHandlers({publicUrl}),
+transport})`, starts it once the server listens (a start failure logs a code and the server still
+serves) and stops it before closing the store.
+
+1. Periods are computed in the owner's zone (`settings.timezone`, default `America/New_York`; an
+   invalid zone falls back to the default). `plan` daily at 02:00 (key `YYYY-MM-DD`),
+   `brief-email` monthly on the 1st at 07:00 (`YYYY-MM`), `deadline-alerts` daily at 07:00
+   (`YYYY-MM-DD`), `freshness` weekly on Monday at 06:00 (that Monday's date). The due key is the
+   latest period whose start is at or before now. With `FATHOM_CLOCK` set, the clock date at 12:00
+   is now, so every period of that day is due.
+2. Idempotence: one attempt per (`job_id`, `period_key`), enforced by the unique index. A failed
+   run is not retried for the same period. Manual runs use `manual:<iso ts>` and ingest triggered
+   runs `ingest:<iso ts>`.
+3. Catch-up: each tick (every minute) runs a job only when its latest due key has no row, so a
+   restart runs at most the latest missed period of each job, never a backfill.
+4. Lease: `job_lock` holds one row (holder, expires_at), a 5 minute lease renewed each tick. A
+   scheduler without the lease runs nothing, and a manual run without it is 409.
+5. Handlers: `(ctx) -> {costUsd?, note?, status?: 'skipped'}` with ctx `{db, config, engine,
+   transport, now, clock, periodKey, trigger, jobRunId}`. Only jobs with a handler are scheduled
+   and listed. A run's row goes `running` then `ok`, `skipped` or `error` with `finished_at`,
+   `duration_ms`, `error_class` (identifier only) and `cost_usd`.
+6. Engine: every model call goes through the runtime engine. With the engine off, over its cap, in
+   fake mode with no script, or when the summary fails grounding, the brief uses its template
+   summary and still sends.
+7. Plan job: the planner is not wired yet, so the server's handler registry has no `plan` handler
+   and `trigger('plan', 'ingest')` is a no-op. When the planner lands it is wired as the `plan`
+   handler, so nightly, manual and ingest runs share one path, the lease and `job_runs`.
+
+## Email
+
+`src/email/transport.mjs` reads addresses and the credential from their files at send and status
+time (never from `src/config.mjs`) and exposes `createTransport(config)`, `emailStatus(config)`
+and `maskAddress`. `src/email/send.mjs` sends and records every attempt in `email_sends`.
+
+1. Transports: `dev` (default) writes each message as a JSON file in `$FATHOM_DATA/outbox`
+   (directory 0700, file 0600) and sends nothing; `smtp` uses nodemailer (465 TLS or 587
+   STARTTLS with TLS required); `resend`, `postmark` and `agentmail` use the providers' HTTPS
+   APIs. AgentMail is the production target: `FATHOM_EMAIL_FROM` is the inbox id.
+2. Credential: `FATHOM_EMAIL_CREDENTIAL_FILE` names the API key or SMTP password file. Like the
+   engine credential it must be private: a file that group or other can read is refused, so a
+   mounted secret needs mode 0400 or 0600. A missing, unreadable, empty or non-private file is
+   `missing_credential`. The credential never appears in a response, log or error.
+3. Send codes: a failed send is recorded with status `failed` and one fixed code:
+   `missing_config`, `missing_credential`, `auth`, `not_found`, `rate_limited`, `invalid`,
+   `rejected`, `network` or `other`. No key, body, address or provider response is logged.
+4. Brief: `src/email/brief.mjs` builds the monthly brief from the scenario: the verdict, the recs
+   that need the owner, deadlines in the next 60 days, stale sources and engine spend. Every amount
+   printed is a stored figure with a footnote marker, and a Figures section lists each one with
+   its label, kind, source and as-of date. The summary paragraph may come from the engine, which
+   may name amounts only as `{f:key}` tokens from the brief's figure set; any digit, `$`, `%`,
+   "percent" or number word outside a token, or a grounding failure, falls back to the template
+   summary. The HTML uses inline style attributes only (no `<style>`, no scripts).
+5. Alerts: `src/jobs/alerts.mjs` alerts on deadlines and rec windows closing within 14 days at
+   the thresholds 14, 7 and 1 days. A deadline linked to a rec and that rec's window share the
+   key `rec:<id>:<date>`; an unlinked deadline is `deadline:<date>:<hash of the normalized
+   title>`. Recs that are done, dismissed or hidden are skipped. Due alerts go out as one email,
+   and `deadline_alerts` rows are written only after it is sent, so each (key, threshold) alerts
+   once.
+6. The Email screen (`web/horizon/screens/email.js`) shows the transport state and masked
+   recipient, Send test email and Send brief now, the brief preview in an iframe with an empty
+   `sandbox` attribute filled through `srcdoc`, the send history and the jobs with Run now.
+7. Live check: `FATHOM_LIVE_EMAIL=1 npm run email:test` sends one test email through the
+   configured transport and prints only the status and code; without `FATHOM_LIVE_EMAIL=1` it
+   refuses (exit 2). Never run it in CI.
 
 ## Ingest
 

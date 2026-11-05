@@ -4,6 +4,7 @@
    Reading notes on ambiguous contract points are at the bottom of this file. */
 
 import { ingestScreens } from './screens/ingest.js';
+import { emailScreen } from './screens/email.js';
 
 const MS = 864e5;
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -29,6 +30,7 @@ let root = null;
 let unsub = null;
 let ui = null;
 let ingest = null;
+let email = null;
 let lastKey = '';
 let resizeTimer = 0;
 let onResize = null;
@@ -992,15 +994,8 @@ function pEngine() {
 
 /* ---------- email ---------- */
 
-function pEmail() {
-  const em = api.s.email || {};
-  return shell(`${pageHead('Email', 'Monthly digest', 'What lands in your inbox on brief day. One email a month, nothing in between unless a window is about to close.')}
-    <div class="h-mail"><div class="h-mail-hd"><div><span>Subject</span><b>${T(em.subject)}</b></div><div><span>Preview</span><p>${T(em.preheader)}</p></div></div>
-      <div class="h-mail-bd"><div class="h-mail-mark">${MARK}<span>${T(api.s.meta.product || 'Fathom')}</span></div>
-        <p>${T(em.greeting)}</p>
-        ${arr(em.sections).map((s) => `<h3>${T(s.heading)}</h3><ul>${arr(s.items).map((i) => `<li>${T(i)}</li>`).join('')}</ul>`).join('')}
-        <div class="h-mail-cta">${btn('Open this month', 'data-go="brief"', 'pri')}</div>
-        <p class="h-mail-ft">${T(em.footer)}</p></div></div>`, 'email');
+function pEmail(fresh) {
+  return email.page(fresh);
 }
 
 /* ---------- onboarding ---------- */
@@ -1212,7 +1207,7 @@ function draw() {
     case 'yearend': html = pYearend(); break;
     case 'connect': html = pConnect(); break;
     case 'engine': html = pEngine(); break;
-    case 'email': html = pEmail(); break;
+    case 'email': html = pEmail(routeChanged); break;
     default: html = pBrief();
   }
   page.innerHTML = html;
@@ -1276,6 +1271,7 @@ function closeRec() {
 function onClick(e) {
   if (ui.more && !e.target.closest('.h-more-wrap')) setMore(false);
   if (ingest.handleClick(e)) return;
+  if (email.handleClick(e)) return;
   const sel = '[data-go],[data-act],[data-ask],[data-askrec],[data-wg],[data-onboard],[data-inst],[data-allow],[data-modal],[data-scope],[data-copy],[data-packet],[data-whatif],[data-packtoggle],[data-more],[data-dlg]';
   let t = e.target.closest(`${sel},.fx-fig`);
   if (!t || !root.contains(t)) return;
@@ -1396,6 +1392,7 @@ function onDocumentKey(e) {
 function mount(r, a) {
   api = a; root = r; ui = freshUi(); lastKey = '';
   ingest = ingestScreens({ api, shell, section, pageHead, btn, icon, esc, T, X, draw, goA });
+  email = emailScreen({ shell, section, pageHead, btn, esc, draw });
   root.innerHTML = '<div class="h-root"></div><div class="h-dlg-host" hidden></div>';
   ui.y = window.scrollY;
   root.addEventListener('click', onClick);

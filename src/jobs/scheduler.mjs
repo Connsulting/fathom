@@ -197,6 +197,7 @@ export function createScheduler({
   const q = {
     ensure: db.prepare('INSERT OR IGNORE INTO jobs (id, name, cadence, does, cost, next_label, last_label, enabled, sort) VALUES (?, ?, ?, ?, NULL, ?, ?, 1, ?)'),
     labels: db.prepare('UPDATE jobs SET next_label = ?, last_label = ? WHERE id = ?'),
+    define: db.prepare('UPDATE jobs SET name = ?, cadence = ?, does = ? WHERE id = ? AND (name IS NOT ? OR cadence IS NOT ? OR does IS NOT ?)'),
     take: db.prepare(`INSERT INTO job_lock (id, holder, expires_at) VALUES (1, ?, ?)
                       ON CONFLICT(id) DO UPDATE SET holder = excluded.holder, expires_at = excluded.expires_at
                       WHERE job_lock.holder = excluded.holder OR job_lock.expires_at <= ? RETURNING holder`),
@@ -229,6 +230,7 @@ export function createScheduler({
     const zone = tz();
     handled.forEach((j, i) => {
       q.ensure.run(j.id, j.name, j.cadence, j.does, null, null, JOB_SORT + i);
+      q.define.run(j.name, j.cadence, j.does, j.id, j.name, j.cadence, j.does);
       const last = q.last.get(j.id);
       q.labels.run(timeLabel(nextRunAt(j.schedule, t, zone, fixed), zone), last ? timeLabel(last.started_at, zone) : null, j.id);
     });

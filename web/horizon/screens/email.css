@@ -1,0 +1,59 @@
+/* Horizon Email screen: transport status, the brief preview frame, send history and jobs.
+   Uses the Horizon tokens from design.css. Every selector is scoped. */
+
+/* transport status */
+.d-horizon .h-em-st { background: var(--s1); padding: 20px 26px; display: flex; flex-direction: column; gap: 14px; }
+.d-horizon .h-em-dl { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px 28px; margin: 0; }
+.d-horizon .h-em-dl dt { color: var(--fa); font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 4px; }
+.d-horizon .h-em-dl dd { margin: 0; font-size: 15px; font-weight: 500; overflow-wrap: anywhere; }
+.d-horizon .h-em-dl dd .mono, .d-horizon .h-em-dl dd.mono { font-weight: 400; }
+.d-horizon .h-em-state.configured, .d-horizon .h-em-state.dev { color: var(--ac); }
+.d-horizon .h-em-state.missing_config, .d-horizon .h-em-state.missing_credential { color: var(--tx); }
+.d-horizon .h-em-detail { color: var(--mu); font-size: 13px; max-width: 72ch; }
+.d-horizon .h-em-ctl { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; }
+.d-horizon .h-em-ctl .h-btn[disabled] { cursor: progress; opacity: 0.7; }
+.d-horizon .h-em-note { color: var(--tx2); font-size: 13px; }
+.d-horizon .h-em-err { color: var(--tx); border: 1px solid var(--line2); border-radius: 10px; padding: 12px 16px; margin: 16px 0; }
+
+/* preview */
+.d-horizon .h-em-pv { background: var(--s1); }
+.d-horizon .h-em-pv-h { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 12px; align-items: baseline; padding: 14px 20px; border-bottom: 1px solid var(--line); }
+.d-horizon .h-em-pv-h span { color: var(--fa); font-size: 12px; }
+.d-horizon .h-em-pv-h b { font-weight: 500; overflow-wrap: anywhere; }
+.d-horizon .h-em-frame { display: block; width: 100%; height: 640px; border: 0; background: #ffffff; }
+
+/* tables */
+.d-horizon .h-em-tw { overflow-x: auto; }
+.d-horizon .h-em-t { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.d-horizon .h-em-t th {
+  text-align: left; font-weight: 400; color: var(--fa); font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase;
+  padding: 12px 14px; background: var(--s1); border-bottom: 1px solid var(--line); white-space: nowrap;
+}
+.d-horizon .h-em-t td { padding: 14px; vertical-align: top; color: var(--tx2); border-top: 1px solid var(--line); }
+.d-horizon .h-em-t tbody tr:first-child td { border-top: 0; }
+.d-horizon .h-em-t th:first-child, .d-horizon .h-em-t td:first-child { padding-left: 20px; }
+.d-horizon .h-em-t th:last-child, .d-horizon .h-em-t td:last-child { padding-right: 20px; }
+.d-horizon .h-em-kind { color: var(--mu); white-space: nowrap; }
+.d-horizon .h-em-subj b { display: block; font-weight: 500; color: var(--tx); overflow-wrap: anywhere; }
+.d-horizon .h-em-subj span, .d-horizon .h-em-res span, .d-horizon .h-em-last span { display: block; color: var(--fa); font-size: 12.5px; margin-top: 2px; }
+.d-horizon .h-em-res b, .d-horizon .h-em-last b { font-weight: 500; }
+.d-horizon .h-em-res.ok b { color: var(--ac); }
+.d-horizon .h-em-res.fail b { color: var(--tx); }
+.d-horizon .h-em-job b { display: block; font-weight: 500; font-size: 15px; color: var(--tx); }
+.d-horizon .h-em-job p { color: var(--mu); font-size: 13px; margin-top: 4px; max-width: 58ch; }
+.d-horizon .h-em-t.jobs td { padding-top: 18px; padding-bottom: 18px; }
+.d-horizon .h-em-t .h-btn[disabled] { cursor: progress; }
+.d-horizon .h-em-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+@media (max-width: 720px) {
+  .d-horizon .h-em-st { padding: 18px 20px; }
+  .d-horizon .h-em-dl { grid-template-columns: minmax(0, 1fr); }
+  .d-horizon .h-em-frame { height: 520px; }
+  .d-horizon .h-em-t.jobs thead { display: none; }
+  .d-horizon .h-em-t.jobs tr { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px; padding: 18px 20px; border-top: 1px solid var(--line); }
+  .d-horizon .h-em-t.jobs tbody tr:first-child { border-top: 0; }
+  .d-horizon .h-em-t.jobs td { padding: 0; border: 0; }
+  .d-horizon .h-em-t.jobs td.h-em-job { grid-column: 1 / -1; }
+  .d-horizon .h-em-t.jobs td.r { text-align: left; }
+  .d-horizon .h-em-t.jobs td[data-l]::before { content: attr(data-l); display: block; color: var(--fa); font-size: 11.5px; letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 3px; }
+}

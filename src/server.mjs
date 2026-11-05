@@ -1,6 +1,8 @@
 // Fathom server: one process serving web/ (the Horizon UI), /shared/ (browser-safe shared
 // logic) and the JSON API, backed by SQLite at $FATHOM_DATA/fathom.sqlite. One runtime engine
-// (src/engine/runtime.mjs) is built at startup and handed to the API as ctx.engine.
+// (src/engine/runtime.mjs) is built at startup and handed to the API as ctx.engine. After it, the
+// email transport and the job scheduler are built and handed to the API as ctx.transport and
+// ctx.scheduler; the scheduler starts once the server listens and stops before the store closes.
 //
 // Store mode (settings.mode, set when the store is created, never inferred from contents):
 // no store file: create it; demo unless FATHOM_DEMO=0 (then real and empty). Demo stores are
@@ -17,6 +19,8 @@ import { createHandler } from './api/router.mjs';
 import { createCannedAnswerer } from './api/answerer.mjs';
 import { createRuntimeEngine } from './engine/runtime.mjs';
 import { refreshPackState } from './packs/state.mjs';
+import { createTransport } from './email/transport.mjs';
+import { createScheduler, defaultHandlers } from './jobs/scheduler.mjs';
 import { seedDemo } from '../demo/seed.mjs';
 
 export class StartupError extends Error {}
@@ -67,8 +71,15 @@ export async function startServer(config = loadConfig()) {
     db.close();
     throw e;
   }
+  const transport = createTransport(config);
+  let scheduler = null;
+  try {
+    scheduler = createScheduler({ db, config, engine, handlers: defaultHandlers({ publicUrl: config.publicUrl }), transport });
+  } catch (err) {
+    console.error('fathom: scheduler unavailable', codeOf(err));
+  }
   const answerer = createCannedAnswerer();
-  const server = http.createServer(createHandler({ db, config, answerer, engine }));
+  const server = http.createServer(createHandler({ db, config, answerer, engine, scheduler, transport }));
   try {
     await new Promise((resolveListen, reject) => {
       server.once('error', reject);
@@ -84,6 +95,14 @@ export async function startServer(config = loadConfig()) {
     }
     throw e;
   }
+  if (scheduler) {
+    try {
+      const started = scheduler.start();
+      if (started && typeof started.then === 'function') started.then(null, err => console.error('fathom: scheduler start failed', codeOf(err)));
+    } catch (err) {
+      console.error('fathom: scheduler start failed', codeOf(err));
+    }
+  }
   const { port } = server.address();
   const host = config.host.includes(':') ? `[${config.host}]` : config.host;
   let closed = false;
@@ -94,10 +113,14 @@ export async function startServer(config = loadConfig()) {
     close() {
       if (closed) return Promise.resolve();
       closed = true;
-      return new Promise(done => {
+      let stopped = Promise.resolve();
+      try {
+        if (scheduler) stopped = Promise.resolve(scheduler.stop()).catch(() => {});
+      } catch { /* stop failed; close anyway */ }
+      return stopped.then(() => new Promise(done => {
         server.close(() => { db.close(); done(); });
         server.closeAllConnections();
-      });
+      }));
     },
   };
 }

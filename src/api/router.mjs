@@ -1,7 +1,8 @@
 // Routing: the JSON API under /api plus /healthz, and static files for everything else.
 // `routes` is the route table (docs/architecture.md lists every entry; test/docs.test.mjs checks).
 // `upload: true` routes take multipart bodies (read by the handler through ctx.readUpload);
-// `ingest: true` routes never log error details, which could carry file contents.
+// `ingest: true` routes never log error details, which could carry file contents; `quiet: true`
+// routes (email and jobs) likewise log an error code only.
 
 import { fileURLToPath } from 'node:url';
 import { HttpError, setSecurityHeaders, sendJson, sendError, guardPost, readJsonBody } from './http.mjs';
@@ -9,6 +10,7 @@ import { guardUpload, readMultipart } from './upload.mjs';
 import { createStatic } from './static.mjs';
 import * as h from './handlers.mjs';
 import * as ih from './ingest-handlers.mjs';
+import * as eh from './email-handlers.mjs';
 
 const TABLE = [
   { method: 'GET', path: '/healthz', handler: h.healthz },
@@ -27,6 +29,11 @@ const TABLE = [
   { method: 'GET', path: '/api/confirm', handler: ih.listPendingConfirm, ingest: true },
   { method: 'POST', path: '/api/confirm/list', handler: ih.listConfirm, ingest: true },
   { method: 'POST', path: '/api/confirm/:id/answer', handler: ih.answerConfirm, ingest: true },
+  { method: 'GET', path: '/api/email', handler: eh.getEmail, quiet: true },
+  { method: 'POST', path: '/api/email/test', handler: eh.sendTestEmail, quiet: true },
+  { method: 'POST', path: '/api/email/brief', handler: eh.sendBriefEmail, quiet: true },
+  { method: 'GET', path: '/api/jobs', handler: eh.listJobs, quiet: true },
+  { method: 'POST', path: '/api/jobs/:id/run', handler: eh.runJob, quiet: true },
 ];
 
 export const routes = TABLE.map(({ method, path }) => ({ method, path }));
@@ -69,7 +76,7 @@ function findRoute(method, rawPath) {
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 const safeCode = err => [err && err.code, err && err.name].find(v => typeof v === 'string' && IDENT.test(v)) || 'unknown';
 
-export function createHandler({ db, config, answerer, engine = null, webDir = WEB_DIR, sharedDir = SHARED_DIR }) {
+export function createHandler({ db, config, answerer, engine = null, scheduler = null, transport = null, webDir = WEB_DIR, sharedDir = SHARED_DIR }) {
   const serveStatic = createStatic({ webDir, sharedDir });
   return async function handle(req, res) {
     setSecurityHeaders(res);
@@ -90,7 +97,7 @@ export function createHandler({ db, config, answerer, engine = null, webDir = WE
           guardPost(req);
           body = await readJsonBody(req);
         }
-        const out = await r.handler({ db, config, answerer, engine, params, body, readUpload, req });
+        const out = await r.handler({ db, config, answerer, engine, scheduler, transport, params, body, readUpload, req });
         sendJson(res, 200, out);
         return;
       }
@@ -101,6 +108,7 @@ export function createHandler({ db, config, answerer, engine = null, webDir = WE
     } catch (err) {
       if (!(err instanceof HttpError)) {
         if (route && route.ingest) console.error('fathom: ingest request failed', safeCode(err));
+        else if (route && route.quiet) console.error('fathom: request failed', safeCode(err));
         else console.error(err);
       }
       if (req.readable) req.resume();

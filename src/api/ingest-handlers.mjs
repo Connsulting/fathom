@@ -1,6 +1,6 @@
 // Ingest API handlers: file uploads, the file list, retries and the confirm queue. Each takes the
-// router ctx ({db, config, engine, params, body, readUpload}) and returns the JSON body or throws
-// HttpError. Pipeline, vault and confirm errors map to statuses here with fixed messages, so no
+// router ctx ({db, config, engine, scheduler, params, body, readUpload}) and returns the JSON body or
+// throws HttpError. A request that imports a file triggers the plan job through ctx.scheduler. Pipeline, vault and confirm errors map to statuses here with fixed messages, so no
 // file name contents or row values reach a response or a log.
 
 import { getSetting } from '../store/db.mjs';
@@ -36,6 +36,21 @@ async function dataKey(ctx) {
   }
 }
 
+const IDENT = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
+const safeCode = err => [err && err.code, err && err.name].find(v => typeof v === 'string' && IDENT.test(v)) || 'unknown';
+
+// Fire and forget: a trigger failure logs a code and never fails the request.
+function triggerPlan(ctx) {
+  if (!ctx.scheduler) return;
+  const failed = err => console.error('fathom: plan trigger failed', safeCode(err));
+  try {
+    const p = ctx.scheduler.trigger('plan', 'ingest');
+    if (p && typeof p.then === 'function') p.then(null, failed);
+  } catch (err) {
+    failed(err);
+  }
+}
+
 const ingestOpts = (ctx, key) => ({ engine: ctx.engine, config: ctx.config, now: nowIso(), key });
 
 export async function uploadFiles(ctx) {
@@ -50,6 +65,7 @@ export async function uploadFiles(ctx) {
     if (err instanceof VaultError) throw new HttpError(409, err.message);
     throw err;
   }
+  if (results.some(r => r && r.status === 'imported')) triggerPlan(ctx);
   const scenario = scenarioOf(ctx);
   return { scenario, files: results, pending: scenario.live.ingest.pending };
 }
@@ -71,6 +87,7 @@ export async function retryFile(ctx) {
     if (err instanceof VaultError) throw new HttpError(409, err.message);
     throw err;
   }
+  if (file && file.status === 'imported') triggerPlan(ctx);
   return { scenario: scenarioOf(ctx), file };
 }
 
