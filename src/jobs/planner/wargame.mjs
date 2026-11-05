@@ -56,7 +56,7 @@ function salaryGame(data, out, ctx) {
   if (missing.length) { out.info.confirm.salary = missing; return invalid(missing[0]); }
   const lo = Math.min(range.min, range.max);
   const hi = Math.max(range.min, range.max);
-  const current = corp.gross;
+  const current = corp.comp;
   const inRange = current > 0 && current >= lo && current <= hi;
   const outside = inRange ? 'in' : current > 0 ? 'out' : 'none';
   // Grid points rounded to the thousand, then clamped into the approved range (G3).
@@ -83,8 +83,8 @@ function salaryGame(data, out, ctx) {
     const K = cents(P - s - pay.value.employerTotal);
     if (K < 0) return null;
     const w2 = parts.w2.some(w => w.src === `corp:${slug}`)
-      ? parts.w2.map(w => (w.src === `corp:${slug}` ? { ...w, gross: s, agi: Math.max(0, cents(s - (corp.pretax || 0))) } : w))
-      : [...parts.w2, { person: corp.person, src: `corp:${slug}`, gross: s, agi: s }];
+      ? parts.w2.map(w => (w.src === `corp:${slug}` ? { ...w, gross: s, comp: s, agi: Math.max(0, cents(s - (corp.pretax || 0))) } : w))
+      : [...parts.w2, { person: corp.person, src: `corp:${slug}`, gross: s, comp: s, agi: s }];
     const biz = parts.biz.map(b => (b.id === slug && b.kind === 'scorp' ? { ...b, agi: K, qbi: K, w2Wages: s } : b));
     const hh = householdTax({ ...parts, w2, biz });
     if (hh.blocked) return { s, blocked: hh.blocked };

@@ -19,7 +19,7 @@ const TAX_CODES = new Set([
   'va529_answers_missing',
   // Ingest contract (plan Revision 6).
   'w2_recipient_unknown', 'payroll_recipient_conflict', 'household_employer_unmatched', 'employer_relation_pending', 'w2_box12_unreadable',
-  'w2_wages_missing', 'deferral_split_unknown', 'paystub_ytd_missing', 'paystub_deferrals_unknown', 'k1_unmatched', 'k1_scorp_unmatched',
+  'w2_wages_missing', 'w2_medicare_wages_missing', 'deferral_split_unknown', 'paystub_ytd_missing', 'paystub_deferrals_unknown', 'k1_unmatched', 'k1_scorp_unmatched',
   'w2_correction_pending', 'w2_correction_conflicting', 'w2_duplicate_unresolved', 'tax_payment_kind_unknown', 'withholding_state_unknown',
   'withholding_recipient_unknown', 'withholding_conflict_pending', 'tax_year_unconfirmed', 'estimated_payer_unknown',
 ]);
@@ -33,6 +33,7 @@ const PAYROLL_NAMED = Object.freeze({
   employer_relation_pending: [who => `We do not know whether ${who} is an outside employer or your own business, so tax projections are on hold.`, 'Answer whether each employer is your own business in Confirm'],
   w2_box12_unreadable: [who => `A box twelve amount on a W-2 from ${who} could not be read, so tax projections are on hold.`, 'Upload a clearer copy of the W-2'],
   w2_wages_missing: [who => `A W-2 from ${who} has no readable wages, so tax projections are on hold.`, 'Upload a clearer copy of the W-2'],
+  w2_medicare_wages_missing: [who => `A W-2 from ${who} has no readable Medicare wages in box five, so federal tax is on hold.`, 'Upload a clearer copy of the W-2 that shows box five'],
   deferral_split_unknown: [who => `Your retirement deferrals are above the yearly limit across ${who} and another plan, and we cannot tell which plan holds the catch-up, so tax and retirement figures are on hold.`, confirmTask('retirement.otherPlanDeferrals')],
   paystub_ytd_missing: [who => `The latest paystub from ${who} has no year-to-date gross pay, so tax projections are on hold.`, 'Upload a paystub that shows year-to-date pay, or the W-2'],
   paystub_deferrals_unknown: [who => `Paystubs from ${who} show retirement or HSA deferrals but no year-to-date total, so tax projections are on hold.`, 'Upload the W-2, or enter your deferrals for this year'],

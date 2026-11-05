@@ -6,7 +6,7 @@
 // householdTax(parts) -> {agi, deduction, pre, qbi, qbiCarryforward, taxable, fedIncome, ctc, se,
 //   seTotal, addlMedicare, retire, retireByBiz, fedTotal, va, vaTaxable, blocked, steps, warnings};
 //   a run whose retirement contributions fail validation returns only {blocked, steps, warnings}
-// parts: {f, state, persons, w2: [{person, src, gross (Medicare wages), agi}], biz: [{id, kind, person, agi, qbi,
+// parts: {f, state, persons, w2: [{person, src, gross (Medicare wages), agi (taxable wages), comp (plan compensation)}], biz: [{id, kind, person, agi, qbi,
 //   seInput, w2Wages, sstb}], retirement: {person: {byPlan, allRegular, allCatchUp, outsideKnown,
 //   catchUpLimit}}, hsaPersonal, itemized, vaItemized, va529Deduction, children, vaBlocked,
 //   qbiLossCarryforward?}
@@ -286,7 +286,8 @@ function retirementPlans(parts, dhByBiz) {
         byBiz[b.id] = ws.deduction;
         continue;
       }
-      const wages = cents(sum(parts.w2.filter(w => w.person === p && (w.src === `corp:${slug}` || w.src === `corp:${slug}:${p}`)).map(w => w.gross)));
+      // Plan compensation (IRC 415(c)(3)), never Medicare wages (E5).
+      const wages = cents(sum(parts.w2.filter(w => w.person === p && (w.src === `corp:${slug}` || w.src === `corp:${slug}:${p}`)).map(w => w.comp)));
       const lim = employerLimit({ kind: 'w2', compensation: wages, regular: D, catchUp: K });
       steps.push(...lim.steps.map(st => ({ ...st, label: `Employer plan (${slug}): ${st.label}`, formula: `${st.formula}, on this run's wages` })));
       const ok = le(E, lim.limit) && le(D + K, wages)

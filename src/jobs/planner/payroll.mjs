@@ -5,8 +5,8 @@
 // employer_relation, withholding_conflict), never from a guessed default.
 //
 // payrollRecords(data, entities, owner) -> {records, blocks, ask}
-//   records: [{docId, docIds, fileId, person, employer, key, kind, wages, ytdWages, medicare,
-//     medicareAssumed, deferral, catchUp, roth, pretax, hsa, deferral457, elective402g, deferralKnown, corp, household, projected}]
+//   records: [{docId, docIds, fileId, person, employer, key, kind, wages, ytdWages, medicare, comp,
+//     deferral, catchUp, roth, pretax, hsa, deferral457, elective402g, deferralKnown, corp, household, projected}]
 //   blocks:  [{code, employer, person}] each blocks household tax (and the dependent wage figures)
 //   ask:     [{employerKey, employer, payer, fileId}] recipient questions to raise through ingest (D9)
 // employerKeyOf(name) -> ingest's employer key
@@ -176,16 +176,16 @@ export function payrollRecords(data, entities, owner = {}) {
       const parts = w2s.map(d => ({ d, box: box12Of(d.fields), wages: d.fields.wages }));
       if (parts.some(p => !p.box)) { blocks.push({ code: 'w2_box12_unreadable', employer: g.employer, person: g.person }); continue; }
       if (parts.some(p => !isAmount(p.wages))) { blocks.push({ code: 'w2_wages_missing', employer: g.employer, person: g.person }); continue; }
+      // E4: box 5 (Medicare wages, Form 8959 line 1) has no stand-in; unread, it blocks.
+      if (parts.some(p => !isAmount(p.d.fields.medicareWages))) { blocks.push({ code: 'w2_medicare_wages_missing', employer: g.employer, person: g.person }); continue; }
       const total = k => cents(sum(parts.map(p => p.box[k])));
       const wages = cents(sum(parts.map(p => p.wages)));
-      // E1: each box is read on its own. Box 1 is income tax wages (already net of pretax
-      // deferrals); box 5 is Medicare wages as the employer reported them (Form 8959). Only when box 5
-      // was not read does the documented rule stand in: box 1 plus the box 12 pretax codes, or box 1
-      // alone when box 12 was not read either, with a visible note.
-      const box = (p, field) => (isAmount(p.d.fields[field]) ? p.d.fields[field] : cents(p.wages + p.box.pretax));
+      // E1, E5: each base is read on its own. Box 1 is income tax wages (already net of pretax
+      // deferrals); box 5 is Medicare wages (Form 8959); plan compensation is box 1 plus the elective
+      // deferrals box 1 leaves out (IRC 415(c)(3), Pub 560).
       r = {
         kind: 'w2', docIds: w2s.map(d => d.id), fileId: w2s[0].fileId, wages, ytdWages: wages, pretax: total('pretax'),
-        medicare: cents(sum(parts.map(p => box(p, 'medicareWages')))), medicareAssumed: parts.some(p => !isAmount(p.d.fields.medicareWages)),
+        medicare: cents(sum(parts.map(p => p.d.fields.medicareWages))), comp: cents(wages + total('pretax')),
         elective402g: total('elective402g'), deferral457: total('deferral457'), roth: total('roth'), hsa: total('hsa'),
         deferralKnown: !parts.some(p => p.box.unread), projected: false,
       };
@@ -209,9 +209,9 @@ export function payrollRecords(data, entities, owner = {}) {
         pretax = cents(sum(stated.filter(c => c.roth !== true).map(c => Number(c.amount))));
       }
       r = {
-        // Gross pay keeps 401(k) deferrals in it, so it is the Medicare wage.
+        // Gross pay keeps 401(k) deferrals in it, so it is the Medicare wage and the plan compensation.
         kind: 'paystub', docIds: [last.id], fileId: last.fileId, wages: Math.max(0, cents(projectedGross - pretax)), ytdWages: cents(last.fields.ytdGross),
-        medicare: projectedGross, medicareAssumed: false, pretax, elective402g: 0, deferral457: 0, roth: 0, hsa: 0, deferralKnown: !deferring, projected: true, section125Unknown: !deferring,
+        medicare: projectedGross, comp: projectedGross, pretax, elective402g: 0, deferral457: 0, roth: 0, hsa: 0, deferralKnown: !deferring, projected: true, section125Unknown: !deferring,
       };
     }
     const corp = g.kind.household && g.kind.entity.classified && g.kind.entity.type === 's_corp' ? g.kind.entity : null;

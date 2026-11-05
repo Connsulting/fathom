@@ -264,10 +264,7 @@ export function computeFigures(data, facts, ctx) {
   // inc.ytd.w2 (F8): outside-employer pay received in the tax year: W-2 box 1, or the latest
   // paystub's year-to-date gross. Held while any payroll document is unresolved.
   const outsideYtd = records.filter(r => !r.household);
-  const section125 = [
-    ...(records.some(r => inUnit(r.person) && r.section125Unknown) ? ['section125_unknown'] : []),
-    ...(records.some(r => inUnit(r.person) && r.medicareAssumed) ? ['medicare_wages_from_box1'] : []),
-  ];
+  const section125 = records.some(r => inUnit(r.person) && r.section125Unknown) ? ['section125_unknown'] : [];
   if (payroll.blocks.length) out.withhold(['inc.ytd.w2', 'room.hsa'], payroll.blocks[0].code);
   else if (outsideYtd.length) {
     out.source('docs', SOURCES.docs.label, dateLabel(clock), SOURCES.docs.kind);
@@ -290,22 +287,25 @@ export function computeFigures(data, facts, ctx) {
   for (const c of corps) {
     if (!inUnit(c.person)) continue;
     const ownRec = records.find(r => r.corp === c.entity.slug && r.person === c.person);
-    // A wage part's gross is its Medicare wage (E1): the P&L officer salary (gross pay), else the
-    // own-corp W-2's box 5. Its AGI wage is box 1 for a W-2.
-    const gross = c.sums.salary > 0 ? c.proj(c.sums.salary) : ownRec ? ownRec.medicare : 0;
-    // I1: owner-set deferral records lower only gross taken from the P&L officer salary (added once
-    // contributions are attributed, below); payroll document wages are box 1 and already exclude
-    // pretax deferrals.
-    c.fromPnl = c.sums.salary > 0;
-    const pretax = gross > 0 ? Math.min(gross, cents(ownRec ? ownRec.pretax : 0)) : 0;
+    // Three wage bases per part (E1, E3, E5): `agi` is taxable wages, `gross` Medicare wages (only
+    // Additional Medicare Tax and FICA or SE inputs read it) and `comp` plan compensation (IRC
+    // 415(c)(3), what plan sizing and limits read). A W-2 from the corp for the year sets all three
+    // from its boxes (box 1; box 5; box 1 plus elective deferrals). Only with no W-2 does the P&L
+    // officer salary projection stand in: gross pay for Medicare wages and compensation, less the
+    // owner's stated pretax deferrals for taxable wages (I1, below).
+    c.fromPnl = !ownRec && c.sums.salary > 0;
+    const salary = c.fromPnl ? c.proj(c.sums.salary) : 0;
+    const gross = ownRec ? ownRec.medicare : salary;
+    const comp = ownRec ? ownRec.comp : salary;
+    const pretax = ownRec ? ownRec.pretax : 0;
     c.w2 = null;
-    if (gross > 0) {
-      c.w2 = { person: c.person, src: `corp:${c.entity.slug}`, gross, agi: c.fromPnl ? Math.max(0, cents(gross - pretax)) : ownRec.wages, pretax };
+    if (comp > 0 || gross > 0) {
+      c.w2 = { person: c.person, src: `corp:${c.entity.slug}`, gross, comp, agi: ownRec ? ownRec.wages : salary, pretax };
       w2.push(c.w2);
     }
     const K = c.proj(c.sums.net);
-    biz.push({ id: c.entity.slug, kind: 'scorp', person: c.person, agi: K, qbi: K, seInput: null, w2Wages: gross, sstb: sstbOf(c.entity) });
-    c.gross = gross;
+    biz.push({ id: c.entity.slug, kind: 'scorp', person: c.person, agi: K, qbi: K, seInput: null, w2Wages: comp, sstb: sstbOf(c.entity) });
+    c.comp = comp;
     c.pretax = pretax;
   }
   // Payroll records per (person, employer) (F3, G1): the corp owner's wages from a household S corp
@@ -319,11 +319,11 @@ export function computeFigures(data, facts, ctx) {
       if (c && c.person === r.person) continue;
       const own = !c && entities.some(e => e.slug === r.corp && e.owner === r.person);
       const src = own ? `corp:${r.corp}` : `corp:${r.corp}:${r.person}`;
-      w2.push({ person: r.person, src, gross: r.medicare, agi: r.wages, pretax: r.pretax });
+      w2.push({ person: r.person, src, gross: r.medicare, comp: r.comp, agi: r.wages, pretax: r.pretax });
       continue;
     }
     if (r.household) continue;
-    w2.push({ person: r.person, src: 'outside', gross: r.medicare, agi: r.wages });
+    w2.push({ person: r.person, src: 'outside', gross: r.medicare, comp: r.comp, agi: r.wages });
   }
   for (const e of pnlEntities) {
     if (!e.classified) { blocked.push(`entity_unclassified:${e.slug}`); out.warn('entity_unclassified'); continue; }
@@ -381,8 +381,8 @@ export function computeFigures(data, facts, ctx) {
   if (attributed.unattributed.some(c => inUnit(c.person))) { blocked.push('retirement_contribution_unattributed'); out.warn('retirement_contribution_unattributed'); }
   for (const c of corps) {
     if (!c.w2 || !c.fromPnl) continue;
-    const pretax = Math.min(c.gross, cents(c.pretax + factPretax(attributed, { records, corps }, c.person, c.entity.slug)));
-    c.w2.agi = Math.max(0, cents(c.gross - pretax));
+    const pretax = Math.min(c.comp, cents(c.pretax + factPretax(attributed, { records, corps }, c.person, c.entity.slug)));
+    c.w2.agi = Math.max(0, cents(c.comp - pretax));
     c.w2.pretax = pretax;
     c.pretax = pretax;
   }
@@ -458,7 +458,7 @@ export function computeFigures(data, facts, ctx) {
   // proprietorship without earnings or a partnership name the sponsor for deadlines.
   const soleByPerson = p => sum(biz.filter(b => b.kind === 'sole' && b.person === p).map(b => b.seInput));
   const soleBizOf = p => biz.filter(b => b.kind === 'sole' && b.person === p);
-  const corpInUnit = corps.find(c => inUnit(c.person) && c.gross > 0) || null;
+  const corpInUnit = corps.find(c => inUnit(c.person) && c.comp > 0) || null;
   const solePerson = corpInUnit ? null : persons.find(p => soleByPerson(p) > 0) || null;
   const soleSized = solePerson ? soleBizOf(solePerson).find(b => b.seInput > 0) : null;
   const zeroCorp = corps.find(c => inUnit(c.person)) || null;
@@ -496,6 +496,8 @@ export function computeFigures(data, facts, ctx) {
   const zeroPlan = { deferral: 0, catchUp: 0, roth: 0, employer: 0, sep: 0 };
   const planSum = list => list.reduce((acc, b) => Object.fromEntries(Object.keys(zeroPlan).map(k => [k, cents(acc[k] + (b ? b[k] : 0))])), zeroPlan);
   const sizing = hasIncome && !blocked.length && !!seInfo && !retireBlocked;
+  // E5: an S corp plan sized from its W-2 says so.
+  const compCodes = corpInUnit && !corpInUnit.fromPnl ? ['w2_plan_compensation'] : [];
   if (sizing) {
     const soloPerson = corpInUnit ? corpInUnit.person : solePerson;
     if (soloPerson) {
@@ -508,14 +510,15 @@ export function computeFigures(data, facts, ctx) {
         const plan = corpInUnit ? planSum([c.byPlan[corpInUnit.entity.slug]]) : planSum(soleBizOf(soloPerson).map(b => c.byPlan[b.id]));
         // Self-employed compensation: net profit less the deductible half of SE tax, before plan
         // contributions (Pub 560 worksheet steps 1 to 3).
-        const compensation = corpInUnit ? corpInUnit.gross
+        const compensation = corpInUnit ? corpInUnit.comp
           : Math.max(0, cents(sum(soleBizOf(soloPerson).map(b => b.seInput - (seInfo.dhByBiz[b.id] || 0)))));
         soloRoomFigures(out, {
-          data, owner, person: soloPerson, corp: corpInUnit, compensation, age: ageOf(soloPerson), contrib: c, plan, conf,
+          data, owner, person: soloPerson, corp: corpInUnit, compensation, age: ageOf(soloPerson), contrib: c, plan, conf, compCodes,
         });
       }
     }
     if (!retireMissing.length) {
+      // SE inputs take Medicare wages (E5).
       const wagesOf = p => sum(w2.filter(w => w.person === p).map(w => w.gross));
       // C1b, K1: SEP room shares the employer limit with every plan of the same businesses, so it
       // takes their whole aggregate: deferrals, catch-ups and employer contributions.
@@ -526,13 +529,13 @@ export function computeFigures(data, facts, ctx) {
       if (!seps.length && corpInUnit) {
         const c = contrib[corpInUnit.person];
         const env = out.safe('sepRoom', () => sepRoom({
-          kind: 'w2', compensation: corpInUnit.gross, ...planInputs(c, c.byPlan[corpInUnit.entity.slug]), ...conf,
+          kind: 'w2', compensation: corpInUnit.comp, ...planInputs(c, c.byPlan[corpInUnit.entity.slug]), ...conf,
         }));
-        if (env) seps.push(env);
+        if (env) seps.push({ ...env, w2Comp: true });
       }
       if (seps.length) {
         out.put('room.sep', sum(seps.map(e => e.value)), 'm', 'SEP IRA room left this year', 'calc:retirement',
-          { calc: 'sepRoom', inputs: seps.map(e => e.inputs), steps: seps.flatMap(e => e.steps), assumptions: [PLAN_TERMS] });
+          { calc: 'sepRoom', inputs: seps.map(e => e.inputs), steps: seps.flatMap(e => e.steps), assumptions: [PLAN_TERMS, ...(seps.some(e => e.w2Comp) ? compCodes : [])] });
       }
     } else {
       out.confirm('retirement', ...retireMissing);
@@ -572,7 +575,7 @@ export function computeFigures(data, facts, ctx) {
 // 414(v)(7)(A): an S corp owner whose prior-year Social Security wages (W-2 box 3, T.D. 10033) from
 // the plan sponsor exceeded the threshold may make catch-ups only as Roth, and none at all without a
 // Roth feature (Treas. Reg. 1.414(v)-2(b)(2)); a sole proprietor has no wages from the sponsor.
-function soloRoomFigures(out, { data, owner, person, corp, compensation, age, contrib, plan, conf }) {
+function soloRoomFigures(out, { data, owner, person, corp, compensation, age, contrib, plan, conf, compCodes = [] }) {
   const R = TAX_2026.retirement;
   const kind = corp ? 'w2' : 'self-employed';
   const priorWages = corp ? priorFicaWages(data, owner, person, corp.entity.name) : 0;
@@ -596,7 +599,7 @@ function soloRoomFigures(out, { data, owner, person, corp, compensation, age, co
   const steps = [...env.steps];
   if (kind === 'self-employed') steps.push({ label: 'No wages from the plan sponsor; the Roth catch-up rule does not apply', formula: 'self-employed participant', value: 0 });
   else if (priorWages != null) steps.push({ label: "Last year's Social Security wages from the plan sponsor", formula: 'prior-year W-2 Social Security wages, or your stated amount', value: priorWages });
-  const loc = extra => ({ calc: 'solo401kRoom', inputs: env.inputs, steps, assumptions: [PLAN_TERMS, ...extra] });
+  const loc = extra => ({ calc: 'solo401kRoom', inputs: env.inputs, steps, assumptions: [PLAN_TERMS, ...compCodes, ...extra] });
   if (mode === 'unknown') {
     // C5: until last year's sponsor wages are known the catch-up may be pre-tax, Roth or (affected,
     // with no Roth feature) not allowed at all, and a disallowed catch-up frees compensation for the
