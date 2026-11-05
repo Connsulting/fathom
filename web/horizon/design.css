@@ -714,6 +714,7 @@ a.h-dec-t:hover { color: var(--ac2); }
 }
 
 /* ---------- responsive ---------- */
+.d-horizon .h-tabs, .d-horizon .h-more-phone { display: none; }
 @media (max-width: 1100px) {
   .d-horizon .h-cols, .d-horizon .h-cols.rec { grid-template-columns: minmax(0, 1fr); gap: 0; }
   .d-horizon .h-wg-split { grid-template-columns: minmax(0, 1fr); }
@@ -728,13 +729,23 @@ a.h-dec-t:hover { color: var(--ac2); }
 }
 @media (max-width: 720px) {
   .d-horizon { font-size: 14px; }
+  .d-horizon .h-top { padding-top: env(safe-area-inset-top); }
+  .d-horizon .h-nav, .d-horizon .h-nav-sep { display: none; }
+  .d-horizon .h-navbar { justify-content: flex-end; flex: 1 1 auto; }
+  .d-horizon .h-more-btn, .d-horizon .h-search-btn { min-height: 44px; min-width: 44px; justify-content: center; }
+  .d-horizon .h-more-p { position: fixed; top: calc(52px + env(safe-area-inset-top)); right: 16px; max-height: calc(100vh - 140px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); overflow-y: auto; }
+  .d-horizon .h-more-p a { padding: 12px 10px; }
+  .d-horizon .h-more-phone { display: block; }
+  .d-horizon .h-tabs { display: flex; position: fixed; z-index: 40; left: 0; right: 0; bottom: 0; margin: 0; padding: 0 4px env(safe-area-inset-bottom); background: var(--bg); border-top: 1px solid var(--line); }
+  .d-horizon .h-tabs a { position: relative; flex: 1 1 0; min-width: 0; min-height: 56px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; color: var(--mu); font-size: 11.5px; letter-spacing: 0.01em; text-decoration: none; -webkit-tap-highlight-color: transparent; }
+  .d-horizon .h-tabs a .h-i { width: 22px; height: 22px; }
+  .d-horizon .h-tabs a.on { color: var(--ac); }
+  .d-horizon .h-tabs a:focus-visible { outline: 2px solid var(--ac); outline-offset: -4px; border-radius: 8px; }
+  .d-horizon .h-tabs a > span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .d-horizon .h-tabs .h-nav-n { position: absolute; top: 5px; left: calc(50% + 7px); margin: 0; }
   .d-horizon .h-top-in { padding: 0 16px; gap: 12px; height: 52px; }
-  .d-horizon .h-mark span { display: none; }
-  .d-horizon .h-nav a { padding: 6px 7px; font-size: 13px; }
-  .d-horizon .h-nav-sep { margin: 0 3px; }
-  .d-horizon .h-more-btn { padding: 6px 4px 6px 7px; font-size: 13px; }
-  .d-horizon .h-navbar { justify-content: space-between; }
-  .d-horizon .h-main { padding: 28px 16px 72px; }
+  .d-horizon .h-more-btn { padding: 6px 8px; font-size: 14px; }
+  .d-horizon .h-main { padding: 28px 16px calc(72px + 64px + env(safe-area-inset-bottom)); }
   .d-horizon .h-engine-off { padding: 10px 16px; }
   .d-horizon .h-verdict { font-size: 28px; gap: 12px; }
   .d-horizon .h-ok { width: 34px; height: 34px; }

@@ -120,7 +120,7 @@ test.describe('routes', { tag: '@smoke' }, () => {
     await expect(more).toHaveAttribute('aria-expanded', 'true');
     const panel = page.locator('#h-more-p');
     await expect(panel).toBeVisible();
-    const groups = panel.locator('.h-more-g');
+    const groups = panel.locator('.h-more-g:not(.h-more-phone)');
     await expect(groups).toHaveCount(2);
     await expect(groups.nth(0).locator('.h-more-h')).toHaveText('Household');
     await expect(groups.nth(0).getByRole('link')).toHaveText(['Goals', 'Accounts', 'Advisor', 'Year end']);

@@ -32,3 +32,107 @@ test.describe('mobile', TAGS, () => {
     await expectH1(page, 'Everything on the calendar');
   });
 });
+
+// Phone tab bar, overflow menu, tap popovers and the home screen manifest.
+const TABS = [['brief', 'Year'], ['confirm', 'Confirm'], ['plan', 'Plan'], ['wargame', 'Decide'], ['ask', 'Ask']];
+const OVERFLOW = ['packs', 'goals', 'accounts', 'advisor', 'yearend', 'connect', 'engine', 'email'];
+
+test.describe('phone shell', TAGS, () => {
+  test.beforeEach(async ({ request, page }) => {
+    expect(page.viewportSize()?.width).toBe(390);
+    await resetDemo(request);
+  });
+
+  test('the tab bar lists the main screens and the top nav is folded', async ({ page }) => {
+    await gotoRoute(page, 'brief');
+    const tabs = page.locator('nav.h-tabs a');
+    await expect(tabs).toHaveCount(TABS.length);
+    for (const [i, [k, l]] of TABS.entries()) {
+      await expect(tabs.nth(i)).toHaveAttribute('data-go', k);
+      await expect(tabs.nth(i).locator('> span')).toContainText(l);
+    }
+    await expect(page.locator('.h-nav')).toBeHidden();
+    await expect(page.locator('.h-search-btn')).toBeVisible();
+    await expect(page.locator('.h-more-btn')).toBeVisible();
+    const bar = await page.locator('nav.h-tabs').boundingBox();
+    expect(Math.round(bar.y + bar.height)).toBe(844);
+    for (const box of await tabs.evaluateAll((els) => els.map((e) => e.getBoundingClientRect().toJSON()))) {
+      expect(box.height).toBeGreaterThanOrEqual(44);
+      expect(box.width).toBeGreaterThanOrEqual(44);
+    }
+  });
+
+  for (const [route, label] of TABS) {
+    test(`the ${label} tab navigates and nothing hides under the bar`, async ({ page }) => {
+      await gotoRoute(page, route === 'brief' ? 'plan' : 'brief');
+      await page.locator(`nav.h-tabs a[data-go="${route}"]`).click();
+      await expect(page).toHaveURL(new RegExp(`#/${route}$`));
+      const tab = page.locator(`nav.h-tabs a[data-go="${route}"]`);
+      await expect(tab).toHaveAttribute('aria-current', 'page');
+      await expect(page.locator('main h1')).toBeVisible();
+      await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+      const gap = await page.evaluate(() => {
+        // The lowest rendered box in the page content, whatever element draws it.
+        let lastBottom = 0;
+        for (const el of document.querySelectorAll('main.h-main *')) {
+          if (!el.checkVisibility()) continue;
+          const r = el.getBoundingClientRect();
+          if (r.width > 0 && r.height > 0) lastBottom = Math.max(lastBottom, r.bottom);
+        }
+        return document.querySelector('nav.h-tabs').getBoundingClientRect().top - lastBottom;
+      });
+      expect(gap, `last element of #/${route} clears the tab bar`).toBeGreaterThanOrEqual(0);
+    });
+  }
+
+  test('the Confirm tab carries the same pending badge as the top nav', async ({ page }) => {
+    await gotoRoute(page, 'brief');
+    const top = await page.locator('.h-nav a[data-go="confirm"] .h-nav-n').textContent();
+    await expect(page.locator('nav.h-tabs a[data-go="confirm"] .h-nav-n')).toHaveText(top);
+  });
+
+  test('the overflow menu reaches the other screens', async ({ page }) => {
+    for (const k of OVERFLOW) {
+      await gotoRoute(page, 'brief');
+      await page.locator('.h-more-btn').click();
+      const link = page.locator(`#h-more-p a[data-go="${k}"]`);
+      await expect(link).toBeVisible();
+      await link.click();
+      await expect(page).toHaveURL(new RegExp(`#/${k}$`));
+      await expect(page.locator('#h-more-p')).toBeHidden();
+      await expect(page.locator('.h-more-btn')).toHaveClass(/\bon\b/);
+    }
+  });
+
+  test('a tap opens a figure popover, a tap outside and Escape close it', async ({ page }) => {
+    await gotoRoute(page, 'ask');
+    await page.locator('button.h-chip[data-ask]').first().tap();
+    const fig = page.locator('.h-thread .fx-fig').first();
+    await expect(fig).toBeVisible();
+    await fig.tap();
+    await expect(page.locator('.fx-pop')).toBeVisible();
+    await page.locator('main h1').tap();
+    await expect(page.locator('.fx-pop')).toHaveCount(0);
+    await fig.tap();
+    await expect(page.locator('.fx-pop')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.fx-pop')).toHaveCount(0);
+  });
+
+  test('the home screen manifest and icons are served', async ({ page, request }) => {
+    await gotoRoute(page, 'brief');
+    const href = await page.locator('link[rel="manifest"]').getAttribute('href');
+    const res = await request.get(href);
+    expect(res.status()).toBe(200);
+    expect(res.headers()['content-type']).toBe('application/manifest+json');
+    const m = await res.json();
+    expect(m).toMatchObject({ name: 'Fathom', short_name: 'Fathom', display: 'standalone', start_url: '/' });
+    expect(m.theme_color).toMatch(/^#[0-9a-f]{6}$/i);
+    const apple = await page.locator('link[rel="apple-touch-icon"]').getAttribute('href');
+    for (const src of [apple, ...m.icons.map((i) => i.src)]) {
+      const r = await request.get(src);
+      expect(r.status(), src).toBe(200);
+      expect(r.headers()['content-type']).toBe('image/png');
+    }
+  });
+});
