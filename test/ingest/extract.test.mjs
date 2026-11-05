@@ -843,7 +843,7 @@ describe('PDF text layer (D6)', () => {
 
   // G6: a short statement (fewer than 200 letters) still goes as redacted text, never as a PDF.
   test('a short text-layer statement with an account number and an SSN-like pattern goes as redacted text', () => withStore(async (s) => {
-    const SHORT = ['Statement', 'Acct 000123456789', 'SSN 123-45-6789', 'Balance $1500.25'];
+    const SHORT = ['Statement', 'Acct 000123456789', 'SSN 123-45-6789', 'Balance $15000.25'];
     assert.ok((SHORT.join(' ').match(/\p{L}/gu) ?? []).length < 200);
     const engine = await recordingEngine([classify, [{ ...STATEMENT, endingBalance: '#A1#', holdings: [] }]]);
     const r = await P.ingestFile(s.db, { name: 'statement-short-2032-03.pdf', bytes: textPdf(SHORT), mime: 'application/pdf' }, s.opts(engine));
@@ -852,9 +852,9 @@ describe('PDF text layer (D6)', () => {
     assert.equal(engine.extracts.length, 2);
     assert.ok(engine.extracts.every((x) => x.document.type === 'text' && !('data' in x.document)), 'never a PDF block');
     const sent = engine.sent();
-    for (const raw of ['000123456789', '123-45-6789', '1500.25']) assert.ok(!sent.includes(raw), `${raw} never sent`);
+    for (const raw of ['000123456789', '123-45-6789', '15000.25']) assert.ok(!sent.includes(raw), `${raw} never sent`);
     assert.doesNotMatch(sent, /\d{5,}/);
-    assert.deepEqual(all(s.db, 'SELECT amount FROM balances').map((b) => b.amount), [1500.25]);
+    assert.deepEqual(all(s.db, 'SELECT amount FROM balances').map((b) => b.amount), [15000.25]);
   }));
 
   // G6 and G8: failed (malformed, partial-text error) and incomplete (over 50 pages, output cap)
