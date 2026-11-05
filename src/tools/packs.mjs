@@ -1,13 +1,18 @@
 // Knowledge pack tools: list_packs, get_pack_entry, search_pack_entries. All read scope.
 // Packs load from ctx.packDirs, else the repo packs/ plus `<ctx.dataDir>/packs/your-plans` when it
-// exists. Status comes from the stored facts, with a packs_state row whose `active` is set
-// overriding it (1 active, 0 available).
+// exists. Status is what the owner sees: a manifest pack linked to a packs_state row (by the row's
+// def.manifest, else the row id) reads packStatus(row base status, row active/exploring); a pack
+// with no row keeps the status derived from the stored facts.
 
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadPacks, activePacks } from '../packs/index.mjs';
 import { parseJson } from '../store/db.mjs';
+import { getFacts } from '../store/facts.mjs';
+import { packStatus } from '../shared/rules.mjs';
+import { resolveTokens } from '../shared/tokens.mjs';
+import { tokenScope } from '../scenario/build.mjs';
 import { ToolError } from './errors.mjs';
 
 export const REPO_PACKS_DIR = fileURLToPath(new URL('../../packs/', import.meta.url)).replace(/[\\/]$/, '');
@@ -27,15 +32,38 @@ export function packDirsFor(dataDir) {
 
 const compare = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 
-// [{ pack, status, why }] sorted by pack id.
+// packs_state rows by the manifest id they stand for: def.manifest when it is a string, else the
+// row's own id. The first row in display order wins.
+function rowsByManifest(db) {
+  const rows = new Map();
+  for (const r of db.prepare('SELECT id, def, active, exploring FROM packs_state ORDER BY sort, id').all()) {
+    const parsed = parseJson(r.def, null);
+    const def = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    const key = typeof def.manifest === 'string' && def.manifest ? def.manifest : r.id;
+    if (!rows.has(key)) rows.set(key, { def, active: r.active, exploring: r.exploring });
+  }
+  return rows;
+}
+
+// [{ pack, status, why }] sorted by pack id. A manifest pack with a linked packs_state row takes
+// the row's live state (packStatus over the row's base status, active and exploring); one without
+// keeps the status derived from the facts.
 function loadPackView(ctx) {
+  const { db } = ctx;
   const packs = loadPacks(ctx.packDirs ?? packDirsFor(ctx.dataDir));
-  const facts = Object.fromEntries(ctx.db.prepare('SELECT key, value FROM facts').all().map(f => [f.key, parseJson(f.value, f.value)]));
-  const overrides = new Map(ctx.db.prepare('SELECT id, active FROM packs_state WHERE active IS NOT NULL').all().map(r => [r.id, r.active]));
-  return activePacks(packs, facts).map(view => {
-    if (!overrides.has(view.pack.id)) return view;
-    const on = Boolean(overrides.get(view.pack.id));
-    return { pack: view.pack, status: on ? 'active' : 'available', why: on ? 'Turned on by the owner.' : 'Turned off by the owner.' };
+  const rows = rowsByManifest(db);
+  const views = activePacks(packs, getFacts(db));
+  if (!rows.size) return views;
+  const scope = tokenScope(db);
+  return views.map(view => {
+    const row = rows.get(view.pack.id);
+    if (!row) return view;
+    const live = { active: row.active == null ? null : Boolean(row.active), exploring: Boolean(row.exploring) };
+    const base = typeof row.def.status === 'string' ? row.def.status : view.status;
+    let why = view.why;
+    if (live.active !== null) why = live.active ? 'Turned on by the owner.' : 'Turned off by the owner.';
+    else if (typeof row.def.why === 'string' && row.def.why) why = resolveTokens(scope, row.def.why, false);
+    return { pack: view.pack, status: packStatus(base, live), why };
   });
 }
 

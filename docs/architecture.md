@@ -160,9 +160,16 @@ recommendation status.
 | `search_pack_entries` | read | `query (2..200 chars), packId?, limit? (1..20, default 10)` | `{query, results: [{packId, file, id, title, score, snippet}], total, truncated}` over active packs only |
 
 The pack tools (`src/tools/packs.mjs`) load packs from `ctx.packDirs`, else the repo `packs/` plus
-`<ctx.dataDir>/packs/your-plans` when it exists. Status comes from `activePacks(packs, facts)` over
-the `facts` table; a `packs_state` row with a non-null `active` overrides it (1 active, 0
-available). Search terms are the lowercase alphanumeric runs of two or more characters in the
+`<ctx.dataDir>/packs/your-plans` when it exists. Status is what the owner sees in the UI, not the
+facts alone. A manifest pack links to a `packs_state` row by the row's `def.manifest` (a manifest
+id), else by the row id. A linked pack reads `packStatus(base, {active, exploring})` from
+`src/shared/rules.mjs`, where `base` is the row's `def.status` when it is a string, else the status
+from `activePacks(packs, facts)`, and `active` and `exploring` are the row's columns (a non-null
+`active` wins; `exploring` shows when the pack is not active). `why` is `Turned on by the owner.` or
+`Turned off by the owner.` when `active` is set, else the row's `def.why` with scenario tokens
+resolved to plain text, else the activation reason. A pack with no linked row keeps the
+facts-derived status and reason. Name, version, tax year, review date and entries always come from
+the manifest files. `search_pack_entries` reads only packs whose status is `active`. Search terms are the lowercase alphanumeric runs of two or more characters in the
 query; an entry matches when every term appears in its title or body; score is 5 per title
 occurrence plus 1 per body occurrence; order is score descending, then pack id, then entry id.
 
@@ -256,7 +263,7 @@ Money columns are dollars rounded to cents; JSON columns hold JSON text. The pro
 | `goals` | `id` PK, `def` JSON, `sort` |
 | `deadlines` | `id` PK, `date`, `label`, `title`, `rec_id`, `hard` |
 | `events` | `id` PK, `date` (label as in the scenario), `kind`, `title`, `body`, `sort` |
-| `packs_state` | `id` PK, `def` JSON (the pack with its base status), `active` (NULL means no override), `exploring`, `what_if_asked`, `what_if_done`, `unhid` JSON, `sort`, `updated_at` |
+| `packs_state` | `id` PK, `def` JSON (the pack with its base status, plus an optional `manifest` tag naming the repo pack manifest the row stands for; migration 005 tags the demo rows, real rows link by their own id), `active` (NULL means no override), `exploring`, `what_if_asked`, `what_if_done`, `unhid` JSON, `sort`, `updated_at` |
 | `decisions` | `id` PK, `title`, `status` in open, decided, upcoming, `wargame`, `rec_id`, `opens_on`, `when_label`, `note`, `decided_line`, `sort` |
 | `jobs` | `id` PK, `name`, `cadence`, `does`, `cost`, `next_label`, `last_label`, `enabled`, `sort` |
 | `job_runs` | `id` PK, `job_id`, `started_at`, `finished_at`, `status`, `cost_usd`, `note` |
@@ -442,7 +449,7 @@ and JSON responses, closed when the response closes. Checks run in this order:
 4. Method: `GET` and `DELETE` are 405 with `Allow: POST`. Bodies are capped at 1 MiB (413);
    malformed JSON is 400.
 5. The key's `last_used_at` is stamped, then the request runs with
-   `ctx = {db, now, packDirs, clock}`.
+   `ctx = {db, now, dataDir, clock}`.
 
 Scopes: `read` (every read tool) and `write:recs` (adds `set_recommendation_status`); every key
 has `read`. `tools/list` returns only the key's tools, annotated `readOnlyHint` for read tools and
