@@ -314,6 +314,14 @@ describe('guessPending', () => {
         'Payments doubled to twice the usual.',
         'It is the percentage the file shows.',
         'Two thirds of rows match.',
+        'About ½ of it.',
+        'Roughly １００ dollars.',
+        'Thousands of dollars came in.',
+        'Hundreds of rows.',
+        'Millions in the account.',
+        'Tens of thousands.',
+        'Doubles the value.',
+        'Tripling the total.',
       ]) assert.equal(verdict(batch, plain, reason), false, `rejected: ${reason}`);
       for (const reason of [
         'The import lists 100 for this account.',
