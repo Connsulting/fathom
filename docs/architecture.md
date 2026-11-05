@@ -744,19 +744,22 @@ included.
    both before any model call. Anything else warns. Warnings never carry document text.
 3. Each source goes through `engine.extract` with rows `{title, body, excerpt, page, taxYear?}`,
    `excerpt` the verbatim source text the row is drawn from. Extracted entries must match the
-   document. For a text source a row is kept only when (a) its excerpt, whitespace-normalized
-   (runs collapsed to one space, trimmed), is a nonempty substring of the normalized source text;
+   document. Each source is checked as a list of page texts with no page markers in them: a text
+   source split on its own `Page N` marker lines with the marker lines removed (text before the
+   first marker is page 1), a PDF split at its text layer's page boundaries without the generated
+   `Page N` labels the engine sees. A row is kept only when (a) its excerpt, whitespace-normalized
+   (runs collapsed to one space, trimmed), is a nonempty substring of a single page's normalized
+   text;
    (b) every number in its neutralized title and body is in the excerpt, without the prose
    exemptions of `checkGrounding` (bare years, dates): every digit run of the title and body must
    be a digit run of the excerpt, with thousands separators removed on both sides (1,500 and 1500
    are the same run) and a date or year taken as its digit runs (2026-12-15 is 2026, 12 and 15);
    `checkGrounding` with the excerpt as the only data must also pass, where a number word counts
    when the excerpt has the same words with the same unit kind (percent-marked or not). So "The benefit is 2099 dollars" from a numberless source
-   is dropped; and (c) an
-   occurrence of the excerpt is on `row.page`, counting `Page N` marker lines before it (1 when there
-   are none). A PDF's rows get the same three checks against its text layer, and its page check
-   uses the PDF's own page boundaries: only the `Page N` lines the builder inserts at each page
-   start count, so a `Page N` line printed inside a page never moves it. Every dropped row is counted in `dropped`, a warning per source says
+   is dropped; and (c) that page's number is `row.page`. A marker line or generated label is
+   therefore never an excerpt or numeric evidence, an excerpt spanning a page boundary is dropped,
+   and a `Page N` line printed inside a PDF page is ordinary page text that never moves the page
+   check. Every dropped row is counted in `dropped`, a warning per source says
    how many sections did not match the document (no document text), `settings.yourPlans` records
    `dropped`, and the Packs Your plans result line shows "N sections were dropped because they did
    not match the document." when N > 0. Each kept row becomes `NN-<slug>.md` holding `# <title>`, the body, `Source: <file name>, page <n>`, `Tax year`

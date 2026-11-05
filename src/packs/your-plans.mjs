@@ -14,10 +14,11 @@
 // one warning before any model call. Each source goes through engine.extract; each row becomes one
 // entry citing `<file name>, page <n>` at https://your-plans.invalid/<fileId>?page=<n> (a reserved
 // host that never resolves; the UI shows it as plain text). A row is kept only when its verbatim
-// excerpt is in the source text (whitespace-normalized), every number in its title and body is in
-// the excerpt (every digit run, years and dates included, with no prose exemptions), and the
-// excerpt sits on the row's page (Page N markers before it in a text file, the page boundaries in
-// a PDF); every other row is dropped and counted. The pack is written to a temporary sibling,
+// excerpt (whitespace-normalized) is within the text of a single page numbered as the row's page
+// (a text file split on its Page N marker lines, a PDF at its text layer's page boundaries, page
+// markers and generated labels removed), and every number in its title and body is in the excerpt
+// (every digit run, years and dates included, with no prose exemptions); every other row is
+// dropped and counted. The pack is written to a temporary sibling,
 // validated with loadPacks, then swapped in, and settings['packs.generation'] is bumped so every
 // running server refreshes. The target must resolve outside the repository entirely. Warnings
 // never carry document text.
@@ -85,51 +86,35 @@ export function fakeExtractRows(text) {
 
 // ---------------------------------------------------------------- the excerpt check
 
-// The source lines whitespace-normalized (runs collapsed to one space, trimmed) into one string,
-// with the page each stretch is on: breaks[i] = [normalized index where page starts, page].
-// pageOf(line, index) is the page a line opens, or null.
-function normalizedSource(lines, pageOf) {
-  let norm = '';
-  const breaks = [[0, 1]];
-  lines.forEach((line, index) => {
-    const words = line.trim().split(/\s+/).filter(Boolean);
-    if (!words.length) return;
-    if (norm) norm += ' ';
-    const page = pageOf(line, index);
-    if (page) breaks.push([norm.length, page]);
-    norm += words.join(' ');
-  });
-  return { norm, breaks };
-}
-
 const lines = text => String(text ?? '').split(/\r?\n/);
-
-// A text file's pages: `Page N` marker lines.
-function textSource(text) {
-  const markOf = line => { const mark = PAGE_MARK.exec(line); return mark ? Math.max(1, Number(mark[1])) : null; };
-  return { document: { type: 'text', text }, checked: normalizedSource(lines(text), markOf) };
-}
-
-// A PDF text layer's pages (pdfText separates them with a form feed): the engine sees each page
-// opened by a `Page N` line, and only those lines are page breaks, so a `Page 3` line printed
-// inside a page never moves the page check.
-function pdfSource(layerText) {
-  const all = [];
-  const opens = new Map();
-  layerText.split('\f').forEach((page, i) => {
-    if (all.length) all.push('');
-    opens.set(all.length, i + 1);
-    all.push(`Page ${i + 1}`, '', ...lines(page.trim()));
-  });
-  return { document: { type: 'text', text: all.join('\n') }, checked: normalizedSource(all, (_, index) => opens.get(index) ?? null) };
-}
-
 const normalize = s => String(s ?? '').replace(/\s+/g, ' ').trim();
 
-function pageAt(breaks, index) {
-  let page = 1;
-  for (const [at, p] of breaks) if (at <= index) page = p;
-  return page;
+// The checked side of a source is its pages: [{ page, text }] with each text whitespace-normalized
+// (runs collapsed to one space, trimmed) and holding no page markers, so a marker can never be an
+// excerpt or numeric evidence and an excerpt spanning a page boundary matches no page.
+
+// A text file's pages: the text split on its own `Page N` marker lines, the marker lines removed.
+// Text before the first marker is page 1.
+function textSource(text) {
+  const pages = [];
+  let current = { page: 1, lines: [] };
+  for (const line of lines(text)) {
+    const mark = PAGE_MARK.exec(line);
+    if (!mark) { current.lines.push(line); continue; }
+    pages.push(current);
+    current = { page: Math.max(1, Number(mark[1])), lines: [] };
+  }
+  pages.push(current);
+  return { document: { type: 'text', text }, pages: pages.map(p => ({ page: p.page, text: normalize(p.lines.join('\n')) })) };
+}
+
+// A PDF text layer's pages (pdfText separates them with a form feed). The engine sees each page
+// opened by a generated `Page N` line so it can cite pages; the check uses the text layer's own
+// pages, without those labels, so a `Page 3` line printed inside a page never moves the page check.
+function pdfSource(layerText) {
+  const layer = layerText.split('\f').map(page => page.trim());
+  const text = layer.map((page, i) => [`Page ${i + 1}`, '', ...lines(page)].join('\n')).join('\n\n');
+  return { document: { type: 'text', text }, pages: layer.map((page, i) => ({ page: i + 1, text: normalize(page) })) };
 }
 
 // The digit runs of a text, thousands separators removed (1,500 and 1500 are the same run) and
@@ -137,15 +122,15 @@ function pageAt(breaks, index) {
 const digitRuns = text => new Set([...String(text ?? '').replace(/(\d),(?=\d{3}(?!\d))/g, '$1').matchAll(/\d+/g)]
   .map(m => m[0].replace(/^0+(?=\d)/, '')));
 
-// A cleaned row matches its source when its excerpt is in the source text, every number in its
-// title and body is in the excerpt, and some occurrence of the excerpt is on the row's page.
+// A cleaned row matches its source when its excerpt is within the text of one of the source's
+// pages numbered as the row's page, and every number in its title and body is in the excerpt.
 // The number check has no prose exemptions: every digit run of the title and body, years and
 // dates included, must be a digit run of the excerpt. On top of that checkGrounding (with the
 // excerpt as the only data) must find nothing but non-percent number words, and such a word counts
 // as in the excerpt only when the excerpt has the same words not followed by a percent marker.
 // Percent-marked word phrases are grounded by checkGrounding itself, so a percent violation is a
 // real mismatch.
-function matchesSource(row, source) {
+function matchesSource(row, pages) {
   const excerpt = normalize(row.excerpt);
   if (!excerpt) return false;
   const lower = excerpt.toLowerCase();
@@ -157,10 +142,7 @@ function matchesSource(row, source) {
     && !/^\s*(?:percent\b|%)/i.test(stated.slice(v.index + v.text.length))
     && new RegExp(`\\b${v.text.toLowerCase()}\\b(?!\\s*(?:percent\\b|%))`).test(lower);
   if (!violations.every(plain)) return false;
-  for (let at = source.norm.indexOf(excerpt); at >= 0; at = source.norm.indexOf(excerpt, at + 1)) {
-    if (pageAt(source.breaks, at) === row.page) return true;
-  }
-  return false;
+  return pages.some(p => p.page === row.page && p.text.includes(excerpt));
 }
 
 // ---------------------------------------------------------------- guards
@@ -327,7 +309,7 @@ export async function buildYourPlans({ db, engine, dataDir, key, fileIds = [], c
     for (const row of rows) {
       const clean = cleanRow(row, warnings, source.name);
       if (!clean) continue;
-      if (!matchesSource(clean, source.checked)) { mismatched++; continue; }
+      if (!matchesSource(clean, source.pages)) { mismatched++; continue; }
       entries.push({ title: clean.title, body: clean.body, page: clean.page, taxYear: clean.taxYear, fileId: source.fileId, name: source.name });
     }
     if (mismatched) {
