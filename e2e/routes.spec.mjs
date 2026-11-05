@@ -7,7 +7,7 @@
 // provenance markup on figures that render. Real mode also aborts any non-GET/HEAD request to
 // the app origin.
 
-import { test, expect, S, REMOTE, SMOKE_REAL, resetDemo, mainRoutes, needsYouIds, rec, plain, gotoRoute, expectH1, mainNav, recDialog, installWriteGuard } from './helpers.mjs';
+import { test, expect, S, REMOTE, SMOKE_REAL, resetDemo, mainRoutes, needsYouIds, rec, plain, gotoRoute, expectH1, mainNav, recDialog } from './helpers.mjs';
 
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -17,42 +17,11 @@ const REAL_ROUTES = [
   'goals', 'accounts', 'advisor', 'yearend', 'connect', 'engine', 'email', 'packs'
 ];
 
-const writes = new WeakMap();
-
 test.describe('routes', { tag: '@smoke' }, () => {
-  test.beforeEach(async ({ page, request, context, baseURL }) => {
-    if (SMOKE_REAL) {
-      const blocked = [];
-      writes.set(page, blocked);
-      await installWriteGuard(context, baseURL, blocked);
-      await context.route(/^https:\/\/fonts\.(googleapis|gstatic)\.com\//, (route) => route.fulfill({
-        status: 200,
-        body: '',
-        headers: { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'content-type': 'text/css' }
-      }));
-      const origin = new URL(baseURL).origin;
-      const failed = [];
-      writes.set(context, failed);
-      page.on('response', (res) => {
-        let url;
-        try { url = new URL(res.url()); } catch { return; }
-        if (url.origin !== origin) return;
-        if (res.status() < 400) return;
-        if (url.pathname === '/healthz' || url.pathname.startsWith('/api/')) {
-          failed.push(`${res.status()} ${res.request().method()} ${url.pathname}`);
-        }
-      });
-      return;
-    }
+  test.beforeEach(async ({ request }) => {
     // Locally the other specs mutate the shared demo store, so start from the seed. A remote
-    // target is a fresh server and is never reset.
-    if (!REMOTE) await resetDemo(request);
-  });
-
-  test.afterEach(async ({ page, context }) => {
-    if (!SMOKE_REAL) return;
-    expect(writes.get(page) || [], 'real-mode smoke issued a write').toEqual([]);
-    expect(writes.get(context) || [], 'failed API request').toEqual([]);
+    // target is never reset. Real mode never reaches this reset: the shared fixture aborts writes.
+    if (!SMOKE_REAL && !REMOTE) await resetDemo(request);
   });
 
   test('healthz reports ok and the schema version', async ({ request }) => {
