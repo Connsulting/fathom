@@ -379,7 +379,8 @@ and JSON responses, closed when the response closes. Checks run in this order:
 
 1. Host: 403 `{error: 'forbidden host'}` unless the `Host` header is an IP literal, `localhost` or
    `*.localhost`, the host of `FATHOM_PUBLIC_URL`, or an entry of `FATHOM_ALLOWED_HOSTS`. This
-   blocks DNS rebinding; it runs before authentication.
+   blocks DNS rebinding; it runs before authentication. The same Host allowlist guards every
+   `/api/keys` route (list, create, revoke), since those hand out credentials.
 2. Origin: when present it must be `http` or `https` with the same host as `Host`, else 403
    `{error: 'forbidden origin'}`.
 3. Auth: `Authorization: Bearer <key>` (scheme case-insensitive, one token). Missing, malformed,

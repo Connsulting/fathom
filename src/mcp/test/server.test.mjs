@@ -257,3 +257,16 @@ describe('log hygiene', () => {
     }
   });
 });
+
+describe('FATHOM_CLOCK', () => {
+  test('tools report the configured clock, as the UI does', T, async () => {
+    const c = await spawnServer({ env: { FATHOM_ENGINE: 'fake', FATHOM_CLOCK: '2027-01-05' } });
+    try {
+      const k = await createKey(c.baseUrl, 'Clock agent');
+      const summary = JSON.parse(rpcResult(await callToolRpc(c.baseUrl, k.key, 'household_summary')).content[0].text);
+      assert.equal(summary.clock, '2027-01-05');
+    } finally {
+      await c.stop();
+    }
+  });
+});

@@ -165,6 +165,29 @@ describe('key routes', () => {
   });
 });
 
+describe('key routes: Host allowlist (DNS rebinding)', () => {
+  let s;
+  before(async () => { s = await spawnServer({ env: { FATHOM_ENGINE: 'fake', FATHOM_ALLOWED_HOSTS: 'agent.example.test' } }); }, T);
+  after(async () => { if (s) await s.stop(); });
+
+  test('a foreign Host is 403 on list, create and revoke, even with a matching Origin', async () => {
+    const evil = `rebind.example:${s.port}`;
+    const same = { host: evil, origin: `http://${evil}` };
+    await fails(request(s.baseUrl, { path: '/api/keys', headers: { host: evil } }), 403);
+    await fails(create(s, { name: 'Rebound' }, same), 403);
+    await fails(revoke(s, 'key_000000000000', same), 403);
+    assert.deepEqual((await ok(request(s.baseUrl, { path: '/api/keys' }))).json.keys, []);
+  });
+
+  test('liveness: IP literal, localhost and a configured host are served', async () => {
+    for (const host of [`127.0.0.1:${s.port}`, `localhost:${s.port}`, 'agent.example.test']) {
+      await ok(request(s.baseUrl, { path: '/api/keys', headers: { host } }));
+    }
+    const { record } = (await ok(create(s, { name: 'Via configured host' }, { host: 'agent.example.test', origin: 'http://agent.example.test' }))).json;
+    await ok(revoke(s, record.id, { host: 'agent.example.test', origin: 'http://agent.example.test' }));
+  });
+});
+
 describe('GET /api/mcp', () => {
   let s;
   before(async () => { s = await spawnServer({ env: { FATHOM_ENGINE: 'fake' } }); }, T);

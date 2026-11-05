@@ -317,6 +317,14 @@ describe('set_recommendation_status', () => {
   });
 });
 
+describe('ctx.clock (FATHOM_CLOCK)', () => {
+  test('ctx.clock overrides the store clock; absent, the store clock still decides', async () => {
+    const stored = (await callTool('household_summary', {}, { db: t.db, now: new Date() })).clock;
+    assert.equal((await callTool('household_summary', {}, { db: t.db, now: new Date(), clock: '2027-01-05' })).clock, '2027-01-05');
+    assert.equal((await callTool('household_summary', {}, { db: t.db, now: new Date(), clock: null })).clock, stored);
+  });
+});
+
 describe('input schema strictness', () => {
   function walk(schema, path, problems) {
     if (schema === null || typeof schema !== 'object' || Array.isArray(schema)) {

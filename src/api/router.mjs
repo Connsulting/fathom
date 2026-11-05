@@ -9,6 +9,7 @@ import * as h from './handlers.mjs';
 import * as k from './keys.mjs';
 import { createKeyService, loadServerSecret } from '../mcp/keys.mjs';
 import { createMcpHandler } from '../mcp/index.mjs';
+import { isAllowedHost } from '../mcp/guard.mjs';
 
 const TABLE = [
   { method: 'GET', path: '/healthz', handler: h.healthz },
@@ -83,6 +84,10 @@ export function createHandler({ db, config, answerer, keys, mcp, webDir = WEB_DI
       }
       if (rawPath === '/healthz' || rawPath === '/api' || rawPath.startsWith('/api/')) {
         const { r, params } = findRoute(req.method, rawPath);
+        // Key management gets the same DNS-rebinding Host allowlist as /mcp.
+        if ((rawPath === '/api/keys' || rawPath.startsWith('/api/keys/')) && !isAllowedHost(req.headers.host, config)) {
+          throw new HttpError(403, 'forbidden host');
+        }
         let body = {};
         if (r.method === 'POST') {
           guardPost(req);

@@ -99,9 +99,9 @@ function nowOf(ctx) {
   return d && !Number.isNaN(d.getTime()) ? d : new Date();
 }
 
-// "Today": the store clock when set, else ctx.now's UTC date.
+// "Today": ctx.clock (FATHOM_CLOCK) when given, else the store clock when set, else ctx.now's UTC date.
 function clockOf(ctx) {
-  return resolveClock(ctx.db, getSetting(ctx.db, 'clock', null) || todayUtc(nowOf(ctx)));
+  return resolveClock(ctx.db, ctx.clock || getSetting(ctx.db, 'clock', null) || todayUtc(nowOf(ctx)));
 }
 
 // ' WHERE a AND b' and its params from [sql, value] pairs, skipping undefined values.

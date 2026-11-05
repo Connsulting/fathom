@@ -92,10 +92,16 @@ function fmtDate(iso, withTime) {
   return d.toLocaleString('en-US', opts);
 }
 
+// A shell argument: left bare when it only holds safe characters, else single-quoted so a
+// URL with metacharacters cannot break or inject into the pasted command.
+export function shellArg(s) {
+  return /^[A-Za-z0-9._~:/@%+=,-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
 function snippets(url) {
   const k = st.revealed ? st.revealed.key : PLACEHOLDER;
   const u = url || 'http://<fathom-host>/mcp';
-  const claude = `claude mcp add --transport http fathom ${u} --header "Authorization: Bearer ${k}"`;
+  const claude = `claude mcp add --transport http fathom ${shellArg(u)} --header "Authorization: Bearer ${k}"`;
   const json = JSON.stringify({ mcpServers: { fathom: { type: 'http', url: u, headers: { Authorization: `Bearer ${k}` } } } }, null, 2);
   return { claude, json };
 }
