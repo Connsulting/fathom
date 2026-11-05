@@ -19,7 +19,8 @@ import { buildYourPlans } from '../src/packs/your-plans.mjs';
 import { loadPacks } from '../src/packs/index.mjs';
 import { createRuntimeEngine } from '../src/engine/runtime.mjs';
 import { loadConfig } from '../src/config.mjs';
-import { checkGrounding } from '../src/engine/grounding.mjs';
+import { createLivePacks } from '../src/packs/live.mjs';
+import { createLiveAnswerer } from '../src/api/answerer.mjs';
 import { openDb, migrate, setSetting } from '../src/store/db.mjs';
 import { storeFile } from '../src/ingest/vault.mjs';
 import { ingestFiles } from '../src/ingest/pipeline.mjs';
@@ -248,7 +249,23 @@ test('AC14.4: an image-only PDF is skipped with the image-only warning before an
 // ---------------------------------------------------------------- 5. generated page markers are not evidence
 
 const PREMIUM_BODY = 'The premium is $1.';
-const ungrounded = (text, entries) => !checkGrounding(text, { data: entries.map(e => ({ title: e.title, body: e.body })) }).ok;
+// Asks the live answerer (the product's answer path, citation lines excluded from evidence) with
+// every chat call answered by `text`; returns the amounts it could not ground.
+async function unverifiedAfterBuild(db, dataDir, text) {
+  const packs = createLivePacks(db, { dataDir });
+  packs.refresh();
+  const runtime = engineFor(db, dataDir);
+  const engine = new Proxy(runtime, {
+    get(target, key) {
+      if (key === 'call') return async request => target.call({ ...request, fake: [{ text }] });
+      const value = Reflect.get(target, key, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+  const reply = await createLiveAnswerer({ engine, packs }).answer({ db, key: 'ask', text: 'What do our plan documents say' });
+  assert.ok(reply.provenance.packIds.includes('your-plans'));
+  return reply.provenance.grounding.unverified;
+}
 
 test('AC14.5: a generated Page N label never serves as a PDF excerpt or grounds a number', async t => {
   const NAME = 'synthetic-numberless-plan.pdf';
@@ -264,7 +281,7 @@ test('AC14.5: a generated Page N label never serves as a PDF excerpt or grounds 
   assert.equal(result.dropped, 1, 'the marker excerpt is dropped and counted');
   const [pack] = loadPacks([result.dir]);
   assert.deepEqual(pack.entries.map(e => e.title), ['Plan summary']);
-  assert.ok(ungrounded('The premium is $1.', pack.entries), 'the marker digit grounds no amount');
+  assert.ok((await unverifiedAfterBuild(db, dataDir, 'The premium is $1.')).includes('$1'), 'the marker digit grounds no amount');
 });
 
 test('AC14.5: a Page 2 marker excerpt, or one spanning a generated label, is dropped on a two-page PDF', async t => {
@@ -283,7 +300,7 @@ test('AC14.5: a Page 2 marker excerpt, or one spanning a generated label, is dro
   assert.equal(result.dropped, 2, 'the marker row and the label-spanning row are dropped and counted');
   const [pack] = loadPacks([result.dir]);
   assert.deepEqual(pack.entries.map(e => e.title).sort(), ['Dental plan', 'Vision plan']);
-  assert.ok(ungrounded('The premium is $2.', pack.entries));
+  assert.ok((await unverifiedAfterBuild(db, dataDir, 'The premium is $2.')).includes('$2'));
 });
 
 test('AC14.5: in a text upload a Page N marker line is not an excerpt or evidence, and real rows keep their page', async t => {
@@ -303,5 +320,5 @@ test('AC14.5: in a text upload a Page N marker line is not an excerpt or evidenc
   const [pack] = loadPacks([result.dir]);
   assert.deepEqual(pack.entries.map(e => e.title), ['Vision plan']);
   assert.equal(pack.entries[0].cites[0].label, `${NAME}, page 2`);
-  assert.ok(ungrounded('The premium is $2.', pack.entries));
+  assert.ok((await unverifiedAfterBuild(s.db, s.dataDir, 'The premium is $2.')).includes('$2'));
 });
