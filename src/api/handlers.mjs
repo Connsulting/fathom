@@ -22,7 +22,7 @@ import { buildYourPlans, YourPlansRefusal } from '../packs/your-plans.mjs';
 import { EngineOffError, BudgetExceededError } from '../engine/index.mjs';
 import { refreshLivePacks } from '../packs/live.mjs';
 import { messageOut } from '../scenario/build.mjs';
-import { isThreadKey, threadRow, getThread, newThreadKey, insertThread, listThreads, deleteThread, purgeTrash,
+import { isThreadKey, threadRow, getThread, newThreadKey, insertThread, listThreads, deleteThread,
   validateTitle, nameThread } from './threads.mjs';
 
 const MAX_TEXT = 4000;
@@ -103,7 +103,6 @@ export function getIdentity(ctx) {
 }
 
 export function getScenario(ctx) {
-  purgeTrash(ctx.db, stamp(ctx));
   return scenarioOf(ctx);
 }
 
@@ -372,13 +371,11 @@ const threadOrThrow = (db, id) => {
 };
 
 export function threadList(ctx) {
-  purgeTrash(ctx.db, stamp(ctx));
   return listThreads(ctx.db);
 }
 
 // GET /api/threads/:id: the thread and its messages (as in scenario.live.conversations).
 export function threadGet(ctx) {
-  purgeTrash(ctx.db, stamp(ctx));
   const thread = threadOrThrow(ctx.db, ctx.params.id);
   const messages = ctx.db.prepare('SELECT * FROM messages WHERE conversation_key = ? ORDER BY id').all(thread.key).map(messageOut);
   return { thread, messages };

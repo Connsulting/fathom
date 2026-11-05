@@ -2947,6 +2947,15 @@ export default {
         "next": "Mon, Nov 9",
         "does": "Count stale and waiting uploads.",
         "cost": 0.02
+      },
+      {
+        "id": "trash-purge",
+        "name": "Ask trash cleanup",
+        "cadence": "Daily, 3:00 AM",
+        "last": "Today 3:00 AM",
+        "next": "Tomorrow 3:00 AM",
+        "does": "Delete conversations that have been in Trash for 30 days.",
+        "cost": 0
       }
     ]
   },

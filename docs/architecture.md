@@ -427,8 +427,8 @@ stored title or null (the UI shows "New conversation"), `titleSource` null, `aut
 `turns` the count of owner messages. A thread is active, archived (`archivedAt`), or in Trash
 (`trashedAt`, which wins; trash keeps `archivedAt` so restore returns the thread where it was).
 Asking in an archived thread unarchives it; asking in a trashed one is 409. Threads trashed 30 or
-more days before the app clock are deleted with their messages (`purgeTrash`) at server start and
-when the thread list, a thread or the scenario is read. Migration 009 moves the old single `ask`
+more days before the app clock are deleted with their messages (`purgeTrash`) by the daily `trash-purge` job (03:00); reads and server
+starts purge nothing. Migration 009 moves the old single `ask`
 conversation, when it has messages, into one thread with the same messages.
 
 Naming (`src/api/threads.mjs`): after a reply is stored, a thread with no title source and at least
@@ -644,7 +644,7 @@ serves) and stops it before closing the store.
 1. Periods are computed in the owner's zone (`settings.timezone`, default `America/New_York`; an
    invalid zone falls back to the default). `plan` daily at 02:00 (key `YYYY-MM-DD`),
    `brief-email` monthly on the 1st at 07:00 (`YYYY-MM`), `deadline-alerts` daily at 07:00
-   (`YYYY-MM-DD`), `freshness` weekly on Monday at 06:00 (that Monday's date). The due key is the
+   (`YYYY-MM-DD`), `trash-purge` daily at 03:00 (`YYYY-MM-DD`), `freshness` weekly on Monday at 06:00 (that Monday's date). The due key is the
    latest period whose start is at or before now. With `FATHOM_CLOCK` set, the clock date at 12:00
    is now, so every period of that day is due.
 2. Idempotence: one attempt per (`job_id`, `period_key`), enforced by the unique index. A failed

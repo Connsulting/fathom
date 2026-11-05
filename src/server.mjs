@@ -25,7 +25,6 @@ import { createMcpHandler } from './mcp/index.mjs';
 import { createRuntimeEngine } from './engine/runtime.mjs';
 import { createLivePacks } from './packs/live.mjs';
 import { clockNow } from './scenario/build.mjs';
-import { purgeTrash } from './api/threads.mjs';
 import { createTransport } from './email/transport.mjs';
 import { createScheduler, defaultHandlers } from './jobs/scheduler.mjs';
 import { seedDemo } from '../demo/seed.mjs';
@@ -68,12 +67,6 @@ function refreshPacks(packs) {
 
 export async function startServer(config = loadConfig()) {
   const db = openStore(config);
-  try {
-    purgeTrash(db, clockNow(db, config.clock));
-  } catch (e) {
-    db.close();
-    throw e;
-  }
   // One runtime engine per process, on the scenario clock so spend lands in the month the Engine
   // screen shows; packs load from the repository and the data volume.
   let engine;

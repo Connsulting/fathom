@@ -4,7 +4,7 @@
 //
 // createThread(db, now) -> thread JSON          getThread(db, id) -> thread JSON | null (bad ids too)
 // listThreads(db) -> { active, archived, trash } each newest lastAt first; trash wins over archived
-// purgeTrash(db, now) -> count of threads (and their messages) trashed 30 or more days before now
+// purgeTrash(db, now) -> count of threads (and their messages) trashed 30 or more days before now; run only by the daily trash-purge job
 // validateTitle(raw, { fromModel, ownerWords }) -> clean title | null
 // titleWords(text) -> normalized words (lowercase, plural and possessive folded) for the owner-words rule
 // fallbackTitle(scope, text) -> plain text of an owner message, markup characters blanked, cut to 48 characters | null
