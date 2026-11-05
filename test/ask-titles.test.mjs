@@ -66,6 +66,19 @@ test('AC3 validateTitle fromModel rejects digits except a standalone 19xx or 20x
   assert.equal(m('Q4 estimates'), null);
 });
 
+test('AC3 validateTitle fromModel rejects money and quantities in any form', () => {
+  const m = raw => validateTitle(raw, { fromModel: true });
+  for (const raw of ['Save $2026 on taxes', 'Spend 2026 dollars', 'Save ten thousand dollars', 'A five percent raise',
+    'Twenty percent withholding', 'Roughly 2k for the roof', 'Paying $ on the roof', 'Fifty grand bonus',
+    'A million reasons to save', 'Paying half a million', 'Saving €2026 abroad', 'Fees at 2026%']) {
+    assert.equal(m(raw), null, raw);
+  }
+  for (const ok of ['Planning the 2026 estimates', 'Quarterly estimate planning', 'Roth conversion before year end',
+    'S corp payroll timing']) {
+    assert.equal(m(ok), ok, ok);
+  }
+});
+
 // ---------------------------------------------------------------- fallbackTitle
 
 test('AC3 fallbackTitle decodes entities, strips tags and collapses whitespace', () => {
