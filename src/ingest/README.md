@@ -197,7 +197,7 @@ bytes; a concurrent upload of bytes being ingested is a `duplicate`.
    active row of the same form type from another file under another key asks it too, equal amounts or not (paystubs never
    do; `both` keeps both). An explicit zero federal withholding field is a row
    (a correction to zero meets this rule); an absent one is not. Answers are remembered by kind and subject
-   and apply at import.
+   and apply at import; a remembered `first` or `second` keeps the row whose dedupe key and amount it kept, not a position.
 7. `counts` is `{rows: {kind: n}, duplicates, crossFormat, revised, superseded,
    incomplete, warnings, warningCodes: {code: n}, queued}`, plus `extractPath`
    when extraction ran: `text`, `pdf_text_layer`, `pdf_document` or `pdf_withheld`.

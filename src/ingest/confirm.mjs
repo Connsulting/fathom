@@ -387,16 +387,24 @@ export function askSlotConflict(db, row, { now } = {}) {
 }
 
 // first or second: archive the other row (withholding_conflict); the survivor takes the identity
-// when the question names one (K1).
+// when the question names one (K1). N1: the answer records the survivor's identity (dedupe key and
+// cents) as context.kept, and a remembered answer keeps the row with that identity, never by position.
+const rowIdentity = (row) => `${row.dedupe_key}#${amountCents(row.amount)}`;
 function applyConflict(db, item, optionId, { now }) {
   if (optionId !== 'first' && optionId !== 'second') return;
-  const { key, payer, first, second } = item.context;
-  const keep = getPayment(db, (optionId === 'first' ? first : second)?.id);
-  const drop = getPayment(db, (optionId === 'first' ? second : first)?.id);
-  if (!keep || !drop) return;
+  const { key, payer, first, second, kept } = item.context;
+  const rows = [getPayment(db, first?.id), getPayment(db, second?.id)];
+  if (!rows[0] || !rows[1]) return;
+  const at = kept ? rows.findIndex((r) => rowIdentity(r) === kept) : Number(optionId === 'second');
+  if (at < 0) return;
+  const [keep, drop] = [rows[at], rows[1 - at]];
   archive(db, 'tax_payments', { ...drop }, { by: keep.file_id, reason: 'withholding_conflict', now });
   db.prepare('DELETE FROM tax_payments WHERE id = ?').run(drop.id);
   if (payer && key) db.prepare('UPDATE tax_payments SET payer = ?, dedupe_key = ? WHERE id = ?').run(payer, key, keep.id);
+  if (!kept) {
+    const context = { ...item.context, kept: rowIdentity(getPayment(db, keep.id)) };
+    db.prepare('UPDATE confirm_items SET context = ? WHERE id = ?').run(JSON.stringify(context), item.id);
+  }
   closeStaleConflicts(db, { now, except: item.id });
 }
 
