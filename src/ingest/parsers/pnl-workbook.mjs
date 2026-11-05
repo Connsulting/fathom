@@ -1,11 +1,20 @@
 import { readWorkbook, ledgerHeader } from '../workbook.mjs';
-import { header, isoDate, money, cents, warning, result, empty } from '../format.mjs';
+import { header, isoDate, money, cents, warning, result, empty, LimitError } from '../format.mjs';
 
 export const id = 'pnl-workbook';
 export const label = 'Business profit and loss';
 export const sourceKind = 'pnl_workbook';
 export function sniff(file) {
-  try { return readWorkbook(file).sheets.some((sheet) => ledgerHeader(sheet)) ? 0.98 : 0; } catch { return 0; }
+  try { return readWorkbook(file).sheets.some((sheet) => ledgerHeader(sheet)) ? 0.98 : 0; } catch (e) { if (e instanceof LimitError) throw e; return 0; }
+}
+
+// The entity a ledger sheet belongs to: its name without a trailing Income or Expenses label
+// (including Actual) and surrounding punctuation.
+export function entityOf(sheetName) {
+  return String(sheetName ?? '')
+    .replace(/^[\s\p{P}]+|[\s\p{P}]+$/gu, '')
+    .replace(/[\s\p{P}]+(?:actual[\s\p{P}]+)?(?:income|expenses?)$/iu, '')
+    .replace(/^[\s\p{P}]+|[\s\p{P}]+$/gu, '');
 }
 
 export function parse(file) {
@@ -18,10 +27,7 @@ export function parse(file) {
       const income = columns.has('payment date');
       const dateColumn = columns.get(income ? 'payment date' : 'date');
       const amountColumn = columns.get(income ? 'payment amount' : 'amount') ?? columns.get([...columns.keys()].find((key) => key.endsWith('actual income')));
-      const entity = sheet.name
-        .replace(/^[\s\p{P}]+|[\s\p{P}]+$/gu, '')
-        .replace(/[\s\p{P}]+(?:actual[\s\p{P}]+)?(?:income|expenses?)$/iu, '')
-        .replace(/^[\s\p{P}]+|[\s\p{P}]+$/gu, '');
+      const entity = entityOf(sheet.name);
       for (const row of sheet.rows.slice(found.index + 1)) {
         const dateCell = row.cells.get(dateColumn), amountCell = row.cells.get(amountColumn);
         if (!dateCell?.value && !amountCell?.value && !amountCell?.missingCache) continue;
@@ -41,5 +47,8 @@ export function parse(file) {
       }
     }
     return monthly.size ? result([...monthly.values()], warnings) : { ...empty('no_pnl_rows'), warnings: [...warnings, ...empty('no_pnl_rows').warnings] };
-  } catch { return empty('malformed_workbook'); }
+  } catch (e) {
+    if (e instanceof LimitError) throw e;
+    return empty('malformed_workbook');
+  }
 }
