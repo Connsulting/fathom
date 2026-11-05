@@ -3,8 +3,9 @@
 // produces the same rows. Values are synthetic and need not reconcile with the scenario figures,
 // except that each account's balance at data-through equals its figure value.
 
+import { cents } from '../src/store/db.mjs';
+
 const MONTHS = { Jan: 1, Feb: 2, Mar: 3, Apr: 4, May: 5, Jun: 6, Jul: 7, Aug: 8, Sep: 9, Oct: 10, Nov: 11, Dec: 12 };
-const cents = n => Math.round(n * 100) / 100;
 const pad = n => String(n).padStart(2, '0');
 
 // mulberry32: small, fast, good enough for synthetic data.

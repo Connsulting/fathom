@@ -294,6 +294,25 @@ describe('set_recommendation_status', () => {
       assert.equal(r.status, status);
     }
   });
+
+  test('an ISO string or epoch ms ctx.now is honored the same as a Date', async () => {
+    const iso = '2027-03-04T10:20:30.000Z';
+    const lastTs = () => t.db.prepare("SELECT ts FROM rec_events WHERE rec_id = 'vaq4' ORDER BY id DESC LIMIT 1").get().ts;
+    for (const now of [new Date(iso), iso, Date.parse(iso)]) {
+      await callTool('set_recommendation_status', { id: 'vaq4', status: 'accepted' }, { db: t.db, now });
+      assert.equal(lastTs(), iso, `rec_event ts for ${typeof now} now`);
+    }
+    // Without a store clock, "today" comes from ctx.now.
+    const stored = t.db.prepare("SELECT value FROM settings WHERE key = 'clock'").get().value;
+    t.db.prepare("DELETE FROM settings WHERE key = 'clock'").run();
+    try {
+      for (const now of [new Date(iso), iso]) {
+        assert.equal((await callTool('household_summary', {}, { db: t.db, now })).clock, '2027-03-04', `clock for ${typeof now} now`);
+      }
+    } finally {
+      t.db.prepare("INSERT INTO settings (key, value, updated_at) VALUES ('clock', ?, '2026-11-05T00:00:00Z')").run(stored);
+    }
+  });
 });
 
 describe('input schema strictness', () => {

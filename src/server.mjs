@@ -11,7 +11,7 @@ import { mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from './config.mjs';
-import { openDb, migrate, readStoreMode, createStoreFile, setSetting, DB_FILE } from './store/db.mjs';
+import { openMigrated, readStoreMode, createStoreFile, setSetting, DB_FILE } from './store/db.mjs';
 import { createHandler } from './api/router.mjs';
 import { createCannedAnswerer } from './api/answerer.mjs';
 import { seedDemo } from '../demo/seed.mjs';
@@ -35,14 +35,7 @@ export function openStore(config) {
   if (config.demo === false && mode === 'demo') {
     throw new StartupError(`FATHOM_DEMO=0 but ${file} is a demo store. Refusing to start; it is unchanged. Point FATHOM_DATA at the real data directory.`);
   }
-  const db = openDb(file);
-  try {
-    migrate(db);
-  } catch (e) {
-    db.close();
-    throw e;
-  }
-  return db;
+  return openMigrated(file);
 }
 
 export async function startServer(config = loadConfig()) {

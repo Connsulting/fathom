@@ -22,26 +22,16 @@
 //    id into ask.suggested. Default conversation = rec on the rec route, else 'ask'.
 //  - Messages are { id, role, html, refs, ts, notice }. 'fathom' html is a series of <p>.
 
-import { money, resolveTokens } from '/shared/tokens.mjs';
+import { money, resolveTokens, esc, KIND_WORDS } from '/shared/tokens.mjs';
 import { needsYou as needsYouOf, packStatus } from '/shared/rules.mjs';
 
 const ROUTES = new Set(['onboarding', 'brief', 'plan', 'rec', 'ask', 'wargame', 'goals', 'accounts',
   'advisor', 'yearend', 'connect', 'engine', 'email', 'packs']);
 const PARAM_KEY = { rec: 'id', onboarding: 'step', wargame: 'name', packs: 'id' };
 const LAST_STEP = 5;
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
-const KIND_WORDS = {
-  a: 'Actual, from a mirrored account',
-  p: 'Projected from the plan',
-  e: 'Estimate',
-  m: 'Model output',
-};
 
 // ---------------------------------------------------------------- small helpers
 
-const esc = v => String(v == null ? '' : v)
-  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const arr = v => (Array.isArray(v) ? v : []);
 
 // Whole dollars as api.money does, or dollars and cents when the value has a nonzero cents part.
@@ -55,18 +45,6 @@ const tokenOpts = {
     try { console.warn('[fathom] ' + msg); } catch (e) { /* no console */ }
   },
 };
-
-// Server timestamps may be ISO date-times; show them the way the mock did ('Nov 5, 9:00 AM').
-function fmtTs(ts) {
-  if (ts == null) return '';
-  const s = String(ts);
-  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s)) return s;
-  const d = new Date(s);
-  if (isNaN(d.getTime())) return s;
-  const h24 = d.getHours();
-  const h = h24 % 12 === 0 ? 12 : h24 % 12;
-  return MONTHS[d.getMonth()] + ' ' + d.getDate() + ', ' + h + ':' + String(d.getMinutes()).padStart(2, '0') + (h24 < 12 ? ' AM' : ' PM');
-}
 
 // ---------------------------------------------------------------- scenario and derived state
 
@@ -92,8 +70,8 @@ function srcOf(id) {
   return { id: id == null ? null : id, label: (s && s.label) || 'Unknown source', asOf: (s && s.asOf) || '' };
 }
 
-const t = s => (s == null ? '' : resolveTokens(S, String(s), true, tokenOpts));
-const txt = s => (s == null ? '' : resolveTokens(S, String(s), false, tokenOpts));
+const t = s => resolveTokens(S, s, true, tokenOpts);
+const txt = s => resolveTokens(S, s, false, tokenOpts);
 
 let stateCache = { ver: -1, val: null };
 function stateView() {
@@ -117,7 +95,7 @@ function mapMsg(m) {
     role: m.role,
     html: t(m.text),
     refs: arr(m.refs),
-    ts: fmtTs(m.ts),
+    ts: m.ts == null ? '' : String(m.ts), // the server already labels it ('Nov 5, 9:04 AM')
     notice: !!m.notice,
   };
 }

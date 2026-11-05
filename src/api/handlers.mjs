@@ -2,19 +2,18 @@
 // body (status 200) or throws HttpError. Every action writes the store and answers with the
 // fresh scenario, so the browser swaps it in.
 
-import { getSetting, setSetting, schemaVersion, tx } from '../store/db.mjs';
+import { getSetting, setSetting, schemaVersion, tx, parseJson as parse } from '../store/db.mjs';
 import { buildScenario, loadContent, defaultPicks, wargameLists } from '../scenario/build.mjs';
 import { ACTION_STATUS, packStatus } from '../shared/rules.mjs';
 import { escapeUserText } from '../shared/tokens.mjs';
 import { seedDemo } from '../../demo/seed.mjs';
 import { HttpError } from './http.mjs';
-import { findQuestion } from './questions.mjs';
+import { findQuestion, isIndex } from './questions.mjs';
 
 export const ENGINE_OFF_HTML = '<p>Engine is off, so answers are paused. Switch it back on to get an answer.</p>';
 const MAX_TEXT = 4000;
 const MAX_LABEL = 200;
 
-const parse = (s, fallback) => { try { return JSON.parse(s); } catch { return fallback; } };
 const paragraphs = list => (Array.isArray(list) ? list : []).map(p => `<p>${p}</p>`).join('');
 const nowIso = () => new Date().toISOString();
 
@@ -56,8 +55,6 @@ function pushMessage(ctx, key, role, text, { refs = [], notice = false } = {}) {
     .run(key, role, text, JSON.stringify(refs), notice ? 1 : 0, stamp(ctx));
   return Number(r.lastInsertRowid);
 }
-
-const isIndex = v => (Number.isInteger(v) && v >= 0) || (typeof v === 'string' && /^\d+$/.test(v));
 
 // ---------------------------------------------------------------- handlers
 
@@ -130,28 +127,29 @@ export function packToggle(ctx) {
   const row = packRow(db, ctx.params.id);
   const def = parse(row.def, {});
   const turnOn = !packActive(row);
+  const statusOf = db.prepare('SELECT status FROM recs WHERE id = ?');
+  const setStatus = db.prepare('UPDATE recs SET status = ?, updated_at = ? WHERE id = ?');
   tx(db, () => {
-    let unhid = [];
+    const unhid = [];
     if (turnOn) {
       for (const rid of def.recIds || []) {
-        const r = db.prepare('SELECT status FROM recs WHERE id = ?').get(rid);
+        const r = statusOf.get(rid);
         if (r && r.status === 'hidden') {
-          db.prepare('UPDATE recs SET status = ?, updated_at = ? WHERE id = ?').run('proposed', nowIso(), rid);
+          setStatus.run('proposed', nowIso(), rid);
           recEvent(db, rid, 'pack_on', row.id, 'hidden', 'proposed');
           unhid.push(rid);
         }
       }
     } else {
-      const others = db.prepare('SELECT * FROM packs_state WHERE id <> ?').all(row.id).filter(packActive);
+      const powered = new Set(db.prepare('SELECT * FROM packs_state WHERE id <> ?').all(row.id).filter(packActive)
+        .flatMap(o => parse(o.def, {}).recIds || []));
       for (const rid of parse(row.unhid, [])) {
-        const powered = others.some(o => (parse(o.def, {}).recIds || []).includes(rid));
-        const r = db.prepare('SELECT status FROM recs WHERE id = ?').get(rid);
-        if (r && r.status === 'proposed' && !powered) {
-          db.prepare('UPDATE recs SET status = ?, updated_at = ? WHERE id = ?').run('hidden', nowIso(), rid);
+        const r = statusOf.get(rid);
+        if (r && r.status === 'proposed' && !powered.has(rid)) {
+          setStatus.run('hidden', nowIso(), rid);
           recEvent(db, rid, 'pack_off', row.id, 'proposed', 'hidden');
         }
       }
-      unhid = [];
     }
     db.prepare('UPDATE packs_state SET active = ?, unhid = ?, updated_at = ? WHERE id = ?')
       .run(turnOn ? 1 : 0, JSON.stringify(unhid), nowIso(), row.id);

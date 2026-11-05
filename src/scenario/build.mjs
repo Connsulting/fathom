@@ -5,7 +5,7 @@
 // Decide statuses and lines, war-game status and decided line, the engine budget, and the
 // provenance figures for war-game, series and engine amounts (wg.*, series.*, engine.*).
 
-import { getSetting, cents } from '../store/db.mjs';
+import { getSetting, cents, parseJson as parse } from '../store/db.mjs';
 import { resolveTokens } from '../shared/tokens.mjs';
 
 const DAY = 86400000;
@@ -87,10 +87,6 @@ export function resolveClock(db, override) {
 
 // ---------------------------------------------------------------- small readers
 
-const parse = (s, fallback) => {
-  if (s == null) return fallback;
-  try { return JSON.parse(s); } catch { return fallback; }
-};
 const arr = v => (Array.isArray(v) ? v : []);
 
 export function loadContent(db) {
@@ -165,22 +161,21 @@ export function loadConversations(db) {
   return out;
 }
 
-export function defaultPicks(wargame) {
-  const pick = (list) => {
-    const i = arr(list).findIndex(x => x && (x.current || x.recommended));
-    return i >= 0 ? i : 0;
-  };
-  const w = wargame || {};
-  return { salary: pick(w.salary && w.salary.points), deferral: pick(w.deferral && w.deferral.options) };
-}
-
 export function wargameLists(wargame) {
   const w = wargame || {};
   return { salary: arr(w.salary && w.salary.points), deferral: arr(w.deferral && w.deferral.options) };
 }
 
+// The current or recommended entry of each war game, else the first.
+export function defaultPicks(wargame) {
+  const pick = list => Math.max(0, list.findIndex(x => x && (x.current || x.recommended)));
+  const { salary, deferral } = wargameLists(wargame);
+  return { salary: pick(salary), deferral: pick(deferral) };
+}
+
 export function loadPacks(db) {
   return db.prepare('SELECT * FROM packs_state ORDER BY sort, id').all().map(r => ({
+    id: r.id,
     def: parse(r.def, {}),
     live: {
       active: r.active == null ? null : !!r.active,

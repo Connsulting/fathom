@@ -64,16 +64,33 @@ export function listTables(db) {
     .all().map(r => r.name);
 }
 
+// JSON text to a value, or `fallback` when it is null or malformed.
+export function parseJson(s, fallback) {
+  if (s == null) return fallback;
+  try { return JSON.parse(s); } catch { return fallback; }
+}
+
 export function getSetting(db, key, fallback) {
   const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
-  if (!row || row.value == null) return fallback;
-  try { return JSON.parse(row.value); } catch { return fallback; }
+  return parseJson(row && row.value, fallback);
 }
 
 export function setSetting(db, key, value) {
   db.prepare(`INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
               ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
     .run(key, JSON.stringify(value), new Date().toISOString());
+}
+
+// Open an existing store and apply pending migrations; closes it again if a migration fails.
+export function openMigrated(path) {
+  const db = openDb(path);
+  try {
+    migrate(db);
+  } catch (e) {
+    db.close();
+    throw e;
+  }
+  return db;
 }
 
 // Run fn inside a transaction; rolls back on throw.
@@ -98,9 +115,7 @@ export function readStoreMode(file) {
     const hasSettings = db.prepare("SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = 'settings'").get();
     if (!hasSettings) return 'real';
     const row = db.prepare("SELECT value FROM settings WHERE key = 'mode'").get();
-    let mode = null;
-    try { mode = row ? JSON.parse(row.value) : null; } catch { mode = null; }
-    return mode === 'demo' ? 'demo' : 'real';
+    return parseJson(row && row.value, null) === 'demo' ? 'demo' : 'real';
   } finally {
     db.close();
   }

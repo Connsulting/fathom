@@ -6,8 +6,8 @@
 // Outputs resolve scenario tokens to plain text, carry masks only (never account numbers), and
 // never include hidden recs.
 
-import { getSetting, tx, cents } from '../store/db.mjs';
-import { loadRecs, loadContent, tokenScope, recFromRow, resolveClock, todayUtc } from '../scenario/build.mjs';
+import { getSetting, tx, cents, parseJson as parse } from '../store/db.mjs';
+import { loadRecs, loadContent, loadPacks, tokenScope, recFromRow, resolveClock, todayUtc } from '../scenario/build.mjs';
 import { needsYou, verdictLevel, packStatus, STATUSES } from '../shared/rules.mjs';
 import { resolveTokens } from '../shared/tokens.mjs';
 
@@ -22,7 +22,6 @@ export class ToolError extends Error {
 const SETTABLE = ['accepted', 'doing', 'done', 'dismissed', 'snoozed', 'proposed'];
 const DATE = '^\\d{4}-\\d{2}-\\d{2}$';
 const MONTH = '^\\d{4}-\\d{2}$';
-const parse = (s, fallback) => { try { return JSON.parse(s); } catch { return fallback; } };
 
 // ---------------------------------------------------------------- validation (JSON Schema subset)
 
@@ -89,8 +88,22 @@ export function validate(schema, args) {
 
 const obj = (properties = {}, required = []) => ({ type: 'object', properties, required, additionalProperties: false });
 
+// ctx.now as a Date: anything `new Date` accepts (Date, ISO string, epoch ms); the current time
+// when it is absent or invalid.
+function nowOf(ctx) {
+  const d = ctx.now == null ? null : new Date(ctx.now);
+  return d && !Number.isNaN(d.getTime()) ? d : new Date();
+}
+
+// "Today": the store clock when set, else ctx.now's UTC date.
 function clockOf(ctx) {
-  return resolveClock(ctx.db, getSetting(ctx.db, 'clock', null) || todayUtc(ctx.now instanceof Date ? ctx.now : new Date()));
+  return resolveClock(ctx.db, getSetting(ctx.db, 'clock', null) || todayUtc(nowOf(ctx)));
+}
+
+// ' WHERE a AND b' and its params from [sql, value] pairs, skipping undefined values.
+function where(conds) {
+  const used = conds.filter(c => c[1] !== undefined);
+  return { clause: used.length ? ' WHERE ' + used.map(c => c[0]).join(' AND ') : '', params: used.map(c => c[1]) };
 }
 
 // Resolve tokens to plain text in every string of a value.
@@ -179,19 +192,16 @@ export const tools = [
     }),
     scope: 'read',
     handler(args, ctx) {
-      const where = [];
-      const params = [];
-      if (args.accountId !== undefined) { where.push('account_id = ?'); params.push(args.accountId); }
-      if (args.from !== undefined) { where.push('date >= ?'); params.push(args.from); }
-      if (args.to !== undefined) { where.push('date <= ?'); params.push(args.to); }
-      if (args.minAmount !== undefined) { where.push('amount >= ?'); params.push(args.minAmount); }
-      if (args.maxAmount !== undefined) { where.push('amount <= ?'); params.push(args.maxAmount); }
-      if (args.category !== undefined) { where.push('category = ?'); params.push(args.category); }
-      if (args.text !== undefined) {
-        where.push("lower(description) LIKE ? ESCAPE '\\'");
-        params.push('%' + args.text.toLowerCase().replace(/[\\%_]/g, c => '\\' + c) + '%');
-      }
-      const clause = where.length ? ' WHERE ' + where.join(' AND ') : '';
+      const { clause, params } = where([
+        ['account_id = ?', args.accountId],
+        ['date >= ?', args.from],
+        ['date <= ?', args.to],
+        ['amount >= ?', args.minAmount],
+        ['amount <= ?', args.maxAmount],
+        ['category = ?', args.category],
+        ["lower(description) LIKE ? ESCAPE '\\'",
+          args.text === undefined ? undefined : '%' + args.text.toLowerCase().replace(/[\\%_]/g, c => '\\' + c) + '%'],
+      ]);
       const limit = args.limit === undefined ? 50 : args.limit;
       const total = ctx.db.prepare('SELECT count(*) AS n FROM transactions' + clause).get(...params).n;
       const rows = ctx.db.prepare('SELECT id, account_id, date, amount, description, category FROM transactions' + clause +
@@ -206,9 +216,8 @@ export const tools = [
     inputSchema: obj({ accountId: { type: 'string' } }),
     scope: 'read',
     handler(args, ctx) {
-      const sql = 'SELECT * FROM positions' + (args.accountId !== undefined ? ' WHERE account_id = ?' : '') + ' ORDER BY account_id, id';
-      const params = args.accountId !== undefined ? [args.accountId] : [];
-      return ctx.db.prepare(sql).all(...params).map(p => ({
+      const { clause, params } = where([['account_id = ?', args.accountId]]);
+      return ctx.db.prepare('SELECT * FROM positions' + clause + ' ORDER BY account_id, id').all(...params).map(p => ({
         accountId: p.account_id, symbol: p.symbol, name: p.name, quantity: p.quantity, price: p.price, value: p.value,
         costBasis: p.cost_basis, asOf: p.as_of,
       }));
@@ -220,12 +229,7 @@ export const tools = [
     inputSchema: obj({ entity: { type: 'string' }, from: { type: 'string', pattern: MONTH }, to: { type: 'string', pattern: MONTH } }),
     scope: 'read',
     handler(args, ctx) {
-      const where = [];
-      const params = [];
-      if (args.entity !== undefined) { where.push('entity = ?'); params.push(args.entity); }
-      if (args.from !== undefined) { where.push('period >= ?'); params.push(args.from); }
-      if (args.to !== undefined) { where.push('period <= ?'); params.push(args.to); }
-      const clause = where.length ? ' WHERE ' + where.join(' AND ') : '';
+      const { clause, params } = where([['entity = ?', args.entity], ['period >= ?', args.from], ['period <= ?', args.to]]);
       const rows = ctx.db.prepare('SELECT period, category, sum(amount) AS amount FROM pnl_lines' + clause +
         ' GROUP BY period, category ORDER BY period, category').all(...params)
         .map(r => ({ period: r.period, category: r.category, amount: cents(r.amount) }));
@@ -269,11 +273,7 @@ export const tools = [
     inputSchema: obj({ from: { type: 'string', pattern: DATE }, to: { type: 'string', pattern: DATE } }),
     scope: 'read',
     handler(args, ctx) {
-      const where = [];
-      const params = [];
-      if (args.from !== undefined) { where.push('date >= ?'); params.push(args.from); }
-      if (args.to !== undefined) { where.push('date <= ?'); params.push(args.to); }
-      const clause = where.length ? ' WHERE ' + where.join(' AND ') : '';
+      const { clause, params } = where([['date >= ?', args.from], ['date <= ?', args.to]]);
       const scope = tokenScope(ctx.db);
       return ctx.db.prepare('SELECT * FROM deadlines' + clause + ' ORDER BY date, id').all(...params)
         .map(d => plainDeep(scope, { date: d.date, label: d.label, title: d.title, recId: d.rec_id, hard: !!d.hard }));
@@ -309,11 +309,9 @@ export const tools = [
     scope: 'read',
     handler(args, ctx) {
       const scope = tokenScope(ctx.db);
-      return ctx.db.prepare('SELECT * FROM packs_state ORDER BY sort, id').all().map(r => {
-        const def = parse(r.def, {});
-        const status = packStatus(def.status, { active: r.active == null ? null : !!r.active, exploring: !!r.exploring });
-        return { id: r.id, name: resolveTokens(scope, def.name || r.id, false), status, why: resolveTokens(scope, def.why || '', false) };
-      });
+      return loadPacks(ctx.db).map(({ id, def, live }) => ({
+        id, name: resolveTokens(scope, def.name || id, false), status: packStatus(def.status, live), why: resolveTokens(scope, def.why || '', false),
+      }));
     },
   },
   {
@@ -330,7 +328,7 @@ export const tools = [
       const row = recRow(db, args.id);
       const def = parse(row.def, {});
       const wake = args.status === 'snoozed' ? (args.wake ? args.wake : 'Next month') : (def.wake != null ? def.wake : null);
-      const ts = (ctx.now instanceof Date ? ctx.now : new Date()).toISOString();
+      const ts = nowOf(ctx).toISOString();
       tx(db, () => {
         db.prepare('UPDATE recs SET status = ?, wake = ?, updated_at = ? WHERE id = ?').run(args.status, wake, ts, args.id);
         db.prepare(`INSERT INTO rec_events (rec_id, ts, action, arg, from_status, to_status, actor)

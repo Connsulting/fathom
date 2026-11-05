@@ -5,7 +5,8 @@
 import { resolveTokens } from '../shared/tokens.mjs';
 
 const arr = v => (Array.isArray(v) ? v : []);
-const isIndex = v => (typeof v === 'number' && Number.isInteger(v) && v >= 0) || (typeof v === 'string' && /^\d+$/.test(v));
+// A non-negative integer, or a string of digits.
+export const isIndex = v => (Number.isInteger(v) && v >= 0) || (typeof v === 'string' && /^\d+$/.test(v));
 
 // Conversation key -> the rec it belongs to, or null for 'ask' and 'pack:<id>'.
 export function recForKey(scenario, key) {

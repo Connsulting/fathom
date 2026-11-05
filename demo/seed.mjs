@@ -12,8 +12,8 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import scenario from './scenario.mjs';
 import { buildLedger, isoFromLabel } from './ledger.mjs';
-import { openDb, migrate, getSetting, setSetting, listTables, readStoreMode, createStoreFile, tx, cents, DB_FILE } from '../src/store/db.mjs';
-import { addDays, defaultPicks } from '../src/scenario/build.mjs';
+import { openMigrated, getSetting, setSetting, listTables, readStoreMode, createStoreFile, tx, cents, DB_FILE } from '../src/store/db.mjs';
+import { addDays, defaultPicks, BUILTIN_SOURCES, DEFAULT_CAP_USD } from '../src/scenario/build.mjs';
 import { loadConfig } from '../src/config.mjs';
 
 export const SEED_ID = 'demo-seed';
@@ -85,8 +85,9 @@ export function seedDemo(db) {
 
     const source = db.prepare('INSERT INTO sources (id, label, as_of, kind, last_ingest_at, note) VALUES (?, ?, ?, ?, ?, ?)');
     for (const [id, s] of Object.entries(S.src)) source.run(id, s.label, s.asOf || '', 'demo', now, '');
-    if (!S.src['wargame-model']) source.run('wargame-model', 'War-game model, from your plan', (S.src.model && S.src.model.asOf) || '', 'model', now, '');
-    if (!S.src['job-estimates']) source.run('job-estimates', 'Per-run cost estimate', '', 'estimate', now, '');
+    const builtin = (id, asOf) => { if (!S.src[id]) source.run(id, BUILTIN_SOURCES[id].label, asOf, BUILTIN_SOURCES[id].kind, now, ''); };
+    builtin('wargame-model', (S.src.model && S.src.model.asOf) || '');
+    builtin('job-estimates', '');
 
     const figure = db.prepare(`INSERT INTO figures (key, v, src, kind, label, file_id, parser, locator, updated_at)
                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
@@ -172,7 +173,7 @@ export function seedDemo(db) {
     setSetting(db, 'clock', clock);
     setSetting(db, 'onboarding', { done: true, step: 6 });
     setSetting(db, 'engine', { on: true });
-    setSetting(db, 'cap', { usd: typeof S.engine.budget.monthly === 'number' ? S.engine.budget.monthly : 200 });
+    setSetting(db, 'cap', { usd: typeof S.engine.budget.monthly === 'number' ? S.engine.budget.monthly : DEFAULT_CAP_USD });
     setSetting(db, 'wargame.picks', defaultPicks(S.wargame));
     setSetting(db, 'seeded', { at: now, scenario_sha: sha });
   });
@@ -193,20 +194,12 @@ function main() {
     process.exit(1);
   }
   mkdirSync(config.dataDir, { recursive: true });
-  let db;
-  if (mode === null) {
-    db = createStoreFile(file, seedDemo);
-  } else {
-    db = openDb(file);
-    try {
-      migrate(db);
-      seedDemo(db);
-    } catch (e) {
-      db.close();
-      throw e;
-    }
+  const db = mode === null ? createStoreFile(file, seedDemo) : openMigrated(file);
+  try {
+    if (mode !== null) seedDemo(db);
+  } finally {
+    db.close();
   }
-  db.close();
   console.log(`seed:demo: demo store ${mode ? 'rebuilt' : 'created'} at ${file}`);
 }
 
