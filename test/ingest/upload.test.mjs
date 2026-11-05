@@ -535,6 +535,62 @@ describe('bounded parsing on a 128 MB heap', () => {
     assert.equal(r.status, 200, r.text.slice(0, 300));
     assert.deepEqual(r.json.files.map((f) => [f.name, f.status]), [['near-limit-export.csv', 'needs_mapping']]);
   }));
+
+  // I1: a CSV record is counted without building or keeping cell text, and the real parse slices
+  // cell text from the source. Cells at LIMITS.cellChars across a record at or past LIMITS.columns
+  // never build hundreds of MB of strings before a limit answers. Each case checks /healthz right
+  // after its upload.
+  const CELL = 32768;
+  test('I1: the cases below sit at the parse limits (512 columns, 32768 characters a cell)', async () => {
+    const { LIMITS } = await src('src/ingest/format.mjs');
+    assert.equal(LIMITS.cellChars, CELL);
+    assert.equal(LIMITS.columns, 512);
+  });
+  const csvUpload = async (s, name, bytes) => {
+    const r = await upload(s.baseUrl, [{ name, bytes, type: 'text/csv' }]);
+    const h = await request(s.baseUrl, { path: '/healthz' });
+    assert.equal(h.status, 200, 'server answers /healthz right after the upload');
+    assert.equal(r.status, 200, r.text.slice(0, 300));
+    return r;
+  };
+  const csvTooLarge = async (s, name, bytes) => {
+    const r = await csvUpload(s, name, bytes);
+    assert.deepEqual(r.json.files.map((f) => [f.name, f.status]), [[name, 'too_large']]);
+    assert.deepEqual(r.json.files[0].counts.warningCodes, { limit_exceeded: 1 });
+  };
+  const plainCell = (n = CELL) => 'x'.repeat(n);
+  // A quoted cell of exactly n decoded characters made of `ab`, a doubled quote and a newline
+  // repeated, so every fourth character takes the escape path and every line spans a record.
+  const escapedCell = (n = CELL) => `"${'ab""\n'.repeat(n / 4)}"`;
+  const shortHeader = 'synthetic label,synthetic amount\n';
+
+  test('I1: a short header then one row of 513 cells of 32768 characters answers too_large; the server stays up', T, () => withSmallHeap(async (s) => {
+    const bytes = Buffer.from(`${shortHeader}${Array.from({ length: 513 }, () => plainCell()).join(',')}\n`);
+    await csvTooLarge(s, 'wide-long-cells.csv', bytes);
+  }));
+
+  test('I1: a short header then one row of 513 quoted 32768-character cells full of doubled quotes and newlines answers too_large; the server stays up', T, () => withSmallHeap(async (s) => {
+    const cell = escapedCell();
+    const bytes = Buffer.from(`${shortHeader}${Array.from({ length: 513 }, () => cell).join(',')}\n`);
+    await csvTooLarge(s, 'wide-escaped-cells.csv', bytes);
+  }));
+
+  // 512 cells of 32768 characters is about 16.8 MB a row, so three rows plus a 512-column header is
+  // about 50.3 MB, under the 50 MiB upload cap (52428800 bytes). That is 2048 cells, far under the
+  // cell limit, and every cell is exactly at cellChars, so no parse limit is passed: it is read and
+  // waits for a mapping.
+  test('I1: a 512-column header then three rows of 512 cells of 32768 characters waits for a mapping; the server stays up', T, () => withSmallHeap(async (s) => {
+    const name = 'wide-long-rows.csv';
+    const row = `${Array.from({ length: 512 }, () => plainCell()).join(',')}\n`;
+    const bytes = Buffer.from(`${wideHeader.join(',')}\n${row.repeat(3)}`);
+    assert.ok(bytes.length <= 50 * 1024 * 1024, 'fixture stays under the upload cap');
+    const r = await csvUpload(s, name, bytes);
+    assert.deepEqual(r.json.files.map((f) => [f.name, f.status]), [[name, 'needs_mapping']]);
+  }));
+
+  test('I1 guard: one cell of 32769 characters answers too_large; the server stays up', T, () => withSmallHeap(async (s) => {
+    await csvTooLarge(s, 'long-cell.csv', Buffer.from(`${shortHeader}${plainCell(CELL + 1)},1\n`));
+  }));
 });
 
 // G8: pdfjs runs in a resource-limited worker with its output discarded. On a 128 MB heap the server
