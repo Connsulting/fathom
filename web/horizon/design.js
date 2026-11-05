@@ -348,13 +348,20 @@ function windowStrip(r) {
 
 /* ---------- shell ---------- */
 
+function whoLine() {
+  const id = api.identity?.();
+  if (!id) return '';
+  const name = id.name || id.login;
+  return `<div class="h-who">Signed in as ${esc(name)}${id.login && id.login !== name ? `<span>${esc(id.login)}</span>` : ''}</div>`;
+}
+
 function shell(inner, active) {
   const link = (k, l) => `<a href="${href(k)}" data-go="${k}" class="${active === k ? 'on' : ''}"${active === k ? ' aria-current="page"' : ''}>${l}</a>`;
   const nav = NAV.map(([k, l]) => link(k, l)).join('');
   const moreOn = MORE.some((g) => g[1].some((i) => i[0] === active));
   const groups = MORE.map(([title, items]) => `<div class="h-more-g"><div class="h-more-h">${title}</div>${items.map(([k, l]) => link(k, l)).join('')}</div>`).join('');
   const more = `<div class="h-more-wrap"><button type="button" class="h-more-btn${moreOn ? ' on' : ''}" data-more="toggle" aria-expanded="${ui.more}" aria-controls="h-more-p">More${icon('chev')}</button>
-    <div class="h-more-p" id="h-more-p" aria-label="More"${ui.more ? '' : ' hidden'}>${groups}</div></div>`;
+    <div class="h-more-p" id="h-more-p" aria-label="More"${ui.more ? '' : ' hidden'}>${whoLine()}${groups}</div></div>`;
   const off = api.engineOn() ? '' : `<div class="h-engine-off">${icon('clock')}Engine off. Proactive jobs are paused. ${goA('engine', 'Engine settings')}</div>`;
   return `<header class="h-top"><div class="h-top-in">
     <a class="h-mark" href="${href('brief')}" data-go="brief" aria-label="${X(api.s.meta.product || 'Fathom')}">${MARK}<span>${T(api.s.meta.product || 'Fathom')}</span></a>
@@ -391,6 +398,7 @@ function pBrief() {
     <div class="h-kicker">${MONTH_FULL[c.getUTCMonth()]} brief<span>${T(api.s.meta.clockLabel)}</span><span>Data through ${T(api.s.meta.dataThrough)}</span></div>
     <h1 class="h-verdict">${clear ? `<i class="h-ok">${icon('check')}</i>` : ''}<span>${T(v.headline)}</span></h1>
     <p class="h-lede">${T(v.sub)}</p>
+    <p class="h-lede">${goA('add', 'Add more files')}</p>
   </section>`;
 
   const tl = section('Your year', timeline('brief'), `${plural(ny.length, 'item')} need you<span class="h-dotsep"></span>${motion.length} in motion<span class="h-dotsep"></span>${done} done`);
@@ -820,7 +828,7 @@ function pAccounts() {
   const series = Object.entries(api.s.series || {});
   const evs = arr(api.s.events).filter((e) => ['income', 'account'].includes(e.kind));
   const conn = accs.filter((a) => a.mirror === 'connected').length;
-  return shell(`${pageHead('Accounts', 'Read-only mirror', `${conn} of ${accs.length} accounts mirrored. Data through ${T(api.s.meta.dataThrough)}.`)}
+  return shell(`${pageHead('Accounts', 'Read-only mirror', `${conn} of ${accs.length} accounts mirrored. Data through ${T(api.s.meta.dataThrough)}. ${goA('add', 'Add more files')}`)}
     <div class="h-ro">${icon('lock')}<span>Read-only. ${T(api.s.meta.product || 'Fathom')} can see balances and transactions. It cannot move, delete or change anything.</span></div>${ingest.pendingBanner()}
     ${series.length ? section('Trend', `<div class="h-sparks">${series.map(spark).join('')}</div>`, 'Solid is actual, dashed is projected') : ''}
     <div class="h-cols"><div class="h-col-main">${list}</div>
@@ -919,19 +927,27 @@ function pEmail() {
         <p class="h-mail-ft">${T(em.footer)}</p></div></div>`, 'email');
 }
 
+function pAdd() {
+  return shell(pageHead('Files', 'Add more files', 'Drop in statements, exports and other documents. New accounts and open questions show up in Confirm.')
+    + ingest.addFiles('add') + ingest.sourcesSection(), 'accounts');
+}
+
 /* ---------- onboarding ---------- */
 
 const STEPS = ['Sign in', 'Tell us', 'Accounts', 'Confirm', 'Priorities', 'First brief'];
 
 function pOnboarding(step) {
   const ob = api.s.onboarding || {};
-  const s = Math.max(0, Math.min(5, step));
+  const first = api.s?.live?.mode === 'real' ? 1 : 0; // a real store has no demo sign-in step
+  const s = Math.max(first, Math.min(5, step));
   const W = 600;
-  const sx = (i) => 10 + (i / 5) * (W - 20);
-  const rail = `<div class="h-ob-rail"><svg viewBox="0 0 ${W} 20" preserveAspectRatio="none" aria-hidden="true"><line class="bg" x1="10" x2="${W - 10}" y1="10" y2="10"/><line class="fg" x1="10" x2="${sx(s)}" y1="10" y2="10"/>${STEPS.map((_, i) => `<circle class="${i < s ? 'done' : i === s ? 'cur' : ''}" cx="${sx(i)}" cy="10" r="${i === s ? 5 : 3.5}"/>`).join('')}</svg>
-    <div class="h-ob-steps">${STEPS.map((l, i) => `<span class="${i === s ? 'on' : ''}" style="left:${(sx(i) / W) * 100}%">${l}</span>`).join('')}</div></div>`;
+  const rs = STEPS.slice(first);
+  const ri = s - first;
+  const sx = (i) => 10 + (i / (rs.length - 1)) * (W - 20);
+  const rail = `<div class="h-ob-rail"><svg viewBox="0 0 ${W} 20" preserveAspectRatio="none" aria-hidden="true"><line class="bg" x1="10" x2="${W - 10}" y1="10" y2="10"/><line class="fg" x1="10" x2="${sx(ri)}" y1="10" y2="10"/>${rs.map((_, i) => `<circle class="${i < ri ? 'done' : i === ri ? 'cur' : ''}" cx="${sx(i)}" cy="10" r="${i === ri ? 5 : 3.5}"/>`).join('')}</svg>
+    <div class="h-ob-steps">${rs.map((l, i) => `<span class="${i === ri ? 'on' : ''}" style="left:${(sx(i) / W) * 100}%">${l}</span>`).join('')}</div></div>`;
   const next = (label = 'Continue', n = s + 1) => btn(`${label}${icon('arrow')}`, `data-onboard="${n}"`, 'pri');
-  const back = s > 0 ? btn('Back', `data-onboard="${s - 1}"`, 'ghost') : '';
+  const back = s > first ? btn('Back', `data-onboard="${s - 1}"`, 'ghost') : '';
   let body = '';
   if (s === 0) {
     body = `<div class="h-ob-hero">${MARK}<h1>${T(ob.welcome?.headline)}</h1><p class="h-lede">${T(ob.welcome?.sub)}</p></div>
@@ -1126,6 +1142,7 @@ function draw() {
     case 'wargame': html = pWargame(r.params?.name); break;
     case 'goals': html = pGoals(); break;
     case 'accounts': html = pAccounts(); break;
+    case 'add': html = pAdd(); break;
     case 'confirm': html = ingest.confirmPage(); break;
     case 'advisor': html = pAdvisor(); break;
     case 'packs': html = packsScreen.render(r.params?.id); break;
