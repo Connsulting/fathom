@@ -23,7 +23,7 @@ import { tempDb } from './helpers/server.mjs';
 const FROZEN = [
   'household_summary', 'get_facts', 'list_accounts', 'query_transactions', 'list_positions', 'pnl_by_month',
   'list_recommendations', 'get_recommendation', 'list_deadlines', 'list_goals', 'get_figures', 'packs_status',
-  'set_recommendation_status',
+  'set_recommendation_status', 'list_packs', 'get_pack_entry', 'search_pack_entries',
 ];
 const TEST_ROWS = 250;
 
@@ -333,6 +333,14 @@ describe('set_recommendation_status', () => {
     } finally {
       t.db.prepare("INSERT INTO settings (key, value, updated_at) VALUES ('clock', ?, '2026-11-05T00:00:00Z')").run(stored);
     }
+  });
+});
+
+describe('ctx.clock (FATHOM_CLOCK)', () => {
+  test('ctx.clock overrides the store clock; absent, the store clock still decides', async () => {
+    const stored = (await callTool('household_summary', {}, { db: t.db, now: new Date() })).clock;
+    assert.equal((await callTool('household_summary', {}, { db: t.db, now: new Date(), clock: '2027-01-05' })).clock, '2027-01-05');
+    assert.equal((await callTool('household_summary', {}, { db: t.db, now: new Date(), clock: null })).clock, stored);
   });
 });
 

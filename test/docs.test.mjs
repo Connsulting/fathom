@@ -34,6 +34,7 @@ const FACT_KEYS = [
 const ENV_KEYS = [
   'FATHOM_DATA', 'FATHOM_PORT', 'FATHOM_HOST', 'FATHOM_DEMO', 'FATHOM_ENGINE', 'FATHOM_CLOCK',
   'FATHOM_CLAUDE_CREDENTIAL_FILE', 'FATHOM_DATA_KEY_FILE', 'FATHOM_EMAIL_TRANSPORT',
+  'FATHOM_PUBLIC_URL', 'FATHOM_ALLOWED_HOSTS',
 ];
 
 test('architecture.md has every frozen section as a heading', () => {

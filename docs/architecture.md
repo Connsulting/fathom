@@ -155,6 +155,23 @@ recommendation status.
 | `get_figures` | read | `keys?: string[]` | `[{key, v, kind, label, source: {id, label, asOf}}]` |
 | `packs_status` | read | none | `[{id, name, status, why}]` |
 | `set_recommendation_status` | write:recs | `id, status: accepted, doing, done, dismissed, snoozed or proposed, wake?` | the rec; writes `rec_events` with actor `tool` |
+| `list_packs` | read | none | `[{id, name, status, why, version, taxYear, reviewed, covers, entries: [{file, title}]}]` sorted by id |
+| `get_pack_entry` | read | `packId, file` (the manifest file or the entry id) | `{packId, packName, file, id, title, markdown, citations: [{label, url}], version, taxYear, reviewed}`; any loaded pack, active or not |
+| `search_pack_entries` | read | `query (2..200 chars), packId?, limit? (1..20, default 10)` | `{query, results: [{packId, file, id, title, score, snippet}], total, truncated}` over active packs only |
+
+The pack tools (`src/tools/packs.mjs`) load packs from `ctx.packDirs`, else the repo `packs/` plus
+`<ctx.dataDir>/packs/your-plans` when it exists. Status is what the owner sees in the UI, not the
+facts alone. A manifest pack links to a `packs_state` row by the row's `def.manifest` (a manifest
+id), else by the row id. A linked pack reads `packStatus(base, {active, exploring})` from
+`src/shared/rules.mjs`, where `base` is the row's `def.status` when it is a string, else the status
+from `activePacks(packs, facts)`, and `active` and `exploring` are the row's columns (a non-null
+`active` wins; `exploring` shows when the pack is not active). `why` is `Turned on by the owner.` or
+`Turned off by the owner.` when `active` is set, else the row's `def.why` with scenario tokens
+resolved to plain text, else the activation reason. A pack with no linked row keeps the
+facts-derived status and reason. Name, version, tax year, review date and entries always come from
+the manifest files. `search_pack_entries` reads only packs whose status is `active`. Search terms are the lowercase alphanumeric runs of two or more characters in the
+query; an entry matches when every term appears in its title or body; score is 5 per title
+occurrence plus 1 per body occurrence; order is score descending, then pack id, then entry id.
 
 Tool outputs resolve scenario tokens to plain text and expose masks only.
 
@@ -188,6 +205,8 @@ secrets are read there.
 | `FATHOM_CLAUDE_CREDENTIAL_FILE` | unset | Path to the mounted Claude credential. |
 | `FATHOM_DATA_KEY_FILE` | unset | Path to the raw file encryption key. |
 | `FATHOM_EMAIL_TRANSPORT` | `dev` | `dev`, `gmail`, `resend` or `postmark`. |
+| `FATHOM_PUBLIC_URL` | unset | The URL MCP clients reach this server at (an `http` or `https` URL with no credentials, query or fragment; anything else refuses to start). Its host is allowed on `/mcp` and every `/api` route, and `GET /api/mcp` advertises it with `/mcp` appended. |
+| `FATHOM_ALLOWED_HOSTS` | unset | Comma separated extra `Host` names allowed on `/mcp` and every `/api` route: `host` (any port) or `host:port`. |
 
 ## Store
 
@@ -244,7 +263,7 @@ Money columns are dollars rounded to cents; JSON columns hold JSON text. The pro
 | `goals` | `id` PK, `def` JSON, `sort` |
 | `deadlines` | `id` PK, `date`, `label`, `title`, `rec_id`, `hard` |
 | `events` | `id` PK, `date` (label as in the scenario), `kind`, `title`, `body`, `sort` |
-| `packs_state` | `id` PK, `def` JSON (the pack with its base status), `active` (NULL means no override), `exploring`, `what_if_asked`, `what_if_done`, `unhid` JSON, `sort`, `updated_at` |
+| `packs_state` | `id` PK, `def` JSON (the pack with its base status, plus an optional `manifest` tag naming the repo pack manifest the row stands for; migration 005 tags the demo rows, real rows link by their own id), `active` (NULL means no override), `exploring`, `what_if_asked`, `what_if_done`, `unhid` JSON, `sort`, `updated_at` |
 | `decisions` | `id` PK, `title`, `status` in open, decided, upcoming, `wargame`, `rec_id`, `opens_on`, `when_label`, `note`, `decided_line`, `sort` |
 | `jobs` | `id` PK, `name`, `cadence`, `does`, `cost`, `next_label`, `last_label`, `enabled`, `sort` |
 | `job_runs` | `id` PK, `job_id`, `started_at`, `finished_at`, `status`, `cost_usd`, `note` |
@@ -349,9 +368,14 @@ fathom message holding its summary.
 
 ## API
 
-All JSON. Every POST except `POST /api/files` requires `content-type: application/json` (charset
-allowed), else 415; when an `Origin` header is present its host must equal the `Host` header, else
-403; bodies are capped at 64 KiB (413); malformed JSON or a non-object body is 400. Errors are `{error: '<message>'}`. Unknown
+All JSON. Every `/api` route (any path equal to `/api` or under `/api/`, including unknown paths,
+wrong methods and the ingest upload and confirm routes) first passes the Host allowlist described
+under "MCP server": a foreign `Host` gets 403 `{error: 'forbidden host'}` before route matching.
+`/healthz` and static files are exempt. A deployment reached by a DNS name must set
+`FATHOM_PUBLIC_URL` or `FATHOM_ALLOWED_HOSTS`. Every POST except `POST /api/files` requires
+`content-type: application/json` (charset allowed), else 415; when an `Origin` header is present its
+host must equal the `Host` header, else 403; bodies are capped at 64 KiB (413); malformed JSON or a
+non-object body is 400. Errors are `{error: '<message>'}`. Unknown
 paths under `/api` are a JSON 404 and a known path with the wrong method is 405. Every action
 response is `{scenario, ...}` with the fresh scenario.
 
@@ -366,13 +390,20 @@ response is `{scenario, ...}` with the fresh scenario.
 | `POST /api/engine` | `{on: boolean}` | `{scenario}`; 400 when `on` is not boolean. |
 | `POST /api/ask` | `{key?: 'ask', a rec id or 'pack:<id>', questionId? or text?}` | `{scenario, message}`. Exactly one of `questionId` or `text`; empty text, both or neither are 400; unknown question or conversation 404. Appends the owner's message and the answer (or the engine-off notice when the engine is off). |
 | `POST /api/onboarding` | `{step}` | `{scenario}`. 0 to 5 set the step, 6 completes onboarding; anything else 400. |
-| `POST /api/demo/reset` | `{}` | `{scenario}`. Rebuilds the demo store and removes stored uploads (`$FATHOM_DATA/files/*.bin`, the demo key stays); 404 unless the store is a demo store. |
+| `POST /api/demo/reset` | `{}` | `{scenario}`. Rebuilds the demo store and removes stored uploads (`$FATHOM_DATA/files/*.bin`); 404 unless the store is a demo store. Clears `api_keys`; the server secret file survives. |
+| `GET /api/keys` | | `{keys: [{id, name, scopes, createdAt, lastUsedAt, revokedAt}]}` ordered by creation; never a key or hash. |
+| `POST /api/keys` | `{name, scopes?: ('read' or 'write:recs')[]}` | `{key, record, keys}`. The only time the key is shown. Name trimmed, 1 to 80 characters, no control characters; scopes always include `read`; else 400. |
+| `POST /api/keys/:id/revoke` | `{}` | `{record, keys}`. Sets `revokedAt` once (a second revoke keeps it); 404 unknown id. |
+| `GET /api/mcp` | | `{url, publicUrlSet, tools: [{name, description, scope}], scopes: [{id, label, access}]}`. `url` is `FATHOM_PUBLIC_URL` with `/mcp` appended unless it already ends in it, else `<proto>://<Host>/mcp` with proto from `X-Forwarded-Proto` (http or https only), then the socket. |
+
 | `POST /api/files` | multipart/form-data, field `files` (one or more) | `{scenario, files: [result], pending}`. A result is `{fileId, name, status, sourceKind, parser, counts, duplicateOf?}` with status `imported`, `duplicate`, `needs_mapping`, `needs_extraction`, `unsupported`, `too_large` (past a parse limit, see Ingest) or `failed`. 400 no files or malformed body, 409 a real store without `FATHOM_DATA_KEY_FILE` (nothing stored), 413 over a size cap, 415 not multipart with a boundary. |
 | `GET /api/files` | | `{files: [{id, name, status, sourceKind, parser, counts, uploadedAt}]}`, newest first. |
 | `POST /api/files/:id/retry` | `{}` | `{scenario, file: result}`. Routes a `needs_mapping` or `needs_extraction` file again under the same id; 404 unknown file, 409 a file that is not waiting. |
 | `GET /api/confirm` | | `{items: [pending confirm items]}`. |
 | `POST /api/confirm/list` | `{status?: pending (default), answered or all}` | `{items}`; 400 for another status. |
 | `POST /api/confirm/:id/answer` | `{answer: optionId}` | `{scenario, item}`. 404 unknown item, 400 an option not offered, 409 already answered or stale (the value changed since the question was asked). |
+
+Key responses carry no `scenario`, the one exception to the rule above.
 
 Uploads: `POST /api/files` takes `multipart/form-data` with a boundary (else 415) under the same
 Origin rule as JSON posts. A request is capped at 200 MB (`UPLOAD_REQUEST_LIMIT`) and each file at
@@ -397,6 +428,42 @@ style-src-attr 'unsafe-inline'; font-src https://fonts.gstatic.com; img-src 'sel
 connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'`.
 API responses also set `Cache-Control: no-store`. There is no authentication in this item: the app
 is reachable only on the owner's private network.
+
+### MCP server
+
+`POST /mcp` (exactly that path) is a stateless Streamable HTTP MCP endpoint (`src/mcp`). Each
+request gets a fresh low-level SDK `Server` and a `StreamableHTTPServerTransport` with no session id
+and JSON responses, closed when the response closes. Checks run in this order:
+
+1. Host: 403 `{error: 'forbidden host'}` unless the `Host` header is an IP literal, `localhost` or
+   `*.localhost`, the host of `FATHOM_PUBLIC_URL`, or an entry of `FATHOM_ALLOWED_HOSTS`. This
+   blocks DNS rebinding; it runs before authentication. The same Host allowlist guards every
+   `/api` route (not only `/api/keys`), decided on the raw path before route matching; `/healthz`
+   and static files are exempt. A deployment reached by a DNS name must set `FATHOM_PUBLIC_URL` or
+   `FATHOM_ALLOWED_HOSTS`.
+2. Origin: when present it must be `http` or `https` with the same host as `Host`, else 403
+   `{error: 'forbidden origin'}`.
+3. Auth: `Authorization: Bearer <key>` (scheme case-insensitive, one token). Missing, malformed,
+   unknown and revoked keys all get 401 with `WWW-Authenticate: Bearer` and exactly
+   `{"error":"unauthorized"}`.
+4. Method: `GET` and `DELETE` are 405 with `Allow: POST`. Bodies are capped at 1 MiB (413);
+   malformed JSON is 400.
+5. The key's `last_used_at` is stamped, then the request runs with
+   `ctx = {db, now, dataDir, clock}`.
+
+Scopes: `read` (every read tool) and `write:recs` (adds `set_recommendation_status`); every key
+has `read`. `tools/list` returns only the key's tools, annotated `readOnlyHint` for read tools and
+`destructiveHint: false`, `openWorldHint: false`. Calling a registry tool outside the key's scopes
+returns an `isError` result `Permission denied: <name> needs the <scope> scope, which this key
+does not have.`; an unknown name is `no tool <name>`; a `ToolError` returns its message; any other
+failure returns `Tool execution failed` and logs only the tool name and error class. Keys, tool
+arguments and tool results are never logged.
+
+Keys (`src/mcp/keys.mjs`) are `fathom_` plus 43 base64url characters (32 random bytes), shown once
+by `POST /api/keys`. `api_keys` stores only HMAC-SHA256 of the key under a server secret: the file
+`api-key-secret` in `FATHOM_DATA`, 64 hex characters, created 0600 on first start and never
+rewritten (a malformed file stops startup; removing it invalidates every key). Verification
+compares against every stored hash with `crypto.timingSafeEqual`.
 
 ## Seams later items plug into
 
@@ -424,7 +491,11 @@ is reachable only on the owner's private network.
    to handlers as `ctx.engine`. In live mode the server reads the credential once from
    `FATHOM_CLAUDE_CREDENTIAL_FILE`; a failure logs "fathom: engine credential unavailable"
    (never the value) and live calls then fail.
-5. MCP: `src/mcp` exposes `src/tools` with scopes checked against `api_keys`.
+5. MCP: `src/mcp` exposes `src/tools` at `POST /mcp` with scopes checked against `api_keys` (see
+   MCP server above). `src/server.mjs` loads the server secret, builds the key service
+   (`createKeyService`) and `createMcpHandler`, and passes both to `createHandler`, which builds
+   them from `config.dataDir` on first use when they are not passed. New tools added to the
+   registry appear on `/mcp` under their scope with no further wiring.
 6. Jobs: `src/jobs` schedules from `jobs` and records `job_runs`.
 7. Email: `src/email` renders the `email` content (later derived) through `FATHOM_EMAIL_TRANSPORT`.
 
@@ -599,6 +670,7 @@ tax payments. Every seeded row carries `file_id` and `parser` `demo-seed` and a 
 The `Dockerfile` builds on `node:24-slim`, installs with `npm ci --omit=dev`, runs as the built-in
 non-root `node` user (uid 1000) with `/data` owned by it, sets `FATHOM_DATA=/data`,
 `FATHOM_PORT=8080` and `FATHOM_HOST=0.0.0.0`, exposes 8080, and health checks `GET /healthz` with
-node's `fetch`. Mount a named volume at `/data`; a host bind mount directory must be writable by
+node's `fetch`. It copies `src`, `web`, `demo` and `packs` (the pack tools read the repo packs at
+runtime). Mount a named volume at `/data`; a host bind mount directory must be writable by
 uid 1000. `scripts/docker-smoke.sh` builds, runs and smoke tests the image with whatever docker CLI
 configuration the caller has.

@@ -1,0 +1,68 @@
+/* Connect screen. Builds on the Horizon tokens and shared classes in design.css. */
+
+.d-horizon .cn-url code[data-testid="mcp-url"] { white-space: normal; overflow-wrap: anywhere; }
+.d-horizon .cn-url .cn-dim { color: var(--fa); }
+.d-horizon .cn-urlnote { margin-top: 8px; max-width: 720px; }
+.d-horizon .cn-err { color: #f0a58f; font-size: 13px; margin-top: 8px; }
+.d-horizon .h-url + .h-cols, .d-horizon .cn-urlnote + .h-cols { margin-top: 4px; }
+
+/* create form */
+.d-horizon .cn-form { max-width: 720px; }
+.d-horizon .cn-field label { display: block; color: var(--mu); font-size: 13px; margin-bottom: 6px; }
+.d-horizon .cn-inrow { display: flex; gap: 8px; }
+.d-horizon .cn-inrow input { flex: 1; min-width: 0; height: 42px; padding: 0 14px; background: var(--s1); color: var(--tx); border: 1px solid var(--line2); border-radius: 9px; font: inherit; font-size: 14.5px; }
+.d-horizon .cn-inrow input::placeholder { color: var(--fa); }
+.d-horizon .cn-inrow input:focus { outline: none; border-color: var(--ac); }
+.d-horizon .cn-inrow input[aria-invalid="true"] { border-color: #f0a58f; }
+.d-horizon .cn-inrow .h-btn { height: 42px; padding: 0 18px; }
+.d-horizon .cn-inrow .h-btn[disabled] { opacity: 0.6; cursor: progress; }
+.d-horizon .cn-scopes { margin-top: 18px; }
+.d-horizon .cn-scopes .h-toggle[disabled] { cursor: default; opacity: 0.55; }
+
+/* one-time reveal */
+.d-horizon .cn-reveal { margin-top: 22px; padding: 18px 20px; border: 1px solid var(--acl); background: var(--acd); border-radius: 12px; max-width: 720px; display: flex; flex-direction: column; gap: 12px; }
+.d-horizon .cn-reveal-h { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.d-horizon .cn-reveal-h h3 { font-size: 15px; overflow-wrap: anywhere; }
+.d-horizon .cn-reveal-h h3:focus { outline: none; }
+.d-horizon .cn-reveal-h span { color: var(--mu); font-size: 12.5px; }
+.d-horizon .cn-reveal-note { color: var(--tx2); font-size: 13.5px; display: flex; gap: 8px; align-items: flex-start; }
+.d-horizon .cn-reveal-note .h-i { color: var(--ac); margin-top: 3px; }
+.d-horizon .cn-keybox { background: var(--bg); max-width: none; }
+.d-horizon .cn-keybox code { white-space: normal; overflow-wrap: anywhere; user-select: all; }
+
+/* snippets */
+.d-horizon .cn-snips { display: flex; flex-direction: column; gap: 18px; max-width: 720px; }
+.d-horizon .cn-snip .h-sub-h { align-items: center; }
+.d-horizon .cn-snip .h-sub-h .h-btn { height: 26px; padding: 0 10px; font-size: 12px; text-transform: none; letter-spacing: 0; }
+
+/* key list */
+.d-horizon .cn-keys { max-width: 720px; }
+.d-horizon .cn-key { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 20px; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--line); }
+.d-horizon .cn-key:first-child { padding-top: 2px; }
+.d-horizon .cn-key-top { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.d-horizon .cn-key-top b { font-weight: 500; font-size: 15px; overflow-wrap: anywhere; min-width: 0; }
+.d-horizon .cn-key .h-meta { margin-top: 4px; }
+.d-horizon .cn-key-acts { justify-content: flex-end; }
+.d-horizon .cn-status { font-size: 12px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line2); color: var(--mu); }
+.d-horizon .cn-status.active { color: var(--ac); border-color: var(--acl); }
+.d-horizon .cn-status:focus { outline: none; }
+.d-horizon .cn-key.revoked .cn-key-top b { color: var(--mu); }
+.d-horizon .cn-confirm { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: flex-end; }
+.d-horizon .cn-confirm span { color: var(--mu); font-size: 12.5px; margin-right: 4px; }
+.d-horizon .h-btn.cn-danger { border-color: #f0a58f; color: #f0a58f; }
+.d-horizon .h-btn.cn-danger:hover { background: rgba(240, 165, 143, 0.12); }
+
+/* tools */
+.d-horizon .cn-tool-h { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.d-horizon .cn-tool-h code { overflow-wrap: anywhere; }
+.d-horizon .cn-scope { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--fa); }
+.d-horizon .cn-scope.w { color: var(--ac); }
+
+@media (max-width: 720px) {
+  .d-horizon .cn-inrow { flex-direction: column; }
+  .d-horizon .cn-inrow .h-btn { width: 100%; }
+  .d-horizon .cn-reveal { padding: 16px; }
+  .d-horizon .cn-key { grid-template-columns: minmax(0, 1fr); }
+  .d-horizon .cn-key-acts, .d-horizon .cn-confirm { justify-content: flex-start; }
+  .d-horizon .cn-keybox { flex-direction: column; align-items: stretch; padding: 12px; }
+}

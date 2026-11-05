@@ -1,6 +1,7 @@
 // Tool registry shared by the chat engine and the MCP server (frozen architecture, tool interface).
 // Each tool: { name, description, inputSchema (JSON Schema subset), scope: 'read'|'write:recs',
-// handler(args, ctx) } with ctx = { db, now }. callTool validates args against inputSchema and
+// handler(args, ctx) } with ctx = { db, now } (pack tools also read optional packDirs, dataDir;
+// see ./packs.mjs). callTool validates args against inputSchema and
 // throws ToolError ('bad_input' | 'not_found'). The only write is recommendation status.
 //
 // Outputs resolve scenario tokens to plain text, carry masks only (never account numbers), and
@@ -10,14 +11,11 @@ import { getSetting, tx, cents, parseJson as parse } from '../store/db.mjs';
 import { loadRecs, loadContent, loadPacks, tokenScope, recFromRow, resolveClock, todayUtc } from '../scenario/build.mjs';
 import { needsYou, verdictLevel, packStatus, STATUSES } from '../shared/rules.mjs';
 import { resolveTokens } from '../shared/tokens.mjs';
+import { ToolError } from './errors.mjs';
+import { packTools } from './packs.mjs';
 
-export class ToolError extends Error {
-  constructor(code, message) {
-    super(message);
-    this.name = 'ToolError';
-    this.code = code;
-  }
-}
+export { ToolError };
+export { packDirsFor } from './packs.mjs';
 
 const SETTABLE = ['accepted', 'doing', 'done', 'dismissed', 'snoozed', 'proposed'];
 const DATE = '^\\d{4}-\\d{2}-\\d{2}$';
@@ -95,9 +93,9 @@ function nowOf(ctx) {
   return d && !Number.isNaN(d.getTime()) ? d : new Date();
 }
 
-// "Today": the store clock when set, else ctx.now's UTC date.
+// "Today": ctx.clock (FATHOM_CLOCK) when given, else the store clock when set, else ctx.now's UTC date.
 function clockOf(ctx) {
-  return resolveClock(ctx.db, getSetting(ctx.db, 'clock', null) || todayUtc(nowOf(ctx)));
+  return resolveClock(ctx.db, ctx.clock || getSetting(ctx.db, 'clock', null) || todayUtc(nowOf(ctx)));
 }
 
 // ' WHERE a AND b' and its params from [sql, value] pairs, skipping undefined values.
@@ -339,6 +337,7 @@ export const tools = [
       return plainDeep(tokenScope(db), recFromRow(recRow(db, args.id), clockOf(ctx)));
     },
   },
+  ...packTools,
 ];
 
 const byName = new Map(tools.map(t => [t.name, t]));
