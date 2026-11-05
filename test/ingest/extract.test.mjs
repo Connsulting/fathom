@@ -854,9 +854,137 @@ describe('withholding recipients (D4, G4)', () => {
         const dup = all(s.db, "SELECT * FROM superseded_rows WHERE table_name = 'tax_payments' ORDER BY id");
         assert.deepEqual(dup.map((x) => [x.reason, x.file_id, JSON.parse(x.row).payer, JSON.parse(x.row).amount]), [['duplicate', ids.b, `${base}:owner`, 240]]);
         assert.equal(recipientQuestions(s.db).length, 0);
+        assert.equal(pendingOf(s.db, 'withholding_conflict').length, 0, 'equal amounts are a duplicate, never a conflict');
       }));
     }
   }
+
+  // Review finding K1: payer identity excludes the withholding amount, so an original document and
+  // its correction (same payer, year and primary figure, different withholding) share an identity
+  // once the recipient resolves. Equal amounts are a duplicate; differing amounts queue one
+  // withholding_conflict question (first: keep the earlier-imported row, second: the later one,
+  // both: both are real payments) and keep both rows active until it is answered. The rejected row
+  // is archived as withholding_conflict, never deleted, and the answer is remembered.
+  const W2_FIRST = { ...W2_2032, stateWithheld: 0, federalWithheld: 12000 };
+  const W2_SECOND = { ...W2_FIRST, federalWithheld: 13000 };
+  const w2Of = (member, extracted) => ({
+    file: (again = '') => textFile(`w2-${member}-2032${again}.txt`, `Synthetic wage and tax statement for 2032, copy ${member}${again}`, 'text/plain'),
+    engine: () => fakeEngine([[{ docType: 'w2', taxYear: 2032, confidence: 0.9 }], [extracted]]),
+  });
+  const int1099Of = (member, federalWithheld) => ({
+    file: (again = '') => textFile(`1099-int-${member}-2032${again}.txt`, `Synthetic 1099-int for tax year 2032, copy ${member}${again}`, 'text/plain'),
+    engine: () => fakeEngine([[{ docType: '1099-int', taxYear: 2032, confidence: 0.9 }], [{ ...form1099('1099-int'), federalWithheld }]]),
+  });
+  const importDoc = async (s, d) => {
+    const r = await P.ingestFile(s.db, d.file(), s.opts(await d.engine()));
+    assert.equal(r.status, 'imported');
+    return r.fileId;
+  };
+  const answerConflict = (s, option) => {
+    const q = pendingOf(s.db, 'withholding_conflict');
+    assert.equal(q.length, 1, 'one withholding_conflict question');
+    return C.answer(s.db, q[0].id, option, { now: NOW });
+  };
+  const archivedWith = (db, reason) => all(db, "SELECT * FROM superseded_rows WHERE table_name = 'tax_payments' AND reason = ? ORDER BY id", reason);
+  const federal = (db) => active(db).filter((t) => t.jurisdiction === 'federal').sort((x, y) => x.id - y.id);
+  // Each case imports the earlier document (first) then the later one (second), both resolved to the
+  // owner, and returns {ids, base, docs, amounts}.
+  const CONFLICT_CASES = [
+    ...[['a', 'b'], ['b', 'a']].map((answerOrder) => ({
+      name: `1099-int original and correction, document answers ${answerOrder.join(',')}`,
+      async run(s) {
+        const docs = { first: int1099Of('original', 200), second: int1099Of('corrected', 240) };
+        const ids = { first: await importDoc(s, docs.first), second: await importDoc(s, docs.second) };
+        const base = base1099('1099-int');
+        const asked = pendingOf(s.db, 'document_recipient');
+        const member = { a: ids.first, b: ids.second };
+        for (const m of answerOrder) answerDoc(s, asked, `${base}:doc:${member[m]}`, 'owner');
+        return { ids, base, docs, amounts: { first: 200, second: 240 }, again: '' };
+      },
+    })),
+    {
+      name: 'two W-2s from one employer, rekeyed by the employer answer',
+      async run(s) {
+        const docs = { first: w2Of('first', W2_FIRST), second: w2Of('second', W2_SECOND) };
+        const ids = { first: await importDoc(s, docs.first), second: await importDoc(s, docs.second) };
+        answerEmployer(s.db, 'owner');
+        return { ids, base: payers().w2, docs, amounts: { first: 12000, second: 13000 }, again: '-again' };
+      },
+    },
+    {
+      name: 'two W-2s from one employer, the second resolved at import by the remembered employer answer',
+      async run(s) {
+        const docs = { first: w2Of('first', W2_FIRST), second: w2Of('second', W2_SECOND) };
+        const first = await importDoc(s, docs.first);
+        answerEmployer(s.db, 'owner');
+        const ids = { first, second: await importDoc(s, docs.second) };
+        return { ids, base: payers().w2, docs, amounts: { first: 12000, second: 13000 }, again: '-again' };
+      },
+    },
+  ];
+
+  test('K1: withholding_conflict is a confirm kind', () => {
+    assert.ok(C.KINDS.includes('withholding_conflict'));
+  });
+
+  for (const c of CONFLICT_CASES) {
+    test(`K1: ${c.name}: differing withholding is not a duplicate; one withholding_conflict question and both rows stay active`, () => withStore(async (s) => {
+      const { ids, amounts } = await c.run(s);
+      assert.deepEqual(federal(s.db).map((t) => [t.recipient, t.amount, t.file_id]), [['owner', amounts.first, ids.first], ['owner', amounts.second, ids.second]]);
+      assert.equal(archivedWith(s.db, 'duplicate').length, 0, 'no row is archived as duplicate');
+      assert.equal(archivedWith(s.db, 'revised').length, 0, 'no row is revised in place');
+      assert.equal(archivedWith(s.db, 'withholding_conflict').length, 0, 'nothing is archived before the answer');
+      const q = pendingOf(s.db, 'withholding_conflict');
+      assert.equal(q.length, 1, 'exactly one withholding_conflict question');
+      assert.deepEqual(q[0].options.map((o) => o.id), ['first', 'second', 'both']);
+      assert.equal(recipientQuestions(s.db).length, 0);
+    }));
+
+    const KEEP = { first: ['first'], second: ['second'], both: ['first', 'second'] };
+    for (const option of ['first', 'second', 'both']) {
+      test(`K1: ${c.name}: answering ${option} keeps ${KEEP[option].join(' and ')}; a re-import asks nothing and changes nothing`, () => withStore(async (s) => {
+        const { ids, base, docs, amounts, again } = await c.run(s);
+        answerConflict(s, option);
+        const kept = federal(s.db);
+        assert.deepEqual(kept.map((t) => [t.recipient, t.amount, t.file_id]), KEEP[option].map((k) => ['owner', amounts[k], ids[k]]));
+        if (option !== 'both') {
+          assert.equal(kept[0].payer, `${base}:owner`, 'the survivor carries the resolved payer identity');
+          assert.equal(kept[0].dedupe_key, rekeyed(kept[0]));
+        }
+        const rejected = option === 'first' ? 'second' : option === 'second' ? 'first' : null;
+        const archived = archivedWith(s.db, 'withholding_conflict');
+        assert.deepEqual(archived.map((x) => [x.file_id, JSON.parse(x.row).amount]), rejected ? [[ids[rejected], amounts[rejected]]] : [], 'the rejected row is archived, never dropped');
+        assert.equal(archivedWith(s.db, 'duplicate').length, 0);
+        assert.equal(pendingOf(s.db, 'withholding_conflict').length, 0);
+
+        const pending = C.pendingItems(s.db).map((i) => i.id);
+        const rows = active(s.db);
+        const superseded = count(s.db, 'superseded_rows');
+        // W-2: re-downloaded copies (same extraction, new bytes) route through import under the
+        // remembered employer answer. 1099: the recipient answer is per document (H1), so a new copy
+        // would rightly ask again; the same bytes are uploaded and skipped as an identical file.
+        for (const d of [docs.first, docs.second]) {
+          const r = await P.ingestFile(s.db, d.file(again), s.opts(await d.engine()));
+          assert.equal(r.status, again ? 'imported' : 'duplicate');
+        }
+        assert.deepEqual(C.pendingItems(s.db).map((i) => i.id), pending, 'nothing new is asked');
+        assert.deepEqual(active(s.db), rows, 'active rows are unchanged');
+        assert.equal(count(s.db, 'superseded_rows'), superseded, 'nothing more is archived');
+      }));
+    }
+  }
+
+  test('K1 guard: two W-2s with equal state and differing federal withholding: the state row collapses as duplicate, only federal is asked about', () => withStore(async (s) => {
+    const first = await importDoc(s, w2Of('first', { ...W2_FIRST, stateWithheld: 3500 }));
+    const second = await importDoc(s, w2Of('second', { ...W2_SECOND, stateWithheld: 3500 }));
+    answerEmployer(s.db, 'owner');
+    const state = active(s.db).filter((t) => t.jurisdiction !== 'federal');
+    assert.deepEqual(state.map((t) => [t.amount, t.file_id]), [[3500, first]], 'one state row, from the earlier file');
+    assert.deepEqual(archivedWith(s.db, 'duplicate').map((x) => [x.file_id, JSON.parse(x.row).jurisdiction, JSON.parse(x.row).amount]), [[second, state[0].jurisdiction, 3500]]);
+    assert.deepEqual(federal(s.db).map((t) => [t.amount, t.file_id]), [[12000, first], [13000, second]]);
+    const q = pendingOf(s.db, 'withholding_conflict');
+    assert.equal(q.length, 1, 'one question, for federal only');
+  }));
 });
 
 // D6 with G6 to G8: a PDF whose text layer has any text is read with pdfjs (in a worker) and goes
