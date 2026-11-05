@@ -39,7 +39,7 @@ export function build(ctx, hit) {
 }
 
 export function template(ctx) {
-  const paid = has(ctx, 'tax.va.paid') ? ' and you have paid {f:tax.va.paid} so far' : '';
+  const paid = has(ctx, 'tax.va.paid') ? ' and you have paid {f:tax.va.paid} in estimated payments so far' : '';
   return {
     summary: 'Pay {f:sh.va.remaining} to Virginia by Jan 15 to cover the year.',
     why: [

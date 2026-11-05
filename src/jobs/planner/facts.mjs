@@ -1,13 +1,16 @@
 // Derived facts: boolean and number facts the planner reads off the data, each with the rule and
-// evidence rows that support it. The planner owns a key only while no row exists or the stored row
-// is its own unconfirmed one; owner answers always win. Booleans are only ever derived as true.
+// evidence rows that support it. The planner owns a key only while no row exists, the stored row
+// is its own unconfirmed one, or it is an unconfirmed import assertion; owner answers and confirmed
+// facts always win. Booleans are only ever derived as true.
 //
 // deriveFacts(data, {entities})         -> {key: {value, rule, rows: [{table, id, fileId}]}}
 // deriveFigureFacts(figs, facts)         -> the same for income.agiEstimate and the Roth candidate
-// mergeFacts(stored, derived)            -> {values, writes, deletes}
+// mergeFacts(stored, derived)            -> {values, writes, deletes, checks}
 
 import { cents } from '../../store/db.mjs';
-import { sameName, isCharitable, addDays } from './data.mjs';
+import { isCharitable, addDays } from './data.mjs';
+import { sameEmployer } from './payroll.mjs';
+import { canonicalJson } from '../../ingest/confirm.mjs';
 import { rothPhaseOutEnd } from './law.mjs';
 
 export const PLANNER_SRC = 'planner';
@@ -38,10 +41,10 @@ export function deriveFacts(data, { entities }) {
   const entityRows = e => [...(e.docId != null ? [ev('documents', e.docId, e.fileId)] : []), ...e.lines.map(l => ev('pnl_lines', l.id, l.file_id))];
   const typed = types => entities.filter(e => e.classified && types.includes(e.type));
   const docs = (types, test = () => true) => data.documents.filter(d => types.includes(d.docType) && test(d));
-  const householdEntity = name => entities.some(e => sameName(e.name, name));
+  const householdEntity = name => entities.some(e => sameEmployer(data, e.name, name));
 
   const scorps = typed(['s_corp']).filter(e => e.lines.length);
-  const scorpW2 = docs(['w2'], d => docYearOk(d, year) && typed(['s_corp']).some(e => sameName(e.name, d.fields.employer)));
+  const scorpW2 = docs(['w2'], d => docYearOk(d, year) && typed(['s_corp']).some(e => sameEmployer(data, e.name, d.fields.employerName)));
   if (scorps.length || scorpW2.length) {
     out['income.sCorp'] = fact(true, scorps.length ? 's_corp entity with profit and loss lines' : 'W-2 from the household S corp',
       [...scorps.flatMap(entityRows), ...scorpW2.map(d => ev('documents', d.id, d.fileId))]);
@@ -55,13 +58,13 @@ export function deriveFacts(data, { entities }) {
   }
 
   const partners = typed(['partnership']);
-  const k1s = docs(['k1'], d => String(d.fields.form ?? '') === '1065');
+  const k1s = docs(['k1'], d => d.fields.entityKind === 'partnership');
   if (partners.length || k1s.length) {
     out['income.partnership'] = fact(true, partners.length ? 'partnership entity' : 'partnership K-1',
       [...partners.flatMap(entityRows), ...k1s.map(d => ev('documents', d.id, d.fileId))]);
   }
 
-  const outside = docs(['w2', 'paystub'], d => docYearOk(d, year) && d.fields.employer && !householdEntity(d.fields.employer));
+  const outside = docs(['w2', 'paystub'], d => docYearOk(d, year) && String(d.fields.employerName ?? '').trim() && !householdEntity(d.fields.employerName));
   if (outside.length) out['income.w2'] = fact(true, 'W-2 or paystub from an outside employer', outside.map(d => ev('documents', d.id, d.fileId)));
 
   const accountFact = (key, rule, test) => {
@@ -94,17 +97,32 @@ export function deriveFigureFacts(figs, facts) {
   return out;
 }
 
-// The planner may write a key when no row exists or the stored row is its own unconfirmed one.
+// D13: the planner may write a key when no row exists, the stored row is its own unconfirmed one, or
+// the key is one it derives (PLANNER_KEYS) and the stored row is an unconfirmed document or parser
+// assertion (src ing:<parser>:<scope>, not ing:notes:). A fact from the owner's notes is never
+// overwritten; a derived value that disagrees with it becomes a check (ingest's fact_check
+// question). It deletes only its own rows.
 const plannerOwned = row => row && row.src === PLANNER_SRC && !row.confirmed;
+const srcOf = row => String((row && row.src) ?? '');
+const fromNotes = row => !!row && !row.confirmed && srcOf(row).startsWith('ing:notes:');
+const plannerWritable = (key, row) => !row || plannerOwned(row)
+  || (PLANNER_KEYS.includes(key) && !row.confirmed && srcOf(row).startsWith('ing:') && !srcOf(row).startsWith('ing:notes:'));
 
+// mergeFacts(stored, derived, {keep}) -> {values, writes, deletes, checks}; checks: [{key, value,
+// rule, rows, stored}] derived values that disagree with an owner's notes fact.
 export function mergeFacts(stored, derived, { keep = [] } = {}) {
   const values = {};
   for (const [k, r] of Object.entries(stored)) values[k] = r.value;
   const writes = [];
   const deletes = [];
+  const checks = [];
   for (const [key, d] of Object.entries(derived)) {
     const row = stored[key];
-    if (row && !plannerOwned(row)) continue;
+    if (PLANNER_KEYS.includes(key) && fromNotes(row)) {
+      if (canonicalJson(row.value) !== canonicalJson(d.value)) checks.push({ key, ...d, stored: row.value });
+      continue;
+    }
+    if (!plannerWritable(key, row)) continue;
     values[key] = d.value;
     writes.push({ key, ...d });
   }
@@ -114,7 +132,7 @@ export function mergeFacts(stored, derived, { keep = [] } = {}) {
       deletes.push(key);
     }
   }
-  return { values, writes, deletes };
+  return { values, writes, deletes, checks };
 }
 
 // Provenance for a derived fact (the first evidence row's file, at most MAX_ROWS rows).

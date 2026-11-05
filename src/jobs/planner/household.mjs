@@ -16,13 +16,14 @@
 // employerPaid(plan) -> employer plus SEP contributions already made to one sponsor's plans
 // planInputs(person, plan) -> the room calculators' plan aggregate inputs for one sponsor
 // attributeContributions(owner, businesses) -> {entries: [{...entry, sponsor: {kind, slug}}], unattributed}
+// payrollRecords(data, entities, owner) -> re-exported from payroll.mjs
 // recordedTypes(sources, person, slug) -> Set of contribution types records already carry
 // contributions(records, corps, attributed, owner) -> {owner|spouse: {allRegular, allCatchUp, all401k,
 //   outsideKnown, byPlan: {slug: {deferral, catchUp, roth, employer, sep}}, ira}}
 
 import { federalIncomeTax, payrollTax, selfEmploymentTax, qbiDeduction, virginiaIncomeTax, employerLimit, TAX_2026 } from '../../calc/index.mjs';
 import { cents } from '../../store/db.mjs';
-import { sameName, monthOf, yearOf, sum } from './data.mjs';
+import { sameName, sum } from './data.mjs';
 import { law, stdDeduction, vaStdDeduction } from './law.mjs';
 
 export const stepsOf = (prefix, env) => (env && Array.isArray(env.steps) ? env.steps.map(s => ({ ...s, label: `${prefix}: ${s.label}` })) : []);
@@ -318,52 +319,12 @@ export function catchUpLimitFor(age) {
   return age >= R.enhancedCatchUpStart && age <= R.enhancedCatchUpEnd ? R.enhancedCatchUp : R.catchUp;
 }
 
-// ---------------------------------------------------------------- payroll records (R3, S6)
+// ---------------------------------------------------------------- payroll records (R3, S6, R6-1)
 
-export function payrollRecords(data, entities, out) {
-  const groups = new Map();
-  for (const d of data.documents) {
-    if (d.docType !== 'w2' && d.docType !== 'paystub') continue;
-    const fl = d.fields;
-    const docYear = d.docType === 'paystub' && fl.periodEnd ? yearOf(fl.periodEnd) : d.taxYear;
-    if (docYear != null && Number(docYear) !== data.taxYear) continue;
-    let person = fl.person;
-    if (person !== 'owner' && person !== 'spouse') { person = 'owner'; out.warn('person_assumed'); }
-    const employer = String(fl.employer ?? '').trim();
-    const key = `${person}|${employer.toLowerCase()}`;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push({ ...d, person, employer });
-  }
-  const records = [];
-  for (const docs of groups.values()) {
-    const w2 = docs.filter(d => d.docType === 'w2').at(-1);
-    const auth = w2 || docs.filter(d => d.docType === 'paystub').sort((a, b) => String(a.fields.periodEnd ?? '').localeCompare(String(b.fields.periodEnd ?? '')) || a.id - b.id).at(-1);
-    const fl = auth.fields;
-    const isW2 = auth.docType === 'w2';
-    const factor = isW2 ? 1 : 12 / (monthOf(fl.periodEnd || '') || 12);
-    const proj = v => cents(num(v) * factor);
-    const r = {
-      docId: auth.id, fileId: auth.fileId, person: auth.person, employer: auth.employer, kind: auth.docType,
-      wages: isW2 ? num(fl.wages) : proj(fl.wagesYtd), ytdWages: isW2 ? num(fl.wages) : num(fl.wagesYtd),
-      deferral: isW2 ? num(fl.deferral401k) : proj(fl.deferral401kYtd),
-      deferralKnown: isW2 ? isAmount(fl.deferral401k) : isAmount(fl.deferral401kYtd),
-      catchUp: isW2 ? num(fl.catchUp401k) : proj(fl.catchUp401kYtd),
-      roth: isW2 ? num(fl.roth401k) : proj(fl.roth401kYtd),
-      fedWithheld: num(isW2 ? fl.federalWithheld : fl.federalWithheldYtd),
-      stateWithheld: num(isW2 ? fl.stateWithheld : fl.stateWithheldYtd),
-      addlWithheld: num(isW2 ? fl.additionalMedicareWithheld : fl.additionalMedicareWithheldYtd ?? fl.additionalMedicareWithheld),
-      hsa: num(isW2 ? fl.hsaEmployer : fl.hsaYtd),
-    };
-    r.pretax = Math.max(0, cents(r.deferral + r.catchUp - r.roth));
-    const corp = entities.find(e => e.classified && e.type === 's_corp' && sameName(e.name, r.employer));
-    r.corp = corp ? corp.slug : null;
-    r.household = !!corp || entities.some(e => sameName(e.name, r.employer));
-    records.push(r);
-  }
-  return records;
-}
+// Payroll records come from ingest's documents through payroll.mjs.
+export { payrollRecords } from './payroll.mjs';
 
-// R3: a deferral field counts as known only when the document carries it as a number.
+// A stated amount: a finite number of at least zero.
 function isAmount(v) {
   return typeof v === 'number' && Number.isFinite(v) && v >= 0;
 }

@@ -722,8 +722,8 @@ Planner facts carry `src: 'planner'`, `confirmed: 0`, `as_of` the clock and prov
 writes a key only when no row exists or the stored row is its own unconfirmed one, so owner answers
 always win; a planner row whose evidence disappears is deleted (kept while the tax computation is
 blocked). Booleans are only derived as true. Keys: `income.sCorp`, `income.selfEmployed`,
-`income.partnership` (from entity documents, the `business.entities` fact, W-2, 1099-NEC and K-1
-documents), `income.w2` (an outside employer, never the household's own S corp), `accounts.has529`,
+`income.partnership` (from the `business.entities` fact, P and L lines, W-2 `employerName`, 1099-NEC
+and K-1 `entityKind` documents), `income.w2` (an outside employer, never the household's own S corp), `accounts.has529`,
 `benefits.hsa`, `retirement.ira`, `retirement.solo401k` (from accounts), `giving.charitable`,
 `giving.annualEstimate` (charitable outflows of the last 365 days), `income.agiEstimate` and
 `retirement.backdoorRothCandidate` (AGI as the MAGI proxy above the Roth phase-out). Calculator
@@ -752,12 +752,12 @@ Kinds: `a` actual, `p` projection, `e` estimate, `m` model output.
 | `pnl.<entity>.netProj`, `.salaryProj`; `scorp.profitProj` | p | `plan-projection` |
 | `agi.est` | e | `calc:tax` |
 | `tax.fed.qbi`, `.taxable`, `.income`, `.se`, `.proj`; `tax.va.proj` | m | `calc:tax` |
-| `tax.fed.paid`, `tax.va.paid` | a | `tax-payments` |
-| `tax.fed.withheld`, `tax.va.withheld` | a | `docs` |
+| `tax.fed.paid`, `tax.va.paid` (tax_payments rows of kind `paid` only) | a | `tax-payments` |
+| `tax.fed.withheld`, `tax.va.withheld` (rows of kind `withholding`, or the owner's `tax.withholding.*`) | a | `tax-withholding` (`docs` for the owner fact) |
 | `sh.fed.required`, `.remaining`; `sh.va.required`, `.remaining` | m (e without a prior year) | `calc:tax` |
 | `room.solo401k`, `.employee`, `.employer`; `room.sep`; `room.ira.owner`, `.spouse`, `.household`; `room.hsa` | m | `calc:retirement` |
 | `hsa.contrib.ytd`, `va529.contrib.ytd` (zero when a college account had no deposit this year), `giving.trailing`, `giving.ytd` | a | `transactions` |
-| `inc.ytd.w2` (outside-employer W-2 or latest paystub wages this year) | a | `docs` |
+| `inc.ytd.w2` (outside-employer W-2 box 1, or the latest paystub's `ytdGross` this year) | a | `docs` |
 | `inc.ytd.total` (every `inc.ytd.*` figure) | a | `calc:income` |
 | `ira.pretax.owner`, `ira.pretax.spouse` | a | `acct:<accountId>` |
 | `va529.deductionLeft`, `va529.taxSaved`, `giving.twoYear` | m | `calc:tax` |
@@ -769,8 +769,10 @@ deductible half to each business, caps QBI at 20 percent of taxable income befor
 child tax credit for children under 17 (omitted above the phase-out threshold), and computes
 Virginia tax with the Virginia 529 deduction (personal exemptions omitted). W-2 or paystub wages
 from a classified household S corp count as that person's own-corp wages even without its P and L.
-Every partnership entity needs its own complete K-1 (matched by the K-1's `partnership`, `entity`
-or `payer` name) or, for a single partnership without one, `income.partnershipEstimate`. An
+Ingest's K-1 names no partnership: a partnership K-1 counts only when it is the only one and there
+is exactly one classified partnership (its owner is the partner); any other count blocks
+`k1_unmatched`. A single partnership without a K-1 uses `income.partnershipEstimate`. An S corp
+K-1 adds nothing next to its S corp's P and L and blocks `k1_scorp_unmatched` without one. An
 unclassified P and L entity, an incomplete partnership input, filing status mfs
 (`mfs_unsupported`), a household tax calculator throw (`calc_failed`) or a missing Virginia
 itemized estimate blocks the tax figures that need it. IRA room counts traditional and Roth IRA
@@ -782,7 +784,33 @@ and never reduced); salary war-game points are clamped into
 `business.salaryRange`, and an S corp with no officer salary yet still gets the war game (no
 current point, measured against the range midpoint); `scorp-salary` and `invoice-deferral` are
 blocked, not retired, while household or Virginia tax is blocked; a pre-tax IRA with
-no balance on file leaves that person's pro-rata status unknown. A planner figure not produced by a run is deleted unless a rec def (text or
+no balance on file leaves that person's pro-rata status unknown.
+
+The planner reads ingest's stored shapes and answers, never a field ingest does not write
+(`src/jobs/planner/payroll.mjs`, `payments.mjs`). A W-2 or paystub belongs to the recipient of its
+active withholding rows (`tax_payments.recipient`), else to the `employer_recipient` or, after
+"both", `document_recipient` answer; unknown, the planner asks ingest's own question
+(`withholdingRecipient`) and blocks `w2_recipient_unknown`. An employer is household when it matches
+a household entity by normalized name or `entity_aliases`, else the `employer_relation` answer
+decides (`household_employer_unmatched`, `employer_relation_pending`). W-2s sum per recipient,
+employer key and year: box 1 is AGI wages, box 12 D, E, F, G and S are pre-tax, D, E, F, S, AA and BB
+count toward 402(g) (G and EE do not), W is HSA money, and a W-2 without box 12 leaves deferrals
+unknown. Deferrals above the 402(g) limit are catch-ups; across a household plan and another plan
+they block `deferral_split_unknown` until `retirement.otherPlanDeferrals` is answered. A paystub-only
+employer projects `ytdGross` to the year (`section125_unknown`), blocking `paystub_ytd_missing`, or
+`paystub_deferrals_unknown` when a stub shows deferrals and no outside-401k contribution is stated.
+A W-2 whose withholding a `withholding_conflict` answer dropped is dropped too; a pending conflict
+blocks `w2_correction_pending`, answers keeping different forms block `w2_correction_conflicting`,
+and two W-2s nothing reconciles block `w2_duplicate_unresolved`. Tax payments count once by kind
+and jurisdiction (`VA` and `Virginia` are Virginia; `state` is Virginia only for a `paid` row of a
+Virginia household): blocks are `tax_payment_kind_unknown`, `withholding_state_unknown`,
+`withholding_recipient_unknown`, `withholding_conflict_pending`, `tax_year_unconfirmed` and
+`estimated_payer_unknown`, each holding only its figure and the safe-harbor figures that use it.
+Additional Medicare Tax withheld (box 6) is not extracted and counts as zero
+(`addl_medicare_withholding_not_read`). Last year's federal tax is `tax.prior.federal`, else the
+uploaded form1040 `totalTax` (`prior_tax_total_line`); AGI is `tax.prior.agi`, else its `agi`.
+Account owners are ingest's option labels mapped to people, and a business account's entity is
+`accounts.businessEntity`, else the only household business. A planner figure not produced by a run is deleted unless a rec def (text or
 `mine`), message, decision note or content row references it, or a kept war-game entry names its
 point or option. `src/scenario/build.mjs` serves a stored `wg.*` figure in place of the value it
 would derive from `content.wargame`.

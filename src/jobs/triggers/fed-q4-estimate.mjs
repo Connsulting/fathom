@@ -65,7 +65,7 @@ const JANUARY_QA = {
 const LESS_QA = { q: 'Can I pay less than this?', a: ['You can, but any shortfall against the target may carry an underpayment penalty for the quarter.'] };
 
 export function template(ctx, hit) {
-  const paid = has(ctx, 'tax.fed.paid') ? ' and you have paid {f:tax.fed.paid} so far' : '';
+  const paid = has(ctx, 'tax.fed.paid') ? ' and you have paid {f:tax.fed.paid} in estimated payments so far' : '';
   const priorKey = hit.priorHigh ? 'fedSafeHarborPriorHigh' : 'fedSafeHarborPrior';
   if (hit.basis === 'prior') {
     return {

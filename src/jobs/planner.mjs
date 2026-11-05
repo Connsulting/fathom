@@ -7,6 +7,7 @@
 
 import { getSetting, tx, parseJson } from '../store/db.mjs';
 import { upsertFact } from '../store/facts.mjs';
+import { withholdingRecipient, ask, canonicalJson, FACT_CHECK_OPTIONS } from '../ingest/confirm.mjs';
 import { loadPacks, activePacks } from '../packs/index.mjs';
 import { refreshPackState, defaultPackDirs } from '../packs/state.mjs';
 import { resolveClock } from '../scenario/build.mjs';
@@ -132,6 +133,10 @@ async function plan(db, engine, { clock, runId, packDirs }) {
       const res = upsertFact(db, { key: w.key, value: w.value, src: PLANNER_SRC, asOf: clock, confirmed: false, provenance: factProvenance(w) });
       if (res.written && res.changed) factsWritten += 1;
     }
+    // D9: a payroll document nobody has said is whose gets ingest's own recipient question (an
+    // existing or answered question is left as it is).
+    for (const q of computed.info.ask || []) withholdingRecipient(db, { ...q, now });
+    askFactChecks(db, merged.checks, { clock, now });
     const delFact = db.prepare('DELETE FROM facts WHERE key = ? AND src = ? AND confirmed = 0');
     for (const key of merged.deletes) {
       delFact.run(key, PLANNER_SRC);
@@ -162,6 +167,26 @@ async function plan(db, engine, { clock, runId, packDirs }) {
     warnings: warningList.length,
   };
   return { runId, status: 'ok', counts, warnings: warningList, costUsd };
+}
+
+// D13: a derived value that disagrees with an owner's notes fact is asked about with ingest's own
+// fact_check question (subject <source>|<key>|<canonical JSON value>, as recordFact builds it), never
+// written. A pending planner question for another value of the key is closed as superseded, so a
+// rerun with the same value asks nothing new.
+function askFactChecks(db, checks, { clock, now }) {
+  const close = db.prepare("UPDATE confirm_items SET status = 'answered', answer = 'superseded', answered_at = ? WHERE id = ?");
+  const pending = db.prepare("SELECT id, subject, context FROM confirm_items WHERE kind = 'fact_check' AND status = 'pending'").all()
+    .map(r => ({ ...r, context: parseJson(r.context, {}) || {} })).filter(r => r.context.src === PLANNER_SRC);
+  for (const c of checks) {
+    const json = canonicalJson(c.value);
+    const subject = `${PLANNER_SRC}|${c.key}|${json}`;
+    for (const p of pending) if (p.context.key === c.key && p.subject !== subject) close.run(now, p.id);
+    const { fileId, parser, locator } = factProvenance(c);
+    ask(db, {
+      kind: 'fact_check', subject, question: `Your data says ${c.key} is ${json}, but your notes say ${canonicalJson(c.stored)}. Is the data right?`,
+      options: FACT_CHECK_OPTIONS, context: { key: c.key, value: c.value, src: PLANNER_SRC, asOf: clock, fileId, parser, locator, confidence: 1 }, fileId, now,
+    });
+  }
 }
 
 // Pack defs list their recs (R12): recIds are the recs whose pack_id is the pack, sorted.

@@ -1,12 +1,18 @@
 // Planning data: everything the planner reads from the store for one run, plus the date helpers,
 // the planning tax year (R10), household entities (R1) and per-source freshness (T9.5).
 //
-// loadPlanningData(db, clock) -> {clock, year, taxYear, accounts, pnl, taxPayments, documents,
-//   transactions, files, freshness}
+// loadPlanningData(db, clock) -> {clock, year, taxYear, accounts, pnl, taxPayments, taxPaymentsNext,
+//   withholding, documents, transactions, files, confirm, conflictArchive, aliases, freshness}
+//   taxPayments: this tax year's active rows; taxPaymentsNext: next year's (only for the tax_year
+//   check); withholding: every active withholding row of any year (who a document belongs to);
+//   confirm: ingest's answers the planner reads; conflictArchive: tax_payments rows a
+//   withholding_conflict answer dropped; aliases: entity_aliases rows.
+// ownerOf(value) -> 'owner' | 'spouse' | 'joint' | 'business' | null (ingest stores option labels)
 
 import { parseJson, cents } from '../../store/db.mjs';
 import { addDays, daysBetween } from '../../scenario/build.mjs';
 import { monthEnd } from '../../ingest/format.mjs';
+import { OWNER_OPTIONS, normalizeName } from '../../ingest/confirm.mjs';
 
 export const SUPPORTED_TAX_YEARS = Object.freeze([2026]);
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -65,29 +71,63 @@ export const isCharitable = c => /charit|donat/i.test(c ?? '');
 
 // ---------------------------------------------------------------- load
 
+// Ingest writes the account_owner option label ('You', 'Your spouse', ...) into accounts.owner.
+export function ownerOf(value) {
+  const ids = OWNER_OPTIONS.map(o => o.id);
+  if (ids.includes(value)) return value;
+  const option = OWNER_OPTIONS.find(o => o.label === value);
+  return option ? option.id : null;
+}
+
+const CONFIRM_KINDS = ['employer_recipient', 'document_recipient', 'withholding_conflict', 'employer_relation', 'tax_year'];
+
+// An owner fact's value (any src but the planner's own), or undefined.
+function ownerFact(db, key) {
+  const row = db.prepare("SELECT value FROM facts WHERE key = ? AND (src IS NULL OR src != 'planner')").get(key);
+  return row ? parseJson(row.value, undefined) : undefined;
+}
+
 export function loadPlanningData(db, clock) {
   const taxYear = planningYear(clock);
   const year = taxYear ?? yearOf(clock);
   const lastPeriod = yearOf(clock) === year ? clock.slice(0, 7) : `${year}-12`;
 
+  const pnl = db.prepare('SELECT * FROM pnl_lines WHERE period >= ? AND period <= ? ORDER BY id').all(`${year}-01`, lastPeriod).map(r => ({ ...r }));
+  // A business account's entity: the owner's accounts.businessEntity answer, else the household's
+  // only business when there is exactly one.
+  const named = ownerFact(db, 'accounts.businessEntity');
+  const byAccount = named && typeof named === 'object' && !Array.isArray(named) ? named : {};
+  const listed = ownerFact(db, 'business.entities');
+  const businessNames = [...new Map([...(Array.isArray(listed) ? listed.map(e => e && e.name) : []), ...pnl.map(l => l.entity)]
+    .filter(n => typeof n === 'string' && normalizeName(n)).map(n => [normalizeName(n), n.trim()])).values()];
   const accounts = db.prepare('SELECT * FROM accounts ORDER BY sort, id').all().map(a => {
-    const locator = parseJson(a.locator, {}) || {};
+    const kind = String(a.kind || '').toLowerCase();
+    const stated = typeof byAccount[a.id] === 'string' && byAccount[a.id].trim() ? byAccount[a.id].trim() : null;
     return {
-      id: a.id, inst: a.inst, mask: a.mask, name: a.name || '', owner: a.owner, kind: String(a.kind || '').toLowerCase(),
-      fileId: a.file_id, entity: typeof locator === 'object' ? locator.entity ?? null : null,
+      id: a.id, inst: a.inst, mask: a.mask, name: a.name || '', owner: ownerOf(a.owner), kind,
+      fileId: a.file_id, entity: stated ?? (kind === 'business' && businessNames.length === 1 ? businessNames[0] : null),
       latest: latestBalance(db, a.id, clock),
     };
   });
 
-  const pnl = db.prepare('SELECT * FROM pnl_lines WHERE period >= ? AND period <= ? ORDER BY id').all(`${year}-01`, lastPeriod).map(r => ({ ...r }));
   const taxPayments = db.prepare('SELECT * FROM tax_payments WHERE tax_year = ? ORDER BY id').all(year).map(r => ({ ...r }));
+  const taxPaymentsNext = db.prepare('SELECT * FROM tax_payments WHERE tax_year = ? ORDER BY id').all(year + 1).map(r => ({ ...r }));
+  const withholding = db.prepare("SELECT id, file_id, payer, recipient, jurisdiction, tax_year FROM tax_payments WHERE kind = 'withholding' ORDER BY id").all().map(r => ({ ...r }));
+  const confirm = db.prepare(`SELECT id, kind, subject, status, answer, context, file_id FROM confirm_items WHERE kind IN (${CONFIRM_KINDS.map(() => '?').join(', ')}) ORDER BY id`)
+    .all(...CONFIRM_KINDS).map(r => ({ id: r.id, kind: r.kind, subject: r.subject, status: r.status, answer: r.answer ?? null, context: parseJson(r.context, {}) || {}, fileId: r.file_id ?? null }));
+  const conflictArchive = db.prepare("SELECT id, file_id, superseded_by, row FROM superseded_rows WHERE table_name = 'tax_payments' AND reason = 'withholding_conflict' ORDER BY id")
+    .all().map(r => ({ id: r.id, fileId: r.file_id ?? null, supersededBy: r.superseded_by ?? null, row: parseJson(r.row, {}) || {} }));
+  const aliases = db.prepare('SELECT alias, entity FROM entity_aliases ORDER BY alias').all().map(r => ({ alias: r.alias, entity: r.entity }));
   const documents = db.prepare('SELECT * FROM documents ORDER BY id').all().map(d => ({
     id: d.id, docType: String(d.doc_type || '').toLowerCase(), taxYear: d.tax_year, fields: parseJson(d.fields, {}) || {}, fileId: d.file_id,
   }));
   const transactions = db.prepare('SELECT * FROM transactions WHERE date > ? AND date <= ? ORDER BY id').all(addDays(clock, -400), clock).map(r => ({ ...r }));
   const files = db.prepare('SELECT id, name, source_kind, uploaded_at, status FROM files ORDER BY uploaded_at, id').all().map(r => ({ ...r }));
 
-  return { clock, year, taxYear, accounts, pnl, taxPayments, documents, transactions, files, freshness: freshness(db, clock) };
+  return {
+    clock, year, taxYear, accounts, pnl, taxPayments, taxPaymentsNext, withholding, documents, transactions, files,
+    confirm, conflictArchive, aliases, freshness: freshness(db, clock),
+  };
 }
 
 function latestBalance(db, accountId, clock) {
@@ -135,23 +175,22 @@ function freshness(db, clock) {
 
 // ---------------------------------------------------------------- entities (R1, T8)
 
-// Household businesses: entity documents and the business.entities fact give classification; P&L
-// entities match by trimmed, case-insensitive name; an unmatched P&L entity is unclassified.
+// Household businesses: the business.entities fact gives classification; P&L entities match by
+// trimmed, case-insensitive name; an unmatched P&L entity is unclassified.
 export function resolveEntities(data, facts) {
   const TYPES = ['s_corp', 'sole_prop', 'llc_single', 'partnership', 'c_corp'];
   const out = [];
-  const add = (e, doc) => {
+  const add = e => {
     if (!e || typeof e.name !== 'string' || !e.name.trim()) return;
     if (out.some(x => sameName(x.name, e.name))) return;
     out.push({
       name: e.name.trim(), slug: slugOf(e.name), type: TYPES.includes(e.type) ? e.type : null,
       owner: e.owner === 'spouse' ? 'spouse' : 'owner', sstb: typeof e.sstb === 'boolean' ? e.sstb : null,
-      docId: doc ? doc.id : null, fileId: doc ? doc.fileId : null, classified: TYPES.includes(e.type), lines: [],
+      docId: null, fileId: null, classified: TYPES.includes(e.type), lines: [],
     });
   };
-  for (const d of data.documents) if (d.docType === 'entity') add(d.fields, d);
   const listed = facts['business.entities'];
-  if (Array.isArray(listed)) for (const e of listed) add(e, null);
+  if (Array.isArray(listed)) for (const e of listed) add(e);
   for (const line of data.pnl) {
     let e = out.find(x => sameName(x.name, line.entity));
     if (!e) {

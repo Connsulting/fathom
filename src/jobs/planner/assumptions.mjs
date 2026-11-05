@@ -19,6 +19,10 @@ export const ASSUMPTION_TEXT = Object.freeze({
   roth_elective: "You can elect Roth for any of this; Roth contributions do not lower this year's tax.",
   roth_catch_up_unconfirmed: 'Catch-up room stays at zero until you confirm your plan offers Roth deferrals.',
   roth_catch_up_unavailable: 'Your plan has no Roth deferrals, so no catch-up is allowed once the Roth rule applies.',
+  section125_unknown: 'Paystubs do not show pre-tax benefit deductions, so wages are projected from gross pay and may be a little high.',
+  prior_tax_total_line: "Last year's target uses the total tax on your uploaded return as filed, which may include taxes the safe-harbor rule leaves out, so it may be a little high.",
+  paid_rows_as_estimates: 'Every payment in your tax payment log is counted as an estimated payment.',
+  addl_medicare_withholding_not_read: 'Additional Medicare tax withheld by an employer is not read from your W-2s yet, so withholding may be a little low.',
 });
 
 export const MAX_NOTES = 5;

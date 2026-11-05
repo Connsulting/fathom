@@ -9,13 +9,15 @@
 import { estimatedPaymentSafeHarbor, solo401kRoom, sepRoom, hsaLimit, TAX_2026 } from '../../calc/index.mjs';
 import { cents } from '../../store/db.mjs';
 import {
-  pnlSums, ytd, dateLabel, monthLabel, cleanLabel, sum, addDays, sameName,
+  pnlSums, ytd, dateLabel, monthLabel, cleanLabel, sum, addDays,
 } from './data.mjs';
 import { law, stdDeduction } from './law.mjs';
 import {
   householdTax, seTaxByPerson, catchUpLimitFor, attributeContributions, payrollRecords, contributions,
   factPretax, stepsOf, planInputs, RETIREMENT_BLOCKS,
 } from './household.mjs';
+import { sameEmployer, docRecipient } from './payroll.mjs';
+import { classifyPayments } from './payments.mjs';
 import { notesFor } from './assumptions.mjs';
 import { trailingCharitable } from './facts.mjs';
 import { buildWargames } from './wargame.mjs';
@@ -31,12 +33,16 @@ const TAX_KEYS = ['agi.est', 'tax.fed.qbi', 'tax.fed.taxable', 'tax.fed.income',
   'sh.va.required', 'sh.va.remaining', 'va529.deduction', 'va529.deductionLeft', 'va529.taxSaved'];
 const VA_KEYS = ['tax.va.proj', 'sh.va.required', 'sh.va.remaining', 'va529.deduction', 'va529.deductionLeft', 'va529.taxSaved'];
 const SOLO_KEYS = ['room.solo401k', 'room.solo401k.employee', 'room.solo401k.employer', 'room.solo401k.catchUp', 'room.solo401k.rothCatchUp', 'room.solo401k.pretax'];
+// Safe-harbor figures that use payments or withholding (R6-2 item 4).
+const SH_FED_PAID = ['sh.fed.required', 'sh.fed.remaining', 'sh.fed.priorRemaining'];
+const SH_VA_PAID = ['sh.va.required', 'sh.va.remaining'];
 const IRA_ANY = a => /\bIRA\b/i.test(a.name) || a.kind === 'roth';
 const IRA_PRETAX = a => /\bIRA\b/i.test(a.name) && !/roth/i.test(a.name) && a.kind !== 'roth';
 
 export const SOURCES = Object.freeze({
   pnl: { label: 'Business profit and loss', kind: 'pnl' },
   'tax-payments': { label: 'Estimated tax payment log', kind: 'ledger' },
+  'tax-withholding': { label: 'Withholding from your W-2s, paystubs and 1099s', kind: 'docs' },
   transactions: { label: 'Account transactions', kind: 'ledger' },
   docs: { label: 'Your documents', kind: 'documents' },
   'calc:tax': { label: 'Tax calculators, 2026 parameters', kind: 'calculator' },
@@ -159,17 +165,7 @@ export function computeFigures(data, facts, ctx) {
     corp.P = P;
   }
 
-  // Tax payments.
-  const payments = jurisdiction => data.taxPayments.filter(t => t.jurisdiction === jurisdiction);
-  const fedPay = payments('federal');
   const isVa = facts['household.state'] === 'VA';
-  const vaPay = isVa ? payments('state') : [];
-  if (fedPay.length || vaPay.length) {
-    const last = data.taxPayments.map(t => t.date).sort().at(-1);
-    out.source('tax-payments', SOURCES['tax-payments'].label, dateLabel(last), SOURCES['tax-payments'].kind);
-  }
-  if (fedPay.length) out.put('tax.fed.paid', sum(fedPay.map(t => t.amount)), 'a', 'Federal estimated tax paid this year', 'tax-payments', rowsLoc('tax_payments', fedPay.map(t => t.id)));
-  if (vaPay.length) out.put('tax.va.paid', sum(vaPay.map(t => t.amount)), 'a', 'Virginia estimated tax paid this year', 'tax-payments', rowsLoc('tax_payments', vaPay.map(t => t.id)));
 
   // Transactions: giving, HSA and college savings inflows.
   const txnSource = () => {
@@ -234,13 +230,47 @@ export function computeFigures(data, facts, ctx) {
   if (!['single', 'mfj', 'mfs', 'hoh', 'qss'].includes(f)) { f = 'single'; out.warn('filing_status_assumed'); }
   const persons = f === 'mfj' || f === 'mfs' ? ['owner', 'spouse'] : ['owner'];
   const inUnit = p => persons.includes(p);
-  const records = payrollRecords(data, entities, out);
-  // inc.ytd.w2 (F8): outside-employer wages received in the tax year (payroll records are already
-  // limited to it), the W-2 box or the latest paystub's year-to-date wages.
+
+  // Tax payments (R6-2): estimates and withholding each counted once, by kind and jurisdiction.
+  const pay = classifyPayments(data, { persons, f, isVa });
+  for (const w of pay.warnings) out.warn(w);
+  out.info.paymentsBlocked = [];
+  const holdPayment = (part, keys) => {
+    if (!part.blocked) return false;
+    out.withhold(keys, part.blocked);
+    if (!out.info.paymentsBlocked.includes(part.blocked)) out.info.paymentsBlocked.push(part.blocked);
+    return true;
+  };
+  if (pay.lastPaidDate) out.source('tax-payments', SOURCES['tax-payments'].label, `through ${monthLabel(pay.lastPaidDate.slice(0, 7))}`, SOURCES['tax-payments'].kind);
+  const putPaid = (key, label, part, shKeys) => {
+    if (holdPayment(part, [key, ...shKeys]) || !part.rows.length) return;
+    out.put(key, part.total, 'a', label, 'tax-payments', rowsLoc('tax_payments', part.ids, { assumptions: ['paid_rows_as_estimates'] }));
+  };
+  putPaid('tax.fed.paid', 'Federal estimated payments logged this year', pay.fed.paid, SH_FED_PAID);
+  if (isVa) putPaid('tax.va.paid', 'Virginia estimated payments logged this year', pay.va.paid, SH_VA_PAID);
+  // An owner-stated withholding total replaces the rows, so their blocks do not apply to it.
+  const fedWithheldFact = typeof owner['tax.withholding.federal'] === 'number';
+  const vaWithheldFact = typeof owner['tax.withholding.virginia'] === 'number';
+  if (!fedWithheldFact) holdPayment(pay.fed.withheld, ['tax.fed.withheld', ...SH_FED_PAID]);
+  if (isVa && !vaWithheldFact) holdPayment(pay.va.withheld, ['tax.va.withheld', ...SH_VA_PAID]);
+
+  // Payroll records per recipient, employer and year (R6-1, R6-5).
+  const blocked = [];
+  const payroll = payrollRecords(data, entities, owner);
+  const records = payroll.records;
+  out.info.payrollBlocks = payroll.blocks.map(b => ({ code: b.code, employer: b.employer }));
+  out.info.ask = payroll.ask;
+  for (const b of payroll.blocks) if (!b.person || inUnit(b.person)) blocked.push(b.code);
+  // inc.ytd.w2 (F8): outside-employer pay received in the tax year: W-2 box 1, or the latest
+  // paystub's year-to-date gross. Held while any payroll document is unresolved.
   const outsideYtd = records.filter(r => !r.household);
-  if (outsideYtd.length) {
+  const section125 = records.some(r => inUnit(r.person) && r.section125Unknown) ? ['section125_unknown'] : [];
+  if (payroll.blocks.length) out.withhold(['inc.ytd.w2', 'room.hsa'], payroll.blocks[0].code);
+  else if (outsideYtd.length) {
     out.source('docs', SOURCES.docs.label, dateLabel(clock), SOURCES.docs.kind);
-    out.put('inc.ytd.w2', sum(outsideYtd.map(r => r.ytdWages)), 'a', 'Outside employer wages received this year', 'docs', rowsLoc('documents', outsideYtd.map(r => r.docId)), outsideYtd[0].fileId);
+    const label = outsideYtd.some(r => r.projected) ? 'Outside employer gross pay received this year' : 'Outside employer wages received this year';
+    out.put('inc.ytd.w2', sum(outsideYtd.map(r => r.ytdWages)), 'a', label, 'docs',
+      rowsLoc('documents', outsideYtd.flatMap(r => r.docIds), { assumptions: outsideYtd.some(r => r.section125Unknown) ? ['section125_unknown'] : [] }), outsideYtd[0].fileId);
   }
   const ageOf = p => {
     const v = owner[p === 'spouse' ? 'household.spouseAge' : 'household.ownerAge'];
@@ -250,7 +280,6 @@ export function computeFigures(data, facts, ctx) {
   const sstbOf = e => (e && typeof e.sstb === 'boolean' ? e.sstb : typeof facts['business.sstb'] === 'boolean' ? facts['business.sstb'] : (out.warn('sstb_assumed'), true));
 
   // Inputs (parts) and what blocks them.
-  const blocked = [];
   if (f === 'mfs') { blocked.push('mfs_unsupported'); out.warn('mfs_unsupported'); }
   const w2 = [];
   const biz = [];
@@ -299,47 +328,43 @@ export function computeFigures(data, facts, ctx) {
       bizNames[e.slug] = e.name;
     }
   }
-  // Partnerships (S1, F2): every partnership entity needs its own K-1 (matched by the K-1's
-  // partnership, entity or payer name; an unnamed K-1 covers one unmatched partnership) or, for a
-  // single partnership without one, income.partnershipEstimate. Every K-1 and estimate must be
-  // complete; anything missing blocks household tax.
+  // Partnerships (S1, F2, R6-1 item 4). Ingest's K-1 carries no partnership name and no person, so
+  // a partnership K-1 is matched only when exactly one K-1 and exactly one classified partnership
+  // exist (the partner is that entity's owner); any other count blocks k1_unmatched. A partnership
+  // with no K-1 needs income.partnershipEstimate (single partnership only). An S corp K-1 repeats
+  // income the S corp's P&L already carries; with no such P&L it has nowhere to go and blocks.
   const k1s = data.documents.filter(d => d.docType === 'k1' && Number(d.taxYear) === TY);
+  const partnerK1s = k1s.filter(d => d.fields.entityKind === 'partnership');
+  if (k1s.some(d => d.fields.entityKind === 's_corp') && !entities.some(e => e.classified && e.type === 's_corp' && e.lines.length)) blocked.push('k1_scorp_unmatched');
   const partnerships = entities.filter(e => e.classified && e.type === 'partnership');
-  const k1Name = d => [d.fields.partnership, d.fields.entity, d.fields.payer].filter(v => typeof v === 'string' && v.trim());
-  const used = new Set();
-  const uncovered = [];
-  for (const e of partnerships) {
-    const named = k1s.filter(d => k1Name(d).some(n => sameName(n, e.name)));
-    named.forEach(d => used.add(d.id));
-    if (!named.length) uncovered.push(e);
-  }
-  for (const d of k1s) {
-    if (used.has(d.id) || k1Name(d).length || !uncovered.length) continue;
-    used.add(d.id);
-    uncovered.shift();
-  }
-  const k1Inputs = k1s.map(d => ({ ...d.fields, id: `k1-${d.id}` }));
-  const est = owner['income.partnershipEstimate'];
+  const k1Inputs = [];
   const missingPartners = [];
-  if (uncovered.length === 1 && est && typeof est === 'object') k1Inputs.push({ ...est, id: uncovered[0].slug, partnership: uncovered[0].name });
-  else missingPartners.push(...uncovered);
+  if (partnerK1s.length) {
+    if (partnerK1s.length === 1 && partnerships.length === 1) {
+      const e = partnerships[0];
+      k1Inputs.push({ ...partnerK1s[0].fields, id: e.slug, partnership: e.name, person: e.owner });
+    } else blocked.push('k1_unmatched');
+  } else {
+    const est = owner['income.partnershipEstimate'];
+    if (partnerships.length === 1 && est && typeof est === 'object') {
+      k1Inputs.push({ ...est, selfEmploymentEarnings: est.seEarnings, id: partnerships[0].slug, partnership: partnerships[0].name, person: partnerships[0].owner });
+    } else missingPartners.push(...partnerships);
+  }
   for (const e of missingPartners) if (inUnit(e.owner)) blocked.push('partnership_incomplete');
-  const fields = ['ordinaryIncome', 'guaranteedPayments', 'seEarnings'];
+  const fields = ['ordinaryIncome', 'guaranteedPayments', 'selfEmploymentEarnings'];
   const complete = k => fields.every(x => k[x] !== null && k[x] !== '' && k[x] !== undefined && Number.isFinite(Number(k[x])));
   const incompleteK1 = k1Inputs.filter(k => !complete(k));
   out.info.partnershipsMissing = [
     ...missingPartners.filter(e => inUnit(e.owner)).map(e => e.name),
-    ...incompleteK1.map(k => k1Name({ fields: k })[0]).filter(Boolean),
+    ...incompleteK1.map(k => k.partnership).filter(Boolean),
   ];
   if (blocked.includes('partnership_incomplete') || incompleteK1.length) out.warn('partnership_incomplete');
   for (const k of k1Inputs) {
     if (!complete(k)) { blocked.push('partnership_incomplete'); continue; }
-    const person = k.person === 'spouse' ? 'spouse' : 'owner';
-    if (k.person !== 'owner' && k.person !== 'spouse') out.warn('person_assumed');
-    if (!inUnit(person)) continue;
+    if (!inUnit(k.person)) continue;
     const ordinary = Number(k.ordinaryIncome);
-    biz.push({ id: k.id, kind: 'partnership', person, agi: cents(ordinary + Number(k.guaranteedPayments)), qbi: ordinary, seInput: Number(k.seEarnings), w2Wages: 0, sstb: sstbOf(null) });
-    bizNames[k.id] = k1Name({ fields: k })[0] || null;
+    biz.push({ id: k.id, kind: 'partnership', person: k.person, agi: cents(ordinary + Number(k.guaranteedPayments)), qbi: ordinary, seInput: Number(k.selfEmploymentEarnings), w2Wages: 0, sstb: sstbOf(partnerships.find(e => e.slug === k.id)) });
+    bizNames[k.id] = k.partnership;
   }
 
   // Retirement contributions attributed to one sponsor each (R2-2, R3-1).
@@ -457,7 +482,7 @@ export function computeFigures(data, facts, ctx) {
     }
   }
   const retireBlocked = !!run && RETIREMENT_BLOCKS.has(run.blocked);
-  if (hh) writeTax(data, out, { hh, parts, records, owner, f, isVa, fedPay, vaPay });
+  if (hh) writeTax(data, out, { hh, parts, owner, f, isVa, pay, section125 });
   out.info.taxComputed = !!hh;
 
   // Retirement room (R5, R6, S5, S6, MG6, R2-5, R3-3, R3-5, R3-6).
@@ -509,7 +534,7 @@ export function computeFigures(data, facts, ctx) {
     }
     if (run) iraRoom(out, { seInfo, persons, w2, biz, retireByBiz: run.retireByBiz, contrib, ageOf, f });
   }
-  hsaRoom(out, { facts, owner, records, hsaPersonal, hsaAccts, ageOf, ageKey, inUnit });
+  if (!payroll.blocks.length) hsaRoom(out, { facts, owner, records, hsaPersonal, hsaAccts, ageOf, ageKey, inUnit });
   if (hh && isVa && hh.va != null && college.some(c => c.capped || c.age70)) va529Figures(out, { hh, parts, college });
   incomeTotal(out);
 
@@ -599,12 +624,13 @@ function soloRoomFigures(out, { data, owner, person, corp, compensation, age, co
 }
 
 // MG6: prior-year Social Security wages (box 3) for `person` from the S corp named `corpName`. K4
-// precedence (recordedTypes in household.mjs): the latest prior-year W-2 from that employer wins,
-// else the owner fact. Box 1 is never used.
+// precedence (recordedTypes in household.mjs): the latest prior-year W-2 from that employer whose
+// recipient is `person` (ingest's withholding rows and answers) wins, else the owner fact. Box 1 is
+// never used.
 export function priorFicaWages(data, owner, person, corpName) {
   const amount = v => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null);
   const docs = data.documents.filter(d => d.docType === 'w2' && Number(d.taxYear) === data.taxYear - 1
-    && (d.fields.person === person || (person === 'owner' && d.fields.person == null)) && sameName(d.fields.employer, corpName));
+    && sameEmployer(data, d.fields.employerName, corpName) && docRecipient(data, d).person === person);
   const doc = docs.at(-1);
   const recorded = doc ? amount(doc.fields.socialSecurityWages) : null;
   if (recorded != null) return recorded;
@@ -675,10 +701,10 @@ function monthlyOutflow(data, out) {
   }
 }
 
-function writeTax(data, out, { hh, parts, records, owner, f, isVa, fedPay, vaPay }) {
+function writeTax(data, out, { hh, parts, owner, f, isVa, pay, section125 }) {
   // MGN1, D2, D6: per-figure assumption codes.
   const planRate = hh.retire > 0 ? ['plan_rate_max'] : [];
-  const fedCodes = ['agi_as_magi_proxy', 'qbi_material_participation', ...(parts.qbiLossCarryforward == null ? ['qbi_no_prior_loss'] : []), ...planRate];
+  const fedCodes = ['agi_as_magi_proxy', 'qbi_material_participation', ...(parts.qbiLossCarryforward == null ? ['qbi_no_prior_loss'] : []), ...planRate, ...section125];
   const vaCodes = ['va_exemptions_omitted', ...planRate];
   const summary = summarizeParts(parts, hh);
   const steps = hh.steps;
@@ -692,23 +718,33 @@ function writeTax(data, out, { hh, parts, records, owner, f, isVa, fedPay, vaPay
   out.put('tax.fed.proj', hh.fedTotal, 'm', 'Projected federal tax for the year', 'calc:tax', loc);
   if (hh.va != null) out.put('tax.va.proj', hh.va, 'm', 'Projected Virginia tax for the year', 'calc:tax', vaLoc);
 
-  // Withholding (R3, T2): owner facts replace document sums.
-  const docRows = records.map(r => r.docId);
-  const withheld = (factKey, pick) => {
-    if (typeof owner[factKey] === 'number') return { v: owner[factKey], loc: rowsLoc('facts', [factKey]) };
-    return { v: sum(records.map(pick)), loc: rowsLoc('documents', docRows) };
+  // Withholding (R3, T2, R6-2): an owner fact replaces the rows; otherwise ingest's withholding rows,
+  // each counted once. Additional Medicare Tax withheld (W-2 box 6) is not extracted, so it counts
+  // as zero with a note (D11).
+  const withheld = (factKey, part, extra) => {
+    if (typeof owner[factKey] === 'number') return { v: owner[factKey], src: 'docs', loc: rowsLoc('facts', [factKey]) };
+    if (part.blocked) return { v: 0, blocked: part.blocked };
+    return { v: part.total, src: 'tax-withholding', loc: rowsLoc('tax_payments', part.ids, extra) };
   };
-  const fedW = withheld('tax.withholding.federal', r => r.fedWithheld + r.addlWithheld);
-  if (fedW.v > 0) out.put('tax.fed.withheld', fedW.v, 'a', 'Federal tax withheld from wages', 'docs', fedW.loc);
-  const vaW = isVa ? withheld('tax.withholding.virginia', r => r.stateWithheld) : { v: 0 };
-  if (vaW.v > 0) out.put('tax.va.withheld', vaW.v, 'a', 'Virginia tax withheld from wages', 'docs', vaW.loc);
-  if (out.figures['tax.fed.withheld'] || out.figures['tax.va.withheld']) out.source('docs', SOURCES.docs.label, dateLabel(data.clock), SOURCES.docs.kind);
+  const fedW = withheld('tax.withholding.federal', pay.fed.withheld, { assumptions: ['addl_medicare_withholding_not_read'] });
+  const vaW = isVa ? withheld('tax.withholding.virginia', pay.va.withheld, {}) : { v: 0 };
+  if ((fedW.src === 'tax-withholding' && fedW.v > 0) || (vaW.src === 'tax-withholding' && vaW.v > 0)) {
+    out.source('tax-withholding', SOURCES['tax-withholding'].label, dateLabel(pay.lastWithheldDate || data.clock), SOURCES['tax-withholding'].kind);
+  }
+  if (!fedW.blocked && fedW.v > 0) out.put('tax.fed.withheld', fedW.v, 'a', 'Federal tax withheld from wages', fedW.src, fedW.loc);
+  if (!vaW.blocked && vaW.v > 0) out.put('tax.va.withheld', vaW.v, 'a', 'Virginia tax withheld from wages', vaW.src, vaW.loc);
+  if (out.figures['tax.fed.withheld'] && out.figures['tax.fed.withheld'].src === 'docs') out.source('docs', SOURCES.docs.label, dateLabel(data.clock), SOURCES.docs.kind);
+  if (out.figures['tax.va.withheld'] && out.figures['tax.va.withheld'].src === 'docs') out.source('docs', SOURCES.docs.label, dateLabel(data.clock), SOURCES.docs.kind);
+  // A blocked payment or withholding figure holds the safe-harbor figures that use it (already
+  // withheld with its code in computeFigures).
+  const fedHeld = !!(fedW.blocked || pay.fed.paid.blocked);
+  const vaHeld = !!(vaW.blocked || pay.va.paid.blocked);
 
   // Safe harbor (MG10): IRC 6654(d)(1)(B), (C). The prior-year target is fixed by last year's
   // return; the current-year target moves with the projection, so it is an estimate.
   const E = TAX_2026.estimated;
   const prior = priorYear(data, owner);
-  const fedPaid = sum(fedPay.map(t => t.amount));
+  const fedPaid = pay.fed.paid.total;
   const totalStep = hh.steps.filter(s => /Federal total/.test(s.label));
   const currentTarget = cents(hh.fedTotal * E.currentRate);
   const currentSteps = [...totalStep, { label: 'Current-year target', formula: 'projected tax * current-year percentage', value: currentTarget }];
@@ -727,15 +763,18 @@ function writeTax(data, out, { hh, parts, records, owner, f, isVa, fedPay, vaPay
       const projectionBinds = currentTarget < priorTarget || smallBalance;
       const kind = projectionBinds ? 'e' : 'm';
       const priorSteps = [{ label: 'Prior-year target', formula: "last year's tax * prior-year percentage for last year's income", value: priorTarget }];
-      const priorCodes = ['prior_return_full_year'];
+      // D10: last year's tax from the uploaded return is its total tax as filed.
+      const priorCodes = ['prior_return_full_year', ...(prior.fromReturn ? ['prior_tax_total_line'] : [])];
       out.put('sh.fed.priorTarget', priorTarget, 'm', "Federal target from last year's tax", 'calc:tax',
         { calc: 'priorYearSafeHarbor', inputs: { priorYearTax: prior.federalTax, priorYearAgi: prior.agi }, steps: priorSteps, assumptions: priorCodes });
-      out.put('sh.fed.priorRemaining', priorRemaining, 'm', "Federal still to pay to reach last year's target", 'calc:tax',
-        { calc: 'priorYearSafeHarbor', inputs: { priorYearTax: prior.federalTax, priorYearAgi: prior.agi, withholding: fedW.v, paymentsMade: fedPaid },
-          steps: [...priorSteps, { label: 'Remaining', formula: 'prior-year target - withholding - payments', value: priorRemaining }], assumptions: priorCodes });
-      const l = { calc: 'estimatedPaymentSafeHarbor', inputs: env.inputs, steps: [...env.steps, ...totalStep], assumptions: [...priorCodes, ...(projectionBinds ? ['projection_target'] : [])] };
-      out.put('sh.fed.required', env.value.requiredAnnualPayment, kind, 'Federal safe-harbor target for the year', 'calc:tax', l);
-      out.put('sh.fed.remaining', env.value.remaining, kind, 'Federal safe harbor still to pay', 'calc:tax', l);
+      if (!fedHeld) {
+        out.put('sh.fed.priorRemaining', priorRemaining, 'm', "Federal still to pay to reach last year's target", 'calc:tax',
+          { calc: 'priorYearSafeHarbor', inputs: { priorYearTax: prior.federalTax, priorYearAgi: prior.agi, withholding: fedW.v, paymentsMade: fedPaid },
+            steps: [...priorSteps, { label: 'Remaining', formula: 'prior-year target - withholding - payments', value: priorRemaining }], assumptions: priorCodes });
+        const l = { calc: 'estimatedPaymentSafeHarbor', inputs: env.inputs, steps: [...env.steps, ...totalStep], assumptions: [...priorCodes, ...(projectionBinds ? ['projection_target'] : [])] };
+        out.put('sh.fed.required', env.value.requiredAnnualPayment, kind, 'Federal safe-harbor target for the year', 'calc:tax', l);
+        out.put('sh.fed.remaining', env.value.remaining, kind, 'Federal safe harbor still to pay', 'calc:tax', l);
+      }
       out.info.priorHigh = high;
       out.info.shBasis = priorTarget <= currentTarget ? 'prior' : 'current';
     }
@@ -745,12 +784,14 @@ function writeTax(data, out, { hh, parts, records, owner, f, isVa, fedPay, vaPay
     const remaining = Math.max(0, cents(required - fedW.v - fedPaid));
     const l = { calc: 'currentYearSafeHarbor', inputs: { currentYearTax: hh.fedTotal, withholding: fedW.v, paymentsMade: fedPaid },
       steps: [...currentSteps, { label: 'Remaining', formula: 'target - withholding - payments', value: remaining }], assumptions: ['projection_target'] };
-    out.put('sh.fed.required', required, 'e', 'Federal safe-harbor target for the year', 'calc:tax', l);
-    out.put('sh.fed.remaining', remaining, 'e', 'Federal safe harbor still to pay', 'calc:tax', l);
+    if (!fedHeld) {
+      out.put('sh.fed.required', required, 'e', 'Federal safe-harbor target for the year', 'calc:tax', l);
+      out.put('sh.fed.remaining', remaining, 'e', 'Federal safe harbor still to pay', 'calc:tax', l);
+    }
   }
   out.info.priorYear = prior.federalTax != null && prior.agi != null;
-  if (hh.va != null) {
-    const vaPaid = sum(vaPay.map(t => t.amount));
+  if (hh.va != null && !vaHeld) {
+    const vaPaid = pay.va.paid.total;
     const hasPrior = prior.virginiaTax != null;
     let required = 0;
     if (cents(hh.va - vaW.v) >= law('vaEstimateThreshold')) required = hasPrior ? cents(Math.min(0.9 * hh.va, prior.virginiaTax)) : cents(0.9 * hh.va);
@@ -774,15 +815,20 @@ function summarizeParts(parts, hh) {
   };
 }
 
+// Last year's federal tax and AGI: the owner's tax.prior.* answers win; otherwise the uploaded
+// form1040 for that year (latest by id), whose total tax stands in for Form 2210 line 8 (D10).
+// Ingest reads no Virginia line, so Virginia tax comes only from tax.prior.virginia.
 function priorYear(data, owner) {
-  const doc = data.documents.filter(d => d.docType === 'tax_return' && Number(d.taxYear) === data.taxYear - 1).at(-1);
-  const pick = (field, factKey) => {
-    const v = doc ? doc.fields[field] : undefined;
-    if (Number.isFinite(Number(v)) && v !== null && v !== '') return Number(v);
-    const fv = owner[factKey];
-    return typeof fv === 'number' ? fv : null;
+  const doc = data.documents.filter(d => d.docType === 'form1040' && Number(d.taxYear) === data.taxYear - 1).at(-1);
+  const amount = v => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  const fact = key => amount(owner[key]);
+  const field = name => (doc ? amount(doc.fields[name]) : null);
+  const federalFact = fact('tax.prior.federal');
+  const federalTax = federalFact ?? field('totalTax');
+  return {
+    federalTax, agi: fact('tax.prior.agi') ?? field('agi'), virginiaTax: fact('tax.prior.virginia'),
+    fromReturn: federalFact == null && federalTax != null,
   };
-  return { federalTax: pick('federalTax', 'tax.prior.federal'), virginiaTax: pick('virginiaTax', 'tax.prior.virginia'), agi: pick('agi', 'tax.prior.agi') };
 }
 
 // IRA room (IRC 219(b)(1), (b)(5), 219(c), 219(f)(1) with 401(c)(2)): compensation is wages plus

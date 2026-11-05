@@ -478,7 +478,7 @@ export function recordFact(db, { key, value, confidence = 1, sourceId = null, fi
   if (prior && prior.status === 'answered' && prior.answer === 'no') return { written: false, changed: false, queued: false };
   const confirmed = Boolean(prior && prior.status === 'answered' && prior.answer === 'yes');
   const r = upsertFact(db, { key, value, src: sourceId, asOf, confirmed, provenance: { fileId, parser, locator }, now });
-  if (!r.written) return { written: false, changed: false, queued: false };
+  if (!r.written && r.reason !== 'unchanged') return { written: false, changed: false, queued: false };
   const json = canonicalJson(value);
   for (const p of pendingItems(db).filter((i) => i.kind === 'fact_check' && i.context.key === key && canonicalJson(i.context.value) !== json)) {
     db.prepare("UPDATE confirm_items SET status = 'answered', answer = 'superseded', answered_at = ? WHERE id = ?").run(stamp(now), p.id);

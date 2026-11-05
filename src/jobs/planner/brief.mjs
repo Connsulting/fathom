@@ -132,7 +132,8 @@ const WATCHING = {
 };
 
 const NOTES = {
-  tax: (ctx, fig) => (has(fig, 'tax.fed.paid', 'sh.fed.required') ? 'Paid {f:tax.fed.paid} of {f:sh.fed.required} federal safe harbor.'
+  tax: (ctx, fig) => (has(fig, 'tax.fed.paid', 'tax.fed.withheld', 'sh.fed.required') ? 'Paid {f:tax.fed.paid} in estimates and had {f:tax.fed.withheld} withheld, toward {f:sh.fed.required} federal safe harbor.'
+    : has(fig, 'tax.fed.paid', 'sh.fed.required') ? 'Paid {f:tax.fed.paid} in estimates toward {f:sh.fed.required} federal safe harbor.'
     : has(fig, 'tax.fed.proj') ? 'Projected federal tax is {f:tax.fed.proj}.' : 'We need your income data to project this year.'),
   retirement: (ctx, fig) => (has(fig, 'room.solo401k.employee') ? 'Employee deferral room left: {f:room.solo401k.employee}.'
     : has(fig, 'room.hsa') ? 'HSA room left: {f:room.hsa}.' : 'Nothing to size yet.'),

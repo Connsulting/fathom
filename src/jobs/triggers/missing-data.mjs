@@ -17,7 +17,29 @@ const TAX_CODES = new Set([
   'pnl', 'tax_payments', 'prior_year_missing', 'filing_status_assumed', 'partnership_incomplete', 'va_itemized_missing', 'mfs_unsupported', 'calc_failed',
   'ctc_refundable_unsupported', 'retirement_contribution_unattributed', 'retirement_contribution_over_limit', 'retirement_other_deferrals_missing',
   'va529_answers_missing',
+  // Ingest contract (plan Revision 6).
+  'w2_recipient_unknown', 'payroll_recipient_conflict', 'household_employer_unmatched', 'employer_relation_pending', 'w2_box12_unreadable',
+  'w2_wages_missing', 'deferral_split_unknown', 'paystub_ytd_missing', 'paystub_deferrals_unknown', 'k1_unmatched', 'k1_scorp_unmatched',
+  'w2_correction_pending', 'w2_correction_conflicting', 'w2_duplicate_unresolved', 'tax_payment_kind_unknown', 'withholding_state_unknown',
+  'withholding_recipient_unknown', 'withholding_conflict_pending', 'tax_year_unconfirmed', 'estimated_payer_unknown',
 ]);
+
+// Payroll reasons that name the employers they concern (from ctx.info.payrollBlocks).
+const CONFIRM_WHICH_W2 = 'Answer which W-2 counts in Confirm';
+const PAYROLL_NAMED = Object.freeze({
+  w2_recipient_unknown: [who => `We do not know whose pay ${who} reports, so tax projections are on hold.`, 'Answer who is paid by each employer in Confirm'],
+  payroll_recipient_conflict: [who => `A payroll document from ${who} is marked as both yours and your spouse's, so tax projections are on hold.`, 'Check who each payroll document belongs to in Confirm'],
+  household_employer_unmatched: [who => `${who} was marked as your own business, but it does not match any business on file, so tax projections are on hold.`, 'Add the business to your household businesses, or answer that it is an outside employer'],
+  employer_relation_pending: [who => `We do not know whether ${who} is an outside employer or your own business, so tax projections are on hold.`, 'Answer whether each employer is your own business in Confirm'],
+  w2_box12_unreadable: [who => `A box twelve amount on a W-2 from ${who} could not be read, so tax projections are on hold.`, 'Upload a clearer copy of the W-2'],
+  w2_wages_missing: [who => `A W-2 from ${who} has no readable wages, so tax projections are on hold.`, 'Upload a clearer copy of the W-2'],
+  deferral_split_unknown: [who => `Your retirement deferrals are above the yearly limit across ${who} and another plan, and we cannot tell which plan holds the catch-up, so tax and retirement figures are on hold.`, confirmTask('retirement.otherPlanDeferrals')],
+  paystub_ytd_missing: [who => `The latest paystub from ${who} has no year-to-date gross pay, so tax projections are on hold.`, 'Upload a paystub that shows year-to-date pay, or the W-2'],
+  paystub_deferrals_unknown: [who => `Paystubs from ${who} show retirement or HSA deferrals but no year-to-date total, so tax projections are on hold.`, 'Upload the W-2, or enter your deferrals for this year'],
+  w2_correction_pending: [who => `Two W-2s from ${who} for the same year disagree, so wages and withholding are on hold.`, CONFIRM_WHICH_W2],
+  w2_correction_conflicting: [who => `Your answers keep different W-2s from ${who} for federal and state withholding, so wages and withholding are on hold.`, CONFIRM_WHICH_W2],
+  w2_duplicate_unresolved: [who => `Two different W-2s from ${who} for the same year and person are on file, and nothing says which counts, so wages are on hold.`, 'Remove the W-2 that does not count, or upload the corrected one'],
+});
 
 // Fixed reason text per code: [what is on hold and why, the task that clears it]. No digits and no
 // data-derived text, so the same sentence is safe as rec prose and as a plain-text reason.
@@ -37,6 +59,14 @@ const REASONS = Object.freeze({
   wargame_contribution_over_limit: ['At one of the incomes this comparison models, this year or next, a retirement contribution would be above what the plan rules allow, so this comparison is not a current choice.', 'Check your retirement contribution amounts with your plan provider or accountant'],
   wargame_salary_contribution_over_limit: ['At one of the salaries in the approved range, a retirement contribution would be above what the plan rules allow for that salary, so this comparison is not a current choice.', 'Check your retirement contribution amounts with your plan provider or accountant'],
   inputs_changed: ['Its inputs changed, so it is kept for reference and is not a current choice.', 'Review the latest data on your plan'],
+  k1_unmatched: ['Partnership statements do not name their partnership, and the statements on file do not match your partnerships one to one, so tax projections are on hold.', 'Upload one partnership statement for each partnership, or check your household businesses'],
+  k1_scorp_unmatched: ['An S corporation shareholder statement is on file, but no S corporation with a profit and loss is, so tax projections are on hold.', 'Upload the S corporation profit and loss, or add it to your household businesses'],
+  tax_payment_kind_unknown: ['A tax payment row does not say whether it is withholding or an estimated payment, so payments are on hold.', 'Check the tax payment log for an unlabeled row'],
+  withholding_state_unknown: ['A W-2 or paystub shows state withholding without naming the state, so Virginia withholding is on hold.', 'Upload a clearer copy that shows the state'],
+  withholding_recipient_unknown: ['Some withholding could be counted twice until we know whose pay it was, so withholding is on hold.', 'Answer who is paid by each employer in Confirm'],
+  withholding_conflict_pending: ['Two documents report different withholding for the same payer, so withholding is on hold.', CONFIRM_WHICH_W2],
+  tax_year_unconfirmed: ['We do not know which tax year your logged estimated payments belong to, so payments are on hold.', 'Answer the tax year question for your payment log in Confirm'],
+  estimated_payer_unknown: ['Your payment log has payments from more than one person, and only one return is filed, so payments are on hold.', 'Check whose estimated payments count toward this return'],
 });
 const RETAINED = 'No longer computed from your current data, so it is shown for reference only.';
 
@@ -54,6 +84,11 @@ function reasonItem(ctx, reason, name = dataText) {
       ? `We do not have complete partnership figures for ${names.join(', ')}.`
       : 'A partnership statement or partnership estimate is missing an amount we need.';
     return { code: reason, tax: true, text, task: 'Add the ordinary income, guaranteed payments and self-employment earnings from each K-1, or a partnership estimate' };
+  }
+  if (PAYROLL_NAMED[reason]) {
+    const names = [...new Set(((ctx.info && ctx.info.payrollBlocks) || []).filter(b => b.code === reason && String(b.employer ?? '').trim()).map(b => name(b.employer)))];
+    const who = names.length ? names.join(', ') : 'an employer';
+    return { code: reason, tax: true, text: PAYROLL_NAMED[reason][0](who), task: PAYROLL_NAMED[reason][1] };
   }
   if (REASONS[reason]) return { code: reason, tax: TAX_CODES.has(reason), text: REASONS[reason][0], task: REASONS[reason][1] };
   if (reason.includes('.')) {
@@ -87,7 +122,7 @@ export function items(ctx) {
   if (ctx.warnings.includes('filing_status_assumed')) {
     out.push({ code: 'filing_status_assumed', tax: true, text: 'Your filing status is not set, so we assumed single.', task: 'Tell us your filing status' });
   }
-  const reasons = [...(ctx.info.blocked || []), ...(ctx.blockedReasons || []).map(b => b.reason)];
+  const reasons = [...(ctx.info.blocked || []), ...(ctx.info.paymentsBlocked || []), ...(ctx.blockedReasons || []).map(b => b.reason)];
   for (const r of reasons) out.push(reasonItem(ctx, r));
   const seen = new Set();
   return out.filter(i => (seen.has(i.code) ? false : (seen.add(i.code), true)));
