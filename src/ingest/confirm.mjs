@@ -6,6 +6,7 @@ import { tx, parseJson } from '../store/db.mjs';
 import { upsertFact, deleteFact } from '../store/facts.mjs';
 import { dedupeKey } from './dedupe.mjs';
 import { cents } from './format.mjs';
+import { captureChanges, revertChanges, touches } from './undo.mjs';
 
 export const KINDS = Object.freeze([
   'account_owner', 'account_kind', 'entity_alias', 'tax_year', 'fact_check', 'near_duplicate', 'employer_relation', 'employer_recipient', 'document_recipient',
@@ -38,13 +39,15 @@ export const taxYearOptions = (year) => [
 // Below this extraction confidence a fact is stored unconfirmed and asked about.
 export const CONFIDENCE_FLOOR = 0.8;
 
-const STATUS = { not_found: 404, bad_option: 400, answered: 409, stale: 409 };
+const STATUS = { not_found: 404, bad_option: 400, answered: 409, stale: 409, final: 409, not_answered: 409 };
+// `final` carries `reason`: no_undo, imported_since, changed_since or used_since.
 export class ConfirmError extends Error {
-  constructor(code) {
+  constructor(code, reason) {
     super(`confirm item ${code.replace('_', ' ')}`);
     this.name = 'ConfirmError';
     this.code = code;
     this.status = STATUS[code] ?? 400;
+    if (reason !== undefined) this.reason = reason;
   }
 }
 
@@ -97,6 +100,7 @@ export function ask(db, { kind, subject, question, options, context = {}, fileId
   if (!KINDS.includes(kind)) throw new TypeError('Unknown confirm kind');
   const prior = findItem(db, kind, subject);
   if (prior && prior.status === 'answered') {
+    markUsed(db, prior.id, { now });
     const applied = applyAnswer(db, { ...prior, context: { ...prior.context, ...context } }, prior.answer, { now });
     return applied.factsChanged ? { remembered: true, factsChanged: true } : { remembered: true };
   }
@@ -124,9 +128,92 @@ export function answerItem(db, id, optionId, { now } = {}) {
   if (item.kind === 'fact_check' && factIsStale(db, item)) throw new ConfirmError('stale');
   if (item.kind === 'withholding_conflict' && !conflictCurrent(db, item)) throw new ConfirmError('stale');
   return tx(db, () => {
-    const { factsChanged } = applyAnswer(db, item, optionId, { now });
-    db.prepare("UPDATE confirm_items SET status = 'answered', answer = ?, answered_at = ? WHERE id = ?").run(optionId, stamp(now), item.id);
+    const { factsChanged } = recordAnswer(db, item, optionId, { now });
     return { item: getItem(db, item.id), factsChanged: Boolean(factsChanged) };
+  });
+}
+
+// Apply and record an answer inside the caller's transaction, storing its change log with the
+// ingest epoch (D1, D2). Returns applyAnswer's result plus the log.
+function recordAnswer(db, item, optionId, { now }) {
+  const { result, changes } = captureChanges(db, () => {
+    const applied = applyAnswer(db, item, optionId, { now });
+    db.prepare("UPDATE confirm_items SET status = 'answered', answer = ?, answered_at = ? WHERE id = ?").run(optionId, stamp(now), item.id);
+    return applied;
+  });
+  db.prepare(`INSERT INTO confirm_undo (item_id, ingest_epoch, changes, created_at, used_at) VALUES (?, ?, ?, ?, NULL)
+              ON CONFLICT(item_id) DO UPDATE SET ingest_epoch = excluded.ingest_epoch, changes = excluded.changes,
+                created_at = excluded.created_at, used_at = NULL`)
+    .run(item.id, ingestEpoch(db), JSON.stringify(changes), stamp(now));
+  return { ...result, changes };
+}
+
+const ingestEpoch = (db) => db.prepare('SELECT coalesce((SELECT n FROM ingest_epoch WHERE id = 1), 0) AS n').get().n;
+
+// D3: a later import or planning run re-applied this answer to rows outside its log, so it is
+// final from now on (used_since).
+function markUsed(db, id, { now } = {}) {
+  db.prepare('UPDATE confirm_undo SET used_at = coalesce(used_at, ?) WHERE item_id = ?').run(stamp(now), id);
+}
+
+// Why an answered item can no longer be revised or reopened, or null when it can (and for a
+// pending item). Cheap: a later change to a logged row (changed_since) shows only on revert.
+export function finalReason(db, item) {
+  if (!item || item.status !== 'answered') return null;
+  if (item.answer === 'superseded') return 'stale';
+  const undo = db.prepare('SELECT ingest_epoch, used_at FROM confirm_undo WHERE item_id = ?').get(item.id);
+  if (!undo) return 'no_undo';
+  if (undo.used_at != null) return 'used_since';
+  if (undo.ingest_epoch !== ingestEpoch(db)) return 'imported_since';
+  return null;
+}
+
+// The answered item a revise or reopen acts on, or the refusal.
+function answeredItem(db, id) {
+  const n = Number(id);
+  const item = Number.isInteger(n) && n > 0 ? getItem(db, n) : null;
+  if (!item) throw new ConfirmError('not_found');
+  if (item.status !== 'answered') throw new ConfirmError('not_answered');
+  if (item.answer === 'superseded') throw new ConfirmError('stale');
+  return item;
+}
+
+// Undo the stored answer of an answered item inside the caller's transaction and drop its undo
+// row. Returns the log it reverted.
+function revertAnswer(db, item) {
+  const reason = finalReason(db, item);
+  if (reason) throw new ConfirmError('final', reason);
+  const changes = parseJson(db.prepare('SELECT changes FROM confirm_undo WHERE item_id = ?').get(item.id).changes, null);
+  if (!Array.isArray(changes)) throw new ConfirmError('final', 'no_undo');
+  revertChanges(db, changes);
+  db.prepare('DELETE FROM confirm_undo WHERE item_id = ?').run(item.id);
+  return changes;
+}
+
+// Change an answered item's answer: revert the stored answer, then answer again, in one
+// transaction (any refusal changes nothing). The same option returns the item unchanged.
+// Returns {item, factsChanged}: whether either log touched facts.
+export function reviseItem(db, id, optionId, { now } = {}) {
+  const item = answeredItem(db, id);
+  if (!item.options.some((o) => o.id === optionId)) throw new ConfirmError('bad_option');
+  if (optionId === item.answer) return { item, factsChanged: false };
+  return tx(db, () => {
+    const reverted = revertAnswer(db, item);
+    const fresh = getItem(db, item.id);
+    if (fresh.kind === 'fact_check' && factIsStale(db, fresh)) throw new ConfirmError('stale');
+    if (fresh.kind === 'withholding_conflict' && !conflictCurrent(db, fresh)) throw new ConfirmError('stale');
+    const { changes } = recordAnswer(db, fresh, optionId, { now });
+    return { item: getItem(db, item.id), factsChanged: touches(reverted, 'facts') || touches(changes, 'facts') };
+  });
+}
+
+// Put an answered item back to pending, restoring every row its answer touched.
+// Returns {item, factsChanged}.
+export function reopenItem(db, id, { now } = {}) {
+  const item = answeredItem(db, id);
+  return tx(db, () => {
+    const reverted = revertAnswer(db, item);
+    return { item: getItem(db, item.id), factsChanged: touches(reverted, 'facts') };
   });
 }
 
@@ -294,14 +381,15 @@ const askDocument = (db, { employerKey = null, employer = '', issuer = '', payer
 export function withholdingRecipient(db, { employerKey = null, employer = '', issuer = '', payer, fileId = null, now } = {}) {
   if (!employerKey) {
     const byDocument = findItem(db, 'document_recipient', payer);
-    if (byDocument?.status === 'answered') return { recipient: byDocument.answer };
+    if (byDocument?.status === 'answered') { markUsed(db, byDocument.id, { now }); return { recipient: byDocument.answer }; }
     return { recipient: 'unknown', outcome: askDocument(db, { issuer, payer, fileId, now }) };
   }
   const byEmployer = findItem(db, 'employer_recipient', employerKey);
+  if (byEmployer?.status === 'answered') markUsed(db, byEmployer.id, { now });
   if (byEmployer?.status === 'answered' && byEmployer.answer !== 'both') return { recipient: byEmployer.answer };
   if (byEmployer?.status === 'answered') {
     const byDocument = findItem(db, 'document_recipient', payer);
-    if (byDocument?.status === 'answered') return { recipient: byDocument.answer };
+    if (byDocument?.status === 'answered') { markUsed(db, byDocument.id, { now }); return { recipient: byDocument.answer }; }
     return { recipient: 'unknown', outcome: askDocument(db, { employerKey, employer: employer || byEmployer.context.employer, payer, fileId, now }) };
   }
   const question = employer ? `Who is paid by ${employer}?` : 'Who is paid by this employer?';
@@ -475,6 +563,7 @@ function applyEmployerRecipient(db, item, optionId, { now }) {
 export function recordFact(db, { key, value, confidence = 1, sourceId = null, fileId = null, parser = null, locator = null, asOf = null, now } = {}) {
   const subject = `${sourceId ?? ''}|${key}|${canonicalJson(value)}`;
   const prior = findItem(db, 'fact_check', subject);
+  if (prior && prior.status === 'answered' && (prior.answer === 'yes' || prior.answer === 'no')) markUsed(db, prior.id, { now });
   if (prior && prior.status === 'answered' && prior.answer === 'no') return { written: false, changed: false, queued: false };
   const confirmed = Boolean(prior && prior.status === 'answered' && prior.answer === 'yes');
   const r = upsertFact(db, { key, value, src: sourceId, asOf, confirmed, provenance: { fileId, parser, locator }, now });

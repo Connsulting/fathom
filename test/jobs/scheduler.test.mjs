@@ -55,9 +55,9 @@ function schedulerFor(t, { handlers, clock, holder = 'test-holder', config, engi
   });
 }
 
-test('JOBS defines the plan, brief-email, deadline-alerts and freshness jobs with a schedule', () => {
+test('JOBS defines the plan, brief-email, deadline-alerts, freshness and confirm-guess jobs with a schedule', () => {
   const ids = JOBS.map((j) => j.id);
-  for (const id of ['plan', 'brief-email', 'deadline-alerts', 'freshness']) assert.ok(ids.includes(id), `JOBS has ${id}`);
+  for (const id of ['plan', 'brief-email', 'deadline-alerts', 'freshness', 'confirm-guess']) assert.ok(ids.includes(id), `JOBS has ${id}`);
   for (const j of JOBS) {
     for (const k of ['id', 'name', 'cadence', 'does', 'schedule']) assert.ok(j[k] != null && j[k] !== '', `${j.id}.${k}`);
   }
@@ -433,7 +433,7 @@ test('engine off: the default brief-email handler still sends the brief through 
     const spendBefore = t.db.prepare('SELECT count(*) AS n FROM spend_ledger').get().n;
     const transport = captureTransport();
     const handlers = defaultHandlers({ publicUrl: null });
-    assert.deepEqual(Object.keys(handlers).sort(), ['brief-email', 'deadline-alerts', 'freshness', 'plan']);
+    assert.deepEqual(Object.keys(handlers).sort(), ['brief-email', 'confirm-guess', 'deadline-alerts', 'freshness', 'plan']);
     const s = schedulerFor(t, { handlers, clock: clockAt('2026-11-05T15:00:00Z'), config, engine, transport });
     await s.runNow('brief-email');
     assert.equal(transport.sent.length, 1, 'the brief went out');

@@ -12,7 +12,7 @@ export function createRegistryServer(registry = [], { purpose, ctx } = {}) {
       throw new TypeError('Invalid tool registry entry');
     }
     names.add(entry.name);
-    if (purpose === 'extract' || (entry.scope === 'write:recs' && purpose !== 'chat')) continue;
+    if (purpose === 'extract' || purpose === 'confirm' || (entry.scope === 'write:recs' && purpose !== 'chat')) continue;
     offered.push({ entry, validate: compileSchema(entry.inputSchema) });
   }
   offered.sort((a, b) => a.entry.name.localeCompare(b.entry.name));

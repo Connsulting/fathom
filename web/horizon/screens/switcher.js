@@ -6,6 +6,7 @@
    Recents keep item keys only (never titles or figures) in localStorage. */
 
 import { normalizeKey, rankItems } from '../keys.js';
+import { deckBindings } from './ingest.js';
 
 let H = null;
 
@@ -114,8 +115,14 @@ function actionSource() {
   return [
     { key: 'act:shortcuts', title: 'Show keyboard shortcuts', group: 'Actions', sub: 'Action', hint: '?', run: () => openSheet() },
     { key: 'act:ask', title: 'Ask a question', group: 'Actions', sub: 'Action', hint: '', run: () => { go('ask'); focusComposer(); } },
-    { key: 'act:add', title: 'Add files', group: 'Actions', sub: 'Action', hint: '', run: () => go('add') }
+    { key: 'act:add', title: 'Add files', group: 'Actions', sub: 'Action', hint: '', run: () => go('add') },
+    ...pendingChecks()
   ];
+}
+
+function pendingChecks() {
+  const n = Number(H.api.ingest?.().pending) || 0;
+  return n > 0 ? [{ key: 'act:confirm', title: 'Start confirming', group: 'Actions', sub: `${n} to check`, hint: H.keys.hintText('g c'), run: () => go('confirm') }] : [];
 }
 
 function recSource() {
@@ -516,6 +523,7 @@ const SCREEN_TABLES = {
   ],
   wargame: listTable,
   add: listTable,
+  confirm: () => deckBindings((name, e) => H.ingest.deckAction(name, e)),
   rec: () => REC_ACTS.map(([k, label, act]) => ({
     keys: [k], label, group: 'Recommendation',
     action: () => clickAct(H.root?.querySelector('.h-dlg-host .h-dlg .h-acts'), act)
