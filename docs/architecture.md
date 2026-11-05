@@ -521,7 +521,8 @@ is reachable only on the owner's private network.
    `$8.7 million` and `$8,700,000`, never `$8.70` or `8.7`. A scaled quantity followed by a percent
    sign or the word `percent` (`1 thousand percent`) is one percent quantity of the full value on
    both sides, so it needs percent evidence, not number evidence. Number-word phrases (`two million`)
-   are still read word by word.
+   are still read word by word, and one followed by a percent sign (with or without a space) or the
+   word `percent` (`one thousand %`) is likewise a percent quantity that needs percent evidence.
 5. One corrective retry (same `system`, the first answer plus a corrective user turn). An answer
    still ungrounded is stored with each violation in `<span class="fx-unverified" title="Not found
    in your data or tool results">`. If the retry call itself fails, the answer is the matching

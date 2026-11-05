@@ -72,6 +72,25 @@ function add(value, kind, sources) {
   else sources[kind].add(value);
 }
 
+// Number-word phrases ("two million") with their value; a percent sign or the word percent right
+// after the phrase makes it a percent quantity. `text` is searched as given, `after` is read for the tail.
+function wordQuantities(text) {
+  const phrases = new RegExp(`\\b(?:${wordPattern})(?:[ -]+(?:and[ -]+)?(?:${wordPattern}))*\\b`, 'gi');
+  const found = [];
+  for (const match of text.matchAll(phrases)) {
+    let total = 0;
+    let part = 0;
+    for (const word of match[0].toLowerCase().split(/[ -]+/)) {
+      if (words.has(word)) part += words.get(word);
+      else if (word === 'hundred') part = (part || 1) * 100;
+      else if (scales.has(word)) { total += (part || 1) * scales.get(word); part = 0; }
+    }
+    const percent = /^\s*(?:percent\b|%)/i.test(text.slice(match.index + match[0].length));
+    found.push({ text: match[0], index: match.index, value: total + part, percent });
+  }
+  return found;
+}
+
 function collect(value, sources, kind = 'number') {
   if (typeof value === 'number') add(value, kind, sources);
   else if (typeof value === 'string') {
@@ -79,6 +98,8 @@ function collect(value, sources, kind = 'number') {
       const item = literal(match[0]);
       add(item.value * item.magnitude, item.percent ? 'percent' : kind, sources);
     }
+    const numeralsBlanked = maskContext(value).replace(numberPattern, match => ' '.repeat(match.length));
+    for (const phrase of wordQuantities(numeralsBlanked)) if (phrase.percent) add(phrase.value, 'percent', sources);
   } else if (value && typeof value === 'object') {
     if (value.isError === true) return;
     const unit = String(value.unit ?? '').toLowerCase();
@@ -124,18 +145,9 @@ export function checkGrounding(prose, { toolResults = [], data = [], figures = {
   }
   // Numeric expressions were judged whole above, so their magnitude words are not judged again.
   const wordsOnly = masked.replace(numberPattern, match => ' '.repeat(match.length));
-  const phrases = new RegExp(`\\b(?:${wordPattern})(?:[ -]+(?:and[ -]+)?(?:${wordPattern}))*\\b`, 'gi');
-  for (const match of wordsOnly.matchAll(phrases)) {
-    let total = 0;
-    let part = 0;
-    for (const word of match[0].toLowerCase().split(/[ -]+/)) {
-      if (words.has(word)) part += words.get(word);
-      else if (word === 'hundred') part = (part || 1) * 100;
-      else if (scales.has(word)) { total += (part || 1) * scales.get(word); part = 0; }
-    }
-    const percent = /^\s*percent\b/i.test(masked.slice(match.index + match[0].length));
-    if (!sources[percent ? 'percent' : 'number'].has(total + part)) {
-      violations.push({ text: match[0], index: match.index, reason: 'numeric word absent from sources' });
+  for (const phrase of wordQuantities(wordsOnly)) {
+    if (!sources[phrase.percent ? 'percent' : 'number'].has(phrase.value)) {
+      violations.push({ text: phrase.text, index: phrase.index, reason: 'numeric word absent from sources' });
     }
   }
   return { ok: violations.length === 0, violations: violations.sort((a, b) => a.index - b.index) };
