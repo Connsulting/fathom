@@ -299,7 +299,7 @@ test('when the corrective retry is refused over the cap, the first answer is kep
 
 test('a literal number grounded by a tool result is bound to its source and listed in provenance', async t => {
   const s = await demoStore(t);
-  const n = callTool('household_summary', {}, { db: s.db, now: '2026-11-05' }).needsYouCount;
+  const n = (await callTool('household_summary', {}, { db: s.db, now: '2026-11-05' })).needsYouCount;
   const { engine } = scripted(s.runtime, [[
     { toolCalls: [{ name: 'household_summary', args: {} }] },
     { text: `From your household summary, ${n} items need you right now.` },

@@ -16,9 +16,17 @@ const MONTH = ['January', 'February', 'March', 'April', 'May', 'June', 'July', '
 // Demo pack row id to repository manifest directory (plan D7).
 const MANIFEST_OF = { scorp: 's-corp-owner', giving: 'charitable-giving' };
 
+const compare = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+
+// The manifest in the order the loaded pack (and so the UI) presents it: entries by id (file
+// stem), each entry's cites by label then url, plain string comparison.
 function manifest(rowId) {
   const dir = MANIFEST_OF[rowId];
-  return { dir, m: JSON.parse(readFileSync(join(REPO, 'packs', dir, 'manifest.json'), 'utf8')) };
+  const m = JSON.parse(readFileSync(join(REPO, 'packs', dir, 'manifest.json'), 'utf8'));
+  m.entries = m.entries
+    .map((e) => ({ ...e, cites: [...e.cites].sort((a, b) => compare(a.label, b.label) || compare(a.url, b.url)) }))
+    .sort((a, b) => compare(entryId(a), entryId(b)));
+  return { dir, m };
 }
 
 function entryId(e) {
