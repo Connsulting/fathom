@@ -736,15 +736,16 @@ a.h-dec-t:hover { color: var(--ac2); }
   .d-horizon .h-more-p { position: fixed; top: calc(52px + env(safe-area-inset-top)); right: 16px; max-height: calc(100vh - 140px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); overflow-y: auto; }
   .d-horizon .h-more-p a { padding: 12px 10px; }
   .d-horizon .h-more-phone { display: block; }
-  .d-horizon .h-tabs { display: flex; position: fixed; z-index: 40; left: 0; right: 0; bottom: 0; padding: 0 4px env(safe-area-inset-bottom); background: var(--bg); border-top: 1px solid var(--line); }
-  .d-horizon .h-tabs a { flex: 1 1 0; min-width: 0; min-height: 56px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; color: var(--mu); font-size: 11.5px; letter-spacing: 0.01em; text-decoration: none; -webkit-tap-highlight-color: transparent; }
+  .d-horizon .h-tabs { display: flex; position: fixed; z-index: 40; left: 0; right: 0; bottom: 0; margin: 0; padding: 0 4px env(safe-area-inset-bottom); background: var(--bg); border-top: 1px solid var(--line); }
+  .d-horizon .h-tabs a { position: relative; flex: 1 1 0; min-width: 0; min-height: 56px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; color: var(--mu); font-size: 11.5px; letter-spacing: 0.01em; text-decoration: none; -webkit-tap-highlight-color: transparent; }
   .d-horizon .h-tabs a .h-i { width: 22px; height: 22px; }
   .d-horizon .h-tabs a.on { color: var(--ac); }
   .d-horizon .h-tabs a:focus-visible { outline: 2px solid var(--ac); outline-offset: -4px; border-radius: 8px; }
-  .d-horizon .h-tabs span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-flex; align-items: center; gap: 4px; }
+  .d-horizon .h-tabs a > span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .d-horizon .h-tabs .h-nav-n { position: absolute; top: 5px; left: calc(50% + 7px); margin: 0; }
   .d-horizon .h-top-in { padding: 0 16px; gap: 12px; height: 52px; }
   .d-horizon .h-more-btn { padding: 6px 8px; font-size: 14px; }
-  .d-horizon .h-main { padding: 28px 16px calc(72px + 57px + env(safe-area-inset-bottom)); }
+  .d-horizon .h-main { padding: 28px 16px calc(72px + 64px + env(safe-area-inset-bottom)); }
   .d-horizon .h-engine-off { padding: 10px 16px; }
   .d-horizon .h-verdict { font-size: 28px; gap: 12px; }
   .d-horizon .h-ok { width: 34px; height: 34px; }
