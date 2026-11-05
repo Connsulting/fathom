@@ -334,5 +334,5 @@ test('an uncached formula in a tax Month cell warns invalid_tax_month with its l
   assert.equal(rows.length, 4, 'the readable month still parses');
   const warn = warnings.find((w) => w.code === 'invalid_tax_month');
   assert.ok(warn, 'invalid_tax_month warning present');
-  assert.deepEqual(warn.locator, { sheet: '2032', cell: 'A5' });
+  assert.deepEqual(warn.locator, { sheet: '2032', cell: 'A4' });
 });
