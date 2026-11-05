@@ -23,7 +23,7 @@ import { tempDb } from './helpers/server.mjs';
 const FROZEN = [
   'household_summary', 'get_facts', 'list_accounts', 'query_transactions', 'list_positions', 'pnl_by_month',
   'list_recommendations', 'get_recommendation', 'list_deadlines', 'list_goals', 'get_figures', 'packs_status',
-  'set_recommendation_status',
+  'set_recommendation_status', 'list_packs', 'get_pack_entry', 'search_pack_entries',
 ];
 const TEST_ROWS = 250;
 
