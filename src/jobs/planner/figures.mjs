@@ -14,7 +14,7 @@ import {
 import { law, stdDeduction } from './law.mjs';
 import {
   householdTax, seTaxByPerson, seRetirementWorksheet, catchUpLimitFor, attributeContributions, payrollRecords, contributions,
-  factPretax, stepsOf, num,
+  factPretax, stepsOf, employerPaid,
 } from './household.mjs';
 import { notesFor } from './assumptions.mjs';
 import { trailingCharitable } from './facts.mjs';
@@ -415,45 +415,46 @@ export function computeFigures(data, facts, ctx) {
   // Self-employed plan deduction per sole or partnership sponsor (MG5, R2-3, R3-2): Publication 560
   // worksheet on the actual mix; S corp plans never deduct on the 1040.
   const retireSteps = [];
+  const sePlans = { contrib, inUnit, ageOf };
   if (seInfo) {
-    for (const b of biz) {
-      if (b.kind === 'scorp' || !inUnit(b.person)) continue;
-      const c = contrib[b.person];
-      const plan = c.byPlan[b.id];
-      if (!plan) continue;
-      const E = cents(plan.employer + plan.sep);
-      const D = plan.deferral;
-      const K = plan.catchUp;
-      if (!(E > 0 || D > 0 || K > 0)) continue;
-      if ((D > 0 || K > 0) && !c.outsideKnown) {
+    for (const { b, missing, ws } of selfEmployedPlans(biz, seInfo, sePlans)) {
+      if (missing) {
         blocked.push('retirement_other_deferrals_missing');
         out.warn('retirement_other_deferrals_missing');
         out.confirm('retirement', 'retirement.otherPlanDeferrals');
         continue;
       }
-      const ws = seRetirementWorksheet({
-        netProfit: b.seInput ?? 0, seDeduction: seInfo.dhByBiz[b.id] || 0, employer: E, deferral: D, catchUp: K, roth: plan.roth,
-        otherDeferrals: cents(c.allRegular - D), otherCatchUp: cents(c.allCatchUp - K), catchUpLimit: catchUpLimitFor(ageOf(b.person)),
-      });
       if (ws.over) { blocked.push('retirement_contribution_over_limit'); out.warn('retirement_contribution_over_limit'); continue; }
       b.retire = ws.deduction;
       retireSteps.push(...ws.steps.map(st => ({ ...st, label: `Self-employed plan (${b.id}): ${st.label}` })));
     }
   }
+  // C2: a war game that changes business income re-checks the stored contributions against the
+  // worksheet at the modeled income (IRC 404(a)(8), Pub 560); true when any is over its limit.
+  const retireOver = modeled => selfEmployedPlans(modeled.biz, seTaxByPerson(modeled), sePlans).some(r => r.missing || r.ws.over);
 
   out.info.blocked = [...new Set(blocked)];
   out.info.vaBlocked = vaBlocked;
   out.info.persons = persons;
   out.info.f = f;
 
-  // MG7: whose plan a solo 401(k) would be, set even when tax is blocked.
+  // MG7, C3: whose plan a solo 401(k) would be, set even when tax is blocked. One selection feeds
+  // sizing, deadlines and wording: an S corp paying its owner wages, else the first person with
+  // positive sole proprietor earnings. Only when neither exists does a zero-salary S corp, a sole
+  // proprietorship without earnings or a partnership name the sponsor for deadlines.
+  const soleByPerson = p => sum(biz.filter(b => b.kind === 'sole' && b.person === p).map(b => b.seInput));
+  const soleBizOf = p => biz.filter(b => b.kind === 'sole' && b.person === p);
   const corpInUnit = corps.find(c => inUnit(c.person) && c.gross > 0) || null;
-  const anyCorp = corpInUnit || corps.find(c => inUnit(c.person)) || null;
-  const soleFirst = biz.find(b => b.kind === 'sole' && b.seInput > 0) || biz.find(b => b.kind === 'sole') || null;
+  const solePerson = corpInUnit ? null : persons.find(p => soleByPerson(p) > 0) || null;
+  const soleSized = solePerson ? soleBizOf(solePerson).find(b => b.seInput > 0) : null;
+  const zeroCorp = corps.find(c => inUnit(c.person)) || null;
+  const soleAny = biz.find(b => b.kind === 'sole') || null;
   const partFirst = biz.find(b => b.kind === 'partnership') || null;
-  out.info.solo = anyCorp ? { person: anyCorp.person, kind: 'scorp', entity: anyCorp.entity.slug }
-    : soleFirst ? { person: soleFirst.person, kind: 'sole', entity: soleFirst.id }
-      : partFirst ? { person: partFirst.person, kind: 'partnership', entity: partFirst.id } : null;
+  out.info.solo = corpInUnit ? { person: corpInUnit.person, kind: 'scorp', entity: corpInUnit.entity.slug }
+    : soleSized ? { person: soleSized.person, kind: 'sole', entity: soleSized.id }
+      : zeroCorp ? { person: zeroCorp.person, kind: 'scorp', entity: zeroCorp.entity.slug }
+        : soleAny ? { person: soleAny.person, kind: 'sole', entity: soleAny.id }
+          : partFirst ? { person: partFirst.person, kind: 'partnership', entity: partFirst.id } : null;
 
   let hh = null;
   if (hasIncome && !blocked.length) {
@@ -474,13 +475,11 @@ export function computeFigures(data, facts, ctx) {
   // Retirement room (R5, R6, S5, S6, MG6, R2-5, R3-3, R3-5, R3-6).
   const retireMissing = ['retirement.planTermsConfirmed', 'retirement.aggregationConfirmed'].filter(k => owner[k] !== true);
   const conf = { planConfirmed: true, aggregationConfirmed: true };
-  const soleByPerson = p => sum(biz.filter(b => b.kind === 'sole' && b.person === p).map(b => b.seInput));
-  const soleBizOf = p => biz.filter(b => b.kind === 'sole' && b.person === p);
   const zeroPlan = { deferral: 0, catchUp: 0, roth: 0, employer: 0, sep: 0 };
   const planSum = list => list.reduce((acc, b) => Object.fromEntries(Object.keys(zeroPlan).map(k => [k, cents(acc[k] + (b ? b[k] : 0))])), zeroPlan);
   const sizing = hasIncome && !blocked.length && !!seInfo;
   if (sizing) {
-    const soloPerson = corpInUnit ? corpInUnit.person : persons.find(p => soleByPerson(p) > 0);
+    const soloPerson = corpInUnit ? corpInUnit.person : solePerson;
     if (soloPerson) {
       const c = contrib[soloPerson];
       const missing = [...retireMissing, ...(ageOf(soloPerson) == null ? [ageKey(soloPerson)] : []), ...(c.outsideKnown ? [] : ['retirement.otherPlanDeferrals'])];
@@ -500,13 +499,14 @@ export function computeFigures(data, facts, ctx) {
     }
     if (!retireMissing.length) {
       const wagesOf = p => sum(w2.filter(w => w.person === p).map(w => w.gross));
-      const sepPaid = p => planSum(soleBizOf(p).map(b => contrib[p].byPlan[b.id])).sep;
+      // C1b: SEP room nets every employer contribution already made by the person's businesses.
+      const sepPaid = p => employerPaid(planSum(soleBizOf(p).map(b => contrib[p].byPlan[b.id])));
       const seps = persons.filter(p => soleByPerson(p) > 0).map(p => out.safe('sepRoom', () => sepRoom({
         kind: 'self-employed', netProfit: soleByPerson(p), filingStatus: f, w2SocialSecurityWages: wagesOf(p), w2MedicareWages: wagesOf(p),
         employerContributions: sepPaid(p), ...conf,
       }))).filter(Boolean);
       if (!seps.length && corpInUnit) {
-        const sep = (contrib[corpInUnit.person].byPlan[corpInUnit.entity.slug] || zeroPlan).sep;
+        const sep = employerPaid(contrib[corpInUnit.person].byPlan[corpInUnit.entity.slug] || zeroPlan);
         const env = out.safe('sepRoom', () => sepRoom({ kind: 'w2', compensation: corpInUnit.gross, employerContributions: sep, ...conf }));
         if (env) seps.push(env);
       }
@@ -530,7 +530,7 @@ export function computeFigures(data, facts, ctx) {
     const gameCorp = corpInUnit || corps.find(c => inUnit(c.person) && c.P > 0) || null;
     out.model = buildWargames(data, out, {
       clock, f, parts, hh, corp: gameCorp, corps, entities: pnlEntities, owner, facts, contrib, ageOf, ageKey,
-      retireMissing, accounts, householdTax,
+      retireMissing, accounts, householdTax, retireOver,
       priorWages: gameCorp ? priorFicaWages(data, owner, gameCorp.person, gameCorp.entity.name) : null,
     });
   } else {
@@ -548,6 +548,29 @@ export function computeFigures(data, facts, ctx) {
   return finish(out);
 }
 
+// Self-employed plan worksheets (MG5, R2-3, R3-2): one per sole or partnership sponsor with
+// contributions, on that sponsor's net profit and deductible half of SE tax. `missing` when elective
+// contributions meet unknown outside deferrals; otherwise the worksheet result.
+function selfEmployedPlans(biz, seInfo, { contrib, inUnit, ageOf }) {
+  const results = [];
+  for (const b of biz) {
+    if (b.kind === 'scorp' || !inUnit(b.person)) continue;
+    const c = contrib[b.person];
+    const plan = c.byPlan[b.id];
+    if (!plan) continue;
+    const E = employerPaid(plan);
+    const D = plan.deferral;
+    const K = plan.catchUp;
+    if (!(E > 0 || D > 0 || K > 0)) continue;
+    if ((D > 0 || K > 0) && !c.outsideKnown) { results.push({ b, missing: true }); continue; }
+    results.push({ b, ws: seRetirementWorksheet({
+      netProfit: b.seInput ?? 0, seDeduction: seInfo.dhByBiz[b.id] || 0, employer: E, deferral: D, catchUp: K, roth: plan.roth,
+      otherDeferrals: cents(c.allRegular - D), otherCatchUp: cents(c.allCatchUp - K), catchUpLimit: catchUpLimitFor(ageOf(b.person)),
+    }) });
+  }
+  return results;
+}
+
 // MG6, R2-5, R3-3, R3-5: solo 401(k) room for the sized participant. Catch-up treatment follows IRC
 // 414(v)(7)(A): an S corp owner whose prior-year Social Security wages (W-2 box 3, T.D. 10033) from
 // the plan sponsor exceeded the threshold may make catch-ups only as Roth, and none at all without a
@@ -558,7 +581,7 @@ function soloRoomFigures(out, { data, owner, person, corp, compensation, age, co
   const priorWages = corp ? priorFicaWages(data, owner, person, corp.entity.name) : 0;
   const base = {
     compensation, kind, age, allPlanDeferrals: contrib.all401k, thisPlanDeferrals: cents(plan.deferral + plan.catchUp),
-    thisPlanCatchUp: plan.catchUp, employerContributions: plan.employer, ...conf,
+    thisPlanCatchUp: plan.catchUp, employerContributions: employerPaid(plan), ...conf,
     ...(priorWages != null ? { priorYearSponsorWages: priorWages } : {}),
   };
   const allowed = out.safe('solo401kRoom', () => solo401kRoom(base));
@@ -578,13 +601,24 @@ function soloRoomFigures(out, { data, owner, person, corp, compensation, age, co
   if (kind === 'self-employed') steps.push({ label: 'No wages from the plan sponsor; the Roth catch-up rule does not apply', formula: 'self-employed participant', value: 0 });
   else if (priorWages != null) steps.push({ label: "Last year's Social Security wages from the plan sponsor", formula: 'prior-year W-2 Social Security wages, or your stated amount', value: priorWages });
   const loc = extra => ({ calc: 'solo401kRoom', inputs: env.inputs, steps, assumptions: [PLAN_TERMS, ...extra] });
-  out.put('room.solo401k.employee', v.employee, 'm', 'Employee deferral room left', 'calc:retirement', loc(['roth_elective']));
-  out.put('room.solo401k.employer', v.employer, 'm', 'Employer contribution room left', 'calc:retirement', loc([]));
   if (mode === 'unknown') {
+    // C5: until last year's sponsor wages are known the catch-up may be pre-tax, Roth or (affected,
+    // with no Roth feature) not allowed at all, and a disallowed catch-up frees compensation for the
+    // employer contribution. A room figure publishes only when every allowed treatment gives the same
+    // value; a confirmed Roth feature rules out the disallowed case.
+    const off = rothFact === true ? allowed : out.safe('solo401kRoom', () => solo401kRoom({ ...base, catchUpAllowed: false }));
+    if (!off) { out.withhold(SOLO_KEYS, 'calc_failed'); return; }
     out.info.retireCatchUp = 'retirement.priorYearFicaWages';
-    out.withhold(['room.solo401k', 'room.solo401k.catchUp', 'room.solo401k.rothCatchUp', 'room.solo401k.pretax'], 'retirement.priorYearFicaWages');
+    const pending = ['room.solo401k', 'room.solo401k.catchUp', 'room.solo401k.rothCatchUp', 'room.solo401k.pretax'];
+    if (off.value.employee === v.employee) out.put('room.solo401k.employee', v.employee, 'm', 'Employee deferral room left', 'calc:retirement', loc(['roth_elective']));
+    else pending.push('room.solo401k.employee');
+    if (off.value.employer === v.employer) out.put('room.solo401k.employer', v.employer, 'm', 'Employer contribution room left', 'calc:retirement', loc([]));
+    else pending.push('room.solo401k.employer');
+    out.withhold(pending, 'retirement.priorYearFicaWages');
     return;
   }
+  out.put('room.solo401k.employee', v.employee, 'm', 'Employee deferral room left', 'calc:retirement', loc(['roth_elective']));
+  out.put('room.solo401k.employer', v.employer, 'm', 'Employer contribution room left', 'calc:retirement', loc([]));
   const catchPre = mode === 'pretax' || mode === 'none' ? v.catchUp : 0;
   const roth = mode === 'roth' ? v.catchUp : 0;
   const pretax = cents(v.employee + v.employer + catchPre);

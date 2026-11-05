@@ -34,6 +34,7 @@ const REASONS = Object.freeze({
   'retirement.otherPlanDeferrals': ['We need your deferrals to other workplace plans this year before sizing retirement room.', confirmTask('retirement.otherPlanDeferrals')],
   'retirement.priorYearFicaWages': ["We need last year's Social Security wages from your business before sizing catch-up room.", confirmTask('retirement.priorYearFicaWages')],
   'retirement.planOffersRoth': ['We need to know whether your plan offers Roth deferrals before sizing catch-up room.', confirmTask('retirement.planOffersRoth')],
+  wargame_contribution_over_limit: ['Moving income to January would leave a self-employed retirement contribution above what the plan rules allow for this year, so this comparison is not a current choice.', 'Check your retirement contribution amounts with your plan provider or accountant'],
   inputs_changed: ['Its inputs changed, so it is kept for reference and is not a current choice.', 'Review the latest data on your plan'],
 });
 const RETAINED = 'No longer computed from your current data, so it is shown for reference only.';

@@ -10,6 +10,7 @@
 //   vaBlocked, qbiLossCarryforward?}
 // seTaxByPerson(parts) -> {se: {person: selfEmploymentTax value}, dhByBiz: {bizId: deductible half}, steps}
 // seRetirementWorksheet(inputs) -> {over: false, deduction, s3, steps} | {over: true, failed, steps}
+// employerPaid(plan) -> employer plus SEP contributions already made to one sponsor's plans
 // attributeContributions(owner, businesses) -> {entries: [{...entry, sponsor: {kind, slug}}], unattributed}
 // contributions(records, corps, attributed, owner) -> {owner|spouse: {allRegular, allCatchUp, all401k,
 //   outsideKnown, byPlan: {slug: {deferral, catchUp, roth, employer, sep}}, ira}}
@@ -238,6 +239,11 @@ export function seRetirementWorksheet({
   return { over: false, deduction, s3, steps };
 }
 
+// Employer contributions already made to a sponsor's plans (MG5, C1): a SEP and a 401(k) of the same
+// business share one employer limit (Pub 560 deduction limit for multiple plans; IRC 404(a)(7),
+// 415(f)), so every room and worksheet check counts both.
+export const employerPaid = plan => cents(num(plan && plan.employer) + num(plan && plan.sep));
+
 // Catch-up limit by age (IRC 414(v)(2)(B), Notice 2025-67); unknown age allows none.
 export function catchUpLimitFor(age) {
   const R = TAX_2026.retirement;
@@ -372,13 +378,20 @@ export function contributions(records, corps, attributed, owner) {
 
     // Other-plan deferrals (R2-3 item 3, R3-1 item 2, D8): known only from a numeric document field,
     // a fact naming the employer, or the retirement.otherPlanDeferrals fact (which replaces them).
+    // C4: a fact that is present but fails validation leaves them unknown; it never falls through
+    // to the documents as if nothing had been stated.
     let outsideKnown = true;
     let outRegular = 0;
     let outCatch = 0;
-    const of = otherFact && typeof otherFact === 'object' ? otherFact[p] : undefined;
-    if (of && typeof of === 'object' && isAmount(of.deferral) && (of.catchUp == null || isAmount(of.catchUp))) {
-      outRegular = of.deferral;
-      outCatch = of.catchUp || 0;
+    const factObject = otherFact && typeof otherFact === 'object' && !Array.isArray(otherFact);
+    const of = factObject ? otherFact[p] : undefined;
+    if (otherFact != null && (!factObject || of != null)) {
+      if (of && typeof of === 'object' && isAmount(of.deferral) && (of.catchUp == null || isAmount(of.catchUp))) {
+        outRegular = of.deferral;
+        outCatch = of.catchUp || 0;
+      } else {
+        outsideKnown = false;
+      }
     } else {
       const oFacts = facts.filter(c => c.sponsor.kind === 'outside' && elective(c));
       const employerOf = c => (typeof c.employer === 'string' ? c.employer.trim() : '');

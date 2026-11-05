@@ -65,8 +65,8 @@ function shapeOk(f) {
 // The planner-side literal check (R2-7, R3-8, D5). After tokens are removed, these forms are
 // blanked and any digit left fails: a month and day with an optional year, "tax year YYYY",
 // "in YYYY", and the plan identifiers 401(k), 403(b), 457(b), "529 plan" and Virginia529. A form is
-// kept (so it fails) when a money word follows it, when a percent sign follows it or when a dollar
-// sign precedes it, so a year can never pass as an amount.
+// kept (so it fails) when a money word appears anywhere after it in the same clause or sentence, when
+// a percent sign follows it or when a dollar sign precedes it, so a year can never pass as an amount.
 const MONTH = '(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)';
 const YEAR = '20\\d{2}';
 const ALLOWED_FORMS = [
@@ -80,13 +80,17 @@ const ALLOWED_FORMS = [
 const FORBIDDEN = new Set(['dollar', 'dollars', 'cent', 'cents', 'percent', 'percentage', 'pct', 'k', 'thousand', 'thousands',
   'million', 'millions', 'billion', 'bn', 'usd', 'bucks', 'points', 'bps', 'basis']);
 
+const IDENTIFIERS = /\b(?:401\(k\)|403\(b\)|457\(b\))/gi;
+
 function moneyContext(text, start, end) {
   if (text[start - 1] === '$') return true;
   const rest = text.slice(end);
   if (/^\s*%/.test(rest)) return true;
-  // The next word after any punctuation other than a sentence end.
-  const next = /^[^\w.!?]*?([a-z]+)/i.exec(rest);
-  return !!next && FORBIDDEN.has(next[1].toLowerCase());
+  // C6: any money word later in the same clause or sentence keeps the form, not only the next word,
+  // so "in 2026 US dollars" fails. Plan identifiers are removed first so the k of 401(k) is not read
+  // as a money word.
+  const clause = rest.split(/[!?;]|\.(?=\s|$)/)[0].replace(IDENTIFIERS, ' ');
+  return (clause.match(/[a-z]+/gi) || []).some(w => FORBIDDEN.has(w.toLowerCase()));
 }
 
 export function plannerLiteralFree(text) {

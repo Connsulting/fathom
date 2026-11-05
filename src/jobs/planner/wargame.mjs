@@ -8,7 +8,7 @@
 import { payrollTax, solo401kRoom, TAX_2026 } from '../../calc/index.mjs';
 import { cents } from '../../store/db.mjs';
 import { sameName, monthOf, yearOf, sum } from './data.mjs';
-import { stepsOf } from './household.mjs';
+import { stepsOf, employerPaid } from './household.mjs';
 
 const PLAN_TERMS = 'plan_terms_confirmed';
 const ZERO_PLAN = Object.freeze({ deferral: 0, catchUp: 0, roth: 0, employer: 0, sep: 0 });
@@ -89,7 +89,7 @@ function salaryGame(data, out, ctx) {
     const total = cents(hh.fedTotal + (hh.va ?? 0) + payrollNet);
     const room = solo401kRoom({
       compensation: s, kind: 'w2', age, allPlanDeferrals: c.all401k, thisPlanDeferrals: cents(plan.deferral + plan.catchUp),
-      thisPlanCatchUp: plan.catchUp, employerContributions: plan.employer, planConfirmed: true, aggregationConfirmed: true,
+      thisPlanCatchUp: plan.catchUp, employerContributions: employerPaid(plan), planConfirmed: true, aggregationConfirmed: true,
       ...(priorWages != null ? { priorYearSponsorWages: priorWages } : {}), ...(catchOff ? { catchUpAllowed: false } : {}),
     });
     const roth = affected && !catchOff ? room.value.catchUp : 0;
@@ -157,7 +157,7 @@ function salaryGame(data, out, ctx) {
 // ---------------------------------------------------------------- deferral (S13, R16)
 
 function deferralGame(data, out, ctx) {
-  const { clock, owner, parts, entities, accounts, householdTax } = ctx;
+  const { clock, owner, parts, entities, accounts, householdTax, retireOver } = ctx;
   const TY = data.taxYear;
   const invalid = code => { out.info.wargameInvalid.deferral = code; return null; };
   const inSeason = yearOf(clock) === TY && monthOf(clock) >= 10;
@@ -222,6 +222,10 @@ function deferralGame(data, out, ctx) {
   const runs = OPTIONS.map(o => ({ o, t26: T(shift(b.agi, -o.amount)), t27: T(shift(base27, o.amount)) }));
   const blockedRun = [t26Base, t27Base, ...runs.flatMap(r => [r.t26, r.t27])].find(t => t.blocked);
   if (blockedRun) return invalid(blockedRun.blocked);
+  // C2: the stored self-employed plan contributions must stay within the worksheet limit at each
+  // option's lower income this year (IRC 62(a)(6), 404(a)(8), Pub 560); an option that pushes them
+  // over cannot claim the tax cut, so the game is not a current choice.
+  if (runs.some(r => retireOver(shift(b.agi, -r.o.amount)))) return invalid('wargame_contribution_over_limit');
 
   put(out, 'wg.deferral.base.income', A, 'Invoice deferral: monthly invoices', {
     calc: 'deferralBase', inputs: { incomeYtd: e.sums.income, months: m },
