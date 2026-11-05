@@ -1,10 +1,14 @@
 // Routing: the JSON API under /api plus /healthz, and static files for everything else.
 // `routes` is the route table (docs/architecture.md lists every entry; test/docs.test.mjs checks).
+// `upload: true` routes take multipart bodies (read by the handler through ctx.readUpload);
+// `ingest: true` routes never log error details, which could carry file contents.
 
 import { fileURLToPath } from 'node:url';
 import { HttpError, setSecurityHeaders, sendJson, sendError, guardPost, readJsonBody } from './http.mjs';
+import { guardUpload, readMultipart } from './upload.mjs';
 import { createStatic } from './static.mjs';
 import * as h from './handlers.mjs';
+import * as ih from './ingest-handlers.mjs';
 
 const TABLE = [
   { method: 'GET', path: '/healthz', handler: h.healthz },
@@ -20,6 +24,12 @@ const TABLE = [
   { method: 'POST', path: '/api/ask', handler: h.ask },
   { method: 'POST', path: '/api/onboarding', handler: h.onboarding },
   { method: 'POST', path: '/api/demo/reset', handler: h.demoReset },
+  { method: 'POST', path: '/api/files', handler: ih.uploadFiles, upload: true, ingest: true },
+  { method: 'GET', path: '/api/files', handler: ih.listFiles, ingest: true },
+  { method: 'POST', path: '/api/files/:id/retry', handler: ih.retryFile, ingest: true },
+  { method: 'GET', path: '/api/confirm', handler: ih.listPendingConfirm, ingest: true },
+  { method: 'POST', path: '/api/confirm/list', handler: ih.listConfirm, ingest: true },
+  { method: 'POST', path: '/api/confirm/:id/answer', handler: ih.answerConfirm, ingest: true },
 ];
 
 export const routes = TABLE.map(({ method, path }) => ({ method, path }));
@@ -58,27 +68,34 @@ function findRoute(method, rawPath) {
   return hit;
 }
 
+// A log-safe error code: the error's code or class name when it is a plain identifier.
+const IDENT = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
+const safeCode = err => [err && err.code, err && err.name].find(v => typeof v === 'string' && IDENT.test(v)) || 'unknown';
+
 // engine, packs and answerer are optional for static-only fixtures: handlers that need them answer
-// 503, and the pack refresh check is skipped without packs.
-export function createHandler({ db, config, engine, packs, answerer, webDir = WEB_DIR, sharedDir = SHARED_DIR }) {
+// 503, and scenarios carry no manifest fields without packs.
+export function createHandler({ db, config, answerer, engine = null, packs = null, webDir = WEB_DIR, sharedDir = SHARED_DIR }) {
   const serveStatic = createStatic({ webDir, sharedDir });
   return async function handle(req, res) {
     setSecurityHeaders(res);
     const url = req.url || '/';
     const q = url.indexOf('?');
     const rawPath = q >= 0 ? url.slice(0, q) : url;
+    let route = null;
     try {
       if (rawPath === '/healthz' || rawPath === '/api' || rawPath.startsWith('/api/')) {
         const { r, params } = findRoute(req.method, rawPath);
+        route = r;
         let body = {};
-        if (r.method === 'POST') {
+        let readUpload = null;
+        if (r.upload) {
+          guardUpload(req);
+          readUpload = () => readMultipart(req);
+        } else if (r.method === 'POST') {
           guardPost(req);
           body = await readJsonBody(req);
         }
-        // Facts or a Your plans build may have changed since the last request (another process,
-        // the CLI, a direct write): refresh pack state first so this response reflects it.
-        if (packs && rawPath !== '/healthz') packs.refreshIfFactsChanged();
-        const out = await r.handler({ db, config, engine, packs, answerer, params, body, req });
+        const out = await r.handler({ db, config, answerer, engine, packs, params, body, readUpload, req });
         sendJson(res, 200, out);
         return;
       }
@@ -87,7 +104,10 @@ export function createHandler({ db, config, engine, packs, answerer, webDir = WE
       }
       await serveStatic(req, res, rawPath);
     } catch (err) {
-      if (!(err instanceof HttpError)) console.error(err);
+      if (!(err instanceof HttpError)) {
+        if (route && route.ingest) console.error('fathom: ingest request failed', safeCode(err));
+        else console.error(err);
+      }
       if (req.readable) req.resume();
       sendError(res, err);
     }

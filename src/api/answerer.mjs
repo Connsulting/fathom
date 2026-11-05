@@ -1,7 +1,7 @@
 // The live answerer: every Ask, rec conversation, pack follow-up and What if goes through the
 // runtime engine (live or fake), then through grounding and escaping before it is stored.
 //
-// createLiveAnswerer({ engine, packs }) ->
+// createLiveAnswerer({ engine, packs }) (packs: the live pack view, src/packs/live.mjs) ->
 //   answer({ db, key, questionId?, text?, clock? }) -> { paragraphs, refs, notice?, provenance? } | null
 //   whatIf({ db, packId, clock? })                  -> { paragraphs, refs, notice?, provenance? }
 // paragraphs are paragraph inner HTML (the handler wraps each in <p>); null means questionId
@@ -35,7 +35,7 @@
 // ({recId, action, wake?}) and the owner confirms it through the ordinary rec action endpoint.
 
 import { callTool, tools as REGISTRY } from '../tools/index.mjs';
-import { buildScenario } from '../scenario/build.mjs';
+import { buildScenario, clockNow } from '../scenario/build.mjs';
 import { checkGrounding, numberPattern, EngineOffError, BudgetExceededError, ModelCallError, ModelAccountingError, RoundLimitError } from '../engine/index.mjs';
 import { packContext } from '../packs/index.mjs';
 import { packStatus, ACTION_STATUS } from '../shared/rules.mjs';
@@ -385,13 +385,13 @@ function noticeFor(error, engine) {
 
 // The manifest packs effectively active now (base status plus overrides), with their rows.
 function activeManifestPacks(db, packs) {
-  const loaded = packs ? packs.loaded() : [];
   const out = [];
+  if (!packs) return out;
   for (const row of db.prepare('SELECT id, def, active, exploring FROM packs_state ORDER BY sort, id').all()) {
     const def = parseJson(row.def, null);
-    if (!def || typeof def.manifest !== 'string') continue;
+    if (!def) continue;
+    const pack = packs.backing(row.id, def);
     const status = packStatus(def.status, { active: row.active == null ? null : !!row.active, exploring: !!row.exploring });
-    const pack = loaded.find(p => p.id === def.manifest);
     if (status === 'active' && pack && !out.some(x => x.pack.id === pack.id)) out.push({ rowId: row.id, pack });
   }
   return out;
@@ -399,8 +399,9 @@ function activeManifestPacks(db, packs) {
 
 function packConversationContext(db, packs, rowId) {
   const row = db.prepare('SELECT def FROM packs_state WHERE id = ?').get(rowId);
-  const def = row ? parseJson(row.def, {}) : {};
-  const pack = def.manifest && packs ? packs.loaded().find(p => p.id === def.manifest) : null;
+  const raw = row ? parseJson(row.def, {}) : {};
+  const def = packs ? packs.view(rowId, raw) : raw;
+  const pack = packs ? packs.backing(rowId, raw) : null;
   const context = { pack: {
     id: rowId, name: def.name, status: def.status, why: def.why, covers: def.covers,
     curator: def.curator, version: def.version, taxYear: def.taxYear, reviewed: def.reviewed,
@@ -422,10 +423,9 @@ export function createLiveAnswerer({ engine, packs } = {}) {
   // One grounded model answer: call, ground, retry once with a corrective turn, render.
   // proposeFor: null (no proposal tool), '*' (any visible rec, the ask conversation) or the rec id
   // of a rec conversation (proposals for any other rec are ignored).
-  async function run({ db, scenario, question, context, history, baseRefs, fakeArgs, proposeFor = null }) {
+  async function run({ db, scenario, now, question, context, history, baseRefs, fakeArgs, proposeFor = null }) {
     if (!engine.isOn()) return offNotice(engine);
-    if (packs) packs.refreshIfFactsChanged();
-    const summary = await callTool('household_summary', {}, { db, now: engine.now() });
+    const summary = await callTool('household_summary', {}, { db, now });
     const active = activeManifestPacks(db, packs);
     const packIds = active.map(a => a.pack.id).sort();
     const packContextText = packContext(active.map(({ pack }) => ({ pack, status: 'active' })));
@@ -433,7 +433,7 @@ export function createLiveAnswerer({ engine, packs } = {}) {
     const offered = [...REGISTRY.filter(t => t.scope === 'read'), ...(proposeFor ? [PROPOSE_TOOL] : [])];
     const fake = engine.mode === 'fake' ? fakeAnswerScript({ scenario, summary, propose: !!proposeFor, ...fakeArgs }) : undefined;
     const request = { purpose: 'chat', system: prompt.system, systemDynamic: prompt.systemDynamic, messages: prompt.messages,
-      tools: offered, maxTokens: MAX_TOKENS, ...(fake ? { fake } : {}) };
+      tools: offered, toolContext: { db, now }, maxTokens: MAX_TOKENS, ...(fake ? { fake } : {}) };
 
     // groundAnswer sanitizes each datum (and context.entries bodies lose their metadata lines there).
     const entryBodies = active.flatMap(({ pack }) => pack.entries.map(e => groundingBody(e.body)));
@@ -500,7 +500,8 @@ export function createLiveAnswerer({ engine, packs } = {}) {
 
   return {
     async answer({ db, key = 'ask', questionId, text, clock } = {}) {
-      const scenario = buildScenario(db, { clock });
+      const scenario = buildScenario(db, { clock, packs });
+      const now = clockNow(db, clock);
       const hasQ = questionId !== undefined && questionId !== null;
       let question;
       let baseRefs = [];
@@ -517,18 +518,18 @@ export function createLiveAnswerer({ engine, packs } = {}) {
       const rec = recForKey(scenario, key);
       let context = null;
       if (rec) {
-        context = { recommendation: await callTool('get_recommendation', { id: rec.id }, { db, now: engine.now() }) };
+        context = { recommendation: await callTool('get_recommendation', { id: rec.id }, { db, now }) };
         baseRefs = [...baseRefs, rec.id];
       } else if (key.startsWith('pack:')) {
         context = packConversationContext(db, packs, key.slice(5)).context;
       }
-      return run({ db, scenario, question, context, history: scenario.live.conversations[key] || [], baseRefs,
+      return run({ db, scenario, now, question, context, history: scenario.live.conversations[key] || [], baseRefs,
         proposeFor: rec ? rec.id : key === 'ask' ? '*' : null,
         fakeArgs: { key, questionId: hasQ ? questionId : undefined, text: hasQ ? undefined : question } });
     },
 
     async whatIf({ db, packId, clock } = {}) {
-      const scenario = buildScenario(db, { clock });
+      const scenario = buildScenario(db, { clock, packs });
       const { def, context } = packConversationContext(db, packs, packId);
       const prompt = def.whatIf && def.whatIf.prompt ? def.whatIf.prompt : '';
       const key = 'pack:' + packId;
@@ -538,7 +539,7 @@ export function createLiveAnswerer({ engine, packs } = {}) {
       const baseRefs = (def.whatIf && Array.isArray(def.whatIf.unlocks) ? def.whatIf.unlocks : []).map(u => u && u.recId);
       // A manifest prompt is literal text; an illustrative demo prompt may carry scenario tokens.
       const question = typeof def.manifest === 'string' ? prompt : plain(scenario, prompt);
-      return run({ db, scenario, question, context, history, baseRefs, fakeArgs: { key, whatIfPack: def } });
+      return run({ db, scenario, now: clockNow(db, clock), question, context, history, baseRefs, fakeArgs: { key, whatIfPack: def } });
     },
   };
 }

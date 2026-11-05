@@ -13,12 +13,11 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildYourPlans, fakeExtractRows } from '../src/packs/your-plans.mjs';
-import { yourPlansDir } from '../src/packs/state.mjs';
 import { loadPacks, activePacks } from '../src/packs/index.mjs';
 import { createRuntimeEngine } from '../src/engine/runtime.mjs';
 import { loadConfig } from '../src/config.mjs';
 import { openDb, migrate, getSetting, setSetting } from '../src/store/db.mjs';
-import { createPackRefresher } from '../src/packs/state.mjs';
+import { yourPlansDir, createLivePacks } from '../src/packs/live.mjs';
 import { createLiveAnswerer } from '../src/api/answerer.mjs';
 import { seedDemo } from '../demo/seed.mjs';
 import {
@@ -427,7 +426,7 @@ function sayingEngine(runtime, text) {
 }
 
 async function answerAfterBuild(db, dataDir, text) {
-  const packs = createPackRefresher(db, { dataDir });
+  const packs = createLivePacks(db, { dataDir });
   packs.refresh();
   const engine = sayingEngine(engineFor(db, dataDir), text);
   return createLiveAnswerer({ engine, packs }).answer({ db, key: 'ask', text: 'What do our plan documents say' });

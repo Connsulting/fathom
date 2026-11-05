@@ -12,7 +12,7 @@ import { openDb, migrate } from '../../store/db.mjs';
 import { loadConfig } from '../../config.mjs';
 import { seedDemo } from '../../../demo/seed.mjs';
 import { createRuntimeEngine } from '../runtime.mjs';
-import { createPackRefresher } from '../../packs/state.mjs';
+import { createLivePacks } from '../../packs/live.mjs';
 import { createLiveAnswerer } from '../../api/answerer.mjs';
 
 export const SMOKE_QUESTION = 'How many of my recommendations need me right now?';
@@ -26,7 +26,7 @@ export async function runAskSmoke({ mode = 'fake', credentialFile = null } = {})
     const env = { FATHOM_DATA: dataDir, FATHOM_ENGINE: mode };
     if (credentialFile) env.FATHOM_CLAUDE_CREDENTIAL_FILE = credentialFile;
     const engine = createRuntimeEngine({ db, config: loadConfig(env) });
-    const packs = createPackRefresher(db, { dataDir });
+    const packs = createLivePacks(db, { dataDir });
     packs.refresh();
     const lastId = db.prepare('SELECT coalesce(max(id), 0) AS id FROM spend_ledger').get().id;
     const reply = await createLiveAnswerer({ engine, packs }).answer({ db, key: 'ask', text: SMOKE_QUESTION });

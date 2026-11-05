@@ -1,18 +1,21 @@
 // API handlers. Each takes { db, config, engine, packs, answerer, params, body } and returns the
 // JSON response body (status 200) or throws HttpError. Every action writes the store and answers
 // with the fresh scenario, so the browser swaps it in. Model calls are awaited before any write
-// transaction opens; only the writes run inside tx().
+// transaction opens; only the writes run inside tx(). ctx.packs is the live pack view
+// (src/packs/live.mjs).
 
 import { getSetting, setSetting, schemaVersion, tx, cents, parseJson as parse } from '../store/db.mjs';
-import { buildScenario, loadContent, defaultPicks, wargameLists } from '../scenario/build.mjs';
+import { buildScenario, clockNow, loadContent, defaultPicks, wargameLists } from '../scenario/build.mjs';
 import { ACTION_STATUS, packStatus } from '../shared/rules.mjs';
 import { escapeUserText } from '../shared/tokens.mjs';
 import { seedDemo } from '../../demo/seed.mjs';
+import { clearStoredFiles } from '../ingest/vault.mjs';
 import { HttpError } from './http.mjs';
 import { findQuestion, isIndex } from './questions.mjs';
 import { whatIfOwnerText } from './answerer.mjs';
 import { buildYourPlans, YourPlansRefusal } from '../packs/your-plans.mjs';
 import { EngineOffError, BudgetExceededError } from '../engine/index.mjs';
+import { refreshLivePacks } from '../packs/live.mjs';
 
 const MAX_TEXT = 4000;
 const MAX_LABEL = 200;
@@ -23,16 +26,12 @@ const TOGGLE_NOTE = 'Recommendations update on the next planning run.';
 const paragraphs = list => (Array.isArray(list) ? list : []).map(p => `<p>${p}</p>`).join('');
 const nowIso = () => new Date().toISOString();
 
-function scenarioOf(ctx) {
-  return buildScenario(ctx.db, { clock: ctx.config && ctx.config.clock, engineMode: ctx.config && ctx.config.engine });
+export function scenarioOf(ctx) {
+  return buildScenario(ctx.db, { clock: ctx.config && ctx.config.clock, engineMode: ctx.config && ctx.config.engine, packs: ctx.packs || null });
 }
 
 // The current "today" for message timestamps: the scenario clock's date at the current time.
-function stamp(ctx) {
-  const clock = (ctx.config && ctx.config.clock) || getSetting(ctx.db, 'clock', null);
-  const now = nowIso();
-  return clock ? `${clock}T${now.slice(11)}` : now;
-}
+const stamp = ctx => clockNow(ctx.db, ctx.config && ctx.config.clock);
 
 function visibleRec(db, id) {
   const row = db.prepare('SELECT * FROM recs WHERE id = ?').get(id);
@@ -44,6 +43,12 @@ function packRow(db, id) {
   const row = db.prepare('SELECT * FROM packs_state WHERE id = ?').get(id);
   if (!row) throw new HttpError(404, `no pack ${id}`);
   return row;
+}
+
+// A pack row's definition with its manifest fields when a loaded manifest backs it.
+function packDef(ctx, row) {
+  const def = parse(row.def, {});
+  return ctx.packs ? ctx.packs.view(row.id, def) : def;
 }
 
 function recEvent(db, recId, action, arg, from, to, actor = 'ui') {
@@ -181,7 +186,7 @@ export function packToggle(ctx) {
 export async function packWhatIf(ctx) {
   const { db } = ctx;
   const first = packRow(db, ctx.params.id);
-  const def = parse(first.def, {});
+  const def = packDef(ctx, first);
   if (!def.whatIf) throw new HttpError(400, `pack ${first.id} has no what-if`);
   const key = 'pack:' + first.id;
   const reply = first.what_if_done ? null
@@ -233,16 +238,11 @@ export function setCap(ctx) {
 // directory is inside the repository.
 export async function yourPlansBuild(ctx) {
   const engine = need(ctx, 'engine');
-  const packs = need(ctx, 'packs');
   const { fileIds = [] } = ctx.body;
   if (!Array.isArray(fileIds) || fileIds.length > MAX_FILE_IDS || !fileIds.every(id => typeof id === 'string' && id.length > 0 && id.length <= 200)) {
     throw new HttpError(400, `fileIds must be at most ${MAX_FILE_IDS} file id strings`);
   }
   if (!engine.isOn()) throw new HttpError(409, 'The engine is off, so Your plans cannot be built. Switch it on first.');
-  const month = engine.now().slice(0, 7).replace('-', '');
-  if (engine.ledger.monthSpendUsd(month) >= engine.capUsd()) {
-    throw new HttpError(409, "This month's engine budget is used up, so Your plans cannot be built. Raise the cap first.");
-  }
   let result;
   try {
     result = await buildYourPlans({ db: ctx.db, engine, dataDir: ctx.config.dataDir, fileIds,
@@ -253,7 +253,7 @@ export async function yourPlansBuild(ctx) {
     if (e instanceof BudgetExceededError) throw new HttpError(409, "This month's engine budget is used up, so Your plans cannot be built. Raise the cap first.");
     throw e;
   }
-  packs.refresh();
+  if (result.written) refreshLivePacks(ctx.db, { dataDir: ctx.config.dataDir });
   const { written, entries, sources, warnings, dropped } = result;
   return { scenario: scenarioOf(ctx), result: { written, entries, sources, warnings, dropped } };
 }
@@ -304,9 +304,10 @@ export function onboarding(ctx) {
   return { scenario: scenarioOf(ctx) };
 }
 
-export function demoReset(ctx) {
+export async function demoReset(ctx) {
   if (getSetting(ctx.db, 'mode', null) !== 'demo') throw new HttpError(404, 'not found');
   seedDemo(ctx.db);
+  await clearStoredFiles(ctx.config.dataDir);
   if (ctx.packs) ctx.packs.refresh();
   return { scenario: scenarioOf(ctx) };
 }

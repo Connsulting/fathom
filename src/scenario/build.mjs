@@ -7,6 +7,7 @@
 
 import { getSetting, cents, parseJson as parse } from '../store/db.mjs';
 import { resolveTokens } from '../shared/tokens.mjs';
+import { ingestState, applyFreshness } from '../ingest/freshness.mjs';
 
 const DAY = 86400000;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -83,6 +84,11 @@ export function resolveClock(db, override) {
   const c = override || getSetting(db, 'clock', null) || todayUtc();
   if (!isIsoDate(c)) throw new Error(`clock must be an ISO date (YYYY-MM-DD), got ${c}`);
   return c;
+}
+
+// The current time on the scenario clock: the clock's date at the current UTC time of day.
+export function clockNow(db, override) {
+  return `${resolveClock(db, override)}T${new Date().toISOString().slice(11)}`;
 }
 
 // ---------------------------------------------------------------- small readers
@@ -174,10 +180,11 @@ export function defaultPicks(wargame) {
   return { salary: pick(salary), deferral: pick(deferral) };
 }
 
-export function loadPacks(db) {
+// livePacks (optional, src/packs/live.mjs) adds each manifest-backed row's manifest fields.
+export function loadPacks(db, livePacks = null) {
   return db.prepare('SELECT * FROM packs_state ORDER BY sort, id').all().map(r => ({
     id: r.id,
-    def: parse(r.def, {}),
+    def: livePacks ? livePacks.view(r.id, parse(r.def, {})) : parse(r.def, {}),
     live: {
       active: r.active == null ? null : !!r.active,
       exploring: !!r.exploring,
@@ -298,7 +305,7 @@ function deriveFigures(fig, { wargame, series, engine }, scope) {
 
 // ---------------------------------------------------------------- build
 
-export function buildScenario(db, { clock, engineMode = null } = {}) {
+export function buildScenario(db, { clock, engineMode = null, packs: livePacks = null } = {}) {
   const clk = resolveClock(db, clock);
   const content = loadContent(db);
   const metaC = section(content, 'meta');
@@ -329,10 +336,12 @@ export function buildScenario(db, { clock, engineMode = null } = {}) {
 
   deriveFigures(fig, { wargame, series, engine }, { names, law, pct, fig });
 
-  const packs = loadPacks(db);
+  const packs = loadPacks(db, livePacks);
   const onboarding = getSetting(db, 'onboarding', { done: false, step: 0 }) || { done: false, step: 0 };
   const picks = { ...defaultPicks(wargame), ...(getSetting(db, 'wargame.picks', null) || {}) };
   const engineOn = getSetting(db, 'engine', { on: true });
+  const ingest = ingestState(db, { clock: clk });
+  const ingestAccounts = ingest.accounts || {};
 
   return {
     meta: {
@@ -349,7 +358,7 @@ export function buildScenario(db, { clock, engineMode = null } = {}) {
     fig,
     series,
     verdict: section(content, 'verdict'),
-    domains: section(content, 'domains'),
+    domains: applyFreshness(section(content, 'domains'), ingest),
     events: db.prepare('SELECT date, kind, title, body FROM events ORDER BY sort, id').all().map(e => ({ ...e })),
     deadlines: db.prepare('SELECT date, label, title, rec_id, hard FROM deadlines ORDER BY date, id').all().map(d => {
       const out = { date: d.date, label: d.label, title: d.title };
@@ -363,9 +372,15 @@ export function buildScenario(db, { clock, engineMode = null } = {}) {
     wargame,
     decisions,
     ask: section(content, 'ask'),
-    accounts: db.prepare('SELECT * FROM accounts ORDER BY sort, id').all().map(a => ({
-      id: a.id, inst: a.inst, name: a.name, owner: a.owner, kind: a.kind, fig: a.fig_key, mirror: a.mirror, note: a.note || '', mask: a.mask,
-    })),
+    accounts: db.prepare('SELECT * FROM accounts ORDER BY sort, id').all().map(a => {
+      const f = Object.hasOwn(ingestAccounts, a.id) ? ingestAccounts[a.id] : {};
+      return {
+        id: a.id, inst: a.inst, name: a.name, owner: a.owner, kind: a.kind, fig: a.fig_key, mirror: a.mirror, note: a.note || '', mask: a.mask,
+        asOf: f.asOf || '', fresh: f.fresh || 'unknown', sourceId: f.sourceId || null,
+        // Text that came from an uploaded file: render as plain text, never as tokens or markup.
+        imported: a.parser !== 'demo-seed',
+      };
+    }),
     advisor: section(content, 'advisor'),
     yearend: section(content, 'yearend'),
     connect: section(content, 'connect'),
@@ -383,6 +398,7 @@ export function buildScenario(db, { clock, engineMode = null } = {}) {
       packs: Object.fromEntries(packs.map(p => [p.def.id, { active: p.live.active, exploring: p.live.exploring, whatIfDone: p.live.whatIfDone }])),
       yourPlans: loadYourPlans(db),
       clock: clk,
+      ingest,
     },
   };
 }

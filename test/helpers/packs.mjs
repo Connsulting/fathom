@@ -1,5 +1,5 @@
 // Synthetic knowledge pack fixtures. A pack written to <dataDir>/packs/your-plans/ is loaded by
-// createPackRefresher and by a server whose FATHOM_DATA is that dataDir (the data volume pack
+// createLivePacks and by a server whose FATHOM_DATA is that dataDir (the data volume pack
 // directory), so tests can exercise manifest-backed behavior without touching repository packs.
 // Contents are synthetic: no real names, amounts tied to a household, hosts or paths.
 

@@ -11,7 +11,8 @@ export const parse = (file) => {
   const parsed = csvParse(file, required, (record, locator, rows, warnings) => {
     const date = isoDate(record['posting date']), amount = money(record.amount);
     if (!date || amount === null) { warning(warnings, 'invalid_transaction', locator); return; }
-    rows.push({ kind: 'transaction', account: { ...account }, date, amount, description: record.description, locator });
+    const externalId = record['check or slip #'];
+    rows.push({ kind: 'transaction', account: { ...account }, date, amount, description: record.description, ...(externalId ? { externalId } : {}), locator });
     if (record.balance) {
       const balance = money(record.balance);
       if (balance === null) warning(warnings, 'invalid_balance', locator);

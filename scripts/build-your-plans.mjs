@@ -2,15 +2,18 @@
 // Builds the private Your plans pack from the plan and benefits documents in the existing store at
 // $FATHOM_DATA (plus any extra files named with --file), through the engine FATHOM_ENGINE selects.
 // Refuses when there is no store. Prints counts only (entries, sources, sections dropped because
-// they did not match the document, warnings), never document text. A running server
-// picks the new pack up on its next request (settings packs.generation changes).
+// they did not match the document, warnings), never document text. A written pack refreshes the
+// store's pack rows here; a running server loads its manifest on its next request (settings
+// packs.generation changes).
 
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadConfig } from '../src/config.mjs';
 import { openMigrated, DB_FILE } from '../src/store/db.mjs';
 import { createRuntimeEngine } from '../src/engine/runtime.mjs';
+import { clockNow } from '../src/scenario/build.mjs';
 import { buildYourPlans, YourPlansRefusal } from '../src/packs/your-plans.mjs';
+import { refreshLivePacks } from '../src/packs/live.mjs';
 import { EngineOffError, BudgetExceededError } from '../src/engine/index.mjs';
 
 const NAME = 'build:your-plans';
@@ -37,8 +40,9 @@ async function main() {
   if (!existsSync(file)) fail('there is no store in FATHOM_DATA; start the server once (or run seed:demo) first.');
   const db = openMigrated(file);
   try {
-    const engine = createRuntimeEngine({ db, config });
+    const engine = createRuntimeEngine({ db, config, now: () => new Date(clockNow(db, config.clock)) });
     const result = await buildYourPlans({ db, engine, dataDir: config.dataDir, fileIds, clock: config.clock || undefined });
+    if (result.written) refreshLivePacks(db, { dataDir: config.dataDir });
     const counts = `${result.entries} entries from ${result.sources.length} sources, ${result.dropped} sections dropped, ${result.warnings.length} warnings`;
     console.log(`${NAME}: ${result.written ? 'built the Your plans pack' : 'nothing to write'}: ${counts}`);
   } catch (e) {

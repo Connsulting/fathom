@@ -1,8 +1,7 @@
-// AC4 over HTTP: at startup the server replaces the seeded demo pack defs with the loaded
-// manifests, serves one pack entry at GET /api/packs/:id/entries/:entryId, keeps the toggle
-// working with its note, and sees a fact written straight into the store on the very next
-// request (R5): the first GET /api/scenario shows the flipped status and the first ask after the
-// change carries the new pack context (provenance.packIds).
+// AC4 over HTTP: the scenario shows the seeded demo pack defs with the loaded manifests' fields
+// (src/packs/live.mjs), the server serves one pack entry at GET /api/packs/:id/entries/:entryId,
+// and the toggle keeps working with its note. Fact changes refresh pack state through ingest
+// (refreshPackState, real stores only), so direct store writes are not watched per request.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -14,7 +13,7 @@ import { escapeUserText, money } from '../src/shared/tokens.mjs';
 import { seedDemo } from '../demo/seed.mjs';
 import { loadConfig } from '../src/config.mjs';
 import { createRuntimeEngine } from '../src/engine/runtime.mjs';
-import { createPackRefresher } from '../src/packs/state.mjs';
+import { createLivePacks } from '../src/packs/live.mjs';
 import { createLiveAnswerer } from '../src/api/answerer.mjs';
 import { buildScenario } from '../src/scenario/build.mjs';
 
@@ -30,12 +29,7 @@ async function ok(resPromise) {
   return r.json;
 }
 
-async function writeDb(file, fn) {
-  const db = await openStore(file);
-  try { return fn(db); } finally { db.close(); }
-}
-
-test('startup replaces the demo pack defs with manifest metadata under the demo ids', T, () => withServer({ env: FAKE }, async s => {
+test('the scenario shows the demo pack defs with manifest metadata under the demo ids', T, () => withServer({ env: FAKE }, async s => {
   const sc = await getScenario(s.baseUrl);
   const giving = packOf(sc, 'giving');
   const manifest = manifestOf('charitable-giving');
@@ -92,28 +86,6 @@ test('toggle keeps working with the planning-run note, and the override survives
   assert.equal(off.note, NOTE);
 }));
 
-test('a fact written straight into the store shows on the first GET of the scenario', T, () => withServer({ env: FAKE }, async s => {
-  assert.equal(packOf(await getScenario(s.baseUrl), 'giving').status, 'suggested');
-  await writeDb(s.dbFile, db => db.prepare("UPDATE facts SET value = 'true' WHERE key = 'giving.charitable'").run());
-  const sc = await getScenario(s.baseUrl);
-  assert.equal(packOf(sc, 'giving').status, 'active');
-}));
-
-test('a fact written straight into the store reaches the pack context of the first ask after it', T, () => withServer({ env: FAKE }, async s => {
-  const before = await ok(postJson(s.baseUrl, '/api/ask', { key: 'ask', text: 'Synthetic pack context question' }));
-  assert.ok(!before.message.provenance.packIds.includes('charitable-giving'));
-  await writeDb(s.dbFile, db => db.prepare("UPDATE facts SET value = 'true' WHERE key = 'giving.charitable'").run());
-  const after = await ok(postJson(s.baseUrl, '/api/ask', { key: 'ask', text: 'Synthetic pack context question' }));
-  assert.ok(after.message.provenance.packIds.includes('charitable-giving'));
-}));
-
-test('a fact change through the db followed by a POST flips activation in that response', T, () => withServer({ env: FAKE }, async s => {
-  assert.equal(packOf(await getScenario(s.baseUrl), 'virginia').status, 'active');
-  await writeDb(s.dbFile, db => db.prepare("UPDATE facts SET value = '\"MD\"' WHERE key = 'household.state'").run());
-  const r = await ok(postJson(s.baseUrl, '/api/engine', { on: true }));
-  assert.equal(packOf(r.scenario, 'virginia').status, 'suggested');
-}));
-
 // ---------------------------------------------------------------- B4: a manifest What if prompt is literal text
 
 // A synthetic manifest pack in the data volume pack directory whose What if prompt carries markup
@@ -158,7 +130,7 @@ test('B4: the What if question for a manifest pack is the raw prompt, and its st
   seedDemo(s.db);
   writeSyntheticPack(s.dataDir, HOSTILE_PACK);
   const runtime = createRuntimeEngine({ db: s.db, config: loadConfig({ FATHOM_DATA: s.dataDir, FATHOM_ENGINE: 'fake' }) });
-  const packs = createPackRefresher(s.db, { dataDir: s.dataDir });
+  const packs = createLivePacks(s.db, { dataDir: s.dataDir });
   packs.refresh();
   const requests = [];
   const engine = new Proxy(runtime, {

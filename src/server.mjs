@@ -1,5 +1,7 @@
 // Fathom server: one process serving web/ (the Horizon UI), /shared/ (browser-safe shared
-// logic) and the JSON API, backed by SQLite at $FATHOM_DATA/fathom.sqlite.
+// logic) and the JSON API, backed by SQLite at $FATHOM_DATA/fathom.sqlite. One runtime engine
+// (src/engine/runtime.mjs) and one live pack view (src/packs/live.mjs) are built at startup and
+// handed to the API as ctx.engine and ctx.packs.
 //
 // Store mode (settings.mode, set when the store is created, never inferred from contents):
 // no store file: create it; demo unless FATHOM_DEMO=0 (then real and empty). Demo stores are
@@ -15,7 +17,8 @@ import { openMigrated, readStoreMode, createStoreFile, setSetting, DB_FILE } fro
 import { createHandler } from './api/router.mjs';
 import { createLiveAnswerer } from './api/answerer.mjs';
 import { createRuntimeEngine } from './engine/runtime.mjs';
-import { createPackRefresher } from './packs/state.mjs';
+import { createLivePacks } from './packs/live.mjs';
+import { clockNow } from './scenario/build.mjs';
 import { seedDemo } from '../demo/seed.mjs';
 
 export class StartupError extends Error {}
@@ -40,19 +43,38 @@ export function openStore(config) {
   return openMigrated(file);
 }
 
-export async function startServer(config = loadConfig()) {
-  const db = openStore(config);
-  // One runtime engine per process; packs load from the repository and the data volume.
-  const engine = createRuntimeEngine({ db, config });
-  const packs = createPackRefresher(db, { dataDir: config.dataDir });
+// Log-safe code for a startup failure: never the message, which could carry a value.
+const codeOf = err => [err && err.code, err && err.name].find(v => typeof v === 'string' && /^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(v)) || 'unknown';
+
+// Real stores rebuild pack definitions from the pack manifests and the stored facts at startup
+// (demo pack definitions are the seeded scenario; a demo store only gains a row for a Your plans
+// pack no row backs). A pack load failure never stops startup.
+function refreshPacks(packs) {
   try {
     packs.refresh();
+  } catch (err) {
+    console.error('fathom: pack state refresh failed', codeOf(err));
+  }
+}
+
+export async function startServer(config = loadConfig()) {
+  const db = openStore(config);
+  // One runtime engine per process, on the scenario clock so spend lands in the month the Engine
+  // screen shows; packs load from the repository and the data volume.
+  let engine;
+  let packs;
+  try {
+    packs = createLivePacks(db, { dataDir: config.dataDir });
+    refreshPacks(packs);
+    engine = createRuntimeEngine({ db, config, now: () => new Date(clockNow(db, config.clock)) });
+    await engine.init();
+    if (engine.credentialState === 'failed') console.error('fathom: engine credential unavailable');
   } catch (e) {
     db.close();
-    throw new StartupError(`knowledge packs failed to load: ${e.message}`);
+    throw e;
   }
   const answerer = createLiveAnswerer({ engine, packs });
-  const server = http.createServer(createHandler({ db, config, engine, packs, answerer }));
+  const server = http.createServer(createHandler({ db, config, answerer, engine, packs }));
   try {
     await new Promise((resolveListen, reject) => {
       server.once('error', reject);

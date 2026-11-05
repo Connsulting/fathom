@@ -22,7 +22,7 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, 
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadPacks } from './index.mjs';
-import { yourPlansDir } from './state.mjs';
+import { yourPlansDir } from './live.mjs';
 import { getSetting, setSetting, parseJson } from '../store/db.mjs';
 import { resolveClock } from '../scenario/build.mjs';
 import { checkGrounding } from '../engine/grounding.mjs';

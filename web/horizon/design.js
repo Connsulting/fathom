@@ -9,6 +9,8 @@ import * as chatScreen from './screens/chat.js';
 import * as packsScreen from './screens/packs.js';
 import * as engineScreen from './screens/engine.js';
 
+import { ingestScreens } from './screens/ingest.js';
+
 const MS = 864e5;
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const MONTH_FULL = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -32,6 +34,7 @@ let api = null;
 let root = null;
 let unsub = null;
 let ui = null;
+let ingest = null;
 let lastKey = '';
 let resizeTimer = 0;
 let onResize = null;
@@ -42,7 +45,7 @@ let bodyLocked = false;
 const freshUi = () => ({
   scopes: {}, curve: {}, prio: {}, connected: {}, modal: null, copied: false,
   packet: false, pick: { salary: null, deferral: null }, signing: false, build: 0,
-  buildTimer: 0, draft: {}, dumped: null, files: null,
+  buildTimer: 0, draft: {}, dumped: null,
   more: false, under: null, inApp: false, closing: false, ret: null, y: 0, msgN: {}, det: {}
 });
 
@@ -421,7 +424,7 @@ function pBrief() {
 
   return shell(`${hero}${tl}
     <div class="h-cols">
-      <div class="h-col-main">${section(clear ? 'Needs you' : `Needs you <em>${ny.length}</em>`, needs)}
+      <div class="h-col-main">${ingest.pendingBanner()}${section(clear ? 'Needs you' : `Needs you <em>${ny.length}</em>`, needs)}
         ${section('Covered', `<div class="h-doms">${doms}</div>`, `${arr(api.s.domains).filter((d) => liveDomainStatus(d, ny) === 'covered').length} of ${arr(api.s.domains).length} quiet`)}</div>
       <div class="h-col-side">${section('What changed', changed)}
         <div class="h-mailnote">${icon('doc')}<div>This brief also went out as your monthly email. ${goA('email', 'Read the email')}</div></div></div>
@@ -806,19 +809,21 @@ function pAccounts() {
   accs.forEach((a) => { const k = KIND[a.kind] || 'Other'; (groups[k] = groups[k] || []).push(a); });
   const keys = Object.keys(groups).sort((a, b) => (order.indexOf(a) + 99) % 99 - (order.indexOf(b) + 99) % 99);
   const mirror = { connected: 'Mirrored', manual: 'Manual', missing: 'Not connected' };
+  // Imported accounts carry text from uploaded files: plain text, no tokens or markup.
+  const lbl = (a, s) => (a.imported === false ? T(s) : esc(s));
   const list = keys.map((k) => section(k, `<div class="h-accs">${groups[k].map((a) => `<div class="h-acc ${a.mirror}">
-      <div class="h-acc-n"><b>${T(a.name)}</b><span>${T(a.inst)}${a.owner ? `, ${T(a.owner)}` : ''}</span></div>
+      <div class="h-acc-n"><b>${lbl(a, a.name)}</b><span>${lbl(a, a.inst)}${a.owner ? `, ${lbl(a, a.owner)}` : ''}</span></div>
       <div class="h-acc-v">${a.fig ? figHtml(a.fig) : '<span class="h-mute">No balance</span>'}</div>
       <div class="h-acc-m"><i></i>${mirror[a.mirror] || esc(a.mirror)}</div>
-      ${a.note ? `<p>${T(a.note)}</p>` : ''}</div>`).join('')}</div>`)).join('');
+      ${ingest.accountMeta(a)}${a.note ? `<p>${lbl(a, a.note)}</p>` : ''}</div>`).join('')}</div>`)).join('');
   const series = Object.entries(api.s.series || {});
   const evs = arr(api.s.events).filter((e) => ['income', 'account'].includes(e.kind));
   const conn = accs.filter((a) => a.mirror === 'connected').length;
   return shell(`${pageHead('Accounts', 'Read-only mirror', `${conn} of ${accs.length} accounts mirrored. Data through ${T(api.s.meta.dataThrough)}.`)}
-    <div class="h-ro">${icon('lock')}<span>Read-only. ${T(api.s.meta.product || 'Fathom')} can see balances and transactions. It cannot move, delete or change anything.</span></div>
+    <div class="h-ro">${icon('lock')}<span>Read-only. ${T(api.s.meta.product || 'Fathom')} can see balances and transactions. It cannot move, delete or change anything.</span></div>${ingest.pendingBanner()}
     ${series.length ? section('Trend', `<div class="h-sparks">${series.map(spark).join('')}</div>`, 'Solid is actual, dashed is projected') : ''}
     <div class="h-cols"><div class="h-col-main">${list}</div>
-    <div class="h-col-side">${section('Detected', evs.length ? `<ol class="h-evs">${evs.map((e) => `<li><time>${T(e.date)}</time><div><b>${T(e.title)}</b><p>${T(e.body)}</p></div></li>`).join('')}</ol>` : '<p class="h-mute">Nothing unusual detected.</p>')}</div></div>`, 'accounts');
+    <div class="h-col-side">${ingest.addFiles('accounts')}${ingest.sourcesSection()}${section('Detected', evs.length ? `<ol class="h-evs">${evs.map((e) => `<li><time>${T(e.date)}</time><div><b>${T(e.title)}</b><p>${T(e.body)}</p></div></li>`).join('')}</ol>` : '<p class="h-mute">Nothing unusual detected.</p>')}</div></div>`, 'accounts');
 }
 
 /* ---------- advisor ---------- */
@@ -950,11 +955,9 @@ function pOnboarding(step) {
       <button type="submit" class="h-btn pri wide">${ui.signing ? 'Checking passkey' : `Continue with passkey${icon('arrow')}`}</button></form>
       <p class="h-mute sm center">Demo sign-in. No account is created.</p>`;
   } else if (s === 1) {
-    const files = ui.files || arr(ob.files);
     body = `<h1>Dump everything in</h1><p class="h-lede">Write it the way you would tell a friend: who is in the house, how money comes in, what is coming up, what worries you. Attach whatever you have.</p>
       <textarea class="h-dump" rows="9" data-dump="1">${X(ui.dumped ?? ob.dump)}</textarea>
-      <ul class="h-files">${files.map((f) => `<li>${icon('doc')}<span>${X(f.name)}</span><em>${X(f.status)}</em></li>`).join('')}</ul>
-      <div class="h-ob-row">${btn(`${icon('plus')}Attach a file`, 'data-attach="1"', 'ghost')}</div>
+      ${ingest.addFiles('onboarding')}
       <div class="h-ob-nav">${back}${next()}</div>`;
   } else if (s === 2) {
     const insts = arr(ob.institutions);
@@ -1135,6 +1138,7 @@ function draw() {
     case 'wargame': html = pWargame(r.params?.name); break;
     case 'goals': html = pGoals(); break;
     case 'accounts': html = pAccounts(); break;
+    case 'confirm': html = ingest.confirmPage(); break;
     case 'advisor': html = pAdvisor(); break;
     case 'packs': html = packsScreen.render(r.params?.id); break;
     case 'yearend': html = pYearend(); break;
@@ -1204,7 +1208,8 @@ function closeRec() {
 function onClick(e) {
   if (ui.more && !e.target.closest('.h-more-wrap')) setMore(false);
   if (SCREENS.some((s) => s.onClick?.(e))) return;
-  const sel = '[data-go],[data-act],[data-ask],[data-askrec],[data-wg],[data-onboard],[data-inst],[data-allow],[data-modal],[data-scope],[data-copy],[data-packet],[data-attach],[data-whatif],[data-packtoggle],[data-more],[data-dlg]';
+  if (ingest.handleClick(e)) return;
+  const sel = '[data-go],[data-act],[data-ask],[data-askrec],[data-wg],[data-onboard],[data-inst],[data-allow],[data-modal],[data-scope],[data-copy],[data-packet],[data-whatif],[data-packtoggle],[data-more],[data-dlg]';
   let t = e.target.closest(`${sel},.fx-fig`);
   if (!t || !root.contains(t)) return;
   // A figure inside a button or link is part of its label: the control takes the click, and the
@@ -1237,11 +1242,6 @@ function onClick(e) {
     ui.copied = true; draw(); setTimeout(() => { ui.copied = false; draw(); }, 1600); return;
   }
   if (d.packet != null) { ui.packet = d.packet === '1'; draw(); return; }
-  if (d.attach) {
-    const base = ui.files || arr(api.s.onboarding?.files);
-    ui.files = base.concat([{ name: `notes-${base.length + 1}.pdf`, status: 'read' }]);
-    draw(); return;
-  }
   if (d.go) {
     e.preventDefault();
     if (d.go === 'rec' && d.id) { openRec(d.id, t); return; }
@@ -1279,6 +1279,7 @@ function onSubmit(e) {
 
 function onInput(e) {
   if (SCREENS.some((s) => s.onInput?.(e))) return;
+  if (ingest.handleChange(e)) return;
   const t = e.target;
   if (t.dataset.draft) { ui.draft[t.dataset.draft] = t.value; return; }
   if (t.dataset.dump) { ui.dumped = t.value; return; }
@@ -1295,6 +1296,8 @@ function onInput(e) {
     if (l && r) { l.classList.toggle('lean', t.value < 50); r.classList.toggle('lean', t.value > 50); }
   }
 }
+
+const onChange = (e) => ingest?.handleChange(e);
 
 function onToggle(e) {
   const k = e.target?.dataset?.det;
@@ -1337,11 +1340,13 @@ SCREENS.forEach((s) => s.bind(KIT));
 function mount(r, a) {
   api = a; root = r; ui = freshUi(); lastKey = '';
   SCREENS.forEach((s) => s.reset?.());
+  ingest = ingestScreens({ api, shell, section, pageHead, btn, icon, esc, T, X, draw, goA });
   root.innerHTML = '<div class="h-root"></div><div class="h-dlg-host" hidden></div>';
   ui.y = window.scrollY;
   root.addEventListener('click', onClick);
   root.addEventListener('submit', onSubmit);
   root.addEventListener('input', onInput);
+  root.addEventListener('change', onChange);
   root.addEventListener('keydown', onKey);
   root.addEventListener('toggle', onToggle, true);
   onResize = () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(draw, 120); };
@@ -1365,6 +1370,7 @@ function unmount() {
     root.removeEventListener('click', onClick);
     root.removeEventListener('submit', onSubmit);
     root.removeEventListener('input', onInput);
+    root.removeEventListener('change', onChange);
     root.removeEventListener('keydown', onKey);
     root.removeEventListener('toggle', onToggle, true);
     root.innerHTML = '';

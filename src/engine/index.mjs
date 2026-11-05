@@ -61,19 +61,18 @@ function explicitCredential(credential) {
   return result;
 }
 
-// controls (optional): () => ({ on, capUsd }), read inside the serialized check before every model
-// round: on false refuses with EngineOffError and a finite capUsd replaces the constructed cap.
 // request.fake (optional, fake mode): a per-call script list used instead of the constructor queue.
 // request.systemDynamic (optional): system text placed after the dynamic boundary (not cached).
+// request.toolContext (optional): { db, now } for this call's tools instead of the constructed one.
 export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger = createMemoryLedger(), capUsd = 200,
-  credential, responses = [], now = () => new Date(), toolContext = {}, controls } = {}) {
+  credential, responses = [], now = () => new Date(), toolContext = {} } = {}) {
   if (!['live', 'fake', 'off'].includes(mode)) throw new TypeError('Invalid engine mode');
   if (!Number.isFinite(capUsd) || capUsd < 0) throw new TypeError('Invalid monthly cap');
   if (typeof ledger.monthSpendUsd !== 'function' || typeof ledger.record !== 'function') throw new TypeError('Invalid ledger adapter');
-  if (controls !== undefined && typeof controls !== 'function') throw new TypeError('Invalid engine controls');
   const scripted = [...responses];
   let poisoned = false;
-  const call = async ({ purpose, system = '', systemDynamic = '', messages, tools = [], maxTokens = 1024, schema, grounding = {}, fake } = {}) => {
+  const call = async ({ purpose, system = '', systemDynamic = '', messages, tools = [], maxTokens = 1024, schema, grounding = {}, fake,
+    toolContext: callContext } = {}) => {
     if (mode === 'off') throw new EngineOffError();
     if (!['chat', 'job', 'extract'].includes(purpose)) throw new TypeError('Invalid call purpose');
     if (typeof system !== 'string' || typeof systemDynamic !== 'string' || !Array.isArray(messages) || messages.length === 0 || !Number.isInteger(maxTokens) || maxTokens <= 0 || maxTokens > 128000) {
@@ -88,16 +87,14 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
     for (let roundIndex = 0; roundIndex < 8; roundIndex++) {
       let round;
       await serial(ledger, async () => {
-        const control = controls ? controls() : null;
-        if (control && control.on === false) { const error = new EngineOffError(); error.toolResults = allResults; throw error; }
         if (poisoned) throw new ModelAccountingError();
-        const cap = control && Number.isFinite(control.capUsd) ? control.capUsd : capUsd;
         const ts = new Date(now()).toISOString();
         const spend = await ledger.monthSpendUsd(monthKey(ts));
         if (!Number.isFinite(spend) || spend < 0) throw new ModelAccountingError();
-        if (spend >= cap) { const error = new BudgetExceededError(); error.toolResults = allResults; throw error; }
+        if (spend >= capUsd) { const error = new BudgetExceededError(); error.toolResults = allResults; throw error; }
         const auth = mode === 'live' ? explicitCredential(credential) : undefined;
-        const registry = createRegistryServer(tools, { purpose, ctx: { db: toolContext.db, now: toolContext.now ?? ts } });
+        const context = callContext ?? toolContext;
+        const registry = createRegistryServer(tools, { purpose, ctx: { db: context.db, now: context.now ?? ts } });
         try {
           if (mode === 'fake') {
             if (!queue.length) throw new ModelCallError('Fake engine has no scripted response');
@@ -107,11 +104,11 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
               status: script.status ?? (script.toolCalls?.length ? 'error_max_turns' : 'success'),
               is_error: script.is_error === true, api_error_status: script.api_error_status ?? null,
               accountingUnknown: script.accountingUnknown ?? false, toolResults: registry.results,
-              content: [{ type: 'text', text: script.text ?? '' }], details: { maxBudgetUsd: cap - spend } };
+              content: [{ type: 'text', text: script.text ?? '' }], details: { maxBudgetUsd: capUsd - spend } };
           } else {
             try {
               round = await (purpose === 'extract' ? messagesRound : sdkRound)({ credential: auth, system, systemDynamic,
-                messages: transcript, maxTokens, maxBudgetUsd: cap - spend, model: DEFAULT_MODEL, registry, schema });
+                messages: transcript, maxTokens, maxBudgetUsd: capUsd - spend, model: DEFAULT_MODEL, registry, schema });
             } catch {
               round = { text: '', content: [], status: 'transport_error', is_error: true,
                 accountingUnknown: true, model: DEFAULT_MODEL, tokens: {}, toolResults: registry.results, details: {} };

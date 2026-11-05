@@ -16,11 +16,11 @@ import { SYSTEM_PROMPT_DYNAMIC_BOUNDARY } from '@anthropic-ai/claude-agent-sdk';
 import { seedDemo } from '../demo/seed.mjs';
 import { loadConfig } from '../src/config.mjs';
 import { setSetting } from '../src/store/db.mjs';
-import { buildScenario } from '../src/scenario/build.mjs';
+import { buildScenario, clockNow } from '../src/scenario/build.mjs';
 import { callTool, tools as REGISTRY } from '../src/tools/index.mjs';
 import { sdkOptions } from '../src/engine/live.mjs';
-import { createRuntimeEngine } from '../src/engine/runtime.mjs';
-import { createPackRefresher } from '../src/packs/state.mjs';
+import { createRuntimeEngine, createSpendLedger } from '../src/engine/runtime.mjs';
+import { createLivePacks } from '../src/packs/live.mjs';
 import { PRODUCT_RULES, NOTICES, buildChatPrompt, groundAnswer, renderAnswer, createLiveAnswerer } from '../src/api/answerer.mjs';
 import { ACTION_STATUS } from '../src/shared/rules.mjs';
 import { ROOT, tempDb } from './helpers/server.mjs';
@@ -39,7 +39,7 @@ async function demoStore(t, env = {}, { prepare } = {}) {
   if (prepare) prepare(s.dataDir);
   const config = loadConfig({ FATHOM_DATA: s.dataDir, FATHOM_ENGINE: 'fake', ...env });
   const runtime = createRuntimeEngine({ db: s.db, config });
-  const packs = createPackRefresher(s.db, { dataDir: s.dataDir });
+  const packs = createLivePacks(s.db, { dataDir: s.dataDir });
   packs.refresh();
   return { ...s, config, runtime, packs };
 }
@@ -611,7 +611,8 @@ test('an answer still ungrounded after the retry is stored with the number marke
 // text, and the spend the engine recorded before it threw stays in the ledger.
 
 const chatRows = db => db.prepare("SELECT id, purpose, model, cost_usd FROM spend_ledger WHERE purpose = 'chat' ORDER BY id").all().map(r => ({ ...r }));
-const monthOf = engine => engine.now().slice(0, 7).replace('-', '');
+// The runtime records spend at the current time (no clock-based now in this fixture).
+const thisMonth = () => new Date().toISOString().slice(0, 7);
 
 test('B1: a corrective retry refused by the engine switch answers with the engine-off notice and keeps the first spend row', async t => {
   const s = await demoStore(t);
@@ -635,7 +636,7 @@ test('B1: a corrective retry refused by the engine switch answers with the engin
 test('B1: a corrective retry refused over the cap the first call exhausted answers with the over-cap notice', async t => {
   const s = await demoStore(t);
   // The cap sits half a dollar above this month's spend; the first call spends a whole dollar.
-  setSetting(s.db, 'cap', { usd: s.runtime.ledger.monthSpendUsd(monthOf(s.runtime)) + 0.5 });
+  setSetting(s.db, 'cap', { usd: createSpendLedger(s.db).monthSpendUsd(thisMonth()) + 0.5 });
   const { engine, requests } = scripted(s.runtime, [
     [{ text: `You could save ${INVENTED} this year.`, costUsd: 1 }],
     [{ text: 'must not run' }],
@@ -1004,7 +1005,7 @@ test('provenance.packEntries lists cited entries of the conversation pack even w
 test('a what-if runs a live conversation seeded with the pack prompt and pack metadata', async t => {
   const s = await demoStore(t);
   const { engine, requests } = scripted(s.runtime);
-  const def = buildScenario(s.db).packs.find(p => p.id === 'giving');
+  const def = buildScenario(s.db, { packs: s.packs }).packs.find(p => p.id === 'giving');
   const reply = await createLiveAnswerer({ engine, packs: s.packs }).whatIf({ db: s.db, packId: 'giving' });
   assert.ok(!reply.notice);
   assert.ok(reply.paragraphs.length > 0);
@@ -1084,7 +1085,7 @@ test('R3 A contract: no tool the answerer offers returns a sentinel argument out
   assert.deepEqual(sorted(names), sorted([...REGISTRY.filter(x => x.scope === 'read').map(x => x.name), PROPOSE]),
     'every read tool and the local proposal tool, nothing else');
   const recId = s.db.prepare("SELECT id FROM recs WHERE status != 'hidden' ORDER BY id LIMIT 1").get().id;
-  const ctx = { db: s.db, now: s.runtime.now() };
+  const ctx = { db: s.db, now: clockNow(s.db) };
 
   const calls = [];
   const plan = new Map();
@@ -1459,7 +1460,7 @@ const DATE_INVENTED = ['$11', '11', '-11', '$5', '5', '-5', '$10', '$2,026'];
 test('R4 F2: the real pnl_by_month result over the demo store never grounds its month or year as a number', async t => {
   const s = await demoStore(t);
   const scenario = buildScenario(s.db);
-  const result = await callTool('pnl_by_month', {}, { db: s.db, now: s.runtime.now() });
+  const result = await callTool('pnl_by_month', {}, { db: s.db, now: clockNow(s.db) });
   assert.ok(result.rows.length > 0, 'the demo store has P&L rows');
   const period = result.rows.map(r => r.period).sort().at(-1);
   assert.match(period, /^\d{4}-\d{2}$/);
