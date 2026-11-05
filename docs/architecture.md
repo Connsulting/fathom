@@ -417,7 +417,9 @@ two owner messages each followed by a reply (a notice counts) is named once. The
 thread's non-notice messages as plain text, newest last, at most 12 messages and 6000 characters.
 The model title is trimmed, loses one pair of quotes and a trailing period, and is refused when
 empty, over 60 characters or 8 words, with a line break, control character, `< > { }` or backtick,
-or any digit, currency or percent sign, or spelled-out number or money word. Engine off, over the cap, any error or a
+or any digit, currency or percent sign, or spelled-out number or money word, or any word
+(lowercased, with a plural `s`/`es` and a possessive `'s` folded) that is not a function word and
+was not used in this thread's owner messages. Engine off, over the cap, any error or a
 refused title uses the fallback: the first owner message as plain text (figure tokens removed,
 other tokens resolved, tags stripped, entities decoded) cut to 48 characters at a word boundary.
 The fake engine returns the fallback as its title. Writes only land while `title_source` is NULL,
