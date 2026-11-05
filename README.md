@@ -32,6 +32,8 @@ November state) and keeps its state across restarts.
 | `FATHOM_CLAUDE_CREDENTIAL_FILE` | unset | Path to the mounted Claude credential. |
 | `FATHOM_DATA_KEY_FILE` | unset | Path to the file encryption key. |
 | `FATHOM_EMAIL_TRANSPORT` | `dev` | `dev`, `gmail`, `resend` or `postmark`. |
+| `FATHOM_PUBLIC_URL` | unset | URL MCP clients use to reach this server (http or https, no credentials, query or fragment). Its host is allowed on `/mcp` and every `/api` route. |
+| `FATHOM_ALLOWED_HOSTS` | unset | Comma separated extra host names (`host` or `host:port`) allowed on `/mcp` and every `/api` route. A deployment reached by a DNS name must set this or `FATHOM_PUBLIC_URL`. |
 
 Rebuild the demo store (refuses a real store):
 

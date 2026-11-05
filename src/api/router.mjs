@@ -1,4 +1,5 @@
-// Routing: the JSON API under /api plus /healthz, and static files for everything else.
+// Routing: the JSON API under /api plus /healthz, the MCP endpoint at exactly /mcp, and static
+// files for everything else.
 // `routes` is the route table (docs/architecture.md lists every entry; test/docs.test.mjs checks).
 // `upload: true` routes take multipart bodies (read by the handler through ctx.readUpload);
 // `ingest: true` routes never log error details, which could carry file contents.
@@ -8,6 +9,10 @@ import { HttpError, setSecurityHeaders, sendJson, sendError, guardPost, readJson
 import { guardUpload, readMultipart } from './upload.mjs';
 import { createStatic } from './static.mjs';
 import * as h from './handlers.mjs';
+import * as k from './keys.mjs';
+import { createKeyService, loadServerSecret } from '../mcp/keys.mjs';
+import { createMcpHandler } from '../mcp/index.mjs';
+import { isAllowedHost } from '../mcp/guard.mjs';
 import * as ih from './ingest-handlers.mjs';
 
 const TABLE = [
@@ -21,6 +26,10 @@ const TABLE = [
   { method: 'POST', path: '/api/ask', handler: h.ask },
   { method: 'POST', path: '/api/onboarding', handler: h.onboarding },
   { method: 'POST', path: '/api/demo/reset', handler: h.demoReset },
+  { method: 'GET', path: '/api/keys', handler: k.listKeys },
+  { method: 'POST', path: '/api/keys', handler: k.createKey },
+  { method: 'POST', path: '/api/keys/:id/revoke', handler: k.revokeKey },
+  { method: 'GET', path: '/api/mcp', handler: k.mcpInfo },
   { method: 'POST', path: '/api/jobs/plan/run', handler: h.planRun },
   { method: 'POST', path: '/api/files', handler: ih.uploadFiles, upload: true, ingest: true },
   { method: 'GET', path: '/api/files', handler: ih.listFiles, ingest: true },
@@ -70,8 +79,14 @@ function findRoute(method, rawPath) {
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 const safeCode = err => [err && err.code, err && err.name].find(v => typeof v === 'string' && IDENT.test(v)) || 'unknown';
 
-export function createHandler({ db, config, answerer, engine = null, webDir = WEB_DIR, sharedDir = SHARED_DIR }) {
+// `keys` (key service) and `mcp` (the /mcp handler) are built from config.dataDir on first use
+// when not passed in.
+export function createHandler({ db, config, answerer, engine = null, keys, mcp, webDir = WEB_DIR, sharedDir = SHARED_DIR }) {
   const serveStatic = createStatic({ webDir, sharedDir });
+  let keyService = keys;
+  let mcpHandler = mcp;
+  const getKeys = () => (keyService ??= createKeyService({ db, serverSecret: loadServerSecret(config.dataDir) }));
+  const getMcp = () => (mcpHandler ??= createMcpHandler({ db, keys: getKeys(), config }));
   return async function handle(req, res) {
     setSecurityHeaders(res);
     const url = req.url || '/';
@@ -79,7 +94,18 @@ export function createHandler({ db, config, answerer, engine = null, webDir = WE
     const rawPath = q >= 0 ? url.slice(0, q) : url;
     let route = null;
     try {
-      if (rawPath === '/healthz' || rawPath === '/api' || rawPath.startsWith('/api/')) {
+      if (rawPath === '/mcp') {
+        await getMcp()(req, res);
+        return;
+      }
+      const isApi = rawPath === '/api' || rawPath.startsWith('/api/');
+      if (isApi || rawPath === '/healthz') {
+        // Every /api path gets the DNS-rebinding Host allowlist (as /mcp does), decided on the raw
+        // path before route matching so encoded spellings, unknown paths and wrong methods are covered.
+        // /healthz stays open for container probes.
+        if (isApi && !isAllowedHost(req.headers.host, config)) {
+          throw new HttpError(403, 'forbidden host');
+        }
         const { r, params } = findRoute(req.method, rawPath);
         route = r;
         let body = {};
@@ -91,7 +117,7 @@ export function createHandler({ db, config, answerer, engine = null, webDir = WE
           guardPost(req);
           body = await readJsonBody(req);
         }
-        const out = await r.handler({ db, config, answerer, engine, params, body, readUpload, req });
+        const out = await r.handler({ db, config, answerer, engine, params, body, readUpload, req, get keys() { return getKeys(); } });
         sendJson(res, 200, out);
         return;
       }
