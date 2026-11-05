@@ -19,10 +19,11 @@ import { buildYourPlans } from '../src/packs/your-plans.mjs';
 import { loadPacks } from '../src/packs/index.mjs';
 import { createRuntimeEngine } from '../src/engine/runtime.mjs';
 import { loadConfig } from '../src/config.mjs';
+import { checkGrounding } from '../src/engine/grounding.mjs';
 import { openDb, migrate, setSetting } from '../src/store/db.mjs';
 import { storeFile } from '../src/ingest/vault.mjs';
 import { ingestFiles } from '../src/ingest/pipeline.mjs';
-import { multiPagePdf, imagePdf } from './helpers/pdf.mjs';
+import { multiPagePdf, imagePdf, textPdf } from './helpers/pdf.mjs';
 import { realStore, offEngine } from './helpers/ingest.mjs';
 import { SERVER_TIMEOUT, withServer, request, postJson } from './helpers/server.mjs';
 
@@ -242,4 +243,65 @@ test('AC14.4: an image-only PDF is skipped with the image-only warning before an
   const named = result.warnings.filter(w => w.includes(NAME));
   assert.equal(named.length, 1, JSON.stringify(result.warnings));
   assert.match(named[0], /image/i, 'the warning says the PDF is image-only');
+});
+
+// ---------------------------------------------------------------- 5. generated page markers are not evidence
+
+const PREMIUM_BODY = 'The premium is $1.';
+const ungrounded = (text, entries) => !checkGrounding(text, { data: entries.map(e => ({ title: e.title, body: e.body })) }).ok;
+
+test('AC14.5: a generated Page N label never serves as a PDF excerpt or grounds a number', async t => {
+  const NAME = 'synthetic-numberless-plan.pdf';
+  const LINE = 'The synthetic plan lists a premium and a deductible.';
+  const { db, dataDir, key } = await pdfStore(t, { id: 'file-synthetic-numberless', name: NAME, bytes: textPdf([LINE]) });
+  const { engine } = recording(engineFor(db, dataDir), [[
+    row('Premium', PREMIUM_BODY, 'Page 1', 1),
+    row('Plan summary', LINE, LINE, 1),
+  ]]);
+  const result = await buildYourPlans({ db, engine, dataDir, key, clock: CLOCK });
+  assert.equal(result.written, true, JSON.stringify(result.warnings));
+  assert.equal(result.entries, 1, 'only the real excerpt is kept');
+  assert.equal(result.dropped, 1, 'the marker excerpt is dropped and counted');
+  const [pack] = loadPacks([result.dir]);
+  assert.deepEqual(pack.entries.map(e => e.title), ['Plan summary']);
+  assert.ok(ungrounded('The premium is $1.', pack.entries), 'the marker digit grounds no amount');
+});
+
+test('AC14.5: a Page 2 marker excerpt, or one spanning a generated label, is dropped on a two-page PDF', async t => {
+  const NAME = 'synthetic-two-page-plan.pdf';
+  const ONE = 'The synthetic dental plan covers cleanings.';
+  const TWO = 'The synthetic vision plan covers frames.';
+  const { db, dataDir, key } = await pdfStore(t, { id: 'file-synthetic-two-page', name: NAME, bytes: multiPagePdf(2, n => (n === 1 ? ONE : TWO)) });
+  const { engine } = recording(engineFor(db, dataDir), [[
+    row('Premium', 'The premium is $2.', 'Page 2', 2),
+    row('Spanning', 'The plan spans two pages.', `${ONE} Page 2 ${TWO}`, 1),
+    row('Dental plan', ONE, ONE, 1),
+    row('Vision plan', TWO, TWO, 2),
+  ]]);
+  const result = await buildYourPlans({ db, engine, dataDir, key, clock: CLOCK });
+  assert.equal(result.written, true, JSON.stringify(result.warnings));
+  assert.equal(result.dropped, 2, 'the marker row and the label-spanning row are dropped and counted');
+  const [pack] = loadPacks([result.dir]);
+  assert.deepEqual(pack.entries.map(e => e.title).sort(), ['Dental plan', 'Vision plan']);
+  assert.ok(ungrounded('The premium is $2.', pack.entries));
+});
+
+test('AC14.5: in a text upload a Page N marker line is not an excerpt or evidence, and real rows keep their page', async t => {
+  const NAME = 'synthetic-paged-plan.md';
+  const ONE = 'The synthetic dental plan covers cleanings.';
+  const TWO = 'The synthetic vision plan covers frames.';
+  const text = ['Page 1', ONE, 'Page 2', TWO, ''].join('\n');
+  const s = await uploadedStore(t, [{ name: NAME, bytes: enc(text), mime: 'text/markdown' }]);
+  const fileId = s.results[0].fileId;
+  const { engine } = recording(engineFor(s.db, s.dataDir), [[
+    row('Premium', 'The premium is $2.', 'Page 2', 2),
+    row('Vision plan', TWO, TWO, 2),
+  ]]);
+  const result = await buildYourPlans({ db: s.db, engine, dataDir: s.dataDir, key: s.key, fileIds: [fileId], clock: CLOCK });
+  assert.equal(result.written, true, JSON.stringify(result.warnings));
+  assert.equal(result.dropped, 1, 'the marker-only excerpt is dropped and counted');
+  const [pack] = loadPacks([result.dir]);
+  assert.deepEqual(pack.entries.map(e => e.title), ['Vision plan']);
+  assert.equal(pack.entries[0].cites[0].label, `${NAME}, page 2`);
+  assert.ok(ungrounded('The premium is $2.', pack.entries));
 });
