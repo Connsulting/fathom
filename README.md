@@ -93,6 +93,8 @@ BASE_URL=http://127.0.0.1:8080 npm run e2e:smoke   # read-only @smoke subset aga
 server. `scripts/docker-smoke.sh` builds the image and smoke tests a container using your docker
 CLI configuration as is.
 
+Deployed smoke is that same `@smoke` subset against a server you already started: set `FATHOM_SMOKE_BASE_URL` (or `BASE_URL`), and for a real store that has finished first-run also set `FATHOM_SMOKE_TARGET=real` plus `FATHOM_SMOKE_HEADERS` as a JSON object when the deployment checks a login header. Real mode checks shells, empty states and provenance, and aborts any request to the app that is not GET or HEAD. The default target is `demo`, which keeps the scenario assertions.
+
 ## Docker
 
 ```bash
