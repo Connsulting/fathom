@@ -103,6 +103,12 @@ const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
 const MARKUP = /[<>{}`]/;
 const QUOTES = [['"', '"'], ["'", "'"], ['\u201c', '\u201d']];
 const YEAR = /\b(?:19|20)\d{2}\b/gu;
+const MONEY_WORDS = new RegExp(`\\b(?:${[
+  'zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve',
+  'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen', 'twenty', 'thirty', 'forty',
+  'fifty', 'sixty', 'seventy', 'eighty', 'ninety', 'hundred', 'thousand', 'million', 'billion', 'trillion',
+  'grand', 'dozen', 'half', 'percent', 'percentage', 'dollar', 'dollars', 'buck', 'bucks', 'cent', 'cents',
+  'usd', 'k'].join('|')})\\b`, 'i');
 
 // Model output also loses one pair of surrounding quotes and one trailing period, and is refused
 // over 8 words or with any digit other than a standalone 19xx or 20xx year. Rename input may carry
@@ -120,6 +126,9 @@ export function validateTitle(raw, { fromModel = false } = {}) {
   if (fromModel) {
     if (s.split(' ').length > MAX_MODEL_WORDS) return null;
     if (/\p{N}/u.test(s.replace(YEAR, ''))) return null;
+    // A model title never states an amount, rate or quantity: no currency or percent signs, no year
+    // shaped number used as a magnitude (2026k), and no spelled-out number or money word.
+    if (/[\p{Sc}%]/u.test(s) || /\b(?:19|20)\d{2}\s?[kmb]\b/i.test(s) || MONEY_WORDS.test(s)) return null;
   }
   return s;
 }
