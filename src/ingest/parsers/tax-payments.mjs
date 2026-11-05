@@ -4,6 +4,7 @@ import { money, monthEnd, header, warning, result, empty } from '../format.mjs';
 export const id = 'tax-payments';
 export const label = 'Estimated tax payments';
 export const sourceKind = 'tax_payments';
+const SUMMARY = /total|sum|required|safe harbor|ytd|year to date|annual/i;
 export function sniff(file) {
   try { return readWorkbook(file).sheets.some((sheet) => taxHeader(sheet)) ? 0.99 : 0; } catch { return 0; }
 }
@@ -19,13 +20,17 @@ export function parse(file) {
       const paidCols = [...sheet.rows[found.index].cells].filter(([, cell]) => /\bpaid$/.test(header(cell.value)));
       for (const row of sheet.rows.slice(found.index + 1)) {
         const monthCell = row.cells.get(monthCol);
-        if (monthCell && (monthCell.missingCache || monthCell.error)) {
-          const populated = paidCols.some(([column]) => { const cell = row.cells.get(column); return cell && (cell.value !== '' || cell.missingCache); });
-          if (populated) warning(warnings, 'invalid_tax_month', { sheet: sheet.name, cell: monthCell.address });
+        const populated = () => paidCols.some(([column]) => { const cell = row.cells.get(column); return cell && (cell.value !== '' || cell.missingCache); });
+        const unreadable = monthCell && (monthCell.missingCache || monthCell.error);
+        const month = unreadable ? 0 : months.indexOf(header(monthCell?.value)) + 1;
+        if (!month) {
+          // A populated row whose month cannot be read hides payments; warn so callers treat the
+          // sheet as incomplete. Summary rows (totals, required amounts) stay silent.
+          if (populated() && (unreadable || !SUMMARY.test(String(monthCell?.value ?? '')))) {
+            warning(warnings, 'invalid_tax_month', { sheet: sheet.name, cell: monthCell?.address ?? `${monthCol}${row.number}` });
+          }
           continue;
         }
-        const month = months.indexOf(header(monthCell?.value)) + 1;
-        if (!month) continue;
         for (const [column] of paidCols) {
           const cell = row.cells.get(column);
           if (!cell || cell.value === '' && !cell.missingCache) continue;

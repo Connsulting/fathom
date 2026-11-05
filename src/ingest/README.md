@@ -117,7 +117,8 @@ status `imported`, `duplicate`, `needs_mapping`, `needs_extraction`,
    category and month (every month when its date is unreadable, every category
    when its category is empty); for tax the warned Paid column's slot (every
    Paid slot of the sheet when the column is unknown). A row whose Month cell is
-   an uncached formula or an error but has a populated Paid cell warns
+   an uncached formula, an error, blank or not a month name (summary labels such as
+   totals and required amounts excepted) but has a populated Paid cell warns
    `invalid_tax_month` and marks every Paid slot of its sheet. Stored rows there are
    neither removed nor revised; a differing amount counts as `incomplete` and the
    stored row stays. New keys still insert.
