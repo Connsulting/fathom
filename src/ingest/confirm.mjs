@@ -367,7 +367,27 @@ export function askConflict(db, { key, payer, first, second, now }) {
   });
 }
 
-// first or second: archive the other row (withholding_conflict); the survivor takes the identity.
+// M1: payer identity includes the primary income amount, so a correction whose income also changed
+// takes another key. A document row of a known recipient in the slot of an active row of the same
+// document type from another file under another key is asked about as above, equal amounts or not.
+// Paystubs never conflict (pay dates are separate payments). The subject is both rows' keys and
+// cents; the context carries no identity, so the survivor keeps its own.
+export function askSlotConflict(db, row, { now } = {}) {
+  const docType = String(row.payer).split(':')[0];
+  if (docType === 'paystub' || !String(row.source_slot ?? '').startsWith('wh:') || row.source_slot.endsWith(':unknown')) return null;
+  const other = db.prepare(`SELECT * FROM tax_payments WHERE source_slot = ? AND payer LIKE ? AND dedupe_key != ? AND file_id IS NOT ? AND id != ?
+    ORDER BY id LIMIT 1`).get(row.source_slot, `${docType}:%`, row.dedupe_key, row.file_id ?? null, row.id);
+  if (!other) return null;
+  const [first, second] = other.id < row.id ? [other, row] : [row, other];
+  return ask(db, {
+    kind: 'withholding_conflict', subject: [first, second].map((r) => `${r.dedupe_key}#${amountCents(r.amount)}`).sort().join('|'),
+    question: `Two ${formLabel(first.payer)} from one payer report ${first.jurisdiction} withholding for ${first.tax_year} for the same person. Which should count?`,
+    options: WITHHOLDING_CONFLICT_OPTIONS, context: { first: rowRef(getPayment(db, first.id)), second: rowRef(getPayment(db, second.id)) }, fileId: second.file_id, now,
+  });
+}
+
+// first or second: archive the other row (withholding_conflict); the survivor takes the identity
+// when the question names one (K1).
 function applyConflict(db, item, optionId, { now }) {
   if (optionId !== 'first' && optionId !== 'second') return;
   const { key, payer, first, second } = item.context;
@@ -376,7 +396,7 @@ function applyConflict(db, item, optionId, { now }) {
   if (!keep || !drop) return;
   archive(db, 'tax_payments', { ...drop }, { by: keep.file_id, reason: 'withholding_conflict', now });
   db.prepare('DELETE FROM tax_payments WHERE id = ?').run(drop.id);
-  db.prepare('UPDATE tax_payments SET payer = ?, dedupe_key = ? WHERE id = ?').run(payer, key, keep.id);
+  if (payer && key) db.prepare('UPDATE tax_payments SET payer = ?, dedupe_key = ? WHERE id = ?').run(payer, key, keep.id);
   closeStaleConflicts(db, { now, except: item.id });
 }
 
@@ -422,6 +442,7 @@ function setRecipient(db, rows, recipient, { now }) {
       remove.run(other.id);
     }
     update.run(recipient, slot, payer, key, r.id);
+    askSlotConflict(db, getPayment(db, r.id), { now });
     slots.add(slot);
   }
   for (const slot of slots) summarizeSlot(db, slot, { now });

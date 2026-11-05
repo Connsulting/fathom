@@ -17,7 +17,7 @@ import { readTable, mapTabular, isZip, sourceKindOf as mappedSourceKind, id as M
 import { extractDocument, isPdf, plainText, labelOf } from './extract.mjs';
 import {
   ask, recordFact, archive, normalizeName, OWNER_OPTIONS, KIND_OPTIONS, NEAR_DUPLICATE_OPTIONS, EMPLOYER_OPTIONS, taxYearOptions,
-  withholdingRecipient, withRecipient, recipientPayer, summarizeSlot, conflictPayer, conflictAsked, askConflict,
+  withholdingRecipient, withRecipient, recipientPayer, summarizeSlot, conflictPayer, conflictAsked, askConflict, askSlotConflict,
 } from './confirm.mjs';
 import { storeFile, readStoredFile, loadDataKey } from './vault.mjs';
 import { recordSource } from './freshness.mjs';
@@ -604,8 +604,9 @@ function putTax(ctx, row, parser, locator, workbook) {
     .run(shaped.jurisdiction, shaped.tax_year, shaped.date, amount, shaped.kind, fileId, parser, locator, rowKey, slot, rowPayer, shaped.date_precision, shaped.tax_year_basis, recipient).lastInsertRowid);
   const stored = db.prepare('SELECT * FROM tax_payments WHERE dedupe_key = ?').get(key);
   if (!stored) {
-    insert(payer, key);
+    const id = insert(payer, key);
     bump(ctx, 'tax_payment');
+    if (summarizes) tally(ctx, askSlotConflict(db, db.prepare('SELECT * FROM tax_payments WHERE id = ?').get(id), { now }));
   } else if (moneyEq(stored.amount, amount)) {
     counts.duplicates += 1;
   } else if (slot && ctx.incomplete.tax.has(slot)) {

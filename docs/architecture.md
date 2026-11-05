@@ -483,7 +483,9 @@ and anything ambiguous becomes a short question in the confirm queue.
    `invalid_cost_basis` makes the account it names incomplete, or the whole file when it names
    none; an incomplete snapshot never removes. A recipient answer that rekeys withholding onto
    a row of the same recipient archives the newer as `duplicate` when the amounts are equal; a
-   different amount, at rekey or at import, keeps both and asks `withholding_conflict` (never `revised`). Withholding slots are
+   different amount, at rekey or at import, keeps both and asks `withholding_conflict` (never `revised`). A W-2 or 1099 row of a
+   known recipient that lands in the slot of an active row of the same form type from another file under another key (the
+   payer identity includes the income amount) also asks `withholding_conflict`, equal amounts or not. Withholding slots are
    `wh:<employer or payer key>:<taxYear>:<jurisdiction>:<recipient>`; W-2 withholding summarizes paystub
    withholding in the same slot (`summarized`) only once the recipient is known, at import or
    when a recipient answer recomputes the slots. Every replaced row is kept in `superseded_rows`.

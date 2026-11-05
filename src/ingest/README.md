@@ -193,7 +193,9 @@ bytes; a concurrent upload of bytes being ingested is a `duplicate`.
    `withholding_conflict` (options `first`, `second`, `both`; the rejected row
    is archived as `withholding_conflict`, the survivor takes the identity). The question names each row by id, dedupe key,
    file id and amount; once a named row is summarized, archived or rekeyed it closes as superseded, and answering
-   a question whose rows no longer match is refused as `stale`. An explicit zero federal withholding field is a row
+   a question whose rows no longer match is refused as `stale`. A W-2 or 1099 row of a known recipient in the slot of an
+   active row of the same form type from another file under another key asks it too, equal amounts or not (paystubs never
+   do; `both` keeps both). An explicit zero federal withholding field is a row
    (a correction to zero meets this rule); an absent one is not. Answers are remembered by kind and subject
    and apply at import.
 7. `counts` is `{rows: {kind: n}, duplicates, crossFormat, revised, superseded,
