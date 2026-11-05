@@ -13,7 +13,7 @@ import { mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from './config.mjs';
-import { openMigrated, readStoreMode, createStoreFile, setSetting, DB_FILE } from './store/db.mjs';
+import { openMigrated, readStoreMode, createStoreFile, getSetting, setSetting, DB_FILE } from './store/db.mjs';
 import { createHandler } from './api/router.mjs';
 import { loadOwnerLogins, ownerLoginsProblemLine } from './api/identity.mjs';
 import { createLiveAnswerer } from './api/answerer.mjs';
