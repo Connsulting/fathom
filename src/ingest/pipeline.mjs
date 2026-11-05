@@ -11,7 +11,7 @@ import { pickParser } from './registry.mjs';
 import { identifyAccountRows, dedupeKey } from './dedupe.mjs';
 import { readWorkbook, ledgerHeader, taxHeader } from './workbook.mjs';
 import { entityOf } from './parsers/pnl-workbook.mjs';
-import { header as headerText, cents, institution } from './format.mjs';
+import { header as headerText, cents, institution, isoDate } from './format.mjs';
 import { readTable, mapTabular, sourceKindOf as mappedSourceKind, id as MAPPED_ID, label as MAPPED_LABEL } from './mapping.mjs';
 import { extractDocument, isPdf, plainText, labelOf } from './extract.mjs';
 import {
@@ -33,7 +33,7 @@ export class IngestError extends Error {
 }
 
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
-const emptyCounts = () => ({ rows: {}, duplicates: 0, revised: 0, superseded: 0, warnings: 0, warningCodes: {}, queued: 0 });
+const emptyCounts = () => ({ rows: {}, duplicates: 0, revised: 0, superseded: 0, incomplete: 0, warnings: 0, warningCodes: {}, queued: 0 });
 const baseName = (name) => String(name ?? '').split(/[\\/]/).pop().slice(0, 255) || 'upload';
 const toBytes = (bytes) => (bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes ?? []));
 const json = (value) => (value === undefined || value === null ? null : JSON.stringify(value));
@@ -203,6 +203,7 @@ function persist(db, fileId, file, plan, opts) {
     coverage = pnlCoverage(db, file, pnlRows);
     if (!pnlRows.length) warn([{ code: 'empty_workbook', locator: {} }]);
   } else if (plan.parser === 'tax-payments') coverage = taxCoverage(file);
+  ctx.incomplete = incompleteParts(db, file, plan.parser, parsed.warnings);
 
   db.prepare(`UPDATE files SET parser = ?, source_kind = ?, source_id = ?, header_signature = coalesce(?, header_signature),
               period_from = ?, period_to = ?, coverage = ? WHERE id = ?`)
@@ -422,6 +423,8 @@ function putPnl(ctx, row, parser, locator) {
     bump(ctx, 'pnl_line');
   } else if (moneyEq(stored.amount, amount)) {
     counts.duplicates += 1;
+  } else if (ctx.incomplete.pnl(row.entity, row.category, row.period)) {
+    counts.incomplete += 1;
   } else {
     archive(db, 'pnl_lines', { ...stored }, { by: fileId, reason: 'revised', now });
     db.prepare('UPDATE pnl_lines SET amount = ?, file_id = ?, parser = ?, locator = ? WHERE id = ?').run(amount, fileId, parser, locator, stored.id);
@@ -457,6 +460,8 @@ function putTax(ctx, row, parser, locator, workbook) {
     bump(ctx, 'tax_payment');
   } else if (moneyEq(stored.amount, amount)) {
     counts.duplicates += 1;
+  } else if (slot && ctx.incomplete.tax.has(slot)) {
+    counts.incomplete += 1;
   } else {
     archive(db, 'tax_payments', { ...stored }, { by: fileId, reason: 'revised', now });
     db.prepare('UPDATE tax_payments SET amount = ?, file_id = ?, parser = ?, locator = ? WHERE id = ?').run(amount, fileId, parser, locator, stored.id);
@@ -517,29 +522,74 @@ function pnlCoverage(db, file, pnlRows) {
 
 // Tax: every year-named sheet with a tax header covers each Paid column's jurisdiction and payer.
 function taxCoverage(file) {
-  const order = (column) => [...column].reduce((v, ch) => v * 26 + ch.charCodeAt(0) - 64, 0);
   const slots = new Set();
-  for (const sheet of readWorkbook(file).sheets) {
-    const found = taxHeader(sheet);
-    if (!found) continue;
-    for (const [column, cell] of sheet.rows[found.index].cells) {
-      if (!/\bpaid$/.test(headerText(cell.value))) continue;
-      const group = found.groups.filter((g) => order(g.column) <= order(column)).at(-1);
-      if (!group) continue;
-      const payer = String(cell.value).trim().replace(/\s+paid$/i, '');
-      slots.add(`tax:${Number(sheet.name)}:${normalizeName(group.jurisdiction)}:${normalizeName(payer)}`);
-    }
-  }
+  for (const sheet of readWorkbook(file).sheets) for (const slot of taxSheetSlots(sheet).values()) slots.add(slot);
   return [...slots].sort();
 }
 
-// Rows of a covered slot from other files whose key this file lacks are archived and removed.
+// A tax sheet's Paid columns mapped to their slots (empty without a tax header).
+function taxSheetSlots(sheet) {
+  const order = (column) => [...column].reduce((v, ch) => v * 26 + ch.charCodeAt(0) - 64, 0);
+  const slots = new Map();
+  const found = taxHeader(sheet);
+  if (!found) return slots;
+  for (const [column, cell] of sheet.rows[found.index].cells) {
+    if (!/\bpaid$/.test(headerText(cell.value))) continue;
+    const group = found.groups.filter((g) => order(g.column) <= order(column)).at(-1);
+    if (!group) continue;
+    const payer = String(cell.value).trim().replace(/\s+paid$/i, '');
+    slots.set(column, `tax:${Number(sheet.name)}:${normalizeName(group.jurisdiction)}:${normalizeName(payer)}`);
+  }
+  return slots;
+}
+
+// What this file parsed only partly (F1): an unreadable amount cell must not remove or revise
+// stored rows it may have fed. P&L: the warned row's entity (through entity_aliases), category and
+// month; an unreadable date widens it to every month and an empty category to every category.
+// Tax: the warned cell's Paid column slot, or every Paid slot of its sheet when the column is not
+// a known Paid column. Returns { pnl(entity, category, period) -> bool, tax: Set of slots }.
+const PARTIAL_CODES = new Set(['formula_without_cache', 'invalid_pnl_row', 'invalid_tax_payment']);
+function incompleteParts(db, file, parser, warnings) {
+  const pnl = [], tax = new Set();
+  const parts = { tax, pnl: (entity, category, period) => pnl.some((m) => m.entity === normalizeName(entity)
+    && (m.category == null || m.category === normalizeName(category)) && (m.period == null || m.period === period)) };
+  const warned = (warnings ?? []).filter((w) => PARTIAL_CODES.has(w.code) && w.locator?.sheet != null);
+  if (!warned.length || (parser !== 'pnl-workbook' && parser !== 'tax-payments')) return parts;
+  const workbook = readWorkbook(file);
+  const sheets = new Map(workbook.sheets.map((sheet) => [sheet.name, sheet]));
+  const aliases = aliasMap(db);
+  for (const w of warned) {
+    const sheet = sheets.get(w.locator.sheet);
+    const [, column, rowNumber] = String(w.locator.cell ?? '').match(/^([A-Z]+)(\d+)$/) ?? [];
+    if (parser === 'tax-payments') {
+      const sheetSlots = sheet ? taxSheetSlots(sheet) : new Map();
+      if (sheetSlots.has(column)) tax.add(sheetSlots.get(column));
+      else for (const slot of sheetSlots.values()) tax.add(slot);
+      continue;
+    }
+    const raw = entityOf(w.locator.sheet);
+    const entity = normalizeName(aliases.get(normalizeName(raw)) ?? raw);
+    if (!entity) continue;
+    const found = sheet && ledgerHeader(sheet);
+    const row = found && sheet.rows.find((r) => r.number === Number(rowNumber));
+    if (!row) { pnl.push({ entity, category: null, period: null }); continue; }
+    const income = found.columns.has('payment date');
+    const date = isoDate(row.cells.get(found.columns.get(income ? 'payment date' : 'date'))?.value, workbook.date1904);
+    const category = income ? 'Income' : String(row.cells.get(found.columns.get('category'))?.value ?? '').trim();
+    pnl.push({ entity, category: category ? normalizeName(category) : null, period: date ? date.slice(0, 7) : null });
+  }
+  return parts;
+}
+
+// Rows of a covered slot from other files whose key this file lacks are archived and removed,
+// except rows this file parsed only partly (incompleteParts).
 function supersede(ctx, coverage) {
   const { db, fileId, counts, now } = ctx;
   for (const [table, prefix] of [['pnl_lines', 'pnl:'], ['tax_payments', 'tax:']]) {
-    for (const slot of coverage.filter((s) => s.startsWith(prefix))) {
+    for (const slot of coverage.filter((s) => s.startsWith(prefix) && !ctx.incomplete.tax.has(s))) {
       for (const r of db.prepare(`SELECT * FROM ${table} WHERE source_slot = ? AND (file_id IS NULL OR file_id != ?) ORDER BY id`).all(slot, fileId)) {
         if (ctx.keys.has(r.dedupe_key)) continue;
+        if (table === 'pnl_lines' && ctx.incomplete.pnl(r.entity, r.category, r.period)) continue;
         archive(db, table, { ...r }, { by: fileId, reason: 'removed', now });
         db.prepare(`DELETE FROM ${table} WHERE id = ?`).run(r.id);
         counts.superseded += 1;

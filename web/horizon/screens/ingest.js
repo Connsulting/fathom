@@ -99,7 +99,8 @@ export function ingestScreens(h) {
       <input type="file" multiple data-upload="1" hidden tabindex="-1"></div>`;
     if (onboarding) return `<div class="h-ing-add ob">${list}${control}</div>`;
     const lede = '<p class="h-mute sm">Exports from banks, cards, brokerages and payroll, profit and loss workbooks, statements and tax forms. Rows already imported are skipped.</p>';
-    return section('Add files', `<div class="h-ing-add">${lede}${control}${list}</div>`);
+    const wl = waitingList();
+    return section('Add files', `<div class="h-ing-add">${lede}${control}${list}</div>`) + (wl ? section('Waiting files', wl) : '');
   }
 
   function accountMeta(a) {
@@ -131,6 +132,13 @@ export function ingestScreens(h) {
     return section('Sources', srcs, g.sources.length ? plural(g.sources.length, 'source') : '') + fmts;
   }
 
+  // Files that need a mapping or the engine; '' when none. Shared by Confirm and Accounts.
+  function waitingList() {
+    const waiting = ing().files.filter((f) => WAITING.includes(f.status));
+    if (!waiting.length) return '';
+    return `<ul class="h-ing-files">${waiting.map((f) => `<li class="${esc(f.status)}">${icon('doc')}<div class="h-ing-f"><div class="h-ing-f-h"><span class="h-ing-f-n">${esc(f.name)}</span><em>${esc(STATUS[f.status])}</em></div></div>${btn(st.retrying[f.id] ? 'Retrying' : 'Retry', `data-retry="${esc(f.id)}"${st.retrying[f.id] ? ' disabled' : ''}`, 'ghost')}</li>`).join('')}</ul>`;
+  }
+
   function confirmPage() {
     const g = ing();
     const files = new Map(g.files.map((f) => [f.id, f]));
@@ -144,10 +152,7 @@ export function ingestScreens(h) {
           <p class="h-cf-q">${esc(i.question)}</p><div class="h-acts">${opts}</div></article>`;
       }).join('')}</div>`
       : `<div class="h-empty"><i class="h-ok sm">${icon('check')}</i><div><b>Nothing to confirm.</b><p>New questions show up here when an import needs one.</p></div></div>`;
-    const waiting = g.files.filter((f) => WAITING.includes(f.status));
-    const wait = waiting.length
-      ? `<ul class="h-ing-files">${waiting.map((f) => `<li class="${esc(f.status)}">${icon('doc')}<div class="h-ing-f"><div class="h-ing-f-h"><span class="h-ing-f-n">${esc(f.name)}</span><em>${esc(STATUS[f.status])}</em></div></div>${btn(st.retrying[f.id] ? 'Retrying' : 'Retry', `data-retry="${esc(f.id)}"${st.retrying[f.id] ? ' disabled' : ''}`, 'ghost')}</li>`).join('')}</ul>`
-      : '<p class="h-mute">No files are waiting.</p>';
+    const wait = waitingList() || '<p class="h-mute">No files are waiting.</p>';
     return shell(`${pageHead('Household', 'Confirm', 'A few short questions so imports land in the right place.')}
       <div class="h-cols"><div class="h-col-main">${section(items.length ? `Questions <em>${items.length}</em>` : 'Questions', cards)}</div>
       <div class="h-col-side">${section('Waiting files', wait)}</div></div>`, 'confirm');

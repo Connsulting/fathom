@@ -29,16 +29,21 @@ export function redactCells(values) {
 
 // Integer part: grouped with commas, or a plain run.
 const INT = String.raw`(?:\d{1,3}(?:,\d{3})+|\d+)`;
-// 1. `$` with an optional space, then a number with optional two decimals.
-// 2. A number with exactly two decimals, not inside a longer number.
+// 1. Optional "(" and "-", `$` with an optional space, optional "-", then a number with optional
+//    two decimals, optional ")".
+// 2. Optional "(" and "-", a number with exactly two decimals (not inside a longer number),
+//    optional ")".
 // 3. Any other digit run.
-const SCAN = new RegExp(String.raw`(\$ ?)(${INT}(?:\.\d{2}(?!\d))?)|(?<![\d,.])(${INT}\.\d{2})(?!\d)|\d+`, 'g');
+// A minus sign or a matched pair of parentheses makes the amount negative.
+const SCAN = new RegExp(
+  String.raw`(\()?(-)?(\$ ?)(-)?(${INT}(?:\.\d{2}(?!\d))?)(\))?`
+  + String.raw`|(?<![\d,.])(\()?(-)?(${INT}\.\d{2})(?!\d)(\))?|\d+`, 'g');
 
 export function redactForExtraction(text) {
   const refs = {};
   const tokenOf = new Map();
-  const tokenFor = (numeric) => {
-    const clean = numeric.replace(/,/g, '');
+  const tokenFor = (numeric, negative) => {
+    const clean = (negative ? '-' : '') + numeric.replace(/,/g, '');
     let token = tokenOf.get(clean);
     if (!token) {
       token = `#A${tokenOf.size + 1}#`;
@@ -47,11 +52,15 @@ export function redactForExtraction(text) {
     }
     return token;
   };
-  const out = maskIds(String(text ?? '')).replace(SCAN, (match, dollar, dollarNum, decimalNum) => {
-    const money = dollarNum ?? decimalNum;
+  const out = maskIds(String(text ?? '')).replace(SCAN, (match, open1, minus1, dollar, minus2, num1, close1, open2, minus3, num2, close2) => {
+    const money = num1 ?? num2;
     if (money === undefined) return match.length > 4 ? maskRun(match) : match;
-    if (!/\d{5,}/.test(money)) return match;
-    return (dollar ?? '') + tokenFor(money);
+    const open = open1 ?? open2;
+    const close = close1 ?? close2;
+    const negative = Boolean(minus1 || minus2 || minus3 || (open && close));
+    // A signed amount is judged by its whole digit count, so a negative 234,567.89 is tokenized.
+    if (!/\d{5,}/.test(negative ? money.replace(/,/g, '') : money)) return match;
+    return (open && !close ? '(' : '') + (dollar ?? '') + tokenFor(money, negative) + (close && !open ? ')' : '');
   });
   return { text: out, refs };
 }

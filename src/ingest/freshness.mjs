@@ -145,7 +145,8 @@ export function ingestState(db, { clock } = {}) {
   const kindOf = new Map(sources.map((s) => [s.id, s.kind]));
 
   const accounts = {};
-  const rows = db.prepare(`SELECT a.id, a.source_id, (
+  const accountNotes = [];
+  const rows = db.prepare(`SELECT a.id, a.name, a.source_id, (
       SELECT max(d) FROM (
         SELECT max(date) AS d FROM transactions WHERE account_id = a.id
         UNION ALL SELECT max(date) FROM balances WHERE account_id = a.id
@@ -155,12 +156,22 @@ export function ingestState(db, { clock } = {}) {
   for (const row of rows) {
     const asOf = isoDay(row.as_of) ?? '';
     const kind = kindOf.get(row.source_id);
-    accounts[row.id] = { asOf, fresh: asOf && kind ? freshnessOf({ kind, asOf }, at).state : 'unknown', sourceId: row.source_id };
+    const f = asOf && kind ? freshnessOf({ kind, asOf }, at) : null;
+    accounts[row.id] = { asOf, fresh: f ? f.state : 'unknown', sourceId: row.source_id };
+    // A stale source already yields a note covering its accounts; only a stale account in a
+    // fresh source needs its own.
+    const source = sources.find((s) => s.id === row.source_id);
+    if (f && f.state === 'stale' && DOMAIN_OF[kind] && source && source.state !== 'stale') {
+      accountNotes.push({ domain: DOMAIN_OF[kind], text: `${row.name || row.id} data is ${f.ageDays} days old. Export a fresh copy.` });
+    }
   }
 
-  const staleNotes = sources
-    .filter((s) => s.state === 'stale' && DOMAIN_OF[s.kind])
-    .map((s) => ({ domain: DOMAIN_OF[s.kind], text: `${s.label} data is ${s.ageDays} days old. Export a fresh copy.` }));
+  const staleNotes = [
+    ...sources
+      .filter((s) => s.state === 'stale' && DOMAIN_OF[s.kind])
+      .map((s) => ({ domain: DOMAIN_OF[s.kind], text: `${s.label} data is ${s.ageDays} days old. Export a fresh copy.` })),
+    ...accountNotes,
+  ];
 
   return { pending: items.length, items, files, sources, accounts, staleNotes, formats: listHowTo() };
 }

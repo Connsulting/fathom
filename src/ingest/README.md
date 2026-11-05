@@ -111,7 +111,14 @@ status `imported`, `duplicate`, `needs_mapping`, `needs_extraction`,
    `source_slot`. Same key with another amount is `revised`. A workbook's
    `coverage` (from the workbook itself) archives and removes rows of covered
    slots that the later file lacks (`removed`). A W-2 withholding total archives
-   paystub withholding for its slot (`summarized`).
+   paystub withholding for its slot (`summarized`). An unreadable amount cell
+   (`formula_without_cache`, `invalid_pnl_row`, `invalid_tax_payment`) marks
+   what it may have fed as partly parsed: for P&L the warned row's entity,
+   category and month (every month when its date is unreadable, every category
+   when its category is empty); for tax the warned Paid column's slot (every
+   Paid slot of the sheet when the column is unknown). Stored rows there are
+   neither removed nor revised; a differing amount counts as `incomplete` and the
+   stored row stays. New keys still insert.
 6. Questions (`confirm.mjs`): `account_owner`, `account_kind`, `entity_alias`,
    `tax_year` (subject `tax:<sheetYear>`), `fact_check` (subject
    `<sourceId>|<key>|<canonical JSON value>`, below 0.8 confidence),
