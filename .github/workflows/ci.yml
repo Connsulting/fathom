@@ -37,6 +37,48 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: npm run e2e
+      - name: real-mode smoke against a store past first-run
+        run: |
+          set -euo pipefail
+          data="$(mktemp -d)"
+          log="$(mktemp)"
+          pid=""
+          cleanup() {
+            status=$?
+            if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+              kill "$pid" 2>/dev/null || true
+              wait "$pid" 2>/dev/null || true
+            fi
+            if [ "$status" -ne 0 ] && [ -s "$log" ]; then
+              tail -n 50 "$log" || true
+            fi
+            rm -rf "$data"
+            rm -f "$log"
+            exit "$status"
+          }
+          trap cleanup EXIT
+          port="$(node -e 'const s=require("node:net").createServer();s.listen(0,"127.0.0.1",()=>{process.stdout.write(String(s.address().port));s.close();});')"
+          base="http://127.0.0.1:${port}"
+          node --input-type=module -e 'import { createRealStore } from "./test/helpers/real-store.mjs"; const db = await createRealStore(process.argv[1], { clock: "2026-11-05" }); db.close();' "$data"
+          FATHOM_DATA="$data" FATHOM_PORT="$port" FATHOM_DEMO=0 FATHOM_ENGINE=off FATHOM_OWNER_LOGINS=owner@example.test node src/server.mjs >"$log" 2>&1 &
+          pid=$!
+          ready=""
+          for _ in $(seq 1 60); do
+            if ! kill -0 "$pid" 2>/dev/null; then
+              echo "real smoke: server exited before it was healthy" >&2
+              exit 1
+            fi
+            if curl -fsS "${base}/healthz" >/dev/null 2>&1; then
+              ready=1
+              break
+            fi
+            sleep 0.5
+          done
+          if [ -z "$ready" ]; then
+            echo "real smoke: server not healthy after 30s" >&2
+            exit 1
+          fi
+          FATHOM_SMOKE_TARGET=real FATHOM_SMOKE_BASE_URL="$base" FATHOM_SMOKE_HEADERS='{"Tailscale-User-Login":"owner@example.test"}' npm run e2e:smoke
       - if: failure()
         uses: actions/upload-artifact@v4
         with:
