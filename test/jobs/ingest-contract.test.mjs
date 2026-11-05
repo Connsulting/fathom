@@ -34,7 +34,7 @@ import { reasonText } from '../../src/jobs/triggers/missing-data.mjs';
 import { confirmTask } from '../../src/jobs/triggers/common.mjs';
 import { nameKey } from '../../src/ingest/extract.mjs';
 import {
-  scratch, addFact, addFile, addNotes, addPayroll, factRow, answerPending, figureRow, plannerFigures, recRow, activeRecIds, parseJson, pnlWorkbook,
+  scratch, addFact, addFile, addNotes, addPayroll, factRow, contentValue, answerPending, figureRow, plannerFigures, recRow, activeRecIds, parseJson, pnlWorkbook,
   PACKS_DIR, SCORP, SOLE_PROP, INST, MASKS,
 } from '../helpers/real-store.mjs';
 
@@ -607,6 +607,73 @@ test('MGI1: E5 S corp plan compensation is box 1 plus deferrals, not box 5', asy
   near(room.v, 17500, 'employer room = 25% of box 1 compensation');
   const notes = (room.locator && room.locator.notes) || [];
   assert.ok(notes.some(n => /W-2/.test(n) && /compensation/i.test(n)), `a visible note says the plan uses W-2 compensation: ${JSON.stringify(notes)}`);
+});
+
+// E6 (driver decision: an unread box 12 makes plan compensation unknown; block every figure that
+// depends on it, including the corp's QBI W-2 wages, so the QBI deduction and federal tax, whenever
+// the W-2 wage limit can bind, with a visible reason). Single filer, non-SSTB S corp whose P&L
+// projects 360,000 of profit (30,000 a month for ten months, no officer-salary line). Its W-2: cash
+// wages 60,000 plus 30,000 of shareholder health premiums less 24,500 of 401(k) deferrals, so box 1
+// 65,500 and box 5 60,000. The bug reads unread box 12 as zero: QBI 32,750, tax 100,596.75, room
+// 16,375.
+// Liveness with box 12 D 24,500 read (2026 single parameters):
+//   W-2 wages for 199A, modified box 1 method (Rev. Proc. 2019-11 section 5.02): box 1 + box 12 D =
+//   65,500 + 24,500 = 90,000.
+//   AGI = 65,500 + 360,000 = 425,500; taxable before QBI = 425,500 - 16,100 = 409,400, above the
+//   threshold plus the phase-in range, so the wage limit applies in full (IRC 199A(b)(2), (b)(3)).
+//   QBI deduction = min(20% * 360,000 = 72,000, 50% * 90,000 = 45,000, 20% * 409,400) = 45,000.
+//   taxable = 409,400 - 45,000 = 364,400; income tax = 1,240 + 4,560 + 12,166 + 24% * 96,075 +
+//   32% * 54,450 + 35% * (364,400 - 256,225) = 1,240 + 4,560 + 12,166 + 23,058 + 17,424 + 37,861.25
+//   = 96,309.25. No Additional Medicare (box 5 60,000), no SE tax.
+//   Plan compensation = box 1 + elective deferrals = 90,000 (IRC 415(c)(3)); employer room = 25% *
+//   90,000 = 22,500 (IRC 404(a)(3)).
+const ASPEN = Object.freeze({ name: 'Aspen Analytics', type: 's_corp', owner: 'owner', sstb: false, income: 30000, expenses: Object.freeze({}) });
+const E6_W2 = box12 => W2(ASPEN.name, { wages: 65500, medicareWages: 60000, socialSecurityWages: 60000, federalWithheld: 20000, ...(box12 ? { box12 } : {}) }, { recipient: 'owner' });
+async function aspenStore(box12) {
+  const db = await S.store({ variant: { ...SINGLE_WAGES, entities: [ASPEN], payroll: [E6_W2(box12)] } });
+  await addFile(db, pnlWorkbook([ASPEN]));
+  await plan(db);
+  return { db, info: computeFor(db).info };
+}
+
+test('MGI1: E6 an unread box 12 blocks plan compensation and the QBI wage limit with a visible reason', async () => {
+  const { db, info } = await aspenStore(null);
+  for (const k of ['room.solo401k', 'room.solo401k.employer', 'tax.fed.qbi', 'tax.fed.proj']) assert.equal(figureRow(db, k), null, `${k} is not published on zero assumed deferrals`);
+  const codes = errorsOf(info).filter(c => !c.includes('.'));
+  assert.ok(codes.length, `a block is reported: blocked ${JSON.stringify(info.blocked)}, withheld ${JSON.stringify(info.withheld)}`);
+  for (const c of codes) assert.notEqual(reasonText({ info, entities: [] }, c), GENERIC, `${c} has its own reason text`);
+  assert.ok(activeRecIds(db).includes('missing-data'), 'missing-data lists the reason');
+  assert.ok(codes.some(c => missingDataText(db).includes(reasonText({ info, entities: [] }, c))), 'the reason text is shown');
+});
+
+test('MGI1: E6 liveness: box 12 read gives QBI 45,000, federal tax 96,309.25 and employer room 22,500', async () => {
+  const { db } = await aspenStore([{ code: 'D', amount: 24500 }]);
+  near(fig(db, 'agi.est').v, 425500, 'AGI');
+  near(fig(db, 'tax.fed.qbi').v, 45000, 'QBI deduction at the W-2 wage limit');
+  near(fig(db, 'tax.fed.proj').v, 96309.25, 'federal tax');
+  near(fig(db, 'room.solo401k.employer').v, 22500, 'employer room on box 1 plus deferrals');
+});
+
+// E7 (driver decision: each salary point carries separate bases; FICA and Medicare on the cash
+// salary, plan compensation = the point's salary + this year's non-FICA compensation, which is box 1
+// + elective deferrals - box 5). The owner's S corp (no officer-salary P&L line) pays cash wages
+// 60,000 plus 10,000 of shareholder health premiums: box 1 70,000, box 5 60,000, box 12 read with no
+// codes. Premiums paid for a 2% shareholder are wages for income tax but not FICA (IRS S corporation
+// shareholder health insurance guidance).
+//   current salary point = 60,000 (cash salary, inside the approved 50,000 to 110,000 range).
+//   payroll tax at that point = 15.3% * 60,000 = 9,180 (the bug: 15.3% * 70,000 = 10,710).
+//   plan compensation at that point = 60,000 + (70,000 + 0 - 60,000) = 70,000; pre-tax room =
+//   24,500 employee + 25% * 70,000 = 17,500 employer = 42,000 (a 60,000 basis gives 39,500).
+test('MGI1: E7 the salary war game charges FICA on cash salary and sizes the plan on box 1', async () => {
+  const w2 = W2(SCORP.name, { wages: 70000, medicareWages: 60000, socialSecurityWages: 60000, federalWithheld: 7000, box12: [] }, { recipient: 'owner' });
+  const { db } = await planned({ entities: [NO_SALARY_CORP, SOLE_PROP], payroll: [w2] });
+  const game = (contentValue(db, 'wargame') || {}).salary;
+  assert.ok(game && Array.isArray(game.points), `the salary war game is built: ${JSON.stringify(db.prepare("SELECT id, status, unavailable_reason FROM decisions WHERE id LIKE 'salary%'").all())}`);
+  const current = game.points.filter(p => p.current);
+  assert.deepEqual(current.map(p => p.id), ['s60'], 'the current point is the 60,000 cash salary');
+  near(fig(db, 'wg.salary.s60.salary').v, 60000, 'current salary');
+  near(fig(db, 'wg.salary.s60.payroll').v, 9180, 'payroll tax on cash salary only');
+  near(fig(db, 'wg.salary.s60.x').v, 42000, 'pre-tax room on 70,000 of plan compensation');
 });
 
 // ================================================================ MGI2: payments counted once, by kind and jurisdiction
