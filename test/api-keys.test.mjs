@@ -179,6 +179,19 @@ describe('key routes: Host allowlist (DNS rebinding)', () => {
     assert.deepEqual((await ok(request(s.baseUrl, { path: '/api/keys' }))).json.keys, []);
   });
 
+  test('percent-encoded spellings of the key routes get the same refusal', async () => {
+    const evil = `rebind.example:${s.port}`;
+    const same = { host: evil, origin: `http://${evil}` };
+    await fails(request(s.baseUrl, { path: '/api/%6beys', headers: { host: evil } }), 403);
+    await fails(postJson(s.baseUrl, '/api/%6beys', { name: 'Rebound', scopes: ['write:recs'] }, same), 403);
+    await fails(postJson(s.baseUrl, '/api/%6beys/key_000000000000/%72evoke', {}, same), 403);
+    assert.deepEqual((await ok(request(s.baseUrl, { path: '/api/keys' }))).json.keys, []);
+  });
+
+  test('liveness: an encoded key route on an allowed Host is still served', async () => {
+    await ok(request(s.baseUrl, { path: '/api/%6beys' }));
+  });
+
   test('liveness: IP literal, localhost and a configured host are served', async () => {
     for (const host of [`127.0.0.1:${s.port}`, `localhost:${s.port}`, 'agent.example.test']) {
       await ok(request(s.baseUrl, { path: '/api/keys', headers: { host } }));
