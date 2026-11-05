@@ -3,6 +3,7 @@
 
 import test, { describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import net from 'node:net';
 import { SERVER_TIMEOUT, spawnServer, request } from '../../../test/helpers/server.mjs';
 import {
   UNAUTHORIZED, PERMISSION_TEXT, createKey, revokeKey, mcpPost, bearer, initializeParams, rpcResult,
@@ -144,9 +145,25 @@ describe('methods and bodies', () => {
   });
 
   test('a body over 1 MiB is 413; malformed JSON is 400', async () => {
-    const big = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: { pad: 'x'.repeat(1024 * 1024 + 10) } });
-    assert.equal((await mcpPost(s.baseUrl, { auth: bearer(readKey.key), body: big })).status, 413);
+    // A declared length over the cap is refused before any body is read. A raw socket keeps this
+    // deterministic: the server closes the connection after the 413, which a client still
+    // streaming a megabyte can see as a reset before it reads the reply.
+    const head = [
+      'POST /mcp HTTP/1.1', `Host: 127.0.0.1:${s.port}`, `Authorization: ${bearer(readKey.key)}`,
+      'Content-Type: application/json', 'Accept: application/json, text/event-stream',
+      `Content-Length: ${1024 * 1024 + 10}`, 'Connection: close', '', '',
+    ].join('\r\n');
+    const reply = await new Promise((resolve, reject) => {
+      const sock = net.connect(Number(s.port), '127.0.0.1', () => sock.write(head));
+      let text = '';
+      sock.on('data', c => { text += c; if (text.includes('\r\n\r\n')) sock.destroy(); });
+      sock.on('close', () => resolve(text));
+      sock.on('error', reject);
+    });
+    assert.match(reply, /^HTTP\/1\.1 413 /);
     assert.equal((await mcpPost(s.baseUrl, { auth: bearer(readKey.key), body: '{"jsonrpc":' })).status, 400);
+    // Liveness: the same call under the cap is served.
+    assert.equal((await mcpPost(s.baseUrl, { auth: bearer(readKey.key) })).status, 200);
   });
 });
 
