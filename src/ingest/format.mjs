@@ -68,47 +68,57 @@ export const asciiMinus = (value) => String(value).replace(MINUS_FORMS, '-');
 
 // Scans CSV text record by record. onRecord(values, locator) returns true to stop. A malformed
 // record goes to onBad(locator). The trailing record is finished only when `complete` (the text
-// is the whole input). Returns {stopped, unclosed, start}.
-function scanCsv(input, limits, complete, onRecord, onBad) {
-  let cells = [], cell = '', quoted = false, closed = false, bad = false, line = 1, start = 1;
+// is the whole input). Returns {stopped, unclosed, start}. Cells are counted, never built one
+// character at a time: with `build` a well-formed record's cells are sliced from the source when
+// each cell ends; without it nothing is built or kept, and onRecord gets an empty array.
+function scanCsv(input, limits, complete, onRecord, onBad, build = true) {
+  let cells = [], count = 0, chars = 0, begin = 0, open = -1, close = -1, escaped = false;
+  let quoted = false, closed = false, bad = false, blank = true, line = 1, start = 1;
   let rows = 0, total = 0, stopped = false;
-  const push = () => {
-    if (cells.length >= limits.columns) throw new LimitError('CSV record has too many columns');
-    cells.push(cell);
+  const push = (end) => {
+    if (count >= limits.columns) throw new LimitError('CSV record has too many columns');
+    count++;
+    if (build && !bad) {
+      const value = close < 0 ? input.slice(begin, end) : input.slice(open + 1, close);
+      cells.push(escaped ? value.replaceAll('""', '"') : value);
+    }
+    chars = 0; open = -1; close = -1; escaped = false; closed = false;
   };
-  const finish = () => {
-    push();
-    if (cells.some((value) => value.trim())) {
+  const finish = (end) => {
+    push(end);
+    if (!blank) {
       if (++rows > limits.rows) throw new LimitError('CSV has too many rows');
       if (bad) onBad({ row: start });
       else {
-        total += cells.length;
+        total += count;
         if (total > limits.cells) throw new LimitError('CSV has too many cells');
         stopped = onRecord(cells, { row: start }) === true;
       }
     }
-    cells = []; cell = ''; closed = false; bad = false; start = line + 1;
+    cells = []; count = 0; bad = false; blank = true; start = line + 1;
   };
   const add = (ch) => {
-    if (cell.length >= limits.cellChars) throw new LimitError('CSV cell is too long');
-    cell += ch;
+    if (chars >= limits.cellChars) throw new LimitError('CSV cell is too long');
+    chars++;
+    if (blank && !/\s/.test(ch)) blank = false;
   };
   for (let i = 0; i < input.length && !stopped; i++) {
     const ch = input[i];
     if (quoted) {
-      if (ch === '"' && input[i + 1] === '"') { add('"'); i++; }
-      else if (ch === '"') { quoted = false; closed = true; }
+      if (ch === '"' && input[i + 1] === '"') { add('"'); escaped = true; i++; }
+      else if (ch === '"') { quoted = false; closed = true; close = i; }
       else { add(ch); if (ch === '\n') line++; }
-    } else if (ch === ',') { push(); cell = ''; closed = false; }
+    } else if (ch === ',') { push(i); begin = i + 1; }
     else if (ch === '\n' || ch === '\r') {
+      const end = i;
       if (ch === '\r' && input[i + 1] === '\n') i++;
-      finish(); line++; start = line;
-    } else if (ch === '"' && !cell && !closed) quoted = true;
+      finish(end); line++; start = line; begin = i + 1;
+    } else if (ch === '"' && !chars && !closed) { quoted = true; open = i; }
     else if (closed && /\s/.test(ch)) continue;
     else { if (closed || ch === '"') bad = true; add(ch); }
   }
   if (stopped) return { stopped, unclosed: false, start };
-  if (complete && !quoted && (cell || cells.length)) finish();
+  if (complete && !quoted && (chars || count)) finish(input.length);
   return { stopped, unclosed: quoted, start };
 }
 
@@ -120,12 +130,13 @@ const headersOf = (values) => {
 
 export function csv(file, { limits = LIMITS } = {}) {
   const input = text(file);
-  // A counting pass keeps nothing, so an input past a limit is rejected before any record is held.
-  scanCsv(input, limits, true, () => {}, () => {});
+  // A counting pass builds and keeps nothing, so an input past a limit is rejected before any cell
+  // text exists.
+  scanCsv(input, limits, true, () => {}, () => {}, false);
   const records = [], warnings = [];
   let headers = null;
   const scan = scanCsv(input, limits, true, (values, locator) => {
-    if (headers) records.push({ values: values.slice(), locator }); // exact length: held near the limit
+    if (headers) records.push({ values, locator });
     else headers = headersOf(values);
   }, (locator) => warning(warnings, 'malformed_csv', locator));
   if (scan.unclosed) warning(warnings, 'unclosed_csv_quote', { row: scan.start });
