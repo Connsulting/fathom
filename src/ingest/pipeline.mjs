@@ -190,7 +190,7 @@ function persist(db, fileId, file, plan, opts) {
   const now = opts.now;
   const counts = emptyCounts();
   if (plan.extractPath) counts.extractPath = plan.extractPath;
-  const ctx = { db, fileId, now, counts, parser: plan.parser ?? null, factsChanged: false, keys: new Set() };
+  const ctx = { db, fileId, now, counts, parser: plan.parser ?? null, factsChanged: false, keys: new Set(), emptySnapshots: new Map() };
   const warn = (list) => {
     for (const w of list ?? []) {
       counts.warnings += 1;
@@ -351,11 +351,23 @@ function samePosting(list, description, parser) {
 }
 
 const activeKey = (db, key) => (db.prepare('SELECT 1 FROM transactions WHERE dedupe_key = ?').get(key) ? key : null);
+// The active row a key stands for: the key itself, else the first active key reached by following
+// confirmed-duplicate survivor links, breadth first. A visited set and a hop cap end cycles, self
+// links and missing survivors with null.
+const SURVIVOR_HOPS = 16;
 function activeCounterpart(db, key) {
-  if (activeKey(db, key)) return key;
-  const survivors = db.prepare(`SELECT survivor_key FROM superseded_rows WHERE table_name = 'transactions' AND dedupe_key = ? AND reason = 'duplicate_confirmed'
-                                AND survivor_key IS NOT NULL ORDER BY id DESC`).all(key);
-  for (const { survivor_key: survivor } of survivors) if (activeKey(db, survivor)) return survivor;
+  const survivorsOf = db.prepare(`SELECT survivor_key FROM superseded_rows WHERE table_name = 'transactions' AND dedupe_key = ? AND reason = 'duplicate_confirmed'
+                                  AND survivor_key IS NOT NULL ORDER BY id DESC`);
+  const seen = new Set([key]);
+  let frontier = [key];
+  for (let hop = 0; frontier.length && hop <= SURVIVOR_HOPS; hop += 1) {
+    const next = [];
+    for (const k of frontier) {
+      if (activeKey(db, k)) return k;
+      for (const { survivor_key: survivor } of survivorsOf.all(k)) if (!seen.has(survivor)) { seen.add(survivor); next.push(survivor); }
+    }
+    frontier = next;
+  }
   return null;
 }
 
@@ -540,10 +552,13 @@ function putTax(ctx, row, parser, locator, workbook) {
   let slot = workbook ? `tax:${row.sheetYear}:${normalizeName(row.jurisdiction)}:${normalizeName(row.payer)}` : (row.sourceSlot ?? null);
   let recipient = workbook ? null : (row.recipient ?? null);
   let payer = row.payer ?? null;
-  if (!workbook && slot && row.employerKey) {
-    // D4 with G4: employer withholding belongs to a recipient; remembered answers decide it at
-    // import. The payer identity carries the document while the recipient is unknown.
-    const r = withholdingRecipient(db, { employerKey: row.employerKey, employer: row.employer ?? '', payer: recipientPayer(row.payer, 'unknown', fileId), fileId, now });
+  if (!workbook && slot?.startsWith('wh:')) {
+    // D4 with G4 and H1: every withholding document (paystub, W-2, 1099) belongs to a recipient;
+    // remembered answers decide it at import. The payer identity carries the document while the
+    // recipient is unknown.
+    const r = withholdingRecipient(db, {
+      employerKey: row.employerKey ?? null, employer: row.employer ?? '', issuer: row.issuer ?? '', payer: recipientPayer(row.payer, 'unknown', fileId), fileId, now,
+    });
     tally(ctx, r.outcome);
     recipient = r.recipient;
     slot = withRecipient(slot, recipient);
@@ -733,18 +748,23 @@ function removeOmittedPositions(ctx, rows, warnings) {
   for (const r of rows) {
     if ((r.kind !== 'position' && r.kind !== 'snapshot') || !r.accountId || !r.asOf || incomplete.has(r.accountId)) continue;
     const id = JSON.stringify([r.accountId, r.asOf]);
-    if (!snapshots.has(id)) snapshots.set(id, { accountId: r.accountId, asOf: r.asOf, keys: new Set() });
+    if (!snapshots.has(id)) snapshots.set(id, { accountId: r.accountId, asOf: r.asOf, keys: new Set(), locator: null });
     if (r.kind === 'position') snapshots.get(id).keys.add(dedupeKey(r));
+    else snapshots.get(id).locator = r.locator ?? null;
   }
   const incomingTo = periodTo(db, fileId);
   const remove = db.prepare('DELETE FROM positions WHERE id = ?');
-  for (const { accountId, asOf, keys } of snapshots.values()) {
+  const held = db.prepare('SELECT 1 FROM positions WHERE account_id = ? AND as_of = ? LIMIT 1');
+  for (const { accountId, asOf, keys, locator } of snapshots.values()) {
     for (const p of db.prepare('SELECT * FROM positions WHERE account_id = ? AND as_of = ? ORDER BY id').all(accountId, asOf)) {
       if (keys.has(p.dedupe_key) || p.file_id === fileId || !newerOrEqual(db, incomingTo, p.file_id)) continue;
       archive(db, 'positions', { ...p }, { by: fileId, reason: 'removed', now });
       remove.run(p.id);
       counts.superseded += 1;
     }
+    // H3: a snapshot that leaves nothing held on its date is an empty holdings figure for refreshFigures.
+    const prior = ctx.emptySnapshots.get(accountId);
+    if (!held.get(accountId, asOf) && (!prior || asOf > prior.asOf)) ctx.emptySnapshots.set(accountId, { asOf, locator });
   }
 }
 
@@ -784,24 +804,42 @@ function askTaxYears(ctx, rows) {
   }
 }
 
-// Account figures: the latest balance, else the holdings total at the latest as-of date.
+// The latest empty holdings snapshot of an account (H3): this file's, or the one behind a stored
+// 0 figure located at a holdings list, whichever is dated later. Returns a figure with asOf, or null.
+function emptyHoldings(ctx, id, key) {
+  const { db, fileId, parser, sourceId } = ctx;
+  const own = ctx.emptySnapshots.get(id);
+  const mine = own ? { v: 0, file_id: fileId, parser, locator: json(own.locator), source_id: sourceId, asOf: own.asOf } : null;
+  const stored = db.prepare(`SELECT g.v, g.file_id, g.parser, g.locator, f.source_id, f.period_to AS asOf FROM figures g LEFT JOIN files f ON f.id = g.file_id
+                             WHERE g.key = ?`).get(key);
+  const prior = stored && stored.v === 0 && stored.asOf && parseJson(stored.locator, null)?.field === 'holdings' ? stored : null;
+  if (!mine || !prior) return mine ?? prior;
+  return prior.asOf > mine.asOf ? prior : mine;
+}
+
+// Account figures: the latest balance, else the holdings total at the latest as-of date, or 0 when
+// an authoritative empty snapshot is dated after every stored position.
 function refreshFigures(ctx, accountIds) {
   const { db, now } = ctx;
   const accountOf = db.prepare('SELECT id, name, source_id FROM accounts WHERE id = ?');
   for (const id of accountIds) {
     const acct = accountOf.get(id);
     if (!acct) continue;
+    const key = `acct.${id}.balance`;
     let fig = db.prepare(`SELECT b.amount AS v, b.file_id, b.parser, b.locator, f.source_id FROM balances b LEFT JOIN files f ON f.id = b.file_id
                           WHERE b.account_id = ? ORDER BY b.date DESC, b.id DESC LIMIT 1`).get(id);
     if (!fig) {
       const latest = db.prepare('SELECT max(as_of) AS d FROM positions WHERE account_id = ?').get(id)?.d;
-      if (!latest) continue;
-      const total = db.prepare('SELECT sum(value) AS v FROM positions WHERE account_id = ? AND as_of = ?').get(id, latest).v;
-      const last = db.prepare(`SELECT p.file_id, p.parser, p.locator, f.source_id FROM positions p LEFT JOIN files f ON f.id = p.file_id
-                               WHERE p.account_id = ? AND p.as_of = ? ORDER BY p.id DESC LIMIT 1`).get(id, latest);
-      fig = { v: cents(total), file_id: last.file_id, parser: last.parser, locator: last.locator, source_id: last.source_id };
+      const empty = emptyHoldings(ctx, id, key);
+      if (empty && (!latest || empty.asOf > latest)) fig = empty;
+      else if (!latest) continue;
+      else {
+        const total = db.prepare('SELECT sum(value) AS v FROM positions WHERE account_id = ? AND as_of = ?').get(id, latest).v;
+        const last = db.prepare(`SELECT p.file_id, p.parser, p.locator, f.source_id FROM positions p LEFT JOIN files f ON f.id = p.file_id
+                                 WHERE p.account_id = ? AND p.as_of = ? ORDER BY p.id DESC LIMIT 1`).get(id, latest);
+        fig = { v: cents(total), file_id: last.file_id, parser: last.parser, locator: last.locator, source_id: last.source_id };
+      }
     }
-    const key = `acct.${id}.balance`;
     const src = fig.source_id ?? acct.source_id ?? null;
     db.prepare(`INSERT INTO figures (key, v, src, kind, label, file_id, parser, locator, updated_at) VALUES (?, ?, ?, 'a', ?, ?, ?, ?, ?)
                 ON CONFLICT(key) DO UPDATE SET v = excluded.v, src = excluded.src, kind = excluded.kind, label = excluded.label,

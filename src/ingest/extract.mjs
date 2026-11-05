@@ -163,13 +163,14 @@ function parseFactValue(key, raw) {
 const fact = (key, value, confidence, locator, extra = {}) => ({ kind: 'fact', key, value, confidence, locator, ...extra });
 
 // Withholding slot wh:<payerKey>:<taxYear>:<jurisdiction>:<recipient>. The recipient starts
-// unknown; for employer withholding (paystub, W-2) the pipeline resolves it from the
-// employer_recipient and document_recipient answers (employerKey and employer carry what it needs).
-function withholding({ docType, jurisdiction, amount, date, datePrecision, taxYear, basis, payer, slotKey, field, employer }) {
+// unknown and the pipeline resolves it per document: for employer withholding (paystub, W-2) from
+// the employer_recipient and document_recipient answers (employerKey and employer carry what it
+// needs), for a 1099 from its own document_recipient answer (issuer names the payer).
+function withholding({ docType, jurisdiction, amount, date, datePrecision, taxYear, basis, payer, slotKey, field, employer, issuer }) {
   return {
     kind: 'tax_payment', jurisdiction, amount: cents(amount), paymentKind: 'withholding', date, datePrecision, taxYear, sheetYear: taxYear,
     taxYearBasis: basis, payer, recipient: 'unknown', sourceSlot: `wh:${slotKey}:${taxYear}:${normalizeName(jurisdiction)}:unknown`,
-    ...(employer !== undefined ? { employerKey: slotKey, employer } : {}), locator: { document: docType, field },
+    ...(employer !== undefined ? { employerKey: slotKey, employer } : { issuer: issuer ?? '' }), locator: { document: docType, field },
   };
 }
 
@@ -234,7 +235,7 @@ export function toRows(docType, extracted, ctx = {}) {
       const key = nameKey(x.payerName);
       if (positive(x.federalWithheld)) {
         rows.push(withholding({ docType, jurisdiction: 'federal', amount: x.federalWithheld, date: `${x.taxYear}-12-31`, datePrecision: 'year', taxYear: x.taxYear,
-          basis: 'form_year', payer: `${docType}:${key}:${x.taxYear}:${centsOf(primary)}`, slotKey: key, field: 'federalWithheld' }));
+          basis: 'form_year', payer: `${docType}:${key}:${x.taxYear}:${centsOf(primary)}`, slotKey: key, field: 'federalWithheld', issuer: String(x.payerName ?? '').trim() }));
       }
       if (docType === '1099-nec') rows.push(fact('income.selfEmployed', true, x.confidence, { document: docType, field: 'nonemployeeCompensation' }));
       break;

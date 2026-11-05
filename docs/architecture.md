@@ -468,8 +468,9 @@ and anything ambiguous becomes a short question in the confirm queue.
    description stores a second transaction under `<key>:d:<16 hex of the description hash>` and
    asks `near_duplicate` whatever the distance between the dates, once per pair even when the
    three-day proximity question also applies. When the collided key holds no active row, the
-   question pairs the new row with the active row its `duplicate_confirmed` tombstone names in
-   `survivor_key`. Accounts are upserted
+   question pairs the new row with the active row reached by following the `survivor_key` links of
+   `duplicate_confirmed` tombstones (bounded; a cycle, self link or missing survivor asks
+   nothing). Accounts are upserted
    by `identity` (`acct-` plus 16 hex of its hash), with `mirror` `manual` and masks of 4 digits
    only.
 4. Revisions: P and L and tax workbook rows carry a `source_slot`; a later workbook replaces the
@@ -482,14 +483,16 @@ and anything ambiguous becomes a short question in the confirm queue.
    `invalid_cost_basis` makes the account it names incomplete, or the whole file when it names
    none; an incomplete snapshot never removes. A recipient answer that rekeys withholding onto
    a row of the same recipient archives the newer as `duplicate`. Withholding slots are
-   `wh:<employerKey>:<taxYear>:<jurisdiction>:<recipient>`; W-2 withholding summarizes paystub
+   `wh:<employer or payer key>:<taxYear>:<jurisdiction>:<recipient>`; W-2 withholding summarizes paystub
    withholding in the same slot (`summarized`) only once the recipient is known, at import or
    when a recipient answer recomputes the slots. Every replaced row is kept in `superseded_rows`.
 5. Each file records `parser`, `source_kind`, `source_id`, `period_from`, `period_to`, `status`
    and `counts` JSON `{rows: {kind: n}, duplicates, crossFormat, revised, superseded, incomplete,
    warnings, warningCodes: {code: n}, queued, extractPath?}`; `extractPath` (`text`,
    `pdf_text_layer`, `pdf_document` or `pdf_withheld`) is set when extraction ran. Ingest sources (`sources` ids starting `ing:`) keep the latest `as_of`
-   and `last_ingest_at`; account balance figures follow the latest stored balance.
+   and `last_ingest_at`; account balance figures follow the latest stored balance, else the
+   holdings total at the latest as-of date, else 0 from a complete empty snapshot dated after
+   every stored position.
 6. When facts change, `refreshPackState` runs. The pipeline logs only an error code.
 
 ### Encryption at rest
@@ -535,8 +538,9 @@ facts wait in `held_facts` until the employer relation is known. With the engine
 subject, question, options: [{id, label}], context, status, answer, fileId, createdAt}`. Kinds:
 `account_owner`, `account_kind`, `entity_alias`, `tax_year`, `fact_check`, `near_duplicate`,
 `employer_relation`, `employer_recipient` (subject the employer key; options `owner` "You",
-`spouse` "Your spouse", `both` "Both of you") and `document_recipient` (subject a paystub or W-2
-payer identity; options `owner`, `spouse`; asked per document after `both`). A recipient answer
+`spouse` "Your spouse", `both` "Both of you") and `document_recipient` (subject a paystub, W-2
+or 1099 payer identity; options `owner`, `spouse`; asked per document after `both`, and directly
+for each 1099 with withholding). A recipient answer
 sets `tax_payments.recipient` on the matching withholding rows, recomputes their `wh:` slots and
 summarizes per slot; while a row's recipient is unknown nothing summarizes it. An answered
 subject is remembered and applied to later imports without a new question. `ConfirmError` codes map to HTTP: `not_found` 404, `bad_option` 400, `answered` 409,

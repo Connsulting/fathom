@@ -138,7 +138,8 @@ status `imported`, `duplicate`, `needs_mapping`, `needs_extraction`,
    stored under `<key>:d:<first 16 hex of SHA256 of the normalized description>`
    and asks `near_duplicate` whatever the distance between the dates, against the
    collided key's active row or, when that key holds only a confirmed duplicate,
-   the row it was confirmed against (`survivor_key` on the tombstone). An alt key
+   the active row reached by following `survivor_key` links on the tombstones
+   (bounded; a cycle, self link or missing survivor asks nothing). An alt key
    already stored or confirmed duplicate is a duplicate with no new question. The
    same amount within three days from another file asks `near_duplicate` too,
    once per pair (subject: the two keys sorted). Balances and
@@ -158,7 +159,7 @@ status `imported`, `duplicate`, `needs_mapping`, `needs_extraction`,
    `source_slot`. Same key with another amount is `revised`. A workbook's
    `coverage` (from the workbook itself) archives and removes rows of covered
    slots that the later file lacks (`removed`). Withholding slots are
-   `wh:<employerKey>:<taxYear>:<jurisdiction>:<recipient>` with recipient `owner`,
+   `wh:<employer or payer key>:<taxYear>:<jurisdiction>:<recipient>` with recipient `owner`,
    `spouse` or `unknown` (also `tax_payments.recipient`). A W-2 withholding total
    archives paystub withholding of its slot (`summarized`) only when the recipient
    is known; an `unknown` slot never summarizes. An unreadable amount cell
@@ -179,17 +180,21 @@ status `imported`, `duplicate`, `needs_mapping`, `needs_extraction`,
    `held_facts` until answered), `employer_recipient` (subject the employer key;
    options `owner` You, `spouse` Your spouse, `both` Both of you) and
    `document_recipient` (subject the document's payer identity; options `owner`,
-   `spouse`, asked per paystub or W-2 after `both`). A recipient answer sets the
+   `spouse`, asked per paystub or W-2 after `both`, and directly per 1099 with
+   withholding, naming its form label). While the recipient is unknown a
+   withholding row's payer identity is `<payer>:doc:<file id>`, so two members'
+   identical documents stay apart. A recipient answer sets the
    recipient of the matching withholding rows, recomputes their slots and
    summarizes per slot; a rekeyed row that collides with one of the same
-   recipient is archived as `duplicate`. 1099 withholding keeps recipient `unknown` and is not
-   asked about (nothing summarizes it). Answers are remembered by kind and subject
+   recipient is archived as `duplicate`. Answers are remembered by kind and subject
    and apply at import.
 7. `counts` is `{rows: {kind: n}, duplicates, crossFormat, revised, superseded,
    incomplete, warnings, warningCodes: {code: n}, queued}`, plus `extractPath`
    when extraction ran: `text`, `pdf_text_layer`, `pdf_document` or `pdf_withheld`.
 8. Sources are `ing:<parser>:<account id or all>`; account figures
-   `acct.<id>.balance` hold the latest balance or the latest holdings total.
+   `acct.<id>.balance` hold the latest balance or the latest holdings total; with
+   no balance, a complete empty snapshot dated after every stored position makes
+   it 0, located at that file's holdings list.
    Pack state refreshes when facts change.
 
 Extraction never sends an identifier: text goes through `redactForExtraction`

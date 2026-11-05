@@ -255,10 +255,10 @@ function applyEmployer(db, employerKey, optionId, { now }) {
   return { factsChanged };
 }
 
-// Withholding recipients (D4). An employer's withholding rows are paystub and W-2 rows whose slot
-// is wh:<employerKey>:...; the recipient is the slot's last segment.
+// Withholding recipients (D4). Withholding slots are wh:<payerKey>:...; the recipient is the
+// slot's last segment. An employer's withholding rows are its paystub and W-2 rows.
 export const withRecipient = (slot, recipient) => String(slot).replace(/:[^:]*$/, `:${recipient}`);
-// G4: the payer identity of an employer withholding row. While the recipient is unknown it is
+// G4: the payer identity of a withholding row. While the recipient is unknown it is
 // <R10 payer>:doc:<file id>, so two members' identical documents never collapse; once resolved it
 // is <R10 payer>:<recipient>.
 export const recipientPayer = (payer, recipient, fileId) => (recipient === 'unknown' ? `${payer}:doc:${fileId}` : `${payer}:${recipient}`);
@@ -266,20 +266,29 @@ const unresolvedPayer = (payer) => String(payer).replace(/:doc:[^:]*$/, '');
 const employerRows = (db, employerKey) => db.prepare(`SELECT * FROM tax_payments WHERE source_slot LIKE ?
   AND (payer LIKE 'paystub:%' OR payer LIKE 'w2:%') ORDER BY id`).all(`wh:${employerKey}:%:unknown`);
 
-function documentQuestion(payer, employer) {
+// A 1099 payer identity starts with the form kind (1099-int), whose label is the kind in capitals.
+function documentQuestion(payer, issuer) {
   const [kind, , when] = String(payer).split(':');
-  const from = employer ? ` from ${employer}` : '';
-  return kind === 'w2' ? `Whose ${when} W-2${from} is this?` : `Whose paystub${from} paid on ${when} is this?`;
+  const from = issuer ? ` from ${issuer}` : '';
+  if (kind === 'w2') return `Whose ${when} W-2${from} is this?`;
+  if (kind === 'paystub') return `Whose paystub${from} paid on ${when} is this?`;
+  return `Whose ${when} ${kind.toUpperCase()}${from} is this?`;
 }
-const askDocument = (db, { employerKey, employer = '', payer, fileId = null, now }) => ask(db, {
-  kind: 'document_recipient', subject: payer, question: documentQuestion(payer, employer), options: DOCUMENT_RECIPIENT_OPTIONS,
-  context: { employerKey, employer, payer }, fileId, now,
+const askDocument = (db, { employerKey = null, employer = '', issuer = '', payer, fileId = null, now }) => ask(db, {
+  kind: 'document_recipient', subject: payer, question: documentQuestion(payer, employerKey ? employer : issuer), options: DOCUMENT_RECIPIENT_OPTIONS,
+  context: employerKey ? { employerKey, employer, payer } : { issuer, payer }, fileId, now,
 });
 
-// The recipient of an employer withholding row at import. Remembered answers decide it; otherwise
-// it is unknown and the open question (employer, or per document after "both") is asked.
+// The recipient of a withholding row at import. Remembered answers decide it; otherwise it is
+// unknown and the open question is asked: for employer withholding the employer question, or per
+// document after "both"; for a 1099 (no employerKey) the document question directly.
 // Returns {recipient, outcome} where outcome is ask()'s result when a question was asked.
-export function withholdingRecipient(db, { employerKey, employer = '', payer, fileId = null, now } = {}) {
+export function withholdingRecipient(db, { employerKey = null, employer = '', issuer = '', payer, fileId = null, now } = {}) {
+  if (!employerKey) {
+    const byDocument = findItem(db, 'document_recipient', payer);
+    if (byDocument?.status === 'answered') return { recipient: byDocument.answer };
+    return { recipient: 'unknown', outcome: askDocument(db, { issuer, payer, fileId, now }) };
+  }
   const byEmployer = findItem(db, 'employer_recipient', employerKey);
   if (byEmployer?.status === 'answered' && byEmployer.answer !== 'both') return { recipient: byEmployer.answer };
   if (byEmployer?.status === 'answered') {
