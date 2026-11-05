@@ -6,6 +6,7 @@
    Recents keep item keys only (never titles or figures) in localStorage. */
 
 import { normalizeKey, rankItems } from '../keys.js';
+import { ASK_KEYS, askNew, newConversation } from './chat.js';
 
 let H = null;
 
@@ -81,20 +82,10 @@ function go(route, params) {
   H.api.go(route, params || {});
 }
 
-function focusComposer(text) {
-  const el = H.root?.querySelector('.h-root [data-draft="ask"]');
-  if (!el) return;
-  if (text != null && el.value !== text) el.value = text;
-  el.focus();
-  const n = el.value.length;
-  if (el.setSelectionRange) el.setSelectionRange(n, n);
-}
-
-// Item 13 is not on main yet: the text lands in the Ask composer, unsent.
+// No match: the text becomes the first question of a new conversation, sent at once.
 function askWith(text) {
-  H.ui.draft.ask = text;
-  go('ask');
-  focusComposer(text);
+  H.setMore(false);
+  askNew(text);
 }
 
 function openRec(id, ret) {
@@ -113,7 +104,7 @@ function goSource() {
 function actionSource() {
   return [
     { key: 'act:shortcuts', title: 'Show keyboard shortcuts', group: 'Actions', sub: 'Action', hint: '?', run: () => openSheet() },
-    { key: 'act:ask', title: 'Ask a question', group: 'Actions', sub: 'Action', hint: '', run: () => { go('ask'); focusComposer(); } },
+    { key: 'act:ask', title: 'Ask a question', group: 'Actions', sub: 'Action', hint: '', run: () => { H.setMore(false); newConversation(); } },
     { key: 'act:add', title: 'Add files', group: 'Actions', sub: 'Action', hint: '', run: () => go('add') }
   ];
 }
@@ -141,8 +132,17 @@ function decisionSource() {
   }));
 }
 
-// Wired to the conversation list once item 13 lands.
-function conversationSource() { return []; }
+// Active conversations (not archived, not in Trash), newest activity first.
+function conversationSource() {
+  const list = H.arr(H.api.threads ? H.api.threads() : [])
+    .filter((t) => t && t.id && !t.archivedAt && !t.trashedAt)
+    .sort((a, b) => { const x = String(a.lastAt || ''), y = String(b.lastAt || ''); return x === y ? 0 : x < y ? 1 : -1; });
+  return list.map((t) => ({
+    key: `conv:${t.id}`, title: typeof t.title === 'string' && t.title ? t.title : 'New conversation',
+    group: 'Conversations', sub: 'Conversation', hint: '',
+    run: () => go('ask', { id: t.id })
+  }));
+}
 
 function accountSource() {
   return H.arr(H.api.s.accounts).map((a) => {
@@ -516,6 +516,7 @@ const SCREEN_TABLES = {
   ],
   wargame: listTable,
   add: listTable,
+  ask: () => ASK_KEYS,
   rec: () => REC_ACTS.map(([k, label, act]) => ({
     keys: [k], label, group: 'Recommendation',
     action: () => clickAct(H.root?.querySelector('.h-dlg-host .h-dlg .h-acts'), act)

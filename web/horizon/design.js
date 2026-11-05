@@ -1319,7 +1319,10 @@ function onToggle(e) {
   if (k && ui) ui.det[k] = e.target.open;
 }
 
+// Root keys that are not shortcuts: Enter in the Ask composer and rename field first. Shortcuts go
+// through the registry in onDocumentKey, so Escape is never prevented here.
 function onKey(e) {
+  if (chatScreen.onFieldKey(e)) return;
   if ((e.key === 'Enter' || e.key === ' ') && e.target.matches?.('[data-wg][tabindex]')) { e.preventDefault(); onClick(e); }
   if (e.key === 'Escape' && ui.modal != null) { ui.modal = null; draw(); }
 }

@@ -320,7 +320,7 @@ function focusInput() {
   return true;
 }
 
-function newConversation() {
+export function newConversation() {
   A.side = false;
   A.renaming = null;
   if (onAsk() && !(H.api.route.params && H.api.route.params.id)) H.draw();
@@ -457,48 +457,57 @@ export function onInput(e) {
 
 /* ---------- keys ---------- */
 
-// The Ask page shortcuts, one table a later keyboard registry can take over as is.
-export const ASK_KEYS = [
-  { key: 'c', label: 'New conversation', action: newConversation },
-  { key: '/', label: 'Focus the question box', action: focusInput },
-  { key: 'Ctrl+L', label: 'Focus the question box', action: focusInput }
-];
+const FIELD_SEL = 'form.h-askx-compose textarea[name="q"], input.h-askx-rename';
 
-const typing = (el) => !!(el && el.closest && el.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])'));
-
-// Page shortcuts: only on the Ask route, never while typing, never with Alt or Meta.
-export function askKey(e) {
-  if (!H || !onAsk()) return false;
-  if (e.defaultPrevented || e.altKey || e.metaKey || e.isComposing || typing(e.target)) return false;
-  if (e.ctrlKey && e.shiftKey) return false;
-  const name = e.ctrlKey ? `Ctrl+${String(e.key).toUpperCase()}` : e.key;
-  const k = ASK_KEYS.find((x) => x.key === name);
-  if (!k) return false;
-  e.preventDefault();
-  k.action();
-  return true;
+function inField() {
+  const a = document.activeElement;
+  return !!(a && a.matches && a.matches(FIELD_SEL) && H.root && H.root.contains(a));
 }
 
-// The document keydown hook: composer and rename field keys first, then the page shortcuts.
-export function onKeydown(e) {
-  if (!H || !H.api || e.defaultPrevented) return false;
-  const t = e.target;
-  if (t && t.matches) {
-    if (t.matches('input.h-askx-rename')) {
-      if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); commitRename(true); return true; }
-      if (e.key === 'Escape') { e.preventDefault(); cancelRename(true); return true; }
-      return false;
-    }
-    if (t.matches('form.h-askx-compose textarea')) {
-      if (e.key === 'Enter' && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey && !e.isComposing) {
-        e.preventDefault();
-        if (t.form) t.form.requestSubmit();
-        return true;
-      }
-      if (e.key === 'Escape') { e.preventDefault(); t.blur(); return true; }
-      return false;
-    }
+// Escape leaves the question box (blur) or cancels a rename; with neither focused it closes the
+// phone sidebar. Anything else falls through to the global Escape.
+function leaveField() {
+  const a = document.activeElement;
+  if (a && a.matches && a.matches('input.h-askx-rename')) { cancelRename(true); return; }
+  if (a && a.matches && a.matches(FIELD_SEL)) { a.blur(); return; }
+  A.side = false;
+  H.draw();
+}
+
+// Opens #/ask with the text sent as the first question of a new conversation.
+export function askNew(text) {
+  const q = String(text || '').trim();
+  if (!H || !H.api || !q) return;
+  if (!onAsk() || (H.api.route.params && H.api.route.params.id)) H.api.go('ask', {});
+  if (A.pending) { H.ui.draft[NEW_DRAFT] = q; H.draw(); focusInput(); return; }
+  sendAsk({ key: null, text: q, draftKey: NEW_DRAFT, refocus: true });
+}
+
+// The Ask page shortcuts, registered as the 'ask' screen table in screens/switcher.js. The
+// registry's typing guard keeps c, / and Ctrl+L out of fields; Escape reaches it from a field.
+export const ASK_KEYS = [
+  { keys: ['c'], label: 'New conversation', group: 'Ask', action: () => newConversation() },
+  { keys: ['/'], label: 'Focus the question box', group: 'Ask', action: () => focusInput() },
+  { keys: ['mod+l'], label: 'Focus the question box', group: 'Ask', action: () => focusInput() },
+  {
+    keys: ['escape'], label: 'Leave the question box', group: 'Ask',
+    when: () => inField() || (A.side && onAsk()), sheetWhen: () => true,
+    action: () => leaveField()
   }
-  if (e.key === 'Escape' && A.side && onAsk()) { e.preventDefault(); A.side = false; H.draw(); return true; }
-  return askKey(e);
+];
+
+// Field keys the registry never sees (its typing guard): Enter sends from the composer
+// (Shift+Enter keeps the newline) and Enter saves a rename. design.js calls this from its root
+// keydown listener.
+export function onFieldKey(e) {
+  if (!H || !H.api || e.defaultPrevented || e.isComposing || e.key !== 'Enter') return false;
+  const t = e.target;
+  if (!t || !t.matches) return false;
+  if (t.matches('input.h-askx-rename')) { e.preventDefault(); commitRename(true); return true; }
+  if (t.matches('form.h-askx-compose textarea') && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey) {
+    e.preventDefault();
+    if (t.form) t.form.requestSubmit();
+    return true;
+  }
+  return false;
 }
