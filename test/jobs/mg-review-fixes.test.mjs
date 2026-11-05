@@ -51,7 +51,7 @@ function computeFor(db, clock = NOW) {
 }
 
 async function planned(variant = {}, now = NOW) {
-  const db = S.store({ variant });
+  const db = await S.store({ variant });
   const result = await plan(db, now);
   return { db, result, info: computeFor(db, now).info };
 }
@@ -262,7 +262,7 @@ test('MG6: C4 an invalid outside-deferral fact withholds solo room and the salar
   if (ye) assert.doesNotMatch(ye.def.summary, /\{f:room\.solo401k/, 'the year-end rec is not sized from the invalid fact');
 
   // Visible: a curve and room built from a valid fact turn unavailable when the fact goes bad.
-  const s = S.store({ variant: { facts: { 'retirement.otherPlanDeferrals': VALID_OUTSIDE } } });
+  const s = await S.store({ variant: { facts: { 'retirement.otherPlanDeferrals': VALID_OUTSIDE } } });
   await plan(s);
   assert.ok(contentValue(s, 'wargame').salary, 'precondition: the salary game is built');
   addFact(s, 'retirement.otherPlanDeferrals', INVALID_OUTSIDE);
@@ -316,7 +316,7 @@ test('MG6: C5 unknown prior-year sponsor wages withhold employer room that depen
   }
 
   // Visible: an employer figure published once the wages were known turns unavailable when they go.
-  const s = S.store({ variant: cedar(2500, 10000, { 'retirement.priorYearFicaWages': { owner: 140000 } }) });
+  const s = await S.store({ variant: cedar(2500, 10000, { 'retirement.priorYearFicaWages': { owner: 140000 } }) });
   await plan(s);
   assert.equal(fig(s, 'room.solo401k.employer').v, 0, 'precondition: not affected, employer 0');
   removeFact(s, 'retirement.priorYearFicaWages');
@@ -389,7 +389,7 @@ test('MG13: C6 liveness: dates and identifiers with ordinary words after them st
 });
 
 test('MG13: C6 writeProse rejects the model reply and falls back to the template', async () => {
-  const db = S.store();
+  const db = await S.store();
   const engine = scripted(() => JSON.stringify({ ...VALID, summary: 'Pay in 2026 US dollars.' }));
   await plan(db, NOW, engine);
   assert.ok(engine.calls.length > 0, 'the engine was asked');
@@ -399,7 +399,7 @@ test('MG13: C6 writeProse rejects the model reply and falls back to the template
 });
 
 test('MG13: C6 stored prose with the phrase is not kept on the next run', async () => {
-  const db = S.store();
+  const db = await S.store();
   await plan(db);
   const id = 'fed-q4-estimate';
   const template = recRow(db, id).def;

@@ -46,7 +46,7 @@ test.describe('AC7: planner on a real store', () => {
     const { resolveTokens } = await import('../src/shared/tokens.mjs');
 
     rmSync(DIR, { recursive: true, force: true });
-    const db = buildRealStore(DIR, { clock: CLOCK });
+    const db = await buildRealStore(DIR, { clock: CLOCK });
     try {
       const result = await runPlanning(db, null, { now: CLOCK });
       expect(result.status).toBe('ok');

@@ -13,15 +13,15 @@ after(() => S.cleanup());
 const OPTS = { packDirs: [PACKS_DIR] };
 const pause = ms => new Promise(r => setTimeout(r, ms));
 
-function storeWithFacts(facts = { 'income.sCorp': true, 'household.state': 'VA', 'household.dependents': 1 }) {
-  const db = S.track(createRealStore(S.dir()));
+async function storeWithFacts(facts = { 'income.sCorp': true, 'household.state': 'VA', 'household.dependents': 1 }) {
+  const db = S.track(await createRealStore(S.dir()));
   for (const [k, v] of Object.entries(facts)) addFact(db, k, v);
   return { db, facts };
 }
 const rows = db => Object.fromEntries(db.prepare('SELECT * FROM packs_state').all().map(r => [r.id, { ...r, def: parseJson(r.def, {}) }]));
 
-test('AC2: the owner live columns and the previous what-if answers survive a refresh', () => {
-  const { db } = storeWithFacts();
+test('AC2: the owner live columns and the previous what-if answers survive a refresh', async () => {
+  const { db } = await storeWithFacts();
   refreshPackState(db, OPTS);
   const prev = rows(db)['s-corp-owner'].def;
   const whatIf = { ...prev.whatIf, a: ['A synthetic what-if paragraph.'], unlocks: [{ title: 'Synthetic unlock', text: 'Example.' }] };
@@ -36,7 +36,7 @@ test('AC2: the owner live columns and the previous what-if answers survive a ref
 });
 
 test('AC2: updated_at moves only when the def changes', async () => {
-  const { db } = storeWithFacts();
+  const { db } = await storeWithFacts();
   refreshPackState(db, OPTS);
   const stamps = () => Object.fromEntries(db.prepare('SELECT id, updated_at FROM packs_state').all().map(r => [r.id, r.updated_at]));
   const before = stamps();

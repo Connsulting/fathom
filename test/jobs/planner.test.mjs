@@ -14,7 +14,7 @@ import {
 import { recAction, ask, packToggle } from '../../src/api/handlers.mjs';
 import { createCannedAnswerer } from '../../src/api/answerer.mjs';
 import {
-  scratch, createRealStore, addDocument, addFact, removeFact, accountIdByMask, figureRow, plannerFigures,
+  scratch, createRealStore, addPayroll, w2Doc, paystubDoc, addFact, removeFact, accountIdByMask, figureRow, plannerFigures,
   factRow, recRow, plannerRec, activeRecIds, recEvents, parseJson, PACKS_DIR, SCORP, SOLE_PROP, SYNTH, MASKS,
   HINTS, INST,
 } from '../helpers/real-store.mjs';
@@ -108,7 +108,7 @@ const DOMAIN_TRIGGER = {
 let base;
 let ids;
 before(async () => {
-  base = S.store();
+  base = await S.store();
   await plan(base);
   ids = {
     checking: accountIdByMask(base, MASKS.checking),
@@ -154,11 +154,11 @@ describe('derived facts and pack state', () => {
   });
 
   test('AC2: income.w2 is never derived from the household S corp, only from an outside employer', async () => {
-    const db = S.store();
-    addDocument(db, { docType: 'w2', taxYear: 2026, fields: { employer: SCORP.name, person: 'owner', wages: 60000 } });
+    const db = await S.store();
+    await addPayroll(db, w2Doc({ employerName: SCORP.name, person: 'owner', wages: 60000 }));
     await plan(db);
     assert.equal(factRow(db, 'income.w2'), null, 'a W-2 from the own S corp does not make income.w2');
-    addDocument(db, { docType: 'w2', taxYear: 2026, fields: { employer: 'Example Employer Inc', person: 'spouse', wages: 80000 } });
+    await addPayroll(db, w2Doc({ employerName: 'Example Employer Inc', person: 'spouse', relation: 'outside', wages: 80000 }));
     await plan(db);
     const f = factRow(db, 'income.w2');
     assert.ok(f, 'an outside employer W-2 derives income.w2');
@@ -167,7 +167,7 @@ describe('derived facts and pack state', () => {
   });
 
   test('AC2: a confirmed owner fact and an unconfirmed owner fact both survive a run', async () => {
-    const db = S.store();
+    const db = await S.store();
     addFact(db, 'accounts.has529', false, { src: 'you', confirmed: true });
     addFact(db, 'benefits.hsa', false, { src: 'you', confirmed: false });
     await plan(db);
@@ -180,7 +180,7 @@ describe('derived facts and pack state', () => {
   });
 
   test('AC2: a planner fact whose evidence disappears is deleted', async () => {
-    const db = S.store();
+    const db = await S.store();
     await plan(db);
     assert.ok(factRow(db, 'giving.charitable'), 'derived first');
     db.prepare("DELETE FROM transactions WHERE category = 'Charitable'").run();
@@ -201,7 +201,7 @@ describe('derived facts and pack state', () => {
   });
 
   test('AC2: the owner pack override is kept across a run', async () => {
-    const db = S.store();
+    const db = await S.store();
     await plan(db);
     db.prepare("UPDATE packs_state SET active = 0, exploring = 1 WHERE id = 'charitable-giving'").run();
     await plan(db);
@@ -221,7 +221,7 @@ describe('derived facts and pack state', () => {
   });
 
   test('AC2: toggling a planner-linked pack off then on through the API handler works (R12)', async () => {
-    const db = S.store();
+    const db = await S.store();
     await plan(db);
     const off = packToggle(ctxOf(db, { id: 's-corp-owner' }));
     assert.equal(off.status, 'available');
@@ -231,7 +231,7 @@ describe('derived facts and pack state', () => {
   });
 
   test('AC2: an unclassified P&L entity derives nothing and blocks tax figures, but keeps its actuals (R1)', async () => {
-    const db = S.store({ variant: { entities: [SCORP, { ...SOLE_PROP, doc: false }] } });
+    const db = await S.store({ variant: { entities: [SCORP, { ...SOLE_PROP, doc: false }] } });
     await plan(db);
     assert.equal(factRow(db, 'income.selfEmployed'), null, 'no classification, no selfEmployed fact');
     assert.equal(factRow(db, 'income.sCorp').value, true, 'the classified S corp still counts');
@@ -415,10 +415,11 @@ describe('figures', () => {
   });
 
   test('AC3: partially funded retirement room subtracts projected deferrals and employer contributions (R5, S6)', async () => {
-    const db = S.store({
+    const db = await S.store({
       variant: {
         pnlExtra: [{ entity: SCORP.name, category: 'Retirement contribution', monthly: 500 }],
-        documents: [{ docType: 'paystub', taxYear: 2026, fields: { employer: SCORP.name, person: 'owner', periodEnd: '2026-10-31', wagesYtd: 40000, deferral401kYtd: 10000 } }],
+        // Ingest's paystub carries this period's deferral only (plan R6-0); 1,000 a period.
+        payroll: [paystubDoc({ employerName: SCORP.name, person: 'owner', payDate: '2026-10-31', periodStart: '2026-10-01', periodEnd: '2026-10-31', gross: 4000, ytdGross: 40000, retirementDeferral: 1000, hsaDeferral: 0 })],
       },
     });
     await plan(db);
@@ -431,7 +432,7 @@ describe('figures', () => {
   });
 
   test('AC3: spouse SE tax uses only the spouse wages when the owner earns above the wage base (R2)', async () => {
-    const db = S.store({ variant: { documents: [{ docType: 'w2', taxYear: 2026, fields: { employer: 'Example Employer Inc', person: 'owner', wages: 200000 } }] } });
+    const db = await S.store({ variant: { payroll: [w2Doc({ employerName: 'Example Employer Inc', person: 'owner', relation: 'outside', wages: 200000 })] } });
     await plan(db);
     const ownerMedicare = 200000 + W;
     const spouse = selfEmploymentTax({ netProfit: SP, filingStatus: 'mfj', w2SocialSecurityWages: 0, w2MedicareWages: 0, spouseMedicareWages: ownerMedicare }).value;
@@ -443,7 +444,7 @@ describe('figures', () => {
   test('AC3: Additional Medicare across two sole props is charged on combined SE earnings above the threshold (S2)', async () => {
     const owner = { name: 'Juniper Works', type: 'sole_prop', owner: 'owner', income: 12500, expenses: {} };
     const spouse = { name: SOLE_PROP.name, type: 'sole_prop', owner: 'spouse', income: 12500, expenses: {} };
-    const db = S.store({
+    const db = await S.store({
       variant: {
         entities: [owner, spouse],
         hints: { [`${INST.bank}|${MASKS.business}`]: { name: 'Business checking', kind: 'business', owner: null, entity: owner.name } },
@@ -460,7 +461,7 @@ describe('figures', () => {
   });
 
   test('AC3: after the last supported filing date there is no tax year: no tax figures, warning unsupported_tax_year', async () => {
-    const db = S.store();
+    const db = await S.store();
     const result = await plan(db, { now: '2027-05-01' });
     assert.ok(result.warnings.includes('unsupported_tax_year'));
     for (const key of ['agi.est', 'tax.fed.proj', 'tax.va.proj', 'sh.fed.required', 'room.solo401k']) assert.equal(figureRow(db, key), null, `${key} skipped`);
@@ -586,7 +587,7 @@ describe('recs', () => {
   });
 
   test('AC4: owner status, task flags and conversation survive a rerun', async () => {
-    const db = S.store();
+    const db = await S.store();
     await plan(db);
     recAction(ctxOf(db, { id: 'va529' }, { action: 'accept' }));
     recAction(ctxOf(db, { id: 'va529' }, { action: 'task', arg: 0 }));
@@ -602,7 +603,7 @@ describe('recs', () => {
   });
 
   test('AC4: a rec whose condition no longer holds is retired to dismissed with a planner event and kept', async () => {
-    const db = S.store();
+    const db = await S.store();
     await plan(db);
     addFact(db, 'accounts.has529', false, { src: 'you', confirmed: true });
     const result = await plan(db);
@@ -620,7 +621,7 @@ describe('recs', () => {
   });
 
   test('AC4: restoring the condition revives a planner-retired rec to proposed', async () => {
-    const db = S.store();
+    const db = await S.store();
     await plan(db);
     addFact(db, 'accounts.has529', false, { src: 'you', confirmed: true });
     await plan(db);
@@ -637,7 +638,7 @@ describe('recs', () => {
 
   for (const [action, status] of [['dismiss', 'dismissed'], ['complete', 'done']]) {
     test(`AC4: an owner-${status} rec stays ${status} when its trigger disappears and reappears (R13, S10)`, async () => {
-      const db = S.store();
+      const db = await S.store();
       await plan(db);
       recAction(ctxOf(db, { id: 'va529' }, { action }));
       addFact(db, 'accounts.has529', false, { src: 'you', confirmed: true });
@@ -653,7 +654,7 @@ describe('recs', () => {
   }
 
   test('AC4: in January the Q4 estimate and HSA recs stay, Dec 31 recs retire as closed, backdoor moves to Apr 15 (R10, S9)', async () => {
-    const db = S.store();
+    const db = await S.store();
     await plan(db);
     await plan(db, { now: '2027-01-10' });
     const active = activeRecIds(db);
@@ -679,7 +680,7 @@ describe('recs', () => {
   });
 
   test('AC4: missing-data fires when the data goes stale (clock 2027-01-10, no new data)', async () => {
-    const db = S.store({ clock: '2027-01-10' });
+    const db = await S.store({ clock: '2027-01-10' });
     await plan(db, { now: '2027-01-10' });
     assert.ok(activeRecIds(db).includes('missing-data'));
     assert.equal(recRow(db, 'missing-data').def.domain, 'data');
@@ -688,7 +689,7 @@ describe('recs', () => {
   });
 
   test('AC4: an empty real store plans cleanly: only missing-data fires and no figures are written', async () => {
-    const db = S.track(createRealStore(S.dir(), { clock: NOW }));
+    const db = S.track(await createRealStore(S.dir(), { clock: NOW }));
     const result = await plan(db);
     assert.equal(result.status, 'ok');
     assert.deepEqual(activeRecIds(db), ['missing-data']);
@@ -698,7 +699,7 @@ describe('recs', () => {
   });
 
   test('AC4: a missing confirmation turns the HSA rec into confirm form with no room figure (R6)', async () => {
-    const db = S.store({ variant: { facts: { 'benefits.hsaEligible': undefined } } });
+    const db = await S.store({ variant: { facts: { 'benefits.hsaEligible': undefined } } });
     await plan(db);
     assert.ok(activeRecIds(db).includes('hsa-room'), 'still fires');
     assert.equal(figureRow(db, 'room.hsa'), null, 'no room figure without confirmed eligibility');
@@ -711,7 +712,7 @@ describe('recs', () => {
   });
 
   test('AC4: without the Virginia529 account answers the va529 rec is in confirm form (S8)', async () => {
-    const db = S.store({ variant: { facts: { 'accounts.va529': undefined } } });
+    const db = await S.store({ variant: { facts: { 'accounts.va529': undefined } } });
     await plan(db);
     assert.ok(activeRecIds(db).includes('va529'));
     assert.match(recRow(db, 'va529').def.title, /^Confirm\b/);
@@ -719,7 +720,7 @@ describe('recs', () => {
   });
 
   test('AC4: a 529 account whose owner is 70 or older is excluded, leaving no va529 rec (T5)', async () => {
-    const db = S.store();
+    const db = await S.store();
     const college = accountIdByMask(db, MASKS.college);
     addFact(db, 'accounts.va529', { [college]: { virginiaPlan: true, ownerAge70Plus: true, carryforward: 0 } });
     await plan(db);
@@ -729,7 +730,7 @@ describe('recs', () => {
   });
 
   test('AC4: a blocked trigger parks its rec as waiting on data and unblocks when the data arrives (S12)', async () => {
-    const db = S.store();
+    const db = await S.store();
     await plan(db);
     const before = recRow(db, 'va-q4-estimate');
     const retained = before.def.mine.map(m => m.fig).filter(k => /^(tax\.va\.proj|sh\.va\.)/.test(k));
@@ -763,10 +764,10 @@ describe('recs', () => {
 
   test('AC4: fully funded retirement leaves no room, so year-end-retirement does not fire (R5)', async () => {
     const sepFull = sepRoom({ kind: 'self-employed', netProfit: SP, filingStatus: 'mfj', ...OPTS }).value;
-    const db = S.store({
+    const db = await S.store({
       variant: {
         pnlExtra: [{ entity: SCORP.name, category: 'Retirement contribution', monthly: 1500 }],
-        documents: [{ docType: 'w2', taxYear: 2026, fields: { employer: SCORP.name, person: 'owner', wages: 35500, deferral401k: 24500 } }],
+        payroll: [w2Doc({ employerName: SCORP.name, person: 'owner', wages: 35500, box12: [{ code: 'D', amount: 24500 }] })],
         facts: { 'retirement.contributions': [{ person: 'spouse', plan: 'sep', type: 'employer', roth: false, amount: sepFull }] },
       },
     });
@@ -779,7 +780,7 @@ describe('recs', () => {
   });
 
   test('AC4: a rec id held by a non-planner rec is skipped with warning rec_id_taken', async () => {
-    const db = S.store();
+    const db = await S.store();
     const def = { id: 'va529', title: 'Owner note', summary: 'Kept by the owner.', tasks: [] };
     db.prepare(`INSERT INTO recs (id, def, status, tasks_done, sort, updated_at) VALUES ('va529', ?, 'accepted', '[]', 0, ?)`)
       .run(JSON.stringify(def), new Date().toISOString());
@@ -792,7 +793,7 @@ describe('recs', () => {
   });
 
   test('AC4: backdoor Roth asks whose IRA it is when an IRA owner is unknown (S9)', async () => {
-    const db = S.store({ variant: { hints: { [`|${MASKS.ira}`]: { name: 'Rollover IRA', kind: 'retirement', owner: null } } } });
+    const db = await S.store({ variant: { hints: { [`|${MASKS.ira}`]: { name: 'Rollover IRA', kind: 'retirement', owner: null } } } });
     await plan(db);
     assert.ok(activeRecIds(db).includes('backdoor-roth'));
     assert.ok(recRow(db, 'backdoor-roth').def.tasks.some(t => /whose IRA/i.test(t.t)), 'a task asks whose IRA it is');

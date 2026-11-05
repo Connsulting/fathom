@@ -16,7 +16,7 @@ import { createEngine } from '../../src/engine/index.mjs';
 import { getScenario, wargamePick } from '../../src/api/handlers.mjs';
 import { createCannedAnswerer } from '../../src/api/answerer.mjs';
 import {
-  scratch, addFact, figureRow, recRow, plannerRec, contentValue, parseJson, PACKS_DIR, SCORP, SOLE_PROP, INST, MASKS,
+  scratch, addFact, w2Doc, figureRow, recRow, plannerRec, contentValue, parseJson, PACKS_DIR, SCORP, SOLE_PROP, INST, MASKS,
 } from '../helpers/real-store.mjs';
 
 const NOW = '2026-11-05';
@@ -50,7 +50,7 @@ function computeFor(db, clock = NOW) {
 }
 
 async function planned(variant = {}, now = NOW) {
-  const db = S.store({ variant });
+  const db = await S.store({ variant });
   const result = await plan(db, now);
   return { db, result, info: computeFor(db, now).info };
 }
@@ -167,11 +167,11 @@ test('MG5: D1 liveness: the S corp SEP path with no deferral is 25% of salary', 
 //   Counted twice (the bug): 25,000 - 20,000 = 5,000 for both.
 
 const NW_NO_SALARY = Object.freeze({ name: SCORP.name, type: 's_corp', owner: 'owner', income: 20000, expenses: { Software: 300 } });
-const NW_W2 = Object.freeze({ docType: 'w2', taxYear: 2026, fields: { employer: SCORP.name, person: 'owner', wages: 100000, deferral401k: 0 } });
+const NW_W2 = Object.freeze(w2Doc({ employerName: SCORP.name, person: 'owner', wages: 100000, box12: [] }));
 const EMPLOYER_LINE = Object.freeze({ entity: SCORP.name, category: '401(k) employer contribution', monthly: 1000 });
 const corpComp = ({ line = false, facts = [] } = {}) => ({
   entities: [NW_NO_SALARY],
-  documents: [NW_W2],
+  payroll: [NW_W2],
   ...(line ? { pnlExtra: [EMPLOYER_LINE] } : {}),
   facts: facts.length ? { 'retirement.contributions': facts } : {},
 });
@@ -208,10 +208,10 @@ test('MG5: D4 liveness: the P&L line alone and the fact alone each give 15,000',
 //     pre-tax catch-up of min(11,250, 180,000 - 24,500) = 11,250.
 //   Box 3 140,000, fact 160,000: box 3 wins, not affected: pre-tax catch-up 11,250 published.
 
-const priorW2 = box3 => ({ docType: 'w2', taxYear: 2025, fields: { employer: CEDAR, person: 'owner', wages: box3 - 10000, socialSecurityWages: box3 } });
+const priorW2 = box3 => w2Doc({ taxYear: 2025, employerName: CEDAR, person: 'owner', wages: box3 - 10000, socialSecurityWages: box3 });
 const cedarWages = (box3, fact) => ({
   ...cedarOnly(15000, 40000, { 'household.ownerAge': 61, 'retirement.priorYearFicaWages': { owner: fact } }),
-  documents: [priorW2(box3)],
+  payroll: [priorW2(box3)],
 });
 const priorStep = db => fig(db, 'room.solo401k.employee').locator.steps.find(s => /Social Security wages from the plan sponsor/.test(s.label));
 
@@ -307,7 +307,7 @@ const pick = (db, clock, game, item) => wargamePick(api(db, clock, { name: game 
 
 // Run 1 builds the game from `first` (or the valid aggregate); run 2 applies `change` on the case clock.
 async function twoRuns(c, change) {
-  const db = S.store({ variant: withFacts(c.base, c.first || c.valid) });
+  const db = await S.store({ variant: withFacts(c.base, c.first || c.valid) });
   await plan(db, NOW);
   const built = contentValue(db, 'wargame') || {};
   assert.ok(built[c.game], `${c.name}: precondition: the ${c.game} game is built in November`);
@@ -360,7 +360,7 @@ test('MG12: D2 D3 liveness: a valid aggregate publishes every path', async t => 
 
 // The reviewer's January case on its own, so the season gate failure is named directly.
 test('MG12: D3 a November game with a 22,000 SEP added and planned in January refuses "Move it all to January"', async () => {
-  const db = S.store({ variant: WREN_HOUSEHOLD });
+  const db = await S.store({ variant: WREN_HOUSEHOLD });
   await plan(db, NOW);
   const built = contentValue(db, 'wargame').deferral;
   assert.equal(built.options.find(o => o.id === 'd100').label, 'Move it all to January', 'precondition');
@@ -428,7 +428,7 @@ test('MG13: D5 liveness: full dates and tax year pass, even with a money word la
 
 test('MG13: D5 writeProse rejects each phrasing and falls back to the template', async () => {
   for (const text of D5_REJECTED) {
-    const db = S.store();
+    const db = await S.store();
     const engine = scripted(() => JSON.stringify({ ...VALID, summary: text }));
     await plan(db, NOW, engine);
     assert.ok(engine.calls.length > 0, 'the engine was asked');
@@ -440,7 +440,7 @@ test('MG13: D5 writeProse rejects each phrasing and falls back to the template',
 });
 
 test('MG13: D5 liveness: writeProse accepts a full-date reply', async () => {
-  const db = S.store();
+  const db = await S.store();
   const engine = scripted(() => JSON.stringify({ ...VALID, summary: 'File by Apr 15, 2027 for tax year 2026.' }));
   await plan(db, NOW, engine);
   assert.ok(engine.calls.length > 0, 'the engine was asked');
@@ -448,7 +448,7 @@ test('MG13: D5 liveness: writeProse accepts a full-date reply', async () => {
 });
 
 test('MG13: D5 stored prose with each phrasing is not kept on the next run', async () => {
-  const db = S.store();
+  const db = await S.store();
   await plan(db);
   const id = 'fed-q4-estimate';
   const template = recRow(db, id).def;

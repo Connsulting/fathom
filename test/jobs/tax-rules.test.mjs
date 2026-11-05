@@ -13,7 +13,7 @@ import { computeFigures } from '../../src/jobs/planner/figures.mjs';
 import { loadPlanningData, resolveEntities } from '../../src/jobs/planner/data.mjs';
 import { deriveFacts, mergeFacts, ownerFactsOf } from '../../src/jobs/planner/facts.mjs';
 import {
-  scratch, addFact, accountIdByMask, figureRow, plannerFigures, contentValue, parseJson, PACKS_DIR, SCORP, SOLE_PROP, MASKS,
+  scratch, addFact, w2Doc, accountIdByMask, figureRow, plannerFigures, contentValue, parseJson, PACKS_DIR, SCORP, SOLE_PROP, MASKS,
 } from '../helpers/real-store.mjs';
 
 const NOW = '2026-11-05';
@@ -47,7 +47,7 @@ function computeFor(db, clock = NOW) {
 }
 
 async function planned(variant = {}) {
-  const db = S.store({ variant });
+  const db = await S.store({ variant });
   const result = await plan(db);
   return { db, result, info: computeFor(db).info };
 }
@@ -144,7 +144,7 @@ describe('MG3 child tax credit phase-out', () => {
     // 2,200 - 50 x ceil((agi.est - 400,000) / 1,000), floored at zero, and no figure carries the
     // retired ctc_phaseout_unsupported assumption.
     const { db, result } = await planned({
-      documents: [{ docType: 'w2', taxYear: 2026, fields: { employer: 'Example Employer Inc', person: 'spouse', wages: 150000, deferral401k: 0 } }],
+      payroll: [w2Doc({ employerName: 'Example Employer Inc', person: 'spouse', relation: 'outside', wages: 150000, box12: [] })],
     });
     const agi = fig(db, 'agi.est').v;
     assert.ok(agi > 400000, `agi.est ${agi} is over the threshold`);
@@ -332,7 +332,7 @@ const JUNIPER = Object.freeze({ name: 'Juniper Works', type: 'sole_prop', owner:
 const MIXED = Object.freeze({ entities: [SCORP, SOLE_PROP, JUNIPER] });
 const MIXEDDOC = Object.freeze({
   ...MIXED,
-  documents: [{ docType: 'w2', taxYear: 2026, fields: { employer: SCORP.name, person: 'owner', wages: 55000, deferral401k: 5000 } }],
+  payroll: [w2Doc({ employerName: SCORP.name, person: 'owner', wages: 55000, box12: [{ code: 'D', amount: 5000 }] })],
 });
 const withContribs = (variant, list, facts = {}) => ({ ...variant, facts: { ...(variant.facts || {}), ...facts, 'retirement.contributions': list } });
 const wagesLine = (db, person) => fig(db, 'agi.est').locator.parts.wages.find(w => w.person === person && w.source === 'own S corp');
@@ -470,11 +470,11 @@ describe('MG5 self-employed retirement deduction', () => {
     // plan it belongs to is unknown, so the owner is asked once and no solo room is sized. With the
     // employer named the document wins: allPlanDeferrals 6,000 (counted once), employee room
     // 24,500 - 6,000 = 18,500 on the 60,000 Northwind salary.
-    const doc = { docType: 'w2', taxYear: 2026, fields: { employer: 'Example Employer Inc', person: 'owner', wages: 90000, deferral401k: 6000 } };
-    const loose = await planned(withContribs({ documents: [doc] }, [{ person: 'owner', plan: 'outside-401k', type: 'deferral', amount: 6000 }]));
+    const doc = w2Doc({ employerName: 'Example Employer Inc', person: 'owner', relation: 'outside', wages: 90000, box12: [{ code: 'D', amount: 6000 }] });
+    const loose = await planned(withContribs({ payroll: [doc] }, [{ person: 'owner', plan: 'outside-401k', type: 'deferral', amount: 6000 }]));
     assert.ok((loose.info.confirm.retirement || []).includes('retirement.otherPlanDeferrals'), `confirm: ${JSON.stringify(loose.info.confirm)}`);
     for (const k of ['room.solo401k', 'room.solo401k.employee', 'room.solo401k.employer', 'room.solo401k.pretax']) absent(loose.db, k);
-    const named = await planned(withContribs({ documents: [doc] }, [{ person: 'owner', plan: 'outside-401k', type: 'deferral', amount: 6000, employer: 'Example Employer Inc' }]));
+    const named = await planned(withContribs({ payroll: [doc] }, [{ person: 'owner', plan: 'outside-401k', type: 'deferral', amount: 6000, employer: 'Example Employer Inc' }]));
     near(fig(named.db, 'room.solo401k').locator.inputs.allPlanDeferrals, 6000, 'allPlanDeferrals');
     near(fig(named.db, 'room.solo401k.employee').v, 18500, 'room.solo401k.employee');
   });
@@ -483,15 +483,15 @@ describe('MG5 self-employed retirement deduction', () => {
     // Spouse outside W-2 with no deferral field plus a 5,000 deferral to the spouse's sole prop
     // plan: the 402(g) test needs the outside deferrals, so household tax blocks. Supplying them as
     // zero unblocks, and agi.est is 5,000 lower than the same store without the deferral fact.
-    const doc = { docType: 'w2', taxYear: 2026, fields: { employer: 'Example Employer Inc', person: 'spouse', wages: 50000 } };
+    const doc = w2Doc({ employerName: 'Example Employer Inc', person: 'spouse', relation: 'outside', wages: 50000 });
     const deferral = [{ person: 'spouse', plan: 'own-corp-401k', type: 'deferral', amount: 5000, entity: SOLE_PROP.slug }];
-    const unknown = await planned(withContribs({ documents: [doc] }, deferral));
+    const unknown = await planned(withContribs({ payroll: [doc] }, deferral));
     assert.ok(unknown.info.blocked.includes('retirement_other_deferrals_missing'), `blocked: ${unknown.info.blocked}`);
     assert.ok((unknown.info.confirm.retirement || []).includes('retirement.otherPlanDeferrals'), 'asks for the outside deferrals');
     absent(unknown.db, 'agi.est');
     const known = { 'retirement.otherPlanDeferrals': { spouse: { deferral: 0, catchUp: 0 } } };
-    const without = await planned({ documents: [doc], facts: known });
-    const withDeferral = await planned(withContribs({ documents: [doc] }, deferral, known));
+    const without = await planned({ payroll: [doc], facts: known });
+    const withDeferral = await planned(withContribs({ payroll: [doc] }, deferral, known));
     assert.deepEqual(withDeferral.info.blocked, []);
     near(r2(fig(without.db, 'agi.est').v - fig(withDeferral.db, 'agi.est').v), 5000, 'agi.est drop once known');
   });
@@ -597,14 +597,14 @@ const corp61 = (extra = {}) => ({
   entities: [{ name: CEDAR, type: 's_corp', owner: 'owner', income: 40000, expenses: { 'Officer salary': 15000, 'Payroll taxes': 1147.5 } }, SOLE_PROP],
   facts: { 'household.ownerAge': 61, ...(extra.facts || {}) },
 });
-const box3 = (employer, ss, wages = 140000) => ({ docType: 'w2', taxYear: 2025, fields: { employer, person: 'owner', wages, socialSecurityWages: ss } });
+const box3 = (employer, ss, wages = 140000) => w2Doc({ taxYear: 2025, employerName: employer, person: 'owner', wages, socialSecurityWages: ss });
 const ROOM_KEYS = ['room.solo401k', 'room.solo401k.employee', 'room.solo401k.employer', 'room.solo401k.catchUp', 'room.solo401k.rothCatchUp', 'room.solo401k.pretax'];
 
 describe('MG6 Roth catch-up', () => {
   test('MG6: an affected participant whose plan offers Roth gets Roth-only catch-up room', async () => {
     // Box 3 160,000 > 150,000: the 11,250 catch-up must be Roth. Pre-tax room 24,500 + 45,000 =
     // 69,500; total 69,500 + 11,250 = 80,750.
-    const { db } = await planned(corp61({ documents: [box3(CEDAR, 160000)], facts: { 'retirement.planOffersRoth': true } }));
+    const { db } = await planned(corp61({ payroll: [box3(CEDAR, 160000)], facts: { 'retirement.planOffersRoth': true } }));
     assert.equal(fig(db, 'room.solo401k.employee').v, 24500);
     assert.equal(fig(db, 'room.solo401k.employer').v, 45000);
     assert.equal(fig(db, 'room.solo401k.rothCatchUp').v, 11250);
@@ -617,7 +617,7 @@ describe('MG6 Roth catch-up', () => {
   test('MG6: an affected participant without a confirmed Roth feature has zero catch-up with a reason', async () => {
     // Sized with catch-up disabled: employee 24,500; catch-up 0; employer min(45,000, 47,500,
     // 180,000 - 24,500) = 45,000. rothCatchUp 0; pre-tax and total 69,500.
-    const unconfirmed = await planned(corp61({ documents: [box3(CEDAR, 160000)] }));
+    const unconfirmed = await planned(corp61({ payroll: [box3(CEDAR, 160000)] }));
     const roth = fig(unconfirmed.db, 'room.solo401k.rothCatchUp');
     assert.equal(roth.v, 0);
     assert.ok(notesOf(roth).includes(NOTE.rothConfirm), 'the zero names the missing confirmation');
@@ -627,7 +627,7 @@ describe('MG6 Roth catch-up', () => {
     absent(unconfirmed.db, 'room.solo401k.catchUp');
     assert.equal(unconfirmed.info.retireCatchUp, 'retirement.planOffersRoth');
 
-    const none = await planned(corp61({ documents: [box3(CEDAR, 160000)], facts: { 'retirement.planOffersRoth': false } }));
+    const none = await planned(corp61({ payroll: [box3(CEDAR, 160000)], facts: { 'retirement.planOffersRoth': false } }));
     const rothNone = fig(none.db, 'room.solo401k.rothCatchUp');
     assert.equal(rothNone.v, 0);
     assert.ok(notesOf(rothNone).includes(NOTE.rothNone), 'the zero names the plan without Roth');
@@ -637,7 +637,7 @@ describe('MG6 Roth catch-up', () => {
 
   test('MG6: exactly 150,000 is not affected', async () => {
     // "Exceeded" is strictly greater: 150,000 is not over, so the 11,250 catch-up may be pre-tax.
-    const { db, info } = await planned(corp61({ documents: [box3(CEDAR, 150000)] }));
+    const { db, info } = await planned(corp61({ payroll: [box3(CEDAR, 150000)] }));
     assert.equal(fig(db, 'room.solo401k.employee').v, 24500);
     assert.equal(fig(db, 'room.solo401k.catchUp').v, 11250);
     absent(db, 'room.solo401k.rothCatchUp');
@@ -658,8 +658,8 @@ describe('MG6 Roth catch-up', () => {
 
   test('MG6: box 1 wages never stand in for box 3', async () => {
     // A 2025 W-2 with box 1 wages 160,000 and no socialSecurityWages field leaves box 3 unknown.
-    const doc = { docType: 'w2', taxYear: 2025, fields: { employer: CEDAR, person: 'owner', wages: 160000 } };
-    const { db, info } = await planned(corp61({ documents: [doc] }));
+    const doc = w2Doc({ taxYear: 2025, employerName: CEDAR, person: 'owner', wages: 160000 });
+    const { db, info } = await planned(corp61({ payroll: [doc] }));
     absent(db, 'room.solo401k.rothCatchUp');
     absent(db, 'room.solo401k.catchUp');
     assert.equal(info.retireCatchUp, 'retirement.priorYearFicaWages');
@@ -693,17 +693,17 @@ describe('MG6 Roth catch-up', () => {
     // 11,250. Without confirmation catch-up is disabled: employer min(12,500, 47,500, 25,500) =
     // 12,500, x 37,000, no Roth figure. Box 3 140,000 (not affected): x 48,250.
     const facts = { 'household.ownerAge': 61 };
-    const roth = await planned({ documents: [box3(SCORP.name, 160000, 120000)], facts: { ...facts, 'retirement.planOffersRoth': true } });
+    const roth = await planned({ payroll: [box3(SCORP.name, 160000, 120000)], facts: { ...facts, 'retirement.planOffersRoth': true } });
     assert.equal(fig(roth.db, 'wg.salary.s50.x').v, 37000);
     assert.equal(fig(roth.db, 'wg.salary.s50.roth').v, 11250);
     assert.equal(contentValue(roth.db, 'wargame').salary.xLabel, 'Pre-tax retirement room');
 
-    const unconfirmed = await planned({ documents: [box3(SCORP.name, 160000, 120000)], facts });
+    const unconfirmed = await planned({ payroll: [box3(SCORP.name, 160000, 120000)], facts });
     assert.equal(fig(unconfirmed.db, 'wg.salary.s50.x').v, 37000);
     absent(unconfirmed.db, 'wg.salary.s50.roth');
     assert.match(contentValue(unconfirmed.db, 'wargame').salary.takeaway, /confirm your plan offers Roth deferrals/i);
 
-    const clear = await planned({ documents: [box3(SCORP.name, 140000, 120000)], facts });
+    const clear = await planned({ payroll: [box3(SCORP.name, 140000, 120000)], facts });
     assert.equal(fig(clear.db, 'wg.salary.s50.x').v, 48250);
     absent(clear.db, 'wg.salary.s50.roth');
   });
@@ -712,8 +712,8 @@ describe('MG6 Roth catch-up', () => {
     // An owner outside W-2 with no deferral field: allPlanDeferrals is unknown, and at low
     // compensation the employer room depends on it (50,000 salary: 37,000 if zero, 12,500 if
     // 24,500), so nothing sized from it is published. SEP room does not depend on it.
-    const doc = { docType: 'w2', taxYear: 2026, fields: { employer: 'Example Employer Inc', person: 'owner', wages: 200000 } };
-    const { db, info } = await planned({ documents: [doc] });
+    const doc = w2Doc({ employerName: 'Example Employer Inc', person: 'owner', relation: 'outside', wages: 200000 });
+    const { db, info } = await planned({ payroll: [doc] });
     for (const k of ROOM_KEYS) absent(db, k, 'outside deferrals unknown');
     assert.ok(figureRow(db, 'room.sep'), 'room.sep still produced');
     assert.equal(db.prepare("SELECT count(*) AS n FROM figures WHERE key LIKE 'wg.salary.%'").get().n, 0, 'no salary war-game figures');
@@ -734,7 +734,7 @@ describe('MG6 Roth catch-up', () => {
     // CORP61, outside deferrals 24,500, box 3 140,000: employee 0; catch-up
     // min(11,250 - 0, 180,000) = 11,250; employer min(45,000, 72,000, 180,000 - 11,250) = 45,000.
     // Pre-tax 0 + 45,000 + 11,250 = 56,250 = total.
-    const { db } = await planned(corp61({ documents: [box3(CEDAR, 140000)], facts: { 'retirement.otherPlanDeferrals': { owner: { deferral: 24500, catchUp: 0 } } } }));
+    const { db } = await planned(corp61({ payroll: [box3(CEDAR, 140000)], facts: { 'retirement.otherPlanDeferrals': { owner: { deferral: 24500, catchUp: 0 } } } }));
     assert.equal(fig(db, 'room.solo401k.employee').v, 0);
     assert.equal(fig(db, 'room.solo401k.catchUp').v, 11250);
     assert.equal(fig(db, 'room.solo401k.employer').v, 45000);
@@ -750,7 +750,7 @@ describe('MG6 Roth catch-up', () => {
     // pre-tax 24,500; total 30,000.
     const small = (facts = {}) => ({
       entities: [{ name: CEDAR, type: 's_corp', owner: 'owner', income: 10000, expenses: { 'Officer salary': 2500, 'Payroll taxes': 191.25 } }, SOLE_PROP],
-      documents: [box3(CEDAR, 160000, 150000)],
+      payroll: [box3(CEDAR, 160000, 150000)],
       facts: { 'household.ownerAge': 61, ...facts },
     });
     const off = await planned(small());
@@ -779,7 +779,7 @@ describe('MG6 Roth catch-up', () => {
 // college account with a 1,000 March contribution; Virginia top rate 5.75% above 17,000.
 describe('MG9 Virginia529', () => {
   const va529 = async entry => {
-    const db = S.store();
+    const db = await S.store();
     addFact(db, 'accounts.va529', { [accountIdByMask(db, MASKS.college)]: entry });
     await plan(db);
     return { db, info: computeFor(db).info };

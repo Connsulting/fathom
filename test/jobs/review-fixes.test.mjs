@@ -10,7 +10,7 @@ import { sepRoom } from '../../src/calc/index.mjs';
 import { recAction } from '../../src/api/handlers.mjs';
 import { createCannedAnswerer } from '../../src/api/answerer.mjs';
 import {
-  scratch, ingestFile, addDocument, addFact, accountIdByMask, contentValue, figureRow, recRow, plannerRec, activeRecIds,
+  scratch, addFile, addPayroll, w2Doc, paystubDoc, addFact, accountIdByMask, contentValue, figureRow, recRow, plannerRec, activeRecIds,
   recEvents, PACKS_DIR, SCORP, SOLE_PROP, MASKS, INST, OWNER_FACTS,
 } from '../helpers/real-store.mjs';
 
@@ -58,7 +58,7 @@ function assertNoRawMarkup(db) {
 describe('review fixes', () => {
   test('AC4: an unclassified P&L entity name with markup reaches missing-data prose only HTML-escaped (F1)', async () => {
     const evilEntity = { name: `Acme ${EVIL} Works`, type: null, owner: 'owner', income: 1000, expenses: { Supplies: 100 }, doc: false };
-    const db = S.store({ variant: { entities: [SCORP, SOLE_PROP, evilEntity] } });
+    const db = await S.store({ variant: { entities: [SCORP, SOLE_PROP, evilEntity] } });
     await plan(db);
     assert.ok(activeRecIds(db).includes('missing-data'), 'missing-data asks how the entity is taxed');
     assertNoRawMarkup(db);
@@ -66,11 +66,11 @@ describe('review fixes', () => {
   });
 
   test('AC4: an imported account name with markup in a va529 task is HTML-escaped (F1)', async () => {
-    const db = S.store();
+    const db = await S.store();
     const grand = '7777';
-    ingestFile(db, aggregatorFile('aggregator-grandparent.csv', [
+    await addFile(db, aggregatorFile('aggregator-grandparent.csv', [
       ['2026-05-10', '529', `Grandparent 529 ${EVIL}`, grand, INST.college, '-500.00', 'College plan deposit', 'Deposit'],
-    ]), { accountHints: { [`${INST.college}|${grand}`]: { kind: '529', owner: null } } });
+    ]), { answers: { hints: { [`${INST.college}|${grand}`]: { kind: '529', owner: null } } } });
     const college = accountIdByMask(db, MASKS.college);
     const other = accountIdByMask(db, grand);
     addFact(db, 'accounts.va529', {
@@ -85,11 +85,12 @@ describe('review fixes', () => {
 
   test('AC3: a second partnership with no K-1 blocks household tax figures and missing-data lists it (F2)', async () => {
     const partners = [
-      { docType: 'entity', taxYear: null, fields: { name: 'Alder Partners', type: 'partnership', owner: 'owner' } },
-      { docType: 'entity', taxYear: null, fields: { name: 'Birch Partners', type: 'partnership', owner: 'owner' } },
+      { name: 'Alder Partners', type: 'partnership', owner: 'owner', income: 0, expenses: {} },
+      { name: 'Birch Partners', type: 'partnership', owner: 'owner', income: 0, expenses: {} },
     ];
-    const k1 = name => ({ docType: 'k1', taxYear: 2026, fields: { partnership: name, entity: name, payer: name, form: '1065', person: 'owner', ordinaryIncome: 30000, guaranteedPayments: 10000, seEarnings: 40000 } });
-    const db = S.store({ variant: { documents: [...partners, k1('Alder Partners')] } });
+    // K-1s carry no partnership name in ingest's extraction shape (plan R6-0).
+    const k1 = () => ({ docType: 'k1', fields: { taxYear: 2026, entityKind: 'partnership', ordinaryIncome: 30000, guaranteedPayments: 10000, selfEmploymentEarnings: 40000 } });
+    const db = await S.store({ variant: { entities: [SCORP, SOLE_PROP, ...partners], payroll: [k1()] } });
     const result = await plan(db);
     assert.equal(figureRow(db, 'agi.est'), null, 'agi.est not produced');
     assert.equal(figureRow(db, 'tax.fed.proj'), null, 'tax.fed.proj not produced');
@@ -97,16 +98,16 @@ describe('review fixes', () => {
     const md = JSON.stringify(recRow(db, 'missing-data').def);
     assert.ok(result.warnings.includes('partnership_incomplete') || /K-1|partnership/i.test(md), 'missing-data names the incomplete partnership');
     // liveness: with a complete K-1 for each partnership the figures are produced
-    const both = S.store({ variant: { documents: [...partners, k1('Alder Partners'), k1('Birch Partners')] } });
+    const both = await S.store({ variant: { entities: [SCORP, SOLE_PROP, ...partners], payroll: [k1(), k1()] } });
     await plan(both);
     assert.ok(figureRow(both, 'agi.est'), 'agi.est with both K-1s');
   });
 
   test('AC3: W-2 wages from a classified S corp with no P&L count in agi.est (F3)', async () => {
-    const corp = { docType: 'entity', taxYear: null, fields: { name: 'Cedar Holdings', type: 's_corp', owner: 'owner' } };
+    const corp = { name: 'Cedar Holdings', type: 's_corp', owner: 'owner', income: 0, expenses: {} };
     const wages = 40000;
-    const without = S.store({ variant: { documents: [corp] } });
-    const withW2 = S.store({ variant: { documents: [corp, { docType: 'w2', taxYear: 2026, fields: { employer: 'Cedar Holdings', person: 'owner', wages } }] } });
+    const without = await S.store({ variant: { entities: [SCORP, SOLE_PROP, corp] } });
+    const withW2 = await S.store({ variant: { entities: [SCORP, SOLE_PROP, corp], payroll: [w2Doc({ employerName: 'Cedar Holdings', person: 'owner', relation: 'household', wages })] } });
     await plan(without);
     await plan(withW2);
     const a = figureRow(without, 'agi.est');
@@ -116,14 +117,14 @@ describe('review fixes', () => {
   });
 
   test('AC3: married filing separately blocks household tax figures with mfs_unsupported (F4)', async () => {
-    const db = S.store({ variant: { facts: { 'household.filingStatus': 'mfs' } } });
+    const db = await S.store({ variant: { facts: { 'household.filingStatus': 'mfs' } } });
     await plan(db);
     for (const key of ['agi.est', 'tax.fed.proj', 'tax.fed.taxable', 'tax.va.proj', 'sh.fed.required', 'room.ira.household']) {
       assert.equal(figureRow(db, key), null, `${key} not produced for mfs`);
     }
     assert.ok(activeRecIds(db).includes('missing-data'), 'missing-data fires');
     // a store that switches to mfs parks its tax recs with the reason
-    const sw = S.store();
+    const sw = await S.store();
     await plan(sw);
     addFact(sw, 'household.filingStatus', 'mfs');
     await plan(sw);
@@ -134,12 +135,12 @@ describe('review fixes', () => {
   });
 
   test('AC3: a Roth IRA contribution reduces the owner IRA room and the household room (F5)', async () => {
-    const db = S.store();
+    const db = await S.store();
     const mask = '8888';
     const inst = 'Sample Brokerage';
-    ingestFile(db, aggregatorFile('aggregator-roth.csv', [
+    await addFile(db, aggregatorFile('aggregator-roth.csv', [
       ['2026-04-01', 'Roth IRA', 'Roth IRA', mask, inst, '-2000.00', 'IRA deposit', 'IRA contribution'],
-    ]), { accountHints: { [`${inst}|${mask}`]: { name: 'Roth IRA', kind: 'roth', owner: 'owner' } } });
+    ]), { answers: { hints: { [`${inst}|${mask}`]: { name: 'Roth IRA', kind: 'roth', owner: 'owner' } } } });
     await plan(db);
     assert.equal(figureRow(db, 'room.ira.owner').v, 7500 - 2000);
     assert.equal(figureRow(db, 'room.ira.spouse').v, 7500, 'the spouse room is untouched');
@@ -147,12 +148,12 @@ describe('review fixes', () => {
   });
 
   test('AC4: an IRA with no balance on file makes that person pro-rata unknown, never clear (F6)', async () => {
-    const db = S.store();
+    const db = await S.store();
     const mask = '9999';
     const inst = 'Sample Brokerage';
-    ingestFile(db, aggregatorFile('aggregator-ira.csv', [
+    await addFile(db, aggregatorFile('aggregator-ira.csv', [
       ['2026-06-01', 'IRA', 'Traditional IRA', mask, inst, '25.00', 'Account fee', 'Fees'],
-    ]), { accountHints: { [`${inst}|${mask}`]: { name: 'Traditional IRA', kind: 'retirement', owner: 'spouse' } } });
+    ]), { answers: { hints: { [`${inst}|${mask}`]: { name: 'Traditional IRA', kind: 'retirement', owner: 'spouse' } } } });
     await plan(db);
     assert.ok(activeRecIds(db).includes('backdoor-roth'));
     const def = recRow(db, 'backdoor-roth').def;
@@ -160,14 +161,14 @@ describe('review fixes', () => {
     const confirmBalance = /\b(confirm|tell us|upload|add|enter)\b[^.]*\bbalance\b/i;
     assert.ok(def.tasks.some(t => confirmBalance.test(t.t)), 'a task asks to confirm the IRA balance');
     // liveness: with every IRA balance on file no such task appears
-    const base = S.store();
+    const base = await S.store();
     await plan(base);
     assert.ok(!recRow(base, 'backdoor-roth').def.tasks.some(t => confirmBalance.test(t.t)));
   });
 
   test('AC3: SEP room for a sole proprietor with outside wages above the wage base passes those wages (F7)', async () => {
     const outside = 200000;
-    const db = S.store({ variant: { documents: [{ docType: 'w2', taxYear: 2026, fields: { employer: 'Example Employer Inc', person: 'spouse', wages: outside } }] } });
+    const db = await S.store({ variant: { payroll: [w2Doc({ employerName: 'Example Employer Inc', person: 'spouse', relation: 'outside', wages: outside })] } });
     await plan(db);
     const expected = sepRoom({ kind: 'self-employed', netProfit: SP, filingStatus: 'mfj', w2SocialSecurityWages: outside, w2MedicareWages: outside, employerContributions: 0, ...CONF }).value;
     const naive = sepRoom({ kind: 'self-employed', netProfit: SP, filingStatus: 'mfj', employerContributions: 0, ...CONF }).value;
@@ -177,7 +178,7 @@ describe('review fixes', () => {
 
   test('AC3: outside wages produce inc.ytd.w2 and inc.ytd.total sums every income figure (F8)', async () => {
     const entitySum = db => r2(db.prepare("SELECT key, v FROM figures WHERE key LIKE 'inc.ytd.%' AND key NOT IN ('inc.ytd.total', 'inc.ytd.w2')").all().reduce((a, r) => a + r.v, 0));
-    const base = S.store();
+    const base = await S.store();
     await plan(base);
     const total = figureRow(base, 'inc.ytd.total');
     assert.ok(total, 'inc.ytd.total on the base set');
@@ -185,7 +186,7 @@ describe('review fixes', () => {
     near(total.v, entitySum(base), 'base inc.ytd.total');
     near(total.v, 10 * (SCORP.income + SOLE_PROP.income), 'base total from the P&L');
 
-    const db = S.store({ variant: { documents: [{ docType: 'paystub', taxYear: 2026, fields: { employer: 'Example Employer Inc', person: 'spouse', periodEnd: '2026-10-31', wagesYtd: 50000 } }] } });
+    const db = await S.store({ variant: { payroll: [paystubDoc({ employerName: 'Example Employer Inc', person: 'spouse', relation: 'outside', payDate: '2026-10-31', periodStart: '2026-10-16', periodEnd: '2026-10-31', ytdGross: 50000, retirementDeferral: 0, hsaDeferral: 0 })] } });
     await plan(db);
     const w2 = figureRow(db, 'inc.ytd.w2');
     assert.ok(w2, 'inc.ytd.w2');
@@ -197,7 +198,7 @@ describe('review fixes', () => {
   });
 
   test('AC4: a calculator that starts throwing parks its rec as waiting instead of retiring it, and recovers (F9)', async () => {
-    const db = S.store();
+    const db = await S.store();
     await plan(db);
     recAction(ctxOf(db, { id: 'hsa-room' }, { action: 'accept' }));
     addFact(db, 'household.ownerAge', 200); // outside the calculator age range
@@ -227,11 +228,11 @@ describe('review fixes', () => {
       }
       assert.deepEqual(missing, []);
     };
-    const base = S.store();
+    const base = await S.store();
     await plan(base);
     check(base);
 
-    const db = S.store();
+    const db = await S.store();
     db.prepare('DELETE FROM transactions WHERE account_id = ?').run(accountIdByMask(db, MASKS.college));
     await plan(db);
     assert.ok(activeRecIds(db).includes('va529'), 'the eligible account still has deduction room');
@@ -243,22 +244,22 @@ describe('review fixes', () => {
 describe('review fixes, round two', () => {
   test('AC3: a spouse W-2 from the household S corp adds exactly its box 1 wages to agi.est (G1)', async () => {
     const spouseWages = 30000;
-    const base = S.store();
-    const withSpouse = S.store({ variant: { documents: [{ docType: 'w2', taxYear: 2026, fields: { employer: SCORP.name, person: 'spouse', wages: spouseWages } }] } });
+    const base = await S.store();
+    const withSpouse = await S.store({ variant: { payroll: [w2Doc({ employerName: SCORP.name, person: 'spouse', wages: spouseWages })] } });
     await plan(base);
     await plan(withSpouse);
     near(r2(figureRow(withSpouse, 'agi.est').v - figureRow(base, 'agi.est').v), spouseWages, 'agi.est rises by the spouse wages');
     // the owner's own-corp wages come from the P&L: an owner W-2 from the same corp is not added again
-    const withOwner = S.store({ variant: { documents: [{ docType: 'w2', taxYear: 2026, fields: { employer: SCORP.name, person: 'owner', wages: 12 * SCORP.expenses['Officer salary'] } }] } });
+    const withOwner = await S.store({ variant: { payroll: [w2Doc({ employerName: SCORP.name, person: 'owner', wages: 12 * SCORP.expenses['Officer salary'] })] } });
     await plan(withOwner);
     near(figureRow(withOwner, 'agi.est').v, figureRow(base, 'agi.est').v, 'owner own-corp wages not double counted');
   });
 
   test('AC4: SEP room alone does not raise the year-end retirement rec (G2)', async () => {
-    const db = S.store({
+    const db = await S.store({
       variant: {
         entities: [SOLE_PROP],
-        documents: [{ docType: 'w2', taxYear: 2026, fields: { employer: 'Example Employer Inc', person: 'spouse', wages: 50000, deferral401k: 24500 } }],
+        payroll: [w2Doc({ employerName: 'Example Employer Inc', person: 'spouse', relation: 'outside', wages: 50000, box12: [{ code: 'D', amount: 24500 }] })],
         facts: { 'business.salaryRange': undefined },
       },
     });
@@ -271,7 +272,7 @@ describe('review fixes, round two', () => {
   });
 
   test('AC4: a solo 401(k) calculator failure parks year-end-retirement as waiting even with spouse SEP room (G2)', async () => {
-    const db = S.store();
+    const db = await S.store();
     await plan(db);
     assert.ok(activeRecIds(db).includes('year-end-retirement'));
     assert.ok(figureRow(db, 'room.sep').v > 0, 'the spouse has SEP room');
@@ -293,7 +294,7 @@ describe('review fixes, round two', () => {
 
   test('AC6: every salary war-game point stays inside an approved range that is not on thousands (G3)', async () => {
     const range = { min: 50400, max: 110400 };
-    const db = S.store({ variant: { facts: { 'business.salaryRange': range } } });
+    const db = await S.store({ variant: { facts: { 'business.salaryRange': range } } });
     await plan(db);
     const salary = contentValue(db, 'wargame').salary;
     assert.ok(salary && salary.points.length >= 2, 'salary war game built');
@@ -315,7 +316,7 @@ describe('review fixes, round two', () => {
 
 describe('review fixes, round three', () => {
   test('AC4: a Virginia itemized gap parks the salary and deferral recs as waiting and restores them (H1)', async () => {
-    const db = S.store();
+    const db = await S.store();
     await plan(db);
     for (const id of ['scorp-salary', 'invoice-deferral']) assert.ok(activeRecIds(db).includes(id), `${id} fires first`);
     recAction(ctxOf(db, { id: 'scorp-salary' }, { action: 'accept' }));
@@ -343,9 +344,9 @@ describe('review fixes, round three', () => {
 
   test('AC3: an owner-set pre-tax own-corp deferral lowers agi.est by its amount; a Roth one does not (H2)', async () => {
     const record = { person: 'owner', plan: 'own-corp-401k', type: 'deferral', roth: false, amount: 10000 };
-    const base = S.store();
-    const pretax = S.store({ variant: { facts: { 'retirement.contributions': [record] } } });
-    const roth = S.store({ variant: { facts: { 'retirement.contributions': [{ ...record, roth: true }] } } });
+    const base = await S.store();
+    const pretax = await S.store({ variant: { facts: { 'retirement.contributions': [record] } } });
+    const roth = await S.store({ variant: { facts: { 'retirement.contributions': [{ ...record, roth: true }] } } });
     await plan(base);
     await plan(pretax);
     await plan(roth);
@@ -356,7 +357,7 @@ describe('review fixes, round three', () => {
 
   test('AC6: an S corp with no officer salary still gets a salary war game inside the range with no current point (H3)', async () => {
     const noSalary = { ...SCORP, expenses: { Software: SCORP.expenses.Software } };
-    const db = S.store({ variant: { entities: [noSalary, SOLE_PROP] } });
+    const db = await S.store({ variant: { entities: [noSalary, SOLE_PROP] } });
     await plan(db);
     assert.ok(activeRecIds(db).includes('scorp-salary'), 'scorp-salary fires');
     const salary = contentValue(db, 'wargame').salary;
@@ -374,8 +375,8 @@ describe('review fixes, round four', () => {
   test('AC3: an own-corp deferral record does not reduce W-2 box 1 wages that already exclude it (I1)', async () => {
     const record = { person: 'owner', plan: 'own-corp-401k', type: 'deferral', roth: false, amount: 10000 };
     const agiPair = async variant => {
-      const without = S.store({ variant });
-      const withRecord = S.store({ variant: { ...variant, facts: { ...(variant.facts || {}), 'retirement.contributions': [record] } } });
+      const without = await S.store({ variant });
+      const withRecord = await S.store({ variant: { ...variant, facts: { ...(variant.facts || {}), 'retirement.contributions': [record] } } });
       await plan(without);
       await plan(withRecord);
       const a = figureRow(without, 'agi.est');
@@ -387,18 +388,15 @@ describe('review fixes, round four', () => {
     // A classified S corp with no P&L lines; its wages come only from the W-2.
     const cedar = 'Cedar Holdings';
     const [docOnly, docOnlyWithRecord] = await agiPair({
-      entities: [SOLE_PROP],
-      documents: [
-        { docType: 'entity', taxYear: null, fields: { name: cedar, type: 's_corp', owner: 'owner' } },
-        { docType: 'w2', taxYear: 2026, fields: { employer: cedar, person: 'owner', wages: 60000 } },
-      ],
+      entities: [SOLE_PROP, { name: cedar, type: 's_corp', owner: 'owner', income: 0, expenses: {} }],
+      payroll: [w2Doc({ employerName: cedar, person: 'owner', relation: 'household', wages: 60000 })],
     });
     near(docOnlyWithRecord, docOnly, 'S corp without P&L: the record leaves agi.est unchanged');
 
     // The S corp has P&L lines but no officer salary; wages again come from the W-2.
     const [noSalary, noSalaryWithRecord] = await agiPair({
       entities: [{ ...SCORP, expenses: { Software: SCORP.expenses.Software } }, SOLE_PROP],
-      documents: [{ docType: 'w2', taxYear: 2026, fields: { employer: SCORP.name, person: 'owner', wages: 60000 } }],
+      payroll: [w2Doc({ employerName: SCORP.name, person: 'owner', wages: 60000 })],
     });
     near(noSalaryWithRecord, noSalary, 'S corp with zero P&L salary: the record leaves agi.est unchanged');
   });

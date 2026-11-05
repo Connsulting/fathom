@@ -37,7 +37,7 @@ const P = r2((M * (SCORP.income - Object.values(SCORP.expenses).reduce((a, b) =>
 
 let base;
 before(async () => {
-  base = S.store();
+  base = await S.store();
   await plan(base);
 });
 
@@ -50,7 +50,7 @@ describe('narrative content', () => {
   });
 
   test('AC6: names come from a household.names fact, merged over the neutral labels', async () => {
-    const db = S.store();
+    const db = await S.store();
     addFact(db, 'household.names', { me: 'Robin Testcase', household: 'The Testcase household' });
     await plan(db);
     const names = contentValue(db, 'names');
@@ -107,7 +107,7 @@ describe('what changed', () => {
   });
 
   test('AC6: a second identical run leaves events unchanged', async () => {
-    const db = S.store();
+    const db = await S.store();
     await plan(db);
     const before = db.prepare('SELECT * FROM events ORDER BY id').all().map(r => ({ ...r }));
     await plan(db);
@@ -115,7 +115,7 @@ describe('what changed', () => {
   });
 
   test('AC6: after a retirement the events list the retired rec and the fact change', async () => {
-    const db = S.store();
+    const db = await S.store();
     await plan(db);
     const title = recRow(db, 'va529').def.title;
     db.prepare("DELETE FROM transactions WHERE category = 'Charitable'").run();
@@ -262,7 +262,7 @@ describe('war games', () => {
       assert.equal(demoScenario.fig[`wg.salary.${p.id}.x`].src, 'wargame-model');
     }
 
-    const db = S.store();
+    const db = await S.store();
     await plan(db);
     const p = loadContent(db).wargame.salary.points[0];
     db.prepare('UPDATE figures SET v = ? WHERE key = ?').run(12345.67, `wg.salary.${p.id}.x`);
@@ -272,7 +272,7 @@ describe('war games', () => {
   });
 
   test('AC6: in January the deferral model is not rebuilt and the previous one is kept (S11)', async () => {
-    const db = S.store();
+    const db = await S.store();
     await plan(db);
     const before = loadContent(db).wargame.deferral;
     await plan(db, '2027-01-10');

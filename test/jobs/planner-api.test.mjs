@@ -48,7 +48,7 @@ async function serve(db, config, engine = null) {
 describe('runPlanning', () => {
   test('AC1: runPlanning returns the result shape and PLAN_JOB_ID is plan', async () => {
     assert.equal(PLAN_JOB_ID, 'plan');
-    const db = S.store();
+    const db = await S.store();
     const result = await plan(db);
     assert.equal(result.status, 'ok');
     assert.ok(Number.isInteger(result.runId));
@@ -68,7 +68,7 @@ describe('runPlanning', () => {
   });
 
   test('AC1: each run inserts the plan job once and one job_runs row with status ok and a counts-only note', async () => {
-    const db = S.store();
+    const db = await S.store();
     const first = await plan(db);
     const second = await plan(db);
     const job = db.prepare("SELECT * FROM jobs WHERE id = 'plan'").get();
@@ -91,7 +91,7 @@ describe('runPlanning', () => {
   });
 
   test('AC1: a failing run marks its job_runs row error with the class name only, and rethrows', async () => {
-    const db = S.store();
+    const db = await S.store();
     const missing = join(S.dir(), 'no-such-packs');
     await assert.rejects(plan(db, { packDirs: [missing] }));
     const run = db.prepare("SELECT * FROM job_runs WHERE job_id = 'plan' ORDER BY id DESC").get();
@@ -113,14 +113,14 @@ describe('runPlanning', () => {
     await assert.rejects(plan(db), err => err instanceof PlannerError && err.code === 'demo_store');
     assert.deepEqual(allTables(db), before, 'demo store unchanged');
     // liveness: a real store is accepted
-    assert.equal((await plan(S.store())).status, 'ok');
+    assert.equal((await plan(await S.store())).status, 'ok');
   });
 
   test('AC1: two concurrent runs both complete and leave the same state as one run', async () => {
     const slow = { async call() { await new Promise(r => setTimeout(r, 2)); throw new Error('synthetic engine failure'); } };
-    const one = S.store();
+    const one = await S.store();
     await plan(one, { engine: slow });
-    const two = S.store();
+    const two = await S.store();
     const results = await Promise.all([plan(two, { engine: slow }), plan(two, { engine: slow })]);
     assert.deepEqual(results.map(r => r.status), ['ok', 'ok']);
     assert.notEqual(results[0].runId, results[1].runId);
@@ -133,7 +133,7 @@ describe('runPlanning', () => {
   });
 
   test('AC1: a second run over the same data writes nothing that changes (idempotent)', async () => {
-    const db = S.store();
+    const db = await S.store();
     await plan(db);
     const keepStamps = ['recs', 'figures'];
     const others = ['facts', 'sources', 'rec_events', 'planner_recs', 'content', 'deadlines', 'decisions', 'events', 'packs_state'];
@@ -158,7 +158,7 @@ describe('POST /api/jobs/plan/run', () => {
 
   test('AC1: on a real store the endpoint plans and returns the scenario with planner recs and the run', async () => {
     const dir = S.dir();
-    const db = S.track(buildRealStore(dir));
+    const db = S.track(await buildRealStore(dir));
     const app = await serve(db, realConfig(dir));
     try {
       const r = await postJson(app.baseUrl, '/api/jobs/plan/run', {});
@@ -195,7 +195,7 @@ describe('npm run plan (src/jobs/plan-cli.mjs)', () => {
 
   test('AC1: the CLI plans a real store, exits 0 and prints counts without amounts', async () => {
     const dir = S.dir();
-    buildRealStore(dir).close();
+    (await buildRealStore(dir)).close();
     const out = await cli({ FATHOM_DATA: dir });
     assert.equal(out.code, 0, out.stderr);
     const counts = out.stdout.split('\n').map(l => parseJson(l.trim(), null)).find(x => x && typeof x === 'object' && x.recs);

@@ -47,7 +47,7 @@ test.beforeAll(async () => {
   const { resolveTokens } = await import('../src/shared/tokens.mjs');
 
   rmSync(DIR, { recursive: true, force: true });
-  const db = buildRealStore(DIR, { clock: CLOCK, variant: { facts: { 'household.names': { advisor: ADVISOR } } } });
+  const db = await buildRealStore(DIR, { clock: CLOCK, variant: { facts: { 'household.names': { advisor: ADVISOR } } } });
   try {
     expect((await runPlanning(db, null, { now: CLOCK })).status).toBe('ok');
     db.prepare('INSERT OR IGNORE INTO conversations (key, created_at) VALUES (?, ?)').run(THREAD_REC, `${CLOCK}T09:00:00.000Z`);

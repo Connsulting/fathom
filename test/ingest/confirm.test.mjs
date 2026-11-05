@@ -275,7 +275,8 @@ describe('fact check', () => {
     assert.deepEqual(F.upsertFact(s.db, { key: 'household.state', value: 'NM', src: 'extract', asOf: '2032-03-02', provenance: { fileId: r.fileId } }), { written: false, reason: 'confirmed' });
     assert.equal(F.getFacts(s.db)['household.state'], 'CO');
     assert.deepEqual(F.upsertFact(s.db, { key: 'household.dependents', value: 1, src: 'extract', asOf: '2032-03-02', provenance: { fileId: r.fileId } }), { written: true, changed: true });
-    assert.deepEqual(F.upsertFact(s.db, { key: 'household.dependents', value: 1, src: 'extract', asOf: '2032-03-02', provenance: { fileId: r.fileId } }), { written: true, changed: false });
+    // MGI4 (plan R6-4): an identical write is a no-op.
+    assert.deepEqual(F.upsertFact(s.db, { key: 'household.dependents', value: 1, src: 'extract', asOf: '2032-03-02', provenance: { fileId: r.fileId } }), { written: false, changed: false, reason: 'unchanged' });
     F.deleteFact(s.db, 'household.dependents', { fileId: 'f-ffffffffffffffffffffffff' });
     assert.equal(F.getFacts(s.db)['household.dependents'], 1, 'another file cannot delete it');
     F.deleteFact(s.db, 'household.state', { fileId: r.fileId });

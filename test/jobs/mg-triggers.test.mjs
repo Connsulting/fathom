@@ -30,7 +30,7 @@ import { HttpError } from '../../src/api/http.mjs';
 import { callTool } from '../../src/tools/index.mjs';
 import { esc, resolveTokens } from '../../src/shared/tokens.mjs';
 import {
-  scratch, addFact, removeFact, addDocument, ingestFile, pnlWorkbook, accountIdByMask, contentValue, recRow,
+  scratch, addFact, removeFact, addPayroll, addFile, w2Doc, factRow, pnlWorkbook, accountIdByMask, contentValue, recRow,
   plannerRec, recEvents, activeRecIds, parseJson, PACKS_DIR, MASKS,
 } from '../helpers/real-store.mjs';
 
@@ -504,7 +504,7 @@ test('MG13: D5 (O1) a bare 529 fails only the planner-side check', () => {
 const unescape = s => String(s).replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
 
 test('MG13: every template on the synthetic household passes the planner check', async () => {
-  const db = S.store();
+  const db = await S.store();
   await plan(db);
   const scenario = buildScenario(db, { clock: NOW });
   const allowed = {
@@ -526,7 +526,7 @@ for (const [what, tamper] of [
   ['qa answer', def => { def.qa = [{ q: 'How much?', a: ['Set aside 2026 dollars.'] }]; }],
 ]) {
   test(`MG13: previously accepted bad prose in an existing store is replaced on the next run (${what})`, async () => {
-    const db = S.store();
+    const db = await S.store();
     await plan(db);
     const id = 'fed-q4-estimate';
     const template = recRow(db, id).def;
@@ -547,7 +547,7 @@ for (const [what, tamper] of [
 }
 
 test('MG13: unchanged stored prose that passes the check is kept on the next run', async () => {
-  const db = S.store();
+  const db = await S.store();
   await plan(db);
   const before = recRow(db, 'fed-q4-estimate').def;
   const result = await plan(db);
@@ -559,7 +559,7 @@ test('MG13: unchanged stored prose that passes the check is kept on the next run
 // ================================================================ MG14: names and kb excerpts as text (D1)
 
 test('MG14: markup in a name renders as text', async () => {
-  const db = S.store();
+  const db = await S.store();
   addFact(db, 'household.names', { advisor: EVIL, me: EVIL });
   await plan(db);
   const names = contentValue(db, 'names');
@@ -575,7 +575,7 @@ test('MG14: markup in a name renders as text', async () => {
 });
 
 test('MG14: an ampersand in a name shows once', async () => {
-  const db = S.store();
+  const db = await S.store();
   addFact(db, 'household.names', { household: 'Lee & Park', advisor: 'Lee & Park Advisory' });
   await plan(db);
   assert.equal(contentValue(db, 'names').household, 'Lee & Park');
@@ -630,7 +630,7 @@ const pickRefused = (db, name, clock = NOW) => assert.throws(
 const decisionRow = (db, id) => db.prepare('SELECT * FROM decisions WHERE id = ?').get(id);
 
 test('MG12: a salary war game whose inputs became invalid stays as history and is not selectable', async () => {
-  const db = S.store();
+  const db = await S.store();
   await plan(db);
   const before = contentValue(db, 'wargame').salary;
   assert.ok(before && before.points.length > 1);
@@ -653,7 +653,7 @@ test('MG12: a salary war game whose inputs became invalid stays as history and i
 });
 
 test('MG12: restoring the inputs clears the marker', async () => {
-  const db = S.store();
+  const db = await S.store();
   await plan(db);
   const range = parseJson(db.prepare("SELECT value FROM facts WHERE key = 'business.salaryRange'").get().value);
   removeFact(db, 'business.salaryRange');
@@ -671,7 +671,7 @@ test('MG12: restoring the inputs clears the marker', async () => {
 });
 
 test('MG12: a decided salary decision stays decided when the game becomes unavailable', async () => {
-  const db = S.store();
+  const db = await S.store();
   await plan(db);
   db.prepare("UPDATE decisions SET status = 'decided' WHERE id = 'salary-2026'").run();
   removeFact(db, 'business.salaryRange');
@@ -683,10 +683,10 @@ test('MG12: a decided salary decision stays decided when the game becomes unavai
 // Source: IRC 402(g)(1) (one regular deferral limit per person across plans, so unknown outside
 // deferrals leave every dependent room figure unknown).
 test('MG12: a built salary game becomes unavailable when outside deferrals become unknown', async () => {
-  const db = S.store();
+  const db = await S.store();
   await plan(db);
   assert.ok(contentValue(db, 'wargame').salary);
-  addDocument(db, { docType: 'w2', taxYear: 2026, fields: { employer: 'Example Employer Inc', person: 'owner', wages: 200000 } });
+  await addPayroll(db, w2Doc({ employerName: 'Example Employer Inc', person: 'owner', relation: 'outside', wages: 200000 }));
   await plan(db);
   const g = contentValue(db, 'wargame').salary;
   assert.equal(typeof g.unavailable, 'string');
@@ -701,7 +701,7 @@ const JAN = '2027-01-10';
 
 // Source: Va. Code 58.1-322.03(7) (the carryforward is needed to know the Virginia deduction).
 test('MG12: a deferral game valid in October becomes unavailable in January when its inputs break', async () => {
-  const db = S.store();
+  const db = await S.store();
   await plan(db, '2026-10-31');
   const october = contentValue(db, 'wargame').deferral;
   assert.ok(october && october.options.length === 3, 'the October run built the deferral game');
@@ -720,7 +720,7 @@ test('MG12: a deferral game valid in October becomes unavailable in January when
 });
 
 test('MG12: the same January run without broken inputs keeps the October game as is', async () => {
-  const db = S.store();
+  const db = await S.store();
   await plan(db, '2026-10-31');
   const october = contentValue(db, 'wargame').deferral;
   await plan(db, JAN);
@@ -728,17 +728,17 @@ test('MG12: the same January run without broken inputs keeps the October game as
   assert.equal(decisionRow(db, 'deferral-2026').unavailable_reason, null);
 });
 
-const quillWorks = db => {
+const quillWorks = async db => {
   const f = pnlWorkbook([{ name: 'Quill Works', income: 1000, expenses: { Supplies: 100 } }]);
   f.name = 'Quill Works P&L 2026.xlsx';
-  ingestFile(db, f);
+  await addFile(db, f);
 };
 
 test('MG12: an unclassified business in January also marks it unavailable', async () => {
-  const db = S.store();
+  const db = await S.store();
   await plan(db, '2026-10-31');
   assert.ok(contentValue(db, 'wargame').deferral);
-  quillWorks(db);
+  await quillWorks(db);
   await plan(db, JAN);
   const g = contentValue(db, 'wargame').deferral;
   assert.match(g.unavailable || '', /Quill Works/, 'the reason names the unclassified business');
@@ -746,7 +746,7 @@ test('MG12: an unclassified business in January also marks it unavailable', asyn
 });
 
 test('MG12: a Virginia target turns unavailable when the 529 answers go missing', async () => {
-  const db = S.store();
+  const db = await S.store();
   await plan(db);
   const before = buildScenario(db, { clock: NOW }).fig['sh.va.remaining'];
   assert.ok(before && before.v > 0, 'the Virginia target exists on valid data');
@@ -770,9 +770,9 @@ test('MG12: a Virginia target turns unavailable when the 529 answers go missing'
 });
 
 test('MG12: federal targets turn unavailable when household tax is blocked', async () => {
-  const db = S.store();
+  const db = await S.store();
   await plan(db);
-  quillWorks(db);
+  await quillWorks(db);
   await plan(db);
   const f = getScenario(api(db)).fig['sh.fed.remaining'];
   assert.ok(f, 'retained while the fed-q4 rec cites it');
@@ -780,7 +780,7 @@ test('MG12: federal targets turn unavailable when household tax is blocked', asy
 });
 
 test('MG12: restoring the data clears the marker', async () => {
-  const va = S.store();
+  const va = await S.store();
   await plan(va);
   vaAnswersMissing(va);
   await plan(va);
@@ -789,11 +789,11 @@ test('MG12: restoring the data clears the marker', async () => {
   assert.ok(!('unavailable' in getScenario(api(va)).fig['sh.va.remaining']));
   assert.ok(!resolveTokens(getScenario(api(va)), '{f:sh.va.remaining}', false).includes('not current'));
 
-  const fed = S.store();
+  const fed = await S.store();
   await plan(fed);
-  quillWorks(fed);
+  await quillWorks(fed);
   await plan(fed);
-  addDocument(fed, { docType: 'entity', taxYear: null, fields: { name: 'Quill Works', type: 'sole_prop', owner: 'owner' } });
+  addFact(fed, 'business.entities', [...factRow(fed, 'business.entities').value, { name: 'Quill Works', type: 'sole_prop', owner: 'owner' }]);
   await plan(fed);
   const f = getScenario(api(fed)).fig['sh.fed.remaining'];
   assert.ok(f && !('unavailable' in f), JSON.stringify(f));
@@ -810,7 +810,7 @@ test('MG12: plain token text marks an unavailable figure and leaves a current on
 // ================================================================ MGN1: figure notes in the scenario
 
 test('MGN1: the scenario serves figure notes', async () => {
-  const db = S.store();
+  const db = await S.store();
   await plan(db);
   const set = (key, locator) => db.prepare('UPDATE figures SET locator = ? WHERE key = ?').run(JSON.stringify(locator), key);
   set('cash.total', { calc: 'synthetic', notes: ['A sentence.'] });
@@ -834,7 +834,7 @@ for (const [label, close, status] of [
   ['hidden', db => db.prepare("UPDATE recs SET status = 'hidden' WHERE id = 'va529'").run(), 'hidden'],
 ]) {
   test(`MGN2: retiring a ${label} rec writes a retire event and keeps ${status}`, async () => {
-    const db = S.store();
+    const db = await S.store();
     await plan(db);
     close(db);
     addFact(db, 'accounts.has529', false);
@@ -848,7 +848,7 @@ for (const [label, close, status] of [
   });
 
   test(`MGN2: a revived ${label} rec stays ${status}`, async () => {
-    const db = S.store();
+    const db = await S.store();
     await plan(db);
     close(db);
     addFact(db, 'accounts.has529', false);

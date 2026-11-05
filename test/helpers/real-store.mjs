@@ -1,22 +1,31 @@
-// Synthetic real-mode store for planner tests and the local real-data check.
+// Synthetic real-mode store for planner tests and the local real-data check. Every file goes
+// through ingest's own pipeline (src/ingest/pipeline.mjs ingestFile) and the owner's answers go
+// through ingest's confirm code (src/ingest/confirm.mjs answer), so planner tests see exactly the
+// rows, documents and questions production stores hold (plan Revision 6, R6-1 item 9).
 //
-// createRealStore(dataDir, {clock})            -> db (empty real store: mode real, clock, onboarding done)
-// ingestFile(db, file, {accountHints})         -> {fileId, parser, rows, byKind, warnings}
-// addDocument(db, {docType, taxYear, fields})  -> document id
-// addFact(db, key, value, {src, confirmed})    -> void (owner-set by default)
-// buildRealStore(dataDir, {clock, variant})    -> db with the synthetic household loaded
+// createRealStore(dataDir, {clock})           -> Promise<db> (empty real store: mode real, clock,
+//                                                onboarding done, a data key at keyFileOf(dataDir))
+// addFile(db, file, {answers})                -> Promise<ingest result> (CSV and workbook files, off engine)
+// addPayroll(db, entry)                       -> Promise<ingest result> (one W-2, paystub, K-1 or
+//                                                form1040 as a text file read by a scripted engine)
+// answerPending(db, kind, option, filter)     -> answered item ids
+// addFact(db, key, value, {src, confirmed})   -> void (owner-set by default)
+// buildRealStore(dataDir, {clock, variant})   -> Promise<db> with the synthetic household loaded
 //
-// Files run through the real parsers (pickParser + parse) and a small loader here. Every name,
-// institution and amount below is invented. Variant options are documented on buildRealStore.
+// Every name, institution and amount below is invented. Variant options are documented on
+// buildRealStore.
 
-import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createStoreFile, setSetting, getSetting, tx, DB_FILE } from '../../src/store/db.mjs';
-import { pickParser } from '../../src/ingest/registry.mjs';
-import { dedupeKey } from '../../src/ingest/dedupe.mjs';
+import { createStoreFile, setSetting, getSetting, parseJson as parseStored, DB_FILE } from '../../src/store/db.mjs';
+import { ingestFile } from '../../src/ingest/pipeline.mjs';
+import { answer, pendingItems } from '../../src/ingest/confirm.mjs';
+import { nameKey } from '../../src/ingest/extract.mjs';
+import { loadDataKey } from '../../src/ingest/vault.mjs';
+import { createEngine } from '../../src/engine/index.mjs';
 import { writeXlsx, XLSX_MIME } from './xlsx.mjs';
 
 export const CLOCK = '2026-11-05';
@@ -26,11 +35,6 @@ export const MONTHS = 10; // P&L, HSA and charitable data cover Jan..Oct of the 
 const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const pad = (n) => String(n).padStart(2, '0');
 const lastDay = (y, m) => new Date(Date.UTC(y, m, 0)).getUTCDate();
-const sha = (...parts) => {
-  const h = createHash('sha256');
-  for (const p of parts) h.update(typeof p === 'string' ? p : Buffer.from(p)).update('\0');
-  return h.digest('hex');
-};
 
 // ---------------------------------------------------------------- the synthetic household
 
@@ -54,10 +58,13 @@ export const INST = Object.freeze({
 
 export const MASKS = Object.freeze({ checking: '1111', business: '4444', hsa: '2222', college: '3333', card: '5555', ira: '6666' });
 
-// Explicit account mapping hints (R18, S13, T8), keyed '<inst>|<mask>'.
+// The owner's answers about each account, keyed '<inst>|<mask>' (R18, S13, T8). `kind` and `owner`
+// become account_kind and account_owner answers (owner null leaves the question pending); `entity`
+// becomes the accounts.businessEntity owner fact. `name` is the name ingest gives the account (the
+// export's account name, else institution and mask); no answer renames an account.
 export const HINTS = Object.freeze({
-  [`${INST.bank}|${MASKS.checking}`]: { name: 'Personal checking', kind: 'checking', owner: null },
-  [`${INST.bank}|${MASKS.business}`]: { name: 'Business checking', kind: 'business', owner: null, entity: SCORP.name },
+  [`${INST.bank}|${MASKS.checking}`]: { name: `${INST.bank} ${MASKS.checking}`, kind: 'checking', owner: null },
+  [`${INST.bank}|${MASKS.business}`]: { name: `${INST.bank} ${MASKS.business}`, kind: 'business', owner: null, entity: SCORP.name },
   [`${INST.hsa}|${MASKS.hsa}`]: { name: 'Family HSA', kind: 'hsa', owner: 'owner' },
   [`${INST.college}|${MASKS.college}`]: { name: 'College 529', kind: '529', owner: null },
   [`${INST.card}|${MASKS.card}`]: { name: 'Rewards card', kind: 'card', owner: null },
@@ -77,6 +84,8 @@ export const SYNTH = Object.freeze({
   fedPaid: 6000,               // federal estimate paid in April, June, September
   statePaid: 2000,             // state estimate paid in the same months
   paidMonths: Object.freeze([4, 6, 9]),
+  // The 2025 return: federalTax is the uploaded form1040's totalTax, agi its agi; virginiaTax is the
+  // owner's tax.prior.virginia answer (ingest reads no Virginia line).
   prior: Object.freeze({ federalTax: 30000, virginiaTax: 9000, agi: 240000 }),
   salaryRange: Object.freeze({ min: 50000, max: 110000 }),
   ownerAge: 45,
@@ -84,7 +93,8 @@ export const SYNTH = Object.freeze({
 });
 
 // Owner answers (src 'you', confirmed 1), R6 as amended by S8/S13. accounts.va529 is filled in
-// once the 529 account id is known.
+// once the 529 account id is known; business.entities and accounts.businessEntity come from the
+// variant's entities and hints.
 export const OWNER_FACTS = Object.freeze({
   'household.state': 'VA',
   'household.filingStatus': 'mfj',
@@ -103,21 +113,32 @@ export const OWNER_FACTS = Object.freeze({
 
 // ---------------------------------------------------------------- store primitives
 
-export function createRealStore(dataDir, { clock = CLOCK } = {}) {
+export const keyFileOf = (dataDir) => join(dataDir, 'data.key');
+
+// Per-store ingest context: the data key and config ingest needs, and a file counter.
+const CTX = new WeakMap();
+const ctxOf = (db) => {
+  const c = CTX.get(db);
+  if (!c) throw new Error('not a store built by test/helpers/real-store.mjs');
+  return c;
+};
+
+export async function createRealStore(dataDir, { clock = CLOCK } = {}) {
   mkdirSync(dataDir, { recursive: true });
-  return createStoreFile(join(dataDir, DB_FILE), db => {
-    setSetting(db, 'mode', 'real');
-    setSetting(db, 'clock', clock);
-    setSetting(db, 'onboarding', { done: true, step: 6 });
+  const keyFile = keyFileOf(dataDir);
+  writeFileSync(keyFile, randomBytes(32), { mode: 0o600 });
+  const key = await loadDataKey({ dataDir, keyFile, mode: 'real' });
+  const db = createStoreFile(join(dataDir, DB_FILE), d => {
+    setSetting(d, 'mode', 'real');
+    setSetting(d, 'clock', clock);
+    setSetting(d, 'onboarding', { done: true, step: 6 });
   });
+  const config = { dataDir, dataKeyFile: keyFile, engine: 'off', clock, demo: false, port: 0, host: '127.0.0.1', claudeCredentialFile: null, emailTransport: 'dev' };
+  CTX.set(db, { config, key, seq: 0 });
+  return db;
 }
 
-const stampOf = (db) => `${getSetting(db, 'clock', CLOCK)}T09:00:00.000Z`;
-
-export function accountId({ inst = '', mask = '', name = '' } = {}) {
-  const identity = mask ? `${inst}|${mask}|` : `${inst}||${String(name).trim().toLowerCase()}`;
-  return `acct-${sha(identity).slice(0, 8)}`;
-}
+export const stampOf = (db) => `${getSetting(db, 'clock', CLOCK)}T09:00:00.000Z`;
 
 export function accountIdByMask(db, mask) {
   const row = db.prepare('SELECT id FROM accounts WHERE mask = ?').get(mask);
@@ -128,128 +149,93 @@ export function accountIds(db) {
   return Object.fromEntries(db.prepare('SELECT id, mask FROM accounts WHERE mask IS NOT NULL').all().map(r => [r.mask, r.id]));
 }
 
-function normalizeKind(raw, name, sourceKind) {
-  const text = `${raw ?? ''} ${name ?? ''}`.toLowerCase();
-  if (/\bbusiness\b/.test(text)) return 'business';
-  if (/\bhsa\b|health savings/.test(text)) return 'hsa';
-  if (/529/.test(text)) return '529';
-  if (/\broth\b/.test(text)) return 'roth';
-  if (/\bira\b|401\s*\(?k\)?|retirement/.test(text)) return 'retirement';
-  if (/saving/.test(text)) return 'savings';
-  if (/credit|card/.test(text)) return 'card';
-  if (/checking/.test(text)) return 'checking';
-  if (/brokerage|taxable|individual|joint/.test(text)) return 'taxable';
-  if (sourceKind === 'brokerage_positions') return 'taxable';
-  return 'checking';
-}
+const engineOf = (mode, responses = []) => {
+  const inner = createEngine({ mode, responses: responses.map(rows => ({ text: JSON.stringify({ rows }) })) });
+  return { mode, isOn: () => mode !== 'off', call: req => inner.call(req), extract: req => inner.extract(req) };
+};
 
-function ensureAccount(db, account, ctx) {
-  const inst = account.inst ?? '';
-  const mask = account.mask || '';
-  const rawName = account.name || '';
-  const id = accountId({ inst, mask, name: rawName });
-  if (db.prepare('SELECT 1 FROM accounts WHERE id = ?').get(id)) return id;
-  const hint = (ctx.hints && ctx.hints[`${inst}|${mask}`]) || null;
-  const name = (hint && hint.name) || rawName || `${inst} ${mask}`.trim();
-  const kind = hint && hint.kind ? String(hint.kind).toLowerCase() : normalizeKind(account.kind, name, ctx.sourceKind);
-  const owner = hint && hint.owner != null ? hint.owner : null;
-  const locator = { ...(ctx.locator || {}), ...(hint && hint.entity ? { entity: hint.entity } : {}) };
-  const sort = db.prepare('SELECT count(*) AS n FROM accounts').get().n;
-  db.prepare(`INSERT INTO accounts (id, inst, mask, name, owner, kind, mirror, note, fig_key, file_id, parser, locator, sort)
-              VALUES (?, ?, ?, ?, ?, ?, 'manual', '', NULL, ?, ?, ?, ?)`)
-    .run(id, inst, mask || null, name, owner, kind, ctx.fileId, ctx.parser, JSON.stringify(locator), sort);
-  return id;
-}
-
-// Load one file through the parser registry. A file no parser accepts gets a files row with
-// status 'unparsed' and parser null.
-export function ingestFile(db, file, { accountHints = {} } = {}) {
-  const bytes = file.bytes instanceof Uint8Array ? file.bytes : new Uint8Array(Buffer.from(file.bytes));
-  const named = { name: file.name, bytes, mime: file.mime };
-  const digest = sha(bytes);
-  const fileId = `file-${sha(file.name, bytes).slice(0, 12)}`;
-  const parser = pickParser(named);
-  const uploadedAt = stampOf(db);
-  const insertFile = (status, sourceKind) => db.prepare(`INSERT OR IGNORE INTO files (id, name, mime, size, sha256, source_kind, uploaded_at, stored_path, status, note)
-                                                         VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL)`)
-    .run(fileId, file.name, file.mime ?? null, bytes.length, digest, sourceKind, uploadedAt, status);
-  if (!parser) {
-    insertFile('unparsed', null);
-    return { fileId, parser: null, rows: 0, byKind: {}, warnings: [] };
+// Answer every pending item of `kind` that `filter(item)` accepts; `option` is an option id or a
+// function of the item returning one (null skips it). Returns the answered ids.
+export function answerPending(db, kind, option, filter = () => true) {
+  const done = [];
+  for (const item of pendingItems(db)) {
+    if (item.kind !== kind || !filter(item)) continue;
+    const id = typeof option === 'function' ? option(item) : option;
+    if (id == null) continue;
+    answer(db, item.id, id, { now: stampOf(db) });
+    done.push(item.id);
   }
-  const parsed = parser.parse(named);
-  const byKind = {};
-  for (const row of parsed.rows) byKind[row.kind] = (byKind[row.kind] ?? 0) + 1;
-  const warnings = [...new Set(parsed.warnings.map(w => w.code))].sort();
-  const prov = (row) => [fileId, parser.id, JSON.stringify(row.locator ?? {})];
-  tx(db, () => {
-    insertFile(parsed.rows.length ? 'parsed' : 'unparsed', parser.sourceKind);
-    for (const row of parsed.rows) {
-      const ctx = { hints: accountHints, fileId, parser: parser.id, sourceKind: parser.sourceKind, locator: row.locator };
-      switch (row.kind) {
-        case 'transaction': {
-          const acct = ensureAccount(db, row.account, ctx);
-          db.prepare(`INSERT INTO transactions (account_id, date, amount, description, category, external_id, dedupe_key, file_id, parser, locator)
-                      VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?) ON CONFLICT(dedupe_key) DO NOTHING`)
-            .run(acct, row.date, row.amount, row.description ?? '', row.category ?? null, dedupeKey(row), ...prov(row));
-          break;
-        }
-        case 'balance': {
-          const acct = ensureAccount(db, row.account, ctx);
-          db.prepare(`INSERT INTO balances (account_id, date, amount, file_id, parser, locator) VALUES (?, ?, ?, ?, ?, ?)
-                      ON CONFLICT(account_id, date) DO NOTHING`).run(acct, row.date, row.amount, ...prov(row));
-          break;
-        }
-        case 'position': {
-          const acct = ensureAccount(db, row.account, ctx);
-          const seen = db.prepare('SELECT 1 FROM positions WHERE account_id = ? AND as_of = ? AND symbol = ?').get(acct, row.asOf, row.symbol);
-          if (!seen) {
-            db.prepare(`INSERT INTO positions (account_id, as_of, symbol, name, quantity, price, value, cost_basis, file_id, parser, locator)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-              .run(acct, row.asOf, row.symbol, row.name ?? null, row.quantity, row.price, row.value, row.costBasis ?? null, ...prov(row));
-          }
-          break;
-        }
-        case 'pnl_line': {
-          const seen = db.prepare('SELECT 1 FROM pnl_lines WHERE entity = ? AND period = ? AND category = ?').get(row.entity, row.period, row.category);
-          if (!seen) {
-            db.prepare('INSERT INTO pnl_lines (entity, period, category, amount, file_id, parser, locator) VALUES (?, ?, ?, ?, ?, ?, ?)')
-              .run(row.entity, row.period, row.category, row.amount, ...prov(row));
-          }
-          break;
-        }
-        case 'tax_payment': {
-          const seen = db.prepare('SELECT 1 FROM tax_payments WHERE jurisdiction = ? AND tax_year = ? AND date = ? AND locator = ?')
-            .get(row.jurisdiction, row.taxYear, row.date, JSON.stringify(row.locator ?? {}));
-          if (!seen) {
-            db.prepare('INSERT INTO tax_payments (jurisdiction, tax_year, date, amount, kind, file_id, parser, locator) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-              .run(row.jurisdiction, row.taxYear, row.date, row.amount, row.paymentKind ?? 'paid', ...prov(row));
-          }
-          break;
-        }
-        case 'document':
-          db.prepare('INSERT INTO documents (doc_type, tax_year, fields, file_id, parser, locator) VALUES (?, ?, ?, ?, ?, ?)')
-            .run(row.docType, row.taxYear ?? null, JSON.stringify(row.fields ?? {}), ...prov(row));
-          break;
-        case 'fact':
-          db.prepare(`INSERT INTO facts (key, value, src, as_of, confirmed, file_id, parser, locator, updated_at)
-                      VALUES (?, ?, 'file', NULL, 0, ?, ?, ?, ?) ON CONFLICT(key) DO NOTHING`)
-            .run(row.key, JSON.stringify(row.value), ...prov(row), uploadedAt);
-          break;
-        default:
-          break;
-      }
-    }
-  });
-  return { fileId, parser: parser.id, rows: parsed.rows.length, byKind, warnings };
+  return done;
 }
 
-export function addDocument(db, { docType, taxYear = null, fields = {} }) {
-  const r = db.prepare(`INSERT INTO documents (doc_type, tax_year, fields, file_id, parser, locator)
-                        VALUES (?, ?, ?, NULL, 'manual', ?)`)
-    .run(docType, taxYear, JSON.stringify(fields), JSON.stringify({ entered: 'owner' }));
-  return Number(r.lastInsertRowid);
+// Account answers from hints ('<inst>|<mask>' -> {kind, owner}), matched by mask.
+function answerAccounts(db, hints) {
+  const byMask = new Map(Object.entries(hints).map(([k, h]) => [k.split('|')[1], h]));
+  const hintOf = (accountId) => {
+    const row = db.prepare('SELECT mask FROM accounts WHERE id = ?').get(accountId);
+    return row && row.mask ? byMask.get(row.mask) ?? null : null;
+  };
+  answerPending(db, 'account_kind', item => hintOf(item.subject)?.kind ?? null);
+  answerPending(db, 'account_owner', item => hintOf(item.subject)?.owner ?? null);
 }
+
+// Ingest one CSV or workbook file through the pipeline with the off engine. answers (optional):
+// {hints, taxYear: 'tax_year' | 'payment_year' | null}. Throws when ingest does not import it.
+export async function addFile(db, file, { answers = {} } = {}) {
+  const c = ctxOf(db);
+  const out = await ingestFile(db, file, { engine: engineOf('off'), config: c.config, key: c.key, now: stampOf(db) });
+  if (out.status !== 'imported') throw new Error(`synthetic file ${file.name} was not imported (${out.status})`);
+  if (answers.hints) answerAccounts(db, answers.hints);
+  if (answers.taxYear) answerPending(db, 'tax_year', answers.taxYear);
+  return out;
+}
+
+const DOC_TAX_YEAR = (docType, fields) => (docType === 'paystub' ? Number(String(fields.payDate).slice(0, 4)) : fields.taxYear);
+
+// One document through ingest's extraction path: a text file whose bytes are unique to this store
+// and call, read by a scripted engine that classifies it as `docType` and returns `fields` (ingest's
+// extraction shape, R6-0 item 1). entry: {docType, fields, recipient?, relation?, document?,
+// conflict?}, each answer applied after the import when ingest asks it:
+//   relation   employer_relation for this employer: 'outside' | 'household'
+//   recipient  employer_recipient for this employer: 'owner' | 'spouse' | 'both'
+//   document   document_recipient for this file: 'owner' | 'spouse'
+//   conflict   withholding_conflict raised by this file: 'first' | 'second' | 'both', or
+//              {<jurisdiction as stored>: option}
+export async function addPayroll(db, entry) {
+  const c = ctxOf(db);
+  const { docType, fields } = entry;
+  c.seq += 1;
+  const file = {
+    name: `synthetic-${docType}-${c.seq}.txt`, mime: 'text/plain',
+    bytes: new TextEncoder().encode(`Synthetic ${docType} statement number ${c.seq} for a test household.\n`),
+  };
+  const engine = engineOf('fake', [[{ docType, taxYear: DOC_TAX_YEAR(docType, fields), confidence: 0.95 }], [{ confidence: 0.95, ...fields }]]);
+  const out = await ingestFile(db, file, { engine, config: c.config, key: c.key, now: stampOf(db) });
+  if (out.status !== 'imported') throw new Error(`synthetic ${docType} was not imported (${out.status})`);
+  const employer = fields.employerName;
+  const key = employer !== undefined ? nameKey(employer) : null;
+  if (entry.relation && key) answerPending(db, 'employer_relation', entry.relation, i => i.subject === key);
+  if (entry.recipient && key) answerPending(db, 'employer_recipient', entry.recipient, i => i.subject === key);
+  if (entry.document) answerPending(db, 'document_recipient', entry.document, i => String(i.subject).endsWith(`:doc:${out.fileId}`));
+  if (entry.conflict) {
+    const jurisdictionOf = (item) => {
+      const row = db.prepare('SELECT jurisdiction FROM tax_payments WHERE id = ?').get(item.context.second?.id);
+      return row ? row.jurisdiction : null;
+    };
+    answerPending(db, 'withholding_conflict', item => (typeof entry.conflict === 'string' ? entry.conflict : entry.conflict[jurisdictionOf(item)] ?? null),
+      item => item.fileId === out.fileId);
+  }
+  return out;
+}
+
+// Payroll entries in ingest's extraction shape. `person` becomes the employer_recipient answer and
+// `relation` the employer_relation answer (leave it out for an employer that is a P&L entity, which
+// ingest does not ask about). federalWithheld defaults to 0: ingest stores a federal withholding
+// row whenever the field is read, and that row is what carries the recipient answer.
+export const w2Doc = ({ person, relation, taxYear = TAX_YEAR, ...fields }) =>
+  ({ docType: 'w2', fields: { taxYear, federalWithheld: 0, ...fields }, ...(person ? { recipient: person } : {}), ...(relation ? { relation } : {}) });
+export const paystubDoc = ({ person, relation, ...fields }) =>
+  ({ docType: 'paystub', fields: { federalWithholding: 0, ...fields }, ...(person ? { recipient: person } : {}), ...(relation ? { relation } : {}) });
 
 export function addFact(db, key, value, { src = 'you', confirmed = true, asOf = null } = {}) {
   db.prepare(`INSERT INTO facts (key, value, src, as_of, confirmed, file_id, parser, locator, updated_at)
@@ -261,6 +247,12 @@ export function addFact(db, key, value, { src = 'you', confirmed = true, asOf = 
 
 export function removeFact(db, key) {
   db.prepare('DELETE FROM facts WHERE key = ?').run(key);
+}
+
+// The stored value of a fact, or undefined.
+export function factValue(db, key) {
+  const r = db.prepare('SELECT value FROM facts WHERE key = ?').get(key);
+  return r ? parseStored(r.value, null) : undefined;
 }
 
 // ---------------------------------------------------------------- synthetic files
@@ -357,42 +349,52 @@ export function positionsCsv({ asOf = `${TAX_YEAR}-10-31` } = {}) {
 
 // ---------------------------------------------------------------- the full build
 
+// The 2025 return as ingest's form1040 extraction (agi and total tax only).
+export const priorReturn = ({ agi = SYNTH.prior.agi, totalTax = SYNTH.prior.federalTax, ...rest } = {}) =>
+  ({ docType: 'form1040', fields: { taxYear: TAX_YEAR - 1, agi, totalTax, ...rest } });
+
 // variant (all optional):
-//   entities:     replace ENTITIES ({name, type, owner, income, expenses, doc?: false to skip the entity document})
+//   entities:     replace ENTITIES ({name, type, owner, income, expenses, doc?: false to leave the
+//                 entity out of the business.entities owner fact})
 //   pnlExtra:     [{entity, category, monthly}] extra expense lines (positive amounts are expenses)
-//   documents:    extra documents [{docType, taxYear, fields}]
+//   payroll:      extra documents through ingest, in order: [{docType, fields, recipient?,
+//                 relation?, document?, conflict?}] (see addPayroll)
 //   facts:        owner facts to add or override; a value of undefined leaves the fact out
-//   hints:        account hints merged over HINTS ({'<inst>|<mask>': {...}})
-//   taxPayments:  false to leave out the tax payment workbook
-//   priorReturn:  false to leave out the 2025 tax_return document
-export function buildRealStore(dataDir, { clock = CLOCK, variant = {} } = {}) {
-  const db = createRealStore(dataDir, { clock });
+//   hints:        account answers merged over HINTS ({'<inst>|<mask>': {kind, owner, entity}})
+//   taxPayments:  false to leave out the tax payment workbook, or taxPaymentsWorkbook options
+//   taxYear:      the tax_year answer for the workbook sheet ('tax_year' by default; null leaves
+//                 it pending)
+//   priorReturn:  false to leave out the 2025 form1040 and the tax.prior.virginia answer, or
+//                 form1040 fields for priorReturn()
+export async function buildRealStore(dataDir, { clock = CLOCK, variant = {} } = {}) {
+  const db = await createRealStore(dataDir, { clock });
   const entities = variant.entities || ENTITIES;
   const hints = { ...HINTS, ...(variant.hints || {}) };
+  const taxYear = variant.taxYear === undefined ? 'tax_year' : variant.taxYear;
   const files = [
     pnlWorkbook(entities, variant.pnlExtra || []),
-    ...(variant.taxPayments === false ? [] : [taxPaymentsWorkbook()]),
+    ...(variant.taxPayments === false ? [] : [taxPaymentsWorkbook(typeof variant.taxPayments === 'object' ? variant.taxPayments : {})]),
     personalCheckingCsv(),
     businessCheckingCsv(),
     aggregatorCsv(),
     positionsCsv(),
   ];
-  for (const f of files) {
-    const out = ingestFile(db, f, { accountHints: hints });
-    if (!out.parser) throw new Error(`synthetic file ${f.name} was not recognised by any parser`);
-  }
-  for (const e of entities) {
-    if (e.doc === false) continue;
-    addDocument(db, { docType: 'entity', taxYear: null, fields: { name: e.name, type: e.type, owner: e.owner } });
-  }
-  if (variant.priorReturn !== false) {
-    addDocument(db, { docType: 'tax_return', taxYear: TAX_YEAR - 1, fields: { ...SYNTH.prior } });
-  }
-  for (const d of variant.documents || []) addDocument(db, d);
+  for (const f of files) await addFile(db, f, { answers: { hints, taxYear } });
+  if (variant.priorReturn !== false) await addPayroll(db, priorReturn(typeof variant.priorReturn === 'object' ? variant.priorReturn : {}));
+  for (const entry of variant.payroll || []) await addPayroll(db, entry);
 
   const collegeId = accountIdByMask(db, MASKS.college);
+  const businessEntity = {};
+  for (const [k, h] of Object.entries(hints)) {
+    const id = h && h.entity ? accountIdByMask(db, k.split('|')[1]) : null;
+    if (id) businessEntity[id] = h.entity;
+  }
+  const listed = entities.filter(e => e.doc !== false).map(e => ({ name: e.name, type: e.type, owner: e.owner, ...(typeof e.sstb === 'boolean' ? { sstb: e.sstb } : {}) }));
   const facts = {
     ...OWNER_FACTS,
+    ...(listed.length ? { 'business.entities': listed } : {}),
+    ...(Object.keys(businessEntity).length ? { 'accounts.businessEntity': businessEntity } : {}),
+    ...(variant.priorReturn !== false ? { 'tax.prior.virginia': SYNTH.prior.virginiaTax } : {}),
     'accounts.va529': { [collegeId]: { virginiaPlan: true, ownerAge70Plus: false, carryforward: 0 } },
     ...(variant.facts || {}),
   };
@@ -419,7 +421,7 @@ export function scratch(prefix = 'fathom-planner-') {
   return {
     dir() { const d = mkdtempSync(join(tmpdir(), prefix)); dirs.push(d); return d; },
     track(db) { dbs.push(db); return db; },
-    store(opts) { const d = this.dir(); return this.track(buildRealStore(d, opts)); },
+    async store(opts) { const d = this.dir(); return this.track(await buildRealStore(d, opts)); },
     cleanup() {
       for (const db of dbs) { try { db.close(); } catch { /* already closed */ } }
       for (const d of dirs) rmSync(d, { recursive: true, force: true });
