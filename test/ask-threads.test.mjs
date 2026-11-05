@@ -1,12 +1,13 @@
 // Ask threads (item 13): ChatGPT-style conversations. Schema and routes with the owner gate (AC9),
 // the 009 migration of the old single 'ask' conversation and per-rec isolation (AC6), reopening
 // and continuing a thread with only its own history (AC5), archive, trash, restore, delete and the
-// 30 day purge (AC4), and naming over HTTP (AC3). Every fixture is synthetic.
+// 30 day trash-purge job (AC4), and naming over HTTP (AC3). Every fixture is synthetic.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
+import { setTimeout as pause } from 'node:timers/promises';
 import { join } from 'node:path';
 import { openDb, migrate, listMigrations, setSetting, DB_FILE } from '../src/store/db.mjs';
 import { seedDemo } from '../demo/seed.mjs';
@@ -15,8 +16,9 @@ import { createRuntimeEngine } from '../src/engine/runtime.mjs';
 import { createLivePacks } from '../src/packs/live.mjs';
 import { createLiveAnswerer } from '../src/api/answerer.mjs';
 import { createThread, purgeTrash } from '../src/api/threads.mjs';
+import { defaultHandlers } from '../src/jobs/scheduler.mjs';
 import {
-  SERVER_TIMEOUT, IDENTITY_HEADER, withServer, request, postJson, getScenario, openStore, tempDb, tempDir,
+  SERVER_TIMEOUT, IDENTITY_HEADER, withServer, spawnServer, request, postJson, getScenario, openStore, tempDb, tempDir,
 } from './helpers/server.mjs';
 
 const T = { timeout: SERVER_TIMEOUT };
@@ -478,34 +480,134 @@ test('AC4 trash, restore to where it was, delete forever, and the 409 guards', T
   assert.deepEqual(allIds(await listThreads(s)), [arch.id]);
 }));
 
-test('AC4 a thread trashed 30 days before the app clock is purged on list; 29 days is kept', T, () => withServer({ env: FAKE }, async s => {
-  const clock = (await getScenario(s.baseUrl)).meta.clock;
-  assert.match(clock, /^\d{4}-\d{2}-\d{2}$/);
-  // The server's now is the clock date at the current time of day (clockNow). Stamps computed from
-  // it here are a moment older when the server reads them: 30 days is purged, 29 days is kept.
-  const now = Date.parse(`${clock}T${new Date().toISOString().slice(11)}`);
-  const old = new Date(now - 30 * DAY).toISOString();
-  const recent = new Date(now - 29 * DAY).toISOString();
-  const a = (await newThread(s, { text: 'Synthetic old trash question' })).thread;
-  const b = (await newThread(s, { text: 'Synthetic recent trash question' })).thread;
-  const keep = (await newThread(s, {})).thread;
-  await ok(threadAct(s, a.id, 'trash'));
-  await ok(threadAct(s, b.id, 'trash'));
-  await readDb(s.dbFile, db => {
+// The scheduler's startup tick runs every due job once, trash-purge included; waits until that
+// job's latest run has finished so a test's store edits cannot race it. Returns that run.
+async function settledRun(s, jobId, timeoutMs = 15000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const job = (await ok(request(s.baseUrl, { path: '/api/jobs' }))).jobs.find(j => j.id === jobId);
+    assert.ok(job, `GET /api/jobs lists ${jobId}`);
+    if (job.lastRun && job.lastRun.status !== 'running' && job.lastRun.finishedAt) return job.lastRun;
+    assert.ok(Date.now() < deadline, `${jobId} has no finished run after ${timeoutMs} ms`);
+    await pause(100);
+  }
+}
+
+const countWhere = (db, table, col, key) => db.prepare(`SELECT count(*) AS n FROM ${table} WHERE ${col} = ?`).get(key).n;
+
+test('AC4 reads and restarts purge nothing; the trash-purge job deletes 30 day trash and keeps 29 days', T2, async () => {
+  const dataDir = await tempDir('fathom-trash-purge-');
+  try {
+    const first = await spawnServer({ dataDir, env: FAKE });
+    let a;
+    let b;
+    let keep;
+    try {
+      await settledRun(first, 'trash-purge');
+      const clock = (await getScenario(first.baseUrl)).meta.clock;
+      assert.match(clock, /^\d{4}-\d{2}-\d{2}$/);
+      // The job's now is the clock date at the current time of day. Stamps computed from it here
+      // are a moment older when the job runs: 30 days is purged, 29 days is kept.
+      const now = Date.parse(`${clock}T${new Date().toISOString().slice(11)}`);
+      a = (await newThread(first, { text: 'Synthetic old trash question' })).thread;
+      b = (await newThread(first, { text: 'Synthetic recent trash question' })).thread;
+      keep = (await newThread(first, {})).thread;
+      await ok(threadAct(first, a.id, 'trash'));
+      await ok(threadAct(first, b.id, 'trash'));
+      await readDb(first.dbFile, db => {
+        const set = db.prepare('UPDATE conversations SET trashed_at = ? WHERE key = ?');
+        set.run(new Date(now - 30 * DAY).toISOString(), a.key);
+        set.run(new Date(now - 29 * DAY).toISOString(), b.key);
+      });
+
+      // No lazy purge on the thread list, an open thread or the scenario.
+      const lists = await listThreads(first);
+      assert.deepEqual(idsOf(lists.trash).sort(), [a.id, b.id].sort(), 'both trashed threads are still listed');
+      assert.deepEqual(idsOf(lists.active), [keep.id]);
+      assert.equal((await openThread(first, a.id)).thread.id, a.id, 'the 30 day thread still opens');
+      assert.ok((await getScenario(first.baseUrl)).live.threads.some(x => x.id === a.id), 'the scenario still carries it');
+      await readDb(first.dbFile, db => {
+        assert.equal(countWhere(db, 'conversations', 'key', a.key), 1);
+        assert.equal(countWhere(db, 'messages', 'conversation_key', a.key), 2);
+      });
+    } finally {
+      await first.stop();
+    }
+
+    // No purge at startup: the restarted server leaves both in Trash. Its scheduler's startup tick
+    // finds today's trash-purge period already run, so only a lazy purge could delete them.
+    const second = await spawnServer({ dataDir, env: FAKE });
+    try {
+      await settledRun(second, 'trash-purge');
+      await readDb(second.dbFile, db => {
+        assert.equal(countWhere(db, 'conversations', 'key', a.key), 1, 'startup kept the 30 day thread');
+        assert.equal(countWhere(db, 'messages', 'conversation_key', a.key), 2, 'startup kept its messages');
+      });
+      assert.deepEqual(idsOf((await listThreads(second)).trash).sort(), [a.id, b.id].sort());
+
+      // The job, run now over HTTP, purges the 30 day thread and its messages only.
+      const r = await ok(postJson(second.baseUrl, '/api/jobs/trash-purge/run', {}));
+      assert.ok(r.run, 'the response carries the run');
+      assert.equal(r.run.jobId, 'trash-purge');
+      assert.equal(r.run.status, 'ok');
+      assert.equal(r.run.trigger, 'manual');
+      assert.equal(r.run.costUsd, 0);
+      assert.deepEqual(r.run.note, { purged: 1 });
+      const listed = r.jobs.find(j => j.id === 'trash-purge');
+      assert.ok(listed, 'the response lists the trash-purge job');
+      assert.equal(listed.lastRun.id, r.run.id);
+      assert.deepEqual((await settledRun(second, 'trash-purge')).note, { purged: 1 }, 'GET /api/jobs reports the purge count');
+
+      await readDb(second.dbFile, db => {
+        assert.equal(countWhere(db, 'conversations', 'key', a.key), 0, 'the 30 day thread is gone');
+        assert.equal(countWhere(db, 'messages', 'conversation_key', a.key), 0, 'its messages are gone');
+        assert.equal(countWhere(db, 'conversations', 'key', b.key), 1, 'the 29 day thread remains');
+        assert.equal(countWhere(db, 'messages', 'conversation_key', b.key), 2, 'with its messages');
+        assert.equal(countWhere(db, 'conversations', 'key', keep.key), 1);
+      });
+      const lists = await listThreads(second);
+      assert.deepEqual(idsOf(lists.trash), [b.id]);
+      assert.deepEqual(idsOf(lists.active), [keep.id]);
+      await fails(request(second.baseUrl, { path: `/api/threads/${a.id}` }), 404);
+    } finally {
+      await second.stop();
+    }
+  } finally {
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('AC4 the default trash-purge handler purges at the clock date and the run time of day', async () => {
+  const t = await tempDb();
+  try {
+    const db = t.db;
+    const exact = createThread(db, '2026-09-01T09:00:00.000Z');
+    const under = createThread(db, '2026-09-01T09:00:00.000Z');
+    const active = createThread(db, '2026-09-01T09:00:00.000Z');
     const set = db.prepare('UPDATE conversations SET trashed_at = ? WHERE key = ?');
-    set.run(old, a.key);
-    set.run(recent, b.key);
-  });
-  const lists = await listThreads(s);
-  assert.deepEqual(idsOf(lists.trash), [b.id]);
-  assert.deepEqual(idsOf(lists.active), [keep.id]);
-  await readDb(s.dbFile, db => {
-    assert.equal(db.prepare('SELECT count(*) AS n FROM conversations WHERE key = ?').get(a.key).n, 0);
-    assert.equal(db.prepare('SELECT count(*) AS n FROM messages WHERE conversation_key = ?').get(a.key).n, 0, 'its messages are gone');
-    assert.equal(db.prepare('SELECT count(*) AS n FROM messages WHERE conversation_key = ?').get(b.key).n, 2);
-  });
-  await fails(request(s.baseUrl, { path: `/api/threads/${a.id}` }), 404);
-}));
+    // The purge time is 2026-11-05T12:00:00.000Z: the clock date at ctx.now's time of day.
+    set.run('2026-10-06T12:00:00.000Z', exact.key);
+    set.run('2026-10-06T12:00:00.001Z', under.key);
+    const msg = db.prepare("INSERT INTO messages (conversation_key, role, text, refs, notice, ts) VALUES (?, 'me', 'Synthetic purge text', '[]', 0, '2026-09-01T09:00:00.000Z')");
+    for (const th of [exact, under, active]) msg.run(th.key);
+
+    const handler = defaultHandlers()['trash-purge'];
+    assert.equal(typeof handler, 'function');
+    // Built the way the scheduler builds it; ctx.now is a real instant on another date.
+    const ctx = {
+      db, config: { dataDir: t.dataDir, clock: null, demo: false, engine: 'off', emailTransport: 'dev', publicUrl: null },
+      engine: null, transport: null, now: '2027-03-01T12:00:00.000Z', clock: '2026-11-05', periodKey: '2026-11-05', trigger: 'scheduled', jobRunId: 1,
+    };
+    assert.deepEqual(await handler(ctx), { costUsd: 0, note: { purged: 1 } });
+    const keys = db.prepare("SELECT key FROM conversations WHERE substr(key, 1, 4) = 'ask:'").all().map(r => r.key).sort();
+    assert.deepEqual(keys, [under.key, active.key].sort());
+    assert.equal(countWhere(db, 'messages', 'conversation_key', exact.key), 0);
+    assert.equal(db.prepare('SELECT count(*) AS n FROM messages').get().n, 2);
+    assert.deepEqual(await handler(ctx), { costUsd: 0, note: { purged: 0 } }, 'a second run finds nothing');
+  } finally {
+    t.close();
+  }
+});
 
 test('AC4 purgeTrash deletes threads trashed 30 or more days ago and their messages only', async () => {
   const t = await tempDb();

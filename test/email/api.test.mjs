@@ -87,7 +87,7 @@ describe('email and jobs routes on a demo server', () => {
     const r = await request(s.baseUrl, { path: '/api/jobs' });
     assert.equal(r.status, 200, r.text.slice(0, 300));
     const ids = r.json.jobs.map((j) => j.id);
-    for (const id of ['plan', 'brief-email', 'deadline-alerts', 'freshness']) assert.ok(ids.includes(id), id);
+    for (const id of ['plan', 'brief-email', 'deadline-alerts', 'freshness', 'trash-purge']) assert.ok(ids.includes(id), id);
     for (const j of r.json.jobs) {
       for (const k of ['name', 'cadence', 'does', 'next']) assert.equal(typeof j[k], 'string', `${j.id}.${k}`);
       assert.ok('lastRun' in j, `${j.id}.lastRun`);

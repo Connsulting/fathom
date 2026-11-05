@@ -55,15 +55,24 @@ function schedulerFor(t, { handlers, clock, holder = 'test-holder', config, engi
   });
 }
 
-test('JOBS defines the plan, brief-email, deadline-alerts and freshness jobs with a schedule', () => {
+test('JOBS defines the plan, brief-email, deadline-alerts, freshness and trash-purge jobs with a schedule', () => {
   const ids = JOBS.map((j) => j.id);
-  for (const id of ['plan', 'brief-email', 'deadline-alerts', 'freshness']) assert.ok(ids.includes(id), `JOBS has ${id}`);
+  for (const id of ['plan', 'brief-email', 'deadline-alerts', 'freshness', 'trash-purge']) assert.ok(ids.includes(id), `JOBS has ${id}`);
   for (const j of JOBS) {
     for (const k of ['id', 'name', 'cadence', 'does', 'schedule']) assert.ok(j[k] != null && j[k] !== '', `${j.id}.${k}`);
   }
 });
 
-test('period keys: monthly brief on the 1st at 07:00 local, daily plan 02:00, daily alerts 07:00, weekly freshness Monday 06:00', () => {
+test('AC4 JOBS defines the daily 03:00 Ask trash cleanup job', () => {
+  const job = JOBS.find((j) => j.id === 'trash-purge');
+  assert.ok(job, 'JOBS has trash-purge');
+  assert.equal(job.name, 'Ask trash cleanup');
+  assert.equal(job.cadence, 'Daily, 3:00 AM');
+  assert.equal(job.does, 'Delete conversations that have been in Trash for 30 days.');
+  assert.deepEqual({ ...job.schedule }, { every: 'day', hour: 3 });
+});
+
+test('period keys: monthly brief on the 1st at 07:00 local, daily plan 02:00, daily alerts 07:00, daily trash-purge 03:00, weekly freshness Monday 06:00', () => {
   // America/New_York is UTC-5 in December and after Nov 1 2026.
   assert.equal(keyAt('brief-email', '2026-12-01T11:59:00Z'), '2026-11');
   assert.equal(keyAt('brief-email', '2026-12-01T12:00:00Z'), '2026-12');
@@ -73,6 +82,8 @@ test('period keys: monthly brief on the 1st at 07:00 local, daily plan 02:00, da
   assert.equal(keyAt('plan', '2026-11-05T07:00:00Z'), '2026-11-05');
   assert.equal(keyAt('deadline-alerts', '2026-11-05T11:59:00Z'), '2026-11-04');
   assert.equal(keyAt('deadline-alerts', '2026-11-05T12:00:00Z'), '2026-11-05');
+  assert.equal(keyAt('trash-purge', '2026-11-05T07:59:00Z'), '2026-11-04', 'trash-purge before 03:00 local');
+  assert.equal(keyAt('trash-purge', '2026-11-05T08:00:00Z'), '2026-11-05', 'trash-purge at 03:00 local');
   // 2026-11-09 is a Monday; the key is that Monday's date.
   assert.equal(keyAt('freshness', '2026-11-09T10:59:00Z'), '2026-11-02');
   assert.equal(keyAt('freshness', '2026-11-09T11:00:00Z'), '2026-11-09');
@@ -382,11 +393,11 @@ test('several triggers during one plan run coalesce into a single rerun; trigger
 test('fixed clock: config.clock makes every period of that date due, whatever now says', async () => {
   const t = await store();
   try {
-    const handlers = { 'brief-email': counter(), 'deadline-alerts': counter(), freshness: counter(), plan: counter() };
+    const handlers = { 'brief-email': counter(), 'deadline-alerts': counter(), freshness: counter(), plan: counter(), 'trash-purge': counter() };
     const s = schedulerFor(t, { handlers, clock: clockAt('2020-01-01T00:00:00Z'), config: configOf(t.dataDir, { clock: '2026-11-05' }) });
     await s.tick();
     const keys = Object.fromEntries(t.db.prepare('SELECT job_id, period_key FROM job_runs').all().map((r) => [r.job_id, r.period_key]));
-    assert.deepEqual(keys, { 'brief-email': '2026-11', 'deadline-alerts': '2026-11-05', freshness: '2026-11-02', plan: '2026-11-05' });
+    assert.deepEqual(keys, { 'brief-email': '2026-11', 'deadline-alerts': '2026-11-05', freshness: '2026-11-02', plan: '2026-11-05', 'trash-purge': '2026-11-05' });
     assert.equal(handlers['brief-email'].calls[0].clock, '2026-11-05', 'ctx.clock is the fixed date');
   } finally { t.done(); }
 });
@@ -433,7 +444,7 @@ test('engine off: the default brief-email handler still sends the brief through 
     const spendBefore = t.db.prepare('SELECT count(*) AS n FROM spend_ledger').get().n;
     const transport = captureTransport();
     const handlers = defaultHandlers({ publicUrl: null });
-    assert.deepEqual(Object.keys(handlers).sort(), ['brief-email', 'deadline-alerts', 'freshness', 'plan']);
+    assert.deepEqual(Object.keys(handlers).sort(), ['brief-email', 'deadline-alerts', 'freshness', 'plan', 'trash-purge']);
     const s = schedulerFor(t, { handlers, clock: clockAt('2026-11-05T15:00:00Z'), config, engine, transport });
     await s.runNow('brief-email');
     assert.equal(transport.sent.length, 1, 'the brief went out');
