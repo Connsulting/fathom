@@ -75,13 +75,48 @@ export async function sdkRound({ credential, system, systemDynamic, messages, ma
   return normalizeSdkRound(observed, { model, registry, maxTokens: Number(options.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS), maxBudgetUsd: options.maxBudgetUsd });
 }
 
+// Structured outputs reject numeric, string-length and array-size constraints with a 400. The engine
+// validates every response against the full schema locally (compileSchema in index.mjs), so the
+// request carries a copy without them.
+export const WIRE_UNSUPPORTED_KEYWORDS = Object.freeze(['minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum',
+  'multipleOf', 'minLength', 'maxLength', 'minItems', 'maxItems', 'uniqueItems', 'minProperties', 'maxProperties']);
+const SCHEMA_MAPS = new Set(['properties', 'patternProperties', '$defs', 'definitions']);
+const SCHEMA_LISTS = new Set(['anyOf', 'allOf', 'oneOf', 'prefixItems']);
+const SCHEMA_SINGLES = new Set(['items', 'not', 'additionalProperties', 'if', 'then', 'else', 'contains']);
+
+export function wireSchema(schema) {
+  if (Array.isArray(schema)) return schema.map(wireSchema);
+  if (!schema || typeof schema !== 'object') return schema;
+  const out = {};
+  for (const [key, value] of Object.entries(schema)) {
+    if (WIRE_UNSUPPORTED_KEYWORDS.includes(key)) continue;
+    if (SCHEMA_MAPS.has(key) && value && typeof value === 'object') {
+      out[key] = Object.fromEntries(Object.entries(value).map(([name, sub]) => [name, wireSchema(sub)]));
+    } else if (SCHEMA_LISTS.has(key) && Array.isArray(value)) out[key] = value.map(wireSchema);
+    else if (SCHEMA_SINGLES.has(key)) out[key] = wireSchema(value);
+    else out[key] = value;
+  }
+  return out;
+}
+
 export async function messagesRound({ credential, system, systemDynamic, messages, maxTokens, model, schema }) {
   const client = new Anthropic({ apiKey: credential.value, authToken: null,
     baseURL: 'https://api.anthropic.com', maxRetries: 0, timeout: 120000 });
-  const response = await client.messages.create({ model, max_tokens: maxTokens,
-    system: [{ type: 'text', text: system || 'Extract only documented rows.', cache_control: { type: 'ephemeral' } },
-      ...(systemDynamic ? [{ type: 'text', text: systemDynamic }] : [])],
-    messages, output_config: { effort: 'low', format: { type: 'json_schema', schema } } });
+  let response;
+  try {
+    response = await client.messages.create({ model, max_tokens: maxTokens,
+      system: [{ type: 'text', text: system || 'Extract only documented rows.', cache_control: { type: 'ephemeral' } },
+        ...(systemDynamic ? [{ type: 'text', text: systemDynamic }] : [])],
+      messages, output_config: { effort: 'low', format: { type: 'json_schema', schema: wireSchema(schema) } } });
+  } catch (error) {
+    // An HTTP error response means the API rejected the request without generating, so its cost is a
+    // known zero. Only failures with no response (network, timeout) keep the conservative unknown path.
+    if (error instanceof Anthropic.APIError && Number.isInteger(error.status)) {
+      return { text: '', content: [], tokens: {}, costUsd: 0, model, status: 'api_error', is_error: true,
+        api_error_status: error.status, details: {}, toolResults: [] };
+    }
+    throw error;
+  }
   let costUsd;
   try { costUsd = usageCostUsd(response.model, response.usage); } catch { costUsd = undefined; }
   return { text: response.content.filter(block => block.type === 'text').map(block => block.text).join(''),
