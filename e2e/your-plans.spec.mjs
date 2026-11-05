@@ -156,3 +156,33 @@ test('model-written Your plans titles render as text, with no markup and no reso
 
   expect(dialogs, 'script dialogs opened by rendered markup').toEqual([]);
 });
+
+// Review advisory: a plan document stored as text only (no file, `fields.text`) is a build source
+// on the server, so the Packs card must offer Build when it is the only input.
+const TEXT_ONLY = [
+  '# Dependent care account rules',
+  '',
+  'The employer plan offers a dependent care account that is elected once a year during open enrollment.',
+  'Unused balances follow the plan rules described in the benefits summary.',
+  ''
+].join('\n');
+
+test('a text-only plan document is enough to build the Your plans pack', async ({ page }, testInfo) => {
+  const { base, dataDir } = yp(testInfo);
+  const db = openDb(join(dataDir, DB_FILE));
+  try {
+    db.prepare(`INSERT INTO documents (doc_type, tax_year, fields, file_id, parser, locator) VALUES ('plan', ?, ?, NULL, NULL, NULL)`)
+      .run(Number(S.meta.clock.slice(0, 4)), JSON.stringify({ text: TEXT_ONLY }));
+  } finally {
+    db.close();
+  }
+
+  await gotoYp(page, base, 'packs');
+  const card = page.locator('.h-yp');
+  await expect(card).toBeVisible();
+  const build = card.locator('button[data-yp-build]');
+  await expect(build).toBeEnabled();
+  await build.click();
+  await expect(page.locator('.h-yp-result')).toContainText(/\b[1-9]\d* entr(y|ies)\b/, { timeout: 30_000 });
+  await expect(page.locator('.fx-err')).toHaveCount(0);
+});

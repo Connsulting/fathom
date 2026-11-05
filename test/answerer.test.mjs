@@ -10,6 +10,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { rm } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { SYSTEM_PROMPT_DYNAMIC_BOUNDARY } from '@anthropic-ai/claude-agent-sdk';
 import { seedDemo } from '../demo/seed.mjs';
 import { loadConfig } from '../src/config.mjs';
@@ -20,7 +22,7 @@ import { sdkOptions } from '../src/engine/live.mjs';
 import { createRuntimeEngine } from '../src/engine/runtime.mjs';
 import { createPackRefresher } from '../src/packs/state.mjs';
 import { PRODUCT_RULES, buildChatPrompt, groundAnswer, renderAnswer, createLiveAnswerer } from '../src/api/answerer.mjs';
-import { tempDb } from './helpers/server.mjs';
+import { ROOT, tempDb } from './helpers/server.mjs';
 
 const ACTIVE_DEMO_PACKS = ['advanced-retirement', 'kids-dependents', 's-corp-owner', 'self-employed-partnership', 'virginia-resident', 'w2-benefits'];
 const UNVERIFIED = '<span class="fx-unverified" title="Not found in your data or tool results">';
@@ -424,6 +426,34 @@ test('a manual pack override changes the prompt pack context and the provenance 
   const off = await answerer.answer({ db: s.db, key: 'ask', text: 'Synthetic override question' });
   assert.ok(!off.provenance.packIds.includes('s-corp-owner'));
   assert.ok(off.provenance.packIds.includes('charitable-giving'));
+});
+
+test('provenance.packEntries lists cited entries of the conversation pack even when it is not active', async t => {
+  const s = await demoStore(t);
+  const manifest = JSON.parse(readFileSync(join(ROOT, 'packs', 'charitable-giving', 'manifest.json'), 'utf8'));
+  const givingTitle = manifest.entries.find(e => e.file === 'bunching.md').title;
+  const scorpTitle = JSON.parse(readFileSync(join(ROOT, 'packs', 's-corp-owner', 'manifest.json'), 'utf8'))
+    .entries.find(e => e.file === 'reasonable-compensation.md').title;
+  assert.ok(!/\d/.test(givingTitle) && !/\d/.test(scorpTitle), 'titles carry no numbers to ground');
+  assert.equal(buildScenario(s.db).packs.find(p => p.id === 'giving').status, 'suggested', 'giving is not active');
+  const { engine } = scripted(s.runtime, [
+    [{ text: `${givingTitle} is the entry that matters here.` }],
+    [{ text: `As a follow-up, ${givingTitle} still applies.` }],
+    [{ text: `${scorpTitle} is the entry that matters here.` }],
+  ]);
+  const answerer = createLiveAnswerer({ engine, packs: s.packs });
+
+  const whatIf = await answerer.whatIf({ db: s.db, packId: 'giving' });
+  assert.ok(!whatIf.notice);
+  assert.ok(whatIf.provenance.packEntries.includes(givingTitle), JSON.stringify(whatIf.provenance.packEntries));
+
+  const followUp = await answerer.answer({ db: s.db, key: 'pack:giving', text: 'Tell me more about that' });
+  assert.ok(!followUp.notice);
+  assert.ok(followUp.provenance.packEntries.includes(givingTitle), JSON.stringify(followUp.provenance.packEntries));
+
+  const active = await answerer.answer({ db: s.db, key: 'ask', text: 'Which entry matters' });
+  assert.ok(active.provenance.packEntries.includes(scorpTitle), 'active pack entries are still found');
+  assert.ok(!active.provenance.packEntries.includes(givingTitle));
 });
 
 test('a what-if runs a live conversation seeded with the pack prompt and pack metadata', async t => {
