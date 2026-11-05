@@ -148,6 +148,10 @@ export function applyRecs(db, results, ctx) {
     if (ACTIVE.includes(rr.status)) {
       db.prepare("UPDATE recs SET status = 'dismissed', waiting_on = NULL, updated_at = ? WHERE id = ?").run(now, id);
       record(id, 'retire', reason, rr.status, 'dismissed');
+    } else {
+      // MGN2: a done, dismissed or hidden rec keeps the owner's status; the event records the
+      // retirement without a status change, so it is never the planner's last word.
+      record(id, 'retire', reason, rr.status, rr.status);
     }
     db.prepare('UPDATE planner_recs SET retired_at = ?, retired_reason = ?, retired_from = ?, held_from = NULL, last_run = ? WHERE rec_id = ?')
       .run(clock, reason, rr.status, runId, id);

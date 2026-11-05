@@ -518,8 +518,8 @@ the trigger's `calcs` threw is blocked as `calc_failed`, never retired.
 |---|---|---|
 | `fed-q4-estimate` | tax / calendar | Jan 15, hard |
 | `va-q4-estimate` | tax / calendar | Jan 15, hard |
-| `year-end-retirement` | retirement / calendar | Last payroll (Dec 15 or `business.lastPayrollDate`), hard; employee deferral room only (SEP room alone does not fire it); blocked when `solo401kRoom` throws |
-| `solo401k-setup` | retirement / calendar | Before last payroll, hard |
+| `year-end-retirement` | retirement / calendar | Deferral deadline (see Deferral deadlines below), hard; regular, catch-up or Roth catch-up room (SEP room alone does not fire it); blocked when `solo401kRoom` throws |
+| `solo401k-setup` | retirement / calendar | Deferral deadline (see Deferral deadlines below), hard |
 | `scorp-salary` | business / income | Last payroll; scenario `salary` |
 | `invoice-deferral` | business / calendar | Dec 1; scenario `deferral` |
 | `hsa-room` | retirement / calendar | Apr 15, hard |
@@ -565,6 +565,63 @@ the statutory dates of the next 400 days that no hit covers. Decisions (src `pla
 by id: `<scenario>-<year>` open per scenario hit and `salary-<year + 1>` upcoming for an S corp.
 Events (src `planner`) are replaced only when something changed against `settings.planner.snapshot`
 (new files, new, revived and retired recs, planner fact changes); the snapshot is rewritten each run.
+
+### Deferral deadlines
+
+`year-end-retirement` and `solo401k-setup` share one deadline from `info.solo` (the sized
+participant's sponsor kind) and `firstYearStatus(ctx)` in `triggers/common.mjs`: an S corp owner
+(or no sponsor known) defers through payroll, so the last payroll; a sole proprietor with no plan
+on file whose `business.onlyEmployee` fact is true (owns the whole business, no employees, the
+spouse included) gets Apr 15 of the next year for a first plan year (IRC 401(b)(2) as amended by
+SECURE 2.0 s.317); a sole proprietor with a plan or who is not eligible, and a partnership, get
+Dec 31 (Treas. Reg. 1.401(k)-1(a)(6)(iii)). Without the answer both recs are confirm forms with the
+Apr 15 window, and year-end-retirement sizes nothing. Sole proprietor text never mentions payroll.
+Roth catch-up room is never described as lowering this year's tax; the tax value line appears only
+when `room.solo401k.pretax` is positive.
+
+### Planner literal check
+
+Besides `checkGrounding`, model prose passes `plannerLiteralFree` (`planner/prose.mjs`): after
+tokens are removed, only a month and day (optionally with the year), `tax year YYYY`, `in YYYY` and
+the plan identifiers 401(k), 403(b), 457(b), `529 plan` and Virginia529 may carry digits, and none
+of those is allowed next to a money word, a percent sign or a dollar sign. Stored prose, model or
+template, is reused only while it still passes both checks; otherwise the rec is rewritten.
+Templates obey the same rule. `src/engine/grounding.mjs` treats Virginia529 as an identifier.
+
+### Unavailable history
+
+A war game the run could not rebuild because its inputs are invalid (`info.wargameInvalid[name]`,
+whatever the season) stays in `content.wargame` with `unavailable: <reason>`; a game absent only
+for the season is kept unchanged, and a rebuilt game drops the marker. Planner decisions on such a
+game keep their row and status and get `decisions.unavailable_reason` (cleared on rebuild; an
+upcoming next-year row is not marked). The scenario serves those decisions with status
+`unavailable` and `unavailable`, and the game with status `unavailable`, unless a stored decision
+on it is decided. `POST /api/wargame/:name/pick` answers 409 for an unavailable game. Decide lists
+unavailable decisions in a collapsed "No longer current" block with a "See the history" link.
+
+A planner figure not produced by a run but kept because something references it gets
+`figures.unavailable_reason`: the readable text for `info.withheld[key]`, else the run's first
+blocked code, else a generic "no longer computed" line (`reasonText(ctx, code)` in
+`triggers/missing-data.mjs`). A produced figure clears it. The scenario serves it as
+`fig[key].unavailable`, `get_figures` as `unavailable`, plain token text appends " (not current)",
+HTML figure spans carry `data-unavailable="1"`, and the popover shows a "Not current" row.
+Triggers never read stored figures, so a retained value never drives a current recommendation.
+
+### Figure notes and stored text
+
+A figure locator's `notes` (readable assumption sentences, no digits) reach the scenario as
+`fig[key].notes` (at most five) and the popover as "Assumes" rows. Names and the product name are
+stored as given and escaped once where they become HTML (`esc` in `web/horizon/design.js`; `{n:}`
+tokens escape on resolve). Knowledge-base excerpts are escaped with braces neutralized after the
+cut, so pack text never carries markup or a live token.
+
+Retiring a planner rec that is already done, dismissed or hidden writes a `retire` event with the
+same from and to status and keeps the owner's status.
+
+Owner inputs added by this round: `business.onlyEmployee`, `retirement.iraBasis` ({owner?,
+spouse?} after-tax IRA basis from Form 8606), `retirement.priorYearFicaWages`,
+`retirement.planOffersRoth`, `retirement.otherPlanDeferrals`, `tax.prior.qbiLossCarryforward`,
+and an optional `entity` on `retirement.contributions` entries.
 
 ### Job rows
 

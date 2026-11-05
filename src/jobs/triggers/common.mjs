@@ -50,10 +50,44 @@ const CONFIRM_TASKS = Object.freeze({
   'business.cashBasis': 'Confirm the business keeps its books on a cash basis',
   'household.ownerAge': 'Tell us your age',
   'household.spouseAge': "Tell us your spouse's age",
-  'accounts.va529': 'Tell us which college savings accounts are Virginia plans and who owns them',
+  'accounts.va529': 'Tell us which college savings accounts are Virginia plans, whether the owner is seventy or older, and any carryforward',
+  'business.onlyEmployee': 'Tell us whether you own the whole business and it has no employees, your spouse included',
+  'retirement.priorYearFicaWages': "Tell us last year's Social Security wages from your business",
+  'retirement.planOffersRoth': 'Tell us whether your plan offers Roth deferrals',
+  'retirement.otherPlanDeferrals': 'Tell us your deferrals to other workplace plans this year',
 });
 
+export const confirmTask = key => CONFIRM_TASKS[key] || 'Answer the open question in your household settings';
+
 export function confirmTasks(keys) {
-  return padTasks([...keys.map(k => CONFIRM_TASKS[k] || 'Answer the open question in your household settings'), 'Run planning again once you have answered']);
+  return padTasks([...keys.map(confirmTask), 'Run planning again once you have answered']);
+}
+
+// First plan year of a sole proprietor's solo 401(k) (IRC 401(b)(2) as amended by SECURE 2.0
+// s.317): only for a sole proprietor with no plan on file. 'eligible' when the owner holds the whole
+// business and it has no employees (the spouse included), 'no' when not, 'unknown' until answered;
+// null for anyone else.
+export function firstYearStatus(ctx) {
+  const solo = ctx.info && ctx.info.solo;
+  if (!solo || solo.kind !== 'sole' || ctx.facts['retirement.solo401k'] === true) return null;
+  const answer = ctx.facts['business.onlyEmployee'];
+  return answer === true ? 'eligible' : answer === false ? 'no' : 'unknown';
+}
+
+// Which deadline a solo 401(k) deferral follows: 'payroll' (an S corp owner, or no sponsor known),
+// 'firstYear' (Apr 15 next year: an eligible sole proprietor's first plan year, and the pending
+// answer that decides it) or 'dec31' (an established sole proprietor plan, an ineligible sole
+// proprietor, a partnership).
+export function deferralDeadline(ctx) {
+  const kind = ctx.info && ctx.info.solo ? ctx.info.solo.kind : null;
+  if (kind === 'sole') return firstYearStatus(ctx) === 'eligible' || firstYearStatus(ctx) === 'unknown' ? 'firstYear' : 'dec31';
+  if (kind === 'partnership') return 'dec31';
+  return 'payroll';
+}
+
+export function deadlineWindow(ctx, deadline, payrollLabel) {
+  if (deadline === 'firstYear') return { close: `${ctx.year + 1}-04-15`, label: 'Apr 15', hard: true };
+  if (deadline === 'dec31') return { close: `${ctx.year}-12-31`, label: 'Dec 31', hard: true };
+  return { close: lastPayroll(ctx), label: payrollLabel, hard: true };
 }
 

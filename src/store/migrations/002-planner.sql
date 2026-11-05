@@ -19,3 +19,8 @@ CREATE TABLE planner_recs (
 ALTER TABLE events ADD COLUMN src TEXT;
 ALTER TABLE deadlines ADD COLUMN src TEXT;
 ALTER TABLE decisions ADD COLUMN src TEXT;
+
+-- Why a decision or figure is no longer usable for current decisions; null when current. Rows stay
+-- as history.
+ALTER TABLE decisions ADD COLUMN unavailable_reason TEXT;
+ALTER TABLE figures ADD COLUMN unavailable_reason TEXT;

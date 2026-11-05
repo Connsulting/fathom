@@ -1,6 +1,8 @@
 // Rec prose: the deterministic template, or model prose accepted only when it is JSON of the right
-// shape, uses only the hit's allowed tokens, states no literal number (R15) and passes the engine's
-// grounding guard. Stored prose is reused while the grounding hash is unchanged.
+// shape, uses only the hit's allowed tokens, states no literal number (R15), passes the engine's
+// grounding guard and passes the planner's stricter literal check (MG13): outside tokens, a digit
+// may appear only in a date form or an allowlisted plan identifier. Stored prose is reused while the
+// grounding hash is unchanged and it still passes the same checks.
 //
 // groundingHash(hit, ctx) -> sha256 hex
 // writeProse(hit, ctx, {engine, stored}) -> {fields: {summary, why, qa}, src, kept, hash, costUsd}
@@ -16,6 +18,7 @@ export const TEMPLATE_VERSION = 1;
 export const PROSE_SYSTEM = [
   'You rewrite one recommendation for a household financial co-pilot. Advisory only: never tell the household to file, move money automatically or buy a specific security.',
   'Write every amount, percent and name only as the tokens given in the input ({f:key}, {fk:key}, {l:key}, {p:key}, {n:key}). Never write a digit or a number word.',
+  'Dates may be written as a month and day, optionally with the year after it; a year may also follow "in" or "tax year". The only plan names with digits you may write are 401(k), 403(b), 457(b), 529 plan and Virginia529.',
   'Keep the facts of the draft; you may reword, reorder and clarify, but add no new claims.',
   'Return JSON only, with this shape: {"summary": string, "why": [1 to 4 strings], "qa": [0 to 4 {"q": string, "a": [1 to 3 strings]}]}.',
 ].join('\n');
@@ -59,6 +62,44 @@ function shapeOk(f) {
     && f.qa.every(x => x && typeof x === 'object' && str(x.q) && Array.isArray(x.a) && x.a.length >= 1 && x.a.length <= 3 && x.a.every(str));
 }
 
+// The planner-side literal check (R2-7, R3-8, D5). After tokens are removed, these forms are
+// blanked and any digit left fails: a month and day with an optional year, "tax year YYYY",
+// "in YYYY", and the plan identifiers 401(k), 403(b), 457(b), "529 plan" and Virginia529. A form is
+// kept (so it fails) when a money word follows it, when a percent sign follows it or when a dollar
+// sign precedes it, so a year can never pass as an amount.
+const MONTH = '(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)';
+const YEAR = '20\\d{2}';
+const ALLOWED_FORMS = [
+  new RegExp(`\\b${MONTH}\\.? (?:[1-9]|[12]\\d|3[01])(?:st|nd|rd|th)?(?:, ${YEAR})?(?![\\d\\w])`, 'gi'),
+  new RegExp(`\\btax year ${YEAR}(?![\\d\\w])`, 'gi'),
+  new RegExp(`\\bin ${YEAR}(?![\\d\\w])`, 'gi'),
+  /\b(?:401\(k\)|403\(b\)|457\(b\))(?![\d\w])/gi,
+  /\b529 plan(?![\d\w])/gi,
+  /\bVirginia529(?![\d\w])/gi,
+];
+const FORBIDDEN = new Set(['dollar', 'dollars', 'cent', 'cents', 'percent', 'percentage', 'pct', 'k', 'thousand', 'thousands',
+  'million', 'millions', 'billion', 'bn', 'usd', 'bucks', 'points', 'bps', 'basis']);
+
+function moneyContext(text, start, end) {
+  if (text[start - 1] === '$') return true;
+  const rest = text.slice(end);
+  if (/^\s*%/.test(rest)) return true;
+  // The next word after any punctuation other than a sentence end.
+  const next = /^[^\w.!?]*?([a-z]+)/i.exec(rest);
+  return !!next && FORBIDDEN.has(next[1].toLowerCase());
+}
+
+export function plannerLiteralFree(text) {
+  let s = String(text).replace(TOKEN, m => ' '.repeat(m.length));
+  for (const re of ALLOWED_FORMS) {
+    s = s.replace(re, (m, ...args) => {
+      const index = args.at(-2);
+      return moneyContext(args.at(-1), index, index + m.length) ? m : ' '.repeat(m.length);
+    });
+  }
+  return !/\d/.test(s);
+}
+
 export function checkProse(fields, allowed) {
   if (!shapeOk(fields)) return { ok: false, reason: 'shape' };
   const scope = { f: allowed.fig, fk: allowed.fig, l: allowed.law, p: allowed.pct, n: allowed.names };
@@ -70,6 +111,7 @@ export function checkProse(fields, allowed) {
     }
     if (/\{(?:f|fk|l|p|n):/.test(text.replace(TOKEN, ''))) return { ok: false, reason: 'token' };
     if (!checkGrounding(text, { figures: tokenOnly }).ok) return { ok: false, reason: 'literal' };
+    if (!plannerLiteralFree(text)) return { ok: false, reason: 'literal' };
   }
   return { ok: true };
 }
@@ -82,9 +124,19 @@ const escapeFields = f => ({
 
 const pickFields = f => ({ summary: f.summary, why: f.why, qa: f.qa });
 
+// Stored prose back to the plain text the checks read (model prose is stored escaped once).
+const unescapeText = v => String(v).replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+const storedFields = def => ({
+  summary: unescapeText(def.summary),
+  why: Array.isArray(def.why) ? def.why.map(unescapeText) : [],
+  qa: Array.isArray(def.qa) ? def.qa.map(x => ({ q: unescapeText(x && x.q), a: Array.isArray(x && x.a) ? x.a.map(unescapeText) : [] })) : [],
+});
+
 export async function writeProse(hit, ctx, { engine = null, stored = null } = {}) {
   const hash = groundingHash(hit, ctx);
-  if (stored && stored.hash === hash && stored.def && typeof stored.def.summary === 'string') {
+  // R2-7: stored prose is reused only while it still passes today's checks, whatever its source.
+  if (stored && stored.hash === hash && stored.def && typeof stored.def.summary === 'string'
+    && checkProse(storedFields(stored.def), allowedFor(hit, ctx)).ok) {
     return { fields: { summary: stored.def.summary, why: stored.def.why || [], qa: stored.def.qa || [] }, src: stored.src, kept: true, hash, costUsd: 0 };
   }
   const draft = hit.trigger.template(ctx, hit.vars);

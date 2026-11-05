@@ -55,14 +55,17 @@ export function build(ctx, hit) {
 export function template(ctx, hit) {
   if (hit.confirm) {
     return {
-      summary: 'Tell us which college savings accounts are Virginia plans you own and we will size the deduction left this year.',
-      why: ['Virginia deducts contributions per account up to {l:va529Cap} a year, but only for Virginia plans owned by the household.'],
+      summary: 'Tell us which college savings accounts are Virginia plans you own, whether the owner is seventy or older, and any carryforward, and we will size the deduction left this year.',
+      why: [
+        'Virginia deducts contributions per account up to {l:va529Cap} a year, but only for Virginia plans owned by the household.',
+        'An owner who is seventy or older deducts the full amount, and any carryforward changes what is left, so Virginia tax waits for these answers.',
+      ],
       qa: [],
     };
   }
   const worth = ctx.fig['va529.taxSaved'] ? ', worth about {f:va529.taxSaved} in Virginia tax' : '';
   return {
-    summary: `You can still deduct {f:va529.deductionLeft} of Virginia 529 contributions this year${worth}.`,
+    summary: `You can still deduct {f:va529.deductionLeft} of contributions to your Virginia 529 plan this year${worth}.`,
     why: [
       'Virginia allows a deduction of up to {l:va529Cap} per account each year; you have contributed {f:va529.contrib.ytd} so far.',
       'Contributions above the limit carry forward to later years, so nothing is lost by putting in more.',

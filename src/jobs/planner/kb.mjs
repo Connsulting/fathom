@@ -1,10 +1,13 @@
 // Knowledge-base excerpts for recs: the first paragraph of a pack entry after its title and the
 // Tax year / Reviewed lines, with trailing citation links dropped (the cite is separate) and other
-// markdown links reduced to their text, at most 420 characters cut at a sentence end.
+// markdown links reduced to their text, at most 420 characters cut at a sentence end. Title, body
+// and cite are then escaped with braces neutralized (MG14), after the cut so no entity is split:
+// pack text renders as text and never resolves as a scenario token.
 //
 // kbExcerpt(packs, packId, entryId) -> {title, body, cite, pack} | null
 
 import { getEntry } from '../../packs/index.mjs';
+import { dataText } from '../triggers/common.mjs';
 
 const MAX = 420;
 
@@ -33,21 +36,33 @@ function plain(text) {
     .trim();
 }
 
-function cut(text) {
-  if (text.length <= MAX) return text;
-  const head = text.slice(0, MAX);
+function cut(text, max) {
+  if (text.length <= max) return text;
+  const head = text.slice(0, max);
   const end = Math.max(head.lastIndexOf('. '), head.lastIndexOf('? '), head.lastIndexOf('! '));
   if (end > 0) return head.slice(0, end + 1);
-  return head.slice(0, MAX - 3).replace(/\s+\S*$/, '') + '...';
+  return head.slice(0, max - 3).replace(/\s+\S*$/, '') + '...';
+}
+
+// The escaped excerpt stays within MAX: cut the plain text, escape, and cut shorter if escaping
+// grew it past the limit.
+function excerptText(text) {
+  let max = MAX;
+  let out = dataText(cut(text, max));
+  while (out.length > MAX && max > 0) {
+    max -= out.length - MAX;
+    out = dataText(cut(text, Math.max(0, max)));
+  }
+  return out;
 }
 
 export function kbExcerpt(packs, packId, entryId) {
   const entry = getEntry(packs, packId, entryId);
   if (!entry) return null;
   return {
-    title: entry.title,
-    body: cut(plain(firstParagraph(entry.body))),
-    cite: entry.cites[0] ? entry.cites[0].label : '',
+    title: dataText(entry.title),
+    body: excerptText(plain(firstParagraph(entry.body))),
+    cite: entry.cites[0] ? dataText(entry.cites[0].label) : '',
     pack: packId,
   };
 }

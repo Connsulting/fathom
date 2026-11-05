@@ -47,7 +47,7 @@ export function template(ctx) {
       "Virginia expects estimates once the balance due passes {l:vaEstimateThreshold}; the target is {p:vaSafeHarborCurrent} of this year's projected tax or last year's tax, whichever is smaller.",
     ],
     qa: [
-      { q: 'How was the Virginia tax projected?', a: ['From your projected income less the Virginia deduction and any Virginia 529 deduction, using the Virginia rate schedule. Personal exemptions are left out, which errs on the side of paying enough.'] },
+      { q: 'How was the Virginia tax projected?', a: ['From your projected income less the Virginia deduction and any Virginia 529 plan deduction, using the Virginia rate schedule. Personal exemptions are left out, which errs on the side of paying enough.'] },
     ],
   };
 }

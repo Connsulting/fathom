@@ -2,7 +2,7 @@
 // tax inputs (R1, R14, R19, T9.5). Evaluated last so it sees every other trigger's block.
 
 import { addDays } from '../planner/data.mjs';
-import { padTasks, dataText } from './common.mjs';
+import { padTasks, dataText, confirmTask } from './common.mjs';
 
 export const id = 'missing-data';
 export const domain = 'data';
@@ -13,32 +13,58 @@ export const calcs = [];
 export const kb = [];
 
 const BUSINESS_FACTS = ['income.sCorp', 'income.selfEmployed', 'income.partnership'];
-const TAX_CODES = new Set(['pnl', 'tax_payments', 'prior_year_missing', 'filing_status_assumed', 'partnership_incomplete', 'va_itemized_missing', 'mfs_unsupported', 'calc_failed']);
+const TAX_CODES = new Set([
+  'pnl', 'tax_payments', 'prior_year_missing', 'filing_status_assumed', 'partnership_incomplete', 'va_itemized_missing', 'mfs_unsupported', 'calc_failed',
+  'ctc_refundable_unsupported', 'retirement_contribution_unattributed', 'retirement_contribution_over_limit', 'retirement_other_deferrals_missing',
+  'va529_answers_missing',
+]);
 
-function reasonItem(ctx, reason) {
+// Fixed reason text per code: [what is on hold and why, the task that clears it]. No digits and no
+// data-derived text, so the same sentence is safe as rec prose and as a plain-text reason.
+const REASONS = Object.freeze({
+  mfs_unsupported: ['Tax figures for married filing separately are not supported yet, so tax projections are on hold.', 'Check your filing status, and ask your accountant for this year projection while filing separately'],
+  calc_failed: ['A calculator could not use one of your answers, so some figures are on hold.', 'Check your household answers, such as ages, for typos'],
+  va_itemized_missing: ['You itemize federally, so Virginia needs your Virginia itemized estimate too.', 'Enter your Virginia itemized deduction estimate'],
+  ctc_refundable_unsupported: ['Your child tax credit is larger than your income tax, and the refundable part is not modeled yet, so tax projections are on hold.', 'Ask your accountant for this year projection, including the refundable child tax credit'],
+  retirement_contribution_unattributed: ['A retirement contribution does not say which of your businesses sponsors the plan, so tax projections are on hold.', 'Tell us which business sponsors each retirement contribution'],
+  retirement_contribution_over_limit: ['A self-employed retirement contribution is above what the plan rules allow for your earnings, so tax projections are on hold.', 'Check your retirement contribution amounts with your plan provider or accountant'],
+  retirement_other_deferrals_missing: ['We need your deferrals to other workplace plans this year before your self-employed retirement deduction can be figured.', confirmTask('retirement.otherPlanDeferrals')],
+  va529_answers_missing: ["We need each college savings account's Virginia answers, including any carryforward, before projecting Virginia tax.", confirmTask('accounts.va529')],
+  ira_room_missing: ['IRA contribution room could not be figured for everyone in the household, so the backdoor Roth recommendation is on hold.', 'Check the household ages and income on file'],
+  'retirement.otherPlanDeferrals': ['We need your deferrals to other workplace plans this year before sizing retirement room.', confirmTask('retirement.otherPlanDeferrals')],
+  'retirement.priorYearFicaWages': ["We need last year's Social Security wages from your business before sizing catch-up room.", confirmTask('retirement.priorYearFicaWages')],
+  'retirement.planOffersRoth': ['We need to know whether your plan offers Roth deferrals before sizing catch-up room.', confirmTask('retirement.planOffersRoth')],
+  inputs_changed: ['Its inputs changed, so it is kept for reference and is not a current choice.', 'Review the latest data on your plan'],
+});
+const RETAINED = 'No longer computed from your current data, so it is shown for reference only.';
+
+// `name` formats a data-derived name: dataText for stored rec HTML, plain for a plain-text reason.
+function reasonItem(ctx, reason, name = dataText) {
   if (reason.startsWith('entity_unclassified:')) {
     const slug = reason.slice('entity_unclassified:'.length);
     const e = (ctx.entities || []).find(x => x.slug === slug);
-    const name = e ? dataText(e.name) : 'a business in your profit and loss';
-    return { code: reason, tax: true, text: `We do not know how ${name} is taxed.`, task: `Tell us how ${name} is taxed` };
+    const who = e ? name(e.name) : 'a business in your profit and loss';
+    return { code: reason, tax: true, text: `We do not know how ${who} is taxed.`, task: `Tell us how ${who} is taxed` };
   }
   if (reason === 'partnership_incomplete') {
-    const names = (ctx.info.partnershipsMissing || []).map(dataText);
+    const names = ((ctx.info && ctx.info.partnershipsMissing) || []).map(name);
     const text = names.length
-      ? `We do not have a complete K-1 or partnership estimate for ${names.join(', ')}.`
-      : 'A partnership K-1 or partnership estimate is missing an amount we need.';
+      ? `We do not have complete partnership figures for ${names.join(', ')}.`
+      : 'A partnership statement or partnership estimate is missing an amount we need.';
     return { code: reason, tax: true, text, task: 'Add the ordinary income, guaranteed payments and self-employment earnings from each K-1, or a partnership estimate' };
   }
-  if (reason === 'mfs_unsupported') {
-    return { code: reason, tax: true, text: 'Tax figures for married filing separately are not supported yet, so tax projections are on hold.', task: 'Check your filing status, and ask your accountant for this year projection while filing separately' };
-  }
-  if (reason === 'calc_failed') {
-    return { code: reason, tax: false, text: 'A calculator could not use one of your answers, so some figures are on hold.', task: 'Check your household answers, such as ages, for typos' };
-  }
-  if (reason === 'va_itemized_missing') {
-    return { code: reason, tax: true, text: 'You itemize federally, so Virginia needs your Virginia itemized estimate too.', task: 'Enter your Virginia itemized deduction estimate' };
+  if (REASONS[reason]) return { code: reason, tax: TAX_CODES.has(reason), text: REASONS[reason][0], task: REASONS[reason][1] };
+  if (reason.includes('.')) {
+    return { code: reason, tax: false, text: 'This is on hold until you answer an open question in your household settings.', task: confirmTask(reason) };
   }
   return { code: reason, tax: true, text: 'Some figures could not be computed from the data on file.', task: 'Check the latest uploads for missing amounts' };
+}
+
+// The plain-text reason for a code (a blocked code, a confirm key or 'inputs_changed'), used for
+// figures and war games kept for reference while unavailable. Escaped where it becomes HTML.
+export function reasonText(ctx, code) {
+  if (!code) return RETAINED;
+  return reasonItem(ctx, code, v => String(v)).text;
 }
 
 export function items(ctx) {

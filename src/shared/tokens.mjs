@@ -3,7 +3,8 @@
 //
 // Tokens: {f:key} and {fk:key} figure money, {l:key} statutory money, {p:key} percent,
 // {n:key} name. resolveTokens leaves literal markup in the input alone and escapes only what a
-// token resolves to. Escaped braces (&#123; &#125;) are not tokens.
+// token resolves to. Escaped braces (&#123; &#125;) are not tokens. A figure with `unavailable`
+// (kept only for reference) is marked: data-unavailable="1" in HTML, " (not current)" in plain text.
 
 export const TOKEN = /\{(fk|f|l|p|n):([^{}\s:]+)\}/g;
 
@@ -60,9 +61,10 @@ export function resolveTokens(scenario, input, asHtml, opts) {
       const f = S.fig ? S.fig[key] : null;
       if (!f || typeof f.v !== 'number') { missing('missing figure ' + key); return '[?' + key + ']'; }
       const text = money(f.v, { k: type === 'fk' });
-      if (!asHtml) return text;
+      // A figure kept only for reference (f.unavailable) never reads as current.
+      if (!asHtml) return f.unavailable ? text + ' (not current)' : text;
       const kind = f.kind in KIND_WORDS ? f.kind : 'e';
-      return '<span class="fx-fig" data-fig="' + esc(key) + '" data-kind="' + kind + '" tabindex="0">' + text + '</span>';
+      return '<span class="fx-fig" data-fig="' + esc(key) + '" data-kind="' + kind + '"' + (f.unavailable ? ' data-unavailable="1"' : '') + ' tabindex="0">' + text + '</span>';
     }
     if (type === 'l') {
       const v = S.law ? S.law[key] : undefined;

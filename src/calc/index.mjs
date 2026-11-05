@@ -129,7 +129,9 @@ export function solo401kRoom(inputs) {
   const additions = positive(Math.min(p.annualAdditions, base) - regularThisPlan - employerPaid);
   const availableComp = positive(base - thisDeferrals - employerPaid);
   const employee = round(Math.min(positive(p.employeeDeferral - allDeferrals), additions, availableComp));
-  const catchLimit = age < p.catchUpAge ? 0 : age >= p.enhancedCatchUpStart && age <= p.enhancedCatchUpEnd ? p.enhancedCatchUp : p.catchUp;
+  if (inputs.catchUpAllowed != null && typeof inputs.catchUpAllowed !== 'boolean') throw new TypeError('catchUpAllowed must be a boolean');
+  const catchUpAllowed = inputs.catchUpAllowed !== false;
+  const catchLimit = !catchUpAllowed || age < p.catchUpAge ? 0 : age >= p.enhancedCatchUpStart && age <= p.enhancedCatchUpEnd ? p.enhancedCatchUp : p.catchUp;
   const catchUp = round(Math.min(positive(catchLimit - positive(allDeferrals - p.employeeDeferral)), positive(availableComp - employee)));
   const rate = kind === 'w2' ? p.employerRate : p.selfEmployedRate;
   const employerIncomeCap = kind === 'self-employed'
@@ -140,7 +142,8 @@ export function solo401kRoom(inputs) {
     rothCatchUp: priorWages > p.rothCatchUpPriorWages ? catchUp : 0 },
   [step('Employee regular room', 'minimum of all-plan deferral, compensation and annual-additions headroom', employee),
     step('Catch-up room', 'age-specific catch-up less all-plan catch-ups already made', catchUp),
-    step('Employer room', 'minimum of employer rate, compensation and annual-additions headroom', employer)], ['retirement', 'solo', 'sep']);
+    step('Employer room', 'minimum of employer rate, compensation and annual-additions headroom', employer),
+    ...(catchUpAllowed ? [] : [step('Catch-up not allowed under this plan', 'catch-up limit set to zero', 0)])], ['retirement', 'solo', 'sep']);
 }
 
 export function sepRoom(inputs) {

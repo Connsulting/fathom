@@ -111,6 +111,8 @@ export function wargamePick(ctx) {
   if (name !== 'salary' && name !== 'deferral') throw new HttpError(404, `no war game ${name}`);
   const wargame = loadContent(db).wargame || {};
   if (!wargame[name]) throw new HttpError(404, `no war game ${name}`);
+  // D3: a war game kept only for reference is not a current choice.
+  if (typeof wargame[name].unavailable === 'string') throw new HttpError(409, 'war game unavailable');
   const list = wargameLists(wargame)[name];
   const { index } = ctx.body;
   let i = index;

@@ -23,12 +23,23 @@ export function evaluate(ctx) {
   const ira = ctx.info.ira || {};
   const persons = ctx.info.persons || ['owner'];
   const noBalance = ira.noBalance || {};
+  // MG8: one contribution limit per person, shared by traditional and Roth (IRC 219(b), 408A(c)(2)).
+  // Contribution advice needs that person's room left; after-tax basis (Form 8606) converts apart.
+  if (persons.some(p => !ctx.fig[`room.ira.${p}`])) return { blocked: 'ira_room_missing' };
+  const basisFact = ctx.facts['retirement.iraBasis'];
+  const basisOf = p => {
+    const v = basisFact && typeof basisFact === 'object' ? basisFact[p] : null;
+    return typeof v === 'number' && Number.isFinite(v) && v > 0;
+  };
   const people = persons.map(person => ({
     person,
     proRata: ira.unknownOwner ? 'unknown' : ira[person] ? 'blocked' : noBalance[person] ? 'noBalance' : 'clear',
+    room: ctx.fig[`room.ira.${person}`].v > 0,
+    basis: basisOf(person),
   }));
+  if (!people.some(p => p.room || p.basis)) return null;
   return {
-    grounding: ['agi.est', 'ira.pretax.owner', 'ira.pretax.spouse', 'room.ira.household'],
+    grounding: ['agi.est', 'room.ira.owner', 'room.ira.spouse', 'ira.pretax.owner', 'ira.pretax.spouse', 'room.ira.household'],
     people,
     afterYear: Number(ctx.clock.slice(0, 4)) !== ctx.year,
   };
@@ -36,44 +47,56 @@ export function evaluate(ctx) {
 
 // Person phrasing that reads correctly for each person (verb agreement, possessives).
 const PERSON = {
-  owner: { clear: 'You can', have: 'You have', your: 'your', obj: 'you' },
-  spouse: { clear: 'Your spouse can', have: 'Your spouse has', your: "your spouse's", obj: 'your spouse' },
+  owner: { clear: 'You can', have: 'You have', your: 'your', obj: 'you', Your: 'Your' },
+  spouse: { clear: 'Your spouse can', have: 'Your spouse has', your: "your spouse's", obj: 'your spouse', Your: "Your spouse's" },
 };
 
+const anyRoom = hit => hit.people.some(p => p.room);
+// Pro-rata status matters only for someone who will convert: room to contribute, or basis.
+const acting = hit => hit.people.filter(p => p.room || p.basis);
+
 export function build(ctx, hit) {
-  const unknown = hit.people.some(p => p.proRata === 'unknown');
-  const blocked = hit.people.filter(p => p.proRata === 'blocked');
-  const noBalance = hit.people.filter(p => p.proRata === 'noBalance');
+  const people = acting(hit);
+  const unknown = people.some(p => p.proRata === 'unknown');
+  const blocked = people.filter(p => p.proRata === 'blocked');
+  const noBalance = people.filter(p => p.proRata === 'noBalance');
+  const withRoom = people.filter(p => p.room);
+  const basisOnly = people.filter(p => !p.room && p.basis);
   return {
-    title: 'Use a backdoor Roth contribution',
+    title: anyRoom(hit) ? 'Use a backdoor Roth contribution' : 'Convert your after-tax IRA basis to Roth',
     effort: 'An afternoon',
-    value: [{ cls: 'retire', text: 'Adds tax-free Roth savings above the income limit' }],
+    value: [{ cls: 'retire', text: anyRoom(hit) ? 'Adds tax-free Roth savings above the income limit' : 'Moves after-tax IRA savings into Roth' }],
     mine: mineOf(ctx, hit.grounding),
     cross: blocked.length ? ['A pre-tax IRA balance makes part of any conversion taxable, so roll it into a workplace plan first if you can.'] : [],
     tasks: padTasks([
+      ...withRoom.map(p => `Make a nondeductible traditional IRA contribution for ${PERSON[p.person].obj}`),
+      ...basisOnly.map(p => `Convert ${PERSON[p.person].your} existing after-tax IRA basis to Roth, with the pro-rata rule in mind`),
       ...(unknown ? ['Tell us whose IRA each traditional IRA account is'] : []),
       ...noBalance.map(p => `Confirm the current balance of ${PERSON[p.person].your} traditional, SEP and SIMPLE IRA accounts`),
       ...blocked.map(p => `Move ${PERSON[p.person].your} pre-tax IRA balance into a workplace plan before converting`),
-      'Make a nondeductible traditional IRA contribution',
-      'Convert it to Roth once it settles',
+      ...(withRoom.length ? ['Convert it to Roth once it settles'] : []),
       'File Form 8606 with the return',
     ]),
   };
 }
 
 export function template(ctx, hit) {
-  const status = hit.people.map(p => {
+  const status = acting(hit).map(p => {
     const w = PERSON[p.person];
     if (p.proRata === 'clear') return `${w.clear} convert without a pro-rata tax.`;
     if (p.proRata === 'blocked') return `${w.have} a pre-tax IRA balance, so a conversion would be partly taxable.`;
     if (p.proRata === 'noBalance') return `We do not have a current balance for ${w.your} pre-tax IRA, so we cannot check the pro-rata rule for ${w.obj} yet.`;
     return `We need to know whose IRA accounts are whose before we can check the pro-rata rule for ${w.obj}.`;
   });
+  const income = ctx.fig['agi.est'] ? 'Your estimated income of {f:agi.est}' : 'Your estimated income';
+  const summary = anyRoom(hit)
+    ? `${income} is above the Roth IRA limit, so direct Roth contributions are out, but a backdoor contribution still works.`
+    : `${income} is above the Roth IRA limit. You have no IRA contribution room left this year, but after-tax basis already in a traditional IRA can still be converted.`;
+  // Room is cited per person, and only where it is positive.
+  const room = hit.people.filter(p => p.room).map(p => `${PERSON[p.person].Your} IRA contribution room left this year is {f:room.ira.${p.person}}.`);
   return {
-    summary: ctx.fig['agi.est']
-      ? 'Your estimated income of {f:agi.est} is above the Roth IRA limit, so direct Roth contributions are out, but a backdoor contribution still works.'
-      : 'Your estimated income is above the Roth IRA limit, so direct Roth contributions are out, but a backdoor contribution still works.',
-    why: [status.join(' '), hit.afterYear
+    summary,
+    why: [status.join(' '), ...room, hit.afterYear
       ? 'A conversion made now is measured against the IRA balances on Dec 31 of the year you convert, not last year.'
       : 'The pro-rata rule looks at every pre-tax IRA balance on Dec 31, so clear those first.'],
     qa: [{ q: 'What is the pro-rata rule?', a: ['When you convert, the taxable share is the pre-tax part of all your traditional, SEP and SIMPLE IRA balances at year end, not just the account you converted.'] }],

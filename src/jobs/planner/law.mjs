@@ -26,6 +26,8 @@ export const LAW = Object.freeze({
   ctcPerChild: pack(2200, 'Child tax credit per child', 'kids-dependents', 'child-tax-credit'),
   ctcThresholdMfj: pack(400000, 'Child tax credit phase-out threshold, married filing jointly', 'kids-dependents', 'child-tax-credit'),
   ctcThresholdOther: pack(200000, 'Child tax credit phase-out threshold, other filers', 'kids-dependents', 'child-tax-credit'),
+  ctcPhaseOutStep: calc(TAX_2026.childTaxCredit.phaseOutStep, 'Child tax credit phase-out step', 'childTaxCredit.phaseOutStep'),
+  ctcPhaseOutReduction: calc(TAX_2026.childTaxCredit.phaseOutReduction, 'Child tax credit reduction per step', 'childTaxCredit.phaseOutReduction'),
   deferral: calc(TAX_2026.retirement.employeeDeferral, 'Employee 401(k) deferral limit', 'retirement.employeeDeferral'),
   hsaSelf: calc(TAX_2026.hsa.self, 'HSA limit, self-only coverage', 'hsa.self'),
   hsaFamily: calc(TAX_2026.hsa.family, 'HSA limit, family coverage', 'hsa.family'),

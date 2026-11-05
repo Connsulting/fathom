@@ -18,6 +18,7 @@ import { writeProse } from './planner/prose.mjs';
 import { applyRecs } from './planner/recs.mjs';
 import { writeBrief, namesOf } from './planner/brief.mjs';
 import { evaluateCatalog } from './triggers/index.mjs';
+import { reasonText } from './triggers/missing-data.mjs';
 import { wargameFigurePrefixes } from './planner/wargame.mjs';
 
 export const PLAN_JOB_ID = 'plan';
@@ -144,7 +145,7 @@ async function plan(db, engine, { clock, runId, packDirs }) {
     refreshPackStateIn(db, { packDirs });
     const hits = results.filter(r => r.state === 'hit' && prose[r.trigger.id]).map(r => r.hit);
     writeBrief(db, { ...ctx, now }, { hits, changes });
-    pruneFigures(db, computed.figures);
+    pruneFigures(db, computed.figures, ctx);
     return { factsWritten, changes };
   });
 
@@ -173,26 +174,30 @@ function writeSources(db, sources) {
   }
 }
 
+// A produced figure is current: its unavailable_reason is cleared (R2-9).
 function writeFigures(db, figures, now) {
-  const get = db.prepare('SELECT v, src, kind, label, file_id, parser, locator FROM figures WHERE key = ?');
-  const put = db.prepare(`INSERT INTO figures (key, v, src, kind, label, file_id, parser, locator, updated_at)
-                          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  const get = db.prepare('SELECT v, src, kind, label, file_id, parser, locator, unavailable_reason FROM figures WHERE key = ?');
+  const put = db.prepare(`INSERT INTO figures (key, v, src, kind, label, file_id, parser, locator, updated_at, unavailable_reason)
+                          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
                           ON CONFLICT(key) DO UPDATE SET v = excluded.v, src = excluded.src, kind = excluded.kind, label = excluded.label,
-                            file_id = excluded.file_id, parser = excluded.parser, locator = excluded.locator, updated_at = excluded.updated_at`);
+                            file_id = excluded.file_id, parser = excluded.parser, locator = excluded.locator, updated_at = excluded.updated_at,
+                            unavailable_reason = NULL`);
   for (const f of Object.values(figures)) {
     const locator = JSON.stringify(f.locator);
     const row = get.get(f.key);
     if (row && row.v === f.v && row.src === f.src && row.kind === f.kind && row.label === f.label
-      && row.file_id === (f.fileId ?? null) && row.parser === PLANNER_SRC && row.locator === locator) continue;
+      && row.file_id === (f.fileId ?? null) && row.parser === PLANNER_SRC && row.locator === locator && row.unavailable_reason == null) continue;
     put.run(f.key, f.v, f.src, f.kind, f.label, f.fileId ?? null, PLANNER_SRC, locator, now);
   }
 }
 
 // S11, R14, T7: a planner figure not produced this run stays while a rec def (including mine),
 // message, decision note or content row references it, or while a kept war-game entry names its
-// point or option; otherwise it is deleted.
-function pruneFigures(db, produced) {
-  const stale = db.prepare('SELECT key FROM figures WHERE parser = ?').all(PLANNER_SRC).map(r => r.key).filter(k => !produced[k]);
+// point or option; otherwise it is deleted. A kept figure is marked unavailable with the readable
+// reason it was not produced (R2-9): the withheld code, else the run's first block, else a generic
+// "no longer computed" line. Triggers never read it: they see only this run's figures.
+function pruneFigures(db, produced, ctx) {
+  const stale = db.prepare('SELECT key, unavailable_reason FROM figures WHERE parser = ?').all(PLANNER_SRC).filter(r => !produced[r.key]);
   if (!stale.length) return;
   const refs = new Set();
   const scan = text => { for (const [, , key] of String(text ?? '').matchAll(TOKEN)) refs.add(key); };
@@ -208,9 +213,16 @@ function pruneFigures(db, produced) {
     scan(r.value);
     if (r.key === 'wargame') prefixes.push(...wargameFigurePrefixes(parseJson(r.value, {})));
   }
+  const info = ctx.info || {};
+  const withheld = info.withheld || {};
   const del = db.prepare('DELETE FROM figures WHERE key = ? AND parser = ?');
-  for (const key of stale) {
-    if (refs.has(key) || prefixes.some(p => key.startsWith(p))) continue;
+  const mark = db.prepare('UPDATE figures SET unavailable_reason = ? WHERE key = ? AND parser = ?');
+  for (const { key, unavailable_reason: was } of stale) {
+    if (refs.has(key) || prefixes.some(p => key.startsWith(p))) {
+      const reason = reasonText(ctx, withheld[key] || (info.blocked || [])[0] || null);
+      if (was !== reason) mark.run(reason, key, PLANNER_SRC);
+      continue;
+    }
     del.run(key, PLANNER_SRC);
   }
 }

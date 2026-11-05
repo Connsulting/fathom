@@ -6,19 +6,31 @@
 //   model: {salary?, deferral?}, warnings: [codes], info}
 // householdTax(parts, ctx) -> re-exported from household.mjs
 
-import { estimatedPaymentSafeHarbor, solo401kRoom, sepRoom, hsaLimit } from '../../calc/index.mjs';
+import { estimatedPaymentSafeHarbor, solo401kRoom, sepRoom, hsaLimit, TAX_2026 } from '../../calc/index.mjs';
 import { cents } from '../../store/db.mjs';
 import {
   pnlSums, ytd, dateLabel, monthLabel, cleanLabel, sum, addDays, sameName,
 } from './data.mjs';
 import { law, stdDeduction } from './law.mjs';
-import { householdTax, payrollRecords, contributions, factPretax, stepsOf, num } from './household.mjs';
+import {
+  householdTax, seTaxByPerson, seRetirementWorksheet, catchUpLimitFor, attributeContributions, payrollRecords, contributions,
+  factPretax, stepsOf, num,
+} from './household.mjs';
+import { notesFor } from './assumptions.mjs';
 import { trailingCharitable } from './facts.mjs';
 import { buildWargames } from './wargame.mjs';
 
-export const ASSUMES_CONFIRMED = 'assumes plan terms and eligibility are confirmed with your advisor';
 const CASH_KINDS = ['checking', 'savings', 'cash', 'business'];
 const PERSONAL_CASH = ['checking', 'savings', 'cash'];
+// MG11: personal spending accounts: checking, savings, cash and personal cards (no business entity).
+const SPEND_ACCOUNT = a => !a.entity && (PERSONAL_CASH.includes(a.kind) || a.kind === 'card' || /credit/i.test(a.kind ?? ''));
+const PLAN_TERMS = 'plan_terms_confirmed';
+// Figures the planner withholds as a group (R2-9): household tax and its targets, Virginia, solo room.
+const TAX_KEYS = ['agi.est', 'tax.fed.qbi', 'tax.fed.taxable', 'tax.fed.income', 'tax.fed.se', 'tax.fed.proj', 'tax.va.proj',
+  'sh.fed.required', 'sh.fed.remaining', 'sh.fed.priorTarget', 'sh.fed.priorRemaining', 'sh.fed.currentTarget',
+  'sh.va.required', 'sh.va.remaining', 'va529.deduction', 'va529.deductionLeft', 'va529.taxSaved'];
+const VA_KEYS = ['tax.va.proj', 'sh.va.required', 'sh.va.remaining', 'va529.deduction', 'va529.deductionLeft', 'va529.taxSaved'];
+const SOLO_KEYS = ['room.solo401k', 'room.solo401k.employee', 'room.solo401k.employer', 'room.solo401k.catchUp', 'room.solo401k.rothCatchUp', 'room.solo401k.pretax'];
 const IRA_ANY = a => /\bIRA\b/i.test(a.name) || a.kind === 'roth';
 const IRA_PRETAX = a => /\bIRA\b/i.test(a.name) && !/roth/i.test(a.name) && a.kind !== 'roth';
 
@@ -38,17 +50,29 @@ export const SOURCES = Object.freeze({
 // ---------------------------------------------------------------- output helpers
 
 export function createOut(clock) {
-  const out = { clock, figures: {}, sources: {}, warnings: new Set(), info: { confirm: {}, blocked: [], calcFailed: [] }, model: {} };
+  const out = {
+    clock, figures: {}, sources: {}, warnings: new Set(), model: {},
+    info: { confirm: {}, blocked: [], calcFailed: [], withheld: {}, wargameInvalid: {} },
+  };
   out.warn = code => out.warnings.add(code);
   out.source = (id, label, asOf, kind) => { out.sources[id] = { label, asOf, kind }; };
   out.put = (key, v, kind, label, src, locator, fileId = null) => {
     if (typeof v !== 'number' || !Number.isFinite(v)) return null;
     if (!out.sources[src] && SOURCES[src]) out.source(src, SOURCES[src].label, dateLabel(clock), SOURCES[src].kind);
+    // MGN1: assumption codes stay; their readable sentences ride along as notes.
+    const notes = notesFor(locator && locator.assumptions);
     out.figures[key] = {
       key, v: cents(v), kind, label: key.startsWith('wg.') ? label : cleanLabel(label), src, fileId,
-      locator: { ...locator, computedOn: clock },
+      locator: { ...locator, ...(notes.length ? { notes } : {}), computedOn: clock },
     };
     return out.figures[key];
+  };
+  // A figure deliberately not produced this run, with the code that explains why (R2-9).
+  out.withhold = (keys, code) => { for (const k of keys) if (!(k in out.info.withheld)) out.info.withheld[k] = code; };
+  // Add confirm keys to a group without duplicates.
+  out.confirm = (group, ...keys) => {
+    const list = out.info.confirm[group] || (out.info.confirm[group] = []);
+    for (const k of keys) if (!list.includes(k)) list.push(k);
   };
   // A calculator call that may throw on unusable inputs: warn calc_failed:<fn> and go on.
   out.safe = (fn, call) => {
@@ -211,17 +235,12 @@ export function computeFigures(data, facts, ctx) {
   const persons = f === 'mfj' || f === 'mfs' ? ['owner', 'spouse'] : ['owner'];
   const inUnit = p => persons.includes(p);
   const records = payrollRecords(data, entities, out);
-  const contrib = contributions(persons, records, corps, owner);
   // inc.ytd.w2 (F8): outside-employer wages received in the tax year (payroll records are already
   // limited to it), the W-2 box or the latest paystub's year-to-date wages.
   const outsideYtd = records.filter(r => !r.household);
   if (outsideYtd.length) {
     out.source('docs', SOURCES.docs.label, dateLabel(clock), SOURCES.docs.kind);
     out.put('inc.ytd.w2', sum(outsideYtd.map(r => r.ytdWages)), 'a', 'Outside employer wages received this year', 'docs', rowsLoc('documents', outsideYtd.map(r => r.docId)), outsideYtd[0].fileId);
-  }
-  for (const t of inflows(accounts.filter(IRA_ANY), t => /contribution/i.test(t.category ?? ''))) {
-    const a = accounts.find(x => x.id === t.account_id);
-    if (a && contrib[a.owner]) contrib[a.owner].ira = cents(contrib[a.owner].ira + t.amount);
   }
   const ageOf = p => {
     const v = owner[p === 'spouse' ? 'household.spouseAge' : 'household.ownerAge'];
@@ -235,15 +254,21 @@ export function computeFigures(data, facts, ctx) {
   if (f === 'mfs') { blocked.push('mfs_unsupported'); out.warn('mfs_unsupported'); }
   const w2 = [];
   const biz = [];
+  const bizNames = {};
   for (const c of corps) {
     if (!inUnit(c.person)) continue;
     const ownRec = records.find(r => r.corp === c.entity.slug && r.person === c.person);
     const gross = c.sums.salary > 0 ? c.proj(c.sums.salary) : ownRec ? cents(ownRec.wages + ownRec.pretax) : 0;
-    // I1: owner-set deferral records lower only gross taken from the P&L officer salary; payroll
-    // document wages are box 1 and already exclude pretax deferrals.
-    const fromPnl = c.sums.salary > 0;
-    const pretax = gross > 0 ? Math.min(gross, cents((ownRec ? ownRec.pretax : 0) + (fromPnl ? factPretax(owner, c.person, ownRec) : 0))) : 0;
-    if (gross > 0) w2.push({ person: c.person, src: `corp:${c.entity.slug}`, gross, agi: Math.max(0, cents(gross - pretax)), pretax });
+    // I1: owner-set deferral records lower only gross taken from the P&L officer salary (added once
+    // contributions are attributed, below); payroll document wages are box 1 and already exclude
+    // pretax deferrals.
+    c.fromPnl = c.sums.salary > 0;
+    const pretax = gross > 0 ? Math.min(gross, cents(ownRec ? ownRec.pretax : 0)) : 0;
+    c.w2 = null;
+    if (gross > 0) {
+      c.w2 = { person: c.person, src: `corp:${c.entity.slug}`, gross, agi: Math.max(0, cents(gross - pretax)), pretax };
+      w2.push(c.w2);
+    }
     const K = c.proj(c.sums.net);
     biz.push({ id: c.entity.slug, kind: 'scorp', person: c.person, agi: K, qbi: K, seInput: null, w2Wages: gross, sstb: sstbOf(c.entity) });
     c.gross = gross;
@@ -271,6 +296,7 @@ export function computeFigures(data, facts, ctx) {
     if ((e.type === 'sole_prop' || e.type === 'llc_single') && inUnit(e.owner)) {
       const S = e.proj(e.sums.net);
       biz.push({ id: e.slug, kind: 'sole', person: e.owner, agi: S, qbi: S, seInput: S, w2Wages: 0, sstb: sstbOf(e) });
+      bizNames[e.slug] = e.name;
     }
   }
   // Partnerships (S1, F2): every partnership entity needs its own K-1 (matched by the K-1's
@@ -295,7 +321,7 @@ export function computeFigures(data, facts, ctx) {
   const k1Inputs = k1s.map(d => ({ ...d.fields, id: `k1-${d.id}` }));
   const est = owner['income.partnershipEstimate'];
   const missingPartners = [];
-  if (uncovered.length === 1 && est && typeof est === 'object') k1Inputs.push({ ...est, id: uncovered[0].slug });
+  if (uncovered.length === 1 && est && typeof est === 'object') k1Inputs.push({ ...est, id: uncovered[0].slug, partnership: uncovered[0].name });
   else missingPartners.push(...uncovered);
   for (const e of missingPartners) if (inUnit(e.owner)) blocked.push('partnership_incomplete');
   const fields = ['ordinaryIncome', 'guaranteedPayments', 'seEarnings'];
@@ -313,99 +339,188 @@ export function computeFigures(data, facts, ctx) {
     if (!inUnit(person)) continue;
     const ordinary = Number(k.ordinaryIncome);
     biz.push({ id: k.id, kind: 'partnership', person, agi: cents(ordinary + Number(k.guaranteedPayments)), qbi: ordinary, seInput: Number(k.seEarnings), w2Wages: 0, sstb: sstbOf(null) });
+    bizNames[k.id] = k1Name({ fields: k })[0] || null;
   }
 
-  // Virginia529 accounts (S8, T5).
+  // Retirement contributions attributed to one sponsor each (R2-2, R3-1).
+  const businesses = [
+    ...entities.filter(e => e.classified && e.type === 's_corp' && inUnit(e.owner)).map(e => ({ kind: 'scorp', slug: e.slug, name: e.name, person: e.owner })),
+    ...biz.filter(b => b.kind !== 'scorp').map(b => ({ kind: b.kind, slug: b.id, name: bizNames[b.id] ?? null, person: b.person })),
+  ];
+  const attributed = attributeContributions(owner, businesses);
+  if (attributed.unattributed.some(c => inUnit(c.person))) { blocked.push('retirement_contribution_unattributed'); out.warn('retirement_contribution_unattributed'); }
+  for (const c of corps) {
+    if (!c.w2 || !c.fromPnl) continue;
+    const pretax = Math.min(c.gross, cents(c.pretax + factPretax(attributed, records, c.person, c.entity.slug)));
+    c.w2.agi = Math.max(0, cents(c.gross - pretax));
+    c.w2.pretax = pretax;
+    c.pretax = pretax;
+  }
+  const contrib = contributions(records, corps, attributed, owner);
+  for (const t of inflows(accounts.filter(IRA_ANY), t => /contribution/i.test(t.category ?? ''))) {
+    const a = accounts.find(x => x.id === t.account_id);
+    if (a && contrib[a.owner]) contrib[a.owner].ira = cents(contrib[a.owner].ira + t.amount);
+  }
+
+  // Virginia529 accounts (S8, T5, MG9, R2-4). An entry is complete when virginiaPlan is boolean and,
+  // for a Virginia plan, ownerAge70Plus is boolean and carryforward is a number of at least zero.
+  // Capped accounts deduct up to the cap; an owner seventy or older deducts in full (Va. Code
+  // 58.1-322.03(7)(a), (7)(b)).
   const vaPlans = owner['accounts.va529'] && typeof owner['accounts.va529'] === 'object' ? owner['accounts.va529'] : null;
   const cap = law('va529Cap');
   const college = collegeAccts.map(a => {
-    const entry = vaPlans ? vaPlans[a.id] : null;
+    const entry = vaPlans && vaPlans[a.id] && typeof vaPlans[a.id] === 'object' ? vaPlans[a.id] : null;
     const contribYtd = sum(inflows([a]).map(t => t.amount));
-    const eligible = !!entry && entry.virginiaPlan === true && entry.ownerAge70Plus !== true;
-    const deduction = eligible ? Math.min(cap, cents(contribYtd + num(entry.carryforward))) : 0;
-    return { account: a, entry, contribYtd, eligible, deduction, age70: !!entry && entry.virginiaPlan === true && entry.ownerAge70Plus === true };
+    const cf = entry ? entry.carryforward : undefined;
+    const completeEntry = !!entry && typeof entry.virginiaPlan === 'boolean'
+      && (entry.virginiaPlan === false || (typeof entry.ownerAge70Plus === 'boolean' && typeof cf === 'number' && Number.isFinite(cf) && cf >= 0));
+    const va = completeEntry && entry.virginiaPlan === true;
+    const age70 = va && entry.ownerAge70Plus === true;
+    const capped = va && !age70;
+    const deduction = capped ? Math.min(cap, cents(contribYtd + cf)) : age70 ? cents(contribYtd + cf) : 0;
+    return { account: a, entry, contribYtd, carryforward: va ? cf : null, complete: completeEntry, capped, age70, deduction };
   });
+  const va529Deduction = cents(sum(college.map(c => c.deduction)));
   out.info.va529 = {
     accounts: college.length,
-    missing: college.filter(c => !c.entry).map(c => c.account.name),
+    missing: college.filter(c => !c.complete).map(c => c.account.name),
     age70: college.filter(c => c.age70).map(c => c.account.name),
-    eligible: college.filter(c => c.eligible).length,
+    eligible: college.filter(c => c.capped).length,
+    age70Count: college.filter(c => c.age70).length,
+    deduction: va529Deduction,
   };
 
   const itemized = typeof owner['tax.itemizedEstimate'] === 'number' ? owner['tax.itemizedEstimate'] : 0;
   const vaItemized = typeof owner['tax.vaItemizedEstimate'] === 'number' ? owner['tax.vaItemizedEstimate'] : null;
-  const vaBlocked = isVa && itemized > stdDeduction(f) && vaItemized == null ? 'va_itemized_missing' : null;
+  const vaBlocked = !isVa ? null
+    : itemized > stdDeduction(f) && vaItemized == null ? 'va_itemized_missing'
+      : out.info.va529.missing.length ? 'va529_answers_missing' : null;
   const ages = Array.isArray(facts['household.dependentAges']) ? facts['household.dependentAges'] : [];
+  // D2: an owner-stated prior-year qualified business loss carryforward, else none (with a note).
+  const qbiCarry = owner['tax.prior.qbiLossCarryforward'];
   const parts = {
     f, state: facts['household.state'] ?? null, persons, w2, biz, hsaPersonal,
     itemized, vaItemized: itemized > stdDeduction(f) ? vaItemized : null,
-    va529Deduction: isVa ? sum(college.filter(c => c.eligible).map(c => c.deduction)) : 0,
+    va529Deduction: isVa ? va529Deduction : 0,
     children: ages.filter(a => typeof a === 'number' && a < 17).length,
     vaBlocked,
+    ...(typeof qbiCarry === 'number' && Number.isFinite(qbiCarry) && qbiCarry >= 0 ? { qbiLossCarryforward: qbiCarry } : {}),
   };
   const hasIncome = biz.length > 0 || w2.length > 0;
+
+  // Self-employment tax, computed on its own so retirement sizing never depends on the household
+  // tax result (R3-6).
+  const seInfo = hasIncome ? out.safe('selfEmploymentTax', () => seTaxByPerson(parts)) : null;
+
+  // Self-employed plan deduction per sole or partnership sponsor (MG5, R2-3, R3-2): Publication 560
+  // worksheet on the actual mix; S corp plans never deduct on the 1040.
+  const retireSteps = [];
+  if (seInfo) {
+    for (const b of biz) {
+      if (b.kind === 'scorp' || !inUnit(b.person)) continue;
+      const c = contrib[b.person];
+      const plan = c.byPlan[b.id];
+      if (!plan) continue;
+      const E = cents(plan.employer + plan.sep);
+      const D = plan.deferral;
+      const K = plan.catchUp;
+      if (!(E > 0 || D > 0 || K > 0)) continue;
+      if ((D > 0 || K > 0) && !c.outsideKnown) {
+        blocked.push('retirement_other_deferrals_missing');
+        out.warn('retirement_other_deferrals_missing');
+        out.confirm('retirement', 'retirement.otherPlanDeferrals');
+        continue;
+      }
+      const ws = seRetirementWorksheet({
+        netProfit: b.seInput ?? 0, seDeduction: seInfo.dhByBiz[b.id] || 0, employer: E, deferral: D, catchUp: K, roth: plan.roth,
+        otherDeferrals: cents(c.allRegular - D), otherCatchUp: cents(c.allCatchUp - K), catchUpLimit: catchUpLimitFor(ageOf(b.person)),
+      });
+      if (ws.over) { blocked.push('retirement_contribution_over_limit'); out.warn('retirement_contribution_over_limit'); continue; }
+      b.retire = ws.deduction;
+      retireSteps.push(...ws.steps.map(st => ({ ...st, label: `Self-employed plan (${b.id}): ${st.label}` })));
+    }
+  }
+
   out.info.blocked = [...new Set(blocked)];
   out.info.vaBlocked = vaBlocked;
   out.info.persons = persons;
   out.info.f = f;
 
+  // MG7: whose plan a solo 401(k) would be, set even when tax is blocked.
+  const corpInUnit = corps.find(c => inUnit(c.person) && c.gross > 0) || null;
+  const anyCorp = corpInUnit || corps.find(c => inUnit(c.person)) || null;
+  const soleFirst = biz.find(b => b.kind === 'sole' && b.seInput > 0) || biz.find(b => b.kind === 'sole') || null;
+  const partFirst = biz.find(b => b.kind === 'partnership') || null;
+  out.info.solo = anyCorp ? { person: anyCorp.person, kind: 'scorp', entity: anyCorp.entity.slug }
+    : soleFirst ? { person: soleFirst.person, kind: 'sole', entity: soleFirst.id }
+      : partFirst ? { person: partFirst.person, kind: 'partnership', entity: partFirst.id } : null;
+
   let hh = null;
   if (hasIncome && !blocked.length) {
     hh = out.safe('householdTax', () => householdTax(parts));
-    if (hh) for (const w of hh.warnings) out.warn(w);
-    else out.info.blocked = ['calc_failed'];
+    if (!hh) out.info.blocked = ['calc_failed'];
+    else {
+      for (const w of hh.warnings) out.warn(w);
+      if (hh.blocked) {
+        out.info.blocked = [hh.blocked];
+        out.warn(hh.blocked);
+        hh = null;
+      }
+    }
   }
-  if (hh) writeTax(data, out, { hh, parts, records, owner, f, isVa, fedPay, vaPay });
+  if (hh) writeTax(data, out, { hh, parts, records, owner, f, isVa, fedPay, vaPay, retireSteps });
   out.info.taxComputed = !!hh;
 
-  // Retirement room (R5, R6, S5, S6).
+  // Retirement room (R5, R6, S5, S6, MG6, R2-5, R3-3, R3-5, R3-6).
   const retireMissing = ['retirement.planTermsConfirmed', 'retirement.aggregationConfirmed'].filter(k => owner[k] !== true);
   const conf = { planConfirmed: true, aggregationConfirmed: true };
-  const assumptions = [ASSUMES_CONFIRMED];
-  const corpInUnit = corps.find(c => inUnit(c.person) && c.gross > 0) || null;
   const soleByPerson = p => sum(biz.filter(b => b.kind === 'sole' && b.person === p).map(b => b.seInput));
-  if (hasIncome && !blocked.length) {
+  const soleBizOf = p => biz.filter(b => b.kind === 'sole' && b.person === p);
+  const zeroPlan = { deferral: 0, catchUp: 0, roth: 0, employer: 0, sep: 0 };
+  const planSum = list => list.reduce((acc, b) => Object.fromEntries(Object.keys(zeroPlan).map(k => [k, cents(acc[k] + (b ? b[k] : 0))])), zeroPlan);
+  const sizing = hasIncome && !blocked.length && !!seInfo;
+  if (sizing) {
     const soloPerson = corpInUnit ? corpInUnit.person : persons.find(p => soleByPerson(p) > 0);
     if (soloPerson) {
-      const missing = [...retireMissing, ...(ageOf(soloPerson) == null ? [ageKey(soloPerson)] : [])];
-      if (missing.length) out.info.confirm.retirement = missing;
-      else {
-        const c = contrib[soloPerson];
-        const compensation = corpInUnit ? corpInUnit.gross : Math.max(0, cents(soleByPerson(soloPerson) - (hh && hh.se[soloPerson] ? hh.se[soloPerson].deductibleHalf : 0)));
-        const inputs = {
-          compensation, kind: corpInUnit ? 'w2' : 'self-employed', age: ageOf(soloPerson), allPlanDeferrals: c.all401k,
-          thisPlanDeferrals: c.thisPlan, thisPlanCatchUp: c.thisCatchUp, employerContributions: c.employer, ...conf,
-        };
-        const env = out.safe('solo401kRoom', () => solo401kRoom(inputs));
-        if (env) {
-          const loc = { calc: 'solo401kRoom', inputs: env.inputs, steps: env.steps, assumptions };
-          out.put('room.solo401k', env.value.total, 'm', 'Solo 401(k) room left this year', 'calc:retirement', loc);
-          out.put('room.solo401k.employee', cents(env.value.employee + env.value.catchUp), 'm', 'Employee deferral room left', 'calc:retirement', loc);
-          out.put('room.solo401k.employer', env.value.employer, 'm', 'Employer contribution room left', 'calc:retirement', loc);
-        }
+      const c = contrib[soloPerson];
+      const missing = [...retireMissing, ...(ageOf(soloPerson) == null ? [ageKey(soloPerson)] : []), ...(c.outsideKnown ? [] : ['retirement.otherPlanDeferrals'])];
+      if (missing.length) {
+        out.confirm('retirement', ...missing);
+        out.withhold(SOLO_KEYS, missing[0]);
+      } else {
+        const plan = corpInUnit ? planSum([c.byPlan[corpInUnit.entity.slug]]) : planSum(soleBizOf(soloPerson).map(b => c.byPlan[b.id]));
+        // Self-employed compensation: net profit less the deductible half of SE tax, before plan
+        // contributions (Pub 560 worksheet steps 1 to 3).
+        const compensation = corpInUnit ? corpInUnit.gross
+          : Math.max(0, cents(sum(soleBizOf(soloPerson).map(b => b.seInput - (seInfo.dhByBiz[b.id] || 0)))));
+        soloRoomFigures(out, {
+          data, owner, person: soloPerson, corp: corpInUnit, compensation, age: ageOf(soloPerson), contrib: c, plan, conf,
+        });
       }
     }
     if (!retireMissing.length) {
       const wagesOf = p => sum(w2.filter(w => w.person === p).map(w => w.gross));
+      const sepPaid = p => planSum(soleBizOf(p).map(b => contrib[p].byPlan[b.id])).sep;
       const seps = persons.filter(p => soleByPerson(p) > 0).map(p => out.safe('sepRoom', () => sepRoom({
         kind: 'self-employed', netProfit: soleByPerson(p), filingStatus: f, w2SocialSecurityWages: wagesOf(p), w2MedicareWages: wagesOf(p),
-        employerContributions: contrib[p].sep, ...conf,
+        employerContributions: sepPaid(p), ...conf,
       }))).filter(Boolean);
       if (!seps.length && corpInUnit) {
-        const env = out.safe('sepRoom', () => sepRoom({ kind: 'w2', compensation: corpInUnit.gross, employerContributions: contrib[corpInUnit.person].sep, ...conf }));
+        const sep = (contrib[corpInUnit.person].byPlan[corpInUnit.entity.slug] || zeroPlan).sep;
+        const env = out.safe('sepRoom', () => sepRoom({ kind: 'w2', compensation: corpInUnit.gross, employerContributions: sep, ...conf }));
         if (env) seps.push(env);
       }
       if (seps.length) {
         out.put('room.sep', sum(seps.map(e => e.value)), 'm', 'SEP IRA room left this year', 'calc:retirement',
-          { calc: 'sepRoom', inputs: seps.map(e => e.inputs), steps: seps.flatMap(e => e.steps), assumptions });
+          { calc: 'sepRoom', inputs: seps.map(e => e.inputs), steps: seps.flatMap(e => e.steps), assumptions: [PLAN_TERMS] });
       }
-    } else if (!out.info.confirm.retirement) {
-      out.info.confirm.retirement = retireMissing;
+    } else {
+      out.confirm('retirement', ...retireMissing);
     }
+    iraRoom(out, { seInfo, persons, w2, biz, contrib, ageOf, f });
   }
-  if (hh) iraRoom(out, { hh, persons, w2, biz, contrib, ageOf, f });
   hsaRoom(out, { facts, owner, records, hsaPersonal, hsaAccts, ageOf, ageKey, inUnit });
-  if (hh && isVa && out.info.va529.eligible > 0) va529Figures(out, { hh, parts, college });
+  if (hh && isVa && hh.va != null && college.some(c => c.capped || c.age70)) va529Figures(out, { hh, parts, college });
   incomeTotal(out);
 
   // War games.
@@ -416,9 +531,84 @@ export function computeFigures(data, facts, ctx) {
     out.model = buildWargames(data, out, {
       clock, f, parts, hh, corp: gameCorp, corps, entities: pnlEntities, owner, facts, contrib, ageOf, ageKey,
       retireMissing, accounts, householdTax,
+      priorWages: gameCorp ? priorFicaWages(data, owner, gameCorp.person, gameCorp.entity.name) : null,
     });
+  } else {
+    // R3-7: with no household tax neither game can be built from current inputs.
+    const code = out.info.blocked[0] || vaBlocked || 'inputs_changed';
+    out.info.wargameInvalid.salary = code;
+    out.info.wargameInvalid.deferral = code;
   }
+
+  // R2-9: what this run deliberately left out, and why.
+  if (out.info.blocked.length) out.withhold([...TAX_KEYS, ...persons.map(p => `room.ira.${p}`), 'room.ira.household'], out.info.blocked[0]);
+  else if (vaBlocked) out.withhold(VA_KEYS, vaBlocked);
+  if (!sizing && out.info.blocked.length) out.withhold([...SOLO_KEYS, 'room.sep'], out.info.blocked[0]);
+  for (const k of Object.keys(out.info.withheld)) if (out.figures[k]) delete out.info.withheld[k];
   return finish(out);
+}
+
+// MG6, R2-5, R3-3, R3-5: solo 401(k) room for the sized participant. Catch-up treatment follows IRC
+// 414(v)(7)(A): an S corp owner whose prior-year Social Security wages (W-2 box 3, T.D. 10033) from
+// the plan sponsor exceeded the threshold may make catch-ups only as Roth, and none at all without a
+// Roth feature (Treas. Reg. 1.414(v)-2(b)(2)); a sole proprietor has no wages from the sponsor.
+function soloRoomFigures(out, { data, owner, person, corp, compensation, age, contrib, plan, conf }) {
+  const R = TAX_2026.retirement;
+  const kind = corp ? 'w2' : 'self-employed';
+  const priorWages = corp ? priorFicaWages(data, owner, person, corp.entity.name) : 0;
+  const base = {
+    compensation, kind, age, allPlanDeferrals: contrib.all401k, thisPlanDeferrals: cents(plan.deferral + plan.catchUp),
+    thisPlanCatchUp: plan.catchUp, employerContributions: plan.employer, ...conf,
+    ...(priorWages != null ? { priorYearSponsorWages: priorWages } : {}),
+  };
+  const allowed = out.safe('solo401kRoom', () => solo401kRoom(base));
+  if (!allowed) { out.withhold(SOLO_KEYS, 'calc_failed'); return; }
+  const affected = priorWages != null && priorWages > R.rothCatchUpPriorWages;
+  const rothFact = owner['retirement.planOffersRoth'];
+  let mode;
+  if (!(allowed.value.catchUp > 0)) mode = 'none';
+  else if (priorWages == null) mode = 'unknown';
+  else if (!affected) mode = 'pretax';
+  else if (rothFact === true) mode = 'roth';
+  else mode = rothFact === false ? 'noRoth' : 'unconfirmed';
+  const env = mode === 'noRoth' || mode === 'unconfirmed' ? out.safe('solo401kRoom', () => solo401kRoom({ ...base, catchUpAllowed: false })) : allowed;
+  if (!env) { out.withhold(SOLO_KEYS, 'calc_failed'); return; }
+  const v = env.value;
+  const steps = [...env.steps];
+  if (kind === 'self-employed') steps.push({ label: 'No wages from the plan sponsor; the Roth catch-up rule does not apply', formula: 'self-employed participant', value: 0 });
+  else if (priorWages != null) steps.push({ label: "Last year's Social Security wages from the plan sponsor", formula: 'prior-year W-2 Social Security wages, or your stated amount', value: priorWages });
+  const loc = extra => ({ calc: 'solo401kRoom', inputs: env.inputs, steps, assumptions: [PLAN_TERMS, ...extra] });
+  out.put('room.solo401k.employee', v.employee, 'm', 'Employee deferral room left', 'calc:retirement', loc(['roth_elective']));
+  out.put('room.solo401k.employer', v.employer, 'm', 'Employer contribution room left', 'calc:retirement', loc([]));
+  if (mode === 'unknown') {
+    out.info.retireCatchUp = 'retirement.priorYearFicaWages';
+    out.withhold(['room.solo401k', 'room.solo401k.catchUp', 'room.solo401k.rothCatchUp', 'room.solo401k.pretax'], 'retirement.priorYearFicaWages');
+    return;
+  }
+  const catchPre = mode === 'pretax' || mode === 'none' ? v.catchUp : 0;
+  const roth = mode === 'roth' ? v.catchUp : 0;
+  const pretax = cents(v.employee + v.employer + catchPre);
+  if (mode === 'pretax') out.put('room.solo401k.catchUp', v.catchUp, 'm', 'Catch-up room left', 'calc:retirement', loc([]));
+  if (mode === 'roth' || mode === 'noRoth' || mode === 'unconfirmed') {
+    const code = mode === 'noRoth' ? ['roth_catch_up_unavailable'] : mode === 'unconfirmed' ? ['roth_catch_up_unconfirmed'] : [];
+    out.put('room.solo401k.rothCatchUp', roth, 'm', 'Catch-up room left, Roth only', 'calc:retirement', loc(code));
+    if (mode === 'unconfirmed') out.info.retireCatchUp = 'retirement.planOffersRoth';
+  }
+  out.put('room.solo401k.pretax', pretax, 'm', 'Pre-tax retirement room left', 'calc:retirement', loc(['roth_elective']));
+  out.put('room.solo401k', cents(pretax + roth), 'm', 'Solo 401(k) room left this year', 'calc:retirement', loc([]));
+}
+
+// MG6: prior-year Social Security wages (box 3) for `person` from the S corp named `corpName`: the
+// owner fact first, else the latest prior-year W-2 from that employer. Box 1 is never used.
+export function priorFicaWages(data, owner, person, corpName) {
+  const fact = owner['retirement.priorYearFicaWages'];
+  const fv = fact && typeof fact === 'object' ? fact[person] : undefined;
+  if (typeof fv === 'number' && Number.isFinite(fv) && fv >= 0) return fv;
+  const docs = data.documents.filter(d => d.docType === 'w2' && Number(d.taxYear) === data.taxYear - 1
+    && (d.fields.person === person || (person === 'owner' && d.fields.person == null)) && sameName(d.fields.employer, corpName));
+  const doc = docs.at(-1);
+  const v = doc ? doc.fields.socialSecurityWages : undefined;
+  return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null;
 }
 
 // inc.ytd.total (F8): every income-received figure, P&L entities plus outside wages.
@@ -436,8 +626,16 @@ function finish(out) {
 
 // ---------------------------------------------------------------- pieces
 
+// MG11: spending is every outflow from a personal spending account in the last three full months;
+// an outflow matched to an inflow of exactly the same cents on another household account within
+// five days is one leg of a transfer and is left out (product rule).
+const dayNumber = iso => Date.UTC(Number(iso.slice(0, 4)), Number(iso.slice(5, 7)) - 1, Number(iso.slice(8, 10))) / 86400000;
+const toCents = v => Math.round(Number(v) * 100);
+
 function monthlyOutflow(data, out) {
-  const ids = new Set(data.accounts.filter(a => PERSONAL_CASH.includes(a.kind)).map(a => a.id));
+  const spend = data.accounts.filter(SPEND_ACCOUNT);
+  const ids = new Set(spend.map(a => a.id));
+  const household = new Set(data.accounts.map(a => a.id));
   const clockMonth = `${data.clock.slice(0, 7)}-01`;
   const start = addDays(clockMonth, -1).slice(0, 7);
   const months = [];
@@ -446,12 +644,28 @@ function monthlyOutflow(data, out) {
     months.unshift(cursor);
     cursor = addDays(`${cursor}-01`, -1).slice(0, 7);
   }
-  const rows = data.transactions.filter(t => ids.has(t.account_id) && t.amount < 0 && months.includes(t.date.slice(0, 7)) && !/transfer|payment/i.test(t.category ?? ''));
+  const ordered = [...data.transactions].sort((a, b) => String(a.date).localeCompare(String(b.date)) || (a.id ?? 0) - (b.id ?? 0));
+  const candidates = ordered.filter(t => ids.has(t.account_id) && t.amount < 0 && months.includes(String(t.date).slice(0, 7)));
+  const usedIds = new Set();
+  const rows = [];
+  let matched = 0;
+  for (const t of candidates) {
+    const want = -toCents(t.amount);
+    const m = ordered.find(u => !usedIds.has(u) && u.account_id !== t.account_id && household.has(u.account_id)
+      && toCents(u.amount) === want && Math.abs(dayNumber(u.date) - dayNumber(t.date)) <= 5);
+    if (m) { usedIds.add(m); matched += 1; } else rows.push(t);
+  }
   const total = -sum(rows.map(t => t.amount));
   if (!(total > 0)) return;
   const avg = cents(total / 3);
-  out.put('cash.monthlyOut', avg, 'e', 'Average monthly spending from personal accounts', 'calc:cash',
-    { calc: 'monthlyOutflow', ...rowsLoc('transactions', rows.map(t => t.id)), inputs: { months }, steps: [{ label: 'Monthly outflow', formula: 'outflows over the last three full months / three', value: avg }] });
+  out.put('cash.monthlyOut', avg, 'e', 'Average monthly spending from personal accounts', 'calc:cash', {
+    calc: 'monthlyOutflow', ...rowsLoc('transactions', rows.map(t => t.id)),
+    inputs: { months, matchedTransfers: matched, accounts: spend.map(a => a.id) },
+    steps: [
+      { label: 'Matched transfers excluded', formula: 'outflows matched to an equal inflow on another household account within five days', value: matched },
+      { label: 'Monthly outflow', formula: 'outflows over the last three full months / three', value: avg },
+    ],
+  });
   const personal = out.figures['cash.personal'];
   if (personal) {
     const runway = Math.round(personal.v / avg * 10) / 10;
@@ -460,17 +674,22 @@ function monthlyOutflow(data, out) {
   }
 }
 
-function writeTax(data, out, { hh, parts, records, owner, f, isVa, fedPay, vaPay }) {
-  const assumptions = ['va_exemptions_omitted', 'agi_as_magi_proxy', ASSUMES_CONFIRMED];
-  if (parts.children > 0 && hh.ctc === 0) assumptions.push('ctc_phaseout_unsupported');
-  const loc = { calc: 'householdTax', parts: summarizeParts(parts), steps: hh.steps, assumptions };
+function writeTax(data, out, { hh, parts, records, owner, f, isVa, fedPay, vaPay, retireSteps }) {
+  // MGN1, D2, D6: per-figure assumption codes.
+  const planRate = hh.retire > 0 ? ['plan_rate_max'] : [];
+  const fedCodes = ['agi_as_magi_proxy', 'qbi_material_participation', ...(parts.qbiLossCarryforward == null ? ['qbi_no_prior_loss'] : []), ...planRate];
+  const vaCodes = ['va_exemptions_omitted', ...planRate];
+  const summary = summarizeParts(parts);
+  const steps = [...retireSteps, ...hh.steps];
+  const loc = { calc: 'householdTax', parts: summary, steps, assumptions: fedCodes };
+  const vaLoc = { calc: 'householdTax', parts: summary, steps, assumptions: vaCodes };
   out.put('agi.est', hh.agi, 'e', 'Estimated adjusted gross income', 'calc:tax', loc);
   out.put('tax.fed.qbi', hh.qbi, 'm', 'Qualified business income deduction', 'calc:tax', loc);
   out.put('tax.fed.taxable', hh.taxable, 'm', 'Federal taxable income', 'calc:tax', loc);
   out.put('tax.fed.income', hh.fedIncome, 'm', 'Federal income tax before credits', 'calc:tax', loc);
   if (hh.seTotal > 0) out.put('tax.fed.se', hh.seTotal, 'm', 'Self-employment tax', 'calc:tax', loc);
   out.put('tax.fed.proj', hh.fedTotal, 'm', 'Projected federal tax for the year', 'calc:tax', loc);
-  if (hh.va != null) out.put('tax.va.proj', hh.va, 'm', 'Projected Virginia tax for the year', 'calc:tax', loc);
+  if (hh.va != null) out.put('tax.va.proj', hh.va, 'm', 'Projected Virginia tax for the year', 'calc:tax', vaLoc);
 
   // Withholding (R3, T2): owner facts replace document sums.
   const docRows = records.map(r => r.docId);
@@ -484,26 +703,47 @@ function writeTax(data, out, { hh, parts, records, owner, f, isVa, fedPay, vaPay
   if (vaW.v > 0) out.put('tax.va.withheld', vaW.v, 'a', 'Virginia tax withheld from wages', 'docs', vaW.loc);
   if (out.figures['tax.fed.withheld'] || out.figures['tax.va.withheld']) out.source('docs', SOURCES.docs.label, dateLabel(data.clock), SOURCES.docs.kind);
 
-  // Safe harbor.
+  // Safe harbor (MG10): IRC 6654(d)(1)(B), (C). The prior-year target is fixed by last year's
+  // return; the current-year target moves with the projection, so it is an estimate.
+  const E = TAX_2026.estimated;
   const prior = priorYear(data, owner);
   const fedPaid = sum(fedPay.map(t => t.amount));
+  const totalStep = hh.steps.filter(s => /Federal total/.test(s.label));
+  const currentTarget = cents(hh.fedTotal * E.currentRate);
+  const currentSteps = [...totalStep, { label: 'Current-year target', formula: 'projected tax * current-year percentage', value: currentTarget }];
+  out.put('sh.fed.currentTarget', currentTarget, 'e', "Federal target from this year's projection", 'calc:tax',
+    { calc: 'currentYearSafeHarbor', inputs: { currentYearTax: hh.fedTotal }, steps: currentSteps, assumptions: ['projection_target'] });
   if (prior.federalTax != null && prior.agi != null) {
     const env = out.safe('estimatedPaymentSafeHarbor', () => estimatedPaymentSafeHarbor({
       currentYearTax: hh.fedTotal, priorYearTax: prior.federalTax, priorYearAgi: prior.agi, filingStatus: f,
       withholding: fedW.v, paymentsMade: fedPaid, priorReturnFullYear: true, specialRulesAbsent: true,
     }));
     if (env) {
-      const l = { calc: 'estimatedPaymentSafeHarbor', inputs: env.inputs, steps: [...env.steps, ...hh.steps.filter(s => /Federal total/.test(s.label))], assumptions };
-      out.put('sh.fed.required', env.value.requiredAnnualPayment, 'm', 'Federal safe-harbor target for the year', 'calc:tax', l);
-      out.put('sh.fed.remaining', env.value.remaining, 'm', 'Federal safe harbor still to pay', 'calc:tax', l);
-      out.info.priorHigh = prior.agi > (f === 'mfs' ? 75000 : 150000);
+      const high = prior.agi > (f === 'mfs' ? E.mfsHighIncomeAgi : E.highIncomeAgi);
+      const priorTarget = cents(prior.federalTax * (high ? E.highIncomePriorRate : E.priorRate));
+      const priorRemaining = Math.max(0, cents(priorTarget - fedW.v - fedPaid));
+      const smallBalance = cents(hh.fedTotal - fedW.v) < E.smallBalance;
+      const projectionBinds = currentTarget < priorTarget || smallBalance;
+      const kind = projectionBinds ? 'e' : 'm';
+      const priorSteps = [{ label: 'Prior-year target', formula: "last year's tax * prior-year percentage for last year's income", value: priorTarget }];
+      const priorCodes = ['prior_return_full_year'];
+      out.put('sh.fed.priorTarget', priorTarget, 'm', "Federal target from last year's tax", 'calc:tax',
+        { calc: 'priorYearSafeHarbor', inputs: { priorYearTax: prior.federalTax, priorYearAgi: prior.agi }, steps: priorSteps, assumptions: priorCodes });
+      out.put('sh.fed.priorRemaining', priorRemaining, 'm', "Federal still to pay to reach last year's target", 'calc:tax',
+        { calc: 'priorYearSafeHarbor', inputs: { priorYearTax: prior.federalTax, priorYearAgi: prior.agi, withholding: fedW.v, paymentsMade: fedPaid },
+          steps: [...priorSteps, { label: 'Remaining', formula: 'prior-year target - withholding - payments', value: priorRemaining }], assumptions: priorCodes });
+      const l = { calc: 'estimatedPaymentSafeHarbor', inputs: env.inputs, steps: [...env.steps, ...totalStep], assumptions: [...priorCodes, ...(projectionBinds ? ['projection_target'] : [])] };
+      out.put('sh.fed.required', env.value.requiredAnnualPayment, kind, 'Federal safe-harbor target for the year', 'calc:tax', l);
+      out.put('sh.fed.remaining', env.value.remaining, kind, 'Federal safe harbor still to pay', 'calc:tax', l);
+      out.info.priorHigh = high;
+      out.info.shBasis = priorTarget <= currentTarget ? 'prior' : 'current';
     }
   } else {
     out.warn('prior_year_missing');
-    const required = cents(0.9 * hh.fedTotal);
+    const required = currentTarget;
     const remaining = Math.max(0, cents(required - fedW.v - fedPaid));
     const l = { calc: 'currentYearSafeHarbor', inputs: { currentYearTax: hh.fedTotal, withholding: fedW.v, paymentsMade: fedPaid },
-      steps: [{ label: 'Current-year target', formula: 'projected tax * current-year percentage', value: required }, { label: 'Remaining', formula: 'target - withholding - payments', value: remaining }], assumptions };
+      steps: [...currentSteps, { label: 'Remaining', formula: 'target - withholding - payments', value: remaining }], assumptions: ['projection_target'] };
     out.put('sh.fed.required', required, 'e', 'Federal safe-harbor target for the year', 'calc:tax', l);
     out.put('sh.fed.remaining', remaining, 'e', 'Federal safe harbor still to pay', 'calc:tax', l);
   }
@@ -517,7 +757,7 @@ function writeTax(data, out, { hh, parts, records, owner, f, isVa, fedPay, vaPay
     const kind = hasPrior ? 'm' : 'e';
     const l = { calc: 'virginiaSafeHarbor', inputs: { currentYearTax: hh.va, priorYearTax: prior.virginiaTax ?? null, withholding: vaW.v, paymentsMade: vaPaid },
       steps: [...hh.steps.filter(s => /^Virginia/.test(s.label)), { label: 'Virginia target', formula: 'lesser of current-year percentage of projected tax and prior-year tax, zero under the threshold', value: required },
-        { label: 'Remaining', formula: 'target - withholding - payments', value: remaining }], assumptions };
+        { label: 'Remaining', formula: 'target - withholding - payments', value: remaining }], assumptions: vaCodes };
     out.put('sh.va.required', required, kind, 'Virginia safe-harbor target for the year', 'calc:tax', l);
     out.put('sh.va.remaining', remaining, kind, 'Virginia estimate still to pay', 'calc:tax', l);
   }
@@ -527,8 +767,9 @@ function summarizeParts(parts) {
   return {
     filingStatus: parts.f, state: parts.state,
     wages: parts.w2.map(w => ({ person: w.person, source: w.src.startsWith('corp:') ? 'own S corp' : 'outside employer', gross: w.gross, agi: w.agi })),
-    businesses: parts.biz.map(b => ({ id: b.id, kind: b.kind, person: b.person, income: b.agi, qbi: b.qbi, seInput: b.seInput })),
+    businesses: parts.biz.map(b => ({ id: b.id, kind: b.kind, person: b.person, income: b.agi, qbi: b.qbi, seInput: b.seInput, retire: b.retire || 0 })),
     hsaPersonal: parts.hsaPersonal, itemized: parts.itemized || null, va529Deduction: parts.va529Deduction, children: parts.children,
+    qbiLossCarryforward: parts.qbiLossCarryforward ?? null,
   };
 }
 
@@ -543,12 +784,16 @@ function priorYear(data, owner) {
   return { federalTax: pick('federalTax', 'tax.prior.federal'), virginiaTax: pick('virginiaTax', 'tax.prior.virginia'), agi: pick('agi', 'tax.prior.agi') };
 }
 
-function iraRoom(out, { hh, persons, w2, biz, contrib, ageOf, f }) {
+// IRA room (IRC 219(b)(1), (b)(5), 219(c), 219(f)(1) with 401(c)(2)): compensation is wages plus
+// self-employment earnings after the deductible half of SE tax and the self-employed plan deduction.
+function iraRoom(out, { seInfo, persons, w2, biz, contrib, ageOf, f }) {
   const comp = p => {
     const wages = sum(w2.filter(w => w.person === p).map(w => w.agi));
-    const se = sum(biz.filter(b => b.person === p && b.seInput != null).map(b => b.seInput));
-    const dh = hh.se[p] ? hh.se[p].deductibleHalf : 0;
-    return cents(wages + Math.max(0, se - dh));
+    const mine = biz.filter(b => b.person === p && b.seInput != null);
+    const se = sum(mine.map(b => b.seInput));
+    const dh = seInfo.se[p] ? seInfo.se[p].deductibleHalf : 0;
+    const retire = sum(mine.map(b => b.retire || 0));
+    return cents(wages + Math.max(0, se - dh - retire));
   };
   const joint = f === 'mfj' ? sum(persons.map(comp)) : null;
   const contribAll = sum(persons.map(p => contrib[p].ira));
@@ -584,18 +829,29 @@ function hsaRoom(out, { facts, owner, records, hsaPersonal, hsaAccts, ageOf, age
   const env = out.safe('hsaLimit', () => hsaLimit({
     coverage, age: ageOf(holder), eligibleMonths: months, eligibilityConfirmed: true, employerContributions: employer, personalContributions: hsaPersonal,
   }));
-  if (env) out.put('room.hsa', env.value.remaining, 'm', 'HSA room left this year', 'calc:retirement', { calc: 'hsaLimit', inputs: env.inputs, steps: env.steps, assumptions: [ASSUMES_CONFIRMED] });
+  if (env) out.put('room.hsa', env.value.remaining, 'm', 'HSA room left this year', 'calc:retirement', { calc: 'hsaLimit', inputs: env.inputs, steps: env.steps, assumptions: [PLAN_TERMS] });
 }
 
+// MG9: Va. Code 58.1-322.03(7). Capped accounts deduct up to the cap a year; an owner seventy or
+// older deducts contributions plus carryforward in full, so only capped accounts have room left.
 function va529Figures(out, { hh, parts, college }) {
   const cap = law('va529Cap');
-  const eligible = college.filter(c => c.eligible);
-  const left = sum(eligible.map(c => Math.max(0, cents(cap - c.deduction))));
-  const steps = eligible.map((c, i) => ({ label: `Account ${i + 1} deduction`, formula: 'min(cap, contributions this year + carryforward)', value: c.deduction }));
-  steps.push({ label: 'Deduction left', formula: 'cap - deduction, summed over Virginia plan accounts', value: left });
-  out.put('va529.deductionLeft', left, 'm', 'Virginia 529 deduction left this year', 'calc:tax', { calc: 'va529Deduction', inputs: { cap, accounts: eligible.length }, steps });
-  if (hh.va == null) return;
-  const full = householdTax({ ...parts, va529Deduction: cents(eligible.length * cap) });
+  const capped = college.filter(c => c.capped);
+  const age70 = college.filter(c => c.age70);
+  const counted = college.filter(c => c.capped || c.age70);
+  const vaCodes = ['va_exemptions_omitted'];
+  const steps = counted.map((c, i) => (c.capped
+    ? { label: `Account ${i + 1} deduction, capped`, formula: 'min(cap, contributions this year + carryforward)', value: c.deduction }
+    : { label: `Account ${i + 1} deduction, owner seventy or older`, formula: 'contributions this year + carryforward, no cap', value: c.deduction }));
+  const total = cents(sum(counted.map(c => c.deduction)));
+  out.put('va529.deduction', total, 'm', 'Virginia 529 deduction this year', 'calc:tax',
+    { calc: 'va529Deduction', inputs: { cap, capped: capped.length, uncapped: age70.length }, steps: [...steps, { label: 'Deduction', formula: 'sum over Virginia plan accounts', value: total }] });
+  if (capped.length) {
+    const left = sum(capped.map(c => Math.max(0, cents(cap - c.deduction))));
+    out.put('va529.deductionLeft', left, 'm', 'Virginia 529 deduction left this year', 'calc:tax',
+      { calc: 'va529Deduction', inputs: { cap, accounts: capped.length }, steps: [...steps, { label: 'Deduction left', formula: 'cap - deduction, summed over capped Virginia plan accounts', value: left }] });
+  }
+  const full = householdTax({ ...parts, va529Deduction: cents(capped.length * cap + sum(age70.map(c => c.deduction))) });
   const saved = cents(hh.va - full.va);
   out.put('va529.taxSaved', saved, 'm', 'Virginia tax saved by using the deduction in full', 'calc:tax', {
     calc: 'virginiaIncomeTax',
@@ -603,5 +859,6 @@ function va529Figures(out, { hh, parts, college }) {
     steps: [...hh.steps.filter(s => /^Virginia/.test(s.label)).map(s => ({ ...s, label: `Current: ${s.label}` })),
       ...full.steps.filter(s => /^Virginia/.test(s.label)).map(s => ({ ...s, label: `Full deduction: ${s.label}` })),
       { label: 'Tax saved', formula: 'Virginia tax now - Virginia tax with the full deduction', value: saved }],
+    assumptions: vaCodes,
   });
 }

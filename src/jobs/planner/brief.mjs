@@ -10,6 +10,7 @@ import { needsYou } from '../../shared/rules.mjs';
 import { listParsers } from '../../ingest/registry.mjs';
 import { lawContent, pctContent } from './law.mjs';
 import { dateLabel, dayLabel, monthEnd, addDays } from './data.mjs';
+import { reasonText } from '../triggers/missing-data.mjs';
 
 export const SRC = 'planner';
 export const NEUTRAL_NAMES = Object.freeze({
@@ -62,11 +63,21 @@ export function writeBrief(db, ctx, { hits }) {
   upsertContent(db, 'law', lawContent(), now);
   upsertContent(db, 'pct', pctContent(), now);
 
-  // War games: replaced only when this run built a new model (S11).
+  // War games: replaced only when this run built a new model (S11). A stored game this run could
+  // not rebuild because its inputs are invalid is kept as history and marked unavailable for current
+  // decisions, whatever the season (D3, R3-7); a game absent only for the season is kept as is.
   const prev = parseJson((db.prepare('SELECT value FROM content WHERE key = ?').get('wargame') || {}).value, {}) || {};
+  const invalid = (ctx.info && ctx.info.wargameInvalid) || {};
   const wargame = { ...prev };
-  if (ctx.model.salary) wargame.salary = ctx.model.salary;
-  if (ctx.model.deferral) wargame.deferral = ctx.model.deferral;
+  for (const name of ['salary', 'deferral']) {
+    if (ctx.model[name]) wargame[name] = ctx.model[name];
+    else if (prev[name] && invalid[name]) wargame[name] = { ...prev[name], unavailable: reasonText(ctx, invalid[name]) };
+    else if (prev[name] && 'unavailable' in prev[name]) {
+      const { unavailable, ...kept } = prev[name];
+      void unavailable;
+      wargame[name] = kept;
+    }
+  }
   upsertContent(db, 'wargame', wargame, now);
 
   writeDeadlines(db, ctx, hits);
@@ -203,6 +214,14 @@ function writeDecisions(db, ctx, hits, wargame) {
     if (row.src !== SRC || wanted.has(row.id)) continue;
     const recGone = row.rec_id != null && !recExists.get(row.rec_id);
     if (recGone || (row.rec_id == null && row.status === 'upcoming')) db.prepare('DELETE FROM decisions WHERE id = ?').run(row.id);
+  }
+  // D3: a decision on a war game kept only for reference stays as history with the game's reason;
+  // the reason clears once the game is rebuilt. An upcoming next-year decision is not affected.
+  const setReason = db.prepare('UPDATE decisions SET unavailable_reason = ? WHERE id = ?');
+  for (const row of db.prepare('SELECT id, status, wargame, unavailable_reason FROM decisions WHERE src = ?').all(SRC)) {
+    const g = row.wargame ? wargame[row.wargame] : null;
+    const reason = row.status !== 'upcoming' && g && typeof g.unavailable === 'string' ? g.unavailable : null;
+    if ((row.unavailable_reason ?? null) !== reason) setReason.run(reason, row.id);
   }
 }
 
