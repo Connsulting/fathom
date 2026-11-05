@@ -10,6 +10,7 @@ import { src } from '../helpers/server.mjs';
 import {
   fixture, textFile, northwindFile, paystubText, realStore, fakeEngine, recordingEngine, offEngine, all, one, count, items, NOW,
 } from '../helpers/ingest.mjs';
+import { textPdf, imagePdf } from '../helpers/pdf.mjs';
 
 let X;
 let RD;
@@ -370,9 +371,10 @@ describe('through ingestFile', () => {
     const tax = all(s.db, 'SELECT * FROM tax_payments');
     assert.equal(tax.length, 8);
     assert.ok(tax.every((t) => t.kind === 'withholding' && t.payer.startsWith('paystub:')));
-    // R15: wh:<employerKey>:<taxYear>:<jurisdiction>, with the payer's employer key.
+    // R15 with D4: wh:<employerKey>:<taxYear>:<jurisdiction>:<recipient>, with the payer's employer
+    // key; the recipient is unknown until the employer_recipient question is answered.
     for (const t of tax) {
-      assert.match(t.source_slot, /^wh:[0-9a-f]{12}:(2031|2032):(federal|co)$/i);
+      assert.match(t.source_slot, /^wh:[0-9a-f]{12}:(2031|2032):(federal|co):unknown$/i);
       assert.equal(t.source_slot.split(':')[1], t.payer.split(':')[1]);
       assert.equal(t.source_slot.split(':')[2], String(t.tax_year));
     }
@@ -515,13 +517,20 @@ describe('held employer facts', () => {
   }));
 });
 
-// R15: a W-2 total summarizes paystub withholding for the same employer, year and jurisdiction.
+// R15 with D4: once the employer's withholding is known to belong to one person (answer owner), a
+// W-2 total summarizes that person's paystub withholding for the same employer, year and
+// jurisdiction.
 describe('annual withholding supersedes paystub detail', () => {
   const W2_2032 = { ...W2, taxYear: 2032 };
   const w2File = () => textFile('w2-2032.txt', 'Synthetic wage and tax statement for 2032', 'text/plain');
   const w2Engine = () => fakeEngine([[{ docType: 'w2', taxYear: 2032, confidence: 0.9 }], [W2_2032]]);
   const stub = (payDate, start) => [paystubFile({ payDate }), { ...PAYSTUB, payDate, periodStart: start, periodEnd: payDate }];
   const stubs = [stub('2032-03-15', '2032-03-01'), stub('2032-03-31', '2032-03-16')];
+  const answerRecipient = (db, option) => {
+    const q = C.pendingItems(db).find((i) => i.kind === 'employer_recipient');
+    assert.ok(q, 'employer_recipient is asked');
+    C.answer(db, q.id, option, { now: NOW });
+  };
 
   function assertSummarized(db) {
     const active = all(db, 'SELECT * FROM tax_payments ORDER BY amount');
@@ -531,7 +540,7 @@ describe('annual withholding supersedes paystub detail', () => {
     ], 'only the W-2 totals stay active');
     for (const t of active) {
       assert.match(t.payer, /^w2:[0-9a-f]{12}:2032:9000000$/);
-      assert.equal(t.source_slot, `wh:${t.payer.split(':')[1]}:2032:${t.source_slot.split(':')[3]}`);
+      assert.equal(t.source_slot, `wh:${t.payer.split(':')[1]}:2032:${t.source_slot.split(':')[3]}:owner`);
       assert.match(t.source_slot.split(':')[3], /^(federal|co)$/i);
     }
     const sup = all(db, "SELECT * FROM superseded_rows WHERE table_name = 'tax_payments' ORDER BY id");
@@ -541,9 +550,10 @@ describe('annual withholding supersedes paystub detail', () => {
     assert.deepEqual(sup.map((x) => JSON.parse(x.row).amount).sort((a, b) => a - b), [250, 250, 700, 700]);
   }
 
-  test('W-2 first, then paystubs: paystub withholding is archived instead of inserted', () => withStore(async (s) => {
+  test('W-2 first, answer owner, then paystubs: paystub withholding is archived instead of inserted', () => withStore(async (s) => {
     const w = await P.ingestFile(s.db, w2File(), s.opts(await w2Engine()));
     assert.equal(w.status, 'imported');
+    answerRecipient(s.db, 'owner');
     for (const [file, extracted] of stubs) {
       const r = await P.ingestFile(s.db, file, s.opts(await fakeEngine(paystubResponses(extracted))));
       assert.equal(r.status, 'imported');
@@ -551,10 +561,12 @@ describe('annual withholding supersedes paystub detail', () => {
     assertSummarized(s.db);
   }));
 
-  test('paystubs first, then the W-2: paystub withholding is archived and deleted', () => withStore(async (s) => {
+  test('paystubs first, then the W-2, then answer owner: paystub withholding is archived and deleted', () => withStore(async (s) => {
     for (const [file, extracted] of stubs) await P.ingestFile(s.db, file, s.opts(await fakeEngine(paystubResponses(extracted))));
     assert.equal(count(s.db, 'tax_payments'), 4);
     await P.ingestFile(s.db, w2File(), s.opts(await w2Engine()));
+    assert.equal(count(s.db, 'tax_payments'), 6, 'nothing is summarized while the recipient is unknown');
+    answerRecipient(s.db, 'owner');
     assertSummarized(s.db);
   }));
 });
@@ -610,5 +622,155 @@ describe('signed amount tokens', () => {
     assert.equal(r.status, 'imported');
     const stored = JSON.parse(one(s.db, "SELECT fields FROM documents WHERE doc_type = 'paystub'").fields);
     assert.deepEqual([stored.gross, stored.net, stored.federalWithholding, stored.stateWithholding], [-123456.78, -234567.89, -345678.9, -456789.01]);
+  }));
+});
+
+// D4: withholding belongs to a recipient (owner, spouse, unknown). The employer question decides it
+// for every document of the employer, or "both" asks per document; unknown never summarizes.
+describe('withholding recipients (D4)', () => {
+  const W2_2032 = { ...W2, taxYear: 2032 };
+  const STUB_B = { ...PAYSTUB, gross: 2500, net: 1900, federalWithholding: 300, stateWithholding: 100, ytdGross: 15000 };
+  const w2File = () => textFile('w2-member-a-2032.txt', 'Synthetic wage and tax statement for 2032, member A', 'text/plain');
+  const importAll = async (s) => {
+    await P.ingestFile(s.db, w2File(), s.opts(await fakeEngine([[{ docType: 'w2', taxYear: 2032, confidence: 0.9 }], [W2_2032]])));
+    await P.ingestFile(s.db, paystubFile({}, 'paystub-member-a.txt'), s.opts(await fakeEngine(paystubResponses(PAYSTUB))));
+    await P.ingestFile(s.db, paystubFile({ gross: '2500.00' }, 'paystub-member-b.txt'), s.opts(await fakeEngine(paystubResponses(STUB_B))));
+  };
+  const key = () => X.nameKey('Example Employer LLC');
+  const payers = () => ({ w2: `w2:${key()}:2032:9000000`, a: `paystub:${key()}:2032-03-15:500000`, b: `paystub:${key()}:2032-03-15:250000` });
+  const pendingOf = (db, kind) => C.pendingItems(db).filter((i) => i.kind === kind);
+
+  test('the new kinds exist and tax_payments has a recipient column', () => withStore(async (s) => {
+    assert.ok(C.KINDS.includes('employer_recipient'));
+    assert.ok(C.KINDS.includes('document_recipient'));
+    assert.ok(all(s.db, 'PRAGMA table_info(tax_payments)').some((c) => c.name === 'recipient'));
+  }));
+
+  test('unknown recipient: a W-2 plus paystubs leave everything active and queue the employer question', () => withStore(async (s) => {
+    await importAll(s);
+    const active = all(s.db, 'SELECT * FROM tax_payments ORDER BY amount');
+    assert.equal(active.length, 6, 'W-2 and both paystubs stay active');
+    for (const t of active) assert.match(t.source_slot, new RegExp(`^wh:${key()}:2032:(federal|co):unknown$`, 'i'));
+    assert.equal(count(s.db, 'superseded_rows', "reason = 'summarized'"), 0);
+    const q = pendingOf(s.db, 'employer_recipient');
+    assert.equal(q.length, 1, 'one question for the employer');
+    assert.equal(q[0].subject, key());
+    assert.deepEqual(q[0].options, [{ id: 'owner', label: 'You' }, { id: 'spouse', label: 'Your spouse' }, { id: 'both', label: 'Both of you' }]);
+  }));
+
+  test('two members at one employer: after both and each document recipient, B stays active and A is summarized', () => withStore(async (s) => {
+    await importAll(s);
+    C.answer(s.db, pendingOf(s.db, 'employer_recipient')[0].id, 'both', { now: NOW });
+    const docs = pendingOf(s.db, 'document_recipient');
+    const p = payers();
+    assert.deepEqual(docs.map((d) => d.subject).sort(), [p.w2, p.a, p.b].sort(), 'one question per document of the employer');
+    for (const d of docs) assert.deepEqual(d.options.map((o) => o.id), ['owner', 'spouse']);
+    const answer = { [p.w2]: 'owner', [p.a]: 'owner', [p.b]: 'spouse' };
+    for (const d of docs) C.answer(s.db, d.id, answer[d.subject], { now: NOW });
+
+    const active = all(s.db, 'SELECT * FROM tax_payments ORDER BY amount');
+    assert.deepEqual(active.map((t) => [t.payer, t.amount, t.source_slot.split(':').at(-1)]), [
+      [p.b, 100, 'spouse'], [p.b, 300, 'spouse'], [p.w2, 3500, 'owner'], [p.w2, 12000, 'owner'],
+    ], "B's paystub withholding stays; A's W-2 totals stay");
+    const sup = all(s.db, "SELECT * FROM superseded_rows WHERE table_name = 'tax_payments' AND reason = 'summarized'");
+    assert.deepEqual(sup.map((x) => [JSON.parse(x.row).payer, JSON.parse(x.row).amount]).sort((x, y) => x[1] - y[1]), [[p.a, 250], [p.a, 700]], "A's paystubs are summarized by A's W-2");
+  }));
+});
+
+// D6: a PDF with a usable text layer is read with pdfjs and goes to the model as redacted text, like
+// a text file; a PDF without one goes as a document. counts.extractPath records the path.
+describe('PDF text layer (D6)', () => {
+  const LINES = [
+    'SYNTHETIC BROKERAGE STATEMENT',
+    'Example Bank brokerage account statement for the period ending March 31, 2032.',
+    'Account holder SSN 123-45-6789',
+    'Account number 000123456789',
+    'Ending balance $123456.78',
+    'This synthetic statement exists only to exercise the text layer reader in tests.',
+    'Holdings are listed for illustration and carry no real market data whatsoever.',
+  ];
+  const classify = [{ docType: 'statement', confidence: 0.9 }];
+
+  test('the helper PDFs are what pdfjs reads: text on the text page, none on the image page', async () => {
+    const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+    const read = async (bytes) => {
+      const doc = await pdfjs.getDocument({ data: bytes, isEvalSupported: false, disableFontFace: true, useSystemFonts: false, verbosity: 0 }).promise;
+      const page = await doc.getPage(1);
+      const text = (await page.getTextContent()).items.map((i) => i.str).join(' ');
+      return { pages: doc.numPages, text };
+    };
+    const t = await read(textPdf(LINES));
+    assert.equal(t.pages, 1);
+    for (const line of LINES) assert.ok(t.text.includes(line), `pdfjs reads: ${line}`);
+    const i = await read(imagePdf());
+    assert.equal(i.pages, 1);
+    assert.equal(i.text.trim(), '');
+  });
+
+  test('pdfText returns {text, pages, usable}', async () => {
+    const { pdfText } = await src('src/ingest/pdftext.mjs');
+    const t = await pdfText(textPdf(LINES));
+    assert.equal(t.pages, 1);
+    assert.equal(t.usable, true);
+    assert.ok(t.text.includes('Ending balance $123456.78'));
+    const i = await pdfText(imagePdf());
+    assert.deepEqual([i.pages, i.usable, i.text.trim()], [1, false, '']);
+    const broken = await pdfText(new TextEncoder().encode('%PDF-1.4\n% not really a pdf\n%%EOF\n'));
+    assert.equal(broken.usable, false, 'errors are caught');
+  });
+
+  test('a text-layer PDF reaches the engine as redacted text only and imports with pdf_text_layer', () => withStore(async (s) => {
+    const engine = await recordingEngine([classify, [{ ...STATEMENT, endingBalance: '#A1#', holdings: [] }]]);
+    const r = await P.ingestFile(s.db, { name: 'statement-text-2032-03.pdf', bytes: textPdf(LINES), mime: 'application/pdf' }, s.opts(engine));
+    assert.equal(r.status, 'imported');
+    assert.equal(engine.extracts.length, 2);
+    assert.ok(engine.extracts.every((x) => x.document.type === 'text' && !('data' in x.document)), 'never a PDF block');
+    assert.equal(r.counts.extractPath, 'pdf_text_layer');
+    const sent = engine.sent();
+    assert.doesNotMatch(sent, /\d{5,}/);
+    for (const raw of ['123-45-6789', '000123456789', '123456']) assert.ok(!sent.includes(raw), `${raw} never sent`);
+    assert.ok(sent.includes('XXX-XX-XXXX'));
+    assert.ok(engine.extracts[1].document.text.includes('#A1#'));
+    assert.deepEqual(all(s.db, 'SELECT amount FROM balances').map((b) => b.amount), [123456.78], 'the token resolves in code');
+  }));
+
+  test('an image-only PDF goes as a PDF document with pdf_document; a text file reports text', () => withStore(async (s) => {
+    const bytes = imagePdf();
+    const engine = await recordingEngine([classify, [STATEMENT]]);
+    const r = await P.ingestFile(s.db, { name: 'statement-scan-2032-03.pdf', bytes, mime: 'application/pdf' }, s.opts(engine));
+    assert.equal(r.status, 'imported');
+    assert.equal(r.counts.extractPath, 'pdf_document');
+    assert.equal(engine.extracts[0].document.type, 'pdf');
+    assert.ok(Buffer.from(engine.extracts[0].document.data).equals(Buffer.from(bytes)));
+    const t = await P.ingestFile(s.db, paystubFile(), s.opts(await fakeEngine(paystubResponses(PAYSTUB))));
+    assert.equal(t.counts.extractPath, 'text');
+  }));
+});
+
+// D7: Unicode minus forms directly before a digit or `$` count as a minus sign; prose dashes stay.
+describe('Unicode minus (D7)', () => {
+  const MINUS = ['\u2212', '\u2012', '\u2013', '\u2014', '\uFE63', '\uFF0D'];
+  const hex = (c) => c.codePointAt(0).toString(16);
+
+  test('each minus form before an amount becomes a negative ref; a prose dash is left alone', () => {
+    for (const m of MINUS) {
+      const out = RD.redactForExtraction(`Ending balance ${m}$123456.78\nNet change ${m}234567.89\nFee ${m}$12.50`);
+      assert.deepEqual(Object.values(out.refs).map(Number), [-123456.78, -234567.89], `U+${hex(m)}`);
+      assert.doesNotMatch(out.text, /\d{5,}/);
+      assert.ok(out.text.includes('Fee -$12.50'), `U+${hex(m)} before a short amount becomes ASCII minus`);
+    }
+    const prose = 'Cash reserve \u2013 rainy day fund \u2014 keep it simple \u2212 always';
+    assert.equal(RD.redactForExtraction(prose).text, prose);
+  });
+
+  test('each minus form yields a negative stored balance through extraction', () => withStore(async (s) => {
+    for (const [i, m] of MINUS.entries()) {
+      const file = textFile(`statement-minus-${hex(m)}.txt`, `SYNTHETIC STATEMENT\nEnding balance ${m}$123456.78\n`, 'text/plain');
+      const engine = await fakeEngine([[{ docType: 'statement', confidence: 0.9 }], [{ ...STATEMENT, accountLast4: `900${i}`, endingBalance: '#A1#', holdings: [] }]]);
+      const r = await P.ingestFile(s.db, file, s.opts(engine));
+      assert.equal(r.status, 'imported');
+      const acct = one(s.db, 'SELECT id FROM accounts WHERE mask = ?', `900${i}`);
+      assert.deepEqual(all(s.db, 'SELECT amount FROM balances WHERE account_id = ?', acct.id).map((b) => b.amount), [-123456.78], `U+${hex(m)}`);
+    }
   }));
 });

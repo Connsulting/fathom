@@ -55,10 +55,10 @@ export function studioRemovalFile() {
 }
 
 // Bank activity CSV in the frozen bank parser's layout; the 4 digit mask comes from the file name.
-// rows: [{date: 'MM/DD/YYYY', amount: '-10.00', balance: '990.00' or '', description}]
-const BANK_HEADER = 'Details,Posting Date,Description,Amount,Type,Balance,Check or Slip #';
+// rows: [{date: 'MM/DD/YYYY', amount: '-10.00', balance: '990.00' or '', description, check?}]
+export const BANK_HEADER = 'Details,Posting Date,Description,Amount,Type,Balance,Check or Slip #';
 export function activityFile(name, rows) {
-  const lines = rows.map((r) => [Number(r.amount) < 0 ? 'DEBIT' : 'CREDIT', r.date, r.description ?? 'Synthetic activity', r.amount, 'OTHER', r.balance ?? '', ''].join(','));
+  const lines = rows.map((r) => [Number(r.amount) < 0 ? 'DEBIT' : 'CREDIT', r.date, r.description ?? 'Synthetic activity', r.amount, 'OTHER', r.balance ?? '', r.check ?? ''].join(','));
   return textFile(name, [BANK_HEADER, ...lines].join('\n') + '\n', 'text/csv');
 }
 

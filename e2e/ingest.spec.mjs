@@ -145,3 +145,77 @@ test('imported account labels render as plain escaped text with no token expansi
   await page.reload();
   await check();
 });
+
+// D9: names that come from uploads render as plain text wherever they show: the onboarding and
+// Accounts result lists and the Confirm card that names the file. No markup and no token expansion.
+// The server keeps only the base name, so the expected literal is the name it reports back.
+const HOSTILE = ['<b>x</b>{f:nope}.csv', '<b>x<b>{f:nope}.csv'];
+const hostileCsv = (number) => {
+  const header = 'Date,Original Date,Account Type,Account Name,Account Number,Institution Name,Name,Custom Name,Amount,Description,Category,Note,Ignored From,Tax Deductible,Transaction Tags';
+  return Buffer.from(`${header}\n2032-02-29,,Checking,Synthetic hostile ${number},${number},Example Bank,Example Shop,,42.35,Synthetic purchase,Shopping,,,,\n`);
+};
+const hostileFiles = (seed) => HOSTILE.map((name, i) => ({ name, mimeType: 'text/csv', buffer: hostileCsv(`555000${seed}${i}${seed}${i}`) }));
+
+// The demo store has finished onboarding; serve every scenario as a fresh one on step 1.
+async function forceOnboarding(page) {
+  await page.route('**/api/**', async (route) => {
+    const res = await route.fetch();
+    if (!String(res.headers()['content-type'] || '').includes('application/json')) return route.fulfill({ response: res });
+    const body = await res.json();
+    const sc = body && body.meta ? body : body && body.scenario;
+    if (sc && sc.live) Object.assign(sc.live, { demo: 'fresh', onboardStep: 1 });
+    return route.fulfill({ response: res, json: body });
+  });
+}
+
+async function uploadHostile(page, seed) {
+  const uploaded = page.waitForResponse((r) => new URL(r.url()).pathname === '/api/files' && r.request().method() === 'POST');
+  await page.locator('input[type=file][data-upload]').setInputFiles(hostileFiles(seed));
+  const res = await uploaded;
+  expect(res.status()).toBe(200);
+  const body = await res.json();
+  expect(body.files.map((f) => f.status)).toEqual(['imported', 'imported']);
+  const names = body.files.map((f) => f.name);
+  for (const n of names) expect(n).toContain('{f:nope}');
+  return names;
+}
+
+async function expectLiteral(scope, names) {
+  for (const n of names) await expect(scope.getByText(n, { exact: true }).first()).toBeVisible();
+}
+
+test('upload file names render literally on onboarding, Accounts and Confirm', async ({ page }) => {
+  await forceOnboarding(page);
+  await page.goto('/#/onboarding/1');
+  await expect(page.getByRole('heading', { level: 1, name: 'Dump everything in' })).toBeVisible();
+  const onboardingNames = await uploadHostile(page, 1);
+  const onboardingList = page.locator('.h-ing-files');
+  await expectLiteral(onboardingList, onboardingNames);
+  await expect(page.locator('.h-ing-files b, .h-files b')).toHaveCount(0);
+
+  // Back to the real (finished onboarding) scenario: reload to drop the forced one, then route.
+  await page.unroute('**/api/**');
+  await page.reload();
+  await gotoRoute(page, 'accounts');
+  const accountNames = await uploadHostile(page, 2);
+  await expectLiteral(page.locator('.h-ing-files').first(), accountNames);
+  await expect(page.locator('.h-ing-files b')).toHaveCount(0);
+
+  await gotoRoute(page, 'confirm');
+  const cards = page.locator('.h-cfs');
+  await expectLiteral(cards, [...new Set([...onboardingNames, ...accountNames])]);
+  await expect(page.locator('.h-cfs b, .h-ing-files b')).toHaveCount(0);
+});
+
+// D1: a file past the parse limits shows as "Too large to read" in the Accounts results.
+test('a file past the parse limits is labeled Too large to read', async ({ page }) => {
+  await gotoRoute(page, 'accounts');
+  const cols = Array.from({ length: 600 }, (_, i) => `c${i}`);
+  const uploaded = page.waitForResponse((r) => new URL(r.url()).pathname === '/api/files' && r.request().method() === 'POST');
+  await page.locator('input[type=file][data-upload]').setInputFiles({ name: 'wide-header.csv', mimeType: 'text/csv', buffer: Buffer.from(`${cols.join(',')}\n${cols.map(() => 'x').join(',')}\n`) });
+  const res = await uploaded;
+  expect(res.status()).toBe(200);
+  expect((await res.json()).files.map((f) => f.status)).toEqual(['too_large']);
+  const row = page.locator('.h-ing-files li').filter({ hasText: 'wide-header.csv' });
+  await expect(row).toContainText('Too large to read');
+});

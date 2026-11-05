@@ -376,3 +376,27 @@ test('an uncached formula in a tax Month cell warns invalid_tax_month with its l
     }
   });
 }
+
+// D7: a Unicode minus form before an amount parses as negative in CSV and workbook cells.
+test('format.number and a bank CSV read Unicode minus forms as negative', async () => {
+  const { number } = await import('../../src/ingest/format.mjs');
+  for (const m of ['\u2212', '\u2012', '\u2013', '\u2014', '\uFE63', '\uFF0D']) {
+    const hex = m.codePointAt(0).toString(16);
+    assert.equal(number(`${m}12.50`), -12.5, `U+${hex}`);
+    assert.equal(number(`${m}$1,234.50`), -1234.5, `U+${hex} before $`);
+  }
+  assert.equal(number('12\u201314'), null, 'a dash between digits is still not a number');
+  const file = textFile('Chase4321_Activity_minus.csv', 'Details,Posting Date,Description,Amount,Type,Balance,Check or Slip #\nDEBIT,03/05/2032,Synthetic card,\u221242.35,OTHER,\u2212957.65,\n', 'text/csv');
+  const parsed = pickParser(file).parse(file);
+  assert.deepEqual(parsed.warnings, []);
+  assert.deepEqual(parsed.rows.map((r) => [r.kind, r.amount]), [['transaction', -42.35], ['balance', -957.65]]);
+});
+
+test('a workbook text amount with a Unicode minus reads as negative', () => {
+  const file = { name: 'minus-pnl.xlsx', bytes: new Uint8Array(writeXlsx([
+    { name: 'Example Studio Income', rows: [['Payment Date', 'Payment Amount'], ['2032-02-10', '\u2212400.00']] },
+  ])) };
+  const parsed = pickParser(file).parse(file);
+  assert.deepEqual(parsed.warnings, []);
+  assert.deepEqual(parsed.rows.map((r) => [r.kind, r.category, r.amount]), [['pnl_line', 'Income', -400]]);
+});

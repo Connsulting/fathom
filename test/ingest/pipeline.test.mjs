@@ -10,7 +10,7 @@ import { src } from '../helpers/server.mjs';
 import { writeXlsx } from '../helpers/xlsx.mjs';
 import {
   fixture, textFile, aggregatorFile, studioRemovalFile, activityFile, coveragePnlFile, coverageTaxFile, positionsFile, unreadablePnlFile, unreadableTaxFile,
-  realStore, fakeEngine, offEngine, all, one, count, items, sha256, fileIdOf,
+  realStore, fakeEngine, recordingEngine, offEngine, all, one, count, items, sha256, fileIdOf,
 } from '../helpers/ingest.mjs';
 
 let P;
@@ -696,5 +696,244 @@ describe('unreadable tax month label', () => {
     assert.equal(r.counts.warningCodes.invalid_tax_month ?? 0, 0);
     assert.equal(count(s.db, 'tax_payments'), 6);
     assert.equal(all(s.db, "SELECT * FROM superseded_rows WHERE table_name = 'tax_payments' AND reason = 'removed'").length, 2);
+  }));
+});
+
+// D1: bounded parsing. Real limits: rows 200000, columns 512, cells 2000000, cell length 32768.
+// An input past a limit is recorded as too_large (encrypted bytes kept), never parsed whole.
+describe('bounded parsing (D1)', () => {
+  let FM;
+  let CHASE;
+  before(async () => {
+    FM = await src('src/ingest/format.mjs');
+    CHASE = await src('src/ingest/parsers/chase-activity.mjs');
+  });
+
+  const REQUIRED = ['details', 'posting date', 'description', 'amount', 'type', 'balance', 'check or slip #'];
+  // About 3 MB of single-character cells in three columns: 500000 rows, past the row limit.
+  const wideCsv = () => textFile('single-char-export.csv', 'a,b,c\n' + 'x,y,z\n'.repeat(500000), 'text/csv');
+  const isLimit = (e) => e instanceof FM.LimitError && e.code === 'limit_exceeded';
+
+  async function assertTooLarge(s, file, r) {
+    assert.equal(r.status, 'too_large');
+    assert.equal(r.counts.warnings, 1);
+    assert.deepEqual(r.counts.warningCodes, { limit_exceeded: 1 });
+    const f = one(s.db, 'SELECT * FROM files WHERE id = ?', r.fileId);
+    assert.equal(f.status, 'too_large');
+    assert.equal(f.note, 'limit_exceeded');
+    assert.deepEqual(JSON.parse(f.counts).warningCodes, { limit_exceeded: 1 });
+    const back = await V.readStoredFile({ dataDir: s.dataDir, key: s.key, id: r.fileId, storedPath: f.stored_path });
+    assert.ok(Buffer.from(back).equals(Buffer.from(file.bytes)), 'the encrypted bytes are kept');
+    for (const table of ['transactions', 'balances', 'positions', 'pnl_lines', 'tax_payments', 'documents']) assert.equal(count(s.db, table), 0, `${table} untouched`);
+  }
+
+  test('LIMITS, LimitError and too_large are exported with the planned values', () => {
+    assert.deepEqual({ ...FM.LIMITS }, { rows: 200000, columns: 512, cells: 2000000, cellChars: 32768 });
+    const e = new FM.LimitError('synthetic');
+    assert.ok(e instanceof Error);
+    assert.equal(e.code, 'limit_exceeded');
+    assert.ok(P.STATUSES.includes('too_large'));
+  });
+
+  test('csv() throws LimitError past the row limit and chase parse lets it propagate', () => {
+    const file = wideCsv();
+    assert.throws(() => FM.csv(file), isLimit);
+    const bank = textFile('Chase4321_Activity_big.csv', `${REQUIRED.join(',')}\n` + 'x,x,x,x,x,x,x\n'.repeat(200001), 'text/csv');
+    assert.throws(() => CHASE.parse(bank), isLimit, 'not swallowed into malformed_csv');
+  });
+
+  test('csvHeader and csvScore read only the header: a body malformed beyond 64 KiB still scores 0.98', () => {
+    const head = 'Details,Posting Date,Description,Amount,Type,Balance,Check or Slip #\n';
+    const body = 'DEBIT,03/01/2032,Synthetic header-only row,-1.00,OTHER,,\n'.repeat(100000);
+    const bytes = Buffer.concat([Buffer.from(head + body), Buffer.from([0xff, 0xfe, 0xfd]), Buffer.from('\n')]);
+    const file = { name: 'Chase4321_Activity_huge.csv', bytes: new Uint8Array(bytes), mime: 'text/csv' };
+    assert.deepEqual(FM.csvHeader(file), REQUIRED);
+    const started = Date.now();
+    assert.equal(FM.csvScore(file, REQUIRED), 0.98, 'sniffing never decodes or parses the body');
+    assert.equal(CHASE.sniff(file), 0.98);
+    assert.ok(Date.now() - started < 1000, 'sniffing a 6 MB file is header-only');
+  });
+
+  test('a 3 MB CSV of single-character cells is too_large; a normal fixture still imports after it', () => withStore(async (s) => {
+    const off = await offEngine();
+    const file = wideCsv();
+    const r = await P.ingestFile(s.db, file, s.opts(off));
+    await assertTooLarge(s, file, r);
+    const ok = await P.ingestFile(s.db, fixture('aggregator.csv', 'text/csv'), s.opts(off));
+    assert.equal(ok.status, 'imported');
+    assert.equal(inserted(ok, 'transaction'), 2);
+  }));
+
+  test('a bank-format CSV past the row limit is too_large through its parser, not imported with warnings', () => withStore(async (s) => {
+    const file = textFile('Chase4321_Activity_rows.csv', `${REQUIRED.join(',')}\n` + 'x,x,x,x,x,x,x\n'.repeat(200001), 'text/csv');
+    const r = await P.ingestFile(s.db, file, s.opts(await offEngine()));
+    await assertTooLarge(s, file, r);
+  }));
+
+  test('a header wider than the column limit is too_large at sniff', () => withStore(async (s) => {
+    const cols = Array.from({ length: 600 }, (_, i) => `c${i}`);
+    const file = textFile('wide-header.csv', `${cols.join(',')}\n${cols.map(() => 'x').join(',')}\n`, 'text/csv');
+    const r = await P.ingestFile(s.db, file, s.opts(await offEngine()));
+    await assertTooLarge(s, file, r);
+  }));
+
+  test('an xlsx whose single sheet holds more cells than the cell limit is too_large', () => withStore(async (s) => {
+    const empty = { empty: true };
+    const row = new Array(512).fill(empty);
+    const rows = Array.from({ length: 3907 }, () => row); // 2000384 cells, 512 columns, 3907 rows
+    const file = { name: 'many-cells.xlsx', bytes: new Uint8Array(writeXlsx([{ name: 'Cells', rows }])) };
+    const r = await P.ingestFile(s.db, file, s.opts(await offEngine()));
+    await assertTooLarge(s, file, r);
+  }));
+});
+
+// D2: the notes document row never holds the note text; extraction reads it from the vault.
+describe('no plaintext notes (D2)', () => {
+  const SENTENCE = 'The quiet heron counts seventeen lanterns before the marigold tide returns.';
+  const noteFile = () => textFile('household-notes.md', `# Synthetic notes\n\n${SENTENCE}\n\nWe keep two dependents in mind.\n`, 'text/markdown');
+  const NOTES_OUT = { facts: [{ key: 'household.dependents', value: '2', confidence: 0.95 }], goals: [{ title: 'Build a cash reserve', when: '2033', confidence: 0.9 }] };
+  const slices = (s, n = 20) => Array.from({ length: s.length - n + 1 }, (_, i) => s.slice(i, i + n));
+
+  function assertNoText(s) {
+    s.db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+    const bytes = [s.file, `${s.file}-wal`].filter((p) => existsSync(p)).map((p) => readFileSync(p).toString('latin1')).join('\n');
+    const tables = s.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all().map((r) => r.name);
+    const cells = [];
+    for (const t of tables) for (const row of s.db.prepare(`SELECT * FROM "${t}"`).all()) for (const v of Object.values(row)) if (typeof v === 'string') cells.push(v);
+    const text = cells.join('\n');
+    for (const slice of slices(SENTENCE)) {
+      assert.ok(!bytes.includes(slice), `database file bytes hold no slice of the note: ${slice}`);
+      assert.ok(!text.includes(slice), `no TEXT column holds a slice of the note: ${slice}`);
+    }
+  }
+
+  test('the stored notes document is a reference, and the database never holds the text', () => withStore(async (s) => {
+    const file = noteFile();
+    const r = await P.ingestFile(s.db, file, s.opts(await offEngine()));
+    assert.equal(r.status, 'needs_extraction');
+    const doc = one(s.db, "SELECT * FROM documents WHERE doc_type = 'notes'");
+    const fields = JSON.parse(doc.fields);
+    assert.deepEqual(Object.keys(fields).sort(), ['chars', 'lines', 'ref', 'sha256']);
+    assert.equal(fields.ref, r.fileId);
+    assert.equal(fields.sha256, sha256(file.bytes));
+    assert.equal(fields.chars, new TextDecoder().decode(file.bytes).length);
+    assert.ok(Number.isInteger(fields.lines) && fields.lines >= 5);
+    assertNoText(s);
+  }));
+
+  test('retry with the engine on reads the note from the vault, extracts facts and still stores no text', () => withStore(async (s) => {
+    const first = await P.ingestFile(s.db, noteFile(), s.opts(await offEngine()));
+    const engine = await recordingEngine([[NOTES_OUT]]);
+    const retried = await P.retryFile(s.db, first.fileId, s.opts(engine));
+    assert.equal(retried.status, 'imported');
+    assert.ok(engine.extracts[0].document.text.includes(SENTENCE), 'the engine got the decrypted note');
+    assert.equal(one(s.db, "SELECT value FROM facts WHERE key = 'household.dependents'").value, '2');
+    assert.equal(count(s.db, 'documents', "doc_type = 'notes'"), 1);
+    assert.equal(JSON.parse(one(s.db, "SELECT fields FROM documents WHERE doc_type = 'notes'").fields).ref, first.fileId);
+    assertNoText(s);
+  }));
+});
+
+// D3: a key collision from another file of the same parser with a different description is a
+// second transaction (alt key plus a near_duplicate question); across formats it stays a duplicate.
+describe('no silently dropped transactions (D3)', () => {
+  const normalize = (v) => String(v).toLowerCase().replace(/[^a-z0-9]/g, '');
+  const row = (description, extra = {}) => ({ date: '03/09/2032', amount: '-54.21', balance: '', description, ...extra });
+
+  test('two uploads of one bank format, same day and amount, different descriptions: both rows and one question', () => withStore(async (s) => {
+    const off = await offEngine();
+    await P.ingestFile(s.db, activityFile('Chase4321_Activity_A.csv', [row('SYNTH GROCERY NORTH')]), s.opts(off));
+    const b = await P.ingestFile(s.db, activityFile('Chase4321_Activity_B.csv', [row('SYNTH PHARMACY SOUTH')]), s.opts(off));
+    assert.equal(inserted(b, 'transaction'), 1);
+    assert.equal(b.counts.duplicates, 0);
+    const tx = all(s.db, 'SELECT * FROM transactions ORDER BY id');
+    assert.deepEqual(tx.map((t) => [t.date, t.amount, t.description]), [['2032-03-09', -54.21, 'SYNTH GROCERY NORTH'], ['2032-03-09', -54.21, 'SYNTH PHARMACY SOUTH']]);
+    assert.equal(tx[1].dedupe_key, `${tx[0].dedupe_key}:d:${sha256(normalize('SYNTH PHARMACY SOUTH')).slice(0, 16)}`);
+    const q = items(s.db, 'near_duplicate');
+    assert.equal(q.length, 1);
+    assert.equal(q[0].subject, tx.map((t) => t.dedupe_key).sort().join('|'));
+  }));
+
+  test('identical descriptions in two uploads of one format are deduped', () => withStore(async (s) => {
+    const off = await offEngine();
+    await P.ingestFile(s.db, activityFile('Chase4321_Activity_A.csv', [row('SYNTH GROCERY NORTH')]), s.opts(off));
+    const b = await P.ingestFile(s.db, activityFile('Chase4321_Activity_B.csv', [row('Synth Grocery  North')]), s.opts(off));
+    assert.equal(inserted(b, 'transaction'), 0);
+    assert.equal(b.counts.duplicates, 1);
+    assert.equal(count(s.db, 'transactions'), 1);
+    assert.equal(items(s.db, 'near_duplicate').length, 0);
+  }));
+
+  test('aggregator plus bank overlap still dedupes and counts the differing description as crossFormat', () => withStore(async (s) => {
+    const off = await offEngine();
+    await P.ingestFile(s.db, fixture('Chase7766_Activity_20320305.csv', 'text/csv'), s.opts(off));
+    const r = await P.ingestFile(s.db, fixture('aggregator.csv', 'text/csv'), s.opts(off));
+    assert.equal(inserted(r, 'transaction'), 0);
+    assert.equal(r.counts.duplicates, 2);
+    assert.equal(r.counts.crossFormat, 1, 'EXAMPLE SHOP CARD 9988 against EXAMPLE SHOP, PURCHASE');
+    assert.equal(count(s.db, 'transactions'), 3);
+    assert.equal(items(s.db, 'near_duplicate').length, 0);
+  }));
+
+  test('bank rows with a check number dedupe by it even when the posting date differs', () => withStore(async (s) => {
+    const off = await offEngine();
+    await P.ingestFile(s.db, activityFile('Chase4321_Activity_A.csv', [row('CHECK 1042', { date: '03/01/2032', amount: '-125.00', check: '1042' })]), s.opts(off));
+    const b = await P.ingestFile(s.db, activityFile('Chase4321_Activity_B.csv', [row('CHECK 1042', { date: '03/04/2032', amount: '-125.00', check: '1042' })]), s.opts(off));
+    assert.equal(inserted(b, 'transaction'), 0);
+    assert.equal(b.counts.duplicates, 1);
+    const tx = all(s.db, 'SELECT * FROM transactions');
+    assert.deepEqual(tx.map((t) => [t.date, t.amount, t.external_id]), [['2032-03-01', -125, '1042']]);
+    assert.equal(items(s.db, 'near_duplicate').length, 0);
+  }));
+});
+
+// D5: a complete positions snapshot removes same-account, same-day holdings it no longer lists.
+describe('authoritative position snapshots (D5)', () => {
+  const A = { symbol: 'EXMPL', quantity: '10', price: '20.00', value: '200.00' };
+  const B = { symbol: 'OTHR', quantity: '5', price: '10.00', value: '50.00' };
+  const figure = (db) => {
+    const acct = one(db, "SELECT * FROM accounts WHERE mask = '2222'");
+    return one(db, 'SELECT v FROM figures WHERE key = ?', `acct.${acct.id}.balance`).v;
+  };
+  const removed = (db) => all(db, "SELECT * FROM superseded_rows WHERE table_name = 'positions' AND reason = 'removed'");
+
+  test('A and B, then the same day with A only: B is archived as removed and the total equals A', () => withStore(async (s) => {
+    const off = await offEngine();
+    const first = await P.ingestFile(s.db, positionsFile('positions-ab.csv', [A, B]), s.opts(off));
+    const second = await P.ingestFile(s.db, positionsFile('positions-a.csv', [A]), s.opts(off));
+    assert.equal(second.counts.superseded, 1);
+    assert.deepEqual(all(s.db, 'SELECT symbol FROM positions').map((p) => p.symbol), ['EXMPL']);
+    const gone = removed(s.db);
+    assert.deepEqual(gone.map((x) => [JSON.parse(x.row).symbol, x.file_id, x.superseded_by]), [['OTHR', first.fileId, second.fileId]]);
+    assert.equal(figure(s.db), 200);
+  }));
+
+  test('a pending activity row does not make the snapshot incomplete', () => withStore(async (s) => {
+    const off = await offEngine();
+    await P.ingestFile(s.db, positionsFile('positions-ab.csv', [A, B]), s.opts(off));
+    const pending = { symbol: 'PENDING', description: 'Pending activity', quantity: '', price: '0', value: '0' };
+    const second = await P.ingestFile(s.db, positionsFile('positions-a-pending.csv', [A, pending]), s.opts(off));
+    assert.equal(second.counts.warningCodes.pending_activity, 1);
+    assert.deepEqual(all(s.db, 'SELECT symbol FROM positions').map((p) => p.symbol), ['EXMPL']);
+    assert.equal(removed(s.db).length, 1);
+  }));
+
+  test('an invalid position row for the account keeps B (incomplete snapshot)', () => withStore(async (s) => {
+    const off = await offEngine();
+    await P.ingestFile(s.db, positionsFile('positions-ab.csv', [A, B]), s.opts(off));
+    const second = await P.ingestFile(s.db, positionsFile('positions-a-invalid.csv', [A, { symbol: 'BROKEN', quantity: '1', price: '1.00', value: 'n/a' }]), s.opts(off));
+    assert.equal(second.counts.warningCodes.invalid_position, 1);
+    assert.deepEqual(all(s.db, 'SELECT symbol FROM positions ORDER BY symbol').map((p) => p.symbol), ['EXMPL', 'OTHR']);
+    assert.equal(removed(s.db).length, 0);
+    assert.equal(figure(s.db), 250);
+  }));
+
+  test('an older second file keeps B', () => withStore(async (s) => {
+    const off = await offEngine();
+    await P.ingestFile(s.db, positionsFile('positions-ab.csv', [A, B]), s.opts(off));
+    await P.ingestFile(s.db, positionsFile('positions-a-older.csv', [A], { asOf: 'Mar-04-2032' }), s.opts(off));
+    assert.equal(count(s.db, 'positions', "as_of = '2032-03-05'"), 2);
+    assert.equal(removed(s.db).length, 0);
+    assert.equal(figure(s.db), 250);
   }));
 });

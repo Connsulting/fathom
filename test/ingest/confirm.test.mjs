@@ -9,7 +9,7 @@ import http from 'node:http';
 import { readFileSync, rmSync } from 'node:fs';
 import { src, spawnServer, request, postJson, SERVER_TIMEOUT } from '../helpers/server.mjs';
 import {
-  fixture, fixturePath, textFile, aggregatorFile, northwindFile, realStore, fakeEngine, offEngine, all, one, count, items, NOW,
+  fixture, fixturePath, textFile, aggregatorFile, activityFile, northwindFile, realStore, fakeEngine, offEngine, all, one, count, items, NOW,
 } from '../helpers/ingest.mjs';
 
 let P;
@@ -342,6 +342,43 @@ describe('near duplicate', () => {
     await P.ingestFile(s.db, aggregatorFile('near-b.csv', [nearLater]), s.opts(off));
     C.answer(s.db, itemOf(s.db, 'near_duplicate').id, 'different', { now: NOW });
     assert.equal(count(s.db, 'transactions'), 2);
+    assert.equal(count(s.db, 'superseded_rows'), 0);
+  }));
+
+  // D3: a same-day, same-amount row from another file of one bank format with a different
+  // description is stored under an alt key and asked about; the answer and a re-import behave.
+  const collide = (name, description, extra = []) => activityFile(name, [{ date: '03/09/2032', amount: '-54.21', balance: '', description }, ...extra]);
+  const unrelated = { date: '03/20/2032', amount: '-9.99', balance: '', description: 'SYNTH OTHER' };
+
+  test('a description collision answered same archives the newer row; a re-import of it asks nothing new', () => withStore(async (s) => {
+    const off = await offEngine();
+    const a = await P.ingestFile(s.db, collide('Chase4321_Activity_A.csv', 'SYNTH GROCERY NORTH'), s.opts(off));
+    await P.ingestFile(s.db, collide('Chase4321_Activity_B.csv', 'SYNTH PHARMACY SOUTH'), s.opts(off));
+    assert.equal(count(s.db, 'transactions'), 2);
+    const q = itemOf(s.db, 'near_duplicate');
+    assert.ok(q, 'the collision is asked about');
+    C.answer(s.db, q.id, 'same', { now: NOW });
+    const left = all(s.db, 'SELECT * FROM transactions');
+    assert.deepEqual(left.map((t) => [t.description, t.file_id]), [['SYNTH GROCERY NORTH', a.fileId]], 'the newer row is archived');
+    assert.equal(count(s.db, 'superseded_rows', "reason = 'duplicate_confirmed'"), 1);
+
+    const again = await P.ingestFile(s.db, collide('Chase4321_Activity_C.csv', 'SYNTH PHARMACY SOUTH', [unrelated]), s.opts(off));
+    assert.equal(again.counts.duplicates, 1);
+    assert.equal((again.counts.rows || {}).transaction, 1, 'only the unrelated row lands');
+    assert.equal(count(s.db, 'transactions'), 2);
+    assert.equal(items(s.db, 'near_duplicate').length, 1, 'no new question');
+  }));
+
+  test('a description collision answered different keeps both; a re-import of it is a duplicate with no new question', () => withStore(async (s) => {
+    const off = await offEngine();
+    await P.ingestFile(s.db, collide('Chase4321_Activity_A.csv', 'SYNTH GROCERY NORTH'), s.opts(off));
+    await P.ingestFile(s.db, collide('Chase4321_Activity_B.csv', 'SYNTH PHARMACY SOUTH'), s.opts(off));
+    C.answer(s.db, itemOf(s.db, 'near_duplicate').id, 'different', { now: NOW });
+    assert.equal(count(s.db, 'transactions'), 2);
+    const again = await P.ingestFile(s.db, collide('Chase4321_Activity_C.csv', 'SYNTH PHARMACY SOUTH', [unrelated]), s.opts(off));
+    assert.equal(again.counts.duplicates, 1);
+    assert.equal(count(s.db, 'transactions'), 3);
+    assert.equal(items(s.db, 'near_duplicate').length, 1, 'no new question');
     assert.equal(count(s.db, 'superseded_rows'), 0);
   }));
 

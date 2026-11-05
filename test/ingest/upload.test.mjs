@@ -12,6 +12,7 @@ import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { src, spawnServer, request, postJson, runCommand, tempDir, freePort, SERVER_TIMEOUT } from '../helpers/server.mjs';
 import { fixturePath, aggregatorCsv } from '../helpers/ingest.mjs';
+import { writeXlsx } from '../helpers/xlsx.mjs';
 
 const T = { timeout: SERVER_TIMEOUT * 2 };
 const XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
@@ -349,4 +350,41 @@ describe('POST /api/files in real mode', () => {
       rmSync(keyDir, { recursive: true, force: true });
     }
   });
+});
+
+// D1: a server on a 128 MB heap survives inputs past the parse limits: each answers 200 with status
+// too_large, the server still answers /healthz, and a normal file still imports after it. One server
+// per test, so a crash in one case does not decide another.
+describe('bounded parsing on a 128 MB heap', () => {
+  async function withSmallHeap(fn) {
+    const s = await spawnServer({ env: { FATHOM_DEMO: '1', FATHOM_ENGINE: 'off', NODE_OPTIONS: '--max-old-space-size=128' } });
+    try {
+      await fn(s);
+      const h = await request(s.baseUrl, { path: '/healthz' });
+      assert.equal(h.status, 200);
+      assert.equal(h.json && h.json.ok, true);
+      const ok = await upload(s.baseUrl, [{ name: 'aggregator.csv', bytes: fx('aggregator.csv'), type: 'text/csv' }]);
+      assert.equal(ok.status, 200, ok.text.slice(0, 300));
+      assert.equal(ok.json.files[0].status, 'imported', 'liveness: a normal fixture still imports');
+    } finally {
+      await s.stop();
+      rmSync(s.dataDir, { recursive: true, force: true });
+    }
+  }
+
+  test('a 3 MB CSV of single-character cells answers 200 with too_large; the server stays up', T, () => withSmallHeap(async (s) => {
+    const bytes = Buffer.from('a,b,c\n' + 'x,y,z\n'.repeat(500000));
+    const r = await upload(s.baseUrl, [{ name: 'single-char-export.csv', bytes, type: 'text/csv' }]);
+    assert.equal(r.status, 200, r.text.slice(0, 300));
+    assert.deepEqual(r.json.files.map((f) => [f.name, f.status]), [['single-char-export.csv', 'too_large']]);
+    assert.deepEqual(r.json.files[0].counts.warningCodes, { limit_exceeded: 1 });
+  }));
+
+  test('an xlsx whose single sheet holds more cells than the limit answers 200 with too_large; the server stays up', T, () => withSmallHeap(async (s) => {
+    const row = new Array(512).fill({ empty: true });
+    const bytes = writeXlsx([{ name: 'Cells', rows: Array.from({ length: 3907 }, () => row) }]);
+    const r = await upload(s.baseUrl, [{ name: 'many-cells.xlsx', bytes, type: XLSX }]);
+    assert.equal(r.status, 200, r.text.slice(0, 300));
+    assert.deepEqual(r.json.files.map((f) => [f.name, f.status]), [['many-cells.xlsx', 'too_large']]);
+  }));
 });
