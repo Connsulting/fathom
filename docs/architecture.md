@@ -483,9 +483,9 @@ is reachable only on the owner's private network.
    `minAmount` equal to `maxAmount`) grounds its matching `rows[].amount`, and a computed total
    (`query_transactions` `total` equal to `limit`) grounds. The sanitizer also drops `fig`
    (a rec's figure reference, such as `mine[].fig`) and any string leaf, under any key, that is a
-   single identifier-like token: no whitespace, letters and digits both, no currency or percent
-   sign, not a magnitude amount (`20k`) or ordinal (`31st`), for example `plan529`, `rec8263` or
-   `acct4821x`.
+   single token (no whitespace) that is not one whole numeric expression, for example `plan529`,
+   `rec8263`, `acct-4821k`, a month period `2026-11`, a date `2026-11-05`, an ISO timestamp or a
+   URL. A token that is exactly one numeric expression (`4821`, `$4,821`, `12%`, `20k`) stays.
    Prose evidence is an allowlist, applied as one transform in the same pass. In every prose
    string (pack entry bodies, and any string value containing whitespace in a tool result, the
    household summary or the conversation context) a number grounds only when it is marked as a
@@ -495,12 +495,22 @@ is reachable only on the owner's private network.
    prose (`Publication 560`, `Section 125`, `age 50`, years, date parts, the digits of
    `Invest529`) never ground, while `$7,000`, `6%`, `3.9 percent`, `20k` and `2 million` do. JSON
    number fields stay evidence, and a single-token string such as `4821` or `$1,500` is not prose.
+   Before any number is judged, URLs, markdown link destinations and autolinks are removed from the
+   prose (link text stays), so `[policy](https://example.invalid/4821k)` grounds nothing while
+   `[the $500 limit](...)` still grounds `$500`. Each number is judged as one whole numeric
+   expression using the engine's `numberPattern`, so scientific notation, decimals and percents
+   are kept or blanked as a unit: `$1e3` grounds `$1,000` and never `$1` or `3`, and `12.5%` never
+   grounds `12%` or `5%`. A marked expression counts only when it stands as its own word: a letter,
+   digit, underscore or period glued in front, a letter or underscore followed by a hyphen in front
+   (`acct-4821k`, `plan-4821%`), or a letter, digit or underscore glued after (`plan_4821k`,
+   `4821%25`) blanks it.
    A stored figure that a tool returns as plain text grounds when the model read it through that
    tool: the tool result is the evidence, though the model is told to write figures as tokens.
    In `checkGrounding` itself (answer and evidence alike) a hyphen glued to a preceding letter or
    digit is not a minus sign (`2026-01` reads as 2026 and 1), a minus after whitespace or before
-   a currency sign (`-$500`) still is, and a one or two letter code joined to digits by a hyphen
-   (`K-12`, `I-9`) is vocabulary like `W-2`, not a number.
+   a currency sign (`-$500`) still is, and an explicit list of letter codes joined to digits by a
+   hyphen (`K-12`, `K-1`, `I-9`) is vocabulary like `W-2`, `W-4` and the 1099 forms, not a number.
+   Any other code (`X-873`, `AB-500`) is not masked: its digits are checked as a number.
 5. One corrective retry (same `system`, the first answer plus a corrective user turn). An answer
    still ungrounded is stored with each violation in `<span class="fx-unverified" title="Not found
    in your data or tool results">`. If the retry call itself fails, the answer is the matching

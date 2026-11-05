@@ -7,7 +7,7 @@ import { sdkRound, messagesRound } from './live.mjs';
 import { DEFAULT_MODEL, estimateUnknownCost } from './pricing.mjs';
 import { EngineOffError, BudgetExceededError, RoundLimitError, ModelCallError, ModelAccountingError } from './errors.mjs';
 export { EngineOffError, BudgetExceededError, RoundLimitError, ModelCallError, ModelAccountingError } from './errors.mjs';
-export { checkGrounding } from './grounding.mjs';
+export { checkGrounding, numberPattern } from './grounding.mjs';
 
 const queues = new WeakMap();
 async function serial(ledger, callback) {

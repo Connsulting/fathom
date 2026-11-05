@@ -4,7 +4,7 @@ for (const [word, value] of Object.entries({ thirty: 30, forty: 40, fifty: 50, s
 const scales = new Map([['thousand', 1000], ['million', 1e6], ['billion', 1e9]]);
 const wordPattern = [...words.keys(), 'hundred', ...scales.keys()].join('|');
 // A hyphen glued to a preceding letter or digit (K-12, 2026-01) joins words; it is not a minus sign.
-const numberPattern = /(?:(?<![\p{L}\d])-\s*\$|\$\s*-?|(?<![\p{L}\d])-|\+)?(?:\d(?:[\d,]*\d)?(?:\.\d+)?|\.\d+)(?:[eE][-+]?\d+)?\s*(?:[kKmMbB]\b|%|percent\b)?/gu;
+export const numberPattern = /(?:(?<![\p{L}\d])-\s*\$|\$\s*-?|(?<![\p{L}\d])-|\+)?(?:\d(?:[\d,]*\d)?(?:\.\d+)?|\.\d+)(?:[eE][-+]?\d+)?\s*(?:[kKmMbB]\b|%|percent\b)?/gu;
 const months = '(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)';
 const dates = [
   /\b\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:[Zz]|[-+]\d{2}:?\d{2})?)?\b/g,
@@ -15,8 +15,9 @@ const dates = [
 const identifiers = [
   /\b(?:401\s*(?:\(\s*k\s*\)|k)|(?:403|457)\s*(?:\(\s*b\s*\)|b)|529)(?:\([a-z0-9]+\))*(?=$|[^a-z0-9])/gi,
   /\b(?:W[- ]?[24]|1099(?:-[a-z0-9]+)?)\b/gi,
-  // Letter codes glued to digits by a hyphen: grade ranges and form-style codes (K-12, I-9).
-  /\b[a-z]{1,2}-\d{1,3}\b/gi,
+  // Recognized letter codes glued to digits by a hyphen: the K-12 grade range, the Schedule K-1
+  // and Form I-9. Any other code (X-873) is checked as a number.
+  /\b(?:K-12|K-1|I-9)\b/gi,
   /\bForm\s+\d{1,4}[a-z]?(?:-[a-z0-9]+)?(?:\([a-z0-9]+\))*/gi,
   /\bSchedule\s+(?:[a-z]{1,3}|\d{1,3})(?:-[a-z0-9]+)?\b/gi,
   /(?:\b(?:Sections?|Sec\.?|IRC|I\.R\.C\.)\s*|§{1,2}\s*)\d+[a-z]?(?:\([a-z0-9]+\))*/gi,

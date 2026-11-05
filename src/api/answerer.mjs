@@ -18,11 +18,12 @@
 // Every grounding source (the household summary, the conversation context, pack entry bodies and
 // each tool result) goes through one evidence sanitizer: identifier, label and citation keys are
 // dropped (ids, keys, names, titles, versions, curators, account masks and numbers, figure
-// references, urls, sources, pages), so are identifier-like string leaves (plan529) under any key,
-// and entry bodies lose their citation and metadata lines, so none of them grounds a number. In
-// prose (any string with whitespace) only quantity-marked numbers ground: a currency sign, a
-// percent sign or the word percent, or a magnitude (k, thousand, million, billion); bare numbers
-// (Publication 560, age 50) never do. JSON number fields stay evidence. Tool results also drop
+// references, urls, sources, pages), so is every single-token string leaf that is not one whole
+// numeric expression (plan529, 2026-11, a URL) under any key, and entry bodies lose their citation
+// and metadata lines, so none of them grounds a number. In prose (any string with whitespace) URLs
+// and link destinations are removed, and only whole-word, quantity-marked numeric expressions
+// ground: a currency sign, a percent sign or the word percent, or a magnitude (k, thousand,
+// million, billion); bare numbers (Publication 560, age 50) never do. JSON number fields stay evidence. Tool results also drop
 // argument echoes: a leaf under an argument's key with an equal value, or a string containing an
 // argument string of 3 or more characters with a digit. Other values that merely equal an argument
 // (a computed total) stay. The model still sees everything.
@@ -35,7 +36,7 @@
 
 import { callTool, tools as REGISTRY } from '../tools/index.mjs';
 import { buildScenario } from '../scenario/build.mjs';
-import { checkGrounding, EngineOffError, BudgetExceededError, ModelCallError, ModelAccountingError, RoundLimitError } from '../engine/index.mjs';
+import { checkGrounding, numberPattern, EngineOffError, BudgetExceededError, ModelCallError, ModelAccountingError, RoundLimitError } from '../engine/index.mjs';
 import { packContext } from '../packs/index.mjs';
 import { packStatus, ACTION_STATUS } from '../shared/rules.mjs';
 import { escapeUserText, resolveTokens } from '../shared/tokens.mjs';
@@ -131,27 +132,39 @@ const META_KEYS = new Set(['id', 'ids', 'key', 'keys', 'ref', 'refs', 'manifest'
   'file', 'files', 'fileName', 'path', 'page', 'pages']);
 const isMetaKey = k => META_KEYS.has(k) || /(?:Id|Ids|_id|_ids|Mask|Masks|_mask|Number|Numbers|_number)$/.test(k);
 
-// Identifier-like text never grounds. A string leaf that is one token (plan529, rec8263,
-// acct4821x: no whitespace, letters and digits both) is dropped whole. Tokens with a currency or
-// percent sign, magnitude amounts (20k) and ordinals (31st) stay.
-const CURRENCY_OR_PERCENT = /[%\p{Sc}]/u;
-const AMOUNT_OR_ORDINAL = /^[-+]?\d[\d,]*(?:\.\d+)?[kmb]$|^\d+(?:st|nd|rd|th)$/i;
-const isIdentifierToken = s => /^\S+$/.test(s) && /\p{L}/u.test(s) && /\d/.test(s)
-  && !CURRENCY_OR_PERCENT.test(s) && !AMOUNT_OR_ORDINAL.test(s);
+// Single-token evidence is an allowlist too. A string leaf with no whitespace grounds only when the
+// whole token is one numeric expression ($4,821, 12%, 1500, 20k); every other token (plan529,
+// acct-4821k, a month period 2026-11, a date or timestamp, a URL) is dropped whole.
+const NUMERIC_TOKEN = new RegExp(`^(?:${numberPattern.source})$`, 'u');
 
-// Prose evidence is an allowlist. In a string with whitespace, a number grounds only when it is
-// marked as a quantity: a currency sign before it, or a percent sign, the word percent or a
-// magnitude (k, thousand, million, billion) after it, and no letter glued in front (Invest529).
-// Every other digit run (Section 125, age 50, a year, a date part) is blanked to spaces.
-const PROSE_NUMBER = /\d(?:[\d,]*\d)?(?:\.\d+)?|\.\d+/g;
-const QUANTITY_BEFORE = /\p{Sc}\s*[-\u2212]?\s*$/u;
-const QUANTITY_AFTER = /^\s*(?:%|(?:percent|k|thousand|million|billion)\b)/i;
-const proseEvidence = s => s.replace(PROSE_NUMBER, (n, index) => {
-  const before = s.slice(0, index);
-  const marked = !/[\p{L}\d.]$/u.test(before)
-    && (QUANTITY_BEFORE.test(before) || QUANTITY_AFTER.test(s.slice(index + n.length)));
-  return marked ? n : ' '.repeat(n.length);
-});
+// Prose evidence is an allowlist. URLs, markdown link destinations and autolinks are removed first
+// (link text stays). Then each whole numeric expression (the engine's numberPattern, so 1e3, 4.50
+// and 12.5% are judged as one unit) is kept only when it stands as its own word, with no letter,
+// digit, underscore or period glued in front, no letter- or underscore-hyphen prefix (acct-4821k)
+// and no letter, digit or underscore glued after, and when it is marked as a quantity: a currency
+// sign before it, or a percent sign, the word percent or a magnitude (k, thousand, million,
+// billion) after it. Every other numeric expression (Section 125, age 50, a year, a date part) is
+// blanked to spaces as a unit.
+const MARKDOWN_LINK = /\[([^\]]*)\]\([^)]*\)/g;
+const AUTOLINK = /<[a-z][a-z\d+.-]*:[^\s<>]*>/gi;
+const BARE_URL = /(?:\b[a-z][a-z\d+.-]*:\/\/|\bwww\.)\S*/gi;
+const GLUED_BEFORE = /(?:[\p{L}\p{N}_.]|[\p{L}_]-)$/u;
+const GLUED_AFTER = /^(?:[\p{L}\p{N}_]|[.,]\p{N})/u;
+const CURRENCY_BEFORE = /\p{Sc}\s*$/u;
+const MARKED = /(?:^[-+]?\s*\$|(?:%|percent|k)$)/i;
+const MAGNITUDE_AFTER = /^\s+(?:thousand|million|billion)\b/i;
+const withoutLinks = s => s.replace(MARKDOWN_LINK, ' $1 ').replace(AUTOLINK, ' ').replace(BARE_URL, ' ');
+function proseEvidence(text) {
+  const s = withoutLinks(text);
+  return s.replace(new RegExp(numberPattern.source, numberPattern.flags), (match, index) => {
+    const n = match.trimEnd();
+    const before = s.slice(0, index);
+    const after = s.slice(index + n.length);
+    const marked = !GLUED_BEFORE.test(before) && !GLUED_AFTER.test(after)
+      && (MARKED.test(n) || CURRENCY_BEFORE.test(before) || MAGNITUDE_AFTER.test(after));
+    return marked ? match : ' '.repeat(match.length);
+  });
+}
 
 // Pack entry text as grounding data: citation and metadata lines never ground a number.
 const META_LINE = /^\s*(?:sources?|tax year|reviewed)\s*:/i;
@@ -189,13 +202,16 @@ function isEcho(v, key, echoes) {
   return typeof v === 'string' && echoes.contained.some(a => norm(v).includes(a));
 }
 
-// Drop identifier, label and citation keys at any depth, identifier-like string leaves, metadata
-// lines from `body` strings, and (for a tool result) argument echoes; prose keeps only marked numbers.
+// Drop identifier, label and citation keys at any depth, single-token string leaves that are not
+// one numeric expression, metadata lines from `body` strings, and (for a tool result) argument
+// echoes; prose keeps only whole-word, quantity-marked numbers outside URLs.
 function scrub(v, echoes = NO_ECHOES, key = undefined) {
   if (typeof v === 'number') return isEcho(v, key, echoes) ? undefined : v;
   if (typeof v === 'string') {
-    if (isIdentifierToken(v.trim()) || isEcho(v, key, echoes)) return undefined;
-    return /\s/.test(v.trim()) ? proseEvidence(v) : v;
+    if (isEcho(v, key, echoes)) return undefined;
+    const token = v.trim();
+    if (!/\s/.test(token)) return NUMERIC_TOKEN.test(token) ? v : undefined;
+    return proseEvidence(v);
   }
   if (Array.isArray(v)) return v.map(x => scrub(x, echoes, key)).filter(x => x !== undefined);
   if (v && typeof v === 'object') {
