@@ -337,6 +337,8 @@ test('MG6: C5 liveness: employer room that does not depend on the catch-up still
 // ================================================================ C6 (MG13): words between a number and a money word
 // The planner-side check (R2-7, D5) blanks "in YYYY" and date forms only when no money word follows;
 // it looked at the next word alone, so a word in between ("US", "taxable") let an amount through.
+// Revision 5 K5 drops bare "in YYYY" and the money-word context: only strict full dates, "tax year
+// YYYY" and the identifiers are masked (see mg-review-fixes-2.test.mjs).
 
 const ALLOWED = { fig: { 'sh.fed.remaining': 15000 }, law: {}, pct: {}, names: {} };
 const fieldsWith = summary => ({ summary, why: ['The figures behind this come from your data.'], qa: [] });
@@ -344,13 +346,11 @@ const SNEAKY = [
   'Pay in 2026 US dollars.',
   'Pay 2026 taxable dollars.',
   'Set aside in 2026 extra after-tax dollars.',
-  'Pay by Jan 15, 2026 US dollars.',
 ];
 const STILL_FINE = [
   'Pay {f:sh.fed.remaining} by Jan 15, 2027.',
-  'This changes in 2026.',
   'It applies for tax year 2026.',
-  'Open the account in 2026 before you file.',
+  'Open the account by Dec 31, 2026 before you file.',
   'Defer more into your solo 401(k) this year.',
 ];
 const VALID = {

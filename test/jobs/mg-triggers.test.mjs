@@ -447,11 +447,11 @@ const TOKEN_ONLY = { 'sh.fed.remaining': 'token' };
 
 const REJECTED = [
   'Pay in 2026 cents.', 'Pay 2026 dollars.', 'Save in 2026 dollars.', 'Set aside in 2026 percent.', 'Owe in 2026, k',
-  'for tax year 2026 dollars', 'Pay by Jan 15, 2026 dollars.', 'Send $2026 by Jan 15.', 'Pay 2,026 now.', 'In 2026 pay 40 of it.',
-  'Pay for 2026.', 'About 40 percent of it.',
+  'Send $2026 by Jan 15.', 'Pay 2,026 now.', 'In 2026 pay 40 of it.',
+  'Pay for 2026.', 'About 40 percent of it.', 'This changes in 2026.',
 ];
 const ACCEPTED = [
-  'Pay {f:sh.fed.remaining} by Jan 15.', 'Pay {f:sh.fed.remaining} by Jan 15, 2027.', 'This changes in 2026.',
+  'Pay {f:sh.fed.remaining} by Jan 15.', 'Pay {f:sh.fed.remaining} by Jan 15, 2027.',
   'It applies for tax year 2026.', 'The window closes Dec 31st.',
 ];
 const IDENTIFIERS = [
