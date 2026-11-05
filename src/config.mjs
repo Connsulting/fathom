@@ -4,7 +4,8 @@
 import { resolve } from 'node:path';
 
 const ENGINES = ['live', 'fake', 'off'];
-const TRANSPORTS = ['dev', 'gmail', 'resend', 'postmark'];
+const TRANSPORTS = ['dev', 'smtp', 'resend', 'postmark', 'agentmail'];
+const SMTP_PORTS = [465, 587];
 
 export class ConfigError extends Error {}
 
@@ -15,6 +16,30 @@ function isoDate(v) {
 }
 
 const blank = v => v == null || v === '';
+const opt = v => (blank(v) ? null : v);
+
+// A plain value and its *_FILE path are exclusive; the file is read later by its consumer.
+function valueOrFile(env, name) {
+  if (!blank(env[name]) && !blank(env[`${name}_FILE`])) throw new ConfigError(`Set ${name} or ${name}_FILE, not both`);
+  return [opt(env[name]), opt(env[`${name}_FILE`])];
+}
+
+function smtpPort(v) {
+  if (blank(v)) return 465;
+  const n = /^\d+$/.test(v) ? Number(v) : NaN;
+  if (!SMTP_PORTS.includes(n)) throw new ConfigError(`FATHOM_EMAIL_SMTP_PORT must be ${SMTP_PORTS.join(' or ')}`);
+  return n;
+}
+
+function publicUrl(v) {
+  if (blank(v)) return null;
+  let u = null;
+  try { u = new URL(v); } catch { /* invalid */ }
+  if (!u || !['http:', 'https:'].includes(u.protocol) || v.endsWith('/') || !u.host) {
+    throw new ConfigError('FATHOM_PUBLIC_URL must be an http or https URL without a trailing slash');
+  }
+  return v;
+}
 
 export function loadConfig(env = process.env) {
   const demoRaw = env.FATHOM_DEMO;
@@ -51,6 +76,8 @@ export function loadConfig(env = process.env) {
     }
     emailTransport = env.FATHOM_EMAIL_TRANSPORT;
   }
+  const [emailFrom, emailFromFile] = valueOrFile(env, 'FATHOM_EMAIL_FROM');
+  const [emailTo, emailToFile] = valueOrFile(env, 'FATHOM_EMAIL_TO');
 
   return {
     dataDir: resolve(blank(env.FATHOM_DATA) ? 'data' : env.FATHOM_DATA),
@@ -62,5 +89,14 @@ export function loadConfig(env = process.env) {
     claudeCredentialFile: blank(env.FATHOM_CLAUDE_CREDENTIAL_FILE) ? null : env.FATHOM_CLAUDE_CREDENTIAL_FILE,
     dataKeyFile: blank(env.FATHOM_DATA_KEY_FILE) ? null : env.FATHOM_DATA_KEY_FILE,
     emailTransport,
+    emailFrom,
+    emailFromFile,
+    emailTo,
+    emailToFile,
+    emailCredentialFile: opt(env.FATHOM_EMAIL_CREDENTIAL_FILE),
+    emailSmtpUser: opt(env.FATHOM_EMAIL_SMTP_USER),
+    emailSmtpHost: blank(env.FATHOM_EMAIL_SMTP_HOST) ? 'smtp.gmail.com' : env.FATHOM_EMAIL_SMTP_HOST,
+    emailSmtpPort: smtpPort(env.FATHOM_EMAIL_SMTP_PORT),
+    publicUrl: publicUrl(env.FATHOM_PUBLIC_URL),
   };
 }
