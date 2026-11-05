@@ -297,17 +297,16 @@ export function computeFigures(data, facts, ctx) {
     const salary = c.fromPnl ? c.proj(c.sums.salary) : 0;
     const gross = ownRec ? ownRec.medicare : salary;
     const comp = ownRec ? ownRec.comp : salary;
-    const pretax = ownRec ? ownRec.pretax : 0;
     c.w2 = null;
-    if (comp > 0 || gross > 0) {
-      c.w2 = { person: c.person, src: `corp:${c.entity.slug}`, gross, comp, agi: ownRec ? ownRec.wages : salary, pretax };
+    // E9: a wage part exists whenever taxable wages are known (a W-2 box 1, or a P&L salary).
+    if (ownRec || salary > 0) {
+      c.w2 = { person: c.person, src: `corp:${c.entity.slug}`, gross, comp, agi: ownRec ? ownRec.wages : salary };
       w2.push(c.w2);
     }
     const K = c.proj(c.sums.net);
     biz.push({ id: c.entity.slug, kind: 'scorp', person: c.person, agi: K, qbi: K, seInput: null, w2Wages: comp, sstb: sstbOf(c.entity) });
     c.comp = comp;
     c.gross = gross;
-    c.pretax = pretax;
   }
   // Payroll records per (person, employer) (F3, G1): the corp owner's wages from a household S corp
   // with a P&L come from its officer salary above, so that W-2 is not added again; any other
@@ -320,7 +319,7 @@ export function computeFigures(data, facts, ctx) {
       if (c && c.person === r.person) continue;
       const own = !c && entities.some(e => e.slug === r.corp && e.owner === r.person);
       const src = own ? `corp:${r.corp}` : `corp:${r.corp}:${r.person}`;
-      w2.push({ person: r.person, src, gross: r.medicare, comp: r.comp, agi: r.wages, pretax: r.pretax });
+      w2.push({ person: r.person, src, gross: r.medicare, comp: r.comp, agi: r.wages });
       continue;
     }
     if (r.household) continue;
@@ -396,10 +395,8 @@ export function computeFigures(data, facts, ctx) {
   }
   for (const c of corps) {
     if (!c.w2 || !c.fromPnl) continue;
-    const pretax = Math.min(c.comp, cents(c.pretax + factPretax(attributed, { records, corps }, c.person, c.entity.slug)));
+    const pretax = Math.min(c.comp, factPretax(attributed, { records, corps }, c.person, c.entity.slug));
     c.w2.agi = Math.max(0, cents(c.comp - pretax));
-    c.w2.pretax = pretax;
-    c.pretax = pretax;
   }
   const contrib = contributions(records, corps, attributed, owner);
   for (const t of inflows(accounts.filter(IRA_ANY), t => /contribution/i.test(t.category ?? ''))) {
