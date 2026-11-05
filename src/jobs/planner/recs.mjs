@@ -15,7 +15,7 @@ export function buildDef(hit, fields) {
   const def = {
     id: r.id, title: r.title, summary: fields.summary, trigger: r.trigger, triggerText: r.triggerText, domain: r.domain,
     effort: r.effort, advisor: null, value: r.value, why: fields.why, mine: r.mine, kb: r.kb, cross: r.cross,
-    tasks: r.tasks.map(t => ({ t: t.t })), qa: fields.qa,
+    tasks: r.tasks, qa: fields.qa,
   };
   if (r.scenario) def.scenario = r.scenario;
   return def;
@@ -51,7 +51,7 @@ export function applyRecs(db, results, ctx) {
   const record = (id, action, arg, from, to) => event.run(id, now, action, arg == null ? null : String(arg), from, to, 'planner');
   const mark = (id, outcome, domain) => {
     byTrigger[id] = outcome;
-    counts[outcome === 'new' ? 'new' : outcome] += 1;
+    counts[outcome] += 1;
     if (outcome !== 'unchanged') domains.add(domain);
   };
   const overridden = packId => packId != null && packOverride(packId) === 0;

@@ -14,11 +14,11 @@ import { TOKEN } from '../shared/tokens.mjs';
 import { loadPlanningData, isoDateOf, resolveEntities } from './planner/data.mjs';
 import { deriveFacts, deriveFigureFacts, mergeFacts, factProvenance, ownerFactsOf, PLANNER_SRC } from './planner/facts.mjs';
 import { computeFigures } from './planner/figures.mjs';
-import { lawContent, pctContent } from './planner/law.mjs';
 import { writeProse } from './planner/prose.mjs';
 import { applyRecs } from './planner/recs.mjs';
 import { writeBrief, namesOf } from './planner/brief.mjs';
 import { evaluateCatalog } from './triggers/index.mjs';
+import { wargameFigurePrefixes } from './planner/wargame.mjs';
 
 export const PLAN_JOB_ID = 'plan';
 
@@ -82,10 +82,10 @@ async function plan(db, engine, { clock, runId, packDirs }) {
   const entities = resolveEntities(data, storedValues);
 
   // Facts from the data, then figures over the merged facts, then the facts read off figures.
-  const dataFacts = deriveFacts(data, storedValues, { entities });
+  const dataFacts = deriveFacts(data, { entities });
   const merged1 = mergeFacts(stored, dataFacts);
   const computed = computeFigures(data, merged1.values, { clock, entities, owner });
-  const figFacts = deriveFigureFacts(computed.figures, merged1.values, {});
+  const figFacts = deriveFigureFacts(computed.figures, merged1.values);
   const derived = { ...dataFacts, ...figFacts };
   // A blocked tax computation is not evidence of absence: keep the figure-derived facts (R14).
   const keep = computed.info.blocked.length ? ['income.agiEstimate', 'retirement.backdoorRothCandidate'] : [];
@@ -99,8 +99,8 @@ async function plan(db, engine, { clock, runId, packDirs }) {
   const fig = Object.fromEntries(Object.entries(computed.figures).map(([k, f]) => [k, { v: f.v, kind: f.kind, label: f.label, src: f.src }]));
 
   const ctx = {
-    clock, year: data.taxYear, month: Number(clock.slice(5, 7)), facts: merged.values, owner, fig,
-    law: lawContent(), pct: pctContent(), names, model: computed.model, data, packs, packStatus,
+    clock, year: data.taxYear, facts: merged.values, owner, fig,
+    names, model: computed.model, data, packs, packStatus,
     info: computed.info, freshness: data.freshness, warnings: [...warnings], entities,
   };
   const results = evaluateCatalog(ctx);
@@ -131,8 +131,9 @@ async function plan(db, engine, { clock, runId, packDirs }) {
       const res = upsertFact(db, { key: w.key, value: w.value, src: PLANNER_SRC, asOf: clock, confirmed: false, provenance: factProvenance(w) });
       if (res.written) factsWritten += 1;
     }
+    const delFact = db.prepare('DELETE FROM facts WHERE key = ? AND src = ? AND confirmed = 0');
     for (const key of merged.deletes) {
-      db.prepare('DELETE FROM facts WHERE key = ? AND src = ? AND confirmed = 0').run(key, PLANNER_SRC);
+      delFact.run(key, PLANNER_SRC);
       factsWritten += 1;
     }
     writeSources(db, computed.sources);
@@ -162,12 +163,13 @@ async function plan(db, engine, { clock, runId, packDirs }) {
 }
 
 function writeSources(db, sources) {
+  const get = db.prepare('SELECT label, as_of, kind FROM sources WHERE id = ?');
+  const put = db.prepare(`INSERT INTO sources (id, label, as_of, kind, last_ingest_at, note) VALUES (?, ?, ?, ?, NULL, '')
+                          ON CONFLICT(id) DO UPDATE SET label = excluded.label, as_of = excluded.as_of, kind = excluded.kind`);
   for (const [id, s] of Object.entries(sources)) {
-    const row = db.prepare('SELECT label, as_of, kind FROM sources WHERE id = ?').get(id);
+    const row = get.get(id);
     if (row && row.label === s.label && row.as_of === s.asOf && row.kind === s.kind) continue;
-    db.prepare(`INSERT INTO sources (id, label, as_of, kind, last_ingest_at, note) VALUES (?, ?, ?, ?, NULL, '')
-                ON CONFLICT(id) DO UPDATE SET label = excluded.label, as_of = excluded.as_of, kind = excluded.kind`)
-      .run(id, s.label, s.asOf, s.kind);
+    put.run(id, s.label, s.asOf, s.kind);
   }
 }
 
@@ -204,13 +206,7 @@ function pruneFigures(db, produced) {
   const prefixes = [];
   for (const r of db.prepare('SELECT key, value FROM content').all()) {
     scan(r.value);
-    if (r.key !== 'wargame') continue;
-    const wg = parseJson(r.value, {}) || {};
-    for (const p of (wg.salary && Array.isArray(wg.salary.points) ? wg.salary.points : [])) prefixes.push(`wg.salary.${p.id}.`);
-    if (wg.deferral) {
-      prefixes.push('wg.deferral.base.');
-      for (const o of Array.isArray(wg.deferral.options) ? wg.deferral.options : []) prefixes.push(`wg.deferral.${o.id}.`);
-    }
+    if (r.key === 'wargame') prefixes.push(...wargameFigurePrefixes(parseJson(r.value, {})));
   }
   const del = db.prepare('DELETE FROM figures WHERE key = ? AND parser = ?');
   for (const key of stale) {

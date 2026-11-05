@@ -6,6 +6,7 @@
 
 import { parseJson, cents } from '../../store/db.mjs';
 import { addDays, daysBetween } from '../../scenario/build.mjs';
+import { monthEnd } from '../../ingest/format.mjs';
 
 export const SUPPORTED_TAX_YEARS = Object.freeze([2026]);
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -13,17 +14,12 @@ const STALE_DAYS = 45;
 
 // ---------------------------------------------------------------- dates
 
-export const pad2 = n => String(n).padStart(2, '0');
 export const monthOf = iso => Number(String(iso).slice(5, 7));
 export const yearOf = iso => Number(String(iso).slice(0, 4));
 export const dayLabel = iso => `${MONTHS[monthOf(iso) - 1]} ${Number(iso.slice(8, 10))}`;
 export const dateLabel = iso => `${dayLabel(iso)}, ${iso.slice(0, 4)}`;
 export const monthLabel = period => `${MONTHS[monthOf(period) - 1]} ${period.slice(0, 4)}`;
-export const monthEnd = period => {
-  const [y, m] = period.split('-').map(Number);
-  return `${period.slice(0, 7)}-${pad2(new Date(Date.UTC(y, m, 0)).getUTCDate())}`;
-};
-export { addDays, daysBetween };
+export { addDays, daysBetween, monthEnd };
 
 // `now` as an ISO date: a Date, an ISO date or timestamp string, epoch ms, or undefined.
 export function isoDateOf(now) {

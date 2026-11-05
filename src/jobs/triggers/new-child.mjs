@@ -1,6 +1,7 @@
 // New child: an expected child, with the expected date as the window when the household gave one.
 
-import { isTrue, mineOf, padTasks, factDate, dayLabel } from './common.mjs';
+import { isTrue, mineOf, padTasks, factDate } from './common.mjs';
+import { dayLabel } from '../planner/data.mjs';
 
 export const id = 'new-child';
 export const domain = 'family';

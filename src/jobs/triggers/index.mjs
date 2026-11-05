@@ -1,4 +1,5 @@
-// The trigger catalog, in order. A trigger hits when its gate holds over the facts, its window has
+// The trigger catalog, in order. A trigger with needsYear does not apply without a planning tax
+// year. A trigger hits when its gate holds over the facts, its window has
 // not closed, and evaluate(ctx) returns hit vars. evaluate may also return {blocked: reason} when a
 // figure it needs could not be computed, and a null evaluation after one of the trigger's
 // calculators threw is blocked as calc_failed; missing-data runs last and lists those reasons.
@@ -54,6 +55,8 @@ export function evaluateCatalog(ctx) {
   const results = [];
   for (const t of triggers) {
     if (!evaluateRule(t.gate, ctx.facts)) { results.push({ trigger: t, state: 'none' }); continue; }
+    // A trigger that needs the planning tax year does not apply without one (R10).
+    if (t.needsYear && !ctx.year) { results.push({ trigger: t, state: 'none' }); continue; }
     const window = t.window(ctx);
     if (window && window.close < ctx.clock) { results.push({ trigger: t, state: 'none', closed: true }); continue; }
     const out = t.evaluate(ctx);

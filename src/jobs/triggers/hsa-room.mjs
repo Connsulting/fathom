@@ -1,6 +1,6 @@
 // HSA room: contribution room left for the year, due by the federal filing date (R6, S4).
 
-import { isTrue, mineOf, padTasks, confirmTasks } from './common.mjs';
+import { isTrue, mineOf, padTasks, confirmTasks, positive } from './common.mjs';
 
 export const id = 'hsa-room';
 export const domain = 'retirement';
@@ -8,16 +8,16 @@ export const trigger = 'calendar';
 export const packs = ['w2-benefits', 'advanced-retirement'];
 export const gate = isTrue('benefits.hsa');
 export const calcs = ['hsaLimit'];
+export const needsYear = true;
 export const kb = [{ pack: 'w2-benefits', entry: 'hsa-limits' }, { pack: 'w2-benefits', entry: 'hsa-eligibility' }];
 
 export function window(ctx) {
-  return ctx.year ? { close: `${ctx.year + 1}-04-15`, label: 'Apr 15', hard: true } : null;
+  return { close: `${ctx.year + 1}-04-15`, label: 'Apr 15', hard: true };
 }
 
 export function evaluate(ctx) {
-  if (!ctx.year) return null;
   if (ctx.info.confirm.hsa) return { confirm: ctx.info.confirm.hsa, grounding: ['hsa.contrib.ytd'] };
-  if (!(ctx.fig['room.hsa'] && ctx.fig['room.hsa'].v > 0)) return null;
+  if (!positive(ctx, 'room.hsa')) return null;
   return { grounding: ['room.hsa', 'hsa.contrib.ytd'] };
 }
 

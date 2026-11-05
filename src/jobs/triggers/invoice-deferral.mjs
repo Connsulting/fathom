@@ -8,14 +8,14 @@ export const trigger = 'calendar';
 export const packs = ['s-corp-owner', 'self-employed-partnership'];
 export const gate = { any: [isTrue('income.sCorp'), isTrue('income.selfEmployed')] };
 export const calcs = ['federalIncomeTax', 'virginiaIncomeTax'];
+export const needsYear = true;
 export const kb = [{ pack: 's-corp-owner', entry: 'distributions-and-basis' }, { pack: 'self-employed-partnership', entry: 'sole-proprietor-income' }];
 
 export function window(ctx) {
-  return ctx.year ? { close: `${ctx.year}-12-01`, label: 'Dec 1', hard: false } : null;
+  return { close: `${ctx.year}-12-01`, label: 'Dec 1', hard: false };
 }
 
 export function evaluate(ctx) {
-  if (!ctx.year) return null;
   if (ctx.info.blocked.length) return { blocked: ctx.info.blocked[0] };
   // The war game needs Virginia tax too; a Virginia gap is missing data, not a closed condition (S12).
   if (ctx.info.vaBlocked) return { blocked: ctx.info.vaBlocked };

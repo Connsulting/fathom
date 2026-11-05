@@ -8,18 +8,17 @@ export const trigger = 'goal';
 export const packs = ['advanced-retirement'];
 export const gate = isTrue('retirement.backdoorRothCandidate');
 export const calcs = [];
+export const needsYear = true;
 export const kb = [{ pack: 'advanced-retirement', entry: 'backdoor-roth' }, { pack: 'advanced-retirement', entry: 'form-8606-pro-rata' }];
 
 // In the tax year the window is the Dec 31 pro-rata snapshot; from Jan 1 to Apr 15 of the next
 // year it is the IRA contribution deadline.
 export function window(ctx) {
-  if (!ctx.year) return null;
   if (Number(ctx.clock.slice(0, 4)) === ctx.year) return { close: `${ctx.year}-12-31`, label: 'Pro-rata snapshot Dec 31', hard: false };
   return { close: `${ctx.year + 1}-04-15`, label: 'IRA contribution deadline', hard: false };
 }
 
 export function evaluate(ctx) {
-  if (!ctx.year) return null;
   if (ctx.info.blocked.length) return { blocked: ctx.info.blocked[0] };
   const ira = ctx.info.ira || {};
   const persons = ctx.info.persons || ['owner'];

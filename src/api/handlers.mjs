@@ -7,7 +7,7 @@ import { buildScenario, loadContent, defaultPicks, wargameLists } from '../scena
 import { ACTION_STATUS, packStatus } from '../shared/rules.mjs';
 import { escapeUserText } from '../shared/tokens.mjs';
 import { seedDemo } from '../../demo/seed.mjs';
-import { runPlanning, PlannerError } from '../jobs/planner.mjs';
+import { runPlanning } from '../jobs/planner.mjs';
 import { defaultPackDirs } from '../packs/state.mjs';
 import { HttpError } from './http.mjs';
 import { findQuestion, isIndex } from './questions.mjs';
@@ -251,19 +251,13 @@ export function demoReset(ctx) {
   return { scenario: scenarioOf(ctx) };
 }
 
-export const REAL_ONLY = 'planning runs on real stores only';
+const REAL_ONLY = 'planning runs on real stores only';
 
 export async function planRun(ctx) {
   if (getSetting(ctx.db, 'mode', null) === 'demo') throw new HttpError(409, REAL_ONLY);
-  let run;
-  try {
-    run = await runPlanning(ctx.db, ctx.engine || null, {
-      now: (ctx.config && ctx.config.clock) || undefined,
-      packDirs: defaultPackDirs(ctx.config && ctx.config.dataDir),
-    });
-  } catch (e) {
-    if (e instanceof PlannerError && e.code === 'demo_store') throw new HttpError(409, REAL_ONLY);
-    throw e;
-  }
+  const run = await runPlanning(ctx.db, ctx.engine || null, {
+    now: (ctx.config && ctx.config.clock) || undefined,
+    packDirs: defaultPackDirs(ctx.config && ctx.config.dataDir),
+  });
   return { scenario: scenarioOf(ctx), run };
 }

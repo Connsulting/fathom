@@ -1,6 +1,6 @@
 // Charitable bunching: give two years of gifts in one year to clear the standard deduction.
 
-import { isTrue, mineOf, padTasks, yearOf } from './common.mjs';
+import { isTrue, mineOf, padTasks, yearOf, positive } from './common.mjs';
 
 export const id = 'charitable-bunching';
 export const domain = 'giving';
@@ -16,7 +16,7 @@ export function window(ctx) {
 
 export function evaluate(ctx) {
   if (!ctx.year) return null;
-  if (!(ctx.fig['giving.trailing'] && ctx.fig['giving.trailing'].v > 0)) return null;
+  if (!positive(ctx, 'giving.trailing')) return null;
   return { grounding: ['giving.trailing', 'giving.twoYear', 'giving.ytd'] };
 }
 

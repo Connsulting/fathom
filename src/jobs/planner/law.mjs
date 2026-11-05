@@ -3,6 +3,7 @@
 // lawContent() and pctContent() are the brief's `law` and `pct` content rows.
 
 import { TAX_2026 } from '../../calc/index.mjs';
+import { cents } from '../../store/db.mjs';
 
 const pack = (v, label, packId, entry) => Object.freeze({ v, label, pack: packId, entry });
 const calc = (v, label, path) => Object.freeze({ v, label, calc: path });
@@ -45,7 +46,7 @@ export function pctContent() {
     fedSafeHarborPriorHigh: Math.round(TAX_2026.estimated.highIncomePriorRate * 100),
     vaSafeHarborCurrent: 90,
     vaSafeHarborPrior: 100,
-    vaTopRate: Math.round(virginiaTop * 100) / 100,
+    vaTopRate: cents(virginiaTop),
   };
 }
 

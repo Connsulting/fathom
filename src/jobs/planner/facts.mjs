@@ -2,11 +2,12 @@
 // evidence rows that support it. The planner owns a key only while no row exists or the stored row
 // is its own unconfirmed one; owner answers always win. Booleans are only ever derived as true.
 //
-// deriveFacts(data, facts, ctx)          -> {key: {value, rule, rows: [{table, id, fileId}]}}
-// deriveFigureFacts(figs, facts, ctx)    -> the same for income.agiEstimate and the Roth candidate
+// deriveFacts(data, {entities})         -> {key: {value, rule, rows: [{table, id, fileId}]}}
+// deriveFigureFacts(figs, facts)         -> the same for income.agiEstimate and the Roth candidate
 // mergeFacts(stored, derived)            -> {values, writes, deletes}
 
-import { sameName, ytd, isCharitable, addDays } from './data.mjs';
+import { cents } from '../../store/db.mjs';
+import { sameName, isCharitable, addDays } from './data.mjs';
 import { rothPhaseOutEnd } from './law.mjs';
 
 export const PLANNER_SRC = 'planner';
@@ -31,8 +32,7 @@ export function trailingCharitable(data) {
   return data.transactions.filter(t => t.date > from && t.date <= data.clock && t.amount < 0 && isCharitable(t.category));
 }
 
-export function deriveFacts(data, facts, ctx) {
-  const { entities } = ctx;
+export function deriveFacts(data, { entities }) {
   const out = {};
   const year = data.year;
   const entityRows = e => [...(e.docId != null ? [ev('documents', e.docId, e.fileId)] : []), ...e.lines.map(l => ev('pnl_lines', l.id, l.file_id))];
@@ -76,14 +76,14 @@ export function deriveFacts(data, facts, ctx) {
   const gifts = trailingCharitable(data);
   if (gifts.length) {
     const rows = gifts.map(t => ev('transactions', t.id, t.file_id));
-    const total = Math.round(gifts.reduce((s, t) => s - t.amount, 0) * 100) / 100;
+    const total = cents(gifts.reduce((s, t) => s - t.amount, 0));
     out['giving.charitable'] = fact(true, 'charitable outflows in the last year', rows);
     if (total > 0) out['giving.annualEstimate'] = fact(total, 'sum of charitable outflows in the last year', rows);
   }
   return out;
 }
 
-export function deriveFigureFacts(figs, facts, ctx) {
+export function deriveFigureFacts(figs, facts) {
   const out = {};
   const agi = figs['agi.est'];
   if (!agi) return out;
@@ -130,4 +130,3 @@ export function ownerFactsOf(stored) {
   return out;
 }
 
-export { ytd };

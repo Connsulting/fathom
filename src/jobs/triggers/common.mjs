@@ -3,7 +3,6 @@
 // tokens and no number words; dates are written as month and day.
 
 import { isIsoDate } from '../../scenario/build.mjs';
-import { dayLabel } from '../planner/data.mjs';
 import { esc } from '../../shared/tokens.mjs';
 
 // Data-derived text (entity and account names) as stored rec HTML: escaped, braces included, so it
@@ -28,7 +27,6 @@ export function lastPayroll(ctx) {
 }
 
 export const factDate = (ctx, key) => (isIsoDate(ctx.facts[key]) ? ctx.facts[key] : null);
-export { dayLabel };
 
 // Grounded figures for `mine`: existing ones only, at most five; confirm forms show actuals only.
 export function mineOf(ctx, keys, { actualOnly = false } = {}) {
@@ -43,7 +41,7 @@ export function padTasks(list) {
   return tasks.map(t => ({ t }));
 }
 
-export const CONFIRM_TASKS = Object.freeze({
+const CONFIRM_TASKS = Object.freeze({
   'retirement.planTermsConfirmed': 'Confirm your retirement plan terms with your advisor',
   'retirement.aggregationConfirmed': 'Confirm no related business shares your plan limits',
   'benefits.hsaEligible': 'Confirm your health plan is HSA eligible for the whole year',
@@ -59,4 +57,3 @@ export function confirmTasks(keys) {
   return padTasks([...keys.map(k => CONFIRM_TASKS[k] || 'Answer the open question in your household settings'), 'Run planning again once you have answered']);
 }
 
-export const kbOf = list => list;

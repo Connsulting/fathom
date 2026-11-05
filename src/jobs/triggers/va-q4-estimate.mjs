@@ -1,6 +1,6 @@
 // Fourth-quarter Virginia estimate: the Virginia target still to pay before Jan 15.
 
-import { BUSINESS, has, mineOf, padTasks } from './common.mjs';
+import { BUSINESS, has, mineOf, padTasks, positive } from './common.mjs';
 
 export const id = 'va-q4-estimate';
 export const domain = 'tax';
@@ -8,17 +8,17 @@ export const trigger = 'calendar';
 export const packs = ['virginia-resident'];
 export const gate = { all: [{ fact: 'household.state', op: 'eq', value: 'VA' }, BUSINESS] };
 export const calcs = ['virginiaIncomeTax'];
+export const needsYear = true;
 export const kb = [{ pack: 'virginia-resident', entry: 'estimated-tax' }];
 
 export function window(ctx) {
-  return ctx.year ? { close: `${ctx.year + 1}-01-15`, label: 'Jan 15', hard: true } : null;
+  return { close: `${ctx.year + 1}-01-15`, label: 'Jan 15', hard: true };
 }
 
 export function evaluate(ctx) {
-  if (!ctx.year) return null;
   if (ctx.info.blocked.length) return { blocked: ctx.info.blocked[0] };
   if (ctx.info.vaBlocked) return { blocked: ctx.info.vaBlocked };
-  if (!(ctx.fig['sh.va.remaining'] && ctx.fig['sh.va.remaining'].v > 0)) return null;
+  if (!positive(ctx, 'sh.va.remaining')) return null;
   return { grounding: ['sh.va.remaining', 'sh.va.required', 'tax.va.paid', 'tax.va.withheld', 'tax.va.proj'] };
 }
 

@@ -1,6 +1,6 @@
 // Fourth-quarter federal estimate: the safe-harbor amount still to pay before Jan 15.
 
-import { BUSINESS, has, mineOf, padTasks } from './common.mjs';
+import { BUSINESS, has, mineOf, padTasks, positive } from './common.mjs';
 
 export const id = 'fed-q4-estimate';
 export const domain = 'tax';
@@ -8,16 +8,16 @@ export const trigger = 'calendar';
 export const packs = ['s-corp-owner', 'self-employed-partnership'];
 export const gate = BUSINESS;
 export const calcs = ['federalIncomeTax', 'selfEmploymentTax', 'qbiDeduction', 'estimatedPaymentSafeHarbor'];
+export const needsYear = true;
 export const kb = [{ pack: 's-corp-owner', entry: 'payroll-and-estimated-tax' }, { pack: 'self-employed-partnership', entry: 'estimated-tax' }];
 
 export function window(ctx) {
-  return ctx.year ? { close: `${ctx.year + 1}-01-15`, label: 'Jan 15', hard: true } : null;
+  return { close: `${ctx.year + 1}-01-15`, label: 'Jan 15', hard: true };
 }
 
 export function evaluate(ctx) {
-  if (!ctx.year) return null;
   if (ctx.info.blocked.length) return { blocked: ctx.info.blocked[0] };
-  if (!(ctx.fig['sh.fed.remaining'] && ctx.fig['sh.fed.remaining'].v > 0)) return null;
+  if (!positive(ctx, 'sh.fed.remaining')) return null;
   return {
     grounding: ['sh.fed.remaining', 'sh.fed.required', 'tax.fed.paid', 'tax.fed.withheld', 'tax.fed.proj'],
     prior: !!ctx.info.priorYear, priorHigh: !!ctx.info.priorHigh,

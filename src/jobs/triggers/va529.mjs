@@ -1,6 +1,6 @@
 // Virginia 529 deduction: deduction room left on Virginia plan accounts before Dec 31 (S8, T5).
 
-import { isTrue, mineOf, padTasks, confirmTasks, yearOf, dataText } from './common.mjs';
+import { isTrue, mineOf, padTasks, confirmTasks, yearOf, dataText, positive } from './common.mjs';
 
 export const id = 'va529';
 export const domain = 'family';
@@ -22,7 +22,7 @@ export function evaluate(ctx) {
   if (!info.eligible) return null;
   if (ctx.info.blocked.length) return { blocked: ctx.info.blocked[0] };
   if (ctx.info.vaBlocked) return { blocked: ctx.info.vaBlocked };
-  if (!(ctx.fig['va529.deductionLeft'] && ctx.fig['va529.deductionLeft'].v > 0)) return null;
+  if (!positive(ctx, 'va529.deductionLeft')) return null;
   return { grounding: ['va529.deductionLeft', 'va529.taxSaved', 'va529.contrib.ytd'], age70: info.age70 };
 }
 

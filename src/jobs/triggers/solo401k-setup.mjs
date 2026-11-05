@@ -8,14 +8,14 @@ export const trigger = 'calendar';
 export const packs = ['advanced-retirement', 's-corp-owner', 'self-employed-partnership'];
 export const gate = { all: [{ any: [isTrue('income.sCorp'), isTrue('income.selfEmployed')] }, absentOrFalse('retirement.solo401k')] };
 export const calcs = ['solo401kRoom'];
+export const needsYear = true;
 export const kb = [{ pack: 'advanced-retirement', entry: 'solo-401k-versus-sep' }, { pack: 'advanced-retirement', entry: 'aggregation-and-employees' }];
 
 export function window(ctx) {
-  return ctx.year ? { close: lastPayroll(ctx), label: 'Before last payroll', hard: true } : null;
+  return { close: lastPayroll(ctx), label: 'Before last payroll', hard: true };
 }
 
 export function evaluate(ctx) {
-  if (!ctx.year) return null;
   return { grounding: ['room.solo401k', 'room.solo401k.employee'] };
 }
 

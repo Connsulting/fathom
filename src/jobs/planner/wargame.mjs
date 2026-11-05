@@ -24,6 +24,19 @@ export function buildWargames(data, out, ctx) {
 
 const put = (out, key, v, label, locator) => out.put(key, v, 'm', label, 'wargame-model', locator);
 
+// Figure key prefixes a stored war-game content value still references: wg.salary.<point>.,
+// wg.deferral.base. and wg.deferral.<option>. (S11, T7).
+export function wargameFigurePrefixes(wargameContent) {
+  const wg = wargameContent || {};
+  const prefixes = [];
+  for (const p of (wg.salary && Array.isArray(wg.salary.points) ? wg.salary.points : [])) prefixes.push(`wg.salary.${p.id}.`);
+  if (wg.deferral) {
+    prefixes.push('wg.deferral.base.');
+    for (const o of Array.isArray(wg.deferral.options) ? wg.deferral.options : []) prefixes.push(`wg.deferral.${o.id}.`);
+  }
+  return prefixes;
+}
+
 // ---------------------------------------------------------------- salary (S3, T3, R6)
 
 function salaryGame(data, out, ctx) {

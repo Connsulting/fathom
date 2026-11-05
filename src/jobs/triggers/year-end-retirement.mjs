@@ -8,6 +8,7 @@ export const trigger = 'calendar';
 export const packs = ['advanced-retirement', 's-corp-owner', 'self-employed-partnership'];
 export const gate = { any: [isTrue('retirement.solo401k'), isTrue('income.sCorp'), isTrue('income.selfEmployed')] };
 export const calcs = ['solo401kRoom', 'sepRoom'];
+export const needsYear = true;
 export const kb = [
   { pack: 'advanced-retirement', entry: 'contribution-deadlines' },
   { pack: 'advanced-retirement', entry: 'solo-401k-versus-sep' },
@@ -15,11 +16,10 @@ export const kb = [
 ];
 
 export function window(ctx) {
-  return ctx.year ? { close: lastPayroll(ctx), label: 'Last payroll', hard: true } : null;
+  return { close: lastPayroll(ctx), label: 'Last payroll', hard: true };
 }
 
 export function evaluate(ctx) {
-  if (!ctx.year) return null;
   if (ctx.info.blocked.length) return { blocked: ctx.info.blocked[0] };
   if (ctx.info.confirm.retirement) return { confirm: ctx.info.confirm.retirement, grounding: [salaryKey(ctx)].filter(Boolean) };
   // The solo 401(k) room this rec rests on could not be computed: missing data, not a closed

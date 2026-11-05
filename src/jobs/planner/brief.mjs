@@ -223,12 +223,17 @@ function factKind(key) {
 
 const parserLabels = () => Object.fromEntries(listParsers().map(p => [p.id, p.label]));
 
-function fileSummary(db, fileId) {
+// One prepared statement per evidence table (fixed names), reused for every new file.
+function fileSummaryStatements(db) {
   const tables = [['transactions', 'date'], ['balances', 'date'], ['positions', 'as_of'], ['tax_payments', 'date'], ['pnl_lines', 'period'], ['documents', null], ['accounts', null]];
+  return tables.map(([table, col]) => ({ col, stmt: db.prepare(`SELECT parser${col ? `, max(${col}) AS d` : ''} FROM ${table} WHERE file_id = ?`) }));
+}
+
+function fileSummary(statements, fileId) {
   let parser = null;
   let latest = null;
-  for (const [table, col] of tables) {
-    const r = db.prepare(`SELECT parser${col ? `, max(${col}) AS d` : ''} FROM ${table} WHERE file_id = ?`).get(fileId);
+  for (const { col, stmt } of statements) {
+    const r = stmt.get(fileId);
     if (r && r.parser && !parser) parser = r.parser;
     if (r && r.d) {
       const d = col === 'period' ? monthEnd(r.d) : r.d;
@@ -251,9 +256,10 @@ function whatChanged(db, ctx) {
   const date = dayLabel(ctx.clock);
   const labels = parserLabels();
   const seenFiles = new Set(snap && Array.isArray(snap.files) ? snap.files : []);
+  const statements = files.some(f => !seenFiles.has(f.id)) ? fileSummaryStatements(db) : [];
   for (const f of files) {
     if (seenFiles.has(f.id)) continue;
-    const s = fileSummary(db, f.id);
+    const s = fileSummary(statements, f.id);
     const what = (s.parser && labels[s.parser]) || f.source_kind || 'Uploaded file';
     events.push({ date, kind: 'account', title: `New data: ${what}`, body: s.latest ? `Data through ${dateLabel(s.latest)}.` : 'Uploaded and filed.' });
     domains.add('data');
