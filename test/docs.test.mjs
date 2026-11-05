@@ -34,8 +34,10 @@ const FACT_KEYS = [
 const ENV_KEYS = [
   'FATHOM_DATA', 'FATHOM_PORT', 'FATHOM_HOST', 'FATHOM_DEMO', 'FATHOM_ENGINE', 'FATHOM_CLOCK',
   'FATHOM_CLAUDE_CREDENTIAL_FILE', 'FATHOM_DATA_KEY_FILE', 'FATHOM_EMAIL_TRANSPORT',
-  'FATHOM_PUBLIC_URL', 'FATHOM_ALLOWED_HOSTS',
+  'FATHOM_PUBLIC_URL', 'FATHOM_ALLOWED_HOSTS', 'FATHOM_OWNER_LOGINS', 'FATHOM_OWNER_LOGINS_FILE',
 ];
+
+const readme = readFileSync(join(ROOT, 'README.md'), 'utf8');
 
 test('architecture.md has every frozen section as a heading', () => {
   for (const [name, re] of Object.entries(SECTIONS)) assert.match(headings, re, `missing section: ${name}`);
@@ -67,7 +69,17 @@ test('architecture.md lists every API route with its method', () => {
     assert.ok(typeof method === 'string' && typeof path === 'string');
     assert.ok(lines.some(l => l.includes(path) && l.includes(method.toUpperCase())), `missing route ${method} ${path}`);
   }
-  for (const p of ['/healthz', '/api/scenario', '/api/recs/:id/action', '/api/ask', '/api/demo/reset']) {
+  for (const p of ['/healthz', '/api/scenario', '/api/recs/:id/action', '/api/ask', '/api/demo/reset', '/api/identity']) {
     assert.ok(routes.some(r => r.path === p), `router registers ${p}`);
   }
+});
+
+test('architecture.md and README.md state the owner identity trust model', () => {
+  for (const [name, text] of [['architecture.md', doc], ['README.md', readme]]) {
+    assert.match(text, /tailscale serve/i, `${name} names tailscale serve as the only path in`);
+    assert.match(text, /Tailscale-User-Login/i, `${name} names the identity header`);
+    assert.ok(text.includes('FATHOM_OWNER_LOGINS'), `${name} names FATHOM_OWNER_LOGINS`);
+  }
+  assert.match(headings, /owner identity/i, 'architecture.md has an Owner identity section');
+  assert.ok(!doc.includes('There is no authentication in this item'), 'the old no-authentication note is gone');
 });

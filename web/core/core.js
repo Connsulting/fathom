@@ -31,7 +31,7 @@ import { money, resolveTokens, esc, KIND_WORDS } from '/shared/tokens.mjs';
 import { needsYou as needsYouOf, packStatus } from '/shared/rules.mjs';
 
 const ROUTES = new Set(['onboarding', 'brief', 'plan', 'rec', 'ask', 'wargame', 'goals', 'accounts',
-  'advisor', 'yearend', 'connect', 'engine', 'email', 'packs', 'confirm']);
+  'advisor', 'yearend', 'connect', 'engine', 'email', 'packs', 'confirm', 'add']);
 const PARAM_KEY = { rec: 'id', onboarding: 'step', wargame: 'name', packs: 'id' };
 const LAST_STEP = 5;
 
@@ -54,6 +54,7 @@ const tokenOpts = {
 // ---------------------------------------------------------------- scenario and derived state
 
 let S = null;           // scenario object from the API (replaced after every action)
+let IDENT = null;       // { login, name } from GET /api/identity, or null (demo, or the fetch failed)
 let version = 0;        // bumped on every change; caches key off it
 let routeStep = null;   // onboarding step of the current route (route state, not stored)
 const pendingPicks = {}; // war-game picks sent but not yet answered (shown immediately)
@@ -63,6 +64,8 @@ const recList = () => arr(S && S.recs);
 const rawRec = id => recList().find(r => r.id === id) || null;
 const packList = () => arr(S && S.packs);
 const rawPack = id => packList().find(p => p.id === id) || null;
+const isReal = () => live().mode === 'real';
+const minStep = () => (isReal() ? 1 : 0);
 const demoId = () => (live().demo === 'fresh' ? 'fresh' : 'november');
 
 function figOf(key) {
@@ -85,7 +88,7 @@ function stateView() {
   const val = {
     demo: demoId(),
     engine: !!L.engine,
-    onboardStep: routeStep != null ? routeStep : (Number.isFinite(Number(L.onboardStep)) ? Number(L.onboardStep) : 0),
+    onboardStep: Math.max(minStep(), routeStep != null ? routeStep : (Number.isFinite(Number(L.onboardStep)) ? Number(L.onboardStep) : 0)),
     picks: Object.assign({}, L.picks || {}, pendingPicks),
     convs: L.conversations || {},
   };
@@ -168,10 +171,11 @@ function on(fn) {
 // ---------------------------------------------------------------- routes
 
 function defaultRoute() {
-  if (demoId() === 'fresh') return { name: 'onboarding', params: { step: stateView().onboardStep || 0 } };
+  if (demoId() === 'fresh') return { name: 'onboarding', params: { step: stateView().onboardStep || minStep() } };
+  if (isReal() && Number(ingest().pending) > 0) return { name: 'confirm', params: {} };
   return { name: 'brief', params: {} };
 }
-const clampStep = n => Math.max(0, Math.min(LAST_STEP, Number.isFinite(n) ? Math.floor(n) : 0));
+const clampStep = n => Math.max(minStep(), Math.min(LAST_STEP, Number.isFinite(n) ? Math.floor(n) : 0));
 
 function normalizeRoute(r) {
   if (!r || !ROUTES.has(r.name)) return defaultRoute();
@@ -283,6 +287,11 @@ function showError(message) {
   errEl = el;
 }
 
+// The identity gate answered 401: reload so the server serves its 401 page.
+function reloadUnauthorized() {
+  try { window.location.reload(); } catch (e) { /* ignore */ }
+}
+
 // A FormData body goes out as multipart with no content-type header (the browser sets the boundary).
 async function postJson(path, body) {
   const form = typeof FormData !== 'undefined' && body instanceof FormData;
@@ -299,6 +308,7 @@ async function postJson(path, body) {
   }
   let data = null;
   try { data = await res.json(); } catch (e) { data = null; }
+  if (res.status === 401) reloadUnauthorized();
   if (!res.ok) throw new Error((data && typeof data.error === 'string' && data.error) || 'The server answered ' + res.status + '.');
   if (!data || !data.scenario || typeof data.scenario !== 'object') throw new Error('The server sent an unexpected reply.');
   return data;
@@ -524,6 +534,7 @@ const api = {
   packEntry,
   buildYourPlans,
   ingest,
+  identity: () => (IDENT ? { login: IDENT.login, name: IDENT.name } : null),
   upload,
   answer,
   retryFile,
@@ -641,10 +652,26 @@ function registerDesign(def) {
 
 async function loadScenario() {
   const res = await fetch('/api/scenario', { headers: { accept: 'application/json' }, credentials: 'same-origin', cache: 'no-store' });
+  if (res.status === 401) reloadUnauthorized();
   if (!res.ok) throw new Error('The server answered ' + res.status + '.');
   const data = await res.json();
   if (!data || typeof data !== 'object' || !data.meta) throw new Error('The server sent an unexpected reply.');
   return data;
+}
+
+async function loadIdentity() {
+  try {
+    const res = await fetch('/api/identity', { headers: { accept: 'application/json' }, credentials: 'same-origin', cache: 'no-store' });
+    if (!res.ok) return null;
+    const d = await res.json();
+    const i = d && d.identity;
+    if (!i || typeof i !== 'object') return null;
+    const login = typeof i.login === 'string' ? i.login : '';
+    const name = typeof i.name === 'string' && i.name ? i.name : login;
+    return login || name ? { login, name } : null;
+  } catch (e) {
+    return null;
+  }
 }
 
 async function boot() {
@@ -655,7 +682,9 @@ async function boot() {
     document.body.appendChild(root);
   }
   try {
-    S = await loadScenario();
+    const [scenario, ident] = await Promise.all([loadScenario(), loadIdentity()]);
+    S = scenario;
+    IDENT = ident;
   } catch (e) {
     bootMessage('Fathom could not load your plan.', (e && e.message ? e.message : 'Unknown error.'), true);
     return;

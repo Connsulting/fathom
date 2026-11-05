@@ -14,10 +14,13 @@ import { createKeyService, loadServerSecret } from '../mcp/keys.mjs';
 import { createMcpHandler } from '../mcp/index.mjs';
 import { isAllowedHost } from '../mcp/guard.mjs';
 import * as ih from './ingest-handlers.mjs';
+import { loadOwnerLogins, identityOf, sendUnauthorized } from './identity.mjs';
+import { getSetting } from '../store/db.mjs';
 
 const TABLE = [
   { method: 'GET', path: '/healthz', handler: h.healthz },
   { method: 'GET', path: '/api/scenario', handler: h.getScenario },
+  { method: 'GET', path: '/api/identity', handler: h.getIdentity },
   { method: 'POST', path: '/api/recs/:id/action', handler: h.recAction },
   { method: 'POST', path: '/api/wargame/:name/pick', handler: h.wargamePick },
   { method: 'POST', path: '/api/packs/:id/toggle', handler: h.packToggle },
@@ -84,8 +87,13 @@ const safeCode = err => [err && err.code, err && err.name].find(v => typeof v ==
 
 // engine, packs and answerer are optional for static-only fixtures: handlers that need them answer
 // 503, and scenarios carry no manifest fields without packs. `keys` (key service) and `mcp` (the
-// /mcp handler) are built from config.dataDir on first use when not passed in.
-export function createHandler({ db, config, answerer, engine = null, packs = null, keys, mcp, webDir = WEB_DIR, sharedDir = SHARED_DIR }) {
+// /mcp handler) are built from config.dataDir on first use when not passed in. `owners` is the
+// loadOwnerLogins result; computed from config when omitted. A real store (any mode but demo,
+// decided once here) gates every path except /healthz and /mcp on the owner identity, before the
+// Host allowlist, route matching and static serving.
+export function createHandler({ db, config, answerer, engine = null, packs = null, keys, mcp, owners, webDir = WEB_DIR, sharedDir = SHARED_DIR }) {
+  const gated = getSetting(db, 'mode', null) !== 'demo';
+  const ownerList = gated ? (owners ?? loadOwnerLogins(config)) : null;
   const serveStatic = createStatic({ webDir, sharedDir });
   let keyService = keys;
   let mcpHandler = mcp;
@@ -103,6 +111,14 @@ export function createHandler({ db, config, answerer, engine = null, packs = nul
         return;
       }
       const isApi = rawPath === '/api' || rawPath.startsWith('/api/');
+      let identity = null;
+      if (gated && rawPath !== '/healthz') {
+        identity = identityOf(req, ownerList.logins);
+        if (!identity) {
+          sendUnauthorized(req, res, isApi);
+          return;
+        }
+      }
       if (isApi || rawPath === '/healthz') {
         // Every /api path gets the DNS-rebinding Host allowlist (as /mcp does), decided on the raw
         // path before route matching so encoded spellings, unknown paths and wrong methods are covered.
@@ -121,7 +137,7 @@ export function createHandler({ db, config, answerer, engine = null, packs = nul
           guardPost(req);
           body = await readJsonBody(req);
         }
-        const out = await r.handler({ db, config, answerer, engine, packs, params, body, readUpload, req, get keys() { return getKeys(); } });
+        const out = await r.handler({ db, config, answerer, engine, packs, identity, params, body, readUpload, req, get keys() { return getKeys(); } });
         sendJson(res, 200, out);
         return;
       }
