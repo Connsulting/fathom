@@ -6,6 +6,7 @@
 // { formula: 'B2*2' } is a formula cell with no cached value; add `cached: n` to cache one.
 // { empty: true } is a present cell element with no value (`<c r="A1"/>`), the smallest cell.
 // { shared: n } is a shared-string cell pointing at item n of xl/sharedStrings.xml.
+// { inline: '<r><t>a</t></r>' } is an inline string cell whose <is> body is that raw XML.
 //
 // Options: { sharedStrings: '<si>...</si>...' } writes xl/sharedStrings.xml with that body inside
 // <sst>; { deflate: true } stores every entry deflated (method 8) instead of stored.
@@ -41,6 +42,7 @@ function sheetXml(rows) {
       const ref = `${column(c)}${number}`;
       if (typeof value === 'object' && value.empty) return `<c r="${ref}"/>`;
       if (typeof value === 'object' && Number.isInteger(value.shared)) return `<c r="${ref}" t="s"><v>${value.shared}</v></c>`;
+      if (typeof value === 'object' && typeof value.inline === 'string') return `<c r="${ref}" t="inlineStr"><is>${value.inline}</is></c>`;
       if (typeof value === 'object' && value.formula) {
         const cached = typeof value.cached === 'number' ? `<v>${value.cached}</v>` : '';
         return `<c r="${ref}"><f>${xmlEscape(value.formula)}</f>${cached}</c>`;

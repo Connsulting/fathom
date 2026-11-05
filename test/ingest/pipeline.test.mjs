@@ -983,6 +983,70 @@ describe('no silently dropped transactions (D3)', () => {
       assert.equal(pendingNear(s.db).length, 0);
     }));
   }
+
+  // C2: a cross-format duplicate's own observation (parser plus normalized description) is kept, so a
+  // later same-parser row with the same key and another description is a second transaction under
+  // the same-format rule, not a silent cross-format drop.
+  const shopAgg = () => aggregatorFile('aggregator-c2.csv', [{ date: '2032-03-09', amount: '25.00', description: 'Example Shop', number: '9999990042', inst: 'Chase', account: 'Synthetic checking' }]);
+  const shopBank = (name, description, extra = []) => activityFile(name, [{ date: '03/09/2032', amount: '-25.00', balance: '', description }, ...extra]);
+
+  test('C2: aggregator then bank (cross-format duplicate) then a distinct same-key bank row: the third row is kept with one question; re-imports change nothing', () => withStore(async (s) => {
+    const off = await offEngine();
+    await P.ingestFile(s.db, shopAgg(), s.opts(off));
+    const bankA = await P.ingestFile(s.db, shopBank('Chase0042_Activity_C2_A.csv', 'EXAMPLE SHOP 0042'), s.opts(off));
+    assert.equal(bankA.counts.duplicates, 1, 'the bank row is the aggregator posting');
+    assert.equal(count(s.db, 'transactions'), 1);
+    assert.equal(count(s.db, 'accounts'), 1, 'one account for both formats');
+    const [aggRow] = all(s.db, 'SELECT * FROM transactions');
+
+    const bankB = await P.ingestFile(s.db, shopBank('Chase0042_Activity_C2_B.csv', 'EXAMPLE SHOP 0043'), s.opts(off));
+    assert.equal(bankB.counts.duplicates, 0, 'EXAMPLE SHOP 0043 is not the EXAMPLE SHOP 0042 bank posting');
+    assert.equal(inserted(bankB, 'transaction'), 1);
+    assert.equal(count(s.db, 'transactions'), 2);
+    const kept = one(s.db, "SELECT * FROM transactions WHERE description = 'EXAMPLE SHOP 0043'");
+    assert.ok(kept, 'the third row is stored');
+    assert.equal(kept.dedupe_key, `${aggRow.dedupe_key}:d:${sha256(normalize('EXAMPLE SHOP 0043')).slice(0, 16)}`, 'under its alt key');
+    const q = items(s.db, 'near_duplicate');
+    assert.equal(q.length, 1, 'exactly one question');
+    assert.ok(q[0].subject.split('|').includes(kept.dedupe_key), 'the question is about the third row');
+
+    const before = count(s.db, 'transactions');
+    const same = await P.ingestFile(s.db, shopBank('Chase0042_Activity_C2_A.csv', 'EXAMPLE SHOP 0042'), s.opts(off));
+    assert.equal(same.status, 'duplicate', 'identical bytes are a duplicate file');
+    for (const [i, file] of [
+      shopBank('Chase0042_Activity_C2_A2.csv', 'EXAMPLE SHOP 0042', [filler(1)]),
+      shopBank('Chase0042_Activity_C2_B2.csv', 'EXAMPLE SHOP 0043', [filler(2)]),
+    ].entries()) {
+      const again = await P.ingestFile(s.db, file, s.opts(off));
+      assert.equal(again.counts.duplicates, 1, `re-import ${i + 1} skips the known posting`);
+      assert.equal(inserted(again, 'transaction'), 1, 'only the filler row lands');
+    }
+    assert.equal(count(s.db, 'transactions'), before + 2);
+    assert.equal(count(s.db, 'transactions', "description LIKE 'EXAMPLE SHOP%' OR description = 'Example Shop'"), 2, 'no shop row added');
+    assert.equal(items(s.db, 'near_duplicate').length, 1, 'no new question');
+  }));
+
+  // C3: the external-id key carries the signed amount, so a check and its return in separate
+  // uploads are two rows; the same check at the same amount still dedupes.
+  const check = (date, amount) => ({ date, amount, balance: '', description: 'CHECK 1042', check: '1042' });
+
+  test('C3: a check and its return in separate uploads share an id but not an amount: both rows are kept; the same id and amount still dedupes', () => withStore(async (s) => {
+    const off = await offEngine();
+    await P.ingestFile(s.db, activityFile('Chase0042_Activity_C3_A.csv', [check('03/01/2032', '-125.00')]), s.opts(off));
+    const b = await P.ingestFile(s.db, activityFile('Chase0042_Activity_C3_B.csv', [check('03/04/2032', '125.00')]), s.opts(off));
+    assert.equal(b.counts.duplicates, 0, 'the return is not the check');
+    assert.equal(inserted(b, 'transaction'), 1);
+    const tx = all(s.db, 'SELECT * FROM transactions ORDER BY id');
+    assert.deepEqual(tx.map((t) => [t.date, t.amount, t.external_id]), [['2032-03-01', -125, '1042'], ['2032-03-04', 125, '1042']]);
+    assert.notEqual(tx[0].dedupe_key, tx[1].dedupe_key);
+
+    for (const [name, row] of [['Chase0042_Activity_C3_C.csv', check('03/02/2032', '-125.00')], ['Chase0042_Activity_C3_D.csv', check('03/05/2032', '125.00')]]) {
+      const again = await P.ingestFile(s.db, activityFile(name, [row]), s.opts(off));
+      assert.equal(again.counts.duplicates, 1, `${row.amount} with id 1042 is already stored`);
+      assert.equal(inserted(again, 'transaction'), 0);
+    }
+    assert.equal(count(s.db, 'transactions'), 2);
+  }));
 });
 
 // D5: a complete positions snapshot removes same-account, same-day holdings it no longer lists.

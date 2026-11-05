@@ -407,6 +407,24 @@ describe('bounded parsing on a 128 MB heap', () => {
     await tooLarge(s, 'rich-text-runs.xlsx', writeXlsx(oneCell, { sharedStrings: `<si>${'<r><t>x</t></r>'.repeat(2050000)}</si>`, deflate: true }));
   }));
 
+  // C1: text length is budgeted on the raw bytes before any tree is built, for shared and inline
+  // strings alike, and inline rich-text runs count toward the cell limit.
+  // 30 MB of escaped ampersands in one text node: 6M characters, far past LIMITS.cellChars.
+  const hugeText = () => '&amp;'.repeat(6 * 1024 * 1024);
+  const inlineSheet = (inline) => [{ name: 'Synthetic export', rows: [['Label'], [{ inline }]] }];
+
+  test('C1: an xlsx whose single shared string is far past the cell character limit answers too_large; the server stays up', T, () => withSmallHeap(async (s) => {
+    await tooLarge(s, 'huge-shared-string.xlsx', writeXlsx(oneCell, { sharedStrings: `<si><t>${hugeText()}</t></si>`, deflate: true }));
+  }));
+
+  test('C1: an xlsx whose inline string is far past the cell character limit answers too_large; the server stays up', T, () => withSmallHeap(async (s) => {
+    await tooLarge(s, 'huge-inline-string.xlsx', writeXlsx(inlineSheet(`<t>${hugeText()}</t>`), { deflate: true }));
+  }));
+
+  test('C1: an xlsx whose inline string holds more rich-text runs than the cell limit answers too_large; the server stays up', T, () => withSmallHeap(async (s) => {
+    await tooLarge(s, 'inline-rich-text-runs.xlsx', writeXlsx(inlineSheet('<r><t>x</t></r>'.repeat(2050000)), { deflate: true }));
+  }));
+
   test('G3: an unknown-format xlsx with more rows than the row limit answers too_large; the server stays up', T, () => withSmallHeap(async (s) => {
     const rows = [['Synthetic column', 'Other column'], ...Array.from({ length: 200001 }, () => [])];
     await tooLarge(s, 'many-rows-export.xlsx', writeXlsx([{ name: 'Synthetic export', rows }], { deflate: true }));
