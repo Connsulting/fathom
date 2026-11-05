@@ -420,14 +420,14 @@ function setEngine(v) {
 
 // ---------------------------------------------------------------- ingest
 
-const emptyIngest = () => ({ pending: 0, items: [], files: [], sources: [], accounts: {}, staleNotes: [], formats: [] });
+const emptyIngest = () => ({ pending: 0, items: [], files: [], waiting: [], sources: [], accounts: {}, staleNotes: [], formats: [] });
 
 function ingest() {
   const g = live().ingest;
   if (!g || typeof g !== 'object') return emptyIngest();
   const out = emptyIngest();
   out.pending = Number.isFinite(Number(g.pending)) ? Number(g.pending) : 0;
-  ['items', 'files', 'sources', 'staleNotes', 'formats'].forEach(k => { out[k] = arr(g[k]); });
+  ['items', 'files', 'waiting', 'sources', 'staleNotes', 'formats'].forEach(k => { out[k] = arr(g[k]); });
   if (g.accounts && typeof g.accounts === 'object') out.accounts = g.accounts;
   return out;
 }

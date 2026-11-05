@@ -12,7 +12,6 @@ const STATUS = {
   unsupported: 'Not a supported file',
   failed: 'Could not import'
 };
-const WAITING = ['needs_mapping', 'needs_extraction'];
 
 const ROWS = [
   ['transaction', 'transaction'],
@@ -134,7 +133,7 @@ export function ingestScreens(h) {
 
   // Files that need a mapping or the engine; '' when none. Shared by Confirm and Accounts.
   function waitingList() {
-    const waiting = ing().files.filter((f) => WAITING.includes(f.status));
+    const waiting = ing().waiting;
     if (!waiting.length) return '';
     return `<ul class="h-ing-files">${waiting.map((f) => `<li class="${esc(f.status)}">${icon('doc')}<div class="h-ing-f"><div class="h-ing-f-h"><span class="h-ing-f-n">${esc(f.name)}</span><em>${esc(STATUS[f.status])}</em></div></div>${btn(st.retrying[f.id] ? 'Retrying' : 'Retry', `data-retry="${esc(f.id)}"${st.retrying[f.id] ? ' disabled' : ''}`, 'ghost')}</li>`).join('')}</ul>`;
   }

@@ -126,6 +126,9 @@ export function ingestState(db, { clock } = {}) {
   const files = db.prepare(`SELECT id, name, status, source_kind, parser, counts, uploaded_at FROM files
                             WHERE stored_path IS NOT NULL ORDER BY uploaded_at DESC, rowid DESC LIMIT ?`)
     .all(FILES_LIMIT).map(fileOf);
+  const waiting = db.prepare(`SELECT id, name, status, source_kind, parser, counts, uploaded_at FROM files
+                              WHERE stored_path IS NOT NULL AND status IN ('needs_mapping', 'needs_extraction')
+                              ORDER BY uploaded_at DESC, rowid DESC`).all().map(fileOf);
 
   const sources = db.prepare("SELECT id, label, as_of, kind, last_ingest_at FROM sources WHERE substr(id, 1, 4) = 'ing:' ORDER BY label, id")
     .all().map((row) => {
@@ -173,7 +176,7 @@ export function ingestState(db, { clock } = {}) {
     ...accountNotes,
   ];
 
-  return { pending: items.length, items, files, sources, accounts, staleNotes, formats: listHowTo() };
+  return { pending: items.length, items, files, waiting, sources, accounts, staleNotes, formats: listHowTo() };
 }
 
 // Returns a new domains array: each stale note is appended (escaped) to its domain's note, a

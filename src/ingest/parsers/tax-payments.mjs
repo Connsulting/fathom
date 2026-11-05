@@ -18,7 +18,13 @@ export function parse(file) {
       const monthCol = found.columns.get('month');
       const paidCols = [...sheet.rows[found.index].cells].filter(([, cell]) => /\bpaid$/.test(header(cell.value)));
       for (const row of sheet.rows.slice(found.index + 1)) {
-        const month = months.indexOf(header(row.cells.get(monthCol)?.value)) + 1;
+        const monthCell = row.cells.get(monthCol);
+        if (monthCell && (monthCell.missingCache || monthCell.error)) {
+          const populated = paidCols.some(([column]) => { const cell = row.cells.get(column); return cell && (cell.value !== '' || cell.missingCache); });
+          if (populated) warning(warnings, 'invalid_tax_month', { sheet: sheet.name, cell: monthCell.address });
+          continue;
+        }
+        const month = months.indexOf(header(monthCell?.value)) + 1;
         if (!month) continue;
         for (const [column] of paidCols) {
           const cell = row.cells.get(column);

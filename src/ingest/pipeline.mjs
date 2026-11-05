@@ -547,8 +547,9 @@ function taxSheetSlots(sheet) {
 // stored rows it may have fed. P&L: the warned row's entity (through entity_aliases), category and
 // month; an unreadable date widens it to every month and an empty category to every category.
 // Tax: the warned cell's Paid column slot, or every Paid slot of its sheet when the column is not
-// a known Paid column. Returns { pnl(entity, category, period) -> bool, tax: Set of slots }.
-const PARTIAL_CODES = new Set(['formula_without_cache', 'invalid_pnl_row', 'invalid_tax_payment']);
+// a known Paid column or the warning is an unreadable Month label (invalid_tax_month).
+// Returns { pnl(entity, category, period) -> bool, tax: Set of slots }.
+const PARTIAL_CODES = new Set(['formula_without_cache', 'invalid_pnl_row', 'invalid_tax_payment', 'invalid_tax_month']);
 function incompleteParts(db, file, parser, warnings) {
   const pnl = [], tax = new Set();
   const parts = { tax, pnl: (entity, category, period) => pnl.some((m) => m.entity === normalizeName(entity)
@@ -563,7 +564,7 @@ function incompleteParts(db, file, parser, warnings) {
     const [, column, rowNumber] = String(w.locator.cell ?? '').match(/^([A-Z]+)(\d+)$/) ?? [];
     if (parser === 'tax-payments') {
       const sheetSlots = sheet ? taxSheetSlots(sheet) : new Map();
-      if (sheetSlots.has(column)) tax.add(sheetSlots.get(column));
+      if (w.code !== 'invalid_tax_month' && sheetSlots.has(column)) tax.add(sheetSlots.get(column));
       else for (const slot of sheetSlots.values()) tax.add(slot);
       continue;
     }

@@ -116,7 +116,9 @@ status `imported`, `duplicate`, `needs_mapping`, `needs_extraction`,
    what it may have fed as partly parsed: for P&L the warned row's entity,
    category and month (every month when its date is unreadable, every category
    when its category is empty); for tax the warned Paid column's slot (every
-   Paid slot of the sheet when the column is unknown). Stored rows there are
+   Paid slot of the sheet when the column is unknown). A row whose Month cell is
+   an uncached formula or an error but has a populated Paid cell warns
+   `invalid_tax_month` and marks every Paid slot of its sheet. Stored rows there are
    neither removed nor revised; a differing amount counts as `incomplete` and the
    stored row stays. New keys still insert.
 6. Questions (`confirm.mjs`): `account_owner`, `account_kind`, `entity_alias`,
