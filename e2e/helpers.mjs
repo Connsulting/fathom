@@ -9,7 +9,10 @@ export const S = scenario;
 
 // True when the suite targets an already running server (smoke mode). Nothing local is
 // created and read-only specs must not reset the target.
-export const REMOTE = !!process.env.BASE_URL;
+export const REMOTE = !!(process.env.BASE_URL || process.env.FATHOM_SMOKE_BASE_URL);
+
+// Real-store smoke (FATHOM_SMOKE_TARGET=real). Default is the demo suite.
+export const SMOKE_REAL = process.env.FATHOM_SMOKE_TARGET === 'real';
 
 const FONT_HOSTS = ['fonts.googleapis.com', 'fonts.gstatic.com'];
 
@@ -21,7 +24,62 @@ const SANDBOX_SCRIPT_BLOCKED = /^Blocked script execution in 'about:srcdoc' beca
 // Every spec imports `test` from here. It fails the test on any console error, uncaught page
 // error or CSP violation. Failed font loads are ignored so an offline runner can still pass;
 // a font blocked by CSP is still reported through the securitypolicyviolation event.
+// Abort a non-GET/HEAD request to the app origin and record it. Cross-origin requests,
+// including font hosts, are left alone. Callers fail the test when `blocked` is non-empty.
+export async function installWriteGuard(context, baseURL, blocked) {
+  const origin = new URL(baseURL).origin;
+  await context.route('**/*', async (route) => {
+    const req = route.request();
+    let url;
+    try {
+      url = new URL(req.url());
+    } catch {
+      await route.continue();
+      return;
+    }
+    const method = req.method().toUpperCase();
+    if (url.origin === origin && method !== 'GET' && method !== 'HEAD') {
+      blocked.push(`${method} ${url.pathname}`);
+      await route.abort('failed');
+      return;
+    }
+    await route.continue();
+  });
+}
+
 export const test = base.extend({
+  // The browser context's route does not see Playwright's APIRequestContext. Wrap the write
+  // verbs so a spec that uses `request.post` cannot mutate a real target either.
+  request: async ({ request, baseURL }, use) => {
+    if (!SMOKE_REAL) {
+      await use(request);
+      return;
+    }
+    const origin = new URL(baseURL).origin;
+    const block = (method, url) => {
+      const abs = new URL(typeof url === 'string' ? url : String(url), baseURL);
+      if (abs.origin === origin && method !== 'GET' && method !== 'HEAD') {
+        throw new Error(`real-mode smoke blocked ${method} ${abs.pathname}`);
+      }
+    };
+    const wrapped = {
+      post: (url, opts) => { block('POST', url); return request.post(url, opts); },
+      put: (url, opts) => { block('PUT', url); return request.put(url, opts); },
+      patch: (url, opts) => { block('PATCH', url); return request.patch(url, opts); },
+      delete: (url, opts) => { block('DELETE', url); return request.delete(url, opts); },
+      fetch: (url, opts = {}) => {
+        block(String(opts.method || 'GET').toUpperCase(), url);
+        return request.fetch(url, opts);
+      }
+    };
+    await use(new Proxy(request, {
+      get(target, prop) {
+        if (Object.prototype.hasOwnProperty.call(wrapped, prop)) return wrapped[prop];
+        const value = target[prop];
+        return typeof value === 'function' ? value.bind(target) : value;
+      }
+    }));
+  },
   page: async ({ page }, use) => {
     const problems = [];
     await page.addInitScript(() => {
