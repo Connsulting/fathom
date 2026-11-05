@@ -1,0 +1,193 @@
+{
+  "id": "s-corp-owner",
+  "name": "S corporation owner",
+  "version": "1.0.0",
+  "taxYear": 2026,
+  "reviewed": "2026-11-05",
+  "curator": "Public primary-source review",
+  "covers": [
+    "reasonable compensation",
+    "shareholder distributions and basis",
+    "shareholder health and fringe benefits",
+    "payroll and estimated tax",
+    "retirement compensation",
+    "qualified business income",
+    "entity election transitions"
+  ],
+  "appliesWhen": {
+    "fact": "income.sCorp",
+    "op": "eq",
+    "value": true
+  },
+  "suggestWhen": {
+    "any": [
+      {
+        "fact": "income.selfEmployed",
+        "op": "eq",
+        "value": true
+      },
+      {
+        "fact": "income.partnership",
+        "op": "eq",
+        "value": true
+      }
+    ]
+  },
+  "whatIf": {
+    "prompt": "What would change if the business elected S corporation treatment or changed its owner compensation?"
+  },
+  "entries": [
+    {
+      "file": "reasonable-compensation.md",
+      "title": "Reasonable compensation before distributions",
+      "cites": [
+        {
+          "label": "IRS S corporation compensation and medical insurance",
+          "url": "https://www.irs.gov/businesses/small-businesses-self-employed/s-corporation-compensation-and-medical-insurance-issues"
+        },
+        {
+          "label": "IRS retirement plan contributions for S corporations",
+          "url": "https://www.irs.gov/retirement-plans/retirement-plan-faqs-regarding-contributions-s-corporation"
+        },
+        {
+          "label": "IRS qualified business income deduction",
+          "url": "https://www.irs.gov/newsroom/qualified-business-income-deduction"
+        }
+      ]
+    },
+    {
+      "file": "distributions-and-basis.md",
+      "title": "Distributions, shareholder loans and basis",
+      "cites": [
+        {
+          "label": "IRS S corporation stock and debt basis",
+          "url": "https://www.irs.gov/businesses/small-businesses-self-employed/s-corporation-stock-and-debt-basis"
+        },
+        {
+          "label": "IRS S corporation compensation and medical insurance",
+          "url": "https://www.irs.gov/businesses/small-businesses-self-employed/s-corporation-compensation-and-medical-insurance-issues"
+        }
+      ]
+    },
+    {
+      "file": "shareholder-health-insurance.md",
+      "title": "Shareholder health insurance and payroll reporting",
+      "cites": [
+        {
+          "label": "IRS S corporation compensation and medical insurance",
+          "url": "https://www.irs.gov/businesses/small-businesses-self-employed/s-corporation-compensation-and-medical-insurance-issues"
+        },
+        {
+          "label": "IRS Form 7206 instructions, self-employed health insurance",
+          "url": "https://www.irs.gov/instructions/i7206"
+        },
+        {
+          "label": "IRS Publication 334, self-employed health insurance rules",
+          "url": "https://www.irs.gov/publications/p334"
+        },
+        {
+          "label": "IRS Publication 15-B, 2026 fringe benefits",
+          "url": "https://www.irs.gov/publications/p15b"
+        }
+      ]
+    },
+    {
+      "file": "spouse-attribution-and-fringes.md",
+      "title": "Spouse attribution and owner fringe benefits",
+      "cites": [
+        {
+          "label": "IRS Publication 15-B, 2026 fringe benefits",
+          "url": "https://www.irs.gov/publications/p15b"
+        },
+        {
+          "label": "IRS Chief Counsel Advice 201912001, family attribution explanation",
+          "url": "https://www.irs.gov/pub/irs-wd/201912001.pdf"
+        },
+        {
+          "label": "IRS S corporation compensation and medical insurance",
+          "url": "https://www.irs.gov/businesses/small-businesses-self-employed/s-corporation-compensation-and-medical-insurance-issues"
+        }
+      ]
+    },
+    {
+      "file": "payroll-and-estimated-tax.md",
+      "title": "Payroll deposits and household estimated tax",
+      "cites": [
+        {
+          "label": "IRS Publication 15, 2026 employer tax guide",
+          "url": "https://www.irs.gov/publications/p15"
+        },
+        {
+          "label": "IRS Publication 505, 2026 estimated tax",
+          "url": "https://www.irs.gov/publications/p505"
+        }
+      ]
+    },
+    {
+      "file": "retirement-compensation.md",
+      "title": "Retirement contributions use wages, not distributions",
+      "cites": [
+        {
+          "label": "IRS retirement plan contributions for S corporations",
+          "url": "https://www.irs.gov/retirement-plans/retirement-plan-faqs-regarding-contributions-s-corporation"
+        },
+        {
+          "label": "IRS Notice 2025-67, 2026 retirement limits",
+          "url": "https://www.irs.gov/pub/irs-drop/n-25-67.pdf"
+        },
+        {
+          "label": "IRS Publication 560, small business retirement plans",
+          "url": "https://www.irs.gov/publications/p560"
+        },
+        {
+          "label": "IRS S corporation compensation and medical insurance",
+          "url": "https://www.irs.gov/businesses/small-businesses-self-employed/s-corporation-compensation-and-medical-insurance-issues"
+        }
+      ]
+    },
+    {
+      "file": "qualified-business-income.md",
+      "title": "QBI, owner wages and the 2026 thresholds",
+      "cites": [
+        {
+          "label": "IRS qualified business income deduction",
+          "url": "https://www.irs.gov/newsroom/qualified-business-income-deduction"
+        },
+        {
+          "label": "IRS Form 8995 instructions, enduring QBI definitions",
+          "url": "https://www.irs.gov/instructions/i8995"
+        },
+        {
+          "label": "IRS Revenue Procedure 2025-32, 2026 inflation adjustments",
+          "url": "https://www.irs.gov/pub/irs-drop/rp-25-32.pdf"
+        },
+        {
+          "label": "IRS Publication 505, 2026 estimated tax",
+          "url": "https://www.irs.gov/publications/p505"
+        }
+      ]
+    },
+    {
+      "file": "elections-and-entity-changes.md",
+      "title": "S elections and changes to a single-member LLC",
+      "cites": [
+        {
+          "label": "IRS Form 2553 instructions",
+          "url": "https://www.irs.gov/instructions/i2553"
+        },
+        {
+          "label": "IRS Publication 3402, LLC classification",
+          "url": "https://www.irs.gov/publications/p3402"
+        },
+        {
+          "label": "IRS S corporation stock and debt basis",
+          "url": "https://www.irs.gov/businesses/small-businesses-self-employed/s-corporation-stock-and-debt-basis"
+        },
+        {
+          "label": "IRS retirement plan contributions for S corporations",
+          "url": "https://www.irs.gov/retirement-plans/retirement-plan-faqs-regarding-contributions-s-corporation"
+        }
+      ]
+    }
+  ]
+}

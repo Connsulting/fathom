@@ -1,0 +1,21 @@
+{
+  "id": "your-plans",
+  "name": "Synthetic owner plans",
+  "version": "1.0.0",
+  "taxYear": 2026,
+  "reviewed": "2026-01-01",
+  "curator": "Synthetic test fixture",
+  "covers": ["Owner planning review"],
+  "appliesWhen": { "fact": "income.selfEmployed", "op": "eq", "value": true },
+  "suggestWhen": { "fact": "household.expectingChild", "op": "eq", "value": true },
+  "whatIf": { "prompt": "What changes if the owner starts independent work?" },
+  "entries": [
+    {
+      "file": "planning-review.md",
+      "title": "Synthetic planning review",
+      "cites": [
+        { "label": "IRS estimated tax guidance", "url": "https://www.irs.gov/publications/p505" }
+      ]
+    }
+  ]
+}

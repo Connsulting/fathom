@@ -1,0 +1,5 @@
+Date,Original Date,Account Type,Account Name,Account Number,Institution Name,Name,Custom Name,Amount,Description,Category,Note,Ignored From,Tax Deductible,Transaction Tags
+2032-02-29,2032-02-28,Checking,Daily account,9911227766,Chase,Example Shop,,42.35,"EXAMPLE SHOP, PURCHASE",Shopping,,,,
+2032-03-01,,Checking,Daily account,9911227766,Chase,Deposit,Renamed deposit,-900.50,Deposit,Income,,,,
+2032-02-30,,Checking,Daily account,9911227766,Chase,Bad date,,12,Malformed,,,,,
+2032-03-02,,Checking,Daily account,9911227766,Chase,Bad amount,,oops,Malformed,,,,,

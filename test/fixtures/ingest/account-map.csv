@@ -1,0 +1,4 @@
+account_alias,account_type,source
+daily,checking,direct_export
+reserve,savings,manual
+,checking,direct_export

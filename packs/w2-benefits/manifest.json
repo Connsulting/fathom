@@ -1,0 +1,188 @@
+{
+  "id": "w2-benefits",
+  "name": "W-2 benefits",
+  "version": "1.1.0",
+  "taxYear": 2026,
+  "reviewed": "2026-11-05",
+  "curator": "Public primary-source review",
+  "covers": [
+    "employer benefits",
+    "HSA eligibility and limits",
+    "health FSA",
+    "dependent care FSA",
+    "retirement deferrals",
+    "payroll withholding"
+  ],
+  "appliesWhen": {
+    "fact": "income.w2",
+    "op": "eq",
+    "value": true
+  },
+  "suggestWhen": {
+    "any": [
+      {
+        "fact": "benefits.hsa",
+        "op": "eq",
+        "value": true
+      },
+      {
+        "fact": "benefits.employer401k",
+        "op": "eq",
+        "value": true
+      },
+      {
+        "all": [
+          {
+            "fact": "income.sCorp",
+            "op": "eq",
+            "value": true
+          },
+          {
+            "any": [
+              {
+                "not": {
+                  "fact": "income.w2",
+                  "op": "exists"
+                }
+              },
+              {
+                "fact": "income.w2",
+                "op": "ne",
+                "value": true
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "whatIf": {
+    "prompt": "What would change if the household gained or lost employer benefits?"
+  },
+  "entries": [
+    {
+      "file": "benefits-inventory.md",
+      "title": "Review the employer benefits inventory",
+      "cites": [
+        {
+          "label": "IRS Publication 15-B (2026)",
+          "url": "https://www.irs.gov/publications/p15b"
+        },
+        {
+          "label": "IRS Publication 505 (2026)",
+          "url": "https://www.irs.gov/publications/p505"
+        }
+      ]
+    },
+    {
+      "file": "employer-retirement.md",
+      "title": "Coordinate employer retirement deferrals",
+      "cites": [
+        {
+          "label": "IRS Notice 2025-67: 2026 retirement limits",
+          "url": "https://www.irs.gov/pub/irs-drop/n-25-67.pdf"
+        },
+        {
+          "label": "IRS contributions across multiple retirement plans",
+          "url": "https://www.irs.gov/retirement-plans/how-much-salary-can-you-defer-if-youre-eligible-for-more-than-one-retirement-plan"
+        }
+      ]
+    },
+    {
+      "file": "hsa-eligibility.md",
+      "title": "Establish HSA eligibility before contributing",
+      "cites": [
+        {
+          "label": "IRS Publication 969: enduring HSA and FSA rules",
+          "url": "https://www.irs.gov/publications/p969"
+        },
+        {
+          "label": "IRS Publication 15-B (2026)",
+          "url": "https://www.irs.gov/publications/p15b"
+        },
+        {
+          "label": "IRS Notice 2026-05: HSA eligibility changes",
+          "url": "https://www.irs.gov/irb/2026-02_IRB"
+        }
+      ]
+    },
+    {
+      "file": "hsa-limits.md",
+      "title": "Use the correct HSA year and coverage limits",
+      "cites": [
+        {
+          "label": "IRS Publication 15-B (2026)",
+          "url": "https://www.irs.gov/publications/p15b"
+        },
+        {
+          "label": "IRS Publication 969: enduring HSA and FSA rules",
+          "url": "https://www.irs.gov/publications/p969"
+        },
+        {
+          "label": "IRS Notice 2026-05: HSA eligibility changes",
+          "url": "https://www.irs.gov/irb/2026-02_IRB"
+        },
+        {
+          "label": "IRS Revenue Procedure 2026-24: published 2027 HSA limits",
+          "url": "https://www.irs.gov/irb/2026-25_irb"
+        }
+      ]
+    },
+    {
+      "file": "health-fsa.md",
+      "title": "Size and coordinate the health FSA",
+      "cites": [
+        {
+          "label": "IRS Publication 15-B (2026)",
+          "url": "https://www.irs.gov/publications/p15b"
+        },
+        {
+          "label": "IRS Revenue Procedure 2025-32: 2026 adjustments",
+          "url": "https://www.irs.gov/pub/irs-drop/rp-25-32.pdf"
+        },
+        {
+          "label": "IRS Publication 969: enduring HSA and FSA rules",
+          "url": "https://www.irs.gov/publications/p969"
+        }
+      ]
+    },
+    {
+      "file": "dependent-care-fsa.md",
+      "title": "Coordinate dependent care benefits across employers",
+      "cites": [
+        {
+          "label": "IRS Publication 15-B (2026)",
+          "url": "https://www.irs.gov/publications/p15b"
+        },
+        {
+          "label": "IRS child and dependent care credit: 2026 rules",
+          "url": "https://www.irs.gov/credits-deductions/individuals/child-and-dependent-care-credit-information"
+        }
+      ]
+    },
+    {
+      "file": "withholding.md",
+      "title": "Use payroll withholding in the household tax plan",
+      "cites": [
+        {
+          "label": "IRS Publication 505 (2026)",
+          "url": "https://www.irs.gov/publications/p505"
+        }
+      ]
+    },
+    {
+      "file": "payroll-reporting.md",
+      "title": "Reconcile payroll and taxable benefits",
+      "cites": [
+        {
+          "label": "IRS Publication 15-B (2026)",
+          "url": "https://www.irs.gov/publications/p15b"
+        },
+        {
+          "label": "IRS Publication 969: enduring HSA and FSA rules",
+          "url": "https://www.irs.gov/publications/p969"
+        }
+      ]
+    }
+  ]
+}

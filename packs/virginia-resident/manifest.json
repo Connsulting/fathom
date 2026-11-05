@@ -1,0 +1,163 @@
+{
+  "id": "virginia-resident",
+  "name": "Virginia resident",
+  "version": "1.1.0",
+  "taxYear": 2026,
+  "reviewed": "2026-11-05",
+  "curator": "Public primary-source review",
+  "covers": [
+    "Virginia residency and conformity",
+    "state deductions",
+    "estimated payments",
+    "Virginia529 deduction",
+    "529 carryforward and recapture",
+    "other-state credits",
+    "Virginia marginal income tax rates and estimated-tax safe harbor"
+  ],
+  "appliesWhen": {
+    "fact": "household.state",
+    "op": "eq",
+    "value": "VA"
+  },
+  "suggestWhen": {
+    "all": [
+      {
+        "fact": "accounts.has529",
+        "op": "eq",
+        "value": true
+      },
+      {
+        "fact": "household.state",
+        "op": "ne",
+        "value": "VA"
+      }
+    ]
+  },
+  "whatIf": {
+    "prompt": "What would change if the household became or stopped being a Virginia resident?"
+  },
+  "entries": [
+    {
+      "file": "residency.md",
+      "title": "Determine Virginia residency and income coverage",
+      "cites": [
+        {
+          "label": "Virginia Tax residency status",
+          "url": "https://www.tax.virginia.gov/residency-status"
+        },
+        {
+          "label": "Virginia Tax credit for taxes paid to another state",
+          "url": "https://www.tax.virginia.gov/credit-for-taxes-paid-to-another-state"
+        }
+      ]
+    },
+    {
+      "file": "state-conformity.md",
+      "title": "Apply Virginia conformity and adjustments separately",
+      "cites": [
+        {
+          "label": "Code of Virginia 58.1-301: conformity",
+          "url": "https://law.lis.virginia.gov/vacode/title58.1/section58.1-301/"
+        },
+        {
+          "label": "Virginia Tax Bulletin 26-1",
+          "url": "https://www.tax.virginia.gov/sites/default/files/inline-files/tb-26-1-date-of-irc-conformity-advanced.pdf"
+        }
+      ]
+    },
+    {
+      "file": "standard-itemized.md",
+      "title": "Coordinate federal and Virginia deduction choices",
+      "cites": [
+        {
+          "label": "Code of Virginia 58.1-322.03: deductions",
+          "url": "https://law.lis.virginia.gov/vacode/title58.1/section58.1-322.03/"
+        },
+        {
+          "label": "Virginia Tax Bulletin 26-1",
+          "url": "https://www.tax.virginia.gov/sites/default/files/inline-files/tb-26-1-date-of-irc-conformity-advanced.pdf"
+        }
+      ]
+    },
+    {
+      "file": "estimated-tax.md",
+      "title": "Schedule Virginia estimated payments independently",
+      "cites": [
+        {
+          "label": "Virginia Tax 2026 Form 760ES and instructions",
+          "url": "https://www.tax.virginia.gov/sites/default/files/taxforms/individual-income-tax/2026/760es-2026.pdf"
+        }
+      ]
+    },
+    {
+      "file": "virginia529-deduction.md",
+      "title": "Claim the Virginia529 deduction by qualifying account",
+      "cites": [
+        {
+          "label": "Code of Virginia 58.1-322.03: deductions",
+          "url": "https://law.lis.virginia.gov/vacode/title58.1/section58.1-322.03/"
+        },
+        {
+          "label": "Invest529 Program Description, October 1, 2026",
+          "url": "https://www.invest529.com/uploads/files/va529_invest_program_description.pdf"
+        }
+      ]
+    },
+    {
+      "file": "virginia529-carryforward.md",
+      "title": "Track Virginia529 carryforwards and the age-70 exception",
+      "cites": [
+        {
+          "label": "Code of Virginia 58.1-322.03: deductions",
+          "url": "https://law.lis.virginia.gov/vacode/title58.1/section58.1-322.03/"
+        },
+        {
+          "label": "Invest529 Program Description, October 1, 2026",
+          "url": "https://www.invest529.com/uploads/files/va529_invest_program_description.pdf"
+        }
+      ]
+    },
+    {
+      "file": "virginia529-withdrawals.md",
+      "title": "Separate qualified withdrawals from Virginia recapture",
+      "cites": [
+        {
+          "label": "Code of Virginia 58.1-322.03: deductions",
+          "url": "https://law.lis.virginia.gov/vacode/title58.1/section58.1-322.03/"
+        },
+        {
+          "label": "Invest529 Program Description, October 1, 2026",
+          "url": "https://www.invest529.com/uploads/files/va529_invest_program_description.pdf"
+        }
+      ]
+    },
+    {
+      "file": "other-state-credit.md",
+      "title": "Review other-state credits and wage reciprocity",
+      "cites": [
+        {
+          "label": "Virginia Tax credit for taxes paid to another state",
+          "url": "https://www.tax.virginia.gov/credit-for-taxes-paid-to-another-state"
+        },
+        {
+          "label": "Virginia Tax residency status",
+          "url": "https://www.tax.virginia.gov/residency-status"
+        }
+      ]
+    },
+    {
+      "file": "income-tax-rates.md",
+      "title": "Apply Virginia marginal income tax rates",
+      "cites": [
+        {
+          "label": "Code of Virginia 58.1-320: marginal income tax rates",
+          "url": "https://law.lis.virginia.gov/vacode/title58.1/section58.1-320/"
+        },
+        {
+          "label": "Virginia Tax 2026 Form 760ES and instructions",
+          "url": "https://www.tax.virginia.gov/sites/default/files/taxforms/individual-income-tax/2026/760es-2026.pdf"
+        }
+      ]
+    }
+  ]
+}
