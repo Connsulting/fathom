@@ -1,0 +1,203 @@
+{
+  "id": "self-employed-partnership",
+  "name": "Self-employed and partnership income",
+  "version": "1.0.0",
+  "taxYear": 2026,
+  "reviewed": "2026-11-05",
+  "curator": "Public primary-source review",
+  "covers": [
+    "sole proprietor and Schedule C income",
+    "self-employment tax",
+    "partnership payments and basis",
+    "estimated tax",
+    "health insurance",
+    "retirement compensation",
+    "qualified business income",
+    "spouse ownership",
+    "single-member LLC transition"
+  ],
+  "appliesWhen": {
+    "any": [
+      {
+        "fact": "income.selfEmployed",
+        "op": "eq",
+        "value": true
+      },
+      {
+        "fact": "income.partnership",
+        "op": "eq",
+        "value": true
+      }
+    ]
+  },
+  "suggestWhen": {
+    "fact": "income.sCorp",
+    "op": "eq",
+    "value": true
+  },
+  "whatIf": {
+    "prompt": "What would change if partnership income moved to a single-member LLC or the business elected corporate treatment?"
+  },
+  "entries": [
+    {
+      "file": "sole-proprietor-income.md",
+      "title": "Sole proprietor income and self-employment tax",
+      "cites": [
+        {
+          "label": "IRS self-employed individuals tax center",
+          "url": "https://www.irs.gov/businesses/small-businesses-self-employed/self-employed-individuals-tax-center"
+        },
+        {
+          "label": "IRS Publication 3402, LLC classification",
+          "url": "https://www.irs.gov/publications/p3402"
+        },
+        {
+          "label": "IRS Publication 505, 2026 estimated tax",
+          "url": "https://www.irs.gov/publications/p505"
+        }
+      ]
+    },
+    {
+      "file": "partner-payments-and-basis.md",
+      "title": "Partner income, guaranteed payments and basis",
+      "cites": [
+        {
+          "label": "IRS Publication 541, partnerships",
+          "url": "https://www.irs.gov/publications/p541"
+        },
+        {
+          "label": "IRS paying yourself",
+          "url": "https://www.irs.gov/businesses/small-businesses-self-employed/paying-yourself"
+        },
+        {
+          "label": "IRS business entity tax treatment",
+          "url": "https://www.irs.gov/faqs/small-business-self-employed-other-business/entities"
+        },
+        {
+          "label": "IRS calculation of plan compensation for partnerships",
+          "url": "https://www.irs.gov/retirement-plans/calculation-of-plan-compensation-for-partnerships"
+        },
+        {
+          "label": "IRS qualified business income deduction",
+          "url": "https://www.irs.gov/newsroom/qualified-business-income-deduction"
+        }
+      ]
+    },
+    {
+      "file": "estimated-tax.md",
+      "title": "Estimated tax for uneven business income",
+      "cites": [
+        {
+          "label": "IRS Publication 505, 2026 estimated tax",
+          "url": "https://www.irs.gov/publications/p505"
+        }
+      ]
+    },
+    {
+      "file": "health-insurance.md",
+      "title": "Self-employed and partner health insurance",
+      "cites": [
+        {
+          "label": "IRS Form 7206 instructions, self-employed health insurance",
+          "url": "https://www.irs.gov/instructions/i7206"
+        },
+        {
+          "label": "IRS Publication 334, self-employed health insurance rules",
+          "url": "https://www.irs.gov/publications/p334"
+        },
+        {
+          "label": "IRS Publication 541, partnerships",
+          "url": "https://www.irs.gov/publications/p541"
+        }
+      ]
+    },
+    {
+      "file": "retirement-compensation.md",
+      "title": "Business retirement plans and adjusted earned income",
+      "cites": [
+        {
+          "label": "IRS Publication 560, small business retirement plans",
+          "url": "https://www.irs.gov/publications/p560"
+        },
+        {
+          "label": "IRS calculation of plan compensation for partnerships",
+          "url": "https://www.irs.gov/retirement-plans/calculation-of-plan-compensation-for-partnerships"
+        },
+        {
+          "label": "IRS Notice 2025-67, 2026 retirement limits",
+          "url": "https://www.irs.gov/pub/irs-drop/n-25-67.pdf"
+        }
+      ]
+    },
+    {
+      "file": "qualified-business-income.md",
+      "title": "QBI for sole proprietors and partners",
+      "cites": [
+        {
+          "label": "IRS qualified business income deduction",
+          "url": "https://www.irs.gov/newsroom/qualified-business-income-deduction"
+        },
+        {
+          "label": "IRS Form 8995 instructions, enduring QBI definitions",
+          "url": "https://www.irs.gov/instructions/i8995"
+        },
+        {
+          "label": "IRS Revenue Procedure 2025-32, 2026 inflation adjustments",
+          "url": "https://www.irs.gov/pub/irs-drop/rp-25-32.pdf"
+        },
+        {
+          "label": "IRS Publication 505, 2026 estimated tax",
+          "url": "https://www.irs.gov/publications/p505"
+        }
+      ]
+    },
+    {
+      "file": "spouses-in-business.md",
+      "title": "Spouse ownership, employment and qualified joint ventures",
+      "cites": [
+        {
+          "label": "IRS married couples in business",
+          "url": "https://www.irs.gov/businesses/small-businesses-self-employed/married-couples-in-business"
+        },
+        {
+          "label": "IRS Publication 541, partnerships",
+          "url": "https://www.irs.gov/publications/p541"
+        },
+        {
+          "label": "IRS Publication 3402, LLC classification",
+          "url": "https://www.irs.gov/publications/p3402"
+        },
+        {
+          "label": "IRS Publication 15-B, 2026 fringe benefits",
+          "url": "https://www.irs.gov/publications/p15b"
+        }
+      ]
+    },
+    {
+      "file": "single-member-llc-transition.md",
+      "title": "Transition from a partnership to a solo LLC",
+      "cites": [
+        {
+          "label": "IRS Publication 3402, LLC classification",
+          "url": "https://www.irs.gov/publications/p3402"
+        },
+        {
+          "label": "IRS Publication 541, partnerships",
+          "url": "https://www.irs.gov/publications/p541"
+        },
+        {
+          "label": "IRS closing a business",
+          "url": "https://www.irs.gov/businesses/small-businesses-self-employed/closing-a-business"
+        },
+        {
+          "label": "IRS Publication 560, small business retirement plans",
+          "url": "https://www.irs.gov/publications/p560"
+        },
+        {
+          "label": "IRS Publication 334, self-employed health insurance rules",
+          "url": "https://www.irs.gov/publications/p334"
+        }
+      ]
+    }
+  ]
+}

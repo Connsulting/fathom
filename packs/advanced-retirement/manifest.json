@@ -1,0 +1,307 @@
+{
+  "id": "advanced-retirement",
+  "name": "Advanced retirement planning",
+  "version": "1.0.0",
+  "taxYear": 2026,
+  "reviewed": "2026-11-05",
+  "curator": "Public primary-source review",
+  "covers": [
+    "2026 contribution limits",
+    "IRA eligibility and backdoor Roth",
+    "Form 8606 pro-rata",
+    "Solo 401(k) versus SEP",
+    "contribution deadlines",
+    "mega backdoor Roth",
+    "Roth catch-ups",
+    "plan aggregation and employee eligibility",
+    "rollovers and conversions"
+  ],
+  "appliesWhen": {
+    "any": [
+      {
+        "fact": "retirement.solo401k",
+        "op": "eq",
+        "value": true
+      },
+      {
+        "fact": "retirement.ira",
+        "op": "eq",
+        "value": true
+      },
+      {
+        "fact": "retirement.backdoorRothCandidate",
+        "op": "eq",
+        "value": true
+      }
+    ]
+  },
+  "suggestWhen": {
+    "any": [
+      {
+        "fact": "benefits.employer401k",
+        "op": "eq",
+        "value": true
+      },
+      {
+        "fact": "income.selfEmployed",
+        "op": "eq",
+        "value": true
+      },
+      {
+        "fact": "income.partnership",
+        "op": "eq",
+        "value": true
+      },
+      {
+        "fact": "income.sCorp",
+        "op": "eq",
+        "value": true
+      }
+    ]
+  },
+  "whatIf": {
+    "prompt": "What would change if the household added a Solo 401(k), a SEP or a permitted Roth conversion strategy?"
+  },
+  "entries": [
+    {
+      "file": "contribution-limits-2026.md",
+      "title": "2026 contribution limits and separate tax buckets",
+      "cites": [
+        {
+          "label": "IRS Notice 2025-67, 2026 retirement limits",
+          "url": "https://www.irs.gov/pub/irs-drop/n-25-67.pdf"
+        },
+        {
+          "label": "IRS Publication 560, small business retirement plans",
+          "url": "https://www.irs.gov/publications/p560"
+        },
+        {
+          "label": "IRS retirement topics, contribution types",
+          "url": "https://www.irs.gov/retirement-plans/plan-participant-employee/retirement-topics-contributions"
+        },
+        {
+          "label": "IRS deferral limits across more than one plan",
+          "url": "https://www.irs.gov/retirement-plans/how-much-salary-can-you-defer-if-youre-eligible-for-more-than-one-retirement-plan"
+        },
+        {
+          "label": "IRS Publication 590-A, IRA contributions and conversions",
+          "url": "https://www.irs.gov/publications/p590a"
+        }
+      ]
+    },
+    {
+      "file": "ira-eligibility.md",
+      "title": "IRA contribution, deduction and Roth eligibility",
+      "cites": [
+        {
+          "label": "IRS Notice 2025-67, 2026 retirement limits",
+          "url": "https://www.irs.gov/pub/irs-drop/n-25-67.pdf"
+        },
+        {
+          "label": "IRS Publication 590-A, IRA contributions and conversions",
+          "url": "https://www.irs.gov/publications/p590a"
+        },
+        {
+          "label": "IRS Form 8606 instructions, IRA basis and conversions",
+          "url": "https://www.irs.gov/instructions/i8606"
+        }
+      ]
+    },
+    {
+      "file": "backdoor-roth.md",
+      "title": "Backdoor Roth contributions and conversions",
+      "cites": [
+        {
+          "label": "IRS Publication 590-A, IRA contributions and conversions",
+          "url": "https://www.irs.gov/publications/p590a"
+        },
+        {
+          "label": "IRS Form 8606 instructions, IRA basis and conversions",
+          "url": "https://www.irs.gov/instructions/i8606"
+        },
+        {
+          "label": "IRS Notice 2025-67, 2026 retirement limits",
+          "url": "https://www.irs.gov/pub/irs-drop/n-25-67.pdf"
+        }
+      ]
+    },
+    {
+      "file": "form-8606-pro-rata.md",
+      "title": "Form 8606 and the IRA pro-rata rule",
+      "cites": [
+        {
+          "label": "IRS Form 8606 instructions, IRA basis and conversions",
+          "url": "https://www.irs.gov/instructions/i8606"
+        },
+        {
+          "label": "IRS Publication 590-A, IRA contributions and conversions",
+          "url": "https://www.irs.gov/publications/p590a"
+        }
+      ]
+    },
+    {
+      "file": "solo-401k-versus-sep.md",
+      "title": "Solo 401(k) versus SEP",
+      "cites": [
+        {
+          "label": "IRS one-participant 401(k) plans",
+          "url": "https://www.irs.gov/retirement-plans/one-participant-401k-plans"
+        },
+        {
+          "label": "IRS Publication 560, small business retirement plans",
+          "url": "https://www.irs.gov/publications/p560"
+        },
+        {
+          "label": "IRS Notice 2025-67, 2026 retirement limits",
+          "url": "https://www.irs.gov/pub/irs-drop/n-25-67.pdf"
+        },
+        {
+          "label": "IRS Form 8606 instructions, IRA basis and conversions",
+          "url": "https://www.irs.gov/instructions/i8606"
+        },
+        {
+          "label": "IRS retirement plan FAQs regarding SEPs",
+          "url": "https://www.irs.gov/retirement-plans/retirement-plans-faqs-regarding-seps"
+        }
+      ]
+    },
+    {
+      "file": "contribution-deadlines.md",
+      "title": "Retirement elections, funding and reporting deadlines",
+      "cites": [
+        {
+          "label": "IRS Forms 1099-R and 5498 instructions for 2026",
+          "url": "https://www.irs.gov/instructions/i1099r"
+        },
+        {
+          "label": "IRS Publication 590-A, IRA contributions and conversions",
+          "url": "https://www.irs.gov/publications/p590a"
+        },
+        {
+          "label": "IRS Publication 560, small business retirement plans",
+          "url": "https://www.irs.gov/publications/p560"
+        },
+        {
+          "label": "IRS one-participant 401(k) plans",
+          "url": "https://www.irs.gov/retirement-plans/one-participant-401k-plans"
+        }
+      ]
+    },
+    {
+      "file": "mega-backdoor-roth.md",
+      "title": "Mega backdoor Roth and after-tax plan features",
+      "cites": [
+        {
+          "label": "IRS retirement topics, contribution types",
+          "url": "https://www.irs.gov/retirement-plans/plan-participant-employee/retirement-topics-contributions"
+        },
+        {
+          "label": "IRS designated Roth account FAQs",
+          "url": "https://www.irs.gov/retirement-plans/retirement-plans-faqs-on-designated-roth-accounts"
+        },
+        {
+          "label": "IRS 401(k) nondiscrimination testing guidance",
+          "url": "https://www.irs.gov/retirement-plans/401k-plan-fix-it-guide-the-plan-failed-the-401k-adp-and-acp-nondiscrimination-tests"
+        },
+        {
+          "label": "IRS Notice 2025-67, 2026 retirement limits",
+          "url": "https://www.irs.gov/pub/irs-drop/n-25-67.pdf"
+        },
+        {
+          "label": "IRS Publication 560, small business retirement plans",
+          "url": "https://www.irs.gov/publications/p560"
+        },
+        {
+          "label": "IRS rollovers of after-tax retirement plan contributions",
+          "url": "https://www.irs.gov/retirement-plans/rollovers-of-after-tax-contributions-in-retirement-plans"
+        },
+        {
+          "label": "IRS Form 8606 instructions, IRA basis and conversions",
+          "url": "https://www.irs.gov/instructions/i8606"
+        }
+      ]
+    },
+    {
+      "file": "catchups-and-roth-wages.md",
+      "title": "Catch-up contributions and the 2026 Roth wage rule",
+      "cites": [
+        {
+          "label": "IRS Notice 2025-67, 2026 retirement limits",
+          "url": "https://www.irs.gov/pub/irs-drop/n-25-67.pdf"
+        },
+        {
+          "label": "IRS retirement topics, catch-up contributions",
+          "url": "https://www.irs.gov/retirement-plans/plan-participant-employee/retirement-topics-catch-up-contributions"
+        },
+        {
+          "label": "IRS final Roth catch-up regulations and wage explanation",
+          "url": "https://www.irs.gov/irb/2025-40_IRB"
+        },
+        {
+          "label": "IRS S corporation retirement compensation",
+          "url": "https://www.irs.gov/retirement-plans/retirement-plan-faqs-regarding-contributions-s-corporation"
+        },
+        {
+          "label": "IRS retirement topics, contribution types",
+          "url": "https://www.irs.gov/retirement-plans/plan-participant-employee/retirement-topics-contributions"
+        }
+      ]
+    },
+    {
+      "file": "aggregation-and-employees.md",
+      "title": "Plan aggregation and employee eligibility",
+      "cites": [
+        {
+          "label": "IRS deferral limits across more than one plan",
+          "url": "https://www.irs.gov/retirement-plans/how-much-salary-can-you-defer-if-youre-eligible-for-more-than-one-retirement-plan"
+        },
+        {
+          "label": "IRS Publication 560, small business retirement plans",
+          "url": "https://www.irs.gov/publications/p560"
+        },
+        {
+          "label": "IRS Publication 571, 403(b) aggregation",
+          "url": "https://www.irs.gov/publications/p571"
+        },
+        {
+          "label": "IRS explanation of Section 415 plan aggregation",
+          "url": "https://www.irs.gov/retirement-plans/issue-snapshot-403b-plan-application-of-irc-section-415c-when-a-403b-plan-is-aggregated-with-a-section-401a-defined-contribution-plan"
+        },
+        {
+          "label": "IRS one-participant 401(k) plans",
+          "url": "https://www.irs.gov/retirement-plans/one-participant-401k-plans"
+        },
+        {
+          "label": "IRS retirement plan FAQs regarding SEPs",
+          "url": "https://www.irs.gov/retirement-plans/retirement-plans-faqs-regarding-seps"
+        }
+      ]
+    },
+    {
+      "file": "rollovers-and-conversions.md",
+      "title": "Rollovers, Roth conversions and income timing",
+      "cites": [
+        {
+          "label": "IRS Publication 590-A, IRA contributions and conversions",
+          "url": "https://www.irs.gov/publications/p590a"
+        },
+        {
+          "label": "IRS Publication 505, 2026 estimated tax",
+          "url": "https://www.irs.gov/publications/p505"
+        },
+        {
+          "label": "IRS Topic 413, retirement plan rollovers",
+          "url": "https://www.irs.gov/taxtopics/tc413"
+        },
+        {
+          "label": "IRS Form 8606 instructions, IRA basis and conversions",
+          "url": "https://www.irs.gov/instructions/i8606"
+        },
+        {
+          "label": "IRS Forms 1099-R and 5498 instructions for 2026",
+          "url": "https://www.irs.gov/instructions/i1099r"
+        }
+      ]
+    }
+  ]
+}

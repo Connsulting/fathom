@@ -1,0 +1,176 @@
+{
+  "id": "charitable-giving",
+  "name": "Charitable giving",
+  "version": "1.0.0",
+  "taxYear": 2026,
+  "reviewed": "2026-11-05",
+  "curator": "Public primary-source review",
+  "covers": [
+    "2026 charitable deductions",
+    "bunching",
+    "donor-advised funds",
+    "appreciated stock",
+    "qualified charitable distributions",
+    "substantiation and carryforwards"
+  ],
+  "appliesWhen": {
+    "fact": "giving.charitable",
+    "op": "eq",
+    "value": true
+  },
+  "suggestWhen": {
+    "all": [
+      {
+        "fact": "giving.charitable",
+        "op": "eq",
+        "value": false
+      },
+      {
+        "fact": "income.agiEstimate",
+        "op": "gte",
+        "value": 250000
+      }
+    ]
+  },
+  "whatIf": {
+    "prompt": "What would change if the household began or changed a charitable giving program?"
+  },
+  "entries": [
+    {
+      "file": "charitable-rules-2026.md",
+      "title": "Apply the new 2026 charitable deduction framework",
+      "cites": [
+        {
+          "label": "IRS Publication 505 (2026): charitable deduction changes",
+          "url": "https://www.irs.gov/publications/p505"
+        },
+        {
+          "label": "IRS Publication 6196: 2026 nonitemizer deduction",
+          "url": "https://www.irs.gov/pub/irs-pdf/p6196.pdf"
+        }
+      ]
+    },
+    {
+      "file": "bunching.md",
+      "title": "Evaluate bunching across tax years",
+      "cites": [
+        {
+          "label": "IRS Publication 505 (2026): charitable deduction changes",
+          "url": "https://www.irs.gov/publications/p505"
+        },
+        {
+          "label": "IRS Publication 526: enduring charitable contribution rules",
+          "url": "https://www.irs.gov/publications/p526"
+        },
+        {
+          "label": "IRS Publication 6196: 2026 nonitemizer deduction",
+          "url": "https://www.irs.gov/pub/irs-pdf/p6196.pdf"
+        }
+      ]
+    },
+    {
+      "file": "donor-advised-funds.md",
+      "title": "Understand donor-advised fund control and deduction timing",
+      "cites": [
+        {
+          "label": "IRS donor-advised funds guidance",
+          "url": "https://www.irs.gov/charities-non-profits/charitable-organizations/donor-advised-funds"
+        },
+        {
+          "label": "IRS Publication 526: enduring charitable contribution rules",
+          "url": "https://www.irs.gov/publications/p526"
+        },
+        {
+          "label": "IRS Publication 6196: 2026 nonitemizer deduction",
+          "url": "https://www.irs.gov/pub/irs-pdf/p6196.pdf"
+        },
+        {
+          "label": "IRS Notice 2007-7: QCD recipient and distribution rules",
+          "url": "https://www.irs.gov/irb/2007-05_IRB"
+        }
+      ]
+    },
+    {
+      "file": "appreciated-stock.md",
+      "title": "Review gifts of appreciated stock",
+      "cites": [
+        {
+          "label": "IRS Publication 526: enduring charitable contribution rules",
+          "url": "https://www.irs.gov/publications/p526"
+        },
+        {
+          "label": "IRS Publication 561: donated property valuation",
+          "url": "https://www.irs.gov/publications/p561"
+        },
+        {
+          "label": "IRS Publication 505 (2026): charitable deduction changes",
+          "url": "https://www.irs.gov/publications/p505"
+        }
+      ]
+    },
+    {
+      "file": "qualified-charitable-distributions.md",
+      "title": "Use qualified charitable distributions only when eligible",
+      "cites": [
+        {
+          "label": "IRS Publication 590-B: enduring QCD rules",
+          "url": "https://www.irs.gov/publications/p590b"
+        },
+        {
+          "label": "IRS Notice 2025-67: 2026 QCD limit",
+          "url": "https://www.irs.gov/pub/irs-drop/n-25-67.pdf"
+        },
+        {
+          "label": "IRS Notice 2007-7: QCD recipient and distribution rules",
+          "url": "https://www.irs.gov/irb/2007-05_IRB"
+        }
+      ]
+    },
+    {
+      "file": "gift-substantiation.md",
+      "title": "Obtain the right receipts before filing",
+      "cites": [
+        {
+          "label": "IRS Publication 526: enduring charitable contribution rules",
+          "url": "https://www.irs.gov/publications/p526"
+        },
+        {
+          "label": "IRS Publication 6196: 2026 nonitemizer deduction",
+          "url": "https://www.irs.gov/pub/irs-pdf/p6196.pdf"
+        }
+      ]
+    },
+    {
+      "file": "noncash-valuation.md",
+      "title": "Value noncash gifts and complete the required reporting",
+      "cites": [
+        {
+          "label": "IRS Publication 526: enduring charitable contribution rules",
+          "url": "https://www.irs.gov/publications/p526"
+        },
+        {
+          "label": "IRS Publication 561: donated property valuation",
+          "url": "https://www.irs.gov/publications/p561"
+        },
+        {
+          "label": "IRS Publication 505 (2026): charitable deduction changes",
+          "url": "https://www.irs.gov/publications/p505"
+        }
+      ]
+    },
+    {
+      "file": "deadlines-and-carryforwards.md",
+      "title": "Track completion dates and charitable carryforwards",
+      "cites": [
+        {
+          "label": "IRS Publication 526: enduring charitable contribution rules",
+          "url": "https://www.irs.gov/publications/p526"
+        },
+        {
+          "label": "IRS Publication 505 (2026): charitable deduction changes",
+          "url": "https://www.irs.gov/publications/p505"
+        }
+      ]
+    }
+  ]
+}
