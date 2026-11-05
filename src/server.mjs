@@ -16,6 +16,8 @@ import { loadConfig } from './config.mjs';
 import { openMigrated, readStoreMode, createStoreFile, setSetting, DB_FILE } from './store/db.mjs';
 import { createHandler } from './api/router.mjs';
 import { createLiveAnswerer } from './api/answerer.mjs';
+import { createKeyService, loadServerSecret } from './mcp/keys.mjs';
+import { createMcpHandler } from './mcp/index.mjs';
 import { createRuntimeEngine } from './engine/runtime.mjs';
 import { createLivePacks } from './packs/live.mjs';
 import { clockNow } from './scenario/build.mjs';
@@ -73,8 +75,16 @@ export async function startServer(config = loadConfig()) {
     db.close();
     throw e;
   }
+  let keys;
+  try {
+    keys = createKeyService({ db, serverSecret: loadServerSecret(config.dataDir) });
+  } catch (e) {
+    db.close();
+    throw new StartupError(`API key secret: ${e.message}`);
+  }
+  const mcp = createMcpHandler({ db, keys, config });
   const answerer = createLiveAnswerer({ engine, packs });
-  const server = http.createServer(createHandler({ db, config, answerer, engine, packs }));
+  const server = http.createServer(createHandler({ db, config, answerer, engine, packs, keys, mcp }));
   try {
     await new Promise((resolveListen, reject) => {
       server.once('error', reject);

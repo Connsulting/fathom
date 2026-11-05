@@ -22,6 +22,20 @@ export const SEED_ID = 'demo-seed';
 // dependency (opens_on null) and stay upcoming until their rec or the owner moves them.
 export const OPENS_ON = Object.freeze({ salary27: '2027-01-01' });
 
+// Demo pack row id to the repo pack manifest it stands for (stored as def.manifest). The other
+// demo packs (contractor, abroad, rental) have no manifest. A tagged row also keeps its demo name
+// as a label, so the pack refresh rewrites it in place under its demo id. Keep in step with
+// migrations 005 (manifest) and 006 (label).
+export const PACK_MANIFEST = Object.freeze({
+  scorp: 's-corp-owner',
+  selfemp: 'self-employed-partnership',
+  w2: 'w2-benefits',
+  virginia: 'virginia-resident',
+  kids: 'kids-dependents',
+  retire: 'advanced-retirement',
+  giving: 'charitable-giving',
+});
+
 // Content rows: narrative sections with no data table yet.
 const CONTENT_KEYS = ['names', 'law', 'pct', 'series', 'verdict', 'domains', 'curve', 'wargame', 'ask', 'advisor', 'yearend', 'connect', 'onboarding', 'email'];
 
@@ -45,18 +59,6 @@ const FACTS = {
   'giving.charitable': false,
   'income.agiEstimate': 380000,
 };
-
-// Demo packs backed by a repository manifest (packs/<manifest id>/). The seed tags them so the
-// pack refresh rewrites them in place under their demo ids, keeping the demo name as a label.
-export const DEMO_PACK_MANIFESTS = Object.freeze({
-  scorp: 's-corp-owner',
-  selfemp: 'self-employed-partnership',
-  w2: 'w2-benefits',
-  virginia: 'virginia-resident',
-  kids: 'kids-dependents',
-  retire: 'advanced-retirement',
-  giving: 'charitable-giving',
-});
 
 // Children before parents so foreign keys hold while clearing.
 const CLEAR_ORDER = [
@@ -170,7 +172,7 @@ export function seedDemo(db) {
     const packState = db.prepare(`INSERT INTO packs_state (id, def, active, exploring, what_if_asked, what_if_done, unhid, sort, updated_at)
                                   VALUES (?, ?, NULL, 0, 0, 0, '[]', ?, ?)`);
     S.packs.forEach((p, i) => {
-      const def = DEMO_PACK_MANIFESTS[p.id] ? { ...p, manifest: DEMO_PACK_MANIFESTS[p.id], label: p.name } : p;
+      const def = Object.hasOwn(PACK_MANIFEST, p.id) ? { ...p, manifest: PACK_MANIFEST[p.id], label: p.name } : p;
       packState.run(p.id, JSON.stringify(def), i, now);
     });
     const decision = db.prepare(`INSERT INTO decisions (id, title, status, wargame, rec_id, opens_on, when_label, note, decided_line, sort)

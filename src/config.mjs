@@ -52,6 +52,23 @@ export function loadConfig(env = process.env) {
     emailTransport = env.FATHOM_EMAIL_TRANSPORT;
   }
 
+  // The URL MCP clients use to reach this server, when it sits behind a proxy or a name. The
+  // value is not echoed in the error: it could carry credentials.
+  let publicUrl = null;
+  if (!blank(env.FATHOM_PUBLIC_URL)) {
+    const raw = env.FATHOM_PUBLIC_URL;
+    let u = null;
+    try { u = new URL(raw); } catch { u = null; }
+    if (!u || !['http:', 'https:'].includes(u.protocol) || u.username || u.password || u.search || u.hash
+      || raw.includes('?') || raw.includes('#')) {
+      throw new ConfigError('FATHOM_PUBLIC_URL must be an absolute http or https URL with no credentials, query or fragment');
+    }
+    publicUrl = u.href;
+  }
+
+  const allowedHosts = blank(env.FATHOM_ALLOWED_HOSTS) ? []
+    : env.FATHOM_ALLOWED_HOSTS.split(',').map(h => h.trim().toLowerCase()).filter(Boolean);
+
   return {
     dataDir: resolve(blank(env.FATHOM_DATA) ? 'data' : env.FATHOM_DATA),
     port,
@@ -62,5 +79,7 @@ export function loadConfig(env = process.env) {
     claudeCredentialFile: blank(env.FATHOM_CLAUDE_CREDENTIAL_FILE) ? null : env.FATHOM_CLAUDE_CREDENTIAL_FILE,
     dataKeyFile: blank(env.FATHOM_DATA_KEY_FILE) ? null : env.FATHOM_DATA_KEY_FILE,
     emailTransport,
+    publicUrl,
+    allowedHosts,
   };
 }

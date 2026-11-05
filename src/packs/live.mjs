@@ -11,7 +11,8 @@
 // createLivePacks(db, { dataDir }) -> { loaded(), backing(rowId, def), view(rowId, def), entry(rowId, entryId), refresh() }
 //   loaded() reloads when settings['packs.generation'] or the Your plans directory changes, so a
 //   build in this process or the CLI is picked up without a restart.
-//   backing() is the loaded pack whose id is def.manifest (demo rows) or else the row id.
+//   backing() is the loaded pack whose id is manifestIdOf(rowId, def): def.manifest (demo rows)
+//   or else the row id, the same link the MCP pack tools use.
 //   view() is the row def plus the backing manifest's covers, entry count and list, curator,
 //   version, tax year, reviewed date and What if prompt, `manifest` set to its id, and `why` from
 //   activePacks over the stored facts (escaped, as refreshPackState stores it), since the UI renders
@@ -19,7 +20,7 @@
 
 import { existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { loadPacks, activePacks, getEntry } from './index.mjs';
+import { loadPacks, activePacks, getEntry, manifestIdOf } from './index.mjs';
 import { REPO_PACKS_DIR, refreshPackState } from './state.mjs';
 import { getFacts } from '../store/facts.mjs';
 import { getSetting, parseJson, tx } from '../store/db.mjs';
@@ -49,8 +50,6 @@ export function loadLivePacks(dataDir) {
   return { packs: packs.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)), dirs, warnings };
 }
 
-const backingId = (rowId, def) => (def && typeof def.manifest === 'string' ? def.manifest : rowId);
-
 export function refreshLivePacks(db, { dataDir, now } = {}) {
   const { packs, dirs, warnings } = loadLivePacks(dataDir);
   const stamp = now || new Date().toISOString();
@@ -58,7 +57,7 @@ export function refreshLivePacks(db, { dataDir, now } = {}) {
     refreshPackState(db, { packDirs: dirs, now: stamp });
     if (getSetting(db, 'mode', null) !== 'demo') return;
     const rows = db.prepare('SELECT id, def FROM packs_state').all();
-    const backed = new Set(rows.map(r => backingId(r.id, parseJson(r.def, null))));
+    const backed = new Set(rows.map(r => manifestIdOf(r.id, parseJson(r.def, null))));
     const missing = packs.filter(p => !backed.has(p.id) && !rows.some(r => r.id === p.id));
     const insert = db.prepare(`INSERT INTO packs_state (id, def, active, exploring, what_if_asked, what_if_done, unhid, sort, updated_at)
                                VALUES (?, ?, NULL, 0, 0, 0, '[]', (SELECT coalesce(max(sort) + 1, 0) FROM packs_state), ?)`);
@@ -103,7 +102,7 @@ export function createLivePacks(db, { dataDir } = {}) {
   }
 
   function backing(rowId, def) {
-    const id = backingId(rowId, def);
+    const id = manifestIdOf(rowId, def);
     return loaded().find(p => p.id === id) || null;
   }
 

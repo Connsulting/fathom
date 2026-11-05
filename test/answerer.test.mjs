@@ -1085,6 +1085,7 @@ test('R3 A contract: no tool the answerer offers returns a sentinel argument out
   assert.deepEqual(sorted(names), sorted([...REGISTRY.filter(x => x.scope === 'read').map(x => x.name), PROPOSE]),
     'every read tool and the local proposal tool, nothing else');
   const recId = s.db.prepare("SELECT id FROM recs WHERE status != 'hidden' ORDER BY id LIMIT 1").get().id;
+  const realPack = s.packs.loaded().find(p => p.id === 's-corp-owner');
   const ctx = { db: s.db, now: clockNow(s.db) };
 
   const calls = [];
@@ -1098,6 +1099,9 @@ test('R3 A contract: no tool the answerer offers returns a sentinel argument out
       const schema = props[name];
       if (schema.enum) base[name] = schema.enum[0];
       else if (name === 'id') base[name] = recId;
+      else if (name === 'packId') base[name] = realPack.id;
+      else if (name === 'file') base[name] = realPack.entries[0].file;
+      else if (name === 'query') base[name] = 'tax';
       else assert.fail(`extend the contract test: ${tool.name} requires ${name}`);
     }
     // An integer sentinel in range that the tool never returns for real arguments at their widest.
