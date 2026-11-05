@@ -220,13 +220,14 @@ function applyFactCheck(db, item, optionId, { now }) {
 }
 
 // near_duplicate same: the newer row (higher id) is archived and removed. The tombstone keeps the
-// row's normalized description, so a later row with its key is skipped only when it is that posting.
+// row's normalized description, so a later row with its key is skipped only when it is that posting,
+// and the kept row's key, so a later collision on the dropped key is asked about against it.
 function confirmDuplicate(db, item, { now }) {
   const keys = item.subject.split('|');
   const rows = keys.map((k) => db.prepare('SELECT * FROM transactions WHERE dedupe_key = ?').get(k)).filter(Boolean);
   if (rows.length < 2) return;
   const [keep, drop] = rows.sort((a, b) => a.id - b.id);
-  archive(db, 'transactions', { ...drop, normalized_description: normalizeName(drop.description) }, { by: keep.file_id, reason: 'duplicate_confirmed', now });
+  archive(db, 'transactions', { ...drop, normalized_description: normalizeName(drop.description) }, { by: keep.file_id, reason: 'duplicate_confirmed', now, survivorKey: keep.dedupe_key });
   db.prepare('DELETE FROM transactions WHERE id = ?').run(drop.id);
 }
 
@@ -380,8 +381,9 @@ export function recordFact(db, { key, value, confidence = 1, sourceId = null, fi
   return { written: true, changed: r.changed, queued };
 }
 
-// Archive a stored row in superseded_rows. `by` is the file that replaced it.
-export function archive(db, table, row, { by = null, reason, now, fileId } = {}) {
-  db.prepare('INSERT INTO superseded_rows (table_name, dedupe_key, row, file_id, superseded_by, reason, at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .run(table, row.dedupe_key ?? null, JSON.stringify(row), fileId !== undefined ? fileId : (row.file_id ?? null), by, reason, stamp(now));
+// Archive a stored row in superseded_rows. `by` is the file that replaced it; `survivorKey` the
+// dedupe key of the row a confirmed duplicate was kept against.
+export function archive(db, table, row, { by = null, reason, now, fileId, survivorKey = null } = {}) {
+  db.prepare('INSERT INTO superseded_rows (table_name, dedupe_key, row, file_id, superseded_by, reason, at, survivor_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(table, row.dedupe_key ?? null, JSON.stringify(row), fileId !== undefined ? fileId : (row.file_id ?? null), by, reason, stamp(now), survivorKey);
 }

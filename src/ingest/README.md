@@ -136,7 +136,9 @@ status `imported`, `duplicate`, `needs_mapping`, `needs_extraction`,
    `counts.crossFormat` when only a word is shared and archived as
    `duplicate_cross_format`. Any other description is another transaction: it is
    stored under `<key>:d:<first 16 hex of SHA256 of the normalized description>`
-   and asks `near_duplicate` whatever the distance between the dates. An alt key
+   and asks `near_duplicate` whatever the distance between the dates, against the
+   collided key's active row or, when that key holds only a confirmed duplicate,
+   the row it was confirmed against (`survivor_key` on the tombstone). An alt key
    already stored or confirmed duplicate is a duplicate with no new question. The
    same amount within three days from another file asks `near_duplicate` too,
    once per pair (subject: the two keys sorted). Balances and

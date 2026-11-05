@@ -250,7 +250,7 @@ Money columns are dollars rounded to cents; JSON columns hold JSON text. The pro
 | `job_runs` | `id` PK, `job_id`, `started_at`, `finished_at`, `status`, `cost_usd`, `note` |
 | `api_keys` | `id` PK, `name`, `key_hash`, `scopes` JSON, `created_at`, `last_used_at`, `revoked_at` |
 | `spend_ledger` | `id` PK, `ts`, `yyyymm` `'YYYY-MM'`, `purpose`, `cost_usd`, `model`, `tokens` JSON |
-| `superseded_rows` | `id` PK, `table_name`, `dedupe_key`, `row` JSON (the archived row), `file_id`, `superseded_by` (references `files.id`), `reason` (`revised`, `removed`, `older_snapshot`, `alias_merged`, `duplicate_confirmed`, `duplicate_cross_format`, `duplicate`, `summarized`), `at` |
+| `superseded_rows` | `id` PK, `table_name`, `dedupe_key`, `row` JSON (the archived row), `file_id`, `superseded_by` (references `files.id`), `reason` (`revised`, `removed`, `older_snapshot`, `alias_merged`, `duplicate_confirmed`, `duplicate_cross_format`, `duplicate`, `summarized`), `at`, `survivor_key` (for `duplicate_confirmed`, the dedupe key of the row it was confirmed against) |
 | `confirm_items` | `id` PK, `kind`, `subject`, `question`, `options` JSON `[{id, label}]`, `context` JSON, `status` in pending, answered, `answer`, `file_id`, `created_at`, `answered_at`; unique (`kind`, `subject`) |
 | `column_mappings` | `signature` PK (header signature), `mapping` JSON, `src`, `created_at`, `uses` |
 | `entity_aliases` | `alias` PK (normalized alias name), `entity` (canonical display name), `created_at` |
@@ -467,7 +467,9 @@ and anything ambiguous becomes a short question in the confirm queue.
    `duplicate_cross_format`; `counts.crossFormat` when only a word is shared). Any other
    description stores a second transaction under `<key>:d:<16 hex of the description hash>` and
    asks `near_duplicate` whatever the distance between the dates, once per pair even when the
-   three-day proximity question also applies. Accounts are upserted
+   three-day proximity question also applies. When the collided key holds no active row, the
+   question pairs the new row with the active row its `duplicate_confirmed` tombstone names in
+   `survivor_key`. Accounts are upserted
    by `identity` (`acct-` plus 16 hex of its hash), with `mirror` `manual` and masks of 4 digits
    only.
 4. Revisions: P and L and tax workbook rows carry a `source_slot`; a later workbook replaces the

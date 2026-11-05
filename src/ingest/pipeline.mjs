@@ -350,6 +350,15 @@ function samePosting(list, description, parser) {
   return shared ? { match: 'cross_words', observation: shared } : null;
 }
 
+const activeKey = (db, key) => (db.prepare('SELECT 1 FROM transactions WHERE dedupe_key = ?').get(key) ? key : null);
+function activeCounterpart(db, key) {
+  if (activeKey(db, key)) return key;
+  const survivors = db.prepare(`SELECT survivor_key FROM superseded_rows WHERE table_name = 'transactions' AND dedupe_key = ? AND reason = 'duplicate_confirmed'
+                                AND survivor_key IS NOT NULL ORDER BY id DESC`).all(key);
+  for (const { survivor_key: survivor } of survivors) if (activeKey(db, survivor)) return survivor;
+  return null;
+}
+
 const NEAR_DATES = 'Two imports show the same amount on this account within three days. Are they the same transaction?';
 const NEAR_KEY = 'Two imports show the same amount and date or reference number on this account with different descriptions. Are they the same transaction?';
 
@@ -390,10 +399,10 @@ function putTransaction(ctx, row, parser, locator) {
                            AND (file_id IS NULL OR file_id != ?) AND dedupe_key != ? ORDER BY id`)
     .all(row.accountId, Math.round(row.amount * 100), addDays(row.date, -3), addDays(row.date, 3), fileId, key);
   const others = near.map((other) => [other.dedupe_key, NEAR_DATES]);
-  // A key collision kept under the alt key is asked about whatever the distance between the dates.
-  if (collided && !near.some((other) => other.dedupe_key === collided) && db.prepare('SELECT 1 FROM transactions WHERE dedupe_key = ?').get(collided)) {
-    others.push([collided, NEAR_KEY]);
-  }
+  // A key collision kept under the alt key is asked about whatever the distance between the dates,
+  // against the collided key's active row, or the row its confirmed duplicate was kept against.
+  const counterpart = collided && activeCounterpart(db, collided);
+  if (counterpart && counterpart !== key && !near.some((other) => other.dedupe_key === counterpart)) others.push([counterpart, NEAR_KEY]);
   for (const [other, question] of others) {
     const subject = [key, other].sort().join('|');
     tally(ctx, ask(db, {

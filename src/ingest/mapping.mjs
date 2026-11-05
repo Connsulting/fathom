@@ -79,13 +79,13 @@ function workbookTable(file) {
     const columns = [...head.cells.keys()];
     const headers = columns.map((c) => header(head.cells.get(c).value));
     if (new Set(headers).size !== headers.length || headers.some((h) => !h)) return null;
-    // Every row is widened to the header, so the widened table is budgeted before it is built.
-    let filled = 0;
-    for (let r = at + 1; r < sheet.rows.length; r++) if (sheet.rows[r].cells.size) filled++;
-    if (filled * columns.length > LIMITS.cells) throw new LimitError('Workbook table has too many cells');
-    const rows = sheet.rows.slice(at + 1)
-      .map((row) => ({ values: columns.map((c) => { const v = row.cells.get(c)?.value; return v === undefined || v === null ? '' : v; }), locator: { sheet: sheet.name, row: row.number } }))
-      .filter((r) => r.values.some((v) => String(v).trim()));
+    // Data-less rows are dropped first; only the rows that are widened to the header are budgeted.
+    const data = sheet.rows.slice(at + 1).filter((row) => columns.some((c) => {
+      const v = row.cells.get(c)?.value;
+      return v !== undefined && v !== null && String(v).trim() !== '';
+    }));
+    if (data.length * columns.length > LIMITS.cells) throw new LimitError('Workbook table has too many cells');
+    const rows = data.map((row) => ({ values: columns.map((c) => { const v = row.cells.get(c)?.value; return v === undefined || v === null ? '' : v; }), locator: { sheet: sheet.name, row: row.number } }));
     return rows.length ? { headers, rows } : null;
   }
   return null;
