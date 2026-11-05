@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { parsers, listParsers, pickParser } from '../../src/ingest/registry.mjs';
+import { writeXlsx } from '../helpers/xlsx.mjs';
 import { dedupeKey } from '../../src/ingest/dedupe.mjs';
 
 const fixture = (name) => ({ name, bytes: readFileSync(new URL(`../fixtures/ingest/${name}`, import.meta.url)) });
@@ -324,4 +325,14 @@ test('dedupe supports every row kind, ignores locators, and canonicalizes docume
   }
   assert.equal(dedupeKey({ kind: 'document', docType: 'test', fields: { b: 2, a: 1 } }), dedupeKey({ kind: 'document', docType: 'test', fields: { a: 1, b: 2 } }));
   assert.throws(() => dedupeKey({ kind: 'unknown' }), /Unsupported row kind/);
+});
+
+test('an uncached formula in a tax Month cell warns invalid_tax_month with its locator', () => {
+  const head = [[null, 'Federal', null, 'State'], ['Month', 'Owner Paid', 'Spouse Paid', 'Owner Paid', 'Spouse Paid']];
+  const file = { name: 'tax-month.xlsx', bytes: new Uint8Array(writeXlsx([{ name: '2032', rows: [...head, ['January', 100, 50, 30, 20], [{ formula: 'A2' }, 120, 60, null, null]] }])) };
+  const { rows, warnings } = pickParser(file).parse(file);
+  assert.equal(rows.length, 4, 'the readable month still parses');
+  const warn = warnings.find((w) => w.code === 'invalid_tax_month');
+  assert.ok(warn, 'invalid_tax_month warning present');
+  assert.deepEqual(warn.locator, { sheet: '2032', cell: 'A5' });
 });

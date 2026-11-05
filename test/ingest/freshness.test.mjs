@@ -329,3 +329,31 @@ describe('how to export', () => {
     assert.equal(H.howToFor('no_such_kind'), null);
   });
 });
+
+// Review finding F6: the files list is limited, so a waiting file must also be listed in `waiting`.
+describe('waiting files', () => {
+  test('an old needs_mapping file stays in waiting after 50+ newer files; retryFile still works', () => withStore(async (s) => {
+    const off = await offEngine();
+    const odd = await P.ingestFile(s.db, { name: 'odd.csv', bytes: new TextEncoder().encode('Zeta,Omega,Sigma\nq,w,e\nr,t,y\n'), mime: 'text/csv' }, s.opts(off));
+    assert.equal(odd.status, 'needs_mapping');
+    for (let i = 0; i < 55; i++) {
+      const csv = `month,account_alias,ending_balance\n2032-02,acct${i},${1000 + i}.25\n`;
+      const r = await P.ingestFile(s.db, { name: `bal-${i}.csv`, bytes: new TextEncoder().encode(csv), mime: 'text/csv' }, s.opts(off));
+      assert.equal(r.status, 'imported', `file ${i}`);
+    }
+    const st = FR.ingestState(s.db, { clock: '2032-03-10' });
+    assert.ok(!st.files.some((f) => f.id === odd.fileId), 'older than the files limit');
+    assert.ok(Array.isArray(st.waiting), 'waiting array present');
+    const w = st.waiting.find((f) => f.id === odd.fileId);
+    assert.ok(w, 'the waiting file is listed');
+    assert.deepEqual(Object.keys(w).sort(), ['counts', 'id', 'name', 'parser', 'sourceKind', 'status', 'uploadedAt']);
+    assert.equal(w.name, 'odd.csv');
+    assert.equal(w.status, 'needs_mapping');
+    assert.ok(st.waiting.every((f) => ['needs_mapping', 'needs_extraction'].includes(f.status)));
+    const sc = B.buildScenario(s.db, { clock: '2032-03-10' });
+    assert.ok(sc.live.ingest.waiting.some((f) => f.id === odd.fileId), 'scenario carries the waiting file');
+    const again = await P.retryFile(s.db, odd.fileId, s.opts(off));
+    assert.equal(again.status, 'needs_mapping');
+    assert.ok(FR.ingestState(s.db, { clock: '2032-03-10' }).waiting.some((f) => f.id === odd.fileId));
+  }));
+});

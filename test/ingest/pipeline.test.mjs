@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { src } from '../helpers/server.mjs';
+import { writeXlsx } from '../helpers/xlsx.mjs';
 import {
   fixture, textFile, aggregatorFile, studioRemovalFile, activityFile, coveragePnlFile, coverageTaxFile, positionsFile, unreadablePnlFile, unreadableTaxFile,
   realStore, fakeEngine, offEngine, all, one, count, items, sha256, fileIdOf,
@@ -653,5 +654,35 @@ describe('partly unreadable workbooks', () => {
     const r = await P.ingestFile(s.db, unreadableTaxFile('marchGone'), s.opts(off));
     assert.equal(r.counts.superseded, 2);
     assert.deepEqual(removedFrom(s.db, 'tax_payments').map((x) => JSON.parse(x.row).amount).sort((a, b) => a - b), [60, 120]);
+  }));
+});
+
+// Review finding F5: a Month label cell that cannot be read (formula without a cached value) must
+// not be taken as "the month is gone". The parser warns invalid_tax_month and the pipeline keeps
+// every stored payment of that sheet.
+describe('unreadable tax month label', () => {
+  const taxWithMonthCell = (marchCell, name) => {
+    const head = [[null, 'Federal', null, 'State'], ['Month', 'Owner Paid', 'Spouse Paid', 'Owner Paid', 'Spouse Paid']];
+    const months = [['January', 100, 50, 30, 20], ['February', 110, null, 35, null], [marchCell, 120, 60, null, null]];
+    return { name, bytes: new Uint8Array(writeXlsx([{ name: '2032', rows: [...head, ...months] }])) };
+  };
+
+  test('an uncached Month formula keeps the stored payments and warns invalid_tax_month', () => withStore(async (s) => {
+    const off = await offEngine();
+    await P.ingestFile(s.db, unreadableTaxFile('base'), s.opts(off));
+    assert.equal(count(s.db, 'tax_payments'), 8);
+    const r = await P.ingestFile(s.db, taxWithMonthCell({ formula: 'A2' }, 'tax-month-unreadable.xlsx'), s.opts(off));
+    assert.equal(r.counts.warningCodes.invalid_tax_month, 1);
+    assert.equal(count(s.db, 'tax_payments'), 8, 'every stored payment of the sheet stays active');
+    assert.deepEqual(all(s.db, "SELECT * FROM superseded_rows WHERE table_name = 'tax_payments' AND reason = 'removed'"), []);
+  }));
+
+  test('control: a readable Month label with the month absent removes that month', () => withStore(async (s) => {
+    const off = await offEngine();
+    await P.ingestFile(s.db, unreadableTaxFile('base'), s.opts(off));
+    const r = await P.ingestFile(s.db, unreadableTaxFile('marchGone'), s.opts(off));
+    assert.equal(r.counts.warningCodes.invalid_tax_month ?? 0, 0);
+    assert.equal(count(s.db, 'tax_payments'), 6);
+    assert.equal(all(s.db, "SELECT * FROM superseded_rows WHERE table_name = 'tax_payments' AND reason = 'removed'").length, 2);
   }));
 });
