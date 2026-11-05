@@ -1,4 +1,5 @@
-/* Horizon ingest screens: Add files, file results, Confirm, pending banner, freshness, Sources.
+/* Horizon ingest screens: Add files, file results, the Confirm deck, pending banner, nav badge,
+   freshness, Sources.
    Uses the Horizon tokens from design.css. Every selector is scoped. */
 
 /* pending banner */
@@ -6,14 +7,14 @@
   display: flex; align-items: center; gap: 14px; margin-top: 44px; padding: 14px 16px;
   border: 1px solid var(--acl); border-radius: 10px; background: var(--acd); color: var(--tx);
 }
-.d-horizon .h-ing-banner:hover { border-color: var(--ac); }
 .d-horizon .h-ing-banner > .h-i { color: var(--ac); }
-.d-horizon .h-ing-banner > .h-i:last-child { margin-left: auto; }
+.d-horizon .h-ing-banner .h-ing-start { margin-left: auto; flex: none; }
 .d-horizon .h-ing-banner-t { display: flex; flex-direction: column; min-width: 0; }
 .d-horizon .h-ing-banner-t b { font-weight: 500; }
 .d-horizon .h-ing-banner-t span { color: var(--mu); font-size: 13px; }
 .d-horizon .h-ing-banner + .h-sec { margin-top: 28px; }
 .d-horizon .h-ro + .h-ing-banner { margin-top: 12px; }
+.d-horizon .h-hero .h-ing-banner { margin: 20px 0 4px; max-width: 68ch; }
 
 /* add files and per-file results */
 .d-horizon .h-ing-add > p { margin-bottom: 12px; }
@@ -63,20 +64,77 @@
 .d-horizon .h-howto ol li { padding: 2px 0; }
 .d-horizon .h-howto details > p { padding: 0 0 12px 22px; }
 
-/* confirm */
-.d-horizon .h-cfs { display: grid; gap: 1px; }
-.d-horizon .h-cf { padding: 16px 0 18px; border-bottom: 1px solid var(--line); }
-.d-horizon .h-cf:first-child { padding-top: 2px; }
+/* nav badge: pending confirm count */
+.d-horizon .h-nav-n {
+  display: inline-block; margin-left: 6px; min-width: 18px; padding: 0 5px; border-radius: 999px;
+  background: var(--acd); color: var(--ac); font: 500 11px/17px var(--mono); text-align: center; vertical-align: 1px;
+}
+
+/* confirm deck */
+.d-horizon .h-deck { max-width: 680px; }
+.d-horizon .h-deck-top { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; }
+.d-horizon .h-deck-pos { font: 12.5px var(--mono); color: var(--mu); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.d-horizon .h-deck-bar { flex: 1; min-width: 0; height: 3px; border-radius: 2px; background: var(--line2); overflow: hidden; }
+.d-horizon .h-deck-bar i { display: block; height: 100%; background: var(--ac); transition: width 0.2s ease; }
+.d-horizon .h-deck-top .h-btn { height: 28px; padding: 0 10px; }
+.d-horizon .h-deck .h-btn.ghost[disabled] { color: var(--fa); background: transparent; cursor: default; opacity: 0.6; }
+
+.d-horizon .h-deck-stack { position: relative; }
+.d-horizon .h-deck-stack.n1 { padding-bottom: 10px; }
+.d-horizon .h-deck-stack.n2 { padding-bottom: 20px; }
+.d-horizon .h-deck-card, .d-horizon .h-deck-peek { border: 1px solid var(--line2); border-radius: 12px; background: var(--s1); }
+.d-horizon .h-deck-card {
+  position: relative; z-index: 2; padding: 22px 24px 20px; touch-action: pan-y;
+  transition: transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.d-horizon .h-deck-card.drag { transition: none; user-select: none; -webkit-user-select: none; }
+.d-horizon .h-deck-peek { position: absolute; left: 0; right: 0; top: 0; transform-origin: 50% 100%; }
+.d-horizon .h-deck-stack.n1 .h-deck-peek { bottom: 10px; }
+.d-horizon .h-deck-stack.n2 .h-deck-peek { bottom: 20px; }
+.d-horizon .h-deck-peek.p1 { z-index: 1; transform: translateY(10px) scale(0.965); opacity: 0.7; }
+.d-horizon .h-deck-peek.p2 { z-index: 0; transform: translateY(20px) scale(0.93); opacity: 0.4; }
+
 .d-horizon .h-cf-k { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ac); font-weight: 500; }
 .d-horizon .h-cf-k span { color: var(--fa); text-transform: none; letter-spacing: 0; font-weight: 400; overflow-wrap: anywhere; }
-.d-horizon .h-cf-q { font-size: 15.5px; color: var(--tx); margin: 6px 0 12px; overflow-wrap: anywhere; }
-.d-horizon .h-cf .h-btn { white-space: normal; height: auto; min-height: 32px; padding-top: 5px; padding-bottom: 5px; text-align: left; }
-.d-horizon .h-cf .h-btn[disabled] { cursor: progress; opacity: 0.6; }
+.d-horizon .h-deck-card .h-cf-k { justify-content: space-between; }
+.d-horizon .h-deck-card .h-cf-k span { min-width: 0; max-width: 60%; text-align: right; }
+.d-horizon .h-cf-q { font-size: 21px; line-height: 1.35; letter-spacing: -0.01em; color: var(--tx); margin: 12px 0 18px; overflow-wrap: anywhere; }
+.d-horizon .h-cf-guess { margin: -6px 0 16px; font-size: 13px; color: var(--mu); overflow-wrap: anywhere; }
+.d-horizon .h-cf-guess b { color: var(--ac); font-weight: 500; }
+.d-horizon .h-cf-why { display: block; margin-top: 2px; color: var(--fa); }
 
+.d-horizon .h-deck-opts { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr)); gap: 8px; }
+.d-horizon .h-deck-card .h-btn {
+  display: block; width: 100%; height: auto; min-height: 40px; padding: 9px 12px; white-space: normal;
+  text-align: left; font-size: 14px; line-height: 1.4; overflow-wrap: anywhere;
+}
+.d-horizon .h-deck-n { font-family: var(--mono); font-size: 12px; color: var(--fa); }
+.d-horizon .h-deck-card .h-btn.pri .h-deck-n { color: inherit; }
+.d-horizon .h-deck-card .h-btn[data-guess="1"]:not(.pri) { border-color: var(--acl); }
+.d-horizon .h-deck-card .h-btn[disabled] { cursor: default; opacity: 0.55; }
+.d-horizon .h-deck-card .h-btn.pri[disabled] { opacity: 1; }
+.d-horizon .h-deck-state { margin-top: 14px; font-size: 12.5px; color: var(--fa); }
+.d-horizon .h-cf-final { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); font-size: 13px; color: var(--tx2); }
+
+.d-horizon .h-deck-top + .h-empty { border: 1px solid var(--line2); border-radius: 12px; padding: 24px; }
+.d-horizon .h-deck-nav { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 18px; }
+.d-horizon .h-deck-nav .h-btn { flex: none; }
+.d-horizon .h-deck-hint { flex: 1; min-width: 0; text-align: center; font-size: 12px; color: var(--fa); }
+.d-horizon .h-deck-hint .tch { display: none; }
+
+@media (hover: none) and (pointer: coarse) {
+  .d-horizon .h-deck-hint .kb { display: none; }
+  .d-horizon .h-deck-hint .tch { display: inline; }
+}
 @media (prefers-reduced-motion: reduce) {
-  .d-horizon .h-howto summary .h-i { transition: none; }
+  .d-horizon .h-howto summary .h-i, .d-horizon .h-deck-card, .d-horizon .h-deck-bar i { transition: none; }
 }
 @media (max-width: 720px) {
   .d-horizon .h-ing-banner { padding: 12px 14px; gap: 12px; }
-  .d-horizon .h-cf-q { font-size: 15px; }
+  .d-horizon .h-deck-card { padding: 18px 16px 16px; }
+  .d-horizon .h-cf-q { font-size: 18px; }
+  .d-horizon .h-deck-opts { grid-template-columns: minmax(0, 1fr); }
+  .d-horizon .h-deck-opts.short { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .d-horizon .h-deck-nav { flex-wrap: wrap; }
+  .d-horizon .h-deck-hint { order: 3; flex-basis: 100%; }
 }

@@ -23,7 +23,7 @@ import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { test, expect, resetDemo, gotoRoute, attentionHeadline, plain, S, REMOTE } from './helpers.mjs';
 
-const JOB_IDS = ['plan', 'brief-email', 'deadline-alerts', 'freshness'];
+const JOB_IDS = ['plan', 'brief-email', 'deadline-alerts', 'freshness', 'confirm-guess'];
 
 // The main e2e server's data directory (playwright.config.mjs runs it on .e2e-data at the repo root).
 const OUTBOX = join(fileURLToPath(new URL('..', import.meta.url)), '.e2e-data', 'outbox');
@@ -63,7 +63,7 @@ test('the demo shows one jobs list', async ({ page }) => {
   assert.deepEqual(jobs.map((j) => j.id), JOB_IDS);
   await gotoRoute(page, 'engine');
   const rows = page.locator('.h-jt .h-jt-r');
-  await expect(rows).toHaveCount(4);
+  await expect(rows).toHaveCount(JOB_IDS.length);
   for (let i = 0; i < jobs.length; i++) {
     await expect(rows.nth(i).locator('.h-jt-n b')).toHaveText(plain(jobs[i].name));
   }

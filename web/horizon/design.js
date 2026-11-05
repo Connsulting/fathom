@@ -27,7 +27,7 @@ const VALUE = { tax: 'Tax', timing: 'Timing', retire: 'Retirement', risk: 'Risk'
 const TRIGGER = { calendar: 'Calendar', income: 'Income change', life: 'Life event', goal: 'Goal', advisor: 'Advisor' };
 const KIND = { business: 'Business', checking: 'Cash', cash: 'Cash', taxable: 'Investing', retirement: 'Retirement', roth: 'Retirement', hsa: 'Health', '529': 'Education' };
 
-const NAV = [['brief', 'Year'], ['plan', 'Plan'], ['wargame', 'Decide'], ['ask', 'Ask'], ['packs', 'Packs']];
+const NAV = [['brief', 'Year'], ['confirm', 'Confirm'], ['plan', 'Plan'], ['wargame', 'Decide'], ['ask', 'Ask'], ['packs', 'Packs']];
 const MORE = [
   ['Household', [['goals', 'Goals'], ['accounts', 'Accounts'], ['advisor', 'Advisor'], ['yearend', 'Year end']]],
   ['System', [['connect', 'Connect'], ['engine', 'Engine'], ['email', 'Email']]]
@@ -377,7 +377,8 @@ function whoLine() {
 
 // The label a NAV entry shows, in the top nav and the tab bar alike.
 function navLabel(k, l) {
-  return l;
+  const pending = k === 'confirm' ? Number(api.ingest().pending) || 0 : 0;
+  return pending > 0 ? `${l}<span class="h-nav-n">${pending}</span>` : l;
 }
 
 // Phone-width bottom tab bar: the NAV entries in TAB_ICON, hidden above 720px by CSS.
@@ -435,7 +436,7 @@ function pBrief() {
   const hero = `<section class="h-hero${clear ? ' clear' : ''}">
     <div class="h-kicker">${MONTH_FULL[c.getUTCMonth()]} brief<span>${T(api.s.meta.clockLabel)}</span><span>Data through ${T(api.s.meta.dataThrough)}</span></div>
     <h1 class="h-verdict">${clear ? `<i class="h-ok">${icon('check')}</i>` : ''}<span>${T(v.headline)}</span></h1>
-    <p class="h-lede">${T(v.sub)}</p>
+    <p class="h-lede">${T(v.sub)}</p>${ingest.pendingBanner()}
     <p class="h-lede">${goA('add', 'Add more files')}</p>
   </section>`;
 
@@ -471,7 +472,7 @@ function pBrief() {
 
   return shell(`${hero}${tl}
     <div class="h-cols">
-      <div class="h-col-main">${ingest.pendingBanner()}${section(clear ? 'Needs you' : `Needs you <em>${ny.length}</em>`, needs)}
+      <div class="h-col-main">${section(clear ? 'Needs you' : `Needs you <em>${ny.length}</em>`, needs)}
         ${section('Covered', `<div class="h-doms">${doms}</div>`, `${arr(api.s.domains).filter((d) => liveDomainStatus(d, ny) === 'covered').length} of ${arr(api.s.domains).length} quiet`)}</div>
       <div class="h-col-side">${section('What changed', changed)}
         <div class="h-mailnote">${icon('doc')}<div>This brief also went out as your monthly email. ${goA('email', 'Read the email')}</div></div></div>
@@ -1181,7 +1182,7 @@ function draw() {
     case 'goals': html = pGoals(); break;
     case 'accounts': html = pAccounts(); break;
     case 'add': html = pAdd(); break;
-    case 'confirm': html = ingest.confirmPage(); break;
+    case 'confirm': html = ingest.confirmPage(routeChanged); break;
     case 'advisor': html = pAdvisor(); break;
     case 'packs': html = packsScreen.render(r.params?.id); break;
     case 'yearend': html = pYearend(); break;
@@ -1191,6 +1192,12 @@ function draw() {
     default: html = pBrief();
   }
   page.innerHTML = html;
+  // On a narrow screen the main nav scrolls inside itself; keep the active link in view.
+  const navOn = page.querySelector('.h-nav a.on');
+  if (navOn) {
+    const over = navOn.getBoundingClientRect().right - navOn.parentElement.getBoundingClientRect().right;
+    if (over > 0) navOn.parentElement.scrollLeft = over;
+  }
   page.querySelectorAll('.h-tl-scroll').forEach((el, i) => {
     if (!routeChanged && scrollers[i] != null) el.scrollLeft = scrollers[i];
     else if (el.scrollWidth > el.clientWidth) el.scrollLeft = Math.max(0, Number(el.dataset.now) - el.clientWidth * 0.25);
@@ -1349,6 +1356,9 @@ function onToggle(e) {
   if (k && ui) ui.det[k] = e.target.open;
 }
 
+const onPointer = (e) => ingest?.handlePointer(e);
+const POINTER = ['pointerdown', 'pointermove', 'pointerup', 'pointercancel'];
+
 function onKey(e) {
   if ((e.key === 'Enter' || e.key === ' ') && e.target.matches?.('[data-wg][tabindex]')) { e.preventDefault(); onClick(e); }
   if (e.key === 'Escape' && ui.modal != null) { ui.modal = null; draw(); }
@@ -1375,7 +1385,7 @@ function onDocumentKey(e) {
 // Helpers the screen modules use. Getters, because api, root and ui change on mount.
 const SCREENS = [switcher, chatScreen, packsScreen, engineScreen];
 const KIT = {
-  get api() { return api; }, get root() { return root; }, get ui() { return ui; }, get keys() { return keys; },
+  get api() { return api; }, get root() { return root; }, get ui() { return ui; }, get keys() { return keys; }, get ingest() { return ingest; },
   draw: () => draw(),
   esc, T, X, arr, plural, icon, btn, goA, href, shell, section, pageHead, thread, composer, figHtml, recById,
   openRec, closeRec, decisionList, statusText, setMore, routeNow, visibleRecs
@@ -1397,6 +1407,7 @@ function mount(r, a) {
   root.addEventListener('change', onChange);
   root.addEventListener('keydown', onKey);
   root.addEventListener('toggle', onToggle, true);
+  POINTER.forEach((t) => root.addEventListener(t, onPointer));
   onResize = () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(draw, 120); };
   window.addEventListener('resize', onResize);
   onDocKey = onDocumentKey;
@@ -1421,6 +1432,7 @@ function unmount() {
     root.removeEventListener('change', onChange);
     root.removeEventListener('keydown', onKey);
     root.removeEventListener('toggle', onToggle, true);
+    POINTER.forEach((t) => root.removeEventListener(t, onPointer));
     switcher.unmount();
     root.innerHTML = '';
   }

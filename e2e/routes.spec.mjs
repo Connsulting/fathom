@@ -111,7 +111,7 @@ test.describe('routes', { tag: '@smoke' }, () => {
     await gotoRoute(page, 'brief');
     await expect(page.locator('.fx-harness')).toHaveCount(0);
 
-    await expect(mainNav(page).getByRole('link')).toHaveText(['Year', 'Plan', 'Decide', 'Ask', 'Packs']);
+    await expect(mainNav(page).getByRole('link')).toHaveText(['Year', /^Confirm\d*$/, 'Plan', 'Decide', 'Ask', 'Packs']);
 
     const more = page.getByRole('button', { name: 'More', exact: true });
     await expect(more).toHaveAttribute('aria-expanded', 'false');
