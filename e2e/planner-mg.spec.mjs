@@ -52,7 +52,7 @@ test.beforeEach(async ({ context }) => {
 
 test.beforeAll(async () => {
   const { buildRealStore, addFact, accountIdByMask, MASKS } = await import('../test/helpers/real-store.mjs');
-  const { runPlanning } = await import('../src/jobs/planner.mjs');
+  const { planRun } = await import('../test/helpers/plan.mjs');
   const { startServer } = await import('../src/server.mjs');
   const { loadConfig } = await import('../src/config.mjs');
   const { resolveTokens } = await import('../src/shared/tokens.mjs');
@@ -60,12 +60,12 @@ test.beforeAll(async () => {
   rmSync(DIR, { recursive: true, force: true });
   const db = await buildRealStore(DIR, { clock: CLOCK, variant: { facts: { 'household.names': { advisor: ADVISOR } } } });
   try {
-    expect((await runPlanning(db, null, { now: CLOCK })).status).toBe('ok');
+    expect((await planRun(db, { now: CLOCK, dataDir: DIR })).status).toBe('ok');
     db.prepare('INSERT OR IGNORE INTO conversations (key, created_at) VALUES (?, ?)').run(THREAD_REC, `${CLOCK}T09:00:00.000Z`);
     db.prepare("INSERT INTO messages (conversation_key, role, text, refs, notice, ts) VALUES (?, 'advisor', ?, '[]', 0, ?)")
       .run(THREAD_REC, '<p>Synthetic advisor note for this check.</p>', `${CLOCK}T10:00:00.000Z`);
     addFact(db, 'accounts.va529', { [accountIdByMask(db, MASKS.college)]: { virginiaPlan: true, ownerAge70Plus: false } });
-    expect((await runPlanning(db, null, { now: CLOCK })).status).toBe('ok');
+    expect((await planRun(db, { now: CLOCK, dataDir: DIR })).status).toBe('ok');
   } finally {
     db.close();
   }

@@ -1,7 +1,7 @@
 // AC7: the planner on a real-mode store, end to end through the UI. beforeAll builds the synthetic
-// household in .e2e-data-planner, runs the planner with no engine and starts a real-mode server in
-// process; every page is reached by full URL on that server. Skipped when BASE_URL targets a
-// remote server (nothing local is created then).
+// household in .e2e-data-planner, runs the plan job through the scheduler with no engine and
+// starts a real-mode server in process; every page is reached by full URL on that server. Skipped
+// when BASE_URL targets a remote server (nothing local is created then).
 
 import { rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -50,7 +50,7 @@ test.describe('AC7: planner on a real store', () => {
 
   test.beforeAll(async () => {
     const { buildRealStore } = await import('../test/helpers/real-store.mjs');
-    const { runPlanning } = await import('../src/jobs/planner.mjs');
+    const { planRun } = await import('../test/helpers/plan.mjs');
     const { startServer } = await import('../src/server.mjs');
     const { loadConfig } = await import('../src/config.mjs');
     const { needsYou } = await import('../src/shared/rules.mjs');
@@ -59,7 +59,7 @@ test.describe('AC7: planner on a real store', () => {
     rmSync(DIR, { recursive: true, force: true });
     const db = await buildRealStore(DIR, { clock: CLOCK });
     try {
-      const result = await runPlanning(db, null, { now: CLOCK });
+      const result = await planRun(db, { now: CLOCK, dataDir: DIR });
       expect(result.status).toBe('ok');
     } finally {
       db.close();
