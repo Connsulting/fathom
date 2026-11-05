@@ -172,3 +172,14 @@ test('supplied salary versus distributions exposes the combined hand-checked tra
   assert.ok(Math.abs(high.totalFederalTax - low.totalFederalTax - 5581.44) < 0.000001);
   assert.throws(() => sCorpSalaryTradeoff({ ...inputs, salary: 60000, salaryApproved: false }), /approved/);
 });
+
+test('S corp tradeoff coordinates Additional Medicare with spouse wages on a joint return', () => {
+  const inputs = { ...confirmed, profitBeforeSalary: 200000, salary: 100000, salaryApproved: true,
+    age: 40, filingStatus: 'mfj', deductions: 0, isSstb: false };
+  const alone = sCorpSalaryTradeoff(inputs).value;
+  const joint = sCorpSalaryTradeoff({ ...inputs, spouseMedicareWages: 200000 }).value;
+  assert.equal(joint.employeePayrollTax - alone.employeePayrollTax, 450);
+  assert.equal(joint.employerPayrollTax, alone.employerPayrollTax);
+  assert.equal(joint.totalFederalTax - alone.totalFederalTax, 450);
+  assert.equal(joint.distributions, alone.distributions);
+});

@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { consumeSdkMessages, messagesRound } from '../live.mjs';
+import { consumeSdkMessages, normalizeSdkRound, messagesRound } from '../live.mjs';
 import { DEFAULT_MODEL, usageCostUsd } from '../pricing.mjs';
-import { createEngine, createMemoryLedger, ModelAccountingError } from '../index.mjs';
+import { createEngine, createMemoryLedger, ModelAccountingError, ModelCallError } from '../index.mjs';
 
 test('recorded SDK terminal error result remains authoritative when the iterator then throws', async () => {
   // Observed with Agent SDK 0.3.318 in the opt-in tool smoke: result, then exception.
@@ -32,7 +32,37 @@ test('known partial cost records before the fake engine refuses further spending
   await assert.rejects(engine.call(request), ModelAccountingError);
   await assert.rejects(engine.call(request), ModelAccountingError);
   assert.equal(ledger.entries.length, 1);
-  assert.equal(ledger.entries[0].costUsd, 0.01);
+  assert.ok(ledger.entries[0].costUsd >= 0.01);
+  assert.equal(ledger.entries[0].tokens.knownCostUsd, 0.01);
+  assert.equal(ledger.entries[0].tokens.estimated, true);
+});
+
+test('success-subtype SDK API errors reject after recording their known cost', async () => {
+  for (const flags of [{ is_error: true, api_error_status: null }, { is_error: false, api_error_status: 401 }]) {
+    async function* stream() {
+      yield { type: 'result', subtype: 'success', ...flags, total_cost_usd: 0,
+        result: 'API authentication failed', usage: { input_tokens: 0, output_tokens: 0 } };
+    }
+    const observed = await consumeSdkMessages(stream());
+    const response = normalizeSdkRound(observed, { model: DEFAULT_MODEL, registry: { results: [] }, maxTokens: 128, maxBudgetUsd: 1 });
+    const ledger = createMemoryLedger();
+    const engine = createEngine({ mode: 'fake', ledger, responses: [response, { text: 'A valid neighboring response', costUsd: 0.01 }] });
+    const request = { purpose: 'chat', messages: [{ role: 'user', content: 'Hello' }] };
+    await assert.rejects(engine.call(request), ModelCallError);
+    assert.equal(ledger.entries.length, 1);
+    assert.equal(ledger.entries[0].costUsd, 0);
+    assert.equal((await engine.call(request)).text, 'A valid neighboring response');
+  }
+});
+
+test('the observed is_error flag on a paid max-turn tool boundary still permits continuation', async () => {
+  const observed = { result: { subtype: 'error_max_turns', is_error: true, api_error_status: null, total_cost_usd: 0.01 }, content: [] };
+  const response = normalizeSdkRound(observed, { model: DEFAULT_MODEL, registry: { results: [{ name: 'lookup', result: { value: 42 } }] }, maxTokens: 128, maxBudgetUsd: 1 });
+  const engine = createEngine({ mode: 'fake', responses: [{ ...response, toolCalls: [{ name: 'lookup' }] }, { text: '$42', costUsd: 0.001 }] });
+  const result = await engine.call({ purpose: 'chat', messages: [{ role: 'user', content: 'Look up the balance' }],
+    tools: [{ name: 'lookup', description: 'Read stored data', scope: 'read', inputSchema: { type: 'object', properties: {}, additionalProperties: false }, handler: async () => ({ value: 42 }) }] });
+  assert.equal(result.text, '$42');
+  assert.equal(result.grounding.ok, true);
 });
 
 test('Messages SDK extraction sends the document, stable cache breakpoint and JSON Schema without ambient auth', async () => {

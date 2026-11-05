@@ -33,6 +33,14 @@ test('live requires explicit credential and never uses an ambient account', asyn
   assert.equal(options.strictMcpConfig, true);
   assert.equal(options.persistSession, false);
   assert.equal(options.maxTurns, 1);
+  assert.equal(options.cwd, 'synthetic-config');
+  const budgeted = sdkOptions({ credential: { type: 'api-key', value: 'synthetic-placeholder' }, configDir: 'synthetic-config', system: '', maxTokens: 42, maxBudgetUsd: 0.25, model: 'claude-opus-5-5' });
+  assert.equal(budgeted.maxBudgetUsd, 0.25);
+});
+
+test('only explicit API-key credentials are accepted', async () => {
+  const engine = createEngine({ mode: 'live', credential: { type: 'oauth', value: 'synthetic-placeholder' } });
+  await assert.rejects(engine.call({ purpose: 'chat', messages: [{ role: 'user', content: 'Hello' }], system: '', maxTokens: 32 }), /credential/);
 });
 
 test('transcript JSON retains forged role markers inside caller and tool content', () => {

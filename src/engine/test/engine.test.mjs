@@ -150,3 +150,50 @@ test('public gateway drives a real deterministic calculator through registry, le
   assert.equal(result.grounding.ok, true);
   assert.equal(ledger.entries.length, 2);
 });
+
+test('invalid tool arguments are recorded and the next model round can correct them', async () => {
+  const ledger = createMemoryLedger();
+  let handlerCalls = 0;
+  const engine = createEngine({ mode: 'fake', ledger, responses: [
+    { toolCalls: [{ name: 'balance', args: { account: 'invalid' } }], is_error: true, costUsd: 0.01 },
+    { toolCalls: [{ name: 'balance', args: { account: 'demo' } }], is_error: true, costUsd: 0.01 },
+    { text: 'The balance is $125.', costUsd: 0.01 },
+  ] });
+  const result = await engine.call({ ...request, tools: [{ ...read, handler: async () => { handlerCalls++; return { value: 125 }; } }] });
+  assert.equal(handlerCalls, 1);
+  assert.equal(result.toolResults[0].isError, true);
+  assert.match(result.toolResults[0].result.error, /arguments/);
+  assert.equal(result.toolResults[1].result.value, 125);
+  assert.equal(result.grounding.ok, true);
+  assert.equal(ledger.entries.length, 3);
+});
+
+test('unknown billed cost reserves spend that survives engine recreation', async () => {
+  const ledger = createMemoryLedger();
+  const engine = createEngine({ mode: 'fake', ledger, capUsd: 0.001, responses: [{ costUsd: null, accountingUnknown: true }] });
+  await assert.rejects(engine.call({ ...request, maxTokens: 1000 }), /cost is incomplete/);
+  assert.ok(ledger.entries[0].costUsd >= 1000 * 20 / 1000000);
+  assert.equal(ledger.entries[0].tokens.estimated, true);
+  const restarted = createEngine({ mode: 'fake', ledger, capUsd: 0.001, responses: [{ text: 'must not run' }] });
+  await assert.rejects(restarted.call(request), BudgetExceededError);
+});
+
+test('each model round receives the remaining monthly budget', async () => {
+  const ledger = createMemoryLedger([{ ts: now().toISOString(), costUsd: 1, purpose: 'chat', model: 'fake', tokens: {} }]);
+  const engine = createEngine({ mode: 'fake', ledger, capUsd: 2, now, responses: [
+    { toolCalls: [{ name: 'balance', args: { account: 'demo' } }], costUsd: 0.25 },
+    { text: 'The balance is $125.', costUsd: 0.1 },
+  ] });
+  const result = await engine.call({ ...request, tools: [read] });
+  assert.equal(result.rounds[0].maxBudgetUsd, 1);
+  assert.equal(result.rounds[1].maxBudgetUsd, 0.75);
+});
+
+test('an SDK budget stop is recorded before the gateway reports the cap error', async () => {
+  const ledger = createMemoryLedger();
+  const engine = createEngine({ mode: 'fake', ledger, capUsd: 0.001, responses: [
+    { status: 'error_max_budget_usd', is_error: true, costUsd: 0.01, toolCalls: [{ name: 'balance', args: { account: 'demo' } }] },
+  ] });
+  await assert.rejects(engine.call({ ...request, tools: [read] }), error => error instanceof BudgetExceededError && error.toolResults[0].result.value === 125);
+  assert.equal(ledger.entries[0].costUsd, 0.01);
+});

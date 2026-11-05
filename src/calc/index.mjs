@@ -246,7 +246,8 @@ export function sCorpSalaryTradeoff(inputs) {
   const salary = money(inputs.salary, 'salary');
   const other = money(inputs.otherTaxableIncome ?? 0, 'otherTaxableIncome');
   const deductions = money(inputs.deductions ?? 0, 'deductions');
-  const payroll = payrollTax({ wages: salary, filingStatus: filing }).value;
+  const spouseMedicareWages = filing === 'mfj' ? money(inputs.spouseMedicareWages ?? 0, 'spouseMedicareWages') : 0;
+  const payroll = payrollTax({ wages: salary, filingStatus: filing, spouseMedicareWages }).value;
   const retirement = solo401kRoom({ ...inputs, compensation: salary, kind: 'w2' }).value;
   const employerPaid = money(inputs.employerContributions ?? 0, 'employerContributions');
   const employeePaid = money(inputs.thisPlanDeferrals ?? 0, 'thisPlanDeferrals');

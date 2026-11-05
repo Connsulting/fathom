@@ -20,6 +20,7 @@ export function createRegistryServer(registry = [], { purpose, ctx } = {}) {
   const invoke = async (name, args) => {
     const found = offered.find(item => item.entry.name === name);
     if (!found || !found.validate(args)) {
+      results.push({ name, args: structuredClone(args), isError: true, result: { error: 'Tool name or arguments rejected' } });
       return { isError: true, content: [{ type: 'text', text: 'Tool name or arguments rejected' }] };
     }
     try {

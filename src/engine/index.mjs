@@ -4,7 +4,7 @@ import { checkGrounding } from './grounding.mjs';
 import { compileSchema } from './schema.mjs';
 import { createRegistryServer } from './tools.mjs';
 import { sdkRound, messagesRound } from './live.mjs';
-import { DEFAULT_MODEL } from './pricing.mjs';
+import { DEFAULT_MODEL, estimateUnknownCost } from './pricing.mjs';
 import { EngineOffError, BudgetExceededError, RoundLimitError, ModelCallError, ModelAccountingError } from './errors.mjs';
 export { EngineOffError, BudgetExceededError, RoundLimitError, ModelCallError, ModelAccountingError } from './errors.mjs';
 export { checkGrounding } from './grounding.mjs';
@@ -46,7 +46,7 @@ export async function loadCredential(file = process.env.FATHOM_CLAUDE_CREDENTIAL
     const value = (await handle.readFile('utf8')).trim();
     if (!value) throw new TypeError('Credential file is empty');
     if (/\s/.test(value)) throw new TypeError('Credential must contain one token');
-    return { type: value.startsWith('sk-ant-oat') ? 'oauth' : 'api-key', value };
+    return { type: 'api-key', value };
   } catch (error) {
     if (error instanceof TypeError) throw error;
     throw new TypeError('Cannot read the explicit credential file');
@@ -55,7 +55,7 @@ export async function loadCredential(file = process.env.FATHOM_CLAUDE_CREDENTIAL
 
 function explicitCredential(credential) {
   const result = typeof credential === 'string' ? { type: 'api-key', value: credential } : credential;
-  if (!result || !['api-key', 'oauth'].includes(result.type) || typeof result.value !== 'string' || !result.value.trim() || /\s/.test(result.value)) {
+  if (!result || result.type !== 'api-key' || typeof result.value !== 'string' || !result.value.trim() || /\s/.test(result.value)) {
     throw new TypeError('An explicit live credential is required');
   }
   return result;
@@ -93,29 +93,49 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
             if (!scripted.length) throw new ModelCallError('Fake engine has no scripted response');
             const script = structuredClone(scripted.shift());
             await Promise.all((script.toolCalls ?? []).map(item => registry.invoke(item.name, item.args ?? {})));
-            round = { text: script.text ?? '', costUsd: script.costUsd ?? 0.001, model: 'fake', tokens: script.tokens ?? {},
+            round = { text: script.text ?? '', costUsd: Object.hasOwn(script, 'costUsd') ? script.costUsd : 0.001, model: 'fake', tokens: script.tokens ?? {},
               status: script.status ?? (script.toolCalls?.length ? 'error_max_turns' : 'success'),
+              is_error: script.is_error === true, api_error_status: script.api_error_status ?? null,
               accountingUnknown: script.accountingUnknown ?? false, toolResults: registry.results,
-              content: [{ type: 'text', text: script.text ?? '' }], details: {} };
+              content: [{ type: 'text', text: script.text ?? '' }], details: { maxBudgetUsd: capUsd - spend } };
           } else {
             try {
               round = await (purpose === 'extract' ? messagesRound : sdkRound)({ credential: auth, system,
-                messages: transcript, maxTokens, model: DEFAULT_MODEL, registry, schema });
+                messages: transcript, maxTokens, maxBudgetUsd: capUsd - spend, model: DEFAULT_MODEL, registry, schema });
             } catch {
-              poisoned = true;
-              throw new ModelCallError('Live model call failed; create a new engine after resolving the failure');
+              round = { text: '', content: [], status: 'transport_error', is_error: true,
+                accountingUnknown: true, model: DEFAULT_MODEL, tokens: {}, toolResults: registry.results, details: {} };
             }
+          }
+          const knownCost = Number.isFinite(round.costUsd) && round.costUsd >= 0 ? round.costUsd : 0;
+          if (round.accountingUnknown || !Number.isFinite(round.costUsd) || round.costUsd < 0) {
+            const estimate = estimateUnknownCost({ model: DEFAULT_MODEL, maxTokens, system, messages: transcript, tools });
+            round.costUsd = Math.max(knownCost, estimate.costUsd);
+            round.tokens = { ...round.tokens, estimated: true, knownCostUsd: knownCost,
+              estimatedInputTokens: estimate.inputTokens, estimatedOutputTokens: estimate.outputTokens };
+            round.accountingUnknown = true;
           }
           if (Number.isFinite(round.costUsd) && round.costUsd >= 0) {
             try { await ledger.record({ ts, purpose, costUsd: round.costUsd, model: round.model, tokens: round.tokens }); }
             catch { poisoned = true; throw new ModelAccountingError(); }
           } else { poisoned = true; throw new ModelAccountingError(); }
-          if (round.accountingUnknown) { poisoned = true; throw new ModelAccountingError(); }
+          if (round.accountingUnknown) {
+            poisoned = true;
+            if (round.is_error || round.api_error_status != null) throw new ModelCallError('Live model call failed; conservative spend was recorded');
+            throw new ModelAccountingError();
+          }
         } finally { await registry.instance.close(); }
       });
       cost += round.costUsd;
       rounds.push(round.details);
       allResults.push(...round.toolResults);
+      const toolBoundary = round.status === 'error_max_turns' && round.toolResults.length > 0;
+      if (round.api_error_status != null || (round.is_error && !toolBoundary && round.status !== 'error_max_budget_usd')) {
+        throw new ModelCallError('Model did not complete a valid response');
+      }
+      if (round.status === 'error_max_budget_usd') {
+        const error = new BudgetExceededError(); error.toolResults = allResults; throw error;
+      }
       if (!['success', 'error_max_turns'].includes(round.status)) throw new ModelCallError('Model did not complete a valid response');
       if (round.status === 'error_max_turns' && round.toolResults.length === 0) throw new ModelCallError('Model reached a turn limit without a tool result');
       if (round.toolResults.length === 0 || purpose === 'extract') {
