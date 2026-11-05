@@ -150,10 +150,9 @@ describe('GET /api/email preview (in-process router, fake engine)', () => {
     let calls = 0;
     const engine = { isOn: () => true, call: () => { calls++; throw new Error('should not be called'); } };
     const { createHandler } = await src('src/api/router.mjs');
-    const { createCannedAnswerer } = await src('src/api/answerer.mjs');
     const config = { dataDir: t.dataDir, clock: '2026-11-05', demo: true, engine: 'fake', port: 0, host: '127.0.0.1', claudeCredentialFile: null, emailTransport: 'dev', publicUrl: null };
     const transport = { name: 'capture', async send() { return { id: 'unused' }; } };
-    const server = http.createServer(createHandler({ db: t.db, config, answerer: createCannedAnswerer(), engine, transport }));
+    const server = http.createServer(createHandler({ db: t.db, config, engine, transport }));
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
     try {
       const r = await request(`http://127.0.0.1:${server.address().port}`, { path: '/api/email' });
@@ -197,12 +196,11 @@ describe('ingest triggers the plan job (in-process router, fake scheduler)', () 
   test('imported upload and successful retry trigger plan once each; nothing imported triggers nothing', T, async () => {
     const st = await realStore();
     const { createHandler } = await src('src/api/router.mjs');
-    const { createCannedAnswerer } = await src('src/api/answerer.mjs');
     const { headerSignature } = await src('src/ingest/mapping.mjs');
     const scheduler = fakeScheduler();
     const transport = { name: 'capture', async send() { return { id: 'unused' }; } };
     const server = http.createServer(createHandler({
-      db: st.db, config: st.config, answerer: createCannedAnswerer(), engine: await offEngine(), scheduler, transport,
+      db: st.db, config: st.config, engine: await offEngine(), scheduler, transport,
     }));
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
     const base = `http://127.0.0.1:${server.address().port}`;
