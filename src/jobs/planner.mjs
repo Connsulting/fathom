@@ -1,9 +1,11 @@
 // The planning run over a real-mode store: derive facts, compute figures and war-game models,
 // evaluate the trigger catalog, write prose (model when accepted, else template), then write
 // everything in one transaction. Runs are serialized per db handle and idempotent: a second run
-// over the same data changes no row.
+// over the same data changes no row. The scheduler's plan job (src/jobs/scheduler.mjs) is the only
+// caller: it claims the job_runs row, passes its id as runId and records status, timing, cost and
+// the counts note. planner_recs first_run and last_run reference that row.
 //
-// runPlanning(db, engine, {now, packDirs}) -> {runId, status, counts, warnings, costUsd}
+// runPlanning(db, engine, {now, packDirs, runId}) -> {runId, status, counts, warnings, costUsd}
 
 import { getSetting, tx, parseJson } from '../store/db.mjs';
 import { upsertFact } from '../store/facts.mjs';
@@ -32,15 +34,11 @@ export class PlannerError extends Error {
   }
 }
 
-const JOB = {
-  id: PLAN_JOB_ID, name: 'Planning run', cadence: 'On demand',
-  does: 'Derives facts and figures from your data, then refreshes your plan and brief.', cost: 0,
-};
-
 // One promise chain per db handle.
 const chains = new WeakMap();
 
 export function runPlanning(db, engine = null, opts = {}) {
+  if (!opts || !Number.isInteger(opts.runId)) throw new TypeError('runPlanning needs runId, the id of the job_runs row the scheduler claimed');
   const prior = chains.get(db) || Promise.resolve();
   const next = prior.catch(() => {}).then(() => run(db, engine, opts));
   chains.set(db, next.catch(() => {}));
@@ -55,24 +53,10 @@ function storedFacts(db) {
   return out;
 }
 
-async function run(db, engine, { now, packDirs } = {}) {
+async function run(db, engine, { now, packDirs, runId }) {
   if (getSetting(db, 'mode', null) === 'demo') throw new PlannerError('demo_store', 'planning runs on real stores only');
   const clock = resolveClock(db, isoDateOf(now));
-  db.prepare(`INSERT OR IGNORE INTO jobs (id, name, cadence, does, cost, next_label, last_label, enabled, sort)
-              VALUES (?, ?, ?, ?, ?, NULL, NULL, 1, (SELECT coalesce(max(sort) + 1, 0) FROM jobs))`)
-    .run(JOB.id, JOB.name, JOB.cadence, JOB.does, JOB.cost);
-  const runId = Number(db.prepare("INSERT INTO job_runs (job_id, started_at, status) VALUES (?, ?, 'running')").run(PLAN_JOB_ID, new Date().toISOString()).lastInsertRowid);
-  try {
-    const result = await plan(db, engine, { clock, runId, packDirs: packDirs ?? defaultPackDirs() });
-    db.prepare("UPDATE job_runs SET status = 'ok', finished_at = ?, cost_usd = ?, note = ? WHERE id = ?")
-      .run(new Date().toISOString(), result.costUsd, JSON.stringify(result.counts), runId);
-    return result;
-  } catch (err) {
-    const name = err && err.constructor && err.constructor.name ? err.constructor.name : 'Error';
-    db.prepare("UPDATE job_runs SET status = 'error', finished_at = ?, note = ? WHERE id = ?")
-      .run(new Date().toISOString(), JSON.stringify({ error: name, code: err instanceof PlannerError ? err.code : null }), runId);
-    throw err;
-  }
+  return plan(db, engine, { clock, runId, packDirs: packDirs ?? defaultPackDirs() });
 }
 
 async function plan(db, engine, { clock, runId, packDirs }) {

@@ -31,7 +31,7 @@ November state) and keeps its state across restarts.
 | `FATHOM_CLOCK` | unset | ISO date that overrides "today", for demos and tests. |
 | `FATHOM_CLAUDE_CREDENTIAL_FILE` | unset | Path to the mounted Claude credential. |
 | `FATHOM_DATA_KEY_FILE` | unset | Path to the file encryption key. |
-| `FATHOM_EMAIL_TRANSPORT` | `dev` | `dev`, `gmail`, `resend` or `postmark`. |
+| `FATHOM_EMAIL_TRANSPORT` | `dev` | `dev`, `smtp`, `resend`, `postmark` or `agentmail`. |
 | `FATHOM_PUBLIC_URL` | unset | URL MCP clients use to reach this server (http or https, no credentials, query or fragment). Its host is allowed on `/mcp` and every `/api` route. |
 | `FATHOM_ALLOWED_HOSTS` | unset | Comma separated extra host names (`host` or `host:port`) allowed on `/mcp` and every `/api` route. A deployment reached by a DNS name must set this or `FATHOM_PUBLIC_URL`. |
 | `FATHOM_OWNER_LOGINS` | unset | Comma separated Tailscale logins allowed into a real store. Unset on a real store, every page and `/api` route answers 401. |
@@ -51,6 +51,16 @@ Rebuild the demo store (refuses a real store):
 ```bash
 npm run seed:demo
 ```
+
+## Email
+
+Fathom sends a monthly brief and short deadline alerts. The default `dev` transport writes each
+message to `outbox/` in the data directory and sends nothing. For real delivery set
+`FATHOM_EMAIL_TRANSPORT` (AgentMail is the production target), the sender and recipients
+(`FATHOM_EMAIL_FROM`, `FATHOM_EMAIL_TO` or their `_FILE` forms) and mount the API key as a file other
+users cannot read (mode 0400, 0440 with fsGroup, or 0600) named by `FATHOM_EMAIL_CREDENTIAL_FILE`. The Email screen shows the
+status, a preview, the send history and the scheduled jobs. `FATHOM_LIVE_EMAIL=1 npm run
+email:test` sends one real test email; every key is listed in `docs/architecture.md`.
 
 ## Access
 

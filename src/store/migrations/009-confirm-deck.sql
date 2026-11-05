@@ -1,4 +1,4 @@
--- 008 confirm deck: per-answer change logs so a confirm answer can be revised or reopened, the
+-- 009 confirm deck: per-answer change logs so a confirm answer can be revised or reopened, the
 -- engine's best guess per pending question, and an ingest epoch that every file import bumps.
 -- confirm_undo.changes is the JSON log of every row the answer changed ([{table, op, rowid,
 -- before, after}], row images as JSON text); ingest_epoch is the epoch when it was recorded and

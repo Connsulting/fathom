@@ -41,6 +41,13 @@ async function readDb(file, fn) {
 }
 
 // A real store with data: facts, a conversation with a message, and the onboarding setting.
+// Recs in a real-store scenario that the planner does not own. The server's startup tick may run
+// the nightly plan job, so a real store can carry planner recs; it never carries seeded ones.
+async function nonPlannerRecs(file, sc) {
+  const planned = await readDb(file, db => db.prepare('SELECT rec_id FROM planner_recs').all().map(r => r.rec_id));
+  return sc.recs.filter(r => !planned.includes(r.id)).map(r => r.id);
+}
+
 async function populatedRealStore() {
   const dataDir = await tempDir();
   await withServer({ dataDir, env: { FATHOM_DEMO: '0' } }, async () => {});
@@ -411,7 +418,7 @@ describe('store modes', () => {
       await withServer({ dataDir, env, npm: env.FATHOM_DEMO === undefined }, async s => {
         const sc = await getScenario(s.baseUrl);
         assert.equal(sc.live.mode, 'real');
-        assert.deepEqual(sc.recs, []);
+        assert.deepEqual(await nonPlannerRecs(file, sc), [], 'no seeded recs');
         assert.equal(sc.live.demo, 'november', 'onboarding setting kept');
         assert.ok(sc.live.conversations.ask.some(m => m.text.includes('Synthetic note for the store test.')));
       });
@@ -452,7 +459,7 @@ describe('store modes', () => {
     await withServer({ dataDir: t.dataDir }, async s => {
       const sc = await getScenario(s.baseUrl);
       assert.equal(sc.live.mode, 'real');
-      assert.deepEqual(sc.recs, []);
+      assert.deepEqual(await nonPlannerRecs(t.file, sc), [], 'no seeded recs');
     });
     const before = await dumpStore(t.file);
     const r = await expectServerExit({ dataDir: t.dataDir, env: { FATHOM_DEMO: '1' } });

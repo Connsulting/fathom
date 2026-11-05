@@ -2,7 +2,8 @@
 // files for everything else.
 // `routes` is the route table (docs/architecture.md lists every entry; test/docs.test.mjs checks).
 // `upload: true` routes take multipart bodies (read by the handler through ctx.readUpload);
-// `ingest: true` routes never log error details, which could carry file contents.
+// `ingest: true` routes never log error details, which could carry file contents; `quiet: true`
+// routes (email and jobs) likewise log an error code only.
 
 import { fileURLToPath } from 'node:url';
 import { HttpError, setSecurityHeaders, sendJson, sendError, guardPost, readJsonBody } from './http.mjs';
@@ -14,6 +15,7 @@ import { createKeyService, loadServerSecret } from '../mcp/keys.mjs';
 import { createMcpHandler } from '../mcp/index.mjs';
 import { isAllowedHost } from '../mcp/guard.mjs';
 import * as ih from './ingest-handlers.mjs';
+import * as eh from './email-handlers.mjs';
 import { loadOwnerLogins, identityOf, sendUnauthorized } from './identity.mjs';
 import { getSetting } from '../store/db.mjs';
 
@@ -36,7 +38,6 @@ const TABLE = [
   { method: 'POST', path: '/api/keys', handler: k.createKey },
   { method: 'POST', path: '/api/keys/:id/revoke', handler: k.revokeKey },
   { method: 'GET', path: '/api/mcp', handler: k.mcpInfo },
-  { method: 'POST', path: '/api/jobs/plan/run', handler: h.planRun },
   { method: 'POST', path: '/api/files', handler: ih.uploadFiles, upload: true, ingest: true },
   { method: 'GET', path: '/api/files', handler: ih.listFiles, ingest: true },
   { method: 'POST', path: '/api/files/:id/retry', handler: ih.retryFile, ingest: true },
@@ -44,6 +45,11 @@ const TABLE = [
   { method: 'POST', path: '/api/confirm/list', handler: ih.listConfirm, ingest: true },
   { method: 'POST', path: '/api/confirm/:id/answer', handler: ih.answerConfirm, ingest: true },
   { method: 'POST', path: '/api/confirm/:id/reopen', handler: ih.reopenConfirm, ingest: true },
+  { method: 'GET', path: '/api/email', handler: eh.getEmail, quiet: true },
+  { method: 'POST', path: '/api/email/test', handler: eh.sendTestEmail, quiet: true },
+  { method: 'POST', path: '/api/email/brief', handler: eh.sendBriefEmail, quiet: true },
+  { method: 'GET', path: '/api/jobs', handler: eh.listJobs, quiet: true },
+  { method: 'POST', path: '/api/jobs/:id/run', handler: eh.runJob, quiet: true },
 ];
 
 export const routes = TABLE.map(({ method, path }) => ({ method, path }));
@@ -92,7 +98,7 @@ const safeCode = err => [err && err.code, err && err.name].find(v => typeof v ==
 // loadOwnerLogins result; computed from config when omitted. A real store (any mode but demo,
 // decided once here) gates every path except /healthz and /mcp on the owner identity, before the
 // Host allowlist, route matching and static serving.
-export function createHandler({ db, config, answerer, engine = null, packs = null, keys, mcp, owners, webDir = WEB_DIR, sharedDir = SHARED_DIR }) {
+export function createHandler({ db, config, answerer, engine = null, packs = null, scheduler = null, transport = null, keys, mcp, owners, webDir = WEB_DIR, sharedDir = SHARED_DIR }) {
   const gated = getSetting(db, 'mode', null) !== 'demo';
   const ownerList = gated ? (owners ?? loadOwnerLogins(config)) : null;
   const serveStatic = createStatic({ webDir, sharedDir });
@@ -138,7 +144,7 @@ export function createHandler({ db, config, answerer, engine = null, packs = nul
           guardPost(req);
           body = await readJsonBody(req);
         }
-        const out = await r.handler({ db, config, answerer, engine, packs, identity, params, body, readUpload, req, get keys() { return getKeys(); } });
+        const out = await r.handler({ db, config, answerer, engine, packs, identity, scheduler, transport, params, body, readUpload, req, get keys() { return getKeys(); } });
         sendJson(res, 200, out);
         return;
       }
@@ -149,6 +155,7 @@ export function createHandler({ db, config, answerer, engine = null, packs = nul
     } catch (err) {
       if (!(err instanceof HttpError)) {
         if (route && route.ingest) console.error('fathom: ingest request failed', safeCode(err));
+        else if (route && route.quiet) console.error('fathom: request failed', safeCode(err));
         else console.error(err);
       }
       if (req.readable) req.resume();

@@ -7,20 +7,20 @@
 
 import test, { after, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { runPlanning } from '../../src/jobs/planner.mjs';
+import { planRun } from '../helpers/plan.mjs';
 import * as H from '../../src/jobs/planner/household.mjs';
 import { computeFigures } from '../../src/jobs/planner/figures.mjs';
 import { loadPlanningData, resolveEntities } from '../../src/jobs/planner/data.mjs';
 import { deriveFacts, mergeFacts, ownerFactsOf } from '../../src/jobs/planner/facts.mjs';
 import {
-  scratch, addFact, w2Doc, accountIdByMask, figureRow, plannerFigures, contentValue, parseJson, PACKS_DIR, SCORP, SOLE_PROP, MASKS,
+  scratch, addFact, w2Doc, accountIdByMask, figureRow, plannerFigures, contentValue, parseJson, SCORP, SOLE_PROP, MASKS,
 } from '../helpers/real-store.mjs';
 
 const NOW = '2026-11-05';
 const S = scratch('fathom-tax-rules-');
 after(() => S.cleanup());
 
-const plan = (db, now = NOW) => runPlanning(db, null, { now, packDirs: [PACKS_DIR] });
+const plan = (db, now = NOW) => planRun(db, { now });
 const r2 = n => Math.round((n + Number.EPSILON) * 100) / 100;
 const near = (actual, expected, what) =>
   assert.ok(typeof actual === 'number' && Math.abs(actual - expected) <= 0.011, `${what}: expected ${expected}, got ${actual}`);

@@ -9,8 +9,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openDb, listMigrations, migrate, schemaVersion, listTables } from '../src/store/db.mjs';
-import { runPlanning } from '../src/jobs/planner.mjs';
-import { PACKS_DIR } from './helpers/real-store.mjs';
+import { planRun } from './helpers/plan.mjs';
 
 const dirs = [];
 const dbs = [];
@@ -86,8 +85,11 @@ test('MGI3: a 006 store upgraded to 007 keeps its data and gains the planner tab
   const cols = seed(db);
   const before = snapshot(db, cols);
 
-  assert.deepEqual(migrate(db), { applied: listMigrations().filter(m => m.id >= 7).map(m => m.id) });
-  assert.equal(schemaVersion(db), listMigrations().at(-1).id);
+  // 007 and every later migration apply in order (the scheduler's plan run needs 008's job_runs columns).
+  const pending = listMigrations().map(m => m.id).filter(id => id > 6);
+  assert.equal(pending[0], 7);
+  assert.deepEqual(migrate(db), { applied: pending });
+  assert.equal(schemaVersion(db), pending[pending.length - 1]);
   assert.deepEqual(snapshot(db, cols), before, 'every seeded row keeps its old columns unchanged');
 
   assert.ok(listTables(db).includes('planner_recs'));
@@ -102,7 +104,7 @@ test('MGI3: a 006 store upgraded to 007 keeps its data and gains the planner tab
   }
   assert.deepEqual(migrate(db), { applied: [] }, 'a second migrate applies nothing');
 
-  const result = await runPlanning(db, null, { now: NOW, packDirs: [PACKS_DIR] });
+  const result = await planRun(db, { now: NOW });
   assert.equal(result.status, 'ok');
   const planned = ['content', 'events', 'deadlines', 'decisions'].reduce((n, t) => n + db.prepare(`SELECT count(*) AS n FROM ${t} WHERE src = 'planner'`).get().n, 0);
   assert.ok(planned > 0, 'the planning run writes rows marked src planner');

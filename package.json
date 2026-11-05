@@ -14,6 +14,7 @@
     "smoke:live": "node --test src/engine/test/live.test.mjs",
     "build:your-plans": "node scripts/build-your-plans.mjs",
     "plan": "node src/jobs/plan-cli.mjs",
+    "email:test": "node scripts/email-test.mjs",
     "confirm:guess": "node src/jobs/guess-cli.mjs"
   },
   "dependencies": {
@@ -22,6 +23,7 @@
     "@modelcontextprotocol/sdk": "1.32.2",
     "ajv": "8.20.0",
     "ajv-formats": "3.0.1",
+    "nodemailer": "10.1.7",
     "pdfjs-dist": "6.4.299"
   },
   "devDependencies": {
