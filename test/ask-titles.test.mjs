@@ -5,7 +5,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { rm } from 'node:fs/promises';
-import { validateTitle, fallbackTitle, nameThread, createThread } from '../src/api/threads.mjs';
+import { validateTitle, fallbackTitle, nameThread, createThread, titleWords } from '../src/api/threads.mjs';
 import { createEngine, createMemoryLedger, EngineOffError, BudgetExceededError } from '../src/engine/index.mjs';
 import { DEFAULT_MODEL, TITLE_MODEL, usageCostUsd } from '../src/engine/pricing.mjs';
 import { buildScenario } from '../src/scenario/build.mjs';
@@ -14,6 +14,8 @@ import { tempDb } from './helpers/server.mjs';
 const SC = { fig: {}, names: {} };
 const CLOCK = '2026-11-05';
 const close = (a, b) => Math.abs(a - b) < 1e-9;
+// A model-title check whose owner said every word of the title, so only the other rules can reject it.
+const owned = raw => validateTitle(raw, { fromModel: true, ownerWords: new Set(titleWords(String(raw))) });
 
 // ---------------------------------------------------------------- validateTitle
 
@@ -37,7 +39,7 @@ test('AC3 validateTitle rejects empty, control characters, markup characters and
 });
 
 test('AC3 validateTitle fromModel strips one pair of quotes and one trailing period', () => {
-  const m = raw => validateTitle(raw, { fromModel: true });
+  const m = owned;
   assert.equal(m('"Quarterly estimates"'), 'Quarterly estimates');
   assert.equal(m('\u201cQuarterly estimates\u201d'), 'Quarterly estimates');
   assert.equal(m("'Quarterly estimates'"), 'Quarterly estimates');
@@ -49,13 +51,13 @@ test('AC3 validateTitle fromModel strips one pair of quotes and one trailing per
 });
 
 test('AC3 validateTitle fromModel allows at most 8 words', () => {
-  const m = raw => validateTitle(raw, { fromModel: true });
+  const m = owned;
   assert.equal(m('alpha bravo charlie delta echo foxtrot golf hotel'), 'alpha bravo charlie delta echo foxtrot golf hotel');
   assert.equal(m('alpha bravo charlie delta echo foxtrot golf hotel india'), null);
 });
 
 test('AC3 validateTitle fromModel rejects any digit, years included', () => {
-  const m = raw => validateTitle(raw, { fromModel: true });
+  const m = owned;
   assert.equal(m('Planning the 2026 estimates'), null);
   assert.equal(m('Save 2026 per month'), null);
   assert.equal(m('Looking back at 1999'), null);
@@ -70,7 +72,7 @@ test('AC3 validateTitle fromModel rejects any digit, years included', () => {
 });
 
 test('AC3 validateTitle fromModel rejects money and quantities in any form', () => {
-  const m = raw => validateTitle(raw, { fromModel: true });
+  const m = owned;
   for (const raw of ['Save $2026 on taxes', 'Spend 2026 dollars', 'Save ten thousand dollars', 'A five percent raise',
     'Twenty percent withholding', 'Roughly 2k for the roof', 'Paying $ on the roof', 'Fifty grand bonus',
     'A million reasons to save', 'Paying half a million', 'Saving €2026 abroad', 'Fees at 2026%']) {
@@ -145,7 +147,8 @@ test('AC3 fallbackTitle works with a scenario built from a store', async () => {
 
 // ---------------------------------------------------------------- nameThread
 
-const FIRST_Q = 'Synthetic estimate question one';
+// Carries every content word of the stub model title 'Quarterly estimate planning'; under 48 characters so the fallback keeps it whole.
+const FIRST_Q = 'Quarterly estimate planning question';
 const OTHER = ['Synthetic unrelated thread text', 'Synthetic unrelated thread reply'];
 
 async function namingStore(t) {
@@ -319,6 +322,39 @@ test('AC3 a manual rename made while the title call runs survives', async t => {
   await nameThread({ db, engine, key: thread.key, clock: CLOCK });
   assert.equal(calls.length, 1);
   assert.deepEqual(rowOf(db, thread.key), { title: 'Synthetic manual name', title_source: 'manual' });
+});
+
+test('AC3 a model title with a word the owner never used falls back', async t => {
+  const said = 'How should we plan the estimates';
+  const ownerWords = new Set(titleWords(said));
+  assert.equal(validateTitle('Save a quarter of income', { fromModel: true, ownerWords }), null);
+  const { db, thread, add } = await namingStore(t);
+  add(thread.key, 'me', said);
+  add(thread.key, 'fathom', '<p>Synthetic estimate answer one</p>');
+  add(thread.key, 'me', 'Synthetic estimate question two');
+  add(thread.key, 'fathom', '<p>Synthetic estimate answer two</p>');
+  const { engine, calls } = stubEngine({ title: 'Save a quarter of income' });
+  await nameThread({ db, engine, key: thread.key, clock: CLOCK });
+  assert.equal(calls.length, 1);
+  assert.deepEqual(rowOf(db, thread.key), { title: fallbackTitle(SC, said), title_source: 'auto' });
+  assert.equal(fallbackTitle(SC, said), said);
+});
+
+test('AC3 quarterly in owner text does not admit quarter in a model title', () => {
+  const ownerWords = new Set(titleWords('Our quarterly estimates'));
+  assert.equal(validateTitle('Quarter estimates', { fromModel: true, ownerWords }), null);
+  assert.equal(validateTitle('Quarterly estimates', { fromModel: true, ownerWords }), 'Quarterly estimates');
+});
+
+test('AC3 titleWords normalizes case, plurals, possessives and hyphens', () => {
+  assert.deepEqual(titleWords("Owner's S-corp Taxes, estimates!"), ['owner', 's', 'corp', 'tax', 'estimate']);
+});
+
+test('AC3 stopwords in a model title are ignored but content words still must be owner words', () => {
+  const ownerWords = new Set(titleWords('estimates'));
+  assert.equal(validateTitle('The estimates', { fromModel: true, ownerWords }), 'The estimates');
+  assert.equal(validateTitle('The estimates for our plan', { fromModel: true, ownerWords }), null);
+  assert.equal(validateTitle('The estimates', { fromModel: true }), null, 'no ownerWords means no content word passes');
 });
 
 // ---------------------------------------------------------------- engine and pricing
