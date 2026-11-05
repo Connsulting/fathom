@@ -1,7 +1,7 @@
 // AC2: the knowledge pack tools (list_packs, get_pack_entry, search_pack_entries) on the demo store
 // with the repo packs, and on a synthetic temp pack dir passed as ctx.packDirs.
 
-import test, { describe, before, after } from 'node:test';
+import test, { describe, before, after, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -10,6 +10,10 @@ import { tools, getTool, callTool, ToolError } from '../src/tools/index.mjs';
 import { loadPacks, activePacks } from '../src/packs/index.mjs';
 import { compileSchema } from '../src/engine/schema.mjs';
 import { parseJson } from '../src/store/db.mjs';
+import { getFacts } from '../src/store/facts.mjs';
+import { packStatus } from '../src/shared/rules.mjs';
+import { resolveTokens } from '../src/shared/tokens.mjs';
+import { tokenScope } from '../src/scenario/build.mjs';
 import { ROOT, tempDb, tempDir } from './helpers/server.mjs';
 
 const NAMES = ['list_packs', 'get_pack_entry', 'search_pack_entries'];
@@ -19,8 +23,6 @@ const RESULT_FIELDS = ['file', 'id', 'packId', 'score', 'snippet', 'title'];
 const NOW = new Date('2026-11-05T15:00:00Z');
 const isCode = code => err => err instanceof ToolError && err.code === code;
 
-const factsOf = db => Object.fromEntries(db.prepare('SELECT key, value FROM facts').all().map(f => [f.key, parseJson(f.value, f.value)]));
-
 function setFact(db, key, value) {
   db.prepare(`INSERT OR REPLACE INTO facts (key, value, src, as_of, confirmed, file_id, parser, locator, updated_at)
               VALUES (?, ?, 'you', '2026-11-01', 1, NULL, NULL, NULL, '2026-11-01T09:00:00Z')`).run(key, JSON.stringify(value));
@@ -29,6 +31,74 @@ function setFact(db, key, value) {
 function setPackState(db, id, active) {
   db.prepare(`INSERT OR REPLACE INTO packs_state (id, def, active, exploring, what_if_asked, what_if_done, unhid, sort, updated_at)
               VALUES (?, '{}', ?, 0, 0, 0, '[]', 0, '2026-11-01T09:00:00Z')`).run(id, active);
+}
+
+// ---------------------------------------------------------------- pack link helpers
+
+const REPO_PACKS = join(ROOT, 'packs');
+// The demo rows that link to a repo manifest (row id -> manifest id), independent of the code under test.
+const LINKS = {
+  scorp: 's-corp-owner',
+  selfemp: 'self-employed-partnership',
+  w2: 'w2-benefits',
+  virginia: 'virginia-resident',
+  kids: 'kids-dependents',
+  retire: 'advanced-retirement',
+  giving: 'charitable-giving',
+};
+// What the seeded demo rows say with no owner override: row def.status through packStatus.
+const SEEDED_STATUS = {
+  'advanced-retirement': 'active',
+  'charitable-giving': 'suggested',
+  'kids-dependents': 'active',
+  's-corp-owner': 'active',
+  'self-employed-partnership': 'active',
+  'virginia-resident': 'active',
+  'w2-benefits': 'active',
+};
+const ON = 'Turned on by the owner.';
+const OFF = 'Turned off by the owner.';
+
+const rowOf = (db, id) => {
+  const r = db.prepare('SELECT id, def, active, exploring FROM packs_state WHERE id = ?').get(id);
+  return r && { ...r, def: parseJson(r.def, {}) };
+};
+
+// The rule from the spec, written out: base is the row def.status when a string, else the
+// facts-derived status; live is the row's override columns; a manifest pack with no linked row keeps
+// the facts-derived view. A row links by def.manifest, else by its own id.
+function expectedView(db, dirs = [REPO_PACKS]) {
+  const rows = db.prepare('SELECT id, def, active, exploring FROM packs_state').all().map(r => ({ ...r, def: parseJson(r.def, {}) }));
+  const scope = tokenScope(db);
+  return activePacks(loadPacks(dirs), getFacts(db)).map(v => {
+    const row = rows.find(r => (typeof r.def.manifest === 'string' ? r.def.manifest : r.id) === v.pack.id);
+    if (!row) return v;
+    const live = { active: row.active == null ? null : Boolean(row.active), exploring: Boolean(row.exploring) };
+    const status = packStatus(typeof row.def.status === 'string' ? row.def.status : v.status, live);
+    let why = v.why;
+    if (row.active != null) why = row.active ? ON : OFF;
+    else if (typeof row.def.why === 'string' && row.def.why) why = resolveTokens(scope, row.def.why, false);
+    return { pack: v.pack, status, why };
+  });
+}
+
+const viewOf = (db, manifestId) => expectedView(db).find(v => v.pack.id === manifestId);
+const listed = async (ctx, id) => (await callTool('list_packs', {}, ctx)).find(p => p.id === id);
+const packOf = id => loadPacks([REPO_PACKS]).find(p => p.id === id);
+
+// The full title of the pack's first entry as a query: every term sits in that entry, so it matches
+// whenever the pack is searched.
+const titleQuery = id => packOf(id).entries[0].title;
+
+async function hits(ctx, id, extra = {}) {
+  const r = await callTool('search_pack_entries', { query: titleQuery(id), limit: 20, ...extra }, ctx);
+  return r.results.filter(x => x.packId === id);
+}
+
+async function freshDemo() {
+  const t = await tempDb();
+  seedDemo(t.db);
+  return { t, ctx: { db: t.db, now: NOW } };
 }
 
 // ---------------------------------------------------------------- synthetic pack fixture
@@ -112,13 +182,14 @@ describe('demo store with the repo packs', () => {
     t = await tempDb();
     seedDemo(t.db);
     ctx = { db: t.db, now: NOW };
-    expected = activePacks(loadPacks([join(ROOT, 'packs')]), factsOf(t.db));
+    expected = expectedView(t.db);
   });
   after(() => t && t.close());
 
-  test('list_packs lists every repo pack sorted by id with statuses derived from facts', async () => {
+  test('list_packs lists every repo pack sorted by id with the status of its linked demo row', async () => {
     const list = await callTool('list_packs', {}, ctx);
     assert.deepEqual(list.map(p => p.id), expected.map(e => e.pack.id));
+    assert.deepEqual(Object.fromEntries(list.map(p => [p.id, p.status])), SEEDED_STATUS);
     assert.deepEqual(list.map(p => p.id), [...list.map(p => p.id)].sort());
     for (const p of list) {
       assert.deepEqual(Object.keys(p).sort(), PACK_FIELDS);
@@ -133,8 +204,51 @@ describe('demo store with the repo packs', () => {
       assert.deepEqual(p.entries.map(x => x.file).sort(), e.pack.entries.map(x => x.file).sort());
       for (const x of p.entries) assert.deepEqual(Object.keys(x).sort(), ['file', 'title']);
     }
-    assert.ok(list.some(p => p.status === 'active'), 'the demo facts activate at least one pack');
-    assert.ok(list.some(p => p.status !== 'active'), 'the demo facts leave at least one pack inactive');
+    assert.ok(list.some(p => p.status === 'active'), 'the demo rows activate at least one pack');
+    assert.ok(list.some(p => p.status !== 'active'), 'the demo rows leave at least one pack inactive');
+  });
+
+  test('a linked row supplies the why: scenario tokens resolved to plain text, no braces left', async () => {
+    const list = await callTool('list_packs', {}, ctx);
+    const scope = tokenScope(t.db);
+    for (const [rowId, manifest] of Object.entries(LINKS)) {
+      const row = rowOf(t.db, rowId);
+      const p = list.find(x => x.id === manifest);
+      assert.equal(p.why, resolveTokens(scope, row.def.why, false), `${manifest} why`);
+      assert.ok(!/\{(fk|f|l|p|n):/.test(p.why), `${manifest} why has no raw tokens: ${p.why}`);
+      assert.ok(!p.why.includes('[?'), `${manifest} why has no unresolved token: ${p.why}`);
+      assert.notEqual(p.why, ON);
+      assert.notEqual(p.why, OFF);
+    }
+    assert.equal(list.find(x => x.id === 'charitable-giving').why.includes('embedded gain'), true);
+  });
+
+  test('name, version, tax year and review date still come from the manifest, id stays the manifest id', async () => {
+    const list = await callTool('list_packs', {}, ctx);
+    for (const { pack } of expected) {
+      const p = list.find(x => x.id === pack.id);
+      assert.equal(p.name, pack.name);
+      assert.equal(p.version, pack.version);
+      assert.equal(p.taxYear, pack.taxYear);
+      assert.equal(p.reviewed, pack.reviewed);
+    }
+    for (const rowId of Object.keys(LINKS)) assert.ok(!list.some(p => p.id === rowId), `${rowId} is a row id, not a pack id`);
+  });
+
+  test('with no overrides the linked rows read packStatus(def.status, live) and the active ones are searchable', async () => {
+    const list = await callTool('list_packs', {}, ctx);
+    for (const [rowId, manifest] of Object.entries(LINKS)) {
+      const row = rowOf(t.db, rowId);
+      assert.equal(row.active, null, `${rowId} has no override`);
+      const want = packStatus(row.def.status, { active: null, exploring: false });
+      assert.equal(list.find(p => p.id === manifest).status, want, `${manifest} status`);
+      const found = await hits(ctx, manifest);
+      if (want === 'active') {
+        assert.ok(found.some(x => x.id === packOf(manifest).entries[0].id), `${manifest} first entry is searchable`);
+      } else {
+        assert.deepEqual(found, [], `${manifest} is not searchable at ${want}`);
+      }
+    }
   });
 
   test('list_packs is deterministic', async () => {
@@ -168,6 +282,265 @@ describe('demo store with the repo packs', () => {
     } finally {
       empty.close();
     }
+  });
+});
+
+describe('owner overrides on the demo rows reach the pack tools', () => {
+  let t;
+  let ctx;
+  beforeEach(async () => {
+    ({ t, ctx } = await freshDemo());
+  });
+  afterEach(() => t && t.close());
+
+  const run = (sql, ...args) => t.db.prepare(sql).run(...args);
+  const entryOf = id => packOf(id).entries[0];
+
+  test('turning the UI pack scorp off takes s-corp-owner out of list_packs and search; entries stay readable', async () => {
+    assert.equal((await listed(ctx, 's-corp-owner')).status, 'active', 'precondition');
+    assert.ok((await hits(ctx, 's-corp-owner')).some(x => x.id === entryOf('s-corp-owner').id), 'precondition: searchable');
+
+    run("UPDATE packs_state SET active = 0 WHERE id = 'scorp'");
+    const p = await listed(ctx, 's-corp-owner');
+    assert.equal(p.status, 'available');
+    assert.equal(p.why, OFF);
+    assert.equal(p.id, 's-corp-owner');
+    assert.equal(p.name, packOf('s-corp-owner').name);
+
+    assert.deepEqual(await hits(ctx, 's-corp-owner'), [], 'no s-corp-owner result');
+    assert.deepEqual(await hits(ctx, 's-corp-owner', { packId: 's-corp-owner' }), [], 'none when asked for the pack by id');
+    const only = await callTool('search_pack_entries', { query: titleQuery('s-corp-owner'), packId: 's-corp-owner' }, ctx);
+    assert.deepEqual([only.results, only.total, only.truncated], [[], 0, false]);
+
+    const got = await callTool('get_pack_entry', { packId: 's-corp-owner', file: entryOf('s-corp-owner').file }, ctx);
+    assert.equal(got.markdown, entryOf('s-corp-owner').body, 'get_pack_entry works for a pack that is off');
+
+    // The other demo packs are untouched.
+    for (const id of ['kids-dependents', 'w2-benefits', 'virginia-resident']) assert.equal((await listed(ctx, id)).status, 'active', id);
+  });
+
+  test('turning scorp back on, or clearing the override, restores s-corp-owner', async () => {
+    run("UPDATE packs_state SET active = 0 WHERE id = 'scorp'");
+    assert.equal((await listed(ctx, 's-corp-owner')).status, 'available');
+
+    run("UPDATE packs_state SET active = 1 WHERE id = 'scorp'");
+    const on = await listed(ctx, 's-corp-owner');
+    assert.equal(on.status, 'active');
+    assert.equal(on.why, ON);
+    assert.ok((await hits(ctx, 's-corp-owner')).some(x => x.id === entryOf('s-corp-owner').id), 'searchable when turned on');
+
+    run("UPDATE packs_state SET active = NULL WHERE id = 'scorp'");
+    const cleared = await listed(ctx, 's-corp-owner');
+    assert.equal(cleared.status, 'active', 'the seeded base status is active');
+    assert.equal(cleared.why, resolveTokens(tokenScope(t.db), rowOf(t.db, 'scorp').def.why, false), 'back to the row why');
+    assert.ok((await hits(ctx, 's-corp-owner')).length > 0, 'searchable again');
+  });
+
+  test('turning off each linked active pack removes exactly that manifest pack', async () => {
+    for (const [rowId, manifest] of Object.entries(LINKS)) {
+      if (SEEDED_STATUS[manifest] !== 'active') continue;
+      run('UPDATE packs_state SET active = 0 WHERE id = ?', rowId);
+      const list = await callTool('list_packs', {}, ctx);
+      for (const p of list) {
+        if (p.id === manifest) {
+          assert.equal(p.status, 'available', `${manifest} off`);
+          assert.equal(p.why, OFF);
+        } else {
+          assert.equal(p.status, SEEDED_STATUS[p.id], `${p.id} while ${manifest} is off`);
+        }
+      }
+      assert.deepEqual(await hits(ctx, manifest), [], `${manifest} not searchable while off`);
+      run('UPDATE packs_state SET active = NULL WHERE id = ?', rowId);
+    }
+  });
+
+  test('an exploring row whose base is not active reads exploring and is not searchable', async () => {
+    run("UPDATE packs_state SET exploring = 1 WHERE id = 'giving'");
+    const p = await listed(ctx, 'charitable-giving');
+    assert.equal(p.status, 'exploring');
+    assert.equal(p.why, resolveTokens(tokenScope(t.db), rowOf(t.db, 'giving').def.why, false), 'no override, so the row why');
+    assert.deepEqual(await hits(ctx, 'charitable-giving'), []);
+    assert.deepEqual(await hits(ctx, 'charitable-giving', { packId: 'charitable-giving' }), []);
+    const got = await callTool('get_pack_entry', { packId: 'charitable-giving', file: entryOf('charitable-giving').file }, ctx);
+    assert.equal(got.markdown, entryOf('charitable-giving').body);
+  });
+
+  test('exploring does not demote a pack that is active', async () => {
+    run("UPDATE packs_state SET exploring = 1 WHERE id = 'scorp'");
+    assert.equal((await listed(ctx, 's-corp-owner')).status, 'active');
+    assert.ok((await hits(ctx, 's-corp-owner')).length > 0);
+  });
+
+  test('an exploring pack that the owner turned off reads exploring and is not searchable', async () => {
+    run("UPDATE packs_state SET exploring = 1, active = 0 WHERE id = 'giving'");
+    const p = await listed(ctx, 'charitable-giving');
+    assert.equal(p.status, 'exploring', 'packStatus: off but exploring reads exploring');
+    assert.equal(p.why, OFF);
+    assert.deepEqual(await hits(ctx, 'charitable-giving'), []);
+  });
+
+  test('a base-available pack turned on reads active, says so, and becomes searchable', async () => {
+    run("UPDATE packs_state SET def = json_set(def, '$.status', 'available') WHERE id = 'giving'");
+    const before = await listed(ctx, 'charitable-giving');
+    assert.equal(before.status, 'available');
+    assert.deepEqual(await hits(ctx, 'charitable-giving'), []);
+
+    run("UPDATE packs_state SET active = 1 WHERE id = 'giving'");
+    const p = await listed(ctx, 'charitable-giving');
+    assert.equal(p.status, 'active');
+    assert.equal(p.why, ON);
+    assert.ok((await hits(ctx, 'charitable-giving')).some(x => x.id === entryOf('charitable-giving').id));
+  });
+
+  test('a seeded suggested pack turned on reads active too', async () => {
+    assert.equal((await listed(ctx, 'charitable-giving')).status, 'suggested');
+    run("UPDATE packs_state SET active = 1, exploring = 1 WHERE id = 'giving'");
+    const p = await listed(ctx, 'charitable-giving');
+    assert.equal(p.status, 'active');
+    assert.equal(p.why, ON);
+    assert.ok((await hits(ctx, 'charitable-giving')).length > 0);
+  });
+
+  test('a string def.status on the row beats the facts', async () => {
+    assert.equal(getFacts(t.db)['household.dependents'] > 0, true, 'the demo facts say a dependent');
+    run("UPDATE packs_state SET def = json_set(def, '$.status', 'available') WHERE id = 'kids'");
+    const p = await listed(ctx, 'kids-dependents');
+    assert.equal(p.status, 'available');
+    assert.deepEqual(await hits(ctx, 'kids-dependents'), []);
+  });
+
+  test('a row def with no string status falls back to the facts-derived status', async () => {
+    const facts = activePacks(loadPacks([REPO_PACKS]), getFacts(t.db));
+    const byFacts = facts.find(v => v.pack.id === 'charitable-giving');
+    assert.equal(byFacts.status, 'available', 'precondition: the demo facts leave charitable-giving available');
+
+    run("UPDATE packs_state SET def = json_remove(def, '$.status') WHERE id = 'giving'");
+    let p = await listed(ctx, 'charitable-giving');
+    assert.equal(p.status, 'available');
+    assert.equal(p.why, resolveTokens(tokenScope(t.db), rowOf(t.db, 'giving').def.why, false), 'a non-empty row why still wins');
+
+    run("UPDATE packs_state SET def = json_set(def, '$.status', 7) WHERE id = 'giving'");
+    p = await listed(ctx, 'charitable-giving');
+    assert.equal(p.status, 'available', 'a non-string status is ignored');
+
+    run("UPDATE packs_state SET active = 1 WHERE id = 'giving'");
+    assert.equal((await listed(ctx, 'charitable-giving')).status, 'active');
+  });
+
+  test('an empty row why falls back to the activation why', async () => {
+    run("UPDATE packs_state SET def = json_set(def, '$.why', '') WHERE id = 'virginia'");
+    const p = await listed(ctx, 'virginia-resident');
+    assert.equal(p.status, 'active');
+    assert.equal(p.why, viewOf(t.db, 'virginia-resident').why);
+    assert.match(p.why, /household\.state/);
+  });
+
+  test('a manifest pack with no linked row falls back to the facts-derived activation status', async () => {
+    const byFacts = id => activePacks(loadPacks([REPO_PACKS]), getFacts(t.db)).find(v => v.pack.id === id);
+    run("DELETE FROM packs_state WHERE id = 'giving'");
+    let p = await listed(ctx, 'charitable-giving');
+    assert.equal(p.status, byFacts('charitable-giving').status);
+    assert.equal(p.status, 'available', 'not the seeded row suggested');
+    assert.equal(p.why, byFacts('charitable-giving').why);
+    assert.deepEqual(await hits(ctx, 'charitable-giving'), []);
+
+    run("DELETE FROM packs_state WHERE id = 'scorp'");
+    p = await listed(ctx, 's-corp-owner');
+    assert.equal(p.status, 'active');
+    assert.equal(p.why, byFacts('s-corp-owner').why);
+    assert.match(p.why, /income\.sCorp/);
+    assert.ok((await hits(ctx, 's-corp-owner')).length > 0, 'facts-derived active is searchable');
+
+    const list = await callTool('list_packs', {}, ctx);
+    assert.equal(list.length, 7, 'every manifest pack is still listed');
+  });
+
+  test('rows without a manifest (contractor, abroad, rental) add no pack and change nothing', async () => {
+    const before = await callTool('list_packs', {}, ctx);
+    run("UPDATE packs_state SET active = 1 WHERE id IN ('contractor', 'abroad', 'rental')");
+    assert.deepEqual(await callTool('list_packs', {}, ctx), before);
+    run("DELETE FROM packs_state WHERE id IN ('contractor', 'abroad', 'rental')");
+    assert.deepEqual(await callTool('list_packs', {}, ctx), before);
+  });
+
+  test('the whole list follows the rule after a mix of overrides', async () => {
+    run("UPDATE packs_state SET active = 0 WHERE id IN ('scorp', 'w2')");
+    run("UPDATE packs_state SET active = 1 WHERE id = 'giving'");
+    run("UPDATE packs_state SET exploring = 1 WHERE id = 'virginia'");
+    const list = await callTool('list_packs', {}, ctx);
+    const want = expectedView(t.db);
+    assert.deepEqual(list.map(p => [p.id, p.status, p.why]), want.map(v => [v.pack.id, v.status, v.why]));
+    assert.deepEqual(Object.fromEntries(list.map(p => [p.id, p.status])), {
+      'advanced-retirement': 'active',
+      'charitable-giving': 'active',
+      'kids-dependents': 'active',
+      's-corp-owner': 'available',
+      'self-employed-partnership': 'active',
+      'virginia-resident': 'active',
+      'w2-benefits': 'available',
+    });
+    const all = await callTool('search_pack_entries', { query: 'tax', limit: 20 }, ctx);
+    const activeIds = new Set(list.filter(p => p.status === 'active').map(p => p.id));
+    for (const x of all.results) assert.ok(activeIds.has(x.packId), `${x.packId} is active`);
+  });
+});
+
+describe('a real-store shaped row (untagged, id equal to the manifest id)', () => {
+  let t;
+  let ctx;
+  beforeEach(async () => {
+    t = await tempDb();
+    ctx = { db: t.db, now: NOW };
+  });
+  afterEach(() => t && t.close());
+
+  test('turning off a facts-active pack takes effect', async () => {
+    setFact(t.db, 'income.sCorp', true);
+    assert.equal((await listed(ctx, 's-corp-owner')).status, 'active', 'precondition: active from facts');
+    assert.ok((await hits(ctx, 's-corp-owner')).length > 0, 'precondition: searchable');
+
+    setPackState(t.db, 's-corp-owner', 0);
+    const p = await listed(ctx, 's-corp-owner');
+    assert.equal(p.status, 'available');
+    assert.equal(p.why, OFF);
+    assert.deepEqual(await hits(ctx, 's-corp-owner'), []);
+    const got = await callTool('get_pack_entry', { packId: 's-corp-owner', file: packOf('s-corp-owner').entries[0].file }, ctx);
+    assert.equal(got.markdown, packOf('s-corp-owner').entries[0].body);
+  });
+
+  test('turning on a pack the facts do not activate takes effect', async () => {
+    assert.equal((await listed(ctx, 'w2-benefits')).status, 'available', 'precondition: no w2 fact');
+    setPackState(t.db, 'w2-benefits', 1);
+    const p = await listed(ctx, 'w2-benefits');
+    assert.equal(p.status, 'active');
+    assert.equal(p.why, ON);
+    assert.ok((await hits(ctx, 'w2-benefits')).length > 0);
+  });
+
+  test('a null override leaves the facts-derived status and why', async () => {
+    setFact(t.db, 'income.sCorp', true);
+    setPackState(t.db, 's-corp-owner', null);
+    const want = viewOf(t.db, 's-corp-owner');
+    const p = await listed(ctx, 's-corp-owner');
+    assert.equal(p.status, 'active');
+    assert.equal(p.why, want.why);
+  });
+
+  test('an exploring row whose facts do not activate it reads exploring and is not searchable', async () => {
+    t.db.prepare(`INSERT INTO packs_state (id, def, active, exploring, what_if_asked, what_if_done, unhid, sort, updated_at)
+                  VALUES ('w2-benefits', '{}', NULL, 1, 0, 0, '[]', 0, '2026-11-01T09:00:00Z')`).run();
+    assert.equal((await listed(ctx, 'w2-benefits')).status, 'exploring');
+    assert.deepEqual(await hits(ctx, 'w2-benefits'), []);
+  });
+
+  test('a tagged row links to its manifest, not to a manifest named like the row', async () => {
+    t.db.prepare(`INSERT INTO packs_state (id, def, active, exploring, what_if_asked, what_if_done, unhid, sort, updated_at)
+                  VALUES ('mine', '{"manifest":"w2-benefits","status":"available"}', 1, 0, 0, 0, '[]', 0, '2026-11-01T09:00:00Z')`).run();
+    const list = await callTool('list_packs', {}, ctx);
+    assert.ok(!list.some(p => p.id === 'mine'));
+    assert.equal(list.find(p => p.id === 'w2-benefits').status, 'active');
+    assert.equal(list.find(p => p.id === 'w2-benefits').why, ON);
+    assert.equal(list.find(p => p.id === 's-corp-owner').status, 'available');
   });
 });
 

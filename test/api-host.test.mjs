@@ -82,6 +82,58 @@ describe('Host allowlist across the whole /api surface', () => {
     assert.equal(r.status, 404);
   });
 
+  // A small valid multipart body: one text file in the "files" field.
+  const upload = () => {
+    const boundary = 'fathom-host-test-boundary';
+    const body = Buffer.concat([
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="files"; filename="synthetic.csv"\r\nContent-Type: text/csv\r\n\r\n`),
+      Buffer.from('date,amount,description\n2032-01-05,-12.34,Synthetic host test row\n'),
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]);
+    return { body, 'content-type': `multipart/form-data; boundary=${boundary}` };
+  };
+  const files = async headers => (await ok(request(s.baseUrl, { path: '/api/files', headers }))).json.files;
+
+  test('a foreign Host with a matching Origin cannot use the ingest routes', async () => {
+    const empty = await files();
+    assert.ok(!empty.some(f => f.name === 'synthetic.csv'), 'precondition: the upload is not stored yet');
+    const pending = (await ok(request(s.baseUrl, { path: '/api/confirm' }))).json;
+    const { body, 'content-type': contentType } = upload();
+    await forbidden(request(s.baseUrl, { method: 'POST', path: '/api/files', headers: { ...foreign, 'content-type': contentType }, body }), 'POST /api/files');
+    await forbidden(request(s.baseUrl, { path: '/api/files', headers: foreign }), 'GET /api/files');
+    await forbidden(postJson(s.baseUrl, '/api/files/any-id/retry', {}, foreign), 'POST /api/files/:id/retry');
+    await forbidden(request(s.baseUrl, { path: '/api/confirm', headers: foreign }), 'GET /api/confirm');
+    await forbidden(postJson(s.baseUrl, '/api/confirm/list', {}, foreign), 'POST /api/confirm/list');
+    await forbidden(postJson(s.baseUrl, '/api/confirm/1/answer', { answer: 'yes' }, foreign), 'POST /api/confirm/:id/answer');
+    await forbidden(postJson(s.baseUrl, '/api/confirm/any-id/answer', { answer: 'yes' }, foreign), 'POST /api/confirm/<non numeric>/answer');
+    const after = await files();
+    assert.deepEqual(after, empty, 'no file was stored by the refused requests');
+    assert.ok(!after.some(f => f.name === 'synthetic.csv'), 'the refused upload is not in the file list');
+    assert.deepEqual((await ok(request(s.baseUrl, { path: '/api/confirm' }))).json, pending, 'the confirm queue is unchanged');
+
+    // Control: the same body on an allowed Host is accepted, so the refusals above were the Host guard.
+    const accepted = await ok(request(s.baseUrl, { method: 'POST', path: '/api/files', headers: { 'content-type': contentType }, body }));
+    assert.equal(accepted.json.files.length, 1);
+    assert.ok((await files()).some(f => f.name === 'synthetic.csv'), 'the allowed upload is listed');
+  });
+
+  test('a foreign Host without an Origin is refused on the ingest routes too', async () => {
+    await forbidden(request(s.baseUrl, { path: '/api/files', headers: { host: evil } }), 'GET /api/files');
+    await forbidden(postJson(s.baseUrl, '/api/confirm/list', {}, { host: evil }), 'POST /api/confirm/list');
+  });
+
+  test('liveness: the ingest routes answer on an IP literal and on the configured DNS name', async () => {
+    for (const host of [`127.0.0.1:${s.port}`, 'agent.example.test']) {
+      const headers = { host, origin: `http://${host}` };
+      const list = await ok(request(s.baseUrl, { path: '/api/files', headers }));
+      assert.ok(Array.isArray(list.json.files), `GET /api/files via ${host}`);
+      const confirm = await ok(postJson(s.baseUrl, '/api/confirm/list', {}, headers));
+      assert.ok(Array.isArray(confirm.json.items), `POST /api/confirm/list via ${host}`);
+      const pending = await ok(request(s.baseUrl, { path: '/api/confirm', headers }));
+      assert.ok(Array.isArray(pending.json.items), `GET /api/confirm via ${host}`);
+    }
+  });
+
   test('/healthz and the UI shell stay unguarded for a foreign Host', async () => {
     const h = await request(s.baseUrl, { path: '/healthz', headers: { host: evil } });
     assert.equal(h.status, 200);
