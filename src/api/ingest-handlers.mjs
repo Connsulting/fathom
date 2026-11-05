@@ -4,13 +4,13 @@
 // file name contents or row values reach a response or a log.
 
 import { getSetting } from '../store/db.mjs';
-import { buildScenario } from '../scenario/build.mjs';
 import { loadDataKey, VaultError } from '../ingest/vault.mjs';
 import { ingestFiles, retryFile as retryIngest } from '../ingest/pipeline.mjs';
 import { answerItem, pendingItems, listItems, ConfirmError } from '../ingest/confirm.mjs';
 import { fileOf } from '../ingest/freshness.mjs';
 import { refreshPackState } from '../packs/state.mjs';
 import { HttpError } from './http.mjs';
+import { scenarioOf } from './handlers.mjs';
 
 const UPLOAD_FIELD = 'files';
 const LIST_STATUSES = ['pending', 'answered', 'all'];
@@ -22,7 +22,6 @@ const CONFIRM_MESSAGE = {
 };
 
 const nowIso = () => new Date().toISOString();
-const scenarioOf = ctx => buildScenario(ctx.db, { clock: ctx.config && ctx.config.clock });
 const storeMode = db => (getSetting(db, 'mode', null) === 'demo' ? 'demo' : 'real');
 
 // The data key for this store: demo stores use a generated key under $FATHOM_DATA/files, real

@@ -24,7 +24,10 @@ const TABLE = [
   { method: 'POST', path: '/api/wargame/:name/pick', handler: h.wargamePick },
   { method: 'POST', path: '/api/packs/:id/toggle', handler: h.packToggle },
   { method: 'POST', path: '/api/packs/:id/whatif', handler: h.packWhatIf },
+  { method: 'GET', path: '/api/packs/:id/entries/:entryId', handler: h.packEntry },
   { method: 'POST', path: '/api/engine', handler: h.setEngine },
+  { method: 'POST', path: '/api/engine/cap', handler: h.setCap },
+  { method: 'POST', path: '/api/your-plans/build', handler: h.yourPlansBuild },
   { method: 'POST', path: '/api/ask', handler: h.ask },
   { method: 'POST', path: '/api/onboarding', handler: h.onboarding },
   { method: 'POST', path: '/api/demo/reset', handler: h.demoReset },
@@ -85,9 +88,10 @@ function findRoute(method, rawPath) {
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 const safeCode = err => [err && err.code, err && err.name].find(v => typeof v === 'string' && IDENT.test(v)) || 'unknown';
 
-// `keys` (key service) and `mcp` (the /mcp handler) are built from config.dataDir on first use
-// when not passed in.
-export function createHandler({ db, config, answerer, engine = null, scheduler = null, transport = null, keys, mcp, webDir = WEB_DIR, sharedDir = SHARED_DIR }) {
+// engine, packs and answerer are optional for static-only fixtures: handlers that need them answer
+// 503, and scenarios carry no manifest fields without packs. `keys` (key service) and `mcp` (the
+// /mcp handler) are built from config.dataDir on first use when not passed in.
+export function createHandler({ db, config, answerer, engine = null, packs = null, scheduler = null, transport = null, keys, mcp, webDir = WEB_DIR, sharedDir = SHARED_DIR }) {
   const serveStatic = createStatic({ webDir, sharedDir });
   let keyService = keys;
   let mcpHandler = mcp;
@@ -123,7 +127,7 @@ export function createHandler({ db, config, answerer, engine = null, scheduler =
           guardPost(req);
           body = await readJsonBody(req);
         }
-        const out = await r.handler({ db, config, answerer, engine, scheduler, transport, params, body, readUpload, req, get keys() { return getKeys(); } });
+        const out = await r.handler({ db, config, answerer, engine, packs, scheduler, transport, params, body, readUpload, req, get keys() { return getKeys(); } });
         sendJson(res, 200, out);
         return;
       }

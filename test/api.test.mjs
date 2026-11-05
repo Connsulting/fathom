@@ -11,7 +11,7 @@ import { needsYou, verdictLevel } from '../src/shared/rules.mjs';
 import { setSetting } from '../src/store/db.mjs';
 import {
   ROOT, SERVER_TIMEOUT, spawnServer, withServer, expectServerExit, request, postJson, getScenario,
-  tempDb, tempDir, openStore, dumpStore, runCommand, recOf, paragraphs, src,
+  tempDb, tempDir, openStore, dumpStore, runCommand, recOf, src,
 } from './helpers/server.mjs';
 
 const T = { timeout: SERVER_TIMEOUT };
@@ -184,7 +184,7 @@ describe('war game, packs and engine', () => {
     await fails(postJson(s.baseUrl, '/api/packs/no-such-pack/toggle', {}), 404);
   }));
 
-  test('what-if marks the pack exploring and appends the canned conversation once', T, () => withServer({}, async s => {
+  test('what-if marks the pack exploring and appends the live conversation once', T, () => withServer({}, async s => {
     const p = demo.packs.find(x => x.id === 'contractor');
     const { scenario } = await ok(postJson(s.baseUrl, '/api/packs/contractor/whatif', {}));
     assert.equal(scenario.live.packs.contractor.exploring, true);
@@ -194,14 +194,16 @@ describe('war game, packs and engine', () => {
     assert.equal(conv[0].role, 'me');
     assert.ok(conv[0].text.includes(p.whatIf.prompt));
     assert.equal(conv[1].role, 'fathom');
-    assert.equal(conv[1].text, paragraphs(p.whatIf.a));
+    assert.equal(conv[1].notice, false);
+    assert.ok(conv[1].text.length > 0);
+    assert.equal(conv[1].provenance.engine, 'fake', 'the answer carries provenance');
+    assert.deepEqual(conv[1].refs, [], 'the contractor unlocks name no rec');
     const again = await ok(postJson(s.baseUrl, '/api/packs/contractor/whatif', {}));
-    assert.equal(again.scenario.live.conversations['pack:contractor'].length, 2, 'no duplicate answer');
+    assert.deepEqual(again.scenario.live.conversations['pack:contractor'], conv, 'no duplicate answer');
     await fails(postJson(s.baseUrl, '/api/packs/no-such-pack/whatif', {}), 404);
   }));
 
   test('what-if with the engine off appends a single notice and does not mark done', T, () => withServer({}, async s => {
-    const p = demo.packs.find(x => x.id === 'rental');
     await ok(postJson(s.baseUrl, '/api/engine', { on: false }));
     let { scenario } = await ok(postJson(s.baseUrl, '/api/packs/rental/whatif', {}));
     ({ scenario } = await ok(postJson(s.baseUrl, '/api/packs/rental/whatif', {})));
@@ -216,7 +218,9 @@ describe('war game, packs and engine', () => {
     ({ scenario } = await ok(postJson(s.baseUrl, '/api/packs/rental/whatif', {})));
     conv = scenario.live.conversations['pack:rental'];
     assert.equal(conv.length, 3);
-    assert.equal(conv[2].text, paragraphs(p.whatIf.a));
+    assert.equal(conv[2].role, 'fathom');
+    assert.equal(conv[2].notice, false);
+    assert.equal(conv[2].provenance.engine, 'fake');
     assert.equal(scenario.live.packs.rental.whatIfDone, true);
   }));
 
@@ -248,14 +252,19 @@ describe('war game, packs and engine', () => {
 });
 
 describe('ask', () => {
-  test('a suggested question appends me and fathom messages with the canned answer and persists', T2, async () => {
+  test('a suggested question appends me and fathom messages with a live answer and persists', T2, async () => {
     const s = await spawnServer();
     const q = demo.ask.suggested.find(x => x.id === 'defer');
+    let answer;
     try {
       const r = await ok(postJson(s.baseUrl, '/api/ask', { key: 'ask', questionId: 'defer' }));
+      answer = r.message;
       assert.equal(r.message.role, 'fathom');
-      assert.equal(r.message.text, paragraphs(q.a));
-      assert.deepEqual(r.message.refs, q.refs);
+      assert.equal(r.message.notice, false);
+      assert.ok(r.message.text.length > 0);
+      assert.equal(r.message.provenance.engine, 'fake');
+      assert.ok(r.message.provenance.tools.length > 0, 'provenance lists the tools used');
+      for (const id of q.refs) assert.ok(r.message.refs.includes(id), `refs include ${id}`);
       const conv = r.scenario.live.conversations.ask;
       assert.equal(conv.length, 2);
       assert.equal(conv[0].role, 'me');
@@ -268,26 +277,32 @@ describe('ask', () => {
     await withServer({ dataDir: s.dataDir }, async s2 => {
       const conv = (await getScenario(s2.baseUrl)).live.conversations.ask;
       assert.equal(conv.length, 2, 'conversation persists');
-      assert.equal(conv[1].text, paragraphs(q.a));
+      assert.deepEqual(conv[1], answer, 'the answer and its provenance persist');
     });
   });
 
   test('a rec question by index answers in the rec conversation', T, () => withServer({}, async s => {
     const rec = demo.recs.find(x => x.id === 'deferral');
     const r = await ok(postJson(s.baseUrl, '/api/ask', { key: 'deferral', questionId: 0 }));
-    assert.equal(r.message.text, paragraphs(rec.qa[0].a));
-    assert.deepEqual(r.message.refs, ['deferral']);
+    assert.equal(r.message.role, 'fathom');
+    assert.equal(r.message.notice, false);
+    assert.ok(r.message.provenance, 'the answer carries provenance');
+    assert.ok(r.message.refs.includes('deferral'));
     const conv = r.scenario.live.conversations.deferral;
     assert.equal(conv.length, 3, 'opening message plus question and answer');
     assert.ok(conv[1].text.includes(rec.qa[0].q));
   }));
 
-  test('free text gets the exact canned answer when it matches a question, else the fallback', T, () => withServer({}, async s => {
+  test('free text matching a question answers with its refs, other free text answers from the summary', T, () => withServer({}, async s => {
     const q = demo.ask.suggested.find(x => x.id === 'screwing');
     const hit = await ok(postJson(s.baseUrl, '/api/ask', { text: '  ' + q.q.toLowerCase() + ' ' }));
-    assert.equal(hit.message.text, paragraphs(q.a));
+    assert.equal(hit.message.notice, false);
+    assert.ok(hit.message.provenance, 'the answer carries provenance');
+    for (const id of q.refs) assert.ok(hit.message.refs.includes(id), `refs include ${id}`);
+    assert.ok(hit.scenario.live.conversations.ask[0].text.includes(q.q.toLowerCase()), 'the owner message is the text sent');
     const miss = await ok(postJson(s.baseUrl, '/api/ask', { key: 'ask', text: 'How tall is the office ficus?' }));
-    assert.equal(miss.message.text, paragraphs(demo.ask.fallback));
+    assert.equal(miss.message.notice, false);
+    assert.ok(miss.message.provenance.tools.some(x => x.name === 'household_summary'));
     assert.deepEqual(miss.message.refs, []);
     const conv = miss.scenario.live.conversations.ask;
     assert.equal(conv.length, 4);
@@ -579,9 +594,8 @@ describe('static symlinks', () => {
     indexText = readFileSync(join(webDir, 'index.html'), 'utf8');
     const { createHandler } = await src('src/api/router.mjs');
     const { loadConfig } = await src('src/config.mjs');
-    const { createCannedAnswerer } = await src('src/api/answerer.mjs');
     const config = loadConfig({ FATHOM_DATA: td.dataDir });
-    srv = http.createServer(createHandler({ db: td.db, config, answerer: createCannedAnswerer(), webDir }));
+    srv = http.createServer(createHandler({ db: td.db, config, webDir }));
     await new Promise(r => srv.listen(0, '127.0.0.1', r));
     base = `http://127.0.0.1:${srv.address().port}`;
   }, T);

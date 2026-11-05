@@ -342,3 +342,9 @@ export function packContext(activation) {
 export function getEntry(packs, packId, entryId) {
   return packs.find((pack) => pack.id === packId)?.entries.find((entry) => entry.id === entryId);
 }
+
+// The manifest id a packs_state row stands for: def.manifest when it is a non-empty string (demo
+// rows), else the row's own id (real stores use manifest ids as row ids).
+export function manifestIdOf(rowId, def) {
+  return def && typeof def === 'object' && typeof def.manifest === 'string' && def.manifest ? def.manifest : rowId;
+}

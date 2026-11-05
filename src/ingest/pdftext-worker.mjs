@@ -2,6 +2,8 @@
 // workerData.data with pdfjs-dist's legacy build, in this thread: no font loading, no system fonts,
 // no worker fetched from outside the package, stopping at the first error. Posts exactly one
 // message {code, pages, text}: code is a fixed status, text is non-empty only for code 'text'.
+// Pages are separated by a form feed on its own line ('\n\f\n'), the only form feeds in the text
+// (any inside a page's text items become spaces), so a caller can split the text into its pages.
 // Never logs; the parent discards this thread's stdout and stderr anyway.
 
 import { parentPort, workerData } from 'node:worker_threads';
@@ -26,10 +28,10 @@ async function read() {
     if (pages > maxPages) return { code: 'incomplete', pages };
     let text = '';
     for (let n = 1; n <= pages; n += 1) {
-      if (n > 1) text += '\n\n';
+      if (n > 1) text += '\n\f\n';
       const reader = (await doc.getPage(n)).streamTextContent().getReader();
       for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read()) {
-        for (const item of chunk.value.items) text += (item.str ?? '') + (item.hasEOL ? '\n' : '');
+        for (const item of chunk.value.items) text += (item.str ?? '').replace(/\f/g, ' ') + (item.hasEOL ? '\n' : '');
         // No reader.cancel(): pdfjs 6.4 keeps enqueueing into a cancelled stream and throws.
         // Reading stops here and task.destroy() below ends the stream.
         if (text.length > maxText) return { code: 'incomplete', pages };

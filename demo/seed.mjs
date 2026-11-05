@@ -23,7 +23,9 @@ export const SEED_ID = 'demo-seed';
 export const OPENS_ON = Object.freeze({ salary27: '2027-01-01' });
 
 // Demo pack row id to the repo pack manifest it stands for (stored as def.manifest). The other
-// demo packs (contractor, abroad, rental) have no manifest. Keep in step with migration 005.
+// demo packs (contractor, abroad, rental) have no manifest. A tagged row also keeps its demo name
+// as a label, so the pack refresh rewrites it in place under its demo id. Keep in step with
+// migrations 005 (manifest) and 006 (label).
 export const PACK_MANIFEST = Object.freeze({
   scorp: 's-corp-owner',
   selfemp: 'self-employed-partnership',
@@ -55,6 +57,7 @@ const FACTS = {
   'retirement.backdoorRothCandidate': true,
   'accounts.has529': true,
   'giving.charitable': false,
+  'income.agiEstimate': 380000,
 };
 
 // Children before parents so foreign keys hold while clearing.
@@ -168,7 +171,10 @@ export function seedDemo(db) {
     S.events.forEach((e, i) => event.run(e.date, e.kind, e.title, e.body, i));
     const packState = db.prepare(`INSERT INTO packs_state (id, def, active, exploring, what_if_asked, what_if_done, unhid, sort, updated_at)
                                   VALUES (?, ?, NULL, 0, 0, 0, '[]', ?, ?)`);
-    S.packs.forEach((p, i) => packState.run(p.id, JSON.stringify(Object.hasOwn(PACK_MANIFEST, p.id) ? { ...p, manifest: PACK_MANIFEST[p.id] } : p), i, now));
+    S.packs.forEach((p, i) => {
+      const def = Object.hasOwn(PACK_MANIFEST, p.id) ? { ...p, manifest: PACK_MANIFEST[p.id], label: p.name } : p;
+      packState.run(p.id, JSON.stringify(def), i, now);
+    });
     const decision = db.prepare(`INSERT INTO decisions (id, title, status, wargame, rec_id, opens_on, when_label, note, decided_line, sort)
                                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`);
     S.decisions.forEach((d, i) => decision.run(d.id, d.title, d.status, d.wargame || null, d.recId || null, OPENS_ON[d.id] || null, d.when || '', d.note || '', i));

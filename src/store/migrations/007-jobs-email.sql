@@ -1,4 +1,4 @@
--- 006 jobs and email: scheduler state on job_runs (period key, trigger, duration, error class),
+-- 007 jobs and email: scheduler state on job_runs (period key, trigger, duration, error class),
 -- one attempt per (job_id, period_key) through a partial unique index (rows with no period key,
 -- such as the planner's own runs, may repeat), the single-row job_lock lease, the email_sends
 -- history (no bodies, no addresses) and deadline_alerts dedupe by (key, threshold).

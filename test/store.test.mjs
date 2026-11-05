@@ -2,9 +2,10 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readdirSync } from 'node:fs';
-import { openDb, migrate, listTables, MIGRATIONS_DIR, getSetting, setSetting } from '../src/store/db.mjs';
-import { tempDb } from './helpers/server.mjs';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { openDb, migrate, listTables, MIGRATIONS_DIR, getSetting, setSetting, DB_FILE } from '../src/store/db.mjs';
+import { tempDb, tempDir, withServer, request, SERVER_TIMEOUT } from './helpers/server.mjs';
 
 const TABLES = [
   'schema_migrations', 'settings', 'content', 'files', 'sources', 'facts', 'accounts', 'transactions',
@@ -152,4 +153,54 @@ test('migration files are NNN-name.sql numbered from 001 without gaps', () => {
     assert.match(f, /^\d{3}-[a-z0-9-]+\.sql$/);
     assert.equal(Number(f.slice(0, 3)), i + 1, `${f} is numbered ${i + 1}`);
   });
+});
+
+// AC15 (merge-gate blocker 7): main's latest store before the chat branch is schema 005
+// (002-ingest, 003-ingest-recipients, 004-ingest-survivor, 005-pack-manifest). Starting the server
+// on such a store applies 006-chat: messages.provenance exists, existing messages survive, the
+// schema reports 6.
+const MAIN_MIGRATIONS = ['001-foundation.sql', '002-ingest.sql', '003-ingest-recipients.sql', '004-ingest-survivor.sql', '005-pack-manifest.sql'];
+
+test('a store migrated to exactly 005 upgrades to 006-chat on startup and keeps its messages', { timeout: SERVER_TIMEOUT * 2 }, async () => {
+  const dataDir = await tempDir('fathom-upgrade-');
+  const file = join(dataDir, DB_FILE);
+  const old = openDb(file);
+  try {
+    old.exec('CREATE TABLE schema_migrations (id INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)');
+    const record = old.prepare("INSERT INTO schema_migrations (id, name, applied_at) VALUES (?, ?, '2026-10-01T00:00:00Z')");
+    for (const name of MAIN_MIGRATIONS) {
+      old.exec(readFileSync(join(MIGRATIONS_DIR, name), 'utf8'));
+      record.run(Number(name.slice(0, 3)), name.slice(4, -4));
+    }
+    setSetting(old, 'mode', 'real');
+    old.prepare("INSERT INTO conversations (key, created_at) VALUES ('ask', '2026-10-02T09:00:00Z')").run();
+    const msg = old.prepare("INSERT INTO messages (conversation_key, role, text, refs, notice, ts) VALUES ('ask', ?, ?, '[]', 0, ?)");
+    msg.run('me', '<p>Synthetic question before the upgrade</p>', '2026-10-02T09:00:00Z');
+    msg.run('fathom', '<p>Synthetic answer before the upgrade</p>', '2026-10-02T09:00:05Z');
+    assert.ok(!old.prepare('PRAGMA table_info(messages)').all().some(c => c.name === 'provenance'), 'the fixture is pre-chat');
+  } finally {
+    old.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+    old.close();
+  }
+
+  await withServer({ dataDir, env: { FATHOM_DEMO: '0', FATHOM_ENGINE: 'off' } }, async s => {
+    const h = await request(s.baseUrl, { path: '/healthz' });
+    assert.equal(h.status, 200);
+    assert.equal(h.json.schema, 6, 'the schema version reports 6 after startup');
+  });
+
+  const db = openDb(file);
+  try {
+    assert.ok(db.prepare('PRAGMA table_info(messages)').all().some(c => c.name === 'provenance'), 'messages.provenance exists');
+    const applied = db.prepare('SELECT id, name FROM schema_migrations ORDER BY id').all().map(r => `${r.id}-${r.name}`);
+    assert.deepEqual(applied, ['1-foundation', '2-ingest', '3-ingest-recipients', '4-ingest-survivor', '5-pack-manifest', '6-chat']);
+    const rows = db.prepare("SELECT role, text, provenance FROM messages WHERE conversation_key = 'ask' ORDER BY id").all().map(r => ({ ...r }));
+    assert.deepEqual(rows, [
+      { role: 'me', text: '<p>Synthetic question before the upgrade</p>', provenance: null },
+      { role: 'fathom', text: '<p>Synthetic answer before the upgrade</p>', provenance: null },
+    ], 'existing message rows survive');
+    assert.equal(getSetting(db, 'mode', null), 'real');
+  } finally {
+    db.close();
+  }
 });
