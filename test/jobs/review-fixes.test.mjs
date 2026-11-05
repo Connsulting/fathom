@@ -11,7 +11,7 @@ import { recAction } from '../../src/api/handlers.mjs';
 import { createCannedAnswerer } from '../../src/api/answerer.mjs';
 import {
   scratch, ingestFile, addDocument, addFact, accountIdByMask, contentValue, figureRow, recRow, plannerRec, activeRecIds,
-  recEvents, PACKS_DIR, SCORP, SOLE_PROP, MASKS, INST,
+  recEvents, PACKS_DIR, SCORP, SOLE_PROP, MASKS, INST, OWNER_FACTS,
 } from '../helpers/real-store.mjs';
 
 const NOW = '2026-11-05';
@@ -310,5 +310,62 @@ describe('review fixes, round two', () => {
       if (comp != null) assert.ok(comp >= range.min && comp <= range.max, `${p.id} x computed on ${comp} inside the range`);
     }
     assert.equal(new Set(values).size, values.length, 'salaries distinct');
+  });
+});
+
+describe('review fixes, round three', () => {
+  test('AC4: a Virginia itemized gap parks the salary and deferral recs as waiting and restores them (H1)', async () => {
+    const db = S.store();
+    await plan(db);
+    for (const id of ['scorp-salary', 'invoice-deferral']) assert.ok(activeRecIds(db).includes(id), `${id} fires first`);
+    recAction(ctxOf(db, { id: 'scorp-salary' }, { action: 'accept' }));
+    const prior = { 'scorp-salary': 'accepted', 'invoice-deferral': 'proposed' };
+
+    addFact(db, 'tax.itemizedEstimate', 40000); // federal itemizes, Virginia estimate missing
+    await plan(db);
+    for (const id of Object.keys(prior)) {
+      const row = recRow(db, id);
+      assert.equal(row.status, 'waiting', `${id} waiting`);
+      assert.equal(row.waiting_on, 'data', `${id} waits on data`);
+      assert.equal(plannerRec(db, id).retired_at, null, `${id} not retired`);
+      const ev = recEvents(db, id).at(-1);
+      assert.deepEqual([ev.action, ev.actor, ev.from_status, ev.to_status], ['block', 'planner', prior[id], 'waiting']);
+    }
+
+    addFact(db, 'tax.vaItemizedEstimate', 20000);
+    await plan(db);
+    for (const [id, status] of Object.entries(prior)) {
+      assert.equal(recRow(db, id).status, status, `${id} back to ${status}`);
+      const ev = recEvents(db, id).at(-1);
+      assert.deepEqual([ev.action, ev.actor, ev.to_status], ['unblock', 'planner', status]);
+    }
+  });
+
+  test('AC3: an owner-set pre-tax own-corp deferral lowers agi.est by its amount; a Roth one does not (H2)', async () => {
+    const record = { person: 'owner', plan: 'own-corp-401k', type: 'deferral', roth: false, amount: 10000 };
+    const base = S.store();
+    const pretax = S.store({ variant: { facts: { 'retirement.contributions': [record] } } });
+    const roth = S.store({ variant: { facts: { 'retirement.contributions': [{ ...record, roth: true }] } } });
+    await plan(base);
+    await plan(pretax);
+    await plan(roth);
+    const agi = db => figureRow(db, 'agi.est').v;
+    near(r2(agi(base) - agi(pretax)), 10000, 'pre-tax deferral comes out of wages');
+    near(agi(roth), agi(base), 'a Roth deferral leaves agi.est unchanged');
+  });
+
+  test('AC6: an S corp with no officer salary still gets a salary war game inside the range with no current point (H3)', async () => {
+    const noSalary = { ...SCORP, expenses: { Software: SCORP.expenses.Software } };
+    const db = S.store({ variant: { entities: [noSalary, SOLE_PROP] } });
+    await plan(db);
+    assert.ok(activeRecIds(db).includes('scorp-salary'), 'scorp-salary fires');
+    const salary = contentValue(db, 'wargame').salary;
+    assert.ok(salary && salary.points.length >= 2, 'salary war game built');
+    assert.equal(salary.points.filter(p => p.current).length, 0, 'no current point at zero salary');
+    const { min, max } = OWNER_FACTS['business.salaryRange'];
+    for (const p of salary.points) {
+      const s = figureRow(db, `wg.salary.${p.id}.salary`);
+      assert.ok(s && s.v >= min && s.v <= max, `${p.id} salary inside the range`);
+    }
   });
 });
