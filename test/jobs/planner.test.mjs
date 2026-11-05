@@ -12,7 +12,8 @@ import {
   solo401kRoom, sepRoom, hsaLimit,
 } from '../../src/calc/index.mjs';
 import { recAction, ask, packToggle } from '../../src/api/handlers.mjs';
-import { createCannedAnswerer } from '../../src/api/answerer.mjs';
+import { createLiveAnswerer } from '../../src/api/answerer.mjs';
+import { createRuntimeEngine } from '../../src/engine/runtime.mjs';
 import { reasonText } from '../../src/jobs/triggers/missing-data.mjs';
 import {
   scratch, createRealStore, addPayroll, w2Doc, paystubDoc, addFact, removeFact, accountIdByMask, figureRow, plannerFigures,
@@ -33,7 +34,9 @@ function fig(db, key) {
   assert.ok(row, `figure ${key} exists`);
   return row;
 }
-const ctxOf = (db, params = {}, body = {}) => ({ db, config: { clock: NOW }, answerer: createCannedAnswerer(), params, body });
+// Ask goes through main's live answerer on the fake engine, as the server wires it.
+const answererFor = db => createLiveAnswerer({ engine: createRuntimeEngine({ db, config: { engine: 'fake' } }) });
+const ctxOf = (db, params = {}, body = {}) => ({ db, config: { clock: NOW }, answerer: answererFor(db), params, body });
 
 // ---------------------------------------------------------------- expected values (hand check)
 

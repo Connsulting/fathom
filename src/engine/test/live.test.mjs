@@ -41,3 +41,16 @@ test('opt-in live SDK tool, caching, per-round accounting and continuation cap',
     cacheReadTokens: ledger.entries[1].tokens.cache_read_input_tokens, cappedRounds: cappedLedger.entries.length,
     extractionCostUsd: extractionLedger.entries[0].costUsd, groundingOk: result.grounding.ok }));
 });
+
+test('opt-in live Ask through the answerer is grounded and records spend', { skip: !enabled, timeout: 180000 }, async () => {
+  // Imported here so the SDK test above still loads on its own.
+  const { runAskSmoke } = await import('./smoke-ask.mjs');
+  const result = await runAskSmoke({ mode: 'live', credentialFile: process.env.FATHOM_CLAUDE_CREDENTIAL_FILE });
+  assert.equal(result.notice, false);
+  assert.equal(result.groundingOk, true);
+  assert.ok(result.spendRows.length >= 1);
+  assert.ok(result.spendRows.every(row => row.purpose === 'chat' && row.costUsd > 0));
+  assert.equal(result.provenance.engine, 'live');
+  console.log(JSON.stringify({ liveAsk: 'passed', rounds: result.spendRows.length,
+    costUsd: result.provenance.costUsd, tools: result.provenance.tools.map(t => t.name) }));
+});

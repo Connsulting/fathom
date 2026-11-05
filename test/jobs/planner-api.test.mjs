@@ -8,7 +8,6 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { runPlanning, PlannerError, PLAN_JOB_ID } from '../../src/jobs/planner.mjs';
 import { createHandler, routes } from '../../src/api/router.mjs';
-import { createCannedAnswerer } from '../../src/api/answerer.mjs';
 import { loadConfig } from '../../src/config.mjs';
 import { openStore } from '../../src/server.mjs';
 import { openDb, listTables, DB_FILE } from '../../src/store/db.mjs';
@@ -37,7 +36,7 @@ function allTables(db) {
 }
 
 async function serve(db, config, engine = null) {
-  const server = http.createServer(createHandler({ db, config, answerer: createCannedAnswerer(), engine }));
+  const server = http.createServer(createHandler({ db, config, engine }));
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   return {
     baseUrl: `http://127.0.0.1:${server.address().port}`,

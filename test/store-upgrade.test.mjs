@@ -1,6 +1,6 @@
-// MGI3 (plan Revision 6, R6-3): a store at main's latest migration (005) upgraded to 006 keeps its
-// data and gains the planner tables and columns, and a planning run succeeds on it. The 005 store
-// is built by applying migrations 001 to 005 exactly as db.mjs migrate does, then seeded with one
+// MGI3 (plan Revision 6, R6-3): a store at main's latest migration (006) upgraded to 007 keeps its
+// data and gains the planner tables and columns, and a planning run succeeds on it. The 006 store
+// is built by applying migrations 001 to 006 exactly as db.mjs migrate does, then seeded with one
 // synthetic row per table the planner or ingest touches. Every value is invented.
 
 import test, { after } from 'node:test';
@@ -22,9 +22,9 @@ after(() => {
 const AT = '2026-11-01T09:00:00.000Z';
 const NOW = '2026-11-05T12:00:00.000Z';
 
-// Migrations 001..005 applied the way db.mjs migrate applies them (own transaction each, recorded
+// Migrations 001..006 applied the way db.mjs migrate applies them (own transaction each, recorded
 // in schema_migrations with the same columns).
-function store005() {
+function storeAtMain() {
   const dir = mkdtempSync(join(tmpdir(), 'fathom-upgrade-'));
   dirs.push(dir);
   const db = openDb(join(dir, 'fathom.sqlite'));
@@ -35,7 +35,7 @@ function store005() {
     applied_at TEXT NOT NULL
   )`);
   const record = db.prepare('INSERT INTO schema_migrations (id, name, applied_at) VALUES (?, ?, ?)');
-  for (const m of listMigrations().filter(m => m.id <= 5)) {
+  for (const m of listMigrations().filter(m => m.id <= 6)) {
     db.exec('BEGIN');
     db.exec(readFileSync(m.file, 'utf8'));
     record.run(m.id, m.name, AT);
@@ -44,7 +44,7 @@ function store005() {
   return db;
 }
 
-// One row per table, with the columns that exist at 005. Returns {table: [columns]}.
+// One row per table, with the columns that exist at 006. Returns {table: [columns]}.
 function seed(db) {
   const put = (table, row) => {
     const cols = Object.keys(row);
@@ -79,15 +79,15 @@ const snapshot = (db, cols) => Object.fromEntries(Object.entries(cols).map(([t, 
   [t, db.prepare(`SELECT ${c.join(', ')} FROM ${t} ORDER BY rowid`).all().map(r => JSON.stringify({ ...r }))]));
 const columnsOf = (db, table) => db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
 
-test('MGI3: a 005 store upgraded to 006 keeps its data and gains the planner tables and columns', async () => {
-  const db = store005();
-  assert.equal(schemaVersion(db), 5);
-  assert.ok(!listTables(db).includes('planner_recs'), 'the 005 store has no planner tables yet');
+test('MGI3: a 006 store upgraded to 007 keeps its data and gains the planner tables and columns', async () => {
+  const db = storeAtMain();
+  assert.equal(schemaVersion(db), 6);
+  assert.ok(!listTables(db).includes('planner_recs'), 'the 006 store has no planner tables yet');
   const cols = seed(db);
   const before = snapshot(db, cols);
 
-  assert.deepEqual(migrate(db), { applied: [6] });
-  assert.equal(schemaVersion(db), 6);
+  assert.deepEqual(migrate(db), { applied: [7] });
+  assert.equal(schemaVersion(db), 7);
   assert.deepEqual(snapshot(db, cols), before, 'every seeded row keeps its old columns unchanged');
 
   assert.ok(listTables(db).includes('planner_recs'));

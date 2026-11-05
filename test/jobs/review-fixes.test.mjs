@@ -8,7 +8,6 @@ import { buildScenario } from '../../src/scenario/build.mjs';
 import { resolveTokens } from '../../src/shared/tokens.mjs';
 import { sepRoom } from '../../src/calc/index.mjs';
 import { recAction } from '../../src/api/handlers.mjs';
-import { createCannedAnswerer } from '../../src/api/answerer.mjs';
 import {
   scratch, addFile, addPayroll, w2Doc, paystubDoc, addFact, accountIdByMask, contentValue, figureRow, recRow, plannerRec, activeRecIds,
   recEvents, PACKS_DIR, SCORP, SOLE_PROP, MASKS, INST, OWNER_FACTS,
@@ -22,7 +21,7 @@ const plan = (db, now = NOW) => runPlanning(db, null, { now, packDirs: [PACKS_DI
 const r2 = n => Math.round((n + Number.EPSILON) * 100) / 100;
 const near = (actual, expected, what) =>
   assert.ok(typeof actual === 'number' && Math.abs(actual - expected) <= 0.011, `${what}: expected ${expected}, got ${actual}`);
-const ctxOf = (db, params = {}, body = {}) => ({ db, config: { clock: NOW }, answerer: createCannedAnswerer(), params, body });
+const ctxOf = (db, params = {}, body = {}) => ({ db, config: { clock: NOW }, params, body });
 const SP = r2(10 * (SOLE_PROP.income - SOLE_PROP.expenses.Supplies) * 12 / 10); // Bluebird projected net
 const CONF = { planConfirmed: true, aggregationConfirmed: true };
 

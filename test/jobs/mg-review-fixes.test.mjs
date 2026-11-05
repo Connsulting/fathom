@@ -14,7 +14,6 @@ import { deriveFacts, mergeFacts, ownerFactsOf } from '../../src/jobs/planner/fa
 import { checkProse } from '../../src/jobs/planner/prose.mjs';
 import { createEngine } from '../../src/engine/index.mjs';
 import { getScenario } from '../../src/api/handlers.mjs';
-import { createCannedAnswerer } from '../../src/api/answerer.mjs';
 import {
   scratch, addFact, removeFact, figureRow, recRow, plannerRec, activeRecIds, contentValue, parseJson, PACKS_DIR,
   SCORP, SOLE_PROP, INST, MASKS,
@@ -26,7 +25,7 @@ const S = scratch('fathom-review-fixes-');
 after(() => S.cleanup());
 
 const plan = (db, now = NOW, engine = null) => runPlanning(db, engine, { now, packDirs: [PACKS_DIR] });
-const api = (db, clock = NOW) => ({ db, config: { clock }, answerer: createCannedAnswerer(), params: {}, body: {} });
+const api = (db, clock = NOW) => ({ db, config: { clock }, params: {}, body: {} });
 const near = (actual, expected, what) =>
   assert.ok(typeof actual === 'number' && Math.abs(actual - expected) <= 0.011, `${what}: expected ${expected}, got ${actual}`);
 const fig = (db, key) => {

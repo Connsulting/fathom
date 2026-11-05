@@ -25,7 +25,6 @@ import { evaluate as evaluateRule } from '../../src/packs/index.mjs';
 import { checkGrounding } from '../../src/engine/index.mjs';
 import { buildScenario, tokenScope } from '../../src/scenario/build.mjs';
 import { getScenario, recAction, wargamePick } from '../../src/api/handlers.mjs';
-import { createCannedAnswerer } from '../../src/api/answerer.mjs';
 import { HttpError } from '../../src/api/http.mjs';
 import { callTool } from '../../src/tools/index.mjs';
 import { esc, resolveTokens } from '../../src/shared/tokens.mjs';
@@ -38,7 +37,7 @@ const NOW = '2026-11-05';
 const S = scratch();
 after(() => S.cleanup());
 const plan = (db, now = NOW, engine = null) => runPlanning(db, engine, { now, packDirs: [PACKS_DIR] });
-const api = (db, { clock = NOW, params = {}, body = {} } = {}) => ({ db, config: { clock }, answerer: createCannedAnswerer(), params, body });
+const api = (db, { clock = NOW, params = {}, body = {} } = {}) => ({ db, config: { clock }, params, body });
 
 const EVIL = '<img src=x onerror=alert(1)>';
 const AGI_NOTE = 'Adjusted gross income stands in for modified adjusted gross income.';

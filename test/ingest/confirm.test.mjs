@@ -290,8 +290,7 @@ describe('fact check', () => {
     F.upsertFact(s.db, { key: 'household.state', value: 'NM', src: 'you', asOf: '2032-03-10', confirmed: true });
     const st = bySubject(s.db, '|household.state|"CO"');
     const { createHandler } = await src('src/api/router.mjs');
-    const { createCannedAnswerer } = await src('src/api/answerer.mjs');
-    const server = http.createServer(createHandler({ db: s.db, config: s.config, answerer: createCannedAnswerer(), engine: await offEngine() }));
+    const server = http.createServer(createHandler({ db: s.db, config: s.config, engine: await offEngine() }));
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
     try {
       const base = `http://127.0.0.1:${server.address().port}`;
