@@ -259,13 +259,17 @@ describe('figures', () => {
     assert.equal(fig(base, 'cash.total').kind, 'a');
   });
 
-  test('AC3: monthly outflow and runway are estimates from personal checking', () => {
+  test('MG11: monthly outflow and runway count personal card spending (AC3)', () => {
+    // Checking 3,000 + 1,500 a month plus the card's 250 charity outflow, none of them a matched
+    // transfer: 4,750 a month; runway round(25,000 / 4,750, one decimal) = 5.3.
+    const monthly = SYNTH.mortgage + SYNTH.groceries + SYNTH.charityMonthly;
     const out = fig(base, 'cash.monthlyOut');
-    near(out.v, SYNTH.mortgage + SYNTH.groceries, 'cash.monthlyOut');
+    near(out.v, monthly, 'cash.monthlyOut');
     assert.equal(out.kind, 'e');
     const runway = fig(base, 'cash.runwayMonths');
     assert.equal(runway.kind, 'e');
-    assert.equal(runway.v, Math.round(SYNTH.checkingEnd / (SYNTH.mortgage + SYNTH.groceries) * 10) / 10);
+    assert.equal(runway.v, Math.round(SYNTH.checkingEnd / monthly * 10) / 10);
+    assert.equal(runway.v, 5.3);
   });
 
   test('AC3: P&L actuals and projections per entity', () => {
@@ -323,7 +327,7 @@ describe('figures', () => {
   test('AC3: retirement room figures match the calculators; IRA room is 7500 per person', () => {
     const solo = solo401kRoom({ compensation: W, kind: 'w2', age: 45, allPlanDeferrals: 0, thisPlanDeferrals: 0, thisPlanCatchUp: 0, employerContributions: 0, ...OPTS }).value;
     near(fig(base, 'room.solo401k').v, solo.total, 'room.solo401k');
-    near(fig(base, 'room.solo401k.employee').v, r2(solo.employee + solo.catchUp), 'room.solo401k.employee');
+    near(fig(base, 'room.solo401k.employee').v, solo.employee, 'room.solo401k.employee (regular deferral room only)');
     near(fig(base, 'room.solo401k.employer').v, solo.employer, 'room.solo401k.employer');
     const sep = sepRoom({ kind: 'self-employed', netProfit: SP, filingStatus: 'mfj', employerContributions: 0, ...OPTS }).value;
     near(fig(base, 'room.sep').v, sep, 'room.sep');
@@ -420,7 +424,7 @@ describe('figures', () => {
     await plan(db);
     const deferrals = r2(10000 * 12 / 10);
     const solo = solo401kRoom({ compensation: W, kind: 'w2', age: 45, allPlanDeferrals: deferrals, thisPlanDeferrals: deferrals, thisPlanCatchUp: 0, employerContributions: 5000, ...OPTS }).value;
-    near(fig(db, 'room.solo401k.employee').v, r2(solo.employee + solo.catchUp), 'employee room after deferrals');
+    near(fig(db, 'room.solo401k.employee').v, solo.employee, 'employee room after deferrals');
     near(fig(db, 'room.solo401k.employer').v, solo.employer, 'employer room after contributions');
     assert.ok(fig(db, 'room.solo401k.employee').v < 24500, 'partially funded');
     assert.ok(activeRecIds(db).includes('year-end-retirement'), 'room left, so the rec stays');
