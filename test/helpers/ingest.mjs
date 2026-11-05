@@ -130,11 +130,12 @@ export function unreadableTaxFile(variant = 'base') {
 }
 
 // Brokerage positions CSV in the frozen parser's layout, as of 2032-03-05 (from the content line).
-// rows: [{symbol, description, quantity, price, value}]
+// rows: [{symbol, description, quantity, price, value, account?, accountName?}]; account defaults
+// to Z5550002222. extra: raw lines added after the rows, before the blank line and the footer.
 const POS_HEADER = "Account number,Account name,Symbol,Description,Quantity,Last price,Last price change,Current value,Today's gain/loss dollar,Today's gain/loss percent,Total gain/loss dollar,Total gain/loss percent,Percent of account,Cost basis total,Average cost basis,Type";
-export function positionsFile(name, rows, { asOf = 'Mar-05-2032' } = {}) {
-  const lines = rows.map((r) => ['Z5550002222', 'Synthetic brokerage', r.symbol, r.description ?? 'Synthetic fund', r.quantity, '$' + r.price, '0', '$' + r.value, '0', '0', '0', '0', '10%', '', '', 'Cash'].join(','));
-  return textFile(name, [POS_HEADER, ...lines, '', `Date downloaded ${asOf} 10:00 a.m ET`].join('\n') + '\n', 'text/csv');
+export function positionsFile(name, rows, { asOf = 'Mar-05-2032', extra = [] } = {}) {
+  const lines = rows.map((r) => [r.account ?? 'Z5550002222', r.accountName ?? 'Synthetic brokerage', r.symbol, r.description ?? 'Synthetic fund', r.quantity, '$' + r.price, '0', '$' + r.value, '0', '0', '0', '0', '10%', '', '', 'Cash'].join(','));
+  return textFile(name, [POS_HEADER, ...lines, ...extra, '', `Date downloaded ${asOf} 10:00 a.m ET`].join('\n') + '\n', 'text/csv');
 }
 
 // Text paystub with identifier-shaped numbers. Each distinct argument set gives distinct bytes.

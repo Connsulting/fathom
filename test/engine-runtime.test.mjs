@@ -4,10 +4,11 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, rmSync } from 'node:fs';
+import { writeFileSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { createRequire, syncBuiltinESMExports } from 'node:module';
 import { join, resolve } from 'node:path';
-import { src, tempDb, tempDir } from './helpers/server.mjs';
+import { pathToFileURL } from 'node:url';
+import { src, tempDb, tempDir, spawnServer, ROOT } from './helpers/server.mjs';
 
 const require = createRequire(import.meta.url);
 
@@ -91,3 +92,41 @@ test('fake and off modes never touch the credential file', () => withFixture(asy
   }
   assert.equal(reads.n, 0);
 }));
+
+// G9: the same through a real server started in live mode with a missing credential file. A preload
+// counts every open of the file. Extraction calls fail (the files wait as needs_extraction), and a
+// file created after startup is never opened. The late file is world-readable and holds two tokens,
+// so it could never authenticate even if it were read.
+test('G9: a live server opens a missing credential once at startup and never again, even after the file appears', { timeout: 60000 }, async () => {
+  const dir = await tempDir('fathom-cred-');
+  const credFile = join(dir, 'credential');
+  const log = join(dir, 'opens.log');
+  const opens = () => (existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean).length : 0);
+  const s = await spawnServer({
+    env: {
+      FATHOM_DEMO: '1', FATHOM_ENGINE: 'live', FATHOM_CLAUDE_CREDENTIAL_FILE: credFile,
+      NODE_OPTIONS: `--import=${pathToFileURL(join(ROOT, 'test/helpers/count-opens.mjs')).href}`,
+      TEST_COUNT_OPENS_TARGET: credFile, TEST_COUNT_OPENS_LOG: log,
+    },
+  });
+  const extractOnce = async (tag) => {
+    const fd = new FormData();
+    fd.append('files', new Blob([`SYNTHETIC PAYSTUB ${tag}\nEmployer: Example Employer LLC\nPay date 2032-03-15\nGross pay 5000.00\n`], { type: 'text/plain' }), `paystub-${tag}.txt`);
+    const res = await fetch(`${s.baseUrl}/api/files`, { method: 'POST', body: fd });
+    const body = await res.json();
+    assert.equal(res.status, 200, JSON.stringify(body).slice(0, 300));
+    assert.equal(body.files[0].status, 'needs_extraction', 'the extraction call fails');
+  };
+  try {
+    assert.equal(opens(), 1, 'opened once at startup');
+    await extractOnce('first');
+    writeFileSync(credFile, 'synthetic placeholder', { mode: 0o644 });
+    await extractOnce('second');
+    await extractOnce('third');
+    assert.equal(opens(), 1, 'never opened again, even after the file appears');
+  } finally {
+    await s.stop();
+    rmSync(s.dataDir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

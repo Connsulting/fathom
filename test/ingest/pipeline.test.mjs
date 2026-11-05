@@ -8,16 +8,19 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { src } from '../helpers/server.mjs';
 import { writeXlsx } from '../helpers/xlsx.mjs';
+import { imagePdf } from '../helpers/pdf.mjs';
 import {
   fixture, textFile, aggregatorFile, studioRemovalFile, activityFile, coveragePnlFile, coverageTaxFile, positionsFile, unreadablePnlFile, unreadableTaxFile,
-  realStore, fakeEngine, recordingEngine, offEngine, all, one, count, items, sha256, fileIdOf,
+  realStore, fakeEngine, recordingEngine, offEngine, all, one, count, items, sha256, fileIdOf, NOW,
 } from '../helpers/ingest.mjs';
 
 let P;
 let V;
+let C;
 before(async () => {
   P = await src('src/ingest/pipeline.mjs');
   V = await src('src/ingest/vault.mjs');
+  C = await src('src/ingest/confirm.mjs');
 });
 
 const inserted = (result, kind) => (result.counts && result.counts.rows && result.counts.rows[kind]) || 0;
@@ -593,7 +596,7 @@ describe('position revisions', () => {
       institution: 'Example Bank', accountLast4: '4321', accountKind: 'brokerage', periodEnd: '2032-03-31', endingBalance: value,
       holdings: [{ symbol: 'EXMPL', name: 'Example Index Fund', quantity: 10, value }], confidence: 0.9,
     });
-    const pdf = (tag) => ({ name: `statement-${tag}.pdf`, bytes: new TextEncoder().encode(`%PDF-1.4\n% synthetic statement ${tag}\n%%EOF\n`), mime: 'application/pdf' });
+    const pdf = (tag) => ({ name: `statement-${tag}.pdf`, bytes: imagePdf({ tag: `synthetic statement ${tag}` }), mime: 'application/pdf' });
     const eng = (value) => fakeEngine([[{ docType: 'statement', confidence: 0.9 }], [statement(value)]]);
     const a = await P.ingestFile(s.db, pdf('first'), s.opts(await eng(1234.5)));
     const b = await P.ingestFile(s.db, pdf('corrected'), s.opts(await eng(1300)));
@@ -785,6 +788,16 @@ describe('bounded parsing (D1)', () => {
     const r = await P.ingestFile(s.db, file, s.opts(await offEngine()));
     await assertTooLarge(s, file, r);
   }));
+
+  // G3: the bounded sniff on a valid body: the header comes back without reading the rest.
+  test('csvHeader returns the header of a file whose valid body exceeds the cell limit, without throwing', () => {
+    const head = `${REQUIRED.join(',')}\n`;
+    const body = 'DEBIT,03/01/2032,Synthetic row,-1.00,OTHER,,\n'.repeat(300000); // 2100000 cells
+    const file = textFile('Chase4321_Activity_valid_huge.csv', head + body, 'text/csv');
+    assert.deepEqual(FM.csvHeader(file), REQUIRED);
+    assert.equal(FM.csvScore(file, REQUIRED), 0.98);
+    assert.throws(() => FM.csv(file), isLimit, 'the whole file is still past the limit');
+  });
 });
 
 // D2: the notes document row never holds the note text; extraction reads it from the vault.
@@ -885,6 +898,91 @@ describe('no silently dropped transactions (D3)', () => {
     assert.deepEqual(tx.map((t) => [t.date, t.amount, t.external_id]), [['2032-03-01', -125, '1042']]);
     assert.equal(items(s.db, 'near_duplicate').length, 0);
   }));
+
+  // G1: across formats a key collision is a duplicate only with evidence: equal normalized
+  // descriptions, or a shared distinctive word (3 or more letters, minus the stoplist).
+  const bankFile = (name, description) => activityFile(name, [row(description)]);
+  const aggFile = (name, description) => aggregatorFile(name, [{ date: '2032-03-09', amount: '54.21', description, number: '9999994321', inst: 'Chase', account: 'Synthetic checking' }]);
+  const unrelatedPairs = [
+    ['no shared word', 'NORTHSIDE GROCERY', 'Riverside Pharmacy'],
+    ['only stoplist words shared', 'DEBIT CARD PURCHASE NORTHSIDE GROCERY', 'Card purchase from Riverside Pharmacy'],
+  ];
+  for (const [what, bankDesc, aggDesc] of unrelatedPairs) {
+    for (const order of ['bank first', 'aggregator first']) {
+      test(`G1: unrelated same-day same-amount bank and aggregator rows (${what}, ${order}) are both kept with one question`, () => withStore(async (s) => {
+        const off = await offEngine();
+        const files = [bankFile('Chase4321_Activity_G1.csv', bankDesc), aggFile('aggregator-g1.csv', aggDesc)];
+        if (order === 'aggregator first') files.reverse();
+        await P.ingestFile(s.db, files[0], s.opts(off));
+        const second = await P.ingestFile(s.db, files[1], s.opts(off));
+        assert.equal(count(s.db, 'accounts'), 1, 'one account for both formats');
+        assert.equal(second.counts.duplicates, 0);
+        assert.equal(inserted(second, 'transaction'), 1);
+        const tx = all(s.db, 'SELECT * FROM transactions ORDER BY id');
+        assert.deepEqual(tx.map((t) => [t.date, t.amount]), [['2032-03-09', -54.21], ['2032-03-09', -54.21]]);
+        assert.equal(tx[1].dedupe_key, `${tx[0].dedupe_key}:d:${sha256(normalize(tx[1].description)).slice(0, 16)}`, 'kept under its alt key');
+        const q = items(s.db, 'near_duplicate');
+        assert.equal(q.length, 1);
+        assert.equal(q[0].subject, tx.map((t) => t.dedupe_key).sort().join('|'));
+      }));
+    }
+  }
+
+  test('G1: the aggregator plus bank overlap fixture still dedupes with the aggregator imported first', () => withStore(async (s) => {
+    const off = await offEngine();
+    await P.ingestFile(s.db, fixture('aggregator.csv', 'text/csv'), s.opts(off));
+    const r = await P.ingestFile(s.db, fixture('Chase7766_Activity_20320305.csv', 'text/csv'), s.opts(off));
+    assert.equal(r.counts.duplicates, 2);
+    assert.equal(count(s.db, 'transactions'), 3);
+    assert.equal(items(s.db, 'near_duplicate').length, 0);
+  }));
+
+  // G2: a duplicate_confirmed tombstone stores the archived row's normalized description; a later
+  // colliding row is skipped only when it matches the tombstone under G1's evidence rule.
+  const coffeeA = (name, extra = []) => activityFile(name, [{ date: '03/09/2032', amount: '-4.50', balance: '', description: 'HARBOR ESPRESSO BAR' }, ...extra]);
+  const coffeeB = (name, extra = []) => activityFile(name, [{ date: '03/10/2032', amount: '-4.50', balance: '', description: 'MORNING BREW COFFEE' }, ...extra]);
+  const lunch = (name, extra = []) => activityFile(name, [{ date: '03/10/2032', amount: '-4.50', balance: '', description: 'SUNNY DELI LUNCH' }, ...extra]);
+  const filler = (n) => ({ date: '03/25/2032', amount: `-${70 + n}.00`, balance: '', description: `SYNTH FILLER ${n}` });
+  const pendingNear = (db) => all(db, "SELECT * FROM confirm_items WHERE kind = 'near_duplicate' AND status = 'pending' ORDER BY id");
+
+  async function confirmSecondCoffee(s, off) {
+    await P.ingestFile(s.db, coffeeA('Chase4321_Activity_coffee_A.csv'), s.opts(off));
+    await P.ingestFile(s.db, coffeeB('Chase4321_Activity_coffee_B.csv'), s.opts(off));
+    const [q] = pendingNear(s.db);
+    assert.ok(q, 'the second coffee is asked about');
+    C.answer(s.db, q.id, 'same', { now: NOW });
+    const tomb = all(s.db, "SELECT * FROM superseded_rows WHERE reason = 'duplicate_confirmed'");
+    assert.equal(tomb.length, 1);
+    assert.ok(JSON.stringify(tomb[0]).includes(normalize('MORNING BREW COFFEE')), 'the tombstone stores the normalized description');
+    return tomb[0].dedupe_key;
+  }
+
+  for (const answer of ['same', 'different']) {
+    test(`G2: after a confirmed duplicate, a distinct same-key lunch is kept and asked about; answered ${answer}, re-imports ask nothing new`, () => withStore(async (s) => {
+      const off = await offEngine();
+      const tombKey = await confirmSecondCoffee(s, off);
+      const r = await P.ingestFile(s.db, lunch('Chase4321_Activity_lunch.csv'), s.opts(off));
+      assert.equal(r.counts.duplicates, 0, 'the lunch is not the confirmed coffee');
+      const kept = one(s.db, "SELECT * FROM transactions WHERE description = 'SUNNY DELI LUNCH'");
+      assert.ok(kept, 'the lunch is stored');
+      assert.equal(kept.dedupe_key, `${tombKey}:d:${sha256(normalize('SUNNY DELI LUNCH')).slice(0, 16)}`, 'under its alt key');
+      const asked = pendingNear(s.db);
+      assert.equal(asked.length, 1, 'the lunch is asked about');
+      assert.ok(asked[0].subject.split('|').includes(kept.dedupe_key));
+
+      C.answer(s.db, asked[0].id, answer, { now: NOW });
+      const before = count(s.db, 'transactions');
+      const questions = count(s.db, 'confirm_items', "kind = 'near_duplicate'");
+      for (const [i, file] of [coffeeB('Chase4321_Activity_coffee_B2.csv', [filler(1)]), lunch('Chase4321_Activity_lunch_2.csv', [filler(2)])].entries()) {
+        const again = await P.ingestFile(s.db, file, s.opts(off));
+        assert.equal(again.counts.duplicates, 1, `re-import ${i + 1} skips the known posting`);
+        assert.equal(inserted(again, 'transaction'), 1, 'only the filler row lands');
+      }
+      assert.equal(count(s.db, 'transactions'), before + 2);
+      assert.equal(count(s.db, 'confirm_items', "kind = 'near_duplicate'"), questions, 'no new question');
+      assert.equal(pendingNear(s.db).length, 0);
+    }));
+  }
 });
 
 // D5: a complete positions snapshot removes same-account, same-day holdings it no longer lists.
@@ -935,5 +1033,64 @@ describe('authoritative position snapshots (D5)', () => {
     assert.equal(count(s.db, 'positions', "as_of = '2032-03-05'"), 2);
     assert.equal(removed(s.db).length, 0);
     assert.equal(figure(s.db), 250);
+  }));
+
+  // G5: a snapshot is authoritative per (account, asOf) only when the file proves coverage.
+  test('G5: a truncated record for the account warns truncated_position and keeps the omitted holding', () => withStore(async (s) => {
+    const off = await offEngine();
+    await P.ingestFile(s.db, positionsFile('positions-ab.csv', [A, B]), s.opts(off));
+    const second = await P.ingestFile(s.db, positionsFile('positions-a-truncated.csv', [A], { extra: ['Z5550002222,Synthetic brokerage'] }), s.opts(off));
+    assert.equal(second.counts.warningCodes.truncated_position, 1);
+    assert.deepEqual(all(s.db, 'SELECT symbol FROM positions ORDER BY symbol').map((p) => p.symbol), ['EXMPL', 'OTHR']);
+    assert.equal(removed(s.db).length, 0);
+    assert.equal(figure(s.db), 250);
+  }));
+
+  test('G5: a warning on account X does not block a complete account Y in the same file', () => withStore(async (s) => {
+    const off = await offEngine();
+    const X = { account: 'Z5550003333', accountName: 'Synthetic brokerage X' };
+    await P.ingestFile(s.db, positionsFile('positions-xy-ab.csv', [{ ...A, ...X }, { ...B, ...X }, A, B]), s.opts(off));
+    const second = await P.ingestFile(s.db, positionsFile('positions-xy-a.csv', [{ ...A, ...X }, { symbol: 'BROKEN', quantity: '1', price: '1.00', value: 'n/a', ...X }, A]), s.opts(off));
+    assert.equal(second.counts.warningCodes.invalid_position, 1);
+    const held = (mask) => all(s.db, 'SELECT p.symbol FROM positions p JOIN accounts a ON a.id = p.account_id WHERE a.mask = ? ORDER BY p.symbol', mask).map((p) => p.symbol);
+    assert.deepEqual(held('3333'), ['EXMPL', 'OTHR'], 'X is incomplete: nothing removed');
+    assert.deepEqual(held('2222'), ['EXMPL'], 'Y is complete: OTHR removed');
+    assert.deepEqual(removed(s.db).map((x) => JSON.parse(x.row).symbol), ['OTHR']);
+    assert.equal(figure(s.db), 200);
+  }));
+
+  test('G5: an unattributable warning marks the whole file incomplete', () => withStore(async (s) => {
+    const off = await offEngine();
+    const X = { account: 'Z5550003333', accountName: 'Synthetic brokerage X' };
+    await P.ingestFile(s.db, positionsFile('positions-xy-ab.csv', [{ ...A, ...X }, { ...B, ...X }, A, B]), s.opts(off));
+    const second = await P.ingestFile(s.db, positionsFile('positions-xy-a-orphan.csv', [{ ...A, ...X }, A, { symbol: 'ORPHAN', quantity: '1', price: '1.00', value: '1.00', account: '' }]), s.opts(off));
+    assert.equal(second.counts.warningCodes.invalid_position, 1);
+    assert.equal(count(s.db, 'positions'), 4);
+    assert.equal(removed(s.db).length, 0);
+  }));
+
+  // Statements: an absent holdings key is not a snapshot; an explicit empty array is.
+  const statement = (holdings) => ({
+    institution: 'Example Bank', accountLast4: '4321', accountKind: 'brokerage', periodEnd: '2032-03-31', endingBalance: 1500, confidence: 0.9,
+    ...(holdings === undefined ? {} : { holdings }),
+  });
+  const statementFile = (tag) => textFile(`statement-${tag}.txt`, `Synthetic brokerage statement ${tag} for the period ending 2032-03-31`, 'text/plain');
+  const statementEngine = (holdings) => fakeEngine([[{ docType: 'statement', confidence: 0.9 }], [statement(holdings)]]);
+  const HOLDINGS = [{ symbol: 'EXMPL', name: 'Example Index Fund', quantity: 10, value: 200 }, { symbol: 'OTHR', name: 'Other Example Fund', quantity: 5, value: 50 }];
+  const statementSymbols = (db) => all(db, "SELECT p.symbol FROM positions p JOIN accounts a ON a.id = p.account_id WHERE a.mask = '4321' ORDER BY p.symbol").map((p) => p.symbol);
+
+  test('G5: a statement extraction without a holdings key keeps the stored holdings', () => withStore(async (s) => {
+    assert.equal((await P.ingestFile(s.db, statementFile('full'), s.opts(await statementEngine(HOLDINGS)))).status, 'imported');
+    assert.equal((await P.ingestFile(s.db, statementFile('no-holdings'), s.opts(await statementEngine(undefined)))).status, 'imported');
+    assert.deepEqual(statementSymbols(s.db), ['EXMPL', 'OTHR']);
+    assert.equal(removed(s.db).length, 0);
+  }));
+
+  test('G5: an explicit empty holdings array is a complete empty snapshot that archives every stored symbol', () => withStore(async (s) => {
+    const first = await P.ingestFile(s.db, statementFile('full'), s.opts(await statementEngine(HOLDINGS)));
+    const empty = await P.ingestFile(s.db, statementFile('empty'), s.opts(await statementEngine([])));
+    assert.equal(empty.status, 'imported');
+    assert.deepEqual(statementSymbols(s.db), []);
+    assert.deepEqual(removed(s.db).map((x) => [JSON.parse(x.row).symbol, x.file_id, x.superseded_by]).sort(), [['EXMPL', first.fileId, empty.fileId], ['OTHR', first.fileId, empty.fileId]]);
   }));
 });

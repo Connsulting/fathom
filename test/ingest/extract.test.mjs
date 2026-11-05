@@ -10,7 +10,7 @@ import { src } from '../helpers/server.mjs';
 import {
   fixture, textFile, northwindFile, paystubText, realStore, fakeEngine, recordingEngine, offEngine, all, one, count, items, NOW,
 } from '../helpers/ingest.mjs';
-import { textPdf, imagePdf } from '../helpers/pdf.mjs';
+import { textPdf, imagePdf, multiPagePdf, malformedPdf, partialTextPdf, inflateBombPdf } from '../helpers/pdf.mjs';
 
 let X;
 let RD;
@@ -61,7 +61,8 @@ const NOTES = {
   ],
   goals: [{ title: 'Build a cash reserve', when: '2033', confidence: 0.9 }],
 };
-const PDF_BYTES = new TextEncoder().encode('%PDF-1.4\n% synthetic statement for tests\n%%EOF\n');
+// G6: a PDF pdfjs cannot open is withheld, so a statement PDF sent as a document is image-only.
+const PDF_BYTES = imagePdf({ tag: 'synthetic statement for tests' });
 const EMPLOYER_FACTS = ['income.w2', 'income.sCorp', 'benefits.employer401k', 'benefits.hsa'];
 
 const ctx = { fileId: 'f-000000000000000000000001', households: { entities: [] } };
@@ -377,6 +378,8 @@ describe('through ingestFile', () => {
       assert.match(t.source_slot, /^wh:[0-9a-f]{12}:(2031|2032):(federal|co):unknown$/i);
       assert.equal(t.source_slot.split(':')[1], t.payer.split(':')[1]);
       assert.equal(t.source_slot.split(':')[2], String(t.tax_year));
+      // G4: while the recipient is unknown the payer identity carries the document.
+      assert.ok(t.payer.endsWith(`:doc:${t.file_id}`), t.payer);
     }
     assert.equal(new Set(tax.map((t) => t.dedupe_key)).size, 8);
     assert.deepEqual(tax.filter((t) => t.jurisdiction === 'federal').map((t) => t.tax_year).sort(), [2031, 2032, 2032, 2032]);
@@ -539,14 +542,15 @@ describe('annual withholding supersedes paystub detail', () => {
       ['federal', 12000, 'withholding', 'annual_total'],
     ], 'only the W-2 totals stay active');
     for (const t of active) {
-      assert.match(t.payer, /^w2:[0-9a-f]{12}:2032:9000000$/);
+      // G4: the resolved payer identity is <R10 payer>:<recipient>.
+      assert.match(t.payer, /^w2:[0-9a-f]{12}:2032:9000000:owner$/);
       assert.equal(t.source_slot, `wh:${t.payer.split(':')[1]}:2032:${t.source_slot.split(':')[3]}:owner`);
       assert.match(t.source_slot.split(':')[3], /^(federal|co)$/i);
     }
     const sup = all(db, "SELECT * FROM superseded_rows WHERE table_name = 'tax_payments' ORDER BY id");
     assert.equal(sup.length, 4, 'two paystubs, two jurisdictions');
     assert.ok(sup.every((x) => x.reason === 'summarized'));
-    assert.ok(sup.every((x) => String(JSON.parse(x.row).payer).startsWith('paystub:')));
+    for (const x of sup) assert.match(JSON.parse(x.row).payer, /^paystub:[0-9a-f]{12}:2032-03-(15|31):500000:owner$/, 'archived under the resolved payer identity');
     assert.deepEqual(sup.map((x) => JSON.parse(x.row).amount).sort((a, b) => a - b), [250, 250, 700, 700]);
   }
 
@@ -625,20 +629,35 @@ describe('signed amount tokens', () => {
   }));
 });
 
-// D4: withholding belongs to a recipient (owner, spouse, unknown). The employer question decides it
-// for every document of the employer, or "both" asks per document; unknown never summarizes.
-describe('withholding recipients (D4)', () => {
+// D4 with G4: withholding belongs to a recipient (owner, spouse, unknown). The employer question
+// decides it for every document of the employer, or "both" asks per document; unknown never
+// summarizes. While the recipient is unknown the payer identity is <R10 payer>:doc:<file id>, so two
+// members' identical documents never collapse; once it resolves the payer identity is
+// <R10 payer>:<recipient> and the row is rekeyed.
+describe('withholding recipients (D4, G4)', () => {
   const W2_2032 = { ...W2, taxYear: 2032 };
   const STUB_B = { ...PAYSTUB, gross: 2500, net: 1900, federalWithholding: 300, stateWithholding: 100, ytdGross: 15000 };
   const w2File = () => textFile('w2-member-a-2032.txt', 'Synthetic wage and tax statement for 2032, member A', 'text/plain');
-  const importAll = async (s) => {
-    await P.ingestFile(s.db, w2File(), s.opts(await fakeEngine([[{ docType: 'w2', taxYear: 2032, confidence: 0.9 }], [W2_2032]])));
-    await P.ingestFile(s.db, paystubFile({}, 'paystub-member-a.txt'), s.opts(await fakeEngine(paystubResponses(PAYSTUB))));
-    await P.ingestFile(s.db, paystubFile({ gross: '2500.00' }, 'paystub-member-b.txt'), s.opts(await fakeEngine(paystubResponses(STUB_B))));
-  };
+  const importAll = async (s) => ({
+    w2: (await P.ingestFile(s.db, w2File(), s.opts(await fakeEngine([[{ docType: 'w2', taxYear: 2032, confidence: 0.9 }], [W2_2032]])))).fileId,
+    a: (await P.ingestFile(s.db, paystubFile({}, 'paystub-member-a.txt'), s.opts(await fakeEngine(paystubResponses(PAYSTUB))))).fileId,
+    b: (await P.ingestFile(s.db, paystubFile({ gross: '2500.00' }, 'paystub-member-b.txt'), s.opts(await fakeEngine(paystubResponses(STUB_B))))).fileId,
+  });
   const key = () => X.nameKey('Example Employer LLC');
   const payers = () => ({ w2: `w2:${key()}:2032:9000000`, a: `paystub:${key()}:2032-03-15:500000`, b: `paystub:${key()}:2032-03-15:250000` });
   const pendingOf = (db, kind) => C.pendingItems(db).filter((i) => i.kind === kind);
+  const recipientQuestions = (db) => C.pendingItems(db).filter((i) => i.kind === 'employer_recipient' || i.kind === 'document_recipient');
+  const answerEmployer = (db, option) => C.answer(db, pendingOf(db, 'employer_recipient')[0].id, option, { now: NOW });
+  const active = (db) => all(db, 'SELECT * FROM tax_payments ORDER BY payer, amount');
+  const rekeyed = (t) => D.dedupeKey({ kind: 'tax_payment', jurisdiction: t.jurisdiction, sheetYear: t.tax_year, date: t.date, payer: t.payer });
+  // Two members' paystubs with identical payroll figures; the bytes differ only in a trailing line.
+  const memberStub = (member, payDate = '2032-03-15') => textFile(`paystub-member-${member}-${payDate}.txt`, `${paystubText({ payDate })}\nSynthetic member ${member}`, 'text/plain');
+  const importStub = async (s, member, payDate = '2032-03-15') => {
+    const extracted = payDate === '2032-03-15' ? PAYSTUB : { ...PAYSTUB, payDate, periodStart: '2032-03-16', periodEnd: payDate };
+    const r = await P.ingestFile(s.db, memberStub(member, payDate), s.opts(await fakeEngine(paystubResponses(extracted))));
+    assert.equal(r.status, 'imported');
+    return r.fileId;
+  };
 
   test('the new kinds exist and tax_payments has a recipient column', () => withStore(async (s) => {
     assert.ok(C.KINDS.includes('employer_recipient'));
@@ -646,11 +665,13 @@ describe('withholding recipients (D4)', () => {
     assert.ok(all(s.db, 'PRAGMA table_info(tax_payments)').some((c) => c.name === 'recipient'));
   }));
 
-  test('unknown recipient: a W-2 plus paystubs leave everything active and queue the employer question', () => withStore(async (s) => {
-    await importAll(s);
-    const active = all(s.db, 'SELECT * FROM tax_payments ORDER BY amount');
-    assert.equal(active.length, 6, 'W-2 and both paystubs stay active');
-    for (const t of active) assert.match(t.source_slot, new RegExp(`^wh:${key()}:2032:(federal|co):unknown$`, 'i'));
+  test('unknown recipient: a W-2 plus paystubs leave everything active under per-document payers and queue the employer question', () => withStore(async (s) => {
+    const ids = await importAll(s);
+    const p = payers();
+    const rows = active(s.db);
+    assert.equal(rows.length, 6, 'W-2 and both paystubs stay active');
+    for (const t of rows) assert.match(t.source_slot, new RegExp(`^wh:${key()}:2032:(federal|co):unknown$`, 'i'));
+    assert.deepEqual(rows.map((t) => t.payer).sort(), [`${p.a}:doc:${ids.a}`, `${p.a}:doc:${ids.a}`, `${p.b}:doc:${ids.b}`, `${p.b}:doc:${ids.b}`, `${p.w2}:doc:${ids.w2}`, `${p.w2}:doc:${ids.w2}`].sort());
     assert.equal(count(s.db, 'superseded_rows', "reason = 'summarized'"), 0);
     const q = pendingOf(s.db, 'employer_recipient');
     assert.equal(q.length, 1, 'one question for the employer');
@@ -659,26 +680,112 @@ describe('withholding recipients (D4)', () => {
   }));
 
   test('two members at one employer: after both and each document recipient, B stays active and A is summarized', () => withStore(async (s) => {
-    await importAll(s);
-    C.answer(s.db, pendingOf(s.db, 'employer_recipient')[0].id, 'both', { now: NOW });
+    const ids = await importAll(s);
+    answerEmployer(s.db, 'both');
     const docs = pendingOf(s.db, 'document_recipient');
     const p = payers();
-    assert.deepEqual(docs.map((d) => d.subject).sort(), [p.w2, p.a, p.b].sort(), 'one question per document of the employer');
+    const subject = { w2: `${p.w2}:doc:${ids.w2}`, a: `${p.a}:doc:${ids.a}`, b: `${p.b}:doc:${ids.b}` };
+    assert.deepEqual(docs.map((d) => d.subject).sort(), Object.values(subject).sort(), 'one question per document, its subject the per-document payer');
     for (const d of docs) assert.deepEqual(d.options.map((o) => o.id), ['owner', 'spouse']);
-    const answer = { [p.w2]: 'owner', [p.a]: 'owner', [p.b]: 'spouse' };
+    const answer = { [subject.w2]: 'owner', [subject.a]: 'owner', [subject.b]: 'spouse' };
     for (const d of docs) C.answer(s.db, d.id, answer[d.subject], { now: NOW });
 
-    const active = all(s.db, 'SELECT * FROM tax_payments ORDER BY amount');
-    assert.deepEqual(active.map((t) => [t.payer, t.amount, t.source_slot.split(':').at(-1)]), [
-      [p.b, 100, 'spouse'], [p.b, 300, 'spouse'], [p.w2, 3500, 'owner'], [p.w2, 12000, 'owner'],
+    const rows = all(s.db, 'SELECT * FROM tax_payments ORDER BY amount');
+    assert.deepEqual(rows.map((t) => [t.payer, t.amount, t.source_slot.split(':').at(-1), t.recipient]), [
+      [`${p.b}:spouse`, 100, 'spouse', 'spouse'], [`${p.b}:spouse`, 300, 'spouse', 'spouse'],
+      [`${p.w2}:owner`, 3500, 'owner', 'owner'], [`${p.w2}:owner`, 12000, 'owner', 'owner'],
     ], "B's paystub withholding stays; A's W-2 totals stay");
+    for (const t of rows) assert.equal(t.dedupe_key, rekeyed(t), 'rekeyed under the resolved payer');
     const sup = all(s.db, "SELECT * FROM superseded_rows WHERE table_name = 'tax_payments' AND reason = 'summarized'");
-    assert.deepEqual(sup.map((x) => [JSON.parse(x.row).payer, JSON.parse(x.row).amount]).sort((x, y) => x[1] - y[1]), [[p.a, 250], [p.a, 700]], "A's paystubs are summarized by A's W-2");
+    assert.deepEqual(sup.map((x) => [JSON.parse(x.row).payer, JSON.parse(x.row).amount]).sort((x, y) => x[1] - y[1]), [[`${p.a}:owner`, 250], [`${p.a}:owner`, 700]], "A's paystubs are summarized by A's W-2");
+  }));
+
+  for (const importOrder of [['a', 'b'], ['b', 'a']]) {
+    for (const answerOrder of [['a', 'b'], ['b', 'a']]) {
+      test(`identical payroll figures for two members (import ${importOrder.join(',')}, answer ${answerOrder.join(',')}) never collapse`, () => withStore(async (s) => {
+        const ids = {};
+        for (const m of importOrder) ids[m] = await importStub(s, m);
+        const base = payers().a;
+        let rows = active(s.db);
+        assert.equal(rows.length, 4, 'both documents stay, two jurisdictions each');
+        assert.deepEqual(rows.map((t) => t.payer).sort(), [`${base}:doc:${ids.a}`, `${base}:doc:${ids.a}`, `${base}:doc:${ids.b}`, `${base}:doc:${ids.b}`].sort());
+        assert.equal(new Set(rows.map((t) => t.dedupe_key)).size, 4);
+
+        answerEmployer(s.db, 'both');
+        const docs = pendingOf(s.db, 'document_recipient');
+        assert.deepEqual(docs.map((d) => d.subject).sort(), [`${base}:doc:${ids.a}`, `${base}:doc:${ids.b}`].sort(), 'one question per document');
+        const recipient = { a: 'owner', b: 'spouse' };
+        for (const m of answerOrder) C.answer(s.db, docs.find((d) => d.subject === `${base}:doc:${ids[m]}`).id, recipient[m], { now: NOW });
+
+        rows = active(s.db);
+        assert.deepEqual(rows.map((t) => [t.payer, t.recipient, t.source_slot.split(':').at(-1), t.amount]), [
+          [`${base}:owner`, 'owner', 'owner', 250], [`${base}:owner`, 'owner', 'owner', 700],
+          [`${base}:spouse`, 'spouse', 'spouse', 250], [`${base}:spouse`, 'spouse', 'spouse', 700],
+        ]);
+        assert.ok(rows.every((t) => !t.payer.includes(':doc:')), 'the file id leaves the payer once resolved');
+        for (const t of rows) assert.equal(t.dedupe_key, rekeyed(t));
+        assert.equal(count(s.db, 'superseded_rows'), 0);
+        assert.equal(recipientQuestions(s.db).length, 0);
+      }));
+    }
+  }
+
+  for (const answerOrder of [['a', 'b'], ['b', 'a']]) {
+    test(`identical documents answered with one recipient (answer ${answerOrder.join(',')}): the rekeyed newer row is archived as duplicate`, () => withStore(async (s) => {
+      const ids = { a: await importStub(s, 'a'), b: await importStub(s, 'b') };
+      const base = payers().a;
+      answerEmployer(s.db, 'both');
+      const docs = pendingOf(s.db, 'document_recipient');
+      assert.deepEqual(docs.map((d) => d.subject).sort(), [`${base}:doc:${ids.a}`, `${base}:doc:${ids.b}`].sort(), 'one question per document');
+      for (const m of answerOrder) C.answer(s.db, docs.find((d) => d.subject === `${base}:doc:${ids[m]}`).id, 'owner', { now: NOW });
+      const rows = active(s.db);
+      assert.deepEqual(rows.map((t) => [t.payer, t.amount, t.file_id]), [[`${base}:owner`, 250, ids.a], [`${base}:owner`, 700, ids.a]], 'one row per jurisdiction, from the older file');
+      const dup = all(s.db, "SELECT * FROM superseded_rows WHERE table_name = 'tax_payments' AND reason = 'duplicate' ORDER BY id");
+      assert.deepEqual(dup.map((x) => [x.file_id, JSON.parse(x.row).amount]).sort((x, y) => x[1] - y[1]), [[ids.b, 250], [ids.b, 700]], 'the newer document is archived');
+    }));
+  }
+
+  for (const option of ['owner', 'spouse']) {
+    test(`a remembered employer answer (${option}) resolves a later import at once`, () => withStore(async (s) => {
+      await importStub(s, 'a');
+      answerEmployer(s.db, option);
+      const base = payers().a;
+      assert.deepEqual(active(s.db).map((t) => t.payer), [`${base}:${option}`, `${base}:${option}`]);
+      await importStub(s, 'a', '2032-03-31');
+      const later = all(s.db, "SELECT * FROM tax_payments WHERE date = '2032-03-31' ORDER BY amount");
+      assert.deepEqual(later.map((t) => [t.payer, t.recipient, t.source_slot.split(':').at(-1)]), [
+        [`paystub:${key()}:2032-03-31:500000:${option}`, option, option], [`paystub:${key()}:2032-03-31:500000:${option}`, option, option],
+      ]);
+      for (const t of later) assert.equal(t.dedupe_key, rekeyed(t));
+      assert.equal(recipientQuestions(s.db).length, 0, 'nothing new is asked');
+    }));
+  }
+
+  test('a remembered both and document answer: a later identical document is asked about on its own and the answered one is kept', () => withStore(async (s) => {
+    const a = await importStub(s, 'a');
+    const base = payers().a;
+    answerEmployer(s.db, 'both');
+    const [docA] = pendingOf(s.db, 'document_recipient');
+    assert.equal(docA.subject, `${base}:doc:${a}`);
+    C.answer(s.db, docA.id, 'owner', { now: NOW });
+
+    const b = await importStub(s, 'b');
+    const docs = pendingOf(s.db, 'document_recipient');
+    assert.deepEqual(docs.map((d) => d.subject), [`${base}:doc:${b}`], 'only the new document is asked about');
+    assert.equal(pendingOf(s.db, 'employer_recipient').length, 0, 'the employer answer is remembered');
+    assert.deepEqual(active(s.db).map((t) => t.payer), [`${base}:doc:${b}`, `${base}:doc:${b}`, `${base}:owner`, `${base}:owner`]);
+
+    C.answer(s.db, docs[0].id, 'spouse', { now: NOW });
+    assert.deepEqual(active(s.db).map((t) => [t.payer, t.file_id]), [[`${base}:owner`, a], [`${base}:owner`, a], [`${base}:spouse`, b], [`${base}:spouse`, b]]);
+    assert.equal(recipientQuestions(s.db).length, 0);
   }));
 });
 
-// D6: a PDF with a usable text layer is read with pdfjs and goes to the model as redacted text, like
-// a text file; a PDF without one goes as a document. counts.extractPath records the path.
+// D6 with G6 to G8: a PDF whose text layer has any text is read with pdfjs (in a worker) and goes
+// to the model as redacted text, like a text file; only an image-only PDF goes as a document. A PDF
+// pdfjs cannot read completely (failed or incomplete) waits as needs_extraction with note
+// pdf_unreadable and is never sent. counts.extractPath records the path. pdfText's own outcomes are
+// in pdftext.test.mjs.
 describe('PDF text layer (D6)', () => {
   const LINES = [
     'SYNTHETIC BROKERAGE STATEMENT',
@@ -707,18 +814,6 @@ describe('PDF text layer (D6)', () => {
     assert.equal(i.text.trim(), '');
   });
 
-  test('pdfText returns {text, pages, usable}', async () => {
-    const { pdfText } = await src('src/ingest/pdftext.mjs');
-    const t = await pdfText(textPdf(LINES));
-    assert.equal(t.pages, 1);
-    assert.equal(t.usable, true);
-    assert.ok(t.text.includes('Ending balance $123456.78'));
-    const i = await pdfText(imagePdf());
-    assert.deepEqual([i.pages, i.usable, i.text.trim()], [1, false, '']);
-    const broken = await pdfText(new TextEncoder().encode('%PDF-1.4\n% not really a pdf\n%%EOF\n'));
-    assert.equal(broken.usable, false, 'errors are caught');
-  });
-
   test('a text-layer PDF reaches the engine as redacted text only and imports with pdf_text_layer', () => withStore(async (s) => {
     const engine = await recordingEngine([classify, [{ ...STATEMENT, endingBalance: '#A1#', holdings: [] }]]);
     const r = await P.ingestFile(s.db, { name: 'statement-text-2032-03.pdf', bytes: textPdf(LINES), mime: 'application/pdf' }, s.opts(engine));
@@ -745,6 +840,44 @@ describe('PDF text layer (D6)', () => {
     const t = await P.ingestFile(s.db, paystubFile(), s.opts(await fakeEngine(paystubResponses(PAYSTUB))));
     assert.equal(t.counts.extractPath, 'text');
   }));
+
+  // G6: a short statement (fewer than 200 letters) still goes as redacted text, never as a PDF.
+  test('a short text-layer statement with an account number and an SSN-like pattern goes as redacted text', () => withStore(async (s) => {
+    const SHORT = ['Statement', 'Acct 000123456789', 'SSN 123-45-6789', 'Balance $1500.25'];
+    assert.ok((SHORT.join(' ').match(/\p{L}/gu) ?? []).length < 200);
+    const engine = await recordingEngine([classify, [{ ...STATEMENT, endingBalance: '#A1#', holdings: [] }]]);
+    const r = await P.ingestFile(s.db, { name: 'statement-short-2032-03.pdf', bytes: textPdf(SHORT), mime: 'application/pdf' }, s.opts(engine));
+    assert.equal(r.status, 'imported');
+    assert.equal(r.counts.extractPath, 'pdf_text_layer');
+    assert.equal(engine.extracts.length, 2);
+    assert.ok(engine.extracts.every((x) => x.document.type === 'text' && !('data' in x.document)), 'never a PDF block');
+    const sent = engine.sent();
+    for (const raw of ['000123456789', '123-45-6789', '1500.25']) assert.ok(!sent.includes(raw), `${raw} never sent`);
+    assert.doesNotMatch(sent, /\d{5,}/);
+    assert.deepEqual(all(s.db, 'SELECT amount FROM balances').map((b) => b.amount), [1500.25]);
+  }));
+
+  // G6 and G8: failed (malformed, partial-text error) and incomplete (over 50 pages, output cap)
+  // PDFs are withheld: needs_extraction, note pdf_unreadable, extractPath pdf_withheld, no engine call.
+  const withheld = [
+    ['a malformed PDF', 'malformed', () => malformedPdf()],
+    ['a 51-page PDF', 'pages-51', () => multiPagePdf(51)],
+    ['a PDF whose second content stream is corrupt', 'partial', () => partialTextPdf(['Synthetic readable line before the corrupt stream'])],
+    ['a PDF whose stream inflates past the 2 MB text cap', 'text-bomb', () => inflateBombPdf({ inflatedBytes: 8 * 1024 * 1024, fill: 'text' })],
+  ];
+  for (const [what, tag, make] of withheld) {
+    test(`${what} is withheld: needs_extraction, pdf_unreadable, pdf_withheld and never reaches the engine`, () => withStore(async (s) => {
+      const engine = await recordingEngine([classify, [STATEMENT]]);
+      const r = await P.ingestFile(s.db, { name: `statement-${tag}.pdf`, bytes: await make(), mime: 'application/pdf' }, s.opts(engine));
+      assert.equal(r.status, 'needs_extraction');
+      assert.equal(r.counts.extractPath, 'pdf_withheld');
+      assert.equal(engine.extracts.length, 0, 'nothing is sent to the model');
+      assert.equal(engine.calls.length, 0);
+      const f = one(s.db, 'SELECT status, note FROM files WHERE id = ?', r.fileId);
+      assert.deepEqual([f.status, f.note], ['needs_extraction', 'pdf_unreadable']);
+      for (const table of ['documents', 'balances', 'positions', 'accounts']) assert.equal(count(s.db, table), 0, `${table} untouched`);
+    }));
+  }
 });
 
 // D7: Unicode minus forms directly before a digit or `$` count as a minus sign; prose dashes stay.

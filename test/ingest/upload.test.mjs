@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import { src, spawnServer, request, postJson, runCommand, tempDir, freePort, SERVER_TIMEOUT } from '../helpers/server.mjs';
 import { fixturePath, aggregatorCsv } from '../helpers/ingest.mjs';
 import { writeXlsx } from '../helpers/xlsx.mjs';
+import { textPdf, markerFontPdf, inflateBombPdf } from '../helpers/pdf.mjs';
 
 const T = { timeout: SERVER_TIMEOUT * 2 };
 const XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
@@ -356,8 +357,8 @@ describe('POST /api/files in real mode', () => {
 // too_large, the server still answers /healthz, and a normal file still imports after it. One server
 // per test, so a crash in one case does not decide another.
 describe('bounded parsing on a 128 MB heap', () => {
-  async function withSmallHeap(fn) {
-    const s = await spawnServer({ env: { FATHOM_DEMO: '1', FATHOM_ENGINE: 'off', NODE_OPTIONS: '--max-old-space-size=128' } });
+  async function withSmallHeap(fn, engine = 'off') {
+    const s = await spawnServer({ env: { FATHOM_DEMO: '1', FATHOM_ENGINE: engine, NODE_OPTIONS: '--max-old-space-size=128' } });
     try {
       await fn(s);
       const h = await request(s.baseUrl, { path: '/healthz' });
@@ -386,5 +387,80 @@ describe('bounded parsing on a 128 MB heap', () => {
     const r = await upload(s.baseUrl, [{ name: 'many-cells.xlsx', bytes, type: XLSX }]);
     assert.equal(r.status, 200, r.text.slice(0, 300));
     assert.deepEqual(r.json.files.map((f) => [f.name, f.status]), [['many-cells.xlsx', 'too_large']]);
+  }));
+
+  // G3: workbook parts are counted on the raw XML before any tree is built: shared strings,
+  // rich-text runs and unknown-format sheets past the limits are too_large, never a crash.
+  const tooLarge = async (s, name, bytes) => {
+    const r = await upload(s.baseUrl, [{ name, bytes, type: XLSX }]);
+    assert.equal(r.status, 200, r.text.slice(0, 300));
+    assert.deepEqual(r.json.files.map((f) => [f.name, f.status]), [[name, 'too_large']]);
+    assert.deepEqual(r.json.files[0].counts.warningCodes, { limit_exceeded: 1 });
+  };
+  const oneCell = [{ name: 'Synthetic export', rows: [['Label'], [{ shared: 0 }]] }];
+
+  test('G3: an xlsx with more shared strings than the cell limit answers too_large; the server stays up', T, () => withSmallHeap(async (s) => {
+    await tooLarge(s, 'many-strings.xlsx', writeXlsx(oneCell, { sharedStrings: '<si/>'.repeat(2000001), deflate: true }));
+  }));
+
+  test('G3: an xlsx whose one shared string holds more rich-text runs than the cell limit answers too_large; the server stays up', T, () => withSmallHeap(async (s) => {
+    await tooLarge(s, 'rich-text-runs.xlsx', writeXlsx(oneCell, { sharedStrings: `<si>${'<r><t>x</t></r>'.repeat(2050000)}</si>`, deflate: true }));
+  }));
+
+  test('G3: an unknown-format xlsx with more rows than the row limit answers too_large; the server stays up', T, () => withSmallHeap(async (s) => {
+    const rows = [['Synthetic column', 'Other column'], ...Array.from({ length: 200001 }, () => [])];
+    await tooLarge(s, 'many-rows-export.xlsx', writeXlsx([{ name: 'Synthetic export', rows }], { deflate: true }));
+  }));
+
+  test('G3: a CSV just under the cell limit maps without error on a 128 MB heap', T, () => withSmallHeap(async (s) => {
+    const cols = Array.from({ length: 10 }, (_, i) => `synthetic column ${i}`);
+    const bytes = Buffer.from(`${cols.join(',')}\n${'a,b,c,d,e,f,g,h,i,j\n'.repeat(199998)}`); // 199999 records, 1999990 cells
+    const r = await upload(s.baseUrl, [{ name: 'near-limit-export.csv', bytes, type: 'text/csv' }]);
+    assert.equal(r.status, 200, r.text.slice(0, 300));
+    assert.deepEqual(r.json.files.map((f) => [f.name, f.status]), [['near-limit-export.csv', 'needs_mapping']]);
+  }));
+});
+
+// G8: pdfjs runs in a resource-limited worker with its output discarded. On a 128 MB heap the server
+// survives PDFs that inflate far past their size, withholds one whose text passes the output cap,
+// and never prints a font name from a PDF.
+describe('PDF isolation on a 128 MB heap', () => {
+  const MARKER = 'ZQXPDFMARKER7731';
+  async function withPdfServer(fn) {
+    const s = await spawnServer({ env: { FATHOM_DEMO: '1', FATHOM_ENGINE: 'fake', NODE_OPTIONS: '--max-old-space-size=128' } });
+    try {
+      await fn(s);
+      const h = await request(s.baseUrl, { path: '/healthz' });
+      assert.equal(h.status, 200);
+      assert.equal(h.json && h.json.ok, true);
+      assert.ok(!s.output().includes(MARKER), 'no marker in server stdout or stderr');
+    } finally {
+      await s.stop();
+      rmSync(s.dataDir, { recursive: true, force: true });
+    }
+  }
+  const PDF = 'application/pdf';
+
+  test('a stream that inflates past the 2 MB text cap is withheld (pdf_withheld); the server stays up', T, () => withPdfServer(async (s) => {
+    const bytes = await inflateBombPdf({ inflatedBytes: 8 * 1024 * 1024, fill: 'text' });
+    const r = await upload(s.baseUrl, [{ name: 'statement-text-bomb.pdf', bytes, type: PDF }]);
+    assert.equal(r.status, 200, r.text.slice(0, 300));
+    assert.equal(r.json.files[0].status, 'needs_extraction');
+    assert.equal(r.json.files[0].counts.extractPath, 'pdf_withheld');
+  }));
+
+  test('a stream of 300 MB of zeros answers 200 and the server stays up', T, () => withPdfServer(async (s) => {
+    const bytes = await inflateBombPdf();
+    const r = await upload(s.baseUrl, [{ name: 'statement-zero-bomb.pdf', bytes, type: PDF }]);
+    assert.equal(r.status, 200, r.text.slice(0, 300));
+    assert.notEqual(r.json.files[0].status, 'failed');
+  }));
+
+  test('a font name carrying a marker never reaches the server output', T, () => withPdfServer(async (s) => {
+    const r = await upload(s.baseUrl, [
+      { name: 'statement-marker-font.pdf', bytes: markerFontPdf(MARKER, ['Synthetic statement with a marker font']), type: PDF },
+      { name: 'statement-marker-name.pdf', bytes: textPdf(['Synthetic statement'], { fontName: MARKER }), type: PDF },
+    ]);
+    assert.equal(r.status, 200, r.text.slice(0, 300));
   }));
 });

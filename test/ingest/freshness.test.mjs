@@ -5,6 +5,7 @@
 import test, { describe, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { src, tempDb } from '../helpers/server.mjs';
+import { imagePdf } from '../helpers/pdf.mjs';
 import { fixture, aggregatorFile, realStore, offEngine, fakeEngine, one, NOW } from '../helpers/ingest.mjs';
 
 let FR;
@@ -186,7 +187,7 @@ describe('stale to fresh', () => {
     institution: 'Example Bank', accountLast4: '4321', accountKind: 'brokerage', periodEnd, endingBalance,
     holdings: [{ symbol: 'EXMPL', name: 'Example Index Fund', quantity: 10, value: 1234.5 }], confidence: 0.9,
   });
-  const pdf = (tag) => ({ name: `statement-${tag}.pdf`, bytes: new TextEncoder().encode(`%PDF-1.4\n% synthetic statement ${tag}\n%%EOF\n`), mime: 'application/pdf' });
+  const pdf = (tag) => ({ name: `statement-${tag}.pdf`, bytes: imagePdf({ tag: `synthetic statement ${tag}` }), mime: 'application/pdf' });
   const engineFor = (periodEnd, bal) => fakeEngine([[{ docType: 'statement', confidence: 0.9 }], [statement(periodEnd, bal)]]);
   const STALE_NOTE = /Export a fresh copy\./;
 
