@@ -37,8 +37,8 @@ function yp(testInfo) {
 }
 
 // Puts the synthetic plan on file the way an upload would: the file in <dataDir>/files/, its
-// files row, and a documents row with doc_type plan.
-function addPlanDocument(dataDir, name = FILE_NAME, text = PLAN_TEXT) {
+// files row, and (unless `document` is false) a documents row with doc_type plan.
+function addPlanDocument(dataDir, name = FILE_NAME, text = PLAN_TEXT, { document = true } = {}) {
   const filesDir = join(dataDir, 'files');
   mkdirSync(filesDir, { recursive: true });
   writeFileSync(join(filesDir, name), text);
@@ -47,8 +47,10 @@ function addPlanDocument(dataDir, name = FILE_NAME, text = PLAN_TEXT) {
     db.prepare(`INSERT INTO files (id, name, mime, size, sha256, source_kind, uploaded_at, stored_path, status, note)
                 VALUES (?, ?, 'text/plain', ?, ?, 'upload', ?, ?, 'parsed', 'Synthetic e2e plan document')`)
       .run(FILE_ID, name, Buffer.byteLength(text), createHash('sha256').update(text).digest('hex'), new Date().toISOString(), `files/${name}`);
-    db.prepare(`INSERT INTO documents (doc_type, tax_year, fields, file_id, parser, locator) VALUES ('plan', ?, '{}', ?, NULL, NULL)`)
-      .run(Number(S.meta.clock.slice(0, 4)), FILE_ID);
+    if (document) {
+      db.prepare(`INSERT INTO documents (doc_type, tax_year, fields, file_id, parser, locator) VALUES ('plan', ?, '{}', ?, NULL, NULL)`)
+        .run(Number(S.meta.clock.slice(0, 4)), FILE_ID);
+    }
   } finally {
     db.close();
   }
@@ -182,6 +184,32 @@ test('a text-only plan document is enough to build the Your plans pack', async (
   await expect(card).toBeVisible();
   const build = card.locator('button[data-yp-build]');
   await expect(build).toBeEnabled();
+  await build.click();
+  await expect(page.locator('.h-yp-result')).toContainText(/\b[1-9]\d* entr(y|ies)\b/, { timeout: 30_000 });
+  await expect(page.locator('.fx-err')).toHaveCount(0);
+});
+
+// CR6: with no plan or benefits documents, an optional uploaded file is the only input. Ticking it
+// must enable Build, unticking must disable it again, and the build must use it.
+test('an optional uploaded file alone enables Build and builds the Your plans pack', async ({ page }, testInfo) => {
+  const { base, dataDir } = yp(testInfo);
+  addPlanDocument(dataDir, FILE_NAME, PLAN_TEXT, { document: false });
+
+  await gotoYp(page, base, 'packs');
+  const card = page.locator('.h-yp');
+  await expect(card).toBeVisible();
+  const box = card.locator(`input[data-yp-file="${FILE_ID}"]`);
+  const build = card.locator('button[data-yp-build]');
+  await expect(box).not.toBeChecked();
+  await expect(build).toBeDisabled();
+
+  await box.check();
+  await expect(build).toBeEnabled();
+  await box.uncheck();
+  await expect(build).toBeDisabled();
+  await box.check();
+  await expect(build).toBeEnabled();
+
   await build.click();
   await expect(page.locator('.h-yp-result')).toContainText(/\b[1-9]\d* entr(y|ies)\b/, { timeout: 30_000 });
   await expect(page.locator('.fx-err')).toHaveCount(0);
