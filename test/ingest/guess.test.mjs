@@ -247,6 +247,61 @@ describe('guessPending', () => {
     assert.deepEqual(accepted, [{ item: a, option: 'checking', reason: 'Ends in 4001' }]);
   }));
 
+  describe('validateGuesses compares complete quantities, not digit runs', () => {
+    const OPTIONS = [{ id: 'checking', label: 'Checking' }, { id: 'cash', label: 'Savings or cash' }];
+    // Two synthetic items whose questions, option labels and file metadata hold no number.
+    function queueQuantities(db) {
+      const mk = (subject, context) => {
+        const r = C.ask(db, { kind: 'account_kind', subject, question: 'What kind of account is this synthetic account?', options: OPTIONS, context, now: NOW });
+        assert.equal(r.queued, true);
+        return r.id;
+      };
+      return { plain: mk('acct-quantity-plain', { amount: '100' }), signed: mk('acct-quantity-signed', { change: '-250', rate: '12.5%' }) };
+    }
+    const verdict = (batch, id, reason) => G.validateGuesses(batch, { guesses: [{ item: id, option: 'checking', reason }] }).length === 1;
+
+    test('an item whose only number is 100 rejects scaled, signed, percent and spelled-out amounts and keeps plain 100', () => withStore(async (s) => {
+      const { plain } = queueQuantities(s.db);
+      const batch = C.pendingItems(s.db);
+      for (const reason of [
+        'The import reports $100k of income.',
+        'The import reports 100 thousand of income.',
+        'A refund of -100 is listed.',
+        'Withholding is 100% of the payment.',
+        'About one hundred thousand dollars came in.',
+        'Around 100 million in the account.',
+        '1,000 shares are listed.',
+      ]) assert.equal(verdict(batch, plain, reason), false, `rejected: ${reason}`);
+      for (const reason of [
+        'The import lists 100 for this account.',
+        'The import lists $100 for this account.',
+        'Matches the 100.00 amount in the file.',
+        'Reads like a checking account',
+      ]) assert.equal(verdict(batch, plain, reason), true, `kept: ${reason}`);
+    }));
+
+    test('an item holding -250 and 12.5% keeps those quantities and rejects 250 with the sign dropped', () => withStore(async (s) => {
+      const { signed } = queueQuantities(s.db);
+      const batch = C.pendingItems(s.db);
+      assert.equal(verdict(batch, signed, 'A charge of -250 matches.'), true);
+      assert.equal(verdict(batch, signed, 'The rate is 12.5% in the file.'), true);
+      assert.equal(verdict(batch, signed, 'A charge of 250 matches.'), false);
+    }));
+
+    test('guessPending stores option_id NULL for a rejected reason and the option for a kept one', () => withStore(async (s) => {
+      const { plain, signed } = queueQuantities(s.db);
+      const engine = runtimeEngine(s.db);
+      await G.guessPending(s.db, engine, { now: NOW, fake: [script([
+        { item: plain, option: 'checking', reason: 'The import reports $100k of income.' },
+        { item: signed, option: 'checking', reason: 'A charge of -250 matches.' },
+      ])] });
+      assert.equal(count(s.db, 'confirm_guesses'), 2, 'a row for every item sent');
+      assert.deepEqual(rowOf(s.db, plain).option_id, null);
+      assert.equal(rowOf(s.db, plain).reason, null);
+      assert.equal(rowOf(s.db, signed).option_id, 'checking');
+    }));
+  });
+
   test('25 pending items with batchSize 20 make two calls, each carrying only its own items with no locator', () => withStore(async (s) => {
     const ids = queue(s.db, 25);
     const engine = runtimeEngine(s.db);
