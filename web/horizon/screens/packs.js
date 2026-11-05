@@ -357,6 +357,9 @@ export function onInput(e) {
   if (!c || c.fixed) return true;
   const set = c.source ? S.yp.off : S.yp.on;
   if (t.checked === !c.source) set.add(id); else set.delete(id);
+  const list = ypCandidates(H.api.s.live?.yourPlans || {});
+  const btn = H.root && H.root.querySelector('button[data-yp-build]');
+  if (btn) btn.disabled = !!S.yp.building || !(list.some((x) => x.source) || list.some(isPicked));
   return true;
 }
 
