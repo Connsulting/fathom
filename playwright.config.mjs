@@ -1,8 +1,10 @@
 // Playwright config for the Fathom end-to-end suite.
-// BASE_URL set: run against that server, start nothing locally (smoke receipts).
-// BASE_URL unset: start three demo servers through e2e/serve.mjs: the main one, a January one
+// FATHOM_SMOKE_BASE_URL or BASE_URL set: run against that server, start nothing locally.
+// Both unset: start three demo servers through e2e/serve.mjs: the main one, a January one
 // whose clock is pinned to 2027-01-05 for e2e/january.spec.mjs, and a Your plans one whose data
 // directory sits outside the checkout (in the temp directory) for e2e/your-plans.spec.mjs.
+// FATHOM_SMOKE_TARGET=real (default demo) selects the real-store smoke assertions. Real mode
+// requires a base URL. FATHOM_SMOKE_HEADERS is an optional JSON object of extra request headers.
 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -15,8 +17,32 @@ function portFrom(value, fallback) {
   return n;
 }
 
+function smokeHeaders(raw) {
+  if (raw == null || raw === '') return {};
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error('FATHOM_SMOKE_HEADERS must be a JSON object of header names to string values');
+  }
+  if (parsed == null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('FATHOM_SMOKE_HEADERS must be a JSON object of header names to string values');
+  }
+  const out = {};
+  for (const [name, value] of Object.entries(parsed)) {
+    if (typeof value !== 'string') throw new Error(`FATHOM_SMOKE_HEADERS.${name} must be a string`);
+    out[name] = value;
+  }
+  return out;
+}
+
 const CI = !!process.env.CI;
-const BASE_URL = process.env.BASE_URL || '';
+const SMOKE_TARGET = process.env.FATHOM_SMOKE_TARGET === 'real' ? 'real' : 'demo';
+const BASE_URL = process.env.FATHOM_SMOKE_BASE_URL || process.env.BASE_URL || '';
+const EXTRA_HEADERS = smokeHeaders(process.env.FATHOM_SMOKE_HEADERS);
+if (SMOKE_TARGET === 'real' && !BASE_URL) {
+  throw new Error('FATHOM_SMOKE_TARGET=real needs FATHOM_SMOKE_BASE_URL or BASE_URL');
+}
 const PORT = portFrom(process.env.E2E_PORT, 4173);
 const JAN_PORT = PORT + 1;
 const YP_PORT = PORT + 2;
@@ -53,9 +79,10 @@ export default defineConfig({
   reporter: 'list',
   timeout: 60_000,
   expect: { timeout: 10_000 },
-  metadata: { janBaseURL, ypBaseURL, ypDataDir },
+  metadata: { janBaseURL, ypBaseURL, ypDataDir, smokeTarget: SMOKE_TARGET },
   use: {
     baseURL,
+    extraHTTPHeaders: EXTRA_HEADERS,
     browserName: 'chromium',
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure'
