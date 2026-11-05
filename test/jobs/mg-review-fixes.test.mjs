@@ -103,6 +103,33 @@ test('MG5: C1 an existing SEP contribution reduces solo 401(k) room', async () =
   near(fig(sep.db, 'room.solo401k').v, 24804.45, 'room.solo401k after the SEP');
 });
 
+// C1b, the mirror of C1: a solo 401(k) employer contribution already made by the same person's
+// business uses the same employer limit, so SEP room must net it. Same sources as C1 (Pub 560
+// multiple-plan coordination and the self-employed worksheet; IRC 404(a)(3)(A), 404(a)(7),
+// 404(a)(8)(C), 415(f)).
+//
+// Hand calculation, Wren Studio 120,000, owner age 45, solo 401(k) employer contribution 10,000:
+//   Step 3 compensation 111,522.27 (as in C1); step 6 20% = 22,304.45; step 8 22,304.45
+//   Worksheet check: 10,000 <= 22,304.45 and 10,000 <= (111,522.27 - 0) / 2, valid, no block
+//   Owner SEP room 22,304.45 - 10,000 = 12,304.45
+//   Spouse Bluebird SEP room 20% x (66,000 - 4,662.75) = 12,267.45, no other plan
+//   room.sep (household sum) 12,304.45 + 12,267.45 = 24,571.90
+// Liveness: with no other plan the owner's room stays 22,304.45; room.sep 22,304.45 + 12,267.45 =
+//   34,571.90.
+
+test('MG5: C1b an existing solo 401(k) employer contribution reduces SEP room', async () => {
+  const solo = await planned(withFacts(WREN_HOUSEHOLD, {
+    'retirement.contributions': [{ person: 'owner', plan: 'own-corp-401k', type: 'employer', amount: 10000 }],
+  }));
+  assert.deepEqual(solo.info.blocked, [], 'a 10,000 employer contribution is within the limit, so nothing blocks');
+  near(fig(solo.db, 'room.sep').v, 24571.9, 'household SEP room after the solo 401(k) employer contribution');
+});
+
+test('MG5: C1b liveness: with no other plan SEP room is unchanged', async () => {
+  const base = await planned(WREN_HOUSEHOLD);
+  near(fig(base.db, 'room.sep').v, 34571.9, 'household SEP room with no other plan');
+});
+
 // ================================================================ C2 (MG12, MG5): deferral game revalidates contributions
 // Sources: IRC 62(a)(6) and 404(a)(8) (the self-employed deduction is capped by earned income);
 // IRS Publication 560 Deduction Worksheet for Self-Employed (the permitted employer contribution
