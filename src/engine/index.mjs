@@ -19,6 +19,10 @@ async function serial(ledger, callback) {
   try { return await callback(); } finally { release(); if (queues.get(ledger) === wait) queues.delete(ledger); }
 }
 
+// Purposes answered in one structured messages round with no tools and no tool loop.
+const SINGLE_ROUND = ['extract', 'confirm'];
+const PURPOSES = ['chat', 'job', ...SINGLE_ROUND];
+
 const monthKey = timestamp => new Date(timestamp).toISOString().slice(0, 7).replace('-', '');
 
 export function createMemoryLedger(initial = []) {
@@ -74,7 +78,7 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
   const call = async ({ purpose, system = '', systemDynamic = '', messages, tools = [], maxTokens = 1024, schema, grounding = {}, fake,
     toolContext: callContext } = {}) => {
     if (mode === 'off') throw new EngineOffError();
-    if (!['chat', 'job', 'extract'].includes(purpose)) throw new TypeError('Invalid call purpose');
+    if (!PURPOSES.includes(purpose)) throw new TypeError('Invalid call purpose');
     if (typeof system !== 'string' || typeof systemDynamic !== 'string' || !Array.isArray(messages) || messages.length === 0 || !Number.isInteger(maxTokens) || maxTokens <= 0 || maxTokens > 128000) {
       throw new TypeError('Invalid model request');
     }
@@ -107,7 +111,7 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
               content: [{ type: 'text', text: script.text ?? '' }], details: { maxBudgetUsd: capUsd - spend } };
           } else {
             try {
-              round = await (purpose === 'extract' ? messagesRound : sdkRound)({ credential: auth, system, systemDynamic,
+              round = await (SINGLE_ROUND.includes(purpose) ? messagesRound : sdkRound)({ credential: auth, system, systemDynamic,
                 messages: transcript, maxTokens, maxBudgetUsd: capUsd - spend, model: DEFAULT_MODEL, registry, schema });
             } catch {
               round = { text: '', content: [], status: 'transport_error', is_error: true,
@@ -146,7 +150,7 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
       }
       if (!['success', 'error_max_turns'].includes(round.status)) throw new ModelCallError('Model did not complete a valid response');
       if (round.status === 'error_max_turns' && round.toolResults.length === 0) throw new ModelCallError('Model reached a turn limit without a tool result');
-      if (round.toolResults.length === 0 || purpose === 'extract') {
+      if (round.toolResults.length === 0 || SINGLE_ROUND.includes(purpose)) {
         return { text: round.text, content: round.content, costUsd: Number(cost.toFixed(12)), model: round.model,
           toolResults: allResults, rounds, grounding: checkGrounding(round.text, { ...grounding, toolResults: allResults }) };
       }

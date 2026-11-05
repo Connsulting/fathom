@@ -172,7 +172,9 @@ describe('ingest state and scenario', () => {
         assert.equal(a.sourceId, null);
       }
       assert.deepEqual(sc.live.ingest.sources, []);
-      assert.equal(sc.live.ingest.pending, 0);
+      const seededPending = store.db.prepare("SELECT count(*) AS n FROM confirm_items WHERE status = 'pending'").get().n;
+      assert.equal(sc.live.ingest.pending, seededPending);
+      assert.ok(seededPending > 0, 'the demo seeds pending confirm items');
       assert.deepEqual(sc.domains, B.loadContent(store.db).domains, 'demo domains unchanged');
     } finally {
       store.close();

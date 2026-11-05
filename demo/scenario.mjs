@@ -2947,6 +2947,15 @@ export default {
         "next": "Mon, Nov 9",
         "does": "Count stale and waiting uploads.",
         "cost": 0.02
+      },
+      {
+        "id": "confirm-guess",
+        "name": "Confirm best guesses",
+        "cadence": "Daily, 3:00 AM",
+        "last": "Today 3:00 AM",
+        "next": "Tomorrow 3:00 AM",
+        "does": "Suggest an answer for each pending confirm question.",
+        "cost": 0.03
       }
     ]
   },

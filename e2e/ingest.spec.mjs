@@ -1,23 +1,29 @@
 // Ingest: add files from Accounts, see per-file results and the new manual accounts with their
-// last data date and freshness, follow the pending banner to Confirm, answer an owner question,
-// and see the owner on Accounts. Expected values come from the upload response, never literals.
+// last data date and freshness, follow the Year banner's Start to the Confirm deck, answer an owner
+// question, and see the owner on Accounts. Expected values come from the upload response and the
+// confirm API, never literals. The demo seeds pending questions, so counts start from the API.
 
 import { writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { test, expect, S, resetDemo, gotoRoute } from './helpers.mjs';
+import { test, expect, S, resetDemo, gotoRoute, quickChecks, aboutMinutes, yearBanner, bannerStart, deckCard, deckTo } from './helpers.mjs';
 
 const fixture = (name) => fileURLToPath(new URL(`../test/fixtures/ingest/${name}`, import.meta.url));
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
-const banner = (page) => page.locator('[data-go="confirm"]').filter({ hasText: /\d+ questions? to confirm/ }).first();
+
+async function pendingIds(request) {
+  const res = await request.get('/api/confirm');
+  expect(res.status()).toBe(200);
+  return (await res.json()).items.map((i) => i.id).sort((a, b) => a - b);
+}
 
 test.beforeEach(async ({ request }) => {
   await resetDemo(request);
 });
 
-test('add files, confirm an owner, and see it on Accounts', async ({ page }) => {
+test('add files, confirm an owner, and see it on Accounts', async ({ page, request }) => {
+  const before = (await pendingIds(request)).length;
   await gotoRoute(page, 'accounts');
   await expect(page.locator('input[type=file][data-upload]')).toHaveCount(1);
-  await expect(banner(page)).toHaveCount(0);
 
   const addFiles = page.getByRole('button', { name: 'Add files', exact: true });
   await expect(addFiles).toBeVisible();
@@ -50,44 +56,51 @@ test('add files, confirm an owner, and see it on Accounts', async ({ page }) => 
     await expect(card.getByText(a.fresh === 'fresh' ? 'Fresh' : 'Stale', { exact: true })).toBeVisible();
   }
 
-  // The pending banner shows on Accounts and on the brief while questions remain.
+  // The Year banner counts the new questions on top of the seeded ones.
   const pending = body.pending;
-  expect(pending).toBeGreaterThan(0);
-  await expect(banner(page)).toContainText(plural(pending, 'question'));
+  expect(pending).toBeGreaterThan(before);
   await gotoRoute(page, 'brief');
-  await expect(banner(page)).toBeVisible();
-  await expect(banner(page)).toContainText(plural(pending, 'question'));
+  await expect(yearBanner(page)).toBeVisible();
+  await expect(yearBanner(page)).toContainText(quickChecks(pending));
+  await expect(yearBanner(page)).toContainText(aboutMinutes(pending));
 
-  // Follow it to Confirm and answer the owner question for the aggregator account.
-  await banner(page).click();
+  // Start opens the Confirm deck; move to the owner question for the aggregator account and answer it.
+  await bannerStart(page).click();
   await expect(page).toHaveURL(/#\/confirm$/);
-  await expect(page.getByText('A few short questions so imports land in the right place.')).toBeVisible();
+  await expect(page.locator('.h-deck')).toBeVisible();
   const account = added.find((a) => body.scenario.live.ingest.items.some((i) => i.kind === 'account_owner' && i.subject === a.id && a.inst));
   expect(account).toBeTruthy();
   const item = body.scenario.live.ingest.items.find((i) => i.kind === 'account_owner' && i.subject === account.id);
-  const option = item.options.find((o) => o.id === 'owner');
-  const choice = page.locator(`[data-answer="${item.id}"][data-option="owner"]`);
+  const index = item.options.findIndex((o) => o.id === 'owner');
+  const option = item.options[index];
+  const order = await pendingIds(request);
+  expect(order).toHaveLength(pending);
+  await deckTo(page, order, item.id);
+  const choice = deckCard(page).locator(`[data-answer="${item.id}"][data-option="owner"]`);
   await expect(choice).toBeVisible();
-  await expect(choice).toHaveText(option.label);
+  await expect(choice).toHaveText(`${index + 1} · ${option.label}`);
   const answered = page.waitForResponse((r) => new URL(r.url()).pathname === `/api/confirm/${item.id}/answer`);
   await choice.click();
   expect((await answered).status()).toBe(200);
-  await expect(page.locator(`[data-answer="${item.id}"]`)).toHaveCount(0);
+  await expect(page.locator(`article.h-deck-card.cur[data-item="${item.id}"]`)).toHaveCount(0);
+  expect(await pendingIds(request)).not.toContain(item.id);
 
-  // The owner label shows on Accounts; one fewer question is pending.
+  // The owner label shows on Accounts; one fewer quick check is pending on the brief.
   await gotoRoute(page, 'accounts');
   const card = page.locator('.h-acc').filter({ hasText: account.name });
   await expect(card).toContainText(`${account.inst}, ${option.label}`);
-  if (pending > 1) await expect(banner(page)).toContainText(plural(pending - 1, 'question'));
-  else await expect(banner(page)).toHaveCount(0);
+  await gotoRoute(page, 'brief');
+  if (pending > 1) await expect(yearBanner(page)).toContainText(quickChecks(pending - 1));
+  else await expect(yearBanner(page)).toHaveCount(0);
 });
 
 // Review finding F3: a file that is only waiting (no confirm question) is recoverable from Accounts.
-test('a waiting file shows on Accounts with Retry, without any pending question', async ({ page }, testInfo) => {
+test('a waiting file shows on Accounts with Retry, without any pending question', async ({ page, request }, testInfo) => {
   const path = testInfo.outputPath('novel-export.csv');
   // Novel headers and no account columns: no parser claims it, no account or owner question.
   writeFileSync(path, 'when,memo,value\n2032-03-02,Synthetic waiting memo,-3.33\n2032-03-03,Synthetic waiting memo two,-4.44\n');
 
+  const before = await pendingIds(request);
   await gotoRoute(page, 'accounts');
   const [chooser] = await Promise.all([
     page.waitForEvent('filechooser'),
@@ -99,12 +112,13 @@ test('a waiting file shows on Accounts with Retry, without any pending question'
   expect(res.status()).toBe(200);
   const body = await res.json();
   expect(body.files.map((f) => f.status)).toEqual(['needs_mapping']);
-  expect(body.pending).toBe(0);
+  expect(body.pending).toBe(before.length);
   const file = body.files[0];
+  expect(await pendingIds(request)).toEqual(before);
+  expect(body.scenario.live.ingest.items.filter((i) => i.fileId === file.fileId)).toEqual([]);
 
   await page.reload();
   await expect(page.locator('header.h-top')).toBeVisible();
-  await expect(banner(page)).toHaveCount(0);
   await expect(page.getByText('Waiting files', { exact: true })).toBeVisible();
   const retry = page.locator(`[data-retry="${file.fileId}"]`);
   await expect(retry).toBeVisible();
@@ -137,7 +151,7 @@ test('imported account labels render as plain escaped text with no token expansi
     await expect(page.locator('header.h-top')).toBeVisible();
     await expect(page.getByText(name, { exact: true }).first()).toBeVisible();
     await expect(page.locator('.h-acc', { hasText: name }).first()).toContainText(name);
-    await expect(page.locator('button[data-answer="1"]')).toHaveCount(0);
+    await expect(page.locator('button[data-answer="1"]', { hasText: 'Continue' })).toHaveCount(0);
     await expect(page.locator('.h-acc i').filter({ hasText: /^x$/ })).toHaveCount(0);
     await expect(page.locator('.h-acc').filter({ hasText: '{f:nope}' }).first()).toBeVisible();
   };
@@ -184,7 +198,7 @@ async function expectLiteral(scope, names) {
   for (const n of names) await expect(scope.getByText(n, { exact: true }).first()).toBeVisible();
 }
 
-test('upload file names render literally on onboarding, Accounts and Confirm', async ({ page }) => {
+test('upload file names render literally on onboarding, Accounts and Confirm', async ({ page, request }) => {
   await forceOnboarding(page);
   await page.goto('/#/onboarding/1');
   await expect(page.getByRole('heading', { level: 1, name: 'Dump everything in' })).toBeVisible();
@@ -201,10 +215,16 @@ test('upload file names render literally on onboarding, Accounts and Confirm', a
   await expectLiteral(page.locator('.h-ing-files').first(), accountNames);
   await expect(page.locator('.h-ing-files b')).toHaveCount(0);
 
+  // The deck shows one card at a time: walk every card and collect the file names in the kickers.
+  const order = await pendingIds(request);
   await gotoRoute(page, 'confirm');
-  const cards = page.locator('.h-cfs');
-  await expectLiteral(cards, [...new Set([...onboardingNames, ...accountNames])]);
-  await expect(page.locator('.h-cfs b, .h-ing-files b')).toHaveCount(0);
+  const seen = new Set();
+  for (const id of order) {
+    await deckTo(page, order, id);
+    await expect(page.locator('.h-deck-card .h-cf-k b, .h-ing-files b')).toHaveCount(0);
+    for (const t of await deckCard(page).locator('.h-cf-k span').allTextContents()) seen.add(t.trim());
+  }
+  for (const n of new Set([...onboardingNames, ...accountNames])) expect([...seen], `file name ${n} on a Confirm card`).toContain(n);
 });
 
 // D1: a file past the parse limits shows as "Too large to read" in the Accounts results.
