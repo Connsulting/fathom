@@ -336,3 +336,43 @@ test('an uncached formula in a tax Month cell warns invalid_tax_month with its l
   assert.ok(warn, 'invalid_tax_month warning present');
   assert.deepEqual(warn.locator, { sheet: '2032', cell: 'A4' });
 });
+
+// Review finding F8: a Month label that is blank or not a month name, with populated Paid cells,
+// must warn invalid_tax_month. Summary-row labels stay silent.
+{
+  const taxSheet = (labelCell, name) => {
+    const head = [[null, 'Federal', null, 'State'], ['Month', 'Owner Paid', 'Spouse Paid', 'Owner Paid', 'Spouse Paid']];
+    const file = { name, bytes: new Uint8Array(writeXlsx([{ name: '2032', rows: [...head, ['January', 100, 50, 30, 20], [labelCell, 120, 60, null, null]] }])) };
+    return pickParser(file).parse(file);
+  };
+
+  test('a tax Month label that is not a month name warns invalid_tax_month with its locator', () => {
+    const { rows, warnings } = taxSheet('not a month', 'tax-month-text.xlsx');
+    assert.equal(rows.length, 4, 'the readable month still parses');
+    const warn = warnings.filter((w) => w.code === 'invalid_tax_month');
+    assert.equal(warn.length, 1);
+    assert.deepEqual(warn[0].locator, { sheet: '2032', cell: 'A4' });
+  });
+
+  test('a blank tax Month label with populated Paid cells warns invalid_tax_month at the Month column address', () => {
+    for (const blank of [null, '']) {
+      const { rows, warnings } = taxSheet(blank, 'tax-month-blank.xlsx');
+      assert.equal(rows.length, 4);
+      const warn = warnings.filter((w) => w.code === 'invalid_tax_month');
+      assert.equal(warn.length, 1, `blank ${JSON.stringify(blank)}`);
+      assert.deepEqual(warn[0].locator, { sheet: '2032', cell: 'A4' });
+    }
+  });
+
+  test('a Total summary row in a tax sheet is skipped silently', () => {
+    const { rows, warnings } = taxSheet('Total', 'tax-month-total.xlsx');
+    assert.equal(rows.length, 4);
+    assert.equal(warnings.filter((w) => w.code === 'invalid_tax_month').length, 0);
+  });
+
+  test('the tax fixtures produce no invalid_tax_month warning', () => {
+    for (const name of ['tax-payments.xlsx', 'tax-payments-revised.xlsx']) {
+      assert.equal(run(name).warnings.filter((w) => w.code === 'invalid_tax_month').length, 0, name);
+    }
+  });
+}

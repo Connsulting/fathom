@@ -677,6 +677,18 @@ describe('unreadable tax month label', () => {
     assert.deepEqual(all(s.db, "SELECT * FROM superseded_rows WHERE table_name = 'tax_payments' AND reason = 'removed'"), []);
   }));
 
+  for (const [what, cell] of [['text that is not a month name', 'not a month'], ['blank', null]]) {
+    test(`a Month label that is ${what} keeps the stored payments and warns invalid_tax_month`, () => withStore(async (s) => {
+      const off = await offEngine();
+      await P.ingestFile(s.db, unreadableTaxFile('base'), s.opts(off));
+      assert.equal(count(s.db, 'tax_payments'), 8);
+      const r = await P.ingestFile(s.db, taxWithMonthCell(cell, 'tax-month-bad-label.xlsx'), s.opts(off));
+      assert.equal(r.counts.warningCodes.invalid_tax_month, 1);
+      assert.equal(count(s.db, 'tax_payments'), 8, 'every stored payment of the sheet stays active');
+      assert.deepEqual(all(s.db, "SELECT * FROM superseded_rows WHERE table_name = 'tax_payments' AND reason = 'removed'"), []);
+    }));
+  }
+
   test('control: a readable Month label with the month absent removes that month', () => withStore(async (s) => {
     const off = await offEngine();
     await P.ingestFile(s.db, unreadableTaxFile('base'), s.opts(off));
