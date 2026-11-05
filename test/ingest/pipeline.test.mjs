@@ -17,10 +17,12 @@ import {
 let P;
 let V;
 let C;
+let Bld;
 before(async () => {
   P = await src('src/ingest/pipeline.mjs');
   V = await src('src/ingest/vault.mjs');
   C = await src('src/ingest/confirm.mjs');
+  Bld = await src('src/scenario/build.mjs');
 });
 
 const inserted = (result, kind) => (result.counts && result.counts.rows && result.counts.rows[kind]) || 0;
@@ -1182,6 +1184,137 @@ describe('no silently dropped transactions (D3)', () => {
     assert.equal(asked.length, 1);
     assert.equal(asked[0].subject, [kept.dedupe_key, agg.dedupe_key].sort().join('|'), 'asked against the surviving aggregator posting');
   }));
+
+  // Review finding H2: survivor links are followed to the active row, not one hop. A (aggregator,
+  // March 1), B (bank, March 4, no check number) and C (bank check 1042, March 6): C is confirmed
+  // into B, then B into A, so C's tombstone names B, which is itself a tombstone naming A.
+  const transferB = () => activityFile('Chase0042_Activity_H2_B.csv', [{ date: '03/04/2032', amount: '-125.00', balance: '', description: 'SYNTH TRANSFER OUT' }]);
+  const checkC = () => checkBank('Chase0042_Activity_H2_C.csv', '03/06/2032', 'CHECK 1042');
+  const nearBetween = (db, x, y) => pendingNear(db).find((q) => q.subject === [x, y].sort().join('|'));
+
+  // Returns {a, b, c}: the three stored rows before the confirmations; only A stays active.
+  async function confirmChain(s, off) {
+    await P.ingestFile(s.db, checkAgg(), s.opts(off));
+    await P.ingestFile(s.db, transferB(), s.opts(off));
+    await P.ingestFile(s.db, checkC(), s.opts(off));
+    assert.equal(count(s.db, 'accounts'), 1, 'one account for both formats');
+    const [a, b, c] = all(s.db, 'SELECT * FROM transactions ORDER BY id');
+    assert.deepEqual([a, b, c].map((t) => [t.date, t.amount, t.external_id]), [['2032-03-01', -125, null], ['2032-03-04', -125, null], ['2032-03-06', -125, '1042']]);
+    const ab = nearBetween(s.db, a.dedupe_key, b.dedupe_key);
+    const bc = nearBetween(s.db, b.dedupe_key, c.dedupe_key);
+    assert.ok(ab && bc, 'A and B, and B and C, are asked about');
+    assert.equal(pendingNear(s.db).length, 2, 'A and C are five days apart: not asked');
+    C.answer(s.db, bc.id, 'same', { now: NOW });
+    C.answer(s.db, ab.id, 'same', { now: NOW });
+    assert.deepEqual(all(s.db, 'SELECT dedupe_key FROM transactions').map((t) => t.dedupe_key), [a.dedupe_key], 'only A is stored');
+    const tomb = (key) => one(s.db, "SELECT survivor_key FROM superseded_rows WHERE reason = 'duplicate_confirmed' AND dedupe_key = ?", key)?.survivor_key;
+    assert.equal(tomb(c.dedupe_key), b.dedupe_key, "C's tombstone names B");
+    assert.equal(tomb(b.dedupe_key), a.dedupe_key, "B's tombstone names A");
+    return { a, b, c };
+  }
+
+  test('H2: C confirmed into B, then B into A; check 1042 on March 15 with another description is kept and asked once against A', () => withStore(async (s) => {
+    const off = await offEngine();
+    const { a, c } = await confirmChain(s, off);
+    const questions = count(s.db, 'confirm_items', "kind = 'near_duplicate'");
+    const r = await P.ingestFile(s.db, checkBank('Chase0042_Activity_H2_D.csv', '03/15/2032', PLUMBER), s.opts(off));
+    assert.equal(r.counts.duplicates, 0, 'another description is another transaction');
+    assert.equal(inserted(r, 'transaction'), 1);
+    const kept = one(s.db, 'SELECT * FROM transactions WHERE description = ?', PLUMBER);
+    assert.equal(kept.dedupe_key, `${c.dedupe_key}:d:${sha256(normalize(PLUMBER)).slice(0, 16)}`, 'under its alt key');
+    assert.equal(count(s.db, 'confirm_items', "kind = 'near_duplicate'"), questions + 1, 'exactly one new question');
+    const asked = pendingNear(s.db);
+    assert.equal(asked.length, 1);
+    assert.equal(asked[0].subject, [kept.dedupe_key, a.dedupe_key].sort().join('|'), 'asked against A, the end of the survivor chain');
+  }));
+
+  test('H2: after the chain, re-importing the March 15 check asks nothing new', () => withStore(async (s) => {
+    const off = await offEngine();
+    await confirmChain(s, off);
+    await P.ingestFile(s.db, checkBank('Chase0042_Activity_H2_D.csv', '03/15/2032', PLUMBER), s.opts(off));
+    const before = count(s.db, 'transactions');
+    const questions = count(s.db, 'confirm_items', "kind = 'near_duplicate'");
+    const again = await P.ingestFile(s.db, checkBank('Chase0042_Activity_H2_D2.csv', '03/15/2032', PLUMBER, [filler(1)]), s.opts(off));
+    assert.equal(again.counts.duplicates, 1, 'the March 15 check is already stored');
+    assert.equal(inserted(again, 'transaction'), 1, 'only the filler row lands');
+    assert.equal(count(s.db, 'transactions'), before + 1);
+    assert.equal(count(s.db, 'confirm_items', "kind = 'near_duplicate'"), questions, 'no new question');
+  }));
+
+  // H2 guard: survivor links are followed boundedly. No sequence of answers builds a cycle (a
+  // confirmed duplicate drops the newer stored row, and a tombstoned key is never stored again), so
+  // these tests write the superseded_rows links directly. The import runs in a worker thread so a
+  // loop fails the test by timeout instead of hanging the runner.
+  async function ingestInWorker(s, file, timeoutMs = 10000) {
+    const { Worker } = await import('node:worker_threads');
+    const { pathToFileURL } = await import('node:url');
+    const code = `
+      const { workerData, parentPort } = require('node:worker_threads');
+      (async () => {
+        const { openDb } = await import(workerData.dbUrl);
+        const P = await import(workerData.pipelineUrl);
+        const db = openDb(workerData.file);
+        try {
+          const r = await P.ingestFile(db, { ...workerData.input, bytes: new Uint8Array(workerData.input.bytes) },
+            { config: workerData.config, now: workerData.now, key: Buffer.from(workerData.key) });
+          parentPort.postMessage({ ok: true, result: r });
+        } catch (error) {
+          parentPort.postMessage({ ok: false, error: String(error && error.stack || error) });
+        } finally { db.close(); }
+      })();`;
+    const { ROOT } = await import('../helpers/server.mjs');
+    const worker = new Worker(code, {
+      eval: true,
+      workerData: {
+        dbUrl: pathToFileURL(join(ROOT, 'src/store/db.mjs')).href, pipelineUrl: pathToFileURL(join(ROOT, 'src/ingest/pipeline.mjs')).href,
+        file: s.file, input: file, config: s.config, now: NOW, key: new Uint8Array(s.key),
+      },
+    });
+    try {
+      return await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`ingest did not finish within ${timeoutMs} ms (survivor loop)`)), timeoutMs);
+        worker.once('message', (m) => { clearTimeout(timer); if (m.ok) resolve(m.result); else reject(new Error(m.error)); });
+        worker.once('error', (e) => { clearTimeout(timer); reject(e); });
+      });
+    } finally { await worker.terminate(); }
+  }
+
+  // Stores check C (ref 1042, March 6) and tombstones it as a confirmed duplicate whose survivor
+  // links are `links` ([[from, to], ...], keys named 'C' or literal), written directly.
+  async function tombstoneC(s, off, links) {
+    await P.ingestFile(s.db, checkC(), s.opts(off));
+    const c = one(s.db, 'SELECT * FROM transactions');
+    const ghost = (name) => (name === 'C' ? c.dedupe_key : `transaction:${sha256(`synthetic-ghost-${name}`)}`);
+    const insert = s.db.prepare(`INSERT INTO superseded_rows (table_name, dedupe_key, row, file_id, superseded_by, reason, at, survivor_key)
+                                 VALUES ('transactions', ?, ?, ?, ?, 'duplicate_confirmed', ?, ?)`);
+    for (const [from, to] of links) {
+      const row = from === 'C' ? { ...c, normalized_description: normalize(c.description) } : { dedupe_key: ghost(from), description: `SYNTH GHOST ${from}`, normalized_description: normalize(`SYNTH GHOST ${from}`) };
+      insert.run(ghost(from), JSON.stringify(row), c.file_id, c.file_id, NOW, ghost(to));
+    }
+    s.db.prepare('DELETE FROM transactions WHERE id = ?').run(c.id);
+    return c;
+  }
+
+  const survivorGuards = [
+    ['a two-key cycle (C names X, X names C)', [['C', 'X'], ['X', 'C']]],
+    ['a three-key cycle (C names X, X names Y, Y names X)', [['C', 'X'], ['X', 'Y'], ['Y', 'X']]],
+    ['a self link (C names C)', [['C', 'C']]],
+    ['a missing survivor (C names X, which has no row and no tombstone)', [['C', 'X']]],
+  ];
+  for (const [what, links] of survivorGuards) {
+    test(`H2 guard: ${what} ends; the March 15 check is kept and asks nothing against an inactive key`, () => withStore(async (s) => {
+      const off = await offEngine();
+      const c = await tombstoneC(s, off, links);
+      assert.equal(count(s.db, 'transactions'), 0, 'nothing is active');
+      const questions = count(s.db, 'confirm_items', "kind = 'near_duplicate'");
+      const r = await ingestInWorker(s, checkBank('Chase0042_Activity_H2_G.csv', '03/15/2032', PLUMBER));
+      assert.equal(r.status, 'imported');
+      assert.equal(inserted(r, 'transaction'), 1);
+      const kept = one(s.db, 'SELECT * FROM transactions WHERE description = ?', PLUMBER);
+      assert.equal(kept.dedupe_key, `${c.dedupe_key}:d:${sha256(normalize(PLUMBER)).slice(0, 16)}`, 'under its alt key');
+      assert.equal(count(s.db, 'confirm_items', "kind = 'near_duplicate'"), questions, 'no active counterpart: no question');
+    }));
+  }
 });
 
 // D5: a complete positions snapshot removes same-account, same-day holdings it no longer lists.
@@ -1291,5 +1424,60 @@ describe('authoritative position snapshots (D5)', () => {
     assert.equal(empty.status, 'imported');
     assert.deepEqual(statementSymbols(s.db), []);
     assert.deepEqual(removed(s.db).map((x) => [JSON.parse(x.row).symbol, x.file_id, x.superseded_by]).sort(), [['EXMPL', first.fileId, empty.fileId], ['OTHR', first.fileId, empty.fileId]]);
+  }));
+
+  // Review finding H3: with no ending balance the account figure is the holdings total, so an
+  // authoritative empty snapshot makes it 0, with provenance from the empty snapshot's file. The
+  // figure is read where the scenario reads it: accounts[].fig names a figures row.
+  const holdingsOnly = (periodEnd, holdings) => ({ institution: 'Example Bank', accountLast4: '4321', accountKind: 'brokerage', periodEnd, holdings, confidence: 0.9 });
+  const holdingsFile = (tag, periodEnd) => textFile(`statement-holdings-${tag}.txt`, `Synthetic brokerage statement ${tag} for the period ending ${periodEnd}`, 'text/plain');
+  const importHoldings = async (s, tag, periodEnd, holdings) => {
+    const r = await P.ingestFile(s.db, holdingsFile(tag, periodEnd), s.opts(await fakeEngine([[{ docType: 'statement', confidence: 0.9 }], [holdingsOnly(periodEnd, holdings)]])));
+    assert.equal(r.status, 'imported');
+    return r;
+  };
+  // The scenario's figure for the 4321 account plus the stored figure row behind it.
+  const holdingsFigure = (db) => {
+    const sc = Bld.buildScenario(db, { clock: '2032-05-10' });
+    const acct = sc.accounts.find((a) => a.mask === '4321');
+    assert.ok(acct?.fig, 'the account names a figure');
+    return { shown: sc.fig[acct.fig], row: one(db, 'SELECT * FROM figures WHERE key = ?', acct.fig) };
+  };
+  const sourceOf = (db, fileId) => one(db, 'SELECT source_id FROM files WHERE id = ?', fileId).source_id;
+
+  test('H3: holdings without an ending balance, then the same date with an empty holdings list: no positions and a figure of 0 from the second file', () => withStore(async (s) => {
+    const first = await importHoldings(s, 'full', '2032-03-31', HOLDINGS);
+    assert.equal(count(s.db, 'balances'), 0, 'no ending balance');
+    assert.equal(holdingsFigure(s.db).shown.v, 250, 'the figure is the holdings total');
+    const empty = await importHoldings(s, 'empty', '2032-03-31', []);
+    assert.deepEqual(statementSymbols(s.db), [], 'no active positions');
+    assert.equal(removed(s.db).length, 2);
+    const { shown, row } = holdingsFigure(s.db);
+    assert.equal(shown.v, 0, 'the scenario shows 0, not the old total');
+    assert.equal(shown.src, sourceOf(s.db, empty.fileId));
+    assert.equal(row.file_id, empty.fileId, 'provenance points at the empty snapshot');
+    assert.notEqual(row.file_id, first.fileId);
+    assert.equal(row.parser, 'extract-statement');
+    assert.equal(JSON.parse(row.locator)?.field, 'holdings', 'located at the holdings list');
+  }));
+
+  test('H3: an empty holdings list dated after the first statement makes the figure 0 from the later file', () => withStore(async (s) => {
+    await importHoldings(s, 'full', '2032-03-31', HOLDINGS);
+    const empty = await importHoldings(s, 'empty-later', '2032-04-30', []);
+    assert.equal(count(s.db, 'positions', "as_of = '2032-04-30'"), 0, 'nothing held on April 30');
+    const { shown, row } = holdingsFigure(s.db);
+    assert.equal(shown.v, 0, 'the latest snapshot is empty');
+    assert.equal(shown.src, sourceOf(s.db, empty.fileId));
+    assert.equal(row.file_id, empty.fileId);
+    assert.equal(JSON.parse(row.locator)?.field, 'holdings');
+  }));
+
+  test('H3: an empty holdings list dated before a stored full statement leaves the later total and its provenance', () => withStore(async (s) => {
+    const full = await importHoldings(s, 'full-later', '2032-04-30', HOLDINGS);
+    await importHoldings(s, 'empty-earlier', '2032-03-31', []);
+    assert.deepEqual(statementSymbols(s.db), ['EXMPL', 'OTHR']);
+    const { shown, row } = holdingsFigure(s.db);
+    assert.equal(shown.v, 250);
+    assert.equal(row.file_id, full.fileId);
   }));
 });

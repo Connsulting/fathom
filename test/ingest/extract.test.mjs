@@ -779,6 +779,84 @@ describe('withholding recipients (D4, G4)', () => {
     assert.deepEqual(active(s.db).map((t) => [t.payer, t.file_id]), [[`${base}:owner`, a], [`${base}:owner`, a], [`${base}:spouse`, b], [`${base}:spouse`, b]]);
     assert.equal(recipientQuestions(s.db).length, 0);
   }));
+
+  // Review finding H1: every withholding-bearing document, not only employer ones, belongs to a
+  // recipient. Two members' 1099s from one payer with identical figures, recipient unknown, stay two
+  // rows under <R10 payer>:doc:<file id>, each asked about on its own; answered apart they stay two,
+  // answered alike the newer is archived as duplicate. One entry per 1099 kind the extractor knows.
+  const PAYER_NAME = 'Example Savings Bank';
+  const FORM_1099 = {
+    '1099-int': { amounts: { interest: 1200, earlyWithdrawalPenalty: 0 }, primary: '120000' },
+    '1099-div': { amounts: { ordinaryDividends: 900, qualifiedDividends: 600, capitalGainDistributions: 100 }, primary: '90000' },
+    '1099-b': { amounts: { proceeds: 15000, costBasis: 12000, shortTermGain: 1000, longTermGain: 2000 }, primary: '1500000' },
+    '1099-nec': { amounts: { nonemployeeCompensation: 20000 }, primary: '2000000' },
+    '1099-misc': { amounts: { rents: 0, royalties: 0, otherIncome: 3000 }, primary: '300000' },
+  };
+  const WITHHOLDING_FIELDS = ['federalWithheld', 'federalWithholding', 'stateWithheld', 'stateWithholding'];
+  const form1099 = (docType) => ({ taxYear: 2032, payerKind: 'bank', payerName: PAYER_NAME, ...FORM_1099[docType].amounts, federalWithheld: 240, confidence: 0.9 });
+  const import1099 = async (s, docType, member) => {
+    const file = textFile(`${docType}-member-${member}-2032.txt`, `Synthetic ${docType} for tax year 2032, member ${member}`, 'text/plain');
+    const r = await P.ingestFile(s.db, file, s.opts(await fakeEngine([[{ docType, taxYear: 2032, confidence: 0.9 }], [form1099(docType)]])));
+    assert.equal(r.status, 'imported');
+    return r.fileId;
+  };
+  const base1099 = (docType) => `${docType}:${X.nameKey(PAYER_NAME)}:2032:${FORM_1099[docType].primary}`;
+  // Imports member a then member b and checks the unresolved state. Returns {ids, docs}.
+  async function importBoth1099(s, docType) {
+    const ids = { a: await import1099(s, docType, 'a'), b: await import1099(s, docType, 'b') };
+    const base = base1099(docType);
+    const rows = active(s.db);
+    assert.equal(rows.length, 2, `both members' ${docType} withholding rows are kept`);
+    assert.deepEqual(rows.map((t) => [t.payer, t.recipient, t.amount]).sort(), [[`${base}:doc:${ids.a}`, 'unknown', 240], [`${base}:doc:${ids.b}`, 'unknown', 240]]);
+    assert.equal(new Set(rows.map((t) => t.dedupe_key)).size, 2);
+    for (const t of rows) assert.match(t.source_slot, new RegExp(`^wh:${X.nameKey(PAYER_NAME)}:2032:federal:unknown$`));
+    const docs = pendingOf(s.db, 'document_recipient');
+    assert.deepEqual(docs.map((d) => d.subject).sort(), [`${base}:doc:${ids.a}`, `${base}:doc:${ids.b}`].sort(), 'one document_recipient question per document');
+    for (const d of docs) {
+      assert.deepEqual(d.options.map((o) => o.id), ['owner', 'spouse']);
+      assert.ok(d.question.includes(X.labelOf(docType)) && !/paystub|W-2/.test(d.question), `the question names the ${X.labelOf(docType)}, got ${d.question}`);
+    }
+    return { ids, docs, base };
+  }
+  const answerDoc = (s, docs, subject, option) => C.answer(s.db, docs.find((d) => d.subject === subject).id, option, { now: NOW });
+
+  test('H1: the 1099 table covers every 1099 kind and every withholding-bearing schema is W-2, paystub or a 1099', () => {
+    assert.deepEqual(Object.keys(FORM_1099).sort(), X.DOC_TYPES.filter((t) => t.startsWith('1099-')).sort());
+    const bearing = Object.entries(X.SCHEMAS).filter(([, schema]) => WITHHOLDING_FIELDS.some((f) => Object.hasOwn(schema.properties ?? {}, f))).map(([t]) => t);
+    assert.deepEqual(bearing.sort(), ['paystub', 'w2', ...Object.keys(FORM_1099)].sort());
+    for (const docType of Object.keys(FORM_1099)) {
+      assert.equal(taxRows(X.toRows(docType, form1099(docType), ctx)).length, 1, `${docType} with federalWithheld yields a withholding row`);
+    }
+  });
+
+  for (const docType of Object.keys(FORM_1099)) {
+    test(`H1: two members' identical ${docType} withholding, recipient unknown, both kept and asked per document; owner and spouse keep both`, () => withStore(async (s) => {
+      const { ids, docs, base } = await importBoth1099(s, docType);
+      answerDoc(s, docs, `${base}:doc:${ids.a}`, 'owner');
+      answerDoc(s, docs, `${base}:doc:${ids.b}`, 'spouse');
+      const rows = active(s.db);
+      assert.deepEqual(rows.map((t) => [t.payer, t.recipient, t.source_slot.split(':').at(-1), t.amount, t.file_id]), [
+        [`${base}:owner`, 'owner', 'owner', 240, ids.a],
+        [`${base}:spouse`, 'spouse', 'spouse', 240, ids.b],
+      ]);
+      for (const t of rows) assert.equal(t.dedupe_key, rekeyed(t), 'rekeyed under the resolved payer');
+      assert.equal(count(s.db, 'superseded_rows', "table_name = 'tax_payments'"), 0);
+      assert.equal(recipientQuestions(s.db).length, 0);
+    }));
+
+    for (const answerOrder of [['a', 'b'], ['b', 'a']]) {
+      test(`H1: two members' identical ${docType} withholding answered with one recipient (answer ${answerOrder.join(',')}) collapse; the newer is archived as duplicate`, () => withStore(async (s) => {
+        const { ids, docs, base } = await importBoth1099(s, docType);
+        for (const m of answerOrder) answerDoc(s, docs, `${base}:doc:${ids[m]}`, 'owner');
+        const rows = active(s.db);
+        assert.deepEqual(rows.map((t) => [t.payer, t.recipient, t.amount, t.file_id]), [[`${base}:owner`, 'owner', 240, ids.a]], 'one row, from the older file');
+        assert.equal(rows[0].dedupe_key, rekeyed(rows[0]));
+        const dup = all(s.db, "SELECT * FROM superseded_rows WHERE table_name = 'tax_payments' ORDER BY id");
+        assert.deepEqual(dup.map((x) => [x.reason, x.file_id, JSON.parse(x.row).payer, JSON.parse(x.row).amount]), [['duplicate', ids.b, `${base}:owner`, 240]]);
+        assert.equal(recipientQuestions(s.db).length, 0);
+      }));
+    }
+  }
 });
 
 // D6 with G6 to G8: a PDF whose text layer has any text is read with pdfjs (in a worker) and goes
