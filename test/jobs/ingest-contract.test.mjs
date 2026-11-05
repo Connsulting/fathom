@@ -676,6 +676,78 @@ test('MGI1: E7 the salary war game charges FICA on cash salary and sizes the pla
   near(fig(db, 'wg.salary.s60.x').v, 42000, 'pre-tax room on 70,000 of plan compensation');
 });
 
+// E8 to E10 (driver decisions: a wage part exists whenever box 1 is known; each salary point's
+// taxable wages are its cash salary plus the current W-2's signed (box 1 - box 5), and its plan
+// compensation is its cash salary plus the signed (plan compensation - box 5), never clamped and
+// never rebuilt from a separately tracked pretax amount; owner-stated deferrals feed only plan
+// compensation). Single filer aged 45, no dependents, a state with no income tax, no personal
+// deductions, confirmed plan terms, 2026 parameters (Rev. Proc. 2025-32: standard deduction
+// 16,100; 10% to 12,400, 12% to 50,400, 22% to 105,700).
+const NO_STATE_SINGLE = Object.freeze({ ...SINGLE_WAGES, facts: Object.freeze({ ...SINGLE_WAGES.facts, 'household.state': 'TX' }) });
+// Ten months of P&L: revenue 10,000, officer salary 5,000 and employer payroll tax 382.50 a month,
+// projected to revenue 120,000, salary 60,000 and payroll tax 4,590 (7.65% of 60,000).
+const BIRCH_CORP = Object.freeze({ name: 'Birchwood Consulting', type: 's_corp', owner: 'owner', sstb: false, income: 10000, expenses: Object.freeze({ 'Officer salary': 5000, 'Payroll taxes': 382.5 }) });
+async function corpStore(corp, w2, facts = {}) {
+  const db = await S.store({ variant: { ...NO_STATE_SINGLE, facts: { ...NO_STATE_SINGLE.facts, ...facts }, entities: [corp], payroll: [w2] } });
+  await addFile(db, pnlWorkbook([corp]));
+  await plan(db);
+  return db;
+}
+const birchW2 = (wages, box12) => W2(BIRCH_CORP.name, { wages, medicareWages: 60000, socialSecurityWages: 60000, federalWithheld: 4000, ...(box12 ? { box12 } : {}) }, { recipient: 'owner' });
+
+// E8. Box 1 35,500, box 5 60,000, box 12 unread; the owner states 24,500 of pretax deferrals to this
+// sponsor. At the 60,000 point:
+//   distributions = 120,000 - 60,000 - 4,590 = 55,410.
+//   taxable wages = 60,000 + (35,500 - 60,000) = 35,500; AGI = 35,500 + 55,410 = 90,910.
+//   taxable before QBI = 90,910 - 16,100 = 74,810; QBI deduction = min(20% * 55,410 = 11,082,
+//   20% * 74,810 = 14,962) = 11,082 (below the threshold, no wage limit); taxable = 63,728.
+//   income tax = 1,240 + 4,560 + 22% * (63,728 - 50,400) = 1,240 + 4,560 + 2,932.16 = 8,732.16.
+//   payroll tax = 15.3% * 60,000 = 9,180; total = 8,732.16 + 9,180 = 17,912.16, the same as with
+//   box 12 D 24,500 read (the bug subtracts the stated deferral from box 1 again: 23,302.16).
+test('MGI1: E8 an owner-stated deferral does not lower salary-point wages again', async () => {
+  const stated = await corpStore(BIRCH_CORP, birchW2(35500, null), {
+    'retirement.contributions': [{ person: 'owner', plan: 'own-corp-401k', type: 'deferral', amount: 24500, entity: BIRCH_CORP.name }],
+  });
+  near(fig(stated, 'wg.salary.s60.tax').v, 17912.16, 'box 12 unread, deferral stated: total tax at 60,000');
+  const read = await corpStore(BIRCH_CORP, birchW2(35500, [{ code: 'D', amount: 24500 }]));
+  near(fig(read, 'wg.salary.s60.tax').v, 17912.16, 'box 12 D read: total tax at 60,000');
+});
+
+// E9. S corp net profit 60,000 (5,000 a month for ten months, projected * 12 / 10, no salary line); the owner's W-2 is
+// only 10,000 of shareholder health premiums: box 1 10,000, box 5 0, box 12 unread. Box 1 is
+// taxable wages, so a wage part exists (the bug drops it: AGI 60,000, tax 3,966.40).
+//   AGI = 60,000 + 10,000 = 70,000; taxable before QBI = 70,000 - 16,100 = 53,900.
+//   QBI deduction = min(20% * 60,000 = 12,000, 20% * 53,900 = 10,780) = 10,780; taxable = 43,120.
+//   income tax = 1,240 + 12% * (43,120 - 12,400) = 1,240 + 3,686.40 = 4,926.40. No SE tax, no
+//   Additional Medicare.
+const PREMIUM_CORP = Object.freeze({ name: 'Cobalt Studio', type: 's_corp', owner: 'owner', sstb: false, income: 5000, expenses: Object.freeze({}) });
+
+test('MGI1: E9 a W-2 with box 1 but no Medicare wages still counts as wages', async () => {
+  const w2 = W2(PREMIUM_CORP.name, { wages: 10000, medicareWages: 0, socialSecurityWages: 0, federalWithheld: 0 }, { recipient: 'owner' });
+  const db = await corpStore(PREMIUM_CORP, w2);
+  near(fig(db, 'agi.est').v, 70000, 'AGI = profit + box 1');
+  near(fig(db, 'tax.fed.proj').v, 4926.4, 'federal tax');
+});
+
+// E10. E8's P&L; box 1 50,000, box 5 60,000, box 12 Y 10,000 (vested nonqualified deferrals: in
+// box 5, out of box 1; 2026 W-2 instructions, box 11 and code Y). At the current 60,000 point:
+//   taxable wages = 60,000 + (50,000 - 60,000) = 50,000 (signed, not clamped at zero; the bug
+//   clamps: 60,000 wages, AGI 115,410, tax 23,302.16).
+//   AGI = 50,000 + 55,410 = 105,410; taxable before QBI = 89,310; QBI deduction = min(11,082,
+//   17,862) = 11,082; taxable = 78,228.
+//   income tax = 1,240 + 4,560 + 22% * (78,228 - 50,400) = 1,240 + 4,560 + 6,122.16 = 11,922.16.
+//   total = 11,922.16 + 9,180 payroll tax = 21,102.16.
+test('MGI1: E10 a salary point keeps a negative box 1 minus box 5 difference', async () => {
+  const db = await corpStore(BIRCH_CORP, birchW2(50000, [{ code: 'Y', amount: 10000 }]));
+  const game = (contentValue(db, 'wargame') || {}).salary;
+  assert.ok(game && game.points.some(p => p.current && p.id === 's60'), 'the 60,000 point is current');
+  const tax = fig(db, 'wg.salary.s60.tax');
+  const agiStep = (tax.locator.steps || []).find(s => /adjusted gross income|^AGI/i.test(s.label));
+  assert.ok(agiStep, `the point's steps carry AGI: ${JSON.stringify((tax.locator.steps || []).map(s => s.label))}`);
+  near(agiStep.value, 105410, 'AGI at the current point');
+  near(tax.v, 21102.16, 'total tax at the current point');
+});
+
 // ================================================================ MGI2: payments counted once, by kind and jurisdiction
 
 // Owner W-2 (employer A): box 1 60,000, federal withheld 9,000, VA withheld 3,000. Workbook: Federal
