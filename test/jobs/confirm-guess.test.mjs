@@ -250,6 +250,70 @@ describe('the default confirm-guess handler', () => {
   });
 });
 
+// The job handler passes no fake script, so a fake-mode runtime engine would be skipped as not_live.
+// This wrapper reports live and injects the next scripted response into each call, so the real
+// runtime engine and spend_ledger run underneath the job.
+function scriptedRuntime(db, scripts) {
+  const rt = createRuntimeEngine({ db, config: { engine: 'fake' }, now: () => new Date(NOW) });
+  let n = 0;
+  return {
+    mode: 'live',
+    isOn: () => rt.isOn(),
+    init: () => rt.init(),
+    call: (req) => rt.call({ ...req, fake: [scripts[n++] ?? { text: JSON.stringify({ guesses: [] }), costUsd: 0 }] }),
+    extract: (req) => rt.extract(req),
+  };
+}
+const confirmSpend = (db) => Number(db.prepare("SELECT coalesce(sum(cost_usd), 0) AS s FROM spend_ledger WHERE purpose = 'confirm'").get().s);
+
+describe('confirm-guess job cost equals the confirm ledger spend, failed calls included', () => {
+  const empty = JSON.stringify({ guesses: [] });
+
+  test('a non-JSON response costing 0.05: cost_usd is 0.05, the run is ok and stopped', () => withStore(async (t) => {
+    queue(t.db, 2);
+    const s = schedulerFor(t.db, { engine: scriptedRuntime(t.db, [{ text: 'not json', costUsd: 0.05 }]) });
+    try {
+      const before = confirmSpend(t.db);
+      const run = await s.runNow(JOB);
+      assert.equal(run.status, 'ok');
+      const [row] = runsOf(t.db);
+      assert.equal(row.status, 'ok');
+      assert.equal(noteOf(row).stopped, true);
+      assert.ok(near(row.cost_usd, 0.05), `cost_usd ${row.cost_usd}`);
+      assert.ok(near(row.cost_usd, confirmSpend(t.db) - before));
+    } finally { await s.stop(); }
+  }));
+
+  test('a ledger-recorded failing call: cost_usd equals the ledger delta', () => withStore(async (t) => {
+    queue(t.db, 25);
+    const s = schedulerFor(t.db, { engine: scriptedRuntime(t.db, [{ text: empty, costUsd: 0.5 }, { text: '', status: 'error_max_turns', costUsd: 0.25 }]) });
+    try {
+      const before = confirmSpend(t.db);
+      const run = await s.runNow(JOB);
+      assert.equal(run.status, 'ok');
+      const [row] = runsOf(t.db);
+      assert.equal(noteOf(row).stopped, true);
+      assert.equal(noteOf(row).batches, 1);
+      assert.ok(near(confirmSpend(t.db) - before, 0.75), 'both calls were recorded in the ledger');
+      assert.ok(near(row.cost_usd, confirmSpend(t.db) - before), `cost_usd ${row.cost_usd}`);
+    } finally { await s.stop(); }
+  }));
+
+  test('a normal two-batch run: cost_usd equals the ledger delta and the batch cost sum', () => withStore(async (t) => {
+    queue(t.db, 25);
+    const s = schedulerFor(t.db, { engine: scriptedRuntime(t.db, [{ text: empty, costUsd: 0.5 }, { text: empty, costUsd: 0.25 }]) });
+    try {
+      const before = confirmSpend(t.db);
+      const run = await s.runNow(JOB);
+      assert.equal(run.status, 'ok');
+      const [row] = runsOf(t.db);
+      assert.deepEqual(noteOf(row), { batches: 2, items: 25, guessed: 0, stopped: false });
+      assert.ok(near(row.cost_usd, 0.75), `cost_usd ${row.cost_usd}`);
+      assert.ok(near(row.cost_usd, confirmSpend(t.db) - before));
+    } finally { await s.stop(); }
+  }));
+});
+
 describe('confirm-guess triggers', () => {
   test('trigger(confirm-guess, ingest) when idle runs it with an ingest key', () => withStore(async (t) => {
     queue(t.db, 2);

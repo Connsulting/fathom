@@ -270,6 +270,32 @@ describe('guessPending', () => {
       ]) assert.equal(verdict(batch, plain, reason), true, `kept: ${reason}`);
     }));
 
+    test('an item whose only number is 100 rejects spaced, dotted, spelled-out and any leftover-digit reasons and still keeps grounded ones', () => withStore(async (s) => {
+      const { plain } = queueQuantities(s.db);
+      const w2 = C.ask(s.db, { kind: 'account_kind', subject: 'acct-quantity-w2', question: 'Does the W-2 name this employer?', options: OPTIONS, context: {}, now: NOW });
+      assert.equal(w2.queued, true);
+      const batch = C.pendingItems(s.db);
+      for (const reason of [
+        'The withholding rate is 100 %.',
+        'The import reports $100 k of income.',
+        'A refund of - 100 is listed.',
+        'A charge of $ 100 k is listed.',
+        'A charge of -$100 is listed.',
+        'The share is .100 of the total.',
+        'About ten dollars came in.',
+        'Twelve payments are listed.',
+        'One hundred is listed.',
+        'Around a dozen rows.',
+      ]) assert.equal(verdict(batch, plain, reason), false, `rejected: ${reason}`);
+      for (const reason of [
+        'The import lists 100 for this account.',
+        'The import lists $100 for this account.',
+        'Matches the 100.00 amount in the file.',
+        'Held at the same broker as your other accounts.',
+      ]) assert.equal(verdict(batch, plain, reason), true, `kept: ${reason}`);
+      assert.equal(verdict(batch, w2.id, 'The W-2 names this employer.'), true, 'kept: W-2 from its own question');
+    }));
+
     test('an item holding -250 and 12.5% keeps those quantities and rejects 250 with the sign dropped', () => withStore(async (s) => {
       const { signed } = queueQuantities(s.db);
       const batch = C.pendingItems(s.db);
@@ -324,6 +350,44 @@ describe('guessPending', () => {
     assert.equal(count(s.db, 'confirm_guesses'), 25);
     assert.equal(count(s.db, 'spend_ledger', "purpose = 'confirm'"), 2);
   }));
+
+  describe('guessPending returns costUsd, the run spend including failed calls, equal to the confirm ledger delta', () => {
+    const confirmSpend = (db) => one(db, "SELECT coalesce(sum(cost_usd), 0) AS s FROM spend_ledger WHERE purpose = 'confirm'").s;
+    const near = (a, b) => Math.abs(a - b) < 1e-9;
+    const empty = JSON.stringify({ guesses: [] });
+
+    test('a normal two-batch run: costUsd is the ledger delta and the sum of the batch costs', () => withStore(async (s) => {
+      queue(s.db, 25);
+      const before = confirmSpend(s.db);
+      const out = await G.guessPending(s.db, runtimeEngine(s.db), { now: NOW, batchSize: 20, fake: [[{ text: empty, costUsd: 0.5 }], [{ text: empty, costUsd: 0.25 }]] });
+      assert.equal(out.batches.length, 2);
+      assert.ok(near(out.costUsd, 0.75), `costUsd ${out.costUsd}`);
+      assert.ok(near(out.costUsd, confirmSpend(s.db) - before));
+      assert.ok(near(out.costUsd, out.batches.reduce((n, b) => n + b.costUsd, 0)));
+    }));
+
+    test('an unparseable response still counts its cost', () => withStore(async (s) => {
+      queue(s.db, 2);
+      const before = confirmSpend(s.db);
+      const out = await G.guessPending(s.db, runtimeEngine(s.db), { now: NOW, fake: [[{ text: 'not json', costUsd: 0.05 }]] });
+      assert.equal(out.stopped, 'bad_response');
+      assert.deepEqual(out.batches, []);
+      assert.ok(near(out.costUsd, 0.05), `costUsd ${out.costUsd}`);
+      assert.ok(near(out.costUsd, confirmSpend(s.db) - before));
+    }));
+
+    test('a ledger-recorded failed call counts its cost, after an earlier good batch', () => withStore(async (s) => {
+      queue(s.db, 25);
+      const before = confirmSpend(s.db);
+      const out = await G.guessPending(s.db, runtimeEngine(s.db), { now: NOW, batchSize: 20, fake: [[{ text: empty, costUsd: 0.5 }], [{ text: '', status: 'error_max_turns', costUsd: 0.25 }]] });
+      assert.equal(typeof out.stopped, 'string', JSON.stringify(out));
+      assert.notEqual(out.stopped, 'bad_response');
+      assert.equal(out.batches.length, 1);
+      assert.ok(near(out.batches[0].costUsd, 0.5));
+      assert.ok(near(out.costUsd, 0.75), `costUsd ${out.costUsd}`);
+      assert.ok(near(out.costUsd, confirmSpend(s.db) - before));
+    }));
+  });
 
   test('a guess never answers: every item stays pending', () => withStore(async (s) => {
     const ids = queue(s.db, 3);
