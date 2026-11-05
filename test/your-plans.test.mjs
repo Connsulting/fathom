@@ -496,6 +496,43 @@ test('B5: after a build drops a row inventing a year-shaped amount, an answer st
   assert.ok(reply.provenance.grounding.unverified.includes('$2,099'), JSON.stringify(reply.provenance.grounding));
 });
 
+const BENEFIT_USD = 'Benefit is one thousand dollars.';
+const BENEFIT_PCT = 'Benefit is one thousand percent.';
+
+test('B5: a number-word row whose body changes the unit from its excerpt is dropped and counted, and a matching unit is kept', async t => {
+  const { db, dataDir } = store(t);
+  addPlanFile(db, dataDir, { id: 'file-usd', name: 'synthetic-usd.md', text: `# Benefit\n\n${BENEFIT_USD}\n` });
+  addPlanFile(db, dataDir, { id: 'file-pct', name: 'synthetic-pct.md', text: `# Benefit\n\n${BENEFIT_PCT}\n` });
+  const engine = extractScripted(engineFor(db, dataDir), [
+    [row('Benefit', BENEFIT_PCT, BENEFIT_USD), row('Benefit kept', BENEFIT_USD, BENEFIT_USD)],
+    [row('Benefit', BENEFIT_USD, BENEFIT_PCT), row('Benefit kept', BENEFIT_PCT, BENEFIT_PCT)],
+  ]);
+  const result = await buildYourPlans({ db, engine, dataDir, clock: CLOCK });
+  assert.equal(result.written, true);
+  assert.equal(result.dropped, 2, `both unit-changed rows are dropped: ${JSON.stringify(result.warnings)}`);
+  assert.equal(result.entries, 2);
+  assert.deepEqual(loadPacks([result.dir])[0].entries.map(e => e.title), ['Benefit kept', 'Benefit kept']);
+  const bodies = builtBodies(result.dir);
+  assert.ok(bodies.includes(BENEFIT_USD) && bodies.includes(BENEFIT_PCT), 'the matching-unit rows are kept');
+  assert.equal(getSetting(db, 'yourPlans', null).dropped, 2);
+});
+
+test('B5: after a build drops a number-word row with a changed unit, an answer stating it is ungrounded', async t => {
+  const { db, dataDir } = demoPlanStore(t);
+  addPlanFile(db, dataDir, { text: `# Dental plan\n\n${DENTAL}\n\n# Benefit\n\n${BENEFIT_USD}\n` });
+  const engine = extractScripted(engineFor(db, dataDir), [[
+    row('Dental plan', DENTAL, DENTAL),
+    row('Benefit', BENEFIT_PCT, BENEFIT_USD),
+  ]]);
+  const result = await buildYourPlans({ db, engine, dataDir, clock: CLOCK });
+  assert.equal(result.written, true);
+  assert.equal(result.dropped, 1, 'the unit-changed row is dropped');
+  assert.ok(!builtBodies(result.dir).includes('percent'));
+  const reply = await answerAfterBuild(db, dataDir, 'The benefit is 1000%.');
+  assert.ok(reply.provenance.packIds.includes('your-plans'));
+  assert.ok(reply.provenance.grounding.unverified.includes('1000%'), JSON.stringify(reply.provenance.grounding));
+});
+
 test('B3: a document file name with digits never grounds that number in an answer', async t => {
   const { db, dataDir } = demoPlanStore(t);
   const name = 'plan_4821.md';
