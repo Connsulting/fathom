@@ -466,6 +466,18 @@ is reachable only on the owner's private network.
    in a pack conversation, ground without their citation and metadata lines (lines starting with
    `Source:`, `Sources:`, `Tax year:` or `Reviewed:`, any case), so a file name or citation never
    grounds a number; the model still sees the full entry text.
+   The key filter is one evidence sanitizer applied inside `groundAnswer` to every grounding
+   source, not only tool results: the household summary, the conversation context (pack metadata,
+   `context.entries`, the rec context) and each tool result. Besides the keys above it drops
+   labels and account identifiers: `ref`, `refs`, `manifest`, `slug`, `name`, `names`, `title`,
+   `titles`, `label`, `labels`, `covers`, `version`, `versions`, `curator`, `curators`, `mask`,
+   `masks`, `inst`, `institution`, `owner`, `owners`, `symbol`, `symbols`, `urls`, `cite`, `src`,
+   `files`, `path`, and any key ending in `_ids`, `Mask`, `Masks`, `_mask`, `Number`, `Numbers` or
+   `_number` (a plain `number` key stays a value). Every `body` string loses its metadata lines in
+   the same pass. Value fields (amounts, balances, rec `value` text, `why`) still ground. So a pack
+   id such as `plan4821`, a pack name, curator or version, a rec id, or a `list_accounts` mask
+   never grounds a number, though the model still sees all of them. The argument-echo rule stays
+   specific to tool results.
 5. One corrective retry (same `system`, the first answer plus a corrective user turn). An answer
    still ungrounded is stored with each violation in `<span class="fx-unverified" title="Not found
    in your data or tool results">`. If the retry call itself fails, the answer is the matching
@@ -554,8 +566,13 @@ included.
    `excerpt` the verbatim source text the row is drawn from. Extracted entries must match the
    document. For a text source a row is kept only when (a) its excerpt, whitespace-normalized
    (runs collapsed to one space, trimmed), is a nonempty substring of the normalized source text;
-   (b) every number in its neutralized title and body is in the excerpt (`checkGrounding` with the
-   excerpt as the only data; a number word counts when the excerpt has the same words); and (c) an
+   (b) every number in its neutralized title and body is in the excerpt, without the prose
+   exemptions of `checkGrounding` (bare years, dates): every digit run of the title and body must
+   be a digit run of the excerpt, with thousands separators removed on both sides (1,500 and 1500
+   are the same run) and a date or year taken as its digit runs (2026-12-15 is 2026, 12 and 15);
+   `checkGrounding` with the excerpt as the only data must also pass, where a number word counts
+   when the excerpt has the same words. So "The benefit is 2099 dollars" from a numberless source
+   is dropped; and (c) an
    occurrence of the excerpt is on `row.page`, counting `Page N` marker lines before it (1 when there
    are none). A PDF source cannot be checked (the code holds no PDF text), so all its rows are
    dropped with one warning that PDF sections cannot be checked against the document yet and a text

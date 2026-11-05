@@ -15,8 +15,11 @@
 // checks every remaining number against tool results and context data only (stored figures may
 // appear only as tokens). One corrective retry; what is still ungrounded is stored wrapped in
 // .fx-unverified. renderAnswer escapes everything except valid tokens and the spans it adds.
-// Tool results are sanitized first (argument echoes, identifier and citation keys dropped) and
-// pack entry citation and metadata lines never count as data, so neither grounds a number.
+// Every grounding source (the household summary, the conversation context and each tool result)
+// goes through one evidence sanitizer: identifier, label and citation keys are dropped (ids, keys,
+// names, titles, versions, curators, account masks and numbers, urls, sources, pages) and entry
+// bodies lose their citation and metadata lines, so none of them grounds a number. Tool results
+// also drop argument echoes. The model still sees everything.
 //
 // Chat never writes. In 'ask' and rec conversations the model is offered one local, non-writing
 // tool, propose_recommendation_action; the last successful call becomes provenance.proposal
@@ -108,10 +111,20 @@ export const PROPOSE_TOOL = Object.freeze({
 
 // ---------------------------------------------------------------- grounding
 
-// Result keys that identify or cite rather than state a value.
-const META_KEYS = new Set(['id', 'ids', 'key', 'keys', 'url', 'href', 'cites', 'citation', 'citations',
-  'source', 'sources', 'file', 'fileName', 'page', 'pages']);
-const isMetaKey = k => META_KEYS.has(k) || /(?:Id|Ids|_id)$/.test(k);
+// Evidence keys that identify, label or cite rather than state a value: ids and keys, names,
+// titles, labels, versions, curators, account masks, institutions and owners, ticker symbols,
+// citations, urls, files and pages. Any key ending in Id, Ids, _id, Mask or Number (accountId,
+// recId, accountMask, accountNumber) names an identifier too. A plain `number` stays a value.
+const META_KEYS = new Set(['id', 'ids', 'key', 'keys', 'ref', 'refs', 'manifest', 'slug',
+  'name', 'names', 'title', 'titles', 'label', 'labels', 'covers', 'version', 'versions', 'curator', 'curators',
+  'mask', 'masks', 'inst', 'institution', 'owner', 'owners', 'symbol', 'symbols',
+  'url', 'urls', 'href', 'cite', 'cites', 'citation', 'citations', 'src', 'source', 'sources',
+  'file', 'files', 'fileName', 'path', 'page', 'pages']);
+const isMetaKey = k => META_KEYS.has(k) || /(?:Id|Ids|_id|_ids|Mask|Masks|_mask|Number|Numbers|_number)$/.test(k);
+
+// Pack entry text as grounding data: citation and metadata lines never ground a number.
+const META_LINE = /^\s*(?:sources?|tax year|reviewed)\s*:/i;
+const groundingBody = body => String(body ?? '').split(/\r?\n/).filter(line => !META_LINE.test(line)).join('\n');
 
 function argLeaves(v, out = { numbers: [], strings: [] }) {
   if (typeof v === 'number') out.numbers.push(v);
@@ -120,7 +133,11 @@ function argLeaves(v, out = { numbers: [], strings: [] }) {
   return out;
 }
 
-function scrub(v, leaves, contained) {
+const NO_ARGS = Object.freeze({ numbers: [], strings: [] });
+
+// Drop identifier, label and citation keys at any depth, metadata lines from `body` strings, and
+// (for a tool result) leaves equal to or containing the call's arguments.
+function scrub(v, leaves = NO_ARGS, contained = []) {
   if (typeof v === 'number') return leaves.numbers.includes(v) ? undefined : v;
   if (typeof v === 'string') {
     const s = v.trim().toLowerCase();
@@ -131,7 +148,7 @@ function scrub(v, leaves, contained) {
     const out = {};
     for (const [k, x] of Object.entries(v)) {
       if (isMetaKey(k)) continue;
-      const y = scrub(x, leaves, contained);
+      const y = scrub(k === 'body' && typeof x === 'string' ? groundingBody(x) : x, leaves, contained);
       if (y !== undefined) out[k] = y;
     }
     return out;
@@ -139,19 +156,18 @@ function scrub(v, leaves, contained) {
   return v;
 }
 
-// A tool result as grounding evidence: leaves equal to an argument leaf of the same call, strings
-// containing an argument string of 3 or more characters with a digit, and identifier or citation
-// keys are dropped. Error results pass through (checkGrounding ignores them).
+// Any grounding datum (household summary, conversation context, pack entry bodies) as evidence.
+const evidence = v => (typeof v === 'string' ? v : scrub(v));
+
+// A tool result as grounding evidence: the evidence sanitizer plus argument echoes (leaves equal
+// to an argument leaf of the same call, strings containing an argument string of 3 or more
+// characters with a digit). Error results pass through (checkGrounding ignores them).
 function groundingResult(r) {
   if (!r || typeof r !== 'object' || r.isError) return r;
   const leaves = argLeaves(r.args);
   const contained = leaves.strings.filter(a => a.length >= 3 && /\d/.test(a));
   return { name: r.name, result: scrub(r.result ?? null, leaves, contained) };
 }
-
-// Pack entry text as grounding data: citation and metadata lines never ground a number.
-const META_LINE = /^\s*(?:sources?|tax year|reviewed)\s*:/i;
-const groundingBody = body => String(body ?? '').split(/\r?\n/).filter(line => !META_LINE.test(line)).join('\n');
 
 function tokenValid(scenario, kind, key) {
   if (!SAFE_KEY.test(key)) return false;
@@ -168,7 +184,8 @@ const KIND_NAMES = { f: 'figure', fk: 'figure', l: 'law', p: 'percent', n: 'name
 //   { ok, violations: [{text, index, reason}], figureKeys, literals: [{text, index, source}] }
 // Every token is validated here and masked with equal-length spaces (invalid ones are recorded
 // once as violations), then checkGrounding sees only tool results and context data, never the
-// stored figures, so a stored value typed as a literal is a violation. Each grounded literal is
+// stored figures, so a stored value typed as a literal is a violation. Tool results and every
+// datum go through the evidence sanitizer first, so identifiers and labels never ground. Each grounded literal is
 // attributed to the first single source that grounds it: a tool result (by tool name), else a
 // context datum (dataLabels[i], default "your data").
 export function groundAnswer(text, { scenario, toolResults = [], data = [], dataLabels = [] } = {}) {
@@ -185,7 +202,7 @@ export function groundAnswer(text, { scenario, toolResults = [], data = [], data
   });
 
   const results = (Array.isArray(toolResults) ? toolResults : []).map(groundingResult);
-  const values = Array.isArray(data) ? data : [data];
+  const values = (Array.isArray(data) ? data : [data]).map(evidence);
   const unsupported = checkGrounding(masked, { toolResults: results, data: values }).violations;
   if (unsupported.length) {
     const figureValues = Object.values((scenario && scenario.fig) || {}).map(f => f && f.v).filter(Number.isFinite);
@@ -328,11 +345,9 @@ export function createLiveAnswerer({ engine, packs } = {}) {
     const request = { purpose: 'chat', system: prompt.system, systemDynamic: prompt.systemDynamic, messages: prompt.messages,
       tools: offered, maxTokens: MAX_TOKENS, ...(fake ? { fake } : {}) };
 
+    // groundAnswer sanitizes each datum (and context.entries bodies lose their metadata lines there).
     const entryBodies = active.flatMap(({ pack }) => pack.entries.map(e => groundingBody(e.body)));
-    const contextData = context && Array.isArray(context.entries)
-      ? { ...context, entries: context.entries.map(e => ({ ...e, body: groundingBody(e.body) })) }
-      : context;
-    const data = [summary, contextData, entryBodies];
+    const data = [summary, context, entryBodies];
     const dataLabels = ['household summary', 'conversation context', 'knowledge pack entries'];
     const resultsOf = res => (res && Array.isArray(res.toolResults) ? res.toolResults : []);
     const ground = (res, toolResults) => groundAnswer(res.text, { scenario, toolResults, data, dataLabels });

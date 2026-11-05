@@ -10,7 +10,8 @@
 // citing `<file name>, page <n>` at https://your-plans.invalid/<fileId>?page=<n> (a reserved host
 // that never resolves; the UI shows it as plain text). A row is kept only when its verbatim excerpt
 // is in the source text (whitespace-normalized), every number in its title and body is in the
-// excerpt, and the excerpt sits on the row's page (Page N markers before it); every other row is
+// excerpt (every digit run, years and dates included, with no prose exemptions), and the excerpt
+// sits on the row's page (Page N markers before it); every other row is
 // dropped and counted. PDF sources cannot be checked yet, so their rows are all dropped with one
 // warning asking for a text copy. The pack is written to a temporary sibling,
 // validated with loadPacks, then swapped in, and settings['packs.generation'] is bumped so every
@@ -102,15 +103,25 @@ function pageAt(breaks, index) {
   return page;
 }
 
+// The digit runs of a text, thousands separators removed (1,500 and 1500 are the same run) and
+// leading zeros dropped. A date or a year is just its runs: 2026-12-15 is 2026, 12 and 15.
+const digitRuns = text => new Set([...String(text ?? '').replace(/(\d),(?=\d{3}(?!\d))/g, '$1').matchAll(/\d+/g)]
+  .map(m => m[0].replace(/^0+(?=\d)/, '')));
+
 // A cleaned row matches its source when its excerpt is in the source text, every number in its
-// title and body is in the excerpt (checkGrounding with the excerpt as the only data; a number
-// word counts as in the excerpt when the excerpt has the same words, since data strings only
-// ground digits), and some occurrence of the excerpt is on the row's page.
+// title and body is in the excerpt, and some occurrence of the excerpt is on the row's page.
+// The number check has no prose exemptions: every digit run of the title and body, years and
+// dates included, must be a digit run of the excerpt. On top of that checkGrounding (with the
+// excerpt as the only data) must find nothing but number words, and a number word counts as in
+// the excerpt when the excerpt has the same words, since data strings only ground digits.
 function matchesSource(row, source) {
   const excerpt = normalize(row.excerpt);
   if (!excerpt) return false;
   const lower = excerpt.toLowerCase();
-  const { violations } = checkGrounding(`${row.title}\n\n${row.body}`, { data: [excerpt] });
+  const stated = `${row.title}\n\n${row.body}`;
+  const runs = digitRuns(excerpt);
+  if (![...digitRuns(stated)].every(run => runs.has(run))) return false;
+  const { violations } = checkGrounding(stated, { data: [excerpt] });
   if (!violations.every(v => v.reason === 'numeric word absent from sources' && new RegExp(`\\b${v.text.toLowerCase()}\\b`).test(lower))) return false;
   for (let at = source.norm.indexOf(excerpt); at >= 0; at = source.norm.indexOf(excerpt, at + 1)) {
     if (pageAt(source.breaks, at) === row.page) return true;
