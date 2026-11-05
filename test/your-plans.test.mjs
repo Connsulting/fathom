@@ -7,7 +7,9 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync, mkdtempSync } from 'node:fs';
+import {
+  existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync, mkdtempSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildYourPlans, fakeExtractRows } from '../src/packs/your-plans.mjs';
@@ -199,6 +201,74 @@ test('a target inside the repository is refused: root, nested dirs and symlinks 
   }
   const allowed = await buildYourPlans({ db, engine, dataDir: storeDir, clock: CLOCK });
   assert.equal(allowed.written, true, 'a data dir outside the checkout is allowed');
+});
+
+// The runtime with extract() counted, every other member passed through.
+function countingEngine(runtime) {
+  const counter = { extracts: 0 };
+  const engine = new Proxy(runtime, {
+    get(target, key) {
+      if (key === 'extract') return async request => { counter.extracts++; return target.extract(request); };
+      const value = Reflect.get(target, key, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+  return { engine, counter };
+}
+
+const listTree = dir => (existsSync(dir) ? readdirSync(dir, { recursive: true }).map(String).sort() : []);
+
+test('a model title with markup or token syntax is neutralized in the manifest covers and entry titles', async t => {
+  const { db, dataDir } = store(t);
+  const heading = '<img src=x onerror=alert(1)> Plan {f:true_reserve}';
+  addPlanFile(db, dataDir, { text: `# ${heading}\n\nThe synthetic plan section text for the owner.\n` });
+  const result = await buildYourPlans({ db, engine: engineFor(db, dataDir), dataDir, clock: CLOCK });
+  assert.equal(result.written, true);
+  const manifest = JSON.parse(readFileSync(join(result.dir, 'manifest.json'), 'utf8'));
+  const titles = [...manifest.covers, ...manifest.entries.map(e => e.title)];
+  assert.equal(titles.length, 2);
+  for (const title of titles) {
+    assert.ok(!/[<>{}]/.test(title), `title is neutral: ${title}`);
+    assert.match(title, /Plan/);
+    assert.match(title, /true_reserve/);
+  }
+  const [pack] = loadPacks([result.dir]);
+  for (const entry of pack.entries) {
+    const first = entry.body.split('\n')[0];
+    assert.ok(!/[<>{}]/.test(first), `entry heading is neutral: ${first}`);
+  }
+});
+
+test('a data dir inside the repository whose your-plans dir links outside is refused before any extraction', async t => {
+  const repoData = join(ROOT, `.yp-link-guard-${process.pid}`);
+  const outside = scratch(t, 'fathom-yp-outside-');
+  const { db } = store(t);
+  const { engine, counter } = countingEngine(engineFor(db, repoData));
+  try {
+    mkdirSync(join(repoData, 'packs'), { recursive: true });
+    addPlanFile(db, repoData);
+    const link = yourPlansDir(repoData);
+    symlinkSync(outside, link);
+    const before = listTree(repoData);
+    await assert.rejects(buildYourPlans({ db, engine, dataDir: repoData, clock: CLOCK }), REFUSAL);
+    assert.equal(counter.extracts, 0, 'no engine call');
+    assert.deepEqual(readdirSync(outside), [], 'nothing written outside');
+    assert.deepEqual(listTree(repoData), before, 'nothing written inside the repository');
+    assert.ok(lstatSync(link).isSymbolicLink(), 'the symlink is untouched');
+    assert.equal(readlinkSync(link), outside);
+    assert.equal(getSetting(db, 'packs.generation', 0), 0);
+    assert.equal(db.prepare("SELECT count(*) AS n FROM spend_ledger WHERE purpose = 'extract'").get().n, 0);
+  } finally {
+    rmSync(repoData, { recursive: true, force: true });
+  }
+  assert.equal(existsSync(repoData), false);
+
+  const liveness = store(t);
+  addPlanFile(liveness.db, liveness.dataDir);
+  const ok = countingEngine(engineFor(liveness.db, liveness.dataDir));
+  const built = await buildYourPlans({ db: liveness.db, engine: ok.engine, dataDir: liveness.dataDir, clock: CLOCK });
+  assert.equal(built.written, true, 'a data dir outside the repository still builds');
+  assert.ok(ok.counter.extracts >= 1);
 });
 
 test('the Dockerfile copies packs and scripts into the image', () => {

@@ -214,7 +214,7 @@ test('a broken pack directory other than your-plans fails loudly', t => {
 // ---------------------------------------------------------------- demo upgrade (R2)
 
 // A store at schema 001 holding the pre-change demo pack rows (defs without manifest or label).
-function preChangeStore(t, mode) {
+function preChangeStore(t, mode, facts = FACTS) {
   const dataDir = scratch(t);
   const db = openDb(join(dataDir, 'fathom.sqlite'));
   t.after(() => db.close());
@@ -227,7 +227,7 @@ function preChangeStore(t, mode) {
   demo.packs.forEach((p, i) => insert.run(p.id, JSON.stringify(p), i));
   const fact = db.prepare(`INSERT INTO facts (key, value, src, as_of, confirmed, file_id, parser, locator, updated_at)
                            VALUES (?, ?, 'you', '2026-11-05', 1, NULL, NULL, NULL, '2026-11-05T00:00:00Z')`);
-  for (const [key, value] of Object.entries(FACTS)) fact.run(key, JSON.stringify(value));
+  for (const [key, value] of Object.entries(facts)) fact.run(key, JSON.stringify(value));
   return db;
 }
 
@@ -260,6 +260,40 @@ test('a real store is not tagged by the migration, so its never-manifest rows st
   refreshPackState(db, { packDirs: [REPO_PACKS_DIR] });
   assert.deepEqual(row(db, 'scorp').def, scorpBefore.def);
   assert.equal(row(db, 's-corp-owner').def.manifest, 's-corp-owner', 'the manifest gets its own row');
+});
+
+// The demo fact set as the pre-change seed wrote it: no income.agiEstimate.
+const OLD_FACTS = Object.fromEntries(Object.entries(FACTS).filter(([key]) => key !== 'income.agiEstimate'));
+const factValue = (db, key) => {
+  const r = db.prepare('SELECT value FROM facts WHERE key = ?').get(key);
+  return r ? JSON.parse(r.value) : undefined;
+};
+
+test('an old demo store with the old fact set and no override upgrades to giving suggested', t => {
+  const db = preChangeStore(t, 'demo', OLD_FACTS);
+  assert.equal(factValue(db, 'income.agiEstimate'), undefined, 'the fixture has the old fact set');
+  migrate(db);
+  refreshPackState(db, { packDirs: [REPO_PACKS_DIR] });
+  const giving = row(db, 'giving');
+  assert.equal(giving.active, null, 'no activation override');
+  assert.equal(giving.def.status, 'suggested');
+  assert.equal(row(db, 'scorp').def.status, 'active');
+});
+
+test('the upgrade keeps an existing income.agiEstimate in a demo store', t => {
+  const db = preChangeStore(t, 'demo', { ...OLD_FACTS, 'income.agiEstimate': 120000 });
+  migrate(db);
+  assert.equal(factValue(db, 'income.agiEstimate'), 120000, 'not overwritten');
+  refreshPackState(db, { packDirs: [REPO_PACKS_DIR] });
+  assert.equal(row(db, 'giving').def.status, 'available', 'activation follows the kept value');
+});
+
+test('the upgrade inserts no fact into a real store', t => {
+  const db = preChangeStore(t, 'real', OLD_FACTS);
+  const before = db.prepare('SELECT key, value FROM facts ORDER BY key').all().map(r => ({ ...r }));
+  migrate(db);
+  assert.deepEqual(db.prepare('SELECT key, value FROM facts ORDER BY key').all().map(r => ({ ...r })), before);
+  assert.equal(factValue(db, 'income.agiEstimate'), undefined);
 });
 
 // ---------------------------------------------------------------- refresher

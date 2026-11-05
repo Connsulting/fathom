@@ -313,6 +313,30 @@ test('a literal number grounded by a tool result is bound to its source and list
   assert.match(String(literal.source), /household.summary/i);
 });
 
+test('a retry that drops the tool call stays grounded by the first attempt tool results', async t => {
+  const s = await demoStore(t);
+  const value = buildScenario(s.db).fig.fixed_fee.v;
+  const amount = `$${value.toLocaleString('en-US')}`;
+  const { engine, requests } = scripted(s.runtime, [
+    [
+      { toolCalls: [{ name: 'get_figures', args: { keys: ['fixed_fee'] } }] },
+      { text: `About ${amount} of delivered work is not invoiced, and you could save ${INVENTED}.` },
+    ],
+    [{ text: `About ${amount} of delivered work is not invoiced.` }],
+  ]);
+  const reply = await createLiveAnswerer({ engine, packs: s.packs }).answer({ db: s.db, key: 'ask', text: 'Synthetic invoice question' });
+  assert.equal(requests.length, 2);
+  assert.ok(!reply.notice);
+  const html = joined(reply);
+  assert.ok(!html.includes('fx-unverified'), html);
+  assert.ok(!html.includes('987,654'), html);
+  assert.ok(new RegExp(`<span class="fx-src"[^>]*>${amount.replace('$', '\\$')}</span>`).test(html), html);
+  assert.deepEqual(reply.provenance.grounding, { ok: true, retried: true, unverified: [] });
+  const call = reply.provenance.tools.find(x => x.name === 'get_figures');
+  assert.ok(call, JSON.stringify(reply.provenance.tools));
+  assert.deepEqual(call.args, { keys: ['fixed_fee'] });
+});
+
 test('engine off by the switch answers with the engine-off notice and spends nothing; back on answers again', async t => {
   const s = await demoStore(t);
   const answerer = createLiveAnswerer({ engine: s.runtime, packs: s.packs });
