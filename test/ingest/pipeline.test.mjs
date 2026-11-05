@@ -1069,6 +1069,119 @@ describe('no silently dropped transactions (D3)', () => {
     assert.equal(q.length, 1, 'exactly one question');
     assert.equal(q[0].subject, tx.map((t) => t.dedupe_key).sort().join('|'));
   }));
+
+  // F2: a distant key collision whose collided key holds no stored row (its posting was archived as
+  // a confirmed or cross-format duplicate) is still asked about, against the surviving posting.
+  const checkAgg = () => aggregatorFile('aggregator-f2.csv', [{ date: '2032-03-01', amount: '125.00', description: 'Check 1042', number: '9999990042', inst: 'Chase', account: 'Synthetic checking' }]);
+  const checkBank = (name, date, description, extra = []) => activityFile(name, [{ ...check(date, '-125.00'), description }, ...extra]);
+  const PLUMBER = 'CHECK 1042 SYNTH PLUMBER';
+  // A novel export with a reference column, mapped with externalId; the mask comes from the file name.
+  const LEDGER_HEADERS = ['posted on', 'memo text', 'value usd', 'ref no', 'bank label'];
+  const LEDGER_MAPPING = { target: 'transaction', date: 'posted on', amount: 'value usd', description: 'memo text', externalId: 'ref no', institution: 'bank label', amountSign: 'as_is', dateOrder: 'ymd' };
+  const ledgerFile = (name, date, description) => textFile(name, `${LEDGER_HEADERS.join(',')}\n${date},${description},-125.00,1042,Chase\n`, 'text/csv');
+
+  // Aggregator March 1, bank check March 2 asked as near-duplicate and answered same: the bank row's
+  // key now holds only its duplicate_confirmed tombstone. Returns the aggregator row.
+  async function confirmCheckIntoAggregator(s, off) {
+    await P.ingestFile(s.db, checkAgg(), s.opts(off));
+    await P.ingestFile(s.db, checkBank('Chase0042_Activity_F2_A.csv', '03/02/2032', 'CHECK 1042'), s.opts(off));
+    assert.equal(count(s.db, 'accounts'), 1, 'one account for both formats');
+    const [q] = pendingNear(s.db);
+    assert.ok(q, 'the bank check is asked about against the aggregator posting');
+    C.answer(s.db, q.id, 'same', { now: NOW });
+    assert.equal(count(s.db, 'superseded_rows', "reason = 'duplicate_confirmed'"), 1);
+    const rows = all(s.db, 'SELECT * FROM transactions');
+    assert.deepEqual(rows.map((t) => [t.date, t.amount, t.description]), [['2032-03-01', -125, 'Check 1042']], 'only the aggregator posting is stored');
+    return rows[0];
+  }
+
+  test('F2: after a confirmed duplicate, the same check id and amount 9 days later with another description is kept with exactly one new question', () => withStore(async (s) => {
+    const off = await offEngine();
+    const agg = await confirmCheckIntoAggregator(s, off);
+    const tomb = one(s.db, "SELECT * FROM superseded_rows WHERE reason = 'duplicate_confirmed'");
+    const questions = count(s.db, 'confirm_items', "kind = 'near_duplicate'");
+    const r = await P.ingestFile(s.db, checkBank('Chase0042_Activity_F2_B.csv', '03/11/2032', PLUMBER), s.opts(off));
+    assert.equal(r.counts.duplicates, 0, 'another description is another transaction');
+    assert.equal(inserted(r, 'transaction'), 1);
+    const kept = one(s.db, 'SELECT * FROM transactions WHERE description = ?', PLUMBER);
+    assert.ok(kept, 'the March 11 check is stored');
+    assert.equal(kept.dedupe_key, `${tomb.dedupe_key}:d:${sha256(normalize(PLUMBER)).slice(0, 16)}`, 'under its alt key');
+    assert.equal(count(s.db, 'confirm_items', "kind = 'near_duplicate'"), questions + 1, 'exactly one new question');
+    const asked = pendingNear(s.db);
+    assert.equal(asked.length, 1);
+    assert.equal(asked[0].subject, [kept.dedupe_key, agg.dedupe_key].sort().join('|'), 'asked against the surviving aggregator posting');
+  }));
+
+  for (const answer of [null, 'same', 'different']) {
+    test(`F2: re-importing the March 11 check ${answer ? `after answering ${answer} ` : ''}asks nothing new`, () => withStore(async (s) => {
+      const off = await offEngine();
+      await confirmCheckIntoAggregator(s, off);
+      await P.ingestFile(s.db, checkBank('Chase0042_Activity_F2_B.csv', '03/11/2032', PLUMBER), s.opts(off));
+      const [q] = pendingNear(s.db);
+      assert.ok(q, 'the March 11 check is asked about');
+      if (answer) C.answer(s.db, q.id, answer, { now: NOW });
+      const before = count(s.db, 'transactions');
+      const questions = count(s.db, 'confirm_items', "kind = 'near_duplicate'");
+      const pending = pendingNear(s.db).length;
+      const same = await P.ingestFile(s.db, checkBank('Chase0042_Activity_F2_B.csv', '03/11/2032', PLUMBER), s.opts(off));
+      assert.equal(same.status, 'duplicate', 'identical bytes are a duplicate file');
+      for (const [i, file] of [
+        checkBank('Chase0042_Activity_F2_B2.csv', '03/11/2032', PLUMBER, [filler(1)]),
+        checkBank('Chase0042_Activity_F2_B3.csv', '03/12/2032', PLUMBER, [filler(2)]),
+      ].entries()) {
+        const again = await P.ingestFile(s.db, file, s.opts(off));
+        assert.equal(again.counts.duplicates, 1, `re-import ${i + 1} skips the known posting`);
+        assert.equal(inserted(again, 'transaction'), 1, 'only the filler row lands');
+      }
+      assert.equal(count(s.db, 'transactions'), before + 2);
+      assert.equal(count(s.db, 'confirm_items', "kind = 'near_duplicate'"), questions, 'no new question');
+      assert.equal(pendingNear(s.db).length, pending);
+    }));
+  }
+
+  // The aggregator format carries no check number, so a mapped export with a reference column stands
+  // in for the second format that dedupes against the bank check by its external id.
+  test('F2: a mapped export and a bank check on the same date dedupe automatically; the same check id 10 days later with another description is kept and asked once', () => withStore(async (s) => {
+    await P.ingestFile(s.db, ledgerFile('synthetic-ledger-0042-a.csv', '2032-03-01', 'Check 1042'), s.opts(await fakeEngine([[LEDGER_MAPPING]])));
+    const off = await offEngine();
+    const [ledger] = all(s.db, 'SELECT * FROM transactions');
+    assert.equal(ledger.parser, 'mapped');
+    const bank = await P.ingestFile(s.db, checkBank('Chase0042_Activity_F2_C.csv', '03/01/2032', 'CHECK 1042'), s.opts(off));
+    assert.equal(bank.counts.duplicates, 1, 'the bank check is the mapped posting');
+    assert.equal(count(s.db, 'accounts'), 1, 'one account for both formats');
+    assert.equal(count(s.db, 'superseded_rows', "reason = 'duplicate_cross_format' AND dedupe_key = ?", ledger.dedupe_key), 1);
+    assert.equal(items(s.db, 'near_duplicate').length, 0);
+
+    const r = await P.ingestFile(s.db, checkBank('Chase0042_Activity_F2_D.csv', '03/11/2032', PLUMBER), s.opts(off));
+    assert.equal(r.counts.duplicates, 0, 'another description is another transaction');
+    assert.equal(inserted(r, 'transaction'), 1);
+    const kept = one(s.db, 'SELECT * FROM transactions WHERE description = ?', PLUMBER);
+    assert.equal(kept.dedupe_key, `${ledger.dedupe_key}:d:${sha256(normalize(PLUMBER)).slice(0, 16)}`, 'under its alt key');
+    const q = items(s.db, 'near_duplicate');
+    assert.equal(q.length, 1, 'exactly one question');
+    assert.equal(q[0].subject, [kept.dedupe_key, ledger.dedupe_key].sort().join('|'));
+  }));
+
+  test('F2: when the collided key holds only a confirmed tombstone and a cross-format observation, the same check id 9 days later with another description is kept and asked once', () => withStore(async (s) => {
+    const off = await offEngine();
+    const agg = await confirmCheckIntoAggregator(s, off);
+    const tomb = one(s.db, "SELECT * FROM superseded_rows WHERE reason = 'duplicate_confirmed'");
+    const first = await P.ingestFile(s.db, ledgerFile('synthetic-ledger-0042-a.csv', '2032-03-02', 'Check 1042'), s.opts(await fakeEngine([[LEDGER_MAPPING]])));
+    assert.equal(first.counts.duplicates, 1, 'the mapped check is the confirmed posting');
+    assert.equal(count(s.db, 'superseded_rows', "reason = 'duplicate_cross_format' AND dedupe_key = ?", tomb.dedupe_key), 1);
+    assert.equal(count(s.db, 'transactions', 'dedupe_key = ?', tomb.dedupe_key), 0, 'the collided key holds no stored row');
+    const questions = count(s.db, 'confirm_items', "kind = 'near_duplicate'");
+
+    const r = await P.ingestFile(s.db, ledgerFile('synthetic-ledger-0042-b.csv', '2032-03-11', PLUMBER), s.opts(off));
+    assert.equal(r.counts.duplicates, 0, 'another description is another transaction');
+    assert.equal(inserted(r, 'transaction'), 1);
+    const kept = one(s.db, 'SELECT * FROM transactions WHERE description = ?', PLUMBER);
+    assert.equal(kept.dedupe_key, `${tomb.dedupe_key}:d:${sha256(normalize(PLUMBER)).slice(0, 16)}`, 'under its alt key');
+    assert.equal(count(s.db, 'confirm_items', "kind = 'near_duplicate'"), questions + 1, 'exactly one new question');
+    const asked = pendingNear(s.db);
+    assert.equal(asked.length, 1);
+    assert.equal(asked[0].subject, [kept.dedupe_key, agg.dedupe_key].sort().join('|'), 'asked against the surviving aggregator posting');
+  }));
 });
 
 // D5: a complete positions snapshot removes same-account, same-day holdings it no longer lists.

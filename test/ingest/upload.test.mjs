@@ -10,7 +10,7 @@ import { Readable } from 'node:stream';
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync, rmSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
-import { src, spawnServer, request, postJson, runCommand, tempDir, freePort, SERVER_TIMEOUT } from '../helpers/server.mjs';
+import { src, spawnServer, request, postJson, runCommand, tempDir, freePort, openStore, SERVER_TIMEOUT } from '../helpers/server.mjs';
 import { fixturePath, aggregatorCsv } from '../helpers/ingest.mjs';
 import { writeXlsx } from '../helpers/xlsx.mjs';
 import { textPdf, markerFontPdf, inflateBombPdf } from '../helpers/pdf.mjs';
@@ -469,6 +469,51 @@ describe('bounded parsing on a 128 MB heap', () => {
     const r = await upload(s.baseUrl, [{ name, bytes, type: 'text/csv' }]);
     assert.equal(r.status, 200, r.text.slice(0, 300));
     assert.deepEqual(r.json.files.map((f) => [f.name, f.status]), [[name, 'needs_mapping']]);
+  }));
+
+  // F1: an empty row carries no data, so it is dropped before any row is widened to the header and
+  // never counts toward the widened budget: a file of empty rows plus real data is read, not
+  // rejected. The header plus 199999 rows is the row limit, so 199998 empty rows precede one data row.
+  // Every row holds at most one cell, which keeps the file under the workbook cell budget.
+  const DATA_ROW = ['2032-03-01', -12.5];
+  const emptyRowsExport = (emptyRow) => [wideHeader, ...Array.from({ length: 199998 }, (_, r) => emptyRow(r)), DATA_ROW];
+  const farBlank = []; farBlank[300] = '';
+  // Cells with no value: an empty element, an empty string, whitespace only, and an empty string far right.
+  const VALUELESS = [[{ empty: true }], [''], ['   '], farBlank];
+  const NO_CELLS = [];
+  const waitsForMapping = async (s, name, bytes) => {
+    const r = await upload(s.baseUrl, [{ name, bytes, type: XLSX }]);
+    assert.equal(r.status, 200, r.text.slice(0, 300));
+    assert.deepEqual(r.json.files.map((f) => [f.name, f.status]), [[name, 'needs_mapping']]);
+    return r.json.files[0];
+  };
+
+  test('F1: an xlsx with a 512-cell header, 199998 rows with no cells and one data row waits for a mapping; the server stays up', T, () => withSmallHeap(async (s) => {
+    await waitsForMapping(s, 'empty-rows-export.xlsx', writeXlsx([{ name: 'Synthetic export', rows: emptyRowsExport(() => NO_CELLS) }], { deflate: true }));
+  }));
+
+  test('F1: an xlsx with a 512-cell header, 199998 rows whose one cell holds no value and one data row waits for a mapping; the server stays up', T, () => withSmallHeap(async (s) => {
+    const rows = emptyRowsExport((r) => VALUELESS[r % VALUELESS.length]);
+    await waitsForMapping(s, 'blank-cells-export.xlsx', writeXlsx([{ name: 'Synthetic export', rows }], { deflate: true }));
+  }));
+
+  // F1: a stored mapping applied on retry reads the same table, so the empty rows stay unwidened there
+  // too, and the one data row imports.
+  test('F1: a stored mapping applied on retry to an xlsx with a 512-cell header and 199998 empty rows imports the data row; the server stays up', T, () => withSmallHeap(async (s) => {
+    const rows = emptyRowsExport((r) => (r % 2 ? NO_CELLS : VALUELESS[(r >> 1) % VALUELESS.length]));
+    const waiting = await waitsForMapping(s, 'empty-rows-retry.xlsx', writeXlsx([{ name: 'Synthetic export', rows }], { deflate: true }));
+    const { headerSignature } = await src('src/ingest/mapping.mjs');
+    const mapping = { target: 'transaction', date: 'synthetic column 0', amount: 'synthetic column 1', amountSign: 'as_is', dateOrder: 'ymd' };
+    const db = await openStore(s.dbFile);
+    try {
+      db.prepare("INSERT INTO column_mappings (signature, mapping, src, created_at, uses) VALUES (?, ?, 'test', '2032-03-10T12:00:00.000Z', 0)")
+        .run(headerSignature(wideHeader), JSON.stringify(mapping));
+    } finally { db.close(); }
+    const retry = await postJson(s.baseUrl, `/api/files/${waiting.fileId}/retry`, {});
+    assert.equal(retry.status, 200, retry.text.slice(0, 300));
+    assert.equal(retry.json.file.fileId, waiting.fileId);
+    assert.equal(retry.json.file.status, 'imported');
+    assert.equal(retry.json.file.counts.rows.transaction, 1, 'only the data row is a transaction');
   }));
 
   // E2: workbook metadata parts (workbook.xml and its rels) have their own small element budget,
