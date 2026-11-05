@@ -1,4 +1,4 @@
-// Upgrade from main's migration 004 to the jobs and email migration: a store built with 001 to 004
+// Upgrade from main's latest migration before this branch's to the jobs and email migration: a store built with main's migrations
 // only, holding a jobs row and a job_runs row in the shape PR #8's planner writes (no period key),
 // is migrated by the real migrate(). The new columns and tables appear, the old row survives,
 // NULL period keys may repeat, and a duplicate (job_id, period_key) is rejected.
@@ -8,11 +8,12 @@ import assert from 'node:assert/strict';
 import { readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tempDir, DB_FILE } from '../helpers/server.mjs';
-import { openDb, migrate, listMigrations, listTables, schemaVersion } from '../../src/store/db.mjs';
+import { openDb, migrate, setSetting, listMigrations, listTables, schemaVersion } from '../../src/store/db.mjs';
 
-const MAIN_LATEST = 4;
+// Main's latest migration before this branch's: the highest-numbered one that is not the jobs-email one.
+const MAIN_LATEST = Math.max(...listMigrations().filter((m) => !/jobs-email/.test(m.name)).map((m) => m.id));
 
-// Apply migrations 001 to 004 exactly as migrate() would, recording them in schema_migrations.
+// Apply migrations through `last` exactly as migrate() would, recording them in schema_migrations.
 function applyThrough(db, last) {
   db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
     id INTEGER PRIMARY KEY,
@@ -37,13 +38,13 @@ async function oldStore() {
   return { db, done() { try { db.close(); } catch { /* closed */ } rmSync(dir, { recursive: true, force: true }); } };
 }
 
-test('main stops at 004 and this branch adds at least one migration after it', () => {
+test('the latest main migration precedes the jobs-email one and this branch adds at least one migration after it', () => {
   const ids = listMigrations().map((m) => m.id);
   assert.ok(ids.includes(MAIN_LATEST));
   assert.ok(Math.max(...ids) > MAIN_LATEST, 'a new migration exists');
 });
 
-test('upgrading a 004 store keeps planner-shaped job_runs rows and adds the scheduler and email schema', async () => {
+test('upgrading a store at the latest main migration keeps planner-shaped job_runs rows and adds the scheduler and email schema', async () => {
   const s = await oldStore();
   try {
     const { db } = s;
@@ -92,5 +93,44 @@ test('migrating twice is a no-op', async () => {
   try {
     migrate(s.db);
     assert.deepEqual(migrate(s.db).applied, []);
+  } finally { s.done(); }
+});
+
+const RETIRED = ['sync', 'sweep', 'triggers', 'brief', 'packet'];
+
+function seedRetired(db, ids) {
+  const job = db.prepare("INSERT INTO jobs (id, name, cadence, does, cost, next_label, last_label, enabled, sort) VALUES (?, ?, 'Daily', 'Synthetic', 0, '', '', 1, 0)");
+  const run = db.prepare("INSERT INTO job_runs (job_id, started_at, finished_at, status) VALUES (?, '2026-11-04T07:00:00.000Z', '2026-11-04T07:00:05.000Z', 'ok')");
+  for (const id of ids) { job.run(id, `Synthetic ${id}`); run.run(id); run.run(id); }
+}
+
+test('upgrading a demo store removes the five retired mock jobs and their job_runs rows', async () => {
+  const s = await oldStore();
+  try {
+    const { db } = s;
+    setSetting(db, 'mode', 'demo');
+    seedRetired(db, RETIRED);
+    db.prepare("INSERT INTO jobs (id, name, cadence, does, cost, next_label, last_label, enabled, sort) VALUES ('plan', 'Synthetic nightly plan', 'Daily', 'Synthetic', 0, '', '', 1, 0)").run();
+    db.prepare("INSERT INTO job_runs (job_id, started_at, status) VALUES ('plan', '2026-11-04T07:00:00.000Z', 'ok')").run();
+    assert.equal(db.prepare('SELECT count(*) AS n FROM jobs').get().n, 6);
+    migrate(db);
+    for (const id of RETIRED) {
+      assert.equal(db.prepare('SELECT count(*) AS n FROM jobs WHERE id = ?').get(id).n, 0, `job ${id} removed`);
+      assert.equal(db.prepare('SELECT count(*) AS n FROM job_runs WHERE job_id = ?').get(id).n, 0, `job_runs for ${id} removed`);
+    }
+    assert.equal(db.prepare("SELECT count(*) AS n FROM jobs WHERE id = 'plan'").get().n, 1, 'other jobs survive');
+    assert.equal(db.prepare("SELECT count(*) AS n FROM job_runs WHERE job_id = 'plan'").get().n, 1, 'other runs survive');
+  } finally { s.done(); }
+});
+
+test('upgrading a real store keeps a job that shares a retired id', async () => {
+  const s = await oldStore();
+  try {
+    const { db } = s;
+    setSetting(db, 'mode', 'real');
+    seedRetired(db, ['sync']);
+    migrate(db);
+    assert.equal(db.prepare("SELECT count(*) AS n FROM jobs WHERE id = 'sync'").get().n, 1);
+    assert.equal(db.prepare("SELECT count(*) AS n FROM job_runs WHERE job_id = 'sync'").get().n, 2);
   } finally { s.done(); }
 });

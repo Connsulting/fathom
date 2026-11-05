@@ -47,10 +47,11 @@ function captureTransport() {
 const runsOf = (db, jobId) => db.prepare('SELECT * FROM job_runs WHERE job_id = ? ORDER BY id').all(jobId).map((r) => ({ ...r }));
 const keyAt = (jobId, iso, tz = NY) => periodKey(JOBS.find((j) => j.id === jobId).schedule, localParts(new Date(iso), tz));
 
-function schedulerFor(t, { handlers, clock, holder = 'test-holder', config, engine = null, transport = captureTransport(), db = t.db, leaseMs } = {}) {
+function schedulerFor(t, { handlers, clock, holder = 'test-holder', config, engine = null, transport = captureTransport(), db = t.db, leaseMs, drainMs } = {}) {
   return createScheduler({
     db, config: config || configOf(t.dataDir), engine, handlers, transport, now: clock.now, tickMs: 3600000, holder,
     ...(leaseMs ? { leaseMs } : {}),
+    ...(drainMs ? { drainMs } : {}),
   });
 }
 
@@ -445,5 +446,114 @@ test('engine off: the default brief-email handler still sends the brief through 
     assert.equal(send.length, 1);
     assert.equal(send[0].status, 'sent');
     assert.equal(t.db.prepare('SELECT count(*) AS n FROM spend_ledger').get().n, spendBefore, 'no model spend with the engine off');
+  } finally { t.done(); }
+});
+
+const realClock = { now: () => new Date() };
+const lockRow = (db) => db.prepare('SELECT holder FROM job_lock').get();
+const withTimeout = (p, ms, label) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(`${label} still pending after ${ms}ms`)), ms))]);
+
+test('ensureJobs inserts a jobs row for every JOBS entry via tick, start and jobs(), while jobs() lists only handled jobs', async () => {
+  for (const how of ['tick', 'start', 'jobs']) {
+    const t = await store();
+    try {
+      const s = schedulerFor(t, { handlers: { freshness: counter() }, clock: clockAt('2026-11-05T15:00:00Z') });
+      if (how === 'tick') await s.tick();
+      if (how === 'start') {
+        s.start();
+        for (let i = 0; i < 50 && t.db.prepare('SELECT count(*) AS n FROM jobs').get().n < JOBS.length; i++) await settle(20);
+      }
+      if (how === 'jobs') s.jobs();
+      const ids = t.db.prepare('SELECT id FROM jobs').all().map((r) => r.id).sort();
+      assert.deepEqual(ids, JOBS.map((j) => j.id).sort(), `${how}: every JOBS entry has a row, plan included`);
+      assert.deepEqual(s.jobs().map((j) => j.id), ['freshness'], `${how}: jobs() lists only handled jobs`);
+      await s.stop();
+    } finally { t.done(); }
+  }
+});
+
+test('lease renewal: a long run keeps the lock past leaseMs so a second scheduler cannot take it; then liveness after stop', async () => {
+  const t = await store();
+  const dbB = openDb(t.file);
+  try {
+    const leaseMs = 200;
+    const g = gatedPlan();
+    const plan = counter();
+    const sa = schedulerFor(t, { handlers: { plan: g.handler }, clock: realClock, holder: 'holder-a', leaseMs });
+    const sb = schedulerFor(t, { handlers: { plan }, clock: realClock, holder: 'holder-b', db: dbB, leaseMs });
+    const first = sa.runNow('plan');
+    await settle(30);
+    assert.equal(g.started.length, 1);
+    await settle(leaseMs * 3);
+    await assert.rejects(() => sb.runNow('plan'), (e) => e instanceof SchedulerError && e.code === 'locked');
+    await sb.tick();
+    assert.equal(plan.calls.length, 0, 'the second scheduler ran nothing');
+    assert.equal(lockRow(dbB).holder, 'holder-a');
+    g.release(0);
+    await first;
+    await sa.stop();
+    const run = await sb.runNow('plan');
+    assert.equal(run.status, 'ok', 'liveness: the second scheduler runs once the first is done');
+    assert.equal(plan.calls.length, 1);
+  } finally {
+    dbB.close();
+    t.done();
+  }
+});
+
+test('stop() waits for the running handler and its final job_runs row before releasing the lease', async () => {
+  const t = await store();
+  try {
+    const g = gatedPlan();
+    const other = counter();
+    const s = schedulerFor(t, { handlers: { plan: g.handler, freshness: other }, clock: realClock, holder: 'stop-holder', leaseMs: 60000, drainMs: 5000 });
+    const first = s.runNow('plan');
+    await settle(30);
+    assert.equal(g.started.length, 1);
+    const queued = await s.trigger('plan', 'ingest');
+    assert.equal(queued, null);
+    let resolved = false;
+    const stopping = s.stop().then(() => { resolved = true; });
+    await settle(150);
+    assert.equal(resolved, false, 'stop is pending while the handler runs');
+    assert.equal(runsOf(t.db, 'plan')[0].status, 'running');
+    assert.equal(lockRow(t.db).holder, 'stop-holder', 'the lease is held until the handler finishes');
+    await s.tick();
+    assert.equal(other.calls.length, 0, 'tick runs nothing after stop begins');
+    await assert.rejects(() => s.runNow('freshness'), (e) => e instanceof SchedulerError && e.code === 'locked');
+    g.release(0);
+    await withTimeout(stopping, 2000, 'stop');
+    await first;
+    const rows = runsOf(t.db, 'plan');
+    assert.equal(rows[0].status, 'ok');
+    assert.ok(rows[0].finished_at, 'finished_at set');
+    assert.equal(t.db.prepare("SELECT count(*) AS n FROM job_lock WHERE holder = 'stop-holder'").get().n, 0, 'lease released');
+    await settle(100);
+    assert.equal(g.started.length, 1, 'the queued rerun was dropped');
+    assert.equal(runsOf(t.db, 'plan').length, 1);
+  } finally { t.done(); }
+});
+
+test('stop() is bounded by drainMs: a handler that never finishes does not hold it, and the lease is released', async () => {
+  const t = await store();
+  try {
+    const hung = async () => { await new Promise(() => {}); };
+    const s = schedulerFor(t, { handlers: { plan: hung }, clock: realClock, holder: 'hung-holder', leaseMs: 60000, drainMs: 100 });
+    s.runNow('plan').catch(() => {});
+    await settle(30);
+    assert.equal(lockRow(t.db).holder, 'hung-holder');
+    await withTimeout(s.stop(), 2000, 'stop');
+    assert.equal(lockRow(t.db), undefined, 'lease released after the drain timeout');
+  } finally { t.done(); }
+});
+
+test('stop() with nothing running resolves promptly and releases the lease', async () => {
+  const t = await store();
+  try {
+    const s = schedulerFor(t, { handlers: { freshness: counter() }, clock: realClock, holder: 'idle-holder', leaseMs: 60000 });
+    await s.runNow('freshness');
+    assert.equal(lockRow(t.db).holder, 'idle-holder');
+    await withTimeout(s.stop(), 500, 'stop');
+    assert.equal(lockRow(t.db), undefined);
   } finally { t.done(); }
 });
