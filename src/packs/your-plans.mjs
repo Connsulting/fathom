@@ -1,14 +1,18 @@
 // The private "Your plans" knowledge pack, built from the owner's own plan and benefits documents
 // into <dataDir>/packs/your-plans/ (the data volume, never the repository).
 //
-// buildYourPlans({ db, engine, dataDir, fileIds, clock }) -> { written, dir, entries, sources: [{fileId, name}], warnings }
-// fakeExtractRows(text, { fileName }) -> [{ title, body, page }]   (the fake engine's extraction)
+// buildYourPlans({ db, engine, dataDir, fileIds, clock }) -> { written, dir, entries, sources: [{fileId, name}], warnings, dropped }
+// fakeExtractRows(text) -> [{ title, body, excerpt, page }]   (the fake engine's extraction)
 //
 // Sources are documents with doc_type plan or benefits (their file, or fields.text when a row has
 // no file) plus any extra files named by id. A stored_path resolves against dataDir and must stay
 // inside it after symlinks. Each source goes through engine.extract; each row becomes one entry
 // citing `<file name>, page <n>` at https://your-plans.invalid/<fileId>?page=<n> (a reserved host
-// that never resolves; the UI shows it as plain text). The pack is written to a temporary sibling,
+// that never resolves; the UI shows it as plain text). A row is kept only when its verbatim excerpt
+// is in the source text (whitespace-normalized), every number in its title and body is in the
+// excerpt, and the excerpt sits on the row's page (Page N markers before it); every other row is
+// dropped and counted. PDF sources cannot be checked yet, so their rows are all dropped with one
+// warning asking for a text copy. The pack is written to a temporary sibling,
 // validated with loadPacks, then swapped in, and settings['packs.generation'] is bumped so every
 // running server refreshes. The target must resolve outside the repository entirely. Warnings
 // never carry document text.
@@ -20,6 +24,7 @@ import { loadPacks } from './index.mjs';
 import { yourPlansDir } from './state.mjs';
 import { getSetting, setSetting, parseJson } from '../store/db.mjs';
 import { resolveClock } from '../scenario/build.mjs';
+import { checkGrounding } from '../engine/grounding.mjs';
 
 const REPO_ROOT = fileURLToPath(new URL('../../', import.meta.url)).replace(/[\\/]$/, '');
 const CITE_HOST = 'https://your-plans.invalid/';
@@ -28,12 +33,13 @@ const MAX_BODY = 20000;
 
 const ROW_SCHEMA = {
   type: 'object',
-  properties: { title: { type: 'string' }, body: { type: 'string' }, page: { type: 'integer' }, taxYear: { type: 'integer' } },
-  required: ['title', 'body', 'page'],
+  properties: { title: { type: 'string' }, body: { type: 'string' }, excerpt: { type: 'string' }, page: { type: 'integer' }, taxYear: { type: 'integer' } },
+  required: ['title', 'body', 'excerpt', 'page'],
   additionalProperties: false,
 };
 const EXTRACT_SYSTEM = 'Extract the sections of this plan or benefits document as rows: a short title, the section text as written, ' +
-  'and the page it starts on (1 when the document has no pages). Add taxYear only when the document states the year it applies to. ' +
+  'the excerpt (the exact source text the row is drawn from, copied verbatim) and the page it starts on (1 when the document has no pages). ' +
+  'Every number in the title and the section text must appear in the excerpt. Add taxYear only when the document states the year it applies to. ' +
   'Never invent sections, amounts or rules that are not in the document.';
 
 export class YourPlansRefusal extends Error {
@@ -44,15 +50,17 @@ export class YourPlansRefusal extends Error {
 
 const PAGE_MARK = /^\s*page\s+(\d{1,4})\s*$/i;
 const HEADING = /^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$/;
+// The title of a section with no heading: numberless, so it passes the excerpt number check.
+const UNTITLED = 'Untitled section';
 
-export function fakeExtractRows(text, { fileName = 'document' } = {}) {
+export function fakeExtractRows(text) {
   const rows = [];
   let page = 1;
   let current = null;
   const close = () => {
     if (current) {
       const body = current.lines.join('\n').trim();
-      if (body) rows.push({ title: current.title || `Page ${current.page} of ${fileName}`, body, page: current.page });
+      if (body) rows.push({ title: current.title || UNTITLED, body, excerpt: body, page: current.page });
     }
     current = null;
   };
@@ -66,6 +74,48 @@ export function fakeExtractRows(text, { fileName = 'document' } = {}) {
   }
   close();
   return rows;
+}
+
+// ---------------------------------------------------------------- the excerpt check
+
+// The source text whitespace-normalized (runs collapsed to one space, trimmed), with the page each
+// stretch is on: breaks[i] = [normalized index where page starts, page].
+function normalizedSource(text) {
+  let norm = '';
+  const breaks = [[0, 1]];
+  for (const line of String(text ?? '').split(/\r?\n/)) {
+    const words = line.trim().split(/\s+/).filter(Boolean);
+    if (!words.length) continue;
+    if (norm) norm += ' ';
+    const mark = PAGE_MARK.exec(line);
+    if (mark) breaks.push([norm.length, Math.max(1, Number(mark[1]))]);
+    norm += words.join(' ');
+  }
+  return { norm, breaks };
+}
+
+const normalize = s => String(s ?? '').replace(/\s+/g, ' ').trim();
+
+function pageAt(breaks, index) {
+  let page = 1;
+  for (const [at, p] of breaks) if (at <= index) page = p;
+  return page;
+}
+
+// A cleaned row matches its source when its excerpt is in the source text, every number in its
+// title and body is in the excerpt (checkGrounding with the excerpt as the only data; a number
+// word counts as in the excerpt when the excerpt has the same words, since data strings only
+// ground digits), and some occurrence of the excerpt is on the row's page.
+function matchesSource(row, source) {
+  const excerpt = normalize(row.excerpt);
+  if (!excerpt) return false;
+  const lower = excerpt.toLowerCase();
+  const { violations } = checkGrounding(`${row.title}\n\n${row.body}`, { data: [excerpt] });
+  if (!violations.every(v => v.reason === 'numeric word absent from sources' && new RegExp(`\\b${v.text.toLowerCase()}\\b`).test(lower))) return false;
+  for (let at = source.norm.indexOf(excerpt); at >= 0; at = source.norm.indexOf(excerpt, at + 1)) {
+    if (pageAt(source.breaks, at) === row.page) return true;
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------- guards
@@ -163,8 +213,8 @@ function cleanRow(row, warnings, name) {
     warnings.push(`A section of ${name} had no text or page and was skipped.`);
     return null;
   }
-  const title = neutralTitle(row.title ?? '').slice(0, MAX_TITLE).trim() || `Section on page ${row.page}`;
-  return { title, body, page: row.page, taxYear: Number.isInteger(row.taxYear) ? row.taxYear : null };
+  const title = neutralTitle(row.title ?? '').slice(0, MAX_TITLE).trim() || UNTITLED;
+  return { title, body, excerpt: String(row.excerpt ?? ''), page: row.page, taxYear: Number.isInteger(row.taxYear) ? row.taxYear : null };
 }
 
 function writePack(dir, { entries, clock }) {
@@ -210,22 +260,38 @@ export async function buildYourPlans({ db, engine, dataDir, fileIds = [], clock 
   const warnings = [];
   const sources = gatherSources(db, resolve(dataDir), fileIds, warnings);
   const entries = [];
+  let dropped = 0;
   for (const source of sources) {
-    const fake = engine.mode === 'fake' && source.document.type === 'text'
-      ? [{ text: JSON.stringify({ rows: fakeExtractRows(source.document.text, { fileName: source.name }) }) }]
+    const text = source.document.type === 'text';
+    const fake = engine.mode === 'fake'
+      ? [{ text: JSON.stringify({ rows: text ? fakeExtractRows(source.document.text) : [] }) }]
       : undefined;
     const rows = await engine.extract({ document: source.document, schema: ROW_SCHEMA, system: EXTRACT_SYSTEM, maxTokens: 4096,
       ...(fake ? { fake } : {}) });
+    if (!text) {
+      // The code holds no PDF text, so nothing extracted from a PDF can be checked against it.
+      dropped += rows.length;
+      warnings.push(`PDF sections of ${source.name} cannot be checked against the document yet, so ${rows.length === 1 ? 'its 1 section was' : `its ${rows.length} sections were`} dropped. Upload a text copy of it instead.`);
+      continue;
+    }
+    const checked = normalizedSource(source.document.text);
+    let mismatched = 0;
     for (const row of rows) {
       const clean = cleanRow(row, warnings, source.name);
-      if (clean) entries.push({ ...clean, fileId: source.fileId, name: source.name });
+      if (!clean) continue;
+      if (!matchesSource(clean, checked)) { mismatched++; continue; }
+      entries.push({ title: clean.title, body: clean.body, page: clean.page, taxYear: clean.taxYear, fileId: source.fileId, name: source.name });
+    }
+    if (mismatched) {
+      dropped += mismatched;
+      warnings.push(`${mismatched === 1 ? '1 section' : `${mismatched} sections`} of ${source.name} ${mismatched === 1 ? 'was' : 'were'} dropped because ${mismatched === 1 ? 'it' : 'they'} did not match the document.`);
     }
   }
   const named = sources.map(s => ({ fileId: s.fileId, name: s.name }));
-  if (!entries.length) return { written: false, dir, entries: 0, sources: named, warnings };
+  if (!entries.length) return { written: false, dir, entries: 0, sources: named, warnings, dropped };
   writePack(dir, { entries, clock: day });
-  setSetting(db, 'yourPlans', { builtAt: new Date().toISOString(), entries: entries.length, sources: named.map(s => s.name) });
+  setSetting(db, 'yourPlans', { builtAt: new Date().toISOString(), entries: entries.length, dropped, sources: named.map(s => s.name) });
   const generation = getSetting(db, 'packs.generation', 0);
   setSetting(db, 'packs.generation', (Number.isInteger(generation) ? generation : 0) + 1);
-  return { written: true, dir, entries: entries.length, sources: named, warnings };
+  return { written: true, dir, entries: entries.length, sources: named, warnings, dropped };
 }

@@ -286,7 +286,10 @@ live state merged in, plus `live`. It only reads.
    naming it is open, else decided if any is decided, else upcoming. War-game `decided` is the
    stored text when a stored decided decision names it, else the line of the first derived decided
    decision.
-5. Engine: `budget.monthly` is `settings.cap.usd` (default 200); `budget.used` is the sum of
+5. Engine: `mode` is the configured `FATHOM_ENGINE` mode (`live`, `fake` or `off`; the API passes
+   `config.engine` as `buildScenario(db, {clock, engineMode})`, null when not given), so the Engine
+   screen shows "Off in configuration" and Paused when the mode is off even with the switch on;
+   `budget.monthly` is `settings.cap.usd` (default 200); `budget.used` is the sum of
    `spend_ledger.cost_usd` for the clock's month; jobs come from `jobs`; `chat` from content;
    `ledger` is the latest 8 spend rows, newest first, as `[{id, ts, purpose, model, cost}]` (`ts`
    a display label, no token or prompt fields).
@@ -342,12 +345,12 @@ response is `{scenario, ...}` with the fresh scenario.
 | `POST /api/recs/:id/action` | `{action: accept, start, snooze, dismiss, complete, reopen or task, arg?}` | `{scenario}`. `task` toggles task `arg`; `snooze` takes a wake label (default "Next month"). 400 bad action or task index, 404 unknown or hidden rec. Writes `rec_events` (actor `ui`). |
 | `POST /api/wargame/:name/pick` | `{index}` (an index or an option id) | `{scenario}`. `name` is salary or deferral (404 otherwise); 400 out of range. |
 | `POST /api/packs/:id/toggle` | `{}` | `{scenario, status, note}`. Turning a pack on lifts its hidden recs to proposed; turning it off hides again only the recs it lifted that no other active pack powers. `note` is "Recommendations update on the next planning run." |
-| `POST /api/packs/:id/whatif` | `{}` | `{scenario}`. Marks the pack exploring and appends the pack's what-if prompt and a live answer (with provenance) once to `pack:<id>`; a notice reply (engine off, over the cap, model error) is appended once and does not mark it done. |
+| `POST /api/packs/:id/whatif` | `{}` | `{scenario}`. Marks the pack exploring and appends the pack's what-if prompt and a live answer (with provenance) once to `pack:<id>`. A manifest-backed pack's prompt is literal text, stored escaped like free text (`whatIfOwnerText`); an illustrative demo prompt keeps its token form; a notice reply (engine off, over the cap, model error) is appended once and does not mark it done. |
 | `GET /api/packs/:id/entries/:entryId` | | `{entry: {id, title, body, cites}}` for an entry of a manifest-backed pack row, from the loaded packs; 404 otherwise. |
 | `POST /api/engine` | `{on: boolean}` | `{scenario}`; 400 when `on` is not boolean. |
 | `POST /api/engine/cap` | `{usd}` | `{scenario}`. `usd` a finite number from 0 to 10000, rounded to cents and stored as `settings.cap`; anything else 400. |
 | `POST /api/ask` | `{key?: 'ask', a rec id or 'pack:<id>', questionId? or text?}` | `{scenario, message}`. Exactly one of `questionId` or `text`; empty text, both or neither are 400; unknown question or conversation 404. Appends the owner's message and the live answer with its provenance, or a notice. |
-| `POST /api/your-plans/build` | `{fileIds?: string[]}` (at most 50) | `{scenario, result: {written, entries, sources, warnings}}`. Builds the Your plans pack; 400 for a bad body; 409 while the engine is off, over the cap, or when the data directory is inside the repository. |
+| `POST /api/your-plans/build` | `{fileIds?: string[]}` (at most 50) | `{scenario, result: {written, entries, sources, warnings, dropped}}`. Builds the Your plans pack (`dropped` counts the extracted sections that did not match their document); 400 for a bad body; 409 while the engine is off, over the cap, or when the data directory is inside the repository. |
 | `POST /api/onboarding` | `{step}` | `{scenario}`. 0 to 5 set the step, 6 completes onboarding; anything else 400. |
 | `POST /api/demo/reset` | `{}` | `{scenario}`. Rebuilds the demo store; 404 unless the store is a demo store. |
 
@@ -428,10 +431,24 @@ is reachable only on the owner's private network.
    `PRODUCT_RULES` states: advisory only, no tax filing, no money movement or account changes, no
    securities selection, no number not taken from a tool result or the provided data, stored
    figures as `{f:key}` tokens from `get_figures`, cite pack entries by title, plain text paragraphs,
-   and `set_recommendation_status` only on the owner's explicit request.
-3. Tools: every read tool of the registry; `set_recommendation_status` is offered only when the
-   owner's message matches a status intent (accept, start, snooze, dismiss, set aside, mark, done,
-   complete, reopen, wake) and does not end in "?".
+   and never changing a recommendation itself: on the owner's explicit request it calls
+   `propose_recommendation_action` so the owner can confirm.
+   A What if question is the pack prompt: a manifest-backed prompt is sent as the raw literal text
+   (no token resolution), an illustrative demo prompt with its tokens resolved to plain text. The
+   history filter drops an earlier copy of the prompt in its stored form.
+3. Tools: every read tool of the registry, never `set_recommendation_status` (the registry keeps it
+   for other surfaces; chat never writes). In `ask` and rec conversations the answerer adds one
+   local, non-writing tool, `propose_recommendation_action` (scope `read`, input `{id, action:
+   accept|start|complete|dismiss|snooze|reopen, wake?: string up to 200}`, no other keys). Its
+   handler checks that the rec exists and is not hidden and that the action is in `ACTION_STATUS`,
+   returns only `{proposed: true}` and never touches the store. It is never offered in `pack:<id>`
+   conversations or a What if. The last successful call becomes `provenance.proposal` `{recId,
+   action, wake?}` (one per answer); in a rec conversation a proposal for any other rec is ignored.
+   The UI shows a confirm card in that Fathom message ("Proposed: <action label> <rec title>", the
+   label from a fixed map, the wake label escaped) with a Confirm button
+   (`button.h-propose[data-propose-rec][data-propose-action]`) that calls the ordinary rec action
+   (`api.act`, `POST /api/recs/:id/action`). The card reads Done, with no button, once the rec's
+   status equals `ACTION_STATUS[action]`.
 4. Grounding (`groundAnswer`): every `{f|fk|l|p|n:key}` token is validated against `fig`, `law`,
    `pct` and `names` (key characters `[A-Za-z0-9_.-]`), recorded once as a violation when invalid,
    and masked; then `checkGrounding` checks the remaining numbers and number words against tool
@@ -439,10 +456,21 @@ is reachable only on the owner's private network.
    bodies), never stored figure values, so a stored figure typed as a literal is a violation
    ("stored figure written as a literal"). Each grounded literal is bound to the first single source
    that grounds it (a tool by name, else the context datum).
+   No number laundering: before `checkGrounding` and literal attribution, each tool result is
+   sanitized. A result leaf (string or number) equal to an argument leaf of the same call (numbers
+   compared numerically, strings after trim) is dropped, as is a string leaf containing an argument
+   string of 3 or more characters with a digit, and every key that identifies or cites (`id`, `ids`,
+   `key`, `keys`, keys ending in `Id`, `Ids` or `_id`, `url`, `href`, `cites`, `citation`,
+   `citations`, `source`, `sources`, `file`, `fileName`, `page`, `pages`). Error results stay
+   ignored; tool provenance (name and args) is unchanged. Pack entry bodies, and `context.entries`
+   in a pack conversation, ground without their citation and metadata lines (lines starting with
+   `Source:`, `Sources:`, `Tax year:` or `Reviewed:`, any case), so a file name or citation never
+   grounds a number; the model still sees the full entry text.
 5. One corrective retry (same `system`, the first answer plus a corrective user turn). An answer
    still ungrounded is stored with each violation in `<span class="fx-unverified" title="Not found
-   in your data or tool results">`; if the retry call itself fails, the first answer is kept,
-   marked.
+   in your data or tool results">`. If the retry call itself fails, the answer is the matching
+   notice (engine off, over the cap, model error), never the first ungrounded text; the spend the
+   engine recorded for each completed round stays in the ledger.
 6. Rendering (`renderAnswer`): model text is untrusted. Everything is HTML-escaped (quotes and
    apostrophes included) with `{` and `}` as `&#123;` and `&#125;`, except valid tokens; bound
    literals are wrapped in `<span class="fx-src" data-src="<literal index>" title="From <source>">`;
@@ -453,21 +481,26 @@ is reachable only on the owner's private network.
    missing live credential ("The model could not answer just now, so nothing was made up. Try again
    in a moment."). Model calls are awaited before the write transaction opens.
 8. Refs: the canned question's refs when the question matches one, the rec of a rec conversation,
-   a what-if's unlock recs, and recs the answer read or changed through tools.
+   a what-if's unlock recs, recs the answer read through tools, and the rec of its proposal.
 9. Fake answer source (`fakeAnswerScript`, `FATHOM_ENGINE=fake`): one tool round
    (`household_summary`, `get_figures` with the answer's figure keys, `get_recommendation` in a rec
    conversation) and one text round: the canned demo answer for a suggested or rec question (by id
    or exact free text), the pack's canned what-if answer (else a numberless sentence naming the pack
    and its covers), or "From your household summary, N items need you right now." with N from the
    summary. Numbers in the owner's free text are echoed first ("You asked about ..."), so an
-   invented amount is marked unverified after the retry.
+   invented amount is marked unverified after the retry. In `ask` and rec conversations, free text
+   that is an explicit command (`^(please\s+)?(accept|start|complete|dismiss|snooze|reopen)\b`)
+   naming a rec (the rec conversation's own rec, or in `ask` a visible rec's id or exact title)
+   adds a `propose_recommendation_action` call to the tool round, and the text round says the owner
+   can confirm it below. Negations and questions ("Do not mark anything done", "Should I dismiss
+   this?") never match.
 
 ### Answer provenance
 
 Stored in `messages.provenance` and returned on the message: `{engine: mode, model, tools: [{name,
 args}], figures: [figure keys], packIds: [active manifest ids in the prompt], packEntries: [entry
 titles named in the answer], literals: [{text, source}], grounding: {ok, retried, unverified:
-[texts]}, costUsd}`. No prompt text is ever stored.
+[texts]}, costUsd, proposal?: {recId, action, wake?}}`. No prompt text is ever stored.
 
 ## Live pack state
 
@@ -501,10 +534,12 @@ overwrites a confirmed one) and `getFacts(db)` (flat `{key: value}`).
 ## Your plans
 
 `src/packs/your-plans.mjs` exports `buildYourPlans({db, engine, dataDir, fileIds, clock})` returning
-`{written, dir, entries, sources: [{fileId, name}], warnings}`, and `fakeExtractRows(text,
-{fileName})` (sections split on `# Heading` lines and `Page N` markers). `npm run build:your-plans
-[-- --file <id>]...` (`scripts/build-your-plans.mjs`) runs it against the existing store (refusing
-when there is none) and prints counts only.
+`{written, dir, entries, sources: [{fileId, name}], warnings, dropped}`, and `fakeExtractRows(text)`
+(sections split on `# Heading` lines and `Page N` markers, each row's `excerpt` the section text it
+read, and "Untitled section" for a section with no heading, so no title carries a number or the
+file name). `npm run build:your-plans [-- --file <id>]...` (`scripts/build-your-plans.mjs`) runs it
+against the existing store (refusing when there is none) and prints counts only, the dropped count
+included.
 
 1. The target `<dataDir>/packs/your-plans/` must resolve (realpath of its nearest existing ancestor,
    so symlinks count) outside the repository entirely; otherwise the build refuses with "FATHOM_DATA
@@ -515,15 +550,27 @@ when there is none) and prints counts only.
    `stored_path` resolves against `dataDir` and must stay inside it after symlinks. Text (`text/*`,
    `.md`, `.txt`) and PDF (`application/pdf` or `%PDF-` magic) are read; anything else warns.
    Warnings never carry document text.
-3. Each source goes through `engine.extract` with rows `{title, body, page, taxYear?}`. Each row
-   becomes `NN-<slug>.md` holding `# <title>`, the body, `Source: <file name>, page <n>`, `Tax year`
+3. Each source goes through `engine.extract` with rows `{title, body, excerpt, page, taxYear?}`,
+   `excerpt` the verbatim source text the row is drawn from. Extracted entries must match the
+   document. For a text source a row is kept only when (a) its excerpt, whitespace-normalized
+   (runs collapsed to one space, trimmed), is a nonempty substring of the normalized source text;
+   (b) every number in its neutralized title and body is in the excerpt (`checkGrounding` with the
+   excerpt as the only data; a number word counts when the excerpt has the same words); and (c) an
+   occurrence of the excerpt is on `row.page`, counting `Page N` marker lines before it (1 when there
+   are none). A PDF source cannot be checked (the code holds no PDF text), so all its rows are
+   dropped with one warning that PDF sections cannot be checked against the document yet and a text
+   copy can be uploaded instead. Every dropped row is counted in `dropped`, a warning per source says
+   how many sections did not match the document (no document text), `settings.yourPlans` records
+   `dropped`, and the Packs Your plans result line shows "N sections were dropped because they did
+   not match the document." when N > 0. Each kept row becomes `NN-<slug>.md` holding `# <title>`, the body, `Source: <file name>, page <n>`, `Tax year`
    and `Reviewed`. Private entries cite `https://your-plans.invalid/<encodeURIComponent(fileId)>?page=<n>`
    with label `<file name>, page <n>`: the frozen manifest requires absolute http(s) cites, and the
    reserved `.invalid` host never resolves; the UI shows these cites as plain text, never links.
 4. The manifest is `your-plans` "Your plans", version 1.0.0, the clock year and date, curator "Built
    from your documents", `appliesWhen: {all: []}` (always active). It is written to a temporary
-   sibling, validated with `loadPacks`, then swapped in. Zero rows write nothing. A successful build
-   sets `settings.yourPlans` and increments `settings['packs.generation']`.
+   sibling, validated with `loadPacks`, then swapped in. Zero kept rows write nothing. A successful
+   build sets `settings.yourPlans` `{builtAt, entries, dropped, sources}` and increments
+   `settings['packs.generation']`.
 
 ## Demo data
 

@@ -17,6 +17,15 @@
 .d-horizon .fx-src { border-bottom: 1px dotted var(--line2); cursor: help; }
 .d-horizon .h-msg.notice .h-msg-b { color: var(--mu); padding-left: 12px; border-left: 2px solid var(--line2); }
 
+/* ---------- chat: proposal confirm card ---------- */
+.d-horizon .h-proposal {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  margin-top: 10px; max-width: 70ch; padding: 10px 12px; border: 1px solid var(--line2); border-radius: 8px;
+}
+.d-horizon .h-proposal p { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.d-horizon .h-proposal-k { color: var(--mu); }
+.d-horizon .h-proposal-done { color: var(--fa); font-size: 12.5px; }
+
 /* ---------- chat: Sources disclosure ---------- */
 .d-horizon .h-src { margin-top: 10px; max-width: 70ch; font-size: 12.5px; color: var(--fa); }
 .d-horizon .h-src summary {

@@ -211,7 +211,7 @@ function packPage(p) {
 
   const whatIf = !on || explored ? section('What if', explored
     ? `${thread(msgs)}${composer('pack:' + p.id, 'Ask a follow-up')}${unlockHtml}`
-    : `<p class="h-mute">Talk through what changes if this applied to you. Nothing turns on until you say so.</p><button type="button" class="h-chip" data-whatif="${esc(p.id)}">${T(p.whatIf?.prompt || 'What if')}</button>`) : '';
+    : `<p class="h-mute">Talk through what changes if this applied to you. Nothing turns on until you say so.</p><button type="button" class="h-chip" data-whatif="${esc(p.id)}">${mt(p, p.whatIf?.prompt || 'What if')}</button>`) : '';
 
   return shell(`<div class="h-rec">
     <a class="h-back" href="${href('packs')}" data-go="packs">${icon('back')}Packs</a>
@@ -278,10 +278,14 @@ function resultLine(r) {
   if (!r) return '';
   const warns = arr(r.warnings).length;
   const docs = arr(r.sources).length;
+  const dropped = Number.isInteger(r.dropped) && r.dropped > 0 ? r.dropped : 0;
   const text = r.written
     ? `Built ${plural(Number(r.entries) || 0, 'entry', 'entries')} from ${plural(docs, 'document')}.`
     : `Nothing was written. No plan sections were found in ${plural(docs, 'document')}.`;
-  return `<p class="h-yp-result${r.written ? '' : ' none'}" role="status">${esc(text)}${warns ? ` <span>${plural(warns, 'document')} skipped.</span>` : ''}</p>`;
+  const droppedLine = dropped
+    ? ` <span>${dropped === 1 ? '1 section was' : `${dropped} sections were`} dropped because ${dropped === 1 ? 'it' : 'they'} did not match the document.</span>`
+    : '';
+  return `<p class="h-yp-result${r.written ? '' : ' none'}" role="status">${esc(text)}${droppedLine}${warns ? ` <span>${plural(warns, 'warning')}.</span>` : ''}</p>`;
 }
 
 function yourPlansCard(packs) {

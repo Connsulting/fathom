@@ -298,7 +298,7 @@ function deriveFigures(fig, { wargame, series, engine }, scope) {
 
 // ---------------------------------------------------------------- build
 
-export function buildScenario(db, { clock } = {}) {
+export function buildScenario(db, { clock, engineMode = null } = {}) {
   const clk = resolveClock(db, clock);
   const content = loadContent(db);
   const metaC = section(content, 'meta');
@@ -325,7 +325,7 @@ export function buildScenario(db, { clock } = {}) {
   const jobs = db.prepare('SELECT * FROM jobs ORDER BY sort, id').all().map(j => ({
     id: j.id, name: j.name, cadence: j.cadence || '', last: j.last_label || '', next: j.next_label || '', does: j.does || '', cost: j.cost,
   }));
-  const engine = { budget: { monthly, used }, chat: section(content, 'engine.chat'), jobs, ledger: loadLedger(db) };
+  const engine = { mode: engineMode, budget: { monthly, used }, chat: section(content, 'engine.chat'), jobs, ledger: loadLedger(db) };
 
   deriveFigures(fig, { wargame, series, engine }, { names, law, pct, fig });
 

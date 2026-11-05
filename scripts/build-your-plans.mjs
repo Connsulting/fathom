@@ -1,7 +1,8 @@
 // npm run build:your-plans [-- --file <id> ...]
 // Builds the private Your plans pack from the plan and benefits documents in the existing store at
 // $FATHOM_DATA (plus any extra files named with --file), through the engine FATHOM_ENGINE selects.
-// Refuses when there is no store. Prints counts only, never document text. A running server
+// Refuses when there is no store. Prints counts only (entries, sources, sections dropped because
+// they did not match the document, warnings), never document text. A running server
 // picks the new pack up on its next request (settings packs.generation changes).
 
 import { existsSync } from 'node:fs';
@@ -38,7 +39,7 @@ async function main() {
   try {
     const engine = createRuntimeEngine({ db, config });
     const result = await buildYourPlans({ db, engine, dataDir: config.dataDir, fileIds, clock: config.clock || undefined });
-    const counts = `${result.entries} entries from ${result.sources.length} sources, ${result.warnings.length} warnings`;
+    const counts = `${result.entries} entries from ${result.sources.length} sources, ${result.dropped} sections dropped, ${result.warnings.length} warnings`;
     console.log(`${NAME}: ${result.written ? 'built the Your plans pack' : 'nothing to write'}: ${counts}`);
   } catch (e) {
     if (e instanceof YourPlansRefusal) fail(e.message);

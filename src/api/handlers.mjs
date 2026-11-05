@@ -10,6 +10,7 @@ import { escapeUserText } from '../shared/tokens.mjs';
 import { seedDemo } from '../../demo/seed.mjs';
 import { HttpError } from './http.mjs';
 import { findQuestion, isIndex } from './questions.mjs';
+import { whatIfOwnerText } from './answerer.mjs';
 import { buildYourPlans, YourPlansRefusal } from '../packs/your-plans.mjs';
 import { EngineOffError, BudgetExceededError } from '../engine/index.mjs';
 
@@ -23,7 +24,7 @@ const paragraphs = list => (Array.isArray(list) ? list : []).map(p => `<p>${p}</
 const nowIso = () => new Date().toISOString();
 
 function scenarioOf(ctx) {
-  return buildScenario(ctx.db, { clock: ctx.config && ctx.config.clock });
+  return buildScenario(ctx.db, { clock: ctx.config && ctx.config.clock, engineMode: ctx.config && ctx.config.engine });
 }
 
 // The current "today" for message timestamps: the scenario clock's date at the current time.
@@ -189,7 +190,7 @@ export async function packWhatIf(ctx) {
     const row = packRow(db, first.id);
     let asked = !!row.what_if_asked;
     let done = !!row.what_if_done;
-    if (!asked) { pushMessage(ctx, key, 'me', def.whatIf.prompt || ''); asked = true; }
+    if (!asked) { pushMessage(ctx, key, 'me', whatIfOwnerText(def)); asked = true; }
     if (!done && reply) {
       if (reply.notice) {
         const last = db.prepare('SELECT notice FROM messages WHERE conversation_key = ? ORDER BY id DESC LIMIT 1').get(key);
@@ -253,8 +254,8 @@ export async function yourPlansBuild(ctx) {
     throw e;
   }
   packs.refresh();
-  const { written, entries, sources, warnings } = result;
-  return { scenario: scenarioOf(ctx), result: { written, entries, sources, warnings } };
+  const { written, entries, sources, warnings, dropped } = result;
+  return { scenario: scenarioOf(ctx), result: { written, entries, sources, warnings, dropped } };
 }
 
 export async function ask(ctx) {

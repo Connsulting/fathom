@@ -480,6 +480,7 @@ function thread(msgs, selfId = '') {
     const refs = arr(m.refs).filter((id) => id !== selfId).map((id) => recById(id)).filter(Boolean);
     return `<div class="h-msg ${esc(m.role)}${m.notice ? ' notice' : ''}"><div class="h-msg-who">${who}${m.ts ? `<time>${X(m.ts)}</time>` : ''}</div><div class="h-msg-b">${m.html || ''}</div>`
       + (refs.length ? `<div class="h-refs">${refs.map((r) => `<a href="${href('rec', { id: r.id })}" data-go="rec" data-id="${esc(r.id)}"><span>${T(r.title)}</span><em>${T(r.window?.label || '')}</em>${icon('arrow')}</a>`).join('')}</div>` : '')
+      + chatScreen.proposalHtml(m)
       + chatScreen.sourcesHtml(m)
       + '</div>';
   }).join('')}</div>`;

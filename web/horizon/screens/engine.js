@@ -39,6 +39,9 @@ export function render() {
   const en = api.s.engine || {};
   const b = en.budget || {};
   const on = api.engineOn();
+  // FATHOM_ENGINE=off pauses everything whatever the switch says.
+  const configOff = en.mode === 'off';
+  const running = on && !configOff;
   const used = Number(b.used) || 0, mo = Number(b.monthly) || 0;
   const p = mo ? Math.min(1, used / mo) : 0;
   const jobsList = arr(en.jobs);
@@ -47,11 +50,11 @@ export function render() {
       <div class="h-jt-n" role="cell"><b>${T(j.name)}</b><p>${T(j.does)}</p></div>
       <div class="h-jt-c" role="cell" data-l="Cadence">${T(j.cadence)}</div>
       <div class="h-jt-c" role="cell" data-l="Last run">${T(j.last)}</div>
-      <div class="h-jt-c${on ? '' : ' off'}" role="cell" data-l="Next run">${on ? T(j.next) : 'Paused'}</div>
+      <div class="h-jt-c${running ? '' : ' off'}" role="cell" data-l="Next run">${running ? T(j.next) : 'Paused'}</div>
       <div class="h-jt-c r mono" role="cell" data-l="Cost per run">${cost(j)}</div>
     </div>`).join('');
   const summary = `<div class="h-eng-sum">
-      <div class="h-eng-c"><span class="h-eng-l">Status</span><b class="h-eng-v${on ? ' acc' : ''}">${on ? 'On' : 'Off'}</b><div class="h-eng-s"><button type="button" class="h-btn" data-fx-engine>${on ? 'Turn the engine off' : 'Turn the engine on'}</button></div></div>
+      <div class="h-eng-c"><span class="h-eng-l">Status</span><b class="h-eng-v${running ? ' acc' : ''}">${configOff ? 'Off in configuration' : on ? 'On' : 'Off'}</b><div class="h-eng-s"><button type="button" class="h-btn" data-fx-engine>${on ? 'Turn the engine off' : 'Turn the engine on'}</button></div></div>
       <div class="h-eng-c"><span class="h-eng-l">Spent this month</span><b class="h-eng-v"><span class="mono">${figHtml('engine.budget.used', { cents: true })}</span> <em>of ${figHtml('engine.budget.monthly', { cents: true })}</em></b>
         <div class="h-eng-s col"><svg class="h-eng-meter" viewBox="0 0 100 4" preserveAspectRatio="none" role="img" aria-label="${Math.round(p * 100)} percent of the monthly budget used"><rect class="bg" width="100" height="4" rx="2"/><rect class="fg" width="${p * 100}" height="4" rx="2"/></svg>
         <div class="h-eng-sub"><span class="mono">${figHtml('engine.budget.left', { cents: true })} left</span><span class="mono">${Math.round(p * 100)}% used</span></div>
@@ -60,7 +63,9 @@ export function render() {
     </div>`;
   const table = jobsList.length ? `<div class="h-card h-jt" role="table" aria-label="Scheduled jobs">
       <div class="h-jt-h" role="row"><span role="columnheader">Job</span><span role="columnheader">Cadence</span><span role="columnheader">Last run</span><span role="columnheader">Next run</span><span role="columnheader" class="r">Cost per run</span></div>${rows}</div>` : '<p class="h-mute">No jobs scheduled.</p>';
-  return shell(`${pageHead('Engine', on ? 'Running' : 'Paused', on ? 'Proactive jobs run on schedule and stay inside the monthly budget.' : 'Proactive jobs are paused. Chat answers only from what is on file. Turn it back on here.')}
+  return shell(`${pageHead('Engine', running ? 'Running' : 'Paused', configOff
+    ? "The engine is off in this deployment's configuration, so jobs and answers are paused."
+    : on ? 'Proactive jobs run on schedule and stay inside the monthly budget.' : 'Proactive jobs are paused. Chat answers only from what is on file. Turn it back on here.')}
     <div class="h-card">${summary}</div>
     ${ledgerHtml(en)}
     ${section('Jobs', table, `${jobsList.length} scheduled`)}`, 'engine');

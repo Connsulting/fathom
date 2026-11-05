@@ -15,12 +15,18 @@
 // checks every remaining number against tool results and context data only (stored figures may
 // appear only as tokens). One corrective retry; what is still ungrounded is stored wrapped in
 // .fx-unverified. renderAnswer escapes everything except valid tokens and the spans it adds.
+// Tool results are sanitized first (argument echoes, identifier and citation keys dropped) and
+// pack entry citation and metadata lines never count as data, so neither grounds a number.
+//
+// Chat never writes. In 'ask' and rec conversations the model is offered one local, non-writing
+// tool, propose_recommendation_action; the last successful call becomes provenance.proposal
+// ({recId, action, wake?}) and the owner confirms it through the ordinary rec action endpoint.
 
 import { callTool, tools as REGISTRY } from '../tools/index.mjs';
 import { buildScenario } from '../scenario/build.mjs';
 import { checkGrounding, EngineOffError, BudgetExceededError, ModelCallError, ModelAccountingError, RoundLimitError } from '../engine/index.mjs';
 import { packContext } from '../packs/index.mjs';
-import { packStatus } from '../shared/rules.mjs';
+import { packStatus, ACTION_STATUS } from '../shared/rules.mjs';
 import { escapeUserText, resolveTokens } from '../shared/tokens.mjs';
 import { parseJson } from '../store/db.mjs';
 import { findQuestion, matchQuestion, recForKey } from './questions.mjs';
@@ -33,7 +39,7 @@ export const PRODUCT_RULES = [
   'Write stored figures as {f:key} tokens using the keys get_figures returns, never as typed amounts.',
   'Cite a knowledge pack entry by its title when you use it.',
   'Answer in plain text paragraphs separated by blank lines, with no markdown and no HTML.',
-  'Use set_recommendation_status only when the owner explicitly asks to change a recommendation status, never on your own initiative.',
+  'You never change a recommendation yourself. When the owner explicitly asks to change one, call propose_recommendation_action so the owner can confirm it; never propose on your own initiative.',
 ].join('\n');
 
 export const NOTICES = Object.freeze({
@@ -44,7 +50,6 @@ export const NOTICES = Object.freeze({
 });
 
 const UNVERIFIED_OPEN = '<span class="fx-unverified" title="Not found in your data or tool results">';
-const STATUS_INTENT = /\b(accept|start|snooze|dismiss|set aside|mark|done|complete|reopen|wake)\b/i;
 const HISTORY_LIMIT = 20;
 const MAX_TOKENS = 1024;
 // Any brace pair that looks like a scenario token; valid ones also need a safe key.
@@ -76,7 +81,77 @@ export function buildChatPrompt({ packContextText = '', summary = {}, context = 
   return { system, systemDynamic, messages: [...turns, { role: 'user', content: String(question ?? '') }] };
 }
 
+// ---------------------------------------------------------------- the proposal tool
+
+export const PROPOSE_TOOL = Object.freeze({
+  name: 'propose_recommendation_action',
+  description: 'Propose a change to one recommendation (accept, start, complete, dismiss, snooze with an optional wake label, reopen) ' +
+    'for the owner to confirm. Nothing changes until the owner confirms. Use it only when the owner explicitly asks for that change.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      id: { type: 'string', minLength: 1 },
+      action: { type: 'string', enum: Object.keys(ACTION_STATUS) },
+      wake: { type: 'string', maxLength: 200 },
+    },
+    required: ['id', 'action'],
+    additionalProperties: false,
+  },
+  scope: 'read',
+  handler(args, ctx) {
+    const row = ctx.db.prepare('SELECT status FROM recs WHERE id = ?').get(args.id);
+    if (!row || row.status === 'hidden') throw new Error('no such recommendation');
+    if (!Object.hasOwn(ACTION_STATUS, args.action)) throw new Error('unknown action');
+    return { proposed: true };
+  },
+});
+
 // ---------------------------------------------------------------- grounding
+
+// Result keys that identify or cite rather than state a value.
+const META_KEYS = new Set(['id', 'ids', 'key', 'keys', 'url', 'href', 'cites', 'citation', 'citations',
+  'source', 'sources', 'file', 'fileName', 'page', 'pages']);
+const isMetaKey = k => META_KEYS.has(k) || /(?:Id|Ids|_id)$/.test(k);
+
+function argLeaves(v, out = { numbers: [], strings: [] }) {
+  if (typeof v === 'number') out.numbers.push(v);
+  else if (typeof v === 'string') out.strings.push(v.trim().toLowerCase());
+  else if (v && typeof v === 'object') for (const x of Object.values(v)) argLeaves(x, out);
+  return out;
+}
+
+function scrub(v, leaves, contained) {
+  if (typeof v === 'number') return leaves.numbers.includes(v) ? undefined : v;
+  if (typeof v === 'string') {
+    const s = v.trim().toLowerCase();
+    return leaves.strings.includes(s) || contained.some(a => s.includes(a)) ? undefined : v;
+  }
+  if (Array.isArray(v)) return v.map(x => scrub(x, leaves, contained)).filter(x => x !== undefined);
+  if (v && typeof v === 'object') {
+    const out = {};
+    for (const [k, x] of Object.entries(v)) {
+      if (isMetaKey(k)) continue;
+      const y = scrub(x, leaves, contained);
+      if (y !== undefined) out[k] = y;
+    }
+    return out;
+  }
+  return v;
+}
+
+// A tool result as grounding evidence: leaves equal to an argument leaf of the same call, strings
+// containing an argument string of 3 or more characters with a digit, and identifier or citation
+// keys are dropped. Error results pass through (checkGrounding ignores them).
+function groundingResult(r) {
+  if (!r || typeof r !== 'object' || r.isError) return r;
+  const leaves = argLeaves(r.args);
+  const contained = leaves.strings.filter(a => a.length >= 3 && /\d/.test(a));
+  return { name: r.name, result: scrub(r.result ?? null, leaves, contained) };
+}
+
+// Pack entry text as grounding data: citation and metadata lines never ground a number.
+const META_LINE = /^\s*(?:sources?|tax year|reviewed)\s*:/i;
+const groundingBody = body => String(body ?? '').split(/\r?\n/).filter(line => !META_LINE.test(line)).join('\n');
 
 function tokenValid(scenario, kind, key) {
   if (!SAFE_KEY.test(key)) return false;
@@ -109,7 +184,7 @@ export function groundAnswer(text, { scenario, toolResults = [], data = [], data
     return ' '.repeat(token.length);
   });
 
-  const results = Array.isArray(toolResults) ? toolResults : [];
+  const results = (Array.isArray(toolResults) ? toolResults : []).map(groundingResult);
   const values = Array.isArray(data) ? data : [data];
   const unsupported = checkGrounding(masked, { toolResults: results, data: values }).violations;
   if (unsupported.length) {
@@ -227,11 +302,20 @@ function packConversationContext(db, packs, rowId) {
   return { def, context };
 }
 
+// The stored owner message that opens a What if: a manifest-backed prompt is literal text, stored
+// escaped like free text; an illustrative demo prompt keeps its token form.
+export function whatIfOwnerText(def) {
+  const prompt = def && def.whatIf && def.whatIf.prompt ? def.whatIf.prompt : '';
+  return typeof def.manifest === 'string' ? escapeUserText(prompt) : prompt;
+}
+
 export function createLiveAnswerer({ engine, packs } = {}) {
   if (!engine || typeof engine.call !== 'function') throw new TypeError('createLiveAnswerer needs an engine');
 
   // One grounded model answer: call, ground, retry once with a corrective turn, render.
-  async function run({ db, scenario, key, question, context, history, baseRefs, fakeArgs }) {
+  // proposeFor: null (no proposal tool), '*' (any visible rec, the ask conversation) or the rec id
+  // of a rec conversation (proposals for any other rec are ignored).
+  async function run({ db, scenario, question, context, history, baseRefs, fakeArgs, proposeFor = null }) {
     if (!engine.isOn()) return offNotice(engine);
     if (packs) packs.refreshIfFactsChanged();
     const summary = await callTool('household_summary', {}, { db, now: engine.now() });
@@ -239,14 +323,16 @@ export function createLiveAnswerer({ engine, packs } = {}) {
     const packIds = active.map(a => a.pack.id).sort();
     const packContextText = packContext(active.map(({ pack }) => ({ pack, status: 'active' })));
     const prompt = buildChatPrompt({ packContextText, summary, context, history, question, today: scenario.meta && scenario.meta.clock });
-    const statusIntent = STATUS_INTENT.test(question) && !question.trim().endsWith('?');
-    const offered = REGISTRY.filter(t => t.scope === 'read' || (statusIntent && t.name === 'set_recommendation_status'));
-    const fake = engine.mode === 'fake' ? fakeAnswerScript({ scenario, summary, ...fakeArgs }) : undefined;
+    const offered = [...REGISTRY.filter(t => t.scope === 'read'), ...(proposeFor ? [PROPOSE_TOOL] : [])];
+    const fake = engine.mode === 'fake' ? fakeAnswerScript({ scenario, summary, propose: !!proposeFor, ...fakeArgs }) : undefined;
     const request = { purpose: 'chat', system: prompt.system, systemDynamic: prompt.systemDynamic, messages: prompt.messages,
       tools: offered, maxTokens: MAX_TOKENS, ...(fake ? { fake } : {}) };
 
-    const entryBodies = active.flatMap(({ pack }) => pack.entries.map(e => e.body));
-    const data = [summary, context, entryBodies];
+    const entryBodies = active.flatMap(({ pack }) => pack.entries.map(e => groundingBody(e.body)));
+    const contextData = context && Array.isArray(context.entries)
+      ? { ...context, entries: context.entries.map(e => ({ ...e, body: groundingBody(e.body) })) }
+      : context;
+    const data = [summary, contextData, entryBodies];
     const dataLabels = ['household summary', 'conversation context', 'knowledge pack entries'];
     const resultsOf = res => (res && Array.isArray(res.toolResults) ? res.toolResults : []);
     const ground = (res, toolResults) => groundAnswer(res.text, { scenario, toolResults, data, dataLabels });
@@ -272,19 +358,24 @@ export function createLiveAnswerer({ engine, packs } = {}) {
         chosen = second;
         toolResults = [...resultsOf(first), ...resultsOf(second)];
         grounding = ground(second, toolResults);
-      } catch {
-        // Keep the first answer, marked; the failed retry stored nothing.
+      } catch (e) {
+        // Never the first, ungrounded answer: the engine recorded each completed round's spend.
+        return noticeFor(e, engine);
       }
     }
 
-    const recReads = toolResults.filter(r => !r.isError && ['get_recommendation', 'set_recommendation_status'].includes(r.name))
-      .map(r => r.args && r.args.id);
+    const proposed = toolResults.filter(r => !r.isError && r.name === PROPOSE_TOOL.name && r.args
+      && (proposeFor === '*' || r.args.id === proposeFor)).at(-1);
+    const proposal = proposed
+      ? { recId: proposed.args.id, action: proposed.args.action, ...(proposed.args.wake ? { wake: proposed.args.wake } : {}) }
+      : null;
+    const recReads = toolResults.filter(r => !r.isError && r.name === 'get_recommendation').map(r => r.args && r.args.id);
     const paragraphs = renderAnswer(chosen.text, grounding.violations, grounding.literals);
     if (!paragraphs.length) return noticeReply(NOTICES.modelError);
     const lower = chosen.text.toLowerCase();
     return {
       paragraphs,
-      refs: unique([...baseRefs, ...recReads]),
+      refs: unique([...baseRefs, ...recReads, proposal && proposal.recId]),
       provenance: {
         engine: engine.mode,
         model: chosen.model,
@@ -297,6 +388,7 @@ export function createLiveAnswerer({ engine, packs } = {}) {
         literals: grounding.literals.map(l => ({ text: l.text, source: l.source })),
         grounding: { ok: grounding.ok, retried, unverified: grounding.violations.map(v => v.text) },
         costUsd: Number(costUsd.toFixed(6)),
+        ...(proposal ? { proposal } : {}),
       },
     };
   }
@@ -325,7 +417,8 @@ export function createLiveAnswerer({ engine, packs } = {}) {
       } else if (key.startsWith('pack:')) {
         context = packConversationContext(db, packs, key.slice(5)).context;
       }
-      return run({ db, scenario, key, question, context, history: scenario.live.conversations[key] || [], baseRefs,
+      return run({ db, scenario, question, context, history: scenario.live.conversations[key] || [], baseRefs,
+        proposeFor: rec ? rec.id : key === 'ask' ? '*' : null,
         fakeArgs: { key, questionId: hasQ ? questionId : undefined, text: hasQ ? undefined : question } });
     },
 
@@ -335,10 +428,12 @@ export function createLiveAnswerer({ engine, packs } = {}) {
       const prompt = def.whatIf && def.whatIf.prompt ? def.whatIf.prompt : '';
       const key = 'pack:' + packId;
       // The prompt opens the conversation; drop an earlier copy of it (a prior notice round).
-      const history = (scenario.live.conversations[key] || []).filter(m => !(m.role === 'me' && m.text === prompt));
+      const stored = whatIfOwnerText(def);
+      const history = (scenario.live.conversations[key] || []).filter(m => !(m.role === 'me' && m.text === stored));
       const baseRefs = (def.whatIf && Array.isArray(def.whatIf.unlocks) ? def.whatIf.unlocks : []).map(u => u && u.recId);
-      return run({ db, scenario, key, question: plain(scenario, prompt), context, history, baseRefs,
-        fakeArgs: { key, whatIfPack: def } });
+      // A manifest prompt is literal text; an illustrative demo prompt may carry scenario tokens.
+      const question = typeof def.manifest === 'string' ? prompt : plain(scenario, prompt);
+      return run({ db, scenario, question, context, history, baseRefs, fakeArgs: { key, whatIfPack: def } });
     },
   };
 }
