@@ -29,6 +29,14 @@ test('opt-in live SDK tool, caching, per-round accounting and continuation cap',
   await assert.rejects(capped.call(request), BudgetExceededError);
   assert.equal(cappedLedger.entries.length, 1);
   assert.equal(calls, 2);
+  const extractionLedger = createMemoryLedger();
+  const extractor = createEngine({ mode: 'live', credential, ledger: extractionLedger });
+  const rows = await extractor.extract({ document: { type: 'text', text: 'Synthetic amount: 42 dollars.' },
+    schema: { type: 'object', properties: { amount: { type: 'number' } }, required: ['amount'], additionalProperties: false }, maxTokens: 128 });
+  assert.deepEqual(rows, [{ amount: 42 }]);
+  assert.equal(extractionLedger.entries.length, 1);
+  assert.ok(extractionLedger.entries[0].costUsd > 0);
   console.log(JSON.stringify({ live: 'passed', rounds: ledger.entries.length, costUsd: result.costUsd,
-    cacheReadTokens: ledger.entries[1].tokens.cache_read_input_tokens, cappedRounds: cappedLedger.entries.length }));
+    cacheReadTokens: ledger.entries[1].tokens.cache_read_input_tokens, cappedRounds: cappedLedger.entries.length,
+    extractionCostUsd: extractionLedger.entries[0].costUsd }));
 });

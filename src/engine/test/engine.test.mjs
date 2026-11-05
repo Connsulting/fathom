@@ -89,6 +89,20 @@ test('parallel tools all finish in the paid round and chat handlers receive only
   assert.deepEqual(Object.keys(contexts[0]).sort(), ['db', 'now']);
 });
 
+test('chat can invoke a recommendation-status write, while invalid scopes fail before a paid round', async () => {
+  let writes = 0;
+  const write = { ...read, scope: 'write:recs', handler: async () => { writes++; return { status: 'accepted' }; } };
+  const engine = createEngine({ mode: 'fake', responses: [
+    { toolCalls: [{ name: 'balance', args: { account: 'demo' } }], costUsd: 0.01 }, { text: 'Accepted', costUsd: 0.01 },
+  ] });
+  await engine.call({ ...request, tools: [write] });
+  assert.equal(writes, 1);
+  const ledger = createMemoryLedger();
+  const invalid = createEngine({ mode: 'fake', ledger, responses: [{ text: 'unused' }] });
+  await assert.rejects(invalid.call({ ...request, tools: [{ ...read, scope: 'write:money' }] }), /registry/);
+  assert.equal(ledger.entries.length, 0);
+});
+
 test('typed extraction accepts valid rows and records cost even when validation rejects rows', async () => {
   const schema = { type: 'object', properties: { amount: { type: 'number' } }, required: ['amount'], additionalProperties: false };
   const ledger = createMemoryLedger();
