@@ -111,7 +111,9 @@ back to extraction rather than guessing.
 result is `{fileId, name, status, sourceKind, parser, counts, duplicateOf?}` with
 status `imported`, `duplicate`, `needs_mapping`, `needs_extraction`,
 `unsupported`, `too_large` or `failed`. `retryFile` throws `IngestError` with
-`status` 404 (unknown file) or 409 (file not waiting).
+`status` 404 (unknown file) or 409 (file not waiting). A file left `pending`
+by an interrupted run is routed again by `retryFile` or by re-uploading its
+bytes; a concurrent upload of bytes being ingested is a `duplicate`.
 
 1. The file id is `f-` plus 24 hex of the content SHA256. Same bytes are a
    `duplicate` of the stored file. Bytes are stored encrypted (vault) before the

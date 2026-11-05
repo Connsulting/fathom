@@ -83,32 +83,50 @@ export async function ingestFiles(db, files, opts = {}) {
   return { results };
 }
 
+// File ids this process is storing or routing now. A 'pending' row whose id is not here was left by
+// an interrupted run and may be routed again. Checked and added synchronously, before any await.
+const inFlight = new Set();
+
 // file = {name, bytes, mime}. Returns {fileId, name, status, sourceKind, parser, counts, duplicateOf?}.
 export async function ingestFile(db, file, opts = {}) {
   const now = opts.now || new Date().toISOString();
   const bytes = toBytes(file.bytes);
   const name = baseName(file.name);
   const hash = sha256(bytes);
-  const prior = db.prepare('SELECT id, source_kind, parser FROM files WHERE sha256 = ?').get(hash);
-  if (prior) {
-    return { fileId: prior.id, name, status: 'duplicate', sourceKind: prior.source_kind ?? null, parser: prior.parser ?? null, counts: emptyCounts(), duplicateOf: prior.id };
+  const prior = db.prepare('SELECT id, source_kind, parser, status FROM files WHERE sha256 = ?').get(hash);
+  const fileId = prior?.id ?? 'f-' + hash.slice(0, 24);
+  if (inFlight.has(fileId) || (prior && prior.status !== 'pending')) {
+    return { fileId, name, status: 'duplicate', sourceKind: prior?.source_kind ?? null, parser: prior?.parser ?? null, counts: emptyCounts(), duplicateOf: fileId };
   }
-  const fileId = 'f-' + hash.slice(0, 24);
-  const key = await dataKey(db, opts);
-  const storedPath = await storeFile({ dataDir: dataDirOf(opts), key, id: fileId, bytes });
-  db.prepare(`INSERT INTO files (id, name, mime, size, sha256, uploaded_at, stored_path, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')`)
-    .run(fileId, name, file.mime ?? null, bytes.length, hash, now, storedPath);
-  return route(db, fileId, { name, bytes, mime: file.mime ?? null }, { ...opts, now });
+  inFlight.add(fileId);
+  try {
+    // An interrupted 'pending' file already has its encrypted bytes and row; the upload's bytes match by hash.
+    if (!prior) {
+      const key = await dataKey(db, opts);
+      const storedPath = await storeFile({ dataDir: dataDirOf(opts), key, id: fileId, bytes });
+      db.prepare(`INSERT INTO files (id, name, mime, size, sha256, uploaded_at, stored_path, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')`)
+        .run(fileId, name, file.mime ?? null, bytes.length, hash, now, storedPath);
+    }
+    return await route(db, fileId, { name, bytes, mime: file.mime ?? null }, { ...opts, now });
+  } finally {
+    inFlight.delete(fileId);
+  }
 }
 
-// Re-run routing for a file waiting on a mapping or the engine, under the same file id.
+// Re-run routing for a file waiting on a mapping or the engine, or left 'pending' by an
+// interrupted run, under the same file id.
 export async function retryFile(db, fileId, opts = {}) {
   const row = db.prepare('SELECT * FROM files WHERE id = ?').get(String(fileId ?? ''));
   if (!row) throw new IngestError(404, 'not_found');
-  if (!WAITING.includes(row.status)) throw new IngestError(409, 'not_waiting');
-  const key = await dataKey(db, opts);
-  const bytes = await readStoredFile({ dataDir: dataDirOf(opts), key, id: row.id, storedPath: row.stored_path });
-  return route(db, row.id, { name: row.name, bytes: toBytes(bytes), mime: row.mime }, { ...opts, now: opts.now || new Date().toISOString() });
+  if (inFlight.has(row.id) || !(WAITING.includes(row.status) || row.status === 'pending')) throw new IngestError(409, 'not_waiting');
+  inFlight.add(row.id);
+  try {
+    const key = await dataKey(db, opts);
+    const bytes = await readStoredFile({ dataDir: dataDirOf(opts), key, id: row.id, storedPath: row.stored_path });
+    return await route(db, row.id, { name: row.name, bytes: toBytes(bytes), mime: row.mime }, { ...opts, now: opts.now || new Date().toISOString() });
+  } finally {
+    inFlight.delete(row.id);
+  }
 }
 
 async function route(db, fileId, file, opts) {
