@@ -1362,3 +1362,243 @@ test('R3 demo regression: every canned demo answer stays grounded except the kno
   const broken = [...outcomes].filter(([id, g]) => !g.ok && !KNOWN_UNVERIFIED.has(id)).map(([id, g]) => `${id} ${JSON.stringify(g.unverified)}`);
   assert.deepEqual(broken, []);
 });
+
+// ---------------------------------------------------------------- round 4: URLs, dates, letter codes, atomic numbers
+
+const R4_CONTROL = { prose: 'The synthetic cap is $7,013 this year.', field: { cap: 7013 }, said: '$7,013' };
+
+// R4 F1: digits, k and % inside a URL or a markdown link destination are not quantities.
+const URL_PROSE = [
+  'See [policy](https://example.invalid/4821k) for details.',
+  'See [policy](https://example.invalid/$4821) for details.',
+  'See [policy](https://example.invalid/4821%25) for details.',
+  'See [policy](/docs/4821k) for details.',
+  'See https://example.invalid/4821k/limits for details.',
+  'See https://example.invalid/doc?limit=4821k&cap=4821%25 for details.',
+  'See http://example.invalid/4821%20limits for details.',
+  'See <https://example.invalid/4821k> for details.',
+  'See <https://example.invalid/$4821> for details.',
+];
+const URL_INVENTED = ['$4,821,000', '$4,821', '4821%'];
+
+test('R4 F1: digits, k and % inside URLs, link destinations and autolinks never ground in prose evidence', async t => {
+  const s = await demoStore(t);
+  const scenario = buildScenario(s.db);
+  for (const prose of URL_PROSE) {
+    for (const where of proseSources(prose)) {
+      for (const text of URL_INVENTED) {
+        const r = groundAnswer(`The figure is ${text}.`, { scenario, ...where });
+        assert.ok(laundered(r).includes(text), `${where.label}: "${prose}" must not ground ${text}`);
+      }
+    }
+  }
+});
+
+test('R4 F1: a single-token URL string under an unremarkable key never grounds its digits', async t => {
+  const s = await demoStore(t);
+  const scenario = buildScenario(s.db);
+  for (const link of ['https://example.invalid/4821k', 'https://example.invalid/$4821', 'https://example.invalid/4821%25', 'https://example.invalid/4821%']) {
+    for (const text of URL_INVENTED) {
+      for (const where of [
+        { label: 'tool result', data: [], toolResults: [{ name: 'list_recommendations', args: {}, result: [{ status: 'doing', link }] }] },
+        { label: 'rec context', toolResults: [], data: [{ recommendation: { status: 'doing', link } }] },
+      ]) {
+        const r = groundAnswer(`The figure is ${text}.`, { scenario, ...where });
+        assert.ok(laundered(r).includes(text), `${where.label}: ${link} must not ground ${text}`);
+      }
+    }
+  }
+});
+
+test('R4 F1: a marked quantity in link text outside the URL still grounds', async t => {
+  const s = await demoStore(t);
+  const scenario = buildScenario(s.db);
+  for (const prose of [
+    'See [the $500 limit](https://example.invalid/x) for details.',
+    'See [the $500 limit](https://example.invalid/4821k) for details.',
+    'The $500 limit applies (see https://example.invalid/4821k).',
+    'The $500 limit applies, see <https://example.invalid/4821k>.',
+  ]) {
+    for (const where of proseSources(prose)) {
+      const ok = groundAnswer('The figure is $500.', { scenario, ...where });
+      assert.equal(ok.ok, true, `${where.label}: "${prose}" grounds $500: ${JSON.stringify(ok.violations)}`);
+      const bad = groundAnswer('The figure is $4,821,000.', { scenario, ...where });
+      assert.ok(laundered(bad).includes('$4,821,000'), `${where.label}: "${prose}" must not ground $4,821,000`);
+    }
+  }
+});
+
+// R4 F2: a month period (YYYY-MM) or another date-shaped single token is a date, not a number.
+const DATE_TOKENS = ['2026-11', '2026-11-05', '2026-11-05T10:00:00Z'];
+const DATE_INVENTED = ['$11', '11', '-11', '$5', '5', '-5', '$10', '$2,026'];
+
+test('R4 F2: the real pnl_by_month result over the demo store never grounds its month or year as a number', async t => {
+  const s = await demoStore(t);
+  const scenario = buildScenario(s.db);
+  const result = await callTool('pnl_by_month', {}, { db: s.db, now: s.runtime.now() });
+  assert.ok(result.rows.length > 0, 'the demo store has P&L rows');
+  const period = result.rows.map(r => r.period).sort().at(-1);
+  assert.match(period, /^\d{4}-\d{2}$/);
+  const month = String(Number(period.slice(5)));
+  const year = Number(period.slice(0, 4)).toLocaleString('en-US');
+  const said = [`$${month}`, month, `$${year}`];
+  const ground = (r, text) => groundAnswer(`The figure is ${text}.`, { scenario, data: [], toolResults: [{ name: 'pnl_by_month', args: {}, result: r }] });
+
+  // Self-check: without the periods nothing in the result states these values.
+  const stripped = { rows: result.rows.map(({ period: _p, ...row }) => row), totals: Object.values(result.totals) };
+  for (const text of said) assert.ok(laundered(ground(stripped, text)).includes(text), `self-check: ${text} is not a P&L value`);
+
+  for (const text of said) {
+    assert.ok(laundered(ground(result, text)).includes(text), `period ${period} must not ground ${text}`);
+  }
+  // A stored row amount still grounds, attributed to pnl_by_month.
+  const row = result.rows.find(r => r.amount > 0);
+  const amount = `$${row.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const kept = ground(result, amount);
+  assert.equal(kept.ok, true, `${amount}: ${JSON.stringify(kept.violations)}`);
+  assert.equal(kept.literals.find(l => l.text === amount).source, 'pnl_by_month');
+});
+
+test('R4 F2: a synthetic period next to an unrelated amount grounds the amount and not $11 or 11', async t => {
+  const s = await demoStore(t);
+  const scenario = buildScenario(s.db);
+  const toolResults = [{ name: 'pnl_by_month', args: {},
+    result: { rows: [{ period: '2026-11', category: 'synthetic', amount: 4321.5 }], totals: { '2026-11': 4321.5 } } }];
+  for (const text of ['$11', '11', '$2,026']) {
+    const r = groundAnswer(`The figure is ${text}.`, { scenario, data: [], toolResults });
+    assert.ok(laundered(r).includes(text), `period 2026-11 must not ground ${text}`);
+  }
+  assert.equal(groundAnswer('The figure is $4,321.50.', { scenario, data: [], toolResults }).ok, true);
+});
+
+test('R4 F2: date-shaped single-token strings under unremarkable keys ground no number', async t => {
+  const s = await demoStore(t);
+  const scenario = buildScenario(s.db);
+  for (const value of DATE_TOKENS) {
+    for (const key of ['asOf', 'month', 'note', 'when']) {
+      const wheres = [
+        { label: 'tool result', data: [], toolResults: [{ name: 'list_recommendations', args: {}, result: [{ status: 'doing', [key]: value }] }] },
+        { label: 'tool result array', data: [], toolResults: [{ name: 'list_recommendations', args: {}, result: { [key]: [value] } }] },
+        { label: 'household summary', toolResults: [], data: [{ facts: { [`synthetic.${key}`]: value } }] },
+        { label: 'rec context', toolResults: [], data: [{ recommendation: { status: 'doing', [key]: value } }] },
+      ];
+      for (const where of wheres) {
+        for (const text of DATE_INVENTED) {
+          const r = groundAnswer(`The figure is ${text}.`, { scenario, ...where });
+          assert.ok(laundered(r).includes(text), `${where.label}: ${key}=${value} must not ground ${text}`);
+        }
+      }
+    }
+  }
+});
+
+// R4 F3: only recognized letter-code vocabulary is masked in the answer.
+test('R4 F3: arbitrary short letter codes in the answer are ungrounded numbers, recognized forms stay masked', async t => {
+  const s = await demoStore(t);
+  const scenario = buildScenario(s.db);
+  for (const [text, number] of [['Your benefit is X-873 dollars.', '873'], ['Your benefit is AB-500 dollars.', '500'],
+    ['You get Q-12 more.', '12'], ['The credit is ZZ-40 this year.', '40']]) {
+    const r = groundAnswer(text, { scenario, toolResults: [], data: [] });
+    assert.equal(r.ok, false, `"${text}" must not pass unchecked`);
+    assert.ok(laundered(r).includes(number), `"${text}" flags ${number}: ${JSON.stringify(r.violations)}`);
+  }
+  for (const text of ['Private K-12 tuition can qualify.', 'Her Schedule K-1 arrives later.', 'File a new Form I-9.',
+    'Your W-2 shows wages.', 'Update your W-4.', 'A 1099-K reports card payments.', 'Your 1099-NEC arrives in January.']) {
+    const r = groundAnswer(text, { scenario, toolResults: [], data: [] });
+    assert.equal(r.ok, true, `"${text}" is vocabulary: ${JSON.stringify(r.violations)}`);
+  }
+});
+
+test('R4 F3: the What if kids canned answer (K-12) stays grounded', async t => {
+  const s = await demoStore(t);
+  const scenario = buildScenario(s.db);
+  const kids = scenario.packs.find(p => p.id === 'kids');
+  assert.ok(kids && kids.whatIf && kids.whatIf.a.some(a => a.includes('K-12')), 'the kids What if says K-12');
+  const reply = await createLiveAnswerer({ engine: s.runtime, packs: s.packs }).whatIf({ db: s.db, packId: 'kids' });
+  assert.ok(joined(reply).includes('K-12'), joined(reply));
+  assert.equal(reply.provenance.grounding.ok, true, JSON.stringify(reply.provenance.grounding));
+  assert.deepEqual(reply.provenance.grounding.unverified, []);
+});
+
+// R4 F4: a numeric expression in prose evidence is one quantity. literal() parses an exponent
+// (the engine reads 1e3 in an answer as 1000), so $1e3 in evidence is read as $1,000, never as
+// $1 next to a bare 3.
+test('R4 F4: scientific notation and decimals in prose evidence ground the whole number, never its parts', async t => {
+  const s = await demoStore(t);
+  const scenario = buildScenario(s.db);
+  const cases = [
+    { prose: 'The allowance is $1e3.', grounds: ['$1,000', '$1e3'], not: ['$1', '1', '3', '$3'] },
+    { prose: 'The allowance is $1.5e3 now.', grounds: ['$1,500'], not: ['$1.5', '$1', '5', '3'] },
+    { prose: 'The fee is $4.50 per month.', grounds: ['$4.50'], not: ['$4', '4', '50', '$50'] },
+    { prose: 'The rate is 12.5% this year.', grounds: ['12.5%'], not: ['12', '5', '12%', '5%'] },
+    { prose: 'The cap is $1,000.50 in total.', grounds: ['$1,000.50'], not: ['50', '$50', '$1'] },
+  ];
+  for (const { prose, grounds, not } of cases) {
+    for (const where of proseSources(prose)) {
+      for (const text of grounds) {
+        const r = groundAnswer(`The figure is ${text}.`, { scenario, ...where });
+        assert.equal(r.ok, true, `${where.label}: "${prose}" grounds ${text}: ${JSON.stringify(r.violations)}`);
+      }
+      for (const text of not) {
+        const r = groundAnswer(`The figure is ${text}.`, { scenario, ...where });
+        assert.ok(laundered(r).includes(text), `${where.label}: "${prose}" must not ground ${text}`);
+      }
+    }
+  }
+});
+
+// R4 adversarial table: every evidence source times every laundering form found so far. Each
+// carrier also states one real quantity (the positive control), which must still ground.
+const LAUNDERING_FORMS = [
+  { form: 'URL digits',
+    prose: 'See [policy](https://example.invalid/4821k), https://example.invalid/4821%25 and <https://example.invalid/$4821>.',
+    field: { link: 'https://example.invalid/4821k', doc: 'https://example.invalid/$4821', more: ['https://example.invalid/4821%25'] },
+    invented: ['$4,821,000', '$4,821', '4821%'] },
+  { form: 'identifier tokens',
+    prose: 'Ask about plan4821, acct-4821k, plan_4821k and plan-4821% today.',
+    field: { ref: 'plan4821', accountNumber: 4821, accountId: 'acct-4821k', tag: 'plan_4821k', code: 'plan-4821%' },
+    invented: ['$4,821,000', '$4,821', '4821', '4821%'] },
+  { form: 'citation numbers',
+    prose: 'See IRS Publication 4821, Section 4821(b), page 4821 and Notice 2026-48.',
+    field: { page: 4821, cites: ['Publication 4821'], source: { name: 'guide 4821' }, file: 'guide-4821.md' },
+    invented: ['$4,821', '4821', '48', '-48'] },
+  { form: 'month periods',
+    prose: 'For the period 2026-11 the total rose, as of 2026-11-05T10:00:00Z.',
+    field: { period: '2026-11', asOf: '2026-11', month: '2026-11-05', when: '2026-11-05T10:00:00Z' },
+    invented: ['$11', '11', '-11', '$5', '$10', '$2,026'] },
+  { form: 'letter codes',
+    prose: 'Plan AB-500 and code X-873 apply under Q-12.',
+    field: { code: 'AB-500', plan: 'X-873', grade: 'Q-12' },
+    invented: ['$500', '500', '-500', '$873', '873', '-12'] },
+];
+
+const EVIDENCE_SOURCES = [
+  { label: 'pack entry body', make: ({ prose }) => ({ toolResults: [], data: [[`# Synthetic entry\n\n${prose}\n`]] }) },
+  { label: 'tool result prose', make: ({ prose }) => ({ data: [],
+    toolResults: [{ name: 'list_recommendations', args: {}, result: [{ status: 'doing', description: prose }] }] }) },
+  { label: 'tool result JSON', make: ({ field }) => ({ data: [],
+    toolResults: [{ name: 'list_recommendations', args: {}, result: [{ status: 'doing', ...field }] }] }) },
+  { label: 'household summary', make: ({ prose, field }) => ({ toolResults: [], data: [{ facts: { 'synthetic.note': prose }, ...field }] }) },
+  { label: 'rec context', make: ({ prose, field }) => ({ toolResults: [], data: [{ recommendation: { status: 'doing', why: prose, ...field } }] }) },
+];
+
+test('R4 adversarial table: no evidence source launders an invented amount through any known form; real quantities still ground', async t => {
+  const s = await demoStore(t);
+  const scenario = buildScenario(s.db);
+  const failures = [];
+  for (const source of EVIDENCE_SOURCES) {
+    const control = groundAnswer(`The figure is ${R4_CONTROL.said}.`, { scenario, ...source.make(R4_CONTROL) });
+    if (!control.ok) failures.push(`${source.label}: control ${R4_CONTROL.said} does not ground`);
+    for (const form of LAUNDERING_FORMS) {
+      const carrier = { prose: `${form.prose} ${R4_CONTROL.prose}`, field: { ...form.field, ...R4_CONTROL.field } };
+      const where = source.make(carrier);
+      const kept = groundAnswer(`The figure is ${R4_CONTROL.said}.`, { scenario, ...where });
+      if (!kept.ok) failures.push(`${source.label} / ${form.form}: control ${R4_CONTROL.said} no longer grounds`);
+      for (const text of form.invented) {
+        const r = groundAnswer(`The figure is ${text}.`, { scenario, ...where });
+        if (!laundered(r).includes(text)) failures.push(`${source.label} / ${form.form}: grounds ${text}`);
+      }
+    }
+  }
+  assert.deepEqual(failures, []);
+});

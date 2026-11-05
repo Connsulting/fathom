@@ -104,3 +104,23 @@ test('a hyphen glued to a preceding letter or digit is not a minus sign, in the 
   assert.equal(checkGrounding('-$25', { toolResults: [{ note: 'a loss of -$25' }] }).ok, true);
   assert.equal(checkGrounding('-$25', { toolResults: [{ note: 'a loss of $25' }] }).ok, false);
 });
+
+test('only recognized letter-code vocabulary is masked; arbitrary short codes are checked numbers', () => {
+  for (const text of ['Your benefit is X-873 dollars.', 'Your benefit is AB-500 dollars.', 'You get Q-12 more.', 'The credit is ZZ-40 this year.']) {
+    const result = checkGrounding(text);
+    assert.equal(result.ok, false, text);
+    assert.ok(!result.violations.some(v => v.text.startsWith('-')), `the glued hyphen is not a minus sign: ${text}`);
+  }
+  assert.deepEqual(checkGrounding('Your benefit is X-873 dollars.').violations.map(v => v.text), ['873']);
+  assert.equal(checkGrounding('Your benefit is X-873 dollars.', { data: [873] }).ok, true);
+  for (const text of ['K-12', 'K-1', 'I-9', 'W-2', 'W-4', '1099-K', 'Private K-12 tuition', 'Schedule K-1', 'Form I-9']) {
+    assert.equal(checkGrounding(text).ok, true, text);
+  }
+});
+
+test('a numeric expression in evidence is one quantity: exponents and decimals never split', () => {
+  // literal() parses the exponent, so $1e3 in evidence is 1000.
+  const evidence = [{ note: 'The allowance is $1e3.' }, { note: 'The fee is $4.50 a month.' }, { note: 'The rate is 12.5% now.' }];
+  for (const text of ['$1,000', '$4.50', '12.5%']) assert.equal(checkGrounding(text, { toolResults: evidence }).ok, true, text);
+  for (const text of ['$1', '$3', '$4', '50', '12%', '5%']) assert.equal(checkGrounding(text, { toolResults: evidence }).ok, false, text);
+});
