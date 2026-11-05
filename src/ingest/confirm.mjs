@@ -122,6 +122,7 @@ export function answerItem(db, id, optionId, { now } = {}) {
   if (item.status === 'answered') throw new ConfirmError(item.answer === 'superseded' ? 'stale' : 'answered');
   if (!item.options.some((o) => o.id === optionId)) throw new ConfirmError('bad_option');
   if (item.kind === 'fact_check' && factIsStale(db, item)) throw new ConfirmError('stale');
+  if (item.kind === 'withholding_conflict' && !conflictCurrent(db, item)) throw new ConfirmError('stale');
   return tx(db, () => {
     const { factsChanged } = applyAnswer(db, item, optionId, { now });
     db.prepare("UPDATE confirm_items SET status = 'answered', answer = ?, answered_at = ? WHERE id = ?").run(optionId, stamp(now), item.id);
@@ -322,6 +323,7 @@ export function summarizeSlot(db, slot, { now } = {}) {
     archive(db, 'tax_payments', { ...r }, { by: w2.file_id, reason: 'summarized', now });
     remove.run(r.id);
   }
+  if (rows.length) closeStaleConflicts(db, { now });
   return rows.length;
 }
 
@@ -341,12 +343,27 @@ function formLabel(payer) {
   return kind === 'w2' ? 'W-2s' : kind === 'paystub' ? 'paystubs' : `${kind.toUpperCase()}s`;
 }
 
+// L1: tax_payments ids are reused, so the question names each stored row by id, dedupe key, file
+// id and amount in cents, read as stored now. A pending question whose rows no longer match
+// (summarized, archived, rekeyed or changed) is closed as superseded; answering one is refused.
+const getPayment = (db, id) => (Number.isInteger(id) ? db.prepare('SELECT * FROM tax_payments WHERE id = ?').get(id) : null);
+const rowRef = (row) => ({ id: row.id, key: row.dedupe_key, fileId: row.file_id ?? null, cents: amountCents(row.amount) });
+const refCurrent = (db, ref) => {
+  const row = getPayment(db, ref?.id);
+  return Boolean(row) && row.dedupe_key === ref.key && (row.file_id ?? null) === ref.fileId && amountCents(row.amount) === ref.cents;
+};
+const conflictCurrent = (db, item) => refCurrent(db, item.context.first) && refCurrent(db, item.context.second);
+function closeStaleConflicts(db, { now, except = null } = {}) {
+  const close = db.prepare("UPDATE confirm_items SET status = 'answered', answer = 'superseded', answered_at = ? WHERE id = ?");
+  for (const p of pendingItems(db)) if (p.kind === 'withholding_conflict' && p.id !== except && !conflictCurrent(db, p)) close.run(stamp(now), p.id);
+}
+
 // Queue the question for stored rows first (earlier import, holding key and payer) and second.
 export function askConflict(db, { key, payer, first, second, now }) {
   return ask(db, {
     kind: 'withholding_conflict', subject: conflictSubject(key, first.amount, second.amount),
     question: `Two ${formLabel(payer)} from one payer report different ${first.jurisdiction} withholding for ${first.tax_year}. Which should count?`,
-    options: WITHHOLDING_CONFLICT_OPTIONS, context: { key, payer, first: first.id, second: second.id }, fileId: second.file_id, now,
+    options: WITHHOLDING_CONFLICT_OPTIONS, context: { key, payer, first: rowRef(getPayment(db, first.id)), second: rowRef(getPayment(db, second.id)) }, fileId: second.file_id, now,
   });
 }
 
@@ -354,13 +371,13 @@ export function askConflict(db, { key, payer, first, second, now }) {
 function applyConflict(db, item, optionId, { now }) {
   if (optionId !== 'first' && optionId !== 'second') return;
   const { key, payer, first, second } = item.context;
-  const get = db.prepare('SELECT * FROM tax_payments WHERE id = ?');
-  const keep = get.get(optionId === 'first' ? first : second);
-  const drop = get.get(optionId === 'first' ? second : first);
+  const keep = getPayment(db, (optionId === 'first' ? first : second)?.id);
+  const drop = getPayment(db, (optionId === 'first' ? second : first)?.id);
   if (!keep || !drop) return;
   archive(db, 'tax_payments', { ...drop }, { by: keep.file_id, reason: 'withholding_conflict', now });
   db.prepare('DELETE FROM tax_payments WHERE id = ?').run(drop.id);
   db.prepare('UPDATE tax_payments SET payer = ?, dedupe_key = ? WHERE id = ?').run(payer, key, keep.id);
+  closeStaleConflicts(db, { now, except: item.id });
 }
 
 // Set the recipient of stored unresolved withholding rows: recompute slot and payer identity and
@@ -408,6 +425,7 @@ function setRecipient(db, rows, recipient, { now }) {
     slots.add(slot);
   }
   for (const slot of slots) summarizeSlot(db, slot, { now });
+  closeStaleConflicts(db, { now });
 }
 
 // employer_recipient: owner or spouse sets every withholding row of the employer; both asks per

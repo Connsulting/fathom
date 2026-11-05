@@ -191,7 +191,10 @@ bytes; a concurrent upload of bytes being ingested is a `duplicate`.
    recipient and amount is archived as `duplicate`. A different amount, at
    rekey or at import of a document, keeps both rows and asks
    `withholding_conflict` (options `first`, `second`, `both`; the rejected row
-   is archived as `withholding_conflict`, the survivor takes the identity). Answers are remembered by kind and subject
+   is archived as `withholding_conflict`, the survivor takes the identity). The question names each row by id, dedupe key,
+   file id and amount; once a named row is summarized, archived or rekeyed it closes as superseded, and answering
+   a question whose rows no longer match is refused as `stale`. An explicit zero federal withholding field is a row
+   (a correction to zero meets this rule); an absent one is not. Answers are remembered by kind and subject
    and apply at import.
 7. `counts` is `{rows: {kind: n}, duplicates, crossFormat, revised, superseded,
    incomplete, warnings, warningCodes: {code: n}, queued}`, plus `extractPath`

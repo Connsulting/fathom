@@ -543,7 +543,9 @@ subject, question, options: [{id, label}], context, status, answer, fileId, crea
 or 1099 payer identity; options `owner`, `spouse`; asked per document after `both`, and directly
 for each 1099 with withholding) and `withholding_conflict` (subject `<dedupe key>|<cents>|<cents>`;
 options `first`, `second`, `both`; the later row holds `<payer>:doc:<file id>` until answered, the
-rejected row is archived as `withholding_conflict` and the survivor takes the identity). A recipient answer
+rejected row is archived as `withholding_conflict` and the survivor takes the identity; the context names each row by id,
+dedupe key, file id and cents, a question whose rows are summarized, archived or rekeyed closes as superseded, and an
+answer to one whose rows no longer match is refused as `stale`). A recipient answer
 sets `tax_payments.recipient` on the matching withholding rows, recomputes their `wh:` slots and
 summarizes per slot; while a row's recipient is unknown nothing summarizes it. An answered
 subject is remembered and applied to later imports without a new question. `ConfirmError` codes map to HTTP: `not_found` 404, `bad_option` 400, `answered` 409,

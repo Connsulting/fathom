@@ -109,6 +109,10 @@ export const nameKey = (name) => createHash('sha256').update(normalizeName(name)
 const centsOf = (value) => (Number.isFinite(value) ? String(Math.round(value * 100)) : 'na');
 const isIso = (value) => typeof value === 'string' && isoDate(value) === value;
 const positive = (value) => Number.isFinite(value) && value > 0;
+// A federal withholding field is observed when present, including an explicit zero (a correction to
+// zero must meet K1); absent or null is not. State withholding stays positive only: a zero there
+// usually means no state tax, not a correction.
+const observed = (value) => Number.isFinite(value) && value >= 0;
 
 // Replace amount tokens with numbers from refs. An unknown token drops its field with a warning.
 export function resolveTokens(value, refs = {}, warnings = [], path = '') {
@@ -206,7 +210,7 @@ export function toRows(docType, extracted, ctx = {}) {
       const key = nameKey(x.employerName);
       const payer = `paystub:${key}:${x.payDate}:${centsOf(x.gross)}`;
       const base = { docType, date: x.payDate, datePrecision: 'day', taxYear: year, basis: 'pay_date', payer, slotKey: key, employer: String(x.employerName ?? '').trim() };
-      if (positive(x.federalWithholding)) rows.push(withholding({ ...base, jurisdiction: 'federal', amount: x.federalWithholding, field: 'federalWithholding' }));
+      if (observed(x.federalWithholding)) rows.push(withholding({ ...base, jurisdiction: 'federal', amount: x.federalWithholding, field: 'federalWithholding' }));
       if (positive(x.stateWithholding)) rows.push(withholding({ ...base, jurisdiction: stateCode(x.state), amount: x.stateWithholding, field: 'stateWithholding' }));
       rows.push(...employerFacts(docType, x, households, {
         employer401k: positive(x.retirementDeferral) ? 'retirementDeferral' : null,
@@ -219,7 +223,7 @@ export function toRows(docType, extracted, ctx = {}) {
       const key = nameKey(x.employerName);
       const payer = `w2:${key}:${x.taxYear}:${centsOf(x.wages)}`;
       const base = { docType, date: `${x.taxYear}-12-31`, datePrecision: 'year', taxYear: x.taxYear, basis: 'annual_total', payer, slotKey: key, employer: String(x.employerName ?? '').trim() };
-      if (positive(x.federalWithheld)) rows.push(withholding({ ...base, jurisdiction: 'federal', amount: x.federalWithheld, field: 'federalWithheld' }));
+      if (observed(x.federalWithheld)) rows.push(withholding({ ...base, jurisdiction: 'federal', amount: x.federalWithheld, field: 'federalWithheld' }));
       if (positive(x.stateWithheld)) rows.push(withholding({ ...base, jurisdiction: stateCode(x.state), amount: x.stateWithheld, field: 'stateWithheld' }));
       const codes = (x.box12 ?? []).filter((b) => positive(b.amount)).map((b) => String(b.code).trim().toUpperCase());
       rows.push(...employerFacts(docType, x, households, {
@@ -233,7 +237,7 @@ export function toRows(docType, extracted, ctx = {}) {
       const primary = { '1099-int': x.interest, '1099-div': x.ordinaryDividends, '1099-b': x.proceeds, '1099-nec': x.nonemployeeCompensation,
         '1099-misc': [x.rents, x.royalties, x.otherIncome].find((v) => Number.isFinite(v) && v !== 0) }[docType];
       const key = nameKey(x.payerName);
-      if (positive(x.federalWithheld)) {
+      if (observed(x.federalWithheld)) {
         rows.push(withholding({ docType, jurisdiction: 'federal', amount: x.federalWithheld, date: `${x.taxYear}-12-31`, datePrecision: 'year', taxYear: x.taxYear,
           basis: 'form_year', payer: `${docType}:${key}:${x.taxYear}:${centsOf(primary)}`, slotKey: key, field: 'federalWithheld', issuer: String(x.payerName ?? '').trim() }));
       }
