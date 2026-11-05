@@ -60,9 +60,14 @@ real store, every page and `/api` route needs a login listed in `FATHOM_OWNER_LO
 uses its own bearer keys, and demo stores are open. Also allow the tailnet name through
 `FATHOM_PUBLIC_URL` or `FATHOM_ALLOWED_HOSTS`.
 
+`tailscale serve` strips client-supplied `Tailscale-User-*` headers before adding its own, and
+tagged nodes get no login, so only the owner's own devices pass.
+
 The limit: the header is only trustworthy when `tailscale serve` is the sole path to the app.
 Anything that reaches the pod or a port-forward directly could forge it, so keep ingress
-default-deny and bind any port-forward to loopback.
+default-deny and bind any port-forward to loopback. Any local process on the serving host can still
+reach the loopback port-forward with a forged header. This is a known limit with no code fix,
+recommended for acceptance pending the owner's decision.
 
 ## Test
 

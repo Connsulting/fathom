@@ -477,10 +477,16 @@ the file contents, path or error) and every gated request is 401. A refused `/ap
 `Cache-Control: no-store` (no body for HEAD). Neither echoes the header. Handlers see the admitted
 identity as `ctx.identity` (null on a demo store).
 
+`tailscale serve` strips any client-supplied `Tailscale-User-*` headers, whatever their case, before
+adding its own, so a tailnet client cannot forge them through it. Tagged nodes (every agent host)
+get no login header, so only the owner's own devices pass the gate.
+
 Limit. The header is trustworthy only when the sole path to the app is `tailscale serve`. Anything
 that reaches the pod, its Service or a port-forward directly could forge it. The homelab deployment
 keeps ingress default-deny and binds its port-forward to loopback only; a misconfigured Service or a
-second ingress would break this. The Host allowlist still applies after the gate, so the tailnet
+second ingress would break this. Known limit, with no code fix: any local process on the serving
+host can reach that loopback port-forward directly and send a forged header. It is recommended for
+acceptance; the owner has not decided yet. The Host allowlist still applies after the gate, so the tailnet
 name must be allowed through `FATHOM_PUBLIC_URL` or `FATHOM_ALLOWED_HOSTS`. Scripts that post
 without the header (such as `scripts/dump.mjs`) get 401 from a real-mode server unless they go
 through `tailscale serve`.
