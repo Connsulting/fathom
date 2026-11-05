@@ -69,7 +69,7 @@ test('architecture.md lists every API route with its method', () => {
     assert.ok(typeof method === 'string' && typeof path === 'string');
     assert.ok(lines.some(l => l.includes(path) && l.includes(method.toUpperCase())), `missing route ${method} ${path}`);
   }
-  for (const p of ['/healthz', '/api/scenario', '/api/recs/:id/action', '/api/ask', '/api/demo/reset', '/api/identity']) {
+  for (const p of ['/healthz', '/api/scenario', '/api/recs/:id/action', '/api/ask', '/api/threads', '/api/demo/reset', '/api/identity']) {
     assert.ok(routes.some(r => r.path === p), `router registers ${p}`);
   }
 });

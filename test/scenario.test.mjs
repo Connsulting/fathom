@@ -86,7 +86,9 @@ test('the seed opens each rec conversation with its summary', () => withSeeded(d
     assert.equal(conv[0].role, 'fathom');
     assert.ok(conv[0].text.includes(r.summary), `${r.id} opening message`);
   }
-  assert.deepEqual(sc.live.conversations.ask || [], []);
+  assert.ok(!('ask' in sc.live.conversations), 'no bare ask conversation');
+  assert.ok(!Object.keys(sc.live.conversations).some(k => k.startsWith('ask:')), 'the seed has no Ask threads');
+  assert.deepEqual(sc.live.threads, []);
 }));
 
 test('Decide in November: salary decided, deferral open, later ones upcoming', () => withSeeded(db => {
@@ -253,12 +255,13 @@ test('an empty store builds a valid empty scenario', async () => {
   }
 });
 
-test('ask conversations keep token-bearing HTML as stored', () => withSeeded(db => {
+test('ask threads keep token-bearing HTML as stored', () => withSeeded(db => {
   const q = demo.ask.suggested[0];
-  db.prepare("INSERT OR IGNORE INTO conversations (key, created_at) VALUES ('ask', '2026-11-05T09:00:00Z')").run();
-  db.prepare("INSERT INTO messages (conversation_key, role, text, refs, notice, ts) VALUES ('ask', 'fathom', ?, ?, 0, '2026-11-05T09:01:00Z')")
-    .run(paragraphs(q.a), JSON.stringify(q.refs));
-  const conv = buildScenario(db).live.conversations.ask;
+  const key = 'ask:0123456789ab';
+  db.prepare('INSERT OR IGNORE INTO conversations (key, created_at, last_at) VALUES (?, ?, ?)').run(key, '2026-11-05T09:00:00Z', '2026-11-05T09:01:00Z');
+  db.prepare("INSERT INTO messages (conversation_key, role, text, refs, notice, ts) VALUES (?, 'fathom', ?, ?, 0, '2026-11-05T09:01:00Z')")
+    .run(key, paragraphs(q.a), JSON.stringify(q.refs));
+  const conv = buildScenario(db).live.conversations[key];
   assert.equal(conv.length, 1);
   assert.equal(conv[0].role, 'fathom');
   assert.equal(conv[0].text, paragraphs(q.a));

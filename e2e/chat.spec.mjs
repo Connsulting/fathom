@@ -3,7 +3,7 @@
 // unverified, and a switched-off engine answers with a notice instead of making anything up.
 // Demo mode runs the live pipeline with the deterministic fake answer source.
 
-import { test, expect, S, resetDemo, visibleRecs, plain, gotoRoute, expectH1, recDialog, bareDollarNodes, rec, liveStatus } from './helpers.mjs';
+import { test, expect, S, resetDemo, visibleRecs, plain, gotoRoute, expectH1, recDialog, bareDollarNodes, rec, liveStatus, ASK_HELLO, ASK_THREAD_URL, askOnAsk } from './helpers.mjs';
 
 const ENGINE_OFF_NOTICE = 'Engine is off, so answers are paused. Switch it back on to get an answer.';
 const GROUNDED = 'Every number is from your data or a tool result.';
@@ -36,20 +36,22 @@ function tool(src, name) {
   return src.locator('li.h-src-tool').filter({ has: src.page().locator('code', { hasText: new RegExp(`^${name}$`) }) });
 }
 
+// Free text in a rec dialog composer (the Ask page has its own composer, see askOnAsk).
 async function askFree(scope, key, text) {
   const input = scope.locator(`form.h-compose[data-free="${key}"] input[name="q"]`);
   await input.fill(text);
   await input.press('Enter');
 }
 
-test('an Ask chip answer shows a figure and Sources listing the tools it used', async ({ page }) => {
+test('an Ask answer to a suggested question shows a figure and Sources listing the tools it used', async ({ page }) => {
   const q = S.ask.suggested.find((x) => (x.a || []).some((p) => FIG_TOKEN.test(p)));
   expect(q, 'a suggested question whose answer uses a figure').toBeTruthy();
   const key = (q.a || []).map((p) => FIG_TOKEN.exec(p)).find(Boolean)[1];
 
   await gotoRoute(page, 'ask');
-  await expectH1(page, 'Ask about your money');
-  await page.locator(`button.h-chip[data-ask="${q.id}"]`).click();
+  await expectH1(page, ASK_HELLO);
+  // The fake answer source maps the exact suggested wording to its canned answer.
+  await askOnAsk(page, plain(q.q));
   const msg = answers(page).last();
   await expect(answers(page)).toHaveCount(1);
   await expect(msg).not.toHaveClass(/\bnotice\b/);
@@ -67,7 +69,9 @@ test('an Ask chip answer shows a figure and Sources listing the tools it used', 
   expect(await bareDollarNodes(page)).toEqual([]);
 
   // The answer and its provenance are stored, not page state.
+  await expect(page).toHaveURL(ASK_THREAD_URL);
   await page.reload();
+  await expect(page).toHaveURL(ASK_THREAD_URL);
   await expect(answers(page)).toHaveCount(1);
   await expect(answers(page).last().locator('details.h-src')).toHaveCount(1);
 });
@@ -78,7 +82,7 @@ test('a free text question with no canned match gets a grounded answer', async (
   expect(canned).not.toContain(text.toLowerCase());
 
   await gotoRoute(page, 'ask');
-  await askFree(page, 'ask', text);
+  await askOnAsk(page, text);
   await expect(page.locator('.h-thread .h-msg.me').last()).toContainText(text);
   const msg = answers(page).last();
   await expect(answers(page)).toHaveCount(1);
@@ -98,7 +102,7 @@ test('a free text question naming an invented amount marks it unverified', async
   const text = `Can I put ${INVENTED_AMOUNT} in my HSA?`;
 
   await gotoRoute(page, 'ask');
-  await askFree(page, 'ask', text);
+  await askOnAsk(page, text);
   const msg = answers(page).last();
   await expect(answers(page)).toHaveCount(1);
   await expect(msg).not.toHaveClass(/\bnotice\b/);
@@ -138,14 +142,16 @@ test('with the engine switched off an ask gets the notice message', async ({ pag
   await expectH1(page, 'Paused');
 
   await gotoRoute(page, 'ask');
-  await page.locator(`button.h-chip[data-ask="${q.id}"]`).click();
+  await askOnAsk(page, plain(q.q));
   await expect(answers(page)).toHaveCount(1);
   const msg = answers(page).last();
   await expect(msg).toHaveClass(/\bnotice\b/);
   await expect(page.locator('.h-thread .h-msg.fathom.notice')).toHaveCount(1);
   await expect(msg).toContainText(ENGINE_OFF_NOTICE);
 
+  await expect(page).toHaveURL(ASK_THREAD_URL);
   await page.reload();
+  await expect(page).toHaveURL(ASK_THREAD_URL);
   await expect(page.locator('.h-thread .h-msg.fathom.notice')).toHaveCount(1);
 });
 

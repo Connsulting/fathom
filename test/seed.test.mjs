@@ -69,20 +69,24 @@ test('seed:demo creates a demo store at the November state', T, async () => {
 
 test('seed:demo rebuilds a demo store, discarding actions taken since', T, async () => {
   const dataDir = await seededDir();
+  let threadKey;
   await withServer({ dataDir }, async s => {
     const r = await postJson(s.baseUrl, '/api/recs/deferral/action', { action: 'complete' });
     assert.equal(r.status, 200);
-    const a = await postJson(s.baseUrl, '/api/ask', { key: 'ask', questionId: 'defer' });
+    const a = await postJson(s.baseUrl, '/api/threads', { text: 'Can we push the fixed-fee invoices into January?' });
     assert.equal(a.status, 200);
+    threadKey = a.json.thread.key;
   });
   await withStore(dataDir, db => {
     assert.equal(db.prepare("SELECT status FROM recs WHERE id = 'deferral'").get().status, 'done');
+    assert.equal(db.prepare('SELECT count(*) AS n FROM messages WHERE conversation_key = ?').get(threadKey).n, 2);
   });
   const again = await seed(dataDir);
   assert.equal(again.code, 0, again.stderr);
   await withStore(dataDir, db => {
     assert.equal(db.prepare("SELECT status FROM recs WHERE id = 'deferral'").get().status, 'proposed');
-    assert.equal(db.prepare("SELECT count(*) AS n FROM messages WHERE conversation_key = 'ask'").get().n, 0);
+    assert.equal(db.prepare('SELECT count(*) AS n FROM messages WHERE conversation_key = ?').get(threadKey).n, 0);
+    assert.equal(db.prepare("SELECT count(*) AS n FROM conversations WHERE key LIKE 'ask:%'").get().n, 0, 'no threads survive the reseed');
     assert.equal(db.prepare("SELECT count(*) AS n FROM rec_events WHERE actor = 'ui'").get().n, 0);
   });
 });

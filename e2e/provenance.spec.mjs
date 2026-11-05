@@ -1,7 +1,7 @@
 // Every displayed amount carries provenance (Horizon port item 5, oracle note 2): on every route,
 // no text node with a bare dollar amount sits outside .fx-fig, .fx-law, an axis tick or the popover.
 
-import { test, expect, S, resetDemo, mainRoutes, visibleRecs, plain, gotoRoute, expectH1, recDialog, bareDollarNodes } from './helpers.mjs';
+import { test, expect, S, resetDemo, mainRoutes, visibleRecs, plain, gotoRoute, expectH1, recDialog, bareDollarNodes, ASK_HELLO, askOnAsk } from './helpers.mjs';
 
 test.beforeEach(async ({ request }) => {
   await resetDemo(request);
@@ -37,14 +37,14 @@ test('every rec dialog has no bare dollar amounts', async ({ page }) => {
 });
 
 test('Ask answers have no bare dollar amounts', async ({ page }) => {
-  await gotoRoute(page, 'ask');
-  const chips = page.locator('button.h-chip[data-ask]');
-  const total = await chips.count();
+  test.setTimeout(120_000);
+  const questions = S.ask.suggested || [];
+  const total = questions.length;
   expect(total).toBeGreaterThan(0);
-  for (let n = total; n > 0; n--) {
-    await chips.first().click();
-    await expect(chips).toHaveCount(n - 1);
-  }
+  await gotoRoute(page, 'ask');
+  await expectH1(page, ASK_HELLO);
+  // Every suggested question, by its exact wording, in one conversation.
+  for (const q of questions) await askOnAsk(page, plain(q.q));
   await expect(page.locator('.h-thread .h-msg.fathom')).toHaveCount(total);
   expect(await bareDollarNodes(page)).toEqual([]);
 });

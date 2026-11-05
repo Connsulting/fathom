@@ -17,6 +17,11 @@ import {
 const T = { timeout: SERVER_TIMEOUT };
 const T2 = { timeout: SERVER_TIMEOUT * 2 };
 const ENGINE_OFF = 'Engine is off, so answers are paused. Switch it back on to get an answer.';
+// A fixed Ask thread key for rows written straight into a store.
+const STORE_THREAD = 'ask:0123456789ab';
+// A suggested question's exact text: sent as free text, it gets the canned answer and its refs.
+const suggested = id => demo.ask.suggested.find(x => x.id === id);
+const newThread = (s, body = {}) => postJson(s.baseUrl, '/api/threads', body);
 
 const act = (s, id, action, arg) =>
   postJson(s.baseUrl, `/api/recs/${encodeURIComponent(id)}/action`, arg === undefined ? { action } : { action, arg });
@@ -48,9 +53,10 @@ async function populatedRealStore() {
   await readDb(file, db => {
     db.prepare(`INSERT INTO facts (key, value, src, as_of, confirmed, file_id, parser, locator, updated_at)
                 VALUES ('household.dependents', '2', 'you', '2026-11-01', 1, NULL, NULL, NULL, '2026-11-01T09:00:00Z')`).run();
-    db.prepare("INSERT OR IGNORE INTO conversations (key, created_at) VALUES ('ask', '2026-11-01T09:00:00Z')").run();
+    db.prepare('INSERT OR IGNORE INTO conversations (key, created_at, last_at) VALUES (?, ?, ?)')
+      .run(STORE_THREAD, '2026-11-01T09:00:00Z', '2026-11-01T09:00:00Z');
     db.prepare(`INSERT INTO messages (conversation_key, role, text, refs, notice, ts)
-                VALUES ('ask', 'me', '<p>Synthetic note for the store test.</p>', '[]', 0, '2026-11-01T09:00:00Z')`).run();
+                VALUES (?, 'me', '<p>Synthetic note for the store test.</p>', '[]', 0, '2026-11-01T09:00:00Z')`).run(STORE_THREAD);
     setSetting(db, 'onboarding', { done: true, step: 6 });
   });
   return { dataDir, file };
@@ -235,17 +241,17 @@ describe('war game, packs and engine', () => {
     }
     await withServer({ dataDir: s.dataDir }, async s2 => {
       assert.equal((await getScenario(s2.baseUrl)).live.engine, false, 'engine setting persists');
-      const r = await ok(postJson(s2.baseUrl, '/api/ask', { key: 'ask', questionId: 'defer' }));
+      const r = await ok(newThread(s2, { text: suggested('defer').q }));
       assert.equal(r.message.notice, true);
       assert.ok(r.message.text.includes(ENGINE_OFF));
-      const conv = r.scenario.live.conversations.ask;
+      const conv = r.scenario.live.conversations[r.thread.key];
       assert.equal(conv.length, 2);
       assert.equal(conv[0].role, 'me');
       assert.equal(conv[1].notice, true);
 
       const back = await ok(postJson(s2.baseUrl, '/api/engine', { on: true }));
       assert.equal(back.scenario.live.engine, true);
-      const ans = await ok(postJson(s2.baseUrl, '/api/ask', { questionId: 'defer' }));
+      const ans = await ok(postJson(s2.baseUrl, '/api/ask', { key: r.thread.key, text: suggested('defer').q }));
       assert.ok(!ans.message.notice, 'answers return once the engine is on');
     });
   });
@@ -254,10 +260,12 @@ describe('war game, packs and engine', () => {
 describe('ask', () => {
   test('a suggested question appends me and fathom messages with a live answer and persists', T2, async () => {
     const s = await spawnServer();
-    const q = demo.ask.suggested.find(x => x.id === 'defer');
+    const q = suggested('defer');
     let answer;
+    let key;
     try {
-      const r = await ok(postJson(s.baseUrl, '/api/ask', { key: 'ask', questionId: 'defer' }));
+      const r = await ok(newThread(s, { text: q.q }));
+      key = r.thread.key;
       answer = r.message;
       assert.equal(r.message.role, 'fathom');
       assert.equal(r.message.notice, false);
@@ -265,7 +273,7 @@ describe('ask', () => {
       assert.equal(r.message.provenance.engine, 'fake');
       assert.ok(r.message.provenance.tools.length > 0, 'provenance lists the tools used');
       for (const id of q.refs) assert.ok(r.message.refs.includes(id), `refs include ${id}`);
-      const conv = r.scenario.live.conversations.ask;
+      const conv = r.scenario.live.conversations[key];
       assert.equal(conv.length, 2);
       assert.equal(conv[0].role, 'me');
       assert.ok(conv[0].text.includes(q.q));
@@ -275,7 +283,7 @@ describe('ask', () => {
       await s.stop();
     }
     await withServer({ dataDir: s.dataDir }, async s2 => {
-      const conv = (await getScenario(s2.baseUrl)).live.conversations.ask;
+      const conv = (await getScenario(s2.baseUrl)).live.conversations[key];
       assert.equal(conv.length, 2, 'conversation persists');
       assert.deepEqual(conv[1], answer, 'the answer and its provenance persist');
     });
@@ -294,37 +302,48 @@ describe('ask', () => {
   }));
 
   test('free text matching a question answers with its refs, other free text answers from the summary', T, () => withServer({}, async s => {
-    const q = demo.ask.suggested.find(x => x.id === 'screwing');
-    const hit = await ok(postJson(s.baseUrl, '/api/ask', { text: '  ' + q.q.toLowerCase() + ' ' }));
+    const q = suggested('screwing');
+    const hit = await ok(newThread(s, { text: '  ' + q.q.toLowerCase() + ' ' }));
+    const key = hit.thread.key;
     assert.equal(hit.message.notice, false);
     assert.ok(hit.message.provenance, 'the answer carries provenance');
     for (const id of q.refs) assert.ok(hit.message.refs.includes(id), `refs include ${id}`);
-    assert.ok(hit.scenario.live.conversations.ask[0].text.includes(q.q.toLowerCase()), 'the owner message is the text sent');
-    const miss = await ok(postJson(s.baseUrl, '/api/ask', { key: 'ask', text: 'How tall is the office ficus?' }));
+    assert.ok(hit.scenario.live.conversations[key][0].text.includes(q.q.toLowerCase()), 'the owner message is the text sent');
+    const miss = await ok(postJson(s.baseUrl, '/api/ask', { key, text: 'How tall is the office ficus?' }));
     assert.equal(miss.message.notice, false);
     assert.ok(miss.message.provenance.tools.some(x => x.name === 'household_summary'));
     assert.deepEqual(miss.message.refs, []);
-    const conv = miss.scenario.live.conversations.ask;
+    const conv = miss.scenario.live.conversations[key];
     assert.equal(conv.length, 4);
     assert.ok(conv[2].text.includes('How tall is the office ficus?'));
   }));
 
   test('ask validates its body', T, () => withServer({}, async s => {
+    const { thread } = await ok(newThread(s));
+    const key = thread.key;
     await fails(postJson(s.baseUrl, '/api/ask', {}), 400);
-    await fails(postJson(s.baseUrl, '/api/ask', { questionId: 'defer', text: 'both' }), 400);
-    await fails(postJson(s.baseUrl, '/api/ask', { text: '   ' }), 400);
-    await fails(postJson(s.baseUrl, '/api/ask', { text: '' }), 400);
-    const unknownQ = await postJson(s.baseUrl, '/api/ask', { questionId: 'no-such-question' });
+    await fails(postJson(s.baseUrl, '/api/ask', { key }), 400);
+    await fails(postJson(s.baseUrl, '/api/ask', { text: 'hello' }), 400);
+    await fails(postJson(s.baseUrl, '/api/ask', { key, questionId: 'defer', text: 'both' }), 400);
+    await fails(postJson(s.baseUrl, '/api/ask', { key, text: '   ' }), 400);
+    await fails(postJson(s.baseUrl, '/api/ask', { key, text: '' }), 400);
+    await fails(postJson(s.baseUrl, '/api/ask', { key, text: 7 }), 400);
+    await fails(postJson(s.baseUrl, '/api/ask', { key: 7, text: 'hello' }), 400);
+    await fails(postJson(s.baseUrl, '/api/ask', { key, text: 'x'.repeat(4001) }), 400);
+    const unknownQ = await postJson(s.baseUrl, '/api/ask', { key, questionId: 'no-such-question' });
     assert.ok([400, 404].includes(unknownQ.status), `unknown question -> ${unknownQ.status}`);
     const unknownKey = await postJson(s.baseUrl, '/api/ask', { key: 'no-such-rec', text: 'hello' });
     assert.ok([400, 404].includes(unknownKey.status), `unknown conversation -> ${unknownKey.status}`);
-    await ok(postJson(s.baseUrl, '/api/ask', { text: 'hello' }));
+    for (const body of [{ questionId: 'yearend', text: 'both' }, { text: '' }, { text: '   ' }, { text: 7 }, { text: 'x'.repeat(4001) }]) {
+      await fails(newThread(s, body), 400);
+    }
+    await ok(postJson(s.baseUrl, '/api/ask', { key, text: 'hello' }));
   }));
 
   test('free text is HTML escaped and cannot inject tokens', T, () => withServer({}, async s => {
-    await ok(postJson(s.baseUrl, '/api/ask', { text: '<img src=x onerror=1>' }));
-    const r = await ok(postJson(s.baseUrl, '/api/ask', { text: 'show {f:anything} and {n:spouse}' }));
-    const mine = r.scenario.live.conversations.ask.filter(m => m.role === 'me').map(m => m.text);
+    const first = await ok(newThread(s, { text: '<img src=x onerror=1>' }));
+    const r = await ok(postJson(s.baseUrl, '/api/ask', { key: first.thread.key, text: 'show {f:anything} and {n:spouse}' }));
+    const mine = r.scenario.live.conversations[first.thread.key].filter(m => m.role === 'me').map(m => m.text);
     assert.equal(mine.length, 2);
     assert.ok(!mine[0].includes('<img'), mine[0]);
     assert.ok(mine[0].includes('&lt;img'), mine[0]);
@@ -368,11 +387,12 @@ describe('onboarding and demo reset', () => {
     const initial = await getScenario(s.baseUrl);
     await ok(act(s, 'deferral', 'complete'));
     await ok(postJson(s.baseUrl, '/api/engine', { on: false }));
-    await ok(postJson(s.baseUrl, '/api/ask', { text: 'hello' }));
+    const asked = await ok(newThread(s, { text: 'hello' }));
     const { scenario } = await ok(postJson(s.baseUrl, '/api/demo/reset', {}));
     assert.equal(recOf(scenario, 'deferral').status, 'proposed');
     assert.equal(scenario.live.engine, true);
-    assert.deepEqual(scenario.live.conversations.ask || [], []);
+    assert.deepEqual(scenario.live.conversations[asked.thread.key] || [], []);
+    assert.deepEqual(scenario.live.threads, [], 'demo reset clears threads');
     assert.deepEqual(scenario.recs.map(r => [r.id, r.status]), initial.recs.map(r => [r.id, r.status]));
   }));
 });
@@ -413,7 +433,7 @@ describe('store modes', () => {
         assert.equal(sc.live.mode, 'real');
         assert.deepEqual(sc.recs, []);
         assert.equal(sc.live.demo, 'november', 'onboarding setting kept');
-        assert.ok(sc.live.conversations.ask.some(m => m.text.includes('Synthetic note for the store test.')));
+        assert.ok(sc.live.conversations[STORE_THREAD].some(m => m.text.includes('Synthetic note for the store test.')));
       });
     }
     await readDb(file, db => {
