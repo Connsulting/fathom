@@ -4,7 +4,9 @@ for (const [word, value] of Object.entries({ thirty: 30, forty: 40, fifty: 50, s
 const scales = new Map([['thousand', 1000], ['million', 1e6], ['billion', 1e9]]);
 const wordPattern = [...words.keys(), 'hundred', ...scales.keys()].join('|');
 // A hyphen glued to a preceding letter or digit (K-12, 2026-01) joins words; it is not a minus sign.
-export const numberPattern = /(?:(?<![\p{L}\d])-\s*\$|\$\s*-?|(?<![\p{L}\d])-|\+)?(?:\d(?:[\d,]*\d)?(?:\.\d+)?|\.\d+)(?:[eE][-+]?\d+)?\s*(?:[kKmMbB]\b|%|percent\b)?/gu;
+// A magnitude word after the number (8.7 million, $2 thousand) is part of the one quantity, so the
+// coefficient is never read on its own.
+export const numberPattern = /(?:(?<![\p{L}\d])-\s*\$|\$\s*-?|(?<![\p{L}\d])-|\+)?(?:\d(?:[\d,]*\d)?(?:\.\d+)?|\.\d+)(?:[eE][-+]?\d+)?(?:\s*(?:thousand|million|billion)\b|\s*(?:[kKmMbB]\b|%|percent\b))?/giu;
 const months = '(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)';
 const dates = [
   /\b\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:[Zz]|[-+]\d{2}:?\d{2})?)?\b/g,
@@ -29,7 +31,7 @@ const identifiers = [
 function blank(text, pattern, preserveCurrency = true) {
   return text.replace(pattern, (match, ...args) => {
     const index = args.at(-2);
-    if (preserveCurrency && (/\$\s*-?\s*$/.test(text.slice(0, index)) || /^\s*(?:%|percent\b)/i.test(text.slice(index + match.length)))) return match;
+    if (preserveCurrency && (/\$\s*-?\s*$/.test(text.slice(0, index)) || /^\s*(?:%|percent\b|thousand\b|million\b|billion\b)/i.test(text.slice(index + match.length)))) return match;
     return ' '.repeat(match.length);
   });
 }
@@ -44,9 +46,9 @@ function maskContext(text, prose = false) {
 
 function literal(text) {
   const normalized = text.replaceAll(',', '').replaceAll('$', '').replace(/\s/g, '').toLowerCase();
-  const suffix = /(?:percent|[%kmb])$/.exec(normalized)?.[0] ?? '';
+  const suffix = /(?:percent|thousand|million|billion|[%kmb])$/.exec(normalized)?.[0] ?? '';
   const numeric = suffix ? normalized.slice(0, -suffix.length) : normalized;
-  const magnitude = ({ k: 1000, m: 1e6, b: 1e9 })[suffix] ?? 1;
+  const magnitude = ({ k: 1000, thousand: 1000, m: 1e6, million: 1e6, b: 1e9, billion: 1e9 })[suffix] ?? 1;
   const decimals = /\.(\d+)/.exec(numeric)?.[1].length ?? 0;
   const exponent = Number(/[eE]([-+]?\d+)$/.exec(numeric)?.[1] ?? 0);
   return { value: Number(numeric), magnitude, percent: suffix === '%' || suffix === 'percent',
@@ -116,8 +118,10 @@ export function checkGrounding(prose, { toolResults = [], data = [], figures = {
       violations.push({ text: match[0].trim(), index: match.index, reason: 'number or unit absent from sources' });
     }
   }
+  // Numeric expressions were judged whole above, so their magnitude words are not judged again.
+  const wordsOnly = masked.replace(numberPattern, match => ' '.repeat(match.length));
   const phrases = new RegExp(`\\b(?:${wordPattern})(?:[ -]+(?:and[ -]+)?(?:${wordPattern}))*\\b`, 'gi');
-  for (const match of masked.matchAll(phrases)) {
+  for (const match of wordsOnly.matchAll(phrases)) {
     let total = 0;
     let part = 0;
     for (const word of match[0].toLowerCase().split(/[ -]+/)) {

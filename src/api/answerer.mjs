@@ -137,23 +137,46 @@ const isMetaKey = k => META_KEYS.has(k) || /(?:Id|Ids|_id|_ids|Mask|Masks|_mask|
 // acct-4821k, a month period 2026-11, a date or timestamp, a URL) is dropped whole.
 const NUMERIC_TOKEN = new RegExp(`^(?:${numberPattern.source})$`, 'u');
 
-// Prose evidence is an allowlist. URLs, markdown link destinations and autolinks are removed first
-// (link text stays). Then each whole numeric expression (the engine's numberPattern, so 1e3, 4.50
-// and 12.5% are judged as one unit) is kept only when it stands as its own word, with no letter,
-// digit, underscore or period glued in front, no letter- or underscore-hyphen prefix (acct-4821k)
-// and no letter, digit or underscore glued after, and when it is marked as a quantity: a currency
-// sign before it, or a percent sign, the word percent or a magnitude (k, thousand, million,
-// billion) after it. Every other numeric expression (Section 125, age 50, a year, a date part) is
-// blanked to spaces as a unit.
-const MARKDOWN_LINK = /\[([^\]]*)\]\([^)]*\)/g;
+// Prose evidence is an allowlist. Markdown link destinations, autolinks and bare URLs are removed
+// first (link text stays). A destination runs to its matching closing parenthesis, so nested and
+// repeated parenthesized segments (a(b(c))/d(e)) are removed whole; an unclosed one runs to the
+// next whitespace. A bare URL runs to the next whitespace, parentheses included. Then each whole
+// numeric expression (the engine's numberPattern, so 1e3, 4.50, 12.5% and 8.7 million are judged
+// as one unit, never as a bare coefficient) is kept only when it stands as its own word, with no
+// letter, digit, underscore or period glued in front, no letter- or underscore-hyphen prefix
+// (acct-4821k) and no letter, digit or underscore glued after, and when it is marked as a quantity:
+// a currency sign before it, or a percent sign, the word percent or a magnitude (k, thousand,
+// million, billion) ending it. Every other numeric expression (Section 125, age 50, a year, a date
+// part) is blanked to spaces as a unit.
+const LINK_OPEN = /\[([^\]]*)\]\(/g;
 const AUTOLINK = /<[a-z][a-z\d+.-]*:[^\s<>]*>/gi;
 const BARE_URL = /(?:\b[a-z][a-z\d+.-]*:\/\/|\bwww\.)\S*/gi;
 const GLUED_BEFORE = /(?:[\p{L}\p{N}_.]|[\p{L}_]-)$/u;
 const GLUED_AFTER = /^(?:[\p{L}\p{N}_]|[.,]\p{N})/u;
 const CURRENCY_BEFORE = /\p{Sc}\s*$/u;
-const MARKED = /(?:^[-+]?\s*\$|(?:%|percent|k)$)/i;
-const MAGNITUDE_AFTER = /^\s+(?:thousand|million|billion)\b/i;
-const withoutLinks = s => s.replace(MARKDOWN_LINK, ' $1 ').replace(AUTOLINK, ' ').replace(BARE_URL, ' ');
+const MARKED = /(?:^[-+]?\s*\$|(?:%|percent|k|thousand|million|billion)$)/i;
+
+// [text](destination) -> " text ", the destination ending at its balanced closing parenthesis.
+function withoutMarkdownLinks(s) {
+  let out = '';
+  let at = 0;
+  for (const m of s.matchAll(LINK_OPEN)) {
+    if (m.index < at) continue;
+    let end = m.index + m[0].length;
+    let depth = 1;
+    while (end < s.length && depth > 0) {
+      if (s[end] === '(') depth++;
+      else if (s[end] === ')') depth--;
+      end++;
+    }
+    if (depth > 0) end = m.index + m[0].length + (/^\S*/.exec(s.slice(m.index + m[0].length))[0].length);
+    out += `${s.slice(at, m.index)} ${m[1]} `;
+    at = end;
+  }
+  return out + s.slice(at);
+}
+
+const withoutLinks = s => withoutMarkdownLinks(s).replace(AUTOLINK, ' ').replace(BARE_URL, ' ');
 function proseEvidence(text) {
   const s = withoutLinks(text);
   return s.replace(new RegExp(numberPattern.source, numberPattern.flags), (match, index) => {
@@ -161,7 +184,7 @@ function proseEvidence(text) {
     const before = s.slice(0, index);
     const after = s.slice(index + n.length);
     const marked = !GLUED_BEFORE.test(before) && !GLUED_AFTER.test(after)
-      && (MARKED.test(n) || CURRENCY_BEFORE.test(before) || MAGNITUDE_AFTER.test(after));
+      && (MARKED.test(n) || CURRENCY_BEFORE.test(before));
     return marked ? match : ' '.repeat(match.length);
   });
 }

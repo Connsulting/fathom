@@ -497,7 +497,10 @@ is reachable only on the owner's private network.
    number fields stay evidence, and a single-token string such as `4821` or `$1,500` is not prose.
    Before any number is judged, URLs, markdown link destinations and autolinks are removed from the
    prose (link text stays), so `[policy](https://example.invalid/4821k)` grounds nothing while
-   `[the $500 limit](...)` still grounds `$500`. Each number is judged as one whole numeric
+   `[the $500 limit](...)` still grounds `$500`. A link destination ends at its balanced closing
+   parenthesis, so nested and repeated parenthesized segments
+   (`[policy](https://example.invalid/a(b(c))/d(e)/$4821)`) are removed whole, and a bare URL is
+   removed through the next whitespace, parentheses included. Each number is judged as one whole numeric
    expression using the engine's `numberPattern`, so scientific notation, decimals and percents
    are kept or blanked as a unit: `$1e3` grounds `$1,000` and never `$1` or `3`, and `12.5%` never
    grounds `12%` or `5%`. A marked expression counts only when it stands as its own word: a letter,
@@ -511,6 +514,12 @@ is reachable only on the owner's private network.
    a currency sign (`-$500`) still is, and an explicit list of letter codes joined to digits by a
    hyphen (`K-12`, `K-1`, `I-9`) is vocabulary like `W-2`, `W-4` and the 1099 forms, not a number.
    Any other code (`X-873`, `AB-500`) is not masked: its digits are checked as a number.
+   A number followed by a magnitude word (`thousand`, `million`, `billion`), with or without a
+   currency sign before it, is one quantity on both sides: in evidence `8.7 million` is collected
+   as 8,700,000 and never as 8.7, and in the answer `$8.7 million` is checked as 8,700,000 with
+   the magnitude word not judged again on its own. So evidence saying `8.7 million` grounds
+   `$8.7 million` and `$8,700,000`, never `$8.70` or `8.7`. Number-word phrases (`two million`)
+   are still read word by word.
 5. One corrective retry (same `system`, the first answer plus a corrective user turn). An answer
    still ungrounded is stored with each violation in `<span class="fx-unverified" title="Not found
    in your data or tool results">`. If the retry call itself fails, the answer is the matching
