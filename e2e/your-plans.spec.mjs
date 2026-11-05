@@ -6,10 +6,10 @@
 // scenario token resolved into a figure.
 
 import { createHash } from 'node:crypto';
-import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test, expect, S, resetDemo } from './helpers.mjs';
 import { openDb, DB_FILE } from '../src/store/db.mjs';
+import { loadDataKey, storeFile } from '../src/ingest/vault.mjs';
 
 const FILE_ID = 'e2e-yp-plan';
 const FILE_NAME = 'benefits-plan-notes.txt';
@@ -36,17 +36,17 @@ function yp(testInfo) {
   return { base: md.ypBaseURL || '', dataDir: md.ypDataDir || '' };
 }
 
-// Puts the synthetic plan on file the way an upload would: the file in <dataDir>/files/, its
-// files row, and (unless `document` is false) a documents row with doc_type plan.
-function addPlanDocument(dataDir, name = FILE_NAME, text = PLAN_TEXT, { document = true } = {}) {
-  const filesDir = join(dataDir, 'files');
-  mkdirSync(filesDir, { recursive: true });
-  writeFileSync(join(filesDir, name), text);
+// Puts the synthetic plan on file the way an upload stores it: encrypted by the vault under the
+// demo store's key at <dataDir>/files/<id>.bin, its files row, and (unless `document` is false) a
+// documents row with doc_type plan.
+async function addPlanDocument(dataDir, name = FILE_NAME, text = PLAN_TEXT, { document = true } = {}) {
+  const key = await loadDataKey({ dataDir, mode: 'demo' });
+  const storedPath = await storeFile({ dataDir, key, id: FILE_ID, bytes: Buffer.from(text, 'utf8') });
   const db = openDb(join(dataDir, DB_FILE));
   try {
     db.prepare(`INSERT INTO files (id, name, mime, size, sha256, source_kind, uploaded_at, stored_path, status, note)
                 VALUES (?, ?, 'text/plain', ?, ?, 'upload', ?, ?, 'parsed', 'Synthetic e2e plan document')`)
-      .run(FILE_ID, name, Buffer.byteLength(text), createHash('sha256').update(text).digest('hex'), new Date().toISOString(), `files/${name}`);
+      .run(FILE_ID, name, Buffer.byteLength(text), createHash('sha256').update(text).digest('hex'), new Date().toISOString(), storedPath);
     if (document) {
       db.prepare(`INSERT INTO documents (doc_type, tax_year, fields, file_id, parser, locator) VALUES ('plan', ?, '{}', ?, NULL, NULL)`)
         .run(Number(S.meta.clock.slice(0, 4)), FILE_ID);
@@ -69,7 +69,7 @@ test.beforeEach(async ({ request }, testInfo) => {
 
 test('a plan document builds the Your plans pack, and entries cite file and page as plain text', async ({ page }, testInfo) => {
   const { base, dataDir } = yp(testInfo);
-  addPlanDocument(dataDir);
+  await addPlanDocument(dataDir);
 
   await gotoYp(page, base, 'packs');
   await expect(page.getByRole('heading', { level: 1, name: 'What Fathom knows', exact: true })).toBeVisible();
@@ -122,7 +122,7 @@ test('model-written Your plans titles render as text, with no markup and no reso
   const { base, dataDir } = yp(testInfo);
   const dialogs = [];
   page.on('dialog', async (d) => { dialogs.push(d.message()); await d.dismiss(); });
-  addPlanDocument(dataDir, HOSTILE_NAME, HOSTILE_TEXT);
+  await addPlanDocument(dataDir, HOSTILE_NAME, HOSTILE_TEXT);
 
   await gotoYp(page, base, 'packs');
   await page.locator(`.h-yp input[data-yp-file="${FILE_ID}"]`).check();
@@ -195,7 +195,7 @@ test('a text-only plan document is enough to build the Your plans pack', async (
 // must enable Build, unticking must disable it again, and the build must use it.
 test('an optional uploaded file alone enables Build and builds the Your plans pack', async ({ page }, testInfo) => {
   const { base, dataDir } = yp(testInfo);
-  addPlanDocument(dataDir, FILE_NAME, PLAN_TEXT, { document: false });
+  await addPlanDocument(dataDir, FILE_NAME, PLAN_TEXT, { document: false });
 
   await gotoYp(page, base, 'packs');
   const card = page.locator('.h-yp');
@@ -238,7 +238,7 @@ const MISMATCH_TEXT = [
 
 test('B5: the build result line reports the sections dropped because they did not match the document', async ({ page }, testInfo) => {
   const { base, dataDir } = yp(testInfo);
-  addPlanDocument(dataDir, MISMATCH_NAME, MISMATCH_TEXT);
+  await addPlanDocument(dataDir, MISMATCH_NAME, MISMATCH_TEXT);
 
   await gotoYp(page, base, 'packs');
   await page.locator(`.h-yp input[data-yp-file="${FILE_ID}"]`).check();
