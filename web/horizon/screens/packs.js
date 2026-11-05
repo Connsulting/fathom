@@ -20,7 +20,11 @@ const S = {
 };
 
 const ekey = (pack, entry) => `${pack}/${entry}`;
-const nameOf = (p) => H.T(p.label || p.name);
+// Plain escaping for manifest-derived text: no markup, no scenario tokens.
+const lit = (s) => H.esc(String(s ?? '')).replace(/'/g, '&#39;').replace(/\{/g, '&#123;').replace(/\}/g, '&#125;');
+// Manifest-backed rows render literally; demo rows may carry tokens.
+const mt = (p, s) => (p.manifest ? lit(s) : H.T(s));
+const nameOf = (p) => (p.label ? H.T(p.label) : mt(p, p.name));
 
 function isoLabel(s) {
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(s || ''));
@@ -43,7 +47,7 @@ const law = (h) => h.replace(/-?\$\d[\d,]*(?:\.\d+)?(?:\s?(?:million|billion|[KM
 
 // Escaped text with emphasis and code, and every dollar amount wrapped as statutory money.
 function inlineText(s) {
-  let h = H.esc(s).replace(/'/g, '&#39;');
+  let h = lit(s);
   h = h.replace(/`([^`]+)`/g, '<code>$1</code>');
   h = h.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>').replace(/__([^_]+)__/g, '<strong>$1</strong>');
   h = h.replace(/(^|[\s(])\*([^*\s][^*]*?)\*(?=[\s.,;:!?)]|$)/g, '$1<em>$2</em>');
@@ -124,7 +128,7 @@ export function renderMarkdown(md, title = '') {
 
 function citeItem(c) {
   if (!c) return '';
-  const label = law(H.esc(c.label || ''));
+  const label = law(lit(c.label || ''));
   const url = safeUrl(c.url);
   return `<li>${url ? `<a href="${H.esc(url)}" target="_blank" rel="noopener noreferrer">${label || H.esc(url)}</a>` : label}</li>`;
 }
@@ -146,7 +150,7 @@ function entriesHtml(p) {
           : `<div class="h-entry-body">${renderMarkdown(got.entry.body, got.entry.title || e.title)}</div>`;
       body = `<div class="h-entry-x" id="h-entry-${esc(e.id)}">${content}${cites.length ? `<div class="h-sub-h h-entry-ch">Citations</div><ul class="h-entry-cites">${cites.map(citeItem).join('')}</ul>` : ''}</div>`;
     }
-    return `<div class="h-entry-i${open ? ' open' : ''}"><button type="button" class="h-entry" data-pack="${esc(p.id)}" data-entry="${esc(e.id)}" aria-expanded="${open}"${open ? ` aria-controls="h-entry-${esc(e.id)}"` : ''}>${law(esc(e.title || e.id))}${icon('chev')}</button>${body}</div>`;
+    return `<div class="h-entry-i${open ? ' open' : ''}"><button type="button" class="h-entry" data-pack="${esc(p.id)}" data-entry="${esc(e.id)}" aria-expanded="${open}"${open ? ` aria-controls="h-entry-${esc(e.id)}"` : ''}>${law(lit(e.title || e.id))}${icon('chev')}</button>${body}</div>`;
   }).join('');
   return section('Entries', `<div class="h-entries">${items}</div>`, plural(list.length, 'entry', 'entries'));
 }
@@ -174,14 +178,14 @@ function toggleEntry(pack, entry) {
 function metaHtml(p) {
   const { T, plural } = H;
   const parts = [`<span>${plural(p.entries || 0, 'curated entry', 'curated entries')}</span>`];
-  if (p.curator) parts.push(`<span>Curated by ${T(p.curator)}</span>`);
+  if (p.curator) parts.push(`<span>Curated by ${mt(p, p.curator)}</span>`);
   if (p.manifest) {
-    if (p.version) parts.push(`<span>Version ${H.X(p.version)}</span>`);
-    if (p.taxYear) parts.push(`<span>Tax year ${H.X(p.taxYear)}</span>`);
-    if (p.reviewed) parts.push(`<span>Reviewed ${H.esc(isoLabel(p.reviewed))}</span>`);
+    if (p.version) parts.push(`<span>Version ${lit(p.version)}</span>`);
+    if (p.taxYear) parts.push(`<span>Tax year ${lit(p.taxYear)}</span>`);
+    if (p.reviewed) parts.push(`<span>Reviewed ${lit(isoLabel(p.reviewed))}</span>`);
     return `<div class="h-meta h-pack-meta">${parts.join('')}</div>`;
   }
-  if (p.updated) parts.push(`<span>Updated ${T(p.updated)}</span>`);
+  if (p.updated) parts.push(`<span>Updated ${mt(p, p.updated)}</span>`);
   return `<div class="h-meta">${parts.join('')}</div>`;
 }
 
@@ -209,7 +213,7 @@ function packPage(p) {
 
   return shell(`<div class="h-rec">
     <a class="h-back" href="${href('packs')}" data-go="packs">${icon('back')}Packs</a>
-    <div class="h-rec-head"><div class="h-kicker">Knowledge pack<span>${st}</span></div><h1>${nameOf(p)}</h1><p class="h-lede">${T(p.why)}</p>
+    <div class="h-rec-head"><div class="h-kicker">Knowledge pack<span>${st}</span></div><h1>${nameOf(p)}</h1><p class="h-lede">${mt(p, p.why)}</p>
     ${metaHtml(p)}</div>
     ${on ? `<div class="h-acts big">${btn('Turn off', `data-packtoggle="${esc(p.id)}"`, 'ghost')}</div>` : explored ? '' : `<div class="h-acts big">${btn('What if', `data-whatif="${esc(p.id)}"`, '')}${turnOn}</div>`}
     ${toggled ? `<p class="h-pack-note">${icon('clock')}<span>${TOGGLE_NOTE}</span></p>` : ''}
@@ -218,7 +222,7 @@ function packPage(p) {
       ${on ? section('Powers on your plan', recs.length ? `<div class="h-refs wide">${recs.map((r) => `<a href="${href('rec', { id: r.id })}" data-go="rec" data-id="${esc(r.id)}"><span>${T(r.title)}</span><em>${T(r.window?.label || '')}</em>${icon('arrow')}</a>`).join('')}</div>` : '<p class="h-mute">Nothing on the plan right now. It still informs answers.</p>') : ''}
       ${entriesHtml(p)}
     </div><div class="h-col-side">
-      ${section('Covers', arr(p.covers).length ? `<ul class="h-cross">${arr(p.covers).map((c) => `<li>${T(c)}</li>`).join('')}</ul>` : '<p class="h-mute">Not listed.</p>')}
+      ${section('Covers', arr(p.covers).length ? `<ul class="h-cross">${arr(p.covers).map((c) => `<li>${mt(p, c)}</li>`).join('')}</ul>` : '<p class="h-mute">Not listed.</p>')}
     </div></div></div>`, 'packs');
 }
 
@@ -231,9 +235,9 @@ function packCard(p) {
   const st = ST[p.status] || esc(p.status);
   return `<article class="h-pack ${esc(p.status)}">
     <div class="h-pack-h"><a href="${href('packs', { id: p.id })}" data-go="packs" data-id="${esc(p.id)}"><b>${nameOf(p)}</b></a><span class="h-pack-st">${on ? '<i></i>' : ''}${st}</span></div>
-    <p>${T(p.why)}</p>
-    ${arr(p.covers).length ? `<p class="h-mute sm">Covers ${arr(p.covers).map((c) => T(c)).join(', ')}</p>` : ''}
-    <div class="h-meta"><span>${plural(p.entries || 0, 'entry', 'entries')}</span>${p.curator ? `<span>${T(p.curator)}</span>` : ''}${p.updated ? `<span>Updated ${T(p.updated)}</span>` : ''}${on ? `<span>Powers ${plural(recs.length, 'item')}</span>` : ''}</div>
+    <p>${mt(p, p.why)}</p>
+    ${arr(p.covers).length ? `<p class="h-mute sm">Covers ${arr(p.covers).map((c) => mt(p, c)).join(', ')}</p>` : ''}
+    <div class="h-meta"><span>${plural(p.entries || 0, 'entry', 'entries')}</span>${p.curator ? `<span>${mt(p, p.curator)}</span>` : ''}${p.updated ? `<span>Updated ${mt(p, p.updated)}</span>` : ''}${on ? `<span>Powers ${plural(recs.length, 'item')}</span>` : ''}</div>
     <div class="h-acts">${on ? goA('packs', `Open${icon('arrow')}`, { id: p.id }, 'h-more') : btn('What if', `data-whatif="${esc(p.id)}"`, '')}</div>
   </article>`;
 }

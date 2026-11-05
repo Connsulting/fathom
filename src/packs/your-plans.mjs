@@ -88,10 +88,17 @@ function realTarget(target) {
   return join(realpathSync(existing), ...rest);
 }
 
+// The data directory, the write parent <dataDir>/packs (where the temporary pack is written and the
+// final directory, or a symlink in its place, is replaced) and the final target must all resolve
+// outside the repository. Checking only the final target would follow a your-plans symlink out of
+// the repository while the write still lands in a parent inside it.
 function guardTarget(dataDir) {
   const repo = realpathSync(REPO_ROOT);
-  if (inside(repo, realTarget(yourPlansDir(resolve(dataDir))))) {
-    throw new YourPlansRefusal('FATHOM_DATA is inside the repository; set it to a directory outside the checkout');
+  const target = yourPlansDir(resolve(dataDir));
+  for (const path of [resolve(dataDir), dirname(target), target]) {
+    if (inside(repo, realTarget(path))) {
+      throw new YourPlansRefusal('FATHOM_DATA is inside the repository; set it to a directory outside the checkout');
+    }
   }
 }
 
@@ -144,14 +151,19 @@ function gatherSources(db, dataDir, fileIds, warnings) {
 
 const slug = title => title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48).replace(/-+$/, '') || 'entry';
 const oneLine = s => String(s).replace(/\s+/g, ' ').trim();
+// Model-extracted titles reach the manifest covers, entry titles and the entry heading: drop markup
+// and token characters, keep the words. Bodies go through the UI's escaping markdown renderer, so
+// only braces (which could form scenario tokens) are replaced there.
+const neutralTitle = s => oneLine(String(s).replace(/[<>{}]/g, ' '));
+const neutralBody = s => String(s).replace(/\{/g, '(').replace(/\}/g, ')');
 
 function cleanRow(row, warnings, name) {
-  const title = oneLine(row.title ?? '').slice(0, MAX_TITLE);
-  const body = String(row.body ?? '').trim().slice(0, MAX_BODY);
-  if (!title || !body || !Number.isInteger(row.page) || row.page < 1) {
-    warnings.push(`A section of ${name} had no title, text or page and was skipped.`);
+  const body = neutralBody(String(row.body ?? '').trim().slice(0, MAX_BODY));
+  if (!body || !Number.isInteger(row.page) || row.page < 1) {
+    warnings.push(`A section of ${name} had no text or page and was skipped.`);
     return null;
   }
+  const title = neutralTitle(row.title ?? '').slice(0, MAX_TITLE).trim() || `Section on page ${row.page}`;
   return { title, body, page: row.page, taxYear: Number.isInteger(row.taxYear) ? row.taxYear : null };
 }
 

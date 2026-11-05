@@ -246,30 +246,35 @@ export function createLiveAnswerer({ engine, packs } = {}) {
     const entryBodies = active.flatMap(({ pack }) => pack.entries.map(e => e.body));
     const data = [summary, context, entryBodies];
     const dataLabels = ['household summary', 'conversation context', 'knowledge pack entries'];
-    const ground = res => groundAnswer(res.text, { scenario, toolResults: res.toolResults, data, dataLabels });
+    const resultsOf = res => (res && Array.isArray(res.toolResults) ? res.toolResults : []);
+    const ground = (res, toolResults) => groundAnswer(res.text, { scenario, toolResults, data, dataLabels });
 
     let first;
     try { first = await engine.call(request); } catch (e) { return noticeFor(e, engine); }
     let chosen = first;
-    let grounding = ground(first);
+    let toolResults = resultsOf(first);
+    let grounding = ground(first, toolResults);
     let retried = false;
     let costUsd = first.costUsd || 0;
     if (!grounding.ok) {
       retried = true;
       const list = grounding.violations.map(v => v.text).join(', ');
+      const earlier = resultsOf(first).map(r => ({ name: r.name, args: r.args ?? {}, result: r.result ?? null,
+        ...(r.isError ? { isError: true } : {}) }));
+      const evidence = earlier.length ? `\n\nTool results from your first attempt (still available as evidence):\n${JSON.stringify(earlier)}` : '';
       const retry = { ...request, messages: [...request.messages, { role: 'assistant', content: first.text },
-        { role: 'user', content: CORRECTIVE.replace('{list}', () => list) }] };
+        { role: 'user', content: CORRECTIVE.replace('{list}', () => list) + evidence }] };
       try {
         const second = await engine.call(retry);
         costUsd += second.costUsd || 0;
         chosen = second;
-        grounding = ground(second);
+        toolResults = [...resultsOf(first), ...resultsOf(second)];
+        grounding = ground(second, toolResults);
       } catch {
         // Keep the first answer, marked; the failed retry stored nothing.
       }
     }
 
-    const toolResults = Array.isArray(chosen.toolResults) ? chosen.toolResults : [];
     const recReads = toolResults.filter(r => !r.isError && ['get_recommendation', 'set_recommendation_status'].includes(r.name))
       .map(r => r.args && r.args.id);
     const paragraphs = renderAnswer(chosen.text, grounding.violations, grounding.literals);
