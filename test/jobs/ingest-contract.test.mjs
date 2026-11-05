@@ -33,7 +33,7 @@ import { notesFor } from '../../src/jobs/planner/assumptions.mjs';
 import { reasonText } from '../../src/jobs/triggers/missing-data.mjs';
 import { nameKey } from '../../src/ingest/extract.mjs';
 import {
-  scratch, addFact, addFile, addPayroll, answerPending, figureRow, plannerFigures, recRow, activeRecIds, parseJson, pnlWorkbook,
+  scratch, addFact, addFile, addNotes, addPayroll, factRow, answerPending, figureRow, plannerFigures, recRow, activeRecIds, parseJson, pnlWorkbook,
   PACKS_DIR, SCORP, SOLE_PROP, INST, MASKS,
 } from '../helpers/real-store.mjs';
 
@@ -363,6 +363,84 @@ test('MGI1: income facts read employerName and entityKind', async () => {
   cites('income.w2', docId('w2', d => d.fields.employerName === OUT_A));
   cites('income.sCorp', docId('w2', d => d.fields.employerName === SCORP.name));
   cites('income.partnership', docId('k1'));
+});
+
+// D13 (coordinator ruling): the planner overwrites an unconfirmed ingest fact only when the key is
+// one it derives (PLANNER_KEYS) and the fact came from a document or parser source (src 'ing:' but
+// not 'ing:notes:'). A fact from the owner's notes is never overwritten; when the planner's value
+// disagrees it raises ingest's fact_check question instead (subject <source>|<key>|<JSON value>,
+// as recordFact builds it). Agreement raises nothing. Notes facts go through ingest's notes path
+// with a scripted extract-notes engine at confidence 0.95, above ingest's 0.8 floor, so ingest
+// itself asks nothing about them.
+const factChecks = (db, key) => db.prepare("SELECT * FROM confirm_items WHERE kind = 'fact_check'").all()
+  .map(r => ({ ...r, context: parseJson(r.context, {}) })).filter(r => r.context.key === key);
+const notesFact = (key, value) => ({ facts: [{ key, value: String(value), confidence: 0.95 }] });
+const unchanged = (db, key, before) => {
+  const now = factRow(db, key);
+  assert.ok(now, `${key} still stored`);
+  for (const c of ['value', 'src', 'confirmed', 'file_id', 'parser', 'updated_at']) assert.deepEqual(now[c], before[c], `${key}.${c} unchanged`);
+};
+
+test('MGI1: D13 a notes fact the planner disagrees with is kept and asked about once', async () => {
+  const db = await S.store({ variant: {} });
+  await addNotes(db, notesFact('income.agiEstimate', 150000));
+  const before = factRow(db, 'income.agiEstimate');
+  assert.ok(before && before.value === 150000 && String(before.src).startsWith('ing:notes:') && before.confirmed === 0, `notes fact stored: ${JSON.stringify(before)}`);
+  assert.equal(factChecks(db, 'income.agiEstimate').length, 0, 'ingest asked nothing (confidence above the floor)');
+
+  await plan(db);
+  const agi = fig(db, 'agi.est').v;
+  assert.notEqual(agi, 150000, 'the planner disagrees');
+  unchanged(db, 'income.agiEstimate', before);
+  const asked = factChecks(db, 'income.agiEstimate');
+  assert.equal(asked.length, 1, `one fact_check for the planner's value: ${JSON.stringify(asked)}`);
+  assert.equal(asked[0].status, 'pending');
+  assert.equal(asked[0].context.value, agi, "the question carries the planner's value");
+  assert.ok(asked[0].subject.endsWith(`|income.agiEstimate|${JSON.stringify(agi)}`), `subject shape: ${asked[0].subject}`);
+
+  await plan(db);
+  unchanged(db, 'income.agiEstimate', before);
+  assert.equal(factChecks(db, 'income.agiEstimate').length, 1, 'a second run does not duplicate the question');
+});
+
+test('MGI1: D13 a notes fact the planner agrees with is kept and nothing is asked', async () => {
+  const twin = await S.store({ variant: {} });
+  await plan(twin);
+  const agi = fig(twin, 'agi.est').v;
+
+  const db = await S.store({ variant: {} });
+  await addNotes(db, notesFact('income.agiEstimate', agi));
+  const before = factRow(db, 'income.agiEstimate');
+  assert.ok(before && before.value === agi && String(before.src).startsWith('ing:notes:'), `notes fact stored: ${JSON.stringify(before)}`);
+  await plan(db);
+  near(fig(db, 'agi.est').v, agi, 'the planner computes the same value');
+  unchanged(db, 'income.agiEstimate', before);
+  assert.equal(factChecks(db, 'income.agiEstimate').length, 0, 'agreement raises nothing');
+});
+
+// Liveness for the allowed path: income.w2 written by the W-2 extraction (src ing:extract-w2:...)
+// is unconfirmed and a planner key, so the planner's derived fact replaces it.
+test('MGI1: D13 a document-sourced planner key is overwritten by the planner', async () => {
+  const db = await S.store({ variant: { payroll: [W2(OUT_A, { wages: 50000, federalWithheld: 5000 }, OUTSIDE_OWNER)] } });
+  const before = factRow(db, 'income.w2');
+  assert.ok(before && String(before.src).startsWith('ing:') && !String(before.src).startsWith('ing:notes:') && before.confirmed === 0,
+    `document fact stored: ${JSON.stringify(before)}`);
+  await plan(db);
+  const after = factRow(db, 'income.w2');
+  assert.equal(after.src, 'planner', 'the planner wrote its derived fact');
+  assert.equal(after.value, true);
+  assert.equal(factChecks(db, 'income.w2').length, 0, 'no question for an allowed overwrite');
+});
+
+// benefits.employer401k is not a key the planner derives: a W-2's fact for it is never touched.
+test('MGI1: D13 a document-sourced key the planner does not derive is never overwritten', async () => {
+  const db = await S.store({ variant: { payroll: [W2(OUT_A, { wages: 50000, federalWithheld: 5000, retirementPlan: true, box12: [{ code: 'D', amount: 3000 }] }, OUTSIDE_OWNER)] } });
+  const before = factRow(db, 'benefits.employer401k');
+  assert.ok(before && String(before.src).startsWith('ing:') && before.confirmed === 0, `document fact stored: ${JSON.stringify(before)}`);
+  await plan(db);
+  unchanged(db, 'benefits.employer401k', before);
+  await plan(db);
+  unchanged(db, 'benefits.employer401k', before);
 });
 
 // ================================================================ MGI2: payments counted once, by kind and jurisdiction

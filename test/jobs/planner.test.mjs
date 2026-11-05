@@ -13,6 +13,7 @@ import {
 } from '../../src/calc/index.mjs';
 import { recAction, ask, packToggle } from '../../src/api/handlers.mjs';
 import { createCannedAnswerer } from '../../src/api/answerer.mjs';
+import { reasonText } from '../../src/jobs/triggers/missing-data.mjs';
 import {
   scratch, createRealStore, addPayroll, w2Doc, paystubDoc, addFact, removeFact, accountIdByMask, figureRow, plannerFigures,
   factRow, recRow, plannerRec, activeRecIds, recEvents, parseJson, PACKS_DIR, SCORP, SOLE_PROP, SYNTH, MASKS,
@@ -414,16 +415,38 @@ describe('figures', () => {
     assert.equal(src('wargame-model').label, 'War-game model: salary, tax and cash calculators');
   });
 
-  test('AC3: partially funded retirement room subtracts projected deferrals and employer contributions (R5, S6)', async () => {
+  // Plan R6-1 item 2.7: ingest's paystub carries this period's deferral only (R6-0), never a
+  // year-to-date total, so a paystub-only payroll group with a deferral blocks the dependent room
+  // with paystub_deferrals_unknown and a visible reason. It is never extrapolated from one period.
+  test('AC3: paystub-only deferrals block retirement room with a visible reason (R6-1 item 2.7)', async () => {
     const db = await S.store({
       variant: {
         pnlExtra: [{ entity: SCORP.name, category: 'Retirement contribution', monthly: 500 }],
-        // Ingest's paystub carries this period's deferral only (plan R6-0); 1,000 a period.
         payroll: [paystubDoc({ employerName: SCORP.name, person: 'owner', payDate: '2026-10-31', periodStart: '2026-10-01', periodEnd: '2026-10-31', gross: 4000, ytdGross: 40000, retirementDeferral: 1000, hsaDeferral: 0 })],
       },
     });
     await plan(db);
-    const deferrals = r2(10000 * 12 / 10);
+    for (const k of ['room.solo401k', 'room.solo401k.employee', 'room.solo401k.employer']) assert.equal(figureRow(db, k), null, `${k} is not published`);
+    assert.ok(activeRecIds(db).includes('missing-data'), 'missing-data lists the reason');
+    const reason = reasonText({ info: { payrollBlocks: [{ code: 'paystub_deferrals_unknown', employer: SCORP.name }] }, entities: [] }, 'paystub_deferrals_unknown');
+    assert.notEqual(reason, reasonText({ info: {}, entities: [] }, 'not_a_reason_code'), 'paystub_deferrals_unknown has its own reason text');
+    assert.ok(JSON.stringify(recRow(db, 'missing-data').def).includes(reason), `missing-data shows: ${reason}`);
+  });
+
+  // Liveness: a year-end W-2 from the S corp whose box 12 D carries the year's deferrals supplies
+  // the amount. Box 12 D 12,000 (the same 12,000 the old fixture projected: 10,000 over ten months
+  // * 12 / 10) is the owner's whole 402(g) total and this plan's deferrals (IRC 402(g)(3); Form W-2
+  // instructions, code D). Employer contributions are the P&L line, 500 a month for ten months =
+  // 5,000. Compensation is the projected officer salary W. Room = solo401kRoom on those inputs.
+  test('AC3: partially funded retirement room subtracts W-2 deferrals and employer contributions (R5, S6)', async () => {
+    const deferrals = 12000;
+    const db = await S.store({
+      variant: {
+        pnlExtra: [{ entity: SCORP.name, category: 'Retirement contribution', monthly: 500 }],
+        payroll: [w2Doc({ employerName: SCORP.name, person: 'owner', wages: r2(W - deferrals), box12: [{ code: 'D', amount: deferrals }] })],
+      },
+    });
+    await plan(db);
     const solo = solo401kRoom({ compensation: W, kind: 'w2', age: 45, allPlanDeferrals: deferrals, thisPlanDeferrals: deferrals, thisPlanCatchUp: 0, employerContributions: 5000, ...OPTS }).value;
     near(fig(db, 'room.solo401k.employee').v, solo.employee, 'employee room after deferrals');
     near(fig(db, 'room.solo401k.employer').v, solo.employer, 'employer room after contributions');

@@ -228,6 +228,22 @@ export async function addPayroll(db, entry) {
   return out;
 }
 
+// The owner's notes file through ingest's notes path: the notes parser stores the note, and a
+// scripted engine plays extract-notes, returning `extraction` ({facts: [{key, value, confidence}],
+// goals: []}) in ingest's notes extraction shape (the test/ingest/confirm.test.mjs pattern). Ingest
+// records each fact under src ing:notes:<scope>. Bytes are unique per store and call.
+export async function addNotes(db, extraction) {
+  const c = ctxOf(db);
+  c.seq += 1;
+  const file = {
+    name: `household-notes-${c.seq}.md`, mime: 'text/markdown',
+    bytes: new TextEncoder().encode(`# Household notes\n\nSynthetic owner note number ${c.seq} for a test household.\n`),
+  };
+  const out = await ingestFile(db, file, { engine: engineOf('fake', [[{ goals: [], ...extraction }]]), config: c.config, key: c.key, now: stampOf(db) });
+  if (out.status !== 'imported') throw new Error(`synthetic notes were not imported (${out.status})`);
+  return out;
+}
+
 // Payroll entries in ingest's extraction shape. `person` becomes the employer_recipient answer and
 // `relation` the employer_relation answer (leave it out for an employer that is a P&L entity, which
 // ingest does not ask about). federalWithheld defaults to 0: ingest stores a federal withholding

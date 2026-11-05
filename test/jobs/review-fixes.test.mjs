@@ -88,19 +88,31 @@ describe('review fixes', () => {
       { name: 'Alder Partners', type: 'partnership', owner: 'owner', income: 0, expenses: {} },
       { name: 'Birch Partners', type: 'partnership', owner: 'owner', income: 0, expenses: {} },
     ];
-    // K-1s carry no partnership name in ingest's extraction shape (plan R6-0).
-    const k1 = () => ({ docType: 'k1', fields: { taxYear: 2026, entityKind: 'partnership', ordinaryIncome: 30000, guaranteedPayments: 10000, selfEmploymentEarnings: 40000 } });
-    const db = await S.store({ variant: { entities: [SCORP, SOLE_PROP, ...partners], payroll: [k1()] } });
+    // K-1s carry no partnership name in ingest's extraction shape (plan R6-0). Two genuinely
+    // different synthetic K-1s, so ingest stores two documents (identical ones dedupe into one).
+    const alderK1 = { docType: 'k1', fields: { taxYear: 2026, entityKind: 'partnership', ordinaryIncome: 30000, guaranteedPayments: 10000, selfEmploymentEarnings: 40000, distributions: 5000 } };
+    const birchK1 = { docType: 'k1', fields: { taxYear: 2026, entityKind: 'partnership', ordinaryIncome: 12000, guaranteedPayments: 0, selfEmploymentEarnings: 12000, distributions: 2000 } };
+    const k1Docs = db => db.prepare("SELECT count(*) AS n FROM documents WHERE doc_type = 'k1'").get().n;
+    const db = await S.store({ variant: { entities: [SCORP, SOLE_PROP, ...partners], payroll: [alderK1] } });
     const result = await plan(db);
     assert.equal(figureRow(db, 'agi.est'), null, 'agi.est not produced');
     assert.equal(figureRow(db, 'tax.fed.proj'), null, 'tax.fed.proj not produced');
     assert.ok(activeRecIds(db).includes('missing-data'));
     const md = JSON.stringify(recRow(db, 'missing-data').def);
     assert.ok(result.warnings.includes('partnership_incomplete') || /K-1|partnership/i.test(md), 'missing-data names the incomplete partnership');
-    // liveness: with a complete K-1 for each partnership the figures are produced
-    const both = await S.store({ variant: { entities: [SCORP, SOLE_PROP, ...partners], payroll: [k1(), k1()] } });
+    // Two different K-1s for the two partnerships: both documents are stored, but a K-1 names no
+    // partnership, so which statement belongs to which partnership is unknown. Plan R6-1 item 4.2:
+    // any count other than one K-1 and one classified partnership blocks k1_unmatched, never a guess.
+    const both = await S.store({ variant: { entities: [SCORP, SOLE_PROP, ...partners], payroll: [alderK1, birchK1] } });
     await plan(both);
-    assert.ok(figureRow(both, 'agi.est'), 'agi.est with both K-1s');
+    assert.equal(k1Docs(both), 2, 'ingest stores both K-1s');
+    assert.equal(figureRow(both, 'agi.est'), null, 'two unnamed K-1s for two partnerships stay blocked');
+    assert.ok(activeRecIds(both).includes('missing-data'));
+    // liveness: one partnership with its one complete K-1 produces the figures
+    const one = await S.store({ variant: { entities: [SCORP, SOLE_PROP, partners[0]], payroll: [alderK1] } });
+    await plan(one);
+    assert.equal(k1Docs(one), 1);
+    assert.ok(figureRow(one, 'agi.est'), 'agi.est with the matching K-1');
   });
 
   test('AC3: W-2 wages from a classified S corp with no P&L count in agi.est (F3)', async () => {
