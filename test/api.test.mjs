@@ -3,14 +3,15 @@
 
 import test, { describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import http from 'node:http';
+import { readFileSync, writeFileSync, symlinkSync, mkdirSync, cpSync } from 'node:fs';
 import { join } from 'node:path';
 import demo from '../demo/scenario.mjs';
 import { needsYou, verdictLevel } from '../src/shared/rules.mjs';
 import { setSetting } from '../src/store/db.mjs';
 import {
   ROOT, SERVER_TIMEOUT, spawnServer, withServer, expectServerExit, request, postJson, getScenario,
-  tempDb, tempDir, openStore, dumpStore, runCommand, recOf, paragraphs,
+  tempDb, tempDir, openStore, dumpStore, runCommand, recOf, paragraphs, src,
 } from './helpers/server.mjs';
 
 const T = { timeout: SERVER_TIMEOUT };
@@ -559,5 +560,70 @@ describe('HTTP guards', () => {
     const fallback = await request(s.baseUrl, { path: '/plan' });
     assert.equal(fallback.status, 200);
     assert.match(fallback.text, /<div id="app"/);
+  });
+});
+
+describe('static symlinks', () => {
+  // createHandler takes a webDir option, so serve a temp copy of web/ in-process.
+  let srv, base, td, secretText, indexText;
+  before(async () => {
+    td = await tempDb();
+    const root = await tempDir();
+    const webDir = join(root, 'web');
+    cpSync(join(ROOT, 'web'), webDir, { recursive: true });
+    secretText = 'TOP-SECRET-OUTSIDE-ROOT';
+    const outside = join(root, 'outside.txt');
+    writeFileSync(outside, secretText);
+    symlinkSync(outside, join(webDir, 'leak.txt'));
+    symlinkSync(join(webDir, 'index.html'), join(webDir, 'alias.html'));
+    indexText = readFileSync(join(webDir, 'index.html'), 'utf8');
+    const { createHandler } = await src('src/api/router.mjs');
+    const { loadConfig } = await src('src/config.mjs');
+    const { createCannedAnswerer } = await src('src/api/answerer.mjs');
+    const config = loadConfig({ FATHOM_DATA: td.dataDir });
+    srv = http.createServer(createHandler({ db: td.db, config, answerer: createCannedAnswerer(), webDir }));
+    await new Promise(r => srv.listen(0, '127.0.0.1', r));
+    base = `http://127.0.0.1:${srv.address().port}`;
+  }, T);
+  after(async () => {
+    if (srv) { srv.closeAllConnections(); await new Promise(r => srv.close(r)); }
+    if (td) td.close();
+  });
+
+  test('a symlink to a file outside the root is a 404 and leaks nothing', async () => {
+    const r = await request(base, { path: '/leak.txt' });
+    assert.equal(r.status, 404);
+    assert.ok(!r.text.includes(secretText));
+  });
+
+  test('a symlink to a file inside the root may be served', async () => {
+    const r = await request(base, { path: '/alias.html' });
+    assert.equal(r.status, 200);
+    assert.equal(r.text, indexText);
+  });
+});
+
+describe('streamed body overflow', () => {
+  let s;
+  before(async () => { s = await spawnServer(); }, T);
+  after(async () => { if (s) await s.stop(); });
+
+  test('a chunked POST over 64 KiB without Content-Length is 413 and the server keeps serving', async () => {
+    const status = await new Promise((resolve, reject) => {
+      const req = http.request({
+        host: '127.0.0.1', port: s.port, method: 'POST', path: '/api/ask',
+        headers: { 'content-type': 'application/json', 'transfer-encoding': 'chunked' },
+      }, res => { res.resume(); res.on('end', () => resolve(res.statusCode)); });
+      let answered = false;
+      req.on('response', () => { answered = true; });
+      req.on('error', e => { if (!answered) reject(e); });
+      const chunk = Buffer.alloc(16 * 1024, 'a');
+      req.write('{"text":"');
+      for (let i = 0; i < 8; i++) req.write(chunk);
+      req.end('"}');
+    });
+    assert.equal(status, 413);
+    const h = await request(s.baseUrl, { path: '/healthz' });
+    assert.equal(h.status, 200);
   });
 });

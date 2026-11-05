@@ -295,3 +295,52 @@ describe('set_recommendation_status', () => {
     }
   });
 });
+
+describe('input schema strictness', () => {
+  function walk(schema, path, problems) {
+    if (schema === null || typeof schema !== 'object' || Array.isArray(schema)) {
+      problems.push(`${path}: schema is not an object`);
+      return;
+    }
+    if (Array.isArray(schema.type)) problems.push(`${path}: type is an array (union types are refused)`);
+    if (schema.properties !== undefined && schema.type !== 'object') problems.push(`${path}: has properties but type is not 'object'`);
+    if (Array.isArray(schema.required)) {
+      const props = schema.properties || {};
+      for (const name of schema.required) {
+        if (!Object.hasOwn(props, name)) problems.push(`${path}: required '${name}' is not in properties`);
+      }
+    }
+    if (schema.properties) {
+      for (const [k, v] of Object.entries(schema.properties)) walk(v, `${path}.properties.${k}`, problems);
+    }
+    if (schema.items !== undefined) walk(schema.items, `${path}.items`, problems);
+    for (const key of ['anyOf', 'oneOf', 'allOf']) {
+      if (Array.isArray(schema[key])) schema[key].forEach((s, i) => walk(s, `${path}.${key}[${i}]`, problems));
+    }
+    if (schema.additionalProperties && typeof schema.additionalProperties === 'object') {
+      walk(schema.additionalProperties, `${path}.additionalProperties`, problems);
+    }
+  }
+
+  test('every tool name is valid and unique, and every inputSchema is strict-compiler compatible', () => {
+    const names = tools.map(x => x.name);
+    assert.equal(new Set(names).size, names.length, 'names are unique');
+    const problems = [];
+    for (const x of tools) {
+      if (!/^[a-zA-Z0-9_-]{1,64}$/.test(x.name)) problems.push(`${x.name}: invalid tool name`);
+      walk(x.inputSchema, x.name, problems);
+    }
+    assert.deepEqual(problems, []);
+  });
+
+  test('list_recommendations accepts a single status string and an array of statuses', async () => {
+    const all = await call('list_recommendations', {});
+    assert.ok(all.length > 0);
+    const status = all[0].status;
+    const one = await call('list_recommendations', { status });
+    const many = await call('list_recommendations', { status: [status] });
+    assert.ok(one.length > 0);
+    assert.ok(one.every(r => r.status === status));
+    assert.deepEqual(many.map(r => r.id), one.map(r => r.id));
+  });
+});
