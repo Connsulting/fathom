@@ -34,4 +34,7 @@ test('compound numeric words are checked as an amount and Unicode minus retains 
   assert.equal(checkGrounding('thirty', { data: [30] }).ok, true);
   assert.equal(checkGrounding('\u221225', { data: [25] }).ok, false);
   assert.equal(checkGrounding('\u221225', { data: [-25] }).ok, true);
+  assert.equal(checkGrounding('.5', { data: [5] }).ok, false);
+  assert.equal(checkGrounding('.5', { data: [0.5] }).ok, true);
+  assert.equal(checkGrounding('1e3', { data: [1000] }).ok, true);
 });

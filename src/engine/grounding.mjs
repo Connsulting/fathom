@@ -3,7 +3,7 @@ const words = new Map(['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'se
 for (const [word, value] of Object.entries({ thirty: 30, forty: 40, fifty: 50, sixty: 60, seventy: 70, eighty: 80, ninety: 90 })) words.set(word, value);
 const scales = new Map([['thousand', 1000], ['million', 1e6], ['billion', 1e9]]);
 const wordPattern = [...words.keys(), 'hundred', ...scales.keys()].join('|');
-const numberPattern = /(?:-\s*\$|\$\s*-?|[-+])?\d(?:[\d,]*\d)?(?:\.\d+)?\s*(?:[kKmM]\b|%)?/g;
+const numberPattern = /(?:-\s*\$|\$\s*-?|[-+])?(?:\d(?:[\d,]*\d)?(?:\.\d+)?|\.\d+)(?:[eE][-+]?\d+)?\s*(?:[kKmM]\b|%)?/g;
 
 function normalize(text) { return text.replaceAll(',', '').replaceAll('$', '').replace(/\s/g, '').toLowerCase(); }
 
