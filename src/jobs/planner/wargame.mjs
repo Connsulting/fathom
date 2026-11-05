@@ -54,9 +54,15 @@ function salaryGame(data, out, ctx) {
   const missing = [...(valid ? [] : ['business.salaryRange']), ...retireMissing, ...(ageOf(corp.person) == null ? [ageKey(corp.person)] : []),
     ...(c.outsideKnown ? [] : ['retirement.otherPlanDeferrals'])];
   if (missing.length) { out.info.confirm.salary = missing; return invalid(missing[0]); }
+  // E7: each point carries three bases. The axis is cash salary (Medicare wages: payroll tax and
+  // Additional Medicare); plan compensation adds this year's non-FICA compensation (box 1 plus
+  // elective deferrals less box 5, nothing for a P&L salary); taxable wages are that less the pretax
+  // deferrals. Unknown compensation (box 12 unread) leaves every point unknown.
+  if (corp.comp == null) return invalid('w2_plan_compensation_unknown');
+  const nonFica = corp.fromPnl ? 0 : Math.max(0, cents(corp.comp - corp.gross));
   const lo = Math.min(range.min, range.max);
   const hi = Math.max(range.min, range.max);
-  const current = corp.comp;
+  const current = corp.gross;
   const inRange = current > 0 && current >= lo && current <= hi;
   const outside = inRange ? 'in' : current > 0 ? 'out' : 'none';
   // Grid points rounded to the thousand, then clamped into the approved range (G3).
@@ -82,16 +88,18 @@ function salaryGame(data, out, ctx) {
     const pay = payrollTax({ wages: s, filingStatus: f, spouseMedicareWages: otherMedicare });
     const K = cents(P - s - pay.value.employerTotal);
     if (K < 0) return null;
+    const comp = cents(s + nonFica);
+    const agi = Math.max(0, cents(comp - (corp.pretax || 0)));
     const w2 = parts.w2.some(w => w.src === `corp:${slug}`)
-      ? parts.w2.map(w => (w.src === `corp:${slug}` ? { ...w, gross: s, comp: s, agi: Math.max(0, cents(s - (corp.pretax || 0))) } : w))
-      : [...parts.w2, { person: corp.person, src: `corp:${slug}`, gross: s, comp: s, agi: s }];
-    const biz = parts.biz.map(b => (b.id === slug && b.kind === 'scorp' ? { ...b, agi: K, qbi: K, w2Wages: s } : b));
+      ? parts.w2.map(w => (w.src === `corp:${slug}` ? { ...w, gross: s, comp, agi } : w))
+      : [...parts.w2, { person: corp.person, src: `corp:${slug}`, gross: s, comp, agi }];
+    const biz = parts.biz.map(b => (b.id === slug && b.kind === 'scorp' ? { ...b, agi: K, qbi: K, w2Wages: comp } : b));
     const hh = householdTax({ ...parts, w2, biz });
     if (hh.blocked) return { s, blocked: hh.blocked };
     const payrollNet = cents(pay.value.total - pay.value.additionalMedicare);
     const total = cents(hh.fedTotal + (hh.va ?? 0) + payrollNet);
     const room = solo401kRoom({
-      compensation: s, kind: 'w2', age, ...planInputs(c, plan), planConfirmed: true, aggregationConfirmed: true,
+      compensation: comp, kind: 'w2', age, ...planInputs(c, plan), planConfirmed: true, aggregationConfirmed: true,
       ...(priorWages != null ? { priorYearSponsorWages: priorWages } : {}), ...(catchOff ? { catchUpAllowed: false } : {}),
     });
     const roth = affected && !catchOff ? room.value.catchUp : 0;

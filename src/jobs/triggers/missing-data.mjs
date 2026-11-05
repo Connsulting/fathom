@@ -19,7 +19,7 @@ const TAX_CODES = new Set([
   'va529_answers_missing',
   // Ingest contract (plan Revision 6).
   'w2_recipient_unknown', 'payroll_recipient_conflict', 'household_employer_unmatched', 'employer_relation_pending', 'w2_box12_unreadable',
-  'w2_wages_missing', 'w2_medicare_wages_missing', 'deferral_split_unknown', 'paystub_ytd_missing', 'paystub_deferrals_unknown', 'k1_unmatched', 'k1_scorp_unmatched',
+  'w2_wages_missing', 'w2_medicare_wages_missing', 'w2_plan_compensation_unknown', 'deferral_split_unknown', 'paystub_ytd_missing', 'paystub_deferrals_unknown', 'k1_unmatched', 'k1_scorp_unmatched',
   'w2_correction_pending', 'w2_correction_conflicting', 'w2_duplicate_unresolved', 'tax_payment_kind_unknown', 'withholding_state_unknown',
   'withholding_recipient_unknown', 'withholding_conflict_pending', 'tax_year_unconfirmed', 'estimated_payer_unknown',
 ]);
@@ -60,6 +60,7 @@ const REASONS = Object.freeze({
   wargame_contribution_over_limit: ['At one of the incomes this comparison models, this year or next, a retirement contribution would be above what the plan rules allow, so this comparison is not a current choice.', 'Check your retirement contribution amounts with your plan provider or accountant'],
   wargame_salary_contribution_over_limit: ['At one of the salaries in the approved range, a retirement contribution would be above what the plan rules allow for that salary, so this comparison is not a current choice.', 'Check your retirement contribution amounts with your plan provider or accountant'],
   inputs_changed: ['Its inputs changed, so it is kept for reference and is not a current choice.', 'Review the latest data on your plan'],
+  w2_plan_compensation_unknown: ['Retirement deferrals on a W-2 from your own business could not be read, so plan compensation is unknown and the figures that depend on it are on hold.', 'Upload a W-2 copy that shows box twelve'],
   k1_unmatched: ['Partnership statements do not name their partnership, and the statements on file do not match your partnerships one to one, so tax projections are on hold.', 'Upload one partnership statement for each partnership, or check your household businesses'],
   k1_scorp_unmatched: ['An S corporation shareholder statement is on file, but no S corporation with a profit and loss is, so tax projections are on hold.', 'Upload the S corporation profit and loss, or add it to your household businesses'],
   tax_payment_kind_unknown: ['A tax payment row does not say whether it is withholding or an estimated payment, so payments are on hold.', 'Check the tax payment log for an unlabeled row'],
@@ -123,7 +124,7 @@ export function items(ctx) {
   if (ctx.warnings.includes('filing_status_assumed')) {
     out.push({ code: 'filing_status_assumed', tax: true, text: 'Your filing status is not set, so we assumed single.', task: 'Tell us your filing status' });
   }
-  const reasons = [...(ctx.info.blocked || []), ...(ctx.info.paymentsBlocked || []), ...(ctx.blockedReasons || []).map(b => b.reason)];
+  const reasons = [...(ctx.info.blocked || []), ...(ctx.info.heldReasons || []), ...(ctx.blockedReasons || []).map(b => b.reason)];
   for (const r of reasons) out.push(reasonItem(ctx, r));
   const seen = new Set();
   return out.filter(i => (seen.has(i.code) ? false : (seen.add(i.code), true)));

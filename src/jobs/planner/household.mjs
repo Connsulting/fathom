@@ -112,6 +112,7 @@ export function householdTax(parts) {
 
   const q = qbiComponent({ ...parts, biz }, { pre, dhByBiz });
   steps.push(...q.steps);
+  if (q.blocked) return { blocked: q.blocked, steps, warnings };
   if (q.carryforward > 0) warnings.push('qbi_loss_carryforward');
   const qbi = q.qbi;
   const taxable = cents(Math.max(0, pre - qbi));
@@ -171,8 +172,11 @@ function qbiComponent(parts, { pre, dhByBiz }) {
     const e = cents(q * applicable) || 0;
     steps.push({ label: `QBI (${b.id}): applicable percentage`, formula: b.sstb ? 'specified service business: one - phase-in share' : 'not a specified service business: all of it', value: cents(applicable * 100) });
     steps.push({ label: `QBI (${b.id}): qualified amount`, formula: '(business income - deductible half of SE tax - SE retirement deduction) * applicable percentage', value: e });
-    return { b, e, wages: cents((b.w2Wages || 0) * applicable) };
+    // E6: below the threshold the W-2 wage limit does not apply, so unknown wages do not matter;
+    // above it, a business whose W-2 wages are unknown (null) blocks the deduction.
+    return { b, e, wages: b.w2Wages == null ? null : cents(b.w2Wages * applicable) };
   });
+  if (phase > 0 && items.some(i => i.e > 0 && i.wages == null)) return { blocked: 'w2_plan_compensation_unknown', steps };
   const carry = Math.max(0, num(parts.qbiLossCarryforward));
   const pos = items.filter(i => i.e > 0);
   const posSum = cents(sum(pos.map(i => i.e)));
@@ -189,7 +193,7 @@ function qbiComponent(parts, { pre, dhByBiz }) {
     pos.forEach((i, idx) => {
       const share = idx === pos.length - 1 ? cents(total - used) : cents(i.e + negSum * i.e / posSum);
       used = cents(used + share);
-      const env = qbiDeduction({ qbi: share, taxableIncome: pre, filingStatus: f, w2Wages: i.wages, isSstb: false, activeBusiness: false });
+      const env = qbiDeduction({ qbi: share, taxableIncome: pre, filingStatus: f, w2Wages: i.wages ?? 0, isSstb: false, activeBusiness: false });
       qbiSum = cents(qbiSum + env.value);
       steps.push({ label: `QBI (${i.b.id}): after netting losses`, formula: 'qualified amount + share of negative QBI in proportion to positive QBI', value: share });
       steps.push(...stepsOf(`QBI (${i.b.id})`, env));
@@ -287,7 +291,9 @@ function retirementPlans(parts, dhByBiz) {
         continue;
       }
       // Plan compensation (IRC 415(c)(3)), never Medicare wages (E5).
-      const wages = cents(sum(parts.w2.filter(w => w.person === p && (w.src === `corp:${slug}` || w.src === `corp:${slug}:${p}`)).map(w => w.comp)));
+      const corpParts = parts.w2.filter(w => w.person === p && (w.src === `corp:${slug}` || w.src === `corp:${slug}:${p}`));
+      if (corpParts.some(w => w.comp == null)) return { blocked: 'w2_plan_compensation_unknown', steps };
+      const wages = cents(sum(corpParts.map(w => w.comp)));
       const lim = employerLimit({ kind: 'w2', compensation: wages, regular: D, catchUp: K });
       steps.push(...lim.steps.map(st => ({ ...st, label: `Employer plan (${slug}): ${st.label}`, formula: `${st.formula}, on this run's wages` })));
       const ok = le(E, lim.limit) && le(D + K, wages)

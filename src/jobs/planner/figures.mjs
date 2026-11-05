@@ -234,11 +234,11 @@ export function computeFigures(data, facts, ctx) {
   // Tax payments (R6-2): estimates and withholding each counted once, by kind and jurisdiction.
   const pay = classifyPayments(data, { persons, f, isVa });
   for (const w of pay.warnings) out.warn(w);
-  out.info.paymentsBlocked = [];
+  out.info.heldReasons = [];
   const holdPayment = (part, keys) => {
     if (!part.blocked) return false;
     out.withhold(keys, part.blocked);
-    if (!out.info.paymentsBlocked.includes(part.blocked)) out.info.paymentsBlocked.push(part.blocked);
+    if (!out.info.heldReasons.includes(part.blocked)) out.info.heldReasons.push(part.blocked);
     return true;
   };
   if (pay.lastPaidDate) out.source('tax-payments', SOURCES['tax-payments'].label, `through ${monthLabel(pay.lastPaidDate.slice(0, 7))}`, SOURCES['tax-payments'].kind);
@@ -306,6 +306,7 @@ export function computeFigures(data, facts, ctx) {
     const K = c.proj(c.sums.net);
     biz.push({ id: c.entity.slug, kind: 'scorp', person: c.person, agi: K, qbi: K, seInput: null, w2Wages: comp, sstb: sstbOf(c.entity) });
     c.comp = comp;
+    c.gross = gross;
     c.pretax = pretax;
   }
   // Payroll records per (person, employer) (F3, G1): the corp owner's wages from a household S corp
@@ -379,6 +380,20 @@ export function computeFigures(data, facts, ctx) {
   ];
   const attributed = attributeContributions(owner, businesses);
   if (attributed.unattributed.some(c => inUnit(c.person))) { blocked.push('retirement_contribution_unattributed'); out.warn('retirement_contribution_unattributed'); }
+  // E6: an own-corp W-2 whose box 12 was not read has unknown compensation, unless the owner states
+  // that sponsor's deferrals (K4: a document that carries none leaves the type to the owner's
+  // answer); then compensation is box 1 plus the stated non-Roth deferrals.
+  for (const r of records) {
+    if (!r.household || !r.corp || r.comp != null || !inUnit(r.person)) continue;
+    const stated = attributed.entries.filter(c => c.person === r.person && c.plan === 'own-corp-401k' && c.sponsor.kind === 'scorp'
+      && c.sponsor.slug === r.corp && (c.type === 'deferral' || c.type === 'catchup'));
+    if (!stated.length) continue;
+    r.comp = cents(r.wages + sum(stated.filter(c => c.roth !== true).map(c => Number(c.amount))));
+    r.deferralKnown = true;
+    for (const w of w2) if (w.comp == null && w.person === r.person && (w.src === `corp:${r.corp}` || w.src === `corp:${r.corp}:${r.person}`)) w.comp = r.comp;
+    for (const c of corps) if (c.entity.slug === r.corp && c.person === r.person && c.comp == null) c.comp = r.comp;
+    for (const b of biz) if (b.kind === 'scorp' && b.id === r.corp && b.w2Wages == null) b.w2Wages = r.comp;
+  }
   for (const c of corps) {
     if (!c.w2 || !c.fromPnl) continue;
     const pretax = Math.min(c.comp, cents(c.pretax + factPretax(attributed, { records, corps }, c.person, c.entity.slug)));
@@ -458,7 +473,7 @@ export function computeFigures(data, facts, ctx) {
   // proprietorship without earnings or a partnership name the sponsor for deadlines.
   const soleByPerson = p => sum(biz.filter(b => b.kind === 'sole' && b.person === p).map(b => b.seInput));
   const soleBizOf = p => biz.filter(b => b.kind === 'sole' && b.person === p);
-  const corpInUnit = corps.find(c => inUnit(c.person) && c.comp > 0) || null;
+  const corpInUnit = corps.find(c => inUnit(c.person) && c.w2) || null;
   const solePerson = corpInUnit ? null : persons.find(p => soleByPerson(p) > 0) || null;
   const soleSized = solePerson ? soleBizOf(solePerson).find(b => b.seInput > 0) : null;
   const zeroCorp = corps.find(c => inUnit(c.person)) || null;
@@ -486,7 +501,8 @@ export function computeFigures(data, facts, ctx) {
       } else hh = run;
     }
   }
-  const retireBlocked = !!run && RETIREMENT_BLOCKS.has(run.blocked);
+  // A run blocked before its retirement deduction exists leaves nothing to size from.
+  const retireBlocked = !!run && (RETIREMENT_BLOCKS.has(run.blocked) || run.blocked === 'w2_plan_compensation_unknown');
   if (hh) writeTax(data, out, { hh, parts, owner, f, isVa, pay, section125 });
   out.info.taxComputed = !!hh;
 
@@ -496,8 +512,17 @@ export function computeFigures(data, facts, ctx) {
   const zeroPlan = { deferral: 0, catchUp: 0, roth: 0, employer: 0, sep: 0 };
   const planSum = list => list.reduce((acc, b) => Object.fromEntries(Object.keys(zeroPlan).map(k => [k, cents(acc[k] + (b ? b[k] : 0))])), zeroPlan);
   const sizing = hasIncome && !blocked.length && !!seInfo && !retireBlocked;
-  // E5: an S corp plan sized from its W-2 says so.
+  // E5: an S corp plan sized from its W-2 says so. E6: a person whose household plan deferrals
+  // (box 12) were not read has unknown plan compensation and plan aggregates; nothing is sized for
+  // them, with a visible reason.
   const compCodes = corpInUnit && !corpInUnit.fromPnl ? ['w2_plan_compensation'] : [];
+  const COMP_UNKNOWN = 'w2_plan_compensation_unknown';
+  const compUnknown = p => records.some(r => r.person === p && r.household && !r.deferralKnown)
+    || corps.some(c => c.person === p && c.w2 && c.comp == null);
+  const holdComp = keys => {
+    out.withhold(keys, COMP_UNKNOWN);
+    if (!out.info.heldReasons.includes(COMP_UNKNOWN)) out.info.heldReasons.push(COMP_UNKNOWN);
+  };
   if (sizing) {
     const soloPerson = corpInUnit ? corpInUnit.person : solePerson;
     if (soloPerson) {
@@ -506,6 +531,8 @@ export function computeFigures(data, facts, ctx) {
       if (missing.length) {
         out.confirm('retirement', ...missing);
         out.withhold(SOLO_KEYS, missing[0]);
+      } else if (compUnknown(soloPerson)) {
+        holdComp(SOLO_KEYS);
       } else {
         const plan = corpInUnit ? planSum([c.byPlan[corpInUnit.entity.slug]]) : planSum(soleBizOf(soloPerson).map(b => c.byPlan[b.id]));
         // Self-employed compensation: net profit less the deductible half of SE tax, before plan
@@ -522,11 +549,14 @@ export function computeFigures(data, facts, ctx) {
       const wagesOf = p => sum(w2.filter(w => w.person === p).map(w => w.gross));
       // C1b, K1: SEP room shares the employer limit with every plan of the same businesses, so it
       // takes their whole aggregate: deferrals, catch-ups and employer contributions.
-      const seps = persons.filter(p => soleByPerson(p) > 0).map(p => out.safe('sepRoom', () => sepRoom({
+      const sepPersons = persons.filter(p => soleByPerson(p) > 0);
+      const sepHeld = sepPersons.some(compUnknown) || (!sepPersons.length && corpInUnit && compUnknown(corpInUnit.person));
+      const seps = sepHeld ? [] : sepPersons.map(p => out.safe('sepRoom', () => sepRoom({
         kind: 'self-employed', netProfit: soleByPerson(p), filingStatus: f, w2SocialSecurityWages: wagesOf(p), w2MedicareWages: wagesOf(p),
         ...planInputs(contrib[p], planSum(soleBizOf(p).map(b => contrib[p].byPlan[b.id]))), ...conf,
       }))).filter(Boolean);
-      if (!seps.length && corpInUnit) {
+      if (sepHeld) holdComp(['room.sep']);
+      else if (!seps.length && corpInUnit) {
         const c = contrib[corpInUnit.person];
         const env = out.safe('sepRoom', () => sepRoom({
           kind: 'w2', compensation: corpInUnit.comp, ...planInputs(c, c.byPlan[corpInUnit.entity.slug]), ...conf,

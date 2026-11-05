@@ -1113,7 +1113,12 @@ employer key and year with three separate bases: box 1 is taxable wages, box 5 i
 (Additional Medicare Tax and FICA or SE inputs only; unread, it blocks `w2_medicare_wages_missing`)
 and box 1 plus the box 12 pretax codes is plan compensation (IRC 415(c)(3), noted
 `w2_plan_compensation`). An own S corp W-2 for the year replaces the officer salary projection for
-all three. Box 12 D, E, F, G and S are pre-tax, D, E, F, S, AA and BB
+all three. Box 12 unread leaves compensation unknown unless the owner states that sponsor's
+deferrals: plan limits, solo and SEP room, the salary war game and, above the 199A threshold, the
+corp's QBI W-2 wages (so QBI and federal tax) block with `w2_plan_compensation_unknown`. Each salary
+war game point takes payroll tax on its cash salary, plan compensation as that salary plus this
+year's non-FICA compensation (box 1 plus deferrals less box 5), and taxable wages as that less the
+pretax deferrals; the current point is the cash salary. Box 12 D, E, F, G and S are pre-tax, D, E, F, S, AA and BB
 count toward 402(g) (G and EE do not), W is HSA money, and a W-2 without box 12 leaves deferrals
 unknown. Deferrals above the 402(g) limit are catch-ups; across a household plan and another plan
 they block `deferral_split_unknown` until `retirement.otherPlanDeferrals` is answered. A paystub-only

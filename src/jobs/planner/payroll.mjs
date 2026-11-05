@@ -185,7 +185,8 @@ export function payrollRecords(data, entities, owner = {}) {
       // deferrals box 1 leaves out (IRC 415(c)(3), Pub 560).
       r = {
         kind: 'w2', docIds: w2s.map(d => d.id), fileId: w2s[0].fileId, wages, ytdWages: wages, pretax: total('pretax'),
-        medicare: cents(sum(parts.map(p => p.d.fields.medicareWages))), comp: cents(wages + total('pretax')),
+        // E6: box 12 unread leaves the deferrals, and so the compensation, unknown (null), never zero.
+        medicare: cents(sum(parts.map(p => p.d.fields.medicareWages))), comp: parts.some(p => p.box.unread) ? null : cents(wages + total('pretax')),
         elective402g: total('elective402g'), deferral457: total('deferral457'), roth: total('roth'), hsa: total('hsa'),
         deferralKnown: !parts.some(p => p.box.unread), projected: false,
       };
