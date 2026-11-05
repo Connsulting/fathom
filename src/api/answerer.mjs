@@ -17,9 +17,10 @@
 // .fx-unverified. renderAnswer escapes everything except valid tokens and the spans it adds.
 // Every grounding source (the household summary, the conversation context and each tool result)
 // goes through one evidence sanitizer: identifier, label and citation keys are dropped (ids, keys,
-// names, titles, versions, curators, account masks and numbers, urls, sources, pages) and entry
-// bodies lose their citation and metadata lines, so none of them grounds a number. Tool results
-// also drop argument echoes. The model still sees everything.
+// names, titles, versions, curators, account masks and numbers, figure references, urls, sources,
+// pages), so are identifier-like string leaves (plan529) under any key, and entry bodies lose their
+// citation and metadata lines, so none of them grounds a number. Tool results also drop argument
+// echoes, but keep row values that merely equal an argument. The model still sees everything.
 //
 // Chat never writes. In 'ask' and rec conversations the model is offered one local, non-writing
 // tool, propose_recommendation_action; the last successful call becomes provenance.proposal
@@ -113,42 +114,82 @@ export const PROPOSE_TOOL = Object.freeze({
 
 // Evidence keys that identify, label or cite rather than state a value: ids and keys, names,
 // titles, labels, versions, curators, account masks, institutions and owners, ticker symbols,
-// citations, urls, files and pages. Any key ending in Id, Ids, _id, Mask or Number (accountId,
-// recId, accountMask, accountNumber) names an identifier too. A plain `number` stays a value.
-const META_KEYS = new Set(['id', 'ids', 'key', 'keys', 'ref', 'refs', 'manifest', 'slug',
+// figure references, citations, urls, files and pages. Any key ending in Id, Ids, _id, Mask or
+// Number (accountId, recId, accountMask, accountNumber) names an identifier too. A plain `number`
+// stays a value.
+const META_KEYS = new Set(['id', 'ids', 'key', 'keys', 'ref', 'refs', 'manifest', 'slug', 'fig',
   'name', 'names', 'title', 'titles', 'label', 'labels', 'covers', 'version', 'versions', 'curator', 'curators',
   'mask', 'masks', 'inst', 'institution', 'owner', 'owners', 'symbol', 'symbols',
   'url', 'urls', 'href', 'cite', 'cites', 'citation', 'citations', 'src', 'source', 'sources',
   'file', 'files', 'fileName', 'path', 'page', 'pages']);
 const isMetaKey = k => META_KEYS.has(k) || /(?:Id|Ids|_id|_ids|Mask|Masks|_mask|Number|Numbers|_number)$/.test(k);
 
+// Identifier-like text never grounds. A string leaf that is one token (plan529, rec8263,
+// acct4821x: no whitespace, letters and digits both) is dropped whole; inside prose, a word that
+// fuses letters and digits (Invest529, va529) is blanked. Words with a currency or percent sign,
+// magnitude amounts (20k) and ordinals (31st) stay, as do prose, dates and plain numbers.
+const CURRENCY_OR_PERCENT = /[%\p{Sc}]/u;
+const AMOUNT_OR_ORDINAL = /^[-+]?\d[\d,]*(?:\.\d+)?[kmb]$|^\d+(?:st|nd|rd|th)$/i;
+const isIdentifierToken = s => /^\S+$/.test(s) && /\p{L}/u.test(s) && /\d/.test(s)
+  && !CURRENCY_OR_PERCENT.test(s) && !AMOUNT_OR_ORDINAL.test(s);
+const fusedWord = w => {
+  const core = w.replace(/^[^\p{L}\d$]+|[^\p{L}\d%]+$/gu, '');
+  return /\p{L}\d|\d\p{L}/u.test(core) && !CURRENCY_OR_PERCENT.test(core) && !AMOUNT_OR_ORDINAL.test(core);
+};
+const blankFusedWords = s => s.replace(/\S+/g, w => (fusedWord(w) ? ' '.repeat(w.length) : w));
+
 // Pack entry text as grounding data: citation and metadata lines never ground a number.
 const META_LINE = /^\s*(?:sources?|tax year|reviewed)\s*:/i;
 const groundingBody = body => String(body ?? '').split(/\r?\n/).filter(line => !META_LINE.test(line)).join('\n');
 
-function argLeaves(v, out = { numbers: [], strings: [] }) {
-  if (typeof v === 'number') out.numbers.push(v);
-  else if (typeof v === 'string') out.strings.push(v.trim().toLowerCase());
-  else if (v && typeof v === 'object') for (const x of Object.values(v)) argLeaves(x, out);
-  return out;
+const norm = v => String(v).trim().toLowerCase();
+
+// The argument leaves of one tool call: each leaf by the key it sits under (array elements take
+// their parent key), every numeric leaf, and the argument strings of 3 or more characters with a
+// digit that no result string may contain.
+function argEchoes(args) {
+  const byKey = new Map();
+  const numbers = new Set();
+  const strings = [];
+  const walk = (v, key) => {
+    if (Array.isArray(v)) for (const x of v) walk(x, key);
+    else if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) walk(x, k);
+    else if (typeof v === 'number' || typeof v === 'string') {
+      if (typeof v === 'number') numbers.add(v);
+      else strings.push(norm(v));
+      if (key === undefined) return;
+      if (!byKey.has(key)) byKey.set(key, new Set());
+      byKey.get(key).add(norm(v));
+    }
+  };
+  walk(args, undefined);
+  return { byKey, numbers, contained: strings.filter(a => a.length >= 3 && /\d/.test(a)) };
 }
 
-const NO_ARGS = Object.freeze({ numbers: [], strings: [] });
+const NO_ECHOES = Object.freeze({ byKey: new Map(), numbers: new Set(), contained: [] });
 
-// Drop identifier, label and citation keys at any depth, metadata lines from `body` strings, and
-// (for a tool result) leaves equal to or containing the call's arguments.
-function scrub(v, leaves = NO_ARGS, contained = []) {
-  if (typeof v === 'number') return leaves.numbers.includes(v) ? undefined : v;
-  if (typeof v === 'string') {
-    const s = v.trim().toLowerCase();
-    return leaves.strings.includes(s) || contained.some(a => s.includes(a)) ? undefined : v;
-  }
-  if (Array.isArray(v)) return v.map(x => scrub(x, leaves, contained)).filter(x => x !== undefined);
+// An argument echo in a tool result: a leaf under the same key as an argument with an equal value,
+// a string containing an argument string, or a number equal to an argument outside every array
+// (request-level fields such as an applied filter). Numbers inside result rows are stored values
+// and stay, even when they equal an argument (an exact amount query returns its matching rows).
+function isEcho(v, key, inRows, echoes) {
+  if (key !== undefined && echoes.byKey.get(key)?.has(norm(v))) return true;
+  if (typeof v === 'number') return !inRows && echoes.numbers.has(v);
+  const s = norm(v);
+  return echoes.contained.some(a => s.includes(a));
+}
+
+// Drop identifier, label and citation keys at any depth, identifier-like string leaves and words,
+// metadata lines from `body` strings, and (for a tool result) argument echoes.
+function scrub(v, echoes = NO_ECHOES, key = undefined, inRows = false) {
+  if (typeof v === 'number') return isEcho(v, key, inRows, echoes) ? undefined : v;
+  if (typeof v === 'string') return isIdentifierToken(v.trim()) || isEcho(v, key, inRows, echoes) ? undefined : blankFusedWords(v);
+  if (Array.isArray(v)) return v.map(x => scrub(x, echoes, key, true)).filter(x => x !== undefined);
   if (v && typeof v === 'object') {
     const out = {};
     for (const [k, x] of Object.entries(v)) {
       if (isMetaKey(k)) continue;
-      const y = scrub(k === 'body' && typeof x === 'string' ? groundingBody(x) : x, leaves, contained);
+      const y = scrub(k === 'body' && typeof x === 'string' ? groundingBody(x) : x, echoes, k, inRows);
       if (y !== undefined) out[k] = y;
     }
     return out;
@@ -157,16 +198,13 @@ function scrub(v, leaves = NO_ARGS, contained = []) {
 }
 
 // Any grounding datum (household summary, conversation context, pack entry bodies) as evidence.
-const evidence = v => (typeof v === 'string' ? v : scrub(v));
+const evidence = v => scrub(v);
 
-// A tool result as grounding evidence: the evidence sanitizer plus argument echoes (leaves equal
-// to an argument leaf of the same call, strings containing an argument string of 3 or more
-// characters with a digit). Error results pass through (checkGrounding ignores them).
+// A tool result as grounding evidence: the evidence sanitizer plus argument echoes (see isEcho).
+// Error results pass through (checkGrounding ignores them).
 function groundingResult(r) {
   if (!r || typeof r !== 'object' || r.isError) return r;
-  const leaves = argLeaves(r.args);
-  const contained = leaves.strings.filter(a => a.length >= 3 && /\d/.test(a));
-  return { name: r.name, result: scrub(r.result ?? null, leaves, contained) };
+  return { name: r.name, result: scrub(r.result ?? null, argEchoes(r.args)) };
 }
 
 function tokenValid(scenario, kind, key) {

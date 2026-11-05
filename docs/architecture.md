@@ -457,9 +457,11 @@ is reachable only on the owner's private network.
    ("stored figure written as a literal"). Each grounded literal is bound to the first single source
    that grounds it (a tool by name, else the context datum).
    No number laundering: before `checkGrounding` and literal attribution, each tool result is
-   sanitized. A result leaf (string or number) equal to an argument leaf of the same call (numbers
-   compared numerically, strings after trim) is dropped, as is a string leaf containing an argument
-   string of 3 or more characters with a digit, and every key that identifies or cites (`id`, `ids`,
+   sanitized. A result leaf (string or number) under the same key name as an argument leaf of the
+   same call with an equal value (compared after trim, case-insensitive; array elements take their
+   parent key) is dropped, as is a string leaf containing an argument string of 3 or more characters
+   with a digit, a number equal to any argument that sits outside every array (a request-level
+   field such as an applied filter), and every key that identifies or cites (`id`, `ids`,
    `key`, `keys`, keys ending in `Id`, `Ids` or `_id`, `url`, `href`, `cites`, `citation`,
    `citations`, `source`, `sources`, `file`, `fileName`, `page`, `pages`). Error results stay
    ignored; tool provenance (name and args) is unchanged. Pack entry bodies, and `context.entries`
@@ -477,7 +479,16 @@ is reachable only on the owner's private network.
    the same pass. Value fields (amounts, balances, rec `value` text, `why`) still ground. So a pack
    id such as `plan4821`, a pack name, curator or version, a rec id, or a `list_accounts` mask
    never grounds a number, though the model still sees all of them. The argument-echo rule stays
-   specific to tool results.
+   specific to tool results. Numbers inside result rows are stored values and keep grounding even
+   when they equal an argument, so an exact amount query (`query_transactions` with `minAmount`
+   equal to `maxAmount`) grounds its matching `rows[].amount`. The sanitizer also drops `fig`
+   (a rec's figure reference, such as `mine[].fig`) and any string leaf, under any key, that is a
+   single identifier-like token: no whitespace, letters and digits both, no currency or percent
+   sign, not a magnitude amount (`20k`) or ordinal (`31st`), for example `plan529`, `rec8263` or
+   `acct4821x`. Inside prose strings (pack entry bodies included) a word that fuses letters and
+   digits under the same exceptions (`Invest529`, `Virginia529`) is blanked, so a program or plan
+   name never grounds its digits. Prose, dates, plain numbers and amounts such as `$1,500` still
+   ground.
 5. One corrective retry (same `system`, the first answer plus a corrective user turn). An answer
    still ungrounded is stored with each violation in `<span class="fx-unverified" title="Not found
    in your data or tool results">`. If the retry call itself fails, the answer is the matching
