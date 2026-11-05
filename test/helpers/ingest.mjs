@@ -100,6 +100,35 @@ export function coverageTaxFile(variant = 'base') {
   return { name: `coverage-tax-${variant}.xlsx`, bytes: new Uint8Array(writeXlsx(sheets)) };
 }
 
+// Partly unreadable workbooks (review finding F1). P&L: Example Studio with Software 2032-02 in
+// two rows (30 + 20) and Travel 2032-03 (50). variant: 'base' | 'unreadable' (second Software
+// amount is a formula with no cached value, Travel amount is text) | 'travelGone' (readable,
+// Travel row deleted).
+export function unreadablePnlFile(variant = 'base') {
+  const income = { name: 'Example Studio Income', rows: [['Payment Date', 'Payment Amount'], ['2032-02-10', 400]] };
+  const head = ['Date', 'Amount', 'Category'];
+  const rows = {
+    base: [head, ['2032-02-09', 30, 'Software'], ['2032-02-15', 20, 'Software'], ['2032-03-11', 50, 'Travel']],
+    unreadable: [head, ['2032-02-09', 30, 'Software'], ['2032-02-15', { formula: 'B2*2' }, 'Software'], ['2032-03-11', 'not a number', 'Travel']],
+    travelGone: [head, ['2032-02-09', 30, 'Software'], ['2032-02-15', 20, 'Software']],
+  }[variant];
+  if (!rows) throw new TypeError(`unknown variant ${variant}`);
+  return { name: `unreadable-pnl-${variant}.xlsx`, bytes: new Uint8Array(writeXlsx([income, { name: 'Example Studio Expenses', rows }])) };
+}
+
+// Tax: the coverage base layout. 'unreadable': March federal Owner Paid is a formula with no cached
+// value and February state Owner Paid is text. 'marchGone': readable, March row deleted.
+export function unreadableTaxFile(variant = 'base') {
+  const head = [[null, 'Federal', null, 'State'], ['Month', 'Owner Paid', 'Spouse Paid', 'Owner Paid', 'Spouse Paid']];
+  const months = {
+    base: [['January', 100, 50, 30, 20], ['February', 110, null, 35, null], ['March', 120, 60, null, null]],
+    unreadable: [['January', 100, 50, 30, 20], ['February', 110, null, 'n/a', null], ['March', { formula: 'B3+10' }, 60, null, null]],
+    marchGone: [['January', 100, 50, 30, 20], ['February', 110, null, 35, null]],
+  }[variant];
+  if (!months) throw new TypeError(`unknown variant ${variant}`);
+  return { name: `unreadable-tax-${variant}.xlsx`, bytes: new Uint8Array(writeXlsx([{ name: '2032', rows: [...head, ...months] }])) };
+}
+
 // Brokerage positions CSV in the frozen parser's layout, as of 2032-03-05 (from the content line).
 // rows: [{symbol, description, quantity, price, value}]
 const POS_HEADER = "Account number,Account name,Symbol,Description,Quantity,Last price,Last price change,Current value,Today's gain/loss dollar,Today's gain/loss percent,Total gain/loss dollar,Total gain/loss percent,Percent of account,Cost basis total,Average cost basis,Type";

@@ -5,7 +5,7 @@
 import test, { describe, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { src, tempDb } from '../helpers/server.mjs';
-import { fixture, realStore, offEngine, fakeEngine, one, NOW } from '../helpers/ingest.mjs';
+import { fixture, aggregatorFile, realStore, offEngine, fakeEngine, one, NOW } from '../helpers/ingest.mjs';
 
 let FR;
 let H;
@@ -218,6 +218,49 @@ describe('stale to fresh', () => {
     assert.equal(a.asOf, '2032-06-15');
     assert.ok(!sc.domains.some((d) => STALE_NOTE.test(d.note || '')), 'the stale note is gone');
     assert.deepEqual(sc.live.ingest.staleNotes, []);
+  }));
+});
+
+// Review finding F4: freshness is per account. One multi-account export whose newest row is
+// fresh must still put a stale account in front of the owner.
+describe('stale account inside a fresh multi-account export', () => {
+  const seedCashDomain = (db) => db.prepare('INSERT INTO content (key, value, src, updated_at) VALUES (?, ?, ?, ?)')
+    .run('domains', JSON.stringify([{ id: 'cash', name: 'Cash and reserves', status: 'covered', watching: '', note: 'Base note.' }]), 'test', NOW);
+  const accountA = { account: 'Synthetic reserve', number: '5550003333' };
+  const accountB = { account: 'Synthetic daily', number: '5550004444' };
+
+  test('A (last row in January) is stale, B (June) is fresh, and the cash note names A', () => withStore(async (s) => {
+    seedCashDomain(s.db);
+    const r = await P.ingestFile(s.db, aggregatorFile('household-export.csv', [
+      { ...accountA, date: '2032-01-05', amount: '15.00', description: 'Synthetic reserve fee' },
+      { ...accountA, date: '2032-01-20', amount: '25.00', description: 'Synthetic reserve transfer' },
+      { ...accountB, date: '2032-06-02', amount: '35.00', description: 'Synthetic grocery' },
+      { ...accountB, date: '2032-06-10', amount: '45.00', description: 'Synthetic utility' },
+    ]), s.opts(await offEngine()));
+    assert.equal(r.status, 'imported');
+    const sc = B.buildScenario(s.db, { clock: '2032-06-30' });
+    const a = sc.accounts.find((x) => x.name === accountA.account);
+    const b = sc.accounts.find((x) => x.name === accountB.account);
+    assert.deepEqual([a.asOf, a.fresh], ['2032-01-20', 'stale']);
+    assert.deepEqual([b.asOf, b.fresh], ['2032-06-10', 'fresh']);
+    const cash = sc.domains.find((d) => d.id === 'cash');
+    assert.equal(cash.status, 'waiting');
+    assert.ok(cash.note.startsWith('Base note.'));
+    assert.ok(cash.note.includes(accountA.account), `note names the stale account: ${cash.note}`);
+    assert.match(cash.note, /162 days old/);
+    assert.ok(!cash.note.includes(accountB.account), 'the fresh account is not called stale');
+  }));
+
+  test('counter-case: when every account in the export is fresh, no note is added', () => withStore(async (s) => {
+    seedCashDomain(s.db);
+    await P.ingestFile(s.db, aggregatorFile('household-export-june.csv', [
+      { ...accountA, date: '2032-06-05', amount: '15.00', description: 'Synthetic reserve fee' },
+      { ...accountB, date: '2032-06-10', amount: '45.00', description: 'Synthetic utility' },
+    ]), s.opts(await offEngine()));
+    const sc = B.buildScenario(s.db, { clock: '2032-06-30' });
+    assert.ok(sc.accounts.filter((x) => x.sourceId).every((x) => x.fresh === 'fresh'));
+    const cash = sc.domains.find((d) => d.id === 'cash');
+    assert.deepEqual([cash.status, cash.note], ['covered', 'Base note.']);
   }));
 });
 

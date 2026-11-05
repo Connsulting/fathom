@@ -8,7 +8,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { src } from '../helpers/server.mjs';
 import {
-  fixture, textFile, aggregatorFile, studioRemovalFile, activityFile, coveragePnlFile, coverageTaxFile, positionsFile,
+  fixture, textFile, aggregatorFile, studioRemovalFile, activityFile, coveragePnlFile, coverageTaxFile, positionsFile, unreadablePnlFile, unreadableTaxFile,
   realStore, fakeEngine, offEngine, all, one, count, items, sha256, fileIdOf,
 } from '../helpers/ingest.mjs';
 
@@ -603,5 +603,55 @@ describe('position revisions', () => {
     assert.deepEqual([pos[0].value, pos[0].price, pos[0].file_id], [1300, 130, b.fileId]);
     const sup = all(s.db, "SELECT * FROM superseded_rows WHERE table_name = 'positions'");
     assert.deepEqual(sup.map((x) => [x.reason, JSON.parse(x.row).value, x.file_id]), [['revised', 1234.5, a.fileId]]);
+  }));
+});
+
+// Review finding F1: an unreadable amount cell (formula without a cached value, or text) must not
+// remove or partially overwrite the active rows of its slot. A readable revision still removes.
+describe('partly unreadable workbooks', () => {
+  const removedFrom = (db, table) => all(db, `SELECT * FROM superseded_rows WHERE table_name = '${table}' AND reason = 'removed'`);
+
+  test('P&L: unreadable cells keep the stored Software total and the Travel row', () => withStore(async (s) => {
+    const off = await offEngine();
+    await P.ingestFile(s.db, unreadablePnlFile('base'), s.opts(off));
+    const r = await P.ingestFile(s.db, unreadablePnlFile('unreadable'), s.opts(off));
+    assert.equal(r.counts.warningCodes.formula_without_cache, 1);
+    assert.equal(r.counts.warningCodes.invalid_pnl_row, 1);
+    const lines = all(s.db, 'SELECT category, period, amount FROM pnl_lines ORDER BY period, category');
+    assert.deepEqual(lines.map((l) => [l.category, l.period, l.amount]), [
+      ['Income', '2032-02', 400], ['Software', '2032-02', -50], ['Travel', '2032-03', -50],
+    ], 'no partial aggregate replaces the complete one and nothing is removed');
+    assert.deepEqual(removedFrom(s.db, 'pnl_lines'), []);
+    assert.equal(count(s.db, 'superseded_rows', "table_name = 'pnl_lines'"), 0);
+  }));
+
+  test('P&L liveness: the same revision without unreadable cells removes the Travel row', () => withStore(async (s) => {
+    const off = await offEngine();
+    await P.ingestFile(s.db, unreadablePnlFile('base'), s.opts(off));
+    const r = await P.ingestFile(s.db, unreadablePnlFile('travelGone'), s.opts(off));
+    assert.equal(r.counts.superseded, 1);
+    assert.deepEqual(removedFrom(s.db, 'pnl_lines').map((x) => JSON.parse(x.row).amount), [-50]);
+    assert.equal(count(s.db, 'pnl_lines', "category = 'Travel'"), 0);
+  }));
+
+  test('tax: unreadable Paid cells keep the stored payments of their slots', () => withStore(async (s) => {
+    const off = await offEngine();
+    await P.ingestFile(s.db, unreadableTaxFile('base'), s.opts(off));
+    const r = await P.ingestFile(s.db, unreadableTaxFile('unreadable'), s.opts(off));
+    assert.equal(r.counts.warningCodes.formula_without_cache, 1);
+    assert.equal(r.counts.warningCodes.invalid_tax_payment, 1);
+    const owner = (j, date) => all(s.db, 'SELECT amount FROM tax_payments WHERE jurisdiction = ? AND payer = ? AND date = ?', j, 'Owner', date).map((t) => t.amount);
+    assert.deepEqual(owner('federal', '2032-03-31'), [120], 'the March federal payment stays');
+    assert.deepEqual(owner('state', '2032-02-29'), [35], 'the February state payment stays');
+    assert.equal(count(s.db, 'tax_payments'), 8);
+    assert.deepEqual(removedFrom(s.db, 'tax_payments'), []);
+  }));
+
+  test('tax liveness: the same revision without unreadable cells removes the March payments', () => withStore(async (s) => {
+    const off = await offEngine();
+    await P.ingestFile(s.db, unreadableTaxFile('base'), s.opts(off));
+    const r = await P.ingestFile(s.db, unreadableTaxFile('marchGone'), s.opts(off));
+    assert.equal(r.counts.superseded, 2);
+    assert.deepEqual(removedFrom(s.db, 'tax_payments').map((x) => JSON.parse(x.row).amount).sort((a, b) => a - b), [60, 120]);
   }));
 });

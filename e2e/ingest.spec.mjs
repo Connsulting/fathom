@@ -2,6 +2,7 @@
 // last data date and freshness, follow the pending banner to Confirm, answer an owner question,
 // and see the owner on Accounts. Expected values come from the upload response, never literals.
 
+import { writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { test, expect, S, resetDemo, gotoRoute } from './helpers.mjs';
 
@@ -79,4 +80,40 @@ test('add files, confirm an owner, and see it on Accounts', async ({ page }) => 
   await expect(card).toContainText(`${account.inst}, ${option.label}`);
   if (pending > 1) await expect(banner(page)).toContainText(plural(pending - 1, 'question'));
   else await expect(banner(page)).toHaveCount(0);
+});
+
+// Review finding F3: a file that is only waiting (no confirm question) is recoverable from Accounts.
+test('a waiting file shows on Accounts with Retry, without any pending question', async ({ page }, testInfo) => {
+  const path = testInfo.outputPath('novel-export.csv');
+  // Novel headers and no account columns: no parser claims it, no account or owner question.
+  writeFileSync(path, 'when,memo,value\n2032-03-02,Synthetic waiting memo,-3.33\n2032-03-03,Synthetic waiting memo two,-4.44\n');
+
+  await gotoRoute(page, 'accounts');
+  const [chooser] = await Promise.all([
+    page.waitForEvent('filechooser'),
+    page.getByRole('button', { name: 'Add files', exact: true }).click(),
+  ]);
+  const uploaded = page.waitForResponse((r) => new URL(r.url()).pathname === '/api/files' && r.request().method() === 'POST');
+  await chooser.setFiles(path);
+  const res = await uploaded;
+  expect(res.status()).toBe(200);
+  const body = await res.json();
+  expect(body.files.map((f) => f.status)).toEqual(['needs_mapping']);
+  expect(body.pending).toBe(0);
+  const file = body.files[0];
+
+  await page.reload();
+  await expect(page.locator('header.h-top')).toBeVisible();
+  await expect(banner(page)).toHaveCount(0);
+  await expect(page.getByText('Waiting files', { exact: true })).toBeVisible();
+  const retry = page.locator(`[data-retry="${file.fileId}"]`);
+  await expect(retry).toBeVisible();
+  await expect(page.getByText('novel-export.csv').first()).toBeVisible();
+  await expect(page.getByText('Needs a mapping').first()).toBeVisible();
+
+  const retried = page.waitForResponse((r) => new URL(r.url()).pathname === `/api/files/${file.fileId}/retry`);
+  await retry.click();
+  expect((await retried).status()).toBe(200);
+  await expect(page.locator(`[data-retry="${file.fileId}"]`)).toBeVisible();
+  await expect(page.getByText('novel-export.csv').first()).toBeVisible();
 });

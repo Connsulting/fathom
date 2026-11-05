@@ -3,6 +3,7 @@
 //
 // writeXlsx([{ name: 'Sheet', rows: [['Date', 'Amount'], ['2032-04-01', 12.5]] }]) -> Buffer
 // A null or undefined cell is left out. Strings are inline strings, finite numbers are numbers.
+// { formula: 'B2*2' } is a formula cell with no cached value; add `cached: n` to cache one.
 
 const enc = new TextEncoder();
 
@@ -31,6 +32,10 @@ function sheetXml(rows) {
     const xml = cells.map((value, c) => {
       if (value === null || value === undefined) return '';
       const ref = `${column(c)}${number}`;
+      if (typeof value === 'object' && value.formula) {
+        const cached = typeof value.cached === 'number' ? `<v>${value.cached}</v>` : '';
+        return `<c r="${ref}"><f>${xmlEscape(value.formula)}</f>${cached}</c>`;
+      }
       if (typeof value === 'number') {
         if (!Number.isFinite(value)) throw new TypeError('numeric cells must be finite');
         return `<c r="${ref}"><v>${value}</v></c>`;

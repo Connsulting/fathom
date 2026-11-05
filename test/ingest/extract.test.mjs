@@ -558,3 +558,57 @@ describe('annual withholding supersedes paystub detail', () => {
     assertSummarized(s.db);
   }));
 });
+
+// Review finding F2: a minus sign or accounting parentheses around a money-shaped number are part
+// of the token's value, and the token replaces them in the sent text.
+describe('signed amount tokens', () => {
+  const SIGNED_TEXT = [
+    'SYNTHETIC PAYSTUB CORRECTION',
+    'Employer: Example Employer LLC',
+    'Pay date 2032-03-15',
+    'Gross pay -123456.78',
+    'Net pay (234,567.89)',
+    'Federal withholding $-345678.90',
+    'State withholding -$456789.01',
+  ].join('\n');
+  const signedFile = () => textFile('paystub-correction.txt', SIGNED_TEXT, 'text/plain');
+  const RUNS = ['123456', '234,567', '234567', '345678', '456789'];
+  // Independent of the code under test: accepts '-1.5', '(1.5)', '$-1.5', '-$1.5', with commas.
+  const numeric = (ref) => {
+    const s = String(ref).trim();
+    const negative = /^\(.*\)$/.test(s) || s.includes('-');
+    const n = Number(s.replace(/[()$,\s-]/g, ''));
+    return negative ? -n : n;
+  };
+
+  test('refs carry the sign and the text keeps only the tokens', () => {
+    const out = RD.redactForExtraction(SIGNED_TEXT);
+    const lines = out.text.split('\n');
+    const tokenOn = (label) => (new RegExp(`^${label} \\$?(#A\\d+#)$`).exec(lines.find((l) => l.startsWith(label))) || [])[1];
+    const tokens = ['Gross pay', 'Net pay', 'Federal withholding', 'State withholding'].map(tokenOn);
+    assert.ok(tokens.every(Boolean), `each amount is a bare token, got ${JSON.stringify(lines.slice(3))}`);
+    assert.deepEqual(tokens.map((t) => numeric(out.refs[t])), [-123456.78, -234567.89, -345678.9, -456789.01]);
+    assert.ok(lines.includes(`Gross pay ${tokens[0]}`), 'the minus sign is inside the token');
+    assert.ok(lines.includes(`Net pay ${tokens[1]}`), 'the parentheses are inside the token');
+    for (const run of RUNS) assert.ok(!out.text.includes(run), `${run} not sent`);
+  });
+
+  test('extractDocument and the pipeline store negative values', () => withStore(async (s) => {
+    const redacted = RD.redactForExtraction(SIGNED_TEXT);
+    const order = Object.keys(redacted.refs);
+    assert.equal(order.length, 4);
+    const extracted = { ...PAYSTUB, gross: order[0], net: order[1], federalWithholding: order[2], stateWithholding: order[3] };
+
+    const engine = await recordingEngine(paystubResponses(extracted));
+    const out = await X.extractDocument(engine, signedFile());
+    assert.equal(out.status, 'imported');
+    const fields = docRows(out.rows).find((r) => r.docType === 'paystub').fields;
+    assert.deepEqual([fields.gross, fields.net, fields.federalWithholding, fields.stateWithholding], [-123456.78, -234567.89, -345678.9, -456789.01]);
+    for (const run of RUNS) assert.ok(!engine.sent().includes(run), `${run} never sent`);
+
+    const r = await P.ingestFile(s.db, signedFile(), s.opts(await fakeEngine(paystubResponses(extracted))));
+    assert.equal(r.status, 'imported');
+    const stored = JSON.parse(one(s.db, "SELECT fields FROM documents WHERE doc_type = 'paystub'").fields);
+    assert.deepEqual([stored.gross, stored.net, stored.federalWithholding, stored.stateWithholding], [-123456.78, -234567.89, -345678.9, -456789.01]);
+  }));
+});
