@@ -214,3 +214,39 @@ export function mainRoutes() {
     ['packs', 'What Fathom knows']
   ];
 }
+
+/* ---------- Confirm deck ---------- */
+
+// Oracles for the Year banner copy (pinned in the confirm deck plan, D10).
+export const quickChecks = (n) => `${n} quick check${n === 1 ? '' : 's'}`;
+export function aboutMinutes(n) {
+  const k = Math.max(1, Math.ceil((n * 5) / 60));
+  return `About ${k} minute${k === 1 ? '' : 's'}`;
+}
+
+// The Year banner and its Start control (the control may be the banner itself or inside it).
+export const yearBanner = (page) => page.locator('.h-ing-banner');
+export const bannerStart = (page) =>
+  page.locator('.h-ing-banner[data-go="confirm"], .h-ing-banner [data-go="confirm"]').filter({ hasText: 'Start' }).last();
+
+export const deckCard = (page) => page.locator('article.h-deck-card.cur');
+export const deckProgress = (page) => page.locator('[data-deck-progress]');
+
+// Current card's item id, as a number.
+export async function deckCurrentId(page) {
+  await expect(deckCard(page)).toHaveCount(1);
+  return Number(await deckCard(page).getAttribute('data-item'));
+}
+
+// Move the deck to item `id` with the j and k keys. `order` is the session order (pending ids
+// at entry, ascending). Each press waits for the current card to change.
+export async function deckTo(page, order, id) {
+  if (!order.includes(id)) throw new Error(`item ${id} is not in the deck order`);
+  for (let i = 0; i <= order.length * 2; i++) {
+    const at = await deckCurrentId(page);
+    if (at === id) return;
+    await page.keyboard.press(order.indexOf(id) > order.indexOf(at) ? 'j' : 'k');
+    await expect(deckCard(page)).not.toHaveAttribute('data-item', String(at));
+  }
+  throw new Error(`could not reach item ${id} in the deck`);
+}
