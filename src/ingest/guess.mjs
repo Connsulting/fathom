@@ -30,7 +30,7 @@ const MAX_TOKENS = 2048;
 const SYSTEM = [
   'You help a household owner answer short questions about their imported financial files.',
   'For each item, pick the single most likely option id from that item\'s own options, using only that item\'s question, options, context and file metadata.',
-  `Give a one-line reason of at most ${REASON_MAX} characters. Never state a number that does not appear in that item.`,
+  `Give a one-line reason of at most ${REASON_MAX} characters. The reason must contain no numbers at all: no digits and no numeric characters of any kind.`,
   'Return JSON matching the schema: {"guesses": [{"item": <item id>, "option": <option id>, "reason": <reason>}]}. Leave out an item you cannot judge.',
 ].join(' ');
 
@@ -51,29 +51,33 @@ const payloadOf = (item) => ({
   file: item.file ?? null,
 });
 
-// One quantity: optional sign (only when not glued to a letter or digit, so W-2 is plain 2), an
-// optional currency symbol, a sign after it, digits with thousands commas and decimals or a
-// leading-dot decimal, and an optional scale or percent suffix that must end a word. Whitespace
-// is allowed between sign, currency, number and suffix.
-const QUANTITY = /(?:(?<![A-Za-z0-9])([-−])\s*)?(?:[$€£]\s*(?:([-−])\s*)?)?(\d[\d,]*(?:\.\d+)?|\.\d+)(?:\s*(thousand|million|billion|trillion|percent)|\s*(bn|k|m|b|%))?(?![A-Za-z0-9])/gi;
-const SCALE = { k: 1e3, thousand: 1e3, m: 1e6, million: 1e6, bn: 1e9, b: 1e9, billion: 1e9, trillion: 1e12 };
-
-// Each quantity in the text normalized to "sign value|percent": 100.00 and $100 equal 100, while
-// 100k, 100 million, -100, 100% and 1,000 are all different from 100.
-function quantitiesIn(text) {
-  const out = [];
-  for (const m of String(text).matchAll(QUANTITY)) {
-    const unit = (m[4] ?? m[5] ?? '').toLowerCase();
-    const percent = unit === '%' || unit === 'percent';
-    const value = Number(m[3].replace(/,/g, '')) * (SCALE[unit] ?? 1);
-    out.push(`${m[1] || m[2] ? '-' : '+'}${value}|${percent ? 'pct' : 'num'}`);
-  }
-  return out;
+// Quantity-word vocabulary: number words, fractions and ordinals, percent words and multipliers.
+// Any word ending in -fold also counts.
+// A reason may use one only if the item's own text does. Matched as whole words, case-insensitive,
+// in any inflected form (plural, -d, -ed, -ing); a space in an entry matches any run of whitespace.
+const QUANTITY_WORDS = [
+  'zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve',
+  'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen',
+  'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety',
+  'hundred', 'thousand', 'million', 'billion', 'trillion',
+  'half', 'quarter', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth', 'tenth',
+  'percent', 'per cent', 'pct', 'percentage', 'basis point', 'bps',
+  'twice', 'double', 'triple', 'quadruple', 'quintuple', 'sextuple', 'septuple', 'octuple', 'dozen', 'halve',
+];
+// Every inflected form mapped to its base word ("thousands" -> "thousand", "tripling" -> "triple").
+const BASE_OF = new Map([['halves', 'half']]);
+for (const base of QUANTITY_WORDS) {
+  const stem = base.replace(/[ey]$/, '');
+  const forms = [base, `${base}s`, `${base}es`, `${base}d`, `${base}ed`, `${base}ing`, `${stem}ing`];
+  if (base.endsWith('y')) forms.push(`${stem}ies`);
+  for (const f of forms) if (!BASE_OF.has(f)) BASE_OF.set(f, base);
 }
-
-// Spelled-out number words ("ten", "one hundred thousand"), lowercase.
-const SPELLED = /\b(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million|billion|trillion|dozen)\b/gi;
-const spelledIn = (text) => (String(text).toLowerCase().match(SPELLED) ?? []);
+const SPELLED = new RegExp(`\\b(?:[a-z]*fold|${[...BASE_OF.keys()].map((w) => w.replace(' ', '\\s+')).join('|')})\\b`, 'gi');
+// Vocabulary words in the text, each normalized to its lowercase base word.
+const spelledIn = (text) => (String(text).match(SPELLED) ?? []).map((w) => {
+  const word = w.toLowerCase().replace(/\s+/g, ' ');
+  return BASE_OF.get(word) ?? word;
+});
 
 // The item's own text: question, option labels, context and file metadata.
 function itemText(item) {
@@ -82,8 +86,8 @@ function itemText(item) {
 }
 
 // Accepted guesses: the item is in the batch, the option is one of its options, and the reason
-// is one nonempty line of at most REASON_MAX characters quoting only whole quantities (sign,
-// scale and percent included) and spelled number words from that item, with no digit left over.
+// is one nonempty line of at most REASON_MAX characters with no numeric character at all and no
+// quantity word (see QUANTITY_WORDS) that the item's own text lacks.
 export function validateGuesses(batchItems, parsed) {
   const byId = new Map(batchItems.map((i) => [i.id, i]));
   const seen = new Set();
@@ -96,10 +100,8 @@ export function validateGuesses(batchItems, parsed) {
     const reason = g.reason;
     if (typeof reason !== 'string' || !reason.trim() || reason.length > REASON_MAX || /[\r\n\u2028\u2029]/.test(reason)) continue;
     const text = itemText(item);
-    const known = new Set(quantitiesIn(text));
     const words = new Set(spelledIn(text));
-    if (!quantitiesIn(reason).every((q) => known.has(q)) || !spelledIn(reason).every((w) => words.has(w))) continue;
-    if (/\d/.test(reason.replace(QUANTITY, ' '))) continue;
+    if (/\p{N}/u.test(reason) || !spelledIn(reason).every((w) => words.has(w))) continue;
     seen.add(item.id);
     out.push({ item: item.id, option: g.option, reason });
   }
