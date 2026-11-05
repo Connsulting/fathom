@@ -4,7 +4,7 @@ import { checkGrounding } from './grounding.mjs';
 import { compileSchema } from './schema.mjs';
 import { createRegistryServer } from './tools.mjs';
 import { sdkRound, messagesRound } from './live.mjs';
-import { DEFAULT_MODEL, estimateUnknownCost } from './pricing.mjs';
+import { DEFAULT_MODEL, TITLE_MODEL, estimateUnknownCost } from './pricing.mjs';
 import { EngineOffError, BudgetExceededError, RoundLimitError, ModelCallError, ModelAccountingError } from './errors.mjs';
 export { EngineOffError, BudgetExceededError, RoundLimitError, ModelCallError, ModelAccountingError } from './errors.mjs';
 export { checkGrounding, numberPattern } from './grounding.mjs';
@@ -61,6 +61,12 @@ function explicitCredential(credential) {
   return result;
 }
 
+// Purposes: 'chat' and 'job' run the SDK tool loop; 'extract' and 'title' are one structured
+// Messages API round. 'title' (Ask thread names) runs on TITLE_MODEL, every other purpose on
+// DEFAULT_MODEL, and the ledger records the purpose.
+const PURPOSES = ['chat', 'job', 'extract', 'title'];
+const ONE_ROUND = new Set(['extract', 'title']);
+
 // request.fake (optional, fake mode): a per-call script list used instead of the constructor queue.
 // request.systemDynamic (optional): system text placed after the dynamic boundary (not cached).
 // request.toolContext (optional): { db, now } for this call's tools instead of the constructed one.
@@ -74,7 +80,8 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
   const call = async ({ purpose, system = '', systemDynamic = '', messages, tools = [], maxTokens = 1024, schema, grounding = {}, fake,
     toolContext: callContext } = {}) => {
     if (mode === 'off') throw new EngineOffError();
-    if (!['chat', 'job', 'extract'].includes(purpose)) throw new TypeError('Invalid call purpose');
+    if (!PURPOSES.includes(purpose)) throw new TypeError('Invalid call purpose');
+    const model = purpose === 'title' ? TITLE_MODEL : DEFAULT_MODEL;
     if (typeof system !== 'string' || typeof systemDynamic !== 'string' || !Array.isArray(messages) || messages.length === 0 || !Number.isInteger(maxTokens) || maxTokens <= 0 || maxTokens > 128000) {
       throw new TypeError('Invalid model request');
     }
@@ -107,16 +114,16 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
               content: [{ type: 'text', text: script.text ?? '' }], details: { maxBudgetUsd: capUsd - spend } };
           } else {
             try {
-              round = await (purpose === 'extract' ? messagesRound : sdkRound)({ credential: auth, system, systemDynamic,
-                messages: transcript, maxTokens, maxBudgetUsd: capUsd - spend, model: DEFAULT_MODEL, registry, schema });
+              round = await (ONE_ROUND.has(purpose) ? messagesRound : sdkRound)({ credential: auth, system, systemDynamic,
+                messages: transcript, maxTokens, maxBudgetUsd: capUsd - spend, model, registry, schema });
             } catch {
               round = { text: '', content: [], status: 'transport_error', is_error: true,
-                accountingUnknown: true, model: DEFAULT_MODEL, tokens: {}, toolResults: registry.results, details: {} };
+                accountingUnknown: true, model, tokens: {}, toolResults: registry.results, details: {} };
             }
           }
           const knownCost = Number.isFinite(round.costUsd) && round.costUsd >= 0 ? round.costUsd : 0;
           if (round.accountingUnknown || !Number.isFinite(round.costUsd) || round.costUsd < 0) {
-            const estimate = estimateUnknownCost({ model: DEFAULT_MODEL, maxTokens,
+            const estimate = estimateUnknownCost({ model, maxTokens,
               system: systemDynamic ? `${system}\n${systemDynamic}` : system, messages: transcript, tools });
             round.costUsd = Math.max(knownCost, estimate.costUsd);
             round.tokens = { ...round.tokens, estimated: true, knownCostUsd: knownCost,
@@ -146,7 +153,7 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
       }
       if (!['success', 'error_max_turns'].includes(round.status)) throw new ModelCallError('Model did not complete a valid response');
       if (round.status === 'error_max_turns' && round.toolResults.length === 0) throw new ModelCallError('Model reached a turn limit without a tool result');
-      if (round.toolResults.length === 0 || purpose === 'extract') {
+      if (round.toolResults.length === 0 || ONE_ROUND.has(purpose)) {
         return { text: round.text, content: round.content, costUsd: Number(cost.toFixed(12)), model: round.model,
           toolResults: allResults, rounds, grounding: checkGrounding(round.text, { ...grounding, toolResults: allResults }) };
       }

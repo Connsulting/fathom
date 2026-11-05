@@ -3,6 +3,11 @@
 // with the fresh scenario, so the browser swaps it in. Model calls are awaited before any write
 // transaction opens; only the writes run inside tx(). ctx.packs is the live pack view
 // (src/packs/live.mjs).
+//
+// Ask threads (src/api/threads.mjs): POST /api/threads creates one (and asks its first question),
+// POST /api/ask continues a thread, a rec conversation or a pack conversation by key. Naming runs
+// after the reply's transaction commits and before the response is built. Trash older than 30 days
+// is purged when the thread list, a thread or the scenario is read.
 
 import { getSetting, setSetting, schemaVersion, tx, cents, parseJson as parse } from '../store/db.mjs';
 import { buildScenario, clockNow, loadContent, defaultPicks, wargameLists } from '../scenario/build.mjs';
@@ -18,6 +23,9 @@ import { whatIfOwnerText } from './answerer.mjs';
 import { buildYourPlans, YourPlansRefusal } from '../packs/your-plans.mjs';
 import { EngineOffError, BudgetExceededError } from '../engine/index.mjs';
 import { refreshLivePacks } from '../packs/live.mjs';
+import { messageOut } from '../scenario/build.mjs';
+import { isThreadKey, threadRow, getThread, newThreadKey, insertThread, listThreads, deleteThread, purgeTrash,
+  validateTitle, nameThread } from './threads.mjs';
 
 const MAX_TEXT = 4000;
 const MAX_LABEL = 200;
@@ -62,10 +70,13 @@ function ensureConversation(db, key) {
   db.prepare('INSERT OR IGNORE INTO conversations (key, created_at) VALUES (?, ?)').run(key, nowIso());
 }
 
+// Appends a message and moves the conversation's last_at to it.
 function pushMessage(ctx, key, role, text, { refs = [], notice = false, provenance = null } = {}) {
   ensureConversation(ctx.db, key);
+  const ts = stamp(ctx);
   const r = ctx.db.prepare('INSERT INTO messages (conversation_key, role, text, refs, notice, ts, provenance) VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .run(key, role, text, JSON.stringify(refs), notice ? 1 : 0, stamp(ctx), provenance ? JSON.stringify(provenance) : null);
+    .run(key, role, text, JSON.stringify(refs), notice ? 1 : 0, ts, provenance ? JSON.stringify(provenance) : null);
+  ctx.db.prepare('UPDATE conversations SET last_at = ? WHERE key = ?').run(ts, key);
   return Number(r.lastInsertRowid);
 }
 
@@ -94,6 +105,7 @@ export function getIdentity(ctx) {
 }
 
 export function getScenario(ctx) {
+  purgeTrash(ctx.db, stamp(ctx));
   return scenarioOf(ctx);
 }
 
@@ -275,10 +287,10 @@ export async function yourPlansBuild(ctx) {
   return { scenario: scenarioOf(ctx), result: { written, entries, sources, warnings, dropped } };
 }
 
-export async function ask(ctx) {
-  const { db } = ctx;
-  const { key = 'ask', questionId, text } = ctx.body;
-  if (typeof key !== 'string' || !key) throw new HttpError(400, 'key must be a conversation key');
+// The question in an ask body: exactly one of questionId (a string or an integer) and text (a
+// non-empty string of at most MAX_TEXT characters after trimming). -> { hasQ, questionId, clean }
+function askBody(body) {
+  const { questionId, text } = body;
   const hasQ = questionId !== undefined && questionId !== null;
   const hasT = text !== undefined && text !== null;
   if (hasQ === hasT) throw new HttpError(400, 'send exactly one of questionId or text');
@@ -287,9 +299,48 @@ export async function ask(ctx) {
   const clean = hasT ? text.trim() : '';
   if (hasT && !clean) throw new HttpError(400, 'text is empty');
   if (clean.length > MAX_TEXT) throw new HttpError(400, `text is over ${MAX_TEXT} characters`);
+  return { hasQ, questionId: hasQ ? questionId : undefined, clean };
+}
 
+// A thread row that can take a new message: 404 unknown, 409 trashed.
+function openThreadRow(db, key) {
+  const row = threadRow(db, key);
+  if (!row) throw new HttpError(404, 'no such conversation');
+  if (row.trashed_at) throw new HttpError(409, 'this conversation is in Trash; restore it to continue');
+  return row;
+}
+
+// Names a thread when it is due; naming never fails the request.
+async function maybeName(ctx, key) {
+  if (!isThreadKey(key)) return;
+  try {
+    await nameThread({ db: ctx.db, engine: ctx.engine || null, key, clock: ctx.config && ctx.config.clock });
+  } catch (e) {
+    console.error('fathom: thread naming failed', e && e.name);
+  }
+}
+
+// Stores the owner message and the reply in `key`; `before` runs first inside the transaction.
+function storeTurn(ctx, key, mine, reply, before) {
+  return tx(ctx.db, () => {
+    if (before) before();
+    pushMessage(ctx, key, 'me', mine);
+    return pushReply(ctx, key, reply);
+  });
+}
+
+const replyIn = (scenario, key, id) => (scenario.live.conversations[key] || []).find(m => m.id === 'm' + id);
+
+export async function ask(ctx) {
+  const { db } = ctx;
+  const { key } = ctx.body;
+  if (typeof key !== 'string' || !key) throw new HttpError(400, 'key must be a conversation key');
+  const { hasQ, questionId, clean } = askBody(ctx.body);
+
+  const thread = isThreadKey(key);
   if (key.startsWith('pack:')) packRow(db, key.slice(5));
-  else if (key !== 'ask') visibleRec(db, key);
+  else if (thread) openThreadRow(db, key);
+  else visibleRec(db, key);
 
   const scenario = scenarioOf(ctx);
   let mine;
@@ -302,15 +353,106 @@ export async function ask(ctx) {
   }
 
   const reply = await need(ctx, 'answerer').answer({ db, key, questionId: hasQ ? questionId : undefined,
-    text: hasT ? clean : undefined, clock: ctx.config && ctx.config.clock });
+    text: hasQ ? undefined : clean, clock: ctx.config && ctx.config.clock });
   if (!reply) throw new HttpError(404, `no question ${questionId}`);
-  const id = tx(db, () => {
-    pushMessage(ctx, key, 'me', mine);
-    return pushReply(ctx, key, reply);
-  });
+  // A thread may have been trashed or deleted while the model answered; asking unarchives it.
+  const id = storeTurn(ctx, key, mine, reply, thread ? () => {
+    openThreadRow(db, key);
+    db.prepare('UPDATE conversations SET archived_at = NULL WHERE key = ?').run(key);
+  } : null);
+  await maybeName(ctx, key);
   const fresh = scenarioOf(ctx);
-  const message = (fresh.live.conversations[key] || []).find(m => m.id === 'm' + id);
-  return { scenario: fresh, message };
+  return { scenario: fresh, message: replyIn(fresh, key, id) };
+}
+
+// ---------------------------------------------------------------- Ask threads
+
+const threadOrThrow = (db, id) => {
+  const t = getThread(db, id);
+  if (!t) throw new HttpError(404, 'no such conversation');
+  return t;
+};
+
+export function threadList(ctx) {
+  purgeTrash(ctx.db, stamp(ctx));
+  return listThreads(ctx.db);
+}
+
+// GET /api/threads/:id: the thread and its messages (as in scenario.live.conversations).
+export function threadGet(ctx) {
+  purgeTrash(ctx.db, stamp(ctx));
+  const thread = threadOrThrow(ctx.db, ctx.params.id);
+  const messages = ctx.db.prepare('SELECT * FROM messages WHERE conversation_key = ? ORDER BY id').all(thread.key).map(messageOut);
+  return { thread, messages };
+}
+
+// POST /api/threads: {} makes an empty thread; { text } or { questionId } (an Ask starter id) also
+// asks the first question. The key is chosen before the model call and the row is written with
+// the turn, so a failed answer leaves nothing behind.
+export async function threadCreate(ctx) {
+  const { db } = ctx;
+  const body = ctx.body;
+  const empty = (body.text === undefined || body.text === null) && (body.questionId === undefined || body.questionId === null);
+  if (empty) {
+    const thread = tx(db, () => insertThread(db, newThreadKey(db), stamp(ctx)));
+    return { scenario: scenarioOf(ctx), thread };
+  }
+  const { hasQ, questionId, clean } = askBody(body);
+  let mine;
+  let question;
+  if (hasQ) {
+    const starter = scenarioOf(ctx).live.askStarters.find(st => st.id === questionId);
+    if (!starter) throw new HttpError(404, `no starter ${questionId}`);
+    mine = starter.q;
+    question = starter.q;
+  } else {
+    mine = escapeUserText(clean);
+    question = clean;
+  }
+  const key = newThreadKey(db);
+  const reply = await need(ctx, 'answerer').answer({ db, key, text: question, clock: ctx.config && ctx.config.clock });
+  if (!reply) throw new HttpError(404, 'no answer');
+  const id = storeTurn(ctx, key, mine, reply, () => insertThread(db, key, stamp(ctx)));
+  await maybeName(ctx, key);
+  const fresh = scenarioOf(ctx);
+  return { scenario: fresh, thread: threadOrThrow(db, key.slice(4)), message: replyIn(fresh, key, id) };
+}
+
+export function threadRename(ctx) {
+  const thread = threadOrThrow(ctx.db, ctx.params.id);
+  const title = validateTitle(ctx.body.title);
+  if (!title) throw new HttpError(400, 'title must be 1 to 60 characters with no line breaks, control characters or < > { } `');
+  ctx.db.prepare("UPDATE conversations SET title = ?, title_source = 'manual' WHERE key = ?").run(title, thread.key);
+  return { scenario: scenarioOf(ctx), thread: threadOrThrow(ctx.db, thread.id) };
+}
+
+export function threadArchive(ctx) {
+  const thread = threadOrThrow(ctx.db, ctx.params.id);
+  if (thread.trashedAt) throw new HttpError(409, 'this conversation is in Trash');
+  ctx.db.prepare('UPDATE conversations SET archived_at = coalesce(archived_at, ?) WHERE key = ?').run(stamp(ctx), thread.key);
+  return { scenario: scenarioOf(ctx), thread: threadOrThrow(ctx.db, thread.id) };
+}
+
+// Trash keeps archived_at, so restore returns the thread to where it was.
+export function threadTrash(ctx) {
+  const thread = threadOrThrow(ctx.db, ctx.params.id);
+  ctx.db.prepare('UPDATE conversations SET trashed_at = coalesce(trashed_at, ?) WHERE key = ?').run(stamp(ctx), thread.key);
+  return { scenario: scenarioOf(ctx), thread: threadOrThrow(ctx.db, thread.id) };
+}
+
+// Out of Trash when trashed, else out of the archive.
+export function threadRestore(ctx) {
+  const thread = threadOrThrow(ctx.db, ctx.params.id);
+  const column = thread.trashedAt ? 'trashed_at' : 'archived_at';
+  ctx.db.prepare(`UPDATE conversations SET ${column} = NULL WHERE key = ?`).run(thread.key);
+  return { scenario: scenarioOf(ctx), thread: threadOrThrow(ctx.db, thread.id) };
+}
+
+export function threadDelete(ctx) {
+  const thread = threadOrThrow(ctx.db, ctx.params.id);
+  if (!thread.trashedAt) throw new HttpError(409, 'only a conversation in Trash can be deleted forever');
+  deleteThread(ctx.db, thread.key);
+  return { scenario: scenarioOf(ctx) };
 }
 
 export function onboarding(ctx) {

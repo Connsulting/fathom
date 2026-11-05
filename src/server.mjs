@@ -7,6 +7,7 @@
 // no store file: create it; demo unless FATHOM_DEMO=0 (then real and empty). Demo stores are
 // seeded once and keep their state across restarts. FATHOM_DEMO=1 refuses a real store and
 // FATHOM_DEMO=0 refuses a demo store, without changing it. A file with no mode is real.
+// Ask threads trashed 30 or more days ago (app clock) are purged once the store is open.
 
 import http from 'node:http';
 import { mkdirSync } from 'node:fs';
@@ -22,6 +23,7 @@ import { createMcpHandler } from './mcp/index.mjs';
 import { createRuntimeEngine } from './engine/runtime.mjs';
 import { createLivePacks } from './packs/live.mjs';
 import { clockNow } from './scenario/build.mjs';
+import { purgeTrash } from './api/threads.mjs';
 import { seedDemo } from '../demo/seed.mjs';
 
 export class StartupError extends Error {}
@@ -62,6 +64,12 @@ function refreshPacks(packs) {
 
 export async function startServer(config = loadConfig()) {
   const db = openStore(config);
+  try {
+    purgeTrash(db, clockNow(db, config.clock));
+  } catch (e) {
+    db.close();
+    throw e;
+  }
   // One runtime engine per process, on the scenario clock so spend lands in the month the Engine
   // screen shows; packs load from the repository and the data volume.
   let engine;

@@ -9,10 +9,10 @@
 // amount reaches grounding the way a careless model would repeat it.
 // When `propose` is set (the proposal tool is offered), free text that is an explicit command
 // (it starts with accept, start, complete, dismiss, snooze or reopen, optionally after "please")
-// naming a rec (the rec conversation's own rec, or in ask a visible rec's id or exact title) adds
+// naming a rec (the rec conversation's own rec, or in an Ask thread a visible rec's id or exact title) adds
 // a propose_recommendation_action call, and the text round says the owner can confirm it below.
 
-import { findQuestion, matchQuestion, recForKey } from './questions.mjs';
+import { findQuestion, matchQuestion, recForKey, isThreadKey } from './questions.mjs';
 import { resolveTokens } from '../shared/tokens.mjs';
 
 const FIGURE_TOKEN = /\{(?:fk|f):([A-Za-z0-9_.-]+)\}/g;
@@ -44,7 +44,7 @@ function commandOf(scenario, key, text) {
   const action = m[1].toLowerCase();
   const own = recForKey(scenario, key);
   if (own) return { id: own.id, action };
-  if (key !== 'ask') return null;
+  if (!isThreadKey(key)) return null;
   const lc = text.toLowerCase();
   const visible = list(scenario.recs).filter(r => r && r.status !== 'hidden');
   const hit = visible.find(r => new RegExp(`\\b${escapeRe(r.id.toLowerCase())}\\b`).test(lc))
@@ -52,7 +52,7 @@ function commandOf(scenario, key, text) {
   return hit ? { id: hit.id, action } : null;
 }
 
-export function fakeAnswerScript({ scenario, key = 'ask', questionId, text, whatIfPack, summary, propose = false } = {}) {
+export function fakeAnswerScript({ scenario, key, questionId, text, whatIfPack, summary, propose = false } = {}) {
   const command = propose && typeof text === 'string' ? commandOf(scenario, key, text) : null;
   let paragraphs;
   if (whatIfPack) {

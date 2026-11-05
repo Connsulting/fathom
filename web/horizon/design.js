@@ -2,7 +2,7 @@
    windows, and today is a line you can see. Everything else hangs off the timeline.
    Every figure, name and date comes from api.s; nothing here names a person or an amount.
    Reading notes on ambiguous contract points are at the bottom of this file.
-   The packs, engine and chat Sources screens live in ./screens/ and get this file's helpers
+   The Ask page (conversations), packs, engine and chat Sources screens live in ./screens/ and get this file's helpers
    through the kit below. */
 
 import * as chatScreen from './screens/chat.js';
@@ -568,20 +568,6 @@ function dlgHtml(id) {
     </div>`);
 }
 
-/* ---------- ask ---------- */
-
-function pAsk() {
-  const msgs = arr(api.conversation());
-  const sug = arr(api.s.ask?.suggested);
-  const chips = sug.map((q) => asked(msgs, q.q) ? '' : `<button type="button" class="h-chip" data-ask="${esc(q.id)}">${T(q.q)}</button>`).join('');
-  return shell(`${pageHead('Ask', 'Ask about your money', `Answers come from your snapshot through ${T(api.s.meta.dataThrough)} and your plan. Tap any figure to see where it came from.`)}
-    <div class="h-ask">
-      ${thread(msgs) || '<div class="h-ask-empty"><p>Try one of these.</p></div>'}
-      ${chips ? `<div class="h-chips">${chips}</div>` : ''}
-      ${composer('ask', 'Ask a question')}
-    </div>`, 'ask');
-}
-
 /* ---------- war game ---------- */
 
 function pick(name) {
@@ -1145,7 +1131,7 @@ function draw() {
   switch (r.name) {
     case 'onboarding': html = pOnboarding(Number(r.params?.step ?? onboardStep())); break;
     case 'plan': html = pPlan(); break;
-    case 'ask': html = pAsk(); break;
+    case 'ask': html = chatScreen.render(r.params?.id); break;
     case 'wargame': html = pWargame(r.params?.name); break;
     case 'goals': html = pGoals(); break;
     case 'accounts': html = pAccounts(); break;
@@ -1223,7 +1209,7 @@ function onClick(e) {
   const cn = e.target.closest('[data-conn]');
   if (cn && root.contains(cn)) { e.preventDefault(); connect.onClick(cn, connectH); return; }
   if (ingest.handleClick(e)) return;
-  const sel = '[data-go],[data-act],[data-ask],[data-askrec],[data-wg],[data-onboard],[data-inst],[data-allow],[data-modal],[data-packet],[data-whatif],[data-packtoggle],[data-more],[data-dlg]';
+  const sel = '[data-go],[data-act],[data-askrec],[data-wg],[data-onboard],[data-inst],[data-allow],[data-modal],[data-packet],[data-whatif],[data-packtoggle],[data-more],[data-dlg]';
   let t = e.target.closest(`${sel},.fx-fig`);
   if (!t || !root.contains(t)) return;
   // A figure inside a button or link is part of its label: the control takes the click, and the
@@ -1241,7 +1227,6 @@ function onClick(e) {
     return;
   }
   if (d.act) { e.preventDefault(); api.act(d.rec, d.act, d.act === 'task' ? Number(d.arg) : d.arg); return; }
-  if (d.ask) { api.ask(d.ask); return; }
   if (d.askrec) { askRec(d.askrec, Number(d.i)); return; }
   if (d.whatif) { e.preventDefault(); const cur = routeNow(); api.whatIf(d.whatif); if (!(cur.name === 'packs' && cur.params?.id === d.whatif)) api.go('packs', { id: d.whatif }); return; }
   if (d.packtoggle) { api.packToggle(d.packtoggle); return; }
@@ -1284,7 +1269,7 @@ function onSubmit(e) {
     const v = (f.q?.value || '').trim();
     if (!v) return;
     ui.draft[key] = '';
-    api.askFree(v, key.startsWith('rec:') ? key.slice(4) : key.startsWith('pack:') ? key : 'ask');
+    api.askFree(v, key.startsWith('rec:') ? key.slice(4) : key);
   }
 }
 
@@ -1323,6 +1308,7 @@ function onKey(e) {
 
 function onDocumentKey(e) {
   if (!root || !api) return;
+  if (chatScreen.onKeydown(e)) return;
   if (e.key === 'Escape') {
     if (ui.more) { setMore(false); root.querySelector('.h-more-btn')?.focus(); return; }
     if (api.route?.name === 'rec') { e.preventDefault(); closeRec(); }

@@ -1,0 +1,217 @@
+/* Horizon Ask: conversations. A thread list on the left, one open conversation on the right, the
+   composer centered when nothing is open and docked at the bottom once a conversation is. Same
+   tokens as design.css. Every selector is scoped under .h-askx so the rec dialog thread keeps its
+   own look. */
+
+.d-horizon .h-main:has(> .h-askx) { max-width: none; padding: 0; }
+
+.d-horizon .h-askx {
+  --askx-top: 57px;
+  --askx-side: 264px;
+  --askx-off: 0px;
+  display: grid;
+  grid-template-columns: var(--askx-side) minmax(0, 1fr);
+  min-height: calc(100vh - var(--askx-top) - var(--askx-off));
+}
+/* The engine-off strip sits between the top bar and the page; keep the page one screen tall. */
+.d-horizon .h-root:has(> .h-engine-off) .h-askx { --askx-off: 41px; }
+
+/* ---------- sidebar ---------- */
+.d-horizon .h-askx-side {
+  position: sticky; top: var(--askx-top); align-self: start;
+  height: calc(100vh - var(--askx-top) - var(--askx-off));
+  display: flex; flex-direction: column; min-width: 0;
+  padding: 14px 10px 10px; background: var(--bg); border-right: 1px solid var(--line);
+}
+.d-horizon .h-askx-new {
+  all: unset; box-sizing: border-box; cursor: pointer;
+  display: flex; align-items: center; gap: 8px; width: 100%; height: 36px; padding: 0 10px;
+  border: 1px solid var(--line2); border-radius: 8px; color: var(--tx); font-size: 13.5px; font-weight: 500;
+}
+.d-horizon .h-askx-new:hover { border-color: var(--fa); background: var(--s1); }
+.d-horizon .h-askx-new .h-i { color: var(--ac); }
+.d-horizon .h-askx-new kbd {
+  margin-left: auto; padding: 0 5px; border: 1px solid var(--line2); border-radius: 4px;
+  font-family: var(--mono); font-size: 11px; line-height: 18px; color: var(--fa);
+}
+.d-horizon .h-askx-list {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto; margin: 16px -6px 0; padding: 0 6px 12px;
+  scrollbar-width: thin; scrollbar-color: var(--line2) transparent;
+}
+.d-horizon .h-askx-group + .h-askx-group { margin-top: 18px; }
+.d-horizon .h-askx-group h3, .d-horizon .h-askx-vt {
+  padding: 0 10px 6px; font-size: 11.5px; font-weight: 500; letter-spacing: 0.07em; text-transform: uppercase; color: var(--fa);
+}
+.d-horizon .h-askx-vt { margin-top: 14px; }
+.d-horizon .h-askx-vnote, .d-horizon .h-askx-none { padding: 0 10px 10px; font-size: 12.5px; color: var(--mu); }
+.d-horizon .h-askx-none { padding-top: 4px; color: var(--fa); }
+
+.d-horizon .h-askx-item { position: relative; border-radius: 7px; }
+.d-horizon .h-askx-row {
+  display: flex; align-items: center; min-height: 34px; padding: 0 10px; border-radius: 7px;
+  color: var(--tx2); font-size: 13.5px;
+}
+.d-horizon .h-askx-item:hover .h-askx-row, .d-horizon .h-askx-item:focus-within .h-askx-row { background: var(--s1); color: var(--tx); }
+.d-horizon .h-askx-row.on, .d-horizon .h-askx-item:hover .h-askx-row.on { background: var(--s2); color: var(--tx); }
+.d-horizon .h-askx-row:focus-visible { outline-offset: -2px; }
+.d-horizon .h-askx-t { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.d-horizon .h-askx-item:not(.stack):hover .h-askx-t, .d-horizon .h-askx-item:not(.stack):focus-within .h-askx-t { padding-right: 54px; }
+
+.d-horizon .h-askx-acts {
+  position: absolute; top: 50%; right: 4px; transform: translateY(-50%);
+  display: flex; gap: 2px; opacity: 0; transition: opacity 0.12s;
+}
+.d-horizon .h-askx-item:hover .h-askx-acts, .d-horizon .h-askx-item:focus-within .h-askx-acts { opacity: 1; }
+.d-horizon .h-askx-item.stack .h-askx-acts { position: static; transform: none; opacity: 1; padding: 0 6px 6px; gap: 4px; }
+
+.d-horizon .h-askx-ib {
+  all: unset; box-sizing: border-box; cursor: pointer; flex: none;
+  width: 26px; height: 26px; display: grid; place-items: center; border-radius: 6px; color: var(--mu);
+}
+.d-horizon .h-askx-ib:hover { color: var(--tx); background: var(--s2); }
+.d-horizon .h-askx-tb {
+  all: unset; box-sizing: border-box; cursor: pointer;
+  padding: 3px 8px; border-radius: 6px; font-size: 12.5px; color: var(--mu);
+}
+.d-horizon .h-askx-tb:hover { color: var(--tx); background: var(--s2); }
+.d-horizon .h-askx-tb[data-thread-act="restore"] { color: var(--ac); }
+
+.d-horizon .h-askx-back {
+  all: unset; box-sizing: border-box; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 7px; padding: 6px 10px; border-radius: 7px; font-size: 13px; color: var(--mu);
+}
+.d-horizon .h-askx-back:hover { color: var(--tx); background: var(--s1); }
+
+.d-horizon .h-askx-foot { display: flex; gap: 4px; padding-top: 8px; border-top: 1px solid var(--line); }
+.d-horizon .h-askx-view {
+  all: unset; box-sizing: border-box; cursor: pointer; flex: 1 1 0; min-width: 0;
+  display: flex; align-items: center; gap: 7px; padding: 7px 10px; border-radius: 7px; font-size: 13px; color: var(--mu);
+}
+.d-horizon .h-askx-view:hover { color: var(--tx); background: var(--s1); }
+.d-horizon .h-askx-view.on { color: var(--tx); background: var(--s2); }
+.d-horizon .h-askx-view em { margin-left: auto; font-style: normal; font-family: var(--mono); font-size: 12px; color: var(--fa); }
+
+.d-horizon .h-askx-new:focus-visible, .d-horizon .h-askx-ib:focus-visible, .d-horizon .h-askx-tb:focus-visible,
+.d-horizon .h-askx-back:focus-visible, .d-horizon .h-askx-view:focus-visible, .d-horizon .h-askx-menu:focus-visible,
+.d-horizon .h-askx-send:focus-visible { outline: 2px solid var(--ac); outline-offset: 1px; }
+
+.d-horizon .h-askx-scrim { display: none; }
+
+/* ---------- main pane ---------- */
+.d-horizon .h-askx-main { display: flex; flex-direction: column; min-width: 0; padding: 0 32px; }
+.d-horizon .h-askx-bar { display: none; }
+.d-horizon .h-askx-menu {
+  all: unset; box-sizing: border-box; cursor: pointer; flex: none;
+  width: 34px; height: 34px; display: none; place-items: center; border-radius: 8px; color: var(--mu);
+}
+.d-horizon .h-askx-menu:hover { color: var(--tx); background: var(--s2); }
+.d-horizon .h-askx-menu .h-i { width: 16px; height: 16px; }
+
+.d-horizon .h-askx-empty {
+  flex: 1 1 auto; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 22px; padding: 40px 0 56px;
+}
+.d-horizon .h-askx-hello { font-size: 30px; line-height: 1.2; letter-spacing: -0.015em; text-align: center; }
+.d-horizon .h-askx-empty .h-askx-compose { width: 100%; max-width: 720px; }
+.d-horizon .h-askx-chips { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; max-width: 720px; }
+.d-horizon .h-askx-chips .h-chip { border-radius: 999px; padding: 7px 14px; }
+
+.d-horizon .h-askx-head {
+  position: sticky; top: var(--askx-top); z-index: 6;
+  display: flex; align-items: center; gap: 6px; min-height: 52px;
+  margin: 0 -32px; padding: 0 32px; background: var(--bg); border-bottom: 1px solid var(--line);
+}
+.d-horizon .h-askx-title {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 15px; color: var(--tx); cursor: text; user-select: none; padding: 4px 0;
+}
+.d-horizon .h-askx-rename {
+  flex: 0 1 420px; min-width: 0; height: 32px; padding: 0 10px; margin-left: -10px;
+  background: var(--s1); color: var(--tx); border: 1px solid var(--ac); border-radius: 7px; font: inherit; font-size: 15px;
+}
+.d-horizon .h-askx-rename:focus { outline: none; }
+.d-horizon .h-askx-tag { flex: none; padding: 1px 7px; border: 1px solid var(--line2); border-radius: 999px; font-size: 11.5px; color: var(--mu); }
+
+.d-horizon .h-askx-msgs { flex: 1 0 auto; width: 100%; max-width: 720px; margin: 0 auto; padding: 28px 0 20px; }
+.d-horizon .h-askx .h-thread { gap: 26px; margin: 0; }
+.d-horizon .h-askx .h-askx-pend { margin-top: 26px; }
+.d-horizon .h-askx .h-thread:empty { display: none; }
+.d-horizon .h-askx .h-msg { scroll-margin-top: 130px; }
+.d-horizon .h-askx .h-msg.me {
+  align-self: flex-end; max-width: min(80%, 560px); padding: 10px 16px;
+  background: var(--s2); border-radius: 18px; overflow-wrap: anywhere;
+}
+.d-horizon .h-askx .h-msg.me .h-msg-who { display: none; }
+.d-horizon .h-askx .h-msg.me .h-msg-b { color: var(--tx); font-size: 15px; max-width: none; }
+.d-horizon .h-askx .h-msg.me.pending .h-msg-b { white-space: pre-wrap; }
+.d-horizon .h-askx .h-msg.fathom .h-msg-b { color: var(--tx); font-size: 15px; line-height: 1.65; }
+.d-horizon .h-askx .h-msg.fathom.notice .h-msg-b { color: var(--mu); }
+.d-horizon .h-askx-wait { display: flex; align-items: center; gap: 10px; color: var(--fa); font-size: 13px; }
+.d-horizon .h-askx-wait i { width: 8px; height: 8px; border-radius: 50%; background: var(--ac); animation: h-askx-pulse 1.1s ease-in-out infinite; }
+@keyframes h-askx-pulse { 0%, 100% { opacity: 0.25; } 50% { opacity: 1; } }
+
+/* ---------- composer ---------- */
+.d-horizon .h-askx-box {
+  display: flex; align-items: flex-end; gap: 8px; padding: 8px 8px 8px 18px;
+  background: var(--s1); border: 1px solid var(--line2); border-radius: 24px;
+}
+.d-horizon .h-askx-box:focus-within { border-color: var(--acl); }
+.d-horizon .h-askx-box textarea {
+  flex: 1 1 auto; min-width: 0; min-height: 36px; max-height: 220px; padding: 7px 0; margin: 0;
+  field-sizing: content; resize: none; overflow-y: auto;
+  background: transparent; border: 0; color: var(--tx); font: inherit; font-size: 15px; line-height: 1.45;
+}
+.d-horizon .h-askx-box textarea::placeholder { color: var(--fa); }
+.d-horizon .h-askx-box textarea:focus, .d-horizon .h-askx-box textarea:focus-visible { outline: none; }
+.d-horizon .h-askx-box textarea[readonly] { color: var(--mu); }
+.d-horizon .h-askx-send {
+  all: unset; box-sizing: border-box; cursor: pointer; flex: none;
+  width: 36px; height: 36px; display: grid; place-items: center; border-radius: 50%;
+  background: var(--ac); color: var(--ink); transition: opacity 0.12s;
+}
+.d-horizon .h-askx-send .h-i { width: 16px; height: 16px; stroke-width: 2; }
+.d-horizon .h-askx-send:hover { background: var(--ac2); }
+.d-horizon .h-askx-send:disabled, .d-horizon .h-askx-box:has(textarea:placeholder-shown) .h-askx-send { opacity: 0.4; }
+.d-horizon .h-askx-send:disabled { cursor: default; }
+.d-horizon .h-askx-note { margin-top: 8px; text-align: center; font-size: 12.5px; color: var(--mu); }
+
+.d-horizon .h-askx-compose.docked {
+  position: sticky; bottom: 0; z-index: 5; width: 100%; max-width: 720px; margin: 0 auto;
+  padding: 10px 0 16px; background: linear-gradient(to bottom, transparent, var(--bg) 18px);
+}
+.d-horizon .h-askx-trashbar {
+  position: sticky; bottom: 0; width: 100%; max-width: 720px; margin: 0 auto 16px;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  padding: 12px 16px; background: var(--s1); border: 1px solid var(--line2); border-radius: 12px;
+}
+.d-horizon .h-askx-trashed { color: var(--tx2); }
+
+/* ---------- phone ---------- */
+@media (max-width: 720px) {
+  .d-horizon .h-askx { --askx-top: 53px; grid-template-columns: minmax(0, 1fr); }
+  .d-horizon .h-askx-side {
+    position: fixed; z-index: 25; top: var(--askx-top); bottom: 0; left: 0; height: auto;
+    width: min(300px, 86vw); transform: translateX(-100%); visibility: hidden;
+    transition: transform 0.18s ease, visibility 0s linear 0.18s;
+  }
+  .d-horizon .h-askx-side.open { transform: none; visibility: visible; transition: transform 0.18s ease; }
+  .d-horizon .h-askx-scrim { display: block; position: fixed; z-index: 24; inset: var(--askx-top) 0 0 0; background: rgba(0, 0, 0, 0.55); }
+  .d-horizon .h-askx-new kbd { display: none; }
+  .d-horizon .h-askx-acts { opacity: 1; }
+  .d-horizon .h-askx-item:not(.stack) .h-askx-t { padding-right: 54px; }
+  .d-horizon .h-askx-main { padding: 0 16px; }
+  .d-horizon .h-askx-menu { display: grid; }
+  .d-horizon .h-askx-bar { display: flex; padding-top: 10px; margin-left: -6px; }
+  .d-horizon .h-askx-head { margin: 0 -16px; padding: 0 16px 0 10px; }
+  .d-horizon .h-askx-empty { padding: 24px 0 48px; }
+  .d-horizon .h-askx-hello { font-size: 24px; }
+  .d-horizon .h-askx .h-msg.me { max-width: 88%; }
+}
+@media (hover: none) {
+  .d-horizon .h-askx-acts { opacity: 1; }
+  .d-horizon .h-askx-item:not(.stack) .h-askx-t { padding-right: 54px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .d-horizon .h-askx-side, .d-horizon .h-askx-side.open { transition: none; }
+  .d-horizon .h-askx-wait i { animation: none; opacity: 0.7; }
+}
