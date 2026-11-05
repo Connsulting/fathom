@@ -15,7 +15,7 @@ export const EMAIL_CODES = Object.freeze([
 
 const MESSAGES = {
   missing_config: 'Email sender or recipient is not configured',
-  missing_credential: 'Email credential is missing, unreadable, empty or not private',
+  missing_credential: 'Email credential is missing, unreadable, empty or readable by other users',
   auth: 'Email provider rejected the credential',
   not_found: 'Email provider could not find the sender',
   rate_limited: 'Email provider rate limit reached',
@@ -41,14 +41,14 @@ const TIMEOUT_MS = 20000;
 const ADDRESS = /^[^\s@,<>"]+@[^\s@,<>"]+$/;
 
 // Read a small regular file without following a final symlink; `private` also refuses a file
-// that group or other can access. Errors carry no path or content.
+// that other users can access (group read is allowed, for a secret mounted with fsGroup). Errors carry no path or content.
 async function readRegular(path, { private: priv = false } = {}) {
   let handle;
   try {
     handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
     const stat = await handle.stat();
     if (!stat.isFile() || stat.size > FILE_LIMIT) throw new Error('not a small regular file');
-    if (priv && (stat.mode & 0o077) !== 0) throw new Error('not private');
+    if (priv && (stat.mode & 0o007) !== 0) throw new Error('not private');
     return await handle.readFile('utf8');
   } catch {
     throw new Error('file could not be read');
@@ -108,7 +108,7 @@ const DETAIL = {
   dev: 'Development transport: messages are written to the outbox in the data volume, nothing is sent.',
   configured: 'Sender, recipients and credential are configured.',
   missing_config: 'Set FATHOM_EMAIL_FROM and FATHOM_EMAIL_TO (or their _FILE paths) to valid addresses.',
-  missing_credential: 'Mount a private, non-empty credential file and set FATHOM_EMAIL_CREDENTIAL_FILE.',
+  missing_credential: 'Mount a non-empty credential file that other users cannot read and set FATHOM_EMAIL_CREDENTIAL_FILE.',
 };
 
 // Transport state for the Email screen. Never returns the credential or a full address.

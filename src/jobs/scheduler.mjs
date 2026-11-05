@@ -9,7 +9,8 @@
 //    Manual and ingest runs use `manual:<iso ts>` and `ingest:<iso ts>` keys.
 // 3. The single-row job_lock lease gates every run: taken when free or expired, renewed on every
 //    tick and run, released on stop(). Without it a tick runs nothing and runNow is `locked`.
-// 4. A job runs at most once at a time in this process (runNow of a running job is `running`), and
+// 4. A job runs at most once at a time in this process (runNow of a running job is `running`; a
+//    trigger during a run is remembered and coalesced into one rerun after it), and
 //    ticks never overlap. A handler that throws never stops the scheduler.
 // 5. job_runs rows record status (ok, skipped, error), duration, trigger, cost and a counts-only
 //    note; error_class is an identifier (the error's code, else its class name), never a message.
@@ -190,6 +191,8 @@ export function createScheduler({
   const byId = new Map(handled.map((j) => [j.id, j]));
   const fixed = config && isIsoDate(config.clock) ? config.clock : null;
   const running = new Set();
+  // Triggers that arrived while their job was running: jobId -> reason, coalesced to one rerun.
+  const pending = new Map();
   let ticking = null;
   let timer = null;
   let first = null;
@@ -267,7 +270,14 @@ export function createScheduler({
     q.finish.run(status, at().toISOString(), Math.max(0, Math.round(performance.now() - started)), errorClass, cost, note, id);
     log.log(`fathom: job ${job.id} ${status}${errorClass ? ` ${errorClass}` : ''}`);
     try { ensureJobs(); } catch { /* labels refresh on the next tick */ }
-    return runOut(q.run.get(id));
+    const result = runOut(q.run.get(id));
+    const again = pending.get(job.id);
+    if (again) {
+      pending.delete(job.id);
+      // Not awaited: the finished run's caller must not wait on the rerun.
+      runOff(job.id, again).catch(() => { log.log(`fathom: job ${job.id} error store`); });
+    }
+    return result;
   }
 
   async function tickOnce() {
@@ -314,6 +324,7 @@ export function createScheduler({
     // Fire-and-forget friendly: resolves to the run, or null when there is no handler or it cannot run now.
     async trigger(jobId, reason = 'ingest') {
       if (!byId.has(jobId) || !TRIGGERS.has(reason)) return null;
+      if (running.has(jobId)) { pending.set(jobId, reason); return null; }
       try { return await runOff(jobId, reason); } catch { return null; }
     },
     start() {

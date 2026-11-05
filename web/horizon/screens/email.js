@@ -110,7 +110,7 @@ export function emailScreen(h) {
     if (!p) return '';
     const src = p.summarySrc === 'model' ? 'Summary written by the engine' : 'Summary from the template';
     return section('Preview', `<div class="h-card h-em-pv">
-      <div class="h-em-pv-h"><span>Subject</span><b>${esc(p.subject)}</b></div>
+      <div class="h-em-pv-h" data-email-subject><span>Subject</span><b>${esc(p.subject)}</b></div>
       <iframe class="h-em-frame" title="Brief preview" sandbox="" srcdoc="${esc(p.html)}"></iframe>
     </div>`, esc(src));
   }

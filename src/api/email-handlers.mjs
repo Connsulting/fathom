@@ -24,7 +24,7 @@ const SCHEDULER_MESSAGE = {
   locked: 'another scheduler holds the job lock',
 };
 
-const brief = ctx => composeBrief(ctx.db, { clock: (ctx.config && ctx.config.clock) || null, publicUrl: (ctx.config && ctx.config.publicUrl) || null, engine: ctx.engine });
+const brief = (ctx, engine = ctx.engine) => composeBrief(ctx.db, { clock: (ctx.config && ctx.config.clock) || null, publicUrl: (ctx.config && ctx.config.publicUrl) || null, engine });
 
 function transportOf(ctx) {
   if (!ctx.transport) throw new HttpError(503, 'email transport unavailable');
@@ -35,7 +35,9 @@ const history = ctx => listSends(ctx.db, { limit: HISTORY_LIMIT });
 
 export async function getEmail(ctx) {
   const status = await emailStatus(ctx.config);
-  const b = await brief(ctx);
+  // The preview uses the template summary only (engine: null): opening the Email screen must never
+  // make a model call. Sends keep the runtime engine.
+  const b = await brief(ctx, null);
   return {
     status,
     preview: { subject: b.subject, text: b.text, html: b.html, summarySrc: b.summarySrc },

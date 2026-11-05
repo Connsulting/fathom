@@ -209,7 +209,7 @@ secrets are read there.
 | `FATHOM_EMAIL_FROM_FILE` | unset | Path to a file holding the sender address. Not with `FATHOM_EMAIL_FROM`. |
 | `FATHOM_EMAIL_TO` | unset (`dev` uses `owner@example.invalid`) | Recipient addresses, comma separated. Not with `FATHOM_EMAIL_TO_FILE`. |
 | `FATHOM_EMAIL_TO_FILE` | unset | Path to a file of recipient addresses (comma or newline separated). Not with `FATHOM_EMAIL_TO`. |
-| `FATHOM_EMAIL_CREDENTIAL_FILE` | unset | Path to the mounted email credential (API key or SMTP password); must be private (mode 0400 or 0600). Required by every transport but `dev`. |
+| `FATHOM_EMAIL_CREDENTIAL_FILE` | unset | Path to the mounted email credential (API key or SMTP password); must not be readable by other users; mount the secret with mode 0400 or 0440 (with fsGroup) or 0600. Required by every transport but `dev`. |
 | `FATHOM_EMAIL_SMTP_USER` | unset | SMTP user name for `smtp`. |
 | `FATHOM_EMAIL_SMTP_HOST` | `smtp.gmail.com` | SMTP host for `smtp`. |
 | `FATHOM_EMAIL_SMTP_PORT` | `465` | `465` (TLS) or `587` (STARTTLS, TLS required); anything else is a config error. |
@@ -558,6 +558,9 @@ serves) and stops it before closing the store.
 7. Plan job: the planner is not wired yet, so the server's handler registry has no `plan` handler
    and `trigger('plan', 'ingest')` is a no-op. When the planner lands it is wired as the `plan`
    handler, so nightly, manual and ingest runs share one path, the lease and `job_runs`.
+8. Triggers during a run: `trigger(jobId, reason)` for a job that is already running remembers the
+   request, and when the current run finishes exactly one more run starts with that reason, so
+   several triggers during one run coalesce into one rerun. `trigger` never rejects.
 
 ## Email
 
@@ -570,9 +573,9 @@ and `maskAddress`. `src/email/send.mjs` sends and records every attempt in `emai
    STARTTLS with TLS required); `resend`, `postmark` and `agentmail` use the providers' HTTPS
    APIs. AgentMail is the production target: `FATHOM_EMAIL_FROM` is the inbox id.
 2. Credential: `FATHOM_EMAIL_CREDENTIAL_FILE` names the API key or SMTP password file. Like the
-   engine credential it must be private: a file that group or other can read is refused, so a
-   mounted secret needs mode 0400 or 0600. A missing, unreadable, empty or non-private file is
-   `missing_credential`. The credential never appears in a response, log or error.
+   engine credential it must not be readable by other users: a file that other can access is refused, so a
+   mounted secret needs mode 0400 or 0440 (with fsGroup) or 0600. A missing, unreadable, empty or
+   other-readable file is `missing_credential`. The credential never appears in a response, log or error.
 3. Send codes: a failed send is recorded with status `failed` and one fixed code:
    `missing_config`, `missing_credential`, `auth`, `not_found`, `rate_limited`, `invalid`,
    `rejected`, `network` or `other`. No key, body, address or provider response is logged.
