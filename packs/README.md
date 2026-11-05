@@ -48,7 +48,11 @@ To include an installed private pack, pass its existing `$FATHOM_DATA/packs/your
 
 ## Activation
 
-Facts are a flat object of dotted keys and raw JSON values. Rules are `{all:[Rule]}`, `{any:[Rule]}`, `{not:Rule}`, or `{fact, op, value}`. Operators are `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in` and `exists`. Equality compares JSON values without coercion; numeric operators require finite numbers. For `in`, the rule value is an array containing allowed fact values. `exists` has no value and tests own-key presence, including false and null.
+Facts are a flat object of dotted keys and raw JSON values.
+
+`income.w2` means W-2 wages from an outside employer. Wages from the household's own S corporation are represented by `income.sCorp` and do not set `income.w2` to true. Both facts may be true when the household also has outside-employer wages. An S corp household without outside-employer wages is offered W-2 benefits as a suggestion because owner wages and shareholder benefit rules differ.
+
+Rules are `{all:[Rule]}`, `{any:[Rule]}`, `{not:Rule}`, or `{fact, op, value}`. Operators are `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in` and `exists`. Equality compares JSON values without coercion; numeric operators require finite numbers. For `in`, the rule value is an array containing allowed fact values. `exists` has no value and tests own-key presence, including false and null.
 
 Missing value comparisons are unknown, including under `not`. An absent key makes `exists` false. In `all`, a known false dominates; in `any`, a known true dominates. Empty `all` is true and empty `any` is false. `evaluate` returns true only for a known match and throws for malformed rules.
 

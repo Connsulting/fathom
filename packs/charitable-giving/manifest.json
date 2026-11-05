@@ -1,7 +1,7 @@
 {
   "id": "charitable-giving",
   "name": "Charitable giving",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "taxYear": 2026,
   "reviewed": "2026-11-05",
   "curator": "Public primary-source review",
@@ -11,7 +11,8 @@
     "donor-advised funds",
     "appreciated stock",
     "qualified charitable distributions",
-    "substantiation and carryforwards"
+    "substantiation and carryforwards",
+    "SALT and overall itemized-deduction limits"
   ],
   "appliesWhen": {
     "fact": "giving.charitable",
@@ -21,9 +22,19 @@
   "suggestWhen": {
     "all": [
       {
-        "fact": "giving.charitable",
-        "op": "eq",
-        "value": false
+        "any": [
+          {
+            "not": {
+              "fact": "giving.charitable",
+              "op": "exists"
+            }
+          },
+          {
+            "fact": "giving.charitable",
+            "op": "eq",
+            "value": false
+          }
+        ]
       },
       {
         "fact": "income.agiEstimate",
@@ -47,6 +58,14 @@
         {
           "label": "IRS Publication 6196: 2026 nonitemizer deduction",
           "url": "https://www.irs.gov/pub/irs-pdf/p6196.pdf"
+        },
+        {
+          "label": "Internal Revenue Code 170: cash limits and itemized floor",
+          "url": "https://uscode.house.gov/us/usc/t26/s170/"
+        },
+        {
+          "label": "IRS Publication 526: contribution limits and carryovers",
+          "url": "https://www.irs.gov/publications/p526"
         }
       ]
     },
@@ -65,6 +84,10 @@
         {
           "label": "IRS Publication 6196: 2026 nonitemizer deduction",
           "url": "https://www.irs.gov/pub/irs-pdf/p6196.pdf"
+        },
+        {
+          "label": "IRS Revenue Procedure 2025-32: 2026 standard deductions",
+          "url": "https://www.irs.gov/pub/irs-drop/rp-25-32.pdf"
         }
       ]
     },
@@ -168,6 +191,38 @@
         },
         {
           "label": "IRS Publication 505 (2026): charitable deduction changes",
+          "url": "https://www.irs.gov/publications/p505"
+        }
+      ]
+    },
+    {
+      "file": "salt-cap-2026.md",
+      "title": "Include the 2026 SALT cap and phase-down in itemization",
+      "cites": [
+        {
+          "label": "IRS Publication 505 (2026): SALT cap and MAGI thresholds",
+          "url": "https://www.irs.gov/publications/p505"
+        },
+        {
+          "label": "Internal Revenue Code 164(b)(6)-(7): SALT limit and phase-down",
+          "url": "https://uscode.house.gov/us/usc/t26/s164/"
+        }
+      ]
+    },
+    {
+      "file": "itemized-deduction-limit.md",
+      "title": "Apply the precise 2026 overall itemized-deduction limit",
+      "cites": [
+        {
+          "label": "Internal Revenue Code 68: exact reduction and ordering",
+          "url": "https://uscode.house.gov/us/usc/t26/s68/"
+        },
+        {
+          "label": "IRS Revenue Procedure 2025-32: 2026 brackets",
+          "url": "https://www.irs.gov/pub/irs-drop/rp-25-32.pdf"
+        },
+        {
+          "label": "IRS Publication 505 (2026): overall limitation and Worksheet 2-6",
           "url": "https://www.irs.gov/publications/p505"
         }
       ]

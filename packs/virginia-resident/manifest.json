@@ -1,7 +1,7 @@
 {
   "id": "virginia-resident",
   "name": "Virginia resident",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "taxYear": 2026,
   "reviewed": "2026-11-05",
   "curator": "Public primary-source review",
@@ -11,7 +11,8 @@
     "estimated payments",
     "Virginia529 deduction",
     "529 carryforward and recapture",
-    "other-state credits"
+    "other-state credits",
+    "Virginia marginal income tax rates and estimated-tax safe harbor"
   ],
   "appliesWhen": {
     "fact": "household.state",
@@ -141,6 +142,20 @@
         {
           "label": "Virginia Tax residency status",
           "url": "https://www.tax.virginia.gov/residency-status"
+        }
+      ]
+    },
+    {
+      "file": "income-tax-rates.md",
+      "title": "Apply Virginia marginal income tax rates",
+      "cites": [
+        {
+          "label": "Code of Virginia 58.1-320: marginal income tax rates",
+          "url": "https://law.lis.virginia.gov/vacode/title58.1/section58.1-320/"
+        },
+        {
+          "label": "Virginia Tax 2026 Form 760ES and instructions",
+          "url": "https://www.tax.virginia.gov/sites/default/files/taxforms/individual-income-tax/2026/760es-2026.pdf"
         }
       ]
     }

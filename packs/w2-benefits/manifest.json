@@ -1,7 +1,7 @@
 {
   "id": "w2-benefits",
   "name": "W-2 benefits",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "taxYear": 2026,
   "reviewed": "2026-11-05",
   "curator": "Public primary-source review",
@@ -29,6 +29,30 @@
         "fact": "benefits.employer401k",
         "op": "eq",
         "value": true
+      },
+      {
+        "all": [
+          {
+            "fact": "income.sCorp",
+            "op": "eq",
+            "value": true
+          },
+          {
+            "any": [
+              {
+                "not": {
+                  "fact": "income.w2",
+                  "op": "exists"
+                }
+              },
+              {
+                "fact": "income.w2",
+                "op": "ne",
+                "value": true
+              }
+            ]
+          }
+        ]
       }
     ]
   },

@@ -118,7 +118,7 @@ function resolveRule(rule, facts) {
     const child = resolveRule(rule.not, facts);
     return {
       match: child.match === null ? null : !child.match,
-      evidence: child.evidence.length ? [`not (${child.evidence.join('; ')})`] : [],
+      evidence: child.evidence.length ? [`Negated condition; observed ${child.evidence.join('; ')}`] : [],
     };
   }
   const tag = own(rule, 'all') ? 'all' : own(rule, 'any') ? 'any' : undefined;
@@ -311,9 +311,13 @@ export function activePacks(packs, facts) {
     const suggested = own(pack, 'suggestWhen') ? resolveRule(pack.suggestWhen, facts) : { match: false };
     const status = active.match === true ? 'active' : suggested.match === true ? 'suggested' : 'available';
     const evidence = status === 'active' ? active.evidence : suggested.evidence;
-    const why = status === 'available' ? 'No matching activation or suggestion rule.'
+    let why = status === 'available' ? 'No matching activation or suggestion rule.'
       : evidence.length ? `Matching ${status === 'active' ? 'activation' : 'suggestion'} rule: ${evidence.join('; ')}.`
         : `Matching ${status === 'active' ? 'activation' : 'suggestion'} rule without fact conditions.`;
+    if (status === 'suggested' && pack.id === 'w2-benefits'
+      && facts['income.sCorp'] === true && facts['income.w2'] !== true) {
+      why += ' S corp owner wages and shareholder benefit rules differ from outside-employer benefits.';
+    }
     return { pack, status, why };
   });
 }
