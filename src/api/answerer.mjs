@@ -15,12 +15,19 @@
 // checks every remaining number against tool results and context data only (stored figures may
 // appear only as tokens). One corrective retry; what is still ungrounded is stored wrapped in
 // .fx-unverified. renderAnswer escapes everything except valid tokens and the spans it adds.
-// Every grounding source (the household summary, the conversation context and each tool result)
-// goes through one evidence sanitizer: identifier, label and citation keys are dropped (ids, keys,
-// names, titles, versions, curators, account masks and numbers, figure references, urls, sources,
-// pages), so are identifier-like string leaves (plan529) under any key, and entry bodies lose their
-// citation and metadata lines, so none of them grounds a number. Tool results also drop argument
-// echoes, but keep row values that merely equal an argument. The model still sees everything.
+// Every grounding source (the household summary, the conversation context, pack entry bodies and
+// each tool result) goes through one evidence sanitizer: identifier, label and citation keys are
+// dropped (ids, keys, names, titles, versions, curators, account masks and numbers, figure
+// references, urls, sources, pages), so are identifier-like string leaves (plan529) under any key,
+// and entry bodies lose their citation and metadata lines, so none of them grounds a number. In
+// prose (any string with whitespace) only quantity-marked numbers ground: a currency sign, a
+// percent sign or the word percent, or a magnitude (k, thousand, million, billion); bare numbers
+// (Publication 560, age 50) never do. JSON number fields stay evidence. Tool results also drop
+// argument echoes: a leaf under an argument's key with an equal value, or a string containing an
+// argument string of 3 or more characters with a digit. Other values that merely equal an argument
+// (a computed total) stay. The model still sees everything.
+// Stored figures should appear only as tokens, but a stored figure that a tool returns as plain
+// text grounds when the model read it through that tool: the tool result is the evidence.
 //
 // Chat never writes. In 'ask' and rec conversations the model is offered one local, non-writing
 // tool, propose_recommendation_action; the last successful call becomes provenance.proposal
@@ -125,18 +132,26 @@ const META_KEYS = new Set(['id', 'ids', 'key', 'keys', 'ref', 'refs', 'manifest'
 const isMetaKey = k => META_KEYS.has(k) || /(?:Id|Ids|_id|_ids|Mask|Masks|_mask|Number|Numbers|_number)$/.test(k);
 
 // Identifier-like text never grounds. A string leaf that is one token (plan529, rec8263,
-// acct4821x: no whitespace, letters and digits both) is dropped whole; inside prose, a word that
-// fuses letters and digits (Invest529, va529) is blanked. Words with a currency or percent sign,
-// magnitude amounts (20k) and ordinals (31st) stay, as do prose, dates and plain numbers.
+// acct4821x: no whitespace, letters and digits both) is dropped whole. Tokens with a currency or
+// percent sign, magnitude amounts (20k) and ordinals (31st) stay.
 const CURRENCY_OR_PERCENT = /[%\p{Sc}]/u;
 const AMOUNT_OR_ORDINAL = /^[-+]?\d[\d,]*(?:\.\d+)?[kmb]$|^\d+(?:st|nd|rd|th)$/i;
 const isIdentifierToken = s => /^\S+$/.test(s) && /\p{L}/u.test(s) && /\d/.test(s)
   && !CURRENCY_OR_PERCENT.test(s) && !AMOUNT_OR_ORDINAL.test(s);
-const fusedWord = w => {
-  const core = w.replace(/^[^\p{L}\d$]+|[^\p{L}\d%]+$/gu, '');
-  return /\p{L}\d|\d\p{L}/u.test(core) && !CURRENCY_OR_PERCENT.test(core) && !AMOUNT_OR_ORDINAL.test(core);
-};
-const blankFusedWords = s => s.replace(/\S+/g, w => (fusedWord(w) ? ' '.repeat(w.length) : w));
+
+// Prose evidence is an allowlist. In a string with whitespace, a number grounds only when it is
+// marked as a quantity: a currency sign before it, or a percent sign, the word percent or a
+// magnitude (k, thousand, million, billion) after it, and no letter glued in front (Invest529).
+// Every other digit run (Section 125, age 50, a year, a date part) is blanked to spaces.
+const PROSE_NUMBER = /\d(?:[\d,]*\d)?(?:\.\d+)?|\.\d+/g;
+const QUANTITY_BEFORE = /\p{Sc}\s*[-\u2212]?\s*$/u;
+const QUANTITY_AFTER = /^\s*(?:%|(?:percent|k|thousand|million|billion)\b)/i;
+const proseEvidence = s => s.replace(PROSE_NUMBER, (n, index) => {
+  const before = s.slice(0, index);
+  const marked = !/[\p{L}\d.]$/u.test(before)
+    && (QUANTITY_BEFORE.test(before) || QUANTITY_AFTER.test(s.slice(index + n.length)));
+  return marked ? n : ' '.repeat(n.length);
+});
 
 // Pack entry text as grounding data: citation and metadata lines never ground a number.
 const META_LINE = /^\s*(?:sources?|tax year|reviewed)\s*:/i;
@@ -145,51 +160,49 @@ const groundingBody = body => String(body ?? '').split(/\r?\n/).filter(line => !
 const norm = v => String(v).trim().toLowerCase();
 
 // The argument leaves of one tool call: each leaf by the key it sits under (array elements take
-// their parent key), every numeric leaf, and the argument strings of 3 or more characters with a
-// digit that no result string may contain.
+// their parent key), and the argument strings of 3 or more characters with a digit that no result
+// string may contain.
 function argEchoes(args) {
   const byKey = new Map();
-  const numbers = new Set();
   const strings = [];
   const walk = (v, key) => {
     if (Array.isArray(v)) for (const x of v) walk(x, key);
     else if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) walk(x, k);
     else if (typeof v === 'number' || typeof v === 'string') {
-      if (typeof v === 'number') numbers.add(v);
-      else strings.push(norm(v));
+      if (typeof v === 'string') strings.push(norm(v));
       if (key === undefined) return;
       if (!byKey.has(key)) byKey.set(key, new Set());
       byKey.get(key).add(norm(v));
     }
   };
   walk(args, undefined);
-  return { byKey, numbers, contained: strings.filter(a => a.length >= 3 && /\d/.test(a)) };
+  return { byKey, contained: strings.filter(a => a.length >= 3 && /\d/.test(a)) };
 }
 
-const NO_ECHOES = Object.freeze({ byKey: new Map(), numbers: new Set(), contained: [] });
+const NO_ECHOES = Object.freeze({ byKey: new Map(), contained: [] });
 
 // An argument echo in a tool result: a leaf under the same key as an argument with an equal value,
-// a string containing an argument string, or a number equal to an argument outside every array
-// (request-level fields such as an applied filter). Numbers inside result rows are stored values
-// and stay, even when they equal an argument (an exact amount query returns its matching rows).
-function isEcho(v, key, inRows, echoes) {
+// or a string containing an argument string. A value under any other key (a computed total, a
+// matching row's amount) is evidence even when it equals an argument.
+function isEcho(v, key, echoes) {
   if (key !== undefined && echoes.byKey.get(key)?.has(norm(v))) return true;
-  if (typeof v === 'number') return !inRows && echoes.numbers.has(v);
-  const s = norm(v);
-  return echoes.contained.some(a => s.includes(a));
+  return typeof v === 'string' && echoes.contained.some(a => norm(v).includes(a));
 }
 
-// Drop identifier, label and citation keys at any depth, identifier-like string leaves and words,
-// metadata lines from `body` strings, and (for a tool result) argument echoes.
-function scrub(v, echoes = NO_ECHOES, key = undefined, inRows = false) {
-  if (typeof v === 'number') return isEcho(v, key, inRows, echoes) ? undefined : v;
-  if (typeof v === 'string') return isIdentifierToken(v.trim()) || isEcho(v, key, inRows, echoes) ? undefined : blankFusedWords(v);
-  if (Array.isArray(v)) return v.map(x => scrub(x, echoes, key, true)).filter(x => x !== undefined);
+// Drop identifier, label and citation keys at any depth, identifier-like string leaves, metadata
+// lines from `body` strings, and (for a tool result) argument echoes; prose keeps only marked numbers.
+function scrub(v, echoes = NO_ECHOES, key = undefined) {
+  if (typeof v === 'number') return isEcho(v, key, echoes) ? undefined : v;
+  if (typeof v === 'string') {
+    if (isIdentifierToken(v.trim()) || isEcho(v, key, echoes)) return undefined;
+    return /\s/.test(v.trim()) ? proseEvidence(v) : v;
+  }
+  if (Array.isArray(v)) return v.map(x => scrub(x, echoes, key)).filter(x => x !== undefined);
   if (v && typeof v === 'object') {
     const out = {};
     for (const [k, x] of Object.entries(v)) {
       if (isMetaKey(k)) continue;
-      const y = scrub(k === 'body' && typeof x === 'string' ? groundingBody(x) : x, echoes, k, inRows);
+      const y = scrub(k === 'body' && typeof x === 'string' ? groundingBody(x) : x, echoes, k);
       if (y !== undefined) out[k] = y;
     }
     return out;

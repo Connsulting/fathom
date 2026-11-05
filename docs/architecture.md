@@ -460,8 +460,7 @@ is reachable only on the owner's private network.
    sanitized. A result leaf (string or number) under the same key name as an argument leaf of the
    same call with an equal value (compared after trim, case-insensitive; array elements take their
    parent key) is dropped, as is a string leaf containing an argument string of 3 or more characters
-   with a digit, a number equal to any argument that sits outside every array (a request-level
-   field such as an applied filter), and every key that identifies or cites (`id`, `ids`,
+   with a digit, and every key that identifies or cites (`id`, `ids`,
    `key`, `keys`, keys ending in `Id`, `Ids` or `_id`, `url`, `href`, `cites`, `citation`,
    `citations`, `source`, `sources`, `file`, `fileName`, `page`, `pages`). Error results stay
    ignored; tool provenance (name and args) is unchanged. Pack entry bodies, and `context.entries`
@@ -479,16 +478,29 @@ is reachable only on the owner's private network.
    the same pass. Value fields (amounts, balances, rec `value` text, `why`) still ground. So a pack
    id such as `plan4821`, a pack name, curator or version, a rec id, or a `list_accounts` mask
    never grounds a number, though the model still sees all of them. The argument-echo rule stays
-   specific to tool results. Numbers inside result rows are stored values and keep grounding even
-   when they equal an argument, so an exact amount query (`query_transactions` with `minAmount`
-   equal to `maxAmount`) grounds its matching `rows[].amount`. The sanitizer also drops `fig`
+   specific to tool results. Any value under a key other than the equal argument's is evidence
+   even when it equals an argument, so an exact amount query (`query_transactions` with
+   `minAmount` equal to `maxAmount`) grounds its matching `rows[].amount`, and a computed total
+   (`query_transactions` `total` equal to `limit`) grounds. The sanitizer also drops `fig`
    (a rec's figure reference, such as `mine[].fig`) and any string leaf, under any key, that is a
    single identifier-like token: no whitespace, letters and digits both, no currency or percent
    sign, not a magnitude amount (`20k`) or ordinal (`31st`), for example `plan529`, `rec8263` or
-   `acct4821x`. Inside prose strings (pack entry bodies included) a word that fuses letters and
-   digits under the same exceptions (`Invest529`, `Virginia529`) is blanked, so a program or plan
-   name never grounds its digits. Prose, dates, plain numbers and amounts such as `$1,500` still
-   ground.
+   `acct4821x`.
+   Prose evidence is an allowlist, applied as one transform in the same pass. In every prose
+   string (pack entry bodies, and any string value containing whitespace in a tool result, the
+   household summary or the conversation context) a number grounds only when it is marked as a
+   quantity: a currency sign before it, or a percent sign, the word `percent` or a magnitude
+   (`k`, `thousand`, `million`, `billion`) after it, with no letter glued in front. Every other
+   digit run is blanked to spaces before `checkGrounding` sees the string, so bare numbers in
+   prose (`Publication 560`, `Section 125`, `age 50`, years, date parts, the digits of
+   `Invest529`) never ground, while `$7,000`, `6%`, `3.9 percent`, `20k` and `2 million` do. JSON
+   number fields stay evidence, and a single-token string such as `4821` or `$1,500` is not prose.
+   A stored figure that a tool returns as plain text grounds when the model read it through that
+   tool: the tool result is the evidence, though the model is told to write figures as tokens.
+   In `checkGrounding` itself (answer and evidence alike) a hyphen glued to a preceding letter or
+   digit is not a minus sign (`2026-01` reads as 2026 and 1), a minus after whitespace or before
+   a currency sign (`-$500`) still is, and a one or two letter code joined to digits by a hyphen
+   (`K-12`, `I-9`) is vocabulary like `W-2`, not a number.
 5. One corrective retry (same `system`, the first answer plus a corrective user turn). An answer
    still ungrounded is stored with each violation in `<span class="fx-unverified" title="Not found
    in your data or tool results">`. If the retry call itself fails, the answer is the matching
