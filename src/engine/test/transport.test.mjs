@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { consumeSdkMessages, normalizeSdkRound, messagesRound } from '../live.mjs';
+import { consumeSdkMessages, normalizeSdkRound, messagesRound, wireSchema, WIRE_UNSUPPORTED_KEYWORDS } from '../live.mjs';
 import { DEFAULT_MODEL, usageCostUsd } from '../pricing.mjs';
 import { createEngine, createMemoryLedger, ModelAccountingError, ModelCallError } from '../index.mjs';
 
@@ -96,4 +96,80 @@ test('pricing distinguishes uncached input, both cache write TTLs, cache reads a
     cache_creation_input_tokens: 2000000, cache_read_input_tokens: 1000000,
     cache_creation: { ephemeral_5m_input_tokens: 1000000, ephemeral_1h_input_tokens: 1000000 } }), 37.2);
   assert.throws(() => usageCostUsd('unknown', {}), /pricing/);
+});
+
+// Deploy finding: structured outputs reject `minimum`/`maximum` with a 400, which the extract path
+// treated as an unknown-cost transport error that disabled the engine until restart.
+const findKeywords = (schema, found = new Set()) => {
+  if (Array.isArray(schema)) { schema.forEach(s => findKeywords(s, found)); return found; }
+  if (!schema || typeof schema !== 'object') return found;
+  for (const [key, value] of Object.entries(schema)) {
+    if (key === 'properties' || key === '$defs') { Object.values(value).forEach(s => findKeywords(s, found)); continue; }
+    if (WIRE_UNSUPPORTED_KEYWORDS.includes(key)) found.add(key);
+    findKeywords(value, found);
+  }
+  return found;
+};
+
+test('wireSchema drops unsupported constraints at every depth and keeps properties named like them', () => {
+  const schema = { type: 'object', additionalProperties: false, required: ['minimum', 'rows'], properties: {
+    minimum: { type: 'number', minimum: 0, maximum: 1 },
+    rows: { type: 'array', minItems: 1, items: { anyOf: [{ type: 'string', maxLength: 3, pattern: '^[0-9]+$' }, { type: 'integer', multipleOf: 2 }] } },
+  } };
+  const wire = wireSchema(schema);
+  assert.deepEqual([...findKeywords(wire)], []);
+  assert.deepEqual(Object.keys(wire.properties), ['minimum', 'rows']);
+  assert.deepEqual(wire.required, ['minimum', 'rows']);
+  assert.equal(wire.properties.rows.items.anyOf[0].pattern, '^[0-9]+$');
+  assert.equal(schema.properties.minimum.maximum, 1, 'the caller schema is not mutated');
+});
+
+test('every ingest extraction schema is free of unsupported keywords on the wire', async () => {
+  const { CLASSIFY_SCHEMA, SCHEMAS } = await import('../../ingest/extract.mjs');
+  const all = [CLASSIFY_SCHEMA, ...Object.values(SCHEMAS)];
+  assert.ok(all.length > 5);
+  assert.ok(all.some(s => findKeywords(s).size > 0), 'the source schemas do carry constraints');
+  for (const s of all) assert.deepEqual([...findKeywords(wireSchema({ type: 'object', properties: { rows: { type: 'array', items: s } } }))], []);
+});
+
+function stubFetch(responses) {
+  const original = globalThis.fetch;
+  const bodies = [];
+  globalThis.fetch = async (url, init) => {
+    bodies.push(JSON.parse(init.body));
+    const next = responses.shift();
+    return new Response(JSON.stringify(next.body), { status: next.status, headers: { 'content-type': 'application/json', 'request-id': 'synthetic' } });
+  };
+  return { bodies, restore: () => { globalThis.fetch = original; } };
+}
+
+const OK_MESSAGE = (text) => ({ id: 'msg_synthetic', type: 'message', role: 'assistant', model: DEFAULT_MODEL, stop_reason: 'end_turn',
+  content: [{ type: 'text', text }], usage: { input_tokens: 20, output_tokens: 5 } });
+const BAD_REQUEST = { type: 'error', error: { type: 'invalid_request_error', message: 'synthetic schema rejection' } };
+
+test('messagesRound sends the wire schema and maps an HTTP error to a zero-cost api error', async () => {
+  const stub = stubFetch([{ status: 400, body: BAD_REQUEST }]);
+  try {
+    const round = await messagesRound({ credential: { value: 'synthetic-key' }, system: 's', maxTokens: 64, model: DEFAULT_MODEL,
+      messages: [{ role: 'user', content: 'x' }], schema: { type: 'object', properties: { c: { type: 'number', minimum: 0, maximum: 1 } }, additionalProperties: false } });
+    assert.equal(round.api_error_status, 400);
+    assert.equal(round.costUsd, 0);
+    assert.equal(round.is_error, true);
+    assert.deepEqual(stub.bodies[0].output_config.format.schema.properties.c, { type: 'number' });
+  } finally { stub.restore(); }
+});
+
+test('a rejected live extract records zero cost and does not disable the engine', async () => {
+  const stub = stubFetch([{ status: 400, body: BAD_REQUEST }, { status: 200, body: OK_MESSAGE('{"rows":[{"c":0.5}]}') }, { status: 200, body: OK_MESSAGE('{"rows":[{"c":7}]}') }]);
+  const ledger = createMemoryLedger();
+  const engine = createEngine({ mode: 'live', credential: 'synthetic-key', ledger });
+  const schema = { type: 'object', properties: { c: { type: 'number', minimum: 0, maximum: 1 } }, required: ['c'], additionalProperties: false };
+  const document = { type: 'text', text: 'Synthetic confidence one half.' };
+  try {
+    await assert.rejects(engine.extract({ document, schema, maxTokens: 64 }), ModelCallError);
+    assert.equal(ledger.entries.length, 1);
+    assert.equal(ledger.entries[0].costUsd, 0);
+    assert.deepEqual(await engine.extract({ document, schema, maxTokens: 64 }), [{ c: 0.5 }], 'the engine still works after the rejection');
+    await assert.rejects(engine.extract({ document, schema, maxTokens: 64 }), ModelCallError, 'the full schema still bounds the value locally');
+  } finally { stub.restore(); }
 });

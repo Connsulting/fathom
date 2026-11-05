@@ -130,17 +130,23 @@ export async function retryFile(db, fileId, opts = {}) {
 }
 
 async function route(db, fileId, file, opts) {
+  let out;
   try {
     const plan = await planFile(db, fileId, file, opts);
-    const out = tx(db, () => persist(db, fileId, file, plan, opts));
-    if (out.factsChanged) refreshPackState(db, { dataDir: dataDirOf(opts), now: opts.now });
-    return out.result;
+    out = tx(db, () => persist(db, fileId, file, plan, opts));
   } catch (error) {
     if (error instanceof LimitError) return tooLarge(db, fileId, file);
     console.error('fathom: ingest failed', error?.code ?? error?.name ?? 'error');
     db.prepare("UPDATE files SET status = 'failed' WHERE id = ?").run(fileId);
     return { fileId, name: file.name, status: 'failed', sourceKind: null, parser: null, counts: emptyCounts() };
   }
+  // The rows are committed. A pack refresh failure must not relabel the file as failed: a re-upload
+  // of the same bytes is a duplicate, so the wrong status would stick. The next fact change or
+  // startup refreshes packs again.
+  if (out.factsChanged) {
+    try { refreshPackState(db, { dataDir: dataDirOf(opts), now: opts.now }); } catch (error) { console.error('fathom: pack refresh failed', error?.name ?? 'error'); }
+  }
+  return out.result;
 }
 
 // D1: an input past a parse limit (format.LIMITS) is recorded, not parsed. Its encrypted bytes stay

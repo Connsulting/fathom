@@ -10,6 +10,7 @@ RUN npm ci --omit=dev && npm cache clean --force
 COPY src ./src
 COPY web ./web
 COPY demo ./demo
+COPY packs ./packs
 
 RUN mkdir -p /data && chown node:node /data
 
