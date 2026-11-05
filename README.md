@@ -42,7 +42,7 @@ npm run seed:demo
 ## Test
 
 ```bash
-npm test                     # unit tests (node --test)
+npm test                     # unit tests (node --test): app, packs, engine and calc
 npx playwright install chromium
 npm run e2e                  # Playwright against two local demo servers it starts itself
 BASE_URL=http://127.0.0.1:8080 npm run e2e:smoke   # read-only @smoke subset against a running server

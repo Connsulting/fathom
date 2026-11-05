@@ -9,8 +9,9 @@ tables, API, seams) and is updated by each item that extends it.
 ### 1. Stack
 
 Node 24 ESM (`.mjs`), no TypeScript, no frontend build step. SQLite through the built-in
-`node:sqlite` (`DatabaseSync`). Minimal dependencies: the runtime has none; `@playwright/test`
-is the only dev dependency. Unit tests run with `node --test`, end-to-end tests with Playwright.
+`node:sqlite` (`DatabaseSync`). Minimal dependencies, all exact pins in `package.json`: the engine runtime uses the Anthropic and
+MCP SDKs and Ajv, and `@playwright/test` is the dev dependency. Unit tests run with `node --test`
+over every module's test directory (`npm test`), end-to-end tests with Playwright.
 
 ### 2. Layout
 
@@ -155,6 +156,10 @@ recommendation status.
 | `set_recommendation_status` | write:recs | `id, status: accepted, doing, done, dismissed, snoozed or proposed, wake?` | the rec; writes `rec_events` with actor `tool` |
 
 Tool outputs resolve scenario tokens to plain text and expose masks only.
+
+`src/engine/tools.mjs` `createRegistryServer` consumes this registry. Input schemas must compile
+under strict Ajv, so no union types (`type` arrays); use `anyOf`. `ctx.now` may be a Date, an ISO
+string or epoch ms, and the store clock decides "today" when set.
 
 ### 9. Engine gateway
 

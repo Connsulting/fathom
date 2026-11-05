@@ -52,7 +52,7 @@ test('no tracked file names a home path or a tailnet host', () => {
   assert.deepEqual(scan(l => l.includes(HOME_PATH) || l.includes(TAILNET)), []);
 });
 
-test('package.json keeps the frozen scripts and has no runtime dependencies', () => {
+test('package.json keeps the frozen scripts, pins every dependency and runs every test glob', () => {
   const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
   assert.equal(pkg.name, 'fathom');
   assert.equal(pkg.private, true);
@@ -64,7 +64,14 @@ test('package.json keeps the frozen scripts and has no runtime dependencies', ()
   assert.equal(pkg.scripts.e2e, 'playwright test');
   assert.equal(pkg.scripts['e2e:smoke'], 'playwright test --grep @smoke');
   assert.ok(pkg.devDependencies['@playwright/test']);
-  assert.deepEqual(pkg.dependencies || {}, {});
+  for (const glob of ['test/**/*.test.mjs', 'src/packs/test/*.test.mjs', 'src/engine/test/*.test.mjs', 'src/calc/test/*.test.mjs']) {
+    assert.ok(pkg.scripts.test.includes(`"${glob}"`), `scripts.test quotes ${glob}`);
+  }
+  for (const group of ['dependencies', 'devDependencies']) {
+    for (const [name, version] of Object.entries(pkg[group] || {})) {
+      assert.match(version, /^\d+\.\d+\.\d+$/, `${group}.${name} is an exact pin`);
+    }
+  }
 });
 
 test('CI runs unit tests and the Playwright suite on pull requests and pushes to main', () => {
@@ -79,4 +86,18 @@ test('CI runs unit tests and the Playwright suite on pull requests and pushes to
   assert.match(yml, /\bnpm test\b/);
   assert.match(yml, /\bnpm run e2e\b/);
   assert.match(yml, /node-version:\s*['"]?24/);
+});
+
+test('CI installs with npm ci before npm test and before npm run e2e', () => {
+  const yml = readFileSync(join(ROOT, '.github/workflows/ci.yml'), 'utf8');
+  const jobs = yml.split(/^jobs:\s*$/m)[1] || '';
+  const block = name => {
+    const m = new RegExp(`^  ${name}:\\s*\\n((?:    .*\\n?|\\s*\\n)*)`, 'm').exec(jobs);
+    assert.ok(m, `${name} job exists`);
+    return m[1];
+  };
+  const unit = block('unit');
+  const e2e = block('e2e');
+  assert.ok(unit.search(/\bnpm ci\b/) >= 0 && unit.search(/\bnpm ci\b/) < unit.search(/\bnpm test\b/), 'unit: npm ci before npm test');
+  assert.ok(e2e.search(/\bnpm ci\b/) >= 0 && e2e.search(/\bnpm ci\b/) < e2e.search(/\bnpm run e2e\b/), 'e2e: npm ci before npm run e2e');
 });

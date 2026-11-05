@@ -16,6 +16,8 @@ import demo from '../demo/scenario.mjs';
 import { seedDemo } from '../demo/seed.mjs';
 import { tools, getTool, callTool, ToolError } from '../src/tools/index.mjs';
 import { needsRule } from '../src/shared/rules.mjs';
+import { createRegistryServer } from '../src/engine/tools.mjs';
+import { compileSchema } from '../src/engine/schema.mjs';
 import { tempDb } from './helpers/server.mjs';
 
 const FROZEN = [
@@ -361,5 +363,49 @@ describe('input schema strictness', () => {
     assert.ok(one.length > 0);
     assert.ok(one.every(r => r.status === status));
     assert.deepEqual(many.map(r => r.id), one.map(r => r.id));
+  });
+});
+
+describe('review advisories', () => {
+  test('invalid anyOf inputs for list_recommendations are refused with bad_input', async () => {
+    await assert.rejects(call('list_recommendations', { status: 42 }), isCode('bad_input'));
+    await assert.rejects(call('list_recommendations', { status: ['accepted', 'not-a-status'] }), isCode('bad_input'));
+  });
+
+  test('a conflicting ctx.now does not override the store clock; epoch ms is accepted', async () => {
+    const seeded = (await call('household_summary')).clock;
+    for (const now of ['2030-01-02T03:04:05.000Z', Date.parse('2030-01-02T03:04:05.000Z'), new Date('2030-01-02T03:04:05.000Z')]) {
+      assert.equal((await callTool('household_summary', {}, { db: t.db, now })).clock, seeded, `clock for ${typeof now} now`);
+    }
+  });
+});
+
+describe('engine compatibility', () => {
+  const engineCtx = () => ({ db: t.db, now: '2026-11-05T15:00:00.000Z' });
+
+  test('every inputSchema compiles under strict Ajv', () => {
+    for (const x of tools) assert.doesNotThrow(() => compileSchema(x.inputSchema), `${x.name} compiles`);
+  });
+
+  test('createRegistryServer accepts the registry; the job purpose drops the write tool', () => {
+    const chat = createRegistryServer(tools, { purpose: 'chat', ctx: engineCtx() });
+    for (const x of tools) assert.ok(chat.names.includes(x.name), `chat offers ${x.name}`);
+    assert.ok(chat.names.includes('set_recommendation_status'));
+    const job = createRegistryServer(tools, { purpose: 'job', ctx: engineCtx() });
+    assert.ok(!job.names.includes('set_recommendation_status'));
+    assert.equal(job.names.length, tools.length - 1);
+  });
+
+  test('invoke matches callTool, rejects bad input and fetches a real rec', async () => {
+    const server = createRegistryServer(tools, { purpose: 'chat', ctx: engineCtx() });
+    const ok = await server.invoke('list_recommendations', {});
+    assert.ok(!ok.isError);
+    const expected = await call('list_recommendations', {});
+    assert.deepEqual(JSON.parse(ok.content[0].text), JSON.parse(JSON.stringify(expected)));
+    const bad = await server.invoke('list_recommendations', { status: 42 });
+    assert.equal(bad.isError, true);
+    const got = await server.invoke('get_recommendation', { id: expected[0].id });
+    assert.ok(!got.isError);
+    assert.equal(JSON.parse(got.content[0].text).id, expected[0].id);
   });
 });
