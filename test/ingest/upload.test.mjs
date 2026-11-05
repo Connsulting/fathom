@@ -430,6 +430,30 @@ describe('bounded parsing on a 128 MB heap', () => {
     await tooLarge(s, 'many-rows-export.xlsx', writeXlsx([{ name: 'Synthetic export', rows }], { deflate: true }));
   }));
 
+  // XLSX_LIMITS: the workbook reader builds a tree at about 170 bytes per cell, so xlsx has its own
+  // lower cell budget (250000) counted over worksheet cells, shared strings and rich-text runs.
+  const gridRows = (total, width = 50) => {
+    const rows = [];
+    for (let left = total, r = 0; left > 0; r++) {
+      const n = Math.min(width, left);
+      rows.push(Array.from({ length: n }, (_, c) => (r === 0 ? `col ${c}` : r * 100 + c)));
+      left -= n;
+    }
+    return rows;
+  };
+
+  test('XLSX_LIMITS: an xlsx with 250001 cells answers too_large; the server stays up', T, () => withSmallHeap(async (s) => {
+    await tooLarge(s, 'over-xlsx-cells.xlsx', writeXlsx([{ name: 'Synthetic export', rows: gridRows(250001) }], { deflate: true }));
+  }));
+
+  test('XLSX_LIMITS: an xlsx with 249990 cells is accepted; the server stays up', T, () => withSmallHeap(async (s) => {
+    const name = 'near-xlsx-limit.xlsx';
+    const bytes = writeXlsx([{ name: 'Synthetic export', rows: gridRows(249990) }], { deflate: true });
+    const r = await upload(s.baseUrl, [{ name, bytes, type: XLSX }]);
+    assert.equal(r.status, 200, r.text.slice(0, 300));
+    assert.deepEqual(r.json.files.map((f) => [f.name, f.status]), [[name, 'needs_mapping']]);
+  }));
+
   test('G3: a CSV just under the cell limit maps without error on a 128 MB heap', T, () => withSmallHeap(async (s) => {
     const cols = Array.from({ length: 10 }, (_, i) => `synthetic column ${i}`);
     const bytes = Buffer.from(`${cols.join(',')}\n${'a,b,c,d,e,f,g,h,i,j\n'.repeat(199998)}`); // 199999 records, 1999990 cells

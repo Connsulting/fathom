@@ -738,6 +738,10 @@ describe('bounded parsing (D1)', () => {
     assert.ok(P.STATUSES.includes('too_large'));
   });
 
+  test('XLSX_LIMITS is exported as a lower cell budget for xlsx', () => {
+    assert.deepEqual({ ...FM.XLSX_LIMITS }, { cells: 250000 });
+  });
+
   test('csv() throws LimitError past the row limit and chase parse lets it propagate', () => {
     const file = wideCsv();
     assert.throws(() => FM.csv(file), isLimit);
