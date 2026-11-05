@@ -17,7 +17,7 @@ import { seedDemo } from '../demo/seed.mjs';
 import { loadConfig } from '../src/config.mjs';
 import { setSetting } from '../src/store/db.mjs';
 import { buildScenario } from '../src/scenario/build.mjs';
-import { callTool } from '../src/tools/index.mjs';
+import { callTool, tools as REGISTRY } from '../src/tools/index.mjs';
 import { sdkOptions } from '../src/engine/live.mjs';
 import { createRuntimeEngine } from '../src/engine/runtime.mjs';
 import { createPackRefresher } from '../src/packs/state.mjs';
@@ -217,8 +217,9 @@ test('B3: a tool result value that echoes a call argument does not ground the nu
   const echoes = [
     // A number echoed under an ordinary key.
     { name: 'get_recommendation', args: { id: 'synthetic', amount: 4821 }, result: { amount: 4821, title: 'Synthetic' } },
-    // A number echoed under another key, compared numerically.
-    { name: 'query_transactions', args: { minAmount: 4821 }, result: { rows: [], floor: 4821.0, total: 0 } },
+    // A number echoed under the same key, compared numerically. (A number under a different key
+    // is a value since round 3; see "R3 A" below.)
+    { name: 'query_transactions', args: { minAmount: 4821 }, result: { rows: [], minAmount: 4821.0, total: 0 } },
     // A string echoed verbatim (after trim).
     { name: 'query_transactions', args: { text: ' 4821 ' }, result: { rows: [], query: '4821', total: 0 } },
     // A string that contains an argument string of length 3 or more with a digit.
@@ -1014,4 +1015,350 @@ test('a what-if runs a live conversation seeded with the pack prompt and pack me
     'the pack prompt opens the conversation');
   assert.ok(requests[0].systemDynamic.includes(def.entryList[0].title), 'pack entries are in the dynamic system');
   assert.ok(!requests[0].system.includes('<household_summary>'));
+});
+
+// ---------------------------------------------------------------- round 3: evidence by construction
+//
+// A: an echo is only a result leaf under the same key as an equal argument, or a string containing
+// an argument string; tools never launder arguments (the contract test). B: inside prose strings
+// only quantity-marked numbers ($, %, percent, k, thousand, million, billion) are evidence.
+// D: a hyphen glued to a letter or digit is not a minus sign.
+
+const SENTINEL_TEXT = 'zq7sentinel93';
+const SENTINEL_AMOUNT = 987654.31;
+const SENTINEL_STRINGS = [SENTINEL_TEXT, `zq7 ${SENTINEL_AMOUNT} sentinel`];
+const SENTINEL_DATES = ['2091-07-23', '2091-07'];
+const SENTINEL_MARKS = ['zq7', '987654', '987,654', '2091'];
+const IDENTIFIER_KEY = /^(?:id|ids|key|keys)$|(?:Id|Ids|_id|_ids)$/;
+
+// Every tool the answerer offers in an ask and a rec conversation, read from its own requests.
+async function offeredTools(s) {
+  const { engine, requests } = scripted(s.runtime);
+  const answerer = createLiveAnswerer({ engine, packs: s.packs });
+  await answerer.answer({ db: s.db, key: 'ask', text: 'Synthetic contract question' });
+  await answerer.answer({ db: s.db, key: 'deferral', text: 'Synthetic contract question' });
+  const byName = new Map();
+  for (const r of requests) for (const tool of r.tools || []) byName.set(tool.name, tool);
+  return [...byName.values()];
+}
+
+// Each leaf (and object key) of a result with the key path it sits under.
+function leaves(v, key, out = []) {
+  if (Array.isArray(v)) for (const x of v) leaves(x, key, out);
+  else if (v && typeof v === 'object') {
+    for (const [k, x] of Object.entries(v)) { out.push({ key, value: k, isKey: true }); leaves(x, k, out); }
+  } else out.push({ key, value: v });
+  return out;
+}
+
+// In-domain argument candidates for one property schema: { value, sentinel }.
+function candidates(schema, name, intSentinel) {
+  if (schema.anyOf) return schema.anyOf.flatMap(branch => candidates(branch, name, intSentinel));
+  if (schema.enum) return [{ value: schema.enum[0], sentinel: false }];
+  const type = [].concat(schema.type)[0];
+  if (type === 'string') {
+    if (schema.pattern) {
+      const date = SENTINEL_DATES.find(d => new RegExp(schema.pattern).test(d));
+      assert.ok(date, `extend the contract test: no sentinel matches ${name} pattern ${schema.pattern}`);
+      return [{ value: date, sentinel: true }];
+    }
+    return SENTINEL_STRINGS.map(value => ({ value, sentinel: true }));
+  }
+  if (type === 'number') {
+    assert.ok(schema.minimum == null && schema.maximum == null, `extend the contract test: ${name} has a numeric range`);
+    return [SENTINEL_AMOUNT, -SENTINEL_AMOUNT].map(value => ({ value, sentinel: true }));
+  }
+  if (type === 'integer') {
+    assert.ok(Number.isInteger(intSentinel), `extend the contract test: no integer sentinel for ${name}`);
+    return [{ value: intSentinel, sentinel: true }];
+  }
+  if (type === 'array') return candidates(schema.items || { type: 'string' }, name, intSentinel).map(c => ({ value: [c.value], sentinel: c.sentinel }));
+  if (type === 'boolean') return [{ value: true, sentinel: false }];
+  return assert.fail(`extend the contract test: ${name} has type ${type}`);
+}
+
+test('R3 A contract: no tool the answerer offers returns a sentinel argument outside identifier keys', async t => {
+  const s = await demoStore(t);
+  const offered = await offeredTools(s);
+  const names = offered.map(tool => tool.name);
+  assert.deepEqual(sorted(names), sorted([...REGISTRY.filter(x => x.scope === 'read').map(x => x.name), PROPOSE]),
+    'every read tool and the local proposal tool, nothing else');
+  const recId = s.db.prepare("SELECT id FROM recs WHERE status != 'hidden' ORDER BY id LIMIT 1").get().id;
+  const ctx = { db: s.db, now: s.runtime.now() };
+
+  const calls = [];
+  const plan = new Map();
+  for (const tool of offered) {
+    const props = (tool.inputSchema && tool.inputSchema.properties) || {};
+    const required = new Set(tool.inputSchema.required || []);
+    // Required arguments take real store values so the tool answers; a sentinel id is an error result.
+    const base = {};
+    for (const name of required) {
+      const schema = props[name];
+      if (schema.enum) base[name] = schema.enum[0];
+      else if (name === 'id') base[name] = recId;
+      else assert.fail(`extend the contract test: ${tool.name} requires ${name}`);
+    }
+    // An integer sentinel in range that the tool never returns for real arguments at their widest.
+    const widest = { ...base };
+    for (const [name, schema] of Object.entries(props)) if (schema.type === 'integer' && schema.maximum != null) widest[name] = schema.maximum;
+    const seen = JSON.stringify(await tool.handler(widest, ctx));
+    const numbers = new Set(leaves(JSON.parse(seen)).map(l => l.value).filter(v => typeof v === 'number'));
+    const intProp = Object.values(props).find(p => p.type === 'integer');
+    let intSentinel;
+    if (intProp) {
+      for (let n = intProp.maximum ?? 1000; n >= (intProp.minimum ?? 1) && intSentinel === undefined; n--) {
+        if (!numbers.has(n)) intSentinel = n;
+      }
+    }
+    const args = [base];
+    const all = { ...base };
+    for (const [name, schema] of Object.entries(props)) {
+      const list = candidates(schema, name, intSentinel);
+      for (const c of list) args.push({ ...base, [name]: c.value });
+      if (!required.has(name)) all[name] = list[0].value;
+    }
+    args.push(all);
+    plan.set(tool.name, { intSentinel });
+    for (const a of args) calls.push({ name: tool.name, args: a });
+  }
+
+  const { engine, responses } = scripted(s.runtime, [[{ toolCalls: calls }, { text: 'Synthetic contract answer.' }]]);
+  const reply = await createLiveAnswerer({ engine, packs: s.packs }).answer({ db: s.db, key: 'ask', text: 'Synthetic contract run' });
+  assert.ok(!reply.notice, JSON.stringify(reply));
+  const results = responses[0].toolResults;
+  assert.equal(results.length, calls.length, 'every scripted call ran');
+  for (const r of results) {
+    assert.ok(!(r.isError && r.result && r.result.error), `schema-valid arguments: ${r.name} ${JSON.stringify(r.args)}`);
+  }
+  for (const name of names) {
+    assert.ok(results.some(r => r.name === name && !r.isError), `${name} answers some sentinel call`);
+    const props = Object.keys(offered.find(x => x.name === name).inputSchema.properties || {});
+    for (const p of props) {
+      assert.ok(results.some(r => r.name === name && !r.isError && Object.hasOwn(r.args, p)), `${name} answers a call with ${p}`);
+    }
+  }
+  for (const r of results.filter(x => !x.isError)) {
+    const { intSentinel } = plan.get(r.name);
+    for (const leaf of leaves(r.result)) {
+      if (!leaf.isKey && leaf.key !== undefined && IDENTIFIER_KEY.test(leaf.key)) continue;
+      const where = `${r.name}(${JSON.stringify(r.args)}) ${leaf.isKey ? 'key' : `under ${leaf.key}`}: ${JSON.stringify(leaf.value)}`;
+      if (typeof leaf.value === 'number') {
+        assert.ok(Math.abs(leaf.value) !== SENTINEL_AMOUNT, where);
+        if (Object.values(r.args || {}).includes(intSentinel)) assert.notEqual(leaf.value, intSentinel, where);
+      } else if (typeof leaf.value === 'string') {
+        const lc = leaf.value.toLowerCase();
+        assert.ok(!SENTINEL_MARKS.some(m => lc.includes(m)), where);
+      }
+    }
+  }
+});
+
+test('R3 A (F2): query_transactions total equal to the limit argument grounds, attributed to query_transactions', async t => {
+  const s = await demoStore(t);
+  const scenario = buildScenario(s.db);
+  // The real match count per account, read from the store; one whose count fits in a single page.
+  const counts = s.db.prepare('SELECT account_id AS id, count(*) AS n FROM transactions GROUP BY account_id ORDER BY n, account_id').all()
+    .filter(c => c.n >= 1 && c.n <= 200);
+  let pick = null;
+  for (const c of counts) {
+    const said = `There are ${c.n} matching transactions.`;
+    const baseline = await createLiveAnswerer({ engine: always(s.runtime, said).engine, packs: s.packs })
+      .answer({ db: s.db, key: 'ask', text: 'Synthetic baseline' });
+    if (!baseline.provenance.grounding.unverified.includes(String(c.n))) continue;
+    const page = await callTool('query_transactions', { accountId: c.id, limit: c.n }, { db: s.db, now: '2026-11-05' });
+    const { total: _total, ...withoutTotal } = page;
+    if (groundAnswer(said, { scenario, toolResults: [{ name: 'query_transactions', args: {}, result: withoutTotal }] }).ok) continue;
+    pick = c;
+    break;
+  }
+  assert.ok(pick, 'some account has a match count that only the total states');
+  const n = pick.n;
+  const said = `There are ${n} matching transactions.`;
+  const { engine, responses } = scripted(s.runtime, [
+    [{ toolCalls: [{ name: 'query_transactions', args: { accountId: pick.id, limit: n } }] }, { text: said }],
+    [{ text: said }],
+  ]);
+  const reply = await createLiveAnswerer({ engine, packs: s.packs }).answer({ db: s.db, key: 'ask', text: 'Synthetic count question' });
+  assert.ok(!reply.notice);
+  const got = responses[0].toolResults.find(r => r.name === 'query_transactions');
+  assert.ok(got && !got.isError, JSON.stringify(responses[0].toolResults));
+  assert.equal(got.result.total, n, 'the real tool counts every match');
+  assert.equal(got.result.rows.length, n);
+  assert.equal(got.result.truncated, false);
+  const { unverified } = reply.provenance.grounding;
+  assert.ok(!unverified.includes(String(n)), `the computed total ${n} grounds: ${JSON.stringify(reply.provenance.grounding)}`);
+  const literal = reply.provenance.literals.find(l => l.text === String(n));
+  assert.equal(literal && literal.source, 'query_transactions', JSON.stringify(reply.provenance.literals));
+
+  // A top-level number under a different key than the equal argument is a value, not an echo.
+  const other = groundAnswer(LAUNDERED, { scenario, data: [],
+    toolResults: [{ name: 'query_transactions', args: { minAmount: 4821 }, result: { rows: [], floor: 4821, total: 0 } }] });
+  assert.equal(other.ok, true, JSON.stringify(other.violations));
+  assert.equal(other.literals.find(l => l.text === '4821').source, 'query_transactions');
+});
+
+// B: prose sentences that carry bare numbers only, and ones that carry one marked quantity each.
+const BARE_PROSE = 'Catch up at age 50 or older under Section 125 rules, and see IRS Publication 560 for details.';
+const BARE_NUMBERS = ['50', '125', '560', '$560'];
+const MARKED = [
+  { prose: 'The synthetic cap is $7,000 for the year.', said: '$7,000', span: '$7,000' },
+  { prose: 'The synthetic rate is 6% this year.', said: '6%', span: '6%' },
+  { prose: 'The synthetic rate is 6 percent this year.', said: '6 percent', span: '6 percent' },
+  { prose: 'It saves about 20k a year.', said: '20k', span: '20k' },
+  // The answer side reads "million" as its own number word, so only the numeral is asserted.
+  { prose: 'It reaches about 2 million in total.', said: '2 million', span: '2' },
+];
+
+// The four places prose evidence reaches groundAnswer, each carrying `prose`.
+const proseSources = prose => [
+  { label: 'pack entry body', toolResults: [], data: [[`# Synthetic entry\n\n${prose}\n`]] },
+  { label: 'tool result description', data: [], toolResults: [{ name: 'list_recommendations', args: {}, result: [{ status: 'doing', description: prose }] }] },
+  { label: 'rec context', toolResults: [], data: [{ recommendation: { status: 'doing', why: prose } }] },
+  { label: 'household summary', toolResults: [], data: [{ facts: { 'synthetic.note': prose } }] },
+];
+
+test('R3 B: bare numbers in prose evidence never ground; marked quantities and JSON numbers do', async t => {
+  const s = await demoStore(t);
+  const scenario = buildScenario(s.db);
+  for (const where of proseSources(BARE_PROSE)) {
+    for (const text of BARE_NUMBERS) {
+      const r = groundAnswer(`The figure is ${text}.`, { scenario, ...where });
+      assert.ok(laundered(r).includes(text), `${where.label}: "${BARE_PROSE}" must not ground ${text}`);
+    }
+  }
+  for (const { prose, said, span } of MARKED) {
+    // A marked quantity grounds alone and next to bare numbers in the same sentence.
+    for (const sentence of [prose, `${prose} ${BARE_PROSE}`]) {
+      for (const where of proseSources(sentence)) {
+        const r = groundAnswer(`The figure is ${said}.`, { scenario, ...where });
+        assert.ok(!laundered(r).includes(span), `${where.label}: "${sentence}" grounds ${span}: ${JSON.stringify(r.violations)}`);
+        if (sentence !== prose) {
+          const bare = groundAnswer('The figure is 50.', { scenario, ...where });
+          assert.ok(laundered(bare).includes('50'), `${where.label}: age 50 stays bare next to ${said}`);
+        }
+      }
+    }
+  }
+  // JSON number fields stay evidence.
+  const json = [
+    { toolResults: [{ name: 'list_recommendations', args: {}, result: [{ catchUpAge: 50, cap: 560 }] }], data: [] },
+    { toolResults: [], data: [{ recommendation: { catchUpAge: 50, cap: 560 } }] },
+  ];
+  for (const where of json) {
+    for (const text of ['50', '$560']) {
+      const r = groundAnswer(`The figure is ${text}.`, { scenario, ...where });
+      assert.equal(r.ok, true, `${text}: ${JSON.stringify(r.violations)}`);
+    }
+  }
+});
+
+test('R3 B (F1): inline citations (IRS Publication 560) in the active demo packs never ground $560', async t => {
+  const s = await demoStore(t);
+  const body = readFileSync(join(ROOT, 'packs', 'advanced-retirement', 'contribution-limits-2026.md'), 'utf8');
+  assert.ok(body.includes('IRS Publication 560'), 'the pack entry cites Publication 560 inline');
+  const said = 'The synthetic limit is $560, and the deferral limit is $24,500.';
+  const { engine, requests } = always(s.runtime, said);
+  const answerer = createLiveAnswerer({ engine, packs: s.packs });
+
+  // Self-check: with every pack whose entries mention 560 off, nothing else in the demo store grounds $560.
+  const citing = new Set(s.packs.loaded().filter(p => p.entries.some(e => e.body.includes('560'))).map(p => p.id));
+  assert.ok(citing.has('advanced-retirement'));
+  const rows = s.db.prepare('SELECT id, def FROM packs_state').all().filter(r => citing.has(JSON.parse(r.def).manifest)).map(r => r.id);
+  const setActive = value => { for (const id of rows) s.db.prepare('UPDATE packs_state SET active = ? WHERE id = ?').run(value, id); };
+  setActive(0);
+  const off = await answerer.answer({ db: s.db, key: 'ask', text: 'Synthetic publication question' });
+  assert.ok(!off.provenance.packIds.some(id => citing.has(id)), JSON.stringify(off.provenance.packIds));
+  assert.ok(off.provenance.grounding.unverified.includes('$560'), JSON.stringify(off.provenance.grounding));
+
+  setActive(null);
+  const active = await answerer.answer({ db: s.db, key: 'ask', text: 'Synthetic publication question' });
+  assert.ok(!active.notice);
+  assert.ok(active.provenance.packIds.includes('advanced-retirement'), 'the pack is active');
+  assert.ok(requests.at(-1).system.includes('IRS Publication 560'), 'the model still sees the citation');
+  assert.ok(active.provenance.grounding.unverified.includes('$560'),
+    `Publication 560 must not ground $560: ${JSON.stringify(active.provenance.grounding)}`);
+  assert.ok(!active.provenance.grounding.unverified.includes('$24,500'), 'the marked limit in the same entry still grounds');
+});
+
+// A synthetic active pack: bare prose numbers and marked quantities, values nothing in the demo states.
+const PROSE_PACK = {
+  id: 'synthetic-prose',
+  name: 'Synthetic prose',
+  appliesWhen: ALWAYS,
+  covers: ['synthetic prose limits'],
+  entries: [{
+    file: 'synthetic-prose.md',
+    title: 'Synthetic prose limit',
+    body: '# Synthetic prose limit\n\nAt age 57 or older under Publication 4383 the synthetic cap is $7,013, ' +
+      'the rate is 6.7%, growth is 3.9 percent and about 23k a year qualifies.\n',
+  }],
+};
+
+test('R3 B: in an active pack entry body only marked quantities ground, end to end', async t => {
+  const s = await demoStore(t, {}, { prepare: dataDir => writeSyntheticPack(dataDir, PROSE_PACK) });
+  const said = 'At 57, under 4383, the cap is $7,013, the rate is 6.7%, growth is 3.9 percent and 23k qualifies.';
+  const answerer = createLiveAnswerer({ engine: always(s.runtime, said).engine, packs: s.packs });
+
+  // Self-check: without the pack, none of these values ground.
+  s.db.prepare("UPDATE packs_state SET active = 0 WHERE id = 'synthetic-prose'").run();
+  const off = await answerer.answer({ db: s.db, key: 'ask', text: 'Synthetic prose question' });
+  assert.ok(!off.provenance.packIds.includes('synthetic-prose'));
+  assert.deepEqual(sorted(off.provenance.grounding.unverified), sorted(['57', '4383', '$7,013', '6.7%', '3.9 percent', '23k']));
+
+  s.db.prepare("UPDATE packs_state SET active = NULL WHERE id = 'synthetic-prose'").run();
+  const reply = await answerer.answer({ db: s.db, key: 'ask', text: 'Synthetic prose question' });
+  assert.ok(reply.provenance.packIds.includes('synthetic-prose'), 'the synthetic pack is active');
+  const { unverified } = reply.provenance.grounding;
+  for (const bare of ['57', '4383']) assert.ok(unverified.includes(bare), `bare ${bare} must not ground: ${JSON.stringify(unverified)}`);
+  for (const marked of ['$7,013', '6.7%', '3.9 percent', '23k']) {
+    assert.ok(!unverified.includes(marked), `${marked} grounds: ${JSON.stringify(unverified)}`);
+    const literal = reply.provenance.literals.find(l => l.text === marked);
+    assert.equal(literal && literal.source, 'knowledge pack entries', JSON.stringify(reply.provenance.literals));
+  }
+});
+
+test('R3 D: K-12 and 2026-01 never read as negatives in evidence or in the answer', async t => {
+  const s = await demoStore(t);
+  const scenario = buildScenario(s.db);
+  const evidence = [
+    { name: 'list_recommendations', args: {}, result: [{ status: 'doing', description: 'Private K-12 tuition can qualify.' }] },
+    { name: 'list_recommendations', args: {}, result: [{ status: 'doing', grade: 'K-12' }] },
+    { name: 'pnl_by_month', args: {}, result: { rows: [{ period: '2026-01', category: 'synthetic', amount: 0 }], totals: {} } },
+  ];
+  for (const r of evidence) {
+    for (const text of ['-12', '−12', '-$12', '-1', '−1', '-$1']) {
+      const g = groundAnswer(`The change is ${text}.`, { scenario, data: [], toolResults: [r] });
+      assert.equal(g.ok, false, `${JSON.stringify(r.result)} must not ground ${text}`);
+    }
+  }
+  const prose = groundAnswer('Private K-12 tuition can qualify.', { scenario, toolResults: [], data: [] });
+  assert.ok(!prose.violations.some(v => v.text.startsWith('-')), `K-12 is not read as a negative: ${JSON.stringify(prose.violations)}`);
+});
+
+// Canned demo answers that were unverified before round 3, independent of it.
+const KNOWN_UNVERIFIED = new Set(['ask:salary', 'rec:offcycle:1', 'whatif:scorp']);
+
+test('R3 demo regression: every canned demo answer stays grounded except the known pre-existing ones; What if kids is grounded', async t => {
+  const s = await demoStore(t);
+  const scenario = buildScenario(s.db);
+  const answerer = createLiveAnswerer({ engine: s.runtime, packs: s.packs });
+  const outcomes = new Map();
+  for (const q of scenario.ask.suggested) {
+    outcomes.set(`ask:${q.id}`, (await answerer.answer({ db: s.db, key: 'ask', questionId: q.id })).provenance.grounding);
+  }
+  for (const rec of scenario.recs) {
+    for (let i = 0; i < (rec.qa || []).length; i++) {
+      outcomes.set(`rec:${rec.id}:${i}`, (await answerer.answer({ db: s.db, key: rec.id, questionId: i })).provenance.grounding);
+    }
+  }
+  for (const pack of scenario.packs) {
+    if (!pack.whatIf) continue;
+    outcomes.set(`whatif:${pack.id}`, (await answerer.whatIf({ db: s.db, packId: pack.id })).provenance.grounding);
+  }
+  assert.ok(outcomes.size >= 20, `the demo has its canned answers: ${outcomes.size}`);
+  assert.ok(outcomes.has('whatif:kids'), 'the kids pack has a What if');
+  assert.deepEqual(outcomes.get('whatif:kids').unverified, [], 'the K-12 What if stays grounded');
+  const broken = [...outcomes].filter(([id, g]) => !g.ok && !KNOWN_UNVERIFIED.has(id)).map(([id, g]) => `${id} ${JSON.stringify(g.unverified)}`);
+  assert.deepEqual(broken, []);
 });

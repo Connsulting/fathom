@@ -84,3 +84,23 @@ test('compound numeric words are checked as an amount and Unicode minus retains 
   assert.equal(checkGrounding('.5', { data: [0.5] }).ok, true);
   assert.equal(checkGrounding('1e3', { data: [1000] }).ok, true);
 });
+
+test('a hyphen glued to a preceding letter or digit is not a minus sign, in the answer and in evidence', () => {
+  // Answer side: K-12 is not -12.
+  assert.ok(!checkGrounding('Private K-12 tuition can qualify.').violations.some(v => v.text.startsWith('-')));
+  assert.equal(checkGrounding('Private K-12 tuition can qualify.', { data: [{ count: 12 }] }).ok, true);
+  // Evidence side: K-12 and 2026-01 never yield a negative.
+  for (const text of ['-12', '−12', '-$12']) {
+    assert.equal(checkGrounding(text, { data: ['K-12'] }).ok, false, `K-12 grounds ${text}`);
+    assert.equal(checkGrounding(text, { toolResults: [{ note: 'Private K-12 tuition can qualify.' }] }).ok, false, `K-12 prose grounds ${text}`);
+  }
+  for (const text of ['-1', '−1', '-$1']) {
+    assert.equal(checkGrounding(text, { toolResults: [{ period: '2026-01' }] }).ok, false, `2026-01 grounds ${text}`);
+  }
+  // A real minus sign still reads as one on both sides.
+  assert.equal(checkGrounding('a change of -12', { data: [{ change: -12 }] }).ok, true);
+  assert.equal(checkGrounding('a change of -12', { data: [{ change: 12 }] }).ok, false);
+  assert.equal(checkGrounding('-$12', { data: ['a change of -$12 this year'] }).ok, true);
+  assert.equal(checkGrounding('-$25', { toolResults: [{ note: 'a loss of -$25' }] }).ok, true);
+  assert.equal(checkGrounding('-$25', { toolResults: [{ note: 'a loss of $25' }] }).ok, false);
+});
