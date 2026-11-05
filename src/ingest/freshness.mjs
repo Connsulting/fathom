@@ -106,9 +106,27 @@ function clockOf(db, clock) {
   return typeof stored === 'string' && dayMs(stored) != null ? stored : today();
 }
 
+// Pending items with fileName (the item's file name or null) and guess (the stored engine guess
+// as {option, label, reason, model, ts}, or null when it has no option or the option is gone).
+function pendingWithGuesses(db) {
+  const extra = new Map(db.prepare(`SELECT ci.id, f.name AS file_name, g.option_id, g.reason, g.model, g.ts
+                                    FROM confirm_items ci LEFT JOIN files f ON f.id = ci.file_id
+                                    LEFT JOIN confirm_guesses g ON g.item_id = ci.id
+                                    WHERE ci.status = 'pending'`).all().map((r) => [r.id, r]));
+  return pendingItems(db).map((item) => {
+    const r = extra.get(item.id);
+    const option = r && r.option_id != null ? item.options.find((o) => o.id === r.option_id) : null;
+    return {
+      ...item,
+      fileName: r?.file_name ?? null,
+      guess: option ? { option: option.id, label: option.label, reason: r.reason, model: r.model, ts: r.ts } : null,
+    };
+  });
+}
+
 export function ingestState(db, { clock } = {}) {
   const at = clockOf(db, clock);
-  const items = pendingItems(db);
+  const items = pendingWithGuesses(db);
   // Uploaded files always have stored bytes; the demo seed's provenance row does not.
   const files = db.prepare(`SELECT id, name, status, source_kind, parser, counts, uploaded_at FROM files
                             WHERE stored_path IS NOT NULL ORDER BY uploaded_at DESC, rowid DESC LIMIT ?`)

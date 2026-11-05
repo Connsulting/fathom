@@ -6,7 +6,8 @@
 import { getSetting } from '../store/db.mjs';
 import { loadDataKey, VaultError } from '../ingest/vault.mjs';
 import { ingestFiles, retryFile as retryIngest } from '../ingest/pipeline.mjs';
-import { answerItem, pendingItems, listItems, ConfirmError } from '../ingest/confirm.mjs';
+import { answerItem, reviseItem, reopenItem, finalReason, pendingItems, listItems, ConfirmError } from '../ingest/confirm.mjs';
+import { scheduleGuesses } from '../ingest/guess.mjs';
 import { fileOf } from '../ingest/freshness.mjs';
 import { refreshPackState } from '../packs/state.mjs';
 import { HttpError } from './http.mjs';
@@ -19,6 +20,14 @@ const CONFIRM_MESSAGE = {
   bad_option: 'answer must be one of the offered options',
   answered: 'that question is already answered',
   stale: 'the value changed since this question was asked',
+  not_answered: 'that question is not answered yet',
+};
+// ConfirmError('final') by reason (D5).
+const FINAL_MESSAGE = {
+  no_undo: 'This answer was recorded before answers could be changed, so it is final.',
+  imported_since: 'A file was imported after this answer, so it is final.',
+  changed_since: 'A later change builds on this answer, so it is final.',
+  used_since: 'A later import used this answer, so it is final.',
 };
 
 const nowIso = () => new Date().toISOString();
@@ -49,6 +58,7 @@ export async function uploadFiles(ctx) {
     if (err instanceof VaultError) throw new HttpError(409, err.message);
     throw err;
   }
+  if (results.some(r => r.status === 'imported')) scheduleGuesses(ctx.db, ctx.engine);
   const scenario = scenarioOf(ctx);
   return { scenario, files: results, pending: scenario.live.ingest.pending };
 }
@@ -70,6 +80,7 @@ export async function retryFile(ctx) {
     if (err instanceof VaultError) throw new HttpError(409, err.message);
     throw err;
   }
+  if (file && file.status === 'imported') scheduleGuesses(ctx.db, ctx.engine);
   return { scenario: scenarioOf(ctx), file };
 }
 
@@ -83,15 +94,21 @@ export function listConfirm(ctx) {
   return { items: listItems(ctx.db, { status }) };
 }
 
-export function answerConfirm(ctx) {
-  const raw = ctx.params.id;
+const itemId = raw => {
   if (!/^\d{1,15}$/.test(raw)) throw new HttpError(404, 'no such question');
-  const optionId = ctx.body.answer;
-  if (typeof optionId !== 'string' || !optionId) throw new HttpError(400, 'answer must be an option id');
+  return Number(raw);
+};
+
+// Run a confirm action and answer {scenario, item} with item.final, refreshing pack state when
+// facts changed. ConfirmErrors map to their fixed messages.
+function confirmAction(ctx, fn) {
   let out;
   try {
-    out = answerItem(ctx.db, Number(raw), optionId, { now: nowIso() });
+    out = fn();
   } catch (err) {
+    if (err instanceof ConfirmError && err.code === 'final' && Object.hasOwn(FINAL_MESSAGE, err.reason)) {
+      throw new HttpError(err.status, FINAL_MESSAGE[err.reason]);
+    }
     if (err instanceof ConfirmError && Object.hasOwn(CONFIRM_MESSAGE, err.code)) {
       throw new HttpError(err.status, CONFIRM_MESSAGE[err.code]);
     }
@@ -100,5 +117,19 @@ export function answerConfirm(ctx) {
   if (out.factsChanged) {
     try { refreshPackState(ctx.db, { dataDir: ctx.config && ctx.config.dataDir }); } catch (err) { console.error('fathom: pack refresh failed', err && err.name); }
   }
-  return { scenario: scenarioOf(ctx), item: out.item };
+  return { scenario: scenarioOf(ctx), item: { ...out.item, final: finalReason(ctx.db, out.item) } };
+}
+
+// {answer} answers a pending item; {answer, revise: true} revises an answered one.
+export function answerConfirm(ctx) {
+  const id = itemId(ctx.params.id);
+  const optionId = ctx.body.answer;
+  if (typeof optionId !== 'string' || !optionId) throw new HttpError(400, 'answer must be an option id');
+  const revise = ctx.body.revise === true;
+  return confirmAction(ctx, () => (revise ? reviseItem : answerItem)(ctx.db, id, optionId, { now: nowIso() }));
+}
+
+export function reopenConfirm(ctx) {
+  const id = itemId(ctx.params.id);
+  return confirmAction(ctx, () => reopenItem(ctx.db, id, { now: nowIso() }));
 }

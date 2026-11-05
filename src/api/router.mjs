@@ -43,6 +43,7 @@ const TABLE = [
   { method: 'GET', path: '/api/confirm', handler: ih.listPendingConfirm, ingest: true },
   { method: 'POST', path: '/api/confirm/list', handler: ih.listConfirm, ingest: true },
   { method: 'POST', path: '/api/confirm/:id/answer', handler: ih.answerConfirm, ingest: true },
+  { method: 'POST', path: '/api/confirm/:id/reopen', handler: ih.reopenConfirm, ingest: true },
 ];
 
 export const routes = TABLE.map(({ method, path }) => ({ method, path }));

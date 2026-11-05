@@ -13,7 +13,8 @@
     "e2e:smoke": "playwright test --grep @smoke",
     "smoke:live": "node --test src/engine/test/live.test.mjs",
     "build:your-plans": "node scripts/build-your-plans.mjs",
-    "plan": "node src/jobs/plan-cli.mjs"
+    "plan": "node src/jobs/plan-cli.mjs",
+    "confirm:guess": "node src/jobs/guess-cli.mjs"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.318",

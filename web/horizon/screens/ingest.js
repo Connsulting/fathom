@@ -1,6 +1,7 @@
-/* Horizon ingest screens: Add files, per-file results, the Confirm queue, the pending banner,
+/* Horizon ingest screens: Add files, per-file results, the Confirm deck, the pending banner,
    account freshness and the Sources list. Text from the server (file names, questions, option
-   labels, source labels) is plain text and always goes through esc(), never token resolution. */
+   labels, guess reasons, source labels) is plain text and always goes through esc(), never token
+   resolution. */
 
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -31,8 +32,33 @@ const KIND = {
   tax_year: 'Tax year',
   fact_check: 'Check a value',
   near_duplicate: 'Possible duplicate',
-  employer_relation: 'Employer'
+  employer_relation: 'Employer',
+  employer_recipient: 'Who is paid',
+  document_recipient: 'Whose document',
+  withholding_conflict: 'Withholding'
 };
+
+// Confirm deck keys. One plain table; the handler in ingestScreens reads it.
+export const DECK_KEYS = [
+  ...['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((key) => ({ key, label: `Answer with option ${key}`, action: 'pick' })),
+  { key: 'Enter', label: "Take Fathom's guess", action: 'guess' },
+  { key: 'j', label: 'Next card', action: 'next' },
+  { key: 'ArrowRight', label: 'Next card', action: 'next' },
+  { key: 'k', label: 'Previous card', action: 'prev' },
+  { key: 'ArrowLeft', label: 'Previous card', action: 'prev' },
+  { key: 'z', label: 'Undo the last answer', action: 'undo' },
+  { key: 'u', label: 'Undo the last answer', action: 'undo' },
+  { key: 'Escape', label: 'Back to Year', action: 'leave' }
+];
+const DECK_ACTION = new Map(DECK_KEYS.map((r) => [r.key, r.action]));
+
+// Year banner copy: about five seconds per check, at least a minute.
+export const quickCheckMinutes = (n) => Math.max(1, Math.ceil((n * 5) / 60));
+export const quickChecksText = (n) => `${n} quick check${n === 1 ? '' : 's'}`;
+export function minutesText(n) {
+  const k = quickCheckMinutes(n);
+  return `About ${k} minute${k === 1 ? '' : 's'}`;
+}
 
 const arr = (a) => (Array.isArray(a) ? a : []);
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
@@ -59,12 +85,15 @@ export function countsText(counts) {
   return parts.join(', ');
 }
 
+const byId = (a, b) => (Number(a) - Number(b)) || (a < b ? -1 : a > b ? 1 : 0);
+const freshDeck = () => ({ ids: [], data: {}, answers: {}, hist: [], final: {}, cur: null, busy: null, busyOpt: null, demo: null });
+
 const cadenceText = (c) => (c && typeof c === 'object' ? String(c.label || '') : String(c || ''));
 
 export function ingestScreens(h) {
   const { api, shell, section, pageHead, btn, icon, esc, draw } = h;
   // Module state survives scenario re-renders (the design redraws the whole page on every change).
-  const st = { busy: 0, results: null, answering: {}, retrying: {}, open: {} };
+  const st = { busy: 0, results: null, retrying: {}, open: {}, deck: freshDeck() };
   const ing = () => api.ingest();
 
   function chip(state) {
@@ -76,7 +105,7 @@ export function ingestScreens(h) {
   function pendingBanner() {
     const n = num(ing().pending);
     if (n <= 0) return '';
-    return `<a class="h-ing-banner" href="#/confirm" data-go="confirm">${icon('clock')}<span class="h-ing-banner-t"><b>${plural(n, 'question')} to confirm</b><span>So imported files land in the right place.</span></span>${icon('arrow')}</a>`;
+    return `<div class="h-ing-banner">${icon('clock')}<span class="h-ing-banner-t"><b>${quickChecksText(n)}</b><span>${minutesText(n)}, so imported files land in the right place.</span></span><a class="h-btn pri h-ing-start" href="#/confirm" data-go="confirm">Start</a></div>`;
   }
 
   function fileRow(f) {
@@ -139,23 +168,248 @@ export function ingestScreens(h) {
     return `<ul class="h-ing-files">${waiting.map((f) => `<li class="${esc(f.status)}">${icon('doc')}<div class="h-ing-f"><div class="h-ing-f-h"><span class="h-ing-f-n">${esc(f.name)}</span><em>${esc(STATUS[f.status] || f.status)}</em></div></div>${btn(st.retrying[f.id] ? 'Retrying' : 'Retry', `data-retry="${esc(f.id)}"${st.retrying[f.id] ? ' disabled' : ''}`, 'ghost')}</li>`).join('')}</ul>`;
   }
 
-  function confirmPage() {
-    const g = ing();
-    const files = new Map(g.files.map((f) => [f.id, f]));
-    const items = g.items.filter((i) => !i.status || i.status === 'pending');
-    const cards = items.length
-      ? `<div class="h-cfs">${items.map((i) => {
-        const busy = !!st.answering[i.id];
-        const from = files.get(i.fileId);
-        const opts = arr(i.options).map((o) => btn(esc(o.label), `data-answer="${esc(i.id)}" data-option="${esc(o.id)}"${busy ? ' disabled' : ''}`, st.answering[i.id] === o.id ? 'pri' : '')).join('');
-        return `<article class="h-cf"><div class="h-cf-k">${esc(KIND[i.kind] || 'Question')}${from ? `<span>${esc(from.name)}</span>` : ''}</div>
-          <p class="h-cf-q">${esc(i.question)}</p><div class="h-acts">${opts}</div></article>`;
-      }).join('')}</div>`
-      : `<div class="h-empty"><i class="h-ok sm">${icon('check')}</i><div><b>Nothing to confirm.</b><p>New questions show up here when an import needs one.</p></div></div>`;
+  /* ---------- Confirm deck ----------
+     Session state lives in st.deck: ids in session order, item data cached so answered cards can
+     be revisited, answers {id: optionId}, the undo history and final notices {id: message}.
+     cur is the current id, or null for the All caught up end state. */
+
+  const pendingNow = () => ing().items.filter((i) => !i.status || i.status === 'pending');
+  const unanswered = (dk, id) => dk.answers[id] == null && dk.busy !== id;
+
+  function syncDeck(entering) {
+    let dk = st.deck;
+    const pend = pendingNow();
+    const ids = pend.map((i) => String(i.id)).sort(byId);
+    const pset = new Set(ids);
+    if (dk.demo !== api.demo() || (entering && !dk.ids.some((id) => pset.has(id)))) {
+      dk = st.deck = freshDeck();
+      dk.demo = api.demo();
+    }
+    pend.forEach((i) => { dk.data[String(i.id)] = i; });
+    const added = [];
+    for (const id of ids) {
+      if (!dk.ids.includes(id)) { dk.ids.push(id); added.push(id); }
+      else if (dk.answers[id] != null && dk.busy !== id) dropAnswer(dk, id);
+    }
+    // Drop cards that left the queue without an answer from this session.
+    const old = dk.ids;
+    dk.ids = old.filter((id) => pset.has(id) || dk.answers[id] != null || dk.busy === id);
+    if (dk.cur != null && !dk.ids.includes(dk.cur)) {
+      const after = old.slice(old.indexOf(dk.cur) + 1).find((id) => dk.ids.includes(id));
+      dk.cur = after ?? null;
+      if (dk.cur != null && !unanswered(dk, dk.cur)) dk.cur = nextOpen(dk, dk.cur);
+    }
+    if (dk.cur == null && added.length) dk.cur = added[0];
+    return dk;
+  }
+
+  function dropAnswer(dk, id) {
+    delete dk.answers[id];
+    delete dk.final[id];
+    dk.hist = dk.hist.filter((x) => x !== id);
+  }
+
+  // The next unanswered id after `id` in session order, wrapping; null when every card is answered.
+  function nextOpen(dk, id) {
+    const at = dk.ids.indexOf(id);
+    const order = [...dk.ids.slice(at + 1), ...dk.ids.slice(0, Math.max(0, at))];
+    return order.find((x) => unanswered(dk, x)) ?? null;
+  }
+
+  const undoTarget = (dk) => [...dk.hist].reverse().find((id) => !dk.final[id]) ?? null;
+
+  function guessOf(it) {
+    const g = it && it.guess;
+    if (!g || g.option == null) return null;
+    const o = arr(it.options).find((x) => String(x.id) === String(g.option));
+    return o ? { option: String(o.id), label: o.label, reason: g.reason } : null;
+  }
+
+  function cardHtml(dk, id, fileName) {
+    const it = dk.data[id];
+    const fin = dk.final[id];
+    const busy = dk.busy === id;
+    const chosen = busy && dk.busyOpt != null ? dk.busyOpt : dk.answers[id];
+    const g = guessOf(it);
+    const opts = arr(it.options).map((o, n) => {
+      const on = chosen != null && String(chosen) === String(o.id);
+      const attrs = `data-answer="${esc(id)}" data-option="${esc(o.id)}" aria-pressed="${on}"${g && g.option === String(o.id) ? ' data-guess="1"' : ''}${busy || fin ? ' disabled' : ''}`;
+      return btn(`<span class="h-deck-n">${n + 1}</span> · ${esc(o.label)}`, attrs, on ? 'pri' : '');
+    }).join('');
+    const short = arr(it.options).every((o) => String(o.label ?? '').length <= 24);
+    const name = it.fileName || fileName || '';
+    const guess = g ? `<p class="h-cf-guess">Fathom's guess: <b>${esc(g.label)}</b>${g.reason ? `<span class="h-cf-why">${esc(g.reason)}</span>` : ''}</p>` : '';
+    const state = fin
+      ? `<p class="h-cf-final" role="status">${esc(fin)}</p>`
+      : (dk.answers[id] != null && !busy ? '<p class="h-deck-state">Answered. Pick another option to change it.</p>' : '');
+    return `<article class="h-deck-card cur${fin ? ' final' : ''}" data-item="${esc(id)}">
+      <div class="h-cf-k">${esc(KIND[it.kind] || 'Question')}${name ? `<span>${esc(name)}</span>` : ''}</div>
+      <p class="h-cf-q">${esc(it.question)}</p>${guess}<div class="h-deck-opts${short ? ' short' : ''}">${opts}</div>${state}</article>`;
+  }
+
+  function confirmPage(entering) {
+    const dk = syncDeck(entering);
+    const files = new Map(ing().files.map((f) => [String(f.id), f.name]));
+    const n = dk.ids.length;
+    const caught = (line) => `<div class="h-empty"><i class="h-ok sm">${icon('check')}</i><div><b>All caught up</b><p>${line}</p></div></div>`;
+    let deck;
+    if (!n) deck = `<div class="h-deck">${caught('New questions show up here when an import needs one.')}</div>`;
+    else {
+      const at = dk.cur == null ? n : dk.ids.indexOf(dk.cur);
+      const done = dk.ids.filter((id) => dk.answers[id] != null).length;
+      const canUndo = dk.busy == null && undoTarget(dk) != null;
+      const top = `<div class="h-deck-top"><span class="h-deck-pos" data-deck-progress>${Math.min(at + 1, n)} of ${n}</span>
+        <div class="h-deck-bar" role="progressbar" aria-label="Answered" aria-valuemin="0" aria-valuemax="${n}" aria-valuenow="${done}"><i style="width:${Math.round((done / n) * 100)}%"></i></div>
+        ${btn('Undo', `data-deck="undo"${canUndo ? '' : ' disabled'}`, 'ghost')}</div>`;
+      let stack;
+      if (dk.cur == null) stack = caught('Every question here is answered. Prev goes back to the last card.');
+      else {
+        const peeks = dk.ids.slice(at + 1, at + 3).map((_, i) => `<div class="h-deck-peek p${i + 1}" aria-hidden="true"></div>`).reverse().join('');
+        stack = `<div class="h-deck-stack${peeks ? ` n${Math.min(2, n - at - 1)}` : ''}">${peeks}${cardHtml(dk, dk.cur, files.get(String(dk.data[dk.cur].fileId)))}</div>`;
+      }
+      const allDone = !dk.ids.some((id) => unanswered(dk, id));
+      const canNext = dk.cur != null && (at < n - 1 || allDone);
+      const hint = '<p class="h-deck-hint"><span class="kb">1 to 9 answer, Enter takes the guess, J and K move, Z undoes, Esc goes to Year</span><span class="tch">Swipe right for the next card, left for the previous one</span></p>';
+      const nav = `<div class="h-deck-nav">${btn('← Prev', `data-deck="prev"${at > 0 ? '' : ' disabled'}`, 'ghost')}${hint}${btn('Next →', `data-deck="next"${canNext ? '' : ' disabled'}`, 'ghost')}</div>`;
+      deck = `<div class="h-deck">${top}${stack}${nav}</div>`;
+    }
     const wait = waitingList() || '<p class="h-mute">No files are waiting.</p>';
     return shell(`${pageHead('Household', 'Confirm', 'A few short questions so imports land in the right place.')}
-      <div class="h-cols"><div class="h-col-main">${section(items.length ? `Questions <em>${items.length}</em>` : 'Questions', cards)}</div>
+      <div class="h-cols"><div class="h-col-main">${deck}</div>
       <div class="h-col-side">${section('Waiting files', wait)}</div></div>`, 'confirm');
+  }
+
+  // Move by d cards. Next past the last card reaches All caught up only when nothing is left open.
+  function move(d) {
+    const dk = st.deck;
+    const n = dk.ids.length;
+    if (!n) return false;
+    const at = dk.cur == null ? n : dk.ids.indexOf(dk.cur);
+    const to = at + d;
+    if (to < 0 || to > n) return false;
+    if (to === n) {
+      if (dk.cur == null || dk.ids.some((id) => unanswered(dk, id))) return false;
+      dk.cur = null;
+    } else dk.cur = dk.ids[to];
+    draw();
+    return true;
+  }
+
+  // Answer (or revise) card `id` with `opt`, then move to the next open card.
+  function pick(id, opt) {
+    const dk = st.deck;
+    const it = dk.data[id];
+    if (dk.busy != null || dk.final[id] || !it || !arr(it.options).some((o) => String(o.id) === String(opt))) return false;
+    if (dk.answers[id] != null && String(dk.answers[id]) === String(opt)) {
+      if (dk.cur === id) { dk.cur = nextOpen(dk, id); draw(); }
+      return true;
+    }
+    const revise = !pendingNow().some((i) => String(i.id) === id);
+    dk.busy = id;
+    dk.busyOpt = String(opt);
+    draw();
+    const req = revise ? api.reviseAnswer(id, opt) : api.answer(id, opt).then((item) => (item ? { item } : null));
+    req.then((r) => {
+      dk.busy = null;
+      dk.busyOpt = null;
+      if (st.deck === dk && r) {
+        if (r.final) {
+          dk.final[id] = r.final;
+          dk.hist = dk.hist.filter((x) => x !== id);
+        } else {
+          dk.answers[id] = String(opt);
+          dk.hist = [...dk.hist.filter((x) => x !== id), id];
+          if (dk.cur === id) dk.cur = nextOpen(dk, id);
+        }
+      }
+      draw();
+    });
+    return true;
+  }
+
+  // Reopen the most recent non-final answer of this session and move to its card.
+  function undo() {
+    const dk = st.deck;
+    const id = dk.busy == null ? undoTarget(dk) : null;
+    if (id == null) return false;
+    dk.busy = id;
+    draw();
+    api.reopenAnswer(id).then((r) => {
+      dk.busy = null;
+      if (st.deck === dk && r) {
+        if (r.final) {
+          dk.final[id] = r.final;
+          dk.hist = dk.hist.filter((x) => x !== id);
+        } else dropAnswer(dk, id);
+        dk.cur = id;
+      }
+      draw();
+    });
+    return true;
+  }
+
+  // Screen keys for the deck; true when the key was handled (the caller prevents the default).
+  function deckKey(e) {
+    if (api.route?.name !== 'confirm' || e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return false;
+    const t = e.target;
+    if (t && (t.isContentEditable || t.matches?.('input,textarea,select'))) return false;
+    const key = e.key && e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    const action = DECK_ACTION.get(key);
+    if (!action) return false;
+    if (key === 'Enter' && t?.closest?.('button,a[href]')) return false;
+    const dk = st.deck;
+    const cur = dk.cur != null ? dk.data[dk.cur] : null;
+    if (e.repeat && ['pick', 'guess', 'undo'].includes(action)) return true;
+    switch (action) {
+      case 'pick': {
+        const o = cur && arr(cur.options)[Number(key) - 1];
+        return o ? pick(dk.cur, o.id) : false;
+      }
+      case 'guess': {
+        const g = guessOf(cur);
+        return g ? pick(dk.cur, g.option) : false;
+      }
+      case 'next': return move(1) || true;
+      case 'prev': return move(-1) || true;
+      case 'undo': return undo() || true;
+      case 'leave': api.go('brief'); return true;
+      default: return false;
+    }
+  }
+
+  // Touch and pen swipes on the current card: it follows the finger, swipe right goes to the next
+  // card, left to the previous one, and a short drag springs back. A swipe never answers.
+  let drag = null;
+  function handlePointer(e) {
+    if (e.type === 'pointerdown') {
+      drag = null;
+      if (api.route?.name !== 'confirm' || (e.pointerType !== 'touch' && e.pointerType !== 'pen')) return false;
+      const el = e.target.closest?.('article.h-deck-card.cur');
+      if (!el || e.target.closest('button,a,input,textarea,select')) return false;
+      drag = { id: e.pointerId, x: e.clientX, y: e.clientY, dx: 0, on: false, el };
+      return true;
+    }
+    if (!drag || e.pointerId !== drag.id) return false;
+    // A redraw during the drag (resize, a scenario change) replaces the card element.
+    if (!drag.el.isConnected) drag.el = document.querySelector('article.h-deck-card.cur') || drag.el;
+    if (e.type === 'pointermove') {
+      const dx = e.clientX - drag.x;
+      if (!drag.on) {
+        if (Math.abs(dx) < 6 || Math.abs(dx) < Math.abs(e.clientY - drag.y)) return true;
+        drag.on = true;
+        drag.el.classList.add('drag');
+      }
+      drag.dx = dx;
+      drag.el.style.transform = `translateX(${dx}px) rotate(${(dx / 30).toFixed(2)}deg)`;
+      return true;
+    }
+    const d = drag;
+    drag = null;
+    const far = e.type === 'pointerup' && d.on && Math.abs(d.dx) >= Math.min(80, (d.el.offsetWidth || 320) * 0.25);
+    d.el.classList.remove('drag');
+    d.el.style.transform = '';
+    if (far) move(d.dx > 0 ? 1 : -1);
+    return true;
   }
 
   function upload(input) {
@@ -172,7 +426,7 @@ export function ingestScreens(h) {
   }
 
   function handleClick(e) {
-    const t = e.target.closest?.('[data-upload-open],[data-answer],[data-retry],details[data-howto] > summary');
+    const t = e.target.closest?.('[data-upload-open],[data-answer],[data-deck],[data-retry],details[data-howto] > summary');
     if (!t) return false;
     if (t.tagName === 'SUMMARY') {
       const d = t.parentElement;
@@ -186,11 +440,13 @@ export function ingestScreens(h) {
       return true;
     }
     if (d.answer) {
-      if (st.answering[d.answer]) return true;
-      const id = d.answer;
-      st.answering[id] = d.option;
-      draw();
-      api.answer(id, d.option).then(() => { delete st.answering[id]; draw(); });
+      pick(d.answer, d.option);
+      return true;
+    }
+    if (d.deck) {
+      if (d.deck === 'undo') undo();
+      else move(d.deck === 'next' ? 1 : -1);
+      t.ownerDocument.querySelector(`[data-deck="${d.deck}"]:not([disabled])`)?.focus();
       return true;
     }
     if (d.retry) {
@@ -212,5 +468,5 @@ export function ingestScreens(h) {
     return true;
   }
 
-  return { confirmPage, pendingBanner, addFiles, accountMeta, sourcesSection, handleClick, handleChange };
+  return { confirmPage, pendingBanner, addFiles, accountMeta, sourcesSection, handleClick, handleChange, deckKey, handlePointer };
 }
