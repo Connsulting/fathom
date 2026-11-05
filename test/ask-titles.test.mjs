@@ -69,10 +69,18 @@ test('AC3 validateTitle fromModel rejects digits except a standalone 19xx or 20x
 // ---------------------------------------------------------------- fallbackTitle
 
 test('AC3 fallbackTitle decodes entities, strips tags and collapses whitespace', () => {
-  assert.equal(fallbackTitle(SC, 'Can we afford a &lt;new&gt; car'), 'Can we afford a <new> car');
+  assert.equal(fallbackTitle(SC, 'Can we afford a &lt;new&gt; car'), 'Can we afford a new car');
   assert.equal(fallbackTitle(SC, 'Is it &quot;safe&quot; &amp; sound'), 'Is it "safe" & sound');
   assert.equal(fallbackTitle(SC, '<p>Synthetic <b>bold</b> question</p>'), 'Synthetic bold question');
   assert.equal(fallbackTitle(SC, '  Synthetic \n\n  spaced\tquestion  '), 'Synthetic spaced question');
+});
+
+test('AC3 fallbackTitle never returns markup characters', () => {
+  assert.equal(fallbackTitle(SC, '&lt;img src=x onerror=1&gt;'), 'img src=x onerror=1');
+  const out = fallbackTitle(SC, 'Use &#96;code&#96; and &#123;braces&#125; and `literal`');
+  assert.ok(typeof out === 'string' && out.length > 0, String(out));
+  assert.ok(!/[<>{}`]/.test(out), out);
+  assert.equal(fallbackTitle(SC, '&lt;&gt;'), null);
 });
 
 test('AC3 fallbackTitle removes figure tokens entirely so no amount appears', () => {
@@ -269,6 +277,21 @@ test('AC3 a thread already named by hand is never sent for a title', async t => 
   assert.equal(await nameThread({ db, engine, key: thread.key, clock: CLOCK }), null);
   assert.equal(calls.length, 0);
   assert.deepEqual(rowOf(db, thread.key), { title: 'Synthetic manual name', title_source: 'manual' });
+});
+
+test('AC3 a thread whose first message has no usable title text is never sent for a title again', async t => {
+  const { db, thread, add } = await namingStore(t);
+  add(thread.key, 'me', '{f:yearend_cash}');
+  add(thread.key, 'fathom', '<p>Synthetic estimate answer one</p>');
+  add(thread.key, 'me', 'Synthetic estimate question two');
+  add(thread.key, 'fathom', '<p>Synthetic estimate answer two</p>');
+  const { engine, calls } = stubEngine({ title: '<b>Quarterly</b> estimates' });
+  assert.equal(await nameThread({ db, engine, key: thread.key, clock: CLOCK }), null);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(rowOf(db, thread.key), { title: null, title_source: 'auto' });
+  assert.equal(await nameThread({ db, engine, key: thread.key, clock: CLOCK }), null);
+  assert.equal(calls.length, 1, 'no further engine call');
+  assert.deepEqual(rowOf(db, thread.key), { title: null, title_source: 'auto' });
 });
 
 test('AC3 a manual rename made while the title call runs survives', async t => {
