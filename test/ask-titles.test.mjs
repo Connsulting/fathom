@@ -22,6 +22,7 @@ test('AC3 validateTitle trims and collapses spaces', () => {
   assert.equal(validateTitle('Tax plan.'), 'Tax plan.', 'a rename keeps its period');
   assert.equal(validateTitle('x'.repeat(60)), 'x'.repeat(60));
   assert.equal(validateTitle('Plan for 2027 and the 401k'), 'Plan for 2027 and the 401k', 'a rename may carry digits');
+  assert.equal(validateTitle('Planning the 2026 estimates'), 'Planning the 2026 estimates', 'a rename may carry a year');
   assert.equal(validateTitle('one two three four five six seven eight nine ten'), 'one two three four five six seven eight nine ten',
     'the word limit is for model output only');
 });
@@ -53,10 +54,12 @@ test('AC3 validateTitle fromModel allows at most 8 words', () => {
   assert.equal(m('alpha bravo charlie delta echo foxtrot golf hotel india'), null);
 });
 
-test('AC3 validateTitle fromModel rejects digits except a standalone 19xx or 20xx year', () => {
+test('AC3 validateTitle fromModel rejects any digit, years included', () => {
   const m = raw => validateTitle(raw, { fromModel: true });
-  assert.equal(m('Planning the 2026 estimates'), 'Planning the 2026 estimates');
-  assert.equal(m('Looking back at 1999'), 'Looking back at 1999');
+  assert.equal(m('Planning the 2026 estimates'), null);
+  assert.equal(m('Save 2026 per month'), null);
+  assert.equal(m('Looking back at 1999'), null);
+  assert.equal(m('Q4 planning'), null);
   assert.equal(m('Spend 4000 on a car'), null);
   assert.equal(m('15 percent savings'), null);
   assert.equal(m('The 401k rollover'), null);
@@ -73,8 +76,8 @@ test('AC3 validateTitle fromModel rejects money and quantities in any form', () 
     'A million reasons to save', 'Paying half a million', 'Saving €2026 abroad', 'Fees at 2026%']) {
     assert.equal(m(raw), null, raw);
   }
-  for (const ok of ['Planning the 2026 estimates', 'Quarterly estimate planning', 'Roth conversion before year end',
-    'S corp payroll timing']) {
+  for (const ok of ['Quarterly estimate planning', 'Roth conversion before year end',
+    'S corp payroll timing', 'Planning next year estimates']) {
     assert.equal(m(ok), ok, ok);
   }
 });
