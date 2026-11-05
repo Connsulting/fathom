@@ -10,7 +10,7 @@ import { Readable } from 'node:stream';
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync, rmSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
-import { src, spawnServer, request, postJson, runCommand, tempDir, freePort, openStore, SERVER_TIMEOUT } from '../helpers/server.mjs';
+import { src, spawnServer, request, postJson, runCommand, tempDir, freePort, openStore, SERVER_TIMEOUT, TEST_OWNER } from '../helpers/server.mjs';
 import { fixturePath, aggregatorCsv } from '../helpers/ingest.mjs';
 import { writeXlsx } from '../helpers/xlsx.mjs';
 import { textPdf, markerFontPdf, inflateBombPdf } from '../helpers/pdf.mjs';
@@ -37,7 +37,7 @@ function form(files, extra = {}) {
 }
 
 async function upload(baseUrl, files, extra) {
-  const res = await fetch(`${baseUrl}/api/files`, { method: 'POST', body: form(files, extra) });
+  const res = await fetch(`${baseUrl}/api/files`, { method: 'POST', headers: { 'tailscale-user-login': TEST_OWNER }, body: form(files, extra) });
   const text = await res.text();
   let json = null;
   try { json = JSON.parse(text); } catch { /* not JSON */ }

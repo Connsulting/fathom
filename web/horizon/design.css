@@ -67,6 +67,8 @@
 .d-horizon .h-more-btn:focus-visible { outline: 2px solid var(--ac); outline-offset: 2px; }
 .d-horizon .h-more-p { position: absolute; z-index: 30; top: calc(100% + 10px); right: 0; width: min(256px, calc(100vw - 32px)); padding: 6px; background: var(--s2); border: 1px solid var(--line2); border-radius: 12px; }
 .d-horizon .h-more-p[hidden] { display: none; }
+.d-horizon .h-who { margin-bottom: 6px; padding: 8px 10px 10px; border-bottom: 1px solid var(--line2); color: var(--tx); font-size: 14px; overflow-wrap: anywhere; }
+.d-horizon .h-who span { display: block; margin-top: 2px; color: var(--fa); font-size: 12.5px; }
 .d-horizon .h-more-g + .h-more-g { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--line2); }
 .d-horizon .h-more-h { padding: 8px 10px 4px; font-size: 11.5px; letter-spacing: 0.07em; text-transform: uppercase; color: var(--fa); }
 .d-horizon .h-more-p a { display: block; padding: 8px 10px; border-radius: 7px; color: var(--tx2); font-size: 14px; }
