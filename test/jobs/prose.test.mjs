@@ -5,17 +5,17 @@
 
 import test, { after, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { runPlanning } from '../../src/jobs/planner.mjs';
+import { planRun } from '../helpers/plan.mjs';
 import * as prose from '../../src/jobs/planner/prose.mjs';
 import { createEngine, checkGrounding } from '../../src/engine/index.mjs';
 import { buildScenario } from '../../src/scenario/build.mjs';
 import { TOKEN } from '../../src/shared/tokens.mjs';
-import { scratch, recRow, activeRecIds, parseJson, PACKS_DIR } from '../helpers/real-store.mjs';
+import { scratch, recRow, activeRecIds, parseJson } from '../helpers/real-store.mjs';
 
 const NOW = '2026-11-05';
 const S = scratch();
 after(() => S.cleanup());
-const plan = (db, engine = null) => runPlanning(db, engine, { now: NOW, packDirs: [PACKS_DIR] });
+const plan = (db, engine = null) => planRun(db, { engine, now: NOW });
 
 const VALID = {
   summary: '{n:household} has a window to act on this.',

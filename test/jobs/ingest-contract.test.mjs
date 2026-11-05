@@ -25,7 +25,7 @@
 
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
-import { runPlanning } from '../../src/jobs/planner.mjs';
+import { planRun } from '../helpers/plan.mjs';
 import { computeFigures } from '../../src/jobs/planner/figures.mjs';
 import { loadPlanningData, resolveEntities } from '../../src/jobs/planner/data.mjs';
 import { deriveFacts, mergeFacts, ownerFactsOf } from '../../src/jobs/planner/facts.mjs';
@@ -35,14 +35,14 @@ import { confirmTask } from '../../src/jobs/triggers/common.mjs';
 import { nameKey } from '../../src/ingest/extract.mjs';
 import {
   scratch, addFact, addFile, addNotes, addPayroll, factRow, contentValue, answerPending, figureRow, plannerFigures, recRow, activeRecIds, parseJson, pnlWorkbook,
-  PACKS_DIR, SCORP, SOLE_PROP, INST, MASKS,
+  SCORP, SOLE_PROP, INST, MASKS,
 } from '../helpers/real-store.mjs';
 
 const NOW = '2026-11-05';
 const S = scratch('fathom-ingest-contract-');
 after(() => S.cleanup());
 
-const plan = db => runPlanning(db, null, { now: NOW, packDirs: [PACKS_DIR] });
+const plan = db => planRun(db, { now: NOW });
 const near = (actual, expected, what) =>
   assert.ok(typeof actual === 'number' && Math.abs(actual - expected) <= 0.011, `${what}: expected ${expected}, got ${actual}`);
 const fig = (db, key) => {

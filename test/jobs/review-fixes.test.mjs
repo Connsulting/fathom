@@ -3,21 +3,21 @@
 
 import test, { after, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { runPlanning } from '../../src/jobs/planner.mjs';
+import { planRun } from '../helpers/plan.mjs';
 import { buildScenario } from '../../src/scenario/build.mjs';
 import { resolveTokens } from '../../src/shared/tokens.mjs';
 import { sepRoom } from '../../src/calc/index.mjs';
 import { recAction } from '../../src/api/handlers.mjs';
 import {
   scratch, addFile, addPayroll, w2Doc, paystubDoc, addFact, accountIdByMask, contentValue, figureRow, recRow, plannerRec, activeRecIds,
-  recEvents, PACKS_DIR, SCORP, SOLE_PROP, MASKS, INST, OWNER_FACTS,
+  recEvents, SCORP, SOLE_PROP, MASKS, INST, OWNER_FACTS,
 } from '../helpers/real-store.mjs';
 
 const NOW = '2026-11-05';
 const S = scratch();
 after(() => S.cleanup());
 
-const plan = (db, now = NOW) => runPlanning(db, null, { now, packDirs: [PACKS_DIR] });
+const plan = (db, now = NOW) => planRun(db, { now });
 const r2 = n => Math.round((n + Number.EPSILON) * 100) / 100;
 const near = (actual, expected, what) =>
   assert.ok(typeof actual === 'number' && Math.abs(actual - expected) <= 0.011, `${what}: expected ${expected}, got ${actual}`);

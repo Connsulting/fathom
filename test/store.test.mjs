@@ -187,14 +187,15 @@ test('a store migrated to exactly 005 upgrades to 006-chat on startup and keeps 
   await withServer({ dataDir, env: { FATHOM_DEMO: '0', FATHOM_ENGINE: 'off' } }, async s => {
     const h = await request(s.baseUrl, { path: '/healthz' });
     assert.equal(h.status, 200);
-    assert.equal(h.json.schema, 7, 'the schema version reports 7 after startup');
+    const latest = Math.max(...readdirSync(MIGRATIONS_DIR).filter(f => f.endsWith('.sql')).map(f => Number(f.slice(0, 3))));
+    assert.equal(h.json.schema, latest, 'the schema version reports the highest migration after startup');
   });
 
   const db = openDb(file);
   try {
     assert.ok(db.prepare('PRAGMA table_info(messages)').all().some(c => c.name === 'provenance'), 'messages.provenance exists');
     const applied = db.prepare('SELECT id, name FROM schema_migrations ORDER BY id').all().map(r => `${r.id}-${r.name}`);
-    assert.deepEqual(applied, ['1-foundation', '2-ingest', '3-ingest-recipients', '4-ingest-survivor', '5-pack-manifest', '6-chat', '7-planner']);
+    assert.deepEqual(applied.slice(0, 7), ['1-foundation', '2-ingest', '3-ingest-recipients', '4-ingest-survivor', '5-pack-manifest', '6-chat', '7-planner']);
     const rows = db.prepare("SELECT role, text, provenance FROM messages WHERE conversation_key = 'ask' ORDER BY id").all().map(r => ({ ...r }));
     assert.deepEqual(rows, [
       { role: 'me', text: '<p>Synthetic question before the upgrade</p>', provenance: null },

@@ -46,7 +46,12 @@ test('npm start on an empty data dir with FATHOM_DEMO unset serves the demo UI a
 test('FATHOM_DEMO=0 on an empty data dir serves a valid empty scenario', T, async () => {
   await withServer({ env: { FATHOM_DEMO: '0' } }, async s => {
     const sc = await getScenario(s.baseUrl);
-    assert.deepEqual(sc.recs, []);
+    // The startup tick may run the nightly plan job; any rec is the planner's, never a seeded one.
+    const { openDb } = await src('src/store/db.mjs');
+    const db = openDb(join(s.dataDir, DB_FILE));
+    let planned;
+    try { planned = db.prepare('SELECT rec_id FROM planner_recs').all().map(r => r.rec_id); } finally { db.close(); }
+    assert.deepEqual(sc.recs.filter(r => !planned.includes(r.id)).map(r => r.id), []);
     assert.equal(sc.live.mode, 'real');
     const page = await request(s.baseUrl, { path: '/' });
     assert.equal(page.status, 200);

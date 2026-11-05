@@ -7,7 +7,7 @@
 
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
-import { runPlanning } from '../../src/jobs/planner.mjs';
+import { planRun } from '../helpers/plan.mjs';
 import { computeFigures } from '../../src/jobs/planner/figures.mjs';
 import { loadPlanningData, resolveEntities } from '../../src/jobs/planner/data.mjs';
 import { deriveFacts, mergeFacts, ownerFactsOf } from '../../src/jobs/planner/facts.mjs';
@@ -15,7 +15,7 @@ import { checkProse } from '../../src/jobs/planner/prose.mjs';
 import { createEngine } from '../../src/engine/index.mjs';
 import { getScenario } from '../../src/api/handlers.mjs';
 import {
-  scratch, addFact, removeFact, figureRow, recRow, plannerRec, activeRecIds, contentValue, parseJson, PACKS_DIR,
+  scratch, addFact, removeFact, figureRow, recRow, plannerRec, activeRecIds, contentValue, parseJson,
   SCORP, SOLE_PROP, INST, MASKS,
 } from '../helpers/real-store.mjs';
 
@@ -24,7 +24,7 @@ const JAN = '2027-01-10';
 const S = scratch('fathom-review-fixes-');
 after(() => S.cleanup());
 
-const plan = (db, now = NOW, engine = null) => runPlanning(db, engine, { now, packDirs: [PACKS_DIR] });
+const plan = (db, now = NOW, engine = null) => planRun(db, { engine, now });
 const api = (db, clock = NOW) => ({ db, config: { clock }, params: {}, body: {} });
 const near = (actual, expected, what) =>
   assert.ok(typeof actual === 'number' && Math.abs(actual - expected) <= 0.011, `${what}: expected ${expected}, got ${actual}`);

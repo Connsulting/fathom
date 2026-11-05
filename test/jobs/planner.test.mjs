@@ -5,7 +5,7 @@
 
 import test, { before, after, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { runPlanning } from '../../src/jobs/planner.mjs';
+import { planRun } from '../helpers/plan.mjs';
 import { buildScenario } from '../../src/scenario/build.mjs';
 import {
   selfEmploymentTax, qbiDeduction, federalIncomeTax, virginiaIncomeTax, estimatedPaymentSafeHarbor,
@@ -17,7 +17,7 @@ import { createRuntimeEngine } from '../../src/engine/runtime.mjs';
 import { reasonText } from '../../src/jobs/triggers/missing-data.mjs';
 import {
   scratch, createRealStore, addPayroll, w2Doc, paystubDoc, addFact, removeFact, accountIdByMask, figureRow, plannerFigures,
-  factRow, recRow, plannerRec, activeRecIds, recEvents, parseJson, PACKS_DIR, SCORP, SOLE_PROP, SYNTH, MASKS,
+  factRow, recRow, plannerRec, activeRecIds, recEvents, parseJson, SCORP, SOLE_PROP, SYNTH, MASKS,
   HINTS, INST,
 } from '../helpers/real-store.mjs';
 
@@ -25,7 +25,7 @@ const NOW = '2026-11-05';
 const S = scratch();
 after(() => S.cleanup());
 
-const plan = (db, { engine = null, now = NOW } = {}) => runPlanning(db, engine, { now, packDirs: [PACKS_DIR] });
+const plan = (db, { engine = null, now = NOW } = {}) => planRun(db, { engine, now });
 const r2 = n => Math.round((n + Number.EPSILON) * 100) / 100;
 const near = (actual, expected, what) =>
   assert.ok(typeof actual === 'number' && Math.abs(actual - expected) <= 0.011, `${what}: expected ${expected}, got ${actual}`);
