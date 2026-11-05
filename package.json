@@ -13,6 +13,7 @@
     "e2e:smoke": "playwright test --grep @smoke",
     "smoke:live": "node --test src/engine/test/live.test.mjs",
     "build:your-plans": "node scripts/build-your-plans.mjs",
+    "plan": "node src/jobs/plan-cli.mjs",
     "email:test": "node scripts/email-test.mjs"
   },
   "dependencies": {

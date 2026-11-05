@@ -34,6 +34,8 @@ November state) and keeps its state across restarts.
 | `FATHOM_EMAIL_TRANSPORT` | `dev` | `dev`, `smtp`, `resend`, `postmark` or `agentmail`. |
 | `FATHOM_PUBLIC_URL` | unset | URL MCP clients use to reach this server (http or https, no credentials, query or fragment). Its host is allowed on `/mcp` and every `/api` route. |
 | `FATHOM_ALLOWED_HOSTS` | unset | Comma separated extra host names (`host` or `host:port`) allowed on `/mcp` and every `/api` route. A deployment reached by a DNS name must set this or `FATHOM_PUBLIC_URL`. |
+| `FATHOM_OWNER_LOGINS` | unset | Comma separated Tailscale logins allowed into a real store. Unset on a real store, every page and `/api` route answers 401. |
+| `FATHOM_OWNER_LOGINS_FILE` | unset | Path to a file with the same list, instead of `FATHOM_OWNER_LOGINS` (not both). |
 
 With `FATHOM_ENGINE=fake` (the demo default), Ask, recommendation chats and What if answer from a
 deterministic scripted source through the same grounding and provenance path as the live engine.
@@ -55,10 +57,27 @@ npm run seed:demo
 Fathom sends a monthly brief and short deadline alerts. The default `dev` transport writes each
 message to `outbox/` in the data directory and sends nothing. For real delivery set
 `FATHOM_EMAIL_TRANSPORT` (AgentMail is the production target), the sender and recipients
-(`FATHOM_EMAIL_FROM`, `FATHOM_EMAIL_TO` or their `_FILE` forms) and mount the API key as a private
-file (mode 0400 or 0600) named by `FATHOM_EMAIL_CREDENTIAL_FILE`. The Email screen shows the
+(`FATHOM_EMAIL_FROM`, `FATHOM_EMAIL_TO` or their `_FILE` forms) and mount the API key as a file other
+users cannot read (mode 0400, 0440 with fsGroup, or 0600) named by `FATHOM_EMAIL_CREDENTIAL_FILE`. The Email screen shows the
 status, a preview, the send history and the scheduled jobs. `FATHOM_LIVE_EMAIL=1 npm run
 email:test` sends one real test email; every key is listed in `docs/architecture.md`.
+
+## Access
+
+Reach the app through `tailscale serve`, which adds `Tailscale-User-Login` to every request. On a
+real store, every page and `/api` route needs a login listed in `FATHOM_OWNER_LOGINS` (or
+`FATHOM_OWNER_LOGINS_FILE`); without a usable list everything but `/healthz` answers 401. `/mcp`
+uses its own bearer keys, and demo stores are open. Also allow the tailnet name through
+`FATHOM_PUBLIC_URL` or `FATHOM_ALLOWED_HOSTS`.
+
+`tailscale serve` strips client-supplied `Tailscale-User-*` headers before adding its own, and
+tagged nodes get no login, so only the owner's own devices pass.
+
+The limit: the header is only trustworthy when `tailscale serve` is the sole path to the app.
+Anything that reaches the pod or a port-forward directly could forge it, so keep ingress
+default-deny and bind any port-forward to loopback. Any local process on the serving host can still
+reach the loopback port-forward with a forged header. This is a known limit with no code fix,
+recommended for acceptance pending the owner's decision.
 
 ## Test
 

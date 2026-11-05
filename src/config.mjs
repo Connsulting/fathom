@@ -107,5 +107,8 @@ export function loadConfig(env = process.env) {
     emailSmtpPort: smtpPort(env.FATHOM_EMAIL_SMTP_PORT),
     publicUrl,
     allowedHosts,
+    // Owner login list, raw: src/api/identity.mjs parses it and fails closed on a problem.
+    ownerLogins: blank(env.FATHOM_OWNER_LOGINS) ? null : env.FATHOM_OWNER_LOGINS,
+    ownerLoginsFile: blank(env.FATHOM_OWNER_LOGINS_FILE) ? null : env.FATHOM_OWNER_LOGINS_FILE,
   };
 }

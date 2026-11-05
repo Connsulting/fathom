@@ -114,10 +114,18 @@ export function loadSources(db, clock) {
   return src;
 }
 
+// Stored figures. A figure carries `notes` (readable assumptions from its locator, at most five,
+// MGN1) when it has any, and `unavailable` (the reason, R2-9) when the planner kept it only for
+// reference.
 export function loadFigures(db) {
   const fig = {};
-  for (const r of db.prepare('SELECT key, v, src, kind, label FROM figures ORDER BY rowid').all()) {
-    fig[r.key] = { v: r.v, src: r.src, kind: r.kind, label: r.label };
+  for (const r of db.prepare('SELECT key, v, src, kind, label, locator, unavailable_reason FROM figures ORDER BY rowid').all()) {
+    const f = { v: r.v, src: r.src, kind: r.kind, label: r.label };
+    const loc = parse(r.locator, null);
+    const notes = loc && Array.isArray(loc.notes) ? loc.notes.filter(n => typeof n === 'string' && n.trim()) : [];
+    if (notes.length) f.notes = notes.slice(0, 5);
+    if (typeof r.unavailable_reason === 'string' && r.unavailable_reason) f.unavailable = r.unavailable_reason;
+    fig[r.key] = f;
   }
   return fig;
 }
@@ -227,6 +235,9 @@ export function deriveDecisions(rows, recsById, clock, wargame) {
     if (d.status === 'decided') {
       const g = d.wargame ? wg[d.wargame] : null;
       line = d.decided_line || (g && g.decided) || [d.when_label, d.note].filter(Boolean).join('. ');
+    } else if (d.unavailable_reason) {
+      // D3, R3-7: kept as history, not a current choice; only a stored decided row wins over it.
+      status = 'unavailable';
     } else if (rec && (rec.status === 'done' || rec.status === 'dismissed')) {
       status = 'decided';
       line = rec.status === 'done' ? 'Marked done on your plan.' : 'Set aside on your plan.';
@@ -239,19 +250,25 @@ export function deriveDecisions(rows, recsById, clock, wargame) {
     out.when = d.when_label || '';
     out.note = d.note || '';
     out.line = line;
+    if (status === 'unavailable') out.unavailable = d.unavailable_reason;
     return out;
   });
 }
 
-// War-game status follows the decisions naming it: open, else decided, else upcoming.
+// War-game status follows the decisions naming it: open, else decided, else upcoming. A game the
+// planner kept only for reference is unavailable unless a stored decision on it is decided.
 function deriveWargame(wargame, decisions, rows) {
   const out = structuredClone(wargame || {});
   for (const [name, g] of Object.entries(out)) {
     if (!g || typeof g !== 'object') continue;
+    const storedDecided = rows.some(r => r.wargame === name && r.status === 'decided');
+    if (typeof g.unavailable === 'string' && !storedDecided) {
+      g.status = 'unavailable';
+      continue;
+    }
     const named = decisions.filter(d => d.wargame === name);
     if (!named.length) continue;
     g.status = named.some(d => d.status === 'open') ? 'open' : named.some(d => d.status === 'decided') ? 'decided' : 'upcoming';
-    const storedDecided = rows.some(r => r.wargame === name && r.status === 'decided');
     const firstDecided = named.find(d => d.status === 'decided');
     if (!(g.decided && storedDecided) && firstDecided) g.decided = firstDecided.line;
   }
@@ -262,11 +279,13 @@ function deriveWargame(wargame, decisions, rows) {
 
 function deriveFigures(fig, { wargame, series, engine }, scope) {
   const plain = s => resolveTokens(scope, s, false);
+  // A stored war-game figure (the planner writes them with calculator locators) wins.
+  const setWg = (key, value) => { if (!fig[key]) fig[key] = value; };
   const salary = wargame.salary;
   if (salary) {
     for (const p of arr(salary.points)) {
-      fig[`wg.salary.${p.id}.x`] = { v: p.x, src: 'wargame-model', kind: 'm', label: `${plain(p.label)}: ${plain(salary.xLabel || 'x')}` };
-      fig[`wg.salary.${p.id}.y`] = { v: p.y, src: 'wargame-model', kind: 'm', label: `${plain(p.label)}: ${plain(salary.yLabel || 'y')}` };
+      setWg(`wg.salary.${p.id}.x`, { v: p.x, src: 'wargame-model', kind: 'm', label: `${plain(p.label)}: ${plain(salary.xLabel || 'x')}` });
+      setWg(`wg.salary.${p.id}.y`, { v: p.y, src: 'wargame-model', kind: 'm', label: `${plain(p.label)}: ${plain(salary.yLabel || 'y')}` });
     }
   }
   const deferral = wargame.deferral;
@@ -279,7 +298,7 @@ function deriveFigures(fig, { wargame, series, engine }, scope) {
       const vals = { amount: o.amount, tax2026: o.tax2026, tax2027: o.tax2027, net: o.net, decCash: o.decCash, need: o.need, gap: cents(o.need - o.decCash) };
       for (const [field, label] of Object.entries(fields)) {
         if (typeof vals[field] !== 'number' || Number.isNaN(vals[field])) continue;
-        fig[`wg.deferral.${o.id}.${field}`] = { v: vals[field], src: 'wargame-model', kind: 'm', label: `${plain(o.label)}: ${label}` };
+        setWg(`wg.deferral.${o.id}.${field}`, { v: vals[field], src: 'wargame-model', kind: 'm', label: `${plain(o.label)}: ${label}` });
       }
     }
   }
@@ -338,6 +357,10 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
 
   const packs = loadPacks(db, livePacks);
   const onboarding = getSetting(db, 'onboarding', { done: false, step: 0 }) || { done: false, step: 0 };
+  const mode = getSetting(db, 'mode', null) === 'demo' ? 'demo' : 'real';
+  // A real store that already holds data (an imported file or an account) is a returning owner:
+  // it builds as november so the owner lands in the app, not first-run onboarding.
+  const hasData = !!db.prepare('SELECT EXISTS (SELECT 1 FROM files) OR EXISTS (SELECT 1 FROM accounts) AS x').get().x;
   const picks = { ...defaultPicks(wargame), ...(getSetting(db, 'wargame.picks', null) || {}) };
   const engineOn = getSetting(db, 'engine', { on: true });
   const ingest = ingestState(db, { clock: clk });
@@ -389,8 +412,8 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
     email: section(content, 'email'),
     packs: packs.map(p => p.def),
     live: {
-      mode: getSetting(db, 'mode', null) === 'demo' ? 'demo' : 'real',
-      demo: onboarding.done ? 'november' : 'fresh',
+      mode,
+      demo: onboarding.done || (mode === 'real' && hasData) ? 'november' : 'fresh',
       engine: !(engineOn && engineOn.on === false),
       onboardStep: Number.isInteger(onboarding.step) ? onboarding.step : 0,
       picks,

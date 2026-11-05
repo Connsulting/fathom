@@ -100,7 +100,7 @@ function figHtml(key, opts = {}) {
   if (!f) return '';
   const v = opts.abs ? Math.abs(f.v) : f.v;
   const text = opts.cents ? usd(v) : api.money(v, opts);
-  return `<span class="fx-fig" data-fig="${esc(key)}" data-kind="${esc(f.kind || '')}"${opts.inert ? '' : ' tabindex="0"'}>${esc(text)}</span>`;
+  return `<span class="fx-fig" data-fig="${esc(key)}" data-kind="${esc(f.kind || '')}"${f.unavailable ? ' data-unavailable="1"' : ''}${opts.inert ? '' : ' tabindex="0"'}>${esc(text)}</span>`;
 }
 
 function statusText(r) {
@@ -350,16 +350,23 @@ function windowStrip(r) {
 
 /* ---------- shell ---------- */
 
+function whoLine() {
+  const id = api.identity?.();
+  if (!id) return '';
+  const name = id.name || id.login;
+  return `<div class="h-who">Signed in as ${esc(name)}${id.login && id.login !== name ? `<span>${esc(id.login)}</span>` : ''}</div>`;
+}
+
 function shell(inner, active) {
   const link = (k, l) => `<a href="${href(k)}" data-go="${k}" class="${active === k ? 'on' : ''}"${active === k ? ' aria-current="page"' : ''}>${l}</a>`;
   const nav = NAV.map(([k, l]) => link(k, l)).join('');
   const moreOn = MORE.some((g) => g[1].some((i) => i[0] === active));
   const groups = MORE.map(([title, items]) => `<div class="h-more-g"><div class="h-more-h">${title}</div>${items.map(([k, l]) => link(k, l)).join('')}</div>`).join('');
   const more = `<div class="h-more-wrap"><button type="button" class="h-more-btn${moreOn ? ' on' : ''}" data-more="toggle" aria-expanded="${ui.more}" aria-controls="h-more-p">More${icon('chev')}</button>
-    <div class="h-more-p" id="h-more-p" aria-label="More"${ui.more ? '' : ' hidden'}>${groups}</div></div>`;
+    <div class="h-more-p" id="h-more-p" aria-label="More"${ui.more ? '' : ' hidden'}>${whoLine()}${groups}</div></div>`;
   const off = api.engineOn() ? '' : `<div class="h-engine-off">${icon('clock')}Engine off. Proactive jobs are paused. ${goA('engine', 'Engine settings')}</div>`;
   return `<header class="h-top"><div class="h-top-in">
-    <a class="h-mark" href="${href('brief')}" data-go="brief" aria-label="${X(api.s.meta.product || 'Fathom')}">${MARK}<span>${T(api.s.meta.product || 'Fathom')}</span></a>
+    <a class="h-mark" href="${href('brief')}" data-go="brief" aria-label="${esc(api.s.meta.product || 'Fathom')}">${MARK}<span>${esc(api.s.meta.product || 'Fathom')}</span></a>
     <div class="h-navbar"><nav class="h-nav" aria-label="Main">${nav}</nav><span class="h-nav-sep"></span>${more}</div>
   </div></header>${off}<main class="h-main">${inner}</main>`;
 }
@@ -393,6 +400,7 @@ function pBrief() {
     <div class="h-kicker">${MONTH_FULL[c.getUTCMonth()]} brief<span>${T(api.s.meta.clockLabel)}</span><span>Data through ${T(api.s.meta.dataThrough)}</span></div>
     <h1 class="h-verdict">${clear ? `<i class="h-ok">${icon('check')}</i>` : ''}<span>${T(v.headline)}</span></h1>
     <p class="h-lede">${T(v.sub)}</p>
+    <p class="h-lede">${goA('add', 'Add more files')}</p>
   </section>`;
 
   const tl = section('Your year', timeline('brief'), `${plural(ny.length, 'item')} need you<span class="h-dotsep"></span>${motion.length} in motion<span class="h-dotsep"></span>${done} done`);
@@ -482,7 +490,7 @@ function pPlan() {
 function thread(msgs, selfId = '') {
   if (!msgs.length) return '';
   return `<div class="h-thread">${msgs.map((m) => {
-    const who = m.role === 'me' ? 'You' : m.role === 'advisor' ? T(api.s.advisor?.name || api.s.names?.advisor || 'Advisor') : m.role === 'claude' ? 'Claude' : T(api.s.meta.product || 'Fathom');
+    const who = m.role === 'me' ? 'You' : m.role === 'advisor' ? (api.s.advisor?.name ? T(api.s.advisor.name) : esc(api.s.names?.advisor || 'Advisor')) : m.role === 'claude' ? 'Claude' : esc(api.s.meta.product || 'Fathom');
     const refs = arr(m.refs).filter((id) => id !== selfId).map((id) => recById(id)).filter(Boolean);
     return `<div class="h-msg ${esc(m.role)}${m.notice ? ' notice' : ''}"><div class="h-msg-who">${who}${m.ts ? `<time>${X(m.ts)}</time>` : ''}</div><div class="h-msg-b">${m.html || ''}</div>`
       + (refs.length ? `<div class="h-refs">${refs.map((r) => `<a href="${href('rec', { id: r.id })}" data-go="rec" data-id="${esc(r.id)}"><span>${T(r.title)}</span><em>${T(r.window?.label || '')}</em>${icon('arrow')}</a>`).join('')}</div>` : '')
@@ -534,7 +542,7 @@ function dlgHtml(id) {
     : `<div class="h-advbox"><div class="h-adv">${icon('clock')}Not yet reviewed</div><p class="h-mute">Goes on the agenda for the next check-in. ${goA('advisor', 'Check-in')}</p></div>`;
 
   const chips = arr(r.qa).map((q, i) => asked(msgs, q.q) ? '' : `<button type="button" class="h-chip" data-askrec="${esc(r.id)}" data-i="${i}">${T(q.q)}</button>`).join('');
-  const wg = r.scenario ? `<a class="h-wglink" href="${href('wargame', { name: r.scenario })}" data-go="wargame" data-name="${esc(r.scenario)}"><div><b>War-game this</b><span>${T(api.s.wargame?.[r.scenario]?.title || '')}</span></div>${icon('arrow')}</a>` : '';
+  const wg = r.scenario && api.s.wargame?.[r.scenario]?.status !== 'unavailable' ? `<a class="h-wglink" href="${href('wargame', { name: r.scenario })}" data-go="wargame" data-name="${esc(r.scenario)}"><div><b>War-game this</b><span>${T(api.s.wargame?.[r.scenario]?.title || '')}</span></div>${icon('arrow')}</a>` : '';
 
   const conv = `<section class="h-sec h-conv"><div class="h-sec-h"><h2>Ask about this</h2><div class="h-sec-aside">Answers use the figures below</div></div>
     ${thread(msgs, r.id)}${chips ? `<div class="h-chips">${chips}</div>` : ''}${composer('rec:' + r.id, 'Ask about this')}</section>`;
@@ -691,19 +699,19 @@ function decisionList() {
   const wg = api.s.wargame || {};
   let list = arr(api.s.decisions);
   if (!list.length) {
-    list = ['salary', 'deferral'].filter((k) => wg[k]).map((k) => ({ id: k, title: wg[k].title, status: wg[k].status || 'open', wargame: k, when: '', note: wg[k].question || '' }));
+    list = ['salary', 'deferral'].filter((k) => wg[k] && wg[k].status !== 'unavailable').map((k) => ({ id: k, title: wg[k].title, status: wg[k].status || 'open', wargame: k, when: '', note: wg[k].question || '' }));
   }
   // The server derives each decision's status and its explanation line; they are used as is.
   return list.map((d) => {
     const r = d.recId ? recById(d.recId) : null;
-    const status = ['open', 'upcoming', 'decided'].includes(d.status) ? d.status : 'open';
+    const status = ['open', 'upcoming', 'decided', 'unavailable'].includes(d.status) ? d.status : 'open';
     return { ...d, status, line: d.line || '', r };
   });
 }
 
 function decideLinks(d, primary) {
   const out = [];
-  if (d.wargame) out.push(`<a href="${href('wargame', { name: d.wargame })}" data-go="wargame" data-name="${esc(d.wargame)}" class="h-btn${primary ? ' pri' : ''}">${d.status === 'decided' ? 'See the curve' : d.status === 'upcoming' ? 'Preview' : 'War game'}</a>`);
+  if (d.wargame) out.push(`<a href="${href('wargame', { name: d.wargame })}" data-go="wargame" data-name="${esc(d.wargame)}" class="h-btn${primary ? ' pri' : ''}">${d.status === 'decided' ? 'See the curve' : d.status === 'upcoming' ? 'Preview' : d.status === 'unavailable' ? 'See the history' : 'War game'}</a>`);
   if (d.r) out.push(`<a href="${href('rec', { id: d.r.id })}" data-go="rec" data-id="${esc(d.r.id)}" class="h-btn${primary && !d.wargame ? ' pri' : ' ghost'}">${d.status === 'open' ? (d.wargame ? 'Details' : 'Open') : 'Details'}</a>`);
   return out.join('');
 }
@@ -713,7 +721,7 @@ function decRow(d) {
   const title = d.r && !d.wargame
     ? `<a class="h-dec-t" href="${href('rec', { id: d.r.id })}" data-go="rec" data-id="${esc(d.r.id)}">${T(d.title)}</a>`
     : d.wargame ? `<a class="h-dec-t" href="${href('wargame', { name: d.wargame })}" data-go="wargame" data-name="${esc(d.wargame)}">${T(d.title)}</a>` : `<span class="h-dec-t">${T(d.title)}</span>`;
-  const body = d.status === 'decided' ? `<p>${T(d.line)}</p>` : `${d.note ? `<p>${T(d.note)}</p>` : ''}${d.when || st ? `<div class="h-meta">${d.when ? `<span class="h-when">${T(d.when)}</span>` : ''}${st}</div>` : ''}`;
+  const body = d.status === 'decided' ? `<p>${T(d.line)}</p>` : d.status === 'unavailable' ? `<p>${esc(d.unavailable || '')}</p>` : `${d.note ? `<p>${T(d.note)}</p>` : ''}${d.when || st ? `<div class="h-meta">${d.when ? `<span class="h-when">${T(d.when)}</span>` : ''}${st}</div>` : ''}`;
   return `<article class="h-dec ${d.status}"><div class="h-dec-b">${title}${body}</div><div class="h-acts">${decideLinks(d, d.status === 'open')}</div></article>`;
 }
 
@@ -722,11 +730,13 @@ function pDecide() {
   const open = list.filter((d) => d.status === 'open');
   const soon = list.filter((d) => d.status === 'upcoming');
   const done = list.filter((d) => d.status === 'decided');
+  const gone = list.filter((d) => d.status === 'unavailable');
   const stats = `<div class="h-stats"><div><b>${open.length}</b><span>open</span></div><div><b>${soon.length}</b><span>coming up</span></div><div><b>${done.length}</b><span>decided</span></div></div>`;
   return shell(`${pageHead('Decide', 'What is open, and what is coming', 'Open choices come first. Each one opens its war game, or the item on your plan when there is nothing to trade off.')}${stats}
     ${section(`Open <em>${open.length}</em>`, open.length ? `<div class="h-decs">${open.map(decRow).join('')}</div>` : '<p class="h-mute">Nothing is waiting on a decision.</p>')}
     ${soon.length ? section(`Coming up <em>${soon.length}</em>`, `<div class="h-decs">${soon.map(decRow).join('')}</div>`, 'Not open yet') : ''}
-    ${done.length ? `<details class="h-details" data-det="decided"${ui.det.decided ? ' open' : ''}><summary>Decided <em>${done.length}</em></summary><div class="h-decs">${done.map(decRow).join('')}</div></details>` : ''}`, 'wargame');
+    ${done.length ? `<details class="h-details" data-det="decided"${ui.det.decided ? ' open' : ''}><summary>Decided <em>${done.length}</em></summary><div class="h-decs">${done.map(decRow).join('')}</div></details>` : ''}
+    ${gone.length ? `<details class="h-details" data-det="unavailable"${ui.det.unavailable ? ' open' : ''}><summary>No longer current <em>${gone.length}</em></summary><div class="h-decs">${gone.map(decRow).join('')}</div></details>` : ''}`, 'wargame');
 }
 
 function pWargame(name) {
@@ -735,19 +745,24 @@ function pWargame(name) {
   if (!cur) return pDecide();
   const g = wg[cur];
   const decided = g.status === 'decided';
-  const dec = decisionList().find((d) => d.wargame === cur && d.status === (decided ? 'decided' : 'open'));
+  const gone = g.status === 'unavailable';
+  const past = decided || gone;
+  const dec = decisionList().find((d) => d.wargame === cur && d.status === (decided ? 'decided' : gone ? 'unavailable' : 'open'));
   const back = `<a class="h-back" href="${href('wargame')}" data-go="wargame">${icon('back')}Decide</a>`;
   const linked = visibleRecs().filter((r) => r.scenario === cur);
-  const lead = decided
+  const lead = gone
+    ? `<div class="h-decided"><div><div class="h-kicker">Not a current choice</div><p>${esc(g.unavailable || '')}</p></div></div>`
+    : decided
     ? `<div class="h-decided"><i class="h-ok sm">${icon('check')}</i><div><div class="h-kicker">Decided</div><p>${T(g.decided || '')}</p></div></div>`
     : (dec?.when ? `<div class="h-meta h-wg-when"><span class="h-when">${T(dec.when)}</span>${dec.note ? `<span>${T(dec.note)}</span>` : ''}</div>` : '');
   const body = cur === 'salary' ? salaryChart(g) : deferralView(g);
-  const secTitle = decided ? 'For reference and for next year' : cur === 'salary' ? 'Tradeoff' : 'Options';
-  const aside = decided ? 'Not an open choice' : cur === 'salary' ? 'Pick a point' : '';
-  const intro = decided ? `<p class="h-mute h-wg-intro">This is no longer a choice to make. It stays here so you can check the reasoning, and it is where next year starts.</p>` : '';
-  return shell(`${back}${pageHead(decided ? 'Decide' : 'Open decision', T(g.title), decided ? '' : T(g.question))}${lead}
+  const secTitle = gone ? 'For reference' : decided ? 'For reference and for next year' : cur === 'salary' ? 'Tradeoff' : 'Options';
+  const aside = gone ? 'Not a current choice' : decided ? 'Not an open choice' : cur === 'salary' ? 'Pick a point' : '';
+  const intro = gone ? `<p class="h-mute h-wg-intro">This stays here so you can check the reasoning. It becomes a choice again once its inputs are current.</p>`
+    : decided ? `<p class="h-mute h-wg-intro">This is no longer a choice to make. It stays here so you can check the reasoning, and it is where next year starts.</p>` : '';
+  return shell(`${back}${pageHead(past ? 'Decide' : 'Open decision', T(g.title), past ? '' : T(g.question))}${lead}
     ${section(secTitle, intro + body, aside)}
-    ${g.takeaway ? `<div class="h-takeaway"><div class="h-kicker">${decided ? 'What the curve said' : 'Takeaway'}</div><p>${T(g.takeaway)}</p></div>` : ''}
+    ${g.takeaway ? `<div class="h-takeaway"><div class="h-kicker">${past ? 'What the curve said' : 'Takeaway'}</div><p>${T(g.takeaway)}</p></div>` : ''}
     ${linked.length ? section('On your plan', `<div class="h-refs wide">${linked.map((r) => `<a href="${href('rec', { id: r.id })}" data-go="rec" data-id="${esc(r.id)}"><span>${T(r.title)}</span><em>${T(r.window?.label || '')}</em>${icon('arrow')}</a>`).join('')}</div>`) : ''}`, 'wargame');
 }
 
@@ -822,8 +837,8 @@ function pAccounts() {
   const series = Object.entries(api.s.series || {});
   const evs = arr(api.s.events).filter((e) => ['income', 'account'].includes(e.kind));
   const conn = accs.filter((a) => a.mirror === 'connected').length;
-  return shell(`${pageHead('Accounts', 'Read-only mirror', `${conn} of ${accs.length} accounts mirrored. Data through ${T(api.s.meta.dataThrough)}.`)}
-    <div class="h-ro">${icon('lock')}<span>Read-only. ${T(api.s.meta.product || 'Fathom')} can see balances and transactions. It cannot move, delete or change anything.</span></div>${ingest.pendingBanner()}
+  return shell(`${pageHead('Accounts', 'Read-only mirror', `${conn} of ${accs.length} accounts mirrored. Data through ${T(api.s.meta.dataThrough)}. ${goA('add', 'Add more files')}`)}
+    <div class="h-ro">${icon('lock')}<span>Read-only. ${esc(api.s.meta.product || 'Fathom')} can see balances and transactions. It cannot move, delete or change anything.</span></div>${ingest.pendingBanner()}
     ${series.length ? section('Trend', `<div class="h-sparks">${series.map(spark).join('')}</div>`, 'Solid is actual, dashed is projected') : ''}
     <div class="h-cols"><div class="h-col-main">${list}</div>
     <div class="h-col-side">${ingest.addFiles('accounts')}${ingest.sourcesSection()}${section('Detected', evs.length ? `<ol class="h-evs">${evs.map((e) => `<li><time>${T(e.date)}</time><div><b>${T(e.title)}</b><p>${T(e.body)}</p></div></li>`).join('')}</ol>` : '<p class="h-mute">Nothing unusual detected.</p>')}</div></div>`, 'accounts');
@@ -844,7 +859,7 @@ function pAdvisor() {
   const experts = arr(a.experts).map((e) => `<li><b>${T(e.name)}</b><span>${T(e.role)}</span><p>${T(e.when)}</p></li>`).join('');
   const conf = arr(a.reviewed).filter((v) => v.verdict === 'confirmed').length;
   const vet = arr(a.reviewed).filter((v) => v.verdict === 'vetoed').length;
-  return shell(`${pageHead('Quarterly check-in', T(a.name || api.s.names?.advisor || 'Your advisor'), T(a.role))}
+  return shell(`${pageHead('Quarterly check-in', a.name ? T(a.name) : esc(api.s.names?.advisor || 'Your advisor'), T(a.role))}
     <div class="h-next"><div><span>Next check-in</span><b>${T(a.next?.when)}</b></div><div><span>Length</span><b>${T(a.next?.length)}</b></div><div><span>Reviewed</span><b>${conf} confirmed, ${vet} vetoed</b></div><div><span>Waiting on review</span><b>${arr(a.pending).length}</b></div></div>
     <div class="h-cols"><div class="h-col-main">
       ${section('Agenda', `<div class="h-prose"><p>${T(a.agenda)}</p></div>`)}
@@ -914,19 +929,27 @@ function pEmail(fresh) {
   return email.page(fresh);
 }
 
+function pAdd() {
+  return shell(pageHead('Files', 'Add more files', 'Drop in statements, exports and other documents. New accounts and open questions show up in Confirm.')
+    + ingest.addFiles('add') + ingest.sourcesSection(), 'accounts');
+}
+
 /* ---------- onboarding ---------- */
 
 const STEPS = ['Sign in', 'Tell us', 'Accounts', 'Confirm', 'Priorities', 'First brief'];
 
 function pOnboarding(step) {
   const ob = api.s.onboarding || {};
-  const s = Math.max(0, Math.min(5, step));
+  const first = api.s?.live?.mode === 'real' ? 1 : 0; // a real store has no demo sign-in step
+  const s = Math.max(first, Math.min(5, step));
   const W = 600;
-  const sx = (i) => 10 + (i / 5) * (W - 20);
-  const rail = `<div class="h-ob-rail"><svg viewBox="0 0 ${W} 20" preserveAspectRatio="none" aria-hidden="true"><line class="bg" x1="10" x2="${W - 10}" y1="10" y2="10"/><line class="fg" x1="10" x2="${sx(s)}" y1="10" y2="10"/>${STEPS.map((_, i) => `<circle class="${i < s ? 'done' : i === s ? 'cur' : ''}" cx="${sx(i)}" cy="10" r="${i === s ? 5 : 3.5}"/>`).join('')}</svg>
-    <div class="h-ob-steps">${STEPS.map((l, i) => `<span class="${i === s ? 'on' : ''}" style="left:${(sx(i) / W) * 100}%">${l}</span>`).join('')}</div></div>`;
+  const rs = STEPS.slice(first);
+  const ri = s - first;
+  const sx = (i) => 10 + (i / (rs.length - 1)) * (W - 20);
+  const rail = `<div class="h-ob-rail"><svg viewBox="0 0 ${W} 20" preserveAspectRatio="none" aria-hidden="true"><line class="bg" x1="10" x2="${W - 10}" y1="10" y2="10"/><line class="fg" x1="10" x2="${sx(ri)}" y1="10" y2="10"/>${rs.map((_, i) => `<circle class="${i < ri ? 'done' : i === ri ? 'cur' : ''}" cx="${sx(i)}" cy="10" r="${i === ri ? 5 : 3.5}"/>`).join('')}</svg>
+    <div class="h-ob-steps">${rs.map((l, i) => `<span class="${i === ri ? 'on' : ''}" style="left:${(sx(i) / W) * 100}%">${l}</span>`).join('')}</div></div>`;
   const next = (label = 'Continue', n = s + 1) => btn(`${label}${icon('arrow')}`, `data-onboard="${n}"`, 'pri');
-  const back = s > 0 ? btn('Back', `data-onboard="${s - 1}"`, 'ghost') : '';
+  const back = s > first ? btn('Back', `data-onboard="${s - 1}"`, 'ghost') : '';
   let body = '';
   if (s === 0) {
     body = `<div class="h-ob-hero">${MARK}<h1>${T(ob.welcome?.headline)}</h1><p class="h-lede">${T(ob.welcome?.sub)}</p></div>
@@ -941,7 +964,7 @@ function pOnboarding(step) {
   } else if (s === 2) {
     const insts = arr(ob.institutions);
     const n = insts.filter((x, i) => ui.connected[i]).length;
-    body = `<h1>Mirror your accounts</h1><p class="h-lede">Read-only. ${T(api.s.meta.product || 'Fathom')} sees balances and transactions so the brief stays current.</p>
+    body = `<h1>Mirror your accounts</h1><p class="h-lede">Read-only. ${esc(api.s.meta.product || 'Fathom')} sees balances and transactions so the brief stays current.</p>
       <ul class="h-insts">${insts.map((x, i) => `<li><div><b>${T(x.inst)}</b><span>${typeof x.accounts === 'number' ? plural(x.accounts, 'account') : T(x.accounts)}, ${T(x.mode || 'read-only')}</span></div>${ui.connected[i] ? `<span class="h-acc">${icon('check')}Connected</span>` : btn('Connect', `data-inst="${i}"`, '')}</li>`).join('')}</ul>
       <p class="h-mute sm">${n} of ${insts.length} connected. You can add the rest later.</p>
       <div class="h-ob-nav">${back}${next(n ? 'Continue' : 'Skip for now')}</div>`;
@@ -989,7 +1012,7 @@ function pOnboarding(step) {
       ui.buildTimer = setTimeout(() => { ui.buildTimer = 0; ui.build += 1; draw(); }, 650);
     }
   }
-  return `<div class="h-ob"><div class="h-ob-top"><span class="h-mark">${MARK}<span>${T(api.s.meta.product || 'Fathom')}</span></span></div>${rail}<div class="h-ob-card">${body}</div></div>`;
+  return `<div class="h-ob"><div class="h-ob-top"><span class="h-mark">${MARK}<span>${esc(api.s.meta.product || 'Fathom')}</span></span></div>${rail}<div class="h-ob-card">${body}</div></div>`;
 }
 
 /* ---------- draw and events ---------- */
@@ -1121,6 +1144,7 @@ function draw() {
     case 'wargame': html = pWargame(r.params?.name); break;
     case 'goals': html = pGoals(); break;
     case 'accounts': html = pAccounts(); break;
+    case 'add': html = pAdd(); break;
     case 'confirm': html = ingest.confirmPage(); break;
     case 'advisor': html = pAdvisor(); break;
     case 'packs': html = packsScreen.render(r.params?.id); break;
@@ -1217,6 +1241,7 @@ function onClick(e) {
   if (d.askrec) { askRec(d.askrec, Number(d.i)); return; }
   if (d.whatif) { e.preventDefault(); const cur = routeNow(); api.whatIf(d.whatif); if (!(cur.name === 'packs' && cur.params?.id === d.whatif)) api.go('packs', { id: d.whatif }); return; }
   if (d.packtoggle) { api.packToggle(d.packtoggle); return; }
+  if (d.wg && api.s.wargame?.[d.wg]?.status === 'unavailable') { e.preventDefault(); return; }
   if (d.wg) { e.preventDefault(); ui.pick[d.wg] = Number(d.i); api.scenarioPick(d.wg, Number(d.i)); draw(); return; }
   if (d.onboard != null && d.onboard !== '') { e.preventDefault(); ui.modal = null; ui.build = 0; api.onboard(Number(d.onboard)); return; }
   if (d.inst != null && d.inst !== '') { ui.modal = Number(d.inst); draw(); return; }

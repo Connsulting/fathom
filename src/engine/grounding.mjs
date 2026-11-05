@@ -15,7 +15,7 @@ const dates = [
   new RegExp(`\\b(?:0?[1-9]|[12]\\d|3[01])(?:st|nd|rd|th)?\\s+${months}\\.?(?:\\s+(?:19|20|21)\\d{2})?\\b`, 'gi'),
 ];
 const identifiers = [
-  /\b(?:401\s*(?:\(\s*k\s*\)|k)|(?:403|457)\s*(?:\(\s*b\s*\)|b)|529)(?:\([a-z0-9]+\))*(?=$|[^a-z0-9])/gi,
+  /\b(?:401\s*(?:\(\s*k\s*\)|k)|(?:403|457)\s*(?:\(\s*b\s*\)|b)|529|Virginia529)(?:\([a-z0-9]+\))*(?=$|[^a-z0-9])/gi,
   /\b(?:W[- ]?[24]|1099(?:-[a-z0-9]+)?)\b/gi,
   // Recognized letter codes glued to digits by a hyphen: the K-12 grade range, the Schedule K-1
   // and Form I-9. Any other code (X-873) is checked as a number.

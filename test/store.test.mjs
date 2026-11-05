@@ -157,8 +157,9 @@ test('migration files are NNN-name.sql numbered from 001 without gaps', () => {
 
 // AC15 (merge-gate blocker 7): main's latest store before the chat branch is schema 005
 // (002-ingest, 003-ingest-recipients, 004-ingest-survivor, 005-pack-manifest). Starting the server
-// on such a store applies 006-chat: messages.provenance exists, existing messages survive, the
-// schema reports 6.
+// on such a store applies 006-chat: messages.provenance exists, existing messages survive. The
+// later 007-planner applies in the same startup, so the schema reports 7 and the applied list
+// ends with it.
 const MAIN_MIGRATIONS = ['001-foundation.sql', '002-ingest.sql', '003-ingest-recipients.sql', '004-ingest-survivor.sql', '005-pack-manifest.sql'];
 
 test('a store migrated to exactly 005 upgrades to 006-chat on startup and keeps its messages', { timeout: SERVER_TIMEOUT * 2 }, async () => {
@@ -194,7 +195,7 @@ test('a store migrated to exactly 005 upgrades to 006-chat on startup and keeps 
   try {
     assert.ok(db.prepare('PRAGMA table_info(messages)').all().some(c => c.name === 'provenance'), 'messages.provenance exists');
     const applied = db.prepare('SELECT id, name FROM schema_migrations ORDER BY id').all().map(r => `${r.id}-${r.name}`);
-    assert.deepEqual(applied.slice(0, 6), ['1-foundation', '2-ingest', '3-ingest-recipients', '4-ingest-survivor', '5-pack-manifest', '6-chat']);
+    assert.deepEqual(applied.slice(0, 7), ['1-foundation', '2-ingest', '3-ingest-recipients', '4-ingest-survivor', '5-pack-manifest', '6-chat', '7-planner']);
     const rows = db.prepare("SELECT role, text, provenance FROM messages WHERE conversation_key = 'ask' ORDER BY id").all().map(r => ({ ...r }));
     assert.deepEqual(rows, [
       { role: 'me', text: '<p>Synthetic question before the upgrade</p>', provenance: null },

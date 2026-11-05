@@ -11,7 +11,7 @@ import { needsYou, verdictLevel } from '../src/shared/rules.mjs';
 import { setSetting } from '../src/store/db.mjs';
 import {
   ROOT, SERVER_TIMEOUT, spawnServer, withServer, expectServerExit, request, postJson, getScenario,
-  tempDb, tempDir, openStore, dumpStore, runCommand, recOf, src,
+  tempDb, tempDir, openStore, dumpStore, runCommand, recOf, src, TEST_OWNER,
 } from './helpers/server.mjs';
 
 const T = { timeout: SERVER_TIMEOUT };
@@ -594,7 +594,9 @@ describe('static symlinks', () => {
     indexText = readFileSync(join(webDir, 'index.html'), 'utf8');
     const { createHandler } = await src('src/api/router.mjs');
     const { loadConfig } = await src('src/config.mjs');
-    const config = loadConfig({ FATHOM_DATA: td.dataDir });
+    // tempDb has no mode row, so it is a real store: the handler admits TEST_OWNER, which
+    // request() sends by default.
+    const config = loadConfig({ FATHOM_DATA: td.dataDir, FATHOM_OWNER_LOGINS: TEST_OWNER });
     srv = http.createServer(createHandler({ db: td.db, config, webDir }));
     await new Promise(r => srv.listen(0, '127.0.0.1', r));
     base = `http://127.0.0.1:${srv.address().port}`;

@@ -87,6 +87,25 @@ test('Solo 401(k) room respects all-plan deferrals, annual additions, compensati
   assert.throws(() => solo401kRoom({ compensation: 100000, age: 40 }), /confirmed/);
 });
 
+test('MG6: solo401kRoom with catch-up disabled lets the employer use the compensation', () => {
+  // Source: Treas. Reg. 1.414(v)-2(b)(2) (an affected participant in a plan without Roth makes no
+  // catch-up); IRC 415(c)(1) (annual additions up to the lesser of 72,000 and compensation).
+  // Compensation 30,000, w2, age 61, catch-up disabled: employee min(24,500, 30,000, 30,000) =
+  // 24,500; catch-up 0; employer min(25% x 30,000 = 7,500, 30,000 - 24,500 = 5,500,
+  // 30,000 - 24,500 - 0 = 5,500) = 5,500; total 30,000.
+  // Allowed (default): catch-up min(11,250, 30,000 - 24,500) = 5,500; employer
+  // min(7,500, 5,500, 30,000 - 24,500 - 5,500 = 0) = 0; total 30,000.
+  const off = solo401kRoom({ ...confirmed, compensation: 30000, kind: 'w2', age: 61, catchUpAllowed: false });
+  assert.equal(off.value.employee, 24500);
+  assert.equal(off.value.catchUp, 0);
+  assert.equal(off.value.employer, 5500);
+  assert.equal(off.value.total, 30000);
+  assert.ok(off.steps.some(s => s.label === 'Catch-up not allowed under this plan'), 'the step names the disabled catch-up');
+  const on = solo401kRoom({ ...confirmed, compensation: 30000, kind: 'w2', age: 61 }).value;
+  assert.deepEqual([on.employee, on.catchUp, on.employer, on.total], [24500, 5500, 0, 30000]);
+  assert.deepEqual(solo401kRoom({ ...confirmed, compensation: 30000, kind: 'w2', age: 61, catchUpAllowed: true }).value, on);
+});
+
 test('SEP room has hand-checked employee, self-employed, annual-cap and low-income cases', () => {
   assert.equal(sepRoom({ ...confirmed, kind: 'w2', compensation: 100000 }).value, 25000);
   assert.equal(sepRoom({ ...confirmed, kind: 'self-employed', netProfit: 100000 }).value, 18587.04);

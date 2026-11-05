@@ -213,7 +213,7 @@ or roll your own).
   law:  { key: number },                    // statutory amounts, never scaled
   pct:  { key: number },                    // percents, 0-100
   src:  { id: { label, asOf } },            // provenance sources
-  fig:  { key: { v: number, src: 'srcId', kind: 'a'|'p'|'e'|'m', label: 'short label' } },
+  fig:  { key: { v: number, src: 'srcId', kind: 'a'|'p'|'e'|'m', label: 'short label', notes?: ['assumption sentence'], unavailable?: 'reason' } },  // notes: at most five; unavailable: kept for reference, not current
   series: { key: { label, unit:'$', points:[{ x:'Apr', v:number, kind:'a'|'p' }] } },
 
   verdict: { clear:{ headline, sub }, attention:{ headline, sub } },   // tokens allowed
