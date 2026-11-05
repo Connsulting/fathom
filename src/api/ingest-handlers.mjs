@@ -1,0 +1,115 @@
+// Ingest API handlers: file uploads, the file list, retries and the confirm queue. Each takes the
+// router ctx ({db, config, engine, params, body, readUpload}) and returns the JSON body or throws
+// HttpError. Pipeline, vault and confirm errors map to statuses here with fixed messages, so no
+// file name contents or row values reach a response or a log.
+
+import { getSetting, parseJson as parse } from '../store/db.mjs';
+import { buildScenario } from '../scenario/build.mjs';
+import { loadDataKey, VaultError } from '../ingest/vault.mjs';
+import { ingestFiles, retryFile as retryIngest } from '../ingest/pipeline.mjs';
+import { answerItem, pendingItems, listItems, ConfirmError } from '../ingest/confirm.mjs';
+import { refreshPackState } from '../packs/state.mjs';
+import { HttpError } from './http.mjs';
+
+const UPLOAD_FIELD = 'files';
+const LIST_STATUSES = ['pending', 'answered', 'all'];
+const CONFIRM_STATUS = { not_found: 404, bad_option: 400, answered: 409, stale: 409 };
+const CONFIRM_MESSAGE = {
+  not_found: 'no such question',
+  bad_option: 'answer must be one of the offered options',
+  answered: 'that question is already answered',
+  stale: 'the value changed since this question was asked',
+};
+
+const nowIso = () => new Date().toISOString();
+const scenarioOf = ctx => buildScenario(ctx.db, { clock: ctx.config && ctx.config.clock });
+const storeMode = db => (getSetting(db, 'mode', null) === 'demo' ? 'demo' : 'real');
+
+// The data key for this store: demo stores use a generated key under $FATHOM_DATA/files, real
+// stores need FATHOM_DATA_KEY_FILE (409 with the vault's message, before anything is stored).
+async function dataKey(ctx) {
+  try {
+    return await loadDataKey({ dataDir: ctx.config.dataDir, keyFile: ctx.config.dataKeyFile, mode: storeMode(ctx.db) });
+  } catch (err) {
+    if (err instanceof VaultError) throw new HttpError(409, err.message);
+    throw err;
+  }
+}
+
+const ingestOpts = (ctx, key) => ({ engine: ctx.engine, config: ctx.config, now: nowIso(), key });
+
+export async function uploadFiles(ctx) {
+  const key = await dataKey(ctx);
+  const parts = (await ctx.readUpload()).filter(p => p.field === UPLOAD_FIELD);
+  if (!parts.length) throw new HttpError(400, `the upload has no files in the "${UPLOAD_FIELD}" field`);
+  const files = parts.map(p => ({ name: p.name, bytes: p.bytes, mime: p.mime }));
+  let results;
+  try {
+    ({ results } = await ingestFiles(ctx.db, files, ingestOpts(ctx, key)));
+  } catch (err) {
+    if (err instanceof VaultError) throw new HttpError(409, err.message);
+    throw err;
+  }
+  const scenario = scenarioOf(ctx);
+  return { scenario, files: results, pending: scenario.live.ingest.pending };
+}
+
+export function listFiles(ctx) {
+  const rows = ctx.db.prepare('SELECT id, name, status, source_kind, parser, counts, uploaded_at FROM files ORDER BY uploaded_at DESC, rowid DESC').all();
+  return {
+    files: rows.map(f => ({
+      id: f.id,
+      name: f.name,
+      status: f.status,
+      sourceKind: f.source_kind,
+      parser: f.parser,
+      counts: parse(f.counts, null),
+      uploadedAt: f.uploaded_at,
+    })),
+  };
+}
+
+export async function retryFile(ctx) {
+  const { id } = ctx.params;
+  const key = await dataKey(ctx);
+  let file;
+  try {
+    file = await retryIngest(ctx.db, id, ingestOpts(ctx, key));
+  } catch (err) {
+    if (err && err.status === 404) throw new HttpError(404, `no file ${id}`);
+    if (err && err.status === 409) throw new HttpError(409, 'that file is not waiting for a mapping or extraction');
+    if (err instanceof VaultError) throw new HttpError(409, err.message);
+    throw err;
+  }
+  return { scenario: scenarioOf(ctx), file };
+}
+
+export function listPendingConfirm(ctx) {
+  return { items: pendingItems(ctx.db) };
+}
+
+export function listConfirm(ctx) {
+  const { status = 'pending' } = ctx.body;
+  if (!LIST_STATUSES.includes(status)) throw new HttpError(400, `status must be one of ${LIST_STATUSES.join(', ')}`);
+  return { items: listItems(ctx.db, { status }) };
+}
+
+export function answerConfirm(ctx) {
+  const raw = ctx.params.id;
+  if (!/^\d{1,15}$/.test(raw)) throw new HttpError(404, 'no such question');
+  const optionId = ctx.body.answer;
+  if (typeof optionId !== 'string' || !optionId) throw new HttpError(400, 'answer must be an option id');
+  let out;
+  try {
+    out = answerItem(ctx.db, Number(raw), optionId, { now: nowIso() });
+  } catch (err) {
+    if (err instanceof ConfirmError && Object.hasOwn(CONFIRM_STATUS, err.code)) {
+      throw new HttpError(CONFIRM_STATUS[err.code], CONFIRM_MESSAGE[err.code]);
+    }
+    throw err;
+  }
+  if (out.factsChanged) {
+    try { refreshPackState(ctx.db, { dataDir: ctx.config && ctx.config.dataDir }); } catch (err) { console.error('fathom: pack refresh failed', err && err.name); }
+  }
+  return { scenario: scenarioOf(ctx), item: out.item };
+}

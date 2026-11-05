@@ -26,7 +26,7 @@ import { money, resolveTokens, esc, KIND_WORDS } from '/shared/tokens.mjs';
 import { needsYou as needsYouOf, packStatus } from '/shared/rules.mjs';
 
 const ROUTES = new Set(['onboarding', 'brief', 'plan', 'rec', 'ask', 'wargame', 'goals', 'accounts',
-  'advisor', 'yearend', 'connect', 'engine', 'email', 'packs']);
+  'advisor', 'yearend', 'connect', 'engine', 'email', 'packs', 'confirm']);
 const PARAM_KEY = { rec: 'id', onboarding: 'step', wargame: 'name', packs: 'id' };
 const LAST_STEP = 5;
 
@@ -277,13 +277,15 @@ function showError(message) {
   errEl = el;
 }
 
+// A FormData body goes out as multipart with no content-type header (the browser sets the boundary).
 async function postJson(path, body) {
+  const form = typeof FormData !== 'undefined' && body instanceof FormData;
   let res;
   try {
     res = await fetch(path, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', accept: 'application/json' },
-      body: JSON.stringify(body || {}),
+      headers: form ? { accept: 'application/json' } : { 'content-type': 'application/json', accept: 'application/json' },
+      body: form ? body : JSON.stringify(body || {}),
       credentials: 'same-origin',
     });
   } catch (e) {
@@ -312,7 +314,7 @@ function applyScenario(next) {
 
 // POST in order; on success replace the scenario and notify; on failure keep the old state.
 // Resolves with onOk(data) or null; never rejects.
-function send(path, body, onOk, onDone) {
+function send(path, body, onOk, onDone, failText) {
   const run = () => postJson(path, body).then(
     data => {
       if (onDone) onDone();
@@ -325,7 +327,7 @@ function send(path, body, onOk, onDone) {
     },
     err => {
       if (onDone) { onDone(); notify(); }
-      showError('Could not save that change. ' + (err && err.message ? err.message : ''));
+      showError((failText || 'Could not save that change. ') + (err && err.message ? err.message : ''));
       return null;
     }
   );
@@ -416,6 +418,39 @@ function setEngine(v) {
   return send('/api/engine', { on: !!v });
 }
 
+// ---------------------------------------------------------------- ingest
+
+const emptyIngest = () => ({ pending: 0, items: [], files: [], sources: [], accounts: {}, staleNotes: [], formats: [] });
+
+function ingest() {
+  const g = live().ingest;
+  if (!g || typeof g !== 'object') return emptyIngest();
+  const out = emptyIngest();
+  out.pending = Number.isFinite(Number(g.pending)) ? Number(g.pending) : 0;
+  ['items', 'files', 'sources', 'staleNotes', 'formats'].forEach(k => { out[k] = arr(g[k]); });
+  if (g.accounts && typeof g.accounts === 'object') out.accounts = g.accounts;
+  return out;
+}
+
+// Resolves { files, pending } with the per-file results, or null on failure (error line shown).
+function upload(fileList) {
+  const list = Array.from(fileList || []);
+  if (!list.length) return done();
+  const form = new FormData();
+  list.forEach(f => form.append('files', f, f.name));
+  return send('/api/files', form, d => ({ files: arr(d.files), pending: Number(d.pending) || 0 }), null, 'Could not add those files. ');
+}
+
+function answer(id, optionId) {
+  if (id == null || id === '' || optionId == null || optionId === '') return done();
+  return send('/api/confirm/' + encodeURIComponent(id) + '/answer', { answer: String(optionId) }, d => d.item || null);
+}
+
+function retryFile(id) {
+  if (id == null || id === '') return done();
+  return send('/api/files/' + encodeURIComponent(id) + '/retry', {}, d => d.file || null);
+}
+
 const api = {
   get s() { return S; },
   get state() { return stateView(); },
@@ -444,6 +479,10 @@ const api = {
   pack,
   whatIf,
   packToggle,
+  ingest,
+  upload,
+  answer,
+  retryFile,
   figPopover: el => openPopover(el),
 };
 

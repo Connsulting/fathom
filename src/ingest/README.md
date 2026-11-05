@@ -81,3 +81,47 @@ evaluates formulas, resolves external entities, follows external relationships,
 or extracts archive paths. Formula cells without cached values warn and are
 excluded. ZIP64, encrypted files and layouts without recognized headers fall
 back to extraction rather than guessing.
+
+# Pipeline
+
+`pipeline.mjs` exports `ingestFiles(db, files, {engine, config, now, key})` ->
+`{results}`, `ingestFile(db, file, opts)` and `retryFile(db, fileId, opts)`. A
+result is `{fileId, name, status, sourceKind, parser, counts, duplicateOf?}` with
+status `imported`, `duplicate`, `needs_mapping`, `needs_extraction`,
+`unsupported` or `failed`. `retryFile` throws `IngestError` with `status` 404
+(unknown file) or 409 (file not waiting).
+
+1. The file id is `f-` plus 24 hex of the content SHA256. Same bytes are a
+   `duplicate` of the stored file. Bytes are stored encrypted (vault) before the
+   `files` row is written; a file's rows are written in one transaction.
+2. Routing: a frozen parser, else a tabular file through a learned or proposed
+   column mapping (`mapping.mjs`, parser `mapped`), else a PDF or UTF-8 text
+   through extraction (`extract.mjs`, parser `extract-<docType>`), else
+   `unsupported`. Markdown notes keep the notes parser document and then extract
+   facts and goals; with the engine off they wait as `needs_extraction`.
+3. Accounts upsert by identity (`inst|mask:`, `inst|name:` or `source:`), id
+   `acct-` plus 16 hex of its SHA256, mirror `manual`. A new account asks for its
+   owner, and for its kind when the export does not name a known one.
+4. Transactions skip a stored key or a confirmed duplicate key; the same amount
+   within three days from another file asks `near_duplicate`. Balances and
+   positions keep one row per slot; the file whose period ends later (unknown is
+   oldest) holds authority: equal values advance provenance, a different value
+   is `revised`, an older file's value is archived as `older_snapshot`.
+5. P&L entities map through `entity_aliases`; P&L and tax workbook rows carry
+   `source_slot`. Same key with another amount is `revised`. A workbook's
+   `coverage` (from the workbook itself) archives and removes rows of covered
+   slots that the later file lacks (`removed`). A W-2 withholding total archives
+   paystub withholding for its slot (`summarized`).
+6. Questions (`confirm.mjs`): `account_owner`, `account_kind`, `entity_alias`,
+   `tax_year` (subject `tax:<sheetYear>`), `fact_check` (subject
+   `<sourceId>|<key>|<canonical JSON value>`, below 0.8 confidence),
+   `near_duplicate` and `employer_relation` (employer facts are held in
+   `held_facts` until answered). Answers are remembered by kind and subject.
+7. Sources are `ing:<parser>:<account id or all>`; account figures
+   `acct.<id>.balance` hold the latest balance or the latest holdings total.
+   Pack state refreshes when facts change.
+
+Extraction never sends an identifier: text goes through `redactForExtraction`
+(amount tokens resolve in code) and mapping samples through `redact` (headers
+and at most five rows). Schemas ask for no SSN, EIN, TIN, account number,
+person's name or address. Nothing logs file contents or values.
