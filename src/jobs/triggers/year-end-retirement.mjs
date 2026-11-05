@@ -22,7 +22,11 @@ export function evaluate(ctx) {
   if (!ctx.year) return null;
   if (ctx.info.blocked.length) return { blocked: ctx.info.blocked[0] };
   if (ctx.info.confirm.retirement) return { confirm: ctx.info.confirm.retirement, grounding: [salaryKey(ctx)].filter(Boolean) };
-  if (!positive(ctx, 'room.solo401k.employee') && !positive(ctx, 'room.sep')) return null;
+  // The solo 401(k) room this rec rests on could not be computed: missing data, not a closed
+  // condition, even when SEP room exists (S12, G2).
+  if ((ctx.info.calcFailed || []).includes('solo401kRoom')) return { blocked: 'calc_failed' };
+  // R10: only employee deferrals have a year-end (last payroll) deadline; SEP room alone does not fire.
+  if (!positive(ctx, 'room.solo401k.employee')) return null;
   return { grounding: ['room.solo401k.employee', 'room.solo401k.employer', 'room.solo401k', 'room.sep', salaryProjKey(ctx)].filter(Boolean) };
 }
 
@@ -60,10 +64,7 @@ export function template(ctx, hit) {
       qa: [],
     };
   }
-  const emp = ctx.fig['room.solo401k.employee'];
-  const summary = emp && emp.v > 0
-    ? 'You can still defer {f:room.solo401k.employee} into your solo 401(k) through payroll before the last payroll of the year.'
-    : 'You still have {f:room.sep} of SEP IRA room for the year.';
+  const summary = 'You can still defer {f:room.solo401k.employee} into your solo 401(k) through payroll before the last payroll of the year.';
   const why = [];
   if (ctx.fig['room.solo401k.employer']) why.push('On top of that, the business can add up to {f:room.solo401k.employer} as an employer contribution.');
   why.push('Employee deferrals have to come out of a paycheck, so the last payroll of the year is the real deadline.');

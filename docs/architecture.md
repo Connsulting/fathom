@@ -493,7 +493,9 @@ or `payer` name) or, for a single partnership without one, `income.partnershipEs
 unclassified P and L entity, an incomplete partnership input, filing status mfs
 (`mfs_unsupported`), a household tax calculator throw (`calc_failed`) or a missing Virginia
 itemized estimate blocks the tax figures that need it. IRA room counts traditional and Roth IRA
-contributions; SEP room for a sole proprietor passes that person's W-2 wages; a pre-tax IRA with
+contributions; SEP room for a sole proprietor passes that person's W-2 wages; payroll records are kept per
+person and employer, and a household S corp W-2 for anyone but its owner counts as that person's
+wages; salary war-game points are clamped into `business.salaryRange`; a pre-tax IRA with
 no balance on file leaves that person's pro-rata status unknown. A planner figure not produced by a run is deleted unless a rec def (text or
 `mine`), message, decision note or content row references it, or a kept war-game entry names its
 point or option. `src/scenario/build.mjs` serves a stored `wg.*` figure in place of the value it
@@ -511,7 +513,7 @@ the trigger's `calcs` threw is blocked as `calc_failed`, never retired.
 |---|---|---|
 | `fed-q4-estimate` | tax / calendar | Jan 15, hard |
 | `va-q4-estimate` | tax / calendar | Jan 15, hard |
-| `year-end-retirement` | retirement / calendar | Last payroll (Dec 15 or `business.lastPayrollDate`), hard |
+| `year-end-retirement` | retirement / calendar | Last payroll (Dec 15 or `business.lastPayrollDate`), hard; employee deferral room only (SEP room alone does not fire it); blocked when `solo401kRoom` throws |
 | `solo401k-setup` | retirement / calendar | Before last payroll, hard |
 | `scorp-salary` | business / income | Last payroll; scenario `salary` |
 | `invoice-deferral` | business / calendar | Dec 1; scenario `deferral` |

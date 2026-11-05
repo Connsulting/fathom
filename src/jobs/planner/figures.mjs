@@ -237,7 +237,7 @@ export function computeFigures(data, facts, ctx) {
   const biz = [];
   for (const c of corps) {
     if (!inUnit(c.person)) continue;
-    const ownRec = records.find(r => r.corp === c.entity.slug);
+    const ownRec = records.find(r => r.corp === c.entity.slug && r.person === c.person);
     const gross = c.sums.salary > 0 ? c.proj(c.sums.salary) : ownRec ? cents(ownRec.wages + ownRec.pretax) : 0;
     const pretax = ownRec ? ownRec.pretax : 0;
     if (gross > 0) w2.push({ person: c.person, src: `corp:${c.entity.slug}`, gross, agi: Math.max(0, cents(gross - pretax)), pretax });
@@ -246,11 +246,17 @@ export function computeFigures(data, facts, ctx) {
     c.gross = gross;
     c.pretax = pretax;
   }
+  // Payroll records per (person, employer) (F3, G1): the corp owner's wages from a household S corp
+  // with a P&L come from its officer salary above, so that W-2 is not added again; any other
+  // person's W-2 from a household S corp, and any W-2 from one with no P&L, counts as that
+  // person's wages.
   for (const r of records) {
     if (!inUnit(r.person)) continue;
-    // Wages from a classified household S corp with no P&L still count as own-corp wages (F3).
-    if (r.corp && !corps.some(c => c.entity.slug === r.corp)) {
-      w2.push({ person: r.person, src: `corp:${r.corp}`, gross: cents(r.wages + r.pretax), agi: r.wages, pretax: r.pretax });
+    if (r.corp) {
+      const c = corps.find(x => x.entity.slug === r.corp);
+      if (c && c.person === r.person) continue;
+      const src = !c && entities.some(e => e.slug === r.corp && e.owner === r.person) ? `corp:${r.corp}` : `corp:${r.corp}:${r.person}`;
+      w2.push({ person: r.person, src, gross: cents(r.wages + r.pretax), agi: r.wages, pretax: r.pretax });
       continue;
     }
     if (r.household) continue;

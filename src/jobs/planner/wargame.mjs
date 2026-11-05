@@ -37,7 +37,9 @@ function salaryGame(data, out, ctx) {
   const hi = Math.max(range.min, range.max);
   const current = corp.gross;
   const inRange = current >= lo && current <= hi;
-  const grid = [0, 1, 2, 3, 4].map(i => round1000(lo + (hi - lo) * i / 4));
+  // Grid points rounded to the thousand, then clamped into the approved range (G3).
+  const clamp = v => Math.min(hi, Math.max(lo, v));
+  const grid = [0, 1, 2, 3, 4].map(i => clamp(round1000(lo + (hi - lo) * i / 4)));
   const salaries = [...new Set([...grid, ...(inRange ? [current] : [])])].sort((a, b) => a - b);
   const P = corp.P;
   const slug = corp.entity.slug;
@@ -68,7 +70,7 @@ function salaryGame(data, out, ctx) {
   const points = salaries.map(evaluate).filter(Boolean);
   if (points.length < 2) return null;
   let ref = inRange ? points.find(p => p.s === current) : null;
-  if (!ref) ref = evaluate(round1000((lo + hi) / 2));
+  if (!ref) ref = evaluate(clamp(round1000((lo + hi) / 2)));
   if (!ref) return null;
 
   const content = [];
