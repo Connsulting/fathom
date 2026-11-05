@@ -1,0 +1,147 @@
+{
+  "id": "kids-dependents",
+  "name": "Kids and dependents",
+  "version": "1.0.0",
+  "taxYear": 2026,
+  "reviewed": "2026-11-05",
+  "curator": "Public primary-source review",
+  "covers": [
+    "dependent qualification",
+    "expected child life events",
+    "child tax credit",
+    "child and dependent care",
+    "education savings",
+    "household employment"
+  ],
+  "appliesWhen": {
+    "fact": "household.dependents",
+    "op": "gt",
+    "value": 0
+  },
+  "suggestWhen": {
+    "fact": "household.expectingChild",
+    "op": "eq",
+    "value": true
+  },
+  "whatIf": {
+    "prompt": "What would change if the household added a child or another qualifying dependent?"
+  },
+  "entries": [
+    {
+      "file": "qualifying-child.md",
+      "title": "Check dependent qualification for a young child",
+      "cites": [
+        {
+          "label": "IRS Publication 501: enduring dependent and custody rules",
+          "url": "https://www.irs.gov/publications/p501"
+        },
+        {
+          "label": "IRS Child Tax Credit eligibility",
+          "url": "https://www.irs.gov/credits-deductions/individuals/child-tax-credit"
+        }
+      ]
+    },
+    {
+      "file": "expected-child.md",
+      "title": "Treat an expected child as a future life event",
+      "cites": [
+        {
+          "label": "IRS Publication 501: enduring dependent and custody rules",
+          "url": "https://www.irs.gov/publications/p501"
+        },
+        {
+          "label": "IRS Publication 505 (2026): withholding changes",
+          "url": "https://www.irs.gov/publications/p505"
+        }
+      ]
+    },
+    {
+      "file": "child-tax-credit.md",
+      "title": "Apply 2026 child tax credit limits and identification rules",
+      "cites": [
+        {
+          "label": "IRS Revenue Procedure 2025-32: 2026 child credit amounts",
+          "url": "https://www.irs.gov/pub/irs-drop/rp-25-32.pdf"
+        },
+        {
+          "label": "IRS Child Tax Credit eligibility",
+          "url": "https://www.irs.gov/credits-deductions/individuals/child-tax-credit"
+        }
+      ]
+    },
+    {
+      "file": "qualifying-care.md",
+      "title": "Identify care expenses that allow work",
+      "cites": [
+        {
+          "label": "IRS Publication 503: enduring qualifying-care rules",
+          "url": "https://www.irs.gov/publications/p503"
+        },
+        {
+          "label": "IRS child and dependent care credit: 2026 changes",
+          "url": "https://www.irs.gov/credits-deductions/individuals/child-and-dependent-care-credit-information"
+        }
+      ]
+    },
+    {
+      "file": "care-credit-fsa.md",
+      "title": "Compare the care credit with dependent care assistance",
+      "cites": [
+        {
+          "label": "IRS child and dependent care credit: 2026 changes",
+          "url": "https://www.irs.gov/credits-deductions/individuals/child-and-dependent-care-credit-information"
+        },
+        {
+          "label": "IRS Publication 15-B (2026): dependent care assistance",
+          "url": "https://www.irs.gov/publications/p15b"
+        },
+        {
+          "label": "IRS Publication 503: enduring qualifying-care rules",
+          "url": "https://www.irs.gov/publications/p503"
+        }
+      ]
+    },
+    {
+      "file": "education-savings.md",
+      "title": "Coordinate education savings with household priorities",
+      "cites": [
+        {
+          "label": "Code of Virginia 58.1-322.03: Virginia529 deductions",
+          "url": "https://law.lis.virginia.gov/vacode/title58.1/section58.1-322.03/"
+        },
+        {
+          "label": "Invest529 Program Description, October 1, 2026",
+          "url": "https://www.invest529.com/uploads/files/va529_invest_program_description.pdf"
+        }
+      ]
+    },
+    {
+      "file": "custody-and-claims.md",
+      "title": "Separate custody rules from credit allocation",
+      "cites": [
+        {
+          "label": "IRS Publication 501: enduring dependent and custody rules",
+          "url": "https://www.irs.gov/publications/p501"
+        },
+        {
+          "label": "IRS Publication 503: enduring qualifying-care rules",
+          "url": "https://www.irs.gov/publications/p503"
+        }
+      ]
+    },
+    {
+      "file": "household-employee.md",
+      "title": "Recognize household employer duties for a nanny",
+      "cites": [
+        {
+          "label": "IRS Publication 926 (2026): household employers",
+          "url": "https://www.irs.gov/publications/p926"
+        },
+        {
+          "label": "IRS Publication 503: enduring qualifying-care rules",
+          "url": "https://www.irs.gov/publications/p503"
+        }
+      ]
+    }
+  ]
+}
