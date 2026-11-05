@@ -1109,12 +1109,14 @@ active withholding rows (`tax_payments.recipient`), else to the `employer_recipi
 (`withholdingRecipient`) and blocks `w2_recipient_unknown`. An employer is household when it matches
 a household entity by normalized name or `entity_aliases`, else the `employer_relation` answer
 decides (`household_employer_unmatched`, `employer_relation_pending`). W-2s sum per recipient,
-employer key and year: box 1 is AGI wages, box 12 D, E, F, G and S are pre-tax, D, E, F, S, AA and BB
+employer key and year: box 1 is AGI wages, box 5 is Medicare wages (else box 1 plus the box 12
+pre-tax codes, noted `medicare_wages_from_box1`), box 12 D, E, F, G and S are pre-tax, D, E, F, S, AA and BB
 count toward 402(g) (G and EE do not), W is HSA money, and a W-2 without box 12 leaves deferrals
 unknown. Deferrals above the 402(g) limit are catch-ups; across a household plan and another plan
 they block `deferral_split_unknown` until `retirement.otherPlanDeferrals` is answered. A paystub-only
 employer projects `ytdGross` to the year (`section125_unknown`), blocking `paystub_ytd_missing`, or
-`paystub_deferrals_unknown` when a stub shows deferrals and no outside-401k contribution is stated.
+`paystub_deferrals_unknown` when a stub shows deferrals and no outside-401k contribution is stated
+for that employer (an unnamed one only when the person has a single outside employer).
 A W-2 whose withholding a `withholding_conflict` answer dropped is dropped too; a pending conflict
 blocks `w2_correction_pending`, answers keeping different forms block `w2_correction_conflicting`,
 and two W-2s nothing reconciles block `w2_duplicate_unresolved`. Tax payments count once by kind

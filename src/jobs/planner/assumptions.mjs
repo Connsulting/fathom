@@ -22,6 +22,7 @@ export const ASSUMPTION_TEXT = Object.freeze({
   section125_unknown: 'Paystubs do not show pre-tax benefit deductions, so wages are projected from gross pay and may be a little high.',
   prior_tax_total_line: "Last year's target uses the total tax on your uploaded return as filed, which may include taxes the safe-harbor rule leaves out, so it may be a little high.",
   paid_rows_as_estimates: 'Every payment in your tax payment log is counted as an estimated payment.',
+  medicare_wages_from_box1: 'A W-2 box five was not read, so Medicare wages are taken as box one plus the pre-tax amounts in box twelve, which may be a little low.',
   addl_medicare_withholding_not_read: 'Additional Medicare tax withheld by an employer is not read from your W-2s yet, so withholding may be a little low.',
 });
 

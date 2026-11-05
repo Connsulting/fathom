@@ -5,8 +5,8 @@
 // employer_relation, withholding_conflict), never from a guessed default.
 //
 // payrollRecords(data, entities, owner) -> {records, blocks, ask}
-//   records: [{docId, docIds, fileId, person, employer, key, kind, wages, ytdWages, deferral, catchUp,
-//     roth, pretax, hsa, deferral457, elective402g, deferralKnown, corp, household, projected}]
+//   records: [{docId, docIds, fileId, person, employer, key, kind, wages, ytdWages, medicare,
+//     medicareAssumed, deferral, catchUp, roth, pretax, hsa, deferral457, elective402g, deferralKnown, corp, household, projected}]
 //   blocks:  [{code, employer, person}] each blocks household tax (and the dependent wage figures)
 //   ask:     [{employerKey, employer, payer, fileId}] recipient questions to raise through ingest (D9)
 // employerKeyOf(name) -> ingest's employer key
@@ -178,8 +178,14 @@ export function payrollRecords(data, entities, owner = {}) {
       if (parts.some(p => !isAmount(p.wages))) { blocks.push({ code: 'w2_wages_missing', employer: g.employer, person: g.person }); continue; }
       const total = k => cents(sum(parts.map(p => p.box[k])));
       const wages = cents(sum(parts.map(p => p.wages)));
+      // E1: each box is read on its own. Box 1 is income tax wages (already net of pretax
+      // deferrals); box 5 is Medicare wages as the employer reported them (Form 8959). Only when box 5
+      // was not read does the documented rule stand in: box 1 plus the box 12 pretax codes, or box 1
+      // alone when box 12 was not read either, with a visible note.
+      const box = (p, field) => (isAmount(p.d.fields[field]) ? p.d.fields[field] : cents(p.wages + p.box.pretax));
       r = {
         kind: 'w2', docIds: w2s.map(d => d.id), fileId: w2s[0].fileId, wages, ytdWages: wages, pretax: total('pretax'),
+        medicare: cents(sum(parts.map(p => box(p, 'medicareWages')))), medicareAssumed: parts.some(p => !isAmount(p.d.fields.medicareWages)),
         elective402g: total('elective402g'), deferral457: total('deferral457'), roth: total('roth'), hsa: total('hsa'),
         deferralKnown: !parts.some(p => p.box.unread), projected: false,
       };
@@ -192,14 +198,20 @@ export function payrollRecords(data, entities, owner = {}) {
       const deferring = stubs.some(s => Number(s.fields.retirementDeferral) > 0 || Number(s.fields.hsaDeferral) > 0);
       let pretax = 0;
       if (deferring) {
+        // E2: a stated deferral belongs to the employer it names; one naming no employer only to the
+        // person's single outside employer. Another employer's answer never applies here.
         const entries = Array.isArray(owner['retirement.contributions']) ? owner['retirement.contributions'] : [];
-        const stated = entries.filter(c => c && c.person === g.person && c.plan === 'outside-401k' && c.type === 'deferral' && isAmount(Number(c.amount)));
+        const named = c => typeof c.employer === 'string' && c.employer.trim();
+        const soleOutside = [...groups.values()].filter(x => x.person === g.person && !x.kind.household).length === 1;
+        const stated = entries.filter(c => c && c.person === g.person && c.plan === 'outside-401k' && c.type === 'deferral' && isAmount(Number(c.amount))
+          && (named(c) ? sameEmployer(data, c.employer, g.employer) : soleOutside));
         if (g.kind.household || !stated.length) { blocks.push({ code: 'paystub_deferrals_unknown', employer: g.employer, person: g.person }); continue; }
         pretax = cents(sum(stated.filter(c => c.roth !== true).map(c => Number(c.amount))));
       }
       r = {
+        // Gross pay keeps 401(k) deferrals in it, so it is the Medicare wage.
         kind: 'paystub', docIds: [last.id], fileId: last.fileId, wages: Math.max(0, cents(projectedGross - pretax)), ytdWages: cents(last.fields.ytdGross),
-        pretax, elective402g: 0, deferral457: 0, roth: 0, hsa: 0, deferralKnown: !deferring, projected: true, section125Unknown: !deferring,
+        medicare: projectedGross, medicareAssumed: false, pretax, elective402g: 0, deferral457: 0, roth: 0, hsa: 0, deferralKnown: !deferring, projected: true, section125Unknown: !deferring,
       };
     }
     const corp = g.kind.household && g.kind.entity.classified && g.kind.entity.type === 's_corp' ? g.kind.entity : null;

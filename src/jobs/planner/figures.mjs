@@ -264,7 +264,10 @@ export function computeFigures(data, facts, ctx) {
   // inc.ytd.w2 (F8): outside-employer pay received in the tax year: W-2 box 1, or the latest
   // paystub's year-to-date gross. Held while any payroll document is unresolved.
   const outsideYtd = records.filter(r => !r.household);
-  const section125 = records.some(r => inUnit(r.person) && r.section125Unknown) ? ['section125_unknown'] : [];
+  const section125 = [
+    ...(records.some(r => inUnit(r.person) && r.section125Unknown) ? ['section125_unknown'] : []),
+    ...(records.some(r => inUnit(r.person) && r.medicareAssumed) ? ['medicare_wages_from_box1'] : []),
+  ];
   if (payroll.blocks.length) out.withhold(['inc.ytd.w2', 'room.hsa'], payroll.blocks[0].code);
   else if (outsideYtd.length) {
     out.source('docs', SOURCES.docs.label, dateLabel(clock), SOURCES.docs.kind);
@@ -287,7 +290,9 @@ export function computeFigures(data, facts, ctx) {
   for (const c of corps) {
     if (!inUnit(c.person)) continue;
     const ownRec = records.find(r => r.corp === c.entity.slug && r.person === c.person);
-    const gross = c.sums.salary > 0 ? c.proj(c.sums.salary) : ownRec ? cents(ownRec.wages + ownRec.pretax) : 0;
+    // A wage part's gross is its Medicare wage (E1): the P&L officer salary (gross pay), else the
+    // own-corp W-2's box 5. Its AGI wage is box 1 for a W-2.
+    const gross = c.sums.salary > 0 ? c.proj(c.sums.salary) : ownRec ? ownRec.medicare : 0;
     // I1: owner-set deferral records lower only gross taken from the P&L officer salary (added once
     // contributions are attributed, below); payroll document wages are box 1 and already exclude
     // pretax deferrals.
@@ -295,7 +300,7 @@ export function computeFigures(data, facts, ctx) {
     const pretax = gross > 0 ? Math.min(gross, cents(ownRec ? ownRec.pretax : 0)) : 0;
     c.w2 = null;
     if (gross > 0) {
-      c.w2 = { person: c.person, src: `corp:${c.entity.slug}`, gross, agi: Math.max(0, cents(gross - pretax)), pretax };
+      c.w2 = { person: c.person, src: `corp:${c.entity.slug}`, gross, agi: c.fromPnl ? Math.max(0, cents(gross - pretax)) : ownRec.wages, pretax };
       w2.push(c.w2);
     }
     const K = c.proj(c.sums.net);
@@ -314,11 +319,11 @@ export function computeFigures(data, facts, ctx) {
       if (c && c.person === r.person) continue;
       const own = !c && entities.some(e => e.slug === r.corp && e.owner === r.person);
       const src = own ? `corp:${r.corp}` : `corp:${r.corp}:${r.person}`;
-      w2.push({ person: r.person, src, gross: cents(r.wages + r.pretax), agi: r.wages, pretax: r.pretax });
+      w2.push({ person: r.person, src, gross: r.medicare, agi: r.wages, pretax: r.pretax });
       continue;
     }
     if (r.household) continue;
-    w2.push({ person: r.person, src: 'outside', gross: cents(r.wages + r.pretax), agi: r.wages });
+    w2.push({ person: r.person, src: 'outside', gross: r.medicare, agi: r.wages });
   }
   for (const e of pnlEntities) {
     if (!e.classified) { blocked.push(`entity_unclassified:${e.slug}`); out.warn('entity_unclassified'); continue; }

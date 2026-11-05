@@ -6,7 +6,7 @@
 // householdTax(parts) -> {agi, deduction, pre, qbi, qbiCarryforward, taxable, fedIncome, ctc, se,
 //   seTotal, addlMedicare, retire, retireByBiz, fedTotal, va, vaTaxable, blocked, steps, warnings};
 //   a run whose retirement contributions fail validation returns only {blocked, steps, warnings}
-// parts: {f, state, persons, w2: [{person, src, gross, agi}], biz: [{id, kind, person, agi, qbi,
+// parts: {f, state, persons, w2: [{person, src, gross (Medicare wages), agi}], biz: [{id, kind, person, agi, qbi,
 //   seInput, w2Wages, sstb}], retirement: {person: {byPlan, allRegular, allCatchUp, outsideKnown,
 //   catchUpLimit}}, hsaPersonal, itemized, vaItemized, va529Deduction, children, vaBlocked,
 //   qbiLossCarryforward?}
@@ -73,6 +73,7 @@ export function householdTax(parts) {
   const mfj = f === 'mfj';
   const steps = [];
   const warnings = [];
+  // Additional Medicare Tax on wages (Form 8959 Part I) uses Medicare wages: a part's gross.
   const wagesOf = p => sum(parts.w2.filter(w => w.person === p).map(w => w.gross));
 
   const seInfo = seTaxByPerson(parts);
