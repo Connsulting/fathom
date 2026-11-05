@@ -248,7 +248,15 @@ function ypCandidates(yp) {
   const out = [];
   const seen = new Set();
   arr(yp.sources).forEach((s) => {
-    if (!s || !s.fileId || seen.has(s.fileId)) return;
+    if (!s) return;
+    if (!s.fileId) {
+      const key = `text:${s.name || ''}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push({ id: key, name: s.name || 'document', docType: s.docType || '', source: true, fixed: true });
+      return;
+    }
+    if (seen.has(s.fileId)) return;
     seen.add(s.fileId);
     out.push({ id: s.fileId, name: s.name || s.fileId, docType: s.docType || '', source: true });
   });
@@ -261,7 +269,7 @@ function ypCandidates(yp) {
 }
 
 // Plan and benefits documents start ticked, other files start unticked.
-const isPicked = (c) => (c.source ? !S.yp.off.has(c.id) : S.yp.on.has(c.id));
+const isPicked = (c) => c.fixed || (c.source ? !S.yp.off.has(c.id) : S.yp.on.has(c.id));
 
 function resultLine(r) {
   const { arr, plural, esc } = H;
@@ -281,7 +289,7 @@ function yourPlansCard(packs) {
   const built = yp.built && typeof yp.built === 'object' ? yp.built : null;
   const pack = packs.find((x) => x.id === 'your-plans' || x.manifest === 'your-plans');
   const files = list.length
-    ? `<ul class="h-yp-files">${list.map((c) => `<li><label><input type="checkbox" data-yp-file="${esc(c.id)}"${isPicked(c) ? ' checked' : ''}><span>${esc(c.name)}</span>${c.source ? `<em>${esc(c.docType || 'plan')} document</em>` : ''}</label></li>`).join('')}</ul>`
+    ? `<ul class="h-yp-files">${list.map((c) => `<li><label>${c.fixed ? '' : `<input type="checkbox" data-yp-file="${esc(c.id)}"${isPicked(c) ? ' checked' : ''}>`}<span>${esc(c.name)}</span>${c.source ? `<em>${esc(c.docType || 'plan')} document</em>` : ''}</label></li>`).join('')}</ul>`
     : '<p class="h-mute sm">No documents on file yet. Upload a plan summary or benefits guide first.</p>';
   const builtLine = built
     ? `<p class="h-mute sm">Last built ${esc(isoLabel(built.builtAt))}${Number.isFinite(Number(built.entries)) ? `, ${plural(Number(built.entries), 'entry', 'entries')}` : ''}. ${pack ? goA('packs', `Open the pack${icon('arrow')}`, { id: pack.id }) : ''}</p>`
@@ -289,7 +297,7 @@ function yourPlansCard(packs) {
   const body = `<div class="h-card h-yp"${S.yp.building ? ' aria-busy="true"' : ''}>
     <p class="h-yp-lede">Build a private pack from your own plan and benefits documents. Answers cite the file and page. Plan and benefits documents on file are always read; tick any other file to include it.</p>
     ${files}
-    <div class="h-acts"><button type="button" class="h-btn pri" data-yp-build${S.yp.building || !list.length ? ' disabled' : ''}>Build Your plans pack</button>${S.yp.building ? '<span class="h-mute sm">Reading your documents</span>' : ''}</div>
+    <div class="h-acts"><button type="button" class="h-btn pri" data-yp-build${S.yp.building || !(list.some((c) => c.source) || list.some(isPicked)) ? ' disabled' : ''}>Build Your plans pack</button>${S.yp.building ? '<span class="h-mute sm">Reading your documents</span>' : ''}</div>
     ${resultLine(S.yp.result)}${builtLine}
   </div>`;
   return section('Your plans', body, 'Private to this household');
@@ -320,7 +328,7 @@ function build() {
   const { api } = H;
   if (S.yp.building || typeof api.buildYourPlans !== 'function') return;
   const list = ypCandidates(api.s.live?.yourPlans || {});
-  const ids = list.filter(isPicked).map((c) => c.id);
+  const ids = list.filter((c) => !c.fixed && isPicked(c)).map((c) => c.id);
   S.yp.building = true;
   S.yp.result = null;
   H.draw();
@@ -346,7 +354,7 @@ export function onInput(e) {
   if (!t || !t.matches || !t.matches('input[data-yp-file]')) return false;
   const id = t.getAttribute('data-yp-file');
   const c = ypCandidates(H.api.s.live?.yourPlans || {}).find((x) => x.id === id);
-  if (!c) return true;
+  if (!c || c.fixed) return true;
   const set = c.source ? S.yp.off : S.yp.on;
   if (t.checked === !c.source) set.add(id); else set.delete(id);
   return true;

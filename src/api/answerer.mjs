@@ -289,7 +289,8 @@ export function createLiveAnswerer({ engine, packs } = {}) {
         tools: toolResults.map(r => ({ name: r.name, args: r.args ?? {} })),
         figures: grounding.figureKeys,
         packIds,
-        packEntries: unique(active.flatMap(({ pack }) => pack.entries.map(e => e.title))
+        packEntries: unique([...active.flatMap(({ pack }) => pack.entries.map(e => e.title)),
+          ...(context && Array.isArray(context.entries) ? context.entries.map(e => e.title) : [])]
           .filter(title => lower.includes(title.toLowerCase()))),
         literals: grounding.literals.map(l => ({ text: l.text, source: l.source })),
         grounding: { ok: grounding.ok, retried, unverified: grounding.violations.map(v => v.text) },
