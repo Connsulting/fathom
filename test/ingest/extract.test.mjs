@@ -985,6 +985,138 @@ describe('withholding recipients (D4, G4)', () => {
     const q = pendingOf(s.db, 'withholding_conflict');
     assert.equal(q.length, 1, 'one question, for federal only');
   }));
+
+  // Review finding L1: a withholding_conflict names stored rows, and tax_payments ids are reused
+  // once rows are removed. A conflict whose rows are removed (summarized by a W-2) is closed, and
+  // answering a conflict whose rows no longer match what it asked about is refused as stale and
+  // changes nothing.
+  const snapshot = (db) => ({ rows: all(db, 'SELECT * FROM tax_payments ORDER BY id'), superseded: all(db, 'SELECT * FROM superseded_rows ORDER BY id') });
+  const refusedStale = (db, id, option) => assert.throws(() => C.answer(db, id, option, { now: NOW }),
+    (e) => e?.name === 'ConfirmError' && ['stale', 'not_found'].includes(e.code), `answering ${option} is refused as stale`);
+  const stubVersion = (version, federalWithholding) => ({
+    file: () => textFile(`paystub-version-${version}-2032-03-15.txt`, `${paystubText()}\nSynthetic version ${version}`, 'text/plain'),
+    engine: () => fakeEngine(paystubResponses({ ...PAYSTUB, stateWithholding: undefined, federalWithholding })),
+  });
+
+  test('L1: a paystub withholding_conflict whose rows a W-2 summarizes is closed; answering it later never touches 1099 rows that reuse the ids', () => withStore(async (s) => {
+    const w2 = await importDoc(s, w2Of('federal-only', { ...W2_2032, stateWithheld: undefined }));
+    await importDoc(s, stubVersion(1, 700));
+    await importDoc(s, stubVersion(2, 650));
+    assert.equal(active(s.db).length, 3, 'the W-2 and both paystub versions, federal only, recipient unknown');
+
+    answerEmployer(s.db, 'owner');
+    assert.deepEqual(active(s.db).map((t) => [t.payer, t.amount, t.file_id]), [[`${payers().w2}:owner`, 12000, w2]], 'the W-2 summarizes both paystub versions');
+    assert.equal(archivedWith(s.db, 'summarized').length, 2);
+    assert.equal(pendingOf(s.db, 'withholding_conflict').length, 0, 'the conflict closes once its rows are summarized');
+    const conflicts = items(s.db, 'withholding_conflict');
+
+    // Two members' 1099-INTs with withholding; their rows may take the ids the paystub rows freed.
+    const ids1099 = [await import1099(s, '1099-int', 'a'), await import1099(s, '1099-int', 'b')];
+    const before = snapshot(s.db);
+    assert.deepEqual(before.rows.filter((t) => t.payer.startsWith('1099-int:')).map((t) => [t.file_id, t.amount]), ids1099.map((id) => [id, 240]));
+    for (const c of conflicts) for (const option of ['first', 'second', 'both']) refusedStale(s.db, c.id, option);
+    assert.deepEqual(snapshot(s.db), before, 'no tax row or archive changes');
+  }));
+
+  // Direct SQL is used because no import path changes a conflicted row in a known-recipient slot.
+  const MUTATIONS = [
+    ['its amount is changed by direct SQL', (db, row) => db.prepare('UPDATE tax_payments SET amount = ? WHERE id = ?').run(260, row.id)],
+    ['it is deleted and an unrelated row takes its id, by direct SQL', (db, row) => {
+      db.prepare('DELETE FROM tax_payments WHERE id = ?').run(row.id);
+      db.prepare(`INSERT INTO tax_payments (id, jurisdiction, tax_year, date, amount, file_id, dedupe_key, source_slot, payer, recipient)
+                  VALUES (?, 'federal', 2032, '2032-12-31', 55, ?, 'synthetic-unrelated-key', 'wh:synthetic:2032:federal:owner', 'synthetic-unrelated-payer', 'owner')`).run(row.id, row.file_id);
+    }],
+  ];
+  for (const [how, mutate] of MUTATIONS) {
+    test(`L1 guard: a pending withholding_conflict whose later row changed (${how}) is refused as stale and changes nothing`, () => withStore(async (s) => {
+      const ids = { first: await importDoc(s, int1099Of('original', 200)), second: await importDoc(s, int1099Of('corrected', 240)) };
+      const base = base1099('1099-int');
+      const asked = pendingOf(s.db, 'document_recipient');
+      for (const id of [ids.first, ids.second]) answerDoc(s, asked, `${base}:doc:${id}`, 'owner');
+      const [q] = pendingOf(s.db, 'withholding_conflict');
+      assert.ok(q, 'a withholding_conflict is pending');
+      mutate(s.db, one(s.db, "SELECT * FROM tax_payments WHERE file_id = ? AND jurisdiction = 'federal'", ids.second));
+      const before = snapshot(s.db);
+      for (const option of ['first', 'second']) refusedStale(s.db, q.id, option);
+      assert.deepEqual(snapshot(s.db), before, 'no tax row or archive changes');
+    }));
+  }
+
+  // Review finding L2: an explicit zero withholding field is observed, so a correction to zero
+  // conflicts with the earlier nonzero amount under K1; an absent field stays absent.
+  const federalOf = (db, base) => active(db).filter((t) => t.jurisdiction === 'federal' && t.payer.startsWith(base));
+  const totalOf = (rows) => rows.reduce((sum, t) => sum + t.amount, 0);
+  const W2_ZERO = { ...W2_FIRST, federalWithheld: 0 };
+  const ZERO_CASES = [
+    {
+      name: '1099-INT',
+      amount: 200,
+      async run(s) {
+        const ids = { first: await importDoc(s, int1099Of('original', 200)), second: await importDoc(s, int1099Of('corrected', 0)) };
+        const base = base1099('1099-int');
+        for (const d of pendingOf(s.db, 'document_recipient')) C.answer(s.db, d.id, 'owner', { now: NOW });
+        return { ids, base };
+      },
+    },
+    {
+      name: 'W-2 rekeyed by the employer answer',
+      amount: 12000,
+      async run(s) {
+        const ids = { first: await importDoc(s, w2Of('first', W2_FIRST)), second: await importDoc(s, w2Of('corrected', W2_ZERO)) };
+        answerEmployer(s.db, 'owner');
+        return { ids, base: payers().w2 };
+      },
+    },
+    {
+      name: 'W-2 resolved at import by the remembered employer answer',
+      amount: 12000,
+      async run(s) {
+        const first = await importDoc(s, w2Of('first', W2_FIRST));
+        answerEmployer(s.db, 'owner');
+        return { ids: { first, second: await importDoc(s, w2Of('corrected', W2_ZERO)) }, base: payers().w2 };
+      },
+    },
+  ];
+  for (const c of ZERO_CASES) {
+    for (const option of ['first', 'second']) {
+      test(`L2: ${c.name} corrected to explicit zero federal withholding queues one withholding_conflict; answering ${option} leaves ${option === 'first' ? c.amount : 0}`, () => withStore(async (s) => {
+        const { ids, base } = await c.run(s);
+        assert.equal(pendingOf(s.db, 'withholding_conflict').length, 1, 'one withholding_conflict question');
+        answerConflict(s, option);
+        const rows = federalOf(s.db, base);
+        const archived = archivedWith(s.db, 'withholding_conflict').map((x) => [x.file_id, JSON.parse(x.row).amount]);
+        if (option === 'second') {
+          assert.equal(totalOf(rows), 0, 'no federal withholding remains for the payer');
+          assert.ok(rows.every((t) => t.amount === 0 && t.file_id === ids.second), 'only the corrected zero row may stay');
+          assert.deepEqual(archived, [[ids.first, c.amount]], 'the nonzero row is archived as withholding_conflict');
+        } else {
+          assert.equal(totalOf(rows), c.amount);
+          assert.deepEqual(rows.filter((t) => t.amount !== 0).map((t) => [t.amount, t.file_id]), [[c.amount, ids.first]]);
+          assert.ok(!archived.some(([fileId]) => fileId === ids.first), 'the earlier row is kept');
+        }
+        assert.equal(pendingOf(s.db, 'withholding_conflict').length, 0);
+      }));
+    }
+  }
+
+  const ABSENT_CASES = [
+    ['1099-INT', '1099-int', { ...form1099('1099-int'), federalWithheld: undefined }, () => int1099Of('original', 200), () => int1099Of('absent', undefined), () => base1099('1099-int'), false],
+    ['W-2', 'w2', { ...W2_FIRST, federalWithheld: undefined }, () => w2Of('first', W2_FIRST), () => w2Of('absent', { ...W2_FIRST, federalWithheld: undefined }), () => payers().w2, true],
+  ];
+  for (const [name, docType, extracted, firstDoc, absentDoc, baseOf, employer] of ABSENT_CASES) {
+    test(`L2 guard: a ${name} with the federal withholding field absent emits no federal row and queues no withholding_conflict`, () => withStore(async (s) => {
+      const fields = JSON.parse(JSON.stringify(extracted));
+      assert.ok(!Object.hasOwn(fields, 'federalWithheld'));
+      assert.equal(taxRows(X.toRows(docType, fields, ctx)).filter((r) => r.jurisdiction === 'federal').length, 0, 'toRows emits no federal withholding row');
+      const first = await importDoc(s, firstDoc());
+      if (employer) answerEmployer(s.db, 'owner');
+      const second = await importDoc(s, absentDoc());
+      for (const d of pendingOf(s.db, 'document_recipient')) C.answer(s.db, d.id, 'owner', { now: NOW });
+      assert.deepEqual(federalOf(s.db, baseOf()).map((t) => [t.amount, t.file_id]), [[name === 'W-2' ? 12000 : 200, first]], 'the earlier withholding stays');
+      assert.equal(count(s.db, 'tax_payments', "file_id = ? AND jurisdiction = 'federal'", second), 0, 'the absent field stores no federal row');
+      assert.equal(items(s.db, 'withholding_conflict').length, 0, 'no withholding_conflict is queued');
+    }));
+  }
 });
 
 // D6 with G6 to G8: a PDF whose text layer has any text is read with pdfjs (in a worker) and goes
