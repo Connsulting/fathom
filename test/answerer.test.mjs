@@ -428,6 +428,93 @@ test('B3: an account mask from the real list_accounts result never grounds a num
   assert.equal(literal && literal.source, 'list_accounts', JSON.stringify(reply.provenance.literals));
 });
 
+test('B3 r2: a figure reference (mine[].fig = plan529) in the va529 rec context never grounds $529; a real amount does', async t => {
+  const s = await demoStore(t);
+  const said = 'The 529 holds $529 today, and the cap is $4,000.';
+  const { engine } = always(s.runtime, said);
+  const reply = await createLiveAnswerer({ engine, packs: s.packs }).answer({ db: s.db, key: 'va529', text: 'Synthetic rec question' });
+  assert.ok(!reply.notice);
+  const { unverified } = reply.provenance.grounding;
+  assert.ok(unverified.includes('$529'), `the fig reference must not ground $529: ${JSON.stringify(reply.provenance.grounding)}`);
+  assert.ok(!unverified.includes('$4,000'), 'a real amount of the rec still grounds');
+});
+
+test('B3 r2: a figure reference in a scripted get_recommendation result never grounds $529; a real amount does', async t => {
+  const s = await demoStore(t);
+  const said = 'The 529 holds $529 today, and the cap is $4,000.';
+  const { engine, responses } = scripted(s.runtime, [
+    [{ toolCalls: [{ name: 'get_recommendation', args: { id: 'va529' } }] }, { text: said }],
+    [{ text: said }],
+  ]);
+  const reply = await createLiveAnswerer({ engine, packs: s.packs }).answer({ db: s.db, key: 'ask', text: 'Synthetic ask' });
+  assert.ok(!reply.notice);
+  const got = responses[0].toolResults.find(r => r.name === 'get_recommendation');
+  assert.ok(got && !got.isError && got.result.mine[0].fig === 'plan529', 'the real reader returns the fig reference');
+  const { unverified } = reply.provenance.grounding;
+  assert.ok(unverified.includes('$529'), `the fig reference must not ground $529: ${JSON.stringify(reply.provenance.grounding)}`);
+  assert.ok(!unverified.includes('$4,000'), 'a real amount still grounds');
+  const literal = reply.provenance.literals.find(l => l.text === '$4,000');
+  assert.equal(literal && literal.source, 'get_recommendation', JSON.stringify(reply.provenance.literals));
+});
+
+test('B3 r2: an identifier-like string under an unremarkable key never grounds its digits', async t => {
+  const s = await demoStore(t);
+  const scenario = buildScenario(s.db);
+  for (const [text, value] of [['8263', 'rec8263'], ['529', 'plan529'], ['4821', 'acct4821x']]) {
+    for (const key of ['ref', 'note', 'fig', 'detail', 'tag']) {
+      const result = { title: 'Synthetic', entry: { [key]: value, v: 12 } };
+      const r = groundAnswer(`The amount is ${text}.`, { scenario, data: [], toolResults: [{ name: 'get_recommendation', args: {}, result }] });
+      assert.equal(r.ok, false, `${key}: ${value} must not ground ${text}`);
+      assert.ok(laundered(r).includes(text));
+    }
+  }
+  const pos = groundAnswer('The amount is 4821.', { scenario, data: [],
+    toolResults: [{ name: 'get_recommendation', args: {}, result: { entry: { note: 'plan529', amount: 4821 } } }] });
+  assert.equal(pos.ok, true, JSON.stringify(pos.violations));
+});
+
+test('B3 r2: an exact amount query keeps the stored row amounts as grounding, attributed to query_transactions', async t => {
+  const s = await demoStore(t);
+  const now = '2026-11-05';
+  const all = await callTool('query_transactions', { limit: 200 }, { db: s.db, now });
+  const pick = all.rows.find(r => Math.abs(r.amount) >= 100 && !all.rows.some(o => o !== r && o.amount === r.amount));
+  assert.ok(pick, 'some stored transaction has a unique amount');
+  const amount = pick.amount;
+  const text = asAmount(Math.abs(amount));
+  const said = `The matching transaction is ${text}.`;
+  const baseline = await createLiveAnswerer({ engine: always(s.runtime, said).engine, packs: s.packs })
+    .answer({ db: s.db, key: 'ask', text: 'Synthetic baseline' });
+  assert.ok(baseline.provenance.grounding.unverified.includes(text), 'nothing else grounds the amount');
+
+  const { engine, responses } = scripted(s.runtime, [
+    [{ toolCalls: [{ name: 'query_transactions', args: { minAmount: amount, maxAmount: amount } }] }, { text: said }],
+    [{ text: said }],
+  ]);
+  const reply = await createLiveAnswerer({ engine, packs: s.packs }).answer({ db: s.db, key: 'ask', text: 'Synthetic exact amount' });
+  assert.ok(!reply.notice);
+  const got = responses[0].toolResults.find(r => r.name === 'query_transactions');
+  assert.ok(got && !got.isError && got.result.rows.some(r => r.amount === amount), 'the real tool returns the row');
+  const { unverified } = reply.provenance.grounding;
+  assert.ok(!unverified.includes(text), `the row amount grounds ${text}: ${JSON.stringify(reply.provenance.grounding)}`);
+  const literal = reply.provenance.literals.find(l => l.text === text);
+  assert.equal(literal && literal.source, 'query_transactions', JSON.stringify(reply.provenance.literals));
+});
+
+test('B3 r2: argument echoes under the same key still do not ground, while other keys with the same value do', async t => {
+  const s = await demoStore(t);
+  const scenario = buildScenario(s.db);
+  const echoed = groundAnswer(LAUNDERED, { scenario, data: [],
+    toolResults: [{ name: 'query_transactions', args: { minAmount: 4821, maxAmount: 4821 }, result: { minAmount: 4821, maxAmount: 4821, rows: [], total: 0 } }] });
+  assert.equal(echoed.ok, false);
+  const contained = groundAnswer(LAUNDERED, { scenario, data: [],
+    toolResults: [{ name: 'query_transactions', args: { text: 'plan 4821' }, result: { rows: [], note: 'No rows matched plan 4821 this year', total: 0 } }] });
+  assert.equal(contained.ok, false);
+  const real = groundAnswer(LAUNDERED, { scenario, data: [],
+    toolResults: [{ name: 'query_transactions', args: { minAmount: 4821, maxAmount: 4821 }, result: { rows: [{ id: 1, amount: 4821 }], total: 1 } }] });
+  assert.equal(real.ok, true, JSON.stringify(real.violations));
+  assert.equal(real.literals.find(l => l.text === '4821').source, 'query_transactions');
+});
+
 // ---------------------------------------------------------------- rendering
 
 test('renderAnswer escapes markup, quotes and stray braces, keeps valid tokens, and splits paragraphs on blank lines', () => {
