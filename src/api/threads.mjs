@@ -108,7 +108,11 @@ const MONEY_WORDS = new RegExp(`\\b(?:${[
   'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen', 'twenty', 'thirty', 'forty',
   'fifty', 'sixty', 'seventy', 'eighty', 'ninety', 'hundred', 'thousand', 'million', 'billion', 'trillion',
   'grand', 'dozen', 'half', 'percent', 'percentage', 'dollar', 'dollars', 'buck', 'bucks', 'cent', 'cents',
-  'usd', 'k'].join('|')})\\b`, 'i');
+  'usd', 'k',
+  // Fraction and multiplier words state a quantity even when the owner typed them.
+  'quarter', 'quarters', 'third', 'thirds', 'fourth', 'fourths', 'fifth', 'fifths', 'sixth', 'seventh',
+  'eighth', 'ninth', 'tenth', 'tenths', 'halves', 'double', 'triple', 'quadruple', 'twice', 'thrice',
+  'fraction', 'majority', 'minority', 'most', 'bulk'].join('|')})\\b`, 'i');
 
 // Model output also loses one pair of surrounding quotes and one trailing period, and is refused
 // over 8 words, with any digit at all (a year shaped number can be an amount), or with any word

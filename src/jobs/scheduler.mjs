@@ -456,7 +456,11 @@ export function defaultHandlers({ publicUrl = null } = {}) {
       return { costUsd: 0, note: { alerts: out.alerts, sent: out.send ? 1 : 0 } };
     },
     async 'trash-purge'(ctx) {
-      const purged = purgeTrash(ctx.db, `${ctx.clock}T${ctx.now.slice(11)}`);
+      // Same basis as trash timestamps (clockNow): config clock, else the stored clock, else the
+      // UTC date, never the owner-local date, so a far east zone cannot purge a day early.
+      const stored = getSetting(ctx.db, 'clock', null);
+      const date = (ctx.config && ctx.config.clock) || (isIsoDate(stored) ? stored : ctx.now.slice(0, 10));
+      const purged = purgeTrash(ctx.db, `${date}T${ctx.now.slice(11)}`);
       return { costUsd: 0, note: { purged } };
     },
     async freshness(ctx) {
