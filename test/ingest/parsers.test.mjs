@@ -140,6 +140,17 @@ test('P&L aggregates actual detailed sheets by entity, category and month', () =
   assert.ok(warnings.some((w) => w.code === 'invalid_pnl_row'));
 });
 
+test('paired income and expense sheets normalize to the same entity', () => {
+  const { rows } = run('business-pnl-paired.xlsx');
+  const income = rows.find((row) => row.category === 'Income' && row.amount === 400);
+  const expense = rows.find((row) => row.category === 'Office supplies');
+  assert.equal(income.entity, 'Example Studio');
+  assert.equal(expense.entity, income.entity);
+  assert.equal(expense.amount, -35);
+  assert.equal(income.locator.sheet, 'Example Studio - (Actual Income)');
+  assert.equal(expense.locator.sheet, '[Example Studio: Expenses]');
+});
+
 test('monthly tax matrix keeps both payers, ignores safe-harbor totals and records precision', () => {
   const { rows, warnings } = run('tax-payments.xlsx');
   assert.equal(rows.length, 10);
@@ -250,6 +261,54 @@ test('overlapping bank and aggregator transactions collide despite description d
   assert.notEqual(dedupeKey(changed), dedupeKey(bank[0]));
   assert.notEqual(dedupeKey({ ...bank[0], date: '2032-03-01' }), dedupeKey(bank[0]));
   assert.notEqual(dedupeKey({ ...bank[0], account: { inst: 'Chase', mask: '8899' } }), dedupeKey(bank[0]));
+});
+
+test('occurrence ordinals preserve repeated postings and collide across overlapping exports', () => {
+  const keysBySource = [];
+  for (const name of ['aggregator.csv', 'Chase7766_Activity_20320305.csv']) {
+    const [heading, posting, unrelated, malformed] = new TextDecoder().decode(fixture(name).bytes).trim().split('\n');
+    const first = textFile(name, [heading, posting, posting].join('\n'));
+    const overlap = textFile(name, [heading, unrelated, posting, malformed, posting].join('\n'));
+    const original = pickParser(first).parse(first).rows.filter((row) => row.kind === 'transaction');
+    const repeated = pickParser(overlap).parse(overlap).rows.filter((row) => row.kind === 'transaction' && row.date === '2032-02-29');
+    assert.equal(original.length, 2);
+    assert.deepEqual(original.map((row) => row.occurrence), [1, 2]);
+    assert.deepEqual(repeated.map((row) => row.occurrence), [1, 2]);
+    const keys = original.map(dedupeKey);
+    assert.equal(new Set(keys).size, 2);
+    assert.deepEqual(repeated.map(dedupeKey), keys);
+    assert.equal(new Set([...original, ...repeated].map(dedupeKey)).size, 2);
+    assert.deepEqual(pickParser(first).parse(first).rows.filter((row) => row.kind === 'transaction').map(dedupeKey), keys);
+    keysBySource.push(keys);
+  }
+  assert.deepEqual(keysBySource[0], keysBySource[1]);
+});
+
+test('unnamed unmasked accounts use opaque source identity for transactions and balances', () => {
+  const bytes = fixture('Chase7766_Activity_20320305.csv').bytes;
+  const first = { name: 'daily-export.csv', bytes };
+  const second = { name: 'reserve-export.csv', bytes };
+  const original = pickParser(first).parse(first).rows;
+  const another = pickParser(second).parse(second).rows;
+  for (let index = 0; index < original.length; index++) {
+    assert.equal(original[index].account.mask, '');
+    assert.equal(original[index].account.name, undefined);
+    assert.match(original[index].locator.source, /^[a-f0-9]{64}$/);
+    assert.notEqual(dedupeKey(original[index]), dedupeKey(another[index]));
+    assert.equal(dedupeKey(original[index]), dedupeKey(pickParser(first).parse(first).rows[index]));
+  }
+  const known = fixture('Chase7766_Activity_20320305.csv');
+  const renamed = { name: 'Chase7766_Activity_20320306.csv', bytes };
+  assert.deepEqual(pickParser(known).parse(known).rows.map(dedupeKey), pickParser(renamed).parse(renamed).rows.map(dedupeKey));
+  const anonymous = { ...original[0], locator: { row: 2 } };
+  assert.throws(() => dedupeKey(anonymous), /source identity/);
+});
+
+test('named unmasked accounts keep identity across files', () => {
+  const first = fixture('aggregator.csv');
+  first.bytes = new TextEncoder().encode(new TextDecoder().decode(first.bytes).replaceAll('9911227766', ''));
+  const second = { ...first, name: 'aggregator-overlap.csv' };
+  assert.deepEqual(pickParser(first).parse(first).rows.map(dedupeKey), pickParser(second).parse(second).rows.map(dedupeKey));
 });
 
 test('dedupe supports every row kind, ignores locators, and canonicalizes document fields', () => {
