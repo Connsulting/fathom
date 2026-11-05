@@ -2,14 +2,16 @@
 // messages round with no tools, recorded in the ledger under 'confirm'. guessPending batches
 // pending items with no guess row, keeps a guess only when it passes validation, stores a row for
 // every item sent so it is never re-sent, and never answers anything. Engine off, fake mode
-// without a per-call script, and an exhausted budget make no guess. Every value here is synthetic.
+// without a per-call script, and an exhausted budget make no guess. Imports trigger the
+// confirm-guess scheduler job (test/jobs/confirm-guess.test.mjs covers the job itself), and
+// npm run confirm:guess runs that job once. Every value here is synthetic.
 
 import test, { describe, before } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { src, tempDb, tempDir, runCommand, request, DB_FILE, TEST_OWNER } from '../helpers/server.mjs';
+import { src, tempDb, tempDir, runCommand, request, postJson, DB_FILE, TEST_OWNER } from '../helpers/server.mjs';
 import { fixture, fixturePath, realStore, offEngine, all, one, count, NOW } from '../helpers/ingest.mjs';
 
 let G;
@@ -37,14 +39,6 @@ async function withStore(fn) {
 }
 
 const pause = (ms) => new Promise((r) => setTimeout(r, ms));
-async function waitFor(cond, ms = 3000) {
-  const deadline = Date.now() + ms;
-  while (!cond()) {
-    if (Date.now() > deadline) return false;
-    await pause(20);
-  }
-  return true;
-}
 
 const pad = (i) => String(i).padStart(2, '0');
 // A per-item marker in the question, and a locator cell that must never reach the model.
@@ -81,20 +75,16 @@ const userText = (req) => {
   return req.messages[0].content;
 };
 
-// A stub engine in live mode that counts calls. hold: the first call waits for release().
-function stubEngine({ hold = false, fail = false } = {}) {
+// A stub engine in live mode that counts calls.
+function stubEngine({ fail = false } = {}) {
   const calls = [];
-  let release;
-  const gate = new Promise((r) => { release = r; });
   return {
     mode: 'live',
     isOn: () => true,
     calls,
-    release: () => release(),
     async call(req) {
       calls.push(structuredClone(req));
       if (fail) throw new Error('synthetic model failure');
-      if (hold && calls.length === 1) await gate;
       return { text: JSON.stringify({ guesses: [] }), model: 'stub', costUsd: 0.01 };
     },
     async extract() { throw new Error('no extraction in this test'); },
@@ -409,66 +399,116 @@ describe('guessPending makes no guess when it must not', () => {
   }));
 });
 
-describe('scheduleGuesses', () => {
-  test('single flight: overlapping triggers run one batch at a time and rerun once', () => withStore(async (s) => {
-    queue(s.db, 3);
-    const engine = stubEngine({ hold: true });
-    const p1 = G.scheduleGuesses(s.db, engine);
-    assert.equal(typeof p1?.then, 'function', 'scheduleGuesses returns a promise');
-    assert.ok(await waitFor(() => engine.calls.length === 1), 'the first run calls the engine');
-    const p2 = G.scheduleGuesses(s.db, engine);
-    const p3 = G.scheduleGuesses(s.db, engine);
-    await pause(50);
-    assert.equal(engine.calls.length, 1, 'no second run while one is in flight');
-    const [late] = queue(s.db, 1, { start: 4 });
-    engine.release();
-    await Promise.all([p1, p2, p3]);
-    assert.ok(await waitFor(() => rowOf(s.db, late) !== undefined), 'the rerun guesses the item queued meanwhile');
-    await pause(50);
-    assert.equal(engine.calls.length, 2, 'one in-flight run plus exactly one rerun');
-    const rerun = userText(engine.calls[1]);
-    assert.ok(rerun.includes(marker(4)) && !rerun.includes(marker(1)), 'the rerun sends only the new item');
-    assert.equal(count(s.db, 'confirm_guesses'), 4);
-    assert.equal(rowOf(s.db, late).model, 'stub');
-  }));
+describe('imports trigger the confirm-guess job through the scheduler', () => {
+  const HEADERS = ['posted on', 'memo text', 'value usd'];
+  const novelCsv = () => [HEADERS.join(','), '2032-03-02,SYNTH NOVEL A,-1.25', '2032-03-03,SYNTH NOVEL B,-2.25'].join('\n') + '\n';
+  const MAPPING = { target: 'transaction', date: 'posted on', amount: 'value usd', description: 'memo text', amountSign: 'as_is', dateOrder: 'ymd' };
 
-  test('a failing run is swallowed and stores nothing', () => withStore(async (s) => {
-    queue(s.db, 2);
-    const engine = stubEngine({ fail: true });
-    await G.scheduleGuesses(s.db, engine);
-    assert.equal(engine.calls.length, 1);
-    assert.equal(count(s.db, 'confirm_guesses'), 0);
-  }));
+  // Records every trigger; runs nothing.
+  function fakeScheduler() {
+    const calls = [];
+    return {
+      calls,
+      trigger(jobId, reason) { calls.push([jobId, reason]); return Promise.resolve(null); },
+      runNow() { throw new Error('not used'); },
+      jobs: () => [],
+      runs: () => [],
+      start() {},
+      stop() {},
+    };
+  }
+  const sorted = (calls) => [...calls].sort((a, b) => a[0].localeCompare(b[0]));
 
-  test('an upload that imports a file schedules guesses for its questions', () => withStore(async (s) => {
+  async function serve(s, engine, scheduler) {
     const { createHandler } = await src('src/api/router.mjs');
-    const engine = stubEngine();
     const config = { ...s.config, ownerLogins: TEST_OWNER, ownerLoginsFile: null };
-    const server = http.createServer(createHandler({ db: s.db, config, engine }));
+    const server = http.createServer(createHandler({ db: s.db, config, engine, scheduler }));
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    return {
+      base: `http://127.0.0.1:${server.address().port}`,
+      close: () => new Promise((resolve) => { server.close(resolve); server.closeAllConnections(); }),
+    };
+  }
+
+  function multipart(name, bytes, mime = 'text/csv') {
+    const boundary = 'fathom-guess-test-boundary';
+    const body = Buffer.concat([
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="files"; filename="${name}"\r\nContent-Type: ${mime}\r\n\r\n`),
+      Buffer.from(bytes),
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]);
+    return { method: 'POST', path: '/api/files', headers: { 'content-type': `multipart/form-data; boundary=${boundary}` }, body };
+  }
+
+  test('scheduleGuesses is gone: the scheduler job is the only guess runner', () => {
+    assert.equal('scheduleGuesses' in G, false);
+  });
+
+  test('an upload that imports a file triggers confirm-guess and plan, and guesses nothing itself', () => withStore(async (s) => {
+    const engine = stubEngine();
+    const scheduler = fakeScheduler();
+    const app = await serve(s, engine, scheduler);
     try {
-      const base = `http://127.0.0.1:${server.address().port}`;
-      const boundary = 'fathom-guess-test-boundary';
-      const body = Buffer.concat([
-        Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="files"; filename="Chase7766_Activity_20320305.csv"\r\nContent-Type: text/csv\r\n\r\n`),
-        readFileSync(fixturePath('Chase7766_Activity_20320305.csv')),
-        Buffer.from(`\r\n--${boundary}--\r\n`),
-      ]);
-      const r = await request(base, { method: 'POST', path: '/api/files', headers: { 'content-type': `multipart/form-data; boundary=${boundary}` }, body });
+      const r = await request(app.base, multipart('Chase7766_Activity_20320305.csv', readFileSync(fixturePath('Chase7766_Activity_20320305.csv'))));
       assert.equal(r.status, 200, r.text.slice(0, 300));
-      const pending = C.pendingItems(s.db).length;
-      assert.ok(pending > 0, 'the upload asked questions');
-      assert.ok(await waitFor(() => count(s.db, 'confirm_guesses') === pending, 5000), 'every new question gets a guess row');
-      assert.ok(engine.calls.length >= 1);
-      assert.ok(engine.calls.every((req) => req.purpose === 'confirm'));
+      assert.equal(r.json.files[0].status, 'imported');
+      assert.ok(C.pendingItems(s.db).length > 0, 'the upload asked questions');
+      assert.deepEqual(sorted(scheduler.calls), [['confirm-guess', 'ingest'], ['plan', 'ingest']], 'one trigger each');
+      await pause(100);
+      assert.equal(count(s.db, 'confirm_guesses'), 0, 'no guess outside the scheduler job');
+      assert.ok(engine.calls.every((req) => req.purpose !== 'confirm'), 'no confirm call outside the scheduler job');
     } finally {
-      await new Promise((resolve) => { server.close(resolve); server.closeAllConnections(); });
+      await app.close();
+    }
+  }));
+
+  test('an upload that imports nothing triggers nothing; a retry that imports triggers confirm-guess and plan', () => withStore(async (s) => {
+    const { headerSignature } = await src('src/ingest/mapping.mjs');
+    const scheduler = fakeScheduler();
+    const app = await serve(s, await offEngine(), scheduler);
+    try {
+      const waiting = await request(app.base, multipart('novel-export.csv', novelCsv()));
+      assert.equal(waiting.status, 200, waiting.text.slice(0, 300));
+      const file = waiting.json.files[0];
+      assert.equal(file.status, 'needs_mapping');
+      assert.deepEqual(scheduler.calls, [], 'an upload that imports nothing does not trigger');
+
+      const stillWaiting = await postJson(app.base, `/api/files/${file.fileId}/retry`, {});
+      assert.equal(stillWaiting.status, 200, stillWaiting.text.slice(0, 300));
+      assert.equal(stillWaiting.json.file.status, 'needs_mapping');
+      assert.deepEqual(scheduler.calls, [], 'an unsuccessful retry does not trigger');
+
+      s.db.prepare("INSERT INTO column_mappings (signature, mapping, src, created_at, uses) VALUES (?, ?, 'test', ?, 0)")
+        .run(headerSignature(HEADERS), JSON.stringify(MAPPING), NOW);
+      const done = await postJson(app.base, `/api/files/${file.fileId}/retry`, {});
+      assert.equal(done.status, 200, done.text.slice(0, 300));
+      assert.equal(done.json.file.status, 'imported');
+      assert.deepEqual(sorted(scheduler.calls), [['confirm-guess', 'ingest'], ['plan', 'ingest']], 'a successful retry triggers each once');
+    } finally {
+      await app.close();
+    }
+  }));
+
+  test('a trigger that rejects never fails the upload', () => withStore(async (s) => {
+    const calls = [];
+    const scheduler = {
+      trigger(jobId) { calls.push(jobId); return Promise.reject(new Error('synthetic rejection')); },
+      runNow() { throw new Error('not used'); }, jobs: () => [], runs: () => [], start() {}, stop() {},
+    };
+    const app = await serve(s, await offEngine(), scheduler);
+    try {
+      const r = await request(app.base, multipart('Chase7766_Activity_20320305.csv', readFileSync(fixturePath('Chase7766_Activity_20320305.csv'))));
+      assert.equal(r.status, 200, r.text.slice(0, 300));
+      assert.equal(r.json.files[0].status, 'imported');
+      assert.deepEqual([...calls].sort(), ['confirm-guess', 'plan']);
+    } finally {
+      await app.close();
     }
   }));
 });
 
-describe('guess CLI', () => {
-  test('on a real store with the engine off it exits 0 and prints one JSON line with skipped', async () => {
+describe('guess CLI (npm run confirm:guess runs the confirm-guess job once through the scheduler)', () => {
+  test('on a migrated real store with the engine off it exits 0, prints one JSON line with a skipped status, and records the run', async () => {
     const store = await tempDb();
     try {
       DB.setSetting(store.db, 'mode', 'real');
@@ -478,7 +518,19 @@ describe('guess CLI', () => {
       assert.equal(r.code, 0, r.stderr);
       const lines = r.stdout.trim().split('\n').filter(Boolean);
       assert.equal(lines.length, 1, r.stdout);
-      assert.equal(JSON.parse(lines[0]).skipped, 'engine_off');
+      const out = JSON.parse(lines[0]);
+      assert.equal(out.status, 'skipped');
+      assert.deepEqual(out.note, { pending: 1 });
+      assert.ok(!r.stdout.includes('Synthetic account'), 'no question text is printed');
+      const db = DB.openDb(join(store.dataDir, DB_FILE));
+      try {
+        const runs = db.prepare("SELECT status, trigger, period_key FROM job_runs WHERE job_id = 'confirm-guess'").all().map((x) => ({ ...x }));
+        assert.equal(runs.length, 1, 'one job_runs row for the CLI run');
+        assert.equal(runs[0].status, 'skipped');
+        assert.equal(runs[0].trigger, 'manual');
+        assert.match(runs[0].period_key, /^manual:/);
+        assert.equal(db.prepare('SELECT count(*) AS n FROM confirm_guesses').get().n, 0);
+      } finally { db.close(); }
     } finally {
       rmSync(store.dataDir, { recursive: true, force: true });
     }
