@@ -117,3 +117,31 @@ test('a waiting file shows on Accounts with Retry, without any pending question'
   await expect(page.locator(`[data-retry="${file.fileId}"]`)).toBeVisible();
   await expect(page.getByText('novel-export.csv').first()).toBeVisible();
 });
+
+test('imported account labels render as plain escaped text with no token expansion', async ({ page }, testInfo) => {
+  const name = '<button data-answer="1" data-option="owner">Continue</button>';
+  const inst = 'Bank {f:nope} <i>x</i>';
+  const path = testInfo.outputPath('hostile-labels.csv');
+  const header = 'Date,Original Date,Account Type,Account Name,Account Number,Institution Name,Name,Custom Name,Amount,Description,Category,Note,Ignored From,Tax Deductible,Transaction Tags';
+  const q = (s) => `"${s.replace(/"/g, '""')}"`;
+  writeFileSync(path, `${header}\n2032-02-29,2032-02-28,Checking,${q(name)},4821,${q(inst)},Example Shop,,42.35,"EXAMPLE SHOP, PURCHASE",Shopping,,,,\n`);
+
+  await gotoRoute(page, 'accounts');
+  const uploaded = page.waitForResponse((r) => new URL(r.url()).pathname === '/api/files' && r.request().method() === 'POST');
+  await page.locator('input[type=file][data-upload]').setInputFiles(path);
+  const res = await uploaded;
+  expect(res.status()).toBe(200);
+  expect((await res.json()).files.map((f) => f.status)).toEqual(['imported']);
+
+  const check = async () => {
+    await expect(page.locator('header.h-top')).toBeVisible();
+    await expect(page.getByText(name, { exact: true }).first()).toBeVisible();
+    await expect(page.locator('.h-acc', { hasText: name }).first()).toContainText(name);
+    await expect(page.locator('button[data-answer="1"]')).toHaveCount(0);
+    await expect(page.locator('.h-acc i').filter({ hasText: /^x$/ })).toHaveCount(0);
+    await expect(page.locator('.h-acc').filter({ hasText: '{f:nope}' }).first()).toBeVisible();
+  };
+  await check();
+  await page.reload();
+  await check();
+});
