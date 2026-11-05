@@ -93,6 +93,8 @@ test('accounts keep only a four digit mask', async () => {
     assert.throws(() => insertAccount(t.db, 'a1', '123456789'));
     assert.throws(() => insertAccount(t.db, 'a2', '12a4'));
     assert.throws(() => insertAccount(t.db, 'a3', '123'));
+    assert.throws(() => insertAccount(t.db, 'a6', '1234\u00005678901'), 'an embedded NUL must not smuggle extra digits past the check');
+    assert.throws(() => insertAccount(t.db, 'a7', Buffer.from('1234')), 'a blob mask is rejected');
     insertAccount(t.db, 'a4', '1234');
     insertAccount(t.db, 'a5', null);
     const masks = t.db.prepare('SELECT id, mask FROM accounts ORDER BY id').all().map(r => [r.id, r.mask]);

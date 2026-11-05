@@ -54,7 +54,7 @@ CREATE TABLE facts (
 CREATE TABLE accounts (
   id TEXT PRIMARY KEY,
   inst TEXT,
-  mask TEXT CHECK (mask IS NULL OR (length(mask) = 4 AND mask GLOB '[0-9][0-9][0-9][0-9]')),
+  mask TEXT CHECK (mask IS NULL OR (typeof(mask) = 'text' AND length(CAST(mask AS BLOB)) = 4 AND mask GLOB '[0-9][0-9][0-9][0-9]')),
   name TEXT,
   owner TEXT,
   kind TEXT,

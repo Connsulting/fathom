@@ -171,3 +171,23 @@ test('seed:demo treats a store with no mode setting as real and refuses it', T, 
   assert.notEqual(r.code, 0);
   assert.deepEqual(await dumpStore(t.file), before);
 });
+
+test('seedDemo itself refuses a populated store with no mode and leaves it untouched', T, async () => {
+  const { seedDemo } = await import('../demo/seed.mjs');
+  const t = await tempDb();
+  t.db.prepare(`INSERT INTO facts (key, value, src, as_of, confirmed, file_id, parser, locator, updated_at)
+                VALUES ('household.state', '"VA"', 'you', '2026-11-01', 1, NULL, NULL, NULL, '2026-11-01T09:00:00Z')`).run();
+  assert.throws(() => seedDemo(t.db), /refusing/);
+  assert.equal(getSetting(t.db, 'mode', null), null);
+  assert.equal(t.db.prepare('SELECT COUNT(*) AS n FROM facts').get().n, 1);
+  t.close();
+});
+
+test('seedDemo itself refuses a real store', T, async () => {
+  const { seedDemo } = await import('../demo/seed.mjs');
+  const t = await tempDb();
+  setSetting(t.db, 'mode', 'real');
+  assert.throws(() => seedDemo(t.db), /refusing/);
+  assert.equal(getSetting(t.db, 'mode', null), 'real');
+  t.close();
+});

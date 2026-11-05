@@ -60,9 +60,16 @@ function clearStore(db) {
   for (const t of [...rest, ...CLEAR_ORDER.filter(t => tables.includes(t))]) db.prepare(`DELETE FROM "${t}"`).run();
 }
 
-// Rebuild the demo content in a migrated store that is empty or already a demo store.
+// Rebuild the demo content in a migrated store that is empty or already a demo store. A store
+// with no mode setting but any rows is treated as real, so this refuses it and changes nothing.
+function isEmptyStore(db) {
+  return listTables(db).filter(t => t !== 'schema_migrations')
+    .every(t => db.prepare(`SELECT 1 FROM "${t}" LIMIT 1`).get() === undefined);
+}
+
 export function seedDemo(db) {
-  if (getSetting(db, 'mode', null) === 'real') throw new Error('refusing to seed a real store');
+  const mode = getSetting(db, 'mode', null);
+  if (mode !== 'demo' && !(mode === null && isEmptyStore(db))) throw new Error('refusing to seed a store that is not empty or a demo store');
   const S = scenario;
   const now = new Date().toISOString();
   const clock = S.meta.clock;
