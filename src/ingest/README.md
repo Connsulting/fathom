@@ -188,7 +188,10 @@ bytes; a concurrent upload of bytes being ingested is a `duplicate`.
    identical documents stay apart. A recipient answer sets the
    recipient of the matching withholding rows, recomputes their slots and
    summarizes per slot; a rekeyed row that collides with one of the same
-   recipient is archived as `duplicate`. Answers are remembered by kind and subject
+   recipient and amount is archived as `duplicate`. A different amount, at
+   rekey or at import of a document, keeps both rows and asks
+   `withholding_conflict` (options `first`, `second`, `both`; the rejected row
+   is archived as `withholding_conflict`, the survivor takes the identity). Answers are remembered by kind and subject
    and apply at import.
 7. `counts` is `{rows: {kind: n}, duplicates, crossFormat, revised, superseded,
    incomplete, warnings, warningCodes: {code: n}, queued}`, plus `extractPath`

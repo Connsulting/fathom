@@ -17,7 +17,7 @@ import { readTable, mapTabular, isZip, sourceKindOf as mappedSourceKind, id as M
 import { extractDocument, isPdf, plainText, labelOf } from './extract.mjs';
 import {
   ask, recordFact, archive, normalizeName, OWNER_OPTIONS, KIND_OPTIONS, NEAR_DUPLICATE_OPTIONS, EMPLOYER_OPTIONS, taxYearOptions,
-  withholdingRecipient, withRecipient, recipientPayer, summarizeSlot,
+  withholdingRecipient, withRecipient, recipientPayer, summarizeSlot, conflictPayer, conflictAsked, askConflict,
 } from './confirm.mjs';
 import { storeFile, readStoredFile, loadDataKey } from './vault.mjs';
 import { recordSource } from './freshness.mjs';
@@ -599,16 +599,28 @@ function putTax(ctx, row, parser, locator, workbook) {
       return;
     }
   }
+  const insert = (rowPayer, rowKey) => Number(db.prepare(`INSERT INTO tax_payments (jurisdiction, tax_year, date, amount, kind, file_id, parser, locator, dedupe_key, source_slot, payer, date_precision, tax_year_basis, recipient)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(shaped.jurisdiction, shaped.tax_year, shaped.date, amount, shaped.kind, fileId, parser, locator, rowKey, slot, rowPayer, shaped.date_precision, shaped.tax_year_basis, recipient).lastInsertRowid);
   const stored = db.prepare('SELECT * FROM tax_payments WHERE dedupe_key = ?').get(key);
   if (!stored) {
-    db.prepare(`INSERT INTO tax_payments (jurisdiction, tax_year, date, amount, kind, file_id, parser, locator, dedupe_key, source_slot, payer, date_precision, tax_year_basis, recipient)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(shaped.jurisdiction, shaped.tax_year, shaped.date, amount, shaped.kind, fileId, parser, locator, key, slot, payer, shaped.date_precision, shaped.tax_year_basis, recipient);
+    insert(payer, key);
     bump(ctx, 'tax_payment');
   } else if (moneyEq(stored.amount, amount)) {
     counts.duplicates += 1;
   } else if (slot && ctx.incomplete.tax.has(slot)) {
     counts.incomplete += 1;
+  } else if (summarizes) {
+    // K1: a document's withholding of a known recipient with another amount is a conflict, never a
+    // revision: a pair already asked about is a repeat; otherwise both stay and the owner is asked.
+    if (conflictAsked(db, key, stored.amount, amount)) counts.duplicates += 1;
+    else {
+      const later = conflictPayer(payer, fileId);
+      const id = insert(later, dedupeKey({ ...row, payer: later }));
+      bump(ctx, 'tax_payment');
+      const second = db.prepare('SELECT * FROM tax_payments WHERE id = ?').get(id);
+      tally(ctx, askConflict(db, { key, payer, first: stored, second, now }));
+    }
   } else {
     archive(db, 'tax_payments', { ...stored }, { by: fileId, reason: 'revised', now });
     db.prepare('UPDATE tax_payments SET amount = ?, file_id = ?, parser = ?, locator = ? WHERE id = ?').run(amount, fileId, parser, locator, stored.id);

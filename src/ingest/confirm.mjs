@@ -9,6 +9,7 @@ import { cents } from './format.mjs';
 
 export const KINDS = Object.freeze([
   'account_owner', 'account_kind', 'entity_alias', 'tax_year', 'fact_check', 'near_duplicate', 'employer_relation', 'employer_recipient', 'document_recipient',
+  'withholding_conflict',
 ]);
 
 export const OWNER_OPTIONS = Object.freeze([
@@ -24,6 +25,9 @@ export const NEAR_DUPLICATE_OPTIONS = Object.freeze([{ id: 'same', label: 'Same 
 export const EMPLOYER_OPTIONS = Object.freeze([{ id: 'outside', label: 'An outside employer' }, { id: 'household', label: 'Our own business' }]);
 export const EMPLOYER_RECIPIENT_OPTIONS = Object.freeze([{ id: 'owner', label: 'You' }, { id: 'spouse', label: 'Your spouse' }, { id: 'both', label: 'Both of you' }]);
 export const DOCUMENT_RECIPIENT_OPTIONS = Object.freeze([{ id: 'owner', label: 'You' }, { id: 'spouse', label: 'Your spouse' }]);
+export const WITHHOLDING_CONFLICT_OPTIONS = Object.freeze([
+  { id: 'first', label: 'Keep the earlier import' }, { id: 'second', label: 'Keep the later import' }, { id: 'both', label: 'Both are real payments' },
+]);
 // Who a withholding row belongs to: the last segment of its wh: slot and tax_payments.recipient.
 export const RECIPIENTS = Object.freeze(['owner', 'spouse', 'unknown']);
 export const taxYearOptions = (year) => [
@@ -162,6 +166,9 @@ export function applyAnswer(db, item, optionId, { now } = {}) {
       if (optionId === 'owner' || optionId === 'spouse') {
         setRecipient(db, db.prepare('SELECT * FROM tax_payments WHERE payer = ? ORDER BY id').all(item.subject), optionId, { now });
       }
+      return {};
+    case 'withholding_conflict':
+      applyConflict(db, item, optionId, { now });
       return {};
     default:
       return {};
@@ -318,9 +325,48 @@ export function summarizeSlot(db, slot, { now } = {}) {
   return rows.length;
 }
 
+// K1: two withholding documents of one recipient share a payer identity (an original and its
+// correction, or two real payments). Equal amounts are a duplicate. Differing amounts keep both
+// rows: the earlier-imported one holds the identity, the later one <payer>:doc:<file id> until a
+// withholding_conflict question is answered. The subject is the identity's key and both amounts,
+// so a later import of either amount against it is a repeat: it asks nothing and changes nothing.
+const amountCents = (amount) => Math.round(Number(amount) * 100);
+export const conflictPayer = (payer, fileId) => `${payer}:doc:${fileId}`;
+const conflictSubject = (key, a, b) => [key, ...[amountCents(a), amountCents(b)].sort((x, y) => x - y)].join('|');
+export const sameAmount = (a, b) => amountCents(a) === amountCents(b);
+export const conflictAsked = (db, key, a, b) => Boolean(findItem(db, 'withholding_conflict', conflictSubject(key, a, b)));
+
+function formLabel(payer) {
+  const kind = String(payer).split(':')[0];
+  return kind === 'w2' ? 'W-2s' : kind === 'paystub' ? 'paystubs' : `${kind.toUpperCase()}s`;
+}
+
+// Queue the question for stored rows first (earlier import, holding key and payer) and second.
+export function askConflict(db, { key, payer, first, second, now }) {
+  return ask(db, {
+    kind: 'withholding_conflict', subject: conflictSubject(key, first.amount, second.amount),
+    question: `Two ${formLabel(payer)} from one payer report different ${first.jurisdiction} withholding for ${first.tax_year}. Which should count?`,
+    options: WITHHOLDING_CONFLICT_OPTIONS, context: { key, payer, first: first.id, second: second.id }, fileId: second.file_id, now,
+  });
+}
+
+// first or second: archive the other row (withholding_conflict); the survivor takes the identity.
+function applyConflict(db, item, optionId, { now }) {
+  if (optionId !== 'first' && optionId !== 'second') return;
+  const { key, payer, first, second } = item.context;
+  const get = db.prepare('SELECT * FROM tax_payments WHERE id = ?');
+  const keep = get.get(optionId === 'first' ? first : second);
+  const drop = get.get(optionId === 'first' ? second : first);
+  if (!keep || !drop) return;
+  archive(db, 'tax_payments', { ...drop }, { by: keep.file_id, reason: 'withholding_conflict', now });
+  db.prepare('DELETE FROM tax_payments WHERE id = ?').run(drop.id);
+  db.prepare('UPDATE tax_payments SET payer = ?, dedupe_key = ? WHERE id = ?').run(payer, key, keep.id);
+}
+
 // Set the recipient of stored unresolved withholding rows: recompute slot and payer identity and
-// rekey each row, then summarize each slot. A rekeyed row whose key another row already holds is
-// the same document of the same person: the newer row (higher id) is archived as duplicate.
+// rekey each row, then summarize each slot. A rekeyed row whose key another row already holds with
+// the same amount is the same document of the same person: the newer row (higher id) is archived
+// as duplicate. A different amount is a withholding conflict (K1).
 function setRecipient(db, rows, recipient, { now }) {
   const update = db.prepare('UPDATE tax_payments SET recipient = ?, source_slot = ?, payer = ?, dedupe_key = ? WHERE id = ?');
   const holder = db.prepare('SELECT * FROM tax_payments WHERE dedupe_key = ? AND id != ?');
@@ -332,6 +378,23 @@ function setRecipient(db, rows, recipient, { now }) {
     const payer = `${unresolvedPayer(r.payer)}:${recipient}`;
     const key = dedupeKey({ kind: 'tax_payment', jurisdiction: r.jurisdiction, sheetYear: r.tax_year, date: r.date, payer });
     const other = holder.get(key, r.id);
+    if (other && !sameAmount(other.amount, r.amount)) {
+      if (conflictAsked(db, key, other.amount, r.amount)) {
+        archive(db, 'tax_payments', { ...r, recipient, source_slot: slot, payer, dedupe_key: key }, { by: other.file_id, reason: 'duplicate', now });
+        remove.run(r.id);
+        continue;
+      }
+      const [first, second] = other.id < r.id ? [other, r] : [r, other];
+      const later = conflictPayer(payer, second.file_id);
+      const laterKey = dedupeKey({ kind: 'tax_payment', jurisdiction: r.jurisdiction, sheetYear: r.tax_year, date: r.date, payer: later });
+      if (second === other) {
+        update.run(other.recipient, other.source_slot, later, laterKey, other.id);
+        update.run(recipient, slot, payer, key, r.id);
+      } else update.run(recipient, slot, later, laterKey, r.id);
+      askConflict(db, { key, payer, first, second, now });
+      slots.add(slot);
+      continue;
+    }
     if (other && other.id < r.id) {
       archive(db, 'tax_payments', { ...r, recipient, source_slot: slot, payer, dedupe_key: key }, { by: other.file_id, reason: 'duplicate', now });
       remove.run(r.id);

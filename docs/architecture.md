@@ -482,7 +482,8 @@ and anything ambiguous becomes a short question in the confirm queue.
    and deleted when it holds period authority. A warning other than `pending_activity` or
    `invalid_cost_basis` makes the account it names incomplete, or the whole file when it names
    none; an incomplete snapshot never removes. A recipient answer that rekeys withholding onto
-   a row of the same recipient archives the newer as `duplicate`. Withholding slots are
+   a row of the same recipient archives the newer as `duplicate` when the amounts are equal; a
+   different amount, at rekey or at import, keeps both and asks `withholding_conflict` (never `revised`). Withholding slots are
    `wh:<employer or payer key>:<taxYear>:<jurisdiction>:<recipient>`; W-2 withholding summarizes paystub
    withholding in the same slot (`summarized`) only once the recipient is known, at import or
    when a recipient answer recomputes the slots. Every replaced row is kept in `superseded_rows`.
@@ -540,7 +541,9 @@ subject, question, options: [{id, label}], context, status, answer, fileId, crea
 `employer_relation`, `employer_recipient` (subject the employer key; options `owner` "You",
 `spouse` "Your spouse", `both` "Both of you") and `document_recipient` (subject a paystub, W-2
 or 1099 payer identity; options `owner`, `spouse`; asked per document after `both`, and directly
-for each 1099 with withholding). A recipient answer
+for each 1099 with withholding) and `withholding_conflict` (subject `<dedupe key>|<cents>|<cents>`;
+options `first`, `second`, `both`; the later row holds `<payer>:doc:<file id>` until answered, the
+rejected row is archived as `withholding_conflict` and the survivor takes the identity). A recipient answer
 sets `tax_payments.recipient` on the matching withholding rows, recomputes their `wh:` slots and
 summarizes per slot; while a row's recipient is unknown nothing summarizes it. An answered
 subject is remembered and applied to later imports without a new question. `ConfirmError` codes map to HTTP: `not_found` 404, `bad_option` 400, `answered` 409,
