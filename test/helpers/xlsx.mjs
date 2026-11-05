@@ -156,3 +156,5 @@ export function writeXlsx(sheets, { sharedStrings, deflate = false, workbookExtr
   ];
   return zip(entries, { deflate });
 }
+
+export const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';

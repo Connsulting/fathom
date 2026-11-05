@@ -291,15 +291,19 @@ export const tools = [
   },
   {
     name: 'get_figures',
-    description: 'Stored figures (money values) with their kind (a actual, p projected, e estimate, m model), label and source with as-of date. Optionally only the given keys.',
+    description: 'Stored figures (money values) with their kind (a actual, p projected, e estimate, m model), label and source with as-of date. A figure with unavailable is kept only for reference and is not current. Optionally only the given keys.',
     inputSchema: obj({ keys: { type: 'array', items: { type: 'string' }, maxItems: 500 } }),
     scope: 'read',
     handler(args, ctx) {
       const want = args.keys ? new Set(args.keys) : null;
-      return ctx.db.prepare(`SELECT f.key, f.v, f.kind, f.label, f.src, s.label AS src_label, s.as_of AS src_as_of
+      return ctx.db.prepare(`SELECT f.key, f.v, f.kind, f.label, f.src, f.unavailable_reason, s.label AS src_label, s.as_of AS src_as_of
                              FROM figures f LEFT JOIN sources s ON s.id = f.src ORDER BY f.rowid`).all()
         .filter(f => !want || want.has(f.key))
-        .map(f => ({ key: f.key, v: f.v, kind: f.kind, label: f.label, source: { id: f.src, label: f.src_label || '', asOf: f.src_as_of || '' } }));
+        .map(f => {
+          const out = { key: f.key, v: f.v, kind: f.kind, label: f.label, source: { id: f.src, label: f.src_label || '', asOf: f.src_as_of || '' } };
+          if (f.unavailable_reason) out.unavailable = f.unavailable_reason;
+          return out;
+        });
     },
   },
   {

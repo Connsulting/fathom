@@ -10,6 +10,8 @@ import { ACTION_STATUS, packStatus } from '../shared/rules.mjs';
 import { escapeUserText } from '../shared/tokens.mjs';
 import { seedDemo } from '../../demo/seed.mjs';
 import { clearStoredFiles, loadDataKey, VaultError } from '../ingest/vault.mjs';
+import { runPlanning } from '../jobs/planner.mjs';
+import { defaultPackDirs } from '../packs/state.mjs';
 import { HttpError } from './http.mjs';
 import { findQuestion, isIndex } from './questions.mjs';
 import { whatIfOwnerText } from './answerer.mjs';
@@ -138,6 +140,8 @@ export function wargamePick(ctx) {
   if (name !== 'salary' && name !== 'deferral') throw new HttpError(404, `no war game ${name}`);
   const wargame = loadContent(db).wargame || {};
   if (!wargame[name]) throw new HttpError(404, `no war game ${name}`);
+  // D3: a war game kept only for reference is not a current choice.
+  if (typeof wargame[name].unavailable === 'string') throw new HttpError(409, 'war game unavailable');
   const list = wargameLists(wargame)[name];
   const { index } = ctx.body;
   let i = index;
@@ -323,4 +327,15 @@ export async function demoReset(ctx) {
   await clearStoredFiles(ctx.config.dataDir);
   if (ctx.packs) ctx.packs.refresh();
   return { scenario: scenarioOf(ctx) };
+}
+
+const REAL_ONLY = 'planning runs on real stores only';
+
+export async function planRun(ctx) {
+  if (getSetting(ctx.db, 'mode', null) === 'demo') throw new HttpError(409, REAL_ONLY);
+  const run = await runPlanning(ctx.db, ctx.engine || null, {
+    now: (ctx.config && ctx.config.clock) || undefined,
+    packDirs: defaultPackDirs(ctx.config && ctx.config.dataDir),
+  });
+  return { scenario: scenarioOf(ctx), run };
 }

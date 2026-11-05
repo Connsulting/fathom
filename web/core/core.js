@@ -567,7 +567,10 @@ function openPopover(anchor) {
     '<div class="fx-pop-val">' + esc(moneyCents(f.v)) + '</div>' +
     '<div class="fx-pop-row"><span class="fx-pop-k">Source</span><span class="fx-pop-v">' + esc(src.label) + '</span></div>' +
     (src.asOf ? '<div class="fx-pop-row"><span class="fx-pop-k">As of</span><span class="fx-pop-v">' + esc(src.asOf) + '</span></div>' : '') +
-    '<div class="fx-pop-row"><span class="fx-pop-k">Kind</span><span class="fx-pop-v">' + esc(kind) + '</span></div>';
+    '<div class="fx-pop-row"><span class="fx-pop-k">Kind</span><span class="fx-pop-v">' + esc(kind) + '</span></div>' +
+    // Kept only for reference (R2-9), then readable assumptions (MGN1); both are stored plain text.
+    (typeof f.unavailable === 'string' && f.unavailable ? '<div class="fx-pop-row"><span class="fx-pop-k">Not current</span><span class="fx-pop-v">' + esc(f.unavailable) + '</span></div>' : '') +
+    (Array.isArray(f.notes) ? f.notes.filter(n => typeof n === 'string').map(n => '<div class="fx-pop-row"><span class="fx-pop-k">Assumes</span><span class="fx-pop-v">' + esc(n) + '</span></div>').join('') : '');
   document.body.appendChild(el);
   const r = anchor.getBoundingClientRect();
   const w = el.offsetWidth;

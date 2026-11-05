@@ -17,7 +17,7 @@ over every module's test directory (`npm test`), end-to-end tests with Playwrigh
 
 | Path | Owner and purpose |
 |---|---|
-| `package.json` | Scripts `start`, `test`, `seed:demo`, `e2e`, `e2e:smoke` (names are frozen). |
+| `package.json` | Scripts `start`, `test`, `seed:demo`, `e2e`, `e2e:smoke` (names are frozen), plus `plan` (`npm run plan`, one planning run over the real store). |
 | `src/server.mjs` | HTTP entry: store mode rules, then serves the UI, `/shared/` and the API. |
 | `src/config.mjs` | `loadConfig(env)`: every environment key, paths only. |
 | `src/store/` | `db.mjs` plus `migrations/NNN-name.sql`. Owned by the foundation item. |
@@ -277,6 +277,7 @@ Money columns are dollars rounded to cents; JSON columns hold JSON text. The pro
 | `column_mappings` | `signature` PK (header signature), `mapping` JSON, `src`, `created_at`, `uses` |
 | `entity_aliases` | `alias` PK (normalized alias name), `entity` (canonical display name), `created_at` |
 | `held_facts` | `id` PK, `hold` (`employer:<employerKey>`), `key`, `value` JSON, `file_id`, `parser`, `locator`, `confidence`, `created_at` |
+| `planner_recs` | `rec_id` PK (references `recs.id`), `trigger_id`, `grounding_hash`, `prose_src` in model, template, `first_run`, `last_run` (reference `job_runs.id`), `retired_at`, `retired_reason`, `retired_from`, `held_from`. Bookkeeping for planner-owned recs (migration 007). |
 
 Migration 002 (`002-ingest.sql`) adds the ingest columns above (`files.parser` through
 `files.coverage`, `accounts.source_id` and `identity`, `transactions.occurrence`, every
@@ -289,6 +290,8 @@ tags the seven manifest-backed demo pack rows with `def.manifest` in demo stores
 "Live pack state"). Migration 006 (`006-chat.sql`) adds `messages.provenance` and, in demo stores
 only, sets `def.label` to the demo name on those tagged rows and adds the synthetic fact
 `income.agiEstimate` when absent.
+
+Migration 007 (`007-planner.sql`) creates `planner_recs` and adds a `src` column to `events`, `deadlines` and `decisions`; the planner writes its rows with `src = 'planner'` and replaces only those.
 
 ### Adding a migration
 
@@ -428,7 +431,7 @@ response is `{scenario, ...}` with the fresh scenario.
 | `POST /api/keys` | `{name, scopes?: ('read' or 'write:recs')[]}` | `{key, record, keys}`. The only time the key is shown. Name trimmed, 1 to 80 characters, no control characters; scopes always include `read`; else 400. |
 | `POST /api/keys/:id/revoke` | `{}` | `{record, keys}`. Sets `revokedAt` once (a second revoke keeps it); 404 unknown id. |
 | `GET /api/mcp` | | `{url, publicUrlSet, tools: [{name, description, scope}], scopes: [{id, label, access}]}`. `url` is `FATHOM_PUBLIC_URL` with `/mcp` appended unless it already ends in it, else `<proto>://<Host>/mcp` with proto from `X-Forwarded-Proto` (http or https only), then the socket. |
-
+| `POST /api/jobs/plan/run` | `{}` | `{scenario, run}`. Runs the planner (`runPlanning`) with the server's runtime engine and `FATHOM_CLOCK`; 409 `{error: 'planning runs on real stores only'}` on a demo store, which it leaves unchanged. |
 | `POST /api/files` | multipart/form-data, field `files` (one or more) | `{scenario, files: [result], pending}`. A result is `{fileId, name, status, sourceKind, parser, counts, duplicateOf?}` with status `imported`, `duplicate`, `needs_mapping`, `needs_extraction`, `unsupported`, `too_large` (past a parse limit, see Ingest) or `failed`. 400 no files or malformed body, 409 a real store without `FATHOM_DATA_KEY_FILE` (nothing stored), 413 over a size cap, 415 not multipart with a boundary. |
 | `GET /api/files` | | `{files: [{id, name, status, sourceKind, parser, counts, uploadedAt}]}`, newest first. |
 | `POST /api/files/:id/retry` | `{}` | `{scenario, file: result}`. Routes a `needs_mapping` or `needs_extraction` file again under the same id; 404 unknown file, 409 a file that is not waiting. |
@@ -990,3 +993,286 @@ node's `fetch`. It copies `src`, `web`, `demo` and `packs` (the pack tools read 
 runtime). Mount a named volume at `/data`; a host bind mount directory must be writable by
 uid 1000. `scripts/docker-smoke.sh` builds, runs and smoke tests the image with whatever docker CLI
 configuration the caller has.
+
+## Planner
+
+`src/jobs/planner.mjs` exports `runPlanning(db, engine, {now, packDirs})`, `PlannerError` and
+`PLAN_JOB_ID` (`'plan'`). It is the real-mode brain: a deterministic run that reads the ledger,
+derives facts and figures, evaluates the trigger catalog and rewrites the planner-owned parts of
+the plan and brief. `POST /api/jobs/plan/run` and `npm run plan` (`src/jobs/plan-cli.mjs`, exit 2
+on a missing or demo store, prints counts and warning codes only) call it.
+
+### Run steps
+
+1. Refuse a demo store (`PlannerError` code `demo_store`). Insert the `jobs` row `plan` when
+   missing and a `job_runs` row with status `running`.
+2. Clock: `now` (a Date, ISO string or epoch ms), else `settings.clock`, else today. The tax year
+   is the latest supported year (2026 today) whose return is not yet due (clock on or before
+   Apr 15 of the next year); without one, tax, retirement and war-game figures are skipped with
+   warning `unsupported_tax_year`.
+3. Load planning data (`planner/data.mjs`): accounts with their latest balance or position value,
+   P and L lines of the tax year, tax payments, documents, transactions of the last 400 days, files
+   and per-source freshness (45 days, or for tax payments the latest federal installment date).
+4. Derive facts (`planner/facts.mjs`), compute figures and the war-game models
+   (`planner/figures.mjs`, `planner/household.mjs`, `planner/wargame.mjs`), then derive
+   `income.agiEstimate` and `retirement.backdoorRothCandidate` from `agi.est`.
+5. Evaluate the trigger catalog (`src/jobs/triggers/`) into hit, blocked or none per trigger.
+6. Prose (`planner/prose.mjs`), outside the transaction: stored prose is kept while the grounding
+   hash is unchanged; otherwise the engine is asked and its reply accepted only under the prose
+   rules below; otherwise the template.
+7. One write transaction: facts, sources, figures, recs (`planner/recs.mjs`), `refreshPackState`
+   and pack `recIds`, the brief (`planner/brief.mjs`), then pruning of planner figures nothing references.
+8. Finish `job_runs` with `ok`, the engine cost and a note of counts only. On any throw the row is
+   `error` with note `{error: <class name>, code: <PlannerError code or null>}` and the error is
+   rethrown. Runs are serialized per db handle, and every write compares first, so a second run
+   over the same data changes no row.
+
+Result: `{runId, status: 'ok', counts: {factsDerived, factsWritten, figures, recs: {active, new,
+updated, retired, unchanged}, byTrigger: {<id>: new|updated|unchanged|retired}, prose: {model,
+template, kept}, warnings}, warnings: [codes], costUsd}`.
+
+### Facts the planner owns
+
+Planner facts carry `src: 'planner'`, `confirmed: 0`, `as_of` the clock and provenance
+`{fileId, parser: 'planner', locator: {rule, rows: [{table, id}] (at most 20), count}}`. The planner
+writes a key only when no row exists or the stored row is its own unconfirmed one, so owner answers
+always win; a planner row whose evidence disappears is deleted (kept while the tax computation is
+blocked). Booleans are only derived as true. Keys: `income.sCorp`, `income.selfEmployed`,
+`income.partnership` (from the `business.entities` fact, P and L lines, W-2 `employerName`, 1099-NEC
+and K-1 `entityKind` documents), `income.w2` (an outside employer, never the household's own S corp), `accounts.has529`,
+`benefits.hsa`, `retirement.ira`, `retirement.solo401k` (from accounts), `giving.charitable`,
+`giving.annualEstimate` (charitable outflows of the last 365 days), `income.agiEstimate` and
+`retirement.backdoorRothCandidate` (AGI as the MAGI proxy above the Roth phase-out). Calculator
+confirmations come only from owner-set facts: `retirement.planTermsConfirmed`,
+`retirement.aggregationConfirmed`, `benefits.hsaEligible`, `benefits.hsaCoverage`,
+`business.salaryRange`, `business.cashBasis`, `household.ownerAge`, `household.spouseAge` and
+`accounts.va529`. A missing one produces no figure and turns the trigger that needs it into a
+confirm form. Other owner inputs: `tax.itemizedEstimate`, `tax.vaItemizedEstimate`,
+`tax.withholding.federal`, `tax.withholding.virginia`, `tax.prior.*`, `retirement.contributions`,
+`income.partnershipEstimate`, `plan.nextYearBusinessIncome`, `business.lastPayrollDate`,
+`household.expectedDate`, `household.names`.
+
+### Figures
+
+Rows are written with `parser = 'planner'`, a label with no digits (except inside 401(k), 529, W-2
+and 1099), and a locator that always carries `computedOn`: data figures hold `rows: {table, ids
+(first 50), count}`, model figures hold `calc`, `inputs` or `parts`, `steps` and `assumptions`.
+Kinds: `a` actual, `p` projection, `e` estimate, `m` model output.
+
+| Keys | Kind | Source |
+|---|---|---|
+| `bal.<accountId>` | a | `acct:<accountId>` |
+| `cash.total`, `cash.business`, `cash.personal` | a | `calc:cash` |
+| `cash.monthlyOut`, `cash.runwayMonths` | e | `calc:cash` |
+| `pnl.<entity>.income`, `.expenses`, `.net`, `.salary`, `.payrollTax`; `inc.ytd.<entity>` | a | `pnl` |
+| `pnl.<entity>.netProj`, `.salaryProj`; `scorp.profitProj` | p | `plan-projection` |
+| `agi.est` | e | `calc:tax` |
+| `tax.fed.qbi`, `.taxable`, `.income`, `.se`, `.proj`; `tax.va.proj` | m | `calc:tax` |
+| `tax.fed.paid`, `tax.va.paid` (tax_payments rows of kind `paid` only) | a | `tax-payments` |
+| `tax.fed.withheld`, `tax.va.withheld` (rows of kind `withholding`, or the owner's `tax.withholding.*`) | a | `tax-withholding` (`docs` for the owner fact) |
+| `sh.fed.required`, `.remaining`; `sh.va.required`, `.remaining` | m (e without a prior year) | `calc:tax` |
+| `room.solo401k`, `.employee`, `.employer`; `room.sep`; `room.ira.owner`, `.spouse`, `.household`; `room.hsa` | m | `calc:retirement` |
+| `hsa.contrib.ytd`, `va529.contrib.ytd` (zero when a college account had no deposit this year), `giving.trailing`, `giving.ytd` | a | `transactions` |
+| `inc.ytd.w2` (outside-employer W-2 box 1, or the latest paystub's `ytdGross` this year) | a | `docs` |
+| `inc.ytd.total` (every `inc.ytd.*` figure) | a | `calc:income` |
+| `ira.pretax.owner`, `ira.pretax.spouse` | a | `acct:<accountId>` |
+| `va529.deductionLeft`, `va529.taxSaved`, `giving.twoYear` | m | `calc:tax` |
+| `wg.salary.<point>.salary`, `.payroll`, `.dist`, `.tax`, `.x`, `.y`; `wg.deferral.<option>.amount`, `.tax2026`, `.tax2027`, `.net`, `.decCash`, `.need`, `.gap`; `wg.deferral.base.income` | m | `wargame-model` |
+
+The household liability (`householdTax`) projects each P and L entity from its own months of data,
+computes self-employment tax per person with filing-unit Additional Medicare, allocates the
+deductible half to each business, caps QBI at 20 percent of taxable income before QBI, applies the
+child tax credit for children under 17 (omitted above the phase-out threshold), and computes
+Virginia tax with the Virginia 529 deduction (personal exemptions omitted). W-2 or paystub wages
+from a classified household S corp count as that person's own-corp wages even without its P and L.
+Ingest's K-1 names no partnership: a partnership K-1 counts only when it is the only one and there
+is exactly one classified partnership (its owner is the partner); any other count blocks
+`k1_unmatched`. A single partnership without a K-1 uses `income.partnershipEstimate`. An S corp
+K-1 adds nothing next to its S corp's P and L and blocks `k1_scorp_unmatched` without one. An
+unclassified P and L entity, an incomplete partnership input, filing status mfs
+(`mfs_unsupported`), a household tax calculator throw (`calc_failed`) or a missing Virginia
+itemized estimate blocks the tax figures that need it. IRA room counts traditional and Roth IRA
+contributions; SEP room for a sole proprietor passes that person's W-2 wages; payroll records are kept per
+person and employer, and a household S corp W-2 for anyone but its owner counts as that person's
+wages; owner-set non-Roth own-corp 401(k) deferral and catch-up records lower that person's
+P&L officer salary wages only for types no payroll document carries (document wages are box 1
+and never reduced); salary war-game points are clamped into
+`business.salaryRange`, and an S corp with no officer salary yet still gets the war game (no
+current point, measured against the range midpoint); `scorp-salary` and `invoice-deferral` are
+blocked, not retired, while household or Virginia tax is blocked; a pre-tax IRA with
+no balance on file leaves that person's pro-rata status unknown.
+
+The planner reads ingest's stored shapes and answers, never a field ingest does not write
+(`src/jobs/planner/payroll.mjs`, `payments.mjs`). A W-2 or paystub belongs to the recipient of its
+active withholding rows (`tax_payments.recipient`), else to the `employer_recipient` or, after
+"both", `document_recipient` answer; unknown, the planner asks ingest's own question
+(`withholdingRecipient`) and blocks `w2_recipient_unknown`. An employer is household when it matches
+a household entity by normalized name or `entity_aliases`, else the `employer_relation` answer
+decides (`household_employer_unmatched`, `employer_relation_pending`). W-2s sum per recipient,
+employer key and year with three separate bases: box 1 is taxable wages, box 5 is Medicare wages
+(Additional Medicare Tax and FICA or SE inputs only; unread, it blocks `w2_medicare_wages_missing`)
+and box 1 plus the box 12 pretax codes is plan compensation (IRC 415(c)(3), noted
+`w2_plan_compensation`). An own S corp W-2 for the year replaces the officer salary projection for
+all three. Box 12 unread leaves compensation unknown unless the owner states that sponsor's
+deferrals: plan limits, solo and SEP room, the salary war game and, above the 199A threshold, the
+corp's QBI W-2 wages (so QBI and federal tax) block with `w2_plan_compensation_unknown`. A wage part
+exists whenever box 1 (or a P and L salary) is known. Each salary war game point takes payroll tax
+on its cash salary, taxable wages as that salary plus this year's signed box 1 minus box 5, and
+plan compensation as that salary plus this year's signed compensation minus box 5, never clamped;
+owner-stated deferrals feed only compensation for a W-2; the current point is the cash salary. Box 12 D, E, F, G and S are pre-tax, D, E, F, S, AA and BB
+count toward 402(g) (G and EE do not), W is HSA money, and a W-2 without box 12 leaves deferrals
+unknown. Deferrals above the 402(g) limit are catch-ups; across a household plan and another plan
+they block `deferral_split_unknown` until `retirement.otherPlanDeferrals` is answered. A paystub-only
+employer projects `ytdGross` to the year (`section125_unknown`), blocking `paystub_ytd_missing`, or
+`paystub_deferrals_unknown` when a stub shows deferrals and no outside-401k contribution is stated
+for that employer (an unnamed one only when the person has a single outside employer).
+A W-2 whose withholding a `withholding_conflict` answer dropped is dropped too; a pending conflict
+blocks `w2_correction_pending`, answers keeping different forms block `w2_correction_conflicting`,
+and two W-2s nothing reconciles block `w2_duplicate_unresolved`. Tax payments count once by kind
+and jurisdiction (`VA` and `Virginia` are Virginia; `state` is Virginia only for a `paid` row of a
+Virginia household): blocks are `tax_payment_kind_unknown`, `withholding_state_unknown`,
+`withholding_recipient_unknown`, `withholding_conflict_pending`, `tax_year_unconfirmed` and
+`estimated_payer_unknown`, each holding only its figure and the safe-harbor figures that use it.
+Additional Medicare Tax withheld (box 6) is not extracted and counts as zero
+(`addl_medicare_withholding_not_read`). Last year's federal tax is `tax.prior.federal`, else the
+uploaded form1040 `totalTax` (`prior_tax_total_line`); AGI is `tax.prior.agi`, else its `agi`.
+Account owners are ingest's option labels mapped to people, and a business account's entity is
+`accounts.businessEntity`, else the only household business. A planner figure not produced by a run is deleted unless a rec def (text or
+`mine`), message, decision note or content row references it, or a kept war-game entry names its
+point or option. `src/scenario/build.mjs` serves a stored `wg.*` figure in place of the value it
+would derive from `content.wargame`.
+
+### Trigger catalog
+
+Each module in `src/jobs/triggers/` exports `id`, `domain`, `trigger`, `packs`, `gate` (a pack
+rule over facts that tolerates absent facts), `calcs`, `kb`, `window(ctx)`, `evaluate(ctx)` (null,
+a hit, or `{blocked: reason}`), `build(ctx, hit)` and `template(ctx, hit)`, plus an optional `needsYear` flag: a trigger with it
+is skipped (state none) when no planning tax year is known. A trigger hits when its gate holds, its window has not closed and `evaluate` returns a hit. A null evaluation after one of
+the trigger's `calcs` threw is blocked as `calc_failed`, never retired.
+
+| Id | Domain / class | Window |
+|---|---|---|
+| `fed-q4-estimate` | tax / calendar | Jan 15, hard |
+| `va-q4-estimate` | tax / calendar | Jan 15, hard |
+| `year-end-retirement` | retirement / calendar | Deferral deadline (see Deferral deadlines below), hard; regular, catch-up or Roth catch-up room (SEP room alone does not fire it); blocked when `solo401kRoom` throws |
+| `solo401k-setup` | retirement / calendar | Deferral deadline (see Deferral deadlines below), hard |
+| `scorp-salary` | business / income | Last payroll; scenario `salary` |
+| `invoice-deferral` | business / calendar | Dec 1; scenario `deferral` |
+| `hsa-room` | retirement / calendar | Apr 15, hard |
+| `va529` | family / calendar | Dec 31, hard |
+| `charitable-bunching` | giving / goal | Dec 31 |
+| `backdoor-roth` | retirement / goal | Pro-rata snapshot Dec 31, then the Apr 15 IRA deadline |
+| `dependent-care-fsa` | family / calendar | Open enrollment |
+| `new-child` | family / life | the expected date, else none |
+| `missing-data` | data / calendar | Jan 15 when tax data is blocked, else two weeks out |
+
+Recs: a new hit inserts the rec (`proposed`, or `hidden` behind an owner-disabled pack), its
+`planner_recs` row and a conversation with one Fathom message holding the summary. An existing
+planner rec is updated only when its def, window or pack changes, keeping status, waiting, wake,
+task flags (remapped by task text) and the conversation. A rec whose trigger no longer applies is
+retired (status `dismissed` only from an active status, event `retire`, reason "Its window closed on
+<date>." or "The condition behind it no longer holds in your data."), never deleted. A planner
+retired rec revives to `proposed` only when the planner's retire event was the last status change.
+A blocked trigger parks an active rec as `waiting` on `data` (event `block`, `held_from`) and
+returns it when the data arrives (event `unblock`). A rec id the planner does not own is skipped
+with warning `rec_id_taken`.
+
+### Prose rules
+
+Templates contain no digits outside tokens and no number words; amounts are `{f:}`/`{fk:}`
+figure tokens, statutory amounts `{l:}`, percents `{p:}`, names `{n:}`; a figure token appears only
+when that figure was produced. Data-derived text (entity and account names, `mine` labels) is
+HTML-escaped, braces included, before it enters a title, task or prose. Model prose (one `job` call
+per changed rec, `maxTokens` 1500, grounding allow list) is accepted only when the reply is JSON
+`{summary, why[1..4], qa[0..4]{q, a[1..3]}}`, every token names an allowed key for its scope,
+`checkGrounding` with token-only sources finds no literal number, and the engine's grounding check
+passes; accepted text is HTML-escaped. Any failure, including `EngineOffError` and
+`BudgetExceededError`, falls back to the template. The grounding hash covers the trigger, template
+version, window close, the hit's figure values and its other hit variables.
+
+### Brief content
+
+Content rows (src `planner`), each written only when it changes: `names` (`household.names` over
+neutral labels), `meta` (`dataThrough` is the latest source date), `law`, `pct`, `verdict` (the
+earliest needs-you rec and its window), `domains` (tax, cash and data always, others when they have
+a hit or a relevant fact; status needs, waiting, changed or covered), and `wargame` (each entry
+replaced only when the run built a new model). Deadlines (src `planner`) are the hit windows plus
+the statutory dates of the next 400 days that no hit covers. Decisions (src `planner`) are upserted
+by id: `<scenario>-<year>` open per scenario hit and `salary-<year + 1>` upcoming for an S corp.
+Events (src `planner`) are replaced only when something changed against `settings.planner.snapshot`
+(new files, new, revived and retired recs, planner fact changes); the snapshot is rewritten each run.
+
+### Deferral deadlines
+
+`year-end-retirement` and `solo401k-setup` share one deadline from `info.solo` (the sized
+participant's sponsor kind) and `firstYearStatus(ctx)` in `triggers/common.mjs`: an S corp owner
+(or no sponsor known) defers through payroll, so the last payroll; a sole proprietor with no plan
+on file whose `business.onlyEmployee` fact is true (owns the whole business, no employees, the
+spouse included) gets Apr 15 of the next year for a first plan year (IRC 401(b)(2) as amended by
+SECURE 2.0 s.317); a sole proprietor with a plan or who is not eligible, and a partnership, get
+Dec 31 (Treas. Reg. 1.401(k)-1(a)(6)(iii)). Without the answer both recs are confirm forms with the
+Apr 15 window, and year-end-retirement sizes nothing. Sole proprietor text never mentions payroll.
+Roth catch-up room is never described as lowering this year's tax; the tax value line appears only
+when `room.solo401k.pretax` is positive.
+
+### Planner literal check
+
+Besides `checkGrounding`, model prose passes `plannerLiteralFree` (`planner/prose.mjs`): after
+tokens are removed, only a month and day (optionally with the year), `tax year YYYY`, `in YYYY` and
+the plan identifiers 401(k), 403(b), 457(b), `529 plan` and Virginia529 may carry digits, and none
+of those is allowed next to a money word, a percent sign or a dollar sign. Stored prose, model or
+template, is reused only while it still passes both checks; otherwise the rec is rewritten.
+Templates obey the same rule. `src/engine/grounding.mjs` treats Virginia529 as an identifier.
+
+### Unavailable history
+
+A war game the run could not rebuild because its inputs are invalid (`info.wargameInvalid[name]`,
+whatever the season) stays in `content.wargame` with `unavailable: <reason>`; a game absent only
+for the season is kept unchanged, and a rebuilt game drops the marker. Planner decisions on such a
+game keep their row and status and get `decisions.unavailable_reason` (cleared on rebuild; an
+upcoming next-year row is not marked). The scenario serves those decisions with status
+`unavailable` and `unavailable`, and the game with status `unavailable`, unless a stored decision
+on it is decided. `POST /api/wargame/:name/pick` answers 409 for an unavailable game. Decide lists
+unavailable decisions in a collapsed "No longer current" block with a "See the history" link.
+
+A planner figure not produced by a run but kept because something references it gets
+`figures.unavailable_reason`: the readable text for `info.withheld[key]`, else the run's first
+blocked code, else a generic "no longer computed" line (`reasonText(ctx, code)` in
+`triggers/missing-data.mjs`). A produced figure clears it. The scenario serves it as
+`fig[key].unavailable`, `get_figures` as `unavailable`, plain token text appends " (not current)",
+HTML figure spans carry `data-unavailable="1"`, and the popover shows a "Not current" row.
+Triggers never read stored figures, so a retained value never drives a current recommendation.
+
+### Figure notes and stored text
+
+A figure locator's `notes` (readable assumption sentences, no digits) reach the scenario as
+`fig[key].notes` (at most five) and the popover as "Assumes" rows. Names and the product name are
+stored as given and escaped once where they become HTML (`esc` in `web/horizon/design.js`; `{n:}`
+tokens escape on resolve). Knowledge-base excerpts are escaped with braces neutralized after the
+cut, so pack text never carries markup or a live token.
+
+Retiring a planner rec that is already done, dismissed or hidden writes a `retire` event with the
+same from and to status and keeps the owner's status.
+
+Owner inputs added by this round: `business.onlyEmployee`, `retirement.iraBasis` ({owner?,
+spouse?} after-tax IRA basis from Form 8606), `retirement.priorYearFicaWages`,
+`retirement.planOffersRoth`, `retirement.otherPlanDeferrals`, `tax.prior.qbiLossCarryforward`,
+and an optional `entity` on `retirement.contributions` entries.
+
+### Job rows
+
+`jobs` row `{id: 'plan', name: 'Planning run', cadence: 'On demand', cost: 0, enabled: 1}`, inserted
+when missing (real stores only). Each run adds one `job_runs` row with ISO `started_at` and
+`finished_at`, status `running` then `ok` or `error`, `cost_usd` and a counts-only `note`.
+
+### Planner seams
+
+The planner uses the shared seams described under "Seams later items plug into" (the runtime
+engine, handed to it as `ctx.engine`) and "Facts helper and pack state".
+
+1. Facts: `upsertFact` for every derived fact; a run counts a fact as written only when the call
+   reports `{written: true, changed: true}`. Planner-owned facts that no longer derive are deleted
+   by key where `src = 'planner'` and unconfirmed (`deleteFact` deletes by file, not by source).
+2. Packs: `refreshPackState(db, {packDirs})` inside the planner's write transaction, then the
+   planner sets each `packs_state.def.recIds` to the ids of the recs whose `pack_id` is the pack,
+   sorted, since `refreshPackState` keeps `recIds` as stored.
