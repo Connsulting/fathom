@@ -123,6 +123,7 @@ Row kinds:
 | pnl_line | `entity, period: 'YYYY-MM', category, amount` | `pnl_lines` |
 | tax_payment | `jurisdiction, taxYear, date, amount, kind` | `tax_payments` |
 | document | `docType, taxYear?, fields` | `documents` |
+| snapshot | `account, asOf` (a statement's holdings list, even empty: the account's complete holdings on that date) | none (drives position removal) |
 | fact | `key, value` | `facts` |
 
 Each row carries a `locator` (row number or cell) from the parser; the pipeline adds
@@ -225,16 +226,16 @@ Money columns are dollars rounded to cents; JSON columns hold JSON text. The pro
 | `schema_migrations` | `id` PK, `name`, `applied_at` |
 | `settings` | `key` PK, `value` JSON, `updated_at`. Keys: `mode`, `engine` `{on}`, `cap` `{usd}` (default 200), `clock`, `onboarding` `{done, step}`, `wargame.picks` `{salary, deferral}`, `seeded` `{at, scenario_sha}` |
 | `content` | `key` PK, `value` JSON, `src`, `updated_at`. Narrative sections with no data table yet: `meta` (product, household, dataThrough), `names`, `law`, `pct`, `series`, `verdict`, `domains`, `curve`, `wargame`, `ask`, `advisor`, `yearend`, `connect`, `engine.chat`, `onboarding`, `email` |
-| `files` | `id` PK, `name`, `mime`, `size`, `sha256`, `source_kind`, `uploaded_at`, `stored_path`, `status`, `note` |
+| `files` | `id` PK, `name`, `mime`, `size`, `sha256` (unique when set), `source_kind`, `uploaded_at`, `stored_path`, `status` (an ingest status, `pending` while routing), `note` (`limit_exceeded` for a `too_large` file), `parser`, `counts` JSON, `source_id`, `header_signature`, `period_from`, `period_to`, `coverage` JSON (the slots a workbook authoritatively covers) |
 | `sources` | `id` PK, `label`, `as_of`, `kind`, `last_ingest_at`, `note` |
 | `facts` | `key` PK, `value` JSON, `src`, `as_of`, `confirmed`, provenance, `updated_at` |
-| `accounts` | `id` PK, `inst`, `mask` (4 digits or NULL), `name`, `owner`, `kind`, `mirror`, `note`, `fig_key`, provenance, `sort` |
-| `transactions` | `id` PK, `account_id`, `date`, `amount`, `description`, `category`, `external_id`, `dedupe_key` unique, provenance |
-| `balances` | `id` PK, `account_id`, `date`, `amount`, provenance; unique (`account_id`, `date`) |
-| `positions` | `id` PK, `account_id`, `as_of`, `symbol`, `name`, `quantity`, `price`, `value`, `cost_basis`, provenance |
-| `pnl_lines` | `id` PK, `entity`, `period` `'YYYY-MM'`, `category`, `amount`, provenance |
-| `tax_payments` | `id` PK, `jurisdiction`, `tax_year`, `date`, `amount`, `kind`, provenance |
-| `documents` | `id` PK, `doc_type`, `tax_year`, `fields` JSON, provenance |
+| `accounts` | `id` PK, `inst`, `mask` (4 digits or NULL), `name`, `owner`, `kind`, `mirror`, `note`, `fig_key`, provenance, `sort`, `source_id`, `identity` (unique when set: `inst|mask:<mask>`, `inst|name:<name>` or `source:<hash>`) |
+| `transactions` | `id` PK, `account_id`, `date`, `amount`, `description`, `category`, `external_id`, `dedupe_key` unique, `occurrence`, provenance |
+| `balances` | `id` PK, `account_id`, `date`, `amount`, `dedupe_key` (unique when set), provenance; unique (`account_id`, `date`) |
+| `positions` | `id` PK, `account_id`, `as_of`, `symbol`, `name`, `quantity`, `price`, `value`, `cost_basis`, `dedupe_key` (unique when set), provenance |
+| `pnl_lines` | `id` PK, `entity`, `period` `'YYYY-MM'`, `category`, `amount`, `dedupe_key` (unique when set), `source_slot`, provenance |
+| `tax_payments` | `id` PK, `jurisdiction`, `tax_year`, `date`, `amount`, `kind` (the row's payment kind), `dedupe_key` (unique when set), `source_slot`, `payer`, `date_precision`, `tax_year_basis`, `recipient` (withholding: `owner`, `spouse` or `unknown`, the last segment of its `wh:` slot; NULL for workbook rows), provenance |
+| `documents` | `id` PK, `doc_type`, `tax_year`, `fields` JSON (extracted values only; a `notes` document holds the reference `{ref, sha256, chars, lines}`, never the text), `dedupe_key` (unique when set), provenance |
 | `figures` | `key` PK, `v`, `src` (references `sources.id`), `kind` in a, p, e, m, `label`, provenance, `updated_at` |
 | `recs` | `id` PK, `def` JSON (the CONTRACT rec minus live fields), `status`, `waiting_on`, `wake`, `tasks_done` JSON, `window_close` ISO date, `window_label`, `pack_id`, `sort`, `updated_at`, provenance |
 | `rec_events` | `id` PK, `rec_id`, `ts`, `action`, `arg`, `from_status`, `to_status`, `actor` (`ui`, `tool`, ...) |
@@ -249,9 +250,21 @@ Money columns are dollars rounded to cents; JSON columns hold JSON text. The pro
 | `job_runs` | `id` PK, `job_id`, `started_at`, `finished_at`, `status`, `cost_usd`, `note` |
 | `api_keys` | `id` PK, `name`, `key_hash`, `scopes` JSON, `created_at`, `last_used_at`, `revoked_at` |
 | `spend_ledger` | `id` PK, `ts`, `yyyymm` `'YYYY-MM'`, `purpose`, `cost_usd`, `model`, `tokens` JSON |
-| `planner_recs` | `rec_id` PK (references `recs.id`), `trigger_id`, `grounding_hash`, `prose_src` in model, template, `first_run`, `last_run` (reference `job_runs.id`), `retired_at`, `retired_reason`, `retired_from`, `held_from`. Bookkeeping for planner-owned recs (migration 002). |
+| `superseded_rows` | `id` PK, `table_name`, `dedupe_key`, `row` JSON (the archived row), `file_id`, `superseded_by` (references `files.id`), `reason` (`revised`, `removed`, `older_snapshot`, `alias_merged`, `duplicate_confirmed`, `duplicate_cross_format`, `duplicate`, `summarized`), `at`, `survivor_key` (for `duplicate_confirmed`, the dedupe key of the row it was confirmed against) |
+| `confirm_items` | `id` PK, `kind`, `subject`, `question`, `options` JSON `[{id, label}]`, `context` JSON, `status` in pending, answered, `answer`, `file_id`, `created_at`, `answered_at`; unique (`kind`, `subject`) |
+| `column_mappings` | `signature` PK (header signature), `mapping` JSON, `src`, `created_at`, `uses` |
+| `entity_aliases` | `alias` PK (normalized alias name), `entity` (canonical display name), `created_at` |
+| `held_facts` | `id` PK, `hold` (`employer:<employerKey>`), `key`, `value` JSON, `file_id`, `parser`, `locator`, `confidence`, `created_at` |
+| `planner_recs` | `rec_id` PK (references `recs.id`), `trigger_id`, `grounding_hash`, `prose_src` in model, template, `first_run`, `last_run` (reference `job_runs.id`), `retired_at`, `retired_reason`, `retired_from`, `held_from`. Bookkeeping for planner-owned recs (migration 005). |
 
-Migration 002 also adds a `src` column to `events`, `deadlines` and `decisions`; the planner writes its rows with `src = 'planner'` and replaces only those.
+Migration 002 (`002-ingest.sql`) adds the ingest columns above (`files.parser` through
+`files.coverage`, `accounts.source_id` and `identity`, `transactions.occurrence`, every
+`dedupe_key` and `source_slot`, `tax_payments.payer`, `date_precision` and `tax_year_basis`) and
+the tables `superseded_rows`, `confirm_items`, `column_mappings`, `entity_aliases` and
+`held_facts`. `demo/seed.mjs` clears them with the rest of the store. Migration 003
+(`003-ingest-recipients.sql`) adds `tax_payments.recipient`.
+
+Migration 005 (`005-planner.sql`) creates `planner_recs` and adds a `src` column to `events`, `deadlines` and `decisions`; the planner writes its rows with `src = 'planner'` and replaces only those.
 
 ### Adding a migration
 
@@ -298,6 +311,14 @@ live state merged in, plus `live`. It only reads.
    `engine.budget.used` (a, `spend-ledger`), `engine.budget.monthly` (p, `settings`),
    `engine.budget.left` (e, `spend-ledger`), and `engine.job.<jobId>.cost` (e, `job-estimates`,
    "Per-run cost estimate"). Built-in sources cover these ids when the store has no row for them.
+7. Ingest freshness: `live.ingest` is `ingestState(db, {clock})` from `src/ingest/freshness.mjs`.
+   Each account gains `asOf` (its last data date, or ''), `fresh` (`fresh`, `stale` or `unknown`)
+   and `sourceId` (its ingest source id, or null); demo accounts read '', `unknown` and null.
+   `imported` is false only for demo seeded accounts; the UI renders every other account's name,
+   institution, owner and note as plain escaped text, never through token resolution.
+   `domains` pass through `applyFreshness`: a stale ingest source appends "<label> data is <n>
+   days old. Export a fresh copy." to its domain's note, moves a `covered` domain to `waiting`, and
+   adds the domain (status `waiting`) when the store has none with that id.
 
 ### The `live` key
 
@@ -310,7 +331,16 @@ live = {
   picks: { salary: int, deferral: int },  // war-game selections; default the current/recommended point
   conversations: { <key>: [ { id, role, text, refs, ts, notice } ] },
   packs: { <id>: { active: boolean | null, exploring: boolean, whatIfDone: boolean } },
-  clock: 'YYYY-MM-DD'
+  clock: 'YYYY-MM-DD',
+  ingest: {
+    pending: int,                       // pending confirm items
+    items: [ confirm item ],            // pending items, shape below
+    files: [ file ],                    // latest 50 files
+    sources: [ { id, label, kind, asOf, lastIngestAt, cadence, state, ageDays, howTo } ],
+    accounts: { <accountId>: { asOf, fresh, sourceId } },
+    staleNotes: [ { domain, text } ],
+    formats: [ how-to entry ]
+  }
 }
 ```
 
@@ -322,9 +352,9 @@ fathom message holding its summary.
 
 ## API
 
-All JSON. Every POST requires `content-type: application/json` (charset allowed), else 415; when an
-`Origin` header is present its host must equal the `Host` header, else 403; bodies are capped at
-64 KiB (413); malformed JSON or a non-object body is 400. Errors are `{error: '<message>'}`. Unknown
+All JSON. Every POST except `POST /api/files` requires `content-type: application/json` (charset
+allowed), else 415; when an `Origin` header is present its host must equal the `Host` header, else
+403; bodies are capped at 64 KiB (413); malformed JSON or a non-object body is 400. Errors are `{error: '<message>'}`. Unknown
 paths under `/api` are a JSON 404 and a known path with the wrong method is 405. Every action
 response is `{scenario, ...}` with the fresh scenario.
 
@@ -339,8 +369,23 @@ response is `{scenario, ...}` with the fresh scenario.
 | `POST /api/engine` | `{on: boolean}` | `{scenario}`; 400 when `on` is not boolean. |
 | `POST /api/ask` | `{key?: 'ask', a rec id or 'pack:<id>', questionId? or text?}` | `{scenario, message}`. Exactly one of `questionId` or `text`; empty text, both or neither are 400; unknown question or conversation 404. Appends the owner's message and the answer (or the engine-off notice when the engine is off). |
 | `POST /api/onboarding` | `{step}` | `{scenario}`. 0 to 5 set the step, 6 completes onboarding; anything else 400. |
-| `POST /api/demo/reset` | `{}` | `{scenario}`. Rebuilds the demo store; 404 unless the store is a demo store. |
+| `POST /api/demo/reset` | `{}` | `{scenario}`. Rebuilds the demo store and removes stored uploads (`$FATHOM_DATA/files/*.bin`, the demo key stays); 404 unless the store is a demo store. |
 | `POST /api/jobs/plan/run` | `{}` | `{scenario, run}`. Runs the planner (`runPlanning`) with the server's runtime engine and `FATHOM_CLOCK`; 409 `{error: 'planning runs on real stores only'}` on a demo store, which it leaves unchanged. |
+| `POST /api/files` | multipart/form-data, field `files` (one or more) | `{scenario, files: [result], pending}`. A result is `{fileId, name, status, sourceKind, parser, counts, duplicateOf?}` with status `imported`, `duplicate`, `needs_mapping`, `needs_extraction`, `unsupported`, `too_large` (past a parse limit, see Ingest) or `failed`. 400 no files or malformed body, 409 a real store without `FATHOM_DATA_KEY_FILE` (nothing stored), 413 over a size cap, 415 not multipart with a boundary. |
+| `GET /api/files` | | `{files: [{id, name, status, sourceKind, parser, counts, uploadedAt}]}`, newest first. |
+| `POST /api/files/:id/retry` | `{}` | `{scenario, file: result}`. Routes a `needs_mapping` or `needs_extraction` file again under the same id; 404 unknown file, 409 a file that is not waiting. |
+| `GET /api/confirm` | | `{items: [pending confirm items]}`. |
+| `POST /api/confirm/list` | `{status?: pending (default), answered or all}` | `{items}`; 400 for another status. |
+| `POST /api/confirm/:id/answer` | `{answer: optionId}` | `{scenario, item}`. 404 unknown item, 400 an option not offered, 409 already answered or stale (the value changed since the question was asked). |
+
+Uploads: `POST /api/files` takes `multipart/form-data` with a boundary (else 415) under the same
+Origin rule as JSON posts. A request is capped at 200 MB (`UPLOAD_REQUEST_LIMIT`) and each file at
+50 MB (`UPLOAD_FILE_LIMIT`) in `src/api/upload.mjs`; a declared `Content-Length` over the request
+cap is refused with 413 and `Connection: close` before the body is read, and both caps are
+enforced again while the body streams. Error messages name the limit, never contents. File names
+keep only their base name (directories of either slash style stripped), at most 255 characters.
+The parser has no dependencies. Every other route keeps the 64 KiB JSON cap. Errors on ingest
+routes log `fathom: ingest request failed` and an error code only, never the error object.
 
 Free text is stored HTML-escaped with `{` and `}` escaped as `&#123;` and `&#125;`, so a user can
 never inject a scenario token or markup.
@@ -369,12 +414,177 @@ is reachable only on the owner's private network.
 2. Packs: `src/packs` replaces the seeded `packs_state.def` rows with loaded manifests and sets the
    base status from `activePacks(packs, facts)`; overrides in `packs_state` keep working.
 3. Ingest: parsers write rows with provenance into the ledger tables, `facts` and `files`; figures
-   and sources follow from them. Narrative `content` rows are replaced as data takes over.
+   and sources follow from them. Narrative `content` rows are replaced as data takes over. See
+   "Ingest" below.
 4. Engine: `src/engine` records spend in `spend_ledger`, which already feeds `engine.budget.used`,
-   and reads the cap from `settings.cap`.
+   and reads the cap from `settings.cap`. The frozen runtime `src/engine/runtime.mjs` exports
+   `createRuntimeEngine({db, config})` returning `{mode, call(req), extract(req), isOn()}` and
+   `createSpendLedger(db)`, the ledger adapter over `spend_ledger` (`monthSpendUsd` accepts
+   `'YYYYMM'` or `'YYYY-MM'`; `record({ts, purpose, costUsd, model, tokens})` stores `yyyymm` from
+   `ts`). Before every call it throws `EngineOffError` when `settings.engine.on` is false and
+   re-reads the cap from `settings.cap.usd` (default 200), rebuilding the inner engine when the cap
+   changes; after any `ModelAccountingError` it refuses further calls. The mode comes from
+   `FATHOM_ENGINE`. `src/server.mjs` builds one runtime engine at startup and the router passes it
+   to handlers as `ctx.engine`. In live mode the server reads the credential once from
+   `FATHOM_CLAUDE_CREDENTIAL_FILE`; a failure logs "fathom: engine credential unavailable"
+   (never the value) and live calls then fail.
 5. MCP: `src/mcp` exposes `src/tools` with scopes checked against `api_keys`.
 6. Jobs: `src/jobs` schedules from `jobs` and records `job_runs`.
 7. Email: `src/email` renders the `email` content (later derived) through `FATHOM_EMAIL_TRANSPORT`.
+
+## Ingest
+
+The "dump everything" flow: the owner drops any mix of exports and documents, each file is stored
+encrypted, routed to a parser, a mapping or an extraction, deduplicated against what is stored,
+and anything ambiguous becomes a short question in the confirm queue.
+
+### Pipeline
+
+`src/ingest/pipeline.mjs` exports `ingestFiles(db, files, {engine, config, now, key})` returning
+`{results}`, `ingestFile(db, file, opts)` and `retryFile(db, fileId, opts)` (errors carry
+`status` 404 for an unknown file and 409 for a file that is not waiting).
+
+1. File id is `f-` plus the first 24 hex characters of the content SHA-256. Identical bytes are a
+   `duplicate` of the stored file (`duplicateOf`), and nothing is imported again.
+2. The encrypted bytes are stored first, then a `files` row, then the file is routed: a known
+   parser (`pickParser`), else an unknown table (`readTable` then `mapTabular`), else a PDF or
+   UTF-8 text (`extractDocument`), else `unsupported`. Markdown notes keep the notes parser's
+   document as a reference to the encrypted file (`fields: {ref: fileId, sha256, chars, lines}`,
+   never the text) and are then extracted as `notes` from the decrypted bytes (on retry, from the
+   vault).
+   Parsing is bounded by `src/ingest/format.mjs` `LIMITS` (200000 rows, 512 columns, 2000000
+   cells, 32768 characters per cell; CSV sniffing reads only the header within 64 KiB).
+   Workbooks use `XLSX_LIMITS` for cells (250000 worksheet cells, shared strings and rich-text
+   runs together) and are checked on their raw XML bytes before any part is read; the metadata
+   parts read into a tree (`xl/workbook.xml` and its rels) have their own budget of 20000
+   elements each, and an unknown xlsx table is budgeted as filled rows times header width
+   against `LIMITS.cells` before its rows are widened. A reader past a limit throws `LimitError` (`limit_exceeded`); the pipeline
+   records the file as `too_large` with note `limit_exceeded` and counts `{warnings: 1,
+   warningCodes: {limit_exceeded: 1}}`, keeps its encrypted bytes and stores nothing else.
+3. Rows get `dedupe_key`s (`src/ingest/dedupe.mjs`) and provenance (`file_id`, `parser`,
+   `locator` JSON); `transactions.occurrence` keeps the occurrence counter. A transaction with an
+   `externalId` (check or slip number, or a mapped column) is keyed
+   `[accountKey, 'ext', externalId, signed cents, occurrence]`, with no date (occurrence only for
+   a repeat within one file). A key collision from another file compares descriptions. From the
+   same parser, equal normalized descriptions are a duplicate. From another parser, equal
+   normalized descriptions or a shared distinctive word are a cross-format duplicate (archived as
+   `duplicate_cross_format`; `counts.crossFormat` when only a word is shared). Any other
+   description stores a second transaction under `<key>:d:<16 hex of the description hash>` and
+   asks `near_duplicate` whatever the distance between the dates, once per pair even when the
+   three-day proximity question also applies. When the collided key holds no active row, the
+   question pairs the new row with the active row reached by following the `survivor_key` links of
+   `duplicate_confirmed` tombstones (bounded; a cycle, self link or missing survivor asks
+   nothing). Accounts are upserted
+   by `identity` (`acct-` plus 16 hex of its hash), with `mirror` `manual` and masks of 4 digits
+   only.
+4. Revisions: P and L and tax workbook rows carry a `source_slot`; a later workbook replaces the
+   rows of every slot in its `files.coverage` (changed amounts archive as `revised`, missing rows
+   as `removed`). Balances and positions compare `files.period_to`: a newer file wins
+   (`revised`), an older one is archived as `older_snapshot`, equal values advance provenance.
+   A positions file, or a statement extraction with a `holdings` key (a `snapshot` row), is a
+   complete snapshot per (account, as-of): stored positions it omits are archived as `removed`
+   and deleted when it holds period authority. A warning other than `pending_activity` or
+   `invalid_cost_basis` makes the account it names incomplete, or the whole file when it names
+   none; an incomplete snapshot never removes. A recipient answer that rekeys withholding onto
+   a row of the same recipient archives the newer as `duplicate` when the amounts are equal; a
+   different amount, at rekey or at import, keeps both and asks `withholding_conflict` (never `revised`). A W-2 or 1099 row of a
+   known recipient that lands in the slot of an active row of the same form type from another file under another key (the
+   payer identity includes the income amount) also asks `withholding_conflict`, equal amounts or not. Withholding slots are
+   `wh:<employer or payer key>:<taxYear>:<jurisdiction>:<recipient>`; W-2 withholding summarizes paystub
+   withholding in the same slot (`summarized`) only once the recipient is known, at import or
+   when a recipient answer recomputes the slots. Every replaced row is kept in `superseded_rows`.
+5. Each file records `parser`, `source_kind`, `source_id`, `period_from`, `period_to`, `status`
+   and `counts` JSON `{rows: {kind: n}, duplicates, crossFormat, revised, superseded, incomplete,
+   warnings, warningCodes: {code: n}, queued, extractPath?}`; `extractPath` (`text`,
+   `pdf_text_layer`, `pdf_document` or `pdf_withheld`) is set when extraction ran. Ingest sources (`sources` ids starting `ing:`) keep the latest `as_of`
+   and `last_ingest_at`; account balance figures follow the latest stored balance, else the
+   holdings total at the latest as-of date, else 0 from a complete empty snapshot dated after
+   every stored position.
+6. When facts change, `refreshPackState` runs. The pipeline logs only an error code.
+
+### Encryption at rest
+
+`src/ingest/vault.mjs`: every uploaded file is stored as `$FATHOM_DATA/files/<id>.bin` (mode 0600,
+directory 0700, written atomically) in AES-256-GCM: `FTHM1`, a 12 byte IV, the ciphertext and the
+16 byte tag, with the file id bound as additional data. `loadDataKey({dataDir, keyFile, mode})`
+reads `FATHOM_DATA_KEY_FILE` (32 raw bytes, 64 hex characters or base64 of 32 bytes; symlinks
+refused). A real store without the key file refuses uploads with "uploads need
+FATHOM_DATA_KEY_FILE: set it to a file holding a 32 byte key" (HTTP 409). A demo store generates
+`$FATHOM_DATA/files/demo.key` on first use. `clearStoredFiles(dataDir)` removes `*.bin` only.
+
+### Mapping unknown tables
+
+`src/ingest/mapping.mjs`: a CSV or workbook sheet with no parser is identified by
+`header_signature` (SHA-256 of its normalized headers). A stored `column_mappings` row is applied
+by code with no model call; otherwise the engine proposes a mapping from the headers and at most 5
+redacted rows, which is validated (`MAPPING_SCHEMA`, every column present, required columns per
+target) before it is stored and applied. With the engine off or an invalid proposal the file is
+`needs_mapping` and can be retried.
+
+### Extraction with redaction
+
+`src/ingest/extract.mjs` classifies a document (`DOC_TYPES`) and extracts it with a per-type JSON
+Schema that never asks for SSNs, EINs, full account numbers, names of people or addresses. Text
+is redacted first (`src/ingest/redact.mjs`): SSN and EIN patterns are masked, money-shaped
+numbers become opaque references that code resolves back, and every other digit run longer than
+4 keeps only its last 4 digits. A PDF's text layer is read first by `src/ingest/pdftext.mjs`
+`pdfText(bytes) -> {status, text, pages}` (pdfjs-dist in a `worker_threads` Worker with bounded
+heaps, a 20 s timeout, a 2 MB text cap and its output discarded; never rejects). `text` (any
+text with a letter) is redacted and sent as text (`pdf_text_layer`); `image_only` (no text on
+any page) is sent as a document (`pdf_document`); `incomplete` (over 50 pages, timeout, cap or
+out of memory) and `failed` (a parse error) wait as `needs_extraction` with note
+`pdf_unreadable`, and nothing is sent (`pdf_withheld`). Extracted values become rows by
+deterministic code; facts below 0.8 confidence wait for a `fact_check`, and employer-dependent
+facts wait in `held_facts` until the employer relation is known. With the engine off the file is
+`needs_extraction`.
+
+### Confirm queue
+
+`src/ingest/confirm.mjs` keeps `confirm_items` (one per `kind` and `subject`) with
+`ask`, `answer(db, id, optionId, {now})`, `pendingItems` and `listItems`. Item shape: `{id, kind,
+subject, question, options: [{id, label}], context, status, answer, fileId, createdAt}`. Kinds:
+`account_owner`, `account_kind`, `entity_alias`, `tax_year`, `fact_check`, `near_duplicate`,
+`employer_relation`, `employer_recipient` (subject the employer key; options `owner` "You",
+`spouse` "Your spouse", `both` "Both of you") and `document_recipient` (subject a paystub, W-2
+or 1099 payer identity; options `owner`, `spouse`; asked per document after `both`, and directly
+for each 1099 with withholding) and `withholding_conflict` (subject `<dedupe key>|<cents>|<cents>`;
+options `first`, `second`, `both`; the later row holds `<payer>:doc:<file id>` until answered, the
+rejected row is archived as `withholding_conflict` and the survivor takes the identity; the context names each row by id,
+dedupe key, file id and cents, a question whose rows are summarized, archived or rekeyed closes as superseded, and an
+answer to one whose rows no longer match is refused as `stale`). A recipient answer
+sets `tax_payments.recipient` on the matching withholding rows, recomputes their `wh:` slots and
+summarizes per slot; while a row's recipient is unknown nothing summarizes it. An answered
+subject is remembered and applied to later imports without a new question. `ConfirmError` codes map to HTTP: `not_found` 404, `bad_option` 400, `answered` 409,
+`stale` 409.
+
+### Freshness
+
+`src/ingest/freshness.mjs` gives each ingest source a cadence by source kind: monthly (stale after
+45 days) for `bank_csv`, `card_csv`, `aggregator_csv`, `balances`, `brokerage_positions`,
+`statement` and `pnl_workbook`; per pay period (35 days) for `paystub`; quarterly (100 days) for
+`tax_payments`; annual (400 days) for `tax_doc`; none for `notes` and `other`. Stale sources feed
+the domain notes (see the scenario builder). `src/ingest/howto.mjs` holds generic export steps
+per format with no institution names.
+
+### Facts helper and pack state
+
+`src/store/facts.mjs` exports `upsertFact(db, {key, value, src, asOf, confirmed, provenance})`
+(never overwrites a confirmed fact with an unconfirmed one), `getFacts(db)` (flat dotted keys)
+and `deleteFact(db, key, {fileId})` (only that file's unconfirmed fact). `src/packs/state.mjs`
+exports `refreshPackState(db, {packDirs, dataDir})`: it loads the repository packs plus
+`$FATHOM_DATA/packs/your-plans/`, evaluates them against the facts and rewrites the base fields
+of `packs_state.def` while keeping `recIds`, the what-if answers and the override columns. The
+server calls it at startup for real stores only (a failure logs a code and startup continues);
+the pipeline calls it after facts change.
+
+### Scripts
+
+`node scripts/dump.mjs <baseUrl> <files or dirs...>` uploads files to `POST /api/files` in batches
+under 200 MB, skipping dotfiles and reporting files over 50 MB, and prints one line per file
+(status, rows by kind, `dup=`, `warn=` and the base name, no values); it exits 1 when a request
+fails. `node scripts/ingest-check.mjs <dir>` imports a directory twice into a throwaway real store
+in the OS temp dir (engine off unless `FATHOM_ENGINE=fake`; `.key`, `.json` and dotfiles
+skipped), prints totals only, and always deletes its temp dir.
 
 ## Demo data
 
@@ -423,8 +633,8 @@ on a missing or demo store, prints counts and warning codes only) call it.
 6. Prose (`planner/prose.mjs`), outside the transaction: stored prose is kept while the grounding
    hash is unchanged; otherwise the engine is asked and its reply accepted only under the prose
    rules below; otherwise the template.
-7. One write transaction: facts, sources, figures, recs (`planner/recs.mjs`), `refreshPackStateIn`,
-   the brief (`planner/brief.mjs`), then pruning of planner figures nothing references.
+7. One write transaction: facts, sources, figures, recs (`planner/recs.mjs`), `refreshPackState`
+   and pack `recIds`, the brief (`planner/brief.mjs`), then pruning of planner figures nothing references.
 8. Finish `job_runs` with `ok`, the engine cost and a note of counts only. On any throw the row is
    `error` with note `{error: <class name>, code: <PlannerError code or null>}` and the error is
    rethrown. Runs are serialized per db handle, and every write compares first, so a second run
@@ -631,19 +841,12 @@ when missing (real stores only). Each run adds one `job_runs` row with ISO `star
 
 ### Planner seams
 
-1. `src/engine/runtime.mjs` `createRuntimeEngine({db, config, responses})` returns
-   `{mode, call, extract}`: the gateway engine over `spend_ledger` (the gateway's `YYYYMM` month
-   keys map to stored `YYYY-MM`). Before each call it throws `EngineOffError` when
-   `settings.engine.on` is false and re-reads `settings.cap.usd` (200 when unusable). Live mode
-   reads `config.claudeCredentialFile` once; a failed read makes calls throw
-   `ModelCallError('Claude credential unavailable')` without naming the file. `src/server.mjs`
-   builds one and passes it to the router, which hands it to handlers as `ctx.engine`.
-2. `src/packs/state.mjs`: `defaultPackDirs(dataDir)` (repo `packs/` plus
-   `<dataDir>/packs/your-plans` when present), `refreshPackStateIn(db, {packDirs})` (inside the
-   caller's transaction) and `refreshPackState` (its own). Rows carry the CONTRACT pack def with
-   base status from the stored facts and `recIds` from `recs.pack_id`; owner columns and previous
-   what-if answers are kept, unknown packs removed, `updated_at` moves only with the def. The
-   server refreshes pack state at startup for real stores only, logging a pack error by message.
-3. `src/store/facts.mjs`: `upsertFact(db, {key, value, src, asOf, confirmed, provenance})` never
-   replaces a confirmed row with an unconfirmed write and skips identical writes (returns
-   `{written, reason?}`); `getFacts(db)` returns every fact parsed by key.
+The planner uses the shared seams described under "Seams later items plug into" (the runtime
+engine, handed to it as `ctx.engine`) and "Facts helper and pack state".
+
+1. Facts: `upsertFact` for every derived fact; a run counts a fact as written only when the call
+   reports `{written: true, changed: true}`. Planner-owned facts that no longer derive are deleted
+   by key where `src = 'planner'` and unconfirmed (`deleteFact` deletes by file, not by source).
+2. Packs: `refreshPackState(db, {packDirs})` inside the planner's write transaction, then the
+   planner sets each `packs_state.def.recIds` to the ids of the recs whose `pack_id` is the pack,
+   sorted, since `refreshPackState` keeps `recIds` as stored.

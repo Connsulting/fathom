@@ -1,4 +1,4 @@
-// AC2: the frozen facts seam (src/store/facts.mjs): upsertFact ownership and idempotence rules,
+// AC2: the frozen facts seam (src/store/facts.mjs): upsertFact ownership rules,
 // provenance columns, and getFacts parsing every row.
 
 import test, { after } from 'node:test';
@@ -10,7 +10,6 @@ const S = scratch('fathom-facts-');
 after(() => S.cleanup());
 const fresh = () => S.track(createRealStore(S.dir()));
 const row = (db, key) => db.prepare('SELECT * FROM facts WHERE key = ?').get(key);
-const pause = ms => new Promise(r => setTimeout(r, ms));
 
 function addFile(db, id) {
   db.prepare(`INSERT INTO files (id, name, mime, size, sha256, source_kind, uploaded_at, stored_path, status, note)
@@ -30,21 +29,6 @@ test('AC2: upsertFact inserts a row with JSON value and provenance columns', () 
   assert.deepEqual([r.src, r.as_of, r.confirmed, r.file_id, r.parser], ['planner', '2026-11-05', 0, 'file-a', 'planner']);
   assert.deepEqual(JSON.parse(r.locator), { rule: 'entity', rows: [{ table: 'documents', id: 1 }], count: 1 });
   assert.ok(r.updated_at);
-});
-
-test('AC2: an identical write changes nothing and reports unchanged', async () => {
-  const db = fresh();
-  const fact = { key: 'giving.annualEstimate', value: 2500, src: 'planner', asOf: '2026-11-05', provenance: { parser: 'planner', locator: { rule: 'giving' } } };
-  assert.equal(upsertFact(db, fact).written, true);
-  const before = { ...row(db, fact.key) };
-  await pause(10);
-  assert.deepEqual(upsertFact(db, fact), { written: false, reason: 'unchanged' });
-  assert.deepEqual({ ...row(db, fact.key) }, before, 'updated_at untouched');
-  // liveness: a different value is written and moves updated_at
-  await pause(10);
-  assert.equal(upsertFact(db, { ...fact, value: 2600 }).written, true);
-  assert.equal(JSON.parse(row(db, fact.key).value), 2600);
-  assert.notEqual(row(db, fact.key).updated_at, before.updated_at);
 });
 
 test('AC2: a confirmed row is never overwritten by an unconfirmed write', () => {

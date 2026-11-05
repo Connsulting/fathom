@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { createStoreFile, setSetting, getSetting, tx, DB_FILE } from '../../src/store/db.mjs';
 import { pickParser } from '../../src/ingest/registry.mjs';
 import { dedupeKey } from '../../src/ingest/dedupe.mjs';
-import { xlsx, XLSX_MIME } from './xlsx.mjs';
+import { writeXlsx, XLSX_MIME } from './xlsx.mjs';
 
 export const CLOCK = '2026-11-05';
 export const TAX_YEAR = 2026;
@@ -292,7 +292,7 @@ export function pnlWorkbook(entities, extra = [], { year = TAX_YEAR, months = MO
       sheets.push({ name: `${e.name} Expenses`, rows: expenses });
     }
   }
-  return { name: 'Business P&L 2026.xlsx', mime: XLSX_MIME, bytes: xlsx(sheets) };
+  return { name: 'Business P&L 2026.xlsx', mime: XLSX_MIME, bytes: writeXlsx(sheets) };
 }
 
 export function taxPaymentsWorkbook({ year = TAX_YEAR, fed = SYNTH.fedPaid, state = SYNTH.statePaid, months = SYNTH.paidMonths } = {}) {
@@ -301,7 +301,7 @@ export function taxPaymentsWorkbook({ year = TAX_YEAR, fed = SYNTH.fedPaid, stat
     const paid = months.includes(i + 1);
     rows.push([label, paid ? fed : null, paid ? state : null]);
   });
-  return { name: 'Estimated taxes.xlsx', mime: XLSX_MIME, bytes: xlsx([{ name: String(year), rows }]) };
+  return { name: 'Estimated taxes.xlsx', mime: XLSX_MIME, bytes: writeXlsx([{ name: String(year), rows }]) };
 }
 
 const CHASE_HEADER = ['Details', 'Posting Date', 'Description', 'Amount', 'Type', 'Balance', 'Check or Slip #'];

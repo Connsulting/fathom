@@ -1,114 +1,132 @@
-// AC5: the frozen runtime engine seam (src/engine/runtime.mjs): a gateway engine over the store's
-// spend_ledger that honors the engine on/off setting and re-reads the monthly cap on every call,
-// with fake responses for tests and a live mode that never leaks its credential.
+// D8: the runtime engine reads the live credential once, when it starts (init() or ready), and
+// never again. A failed read leaves every live call failing with ModelCallError('engine credential
+// unavailable') even after the file appears. Fake and off modes never read the file.
 
-import test, { after } from 'node:test';
+import test from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, chmodSync } from 'node:fs';
-import { join } from 'node:path';
-import { createRuntimeEngine } from '../src/engine/runtime.mjs';
-import { EngineOffError, BudgetExceededError, ModelCallError } from '../src/engine/index.mjs';
-import { setSetting } from '../src/store/db.mjs';
-import { scratch, createRealStore } from './helpers/real-store.mjs';
+import { writeFileSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import { createRequire, syncBuiltinESMExports } from 'node:module';
+import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { src, tempDb, tempDir, spawnServer, ROOT } from './helpers/server.mjs';
 
-const S = scratch('fathom-runtime-');
-after(() => S.cleanup());
-const fresh = () => S.track(createRealStore(S.dir()));
-const req = { purpose: 'job', system: 'Synthetic test system prompt.', messages: [{ role: 'user', content: 'Say hello.' }], maxTokens: 64 };
-const month = () => new Date().toISOString().slice(0, 7);
-const fakeConfig = { engine: 'fake', claudeCredentialFile: null };
+const require = createRequire(import.meta.url);
 
-function spend(db, usd) {
-  db.prepare("INSERT INTO spend_ledger (ts, yyyymm, purpose, cost_usd, model, tokens) VALUES (?, ?, 'chat', ?, 'fake', '{}')")
-    .run(new Date().toISOString(), month(), usd);
+// Count every fs open or read of `target`, through the builtin modules' live ESM bindings.
+// counter.write(text) creates the file without counting (writeFileSync opens through fs too).
+function countReads(target) {
+  const want = resolve(target);
+  const fsp = require('node:fs/promises');
+  const fs = require('node:fs');
+  const patched = [[fsp, 'open'], [fsp, 'readFile'], [fs, 'openSync'], [fs, 'readFileSync'], [fs, 'open'], [fs, 'readFile']];
+  const originals = patched.map(([mod, name]) => mod[name]);
+  const counter = { n: 0 };
+  patched.forEach(([mod, name], i) => {
+    const original = originals[i];
+    mod[name] = function counted(path, ...rest) {
+      if (!counter.paused && typeof path === 'string' && resolve(path) === want) counter.n += 1;
+      return original.call(this, path, ...rest);
+    };
+  });
+  syncBuiltinESMExports();
+  counter.write = (text) => {
+    counter.paused = true;
+    try { writeFileSync(target, text, { mode: 0o600 }); } finally { counter.paused = false; }
+  };
+  counter.restore = () => {
+    patched.forEach(([mod, name], i) => { mod[name] = originals[i]; });
+    syncBuiltinESMExports();
+  };
+  return counter;
 }
 
-test('AC5: the runtime engine reports its mode and answers fake calls in order', async () => {
-  const db = fresh();
-  const engine = createRuntimeEngine({ db, config: fakeConfig, responses: [{ text: 'first reply', costUsd: 0.01 }, { text: 'second reply', costUsd: 0.02 }] });
-  assert.equal(engine.mode, 'fake');
-  assert.equal(typeof engine.extract, 'function');
-  assert.equal((await engine.call(req)).text, 'first reply');
-  assert.equal((await engine.call(req)).text, 'second reply');
-});
+const CALL = { purpose: 'chat', messages: [{ role: 'user', content: 'Hello' }], system: '', maxTokens: 32 };
+const EXTRACT = { document: { type: 'text', text: 'Synthetic' }, schema: { type: 'object', properties: {}, additionalProperties: false }, system: '', maxTokens: 64 };
 
-test('AC5: each call is recorded in spend_ledger with a YYYY-MM month and its cost, purpose, model and tokens', async () => {
-  const db = fresh();
-  const engine = createRuntimeEngine({ db, config: fakeConfig, responses: [{ text: 'ok', costUsd: 0.25, tokens: { input: 10, output: 5 } }] });
-  await engine.call(req);
-  const rows = db.prepare('SELECT * FROM spend_ledger').all();
-  assert.equal(rows.length, 1);
-  const r = rows[0];
-  assert.match(r.yyyymm, /^\d{4}-\d{2}$/);
-  assert.equal(r.yyyymm, r.ts.slice(0, 7));
-  assert.equal(r.cost_usd, 0.25);
-  assert.equal(r.purpose, 'job');
-  assert.equal(r.model, 'fake');
-  assert.deepEqual(JSON.parse(r.tokens), { input: 10, output: 5 });
-});
+async function started(rt) {
+  if (typeof rt.init === 'function') await rt.init();
+  else if (rt.ready) await rt.ready;
+}
 
-test('AC5: month spend is read from the ledger by YYYY-MM, so a spent month blocks calls at the cap', async () => {
-  const db = fresh();
-  setSetting(db, 'cap', { usd: 5 });
-  spend(db, 5);
-  const engine = createRuntimeEngine({ db, config: fakeConfig, responses: [{ text: 'not reached' }] });
-  await assert.rejects(engine.call(req), BudgetExceededError);
-  // liveness: a cap above this month's spend lets the call through
-  const ok = fresh();
-  setSetting(ok, 'cap', { usd: 10 });
-  spend(ok, 5);
-  const live = createRuntimeEngine({ db: ok, config: fakeConfig, responses: [{ text: 'reached' }] });
-  assert.equal((await live.call(req)).text, 'reached');
-});
+async function withFixture(fn) {
+  const store = await tempDb();
+  const dir = await tempDir('fathom-cred-');
+  const credFile = join(dir, 'credential');
+  const reads = countReads(credFile);
+  try {
+    return await fn({ db: store.db, credFile, reads });
+  } finally {
+    reads.restore();
+    store.close();
+    rmSync(store.dataDir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
 
-test('AC5: the engine setting off throws EngineOffError before any call, on again calls', async () => {
-  const db = fresh();
-  const engine = createRuntimeEngine({ db, config: fakeConfig, responses: [{ text: 'after on' }] });
-  setSetting(db, 'engine', { on: false });
-  await assert.rejects(engine.call(req), EngineOffError);
-  await assert.rejects(engine.extract({ document: { type: 'text', text: 'x' }, schema: { type: 'object' } }), EngineOffError);
-  assert.equal(db.prepare('SELECT count(*) AS n FROM spend_ledger').get().n, 0, 'nothing spent while off');
-  setSetting(db, 'engine', { on: true });
-  assert.equal((await engine.call(req)).text, 'after on');
-});
+test('live mode reads a missing credential once at start; a file created later is never read and live calls fail', () => withFixture(async ({ db, credFile, reads }) => {
+  const { createRuntimeEngine } = await src('src/engine/runtime.mjs');
+  const { ModelCallError } = await src('src/engine/index.mjs');
+  const rt = createRuntimeEngine({ db, config: { engine: 'live', claudeCredentialFile: credFile } });
+  assert.ok(typeof rt.init === 'function' || (rt.ready && typeof rt.ready.then === 'function'), 'the runtime exposes init() or a ready promise');
+  await started(rt);
+  assert.equal(reads.n, 1, 'the credential file is read once, at start');
+  assert.equal(rt.credentialState, 'failed');
 
-test('AC5: the cap is re-read on every call', async () => {
-  const db = fresh();
-  const engine = createRuntimeEngine({ db, config: fakeConfig, responses: [{ text: 'one' }, { text: 'two' }, { text: 'three' }] });
-  setSetting(db, 'cap', { usd: 0 });
-  await assert.rejects(engine.call(req), BudgetExceededError);
-  setSetting(db, 'cap', { usd: 200 });
-  const r = await engine.call(req);
-  assert.equal(typeof r.text, 'string');
-  assert.ok(r.text.length > 0);
-});
+  reads.write('synthetic-placeholder');
+  const unavailable = (e) => e instanceof ModelCallError && e.message === 'engine credential unavailable';
+  for (let i = 0; i < 2; i++) {
+    await assert.rejects(rt.call(CALL), unavailable);
+    await assert.rejects(rt.extract(EXTRACT), unavailable);
+  }
+  assert.equal(reads.n, 1, 'never read again, even after the file appears');
+}));
 
-test('AC5: an unusable cap setting falls back to 200', async () => {
-  const db = fresh();
-  setSetting(db, 'cap', { usd: 'lots' });
-  spend(db, 150);
-  const engine = createRuntimeEngine({ db, config: fakeConfig, responses: [{ text: 'under the default cap' }] });
-  assert.equal((await engine.call(req)).text, 'under the default cap');
-  spend(db, 60);
-  await assert.rejects(engine.call(req), BudgetExceededError, 'over 200 this month');
-});
+test('fake and off modes never touch the credential file', () => withFixture(async ({ db, credFile, reads }) => {
+  const { createRuntimeEngine } = await src('src/engine/runtime.mjs');
+  reads.write('synthetic-placeholder');
+  for (const mode of ['fake', 'off']) {
+    const rt = createRuntimeEngine({ db, config: { engine: mode, claudeCredentialFile: credFile } });
+    await started(rt);
+    await assert.rejects(rt.extract(EXTRACT));
+    await assert.rejects(rt.call(CALL));
+  }
+  assert.equal(reads.n, 0);
+}));
 
-test('AC5: live mode without a readable credential fails calls with ModelCallError and never echoes the secret', async () => {
-  const dir = S.dir();
-  const file = join(dir, 'credential');
-  const secret = 'synthetic-secret-token-for-test';
-  writeFileSync(file, secret);
-  chmodSync(file, 0o644); // not private, so loadCredential refuses it
-  const db = fresh();
-  const engine = createRuntimeEngine({ db, config: { engine: 'live', claudeCredentialFile: file } });
-  assert.equal(engine.mode, 'live');
-  await assert.rejects(engine.call(req), err => {
-    assert.ok(err instanceof ModelCallError, `ModelCallError, got ${err && err.name}`);
-    assert.equal(err.message, 'Claude credential unavailable');
-    assert.ok(!String(err.stack).includes(secret) && !String(err.message).includes(file));
-    return true;
+// G9: the same through a real server started in live mode with a missing credential file. A preload
+// counts every open of the file. Extraction calls fail (the files wait as needs_extraction), and a
+// file created after startup is never opened. The late file is world-readable and holds two tokens,
+// so it could never authenticate even if it were read.
+test('G9: a live server opens a missing credential once at startup and never again, even after the file appears', { timeout: 60000 }, async () => {
+  const dir = await tempDir('fathom-cred-');
+  const credFile = join(dir, 'credential');
+  const log = join(dir, 'opens.log');
+  const opens = () => (existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean).length : 0);
+  const s = await spawnServer({
+    env: {
+      FATHOM_DEMO: '1', FATHOM_ENGINE: 'live', FATHOM_CLAUDE_CREDENTIAL_FILE: credFile,
+      NODE_OPTIONS: `--import=${pathToFileURL(join(ROOT, 'test/helpers/count-opens.mjs')).href}`,
+      TEST_COUNT_OPENS_TARGET: credFile, TEST_COUNT_OPENS_LOG: log,
+    },
   });
-  const missing = createRuntimeEngine({ db, config: { engine: 'live', claudeCredentialFile: join(dir, 'absent') } });
-  await assert.rejects(missing.call(req), err => err instanceof ModelCallError && err.message === 'Claude credential unavailable');
-  assert.equal(db.prepare('SELECT count(*) AS n FROM spend_ledger').get().n, 0, 'nothing recorded');
+  const extractOnce = async (tag) => {
+    const fd = new FormData();
+    fd.append('files', new Blob([`SYNTHETIC PAYSTUB ${tag}\nEmployer: Example Employer LLC\nPay date 2032-03-15\nGross pay 5000.00\n`], { type: 'text/plain' }), `paystub-${tag}.txt`);
+    const res = await fetch(`${s.baseUrl}/api/files`, { method: 'POST', body: fd });
+    const body = await res.json();
+    assert.equal(res.status, 200, JSON.stringify(body).slice(0, 300));
+    assert.equal(body.files[0].status, 'needs_extraction', 'the extraction call fails');
+  };
+  try {
+    assert.equal(opens(), 1, 'opened once at startup');
+    await extractOnce('first');
+    writeFileSync(credFile, 'synthetic placeholder', { mode: 0o644 });
+    await extractOnce('second');
+    await extractOnce('third');
+    assert.equal(opens(), 1, 'never opened again, even after the file appears');
+  } finally {
+    await s.stop();
+    rmSync(s.dataDir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

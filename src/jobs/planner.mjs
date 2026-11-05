@@ -8,7 +8,7 @@
 import { getSetting, tx, parseJson } from '../store/db.mjs';
 import { upsertFact } from '../store/facts.mjs';
 import { loadPacks, activePacks } from '../packs/index.mjs';
-import { refreshPackStateIn, defaultPackDirs } from '../packs/state.mjs';
+import { refreshPackState, defaultPackDirs } from '../packs/state.mjs';
 import { resolveClock } from '../scenario/build.mjs';
 import { TOKEN } from '../shared/tokens.mjs';
 import { loadPlanningData, isoDateOf, resolveEntities } from './planner/data.mjs';
@@ -130,7 +130,7 @@ async function plan(db, engine, { clock, runId, packDirs }) {
     let factsWritten = 0;
     for (const w of merged.writes) {
       const res = upsertFact(db, { key: w.key, value: w.value, src: PLANNER_SRC, asOf: clock, confirmed: false, provenance: factProvenance(w) });
-      if (res.written) factsWritten += 1;
+      if (res.written && res.changed) factsWritten += 1;
     }
     const delFact = db.prepare('DELETE FROM facts WHERE key = ? AND src = ? AND confirmed = 0');
     for (const key of merged.deletes) {
@@ -142,7 +142,8 @@ async function plan(db, engine, { clock, runId, packDirs }) {
     const changes = applyRecs(db, results, {
       clock, now, runId, prose, packOverride: id => overrides[id] ?? null, warn: code => warnings.add(code),
     });
-    refreshPackStateIn(db, { packDirs });
+    refreshPackState(db, { packDirs });
+    linkPackRecs(db, now);
     const hits = results.filter(r => r.state === 'hit' && prose[r.trigger.id]).map(r => r.hit);
     writeBrief(db, { ...ctx, now }, { hits, changes });
     pruneFigures(db, computed.figures, ctx);
@@ -161,6 +162,19 @@ async function plan(db, engine, { clock, runId, packDirs }) {
     warnings: warningList.length,
   };
   return { runId, status: 'ok', counts, warnings: warningList, costUsd };
+}
+
+// Pack defs list their recs (R12): recIds are the recs whose pack_id is the pack, sorted.
+// refreshPackState keeps recIds as stored, so the planner sets them after it writes recs.
+function linkPackRecs(db, now) {
+  const recIdsOf = db.prepare('SELECT id FROM recs WHERE pack_id = ? ORDER BY id');
+  const update = db.prepare('UPDATE packs_state SET def = ?, updated_at = ? WHERE id = ?');
+  for (const row of db.prepare('SELECT id, def FROM packs_state').all()) {
+    const def = parseJson(row.def, null);
+    if (!def || typeof def !== 'object') continue;
+    const text = JSON.stringify({ ...def, recIds: recIdsOf.all(row.id).map(r => r.id) });
+    if (text !== row.def) update.run(text, now, row.id);
+  }
 }
 
 function writeSources(db, sources) {

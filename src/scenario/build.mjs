@@ -7,6 +7,7 @@
 
 import { getSetting, cents, parseJson as parse } from '../store/db.mjs';
 import { resolveTokens } from '../shared/tokens.mjs';
+import { ingestState, applyFreshness } from '../ingest/freshness.mjs';
 
 const DAY = 86400000;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -328,6 +329,8 @@ export function buildScenario(db, { clock } = {}) {
   const onboarding = getSetting(db, 'onboarding', { done: false, step: 0 }) || { done: false, step: 0 };
   const picks = { ...defaultPicks(wargame), ...(getSetting(db, 'wargame.picks', null) || {}) };
   const engineOn = getSetting(db, 'engine', { on: true });
+  const ingest = ingestState(db, { clock: clk });
+  const ingestAccounts = ingest.accounts || {};
 
   return {
     meta: {
@@ -344,7 +347,7 @@ export function buildScenario(db, { clock } = {}) {
     fig,
     series,
     verdict: section(content, 'verdict'),
-    domains: section(content, 'domains'),
+    domains: applyFreshness(section(content, 'domains'), ingest),
     events: db.prepare('SELECT date, kind, title, body FROM events ORDER BY sort, id').all().map(e => ({ ...e })),
     deadlines: db.prepare('SELECT date, label, title, rec_id, hard FROM deadlines ORDER BY date, id').all().map(d => {
       const out = { date: d.date, label: d.label, title: d.title };
@@ -358,9 +361,15 @@ export function buildScenario(db, { clock } = {}) {
     wargame,
     decisions,
     ask: section(content, 'ask'),
-    accounts: db.prepare('SELECT * FROM accounts ORDER BY sort, id').all().map(a => ({
-      id: a.id, inst: a.inst, name: a.name, owner: a.owner, kind: a.kind, fig: a.fig_key, mirror: a.mirror, note: a.note || '', mask: a.mask,
-    })),
+    accounts: db.prepare('SELECT * FROM accounts ORDER BY sort, id').all().map(a => {
+      const f = Object.hasOwn(ingestAccounts, a.id) ? ingestAccounts[a.id] : {};
+      return {
+        id: a.id, inst: a.inst, name: a.name, owner: a.owner, kind: a.kind, fig: a.fig_key, mirror: a.mirror, note: a.note || '', mask: a.mask,
+        asOf: f.asOf || '', fresh: f.fresh || 'unknown', sourceId: f.sourceId || null,
+        // Text that came from an uploaded file: render as plain text, never as tokens or markup.
+        imported: a.parser !== 'demo-seed',
+      };
+    }),
     advisor: section(content, 'advisor'),
     yearend: section(content, 'yearend'),
     connect: section(content, 'connect'),
@@ -377,6 +386,7 @@ export function buildScenario(db, { clock } = {}) {
       conversations: loadConversations(db),
       packs: Object.fromEntries(packs.map(p => [p.def.id, { active: p.live.active, exploring: p.live.exploring, whatIfDone: p.live.whatIfDone }])),
       clock: clk,
+      ingest,
     },
   };
 }

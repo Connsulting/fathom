@@ -1,4 +1,4 @@
--- 002 planner: bookkeeping for planner-owned recommendations, and a src column on the brief
+-- 005 planner: bookkeeping for planner-owned recommendations, and a src column on the brief
 -- tables the planner rewrites, so it replaces only its own rows.
 -- retired_from: the rec status when the planner retired it. held_from: the status a blocked rec
 -- held before the planner parked it as waiting on data.
