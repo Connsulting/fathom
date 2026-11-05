@@ -18,6 +18,9 @@ unknown CSVs and broken workbooks return null for model extraction.
    become a holding. Footers do not become positions.
 4. P&L uses actual payment and expense detail sheets. It groups signed dollars by
    sheet-derived entity, month and category, retaining every amount-cell locator.
+   Income and expense sheet names use the same entity rule: remove a trailing
+   Income or Expenses label (including Actual) and surrounding punctuation.
+   Different aliases remain distinct and require an explicit entity mapping.
    Summary and forecast matrices are excluded to prevent double counting.
    Expense refunds offset expenses. Income, transfer and card/loan payment rows
    in expense ledgers are excluded. The workbook does not establish accounting
@@ -43,20 +46,33 @@ unknown CSVs and broken workbooks return null for model extraction.
 7. Notes emit one document with `docType: 'notes'` and `fields: {text}`. They do
    not extract facts or financial figures.
 
-`dedupeKey(row)` hashes semantic identity and ignores provenance. Transaction
-identity is normalized institution, mask (or name when absent), posted day and
-signed cents. Description tolerance is deliberately unbounded: provider-added
-prefixes, suffixes, punctuation and renamed merchants all collide. Two genuine
-same-account, same-day, same-amount payments also collide. Callers must retain
-source evidence and review multiplicity before discarding rows. Account mapping
-is explicit; aliases and differently named institutions are not inferred.
+`dedupeKey(row)` hashes semantic identity. Both transaction parsers call
+`identifyAccountRows(result, file)` to assign `occurrence`, a one-based ordinal
+in file order within each account, posted-day and signed-cents group. Distinct
+repeated postings retain distinct keys. The Nth occurrence in one export matches
+the Nth occurrence in an overlapping export. Invalid rows and running balances
+do not consume transaction ordinals. Each parse starts a new count.
+Future transaction producers must assign these ordinals before deduplication.
+
+Account identity is normalized institution plus mask, or name when unmasked.
+When neither exists, `locator.source` scopes account rows to an opaque SHA256
+of filename and bytes. It stores no raw filename or account number. Unidentified
+accounts cannot deduplicate across different files until explicitly mapped.
+An unnamed account without source identity is rejected by `dedupeKey`.
+Description tolerance remains unbounded: provider-added prefixes, suffixes,
+punctuation and renamed merchants do not affect a posting's key. Overlap matching
+assumes both files include the same occurrences in each group; partial-day dumps
+or reordered equal-amount postings cannot establish which occurrence is shared.
+Account mapping is explicit; aliases and differently named institutions are not
+inferred.
 Balance identities include cents so different intraday balances survive. Position
 identity is account, day and symbol. P&L identity is entity, month and category;
 tax identity is jurisdiction, sheet year, month and payer. Amount corrections
 retain the same slot key. A same-key, different-amount row is a revision, not an
 additional amount. The pipeline must resolve import order and preserve both
 versions as evidence; this module only computes keys. Document fields use canonical key ordering; facts use
-key and value. No key includes a locator, parser or file identity.
+key and value. Keys ignore parser and pipeline file IDs, and ignore locators
+except the source scope required for an unnamed, unmasked account.
 
 The dependency-free OOXML reader supports ordinary stored or deflated XLSX ZIP
 archives, shared and inline strings, cached formula values and both Excel date

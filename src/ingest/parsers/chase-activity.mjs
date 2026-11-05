@@ -1,4 +1,5 @@
 import { csvScore, csvParse, isoDate, money, warning } from '../format.mjs';
+import { identifyAccountRows } from '../dedupe.mjs';
 
 export const id = 'chase-activity';
 export const label = 'Chase account activity';
@@ -18,5 +19,5 @@ export const parse = (file) => {
     }
   });
   if (!account.mask) warning(parsed.warnings, 'missing_account_mask');
-  return parsed;
+  return identifyAccountRows(parsed, file);
 };

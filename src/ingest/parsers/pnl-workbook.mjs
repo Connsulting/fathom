@@ -18,7 +18,10 @@ export function parse(file) {
       const income = columns.has('payment date');
       const dateColumn = columns.get(income ? 'payment date' : 'date');
       const amountColumn = columns.get(income ? 'payment amount' : 'amount') ?? columns.get([...columns.keys()].find((key) => key.endsWith('actual income')));
-      const entity = sheet.name.replace(/\s+(?:actual\s+)?income$/i, '').trim();
+      const entity = sheet.name
+        .replace(/^[\s\p{P}]+|[\s\p{P}]+$/gu, '')
+        .replace(/[\s\p{P}]+(?:actual[\s\p{P}]+)?(?:income|expenses?)$/iu, '')
+        .replace(/^[\s\p{P}]+|[\s\p{P}]+$/gu, '');
       for (const row of sheet.rows.slice(found.index + 1)) {
         const dateCell = row.cells.get(dateColumn), amountCell = row.cells.get(amountColumn);
         if (!dateCell?.value && !amountCell?.value && !amountCell?.missingCache) continue;

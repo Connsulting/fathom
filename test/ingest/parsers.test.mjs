@@ -279,6 +279,8 @@ test('occurrence ordinals preserve repeated postings and collide across overlapp
     assert.deepEqual(repeated.map(dedupeKey), keys);
     assert.equal(new Set([...original, ...repeated].map(dedupeKey)).size, 2);
     assert.deepEqual(pickParser(first).parse(first).rows.filter((row) => row.kind === 'transaction').map(dedupeKey), keys);
+    const differentDescriptions = textFile(name, [heading, posting, posting.replace('EXAMPLE SHOP', 'OTHER MEMO')].join('\n'));
+    assert.deepEqual(pickParser(differentDescriptions).parse(differentDescriptions).rows.filter((row) => row.kind === 'transaction').map(dedupeKey), keys);
     keysBySource.push(keys);
   }
   assert.deepEqual(keysBySource[0], keysBySource[1]);
@@ -302,6 +304,8 @@ test('unnamed unmasked accounts use opaque source identity for transactions and 
   assert.deepEqual(pickParser(known).parse(known).rows.map(dedupeKey), pickParser(renamed).parse(renamed).rows.map(dedupeKey));
   const anonymous = { ...original[0], locator: { row: 2 } };
   assert.throws(() => dedupeKey(anonymous), /source identity/);
+  const sameNameDifferentContent = { name: first.name, bytes: new TextEncoder().encode(new TextDecoder().decode(bytes).replace('Deposit', 'Different memo')) };
+  assert.notEqual(dedupeKey(original[0]), dedupeKey(pickParser(sameNameDifferentContent).parse(sameNameDifferentContent).rows[0]));
 });
 
 test('named unmasked accounts keep identity across files', () => {
