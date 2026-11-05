@@ -17,7 +17,7 @@ over every module's test directory (`npm test`), end-to-end tests with Playwrigh
 
 | Path | Owner and purpose |
 |---|---|
-| `package.json` | Scripts `start`, `test`, `seed:demo`, `e2e`, `e2e:smoke` (names are frozen), plus `plan` (`npm run plan`, one planning run over the real store). |
+| `package.json` | Scripts `start`, `test`, `seed:demo`, `e2e`, `e2e:smoke` (names are frozen), plus `plan` (`npm run plan`, one planning run over the real store) and `confirm:guess` (`npm run confirm:guess`, one run of the `confirm-guess` job: engine guesses for pending confirm questions). |
 | `src/server.mjs` | HTTP entry: store mode rules, then serves the UI, `/shared/` and the API. |
 | `src/config.mjs` | `loadConfig(env)`: every environment key, paths only. |
 | `src/store/` | `db.mjs` plus `migrations/NNN-name.sql`. Owned by the foundation item. |
@@ -183,8 +183,8 @@ string or epoch ms, and the store clock decides "today" when set.
 ### 9. Engine gateway
 
 `src/engine` exports `createEngine({mode: 'live'|'fake'|'off', ledger, capUsd, credential})` with
-`call({purpose: 'chat'|'job'|'extract'|'title', system, messages, tools?, maxTokens})` and a chat
-runner on the Claude Agent SDK. `extract` and `title` are one structured Messages API round (a JSON
+`call({purpose: 'chat'|'job'|'extract'|'confirm'|'title', system, messages, tools?, maxTokens})` and a chat
+runner on the Claude Agent SDK. `extract`, `confirm` and `title` are one structured Messages API round (a JSON
 schema); `title` names Ask threads on `TITLE_MODEL` (`claude-haiku-5-5`), every other purpose runs
 on `DEFAULT_MODEL` (`claude-opus-5-5`), and the conservative estimate for an unknown cost uses the
 purpose's model. Prices live in `src/engine/pricing.mjs` with the date they were verified on the
@@ -291,6 +291,9 @@ Money columns are dollars rounded to cents; JSON columns hold JSON text. The pro
 | `spend_ledger` | `id` PK, `ts`, `yyyymm` `'YYYY-MM'`, `purpose`, `cost_usd` (full precision), `model`, `tokens` JSON (usage counts only, never prompt text) |
 | `superseded_rows` | `id` PK, `table_name`, `dedupe_key`, `row` JSON (the archived row), `file_id`, `superseded_by` (references `files.id`), `reason` (`revised`, `removed`, `older_snapshot`, `alias_merged`, `duplicate_confirmed`, `duplicate_cross_format`, `duplicate`, `summarized`), `at`, `survivor_key` (for `duplicate_confirmed`, the dedupe key of the row it was confirmed against) |
 | `confirm_items` | `id` PK, `kind`, `subject`, `question`, `options` JSON `[{id, label}]`, `context` JSON, `status` in pending, answered, `answer`, `file_id`, `created_at`, `answered_at`; unique (`kind`, `subject`) |
+| `confirm_undo` | `item_id` PK (references `confirm_items.id`, cascade delete), `ingest_epoch` (the epoch when the answer was recorded), `changes` JSON `[{table, op, rowid, before, after}]` (the answer's change log, row images as JSON text), `created_at`, `used_at` (set when a later import or planning run re-applied the answer). One row per revisable answer (migration 009). |
+| `confirm_guesses` | `item_id` PK (references `confirm_items.id`, cascade delete), `option_id` (NULL when the engine gave no valid guess), `reason`, `model`, `ts`. One row per question sent to the engine, so none is sent twice (migration 009). |
+| `ingest_epoch` | `id` PK (always 1), `n`. Bumped by triggers on every `files` insert and update (migration 009); readers treat a missing row as 0. |
 | `column_mappings` | `signature` PK (header signature), `mapping` JSON, `src`, `created_at`, `uses` |
 | `entity_aliases` | `alias` PK (normalized alias name), `entity` (canonical display name), `created_at` |
 | `held_facts` | `id` PK, `hold` (`employer:<employerKey>`), `key`, `value` JSON, `file_id`, `parser`, `locator`, `confidence`, `created_at` |
@@ -317,6 +320,9 @@ with no period key, such as the planner's own runs, may repeat), and the tables 
 them freely. In a demo store only (`settings.mode` is `demo`) it also deletes the five retired mock
 jobs (`sync`, `sweep`, `triggers`, `brief`, `packet`) and their `job_runs` rows, because the demo now
 seeds the scheduler's jobs and there is one jobs list.
+
+Migration 009 (`009-confirm-deck.sql`) creates `confirm_undo`, `confirm_guesses` and
+`ingest_epoch` with the two `files` triggers that bump the epoch (see "Confirm queue").
 
 ### Adding a migration
 
@@ -396,7 +402,8 @@ live = {
   clock: 'YYYY-MM-DD',
   ingest: {
     pending: int,                       // pending confirm items
-    items: [ confirm item ],            // pending items, shape below
+    items: [ confirm item ],            // pending items, shape below, plus fileName (string or null) and
+                                        // guess (null or {option, label, reason, model, ts})
     files: [ file ],                    // latest 50 files
     sources: [ { id, label, kind, asOf, lastIngestAt, cadence, state, ageDays, howTo } ],
     accounts: { <accountId>: { asOf, fresh, sourceId } },
@@ -428,7 +435,7 @@ stored title or null (the UI shows "New conversation"), `titleSource` null, `aut
 (`trashedAt`, which wins; trash keeps `archivedAt` so restore returns the thread where it was).
 Asking in an archived thread unarchives it; asking in a trashed one is 409. Threads trashed 30 or
 more days before the app clock are deleted with their messages (`purgeTrash`) by the daily `trash-purge` job (03:00); reads and server
-starts purge nothing. Migration 009 moves the old single `ask`
+starts purge nothing. Migration 010 moves the old single `ask`
 conversation, when it has messages, into one thread with the same messages.
 
 Naming (`src/api/threads.mjs`): after a reply is stored, a thread with no title source and at least
@@ -505,7 +512,8 @@ response is `{scenario, ...}` with the fresh scenario.
 | `POST /api/files/:id/retry` | `{}` | `{scenario, file: result}`. Routes a `needs_mapping` or `needs_extraction` file again under the same id; 404 unknown file, 409 a file that is not waiting. |
 | `GET /api/confirm` | | `{items: [pending confirm items]}`. |
 | `POST /api/confirm/list` | `{status?: pending (default), answered or all}` | `{items}`; 400 for another status. |
-| `POST /api/confirm/:id/answer` | `{answer: optionId}` | `{scenario, item}`. 404 unknown item, 400 an option not offered, 409 already answered or stale (the value changed since the question was asked). |
+| `POST /api/confirm/:id/answer` | `{answer: optionId, revise?: true}` | `{scenario, item}` with `item.final` (null or the reason it is final). 404 unknown item, 400 an option not offered, 409 already answered or stale (the value changed since the question was asked). With `revise: true` it changes an answered item's answer instead: 409 "that question is not answered yet" for a pending item, and 409 with a fixed one-line message when the answer is final (see "Confirm queue"). |
+| `POST /api/confirm/:id/reopen` | `{}` | `{scenario, item}`. Puts an answered item back to pending and restores every row its answer changed. 404 unknown item, 409 not answered, stale or final, as for a revise. |
 | `GET /api/email` | | `{status: {transport, state, recipient, recipients, detail}, preview: {subject, text, html, summarySrc}, history}`. `recipient` is masked (`o***@e***.invalid`); `history` is `email_sends` rows newest first with no bodies. The preview is the brief composed now over the store with the runtime engine (template summary when the engine cannot answer). |
 | `POST /api/email/test` | `{}` | `{send, history}`. Sends a fixed test email (kind `test`) through the configured transport; a failed send is a 200 with `send.status` `failed` and `send.errorCode`. |
 | `POST /api/email/brief` | `{}` | `{send, history}`. Composes and sends the brief now (kind `brief`); failures as above. |
@@ -644,7 +652,8 @@ serves) and stops it before closing the store.
 1. Periods are computed in the owner's zone (`settings.timezone`, default `America/New_York`; an
    invalid zone falls back to the default). `plan` daily at 02:00 (key `YYYY-MM-DD`),
    `brief-email` monthly on the 1st at 07:00 (`YYYY-MM`), `deadline-alerts` daily at 07:00
-   (`YYYY-MM-DD`), `trash-purge` daily at 03:00 (`YYYY-MM-DD`), `freshness` weekly on Monday at 06:00 (that Monday's date). The due key is the
+   (`YYYY-MM-DD`), `trash-purge` daily at 03:00 (`YYYY-MM-DD`), `freshness` weekly on Monday at 06:00 (that Monday's date), `confirm-guess`
+   daily at 03:00 (`YYYY-MM-DD`). The due key is the
    latest period whose start is at or before now. With `FATHOM_CLOCK` set, the clock date at 12:00
    is now, so every period of that day is due.
 2. Idempotence: one attempt per (`job_id`, `period_key`), enforced by the unique index. A failed
@@ -675,10 +684,20 @@ serves) and stops it before closing the store.
    refused with 409 before the scheduler, so nothing changes. `npm run plan` builds a scheduler
    with only the plan handler and runs it now; it exits 3, telling the owner to use Run now in the
    app or `POST /api/jobs/plan/run`, when another process (the running server) holds the lease.
-8. Triggers during a run: `trigger(jobId, reason)` for a job that is already running remembers the
+8. Confirm-guess job: `defaultHandlers` includes `confirm-guess`, the only code path that asks the
+   engine for confirm guesses. Nightly at 03:00, manual (Run now, `POST /api/jobs/confirm-guess/run`,
+   `npm run confirm:guess`) and ingest (`trigger('confirm-guess', 'ingest')` beside the plan trigger
+   after an upload or retry imports a file) runs share it. It calls `guessPending(db, engine, {now:
+   ctx.now})` until nothing is left. When that skips (engine off, not a live engine, nothing
+   pending) the run is `skipped` with note `{pending}`; otherwise it is `ok` with the batch cost
+   sum and note `{batches, items, guessed, stopped}`, also when an engine error stopped it.
+   `npm run confirm:guess` builds a scheduler with only this handler, runs it now and prints one
+   JSON line `{status, note}`; it exits 1 when there is no store and 3 when another process holds
+   the lease.
+9. Triggers during a run: `trigger(jobId, reason)` for a job that is already running remembers the
    request, and when the current run finishes exactly one more run starts with that reason, so
    several triggers during one run coalesce into one rerun. `trigger` never rejects.
-9. Stop: `stop()` is graceful and never rejects. It stops ticking, refuses new runs (409) and
+10. Stop: `stop()` is graceful and never rejects. It stops ticking, refuses new runs (409) and
    drops queued reruns, waits for active runs to finish (at most `drainMs`, default 30 seconds),
    then releases the lease; the server awaits it before closing the store.
 
@@ -1102,7 +1121,36 @@ answer to one whose rows no longer match is refused as `stale`). A recipient ans
 sets `tax_payments.recipient` on the matching withholding rows, recomputes their `wh:` slots and
 summarizes per slot; while a row's recipient is unknown nothing summarizes it. An answered
 subject is remembered and applied to later imports without a new question. `ConfirmError` codes map to HTTP: `not_found` 404, `bad_option` 400, `answered` 409,
-`stale` 409.
+`stale` 409, `not_answered` 409 and `final` 409 (with `reason`).
+
+Revise and reopen (`reviseItem(db, id, optionId, {now})`, `reopenItem(db, id, {now})`, both
+returning `{item, factsChanged}`) use a generic per-answer change log, not per-kind inverse code.
+`answerItem` runs the answer under `captureChanges` (`src/ingest/undo.mjs`): TEMP triggers on every
+ordinary table except `confirm_undo`, `confirm_guesses`, `ingest_epoch`, `schema_migrations` and
+`spend_ledger` record each row change, and the log is stored in `confirm_undo` with the current
+ingest epoch. `revertChanges` walks the log backwards, requires every touched row to still equal
+the image the answer left (or to be still absent after a delete), and restores it; a revise then
+answers again, all in one transaction, so a refusal changes nothing. `finalReason(db, item)` is
+null or why an answer can no longer change: `no_undo` (answered before the log existed),
+`imported_since` (a file was imported since, so remembered answers reached rows outside the log),
+`used_since` (a later import or planning run re-applied it), `changed_since` (found only on
+revert: a later change touched a logged row) and `stale` for a superseded item. The 409 messages
+are "This answer was recorded before answers could be changed, so it is final.", "A file was
+imported after this answer, so it is final.", "A later change builds on this answer, so it is
+final." and "A later import used this answer, so it is final.". Pack state refreshes when either
+log touched `facts`.
+
+Engine guesses (`src/ingest/guess.mjs`): `guessPending(db, engine, {now, batchSize = 20,
+maxBatches, fake})` sends pending items with no `confirm_guesses` row in batches, one engine call
+with purpose `confirm` each (a single structured Messages round with no tools), carrying each
+item's kind, question, options, context without locators and file metadata (name, source kind,
+parser, period). A guess is kept only when its item is in the batch, its option is one of that
+item's options, and its reason is one line of at most 160 characters whose every number appears
+in that item; every item sent gets a row (`option_id` NULL otherwise). It runs only on a live
+engine (or with a per-call fake script in tests) that is on; engine errors stop the run as
+`stopped`. Guesses never answer. It runs only as the scheduler job `confirm-guess` (see "Jobs"):
+daily at 03:00, after an upload or retry that imports a file, Run now, and `npm run confirm:guess`
+(`src/jobs/guess-cli.mjs`).
 
 ### Freshness
 
@@ -1145,7 +1193,10 @@ and the spend ledger sums to the scenario's month-to-date spend. `demo/ledger.mj
 deterministic synthetic ledger (seeded PRNG): transactions for the checking and business accounts
 from January through the data-through month, balances at data-through equal to each account's
 figure, positions for investment accounts, monthly P and L per business and quarterly estimated
-tax payments. Every seeded row carries `file_id` and `parser` `demo-seed` and a locator.
+tax payments. Every seeded row carries `file_id` and `parser` `demo-seed` and a locator. The seed
+also queues four synthetic pending confirm questions on demo rows (`account_owner`,
+`account_kind`, a `fact_check` on a key the demo facts lack, a `tax_year` with no workbook rows)
+and one stored guess (model `demo`) on the owner question, so the demo shows the confirm deck.
 
 ## Container
 

@@ -52,6 +52,7 @@ const TABLE = [
   { method: 'GET', path: '/api/confirm', handler: ih.listPendingConfirm, ingest: true },
   { method: 'POST', path: '/api/confirm/list', handler: ih.listConfirm, ingest: true },
   { method: 'POST', path: '/api/confirm/:id/answer', handler: ih.answerConfirm, ingest: true },
+  { method: 'POST', path: '/api/confirm/:id/reopen', handler: ih.reopenConfirm, ingest: true },
   { method: 'GET', path: '/api/email', handler: eh.getEmail, quiet: true },
   { method: 'POST', path: '/api/email/test', handler: eh.sendTestEmail, quiet: true },
   { method: 'POST', path: '/api/email/brief', handler: eh.sendBriefEmail, quiet: true },

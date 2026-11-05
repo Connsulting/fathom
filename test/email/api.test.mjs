@@ -2,8 +2,8 @@
 // POST /api/email/test and /api/email/brief over the dev transport (outbox file, history row
 // with no body), GET /api/jobs, POST /api/jobs/:id/run (known and unknown ids), and the POST
 // guards. Revision r2 item 4 runs in-process: createHandler with a fake scheduler records
-// trigger('plan', 'ingest') for an imported upload and a successful retry, and nothing for an
-// upload or retry that imports nothing.
+// trigger('plan', 'ingest') and trigger('confirm-guess', 'ingest') for an imported upload and a
+// successful retry, and nothing for an upload or retry that imports nothing.
 
 import test, { describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -87,7 +87,7 @@ describe('email and jobs routes on a demo server', () => {
     const r = await request(s.baseUrl, { path: '/api/jobs' });
     assert.equal(r.status, 200, r.text.slice(0, 300));
     const ids = r.json.jobs.map((j) => j.id);
-    for (const id of ['plan', 'brief-email', 'deadline-alerts', 'freshness', 'trash-purge']) assert.ok(ids.includes(id), id);
+    for (const id of ['plan', 'brief-email', 'deadline-alerts', 'freshness', 'trash-purge', 'confirm-guess']) assert.ok(ids.includes(id), id);
     for (const j of r.json.jobs) {
       for (const k of ['name', 'cadence', 'does', 'next']) assert.equal(typeof j[k], 'string', `${j.id}.${k}`);
       assert.ok('lastRun' in j, `${j.id}.lastRun`);
@@ -193,7 +193,10 @@ describe('ingest triggers the plan job (in-process router, fake scheduler)', () 
     return { status: res.status, json: await res.json() };
   }
 
-  test('imported upload and successful retry trigger plan once each; nothing imported triggers nothing', T, async () => {
+  const AFTER_IMPORT = [['confirm-guess', 'ingest'], ['plan', 'ingest']];
+  const sorted = (calls) => [...calls].sort((a, b) => a[0].localeCompare(b[0]));
+
+  test('imported upload and successful retry trigger plan and confirm-guess once each; nothing imported triggers nothing', T, async () => {
     const st = await realStore();
     const { createHandler } = await src('src/api/router.mjs');
     const { headerSignature } = await src('src/ingest/mapping.mjs');
@@ -208,25 +211,25 @@ describe('ingest triggers the plan job (in-process router, fake scheduler)', () 
       const imported = await upload(base, [{ name: 'aggregator.csv', bytes: readFileSync(fixturePath('aggregator.csv')) }]);
       assert.equal(imported.status, 200);
       assert.equal(imported.json.files[0].status, 'imported');
-      assert.deepEqual(scheduler.calls, [['plan', 'ingest']], 'an imported upload triggers plan');
+      assert.deepEqual(sorted(scheduler.calls), AFTER_IMPORT, 'an imported upload triggers plan and confirm-guess');
 
       const waiting = await upload(base, [textFile('novel-export.csv', novelCsv(), 'text/csv')]);
       assert.equal(waiting.status, 200);
       const file = waiting.json.files[0];
       assert.equal(file.status, 'needs_mapping');
-      assert.equal(scheduler.calls.length, 1, 'an upload that imports nothing does not trigger');
+      assert.equal(scheduler.calls.length, 2, 'an upload that imports nothing does not trigger');
 
       const stillWaiting = await postJson(base, `/api/files/${file.fileId}/retry`, {});
       assert.equal(stillWaiting.status, 200);
       assert.equal(stillWaiting.json.file.status, 'needs_mapping');
-      assert.equal(scheduler.calls.length, 1, 'an unsuccessful retry does not trigger');
+      assert.equal(scheduler.calls.length, 2, 'an unsuccessful retry does not trigger');
 
       st.db.prepare("INSERT INTO column_mappings (signature, mapping, src, created_at, uses) VALUES (?, ?, 'test', '2032-03-10T12:00:00.000Z', 0)")
         .run(headerSignature(HEADERS), JSON.stringify(MAPPING));
       const done = await postJson(base, `/api/files/${file.fileId}/retry`, {});
       assert.equal(done.status, 200);
       assert.equal(done.json.file.status, 'imported');
-      assert.deepEqual(scheduler.calls, [['plan', 'ingest'], ['plan', 'ingest']], 'a successful retry triggers plan');
+      assert.deepEqual(sorted(scheduler.calls.slice(2)), AFTER_IMPORT, 'a successful retry triggers plan and confirm-guess');
     } finally {
       await new Promise((r) => { server.close(r); server.closeAllConnections(); });
       st.close();

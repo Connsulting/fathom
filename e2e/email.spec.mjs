@@ -23,7 +23,7 @@ import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { test, expect, resetDemo, gotoRoute, attentionHeadline, plain, S, REMOTE } from './helpers.mjs';
 
-const JOB_IDS = ['plan', 'brief-email', 'deadline-alerts', 'freshness', 'trash-purge'];
+const JOB_IDS = ['plan', 'brief-email', 'deadline-alerts', 'freshness', 'trash-purge', 'confirm-guess'];
 
 // The main e2e server's data directory (playwright.config.mjs runs it on .e2e-data at the repo root).
 const OUTBOX = join(fileURLToPath(new URL('..', import.meta.url)), '.e2e-data', 'outbox');

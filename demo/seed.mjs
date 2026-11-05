@@ -15,6 +15,7 @@ import { buildLedger, isoFromLabel } from './ledger.mjs';
 import { openMigrated, getSetting, setSetting, listTables, readStoreMode, createStoreFile, tx, cents, DB_FILE } from '../src/store/db.mjs';
 import { addDays, defaultPicks, BUILTIN_SOURCES, DEFAULT_CAP_USD } from '../src/scenario/build.mjs';
 import { loadConfig } from '../src/config.mjs';
+import { ask, canonicalJson, OWNER_OPTIONS, KIND_OPTIONS, FACT_CHECK_OPTIONS, taxYearOptions } from '../src/ingest/confirm.mjs';
 
 export const SEED_ID = 'demo-seed';
 
@@ -62,11 +63,38 @@ const FACTS = {
 
 // Children before parents so foreign keys hold while clearing.
 const CLEAR_ORDER = [
-  'messages', 'conversations', 'rec_events', 'job_runs', 'jobs', 'superseded_rows', 'confirm_items', 'held_facts',
+  'messages', 'conversations', 'rec_events', 'job_runs', 'jobs', 'superseded_rows', 'confirm_undo', 'confirm_guesses', 'confirm_items',
+  'ingest_epoch', 'held_facts',
   'column_mappings', 'entity_aliases', 'transactions', 'balances', 'positions',
   'pnl_lines', 'tax_payments', 'documents', 'figures', 'accounts', 'facts', 'sources', 'recs', 'goals',
   'deadlines', 'events', 'packs_state', 'decisions', 'api_keys', 'spend_ledger', 'content', 'settings', 'files',
 ];
+
+// Synthetic pending confirm questions so the demo shows the confirm deck: one per kind below, on
+// demo rows, from the seed file. The fact key is one FACTS does not hold; the tax year has no
+// workbook rows, so answering it changes no payment. One stored guess, on the owner question.
+const CONFIRM_FACT = { key: 'retirement.planOffersRoth', value: true };
+const CONFIRM_TAX_YEAR = 2025;
+const CONFIRM_GUESS = { option: 'owner', reason: 'Held at the same broker as your other individual accounts' };
+
+function seedConfirm(db, { clock, now }) {
+  const base = { fileId: SEED_ID, now };
+  const owner = ask(db, { ...base, kind: 'account_owner', subject: 'a_tod', question: 'Whose account is the Individual brokerage account?', options: OWNER_OPTIONS, context: {} });
+  ask(db, { ...base, kind: 'account_kind', subject: 'a_jdirect', question: 'What kind of account is the Direct-index account?', options: KIND_OPTIONS, context: {} });
+  const { key, value } = CONFIRM_FACT;
+  const json = canonicalJson(value);
+  ask(db, {
+    ...base, kind: 'fact_check', subject: `${SEED_ID}|${key}|${json}`, question: `An import says ${key} is ${json}. Is that right?`, options: FACT_CHECK_OPTIONS,
+    context: { key, value, src: SEED_ID, asOf: clock, fileId: SEED_ID, parser: SEED_ID, locator: `confirm:${key}`, confidence: 0.5 },
+  });
+  const year = CONFIRM_TAX_YEAR;
+  ask(db, {
+    ...base, kind: 'tax_year', subject: `tax:${year}`, question: `Does the ${year} sheet list payments for tax year ${year}, or payments made during ${year}?`,
+    options: taxYearOptions(year), context: { sheetYear: year },
+  });
+  db.prepare("INSERT INTO confirm_guesses (item_id, option_id, reason, model, ts) VALUES (?, ?, ?, 'demo', ?)")
+    .run(owner.id, CONFIRM_GUESS.option, CONFIRM_GUESS.reason, now);
+}
 
 const LIVE_REC_FIELDS = ['status', 'statusByDemo', 'window', 'waitingOn'];
 
@@ -181,6 +209,8 @@ export function seedDemo(db) {
 
     const job = db.prepare('INSERT INTO jobs (id, name, cadence, does, cost, next_label, last_label, enabled, sort) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)');
     S.engine.jobs.forEach((j, i) => job.run(j.id, j.name, j.cadence, j.does, j.cost, j.next, j.last, i));
+
+    seedConfirm(db, { clock, now });
 
     // Month-to-date spend that sums to the scenario's engine.budget.used: one run of each job,
     // the rest as chat.

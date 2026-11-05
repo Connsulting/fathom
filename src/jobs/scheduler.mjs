@@ -1,7 +1,7 @@
 // Job scheduler. Rules:
 // 1. Period keys come from the owner's local time (settings.timezone, default America/New_York; an
 //    invalid zone falls back). A period starts at its due time (plan daily 02:00, brief-email the
-//    1st at 07:00, deadline-alerts daily 07:00, trash-purge daily 03:00, freshness Monday 06:00); the due key is the latest
+//    1st at 07:00, deadline-alerts daily 07:00, trash-purge daily 03:00, freshness Monday 06:00, confirm-guess daily 03:00); the due key is the latest
 //    period whose start is at or before now. config.clock fixes the local date at 12:00.
 // 2. One attempt per (job_id, period_key): the job_runs insert claims it and the unique index
 //    refuses a second claim, so a failed run is not retried that period. A tick runs only the
@@ -34,6 +34,7 @@ import { sendEmail } from '../email/send.mjs';
 import { runDeadlineAlerts } from './alerts.mjs';
 import { runPlanning } from './planner.mjs';
 import { purgeTrash } from '../api/threads.mjs';
+import { guessPending } from '../ingest/guess.mjs';
 import { defaultPackDirs } from '../packs/state.mjs';
 
 export const DEFAULT_TIMEZONE = 'America/New_York';
@@ -48,6 +49,7 @@ export const JOBS = Object.freeze([
   { id: 'deadline-alerts', name: 'Deadline alerts', cadence: 'Daily, 7:00 AM', does: 'Email one alert when a deadline or window is 14, 7 or 1 days away.', schedule: Object.freeze({ every: 'day', hour: 7 }) },
   { id: 'freshness', name: 'Data freshness check', cadence: 'Weekly, Monday 6:00 AM', does: 'Count stale and waiting uploads.', schedule: Object.freeze({ every: 'week', weekday: 1, hour: 6 }) },
   { id: 'trash-purge', name: 'Ask trash cleanup', cadence: 'Daily, 3:00 AM', does: 'Delete conversations that have been in Trash for 30 days.', schedule: Object.freeze({ every: 'day', hour: 3 }) },
+  { id: 'confirm-guess', name: 'Confirm best guesses', cadence: 'Daily, 3:00 AM', does: 'Suggest an answer for each pending confirm question.', schedule: Object.freeze({ every: 'day', hour: 3 }) },
 ].map(Object.freeze));
 const JOB_SORT = 100;
 
@@ -432,7 +434,9 @@ export function createScheduler({
 // The server's handlers. `plan` is the only path that plans: on a real store it runs the planner
 // with this run's id and the run's clock, and returns the planner's counts as the note plus the
 // whole planner result as `planning` (the scheduler ignores it; npm run plan prints its warning
-// codes). On a demo store it plans nothing and the run is recorded skipped.
+// codes). On a demo store it plans nothing and the run is recorded skipped. `confirm-guess` runs
+// guessPending until nothing is left: skipped with the pending count when it skips (engine off,
+// not live, nothing pending), else ok with the run's confirm ledger spend, also when an engine error stopped it.
 export function defaultHandlers({ publicUrl = null } = {}) {
   return {
     async plan(ctx) {
@@ -468,6 +472,18 @@ export function defaultHandlers({ publicUrl = null } = {}) {
       return {
         costUsd: 0,
         note: { sources: s.sources.length, stale: s.sources.filter((x) => x.state === 'stale').length, pending: s.pending, waiting: s.waiting.length },
+      };
+    },
+    async 'confirm-guess'(ctx) {
+      const out = await guessPending(ctx.db, ctx.engine, { now: ctx.now });
+      if (out.skipped) {
+        const pending = ctx.db.prepare("SELECT count(*) AS n FROM confirm_items WHERE status = 'pending'").get().n;
+        return { status: 'skipped', note: { pending } };
+      }
+      const sum = (key) => out.batches.reduce((n, b) => n + (Number(b[key]) || 0), 0);
+      return {
+        costUsd: out.costUsd,
+        note: { batches: out.batches.length, items: sum('items'), guessed: sum('guessed'), stopped: Boolean(out.stopped) },
       };
     },
   };

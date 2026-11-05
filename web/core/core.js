@@ -37,6 +37,8 @@
 //    null too, and a deleted open thread falls back to #/ask).
 //  - api.packEntry(packId, entryId) GETs one pack entry and resolves { id, title, body, cites } or
 //    null; it never touches the scenario or the error line.
+//  - api.reviseAnswer(id, optionId) and api.reopenAnswer(id) resolve { item }, or { final: message }
+//    when the server refuses with 409 (no error line), or null on any other failure.
 
 import { money, resolveTokens, esc, KIND_WORDS } from '/shared/tokens.mjs';
 import { needsYou as needsYouOf, packStatus } from '/shared/rules.mjs';
@@ -186,7 +188,6 @@ function on(fn) {
 
 function defaultRoute() {
   if (demoId() === 'fresh') return { name: 'onboarding', params: { step: stateView().onboardStep || minStep() } };
-  if (isReal() && Number(ingest().pending) > 0) return { name: 'confirm', params: {} };
   return { name: 'brief', params: {} };
 }
 const clampStep = n => Math.max(minStep(), Math.min(LAST_STEP, Number.isFinite(n) ? Math.floor(n) : 0));
@@ -324,7 +325,11 @@ async function postJson(path, body) {
   let data = null;
   try { data = await res.json(); } catch (e) { data = null; }
   if (res.status === 401) reloadUnauthorized();
-  if (!res.ok) throw new Error((data && typeof data.error === 'string' && data.error) || 'The server answered ' + res.status + '.');
+  if (!res.ok) {
+    const err = new Error((data && typeof data.error === 'string' && data.error) || 'The server answered ' + res.status + '.');
+    err.status = res.status;
+    throw err;
+  }
   if (!data || !data.scenario || typeof data.scenario !== 'object') throw new Error('The server sent an unexpected reply.');
   return data;
 }
@@ -359,6 +364,28 @@ function send(path, body, onOk, onDone, failText) {
     err => {
       if (onDone) { onDone(); notify(); }
       showError((failText || 'Could not save that change. ') + (err && err.message ? err.message : ''));
+      return null;
+    }
+  );
+  const p = queue.then(run);
+  queue = p;
+  return p;
+}
+
+// Like send, for changes the server may refuse as final: resolves { item } on success and
+// { final: message } on a 409 without the error line. Other failures show the error line and
+// resolve null.
+function sendFinal(path, body) {
+  const run = () => postJson(path, body).then(
+    data => {
+      applyScenario(data.scenario);
+      hideError();
+      notify();
+      return { item: data.item || null };
+    },
+    err => {
+      if (err && err.status === 409) return { final: err.message };
+      showError('Could not save that change. ' + (err && err.message ? err.message : ''));
       return null;
     }
   );
@@ -559,6 +586,18 @@ function answer(id, optionId) {
   return send('/api/confirm/' + encodeURIComponent(id) + '/answer', { answer: String(optionId) }, d => d.item || null);
 }
 
+// Change an answered question to another option.
+function reviseAnswer(id, optionId) {
+  if (id == null || id === '' || optionId == null || optionId === '') return done();
+  return sendFinal('/api/confirm/' + encodeURIComponent(id) + '/answer', { answer: String(optionId), revise: true });
+}
+
+// Put an answered question back to pending.
+function reopenAnswer(id) {
+  if (id == null || id === '') return done();
+  return sendFinal('/api/confirm/' + encodeURIComponent(id) + '/reopen', {});
+}
+
 function retryFile(id) {
   if (id == null || id === '') return done();
   return send('/api/files/' + encodeURIComponent(id) + '/retry', {}, d => d.file || null);
@@ -604,6 +643,8 @@ const api = {
   identity: () => (IDENT ? { login: IDENT.login, name: IDENT.name } : null),
   upload,
   answer,
+  reviseAnswer,
+  reopenAnswer,
   retryFile,
   figPopover: el => openPopover(el),
 };

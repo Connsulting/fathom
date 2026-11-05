@@ -19,6 +19,11 @@ async function serial(ledger, callback) {
   try { return await callback(); } finally { release(); if (queues.get(ledger) === wait) queues.delete(ledger); }
 }
 
+// Purposes answered in one structured messages round with no tools and no tool loop. 'title'
+// (Ask thread names) runs on TITLE_MODEL, every other purpose on DEFAULT_MODEL.
+const SINGLE_ROUND = ['extract', 'confirm', 'title'];
+const PURPOSES = ['chat', 'job', ...SINGLE_ROUND];
+
 const monthKey = timestamp => new Date(timestamp).toISOString().slice(0, 7).replace('-', '');
 
 export function createMemoryLedger(initial = []) {
@@ -60,12 +65,6 @@ function explicitCredential(credential) {
   }
   return result;
 }
-
-// Purposes: 'chat' and 'job' run the SDK tool loop; 'extract' and 'title' are one structured
-// Messages API round. 'title' (Ask thread names) runs on TITLE_MODEL, every other purpose on
-// DEFAULT_MODEL, and the ledger records the purpose.
-const PURPOSES = ['chat', 'job', 'extract', 'title'];
-const ONE_ROUND = new Set(['extract', 'title']);
 
 // request.fake (optional, fake mode): a per-call script list used instead of the constructor queue.
 // request.systemDynamic (optional): system text placed after the dynamic boundary (not cached).
@@ -114,7 +113,7 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
               content: [{ type: 'text', text: script.text ?? '' }], details: { maxBudgetUsd: capUsd - spend } };
           } else {
             try {
-              round = await (ONE_ROUND.has(purpose) ? messagesRound : sdkRound)({ credential: auth, system, systemDynamic,
+              round = await (SINGLE_ROUND.includes(purpose) ? messagesRound : sdkRound)({ credential: auth, system, systemDynamic,
                 messages: transcript, maxTokens, maxBudgetUsd: capUsd - spend, model, registry, schema });
             } catch {
               round = { text: '', content: [], status: 'transport_error', is_error: true,
@@ -153,7 +152,7 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
       }
       if (!['success', 'error_max_turns'].includes(round.status)) throw new ModelCallError('Model did not complete a valid response');
       if (round.status === 'error_max_turns' && round.toolResults.length === 0) throw new ModelCallError('Model reached a turn limit without a tool result');
-      if (round.toolResults.length === 0 || ONE_ROUND.has(purpose)) {
+      if (round.toolResults.length === 0 || SINGLE_ROUND.includes(purpose)) {
         return { text: round.text, content: round.content, costUsd: Number(cost.toFixed(12)), model: round.model,
           toolResults: allResults, rounds, grounding: checkGrounding(round.text, { ...grounding, toolResults: allResults }) };
       }

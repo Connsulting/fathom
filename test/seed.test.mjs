@@ -35,7 +35,7 @@ test('demo/scenario.mjs is a faithful port of mock-v2/scenario/example.js', () =
   const sandbox = { window: {} };
   vm.runInNewContext(code, sandbox);
   const mock = JSON.parse(JSON.stringify(sandbox.window.FATHOM_SCENARIO));
-  // engine.jobs is exempt: the demo seeds the scheduler's five real jobs while mock-v2 stays
+  // engine.jobs is exempt: the demo seeds the scheduler's real jobs while mock-v2 stays
   // untouched and keeps its original mock job list.
   const { jobs: demoJobs, ...demoEngine } = demo.engine;
   const { jobs: mockJobs, ...mockEngine } = mock.engine;
@@ -44,7 +44,7 @@ test('demo/scenario.mjs is a faithful port of mock-v2/scenario/example.js', () =
 });
 
 test('demo engine.jobs are the scheduler jobs, by id, name, cadence and does', () => {
-  assert.deepEqual(demo.engine.jobs.map(j => j.id), ['plan', 'brief-email', 'deadline-alerts', 'freshness', 'trash-purge']);
+  assert.deepEqual(demo.engine.jobs.map(j => j.id), ['plan', 'brief-email', 'deadline-alerts', 'freshness', 'trash-purge', 'confirm-guess']);
   assert.deepEqual(demo.engine.jobs.map(j => j.id), JOBS.map(j => j.id));
   for (const job of demo.engine.jobs) {
     const real = JOBS.find(j => j.id === job.id);

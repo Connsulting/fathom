@@ -2956,6 +2956,15 @@ export default {
         "next": "Tomorrow 3:00 AM",
         "does": "Delete conversations that have been in Trash for 30 days.",
         "cost": 0
+      },
+      {
+        "id": "confirm-guess",
+        "name": "Confirm best guesses",
+        "cadence": "Daily, 3:00 AM",
+        "last": "Today 3:00 AM",
+        "next": "Tomorrow 3:00 AM",
+        "does": "Suggest an answer for each pending confirm question.",
+        "cost": 0.03
       }
     ]
   },

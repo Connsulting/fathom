@@ -1,15 +1,16 @@
 // Owner identity and the returning owner, on a real store: its own server (not the demo
 // webServer), started here with FATHOM_DEMO=0 and one allowed login. Without the identity header
 // the app is the Not authorized page; with it, an empty store shows onboarding without the demo
-// sign-in step, a store with data lands on Confirm (pending questions) or the brief, the More menu
-// shows who is signed in (escaped), and the brief and Accounts link to the Add more files page.
+// sign-in step, a store with data lands on the brief (with the quick checks banner and its Start
+// control while questions are pending), the More menu shows who is signed in (escaped), and the
+// brief and Accounts link to the Add more files page.
 // Desktop only. URLs are absolute to this server, so the configured baseURL is ignored.
 
 import { spawn } from 'node:child_process';
 import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { test, expect, expectH1, REMOTE } from './helpers.mjs';
+import { test, expect, expectH1, REMOTE, yearBanner, bannerStart } from './helpers.mjs';
 import { openDb } from '../src/store/db.mjs';
 import { ask, OWNER_OPTIONS } from '../src/ingest/confirm.mjs';
 
@@ -132,16 +133,24 @@ test.describe('signed in through the identity header', () => {
     await expect(page.getByRole('button', { name: 'Back', exact: true })).toHaveCount(0);
   });
 
-  test('a returning owner with a pending question lands on Confirm', async ({ page }) => {
+  test('a returning owner with a pending question lands on the brief, and Start opens Confirm', async ({ page }) => {
     itemId = seedReturningOwner();
     await page.goto(`${BASE}/`);
+    await expect(page).toHaveURL(/#\/brief$/);
+    const banner = yearBanner(page);
+    await expect(banner).toBeVisible();
+    await expect(banner).toContainText('1 quick check');
+    await expect(banner).not.toContainText('1 quick checks');
+    await expect(banner).toContainText('About 1 minute');
+    await expect(banner).not.toContainText('About 1 minutes');
+    await bannerStart(page).click();
     await expect(page).toHaveURL(/#\/confirm$/);
-    await expect(page.locator(`[data-answer="${itemId}"][data-option="owner"]`)).toBeVisible();
+    await expect(page.locator(`article.h-deck-card.cur [data-answer="${itemId}"][data-option="owner"]`)).toBeVisible();
   });
 
   test('the More menu shows the signed-in name as literal text', async ({ page }) => {
     await page.goto(`${BASE}/`);
-    await expect(page).toHaveURL(/#\/confirm$/);
+    await expect(page).toHaveURL(/#\/brief$/);
     await page.locator('.h-more-btn').click();
     const panel = page.locator('.h-more-p');
     await expect(panel).toBeVisible();
@@ -152,15 +161,19 @@ test.describe('signed in through the identity header', () => {
     await expect(panel).toContainText(HEADER_LOGIN.trim());
   });
 
-  test('after the question is answered the owner lands on the brief', async ({ page }) => {
+  test('after the question is answered the owner still lands on the brief, without the banner', async ({ page }) => {
     await page.goto(`${BASE}/`);
+    await expect(page).toHaveURL(/#\/brief$/);
+    await bannerStart(page).click();
     await expect(page).toHaveURL(/#\/confirm$/);
     const answered = page.waitForResponse((r) => new URL(r.url()).pathname === `/api/confirm/${itemId}/answer`);
     await page.locator(`[data-answer="${itemId}"][data-option="owner"]`).click();
     expect((await answered).status()).toBe(200);
-    await expect(page.locator(`[data-answer="${itemId}"]`)).toHaveCount(0);
+    await expect(page.locator('.h-empty', { hasText: 'All caught up' })).toBeVisible();
     await page.goto(`${BASE}/`);
     await expect(page).toHaveURL(/#\/brief$/);
+    await expect(page.locator('header.h-top')).toBeVisible();
+    await expect(yearBanner(page)).toHaveCount(0);
   });
 
   test('the brief and Accounts link to the Add more files page with the uploader', async ({ page }) => {
