@@ -510,6 +510,20 @@ test('B3: a document file name with digits never grounds that number in an answe
   assert.ok(reply.provenance.grounding.unverified.includes('4821'), JSON.stringify(reply.provenance.grounding));
 });
 
+test('R5 F1: a document saying "8.7 million" builds an entry; "$8.70" is ungrounded and "$8.7 million" grounds', async t => {
+  const { db, dataDir } = demoPlanStore(t);
+  addPlanFile(db, dataDir, { text: '# Synthetic cap\n\nThe cap is 8.7 million.\n' });
+  const result = await buildYourPlans({ db, engine: engineFor(db, dataDir), dataDir, clock: CLOCK });
+  assert.equal(result.written, true);
+  assert.equal(result.entries, 1, JSON.stringify(result.warnings));
+  assert.ok(builtBodies(result.dir).includes('8.7 million'), 'the entry carries the excerpt');
+  const bad = await answerAfterBuild(db, dataDir, 'Your cap is $8.70.');
+  assert.ok(bad.provenance.packIds.includes('your-plans'));
+  assert.ok(bad.provenance.grounding.unverified.includes('$8.70'), JSON.stringify(bad.provenance.grounding));
+  const good = await answerAfterBuild(db, dataDir, 'Your cap is $8.7 million.');
+  assert.equal(good.provenance.grounding.ok, true, JSON.stringify(good.provenance.grounding));
+});
+
 // ---------------------------------------------------------------- server
 
 async function ok(resPromise) {

@@ -124,3 +124,8 @@ test('a numeric expression in evidence is one quantity: exponents and decimals n
   for (const text of ['$1,000', '$4.50', '12.5%']) assert.equal(checkGrounding(text, { toolResults: evidence }).ok, true, text);
   for (const text of ['$1', '$3', '$4', '50', '12%', '5%']) assert.equal(checkGrounding(text, { toolResults: evidence }).ok, false, text);
 });
+
+test('a worded magnitude is one quantity: 8.7 million grounds on 8700000, never on 8.7', () => {
+  assert.equal(checkGrounding('about 8.7 million', { data: [8700000] }).ok, true);
+  assert.equal(checkGrounding('about 8.7 million', { data: [8.7] }).ok, false);
+});

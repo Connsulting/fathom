@@ -1570,6 +1570,14 @@ const LAUNDERING_FORMS = [
     prose: 'Plan AB-500 and code X-873 apply under Q-12.',
     field: { code: 'AB-500', plan: 'X-873', grade: 'Q-12' },
     invented: ['$500', '500', '-500', '$873', '873', '-12'] },
+  { form: 'scaled quantities',
+    prose: 'The benefit is 8.7 million, the fee is 2 thousand and the pool is 1.5 billion.',
+    field: { note: 'The benefit is 8.7 million, the fee is 2 thousand and the pool is 1.5 billion.' },
+    invented: ['$8.70', '8.7', '$8.7', '$2', '2', '$1.50', '1.5', '$1.5'] },
+  { form: 'parenthesized link destinations',
+    prose: 'See [policy](https://example.invalid/a(b)/$4821), [nested](https://example.invalid/a(b(c))/d(e)/4821k) and https://example.invalid/w(x)/$4821 today.',
+    field: { link: 'https://example.invalid/a(b)/$4821', doc: 'https://example.invalid/a(b(c))/d(e)/4821k' },
+    invented: ['$4,821', '4821', '$4,821,000'] },
 ];
 
 const EVIDENCE_SOURCES = [
@@ -1598,6 +1606,76 @@ test('R4 adversarial table: no evidence source launders an invented amount throu
         const r = groundAnswer(`The figure is ${text}.`, { scenario, ...where });
         if (!laundered(r).includes(text)) failures.push(`${source.label} / ${form.form}: grounds ${text}`);
       }
+    }
+  }
+  assert.deepEqual(failures, []);
+});
+
+// ---------------------------------------------------------------- round 5: scaled quantities, parenthesized URLs
+
+const SCALED_PROSE = [
+  { prose: 'The benefit is 8.7 million.', grounds: ['$8.7 million', '$8,700,000', '8.7 million'], not: ['$8.70', '8.7', '$8.7', '$8'] },
+  { prose: 'The fee is 2 thousand.', grounds: ['2 thousand', '$2,000', '$2 thousand'], not: ['$2', '2', '$2.00'] },
+  { prose: 'The pool is 1.5 billion.', grounds: ['1.5 billion', '$1.5 billion', '$1,500,000,000'], not: ['$1.50', '1.5', '$1.5', '$1'] },
+];
+
+test('R5 F1: a scaled quantity in prose evidence grounds its full value, never the bare coefficient', async t => {
+  const s = await demoStore(t);
+  const scenario = buildScenario(s.db);
+  const failures = [];
+  for (const { prose, grounds, not } of SCALED_PROSE) {
+    for (const where of proseSources(prose)) {
+      for (const text of grounds) {
+        const r = groundAnswer(`The figure is ${text}.`, { scenario, ...where });
+        if (!r.ok) failures.push(`${where.label}: "${prose}" should ground ${text}: ${JSON.stringify(laundered(r))}`);
+      }
+      for (const text of not) {
+        const r = groundAnswer(`The figure is ${text}.`, { scenario, ...where });
+        if (!laundered(r).includes(text)) failures.push(`${where.label}: "${prose}" must not ground ${text}`);
+      }
+    }
+  }
+  assert.deepEqual(failures, []);
+});
+
+const PAREN_PROSE = [
+  'See [policy](https://example.invalid/a(b)/$4821).',
+  'See [policy](https://example.invalid/a(b(c))/$4821) for details.',
+  'See [policy](https://example.invalid/a(b)/c(d)/4821k) for details.',
+  'See [policy](/docs/a(b)/$4821).',
+  'See https://example.invalid/a(b)/$4821 for details.',
+  'See https://example.invalid/w(x)/y(z)/4821k today.',
+  'See <https://example.invalid/a(b)/$4821> for details.',
+];
+
+test('R5 F2: link destinations and bare URLs with parentheses never ground their digits', async t => {
+  const s = await demoStore(t);
+  const scenario = buildScenario(s.db);
+  const failures = [];
+  for (const prose of PAREN_PROSE) {
+    for (const where of proseSources(prose)) {
+      for (const text of ['$4,821', '4821']) {
+        const r = groundAnswer(`The figure is ${text}.`, { scenario, ...where });
+        if (!laundered(r).includes(text)) failures.push(`${where.label}: "${prose}" must not ground ${text}`);
+      }
+    }
+  }
+  assert.deepEqual(failures, []);
+});
+
+test('R5 F2: a marked amount in the link text of a parenthesized destination still grounds', async t => {
+  const s = await demoStore(t);
+  const scenario = buildScenario(s.db);
+  const failures = [];
+  for (const prose of [
+    'See [the $500 limit](https://example.invalid/a(b)/$4821) for details.',
+    'See [the $500 limit](https://example.invalid/a(b(c))/d(e)/4821k) for details.',
+  ]) {
+    for (const where of proseSources(prose)) {
+      const ok = groundAnswer('The figure is $500.', { scenario, ...where });
+      if (!ok.ok) failures.push(`${where.label}: "${prose}" should ground $500: ${JSON.stringify(laundered(ok))}`);
+      const bad = groundAnswer('The figure is $4,821.', { scenario, ...where });
+      if (!laundered(bad).includes('$4,821')) failures.push(`${where.label}: "${prose}" must not ground $4,821`);
     }
   }
   assert.deepEqual(failures, []);
