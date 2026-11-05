@@ -7,7 +7,7 @@ import test, { describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { readFileSync, rmSync } from 'node:fs';
-import { src, spawnServer, request, postJson, SERVER_TIMEOUT } from '../helpers/server.mjs';
+import { src, spawnServer, request, postJson, SERVER_TIMEOUT, TEST_OWNER } from '../helpers/server.mjs';
 import {
   fixture, fixturePath, textFile, aggregatorFile, activityFile, northwindFile, realStore, fakeEngine, offEngine, all, one, count, items, NOW,
 } from '../helpers/ingest.mjs';
@@ -290,7 +290,9 @@ describe('fact check', () => {
     const st = bySubject(s.db, '|household.state|"CO"');
     const { createHandler } = await src('src/api/router.mjs');
     const { createCannedAnswerer } = await src('src/api/answerer.mjs');
-    const server = http.createServer(createHandler({ db: s.db, config: s.config, answerer: createCannedAnswerer(), engine: await offEngine() }));
+    // A real store: the handler admits TEST_OWNER, which postJson sends by default.
+    const config = { ...s.config, ownerLogins: TEST_OWNER, ownerLoginsFile: null };
+    const server = http.createServer(createHandler({ db: s.db, config, answerer: createCannedAnswerer(), engine: await offEngine() }));
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
     try {
       const base = `http://127.0.0.1:${server.address().port}`;
