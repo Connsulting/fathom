@@ -159,10 +159,10 @@ describe('derived facts and pack state', () => {
 
   test('AC2: income.w2 is never derived from the household S corp, only from an outside employer', async () => {
     const db = await S.store();
-    await addPayroll(db, w2Doc({ employerName: SCORP.name, person: 'owner', wages: 60000 }));
+    await addPayroll(db, w2Doc({ employerName: SCORP.name, person: 'owner', wages: 60000, medicareWages: 60000 }));
     await plan(db);
     assert.equal(factRow(db, 'income.w2'), null, 'a W-2 from the own S corp does not make income.w2');
-    await addPayroll(db, w2Doc({ employerName: 'Example Employer Inc', person: 'spouse', relation: 'outside', wages: 80000 }));
+    await addPayroll(db, w2Doc({ employerName: 'Example Employer Inc', person: 'spouse', relation: 'outside', wages: 80000, medicareWages: 80000 }));
     await plan(db);
     const f = factRow(db, 'income.w2');
     assert.ok(f, 'an outside employer W-2 derives income.w2');
@@ -446,7 +446,7 @@ describe('figures', () => {
     const db = await S.store({
       variant: {
         pnlExtra: [{ entity: SCORP.name, category: 'Retirement contribution', monthly: 500 }],
-        payroll: [w2Doc({ employerName: SCORP.name, person: 'owner', wages: r2(W - deferrals), box12: [{ code: 'D', amount: deferrals }] })],
+        payroll: [w2Doc({ employerName: SCORP.name, person: 'owner', wages: r2(W - deferrals), medicareWages: W, box12: [{ code: 'D', amount: deferrals }] })],
       },
     });
     await plan(db);
@@ -458,7 +458,7 @@ describe('figures', () => {
   });
 
   test('AC3: spouse SE tax uses only the spouse wages when the owner earns above the wage base (R2)', async () => {
-    const db = await S.store({ variant: { payroll: [w2Doc({ employerName: 'Example Employer Inc', person: 'owner', relation: 'outside', wages: 200000 })] } });
+    const db = await S.store({ variant: { payroll: [w2Doc({ employerName: 'Example Employer Inc', person: 'owner', relation: 'outside', wages: 200000, medicareWages: 200000 })] } });
     await plan(db);
     const ownerMedicare = 200000 + W;
     const spouse = selfEmploymentTax({ netProfit: SP, filingStatus: 'mfj', w2SocialSecurityWages: 0, w2MedicareWages: 0, spouseMedicareWages: ownerMedicare }).value;
@@ -793,7 +793,7 @@ describe('recs', () => {
     const db = await S.store({
       variant: {
         pnlExtra: [{ entity: SCORP.name, category: 'Retirement contribution', monthly: 1500 }],
-        payroll: [w2Doc({ employerName: SCORP.name, person: 'owner', wages: 35500, box12: [{ code: 'D', amount: 24500 }] })],
+        payroll: [w2Doc({ employerName: SCORP.name, person: 'owner', wages: 35500, medicareWages: 60000, box12: [{ code: 'D', amount: 24500 }] })],
         facts: { 'retirement.contributions': [{ person: 'spouse', plan: 'sep', type: 'employer', roth: false, amount: sepFull }] },
       },
     });

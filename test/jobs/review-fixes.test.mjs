@@ -118,7 +118,7 @@ describe('review fixes', () => {
     const corp = { name: 'Cedar Holdings', type: 's_corp', owner: 'owner', income: 0, expenses: {} };
     const wages = 40000;
     const without = await S.store({ variant: { entities: [SCORP, SOLE_PROP, corp] } });
-    const withW2 = await S.store({ variant: { entities: [SCORP, SOLE_PROP, corp], payroll: [w2Doc({ employerName: 'Cedar Holdings', person: 'owner', relation: 'household', wages })] } });
+    const withW2 = await S.store({ variant: { entities: [SCORP, SOLE_PROP, corp], payroll: [w2Doc({ employerName: 'Cedar Holdings', person: 'owner', relation: 'household', wages, medicareWages: wages })] } });
     await plan(without);
     await plan(withW2);
     const a = figureRow(without, 'agi.est');
@@ -179,7 +179,7 @@ describe('review fixes', () => {
 
   test('AC3: SEP room for a sole proprietor with outside wages above the wage base passes those wages (F7)', async () => {
     const outside = 200000;
-    const db = await S.store({ variant: { payroll: [w2Doc({ employerName: 'Example Employer Inc', person: 'spouse', relation: 'outside', wages: outside })] } });
+    const db = await S.store({ variant: { payroll: [w2Doc({ employerName: 'Example Employer Inc', person: 'spouse', relation: 'outside', wages: outside, medicareWages: outside })] } });
     await plan(db);
     const expected = sepRoom({ kind: 'self-employed', netProfit: SP, filingStatus: 'mfj', w2SocialSecurityWages: outside, w2MedicareWages: outside, employerContributions: 0, ...CONF }).value;
     const naive = sepRoom({ kind: 'self-employed', netProfit: SP, filingStatus: 'mfj', employerContributions: 0, ...CONF }).value;
@@ -256,12 +256,12 @@ describe('review fixes, round two', () => {
   test('AC3: a spouse W-2 from the household S corp adds exactly its box 1 wages to agi.est (G1)', async () => {
     const spouseWages = 30000;
     const base = await S.store();
-    const withSpouse = await S.store({ variant: { payroll: [w2Doc({ employerName: SCORP.name, person: 'spouse', wages: spouseWages })] } });
+    const withSpouse = await S.store({ variant: { payroll: [w2Doc({ employerName: SCORP.name, person: 'spouse', wages: spouseWages, medicareWages: spouseWages })] } });
     await plan(base);
     await plan(withSpouse);
     near(r2(figureRow(withSpouse, 'agi.est').v - figureRow(base, 'agi.est').v), spouseWages, 'agi.est rises by the spouse wages');
     // the owner's own-corp wages come from the P&L: an owner W-2 from the same corp is not added again
-    const withOwner = await S.store({ variant: { payroll: [w2Doc({ employerName: SCORP.name, person: 'owner', wages: 12 * SCORP.expenses['Officer salary'] })] } });
+    const withOwner = await S.store({ variant: { payroll: [w2Doc({ employerName: SCORP.name, person: 'owner', wages: 12 * SCORP.expenses['Officer salary'], medicareWages: 12 * SCORP.expenses['Officer salary'] })] } });
     await plan(withOwner);
     near(figureRow(withOwner, 'agi.est').v, figureRow(base, 'agi.est').v, 'owner own-corp wages not double counted');
   });
@@ -270,7 +270,7 @@ describe('review fixes, round two', () => {
     const db = await S.store({
       variant: {
         entities: [SOLE_PROP],
-        payroll: [w2Doc({ employerName: 'Example Employer Inc', person: 'spouse', relation: 'outside', wages: 50000, box12: [{ code: 'D', amount: 24500 }] })],
+        payroll: [w2Doc({ employerName: 'Example Employer Inc', person: 'spouse', relation: 'outside', wages: 50000, medicareWages: 74500, box12: [{ code: 'D', amount: 24500 }] })],
         facts: { 'business.salaryRange': undefined },
       },
     });
@@ -400,14 +400,14 @@ describe('review fixes, round four', () => {
     const cedar = 'Cedar Holdings';
     const [docOnly, docOnlyWithRecord] = await agiPair({
       entities: [SOLE_PROP, { name: cedar, type: 's_corp', owner: 'owner', income: 0, expenses: {} }],
-      payroll: [w2Doc({ employerName: cedar, person: 'owner', relation: 'household', wages: 60000 })],
+      payroll: [w2Doc({ employerName: cedar, person: 'owner', relation: 'household', wages: 60000, medicareWages: 60000 })],
     });
     near(docOnlyWithRecord, docOnly, 'S corp without P&L: the record leaves agi.est unchanged');
 
     // The S corp has P&L lines but no officer salary; wages again come from the W-2.
     const [noSalary, noSalaryWithRecord] = await agiPair({
       entities: [{ ...SCORP, expenses: { Software: SCORP.expenses.Software } }, SOLE_PROP],
-      payroll: [w2Doc({ employerName: SCORP.name, person: 'owner', wages: 60000 })],
+      payroll: [w2Doc({ employerName: SCORP.name, person: 'owner', wages: 60000, medicareWages: 60000 })],
     });
     near(noSalaryWithRecord, noSalary, 'S corp with zero P&L salary: the record leaves agi.est unchanged');
   });

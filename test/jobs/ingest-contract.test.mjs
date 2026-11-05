@@ -122,8 +122,8 @@ const OUT_B = 'Example Logistics Co';
 //   43,000 (AA is designated Roth, already inside box 1). AGI wages = 100,000.
 //   Owner 402(g) total = D 5,000 + D 3,000 + AA 2,000 = 10,000 (402A(c)(2)); Roth 2,000.
 const TWO_W2 = Object.freeze([
-  W2(OUT_B, { wages: 40000, federalWithheld: 4800, state: 'VA', stateWithheld: 1800, box12: [{ code: 'D', amount: 3000 }, { code: 'AA', amount: 2000 }] }, OUTSIDE_OWNER),
-  W2(OUT_A, { wages: 60000, federalWithheld: 7200, state: 'VA', stateWithheld: 2700, box12: [{ code: 'D', amount: 5000 }] }, OUTSIDE_OWNER),
+  W2(OUT_B, { wages: 40000, medicareWages: 43000, federalWithheld: 4800, state: 'VA', stateWithheld: 1800, box12: [{ code: 'D', amount: 3000 }, { code: 'AA', amount: 2000 }] }, OUTSIDE_OWNER),
+  W2(OUT_A, { wages: 60000, medicareWages: 65000, federalWithheld: 7200, state: 'VA', stateWithheld: 2700, box12: [{ code: 'D', amount: 5000 }] }, OUTSIDE_OWNER),
 ]);
 
 test('MGI1: two ingested W-2s sum per recipient and employer', async () => {
@@ -148,7 +148,7 @@ test('MGI1: box 12 deferrals reduce solo 401(k) employee room', async () => {
 // 402(g) total = D only = 4,000 (G is a 457(b) deferral under 457(c)), so employee room = 24,500 -
 // 4,000 = 20,500.
 test('MGI1: code G lowers box 1 but not the 402(g) total', async () => {
-  const { db } = await planned({ payroll: [W2(OUT_A, { wages: 50000, federalWithheld: 6000, box12: [{ code: 'D', amount: 4000 }, { code: 'G', amount: 6000 }] }, OUTSIDE_OWNER)] });
+  const { db } = await planned({ payroll: [W2(OUT_A, { wages: 50000, medicareWages: 60000, federalWithheld: 6000, box12: [{ code: 'D', amount: 4000 }, { code: 'G', amount: 6000 }] }, OUTSIDE_OWNER)] });
   const [part] = outsideParts(db, 'owner');
   assert.ok(part, 'one outside wage part');
   near(part.gross, 60000, 'gross = box 1 + D + G');
@@ -163,7 +163,7 @@ test('MGI1: code G lowers box 1 but not the 402(g) total', async () => {
 const AGE52 = Object.freeze({ 'household.ownerAge': 52, 'retirement.priorYearFicaWages': { owner: 60000 } });
 
 test('MGI1: catch-up is the excess over 402(g) at one plan', async () => {
-  const { db } = await planned({ facts: AGE52, payroll: [W2(OUT_A, { wages: 100000, federalWithheld: 15000, box12: [{ code: 'D', amount: 30000 }] }, OUTSIDE_OWNER)] });
+  const { db } = await planned({ facts: AGE52, payroll: [W2(OUT_A, { wages: 100000, medicareWages: 130000, federalWithheld: 15000, box12: [{ code: 'D', amount: 30000 }] }, OUTSIDE_OWNER)] });
   near(fig(db, 'room.solo401k.catchUp').v, 2500, 'catch-up room');
   near(fig(db, 'room.solo401k.employee').v, 0, 'employee room');
 });
@@ -174,8 +174,8 @@ test('MGI1: catch-up is the excess over 402(g) at one plan', async () => {
 // retirement.otherPlanDeferrals {deferral 20,000, catchUp 0} settles the split.
 test('MGI1: an unsplittable catch-up blocks', async () => {
   const payroll = [
-    W2(OUT_A, { wages: 80000, federalWithheld: 12000, box12: [{ code: 'D', amount: 20000 }] }, OUTSIDE_OWNER),
-    W2(SCORP.name, { wages: 50000, federalWithheld: 6000, box12: [{ code: 'D', amount: 10000 }] }, { recipient: 'owner' }),
+    W2(OUT_A, { wages: 80000, medicareWages: 100000, federalWithheld: 12000, box12: [{ code: 'D', amount: 20000 }] }, OUTSIDE_OWNER),
+    W2(SCORP.name, { wages: 50000, medicareWages: 60000, federalWithheld: 6000, box12: [{ code: 'D', amount: 10000 }] }, { recipient: 'owner' }),
   ];
   const blocked = await planned({ facts: AGE52, payroll });
   assertBlocked(blocked.db, blocked.info, 'deferral_split_unknown', ['agi.est', 'tax.fed.proj', 'room.solo401k.employee', 'room.solo401k.catchUp']);
@@ -225,8 +225,8 @@ test('MGI1: paystub deferrals without a year-to-date total block', async () => {
 test('MGI1: recipients come from the answers', async () => {
   const { db, info } = await planned({
     payroll: [
-      W2(OUT_B, { wages: 30000, federalWithheld: 3000 }, { recipient: 'both', relation: 'outside', document: 'spouse' }),
-      W2(OUT_B, { wages: 45000, federalWithheld: 5000 }),
+      W2(OUT_B, { wages: 30000, medicareWages: 30000, federalWithheld: 3000 }, { recipient: 'both', relation: 'outside', document: 'spouse' }),
+      W2(OUT_B, { wages: 45000, medicareWages: 45000, federalWithheld: 5000 }),
     ],
   });
   assertBlocked(db, info, 'w2_recipient_unknown', ['agi.est', 'inc.ytd.w2']);
@@ -245,7 +245,7 @@ test('MGI1: recipients come from the answers', async () => {
 // lifts it.
 test('MGI1: a W-2 with no withholding rows asks its recipient through ingest', async () => {
   const employer = 'Example Robotics Inc';
-  const { db, info } = await planned({ payroll: [W2(employer, { wages: 20000 }, { relation: 'outside' })] });
+  const { db, info } = await planned({ payroll: [W2(employer, { wages: 20000, medicareWages: 20000 }, { relation: 'outside' })] });
   assertBlocked(db, info, 'w2_recipient_unknown', ['agi.est']);
   const asked = db.prepare("SELECT * FROM confirm_items WHERE kind = 'employer_recipient' AND subject = ?").get(nameKey(employer));
   assert.ok(asked, 'an employer_recipient question is queued for the employer key');
@@ -263,7 +263,7 @@ test('MGI1: a W-2 with no withholding rows asks its recipient through ingest', a
 // question on a P&L sheet named for the alias) maps it to the S corp: not outside wages. Without
 // the alias, 'household' matches nothing and blocks.
 const NW_LLC = 'Northwind Advisory, LLC';
-const nwLlcW2 = () => W2(NW_LLC, { wages: 60000, federalWithheld: 6000 }, { recipient: 'owner', relation: 'household' });
+const nwLlcW2 = () => W2(NW_LLC, { wages: 60000, medicareWages: 60000, federalWithheld: 6000 }, { recipient: 'owner', relation: 'household' });
 
 test('MGI1: a household employer is matched by name or alias', async () => {
   const unmatched = await planned({ payroll: [nwLlcW2()] });
@@ -351,8 +351,8 @@ test('MGI1: income facts read employerName and entityKind', async () => {
     variant: {
       entities: [{ ...SCORP, income: 0, expenses: {} }, SOLE_PROP],
       payroll: [
-        W2(OUT_A, { wages: 50000, federalWithheld: 5000 }, OUTSIDE_OWNER),
-        W2(SCORP.name, { wages: 40000, federalWithheld: 4000 }, { recipient: 'owner', relation: 'household' }),
+        W2(OUT_A, { wages: 50000, medicareWages: 50000, federalWithheld: 5000 }, OUTSIDE_OWNER),
+        W2(SCORP.name, { wages: 40000, medicareWages: 40000, federalWithheld: 4000 }, { recipient: 'owner', relation: 'household' }),
         K1({ entityKind: 'partnership', ordinaryIncome: 1000, guaranteedPayments: 0, selfEmploymentEarnings: 1000 }),
       ],
     },
@@ -422,7 +422,7 @@ test('MGI1: D13 a notes fact the planner agrees with is kept and nothing is aske
 // Liveness for the allowed path: income.w2 written by the W-2 extraction (src ing:extract-w2:...)
 // is unconfirmed and a planner key, so the planner's derived fact replaces it.
 test('MGI1: D13 a document-sourced planner key is overwritten by the planner', async () => {
-  const db = await S.store({ variant: { payroll: [W2(OUT_A, { wages: 50000, federalWithheld: 5000 }, OUTSIDE_OWNER)] } });
+  const db = await S.store({ variant: { payroll: [W2(OUT_A, { wages: 50000, medicareWages: 50000, federalWithheld: 5000 }, OUTSIDE_OWNER)] } });
   const before = factRow(db, 'income.w2');
   assert.ok(before && String(before.src).startsWith('ing:') && !String(before.src).startsWith('ing:notes:') && before.confirmed === 0,
     `document fact stored: ${JSON.stringify(before)}`);
@@ -435,7 +435,7 @@ test('MGI1: D13 a document-sourced planner key is overwritten by the planner', a
 
 // benefits.employer401k is not a key the planner derives: a W-2's fact for it is never touched.
 test('MGI1: D13 a document-sourced key the planner does not derive is never overwritten', async () => {
-  const db = await S.store({ variant: { payroll: [W2(OUT_A, { wages: 50000, federalWithheld: 5000, retirementPlan: true, box12: [{ code: 'D', amount: 3000 }] }, OUTSIDE_OWNER)] } });
+  const db = await S.store({ variant: { payroll: [W2(OUT_A, { wages: 50000, medicareWages: 53000, federalWithheld: 5000, retirementPlan: true, box12: [{ code: 'D', amount: 3000 }] }, OUTSIDE_OWNER)] } });
   const before = factRow(db, 'benefits.employer401k');
   assert.ok(before && String(before.src).startsWith('ing:') && before.confirmed === 0, `document fact stored: ${JSON.stringify(before)}`);
   await plan(db);
@@ -547,6 +547,68 @@ test('MGI1: E2 liveness: with both employers answered AGI is 231,000', async () 
   near(fig(db, 'tax.fed.proj').v, 45584, 'federal tax with 360 of Additional Medicare Tax');
 });
 
+// E3 (driver decision: when a W-2 for the employer and year exists, taxable wages are box 1; the
+// officer salary projection applies only with no W-2). Single filer, own S corp whose P&L carries
+// an officer salary of 5,000 a month for ten months (projected 60,000) and income equal to it, so
+// zero profit. W-2 from the corp: box 1 35,500, box 5 60,000 (Form 1040 line 1a instructions: wages
+// are box 1). The bug rebuilds wages from the projected salary when box 12 is unread: AGI 60,000,
+// tax 5,020.
+//   AGI = 35,500 + 0 profit = 35,500.
+//   taxable = 35,500 - 16,100 = 19,400; income tax = 1,240 + 12% * (19,400 - 12,400) = 1,240 + 840
+//   = 2,080. No QBI (zero profit), no SE tax, no Additional Medicare (box 5 60,000 < 200,000).
+// Reading box 12 D 24,500 gives the same numbers: box 1 already excludes it.
+const JUNIPER = Object.freeze({ name: 'Juniper Advisory', type: 's_corp', owner: 'owner', income: 5000, expenses: Object.freeze({ 'Officer salary': 5000 }) });
+const E3_W2 = box12 => W2(JUNIPER.name, { wages: 35500, medicareWages: 60000, socialSecurityWages: 60000, federalWithheld: 2000, ...(box12 ? { box12 } : {}) }, { recipient: 'owner' });
+
+test('MGI1: E3 a W-2 from the own S corp sets taxable wages from box 1, not the projected salary', async () => {
+  for (const box12 of [null, [{ code: 'D', amount: 24500 }]]) {
+    const db = await S.store({ variant: { ...SINGLE_WAGES, entities: [JUNIPER], payroll: [E3_W2(box12)] } });
+    await addFile(db, pnlWorkbook([JUNIPER]));
+    await plan(db);
+    const what = box12 ? 'box 12 D read' : 'box 12 unread';
+    near(fig(db, `pnl.${'juniper-advisory'}.salaryProj`).v, 60000, `${what}: precondition, projected officer salary`);
+    near(fig(db, 'agi.est').v, 35500, `${what}: AGI is box 1`);
+    near(fig(db, 'tax.fed.proj').v, 2080, `${what}: federal tax on box 1`);
+  }
+});
+
+// E4 (driver decision: an unread box 5 blocks federal tax and every figure that depends on it with a
+// visible reason; no fallback to box 1). Single filer, box 1 190,000, boxes 5 and 12 unread: the
+// fallback published 34,334 with a note, omitting 130.50 of Additional Medicare Tax (Form 8959
+// line 1 is box 5). Liveness: box 5 214,500 publishes 34,464.50 (hand calculation under E1).
+test('MGI1: E4 an unread box 5 blocks federal tax with a visible reason', async () => {
+  const noBox5 = W2(OUT_A, { wages: 190000, socialSecurityWages: 184500, federalWithheld: 38000 }, OUTSIDE_OWNER);
+  const { db, info } = await planned({ ...SINGLE_WAGES, payroll: [noBox5] });
+  for (const k of ['tax.fed.proj', 'sh.fed.currentTarget', 'sh.fed.required', 'sh.fed.remaining']) assert.equal(figureRow(db, k), null, `${k} is not published without box 5`);
+  const codes = errorsOf(info).filter(c => !c.includes('.'));
+  assert.ok(codes.length, `a block is reported: blocked ${JSON.stringify(info.blocked)}, withheld ${JSON.stringify(info.withheld)}`);
+  for (const c of codes) assert.notEqual(reasonText({ info, entities: [] }, c), GENERIC, `${c} has its own reason text`);
+  assert.ok(activeRecIds(db).includes('missing-data'), 'missing-data lists the reason');
+  assert.ok(codes.some(c => missingDataText(db).includes(reasonText({ info, entities: [] }, c))), 'the reason text is shown');
+
+  const withBox5 = await planned({ ...SINGLE_WAGES, payroll: [E1_W2(null)] });
+  near(fig(withBox5.db, 'tax.fed.proj').v, 34464.5, 'box 5 read: federal tax with 130.50 of Additional Medicare Tax');
+});
+
+// E5 (driver decision: plan compensation for an S corp owner is box 1 plus elective deferrals, IRC
+// 415(c)(3) and Pub 560, with a visible note that the plan uses W-2 compensation; Medicare wages feed
+// only Additional Medicare Tax and FICA). The owner's S corp has no officer-salary P&L line; its
+// W-2 shows box 1 70,000 (60,000 cash wages plus 10,000 of 2% shareholder health premiums, which
+// are box 1 wages but not box 5 Medicare wages under IRS S corporation compensation guidance), box 5
+// 60,000, box 12 read with no codes, and no contributions on file.
+//   compensation = 70,000 + 0 deferrals = 70,000; employer room = 25% * 70,000 = 17,500 (IRC
+//   404(a)(3)). The bug sizes it on box 5: 25% * 60,000 = 15,000.
+const NO_SALARY_CORP = Object.freeze({ ...SCORP, expenses: Object.freeze({ Software: 300 }) });
+
+test('MGI1: E5 S corp plan compensation is box 1 plus deferrals, not box 5', async () => {
+  const w2 = W2(SCORP.name, { wages: 70000, medicareWages: 60000, socialSecurityWages: 60000, federalWithheld: 7000, box12: [] }, { recipient: 'owner' });
+  const { db } = await planned({ entities: [NO_SALARY_CORP, SOLE_PROP], payroll: [w2] });
+  const room = fig(db, 'room.solo401k.employer');
+  near(room.v, 17500, 'employer room = 25% of box 1 compensation');
+  const notes = (room.locator && room.locator.notes) || [];
+  assert.ok(notes.some(n => /W-2/.test(n) && /compensation/i.test(n)), `a visible note says the plan uses W-2 compensation: ${JSON.stringify(notes)}`);
+});
+
 // ================================================================ MGI2: payments counted once, by kind and jurisdiction
 
 // Owner W-2 (employer A): box 1 60,000, federal withheld 9,000, VA withheld 3,000. Workbook: Federal
@@ -560,7 +622,7 @@ test('MGI1: E2 liveness: with both employers answered AGI is 231,000', async () 
 const MGI2_BASE = Object.freeze({
   taxPayments: { state: 1000 },
   priorReturn: { agi: 120000, totalTax: 30000 },
-  payroll: [W2(OUT_A, { wages: 60000, federalWithheld: 9000, state: 'VA', stateWithheld: 3000 }, OUTSIDE_OWNER)],
+  payroll: [W2(OUT_A, { wages: 60000, medicareWages: 60000, federalWithheld: 9000, state: 'VA', stateWithheld: 3000 }, OUTSIDE_OWNER)],
 });
 
 test('MGI2: withholding and estimates are each counted once', async () => {
@@ -622,7 +684,7 @@ test('MGI2: Additional Medicare withholding counts zero with a note because inge
 const STUBS_THEN_W2 = (answers) => [
   STUB(OUT_A, { payDate: '2026-01-31', periodStart: '2026-01-01', periodEnd: '2026-01-31', gross: 5000, federalWithholding: 750, ytdGross: 5000 }, answers),
   STUB(OUT_A, { payDate: '2026-02-28', periodStart: '2026-02-01', periodEnd: '2026-02-28', gross: 5000, federalWithholding: 750, ytdGross: 10000 }, answers),
-  W2(OUT_A, { wages: 60000, federalWithheld: 9000 }, answers),
+  W2(OUT_A, { wages: 60000, medicareWages: 60000, federalWithheld: 9000 }, answers),
 ];
 
 test('MGI2: paystub withholding summarized by the W-2 counts once', async () => {
@@ -662,15 +724,15 @@ test('MGI2: jurisdictions normalize', async () => {
 // W-2 withholding 1,500 is left out of Virginia withholding with a warning; the Virginia W-2's 3,000
 // alone counts.
 test('MGI2: unknown and other-state withholding stays out of Virginia', async () => {
-  const unknown = await planned({ payroll: [W2(OUT_A, { wages: 60000, federalWithheld: 9000, state: '', stateWithheld: 2000 }, OUTSIDE_OWNER)] });
+  const unknown = await planned({ payroll: [W2(OUT_A, { wages: 60000, medicareWages: 60000, federalWithheld: 9000, state: '', stateWithheld: 2000 }, OUTSIDE_OWNER)] });
   assert.equal(unknown.db.prepare("SELECT count(*) AS n FROM tax_payments WHERE kind = 'withholding' AND jurisdiction = 'state'").get().n, 1, 'ingest stores jurisdiction state');
   assertBlocked(unknown.db, unknown.info, 'withholding_state_unknown', ['tax.va.withheld', 'sh.va.remaining']);
   near(fig(unknown.db, 'tax.fed.withheld').v, 9000, 'federal withholding is unaffected');
 
   const md = await planned({
     payroll: [
-      W2(OUT_A, { wages: 60000, federalWithheld: 9000, state: 'VA', stateWithheld: 3000 }, OUTSIDE_OWNER),
-      W2(OUT_B, { wages: 30000, federalWithheld: 3000, state: 'MD', stateWithheld: 1500 }, OUTSIDE_OWNER),
+      W2(OUT_A, { wages: 60000, medicareWages: 60000, federalWithheld: 9000, state: 'VA', stateWithheld: 3000 }, OUTSIDE_OWNER),
+      W2(OUT_B, { wages: 30000, medicareWages: 30000, federalWithheld: 3000, state: 'MD', stateWithheld: 1500 }, OUTSIDE_OWNER),
     ],
   });
   near(fig(md.db, 'tax.va.withheld').v, 3000, 'Virginia withholding excludes Maryland');
@@ -718,8 +780,8 @@ test('MGI2: brief and Q4 prose name estimates and withholding separately', async
 // Original W-2 (employer A, 2026): box 1 60,000, federal 9,000, VA 2,700. Corrected W-2 (later
 // file): box 1 65,000, federal 9,800, VA 2,925. The employer is answered owner on the first import,
 // so the second import asks two withholding_conflict questions (federal and VA).
-const ORIGINAL = () => W2(OUT_A, { wages: 60000, federalWithheld: 9000, state: 'VA', stateWithheld: 2700 }, OUTSIDE_OWNER);
-const CORRECTED = (conflict) => W2(OUT_A, { wages: 65000, federalWithheld: 9800, state: 'VA', stateWithheld: 2925 }, conflict ? { conflict } : {});
+const ORIGINAL = () => W2(OUT_A, { wages: 60000, medicareWages: 60000, federalWithheld: 9000, state: 'VA', stateWithheld: 2700 }, OUTSIDE_OWNER);
+const CORRECTED = (conflict) => W2(OUT_A, { wages: 65000, medicareWages: 65000, federalWithheld: 9800, state: 'VA', stateWithheld: 2925 }, conflict ? { conflict } : {});
 const noFigureIs = (db, v) => {
   for (const f of plannerFigures(db)) assert.notEqual(f.v, v, `${f.key} must not be ${v}`);
 };
@@ -762,8 +824,8 @@ test('MGI5: answers that keep different forms block', async () => {
 // (askConflict). 'second': wages 60,000 once, not 120,000; federal withholding 9,500. 'first':
 // the original is kept, so withholding is 9,000 (the bug reads the last W-2's field: 9,500).
 const sameWages = conflict => [
-  W2(OUT_A, { wages: 60000, federalWithheld: 9000 }, OUTSIDE_OWNER),
-  W2(OUT_A, { wages: 60000, federalWithheld: 9500 }, { conflict }),
+  W2(OUT_A, { wages: 60000, medicareWages: 60000, federalWithheld: 9000 }, OUTSIDE_OWNER),
+  W2(OUT_A, { wages: 60000, medicareWages: 60000, federalWithheld: 9500 }, { conflict }),
 ];
 
 test('MGI5: a same-wages correction keeps one form', async () => {
@@ -786,8 +848,8 @@ test('MGI5: a same-wages correction keeps one form', async () => {
 test('MGI5: an unreconciled pair blocks', async () => {
   const { db, info } = await planned({
     payroll: [
-      W2(OUT_A, { wages: 60000, federalWithheld: 9000, box12: [{ code: 'D', amount: 5000 }] }, OUTSIDE_OWNER),
-      W2(OUT_A, { wages: 60000, federalWithheld: 9000, box12: [{ code: 'D', amount: 6000 }] }),
+      W2(OUT_A, { wages: 60000, medicareWages: 65000, federalWithheld: 9000, box12: [{ code: 'D', amount: 5000 }] }, OUTSIDE_OWNER),
+      W2(OUT_A, { wages: 60000, medicareWages: 66000, federalWithheld: 9000, box12: [{ code: 'D', amount: 6000 }] }),
     ],
   });
   assert.equal(db.prepare("SELECT count(*) AS n FROM documents WHERE doc_type = 'w2'").get().n, 2, 'two documents stored');

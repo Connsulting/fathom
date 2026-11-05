@@ -166,7 +166,7 @@ test('MG5: D1 liveness: the S corp SEP path with no deferral is 25% of salary', 
 //   Counted twice (the bug): 25,000 - 20,000 = 5,000 for both.
 
 const NW_NO_SALARY = Object.freeze({ name: SCORP.name, type: 's_corp', owner: 'owner', income: 20000, expenses: { Software: 300 } });
-const NW_W2 = Object.freeze(w2Doc({ employerName: SCORP.name, person: 'owner', wages: 100000, box12: [] }));
+const NW_W2 = Object.freeze(w2Doc({ employerName: SCORP.name, person: 'owner', wages: 100000, medicareWages: 100000, box12: [] }));
 const EMPLOYER_LINE = Object.freeze({ entity: SCORP.name, category: '401(k) employer contribution', monthly: 1000 });
 const corpComp = ({ line = false, facts = [] } = {}) => ({
   entities: [NW_NO_SALARY],

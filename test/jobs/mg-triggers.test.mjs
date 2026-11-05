@@ -685,7 +685,7 @@ test('MG12: a built salary game becomes unavailable when outside deferrals becom
   const db = await S.store();
   await plan(db);
   assert.ok(contentValue(db, 'wargame').salary);
-  await addPayroll(db, w2Doc({ employerName: 'Example Employer Inc', person: 'owner', relation: 'outside', wages: 200000 }));
+  await addPayroll(db, w2Doc({ employerName: 'Example Employer Inc', person: 'owner', relation: 'outside', wages: 200000, medicareWages: 200000 }));
   await plan(db);
   const g = contentValue(db, 'wargame').salary;
   assert.equal(typeof g.unavailable, 'string');

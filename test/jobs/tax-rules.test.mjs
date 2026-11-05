@@ -144,7 +144,7 @@ describe('MG3 child tax credit phase-out', () => {
     // 2,200 - 50 x ceil((agi.est - 400,000) / 1,000), floored at zero, and no figure carries the
     // retired ctc_phaseout_unsupported assumption.
     const { db, result } = await planned({
-      payroll: [w2Doc({ employerName: 'Example Employer Inc', person: 'spouse', relation: 'outside', wages: 150000, box12: [] })],
+      payroll: [w2Doc({ employerName: 'Example Employer Inc', person: 'spouse', relation: 'outside', wages: 150000, medicareWages: 150000, box12: [] })],
     });
     const agi = fig(db, 'agi.est').v;
     assert.ok(agi > 400000, `agi.est ${agi} is over the threshold`);
@@ -332,7 +332,7 @@ const JUNIPER = Object.freeze({ name: 'Juniper Works', type: 'sole_prop', owner:
 const MIXED = Object.freeze({ entities: [SCORP, SOLE_PROP, JUNIPER] });
 const MIXEDDOC = Object.freeze({
   ...MIXED,
-  payroll: [w2Doc({ employerName: SCORP.name, person: 'owner', wages: 55000, box12: [{ code: 'D', amount: 5000 }] })],
+  payroll: [w2Doc({ employerName: SCORP.name, person: 'owner', wages: 55000, medicareWages: 60000, box12: [{ code: 'D', amount: 5000 }] })],
 });
 const withContribs = (variant, list, facts = {}) => ({ ...variant, facts: { ...(variant.facts || {}), ...facts, 'retirement.contributions': list } });
 const wagesLine = (db, person) => fig(db, 'agi.est').locator.parts.wages.find(w => w.person === person && w.source === 'own S corp');
@@ -470,7 +470,7 @@ describe('MG5 self-employed retirement deduction', () => {
     // plan it belongs to is unknown, so the owner is asked once and no solo room is sized. With the
     // employer named the document wins: allPlanDeferrals 6,000 (counted once), employee room
     // 24,500 - 6,000 = 18,500 on the 60,000 Northwind salary.
-    const doc = w2Doc({ employerName: 'Example Employer Inc', person: 'owner', relation: 'outside', wages: 90000, box12: [{ code: 'D', amount: 6000 }] });
+    const doc = w2Doc({ employerName: 'Example Employer Inc', person: 'owner', relation: 'outside', wages: 90000, medicareWages: 96000, box12: [{ code: 'D', amount: 6000 }] });
     const loose = await planned(withContribs({ payroll: [doc] }, [{ person: 'owner', plan: 'outside-401k', type: 'deferral', amount: 6000 }]));
     assert.ok((loose.info.confirm.retirement || []).includes('retirement.otherPlanDeferrals'), `confirm: ${JSON.stringify(loose.info.confirm)}`);
     for (const k of ['room.solo401k', 'room.solo401k.employee', 'room.solo401k.employer', 'room.solo401k.pretax']) absent(loose.db, k);
@@ -483,7 +483,7 @@ describe('MG5 self-employed retirement deduction', () => {
     // Spouse outside W-2 with no deferral field plus a 5,000 deferral to the spouse's sole prop
     // plan: the 402(g) test needs the outside deferrals, so household tax blocks. Supplying them as
     // zero unblocks, and agi.est is 5,000 lower than the same store without the deferral fact.
-    const doc = w2Doc({ employerName: 'Example Employer Inc', person: 'spouse', relation: 'outside', wages: 50000 });
+    const doc = w2Doc({ employerName: 'Example Employer Inc', person: 'spouse', relation: 'outside', wages: 50000, medicareWages: 50000 });
     const deferral = [{ person: 'spouse', plan: 'own-corp-401k', type: 'deferral', amount: 5000, entity: SOLE_PROP.slug }];
     const unknown = await planned(withContribs({ payroll: [doc] }, deferral));
     assert.ok(unknown.info.blocked.includes('retirement_other_deferrals_missing'), `blocked: ${unknown.info.blocked}`);
@@ -712,7 +712,7 @@ describe('MG6 Roth catch-up', () => {
     // An owner outside W-2 with no deferral field: allPlanDeferrals is unknown, and at low
     // compensation the employer room depends on it (50,000 salary: 37,000 if zero, 12,500 if
     // 24,500), so nothing sized from it is published. SEP room does not depend on it.
-    const doc = w2Doc({ employerName: 'Example Employer Inc', person: 'owner', relation: 'outside', wages: 200000 });
+    const doc = w2Doc({ employerName: 'Example Employer Inc', person: 'owner', relation: 'outside', wages: 200000, medicareWages: 200000 });
     const { db, info } = await planned({ payroll: [doc] });
     for (const k of ROOM_KEYS) absent(db, k, 'outside deferrals unknown');
     assert.ok(figureRow(db, 'room.sep'), 'room.sep still produced');
