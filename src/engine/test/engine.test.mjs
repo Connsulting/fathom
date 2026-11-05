@@ -1,0 +1,121 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { createEngine, createMemoryLedger, EngineOffError, BudgetExceededError, RoundLimitError } from '../index.mjs';
+import { createRegistryServer } from '../tools.mjs';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+
+const request = { purpose: 'chat', system: 'Use stored figures.', messages: [{ role: 'user', content: 'What is the balance?' }], maxTokens: 128 };
+const now = () => new Date('2026-06-15T12:00:00Z');
+const read = { name: 'balance', description: 'Read a synthetic balance.', scope: 'read',
+  inputSchema: { type: 'object', properties: { account: { type: 'string', enum: ['demo'] } }, required: ['account'], additionalProperties: false },
+  handler: async (args, ctx) => ({ value: 125, account: args.account, clock: ctx.now }) };
+
+test('off and cap checks precede response consumption and have live neighboring cases', async () => {
+  const ledger = createMemoryLedger();
+  await assert.rejects(createEngine({ mode: 'off', ledger, now }).call(request), EngineOffError);
+  ledger.record({ ts: now().toISOString(), purpose: 'chat', costUsd: 200, model: 'fake', tokens: {} });
+  const blocked = createEngine({ mode: 'fake', ledger, now, responses: [{ text: 'Hello', costUsd: 0.01 }] });
+  await assert.rejects(blocked.call(request), BudgetExceededError);
+  const allowed = createEngine({ mode: 'fake', ledger, capUsd: 201, now, responses: [{ text: 'Hello', costUsd: 0.01 }] });
+  assert.equal((await allowed.call(request)).text, 'Hello');
+  assert.equal(ledger.entries.length, 2);
+  assert.equal(ledger.monthSpendUsd('202606'), 200.01);
+});
+
+test('ledger month is UTC, previous months do not consume current cap', async () => {
+  const ledger = createMemoryLedger([{ ts: '2026-05-31T23:59:00Z', purpose: 'job', costUsd: 300, model: 'fake', tokens: {} }]);
+  const engine = createEngine({ mode: 'fake', ledger, now, responses: [{ text: 'Ready', costUsd: 0.03 }] });
+  await engine.call({ ...request, purpose: 'job' });
+  assert.equal(ledger.monthSpendUsd('202606'), 0.03);
+  assert.equal(ledger.entries[1].purpose, 'job');
+});
+
+test('a tool round is accounted before a continuation cap refusal, with its tool results retained', async () => {
+  const ledger = createMemoryLedger();
+  let calls = 0;
+  const engine = createEngine({ mode: 'fake', ledger, capUsd: 0.01, now, responses: [
+    { toolCalls: [{ name: 'balance', args: { account: 'demo' } }], costUsd: 0.02 },
+    { text: 'Your balance is $125.', costUsd: 0.02 },
+  ] });
+  await assert.rejects(engine.call({ ...request, tools: [{ ...read, handler: async () => { calls++; return { value: 125 }; } }] }),
+    error => error instanceof BudgetExceededError && error.toolResults[0].result.value === 125);
+  assert.equal(calls, 1);
+  assert.equal(ledger.entries.length, 1);
+});
+
+test('multi-round fake executes the registry, records each round, and returns a grounding verdict', async () => {
+  const ledger = createMemoryLedger();
+  const engine = createEngine({ mode: 'fake', ledger, now, responses: [
+    { toolCalls: [{ name: 'balance', args: { account: 'demo' } }], costUsd: 0.01 },
+    { text: 'Your balance is $125. Save $999.', costUsd: 0.02 },
+  ] });
+  const result = await engine.call({ ...request, tools: [read] });
+  assert.equal(result.costUsd, 0.03);
+  assert.equal(result.grounding.ok, false);
+  assert.equal(result.grounding.violations.length, 1);
+  assert.equal(ledger.entries.length, 2);
+  assert.equal(result.toolResults[0].result.value, 125);
+});
+
+test('registry exposes exact JSON Schema, validates before execution, and removes writes from jobs', async () => {
+  let writes = 0;
+  const write = { ...read, name: 'set_status', scope: 'write:recs', handler: async () => { writes++; return 'ok'; } };
+  const server = createRegistryServer([read, write], { purpose: 'job', ctx: { db: {}, now: 'demo' } });
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: 'test', version: '1' });
+  await Promise.all([client.connect(a), server.instance.connect(b)]);
+  try {
+    const listed = await client.listTools();
+    assert.deepEqual(listed.tools.map(t => t.name), ['balance']);
+    assert.deepEqual(listed.tools[0].inputSchema, read.inputSchema);
+    assert.equal((await client.callTool({ name: 'balance', arguments: { account: 'demo' } })).isError, undefined);
+    assert.equal((await client.callTool({ name: 'balance', arguments: { account: 'bad' } })).isError, true);
+    assert.equal((await client.callTool({ name: 'set_status', arguments: { account: 'demo' } })).isError, true);
+    assert.equal(writes, 0);
+  } finally { await client.close(); await server.instance.close(); }
+});
+
+test('parallel tools all finish in the paid round and chat handlers receive only the frozen context', async () => {
+  const contexts = [];
+  const tools = ['alpha', 'beta'].map(name => ({ ...read, name, handler: async (_args, ctx) => { contexts.push(ctx); return { value: 2 }; } }));
+  const db = {};
+  const engine = createEngine({ mode: 'fake', now, toolContext: { db }, responses: [
+    { toolCalls: tools.map(t => ({ name: t.name, args: { account: 'demo' } })), costUsd: 0.01 }, { text: 'Done', costUsd: 0.01 },
+  ] });
+  assert.equal((await engine.call({ ...request, tools })).toolResults.length, 2);
+  assert.ok(contexts.every(ctx => ctx.db === db && ctx.now === now().toISOString()));
+  assert.deepEqual(Object.keys(contexts[0]).sort(), ['db', 'now']);
+});
+
+test('typed extraction accepts valid rows and records cost even when validation rejects rows', async () => {
+  const schema = { type: 'object', properties: { amount: { type: 'number' } }, required: ['amount'], additionalProperties: false };
+  const ledger = createMemoryLedger();
+  const engine = createEngine({ mode: 'fake', ledger, now, responses: [
+    { text: '{"rows":[{"amount":75}]}', costUsd: 0.01 }, { text: '{"rows":[{"amount":"invented"}]}', costUsd: 0.02 },
+  ] });
+  assert.deepEqual(await engine.extract({ document: { type: 'text', text: 'Synthetic amount 75' }, schema }), [{ amount: 75 }]);
+  await assert.rejects(engine.extract({ document: { type: 'pdf', data: Buffer.from('%PDF-synthetic') }, schema }), /schema/);
+  assert.equal(ledger.entries.length, 2);
+  assert.equal(ledger.entries[1].purpose, 'extract');
+  await assert.rejects(createEngine({ mode: 'off' }).extract({ document: { type: 'text', text: 'demo' }, schema }), EngineOffError);
+});
+
+test('ledger failures stop work, malformed responses retain known costs, and loops are bounded', async () => {
+  const ledger = createMemoryLedger();
+  const engine = createEngine({ mode: 'fake', ledger, responses: [{ text: '{broken', costUsd: 0.01 }] });
+  await assert.rejects(engine.extract({ document: { type: 'text', text: 'demo' }, schema: { type: 'object' } }), /JSON/);
+  assert.equal(ledger.entries.length, 1);
+  const bad = createEngine({ mode: 'fake', ledger: { monthSpendUsd: () => { throw new Error('store unavailable'); }, record: () => {} } });
+  await assert.rejects(bad.call(request), /store unavailable/);
+  const loop = createEngine({ mode: 'fake', responses: Array.from({ length: 8 }, () => ({ toolCalls: [{ name: 'balance', args: { account: 'demo' } }], costUsd: 0.001 })) });
+  await assert.rejects(loop.call({ ...request, tools: [read] }), RoundLimitError);
+});
+
+test('concurrent calls sharing a ledger check spend after the prior round records', async () => {
+  const ledger = createMemoryLedger();
+  const engine = createEngine({ mode: 'fake', ledger, capUsd: 0.01, responses: [{ text: 'ok', costUsd: 0.02 }, { text: 'bad', costUsd: 0.02 }] });
+  const results = await Promise.allSettled([engine.call(request), engine.call(request)]);
+  assert.equal(results.filter(r => r.status === 'fulfilled').length, 1);
+  assert.equal(ledger.entries.length, 1);
+});
