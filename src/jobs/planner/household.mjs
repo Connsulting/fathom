@@ -151,13 +151,33 @@ export function payrollRecords(data, entities, out) {
   return records;
 }
 
+// Owner-set own-corp 401(k) records (R3, H2): documents win, so a record adds only the elective types
+// (deferral, catchup) the person's own-corp payroll documents do not carry. Roth records never lower
+// wages.
+function coveredTypes(docs) {
+  return new Set([...(docs.some(r => r.deferral > 0 || r.roth > 0) ? ['deferral'] : []), ...(docs.some(r => r.catchUp > 0) ? ['catchup'] : [])]);
+}
+
+function ownCorpFacts(owner, person, docs) {
+  const facts = Array.isArray(owner['retirement.contributions']) ? owner['retirement.contributions'] : [];
+  const covered = coveredTypes(docs);
+  return facts.filter(c => c && c.person === person && c.plan === 'own-corp-401k' && (c.type === 'deferral' || c.type === 'catchup')
+    && Number.isFinite(Number(c.amount)) && !covered.has(c.type));
+}
+
+export function factPretax(owner, person, ownRec) {
+  return cents(sum(ownCorpFacts(owner, person, ownRec ? [ownRec] : []).filter(c => c.roth !== true).map(c => Number(c.amount))));
+}
+
 export function contributions(persons, records, corps, owner) {
   const facts = Array.isArray(owner['retirement.contributions']) ? owner['retirement.contributions'] : [];
   const out = {};
   for (const p of ['owner', 'spouse']) {
     const mine = records.filter(r => r.person === p);
     const own = mine.filter(r => r.corp);
-    const fx = facts.filter(c => c && c.person === p && Number.isFinite(Number(c.amount)));
+    const covered = coveredTypes(own);
+    const fx = facts.filter(c => c && c.person === p && Number.isFinite(Number(c.amount))
+      && !(c.plan === 'own-corp-401k' && (c.type === 'deferral' || c.type === 'catchup') && covered.has(c.type)));
     const fsum = test => sum(fx.filter(test).map(c => Number(c.amount)));
     const is401k = c => c.plan === 'own-corp-401k' || c.plan === 'outside-401k';
     const elective = c => c.type === 'deferral' || c.type === 'catchup';

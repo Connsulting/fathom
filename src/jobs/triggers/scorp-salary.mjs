@@ -17,6 +17,8 @@ export function window(ctx) {
 export function evaluate(ctx) {
   if (!ctx.year) return null;
   if (ctx.info.blocked.length) return { blocked: ctx.info.blocked[0] };
+  // The war game needs Virginia tax too; a Virginia gap is missing data, not a closed condition (S12).
+  if (ctx.info.vaBlocked) return { blocked: ctx.info.vaBlocked };
   if (ctx.model.salary) return { grounding: [salaryProjKey(ctx), 'scorp.profitProj', 'room.solo401k.employee', 'room.solo401k.employer'].filter(Boolean) };
   if (ctx.info.confirm.salary) return { confirm: ctx.info.confirm.salary, grounding: [salaryKey(ctx)].filter(Boolean) };
   return null;
@@ -56,7 +58,8 @@ export function template(ctx, hit) {
       qa: [],
     };
   }
-  const key = salaryProjKey(ctx);
+  const found = salaryProjKey(ctx);
+  const key = found && ctx.fig[found].v > 0 ? found : null;
   return {
     summary: key
       ? `You are on track to pay yourself {f:${key}} this year. The war game shows what a different salary does to tax and retirement room.`

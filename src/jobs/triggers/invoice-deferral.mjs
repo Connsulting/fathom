@@ -17,6 +17,8 @@ export function window(ctx) {
 export function evaluate(ctx) {
   if (!ctx.year) return null;
   if (ctx.info.blocked.length) return { blocked: ctx.info.blocked[0] };
+  // The war game needs Virginia tax too; a Virginia gap is missing data, not a closed condition (S12).
+  if (ctx.info.vaBlocked) return { blocked: ctx.info.vaBlocked };
   if (ctx.model.deferral) {
     return { grounding: ['wg.deferral.d100.tax2026', 'wg.deferral.d100.tax2027', 'wg.deferral.d100.decCash', 'wg.deferral.d100.need', 'cash.business'] };
   }

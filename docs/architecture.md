@@ -495,7 +495,11 @@ unclassified P and L entity, an incomplete partnership input, filing status mfs
 itemized estimate blocks the tax figures that need it. IRA room counts traditional and Roth IRA
 contributions; SEP room for a sole proprietor passes that person's W-2 wages; payroll records are kept per
 person and employer, and a household S corp W-2 for anyone but its owner counts as that person's
-wages; salary war-game points are clamped into `business.salaryRange`; a pre-tax IRA with
+wages; owner-set non-Roth own-corp 401(k) deferral and catch-up records lower that person's
+wages only for types no payroll document carries; salary war-game points are clamped into
+`business.salaryRange`, and an S corp with no officer salary yet still gets the war game (no
+current point, measured against the range midpoint); `scorp-salary` and `invoice-deferral` are
+blocked, not retired, while household or Virginia tax is blocked; a pre-tax IRA with
 no balance on file leaves that person's pro-rata status unknown. A planner figure not produced by a run is deleted unless a rec def (text or
 `mine`), message, decision note or content row references it, or a kept war-game entry names its
 point or option. `src/scenario/build.mjs` serves a stored `wg.*` figure in place of the value it

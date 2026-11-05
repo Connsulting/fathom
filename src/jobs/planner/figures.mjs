@@ -12,7 +12,7 @@ import {
   pnlSums, ytd, dateLabel, monthLabel, cleanLabel, sum, addDays, sameName,
 } from './data.mjs';
 import { law, stdDeduction } from './law.mjs';
-import { householdTax, payrollRecords, contributions, stepsOf, num } from './household.mjs';
+import { householdTax, payrollRecords, contributions, factPretax, stepsOf, num } from './household.mjs';
 import { trailingCharitable } from './facts.mjs';
 import { buildWargames } from './wargame.mjs';
 
@@ -239,7 +239,7 @@ export function computeFigures(data, facts, ctx) {
     if (!inUnit(c.person)) continue;
     const ownRec = records.find(r => r.corp === c.entity.slug && r.person === c.person);
     const gross = c.sums.salary > 0 ? c.proj(c.sums.salary) : ownRec ? cents(ownRec.wages + ownRec.pretax) : 0;
-    const pretax = ownRec ? ownRec.pretax : 0;
+    const pretax = gross > 0 ? Math.min(gross, cents((ownRec ? ownRec.pretax : 0) + factPretax(owner, c.person, ownRec))) : 0;
     if (gross > 0) w2.push({ person: c.person, src: `corp:${c.entity.slug}`, gross, agi: Math.max(0, cents(gross - pretax)), pretax });
     const K = c.proj(c.sums.net);
     biz.push({ id: c.entity.slug, kind: 'scorp', person: c.person, agi: K, qbi: K, seInput: null, w2Wages: gross, sstb: sstbOf(c.entity) });
@@ -255,8 +255,10 @@ export function computeFigures(data, facts, ctx) {
     if (r.corp) {
       const c = corps.find(x => x.entity.slug === r.corp);
       if (c && c.person === r.person) continue;
-      const src = !c && entities.some(e => e.slug === r.corp && e.owner === r.person) ? `corp:${r.corp}` : `corp:${r.corp}:${r.person}`;
-      w2.push({ person: r.person, src, gross: cents(r.wages + r.pretax), agi: r.wages, pretax: r.pretax });
+      const own = !c && entities.some(e => e.slug === r.corp && e.owner === r.person);
+      const src = own ? `corp:${r.corp}` : `corp:${r.corp}:${r.person}`;
+      const extra = own ? Math.min(r.wages, factPretax(owner, r.person, r)) : 0;
+      w2.push({ person: r.person, src, gross: cents(r.wages + r.pretax), agi: cents(r.wages - extra), pretax: cents(r.pretax + extra) });
       continue;
     }
     if (r.household) continue;
@@ -406,8 +408,11 @@ export function computeFigures(data, facts, ctx) {
 
   // War games.
   if (hh) {
+    // H3: an S corp with no officer salary yet but positive projected profit still gets the salary
+    // war game (no current point).
+    const gameCorp = corpInUnit || corps.find(c => inUnit(c.person) && c.P > 0) || null;
     out.model = buildWargames(data, out, {
-      clock, f, parts, hh, corp: corpInUnit, corps, entities: pnlEntities, owner, facts, contrib, ageOf, ageKey,
+      clock, f, parts, hh, corp: gameCorp, corps, entities: pnlEntities, owner, facts, contrib, ageOf, ageKey,
       retireMissing, accounts, householdTax,
     });
   }

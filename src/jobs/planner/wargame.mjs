@@ -36,7 +36,8 @@ function salaryGame(data, out, ctx) {
   const lo = Math.min(range.min, range.max);
   const hi = Math.max(range.min, range.max);
   const current = corp.gross;
-  const inRange = current >= lo && current <= hi;
+  const inRange = current > 0 && current >= lo && current <= hi;
+  const outside = inRange ? 'in' : current > 0 ? 'out' : 'none';
   // Grid points rounded to the thousand, then clamped into the approved range (G3).
   const clamp = v => Math.min(hi, Math.max(lo, v));
   const grid = [0, 1, 2, 3, 4].map(i => clamp(round1000(lo + (hi - lo) * i / 4)));
@@ -98,15 +99,19 @@ function salaryGame(data, out, ctx) {
   }
   return {
     title: `What should you pay yourself in ${data.taxYear}?`,
-    question: inRange
-      ? 'Each point trades payroll tax against retirement room. The current salary is marked.'
-      : 'Each point trades payroll tax against retirement room. Your current salary is outside the approved range, so changes are measured against the middle of the range.',
+    question: {
+      in: 'Each point trades payroll tax against retirement room. The current salary is marked.',
+      out: 'Each point trades payroll tax against retirement room. Your current salary is outside the approved range, so changes are measured against the middle of the range.',
+      none: 'Each point trades payroll tax against retirement room. You have no officer salary yet this year, so changes are measured against the middle of the range.',
+    }[outside],
     xLabel: 'Pre-tax retirement room',
     yLabel: inRange ? 'Tax change vs your current salary' : 'Tax change vs the middle of the range',
     points: content,
-    takeaway: inRange
-      ? 'A higher salary buys more pre-tax retirement room and costs more payroll tax. Points on the frontier give the most room for the tax.'
-      : 'Your current salary is outside the range your advisor approved. Pick a point inside it with your advisor before the last payroll.',
+    takeaway: {
+      in: 'A higher salary buys more pre-tax retirement room and costs more payroll tax. Points on the frontier give the most room for the tax.',
+      out: 'Your current salary is outside the range your advisor approved. Pick a point inside it with your advisor before the last payroll.',
+      none: 'An S corp owner who works in the business needs a reasonable salary. Pick a point inside the approved range with your advisor before the last payroll.',
+    }[outside],
   };
 }
 
