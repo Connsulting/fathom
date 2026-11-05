@@ -49,8 +49,8 @@ test('AC3 validateTitle fromModel strips one pair of quotes and one trailing per
 
 test('AC3 validateTitle fromModel allows at most 8 words', () => {
   const m = raw => validateTitle(raw, { fromModel: true });
-  assert.equal(m('one two three four five six seven eight'), 'one two three four five six seven eight');
-  assert.equal(m('one two three four five six seven eight nine'), null);
+  assert.equal(m('alpha bravo charlie delta echo foxtrot golf hotel'), 'alpha bravo charlie delta echo foxtrot golf hotel');
+  assert.equal(m('alpha bravo charlie delta echo foxtrot golf hotel india'), null);
 });
 
 test('AC3 validateTitle fromModel rejects digits except a standalone 19xx or 20xx year', () => {
