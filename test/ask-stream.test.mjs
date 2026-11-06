@@ -254,6 +254,48 @@ test('streamHtml drops a mid-answer Sources sentence and keeps the prose around 
   assert.match(streamHtml('Your sources of income are steady.'), /sources of income/);
 });
 
+test('stripSources keeps wrapped prose that continues with sources', () => {
+  const wrapped = 'Your retirement plan has two funding\nsources: employer contributions and your own deferrals.';
+  assert.equal(stripSources(wrapped), wrapped);
+  assert.equal(stripSources(`${wrapped}\nKeep both.`), `${wrapped}\nKeep both.`);
+  // Capitalized, but after a line that did not end a sentence: still prose.
+  const capital = 'Your plan has two funding\nSources: employer and own deferrals.';
+  assert.equal(stripSources(capital), capital);
+});
+
+test('stripSources removes comma and semicolon separated citations', () => {
+  assert.equal(stripSources('Open. Sources: "A", "B." Then pay.'), 'Open. Then pay.');
+  assert.equal(stripSources('Open. Sources: "A"; "B". Then pay.'), 'Open. Then pay.');
+  assert.equal(stripSources('Open. Sources: household summary, tax pack. Then pay.'), 'Open. Then pay.');
+  assert.equal(stripSources('Open. Sources: “A”, “B.” Then pay.'), 'Open. Then pay.');
+});
+
+test('stripSources and streamHtml remove a singular Source label', () => {
+  assert.equal(stripSources('Open. Source: "A". Then pay.'), 'Open. Then pay.');
+  assert.equal(stripSources('Pay it.\n\nSource: household summary\n\nKeep a reserve.'), 'Pay it.\n\nKeep a reserve.');
+  const html = streamHtml('Open. Source: "Gifts of appreciated stock". Then pay.');
+  assert.match(html, /Then pay/);
+  assert.doesNotMatch(html, /Source/);
+  assert.equal(stripSources('Open. Reference: "A". Then pay.'), 'Open. Then pay.');
+  assert.equal(stripSources('Open. Citation: the tax pack. Then pay.'), 'Open. Then pay.');
+});
+
+test('a removed citation list item leaves no bare marker', () => {
+  // Mid-list: the whole item goes with its marker; the remaining numbering is left alone.
+  assert.equal(stripSources('Do these:\n\n1. Pay the estimate.\n2. Sources: "Quarterly taxes"\n3. Keep a reserve.'),
+    'Do these:\n\n1. Pay the estimate.\n3. Keep a reserve.');
+  // Trailing item.
+  assert.equal(stripSources('Do these:\n\n1. Pay the estimate.\n2. Sources: household summary'),
+    'Do these:\n\n1. Pay the estimate.');
+  // A bullet item goes with its dash.
+  assert.equal(stripSources('Do these:\n\n- Pay the estimate.\n- Sources: tax pack\n- Keep a reserve.'),
+    'Do these:\n\n- Pay the estimate.\n- Keep a reserve.');
+  // An item with a sentence before the citation keeps the sentence and its marker.
+  assert.equal(stripSources('Do these:\n\n1. Pay the estimate.\n2. Keep a reserve. Sources: "A".\n3. File on time.'),
+    'Do these:\n\n1. Pay the estimate.\n2. Keep a reserve.\n3. File on time.');
+  assert.equal(stripSources('1. Pay the estimate.\n2. Keep a reserve. Sources: "A".'), '1. Pay the estimate.\n2. Keep a reserve.');
+});
+
 test('the prompt tells the model not to cite sources and allows the markdown subset', () => {
   assert.match(PRODUCT_RULES, /Never write a Sources/);
   assert.match(PRODUCT_RULES, /Call tools before you write/);
