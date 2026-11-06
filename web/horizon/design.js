@@ -910,7 +910,7 @@ function goalCard(g) {
   }
   if (!prog && owner) {
     const tKey = `goal.${g.id}.target`;
-    if (!api.fig(tKey)) prog = `<p class="h-gnone">No target yet. <button type="button" class="h-link" data-goal="edit" data-id="${esc(g.id)}">Add one</button></p>`;
+    if (!(api.s.fig && api.s.fig[tKey])) prog = `<p class="h-gnone">No target yet. <button type="button" class="h-link" data-goal="edit" data-id="${esc(g.id)}">Add one</button></p>`;
     else if (g.trackWaiting) prog = `<p class="h-gnone">Target ${figHtml(tKey, { k: true })}. Waiting on a balance for what it tracks.</p>`;
     else prog = `<p class="h-gnone">Target ${figHtml(tKey, { k: true })}. <button type="button" class="h-link" data-goal="edit" data-id="${esc(g.id)}">Pick what to track</button> to see progress.</p>`;
   }
