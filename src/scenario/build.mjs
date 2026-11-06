@@ -10,6 +10,7 @@ import { resolveTokens } from '../shared/tokens.mjs';
 import { ingestState, applyFreshness } from '../ingest/freshness.mjs';
 import { MODEL_PURPOSES, modelFor } from '../engine/pricing.mjs';
 import { factEventTitle } from '../shared/event-labels.mjs';
+import { deriveHeard } from '../onboarding/heard.mjs';
 import { withAdvisor, advisorSection } from '../advisor/index.mjs';
 
 const DAY = 86400000;
@@ -53,7 +54,7 @@ const EMPTY = {
     dump: '',
     files: [],
     institutions: [],
-    heard: { people: [], entities: [], income: [], lifeEvents: [], deadlines: 0, questions: [] },
+    heard: { people: [], entities: [], income: [], lifeEvents: [], deadlines: 0, questions: [] }, // unused: the page reads live.heard, derived from stored facts
     priorities: [],
   },
   email: { subject: '', preheader: '', greeting: '', sections: [], footer: '' },
@@ -496,6 +497,7 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
       yourPlans: loadYourPlans(db),
       clock: clk,
       ingest,
+      heard: deriveHeard(db, { clock: clk }),
     },
   };
 }
