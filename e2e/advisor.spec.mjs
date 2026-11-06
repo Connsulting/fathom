@@ -24,6 +24,7 @@ test.describe('advisor workflow', { tag: '@mobile' }, () => {
   });
 
   test('send, veto, confirm, check-in and packet', async ({ page }) => {
+    test.setTimeout(120_000); // one long flow: five writes, a reload and two downloads
     // The Advisor screen reads the seeded tables.
     await gotoRoute(page, 'advisor');
     await expectH1(page, advisorName());
@@ -80,7 +81,7 @@ test.describe('advisor workflow', { tag: '@mobile' }, () => {
     await noSideScroll(page, 'the check-in form');
     await ci.getByRole('button', { name: 'Save check-in' }).click();
     await expect(page.locator('.h-next')).toContainText('Thu, Dec 17, 2026, 10:30 AM');
-    await page.reload();
+    await page.reload({ waitUntil: 'domcontentloaded' });
     await expect(page.locator('.h-next')).toContainText('Thu, Dec 17, 2026, 10:30 AM');
     await expect(page.locator('.h-next')).toContainText('45 min');
 
