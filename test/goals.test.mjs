@@ -121,6 +121,16 @@ test('progress comes from tracked stored data with its provenance, never a parti
   assert.equal(waiting.goal.trackWaiting, true);
   assert.equal(waiting.scenario.fig[`goal.${waiting.goal.id}.current`], undefined);
 
+  // A figure kept only for reference (not current) never feeds a goal or the model.
+  s.db.prepare("UPDATE figures SET unavailable_reason = 'Account reclassified' WHERE key = 'bal.a1'").run();
+  const stale = buildScenario(s.db, { clock: s.config.clock }).goals.find(g => g.id === one.id);
+  assert.equal(stale.progress, undefined);
+  assert.equal(stale.current, undefined);
+  assert.equal(stale.trackWaiting, true);
+  const sum = await callTool('household_summary', {}, { db: s.db, now: NOW });
+  assert.equal(sum.goals.find(g => g.id === one.id).current, undefined);
+  s.db.prepare("UPDATE figures SET unavailable_reason = NULL WHERE key = 'bal.a1'").run();
+
   const noTarget = goalCreate(s.ctx({ title: 'Just tracking', track: { accounts: ['a1'] } })).goal;
   assert.equal(noTarget.progress, undefined, 'no target, no bar');
   assert.equal(noTarget.current, 'bal.a1');

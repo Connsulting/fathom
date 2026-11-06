@@ -384,7 +384,9 @@ function deriveFigures(fig, { wargame, series, engine }, scope) {
 // derived figures in `fig`: goal.<id>.target (the typed target, src 'goal-target', kind 't') and
 // goal.<id>.current (the tracked value: one account's or known figure's own figure, or the sum of
 // several tracked accounts, src 'goal-track'), and progress {cur, target} when both exist. A
-// tracked account with no stored balance leaves the goal with no current value, never a partial sum.
+// tracked account with no stored balance, or a figure kept only for reference (unavailable), leaves
+// the goal with no current value, never a partial or stale sum.
+const currentFig = f => !!f && typeof f.v === 'number' && !f.unavailable;
 export function loadGoals(db, { fig = {}, accounts = [] } = {}) {
   const rows = db.prepare('SELECT * FROM goals ORDER BY sort, created_at, id').all();
   return rows.map(r => {
@@ -400,14 +402,14 @@ export function loadGoals(db, { fig = {}, accounts = [] } = {}) {
     }
     const tr = def.track;
     let cur = null;
-    if (tr && typeof tr.figure === 'string' && fig[tr.figure] && typeof fig[tr.figure].v === 'number') {
+    if (tr && typeof tr.figure === 'string' && currentFig(fig[tr.figure])) {
       cur = tr.figure;
       const known = KNOWN_FIGURES.find(k => k.key === tr.figure);
       g.trackLabel = known ? known.label : tr.figure;
     } else if (tr && Array.isArray(tr.accounts) && tr.accounts.length) {
       const accts = tr.accounts.map(id => accounts.find(a => a.id === id)).filter(Boolean);
       g.trackLabel = accts.map(a => a.name).join(', ');
-      const figs = accts.map(a => (a.fig_key && fig[a.fig_key] && typeof fig[a.fig_key].v === 'number' ? fig[a.fig_key] : null));
+      const figs = accts.map(a => (a.fig_key && currentFig(fig[a.fig_key]) ? fig[a.fig_key] : null));
       if (accts.length && accts.length === tr.accounts.length && figs.every(Boolean)) {
         if (accts.length === 1) cur = accts[0].fig_key;
         else {

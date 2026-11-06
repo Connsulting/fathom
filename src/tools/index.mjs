@@ -139,7 +139,7 @@ function goalsForModel(db) {
     if (owner && g.targetDate) out.targetDate = g.targetDate;
     if (g.trackLabel) out.tracking = g.trackLabel;
     const cur = g.progress ? fig[g.progress.cur] : (g.current ? fig[g.current] : null);
-    if (cur && typeof cur.v === 'number') out.current = { amount: cur.v, kind: cur.kind };
+    if (cur && typeof cur.v === 'number' && !cur.unavailable) out.current = { amount: cur.v, kind: cur.kind };
     if (!owner && g.progress && fig[g.progress.target]) out.target = { amount: fig[g.progress.target].v, source: 'plan' };
     return out;
   });

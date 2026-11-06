@@ -1515,7 +1515,8 @@ validates it and is shared with the browser.
 The scenario builder derives each owner goal's figures: `goal.<id>.target` is the typed target
 (source `goal-target`, labelled "You typed this", kind `t`, "A target you set"), and the current value is the tracked account's or
 known figure's own stored figure, or for several accounts `goal.<id>.current`, their sum (source
-`goal-track`). A tracked account with no stored balance gives no current value, never a partial
+`goal-track`). A tracked account with no stored balance, or a figure kept only for reference
+(unavailable), gives no current value, never a partial or stale
 sum. `progress {cur, target}` is set only when both exist; the Goals screen draws a bar only then.
 
 Tradeoff curve positions are `settings` `curve.positions` (`{axisId: 0..1}`). The axes are the
