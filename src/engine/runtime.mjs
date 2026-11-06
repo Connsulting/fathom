@@ -77,7 +77,8 @@ export function createRuntimeEngine({ db, config = {}, now } = {}) {
     await init();
     if (state.credentialState === 'failed') throw new ModelCallError('engine credential unavailable');
     if (!inner || cap !== innerCap) {
-      inner = createEngine({ mode, ledger, capUsd: cap, credential: auth ?? undefined, ...(now ? { now } : {}) });
+      inner = createEngine({ mode, ledger, capUsd: cap, credential: auth ?? undefined, ...(now ? { now } : {}),
+        streamDelayMs: mode === 'fake' && Number.isInteger(config.fakeStreamMs) ? config.fakeStreamMs : 0 });
       innerCap = cap;
     }
     return inner;
