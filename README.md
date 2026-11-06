@@ -123,6 +123,15 @@ uid 1000.
 The repository only ever contains synthetic demo data. Real household data lives only in a
 deployment's data volume (`FATHOM_DATA`) and is never committed.
 
+## Advisor reviews
+
+The Advisor screen is a review workflow the owner runs; advisors have no accounts. Send a
+recommendation to the advisor from its page or the Plan, set the next check-in, and record the
+advisor's verdict (confirmed or vetoed, with a note and date). A veto dismisses the recommendation,
+and later planning runs keep it dismissed unless its inputs change. Prepare packet builds a
+printable HTML review packet of everything waiting, with every figure's source; it is stored
+encrypted in the data volume and can be downloaded again. Print it to PDF from the browser.
+
 ## Design mock
 
 `mock-v2/` is the clickable design reference on synthetic data and needs only Python 3:
