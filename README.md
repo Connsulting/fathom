@@ -36,6 +36,7 @@ November state) and keeps its state across restarts.
 | `FATHOM_PUBLIC_URL` | unset | URL MCP clients use to reach this server (http or https, no credentials, query or fragment). Its host is allowed on `/mcp` and every `/api` route. |
 | `FATHOM_ALLOWED_HOSTS` | unset | Comma separated extra host names (`host` or `host:port`) allowed on `/mcp` and every `/api` route. A deployment reached by a DNS name must set this or `FATHOM_PUBLIC_URL`. |
 | `FATHOM_OWNER_LOGINS` | unset | Comma separated Tailscale logins allowed into a real store. Unset on a real store, every page and `/api` route answers 401. |
+| `FATHOM_SIMPLEFIN_ALLOWED_HOSTS` | `bridge.simplefin.org,beta-bridge.simplefin.org` | Hosts the SimpleFIN client may call; everything else is refused. |
 | `FATHOM_OWNER_LOGINS_FILE` | unset | Path to a file with the same list, instead of `FATHOM_OWNER_LOGINS` (not both). |
 
 With `FATHOM_ENGINE=fake` (the demo default), Ask, recommendation chats and What if answer from a
@@ -52,6 +53,15 @@ Rebuild the demo store (refuses a real store):
 ```bash
 npm run seed:demo
 ```
+
+## Bank and brokerage connections
+
+Accounts connect read-only through SimpleFIN Bridge. Create a setup token on the SimpleFIN Bridge
+site and paste it under Connect accounts on the Accounts screen (or in onboarding). Fathom claims it
+once, keeps the access URL encrypted with the data key (a real store needs `FATHOM_DATA_KEY_FILE`),
+and syncs daily with the `simplefin-sync` job or on Sync now. The deployment needs outbound HTTPS
+to the hosts in `FATHOM_SIMPLEFIN_ALLOWED_HOSTS`. The demo uses a synthetic bridge and needs no
+network.
 
 ## Email
 

@@ -794,6 +794,18 @@ function ingest() {
   return out;
 }
 
+// SimpleFIN Bridge: connect with a setup token (the token goes only in this request body), Sync
+// now (the simplefin-sync job under the lease) and Disconnect. Each resolves the response or null.
+function simplefinConnect(token) {
+  return send('/api/simplefin/connect', { token: String(token || '') }, d => d, null, 'Could not connect accounts. ');
+}
+function simplefinSync() {
+  return send('/api/jobs/simplefin-sync/run', {}, d => d, null, 'Could not sync accounts. ');
+}
+function simplefinDisconnect() {
+  return send('/api/simplefin/disconnect', {}, d => d, null, 'Could not disconnect. ');
+}
+
 // Resolves { files, pending } with the per-file results, or null on failure (error line shown).
 function upload(fileList) {
   const list = Array.from(fileList || []);
@@ -961,6 +973,10 @@ const api = {
   ingest,
   identity: () => (IDENT ? { login: IDENT.login, name: IDENT.name } : null),
   upload,
+  simplefinConnect,
+  simplefinSync,
+  simplefinDisconnect,
+  showError,
   answer,
   reviseAnswer,
   reopenAnswer,
