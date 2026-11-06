@@ -1,8 +1,51 @@
 # Fathom architecture
 
 This is the architecture every build item works against. The first part is frozen: change it only
-by agreement across items. The second part describes what the foundation item built (store,
-tables, API, seams) and is updated by each item that extends it.
+by agreement across items. The rest describes the running app and is updated as items land.
+Known limits from merged pull requests are in [`known-limits.md`](known-limits.md).
+
+## Request and job flow
+
+```
+browser or MCP client
+        |  HTTP (pages, /api, POST /mcp)
+        v
+   src/server.mjs
+        |-- owner gate (real store: Tailscale-User-Login)
+        |-- router (JSON, uploads, SSE for Ask)
+        |-- scheduler tick (in process)
+                |-- plan, brief-email, deadline-alerts
+                |-- freshness, trash-purge, confirm-guess, simplefin-sync
+                        |
+                        v
+              runtime engine (purpose + model)
+                        |
+                        v
+                 SQLite + encrypted vault
+```
+
+An upload commits rows, then the scheduler is asked to plan and to guess confirm answers. A nightly tick does the same plan, and on its own cadence sends the brief and deadline mail. Ask streams through the engine, then replaces the draft with the grounded HTML stored on the thread.
+
+## Where each subsystem is written
+
+1. Store and migrations: Store.
+2. Ingest and vault: Ingest.
+3. Confirm queue and revise: Confirm queue, and the confirm routes under API.
+4. Planner, figures and provenance: Planner.
+5. Scheduler and jobs: Jobs.
+6. Engine gateway: Frozen architecture, Engine gateway, and Runtime engine.
+7. Chat, streaming and grounding: Chat over the data.
+8. Ask conversations: The `live` key, Ask threads.
+9. MCP and keys: MCP server.
+10. Packs and Your plans: Live pack state, Your plans.
+11. Email: Email.
+12. Owner gate: Owner identity.
+13. Onboarding: Onboarding.
+14. Goals: Goals and the tradeoff curve.
+15. Advisor: Advisor workflow.
+16. Year end: Year end.
+17. Bank connections: SimpleFIN connections.
+18. UI shell, keyboard, phone, demo, tests: UI shell, Keyboard registry and switcher, Phone layout, Demo mode, Testing and real-mode smoke.
 
 ## Frozen architecture
 
@@ -227,6 +270,10 @@ secrets are read there.
 | `FATHOM_OWNER_LOGINS` | unset | Comma or newline separated Tailscale logins admitted on a real store (trimmed, case-insensitive). Unset or blank on a real store fails closed: every page and `/api` route answers 401. See "Owner identity". |
 | `FATHOM_SIMPLEFIN_ALLOWED_HOSTS` | `bridge.simplefin.org,beta-bridge.simplefin.org` | Comma separated host names the SimpleFIN client may call (no scheme, port or path; anything else refuses to start). Claim and access URLs on any other host are refused. |
 | `FATHOM_OWNER_LOGINS_FILE` | unset | Path to a file holding the same list (comma or newline separated). Use instead of `FATHOM_OWNER_LOGINS`; setting both, or an unreadable file, fails closed. |
+| `FATHOM_LIVE` | unset | Read only by `npm run smoke:live`. `1` plus `FATHOM_CLAUDE_CREDENTIAL_FILE` runs the opt-in live engine smoke. |
+| `FATHOM_SMOKE_BASE_URL` | unset | With `BASE_URL`, points Playwright smoke at a server you already started. |
+| `FATHOM_SMOKE_TARGET` | `demo` | `real` swaps scenario assertions for shell, empty-state and provenance checks, and aborts any app request that is not GET or HEAD. |
+| `FATHOM_SMOKE_HEADERS` | unset | JSON object of extra request headers for a real-store smoke (the owner login header). |
 
 ## Store
 
@@ -1772,3 +1819,61 @@ goals (title, horizon, typed target with source `you`, tracked current value) an
 In an Ask thread the answerer also offers `propose_goal`; its last successful call becomes
 `provenance.goalProposal`, a target survives only when the owner's own message states it, and the
 chat card saves it through `POST /api/goals` when the owner taps Save. Chat never writes.
+
+## Bank connections
+
+Shipped. Read-only SimpleFIN Bridge connections are the SimpleFIN connections section: migration
+`014` (`simplefin_connection`, `simplefin_accounts`), the encrypted access URL, the
+`simplefin-sync` job, and Connect accounts on Accounts, onboarding, and the switcher. Holdings
+from the bridge are not mapped; brokerage accounts get balances and transactions only. Uploaded
+files still import the same way.
+
+## UI shell
+
+Horizon is static files under `web/horizon/`, served by the same process as the API. Hash routes
+are the screens (`#/year`, `#/confirm`, `#/plan`, `#/ask`, and the rest registered in
+`web/horizon/design.js`). The scenario payload from `GET /api/scenario` is what the screens render.
+Demo stores resolve scenario tokens; a real store shows stored text as stored.
+
+## Keyboard registry and switcher
+
+`web/horizon/keys.js` is a pure registry: it normalizes keydown events to binding names (`mod+k`
+for Ctrl or Cmd, letter keys, Escape), ignores Alt chords, and does not steal keys while the owner
+is typing except Escape and the switcher chord. `register(scope, bindings)` installs a scope;
+`web/horizon/screens/switcher.js` registers `global` and the current screen.
+
+Ctrl+K or Cmd+K opens the switcher. It lists Go to (screens), Actions (shortcuts, Ask, Add files,
+New goal, Start confirming when something is pending), and rows for recommendations, decisions,
+conversations, accounts, deadlines, packs and files. Files is also in More (`#/add`). `?` opens
+the shortcut sheet. Two-key sequences such as `g` then `c` jump to Confirm. The Engine screen
+shows the model for each purpose from `modelFor` in `src/engine/pricing.mjs`. Account trend
+series come from stored balances. What changed uses plain event labels. Decide records a salary
+or deferral (`POST /api/decisions/:id/decide`); Revisit reopens it. A decided salary is the
+payroll assumption for the next plan.
+
+## Phone layout
+
+At 720px and below, a fixed bottom tab bar shows Year, Confirm, Plan, Decide and Ask. The top nav
+folds into a More sheet that lists the other screens. Add to Home Screen uses the web app manifest.
+There is no service worker, so the installed icon still needs the network. War-game charts have no
+pointer readout, so the phone pass does not add touch drag on the curve.
+
+## Demo mode
+
+`main` runs end to end on synthetic data with no secrets. A new store with `FATHOM_DEMO` unset is
+a demo and is seeded once. `FATHOM_ENGINE` defaults to `fake` on a demo and `off` on a real store.
+The fake engine answers from `src/api/fake-answers.mjs` through the same grounding path as live.
+`POST /api/demo/reset` rebuilds a demo store only. `npm run seed:demo` refuses a real store.
+`FATHOM_CLOCK` overrides today for demos and tests and is never written to the store.
+
+## Testing and real-mode smoke
+
+`npm test` runs `node --test` over `test/**/*.test.mjs`, `src/packs/test`, `src/engine/test`,
+`src/calc/test` and `src/mcp/test`. `npm run e2e` is Playwright against demo servers the config
+starts. `npm run e2e:smoke` is the `@smoke` subset. Against a server you already started, set
+`FATHOM_SMOKE_BASE_URL` or `BASE_URL`. For a real store that has finished first run, set
+`FATHOM_SMOKE_TARGET=real` and, when the gate is on, `FATHOM_SMOKE_HEADERS` to a JSON object.
+Real mode checks shells, empty states and provenance, and aborts any request to the app that is
+not GET or HEAD. `npm run smoke:live` is separate: it calls the live model only when `FATHOM_LIVE=1`
+and `FATHOM_CLAUDE_CREDENTIAL_FILE` is set. `scripts/e2e-all.sh` runs the full Playwright suite and
+then smoke against a server. `scripts/docker-smoke.sh` builds the image and smokes a container.
