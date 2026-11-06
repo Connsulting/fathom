@@ -232,9 +232,10 @@ export function decisionDecide(ctx) {
     setSetting(db, 'wargame.picks', { ...defaultPicks(wargame), ...stored, [name]: i });
     if (name === 'salary') {
       const salaryFig = scenario.fig[`wg.salary.${point.id}.salary`];
-      if (salaryFig && Number.isFinite(salaryFig.v) && salaryFig.v > 0) {
+      // The game names the S corp it was built for; a decided salary binds to that business only.
+      if (salaryFig && Number.isFinite(salaryFig.v) && salaryFig.v > 0 && typeof wargame.salary.entity === 'string') {
         upsertFact(db, {
-          key: DECIDED_FACT.salary, value: salaryFig.v, src: DECIDE_SRC.salary, asOf: scenario.meta.clock, confirmed: true, now,
+          key: DECIDED_FACT.salary, value: { entity: wargame.salary.entity, salary: salaryFig.v }, src: DECIDE_SRC.salary, asOf: scenario.meta.clock, confirmed: true, now,
           provenance: { parser: 'decide', locator: { decision: row.id, point: point.id, figure: `wg.salary.${point.id}.salary` } },
         });
       }

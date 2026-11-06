@@ -11,8 +11,9 @@ import { monthLabel } from './data.mjs';
 
 export const SERIES_SRC = 'balances';
 export const MAX_POINTS = 12;
-// Account kinds whose balance is a debt: left out of the combined series.
-const LIABILITY = /^(credit|loan|mortgage|liability|debt)/;
+// Account kinds whose balance is a debt (a statement shows what is owed as a positive number): the
+// combined series subtracts them.
+const LIABILITY = /^(credit|card|loan|mortgage|liability|debt)/;
 
 const monthKey = iso => String(iso).slice(0, 7);
 // 'acct-ab12' -> 'acct-ab12'; any other id gets the prefix. Characters outside [a-z0-9_-] become '-'.
@@ -75,7 +76,10 @@ export function buildSeries(db, clock) {
       };
     }
     // Only accounts with a trend of their own count, so one freshly uploaded account does not blank the total.
-    if (inWindow.length >= 2 && !LIABILITY.test(String(a.kind || '').toLowerCase())) perAccount.push(values);
+    if (inWindow.length >= 2) {
+      const debt = LIABILITY.test(String(a.kind || '').toLowerCase());
+      perAccount.push(debt ? new Map([...values].map(([k, v]) => [k, -Math.abs(v)])) : values);
+    }
   }
   // Combined: each account counts from its first stored month on (its last balance carries
   // forward). The series starts where every counted account has begun.

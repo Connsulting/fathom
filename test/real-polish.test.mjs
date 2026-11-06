@@ -5,7 +5,7 @@
 import test, { after, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { planRun } from './helpers/plan.mjs';
-import { scratch, createRealStore, figureRow, factRow, contentValue } from './helpers/real-store.mjs';
+import { scratch, createRealStore, addPayroll, w2Doc, SCORP, figureRow, factRow, contentValue } from './helpers/real-store.mjs';
 import { buildScenario } from '../src/scenario/build.mjs';
 import { buildSeries, seriesKey, MAX_POINTS } from '../src/jobs/planner/series.mjs';
 import { FROZEN_FACT_KEYS } from '../src/ingest/extract.mjs';
@@ -14,6 +14,7 @@ import { MODEL_PURPOSES, modelFor, DEFAULT_MODEL, TITLE_MODEL } from '../src/eng
 import { decisionDecide, decisionRevisit } from '../src/api/handlers.mjs';
 import { HttpError } from '../src/api/http.mjs';
 import { resolveTokens } from '../src/shared/tokens.mjs';
+import { payrollTax } from '../src/calc/index.mjs';
 
 const NOW = '2026-11-05';
 const S = scratch('fathom-polish-');
@@ -59,7 +60,7 @@ describe('series from balances', () => {
     assert.deepEqual(buildSeries(db, NOW)['acct-brk'].points.map(p => p.v), [5000, 7600]);
   });
 
-  test('net worth sums accounts, carries a balance forward, starts once every account has begun and skips debts', async () => {
+  test('net worth sums assets, subtracts debts, carries a balance forward and starts once every account has begun', async () => {
     const db = await emptyDb();
     account(db, 'a', { name: 'Savings', kind: 'checking', sort: 1 });
     account(db, 'b', { name: 'Brokerage', kind: 'taxable', sort: 2 });
@@ -70,9 +71,10 @@ describe('series from balances', () => {
     for (const [d, v] of [['2026-09-30', 50], ['2026-10-31', 60]]) balance(db, 'c', d, v);
     const series = buildSeries(db, NOW);
     assert.equal(Object.keys(series)[0], 'net', 'net worth first');
-    // Brokerage begins in September; the card is a debt and is left out of the total.
-    assert.deepEqual(series.net.points.map(p => [p.x, p.v]), [['Sep 2026', 1120], ['Oct 2026', 1330]]);
+    // Brokerage begins in September; the card balance is owed, so it is subtracted.
+    assert.deepEqual(series.net.points.map(p => [p.x, p.v]), [['Sep 2026', 1070], ['Oct 2026', 1270]]);
     assert.ok(series['acct-c'], 'the card keeps its own trend');
+    assert.equal(series['acct-c'].points[1].v, 60, 'its own trend shows the statement balance');
     assert.equal(seriesKey('acct-ab12'), 'acct-ab12');
     assert.equal(seriesKey('Odd Id/1'), 'acct-odd-id-1');
   });
@@ -220,7 +222,7 @@ describe('decide and revisit', () => {
     assert.equal(out.scenario.wargame.salary.status, 'decided');
     assert.equal(out.scenario.wargame.salary.decided, d.line);
     const fact = factRow(db, 'business.salaryDecided');
-    assert.equal(fact.value, figureRow(db, `wg.salary.${point.id}.salary`).v);
+    assert.deepEqual(fact.value, { entity: 'northwind-advisory', salary: figureRow(db, `wg.salary.${point.id}.salary`).v });
     assert.equal(fact.src, 'decide:salary');
     assert.equal(fact.locator.decision, 'salary-2026');
     assert.equal(fact.locator.figure, `wg.salary.${point.id}.salary`);
@@ -270,5 +272,69 @@ describe('decide and revisit', () => {
     assert.equal(code(() => decisionDecide(ctxFor(db, 'salary-2027'))), 409, 'upcoming');
     assert.equal(code(() => decisionDecide(ctxFor(db, 'salary-2026'))), 200, 'default pick');
     assert.equal(code(() => decisionDecide(ctxFor(db, 'salary-2026'))), 409, 'already decided');
+  });
+});
+
+describe('a decided salary stays consistent across replans', () => {
+  const slug = 'northwind-advisory';
+  const SCORP2 = Object.freeze({ ...SCORP, name: 'Harbor Consulting', slug: 'harbor-consulting', owner: 'spouse' });
+
+  test('the decided salary moves wages and distributions together: AGI changes only by the employer payroll tax', async () => {
+    const db = await plannedStore();
+    const agiBefore = figureRow(db, 'agi.est').v;
+    const salaryBefore = figureRow(db, `pnl.${slug}.salaryProj`).v;
+    const game = contentValue(db, 'wargame').salary;
+    const point = game.points.find(p => figureRow(db, `wg.salary.${p.id}.salary`).v > salaryBefore);
+    const chosen = figureRow(db, `wg.salary.${point.id}.salary`).v;
+    decisionDecide(ctxFor(db, 'salary-2026', { index: point.id }));
+    await planRun(db, { now: NOW });
+    const employer = w => payrollTax({ wages: w, filingStatus: 'single' }).value.employerTotal;
+    const expected = agiBefore - (employer(chosen) - employer(salaryBefore));
+    const agiAfter = figureRow(db, 'agi.est').v;
+    assert.ok(Math.abs(agiAfter - expected) <= 1, `agi ${agiAfter} vs ${expected}`);
+    assert.ok(Math.abs(agiAfter - (agiBefore + chosen - salaryBefore)) > 1000, 'not wages added on top of unchanged profit');
+  });
+
+  test('the decision binds to its business: a second S corp keeps its own salary', async () => {
+    const db = await S.store({ variant: { entities: [SCORP, SCORP2] } });
+    await planRun(db, { now: NOW });
+    const otherBefore = figureRow(db, `pnl.${SCORP2.slug}.salaryProj`);
+    assert.equal(otherBefore.src, 'plan-projection');
+    const game = contentValue(db, 'wargame').salary;
+    assert.ok(game, 'the salary game is built');
+    const entity = game.entity;
+    const other = entity === slug ? SCORP2.slug : slug;
+    const otherProj = figureRow(db, `pnl.${other}.salaryProj`).v;
+    const point = game.points.find(p => figureRow(db, `wg.salary.${p.id}.salary`).v !== figureRow(db, `pnl.${entity}.salaryProj`).v);
+    decisionDecide(ctxFor(db, 'salary-2026', { index: point.id }));
+    assert.equal(factRow(db, 'business.salaryDecided').value.entity, entity);
+    await planRun(db, { now: NOW });
+    assert.equal(figureRow(db, `pnl.${entity}.salaryProj`).src, 'owner-decision');
+    const after = figureRow(db, `pnl.${other}.salaryProj`);
+    assert.equal(after.v, otherProj);
+    assert.equal(after.src, 'plan-projection');
+  });
+
+  test('a W-2 for the year supersedes the decision everywhere, the deferral payroll basis included', async () => {
+    const db = await plannedStore();
+    const game = contentValue(db, 'wargame').salary;
+    const before = figureRow(db, `pnl.${slug}.salaryProj`).v;
+    const point = game.points.find(p => figureRow(db, `wg.salary.${p.id}.salary`).v !== before);
+    decisionDecide(ctxFor(db, 'salary-2026', { index: point.id }));
+    await planRun(db, { now: NOW });
+    assert.equal(figureRow(db, `pnl.${slug}.salaryProj`).src, 'owner-decision');
+    const needDecided = db.prepare("SELECT v FROM figures WHERE key LIKE 'wg.deferral.%.need' LIMIT 1").get();
+    await addPayroll(db, w2Doc({ employerName: SCORP.name, person: 'owner', wages: 61000, medicareWages: 61000 }));
+    await planRun(db, { now: NOW });
+    const back = figureRow(db, `pnl.${slug}.salaryProj`);
+    assert.equal(back.src, 'plan-projection');
+    assert.equal(back.v, before);
+    const needAfter = db.prepare("SELECT v FROM figures WHERE key LIKE 'wg.deferral.%.need' LIMIT 1").get();
+    assert.ok(needDecided && needAfter, 'the deferral game is offered in November');
+    {
+      const payTax = db.prepare("SELECT v FROM figures WHERE key = ?").get(`pnl.${slug}.payrollTax`);
+      assert.equal(needAfter.v, Math.round(((before + Math.round(payTax.v * 12 / 10 * 100) / 100) / 12) * 100) / 100, 'payroll need back on the P&L basis');
+      assert.notEqual(needAfter.v, needDecided.v);
+    }
   });
 });

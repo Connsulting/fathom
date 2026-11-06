@@ -6,7 +6,7 @@
 //   model: {salary?, deferral?}, warnings: [codes], info}
 // householdTax(parts, ctx) -> re-exported from household.mjs
 
-import { estimatedPaymentSafeHarbor, solo401kRoom, sepRoom, hsaLimit, TAX_2026 } from '../../calc/index.mjs';
+import { estimatedPaymentSafeHarbor, solo401kRoom, sepRoom, hsaLimit, payrollTax, TAX_2026 } from '../../calc/index.mjs';
 import { cents } from '../../store/db.mjs';
 import {
   pnlSums, ytd, dateLabel, monthLabel, cleanLabel, sum, addDays,
@@ -54,12 +54,14 @@ export const SOURCES = Object.freeze({
   'owner-decision': { label: 'Your decision in Decide', kind: 'decision' },
 });
 
-// The officer salary the owner decided in Decide (owner fact business.salaryDecided, written by
-// the decide action), or null. It stands in for the P&L salary projection until they revisit it.
+// The officer salary the owner decided in Decide: owner fact business.salaryDecided, written by the
+// decide action as {entity, salary} (the S corp the salary war game was built for). It stands in for
+// that business's P&L salary projection until they revisit it. Another business is not affected.
 export const SALARY_DECIDED_KEY = 'business.salaryDecided';
-export function decidedSalary(owner) {
+export function decidedSalary(owner, slug) {
   const v = owner && owner[SALARY_DECIDED_KEY];
-  return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null;
+  if (!v || typeof v !== 'object' || v.entity !== slug) return null;
+  return typeof v.salary === 'number' && Number.isFinite(v.salary) && v.salary > 0 ? v.salary : null;
 }
 
 // ---------------------------------------------------------------- output helpers
@@ -156,15 +158,18 @@ export function computeFigures(data, facts, ctx) {
       out.put(`pnl.${e.slug}.salary`, s.salary, 'a', `${e.name} officer salary, year to date`, 'pnl', loc(s.ids.salary), s.fileId);
       out.put(`pnl.${e.slug}.payrollTax`, s.payrollTax, 'a', `${e.name} employer payroll tax, year to date`, 'pnl', loc(s.ids.payrollTax), s.fileId);
       // A salary the owner decided in Decide is the payroll assumption: it replaces the straight-line
-      // P&L projection (profit before salary below still comes from the P&L).
-      const decided = decidedSalary(owner);
+      // P&L projection. The second pass below drops it when a W-2 exists or the salary leaves no
+      // distributions; profit before salary still comes from the P&L.
+      const decided = decidedSalary(owner, e.slug);
+      const putProjection = () => out.put(`pnl.${e.slug}.salaryProj`, proj(s.salary), 'p', `${e.name} officer salary, projected for the year`, 'plan-projection', projLoc('Projected salary', s.salary));
       e.salaryAssumed = decided ?? proj(s.salary);
       e.salaryDecided = decided != null;
+      e.restoreSalaryProj = () => { e.salaryDecided = false; e.salaryAssumed = proj(s.salary); putProjection(); };
       if (decided != null) {
         out.put(`pnl.${e.slug}.salaryProj`, decided, 'p', `${e.name} officer salary, as you decided`, 'owner-decision',
           { calc: 'ownerDecision', inputs: { decision: SALARY_DECIDED_KEY }, steps: [{ label: 'Salary you decided', formula: 'the point you picked in Decide', value: decided }] });
       } else {
-        out.put(`pnl.${e.slug}.salaryProj`, proj(s.salary), 'p', `${e.name} officer salary, projected for the year`, 'plan-projection', projLoc('Projected salary', s.salary));
+        putProjection();
       }
       corps.push({ entity: e, person: e.owner, sums: s, proj });
     }
@@ -312,8 +317,19 @@ export function computeFigures(data, facts, ctx) {
     // from its boxes (box 1; box 5; box 1 plus elective deferrals). Only with no W-2 does the P&L
     // officer salary projection stand in: gross pay for Medicare wages and compensation, less the
     // owner's stated pretax deferrals for taxable wages (I1, below).
-    c.fromPnl = !ownRec && (c.entity.salaryDecided || c.sums.salary > 0);
-    const salary = c.fromPnl ? c.entity.salaryAssumed : 0;
+    // A decided salary applies only while no W-2 exists and it leaves distributions: the business's
+    // profit before salary is fixed, so distributions are that profit less the salary and the
+    // employer payroll tax on it (the same model as the salary war game).
+    const e = c.entity;
+    if (e.salaryDecided) {
+      const profit = cents(c.proj(c.sums.net) + c.proj(c.sums.salary) + c.proj(c.sums.payrollTax));
+      const pay = ownRec ? null : out.safe('payrollTax', () => payrollTax({ wages: e.salaryAssumed, filingStatus: 'single' }));
+      const dist = pay ? cents(profit - e.salaryAssumed - pay.value.employerTotal) : null;
+      if (dist == null || dist < 0) e.restoreSalaryProj();
+      else { e.decidedDistributions = dist; e.decidedPayrollTax = pay.value.employerTotal; }
+    }
+    c.fromPnl = !ownRec && (e.salaryDecided || c.sums.salary > 0);
+    const salary = c.fromPnl ? e.salaryAssumed : 0;
     const gross = ownRec ? ownRec.medicare : salary;
     const comp = ownRec ? ownRec.comp : salary;
     c.w2 = null;
@@ -322,7 +338,7 @@ export function computeFigures(data, facts, ctx) {
       c.w2 = { person: c.person, src: `corp:${c.entity.slug}`, gross, comp, agi: ownRec ? ownRec.wages : salary };
       w2.push(c.w2);
     }
-    const K = c.proj(c.sums.net);
+    const K = e.salaryDecided ? e.decidedDistributions : c.proj(c.sums.net);
     biz.push({ id: c.entity.slug, kind: 'scorp', person: c.person, agi: K, qbi: K, seInput: null, w2Wages: comp, sstb: sstbOf(c.entity) });
     c.comp = comp;
     c.gross = gross;
