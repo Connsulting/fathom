@@ -41,8 +41,9 @@ export function roundSeparator(prev, next) {
 
 // One call's answer text across rounds. The stream (streamPiece) and storage (endRound) compute
 // the separator from the same stored text and the same first character of the round, so the
-// streamed text always equals the stored text. A round with no text adds nothing.
-function createAnswerAssembler() {
+// streamed text always equals the stored text. A round with no text adds nothing. replaceRound
+// (superseded SDK frames) returns the full answer so far with the round's kept text, to restream.
+export function createAnswerAssembler() {
   let text = '';
   let started = false;
   return {
@@ -54,6 +55,12 @@ function createAnswerAssembler() {
       if (started) return piece;
       started = true;
       return roundSeparator(text, piece) + piece;
+    },
+    replaceRound(roundText) {
+      const kept = typeof roundText === 'string' ? roundText : '';
+      started = kept !== '';
+      if (!kept) return text;
+      return text + roundSeparator(text, kept) + kept;
     },
     endRound(roundText) {
       if (typeof roundText === 'string' && roundText) text += roundSeparator(text, roundText) + roundText;
@@ -108,7 +115,9 @@ function explicitCredential(credential) {
 // request.toolContext (optional): { db, now } for this call's tools instead of the constructed one.
 // request.onEvent (optional, purpose 'chat'): called with { type: 'tool', name } as each tool call
 // starts and { type: 'text', text } for each text delta, in every round; a round's first delta is
-// prefixed with roundSeparator, so the deltas join to exactly the returned text. In fake mode the round's
+// prefixed with roundSeparator, so the deltas join to exactly the returned text. When the SDK
+// supersedes refused frames, { type: 'reset' } drops everything streamed and is followed by the
+// full answer text so far; the text after the last reset equals the returned text. In fake mode the round's
 // scripted text arrives in deterministic chunks of FAKE_CHUNK_WORDS words, streamDelayMs apart.
 // A throwing listener is ignored; events never change the result, the spend or the ledger.
 export const FAKE_CHUNK_WORDS = 3;
@@ -139,6 +148,10 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
           if (event && event.type === 'text') {
             const text = answer.streamPiece(event.text);
             if (text) onEvent({ type: 'text', text });
+          } else if (event && event.type === 'replace') {
+            const full = answer.replaceRound(event.text);
+            onEvent({ type: 'reset' });
+            if (full) onEvent({ type: 'text', text: full });
           } else onEvent(event);
         } catch { /* listeners never fail a call */ }
       }

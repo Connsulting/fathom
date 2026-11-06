@@ -27,7 +27,9 @@ export function sdkStreamEvent(message) {
 // The CLI emits one assistant frame per completed content block; frames of one response share
 // message.id and each carries only its own block (sdk.d.ts SDKAssistantMessage). So every frame
 // appends its blocks in arrival order, keyed by the frame uuid, and nothing is replaced by block
-// index or message id. A frame with `supersedes` evicts the named earlier frames first.
+// index or message id. A frame with `supersedes` (a refused response retried on a fallback model)
+// evicts the named earlier frames first; when any is evicted, onEvent gets { type: 'replace', text }
+// with the round's kept text, since the stream already carried the evicted text.
 export async function consumeSdkMessages(stream, onEvent) {
   let result;
   const frames = [];
@@ -42,13 +44,17 @@ export async function consumeSdkMessages(stream, onEvent) {
       }
       if (message.type === 'system' && message.subtype === 'init') tools = message.tools;
       if (message.type === 'assistant' && message.message) {
+        let replaced = false;
         if (Array.isArray(message.supersedes) && message.supersedes.length) {
           const evicted = new Set(message.supersedes);
-          for (let n = frames.length - 1; n >= 0; n--) if (evicted.has(frames[n].uuid)) frames.splice(n, 1);
+          for (let n = frames.length - 1; n >= 0; n--) if (evicted.has(frames[n].uuid)) { frames.splice(n, 1); replaced = true; }
         }
         const blocks = Array.isArray(message.message.content) ? message.message.content : [];
         frames.push({ uuid: message.uuid, blocks: blocks.slice() });
         content = frames.flatMap(frame => frame.blocks);
+        if (onEvent && replaced) {
+          try { onEvent({ type: 'replace', text: assistantText(content) }); } catch { /* listeners never fail a round */ }
+        }
         usage = message.message.usage;
       }
       if (message.type === 'result') result = message;

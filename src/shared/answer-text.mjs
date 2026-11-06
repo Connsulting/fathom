@@ -31,7 +31,7 @@ const ENDS_SENTENCE = /[.!?]["'”’)\]]?[ \t]*$/;
 const QUOTE_CLOSE = { '"': '"', '“': '”', '‘': '’' };
 const URL_SPAN = /^https?:\/\/[^\s"“”]*[^\s.,;:!?"“”)\]]/i;
 const BARE_TITLE = /^[^,;]*?(?=[.!?](?:\s|$)|[,;]|$)/;
-const JOINER = /^(?:,|;|and(?=[ \t]))/;
+const JOINER = /^(?:[,;](?:[ \t]+and(?=[ \t]))?|and(?=[ \t]))/;
 const blank = line => !line.trim();
 
 // From just after the colon (within one line): quoted titles, URLs and bare titles joined by commas,

@@ -34,7 +34,8 @@
 // runs: { type: 'progress', label } (a fixed plain label per tool, never arguments or values),
 // { type: 'text', text } (raw model text deltas, untrusted: the client escapes them and shows every
 // number as still being checked) and { type: 'reset' } (drop the streamed text because the answer is
-// being redone after a failed grounding check; a tool call does not reset it). The returned reply is the
+// being redone after a failed grounding check, or the engine restreams it after the SDK superseded
+// refused frames; a tool call does not reset it). The returned reply is the
 // only grounded result; nothing streamed is stored. A throwing onEvent never fails the answer.
 //
 // The model's text loses its Source, Reference or Citation lines and sentences (stripSources) before grounding,
@@ -474,8 +475,9 @@ const PROGRESS_OTHER = 'Looking at your data';
 export const progressLabel = name => (Object.hasOwn(PROGRESS_LABELS, name) ? PROGRESS_LABELS[name] : PROGRESS_OTHER);
 
 // A safe emitter: progress labels deduplicated in a row, a reset only after text, a throwing
-// listener ignored. Engine events ({ type: 'tool', name } / { type: 'text', text }) go through
-// engineEvent. A tool call does not reset streamed text. reset() is the grounding retry.
+// listener ignored. Engine events ({ type: 'tool', name } / { type: 'text', text } / { type: 'reset' })
+// go through engineEvent. A tool call does not reset streamed text. reset() is the grounding retry
+// and the engine's restream after superseded frames.
 function streamer(onEvent) {
   if (typeof onEvent !== 'function') return { progress() {}, reset() {}, engineEvent: undefined };
   let lastLabel = null;
@@ -488,6 +490,7 @@ function streamer(onEvent) {
       if (!e || typeof e !== 'object') return;
       if (e.type === 'tool') out.progress(progressLabel(String(e.name || '')));
       else if (e.type === 'text' && typeof e.text === 'string' && e.text) { texted = true; send({ type: 'text', text: e.text }); }
+      else if (e.type === 'reset') out.reset();
     },
   };
   return out;
