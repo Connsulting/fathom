@@ -1,4 +1,4 @@
-// Rec conversations become Ask threads. AC4: migration 015 moves every rec-keyed conversation into
+// Rec conversations become Ask threads. AC4: migration 016 moves every rec-keyed conversation into
 // an 'ask:<12 hex>' thread carrying a rec context reference (rec_id), archives and detaches the
 // summary-only ones, deletes empty ones and leaves pack and Ask conversations alone. recForKey
 // resolves a rec thread to its rec. The API asks from a rec through POST /api/threads with recId,
@@ -34,11 +34,15 @@ const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/;
 const AT = '2026-10-01T00:00:00.000Z';
 const GOAL_CONFIRM = 'You can save this goal below.';
 
-// ---------------------------------------------------------------- AC4: migration 015
+// ---------------------------------------------------------------- AC4: migration 016
 
-// A store at schema 014, built by applying migrations 001..014 the way db.mjs migrate does (own
+// The rec threads migration; the store under test holds every migration before it.
+const REC_MIGRATION = 16;
+const BEFORE = Math.max(...listMigrations().map(m => m.id).filter(id => id < REC_MIGRATION));
+
+// A store just before the rec threads migration, built by applying every earlier migration the way db.mjs migrate does (own
 // transaction each, recorded in schema_migrations).
-function storeAt014(file) {
+function storeBeforeRecThreads(file) {
   const db = openDb(file);
   db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
     id INTEGER PRIMARY KEY,
@@ -46,7 +50,7 @@ function storeAt014(file) {
     applied_at TEXT NOT NULL
   )`);
   const record = db.prepare('INSERT INTO schema_migrations (id, name, applied_at) VALUES (?, ?, ?)');
-  for (const m of listMigrations().filter(x => x.id <= 14)) {
+  for (const m of listMigrations().filter(x => x.id < REC_MIGRATION)) {
     db.exec('BEGIN');
     db.exec(readFileSync(m.file, 'utf8'));
     record.run(m.id, m.name, AT);
@@ -62,7 +66,7 @@ const ALPHA_LAST = '2026-10-04T00:00:00.000Z';
 const GONE_MAX_TS = '2026-10-06T09:00:05.000Z';
 const KEPT = ['pack:syn-pack', 'ask:0a1b2c3d4e5f', 'ask:111111111111', 'ask:222222222222'];
 
-function seed014(db) {
+function seedBeforeRecThreads(db) {
   db.prepare('INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)').run('mode', JSON.stringify('real'), AT);
   const rec = db.prepare("INSERT INTO recs (id, def, status, tasks_done, sort, updated_at) VALUES (?, ?, 'proposed', '[]', ?, ?)");
   rec.run('syn-alpha', JSON.stringify({ id: 'syn-alpha', title: 'Synthetic alpha rec', summary: 'Synthetic alpha summary', domain: 'data' }), 0, AT);
@@ -114,17 +118,17 @@ const withoutKey = ({ conversation_key: _k, ...rest }) => rest;
 
 async function migratedStore(t) {
   const dir = await tempDir('fathom-rec-threads-');
-  const db = storeAt014(join(dir, DB_FILE));
+  const db = storeBeforeRecThreads(join(dir, DB_FILE));
   t.after(async () => { try { db.close(); } catch { /* closed */ } await rm(dir, { recursive: true, force: true }); });
-  assert.equal(schemaVersion(db), 14);
-  seed014(db);
+  assert.equal(schemaVersion(db), BEFORE);
+  seedBeforeRecThreads(db);
   const before = {
     messages: messageRows(db),
     kept: Object.fromEntries(KEPT.map(k => [k, { ...db.prepare(`SELECT ${OLD_CONV_COLS} FROM conversations WHERE key = ?`).get(k) }])),
     created: Object.fromEntries(db.prepare('SELECT key, created_at FROM conversations').all().map(r => [r.key, r.created_at])),
   };
-  const pending = listMigrations().map(m => m.id).filter(id => id > 14);
-  assert.equal(pending[0], 15, 'migration 015 is next');
+  const pending = listMigrations().map(m => m.id).filter(id => id > BEFORE);
+  assert.equal(pending[0], REC_MIGRATION, 'migration 016 is next');
   assert.deepEqual(migrate(db), { applied: pending });
   return { db, before };
 }
@@ -136,7 +140,7 @@ function movedTo(db, recId) {
   return rows[0];
 }
 
-test('AC4 migration 015 adds rec_id and rec_detached_at and leaves no rec-keyed conversation', async t => {
+test('AC4 migration 016 adds rec_id and rec_detached_at and leaves no rec-keyed conversation', async t => {
   const { db } = await migratedStore(t);
   const cols = db.prepare('PRAGMA table_info(conversations)').all().map(c => c.name);
   assert.ok(cols.includes('rec_id'), 'conversations.rec_id');

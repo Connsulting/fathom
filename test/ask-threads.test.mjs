@@ -256,7 +256,7 @@ test('AC6 migrating a 007 store moves the ask conversation into one thread with 
       const convs = db.prepare('SELECT * FROM conversations ORDER BY key').all().map(r => ({ ...r }));
       assert.ok(!convs.some(c => c.key === 'ask'), 'the ask row is gone');
       assert.equal(db.prepare("SELECT count(*) AS n FROM messages WHERE conversation_key = 'ask'").get().n, 0);
-      // 015 also moves the summary-only rec conversation into an archived, detached thread.
+      // 016 also moves the summary-only rec conversation into an archived, detached thread.
       const threads = convs.filter(c => THREAD_KEY.test(c.key) && c.rec_id == null);
       assert.equal(threads.length, 1, JSON.stringify(convs.map(c => c.key)));
       const th = threads[0];
@@ -268,7 +268,7 @@ test('AC6 migrating a 007 store moves the ask conversation into one thread with 
       assert.equal(th.archived_at, null);
       assert.equal(th.trashed_at, null);
 
-      assert.ok(!convs.some(c => c.key === 'deferral'), 'no rec-keyed conversation remains after 015');
+      assert.ok(!convs.some(c => c.key === 'deferral'), 'no rec-keyed conversation remains after 016');
       const rec = convs.find(c => c.rec_id === 'deferral');
       assert.match(rec.key, THREAD_KEY);
       assert.equal(rec.created_at, REC_CREATED, 'the rec thread keeps the rec conversation created_at');
@@ -302,7 +302,7 @@ test('AC6 an empty ask conversation migrates to no thread, and a store without o
       try {
         migrate(db);
         const rows = db.prepare('SELECT key, rec_id, archived_at, rec_detached_at FROM conversations ORDER BY key').all().map(r => ({ ...r }));
-        assert.equal(rows.length, 1, `${name}: only the rec conversation remains, as a thread (015): ${JSON.stringify(rows)}`);
+        assert.equal(rows.length, 1, `${name}: only the rec conversation remains, as a thread (016): ${JSON.stringify(rows)}`);
         assert.match(rows[0].key, THREAD_KEY);
         assert.equal(rows[0].rec_id, 'deferral', `${name}: the thread names its rec`);
         assert.equal(typeof rows[0].archived_at, 'string', `${name}: summary only, so archived`);
