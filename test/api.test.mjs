@@ -73,7 +73,6 @@ describe('rec actions', () => {
   test('each action transitions per CONTRACT, persists across a restart, and writes rec_events', T2, async () => {
     const s = await spawnServer();
     const steps = [
-      ['accept', undefined, 'accepted'],
       ['start', undefined, 'doing'],
       ['snooze', 'Dec 10 check-in', 'snoozed'],
       ['snooze', undefined, 'snoozed'],
@@ -129,11 +128,12 @@ describe('rec actions', () => {
 
   test('bad action 400, unknown rec 404, hidden rec 404', T, () => withServer({}, async s => {
     await fails(act(s, 'deferral', 'explode'), 400);
+    await fails(act(s, 'deferral', 'accept'), 400); // retired: Doing it is the start action
     await fails(postJson(s.baseUrl, '/api/recs/deferral/action', {}), 400);
-    await fails(act(s, 'no-such-rec', 'accept'), 404);
-    await fails(act(s, 'daf', 'accept'), 404);
+    await fails(act(s, 'no-such-rec', 'start'), 404);
+    await fails(act(s, 'daf', 'start'), 404);
     await fails(act(s, 'daf', 'task', 0), 404);
-    await ok(act(s, 'dcfsa', 'accept'));
+    await ok(act(s, 'dcfsa', 'start'));
   }));
 
   test('completing every needs-you rec flips the verdict to clear and it persists', T2, async () => {
@@ -182,7 +182,7 @@ describe('war game, packs and engine', () => {
     assert.equal(on.status, 'active');
     assert.equal(on.scenario.live.packs.giving.active, true);
     assert.equal(recOf(on.scenario, 'daf').status, 'proposed');
-    await ok(act(s, 'daf', 'accept'));
+    await ok(act(s, 'daf', 'start'));
     await ok(act(s, 'daf', 'reopen'));
 
     const off = await ok(postJson(s.baseUrl, '/api/packs/giving/toggle', {}));
@@ -190,7 +190,7 @@ describe('war game, packs and engine', () => {
     assert.notEqual(off.scenario.live.packs.giving.active, true);
     const daf = recOf(off.scenario, 'daf');
     assert.ok(!daf || daf.status === 'hidden', 'daf is hidden again');
-    await fails(act(s, 'daf', 'accept'), 404);
+    await fails(act(s, 'daf', 'start'), 404);
 
     const scorp = await ok(postJson(s.baseUrl, '/api/packs/scorp/toggle', {}));
     assert.equal(scorp.status, 'available', 'an active pack turned off reads available');

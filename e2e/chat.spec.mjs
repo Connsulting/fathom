@@ -181,15 +181,15 @@ test('B2: "dismiss this" in a rec conversation proposes; Confirm dismisses the r
   const confirm = msg.locator(`button.h-propose[data-propose-rec="${id}"][data-propose-action="dismiss"]`);
   await expect(confirm).toHaveCount(1);
   await expect(confirm).toHaveText('Confirm');
-  await expect(msg).toContainText('Dismiss');
+  await expect(msg).toContainText('Not for us');
   await expect(msg).toContainText(plain(r.title));
 
   // Nothing is written until the owner confirms.
   expect(await recStatusOf(request, id)).toBe('proposed');
-  await expect(dlg.locator('.h-rec-head .h-st')).not.toHaveText('Dismissed');
+  await expect(dlg.locator('.h-rec-head .h-st')).not.toHaveText('Not for us');
 
   await confirm.click();
-  await expect(dlg.locator('.h-rec-head .h-st')).toHaveText('Dismissed');
+  await expect(dlg.locator('.h-rec-head .h-st')).toHaveText('Not for us');
   await expect.poll(() => recStatusOf(request, id)).toBe('dismissed');
   const done = answers(dlg).last();
   await expect(done.locator('button.h-propose')).toHaveCount(0);

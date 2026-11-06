@@ -139,7 +139,7 @@ function createForm(h) {
       <li><button type="button" class="h-toggle on" role="switch" aria-checked="true" aria-disabled="true" disabled aria-labelledby="cn-scope-read"><i></i></button>
         <div><b id="cn-scope-read">Read your plan, data and packs</b><span>Always on</span></div></li>
       <li><button type="button" class="h-toggle${st.write ? ' on' : ''}" role="switch" aria-checked="${st.write}" data-conn="write-toggle" data-testid="key-write-toggle" aria-labelledby="cn-scope-write"><i></i></button>
-        <div><b id="cn-scope-write">Can change recommendation status</b><span>Write: accept, start, finish, snooze or dismiss items</span></div></li>
+        <div><b id="cn-scope-write">Can change recommendation status</b><span>Write: mark items doing it, done, later or not for us</span></div></li>
     </ul>
   </form>`;
 }

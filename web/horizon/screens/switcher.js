@@ -502,7 +502,7 @@ function enterRow() {
 
 /* ---------- binding tables ---------- */
 
-const REC_ACTS = [['a', 'Accept', 'accept'], ['s', 'Snooze', 'snooze'], ['e', 'Mark done', 'complete'], ['shift+x', 'Dismiss', 'dismiss']];
+const REC_ACTS = [['d', 'Doing it', 'start'], ['e', 'Done', 'complete'], ['l', 'Later', 'snooze'], ['shift+x', 'Not for us', 'dismiss']];
 
 function clickAct(scopeEl, act) {
   const b = scopeEl?.querySelector(`[data-act="${act}"]`);

@@ -5,7 +5,7 @@
 
 import { test, expect, S, resetDemo, plain, gotoRoute, expectH1, recDialog, openRecFromPage, bareDollarNodes } from './helpers.mjs';
 
-const SENT = 'hsa'; // accepted, never sent to the advisor in the demo
+const SENT = 'hsa'; // in motion, never sent to the advisor in the demo
 const WAITING = ['deferral', 'dcfsa', 'backdoor', 'spouseentity', 'filingplan'];
 const NOTE = '<b>Not now</b> & {f:hsa_room} later';
 
@@ -54,7 +54,7 @@ test.describe('advisor workflow', { tag: '@mobile' }, () => {
     await expect(dlg.locator('.h-advbox')).toContainText('Advisor vetoed');
     await expect(dlg.locator('.h-advbox p').first()).toHaveText(NOTE);
     await expect(dlg.locator('.h-advbox b')).toHaveCount(0);
-    await expect(dlg.locator('.h-rec-head .h-st')).toHaveText('Dismissed');
+    await expect(dlg.locator('.h-rec-head .h-st')).toHaveText('Not for us');
     await dlg.getByRole('button', { name: 'Close', exact: true }).click();
 
     // The Advisor screen lists it as reviewed; confirm one waiting rec from there.

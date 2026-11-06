@@ -310,17 +310,19 @@ describe('set_recommendation_status', () => {
     await assert.rejects(call('set_recommendation_status', { id: 'no-such-rec', status: 'done' }), isCode('not_found'));
     await assert.rejects(call('set_recommendation_status', { id: 'daf', status: 'proposed' }), isCode('not_found'));
     assert.equal(t.db.prepare("SELECT status FROM recs WHERE id = 'daf'").get().status, 'hidden');
-    for (const status of ['accepted', 'doing', 'dismissed', 'proposed']) {
+    for (const status of ['doing', 'dismissed', 'proposed']) {
       const r = await call('set_recommendation_status', { id: 'vaq4', status });
       assert.equal(r.status, status);
     }
+    // The retired 'accepted' status is refused, not mapped.
+    await assert.rejects(call('set_recommendation_status', { id: 'vaq4', status: 'accepted' }), isCode('bad_input'));
   });
 
   test('an ISO string or epoch ms ctx.now is honored the same as a Date', async () => {
     const iso = '2027-03-04T10:20:30.000Z';
     const lastTs = () => t.db.prepare("SELECT ts FROM rec_events WHERE rec_id = 'vaq4' ORDER BY id DESC LIMIT 1").get().ts;
     for (const now of [new Date(iso), iso, Date.parse(iso)]) {
-      await callTool('set_recommendation_status', { id: 'vaq4', status: 'accepted' }, { db: t.db, now });
+      await callTool('set_recommendation_status', { id: 'vaq4', status: 'doing' }, { db: t.db, now });
       assert.equal(lastTs(), iso, `rec_event ts for ${typeof now} now`);
     }
     // Without a store clock, "today" comes from ctx.now.
@@ -396,7 +398,7 @@ describe('input schema strictness', () => {
 describe('review advisories', () => {
   test('invalid anyOf inputs for list_recommendations are refused with bad_input', async () => {
     await assert.rejects(call('list_recommendations', { status: 42 }), isCode('bad_input'));
-    await assert.rejects(call('list_recommendations', { status: ['accepted', 'not-a-status'] }), isCode('bad_input'));
+    await assert.rejects(call('list_recommendations', { status: ['doing', 'not-a-status'] }), isCode('bad_input'));
   });
 
   test('a conflicting ctx.now does not override the store clock; epoch ms is accepted', async () => {

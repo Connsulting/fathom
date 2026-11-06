@@ -59,7 +59,7 @@ const monthName = () => {
 };
 
 const STATUS = {
-  proposed: 'New', accepted: 'Accepted', doing: 'In progress', waiting: 'Waiting',
+  proposed: 'New', doing: 'Doing it', waiting: 'Waiting',
   snoozed: 'Snoozed', done: 'Done', dismissed: 'Dismissed', hidden: 'Hidden',
 };
 function statusText(r) {
@@ -292,9 +292,8 @@ function actionButtons(r, compact) {
   const wake = wakeLabel();
   let out = '';
   switch (r.status) {
-    case 'proposed': out = b('accept', 'Accept', true) + b('snooze', 'Snooze 2 weeks', false, wake) + b('dismiss', 'Dismiss'); break;
-    case 'accepted': out = b('start', 'Start', true) + b('complete', 'Mark done') + (compact ? '' : b('snooze', 'Snooze 2 weeks', false, wake)); break;
-    case 'doing': out = b('complete', 'Mark done', true) + (compact ? '' : b('snooze', 'Snooze 2 weeks', false, wake)); break;
+    case 'proposed': out = b('start', 'Doing it', true) + b('snooze', 'Later', false, wake) + b('dismiss', 'Not for us'); break;
+    case 'doing': out = b('complete', 'Done', true) + b('snooze', 'Later', false, wake) + b('dismiss', 'Not for us'); break;
     case 'waiting': out = b('start', 'Unblock') + b('complete', 'Mark done'); break;
     case 'snoozed': out = b('reopen', 'Wake now'); break;
     case 'done': out = b('reopen', 'Reopen'); break;
@@ -313,7 +312,7 @@ function taskProgress(r) {
 
 function recCard(r, opts) {
   opts = opts || {};
-  const resolved = !['proposed', 'accepted', 'doing'].includes(r.status);
+  const resolved = !['proposed', 'doing'].includes(r.status);
   const replies = api.conversation(r.id).length;
   const days = r.window && typeof r.window.days === 'number' ? r.window.days : null;
   const adv = r.advisor && r.advisor.verdict ? '<span class="t-meta-i">' + esc(advisorName().split(',')[0]) + ': ' + esc(ADV[r.advisor.verdict] || r.advisor.verdict) + '</span>' : '';
@@ -354,9 +353,9 @@ function briefThread(route) {
   const s = S();
   const v = api.verdict();
   const brief = ui.briefSet.map(id => api.rec(id)).filter(r => r && r.status !== 'hidden');
-  const open = brief.filter(r => ['proposed', 'accepted', 'doing'].includes(r.status));
+  const open = brief.filter(r => ['proposed', 'doing'].includes(r.status));
   const needIds = new Set(api.needsYou().map(r => r.id));
-  const motion = api.recs().filter(r => ['accepted', 'doing', 'waiting'].includes(r.status) && !needIds.has(r.id) && !ui.briefSet.includes(r.id));
+  const motion = api.recs().filter(r => ['doing', 'waiting'].includes(r.status) && !needIds.has(r.id) && !ui.briefSet.includes(r.id));
   const date = (s.meta && s.meta.clockLabel) || '';
   let h = divider(date);
 
@@ -720,7 +719,7 @@ function drawerIndex() {
   const s = S();
   const recs = api.recs();
   const needs = api.needsYou().length;
-  const motion = recs.filter(r => ['accepted', 'doing', 'waiting'].includes(r.status)).length;
+  const motion = recs.filter(r => ['doing', 'waiting'].includes(r.status)).length;
   const packs = api.packs();
   const docs = A(s.yearend && s.yearend.docs);
   const scopes = currentScopes();
@@ -746,7 +745,7 @@ function planPanel() {
   const need = new Set(api.needsYou().map(r => r.id));
   const groups = [
     ['Needs you', r => need.has(r.id)],
-    ['In motion', r => ['accepted', 'doing'].includes(r.status) && !need.has(r.id)],
+    ['In motion', r => ['doing'].includes(r.status) && !need.has(r.id)],
     ['Waiting', r => r.status === 'waiting'],
     ['Snoozed', r => r.status === 'snoozed'],
     ['Done', r => r.status === 'done'],
@@ -765,7 +764,7 @@ function planPanel() {
 function planRow(r) {
   const value = A(r.value).map(v => VALUE[v.cls] || v.cls);
   const days = r.window && typeof r.window.days === 'number' ? r.window.days : null;
-  const live = ['proposed', 'accepted', 'doing', 'waiting'].includes(r.status);
+  const live = ['proposed', 'doing', 'waiting'].includes(r.status);
   return '<div class="t-prow st-' + esc(r.status) + '">' +
     '<div class="t-prow-top"><button type="button" class="t-prow-title" data-go="rec" data-p="' + esc(r.id) + '">' + T(r.title) + '</button>' +
     (r.window && live ? '<span class="t-win-n' + (days != null && days <= 30 ? ' is-soon' : '') + '">' + T(r.window.label) + (days > 0 ? ', ' + esc(daysText(days)) : '') + '</span>' : '') + '</div>' +

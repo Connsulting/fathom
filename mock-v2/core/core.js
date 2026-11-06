@@ -204,7 +204,7 @@ function resetStore(demo, opts) {
 
 function needsRule(status, r) {
   const days = r && r.window && typeof r.window.days === 'number' ? r.window.days : 9999;
-  return status === 'proposed' || ((status === 'accepted' || status === 'doing') && days <= 30);
+  return status === 'proposed' || (status === 'doing' && days <= 30);
 }
 
 function liveStatus(r) {
@@ -364,7 +364,7 @@ function verdict() {
 
 // ---------------------------------------------------------------- actions
 
-const ACTION_STATUS = { accept: 'accepted', start: 'doing', complete: 'done', dismiss: 'dismissed', snooze: 'snoozed', reopen: 'proposed' };
+const ACTION_STATUS = { start: 'doing', complete: 'done', dismiss: 'dismissed', snooze: 'snoozed', reopen: 'proposed' };
 
 function act(recId, action, arg) {
   const r = rawRec(recId);
@@ -867,7 +867,7 @@ const FALLBACK = {
     let tools = '';
     const btn = (label, attrs) => '<button type="button" ' + attrs + ' style="margin:2px">' + esc(label) + '</button>';
     const recRow = x => '<div>' + '<a href="#/rec/' + esc(x.id) + '">' + esc(x.id) + '</a> [' + esc(x.status) + '] ' +
-      ['accept', 'start', 'snooze', 'dismiss', 'complete', 'reopen'].map(ac => btn(ac, 'data-do="act" data-rec="' + esc(x.id) + '" data-action="' + ac + '"')).join('') + '</div>';
+      ['start', 'snooze', 'dismiss', 'complete', 'reopen'].map(ac => btn(ac, 'data-do="act" data-rec="' + esc(x.id) + '" data-action="' + ac + '"')).join('') + '</div>';
     if (r.name === 'brief') tools = api.needsYou().map(recRow).join('') || '<div>(no needs-you items)</div>';
     if (r.name === 'plan') tools = api.recs().map(recRow).join('');
     if (r.name === 'rec') {

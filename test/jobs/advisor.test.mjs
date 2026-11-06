@@ -110,15 +110,15 @@ describe('advisor workflow, real store', () => {
   test('a confirmed verdict keeps its status and badge across reruns', async () => {
     const { db, srv } = await planned();
     try {
-      await postJson(srv.url, '/api/recs/' + REC + '/action', { action: 'accept' });
+      await postJson(srv.url, '/api/recs/' + REC + '/action', { action: 'start' });
       const { json } = await postJson(srv.url, '/api/advisor/reviews', { recId: REC });
       const v = await postJson(srv.url, `/api/advisor/reviews/${json.reviewId}/verdict`, { verdict: 'confirmed', note: 'Fine as written.', date: NOW });
       assert.equal(v.status, 200);
-      assert.equal(status(db, REC), 'accepted', 'a confirmation does not change the owner status');
+      assert.equal(status(db, REC), 'doing', 'a confirmation does not change the owner status');
       await planRun(db, { now: NOW });
       await planRun(db, { now: NOW });
       const s = await scen(srv.url);
-      assert.equal(recOf(s, REC).status, 'accepted');
+      assert.equal(recOf(s, REC).status, 'doing');
       assert.equal(recOf(s, REC).advisor.verdict, 'confirmed');
       assert.equal(recOf(s, REC).advisor.note, 'Fine as written.');
     } finally { await srv.close(); }
@@ -265,7 +265,7 @@ describe('upgrade from migration 010 (review fix)', () => {
     }
     const rec = db.prepare("INSERT INTO recs (id, def, status, sort, updated_at) VALUES (?, ?, ?, ?, '2026-10-20T09:00:00.000Z')");
     rec.run('a', JSON.stringify({ id: 'a', title: 'Waiting one', advisor: { verdict: 'pending', note: 'On the agenda' } }), 'proposed', 0);
-    rec.run('b', JSON.stringify({ id: 'b', title: 'Confirmed one', advisor: { verdict: 'confirmed', note: 'Agree.' } }), 'accepted', 1);
+    rec.run('b', JSON.stringify({ id: 'b', title: 'Confirmed one', advisor: { verdict: 'confirmed', note: 'Agree.' } }), 'doing', 1);
     rec.run('c', JSON.stringify({ id: 'c', title: 'Vetoed one', advisor: { verdict: 'vetoed', note: 'Not for you.' } }), 'dismissed', 2);
     rec.run('d', JSON.stringify({ id: 'd', title: 'Never sent', advisor: null }), 'proposed', 3);
     db.prepare("INSERT INTO content (key, value, src, updated_at) VALUES ('advisor', ?, 'x', '2026-10-21T09:00:00.000Z')").run(JSON.stringify({

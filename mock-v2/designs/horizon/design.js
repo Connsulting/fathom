@@ -6,10 +6,10 @@
 const MS = 864e5;
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const MONTH_FULL = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-const OPEN = ['proposed', 'accepted', 'doing'];
+const OPEN = ['proposed', 'doing'];
 const STATUS = {
-  proposed: 'New', accepted: 'Accepted', doing: 'In progress', waiting: 'Waiting',
-  snoozed: 'Snoozed', done: 'Done', dismissed: 'Dismissed', hidden: 'Hidden'
+  proposed: 'New', doing: 'Doing it', waiting: 'Waiting',
+  snoozed: 'Later', done: 'Done', dismissed: 'Not for us', hidden: 'Hidden'
 };
 const WAITING = { data: 'on data', advisor: 'on advisor', date: 'on a date' };
 const VALUE = { tax: 'Tax', timing: 'Timing', retire: 'Retirement', risk: 'Risk', cash: 'Cash', goal: 'Goal' };
@@ -89,7 +89,7 @@ function figHtml(key, opts) {
 
 function statusText(r) {
   if (r.status === 'waiting') return `Waiting ${WAITING[r.waitingOn] || ''}`.trim();
-  if (r.status === 'snoozed') return r.wake ? `Snoozed to ${X(r.wake)}` : 'Snoozed';
+  if (r.status === 'snoozed') return r.wake ? `Later, until ${X(r.wake)}` : 'Later';
   return STATUS[r.status] || esc(r.status);
 }
 function countdown(r) {
@@ -148,11 +148,11 @@ function snoozeLabel() { return fmt(addDays(clock(), 14)); }
 
 function actionsFor(r, compact) {
   const a = (act, label, cls = '', arg) => btn(label, `data-act="${act}" data-rec="${esc(r.id)}"${arg != null ? ` data-arg="${esc(arg)}"` : ''}`, cls);
-  const sz = a('snooze', compact ? 'Snooze' : `Snooze to ${snoozeLabel()}`, 'ghost', snoozeLabel());
+  const sz = a('snooze', compact ? 'Later' : `Later, until ${snoozeLabel()}`, 'ghost', snoozeLabel());
+  const nfu = a('dismiss', 'Not for us', 'ghost');
   switch (r.status) {
-    case 'proposed': return [a('accept', 'Accept', 'pri'), a('complete', 'Done', ''), sz, a('dismiss', 'Dismiss', 'ghost')];
-    case 'accepted': return [a('complete', 'Done', 'pri'), a('start', 'Start', ''), sz];
-    case 'doing': return [a('complete', 'Done', 'pri'), sz];
+    case 'proposed': return [a('start', 'Doing it', 'pri'), a('complete', 'Done', ''), sz, nfu];
+    case 'doing': return [a('complete', 'Done', 'pri'), sz, nfu];
     case 'waiting': return [a('complete', 'Done', ''), a('reopen', 'Reopen', 'ghost')];
     case 'snoozed': return [a('reopen', 'Wake now', '')];
     case 'done': return [a('reopen', 'Reopen', 'ghost')];
@@ -370,7 +370,7 @@ function pBrief() {
   const ny = api.needsYou();
   const recs = visibleRecs();
   const clear = v.level === 'clear';
-  const motion = recs.filter((r) => ['accepted', 'doing', 'waiting'].includes(r.status) && !isNeeds(r, ny));
+  const motion = recs.filter((r) => ['doing', 'waiting'].includes(r.status) && !isNeeds(r, ny));
   const done = recs.filter((r) => r.status === 'done').length;
 
   const hero = `<section class="h-hero${clear ? ' clear' : ''}">
@@ -446,7 +446,7 @@ function pPlan() {
     ['Before the year closes', open.filter((r) => days(r) > 30 && days(r) <= ye)],
     [`${c.getUTCFullYear() + 1} and later`, open.filter((r) => days(r) > ye)],
     ['Waiting', recs.filter((r) => r.status === 'waiting')],
-    ['Snoozed', recs.filter((r) => r.status === 'snoozed')],
+    ['Later', recs.filter((r) => r.status === 'snoozed')],
     ['Done', recs.filter((r) => r.status === 'done')]
   ];
   const dismissed = recs.filter((r) => r.status === 'dismissed');
@@ -456,7 +456,7 @@ function pPlan() {
   ];
   const stats = `<div class="h-stats">${counts.map(([n, l]) => `<div><b>${n}</b><span>${l}</span></div>`).join('')}</div>`;
   const body = groups.filter((g) => g[1].length).map(([t, list]) => section(`${t} <em>${list.length}</em>`, `<div class="h-rows">${list.map((r) => recRow(r, ny)).join('')}</div>`)).join('')
-    + (dismissed.length ? `<details class="h-details" data-det="dismissed"${ui.det.dismissed ? ' open' : ''}><summary>Dismissed <em>${dismissed.length}</em></summary><div class="h-rows">${dismissed.map((r) => recRow(r, ny)).join('')}</div></details>` : '');
+    + (dismissed.length ? `<details class="h-details" data-det="dismissed"${ui.det.dismissed ? ' open' : ''}><summary>Not for us <em>${dismissed.length}</em></summary><div class="h-rows">${dismissed.map((r) => recRow(r, ny)).join('')}</div></details>` : '');
   return shell(`${pageHead('Plan', 'Everything on the calendar', 'Each item sits at the date its window closes. Decide, do it, or set it aside.')}${stats}
     ${section('Timeline', timeline('plan'))}${body || '<p class="h-mute">No recommendations yet.</p>'}`, 'plan');
 }

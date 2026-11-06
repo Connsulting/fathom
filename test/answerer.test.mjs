@@ -856,7 +856,7 @@ test('B2: a snooze proposal in ask carries its wake label, and the last successf
   const s = await demoStore(t);
   const before = allStatuses(s.db);
   const { engine } = scripted(s.runtime, [[
-    { toolCalls: [{ name: PROPOSE, args: { id: 'dcfsa', action: 'accept' } }] },
+    { toolCalls: [{ name: PROPOSE, args: { id: 'dcfsa', action: 'start' } }] },
     { toolCalls: [{ name: PROPOSE, args: { id: 'dcfsa', action: 'snooze', wake: 'Next month' } }] },
     { toolCalls: [{ name: PROPOSE, args: { id: 'daf', action: 'dismiss' } }] },
     { text: 'You can confirm the snooze below.' },
@@ -890,7 +890,8 @@ test('B2: a proposal for a hidden or unknown rec, an unknown action or an extra 
   const before = allStatuses(s.db);
   const bad = [
     { id: 'daf', action: 'dismiss' },
-    { id: 'no-such-rec', action: 'accept' },
+    { id: 'no-such-rec', action: 'start' },
+    { id: 'dcfsa', action: 'accept' }, // retired: Doing it is the start action
     { id: 'dcfsa', action: 'delete' },
     { id: 'dcfsa', action: 'none' },
     { id: 'dcfsa', action: 'complete', status: 'done' },
@@ -922,7 +923,7 @@ test('B2: the fake engine proposes an explicit command that names the rec, and n
     ['deferral', 'dismiss this', { recId: 'deferral', action: 'dismiss' }],
     ['deferral', 'Please complete this', { recId: 'deferral', action: 'complete' }],
     ['deferral', 'start this one', { recId: 'deferral', action: 'start' }],
-    [THREAD, 'Please accept dcfsa', { recId: 'dcfsa', action: 'accept' }],
+    [THREAD, 'Please start dcfsa', { recId: 'dcfsa', action: 'start' }],
     [THREAD, `Dismiss ${dcfsaTitle}`, { recId: 'dcfsa', action: 'dismiss' }],
   ];
   for (const [key, text, want] of cases) {

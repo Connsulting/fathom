@@ -48,7 +48,7 @@ describe('Host allowlist across the whole /api surface', () => {
 
   test('other routes, encoded paths, unknown paths and wrong methods are all refused', async () => {
     const before = JSON.stringify(await scenario());
-    await forbidden(postJson(s.baseUrl, '/api/recs/any-id/action', { action: 'accept' }, foreign), 'POST recs action');
+    await forbidden(postJson(s.baseUrl, '/api/recs/any-id/action', { action: 'start' }, foreign), 'POST recs action');
     await forbidden(postJson(s.baseUrl, '/api/ask', { key: 'deferral', text: 'hello' }, foreign), 'POST /api/ask');
     await forbidden(postJson(s.baseUrl, '/api/threads', { text: 'hello' }, foreign), 'POST /api/threads');
     await forbidden(request(s.baseUrl, { path: '/api/threads', headers: foreign }), 'GET /api/threads');

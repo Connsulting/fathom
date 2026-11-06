@@ -220,10 +220,10 @@ describe('protocol', () => {
 
   test('liveness: the write tool with a write key succeeds', async () => {
     const recs = JSON.parse(rpcResult(await callToolRpc(s.baseUrl, writeKey.key, 'list_recommendations')).content[0].text);
-    const target = recs.find(r => r.status !== 'accepted') || recs[0];
-    const result = rpcResult(await callToolRpc(s.baseUrl, writeKey.key, 'set_recommendation_status', { id: target.id, status: 'accepted' }));
+    const target = recs.find(r => r.status !== 'doing') || recs[0];
+    const result = rpcResult(await callToolRpc(s.baseUrl, writeKey.key, 'set_recommendation_status', { id: target.id, status: 'doing' }));
     assert.ok(!result.isError, result.content && result.content[0] && result.content[0].text);
-    assert.equal(JSON.parse(result.content[0].text).status, 'accepted');
+    assert.equal(JSON.parse(result.content[0].text).status, 'doing');
     seenResults.push(result.content[0].text);
   });
 
