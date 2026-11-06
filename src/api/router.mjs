@@ -33,6 +33,7 @@ const TABLE = [
   { method: 'GET', path: '/api/scenario', handler: h.getScenario },
   { method: 'GET', path: '/api/identity', handler: h.getIdentity },
   { method: 'POST', path: '/api/recs/:id/action', handler: h.recAction },
+  { method: 'POST', path: '/api/recs/:id/start-over', handler: h.recStartOver },
   { method: 'POST', path: '/api/wargame/:name/pick', handler: h.wargamePick },
   { method: 'POST', path: '/api/decisions/:id/decide', handler: h.decisionDecide },
   { method: 'POST', path: '/api/decisions/:id/revisit', handler: h.decisionRevisit },

@@ -728,6 +728,45 @@ a.h-dec-t:hover { color: var(--ac2); }
 .d-horizon .h-dlg .h-wglink { margin-top: 28px; }
 .d-horizon .h-dlg .h-compose { max-width: none; }
 .d-horizon .h-dlg .h-chips { margin-top: 0; }
+/* The dialog's conversation is an Ask thread: Open in Ask and Start over sit in the section head. */
+.d-horizon .h-dlg .h-conv .h-sec-h { flex-wrap: wrap; row-gap: 6px; }
+.d-horizon .h-conv-acts { display: flex; align-items: baseline; gap: 16px; margin-left: auto; }
+.d-horizon .h-conv-open { color: var(--mu); font-size: 12.5px; white-space: nowrap; }
+.d-horizon .h-conv-open:hover { color: var(--ac2); }
+.d-horizon .h-conv-reset { all: unset; box-sizing: border-box; cursor: pointer; color: var(--mu); font-size: 12.5px; white-space: nowrap; }
+.d-horizon .h-conv-reset:hover { color: var(--tx); }
+.d-horizon .h-conv-reset:focus-visible { outline: 2px solid var(--ac); outline-offset: 2px; }
+.d-horizon .h-conv-reset:disabled { cursor: default; opacity: 0.45; }
+.d-horizon .h-conv-reset:disabled:hover { color: var(--mu); }
+.d-horizon .h-dlg .h-askx-pend .h-msg.me.pending .h-msg-b { white-space: pre-wrap; overflow-wrap: anywhere; }
+.d-horizon .h-dlg .h-askx-pend { scroll-margin: 12px 0; }
+.d-horizon .h-chip:disabled { cursor: default; opacity: 0.45; }
+.d-horizon .h-chip:disabled:hover { border-color: var(--line2); color: var(--tx2); }
+.d-horizon .h-compose[aria-busy="true"] input { color: var(--mu); }
+.d-horizon .h-compose .h-btn:disabled { cursor: default; opacity: 0.45; }
+
+/* Ask: the rec a thread was asked from, as a quiet link in its sidebar row (a second line under
+   the title, beside the row link) and in its header. Plain text; the dot marks it as a rec. */
+.d-horizon .h-askx-ctx {
+  position: relative; display: block; min-width: 0; max-width: 100%; padding-left: 11px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 12px; line-height: 18px; color: var(--mu);
+}
+.d-horizon .h-askx-ctx::before {
+  content: ''; position: absolute; left: 0; top: 50%; width: 5px; height: 5px; margin-top: -2.5px;
+  border-radius: 50%; background: var(--acl);
+}
+.d-horizon .h-askx-ctx:hover { color: var(--tx); }
+.d-horizon .h-askx-ctx:hover::before { background: var(--ac); }
+.d-horizon .h-askx-item.ctx .h-askx-row { align-items: flex-start; min-height: 52px; padding-top: 7px; }
+.d-horizon .h-askx-item.ctx > .h-askx-ctx { position: absolute; top: 28px; left: 10px; max-width: calc(100% - 20px); }
+.d-horizon .h-askx-item.ctx:not(.stack) .h-askx-acts { top: 17px; }
+.d-horizon .h-askx-head .h-askx-ctx {
+  flex: 0 1 auto; max-width: 45%; margin-left: 4px; padding: 2px 9px 2px 19px;
+  border: 1px solid var(--line2); border-radius: 999px; font-size: 12px;
+}
+.d-horizon .h-askx-head .h-askx-ctx::before { left: 8px; }
+.d-horizon .h-askx-head .h-askx-ctx:hover { border-color: var(--ac); }
 @keyframes h-dlg-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
 @keyframes h-dlg-fade { from { opacity: 0; } to { opacity: 1; } }
 .d-horizon .h-dlg-host.enter .h-dlg { animation: h-dlg-in 0.16s ease-out; }

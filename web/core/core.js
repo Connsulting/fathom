@@ -20,29 +20,39 @@
 //  - api.scenarioPick(name, idx): idx is a point/option index or its id string.
 //  - api.decide(decisionId, idx?): decide the open war-game decision on the picked point (idx, else the
 //    stored pick); api.revisit(decisionId) reopens a decision decided that way.
-//  - api.ask(questionId, key?): index (or id) into rec.qa when the conversation is a rec, otherwise an
-//    id into ask.suggested (or a starter id on #/ask). Default conversation = the rec on the rec
-//    route, the pack's What if thread on a pack route, the open thread on #/ask/<id>; on #/ask with
-//    no thread open it starts a new thread (api.newThread).
+//  - api.ask(questionId, key?): index (or id) into rec.qa when the conversation was asked from a rec,
+//    otherwise an id into ask.suggested (or a starter id on #/ask). Default conversation = the rec's
+//    attached thread on the rec route (none yet: a new thread asked from that rec), the pack's What
+//    if thread on a pack route, the open thread on #/ask/<id>; on #/ask with no thread open it starts
+//    a new thread (api.newThread).
 //  - Messages are { id, role, html, refs, ts, notice, provenance }. 'fathom' html is a series of <p>.
 //    provenance is the stored object (tools, figures, literals, packEntries, packIds, grounding)
 //    or null for messages that have none.
-//  - api.askFree(text, key) takes an Ask thread key 'ask:<id>', a rec id or 'pack:<id>' (the pack's
-//    What if thread). There is no bare 'ask' conversation; api.conversation() with no key is [].
+//  - api.askFree(text, key) takes an Ask thread key 'ask:<id>' or 'pack:<id>' (the pack's What if
+//    thread). Recs have no conversation of their own: a question asked from a rec is an Ask thread
+//    carrying recId. There is no bare 'ask' conversation; api.conversation() with no key is [].
 //  - Ask threads: route 'ask' takes an optional id (#/ask/<id>; an id not in live.threads normalizes
 //    to #/ask). api.threads() lists every thread (archived and trashed too, newest lastAt first) as
-//    { id, key, title, titleSource, createdAt, lastAt, archivedAt, trashedAt, turns }; title null
-//    means "New conversation". api.askStarters() lists { id, q } plain-text starters.
-//    api.newThread({ text } | { questionId }) creates a thread, asks, and opens #/ask/<id> (replacing
-//    #/ask); it resolves { thread, message } or null. api.threadAct(id, 'archive'|'trash'|'restore'|
+//    { id, key, title, titleSource, createdAt, lastAt, archivedAt, trashedAt, turns, recId,
+//    recDetachedAt }; title null means "New conversation"; recId names the rec the thread was asked
+//    from (null for none; the rec may no longer exist) and recDetachedAt is set once Start over
+//    detached it from that rec's dialog. api.askStarters() lists { id, q } plain-text starters.
+//    api.newThread({ text, recId? } | { questionId, recId? }) creates a thread, asks, and opens
+//    #/ask/<id> when the owner is on #/ask (replacing it); with recId the thread is asked from that
+//    rec and questionId indexes rec.qa. It resolves { thread, message } or null.
+//    api.recThread(recId) is the rec's attached thread: the newest lastAt thread with that recId,
+//    not trashed and not detached, or null. api.startOver(recId) detaches every thread of the rec
+//    (they stay in Ask) and resolves the response or null. api.threadAct(id, 'archive'|'trash'|'restore'|
 //    'delete') and api.renameThread(id, title) resolve the updated thread (or null; delete resolves
 //    null too, and a deleted open thread falls back to #/ask).
-//  - api.askStream(text, key, onEvent) and api.newThreadStream({ text } | { questionId }, onEvent) are
-//    askFree and newThread over the server's event stream: onEvent(name, data) sees 'start' {key},
+//  - api.askStream({ text } | { questionId }, key, onEvent) and api.newThreadStream({ text, recId? } |
+//    { questionId, recId? }, onEvent) are api.askFree / api.ask and api.newThread over the server's
+//    event stream: onEvent(name, data) sees 'start' {key},
 //    'progress' {label}, 'text' {text} (raw model text: escape it and never style its numbers as
 //    verified), 'reset' and 'recovering'. They resolve exactly like askFree and newThread. When the
 //    stream breaks before its final event, the answer is fetched instead: the scenario is reloaded
-//    until the conversation has the new turn (the server stores it once, after grounding).
+//    until the conversation has the new turn (the server stores it once, after grounding). A new
+//    thread counts only once it has a turn (a rec thread's row exists before its answer is stored).
 //  - api.packEntry(packId, entryId) GETs one pack entry and resolves { id, title, body, cites } or
 //    null; it never touches the scenario or the error line.
 //  - api.reviseAnswer(id, optionId) and api.reopenAnswer(id) resolve { item }, or { final: message }
@@ -425,10 +435,13 @@ async function postStream(path, body, onEvent) {
 
 const meTurns = (scenario, key) => arr(scenario && scenario.live && scenario.live.conversations && scenario.live.conversations[key])
   .filter(m => m && m.role === 'me').length;
+// A thread's conversation key ('ask:<id>').
+const threadKey = (th) => th.key || 'ask:' + th.id;
 const threadIds = (scenario) => new Set(arr(scenario && scenario.live && scenario.live.threads).map(t => t && t.id));
 
 // Reload the scenario until the asked conversation has the new turn: `key` with more owner
-// messages than `before`, or (a new thread whose key never arrived) a thread not in `ids`.
+// messages than `before`, or (a new thread whose key never arrived) a thread not in `ids` that has
+// a stored turn (a thread asked from a rec is inserted before its answer).
 // Resolves { scenario, key } or null after RECOVER_FOR_MS.
 async function recoverTurn({ key, before, ids }) {
   const until = Date.now() + RECOVER_FOR_MS;
@@ -438,8 +451,8 @@ async function recoverTurn({ key, before, ids }) {
     try { next = await loadScenario(); } catch (e) { continue; }
     if (key && meTurns(next, key) > before) return { scenario: next, key };
     if (!key) {
-      const fresh = arr(next.live && next.live.threads).find(t => t && t.id && !ids.has(t.id));
-      if (fresh) return { scenario: next, key: fresh.key || 'ask:' + fresh.id };
+      const fresh = arr(next.live && next.live.threads).find(t => t && t.id && !ids.has(t.id) && Number(t.turns) > 0);
+      if (fresh) return { scenario: next, key: threadKey(fresh) };
     }
   }
   return null;
@@ -484,31 +497,49 @@ function lastReply(key) {
   return null;
 }
 
-function askStream(text, convKey, onEvent) {
-  const clean = String(text == null ? '' : text).trim();
-  if (!clean) return done();
+// { text } | { questionId } as the question part of a request body, or null when it is empty. A
+// rec question id that is all digits is an index into rec.qa; starter ids stay strings.
+const hasQid = o => o.questionId != null && o.questionId !== '';
+const qidOf = v => (typeof v === 'string' && /^\d+$/.test(v) ? Number(v) : v);
+function questionBody(q, numeric) {
+  const o = q && typeof q === 'object' ? q : {};
+  if (hasQid(o)) return { questionId: numeric ? qidOf(o.questionId) : String(o.questionId) };
+  const text = String(o.text == null ? '' : o.text).trim();
+  return text ? { text } : null;
+}
+
+// The new-thread body: the question plus recId when the thread is asked from a rec.
+function threadBody(q) {
+  const o = q && typeof q === 'object' ? q : {};
+  const recId = typeof o.recId === 'string' && o.recId ? o.recId : null;
+  const body = questionBody(o, !!recId);
+  if (!body) return null;
+  if (recId) body.recId = recId;
+  return body;
+}
+
+// The rec of the rec route, or null.
+const routeRecId = () => (cur && cur.name === 'rec' && cur.params && cur.params.id ? String(cur.params.id) : null);
+
+function askStream(q, convKey, onEvent) {
+  const body = questionBody(q, true);
+  if (!body) return done();
   const key = convKey || activeKey();
-  if (!key) return newThreadStream({ text: clean }, onEvent);
+  if (!key) return newThreadStream({ ...body, recId: routeRecId() }, onEvent);
   if (key.startsWith('pack:') && !rawPack(key.slice(5))) return done();
   const cb = typeof onEvent === 'function' ? onEvent : () => {};
-  return sendStream('/api/ask', { key, text: clean }, cb, d => (d.message ? mapMsg(d.message) : d.recoveredKey ? lastReply(key) : null), key);
+  return sendStream('/api/ask', { key, ...body }, cb, d => (d.message ? mapMsg(d.message) : d.recoveredKey ? lastReply(key) : null), key);
 }
 
 function newThreadStream(q, onEvent) {
-  const o = q && typeof q === 'object' ? q : {};
-  let body;
-  if (o.questionId != null && o.questionId !== '') body = { questionId: String(o.questionId) };
-  else {
-    const text = String(o.text == null ? '' : o.text).trim();
-    if (!text) return done();
-    body = { text };
-  }
+  const body = threadBody(q);
+  if (!body) return done();
   const cb = typeof onEvent === 'function' ? onEvent : () => {};
   return sendStream('/api/threads', body, cb, d => {
     let th = d.thread && typeof d.thread === 'object' ? d.thread : null;
     if (!th && d.recoveredKey) th = rawThread(d.recoveredKey.replace(/^ask:/, ''));
     if (th && th.id && cur && cur.name === 'ask' && !(cur.params && cur.params.id)) go('ask', { id: th.id }, { replace: true });
-    const key = th ? th.key || 'ask:' + th.id : null;
+    const key = th ? threadKey(th) : null;
     return { thread: th, message: d.message ? mapMsg(d.message) : key ? lastReply(key) : null };
   });
 }
@@ -594,12 +625,19 @@ function act(recId, action, arg) {
   return send('/api/recs/' + encodeURIComponent(recId) + '/action', body);
 }
 
+// The conversation the current route asks into: the rec's attached thread on the rec route (null
+// when it has none: the next question starts a thread asked from the rec), the pack's What if
+// thread, or the open Ask thread.
 function activeKey() {
-  if (cur && cur.name === 'rec' && cur.params && cur.params.id) return cur.params.id;
+  const recId = routeRecId();
+  if (recId) {
+    const th = recThread(recId);
+    return th ? threadKey(th) : null;
+  }
   if (cur && cur.name === 'packs' && cur.params && cur.params.id) return 'pack:' + cur.params.id;
   if (cur && cur.name === 'ask' && cur.params && cur.params.id) {
     const th = rawThread(cur.params.id);
-    if (th) return th.key || 'ask:' + th.id;
+    if (th) return threadKey(th);
   }
   return null;
 }
@@ -607,16 +645,15 @@ function activeKey() {
 function ask(questionId, convKey) {
   if (questionId == null || questionId === '') return done();
   const key = convKey || activeKey();
-  if (!key) return newThread({ questionId: String(questionId) });
-  const qid = typeof questionId === 'string' && /^\d+$/.test(questionId) ? Number(questionId) : questionId;
-  return send('/api/ask', { key, questionId: qid }, d => (d.message ? mapMsg(d.message) : null));
+  if (!key) return newThread({ questionId: String(questionId), recId: routeRecId() });
+  return send('/api/ask', { key, questionId: qidOf(questionId) }, d => (d.message ? mapMsg(d.message) : null));
 }
 
 function askFree(text, convKey) {
   const clean = String(text == null ? '' : text).trim();
   if (!clean) return done();
   const key = convKey || activeKey();
-  if (!key) return newThread({ text: clean });
+  if (!key) return newThread({ text: clean, recId: routeRecId() });
   if (key.startsWith('pack:') && !rawPack(key.slice(5))) return done();
   return send('/api/ask', { key, text: clean }, d => (d.message ? mapMsg(d.message) : null));
 }
@@ -636,19 +673,32 @@ function askStarters() {
 // Creates a thread and asks its first question. When the owner is still on #/ask, the new thread
 // replaces that history entry, so Back leaves the Ask page instead of reopening an empty composer.
 function newThread(q) {
-  const o = q && typeof q === 'object' ? q : {};
-  let body;
-  if (o.questionId != null && o.questionId !== '') body = { questionId: String(o.questionId) };
-  else {
-    const text = String(o.text == null ? '' : o.text).trim();
-    if (!text) return done();
-    body = { text };
-  }
+  const body = threadBody(q);
+  if (!body) return done();
   return send('/api/threads', body, d => {
     const th = d.thread && typeof d.thread === 'object' ? d.thread : null;
     if (th && th.id && cur && cur.name === 'ask' && !(cur.params && cur.params.id)) go('ask', { id: th.id }, { replace: true });
     return { thread: th, message: d.message ? mapMsg(d.message) : null };
   });
+}
+
+// The thread the rec's dialog shows: newest lastAt among the rec's threads that are neither trashed
+// nor detached by Start over (an archived one still counts), or null.
+function recThread(recId) {
+  if (recId == null || recId === '') return null;
+  const id = String(recId);
+  let best = null;
+  for (const th of threadList()) {
+    if (!th || th.recId !== id || th.trashedAt || th.recDetachedAt) continue;
+    if (!best || String(th.lastAt || '') > String(best.lastAt || '')) best = th;
+  }
+  return best;
+}
+
+// Start over: detach every thread of the rec from its dialog; the threads stay in Ask.
+function startOver(recId) {
+  if (!rawRec(String(recId == null ? '' : recId))) return done();
+  return send('/api/recs/' + encodeURIComponent(recId) + '/start-over', {});
 }
 
 function threadAct(id, action) {
@@ -961,6 +1011,8 @@ const api = {
   askStarters,
   newThread,
   newThreadStream,
+  recThread,
+  startOver,
   threadAct,
   renameThread,
   scenarioPick,

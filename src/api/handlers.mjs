@@ -4,8 +4,9 @@
 // transaction opens; only the writes run inside tx(). ctx.packs is the live pack view
 // (src/packs/live.mjs).
 //
-// Ask threads (src/api/threads.mjs): POST /api/threads creates one (and asks its first question),
-// POST /api/ask continues a thread, a rec conversation or a pack conversation by key. Naming runs
+// Ask threads (src/api/threads.mjs): POST /api/threads creates one (and asks its first question,
+// from a rec when the body names recId), POST /api/ask continues a thread or a pack conversation by
+// key, and POST /api/recs/:id/start-over detaches a rec's threads from its dialog. Naming runs
 // after the reply's transaction commits and before the response is built. Trash older than 30 days
 // is purged when the thread list, a thread or the scenario is read. Both asking routes stream as
 // Server-Sent Events on request (src/api/router.mjs); the stored turn and the final body are the same.
@@ -465,9 +466,11 @@ export async function ask(ctx) {
   const { hasQ, questionId, clean } = askBody(ctx.body);
 
   const thread = isThreadKey(key);
-  if (key.startsWith('pack:')) packRow(db, key.slice(5));
-  else if (thread) openThreadRow(db, key);
-  else visibleRec(db, key);
+  if (!thread && !key.startsWith('pack:')) {
+    throw new HttpError(400, 'key must be an Ask thread or a pack conversation; ask about a recommendation through POST /api/threads with recId');
+  }
+  if (thread) openThreadRow(db, key);
+  else packRow(db, key.slice(5));
 
   const scenario = scenarioOf(ctx);
   let mine;
@@ -514,11 +517,13 @@ export function threadGet(ctx) {
 
 // POST /api/threads: {} makes an empty thread; { text } or { questionId } (an Ask starter id) also
 // asks the first question. The key is chosen before the model call and the row is written with
-// the turn, so a failed answer leaves nothing behind.
+// the turn, so a failed answer leaves nothing behind. With recId the thread is asked from that rec
+// (threadCreateFromRec).
 export async function threadCreate(ctx) {
   const { db } = ctx;
   const body = ctx.body;
   const empty = (body.text === undefined || body.text === null) && (body.questionId === undefined || body.questionId === null);
+  if (body.recId !== undefined && body.recId !== null) return threadCreateFromRec(ctx, empty);
   if (empty) {
     const thread = tx(db, () => insertThread(db, newThreadKey(db), stamp(ctx)));
     return { scenario: scenarioOf(ctx), thread };
@@ -543,6 +548,59 @@ export async function threadCreate(ctx) {
   await maybeName(ctx, key);
   const fresh = scenarioOf(ctx);
   return { scenario: fresh, thread: threadOrThrow(db, key.slice(4)), message: replyIn(fresh, key, id) };
+}
+
+// POST /api/threads { recId, text | questionId }: a thread asked from a visible rec (404 unknown or
+// hidden); a question is required (400) and questionId is a rec.qa index, id or exact question (404
+// unknown). The row is written before the model call so the answerer's scenario resolves the rec
+// context (recForKey); a failed or empty answer deletes it again while it holds no message.
+async function threadCreateFromRec(ctx, empty) {
+  const { db } = ctx;
+  const { recId } = ctx.body;
+  if (typeof recId !== 'string' || !recId) throw new HttpError(400, 'recId must be a recommendation id');
+  visibleRec(db, recId);
+  if (empty) throw new HttpError(400, 'send questionId or text to ask about a recommendation');
+  const { hasQ, questionId, clean } = askBody(ctx.body);
+  let mine;
+  if (hasQ) {
+    const q = findQuestion(scenarioOf(ctx), recId, questionId);
+    if (!q) throw new HttpError(404, `no question ${questionId}`);
+    mine = q.q;
+  } else {
+    mine = escapeUserText(clean);
+  }
+  const key = newThreadKey(db);
+  tx(db, () => insertThread(db, key, stamp(ctx), { recId }));
+  let reply;
+  try {
+    streamStart(ctx, key);
+    reply = await need(ctx, 'answerer').answer({ db, key, questionId: hasQ ? questionId : undefined,
+      text: hasQ ? undefined : clean, clock: ctx.config && ctx.config.clock, ...streaming(ctx) });
+    if (!reply) throw new HttpError(404, hasQ ? `no question ${questionId}` : 'no answer');
+  } catch (e) {
+    dropIfEmpty(db, key);
+    throw e;
+  }
+  // The thread may have been trashed or deleted while the model answered.
+  const id = storeTurn(ctx, key, mine, reply, () => openThreadRow(db, key));
+  await maybeName(ctx, key);
+  const fresh = scenarioOf(ctx);
+  return { scenario: fresh, thread: threadOrThrow(db, key.slice(4)), message: replyIn(fresh, key, id) };
+}
+
+// Deletes a thread row that holds no message (a rec thread whose first answer failed).
+function dropIfEmpty(db, key) {
+  db.prepare('DELETE FROM conversations WHERE key = ? AND NOT EXISTS (SELECT 1 FROM messages WHERE conversation_key = ?)').run(key, key);
+}
+
+// POST /api/recs/:id/start-over: detaches every thread asked from a visible rec that its dialog
+// still shows, so the dialog opens a fresh composer. The threads stay in Ask untouched otherwise.
+export function recStartOver(ctx) {
+  const { db } = ctx;
+  const { id } = ctx.params;
+  visibleRec(db, id);
+  db.prepare('UPDATE conversations SET rec_detached_at = ? WHERE rec_id = ? AND rec_detached_at IS NULL').run(stamp(ctx), id);
+  return { scenario: scenarioOf(ctx) };
 }
 
 export function threadRename(ctx) {

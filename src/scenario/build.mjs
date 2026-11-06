@@ -176,7 +176,8 @@ export function messageOut(row) {
   };
 }
 
-// Every conversation's messages by key: rec ids, 'pack:<id>' and Ask threads ('ask:<id>').
+// Every conversation's messages by key: Ask threads ('ask:<id>', rec threads included) and
+// 'pack:<id>'. No conversation is keyed by a rec id (migration 016 moved them into threads).
 export function loadConversations(db) {
   const out = {};
   for (const c of db.prepare('SELECT key FROM conversations ORDER BY created_at, key').all()) out[c.key] = out[c.key] || [];
@@ -202,11 +203,14 @@ export function threadOut(row) {
     lastAt: row.last_at ?? row.created_at,
     archivedAt: row.archived_at ?? null,
     trashedAt: row.trashed_at ?? null,
+    recId: row.rec_id ?? null,
+    recDetachedAt: row.rec_detached_at ?? null,
     turns: Number(row.turns) || 0,
   };
 }
 
 export const THREAD_SELECT = `SELECT c.key, c.created_at, c.title, c.title_source, c.archived_at, c.trashed_at, c.last_at,
+  c.rec_id, c.rec_detached_at,
   (SELECT count(*) FROM messages m WHERE m.conversation_key = c.key AND m.role = 'me') AS turns
   FROM conversations c`;
 

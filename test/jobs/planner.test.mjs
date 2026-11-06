@@ -11,7 +11,7 @@ import {
   selfEmploymentTax, qbiDeduction, federalIncomeTax, virginiaIncomeTax, estimatedPaymentSafeHarbor,
   solo401kRoom, sepRoom, hsaLimit,
 } from '../../src/calc/index.mjs';
-import { recAction, ask, packToggle } from '../../src/api/handlers.mjs';
+import { recAction, packToggle, threadCreate } from '../../src/api/handlers.mjs';
 import { createLiveAnswerer } from '../../src/api/answerer.mjs';
 import { createRuntimeEngine } from '../../src/engine/runtime.mjs';
 import { reasonText } from '../../src/jobs/triggers/missing-data.mjs';
@@ -603,12 +603,10 @@ describe('recs', () => {
     assert.deepEqual(dated, [...dated].sort(), 'non-decreasing close dates');
   });
 
-  test('AC4: each new rec gets a conversation with one Fathom message holding its summary', () => {
+  test('AC4: a new rec gets no rec-keyed conversation or opening summary message', () => {
     for (const id of EXPECTED_ACTIVE) {
-      const msgs = base.prepare('SELECT role, text FROM messages WHERE conversation_key = ? ORDER BY id').all(id);
-      assert.equal(msgs.length, 1, `${id} one message`);
-      assert.equal(msgs[0].role, 'fathom');
-      assert.equal(msgs[0].text, `<p>${recRow(base, id).def.summary}</p>`);
+      assert.equal(base.prepare('SELECT count(*) AS n FROM conversations WHERE key = ?').get(id).n, 0, `${id} has no conversation`);
+      assert.equal(base.prepare('SELECT count(*) AS n FROM messages WHERE conversation_key = ?').get(id).n, 0, `${id} has no message`);
     }
   });
 
@@ -617,15 +615,19 @@ describe('recs', () => {
     await plan(db);
     recAction(ctxOf(db, { id: 'va529' }, { action: 'start' }));
     recAction(ctxOf(db, { id: 'va529' }, { action: 'task', arg: 0 }));
-    await ask(ctxOf(db, {}, { key: 'va529', text: 'Synthetic follow-up question for the planner test.' }));
-    const before = db.prepare("SELECT id, role, text FROM messages WHERE conversation_key = 'va529' ORDER BY id").all().map(r => ({ ...r }));
+    const { thread } = await threadCreate(ctxOf(db, {}, { recId: 'va529', text: 'Synthetic follow-up question for the planner test.' }));
+    assert.equal(thread.recId, 'va529');
+    const before = db.prepare('SELECT id, role, text FROM messages WHERE conversation_key = ? ORDER BY id').all(thread.key).map(r => ({ ...r }));
     assert.ok(before.length >= 2);
+    const convBefore = { ...db.prepare('SELECT * FROM conversations WHERE key = ?').get(thread.key) };
     await plan(db);
     const row = recRow(db, 'va529');
     assert.equal(row.status, 'doing');
     assert.equal(row.tasks_done[0], true, 'task flag kept');
-    const after = db.prepare("SELECT id, role, text FROM messages WHERE conversation_key = 'va529' ORDER BY id").all().map(r => ({ ...r }));
-    assert.deepEqual(after, before, 'conversation untouched');
+    const after = db.prepare('SELECT id, role, text FROM messages WHERE conversation_key = ? ORDER BY id').all(thread.key).map(r => ({ ...r }));
+    assert.deepEqual(after, before, 'the rec thread is untouched');
+    assert.deepEqual({ ...db.prepare('SELECT * FROM conversations WHERE key = ?').get(thread.key) }, convBefore, 'its row too');
+    assert.equal(db.prepare("SELECT count(*) AS n FROM conversations WHERE key = 'va529'").get().n, 0, 'no rec-keyed conversation');
   });
 
   test('AC4: a rec whose condition no longer holds is retired to dismissed with a planner event and kept', async () => {

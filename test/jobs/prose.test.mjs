@@ -130,8 +130,8 @@ describe('model prose', () => {
       assert.deepEqual(def.qa, VALID.qa);
     }
     assert.equal(result.counts.prose.model, Object.keys(src).length);
-    const msg = db.prepare("SELECT text FROM messages WHERE conversation_key = 'fed-q4-estimate' ORDER BY id").get();
-    assert.equal(msg.text, `<p>${VALID.summary}</p>`, 'the first rec message carries the accepted summary');
+    assert.equal(db.prepare("SELECT count(*) AS n FROM messages WHERE conversation_key = 'fed-q4-estimate'").get().n, 0,
+      'the planner writes no opening summary message; the dialog shows the accepted summary from the def');
   });
 
   test('AC5: the engine is asked for a job with the draft, allowed figures and a token allow list', async () => {

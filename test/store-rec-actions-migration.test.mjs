@@ -51,7 +51,8 @@ test('migration 015 turns every accepted rec into doing and keeps all other data
   const before = db.prepare('SELECT id, status, wake, tasks_done, pack_id, sort, updated_at FROM recs ORDER BY id').all();
   assert.equal(before.filter(r => r.status === 'accepted').length, 2);
 
-  assert.deepEqual(migrate(db).applied, [TARGET.id]);
+  // Later migrations (016 moves rec conversations into Ask threads) apply after it.
+  assert.equal(migrate(db).applied[0], TARGET.id);
 
   const after = db.prepare('SELECT id, status, wake, tasks_done, pack_id, sort, updated_at FROM recs ORDER BY id').all();
   assert.deepEqual(after.map(r => ({ ...r })), before.map(r => ({ ...r, status: r.status === 'accepted' ? 'doing' : r.status })));
