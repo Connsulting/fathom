@@ -37,7 +37,7 @@
 // being redone after a failed grounding check; a tool call does not reset it). The returned reply is the
 // only grounded result; nothing streamed is stored. A throwing onEvent never fails the answer.
 //
-// The model's text loses a trailing or mid-answer Sources sentence (stripSources) before grounding,
+// The model's text loses its Source, Reference or Citation lines and sentences (stripSources) before grounding,
 // and the rendered blocks keep a minimal markdown subset (src/shared/answer-text.mjs): paragraphs,
 // bullet and numbered lists and bold, over the escaped text. List blocks come back complete
 // (<ul>/<ol>); every other block is paragraph inner HTML.

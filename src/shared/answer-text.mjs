@@ -1,8 +1,12 @@
 // Answer text shared by the server (grounded rendering) and the browser (the streaming preview).
 // Served to the browser at /shared/answer-text.mjs, so it imports nothing outside src/shared.
 //
-// stripSources(text) -> text without a trailing "Sources:" paragraph, heading block or sentence,
-// and without a mid-answer sentence or line that begins with Sources, References or Citations and a colon.
+// stripSources(text) -> text without citations. A citation is a capitalized or all-caps Source,
+//   Reference or Citation label (singular or plural, optionally emphasized) and a colon, at text,
+//   paragraph or list item start or after a finished sentence, with the quoted titles, URLs and
+//   bare titles after it through the sentence end. A citation filling its line removes the line
+//   (list marker included); a label line heading a list removes the list. Only whitespace touched by
+//   a removal is cleaned. Text that would be left empty is returned unchanged.
 // listMarkerSpans(text) -> [{ index, length }] of ordered-list markers ("1. ") at line starts, which
 //   grounding masks (a list number is not a figure).
 // markdownBlocks(html) -> [block] from escaped HTML: each block is either paragraph inner HTML (the
@@ -17,94 +21,109 @@
 
 import { escapeUserText } from './tokens.mjs';
 
-const LABEL = '(?:[*_]{1,2})?\\s*(?:sources?|references?|citations?)\\s*(?:[*_]{1,2})?';
-const LEAD_BLOCK = new RegExp(`^\\s*${LABEL}[ \\t]*(?::|\\n|$)`, 'i');
-const TAIL_LINE = new RegExp(`\\n[ \\t]*${LABEL}\\s*:[^\\n]*$`, 'i');
-// Mid-answer citations use the capitalized label only, so wrapped prose ("sources:") stays.
-const CITE_LABEL = /(?:[*_]{1,2})?(Sources|References|Citations)(?:[*_]{1,2})?[ \t]*:/y;
-const QUOTE_CLOSE = { '"': '"', "'": "'", '\u201c': '\u201d', '\u2018': '\u2019' };
+const LABELS = '(?:Sources?|References?|Citations?|SOURCES?|REFERENCES?|CITATIONS?)';
+const EM = '(?:[*_]{1,2})?';
+const CITE_LABEL = new RegExp(`${EM}${LABELS}${EM}[ \\t]*:${EM}`, 'y');
+const HEADING = new RegExp(`^[ \\t]*${EM}${LABELS}${EM}[ \\t]*:?[ \\t]*${EM}[ \\t]*$`);
+const LIST_ITEM = /^[ \t]*(?:[-*•+]|\d{1,2}[.)])[ \t]+/;
+const AFTER_SENTENCE = /[.!?]["'”’)\]]?[ \t]+$/;
+const ENDS_SENTENCE = /[.!?]["'”’)\]]?[ \t]*$/;
+const QUOTE_CLOSE = { '"': '"', '“': '”', '‘': '’' };
+const URL_SPAN = /^https?:\/\/[^\s"“”]*[^\s.,;:!?"“”)\]]/i;
+const BARE_TITLE = /^[^,;]*?(?=[.!?](?:\s|$)|[,;]|$)/;
+const JOINER = /^(?:,|;|and(?=[ \t]))/;
+const blank = line => !line.trim();
 
-function citeBoundary(text, index) {
-  if (index === 0) return true;
-  const before = text.slice(0, index);
-  if (/\n[ \t]*\n[ \t]*$/.test(before)) return true;
-  if (/\n[ \t]*(?:[-*•+]|\d{1,2}[.)])[ \t]+$/.test(before)) return true;
-  return /[.!?]["'\u201d]?[ \t]*$/.test(before) || /[.!?]["'\u201d]?\n[ \t]*$/.test(before);
-}
-
-// From just after the colon: quoted titles (straight or curly), URLs, and bare titles, joined by
-// commas, semicolons or "and", through the sentence end after the last span.
-function consumeCitation(text, start) {
+// From just after the colon (within one line): quoted titles, URLs and bare titles joined by commas,
+// semicolons or "and", through the sentence end. An unclosed quote runs to the line end.
+function consumeCitation(line, start) {
   let j = start;
-  let saw = false;
-  while (j < text.length && text[j] !== '\n') {
-    const rest = text.slice(j);
-    const pad = /^[ \t]+/.exec(rest)?.[0].length ?? 0;
-    const body = rest.slice(pad);
-    const close = QUOTE_CLOSE[body[0]];
-    if (close) {
-      const end = body.indexOf(close, 1);
-      if (end < 0) return text.length;
-      j += pad + end + 1;
-      saw = true;
+  let expectItem = true;
+  let titleEnded = false;
+  for (;;) {
+    const k = j + /^[ \t]*/.exec(line.slice(j))[0].length;
+    const body = line.slice(k);
+    if (expectItem) {
+      if (!body) return k;
+      const close = QUOTE_CLOSE[body[0]];
+      if (close) {
+        const end = body.indexOf(close, 1);
+        if (end < 0) return line.length;
+        titleEnded = /[.!?]$/.test(body.slice(1, end));
+        j = k + end + 1;
+      } else {
+        const span = URL_SPAN.exec(body) ?? BARE_TITLE.exec(body);
+        if (!span || !span[0].length) return j;
+        titleEnded = false;
+        j = k + span[0].length;
+      }
+      expectItem = false;
       continue;
     }
-    const url = /^https?:\/\/\S+/i.exec(body);
-    if (url) {
-      j += pad + url[0].length;
-      saw = true;
-      continue;
-    }
-    const joiner = /^(?:,|;|and)\b/.exec(body);
-    if (saw && joiner) {
-      j += pad + joiner[0].length;
-      continue;
-    }
-    if (saw && /^[.!?]/.test(body)) return j + pad + 1;
-    if (!saw) {
-      const bare = /^[^\n.!?]+/.exec(body);
-      j += pad + (bare ? bare[0].length : 0);
-      if (/[.!?]/.test(text[j] ?? '')) j += 1;
-    }
-    break;
+    const joiner = JOINER.exec(body);
+    if (joiner) { j = k + joiner[0].length; expectItem = true; continue; }
+    if (!titleEnded && /^[.!?](?=\s|$)/.test(body)) return k + 1;
+    return j;
   }
-  return j;
 }
 
-function stripCiteSentences(text) {
+// One line without its citations, or null when the citations filled it. `lineStart` says whether
+// the line's first character is at a boundary (text start, paragraph start, after a finished sentence).
+function stripLine(line, lineStart) {
+  const item = LIST_ITEM.exec(line);
+  const contentStart = item ? item[0].length : /^[ \t]*/.exec(line)[0].length;
   let out = '';
+  let removed = false;
   let i = 0;
-  while (i < text.length) {
+  while (i < line.length) {
     CITE_LABEL.lastIndex = i;
-    const m = CITE_LABEL.exec(text);
-    if (m && m.index === i && citeBoundary(text, i)) {
-      let j = consumeCitation(text, i + m[0].length);
-      if (text[j] === '\n' && /\n$/.test(out)) j += 1;
-      else if (text[j] === ' ' || text[j] === '\t') {
-        while (text[j] === ' ' || text[j] === '\t') j += 1;
-        if (j < text.length && text[j] !== '\n' && out && !/\s$/.test(out)) out += ' ';
-      }
-      i = j;
-      continue;
-    }
-    out += text[i];
-    i += 1;
+    const m = CITE_LABEL.exec(line);
+    const boundary = m && (i === contentStart ? (item || lineStart) : AFTER_SENTENCE.test(line.slice(0, i)));
+    if (!boundary) { out += line[i]; i += 1; continue; }
+    const end = consumeCitation(line, i + m[0].length);
+    if (i === contentStart && blank(line.slice(end))) return null;
+    removed = true;
+    let after = end;
+    while (line[after] === ' ' || line[after] === '\t') after += 1;
+    if (after >= line.length) out = out.replace(/[ \t]+$/, '');
+    else if (out && !/\s$/.test(out)) out += ' ';
+    i = after;
   }
+  // A line left as nothing or a bare list marker goes too.
+  if (removed && blank(`${out} `.replace(LIST_ITEM, ''))) return null;
   return out;
 }
 
 export function stripSources(text) {
-  let s = String(text ?? '').replace(/\s+$/, '');
-  for (;;) {
-    const blocks = s.split(/\n[ \t]*\n/);
-    if (blocks.length < 2 || !LEAD_BLOCK.test(blocks.at(-1))) break;
-    s = blocks.slice(0, -1).join('\n\n').replace(/\s+$/, '');
+  const input = String(text ?? '');
+  const lines = input.split('\n');
+  const drop = new Array(lines.length).fill(false);
+  // Heading blocks: a paragraph whose first line is the label alone and whose other lines are list items.
+  for (let i = 0; i < lines.length; i++) {
+    if (blank(lines[i]) || (i > 0 && !blank(lines[i - 1])) || !HEADING.test(lines[i])) continue;
+    let j = i + 1;
+    while (j < lines.length && !blank(lines[j]) && LIST_ITEM.test(lines[j])) j += 1;
+    if (j > i + 1 && (j === lines.length || blank(lines[j]))) drop.fill(true, i, j);
   }
-  if (LEAD_BLOCK.test(s) && !/\n[ \t]*\n/.test(s)) return s;
-  s = s.replace(TAIL_LINE, '').replace(/\s+$/, '');
-  s = stripCiteSentences(s);
-  s = s.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').replace(/[ \t]{2,}/g, ' ').replace(/\s+$/, '');
-  return s.replace(/^\n+/, '');
+  const kept = lines.map((line, i) => {
+    if (drop[i]) return null;
+    const lineStart = i === 0 || blank(lines[i - 1]) || ENDS_SENTENCE.test(lines[i - 1]);
+    return stripLine(line, lineStart);
+  });
+  // Rejoin. Blank lines next to a removed line collapse to one, and none are left at either end.
+  const out = [];
+  let touched = false;
+  for (const line of kept) {
+    if (line === null) { touched = true; continue; }
+    if (touched) {
+      if (blank(line) && (!out.length || blank(out.at(-1)))) continue;
+      if (!blank(line)) touched = false;
+    }
+    out.push(line);
+  }
+  if (touched) while (out.length && blank(out.at(-1))) out.pop();
+  const result = out.join('\n');
+  return blank(result) ? input : result;
 }
 
 const OL_MARK = /^([ \t]*)(\d{1,2})[.)](?=[ \t])/gm;

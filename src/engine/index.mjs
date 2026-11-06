@@ -24,31 +24,41 @@ async function serial(ledger, callback) {
 const SINGLE_ROUND = ['extract', 'confirm', 'title'];
 const PURPOSES = ['chat', 'job', ...SINGLE_ROUND];
 
-// Keep every round. Join with '' only when the cut is inside a word or a number. A finished
-// sentence starts a new paragraph. Anything else (a word, a comma) gets one space.
-const WORD_CHAR = /[\p{L}\p{N}]/u;
-const TERMINAL = /[.!?]["'\u201d]?$/;
+// The separator placed before a round's text when it follows earlier rounds' text. The model's
+// own characters stand: nothing is added when either side already has whitespace at the seam, and
+// nothing is inserted inside a word or number ("appreci" + "ated", "1,2" + "00"). A new paragraph
+// follows terminal punctuation, or a word or number followed by a capitalized word ("Plan A" +
+// "Keep a reserve.").
+const ENDS_TERMINAL = /[.!?:]["'\u201d\u2019)\]*_]*$/;
 
-export function joinAnswerParts(parts) {
-  let out = '';
-  for (const part of parts) {
-    if (typeof part !== 'string' || !part) continue;
-    if (!out) { out = part; continue; }
-    const prev = out.replace(/\s+$/, '');
-    const next = part.replace(/^\s+/, '');
-    const a = prev.slice(-1);
-    const b = next.slice(0, 1);
-    const lastWord = prev.match(/[\p{L}\p{N}]+$/u)?.[0] ?? '';
-    const midWord = WORD_CHAR.test(a) && WORD_CHAR.test(b) && (
-      (/[\p{N}]/u.test(a) && /[\p{N}]/u.test(b))
-      || (lastWord.length === 1 && /[\p{L}]/u.test(a) && /[\p{L}]/u.test(b))
-    );
-    let sep = '\n\n';
-    if (midWord) sep = '';
-    else if (!TERMINAL.test(prev)) sep = ' ';
-    out = prev + sep + next;
-  }
-  return out;
+export function roundSeparator(prev, next) {
+  if (!prev || !next) return '';
+  if (/\s$/.test(prev) || /^\s/.test(next)) return '';
+  if (ENDS_TERMINAL.test(prev)) return '\n\n';
+  if (/[\p{L}\p{N}]$/u.test(prev) && /^\p{Lu}/u.test(next)) return '\n\n';
+  return '';
+}
+
+// One call's answer text across rounds. The stream (streamPiece) and storage (endRound) compute
+// the separator from the same stored text and the same first character of the round, so the
+// streamed text always equals the stored text. A round with no text adds nothing.
+function createAnswerAssembler() {
+  let text = '';
+  let started = false;
+  return {
+    get text() { return text; },
+    beginRound() { started = false; },
+    streamPiece(delta) {
+      const piece = typeof delta === 'string' ? delta : '';
+      if (!piece) return '';
+      if (started) return piece;
+      started = true;
+      return roundSeparator(text, piece) + piece;
+    },
+    endRound(roundText) {
+      if (typeof roundText === 'string' && roundText) text += roundSeparator(text, roundText) + roundText;
+    },
+  };
 }
 
 const monthKey = timestamp => new Date(timestamp).toISOString().slice(0, 7).replace('-', '');
@@ -97,7 +107,8 @@ function explicitCredential(credential) {
 // request.systemDynamic (optional): system text placed after the dynamic boundary (not cached).
 // request.toolContext (optional): { db, now } for this call's tools instead of the constructed one.
 // request.onEvent (optional, purpose 'chat'): called with { type: 'tool', name } as each tool call
-// starts and { type: 'text', text } for each text delta, in every round. In fake mode the round's
+// starts and { type: 'text', text } for each text delta, in every round; a round's first delta is
+// prefixed with roundSeparator, so the deltas join to exactly the returned text. In fake mode the round's
 // scripted text arrives in deterministic chunks of FAKE_CHUNK_WORDS words, streamDelayMs apart.
 // A throwing listener is ignored; events never change the result, the spend or the ledger.
 export const FAKE_CHUNK_WORDS = 3;
@@ -121,21 +132,14 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
   const call = async ({ purpose, system = '', systemDynamic = '', messages, tools = [], maxTokens = 1024, schema, grounding = {}, fake,
     toolContext: callContext, onEvent } = {}) => {
     if (mode === 'off') throw new EngineOffError();
-    let bridge = false;
+    const answer = createAnswerAssembler();
     const emit = typeof onEvent === 'function' && purpose === 'chat'
       ? event => {
         try {
-          if (bridge && event && event.type === 'text' && event.text) {
-            bridge = false;
-            const prev = joinAnswerParts(answerParts);
-            if (prev) {
-              const next = String(event.text).replace(/^\s+/, '');
-              const joined = joinAnswerParts([prev, event.text]);
-              const sep = joined.slice(prev.length, joined.length - next.length);
-              if (sep) onEvent({ type: 'text', text: sep });
-            }
-          }
-          onEvent(event);
+          if (event && event.type === 'text') {
+            const text = answer.streamPiece(event.text);
+            if (text) onEvent({ type: 'text', text });
+          } else onEvent(event);
         } catch { /* listeners never fail a call */ }
       }
       : null;
@@ -149,11 +153,10 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
     const transcript = structuredClone(messages);
     const allResults = [];
     const rounds = [];
-    const answerParts = [];
     let cost = 0;
     for (let roundIndex = 0; roundIndex < 8; roundIndex++) {
       let round;
-      bridge = true;
+      answer.beginRound();
       await serial(ledger, async () => {
         if (poisoned) throw new ModelAccountingError();
         const ts = new Date(now()).toISOString();
@@ -215,7 +218,7 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
       cost += round.costUsd;
       rounds.push(round.details);
       allResults.push(...round.toolResults);
-      if (typeof round.text === 'string' && round.text) answerParts.push(round.text);
+      answer.endRound(round.text);
       const toolBoundary = round.status === 'error_max_turns' && round.toolResults.length > 0;
       if (round.api_error_status != null || (round.is_error && !toolBoundary && round.status !== 'error_max_budget_usd')) {
         throw new ModelCallError('Model did not complete a valid response');
@@ -226,7 +229,7 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
       if (!['success', 'error_max_turns'].includes(round.status)) throw new ModelCallError('Model did not complete a valid response');
       if (round.status === 'error_max_turns' && round.toolResults.length === 0) throw new ModelCallError('Model reached a turn limit without a tool result');
       if (round.toolResults.length === 0 || SINGLE_ROUND.includes(purpose)) {
-        const text = joinAnswerParts(answerParts);
+        const text = answer.text;
         return { text, content: round.content, costUsd: Number(cost.toFixed(12)), model: round.model,
           toolResults: allResults, rounds, grounding: checkGrounding(text, { ...grounding, toolResults: allResults }) };
       }

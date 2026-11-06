@@ -24,9 +24,13 @@ export function sdkStreamEvent(message) {
   return null;
 }
 
+// The CLI emits one assistant frame per completed content block; frames of one response share
+// message.id and each carries only its own block (sdk.d.ts SDKAssistantMessage). So every frame
+// appends its blocks in arrival order, keyed by the frame uuid, and nothing is replaced by block
+// index or message id. A frame with `supersedes` evicts the named earlier frames first.
 export async function consumeSdkMessages(stream, onEvent) {
   let result;
-  const messages = [];
+  const frames = [];
   let content = [];
   let tools = [];
   let usage;
@@ -38,7 +42,13 @@ export async function consumeSdkMessages(stream, onEvent) {
       }
       if (message.type === 'system' && message.subtype === 'init') tools = message.tools;
       if (message.type === 'assistant' && message.message) {
-        content = mergeAssistantContent(messages, message.message);
+        if (Array.isArray(message.supersedes) && message.supersedes.length) {
+          const evicted = new Set(message.supersedes);
+          for (let n = frames.length - 1; n >= 0; n--) if (evicted.has(frames[n].uuid)) frames.splice(n, 1);
+        }
+        const blocks = Array.isArray(message.message.content) ? message.message.content : [];
+        frames.push({ uuid: message.uuid, blocks: blocks.slice() });
+        content = frames.flatMap(frame => frame.blocks);
         usage = message.message.usage;
       }
       if (message.type === 'result') result = message;
@@ -71,33 +81,14 @@ export function sdkOptions({ credential, configDir, system, systemDynamic, maxTo
   };
 }
 
-// Assistant frames append. A later frame replaces an earlier block only when it is the same
-// message id and the same block index (a snapshot). Equal text in two messages is two blocks:
-// deduping by content drops digits and changes the figure.
-export function mergeAssistantContent(messages, message) {
-  const blocks = Array.isArray(message?.content) ? message.content : [];
-  const id = message && Object.hasOwn(message, 'id') ? message.id : undefined;
-  if (id === undefined || id === null) messages.push({ id: undefined, blocks: blocks.slice() });
-  else {
-    const slot = messages.find(item => item.id === id);
-    if (!slot) messages.push({ id, blocks: blocks.slice() });
-    else {
-      blocks.forEach((block, index) => { slot.blocks[index] = block; });
-      if (blocks.length < slot.blocks.length) slot.blocks.length = blocks.length;
-    }
-  }
-  return messages.flatMap(item => item.blocks);
-}
-
-// Text blocks are the answer. The SDK result string is only the last block when a turn mixed
-// text and tools, so a shorter result must not replace the joined blocks (including a mid-word cut).
+// Text blocks are the answer, joined exactly as emitted. The SDK result string is only the last
+// completed block, so it is used only when the round has no text block at all.
 export function assistantText(content = [], reported) {
-  const joined = (Array.isArray(content) ? content : [])
+  const texts = (Array.isArray(content) ? content : [])
     .filter(block => block && block.type === 'text' && typeof block.text === 'string')
-    .map(block => block.text)
-    .join('');
-  const resultText = typeof reported === 'string' ? reported : '';
-  return joined.length >= resultText.length ? joined : resultText;
+    .map(block => block.text);
+  if (texts.length) return texts.join('');
+  return typeof reported === 'string' ? reported : '';
 }
 
 export function normalizeSdkRound({ result, content = [], tools = [], usage }, { model, registry, maxTokens, maxBudgetUsd }) {
