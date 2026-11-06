@@ -108,10 +108,14 @@ export function emailScreen(h) {
   function preview() {
     const p = st.email?.preview;
     if (!p) return '';
+    // The page CSP allows inline style attributes but not a <style> element, and srcdoc inherits it.
+    // The email's head style only sets color-scheme and a mobile gutter; every surface carries inline
+    // colors, so the preview drops the element and looks the same.
+    const html = String(p.html || '').replace(/<style[\s\S]*?<\/style>/gi, '');
     const src = p.summarySrc === 'model' ? 'Summary written by the engine' : 'Summary from the template';
     return section('Preview', `<div class="h-card h-em-pv">
       <div class="h-em-pv-h" data-email-subject><span>Subject</span><b>${esc(p.subject)}</b></div>
-      <iframe class="h-em-frame" title="Brief preview" sandbox="" srcdoc="${esc(p.html)}"></iframe>
+      <iframe class="h-em-frame" title="Brief preview" sandbox="" srcdoc="${esc(html)}"></iframe>
     </div>`, esc(src));
   }
 
