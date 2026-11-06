@@ -131,8 +131,9 @@ export function goalTopics(goal, accounts = []) {
       if (a && ACCOUNT_TOPIC[a.kind]) out.add(ACCOUNT_TOPIC[a.kind]);
     }
   }
-  if (tr && typeof tr.figure === 'string') {
-    const k = KNOWN_FIGURES.find(x => x.key === tr.figure);
+  // A known figure the goal tracks, or (a seed goal) the figure its progress bar reads.
+  for (const key of [tr && tr.figure, goal.progress && goal.progress.cur]) {
+    const k = typeof key === 'string' ? KNOWN_FIGURES.find(x => x.key === key) : null;
     if (k) out.add(k.topic);
   }
   return out;
