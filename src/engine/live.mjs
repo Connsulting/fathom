@@ -24,8 +24,15 @@ export function sdkStreamEvent(message) {
   return null;
 }
 
+// The CLI emits one assistant frame per completed content block; frames of one response share
+// message.id and each carries only its own block (sdk.d.ts SDKAssistantMessage). So every frame
+// appends its blocks in arrival order, keyed by the frame uuid, and nothing is replaced by block
+// index or message id. A frame with `supersedes` (a refused response retried on a fallback model)
+// evicts the named earlier frames first; when any is evicted, onEvent gets { type: 'replace', text }
+// with the round's kept text, since the stream already carried the evicted text.
 export async function consumeSdkMessages(stream, onEvent) {
   let result;
+  let frames = [];
   let content = [];
   let tools = [];
   let usage;
@@ -36,7 +43,20 @@ export async function consumeSdkMessages(stream, onEvent) {
         if (event) { try { onEvent(event); } catch { /* listeners never fail a round */ } }
       }
       if (message.type === 'system' && message.subtype === 'init') tools = message.tools;
-      if (message.type === 'assistant') { content = message.message.content; usage = message.message.usage; }
+      if (message.type === 'assistant' && message.message) {
+        const before = frames.length;
+        if (Array.isArray(message.supersedes) && message.supersedes.length) {
+          const evicted = new Set(message.supersedes);
+          frames = frames.filter(frame => !evicted.has(frame.uuid));
+        }
+        const replaced = frames.length !== before;
+        frames.push({ uuid: message.uuid, blocks: Array.isArray(message.message.content) ? message.message.content.slice() : [] });
+        content = frames.flatMap(frame => frame.blocks);
+        if (onEvent && replaced) {
+          try { onEvent({ type: 'replace', text: assistantText(content) }); } catch { /* listeners never fail a round */ }
+        }
+        usage = message.message.usage;
+      }
       if (message.type === 'result') result = message;
     }
   } catch {
@@ -67,12 +87,22 @@ export function sdkOptions({ credential, configDir, system, systemDynamic, maxTo
   };
 }
 
+// Text blocks are the answer, joined exactly as emitted. The SDK result string is only the last
+// completed block, so it is used only when the round has no text block at all.
+export function assistantText(content = [], reported) {
+  const texts = (Array.isArray(content) ? content : [])
+    .filter(block => block && block.type === 'text' && typeof block.text === 'string')
+    .map(block => block.text);
+  if (texts.length) return texts.join('');
+  return typeof reported === 'string' ? reported : '';
+}
+
 export function normalizeSdkRound({ result, content = [], tools = [], usage }, { model, registry, maxTokens, maxBudgetUsd }) {
   let costUsd = result?.total_cost_usd;
   if (!Number.isFinite(costUsd) && usage) {
     try { costUsd = usageCostUsd(model, usage); } catch { costUsd = undefined; }
   }
-  return { text: result?.result ?? content.filter(block => block.type === 'text').map(block => block.text).join('\n'),
+  return { text: assistantText(content, result?.result),
     content, tokens: result?.usage ?? usage ?? {}, costUsd, model,
     status: result?.subtype ?? 'missing_result', is_error: result?.is_error === true,
     api_error_status: result?.api_error_status ?? null,

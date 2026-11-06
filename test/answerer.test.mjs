@@ -24,6 +24,7 @@ import { createRuntimeEngine, createSpendLedger } from '../src/engine/runtime.mj
 import { createLivePacks } from '../src/packs/live.mjs';
 import { PRODUCT_RULES, NOTICES, buildChatPrompt, groundAnswer, renderAnswer, createLiveAnswerer } from '../src/api/answerer.mjs';
 import { ACTION_STATUS } from '../src/shared/rules.mjs';
+import { stripSources, markdownBlocks } from '../src/shared/answer-text.mjs';
 import { ROOT, tempDb } from './helpers/server.mjs';
 import { writeSyntheticPack, ALWAYS } from './helpers/packs.mjs';
 
@@ -75,6 +76,148 @@ function scripted(runtime, scripts = [], { before } = {}) {
   });
   return { engine, requests, responses };
 }
+
+test('a tool preamble and the answer stay as two paragraphs and the stream matches', async t => {
+  const s = await demoStore(t);
+  const seen = [];
+  const { engine } = scripted(s.runtime, [[
+    { text: 'Let me check your figures.', toolCalls: [{ name: 'household_summary', args: {} }] },
+    { text: 'Keep a reserve.' },
+  ]]);
+  const reply = await createLiveAnswerer({ engine, packs: s.packs }).answer({
+    db: s.db, key: THREAD, text: 'What should I keep?', onEvent: e => seen.push(e),
+  });
+  const streamed = seen.filter(e => e.type === 'text').map(e => e.text).join('');
+  assert.equal(seen.some(e => e.type === 'reset'), false);
+  assert.equal(streamed, 'Let me check your figures.\n\nKeep a reserve.');
+  assert.deepEqual(reply.paragraphs, ['Let me check your figures.', 'Keep a reserve.']);
+  assert.equal(reply.paragraphs.join('\n\n'), streamed);
+});
+
+test('superseded SDK frames leave the stream equal to storage', async t => {
+  const s = await demoStore(t);
+  // Fake mode never emits reset, so this runtime streams a refused draft, an engine reset and the
+  // replacement by hand, then delegates with no onEvent so only those events reach the listener.
+  const engine = new Proxy(s.runtime, {
+    get(target, key) {
+      if (key === 'call') {
+        return async request => {
+          const { onEvent, ...rest } = request;
+          onEvent?.({ type: 'text', text: 'Refused draft.' });
+          onEvent?.({ type: 'reset' });
+          onEvent?.({ type: 'text', text: 'Keep a reserve.' });
+          return target.call({ ...rest, fake: [{ text: 'Keep a reserve.' }] });
+        };
+      }
+      const value = Reflect.get(target, key, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+  const seen = [];
+  const reply = await createLiveAnswerer({ engine, packs: s.packs }).answer({
+    db: s.db, key: THREAD, text: 'What should I keep?', onEvent: e => seen.push(e),
+  });
+  const last = seen.map(e => e.type).lastIndexOf('reset');
+  const effective = seen.slice(last + 1).filter(e => e.type === 'text').map(e => e.text).join('');
+  assert.equal(seen.filter(e => e.type === 'reset').length, 1, 'one reset reached the listener');
+  assert.equal(effective, 'Keep a reserve.');
+  assert.deepEqual(reply.paragraphs, ['Keep a reserve.']);
+});
+
+test('text before a tool round is kept when the model resumes mid-word', async t => {
+  const s = await demoStore(t);
+  const head = 'Give appreciated assets instead of cash.\n\nSources: "G';
+  const tail = 'ifts of appreciated stock" and "Evaluate bunching across tax years."\n\nQuarterly tax payments. The federal safe harbor follows last year.\n\nThe most useful next steps are to schedule the payment.';
+  const { engine } = scripted(s.runtime, [[
+    { content: [
+      { type: 'text', text: head },
+      { type: 'tool_use', id: 'synthetic', name: 'household_summary', input: {} },
+    ], toolCalls: [{ name: 'household_summary', args: {} }] },
+    { text: tail },
+  ]]);
+  const reply = await createLiveAnswerer({ engine, packs: s.packs }).answer({ db: s.db, key: THREAD, text: 'What am I missing?' });
+  const body = joined(reply);
+  assert.match(body, /Give appreciated assets instead of cash/);
+  assert.match(body, /Quarterly tax payments/);
+  assert.match(body, /most useful next steps/);
+  assert.doesNotMatch(body, /ifts of appreciated/);
+  assert.doesNotMatch(body, /Sources:/);
+});
+
+// Two scripted rounds in one answer call: the first calls a tool, so the second round follows.
+async function twoRounds(s, first, second) {
+  const seen = [];
+  const run = scripted(s.runtime, [[
+    { text: first, toolCalls: [{ name: 'household_summary', args: {} }] },
+    { text: second },
+  ]]);
+  const reply = await createLiveAnswerer({ engine: run.engine, packs: s.packs }).answer({
+    db: s.db, key: THREAD, text: 'What should I keep?', onEvent: e => seen.push(e),
+  });
+  const streamed = seen.filter(e => e.type === 'text').map(e => e.text).join('');
+  return { reply, stored: run.responses[0].text, streamed, seen };
+}
+
+test('answer assembly joins tool rounds without editing words', async t => {
+  const s = await demoStore(t);
+  const word = await twoRounds(s, 'We can set this aside for the appreci', 'ated stock gift.');
+  assert.match(word.stored, /appreciated stock/);
+  assert.match(joined(word.reply), /appreciated stock/);
+  assert.doesNotMatch(joined(word.reply), /appreci ated/);
+  assert.doesNotMatch(word.stored, /appreci\s+ated/);
+
+  const fresh = await twoRounds(s, 'Plan A', 'Keep a reserve.');
+  assert.deepEqual(fresh.reply.paragraphs, ['Plan A', 'Keep a reserve.']);
+
+  const sentence = await twoRounds(s, 'Let me check your figures.', 'Keep a reserve.');
+  assert.deepEqual(sentence.reply.paragraphs, ['Let me check your figures.', 'Keep a reserve.']);
+
+  // A figure cut across the tool round: the engine's stored text, before grounding.
+  const figure = await twoRounds(s, 'Set aside $1,2', '00 into savings.');
+  assert.equal(figure.stored, 'Set aside $1,200 into savings.');
+});
+
+test('streamed and stored answer text match across tool rounds', async t => {
+  const s = await demoStore(t);
+  const pairs = [
+    ['Ready. ', ' Keep a reserve.'],
+    ['Let me check your figures.', 'Keep a reserve.'],
+    ['We can set this aside for the appreci', 'ated stock gift.'],
+    ['Plan A', 'Keep a reserve.'],
+  ];
+  for (const [first, second] of pairs) {
+    const run = await twoRounds(s, first, second);
+    assert.equal(run.seen.some(e => e.type === 'reset'), false, `${first} | ${second}: no reset`);
+    assert.equal(run.streamed, run.stored, `${first} | ${second}: stream equals storage`);
+    assert.deepEqual(run.reply.paragraphs, markdownBlocks(stripSources(run.streamed)), `${first} | ${second}: reply renders the stream`);
+  }
+  const spaced = await twoRounds(s, 'Ready. ', ' Keep a reserve.');
+  assert.equal(spaced.stored, 'Ready.  Keep a reserve.', 'the model characters stand, nothing inserted');
+  assert.equal(spaced.streamed, 'Ready.  Keep a reserve.');
+});
+
+test('a removed citation list item leaves no bare marker', async t => {
+  const s = await demoStore(t);
+  const { engine } = scripted(s.runtime, [[
+    { text: 'Do these:\n\n1. Pay the estimate.\n2. Sources: "Quarterly taxes"\n3. Keep a reserve.' },
+  ]]);
+  const reply = await createLiveAnswerer({ engine, packs: s.packs }).answer({ db: s.db, key: THREAD, text: 'What should I do?' });
+  assert.equal(reply.provenance.grounding.ok, true, JSON.stringify(reply.provenance.grounding));
+  assert.equal(reply.provenance.grounding.retried, false);
+  assert.deepEqual(reply.provenance.grounding.unverified, []);
+  assert.equal(reply.provenance.literals.some(l => /^\d+$/.test(l.text)), false, 'no list number is a literal');
+  const items = reply.paragraphs.flatMap(block => {
+    const lis = [...block.matchAll(/<li>([\s\S]*?)<\/li>/g)].map(m => m[1]);
+    return lis.length ? lis : [block];
+  });
+  for (const item of items) {
+    const plainText = item.replace(/<[^>]*>/g, '').trim();
+    assert.ok(plainText !== '' && !/^\d{1,2}[.)]?$/.test(plainText), `no empty or bare-number item: ${JSON.stringify(reply.paragraphs)}`);
+  }
+  assert.doesNotMatch(joined(reply), /Sources|Quarterly taxes/);
+  assert.match(joined(reply), /Pay the estimate\./);
+  assert.match(joined(reply), /Keep a reserve\./);
+});
 
 const spendCount = db => db.prepare('SELECT count(*) AS n FROM spend_ledger').get().n;
 const joined = reply => reply.paragraphs.join('\n');

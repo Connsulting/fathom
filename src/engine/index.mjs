@@ -24,6 +24,50 @@ async function serial(ledger, callback) {
 const SINGLE_ROUND = ['extract', 'confirm', 'title'];
 const PURPOSES = ['chat', 'job', ...SINGLE_ROUND];
 
+// The separator placed before a round's text when it follows earlier rounds' text. The model's
+// own characters stand: nothing is added when either side already has whitespace at the seam, and
+// nothing is inserted inside a word or number ("appreci" + "ated", "1,2" + "00"). A new paragraph
+// follows terminal punctuation, or a word or number followed by a capitalized word ("Plan A" +
+// "Keep a reserve.").
+const ENDS_TERMINAL = /[.!?:]["'\u201d\u2019)\]*_]*$/;
+
+function roundSeparator(prev, next) {
+  if (!prev || !next) return '';
+  if (/\s$/.test(prev) || /^\s/.test(next)) return '';
+  if (ENDS_TERMINAL.test(prev)) return '\n\n';
+  if (/[\p{L}\p{N}]$/u.test(prev) && /^\p{Lu}/u.test(next)) return '\n\n';
+  return '';
+}
+
+// One call's answer text across rounds. The stream (streamPiece) and storage (endRound) compute
+// the separator from the same stored text and the same first character of the round, so the
+// streamed text always equals the stored text. A round with no text adds nothing. replaceRound
+// (superseded SDK frames) returns the full answer so far with the round's kept text, to restream.
+export function createAnswerAssembler() {
+  let text = '';
+  let started = false;
+  return {
+    get text() { return text; },
+    beginRound() { started = false; },
+    streamPiece(delta) {
+      const piece = typeof delta === 'string' ? delta : '';
+      if (!piece) return '';
+      if (started) return piece;
+      started = true;
+      return roundSeparator(text, piece) + piece;
+    },
+    replaceRound(roundText) {
+      const kept = typeof roundText === 'string' ? roundText : '';
+      started = kept !== '';
+      if (!kept) return text;
+      return text + roundSeparator(text, kept) + kept;
+    },
+    endRound(roundText) {
+      if (typeof roundText === 'string' && roundText) text += roundSeparator(text, roundText) + roundText;
+    },
+  };
+}
+
 const monthKey = timestamp => new Date(timestamp).toISOString().slice(0, 7).replace('-', '');
 
 export function createMemoryLedger(initial = []) {
@@ -70,7 +114,10 @@ function explicitCredential(credential) {
 // request.systemDynamic (optional): system text placed after the dynamic boundary (not cached).
 // request.toolContext (optional): { db, now } for this call's tools instead of the constructed one.
 // request.onEvent (optional, purpose 'chat'): called with { type: 'tool', name } as each tool call
-// starts and { type: 'text', text } for each text delta, in every round. In fake mode the round's
+// starts and { type: 'text', text } for each text delta, in every round; a round's first delta is
+// prefixed with roundSeparator, so the deltas join to exactly the returned text. When the SDK
+// supersedes refused frames, { type: 'reset' } drops everything streamed and is followed by the
+// full answer text so far; the text after the last reset equals the returned text. In fake mode the round's
 // scripted text arrives in deterministic chunks of FAKE_CHUNK_WORDS words, streamDelayMs apart.
 // A throwing listener is ignored; events never change the result, the spend or the ledger.
 export const FAKE_CHUNK_WORDS = 3;
@@ -94,8 +141,20 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
   const call = async ({ purpose, system = '', systemDynamic = '', messages, tools = [], maxTokens = 1024, schema, grounding = {}, fake,
     toolContext: callContext, onEvent } = {}) => {
     if (mode === 'off') throw new EngineOffError();
+    const answer = createAnswerAssembler();
     const emit = typeof onEvent === 'function' && purpose === 'chat'
-      ? event => { try { onEvent(event); } catch { /* listeners never fail a call */ } }
+      ? event => {
+        try {
+          if (event && event.type === 'text') {
+            const text = answer.streamPiece(event.text);
+            if (text) onEvent({ type: 'text', text });
+          } else if (event && event.type === 'replace') {
+            const full = answer.replaceRound(event.text);
+            onEvent({ type: 'reset' });
+            if (full) onEvent({ type: 'text', text: full });
+          } else onEvent(event);
+        } catch { /* listeners never fail a call */ }
+      }
       : null;
     if (!PURPOSES.includes(purpose)) throw new TypeError('Invalid call purpose');
     const model = modelFor(purpose);
@@ -110,6 +169,7 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
     let cost = 0;
     for (let roundIndex = 0; roundIndex < 8; roundIndex++) {
       let round;
+      answer.beginRound();
       await serial(ledger, async () => {
         if (poisoned) throw new ModelAccountingError();
         const ts = new Date(now()).toISOString();
@@ -127,14 +187,18 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
               for (const item of script.toolCalls ?? []) { emit({ type: 'tool', name: item.name }); await pause(streamDelayMs); }
             }
             await Promise.all((script.toolCalls ?? []).map(item => registry.invoke(item.name, item.args ?? {})));
-            if (emit && script.text) {
-              for (const chunk of fakeChunks(script.text)) { await pause(streamDelayMs); emit({ type: 'text', text: chunk }); }
+            const blockTexts = Array.isArray(script.content)
+              ? script.content.filter(block => block && block.type === 'text' && typeof block.text === 'string').map(block => block.text)
+              : null;
+            const text = blockTexts && blockTexts.length ? blockTexts.join('') : (script.text ?? '');
+            if (emit && text) {
+              for (const chunk of fakeChunks(text)) { await pause(streamDelayMs); emit({ type: 'text', text: chunk }); }
             }
-            round = { text: script.text ?? '', costUsd: Object.hasOwn(script, 'costUsd') ? script.costUsd : 0.001, model: 'fake', tokens: script.tokens ?? {},
+            round = { text, costUsd: Object.hasOwn(script, 'costUsd') ? script.costUsd : 0.001, model: 'fake', tokens: script.tokens ?? {},
               status: script.status ?? (script.toolCalls?.length ? 'error_max_turns' : 'success'),
               is_error: script.is_error === true, api_error_status: script.api_error_status ?? null,
               accountingUnknown: script.accountingUnknown ?? false, toolResults: registry.results,
-              content: [{ type: 'text', text: script.text ?? '' }], details: { maxBudgetUsd: capUsd - spend } };
+              content: Array.isArray(script.content) ? script.content : [{ type: 'text', text }], details: { maxBudgetUsd: capUsd - spend } };
           } else {
             try {
               round = await (SINGLE_ROUND.includes(purpose) ? messagesRound : sdkRound)({ credential: auth, system, systemDynamic,
@@ -167,6 +231,7 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
       cost += round.costUsd;
       rounds.push(round.details);
       allResults.push(...round.toolResults);
+      answer.endRound(round.text);
       const toolBoundary = round.status === 'error_max_turns' && round.toolResults.length > 0;
       if (round.api_error_status != null || (round.is_error && !toolBoundary && round.status !== 'error_max_budget_usd')) {
         throw new ModelCallError('Model did not complete a valid response');
@@ -177,8 +242,9 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
       if (!['success', 'error_max_turns'].includes(round.status)) throw new ModelCallError('Model did not complete a valid response');
       if (round.status === 'error_max_turns' && round.toolResults.length === 0) throw new ModelCallError('Model reached a turn limit without a tool result');
       if (round.toolResults.length === 0 || SINGLE_ROUND.includes(purpose)) {
-        return { text: round.text, content: round.content, costUsd: Number(cost.toFixed(12)), model: round.model,
-          toolResults: allResults, rounds, grounding: checkGrounding(round.text, { ...grounding, toolResults: allResults }) };
+        const text = answer.text;
+        return { text, content: round.content, costUsd: Number(cost.toFixed(12)), model: round.model,
+          toolResults: allResults, rounds, grounding: checkGrounding(text, { ...grounding, toolResults: allResults }) };
       }
       transcript.push({ role: 'assistant', content: round.content }, { role: 'tool', content: round.toolResults });
     }
