@@ -15,6 +15,7 @@ import { emailScreen } from './screens/email.js';
 import * as switcher from './screens/switcher.js';
 import * as simplefin from './screens/simplefin.js';
 import { createKeys } from './keys.js';
+import { KNOWN_FIGURES } from '/shared/goals.mjs';
 
 const MS = 864e5;
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -54,7 +55,7 @@ let bodyLocked = false;
 let connectOn = false;
 
 const freshUi = () => ({
-  curve: {}, prio: {}, modal: null,
+  curve: {}, prio: {}, modal: null, goalForm: null, goalDel: null,
   packet: false, pick: { salary: null, deferral: null }, build: 0,
   buildTimer: 0, draft: {}, dumped: null, noteBusy: false, understood: null,
   more: false, under: null, inApp: false, closing: false, ret: null, y: 0, msgN: {}, det: {}
@@ -494,7 +495,7 @@ function recRow(r, ny) {
     <div class="h-row-b">
       <div class="h-row-top"><a href="${href('rec', { id: r.id })}" data-go="rec" data-id="${esc(r.id)}">${T(r.title)}</a><span class="h-st ${r.status}">${statusText(r)}</span></div>
       <p>${T(r.summary)}</p>
-      <div class="h-meta"><span>${T(r.triggerText || TRIGGER[r.trigger] || '')}</span>${r.status === 'done' || r.status === 'dismissed' ? '' : `<span>${T(r.window?.label || '')}</span>`}${r.effort ? `<span>${T(r.effort)}</span>` : ''}${values(r) ? `<span>${values(r)}</span>` : ''}${r.advisor ? `<span class="h-adv ${r.advisor.verdict}">${advisorText(r)}</span>` : ''}</div>
+      <div class="h-meta"><span>${T(r.triggerText || TRIGGER[r.trigger] || '')}</span>${r.status === 'done' || r.status === 'dismissed' ? '' : `<span>${T(r.window?.label || '')}</span>`}${r.effort ? `<span>${T(r.effort)}</span>` : ''}${values(r) ? `<span>${values(r)}</span>` : ''}${r.advisor ? `<span class="h-adv ${r.advisor.verdict}">${advisorText(r)}</span>` : ''}${servesHtml(r)}</div>
     </div>
     <div class="h-acts">${actionsFor(r, true).join('')}${advisorScreen.rowAction(r)}</div>
   </article>`;
@@ -536,6 +537,7 @@ function thread(msgs, selfId = '') {
     return `<div class="h-msg ${esc(m.role)}${m.notice ? ' notice' : ''}"><div class="h-msg-who">${who}${m.ts ? `<time>${X(m.ts)}</time>` : ''}</div><div class="h-msg-b">${m.html || ''}</div>`
       + (refs.length ? `<div class="h-refs">${refs.map((r) => `<a href="${href('rec', { id: r.id })}" data-go="rec" data-id="${esc(r.id)}"><span>${T(r.title)}</span><em>${T(r.window?.label || '')}</em>${icon('arrow')}</a>`).join('')}</div>` : '')
       + chatScreen.proposalHtml(m)
+      + chatScreen.goalProposalHtml(m)
       + chatScreen.sourcesHtml(m)
       + '</div>';
   }).join('')}</div>`;
@@ -590,7 +592,7 @@ function dlgHtml(id) {
   return frame(`${T(TRIGGER[r.trigger] || r.trigger || '')}<span>${T(r.triggerText)}</span>`, `<div class="h-rec-head">
       <h1 id="h-dlg-t" class="h-dlg-title">${T(r.title)}</h1>
       <p class="h-lede">${T(r.summary)}</p>
-      <div class="h-meta"><span class="h-st ${r.status}">${statusText(r)}</span>${isNeeds(r, ny) ? '<span class="h-acc">Needs you</span>' : ''}${r.effort ? `<span>${T(r.effort)}</span>` : ''}${values(r) ? `<span>${values(r)}</span>` : ''}</div>
+      <div class="h-meta"><span class="h-st ${r.status}">${statusText(r)}</span>${isNeeds(r, ny) ? '<span class="h-acc">Needs you</span>' : ''}${r.effort ? `<span>${T(r.effort)}</span>` : ''}${values(r) ? `<span>${values(r)}</span>` : ''}${servesHtml(r)}</div>
     </div>
     ${windowStrip(r)}
     <div class="h-acts big">${actionsFor(r, false).join('')}</div>
@@ -809,6 +811,122 @@ function pWargame(name) {
 
 /* ---------- goals ---------- */
 
+// Goal text: an owner goal is plain text the owner typed (escaped, never token-resolved); a seed
+// goal is scenario text with tokens.
+const gText = (g, s) => (g && g.origin === 'owner' ? esc(s) : T(s));
+const goalTitle = (g) => gText(g, g.title);
+
+function servesHtml(r) {
+  const list = arr(r.serves);
+  if (!list.length) return '';
+  return `<span class="h-serves">Serves: ${list.map((g) => `<a href="${href('goals')}" data-go="goals">${g.origin === 'owner' ? esc(g.title) : T(g.title)}</a>`).join(', ')}</span>`;
+}
+
+const emptyDraft = (horizon = 'now') => ({ title: '', note: '', horizon, target: '', targetDate: '', trackKind: 'none', accounts: [], figure: '' });
+
+function draftOf(g) {
+  const t = g.track || null;
+  return {
+    title: g.title || '', note: g.note || '', horizon: g.horizon || 'now',
+    target: typeof g.target === 'number' ? String(g.target) : '', targetDate: g.targetDate || '',
+    trackKind: t && Array.isArray(t.accounts) ? 'accounts' : t && t.figure ? 'figure' : 'none',
+    accounts: t && Array.isArray(t.accounts) ? t.accounts.slice() : [], figure: t && t.figure ? t.figure : ''
+  };
+}
+
+function openGoalForm(id) {
+  const g = id ? arr(api.s.goals).find((x) => x.id === id) : null;
+  ui.goalForm = { id: g ? g.id : null, draft: g ? draftOf(g) : emptyDraft(), err: '' };
+  ui.goalDel = null;
+  draw();
+  const el = root?.querySelector('.h-gform [data-gf="title"]');
+  if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+}
+
+// Trackable figures the store holds, by the shared list.
+const trackFigures = () => KNOWN_FIGURES.filter((k) => api.s.fig && api.s.fig[k.key]);
+
+function goalFormHtml() {
+  const f = ui.goalForm;
+  const d = f.draft;
+  const accts = arr(api.s.accounts).filter((a) => a.fig);
+  const figs = trackFigures();
+  const chip = (h) => `<button type="button" class="h-chip${d.horizon === h[0] ? ' on' : ''}" data-goal-h="${h[0]}" aria-pressed="${d.horizon === h[0]}">${h[1]}</button>`;
+  const opt = (v, l) => `<option value="${esc(v)}"${(d.trackKind === 'figure' ? d.figure : d.trackKind) === v ? ' selected' : ''}>${esc(l)}</option>`;
+  const acctList = d.trackKind === 'accounts' ? `<div class="h-gaccts">${accts.length ? accts.map((a) => `<label class="h-gacct"><input type="checkbox" data-gf="acct" value="${esc(a.id)}"${d.accounts.includes(a.id) ? ' checked' : ''}><span>${a.imported ? esc(a.name) : T(a.name)}</span><small>${a.imported ? esc(a.inst) : T(a.inst)}</small></label>`).join('') : '<p class="h-mute sm">No accounts with a balance yet.</p>'}</div>` : '';
+  return `<form class="h-gform" data-goalform="1" aria-label="${f.id ? 'Edit goal' : 'New goal'}" novalidate>
+    <h2>${f.id ? 'Edit goal' : 'New goal'}</h2>
+    <label class="h-gf">Your goal, in your own words<input type="text" data-gf="title" maxlength="120" value="${esc(d.title)}" placeholder="For example, a year of cash in the bank" autocomplete="off"></label>
+    <label class="h-gf">A short note <span class="h-mute">optional</span><textarea data-gf="note" maxlength="500" rows="2">${esc(d.note)}</textarea></label>
+    <div class="h-gf"><span>When</span><div class="h-chips" role="group" aria-label="Horizon">${GOAL_BANDS.map(chip).join('')}</div></div>
+    <div class="h-gf2">
+      <label class="h-gf">Target amount <span class="h-mute">optional</span><input type="number" data-gf="target" min="0" step="any" inputmode="decimal" value="${esc(d.target)}" placeholder="0"></label>
+      <label class="h-gf">Target date <span class="h-mute">optional</span><input type="date" data-gf="targetDate" value="${esc(d.targetDate)}"></label>
+    </div>
+    <label class="h-gf">Track with <span class="h-mute">optional</span><select data-gf="track">${opt('none', 'Nothing yet')}${accts.length ? opt('accounts', 'One or more accounts') : ''}${figs.map((k) => opt(k.key, k.label)).join('')}</select></label>
+    ${acctList}
+    ${f.err ? `<p class="h-gerr" role="alert">${esc(f.err)}</p>` : ''}
+    <div class="h-ob-nav">${btn('Cancel', 'data-goal="cancel"', 'ghost')}<button type="submit" class="h-btn pri">${f.id ? 'Save changes' : 'Save goal'}</button></div>
+  </form>`;
+}
+
+// Form draft -> API fields, or an error message.
+function goalFields(d) {
+  const title = d.title.trim();
+  if (!title) return { err: 'Write the goal in your own words.' };
+  const out = { title, note: d.note.trim(), horizon: d.horizon, target: null, targetDate: d.targetDate || null, track: null };
+  if (d.target !== '') {
+    const n = Number(d.target);
+    if (!Number.isFinite(n) || n < 0) return { err: 'The target amount must be zero or more.' };
+    out.target = n;
+  }
+  if (d.trackKind === 'accounts' && d.accounts.length) out.track = { accounts: d.accounts.slice() };
+  if (d.trackKind === 'figure' && d.figure) out.track = { figure: d.figure };
+  return { fields: out };
+}
+
+function saveGoal() {
+  const f = ui.goalForm;
+  if (!f || f.saving) return;
+  const { fields, err } = goalFields(f.draft);
+  if (err) { f.err = err; draw(); return; }
+  f.saving = true;
+  const p = f.id ? api.goalUpdate(f.id, fields) : api.goalCreate(fields);
+  p.then((g) => {
+    if (ui.goalForm !== f) return;
+    f.saving = false;
+    if (g) { ui.goalForm = null; draw(); }
+  });
+}
+
+const GOAL_BANDS = [['now', 'This year'], ['1-3y', 'Next few years'], ['3-10y', 'Long range']];
+
+function goalCard(g) {
+  const owner = g.origin === 'owner';
+  let prog = '';
+  if (g.progress) {
+    const cur = figVal(g.progress.cur), tgt = figVal(g.progress.target);
+    if (cur != null && tgt) {
+      const p = Math.max(0, Math.min(1, cur / tgt));
+      prog = `<div class="h-prog"><svg viewBox="0 0 100 4" preserveAspectRatio="none" aria-hidden="true"><rect class="bg" width="100" height="4" rx="2"/><rect class="fg" width="${p * 100}" height="4" rx="2"/></svg><span>${figHtml(g.progress.cur, { k: true })} of ${figHtml(g.progress.target, { k: true })}</span></div>`;
+    }
+  }
+  if (!prog && owner) {
+    const tKey = `goal.${g.id}.target`;
+    if (!(api.s.fig && api.s.fig[tKey])) prog = `<p class="h-gnone">No target yet. <button type="button" class="h-link" data-goal="edit" data-id="${esc(g.id)}">Add one</button></p>`;
+    else if (g.trackWaiting) prog = `<p class="h-gnone">Target ${figHtml(tKey, { k: true })}. Waiting on a balance for what it tracks.</p>`;
+    else prog = `<p class="h-gnone">Target ${figHtml(tKey, { k: true })}. <button type="button" class="h-link" data-goal="edit" data-id="${esc(g.id)}">Pick what to track</button> to see progress.</p>`;
+  }
+  const meta = [];
+  if (owner && g.targetDate) { const d = parseISO(g.targetDate); if (d) meta.push(`By ${MON[d.getUTCMonth()]} ${d.getUTCFullYear()}`); }
+  if (owner && g.trackLabel) meta.push(`Tracks ${esc(g.trackLabel)}`);
+  const del = ui.goalDel === g.id
+    ? `<span class="h-gdel">Delete for good?</span>${btn('Delete', `data-goal="delete-yes" data-id="${esc(g.id)}"`, 'danger')}${btn('Keep', 'data-goal="delete-no"', 'ghost')}`
+    : `${owner && !g.archived ? btn('Edit', `data-goal="edit" data-id="${esc(g.id)}"`, 'ghost') : ''}${btn(g.archived ? 'Restore' : 'Archive', `data-goal="${g.archived ? 'restore' : 'archive'}" data-id="${esc(g.id)}"`, 'ghost')}${btn('Delete', `data-goal="delete" data-id="${esc(g.id)}"`, 'ghost')}`;
+  const note = owner ? g.note : g.prose;
+  return `<article class="h-goal ${esc((g.status || '').replace(/\s+/g, '-'))}${g.archived ? ' archived' : ''}" data-goal-id="${esc(g.id)}"><div class="h-goal-h"><b>${goalTitle(g)}</b><span>${g.archived ? 'Archived' : owner ? '' : T(g.status)}</span></div>${note ? `<p>${gText(g, note)}</p>` : ''}${meta.length ? `<div class="h-meta">${meta.map((m) => `<span>${m}</span>`).join('')}</div>` : ''}${prog}<div class="h-gacts">${del}</div></article>`;
+}
+
 function pGoals() {
   const y = clock().getUTCFullYear();
   const bands = [
@@ -816,29 +934,53 @@ function pGoals() {
     ['1-3y', 'Next few years', `${y + 1} to ${y + 3}`],
     ['3-10y', 'Long range', `${y + 3} to ${y + 10}`]
   ];
-  const goals = arr(api.s.goals);
-  const card = (g) => {
-    let prog = '';
-    if (g.progress) {
-      const cur = figVal(g.progress.cur), tgt = figVal(g.progress.target);
-      if (cur != null && tgt) {
-        const p = Math.max(0, Math.min(1, cur / tgt));
-        prog = `<div class="h-prog"><svg viewBox="0 0 100 4" preserveAspectRatio="none" aria-hidden="true"><rect class="bg" width="100" height="4" rx="2"/><rect class="fg" width="${p * 100}" height="4" rx="2"/></svg><span>${figHtml(g.progress.cur, { k: true })} of ${figHtml(g.progress.target, { k: true })}</span></div>`;
-      }
-    }
-    return `<article class="h-goal ${esc((g.status || '').replace(/\s+/g, '-'))}"><div class="h-goal-h"><b>${T(g.title)}</b><span>${T(g.status)}</span></div><p>${T(g.prose)}</p>${prog}</article>`;
-  };
+  const all = arr(api.s.goals);
+  const goals = all.filter((g) => !g.archived);
+  const archived = all.filter((g) => g.archived);
   const axis = `<div class="h-gaxis">${bands.map((b) => `<div><b>${b[1]}</b><span>${b[2]}</span></div>`).join('')}</div>`;
-  const cols = `<div class="h-gcols">${bands.map((b) => `<div class="h-gcol"><div class="h-gcol-h"><b>${b[1]}</b><span>${b[2]}</span></div>${goals.filter((g) => g.horizon === b[0]).map(card).join('') || '<p class="h-mute sm">Nothing here.</p>'}</div>`).join('')}</div>`;
+  const cols = `<div class="h-gcols">${bands.map((b) => `<div class="h-gcol"><div class="h-gcol-h"><b>${b[1]}</b><span>${b[2]}</span></div>${goals.filter((g) => (g.horizon || 'now') === b[0]).map(goalCard).join('') || '<p class="h-mute sm">Nothing here.</p>'}</div>`).join('')}</div>`;
   const curve = arr(api.s.curve).map((c) => {
-    const v = ui.curve[c.id] ?? c.value;
+    const v = ui.curve[c.id] ?? c.value ?? 0.5;
     return `<div class="h-curve"><div class="h-curve-ends"><span class="${v < 0.5 ? 'lean' : ''}">${T(c.left)}</span><span class="${v > 0.5 ? 'lean' : ''}">${T(c.right)}</span></div>
       <input type="range" min="0" max="100" value="${Math.round(v * 100)}" data-curve="${esc(c.id)}" aria-label="${esc(api.txt(c.left) + ' or ' + api.txt(c.right))}">
-      <p>${T(c.note)}</p></div>`;
+      ${c.note ? `<p>${T(c.note)}</p>` : ''}</div>`;
   }).join('');
+  const add = ui.goalForm && !ui.goalForm.id ? '' : `<div class="h-gadd">${btn(`${icon('plus')}Goal`, 'data-goal="new" aria-keyshortcuts="n"', 'pri')}<span class="h-mute sm">Press N</span></div>`;
+  const form = ui.goalForm ? goalFormHtml() : '';
+  const arch = archived.length ? `<details class="h-garch" data-det="goals-archived"${ui.det['goals-archived'] ? ' open' : ''}><summary>${plural(archived.length, 'archived goal')}</summary><div class="h-garch-l">${archived.map(goalCard).join('')}</div></details>` : '';
   return shell(`${pageHead('Goals', 'Where you are headed', 'Goals in your own words, placed on the years they live in.')}
-    ${axis}${cols}
+    ${add}${form}
+    ${axis}${cols}${arch}
     ${curve ? section('Where on the curve', `<p class="h-mute">Every plan trades one thing for another. These set where you sit. Recommendations respect them.</p><div class="h-curves">${curve}</div>`) : ''}`, 'goals');
+}
+
+function goalClick(t) {
+  const d = t.dataset;
+  const act = d.goal;
+  if (act === 'new') { openGoalForm(null); return; }
+  if (act === 'edit') { openGoalForm(d.id); return; }
+  if (act === 'cancel') { ui.goalForm = null; draw(); return; }
+  if (act === 'archive' || act === 'restore') { if (ui.goalForm?.id === d.id) ui.goalForm = null; api.goalArchive(d.id, act === 'archive'); return; }
+  if (act === 'delete') { ui.goalDel = d.id; draw(); return; }
+  if (act === 'delete-no') { ui.goalDel = null; draw(); return; }
+  if (act === 'delete-yes') { ui.goalDel = null; if (ui.goalForm?.id === d.id) ui.goalForm = null; api.goalDelete(d.id); }
+}
+
+function goalInput(t) {
+  const f = ui.goalForm;
+  if (!f) return false;
+  const k = t.dataset.gf;
+  if (!k) return false;
+  if (k === 'acct') {
+    const set = new Set(f.draft.accounts);
+    if (t.checked) set.add(t.value); else set.delete(t.value);
+    f.draft.accounts = [...set];
+  } else if (k === 'track') {
+    if (t.value === 'none' || t.value === 'accounts') { f.draft.trackKind = t.value; f.draft.figure = ''; }
+    else { f.draft.trackKind = 'figure'; f.draft.figure = t.value; }
+    draw();
+  } else f.draft[k] = t.value;
+  return true;
 }
 
 /* ---------- accounts ---------- */
@@ -1287,6 +1429,17 @@ function onClick(e) {
   if (cn && root.contains(cn)) { e.preventDefault(); connect.onClick(cn, connectH); return; }
   if (ingest.handleClick(e)) return;
   if (email.handleClick(e)) return;
+  const gt = e.target.closest('[data-goal],[data-goal-h]');
+  if (gt && root.contains(gt)) {
+    e.preventDefault();
+    if (gt.dataset.goalH) {
+      if (ui.goalForm) ui.goalForm.draft.horizon = gt.dataset.goalH;
+      gt.parentElement.querySelectorAll('[data-goal-h]').forEach((b) => { const on = b === gt; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); });
+      return;
+    }
+    goalClick(gt);
+    return;
+  }
   const sel = '[data-go],[data-act],[data-askrec],[data-wg],[data-onboard],[data-savenote],[data-modal],[data-packet],[data-whatif],[data-packtoggle],[data-more],[data-dlg]';
   let t = e.target.closest(`${sel},.fx-fig`);
   if (!t || !root.contains(t)) return;
@@ -1354,6 +1507,7 @@ function onSubmit(e) {
   if (SCREENS.some((s) => s.onSubmit?.(e))) return;
   const f = e.target;
   if (f.dataset.connForm) { e.preventDefault(); connect.onSubmit(f, connectH); return; }
+  if (f.dataset.goalform) { e.preventDefault(); saveGoal(); return; }
   if (f.dataset.free != null) {
     e.preventDefault();
     const key = f.dataset.free;
@@ -1369,6 +1523,7 @@ function onInput(e) {
   if (ingest.handleChange(e)) return;
   const t = e.target;
   if (t.dataset.connInput) { connect.onInput(t); return; }
+  if (t.dataset.gf && t.dataset.gf !== 'track' && t.dataset.gf !== 'acct') { goalInput(t); return; }
   if (t.dataset.draft) { ui.draft[t.dataset.draft] = t.value; return; }
   if (t.dataset.dump) {
     const was = String(ui.dumped ?? '').trim() !== '';
@@ -1392,7 +1547,15 @@ function onInput(e) {
   }
 }
 
-const onChange = (e) => ingest?.handleChange(e);
+// Committed changes: a goal form select or checkbox, and a released curve or priority slider
+// (saved to the store, so both feed the planner and chat).
+function onChange(e) {
+  const t = e.target;
+  if (t?.dataset?.gf === 'track' || t?.dataset?.gf === 'acct') { goalInput(t); return; }
+  if (t?.dataset?.curve) { api.setCurve(t.dataset.curve, Number(t.value) / 100); return; }
+  if (t?.dataset?.prio) { api.setCurve(t.dataset.prio, Number(t.value) / 100); return; }
+  ingest?.handleChange(e);
+}
 
 function onToggle(e) {
   const k = e.target?.dataset?.det;
@@ -1434,7 +1597,8 @@ const KIT = {
   get api() { return api; }, get root() { return root; }, get ui() { return ui; }, get keys() { return keys; }, get ingest() { return ingest; },
   draw: () => draw(),
   esc, T, X, arr, plural, icon, btn, goA, href, shell, section, pageHead, thread, composer, figHtml, recById,
-  openRec, closeRec, decisionList, statusText, setMore, routeNow, visibleRecs
+  openRec, closeRec, decisionList, statusText, setMore, routeNow, visibleRecs,
+  newGoal: () => { if (routeNow().name !== 'goals') api.go('goals', {}); openGoalForm(null); }
 };
 SCREENS.forEach((s) => s.bind(KIT));
 

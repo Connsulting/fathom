@@ -830,3 +830,45 @@ a.h-dec-t:hover { color: var(--ac2); }
   .d-horizon .h-packs { grid-template-columns: minmax(0, 1fr); }
   .d-horizon .h-seg button { min-width: 50%; flex: 1 1 50%; border-bottom: 1px solid var(--line2); }
 }
+
+/* Goals: the add button, the inline goal form, per-goal actions, archived goals, Serves links. */
+.d-horizon .h-gadd { display: flex; align-items: center; gap: 12px; margin: 0 0 20px; }
+.d-horizon .h-gadd .h-btn svg { width: 14px; height: 14px; margin-right: 6px; }
+.d-horizon .h-gform { background: var(--s1); border: 1px solid var(--line2); border-radius: 12px; padding: 18px 18px 14px; margin: 0 0 24px; max-width: 640px; display: grid; gap: 14px; }
+.d-horizon .h-gform h2 { font-size: 15px; font-weight: 500; }
+.d-horizon .h-gf { display: grid; gap: 6px; font-size: 13px; color: var(--tx2); min-width: 0; }
+.d-horizon .h-gf .h-mute { font-size: 12px; }
+.d-horizon .h-gf input, .d-horizon .h-gf textarea, .d-horizon .h-gf select { width: 100%; min-width: 0; background: var(--bg); color: var(--tx); border: 1px solid var(--line2); border-radius: 8px; font: inherit; font-size: 14.5px; padding: 9px 12px; color-scheme: dark; }
+.d-horizon .h-gf textarea { resize: vertical; line-height: 1.5; }
+.d-horizon .h-gf input:focus, .d-horizon .h-gf textarea:focus, .d-horizon .h-gf select:focus { outline: none; border-color: var(--ac); }
+.d-horizon .h-gf .h-chips { margin: 0; }
+.d-horizon .h-chip.on { border-color: var(--ac); background: var(--acd); color: var(--tx); }
+.d-horizon .h-gf2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.d-horizon .h-gaccts { display: grid; gap: 6px; margin-top: -4px; }
+.d-horizon .h-gacct { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; font-size: 13.5px; padding: 6px 2px; }
+.d-horizon .h-gacct input { accent-color: var(--ac); }
+.d-horizon .h-gacct small { color: var(--fa); font-size: 12px; }
+.d-horizon .h-gerr { color: #f0a59a; font-size: 13px; }
+.d-horizon .h-gform .h-ob-nav { margin-top: 2px; }
+.d-horizon .h-gnone { color: var(--fa); font-size: 13px; margin-top: 10px; }
+.d-horizon .h-goal .h-gnone { color: var(--fa); font-size: 13px; margin-top: 10px; }
+.d-horizon .h-link { all: unset; cursor: pointer; color: var(--ac); }
+.d-horizon .h-link:hover { text-decoration: underline; }
+.d-horizon .h-link:focus-visible { outline: 2px solid var(--ac); outline-offset: 2px; }
+.d-horizon .h-goal .h-meta { margin-top: 8px; }
+.d-horizon .h-gacts { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin-top: 10px; }
+.d-horizon .h-gacts .h-btn { height: 28px; padding: 0 10px; font-size: 12.5px; }
+.d-horizon .h-gacts .h-btn.danger { background: transparent; border-color: #8a3b31; color: #f0a59a; }
+.d-horizon .h-gdel { color: var(--tx2); font-size: 12.5px; margin-right: 6px; }
+.d-horizon .h-goal.archived .h-goal-h b { color: var(--mu); }
+.d-horizon .h-garch { margin: 8px 0 24px; }
+.d-horizon .h-garch summary { cursor: pointer; color: var(--mu); font-size: 13px; padding: 8px 0; }
+.d-horizon .h-garch-l { max-width: 640px; }
+.d-horizon .h-serves { color: var(--tx2); }
+.d-horizon .h-serves a { color: var(--ac); text-decoration: none; }
+.d-horizon .h-serves a:hover { text-decoration: underline; }
+.d-horizon .h-goal-proposal .h-mute { font-size: 12.5px; }
+@media (max-width: 560px) {
+  .d-horizon .h-gform { padding: 14px; }
+  .d-horizon .h-gf2 { grid-template-columns: 1fr; }
+}
