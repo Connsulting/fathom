@@ -1,0 +1,11 @@
+Date,Original Date,Account Type,Account Name,Account Number,Institution Name,Name,Custom Name,Amount,Description,Category,Note,Ignored From,Tax Deductible,Transaction Tags,Account Holder
+2026-10-02,,Brokerage,Individual TOD,4401111,Example Brokerage,Dividend,,-12.40,Dividend reinvested,Income,,,,,Avery Example
+2026-10-02,,Brokerage,Individual TOD,4402222,Example Brokerage,Dividend,,-9.10,Dividend reinvested,Income,,,,,Blair Example
+2026-10-01,,Checking,Everyday Checking,9914455,Chase,Grocery Mart,,54.20,Grocery Mart,Groceries,,,,,Avery Example
+2026-10-03,,Checking,Everyday Checking,9914455,Chase,AMZN Mktp US,,23.99,AMZN Mktp US,Shopping,,,,,Avery Example
+2026-10-05,,Checking,Everyday Checking,9914455,Chase,Payroll deposit,,-2500.00,Payroll deposit,Income,,,,,Avery Example
+2026-10-07,,Checking,Everyday Checking,9914455,Chase,City Water,,61.10,City Water utility,Utilities,,,,,Avery Example
+2026-10-12,,Checking,Everyday Checking,9914455,Chase,Corner Cafe,,8.75,Corner Cafe,Dining,,,,,Avery Example
+2026-10-09,,Other,Rewards Card,7703344,Example Card,Fuel Stop,,40.00,Fuel Stop,Auto,,,,,Blair Example
+2026-10-16,,Other,Rewards Card,7703344,Example Card,Bookshop,,15.00,Bookshop,Shopping,,,,,Blair Example
+2026-10-20,,Other,Rainy Day,6605566,Example Credit Union,Interest,,-1.05,Interest paid,Income,,,,,Avery Example & Blair Example
