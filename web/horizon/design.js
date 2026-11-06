@@ -58,7 +58,7 @@ let connectOn = false;
 const freshUi = () => ({
   curve: {}, prio: {}, modal: null, goalForm: null, goalDel: null,
   pick: { salary: null, deferral: null }, build: 0,
-  buildTimer: 0, draft: {}, dumped: null, noteBusy: false, understood: null,
+  buildTimer: 0, draft: {}, recReset: {}, dumped: null, noteBusy: false, understood: null,
   more: false, under: null, inApp: false, closing: false, ret: null, y: 0, msgN: {}, det: {}
 });
 
@@ -574,7 +574,7 @@ function dlgHtml(id) {
   const tkey = th ? th.key || `ask:${th.id}` : '';
   const msgs = tkey ? arr(api.conversation(tkey)) : [];
   const pend = chatScreen.recPendingHtml(r.id, tkey);
-  const busy = chatScreen.askBusy();
+  const busy = chatScreen.askBusy() || !!ui.recReset[r.id];
   const tasks = arr(r.tasks);
   const doneN = tasks.filter((t) => t.done).length;
   const ny = api.needsYou();
@@ -1498,6 +1498,7 @@ function saveNote() {
 // A follow-up chip: the rec's canned question i, asked into the rec's attached thread (a new
 // thread asked from the rec when none is attached). The chip text is what the pending block shows.
 function askRec(recId, i) {
+  if (ui.recReset[recId]) return;
   const r = recById(recId);
   const q = r && arr(r.qa)[i];
   if (!q) return;
@@ -1507,9 +1508,12 @@ function askRec(recId, i) {
 
 // Start over: the dialog lets go of its thread (it stays in Ask) and the composer starts empty.
 function startOver(recId) {
-  if (chatScreen.askBusy()) return;
+  if (chatScreen.askBusy() || ui.recReset[recId]) return;
   ui.draft['rec:' + recId] = '';
-  api.startOver(recId);
+  ui.recReset[recId] = true;
+  const settle = () => { delete ui.recReset[recId]; draw(); };
+  Promise.resolve(api.startOver(recId)).then(settle, settle);
+  draw();
 }
 
 function onSubmit(e) {
@@ -1525,6 +1529,7 @@ function onSubmit(e) {
     if (key.startsWith('rec:')) {
       // Through the Ask page's pending and streaming path; it clears the draft once it sends.
       const recId = key.slice(4);
+      if (ui.recReset[recId]) return;
       const th = api.recThread(recId);
       chatScreen.askFromRec({ recId, key: th ? th.key || `ask:${th.id}` : null, text: v, draftKey: key, refocus: document.activeElement === f.q });
       return;
