@@ -435,6 +435,8 @@ async function postStream(path, body, onEvent) {
 
 const meTurns = (scenario, key) => arr(scenario && scenario.live && scenario.live.conversations && scenario.live.conversations[key])
   .filter(m => m && m.role === 'me').length;
+// A thread's conversation key ('ask:<id>').
+const threadKey = (th) => th.key || 'ask:' + th.id;
 const threadIds = (scenario) => new Set(arr(scenario && scenario.live && scenario.live.threads).map(t => t && t.id));
 
 // Reload the scenario until the asked conversation has the new turn: `key` with more owner
@@ -450,7 +452,7 @@ async function recoverTurn({ key, before, ids }) {
     if (key && meTurns(next, key) > before) return { scenario: next, key };
     if (!key) {
       const fresh = arr(next.live && next.live.threads).find(t => t && t.id && !ids.has(t.id) && Number(t.turns) > 0);
-      if (fresh) return { scenario: next, key: fresh.key || 'ask:' + fresh.id };
+      if (fresh) return { scenario: next, key: threadKey(fresh) };
     }
   }
   return null;
@@ -523,7 +525,7 @@ function askStream(q, convKey, onEvent) {
   const body = questionBody(q, true);
   if (!body) return done();
   const key = convKey || activeKey();
-  if (!key) return newThreadStream({ ...body, recId: convKey ? null : routeRecId() }, onEvent);
+  if (!key) return newThreadStream({ ...body, recId: routeRecId() }, onEvent);
   if (key.startsWith('pack:') && !rawPack(key.slice(5))) return done();
   const cb = typeof onEvent === 'function' ? onEvent : () => {};
   return sendStream('/api/ask', { key, ...body }, cb, d => (d.message ? mapMsg(d.message) : d.recoveredKey ? lastReply(key) : null), key);
@@ -537,7 +539,7 @@ function newThreadStream(q, onEvent) {
     let th = d.thread && typeof d.thread === 'object' ? d.thread : null;
     if (!th && d.recoveredKey) th = rawThread(d.recoveredKey.replace(/^ask:/, ''));
     if (th && th.id && cur && cur.name === 'ask' && !(cur.params && cur.params.id)) go('ask', { id: th.id }, { replace: true });
-    const key = th ? th.key || 'ask:' + th.id : null;
+    const key = th ? threadKey(th) : null;
     return { thread: th, message: d.message ? mapMsg(d.message) : key ? lastReply(key) : null };
   });
 }
@@ -630,12 +632,12 @@ function activeKey() {
   const recId = routeRecId();
   if (recId) {
     const th = recThread(recId);
-    return th ? th.key || 'ask:' + th.id : null;
+    return th ? threadKey(th) : null;
   }
   if (cur && cur.name === 'packs' && cur.params && cur.params.id) return 'pack:' + cur.params.id;
   if (cur && cur.name === 'ask' && cur.params && cur.params.id) {
     const th = rawThread(cur.params.id);
-    if (th) return th.key || 'ask:' + th.id;
+    if (th) return threadKey(th);
   }
   return null;
 }
@@ -643,7 +645,7 @@ function activeKey() {
 function ask(questionId, convKey) {
   if (questionId == null || questionId === '') return done();
   const key = convKey || activeKey();
-  if (!key) return newThread({ questionId: String(questionId), recId: convKey ? null : routeRecId() });
+  if (!key) return newThread({ questionId: String(questionId), recId: routeRecId() });
   return send('/api/ask', { key, questionId: qidOf(questionId) }, d => (d.message ? mapMsg(d.message) : null));
 }
 
@@ -651,7 +653,7 @@ function askFree(text, convKey) {
   const clean = String(text == null ? '' : text).trim();
   if (!clean) return done();
   const key = convKey || activeKey();
-  if (!key) return newThread({ text: clean, recId: convKey ? null : routeRecId() });
+  if (!key) return newThread({ text: clean, recId: routeRecId() });
   if (key.startsWith('pack:') && !rawPack(key.slice(5))) return done();
   return send('/api/ask', { key, text: clean }, d => (d.message ? mapMsg(d.message) : null));
 }

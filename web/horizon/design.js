@@ -571,7 +571,7 @@ function dlgHtml(id) {
   // The conversation is the rec's attached Ask thread (none until the first question, and none
   // again after Start over); a question in flight shows as the Ask page's pending block.
   const th = api.recThread(r.id);
-  const tkey = th ? th.key || `ask:${th.id}` : '';
+  const tkey = th ? chatScreen.keyOf(th) : '';
   const msgs = tkey ? arr(api.conversation(tkey)) : [];
   const pend = chatScreen.recPendingHtml(r.id, tkey);
   const busy = chatScreen.askBusy() || !!ui.recReset[r.id];
@@ -1284,7 +1284,7 @@ function syncDialog(r, page) {
     if (body) body.scrollTop = top;
     // Messages of the rec's attached thread: a landed answer scrolls to its question.
     const rth = api.recThread(id);
-    const n = rth ? arr(api.conversation(rth.key || `ask:${rth.id}`)).length : 0;
+    const n = rth ? arr(api.conversation(chatScreen.keyOf(rth))).length : 0;
     const prev = ui.msgN[id];
     ui.msgN[id] = n;
     if (prev != null && n > prev) {
@@ -1502,8 +1502,7 @@ function askRec(recId, i) {
   const r = recById(recId);
   const q = r && arr(r.qa)[i];
   if (!q) return;
-  const th = api.recThread(recId);
-  chatScreen.askFromRec({ recId, key: th ? th.key || `ask:${th.id}` : null, text: api.txt(q.q), questionId: i });
+  chatScreen.askFromRec({ recId, text: api.txt(q.q), questionId: i });
 }
 
 // Start over: the dialog lets go of its thread (it stays in Ask) and the composer starts empty.
@@ -1530,8 +1529,7 @@ function onSubmit(e) {
       // Through the Ask page's pending and streaming path; it clears the draft once it sends.
       const recId = key.slice(4);
       if (ui.recReset[recId]) return;
-      const th = api.recThread(recId);
-      chatScreen.askFromRec({ recId, key: th ? th.key || `ask:${th.id}` : null, text: v, draftKey: key, refocus: document.activeElement === f.q });
+      chatScreen.askFromRec({ recId, text: v, draftKey: key, refocus: document.activeElement === f.q });
       return;
     }
     ui.draft[key] = '';

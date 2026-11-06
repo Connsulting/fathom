@@ -191,7 +191,11 @@ export function reset() { A = fresh(); }
 
 const threads = () => H.arr(H.api.threads ? H.api.threads() : []);
 const threadById = (id) => (id ? threads().find((t) => t && t.id === id) || null : null);
-const keyOf = (t) => t.key || `ask:${t.id}`;
+export const keyOf = (t) => t.key || `ask:${t.id}`;
+// The key of the thread a rec's dialog shows, or null when it has none.
+const recKey = (recId) => { const th = H.api.recThread(recId); return th ? keyOf(th) : null; };
+// A question in flight that starts a new thread from the Ask page (not from a rec dialog).
+const newOnAsk = (p) => !!p && p.key == null && !p.recId;
 const titleOf = (t) => (A.pendingTitle && A.pendingTitle.id === t.id ? A.pendingTitle.title : (typeof t.title === 'string' && t.title ? t.title : NEW_TITLE));
 const meCount = (key) => H.arr(H.api.conversation(key)).filter((m) => m.role === 'me').length;
 const onAsk = () => H.api && H.api.route && H.api.route.name === 'ask';
@@ -344,8 +348,7 @@ function livePending() {
   const p = A.pending;
   if (!p) return null;
   // A new thread asked from a rec is stored once the rec has an attached thread with the turn.
-  const th = !p.key && p.recId ? H.api.recThread(p.recId) : null;
-  const k = p.key || (th ? keyOf(th) : null);
+  const k = p.key || (p.recId ? recKey(p.recId) : null);
   return k && meCount(k) > p.n ? null : p;
 }
 
@@ -385,7 +388,7 @@ function threadHtml(th) {
   let p = A.pending;
   if (p && p.key && p.key === key && meCount(key) > p.n) p = null;
   // This thread's question, or a new thread started on this page (not one asked from a rec).
-  const mine = p && (th ? p.key === key : p.key == null && !p.recId) ? p : null;
+  const mine = p && (th ? p.key === key : newOnAsk(p)) ? p : null;
   const trashed = !!(th && th.trashedAt);
   const title = th && A.renaming === th.id
     ? `<input class="h-askx-rename" type="text" maxlength="60" value="${esc(A.renameVal)}" placeholder="${NEW_TITLE}" aria-label="Conversation name" autocomplete="off" data-draft="rename">`
@@ -415,7 +418,7 @@ export function render(id) {
     A.lastN = n;
     // Opening a thread lands on its latest question; a thread just created by a streamed answer
     // keeps the place the owner was reading.
-    if (th && !(A.pending && A.pending.streamed && A.pending.key == null && !A.pending.recId)) queueMicrotask(scrollToLastMine);
+    if (th && !(newOnAsk(A.pending) && A.pending.streamed)) queueMicrotask(scrollToLastMine);
   } else if (th && n > A.lastN) {
     A.lastN = n;
     // A streamed answer was read in place while it arrived; keep the owner where they are.
@@ -423,7 +426,7 @@ export function render(id) {
   } else {
     A.lastN = n;
   }
-  const main = th || (A.pending && A.pending.key == null && !A.pending.recId) ? threadHtml(th) : emptyHtml();
+  const main = th || newOnAsk(A.pending) ? threadHtml(th) : emptyHtml();
   return H.shell(`<div class="h-askx">${sideHtml(shown)}${main}</div>`, 'ask');
 }
 
@@ -508,12 +511,12 @@ function sendAsk({ key, recId, text, questionId, draftKey, refocus }) {
   return true;
 }
 
-// A question from a rec dialog: key is the rec's attached thread (null starts a new thread asked
-// from the rec), text the typed or chip text, questionId the rec.qa index for a chip. Returns false
-// when another question is still in flight.
-export function askFromRec({ recId, key, text, questionId, draftKey, refocus }) {
+// A question from a rec dialog, asked into the rec's attached thread (none: a new thread asked
+// from the rec); text is the typed or chip text, questionId the rec.qa index for a chip. Returns
+// false when another question is still in flight.
+export function askFromRec({ recId, text, questionId, draftKey, refocus }) {
   if (!H || !H.api || !recId) return false;
-  return sendAsk({ key: key || null, recId, text: String(text || '').trim(), questionId, draftKey, refocus });
+  return sendAsk({ key: recKey(recId), recId, text: String(text || '').trim(), questionId, draftKey, refocus });
 }
 
 /* ---------- rename ---------- */
