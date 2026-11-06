@@ -94,6 +94,36 @@ test('a tool preamble and the answer stay as two paragraphs and the stream match
   assert.equal(reply.paragraphs.join('\n\n'), streamed);
 });
 
+test('superseded SDK frames leave the stream equal to storage', async t => {
+  const s = await demoStore(t);
+  // Fake mode never emits reset, so this runtime streams a refused draft, an engine reset and the
+  // replacement by hand, then delegates with no onEvent so only those events reach the listener.
+  const engine = new Proxy(s.runtime, {
+    get(target, key) {
+      if (key === 'call') {
+        return async request => {
+          const { onEvent, ...rest } = request;
+          onEvent?.({ type: 'text', text: 'Refused draft.' });
+          onEvent?.({ type: 'reset' });
+          onEvent?.({ type: 'text', text: 'Keep a reserve.' });
+          return target.call({ ...rest, fake: [{ text: 'Keep a reserve.' }] });
+        };
+      }
+      const value = Reflect.get(target, key, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+  const seen = [];
+  const reply = await createLiveAnswerer({ engine, packs: s.packs }).answer({
+    db: s.db, key: THREAD, text: 'What should I keep?', onEvent: e => seen.push(e),
+  });
+  const last = seen.map(e => e.type).lastIndexOf('reset');
+  const effective = seen.slice(last + 1).filter(e => e.type === 'text').map(e => e.text).join('');
+  assert.equal(seen.filter(e => e.type === 'reset').length, 1, 'one reset reached the listener');
+  assert.equal(effective, 'Keep a reserve.');
+  assert.deepEqual(reply.paragraphs, ['Keep a reserve.']);
+});
+
 test('text before a tool round is kept when the model resumes mid-word', async t => {
   const s = await demoStore(t);
   const head = 'Give appreciated assets instead of cash.\n\nSources: "G';

@@ -3,6 +3,7 @@ import test from 'node:test';
 import { consumeSdkMessages, normalizeSdkRound, assistantText, messagesRound, wireSchema, WIRE_UNSUPPORTED_KEYWORDS } from '../live.mjs';
 import { DEFAULT_MODEL, usageCostUsd } from '../pricing.mjs';
 import { createEngine, createMemoryLedger, ModelAccountingError, ModelCallError } from '../index.mjs';
+import * as engineModule from '../index.mjs';
 
 test('distinct assistant frames keep identical text, including a repeated digit', async () => {
   const frames = ['Set aside $1', '0', '0', '.'];
@@ -103,6 +104,55 @@ test('consumeSdkMessages keeps every completed block frame', async () => {
   assert.doesNotMatch(replaced.round.text, /Refused draft/);
   assert.match(replaced.round.text, /Replacement answer\./);
   assert.equal(replaced.round.text, 'Opening line. Replacement answer.');
+});
+
+test('superseded SDK frames leave the stream equal to storage', async () => {
+  const run = async frames => {
+    const events = [];
+    async function* stream() { yield* frames; }
+    const observed = await consumeSdkMessages(stream(), e => events.push(e));
+    const round = normalizeSdkRound(observed, { model: DEFAULT_MODEL, registry: { results: [] }, maxTokens: 128, maxBudgetUsd: 1 });
+    let effective = '';
+    for (const e of events) {
+      if (e.type === 'text') effective += e.text;
+      else if (e.type === 'replace') effective = e.text;
+    }
+    return { round, events, effective };
+  };
+  const replaced = await run([
+    ...sdkResponse('msg_first', [{ type: 'text', text: 'Opening line. ' }, { type: 'text', text: 'Refused draft text.' }]),
+    ...sdkResponse('msg_fallback', [{ type: 'text', text: 'Replacement answer.' }], { supersedes: { 0: ['msg_first_block1'] } }),
+    resultFrame('Replacement answer.'),
+  ]);
+  assert.equal(replaced.round.text, 'Opening line. Replacement answer.');
+  assert.equal(replaced.events.filter(e => e.type === 'replace').length, 1, 'exactly one replace event');
+  assert.equal(replaced.effective, replaced.round.text);
+  const plain = await run([
+    ...sdkResponse('msg_plain', [{ type: 'text', text: 'Opening line. ' }, { type: 'text', text: 'Kept text.' }]),
+    resultFrame('Kept text.'),
+  ]);
+  assert.equal(plain.events.filter(e => e.type === 'replace').length, 0, 'no supersedes, no replace');
+  assert.equal(plain.effective, plain.round.text);
+});
+
+test('superseded SDK frames leave the stream equal to storage', () => {
+  assert.equal(typeof engineModule.createAnswerAssembler, 'function', 'createAnswerAssembler is exported');
+  const a = engineModule.createAnswerAssembler();
+  a.beginRound();
+  assert.equal(a.streamPiece('Plan A'), 'Plan A');
+  a.endRound('Plan A');
+  a.beginRound();
+  assert.equal(a.streamPiece('Refused'), '\n\nRefused');
+  assert.equal(a.replaceRound('Keep a reserve.'), 'Plan A\n\nKeep a reserve.', 'replaceRound returns the full answer so far');
+  assert.equal(a.streamPiece(' More.'), ' More.', 'the round has already started');
+  a.endRound('Keep a reserve. More.');
+  assert.equal(a.text, 'Plan A\n\nKeep a reserve. More.');
+  const b = engineModule.createAnswerAssembler();
+  b.beginRound();
+  b.streamPiece('Plan A');
+  b.endRound('Plan A');
+  b.beginRound();
+  assert.equal(b.replaceRound(''), 'Plan A', 'an empty replacement returns the stored text');
 });
 
 test('a shorter SDK result does not replace text blocks split across a tool', () => {

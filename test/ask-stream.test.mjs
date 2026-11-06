@@ -268,6 +268,12 @@ test('stripSources removes comma and semicolon separated citations', () => {
   assert.equal(stripSources('Open. Sources: "A"; "B". Then pay.'), 'Open. Then pay.');
   assert.equal(stripSources('Open. Sources: household summary, tax pack. Then pay.'), 'Open. Then pay.');
   assert.equal(stripSources('Open. Sources: “A”, “B.” Then pay.'), 'Open. Then pay.');
+  const oxford = 'Open. Sources: "A", "B", and "C." Then pay.';
+  assert.equal(stripSources(oxford), 'Open. Then pay.');
+  assert.equal(stripSources('Open. Sources: "A"; "B"; and "C". Then pay.'), 'Open. Then pay.');
+  const html = streamHtml(oxford);
+  assert.match(html, /Then pay/);
+  assert.doesNotMatch(html, /Sources/);
 });
 
 test('stripSources and streamHtml remove a singular Source label', () => {
