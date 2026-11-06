@@ -855,6 +855,24 @@ function retryFile(id) {
   return send('/api/files/' + encodeURIComponent(id) + '/retry', {}, d => d.file || null);
 }
 
+// Advisor workflow (item 24). Each resolves with a truthy value on success, null on failure.
+function sendToAdvisor(recId) {
+  if (recId == null || recId === '') return done();
+  return send('/api/advisor/reviews', { recId: String(recId) }, () => true);
+}
+
+function advisorVerdict(reviewId, verdict, note, date) {
+  return send('/api/advisor/reviews/' + encodeURIComponent(reviewId) + '/verdict', { verdict, note, date }, () => true);
+}
+
+function advisorCheckin(date, time, lengthMin) {
+  return send('/api/advisor/checkin', { date, time, lengthMin }, () => true);
+}
+
+function advisorPacket() {
+  return send('/api/advisor/packets', {}, d => d.packetId || null, null, 'Could not prepare the packet. ');
+}
+
 const api = {
   get s() { return S; },
   get state() { return stateView(); },
@@ -902,6 +920,10 @@ const api = {
   reviseAnswer,
   reopenAnswer,
   retryFile,
+  sendToAdvisor,
+  advisorVerdict,
+  advisorCheckin,
+  advisorPacket,
   figPopover: el => openPopover(el),
 };
 
