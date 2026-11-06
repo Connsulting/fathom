@@ -91,8 +91,16 @@ One line each, taken from merged pull request bodies and deduplicated. The numbe
 1. War-game charts have no pointer readout, so touch drag on the curve is not implemented (#17).
 2. There is no service worker; an installed home-screen icon still needs the network (#17).
 
-## Not on main
+## Bank connections
 
-Open pull request 27 (SimpleFIN, read-only): holdings are not mapped; a later bridge description keeps the first text; overlapping file rows can raise near-duplicate Confirm cards; the `simplefin` source has no freshness cadence; the fake bridge ignores `start-date`.
+1. Holdings and positions from SimpleFIN are not mapped; brokerage accounts get balances and transactions only (#27).
+2. A later bridge description change keeps the first description (#27).
+3. A file uploaded after connecting whose rows overlap bridge rows on nearby dates can raise near-duplicate Confirm cards (#27).
+4. The `simplefin` source kind has no freshness cadence, and the fake bridge ignores `start-date` (#27).
 
-Open pull request 24 (Accounts, Engine, What changed, Decide, Files): a decided deferral is recorded but no projection reads it; a W-2 on file wins over a decided salary; a decided salary is dropped for a run when a W-2 exists or distributions would go negative, while the decided line still shows; net worth counts only accounts with two months of data and subtracts card, credit and loan kinds.
+## Accounts, events and decisions
+
+1. A decided deferral is recorded and shown, but no projection reads it (#24).
+2. With a W-2 on file for the year, the actual W-2 wins over a decided salary (#24).
+3. A decided salary is dropped for a run when a W-2 exists or it would leave negative distributions; the decided line still shows (#24).
+4. Net worth counts only accounts with at least two months of data and subtracts card, credit and loan kinds (#24).

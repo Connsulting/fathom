@@ -15,7 +15,7 @@ browser or MCP client
         |-- router (JSON, uploads, SSE for Ask)
         |-- scheduler tick (in process)
                 |-- plan, brief-email, deadline-alerts
-                |-- freshness, trash-purge, confirm-guess
+                |-- freshness, trash-purge, confirm-guess, simplefin-sync
                         |
                         v
               runtime engine (purpose + model)
@@ -44,7 +44,7 @@ An upload commits rows, then the scheduler is asked to plan and to guess confirm
 14. Goals: Goals and the tradeoff curve.
 15. Advisor: Advisor workflow.
 16. Year end: Year end.
-17. Bank connections: Bank connections (not on main yet).
+17. Bank connections: SimpleFIN connections.
 18. UI shell, keyboard, phone, demo, tests: UI shell, Keyboard registry and switcher, Phone layout, Demo mode, Testing and real-mode smoke.
 
 ## Frozen architecture
@@ -268,6 +268,7 @@ secrets are read there.
 | `FATHOM_PUBLIC_URL` | unset | The URL MCP clients reach this server at (an `http` or `https` URL with no credentials, query or fragment; anything else refuses to start). Emails link into the app from it. Its host is allowed on `/mcp` and every `/api` route, and `GET /api/mcp` advertises it with `/mcp` appended. |
 | `FATHOM_ALLOWED_HOSTS` | unset | Comma separated extra `Host` names allowed on `/mcp` and every `/api` route: `host` (any port) or `host:port`. |
 | `FATHOM_OWNER_LOGINS` | unset | Comma or newline separated Tailscale logins admitted on a real store (trimmed, case-insensitive). Unset or blank on a real store fails closed: every page and `/api` route answers 401. See "Owner identity". |
+| `FATHOM_SIMPLEFIN_ALLOWED_HOSTS` | `bridge.simplefin.org,beta-bridge.simplefin.org` | Comma separated host names the SimpleFIN client may call (no scheme, port or path; anything else refuses to start). Claim and access URLs on any other host are refused. |
 | `FATHOM_OWNER_LOGINS_FILE` | unset | Path to a file holding the same list (comma or newline separated). Use instead of `FATHOM_OWNER_LOGINS`; setting both, or an unreadable file, fails closed. |
 | `FATHOM_LIVE` | unset | Read only by `npm run smoke:live`. `1` plus `FATHOM_CLAUDE_CREDENTIAL_FILE` runs the opt-in live engine smoke. |
 | `FATHOM_SMOKE_BASE_URL` | unset | With `BASE_URL`, points Playwright smoke at a server you already started. |
@@ -346,6 +347,8 @@ Money columns are dollars rounded to cents; JSON columns hold JSON text. The pro
 | `column_mappings` | `signature` PK (header signature), `mapping` JSON, `src`, `created_at`, `uses` |
 | `entity_aliases` | `alias` PK (normalized alias name), `entity` (canonical display name), `created_at` |
 | `held_facts` | `id` PK, `hold` (`employer:<employerKey>`), `key`, `value` JSON, `file_id`, `parser`, `locator`, `confidence`, `created_at` |
+| `simplefin_connection` | `id` PK (always 1), `access_blob` (the SimpleFIN access URL encrypted with the data key, base64; never plaintext), `connected_at`, `last_sync_at`, `status` (`ok`, `reconnect` or `error`), `error_code`, `messages` JSON (sanitized bridge messages from the last sync), `accounts` (count). Migration 014. |
+| `simplefin_accounts` | `sf_key` PK (hash of the bridge connection and account ids), `account_id` (the Fathom account it writes into), `candidate_id` (the imported account a pending match question asks about), `status` (`mapped` or `pending_match`), `name`, `backfilled` (1 once it imported under the full first window), `created_at`. Migration 014. |
 | `yearend_marks` | (`tax_year`, `item_key`) PK, `reason`, `marked_at`. The owner's "not needed this year" marks on expected year-end documents (migration 013). |
 | `yearend_packets` | `id` PK, `tax_year`, `generated_at`, `counts` JSON, `bytes`. One row per accountant packet generated (migration 013). |
 | `advisor_reviews` | `id` PK, `rec_id` (references `recs.id`; NULL only for a demo item outside the plan), `title` (the rec title when sent), `sent_at`, `verdict` NULL (waiting), confirmed or vetoed, `note` (escaped owner text, at most 1000 characters before escaping), `reviewed_on` (the advisor's date), `recorded_at`, `grounding_hash` (the planner's hash for the rec when the verdict was recorded), `closed_at`, `closed_reason` (`sent again`, `inputs changed`); at most one open row per rec (migration 011) |
@@ -385,6 +388,8 @@ content row's `reviewed` items outside the plan, so an upgrade keeps every pendi
 verdict; the content row's `next` label shows until the owner sets a check-in.
 
 Migration 013 (`013-yearend.sql`) creates `yearend_marks` and `yearend_packets` (see "Year end").
+
+Migration 014 (`014-simplefin.sql`) creates `simplefin_connection` and `simplefin_accounts` (see "SimpleFIN connections").
 
 ### Adding a migration
 
@@ -432,7 +437,7 @@ live state merged in, plus `live`. It only reads.
 6. Derived provenance figures, registered at build time and never stored:
    `wg.salary.<pointId>.x|y` and `wg.deferral.<optionId>.amount|tax2026|tax2027|net|decCash|need|gap`
    (kind m, source `wargame-model`, "War-game model, from your plan");
-   `series.<key>.<index>` (the point's kind, source the series `src` or `plan`);
+   `series.<key>.<index>` (the point's kind, source the series `src` or `plan`; a real store's series carry `imported: true` and src `balances`, the "Account balances you uploaded" built-in source);
    `engine.budget.used` (a, `spend-ledger`), `engine.budget.monthly` (p, `settings`),
    `engine.budget.left` (e, `spend-ledger`), `engine.job.<jobId>.cost` (e, `job-estimates`,
    "Per-run cost estimate") and `engine.ledger.<id>.cost` (a, `spend-ledger`, label
@@ -446,6 +451,13 @@ live state merged in, plus `live`. It only reads.
    `domains` pass through `applyFreshness`: a stale ingest source appends "<label> data is <n>
    days old. Export a fresh copy." to its domain's note, moves a `covered` domain to `waiting`, and
    adds the domain (status `waiting`) when the store has none with that id.
+
+### Engine models
+
+`engine.models` is `[{purpose, model}]` for chat, job, extract, title and confirm, read from
+`modelFor(purpose)` in `src/engine/pricing.mjs` (the same function the engine calls), so the Engine
+screen shows the configured model per purpose in demo and real mode. `engine.chat` stays a demo-only
+content row (a note); an empty store serves it blank.
 
 ### The `live` key
 
@@ -594,6 +606,8 @@ response is `{scenario, ...}` with the fresh scenario.
 | `GET /api/identity` | | `{identity: {login, name} or null}`. The admitted owner: `login` is the trimmed `Tailscale-User-Login`, `name` the trimmed `Tailscale-User-Name` or else the login. Always `null` on a demo store. |
 | `POST /api/recs/:id/action` | `{action: accept, start, snooze, dismiss, complete, reopen or task, arg?}` | `{scenario}`. `task` toggles task `arg`; `snooze` takes a wake label (default "Next month"). 400 bad action or task index, 404 unknown or hidden rec. Writes `rec_events` (actor `ui`). |
 | `POST /api/wargame/:name/pick` | `{index}` (an index or an option id) | `{scenario}`. `name` is salary or deferral (404 otherwise); 400 out of range. |
+| `POST /api/decisions/:id/decide` | `{index?}` (a point index or id; default the stored pick) | `{scenario}`. Decide on the picked point of an open salary or deferral decision: status becomes decided and `decided_line` is built from the point's own label plus `{f:...}` tokens for the `wg.*` figures the registry holds (provenance stays on the figures). Records the pick in `wargame.picks`, writes the owner-stated assumption fact (`business.salaryDecided` = `{entity, salary}`, the S corp the game was built for and the point's `wg.salary.<id>.salary` value, or `business.deferralDecided` = `{option, amount}`; src `decide:salary` or `decide:deferral`, confirmed, locator names the decision and the figure), logs a `decide` rec event on the linked rec and schedules the plan job (trigger `decide`) on a real store. 404 unknown id, 400 no war game or bad index, 409 already decided, not open, upcoming or unavailable. |
+| `POST /api/decisions/:id/revisit` | `{}` | `{scenario}`. Reopens a decision decided that way: status open, `decided_line` cleared, the assumption fact deleted, a `revisit` rec event, plan job scheduled. 409 for a decision that is not decided with a stored choice. |
 | `POST /api/packs/:id/toggle` | `{}` | `{scenario, status, note}`. Turning a pack on lifts its hidden recs to proposed; turning it off hides again only the recs it lifted that no other active pack powers. `note` is "Recommendations update on the next planning run." |
 | `POST /api/packs/:id/whatif` | `{}` | `{scenario}`. Marks the pack exploring and appends the pack's what-if prompt and a live answer (with provenance) once to `pack:<id>`. A manifest-backed pack's prompt is literal text, stored escaped like free text (`whatIfOwnerText`); an illustrative demo prompt keeps its token form; a notice reply (engine off, over the cap, model error) is appended once and does not mark it done. |
 | `GET /api/packs/:id/entries/:entryId` | | `{entry: {id, title, body, cites}}` for an entry of a manifest-backed pack row, from the loaded packs; 404 otherwise. |
@@ -638,6 +652,8 @@ response is `{scenario, ...}` with the fresh scenario.
 | `POST /api/advisor/packets` | `{}` | `{scenario, packetId}`. Builds the review packet for every waiting review and stores it encrypted. 409 when nothing waits or a real store has no data key. |
 | `GET /api/advisor/packets/:id` | | The stored packet as `text/html` with `Content-Disposition: attachment`, the one non-JSON API response. 404 unknown id. |
 | `GET /api/jobs` | | `{jobs: [{id, name, cadence, does, lastRun, next, nextAt}], runs, timezone}`. Only jobs with a handler are listed; `runs` are recent `job_runs`. |
+| `POST /api/simplefin/connect` | `{token}` (a SimpleFIN setup token, at most 4096 characters) | `{scenario, connected, run}`. Claims the token, stores the access URL encrypted and runs the first `simplefin-sync` under the lease (`run`, or null when the scheduler is busy). 400 a bad token or a host not allowed, 400 a used or unknown token ("That setup token was already used..."), 409 already connected or a real store without `FATHOM_DATA_KEY_FILE`, 502 the bridge failed. A demo store uses the synthetic fake bridge. |
+| `POST /api/simplefin/disconnect` | `{}` | `{scenario, disconnected}`. Deletes the stored access URL; connected accounts become `manual` and keep their rows. |
 | `POST /api/yearend/marks` | `{key, reason, year?}` | `{scenario}`. Marks the expected year-end item `key` not needed for `year` (default: the tax year on the clock) with `reason` (trimmed, 1 to 300 characters), or clears the mark with `reason: null`. 400 bad body or year, 404 a key that is not expected that year. |
 | `GET /api/yearend/packet?year=YYYY` | | The accountant packet as `application/zip` (attachment `tax-packet-YYYY.zip`), built on demand and recorded in `yearend_packets`; not JSON. `year` defaults to the tax year on the clock; 400 a bad year, 409 when the data key is unavailable. See "Year end". |
 | `POST /api/jobs/:id/run` | `{}` | `{scenario, run, jobs}`. Runs the job now through the scheduler under the lease (trigger `manual`); `run` is the scheduler's run (`{id, jobId, status, trigger, periodKey, startedAt, finishedAt, durationMs, errorClass, costUsd, note}`) and `scenario` the fresh scenario. `POST /api/jobs/plan/run` is this route: the manual planning run with the server's runtime engine and clock; on a demo store it answers 409 `{error: 'planning runs on real stores only'}` before the scheduler, leaving the store unchanged. 404 unknown job, 409 already running or the lease is held by another scheduler. |
@@ -808,7 +824,7 @@ serves) and stops it before closing the store.
    invalid zone falls back to the default). `plan` daily at 02:00 (key `YYYY-MM-DD`),
    `brief-email` monthly on the 1st at 07:00 (`YYYY-MM`), `deadline-alerts` daily at 07:00
    (`YYYY-MM-DD`), `trash-purge` daily at 03:00 (`YYYY-MM-DD`), `freshness` weekly on Monday at 06:00 (that Monday's date), `confirm-guess`
-   daily at 03:00 (`YYYY-MM-DD`). The due key is the
+   daily at 03:00 (`YYYY-MM-DD`), `simplefin-sync` daily at 05:00 (`YYYY-MM-DD`). The due key is the
    latest period whose start is at or before now. With `FATHOM_CLOCK` set, the clock date at 12:00
    is now, so every period of that day is due.
 2. Idempotence: one attempt per (`job_id`, `period_key`), enforced by the unique index. A failed
@@ -855,6 +871,59 @@ serves) and stops it before closing the store.
 10. Stop: `stop()` is graceful and never rejects. It stops ticking, refuses new runs (409) and
    drops queued reruns, waits for active runs to finish (at most `drainMs`, default 30 seconds),
    then releases the lease; the server awaits it before closing the store.
+
+## SimpleFIN connections
+
+Read-only bank and brokerage connections through SimpleFIN Bridge (`src/ingest/simplefin.mjs`,
+`src/api/simplefin-handlers.mjs`, `web/horizon/screens/simplefin.js`).
+
+1. Connect: the owner pastes a setup token (base64 of a claim URL) on the Accounts screen
+   ("Connect accounts"), the onboarding Accounts step, or through the switcher action "Connect
+   accounts". The server decodes it and refuses anything but `https` on a host in
+   `FATHOM_SIMPLEFIN_ALLOWED_HOSTS` with the default port and no credentials (the token is user
+   input: SSRF guard), POSTs the claim URL with redirects refused, and checks the answer is an
+   `https` access URL with credentials on an allowed host. A 403 claim is a used or unknown token.
+2. Storage: the access URL is encrypted with the data key (vault AES-256-GCM, AAD
+   `simplefin:access`) in `simplefin_connection.access_blob`. It never appears in a response, the
+   scenario, a log or an error. Requests send its credentials as a Basic `Authorization` header,
+   never in the request URL. Disconnect deletes the row.
+3. Sync: the scheduler job `simplefin-sync` (daily 05:00, Run now, after a match answer, and after
+   connect) GETs `<access>/accounts?version=2&start-date=<epoch>`: 90 days back until every known
+   bridge account has imported once under that window (`simplefin_accounts.backfilled`; an account
+   held by a match question or first seen later still gets it), then from 14 days before the last
+   sync. It reads protocol v2 (`connections`, `errlist`) and v1
+   (`org`, `errors`). Accounts in another currency than USD are skipped. Pending transactions are
+   skipped. Names keep at most the last four digits of any number; the mask is the last four digits
+   found in the name, or in an all-digit id (an id mask is never enough for a sure match).
+4. Mapping: rows go into one synthetic ingest file (`SimpleFIN sync <date>.json`, no credentials)
+   routed by the pipeline with the `simplefin` parser, so provenance, `externalId` and `dedupeKey`
+   dedupe, balance revisions, sources and account figures work as for uploads; an unchanged
+   answer is a duplicate file and writes nothing. Accounts written are `mirror` `connected`. Bridge
+   rows carry the account identity, so their dedupe keys are scoped to it, and the bridge
+   transaction id is authoritative: a resync with a changed description is the same posting. On an
+   account that also has file rows, a bridge transaction with the same date and amount as a file
+   transaction is that posting (one for one); the rest go through ingest dedupe and its
+   near-duplicate questions. A file uploaded later whose institution and mask match exactly one
+   connected account lands in it.
+5. Matching: a new bridge account is matched to an existing non-connected account at the same
+   institution: sure when exactly one shares its mask (or, without a mask, its name and has no
+   mask) and no stored balance on the bridge's balance date differs. Otherwise the closest
+   candidate by recent balance gets an `account_match` Confirm question ("Same account, merge
+   them" or "Different accounts, keep both") and the account imports nothing until it is
+   answered; the answer maps it and triggers a sync. Without candidates it gets its own account
+   (identity `simplefin:<sf_key>`).
+6. Errors: 403 (revoked), 402 (payment required) and `gen.auth` or `con.auth` in `errlist` set
+   status `reconnect`, and the UI shows a reconnect prompt with the token form; network and
+   unreadable replies set `error` and retry on the next sync. The job records counts only
+   (`accounts`, `transactions`, `balances`, `duplicates`, `matched`, `pending`, `queued`,
+   `skipped`, `changed`) and fails with `simplefin_<code>`. When it wrote rows it triggers the
+   `plan` job (reason `ingest`).
+7. Demo and tests: a demo store always uses the synthetic fake bridge (`createFakeSimplefin`): no
+   network. `live.simplefin.demoToken` is its reusable token; any other claim code is a used token.
+8. `live.simplefin` is `{demo, demoToken, pendingMatches, connected, accounts?, connectedAt?,
+   lastSyncAt?, status?, errorCode?, reconnect?, messages?}`.
+9. Egress: a real deployment needs outbound HTTPS (443) to the hosts in
+   `FATHOM_SIMPLEFIN_ALLOWED_HOSTS` and nothing else for this feature.
 
 ## Email
 
@@ -1609,6 +1678,22 @@ passes; accepted text is HTML-escaped. Any failure, including `EngineOffError` a
 `BudgetExceededError`, falls back to the template. The grounding hash covers the trigger, template
 version, window close, the hit's figure values and its other hit variables.
 
+### Decided salary
+
+The decide action (`POST /api/decisions/:id/decide`) writes the owner fact `business.salaryDecided`
+as `{entity, salary}`; the salary war game content carries `entity`, the slug of the S corp it was
+built for. `computeFigures` treats the salary as that business's owner-stated payroll assumption only:
+another S corp keeps its own projection. It replaces the straight-line P&L officer salary projection
+(`pnl.<slug>.salaryProj`, source `owner-decision`), becomes the wage part of the household tax parts
+and the war game's current point, and distributions follow the same model as the war game (profit
+before salary less the salary and the employer payroll tax on it), so wages and distributions move
+together. The deferral game's monthly payroll uses the decided salary and its employer payroll tax.
+Profit before salary still comes from the P&L. The decision is dropped for the run (the projection
+figure is restored) when a W-2 from the business exists for the year (actual data wins) or when the
+salary would leave negative distributions. Revisit deletes the fact, so the next run goes back to
+the data. A decided deferral is recorded (`business.deferralDecided`) and shown, but no projection
+reads it yet.
+
 ### Brief content
 
 Content rows (src `planner`), each written only when it changes: `names` (`household.names` over
@@ -1620,6 +1705,15 @@ the statutory dates of the next 400 days that no hit covers. Decisions (src `pla
 by id: `<scenario>-<year>` open per scenario hit and `salary-<year + 1>` upcoming for an S corp.
 Events (src `planner`) are replaced only when something changed against `settings.planner.snapshot`
 (new files, new, revived and retired recs, planner fact changes); the snapshot is rewritten each run.
+Fact-change event titles come from the fixed label map in `src/shared/event-labels.mjs` (every
+frozen fact key, detected and no longer seen, plus a fallback per event kind), for example "S corp
+income detected"; no title holds a figure or a raw key, and the scenario rewrites an old stored
+"<key> changed" title the same way. The `series` content row (src `planner`) is built by
+`src/jobs/planner/series.mjs` from the balances table (positions values for months a brokerage
+account has no balance): one `acct-<id>` series per account with at least two months in the last 12,
+and `net` ("Net worth, accounts with a trend": only accounts with a series of their own, debts such as
+card, credit and loan kinds subtracted, each counted from its first month with its last balance carried
+forward; it ends at the newest month any upload covers).
 
 ### Deferral deadlines
 
@@ -1728,10 +1822,11 @@ chat card saves it through `POST /api/goals` when the owner taps Save. Chat neve
 
 ## Bank connections
 
-Not on `main`. Open pull request 27 adds read-only SimpleFIN Bridge connections: migration `014`,
-an encrypted access URL, a `simplefin-sync` job (daily at 05:00, plus Run now, after connect, and
-after a match answer), and Connect accounts on Accounts, onboarding, and the switcher. Holdings
-are not mapped. Until that merges, accounts arrive only from uploaded files.
+Shipped. Read-only SimpleFIN Bridge connections are the SimpleFIN connections section: migration
+`014` (`simplefin_connection`, `simplefin_accounts`), the encrypted access URL, the
+`simplefin-sync` job, and Connect accounts on Accounts, onboarding, and the switcher. Holdings
+from the bridge are not mapped; brokerage accounts get balances and transactions only. Uploaded
+files still import the same way.
 
 ## UI shell
 
@@ -1749,9 +1844,12 @@ is typing except Escape and the switcher chord. `register(scope, bindings)` inst
 
 Ctrl+K or Cmd+K opens the switcher. It lists Go to (screens), Actions (shortcuts, Ask, Add files,
 New goal, Start confirming when something is pending), and rows for recommendations, decisions,
-conversations, accounts, deadlines and packs. Files in the switcher are part of open pull request
-24 and are not on `main`. `?` opens the shortcut sheet. Two-key sequences such as `g` then `c`
-jump to Confirm.
+conversations, accounts, deadlines, packs and files. Files is also in More (`#/add`). `?` opens
+the shortcut sheet. Two-key sequences such as `g` then `c` jump to Confirm. The Engine screen
+shows the model for each purpose from `modelFor` in `src/engine/pricing.mjs`. Account trend
+series come from stored balances. What changed uses plain event labels. Decide records a salary
+or deferral (`POST /api/decisions/:id/decide`); Revisit reopens it. A decided salary is the
+payroll assumption for the next plan.
 
 ## Phone layout
 

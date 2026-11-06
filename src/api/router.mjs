@@ -20,6 +20,7 @@ import { createMcpHandler } from '../mcp/index.mjs';
 import { isAllowedHost } from '../mcp/guard.mjs';
 import * as ih from './ingest-handlers.mjs';
 import * as eh from './email-handlers.mjs';
+import * as sf from './simplefin-handlers.mjs';
 import * as yh from './yearend-handlers.mjs';
 import * as gh from './goals.mjs';
 import * as oh from './onboarding-handlers.mjs';
@@ -33,6 +34,8 @@ const TABLE = [
   { method: 'GET', path: '/api/identity', handler: h.getIdentity },
   { method: 'POST', path: '/api/recs/:id/action', handler: h.recAction },
   { method: 'POST', path: '/api/wargame/:name/pick', handler: h.wargamePick },
+  { method: 'POST', path: '/api/decisions/:id/decide', handler: h.decisionDecide },
+  { method: 'POST', path: '/api/decisions/:id/revisit', handler: h.decisionRevisit },
   { method: 'POST', path: '/api/packs/:id/toggle', handler: h.packToggle },
   { method: 'POST', path: '/api/packs/:id/whatif', handler: h.packWhatIf },
   { method: 'GET', path: '/api/packs/:id/entries/:entryId', handler: h.packEntry },
@@ -78,6 +81,8 @@ const TABLE = [
   { method: 'POST', path: '/api/advisor/packets', handler: ah.createPacket, quiet: true },
   { method: 'GET', path: '/api/advisor/packets/:id', handler: ah.downloadPacket, quiet: true, download: true },
   { method: 'POST', path: '/api/jobs/:id/run', handler: eh.runJob, quiet: true },
+  { method: 'POST', path: '/api/simplefin/connect', handler: sf.connect, quiet: true },
+  { method: 'POST', path: '/api/simplefin/disconnect', handler: sf.disconnect, quiet: true },
   { method: 'POST', path: '/api/yearend/marks', handler: yh.markItem },
   { method: 'GET', path: '/api/yearend/packet', handler: yh.downloadPacket, raw: true, quiet: true },
 ];

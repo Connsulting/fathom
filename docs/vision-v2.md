@@ -20,9 +20,9 @@ Sources, in priority order:
 
 ## Status
 
-Built, as of the docs refresh on `main`: the SQLite store and Horizon UI in one process; dump-everything ingest with an encrypted file vault and a Confirm deck (revisable answers, engine guesses from fixed basis codes); the planner (figures, provenance, war games); in-process jobs (nightly plan, monthly brief, deadline alerts, freshness, Ask trash purge, confirm guesses); the budgeted engine (`chat`, `job`, `extract`, `confirm`, `title`); Ask conversations with streamed, grounded answers; MCP with app-issued keys; knowledge packs and Your plans; email transports; the owner gate on the Tailscale login header; real onboarding (Tell us, sign-in display, Confirm); owner-editable goals and the tradeoff curve; the advisor review workflow; the year-end checklist and accountant packet; the keyboard layer and Ctrl+K switcher; the phone layout and home-screen install; and a real-store smoke mode.
+Built, on `main`: the SQLite store and Horizon UI in one process; dump-everything ingest with an encrypted file vault and a Confirm deck (revisable answers, engine guesses from fixed basis codes); the planner (figures, provenance, war games); in-process jobs (nightly plan, monthly brief, deadline alerts, freshness, Ask trash purge, confirm guesses, SimpleFIN sync); the budgeted engine (`chat`, `job`, `extract`, `confirm`, `title`, with `modelFor` choosing the model); Ask conversations with streamed, grounded answers; MCP with app-issued keys; knowledge packs and Your plans; email transports; the owner gate on the Tailscale login header; real onboarding (Tell us, sign-in display, Confirm); owner-editable goals and the tradeoff curve; the advisor review workflow; the year-end checklist and accountant packet; the keyboard layer and Ctrl+K switcher; the phone layout and home-screen install; a real-store smoke mode; read-only SimpleFIN bank and brokerage connections (balances and transactions; holdings are not mapped); account trend series from balances; plain event labels; war-game Decide and Revisit (a decided salary is the payroll assumption); and Files in More and in the switcher.
 
-Still deferred, or not on `main` when this section was written: live account aggregation (an open pull request adds read-only SimpleFIN connections; holdings stay unmapped there); an Accounts trend series, engine model display, plain event labels, war-game decide and revisit, and Files in the switcher (an open polish pull request); tax filing and money movement (out of scope); multi-household tenancy; a real advisor login (the owner records the verdict); a service worker for the installed phone app.
+Still deferred: tax filing and money movement (out of scope); multi-household tenancy; a real advisor login (the owner records the verdict); a service worker for the installed phone app; mapping SimpleFIN holdings.
 
 ## 1. The product in one paragraph
 
@@ -258,7 +258,7 @@ split panes with a command palette), **Horizon** (the calendar year as the spine
 This list is the original mock-era deferral. The Status section above is what shipped. Still
 deferred from the product: multi-household tenancy; tax filing integrations; money movement (out
 of scope permanently). Real model calls, the calculators, and owner identity (Tailscale, not a
-password) are built. Live aggregation is the open SimpleFIN work, read-only only.
+password) are built. Read-only SimpleFIN aggregation is built; holdings are not mapped.
 
 ## 12. Run and review
 

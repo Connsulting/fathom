@@ -4,7 +4,7 @@ import { checkGrounding } from './grounding.mjs';
 import { compileSchema } from './schema.mjs';
 import { createRegistryServer } from './tools.mjs';
 import { sdkRound, messagesRound } from './live.mjs';
-import { DEFAULT_MODEL, TITLE_MODEL, estimateUnknownCost } from './pricing.mjs';
+import { modelFor, estimateUnknownCost } from './pricing.mjs';
 import { EngineOffError, BudgetExceededError, RoundLimitError, ModelCallError, ModelAccountingError } from './errors.mjs';
 export { EngineOffError, BudgetExceededError, RoundLimitError, ModelCallError, ModelAccountingError } from './errors.mjs';
 export { checkGrounding, numberPattern } from './grounding.mjs';
@@ -98,7 +98,7 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
       ? event => { try { onEvent(event); } catch { /* listeners never fail a call */ } }
       : null;
     if (!PURPOSES.includes(purpose)) throw new TypeError('Invalid call purpose');
-    const model = purpose === 'title' ? TITLE_MODEL : DEFAULT_MODEL;
+    const model = modelFor(purpose);
     if (typeof system !== 'string' || typeof systemDynamic !== 'string' || !Array.isArray(messages) || messages.length === 0 || !Number.isInteger(maxTokens) || maxTokens <= 0 || maxTokens > 128000) {
       throw new TypeError('Invalid model request');
     }

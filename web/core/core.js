@@ -18,6 +18,8 @@
 //  - api.go(name, params): params is an object ({id}, {step}, {name}) or a bare value for the route's
 //    primary param (rec->id, onboarding->step, wargame->name, packs->id).
 //  - api.scenarioPick(name, idx): idx is a point/option index or its id string.
+//  - api.decide(decisionId, idx?): decide the open war-game decision on the picked point (idx, else the
+//    stored pick); api.revisit(decisionId) reopens a decision decided that way.
 //  - api.ask(questionId, key?): index (or id) into rec.qa when the conversation is a rec, otherwise an
 //    id into ask.suggested (or a starter id on #/ask). Default conversation = the rec on the rec
 //    route, the pack's What if thread on a pack route, the open thread on #/ask/<id>; on #/ask with
@@ -675,6 +677,16 @@ function packToggle(id) {
   });
 }
 
+// Decide on the picked point of an open war-game decision, or reopen a decided one.
+function decide(decisionId, idx) {
+  const body = idx == null ? {} : { index: idx };
+  return send('/api/decisions/' + encodeURIComponent(decisionId) + '/decide', body, null, null, 'Could not save that decision. ');
+}
+
+function revisit(decisionId) {
+  return send('/api/decisions/' + encodeURIComponent(decisionId) + '/revisit', {}, null, null, 'Could not reopen that decision. ');
+}
+
 function scenarioPick(name, idx) {
   if (name !== 'salary' && name !== 'deferral') return done();
   const w = S && S.wargame && S.wargame[name];
@@ -792,6 +804,18 @@ function ingest() {
   ['items', 'files', 'waiting', 'sources', 'staleNotes', 'formats'].forEach(k => { out[k] = arr(g[k]); });
   if (g.accounts && typeof g.accounts === 'object') out.accounts = g.accounts;
   return out;
+}
+
+// SimpleFIN Bridge: connect with a setup token (the token goes only in this request body), Sync
+// now (the simplefin-sync job under the lease) and Disconnect. Each resolves the response or null.
+function simplefinConnect(token) {
+  return send('/api/simplefin/connect', { token: String(token || '') }, d => d, null, 'Could not connect accounts. ');
+}
+function simplefinSync() {
+  return send('/api/jobs/simplefin-sync/run', {}, d => d, null, 'Could not sync accounts. ');
+}
+function simplefinDisconnect() {
+  return send('/api/simplefin/disconnect', {}, d => d, null, 'Could not disconnect. ');
 }
 
 // Resolves { files, pending } with the per-file results, or null on failure (error line shown).
@@ -940,6 +964,8 @@ const api = {
   threadAct,
   renameThread,
   scenarioPick,
+  decide,
+  revisit,
   onboard,
   goalCreate,
   goalUpdate,
@@ -961,6 +987,10 @@ const api = {
   ingest,
   identity: () => (IDENT ? { login: IDENT.login, name: IDENT.name } : null),
   upload,
+  simplefinConnect,
+  simplefinSync,
+  simplefinDisconnect,
+  showError,
   answer,
   reviseAnswer,
   reopenAnswer,

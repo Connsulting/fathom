@@ -11,6 +11,8 @@ import { listParsers } from '../../ingest/registry.mjs';
 import { lawContent, pctContent } from './law.mjs';
 import { dateLabel, dayLabel, monthEnd, addDays } from './data.mjs';
 import { reasonText } from '../triggers/missing-data.mjs';
+import { buildSeries } from './series.mjs';
+import { factEventTitle } from '../../shared/event-labels.mjs';
 import { notBuiltReason } from './wargame.mjs';
 
 export const SRC = 'planner';
@@ -63,6 +65,7 @@ export function writeBrief(db, ctx, { hits }) {
   upsertContent(db, 'meta', { product: 'Fathom', household: names.household, dataThrough: dataThroughOf(ctx.freshness) }, now);
   upsertContent(db, 'law', lawContent(), now);
   upsertContent(db, 'pct', pctContent(), now);
+  upsertContent(db, 'series', buildSeries(db, clock), now);
 
   // War games: replaced only when this run built a new model (S11). A stored game this run could
   // not rebuild because its inputs are invalid is kept as history and marked unavailable for current
@@ -305,12 +308,12 @@ function whatChanged(db, ctx) {
   const oldFacts = snap && snap.facts ? snap.facts : {};
   for (const [key, value] of Object.entries(facts)) {
     if (oldFacts[key] === value) continue;
-    events.push({ date, kind: factKind(key), title: `${key} changed`, body: 'Derived from your data.' });
+    events.push({ date, kind: factKind(key), title: factEventTitle(key, { kind: factKind(key) }), body: 'Derived from your data.' });
     domains.add(factDomain(key));
   }
   for (const key of Object.keys(oldFacts).sort()) {
     if (key in facts) continue;
-    events.push({ date, kind: factKind(key), title: `${key} changed`, body: 'No longer seen in your data.' });
+    events.push({ date, kind: factKind(key), title: factEventTitle(key, { removed: true, kind: factKind(key) }), body: 'No longer seen in your data.' });
     domains.add(factDomain(key));
   }
   let written = null;
