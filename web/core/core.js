@@ -884,6 +884,12 @@ function reopenAnswer(id) {
   return sendFinal('/api/confirm/' + encodeURIComponent(id) + '/reopen', {});
 }
 
+// Mark an expected year-end document not needed this year (reason text), or clear the mark (null).
+function yearendMark(year, key, reason) {
+  if (!key) return done();
+  return send('/api/yearend/marks', { year, key, reason: reason == null ? null : String(reason) }, d => d);
+}
+
 function retryFile(id) {
   if (id == null || id === '') return done();
   return send('/api/files/' + encodeURIComponent(id) + '/retry', {}, d => d.file || null);
@@ -959,6 +965,8 @@ const api = {
   reviseAnswer,
   reopenAnswer,
   retryFile,
+  yearendMark,
+  refresh: refetchScenario,
   sendToAdvisor,
   advisorVerdict,
   advisorCheckin,
