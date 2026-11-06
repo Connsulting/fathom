@@ -5,6 +5,11 @@ export const DEFAULT_MODEL = 'claude-opus-5-5';
 // Thread titles (src/api/threads.mjs) run on the small model.
 export const TITLE_MODEL = 'claude-haiku-5-5';
 
+// The model each call purpose runs on; the one place the choice lives. src/engine/index.mjs and
+// the Engine screen both read it.
+export const MODEL_PURPOSES = Object.freeze(['chat', 'job', 'extract', 'title', 'confirm']);
+export const modelFor = purpose => (purpose === 'title' ? TITLE_MODEL : DEFAULT_MODEL);
+
 const SOURCE = 'https://platform.claude.com/docs/en/about-claude/pricing';
 
 export const PRICING = Object.freeze({
