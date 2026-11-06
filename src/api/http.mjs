@@ -16,11 +16,13 @@ export const CSP = [
   "form-action 'self'",
 ].join('; ');
 
+// `code` is an optional fixed identifier sent next to the message, for clients that branch on it.
 export class HttpError extends Error {
-  constructor(status, message, headers) {
+  constructor(status, message, headers, code) {
     super(message);
     this.status = status;
     this.headers = headers || {};
+    if (code !== undefined) this.code = code;
   }
 }
 
@@ -48,7 +50,8 @@ export function sendJson(res, status, body, headers = {}) {
 export function sendError(res, err) {
   const status = err instanceof HttpError ? err.status : 500;
   const message = err instanceof HttpError ? err.message : 'internal error';
-  sendJson(res, status, { error: message }, err instanceof HttpError ? err.headers : {});
+  const body = err instanceof HttpError && typeof err.code === 'string' ? { error: message, code: err.code } : { error: message };
+  sendJson(res, status, body, err instanceof HttpError ? err.headers : {});
 }
 
 // Server-Sent Events for a streaming route. Headers go out with the first event, so an error

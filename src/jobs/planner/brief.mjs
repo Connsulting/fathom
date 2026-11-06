@@ -11,6 +11,7 @@ import { listParsers } from '../../ingest/registry.mjs';
 import { lawContent, pctContent } from './law.mjs';
 import { dateLabel, dayLabel, monthEnd, addDays } from './data.mjs';
 import { reasonText } from '../triggers/missing-data.mjs';
+import { notBuiltReason } from './wargame.mjs';
 
 export const SRC = 'planner';
 export const NEUTRAL_NAMES = Object.freeze({
@@ -78,6 +79,12 @@ export function writeBrief(db, ctx, { hits }) {
       wargame[name] = kept;
     }
   }
+  // A game with no model and nothing kept records why it was not built, so Decide can say what
+  // data would unlock it (recomputed every run).
+  delete wargame.notBuilt;
+  const notBuilt = {};
+  for (const name of ['salary', 'deferral']) if (!wargame[name] && invalid[name]) notBuilt[name] = notBuiltReason(name, invalid[name]);
+  if (Object.keys(notBuilt).length) wargame.notBuilt = notBuilt;
   upsertContent(db, 'wargame', wargame, now);
 
   writeDeadlines(db, ctx, hits);
