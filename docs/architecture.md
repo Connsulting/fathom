@@ -1225,9 +1225,12 @@ All document text is plain text (demo tokens resolved on the server) and is rend
 The packet (`src/yearend/packet.mjs`) is a zip with `index.html` and `documents/NN-<form>-<issuer>-
 <year>.<ext>` for every received document, decrypted from the vault. It is assembled in a fresh
 0700 temp directory under the OS temp directory, streamed with a known length, and the directory is
-removed when the response ends, fails or the client leaves, and on any build error. The index is
+removed when the response ends, fails or the client leaves (also when it left during the build),
+and on any build error. The index is
 static printable HTML: open items, expected against received, other documents, the year's
-`tax_payments` with totals, P&L totals per entity and category, stored actual figures and the
+`tax_payments` with totals (a jurisdiction is "Not totaled" while any of its rows is named by a
+pending `withholding_conflict` or sits in an employer slot holding both W-2 and paystub rows, as the
+planner treats them; those rows are listed as open items), P&L totals per entity and category, stored actual figures and the
 filing facts, each row naming its file, parser and locator or the calculation. A received document
 whose stored copy cannot be read is left out and listed as an open item. A demo store's documents
 have no stored bytes, so the packet carries a short synthetic text rendering of each.

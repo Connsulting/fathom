@@ -43,7 +43,7 @@ export function packetData(db, { year, clock }) {
   const scope = tokenScope(db);
   const checklist = yearendChecklist(db, { year, clock, plain: (s) => resolveTokens(scope, s, false) });
   const files = new Map(db.prepare('SELECT id, name, uploaded_at, stored_path, mime, parser FROM files').all().map((f) => [f.id, f]));
-  const payments = db.prepare('SELECT * FROM tax_payments WHERE tax_year = ? ORDER BY date, id').all(year);
+  const payments = heldPayments(db, db.prepare('SELECT * FROM tax_payments WHERE tax_year = ? ORDER BY date, id').all(year));
   const pnl = db.prepare(`SELECT entity, category, round(sum(amount), 2) AS total, count(*) AS n, group_concat(DISTINCT file_id) AS file_ids
                           FROM pnl_lines WHERE substr(period, 1, 4) = ? GROUP BY entity, category ORDER BY entity, category`).all(String(year));
   const figures = db.prepare(`SELECT f.key, f.v, f.label, f.kind, f.file_id, f.parser, f.locator, s.label AS src_label, s.as_of
@@ -61,6 +61,30 @@ export function packetData(db, { year, clock }) {
   return { ...checklist, files, payments, pnl, figures, facts, decisions, household: resolveTokens(scope, parseMeta(db).household || '', false) };
 }
 
+// Payments that must not be totaled yet, as the planner treats them: rows a pending
+// withholding_conflict names, and rows in an employer slot holding both W-2 and paystub rows
+// (unsummarized until the recipient is known, so they would double count). Each gets `held`.
+export function heldPayments(db, payments) {
+  const conflicted = new Set();
+  for (const r of db.prepare("SELECT context FROM confirm_items WHERE kind = 'withholding_conflict' AND status = 'pending'").all()) {
+    let c = {};
+    try { c = JSON.parse(r.context || '{}') || {}; } catch { /* malformed context names no rows */ }
+    for (const ref of [c.first, c.second]) if (ref && ref.id != null) conflicted.add(Number(ref.id));
+  }
+  const forms = new Map();
+  for (const p of payments) {
+    if (!p.source_slot) continue;
+    if (!forms.has(p.source_slot)) forms.set(p.source_slot, new Set());
+    forms.get(p.source_slot).add(String(p.payer || '').split(':')[0]);
+  }
+  return payments.map((p) => {
+    const f = p.source_slot ? forms.get(p.source_slot) : null;
+    const held = conflicted.has(Number(p.id)) ? 'two documents disagree; answer the withholding question in Confirm'
+      : f && f.has('w2') && f.has('paystub') ? 'W-2 and paystubs from one employer not yet reconciled' : null;
+    return held ? { ...p, held } : p;
+  });
+}
+
 function parseMeta(db) {
   const r = db.prepare("SELECT value FROM content WHERE key = 'meta'").get();
   try { return JSON.parse(r?.value || '{}') || {}; } catch { return {}; }
@@ -75,14 +99,21 @@ export function renderIndex(d, { generatedAt, entries, unreadable }) {
     : i.status === 'skipped' ? `Not needed: ${esc(i.skip.reason)}` : `${esc(i.src)}. ${esc(i.note)}`}</td></tr>`).join('');
   const rowsUnmatched = d.unmatched.map((u) => `<tr><td>${esc(u.t)}</td><td>${u.zip ? `<a href="${esc(u.zip)}">${esc(u.zip)}</a>` : ''}<br><small>${esc(u.name)}, stored ${esc(u.date)}</small></td></tr>`).join('');
   const byJur = new Map();
-  for (const p of d.payments) byJur.set(p.jurisdiction, (byJur.get(p.jurisdiction) || 0) + p.amount);
-  const rowsPay = d.payments.map((p) => `<tr><td>${esc(p.date)}</td><td>${esc(p.jurisdiction)}</td><td>${esc(p.kind || '')}</td><td class="r">${esc(money(p.amount, { cents: true }))}</td><td><small>${esc(provText(p, d.files))}</small></td></tr>`).join('');
-  const rowsPayTotal = [...byJur].map(([j, v]) => `<tr><td>Total ${esc(j)}</td><td class="r">${esc(money(Math.round(v * 100) / 100, { cents: true }))}</td><td><small>Sum of ${d.payments.filter((p) => p.jurisdiction === j).length} payments listed above</small></td></tr>`).join('');
+  for (const p of d.payments) {
+    const t = byJur.get(p.jurisdiction) || { sum: 0, n: 0, held: 0 };
+    if (p.held) t.held += 1; else { t.sum += p.amount; t.n += 1; }
+    byJur.set(p.jurisdiction, t);
+  }
+  const rowsPay = d.payments.map((p) => `<tr><td>${esc(p.date)}</td><td>${esc(p.jurisdiction)}</td><td>${esc(p.kind || '')}</td><td class="r">${esc(money(p.amount, { cents: true }))}</td><td><small>${p.held ? `Not counted yet: ${esc(p.held)}. ` : ''}${esc(provText(p, d.files))}</small></td></tr>`).join('');
+  const rowsPayTotal = [...byJur].map(([j, t]) => (t.held
+    ? `<tr><td>Total ${esc(j)}</td><td class="r">Not totaled</td><td><small>${t.held} of ${t.held + t.n} payments wait on a question; no total until it is answered</small></td></tr>`
+    : `<tr><td>Total ${esc(j)}</td><td class="r">${esc(money(Math.round(t.sum * 100) / 100, { cents: true }))}</td><td><small>Sum of ${t.n} payments listed above</small></td></tr>`)).join('');
   const rowsPnl = d.pnl.map((p) => `<tr><td>${esc(p.entity)}</td><td>${esc(p.category)}</td><td class="r">${esc(money(p.total, { cents: true }))}</td><td><small>Sum of ${p.n} ledger lines from ${esc(String(p.file_ids || '').split(',').map((id) => d.files.get(id)?.name || id).join(', '))}</small></td></tr>`).join('');
   const rowsFig = d.figures.map((f) => `<tr><td>${esc(f.label)}</td><td class="r">${esc(money(f.v, { cents: true }))}</td><td><small>${esc([f.src_label, f.as_of].filter(Boolean).join(', '))}; ${esc(provText(f, d.files))}</small></td></tr>`).join('');
   const rowsFacts = d.facts.map((f) => `<tr><td>${esc(f.key)}</td><td>${esc(JSON.parse(f.value))}</td><td><small>${f.confirmed ? 'Confirmed by the owner' : 'From an import'}; ${esc(provText(f, d.files))}</small></td></tr>`).join('');
   const open = [
     ...d.items.filter((i) => i.status === 'missing' || i.status === 'expected').map((i) => `${esc(i.t)}: ${STATUS[i.status].toLowerCase()}, usually ${esc(i.note.toLowerCase())}`),
+    ...d.payments.filter((p) => p.held).map((p) => `${esc(p.jurisdiction)} payment of ${esc(p.date)} is not counted yet: ${esc(p.held)}`),
     ...unreadable.map((u) => `${esc(u.name)}: the stored copy could not be read, so it is not in this packet`),
     ...d.decisions.filter((x) => !x.done).map((x) => `Decision: ${esc(x.t)}${x.when ? ` (${esc(x.when)})` : ''}`),
   ];
@@ -171,14 +202,17 @@ export async function buildPacket(db, { year, clock, dataDir, key, tmpRoot = tmp
 export function streamPacket(res, packet) {
   return new Promise((resolve) => {
     let done = false;
-    const finish = () => { if (done) return; done = true; packet.cleanup().finally(resolve); };
+    let s = null;
+    const finish = () => { if (done) return; done = true; s?.destroy(); packet.cleanup().finally(resolve); };
+    // The client may have gone while the packet was being built: remove it without streaming.
+    if (res.destroyed || res.writableEnded || res.socket?.destroyed) { finish(); return; }
     res.writeHead(200, {
       'Content-Type': 'application/zip',
       'Content-Length': packet.size,
       'Content-Disposition': `attachment; filename="${packet.filename}"`,
       'Cache-Control': 'no-store',
     });
-    const s = createReadStream(packet.file);
+    s = createReadStream(packet.file);
     s.on('error', () => { res.destroy(); finish(); });
     res.on('close', finish);
     s.on('close', () => { if (res.writableEnded) finish(); });

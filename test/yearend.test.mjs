@@ -303,3 +303,44 @@ test('demo: the seeded store builds the year-end section through the same tables
     assert.deepEqual(names, ['index.html', 'documents/01-1098-Harbor-Bank-2026.txt', 'documents/02-Document-County-treasurer-2026.txt']);
   } finally { await srv.close(); await rm(dataDir, { recursive: true, force: true }); }
 });
+
+test('review fix: a client gone before streaming starts still removes the temp directory', async () => {
+  const s = await packetStore();
+  try {
+    const packet = await buildPacket(s.db, { year: 2026, clock: '2027-02-20', dataDir: s.dataDir, key: s.key, tmpRoot: s.tmpRoot });
+    assert.equal((await readdir(s.tmpRoot)).length, 1);
+    const res = fakeRes();
+    res.destroy();
+    await streamPacket(res, packet);
+    assert.deepEqual(await readdir(s.tmpRoot), []);
+    assert.equal(res.status, undefined, 'nothing was sent');
+  } finally { await s.cleanup(); }
+});
+
+test('review fix: payments a pending withholding conflict names, or an unreconciled W-2 and paystub slot, are not totaled', async () => {
+  const s = await packetStore();
+  try {
+    const ins = s.db.prepare("INSERT INTO tax_payments (jurisdiction, tax_year, date, amount, kind, file_id, parser, locator, source_slot, payer) VALUES (?, 2026, '2026-12-31', ?, 'withholding', 'wb', 'w2', 'box2', ?, ?)");
+    const a = Number(ins.run('federal', 12000, 'wh:acme:2026:federal:owner', 'w2:acme:2026:1').lastInsertRowid);
+    const b = Number(ins.run('federal', 13000, 'wh:acme:2026:federal:owner', 'w2:acme:2026:2').lastInsertRowid);
+    s.db.prepare("INSERT INTO confirm_items (kind, subject, question, options, context, status, created_at) VALUES ('withholding_conflict', 'x', 'Which?', '[]', ?, 'pending', '2027-02-01')")
+      .run(JSON.stringify({ first: { id: a }, second: { id: b } }));
+    ins.run('ny', 500, 'wh:north:2026:ny:owner', 'w2:north:2026:1');
+    ins.run('ny', 40, 'wh:north:2026:ny:owner', 'paystub:north:2026-06-30:1');
+    const res = fakeRes();
+    await streamPacket(res, await buildPacket(s.db, { year: 2026, clock: '2027-02-20', dataDir: s.dataDir, key: s.key, tmpRoot: s.tmpRoot }));
+    const html = readZip(res.body())[0].data.toString('utf8');
+    assert.ok(!html.includes('$26,234.50') && !html.includes('$25,000.00'), 'no total includes the disputed rows');
+    assert.match(html, /Total federal<\/td><td class="r">Not totaled<\/td><td><small>2 of 3 payments wait on a question/);
+    assert.match(html, /Total ny<\/td><td class="r">Not totaled/);
+    assert.ok(!html.includes('$540.00'));
+    assert.match(html, /federal payment of 2026-12-31 is not counted yet: two documents disagree/);
+    assert.match(html, /ny payment of 2026-12-31 is not counted yet: W-2 and paystubs from one employer not yet reconciled/);
+    // Once answered, the conflict no longer holds the federal total back.
+    s.db.prepare("UPDATE confirm_items SET status = 'answered'").run();
+    s.db.prepare('DELETE FROM tax_payments WHERE id = ?').run(a);
+    const res2 = fakeRes();
+    await streamPacket(res2, await buildPacket(s.db, { year: 2026, clock: '2027-02-20', dataDir: s.dataDir, key: s.key, tmpRoot: s.tmpRoot }));
+    assert.match(readZip(res2.body())[0].data.toString('utf8'), /Total federal<\/td><td class="r">\$14,234\.50<\/td><td><small>Sum of 2 payments/);
+  } finally { await s.cleanup(); }
+});
