@@ -40,6 +40,32 @@ export function wargameFigurePrefixes(wargameContent) {
   return prefixes;
 }
 
+// Why a war game could not be built, in plain language with no figures, and what unlocks it:
+// unlock 'files' (Add files) or 'answers' (Confirm). brief.mjs stores one per game that has no
+// model and no kept history under content wargame.notBuilt (Decide shows it).
+const GAME_NAME = Object.freeze({ salary: 'Salary war game', deferral: 'Invoice deferral war game' });
+const NEEDS = Object.freeze({
+  salary: {
+    inputs_changed: ['needs an S corp with profit on file.', 'files'],
+    'business.salaryRange': ['needs the salary range you would consider paying yourself.', 'answers'],
+    'retirement.otherPlanDeferrals': ['needs your deferrals to other workplace plans this year.', 'answers'],
+    'retirement.priorYearFicaWages': ["needs last year's Social Security wages from your business.", 'files'],
+    w2_plan_compensation_unknown: ['needs a W-2 from your business that shows box twelve.', 'files'],
+  },
+  deferral: {
+    inputs_changed: ['needs a business with income and its business bank account on file.', 'files'],
+    'business.cashBasis': ['needs to know whether your business uses cash basis accounting.', 'answers'],
+  },
+});
+
+export function notBuiltReason(name, code) {
+  const known = (NEEDS[name] || {})[code];
+  const [needs, unlock] = known
+    || (String(code).includes('.') ? ['needs a household answer it does not have yet.', 'answers']
+      : ['is on hold until the tax figures it builds on can be computed from your files.', 'files']);
+  return { code: String(code), text: `${GAME_NAME[name] || 'This war game'} ${needs}`, unlock };
+}
+
 // ---------------------------------------------------------------- salary (S3, T3, R6)
 
 function salaryGame(data, out, ctx) {
