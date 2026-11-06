@@ -17,9 +17,17 @@
    Until text arrives the pending block lists the run's progress labels; streamed text is raw model
    output rendered by streamHtml (escaped, minimal markdown, every number and token in a neutral
    .fx-checking span, never .fx-src or .fx-fig). The final grounded message replaces it. Only the
-   pending block is repainted per event; the page redraws once at the start and once at the end.
+   pending blocks are repainted per event; the page redraws once at the start and once at the end.
+   Recs: a question asked in a rec dialog is an Ask thread carrying recId (api.recThread is the
+   thread the dialog shows). This module is the one pending and streaming implementation for both:
+   design.js asks through askFromRec and renders recPendingHtml in the dialog, so the same question
+   in flight shows on the Ask page and in the dialog, and every pending block on screen streams.
+   A thread asked from a rec carries a context chip (a.h-askx-ctx, the rec title as escaped plain
+   text, data-go="rec") in its sidebar row, beside the row link, and in its header; design.js opens
+   the rec dialog from it. A thread whose rec no longer exists or is hidden has no chip.
    Scrolling: sending pins the owner's question under the thread header and the answer grows below
-   it; opening a thread lands on its latest question. */
+   it; opening a thread lands on its latest question. In the rec dialog the pending block is
+   scrolled into view inside the dialog. */
 
 import { ACTION_STATUS } from '/shared/rules.mjs';
 import { escapeUserText, money } from '/shared/tokens.mjs';
@@ -171,7 +179,8 @@ const fresh = () => ({
   side: false,        // phone: sidebar overlay open
   renaming: null,     // id of the thread whose title is being edited
   renameVal: '',
-  pending: null,      // { key, text, n } a question in flight (key null: a new thread)
+  pending: null,      // { key, recId, text, n } a question in flight (key null: a new thread;
+                      // recId: asked from that rec's dialog)
   pendingTitle: null, // { id, title } a rename in flight
   lastId: null,       // thread shown by the last render ('' for the empty state)
   lastN: 0            // its message count then
@@ -208,12 +217,22 @@ const newestFirst = (list) => list.slice().sort((a, b) => {
   return x === y ? 0 : x < y ? 1 : -1;
 });
 
+// The context chip of a thread asked from a rec that is still on the plan, or ''.
+function ctxChip(t) {
+  const { api, esc } = H;
+  const r = t && typeof t.recId === 'string' && t.recId ? api.rec(t.recId) : null;
+  if (!r || r.status === 'hidden') return '';
+  const id = esc(r.id);
+  return `<a class="h-askx-ctx" href="#/rec/${encodeURIComponent(r.id)}" data-go="rec" data-id="${id}">${esc(api.txt(r.title))}</a>`;
+}
+
 /* ---------- sidebar ---------- */
 
 function rowHtml(t, openId, mode) {
   const { esc } = H;
   const id = esc(t.id);
   const on = t.id === openId;
+  const ctx = ctxChip(t);
   const link = `<a class="h-askx-row${on ? ' on' : ''}" href="#/ask/${encodeURIComponent(t.id)}" data-thread="${id}"${on ? ' aria-current="page"' : ''}><span class="h-askx-t">${esc(titleOf(t))}</span></a>`;
   const ib = (act, label, ic) => `<button type="button" class="h-askx-ib" data-thread-act="${act}" data-tid="${id}" aria-label="${label}" title="${label}">${ic}</button>`;
   const tb = (act, label) => `<button type="button" class="h-askx-tb" data-thread-act="${act}" data-tid="${id}">${label}</button>`;
@@ -221,7 +240,7 @@ function rowHtml(t, openId, mode) {
   if (mode === 'trash') acts = tb('restore', 'Restore') + tb('delete', 'Delete forever');
   else if (mode === 'archived') acts = tb('restore', 'Restore') + tb('trash', 'Move to Trash');
   else acts = ib('archive', 'Archive', I.archive) + ib('trash', 'Move to Trash', I.trash);
-  return `<div class="h-askx-item${mode === 'main' ? '' : ' stack'}">${link}<div class="h-askx-acts">${acts}</div></div>`;
+  return `<div class="h-askx-item${mode === 'main' ? '' : ' stack'}${ctx ? ' ctx' : ''}">${link}${ctx}<div class="h-askx-acts">${acts}</div></div>`;
 }
 
 function sideHtml(openId) {
@@ -312,12 +331,35 @@ function pendingHtml(p) {
     + `<div class="h-askx-live" aria-live="polite">${liveHtml(p)}</div></div>`;
 }
 
-// Repaint only the live block of the pending question (no full redraw per streamed chunk).
+// Repaint only the live blocks of the pending question (no full redraw per streamed chunk). With
+// the rec dialog open over the Ask page both may show the same question, and both stream.
 function paintLive(p) {
   if (A.pending !== p || !H.root) return;
-  const el = H.root.querySelector('.h-askx-pend .h-askx-live');
-  if (el) el.innerHTML = liveHtml(p);
+  const html = liveHtml(p);
+  H.root.querySelectorAll('.h-askx-pend .h-askx-live').forEach((el) => { el.innerHTML = html; });
 }
+
+// The pending question, or null once its turn is stored (the final answer replaces the block).
+function livePending() {
+  const p = A.pending;
+  if (!p) return null;
+  // A new thread asked from a rec is stored once the rec has an attached thread with the turn.
+  const th = !p.key && p.recId ? H.api.recThread(p.recId) : null;
+  const k = p.key || (th ? keyOf(th) : null);
+  return k && meCount(k) > p.n ? null : p;
+}
+
+// The pending block for a rec dialog: the question in flight when it was asked from this rec or
+// into the thread the dialog shows (threadKey, possibly asked on the Ask page), else ''.
+export function recPendingHtml(recId, threadKey) {
+  if (!H || !H.api) return '';
+  const p = livePending();
+  if (!p || !((recId && p.recId === recId) || (threadKey && p.key === threadKey))) return '';
+  return pendingHtml(p);
+}
+
+// True while a question is in flight (one at a time, from the Ask page or a rec dialog).
+export function askBusy() { return !!A.pending; }
 
 function streamEvent(p, name, data) {
   if (A.pending !== p) return;
@@ -342,7 +384,8 @@ function threadHtml(th) {
   const msgs = th ? H.arr(H.api.conversation(key)) : [];
   let p = A.pending;
   if (p && p.key && p.key === key && meCount(key) > p.n) p = null;
-  const mine = p && (th ? p.key === key : p.key == null) ? p : null;
+  // This thread's question, or a new thread started on this page (not one asked from a rec).
+  const mine = p && (th ? p.key === key : p.key == null && !p.recId) ? p : null;
   const trashed = !!(th && th.trashedAt);
   const title = th && A.renaming === th.id
     ? `<input class="h-askx-rename" type="text" maxlength="60" value="${esc(A.renameVal)}" placeholder="${NEW_TITLE}" aria-label="Conversation name" autocomplete="off" data-draft="rename">`
@@ -353,7 +396,7 @@ function threadHtml(th) {
     ? `<div class="h-askx-trashbar"><p class="h-askx-trashed">In Trash. Restore it to continue.</p><button type="button" class="h-btn" data-thread-act="restore" data-tid="${esc(th.id)}">${icon('back')}Restore</button></div>`
     : composeHtml(key, th ? key : NEW_DRAFT, true, !!A.pending);
   return `<section class="h-askx-main">
-    <header class="h-askx-head">${menuBtn()}${title}${tag}${rename}</header>
+    <header class="h-askx-head">${menuBtn()}${title}${tag}${th ? ctxChip(th) : ''}${rename}</header>
     <div class="h-askx-msgs">${thread(msgs)}${mine ? pendingHtml(mine) : ''}</div>
     ${foot}
   </section>`;
@@ -372,7 +415,7 @@ export function render(id) {
     A.lastN = n;
     // Opening a thread lands on its latest question; a thread just created by a streamed answer
     // keeps the place the owner was reading.
-    if (th && !(A.pending && A.pending.streamed && A.pending.key == null)) queueMicrotask(scrollToLastMine);
+    if (th && !(A.pending && A.pending.streamed && A.pending.key == null && !A.pending.recId)) queueMicrotask(scrollToLastMine);
   } else if (th && n > A.lastN) {
     A.lastN = n;
     // A streamed answer was read in place while it arrived; keep the owner where they are.
@@ -380,7 +423,7 @@ export function render(id) {
   } else {
     A.lastN = n;
   }
-  const main = th || (A.pending && A.pending.key == null) ? threadHtml(th) : emptyHtml();
+  const main = th || (A.pending && A.pending.key == null && !A.pending.recId) ? threadHtml(th) : emptyHtml();
   return H.shell(`<div class="h-askx">${sideHtml(shown)}${main}</div>`, 'ask');
 }
 
@@ -399,6 +442,17 @@ function scrollToLastMine() {
   const head = H.root.querySelector('.h-askx-head');
   const under = head ? head.getBoundingClientRect().bottom : 0;
   try { window.scrollTo(0, Math.max(0, el.getBoundingClientRect().top + window.scrollY - under - 16)); } catch (e) { /* ignore */ }
+}
+
+// The rec dialog: bring the pending block into view inside the dialog (the page under it stays).
+function scrollDialogPend() {
+  const el = H.root && H.root.querySelector('.h-dlg .h-askx-pend');
+  if (el) try { el.scrollIntoView({ block: 'nearest' }); } catch (e) { /* ignore */ }
+}
+
+function focusRecInput(recId) {
+  const el = H.root && H.root.querySelector(`.h-dlg form.h-compose[data-free="rec:${CSS.escape(recId)}"] input[name="q"]`);
+  if (el) el.focus();
 }
 
 function focusInput() {
@@ -420,31 +474,46 @@ export function newConversation() {
 
 /* ---------- asking ---------- */
 
-// Shows the question at once and keeps the composer read-only until the answer lands. On failure
-// the core keeps the old state and shows its error line; the typed text goes back in the composer.
-function sendAsk({ key, text, draftKey, starter, refocus }) {
-  if (A.pending || !text) return;
-  const pend = { key: key || null, text, n: key ? meCount(key) : 0, steps: [], stream: '', streamed: false };
+// Shows the question at once and keeps the composer read-only until the answer lands. text is
+// what the pending block shows; questionId (a starter id, or an index into rec.qa with recId) asks
+// the canned question instead of the text. key null starts a new thread, asked from recId when set.
+// On failure the core keeps the old state and shows its error line; typed text goes back in the
+// composer. Returns false when nothing was sent.
+function sendAsk({ key, recId, text, questionId, draftKey, refocus }) {
+  if (A.pending || !text) return false;
+  const k = key || null;
+  const rid = recId || null;
+  const hasQ = questionId != null && questionId !== '';
+  const pend = { key: k, recId: rid, text, n: k ? meCount(k) : 0, steps: [], stream: '', streamed: false };
   A.pending = pend;
   if (draftKey) H.ui.draft[draftKey] = '';
   H.draw();
-  // The question goes to the top of the view; the answer grows below it.
-  scrollToLastMine();
+  // The question goes to the top of the view (inside the dialog for a rec); the answer grows below.
+  if (rid) scrollDialogPend(); else scrollToLastMine();
   const api = H.api;
   const live = api.engineOn() && typeof api.askStream === 'function';
   const onEvent = (name, data) => streamEvent(pend, name, data);
-  const q = starter ? { questionId: starter } : { text };
+  const q = hasQ ? { questionId } : { text };
   const req = live
-    ? (key ? api.askStream(text, key, onEvent) : api.newThreadStream(q, onEvent))
-    : (key ? api.askFree(text, key) : api.newThread(q));
+    ? (k ? api.askStream(q, k, onEvent) : api.newThreadStream({ ...q, recId: rid }, onEvent))
+    : (k ? (hasQ ? api.ask(questionId, k) : api.askFree(text, k)) : api.newThread({ ...q, recId: rid }));
   Promise.resolve(req).then((res) => {
     if (A.pending === pend) A.pending = null;
     if (!H.api) return;
-    const ok = key ? meCount(key) > pend.n : !!res;
-    if (!ok && draftKey && !starter && !H.ui.draft[draftKey]) H.ui.draft[draftKey] = text;
+    const ok = k ? meCount(k) > pend.n : !!res;
+    if (!ok && draftKey && !hasQ && !H.ui.draft[draftKey]) H.ui.draft[draftKey] = text;
     H.draw();
-    if (ok && refocus) focusInput();
+    if (ok && refocus) { if (rid) focusRecInput(rid); else focusInput(); }
   });
+  return true;
+}
+
+// A question from a rec dialog: key is the rec's attached thread (null starts a new thread asked
+// from the rec), text the typed or chip text, questionId the rec.qa index for a chip. Returns false
+// when another question is still in flight.
+export function askFromRec({ recId, key, text, questionId, draftKey, refocus }) {
+  if (!H || !H.api || !recId) return false;
+  return sendAsk({ key: key || null, recId, text: String(text || '').trim(), questionId, draftKey, refocus });
 }
 
 /* ---------- rename ---------- */
@@ -494,6 +563,8 @@ export function onClick(e) {
   if (proposalClick(e)) return true;
   const root = H.root;
   if (!root || !H.api) return false;
+  // A context chip opens the rec dialog (design.js, data-go="rec"); the phone sidebar closes first.
+  if (A.side && e.target.closest('a.h-askx-ctx')) A.side = false;
   const t = e.target.closest(ASK_SEL);
   // A click anywhere else while renaming saves the name, like leaving the field.
   if (A.renaming && !e.target.closest('input.h-askx-rename') && !(t && t.dataset.threadAct === 'rename')) commitRename(false);
@@ -502,7 +573,7 @@ export function onClick(e) {
   if (d.starter != null) {
     e.preventDefault();
     const s = H.arr(H.api.askStarters()).find((x) => String(x.id) === d.starter);
-    if (s) sendAsk({ key: null, text: s.q, starter: String(s.id), refocus: false });
+    if (s) sendAsk({ key: null, text: s.q, questionId: String(s.id), refocus: false });
     return true;
   }
   if (d.threadAct) {

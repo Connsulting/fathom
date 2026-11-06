@@ -549,11 +549,12 @@ function asked(msgs, q) {
   return msgs.some((m) => m.role === 'me' && (m.html || '').replace(/<[^>]+>/g, '').trim() === qt);
 }
 
-function composer(key, placeholder) {
+// busy: a question is in flight; the field is read-only (it keeps focus) and Send is disabled.
+function composer(key, placeholder, busy = false) {
   const off = !api.engineOn();
-  return `<form class="h-compose" data-free="${esc(key)}">
-    <input name="q" type="text" autocomplete="off" placeholder="${esc(placeholder)}" value="${esc(ui.draft[key] || '')}" data-draft="${esc(key)}">
-    <button type="submit" class="h-btn pri" aria-label="Send">${icon('send')}</button>
+  return `<form class="h-compose" data-free="${esc(key)}"${busy ? ' aria-busy="true"' : ''}>
+    <input name="q" type="text" autocomplete="off" placeholder="${esc(placeholder)}" value="${esc(ui.draft[key] || '')}" data-draft="${esc(key)}"${busy ? ' readonly' : ''}>
+    <button type="submit" class="h-btn pri" aria-label="Send"${busy ? ' disabled' : ''}>${icon('send')}</button>
   </form>${off ? '<p class="h-mute sm">Engine off. Answers are paused until it is back on.</p>' : ''}`;
 }
 
@@ -567,7 +568,13 @@ function dlgHtml(id) {
   const frame = (kick, body) => `<div class="h-dlg-back" data-dlg="close"></div><div class="h-dlg" role="dialog" aria-modal="true" aria-labelledby="h-dlg-t" tabindex="-1"><div class="h-dlg-bar"><div class="h-kicker">${kick}</div>${close}</div><div class="h-dlg-body">${body}</div></div>`;
   const r = recById(id);
   if (!r) return frame('Plan', `<h1 id="h-dlg-t" class="h-dlg-title">Not on your plan</h1><p class="h-mute">That recommendation is not on your plan right now.</p>`);
-  const msgs = arr(api.conversation(r.id));
+  // The conversation is the rec's attached Ask thread (none until the first question, and none
+  // again after Start over); a question in flight shows as the Ask page's pending block.
+  const th = api.recThread(r.id);
+  const tkey = th ? th.key || `ask:${th.id}` : '';
+  const msgs = tkey ? arr(api.conversation(tkey)) : [];
+  const pend = chatScreen.recPendingHtml(r.id, tkey);
+  const busy = chatScreen.askBusy();
   const tasks = arr(r.tasks);
   const doneN = tasks.filter((t) => t.done).length;
   const ny = api.needsYou();
@@ -584,11 +591,14 @@ function dlgHtml(id) {
 
   const adv = advisorScreen.recBox(r);
 
-  const chips = arr(r.qa).map((q, i) => asked(msgs, q.q) ? '' : `<button type="button" class="h-chip" data-askrec="${esc(r.id)}" data-i="${i}">${T(q.q)}</button>`).join('');
+  const chips = arr(r.qa).map((q, i) => asked(msgs, q.q) ? '' : `<button type="button" class="h-chip" data-askrec="${esc(r.id)}" data-i="${i}"${busy ? ' disabled' : ''}>${T(q.q)}</button>`).join('');
   const wg = r.scenario && api.s.wargame?.[r.scenario]?.status !== 'unavailable' ? `<a class="h-wglink" href="${href('wargame', { name: r.scenario })}" data-go="wargame" data-name="${esc(r.scenario)}"><div><b>War-game this</b><span>${T(api.s.wargame?.[r.scenario]?.title || '')}</span></div>${icon('arrow')}</a>` : '';
 
-  const conv = `<section class="h-sec h-conv"><div class="h-sec-h"><h2>Ask about this</h2><div class="h-sec-aside">Answers use the figures below</div></div>
-    ${thread(msgs, r.id)}${chips ? `<div class="h-chips">${chips}</div>` : ''}${composer('rec:' + r.id, 'Ask about this')}</section>`;
+  const convAside = th
+    ? `<div class="h-sec-aside h-conv-acts"><a class="h-conv-open" href="${href('ask', { id: th.id })}" data-go="ask" data-id="${esc(th.id)}">Open in Ask</a><button type="button" class="h-conv-reset" data-recstart="${esc(r.id)}"${busy ? ' disabled' : ''}>Start over</button></div>`
+    : '<div class="h-sec-aside">Answers use the figures below</div>';
+  const conv = `<section class="h-sec h-conv"><div class="h-sec-h"><h2>Ask about this</h2>${convAside}</div>
+    ${thread(msgs, r.id)}${pend}${chips ? `<div class="h-chips">${chips}</div>` : ''}${composer('rec:' + r.id, 'Ask about this', busy)}</section>`;
 
   return frame(`${T(TRIGGER[r.trigger] || r.trigger || '')}<span>${T(r.triggerText)}</span>`, `<div class="h-rec-head">
       <h1 id="h-dlg-t" class="h-dlg-title">${T(r.title)}</h1>
@@ -1272,7 +1282,9 @@ function syncDialog(r, page) {
     lockBody(true);
     const body = host.querySelector('.h-dlg-body');
     if (body) body.scrollTop = top;
-    const n = arr(api.conversation(id)).length;
+    // Messages of the rec's attached thread: a landed answer scrolls to its question.
+    const rth = api.recThread(id);
+    const n = rth ? arr(api.conversation(rth.key || `ask:${rth.id}`)).length : 0;
     const prev = ui.msgN[id];
     ui.msgN[id] = n;
     if (prev != null && n > prev) {
@@ -1422,7 +1434,7 @@ function onClick(e) {
     goalClick(gt);
     return;
   }
-  const sel = '[data-go],[data-act],[data-askrec],[data-wg],[data-onboard],[data-savenote],[data-modal],[data-whatif],[data-packtoggle],[data-decide],[data-revisit],[data-more],[data-dlg]';
+  const sel = '[data-go],[data-act],[data-askrec],[data-recstart],[data-wg],[data-onboard],[data-savenote],[data-modal],[data-whatif],[data-packtoggle],[data-decide],[data-revisit],[data-more],[data-dlg]';
   let t = e.target.closest(`${sel},.fx-fig`);
   if (!t || !root.contains(t)) return;
   // A figure inside a button or link is part of its label: the control takes the click, and the
@@ -1441,6 +1453,7 @@ function onClick(e) {
   }
   if (d.act) { e.preventDefault(); api.act(d.rec, d.act, d.act === 'task' ? Number(d.arg) : d.arg); return; }
   if (d.askrec) { askRec(d.askrec, Number(d.i)); return; }
+  if (d.recstart) { e.preventDefault(); startOver(d.recstart); return; }
   if (d.whatif) { e.preventDefault(); const cur = routeNow(); api.whatIf(d.whatif); if (!(cur.name === 'packs' && cur.params?.id === d.whatif)) api.go('packs', { id: d.whatif }); return; }
   if (d.packtoggle) { api.packToggle(d.packtoggle); return; }
   if (d.decide) { e.preventDefault(); const gm = api.s.decisions?.find((x) => x.id === d.decide)?.wargame; api.decide(d.decide, gm ? pick(gm) : undefined); return; }
@@ -1482,8 +1495,21 @@ function saveNote() {
   });
 }
 
+// A follow-up chip: the rec's canned question i, asked into the rec's attached thread (a new
+// thread asked from the rec when none is attached). The chip text is what the pending block shows.
 function askRec(recId, i) {
-  api.ask(String(i), recId);
+  const r = recById(recId);
+  const q = r && arr(r.qa)[i];
+  if (!q) return;
+  const th = api.recThread(recId);
+  chatScreen.askFromRec({ recId, key: th ? th.key || `ask:${th.id}` : null, text: api.txt(q.q), questionId: i });
+}
+
+// Start over: the dialog lets go of its thread (it stays in Ask) and the composer starts empty.
+function startOver(recId) {
+  if (chatScreen.askBusy()) return;
+  ui.draft['rec:' + recId] = '';
+  api.startOver(recId);
 }
 
 function onSubmit(e) {
@@ -1496,8 +1522,15 @@ function onSubmit(e) {
     const key = f.dataset.free;
     const v = (f.q?.value || '').trim();
     if (!v) return;
+    if (key.startsWith('rec:')) {
+      // Through the Ask page's pending and streaming path; it clears the draft once it sends.
+      const recId = key.slice(4);
+      const th = api.recThread(recId);
+      chatScreen.askFromRec({ recId, key: th ? th.key || `ask:${th.id}` : null, text: v, draftKey: key, refocus: document.activeElement === f.q });
+      return;
+    }
     ui.draft[key] = '';
-    api.askFree(v, key.startsWith('rec:') ? key.slice(4) : key);
+    api.askFree(v, key);
   }
 }
 
