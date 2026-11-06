@@ -20,8 +20,9 @@ const STARTERS = [
   ['scorp', 'How is the S corp doing this year?'],
   ['yearend', 'What should we do before the year ends?']
 ];
-const NEW_TITLE = 'New conversation';
 const FREE_Q = 'Give me a quick read on where the household stands right now';
+// A thread is named after its first answer; the fake engine's title is the first question cut to 48 characters.
+const FREE_TITLE = 'Give me a quick read on where the household';
 const GROUPS = ['Today', 'Yesterday', 'Previous 7 days', 'Older'];
 
 // Grouping compares dates against the app clock; pin the browser zone so a thread stamped late in
@@ -213,7 +214,8 @@ test('AC2: a starter chip sends; the owner bubble is right-aligned and the compo
 
   await expect(page.locator('.h-askx-empty')).toHaveCount(0);
   await expect(page.locator('h1.h-askx-hello')).toHaveCount(0);
-  await expect(title(page)).toHaveText(NEW_TITLE);
+  // Named after the first answer (the fake engine's title is the starter question itself).
+  await expect(title(page)).toHaveText(text);
 
   // Owner bubble hugs the right edge of the message column.
   const col = await box(msgs(page));
@@ -290,7 +292,7 @@ test('AC1: the Ask button starts a new conversation and the earlier one is liste
   const r = today.locator(`a.h-askx-row[data-thread="${id}"]`);
   await expect(r).toBeVisible();
   await expect(r).toHaveAttribute('href', `#/ask/${id}`);
-  await expect(r.locator('span.h-askx-t')).toHaveText(NEW_TITLE);
+  await expect(r.locator('span.h-askx-t')).toHaveText(FREE_TITLE);
   await expect(r).not.toHaveClass(/\bon\b/);
 });
 
@@ -445,7 +447,7 @@ test('AC1: rename by double click or the Rename button; Enter saves, Escape canc
   const name = 'Quarterly planning notes';
   const t = await newThread(request, FREE_Q);
   await openThread(page, t.id);
-  await expect(title(page)).toHaveText(NEW_TITLE);
+  await expect(title(page)).toHaveText(FREE_TITLE);
 
   await title(page).dblclick();
   const input = page.locator('header.h-askx-head input.h-askx-rename');

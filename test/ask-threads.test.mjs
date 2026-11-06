@@ -26,7 +26,7 @@ const T2 = { timeout: SERVER_TIMEOUT * 2 };
 const FAKE = { FATHOM_ENGINE: 'fake' };
 const REAL = { FATHOM_DEMO: '0', FATHOM_ENGINE: 'off' };
 const THREAD_KEY = /^ask:[a-f0-9]{12}$/;
-const THREAD_FIELDS = ['archivedAt', 'createdAt', 'id', 'key', 'lastAt', 'title', 'titleSource', 'trashedAt', 'turns'];
+const THREAD_FIELDS = ['archivedAt', 'createdAt', 'id', 'key', 'lastAt', 'recDetachedAt', 'recId', 'title', 'titleSource', 'trashedAt', 'turns'];
 const DAY = 24 * 60 * 60 * 1000;
 
 async function ok(resPromise) {
@@ -126,6 +126,8 @@ test('AC9 POST /api/threads creates an empty thread; list, open and the scenario
   assert.equal(th.turns, 0);
   assert.equal(th.archivedAt, null);
   assert.equal(th.trashedAt, null);
+  assert.equal(th.recId, null, 'a plain Ask thread has no rec context');
+  assert.equal(th.recDetachedAt, null);
   assert.ok(th.createdAt && th.lastAt);
 
   const lists = await listThreads(s);
@@ -229,7 +231,8 @@ test('AC9 on a real store the thread routes need the owner login', T, () => with
 
 test('AC9 POST /api/ask requires a key and the bare ask key is gone', T, () => withServer({ env: FAKE }, async s => {
   await fails(postJson(s.baseUrl, '/api/ask', { text: 'hello' }), 400);
-  await fails(postJson(s.baseUrl, '/api/ask', { key: 'ask', text: 'hello' }), 404);
+  // Neither an Ask thread key nor a pack key.
+  await fails(postJson(s.baseUrl, '/api/ask', { key: 'ask', text: 'hello' }), 400);
   await fails(postJson(s.baseUrl, '/api/ask', { key: 'ask:0123456789ab', text: 'hello' }), 404);
   const n = await readDb(s.dbFile, db => db.prepare('SELECT count(*) AS n FROM conversations WHERE key = ? OR key LIKE ?').get('ask', 'ask:%').n);
   assert.equal(n, 0, 'refused asks create no conversation');
@@ -253,7 +256,8 @@ test('AC6 migrating a 007 store moves the ask conversation into one thread with 
       const convs = db.prepare('SELECT * FROM conversations ORDER BY key').all().map(r => ({ ...r }));
       assert.ok(!convs.some(c => c.key === 'ask'), 'the ask row is gone');
       assert.equal(db.prepare("SELECT count(*) AS n FROM messages WHERE conversation_key = 'ask'").get().n, 0);
-      const threads = convs.filter(c => THREAD_KEY.test(c.key));
+      // 016 also moves the summary-only rec conversation into an archived, detached thread.
+      const threads = convs.filter(c => THREAD_KEY.test(c.key) && c.rec_id == null);
       assert.equal(threads.length, 1, JSON.stringify(convs.map(c => c.key)));
       const th = threads[0];
       assert.deepEqual(messagesOf(db, th.key), OLD_ASK, 'same messages, same order, text and ts');
@@ -264,10 +268,16 @@ test('AC6 migrating a 007 store moves the ask conversation into one thread with 
       assert.equal(th.archived_at, null);
       assert.equal(th.trashed_at, null);
 
-      const rec = convs.find(c => c.key === 'deferral');
-      assert.equal(rec.created_at, REC_CREATED, 'the rec conversation is untouched');
-      assert.deepEqual(messagesOf(db, 'deferral'), recBefore);
+      assert.ok(!convs.some(c => c.key === 'deferral'), 'no rec-keyed conversation remains after 016');
+      const rec = convs.find(c => c.rec_id === 'deferral');
+      assert.match(rec.key, THREAD_KEY);
+      assert.equal(rec.created_at, REC_CREATED, 'the rec thread keeps the rec conversation created_at');
+      assert.deepEqual(messagesOf(db, rec.key), recBefore, 'its opening summary message moved unchanged');
       assert.equal(rec.last_at, REC_MSG.ts, 'other conversations get last_at from their newest message');
+      assert.equal(typeof rec.archived_at, 'string', 'a summary-only rec conversation becomes archived');
+      assert.equal(typeof rec.rec_detached_at, 'string', 'and detached');
+      assert.equal(rec.title, 'Opening summary');
+      assert.equal(rec.title_source, 'auto');
       const pack = convs.find(c => c.key === 'pack:giving');
       assert.equal(pack.last_at, '2026-10-01T07:00:00.000Z', 'or from created_at when empty');
       assert.equal(db.prepare('SELECT count(*) AS n FROM messages').get().n, OLD_ASK.length + 1, 'no message is lost or added');
@@ -291,9 +301,13 @@ test('AC6 an empty ask conversation migrates to no thread, and a store without o
       const db = openDb(file);
       try {
         migrate(db);
-        const keys = db.prepare('SELECT key FROM conversations ORDER BY key').all().map(r => r.key);
-        assert.deepEqual(keys, ['deferral'], `${name}: only the rec conversation remains`);
-        assert.deepEqual(messagesOf(db, 'deferral'), [REC_MSG], `${name}: rec messages kept`);
+        const rows = db.prepare('SELECT key, rec_id, archived_at, rec_detached_at FROM conversations ORDER BY key').all().map(r => ({ ...r }));
+        assert.equal(rows.length, 1, `${name}: only the rec conversation remains, as a thread (016): ${JSON.stringify(rows)}`);
+        assert.match(rows[0].key, THREAD_KEY);
+        assert.equal(rows[0].rec_id, 'deferral', `${name}: the thread names its rec`);
+        assert.equal(typeof rows[0].archived_at, 'string', `${name}: summary only, so archived`);
+        assert.equal(typeof rows[0].rec_detached_at, 'string', `${name}: and detached`);
+        assert.deepEqual(messagesOf(db, rows[0].key), [REC_MSG], `${name}: rec messages kept`);
         assert.deepEqual(migrate(db).applied, [], `${name}: a second migrate is a no-op`);
       } finally {
         db.close();
@@ -304,22 +318,26 @@ test('AC6 an empty ask conversation migrates to no thread, and a store without o
   }
 });
 
-test('AC6 rec and pack conversations never appear as threads', T, () => withServer({ env: FAKE }, async s => {
-  await ok(postJson(s.baseUrl, '/api/ask', { key: 'deferral', questionId: 0 }));
+test('AC6 pack conversations never appear as threads; a rec question is a thread carrying its rec', T, () => withServer({ env: FAKE }, async s => {
   await ok(postJson(s.baseUrl, '/api/packs/giving/whatif', {}));
   const follow = await ok(postJson(s.baseUrl, '/api/ask', { key: 'pack:giving', text: 'What would that change for us' }));
-  assert.ok(follow.scenario.live.conversations.deferral.length >= 3, 'the rec conversation has the question');
   assert.ok(follow.scenario.live.conversations['pack:giving'].length >= 4, 'the pack conversation has the follow up');
   const sc = await getScenario(s.baseUrl);
-  assert.deepEqual(sc.live.threads, [], 'no threads from rec or pack conversations');
-  const lists = await listThreads(s);
-  assert.deepEqual(allIds(lists), []);
+  assert.deepEqual(sc.live.threads, [], 'no threads from pack conversations');
+  assert.deepEqual(allIds(await listThreads(s)), []);
 
+  const recAsk = await newThread(s, { recId: 'deferral', questionId: 0 });
+  assert.match(recAsk.thread.key, THREAD_KEY);
+  assert.equal(recAsk.thread.recId, 'deferral');
+  assert.equal(recAsk.thread.recDetachedAt, null);
+  assert.ok(!('deferral' in recAsk.scenario.live.conversations), 'no rec-keyed conversation');
   const { thread } = await newThread(s, { text: 'Synthetic thread question' });
+  assert.equal(thread.recId, null);
   const after = await getScenario(s.baseUrl);
-  assert.deepEqual(after.live.threads.map(x => x.key), [thread.key]);
+  assert.deepEqual(new Set(after.live.threads.map(x => x.key)), new Set([recAsk.thread.key, thread.key]));
   assert.ok(after.live.threads.every(x => THREAD_KEY.test(x.key)));
-  assert.deepEqual(allIds(await listThreads(s)), [thread.id]);
+  assert.equal(after.live.threads.find(x => x.key === recAsk.thread.key).recId, 'deferral');
+  assert.deepEqual(new Set(allIds(await listThreads(s))), new Set([recAsk.thread.id, thread.id]));
 }));
 
 test('AC6 the migrated thread is first in the active list of a restarted 007 store', T2, async () => {
@@ -672,11 +690,11 @@ test('AC4 purgeTrash deletes threads trashed 30 or more days ago and their messa
 const QUARTERLY = 'How should we think about the quarterly estimates';
 const QUARTERLY_FALLBACK = 'How should we think about the quarterly';
 
-test('AC3 the fake engine names a thread once after the second turn', T, () => withServer({ env: FAKE }, async s => {
+test('AC3 the fake engine names a thread once after the first turn', T, () => withServer({ env: FAKE }, async s => {
   const first = await newThread(s, { text: QUARTERLY });
-  assert.equal(first.thread.title, null, 'the UI shows New conversation after turn 1');
-  assert.equal((await openThread(s, first.thread.id)).thread.title, null);
-  assert.equal(await titleSpend(s.dbFile), 0);
+  assert.equal(first.thread.title, QUARTERLY_FALLBACK, 'the response of the first answer already carries the title');
+  assert.equal(first.thread.titleSource, 'auto');
+  assert.equal(await titleSpend(s.dbFile), 1);
 
   await ask(s, first.thread.key, 'Synthetic second question');
   const named = (await openThread(s, first.thread.id)).thread;
@@ -691,11 +709,11 @@ test('AC3 the fake engine names a thread once after the second turn', T, () => w
   assert.equal((await openThread(s, first.thread.id)).thread.title, QUARTERLY_FALLBACK);
 }));
 
-test('AC3 with the engine off the second turn names the thread with the fallback and spends nothing', T, () => withServer({ env: FAKE }, async s => {
+test('AC3 with the engine off the first turn names the thread with the fallback and spends nothing', T, () => withServer({ env: FAKE }, async s => {
   await ok(postJson(s.baseUrl, '/api/engine', { on: false }));
   const first = await newThread(s, { text: QUARTERLY });
   assert.equal(first.message.notice, true);
-  assert.equal(first.thread.title, null);
+  assert.equal(first.thread.title, QUARTERLY_FALLBACK, 'a notice reply completes the turn');
   await ask(s, first.thread.key, 'Synthetic second question');
   const named = (await openThread(s, first.thread.id)).thread;
   assert.equal(named.title, QUARTERLY_FALLBACK);
@@ -704,10 +722,12 @@ test('AC3 with the engine off the second turn names the thread with the fallback
 }));
 
 test('AC3 a manual rename wins over automatic naming', T, () => withServer({ env: FAKE }, async s => {
-  const first = await newThread(s, { text: QUARTERLY });
+  // Renamed before any turn, so the first completed turn finds the title source already set.
+  const first = await newThread(s, {});
   const renamed = await ok(threadAct(s, first.thread.id, 'rename', { title: '  Synthetic manual name  ' }));
   assert.equal(renamed.thread.title, 'Synthetic manual name');
   assert.equal(renamed.thread.titleSource, 'manual');
+  await ask(s, first.thread.key, QUARTERLY);
   await ask(s, first.thread.key, 'Synthetic second question');
   await ask(s, first.thread.key, 'Synthetic third question');
   const th = (await openThread(s, first.thread.id)).thread;

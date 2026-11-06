@@ -296,16 +296,17 @@ describe('ask', () => {
     });
   });
 
-  test('a rec question by index answers in the rec conversation', T, () => withServer({}, async s => {
+  test('a rec question by index answers in a new thread asked from the rec', T, () => withServer({}, async s => {
     const rec = demo.recs.find(x => x.id === 'deferral');
-    const r = await ok(postJson(s.baseUrl, '/api/ask', { key: 'deferral', questionId: 0 }));
+    const r = await ok(newThread(s, { recId: 'deferral', questionId: 0 }));
+    assert.equal(r.thread.recId, 'deferral');
     assert.equal(r.message.role, 'fathom');
     assert.equal(r.message.notice, false);
     assert.ok(r.message.provenance, 'the answer carries provenance');
     assert.ok(r.message.refs.includes('deferral'));
-    const conv = r.scenario.live.conversations.deferral;
-    assert.equal(conv.length, 3, 'opening message plus question and answer');
-    assert.ok(conv[1].text.includes(rec.qa[0].q));
+    const conv = r.scenario.live.conversations[r.thread.key];
+    assert.equal(conv.length, 2, 'question and answer');
+    assert.ok(conv[0].text.includes(rec.qa[0].q));
   }));
 
   test('free text matching a question answers with its refs, other free text answers from the summary', T, () => withServer({}, async s => {
@@ -339,8 +340,9 @@ describe('ask', () => {
     await fails(postJson(s.baseUrl, '/api/ask', { key, text: 'x'.repeat(4001) }), 400);
     const unknownQ = await postJson(s.baseUrl, '/api/ask', { key, questionId: 'no-such-question' });
     assert.ok([400, 404].includes(unknownQ.status), `unknown question -> ${unknownQ.status}`);
-    const unknownKey = await postJson(s.baseUrl, '/api/ask', { key: 'no-such-rec', text: 'hello' });
-    assert.ok([400, 404].includes(unknownKey.status), `unknown conversation -> ${unknownKey.status}`);
+    // A key that is neither an Ask thread nor a pack conversation (a bare rec id included) is 400.
+    await fails(postJson(s.baseUrl, '/api/ask', { key: 'no-such-rec', text: 'hello' }), 400);
+    await fails(postJson(s.baseUrl, '/api/ask', { key: 'deferral', text: 'hello' }), 400);
     for (const body of [{ questionId: 'yearend', text: 'both' }, { text: '' }, { text: '   ' }, { text: 7 }, { text: 'x'.repeat(4001) }]) {
       await fails(newThread(s, body), 400);
     }

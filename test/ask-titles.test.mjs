@@ -202,17 +202,59 @@ test('AC3 createThread makes an untitled ask thread', async t => {
   assert.deepEqual(rowOf(db, thread.key), { title: null, title_source: null });
 });
 
-test('AC3 nameThread does nothing before two owner messages each have a reply', async t => {
+test('AC3 nameThread does nothing before the first owner message has a reply', async t => {
   const { db, thread, add } = await namingStore(t);
   const { engine, calls } = stubEngine({ title: 'Quarterly estimate planning' });
   assert.equal(await nameThread({ db, engine, key: thread.key, clock: CLOCK }), null, 'no messages');
   add(thread.key, 'me', FIRST_Q);
-  add(thread.key, 'fathom', '<p>Synthetic estimate answer one</p>');
-  assert.equal(await nameThread({ db, engine, key: thread.key, clock: CLOCK }), null, 'one turn');
-  add(thread.key, 'me', 'Synthetic estimate question two');
-  assert.equal(await nameThread({ db, engine, key: thread.key, clock: CLOCK }), null, 'second question has no reply yet');
+  assert.equal(await nameThread({ db, engine, key: thread.key, clock: CLOCK }), null, 'the first question has no reply yet');
   assert.equal(calls.length, 0);
   assert.deepEqual(rowOf(db, thread.key), { title: null, title_source: null });
+  add(thread.key, 'fathom', '<p>Synthetic estimate answer one</p>');
+  const out = await nameThread({ db, engine, key: thread.key, clock: CLOCK });
+  assert.ok(out != null, 'one completed turn names the thread');
+  assert.equal(calls.length, 1);
+  assert.deepEqual(rowOf(db, thread.key), { title: 'Quarterly estimate planning', title_source: 'auto' });
+});
+
+test('AC3 nameThread names a thread after its first completed turn', async t => {
+  // Model title after one owner message and one reply.
+  {
+    const { db, thread, add } = await namingStore(t);
+    add(thread.key, 'me', FIRST_Q);
+    add(thread.key, 'fathom', '<p>Synthetic estimate answer one</p>');
+    const { engine, calls } = stubEngine({ title: 'Quarterly estimate planning' });
+    const out = await nameThread({ db, engine, key: thread.key, clock: CLOCK });
+    assert.deepEqual(out, { title: 'Quarterly estimate planning', titleSource: 'auto', from: 'model' });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].purpose, 'title');
+    assert.deepEqual(rowOf(db, thread.key), { title: 'Quarterly estimate planning', title_source: 'auto' });
+    add(thread.key, 'me', 'Synthetic estimate question two');
+    add(thread.key, 'fathom', '<p>Synthetic estimate answer two</p>');
+    assert.equal(await nameThread({ db, engine, key: thread.key, clock: CLOCK }), null, 'never renamed after the first naming');
+    assert.equal(calls.length, 1);
+  }
+  // Fallback after one turn whose reply is a notice (the engine is off).
+  {
+    const { db, thread, add } = await namingStore(t);
+    add(thread.key, 'me', FIRST_Q);
+    add(thread.key, 'fathom', '<p>Synthetic engine off notice</p>', 1);
+    const { engine, calls } = stubEngine({ title: 'Quarterly estimate planning' }, { on: false });
+    const out = await nameThread({ db, engine, key: thread.key, clock: CLOCK });
+    assert.deepEqual(out, { title: FIRST_Q, titleSource: 'auto', from: 'fallback' });
+    assert.equal(calls.length, 0);
+    assert.deepEqual(rowOf(db, thread.key), { title: FIRST_Q, title_source: 'auto' });
+  }
+  // Fallback after one turn when the model title is invalid.
+  {
+    const { db, thread, add } = await namingStore(t);
+    add(thread.key, 'me', FIRST_Q);
+    add(thread.key, 'fathom', '<p>Synthetic estimate answer one</p>');
+    const { engine, calls } = stubEngine({ title: 'Spend 4000 on the estimates' });
+    const out = await nameThread({ db, engine, key: thread.key, clock: CLOCK });
+    assert.deepEqual(out, { title: FIRST_Q, titleSource: 'auto', from: 'fallback' });
+    assert.equal(calls.length, 1);
+  }
 });
 
 test('AC3 nameThread sends one title call with only this thread and stores the model title', async t => {

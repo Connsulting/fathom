@@ -1,6 +1,7 @@
 // Deterministic fake answer source for FATHOM_ENGINE=fake (the demo and the tests). It scripts
 // the two rounds a live model would run: one tool round that reads the household summary, the
-// figures its answer cites and the conversation's recommendation, then one text round.
+// figures its answer cites and the recommendation the conversation was asked from (recForKey),
+// then one text round.
 //
 // fakeAnswerScript({ scenario, key, questionId, text, whatIfPack, summary, propose }) -> [round1, round2]
 // The text round is the canned demo answer for a suggested or rec question (by id or by exact
@@ -9,9 +10,9 @@
 // amount reaches grounding the way a careless model would repeat it.
 // When `propose` is set (the proposal tool is offered), free text that is an explicit command
 // (it starts with start, complete, dismiss, snooze or reopen, optionally after "please")
-// naming a rec (the rec conversation's own rec, or in an Ask thread a visible rec's id or exact title) adds
+// naming a rec (the thread's own rec when it was asked from one, else a visible rec's id or exact title) adds
 // a propose_recommendation_action call, and the text round says the owner can confirm it below.
-// In an Ask thread, free text "add a goal: <words>" adds a propose_goal call with those words as
+// In an Ask thread with no rec context, free text "add a goal: <words>" adds a propose_goal call with those words as
 // the title (a horizon phrase sets the horizon; the first amount the owner wrote is the target),
 // and the text round says the owner can save it below. Its amounts are not echoed.
 
@@ -28,9 +29,10 @@ const GOAL_CONFIRM = 'Nothing is saved yet. You can save this goal below.';
 const HORIZON_WORDS = [['1-3y', /next few years/i], ['3-10y', /long range|long term/i], ['now', /this year/i]];
 const GOAL_AMOUNT = /\$(\d[\d,]*(?:\.\d+)?)\s*(k|m)?\b/i;
 
-// propose_goal args for an "add a goal" command in an Ask thread, else null.
-function goalCommandOf(key, text) {
-  if (!isThreadKey(key)) return null;
+// propose_goal args for an "add a goal" command in an Ask thread, else null. A thread asked from a
+// rec gets none: the live answerer offers no goal tool in rec context.
+function goalCommandOf(scenario, key, text) {
+  if (!isThreadKey(key) || recForKey(scenario, key)) return null;
   const m = GOAL_COMMAND.exec(String(text ?? '').trim());
   if (!m) return null;
   const title = m[1].trim().slice(0, 120);
@@ -75,7 +77,7 @@ function commandOf(scenario, key, text) {
 
 export function fakeAnswerScript({ scenario, key, questionId, text, whatIfPack, summary, propose = false } = {}) {
   const command = propose && typeof text === 'string' ? commandOf(scenario, key, text) : null;
-  const goal = propose && !command && typeof text === 'string' ? goalCommandOf(key, text) : null;
+  const goal = propose && !command && typeof text === 'string' ? goalCommandOf(scenario, key, text) : null;
   let paragraphs;
   if (whatIfPack) {
     paragraphs = whatIfParagraphs(scenario, whatIfPack);
@@ -102,7 +104,8 @@ export function fakeAnswerScript({ scenario, key, questionId, text, whatIfPack, 
   const keys = [...new Set([...body.matchAll(FIGURE_TOKEN)].map(m => m[1]))];
   const toolCalls = [{ name: 'household_summary', args: {} }];
   if (keys.length) toolCalls.push({ name: 'get_figures', args: { keys } });
-  if (recForKey(scenario, key)) toolCalls.push({ name: 'get_recommendation', args: { id: key } });
+  const rec = recForKey(scenario, key);
+  if (rec) toolCalls.push({ name: 'get_recommendation', args: { id: rec.id } });
   if (command) toolCalls.push({ name: 'propose_recommendation_action', args: command });
   if (goal) toolCalls.push({ name: 'propose_goal', args: goal });
   return [{ toolCalls }, { text: body }];

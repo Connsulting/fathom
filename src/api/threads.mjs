@@ -1,7 +1,9 @@
 // Ask threads: store operations, title validation, the fallback title and automatic naming.
 // A thread is a conversations row keyed 'ask:<12 lowercase hex>' (THREAD_KEY); URLs carry the bare
-// id. Thread JSON is build.mjs threadOut. Times are app clock ISO strings the caller passes in.
+// id. Thread JSON is build.mjs threadOut. A thread asked from a recommendation carries that rec's
+// id (rec_id, a context reference). Times are app clock ISO strings the caller passes in.
 //
+// insertThread(db, key, now, { recId }) -> thread JSON (throws when the key is taken)
 // createThread(db, now) -> thread JSON          getThread(db, id) -> thread JSON | null (bad ids too)
 // listThreads(db) -> { active, archived, trash } each newest lastAt first; trash wins over archived
 // purgeTrash(db, now) -> count of threads (and their messages) trashed 30 or more days before now; run only by the daily trash-purge job
@@ -10,8 +12,8 @@
 // fallbackTitle(scope, text) -> plain text of an owner message, markup characters blanked, cut to 48 characters | null
 // nameThread({ db, engine, key, clock }) -> { title, titleSource: 'auto', from: 'model' | 'fallback' } | null
 //
-// Naming runs once, after a reply is stored, when the thread has no title source and at least two
-// owner messages each followed by a reply (a notice counts). The engine gets one 'title' call that
+// Naming runs once, after a reply is stored, when the thread has no title source and at least one
+// owner message followed by a reply (a notice counts), so a thread is named after its first answer. The engine gets one 'title' call that
 // sees only this thread's non-notice messages as plain text; engine off, any error or an invalid
 // title uses the fallback; with neither, title_source is set to 'auto' with a NULL title (shown as
 // "New conversation", never retried) and the result is null. The write only lands while title_source is still NULL, so a manual
@@ -55,10 +57,11 @@ export function newThreadKey(db) {
   }
 }
 
-// Inserts the thread row for `key` (from newThreadKey); throws when the key is taken.
-export function insertThread(db, key, now) {
+// Inserts the thread row for `key` (from newThreadKey), asked from rec `recId` when given; throws
+// when the key is taken.
+export function insertThread(db, key, now, { recId = null } = {}) {
   if (!isThreadKey(key)) throw new TypeError('Invalid thread key');
-  db.prepare('INSERT INTO conversations (key, created_at, last_at) VALUES (?, ?, ?)').run(key, now, now);
+  db.prepare('INSERT INTO conversations (key, created_at, last_at, rec_id) VALUES (?, ?, ?, ?)').run(key, now, now, recId ?? null);
   return threadOut(threadRow(db, key));
 }
 
@@ -253,7 +256,7 @@ export async function nameThread({ db, engine = null, key } = {}) {
   const row = db.prepare('SELECT title_source FROM conversations WHERE key = ?').get(key);
   if (!isThreadKey(key) || !row || row.title_source != null) return null;
   const messages = db.prepare('SELECT role, text, notice FROM messages WHERE conversation_key = ? ORDER BY id').all(key);
-  if (completedTurns(messages) < 2) return null;
+  if (completedTurns(messages) < 1) return null;
   const scope = tokenScope(db);
   const fallback = fallbackTitle(scope, messages.find(m => m.role === 'me').text);
   let title = null;

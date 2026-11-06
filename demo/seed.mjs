@@ -232,9 +232,6 @@ export function seedDemo(db) {
 
     const rec = db.prepare(`INSERT INTO recs (id, def, status, waiting_on, wake, tasks_done, window_close, window_label, pack_id, sort, updated_at, file_id, parser, locator)
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-    const conv = db.prepare('INSERT INTO conversations (key, created_at) VALUES (?, ?)');
-    const msg = db.prepare("INSERT INTO messages (conversation_key, role, text, refs, notice, ts) VALUES (?, 'fathom', ?, '[]', 0, ?)");
-    const opened = `${clock}T08:00:00.000Z`;
     S.recs.forEach((r, i) => {
       const def = { ...r, tasks: (r.tasks || []).map(({ done, ...t }) => t) };
       for (const k of LIVE_REC_FIELDS) delete def[k];
@@ -245,8 +242,6 @@ export function seedDemo(db) {
       rec.run(r.id, JSON.stringify(def), status, r.waitingOn || null, r.wake || null,
         JSON.stringify((r.tasks || []).map(t => !!t.done)), days == null ? null : addDays(clock, days),
         r.window ? r.window.label : null, pack ? pack.id : null, i, now, ...prov(`recs[${i}]`));
-      conv.run(r.id, opened);
-      msg.run(r.id, `<p>${r.summary}</p>`, opened);
     });
 
     const goal = db.prepare('INSERT INTO goals (id, def, sort) VALUES (?, ?, ?)');

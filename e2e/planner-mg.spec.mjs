@@ -16,6 +16,7 @@ const OWNER = 'owner@example.test';
 const AUTH = Object.freeze({ 'Tailscale-User-Login': OWNER });
 const ADVISOR = 'Lee & Park <img src=x onerror=alert(1)>';
 const THREAD_REC = 'fed-q4-estimate';
+const THREAD_KEY = 'ask:0f0e0d0c0b0a';
 const AGI_NOTE = 'Adjusted gross income stands in for modified adjusted gross income.';
 
 let app = null;
@@ -61,9 +62,13 @@ test.beforeAll(async () => {
   const db = await buildRealStore(DIR, { clock: CLOCK, variant: { facts: { 'household.names': { advisor: ADVISOR } } } });
   try {
     expect((await planRun(db, { now: CLOCK, dataDir: DIR })).status).toBe('ok');
-    db.prepare('INSERT OR IGNORE INTO conversations (key, created_at) VALUES (?, ?)').run(THREAD_REC, `${CLOCK}T09:00:00.000Z`);
+    // A conversation asked from the rec is an Ask thread carrying the rec as its context.
+    db.prepare('INSERT INTO conversations (key, created_at, last_at, rec_id) VALUES (?, ?, ?, ?)')
+      .run(THREAD_KEY, `${CLOCK}T09:00:00.000Z`, `${CLOCK}T10:00:00.000Z`, THREAD_REC);
+    db.prepare("INSERT INTO messages (conversation_key, role, text, refs, notice, ts) VALUES (?, 'me', ?, '[]', 0, ?)")
+      .run(THREAD_KEY, 'Synthetic owner question for this check.', `${CLOCK}T09:00:00.000Z`);
     db.prepare("INSERT INTO messages (conversation_key, role, text, refs, notice, ts) VALUES (?, 'advisor', ?, '[]', 0, ?)")
-      .run(THREAD_REC, '<p>Synthetic advisor note for this check.</p>', `${CLOCK}T10:00:00.000Z`);
+      .run(THREAD_KEY, '<p>Synthetic advisor note for this check.</p>', `${CLOCK}T10:00:00.000Z`);
     addFact(db, 'accounts.va529', { [accountIdByMask(db, MASKS.college)]: { virginiaPlan: true, ownerAge70Plus: false } });
     expect((await planRun(db, { now: CLOCK, dataDir: DIR })).status).toBe('ok');
   } finally {
