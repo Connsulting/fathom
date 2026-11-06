@@ -30,6 +30,18 @@
 // Stored figures should appear only as tokens, but a stored figure that a tool returns as plain
 // text grounds when the model read it through that tool: the tool result is the evidence.
 //
+// Streaming: answer({ ..., onEvent }) and whatIf({ ..., onEvent }) report progress while the model
+// runs: { type: 'progress', label } (a fixed plain label per tool, never arguments or values),
+// { type: 'text', text } (raw model text deltas, untrusted: the client escapes them and shows every
+// number as still being checked) and { type: 'reset' } (drop the streamed text: it was a tool round
+// preamble or the answer is being redone after a failed grounding check). The returned reply is the
+// only grounded result; nothing streamed is stored. A throwing onEvent never fails the answer.
+//
+// The model's text loses a trailing Sources paragraph or sentence (stripSources) before grounding,
+// and the rendered blocks keep a minimal markdown subset (src/shared/answer-text.mjs): paragraphs,
+// bullet and numbered lists and bold, over the escaped text. List blocks come back complete
+// (<ul>/<ol>); every other block is paragraph inner HTML.
+//
 // Chat never writes. In Ask threads ('ask:<id>') and rec conversations the model is offered one local, non-writing
 // tool, propose_recommendation_action; the last successful call becomes provenance.proposal
 // ({recId, action, wake?}) and the owner confirms it through the ordinary rec action endpoint.
@@ -43,14 +55,15 @@ import { escapeUserText, resolveTokens } from '../shared/tokens.mjs';
 import { parseJson } from '../store/db.mjs';
 import { findQuestion, matchQuestion, recForKey, isThreadKey } from './questions.mjs';
 import { fakeAnswerScript } from './fake-answers.mjs';
+import { stripSources, listMarkerSpans, markdownBlocks } from '../shared/answer-text.mjs';
 
 export const PRODUCT_RULES = [
   'You are Fathom, a year-round financial co-pilot for one household of independent professionals.',
   'You are advisory only: you explain and recommend. You never file taxes, never move money or change any account, and never select individual securities.',
   'Never state a number you did not take from a tool result, the household summary, the conversation context or a knowledge pack entry.',
   'Write stored figures as {f:key} tokens using the keys get_figures returns, never as typed amounts.',
-  'Cite a knowledge pack entry by its title when you use it.',
-  'Answer in plain text paragraphs separated by blank lines, with no markdown and no HTML.',
+  'Never write a Sources, References or Citations line and never cite sources in your prose: the app shows the sources it used under every answer.',
+  'Answer in short paragraphs separated by blank lines. You may use bullet lists (lines starting with "- "), numbered lists (lines starting with "1. ") and **bold**; use no other markdown (no headings, links or tables) and no HTML.',
   'You never change a recommendation yourself. When the owner explicitly asks to change one, call propose_recommendation_action so the owner can confirm it; never propose on your own initiative.',
 ].join('\n');
 
@@ -78,6 +91,9 @@ const ENTITIES = { '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;
 function plainText(html) {
   return String(html ?? '')
     .replace(/<\/p>\s*<p>/g, '\n\n')
+    .replace(/<\/li>\s*<li>/g, '\n- ')
+    .replace(/<\/(?:p|ul|ol)>\s*<(?:p|ul|ol)(?:\s[^>]*)?>/g, '\n\n')
+    .replace(/<li>/g, '- ')
     .replace(/<[^>]*>/g, '')
     .replace(/&(?:amp|lt|gt|quot|#39|#123|#125);/g, m => ENTITIES[m])
     .trim();
@@ -290,7 +306,15 @@ export function groundAnswer(text, { scenario, toolResults = [], data = [], data
     }
     return ' '.repeat(token.length);
   });
+  // Ordered-list markers ("1. ") are list numbering, not figures.
+  let unlisted = masked;
+  for (const m of listMarkerSpans(masked)) {
+    unlisted = unlisted.slice(0, m.index) + ' '.repeat(m.length) + unlisted.slice(m.index + m.length);
+  }
+  return groundMasked(unlisted, { scenario, toolResults, data, dataLabels, violations, figureKeys });
+}
 
+function groundMasked(masked, { scenario, toolResults, data, dataLabels, violations, figureKeys }) {
   const results = (Array.isArray(toolResults) ? toolResults : []).map(groundingResult);
   const values = (Array.isArray(data) ? data : [data]).map(evidence);
   const unsupported = checkGrounding(masked, { toolResults: results, data: values }).violations;
@@ -338,7 +362,8 @@ function escapeKeepingTokens(segment) {
   return out + escapeUserText(segment.slice(last));
 }
 
-// renderAnswer(text, violations, literals = []) -> [paragraph inner HTML]
+// renderAnswer(text, violations, literals = []) -> [block]: paragraph inner HTML, or a complete
+// <ul>/<ol> list block (markdownBlocks).
 // Violations are wrapped in .fx-unverified (an invalid token is escaped inside it, so it never
 // resolves); bound literals in .fx-src with data-src the literal's index and a "From" title.
 export function renderAnswer(text, violations = [], literals = []) {
@@ -360,7 +385,55 @@ export function renderAnswer(text, violations = [], literals = []) {
     at = m.end;
   }
   html += escapeKeepingTokens(prose.slice(at));
-  return html.split(/\n[ \t]*\n\s*/).map(p => p.trim()).filter(Boolean);
+  return markdownBlocks(html);
+}
+
+// ---------------------------------------------------------------- progress labels
+
+// Plain progress labels by tool name. Labels never carry arguments, values or model text.
+export const PROGRESS_LABELS = Object.freeze({
+  household_summary: 'Reading your household summary',
+  get_facts: 'Looking at your stored facts',
+  list_accounts: 'Looking at your accounts',
+  query_transactions: 'Looking through your transactions',
+  list_positions: 'Looking at your holdings',
+  pnl_by_month: 'Looking at your monthly income and spending',
+  list_recommendations: 'Looking at your plan',
+  get_recommendation: 'Reading the recommendation',
+  list_deadlines: 'Checking your deadlines',
+  list_goals: 'Looking at your goals',
+  get_figures: 'Pulling the figures',
+  packs_status: 'Checking your knowledge packs',
+  list_packs: 'Checking your knowledge packs',
+  get_pack_entry: 'Reading a knowledge pack entry',
+  search_pack_entries: 'Searching your knowledge packs',
+  propose_recommendation_action: 'Preparing a change for you to confirm',
+});
+export const PROGRESS_START = 'Reading your household summary';
+export const PROGRESS_GROUNDING = 'Checking every number against your data';
+export const PROGRESS_RETRY = 'Rechecking the numbers';
+const PROGRESS_OTHER = 'Looking at your data';
+
+export const progressLabel = name => (Object.hasOwn(PROGRESS_LABELS, name) ? PROGRESS_LABELS[name] : PROGRESS_OTHER);
+
+// A safe emitter: progress labels deduplicated in a row, a reset only after text, a throwing
+// listener ignored. Engine events ({ type: 'tool', name } / { type: 'text', text }) go through
+// engineEvent, which resets streamed text when a tool round follows it.
+function streamer(onEvent) {
+  if (typeof onEvent !== 'function') return { progress() {}, reset() {}, engineEvent: undefined };
+  let lastLabel = null;
+  let texted = false;
+  const send = e => { try { onEvent(e); } catch { /* the stream never fails an answer */ } };
+  const out = {
+    progress(label) { if (label !== lastLabel) { lastLabel = label; send({ type: 'progress', label }); } },
+    reset() { if (texted) { texted = false; send({ type: 'reset' }); } },
+    engineEvent(e) {
+      if (!e || typeof e !== 'object') return;
+      if (e.type === 'tool') { out.reset(); out.progress(progressLabel(String(e.name || ''))); }
+      else if (e.type === 'text' && typeof e.text === 'string' && e.text) { texted = true; send({ type: 'text', text: e.text }); }
+    },
+  };
+  return out;
 }
 
 // ---------------------------------------------------------------- the live answerer
@@ -423,8 +496,10 @@ export function createLiveAnswerer({ engine, packs } = {}) {
   // One grounded model answer: call, ground, retry once with a corrective turn, render.
   // proposeFor: null (no proposal tool), '*' (any visible rec, an Ask thread) or the rec id
   // of a rec conversation (proposals for any other rec are ignored).
-  async function run({ db, scenario, now, question, context, history, baseRefs, fakeArgs, proposeFor = null }) {
+  async function run({ db, scenario, now, question, context, history, baseRefs, fakeArgs, proposeFor = null, onEvent }) {
     if (!engine.isOn()) return offNotice(engine);
+    const stream = streamer(onEvent);
+    stream.progress(PROGRESS_START);
     const summary = await callTool('household_summary', {}, { db, now });
     const active = activeManifestPacks(db, packs);
     const packIds = active.map(a => a.pack.id).sort();
@@ -433,17 +508,20 @@ export function createLiveAnswerer({ engine, packs } = {}) {
     const offered = [...REGISTRY.filter(t => t.scope === 'read'), ...(proposeFor ? [PROPOSE_TOOL] : [])];
     const fake = engine.mode === 'fake' ? fakeAnswerScript({ scenario, summary, propose: !!proposeFor, ...fakeArgs }) : undefined;
     const request = { purpose: 'chat', system: prompt.system, systemDynamic: prompt.systemDynamic, messages: prompt.messages,
-      tools: offered, toolContext: { db, now }, maxTokens: MAX_TOKENS, ...(fake ? { fake } : {}) };
+      tools: offered, toolContext: { db, now }, maxTokens: MAX_TOKENS, ...(fake ? { fake } : {}),
+      ...(stream.engineEvent ? { onEvent: stream.engineEvent } : {}) };
 
     // groundAnswer sanitizes each datum (and context.entries bodies lose their metadata lines there).
     const entryBodies = active.flatMap(({ pack }) => pack.entries.map(e => groundingBody(e.body)));
     const data = [summary, context, entryBodies];
     const dataLabels = ['household summary', 'conversation context', 'knowledge pack entries'];
     const resultsOf = res => (res && Array.isArray(res.toolResults) ? res.toolResults : []);
-    const ground = (res, toolResults) => groundAnswer(res.text, { scenario, toolResults, data, dataLabels });
+    const textOf = res => stripSources(res.text);
+    const ground = (res, toolResults) => groundAnswer(textOf(res), { scenario, toolResults, data, dataLabels });
 
     let first;
     try { first = await engine.call(request); } catch (e) { return noticeFor(e, engine); }
+    stream.progress(PROGRESS_GROUNDING);
     let chosen = first;
     let toolResults = resultsOf(first);
     let grounding = ground(first, toolResults);
@@ -451,6 +529,8 @@ export function createLiveAnswerer({ engine, packs } = {}) {
     let costUsd = first.costUsd || 0;
     if (!grounding.ok) {
       retried = true;
+      stream.reset();
+      stream.progress(PROGRESS_RETRY);
       const list = grounding.violations.map(v => v.text).join(', ');
       const earlier = resultsOf(first).map(r => ({ name: r.name, args: r.args ?? {}, result: r.result ?? null,
         ...(r.isError ? { isError: true } : {}) }));
@@ -459,6 +539,7 @@ export function createLiveAnswerer({ engine, packs } = {}) {
         { role: 'user', content: CORRECTIVE.replace('{list}', () => list) + evidence }] };
       try {
         const second = await engine.call(retry);
+        stream.progress(PROGRESS_GROUNDING);
         costUsd += second.costUsd || 0;
         chosen = second;
         toolResults = [...resultsOf(first), ...resultsOf(second)];
@@ -475,9 +556,10 @@ export function createLiveAnswerer({ engine, packs } = {}) {
       ? { recId: proposed.args.id, action: proposed.args.action, ...(proposed.args.wake ? { wake: proposed.args.wake } : {}) }
       : null;
     const recReads = toolResults.filter(r => !r.isError && r.name === 'get_recommendation').map(r => r.args && r.args.id);
-    const paragraphs = renderAnswer(chosen.text, grounding.violations, grounding.literals);
+    const text = textOf(chosen);
+    const paragraphs = renderAnswer(text, grounding.violations, grounding.literals);
     if (!paragraphs.length) return noticeReply(NOTICES.modelError);
-    const lower = chosen.text.toLowerCase();
+    const lower = text.toLowerCase();
     return {
       paragraphs,
       refs: unique([...baseRefs, ...recReads, proposal && proposal.recId]),
@@ -499,7 +581,7 @@ export function createLiveAnswerer({ engine, packs } = {}) {
   }
 
   return {
-    async answer({ db, key, questionId, text, clock } = {}) {
+    async answer({ db, key, questionId, text, clock, onEvent } = {}) {
       if (typeof key !== 'string' || !key) throw new TypeError('answer needs a conversation key');
       const scenario = buildScenario(db, { clock, packs });
       const now = clockNow(db, clock);
@@ -525,11 +607,11 @@ export function createLiveAnswerer({ engine, packs } = {}) {
         context = packConversationContext(db, packs, key.slice(5)).context;
       }
       return run({ db, scenario, now, question, context, history: scenario.live.conversations[key] || [], baseRefs,
-        proposeFor: rec ? rec.id : isThreadKey(key) ? '*' : null,
+        proposeFor: rec ? rec.id : isThreadKey(key) ? '*' : null, onEvent,
         fakeArgs: { key, questionId: hasQ ? questionId : undefined, text: hasQ ? undefined : question } });
     },
 
-    async whatIf({ db, packId, clock } = {}) {
+    async whatIf({ db, packId, clock, onEvent } = {}) {
       const scenario = buildScenario(db, { clock, packs });
       const { def, context } = packConversationContext(db, packs, packId);
       const prompt = def.whatIf && def.whatIf.prompt ? def.whatIf.prompt : '';
@@ -540,7 +622,7 @@ export function createLiveAnswerer({ engine, packs } = {}) {
       const baseRefs = (def.whatIf && Array.isArray(def.whatIf.unlocks) ? def.whatIf.unlocks : []).map(u => u && u.recId);
       // A manifest prompt is literal text; an illustrative demo prompt may carry scenario tokens.
       const question = typeof def.manifest === 'string' ? prompt : plain(scenario, prompt);
-      return run({ db, scenario, now: clockNow(db, clock), question, context, history, baseRefs, fakeArgs: { key, whatIfPack: def } });
+      return run({ db, scenario, now: clockNow(db, clock), question, context, history, baseRefs, onEvent, fakeArgs: { key, whatIfPack: def } });
     },
   };
 }

@@ -54,6 +54,53 @@ export function sendError(res, err) {
   sendJson(res, status, body, err instanceof HttpError ? err.headers : {});
 }
 
+// Server-Sent Events for a streaming route. Headers go out with the first event, so an error
+// thrown before any event is still an ordinary JSON error. send({ type, ...data }) writes one event
+// named by type; finish(out) writes the 'final' event (the JSON body the route returns) and ends;
+// fail(err) writes an 'error' event ({ status, error }) and ends. A client that disconnects stops
+// receiving events; the handler runs to completion, so the answer is still stored. A comment line
+// every 15 seconds keeps idle proxies from closing the stream.
+export const wantsEventStream = req => /\btext\/event-stream\b/i.test(String(req.headers.accept || ''));
+
+export function createEventStream(req, res, { heartbeatMs = 15000 } = {}) {
+  let started = false;
+  let closed = false;
+  let timer = null;
+  const live = () => !closed && !res.destroyed && !res.writableEnded;
+  res.on('close', () => { closed = true; if (timer) clearInterval(timer); });
+  const start = () => {
+    if (started) return;
+    started = true;
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'X-Accel-Buffering': 'no',
+    });
+    if (typeof res.flushHeaders === 'function') res.flushHeaders();
+    timer = setInterval(() => { if (live()) res.write(': ping\n\n'); }, heartbeatMs);
+    timer.unref?.();
+  };
+  const write = (name, data) => {
+    start();
+    if (live()) res.write(`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
+  const end = () => { if (timer) clearInterval(timer); if (live()) res.end(); };
+  return {
+    get started() { return started; },
+    send(event) {
+      if (!event || typeof event.type !== 'string' || !/^[a-z]+$/.test(event.type)) return;
+      const { type, ...data } = event;
+      write(type, data);
+    },
+    finish(out) { write('final', out); end(); },
+    fail(err) {
+      const status = err instanceof HttpError ? err.status : 500;
+      write('error', { status, error: err instanceof HttpError ? err.message : 'internal error' });
+      end();
+    },
+  };
+}
+
 const normHost = h => {
   try { return new URL('http://' + h).host; } catch { return null; }
 };

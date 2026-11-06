@@ -69,16 +69,34 @@ function explicitCredential(credential) {
 // request.fake (optional, fake mode): a per-call script list used instead of the constructor queue.
 // request.systemDynamic (optional): system text placed after the dynamic boundary (not cached).
 // request.toolContext (optional): { db, now } for this call's tools instead of the constructed one.
+// request.onEvent (optional, purpose 'chat'): called with { type: 'tool', name } as each tool call
+// starts and { type: 'text', text } for each text delta, in every round. In fake mode the round's
+// scripted text arrives in deterministic chunks of FAKE_CHUNK_WORDS words, streamDelayMs apart.
+// A throwing listener is ignored; events never change the result, the spend or the ledger.
+export const FAKE_CHUNK_WORDS = 3;
+
+export function fakeChunks(text) {
+  const parts = String(text ?? '').split(/(?<=\s)(?=\S)/);
+  const out = [];
+  for (let i = 0; i < parts.length; i += FAKE_CHUNK_WORDS) out.push(parts.slice(i, i + FAKE_CHUNK_WORDS).join(''));
+  return out;
+}
+
+const pause = ms => (ms > 0 ? new Promise(resolve => setTimeout(resolve, ms)) : Promise.resolve());
+
 export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger = createMemoryLedger(), capUsd = 200,
-  credential, responses = [], now = () => new Date(), toolContext = {} } = {}) {
+  credential, responses = [], now = () => new Date(), toolContext = {}, streamDelayMs = 0 } = {}) {
   if (!['live', 'fake', 'off'].includes(mode)) throw new TypeError('Invalid engine mode');
   if (!Number.isFinite(capUsd) || capUsd < 0) throw new TypeError('Invalid monthly cap');
   if (typeof ledger.monthSpendUsd !== 'function' || typeof ledger.record !== 'function') throw new TypeError('Invalid ledger adapter');
   const scripted = [...responses];
   let poisoned = false;
   const call = async ({ purpose, system = '', systemDynamic = '', messages, tools = [], maxTokens = 1024, schema, grounding = {}, fake,
-    toolContext: callContext } = {}) => {
+    toolContext: callContext, onEvent } = {}) => {
     if (mode === 'off') throw new EngineOffError();
+    const emit = typeof onEvent === 'function' && purpose === 'chat'
+      ? event => { try { onEvent(event); } catch { /* listeners never fail a call */ } }
+      : null;
     if (!PURPOSES.includes(purpose)) throw new TypeError('Invalid call purpose');
     const model = purpose === 'title' ? TITLE_MODEL : DEFAULT_MODEL;
     if (typeof system !== 'string' || typeof systemDynamic !== 'string' || !Array.isArray(messages) || messages.length === 0 || !Number.isInteger(maxTokens) || maxTokens <= 0 || maxTokens > 128000) {
@@ -105,7 +123,13 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
           if (mode === 'fake') {
             if (!queue.length) throw new ModelCallError('Fake engine has no scripted response');
             const script = structuredClone(queue.shift());
+            if (emit) {
+              for (const item of script.toolCalls ?? []) { emit({ type: 'tool', name: item.name }); await pause(streamDelayMs); }
+            }
             await Promise.all((script.toolCalls ?? []).map(item => registry.invoke(item.name, item.args ?? {})));
+            if (emit && script.text) {
+              for (const chunk of fakeChunks(script.text)) { await pause(streamDelayMs); emit({ type: 'text', text: chunk }); }
+            }
             round = { text: script.text ?? '', costUsd: Object.hasOwn(script, 'costUsd') ? script.costUsd : 0.001, model: 'fake', tokens: script.tokens ?? {},
               status: script.status ?? (script.toolCalls?.length ? 'error_max_turns' : 'success'),
               is_error: script.is_error === true, api_error_status: script.api_error_status ?? null,
@@ -114,7 +138,7 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
           } else {
             try {
               round = await (SINGLE_ROUND.includes(purpose) ? messagesRound : sdkRound)({ credential: auth, system, systemDynamic,
-                messages: transcript, maxTokens, maxBudgetUsd: capUsd - spend, model, registry, schema });
+                messages: transcript, maxTokens, maxBudgetUsd: capUsd - spend, model, registry, schema, ...(emit ? { onEvent: emit } : {}) });
             } catch {
               round = { text: '', content: [], status: 'transport_error', is_error: true,
                 accountingUnknown: true, model, tokens: {}, toolResults: registry.results, details: {} };
