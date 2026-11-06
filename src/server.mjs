@@ -9,6 +9,7 @@
 // no store file: create it; demo unless FATHOM_DEMO=0 (then real and empty). Demo stores are
 // seeded once and keep their state across restarts. FATHOM_DEMO=1 refuses a real store and
 // FATHOM_DEMO=0 refuses a demo store, without changing it. A file with no mode is real.
+// Ask threads trashed 30 or more days ago (app clock) are purged once the store is open.
 
 import http from 'node:http';
 import { mkdirSync } from 'node:fs';

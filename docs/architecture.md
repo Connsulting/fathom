@@ -183,8 +183,13 @@ string or epoch ms, and the store clock decides "today" when set.
 ### 9. Engine gateway
 
 `src/engine` exports `createEngine({mode: 'live'|'fake'|'off', ledger, capUsd, credential})` with
-`call({purpose: 'chat'|'job'|'extract'|'confirm', system, messages, tools?, maxTokens})` and a chat runner on
-the Claude Agent SDK. It checks on/off and month-to-date spend below the cap BEFORE every model
+`call({purpose: 'chat'|'job'|'extract'|'confirm'|'title', system, messages, tools?, maxTokens})` and a chat
+runner on the Claude Agent SDK. `extract`, `confirm` and `title` are one structured Messages API round (a JSON
+schema); `title` names Ask threads on `TITLE_MODEL` (`claude-haiku-5-5`), every other purpose runs
+on `DEFAULT_MODEL` (`claude-opus-5-5`), and the conservative estimate for an unknown cost uses the
+purpose's model. Prices live in `src/engine/pricing.mjs` with the date they were verified on the
+pricing page; Haiku 5.5 has a base row for prompts up to 100,000 tokens (input plus cache read plus
+cache write) and a long row above that. It checks on/off and month-to-date spend below the cap BEFORE every model
 call (throws `EngineOffError` or `BudgetExceededError`) and records cost to the ledger after.
 Ledger adapter: `{monthSpendUsd(yyyymm), record({ts, purpose, costUsd, model, tokens})}` over the
 `spend_ledger` table (`yyyymm` stored as `'YYYY-MM'`). Default cap 200 USD (`settings.cap`).
@@ -270,7 +275,7 @@ Money columns are dollars rounded to cents; JSON columns hold JSON text. The pro
 | `figures` | `key` PK, `v`, `src` (references `sources.id`), `kind` in a, p, e, m, `label`, provenance, `updated_at` |
 | `recs` | `id` PK, `def` JSON (the CONTRACT rec minus live fields), `status`, `waiting_on`, `wake`, `tasks_done` JSON, `window_close` ISO date, `window_label`, `pack_id`, `sort`, `updated_at`, provenance |
 | `rec_events` | `id` PK, `rec_id`, `ts`, `action`, `arg`, `from_status`, `to_status`, `actor` (`ui`, `tool`, ...) |
-| `conversations` | `key` PK (`ask`, a rec id, or `pack:<id>`), `created_at` |
+| `conversations` | `key` PK (an Ask thread `ask:<12 lowercase hex>`, a rec id, or `pack:<id>`), `created_at`, `last_at` (newest message time, else `created_at`), and for Ask threads `title` (NULL until named), `title_source` (NULL, `auto` or `manual`), `archived_at`, `trashed_at` (migration 008; app clock ISO times) |
 | `messages` | `id` PK, `conversation_key`, `role` in me, fathom, advisor, claude, `text` (token-bearing HTML), `refs` JSON, `notice`, `ts`, `provenance` JSON or NULL (migration 006; see "Answer provenance") |
 | `goals` | `id` PK, `def` JSON, `sort` |
 | `deadlines` | `id` PK, `date`, `label`, `title`, `rec_id`, `hard` |
@@ -390,6 +395,8 @@ live = {
   onboardStep: int,
   picks: { salary: int, deferral: int },  // war-game selections; default the current/recommended point
   conversations: { <key>: [ { id, role, text, refs, ts, notice, provenance } ] },
+  threads: [ thread ],                  // every Ask thread, archived and trashed included, newest lastAt first
+  askStarters: [ { id, q } ],           // Ask starter questions whose condition holds, pinned order
   packs: { <id>: { active: boolean | null, exploring: boolean, whatIfDone: boolean } },
   yourPlans: { sources: [ { fileId, name, docType } ], files: [ { id, name } ], built: settings.yourPlans | null },
   clock: 'YYYY-MM-DD',
@@ -409,13 +416,47 @@ live = {
 `yourPlans.sources` are the plan and benefits documents (a text-only document row is named
 `document-<id>` with `fileId` null); `files` are the stored files a build can read (text or PDF).
 
-Conversation keys are `ask`, a rec id, or `pack:<id>`; `ask` is always present. Message `id` is a
+Conversation keys are Ask threads (`ask:<id>`), rec ids, or `pack:<id>`; every stored
+conversation is present. Message `id` is a
 string (`m<rowid>`), `text` is token-bearing HTML source (paragraphs as `<p>...</p>`; resolve it
 with `api.t` at read time), `refs` are rec ids, `ts` is a display label such as "Nov 5, 9:04 AM",
 `notice` is true for every notice the answerer stores instead of an answer (engine off, off by
 configuration, over the cap, model error). `provenance` is the stored answer provenance or null
 (owner messages, notices and seeded messages). The demo seed opens each rec conversation with one
 fathom message holding its summary.
+
+### Ask threads
+
+Ask is many conversations. A thread is a `conversations` row keyed `ask:<id>`, `<id>` 12 lowercase
+hex characters; URLs and the thread routes use the bare `<id>` (anything else is 404). Thread JSON
+is `{id, key, title, titleSource, createdAt, lastAt, archivedAt, trashedAt, turns}`: `title` is the
+stored title or null (the UI shows "New conversation"), `titleSource` null, `auto` or `manual`,
+`turns` the count of owner messages. A thread is active, archived (`archivedAt`), or in Trash
+(`trashedAt`, which wins; trash keeps `archivedAt` so restore returns the thread where it was).
+Asking in an archived thread unarchives it; asking in a trashed one is 409. Threads trashed 30 or
+more days before the app clock are deleted with their messages (`purgeTrash`) by the daily `trash-purge` job (03:00); reads and server
+starts purge nothing. Migration 010 moves the old single `ask`
+conversation, when it has messages, into one thread with the same messages.
+
+Naming (`src/api/threads.mjs`): after a reply is stored, a thread with no title source and at least
+two owner messages each followed by a reply (a notice counts) is named once. The engine gets one
+`title` call whose fixed system text holds no household data and whose one user message is this
+thread's non-notice messages as plain text, newest last, at most 12 messages and 6000 characters.
+The model title is trimmed, loses one pair of quotes and a trailing period, and is refused when
+empty, over 60 characters or 8 words, with a line break, control character, `< > { }` or backtick,
+or any digit, currency or percent sign, or spelled-out number or money word, or any word
+(lowercased, with a plural `s`/`es` and a possessive `'s` folded) that is not a function word and
+was not used in this thread's owner messages. Engine off, over the cap, any error or a
+refused title uses the fallback: the first owner message as plain text (figure tokens removed,
+other tokens resolved, tags stripped, entities decoded) cut to 48 characters at a word boundary.
+The fake engine returns the fallback as its title. Writes only land while `title_source` is NULL,
+so an owner rename (`manual`, 1 to 60 characters, digits allowed) always wins. Titles render
+escaped.
+
+`live.askStarters` lists, in this order and only when its condition holds: `attention` "What needs
+my attention right now?" (a visible rec proposed, accepted or doing), `taxes` "How are our tax
+payments tracking this year?" (any tax payment), `scorp` "How is the S corp doing this year?" (fact
+`income.sCorp` true or any P&L line), `yearend` "What should we do before the year ends?" (always).
 
 ### The `live.demo` rule
 
@@ -450,7 +491,15 @@ response is `{scenario, ...}` with the fresh scenario.
 | `GET /api/packs/:id/entries/:entryId` | | `{entry: {id, title, body, cites}}` for an entry of a manifest-backed pack row, from the loaded packs; 404 otherwise. |
 | `POST /api/engine` | `{on: boolean}` | `{scenario}`; 400 when `on` is not boolean. |
 | `POST /api/engine/cap` | `{usd}` | `{scenario}`. `usd` a finite number from 0 to 10000, rounded to cents and stored as `settings.cap`; anything else 400. |
-| `POST /api/ask` | `{key?: 'ask', a rec id or 'pack:<id>', questionId? or text?}` | `{scenario, message}`. Exactly one of `questionId` or `text`; empty text, both or neither are 400; unknown question or conversation 404. Appends the owner's message and the live answer with its provenance, or a notice. |
+| `POST /api/ask` | `{key: an Ask thread key 'ask:<id>', a rec id or 'pack:<id>', questionId? or text?}` | `{scenario, message}`. `key` is required (400 without it). Exactly one of `questionId` or `text`; empty text, both or neither are 400; unknown question or conversation 404; a thread in Trash 409. Appends the owner's message and the live answer with its provenance, or a notice; asking in an archived thread unarchives it, and a thread due a name is named before the response. New threads come only from `POST /api/threads`. |
+| `GET /api/threads` | | `{active, archived, trash}`, each a list of thread JSON newest `lastAt` first. Purges old trash first. |
+| `POST /api/threads` | `{}`, `{text}` or `{questionId}` (an Ask starter id) | `{scenario, thread, message?}`. Creates a thread; with a question it also asks it (validated like `POST /api/ask`; a starter's fixed text is the question) and returns the reply as `message`. Unknown starter 404. |
+| `GET /api/threads/:id` | | `{thread, messages}` (messages as in `live.conversations`). A trashed thread opens too; 404 unknown or malformed id. |
+| `POST /api/threads/:id/rename` | `{title}` | `{scenario, thread}`. Sets `title_source` `manual`; 400 invalid title; 404 unknown. |
+| `POST /api/threads/:id/archive` | `{}` | `{scenario, thread}`. Sets `archivedAt`; 409 when trashed. |
+| `POST /api/threads/:id/trash` | `{}` | `{scenario, thread}`. Sets `trashedAt`, keeps `archivedAt`. |
+| `POST /api/threads/:id/restore` | `{}` | `{scenario, thread}`. Clears `trashedAt` when trashed, else `archivedAt`. |
+| `POST /api/threads/:id/delete` | `{}` | `{scenario}`. Deletes the thread and its messages forever; 409 unless it is in Trash. |
 | `POST /api/your-plans/build` | `{fileIds?: string[]}` (at most 50) | `{scenario, result: {written, entries, sources, warnings, dropped}}`. Builds the Your plans pack (`dropped` counts the extracted sections that did not match their document); 400 for a bad body; 409 while the engine is off, over the cap, or when the data directory is inside the repository. |
 | `POST /api/onboarding` | `{step}` | `{scenario}`. 0 to 5 set the step, 6 completes onboarding; anything else 400. |
 | `POST /api/demo/reset` | `{}` | `{scenario}`. Rebuilds the demo store and removes stored uploads (`$FATHOM_DATA/files/*.bin`); 404 unless the store is a demo store. Clears `api_keys`; the server secret file survives. |
@@ -603,7 +652,7 @@ serves) and stops it before closing the store.
 1. Periods are computed in the owner's zone (`settings.timezone`, default `America/New_York`; an
    invalid zone falls back to the default). `plan` daily at 02:00 (key `YYYY-MM-DD`),
    `brief-email` monthly on the 1st at 07:00 (`YYYY-MM`), `deadline-alerts` daily at 07:00
-   (`YYYY-MM-DD`), `freshness` weekly on Monday at 06:00 (that Monday's date), `confirm-guess`
+   (`YYYY-MM-DD`), `trash-purge` daily at 03:00 (`YYYY-MM-DD`), `freshness` weekly on Monday at 06:00 (that Monday's date), `confirm-guess`
    daily at 03:00 (`YYYY-MM-DD`). The due key is the
    latest period whose start is at or before now. With `FATHOM_CLOCK` set, the clock date at 12:00
    is now, so every period of that day is due.
@@ -739,7 +788,7 @@ process, so accounting poison lasts for the process, and awaits `init()` once at
    (no token resolution), an illustrative demo prompt with its tokens resolved to plain text. The
    history filter drops an earlier copy of the prompt in its stored form.
 3. Tools: every read tool of the registry, never `set_recommendation_status` (the registry keeps it
-   for other surfaces; chat never writes). In `ask` and rec conversations the answerer adds one
+   for other surfaces; chat never writes). In Ask threads and rec conversations the answerer adds one
    local, non-writing tool, `propose_recommendation_action` (scope `read`, input `{id, action:
    accept|start|complete|dismiss|snooze|reopen, wake?: string up to 200}`, no other keys). Its
    handler checks that the rec exists and is not hidden and that the action is in `ACTION_STATUS`,
@@ -847,9 +896,9 @@ process, so accounting poison lasts for the process, and awaits `init()` once at
    or exact free text), the pack's canned what-if answer (else a numberless sentence naming the pack
    and its covers), or "From your household summary, N items need you right now." with N from the
    summary. Numbers in the owner's free text are echoed first ("You asked about ..."), so an
-   invented amount is marked unverified after the retry. In `ask` and rec conversations, free text
+   invented amount is marked unverified after the retry. In Ask threads and rec conversations, free text
    that is an explicit command (`^(please\s+)?(accept|start|complete|dismiss|snooze|reopen)\b`)
-   naming a rec (the rec conversation's own rec, or in `ask` a visible rec's id or exact title)
+   naming a rec (the rec conversation's own rec, or in an Ask thread a visible rec's id or exact title)
    adds a `propose_recommendation_action` call to the tool round, and the text round says the owner
    can confirm it below. Negations and questions ("Do not mark anything done", "Should I dismiss
    this?") never match.

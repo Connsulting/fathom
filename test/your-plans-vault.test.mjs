@@ -262,7 +262,7 @@ async function unverifiedAfterBuild(db, dataDir, text) {
       return typeof value === 'function' ? value.bind(target) : value;
     },
   });
-  const reply = await createLiveAnswerer({ engine, packs }).answer({ db, key: 'ask', text: 'What do our plan documents say' });
+  const reply = await createLiveAnswerer({ engine, packs }).answer({ db, key: 'ask:0123456789ab', text: 'What do our plan documents say' });
   assert.ok(reply.provenance.packIds.includes('your-plans'));
   return reply.provenance.grounding.unverified;
 }

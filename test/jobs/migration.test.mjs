@@ -1,4 +1,5 @@
-// Upgrade from main's latest migration before this branch's to the jobs and email migration: a store built with main's migrations
+// Upgrade from main's latest migration before the jobs-email migration (the highest id below it) through the jobs-email
+// migration and any later ones: a store built with migrations below jobs-email
 // only, holding a jobs row and a job_runs row in the shape PR #8's planner writes (no period key),
 // is migrated by the real migrate(). The new columns and tables appear, the old row survives,
 // NULL period keys may repeat, and a duplicate (job_id, period_key) is rejected.
@@ -12,8 +13,8 @@ import { openDb, migrate, setSetting, listMigrations, listTables, schemaVersion 
 
 // The latest migration before the jobs-email one: the highest-numbered one below it (later
 // migrations, such as 009-confirm-deck, come after it and are applied by migrate() too).
-const JOBS_EMAIL = listMigrations().find((m) => /jobs-email/.test(m.name)).id;
-const MAIN_LATEST = Math.max(...listMigrations().filter((m) => m.id < JOBS_EMAIL).map((m) => m.id));
+const JOBS_EMAIL = listMigrations().find((m) => /jobs-email/.test(m.name));
+const MAIN_LATEST = Math.max(...listMigrations().filter((m) => m.id < JOBS_EMAIL.id).map((m) => m.id));
 
 // Apply migrations through `last` exactly as migrate() would, recording them in schema_migrations.
 function applyThrough(db, last) {
@@ -40,10 +41,11 @@ async function oldStore() {
   return { db, done() { try { db.close(); } catch { /* closed */ } rmSync(dir, { recursive: true, force: true }); } };
 }
 
-test('the latest main migration precedes the jobs-email one and this branch adds at least one migration after it', () => {
+test('the jobs-email migration exists and has an id greater than the latest main migration', () => {
   const ids = listMigrations().map((m) => m.id);
+  assert.ok(JOBS_EMAIL, 'jobs-email migration exists');
   assert.ok(ids.includes(MAIN_LATEST));
-  assert.ok(Math.max(...ids) > MAIN_LATEST, 'a new migration exists');
+  assert.ok(JOBS_EMAIL.id > MAIN_LATEST, 'jobs-email comes after the latest main migration');
 });
 
 test('upgrading a store at the latest main migration keeps planner-shaped job_runs rows and adds the scheduler and email schema', async () => {
@@ -57,8 +59,9 @@ test('upgrading a store at the latest main migration keeps planner-shaped job_ru
 
     const { applied } = migrate(db);
     assert.ok(applied.length >= 1 && applied.every((id) => id > MAIN_LATEST), `applied ${applied}`);
+    assert.ok(applied.includes(JOBS_EMAIL.id), 'the jobs-email migration is applied');
     const newest = schemaVersion(db);
-    assert.equal(newest, Math.max(...applied), 'the new migration is the highest applied id');
+    assert.equal(newest, Math.max(...applied), 'the highest applied id is the schema version');
 
     const jr = columns(db, 'job_runs');
     for (const c of ['period_key', 'trigger', 'duration_ms', 'error_class']) assert.ok(jr.includes(c), `job_runs.${c}`);

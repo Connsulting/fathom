@@ -3,12 +3,16 @@
 // the owner's question, and by the fake answer source to script deterministic answers.
 
 import { resolveTokens } from '../shared/tokens.mjs';
+import { THREAD_KEY } from '../scenario/build.mjs';
 
 const arr = v => (Array.isArray(v) ? v : []);
 // A non-negative integer, or a string of digits.
 export const isIndex = v => (Number.isInteger(v) && v >= 0) || (typeof v === 'string' && /^\d+$/.test(v));
 
-// Conversation key -> the rec it belongs to, or null for 'ask' and 'pack:<id>'.
+// An Ask thread key ('ask:<12 hex>'); any other key is a rec id or 'pack:<id>'.
+export const isThreadKey = key => typeof key === 'string' && THREAD_KEY.test(key);
+
+// Conversation key -> the rec it belongs to, or null for an Ask thread and 'pack:<id>'.
 export function recForKey(scenario, key) {
   return arr(scenario.recs).find(r => r.id === key) || null;
 }

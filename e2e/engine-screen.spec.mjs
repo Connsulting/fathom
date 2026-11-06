@@ -2,7 +2,7 @@
 // the error toast, and the Recent spend ledger lists real model calls (purpose, model, cost as a
 // figure) without any prompt contents.
 
-import { test, expect, S, resetDemo, usd, plain, gotoRoute, expectH1 } from './helpers.mjs';
+import { test, expect, S, resetDemo, usd, plain, gotoRoute, expectH1, askOnAsk } from './helpers.mjs';
 
 const TOO_HIGH = 20000; // above the 10000 ceiling the cap API accepts
 
@@ -66,7 +66,7 @@ test('after an Ask, Recent spend lists a chat row with a cost figure and no prom
   const before = await rows.count();
 
   await gotoRoute(page, 'ask');
-  await page.locator(`button.h-chip[data-ask="${q.id}"]`).click();
+  await askOnAsk(page, plain(q.q));
   const answer = page.locator('.h-thread .h-msg.fathom').last();
   await expect(answer).toBeVisible();
   await expect(answer).not.toHaveClass(/\bnotice\b/);

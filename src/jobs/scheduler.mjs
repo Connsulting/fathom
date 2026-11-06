@@ -1,7 +1,7 @@
 // Job scheduler. Rules:
 // 1. Period keys come from the owner's local time (settings.timezone, default America/New_York; an
 //    invalid zone falls back). A period starts at its due time (plan daily 02:00, brief-email the
-//    1st at 07:00, deadline-alerts daily 07:00, freshness Monday 06:00, confirm-guess daily 03:00); the due key is the latest
+//    1st at 07:00, deadline-alerts daily 07:00, trash-purge daily 03:00, freshness Monday 06:00, confirm-guess daily 03:00); the due key is the latest
 //    period whose start is at or before now. config.clock fixes the local date at 12:00.
 // 2. One attempt per (job_id, period_key): the job_runs insert claims it and the unique index
 //    refuses a second claim, so a failed run is not retried that period. A tick runs only the
@@ -33,6 +33,7 @@ import { composeBrief } from '../email/brief.mjs';
 import { sendEmail } from '../email/send.mjs';
 import { runDeadlineAlerts } from './alerts.mjs';
 import { runPlanning } from './planner.mjs';
+import { purgeTrash } from '../api/threads.mjs';
 import { guessPending } from '../ingest/guess.mjs';
 import { defaultPackDirs } from '../packs/state.mjs';
 
@@ -47,6 +48,7 @@ export const JOBS = Object.freeze([
   { id: 'brief-email', name: 'Monthly brief email', cadence: 'Monthly, 1st at 7:00 AM', does: 'Compose the monthly brief and email it.', schedule: Object.freeze({ every: 'month', day: 1, hour: 7 }) },
   { id: 'deadline-alerts', name: 'Deadline alerts', cadence: 'Daily, 7:00 AM', does: 'Email one alert when a deadline or window is 14, 7 or 1 days away.', schedule: Object.freeze({ every: 'day', hour: 7 }) },
   { id: 'freshness', name: 'Data freshness check', cadence: 'Weekly, Monday 6:00 AM', does: 'Count stale and waiting uploads.', schedule: Object.freeze({ every: 'week', weekday: 1, hour: 6 }) },
+  { id: 'trash-purge', name: 'Ask trash cleanup', cadence: 'Daily, 3:00 AM', does: 'Delete conversations that have been in Trash for 30 days.', schedule: Object.freeze({ every: 'day', hour: 3 }) },
   { id: 'confirm-guess', name: 'Confirm best guesses', cadence: 'Daily, 3:00 AM', does: 'Suggest an answer for each pending confirm question.', schedule: Object.freeze({ every: 'day', hour: 3 }) },
 ].map(Object.freeze));
 const JOB_SORT = 100;
@@ -456,6 +458,14 @@ export function defaultHandlers({ publicUrl = null } = {}) {
       const out = await runDeadlineAlerts(ctx.db, { clock: ctx.clock, transport: ctx.transport, publicUrl, now: ctx.now, jobRunId: ctx.jobRunId });
       if (out.send && out.send.status !== 'sent') throw new JobFailure(`email_${out.send.errorCode || 'other'}`);
       return { costUsd: 0, note: { alerts: out.alerts, sent: out.send ? 1 : 0 } };
+    },
+    async 'trash-purge'(ctx) {
+      // Same basis as trash timestamps (clockNow): config clock, else the stored clock, else the
+      // UTC date, never the owner-local date, so a far east zone cannot purge a day early.
+      const stored = getSetting(ctx.db, 'clock', null);
+      const date = (ctx.config && ctx.config.clock) || (isIsoDate(stored) ? stored : ctx.now.slice(0, 10));
+      const purged = purgeTrash(ctx.db, `${date}T${ctx.now.slice(11)}`);
+      return { costUsd: 0, note: { purged } };
     },
     async freshness(ctx) {
       const s = ingestState(ctx.db, { clock: ctx.clock });
