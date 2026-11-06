@@ -8,6 +8,7 @@
 import { getSetting, cents, parseJson as parse } from '../store/db.mjs';
 import { resolveTokens } from '../shared/tokens.mjs';
 import { ingestState, applyFreshness } from '../ingest/freshness.mjs';
+import { buildYearend } from '../yearend/expected.mjs';
 
 const DAY = 86400000;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -41,7 +42,6 @@ const EMPTY = {
   wargame: {},
   ask: { suggested: [], fallback: [] },
   advisor: { name: '', role: '', next: { when: '', length: '' }, agenda: '', reviewed: [], pending: [], notAsking: [], shared: [], experts: [] },
-  yearend: { docs: [], decisions: [] },
   connect: { url: '', scopes: [], tools: [], transcript: [], config: '' },
   'engine.chat': { model: '', note: '' },
   onboarding: {
@@ -458,7 +458,7 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
       };
     }),
     advisor: section(content, 'advisor'),
-    yearend: section(content, 'yearend'),
+    yearend: buildYearend(db, { clock: clk, recs, decisions, plain: s => resolveTokens({ names, law, pct, fig }, s, false) }),
     connect: section(content, 'connect'),
     engine,
     onboarding: section(content, 'onboarding'),

@@ -3,7 +3,8 @@
 // `routes` is the route table (docs/architecture.md lists every entry; test/docs.test.mjs checks).
 // `upload: true` routes take multipart bodies (read by the handler through ctx.readUpload);
 // `ingest: true` routes never log error details, which could carry file contents; `quiet: true`
-// routes (email and jobs) likewise log an error code only.
+// routes (email, jobs and the packet) likewise log an error code only; `raw: true` routes write the
+// response themselves (the packet zip).
 
 import { fileURLToPath } from 'node:url';
 import { HttpError, setSecurityHeaders, sendJson, sendError, guardPost, readJsonBody } from './http.mjs';
@@ -16,6 +17,7 @@ import { createMcpHandler } from '../mcp/index.mjs';
 import { isAllowedHost } from '../mcp/guard.mjs';
 import * as ih from './ingest-handlers.mjs';
 import * as eh from './email-handlers.mjs';
+import * as yh from './yearend-handlers.mjs';
 import { loadOwnerLogins, identityOf, sendUnauthorized } from './identity.mjs';
 import { getSetting } from '../store/db.mjs';
 
@@ -59,6 +61,8 @@ const TABLE = [
   { method: 'POST', path: '/api/email/brief', handler: eh.sendBriefEmail, quiet: true },
   { method: 'GET', path: '/api/jobs', handler: eh.listJobs, quiet: true },
   { method: 'POST', path: '/api/jobs/:id/run', handler: eh.runJob, quiet: true },
+  { method: 'POST', path: '/api/yearend/marks', handler: yh.markItem },
+  { method: 'GET', path: '/api/yearend/packet', handler: yh.downloadPacket, raw: true, quiet: true },
 ];
 
 export const routes = TABLE.map(({ method, path }) => ({ method, path }));
@@ -153,8 +157,8 @@ export function createHandler({ db, config, answerer, engine = null, packs = nul
           guardPost(req);
           body = await readJsonBody(req);
         }
-        const out = await r.handler({ db, config, answerer, engine, packs, identity, scheduler, transport, params, body, readUpload, req, get keys() { return getKeys(); } });
-        sendJson(res, 200, out);
+        const out = await r.handler({ db, config, answerer, engine, packs, identity, scheduler, transport, params, body, readUpload, req, res, get keys() { return getKeys(); } });
+        if (!r.raw) sendJson(res, 200, out);
         return;
       }
       if (req.method !== 'GET' && req.method !== 'HEAD') {
