@@ -36,7 +36,8 @@ for tag in "$@"; do
   fi
   repo="$this_repo"
   timeout --foreground 20 docker tag "$local_image" "$tag"
-  push_out="$(timeout --foreground 300 docker push "$tag")"
+  # Docker prints the digest line on stdout or stderr depending on version.
+  push_out="$(timeout --foreground 300 docker push "$tag" 2>&1)"
   this_digest="$(printf '%s\n' "$push_out" | digest_from_push)"
   if [ -z "$this_digest" ]; then
     echo "push-tested-image: ${tag} push did not report a digest" >&2
