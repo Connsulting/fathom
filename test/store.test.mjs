@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { openDb, migrate, listTables, MIGRATIONS_DIR, getSetting, setSetting, DB_FILE } from '../src/store/db.mjs';
+import { openDb, migrate, listTables, listMigrations, MIGRATIONS_DIR, getSetting, setSetting, DB_FILE } from '../src/store/db.mjs';
 import { tempDb, tempDir, withServer, request, SERVER_TIMEOUT } from './helpers/server.mjs';
 
 const TABLES = [
@@ -116,8 +116,8 @@ test('enumerated columns reject unknown values and accept known ones', async () 
     assert.throws(() => fig.run('f_bad', 's1', 'z', 'Bad kind'));
     for (const k of ['a', 'p', 'e', 'm']) fig.run('f_' + k, 's1', k, 'Kind ' + k);
 
-    db.prepare("INSERT INTO conversations (key, created_at) VALUES ('ask', '2026-11-05T09:00:00Z')").run();
-    const msg = db.prepare("INSERT INTO messages (conversation_key, role, text, refs, notice, ts) VALUES ('ask', ?, '<p>x</p>', '[]', 0, '2026-11-05T09:00:00Z')");
+    db.prepare("INSERT INTO conversations (key, created_at) VALUES ('ask:0123456789ab', '2026-11-05T09:00:00Z')").run();
+    const msg = db.prepare("INSERT INTO messages (conversation_key, role, text, refs, notice, ts) VALUES ('ask:0123456789ab', ?, '<p>x</p>', '[]', 0, '2026-11-05T09:00:00Z')");
     assert.throws(() => msg.run('bot'));
     for (const role of ['me', 'fathom', 'advisor', 'claude']) msg.run(role);
 
@@ -157,9 +157,11 @@ test('migration files are NNN-name.sql numbered from 001 without gaps', () => {
 
 // AC15 (merge-gate blocker 7): main's latest store before the chat branch is schema 005
 // (002-ingest, 003-ingest-recipients, 004-ingest-survivor, 005-pack-manifest). Starting the server
-// on such a store applies 006-chat: messages.provenance exists, existing messages survive. The
-// later 007-planner applies in the same startup, so the schema reports 7 and the applied list
-// ends with it.
+// on such a store applies 006-chat: messages.provenance exists, existing messages survive. Every
+// later migration (007-planner, 008-jobs-email, 009-confirm-deck, 010-ask-threads, ...) applies in the same startup, so the schema
+// reports the newest migration and the old 'ask' conversation's messages now live in one Ask
+// thread.
+const LATEST = Math.max(...listMigrations().map(m => m.id));
 const MAIN_MIGRATIONS = ['001-foundation.sql', '002-ingest.sql', '003-ingest-recipients.sql', '004-ingest-survivor.sql', '005-pack-manifest.sql'];
 
 test('a store migrated to exactly 005 upgrades to 006-chat on startup and keeps its messages', { timeout: SERVER_TIMEOUT * 2 }, async () => {
@@ -195,8 +197,13 @@ test('a store migrated to exactly 005 upgrades to 006-chat on startup and keeps 
   try {
     assert.ok(db.prepare('PRAGMA table_info(messages)').all().some(c => c.name === 'provenance'), 'messages.provenance exists');
     const applied = db.prepare('SELECT id, name FROM schema_migrations ORDER BY id').all().map(r => `${r.id}-${r.name}`);
+    assert.deepEqual(applied, listMigrations().map(m => `${m.id}-${m.name}`));
     assert.deepEqual(applied.slice(0, 7), ['1-foundation', '2-ingest', '3-ingest-recipients', '4-ingest-survivor', '5-pack-manifest', '6-chat', '7-planner']);
-    const rows = db.prepare("SELECT role, text, provenance FROM messages WHERE conversation_key = 'ask' ORDER BY id").all().map(r => ({ ...r }));
+    assert.equal(db.prepare("SELECT count(*) AS n FROM conversations WHERE key = 'ask'").get().n, 0, 'the bare ask conversation is gone');
+    const threads = db.prepare("SELECT key FROM conversations WHERE key LIKE 'ask:%'").all().map(r => r.key);
+    assert.equal(threads.length, 1);
+    assert.match(threads[0], /^ask:[a-f0-9]{12}$/);
+    const rows = db.prepare('SELECT role, text, provenance FROM messages WHERE conversation_key = ? ORDER BY id').all(threads[0]).map(r => ({ ...r }));
     assert.deepEqual(rows, [
       { role: 'me', text: '<p>Synthetic question before the upgrade</p>', provenance: null },
       { role: 'fathom', text: '<p>Synthetic answer before the upgrade</p>', provenance: null },

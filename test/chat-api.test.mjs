@@ -5,6 +5,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import demo from '../demo/scenario.mjs';
 import { SERVER_TIMEOUT, withServer, postJson, getScenario, openStore } from './helpers/server.mjs';
 
 const T = { timeout: SERVER_TIMEOUT };
@@ -25,10 +26,14 @@ async function readDb(file, fn) {
 
 const spendRows = file => readDb(file, db => db.prepare('SELECT * FROM spend_ledger ORDER BY id').all().map(r => ({ ...r })));
 const ask = (s, body) => ok(postJson(s.baseUrl, '/api/ask', body));
+// A new Ask thread asked `text` first: { scenario, thread, message }.
+const askNew = (s, text) => ok(postJson(s.baseUrl, '/api/threads', { text }));
+// The suggested question 'leave' as free text: the fake answer source matches it to its canned answer.
+const LEAVE = demo.ask.suggested.find(q => q.id === 'leave').q;
 const toolNames = message => message.provenance.tools.map(x => x.name);
 
 test('an Ask chip stores a grounded answer with provenance in the message row and the scenario', T, () => withServer({ env: FAKE }, async s => {
-  const r = await ask(s, { key: 'ask', questionId: 'leave' });
+  const r = await askNew(s, LEAVE);
   const m = r.message;
   assert.equal(m.role, 'fathom');
   assert.equal(m.notice, false);
@@ -38,18 +43,18 @@ test('an Ask chip stores a grounded answer with provenance in the message row an
   assert.equal(m.provenance.grounding.ok, true);
   assert.ok(toolNames(m).includes('household_summary'));
   assert.ok(m.provenance.figures.includes('yearend_cash'));
-  const conv = r.scenario.live.conversations.ask;
+  const conv = r.scenario.live.conversations[r.thread.key];
   assert.equal(conv.length, 2);
   assert.equal(conv[0].role, 'me');
   assert.equal(conv[0].provenance, null, 'the owner message carries no provenance');
   assert.deepEqual(conv[1], m);
-  const stored = await readDb(s.dbFile, db => db.prepare("SELECT provenance FROM messages WHERE conversation_key = 'ask' AND role = 'fathom'").get());
+  const stored = await readDb(s.dbFile, db => db.prepare("SELECT provenance FROM messages WHERE conversation_key = ? AND role = 'fathom'").get(r.thread.key));
   assert.deepEqual(JSON.parse(stored.provenance), m.provenance);
   assert.ok(!stored.provenance.includes('<household_summary>'), 'no prompt text is stored');
 }));
 
 test('unmatched free text gets a grounded answer from the household summary with a bound literal', T, () => withServer({ env: FAKE }, async s => {
-  const r = await ask(s, { key: 'ask', text: 'How are things looking overall' });
+  const r = await askNew(s, 'How are things looking overall');
   const m = r.message;
   assert.equal(m.notice, false);
   assert.equal(m.provenance.grounding.ok, true);
@@ -60,7 +65,7 @@ test('unmatched free text gets a grounded answer from the household summary with
 }));
 
 test('free text with an invented amount is retried and stored with the amount marked unverified', T, () => withServer({ env: FAKE }, async s => {
-  const r = await ask(s, { key: 'ask', text: `Could we spend ${INVENTED} on a sailboat` });
+  const r = await askNew(s, `Could we spend ${INVENTED} on a sailboat`);
   const m = r.message;
   assert.equal(m.notice, false);
   assert.ok(m.text.includes(`<span class="fx-unverified" title="Not found in your data or tool results">${INVENTED}</span>`), m.text);
@@ -103,14 +108,14 @@ test('what-if runs a live conversation once, stores provenance and marks the pac
 test('engine off stores the notice without spending; back on answers with provenance', T, () => withServer({ env: FAKE }, async s => {
   await ok(postJson(s.baseUrl, '/api/engine', { on: false }));
   const before = (await spendRows(s.dbFile)).length;
-  const off = await ask(s, { key: 'ask', questionId: 'leave' });
+  const off = await askNew(s, LEAVE);
   assert.equal(off.message.notice, true);
   assert.ok(off.message.text.includes('Engine is off, so answers are paused.'));
   assert.equal((await spendRows(s.dbFile)).length, before);
   const whatIf = await ok(postJson(s.baseUrl, '/api/packs/giving/whatif', {}));
   assert.equal(whatIf.scenario.live.packs.giving.whatIfDone, false, 'a notice does not mark the what-if done');
   await ok(postJson(s.baseUrl, '/api/engine', { on: true }));
-  const on = await ask(s, { key: 'ask', questionId: 'leave' });
+  const on = await ask(s, { key: off.thread.key, text: LEAVE });
   assert.equal(on.message.notice, false);
   assert.ok(on.message.provenance);
 }));
@@ -118,7 +123,7 @@ test('engine off stores the notice without spending; back on answers with proven
 test('a zero cap stores the over-cap notice without spending; a restored cap answers', T, () => withServer({ env: FAKE }, async s => {
   await ok(postJson(s.baseUrl, '/api/engine/cap', { usd: 0 }));
   const before = (await spendRows(s.dbFile)).length;
-  const capped = await ask(s, { key: 'ask', questionId: 'leave' });
+  const capped = await askNew(s, LEAVE);
   assert.equal(capped.message.notice, true);
   assert.ok(capped.message.text.includes('is used up, so answers are paused'), capped.message.text);
   assert.ok(capped.message.text.includes('{f:engine.budget.monthly}'), capped.message.text);
@@ -126,12 +131,12 @@ test('a zero cap stores the over-cap notice without spending; a restored cap ans
   const whatIf = await ok(postJson(s.baseUrl, '/api/packs/giving/whatif', {}));
   assert.equal(whatIf.scenario.live.packs.giving.whatIfDone, false);
   await ok(postJson(s.baseUrl, '/api/engine/cap', { usd: 200 }));
-  assert.equal((await ask(s, { key: 'ask', questionId: 'leave' })).message.notice, false);
+  assert.equal((await ask(s, { key: capped.thread.key, text: LEAVE })).message.notice, false);
 }));
 
 test('a server configured with FATHOM_ENGINE=off answers with the configuration notice', T, () => withServer({ env: { FATHOM_ENGINE: 'off' } }, async s => {
   const before = (await spendRows(s.dbFile)).length;
-  const r = await ask(s, { key: 'ask', questionId: 'leave' });
+  const r = await askNew(s, LEAVE);
   assert.equal(r.message.notice, true);
   assert.ok(r.message.text.includes('off in this deployment'), r.message.text);
   const whatIf = await ok(postJson(s.baseUrl, '/api/packs/giving/whatif', {}));
@@ -144,7 +149,7 @@ test('a server configured with FATHOM_ENGINE=off answers with the configuration 
 test('each answer records spend rows in the clock month that the scenario ledger lists', T, () => withServer({ env: FAKE }, async s => {
   const first = await getScenario(s.baseUrl);
   const before = await spendRows(s.dbFile);
-  await ask(s, { key: 'ask', questionId: 'leave' });
+  await askNew(s, LEAVE);
   const after = await spendRows(s.dbFile);
   const added = after.slice(before.length);
   assert.ok(added.length >= 1);
@@ -169,7 +174,8 @@ const toolRows = file => readDb(file, db => db.prepare("SELECT count(*) AS n FRO
 test('B2: chat commands and a What if never change a rec status; an explicit command is a proposal', T, () => withServer({ env: FAKE }, async s => {
   const before = statuses(await getScenario(s.baseUrl));
   const events = await toolRows(s.dbFile);
-  for (const key of ['ask', 'deferral']) {
+  const { thread } = await ok(postJson(s.baseUrl, '/api/threads', {}));
+  for (const key of [thread.key, 'deferral']) {
     for (const text of ['Do not mark anything done', 'mark this done', 'Please mark this done', 'Snooze this until next month']) {
       const r = await ask(s, { key, text });
       assert.ok(!toolNames(r.message).includes('set_recommendation_status'), `${key}: ${text}`);

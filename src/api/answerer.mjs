@@ -30,7 +30,7 @@
 // Stored figures should appear only as tokens, but a stored figure that a tool returns as plain
 // text grounds when the model read it through that tool: the tool result is the evidence.
 //
-// Chat never writes. In 'ask' and rec conversations the model is offered one local, non-writing
+// Chat never writes. In Ask threads ('ask:<id>') and rec conversations the model is offered one local, non-writing
 // tool, propose_recommendation_action; the last successful call becomes provenance.proposal
 // ({recId, action, wake?}) and the owner confirms it through the ordinary rec action endpoint.
 
@@ -41,7 +41,7 @@ import { packContext } from '../packs/index.mjs';
 import { packStatus, ACTION_STATUS } from '../shared/rules.mjs';
 import { escapeUserText, resolveTokens } from '../shared/tokens.mjs';
 import { parseJson } from '../store/db.mjs';
-import { findQuestion, matchQuestion, recForKey } from './questions.mjs';
+import { findQuestion, matchQuestion, recForKey, isThreadKey } from './questions.mjs';
 import { fakeAnswerScript } from './fake-answers.mjs';
 
 export const PRODUCT_RULES = [
@@ -421,7 +421,7 @@ export function createLiveAnswerer({ engine, packs } = {}) {
   if (!engine || typeof engine.call !== 'function') throw new TypeError('createLiveAnswerer needs an engine');
 
   // One grounded model answer: call, ground, retry once with a corrective turn, render.
-  // proposeFor: null (no proposal tool), '*' (any visible rec, the ask conversation) or the rec id
+  // proposeFor: null (no proposal tool), '*' (any visible rec, an Ask thread) or the rec id
   // of a rec conversation (proposals for any other rec are ignored).
   async function run({ db, scenario, now, question, context, history, baseRefs, fakeArgs, proposeFor = null }) {
     if (!engine.isOn()) return offNotice(engine);
@@ -499,7 +499,8 @@ export function createLiveAnswerer({ engine, packs } = {}) {
   }
 
   return {
-    async answer({ db, key = 'ask', questionId, text, clock } = {}) {
+    async answer({ db, key, questionId, text, clock } = {}) {
+      if (typeof key !== 'string' || !key) throw new TypeError('answer needs a conversation key');
       const scenario = buildScenario(db, { clock, packs });
       const now = clockNow(db, clock);
       const hasQ = questionId !== undefined && questionId !== null;
@@ -524,7 +525,7 @@ export function createLiveAnswerer({ engine, packs } = {}) {
         context = packConversationContext(db, packs, key.slice(5)).context;
       }
       return run({ db, scenario, now, question, context, history: scenario.live.conversations[key] || [], baseRefs,
-        proposeFor: rec ? rec.id : key === 'ask' ? '*' : null,
+        proposeFor: rec ? rec.id : isThreadKey(key) ? '*' : null,
         fakeArgs: { key, questionId: hasQ ? questionId : undefined, text: hasQ ? undefined : question } });
     },
 

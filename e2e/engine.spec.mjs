@@ -1,7 +1,7 @@
 // Engine screen: the on/off toggle drives the engine-off strip and Ask answers, and every
 // amount on the screen is a figure with provenance (Horizon port item 5).
 
-import { test, expect, S, resetDemo, usd, gotoRoute, expectH1, mainNav, expectPopoverSource } from './helpers.mjs';
+import { test, expect, S, resetDemo, usd, plain, gotoRoute, expectH1, mainNav, expectPopoverSource, ASK_THREAD_URL, askOnAsk } from './helpers.mjs';
 
 const ENGINE_OFF_NOTICE = 'Engine is off, so answers are paused. Switch it back on to get an answer.';
 
@@ -27,7 +27,7 @@ test('turning the engine off pauses answers; turning it on restores them', async
   await mainNav(page).getByRole('link', { name: 'Ask', exact: true }).click();
   await expect(page).toHaveURL(/#\/ask$/);
   await expect(page.locator('.h-engine-off')).toBeVisible();
-  await page.locator(`button.h-chip[data-ask="${qOff.id}"]`).click();
+  const id = await askOnAsk(page, plain(qOff.q));
   const answers = page.locator('.h-thread .h-msg.fathom');
   await expect(answers).toHaveCount(1);
   await expect(answers.last()).toContainText(ENGINE_OFF_NOTICE);
@@ -38,8 +38,13 @@ test('turning the engine off pauses answers; turning it on restores them', async
   await expectH1(page, 'Running');
   await expect(page.locator('.h-engine-off')).toHaveCount(0);
 
+  // The Ask link opens a new conversation; the earlier one continues from its sidebar row.
   await mainNav(page).getByRole('link', { name: 'Ask', exact: true }).click();
-  await page.locator(`button.h-chip[data-ask="${qOn.id}"]`).click();
+  await page.locator(`aside.h-askx-side a.h-askx-row[data-thread="${id}"]`).click();
+  await expect(page).toHaveURL(new RegExp(`#/ask/${id}$`));
+  await expect(answers).toHaveCount(1);
+  await askOnAsk(page, plain(qOn.q));
+  await expect(page).toHaveURL(new RegExp(`#/ask/${id}$`));
   await expect(answers).toHaveCount(2);
   const last = answers.last();
   await expect(last).not.toContainText(ENGINE_OFF_NOTICE);
@@ -48,6 +53,7 @@ test('turning the engine off pauses answers; turning it on restores them', async
 
   // The state is in the store, not the page.
   await page.reload();
+  await expect(page).toHaveURL(ASK_THREAD_URL);
   await expect(page.locator('.h-engine-off')).toHaveCount(0);
   await expect(answers).toHaveCount(2);
 });

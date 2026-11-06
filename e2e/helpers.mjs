@@ -296,12 +296,38 @@ export async function bareDollarNodes(page) {
   });
 }
 
+/* ---------- Ask conversations ---------- */
+
+// The Ask empty state heading (#/ask, no conversation open).
+export const ASK_HELLO = 'What do you want to know?';
+// An open conversation's URL; group 1 is the thread id.
+export const ASK_THREAD_URL = /#\/ask\/([a-f0-9]{12})$/;
+
+// The Ask composer: the centered one in the empty state, the docked one in an open conversation.
+export function askInput(page) {
+  return page.locator('form.h-askx-compose textarea[name="q"]');
+}
+
+// Types a question into the Ask composer, sends it with Enter and waits for the Fathom reply.
+// Returns the id of the conversation it landed in.
+export async function askOnAsk(page, text) {
+  const replies = page.locator('.h-thread .h-msg.fathom');
+  const before = await replies.count();
+  const input = askInput(page);
+  await expect(input).toBeVisible();
+  await input.fill(text);
+  await input.press('Enter');
+  await expect(page).toHaveURL(ASK_THREAD_URL);
+  await expect(replies).toHaveCount(before + 1);
+  return ASK_THREAD_URL.exec(page.url())[1];
+}
+
 // Main routes with their h1 text (rec and per-pack routes are handled by the specs).
 export function mainRoutes() {
   return [
     ['brief', attentionHeadline()],
     ['plan', 'Everything on the calendar'],
-    ['ask', 'Ask about your money'],
+    ['ask', ASK_HELLO],
     ['wargame', 'What is open, and what is coming'],
     ['wargame/salary', plain(S.wargame.salary.title)],
     ['wargame/deferral', plain(S.wargame.deferral.title)],

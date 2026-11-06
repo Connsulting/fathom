@@ -167,13 +167,66 @@ export function messageOut(row) {
   };
 }
 
+// Every conversation's messages by key: rec ids, 'pack:<id>' and Ask threads ('ask:<id>').
 export function loadConversations(db) {
-  const out = { ask: [] };
+  const out = {};
   for (const c of db.prepare('SELECT key FROM conversations ORDER BY created_at, key').all()) out[c.key] = out[c.key] || [];
   for (const m of db.prepare('SELECT * FROM messages ORDER BY id').all()) {
     (out[m.conversation_key] || (out[m.conversation_key] = [])).push(messageOut(m));
   }
   return out;
+}
+
+// ---------------------------------------------------------------- Ask threads
+
+// An Ask thread key: 'ask:' and 12 lowercase hex characters (the id the URLs carry).
+export const THREAD_KEY = /^ask:[a-f0-9]{12}$/;
+
+// Thread JSON (docs/architecture.md, Ask threads) from a conversations row with a `turns` count.
+export function threadOut(row) {
+  return {
+    id: row.key.slice(4),
+    key: row.key,
+    title: row.title ?? null,
+    titleSource: row.title_source ?? null,
+    createdAt: row.created_at,
+    lastAt: row.last_at ?? row.created_at,
+    archivedAt: row.archived_at ?? null,
+    trashedAt: row.trashed_at ?? null,
+    turns: Number(row.turns) || 0,
+  };
+}
+
+export const THREAD_SELECT = `SELECT c.key, c.created_at, c.title, c.title_source, c.archived_at, c.trashed_at, c.last_at,
+  (SELECT count(*) FROM messages m WHERE m.conversation_key = c.key AND m.role = 'me') AS turns
+  FROM conversations c`;
+
+// Every Ask thread (archived and trashed included), newest lastAt first.
+export function loadThreads(db) {
+  return db.prepare(`${THREAD_SELECT} WHERE substr(c.key, 1, 4) = 'ask:' ORDER BY coalesce(c.last_at, c.created_at) DESC, c.rowid DESC`)
+    .all().filter(r => THREAD_KEY.test(r.key)).map(threadOut);
+}
+
+// The fixed Ask starter questions, in their pinned order. No figures, no tokens.
+export const ASK_STARTERS = Object.freeze([
+  Object.freeze({ id: 'attention', q: 'What needs my attention right now?' }),
+  Object.freeze({ id: 'taxes', q: 'How are our tax payments tracking this year?' }),
+  Object.freeze({ id: 'scorp', q: 'How is the S corp doing this year?' }),
+  Object.freeze({ id: 'yearend', q: 'What should we do before the year ends?' }),
+]);
+
+// The starters whose condition holds: attention (a visible rec proposed, accepted or doing), taxes
+// (any tax payment), scorp (fact income.sCorp is true or any P&L line), yearend (always).
+export function loadAskStarters(db, recs) {
+  const exists = table => !!db.prepare(`SELECT EXISTS (SELECT 1 FROM ${table}) AS x`).get().x;
+  const sCorp = parse(db.prepare("SELECT value FROM facts WHERE key = 'income.sCorp'").get()?.value, null) === true;
+  const holds = {
+    attention: recs.some(r => ['proposed', 'accepted', 'doing'].includes(r.status)),
+    taxes: exists('tax_payments'),
+    scorp: sCorp || exists('pnl_lines'),
+    yearend: true,
+  };
+  return ASK_STARTERS.filter(st => holds[st.id]).map(st => ({ id: st.id, q: st.q }));
 }
 
 export function wargameLists(wargame) {
@@ -418,6 +471,8 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
       onboardStep: Number.isInteger(onboarding.step) ? onboarding.step : 0,
       picks,
       conversations: loadConversations(db),
+      threads: loadThreads(db),
+      askStarters: loadAskStarters(db, recs),
       packs: Object.fromEntries(packs.map(p => [p.def.id, { active: p.live.active, exploring: p.live.exploring, whatIfDone: p.live.whatIfDone }])),
       yourPlans: loadYourPlans(db),
       clock: clk,

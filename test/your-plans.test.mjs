@@ -418,7 +418,7 @@ async function answerAfterBuild(db, dataDir, text) {
   const packs = createLivePacks(db, { dataDir });
   packs.refresh();
   const engine = sayingEngine(engineFor(db, dataDir), text);
-  return createLiveAnswerer({ engine, packs }).answer({ db, key: 'ask', text: 'What do our plan documents say' });
+  return createLiveAnswerer({ engine, packs }).answer({ db, key: 'ask:0123456789ab', text: 'What do our plan documents say' });
 }
 
 test('B5: a document with no numbers and a row inventing an amount gives no entry with it, and an answer stating it is ungrounded', async t => {
@@ -590,7 +590,7 @@ test('POST /api/your-plans/build builds the pack, which is live for entries and 
   assert.equal(entry.entry.id, entryId);
   assert.match(entry.entry.cites[0].url, /^https:\/\/your-plans\.invalid\//);
 
-  const reply = await ok(postJson(s.baseUrl, '/api/ask', { key: 'ask', text: 'What do our plan documents say' }));
+  const reply = await ok(postJson(s.baseUrl, '/api/threads', { text: 'What do our plan documents say' }));
   assert.ok(reply.message.provenance.packIds.includes('your-plans'), 'the next prompt carries the new pack');
 }));
 
@@ -628,7 +628,7 @@ test('npm run build:your-plans against a running server is picked up on its next
   assert.equal(pack.status, 'active');
   const entryId = pack.entryList[0].id;
   assert.equal((await request(s.baseUrl, { path: `/api/packs/your-plans/entries/${encodeURIComponent(entryId)}` })).status, 200);
-  const reply = await ok(postJson(s.baseUrl, '/api/ask', { key: 'ask', text: 'What do our plan documents say' }));
+  const reply = await ok(postJson(s.baseUrl, '/api/threads', { text: 'What do our plan documents say' }));
   assert.ok(reply.message.provenance.packIds.includes('your-plans'));
 }));
 

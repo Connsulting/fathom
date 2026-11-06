@@ -19,11 +19,22 @@
 //    primary param (rec->id, onboarding->step, wargame->name, packs->id).
 //  - api.scenarioPick(name, idx): idx is a point/option index or its id string.
 //  - api.ask(questionId, key?): index (or id) into rec.qa when the conversation is a rec, otherwise an
-//    id into ask.suggested. Default conversation = rec on the rec route, else 'ask'.
+//    id into ask.suggested (or a starter id on #/ask). Default conversation = the rec on the rec
+//    route, the pack's What if thread on a pack route, the open thread on #/ask/<id>; on #/ask with
+//    no thread open it starts a new thread (api.newThread).
 //  - Messages are { id, role, html, refs, ts, notice, provenance }. 'fathom' html is a series of <p>.
 //    provenance is the stored object (tools, figures, literals, packEntries, packIds, grounding)
 //    or null for messages that have none.
-//  - api.askFree(text, key) takes 'ask', a rec id or 'pack:<id>' (the pack's What if thread).
+//  - api.askFree(text, key) takes an Ask thread key 'ask:<id>', a rec id or 'pack:<id>' (the pack's
+//    What if thread). There is no bare 'ask' conversation; api.conversation() with no key is [].
+//  - Ask threads: route 'ask' takes an optional id (#/ask/<id>; an id not in live.threads normalizes
+//    to #/ask). api.threads() lists every thread (archived and trashed too, newest lastAt first) as
+//    { id, key, title, titleSource, createdAt, lastAt, archivedAt, trashedAt, turns }; title null
+//    means "New conversation". api.askStarters() lists { id, q } plain-text starters.
+//    api.newThread({ text } | { questionId }) creates a thread, asks, and opens #/ask/<id> (replacing
+//    #/ask); it resolves { thread, message } or null. api.threadAct(id, 'archive'|'trash'|'restore'|
+//    'delete') and api.renameThread(id, title) resolve the updated thread (or null; delete resolves
+//    null too, and a deleted open thread falls back to #/ask).
 //  - api.packEntry(packId, entryId) GETs one pack entry and resolves { id, title, body, cites } or
 //    null; it never touches the scenario or the error line.
 //  - api.reviseAnswer(id, optionId) and api.reopenAnswer(id) resolve { item }, or { final: message }
@@ -34,7 +45,7 @@ import { needsYou as needsYouOf, packStatus } from '/shared/rules.mjs';
 
 const ROUTES = new Set(['onboarding', 'brief', 'plan', 'rec', 'ask', 'wargame', 'goals', 'accounts',
   'advisor', 'yearend', 'connect', 'engine', 'email', 'packs', 'confirm', 'add']);
-const PARAM_KEY = { rec: 'id', onboarding: 'step', wargame: 'name', packs: 'id' };
+const PARAM_KEY = { rec: 'id', onboarding: 'step', wargame: 'name', packs: 'id', ask: 'id' };
 const LAST_STEP = 5;
 
 // ---------------------------------------------------------------- small helpers
@@ -66,6 +77,8 @@ const recList = () => arr(S && S.recs);
 const rawRec = id => recList().find(r => r.id === id) || null;
 const packList = () => arr(S && S.packs);
 const rawPack = id => packList().find(p => p.id === id) || null;
+const threadList = () => arr(live().threads);
+const rawThread = id => threadList().find(t => t && t.id === id) || null;
 const isReal = () => live().mode === 'real';
 const minStep = () => (isReal() ? 1 : 0);
 const demoId = () => (live().demo === 'fresh' ? 'fresh' : 'november');
@@ -111,7 +124,8 @@ function mapMsg(m) {
   };
 }
 function conversation(key) {
-  const k = key == null || key === '' ? 'ask' : String(key);
+  if (key == null || key === '') return [];
+  const k = String(key);
   if (convCache.ver !== version) convCache = { ver: version, map: new Map() };
   if (convCache.map.has(k)) return convCache.map.get(k);
   const list = arr((live().conversations || {})[k]).map(mapMsg);
@@ -187,6 +201,7 @@ function normalizeRoute(r) {
   }
   if (r.name === 'onboarding') return defaultRoute();
   if (r.name === 'rec') return p.id && rawRec(String(p.id)) ? { name: 'rec', params: { id: String(p.id) } } : { name: 'plan', params: {} };
+  if (r.name === 'ask') return p.id && rawThread(String(p.id)) ? { name: 'ask', params: { id: String(p.id) } } : { name: 'ask', params: {} };
   if (r.name === 'packs') return p.id && rawPack(String(p.id)) ? { name: 'packs', params: { id: String(p.id) } } : { name: 'packs', params: {} };
   if (r.name === 'wargame') {
     const n = p.name != null ? String(p.name) : '';
@@ -403,12 +418,17 @@ function act(recId, action, arg) {
 function activeKey() {
   if (cur && cur.name === 'rec' && cur.params && cur.params.id) return cur.params.id;
   if (cur && cur.name === 'packs' && cur.params && cur.params.id) return 'pack:' + cur.params.id;
-  return 'ask';
+  if (cur && cur.name === 'ask' && cur.params && cur.params.id) {
+    const th = rawThread(cur.params.id);
+    if (th) return th.key || 'ask:' + th.id;
+  }
+  return null;
 }
 
 function ask(questionId, convKey) {
   if (questionId == null || questionId === '') return done();
   const key = convKey || activeKey();
+  if (!key) return newThread({ questionId: String(questionId) });
   const qid = typeof questionId === 'string' && /^\d+$/.test(questionId) ? Number(questionId) : questionId;
   return send('/api/ask', { key, questionId: qid }, d => (d.message ? mapMsg(d.message) : null));
 }
@@ -417,8 +437,50 @@ function askFree(text, convKey) {
   const clean = String(text == null ? '' : text).trim();
   if (!clean) return done();
   const key = convKey || activeKey();
+  if (!key) return newThread({ text: clean });
   if (key.startsWith('pack:') && !rawPack(key.slice(5))) return done();
   return send('/api/ask', { key, text: clean }, d => (d.message ? mapMsg(d.message) : null));
+}
+
+// ---------------------------------------------------------------- Ask threads
+
+const THREAD_ACTS = new Set(['archive', 'trash', 'restore', 'delete']);
+
+function threads() {
+  return threadList().slice();
+}
+
+function askStarters() {
+  return arr(live().askStarters).filter(s => s && s.id != null && typeof s.q === 'string');
+}
+
+// Creates a thread and asks its first question. When the owner is still on #/ask, the new thread
+// replaces that history entry, so Back leaves the Ask page instead of reopening an empty composer.
+function newThread(q) {
+  const o = q && typeof q === 'object' ? q : {};
+  let body;
+  if (o.questionId != null && o.questionId !== '') body = { questionId: String(o.questionId) };
+  else {
+    const text = String(o.text == null ? '' : o.text).trim();
+    if (!text) return done();
+    body = { text };
+  }
+  return send('/api/threads', body, d => {
+    const th = d.thread && typeof d.thread === 'object' ? d.thread : null;
+    if (th && th.id && cur && cur.name === 'ask' && !(cur.params && cur.params.id)) go('ask', { id: th.id }, { replace: true });
+    return { thread: th, message: d.message ? mapMsg(d.message) : null };
+  });
+}
+
+function threadAct(id, action) {
+  if (id == null || id === '' || !THREAD_ACTS.has(action) || !rawThread(String(id))) return done();
+  return send('/api/threads/' + encodeURIComponent(id) + '/' + action, {}, d => (d.thread && typeof d.thread === 'object' ? d.thread : null));
+}
+
+function renameThread(id, title) {
+  const clean = String(title == null ? '' : title).trim().replace(/\s+/g, ' ');
+  if (id == null || id === '' || !clean || !rawThread(String(id))) return done();
+  return send('/api/threads/' + encodeURIComponent(id) + '/rename', { title: clean }, d => (d.thread && typeof d.thread === 'object' ? d.thread : null));
 }
 
 function whatIf(id) {
@@ -560,6 +622,11 @@ const api = {
   ask,
   askFree,
   conversation,
+  threads,
+  askStarters,
+  newThread,
+  threadAct,
+  renameThread,
   scenarioPick,
   onboard,
   engineOn: () => !!live().engine,

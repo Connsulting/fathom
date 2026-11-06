@@ -4,12 +4,15 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import demo from '../demo/scenario.mjs';
 import { SERVER_TIMEOUT, spawnServer, withServer, request, postJson, getScenario, openStore } from './helpers/server.mjs';
 
 const T = { timeout: SERVER_TIMEOUT };
 const T2 = { timeout: SERVER_TIMEOUT * 2 };
 const FAKE = { FATHOM_ENGINE: 'fake' };
 const cents = n => Math.round(n * 100) / 100;
+// The suggested question 'leave' as free text in a new Ask thread.
+const LEAVE = demo.ask.suggested.find(q => q.id === 'leave').q;
 
 async function ok(resPromise) {
   const r = await resPromise;
@@ -71,7 +74,7 @@ test('the scenario ledger lists the latest 8 spend rows without prompt or token 
       insert.run(`${first.meta.clock}T00:00:0${i}.000Z`, month, 0.11 + i / 100, JSON.stringify({ input_tokens: 5, prompt: 'SYNTHETIC-PROMPT-TEXT' }));
     }
   });
-  await ok(postJson(s.baseUrl, '/api/ask', { key: 'ask', questionId: 'leave' }));
+  await ok(postJson(s.baseUrl, '/api/threads', { text: LEAVE }));
   const sc = await getScenario(s.baseUrl);
   const ledger = sc.engine.ledger;
   assert.equal(ledger.length, 8);
@@ -83,7 +86,7 @@ test('the scenario ledger lists the latest 8 spend rows without prompt or token 
 }));
 
 test('each listed ledger row has a provenance figure for its cost', T, () => withServer({ env: FAKE }, async s => {
-  await ok(postJson(s.baseUrl, '/api/ask', { key: 'ask', questionId: 'leave' }));
+  await ok(postJson(s.baseUrl, '/api/threads', { text: LEAVE }));
   const sc = await getScenario(s.baseUrl);
   assert.ok(sc.engine.ledger.length > 0);
   for (const row of sc.engine.ledger) {

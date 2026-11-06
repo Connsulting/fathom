@@ -4,7 +4,7 @@ import { checkGrounding } from './grounding.mjs';
 import { compileSchema } from './schema.mjs';
 import { createRegistryServer } from './tools.mjs';
 import { sdkRound, messagesRound } from './live.mjs';
-import { DEFAULT_MODEL, estimateUnknownCost } from './pricing.mjs';
+import { DEFAULT_MODEL, TITLE_MODEL, estimateUnknownCost } from './pricing.mjs';
 import { EngineOffError, BudgetExceededError, RoundLimitError, ModelCallError, ModelAccountingError } from './errors.mjs';
 export { EngineOffError, BudgetExceededError, RoundLimitError, ModelCallError, ModelAccountingError } from './errors.mjs';
 export { checkGrounding, numberPattern } from './grounding.mjs';
@@ -19,8 +19,9 @@ async function serial(ledger, callback) {
   try { return await callback(); } finally { release(); if (queues.get(ledger) === wait) queues.delete(ledger); }
 }
 
-// Purposes answered in one structured messages round with no tools and no tool loop.
-const SINGLE_ROUND = ['extract', 'confirm'];
+// Purposes answered in one structured messages round with no tools and no tool loop. 'title'
+// (Ask thread names) runs on TITLE_MODEL, every other purpose on DEFAULT_MODEL.
+const SINGLE_ROUND = ['extract', 'confirm', 'title'];
 const PURPOSES = ['chat', 'job', ...SINGLE_ROUND];
 
 const monthKey = timestamp => new Date(timestamp).toISOString().slice(0, 7).replace('-', '');
@@ -79,6 +80,7 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
     toolContext: callContext } = {}) => {
     if (mode === 'off') throw new EngineOffError();
     if (!PURPOSES.includes(purpose)) throw new TypeError('Invalid call purpose');
+    const model = purpose === 'title' ? TITLE_MODEL : DEFAULT_MODEL;
     if (typeof system !== 'string' || typeof systemDynamic !== 'string' || !Array.isArray(messages) || messages.length === 0 || !Number.isInteger(maxTokens) || maxTokens <= 0 || maxTokens > 128000) {
       throw new TypeError('Invalid model request');
     }
@@ -112,15 +114,15 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
           } else {
             try {
               round = await (SINGLE_ROUND.includes(purpose) ? messagesRound : sdkRound)({ credential: auth, system, systemDynamic,
-                messages: transcript, maxTokens, maxBudgetUsd: capUsd - spend, model: DEFAULT_MODEL, registry, schema });
+                messages: transcript, maxTokens, maxBudgetUsd: capUsd - spend, model, registry, schema });
             } catch {
               round = { text: '', content: [], status: 'transport_error', is_error: true,
-                accountingUnknown: true, model: DEFAULT_MODEL, tokens: {}, toolResults: registry.results, details: {} };
+                accountingUnknown: true, model, tokens: {}, toolResults: registry.results, details: {} };
             }
           }
           const knownCost = Number.isFinite(round.costUsd) && round.costUsd >= 0 ? round.costUsd : 0;
           if (round.accountingUnknown || !Number.isFinite(round.costUsd) || round.costUsd < 0) {
-            const estimate = estimateUnknownCost({ model: DEFAULT_MODEL, maxTokens,
+            const estimate = estimateUnknownCost({ model, maxTokens,
               system: systemDynamic ? `${system}\n${systemDynamic}` : system, messages: transcript, tools });
             round.costUsd = Math.max(knownCost, estimate.costUsd);
             round.tokens = { ...round.tokens, estimated: true, knownCostUsd: knownCost,
