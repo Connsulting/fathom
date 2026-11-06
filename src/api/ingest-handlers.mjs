@@ -34,7 +34,7 @@ const storeMode = db => (getSetting(db, 'mode', null) === 'demo' ? 'demo' : 'rea
 
 // The data key for this store: demo stores use a generated key under $FATHOM_DATA/files, real
 // stores need FATHOM_DATA_KEY_FILE (409 with the vault's message, before anything is stored).
-async function dataKey(ctx) {
+export async function dataKey(ctx) {
   try {
     return await loadDataKey({ dataDir: ctx.config.dataDir, keyFile: ctx.config.dataKeyFile, mode: storeMode(ctx.db) });
   } catch (err) {
@@ -57,10 +57,10 @@ function triggerJob(ctx, jobId) {
     failed(err);
   }
 }
-const triggerPlan = ctx => triggerJob(ctx, 'plan');
-const triggerGuesses = ctx => triggerJob(ctx, 'confirm-guess');
+export const triggerPlan = ctx => triggerJob(ctx, 'plan');
+export const triggerGuesses = ctx => triggerJob(ctx, 'confirm-guess');
 
-const ingestOpts = (ctx, key) => ({ engine: ctx.engine, config: ctx.config, now: nowIso(), key });
+export const ingestOpts = (ctx, key) => ({ engine: ctx.engine, config: ctx.config, now: nowIso(), key });
 
 export async function uploadFiles(ctx) {
   const key = await dataKey(ctx);

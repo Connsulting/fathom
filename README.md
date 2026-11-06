@@ -79,6 +79,12 @@ default-deny and bind any port-forward to loopback. Any local process on the ser
 reach the loopback port-forward with a forged header. This is a known limit with no code fix,
 recommended for acceptance pending the owner's decision.
 
+Onboarding has no sign-in of its own: identity is this gate, and the first step shows who the
+server says you are. The Tell us note is saved as an encrypted notes file and read the way an
+uploaded notes file is (with the engine off it is stored and waits). "Here is what we heard" lists
+only what the store holds, with where each value came from. On a real store, More has Setup to add
+more context later.
+
 ## Test
 
 ```bash
