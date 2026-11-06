@@ -589,7 +589,30 @@
 
 /* ---------- onboarding ---------- */
 .d-horizon .h-ob { max-width: 680px; margin: 0 auto; padding: 32px 24px 96px; }
-.d-horizon .h-ob-top { display: flex; justify-content: center; margin-bottom: 36px; }
+.d-horizon .h-ob-top { position: relative; display: flex; justify-content: center; align-items: center; margin-bottom: 36px; }
+.d-horizon .h-ob-x, .d-horizon .h-ob-id { position: absolute; right: 0; top: 50%; transform: translateY(-50%); font-size: 13px; color: var(--mu); }
+.d-horizon .h-ob-x:hover { color: var(--ac); }
+.d-horizon .h-ob-who { display: flex; gap: 14px; align-items: flex-start; max-width: 460px; margin: 0 auto 12px; padding: 16px 18px; background: var(--s1); border: 1px solid var(--line2); border-radius: 10px; }
+.d-horizon .h-ob-who .h-i { width: 20px; height: 20px; flex: none; margin-top: 2px; color: var(--ac); }
+.d-horizon .h-ob-who b { display: block; font-weight: 500; }
+.d-horizon .h-ob-who span { display: block; margin-top: 2px; color: var(--mu); font-size: 13.5px; }
+.d-horizon .h-ob-under { margin-top: 20px; padding: 16px 18px; border: 1px solid var(--line2); border-radius: 10px; background: var(--s1); }
+.d-horizon .h-ob-under p { margin: 6px 0 0; color: var(--tx2); font-size: 14px; }
+.d-horizon .h-ob-facts { margin-top: 10px; }
+.d-horizon .h-ob-facts li { display: flex; gap: 12px; align-items: baseline; padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+.d-horizon .h-ob-facts li span { color: var(--mu); flex: 1; min-width: 0; }
+.d-horizon .h-ob-facts li b { font-weight: 500; color: var(--tx); overflow-wrap: anywhere; }
+.d-horizon .h-ob-facts li em { font-style: normal; color: var(--fa); font-size: 12px; }
+.d-horizon .h-heard-l li { display: block; }
+.d-horizon .h-heard-t { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+.d-horizon .h-heard-t span { color: var(--mu); }
+.d-horizon .h-heard-t b { font-weight: 500; color: var(--tx); text-align: right; overflow-wrap: anywhere; }
+.d-horizon .h-heard-p { display: flex; justify-content: space-between; gap: 12px; margin-top: 3px; font-size: 12px; }
+.d-horizon .h-heard-p em { font-style: normal; color: var(--fa); min-width: 0; overflow-wrap: anywhere; }
+.d-horizon .h-heard-p a { flex: none; color: var(--ac); }
+.d-horizon .h-heard-q { display: flex; gap: 14px; align-items: baseline; margin: 0 0 24px; color: var(--mu); }
+.d-horizon .h-heard-q b { font-family: var(--mono); font-weight: 400; font-size: 24px; color: var(--ac); line-height: 1; }
+.d-horizon .h-heard-q a { color: var(--ac); }
 .d-horizon .h-ob-rail { position: relative; margin: 0 auto 44px; max-width: 600px; }
 .d-horizon .h-ob-rail svg { width: 100%; height: 20px; display: block; overflow: visible; }
 .d-horizon .h-ob-rail .bg { stroke: var(--line2); stroke-width: 1.5; }
@@ -796,6 +819,8 @@ a.h-dec-t:hover { color: var(--ac2); }
   .d-horizon .h-prio { grid-template-columns: minmax(0, 1fr) 32px; }
   .d-horizon .h-prio input { grid-column: 1 / -1; grid-row: 2; }
   .d-horizon .h-ob { padding: 24px 16px 72px; }
+  .d-horizon .h-ob-top { flex-direction: column; gap: 10px; }
+  .d-horizon .h-ob-x, .d-horizon .h-ob-id { position: static; transform: none; }
   .d-horizon .h-ob-hero h1 { font-size: 30px; }
   .d-horizon .h-ob-card h1 { font-size: 25px; }
   .d-horizon .h-ob-steps span { display: none; }

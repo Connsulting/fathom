@@ -411,6 +411,7 @@ live = {
   packs: { <id>: { active: boolean | null, exploring: boolean, whatIfDone: boolean } },
   yourPlans: { sources: [ { fileId, name, docType } ], files: [ { id, name } ], built: settings.yourPlans | null },
   clock: 'YYYY-MM-DD',
+  heard: { sections: [ { id, title, items: [ heard item ] } ], deadlines: int, pending: int, empty: boolean },  // see Onboarding below
   ingest: {
     pending: int,                       // pending confirm items
     items: [ confirm item ],            // pending items, shape below, plus fileName (string or null) and
@@ -476,6 +477,51 @@ payments tracking this year?" (any tax payment), `scorp` "How is the S corp doin
 that already holds data is a returning owner and lands in the app, not first-run onboarding. Demo
 stores follow onboarding alone.
 
+### Onboarding
+
+Onboarding is six steps (Sign in, Tell us, Accounts, Confirm, Priorities, First brief). Nothing in
+it is fake or hand-written any more except the Accounts (connections) and Priorities steps, which
+other items own.
+
+Sign in. There is no passkey and no form. Identity is the owner gate (Owner identity above). The
+demo build, which has no gate, shows step 0 as a line: "Signed in through your private network"
+with the identity `GET /api/identity` reports, or "Reached through your private network" with a
+note that the demo signs no one in. A real store skips step 0 (the first step is 1) and shows the
+signed-in name in the page header; More shows it too.
+
+Tell us. The text is saved by `POST /api/onboarding/notes` (`src/api/onboarding-handlers.mjs`) as a
+file named `Setup notes <date>.md` (type `text/markdown`) through `ingestFile`, exactly the path of
+an uploaded notes file: the bytes are stored encrypted in the vault, the notes parser writes the
+`notes` document row (a reference, never the text), and with the engine on `extractDocument` reads
+the redacted text, writes facts with provenance (`file_id`, parser `extract-notes`, locator) and
+goal documents, and asks a `fact_check` Confirm card for a fact below the confidence floor. With
+the engine off only the parser's deterministic path runs: the note is stored and the file waits
+with status `needs_extraction` (retried from Confirm, Waiting files, once the engine is on);
+nothing is extracted and nothing is invented. The same text saved twice is a `duplicate`. A
+successful import triggers the plan and confirm-guess jobs, like an upload. The response carries
+`understood` from `understoodOf` (`src/onboarding/heard.mjs`):
+`{fileId, status, engineOn, waiting, facts: [{key, label, value, confirmed}], goals: [{title, when}], asked}`,
+the stored rows that file wrote and the open questions it raised; the page shows it after the
+save. A returning owner reaches the same step again as Setup in More (real stores only): the route
+`#/onboarding` is allowed on a real store after first run, lands on step 1, shows Back to the app,
+and finishing returns to the brief.
+
+Confirm ("Here is what we heard"). `live.heard` is `deriveHeard(db, {clock})`: stored facts (filing
+status, state, dependents and ages, expecting a child, income types, benefits, giving), entities
+(the P&L entities) and accounts counted by kind, plus the count of deadlines in
+the next twelve months and of open Confirm questions. A heard item is
+`{id, key?, label, value, prov, confirmed, asked, edit: {route, step?, label}}`. `prov` names the
+file the value came from (`From <file name>`), the planner, or the owner's own answer ("confirmed by
+you"). `edit` is the Confirm deck when a question about that item is open, Accounts for accounts
+and entities, and Tell us ("Correct in notes") otherwise, because a corrected note supersedes an
+unconfirmed fact and raises a check against a confirmed one. A value of the wrong type is not
+shown. `onboarding.heard` in the content table is no longer read. File-sourced text (file, entity
+and account names) is rendered escaped, never as tokens or markup.
+
+Seams. The Accounts step (item 22) and the Priorities step (item 20) are unchanged `else if (s === 2)`
+and `(s === 4)` branches of `pOnboarding` in `web/horizon/design.js`; the Confirm step is
+`heardHtml`, the Tell us panel `understoodHtml`.
+
 ## API
 
 All JSON. On a real store every path except `/healthz` and `/mcp` first passes the owner identity
@@ -518,6 +564,7 @@ response is `{scenario, ...}` with the fresh scenario.
 | `POST /api/goals/:id/delete` | `{}` | `{scenario}`. Deletes a goal for good. |
 | `POST /api/curve` | `{id, value}` or `{positions: {id: value}}` | `{scenario}`. Stores tradeoff curve positions (0 to 1, rounded to hundredths) in `settings` `curve.positions`; 400 for an unknown axis or a value out of range. The onboarding Priorities step saves through this route too. |
 | `POST /api/onboarding` | `{step}` | `{scenario}`. 0 to 5 set the step, 6 completes onboarding; anything else 400. |
+| `POST /api/onboarding/notes` | `{text}` | `{scenario, file, understood}`. Saves the Tell us note as a notes document through the ingest pipeline (see Onboarding below). 400 for a missing, empty or control-character text, 413 over 30000 bytes, 409 without a data key on a real store, 422 when the note could not be stored. The text never appears in an error, a log or the database. |
 | `POST /api/demo/reset` | `{}` | `{scenario}`. Rebuilds the demo store and removes stored uploads (`$FATHOM_DATA/files/*.bin`); 404 unless the store is a demo store. Clears `api_keys`; the server secret file survives. |
 | `GET /api/keys` | | `{keys: [{id, name, scopes, createdAt, lastUsedAt, revokedAt}]}` ordered by creation; never a key or hash. |
 | `POST /api/keys` | `{name, scopes?: ('read' or 'write:recs')[]}` | `{key, record, keys}`. The only time the key is shown. Name trimmed, 1 to 80 characters, no control characters; scopes always include `read`; else 400. |
