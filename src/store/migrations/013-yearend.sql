@@ -1,4 +1,4 @@
--- 011 year end: the owner's "not needed this year" marks on expected tax documents, and a record
+-- 013 year end: the owner's "not needed this year" marks on expected tax documents, and a record
 -- of every accountant packet generated. item_key is the deterministic key of an expected item
 -- (src/yearend/expected.mjs), for example 'w2:<employer>' or '1099-int:<account id>'. counts is
 -- JSON {expected, received, missing, skipped, unmatched, files, unreadable, payments, decisions}.

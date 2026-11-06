@@ -64,7 +64,7 @@ const FACTS = {
 
 // Children before parents so foreign keys hold while clearing.
 const CLEAR_ORDER = [
-  'messages', 'conversations', 'rec_events', 'job_runs', 'jobs', 'superseded_rows', 'confirm_undo', 'confirm_guesses', 'confirm_items',
+  'advisor_reviews', 'advisor_checkin', 'advisor_packets', 'messages', 'conversations', 'rec_events', 'job_runs', 'jobs', 'superseded_rows', 'confirm_undo', 'confirm_guesses', 'confirm_items',
   'ingest_epoch', 'held_facts',
   'column_mappings', 'entity_aliases', 'transactions', 'balances', 'positions',
   'pnl_lines', 'tax_payments', 'documents', 'figures', 'accounts', 'facts', 'sources', 'recs', 'goals',
@@ -117,6 +117,37 @@ function seedYearendDocs(db, S, { year, now }) {
   });
 }
 
+// The advisor workflow tables from the scenario: each rec's advisor field (pending, confirmed or
+// vetoed), the reviewed items outside the plan, and the next check-in. Dates are synthetic and
+// relative to the demo clock.
+export const DEMO_CHECKIN = Object.freeze({ date: '2026-12-10', time: '14:00', lengthMin: 30 });
+
+function seedAdvisor(db, S, clock) {
+  const ins = db.prepare(`INSERT INTO advisor_reviews (rec_id, title, sent_at, verdict, note, reviewed_on, recorded_at)
+                          VALUES (?, ?, ?, ?, ?, ?, ?)`);
+  let i = 0;
+  for (const r of S.recs) {
+    const a = r.advisor;
+    if (!a || !a.verdict) continue;
+    i += 1;
+    const sent = `${addDays(clock, -(14 + 3 * i))}T09:00:00.000Z`;
+    if (a.verdict === 'pending') {
+      ins.run(r.id, r.title, sent, null, '', null, null);
+    } else {
+      const on = addDays(clock, -(7 + i));
+      ins.run(r.id, r.title, sent, a.verdict, a.note || '', on, `${on}T17:00:00.000Z`);
+    }
+  }
+  for (const v of S.advisor.reviewed || []) {
+    if (v.recId) continue;
+    i += 1;
+    const on = addDays(clock, -(7 + i));
+    ins.run(null, v.title, `${addDays(clock, -(14 + 3 * i))}T09:00:00.000Z`, v.verdict, v.note || '', on, `${on}T17:00:00.000Z`);
+  }
+  db.prepare('INSERT INTO advisor_checkin (id, date, time, length_min, updated_at) VALUES (1, ?, ?, ?, ?)')
+    .run(DEMO_CHECKIN.date, DEMO_CHECKIN.time, DEMO_CHECKIN.lengthMin, `${clock}T08:00:00.000Z`);
+}
+
 const LIVE_REC_FIELDS = ['status', 'statusByDemo', 'window', 'waitingOn'];
 
 function clearStore(db) {
@@ -152,7 +183,12 @@ export function seedDemo(db) {
 
     const content = db.prepare('INSERT INTO content (key, value, src, updated_at) VALUES (?, ?, ?, ?)');
     content.run('meta', JSON.stringify({ product: S.meta.product, household: S.meta.household, dataThrough: S.meta.dataThrough }), SEED_ID, now);
-    for (const k of CONTENT_KEYS) if (S[k] !== undefined) content.run(k, JSON.stringify(S[k]), SEED_ID, now);
+    for (const k of CONTENT_KEYS) {
+      if (S[k] === undefined) continue;
+      // The advisor's review state lives in the advisor tables (seedAdvisor); content keeps the narrative.
+      const v = k === 'advisor' ? (({ next, reviewed, pending, ...rest }) => rest)(S[k]) : S[k];
+      content.run(k, JSON.stringify(v), SEED_ID, now);
+    }
     content.run('engine.chat', JSON.stringify(S.engine.chat), SEED_ID, now);
 
     const source = db.prepare('INSERT INTO sources (id, label, as_of, kind, last_ingest_at, note) VALUES (?, ?, ?, ?, ?, ?)');
@@ -202,6 +238,7 @@ export function seedDemo(db) {
     S.recs.forEach((r, i) => {
       const def = { ...r, tasks: (r.tasks || []).map(({ done, ...t }) => t) };
       for (const k of LIVE_REC_FIELDS) delete def[k];
+      delete def.advisor;
       const status = (r.statusByDemo && r.statusByDemo.november) || r.status;
       const days = r.window && typeof r.window.days === 'number' ? r.window.days : null;
       const pack = S.packs.find(p => (p.recIds || []).includes(r.id));
@@ -233,6 +270,7 @@ export function seedDemo(db) {
 
     seedConfirm(db, { clock, now });
     seedYearendDocs(db, S, { year: Number(clock.slice(0, 4)), now });
+    seedAdvisor(db, S, clock);
 
     // Month-to-date spend that sums to the scenario's engine.budget.used: one run of each job,
     // the rest as chat.

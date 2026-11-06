@@ -124,6 +124,15 @@ expected against received, the year's tax payments, key figures and open items, 
 source. The zip is built in a temporary directory that is removed after the download, and every
 generation is recorded. See docs/architecture.md, Year end.
 
+## Advisor reviews
+
+The Advisor screen is a review workflow the owner runs; advisors have no accounts. Send a
+recommendation to the advisor from its page or the Plan, set the next check-in, and record the
+advisor's verdict (confirmed or vetoed, with a note and date). A veto dismisses the recommendation,
+and later planning runs keep it dismissed unless its inputs change. Prepare packet builds a
+printable HTML review packet of everything waiting, with every figure's source; it is stored
+encrypted in the data volume and can be downloaded again. Print it to PDF from the browser.
+
 ## Design mock
 
 `mock-v2/` is the clickable design reference on synthetic data and needs only Python 3:
