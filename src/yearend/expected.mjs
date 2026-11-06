@@ -87,7 +87,7 @@ export function expectedItems({ facts, accounts, year, active, deposits, employe
     if (a.kind === 'taxable') {
       add({ key: `1099-composite:${a.id}`, form: '1099-b', forms: ['1099-b', '1099-div', '1099-int'], t: `Composite 1099 (B, DIV, INT) for ${label}`, src: `${a.inst || 'The brokerage'} tax center`, arrives: 'feb15', name: inst, why: 'Brokerage account with activity this year', account: a.id });
     } else if (BANK.includes(a.kind) || (a.kind === 'business' && !/payroll/i.test(label))) {
-      add({ key: `1099-int:${a.id}`, form: '1099-int', t: `1099-INT for ${label}`, src: `${a.inst || 'The bank'}; only issued when interest reached $10`, arrives: 'jan31', name: inst, why: 'Bank account with activity this year', account: a.id });
+      add({ key: `1099-int:${a.id}`, form: '1099-int', t: `1099-INT for ${label}`, src: `${a.inst || 'The bank'}; only issued above the IRS interest reporting threshold`, arrives: 'jan31', name: inst, why: 'Bank account with activity this year', account: a.id });
     } else if (a.kind === 'loan' && /mortgage|home/i.test(label)) {
       add({ key: `1098:${a.id}`, form: '1098', t: `1098 mortgage interest for ${label}`, src: `${a.inst || 'The mortgage servicer'}`, arrives: 'jan31', name: inst, why: 'Mortgage account', account: a.id });
     } else if (IRA(a) && deposits(a.id)) {
@@ -104,7 +104,7 @@ export function expectedItems({ facts, accounts, year, active, deposits, employe
     add({ key: 'k1:partnership', form: 'k1', t: 'K-1 from each partnership', src: 'The partnership’s preparer', arrives: 'mar15', why: 'You have partnership income' });
   }
   if (facts['income.selfEmployed'] === true) {
-    add({ key: '1099-nec', form: '1099-nec', forms: ['1099-nec', '1099-misc'], t: '1099-NEC from clients', src: 'Each client that paid $600 or more', arrives: 'jan31', why: 'You have self-employment income' });
+    add({ key: '1099-nec', form: '1099-nec', forms: ['1099-nec', '1099-misc'], t: '1099-NEC from clients', src: 'Each client that paid you above the 1099-NEC reporting threshold', arrives: 'jan31', why: 'You have self-employment income' });
     add({ key: '1099-k', form: '1099-k', t: '1099-K from payment processors', src: 'Each card or payment platform that paid you', arrives: 'jan31', why: 'You have self-employment income' });
   }
   if (facts['benefits.hsa'] === true || accounts.some((a) => a.kind === 'hsa')) {
