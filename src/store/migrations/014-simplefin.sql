@@ -16,12 +16,14 @@ CREATE TABLE simplefin_connection (
 
 -- One row per SimpleFIN account seen: sf_key is a hash of the connection and account ids.
 -- status 'mapped' writes rows into account_id; 'pending_match' waits on an account_match confirm
--- question about candidate_id and imports nothing until it is answered.
+-- question about candidate_id and imports nothing until it is answered. backfilled is 1 once the
+-- account imported under the full first window; until then every sync asks for that window.
 CREATE TABLE simplefin_accounts (
   sf_key TEXT PRIMARY KEY,
   account_id TEXT,
   candidate_id TEXT,
   status TEXT NOT NULL,
   name TEXT,
+  backfilled INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL
 );

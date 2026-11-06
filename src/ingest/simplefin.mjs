@@ -172,7 +172,9 @@ export function normalizeAccountSet(body) {
     }
     accounts.push({
       key: sha(`${connId}\u0000${String(a.id)}`).slice(0, 24),
-      inst, name: maskName(a.name) || 'Connected account', mask: lastFour(maskName(a.name), a.id),
+      // A mask from the name ("x1234") can decide a match; one taken from an all-digit id is shown
+      // but only ever asked about (an id is opaque to the protocol).
+      inst, name: maskName(a.name) || 'Connected account', mask: lastFour(maskName(a.name), a.id), maskSure: Boolean(lastFour(maskName(a.name), null)),
       balance: amountOf(a.balance), balanceDate: isoOf(a['balance-date']), transactions,
     });
   }
@@ -193,7 +195,9 @@ export const parser = Object.freeze({
       const base = { account: a.account, accountId: a.accountId, identity: a.identity };
       a.transactions.forEach((t, j) => {
         span(t.date);
-        rows.push({ ...base, kind: 'transaction', date: t.date, amount: t.amount, description: t.description, externalId: t.externalId, locator: { account: i, transaction: j } });
+        // The bridge's transaction id is authoritative within its account: a resync with a changed
+        // description is the same posting (externalAuthoritative), never a second one.
+        rows.push({ ...base, kind: 'transaction', date: t.date, amount: t.amount, description: t.description, externalId: t.externalId, externalAuthoritative: true, locator: { account: i, transaction: j } });
       });
       if (a.balance) {
         span(a.balance.date);
@@ -258,7 +262,7 @@ export function matchAccount(db, acct) {
   const closest = (list) => [...list].sort((a, b) => distance(a) - distance(b))[0].id;
   if (acct.mask) {
     const same = pool.filter((c) => c.mask === acct.mask);
-    if (same.length === 1 && !contradicts(same[0])) return { sure: same[0].id };
+    if (same.length === 1 && acct.maskSure && !contradicts(same[0])) return { sure: same[0].id };
     if (same.length) return { candidate: closest(same) };
     const unmasked = pool.filter((c) => !c.mask);
     return unmasked.length ? { candidate: closest(unmasked) } : {};
@@ -309,8 +313,11 @@ function targetOf(db, accountId, acct) {
   return { accountId, identity: ownIdentity(acct.key), account: { inst: acct.inst, mask: acct.mask, name: acct.name, kind: acct.name } };
 }
 
-function startDate(row, clock) {
-  if (!row.last_sync_at) return addDays(clock, -FIRST_DAYS);
+// The full first window until every known bridge account has imported once under it, so an
+// account held by a match question or first seen on a short window still gets its history.
+function startDate(db, row, clock) {
+  const owed = db.prepare('SELECT count(*) AS n FROM simplefin_accounts WHERE backfilled = 0').get().n;
+  if (!row.last_sync_at || owed) return addDays(clock, -FIRST_DAYS);
   const last = String(row.last_sync_at).slice(0, 10);
   const from = addDays(last < clock ? last : clock, -OVERLAP_DAYS);
   return from < addDays(clock, -FIRST_DAYS) ? addDays(clock, -FIRST_DAYS) : from;
@@ -330,10 +337,12 @@ export async function syncSimplefin(db, { config = {}, hosts, fetch: fetchImpl, 
   const stamp = now || new Date().toISOString();
   const today = clock || stamp.slice(0, 10);
   const k = key ?? await dataKeyFor(db, config);
+  const start = startDate(db, row, today);
+  const full = start === addDays(today, -FIRST_DAYS);
   let set;
   try {
     const access = decrypt(k, Buffer.from(row.access_blob, 'base64'), AAD).toString('utf8');
-    set = normalizeAccountSet(await fetchAccounts(access, { hosts, fetch: fetchImpl, startDate: startDate(row, today) }));
+    set = normalizeAccountSet(await fetchAccounts(access, { hosts, fetch: fetchImpl, startDate: start }));
   } catch (e) {
     const code = e instanceof SimplefinError ? e.code : 'bad_access';
     setStatus(db, RECONNECT.has(code) ? 'reconnect' : 'error', code, null);
@@ -346,11 +355,22 @@ export async function syncSimplefin(db, { config = {}, hosts, fetch: fetchImpl, 
     const accountId = resolveAccount(db, acct, { now: stamp, counts });
     if (!accountId) continue;
     const target = targetOf(db, accountId, acct);
-    // File imports own the history they cover: on an account that also has file rows, only bridge
-    // transactions after its latest file transaction are taken.
-    const cutoff = db.prepare("SELECT max(date) AS d FROM transactions WHERE account_id = ? AND coalesce(parser, '') != 'simplefin'").get(accountId)?.d ?? null;
-    const transactions = acct.transactions.filter((t) => !cutoff || t.date > cutoff);
+    // A bridge transaction with the same date and amount as a file-imported one on this account is
+    // that posting, one for one; every other bridge transaction goes through ingest dedupe (and its
+    // near-duplicate questions).
+    const fileRows = new Map();
+    for (const r of db.prepare("SELECT date, amount FROM transactions WHERE account_id = ? AND coalesce(parser, '') != 'simplefin'").all(accountId)) {
+      const slot = `${r.date}|${Math.round(r.amount * 100)}`;
+      fileRows.set(slot, (fileRows.get(slot) ?? 0) + 1);
+    }
+    const transactions = acct.transactions.filter((t) => {
+      const slot = `${t.date}|${Math.round(t.amount * 100)}`;
+      const n = fileRows.get(slot) ?? 0;
+      if (n > 0) { fileRows.set(slot, n - 1); return false; }
+      return true;
+    });
     docAccounts.push({
+      sfKey: acct.key,
       ...target,
       balance: acct.balance != null && acct.balanceDate ? { date: acct.balanceDate, amount: acct.balance } : null,
       transactions,
@@ -368,6 +388,10 @@ export async function syncSimplefin(db, { config = {}, hosts, fetch: fetchImpl, 
     changed = result.status === 'imported' && (counts.transactions + counts.balances + (c.revised ?? 0)) > 0;
     if (result.status === 'imported') {
       db.prepare(`UPDATE accounts SET mirror = 'connected' WHERE id IN (${docAccounts.map(() => '?').join(', ')})`).run(...docAccounts.map((a) => a.accountId));
+    }
+    if (full && (result.status === 'imported' || result.status === 'duplicate')) {
+      const mark = db.prepare('UPDATE simplefin_accounts SET backfilled = 1 WHERE sf_key = ?');
+      for (const a of docAccounts) mark.run(a.sfKey);
     }
   }
   const authError = set.errors.find((e) => /^(gen|con)\.auth/.test(e.code));

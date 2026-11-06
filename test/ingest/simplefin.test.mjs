@@ -149,10 +149,11 @@ test('a connected account matches an imported one by institution and mask and ke
   assert.equal(all.length, 1, 'no second account');
   assert.equal(all[0].id, before.id);
   assert.equal(all[0].mirror, 'connected');
-  // The paycheck three days ago stays the file's row only; bridge rows after it are added.
+  // The paycheck three days ago stays the file's row only (same date and amount); every other
+  // bridge posting is added, also ones dated before the file's latest row.
   const rows = s.db.prepare('SELECT date, amount, parser FROM transactions WHERE account_id = ? ORDER BY date').all(before.id);
   assert.equal(rows.filter((r) => r.amount === 2450).length, 1);
-  assert.deepEqual(rows.filter((r) => r.parser === 'simplefin').map((r) => r.date), [day(1)]);
+  assert.deepEqual(rows.filter((r) => r.parser === 'simplefin').map((r) => r.date), [day(9), day(6), day(1)]);
 }));
 
 test('an unsure match asks a Confirm card and imports nothing for it until answered', () => withStore(async (s) => {
@@ -263,3 +264,59 @@ test('the simplefin-sync job runs under the scheduler, records counts and trigge
     try { t.db.close(); } catch { /* closed */ }
   }
 });
+
+// Review fixes: one regression test each.
+const setWith = (accounts, connections = [{ conn_id: 'C1', name: 'Fathom Demo Bank', org_id: 'o', sfin_url: 'https://bridge.simplefin.org/simplefin' }]) =>
+  async () => new Response(JSON.stringify({ errlist: [], connections, accounts }), { status: 200 });
+const acct = (id, name, extra = {}) => ({ id, conn_id: 'C1', name, currency: 'USD', balance: '100.00', 'balance-date': 1962100000, transactions: [], ...extra });
+
+test('a mask taken from an all-digit id is asked about, never merged silently', () => withStore(async (s) => {
+  await P.ingestFile(s.db, aggregatorFile('chk.csv', [{ date: '2032-01-05', amount: '5.00', inst: 'Fathom Demo Bank', account: 'Checking', number: '9990004821', description: 'Old' }]), s.opts(null));
+  await S.connectSimplefin(s.db, S.fakeToken(), opts(s));
+  const out = await S.syncSimplefin(s.db, opts(s, { fetch: setWith([acct('9876544821', 'Savings')]) }));
+  assert.equal(out.counts.pending, 1);
+  assert.equal(out.counts.matched, 0);
+  assert.equal(s.db.prepare("SELECT count(*) AS n FROM confirm_items WHERE kind = 'account_match'").get().n, 1);
+}));
+
+test('two bridge accounts with the same institution, name and balance both import', () => withStore(async (s) => {
+  await S.connectSimplefin(s.db, S.fakeToken(), opts(s));
+  const conns = [{ conn_id: 'C1', name: 'Synthetic Bank', org_id: 'a', sfin_url: 'x' }, { conn_id: 'C2', name: 'Synthetic Bank', org_id: 'b', sfin_url: 'x' }];
+  const tx = [{ id: 'T1', posted: 1962000000, amount: '-5.00', description: 'Same' }];
+  const out = await S.syncSimplefin(s.db, opts(s, { fetch: setWith([acct('A', 'Checking', { transactions: tx }), acct('A', 'Checking', { conn_id: 'C2', transactions: tx })], conns) }));
+  assert.equal(out.status, 'ok');
+  assert.equal(s.db.prepare("SELECT count(*) AS n FROM accounts WHERE inst = 'Synthetic Bank'").get().n, 2);
+  assert.equal(s.db.prepare('SELECT count(*) AS n FROM balances').get().n, 2);
+  assert.equal(s.db.prepare('SELECT count(*) AS n FROM transactions').get().n, 2);
+}));
+
+test('an account held by a match question still gets the full first window after the answer', () => withStore(async (s) => {
+  await P.ingestFile(s.db, aggregatorFile('other.csv', [{ date: '2032-01-05', amount: '5.00', inst: 'Other bank', account: 'Joint checking', number: '', description: 'Old' }]), s.opts(null));
+  await S.connectSimplefin(s.db, S.fakeToken(), opts(s));
+  const starts = [];
+  const inner = S.createFakeSimplefin({ today: () => TODAY });
+  const fetch = (url, init) => { starts.push(new URL(url).searchParams.get('start-date')); return inner(url, init); };
+  await S.syncSimplefin(s.db, opts(s, { fetch }));
+  C.answer(s.db, s.db.prepare("SELECT id FROM confirm_items WHERE kind = 'account_match'").get().id, 'same', { now: NOW });
+  await S.syncSimplefin(s.db, opts(s, { fetch, now: '2032-03-10T13:00:00.000Z' }));
+  await S.syncSimplefin(s.db, opts(s, { fetch, now: '2032-03-10T14:00:00.000Z' }));
+  assert.equal(starts[1], starts[0], 'the answered account syncs the full window');
+  assert.ok(Number(starts[2]) > Number(starts[0]), 'then the window narrows');
+}));
+
+test('a file uploaded after connecting lands in the connected account', () => withStore(async (s) => {
+  await S.connectSimplefin(s.db, S.fakeToken(), opts(s));
+  await S.syncSimplefin(s.db, opts(s));
+  const r = await P.ingestFile(s.db, aggregatorFile('later.csv', [{ date: '2032-01-05', amount: '5.00', inst: 'Fathom Demo Bank', account: 'Everyday Checking', number: '9990004821', description: 'Old' }]), s.opts(null));
+  assert.equal(r.status, 'imported');
+  assert.equal(s.db.prepare("SELECT count(*) AS n FROM accounts WHERE mask = '4821'").get().n, 1);
+}));
+
+test('a resync with a changed description is the same posting', () => withStore(async (s) => {
+  await S.connectSimplefin(s.db, S.fakeToken(), opts(s));
+  const tx = (description) => [{ id: 'T1', posted: 1962000000, amount: '-5.00', description }];
+  await S.syncSimplefin(s.db, opts(s, { fetch: setWith([acct('A', 'Checking x1111', { transactions: tx('POS 123') })]) }));
+  await S.syncSimplefin(s.db, opts(s, { now: '2032-03-10T13:00:00.000Z', fetch: setWith([acct('A', 'Checking x1111', { transactions: tx('Coffee shop') })]) }));
+  assert.equal(s.db.prepare('SELECT count(*) AS n FROM transactions').get().n, 1);
+  assert.equal(s.db.prepare("SELECT count(*) AS n FROM confirm_items WHERE kind = 'near_duplicate'").get().n, 0);
+}));

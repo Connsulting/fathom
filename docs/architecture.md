@@ -301,7 +301,7 @@ Money columns are dollars rounded to cents; JSON columns hold JSON text. The pro
 | `entity_aliases` | `alias` PK (normalized alias name), `entity` (canonical display name), `created_at` |
 | `held_facts` | `id` PK, `hold` (`employer:<employerKey>`), `key`, `value` JSON, `file_id`, `parser`, `locator`, `confidence`, `created_at` |
 | `simplefin_connection` | `id` PK (always 1), `access_blob` (the SimpleFIN access URL encrypted with the data key, base64; never plaintext), `connected_at`, `last_sync_at`, `status` (`ok`, `reconnect` or `error`), `error_code`, `messages` JSON (sanitized bridge messages from the last sync), `accounts` (count). Migration 014. |
-| `simplefin_accounts` | `sf_key` PK (hash of the bridge connection and account ids), `account_id` (the Fathom account it writes into), `candidate_id` (the imported account a pending match question asks about), `status` (`mapped` or `pending_match`), `name`, `created_at`. Migration 014. |
+| `simplefin_accounts` | `sf_key` PK (hash of the bridge connection and account ids), `account_id` (the Fathom account it writes into), `candidate_id` (the imported account a pending match question asks about), `status` (`mapped` or `pending_match`), `name`, `backfilled` (1 once it imported under the full first window), `created_at`. Migration 014. |
 | `advisor_reviews` | `id` PK, `rec_id` (references `recs.id`; NULL only for a demo item outside the plan), `title` (the rec title when sent), `sent_at`, `verdict` NULL (waiting), confirmed or vetoed, `note` (escaped owner text, at most 1000 characters before escaping), `reviewed_on` (the advisor's date), `recorded_at`, `grounding_hash` (the planner's hash for the rec when the verdict was recorded), `closed_at`, `closed_reason` (`sent again`, `inputs changed`); at most one open row per rec (migration 011) |
 | `advisor_checkin` | `id` PK (always 1), `date`, `time` (`HH:MM` or NULL), `length_min`, `updated_at`. The owner-set next check-in (migration 011). |
 | `advisor_packets` | `id` PK (`advpkt-` and 16 hex), `created_at`, `clock` (the scenario date it was built for), `rec_ids` JSON, `stored_path` (encrypted under the data key, `files/<id>.bin`), `bytes`, `sha256` (migration 011) |
@@ -773,17 +773,23 @@ Read-only bank and brokerage connections through SimpleFIN Bridge (`src/ingest/s
    scenario, a log or an error. Requests send its credentials as a Basic `Authorization` header,
    never in the request URL. Disconnect deletes the row.
 3. Sync: the scheduler job `simplefin-sync` (daily 05:00, Run now, after a match answer, and after
-   connect) GETs `<access>/accounts?version=2&start-date=<epoch>`: 90 days back on the first sync,
-   then from 14 days before the last sync. It reads protocol v2 (`connections`, `errlist`) and v1
+   connect) GETs `<access>/accounts?version=2&start-date=<epoch>`: 90 days back until every known
+   bridge account has imported once under that window (`simplefin_accounts.backfilled`; an account
+   held by a match question or first seen later still gets it), then from 14 days before the last
+   sync. It reads protocol v2 (`connections`, `errlist`) and v1
    (`org`, `errors`). Accounts in another currency than USD are skipped. Pending transactions are
    skipped. Names keep at most the last four digits of any number; the mask is the last four digits
-   found in the name, or in an all-digit id.
+   found in the name, or in an all-digit id (an id mask is never enough for a sure match).
 4. Mapping: rows go into one synthetic ingest file (`SimpleFIN sync <date>.json`, no credentials)
    routed by the pipeline with the `simplefin` parser, so provenance, `externalId` and `dedupeKey`
    dedupe, balance revisions, sources and account figures work as for uploads; an unchanged
-   answer is a duplicate file and writes nothing. Accounts written are `mirror` `connected`. On an
-   account that also has file rows, only bridge transactions after its latest file transaction
-   are taken (file imports own the history they cover).
+   answer is a duplicate file and writes nothing. Accounts written are `mirror` `connected`. Bridge
+   rows carry the account identity, so their dedupe keys are scoped to it, and the bridge
+   transaction id is authoritative: a resync with a changed description is the same posting. On an
+   account that also has file rows, a bridge transaction with the same date and amount as a file
+   transaction is that posting (one for one); the rest go through ingest dedupe and its
+   near-duplicate questions. A file uploaded later whose institution and mask match exactly one
+   connected account lands in it.
 5. Matching: a new bridge account is matched to an existing non-connected account at the same
    institution: sure when exactly one shares its mask (or, without a mask, its name and has no
    mask) and no stored balance on the bridge's balance date differs. Otherwise the closest

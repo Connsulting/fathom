@@ -240,7 +240,8 @@ function persist(db, fileId, file, plan, opts) {
 
   // Accounts: identity, id, and the file's source id.
   const accountRows = parsed.rows.filter((r) => r.account);
-  for (const row of accountRows) row.accountId ??= accountIdOf(accountIdentity(row));
+  const connected = connectedAccountFor(db);
+  for (const row of accountRows) row.accountId ??= connected(row) ?? accountIdOf(accountIdentity(row));
   const accountIds = [...new Set(accountRows.map((r) => r.accountId))];
   const single = accountIds.length === 1 ? accountIds[0] : null;
   const sourceId = `ing:${plan.parser}:${single ?? 'all'}`;
@@ -300,6 +301,28 @@ function persist(db, fileId, file, plan, opts) {
   }
   refreshFigures(ctx, accountIds);
   return finish(plan.status);
+}
+
+// A file row for an account first seen through SimpleFIN: when the row's own identity has no
+// account and exactly one connected account (identity simplefin:...) has the same institution and
+// mask, the row belongs to it. Otherwise null (the row's own identity decides).
+function connectedAccountFor(db) {
+  const cache = new Map();
+  const byMask = db.prepare("SELECT id, inst FROM accounts WHERE identity LIKE 'simplefin:%' AND mask = ?");
+  const exists = db.prepare('SELECT 1 FROM accounts WHERE id = ?');
+  return (row) => {
+    if (row.identity || !/^\d{4}$/.test(row.account?.mask ?? '')) return null;
+    const own = accountIdOf(accountIdentity(row));
+    if (cache.has(own)) return cache.get(own);
+    let out = null;
+    if (!exists.get(own)) {
+      const inst = normalizeName(institution(row.account.inst));
+      const hits = byMask.all(row.account.mask).filter((a) => normalizeName(institution(a.inst)) === inst);
+      if (hits.length === 1) out = hits[0].id;
+    }
+    cache.set(own, out);
+    return out;
+  };
 }
 
 function tally(ctx, outcome) {
@@ -419,6 +442,7 @@ function putTransaction(ctx, row, parser, locator) {
   let collided = null;
   let seen = observations(db, key);
   if (seen.some((o) => o.stored && o.file_id === fileId)) { counts.duplicates += 1; return; }
+  if (row.externalAuthoritative && seen.length) { counts.duplicates += 1; return; }
   if (seen.length) {
     const found = samePosting(seen, row.description, parser);
     if (found) return duplicate(found, key);
