@@ -19,6 +19,15 @@ function capForm(b) {
     </form>`;
 }
 
+// The model each purpose runs on, from the engine's own configuration (scenario engine.models).
+const PURPOSE_LABELS = { chat: 'Chat answers', job: 'Briefs and jobs', extract: 'Reading files', title: 'Thread names', confirm: 'Confirm guesses' };
+
+function modelsHtml(en) {
+  const { arr, esc } = H;
+  const rows = arr(en.models).map((m) => `<li data-purpose="${esc(m.purpose)}"><span>${esc(PURPOSE_LABELS[m.purpose] || m.purpose)}</span><b class="mono">${esc(m.model)}</b></li>`).join('');
+  return rows ? `<ul class="h-eng-models" aria-label="Model per purpose">${rows}</ul>` : '<b class="h-eng-v">Not configured</b>';
+}
+
 function ledgerHtml(en) {
   const { arr, esc, figHtml, section } = H;
   const rows = arr(en.ledger);
@@ -59,7 +68,7 @@ export function render() {
         <div class="h-eng-s col"><svg class="h-eng-meter" viewBox="0 0 100 4" preserveAspectRatio="none" role="img" aria-label="${Math.round(p * 100)} percent of the monthly budget used"><rect class="bg" width="100" height="4" rx="2"/><rect class="fg" width="${p * 100}" height="4" rx="2"/></svg>
         <div class="h-eng-sub"><span class="mono">${figHtml('engine.budget.left', { cents: true })} left</span><span class="mono">${Math.round(p * 100)}% used</span></div>
         ${capForm(b)}</div></div>
-      <div class="h-eng-c"><span class="h-eng-l">Chat engine</span><b class="h-eng-v">${T(en.chat?.model)}</b>${en.chat?.note ? `<div class="h-eng-s"><p>${T(en.chat.note)}</p></div>` : ''}</div>
+      <div class="h-eng-c"><span class="h-eng-l">Models</span>${modelsHtml(en)}${en.chat?.note ? `<div class="h-eng-s"><p>${T(en.chat.note)}</p></div>` : ''}</div>
     </div>`;
   const table = jobsList.length ? `<div class="h-card h-jt" role="table" aria-label="Scheduled jobs">
       <div class="h-jt-h" role="row"><span role="columnheader">Job</span><span role="columnheader">Cadence</span><span role="columnheader">Last run</span><span role="columnheader">Next run</span><span role="columnheader" class="r">Cost per run</span></div>${rows}</div>` : '<p class="h-mute">No jobs scheduled.</p>';

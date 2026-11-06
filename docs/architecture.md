@@ -390,7 +390,7 @@ live state merged in, plus `live`. It only reads.
 6. Derived provenance figures, registered at build time and never stored:
    `wg.salary.<pointId>.x|y` and `wg.deferral.<optionId>.amount|tax2026|tax2027|net|decCash|need|gap`
    (kind m, source `wargame-model`, "War-game model, from your plan");
-   `series.<key>.<index>` (the point's kind, source the series `src` or `plan`);
+   `series.<key>.<index>` (the point's kind, source the series `src` or `plan`; a real store's series carry `imported: true` and src `balances`, the "Account balances you uploaded" built-in source);
    `engine.budget.used` (a, `spend-ledger`), `engine.budget.monthly` (p, `settings`),
    `engine.budget.left` (e, `spend-ledger`), `engine.job.<jobId>.cost` (e, `job-estimates`,
    "Per-run cost estimate") and `engine.ledger.<id>.cost` (a, `spend-ledger`, label
@@ -404,6 +404,13 @@ live state merged in, plus `live`. It only reads.
    `domains` pass through `applyFreshness`: a stale ingest source appends "<label> data is <n>
    days old. Export a fresh copy." to its domain's note, moves a `covered` domain to `waiting`, and
    adds the domain (status `waiting`) when the store has none with that id.
+
+### Engine models
+
+`engine.models` is `[{purpose, model}]` for chat, job, extract, title and confirm, read from
+`modelFor(purpose)` in `src/engine/pricing.mjs` (the same function the engine calls), so the Engine
+screen shows the configured model per purpose in demo and real mode. `engine.chat` stays a demo-only
+content row (a note); an empty store serves it blank.
 
 ### The `live` key
 
@@ -552,6 +559,8 @@ response is `{scenario, ...}` with the fresh scenario.
 | `GET /api/identity` | | `{identity: {login, name} or null}`. The admitted owner: `login` is the trimmed `Tailscale-User-Login`, `name` the trimmed `Tailscale-User-Name` or else the login. Always `null` on a demo store. |
 | `POST /api/recs/:id/action` | `{action: accept, start, snooze, dismiss, complete, reopen or task, arg?}` | `{scenario}`. `task` toggles task `arg`; `snooze` takes a wake label (default "Next month"). 400 bad action or task index, 404 unknown or hidden rec. Writes `rec_events` (actor `ui`). |
 | `POST /api/wargame/:name/pick` | `{index}` (an index or an option id) | `{scenario}`. `name` is salary or deferral (404 otherwise); 400 out of range. |
+| `POST /api/decisions/:id/decide` | `{index?}` (a point index or id; default the stored pick) | `{scenario}`. Decide on the picked point of an open salary or deferral decision: status becomes decided and `decided_line` is built from the point's own label plus `{f:...}` tokens for the `wg.*` figures the registry holds (provenance stays on the figures). Records the pick in `wargame.picks`, writes the owner-stated assumption fact (`business.salaryDecided` = `{entity, salary}`, the S corp the game was built for and the point's `wg.salary.<id>.salary` value, or `business.deferralDecided` = `{option, amount}`; src `decide:salary` or `decide:deferral`, confirmed, locator names the decision and the figure), logs a `decide` rec event on the linked rec and schedules the plan job (trigger `decide`) on a real store. 404 unknown id, 400 no war game or bad index, 409 already decided, not open, upcoming or unavailable. |
+| `POST /api/decisions/:id/revisit` | `{}` | `{scenario}`. Reopens a decision decided that way: status open, `decided_line` cleared, the assumption fact deleted, a `revisit` rec event, plan job scheduled. 409 for a decision that is not decided with a stored choice. |
 | `POST /api/packs/:id/toggle` | `{}` | `{scenario, status, note}`. Turning a pack on lifts its hidden recs to proposed; turning it off hides again only the recs it lifted that no other active pack powers. `note` is "Recommendations update on the next planning run." |
 | `POST /api/packs/:id/whatif` | `{}` | `{scenario}`. Marks the pack exploring and appends the pack's what-if prompt and a live answer (with provenance) once to `pack:<id>`. A manifest-backed pack's prompt is literal text, stored escaped like free text (`whatIfOwnerText`); an illustrative demo prompt keeps its token form; a notice reply (engine off, over the cap, model error) is appended once and does not mark it done. |
 | `GET /api/packs/:id/entries/:entryId` | | `{entry: {id, title, body, cites}}` for an entry of a manifest-backed pack row, from the loaded packs; 404 otherwise. |
@@ -1622,6 +1631,22 @@ passes; accepted text is HTML-escaped. Any failure, including `EngineOffError` a
 `BudgetExceededError`, falls back to the template. The grounding hash covers the trigger, template
 version, window close, the hit's figure values and its other hit variables.
 
+### Decided salary
+
+The decide action (`POST /api/decisions/:id/decide`) writes the owner fact `business.salaryDecided`
+as `{entity, salary}`; the salary war game content carries `entity`, the slug of the S corp it was
+built for. `computeFigures` treats the salary as that business's owner-stated payroll assumption only:
+another S corp keeps its own projection. It replaces the straight-line P&L officer salary projection
+(`pnl.<slug>.salaryProj`, source `owner-decision`), becomes the wage part of the household tax parts
+and the war game's current point, and distributions follow the same model as the war game (profit
+before salary less the salary and the employer payroll tax on it), so wages and distributions move
+together. The deferral game's monthly payroll uses the decided salary and its employer payroll tax.
+Profit before salary still comes from the P&L. The decision is dropped for the run (the projection
+figure is restored) when a W-2 from the business exists for the year (actual data wins) or when the
+salary would leave negative distributions. Revisit deletes the fact, so the next run goes back to
+the data. A decided deferral is recorded (`business.deferralDecided`) and shown, but no projection
+reads it yet.
+
 ### Brief content
 
 Content rows (src `planner`), each written only when it changes: `names` (`household.names` over
@@ -1633,6 +1658,15 @@ the statutory dates of the next 400 days that no hit covers. Decisions (src `pla
 by id: `<scenario>-<year>` open per scenario hit and `salary-<year + 1>` upcoming for an S corp.
 Events (src `planner`) are replaced only when something changed against `settings.planner.snapshot`
 (new files, new, revived and retired recs, planner fact changes); the snapshot is rewritten each run.
+Fact-change event titles come from the fixed label map in `src/shared/event-labels.mjs` (every
+frozen fact key, detected and no longer seen, plus a fallback per event kind), for example "S corp
+income detected"; no title holds a figure or a raw key, and the scenario rewrites an old stored
+"<key> changed" title the same way. The `series` content row (src `planner`) is built by
+`src/jobs/planner/series.mjs` from the balances table (positions values for months a brokerage
+account has no balance): one `acct-<id>` series per account with at least two months in the last 12,
+and `net` ("Net worth, accounts with a trend": only accounts with a series of their own, debts such as
+card, credit and loan kinds subtracted, each counted from its first month with its last balance carried
+forward; it ends at the newest month any upload covers).
 
 ### Deferral deadlines
 

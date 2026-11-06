@@ -184,6 +184,7 @@ function salaryGame(data, out, ctx) {
   }[outside];
   const rothNote = catchOff && rothFact == null && age >= R.catchUpAge ? ' Catch-up room is left out until you confirm your plan offers Roth deferrals.' : '';
   return {
+    entity: slug,
     title: `What should you pay yourself in ${data.taxYear}?`,
     question: {
       in: 'Each point trades payroll tax against retirement room. The current salary is marked.',
@@ -284,7 +285,9 @@ function deferralModel(data, out, ctx, valid) {
   const isCorp = b.kind === 'scorp';
   const m = e.months;
   const avgPre = (e.sums.net + (isCorp ? e.sums.salary + e.sums.payrollTax : 0)) / m;
-  const monthlyPayroll = isCorp ? cents((e.proj(e.sums.salary) + e.proj(e.sums.payrollTax)) / 12) : 0;
+  // A decided salary brings its own employer payroll tax; otherwise the P&L projections stand.
+  const monthlyPayroll = isCorp
+    ? cents(((e.salaryDecided ? e.salaryAssumed : e.proj(e.sums.salary)) + (e.salaryDecided ? e.decidedPayrollTax : e.proj(e.sums.payrollTax))) / 12) : 0;
   const monthlyOut = out.figures['cash.monthlyOut'] ? out.figures['cash.monthlyOut'].v : 0;
   const need = isCorp ? monthlyPayroll : monthlyOut;
   const codes26 = ['agi_as_magi_proxy'];
