@@ -22,6 +22,27 @@ owner's homelab, reachable only on the owner's private network.
 5. Secrets come from the environment or mounted files at runtime, never from tracked files.
 6. Every change ships with tests. End-to-end coverage uses Playwright against the demo build.
 
+## Agent workflow
+
+These override the general implement process where they differ. Several agents share one build
+host, and full local suites on a loaded host time out at random, cost reruns and prove nothing CI
+does not.
+
+1. Locally, run only the tests for what you touched: the unit files and Playwright specs that
+   cover the changed modules, plus any test you added. Do not run the full `npm test` or the full
+   Playwright suite locally. CI runs both on every push and is the full-suite gate.
+2. A test that times out locally while unrelated to your change is host load. Rerun that one file
+   alone once. If it passes alone, leave it to CI; do not keep rerunning the suite.
+3. Run Playwright on a port of your own (not the default 4173) so parallel agents do not collide.
+4. Plan review happens only for security or authentication changes, store migrations that rewrite
+   existing data, and new subsystems, and is capped at two rounds. Every other change goes straight
+   to tests and implementation.
+5. Every PR still gets a code review from a provider other than the author's before merge.
+6. Commit and push to the remote branch at every checkpoint, starting with the failing tests.
+   Uncommitted worktrees have been lost to cleanup.
+7. Store migrations are numbered in merge order. When two branches claim the same number, the one
+   that merges second renumbers.
+
 ## Product boundaries
 
 Advisory only. No tax filing, no money movement, no securities selection. Account access is
