@@ -154,6 +154,7 @@ recommendation status.
 | `list_goals` | read | none | goals |
 | `get_figures` | read | `keys?: string[]` | `[{key, v, kind, label, source: {id, label, asOf}}]` |
 | `packs_status` | read | none | `[{id, name, status, why}]` |
+| `advisor_status` | read | none | `{advisor, nextCheckin: {date, time, lengthMin, label} or null, waiting: [{recId, title, sentOn}], reviewed: [{recId, title, sentOn, verdict, note, reviewedOn, recordedOn}], history (closed reviews with closedOn, closedReason), packets: [{id, date, recIds}]}` (see "Advisor workflow") |
 | `set_recommendation_status` | write:recs | `id, status: accepted, doing, done, dismissed, snoozed or proposed, wake?` | the rec; writes `rec_events` with actor `tool` |
 | `list_packs` | read | none | `[{id, name, status, why, version, taxYear, reviewed, covers, entries: [{file, title}]}]` sorted by id |
 | `get_pack_entry` | read | `packId, file` (the manifest file or the entry id) | `{packId, packName, file, id, title, markdown, citations: [{label, url}], version, taxYear, reviewed}`; any loaded pack, active or not |
@@ -298,6 +299,9 @@ Money columns are dollars rounded to cents; JSON columns hold JSON text. The pro
 | `column_mappings` | `signature` PK (header signature), `mapping` JSON, `src`, `created_at`, `uses` |
 | `entity_aliases` | `alias` PK (normalized alias name), `entity` (canonical display name), `created_at` |
 | `held_facts` | `id` PK, `hold` (`employer:<employerKey>`), `key`, `value` JSON, `file_id`, `parser`, `locator`, `confidence`, `created_at` |
+| `advisor_reviews` | `id` PK, `rec_id` (references `recs.id`; NULL only for a demo item outside the plan), `title` (the rec title when sent), `sent_at`, `verdict` NULL (waiting), confirmed or vetoed, `note` (escaped owner text, at most 1000 characters before escaping), `reviewed_on` (the advisor's date), `recorded_at`, `grounding_hash` (the planner's hash for the rec when the verdict was recorded), `closed_at`, `closed_reason` (`sent again`, `inputs changed`); at most one open row per rec (migration 011) |
+| `advisor_checkin` | `id` PK (always 1), `date`, `time` (`HH:MM` or NULL), `length_min`, `updated_at`. The owner-set next check-in (migration 011). |
+| `advisor_packets` | `id` PK (`advpkt-` and 16 hex), `created_at`, `clock` (the scenario date it was built for), `rec_ids` JSON, `stored_path` (encrypted under the data key, `files/<id>.bin`), `bytes`, `sha256` (migration 011) |
 | `planner_recs` | `rec_id` PK (references `recs.id`), `trigger_id`, `grounding_hash`, `prose_src` in model, template, `first_run`, `last_run` (reference `job_runs.id`), `retired_at`, `retired_reason`, `retired_from`, `held_from`. Bookkeeping for planner-owned recs (migration 007). |
 
 Migration 002 (`002-ingest.sql`) adds the ingest columns above (`files.parser` through
@@ -324,6 +328,12 @@ seeds the scheduler's jobs and there is one jobs list.
 
 Migration 009 (`009-confirm-deck.sql`) creates `confirm_undo`, `confirm_guesses` and
 `ingest_epoch` with the two `files` triggers that bump the epoch (see "Confirm queue").
+
+Migration 011 (`011-advisor.sql`) creates `advisor_reviews`, `advisor_checkin` and
+`advisor_packets` (see "Advisor workflow"). The demo seed fills the first two from the scenario.
+It backfills `advisor_reviews` from an existing store's rec defs (`def.advisor`) and the advisor
+content row's `reviewed` items outside the plan, so an upgrade keeps every pending review and
+verdict; the content row's `next` label shows until the owner sets a check-in.
 
 ### Adding a migration
 
@@ -566,6 +576,11 @@ response is `{scenario, ...}` with the fresh scenario.
 | `GET /api/email` | | `{status: {transport, state, recipient, recipients, detail}, preview: {subject, text, html, summarySrc}, history}`. `recipient` is masked (`o***@e***.invalid`); `history` is `email_sends` rows newest first with no bodies. The preview is the brief composed now over the store with the runtime engine (template summary when the engine cannot answer). |
 | `POST /api/email/test` | `{}` | `{send, history}`. Sends a fixed test email (kind `test`) through the configured transport; a failed send is a 200 with `send.status` `failed` and `send.errorCode`. |
 | `POST /api/email/brief` | `{}` | `{send, history}`. Composes and sends the brief now (kind `brief`); failures as above. |
+| `POST /api/advisor/reviews` | `{recId}` | `{scenario, reviewId}`. Sends the rec to the advisor (idempotent while it waits; a reviewed rec sent again closes the old verdict). 404 unknown or hidden rec. |
+| `POST /api/advisor/reviews/:id/verdict` | `{verdict: 'confirmed' or 'vetoed', note, date: 'YYYY-MM-DD'}` | `{scenario}`. Records the advisor's verdict; a veto dismisses the rec through the rec action path (event `dismiss`, arg `advisor vetoed`). 400 bad verdict, note over 1000 characters or bad date, 404 no open review, 409 already has a verdict. |
+| `POST /api/advisor/checkin` | `{date, time?: 'HH:MM', lengthMin: 5..480}` | `{scenario}`. Sets the next check-in. |
+| `POST /api/advisor/packets` | `{}` | `{scenario, packetId}`. Builds the review packet for every waiting review and stores it encrypted. 409 when nothing waits or a real store has no data key. |
+| `GET /api/advisor/packets/:id` | | The stored packet as `text/html` with `Content-Disposition: attachment`, the one non-JSON API response. 404 unknown id. |
 | `GET /api/jobs` | | `{jobs: [{id, name, cadence, does, lastRun, next, nextAt}], runs, timezone}`. Only jobs with a handler are listed; `runs` are recent `job_runs`. |
 | `POST /api/jobs/:id/run` | `{}` | `{scenario, run, jobs}`. Runs the job now through the scheduler under the lease (trigger `manual`); `run` is the scheduler's run (`{id, jobId, status, trigger, periodKey, startedAt, finishedAt, durationMs, errorClass, costUsd, note}`) and `scenario` the fresh scenario. `POST /api/jobs/plan/run` is this route: the manual planning run with the server's runtime engine and clock; on a demo store it answers 409 `{error: 'planning runs on real stores only'}` before the scheduler, leaving the store unchanged. 404 unknown job, 409 already running or the lease is held by another scheduler. |
 
@@ -663,6 +678,38 @@ by `POST /api/keys`. `api_keys` stores only HMAC-SHA256 of the key under a serve
 `api-key-secret` in `FATHOM_DATA`, 64 hex characters, created 0600 on first start and never
 rewritten (a malformed file stops startup; removing it invalidates every key). Verification
 compares against every stored hash with `crypto.timingSafeEqual`.
+
+## Advisor workflow
+
+The owner runs the advisor review (`src/advisor`); there are no advisor accounts or logins.
+Sending a rec opens an `advisor_reviews` row; recording the advisor's verdict fills it. The scenario
+builder sets each rec's `advisor` (`null`, or `{verdict: 'pending'|'confirmed'|'vetoed', note,
+date, reviewId}`) from the open rows, never from the rec def, and builds `advisor` from the
+`content` row's narrative keys (`name`, `role`, `agenda`, `notAsking`, `shared`, `experts`) plus
+the tables: `next` (`{when, length, date, time, lengthMin}`), `reviewed` (newest first, with
+`date` and `reviewedOn`), `pending` (rec ids, CONTRACT shape), `waiting` (`[{reviewId, recId,
+title, sent, sentOn}]`) and `packets` (`[{id, createdAt, date, recIds}]`). Demo and real stores
+share this path: `demo/seed.mjs` writes the tables and strips `next`, `reviewed` and `pending` from
+the content row and `advisor` from rec defs.
+
+Planner persistence: a vetoed rec is dismissed by the owner's action, so `applyRecs` keeps it
+dismissed on later runs, and a confirmed verdict lives outside the rec def, so reruns keep it.
+`liftStaleVetoes` runs in the planner's write transaction after `applyRecs`: a veto on a planner
+rec whose `planner_recs.grounding_hash` (figures, window and variables behind the rec) differs from
+the hash recorded with the verdict is closed with `inputs changed`, and the rec returns to
+`proposed` (event `advisor_veto_lifted`, actor `planner`) when the veto's dismiss is still its last
+status change.
+
+The review packet (`src/advisor/packet.mjs`) is one self-contained HTML document with no scripts or
+external resources: a household summary, each waiting rec with its why-now, figures, steps,
+knowledge sources and questions for the advisor, the figures' stated assumptions, and a numbered
+note for every figure (value, label, kind, source, as of). Figures come only from the scenario's
+stored or derived figures; statutory amounts and rates (`{l:}`, `{p:}`) cite the `law` and `pct`
+content rows' source (`contentSources`: a sources row, an imported file, or the planner's tax
+calculator parameters). Any token whose source is unknown renders as "figure unavailable".
+All stored text is reduced to plain text and escaped. The owner downloads it and prints to PDF
+from the browser. Packets are stored with the vault's AES-256-GCM under the data key and listed on
+the Advisor screen for re-download. The packet is not emailed.
 
 ## Seams later items plug into
 

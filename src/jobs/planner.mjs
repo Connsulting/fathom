@@ -23,6 +23,7 @@ import { writeBrief, namesOf } from './planner/brief.mjs';
 import { evaluateCatalog } from './triggers/index.mjs';
 import { reasonText } from './triggers/missing-data.mjs';
 import { wargameFigurePrefixes } from './planner/wargame.mjs';
+import { liftStaleVetoes } from '../advisor/index.mjs';
 
 export const PLAN_JOB_ID = 'plan';
 
@@ -131,6 +132,8 @@ async function plan(db, engine, { clock, runId, packDirs }) {
     const changes = applyRecs(db, results, {
       clock, now, runId, prose, packOverride: id => overrides[id] ?? null, warn: code => warnings.add(code),
     });
+    // A vetoed rec stays dismissed (applyRecs keeps the owner's status) unless its inputs changed.
+    liftStaleVetoes(db, { now });
     refreshPackState(db, { packDirs });
     linkPackRecs(db, now);
     const hits = results.filter(r => r.state === 'hit' && prose[r.trigger.id]).map(r => r.hit);
