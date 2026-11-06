@@ -76,6 +76,26 @@ function scripted(runtime, scripts = [], { before } = {}) {
   return { engine, requests, responses };
 }
 
+test('text before a tool round is kept when the model resumes mid-word', async t => {
+  const s = await demoStore(t);
+  const head = 'Give appreciated assets instead of cash.\n\nSources: "G';
+  const tail = 'ifts of appreciated stock" and "Evaluate bunching across tax years."\n\nQuarterly tax payments. The federal safe harbor follows last year.\n\nThe most useful next steps are to schedule the payment.';
+  const { engine } = scripted(s.runtime, [[
+    { content: [
+      { type: 'text', text: head },
+      { type: 'tool_use', id: 'synthetic', name: 'household_summary', input: {} },
+    ], toolCalls: [{ name: 'household_summary', args: {} }] },
+    { text: tail },
+  ]]);
+  const reply = await createLiveAnswerer({ engine, packs: s.packs }).answer({ db: s.db, key: THREAD, text: 'What am I missing?' });
+  const body = joined(reply);
+  assert.match(body, /Give appreciated assets instead of cash/);
+  assert.match(body, /Quarterly tax payments/);
+  assert.match(body, /most useful next steps/);
+  assert.doesNotMatch(body, /ifts of appreciated/);
+  assert.doesNotMatch(body, /Sources:/);
+});
+
 const spendCount = db => db.prepare('SELECT count(*) AS n FROM spend_ledger').get().n;
 const joined = reply => reply.paragraphs.join('\n');
 const toolNames = request => (request.tools || []).map(tool => tool.name);

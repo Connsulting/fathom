@@ -1,7 +1,8 @@
 // Answer text shared by the server (grounded rendering) and the browser (the streaming preview).
 // Served to the browser at /shared/answer-text.mjs, so it imports nothing outside src/shared.
 //
-// stripSources(text) -> text without a trailing "Sources:" paragraph, heading block or sentence.
+// stripSources(text) -> text without a trailing "Sources:" paragraph, heading block or sentence,
+// and without a mid-answer sentence or line that begins with Sources, References or Citations and a colon.
 // listMarkerSpans(text) -> [{ index, length }] of ordered-list markers ("1. ") at line starts, which
 //   grounding masks (a list number is not a figure).
 // markdownBlocks(html) -> [block] from escaped HTML: each block is either paragraph inner HTML (the
@@ -18,8 +19,37 @@ import { escapeUserText } from './tokens.mjs';
 
 const LABEL = '(?:[*_]{1,2})?\\s*(?:sources?|references?|citations?)\\s*(?:[*_]{1,2})?';
 const LEAD_BLOCK = new RegExp(`^\\s*${LABEL}[ \\t]*(?::|\\n|$)`, 'i');
-const TAIL_SENTENCE = new RegExp(`([.!?)])[ \\t]+${LABEL}\\s*:[^\\n]*$`, 'i');
+const TAIL_SENTENCE = new RegExp(`([.!?)])[ \\t]+${LABEL}\\s*:[^\\n.!?]*[.!?]"?'?$`, 'i');
 const TAIL_LINE = new RegExp(`\\n[ \\t]*${LABEL}\\s*:[^\\n]*$`, 'i');
+
+const SOURCE_START = new RegExp(`^[ \\t]*${LABEL}\\s*:`, 'i');
+
+// Drop a sentence or line that begins with Sources/References/Citations and a colon.
+// A sentence ends at the first . ! or ? (or the end of the line). Prose that merely
+// contains the word "source" does not start that way, so it stays.
+function stripSourceSentences(line) {
+  let out = '';
+  let i = 0;
+  while (i < line.length) {
+    const atBoundary = i === 0 || /[.!?][ \t]*$/.test(line.slice(0, i));
+    if (atBoundary) {
+      const m = SOURCE_START.exec(line.slice(i));
+      if (m && m.index === 0) {
+        let j = i + m[0].length;
+        while (j < line.length && !/[.!?]/.test(line[j])) j += 1;
+        if (j < line.length) j += 1;
+        if (line[j] === '"' || line[j] === "'" || line[j] === '\u201d') j += 1;
+        while (line[j] === ' ' || line[j] === '\t') j += 1;
+        if (j < line.length && out && !/\s$/.test(out)) out += ' ';
+        i = j;
+        continue;
+      }
+    }
+    out += line[i];
+    i += 1;
+  }
+  return out.replace(/[ \t]{2,}/g, ' ').replace(/[ \t]+$/g, '');
+}
 
 export function stripSources(text) {
   let s = String(text ?? '').replace(/\s+$/, '');
@@ -29,7 +59,13 @@ export function stripSources(text) {
     s = blocks.slice(0, -1).join('\n\n').replace(/\s+$/, '');
   }
   if (LEAD_BLOCK.test(s) && !/\n[ \t]*\n/.test(s)) return s;
-  return s.replace(TAIL_LINE, '').replace(TAIL_SENTENCE, '$1').replace(/\s+$/, '');
+  s = s.replace(TAIL_LINE, '').replace(TAIL_SENTENCE, '$1').replace(/\s+$/, '');
+  s = s.split('\n').flatMap(line => {
+    const next = stripSourceSentences(line);
+    return next === '' && line.trim() !== '' ? [] : [next];
+  }).join('\n');
+  s = s.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').replace(/\s+$/, '');
+  return s.replace(/^\n+/, '');
 }
 
 const OL_MARK = /^([ \t]*)(\d{1,2})[.)](?=[ \t])/gm;

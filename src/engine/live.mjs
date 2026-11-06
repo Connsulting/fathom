@@ -36,7 +36,10 @@ export async function consumeSdkMessages(stream, onEvent) {
         if (event) { try { onEvent(event); } catch { /* listeners never fail a round */ } }
       }
       if (message.type === 'system' && message.subtype === 'init') tools = message.tools;
-      if (message.type === 'assistant') { content = message.message.content; usage = message.message.usage; }
+      if (message.type === 'assistant' && message.message) {
+        content = mergeAssistantContent(content, message.message.content);
+        usage = message.message.usage;
+      }
       if (message.type === 'result') result = message;
     }
   } catch {
@@ -67,12 +70,41 @@ export function sdkOptions({ credential, configDir, system, systemDynamic, maxTo
   };
 }
 
+// One assistant event may be a full snapshot or only the newest blocks. A later snapshot replaces
+// the earlier one; a new block is appended. Identical blocks are not repeated.
+function sameBlock(a, b) {
+  return !!a && !!b && a.type === b.type && a.text === b.text && a.id === b.id && a.name === b.name;
+}
+
+export function mergeAssistantContent(prev = [], next) {
+  if (!Array.isArray(next) || next.length === 0) return Array.isArray(prev) ? prev : [];
+  const prior = Array.isArray(prev) ? prev : [];
+  const snapshot = next.length >= prior.length && prior.every((block, i) => sameBlock(block, next[i]));
+  if (snapshot || prior.length === 0) return next.slice();
+  const out = prior.slice();
+  for (const block of next) {
+    if (!out.some(have => sameBlock(have, block))) out.push(block);
+  }
+  return out;
+}
+
+// Text blocks are the answer. The SDK result string is only the last block when a turn mixed
+// text and tools, so a shorter result must not replace the joined blocks (including a mid-word cut).
+export function assistantText(content = [], reported) {
+  const joined = (Array.isArray(content) ? content : [])
+    .filter(block => block && block.type === 'text' && typeof block.text === 'string')
+    .map(block => block.text)
+    .join('');
+  const resultText = typeof reported === 'string' ? reported : '';
+  return joined.length >= resultText.length ? joined : resultText;
+}
+
 export function normalizeSdkRound({ result, content = [], tools = [], usage }, { model, registry, maxTokens, maxBudgetUsd }) {
   let costUsd = result?.total_cost_usd;
   if (!Number.isFinite(costUsd) && usage) {
     try { costUsd = usageCostUsd(model, usage); } catch { costUsd = undefined; }
   }
-  return { text: result?.result ?? content.filter(block => block.type === 'text').map(block => block.text).join('\n'),
+  return { text: assistantText(content, result?.result),
     content, tokens: result?.usage ?? usage ?? {}, costUsd, model,
     status: result?.subtype ?? 'missing_result', is_error: result?.is_error === true,
     api_error_status: result?.api_error_status ?? null,

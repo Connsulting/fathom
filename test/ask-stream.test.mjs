@@ -224,6 +224,21 @@ test('stripSources removes a trailing Sources paragraph, heading block or senten
   assert.equal(stripSources('Your sources of income are steady.'), 'Your sources of income are steady.');
   assert.equal(stripSources('Sources: only this'), 'Sources: only this');
   assert.equal(stripSources('Check the sources: then decide. Then pay.'), 'Check the sources: then decide. Then pay.');
+  assert.equal(
+    stripSources('Give appreciated assets instead of cash.\n\nSources: "Gifts of appreciated stock" and "Evaluate bunching across tax years."\n\nQuarterly tax payments. Schedule them.'),
+    'Give appreciated assets instead of cash.\n\nQuarterly tax payments. Schedule them.',
+  );
+  assert.equal(stripSources('Open. Sources: "A" and "B." More stays.'), 'Open. More stays.');
+  assert.equal(stripSources('Read this.\nReferences: the pack.\nThen decide.'), 'Read this.\nThen decide.');
+});
+
+test('streamHtml drops a mid-answer Sources sentence and keeps the prose around it', () => {
+  const html = streamHtml('Give appreciated assets instead of cash.\n\nSources: "Gifts of appreciated stock" and "Evaluate bunching across tax years."\n\nQuarterly tax payments.');
+  assert.match(html, /Give appreciated assets instead of cash/);
+  assert.match(html, /Quarterly tax payments/);
+  assert.doesNotMatch(html, /Sources/);
+  assert.doesNotMatch(html, /Gifts of appreciated/);
+  assert.match(streamHtml('Your sources of income are steady.'), /sources of income/);
 });
 
 test('the prompt tells the model not to cite sources and allows the markdown subset', () => {

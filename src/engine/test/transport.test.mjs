@@ -1,8 +1,24 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { consumeSdkMessages, normalizeSdkRound, messagesRound, wireSchema, WIRE_UNSUPPORTED_KEYWORDS } from '../live.mjs';
+import { consumeSdkMessages, normalizeSdkRound, assistantText, messagesRound, wireSchema, WIRE_UNSUPPORTED_KEYWORDS } from '../live.mjs';
 import { DEFAULT_MODEL, usageCostUsd } from '../pricing.mjs';
 import { createEngine, createMemoryLedger, ModelAccountingError, ModelCallError } from '../index.mjs';
+
+test('a shorter SDK result does not replace text blocks split across a tool', () => {
+  const head = 'Give appreciated assets instead of cash.\n\nSources: "G';
+  const tail = 'ifts of appreciated stock" and "Evaluate bunching across tax years."';
+  const content = [
+    { type: 'text', text: head },
+    { type: 'tool_use', id: 'synthetic', name: 'get_figures', input: {} },
+    { type: 'text', text: tail },
+  ];
+  assert.equal(assistantText(content, tail), head + tail);
+  const round = normalizeSdkRound(
+    { result: { subtype: 'success', result: tail, total_cost_usd: 0.01 }, content },
+    { model: DEFAULT_MODEL, registry: { results: [] }, maxTokens: 128, maxBudgetUsd: 1 },
+  );
+  assert.equal(round.text, head + tail);
+});
 
 test('recorded SDK terminal error result remains authoritative when the iterator then throws', async () => {
   // Observed with Agent SDK 0.3.318 in the opt-in tool smoke: result, then exception.

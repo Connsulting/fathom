@@ -107,6 +107,7 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
     const transcript = structuredClone(messages);
     const allResults = [];
     const rounds = [];
+    const answerParts = [];
     let cost = 0;
     for (let roundIndex = 0; roundIndex < 8; roundIndex++) {
       let round;
@@ -127,14 +128,18 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
               for (const item of script.toolCalls ?? []) { emit({ type: 'tool', name: item.name }); await pause(streamDelayMs); }
             }
             await Promise.all((script.toolCalls ?? []).map(item => registry.invoke(item.name, item.args ?? {})));
-            if (emit && script.text) {
-              for (const chunk of fakeChunks(script.text)) { await pause(streamDelayMs); emit({ type: 'text', text: chunk }); }
+            const blockTexts = Array.isArray(script.content)
+              ? script.content.filter(block => block && block.type === 'text' && typeof block.text === 'string').map(block => block.text)
+              : null;
+            const text = blockTexts && blockTexts.length ? blockTexts.join('') : (script.text ?? '');
+            if (emit && text) {
+              for (const chunk of fakeChunks(text)) { await pause(streamDelayMs); emit({ type: 'text', text: chunk }); }
             }
-            round = { text: script.text ?? '', costUsd: Object.hasOwn(script, 'costUsd') ? script.costUsd : 0.001, model: 'fake', tokens: script.tokens ?? {},
+            round = { text, costUsd: Object.hasOwn(script, 'costUsd') ? script.costUsd : 0.001, model: 'fake', tokens: script.tokens ?? {},
               status: script.status ?? (script.toolCalls?.length ? 'error_max_turns' : 'success'),
               is_error: script.is_error === true, api_error_status: script.api_error_status ?? null,
               accountingUnknown: script.accountingUnknown ?? false, toolResults: registry.results,
-              content: [{ type: 'text', text: script.text ?? '' }], details: { maxBudgetUsd: capUsd - spend } };
+              content: Array.isArray(script.content) ? script.content : [{ type: 'text', text }], details: { maxBudgetUsd: capUsd - spend } };
           } else {
             try {
               round = await (SINGLE_ROUND.includes(purpose) ? messagesRound : sdkRound)({ credential: auth, system, systemDynamic,
@@ -167,6 +172,7 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
       cost += round.costUsd;
       rounds.push(round.details);
       allResults.push(...round.toolResults);
+      if (typeof round.text === 'string' && round.text) answerParts.push(round.text);
       const toolBoundary = round.status === 'error_max_turns' && round.toolResults.length > 0;
       if (round.api_error_status != null || (round.is_error && !toolBoundary && round.status !== 'error_max_budget_usd')) {
         throw new ModelCallError('Model did not complete a valid response');
@@ -177,8 +183,9 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
       if (!['success', 'error_max_turns'].includes(round.status)) throw new ModelCallError('Model did not complete a valid response');
       if (round.status === 'error_max_turns' && round.toolResults.length === 0) throw new ModelCallError('Model reached a turn limit without a tool result');
       if (round.toolResults.length === 0 || SINGLE_ROUND.includes(purpose)) {
-        return { text: round.text, content: round.content, costUsd: Number(cost.toFixed(12)), model: round.model,
-          toolResults: allResults, rounds, grounding: checkGrounding(round.text, { ...grounding, toolResults: allResults }) };
+        const text = answerParts.join('');
+        return { text, content: round.content, costUsd: Number(cost.toFixed(12)), model: round.model,
+          toolResults: allResults, rounds, grounding: checkGrounding(text, { ...grounding, toolResults: allResults }) };
       }
       transcript.push({ role: 'assistant', content: round.content }, { role: 'tool', content: round.toolResults });
     }
