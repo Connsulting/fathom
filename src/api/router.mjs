@@ -3,10 +3,13 @@
 // `routes` is the route table (docs/architecture.md lists every entry; test/docs.test.mjs checks).
 // `upload: true` routes take multipart bodies (read by the handler through ctx.readUpload);
 // `ingest: true` routes never log error details, which could carry file contents; `quiet: true`
-// routes (email and jobs) likewise log an error code only.
+// routes (email and jobs) likewise log an error code only. `stream: true` routes (the two that ask
+// a question) answer as Server-Sent Events when the request's Accept header asks for
+// text/event-stream (see createEventStream); the gate, Host allowlist and POST guards run first,
+// exactly as for JSON.
 
 import { fileURLToPath } from 'node:url';
-import { HttpError, setSecurityHeaders, sendJson, sendError, guardPost, readJsonBody } from './http.mjs';
+import { HttpError, setSecurityHeaders, sendJson, sendError, guardPost, readJsonBody, createEventStream, wantsEventStream } from './http.mjs';
 import { guardUpload, readMultipart } from './upload.mjs';
 import { createStatic } from './static.mjs';
 import * as h from './handlers.mjs';
@@ -32,9 +35,9 @@ const TABLE = [
   { method: 'POST', path: '/api/engine', handler: h.setEngine },
   { method: 'POST', path: '/api/engine/cap', handler: h.setCap },
   { method: 'POST', path: '/api/your-plans/build', handler: h.yourPlansBuild },
-  { method: 'POST', path: '/api/ask', handler: h.ask },
+  { method: 'POST', path: '/api/ask', handler: h.ask, stream: true },
   { method: 'GET', path: '/api/threads', handler: h.threadList },
-  { method: 'POST', path: '/api/threads', handler: h.threadCreate },
+  { method: 'POST', path: '/api/threads', handler: h.threadCreate, stream: true },
   { method: 'GET', path: '/api/threads/:id', handler: h.threadGet },
   { method: 'POST', path: '/api/threads/:id/rename', handler: h.threadRename },
   { method: 'POST', path: '/api/threads/:id/archive', handler: h.threadArchive },
@@ -52,6 +55,7 @@ const TABLE = [
   { method: 'POST', path: '/api/files/:id/retry', handler: ih.retryFile, ingest: true },
   { method: 'GET', path: '/api/confirm', handler: ih.listPendingConfirm, ingest: true },
   { method: 'POST', path: '/api/confirm/list', handler: ih.listConfirm, ingest: true },
+  { method: 'GET', path: '/api/confirm/:id', handler: ih.getConfirm, ingest: true },
   { method: 'POST', path: '/api/confirm/:id/answer', handler: ih.answerConfirm, ingest: true },
   { method: 'POST', path: '/api/confirm/:id/reopen', handler: ih.reopenConfirm, ingest: true },
   { method: 'GET', path: '/api/email', handler: eh.getEmail, quiet: true },
@@ -155,8 +159,20 @@ export function createHandler({ db, config, answerer, engine = null, packs = nul
           guardPost(req);
           body = await readJsonBody(req);
         }
-        const out = await r.handler({ db, config, answerer, engine, packs, identity, scheduler, transport, params, body, readUpload, req, get keys() { return getKeys(); } });
-        sendJson(res, 200, out);
+        const events = r.stream && wantsEventStream(req) ? createEventStream(req, res) : null;
+        let out;
+        try {
+          out = await r.handler({ db, config, answerer, engine, packs, identity, scheduler, transport, params, body, readUpload, req,
+            ...(events ? { onEvent: events.send } : {}), get keys() { return getKeys(); } });
+        } catch (err) {
+          // Once the event stream has started, an error is its last event.
+          if (!events || !events.started) throw err;
+          if (!(err instanceof HttpError)) console.error(err);
+          events.fail(err);
+          return;
+        }
+        if (events) events.finish(out);
+        else sendJson(res, 200, out);
         return;
       }
       if (req.method !== 'GET' && req.method !== 'HEAD') {

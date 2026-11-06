@@ -474,10 +474,10 @@ describe('revise and reopen over HTTP', () => {
   test('revise and reopen on a pending item are 409 not answered', async () => {
     const reopen = await postJson(s.baseUrl, `/api/confirm/${owner.id}/reopen`, {});
     assert.equal(reopen.status, 409);
-    assert.deepEqual(reopen.json, { error: NOT_ANSWERED });
+    assert.deepEqual(reopen.json, { error: NOT_ANSWERED, code: 'not_answered' });
     const revise = await postJson(s.baseUrl, `/api/confirm/${owner.id}/answer`, { answer: 'joint', revise: true });
     assert.equal(revise.status, 409);
-    assert.deepEqual(revise.json, { error: NOT_ANSWERED });
+    assert.deepEqual(revise.json, { error: NOT_ANSWERED, code: 'not_answered' });
   });
 
   test('an import after the answer makes revise and reopen 409 final with the fixed message', async () => {

@@ -55,6 +55,16 @@ export function loadConfig(env = process.env) {
     engine = env.FATHOM_ENGINE;
   }
 
+  // Fake engine only: milliseconds between streamed answer chunks, so the demo shows an answer
+  // arriving the way a live one does. 0 streams at once.
+  let fakeStreamMs = 25;
+  if (!blank(env.FATHOM_FAKE_STREAM_MS)) {
+    fakeStreamMs = Number(env.FATHOM_FAKE_STREAM_MS);
+    if (!Number.isInteger(fakeStreamMs) || fakeStreamMs < 0 || fakeStreamMs > 1000) {
+      throw new ConfigError(`FATHOM_FAKE_STREAM_MS must be an integer from 0 to 1000, got ${env.FATHOM_FAKE_STREAM_MS}`);
+    }
+  }
+
   let clock = null;
   if (!blank(env.FATHOM_CLOCK)) {
     if (!isoDate(env.FATHOM_CLOCK)) throw new ConfigError(`FATHOM_CLOCK must be an ISO date (YYYY-MM-DD), got ${env.FATHOM_CLOCK}`);
@@ -97,6 +107,7 @@ export function loadConfig(env = process.env) {
     host: blank(env.FATHOM_HOST) ? '127.0.0.1' : env.FATHOM_HOST,
     demo,
     engine,
+    fakeStreamMs,
     clock,
     claudeCredentialFile: blank(env.FATHOM_CLAUDE_CREDENTIAL_FILE) ? null : env.FATHOM_CLAUDE_CREDENTIAL_FILE,
     dataKeyFile: blank(env.FATHOM_DATA_KEY_FILE) ? null : env.FATHOM_DATA_KEY_FILE,

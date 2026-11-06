@@ -35,6 +35,12 @@
 //    #/ask); it resolves { thread, message } or null. api.threadAct(id, 'archive'|'trash'|'restore'|
 //    'delete') and api.renameThread(id, title) resolve the updated thread (or null; delete resolves
 //    null too, and a deleted open thread falls back to #/ask).
+//  - api.askStream(text, key, onEvent) and api.newThreadStream({ text } | { questionId }, onEvent) are
+//    askFree and newThread over the server's event stream: onEvent(name, data) sees 'start' {key},
+//    'progress' {label}, 'text' {text} (raw model text: escape it and never style its numbers as
+//    verified), 'reset' and 'recovering'. They resolve exactly like askFree and newThread. When the
+//    stream breaks before its final event, the answer is fetched instead: the scenario is reloaded
+//    until the conversation has the new turn (the server stores it once, after grounding).
 //  - api.packEntry(packId, entryId) GETs one pack entry and resolves { id, title, body, cites } or
 //    null; it never touches the scenario or the error line.
 //  - api.reviseAnswer(id, optionId) and api.reopenAnswer(id) resolve { item }, or { final: message }
@@ -328,10 +334,180 @@ async function postJson(path, body) {
   if (!res.ok) {
     const err = new Error((data && typeof data.error === 'string' && data.error) || 'The server answered ' + res.status + '.');
     err.status = res.status;
+    if (data && typeof data.code === 'string') err.code = data.code;
     throw err;
   }
   if (!data || !data.scenario || typeof data.scenario !== 'object') throw new Error('The server sent an unexpected reply.');
   return data;
+}
+
+// ---------------------------------------------------------------- streamed asks
+
+const RECOVER_EVERY_MS = 1500;
+const RECOVER_FOR_MS = 240000;
+
+// One Server-Sent Events block -> { name, data } or null.
+function parseEvent(block) {
+  let name = 'message';
+  const data = [];
+  for (const line of block.split('\n')) {
+    if (line.startsWith('event:')) name = line.slice(6).trim();
+    else if (line.startsWith('data:')) data.push(line.slice(5).replace(/^ /, ''));
+  }
+  if (!data.length) return null;
+  try { return { name, data: JSON.parse(data.join('\n')) }; } catch (e) { return null; }
+}
+
+const broken = (key) => { const err = new Error('The answer stream broke.'); err.broken = true; err.key = key; return err; };
+
+// POST asking for an event stream. Resolves the final body; rejects with err.status for a server
+// error and err.broken (with err.key once the server named the conversation) when the stream
+// ends or fails before a final or error event.
+async function postStream(path, body, onEvent) {
+  let res;
+  try {
+    res = await fetch(path, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'text/event-stream' },
+      body: JSON.stringify(body || {}),
+      credentials: 'same-origin',
+    });
+  } catch (e) {
+    throw broken(null);
+  }
+  if (res.status === 401) reloadUnauthorized();
+  if (!/text\/event-stream/i.test(res.headers.get('content-type') || '')) {
+    let data = null;
+    try { data = await res.json(); } catch (e) { data = null; }
+    if (!res.ok) {
+      const err = new Error((data && typeof data.error === 'string' && data.error) || 'The server answered ' + res.status + '.');
+      err.status = res.status;
+      throw err;
+    }
+    if (!data || !data.scenario || typeof data.scenario !== 'object') throw new Error('The server sent an unexpected reply.');
+    return data;
+  }
+  let key = null;
+  let buf = '';
+  const dec = new TextDecoder();
+  try {
+    const reader = res.body.getReader();
+    for (;;) {
+      const { value, done: end } = await reader.read();
+      if (end) break;
+      buf += dec.decode(value, { stream: true }).replace(/\r\n?/g, '\n');
+      let at;
+      while ((at = buf.indexOf('\n\n')) >= 0) {
+        const ev = parseEvent(buf.slice(0, at));
+        buf = buf.slice(at + 2);
+        if (!ev) continue;
+        if (ev.name === 'final') {
+          if (ev.data && ev.data.scenario && typeof ev.data.scenario === 'object') return ev.data;
+          throw broken(key);
+        }
+        if (ev.name === 'error') {
+          const err = new Error((ev.data && typeof ev.data.error === 'string' && ev.data.error) || 'The server could not answer.');
+          err.status = (ev.data && ev.data.status) || 500;
+          throw err;
+        }
+        if (ev.name === 'start' && ev.data && typeof ev.data.key === 'string') key = ev.data.key;
+        try { onEvent(ev.name, ev.data || {}); } catch (e) { /* a view error never breaks the stream */ }
+      }
+    }
+  } catch (e) {
+    if (e && (e.status || e.broken)) throw e;
+  }
+  throw broken(key);
+}
+
+const meTurns = (scenario, key) => arr(scenario && scenario.live && scenario.live.conversations && scenario.live.conversations[key])
+  .filter(m => m && m.role === 'me').length;
+const threadIds = (scenario) => new Set(arr(scenario && scenario.live && scenario.live.threads).map(t => t && t.id));
+
+// Reload the scenario until the asked conversation has the new turn: `key` with more owner
+// messages than `before`, or (a new thread whose key never arrived) a thread not in `ids`.
+// Resolves { scenario, key } or null after RECOVER_FOR_MS.
+async function recoverTurn({ key, before, ids }) {
+  const until = Date.now() + RECOVER_FOR_MS;
+  while (Date.now() < until) {
+    await new Promise(r => setTimeout(r, RECOVER_EVERY_MS));
+    let next;
+    try { next = await loadScenario(); } catch (e) { continue; }
+    if (key && meTurns(next, key) > before) return { scenario: next, key };
+    if (!key) {
+      const fresh = arr(next.live && next.live.threads).find(t => t && t.id && !ids.has(t.id));
+      if (fresh) return { scenario: next, key: fresh.key || 'ask:' + fresh.id };
+    }
+  }
+  return null;
+}
+
+// Like send, over an event stream; a broken stream falls back to recoverTurn.
+function sendStream(path, body, onEvent, onOk, key) {
+  const run = () => {
+    const before = key ? meTurns(S, key) : 0;
+    const ids = threadIds(S);
+    return postStream(path, body, onEvent).catch(err => {
+      if (!err || !err.broken) throw err;
+      try { onEvent('recovering', {}); } catch (e) { /* ignore */ }
+      return recoverTurn({ key: err.key || key, before, ids }).then(got => {
+        if (!got) throw new Error('The answer did not arrive in time. Reload the page to check for it.');
+        return { scenario: got.scenario, recoveredKey: got.key };
+      });
+    }).then(
+      data => {
+        applyScenario(data.scenario);
+        hideError();
+        let out = data;
+        try { out = onOk(data); } catch (e) { out = null; }
+        notify();
+        return out;
+      },
+      err => {
+        showError('Could not get an answer. ' + (err && err.message ? err.message : ''));
+        return null;
+      }
+    );
+  };
+  const p = queue.then(run);
+  queue = p;
+  return p;
+}
+
+// The newest Fathom message in `key`, mapped (a recovered answer has no message in the body).
+function lastReply(key) {
+  const list = conversation(key);
+  for (let i = list.length - 1; i >= 0; i--) if (list[i].role !== 'me') return list[i];
+  return null;
+}
+
+function askStream(text, convKey, onEvent) {
+  const clean = String(text == null ? '' : text).trim();
+  if (!clean) return done();
+  const key = convKey || activeKey();
+  if (!key) return newThreadStream({ text: clean }, onEvent);
+  if (key.startsWith('pack:') && !rawPack(key.slice(5))) return done();
+  const cb = typeof onEvent === 'function' ? onEvent : () => {};
+  return sendStream('/api/ask', { key, text: clean }, cb, d => (d.message ? mapMsg(d.message) : d.recoveredKey ? lastReply(key) : null), key);
+}
+
+function newThreadStream(q, onEvent) {
+  const o = q && typeof q === 'object' ? q : {};
+  let body;
+  if (o.questionId != null && o.questionId !== '') body = { questionId: String(o.questionId) };
+  else {
+    const text = String(o.text == null ? '' : o.text).trim();
+    if (!text) return done();
+    body = { text };
+  }
+  const cb = typeof onEvent === 'function' ? onEvent : () => {};
+  return sendStream('/api/threads', body, cb, d => {
+    let th = d.thread && typeof d.thread === 'object' ? d.thread : null;
+    if (!th && d.recoveredKey) th = rawThread(d.recoveredKey.replace(/^ask:/, ''));
+    if (th && th.id && cur && cur.name === 'ask' && !(cur.params && cur.params.id)) go('ask', { id: th.id }, { replace: true });
+    const key = th ? th.key || 'ask:' + th.id : null;
+    return { thread: th, message: d.message ? mapMsg(d.message) : key ? lastReply(key) : null };
+  });
 }
 
 // Swap in a new scenario and keep the route valid for it (for example onboarding finishing).
@@ -593,9 +769,73 @@ function upload(fileList) {
   return send('/api/files', form, d => ({ files: arr(d.files), pending: Number(d.pending) || 0 }), null, 'Could not add those files. ');
 }
 
+// A failed answer POST is retried once only when the server confirms the first attempt did not
+// land: a network error or a 502, 503 or 504 (a proxy that lost the connection) re-reads the item,
+// and only a still pending item is posted again. An item answered with this option meanwhile
+// landed; any other state is reported stale. Never a blind second POST.
+const RETRY_STATUS = new Set([502, 503, 504]);
+const retryable = err => !!err && (err.status == null || RETRY_STATUS.has(err.status));
+
+async function confirmItemNow(id) {
+  try {
+    const res = await fetch('/api/confirm/' + encodeURIComponent(id), { headers: { accept: 'application/json' }, credentials: 'same-origin', cache: 'no-store' });
+    if (!res.ok) return null;
+    const d = await res.json();
+    return d && d.item && typeof d.item === 'object' ? d.item : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+// Re-read the scenario after an answer whose reply was lost or refused as stale.
+async function refetchScenario() {
+  try {
+    applyScenario(await loadScenario());
+  } catch (e) { /* keep the old state */ }
+  notify();
+}
+
+// Resolves { item } on success, { stale: true } when the question changed since it was asked (the
+// scenario is refetched first) and null on any other failure (error line shown). Never rejects.
 function answer(id, optionId) {
   if (id == null || id === '' || optionId == null || optionId === '') return done();
-  return send('/api/confirm/' + encodeURIComponent(id) + '/answer', { answer: String(optionId) }, d => d.item || null);
+  const path = '/api/confirm/' + encodeURIComponent(id) + '/answer';
+  const body = { answer: String(optionId) };
+  const stale = async () => { hideError(); await refetchScenario(); return { stale: true }; };
+  const fail = err => {
+    showError('Could not save that change. ' + (err && err.message ? err.message : ''));
+    return null;
+  };
+  const run = async () => {
+    let data;
+    try {
+      data = await postJson(path, body);
+    } catch (err) {
+      if (err && err.status === 409 && err.code === 'stale') return stale();
+      if (!retryable(err)) return fail(err);
+      const now = await confirmItemNow(id);
+      if (!now) return fail(err);
+      if (now.status === 'answered') {
+        if (String(now.answer) !== String(optionId)) return stale();
+        hideError();
+        await refetchScenario();
+        return { item: now };
+      }
+      try {
+        data = await postJson(path, body);
+      } catch (again) {
+        if (again && again.status === 409 && again.code === 'stale') return stale();
+        return fail(again);
+      }
+    }
+    applyScenario(data.scenario);
+    hideError();
+    notify();
+    return { item: data.item || null };
+  };
+  const p = queue.then(run);
+  queue = p;
+  return p;
 }
 
 // Change an answered question to another option.
@@ -633,10 +873,12 @@ const api = {
   act,
   ask,
   askFree,
+  askStream,
   conversation,
   threads,
   askStarters,
   newThread,
+  newThreadStream,
   threadAct,
   renameThread,
   scenarioPick,
@@ -821,15 +1063,16 @@ async function boot() {
   if (def) mountDesign(def);
   else bootMessage('Fathom could not start.', 'No interface is registered.');
   // Engine switches and provenance popovers for any .fx-fig, unless a design handles the click
-  // and calls preventDefault.
-  root.addEventListener('click', e => {
+  // and calls preventDefault. These listen on the document, so they run after the design's own
+  // root listeners whichever registered first (a design that loads after boot mounts later).
+  document.addEventListener('click', e => {
     if (e.defaultPrevented) return;
     const sw = e.target.closest && e.target.closest('[data-fx-engine]');
     if (sw && root.contains(sw)) { e.preventDefault(); setEngine(!live().engine); return; }
     const el = e.target.closest && e.target.closest('.fx-fig');
     if (el && root.contains(el)) openPopover(el);
   });
-  root.addEventListener('keydown', e => {
+  document.addEventListener('keydown', e => {
     if (e.defaultPrevented || (e.key !== 'Enter' && e.key !== ' ')) return;
     const el = e.target.closest && e.target.closest('.fx-fig');
     if (el && root.contains(el)) { e.preventDefault(); openPopover(el); }

@@ -218,8 +218,20 @@ export function reopenItem(db, id, { now } = {}) {
   });
 }
 
+// The planner's source id (PLANNER_SRC in src/jobs/planner/facts.mjs, which imports this module).
+const PLANNER = 'planner';
+
+// An import check is stale when the stored fact no longer holds the value it asks about. A planner
+// check asks about a derived value that differs from the owner's notes fact by construction, so it
+// records the notes value it was asked against (context.stored) and is stale only when the stored
+// fact changed since. A planner check without context.stored (asked before it was recorded) is
+// stale; the next planning run asks it again with the field.
 function factIsStale(db, item) {
   const current = db.prepare('SELECT value FROM facts WHERE key = ?').get(item.context.key);
+  if (item.context.src === PLANNER) {
+    if (!Object.hasOwn(item.context, 'stored') || !current) return true;
+    return canonicalJson(parseJson(current.value, null)) !== canonicalJson(item.context.stored);
+  }
   if (!current) return false;
   return canonicalJson(parseJson(current.value, null)) !== canonicalJson(item.context.value);
 }

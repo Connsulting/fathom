@@ -6,7 +6,7 @@
 // 2. One attempt per (job_id, period_key): the job_runs insert claims it and the unique index
 //    refuses a second claim, so a failed run is not retried that period. A tick runs only the
 //    latest due period of each job, so catch-up after downtime is one run, never a backfill.
-//    Manual and ingest runs use `manual:<iso ts>` and `ingest:<iso ts>` keys.
+//    Manual, ingest and confirm runs use `manual:<iso ts>`, `ingest:<iso ts>` and `confirm:<iso ts>` keys.
 // 3. The single-row job_lock lease gates every run: taken when free or expired on every tick and
 //    run, and while any handler runs an unref'd timer (every leaseMs / 3) extends it, only while
 //    this holder still holds it. Without it a tick runs nothing and runNow is `locked`.
@@ -25,6 +25,9 @@
 // 8. Planning runs only here: the default `plan` handler calls runPlanning with this run's id, so
 //    nightly, manual (Run now, POST /api/jobs/plan/run, npm run plan) and ingest runs share the
 //    lease and job_runs. On a demo store it records the run skipped and plans nothing.
+// 9. soon(jobId, reason, {immediate}) debounces triggers: each call restarts a debounceMs timer
+//    (default 30 s) and the job is triggered once when it fires, or at once when immediate. stop()
+//    drops a pending one. Confirm answers use it so a burst of answers plans once.
 
 import { getSetting } from '../store/db.mjs';
 import { isIsoDate } from '../scenario/build.mjs';
@@ -42,7 +45,7 @@ export const DEFAULT_TIMEZONE = 'America/New_York';
 const DAY = 86400000;
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
-const TRIGGERS = new Set(['manual', 'ingest']);
+const TRIGGERS = new Set(['manual', 'ingest', 'confirm']);
 
 export const JOBS = Object.freeze([
   { id: 'plan', name: 'Nightly plan refresh', cadence: 'Daily, 2:00 AM', does: 'Re-plan recommendations and deadlines from the latest data.', schedule: Object.freeze({ every: 'day', hour: 2 }) },
@@ -218,7 +221,7 @@ const isUniqueViolation = (e) => e && (e.errcode === 2067 || e.errcode === 1555 
 
 export function createScheduler({
   db, config = {}, engine = null, handlers = {}, transport = null, now = () => new Date(),
-  tickMs = 60000, leaseMs = 300000, drainMs = 30000, holder = `fathom-${process.pid}`, log = console,
+  tickMs = 60000, leaseMs = 300000, drainMs = 30000, debounceMs = 30000, holder = `fathom-${process.pid}`, log = console,
 } = {}) {
   if (!db) throw new TypeError('A store is required');
   const handled = JOBS.filter((j) => typeof handlers[j.id] === 'function');
@@ -234,6 +237,8 @@ export function createScheduler({
   let first = null;
   let renewer = null;
   let stopping = false;
+  // Debounced triggers: jobId -> timer.
+  const soonTimers = new Map();
 
   const q = {
     ensure: db.prepare('INSERT OR IGNORE INTO jobs (id, name, cadence, does, cost, next_label, last_label, enabled, sort) VALUES (?, ?, ?, ?, NULL, ?, ?, 1, ?)'),
@@ -381,18 +386,45 @@ export function createScheduler({
     throw new SchedulerError('running');
   }
 
-  async function triggerJob(jobId, reason = 'ingest') {
+  // Fire-and-forget friendly: resolves to the run, or null when there is no handler or it cannot run now.
+  async function trigger(jobId, reason = 'ingest') {
     if (!byId.has(jobId) || !TRIGGERS.has(reason)) return null;
     if (running.has(jobId)) { if (!stopping) pending.set(jobId, reason); return null; }
     try { return await runOff(jobId, reason); } catch { return null; }
+  }
+
+  // Handlers trigger other jobs through ctx.triggerJob (inside a run, `trigger` is the run's reason).
+  const triggerJob = trigger;
+
+  function clearSoon(jobId) {
+    const h = soonTimers.get(jobId);
+    if (h) clearTimeout(h);
+    soonTimers.delete(jobId);
+  }
+
+  // Rule 9. Returns whether a trigger was scheduled (or fired).
+  function soon(jobId, reason, { immediate = false } = {}) {
+    if (!byId.has(jobId) || !TRIGGERS.has(reason) || stopping) return false;
+    clearSoon(jobId);
+    const fire = () => {
+      soonTimers.delete(jobId);
+      trigger(jobId, reason).catch(() => {});
+    };
+    if (immediate) fire();
+    else {
+      const h = setTimeout(fire, debounceMs);
+      h.unref?.();
+      soonTimers.set(jobId, h);
+    }
+    return true;
   }
 
   return {
     holder,
     tick,
     runNow: (jobId) => runOff(jobId, 'manual'),
-    // Fire-and-forget friendly: resolves to the run, or null when there is no handler or it cannot run now.
-    trigger: triggerJob,
+    trigger,
+    soon,
     start() {
       if (timer) return;
       first = setTimeout(() => { first = null; tick().catch(() => {}); }, 0);
@@ -407,6 +439,7 @@ export function createScheduler({
       if (timer) clearInterval(timer);
       first = null;
       timer = null;
+      for (const id of [...soonTimers.keys()]) clearSoon(id);
       stopRenewing();
       pending.clear();
       let drain;
