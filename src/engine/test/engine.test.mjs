@@ -91,7 +91,7 @@ test('parallel tools all finish in the paid round and chat handlers receive only
 
 test('chat can invoke a recommendation-status write, while invalid scopes fail before a paid round', async () => {
   let writes = 0;
-  const write = { ...read, scope: 'write:recs', handler: async () => { writes++; return { status: 'accepted' }; } };
+  const write = { ...read, scope: 'write:recs', handler: async () => { writes++; return { status: 'ok' }; } };
   const engine = createEngine({ mode: 'fake', responses: [
     { toolCalls: [{ name: 'balance', args: { account: 'demo' } }], costUsd: 0.01 }, { text: 'Accepted', costUsd: 0.01 },
   ] });

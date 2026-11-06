@@ -8,8 +8,8 @@ import { parseJson } from '../../store/db.mjs';
 import { dayLabel } from './data.mjs';
 import { servesGoals, recTopics } from '../../shared/goals.mjs';
 
-const ACTIVE = ['proposed', 'accepted', 'doing', 'waiting', 'snoozed'];
-const BLOCKABLE = ['proposed', 'accepted', 'doing'];
+const ACTIVE = ['proposed', 'doing', 'waiting', 'snoozed'];
+const BLOCKABLE = ['proposed', 'doing'];
 
 export function buildDef(hit, fields) {
   const r = hit.rec;

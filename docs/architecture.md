@@ -198,7 +198,7 @@ recommendation status.
 | `get_figures` | read | `keys?: string[]` | `[{key, v, kind, label, source: {id, label, asOf}}]` |
 | `packs_status` | read | none | `[{id, name, status, why}]` |
 | `advisor_status` | read | none | `{advisor, nextCheckin: {date, time, lengthMin, label} or null, waiting: [{recId, title, sentOn}], reviewed: [{recId, title, sentOn, verdict, note, reviewedOn, recordedOn}], history (closed reviews with closedOn, closedReason), packets: [{id, date, recIds}]}` (see "Advisor workflow") |
-| `set_recommendation_status` | write:recs | `id, status: accepted, doing, done, dismissed, snoozed or proposed, wake?` | the rec; writes `rec_events` with actor `tool` |
+| `set_recommendation_status` | write:recs | `id, status: doing, done, dismissed, snoozed or proposed, wake?` | the rec; writes `rec_events` with actor `tool` |
 | `list_packs` | read | none | `[{id, name, status, why, version, taxYear, reviewed, covers, entries: [{file, title}]}]` sorted by id |
 | `get_pack_entry` | read | `packId, file` (the manifest file or the entry id) | `{packId, packName, file, id, title, markdown, citations: [{label, url}], version, taxYear, reviewed}`; any loaded pack, active or not |
 | `search_pack_entries` | read | `query (2..200 chars), packId?, limit? (1..20, default 10)` | `{results: [{packId, file, id, title, score, snippet}], total, truncated}` over active packs only (the query is not echoed) |
@@ -391,6 +391,21 @@ Migration 013 (`013-yearend.sql`) creates `yearend_marks` and `yearend_packets` 
 
 Migration 014 (`014-simplefin.sql`) creates `simplefin_connection` and `simplefin_accounts` (see "SimpleFIN connections").
 
+Migration 015 (`015-rec-doing-status.sql`) merges the `accepted` rec status into `doing`. The `recs`
+CHECK lists the statuses, so the table is rebuilt without `accepted`; a migration with a `-- REBUILDS_TABLE`
+line runs with foreign keys off and must pass
+`PRAGMA foreign_key_check` before it commits (`migrate()` in `db.mjs`). Stored `accepted` recs become
+`doing`, and `rec_events` rows are rewritten: action `accept` reads as `start`, statuses `accepted` as `doing`.
+`planner_recs.held_from` and `retired_from` follow, and a stored Ask proposal (`messages.provenance`
+`proposal.action`) that offered `accept` now offers `start`. Recorded tool-call arguments in message
+provenance are a log and keep their original text.
+
+Rec actions and their buttons: `start` "Doing it" (-> `doing`), `complete` "Done" (-> `done`),
+`snooze` "Later" (-> `snoozed`, with a wake label), `dismiss` "Not for us" (-> `dismissed`) and `reopen`
+(Reopen, Wake now or Restore, by state). The keys in the Plan list and the rec dialog are D, E, L and
+Shift+X. The `accept` action no longer exists; the MCP `set_recommendation_status` enum drops
+`accepted` with it, a change to that external tool contract.
+
 ### Adding a migration
 
 1. Add `src/store/migrations/NNN-name.sql` with the next number (three digits, no gaps, lowercase
@@ -529,7 +544,7 @@ so an owner rename (`manual`, 1 to 60 characters, digits allowed) always wins. T
 escaped.
 
 `live.askStarters` lists, in this order and only when its condition holds: `attention` "What needs
-my attention right now?" (a visible rec proposed, accepted or doing), `taxes` "How are our tax
+my attention right now?" (a visible rec proposed or doing), `taxes` "How are our tax
 payments tracking this year?" (any tax payment), `scorp` "How is the S corp doing this year?" (fact
 `income.sCorp` true or any P&L line), `yearend` "What should we do before the year ends?" (always).
 
@@ -604,7 +619,7 @@ response is `{scenario, ...}` with the fresh scenario.
 | `GET /healthz` | | `{ok: true, schema: <latest migration id>}` |
 | `GET /api/scenario` | | the scenario with `live` |
 | `GET /api/identity` | | `{identity: {login, name} or null}`. The admitted owner: `login` is the trimmed `Tailscale-User-Login`, `name` the trimmed `Tailscale-User-Name` or else the login. Always `null` on a demo store. |
-| `POST /api/recs/:id/action` | `{action: accept, start, snooze, dismiss, complete, reopen or task, arg?}` | `{scenario}`. `task` toggles task `arg`; `snooze` takes a wake label (default "Next month"). 400 bad action or task index, 404 unknown or hidden rec. Writes `rec_events` (actor `ui`). |
+| `POST /api/recs/:id/action` | `{action: start, snooze, dismiss, complete, reopen or task, arg?}` | `{scenario}`. `task` toggles task `arg`; `snooze` takes a wake label (default "Next month"). 400 bad action or task index, 404 unknown or hidden rec. Writes `rec_events` (actor `ui`). |
 | `POST /api/wargame/:name/pick` | `{index}` (an index or an option id) | `{scenario}`. `name` is salary or deferral (404 otherwise); 400 out of range. |
 | `POST /api/decisions/:id/decide` | `{index?}` (a point index or id; default the stored pick) | `{scenario}`. Decide on the picked point of an open salary or deferral decision: status becomes decided and `decided_line` is built from the point's own label plus `{f:...}` tokens for the `wg.*` figures the registry holds (provenance stays on the figures). Records the pick in `wargame.picks`, writes the owner-stated assumption fact (`business.salaryDecided` = `{entity, salary}`, the S corp the game was built for and the point's `wg.salary.<id>.salary` value, or `business.deferralDecided` = `{option, amount}`; src `decide:salary` or `decide:deferral`, confirmed, locator names the decision and the figure), logs a `decide` rec event on the linked rec and schedules the plan job (trigger `decide`) on a real store. 404 unknown id, 400 no war game or bad index, 409 already decided, not open, upcoming or unavailable. |
 | `POST /api/decisions/:id/revisit` | `{}` | `{scenario}`. Reopens a decision decided that way: status open, `decided_line` cleared, the assumption fact deleted, a `revisit` rec event, plan job scheduled. 409 for a decision that is not decided with a stored choice. |
@@ -1014,7 +1029,7 @@ process, so accounting poison lasts for the process, and awaits `init()` once at
 3. Tools: every read tool of the registry, never `set_recommendation_status` (the registry keeps it
    for other surfaces; chat never writes). In Ask threads and rec conversations the answerer adds one
    local, non-writing tool, `propose_recommendation_action` (scope `read`, input `{id, action:
-   accept|start|complete|dismiss|snooze|reopen, wake?: string up to 200}`, no other keys). Its
+   start|complete|dismiss|snooze|reopen, wake?: string up to 200}`, no other keys). Its
    handler checks that the rec exists and is not hidden and that the action is in `ACTION_STATUS`,
    returns only `{proposed: true}` and never touches the store. It is never offered in `pack:<id>`
    conversations or a What if. The last successful call becomes `provenance.proposal` `{recId,
@@ -1121,7 +1136,7 @@ process, so accounting poison lasts for the process, and awaits `init()` once at
    and its covers), or "From your household summary, N items need you right now." with N from the
    summary. Numbers in the owner's free text are echoed first ("You asked about ..."), so an
    invented amount is marked unverified after the retry. In Ask threads and rec conversations, free text
-   that is an explicit command (`^(please\s+)?(accept|start|complete|dismiss|snooze|reopen)\b`)
+   that is an explicit command (`^(please\s+)?(start|complete|dismiss|snooze|reopen)\b`)
    naming a rec (the rec conversation's own rec, or in an Ask thread a visible rec's id or exact title)
    adds a `propose_recommendation_action` call to the tool round, and the text round says the owner
    can confirm it below. Negations and questions ("Do not mark anything done", "Should I dismiss

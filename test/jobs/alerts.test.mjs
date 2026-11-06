@@ -126,13 +126,13 @@ test('deadlines whose rec is done, dismissed or hidden are skipped, and so are r
     }
     assert.deepEqual(dueAlerts(t.db, { clock: CLOCK }), []);
     // Liveness: the same shapes with an open status alert.
-    for (const status of ['proposed', 'accepted', 'doing', 'waiting', 'snoozed']) {
+    for (const status of ['proposed', 'doing', 'waiting', 'snoozed']) {
       addRec(t.db, { id: `syn-${status}`, status, close: addDays(CLOCK, 4) });
     }
     addDeadline(t.db, { date: addDays(CLOCK, 6), title: 'Synthetic open deadline', recId: 'syn-proposed' });
     const keys = dueAlerts(t.db, { clock: CLOCK }).map((a) => a.key).sort();
     assert.deepEqual(keys, [
-      `rec:syn-accepted:${addDays(CLOCK, 4)}`, `rec:syn-doing:${addDays(CLOCK, 4)}`,
+      `rec:syn-doing:${addDays(CLOCK, 4)}`,
       `rec:syn-proposed:${addDays(CLOCK, 4)}`, `rec:syn-proposed:${addDays(CLOCK, 6)}`,
       `rec:syn-snoozed:${addDays(CLOCK, 4)}`, `rec:syn-waiting:${addDays(CLOCK, 4)}`,
     ].sort());

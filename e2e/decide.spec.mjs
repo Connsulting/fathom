@@ -35,7 +35,7 @@ async function actOnRec(page, recId, action) {
   await openRecFromPage(page, recId);
   const dlg = recDialog(page);
   await dlg.locator(`.h-acts.big [data-act="${action}"]`).click();
-  const label = { complete: 'Done', reopen: 'New', dismiss: 'Dismissed' }[action];
+  const label = { complete: 'Done', reopen: 'New', dismiss: 'Not for us' }[action];
   await expect(dlg.locator('.h-rec-head .h-st')).toHaveText(label);
   await closeDialogWithX(page);
 }

@@ -577,7 +577,7 @@ const done = v => Promise.resolve(v === undefined ? null : v);
 
 // ---------------------------------------------------------------- actions
 
-const ACTIONS = new Set(['accept', 'start', 'complete', 'dismiss', 'snooze', 'reopen']);
+const ACTIONS = new Set(['start', 'complete', 'dismiss', 'snooze', 'reopen']);
 
 function act(recId, action, arg) {
   const r = rawRec(recId);

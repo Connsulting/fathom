@@ -53,7 +53,7 @@ const plural = (n, w) => n + ' ' + w + (n === 1 ? '' : 's');
 const visRecs = () => api.recs().filter(r => r.status !== 'hidden');
 const domainOf = id => arr(S().domains).find(d => d.id === id);
 
-const ST = { proposed: 'New', accepted: 'Accepted', doing: 'In progress', waiting: 'Waiting', snoozed: 'Snoozed', done: 'Done', dismissed: 'Dismissed', hidden: 'Behind a pack' };
+const ST = { proposed: 'New', doing: 'Doing it', waiting: 'Waiting', snoozed: 'Snoozed', done: 'Done', dismissed: 'Dismissed', hidden: 'Behind a pack' };
 function stLabel(r) {
   if (r.status === 'waiting') return 'Waiting on ' + (r.waitingOn || 'something');
   if (r.status === 'snoozed' && r.wake) return 'Snoozed until ' + X(r.wake);
@@ -62,8 +62,7 @@ function stLabel(r) {
 const TRIG = { calendar: 'Calendar', income: 'Income change', life: 'Life event', goal: 'Goal', advisor: 'Advisor' };
 const VCLS = { tax: 'Tax', timing: 'Timing', retire: 'Retirement', risk: 'Risk', cash: 'Cash', goal: 'Goal' };
 const ACT = {
-  accept: { l: 'Accept', k: 'a', done: 'Accepted' },
-  start: { l: 'Start', k: '', done: 'Started' },
+  start: { l: 'Doing it', k: 'a', done: 'Doing it' },
   complete: { l: 'Complete', k: 'c', done: 'Completed' },
   snooze: { l: 'Snooze', k: 's', done: 'Snoozed until ' },
   dismiss: { l: 'Dismiss', k: 'd', done: 'Dismissed' },
@@ -71,8 +70,7 @@ const ACT = {
 };
 function actionsFor(st) {
   return ({
-    proposed: ['accept', 'start', 'complete', 'snooze', 'dismiss'],
-    accepted: ['start', 'complete', 'snooze', 'dismiss'],
+    proposed: ['start', 'complete', 'snooze', 'dismiss'],
     doing: ['complete', 'snooze', 'dismiss'],
     waiting: ['complete', 'snooze'],
     snoozed: ['reopen', 'complete'],
@@ -80,7 +78,7 @@ function actionsFor(st) {
     dismissed: ['reopen'],
   })[st] || [];
 }
-const primaryAct = st => ({ proposed: 'accept', accepted: 'complete', doing: 'complete', waiting: 'complete', snoozed: 'reopen', done: 'reopen', dismissed: 'reopen' })[st];
+const primaryAct = st => ({ proposed: 'start', doing: 'complete', waiting: 'complete', snoozed: 'reopen', done: 'reopen', dismissed: 'reopen' })[st];
 
 function doAct(id, a) {
   const r = api.rec(id);
@@ -136,7 +134,7 @@ function glyph(st) {
   const c = '<circle cx="8" cy="8" r="6"/>';
   const inner = {
     proposed: '<circle cx="8" cy="8" r="6" stroke-dasharray="2.2 2.1"/>',
-    accepted: c,
+    open: c,
     doing: c + '<path class="f" d="M8 4.5a3.5 3.5 0 0 1 0 7z"/>',
     waiting: c + '<path d="M6.6 6v4M9.4 6v4"/>',
     snoozed: c + '<path d="M8 5.2v3l2 1.3"/>',
@@ -347,7 +345,7 @@ function deadlineList() {
 
 const DOM_ST = { covered: 'Covered', changed: 'Changed', needs: 'Needs you', waiting: 'Waiting' };
 function domGlyph(st) {
-  return { covered: glyph('done'), changed: glyph('doing'), needs: glyph('proposed'), waiting: glyph('waiting') }[st] || glyph('accepted');
+  return { covered: glyph('done'), changed: glyph('doing'), needs: glyph('proposed'), waiting: glyph('waiting') }[st] || glyph('open');
 }
 
 const EV_KIND = { income: 'Income', life: 'Life', calendar: 'Calendar', account: 'Account', milestone: 'Milestone' };
@@ -359,7 +357,7 @@ function pgBrief() {
   const meta = S().meta || {};
   const clear = v.level === 'clear';
   const needIds = new Set(needs.map(r => r.id));
-  const motion = visRecs().filter(r => !needIds.has(r.id) && ['accepted', 'doing', 'waiting'].includes(r.status)).sort((a, b) => (a.window.days || 0) - (b.window.days || 0));
+  const motion = visRecs().filter(r => !needIds.has(r.id) && ['doing', 'waiting'].includes(r.status)).sort((a, b) => (a.window.days || 0) - (b.window.days || 0));
 
   const verdict = '<section class="cx-verdict' + (clear ? ' is-clear' : '') + '">' +
     '<div class="cx-eyebrow">' + esc(MONTHS_LONG[c.m]) + ' brief<span class="cx-dot"></span>' + T(meta.clockLabel) + '</div>' +
@@ -396,7 +394,7 @@ function pgBrief() {
 // ---------------------------------------------------------------- plan and rec detail
 
 const GROUPS = [
-  ['Needs a decision', ['proposed']], ['In progress', ['doing']], ['Accepted', ['accepted']],
+  ['Needs a decision', ['proposed']], ['Doing it', ['doing']],
   ['Waiting', ['waiting']], ['Snoozed', ['snoozed']], ['Done', ['done']], ['Dismissed', ['dismissed']],
 ];
 
@@ -663,7 +661,7 @@ function pgWargame(r) {
 // ---------------------------------------------------------------- goals
 
 const HZ = [['now', 'Now'], ['1-3y', '1 to 3 years'], ['3-10y', '3 to 10 years']];
-const GST = { done: 'done', 'on track': 'doing', watch: 'waiting', open: 'accepted' };
+const GST = { done: 'done', 'on track': 'doing', watch: 'waiting', open: 'open' };
 
 function pgGoals() {
   const goals = arr(S().goals);
@@ -677,7 +675,7 @@ function pgGoals() {
         const frac = t && t.v ? c.v / t.v : 0;
         prog = '<div class="cx-prog">' + bar(frac, 'cx-bar-acc') + '<div class="cx-prog-l"><span>' + T('{f:' + g.progress.cur + '}') + ' of ' + T('{f:' + g.progress.target + '}') + '</span><span class="cx-mono">' + Math.round(frac * 100) + '%</span></div></div>';
       }
-      return '<div class="cx-goal">' + glyph(GST[g.status] || 'accepted') + '<div class="cx-goal-m"><div class="cx-goal-t">' + T(g.title) + '<span class="cx-goal-s">' + esc(g.status) + '</span></div><p>' + T(g.prose) + '</p>' + prog + '</div></div>';
+      return '<div class="cx-goal">' + glyph(GST[g.status] || 'open') + '<div class="cx-goal-m"><div class="cx-goal-t">' + T(g.title) + '<span class="cx-goal-s">' + esc(g.status) + '</span></div><p>' + T(g.prose) + '</p>' + prog + '</div></div>';
     }).join('') + '</div></section>';
   }).join('');
   return '<div class="cx-wrap"><div class="cx-pgh"><h1>Goals</h1><p class="cx-sub">In your words. Recommendations trace back to these.</p></div>' + sec +
@@ -830,7 +828,7 @@ function pgEmail() {
 
 const PST = { active: 'Active', exploring: 'Exploring', suggested: 'Suggested', available: 'Available' };
 function packGlyph(st) {
-  return { active: glyph('done'), exploring: glyph('doing'), suggested: glyph('proposed'), available: glyph('accepted') }[st] || glyph('accepted');
+  return { active: glyph('done'), exploring: glyph('doing'), suggested: glyph('proposed'), available: glyph('open') }[st] || glyph('open');
 }
 
 function pgPacks(r) {
@@ -1181,7 +1179,7 @@ function onKey(e) {
     if (p && k === 'w' && p.status !== 'active' && p.whatIf) { api.whatIf(p.id); return; }
     if (p && k === 't' && p.status !== 'active') { api.packToggle(p.id); toast('Turned on: ' + X(p.name)); return; }
   }
-  const map = { a: 'accept', s: 'snooze', d: 'dismiss', c: 'complete', r: 'reopen' };
+  const map = { a: 'start', s: 'snooze', d: 'dismiss', c: 'complete', r: 'reopen' };
   if (map[k]) {
     const id = focusedRecId();
     if (!id) return;
@@ -1189,7 +1187,7 @@ function onKey(e) {
     if (!rec || rec.status === 'hidden') return;
     const a = map[k];
     if (a === 'reopen' && !['snoozed', 'done', 'dismissed'].includes(rec.status)) return;
-    if (rec.status === ({ accept: 'accepted', snooze: 'snoozed', dismiss: 'dismissed', complete: 'done' })[a]) return;
+    if (rec.status === ({ start: 'doing', snooze: 'snoozed', dismiss: 'dismissed', complete: 'done' })[a]) return;
     e.preventDefault();
     doAct(id, a);
   }
@@ -1211,7 +1209,7 @@ function commands() {
   NAV.flatMap(g => g[1]).forEach(([n, l, k]) => out.push({ g: 'Go to', l: l, k: 'g ' + k, icon: n, run: () => go(n) }));
   orderedRecs().forEach(x => out.push({ g: 'Recommendations', l: X(x.title), meta: stLabel(x), st: x.status, run: () => go('rec', { id: x.id }) }));
   api.needsYou().forEach(x => {
-    out.push({ g: 'Actions', l: 'Accept: ' + X(x.title), run: () => doAct(x.id, 'accept'), hide: x.status !== 'proposed' });
+    out.push({ g: 'Actions', l: 'Doing it: ' + X(x.title), run: () => doAct(x.id, 'start'), hide: x.status !== 'proposed' });
     out.push({ g: 'Actions', l: 'Complete: ' + X(x.title), run: () => doAct(x.id, 'complete') });
   });
   api.packs().forEach(p => {

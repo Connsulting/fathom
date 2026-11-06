@@ -19,7 +19,7 @@ const NAV = [
 const MORE = [['connect', 'Connect your AI'], ['engine', 'Engine'], ['email', 'Monthly email']];
 
 const STATUS = {
-  proposed: 'New', accepted: 'Accepted', doing: 'In progress', waiting: 'Waiting',
+  proposed: 'New', doing: 'Doing it', waiting: 'Waiting',
   snoozed: 'Snoozed', done: 'Done', dismissed: 'Dismissed',
 };
 const TRIGGER = { calendar: 'Deadline', income: 'Income change', life: 'Life event', goal: 'Goal', advisor: 'Advisor' };
@@ -111,9 +111,8 @@ function recActions(r, compact) {
   const b = (a, l, primary) => btn(a, l, id, primary ? 'lg-btn-primary' : '');
   const out = [];
   switch (r.status) {
-    case 'proposed': out.push(b('accept', 'Accept', 1), b('complete', 'Mark done'), b('snooze', 'Later'), b('dismiss', 'Dismiss')); break;
-    case 'accepted': out.push(b('start', 'Start', 1), b('complete', 'Mark done'), b('snooze', 'Later')); if (!compact) out.push(b('dismiss', 'Dismiss')); break;
-    case 'doing': out.push(b('complete', 'Mark done', 1), b('snooze', 'Later')); break;
+    case 'proposed': out.push(b('start', 'Doing it', 1), b('complete', 'Done'), b('snooze', 'Later'), b('dismiss', 'Not for us')); break;
+    case 'doing': out.push(b('complete', 'Done', 1), b('snooze', 'Later'), b('dismiss', 'Not for us')); break;
     case 'waiting': out.push(b('complete', 'Mark done')); break;
     case 'snoozed': out.push(b('reopen', 'Wake now'), b('complete', 'Mark done')); break;
     case 'done': case 'dismissed': out.push(b('reopen', 'Reopen')); break;
@@ -322,7 +321,7 @@ function viewBrief() {
   const all = recs();
   const count = (st) => all.filter((r) => r.status === st).length;
   const needIds = new Set(list.map((r) => r.id));
-  const doing = all.filter((r) => (r.status === 'doing' || r.status === 'accepted') && !needIds.has(r.id)).length;
+  const doing = all.filter((r) => r.status === 'doing' && !needIds.has(r.id)).length;
   const motion = [doing && `${doing} in progress`, count('waiting') && `${count('waiting')} waiting on others`, count('snoozed') && `${count('snoozed')} snoozed`].filter(Boolean);
 
   const needsHtml = list.length ? `<section class="lg-sec">
@@ -416,7 +415,7 @@ function viewPlan() {
   const all = recs().slice().sort((a, b) => (a.window?.days ?? 999) - (b.window?.days ?? 999));
   const groups = [
     ['Needs a decision', (r) => r.status === 'proposed'],
-    ['In progress', (r) => r.status === 'doing' || r.status === 'accepted'],
+    ['In progress', (r) => r.status === 'doing'],
     ['Waiting on others', (r) => r.status === 'waiting'],
     ['Snoozed', (r) => r.status === 'snoozed'],
     ['Done', (r) => r.status === 'done'],
@@ -959,7 +958,7 @@ function onClick(e) {
   switch (act) {
     case 'menu': ui.menu = !ui.menu; ui.more = ui.menu; break;
     case 'more': ui.more = !ui.more; break;
-    case 'accept': case 'start': case 'complete': case 'dismiss': case 'reopen':
+    case 'start': case 'complete': case 'dismiss': case 'reopen':
       api.act(id, act); break;
     case 'snooze': api.act(id, 'snooze', nextBrief()); break;
     case 'task': api.act(id, 'task', i); break;

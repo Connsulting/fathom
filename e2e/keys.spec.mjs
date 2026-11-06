@@ -274,10 +274,10 @@ test.describe('keys', () => {
   });
 
   const ACTIONS = [
-    ['a', 'accepted', 'Accepted'],
-    ['s', 'snoozed', /^Snoozed/],
+    ['d', 'doing', 'Doing it'],
+    ['l', 'snoozed', /^Later/],
     ['e', 'done', 'Done'],
-    ['Shift+X', 'dismissed', 'Dismissed']
+    ['Shift+X', 'dismissed', 'Not for us']
   ];
   for (const [key, status, label] of ACTIONS) {
     test(`Plan list: ${key} on a proposed rec sets it ${status}`, async ({ page, request }) => {
@@ -303,7 +303,7 @@ test.describe('keys', () => {
     await expect(dlg).toBeVisible();
     const groups = (await dlg.locator('section.h-ks-g h3').allTextContents()).map((t) => t.trim());
     for (const g of ['Global', 'Go to', 'List', 'Recommendation']) expect(groups, g).toContain(g);
-    await expect(dlg.locator('.h-ks-l', { hasText: /^Accept/ })).toHaveCount(1);
+    await expect(dlg.locator('.h-ks-l', { hasText: /^Doing it/ })).toHaveCount(1);
     await page.keyboard.press('Escape');
     await expect(sheet(page)).toBeHidden();
 
@@ -316,7 +316,7 @@ test.describe('keys', () => {
     expect(askGroups).toContain('Global');
     expect(askGroups).toContain('Go to');
     expect(askGroups).not.toContain('Recommendation');
-    await expect(sheet(page).locator('.h-ks-l', { hasText: /^Accept/ })).toHaveCount(0);
+    await expect(sheet(page).locator('.h-ks-l', { hasText: /^Doing it/ })).toHaveCount(0);
     // The Ask keys come from the registry (labels from ASK_KEYS in web/horizon/screens/chat.js).
     await expect(sheet(page).locator('.h-ks-l', { hasText: /^New conversation/ })).toHaveCount(1);
     await expect(sheet(page).locator('.h-ks-l', { hasText: /^Focus the question box/ })).toHaveCount(2);
@@ -347,10 +347,10 @@ test.describe('keys', () => {
     await gotoRoute(page, 'plan');
     await expectH1(page, 'Everything on the calendar');
     const row = recRow(page, r.id);
-    for (const [act, hint] of [['accept', '(A)'], ['snooze', '(S)'], ['complete', '(E)'], ['dismiss', '(Shift+X)']]) {
+    for (const [act, hint] of [['start', '(D)'], ['snooze', '(L)'], ['complete', '(E)'], ['dismiss', '(Shift+X)']]) {
       await expect(row.locator(`[data-act="${act}"]`), act).toHaveAttribute('title', new RegExp(hint.replace(/[()+]/g, '\\$&')));
     }
-    for (const [act, hint] of [['accept', '(A)'], ['complete', '(E)']]) {
+    for (const [act, hint] of [['start', '(D)'], ['complete', '(E)']]) {
       const all = page.locator(`article.h-row [data-act="${act}"]`);
       const n = await all.count();
       for (let i = 0; i < n; i++) expect(await all.nth(i).getAttribute('title'), `${act} ${i}`).toContain(hint);

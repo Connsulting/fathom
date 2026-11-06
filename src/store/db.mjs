@@ -11,6 +11,7 @@ export const MIGRATIONS_DIR = fileURLToPath(new URL('./migrations/', import.meta
 export const DB_FILE = 'fathom.sqlite';
 
 const MIGRATION_FILE = /^(\d{3})-([a-z0-9-]+)\.sql$/;
+const REBUILDS_TABLE = /^-- REBUILDS_TABLE\b/m;
 
 export function openDb(path) {
   const db = new DatabaseSync(path);
@@ -40,14 +41,27 @@ export function migrate(db) {
   for (const m of listMigrations()) {
     if (done.has(m.id)) continue;
     const sql = readFileSync(m.file, 'utf8');
-    db.exec('BEGIN');
+    // A migration that rebuilds a table other tables reference (SQLite cannot alter a CHECK) opens
+    // with REBUILDS_TABLE. Foreign keys cannot be switched off inside a transaction, so they are off
+    // around it, and foreign_key_check must come back clean before it commits.
+    const rebuild = REBUILDS_TABLE.test(sql);
+    if (rebuild) db.exec('PRAGMA foreign_keys = OFF');
     try {
-      db.exec(sql);
-      record.run(m.id, m.name, new Date().toISOString());
-      db.exec('COMMIT');
-    } catch (e) {
-      db.exec('ROLLBACK');
-      throw new Error(`migration ${m.id}-${m.name} failed: ${e.message}`);
+      db.exec('BEGIN');
+      try {
+        db.exec(sql);
+        if (rebuild) {
+          const bad = db.prepare('PRAGMA foreign_key_check').all();
+          if (bad.length) throw new Error(`foreign key check found ${bad.length} violation(s), first in ${bad[0].table}`);
+        }
+        record.run(m.id, m.name, new Date().toISOString());
+        db.exec('COMMIT');
+      } catch (e) {
+        db.exec('ROLLBACK');
+        throw new Error(`migration ${m.id}-${m.name} failed: ${e.message}`);
+      }
+    } finally {
+      if (rebuild) db.exec('PRAGMA foreign_keys = ON');
     }
     applied.push(m.id);
   }
