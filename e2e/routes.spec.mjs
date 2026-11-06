@@ -125,7 +125,7 @@ test.describe('routes', { tag: '@smoke' }, () => {
     await expect(groups.nth(0).locator('.h-more-h')).toHaveText('Household');
     await expect(groups.nth(0).getByRole('link')).toHaveText(['Goals', 'Accounts', 'Advisor', 'Year end']);
     await expect(groups.nth(1).locator('.h-more-h')).toHaveText('System');
-    await expect(groups.nth(1).getByRole('link')).toHaveText(['Connect', 'Engine', 'Email']);
+    await expect(groups.nth(1).getByRole('link')).toHaveText(SMOKE_REAL ? ['Connect', 'Engine', 'Email', 'Setup'] : ['Connect', 'Engine', 'Email']); // a real store also has Setup
 
     await groups.nth(1).getByRole('link', { name: 'Engine', exact: true }).click();
     await expect(page).toHaveURL(/#\/engine$/);
