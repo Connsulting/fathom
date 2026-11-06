@@ -96,6 +96,8 @@ function stripLine(line, lineStart) {
 
 export function stripSources(text) {
   const input = String(text ?? '');
+  // No label anywhere: nothing to remove (streamHtml calls this on every delta).
+  if (!/source|reference|citation/i.test(input)) return input;
   const lines = input.split('\n');
   const drop = new Array(lines.length).fill(false);
   // Heading blocks: a paragraph whose first line is the label alone and whose other lines are list items.

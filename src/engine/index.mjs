@@ -3,7 +3,7 @@ import { constants } from 'node:fs';
 import { checkGrounding } from './grounding.mjs';
 import { compileSchema } from './schema.mjs';
 import { createRegistryServer } from './tools.mjs';
-import { sdkRound, messagesRound } from './live.mjs';
+import { sdkRound, messagesRound, assistantText } from './live.mjs';
 import { modelFor, estimateUnknownCost } from './pricing.mjs';
 import { EngineOffError, BudgetExceededError, RoundLimitError, ModelCallError, ModelAccountingError } from './errors.mjs';
 export { EngineOffError, BudgetExceededError, RoundLimitError, ModelCallError, ModelAccountingError } from './errors.mjs';
@@ -31,7 +31,7 @@ const PURPOSES = ['chat', 'job', ...SINGLE_ROUND];
 // "Keep a reserve.").
 const ENDS_TERMINAL = /[.!?:]["'\u201d\u2019)\]*_]*$/;
 
-export function roundSeparator(prev, next) {
+function roundSeparator(prev, next) {
   if (!prev || !next) return '';
   if (/\s$/.test(prev) || /^\s/.test(next)) return '';
   if (ENDS_TERMINAL.test(prev)) return '\n\n';
@@ -187,10 +187,7 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
               for (const item of script.toolCalls ?? []) { emit({ type: 'tool', name: item.name }); await pause(streamDelayMs); }
             }
             await Promise.all((script.toolCalls ?? []).map(item => registry.invoke(item.name, item.args ?? {})));
-            const blockTexts = Array.isArray(script.content)
-              ? script.content.filter(block => block && block.type === 'text' && typeof block.text === 'string').map(block => block.text)
-              : null;
-            const text = blockTexts && blockTexts.length ? blockTexts.join('') : (script.text ?? '');
+            const text = assistantText(script.content, script.text);
             if (emit && text) {
               for (const chunk of fakeChunks(text)) { await pause(streamDelayMs); emit({ type: 'text', text: chunk }); }
             }
