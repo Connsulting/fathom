@@ -2965,6 +2965,15 @@ export default {
         "next": "Tomorrow 3:00 AM",
         "does": "Suggest an answer for each pending confirm question.",
         "cost": 0.03
+      },
+      {
+        "id": "simplefin-sync",
+        "name": "Bank and brokerage sync",
+        "cadence": "Daily, 5:00 AM",
+        "last": "Today 5:00 AM",
+        "next": "Tomorrow 5:00 AM",
+        "does": "Read balances and transactions from SimpleFIN Bridge, read-only.",
+        "cost": 0
       }
     ]
   },

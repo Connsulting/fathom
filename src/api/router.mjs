@@ -16,6 +16,7 @@ import { createMcpHandler } from '../mcp/index.mjs';
 import { isAllowedHost } from '../mcp/guard.mjs';
 import * as ih from './ingest-handlers.mjs';
 import * as eh from './email-handlers.mjs';
+import * as sf from './simplefin-handlers.mjs';
 import { loadOwnerLogins, identityOf, sendUnauthorized } from './identity.mjs';
 import { getSetting } from '../store/db.mjs';
 
@@ -58,6 +59,8 @@ const TABLE = [
   { method: 'POST', path: '/api/email/brief', handler: eh.sendBriefEmail, quiet: true },
   { method: 'GET', path: '/api/jobs', handler: eh.listJobs, quiet: true },
   { method: 'POST', path: '/api/jobs/:id/run', handler: eh.runJob, quiet: true },
+  { method: 'POST', path: '/api/simplefin/connect', handler: sf.connect, quiet: true },
+  { method: 'POST', path: '/api/simplefin/disconnect', handler: sf.disconnect, quiet: true },
 ];
 
 export const routes = TABLE.map(({ method, path }) => ({ method, path }));

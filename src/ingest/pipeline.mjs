@@ -61,6 +61,7 @@ export function kindOf(kind) {
 
 // Normalized account identity: inst|mask:<mask>, inst|name:<name>, else source:<hash>.
 export function accountIdentity(row) {
+  if (row.identity) return row.identity;
   const account = row.account ?? {};
   const inst = normalizeName(institution(account.inst));
   if (account.mask) return `${inst}|mask:${account.mask}`;
@@ -173,7 +174,7 @@ function householdEntities(db) {
 async function planFile(db, fileId, file, opts) {
   const { engine, now } = opts;
   if (!file.bytes.length) return { status: 'unsupported', warnings: [{ code: 'empty_file', locator: {} }] };
-  const parser = pickParser(file);
+  const parser = opts.parser ?? pickParser(file);
   if (parser) {
     const parsed = parser.parse(file);
     let status = 'imported';
@@ -189,7 +190,7 @@ async function planFile(db, fileId, file, opts) {
         parsed.warnings.push(...ex.warnings);
       } else status = 'needs_extraction';
     }
-    return { status, parser: parser.id, label: parser.label, sourceKind: parser.sourceKind, parsed, extractPath };
+    return { status, parser: parser.id, label: parser.label, sourceKind: parser.sourceKind, mirror: parser.mirror ?? 'manual', parsed, extractPath };
   }
   const table = readTable(file);
   if (table) {
@@ -214,7 +215,7 @@ function persist(db, fileId, file, plan, opts) {
   const now = opts.now;
   const counts = emptyCounts();
   if (plan.extractPath) counts.extractPath = plan.extractPath;
-  const ctx = { db, fileId, now, counts, parser: plan.parser ?? null, factsChanged: false, keys: new Set(), emptySnapshots: new Map() };
+  const ctx = { db, fileId, now, counts, parser: plan.parser ?? null, mirror: plan.mirror ?? 'manual', factsChanged: false, keys: new Set(), emptySnapshots: new Map() };
   const warn = (list) => {
     for (const w of list ?? []) {
       counts.warnings += 1;
@@ -239,7 +240,7 @@ function persist(db, fileId, file, plan, opts) {
 
   // Accounts: identity, id, and the file's source id.
   const accountRows = parsed.rows.filter((r) => r.account);
-  for (const row of accountRows) row.accountId = accountIdOf(accountIdentity(row));
+  for (const row of accountRows) row.accountId ??= accountIdOf(accountIdentity(row));
   const accountIds = [...new Set(accountRows.map((r) => r.accountId))];
   const single = accountIds.length === 1 ? accountIds[0] : null;
   const sourceId = `ing:${plan.parser}:${single ?? 'all'}`;
@@ -314,7 +315,7 @@ function accountName(account) {
 }
 
 function upsertAccounts(ctx, accountRows) {
-  const { db, fileId, now, parser, sourceId } = ctx;
+  const { db, fileId, now, parser, sourceId, mirror } = ctx;
   const seen = new Set();
   for (const row of accountRows) {
     if (seen.has(row.accountId)) continue;
@@ -329,8 +330,8 @@ function upsertAccounts(ctx, accountRows) {
     const kind = kindOf(account.kind);
     const mask = /^\d{4}$/.test(account.mask ?? '') ? account.mask : null;
     db.prepare(`INSERT INTO accounts (id, inst, mask, name, owner, kind, mirror, file_id, parser, locator, identity, source_id)
-                VALUES (?, ?, ?, ?, NULL, ?, 'manual', ?, ?, ?, ?, ?)`)
-      .run(row.accountId, institution(account.inst) || null, mask, name, kind, fileId, row.parser ?? parser, json(row.locator ?? null), identity, sourceId);
+                VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(row.accountId, institution(account.inst) || null, mask, name, kind, mirror, fileId, row.parser ?? parser, json(row.locator ?? null), identity, sourceId);
     tally(ctx, ask(db, { kind: 'account_owner', subject: row.accountId, question: `Whose account is ${name}?`, options: OWNER_OPTIONS, context: {}, fileId, now }));
     if (!kind) tally(ctx, ask(db, { kind: 'account_kind', subject: row.accountId, question: `What kind of account is ${name}?`, options: KIND_OPTIONS, context: {}, fileId, now }));
   }

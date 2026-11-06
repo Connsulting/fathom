@@ -477,6 +477,23 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
       yourPlans: loadYourPlans(db),
       clock: clk,
       ingest,
+      simplefin: loadSimplefin(db, mode),
     },
+  };
+}
+
+// The SimpleFIN connection as the UI may see it: never the access URL (src/ingest/simplefin.mjs
+// owns the connection; this reads its status columns only).
+export function loadSimplefin(db, mode) {
+  const row = db.prepare('SELECT connected_at, last_sync_at, status, error_code, messages, accounts FROM simplefin_connection WHERE id = 1').get();
+  const pendingMatches = db.prepare("SELECT count(*) AS n FROM simplefin_accounts WHERE status = 'pending_match'").get().n;
+  // The demo store talks to a synthetic fake bridge; its setup token is synthetic and reusable.
+  const demoToken = mode === 'demo' ? Buffer.from('https://bridge.simplefin.org/simplefin/claim/demo-fathom', 'utf8').toString('base64') : null;
+  const base = { demo: mode === 'demo', demoToken, pendingMatches };
+  if (!row) return { ...base, connected: false };
+  const messages = parse(row.messages, []);
+  return {
+    ...base, connected: true, accounts: row.accounts, connectedAt: row.connected_at, lastSyncAt: row.last_sync_at,
+    status: row.status, errorCode: row.error_code, reconnect: row.status === 'reconnect', messages: Array.isArray(messages) ? messages : [],
   };
 }

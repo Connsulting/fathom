@@ -1,0 +1,96 @@
+/* SimpleFIN Bridge connection: the setup token form, then "Connected to SimpleFIN, N accounts,
+   last sync <time>" with Sync now and Disconnect, and a reconnect prompt when the bridge refused
+   access. State comes from live.simplefin in the scenario, which never holds the access URL. The
+   pasted token lives only in the form field and this module's memory until it is sent; it is
+   cleared on success and never written to storage, the URL or the console. Rendered on the
+   Accounts screen and the onboarding Accounts step; design.js delegates events here. */
+
+let H = null;
+export function bind(kit) { H = kit; }
+
+const S = { token: '', busy: '' };
+export function reset() { S.token = ''; S.busy = ''; }
+
+const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function when(iso) {
+  const d = new Date(String(iso || ''));
+  if (Number.isNaN(d.getTime())) return 'not yet';
+  const h = d.getHours();
+  return `${MON[d.getMonth()]} ${d.getDate()}, ${h % 12 || 12}:${String(d.getMinutes()).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
+}
+
+const PROBLEM = {
+  revoked: 'SimpleFIN refused access. Reconnect with a new setup token.',
+  payment_required: 'SimpleFIN says the subscription needs payment. Renew it, then reconnect.',
+  auth: 'SimpleFIN reports a sign-in problem with a connected institution. Fix it on the SimpleFIN Bridge site, or reconnect.',
+  bad_access: 'The stored connection cannot be used. Reconnect with a new setup token.',
+  network: 'The last sync could not reach SimpleFIN. It tries again on the next sync.',
+  bad_response: 'The last sync got a reply Fathom could not read. It tries again on the next sync.'
+};
+
+const state = () => H.api.s?.live?.simplefin || { connected: false };
+
+function form(sf, reconnect) {
+  const { esc, btn } = H;
+  return `<form class="h-sf-form" data-sf-form novalidate>
+      <label for="h-sf-token">${reconnect ? 'New SimpleFIN setup token' : 'SimpleFIN setup token'}</label>
+      <textarea id="h-sf-token" name="token" rows="3" data-sf-token autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Paste the token here">${esc(S.token)}</textarea>
+      <p class="h-mute sm">Create a setup token on the SimpleFIN Bridge site (bridge.simplefin.org) and paste it here. Each token works once. Fathom keeps the access encrypted and only reads.</p>
+      <div class="h-sf-act">${sf.demo && sf.demoToken ? btn('Use the demo token', 'type="button" data-sf="demo"', 'ghost') : ''}<button type="submit" class="h-btn pri"${S.busy ? ' disabled' : ''}>${S.busy === 'connect' ? 'Connecting' : reconnect ? 'Reconnect' : 'Connect'}</button></div>
+      ${sf.demo ? '<p class="h-mute sm">Demo: this uses a synthetic SimpleFIN bridge with made up accounts. Nothing leaves this machine.</p>' : ''}
+    </form>`;
+}
+
+// The connection block: the form, or the connected status with its actions.
+export function block() {
+  const { esc, btn, icon, plural, goA } = H;
+  const sf = state();
+  if (!sf.connected) return `<div class="h-sf" data-sf-box>${form(sf, false)}</div>`;
+  const problem = sf.errorCode ? PROBLEM[sf.errorCode] || 'The last sync failed. It tries again on the next sync.' : '';
+  const msgs = Array.isArray(sf.messages) ? sf.messages : [];
+  return `<div class="h-sf on" data-sf-box data-sf-connected>
+      <p class="h-sf-st">${icon('check')}<span><b>Connected to SimpleFIN</b>, ${plural(Number(sf.accounts) || 0, 'account')}, last sync ${esc(when(sf.lastSyncAt))}</span></p>
+      ${problem ? `<p class="h-sf-warn" role="alert">${esc(problem)}</p>` : ''}
+      ${msgs.length ? `<ul class="h-sf-msgs">${msgs.map((m) => `<li>${esc(m)}</li>`).join('')}</ul>` : ''}
+      ${sf.pendingMatches ? `<p class="h-mute sm">${plural(sf.pendingMatches, 'connected account')} ${sf.pendingMatches === 1 ? 'needs' : 'need'} an answer first: is it an account you already imported? ${goA('confirm', 'Answer in Confirm')}</p>` : ''}
+      <div class="h-sf-act">${btn(S.busy === 'sync' ? 'Syncing' : 'Sync now', `type="button" data-sf="sync"${S.busy ? ' disabled' : ''}`, '')}${btn('Disconnect', `type="button" data-sf="disconnect"${S.busy ? ' disabled' : ''}`, 'ghost')}</div>
+      ${sf.reconnect ? form(sf, true) : ''}
+    </div>`;
+}
+
+function run(kind, p) {
+  S.busy = kind; H.draw();
+  return p.then((res) => { S.busy = ''; if (res && kind === 'connect') S.token = ''; H.draw(); return res; });
+}
+
+export function onClick(e) {
+  const t = e.target.closest?.('[data-sf]');
+  if (!t || !H.root?.contains(t)) return false;
+  e.preventDefault();
+  if (S.busy) return true;
+  const sf = state();
+  const a = t.dataset.sf;
+  if (a === 'demo' && sf.demoToken) { S.token = sf.demoToken; H.draw(); return true; }
+  if (a === 'sync') { run('sync', H.api.simplefinSync()); return true; }
+  if (a === 'disconnect') { run('disconnect', H.api.simplefinDisconnect()); return true; }
+  return true;
+}
+
+export function onSubmit(e) {
+  const f = e.target;
+  if (!f?.matches?.('form[data-sf-form]')) return false;
+  e.preventDefault();
+  if (S.busy) return true;
+  const token = String(f.token?.value ?? S.token).trim();
+  S.token = token;
+  if (!token) { H.api.showError?.('Paste the SimpleFIN setup token first.'); return true; }
+  run('connect', H.api.simplefinConnect(token));
+  return true;
+}
+
+export function onInput(e) {
+  const t = e.target;
+  if (!t?.matches?.('textarea[data-sf-token]')) return false;
+  S.token = t.value;
+  return true;
+}

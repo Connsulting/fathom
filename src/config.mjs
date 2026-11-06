@@ -2,6 +2,7 @@
 // need them, from the files named here, never from this module or from tracked files.
 
 import { resolve } from 'node:path';
+import { parseAllowedHosts } from './ingest/simplefin-hosts.mjs';
 
 const ENGINES = ['live', 'fake', 'off'];
 const TRANSPORTS = ['dev', 'smtp', 'resend', 'postmark', 'agentmail'];
@@ -87,6 +88,9 @@ export function loadConfig(env = process.env) {
   const allowedHosts = blank(env.FATHOM_ALLOWED_HOSTS) ? []
     : env.FATHOM_ALLOWED_HOSTS.split(',').map(h => h.trim().toLowerCase()).filter(Boolean);
 
+  const simplefinHosts = parseAllowedHosts(env.FATHOM_SIMPLEFIN_ALLOWED_HOSTS);
+  if (!simplefinHosts) throw new ConfigError('FATHOM_SIMPLEFIN_ALLOWED_HOSTS must be comma separated host names with no scheme, port or path');
+
   return {
     dataDir: resolve(blank(env.FATHOM_DATA) ? 'data' : env.FATHOM_DATA),
     port,
@@ -107,6 +111,7 @@ export function loadConfig(env = process.env) {
     emailSmtpPort: smtpPort(env.FATHOM_EMAIL_SMTP_PORT),
     publicUrl,
     allowedHosts,
+    simplefinHosts,
     // Owner login list, raw: src/api/identity.mjs parses it and fails closed on a problem.
     ownerLogins: blank(env.FATHOM_OWNER_LOGINS) ? null : env.FATHOM_OWNER_LOGINS,
     ownerLoginsFile: blank(env.FATHOM_OWNER_LOGINS_FILE) ? null : env.FATHOM_OWNER_LOGINS_FILE,

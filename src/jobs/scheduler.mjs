@@ -36,6 +36,7 @@ import { runPlanning } from './planner.mjs';
 import { purgeTrash } from '../api/threads.mjs';
 import { guessPending } from '../ingest/guess.mjs';
 import { defaultPackDirs } from '../packs/state.mjs';
+import { syncSimplefin, createFakeSimplefin } from '../ingest/simplefin.mjs';
 
 export const DEFAULT_TIMEZONE = 'America/New_York';
 const DAY = 86400000;
@@ -50,6 +51,7 @@ export const JOBS = Object.freeze([
   { id: 'freshness', name: 'Data freshness check', cadence: 'Weekly, Monday 6:00 AM', does: 'Count stale and waiting uploads.', schedule: Object.freeze({ every: 'week', weekday: 1, hour: 6 }) },
   { id: 'trash-purge', name: 'Ask trash cleanup', cadence: 'Daily, 3:00 AM', does: 'Delete conversations that have been in Trash for 30 days.', schedule: Object.freeze({ every: 'day', hour: 3 }) },
   { id: 'confirm-guess', name: 'Confirm best guesses', cadence: 'Daily, 3:00 AM', does: 'Suggest an answer for each pending confirm question.', schedule: Object.freeze({ every: 'day', hour: 3 }) },
+  { id: 'simplefin-sync', name: 'Bank and brokerage sync', cadence: 'Daily, 5:00 AM', does: 'Read balances and transactions from SimpleFIN Bridge, read-only.', schedule: Object.freeze({ every: 'day', hour: 5 }) },
 ].map(Object.freeze));
 const JOB_SORT = 100;
 
@@ -314,7 +316,7 @@ export function createScheduler({
     let cost = null;
     let note = null;
     try {
-      const ctx = { db, config, engine, transport, now: t.toISOString(), clock: clockFor(t, zone), periodKey: key, trigger, jobRunId: id };
+      const ctx = { db, config, engine, transport, now: t.toISOString(), clock: clockFor(t, zone), periodKey: key, trigger, jobRunId: id, triggerJob: (jobId) => triggerJob(jobId, 'ingest') };
       const out = (await handlers[job.id](ctx)) || {};
       if (out.status === 'skipped') status = 'skipped';
       if (Number.isFinite(out.costUsd) && out.costUsd >= 0) cost = out.costUsd;
@@ -379,16 +381,18 @@ export function createScheduler({
     throw new SchedulerError('running');
   }
 
+  async function triggerJob(jobId, reason = 'ingest') {
+    if (!byId.has(jobId) || !TRIGGERS.has(reason)) return null;
+    if (running.has(jobId)) { if (!stopping) pending.set(jobId, reason); return null; }
+    try { return await runOff(jobId, reason); } catch { return null; }
+  }
+
   return {
     holder,
     tick,
     runNow: (jobId) => runOff(jobId, 'manual'),
     // Fire-and-forget friendly: resolves to the run, or null when there is no handler or it cannot run now.
-    async trigger(jobId, reason = 'ingest') {
-      if (!byId.has(jobId) || !TRIGGERS.has(reason)) return null;
-      if (running.has(jobId)) { if (!stopping) pending.set(jobId, reason); return null; }
-      try { return await runOff(jobId, reason); } catch { return null; }
-    },
+    trigger: triggerJob,
     start() {
       if (timer) return;
       first = setTimeout(() => { first = null; tick().catch(() => {}); }, 0);
@@ -437,8 +441,23 @@ export function createScheduler({
 // codes). On a demo store it plans nothing and the run is recorded skipped. `confirm-guess` runs
 // guessPending until nothing is left: skipped with the pending count when it skips (engine off,
 // not live, nothing pending), else ok with the run's confirm ledger spend, also when an engine error stopped it.
-export function defaultHandlers({ publicUrl = null } = {}) {
+// `simplefin-sync` reads the SimpleFIN connection (skipped when there is none); a demo store uses
+// the synthetic fake bridge, a real one `simplefinFetch` (default global fetch). It returns counts
+// only, fails with the bridge code when access needs a reconnect, and triggers the after-import
+// planning run when it wrote rows.
+export function defaultHandlers({ publicUrl = null, simplefinFetch = null } = {}) {
   return {
+    async 'simplefin-sync'(ctx) {
+      const demo = getSetting(ctx.db, 'mode', null) === 'demo';
+      const out = await syncSimplefin(ctx.db, {
+        config: ctx.config, hosts: ctx.config?.simplefinHosts, now: ctx.now, clock: ctx.clock, engine: ctx.engine,
+        fetch: demo ? createFakeSimplefin({ today: () => ctx.clock }) : (simplefinFetch ?? globalThis.fetch),
+      });
+      if (out.status === 'skipped') return { status: 'skipped', note: { connected: false } };
+      if (out.status !== 'ok') throw new JobFailure(`simplefin_${out.code || 'error'}`);
+      if (out.changed) ctx.triggerJob?.('plan');
+      return { costUsd: 0, note: { ...out.counts, changed: out.changed } };
+    },
     async plan(ctx) {
       if (getSetting(ctx.db, 'mode', null) === 'demo') return { status: 'skipped' };
       const planning = await runPlanning(ctx.db, ctx.engine || null, {

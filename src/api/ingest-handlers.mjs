@@ -144,7 +144,10 @@ export function answerConfirm(ctx) {
   const optionId = ctx.body.answer;
   if (typeof optionId !== 'string' || !optionId) throw new HttpError(400, 'answer must be an option id');
   const revise = ctx.body.revise === true;
-  return confirmAction(ctx, () => (revise ? reviseItem : answerItem)(ctx.db, id, optionId, { now: nowIso() }));
+  const out = confirmAction(ctx, () => (revise ? reviseItem : answerItem)(ctx.db, id, optionId, { now: nowIso() }));
+  // A SimpleFIN account waits on its match question: the answer lets the next sync import it.
+  if (out.item && out.item.kind === 'account_match') triggerJob(ctx, 'simplefin-sync');
+  return out;
 }
 
 export function reopenConfirm(ctx) {
