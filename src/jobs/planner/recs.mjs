@@ -1,6 +1,7 @@
 // Recs upsert, blocking and retirement for planner-owned recs (base plan, R13, R14, S10, S12, T6).
-// The owner's status, task flags and conversation always survive; the planner only changes status
-// when its own retire or block event was the last word.
+// The owner's status and task flags always survive; the planner only changes status when its own
+// retire or block event was the last word. The planner writes no conversation: a question asked
+// from a rec is an Ask thread carrying the rec id, and it outlives the rec.
 //
 // applyRecs(db, results, ctx) -> {byTrigger, counts: {new, updated, retired, unchanged}, domains}
 
@@ -61,7 +62,6 @@ export function sortOrder(results, prefs = {}) {
 
 export function applyRecs(db, results, ctx) {
   const { clock, now, runId, prose, packOverride, warn, prefs } = ctx;
-  const stamp = `${clock}T${now.slice(11)}`;
   const recRows = new Map(db.prepare('SELECT * FROM recs').all().map(r => [r.id, r]));
   const prRows = new Map(db.prepare('SELECT * FROM planner_recs').all().map(r => [r.rec_id, r]));
   const sorts = sortOrder(results, prefs);
@@ -101,10 +101,6 @@ export function applyRecs(db, results, ctx) {
           .run(id, defText, status, JSON.stringify(def.tasks.map(() => false)), close, label, hit.packId, sort, now, JSON.stringify({ trigger: id }));
         db.prepare(`INSERT INTO planner_recs (rec_id, trigger_id, grounding_hash, prose_src, first_run, last_run, retired_at, retired_reason, retired_from, held_from)
                     VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL)`).run(id, id, p.hash, p.src, runId, runId);
-        const conv = db.prepare('INSERT OR IGNORE INTO conversations (key, created_at) VALUES (?, ?)').run(id, stamp);
-        if (Number(conv.changes) === 1) {
-          db.prepare("INSERT INTO messages (conversation_key, role, text, refs, notice, ts) VALUES (?, 'fathom', ?, '[]', 0, ?)").run(id, `<p>${def.summary}</p>`, stamp);
-        }
         mark(id, 'new', t.domain);
         continue;
       }

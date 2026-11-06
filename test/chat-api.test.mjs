@@ -154,9 +154,11 @@ test('each answer records spend rows in the clock month that the scenario ledger
   await askNew(s, LEAVE);
   const after = await spendRows(s.dbFile);
   const added = after.slice(before.length);
-  assert.ok(added.length >= 1);
+  // The first answer also names the thread, which spends one title call.
+  assert.ok(added.filter(row => row.purpose === 'chat').length >= 1);
+  assert.equal(added.filter(row => row.purpose === 'title').length, 1);
   for (const row of added) {
-    assert.equal(row.purpose, 'chat');
+    assert.ok(['chat', 'title'].includes(row.purpose), row.purpose);
     assert.equal(row.model, 'fake');
     assert.equal(row.yyyymm, first.meta.clock.slice(0, 7));
     assert.ok(row.cost_usd > 0);

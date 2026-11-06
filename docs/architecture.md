@@ -325,7 +325,7 @@ Money columns are dollars rounded to cents; JSON columns hold JSON text. The pro
 | `figures` | `key` PK, `v`, `src` (references `sources.id`), `kind` in a, p, e, m, `label`, provenance, `updated_at` |
 | `recs` | `id` PK, `def` JSON (the CONTRACT rec minus live fields), `status`, `waiting_on`, `wake`, `tasks_done` JSON, `window_close` ISO date, `window_label`, `pack_id`, `sort`, `updated_at`, provenance |
 | `rec_events` | `id` PK, `rec_id`, `ts`, `action`, `arg`, `from_status`, `to_status`, `actor` (`ui`, `tool`, ...) |
-| `conversations` | `key` PK (an Ask thread `ask:<12 lowercase hex>`, a rec id, or `pack:<id>`), `created_at`, `last_at` (newest message time, else `created_at`), and for Ask threads `title` (NULL until named), `title_source` (NULL, `auto` or `manual`), `archived_at`, `trashed_at` (migration 008; app clock ISO times) |
+| `conversations` | `key` PK (an Ask thread `ask:<12 lowercase hex>` or `pack:<id>`), `created_at`, `last_at` (newest message time, else `created_at`), and for Ask threads `title` (NULL until named), `title_source` (NULL, `auto` or `manual`), `archived_at`, `trashed_at` (migration 008; app clock ISO times), `rec_id` (the rec a thread was asked from, a context reference, never a foreign key) and `rec_detached_at` (set by Start over) (migration 016) |
 | `messages` | `id` PK, `conversation_key`, `role` in me, fathom, advisor, claude, `text` (token-bearing HTML), `refs` JSON, `notice`, `ts`, `provenance` JSON or NULL (migration 006; see "Answer provenance") |
 | `goals` | `id` PK, `def` JSON, `sort` |
 | `deadlines` | `id` PK, `date`, `label`, `title`, `rec_id`, `hard` |
@@ -506,30 +506,59 @@ live = {
 `yourPlans.sources` are the plan and benefits documents (a text-only document row is named
 `document-<id>` with `fileId` null); `files` are the stored files a build can read (text or PDF).
 
-Conversation keys are Ask threads (`ask:<id>`), rec ids, or `pack:<id>`; every stored
-conversation is present. Message `id` is a
+Conversation keys are Ask threads (`ask:<id>`, threads asked from a rec included) or `pack:<id>`;
+every stored conversation is present. No conversation is keyed by a rec id. Message `id` is a
 string (`m<rowid>`), `text` is token-bearing HTML source (paragraphs as `<p>...</p>`; resolve it
 with `api.t` at read time), `refs` are rec ids, `ts` is a display label such as "Nov 5, 9:04 AM",
 `notice` is true for every notice the answerer stores instead of an answer (engine off, off by
 configuration, over the cap, model error). `provenance` is the stored answer provenance or null
-(owner messages, notices and seeded messages). The demo seed opens each rec conversation with one
-fathom message holding its summary.
+(owner messages, notices and seeded messages). Neither the demo seed nor the planner writes a
+conversation for a rec; the rec dialog shows the rec summary as its lede.
 
 ### Ask threads
 
 Ask is many conversations. A thread is a `conversations` row keyed `ask:<id>`, `<id>` 12 lowercase
 hex characters; URLs and the thread routes use the bare `<id>` (anything else is 404). Thread JSON
-is `{id, key, title, titleSource, createdAt, lastAt, archivedAt, trashedAt, turns}`: `title` is the
-stored title or null (the UI shows "New conversation"), `titleSource` null, `auto` or `manual`,
-`turns` the count of owner messages. A thread is active, archived (`archivedAt`), or in Trash
+is `{id, key, title, titleSource, createdAt, lastAt, archivedAt, trashedAt, recId, recDetachedAt,
+turns}`: `title` is the stored title or null (the UI shows "New conversation"), `titleSource` null,
+`auto` or `manual`, `recId` the rec the thread was asked from or null, `recDetachedAt` the time
+Start over detached it from that rec's dialog or null, `turns` the count of owner messages. A thread is active, archived (`archivedAt`), or in Trash
 (`trashedAt`, which wins; trash keeps `archivedAt` so restore returns the thread where it was).
 Asking in an archived thread unarchives it; asking in a trashed one is 409. Threads trashed 30 or
 more days before the app clock are deleted with their messages (`purgeTrash`) by the daily `trash-purge` job (03:00); reads and server
 starts purge nothing. Migration 010 moves the old single `ask`
 conversation, when it has messages, into one thread with the same messages.
 
+Rec context: a question asked from a rec dialog is an Ask thread whose `recId` names the rec
+(`POST /api/threads` with `recId`). `recForKey(scenario, key)` (`src/api/questions.mjs`) is the one
+context lookup: a rec id resolves to that rec, an Ask thread to the rec its `recId` names in
+`live.threads`, anything else (no rec, a rec no longer in the scenario, `pack:<id>`) to null. The
+answerer, `findQuestion`, `matchQuestion` and the fake answer source read it, so a rec thread gets
+the rec as conversation context (`get_recommendation`), the rec in its refs, the rec's own `qa`
+questions and a proposal scope of that rec only, and no `propose_goal`. A hidden rec still
+resolves. `POST /api/ask` refuses a key that is neither an Ask thread nor `pack:<id>` (400). Start
+over (`POST /api/recs/:id/start-over`) sets `recDetachedAt` on every attached thread of the rec;
+the thread keeps its messages, title, `recId` and list place in Ask.
+
+Migration 016 (`016-rec-threads.sql`) adds `rec_id` and `rec_detached_at` and moves every
+conversation keyed by a rec id (any key not `ask:%` and not `pack:%`) into a new `ask:<12 hex>`
+thread with `rec_id` = the old key, `created_at` kept, `last_at` = the old `last_at`, else the
+newest message time, else `created_at`, and every message moved unchanged. One with an owner
+message stays active with a NULL title (named after its next answer). One with messages but no
+owner message (the opening summary copy the seed and planner used to write) is archived and
+detached at migration time, titled "Opening summary" (`auto`, never sent for naming). One with no
+messages is deleted. Any failure, including a key collision, rolls the migration back.
+
+Horizon: the rec dialog shows the newest (`lastAt`) thread of the rec that is neither trashed nor
+detached (`api.recThread`), with Open in Ask (`#/ask/<id>`) and Start over; with none it shows a
+fresh composer and the rec's question chips, and asking creates a new thread with `recId`. Asks from
+the dialog show the same pending and streaming block as the Ask page. In the Ask list and the thread
+header a thread whose rec exists and is visible carries a context chip with the rec title, linking
+to `#/rec/<id>`; a thread whose rec is gone shows none.
+
 Naming (`src/api/threads.mjs`): after a reply is stored, a thread with no title source and at least
-two owner messages each followed by a reply (a notice counts) is named once. The engine gets one
+one owner message followed by a reply (a notice counts) is named once, so a thread has its title
+after its first answer. The engine gets one
 `title` call whose fixed system text holds no household data and whose one user message is this
 thread's non-notice messages as plain text, newest last, at most 12 messages and 6000 characters.
 The model title is trimmed, loses one pair of quotes and a trailing period, and is refused when
@@ -619,6 +648,7 @@ response is `{scenario, ...}` with the fresh scenario.
 | `GET /healthz` | | `{ok: true, schema: <latest migration id>}` |
 | `GET /api/scenario` | | the scenario with `live` |
 | `GET /api/identity` | | `{identity: {login, name} or null}`. The admitted owner: `login` is the trimmed `Tailscale-User-Login`, `name` the trimmed `Tailscale-User-Name` or else the login. Always `null` on a demo store. |
+| `POST /api/recs/:id/start-over` | `{}` | `{scenario}`. Detaches every thread asked from the rec that is still attached (sets `recDetachedAt` to the app clock time), so the rec dialog opens a fresh composer; an already detached thread keeps its time. Threads, messages, titles, archive and trash are untouched. 404 unknown or hidden rec. |
 | `POST /api/recs/:id/action` | `{action: start, snooze, dismiss, complete, reopen or task, arg?}` | `{scenario}`. `task` toggles task `arg`; `snooze` takes a wake label (default "Next month"). 400 bad action or task index, 404 unknown or hidden rec. Writes `rec_events` (actor `ui`). |
 | `POST /api/wargame/:name/pick` | `{index}` (an index or an option id) | `{scenario}`. `name` is salary or deferral (404 otherwise); 400 out of range. |
 | `POST /api/decisions/:id/decide` | `{index?}` (a point index or id; default the stored pick) | `{scenario}`. Decide on the picked point of an open salary or deferral decision: status becomes decided and `decided_line` is built from the point's own label plus `{f:...}` tokens for the `wg.*` figures the registry holds (provenance stays on the figures). Records the pick in `wargame.picks`, writes the owner-stated assumption fact (`business.salaryDecided` = `{entity, salary}`, the S corp the game was built for and the point's `wg.salary.<id>.salary` value, or `business.deferralDecided` = `{option, amount}`; src `decide:salary` or `decide:deferral`, confirmed, locator names the decision and the figure), logs a `decide` rec event on the linked rec and schedules the plan job (trigger `decide`) on a real store. 404 unknown id, 400 no war game or bad index, 409 already decided, not open, upcoming or unavailable. |
@@ -628,9 +658,9 @@ response is `{scenario, ...}` with the fresh scenario.
 | `GET /api/packs/:id/entries/:entryId` | | `{entry: {id, title, body, cites}}` for an entry of a manifest-backed pack row, from the loaded packs; 404 otherwise. |
 | `POST /api/engine` | `{on: boolean}` | `{scenario}`; 400 when `on` is not boolean. |
 | `POST /api/engine/cap` | `{usd}` | `{scenario}`. `usd` a finite number from 0 to 10000, rounded to cents and stored as `settings.cap`; anything else 400. |
-| `POST /api/ask` | `{key: an Ask thread key 'ask:<id>', a rec id or 'pack:<id>', questionId? or text?}` | `{scenario, message}`. `key` is required (400 without it). Exactly one of `questionId` or `text`; empty text, both or neither are 400; unknown question or conversation 404; a thread in Trash 409. Appends the owner's message and the live answer with its provenance, or a notice; asking in an archived thread unarchives it, and a thread due a name is named before the response. New threads come only from `POST /api/threads`. With `Accept: text/event-stream` the answer streams as Server-Sent Events: `start` `{key}`, then `progress` `{label}` (a fixed plain label per tool), `text` `{text}` (raw model text, never grounded or stored) and `reset` `{}` (drop streamed text), then `final` with the JSON body above, or `error` `{status, error}`. Validation errors before the first event are ordinary JSON errors. |
+| `POST /api/ask` | `{key: an Ask thread key 'ask:<id>' or 'pack:<id>', questionId? or text?}` | `{scenario, message}`. `key` is required (400 without it); any other key, a rec id included, is 400 (ask from a rec through `POST /api/threads` with `recId`). Exactly one of `questionId` or `text`; empty text, both or neither are 400; unknown question or conversation 404; a thread in Trash 409. Appends the owner's message and the live answer with its provenance, or a notice; asking in an archived thread unarchives it, and a thread due a name is named before the response. New threads come only from `POST /api/threads`. With `Accept: text/event-stream` the answer streams as Server-Sent Events: `start` `{key}`, then `progress` `{label}` (a fixed plain label per tool), `text` `{text}` (raw model text, never grounded or stored) and `reset` `{}` (drop streamed text), then `final` with the JSON body above, or `error` `{status, error}`. Validation errors before the first event are ordinary JSON errors. |
 | `GET /api/threads` | | `{active, archived, trash}`, each a list of thread JSON newest `lastAt` first. Purges old trash first. |
-| `POST /api/threads` | `{}`, `{text}` or `{questionId}` (an Ask starter id) | `{scenario, thread, message?}`. Creates a thread; with a question it also asks it (validated like `POST /api/ask`; a starter's fixed text is the question) and returns the reply as `message`. Unknown starter 404. Streams like `POST /api/ask` on request. |
+| `POST /api/threads` | `{}`, `{text}` or `{questionId}` (an Ask starter id); or `{recId, text}` or `{recId, questionId}` | `{scenario, thread, message?}`. Creates a thread; with a question it also asks it (validated like `POST /api/ask`; a starter's fixed text is the question) and returns the reply as `message`. Unknown starter 404. With `recId` the thread is asked from that rec: 404 unknown or hidden rec, 400 without a question, `questionId` a `rec.qa` index, id or exact question (404 unknown); the row is written before the answer so the answerer sees the rec context, and a failed or empty answer deletes it again. Streams like `POST /api/ask` on request. |
 | `GET /api/threads/:id` | | `{thread, messages}` (messages as in `live.conversations`). A trashed thread opens too; 404 unknown or malformed id. |
 | `POST /api/threads/:id/rename` | `{title}` | `{scenario, thread}`. Sets `title_source` `manual`; 400 invalid title; 404 unknown. |
 | `POST /api/threads/:id/archive` | `{}` | `{scenario, thread}`. Sets `archivedAt`; 409 when trashed. |
@@ -806,8 +836,8 @@ the Advisor screen for re-download. The packet is not emailed.
 1. Answerer: `src/api/answerer.mjs` exports `createLiveAnswerer({engine, packs})` returning
    `{answer({db, key, questionId?, text?, clock?}), whatIf({db, packId, clock?})}`, each resolving to
    `{paragraphs, refs, notice?, provenance?}` (`answer` is null for an unknown `questionId`).
-   `src/server.mjs` constructs it and the router passes it to handlers as `ctx.answerer`. Every Ask,
-   rec conversation, pack follow-up and What if goes through it; the ask endpoint words the owner's
+   `src/server.mjs` constructs it and the router passes it to handlers as `ctx.answerer`. Every Ask
+   thread (rec threads included), pack follow-up and What if goes through it; the ask endpoint words the owner's
    question itself from `src/api/questions.mjs`. See "Chat over the data" below.
 2. Packs: `src/packs/state.mjs` rewrites the base fields of `packs_state.def` from loaded
    manifests and `activePacks(packs, facts)` in real stores; overrides in `packs_state` keep
@@ -1011,8 +1041,8 @@ process, so accounting poison lasts for the process, and awaits `init()` once at
 
 1. Before a model call: off by the switch answers with the engine-off notice, off by configuration
    with "The engine is off in this deployment's configuration, so answers are paused." The answerer
-   then reads `household_summary` (tool time is the scenario clock), and for a rec conversation the
-   rec (`get_recommendation`) or for `pack:<id>` the pack metadata and entries, as conversation
+   then reads `household_summary` (tool time is the scenario clock), and for a thread asked from a
+   rec (`recForKey`) the rec (`get_recommendation`) or for `pack:<id>` the pack metadata and entries, as conversation
    context.
 2. Prompt (`buildChatPrompt`): `system` = `PRODUCT_RULES` plus `<knowledge_packs>` holding
    `packContext` of the effectively active manifest packs (base status plus overrides), with no
@@ -1027,13 +1057,13 @@ process, so accounting poison lasts for the process, and awaits `init()` once at
    (no token resolution), an illustrative demo prompt with its tokens resolved to plain text. The
    history filter drops an earlier copy of the prompt in its stored form.
 3. Tools: every read tool of the registry, never `set_recommendation_status` (the registry keeps it
-   for other surfaces; chat never writes). In Ask threads and rec conversations the answerer adds one
+   for other surfaces; chat never writes). In Ask threads the answerer adds one
    local, non-writing tool, `propose_recommendation_action` (scope `read`, input `{id, action:
    start|complete|dismiss|snooze|reopen, wake?: string up to 200}`, no other keys). Its
    handler checks that the rec exists and is not hidden and that the action is in `ACTION_STATUS`,
    returns only `{proposed: true}` and never touches the store. It is never offered in `pack:<id>`
    conversations or a What if. The last successful call becomes `provenance.proposal` `{recId,
-   action, wake?}` (one per answer); in a rec conversation a proposal for any other rec is ignored.
+   action, wake?}` (one per answer); in a thread asked from a rec a proposal for any other rec is ignored.
    The UI shows a confirm card in that Fathom message ("Proposed: <action label> <rec title>", the
    label from a fixed map, the wake label escaped) with a Confirm button
    (`button.h-propose[data-propose-rec][data-propose-action]`) that calls the ordinary rec action
@@ -1127,17 +1157,17 @@ process, so accounting poison lasts for the process, and awaits `init()` once at
    the cap on the Engine screen or wait for next month."), and any other model error, including a
    missing live credential ("The model could not answer just now, so nothing was made up. Try again
    in a moment."). Model calls are awaited before the write transaction opens.
-8. Refs: the canned question's refs when the question matches one, the rec of a rec conversation,
+8. Refs: the canned question's refs when the question matches one, the rec of a rec thread,
    a what-if's unlock recs, recs the answer read through tools, and the rec of its proposal.
 9. Fake answer source (`fakeAnswerScript`, `FATHOM_ENGINE=fake`): one tool round
-   (`household_summary`, `get_figures` with the answer's figure keys, `get_recommendation` in a rec
-   conversation) and one text round: the canned demo answer for a suggested or rec question (by id
+   (`household_summary`, `get_figures` with the answer's figure keys, `get_recommendation` with the
+   resolved rec id in a rec thread) and one text round: the canned demo answer for a suggested or rec question (by id
    or exact free text), the pack's canned what-if answer (else a numberless sentence naming the pack
    and its covers), or "From your household summary, N items need you right now." with N from the
    summary. Numbers in the owner's free text are echoed first ("You asked about ..."), so an
-   invented amount is marked unverified after the retry. In Ask threads and rec conversations, free text
+   invented amount is marked unverified after the retry. In Ask threads, free text
    that is an explicit command (`^(please\s+)?(start|complete|dismiss|snooze|reopen)\b`)
-   naming a rec (the rec conversation's own rec, or in an Ask thread a visible rec's id or exact title)
+   naming a rec (a rec thread's own rec, else a visible rec's id or exact title)
    adds a `propose_recommendation_action` call to the tool round, and the text round says the owner
    can confirm it below. Negations and questions ("Do not mark anything done", "Should I dismiss
    this?") never match.
@@ -1670,9 +1700,9 @@ the trigger's `calcs` threw is blocked as `calc_failed`, never retired.
 | `missing-data` | data / calendar | Jan 15 when tax data is blocked, else two weeks out |
 
 Recs: a new hit inserts the rec (`proposed`, or `hidden` behind an owner-disabled pack), its
-`planner_recs` row and a conversation with one Fathom message holding the summary. An existing
-planner rec is updated only when its def, window or pack changes, keeping status, waiting, wake,
-task flags (remapped by task text) and the conversation. A rec whose trigger no longer applies is
+`planner_recs` row; it writes no conversation. An existing planner rec is updated only when its
+def, window or pack changes, keeping status, waiting, wake and task flags (remapped by task text);
+threads asked from the rec are never touched. A rec whose trigger no longer applies is
 retired (status `dismissed` only from an active status, event `retire`, reason "Its window closed on
 <date>." or "The condition behind it no longer holds in your data."), never deleted. A planner
 retired rec revives to `proposed` only when the planner's retire event was the last status change.
@@ -1831,7 +1861,7 @@ sources and the rec's domain, value classes and id; the scenario sets `rec.serve
 shows "Serves: <goal>". The planner ranks recs that tie on window close by whether they serve a
 goal, then by the owner's curve lean. `household_summary` and `list_goals` give the model the open
 goals (title, horizon, typed target with source `you`, tracked current value) and each curve's lean.
-In an Ask thread the answerer also offers `propose_goal`; its last successful call becomes
+In an Ask thread with no rec context the answerer also offers `propose_goal`; its last successful call becomes
 `provenance.goalProposal`, a target survives only when the owner's own message states it, and the
 chat card saves it through `POST /api/goals` when the owner taps Save. Chat never writes.
 

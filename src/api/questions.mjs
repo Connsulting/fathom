@@ -1,5 +1,5 @@
-// The canned question catalog the UI offers as chips: a rec's own follow-ups (rec.qa) in a rec
-// conversation, the suggested Ask questions everywhere else. Used by the ask endpoint to word
+// The canned question catalog the UI offers as chips: a rec's own follow-ups (rec.qa) in a thread
+// asked from a rec, the suggested Ask questions everywhere else. Used by the ask endpoint to word
 // the owner's question, and by the fake answer source to script deterministic answers.
 
 import { resolveTokens } from '../shared/tokens.mjs';
@@ -9,12 +9,22 @@ const arr = v => (Array.isArray(v) ? v : []);
 // A non-negative integer, or a string of digits.
 export const isIndex = v => (Number.isInteger(v) && v >= 0) || (typeof v === 'string' && /^\d+$/.test(v));
 
-// An Ask thread key ('ask:<12 hex>'); any other key is a rec id or 'pack:<id>'.
+// An Ask thread key ('ask:<12 hex>'); the only other conversation key is 'pack:<id>'.
 export const isThreadKey = key => typeof key === 'string' && THREAD_KEY.test(key);
 
-// Conversation key -> the rec it belongs to, or null for an Ask thread and 'pack:<id>'.
+// The rec context of a conversation key: a rec id resolves to that rec (POST /api/threads with
+// recId looks questions up before the thread exists); an Ask thread resolves to the rec its recId
+// names in scenario.live.threads. Null for a thread with no rec or whose rec is gone, a pack
+// conversation and an unknown key. The answerer, findQuestion, matchQuestion and the fake answer
+// source all read rec context through this one lookup.
 export function recForKey(scenario, key) {
-  return arr(scenario.recs).find(r => r.id === key) || null;
+  const recs = arr(scenario.recs);
+  if (isThreadKey(key)) {
+    const thread = arr(scenario.live && scenario.live.threads).find(t => t && t.key === key);
+    const recId = thread && thread.recId;
+    return recId ? recs.find(r => r.id === recId) || null : null;
+  }
+  return recs.find(r => r.id === key) || null;
 }
 
 // { q, a, refs } for a question id (or index, or exact question) in conversation `key`.
