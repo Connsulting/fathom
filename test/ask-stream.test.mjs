@@ -230,6 +230,19 @@ test('stripSources removes a trailing Sources paragraph, heading block or senten
   );
   assert.equal(stripSources('Open. Sources: "A" and "B." More stays.'), 'Open. More stays.');
   assert.equal(stripSources('Read this.\nReferences: the pack.\nThen decide.'), 'Read this.\nThen decide.');
+  assert.equal(
+    stripSources('Open. Sources: "Gifts of appreciated stock." and "Evaluate bunching across tax years." Then pay.'),
+    'Open. Then pay.',
+  );
+  assert.equal(
+    stripSources('Open. Sources: \u201cGifts of appreciated stock.\u201d and \u201cEvaluate bunching across tax years.\u201d Then pay.'),
+    'Open. Then pay.',
+  );
+  assert.equal(stripSources('See this. Sources: https://irs.gov/publications/p526. Then pay.'), 'See this. Then pay.');
+  assert.equal(
+    stripSources('Your retirement plan has two funding\nsources: employer contributions and your own deferrals.\nKeep both.'),
+    'Your retirement plan has two funding\nsources: employer contributions and your own deferrals.\nKeep both.',
+  );
 });
 
 test('streamHtml drops a mid-answer Sources sentence and keeps the prose around it', () => {
@@ -243,6 +256,7 @@ test('streamHtml drops a mid-answer Sources sentence and keeps the prose around 
 
 test('the prompt tells the model not to cite sources and allows the markdown subset', () => {
   assert.match(PRODUCT_RULES, /Never write a Sources/);
+  assert.match(PRODUCT_RULES, /Call tools before you write/);
   assert.doesNotMatch(PRODUCT_RULES, /Cite a knowledge pack entry/);
   assert.match(PRODUCT_RULES, /bullet lists/);
 });

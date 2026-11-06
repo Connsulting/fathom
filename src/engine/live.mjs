@@ -26,6 +26,7 @@ export function sdkStreamEvent(message) {
 
 export async function consumeSdkMessages(stream, onEvent) {
   let result;
+  const messages = [];
   let content = [];
   let tools = [];
   let usage;
@@ -37,7 +38,7 @@ export async function consumeSdkMessages(stream, onEvent) {
       }
       if (message.type === 'system' && message.subtype === 'init') tools = message.tools;
       if (message.type === 'assistant' && message.message) {
-        content = mergeAssistantContent(content, message.message.content);
+        content = mergeAssistantContent(messages, message.message);
         usage = message.message.usage;
       }
       if (message.type === 'result') result = message;
@@ -70,22 +71,22 @@ export function sdkOptions({ credential, configDir, system, systemDynamic, maxTo
   };
 }
 
-// One assistant event may be a full snapshot or only the newest blocks. A later snapshot replaces
-// the earlier one; a new block is appended. Identical blocks are not repeated.
-function sameBlock(a, b) {
-  return !!a && !!b && a.type === b.type && a.text === b.text && a.id === b.id && a.name === b.name;
-}
-
-export function mergeAssistantContent(prev = [], next) {
-  if (!Array.isArray(next) || next.length === 0) return Array.isArray(prev) ? prev : [];
-  const prior = Array.isArray(prev) ? prev : [];
-  const snapshot = next.length >= prior.length && prior.every((block, i) => sameBlock(block, next[i]));
-  if (snapshot || prior.length === 0) return next.slice();
-  const out = prior.slice();
-  for (const block of next) {
-    if (!out.some(have => sameBlock(have, block))) out.push(block);
+// Assistant frames append. A later frame replaces an earlier block only when it is the same
+// message id and the same block index (a snapshot). Equal text in two messages is two blocks:
+// deduping by content drops digits and changes the figure.
+export function mergeAssistantContent(messages, message) {
+  const blocks = Array.isArray(message?.content) ? message.content : [];
+  const id = message && Object.hasOwn(message, 'id') ? message.id : undefined;
+  if (id === undefined || id === null) messages.push({ id: undefined, blocks: blocks.slice() });
+  else {
+    const slot = messages.find(item => item.id === id);
+    if (!slot) messages.push({ id, blocks: blocks.slice() });
+    else {
+      blocks.forEach((block, index) => { slot.blocks[index] = block; });
+      if (blocks.length < slot.blocks.length) slot.blocks.length = blocks.length;
+    }
   }
-  return out;
+  return messages.flatMap(item => item.blocks);
 }
 
 // Text blocks are the answer. The SDK result string is only the last block when a turn mixed

@@ -33,8 +33,8 @@
 // Streaming: answer({ ..., onEvent }) and whatIf({ ..., onEvent }) report progress while the model
 // runs: { type: 'progress', label } (a fixed plain label per tool, never arguments or values),
 // { type: 'text', text } (raw model text deltas, untrusted: the client escapes them and shows every
-// number as still being checked) and { type: 'reset' } (drop the streamed text: it was a tool round
-// preamble or the answer is being redone after a failed grounding check). The returned reply is the
+// number as still being checked) and { type: 'reset' } (drop the streamed text because the answer is
+// being redone after a failed grounding check; a tool call does not reset it). The returned reply is the
 // only grounded result; nothing streamed is stored. A throwing onEvent never fails the answer.
 //
 // The model's text loses a trailing or mid-answer Sources sentence (stripSources) before grounding,
@@ -67,6 +67,7 @@ export const PRODUCT_RULES = [
   'Never state a number you did not take from a tool result, the household summary, the conversation context or a knowledge pack entry.',
   'Write stored figures as {f:key} tokens using the keys get_figures returns, never as typed amounts.',
   'Never write a Sources, References or Citations line and never cite sources in your prose: the app shows the sources it used under every answer.',
+  'Call tools before you write the answer, and do not narrate tool use.',
   'Answer in short paragraphs separated by blank lines. You may use bullet lists (lines starting with "- "), numbered lists (lines starting with "1. ") and **bold**; use no other markdown (no headings, links or tables) and no HTML.',
   'You never change a recommendation yourself. When the owner explicitly asks to change one, call propose_recommendation_action so the owner can confirm it; never propose on your own initiative.',
   'You never add a goal yourself. When the owner explicitly asks to add one, call propose_goal with the goal in their own words so the owner can save it; include a target amount only when the owner stated it.',
@@ -474,7 +475,7 @@ export const progressLabel = name => (Object.hasOwn(PROGRESS_LABELS, name) ? PRO
 
 // A safe emitter: progress labels deduplicated in a row, a reset only after text, a throwing
 // listener ignored. Engine events ({ type: 'tool', name } / { type: 'text', text }) go through
-// engineEvent, which resets streamed text when a tool round follows it.
+// engineEvent. A tool call does not reset streamed text. reset() is the grounding retry.
 function streamer(onEvent) {
   if (typeof onEvent !== 'function') return { progress() {}, reset() {}, engineEvent: undefined };
   let lastLabel = null;
@@ -485,7 +486,7 @@ function streamer(onEvent) {
     reset() { if (texted) { texted = false; send({ type: 'reset' }); } },
     engineEvent(e) {
       if (!e || typeof e !== 'object') return;
-      if (e.type === 'tool') { out.reset(); out.progress(progressLabel(String(e.name || ''))); }
+      if (e.type === 'tool') out.progress(progressLabel(String(e.name || '')));
       else if (e.type === 'text' && typeof e.text === 'string' && e.text) { texted = true; send({ type: 'text', text: e.text }); }
     },
   };

@@ -4,6 +4,26 @@ import { consumeSdkMessages, normalizeSdkRound, assistantText, messagesRound, wi
 import { DEFAULT_MODEL, usageCostUsd } from '../pricing.mjs';
 import { createEngine, createMemoryLedger, ModelAccountingError, ModelCallError } from '../index.mjs';
 
+test('distinct assistant frames keep identical text, including a repeated digit', async () => {
+  const frames = ['Set aside $1', '0', '0', '.'];
+  async function* stream() {
+    for (let n = 0; n < frames.length; n += 1) {
+      yield { type: 'assistant', message: { id: `msg_${n}`, content: [{ type: 'text', text: frames[n] }], usage: { output_tokens: 1 } } };
+    }
+    yield { type: 'result', subtype: 'success', result: '.', total_cost_usd: 0.01 };
+  }
+  const observed = await consumeSdkMessages(stream());
+  const round = normalizeSdkRound(observed, { model: DEFAULT_MODEL, registry: { results: [] }, maxTokens: 32, maxBudgetUsd: 1 });
+  assert.equal(round.text, 'Set aside $100.');
+  async function* snapshot() {
+    yield { type: 'assistant', message: { id: 'msg_same', content: [{ type: 'text', text: 'Set aside $1' }], usage: {} } };
+    yield { type: 'assistant', message: { id: 'msg_same', content: [{ type: 'text', text: 'Set aside $1' }, { type: 'text', text: '00.' }], usage: {} } };
+    yield { type: 'result', subtype: 'success', result: '00.', total_cost_usd: 0.01 };
+  }
+  const again = normalizeSdkRound(await consumeSdkMessages(snapshot()), { model: DEFAULT_MODEL, registry: { results: [] }, maxTokens: 32, maxBudgetUsd: 1 });
+  assert.equal(again.text, 'Set aside $100.');
+});
+
 test('a shorter SDK result does not replace text blocks split across a tool', () => {
   const head = 'Give appreciated assets instead of cash.\n\nSources: "G';
   const tail = 'ifts of appreciated stock" and "Evaluate bunching across tax years."';

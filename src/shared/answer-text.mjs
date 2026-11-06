@@ -19,36 +19,78 @@ import { escapeUserText } from './tokens.mjs';
 
 const LABEL = '(?:[*_]{1,2})?\\s*(?:sources?|references?|citations?)\\s*(?:[*_]{1,2})?';
 const LEAD_BLOCK = new RegExp(`^\\s*${LABEL}[ \\t]*(?::|\\n|$)`, 'i');
-const TAIL_SENTENCE = new RegExp(`([.!?)])[ \\t]+${LABEL}\\s*:[^\\n.!?]*[.!?]"?'?$`, 'i');
 const TAIL_LINE = new RegExp(`\\n[ \\t]*${LABEL}\\s*:[^\\n]*$`, 'i');
+// Mid-answer citations use the capitalized label only, so wrapped prose ("sources:") stays.
+const CITE_LABEL = /(?:[*_]{1,2})?(Sources|References|Citations)(?:[*_]{1,2})?[ \t]*:/y;
+const QUOTE_CLOSE = { '"': '"', "'": "'", '\u201c': '\u201d', '\u2018': '\u2019' };
 
-const SOURCE_START = new RegExp(`^[ \\t]*${LABEL}\\s*:`, 'i');
+function citeBoundary(text, index) {
+  if (index === 0) return true;
+  const before = text.slice(0, index);
+  if (/\n[ \t]*\n[ \t]*$/.test(before)) return true;
+  if (/\n[ \t]*(?:[-*•+]|\d{1,2}[.)])[ \t]+$/.test(before)) return true;
+  return /[.!?]["'\u201d]?[ \t]*$/.test(before) || /[.!?]["'\u201d]?\n[ \t]*$/.test(before);
+}
 
-// Drop a sentence or line that begins with Sources/References/Citations and a colon.
-// A sentence ends at the first . ! or ? (or the end of the line). Prose that merely
-// contains the word "source" does not start that way, so it stays.
-function stripSourceSentences(line) {
+// From just after the colon: quoted titles (straight or curly), URLs, and bare titles, joined by
+// commas, semicolons or "and", through the sentence end after the last span.
+function consumeCitation(text, start) {
+  let j = start;
+  let saw = false;
+  while (j < text.length && text[j] !== '\n') {
+    const rest = text.slice(j);
+    const pad = /^[ \t]+/.exec(rest)?.[0].length ?? 0;
+    const body = rest.slice(pad);
+    const close = QUOTE_CLOSE[body[0]];
+    if (close) {
+      const end = body.indexOf(close, 1);
+      if (end < 0) return text.length;
+      j += pad + end + 1;
+      saw = true;
+      continue;
+    }
+    const url = /^https?:\/\/\S+/i.exec(body);
+    if (url) {
+      j += pad + url[0].length;
+      saw = true;
+      continue;
+    }
+    const joiner = /^(?:,|;|and)\b/.exec(body);
+    if (saw && joiner) {
+      j += pad + joiner[0].length;
+      continue;
+    }
+    if (saw && /^[.!?]/.test(body)) return j + pad + 1;
+    if (!saw) {
+      const bare = /^[^\n.!?]+/.exec(body);
+      j += pad + (bare ? bare[0].length : 0);
+      if (/[.!?]/.test(text[j] ?? '')) j += 1;
+    }
+    break;
+  }
+  return j;
+}
+
+function stripCiteSentences(text) {
   let out = '';
   let i = 0;
-  while (i < line.length) {
-    const atBoundary = i === 0 || /[.!?][ \t]*$/.test(line.slice(0, i));
-    if (atBoundary) {
-      const m = SOURCE_START.exec(line.slice(i));
-      if (m && m.index === 0) {
-        let j = i + m[0].length;
-        while (j < line.length && !/[.!?]/.test(line[j])) j += 1;
-        if (j < line.length) j += 1;
-        if (line[j] === '"' || line[j] === "'" || line[j] === '\u201d') j += 1;
-        while (line[j] === ' ' || line[j] === '\t') j += 1;
-        if (j < line.length && out && !/\s$/.test(out)) out += ' ';
-        i = j;
-        continue;
+  while (i < text.length) {
+    CITE_LABEL.lastIndex = i;
+    const m = CITE_LABEL.exec(text);
+    if (m && m.index === i && citeBoundary(text, i)) {
+      let j = consumeCitation(text, i + m[0].length);
+      if (text[j] === '\n' && /\n$/.test(out)) j += 1;
+      else if (text[j] === ' ' || text[j] === '\t') {
+        while (text[j] === ' ' || text[j] === '\t') j += 1;
+        if (j < text.length && text[j] !== '\n' && out && !/\s$/.test(out)) out += ' ';
       }
+      i = j;
+      continue;
     }
-    out += line[i];
+    out += text[i];
     i += 1;
   }
-  return out.replace(/[ \t]{2,}/g, ' ').replace(/[ \t]+$/g, '');
+  return out;
 }
 
 export function stripSources(text) {
@@ -59,12 +101,9 @@ export function stripSources(text) {
     s = blocks.slice(0, -1).join('\n\n').replace(/\s+$/, '');
   }
   if (LEAD_BLOCK.test(s) && !/\n[ \t]*\n/.test(s)) return s;
-  s = s.replace(TAIL_LINE, '').replace(TAIL_SENTENCE, '$1').replace(/\s+$/, '');
-  s = s.split('\n').flatMap(line => {
-    const next = stripSourceSentences(line);
-    return next === '' && line.trim() !== '' ? [] : [next];
-  }).join('\n');
-  s = s.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').replace(/\s+$/, '');
+  s = s.replace(TAIL_LINE, '').replace(/\s+$/, '');
+  s = stripCiteSentences(s);
+  s = s.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').replace(/[ \t]{2,}/g, ' ').replace(/\s+$/, '');
   return s.replace(/^\n+/, '');
 }
 

@@ -76,6 +76,23 @@ function scripted(runtime, scripts = [], { before } = {}) {
   return { engine, requests, responses };
 }
 
+test('a tool preamble and the answer stay as two paragraphs and the stream matches', async t => {
+  const s = await demoStore(t);
+  const seen = [];
+  const { engine } = scripted(s.runtime, [[
+    { text: 'Let me check your figures.', toolCalls: [{ name: 'household_summary', args: {} }] },
+    { text: 'Keep a reserve.' },
+  ]]);
+  const reply = await createLiveAnswerer({ engine, packs: s.packs }).answer({
+    db: s.db, key: THREAD, text: 'What should I keep?', onEvent: e => seen.push(e),
+  });
+  const streamed = seen.filter(e => e.type === 'text').map(e => e.text).join('');
+  assert.equal(seen.some(e => e.type === 'reset'), false);
+  assert.equal(streamed, 'Let me check your figures.\n\nKeep a reserve.');
+  assert.deepEqual(reply.paragraphs, ['Let me check your figures.', 'Keep a reserve.']);
+  assert.equal(reply.paragraphs.join('\n\n'), streamed);
+});
+
 test('text before a tool round is kept when the model resumes mid-word', async t => {
   const s = await demoStore(t);
   const head = 'Give appreciated assets instead of cash.\n\nSources: "G';

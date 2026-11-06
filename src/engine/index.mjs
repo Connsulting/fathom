@@ -24,6 +24,33 @@ async function serial(ledger, callback) {
 const SINGLE_ROUND = ['extract', 'confirm', 'title'];
 const PURPOSES = ['chat', 'job', ...SINGLE_ROUND];
 
+// Keep every round. Join with '' only when the cut is inside a word or a number. A finished
+// sentence starts a new paragraph. Anything else (a word, a comma) gets one space.
+const WORD_CHAR = /[\p{L}\p{N}]/u;
+const TERMINAL = /[.!?]["'\u201d]?$/;
+
+export function joinAnswerParts(parts) {
+  let out = '';
+  for (const part of parts) {
+    if (typeof part !== 'string' || !part) continue;
+    if (!out) { out = part; continue; }
+    const prev = out.replace(/\s+$/, '');
+    const next = part.replace(/^\s+/, '');
+    const a = prev.slice(-1);
+    const b = next.slice(0, 1);
+    const lastWord = prev.match(/[\p{L}\p{N}]+$/u)?.[0] ?? '';
+    const midWord = WORD_CHAR.test(a) && WORD_CHAR.test(b) && (
+      (/[\p{N}]/u.test(a) && /[\p{N}]/u.test(b))
+      || (lastWord.length === 1 && /[\p{L}]/u.test(a) && /[\p{L}]/u.test(b))
+    );
+    let sep = '\n\n';
+    if (midWord) sep = '';
+    else if (!TERMINAL.test(prev)) sep = ' ';
+    out = prev + sep + next;
+  }
+  return out;
+}
+
 const monthKey = timestamp => new Date(timestamp).toISOString().slice(0, 7).replace('-', '');
 
 export function createMemoryLedger(initial = []) {
@@ -94,8 +121,23 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
   const call = async ({ purpose, system = '', systemDynamic = '', messages, tools = [], maxTokens = 1024, schema, grounding = {}, fake,
     toolContext: callContext, onEvent } = {}) => {
     if (mode === 'off') throw new EngineOffError();
+    let bridge = false;
     const emit = typeof onEvent === 'function' && purpose === 'chat'
-      ? event => { try { onEvent(event); } catch { /* listeners never fail a call */ } }
+      ? event => {
+        try {
+          if (bridge && event && event.type === 'text' && event.text) {
+            bridge = false;
+            const prev = joinAnswerParts(answerParts);
+            if (prev) {
+              const next = String(event.text).replace(/^\s+/, '');
+              const joined = joinAnswerParts([prev, event.text]);
+              const sep = joined.slice(prev.length, joined.length - next.length);
+              if (sep) onEvent({ type: 'text', text: sep });
+            }
+          }
+          onEvent(event);
+        } catch { /* listeners never fail a call */ }
+      }
       : null;
     if (!PURPOSES.includes(purpose)) throw new TypeError('Invalid call purpose');
     const model = modelFor(purpose);
@@ -111,6 +153,7 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
     let cost = 0;
     for (let roundIndex = 0; roundIndex < 8; roundIndex++) {
       let round;
+      bridge = true;
       await serial(ledger, async () => {
         if (poisoned) throw new ModelAccountingError();
         const ts = new Date(now()).toISOString();
@@ -183,7 +226,7 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
       if (!['success', 'error_max_turns'].includes(round.status)) throw new ModelCallError('Model did not complete a valid response');
       if (round.status === 'error_max_turns' && round.toolResults.length === 0) throw new ModelCallError('Model reached a turn limit without a tool result');
       if (round.toolResults.length === 0 || SINGLE_ROUND.includes(purpose)) {
-        const text = answerParts.join('');
+        const text = joinAnswerParts(answerParts);
         return { text, content: round.content, costUsd: Number(cost.toFixed(12)), model: round.model,
           toolResults: allResults, rounds, grounding: checkGrounding(text, { ...grounding, toolResults: allResults }) };
       }
