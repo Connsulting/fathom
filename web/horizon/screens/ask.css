@@ -188,14 +188,18 @@
 
 /* ---------- phone ---------- */
 @media (max-width: 720px) {
-  .d-horizon .h-askx { --askx-top: 53px; grid-template-columns: minmax(0, 1fr); }
+  /* The fixed bottom tab bar (about 64px plus the safe area) owns the bottom of the screen. */
+  .d-horizon .h-askx {
+    --askx-top: calc(53px + env(safe-area-inset-top)); --askx-tabs: calc(65px + env(safe-area-inset-bottom));
+    grid-template-columns: minmax(0, 1fr); min-height: calc(100vh - var(--askx-top) - var(--askx-off) - var(--askx-tabs));
+  }
   .d-horizon .h-askx-side {
-    position: fixed; z-index: 25; top: var(--askx-top); bottom: 0; left: 0; height: auto;
+    position: fixed; z-index: 25; top: var(--askx-top); bottom: var(--askx-tabs); left: 0; height: auto;
     width: min(300px, 86vw); transform: translateX(-100%); visibility: hidden;
     transition: transform 0.18s ease, visibility 0s linear 0.18s;
   }
   .d-horizon .h-askx-side.open { transform: none; visibility: visible; transition: transform 0.18s ease; }
-  .d-horizon .h-askx-scrim { display: block; position: fixed; z-index: 24; inset: var(--askx-top) 0 0 0; background: rgba(0, 0, 0, 0.55); }
+  .d-horizon .h-askx-scrim { display: block; position: fixed; z-index: 24; inset: var(--askx-top) 0 var(--askx-tabs) 0; background: rgba(0, 0, 0, 0.55); }
   .d-horizon .h-askx-new kbd { display: none; }
   .d-horizon .h-askx-acts { opacity: 1; }
   .d-horizon .h-askx-item:not(.stack) .h-askx-t { padding-right: 54px; }
@@ -206,6 +210,8 @@
   .d-horizon .h-askx-empty { padding: 24px 0 48px; }
   .d-horizon .h-askx-hello { font-size: 24px; }
   .d-horizon .h-askx .h-msg.me { max-width: 88%; }
+  .d-horizon .h-askx-compose.docked, .d-horizon .h-askx-trashbar { bottom: var(--askx-tabs); }
+  .d-horizon .h-main:has(> .h-askx) { padding-bottom: var(--askx-tabs); }
 }
 @media (hover: none) {
   .d-horizon .h-askx-acts { opacity: 1; }

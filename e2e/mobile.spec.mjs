@@ -1,7 +1,7 @@
 // Phone width (390px, mobile project only): no horizontal page scroll on any main route, and the
 // rec modal opens and closes.
 
-import { test, expect, resetDemo, mainRoutes, needsYouIds, gotoRoute, expectH1, openRecFromPage, closeDialogWithX } from './helpers.mjs';
+import { test, expect, S, resetDemo, mainRoutes, needsYouIds, gotoRoute, expectH1, openRecFromPage, closeDialogWithX, askOnAsk, plain } from './helpers.mjs';
 
 const TAGS = { tag: ['@mobile', '@mobile-only'] };
 
@@ -105,13 +105,15 @@ test.describe('phone shell', TAGS, () => {
   });
 
   test('a tap opens a figure popover, a tap outside and Escape close it', async ({ page }) => {
+    // A suggested question whose canned answer carries a figure.
+    const q = S.ask.suggested.find((x) => (x.a || []).some((p) => /\{fk?:[A-Za-z0-9_]+\}/.test(p)));
     await gotoRoute(page, 'ask');
-    await page.locator('button.h-chip[data-ask]').first().tap();
-    const fig = page.locator('.h-thread .fx-fig').first();
+    await askOnAsk(page, plain(q.q));
+    const fig = page.locator('.h-thread .h-msg:not(.me) .fx-fig').first();
     await expect(fig).toBeVisible();
     await fig.tap();
     await expect(page.locator('.fx-pop')).toBeVisible();
-    await page.locator('main h1').tap();
+    await page.locator('.h-thread .h-msg.me').first().tap();
     await expect(page.locator('.fx-pop')).toHaveCount(0);
     await fig.tap();
     await expect(page.locator('.fx-pop')).toBeVisible();

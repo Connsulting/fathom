@@ -573,6 +573,10 @@ test.describe('AC8 phone', { tag: '@mobile' }, () => {
     await expect(row(page, a.id)).toBeVisible();
     await expect(row(page, b.id)).toBeVisible();
     expect(await noScroll(), 'no horizontal page scroll with the sidebar open').toBe(true);
+    const tabTop = () => page.locator('nav.h-tabs').evaluate((n) => n.getBoundingClientRect().top);
+    const bottomOf = (sel) => page.locator(sel).first().evaluate((n) => n.getBoundingClientRect().bottom);
+    await expect(page.locator('nav.h-tabs')).toBeVisible();
+    expect(await bottomOf('aside.h-askx-side .h-askx-foot'), 'sidebar footer clears the tab bar').toBeLessThanOrEqual(await tabTop());
 
     await row(page, a.id).click();
     await expect(page).toHaveURL(new RegExp(`#/ask/${a.id}$`));
@@ -580,5 +584,8 @@ test.describe('AC8 phone', { tag: '@mobile' }, () => {
     await expect(page.locator('aside.h-askx-side.open')).toHaveCount(0);
     await expect.poll(() => onScreen(side(page))).toBe(false);
     expect(await noScroll(), 'no horizontal page scroll in a conversation').toBe(true);
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await expect(page.locator('.h-askx-compose.docked')).toBeVisible();
+    expect(await bottomOf('.h-askx-compose.docked'), 'docked input clears the tab bar').toBeLessThanOrEqual(await tabTop());
   });
 });
