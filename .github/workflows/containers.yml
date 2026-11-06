@@ -20,7 +20,7 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
-      actions: write
+      actions: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
@@ -33,7 +33,6 @@ jobs:
           push: false
           tags: fathom:ci
           cache-from: type=gha
-          cache-to: type=gha,mode=max
           provenance: false
           sbom: false
       - name: Smoke /healthz
@@ -46,7 +45,7 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
-      actions: write
+      actions: read
       packages: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -74,22 +73,16 @@ jobs:
           tags: fathom:ci
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
           # Artifact attestations are not available on this private plan.
           # metadata-action still sets OCI source, revision and version labels.
           provenance: false
           sbom: false
       - name: Smoke /healthz
         run: scripts/docker-healthz.sh fathom:ci
-      - name: Push
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
-        with:
-          context: .
-          platforms: linux/amd64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          provenance: false
-          sbom: false
+      - name: Push the tested image
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          mapfile -t tags < <(printf '%s\n' "$TAGS" | sed '/^$/d')
+          scripts/push-tested-image.sh fathom:ci "${tags[@]}"

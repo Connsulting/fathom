@@ -24,5 +24,7 @@ pushes the image with tags `X.Y.Z`, `X.Y` and `latest`, then opens a GitHub Rele
 generated notes. A failing test, health check or version check publishes nothing.
 
 Secret scanning in CI covers the pull request range (`base..head`) and, on `main`, the pushed
-range. A one-time full-history scan found only a synthetic email fixture, since removed. CI does
-not scan full history and does not allowlist findings.
+range (`before..sha`). A one-time full-history scan found only a synthetic email fixture, since
+removed. CI does not scan full history and does not allowlist findings. A push whose `before` is
+missing (all zeros) scans `merge-base(origin/main, sha)..sha` when that range is non-empty.
+An initial push of `main`, which has no baseline, fails the job on purpose.

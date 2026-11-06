@@ -14,9 +14,9 @@ cleanup() {
   if [ -n "$started" ]; then
     if [ "$status" -ne 0 ]; then
       echo "docker-healthz: container log follows"
-      docker logs --tail 50 "$name" 2>&1 || true
+      timeout --foreground 15 docker logs --tail 50 "$name" 2>&1 || true
     fi
-    docker rm -f "$name" >/dev/null 2>&1 || true
+    timeout --foreground 20 docker rm -f "$name" >/dev/null 2>&1 || true
   fi
   exit "$status"
 }
@@ -27,21 +27,34 @@ base="http://127.0.0.1:${port}"
 
 echo "docker-healthz: starting ${name} from ${image} on port ${port}"
 started=1
-docker run -d --name "$name" -p "127.0.0.1:${port}:8080" "$image" >/dev/null
+timeout --foreground 30 docker run -d --name "$name" -p "127.0.0.1:${port}:8080" "$image" >/dev/null
 
 echo "docker-healthz: waiting up to 90s for /healthz"
 deadline=$((SECONDS + 90))
 while [ "$SECONDS" -lt "$deadline" ]; do
-  running="$(docker inspect -f '{{.State.Running}}' "$name" 2>/dev/null || echo false)"
+  running="$(timeout --foreground 10 docker inspect -f '{{.State.Running}}' "$name" 2>/dev/null || echo false)"
   if [ "$running" != "true" ]; then
     echo "docker-healthz: container is not running" >&2
     exit 1
   fi
-  if curl -fsS "${base}/healthz" >/dev/null 2>&1; then
+  remaining=$((deadline - SECONDS))
+  if [ "$remaining" -lt 1 ]; then
+    break
+  fi
+  max="$remaining"
+  if [ "$max" -gt 5 ]; then
+    max=5
+  fi
+  if curl --connect-timeout 2 --max-time "$max" -fsS "${base}/healthz" >/dev/null 2>&1; then
     echo "docker-healthz: healthy"
     exit 0
   fi
-  sleep 2
+  remaining=$((deadline - SECONDS))
+  if [ "$remaining" -gt 2 ]; then
+    sleep 2
+  elif [ "$remaining" -gt 0 ]; then
+    sleep "$remaining"
+  fi
 done
 echo "docker-healthz: /healthz not healthy after 90s" >&2
 exit 1
