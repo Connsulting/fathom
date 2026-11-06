@@ -9,10 +9,14 @@
    module only adds the provenance list and the card; it never re-renders the body.
    Chat never writes: a proposal (provenance.proposal {recId, action, wake?}) changes the rec only
    when the owner clicks Confirm, through the ordinary rec action (api.act). The card wording comes
-   from a fixed action map and the rec, never from model text; the wake label is escaped text. */
+   from a fixed action map and the rec, never from model text; the wake label is escaped text.
+   A goal proposal (provenance.goalProposal {title, note, horizon, target, targetDate}) saves a goal
+   only when the owner taps Save, through the goals API (api.goalCreate). Its text is escaped; the
+   card reads Saved once an owner goal with that title exists. */
 
 import { ACTION_STATUS } from '/shared/rules.mjs';
-import { escapeUserText } from '/shared/tokens.mjs';
+import { escapeUserText, money } from '/shared/tokens.mjs';
+import { horizonLabel } from '/shared/goals.mjs';
 
 let H = null;
 
@@ -99,7 +103,34 @@ export function proposalHtml(m) {
     + '</div>';
 }
 
+// The save card for a Fathom message that proposes a goal.
+export function goalProposalHtml(m) {
+  if (!H || !m || m.role !== 'fathom' || m.notice || !isObj(m.provenance) || !isObj(m.provenance.goalProposal)) return '';
+  const { api, esc } = H;
+  const g = m.provenance.goalProposal;
+  if (typeof g.title !== 'string' || !g.title.trim()) return '';
+  const saved = H.arr(api.s.goals).some((x) => x.origin === 'owner' && x.title === g.title);
+  const bits = [horizonLabel(g.horizon)];
+  if (typeof g.target === 'number') bits.push(`target ${money(g.target)}, as you said`);
+  if (typeof g.targetDate === 'string' && g.targetDate) bits.push(`by ${g.targetDate}`);
+  const fields = { title: g.title, note: typeof g.note === 'string' ? g.note : '', horizon: g.horizon || 'now',
+    target: typeof g.target === 'number' ? g.target : null, targetDate: g.targetDate || null };
+  return `<div class="h-proposal h-goal-proposal"><p><span class="h-proposal-k">New goal:</span> <b>${esc(g.title)}</b> <span class="h-mute">${esc(bits.join(', '))}</span></p>`
+    + (saved
+      ? '<span class="h-proposal-done">Saved</span>'
+      : `<button type="button" class="h-btn pri h-propose" data-propose-goal="${esc(JSON.stringify(fields))}">Save</button>`)
+    + '</div>';
+}
+
 function proposalClick(e) {
+  const g = e.target.closest('button.h-propose[data-propose-goal]');
+  if (g && H.root.contains(g)) {
+    e.preventDefault();
+    let fields = null;
+    try { fields = JSON.parse(g.dataset.proposeGoal); } catch { fields = null; }
+    if (fields) { g.disabled = true; H.api.goalCreate(fields); }
+    return true;
+  }
   const t = e.target.closest('button.h-propose[data-propose-rec]');
   if (!t || !H.root.contains(t)) return false;
   e.preventDefault();

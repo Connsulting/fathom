@@ -33,6 +33,9 @@
 // Chat never writes. In Ask threads ('ask:<id>') and rec conversations the model is offered one local, non-writing
 // tool, propose_recommendation_action; the last successful call becomes provenance.proposal
 // ({recId, action, wake?}) and the owner confirms it through the ordinary rec action endpoint.
+// Ask threads also get propose_goal: the last successful call becomes provenance.goalProposal
+// ({title, note, horizon, target, targetDate}) and the owner saves it through POST /api/goals. A
+// proposed target survives only when the owner's own message states that amount.
 
 import { callTool, tools as REGISTRY } from '../tools/index.mjs';
 import { buildScenario, clockNow } from '../scenario/build.mjs';
@@ -43,6 +46,7 @@ import { escapeUserText, resolveTokens } from '../shared/tokens.mjs';
 import { parseJson } from '../store/db.mjs';
 import { findQuestion, matchQuestion, recForKey, isThreadKey } from './questions.mjs';
 import { fakeAnswerScript } from './fake-answers.mjs';
+import { HORIZON_IDS, LIMITS, validateGoal } from '../shared/goals.mjs';
 
 export const PRODUCT_RULES = [
   'You are Fathom, a year-round financial co-pilot for one household of independent professionals.',
@@ -52,6 +56,7 @@ export const PRODUCT_RULES = [
   'Cite a knowledge pack entry by its title when you use it.',
   'Answer in plain text paragraphs separated by blank lines, with no markdown and no HTML.',
   'You never change a recommendation yourself. When the owner explicitly asks to change one, call propose_recommendation_action so the owner can confirm it; never propose on your own initiative.',
+  'You never add a goal yourself. When the owner explicitly asks to add one, call propose_goal with the goal in their own words so the owner can save it; include a target amount only when the owner stated it.',
 ].join('\n');
 
 export const NOTICES = Object.freeze({
@@ -117,6 +122,57 @@ export const PROPOSE_TOOL = Object.freeze({
     return { proposed: true };
   },
 });
+
+export const PROPOSE_GOAL_TOOL = Object.freeze({
+  name: 'propose_goal',
+  description: 'Propose a new household goal for the owner to save: the goal in the owner\'s own words, a horizon ' +
+    '(now = this year, 1-3y = next few years, 3-10y = long range), and a target amount or date only when the owner stated one. ' +
+    'Nothing is saved until the owner taps Save. Use it only when the owner explicitly asks to add a goal.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      title: { type: 'string', minLength: 1, maxLength: LIMITS.title },
+      note: { type: 'string', maxLength: LIMITS.note },
+      horizon: { type: 'string', enum: HORIZON_IDS },
+      target: { type: 'number' },
+      targetDate: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
+    },
+    required: ['title'],
+    additionalProperties: false,
+  },
+  scope: 'read',
+  handler(args) {
+    const res = validateGoal({ title: args.title, note: args.note, horizon: args.horizon, target: args.target, targetDate: args.targetDate });
+    if (!res.ok) throw new Error(res.error);
+    return { proposed: true };
+  },
+});
+
+// Amounts the owner's text states: 50000, $50,000, 50k, 1.5 million.
+const OWNER_AMOUNT = /\$?(\d[\d,]*(?:\.\d+)?)\s*(k|m|thousand|million)?\b/gi;
+export function ownerAmounts(text) {
+  const out = new Set();
+  for (const m of String(text ?? '').matchAll(OWNER_AMOUNT)) {
+    const base = Number(m[1].replace(/,/g, ''));
+    if (!Number.isFinite(base)) continue;
+    const mult = { k: 1e3, thousand: 1e3, m: 1e6, million: 1e6 }[(m[2] || '').toLowerCase()] || 1;
+    out.add(Math.round(base * mult * 100) / 100);
+  }
+  return out;
+}
+
+// The goal proposal from the last successful propose_goal call, validated, with a target the
+// owner did not state dropped.
+function goalProposalOf(toolResults, question) {
+  const hit = toolResults.filter(r => !r.isError && r.name === PROPOSE_GOAL_TOOL.name && r.args).at(-1);
+  if (!hit) return null;
+  const a = hit.args;
+  const res = validateGoal({ title: a.title, note: a.note, horizon: a.horizon, target: a.target, targetDate: a.targetDate });
+  if (!res.ok) return null;
+  const g = res.value;
+  if (g.target != null && !ownerAmounts(question).has(g.target)) g.target = null;
+  return { title: g.title, note: g.note || '', horizon: g.horizon, target: g.target, targetDate: g.targetDate };
+}
 
 // ---------------------------------------------------------------- grounding
 
@@ -430,7 +486,7 @@ export function createLiveAnswerer({ engine, packs } = {}) {
     const packIds = active.map(a => a.pack.id).sort();
     const packContextText = packContext(active.map(({ pack }) => ({ pack, status: 'active' })));
     const prompt = buildChatPrompt({ packContextText, summary, context, history, question, today: scenario.meta && scenario.meta.clock });
-    const offered = [...REGISTRY.filter(t => t.scope === 'read'), ...(proposeFor ? [PROPOSE_TOOL] : [])];
+    const offered = [...REGISTRY.filter(t => t.scope === 'read'), ...(proposeFor ? [PROPOSE_TOOL] : []), ...(proposeFor === '*' ? [PROPOSE_GOAL_TOOL] : [])];
     const fake = engine.mode === 'fake' ? fakeAnswerScript({ scenario, summary, propose: !!proposeFor, ...fakeArgs }) : undefined;
     const request = { purpose: 'chat', system: prompt.system, systemDynamic: prompt.systemDynamic, messages: prompt.messages,
       tools: offered, toolContext: { db, now }, maxTokens: MAX_TOKENS, ...(fake ? { fake } : {}) };
@@ -474,6 +530,7 @@ export function createLiveAnswerer({ engine, packs } = {}) {
     const proposal = proposed
       ? { recId: proposed.args.id, action: proposed.args.action, ...(proposed.args.wake ? { wake: proposed.args.wake } : {}) }
       : null;
+    const goalProposal = proposeFor === '*' ? goalProposalOf(toolResults, question) : null;
     const recReads = toolResults.filter(r => !r.isError && r.name === 'get_recommendation').map(r => r.args && r.args.id);
     const paragraphs = renderAnswer(chosen.text, grounding.violations, grounding.literals);
     if (!paragraphs.length) return noticeReply(NOTICES.modelError);
@@ -494,6 +551,7 @@ export function createLiveAnswerer({ engine, packs } = {}) {
         grounding: { ok: grounding.ok, retried, unverified: grounding.violations.map(v => v.text) },
         costUsd: Number(costUsd.toFixed(6)),
         ...(proposal ? { proposal } : {}),
+        ...(goalProposal ? { goalProposal } : {}),
       },
     };
   }

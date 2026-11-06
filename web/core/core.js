@@ -522,6 +522,36 @@ function onboard(step) {
   return send('/api/onboarding', { step: s });
 }
 
+// ---------------------------------------------------------------- goals and the curve
+
+// Resolve with the saved goal (or true for a delete), or null on failure (error line shown).
+function goalCreate(fields) {
+  if (!fields || typeof fields !== 'object') return done();
+  return send('/api/goals', fields, d => d.goal || null, null, 'Could not save that goal. ');
+}
+
+function goalUpdate(id, fields) {
+  if (id == null || id === '' || !fields || typeof fields !== 'object') return done();
+  return send('/api/goals/' + encodeURIComponent(id), fields, d => d.goal || null, null, 'Could not save that goal. ');
+}
+
+function goalArchive(id, archived) {
+  if (id == null || id === '') return done();
+  return send('/api/goals/' + encodeURIComponent(id) + '/archive', { archived: archived !== false }, d => d.goal || null);
+}
+
+function goalDelete(id) {
+  if (id == null || id === '') return done();
+  return send('/api/goals/' + encodeURIComponent(id) + '/delete', {}, () => true);
+}
+
+// A tradeoff curve or onboarding priority position, 0 to 1.
+function setCurve(id, value) {
+  const v = Number(value);
+  if (id == null || id === '' || !Number.isFinite(v) || v < 0 || v > 1) return done();
+  return send('/api/curve', { id: String(id), value: Math.round(v * 100) / 100 });
+}
+
 function setEngine(v) {
   return send('/api/engine', { on: !!v });
 }
@@ -629,6 +659,11 @@ const api = {
   renameThread,
   scenarioPick,
   onboard,
+  goalCreate,
+  goalUpdate,
+  goalArchive,
+  goalDelete,
+  setCurve,
   engineOn: () => !!live().engine,
   setEngine,
   setCap,

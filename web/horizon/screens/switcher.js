@@ -107,6 +107,7 @@ function actionSource() {
     { key: 'act:shortcuts', title: 'Show keyboard shortcuts', group: 'Actions', sub: 'Action', hint: '?', run: () => openSheet() },
     { key: 'act:ask', title: 'Ask a question', group: 'Actions', sub: 'Action', hint: '', run: () => { H.setMore(false); newConversation(); } },
     { key: 'act:add', title: 'Add files', group: 'Actions', sub: 'Action', hint: '', run: () => go('add') },
+    { key: 'act:goal', title: 'New goal', group: 'Actions', sub: 'Action', hint: '', run: () => { H.setMore(false); H.newGoal(); } },
     ...pendingChecks()
   ];
 }
@@ -522,6 +523,7 @@ const SCREEN_TABLES = {
     }))
   ],
   wargame: listTable,
+  goals: () => [{ keys: ['n'], label: 'New goal', group: 'Goals', action: () => H.newGoal() }],
   add: listTable,
   ask: () => ASK_KEYS,
   confirm: () => deckBindings((name, e) => H.ingest.deckAction(name, e)),

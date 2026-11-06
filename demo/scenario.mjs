@@ -2158,6 +2158,7 @@ export default {
       "id": "port4",
       "title": "Zero income required",
       "horizon": "3-10y",
+      "kind": "retirement",
       "status": "on track",
       "prose": "The backstop, not the trigger. Work does not stop; it just stops being necessary.",
       "progress": {

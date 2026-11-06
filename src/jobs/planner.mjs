@@ -12,7 +12,7 @@ import { upsertFact } from '../store/facts.mjs';
 import { withholdingRecipient, ask, canonicalJson, FACT_CHECK_OPTIONS } from '../ingest/confirm.mjs';
 import { loadPacks, activePacks } from '../packs/index.mjs';
 import { refreshPackState, defaultPackDirs } from '../packs/state.mjs';
-import { resolveClock } from '../scenario/build.mjs';
+import { resolveClock, loadGoals, loadCurve, loadContent } from '../scenario/build.mjs';
 import { TOKEN } from '../shared/tokens.mjs';
 import { loadPlanningData, isoDateOf, resolveEntities } from './planner/data.mjs';
 import { deriveFacts, deriveFigureFacts, mergeFacts, factProvenance, ownerFactsOf, PLANNER_SRC } from './planner/facts.mjs';
@@ -84,10 +84,17 @@ async function plan(db, engine, { clock, runId, packDirs }) {
   const names = namesOf(merged.values);
   const fig = Object.fromEntries(Object.entries(computed.figures).map(([k, f]) => [k, { v: f.v, kind: f.kind, label: f.label, src: f.src }]));
 
+  // The owner's goals and tradeoff curve positions rank recs that tie on their window.
+  const accountRows = db.prepare('SELECT * FROM accounts').all();
+  const prefs = {
+    goals: loadGoals(db, { fig: { ...fig }, accounts: accountRows }),
+    accounts: accountRows,
+    curve: Object.fromEntries(loadCurve(db, loadContent(db)).map(c => [c.id, c.value])),
+  };
   const ctx = {
     clock, year: data.taxYear, facts: merged.values, owner, fig,
     names, model: computed.model, data, packs, packStatus,
-    info: computed.info, freshness: data.freshness, warnings: [...warnings], entities,
+    info: computed.info, freshness: data.freshness, warnings: [...warnings], entities, goals: prefs.goals, curve: prefs.curve,
   };
   const results = evaluateCatalog(ctx);
 
@@ -129,7 +136,7 @@ async function plan(db, engine, { clock, runId, packDirs }) {
     writeSources(db, computed.sources);
     writeFigures(db, computed.figures, now);
     const changes = applyRecs(db, results, {
-      clock, now, runId, prose, packOverride: id => overrides[id] ?? null, warn: code => warnings.add(code),
+      clock, now, runId, prose, packOverride: id => overrides[id] ?? null, warn: code => warnings.add(code), prefs,
     });
     refreshPackState(db, { packDirs });
     linkPackRecs(db, now);
