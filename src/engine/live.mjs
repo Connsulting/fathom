@@ -7,13 +7,34 @@ import { usageCostUsd } from './pricing.mjs';
 
 export const encodeTranscript = messages => JSON.stringify(messages);
 
-export async function consumeSdkMessages(stream) {
+const TOOL_PREFIX = 'mcp__fathom__';
+
+// One SDK partial-message event as an engine stream event ({ type: 'tool', name } when a tool_use
+// block starts, { type: 'text', text } for a text delta), or null.
+export function sdkStreamEvent(message) {
+  const event = message && message.type === 'stream_event' ? message.event : null;
+  if (!event) return null;
+  if (event.type === 'content_block_start' && event.content_block && event.content_block.type === 'tool_use') {
+    const name = String(event.content_block.name || '');
+    return { type: 'tool', name: name.startsWith(TOOL_PREFIX) ? name.slice(TOOL_PREFIX.length) : name };
+  }
+  if (event.type === 'content_block_delta' && event.delta && event.delta.type === 'text_delta' && typeof event.delta.text === 'string') {
+    return { type: 'text', text: event.delta.text };
+  }
+  return null;
+}
+
+export async function consumeSdkMessages(stream, onEvent) {
   let result;
   let content = [];
   let tools = [];
   let usage;
   try {
     for await (const message of stream) {
+      if (onEvent && message.type === 'stream_event') {
+        const event = sdkStreamEvent(message);
+        if (event) { try { onEvent(event); } catch { /* listeners never fail a round */ } }
+      }
       if (message.type === 'system' && message.subtype === 'init') tools = message.tools;
       if (message.type === 'assistant') { content = message.message.content; usage = message.message.usage; }
       if (message.type === 'result') result = message;
@@ -59,14 +80,15 @@ export function normalizeSdkRound({ result, content = [], tools = [], usage }, {
     details: { tools, maxTokens, maxBudgetUsd }, toolResults: registry.results };
 }
 
-export async function sdkRound({ credential, system, systemDynamic, messages, maxTokens, maxBudgetUsd, model, registry }) {
+export async function sdkRound({ credential, system, systemDynamic, messages, maxTokens, maxBudgetUsd, model, registry, onEvent }) {
   const configDir = await mkdtemp(join(tmpdir(), 'fathom-engine-'));
   const options = sdkOptions({ credential, configDir, system, systemDynamic, maxTokens, maxBudgetUsd, model, registry });
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 120000);
   let observed;
   try {
-    observed = await consumeSdkMessages(query({ prompt: encodeTranscript(messages), options: { ...options, abortController: controller } }));
+    observed = await consumeSdkMessages(query({ prompt: encodeTranscript(messages),
+      options: { ...options, abortController: controller, ...(onEvent ? { includePartialMessages: true } : {}) } }), onEvent);
   }
   finally {
     clearTimeout(timer);
