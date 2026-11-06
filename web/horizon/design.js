@@ -15,6 +15,7 @@ import { ingestScreens } from './screens/ingest.js';
 import { emailScreen } from './screens/email.js';
 import * as switcher from './screens/switcher.js';
 import { createKeys } from './keys.js';
+import { KNOWN_FIGURES } from '/shared/goals.mjs';
 
 const MS = 864e5;
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -54,9 +55,9 @@ let bodyLocked = false;
 let connectOn = false;
 
 const freshUi = () => ({
-  curve: {}, prio: {}, connected: {}, modal: null,
-  pick: { salary: null, deferral: null }, signing: false, build: 0,
-  buildTimer: 0, draft: {}, dumped: null,
+  curve: {}, prio: {}, connected: {}, modal: null, goalForm: null, goalDel: null,
+  pick: { salary: null, deferral: null }, build: 0,
+  buildTimer: 0, draft: {}, dumped: null, noteBusy: false, understood: null,
   more: false, under: null, inApp: false, closing: false, ret: null, y: 0, msgN: {}, det: {}
 });
 
@@ -399,7 +400,9 @@ function shell(inner, active) {
   const rest = NAV.filter(([k]) => !TAB_ICON[k]);
   const moreOn = MORE.some((g) => g[1].some((i) => i[0] === active)) || rest.some(([k]) => k === active);
   const screens = rest.length ? `<div class="h-more-g h-more-phone"><div class="h-more-h">Screens</div>${rest.map(([k, l]) => link(k, l)).join('')}</div>` : '';
-  const groups = screens + MORE.map(([title, items]) => `<div class="h-more-g"><div class="h-more-h">${title}</div>${items.map(([k, l]) => link(k, l)).join('')}</div>`).join('');
+  // A real store reaches onboarding again as Setup, to add more context.
+  const setup = api.s?.live?.mode === 'real' ? [['onboarding', 'Setup']] : [];
+  const groups = screens + MORE.map(([title, items]) => `<div class="h-more-g"><div class="h-more-h">${title}</div>${(title === 'System' ? [...items, ...setup] : items).map(([k, l]) => link(k, l)).join('')}</div>`).join('');
   const more = `<div class="h-more-wrap"><button type="button" class="h-more-btn${moreOn ? ' on' : ''}" data-more="toggle" aria-expanded="${ui.more}" aria-controls="h-more-p">More${icon('chev')}</button>
     <div class="h-more-p" id="h-more-p" aria-label="More"${ui.more ? '' : ' hidden'}>${whoLine()}${groups}</div></div>`;
   const off = api.engineOn() ? '' : `<div class="h-engine-off">${icon('clock')}Engine off. Proactive jobs are paused. ${goA('engine', 'Engine settings')}</div>`;
@@ -492,7 +495,7 @@ function recRow(r, ny) {
     <div class="h-row-b">
       <div class="h-row-top"><a href="${href('rec', { id: r.id })}" data-go="rec" data-id="${esc(r.id)}">${T(r.title)}</a><span class="h-st ${r.status}">${statusText(r)}</span></div>
       <p>${T(r.summary)}</p>
-      <div class="h-meta"><span>${T(r.triggerText || TRIGGER[r.trigger] || '')}</span>${r.status === 'done' || r.status === 'dismissed' ? '' : `<span>${T(r.window?.label || '')}</span>`}${r.effort ? `<span>${T(r.effort)}</span>` : ''}${values(r) ? `<span>${values(r)}</span>` : ''}${r.advisor ? `<span class="h-adv ${r.advisor.verdict}">${advisorText(r)}</span>` : ''}</div>
+      <div class="h-meta"><span>${T(r.triggerText || TRIGGER[r.trigger] || '')}</span>${r.status === 'done' || r.status === 'dismissed' ? '' : `<span>${T(r.window?.label || '')}</span>`}${r.effort ? `<span>${T(r.effort)}</span>` : ''}${values(r) ? `<span>${values(r)}</span>` : ''}${r.advisor ? `<span class="h-adv ${r.advisor.verdict}">${advisorText(r)}</span>` : ''}${servesHtml(r)}</div>
     </div>
     <div class="h-acts">${actionsFor(r, true).join('')}${advisorScreen.rowAction(r)}</div>
   </article>`;
@@ -534,6 +537,7 @@ function thread(msgs, selfId = '') {
     return `<div class="h-msg ${esc(m.role)}${m.notice ? ' notice' : ''}"><div class="h-msg-who">${who}${m.ts ? `<time>${X(m.ts)}</time>` : ''}</div><div class="h-msg-b">${m.html || ''}</div>`
       + (refs.length ? `<div class="h-refs">${refs.map((r) => `<a href="${href('rec', { id: r.id })}" data-go="rec" data-id="${esc(r.id)}"><span>${T(r.title)}</span><em>${T(r.window?.label || '')}</em>${icon('arrow')}</a>`).join('')}</div>` : '')
       + chatScreen.proposalHtml(m)
+      + chatScreen.goalProposalHtml(m)
       + chatScreen.sourcesHtml(m)
       + '</div>';
   }).join('')}</div>`;
@@ -588,7 +592,7 @@ function dlgHtml(id) {
   return frame(`${T(TRIGGER[r.trigger] || r.trigger || '')}<span>${T(r.triggerText)}</span>`, `<div class="h-rec-head">
       <h1 id="h-dlg-t" class="h-dlg-title">${T(r.title)}</h1>
       <p class="h-lede">${T(r.summary)}</p>
-      <div class="h-meta"><span class="h-st ${r.status}">${statusText(r)}</span>${isNeeds(r, ny) ? '<span class="h-acc">Needs you</span>' : ''}${r.effort ? `<span>${T(r.effort)}</span>` : ''}${values(r) ? `<span>${values(r)}</span>` : ''}</div>
+      <div class="h-meta"><span class="h-st ${r.status}">${statusText(r)}</span>${isNeeds(r, ny) ? '<span class="h-acc">Needs you</span>' : ''}${r.effort ? `<span>${T(r.effort)}</span>` : ''}${values(r) ? `<span>${values(r)}</span>` : ''}${servesHtml(r)}</div>
     </div>
     ${windowStrip(r)}
     <div class="h-acts big">${actionsFor(r, false).join('')}</div>
@@ -807,6 +811,122 @@ function pWargame(name) {
 
 /* ---------- goals ---------- */
 
+// Goal text: an owner goal is plain text the owner typed (escaped, never token-resolved); a seed
+// goal is scenario text with tokens.
+const gText = (g, s) => (g && g.origin === 'owner' ? esc(s) : T(s));
+const goalTitle = (g) => gText(g, g.title);
+
+function servesHtml(r) {
+  const list = arr(r.serves);
+  if (!list.length) return '';
+  return `<span class="h-serves">Serves: ${list.map((g) => `<a href="${href('goals')}" data-go="goals">${g.origin === 'owner' ? esc(g.title) : T(g.title)}</a>`).join(', ')}</span>`;
+}
+
+const emptyDraft = (horizon = 'now') => ({ title: '', note: '', horizon, target: '', targetDate: '', trackKind: 'none', accounts: [], figure: '' });
+
+function draftOf(g) {
+  const t = g.track || null;
+  return {
+    title: g.title || '', note: g.note || '', horizon: g.horizon || 'now',
+    target: typeof g.target === 'number' ? String(g.target) : '', targetDate: g.targetDate || '',
+    trackKind: t && Array.isArray(t.accounts) ? 'accounts' : t && t.figure ? 'figure' : 'none',
+    accounts: t && Array.isArray(t.accounts) ? t.accounts.slice() : [], figure: t && t.figure ? t.figure : ''
+  };
+}
+
+function openGoalForm(id) {
+  const g = id ? arr(api.s.goals).find((x) => x.id === id) : null;
+  ui.goalForm = { id: g ? g.id : null, draft: g ? draftOf(g) : emptyDraft(), err: '' };
+  ui.goalDel = null;
+  draw();
+  const el = root?.querySelector('.h-gform [data-gf="title"]');
+  if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+}
+
+// Trackable figures the store holds, by the shared list.
+const trackFigures = () => KNOWN_FIGURES.filter((k) => api.s.fig && api.s.fig[k.key]);
+
+function goalFormHtml() {
+  const f = ui.goalForm;
+  const d = f.draft;
+  const accts = arr(api.s.accounts).filter((a) => a.fig);
+  const figs = trackFigures();
+  const chip = (h) => `<button type="button" class="h-chip${d.horizon === h[0] ? ' on' : ''}" data-goal-h="${h[0]}" aria-pressed="${d.horizon === h[0]}">${h[1]}</button>`;
+  const opt = (v, l) => `<option value="${esc(v)}"${(d.trackKind === 'figure' ? d.figure : d.trackKind) === v ? ' selected' : ''}>${esc(l)}</option>`;
+  const acctList = d.trackKind === 'accounts' ? `<div class="h-gaccts">${accts.length ? accts.map((a) => `<label class="h-gacct"><input type="checkbox" data-gf="acct" value="${esc(a.id)}"${d.accounts.includes(a.id) ? ' checked' : ''}><span>${a.imported ? esc(a.name) : T(a.name)}</span><small>${a.imported ? esc(a.inst) : T(a.inst)}</small></label>`).join('') : '<p class="h-mute sm">No accounts with a balance yet.</p>'}</div>` : '';
+  return `<form class="h-gform" data-goalform="1" aria-label="${f.id ? 'Edit goal' : 'New goal'}" novalidate>
+    <h2>${f.id ? 'Edit goal' : 'New goal'}</h2>
+    <label class="h-gf">Your goal, in your own words<input type="text" data-gf="title" maxlength="120" value="${esc(d.title)}" placeholder="For example, a year of cash in the bank" autocomplete="off"></label>
+    <label class="h-gf">A short note <span class="h-mute">optional</span><textarea data-gf="note" maxlength="500" rows="2">${esc(d.note)}</textarea></label>
+    <div class="h-gf"><span>When</span><div class="h-chips" role="group" aria-label="Horizon">${GOAL_BANDS.map(chip).join('')}</div></div>
+    <div class="h-gf2">
+      <label class="h-gf">Target amount <span class="h-mute">optional</span><input type="number" data-gf="target" min="0" step="any" inputmode="decimal" value="${esc(d.target)}" placeholder="0"></label>
+      <label class="h-gf">Target date <span class="h-mute">optional</span><input type="date" data-gf="targetDate" value="${esc(d.targetDate)}"></label>
+    </div>
+    <label class="h-gf">Track with <span class="h-mute">optional</span><select data-gf="track">${opt('none', 'Nothing yet')}${accts.length ? opt('accounts', 'One or more accounts') : ''}${figs.map((k) => opt(k.key, k.label)).join('')}</select></label>
+    ${acctList}
+    ${f.err ? `<p class="h-gerr" role="alert">${esc(f.err)}</p>` : ''}
+    <div class="h-ob-nav">${btn('Cancel', 'data-goal="cancel"', 'ghost')}<button type="submit" class="h-btn pri">${f.id ? 'Save changes' : 'Save goal'}</button></div>
+  </form>`;
+}
+
+// Form draft -> API fields, or an error message.
+function goalFields(d) {
+  const title = d.title.trim();
+  if (!title) return { err: 'Write the goal in your own words.' };
+  const out = { title, note: d.note.trim(), horizon: d.horizon, target: null, targetDate: d.targetDate || null, track: null };
+  if (d.target !== '') {
+    const n = Number(d.target);
+    if (!Number.isFinite(n) || n < 0) return { err: 'The target amount must be zero or more.' };
+    out.target = n;
+  }
+  if (d.trackKind === 'accounts' && d.accounts.length) out.track = { accounts: d.accounts.slice() };
+  if (d.trackKind === 'figure' && d.figure) out.track = { figure: d.figure };
+  return { fields: out };
+}
+
+function saveGoal() {
+  const f = ui.goalForm;
+  if (!f || f.saving) return;
+  const { fields, err } = goalFields(f.draft);
+  if (err) { f.err = err; draw(); return; }
+  f.saving = true;
+  const p = f.id ? api.goalUpdate(f.id, fields) : api.goalCreate(fields);
+  p.then((g) => {
+    if (ui.goalForm !== f) return;
+    f.saving = false;
+    if (g) { ui.goalForm = null; draw(); }
+  });
+}
+
+const GOAL_BANDS = [['now', 'This year'], ['1-3y', 'Next few years'], ['3-10y', 'Long range']];
+
+function goalCard(g) {
+  const owner = g.origin === 'owner';
+  let prog = '';
+  if (g.progress) {
+    const cur = figVal(g.progress.cur), tgt = figVal(g.progress.target);
+    if (cur != null && tgt) {
+      const p = Math.max(0, Math.min(1, cur / tgt));
+      prog = `<div class="h-prog"><svg viewBox="0 0 100 4" preserveAspectRatio="none" aria-hidden="true"><rect class="bg" width="100" height="4" rx="2"/><rect class="fg" width="${p * 100}" height="4" rx="2"/></svg><span>${figHtml(g.progress.cur, { k: true })} of ${figHtml(g.progress.target, { k: true })}</span></div>`;
+    }
+  }
+  if (!prog && owner) {
+    const tKey = `goal.${g.id}.target`;
+    if (!(api.s.fig && api.s.fig[tKey])) prog = `<p class="h-gnone">No target yet. <button type="button" class="h-link" data-goal="edit" data-id="${esc(g.id)}">Add one</button></p>`;
+    else if (g.trackWaiting) prog = `<p class="h-gnone">Target ${figHtml(tKey, { k: true })}. Waiting on a balance for what it tracks.</p>`;
+    else prog = `<p class="h-gnone">Target ${figHtml(tKey, { k: true })}. <button type="button" class="h-link" data-goal="edit" data-id="${esc(g.id)}">Pick what to track</button> to see progress.</p>`;
+  }
+  const meta = [];
+  if (owner && g.targetDate) { const d = parseISO(g.targetDate); if (d) meta.push(`By ${MON[d.getUTCMonth()]} ${d.getUTCFullYear()}`); }
+  if (owner && g.trackLabel) meta.push(`Tracks ${esc(g.trackLabel)}`);
+  const del = ui.goalDel === g.id
+    ? `<span class="h-gdel">Delete for good?</span>${btn('Delete', `data-goal="delete-yes" data-id="${esc(g.id)}"`, 'danger')}${btn('Keep', 'data-goal="delete-no"', 'ghost')}`
+    : `${owner && !g.archived ? btn('Edit', `data-goal="edit" data-id="${esc(g.id)}"`, 'ghost') : ''}${btn(g.archived ? 'Restore' : 'Archive', `data-goal="${g.archived ? 'restore' : 'archive'}" data-id="${esc(g.id)}"`, 'ghost')}${btn('Delete', `data-goal="delete" data-id="${esc(g.id)}"`, 'ghost')}`;
+  const note = owner ? g.note : g.prose;
+  return `<article class="h-goal ${esc((g.status || '').replace(/\s+/g, '-'))}${g.archived ? ' archived' : ''}" data-goal-id="${esc(g.id)}"><div class="h-goal-h"><b>${goalTitle(g)}</b><span>${g.archived ? 'Archived' : owner ? '' : T(g.status)}</span></div>${note ? `<p>${gText(g, note)}</p>` : ''}${meta.length ? `<div class="h-meta">${meta.map((m) => `<span>${m}</span>`).join('')}</div>` : ''}${prog}<div class="h-gacts">${del}</div></article>`;
+}
+
 function pGoals() {
   const y = clock().getUTCFullYear();
   const bands = [
@@ -814,29 +934,53 @@ function pGoals() {
     ['1-3y', 'Next few years', `${y + 1} to ${y + 3}`],
     ['3-10y', 'Long range', `${y + 3} to ${y + 10}`]
   ];
-  const goals = arr(api.s.goals);
-  const card = (g) => {
-    let prog = '';
-    if (g.progress) {
-      const cur = figVal(g.progress.cur), tgt = figVal(g.progress.target);
-      if (cur != null && tgt) {
-        const p = Math.max(0, Math.min(1, cur / tgt));
-        prog = `<div class="h-prog"><svg viewBox="0 0 100 4" preserveAspectRatio="none" aria-hidden="true"><rect class="bg" width="100" height="4" rx="2"/><rect class="fg" width="${p * 100}" height="4" rx="2"/></svg><span>${figHtml(g.progress.cur, { k: true })} of ${figHtml(g.progress.target, { k: true })}</span></div>`;
-      }
-    }
-    return `<article class="h-goal ${esc((g.status || '').replace(/\s+/g, '-'))}"><div class="h-goal-h"><b>${T(g.title)}</b><span>${T(g.status)}</span></div><p>${T(g.prose)}</p>${prog}</article>`;
-  };
+  const all = arr(api.s.goals);
+  const goals = all.filter((g) => !g.archived);
+  const archived = all.filter((g) => g.archived);
   const axis = `<div class="h-gaxis">${bands.map((b) => `<div><b>${b[1]}</b><span>${b[2]}</span></div>`).join('')}</div>`;
-  const cols = `<div class="h-gcols">${bands.map((b) => `<div class="h-gcol"><div class="h-gcol-h"><b>${b[1]}</b><span>${b[2]}</span></div>${goals.filter((g) => g.horizon === b[0]).map(card).join('') || '<p class="h-mute sm">Nothing here.</p>'}</div>`).join('')}</div>`;
+  const cols = `<div class="h-gcols">${bands.map((b) => `<div class="h-gcol"><div class="h-gcol-h"><b>${b[1]}</b><span>${b[2]}</span></div>${goals.filter((g) => (g.horizon || 'now') === b[0]).map(goalCard).join('') || '<p class="h-mute sm">Nothing here.</p>'}</div>`).join('')}</div>`;
   const curve = arr(api.s.curve).map((c) => {
-    const v = ui.curve[c.id] ?? c.value;
+    const v = ui.curve[c.id] ?? c.value ?? 0.5;
     return `<div class="h-curve"><div class="h-curve-ends"><span class="${v < 0.5 ? 'lean' : ''}">${T(c.left)}</span><span class="${v > 0.5 ? 'lean' : ''}">${T(c.right)}</span></div>
       <input type="range" min="0" max="100" value="${Math.round(v * 100)}" data-curve="${esc(c.id)}" aria-label="${esc(api.txt(c.left) + ' or ' + api.txt(c.right))}">
-      <p>${T(c.note)}</p></div>`;
+      ${c.note ? `<p>${T(c.note)}</p>` : ''}</div>`;
   }).join('');
+  const add = ui.goalForm && !ui.goalForm.id ? '' : `<div class="h-gadd">${btn(`${icon('plus')}Goal`, 'data-goal="new" aria-keyshortcuts="n"', 'pri')}<span class="h-mute sm">Press N</span></div>`;
+  const form = ui.goalForm ? goalFormHtml() : '';
+  const arch = archived.length ? `<details class="h-garch" data-det="goals-archived"${ui.det['goals-archived'] ? ' open' : ''}><summary>${plural(archived.length, 'archived goal')}</summary><div class="h-garch-l">${archived.map(goalCard).join('')}</div></details>` : '';
   return shell(`${pageHead('Goals', 'Where you are headed', 'Goals in your own words, placed on the years they live in.')}
-    ${axis}${cols}
+    ${add}${form}
+    ${axis}${cols}${arch}
     ${curve ? section('Where on the curve', `<p class="h-mute">Every plan trades one thing for another. These set where you sit. Recommendations respect them.</p><div class="h-curves">${curve}</div>`) : ''}`, 'goals');
+}
+
+function goalClick(t) {
+  const d = t.dataset;
+  const act = d.goal;
+  if (act === 'new') { openGoalForm(null); return; }
+  if (act === 'edit') { openGoalForm(d.id); return; }
+  if (act === 'cancel') { ui.goalForm = null; draw(); return; }
+  if (act === 'archive' || act === 'restore') { if (ui.goalForm?.id === d.id) ui.goalForm = null; api.goalArchive(d.id, act === 'archive'); return; }
+  if (act === 'delete') { ui.goalDel = d.id; draw(); return; }
+  if (act === 'delete-no') { ui.goalDel = null; draw(); return; }
+  if (act === 'delete-yes') { ui.goalDel = null; if (ui.goalForm?.id === d.id) ui.goalForm = null; api.goalDelete(d.id); }
+}
+
+function goalInput(t) {
+  const f = ui.goalForm;
+  if (!f) return false;
+  const k = t.dataset.gf;
+  if (!k) return false;
+  if (k === 'acct') {
+    const set = new Set(f.draft.accounts);
+    if (t.checked) set.add(t.value); else set.delete(t.value);
+    f.draft.accounts = [...set];
+  } else if (k === 'track') {
+    if (t.value === 'none' || t.value === 'accounts') { f.draft.trackKind = t.value; f.draft.figure = ''; }
+    else { f.draft.trackKind = 'figure'; f.draft.figure = t.value; }
+    draw();
+  } else f.draft[k] = t.value;
+  return true;
 }
 
 /* ---------- accounts ---------- */
@@ -940,15 +1084,22 @@ function pOnboarding(step) {
   const back = s > first ? btn('Back', `data-onboard="${s - 1}"`, 'ghost') : '';
   let body = '';
   if (s === 0) {
+    const who = api.identity?.();
+    const line = who
+      ? `<b>Signed in through your private network</b><span>${esc(who.name || who.login)}${who.login && who.login !== who.name ? ` (${esc(who.login)})` : ''}</span>`
+      : '<b>Reached through your private network</b><span>This demo does not sign anyone in, and no account is created.</span>';
     body = `<div class="h-ob-hero">${MARK}<h1>${T(ob.welcome?.headline)}</h1><p class="h-lede">${T(ob.welcome?.sub)}</p></div>
-      <form class="h-ob-sign" data-signin="1"><label>Email<input type="email" placeholder="you@example.com" autocomplete="off"></label>
-      <button type="submit" class="h-btn pri wide">${ui.signing ? 'Checking passkey' : `Continue with passkey${icon('arrow')}`}</button></form>
-      <p class="h-mute sm center">Demo sign-in. No account is created.</p>`;
+      <div class="h-ob-who" data-ob-who="1">${icon('lock')}<div>${line}</div></div>
+      <div class="h-ob-nav">${next()}</div>`;
   } else if (s === 1) {
-    body = `<h1>Dump everything in</h1><p class="h-lede">Write it the way you would tell a friend: who is in the house, how money comes in, what is coming up, what worries you. Attach whatever you have.</p>
-      <textarea class="h-dump" rows="9" data-dump="1">${X(ui.dumped ?? ob.dump)}</textarea>
+    const draft = String(ui.dumped ?? '');
+    const dirty = draft.trim() !== '';
+    const go = noteGo(dirty, ui.noteBusy);
+    body = `<h1>Dump everything in</h1><p class="h-lede">Write it the way you would tell a friend: who is in the house, how money comes in, what is coming up, what worries you. It is stored encrypted and read the way an uploaded notes file is. Attach whatever you have.</p>
+      <textarea class="h-dump" rows="9" data-dump="1" aria-label="Tell us about your household" placeholder="For example: we file jointly in Virginia, I run an S corporation, my spouse freelances, we have two kids and a third on the way.">${esc(draft)}</textarea>
+      ${understoodHtml()}
       ${ingest.addFiles('onboarding')}
-      <div class="h-ob-nav">${back}${next()}</div>`;
+      <div class="h-ob-nav">${back}${go}</div>`;
   } else if (s === 2) {
     const insts = arr(ob.institutions);
     const n = insts.filter((x, i) => ui.connected[i]).length;
@@ -964,13 +1115,7 @@ function pOnboarding(step) {
         <div class="h-ob-nav">${btn('Cancel', 'data-modal="close"', 'ghost')}${btn('Allow read-only', `data-allow="${ui.modal}"`, 'pri')}</div></div></div>`;
     }
   } else if (s === 3) {
-    const h = ob.heard || {};
-    const list = (t, a) => arr(a).length ? `<div class="h-heard"><div class="h-sub-h">${t}</div><ul>${arr(a).map((x) => `<li>${T(typeof x === 'string' ? x : (x.name || x.label || x.t || ''))}</li>`).join('')}</ul></div>` : '';
-    body = `<h1>Here is what we heard</h1><p class="h-lede">Fix anything that is wrong before we build your year.</p>
-      <div class="h-heards">${list('People', h.people)}${list('Entities', h.entities)}${list('Income', h.income)}${list('Life events', h.lifeEvents)}</div>
-      <div class="h-heard-dl"><b>${h.deadlines ?? 0}</b><span>deadlines found for the next twelve months</span></div>
-      ${list('Questions we still have', h.questions)}
-      <div class="h-ob-nav">${back}${next('Looks right')}</div>`;
+    body = heardHtml(back, next);
   } else if (s === 4) {
     body = `<h1>Where on the curve</h1><p class="h-lede">Every choice trades one good thing for another. Tell us how much each matters. You can change this any time.</p>
       <div class="h-prios">${arr(ob.priorities).map((p) => {
@@ -983,10 +1128,10 @@ function pOnboarding(step) {
       }).join('')}</div>
       <div class="h-ob-nav">${back}${next('Build my year')}</div>`;
   } else {
-    const h = ob.heard || {};
+    const h = api.heard();
     const lines = [
-      `Reading ${plural(arr(ob.institutions).reduce((n, x) => n + (Number(x.accounts) || 1), 0), 'account')}`,
-      `Placing ${plural(h.deadlines ?? arr(api.s.deadlines).length, 'deadline')} on your year`,
+      `Reading ${plural(arr(api.s.accounts).length, 'account')}`,
+      `Placing ${plural(h.deadlines ?? 0, 'deadline')} on your year`,
       `Checking ${plural(arr(api.s.domains).length, 'area')} for gaps`,
       'Drafting your first brief'
     ];
@@ -995,12 +1140,59 @@ function pOnboarding(step) {
       <div class="h-build"><svg viewBox="0 0 600 40" preserveAspectRatio="none" aria-hidden="true"><line class="bg" x1="0" x2="600" y1="20" y2="20"/><line class="fg" x1="0" x2="${(b / lines.length) * 600}" y1="20" y2="20"/>
       ${MON.map((m, i) => `<line class="tk" x1="${i * 50 + 25}" x2="${i * 50 + 25}" y1="14" y2="26"/><text x="${i * 50 + 25}" y="40" text-anchor="middle">${m}</text>`).join('')}</svg></div>
       <ul class="h-build-l">${lines.map((l, i) => `<li class="${i < b ? 'done' : i === b ? 'cur' : ''}"><i>${i < b ? icon('check') : ''}</i>${l}</li>`).join('')}</ul>
-      <div class="h-ob-nav">${back}${b >= lines.length ? btn(`Open my first brief${icon('arrow')}`, 'data-onboard="6"', 'pri') : ''}</div>`;
+      <div class="h-ob-nav">${back}${b >= lines.length ? btn(`${api.demo() === 'fresh' ? 'Open my first brief' : 'Back to my brief'}${icon('arrow')}`, 'data-onboard="6"', 'pri') : ''}</div>`;
     if (b < lines.length && !ui.buildTimer) {
       ui.buildTimer = setTimeout(() => { ui.buildTimer = 0; ui.build += 1; draw(); }, 650);
     }
   }
-  return `<div class="h-ob"><div class="h-ob-top"><span class="h-mark">${MARK}<span>${esc(api.s.meta.product || 'Fathom')}</span></span></div>${rail}<div class="h-ob-card">${body}</div></div>`;
+  const who = api.identity?.();
+  const exit = api.demo() !== 'fresh' ? goA('brief', 'Back to the app', {}, 'h-ob-x') : (who ? `<span class="h-ob-id">Signed in as ${esc(who.name || who.login)}</span>` : '');
+  return `<div class="h-ob"><div class="h-ob-top"><span class="h-mark">${MARK}<span>${esc(api.s.meta.product || 'Fathom')}</span></span>${exit}</div>${rail}<div class="h-ob-card">${body}</div></div>`;
+}
+
+// The Tell us primary button: Continue with nothing typed, Save and read once there is text.
+function noteGo(dirty, busy) {
+  if (busy) return btn('Reading your note', 'data-ob-go="1" disabled aria-busy="true"', 'pri');
+  if (dirty) return btn(`Save and read${icon('arrow')}`, 'data-ob-go="1" data-savenote="1"', 'pri');
+  return btn(`Continue${icon('arrow')}`, 'data-ob-go="1" data-onboard="2"', 'pri');
+}
+
+// What the Tell us note added, as the server read it. Facts, goals and open questions come from the
+// stored rows of that file; with the engine off the note is saved and waits.
+function understoodHtml() {
+  const u = ui.understood;
+  if (!u) return '';
+  let head;
+  if (u.status === 'duplicate') head = 'You already saved this exact note.';
+  else if (u.waiting) head = u.engineOn ? 'Saved. It could not be read just now, and it waits in Confirm under Waiting files.' : 'Saved encrypted. The engine is off, so nothing was read from it yet. It is read when the engine is on.';
+  else if (!arr(u.facts).length && !arr(u.goals).length) head = 'Saved. Nothing in it matched a household fact, so nothing was recorded.';
+  else head = 'Saved. Here is what we understood.';
+  const facts = arr(u.facts).map((f) => `<li><span>${esc(f.label)}</span><b>${esc(f.value)}</b>${f.confirmed ? '' : '<em>to confirm</em>'}</li>`).join('');
+  const goals = arr(u.goals).map((g) => `<li><span>Goal</span><b>${esc(g.title)}</b>${g.when ? `<em>${esc(g.when)}</em>` : ''}</li>`).join('');
+  const asks = Number(u.asked) > 0 && api.demo() !== 'fresh' ? `<p class="h-mute sm">${plural(u.asked, 'question')} to answer. ${goA('confirm', 'Open Confirm')}</p>` : (Number(u.asked) > 0 ? `<p class="h-mute sm">${plural(u.asked, 'question')} to answer in Confirm.</p>` : '');
+  const eng = u.waiting && !u.engineOn && api.demo() !== 'fresh' ? `<p class="h-mute sm">${goA('engine', 'Engine settings')}</p>` : '';
+  return `<div class="h-ob-under" data-understood="1" aria-live="polite"><div class="h-sub-h">What we understood</div><p>${head}</p>${facts || goals ? `<ul class="h-ob-facts">${facts}${goals}</ul>` : ''}${asks}${eng}</div>`;
+}
+
+// "Here is what we heard": the stored household with provenance and an edit link per item, never
+// a value the store does not hold. Away from first-run demo onboarding the edit links go to the
+// Confirm card or Accounts; there (and for facts with no open question) they go back to Tell us.
+function heardHtml(back, next) {
+  const h = api.heard();
+  const canLeave = api.demo() !== 'fresh';
+  const edit = (e) => {
+    if (!e || e.route === 'onboarding' || !canLeave) return `<a href="${href('onboarding', { step: 1 })}" data-onboard="1">Correct in notes</a>`;
+    return goA(e.route, esc(e.label));
+  };
+  const sections = arr(h.sections).map((sec) => `<div class="h-heard" data-heard="${esc(sec.id)}"><div class="h-sub-h">${esc(sec.title)}</div><ul class="h-heard-l">${arr(sec.items).map((it) =>
+    `<li data-heard-item="${esc(it.id)}"><div class="h-heard-t"><span>${esc(it.label)}</span><b>${esc(it.value)}</b></div><div class="h-heard-p"><em>${esc(it.prov)}</em>${edit(it.edit)}</div></li>`).join('')}</ul></div>`).join('');
+  const empty = `<div class="h-empty"><div><b>Nothing stored yet</b><p>Tell us about the household in the previous step or add accounts, then come back to check it.</p></div></div>`;
+  const dl = Number(h.deadlines) > 0 ? `<div class="h-heard-dl"><b>${Number(h.deadlines)}</b><span>deadlines on your year for the next twelve months, from the plan</span></div>` : '';
+  const q = Number(h.pending) > 0
+    ? `<div class="h-heard-q" data-heard-open="1"><b>${Number(h.pending)}</b><span>${Number(h.pending) === 1 ? 'question is' : 'questions are'} still open. ${canLeave ? goA('confirm', 'Answer them in Confirm') : 'Answer them in Confirm once you are in the app.'}</span></div>` : '';
+  return `<h1>Here is what we heard</h1><p class="h-lede">Fix anything that is wrong before we build your year. Each line shows where it came from.</p>
+      ${h.empty ? empty : `<div class="h-heards">${sections}</div>`}${dl}${q}
+      <div class="h-ob-nav">${back}${next('Looks right')}</div>`;
 }
 
 /* ---------- draw and events ---------- */
@@ -1214,7 +1406,18 @@ function onClick(e) {
   if (cn && root.contains(cn)) { e.preventDefault(); connect.onClick(cn, connectH); return; }
   if (ingest.handleClick(e)) return;
   if (email.handleClick(e)) return;
-  const sel = '[data-go],[data-act],[data-askrec],[data-wg],[data-onboard],[data-inst],[data-allow],[data-modal],[data-whatif],[data-packtoggle],[data-more],[data-dlg]';
+  const gt = e.target.closest('[data-goal],[data-goal-h]');
+  if (gt && root.contains(gt)) {
+    e.preventDefault();
+    if (gt.dataset.goalH) {
+      if (ui.goalForm) ui.goalForm.draft.horizon = gt.dataset.goalH;
+      gt.parentElement.querySelectorAll('[data-goal-h]').forEach((b) => { const on = b === gt; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); });
+      return;
+    }
+    goalClick(gt);
+    return;
+  }
+  const sel = '[data-go],[data-act],[data-askrec],[data-wg],[data-onboard],[data-savenote],[data-inst],[data-allow],[data-modal],[data-whatif],[data-packtoggle],[data-more],[data-dlg]';
   let t = e.target.closest(`${sel},.fx-fig`);
   if (!t || !root.contains(t)) return;
   // A figure inside a button or link is part of its label: the control takes the click, and the
@@ -1237,7 +1440,14 @@ function onClick(e) {
   if (d.packtoggle) { api.packToggle(d.packtoggle); return; }
   if (d.wg && api.s.wargame?.[d.wg]?.status === 'unavailable') { e.preventDefault(); return; }
   if (d.wg) { e.preventDefault(); ui.pick[d.wg] = Number(d.i); api.scenarioPick(d.wg, Number(d.i)); draw(); return; }
-  if (d.onboard != null && d.onboard !== '') { e.preventDefault(); ui.modal = null; ui.build = 0; api.onboard(Number(d.onboard)); return; }
+  if (d.savenote != null) { e.preventDefault(); saveNote(); return; }
+  if (d.onboard != null && d.onboard !== '') {
+    e.preventDefault(); ui.modal = null; ui.build = 0;
+    // Finishing Setup for a returning owner has no first-run flip to the brief, so go there.
+    if (Number(d.onboard) === 6 && api.demo() !== 'fresh') { api.onboard(6).then(() => api.go('brief')); return; }
+    api.onboard(Number(d.onboard));
+    return;
+  }
   if (d.inst != null && d.inst !== '') { ui.modal = Number(d.inst); draw(); return; }
   if (d.allow != null && d.allow !== '') { ui.connected[Number(d.allow)] = true; ui.modal = null; draw(); return; }
   if (d.modal === 'close') { ui.modal = null; draw(); return; }
@@ -1252,6 +1462,21 @@ function onClick(e) {
   }
 }
 
+// Save the Tell us note through the server's ingest path and show what it understood. The draft
+// stays in the box while the save runs and a failure keeps it (core shows the error line).
+function saveNote() {
+  const text = String(ui.dumped ?? '').trim();
+  if (!text || ui.noteBusy) return;
+  ui.noteBusy = true;
+  ui.understood = null;
+  draw();
+  Promise.resolve(api.saveNotes(text)).then((r) => {
+    ui.noteBusy = false;
+    if (r && r.understood) { ui.understood = r.understood; ui.dumped = ''; }
+    draw();
+  });
+}
+
 function askRec(recId, i) {
   api.ask(String(i), recId);
 }
@@ -1260,13 +1485,7 @@ function onSubmit(e) {
   if (SCREENS.some((s) => s.onSubmit?.(e))) return;
   const f = e.target;
   if (f.dataset.connForm) { e.preventDefault(); connect.onSubmit(f, connectH); return; }
-  if (f.dataset.signin) {
-    e.preventDefault();
-    if (ui.signing) return;
-    ui.signing = true; draw();
-    setTimeout(() => { ui.signing = false; api.onboard(1); }, 700);
-    return;
-  }
+  if (f.dataset.goalform) { e.preventDefault(); saveGoal(); return; }
   if (f.dataset.free != null) {
     e.preventDefault();
     const key = f.dataset.free;
@@ -1282,8 +1501,16 @@ function onInput(e) {
   if (ingest.handleChange(e)) return;
   const t = e.target;
   if (t.dataset.connInput) { connect.onInput(t); return; }
+  if (t.dataset.gf && t.dataset.gf !== 'track' && t.dataset.gf !== 'acct') { goalInput(t); return; }
   if (t.dataset.draft) { ui.draft[t.dataset.draft] = t.value; return; }
-  if (t.dataset.dump) { ui.dumped = t.value; return; }
+  if (t.dataset.dump) {
+    const was = String(ui.dumped ?? '').trim() !== '';
+    ui.dumped = t.value;
+    // Swap the primary button in place (a redraw would drop the caret) when the draft becomes empty or not.
+    const go = root.querySelector('[data-ob-go]');
+    if (go && was !== (t.value.trim() !== '') && !ui.noteBusy) go.outerHTML = noteGo(t.value.trim() !== '', false);
+    return;
+  }
   if (t.dataset.curve) {
     ui.curve[t.dataset.curve] = Number(t.value) / 100;
     const box = t.closest('.h-curve');
@@ -1298,7 +1525,15 @@ function onInput(e) {
   }
 }
 
-const onChange = (e) => ingest?.handleChange(e);
+// Committed changes: a goal form select or checkbox, and a released curve or priority slider
+// (saved to the store, so both feed the planner and chat).
+function onChange(e) {
+  const t = e.target;
+  if (t?.dataset?.gf === 'track' || t?.dataset?.gf === 'acct') { goalInput(t); return; }
+  if (t?.dataset?.curve) { api.setCurve(t.dataset.curve, Number(t.value) / 100); return; }
+  if (t?.dataset?.prio) { api.setCurve(t.dataset.prio, Number(t.value) / 100); return; }
+  ingest?.handleChange(e);
+}
 
 function onToggle(e) {
   const k = e.target?.dataset?.det;
@@ -1340,7 +1575,8 @@ const KIT = {
   get api() { return api; }, get root() { return root; }, get ui() { return ui; }, get keys() { return keys; }, get ingest() { return ingest; },
   draw: () => draw(),
   esc, T, X, arr, plural, icon, btn, goA, href, shell, section, pageHead, thread, composer, figHtml, recById,
-  openRec, closeRec, decisionList, statusText, setMore, routeNow, visibleRecs
+  openRec, closeRec, decisionList, statusText, setMore, routeNow, visibleRecs,
+  newGoal: () => { if (routeNow().name !== 'goals') api.go('goals', {}); openGoalForm(null); }
 };
 SCREENS.forEach((s) => s.bind(KIT));
 

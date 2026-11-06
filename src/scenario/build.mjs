@@ -9,6 +9,8 @@ import { getSetting, cents, parseJson as parse } from '../store/db.mjs';
 import { resolveTokens } from '../shared/tokens.mjs';
 import { ingestState, applyFreshness } from '../ingest/freshness.mjs';
 import { buildYearend } from '../yearend/expected.mjs';
+import { CURVE_AXES, KNOWN_FIGURES, curvePosition, servesGoals } from '../shared/goals.mjs';
+import { deriveHeard } from '../onboarding/heard.mjs';
 import { withAdvisor, advisorSection } from '../advisor/index.mjs';
 
 const DAY = 86400000;
@@ -25,6 +27,8 @@ export const BUILTIN_SOURCES = Object.freeze({
   'spend-ledger': { label: 'Engine spend ledger, this month', kind: 'ledger' },
   settings: { label: 'Your engine settings', kind: 'settings' },
   plan: { label: 'Plan of record', kind: 'plan' },
+  'goal-target': { label: 'You typed this', kind: 'owner' },
+  'goal-track': { label: 'Sum of the accounts this goal tracks', kind: 'calc' },
 });
 
 // Narrative sections an empty store serves, so every CONTRACT key is present and valid.
@@ -50,7 +54,7 @@ const EMPTY = {
     dump: '',
     files: [],
     institutions: [],
-    heard: { people: [], entities: [], income: [], lifeEvents: [], deadlines: 0, questions: [] },
+    heard: { people: [], entities: [], income: [], lifeEvents: [], deadlines: 0, questions: [] }, // unused: the page reads live.heard, derived from stored facts
     priorities: [],
   },
   email: { subject: '', preheader: '', greeting: '', sections: [], footer: '' },
@@ -377,6 +381,72 @@ function deriveFigures(fig, { wargame, series, engine }, scope) {
   }
 }
 
+// ---------------------------------------------------------------- goals and the curve
+
+// Every goal row (archived included) as {...def, id, origin, archived, progress?}. Owner goals get
+// derived figures in `fig`: goal.<id>.target (the typed target, src 'goal-target', kind 't') and
+// goal.<id>.current (the tracked value: one account's or known figure's own figure, or the sum of
+// several tracked accounts, src 'goal-track'), and progress {cur, target} when both exist. A
+// tracked account with no stored balance, or a figure kept only for reference (unavailable), leaves
+// the goal with no current value, never a partial or stale sum.
+const currentFig = f => !!f && typeof f.v === 'number' && !f.unavailable;
+export function loadGoals(db, { fig = {}, accounts = [] } = {}) {
+  const rows = db.prepare('SELECT * FROM goals ORDER BY sort, created_at, id').all();
+  return rows.map(r => {
+    const def = parse(r.def, {});
+    const origin = r.origin === 'owner' ? 'owner' : 'seed';
+    const g = { ...def, id: r.id, origin, archived: !!r.archived_at };
+    if (origin !== 'owner') return g;
+    delete g.progress;
+    const tKey = `goal.${r.id}.target`;
+    const cKey = `goal.${r.id}.current`;
+    if (typeof def.target === 'number' && Number.isFinite(def.target)) {
+      fig[tKey] = { v: def.target, src: 'goal-target', kind: 't', label: 'Goal target' };
+    }
+    const tr = def.track;
+    let cur = null;
+    if (tr && typeof tr.figure === 'string' && currentFig(fig[tr.figure])) {
+      cur = tr.figure;
+      const known = KNOWN_FIGURES.find(k => k.key === tr.figure);
+      g.trackLabel = known ? known.label : tr.figure;
+    } else if (tr && Array.isArray(tr.accounts) && tr.accounts.length) {
+      const accts = tr.accounts.map(id => accounts.find(a => a.id === id)).filter(Boolean);
+      g.trackLabel = accts.map(a => a.name).join(', ');
+      const figs = accts.map(a => (a.fig_key && currentFig(fig[a.fig_key]) ? fig[a.fig_key] : null));
+      if (accts.length && accts.length === tr.accounts.length && figs.every(Boolean)) {
+        if (accts.length === 1) cur = accts[0].fig_key;
+        else {
+          fig[cKey] = {
+            v: cents(figs.reduce((s, f) => s + f.v, 0)), src: 'goal-track',
+            kind: figs.every(f => f.kind === 'a') ? 'a' : 'e', label: 'Goal progress: tracked accounts',
+          };
+          cur = cKey;
+        }
+      } else g.trackWaiting = true;
+    }
+    if (cur) g.current = cur;
+    if (cur && fig[tKey] && fig[tKey].v > 0) g.progress = { cur, target: tKey };
+    return g;
+  });
+}
+
+// The tradeoff curve: the content axes (the demo) or the default axes (a real store), each with
+// its position from settings 'curve.positions'.
+export function loadCurve(db, content) {
+  const positions = getSetting(db, 'curve.positions', null) || {};
+  const axes = Array.isArray(content.curve) && content.curve.length ? content.curve : CURVE_AXES;
+  return axes.map(a => ({ ...a, value: curvePosition(positions, a) }));
+}
+
+// Onboarding priorities: the content's (the demo) or one per curve axis, at the stored positions.
+function onboardingWithPriorities(onboarding, curve, positions) {
+  const ob = structuredClone(onboarding);
+  const list = Array.isArray(ob.priorities) && ob.priorities.length ? ob.priorities
+    : curve.map(c => ({ id: c.id, label: `${c.left} vs ${c.right}`, value: c.value }));
+  ob.priorities = list.map(p => ({ ...p, value: curvePosition(positions, p) }));
+  return ob;
+}
+
 // ---------------------------------------------------------------- build
 
 export function buildScenario(db, { clock, engineMode = null, packs: livePacks = null } = {}) {
@@ -420,6 +490,14 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
   const engineOn = getSetting(db, 'engine', { on: true });
   const ingest = ingestState(db, { clock: clk });
   const ingestAccounts = ingest.accounts || {};
+  const accountRows = db.prepare('SELECT * FROM accounts ORDER BY sort, id').all();
+  const goals = loadGoals(db, { fig, accounts: accountRows });
+  const curve = loadCurve(db, content);
+  const positions = getSetting(db, 'curve.positions', null) || {};
+  for (const r of recs) {
+    const serves = servesGoals(r, goals, accountRows);
+    if (serves.length) r.serves = serves;
+  }
 
   return {
     meta: {
@@ -445,12 +523,12 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
       return out;
     }),
     recs,
-    goals: db.prepare('SELECT def FROM goals ORDER BY sort, id').all().map(g => parse(g.def, {})),
-    curve: section(content, 'curve'),
+    goals,
+    curve,
     wargame,
     decisions,
     ask: section(content, 'ask'),
-    accounts: db.prepare('SELECT * FROM accounts ORDER BY sort, id').all().map(a => {
+    accounts: accountRows.map(a => {
       const f = Object.hasOwn(ingestAccounts, a.id) ? ingestAccounts[a.id] : {};
       return {
         id: a.id, inst: a.inst, name: a.name, owner: a.owner, kind: a.kind, fig: a.fig_key, mirror: a.mirror, note: a.note || '', mask: a.mask,
@@ -463,7 +541,7 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
     yearend: buildYearend(db, { clock: clk, recs, decisions, plain: s => resolveTokens({ names, law, pct, fig }, s, false) }),
     connect: section(content, 'connect'),
     engine,
-    onboarding: section(content, 'onboarding'),
+    onboarding: onboardingWithPriorities(section(content, 'onboarding'), curve, positions),
     email: section(content, 'email'),
     packs: packs.map(p => p.def),
     live: {
@@ -479,6 +557,7 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
       yourPlans: loadYourPlans(db),
       clock: clk,
       ingest,
+      heard: deriveHeard(db, { clock: clk }),
     },
   };
 }

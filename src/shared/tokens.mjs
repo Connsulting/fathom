@@ -13,6 +13,7 @@ export const KIND_WORDS = Object.freeze({
   p: 'Projected from the plan',
   e: 'Estimate',
   m: 'Model output',
+  t: 'A target you set',
 });
 
 export const esc = v => String(v == null ? '' : v)

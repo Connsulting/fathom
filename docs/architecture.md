@@ -415,6 +415,7 @@ live = {
   packs: { <id>: { active: boolean | null, exploring: boolean, whatIfDone: boolean } },
   yourPlans: { sources: [ { fileId, name, docType } ], files: [ { id, name } ], built: settings.yourPlans | null },
   clock: 'YYYY-MM-DD',
+  heard: { sections: [ { id, title, items: [ heard item ] } ], deadlines: int, pending: int, empty: boolean },  // see Onboarding below
   ingest: {
     pending: int,                       // pending confirm items
     items: [ confirm item ],            // pending items, shape below, plus fileName (string or null) and
@@ -480,6 +481,51 @@ payments tracking this year?" (any tax payment), `scorp` "How is the S corp doin
 that already holds data is a returning owner and lands in the app, not first-run onboarding. Demo
 stores follow onboarding alone.
 
+### Onboarding
+
+Onboarding is six steps (Sign in, Tell us, Accounts, Confirm, Priorities, First brief). Nothing in
+it is fake or hand-written any more except the Accounts (connections) and Priorities steps, which
+other items own.
+
+Sign in. There is no passkey and no form. Identity is the owner gate (Owner identity above). The
+demo build, which has no gate, shows step 0 as a line: "Signed in through your private network"
+with the identity `GET /api/identity` reports, or "Reached through your private network" with a
+note that the demo signs no one in. A real store skips step 0 (the first step is 1) and shows the
+signed-in name in the page header; More shows it too.
+
+Tell us. The text is saved by `POST /api/onboarding/notes` (`src/api/onboarding-handlers.mjs`) as a
+file named `Setup notes <date>.md` (type `text/markdown`) through `ingestFile`, exactly the path of
+an uploaded notes file: the bytes are stored encrypted in the vault, the notes parser writes the
+`notes` document row (a reference, never the text), and with the engine on `extractDocument` reads
+the redacted text, writes facts with provenance (`file_id`, parser `extract-notes`, locator) and
+goal documents, and asks a `fact_check` Confirm card for a fact below the confidence floor. With
+the engine off only the parser's deterministic path runs: the note is stored and the file waits
+with status `needs_extraction` (retried from Confirm, Waiting files, once the engine is on);
+nothing is extracted and nothing is invented. The same text saved twice is a `duplicate`. A
+successful import triggers the plan and confirm-guess jobs, like an upload. The response carries
+`understood` from `understoodOf` (`src/onboarding/heard.mjs`):
+`{fileId, status, engineOn, waiting, facts: [{key, label, value, confirmed}], goals: [{title, when}], asked}`,
+the stored rows that file wrote and the open questions it raised; the page shows it after the
+save. A returning owner reaches the same step again as Setup in More (real stores only): the route
+`#/onboarding` is allowed on a real store after first run, lands on step 1, shows Back to the app,
+and finishing returns to the brief.
+
+Confirm ("Here is what we heard"). `live.heard` is `deriveHeard(db, {clock})`: stored facts (filing
+status, state, dependents and ages, expecting a child, income types, benefits, giving), entities
+(the P&L entities) and accounts counted by kind, plus the count of deadlines in
+the next twelve months and of open Confirm questions. A heard item is
+`{id, key?, label, value, prov, confirmed, asked, edit: {route, step?, label}}`. `prov` names the
+file the value came from (`From <file name>`), the planner, or the owner's own answer ("confirmed by
+you"). `edit` is the Confirm deck when a question about that item is open, Accounts for accounts
+and entities, and Tell us ("Correct in notes") otherwise, because a corrected note supersedes an
+unconfirmed fact and raises a check against a confirmed one. A value of the wrong type is not
+shown. `onboarding.heard` in the content table is no longer read. File-sourced text (file, entity
+and account names) is rendered escaped, never as tokens or markup.
+
+Seams. The Accounts step (item 22) and the Priorities step (item 20) are unchanged `else if (s === 2)`
+and `(s === 4)` branches of `pOnboarding` in `web/horizon/design.js`; the Confirm step is
+`heardHtml`, the Tell us panel `understoodHtml`.
+
 ## API
 
 All JSON. On a real store every path except `/healthz` and `/mcp` first passes the owner identity
@@ -516,7 +562,13 @@ response is `{scenario, ...}` with the fresh scenario.
 | `POST /api/threads/:id/restore` | `{}` | `{scenario, thread}`. Clears `trashedAt` when trashed, else `archivedAt`. |
 | `POST /api/threads/:id/delete` | `{}` | `{scenario}`. Deletes the thread and its messages forever; 409 unless it is in Trash. |
 | `POST /api/your-plans/build` | `{fileIds?: string[]}` (at most 50) | `{scenario, result: {written, entries, sources, warnings, dropped}}`. Builds the Your plans pack (`dropped` counts the extracted sections that did not match their document); 400 for a bad body; 409 while the engine is off, over the cap, or when the data directory is inside the repository. |
+| `POST /api/goals` | `{title, note?, horizon?, target?, targetDate?, track?}` | `{scenario, goal}`. Creates an owner goal (`origin` owner). `title` 1 to 120 characters, no line breaks; `note` at most 500; `horizon` now, 1-3y or 3-10y (default now); `target` a non-negative number or null; `targetDate` a valid YYYY-MM-DD or null; `track` null, `{accounts: [account ids]}` (at most 20, known ids) or `{figure: key}` (a known figure the store holds). Anything else 400. |
+| `POST /api/goals/:id` | any subset of the create fields | `{scenario, goal}`. Edits an owner goal; 409 for a seed (demo) goal, 404 unknown. |
+| `POST /api/goals/:id/archive` | `{archived?: boolean}` (default true) | `{scenario, goal}`. Archives or restores a goal. |
+| `POST /api/goals/:id/delete` | `{}` | `{scenario}`. Deletes a goal for good. |
+| `POST /api/curve` | `{id, value}` or `{positions: {id: value}}` | `{scenario}`. Stores tradeoff curve positions (0 to 1, rounded to hundredths) in `settings` `curve.positions`; 400 for an unknown axis or a value out of range. The onboarding Priorities step saves through this route too. |
 | `POST /api/onboarding` | `{step}` | `{scenario}`. 0 to 5 set the step, 6 completes onboarding; anything else 400. |
+| `POST /api/onboarding/notes` | `{text}` | `{scenario, file, understood}`. Saves the Tell us note as a notes document through the ingest pipeline (see Onboarding below). 400 for a missing, empty or control-character text, 413 over 30000 bytes, 409 without a data key on a real store, 422 when the note could not be stored. The text never appears in an error, a log or the database. |
 | `POST /api/demo/reset` | `{}` | `{scenario}`. Rebuilds the demo store and removes stored uploads (`$FATHOM_DATA/files/*.bin`); 404 unless the store is a demo store. Clears `api_keys`; the server secret file survives. |
 | `GET /api/keys` | | `{keys: [{id, name, scopes, createdAt, lastUsedAt, revokedAt}]}` ordered by creation; never a key or hash. |
 | `POST /api/keys` | `{name, scopes?: ('read' or 'write:recs')[]}` | `{key, record, keys}`. The only time the key is shown. Name trimmed, 1 to 80 characters, no control characters; scopes always include `read`; else 400. |
@@ -1597,3 +1649,32 @@ engine, handed to it as `ctx.engine`) and "Facts helper and pack state".
 2. Packs: `refreshPackState(db, {packDirs})` inside the planner's write transaction, then the
    planner sets each `packs_state.def.recIds` to the ids of the recs whose `pack_id` is the pack,
    sorted, since `refreshPackState` keeps `recIds` as stored.
+
+## Goals and the tradeoff curve
+
+Goals live in the `goals` table: `def` JSON, `sort`, `origin` (`seed` for the demo seed, whose text
+carries scenario tokens; `owner` for goals the owner typed, stored as typed and always rendered
+escaped, never token-resolved), `archived_at`, `created_at` and `updated_at` (migration 012). An
+owner goal def is `{id, title, note, horizon, target, targetDate, track}`; `src/shared/goals.mjs`
+validates it and is shared with the browser.
+
+The scenario builder derives each owner goal's figures: `goal.<id>.target` is the typed target
+(source `goal-target`, labelled "You typed this", kind `t`, "A target you set"), and the current value is the tracked account's or
+known figure's own stored figure, or for several accounts `goal.<id>.current`, their sum (source
+`goal-track`). A tracked account with no stored balance, or a figure kept only for reference
+(unavailable), gives no current value, never a partial or stale
+sum. `progress {cur, target}` is set only when both exist; the Goals screen draws a bar only then.
+
+Tradeoff curve positions are `settings` `curve.positions` (`{axisId: 0..1}`). The axes are the
+content `curve` (the demo) or the four default axes in `src/shared/goals.mjs` (a real store). The
+onboarding Priorities step shows the same axes and saves to the same setting.
+
+Goals and positions feed the planner and chat. `servesGoals` matches a rec to open goals by topic
+(retirement, education, cash, tax, giving, health, home) from the goal's words, kind and tracked
+sources and the rec's domain, value classes and id; the scenario sets `rec.serves` and the rec
+shows "Serves: <goal>". The planner ranks recs that tie on window close by whether they serve a
+goal, then by the owner's curve lean. `household_summary` and `list_goals` give the model the open
+goals (title, horizon, typed target with source `you`, tracked current value) and each curve's lean.
+In an Ask thread the answerer also offers `propose_goal`; its last successful call becomes
+`provenance.goalProposal`, a target survives only when the owner's own message states it, and the
+chat card saves it through `POST /api/goals` when the owner taps Save. Chat never writes.

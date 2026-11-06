@@ -205,7 +205,8 @@ function normalizeRoute(r) {
     const step = r.name === 'onboarding' && p.step != null && p.step !== '' ? clampStep(Number(p.step)) : stateView().onboardStep;
     return { name: 'onboarding', params: { step } };
   }
-  if (r.name === 'onboarding') return defaultRoute();
+  // A real store past first run reaches onboarding as Setup, landing on Tell us.
+  if (r.name === 'onboarding') return isReal() ? { name: 'onboarding', params: { step: p.step != null && p.step !== '' ? clampStep(Number(p.step)) : 1 } } : defaultRoute();
   if (r.name === 'rec') return p.id && rawRec(String(p.id)) ? { name: 'rec', params: { id: String(p.id) } } : { name: 'plan', params: {} };
   if (r.name === 'ask') return p.id && rawThread(String(p.id)) ? { name: 'ask', params: { id: String(p.id) } } : { name: 'ask', params: {} };
   if (r.name === 'packs') return p.id && rawPack(String(p.id)) ? { name: 'packs', params: { id: String(p.id) } } : { name: 'packs', params: {} };
@@ -698,6 +699,51 @@ function onboard(step) {
   return send('/api/onboarding', { step: s });
 }
 
+// ---------------------------------------------------------------- goals and the curve
+
+// Resolve with the saved goal (or true for a delete), or null on failure (error line shown).
+function goalCreate(fields) {
+  if (!fields || typeof fields !== 'object') return done();
+  return send('/api/goals', fields, d => d.goal || null, null, 'Could not save that goal. ');
+}
+
+function goalUpdate(id, fields) {
+  if (id == null || id === '' || !fields || typeof fields !== 'object') return done();
+  return send('/api/goals/' + encodeURIComponent(id), fields, d => d.goal || null, null, 'Could not save that goal. ');
+}
+
+function goalArchive(id, archived) {
+  if (id == null || id === '') return done();
+  return send('/api/goals/' + encodeURIComponent(id) + '/archive', { archived: archived !== false }, d => d.goal || null);
+}
+
+function goalDelete(id) {
+  if (id == null || id === '') return done();
+  return send('/api/goals/' + encodeURIComponent(id) + '/delete', {}, () => true);
+}
+
+// A tradeoff curve or onboarding priority position, 0 to 1.
+function setCurve(id, value) {
+  const v = Number(value);
+  if (id == null || id === '' || !Number.isFinite(v) || v < 0 || v > 1) return done();
+  return send('/api/curve', { id: String(id), value: Math.round(v * 100) / 100 });
+}
+
+// Saves the Tell us note through the ingest pipeline. Resolves { understood, file } (what the
+// note added: facts, goals, open questions; waiting when the engine is off), or null on failure.
+function saveNotes(text) {
+  const clean = String(text == null ? '' : text).trim();
+  if (!clean) return done();
+  return send('/api/onboarding/notes', { text: clean }, d => (d.understood && typeof d.understood === 'object' ? { understood: d.understood, file: d.file || null } : null), null, 'Could not save your note. ');
+}
+
+// What the store holds about the household, for the "what we heard" step: { sections, deadlines,
+// pending, empty }. Derived on the server from stored facts and accounts, with provenance.
+function heard() {
+  const h = live().heard;
+  return h && typeof h === 'object' ? h : { sections: [], deadlines: 0, pending: 0, empty: true };
+}
+
 function setEngine(v) {
   return send('/api/engine', { on: !!v });
 }
@@ -895,6 +941,13 @@ const api = {
   renameThread,
   scenarioPick,
   onboard,
+  goalCreate,
+  goalUpdate,
+  goalArchive,
+  goalDelete,
+  setCurve,
+  saveNotes,
+  heard,
   engineOn: () => !!live().engine,
   setEngine,
   setCap,

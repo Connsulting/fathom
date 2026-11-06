@@ -21,6 +21,8 @@ import { isAllowedHost } from '../mcp/guard.mjs';
 import * as ih from './ingest-handlers.mjs';
 import * as eh from './email-handlers.mjs';
 import * as yh from './yearend-handlers.mjs';
+import * as gh from './goals.mjs';
+import * as oh from './onboarding-handlers.mjs';
 import * as ah from './advisor-handlers.mjs';
 import { loadOwnerLogins, identityOf, sendUnauthorized } from './identity.mjs';
 import { getSetting } from '../store/db.mjs';
@@ -46,7 +48,13 @@ const TABLE = [
   { method: 'POST', path: '/api/threads/:id/trash', handler: h.threadTrash },
   { method: 'POST', path: '/api/threads/:id/restore', handler: h.threadRestore },
   { method: 'POST', path: '/api/threads/:id/delete', handler: h.threadDelete },
+  { method: 'POST', path: '/api/goals', handler: gh.goalCreate },
+  { method: 'POST', path: '/api/goals/:id', handler: gh.goalUpdate },
+  { method: 'POST', path: '/api/goals/:id/archive', handler: gh.goalArchive },
+  { method: 'POST', path: '/api/goals/:id/delete', handler: gh.goalDelete },
+  { method: 'POST', path: '/api/curve', handler: gh.curveSet },
   { method: 'POST', path: '/api/onboarding', handler: h.onboarding },
+  { method: 'POST', path: '/api/onboarding/notes', handler: oh.saveNotes, ingest: true },
   { method: 'POST', path: '/api/demo/reset', handler: h.demoReset },
   { method: 'GET', path: '/api/keys', handler: k.listKeys },
   { method: 'POST', path: '/api/keys', handler: k.createKey },
