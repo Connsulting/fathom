@@ -54,8 +54,8 @@ let connectOn = false;
 
 const freshUi = () => ({
   curve: {}, prio: {}, connected: {}, modal: null,
-  packet: false, pick: { salary: null, deferral: null }, signing: false, build: 0,
-  buildTimer: 0, draft: {}, dumped: null,
+  packet: false, pick: { salary: null, deferral: null }, build: 0,
+  buildTimer: 0, draft: {}, dumped: null, noteBusy: false, understood: null,
   more: false, under: null, inApp: false, closing: false, ret: null, y: 0, msgN: {}, det: {}
 });
 
@@ -398,7 +398,9 @@ function shell(inner, active) {
   const rest = NAV.filter(([k]) => !TAB_ICON[k]);
   const moreOn = MORE.some((g) => g[1].some((i) => i[0] === active)) || rest.some(([k]) => k === active);
   const screens = rest.length ? `<div class="h-more-g h-more-phone"><div class="h-more-h">Screens</div>${rest.map(([k, l]) => link(k, l)).join('')}</div>` : '';
-  const groups = screens + MORE.map(([title, items]) => `<div class="h-more-g"><div class="h-more-h">${title}</div>${items.map(([k, l]) => link(k, l)).join('')}</div>`).join('');
+  // A real store reaches onboarding again as Setup, to add more context.
+  const setup = api.s?.live?.mode === 'real' ? [['onboarding', 'Setup']] : [];
+  const groups = screens + MORE.map(([title, items]) => `<div class="h-more-g"><div class="h-more-h">${title}</div>${(title === 'System' ? [...items, ...setup] : items).map(([k, l]) => link(k, l)).join('')}</div>`).join('');
   const more = `<div class="h-more-wrap"><button type="button" class="h-more-btn${moreOn ? ' on' : ''}" data-more="toggle" aria-expanded="${ui.more}" aria-controls="h-more-p">More${icon('chev')}</button>
     <div class="h-more-p" id="h-more-p" aria-label="More"${ui.more ? '' : ' hidden'}>${whoLine()}${groups}</div></div>`;
   const off = api.engineOn() ? '' : `<div class="h-engine-off">${icon('clock')}Engine off. Proactive jobs are paused. ${goA('engine', 'Engine settings')}</div>`;
@@ -966,15 +968,22 @@ function pOnboarding(step) {
   const back = s > first ? btn('Back', `data-onboard="${s - 1}"`, 'ghost') : '';
   let body = '';
   if (s === 0) {
+    const who = api.identity?.();
+    const line = who
+      ? `<b>Signed in through your private network</b><span>${esc(who.name || who.login)}${who.login && who.login !== who.name ? ` (${esc(who.login)})` : ''}</span>`
+      : '<b>Reached through your private network</b><span>This demo does not sign anyone in, and no account is created.</span>';
     body = `<div class="h-ob-hero">${MARK}<h1>${T(ob.welcome?.headline)}</h1><p class="h-lede">${T(ob.welcome?.sub)}</p></div>
-      <form class="h-ob-sign" data-signin="1"><label>Email<input type="email" placeholder="you@example.com" autocomplete="off"></label>
-      <button type="submit" class="h-btn pri wide">${ui.signing ? 'Checking passkey' : `Continue with passkey${icon('arrow')}`}</button></form>
-      <p class="h-mute sm center">Demo sign-in. No account is created.</p>`;
+      <div class="h-ob-who" data-ob-who="1">${icon('lock')}<div>${line}</div></div>
+      <div class="h-ob-nav">${next()}</div>`;
   } else if (s === 1) {
-    body = `<h1>Dump everything in</h1><p class="h-lede">Write it the way you would tell a friend: who is in the house, how money comes in, what is coming up, what worries you. Attach whatever you have.</p>
-      <textarea class="h-dump" rows="9" data-dump="1">${X(ui.dumped ?? ob.dump)}</textarea>
+    const draft = String(ui.dumped ?? '');
+    const dirty = draft.trim() !== '';
+    const go = noteGo(dirty, ui.noteBusy);
+    body = `<h1>Dump everything in</h1><p class="h-lede">Write it the way you would tell a friend: who is in the house, how money comes in, what is coming up, what worries you. It is stored encrypted and read the way an uploaded notes file is. Attach whatever you have.</p>
+      <textarea class="h-dump" rows="9" data-dump="1" aria-label="Tell us about your household" placeholder="For example: we file jointly in Virginia, I run an S corporation, my spouse freelances, we have two kids and a third on the way.">${esc(draft)}</textarea>
+      ${understoodHtml()}
       ${ingest.addFiles('onboarding')}
-      <div class="h-ob-nav">${back}${next()}</div>`;
+      <div class="h-ob-nav">${back}${go}</div>`;
   } else if (s === 2) {
     const insts = arr(ob.institutions);
     const n = insts.filter((x, i) => ui.connected[i]).length;
@@ -990,13 +999,7 @@ function pOnboarding(step) {
         <div class="h-ob-nav">${btn('Cancel', 'data-modal="close"', 'ghost')}${btn('Allow read-only', `data-allow="${ui.modal}"`, 'pri')}</div></div></div>`;
     }
   } else if (s === 3) {
-    const h = ob.heard || {};
-    const list = (t, a) => arr(a).length ? `<div class="h-heard"><div class="h-sub-h">${t}</div><ul>${arr(a).map((x) => `<li>${T(typeof x === 'string' ? x : (x.name || x.label || x.t || ''))}</li>`).join('')}</ul></div>` : '';
-    body = `<h1>Here is what we heard</h1><p class="h-lede">Fix anything that is wrong before we build your year.</p>
-      <div class="h-heards">${list('People', h.people)}${list('Entities', h.entities)}${list('Income', h.income)}${list('Life events', h.lifeEvents)}</div>
-      <div class="h-heard-dl"><b>${h.deadlines ?? 0}</b><span>deadlines found for the next twelve months</span></div>
-      ${list('Questions we still have', h.questions)}
-      <div class="h-ob-nav">${back}${next('Looks right')}</div>`;
+    body = heardHtml(back, next);
   } else if (s === 4) {
     body = `<h1>Where on the curve</h1><p class="h-lede">Every choice trades one good thing for another. Tell us how much each matters. You can change this any time.</p>
       <div class="h-prios">${arr(ob.priorities).map((p) => {
@@ -1009,10 +1012,10 @@ function pOnboarding(step) {
       }).join('')}</div>
       <div class="h-ob-nav">${back}${next('Build my year')}</div>`;
   } else {
-    const h = ob.heard || {};
+    const h = api.heard();
     const lines = [
-      `Reading ${plural(arr(ob.institutions).reduce((n, x) => n + (Number(x.accounts) || 1), 0), 'account')}`,
-      `Placing ${plural(h.deadlines ?? arr(api.s.deadlines).length, 'deadline')} on your year`,
+      `Reading ${plural(arr(api.s.accounts).length, 'account')}`,
+      `Placing ${plural(h.deadlines ?? 0, 'deadline')} on your year`,
       `Checking ${plural(arr(api.s.domains).length, 'area')} for gaps`,
       'Drafting your first brief'
     ];
@@ -1021,12 +1024,59 @@ function pOnboarding(step) {
       <div class="h-build"><svg viewBox="0 0 600 40" preserveAspectRatio="none" aria-hidden="true"><line class="bg" x1="0" x2="600" y1="20" y2="20"/><line class="fg" x1="0" x2="${(b / lines.length) * 600}" y1="20" y2="20"/>
       ${MON.map((m, i) => `<line class="tk" x1="${i * 50 + 25}" x2="${i * 50 + 25}" y1="14" y2="26"/><text x="${i * 50 + 25}" y="40" text-anchor="middle">${m}</text>`).join('')}</svg></div>
       <ul class="h-build-l">${lines.map((l, i) => `<li class="${i < b ? 'done' : i === b ? 'cur' : ''}"><i>${i < b ? icon('check') : ''}</i>${l}</li>`).join('')}</ul>
-      <div class="h-ob-nav">${back}${b >= lines.length ? btn(`Open my first brief${icon('arrow')}`, 'data-onboard="6"', 'pri') : ''}</div>`;
+      <div class="h-ob-nav">${back}${b >= lines.length ? btn(`${api.demo() === 'fresh' ? 'Open my first brief' : 'Back to my brief'}${icon('arrow')}`, 'data-onboard="6"', 'pri') : ''}</div>`;
     if (b < lines.length && !ui.buildTimer) {
       ui.buildTimer = setTimeout(() => { ui.buildTimer = 0; ui.build += 1; draw(); }, 650);
     }
   }
-  return `<div class="h-ob"><div class="h-ob-top"><span class="h-mark">${MARK}<span>${esc(api.s.meta.product || 'Fathom')}</span></span></div>${rail}<div class="h-ob-card">${body}</div></div>`;
+  const who = api.identity?.();
+  const exit = api.demo() !== 'fresh' ? goA('brief', 'Back to the app', {}, 'h-ob-x') : (who ? `<span class="h-ob-id">Signed in as ${esc(who.name || who.login)}</span>` : '');
+  return `<div class="h-ob"><div class="h-ob-top"><span class="h-mark">${MARK}<span>${esc(api.s.meta.product || 'Fathom')}</span></span>${exit}</div>${rail}<div class="h-ob-card">${body}</div></div>`;
+}
+
+// The Tell us primary button: Continue with nothing typed, Save and read once there is text.
+function noteGo(dirty, busy) {
+  if (busy) return btn('Reading your note', 'data-ob-go="1" disabled aria-busy="true"', 'pri');
+  if (dirty) return btn(`Save and read${icon('arrow')}`, 'data-ob-go="1" data-savenote="1"', 'pri');
+  return btn(`Continue${icon('arrow')}`, 'data-ob-go="1" data-onboard="2"', 'pri');
+}
+
+// What the Tell us note added, as the server read it. Facts, goals and open questions come from the
+// stored rows of that file; with the engine off the note is saved and waits.
+function understoodHtml() {
+  const u = ui.understood;
+  if (!u) return '';
+  let head;
+  if (u.status === 'duplicate') head = 'You already saved this exact note.';
+  else if (u.waiting) head = u.engineOn ? 'Saved. It could not be read just now, and it waits in Confirm under Waiting files.' : 'Saved encrypted. The engine is off, so nothing was read from it yet. It is read when the engine is on.';
+  else if (!arr(u.facts).length && !arr(u.goals).length) head = 'Saved. Nothing in it matched a household fact, so nothing was recorded.';
+  else head = 'Saved. Here is what we understood.';
+  const facts = arr(u.facts).map((f) => `<li><span>${esc(f.label)}</span><b>${esc(f.value)}</b>${f.confirmed ? '' : '<em>to confirm</em>'}</li>`).join('');
+  const goals = arr(u.goals).map((g) => `<li><span>Goal</span><b>${esc(g.title)}</b>${g.when ? `<em>${esc(g.when)}</em>` : ''}</li>`).join('');
+  const asks = Number(u.asked) > 0 && api.demo() !== 'fresh' ? `<p class="h-mute sm">${plural(u.asked, 'question')} to answer. ${goA('confirm', 'Open Confirm')}</p>` : (Number(u.asked) > 0 ? `<p class="h-mute sm">${plural(u.asked, 'question')} to answer in Confirm.</p>` : '');
+  const eng = u.waiting && !u.engineOn && api.demo() !== 'fresh' ? `<p class="h-mute sm">${goA('engine', 'Engine settings')}</p>` : '';
+  return `<div class="h-ob-under" data-understood="1" aria-live="polite"><div class="h-sub-h">What we understood</div><p>${head}</p>${facts || goals ? `<ul class="h-ob-facts">${facts}${goals}</ul>` : ''}${asks}${eng}</div>`;
+}
+
+// "Here is what we heard": the stored household with provenance and an edit link per item, never
+// a value the store does not hold. Away from first-run demo onboarding the edit links go to the
+// Confirm card or Accounts; there (and for facts with no open question) they go back to Tell us.
+function heardHtml(back, next) {
+  const h = api.heard();
+  const canLeave = api.demo() !== 'fresh';
+  const edit = (e) => {
+    if (!e || e.route === 'onboarding' || !canLeave) return `<a href="${href('onboarding', { step: 1 })}" data-onboard="1">Correct in notes</a>`;
+    return goA(e.route, esc(e.label));
+  };
+  const sections = arr(h.sections).map((sec) => `<div class="h-heard" data-heard="${esc(sec.id)}"><div class="h-sub-h">${esc(sec.title)}</div><ul class="h-heard-l">${arr(sec.items).map((it) =>
+    `<li data-heard-item="${esc(it.id)}"><div class="h-heard-t"><span>${esc(it.label)}</span><b>${esc(it.value)}</b></div><div class="h-heard-p"><em>${esc(it.prov)}</em>${edit(it.edit)}</div></li>`).join('')}</ul></div>`).join('');
+  const empty = `<div class="h-empty"><div><b>Nothing stored yet</b><p>Tell us about the household in the previous step or add accounts, then come back to check it.</p></div></div>`;
+  const dl = Number(h.deadlines) > 0 ? `<div class="h-heard-dl"><b>${Number(h.deadlines)}</b><span>deadlines on your year for the next twelve months, from the plan</span></div>` : '';
+  const q = Number(h.pending) > 0
+    ? `<div class="h-heard-q" data-heard-open="1"><b>${Number(h.pending)}</b><span>${Number(h.pending) === 1 ? 'question is' : 'questions are'} still open. ${canLeave ? goA('confirm', 'Answer them in Confirm') : 'Answer them in Confirm once you are in the app.'}</span></div>` : '';
+  return `<h1>Here is what we heard</h1><p class="h-lede">Fix anything that is wrong before we build your year. Each line shows where it came from.</p>
+      ${h.empty ? empty : `<div class="h-heards">${sections}</div>`}${dl}${q}
+      <div class="h-ob-nav">${back}${next('Looks right')}</div>`;
 }
 
 /* ---------- draw and events ---------- */
@@ -1240,7 +1290,7 @@ function onClick(e) {
   if (cn && root.contains(cn)) { e.preventDefault(); connect.onClick(cn, connectH); return; }
   if (ingest.handleClick(e)) return;
   if (email.handleClick(e)) return;
-  const sel = '[data-go],[data-act],[data-askrec],[data-wg],[data-onboard],[data-inst],[data-allow],[data-modal],[data-packet],[data-whatif],[data-packtoggle],[data-more],[data-dlg]';
+  const sel = '[data-go],[data-act],[data-askrec],[data-wg],[data-onboard],[data-savenote],[data-inst],[data-allow],[data-modal],[data-packet],[data-whatif],[data-packtoggle],[data-more],[data-dlg]';
   let t = e.target.closest(`${sel},.fx-fig`);
   if (!t || !root.contains(t)) return;
   // A figure inside a button or link is part of its label: the control takes the click, and the
@@ -1263,7 +1313,14 @@ function onClick(e) {
   if (d.packtoggle) { api.packToggle(d.packtoggle); return; }
   if (d.wg && api.s.wargame?.[d.wg]?.status === 'unavailable') { e.preventDefault(); return; }
   if (d.wg) { e.preventDefault(); ui.pick[d.wg] = Number(d.i); api.scenarioPick(d.wg, Number(d.i)); draw(); return; }
-  if (d.onboard != null && d.onboard !== '') { e.preventDefault(); ui.modal = null; ui.build = 0; api.onboard(Number(d.onboard)); return; }
+  if (d.savenote != null) { e.preventDefault(); saveNote(); return; }
+  if (d.onboard != null && d.onboard !== '') {
+    e.preventDefault(); ui.modal = null; ui.build = 0;
+    // Finishing Setup for a returning owner has no first-run flip to the brief, so go there.
+    if (Number(d.onboard) === 6 && api.demo() !== 'fresh') { api.onboard(6).then(() => api.go('brief')); return; }
+    api.onboard(Number(d.onboard));
+    return;
+  }
   if (d.inst != null && d.inst !== '') { ui.modal = Number(d.inst); draw(); return; }
   if (d.allow != null && d.allow !== '') { ui.connected[Number(d.allow)] = true; ui.modal = null; draw(); return; }
   if (d.modal === 'close') { ui.modal = null; draw(); return; }
@@ -1279,6 +1336,21 @@ function onClick(e) {
   }
 }
 
+// Save the Tell us note through the server's ingest path and show what it understood. The draft
+// stays in the box while the save runs and a failure keeps it (core shows the error line).
+function saveNote() {
+  const text = String(ui.dumped ?? '').trim();
+  if (!text || ui.noteBusy) return;
+  ui.noteBusy = true;
+  ui.understood = null;
+  draw();
+  Promise.resolve(api.saveNotes(text)).then((r) => {
+    ui.noteBusy = false;
+    if (r && r.understood) { ui.understood = r.understood; ui.dumped = ''; }
+    draw();
+  });
+}
+
 function askRec(recId, i) {
   api.ask(String(i), recId);
 }
@@ -1287,13 +1359,6 @@ function onSubmit(e) {
   if (SCREENS.some((s) => s.onSubmit?.(e))) return;
   const f = e.target;
   if (f.dataset.connForm) { e.preventDefault(); connect.onSubmit(f, connectH); return; }
-  if (f.dataset.signin) {
-    e.preventDefault();
-    if (ui.signing) return;
-    ui.signing = true; draw();
-    setTimeout(() => { ui.signing = false; api.onboard(1); }, 700);
-    return;
-  }
   if (f.dataset.free != null) {
     e.preventDefault();
     const key = f.dataset.free;
@@ -1310,7 +1375,14 @@ function onInput(e) {
   const t = e.target;
   if (t.dataset.connInput) { connect.onInput(t); return; }
   if (t.dataset.draft) { ui.draft[t.dataset.draft] = t.value; return; }
-  if (t.dataset.dump) { ui.dumped = t.value; return; }
+  if (t.dataset.dump) {
+    const was = String(ui.dumped ?? '').trim() !== '';
+    ui.dumped = t.value;
+    // Swap the primary button in place (a redraw would drop the caret) when the draft becomes empty or not.
+    const go = root.querySelector('[data-ob-go]');
+    if (go && was !== (t.value.trim() !== '') && !ui.noteBusy) go.outerHTML = noteGo(t.value.trim() !== '', false);
+    return;
+  }
   if (t.dataset.curve) {
     ui.curve[t.dataset.curve] = Number(t.value) / 100;
     const box = t.closest('.h-curve');
