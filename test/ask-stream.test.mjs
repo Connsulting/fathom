@@ -224,10 +224,87 @@ test('stripSources removes a trailing Sources paragraph, heading block or senten
   assert.equal(stripSources('Your sources of income are steady.'), 'Your sources of income are steady.');
   assert.equal(stripSources('Sources: only this'), 'Sources: only this');
   assert.equal(stripSources('Check the sources: then decide. Then pay.'), 'Check the sources: then decide. Then pay.');
+  assert.equal(
+    stripSources('Give appreciated assets instead of cash.\n\nSources: "Gifts of appreciated stock" and "Evaluate bunching across tax years."\n\nQuarterly tax payments. Schedule them.'),
+    'Give appreciated assets instead of cash.\n\nQuarterly tax payments. Schedule them.',
+  );
+  assert.equal(stripSources('Open. Sources: "A" and "B." More stays.'), 'Open. More stays.');
+  assert.equal(stripSources('Read this.\nReferences: the pack.\nThen decide.'), 'Read this.\nThen decide.');
+  assert.equal(
+    stripSources('Open. Sources: "Gifts of appreciated stock." and "Evaluate bunching across tax years." Then pay.'),
+    'Open. Then pay.',
+  );
+  assert.equal(
+    stripSources('Open. Sources: \u201cGifts of appreciated stock.\u201d and \u201cEvaluate bunching across tax years.\u201d Then pay.'),
+    'Open. Then pay.',
+  );
+  assert.equal(stripSources('See this. Sources: https://irs.gov/publications/p526. Then pay.'), 'See this. Then pay.');
+  assert.equal(
+    stripSources('Your retirement plan has two funding\nsources: employer contributions and your own deferrals.\nKeep both.'),
+    'Your retirement plan has two funding\nsources: employer contributions and your own deferrals.\nKeep both.',
+  );
+});
+
+test('streamHtml drops a mid-answer Sources sentence and keeps the prose around it', () => {
+  const html = streamHtml('Give appreciated assets instead of cash.\n\nSources: "Gifts of appreciated stock" and "Evaluate bunching across tax years."\n\nQuarterly tax payments.');
+  assert.match(html, /Give appreciated assets instead of cash/);
+  assert.match(html, /Quarterly tax payments/);
+  assert.doesNotMatch(html, /Sources/);
+  assert.doesNotMatch(html, /Gifts of appreciated/);
+  assert.match(streamHtml('Your sources of income are steady.'), /sources of income/);
+});
+
+test('stripSources keeps wrapped prose that continues with sources', () => {
+  const wrapped = 'Your retirement plan has two funding\nsources: employer contributions and your own deferrals.';
+  assert.equal(stripSources(wrapped), wrapped);
+  assert.equal(stripSources(`${wrapped}\nKeep both.`), `${wrapped}\nKeep both.`);
+  // Capitalized, but after a line that did not end a sentence: still prose.
+  const capital = 'Your plan has two funding\nSources: employer and own deferrals.';
+  assert.equal(stripSources(capital), capital);
+});
+
+test('stripSources removes comma and semicolon separated citations', () => {
+  assert.equal(stripSources('Open. Sources: "A", "B." Then pay.'), 'Open. Then pay.');
+  assert.equal(stripSources('Open. Sources: "A"; "B". Then pay.'), 'Open. Then pay.');
+  assert.equal(stripSources('Open. Sources: household summary, tax pack. Then pay.'), 'Open. Then pay.');
+  assert.equal(stripSources('Open. Sources: “A”, “B.” Then pay.'), 'Open. Then pay.');
+  const oxford = 'Open. Sources: "A", "B", and "C." Then pay.';
+  assert.equal(stripSources(oxford), 'Open. Then pay.');
+  assert.equal(stripSources('Open. Sources: "A"; "B"; and "C". Then pay.'), 'Open. Then pay.');
+  const html = streamHtml(oxford);
+  assert.match(html, /Then pay/);
+  assert.doesNotMatch(html, /Sources/);
+});
+
+test('stripSources and streamHtml remove a singular Source label', () => {
+  assert.equal(stripSources('Open. Source: "A". Then pay.'), 'Open. Then pay.');
+  assert.equal(stripSources('Pay it.\n\nSource: household summary\n\nKeep a reserve.'), 'Pay it.\n\nKeep a reserve.');
+  const html = streamHtml('Open. Source: "Gifts of appreciated stock". Then pay.');
+  assert.match(html, /Then pay/);
+  assert.doesNotMatch(html, /Source/);
+  assert.equal(stripSources('Open. Reference: "A". Then pay.'), 'Open. Then pay.');
+  assert.equal(stripSources('Open. Citation: the tax pack. Then pay.'), 'Open. Then pay.');
+});
+
+test('a removed citation list item leaves no bare marker', () => {
+  // Mid-list: the whole item goes with its marker; the remaining numbering is left alone.
+  assert.equal(stripSources('Do these:\n\n1. Pay the estimate.\n2. Sources: "Quarterly taxes"\n3. Keep a reserve.'),
+    'Do these:\n\n1. Pay the estimate.\n3. Keep a reserve.');
+  // Trailing item.
+  assert.equal(stripSources('Do these:\n\n1. Pay the estimate.\n2. Sources: household summary'),
+    'Do these:\n\n1. Pay the estimate.');
+  // A bullet item goes with its dash.
+  assert.equal(stripSources('Do these:\n\n- Pay the estimate.\n- Sources: tax pack\n- Keep a reserve.'),
+    'Do these:\n\n- Pay the estimate.\n- Keep a reserve.');
+  // An item with a sentence before the citation keeps the sentence and its marker.
+  assert.equal(stripSources('Do these:\n\n1. Pay the estimate.\n2. Keep a reserve. Sources: "A".\n3. File on time.'),
+    'Do these:\n\n1. Pay the estimate.\n2. Keep a reserve.\n3. File on time.');
+  assert.equal(stripSources('1. Pay the estimate.\n2. Keep a reserve. Sources: "A".'), '1. Pay the estimate.\n2. Keep a reserve.');
 });
 
 test('the prompt tells the model not to cite sources and allows the markdown subset', () => {
   assert.match(PRODUCT_RULES, /Never write a Sources/);
+  assert.match(PRODUCT_RULES, /Call tools before you write/);
   assert.doesNotMatch(PRODUCT_RULES, /Cite a knowledge pack entry/);
   assert.match(PRODUCT_RULES, /bullet lists/);
 });

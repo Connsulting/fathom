@@ -1,8 +1,175 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { consumeSdkMessages, normalizeSdkRound, messagesRound, wireSchema, WIRE_UNSUPPORTED_KEYWORDS } from '../live.mjs';
+import { consumeSdkMessages, normalizeSdkRound, assistantText, messagesRound, wireSchema, WIRE_UNSUPPORTED_KEYWORDS } from '../live.mjs';
 import { DEFAULT_MODEL, usageCostUsd } from '../pricing.mjs';
 import { createEngine, createMemoryLedger, ModelAccountingError, ModelCallError } from '../index.mjs';
+import * as engineModule from '../index.mjs';
+
+test('distinct assistant frames keep identical text, including a repeated digit', async () => {
+  const frames = ['Set aside $1', '0', '0', '.'];
+  async function* stream() {
+    for (let n = 0; n < frames.length; n += 1) {
+      yield { type: 'assistant', message: { id: `msg_${n}`, content: [{ type: 'text', text: frames[n] }], usage: { output_tokens: 1 } } };
+    }
+    yield { type: 'result', subtype: 'success', result: '.', total_cost_usd: 0.01 };
+  }
+  const observed = await consumeSdkMessages(stream());
+  const round = normalizeSdkRound(observed, { model: DEFAULT_MODEL, registry: { results: [] }, maxTokens: 32, maxBudgetUsd: 1 });
+  assert.equal(round.text, 'Set aside $100.');
+  // One response streamed as one-block frames that share message.id (the real SDK shape; see
+  // sdkResponse below). Each frame carries only its own block, so appending keeps the figure.
+  async function* sameMessage() {
+    yield* sdkResponse('msg_same', [{ type: 'text', text: 'Set aside $1' }, { type: 'text', text: '00.' }]);
+    yield { type: 'result', subtype: 'success', result: '00.', total_cost_usd: 0.01 };
+  }
+  const again = normalizeSdkRound(await consumeSdkMessages(sameMessage()), { model: DEFAULT_MODEL, registry: { results: [] }, maxTokens: 32, maxBudgetUsd: 1 });
+  assert.equal(again.text, 'Set aside $100.');
+});
+
+// Real SDK framing (Agent SDK 0.3.318, node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts,
+// SDKAssistantMessage and SDKPartialAssistantMessage): with includePartialMessages the CLI yields
+// { type: 'stream_event', event: <raw Messages API stream event>, parent_tool_use_id: null, uuid,
+// session_id } frames (message_start, content_block_start, content_block_delta, content_block_stop,
+// message_delta, message_stop), and after each content_block_stop one { type: 'assistant', message:
+// { id, content: [<that one completed block>], stop_reason: null, usage: <not final> }, uuid } frame.
+// Consecutive assistant frames of one response share message.id and each carries only its own block.
+// The result's `result` is the text of the last completed block only ('' after a tool_use block).
+// A frame may carry `supersedes: [uuid, ...]` naming earlier frames it replaces (refusal fallback).
+// `supersedes` maps a block index to the uuids its assistant frame supersedes. The assistant frame
+// for block n has uuid `${id}_block${n}`.
+function* sdkResponse(id, blocks, { supersedes = {} } = {}) {
+  let seq = 0;
+  const wrap = event => ({ type: 'stream_event', event, parent_tool_use_id: null, uuid: `${id}_ev${seq++}`, session_id: 'synthetic-session' });
+  yield wrap({ type: 'message_start', message: { id, type: 'message', role: 'assistant', model: DEFAULT_MODEL, content: [],
+    stop_reason: null, usage: { input_tokens: 10, output_tokens: 1 } } });
+  for (const [index, block] of blocks.entries()) {
+    if (block.type === 'text') {
+      yield wrap({ type: 'content_block_start', index, content_block: { type: 'text', text: '' } });
+      yield wrap({ type: 'content_block_delta', index, delta: { type: 'text_delta', text: block.text } });
+    } else {
+      yield wrap({ type: 'content_block_start', index, content_block: { ...block, input: {} } });
+      yield wrap({ type: 'content_block_delta', index, delta: { type: 'input_json_delta', partial_json: JSON.stringify(block.input ?? {}) } });
+    }
+    yield wrap({ type: 'content_block_stop', index });
+    yield { type: 'assistant', message: { id, type: 'message', role: 'assistant', model: DEFAULT_MODEL, content: [block],
+      stop_reason: null, usage: { input_tokens: 10, output_tokens: index + 1 } },
+    parent_tool_use_id: null, uuid: `${id}_block${index}`, session_id: 'synthetic-session',
+    ...(supersedes[index] ? { supersedes: supersedes[index] } : {}) };
+  }
+  yield wrap({ type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: blocks.length } });
+  yield wrap({ type: 'message_stop' });
+}
+
+async function replay(frames) {
+  const streamed = [];
+  async function* stream() { yield* frames; }
+  const observed = await consumeSdkMessages(stream(), e => { if (e.type === 'text') streamed.push(e.text); });
+  const round = normalizeSdkRound(observed, { model: DEFAULT_MODEL, registry: { results: [] }, maxTokens: 128, maxBudgetUsd: 1 });
+  return { round, streamed: streamed.join('') };
+}
+
+const resultFrame = (result, subtype = 'success') => ({ type: 'result', subtype, result, is_error: false,
+  total_cost_usd: 0.01, usage: { input_tokens: 10, output_tokens: 4 }, uuid: 'result_uuid', session_id: 'synthetic-session' });
+
+test('consumeSdkMessages keeps every completed block frame', async () => {
+  // (a) Four one-block frames of one response; the result names only the last block.
+  const digits = await replay([
+    ...sdkResponse('msg_digits', ['Set aside $1', '0', '0', '.'].map(text => ({ type: 'text', text }))),
+    resultFrame('.'),
+  ]);
+  assert.equal(digits.streamed, 'Set aside $100.');
+  assert.equal(digits.round.text, 'Set aside $100.');
+  assert.equal(digits.round.text, digits.streamed);
+
+  // (b) Text, a tool call and text in one response: the opening before the tool is kept.
+  const head = 'Give appreciated assets instead of cash.\n\nSources: "G';
+  const tail = 'ifts of appreciated stock" and "Evaluate bunching across tax years."';
+  const split = await replay([
+    ...sdkResponse('msg_split', [
+      { type: 'text', text: head },
+      { type: 'tool_use', id: 'toolu_synthetic', name: 'mcp__fathom__get_figures', input: {} },
+      { type: 'text', text: tail },
+    ]),
+    resultFrame(tail),
+  ]);
+  assert.equal(split.round.text, head + tail);
+  assert.equal(split.round.text, split.streamed);
+
+  // (c) A refusal-fallback frame supersedes an earlier text frame: the evicted text is gone.
+  const replaced = await replay([
+    ...sdkResponse('msg_first', [{ type: 'text', text: 'Opening line. ' }, { type: 'text', text: 'Refused draft text.' }]),
+    ...sdkResponse('msg_fallback', [{ type: 'text', text: 'Replacement answer.' }], { supersedes: { 0: ['msg_first_block1'] } }),
+    resultFrame('Replacement answer.'),
+  ]);
+  assert.doesNotMatch(replaced.round.text, /Refused draft/);
+  assert.match(replaced.round.text, /Replacement answer\./);
+  assert.equal(replaced.round.text, 'Opening line. Replacement answer.');
+});
+
+test('superseded SDK frames leave the stream equal to storage', async () => {
+  const run = async frames => {
+    const events = [];
+    async function* stream() { yield* frames; }
+    const observed = await consumeSdkMessages(stream(), e => events.push(e));
+    const round = normalizeSdkRound(observed, { model: DEFAULT_MODEL, registry: { results: [] }, maxTokens: 128, maxBudgetUsd: 1 });
+    let effective = '';
+    for (const e of events) {
+      if (e.type === 'text') effective += e.text;
+      else if (e.type === 'replace') effective = e.text;
+    }
+    return { round, events, effective };
+  };
+  const replaced = await run([
+    ...sdkResponse('msg_first', [{ type: 'text', text: 'Opening line. ' }, { type: 'text', text: 'Refused draft text.' }]),
+    ...sdkResponse('msg_fallback', [{ type: 'text', text: 'Replacement answer.' }], { supersedes: { 0: ['msg_first_block1'] } }),
+    resultFrame('Replacement answer.'),
+  ]);
+  assert.equal(replaced.round.text, 'Opening line. Replacement answer.');
+  assert.equal(replaced.events.filter(e => e.type === 'replace').length, 1, 'exactly one replace event');
+  assert.equal(replaced.effective, replaced.round.text);
+  const plain = await run([
+    ...sdkResponse('msg_plain', [{ type: 'text', text: 'Opening line. ' }, { type: 'text', text: 'Kept text.' }]),
+    resultFrame('Kept text.'),
+  ]);
+  assert.equal(plain.events.filter(e => e.type === 'replace').length, 0, 'no supersedes, no replace');
+  assert.equal(plain.effective, plain.round.text);
+});
+
+test('superseded SDK frames leave the stream equal to storage', () => {
+  assert.equal(typeof engineModule.createAnswerAssembler, 'function', 'createAnswerAssembler is exported');
+  const a = engineModule.createAnswerAssembler();
+  a.beginRound();
+  assert.equal(a.streamPiece('Plan A'), 'Plan A');
+  a.endRound('Plan A');
+  a.beginRound();
+  assert.equal(a.streamPiece('Refused'), '\n\nRefused');
+  assert.equal(a.replaceRound('Keep a reserve.'), 'Plan A\n\nKeep a reserve.', 'replaceRound returns the full answer so far');
+  assert.equal(a.streamPiece(' More.'), ' More.', 'the round has already started');
+  a.endRound('Keep a reserve. More.');
+  assert.equal(a.text, 'Plan A\n\nKeep a reserve. More.');
+  const b = engineModule.createAnswerAssembler();
+  b.beginRound();
+  b.streamPiece('Plan A');
+  b.endRound('Plan A');
+  b.beginRound();
+  assert.equal(b.replaceRound(''), 'Plan A', 'an empty replacement returns the stored text');
+});
+
+test('a shorter SDK result does not replace text blocks split across a tool', () => {
+  const head = 'Give appreciated assets instead of cash.\n\nSources: "G';
+  const tail = 'ifts of appreciated stock" and "Evaluate bunching across tax years."';
+  const content = [
+    { type: 'text', text: head },
+    { type: 'tool_use', id: 'synthetic', name: 'get_figures', input: {} },
+    { type: 'text', text: tail },
+  ];
+  assert.equal(assistantText(content, tail), head + tail);
+  const round = normalizeSdkRound(
+    { result: { subtype: 'success', result: tail, total_cost_usd: 0.01 }, content },
+    { model: DEFAULT_MODEL, registry: { results: [] }, maxTokens: 128, maxBudgetUsd: 1 },
+  );
+  assert.equal(round.text, head + tail);
+});
 
 test('recorded SDK terminal error result remains authoritative when the iterator then throws', async () => {
   // Observed with Agent SDK 0.3.318 in the opt-in tool smoke: result, then exception.
