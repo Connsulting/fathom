@@ -235,9 +235,22 @@ MT-05 adds OS-operator command `node scripts/reconcile-spend.mjs --household
 cost only after the operator has obtained the provider receipt, records receipt
 reference and audit outcome without its contents, settles idempotently and
 releases unused reservation. A cost above the reserved bound keeps the
-credential paused with `reservation_bound_exceeded`; never silently erase debt.
+household's accounting hold with `reservation_bound_exceeded`; never silently
+erase debt. Other households keep using unreserved credit. This exceptional
+provider-bound violation requires an operator-reviewed accounting repair; the
+ordinary reconcile command cannot disguise it as a within-bound settlement.
 Tests supply synthetic receipts. This command reconciles accounting; it does
 not automatically enable the household's engine pause flag.
+
+MT-05 also adds OS-operator command `node scripts/model-budget.mjs
+--instance-cap-usd <n>` and `node scripts/model-budget.mjs --household <id>
+--allocation-usd <n>`. Values are finite dollars from 0 to 10000, rounded to cents;
+the command records an idempotent audited setting change. Refuse an allocation
+above the instance cap and refuse cap/allocation reductions below current-month
+settled cost plus outstanding reservations. Changing a budget never changes
+pause flags or reconciles a round. The existing admin cap endpoint remains
+bounded by the operator allocation. Both commands are delivered and tested in
+MT-05, so setting funding is an operator operation with a specified path.
 
 MT-08 adds admin-only `POST /api/household/backups` returning a queued operation
 id and `GET /api/household/backups/:id/status`. A fixed instance backup runner
@@ -588,8 +601,9 @@ an operation journal. There is no runtime legacy-storage fallback.
    layouts disagree.
 8. Start with one active production household and outbound work paused. Log in
    again; verify the migrated state and funding/recipient configuration before
-   explicit resumption. Synthetic two-household verification enables the
-   multi-household provisioning gate. Keep the rollback snapshot for 7 days.
+   explicit resumption. MT-10's release migration later opens multi-household
+   provisioning, after its isolation gate passes. Keep the rollback snapshot
+   for 7 days.
    After new writes, rollback restores a coordinated full snapshot under a
    stopped service; never point the old binary at the newer live volume.
 
@@ -654,7 +668,7 @@ every `/mcp` method and tool:
    Print only synthetic seed, route template, mutation kind and assertion code.
    Save minimized synthetic repros on failure; never fuzz against real data.
 7. Inspect HTTP bodies/headers, all SSE events before final grounding, downloads
-   after decryption/decompression, browser state, emitted model requests,
+   after decryption/decompression, emitted model requests,
    email sink/outbox and queued jobs. Compare B's DB logical digest and filesystem
    manifest before/after each unauthorized A mutation. A 404 with a B-side effect
    is a failure. Inspect sanitized logs for leaked payloads and credentials.
@@ -702,8 +716,9 @@ deployment checks.
    Crash before and after the registry switch and recover deterministically.
 8. Playwright verifies enrollment, two-household selection, role controls,
    household-labelled deep links, two tabs with stale context, logout and login,
-   packet downloads and demo reset. Render desktop and phone surfaces and compare
-   household names/context against the fixtures. No real data in screenshots.
+   packet downloads, browser state and demo reset. Render desktop and phone
+   surfaces and compare household names/context against the fixtures. No real
+   data in screenshots.
 
 Implementation gate: `npm test`, `npm run e2e` and the existing CI real-mode smoke
 remain required. The final ticket adds `node --test test-isolation/route-fuzz.mjs`
@@ -809,8 +824,11 @@ elapsed waits, which must be added along the dependency chain.
 
    Problem: the account design binds each user to one household and has no
    distinct operator authority. Base: `main`. Blocked by: merged account change
-   and accepted design. Decisions: create `platform.sqlite` and the offline auth
-   migration in this package; retain the singleton financial layout. Global users,
+   and accepted design. Decisions: create `platform.sqlite`, the offline auth
+   migration and its encrypted source-snapshot helper in this package; refuse
+   unmigrated real startup with `platform_migration_required`, and enforce
+   `multi_household_enabled`/409 `multi_household_gated` until MT-10. Retain the
+   singleton financial layout. Global users,
    multi-household membership, explicit operator bootstrap and invite-only
    provisioning as specified above;
    implement backend control records and enrollment policies with creation gated
@@ -825,6 +843,11 @@ elapsed waits, which must be added along the dependency chain.
    2. The account PR's passkey/session/enrollment tests and the complete existing
       suite remain green after every caller leaves `users.household_id`.
       Verified by: `npm test`. Runs in: worker.
+   3. Unmigrated real startup refuses; a second non-deleted real household,
+      including one still provisioning, gets 409 `multi_household_gated`.
+      The source-snapshot helper encrypts and round-trips the stopped source
+      using a synthetic `FATHOM_BACKUP_KEY_FILE`. Verified by:
+      `node --test test/tenancy-identity.test.mjs`. Runs in: worker.
 
    Out of scope: financial calculations, public registration and provider setup.
    Readiness now: startable no, finishable no; missing merged account contract
@@ -917,7 +940,8 @@ elapsed waits, which must be added along the dependency chain.
    Problem: a shared credential with ledger-object queues cannot cap concurrent
    server/CLI spend. Base: `main`. Blocked by: MT-03. Decisions: operator-funded
    credential, zero new allocations, UTC funding months, transactional round
-   reservations, operator reconciliation, programmatic loopback-only
+   reservations, operator funding/allocation commands and reconciliation,
+   programmatic loopback-only
    `testTransport` injection and idempotent household mirrors. Preconditions: local model
    HTTP emulator exercising live-mode serialization and synthetic usage, no paid
    calls. Estimated production change: 500 to 900 lines; one run. Acceptance
@@ -937,6 +961,11 @@ elapsed waits, which must be added along the dependency chain.
       idempotently without enabling outbound work. The normal bootstrap cannot
       redirect a real credential through the test harness. Verified by:
       `node --test test/tenancy-reconcile.test.mjs`. Runs in: worker.
+   4. The operator budget command sets instance funding and household allocation
+      idempotently with an audit record, refuses an allocation above the cap and
+      reductions below committed spend/reservations, and never changes pause
+      flags. Verified by: `node --test test/tenancy-budget.test.mjs`.
+      Runs in: worker.
 
    Out of scope: live billing integration and personal subscription credentials.
    Readiness now: startable no, finishable no; MT-03 absent. Required risk probe:
