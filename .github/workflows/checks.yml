@@ -19,8 +19,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          # Full history on main. Pull requests scan the files in the merge commit.
-          fetch-depth: ${{ github.event_name == 'push' && 0 || 1 }}
+          # Depth so the range endpoints exist. The scan itself is only that range.
+          fetch-depth: 0
       - name: Install gitleaks
         run: |
           set -euo pipefail
@@ -29,16 +29,25 @@ jobs:
           echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  gitleaks.tar.gz" | sha256sum -c -
           tar -xzf gitleaks.tar.gz gitleaks
           sudo mv gitleaks /usr/local/bin/gitleaks
-      - name: Scan
+      - name: Scan new commits
         env:
           EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BEFORE: ${{ github.event.before }}
+          PUSH_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          if [ "$EVENT_NAME" = "push" ]; then
-            gitleaks detect --source . --redact --exit-code 1 --verbose
+          zeros=0000000000000000000000000000000000000000
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            opts="${BASE_SHA}..${HEAD_SHA}"
+          elif [ "$BEFORE" = "$zeros" ]; then
+            opts="--max-count=1"
           else
-            gitleaks detect --no-git --source . --redact --exit-code 1 --verbose
+            opts="${BEFORE}..${PUSH_SHA}"
           fi
+          echo "gitleaks log-opts: ${opts}"
+          gitleaks detect --source . --redact --exit-code 1 --verbose --log-opts="$opts"
 
   npm-audit:
     runs-on: ubuntu-latest

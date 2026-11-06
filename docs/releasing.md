@@ -22,3 +22,7 @@ Those builds do not get a version tag or `latest`.
 A tag `vX.Y.Z` (for example `v0.1.0`) runs the same unit tests and Playwright suite as CI, then
 pushes the image with tags `X.Y.Z`, `X.Y` and `latest`, then opens a GitHub Release with
 generated notes. A failing test, health check or version check publishes nothing.
+
+Secret scanning in CI covers the pull request range (`base..head`) and, on `main`, the pushed
+range. A one-time full-history scan found only a synthetic email fixture, since removed. CI does
+not scan full history and does not allowlist findings.

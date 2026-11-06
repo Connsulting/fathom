@@ -1,8 +1,0 @@
-title = "fathom"
-
-[extend]
-useDefault = true
-
-[[allowlists]]
-description = "One historical commit. Its only finding was a synthetic email fixture that the current tree no longer contains."
-commits = ["fe2c53e65df0aa691585bc8be46685d4450fa22a"]
