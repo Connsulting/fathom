@@ -7,7 +7,8 @@ for your own AI. Advisory only: it never files taxes or moves money.
 
 Status: build phase. Docs: product definition [`docs/vision-v2.md`](docs/vision-v2.md) (Status
 section for built versus deferred), architecture [`docs/architecture.md`](docs/architecture.md),
-known limits [`docs/known-limits.md`](docs/known-limits.md). The clickable mock is `mock-v2/`.
+known limits [`docs/known-limits.md`](docs/known-limits.md), releases [`docs/releasing.md`](docs/releasing.md).
+The clickable mock is `mock-v2/`.
 
 ## Run it
 
