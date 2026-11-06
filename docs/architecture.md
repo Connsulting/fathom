@@ -396,6 +396,9 @@ CHECK lists the statuses, so the table is rebuilt without `accepted`; a migratio
 line runs with foreign keys off and must pass
 `PRAGMA foreign_key_check` before it commits (`migrate()` in `db.mjs`). Stored `accepted` recs become
 `doing`, and `rec_events` rows are rewritten: action `accept` reads as `start`, statuses `accepted` as `doing`.
+`planner_recs.held_from` and `retired_from` follow, and a stored Ask proposal (`messages.provenance`
+`proposal.action`) that offered `accept` now offers `start`. Recorded tool-call arguments in message
+provenance are a log and keep their original text.
 
 Rec actions and their buttons: `start` "Doing it" (-> `doing`), `complete` "Done" (-> `done`),
 `snooze` "Later" (-> `snoozed`, with a wake label), `dismiss` "Not for us" (-> `dismissed`) and `reopen`

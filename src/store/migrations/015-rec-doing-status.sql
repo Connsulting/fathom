@@ -33,3 +33,12 @@ ALTER TABLE recs_new RENAME TO recs;
 UPDATE rec_events SET action = 'start' WHERE action = 'accept';
 UPDATE rec_events SET from_status = 'doing' WHERE from_status = 'accepted';
 UPDATE rec_events SET to_status = 'doing' WHERE to_status = 'accepted';
+
+-- The planner remembers the status a parked or retired rec returns to; restoring accepted would now
+-- violate the recs CHECK and roll back the planning run.
+UPDATE planner_recs SET held_from = 'doing' WHERE held_from = 'accepted';
+UPDATE planner_recs SET retired_from = 'doing' WHERE retired_from = 'accepted';
+
+-- A stored Ask proposal that offered the retired accept action now offers start (Doing it).
+UPDATE messages SET provenance = json_set(provenance, '$.proposal.action', 'start')
+WHERE json_valid(provenance) AND json_extract(provenance, '$.proposal.action') = 'accept';
