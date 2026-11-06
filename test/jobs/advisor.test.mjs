@@ -1,0 +1,273 @@
+// Item 24: the advisor review workflow. Marking a rec for review, recording verdicts (a veto
+// dismisses through the rec action path), the check-in, the planner keeping vetoed and confirmed
+// recs across a rerun (and lifting a veto when the rec's inputs changed), the review packet
+// (every figure with provenance, all text escaped, stored encrypted and downloadable), the demo
+// seed writing the same tables, and the read-only advisor_status tool.
+
+import test, { after, describe } from 'node:test';
+import assert from 'node:assert/strict';
+import http from 'node:http';
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { createHandler } from '../../src/api/router.mjs';
+import { loadConfig } from '../../src/config.mjs';
+import { openMigrated } from '../../src/store/db.mjs';
+import { seedDemo } from '../../demo/seed.mjs';
+import { buildScenario } from '../../src/scenario/build.mjs';
+import { buildPacketHtml } from '../../src/advisor/packet.mjs';
+import { MAX_NOTE } from '../../src/advisor/index.mjs';
+import { callTool, getTool } from '../../src/tools/index.mjs';
+import { request, postJson, TEST_OWNER } from '../helpers/server.mjs';
+import { scratch, keyFileOf } from '../helpers/real-store.mjs';
+import { planRun } from '../helpers/plan.mjs';
+
+const NOW = '2026-11-05';
+const REC = 'fed-q4-estimate';
+const S = scratch();
+after(() => S.cleanup());
+
+const configFor = dir => ({ ...loadConfig({ FATHOM_DATA: dir, FATHOM_DEMO: '0', FATHOM_ENGINE: 'off', FATHOM_CLOCK: NOW, FATHOM_OWNER_LOGINS: TEST_OWNER, FATHOM_DATA_KEY_FILE: keyFileOf(dir) }) });
+
+async function serve(db, config) {
+  const server = http.createServer(createHandler({ db, config }));
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  return {
+    url: `http://127.0.0.1:${server.address().port}`,
+    close: () => new Promise(resolve => { server.close(resolve); server.closeAllConnections(); }),
+  };
+}
+
+// A planned real store behind the in-process router.
+async function planned() {
+  const dir = S.dir();
+  const { buildRealStore } = await import('../helpers/real-store.mjs');
+  const db = S.track(await buildRealStore(dir, { clock: NOW }));
+  const res = await planRun(db, { now: NOW });
+  assert.equal(res.status, 'ok');
+  const srv = await serve(db, configFor(dir));
+  return { db, dir, srv };
+}
+
+const scen = async url => (await request(url, { path: '/api/scenario' })).json;
+const recOf = (s, id) => s.recs.find(r => r.id === id);
+const status = (db, id) => db.prepare('SELECT status FROM recs WHERE id = ?').get(id).status;
+
+describe('advisor workflow, real store', () => {
+  test('send marks the rec for review with a timestamp, idempotently, and lists it as waiting', async () => {
+    const { db, srv } = await planned();
+    try {
+      let s = await scen(srv.url);
+      assert.equal(recOf(s, REC).advisor, null, 'planner recs start unsent');
+      const r1 = await postJson(srv.url, '/api/advisor/reviews', { recId: REC });
+      assert.equal(r1.status, 200, r1.text);
+      const r2 = await postJson(srv.url, '/api/advisor/reviews', { recId: REC });
+      assert.equal(r2.json.reviewId, r1.json.reviewId, 'sending twice keeps one waiting review');
+      s = r2.json.scenario;
+      assert.equal(recOf(s, REC).advisor.verdict, 'pending');
+      assert.deepEqual(s.advisor.pending, [REC]);
+      assert.equal(s.advisor.waiting[0].sentOn, NOW);
+      const row = db.prepare('SELECT * FROM advisor_reviews WHERE rec_id = ?').get(REC);
+      assert.match(row.sent_at, /^2026-11-05T/);
+      assert.equal((await postJson(srv.url, '/api/advisor/reviews', { recId: 'nope' })).status, 404);
+      assert.equal((await postJson(srv.url, '/api/advisor/reviews', {})).status, 400);
+    } finally { await srv.close(); }
+  });
+
+  test('a veto dismisses through the rec action path, survives a rerun, and lifts when inputs change', async () => {
+    const { db, srv } = await planned();
+    try {
+      const { json } = await postJson(srv.url, '/api/advisor/reviews', { recId: REC });
+      const note = '<img src=x onerror=alert(1)> {f:agi.est} & more';
+      const v = await postJson(srv.url, `/api/advisor/reviews/${json.reviewId}/verdict`, { verdict: 'vetoed', note, date: '2026-11-04' });
+      assert.equal(v.status, 200, v.text);
+      assert.equal(status(db, REC), 'dismissed');
+      const ev = db.prepare("SELECT * FROM rec_events WHERE rec_id = ? AND action = 'dismiss' ORDER BY id DESC").get(REC);
+      assert.equal(ev.arg, 'advisor vetoed');
+      assert.equal(ev.actor, 'ui');
+      const a = recOf(v.json.scenario, REC).advisor;
+      assert.equal(a.verdict, 'vetoed');
+      assert.ok(!a.note.includes('<img') && !a.note.includes('{f:'), 'the note is stored escaped, braces included');
+      assert.equal(a.date, 'Nov 4, 2026');
+      assert.equal(v.json.scenario.advisor.reviewed[0].recId, REC);
+      // A second verdict on the same review is refused.
+      assert.equal((await postJson(srv.url, `/api/advisor/reviews/${json.reviewId}/verdict`, { verdict: 'confirmed', note: '', date: NOW })).status, 409);
+
+      await planRun(db, { now: NOW });
+      assert.equal(status(db, REC), 'dismissed', 'the planner keeps a vetoed rec dismissed');
+      assert.equal(recOf(await scen(srv.url), REC).advisor.verdict, 'vetoed');
+
+      // The rec's inputs changed since the verdict: the next run lifts the veto.
+      db.prepare("UPDATE advisor_reviews SET grounding_hash = 'older-inputs' WHERE id = ?").run(json.reviewId);
+      await planRun(db, { now: NOW });
+      assert.equal(status(db, REC), 'proposed');
+      const lifted = db.prepare("SELECT * FROM rec_events WHERE rec_id = ? ORDER BY id DESC").get(REC);
+      assert.deepEqual([lifted.action, lifted.actor], ['advisor_veto_lifted', 'planner']);
+      assert.equal(recOf(await scen(srv.url), REC).advisor, null);
+      assert.equal(db.prepare('SELECT closed_reason FROM advisor_reviews WHERE id = ?').get(json.reviewId).closed_reason, 'inputs changed');
+    } finally { await srv.close(); }
+  });
+
+  test('a confirmed verdict keeps its status and badge across reruns', async () => {
+    const { db, srv } = await planned();
+    try {
+      await postJson(srv.url, '/api/recs/' + REC + '/action', { action: 'accept' });
+      const { json } = await postJson(srv.url, '/api/advisor/reviews', { recId: REC });
+      const v = await postJson(srv.url, `/api/advisor/reviews/${json.reviewId}/verdict`, { verdict: 'confirmed', note: 'Fine as written.', date: NOW });
+      assert.equal(v.status, 200);
+      assert.equal(status(db, REC), 'accepted', 'a confirmation does not change the owner status');
+      await planRun(db, { now: NOW });
+      await planRun(db, { now: NOW });
+      const s = await scen(srv.url);
+      assert.equal(recOf(s, REC).status, 'accepted');
+      assert.equal(recOf(s, REC).advisor.verdict, 'confirmed');
+      assert.equal(recOf(s, REC).advisor.note, 'Fine as written.');
+    } finally { await srv.close(); }
+  });
+
+  test('verdict validation: verdict, note length and date', async () => {
+    const { srv } = await planned();
+    try {
+      const { json } = await postJson(srv.url, '/api/advisor/reviews', { recId: REC });
+      const url = `/api/advisor/reviews/${json.reviewId}/verdict`;
+      assert.equal((await postJson(srv.url, url, { verdict: 'maybe', note: '', date: NOW })).status, 400);
+      assert.equal((await postJson(srv.url, url, { verdict: 'confirmed', note: 'x'.repeat(MAX_NOTE + 1), date: NOW })).status, 400);
+      assert.equal((await postJson(srv.url, url, { verdict: 'confirmed', note: '', date: '2026-02-30' })).status, 400);
+      assert.equal((await postJson(srv.url, '/api/advisor/reviews/999/verdict', { verdict: 'confirmed', note: '', date: NOW })).status, 404);
+    } finally { await srv.close(); }
+  });
+
+  test('the check-in persists with its date and length', async () => {
+    const { db, srv } = await planned();
+    try {
+      const r = await postJson(srv.url, '/api/advisor/checkin', { date: '2026-12-10', time: '14:00', lengthMin: 45 });
+      assert.equal(r.status, 200, r.text);
+      assert.deepEqual(r.json.scenario.advisor.next, { when: 'Thu, Dec 10, 2026, 2:00 PM', length: '45 min', date: '2026-12-10', time: '14:00', lengthMin: 45 });
+      assert.equal(db.prepare('SELECT length_min FROM advisor_checkin').get().length_min, 45);
+      assert.equal((await postJson(srv.url, '/api/advisor/checkin', { date: 'soon', lengthMin: 30 })).status, 400);
+      assert.equal((await postJson(srv.url, '/api/advisor/checkin', { date: '2026-12-10', lengthMin: 2 })).status, 400);
+      assert.equal((await postJson(srv.url, '/api/advisor/checkin', { date: '2026-12-10', time: '25:00', lengthMin: 30 })).status, 400);
+    } finally { await srv.close(); }
+  });
+
+  test('the packet is stored encrypted, listed with its date and downloads as an HTML attachment', async () => {
+    const { db, dir, srv } = await planned();
+    try {
+      assert.equal((await postJson(srv.url, '/api/advisor/packets', {})).status, 409, 'nothing waiting');
+      await postJson(srv.url, '/api/advisor/reviews', { recId: REC });
+      const p = await postJson(srv.url, '/api/advisor/packets', {});
+      assert.equal(p.status, 200, p.text);
+      const id = p.json.packetId;
+      assert.match(id, /^advpkt-[a-f0-9]{16}$/);
+      assert.deepEqual(p.json.scenario.advisor.packets.map(x => [x.id, x.date, x.recIds]), [[id, 'Nov 5, 2026', [REC]]]);
+      const stored = readFileSync(join(dir, 'files', `${id}.bin`));
+      assert.ok(!stored.includes(Buffer.from('Advisor review packet')), 'stored ciphertext, not HTML');
+      assert.ok(readdirSync(join(dir, 'files')).includes(`${id}.bin`));
+      const d = await request(srv.url, { path: `/api/advisor/packets/${id}` });
+      assert.equal(d.status, 200);
+      assert.match(d.headers['content-type'], /^text\/html/);
+      assert.match(d.headers['content-disposition'], /^attachment; filename="advisor-packet-2026-11-05\.html"$/);
+      assert.match(d.text, /Advisor review packet/);
+      assert.ok(d.text.includes(db.prepare('SELECT def FROM recs WHERE id = ?').get(REC).def.match(/"title":"([^"]+)"/)[1].replace(/&/g, '&amp;')));
+      assert.equal((await request(srv.url, { path: '/api/advisor/packets/advpkt-0000000000000000' })).status, 404);
+      assert.equal((await request(srv.url, { path: '/api/advisor/packets/..%2Fx' })).status, 404);
+      assert.equal((await request(srv.url, { path: `/api/advisor/packets/${id}`, headers: { 'tailscale-user-login': 'someone@example.test' } })).status, 401, 'owner gate');
+    } finally { await srv.close(); }
+  });
+});
+
+describe('advisor packet content', () => {
+  const demo = () => {
+    const db = openMigrated(':memory:');
+    seedDemo(db);
+    return db;
+  };
+
+  test('every money figure in the packet carries a provenance note, and the notes name a source', () => {
+    const db = demo();
+    const s = buildScenario(db);
+    const html = buildPacketHtml(s, { generatedOn: s.meta.clock });
+    const body = html.split('<h2>Where each figure comes from</h2>')[0];
+    const amounts = [...body.matchAll(/\$[\d,.]+[KM]?/g)];
+    assert.ok(amounts.length > 3, 'the demo packet shows figures');
+    for (const m of amounts) {
+      const after = body.slice(m.index + m[0].length, m.index + m[0].length + 40);
+      assert.match(after, /^<sup><a href="#n\d+">\d+<\/a><\/sup>/, `figure ${m[0]} has a footnote`);
+    }
+    const notes = [...html.matchAll(/<li id="n(\d+)"><b>[^<]+<\/b>, [^<]*Source: ([^<]+)<\/li>/g)];
+    assert.ok(notes.length > 0);
+    for (const n of notes) assert.ok(n[2].trim().length > 1, `note ${n[1]} names a source`);
+    const refs = new Set([...body.matchAll(/href="#n(\d+)"/g)].map(m => m[1]));
+    for (const r of refs) assert.ok(html.includes(`<li id="n${r}">`), `footnote ${r} exists`);
+    for (const id of s.advisor.pending) assert.ok(html.includes(`id="rec-${id}"`), `pending ${id} is in the packet`);
+    assert.ok(!/<script/i.test(html), 'no scripts');
+    assert.ok(!/(src|href)="(https?:)?\/\//i.test(html), 'no external resources');
+    db.close();
+  });
+
+  test('a figure with no source is shown as unavailable, never as a number', () => {
+    const db = demo();
+    const s = buildScenario(db);
+    const rec = s.recs.find(r => r.id === s.advisor.pending[0]);
+    rec.summary = 'Orphan {f:orphan.fig} and sourced.';
+    s.fig['orphan.fig'] = { v: 123456, kind: 'e', label: 'Orphan', src: 'no-such-source' };
+    const html = buildPacketHtml(s, {});
+    assert.ok(html.includes('Orphan <span class="nofig">[figure unavailable]</span>'));
+    assert.ok(!html.includes('123,456'));
+    db.close();
+  });
+
+  test('titles, notes and names are escaped and markup is stripped', () => {
+    const db = demo();
+    const s = buildScenario(db);
+    const rec = s.recs.find(r => r.id === s.advisor.pending[0]);
+    rec.title = '<script>alert(1)</script> & "quoted"';
+    rec.why = ['<img src=x onerror=alert(2)>Plain &amp; simple'];
+    rec.qa = [{ q: '<b>bold</b> question?', a: [] }];
+    s.meta.household = '<i>House</i>';
+    const html = buildPacketHtml(s, {});
+    assert.ok(!html.includes('<script>'), 'no raw script');
+    assert.ok(!html.includes('<img'), 'no raw img');
+    assert.ok(html.includes('alert(1) &amp; &quot;quoted&quot;'));
+    assert.ok(html.includes('Plain &amp; simple'));
+    assert.ok(html.includes('<li>bold question?</li>'));
+    assert.ok(!html.includes('<i>House</i>'));
+    db.close();
+  });
+});
+
+describe('demo seed and advisor_status', () => {
+  test('the demo seeds the advisor tables and the scenario reads them', () => {
+    const db = openMigrated(':memory:');
+    seedDemo(db);
+    const s = buildScenario(db);
+    assert.ok(db.prepare('SELECT count(*) AS n FROM advisor_reviews').get().n > 5);
+    assert.deepEqual(s.advisor.pending, ['deferral', 'dcfsa', 'backdoor', 'spouseentity', 'filingplan']);
+    assert.equal(s.advisor.next.length, '30 min');
+    assert.ok(s.advisor.reviewed.some(v => v.verdict === 'vetoed' && v.recId === 'megabackdoor'));
+    assert.ok(s.advisor.reviewed.some(v => !v.recId), 'a reviewed item outside the plan');
+    const content = JSON.parse(db.prepare("SELECT value FROM content WHERE key = 'advisor'").get().value);
+    assert.ok(!('pending' in content) && !('reviewed' in content) && !('next' in content), 'review state is not narrative content');
+    for (const r of db.prepare('SELECT def FROM recs').all()) assert.ok(!('advisor' in JSON.parse(r.def)), 'no advisor in rec defs');
+    db.close();
+  });
+
+  test('advisor_status is a read tool that reports who reviewed what, when', async () => {
+    const db = openMigrated(':memory:');
+    seedDemo(db);
+    const tool = getTool('advisor_status');
+    assert.equal(tool.scope, 'read');
+    const out = await callTool('advisor_status', {}, { db, now: new Date('2026-11-05T12:00:00Z') });
+    assert.equal(typeof out.advisor, 'string');
+    assert.ok(!out.advisor.includes('{n:'), 'names resolved');
+    assert.deepEqual(out.waiting.map(w => w.recId), ['deferral', 'dcfsa', 'backdoor', 'spouseentity', 'filingplan']);
+    const veto = out.reviewed.find(v => v.recId === 'megabackdoor');
+    assert.equal(veto.verdict, 'vetoed');
+    assert.match(veto.reviewedOn, /^\d{4}-\d{2}-\d{2}$/);
+    assert.match(veto.sentOn, /^\d{4}-\d{2}-\d{2}$/);
+    assert.deepEqual(out.nextCheckin, { date: '2026-12-10', time: '14:00', lengthMin: 30, label: 'Thu, Dec 10, 2026, 2:00 PM' });
+    const rec = await callTool('get_recommendation', { id: 'megabackdoor' }, { db, now: new Date('2026-11-05T12:00:00Z') });
+    assert.equal(rec.advisor.verdict, 'vetoed');
+    await assert.rejects(callTool('advisor_status', { extra: 1 }, { db }), /not a known argument/);
+    db.close();
+  });
+});

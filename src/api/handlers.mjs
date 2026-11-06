@@ -129,18 +129,25 @@ export function recAction(ctx) {
   }
 
   if (!Object.hasOwn(ACTION_STATUS, action)) throw new HttpError(400, `unknown action ${action}`);
-  const status = ACTION_STATUS[action];
-  let wake = def.wake != null ? def.wake : null;
+  let wake = null;
   if (action === 'snooze') {
     if (arg != null && typeof arg !== 'string') throw new HttpError(400, 'snooze arg must be a label');
     if (arg && arg.length > MAX_LABEL) throw new HttpError(400, 'snooze label is too long');
     wake = arg ? arg : 'Next month';
   }
-  tx(db, () => {
-    db.prepare('UPDATE recs SET status = ?, wake = ?, updated_at = ? WHERE id = ?').run(status, wake, nowIso(), id);
-    recEvent(db, id, action, action === 'snooze' ? wake : null, row.status, status);
-  });
+  tx(db, () => applyStatusAction(db, row, action, wake));
   return { scenario: scenarioOf(ctx) };
+}
+
+// The rec action path's write (callers hold the transaction): sets the status ACTION_STATUS gives
+// `action` and records it. `arg` is the wake label for snooze, a reason otherwise (the advisor
+// veto dismisses with 'advisor vetoed').
+export function applyStatusAction(db, row, action, arg = null) {
+  const status = ACTION_STATUS[action];
+  if (!status) throw new HttpError(400, `unknown action ${action}`);
+  const wake = action === 'snooze' ? arg : (parse(row.def, {}).wake ?? null);
+  db.prepare('UPDATE recs SET status = ?, wake = ?, updated_at = ? WHERE id = ?').run(status, wake, nowIso(), row.id);
+  recEvent(db, row.id, action, arg, row.status, status);
 }
 
 export function wargamePick(ctx) {

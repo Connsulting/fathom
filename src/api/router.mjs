@@ -2,6 +2,7 @@
 // files for everything else.
 // `routes` is the route table (docs/architecture.md lists every entry; test/docs.test.mjs checks).
 // `upload: true` routes take multipart bodies (read by the handler through ctx.readUpload);
+// `download: true` routes answer { filename, type, bytes } as an attachment instead of JSON;
 // `ingest: true` routes never log error details, which could carry file contents; `quiet: true`
 // routes (email and jobs) likewise log an error code only.
 
@@ -16,6 +17,7 @@ import { createMcpHandler } from '../mcp/index.mjs';
 import { isAllowedHost } from '../mcp/guard.mjs';
 import * as ih from './ingest-handlers.mjs';
 import * as eh from './email-handlers.mjs';
+import * as ah from './advisor-handlers.mjs';
 import { loadOwnerLogins, identityOf, sendUnauthorized } from './identity.mjs';
 import { getSetting } from '../store/db.mjs';
 
@@ -57,6 +59,11 @@ const TABLE = [
   { method: 'POST', path: '/api/email/test', handler: eh.sendTestEmail, quiet: true },
   { method: 'POST', path: '/api/email/brief', handler: eh.sendBriefEmail, quiet: true },
   { method: 'GET', path: '/api/jobs', handler: eh.listJobs, quiet: true },
+  { method: 'POST', path: '/api/advisor/reviews', handler: ah.sendReview },
+  { method: 'POST', path: '/api/advisor/reviews/:id/verdict', handler: ah.reviewVerdict },
+  { method: 'POST', path: '/api/advisor/checkin', handler: ah.saveCheckin },
+  { method: 'POST', path: '/api/advisor/packets', handler: ah.createPacket, quiet: true },
+  { method: 'GET', path: '/api/advisor/packets/:id', handler: ah.downloadPacket, quiet: true, download: true },
   { method: 'POST', path: '/api/jobs/:id/run', handler: eh.runJob, quiet: true },
 ];
 
@@ -153,6 +160,16 @@ export function createHandler({ db, config, answerer, engine = null, packs = nul
           body = await readJsonBody(req);
         }
         const out = await r.handler({ db, config, answerer, engine, packs, identity, scheduler, transport, params, body, readUpload, req, get keys() { return getKeys(); } });
+        if (r.download) {
+          res.writeHead(200, {
+            'content-type': out.type,
+            'content-length': out.bytes.length,
+            'content-disposition': `attachment; filename="${out.filename.replace(/[^A-Za-z0-9._-]/g, '_')}"`,
+            'cache-control': 'no-store',
+          });
+          res.end(req.method === 'HEAD' ? undefined : out.bytes);
+          return;
+        }
         sendJson(res, 200, out);
         return;
       }

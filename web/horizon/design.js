@@ -8,6 +8,7 @@
 import * as chatScreen from './screens/chat.js';
 import * as packsScreen from './screens/packs.js';
 import * as engineScreen from './screens/engine.js';
+import * as advisorScreen from './screens/advisor.js';
 import * as connect from './screens/connect.js';
 import { ingestScreens } from './screens/ingest.js';
 import { emailScreen } from './screens/email.js';
@@ -136,7 +137,7 @@ function advisorText(r) {
   const v = r.advisor.verdict;
   if (v === 'confirmed') return `${icon('check')}Advisor confirmed`;
   if (v === 'vetoed') return `${icon('x')}Advisor vetoed`;
-  return `${icon('clock')}Advisor reviewing`;
+  return `${icon('clock')}Waiting on advisor`;
 }
 
 function icon(name) {
@@ -492,7 +493,7 @@ function recRow(r, ny) {
       <p>${T(r.summary)}</p>
       <div class="h-meta"><span>${T(r.triggerText || TRIGGER[r.trigger] || '')}</span>${r.status === 'done' || r.status === 'dismissed' ? '' : `<span>${T(r.window?.label || '')}</span>`}${r.effort ? `<span>${T(r.effort)}</span>` : ''}${values(r) ? `<span>${values(r)}</span>` : ''}${r.advisor ? `<span class="h-adv ${r.advisor.verdict}">${advisorText(r)}</span>` : ''}</div>
     </div>
-    <div class="h-acts">${actionsFor(r, true).join('')}</div>
+    <div class="h-acts">${actionsFor(r, true).join('')}${advisorScreen.rowAction(r)}</div>
   </article>`;
 }
 
@@ -575,8 +576,7 @@ function dlgHtml(id) {
   const check = tasks.length ? `<div class="h-prog"><svg viewBox="0 0 100 4" preserveAspectRatio="none" aria-hidden="true"><rect class="bg" width="100" height="4" rx="2"/><rect class="fg" width="${pct * 100}" height="4" rx="2"/></svg><span>${doneN} of ${tasks.length}</span></div>
     <ul class="h-tasks">${tasks.map((t, i) => `<li><button type="button" class="h-task${t.done ? ' done' : ''}" data-act="task" data-rec="${esc(r.id)}" data-arg="${i}" aria-pressed="${t.done}"><i>${t.done ? icon('check') : ''}</i><span>${T(t.t)}</span></button></li>`).join('')}</ul>` : '<p class="h-mute">No steps.</p>';
 
-  const adv = r.advisor ? `<div class="h-advbox ${r.advisor.verdict}"><div class="h-adv ${r.advisor.verdict}">${advisorText(r)}</div><p>${T(r.advisor.note)}</p></div>`
-    : `<div class="h-advbox"><div class="h-adv">${icon('clock')}Not yet reviewed</div><p class="h-mute">Goes on the agenda for the next check-in. ${goA('advisor', 'Check-in')}</p></div>`;
+  const adv = advisorScreen.recBox(r);
 
   const chips = arr(r.qa).map((q, i) => asked(msgs, q.q) ? '' : `<button type="button" class="h-chip" data-askrec="${esc(r.id)}" data-i="${i}">${T(q.q)}</button>`).join('');
   const wg = r.scenario && api.s.wargame?.[r.scenario]?.status !== 'unavailable' ? `<a class="h-wglink" href="${href('wargame', { name: r.scenario })}" data-go="wargame" data-name="${esc(r.scenario)}"><div><b>War-game this</b><span>${T(api.s.wargame?.[r.scenario]?.title || '')}</span></div>${icon('arrow')}</a>` : '';
@@ -869,31 +869,7 @@ function pAccounts() {
 
 /* ---------- advisor ---------- */
 
-function pAdvisor() {
-  const a = api.s.advisor || {};
-  const recLink = (id, fallback) => {
-    const r = id ? recById(id) : null;
-    return r ? goA('rec', T(r.title), { id: r.id }) : T(fallback || '');
-  };
-  const reviewed = arr(a.reviewed).map((v) => `<li class="h-rv ${v.verdict}"><div class="h-adv ${v.verdict}">${v.verdict === 'vetoed' ? icon('x') + 'Vetoed' : icon('check') + 'Confirmed'}</div><div><b>${recLink(v.recId, v.title)}</b><p>${T(v.note)}</p></div></li>`).join('');
-  const pending = arr(a.pending).map((id) => recById(id)).filter(Boolean).map((r) => `<li><a href="${href('rec', { id: r.id })}" data-go="rec" data-id="${esc(r.id)}"><span>${T(r.title)}</span><em>${statusText(r)}</em>${icon('arrow')}</a></li>`).join('');
-  const notAsk = arr(a.notAsking).map((n) => `<li><b>${T(n.q)}</b><p>${T(n.why)}</p></li>`).join('');
-  const shared = arr(a.shared).map((s) => `<li><span>${T(s.title)}</span><time>${T(s.when)}</time></li>`).join('');
-  const experts = arr(a.experts).map((e) => `<li><b>${T(e.name)}</b><span>${T(e.role)}</span><p>${T(e.when)}</p></li>`).join('');
-  const conf = arr(a.reviewed).filter((v) => v.verdict === 'confirmed').length;
-  const vet = arr(a.reviewed).filter((v) => v.verdict === 'vetoed').length;
-  return shell(`${pageHead('Quarterly check-in', a.name ? T(a.name) : esc(api.s.names?.advisor || 'Your advisor'), T(a.role))}
-    <div class="h-next"><div><span>Next check-in</span><b>${T(a.next?.when)}</b></div><div><span>Length</span><b>${T(a.next?.length)}</b></div><div><span>Reviewed</span><b>${conf} confirmed, ${vet} vetoed</b></div><div><span>Waiting on review</span><b>${arr(a.pending).length}</b></div></div>
-    <div class="h-cols"><div class="h-col-main">
-      ${section('Agenda', `<div class="h-prose"><p>${T(a.agenda)}</p></div>`)}
-      ${reviewed ? section('What the advisor said', `<ul class="h-rvs">${reviewed}</ul>`, 'Seen your conversations with the AI') : ''}
-      ${pending ? section('To review together', `<ul class="h-links">${pending}</ul>`) : ''}
-    </div><div class="h-col-side">
-      ${notAsk ? section('Not asking you', `<ul class="h-qs">${notAsk}</ul>`) : ''}
-      ${shared ? section('Shared with the advisor', `<ul class="h-kv">${shared}</ul>`) : ''}
-      ${experts ? section('Specialists', `<ul class="h-experts">${experts}</ul>`) : ''}
-    </div></div>`, 'advisor');
-}
+/* The advisor screen lives in screens/advisor.js. */
 
 /* ---------- packs ---------- */
 
@@ -1169,7 +1145,7 @@ function draw() {
     case 'accounts': html = pAccounts(); break;
     case 'add': html = pAdd(); break;
     case 'confirm': html = ingest.confirmPage(routeChanged); break;
-    case 'advisor': html = pAdvisor(); break;
+    case 'advisor': html = advisorScreen.render(); break;
     case 'packs': html = packsScreen.render(r.params?.id); break;
     case 'yearend': html = pYearend(); break;
     case 'connect': html = connect.render(connectH); break;
@@ -1371,7 +1347,7 @@ function onDocumentKey(e) {
 }
 
 // Helpers the screen modules use. Getters, because api, root and ui change on mount.
-const SCREENS = [switcher, chatScreen, packsScreen, engineScreen];
+const SCREENS = [switcher, chatScreen, packsScreen, engineScreen, advisorScreen];
 const KIT = {
   get api() { return api; }, get root() { return root; }, get ui() { return ui; }, get keys() { return keys; }, get ingest() { return ingest; },
   draw: () => draw(),
