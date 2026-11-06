@@ -8,7 +8,8 @@
 // never include hidden recs.
 
 import { getSetting, tx, cents, parseJson as parse } from '../store/db.mjs';
-import { loadRecs, loadContent, loadPacks, tokenScope, recFromRow, resolveClock, todayUtc } from '../scenario/build.mjs';
+import { loadRecs, loadContent, loadPacks, tokenScope, recFromRow, resolveClock, todayUtc, loadGoals, loadCurve, loadFigures } from '../scenario/build.mjs';
+import { horizonLabel } from '../shared/goals.mjs';
 import { needsYou, verdictLevel, packStatus, STATUSES } from '../shared/rules.mjs';
 import { resolveTokens } from '../shared/tokens.mjs';
 import { ToolError } from './errors.mjs';
@@ -121,12 +122,47 @@ function recRow(db, id) {
   return row;
 }
 
+// Goals as the model sees them: open goals only, owner text verbatim (seed text token-resolved),
+// the target the owner typed (provenance 'you') and the tracked current value when stored data
+// gives one. No number here is computed by the model.
+function goalsForModel(db) {
+  const scope = tokenScope(db);
+  const fig = loadFigures(db);
+  const accounts = db.prepare('SELECT * FROM accounts').all();
+  return loadGoals(db, { fig, accounts }).filter(g => !g.archived).map(g => {
+    const owner = g.origin === 'owner';
+    const text = v => (owner ? String(v ?? '') : resolveTokens(scope, String(v ?? ''), false));
+    const out = { id: g.id, title: text(g.title), horizon: horizonLabel(g.horizon) };
+    const note = owner ? g.note : g.prose;
+    if (note) out.note = text(note);
+    if (!owner && g.status) out.status = g.status;
+    if (owner && typeof g.target === 'number') out.target = { amount: g.target, source: 'you' };
+    if (owner && g.targetDate) out.targetDate = g.targetDate;
+    if (g.trackLabel) out.tracking = g.trackLabel;
+    const cur = g.progress ? fig[g.progress.cur] : (g.current ? fig[g.current] : null);
+    if (cur && typeof cur.v === 'number' && !cur.unavailable) out.current = { amount: cur.v, kind: cur.kind };
+    if (!owner && g.progress && fig[g.progress.target]) out.target = { amount: fig[g.progress.target].v, source: 'plan' };
+    return out;
+  });
+}
+
+// Curve positions as words: which end the owner leans to, or no lean.
+function curveForModel(db) {
+  const scope = tokenScope(db);
+  return loadCurve(db, loadContent(db)).map(c => {
+    const left = resolveTokens(scope, String(c.left ?? ''), false);
+    const right = resolveTokens(scope, String(c.right ?? ''), false);
+    const lean = c.value < 0.45 ? left : c.value > 0.55 ? right : 'no lean';
+    return { between: `${left} or ${right}`, leansToward: lean };
+  });
+}
+
 // ---------------------------------------------------------------- tools
 
 export const tools = [
   {
     name: 'household_summary',
-    description: 'Household overview: confirmed facts, the verdict (clear or attention), how many recommendations need the owner now, counts by status, the data-through date and today.',
+    description: 'Household overview: confirmed facts, the verdict (clear or attention), how many recommendations need the owner now, counts by status, the data-through date, today, the open goals (title, horizon, target the owner typed, tracked current value) and where the owner sits on each tradeoff curve.',
     inputSchema: obj(),
     scope: 'read',
     handler(args, ctx) {
@@ -144,6 +180,8 @@ export const tools = [
         statusCounts,
         dataThrough: meta.dataThrough || '',
         clock,
+        goals: goalsForModel(ctx.db),
+        curve: curveForModel(ctx.db),
       };
     },
   },
@@ -282,12 +320,11 @@ export const tools = [
   },
   {
     name: 'list_goals',
-    description: 'The household goals in plain language, with horizon, status and progress figure keys.',
+    description: 'The open household goals in plain language: title, horizon, note, the target the owner typed and the tracked current value from stored data.',
     inputSchema: obj(),
     scope: 'read',
     handler(args, ctx) {
-      const scope = tokenScope(ctx.db);
-      return ctx.db.prepare('SELECT def FROM goals ORDER BY sort, id').all().map(g => plainDeep(scope, parse(g.def, {})));
+      return goalsForModel(ctx.db);
     },
   },
   {

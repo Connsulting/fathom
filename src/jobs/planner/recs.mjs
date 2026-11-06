@@ -6,6 +6,7 @@
 
 import { parseJson } from '../../store/db.mjs';
 import { dayLabel } from './data.mjs';
+import { servesGoals, recTopics } from '../../shared/goals.mjs';
 
 const ACTIVE = ['proposed', 'accepted', 'doing', 'waiting', 'snoozed'];
 const BLOCKABLE = ['proposed', 'accepted', 'doing'];
@@ -26,24 +27,44 @@ function lastStatusEvent(db, recId) {
   return db.prepare('SELECT * FROM rec_events WHERE rec_id = ? AND from_status IS NOT to_status ORDER BY id DESC LIMIT 1').get(recId) || null;
 }
 
-// Hits ordered by window close (open-ended last), then catalog order.
-export function sortOrder(results) {
-  const hits = results.map((r, i) => ({ r, i })).filter(x => x.r.state === 'hit');
+// The owner's lean for a rec, from the tradeoff curve (0 left end, 1 right end): a retirement rec
+// gains when the owner leans to max retirement room (ret_life below 0.5), a tax rec when they lean
+// to paying less tax now (tax_cash below 0.5), a cash rec when they lean to flexible cash.
+export function curveLean(rec, curve = {}) {
+  const t = recTopics(rec);
+  const pos = id => (typeof curve[id] === 'number' ? curve[id] : 0.5);
+  let lean = 0;
+  if (t.has('retirement')) lean += 0.5 - pos('ret_life');
+  if (t.has('tax')) lean += 0.5 - pos('tax_cash');
+  if (t.has('cash')) lean += pos('tax_cash') - 0.5;
+  return lean;
+}
+
+// Hits ordered by window close (open-ended last), then recs that serve an open goal, then the
+// owner's curve lean, then catalog order. prefs: {goals, accounts, curve} (curve: {axisId: 0..1}).
+export function sortOrder(results, prefs = {}) {
+  const { goals = [], accounts = [], curve = {} } = prefs || {};
+  const hits = results.map((r, i) => ({ r, i })).filter(x => x.r.state === 'hit').map(x => {
+    const rec = x.r.hit.rec || {};
+    return { ...x, serves: servesGoals(rec, goals, accounts).length ? 1 : 0, lean: curveLean(rec, curve) };
+  });
   hits.sort((a, b) => {
     const ca = a.r.hit.window ? a.r.hit.window.close : null;
     const cb = b.r.hit.window ? b.r.hit.window.close : null;
     if (ca !== cb) return ca == null ? 1 : cb == null ? -1 : ca < cb ? -1 : 1;
+    if (a.serves !== b.serves) return b.serves - a.serves;
+    if (a.lean !== b.lean) return b.lean - a.lean;
     return a.i - b.i;
   });
   return new Map(hits.map((x, sort) => [x.r.trigger.id, sort]));
 }
 
 export function applyRecs(db, results, ctx) {
-  const { clock, now, runId, prose, packOverride, warn } = ctx;
+  const { clock, now, runId, prose, packOverride, warn, prefs } = ctx;
   const stamp = `${clock}T${now.slice(11)}`;
   const recRows = new Map(db.prepare('SELECT * FROM recs').all().map(r => [r.id, r]));
   const prRows = new Map(db.prepare('SELECT * FROM planner_recs').all().map(r => [r.rec_id, r]));
-  const sorts = sortOrder(results);
+  const sorts = sortOrder(results, prefs);
   const counts = { new: 0, updated: 0, retired: 0, unchanged: 0 };
   const byTrigger = {};
   const domains = new Set();
