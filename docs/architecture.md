@@ -558,6 +558,11 @@ response is `{scenario, ...}` with the fresh scenario.
 | `POST /api/threads/:id/restore` | `{}` | `{scenario, thread}`. Clears `trashedAt` when trashed, else `archivedAt`. |
 | `POST /api/threads/:id/delete` | `{}` | `{scenario}`. Deletes the thread and its messages forever; 409 unless it is in Trash. |
 | `POST /api/your-plans/build` | `{fileIds?: string[]}` (at most 50) | `{scenario, result: {written, entries, sources, warnings, dropped}}`. Builds the Your plans pack (`dropped` counts the extracted sections that did not match their document); 400 for a bad body; 409 while the engine is off, over the cap, or when the data directory is inside the repository. |
+| `POST /api/goals` | `{title, note?, horizon?, target?, targetDate?, track?}` | `{scenario, goal}`. Creates an owner goal (`origin` owner). `title` 1 to 120 characters, no line breaks; `note` at most 500; `horizon` now, 1-3y or 3-10y (default now); `target` a non-negative number or null; `targetDate` a valid YYYY-MM-DD or null; `track` null, `{accounts: [account ids]}` (at most 20, known ids) or `{figure: key}` (a known figure the store holds). Anything else 400. |
+| `POST /api/goals/:id` | any subset of the create fields | `{scenario, goal}`. Edits an owner goal; 409 for a seed (demo) goal, 404 unknown. |
+| `POST /api/goals/:id/archive` | `{archived?: boolean}` (default true) | `{scenario, goal}`. Archives or restores a goal. |
+| `POST /api/goals/:id/delete` | `{}` | `{scenario}`. Deletes a goal for good. |
+| `POST /api/curve` | `{id, value}` or `{positions: {id: value}}` | `{scenario}`. Stores tradeoff curve positions (0 to 1, rounded to hundredths) in `settings` `curve.positions`; 400 for an unknown axis or a value out of range. The onboarding Priorities step saves through this route too. |
 | `POST /api/onboarding` | `{step}` | `{scenario}`. 0 to 5 set the step, 6 completes onboarding; anything else 400. |
 | `POST /api/onboarding/notes` | `{text}` | `{scenario, file, understood}`. Saves the Tell us note as a notes document through the ingest pipeline (see Onboarding below). 400 for a missing, empty or control-character text, 413 over 30000 bytes, 409 without a data key on a real store, 422 when the note could not be stored. The text never appears in an error, a log or the database. |
 | `POST /api/demo/reset` | `{}` | `{scenario}`. Rebuilds the demo store and removes stored uploads (`$FATHOM_DATA/files/*.bin`); 404 unless the store is a demo store. Clears `api_keys`; the server secret file survives. |
@@ -1592,3 +1597,32 @@ engine, handed to it as `ctx.engine`) and "Facts helper and pack state".
 2. Packs: `refreshPackState(db, {packDirs})` inside the planner's write transaction, then the
    planner sets each `packs_state.def.recIds` to the ids of the recs whose `pack_id` is the pack,
    sorted, since `refreshPackState` keeps `recIds` as stored.
+
+## Goals and the tradeoff curve
+
+Goals live in the `goals` table: `def` JSON, `sort`, `origin` (`seed` for the demo seed, whose text
+carries scenario tokens; `owner` for goals the owner typed, stored as typed and always rendered
+escaped, never token-resolved), `archived_at`, `created_at` and `updated_at` (migration 012). An
+owner goal def is `{id, title, note, horizon, target, targetDate, track}`; `src/shared/goals.mjs`
+validates it and is shared with the browser.
+
+The scenario builder derives each owner goal's figures: `goal.<id>.target` is the typed target
+(source `goal-target`, labelled "You typed this", kind `t`, "A target you set"), and the current value is the tracked account's or
+known figure's own stored figure, or for several accounts `goal.<id>.current`, their sum (source
+`goal-track`). A tracked account with no stored balance, or a figure kept only for reference
+(unavailable), gives no current value, never a partial or stale
+sum. `progress {cur, target}` is set only when both exist; the Goals screen draws a bar only then.
+
+Tradeoff curve positions are `settings` `curve.positions` (`{axisId: 0..1}`). The axes are the
+content `curve` (the demo) or the four default axes in `src/shared/goals.mjs` (a real store). The
+onboarding Priorities step shows the same axes and saves to the same setting.
+
+Goals and positions feed the planner and chat. `servesGoals` matches a rec to open goals by topic
+(retirement, education, cash, tax, giving, health, home) from the goal's words, kind and tracked
+sources and the rec's domain, value classes and id; the scenario sets `rec.serves` and the rec
+shows "Serves: <goal>". The planner ranks recs that tie on window close by whether they serve a
+goal, then by the owner's curve lean. `household_summary` and `list_goals` give the model the open
+goals (title, horizon, typed target with source `you`, tracked current value) and each curve's lean.
+In an Ask thread the answerer also offers `propose_goal`; its last successful call becomes
+`provenance.goalProposal`, a target survives only when the owner's own message states it, and the
+chat card saves it through `POST /api/goals` when the owner taps Save. Chat never writes.
