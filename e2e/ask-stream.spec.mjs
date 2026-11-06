@@ -33,7 +33,7 @@ async function record(page) {
         log.order.push('text');
         const me = pend.querySelector('.h-msg.me');
         const head = document.querySelector('.h-askx-head');
-        if (me && head) log.pinned = { me: me.getBoundingClientRect().top, head: head.getBoundingClientRect().bottom, y: window.scrollY, max: document.documentElement.scrollHeight - window.innerHeight, ih: window.innerHeight, pend: pend.getBoundingClientRect().height };
+        if (me && head) log.pinned = { me: me.getBoundingClientRect().top, head: head.getBoundingClientRect().bottom, y: window.scrollY };
       }
       const t = st.textContent;
       if (log.texts[log.texts.length - 1] !== t) log.texts.push(t);
@@ -47,6 +47,9 @@ async function record(page) {
 const askLog = (page) => page.evaluate(() => window.__askLog);
 
 async function send(page, text) {
+  // Layout must be final before the page measures where to pin the question (a late web font
+  // reflows the thread above it).
+  await page.evaluate(() => document.fonts.ready);
   const input = askInput(page);
   await expect(input).toBeVisible();
   await input.fill(text);
@@ -97,7 +100,6 @@ test('@mobile sending pins the question under the header while the answer grows 
   await expect(page.locator('.h-askx-msgs .h-msg.fathom')).toHaveCount(2);
   const log = await askLog(page);
   expect(log.pinned).not.toBeNull();
-  console.log(JSON.stringify(log.pinned));
   expect(log.pinned.y).toBeGreaterThan(0);
   expect(log.pinned.me).toBeGreaterThanOrEqual(log.pinned.head - 1);
   expect(log.pinned.me, JSON.stringify(log.pinned)).toBeLessThan(log.pinned.head + 40);
@@ -137,6 +139,7 @@ test('@mobile reopening a conversation lands on its latest question', async ({ p
   const again = await request.post('/api/ask', { headers: { 'content-type': 'application/json' }, data: { key: thread.key, text: FOLLOW } });
   expect(again.status()).toBe(200);
   await gotoRoute(page, `ask/${thread.id}`);
+  await page.evaluate(() => document.fonts.ready);
   const latest = page.locator('.h-askx-msgs .h-msg.me').last();
   await expect(latest).toContainText(FOLLOW);
   await expect(latest).toBeInViewport();
