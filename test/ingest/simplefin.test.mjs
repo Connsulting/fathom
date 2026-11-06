@@ -228,3 +228,38 @@ test('Disconnect deletes the stored access URL and stops mirroring', () => withS
   assert.ok(s.db.prepare('SELECT count(*) AS n FROM transactions').get().n > 0, 'rows stay');
   assert.equal((await S.syncSimplefin(s.db, opts(s))).status, 'skipped');
 }));
+
+// The scheduler job on a demo store (the fake bridge): counts-only note, a plan run triggered after
+// rows were written, skipped when not connected, and an error code when access is revoked.
+test('the simplefin-sync job runs under the scheduler, records counts and triggers planning', async () => {
+  const { tempDb } = await src('test/helpers/server.mjs');
+  const { seedDemo } = await src('demo/seed.mjs');
+  const { createScheduler, defaultHandlers } = await src('src/jobs/scheduler.mjs');
+  const t = await tempDb();
+  try {
+    seedDemo(t.db);
+    const config = { dataDir: t.dataDir, clock: '2026-11-05', demo: true, engine: 'off', emailTransport: 'dev', publicUrl: null, simplefinHosts: S.DEFAULT_HOSTS };
+    const handlers = defaultHandlers({});
+    const s = createScheduler({ db: t.db, config, handlers, now: () => new Date('2026-11-05T15:00:00Z'), tickMs: 3600000, holder: 'sf-test' });
+    const skipped = await s.runNow('simplefin-sync');
+    assert.equal(skipped.status, 'skipped');
+    await S.connectSimplefin(t.db, S.fakeToken(), { config, now: '2026-11-05T15:00:00Z', fetch: S.createFakeSimplefin({ today: () => '2026-11-05' }) });
+    const run = await s.runNow('simplefin-sync');
+    assert.equal(run.status, 'ok');
+    assert.equal(run.note.accounts, 4);
+    assert.ok(run.note.transactions > 0);
+    assert.equal(run.note.changed, true);
+    assert.equal(run.note.pending, 1, 'the demo other bank account waits on a match question');
+    const note = JSON.parse(t.db.prepare("SELECT note FROM job_runs WHERE job_id = 'simplefin-sync' ORDER BY id DESC LIMIT 1").get().note);
+    assert.ok(Object.values(note).every((v) => typeof v === 'number' || typeof v === 'boolean'), 'counts only');
+    await new Promise((r) => setTimeout(r, 50));
+    assert.ok(t.db.prepare("SELECT count(*) AS n FROM job_runs WHERE job_id = 'plan' AND trigger = 'ingest'").get().n >= 1, 'planning triggered');
+    t.db.prepare('DELETE FROM simplefin_connection').run();
+    await S.connectSimplefin(t.db, S.fakeToken('demo-revoked'), { config, now: '2026-11-05T15:00:00Z', fetch: S.createFakeSimplefin() });
+    const failed = await s.runNow('simplefin-sync');
+    assert.deepEqual([failed.status, failed.errorClass], ['error', 'simplefin_revoked']);
+    await s.stop();
+  } finally {
+    try { t.db.close(); } catch { /* closed */ }
+  }
+});

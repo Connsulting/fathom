@@ -444,7 +444,7 @@ test('engine off: the default brief-email handler still sends the brief through 
     const spendBefore = t.db.prepare('SELECT count(*) AS n FROM spend_ledger').get().n;
     const transport = captureTransport();
     const handlers = defaultHandlers({ publicUrl: null });
-    assert.deepEqual(Object.keys(handlers).sort(), ['brief-email', 'confirm-guess', 'deadline-alerts', 'freshness', 'plan', 'trash-purge']);
+    assert.deepEqual(Object.keys(handlers).sort(), ['brief-email', 'confirm-guess', 'deadline-alerts', 'freshness', 'plan', 'simplefin-sync', 'trash-purge']);
     const s = schedulerFor(t, { handlers, clock: clockAt('2026-11-05T15:00:00Z'), config, engine, transport });
     await s.runNow('brief-email');
     assert.equal(transport.sent.length, 1, 'the brief went out');
