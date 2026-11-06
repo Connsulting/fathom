@@ -32,6 +32,7 @@ const KIND = {
   tax_year: 'Tax year',
   fact_check: 'Check a value',
   near_duplicate: 'Possible duplicate',
+  account_match: 'Same account?',
   employer_relation: 'Employer',
   employer_recipient: 'Who is paid',
   document_recipient: 'Whose document',

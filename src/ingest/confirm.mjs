@@ -10,7 +10,7 @@ import { captureChanges, revertChanges, touches } from './undo.mjs';
 
 export const KINDS = Object.freeze([
   'account_owner', 'account_kind', 'entity_alias', 'tax_year', 'fact_check', 'near_duplicate', 'employer_relation', 'employer_recipient', 'document_recipient',
-  'withholding_conflict',
+  'withholding_conflict', 'account_match',
 ]);
 
 export const OWNER_OPTIONS = Object.freeze([
@@ -23,6 +23,7 @@ export const KIND_OPTIONS = Object.freeze([
 ]);
 export const FACT_CHECK_OPTIONS = Object.freeze([{ id: 'yes', label: 'Yes, that is right' }, { id: 'no', label: 'No, ignore it' }]);
 export const NEAR_DUPLICATE_OPTIONS = Object.freeze([{ id: 'same', label: 'Same transaction, keep one' }, { id: 'different', label: 'Different, keep both' }]);
+export const ACCOUNT_MATCH_OPTIONS = Object.freeze([{ id: 'same', label: 'Same account, merge them' }, { id: 'different', label: 'Different accounts, keep both' }]);
 export const EMPLOYER_OPTIONS = Object.freeze([{ id: 'outside', label: 'An outside employer' }, { id: 'household', label: 'Our own business' }]);
 export const EMPLOYER_RECIPIENT_OPTIONS = Object.freeze([{ id: 'owner', label: 'You' }, { id: 'spouse', label: 'Your spouse' }, { id: 'both', label: 'Both of you' }]);
 export const DOCUMENT_RECIPIENT_OPTIONS = Object.freeze([{ id: 'owner', label: 'You' }, { id: 'spouse', label: 'Your spouse' }]);
@@ -270,6 +271,16 @@ export function applyAnswer(db, item, optionId, { now } = {}) {
     case 'withholding_conflict':
       applyConflict(db, item, optionId, { now });
       return {};
+    case 'account_match': {
+      // A SimpleFIN account waiting on this question writes into the imported account (same) or
+      // its own new account (different) from the next sync on.
+      const { sfKey, candidateId, ownId } = item.context ?? {};
+      const target = optionId === 'same' ? candidateId : optionId === 'different' ? ownId : null;
+      if (typeof sfKey === 'string' && typeof target === 'string') {
+        db.prepare("UPDATE simplefin_accounts SET account_id = ?, status = 'mapped' WHERE sf_key = ?").run(target, sfKey);
+      }
+      return {};
+    }
     default:
       return {};
   }
