@@ -14,6 +14,7 @@ import { needsYou, verdictLevel, packStatus, STATUSES } from '../shared/rules.mj
 import { resolveTokens } from '../shared/tokens.mjs';
 import { ToolError } from './errors.mjs';
 import { packTools } from './packs.mjs';
+import { withAdvisor, advisorStatus } from '../advisor/index.mjs';
 
 export { ToolError };
 export { packDirsFor } from './packs.mjs';
@@ -302,7 +303,7 @@ export const tools = [
     scope: 'read',
     handler(args, ctx) {
       const row = recRow(ctx.db, args.id);
-      return plainDeep(tokenScope(ctx.db), recFromRow(row, clockOf(ctx)));
+      return plainDeep(tokenScope(ctx.db), withAdvisor(ctx.db, [recFromRow(row, clockOf(ctx))])[0]);
     },
   },
   {
@@ -375,7 +376,18 @@ export const tools = [
         db.prepare(`INSERT INTO rec_events (rec_id, ts, action, arg, from_status, to_status, actor)
                     VALUES (?, ?, 'set_status', ?, ?, ?, 'tool')`).run(args.id, ts, args.wake == null ? null : args.wake, row.status, args.status);
       });
-      return plainDeep(tokenScope(db), recFromRow(recRow(db, args.id), clockOf(ctx)));
+      return plainDeep(tokenScope(db), withAdvisor(db, [recFromRow(recRow(db, args.id), clockOf(ctx))])[0]);
+    },
+  },
+  {
+    name: 'advisor_status',
+    description: 'The advisor review workflow: the next check-in, recommendations waiting on the advisor (with the date sent), verdicts recorded (confirmed or vetoed, with the advisor note, the advisor date and the date it was recorded), closed reviews, and generated review packets. Read only. The household records verdicts; there are no advisor accounts.',
+    inputSchema: obj(),
+    scope: 'read',
+    handler(args, ctx) {
+      const scope = tokenScope(ctx.db);
+      const names = scope.names || {};
+      return plainDeep(scope, { advisor: names.advisor || 'Your advisor', ...advisorStatus(ctx.db) });
     },
   },
   ...packTools,

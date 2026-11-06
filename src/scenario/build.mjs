@@ -9,6 +9,7 @@ import { getSetting, cents, parseJson as parse } from '../store/db.mjs';
 import { resolveTokens } from '../shared/tokens.mjs';
 import { ingestState, applyFreshness } from '../ingest/freshness.mjs';
 import { CURVE_AXES, KNOWN_FIGURES, curvePosition, servesGoals } from '../shared/goals.mjs';
+import { withAdvisor, advisorSection } from '../advisor/index.mjs';
 
 const DAY = 86400000;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -43,7 +44,7 @@ const EMPTY = {
   curve: [],
   wargame: {},
   ask: { suggested: [], fallback: [] },
-  advisor: { name: '', role: '', next: { when: '', length: '' }, agenda: '', reviewed: [], pending: [], notAsking: [], shared: [], experts: [] },
+  advisor: { name: '', role: '', agenda: '', notAsking: [], shared: [], experts: [] },
   yearend: { docs: [], decisions: [] },
   connect: { url: '', scopes: [], tools: [], transcript: [], config: '' },
   'engine.chat': { model: '', note: '' },
@@ -154,8 +155,9 @@ export function recFromRow(row, clock) {
 }
 
 // Every rec with live status (hidden ones included; callers filter).
+// Each rec's `advisor` field comes from the advisor tables (src/advisor), never from its def.
 export function loadRecs(db, clock) {
-  return db.prepare('SELECT * FROM recs ORDER BY sort, id').all().map(r => recFromRow(r, clock));
+  return withAdvisor(db, db.prepare('SELECT * FROM recs ORDER BY sort, id').all().map(r => recFromRow(r, clock)));
 }
 
 export function messageOut(row) {
@@ -534,7 +536,7 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
         imported: a.parser !== 'demo-seed',
       };
     }),
-    advisor: section(content, 'advisor'),
+    advisor: advisorSection(db, section(content, 'advisor'), recs),
     yearend: section(content, 'yearend'),
     connect: section(content, 'connect'),
     engine,
