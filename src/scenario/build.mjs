@@ -8,6 +8,8 @@
 import { getSetting, cents, parseJson as parse } from '../store/db.mjs';
 import { resolveTokens } from '../shared/tokens.mjs';
 import { ingestState, applyFreshness } from '../ingest/freshness.mjs';
+import { MODEL_PURPOSES, modelFor } from '../engine/pricing.mjs';
+import { factEventTitle } from '../shared/event-labels.mjs';
 
 const DAY = 86400000;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -22,6 +24,7 @@ export const BUILTIN_SOURCES = Object.freeze({
   'job-estimates': { label: 'Per-run cost estimate', kind: 'estimate' },
   'spend-ledger': { label: 'Engine spend ledger, this month', kind: 'ledger' },
   settings: { label: 'Your engine settings', kind: 'settings' },
+  balances: { label: 'Account balances you uploaded', kind: 'accounts' },
   plan: { label: 'Plan of record', kind: 'plan' },
 });
 
@@ -303,6 +306,8 @@ export function deriveDecisions(rows, recsById, clock, wargame) {
     out.when = d.when_label || '';
     out.note = d.note || '';
     out.line = line;
+    // A decision decided through the decide action carries its stored line and can be reopened.
+    if (d.status === 'decided' && d.wargame && d.decided_line) out.revisitable = true;
     if (status === 'unavailable') out.unavailable = d.unavailable_reason;
     return out;
   });
@@ -323,7 +328,10 @@ function deriveWargame(wargame, decisions, rows) {
     if (!named.length) continue;
     g.status = named.some(d => d.status === 'open') ? 'open' : named.some(d => d.status === 'decided') ? 'decided' : 'upcoming';
     const firstDecided = named.find(d => d.status === 'decided');
-    if (!(g.decided && storedDecided) && firstDecided) g.decided = firstDecided.line;
+    // A line the decide action stored wins over the game's own decided text.
+    const storedLine = rows.find(r => r.wargame === name && r.status === 'decided' && r.decided_line);
+    if (storedLine) g.decided = storedLine.decided_line;
+    else if (!(g.decided && storedDecided) && firstDecided) g.decided = firstDecided.line;
   }
   return out;
 }
@@ -375,6 +383,12 @@ function deriveFigures(fig, { wargame, series, engine }, scope) {
   }
 }
 
+const RAW_EVENT_TITLE = /^([a-z][A-Za-z0-9]*(?:\.[A-Za-z0-9]+)+) changed$/;
+function plainEventTitle(e) {
+  const m = RAW_EVENT_TITLE.exec(String(e.title));
+  return m ? factEventTitle(m[1], { removed: /^No longer/.test(String(e.body)), kind: e.kind }) : e.title;
+}
+
 // ---------------------------------------------------------------- build
 
 export function buildScenario(db, { clock, engineMode = null, packs: livePacks = null } = {}) {
@@ -404,7 +418,9 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
   const jobs = db.prepare('SELECT * FROM jobs ORDER BY sort, id').all().map(j => ({
     id: j.id, name: j.name, cadence: j.cadence || '', last: j.last_label || '', next: j.next_label || '', does: j.does || '', cost: j.cost,
   }));
-  const engine = { mode: engineMode, budget: { monthly, used }, chat: section(content, 'engine.chat'), jobs, ledger: loadLedger(db) };
+  // The models the engine runs per purpose, read from the engine's own configuration (not content).
+  const models = MODEL_PURPOSES.map(purpose => ({ purpose, model: modelFor(purpose) }));
+  const engine = { mode: engineMode, budget: { monthly, used }, chat: section(content, 'engine.chat'), models, jobs, ledger: loadLedger(db) };
 
   deriveFigures(fig, { wargame, series, engine }, { names, law, pct, fig });
 
@@ -435,7 +451,8 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
     series,
     verdict: section(content, 'verdict'),
     domains: applyFreshness(section(content, 'domains'), ingest),
-    events: db.prepare('SELECT date, kind, title, body FROM events ORDER BY sort, id').all().map(e => ({ ...e })),
+    // A store written before titles were plain language may still hold "<fact key> changed".
+    events: db.prepare('SELECT date, kind, title, body FROM events ORDER BY sort, id').all().map(e => ({ ...e, title: plainEventTitle(e) })),
     deadlines: db.prepare('SELECT date, label, title, rec_id, hard FROM deadlines ORDER BY date, id').all().map(d => {
       const out = { date: d.date, label: d.label, title: d.title };
       if (d.rec_id) out.recId = d.rec_id;

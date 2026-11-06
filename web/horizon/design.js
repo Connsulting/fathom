@@ -29,7 +29,7 @@ const KIND = { business: 'Business', checking: 'Cash', cash: 'Cash', taxable: 'I
 
 const NAV = [['brief', 'Year'], ['confirm', 'Confirm'], ['plan', 'Plan'], ['wargame', 'Decide'], ['ask', 'Ask'], ['packs', 'Packs']];
 const MORE = [
-  ['Household', [['goals', 'Goals'], ['accounts', 'Accounts'], ['advisor', 'Advisor'], ['yearend', 'Year end']]],
+  ['Household', [['goals', 'Goals'], ['accounts', 'Accounts'], ['add', 'Files'], ['advisor', 'Advisor'], ['yearend', 'Year end']]],
   ['System', [['connect', 'Connect'], ['engine', 'Engine'], ['email', 'Email']]]
 ];
 // Phone width: these NAV entries move to the bottom tab bar, in NAV order, with these icons. NAV
@@ -794,12 +794,19 @@ function pWargame(name) {
     ? `<div class="h-decided"><i class="h-ok sm">${icon('check')}</i><div><div class="h-kicker">Decided</div><p>${T(g.decided || '')}</p></div></div>`
     : (dec?.when ? `<div class="h-meta h-wg-when"><span class="h-when">${T(dec.when)}</span>${dec.note ? `<span>${T(dec.note)}</span>` : ''}</div>` : '');
   const body = cur === 'salary' ? salaryChart(g) : deferralView(g);
+  // Decide on the picked point (an open decision) or revisit it (a decision made here). A decision
+  // that became decided because its recommendation finished has no stored choice to revisit.
+  const decideBar = !past && dec && dec.status === 'open'
+    ? `<div class="h-decide-bar"><button type="button" class="h-btn pri" data-decide="${esc(dec.id)}">Decide on this</button><span class="h-mute sm">Saves the point you picked as your decision and as the assumption for your plan.</span></div>`
+    : decided && dec && dec.revisitable
+    ? `<div class="h-decide-bar"><button type="button" class="h-btn" data-revisit="${esc(dec.id)}">Revisit</button><span class="h-mute sm">Reopens this choice and goes back to your data on the next plan run.</span></div>`
+    : '';
   const secTitle = gone ? 'For reference' : decided ? 'For reference and for next year' : cur === 'salary' ? 'Tradeoff' : 'Options';
   const aside = gone ? 'Not a current choice' : decided ? 'Not an open choice' : cur === 'salary' ? 'Pick a point' : '';
   const intro = gone ? `<p class="h-mute h-wg-intro">This stays here so you can check the reasoning. It becomes a choice again once its inputs are current.</p>`
     : decided ? `<p class="h-mute h-wg-intro">This is no longer a choice to make. It stays here so you can check the reasoning, and it is where next year starts.</p>` : '';
   return shell(`${back}${pageHead(past ? 'Decide' : 'Open decision', T(g.title), past ? '' : T(g.question))}${lead}
-    ${section(secTitle, intro + body, aside)}
+    ${section(secTitle, intro + body + decideBar, aside)}
     ${g.takeaway ? `<div class="h-takeaway"><div class="h-kicker">${past ? 'What the curve said' : 'Takeaway'}</div><p>${T(g.takeaway)}</p></div>` : ''}
     ${linked.length ? section('On your plan', `<div class="h-refs wide">${linked.map((r) => `<a href="${href('rec', { id: r.id })}" data-go="rec" data-id="${esc(r.id)}"><span>${T(r.title)}</span><em>${T(r.window?.label || '')}</em>${icon('arrow')}</a>`).join('')}</div>`) : ''}`, 'wargame');
 }
@@ -852,7 +859,8 @@ function spark([key, sr]) {
   const a = pts.slice(0, lastA + 1).map((p, i) => `${sx(i)},${sy(p.v)}`).join(' ');
   const pr = lastA >= 0 ? pts.slice(lastA).map((p, i) => `${sx(i + lastA)},${sy(p.v)}`).join(' ') : pts.map((p, i) => `${sx(i)},${sy(p.v)}`).join(' ');
   const last = pts[pts.length - 1];
-  return `<div class="h-spark"><div class="h-spark-h"><span>${T(sr.label)}</span><b>${figHtml(`series.${key}.${pts.length - 1}`, { k: true })}</b></div>
+  // A series built from uploaded accounts carries imported text: plain text, no tokens or markup.
+  return `<div class="h-spark" data-series="${esc(key)}"><div class="h-spark-h"><span>${sr.imported ? esc(sr.label) : T(sr.label)}</span><b>${figHtml(`series.${key}.${pts.length - 1}`, { k: true })}</b></div>
     <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">${a ? `<polyline class="a" points="${a}"/>` : ''}${pr && lastA < pts.length - 1 ? `<polyline class="p" points="${pr}"/>` : ''}
     ${lastA >= 0 ? `<circle class="pt" cx="${sx(lastA)}" cy="${sy(pts[lastA].v)}" r="2.5"/>` : ''}
     <text x="${P}" y="${H - 1}">${X(pts[0].x)}</text><text x="${W - P}" y="${H - 1}" text-anchor="end">${X(last.x)}</text></svg></div>`;
@@ -1264,7 +1272,7 @@ function onClick(e) {
   if (cn && root.contains(cn)) { e.preventDefault(); connect.onClick(cn, connectH); return; }
   if (ingest.handleClick(e)) return;
   if (email.handleClick(e)) return;
-  const sel = '[data-go],[data-act],[data-askrec],[data-wg],[data-onboard],[data-inst],[data-allow],[data-modal],[data-packet],[data-whatif],[data-packtoggle],[data-more],[data-dlg]';
+  const sel = '[data-go],[data-act],[data-askrec],[data-wg],[data-onboard],[data-inst],[data-allow],[data-modal],[data-packet],[data-whatif],[data-packtoggle],[data-decide],[data-revisit],[data-more],[data-dlg]';
   let t = e.target.closest(`${sel},.fx-fig`);
   if (!t || !root.contains(t)) return;
   // A figure inside a button or link is part of its label: the control takes the click, and the
@@ -1285,6 +1293,8 @@ function onClick(e) {
   if (d.askrec) { askRec(d.askrec, Number(d.i)); return; }
   if (d.whatif) { e.preventDefault(); const cur = routeNow(); api.whatIf(d.whatif); if (!(cur.name === 'packs' && cur.params?.id === d.whatif)) api.go('packs', { id: d.whatif }); return; }
   if (d.packtoggle) { api.packToggle(d.packtoggle); return; }
+  if (d.decide) { e.preventDefault(); const gm = api.s.decisions?.find((x) => x.id === d.decide)?.wargame; api.decide(d.decide, gm ? pick(gm) : undefined); return; }
+  if (d.revisit) { e.preventDefault(); api.revisit(d.revisit); return; }
   if (d.wg && api.s.wargame?.[d.wg]?.status === 'unavailable') { e.preventDefault(); return; }
   if (d.wg) { e.preventDefault(); ui.pick[d.wg] = Number(d.i); api.scenarioPick(d.wg, Number(d.i)); draw(); return; }
   if (d.onboard != null && d.onboard !== '') { e.preventDefault(); ui.modal = null; ui.build = 0; api.onboard(Number(d.onboard)); return; }

@@ -247,7 +247,7 @@ function pruneFigures(db, produced, ctx) {
     for (const m of Array.isArray(def.mine) ? def.mine : []) if (m && m.fig) refs.add(m.fig);
   }
   for (const r of db.prepare('SELECT text FROM messages').all()) scan(r.text);
-  for (const r of db.prepare('SELECT note FROM decisions').all()) scan(r.note);
+  for (const r of db.prepare('SELECT note, decided_line FROM decisions').all()) { scan(r.note); scan(r.decided_line); }
   const prefixes = [];
   for (const r of db.prepare('SELECT key, value FROM content').all()) {
     scan(r.value);

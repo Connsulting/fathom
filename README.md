@@ -52,6 +52,14 @@ Rebuild the demo store (refuses a real store):
 npm run seed:demo
 ```
 
+## Deciding and trends
+
+On a real store the Decide screen's war games end in a choice: pick a point, press "Decide on this",
+and the decision is saved with its figures. A decided salary becomes the payroll assumption on the
+next planning run until you press "Revisit". Accounts shows monthly trend lines built from the
+balances you uploaded. The Engine screen lists the model each purpose runs on, and Files is in the
+quick switcher (Ctrl or Cmd K) and the More menu.
+
 ## Email
 
 Fathom sends a monthly brief and short deadline alerts. The default `dev` transport writes each

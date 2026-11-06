@@ -25,6 +25,8 @@ const TABLE = [
   { method: 'GET', path: '/api/identity', handler: h.getIdentity },
   { method: 'POST', path: '/api/recs/:id/action', handler: h.recAction },
   { method: 'POST', path: '/api/wargame/:name/pick', handler: h.wargamePick },
+  { method: 'POST', path: '/api/decisions/:id/decide', handler: h.decisionDecide },
+  { method: 'POST', path: '/api/decisions/:id/revisit', handler: h.decisionRevisit },
   { method: 'POST', path: '/api/packs/:id/toggle', handler: h.packToggle },
   { method: 'POST', path: '/api/packs/:id/whatif', handler: h.packWhatIf },
   { method: 'GET', path: '/api/packs/:id/entries/:entryId', handler: h.packEntry },

@@ -284,7 +284,7 @@ function deferralModel(data, out, ctx, valid) {
   const isCorp = b.kind === 'scorp';
   const m = e.months;
   const avgPre = (e.sums.net + (isCorp ? e.sums.salary + e.sums.payrollTax : 0)) / m;
-  const monthlyPayroll = isCorp ? cents((e.proj(e.sums.salary) + e.proj(e.sums.payrollTax)) / 12) : 0;
+  const monthlyPayroll = isCorp ? cents(((e.salaryAssumed ?? e.proj(e.sums.salary)) + e.proj(e.sums.payrollTax)) / 12) : 0;
   const monthlyOut = out.figures['cash.monthlyOut'] ? out.figures['cash.monthlyOut'].v : 0;
   const need = isCorp ? monthlyPayroll : monthlyOut;
   const codes26 = ['agi_as_magi_proxy'];

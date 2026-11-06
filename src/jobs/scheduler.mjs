@@ -44,7 +44,7 @@ export const DEFAULT_TIMEZONE = 'America/New_York';
 const DAY = 86400000;
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
-const TRIGGERS = new Set(['manual', 'ingest', 'confirm']);
+const TRIGGERS = new Set(['manual', 'ingest', 'confirm', 'decide']);
 
 export const JOBS = Object.freeze([
   { id: 'plan', name: 'Nightly plan refresh', cadence: 'Daily, 2:00 AM', does: 'Re-plan recommendations and deadlines from the latest data.', schedule: Object.freeze({ every: 'day', hour: 2 }) },

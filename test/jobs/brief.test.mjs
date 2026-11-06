@@ -126,7 +126,7 @@ describe('what changed', () => {
     assert.ok(retired, 'retired event');
     assert.equal(retired.kind, 'milestone');
     assert.equal(retired.body, 'The condition behind it no longer holds in your data.');
-    const lost = events.find(e => e.title === 'giving.charitable changed');
+    const lost = events.find(e => e.title === 'Charitable giving no longer seen');
     assert.ok(lost, 'fact change event');
     assert.equal(lost.body, 'No longer seen in your data.');
   });

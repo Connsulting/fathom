@@ -51,7 +51,16 @@ export const SOURCES = Object.freeze({
   'plan-projection': { label: 'Straight-line projection of this year', kind: 'projection' },
   'wargame-model': { label: 'War-game model: salary, tax and cash calculators', kind: 'model' },
   'calc:income': { label: 'Income received, summed from your records', kind: 'calculator' },
+  'owner-decision': { label: 'Your decision in Decide', kind: 'decision' },
 });
+
+// The officer salary the owner decided in Decide (owner fact business.salaryDecided, written by
+// the decide action), or null. It stands in for the P&L salary projection until they revisit it.
+export const SALARY_DECIDED_KEY = 'business.salaryDecided';
+export function decidedSalary(owner) {
+  const v = owner && owner[SALARY_DECIDED_KEY];
+  return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null;
+}
 
 // ---------------------------------------------------------------- output helpers
 
@@ -146,7 +155,17 @@ export function computeFigures(data, facts, ctx) {
     if (e.classified && e.type === 's_corp') {
       out.put(`pnl.${e.slug}.salary`, s.salary, 'a', `${e.name} officer salary, year to date`, 'pnl', loc(s.ids.salary), s.fileId);
       out.put(`pnl.${e.slug}.payrollTax`, s.payrollTax, 'a', `${e.name} employer payroll tax, year to date`, 'pnl', loc(s.ids.payrollTax), s.fileId);
-      out.put(`pnl.${e.slug}.salaryProj`, proj(s.salary), 'p', `${e.name} officer salary, projected for the year`, 'plan-projection', projLoc('Projected salary', s.salary));
+      // A salary the owner decided in Decide is the payroll assumption: it replaces the straight-line
+      // P&L projection (profit before salary below still comes from the P&L).
+      const decided = decidedSalary(owner);
+      e.salaryAssumed = decided ?? proj(s.salary);
+      e.salaryDecided = decided != null;
+      if (decided != null) {
+        out.put(`pnl.${e.slug}.salaryProj`, decided, 'p', `${e.name} officer salary, as you decided`, 'owner-decision',
+          { calc: 'ownerDecision', inputs: { decision: SALARY_DECIDED_KEY }, steps: [{ label: 'Salary you decided', formula: 'the point you picked in Decide', value: decided }] });
+      } else {
+        out.put(`pnl.${e.slug}.salaryProj`, proj(s.salary), 'p', `${e.name} officer salary, projected for the year`, 'plan-projection', projLoc('Projected salary', s.salary));
+      }
       corps.push({ entity: e, person: e.owner, sums: s, proj });
     }
   }
@@ -293,8 +312,8 @@ export function computeFigures(data, facts, ctx) {
     // from its boxes (box 1; box 5; box 1 plus elective deferrals). Only with no W-2 does the P&L
     // officer salary projection stand in: gross pay for Medicare wages and compensation, less the
     // owner's stated pretax deferrals for taxable wages (I1, below).
-    c.fromPnl = !ownRec && c.sums.salary > 0;
-    const salary = c.fromPnl ? c.proj(c.sums.salary) : 0;
+    c.fromPnl = !ownRec && (c.entity.salaryDecided || c.sums.salary > 0);
+    const salary = c.fromPnl ? c.entity.salaryAssumed : 0;
     const gross = ownRec ? ownRec.medicare : salary;
     const comp = ownRec ? ownRec.comp : salary;
     c.w2 = null;
