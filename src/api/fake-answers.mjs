@@ -8,7 +8,7 @@
 // household_summary result. Numbers in the owner's free text are echoed back, so an invented
 // amount reaches grounding the way a careless model would repeat it.
 // When `propose` is set (the proposal tool is offered), free text that is an explicit command
-// (it starts with accept, start, complete, dismiss, snooze or reopen, optionally after "please")
+// (it starts with start, complete, dismiss, snooze or reopen, optionally after "please")
 // naming a rec (the rec conversation's own rec, or in an Ask thread a visible rec's id or exact title) adds
 // a propose_recommendation_action call, and the text round says the owner can confirm it below.
 // In an Ask thread, free text "add a goal: <words>" adds a propose_goal call with those words as
@@ -21,7 +21,7 @@ import { resolveTokens } from '../shared/tokens.mjs';
 const FIGURE_TOKEN = /\{(?:fk|f):([A-Za-z0-9_.-]+)\}/g;
 const OWNER_NUMBER = /-?\$?\d(?:[\d,]*\d)?(?:\.\d+)?%?/g;
 const YEAR = /\b(?:19|20|21)\d{2}\b/g;
-const COMMAND = /^(?:please\s+)?(accept|start|complete|dismiss|snooze|reopen)\b/i;
+const COMMAND = /^(?:please\s+)?(start|complete|dismiss|snooze|reopen)\b/i;
 const CONFIRM = 'Nothing has changed yet. You can confirm this change below.';
 const GOAL_COMMAND = /^(?:please\s+)?add (?:a |another |new |a new )?goal\s*[:,-]?\s*(\S[\s\S]*)$/i;
 const GOAL_CONFIRM = 'Nothing is saved yet. You can save this goal below.';

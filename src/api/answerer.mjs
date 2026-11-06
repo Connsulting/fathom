@@ -118,7 +118,7 @@ export function buildChatPrompt({ packContextText = '', summary = {}, context = 
 
 export const PROPOSE_TOOL = Object.freeze({
   name: 'propose_recommendation_action',
-  description: 'Propose a change to one recommendation (accept, start, complete, dismiss, snooze with an optional wake label, reopen) ' +
+  description: 'Propose a change to one recommendation (start = the owner is doing it, complete, dismiss = not for us, snooze = later, with an optional wake label, reopen) ' +
     'for the owner to confirm. Nothing changes until the owner confirms. Use it only when the owner explicitly asks for that change.',
   inputSchema: {
     type: 'object',

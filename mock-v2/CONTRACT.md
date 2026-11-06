@@ -104,7 +104,7 @@ api.recs()                  // all recommendations with live status merged in
 api.rec(id)
 api.needsYou()              // recs needing the person now (rule below), sorted by window.days
 api.verdict()               // { level: 'clear'|'attention', headline, sub } computed
-api.act(recId, action, arg?)// action: 'accept'|'start'|'snooze'|'dismiss'|'complete'|'reopen'|'task'
+api.act(recId, action, arg?)// action: 'start'|'snooze'|'dismiss'|'complete'|'reopen'|'task'
                             //   'task' arg = task index, toggles done
                             //   'snooze' arg = wake label string
 api.ask(questionId)         // appends canned Q and A to the active conversation
@@ -171,14 +171,14 @@ Demo state `checkin` starts on `advisor`. Demo state `fresh` forces `onboarding`
 Each rec has a base `status` in the scenario plus optional `statusByDemo: { first: 'proposed', clear: 'done' }`.
 Live status = action overrides ?? statusByDemo[demo] ?? status.
 
-Statuses: `proposed` (new, needs a decision), `accepted` (agreed, not started), `doing`
-(in progress), `waiting` (blocked; `waitingOn: 'data'|'advisor'|'date'`), `snoozed`
+Statuses: `proposed` (new, needs a decision), `doing` (the owner has committed: "Doing it",
+in motion with its steps tracked), `waiting` (blocked; `waitingOn: 'data'|'advisor'|'date'`), `snoozed`
 (`wake` label), `done`, `dismissed`.
 
-Actions: accept -> accepted; start -> doing; complete -> done; dismiss -> dismissed;
-snooze -> snoozed; reopen -> proposed. Completing all tasks does not auto-complete.
+Actions (buttons): start ("Doing it") -> doing; complete ("Done") -> done; snooze ("Later") ->
+snoozed; dismiss ("Not for us") -> dismissed; reopen -> proposed. Completing all tasks does not auto-complete.
 
-`needsYou()` = recs where status is `proposed`, or status is `accepted`/`doing` and
+`needsYou()` = recs where status is `proposed`, or status is `doing` and
 `window.days <= 30`. Excludes `waiting`, `snoozed`, `done`, `dismissed`.
 
 `verdict()`: if needsYou is empty -> level `clear`, headline from `scenario.verdict.clear`,

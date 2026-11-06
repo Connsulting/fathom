@@ -11,7 +11,7 @@ import { tools } from '../tools/index.mjs';
 export const KEY_PREFIX = 'fathom_';
 export const SCOPE_INFO = Object.freeze([
   { id: 'read', label: 'Read', access: 'Read household facts, accounts, transactions, recommendations, deadlines, goals, figures and knowledge packs.' },
-  { id: 'write:recs', label: 'Change recommendation status', access: 'Set a recommendation status (accept, start, finish, dismiss, snooze). Nothing else is writable.' },
+  { id: 'write:recs', label: 'Change recommendation status', access: 'Set a recommendation status (doing it, done, later, not for us). Nothing else is writable.' },
 ]);
 export const SCOPES = Object.freeze(SCOPE_INFO.map(s => s.id));
 export const SECRET_FILE = 'api-key-secret';

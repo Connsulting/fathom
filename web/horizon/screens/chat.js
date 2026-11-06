@@ -34,7 +34,7 @@ const GROUNDED = 'Every number is from your data or a tool result.';
 const UNVERIFIED = 'Some numbers could not be verified and are marked.';
 
 const isObj = (v) => v != null && typeof v === 'object' && !Array.isArray(v);
-const ACTION_LABEL = { accept: 'Accept', start: 'Start', complete: 'Mark done', dismiss: 'Dismiss', snooze: 'Snooze', reopen: 'Reopen' };
+const ACTION_LABEL = { start: 'Doing it', complete: 'Done', dismiss: 'Not for us', snooze: 'Later', reopen: 'Reopen' };
 
 function argsText(args) {
   if (args == null) return 'no arguments';
@@ -104,7 +104,7 @@ export function proposalHtml(m) {
   if (!r || r.status === 'hidden') return '';
   const wake = p.action === 'snooze' && typeof p.wake === 'string' && p.wake ? p.wake : '';
   const done = r.status === ACTION_STATUS[p.action];
-  return `<div class="h-proposal"><p><span class="h-proposal-k">Proposed:</span> ${label} <b>${T(r.title)}</b>${wake ? ` until ${escapeUserText(wake)}` : ''}</p>`
+  return `<div class="h-proposal"><p><span class="h-proposal-k">Proposed:</span> ${label}: <b>${T(r.title)}</b>${wake ? ` until ${escapeUserText(wake)}` : ''}</p>`
     + (done
       ? '<span class="h-proposal-done">Done</span>'
       : `<button type="button" class="h-btn pri h-propose" data-propose-rec="${esc(r.id)}" data-propose-action="${esc(p.action)}"${wake ? ` data-propose-wake="${escapeUserText(wake)}"` : ''}>Confirm</button>`)

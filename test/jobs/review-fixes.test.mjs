@@ -211,7 +211,7 @@ describe('review fixes', () => {
   test('AC4: a calculator that starts throwing parks its rec as waiting instead of retiring it, and recovers (F9)', async () => {
     const db = await S.store();
     await plan(db);
-    recAction(ctxOf(db, { id: 'hsa-room' }, { action: 'accept' }));
+    recAction(ctxOf(db, { id: 'hsa-room' }, { action: 'start' }));
     addFact(db, 'household.ownerAge', 200); // outside the calculator age range
     await plan(db);
     const row = recRow(db, 'hsa-room');
@@ -219,10 +219,10 @@ describe('review fixes', () => {
     assert.equal(row.waiting_on, 'data');
     assert.equal(plannerRec(db, 'hsa-room').retired_at, null, 'not retired');
     const ev = recEvents(db, 'hsa-room').at(-1);
-    assert.deepEqual([ev.action, ev.actor, ev.from_status, ev.to_status], ['block', 'planner', 'accepted', 'waiting']);
+    assert.deepEqual([ev.action, ev.actor, ev.from_status, ev.to_status], ['block', 'planner', 'doing', 'waiting']);
     addFact(db, 'household.ownerAge', 45);
     await plan(db);
-    assert.equal(recRow(db, 'hsa-room').status, 'accepted', 'back to the prior status');
+    assert.equal(recRow(db, 'hsa-room').status, 'doing', 'back to the prior status');
     assert.equal(recEvents(db, 'hsa-room').at(-1).action, 'unblock');
   });
 
@@ -330,8 +330,8 @@ describe('review fixes, round three', () => {
     const db = await S.store();
     await plan(db);
     for (const id of ['scorp-salary', 'invoice-deferral']) assert.ok(activeRecIds(db).includes(id), `${id} fires first`);
-    recAction(ctxOf(db, { id: 'scorp-salary' }, { action: 'accept' }));
-    const prior = { 'scorp-salary': 'accepted', 'invoice-deferral': 'proposed' };
+    recAction(ctxOf(db, { id: 'scorp-salary' }, { action: 'start' }));
+    const prior = { 'scorp-salary': 'doing', 'invoice-deferral': 'proposed' };
 
     addFact(db, 'tax.itemizedEstimate', 40000); // federal itemizes, Virginia estimate missing
     await plan(db);

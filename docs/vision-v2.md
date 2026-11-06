@@ -143,9 +143,10 @@ businesses as one financial unit with the person as the customer.
 
 ## 4. Recommendation model
 
-Statuses: proposed, accepted, doing, waiting (on data, the advisor, or a date), snoozed (with a
-wake condition), done, dismissed, and hidden (behind an inactive knowledge pack). "Needs you" is
-any proposed item, plus accepted or in-progress items whose window is inside 30 days. Waiting and
+Statuses: proposed, doing (the owner has committed; the steps are tracked), waiting (on data, the
+advisor, or a date), snoozed (with a wake condition), done, dismissed, and hidden (behind an inactive
+knowledge pack). The owner's four answers to a proposed item read Doing it, Done, Later and Not for
+us. "Needs you" is any proposed item, plus doing items whose window is inside 30 days. Waiting and
 snoozed items are carried and do not count. The verdict is computed from that set, so the brief can
 only say "covered" when nothing needs the owner.
 

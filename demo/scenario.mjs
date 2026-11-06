@@ -1282,7 +1282,7 @@ export default {
         "days": 56
       },
       "effort": "5 min",
-      "status": "accepted",
+      "status": "doing",
       "statusByDemo": {
         "first": "proposed"
       },
@@ -1355,7 +1355,7 @@ export default {
         "days": 56
       },
       "effort": "5 min",
-      "status": "accepted",
+      "status": "doing",
       "statusByDemo": {
         "first": "proposed"
       },
@@ -1548,7 +1548,7 @@ export default {
         "days": 161
       },
       "effort": "5 min",
-      "status": "accepted",
+      "status": "doing",
       "statusByDemo": {
         "first": "snoozed"
       },
@@ -1748,7 +1748,7 @@ export default {
         "days": 87
       },
       "effort": "2 hours",
-      "status": "accepted",
+      "status": "doing",
       "statusByDemo": {
         "first": "snoozed"
       },
@@ -1815,7 +1815,7 @@ export default {
         "days": 56
       },
       "effort": "30 min",
-      "status": "accepted",
+      "status": "doing",
       "statusByDemo": {
         "first": "snoozed"
       },
@@ -2875,7 +2875,7 @@ export default {
       },
       {
         "name": "plan.update_status",
-        "desc": "Accept, snooze or complete a recommendation (write scope)"
+        "desc": "Mark a recommendation doing it, done, later or not for us (write scope)"
       },
       {
         "name": "scenarios.run",

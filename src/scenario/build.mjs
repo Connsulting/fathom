@@ -224,13 +224,13 @@ export const ASK_STARTERS = Object.freeze([
   Object.freeze({ id: 'yearend', q: 'What should we do before the year ends?' }),
 ]);
 
-// The starters whose condition holds: attention (a visible rec proposed, accepted or doing), taxes
+// The starters whose condition holds: attention (a visible rec proposed or doing), taxes
 // (any tax payment), scorp (fact income.sCorp is true or any P&L line), yearend (always).
 export function loadAskStarters(db, recs) {
   const exists = table => !!db.prepare(`SELECT EXISTS (SELECT 1 FROM ${table}) AS x`).get().x;
   const sCorp = parse(db.prepare("SELECT value FROM facts WHERE key = 'income.sCorp'").get()?.value, null) === true;
   const holds = {
-    attention: recs.some(r => ['proposed', 'accepted', 'doing'].includes(r.status)),
+    attention: recs.some(r => ['proposed', 'doing'].includes(r.status)),
     taxes: exists('tax_payments'),
     scorp: sCorp || exists('pnl_lines'),
     yearend: true,

@@ -19,7 +19,7 @@ import { withAdvisor, advisorStatus } from '../advisor/index.mjs';
 export { ToolError };
 export { packDirsFor } from './packs.mjs';
 
-const SETTABLE = ['accepted', 'doing', 'done', 'dismissed', 'snoozed', 'proposed'];
+const SETTABLE = ['doing', 'done', 'dismissed', 'snoozed', 'proposed'];
 const DATE = '^\\d{4}-\\d{2}-\\d{2}$';
 const MONTH = '^\\d{4}-\\d{2}$';
 
@@ -358,7 +358,7 @@ export const tools = [
   },
   {
     name: 'set_recommendation_status',
-    description: 'Set a recommendation status (accepted, doing, done, dismissed, snoozed, proposed). Snoozed takes an optional wake label. Recorded in the rec history as a tool change.',
+    description: 'Set a recommendation status (doing, done, dismissed, snoozed, proposed). Snoozed takes an optional wake label. Recorded in the rec history as a tool change.',
     inputSchema: obj({
       id: { type: 'string', minLength: 1 },
       status: { type: 'string', enum: SETTABLE },

@@ -19,21 +19,20 @@ test('shared modules import nothing from node', () => {
 
 test('ACTION_STATUS maps every action', () => {
   assert.deepEqual({ ...ACTION_STATUS }, {
-    accept: 'accepted', start: 'doing', complete: 'done', dismiss: 'dismissed', snooze: 'snoozed', reopen: 'proposed',
+    start: 'doing', complete: 'done', dismiss: 'dismissed', snooze: 'snoozed', reopen: 'proposed',
   });
 });
 
 test('needsRule follows the CONTRACT rule', () => {
   assert.equal(needsRule('proposed', rec('a', 'proposed', 400)), true);
-  assert.equal(needsRule('accepted', rec('a', 'accepted', 30)), true);
   assert.equal(needsRule('doing', rec('a', 'doing', 5)), true);
-  assert.equal(needsRule('accepted', rec('a', 'accepted', 31)), false);
+  assert.equal(needsRule('doing', rec('a', 'doing', 30)), true);
   assert.equal(needsRule('doing', rec('a', 'doing', 31)), false);
   for (const s of ['waiting', 'snoozed', 'done', 'dismissed', 'hidden']) assert.equal(needsRule(s, rec('a', s, 1)), false, s);
 });
 
 test('needsYou sorts by window and excludes hidden; verdictLevel follows it', () => {
-  const recs = [rec('late', 'proposed', 50), rec('soon', 'doing', 3), rec('h', 'hidden', 1), rec('w', 'waiting', 1), rec('mid', 'accepted', 20)];
+  const recs = [rec('late', 'proposed', 50), rec('soon', 'doing', 3), rec('h', 'hidden', 1), rec('w', 'waiting', 1), rec('mid', 'doing', 20)];
   assert.deepEqual(needsYou(recs).map(r => r.id), ['soon', 'mid', 'late']);
   assert.equal(verdictLevel(recs), 'attention');
   assert.equal(verdictLevel([rec('d', 'done', 1), rec('h', 'hidden', 1)]), 'clear');

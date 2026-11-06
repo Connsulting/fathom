@@ -146,7 +146,7 @@ export async function resetDemo(request, baseURL) {
 
 /* ---------- scenario oracle (independent of src/, mirrors CONTRACT.md) ---------- */
 
-const OPEN_SOON = ['accepted', 'doing'];
+const OPEN_SOON = ['doing'];
 
 // Live status at seed time: statusByDemo.november ?? status (pinned decision 3).
 export function liveStatus(r) {
@@ -163,7 +163,7 @@ export function rec(id) {
   return r;
 }
 
-// CONTRACT needsYou(): proposed, or accepted/doing with window.days <= 30; sorted by days.
+// CONTRACT needsYou(): proposed, or doing with window.days <= 30; sorted by days.
 export function needsYouIds() {
   return visibleRecs()
     .filter((r) => {

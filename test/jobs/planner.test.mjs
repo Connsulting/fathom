@@ -615,14 +615,14 @@ describe('recs', () => {
   test('AC4: owner status, task flags and conversation survive a rerun', async () => {
     const db = await S.store();
     await plan(db);
-    recAction(ctxOf(db, { id: 'va529' }, { action: 'accept' }));
+    recAction(ctxOf(db, { id: 'va529' }, { action: 'start' }));
     recAction(ctxOf(db, { id: 'va529' }, { action: 'task', arg: 0 }));
     await ask(ctxOf(db, {}, { key: 'va529', text: 'Synthetic follow-up question for the planner test.' }));
     const before = db.prepare("SELECT id, role, text FROM messages WHERE conversation_key = 'va529' ORDER BY id").all().map(r => ({ ...r }));
     assert.ok(before.length >= 2);
     await plan(db);
     const row = recRow(db, 'va529');
-    assert.equal(row.status, 'accepted');
+    assert.equal(row.status, 'doing');
     assert.equal(row.tasks_done[0], true, 'task flag kept');
     const after = db.prepare("SELECT id, role, text FROM messages WHERE conversation_key = 'va529' ORDER BY id").all().map(r => ({ ...r }));
     assert.deepEqual(after, before, 'conversation untouched');
@@ -808,13 +808,13 @@ describe('recs', () => {
   test('AC4: a rec id held by a non-planner rec is skipped with warning rec_id_taken', async () => {
     const db = await S.store();
     const def = { id: 'va529', title: 'Owner note', summary: 'Kept by the owner.', tasks: [] };
-    db.prepare(`INSERT INTO recs (id, def, status, tasks_done, sort, updated_at) VALUES ('va529', ?, 'accepted', '[]', 0, ?)`)
+    db.prepare(`INSERT INTO recs (id, def, status, tasks_done, sort, updated_at) VALUES ('va529', ?, 'doing', '[]', 0, ?)`)
       .run(JSON.stringify(def), new Date().toISOString());
     const result = await plan(db);
     assert.ok(result.warnings.includes('rec_id_taken'));
     assert.equal(plannerRec(db, 'va529'), null);
     const row = recRow(db, 'va529');
-    assert.deepEqual([row.status, row.def.title], ['accepted', 'Owner note']);
+    assert.deepEqual([row.status, row.def.title], ['doing', 'Owner note']);
     assert.ok(activeRecIds(db).includes('va-q4-estimate'), 'the other recs still land');
   });
 

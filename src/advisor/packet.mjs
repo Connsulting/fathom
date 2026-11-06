@@ -126,7 +126,7 @@ export function buildPacketHtml(S, { generatedOn, sources = {} } = {}) {
   const waiting = new Map(arr(adv.waiting).map(w => [w.recId, w]));
   const product = plain(S.meta?.product || 'Fathom');
   const advisorName = plain(adv.name ? S.names && /^\{n:([^}]+)\}$/.test(adv.name) ? S.names[adv.name.slice(3, -1)] : adv.name : '') || 'Your advisor';
-  const open = recs.filter(r => ['proposed', 'accepted', 'doing', 'waiting', 'snoozed'].includes(r.status));
+  const open = recs.filter(r => ['proposed', 'doing', 'waiting', 'snoozed'].includes(r.status));
   const accounts = arr(S.accounts);
   const goals = arr(S.goals);
   const reviewed = arr(adv.reviewed);
