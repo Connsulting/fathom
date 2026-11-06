@@ -18,7 +18,7 @@ import {
 import { sendEmail, listSends } from '../../src/email/send.mjs';
 
 // Synthetic secrets and markers: none may appear in an error, a thrown message or a log line.
-const KEY = 'am_synthetic_KEY_7f3c9e1d55';
+const KEY = 'synthetic-email-credential';
 const BODY_TEXT = 'SYNTHETIC-BODY-TEXT-90210';
 const BODY_HTML = '<p style="margin:0">SYNTHETIC-BODY-HTML-31337</p>';
 const FROM = 'fathom+inbox@example.invalid';
