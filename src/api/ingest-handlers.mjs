@@ -6,7 +6,7 @@
 import { getSetting } from '../store/db.mjs';
 import { loadDataKey, VaultError } from '../ingest/vault.mjs';
 import { ingestFiles, retryFile as retryIngest } from '../ingest/pipeline.mjs';
-import { answerItem, reviseItem, reopenItem, finalReason, pendingItems, listItems, ConfirmError } from '../ingest/confirm.mjs';
+import { answerItem, reviseItem, reopenItem, finalReason, getItem, pendingItems, listItems, ConfirmError } from '../ingest/confirm.mjs';
 import { fileOf } from '../ingest/freshness.mjs';
 import { refreshPackState } from '../packs/state.mjs';
 import { HttpError } from './http.mjs';
@@ -102,6 +102,13 @@ export async function retryFile(ctx) {
   return { scenario: scenarioOf(ctx), file };
 }
 
+// One confirm item by id, pending or answered, so a client can check whether an answer landed.
+export function getConfirm(ctx) {
+  const item = getItem(ctx.db, itemId(ctx.params.id));
+  if (!item) throw new HttpError(404, 'no such question');
+  return { item: { ...item, final: finalReason(ctx.db, item) } };
+}
+
 export function listPendingConfirm(ctx) {
   return { items: pendingItems(ctx.db) };
 }
@@ -128,7 +135,7 @@ function confirmAction(ctx, fn) {
       throw new HttpError(err.status, FINAL_MESSAGE[err.reason]);
     }
     if (err instanceof ConfirmError && Object.hasOwn(CONFIRM_MESSAGE, err.code)) {
-      throw new HttpError(err.status, CONFIRM_MESSAGE[err.code]);
+      throw new HttpError(err.status, CONFIRM_MESSAGE[err.code], undefined, err.code);
     }
     throw err;
   }
@@ -138,16 +145,40 @@ function confirmAction(ctx, fn) {
   return { scenario: scenarioOf(ctx), item: { ...out.item, final: finalReason(ctx.db, out.item) } };
 }
 
+// After a confirm answer (or a stale refusal) on a real store, the plan job is scheduled through
+// the scheduler's debounce: one run 30 s after the last answer of a burst, or right away once the
+// pending queue is empty. The run's job_runs trigger is 'confirm'. Never fails the request.
+export function schedulePlan(ctx) {
+  if (!ctx.scheduler || typeof ctx.scheduler.soon !== 'function' || storeMode(ctx.db) === 'demo') return;
+  try {
+    const left = ctx.db.prepare("SELECT count(*) AS n FROM confirm_items WHERE status = 'pending'").get().n;
+    ctx.scheduler.soon('plan', 'confirm', { immediate: left === 0 });
+  } catch (err) {
+    console.error('fathom: plan trigger failed', safeCode(err));
+  }
+}
+
+function afterAnswer(ctx, fn) {
+  try {
+    const out = confirmAction(ctx, fn);
+    schedulePlan(ctx);
+    return out;
+  } catch (err) {
+    if (err instanceof HttpError && err.code === 'stale') schedulePlan(ctx);
+    throw err;
+  }
+}
+
 // {answer} answers a pending item; {answer, revise: true} revises an answered one.
 export function answerConfirm(ctx) {
   const id = itemId(ctx.params.id);
   const optionId = ctx.body.answer;
   if (typeof optionId !== 'string' || !optionId) throw new HttpError(400, 'answer must be an option id');
   const revise = ctx.body.revise === true;
-  return confirmAction(ctx, () => (revise ? reviseItem : answerItem)(ctx.db, id, optionId, { now: nowIso() }));
+  return afterAnswer(ctx, () => (revise ? reviseItem : answerItem)(ctx.db, id, optionId, { now: nowIso() }));
 }
 
 export function reopenConfirm(ctx) {
   const id = itemId(ctx.params.id);
-  return confirmAction(ctx, () => reopenItem(ctx.db, id, { now: nowIso() }));
+  return afterAnswer(ctx, () => reopenItem(ctx.db, id, { now: nowIso() }));
 }

@@ -162,21 +162,38 @@ async function plan(db, engine, { clock, runId, packDirs }) {
 
 // D13: a derived value that disagrees with an owner's notes fact is asked about with ingest's own
 // fact_check question (subject <source>|<key>|<canonical JSON value>, as recordFact builds it), never
-// written. A pending planner question for another value of the key is closed as superseded, so a
-// rerun with the same value asks nothing new.
+// written. The context records the notes value it is asked against (stored), so the question goes
+// stale only when the notes fact changes. A pending planner question for another value of the key,
+// or for a key with no disagreement left, is closed as superseded, so a rerun with the same value
+// asks nothing new. A question for this value that is pending against another notes value (or one
+// asked before stored was recorded), or was closed as superseded, is asked again in place with the
+// current context (the (kind, subject) pair is unique).
 function askFactChecks(db, checks, { clock, now }) {
   const close = db.prepare("UPDATE confirm_items SET status = 'answered', answer = 'superseded', answered_at = ? WHERE id = ?");
+  const reask = db.prepare("UPDATE confirm_items SET status = 'pending', answer = NULL, answered_at = NULL, question = ?, context = ?, file_id = ? WHERE id = ?");
+  const bySubject = db.prepare("SELECT id, status, answer, context FROM confirm_items WHERE kind = 'fact_check' AND subject = ?");
   const pending = db.prepare("SELECT id, subject, context FROM confirm_items WHERE kind = 'fact_check' AND status = 'pending'").all()
     .map(r => ({ ...r, context: parseJson(r.context, {}) || {} })).filter(r => r.context.src === PLANNER_SRC);
+  const keys = new Set(checks.map(c => c.key));
+  for (const p of pending) if (!keys.has(p.context.key)) close.run(now, p.id);
   for (const c of checks) {
     const json = canonicalJson(c.value);
     const subject = `${PLANNER_SRC}|${c.key}|${json}`;
     for (const p of pending) if (p.context.key === c.key && p.subject !== subject) close.run(now, p.id);
     const { fileId, parser, locator } = factProvenance(c);
-    ask(db, {
-      kind: 'fact_check', subject, question: `Your data says ${c.key} is ${json}, but your notes say ${canonicalJson(c.stored)}. Is the data right?`,
-      options: FACT_CHECK_OPTIONS, context: { key: c.key, value: c.value, src: PLANNER_SRC, asOf: clock, fileId, parser, locator, confidence: 1 }, fileId, now,
-    });
+    const question = `Your data says ${c.key} is ${json}, but your notes say ${canonicalJson(c.stored)}. Is the data right?`;
+    const context = { key: c.key, value: c.value, stored: c.stored, src: PLANNER_SRC, asOf: clock, fileId, parser, locator, confidence: 1 };
+    const prior = bySubject.get(subject);
+    if (prior) {
+      const was = parseJson(prior.context, {}) || {};
+      const askedAgainst = Object.hasOwn(was, 'stored') ? canonicalJson(was.stored) : null;
+      const outdated = prior.status === 'pending' && askedAgainst !== canonicalJson(c.stored);
+      if (outdated || (prior.status === 'answered' && prior.answer === 'superseded')) {
+        reask.run(question, JSON.stringify(context), fileId ?? null, prior.id);
+        continue;
+      }
+    }
+    ask(db, { kind: 'fact_check', subject, question, options: FACT_CHECK_OPTIONS, context, fileId, now });
   }
 }
 

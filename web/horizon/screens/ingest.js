@@ -198,6 +198,7 @@ export function ingestScreens(h) {
      be revisited, answers {id: optionId}, the undo history and final notices {id: message}.
      cur is the current id, or null for the All caught up end state. */
 
+  const STALE_LINE = 'This one changed while you were answering; refreshed.';
   const pendingNow = () => ing().items.filter((i) => !i.status || i.status === 'pending');
   const unanswered = (dk, id) => dk.answers[id] == null && dk.busy !== id;
 
@@ -283,6 +284,7 @@ export function ingestScreens(h) {
       const at = dk.cur == null ? n : dk.ids.indexOf(dk.cur);
       const done = dk.ids.filter((id) => dk.answers[id] != null).length;
       const canUndo = dk.busy == null && undoTarget(dk) != null;
+      const note = dk.notice ? `<p class="h-deck-notice" role="status">${esc(dk.notice)}</p>` : '';
       const top = `<div class="h-deck-top"><span class="h-deck-pos" data-deck-progress>${Math.min(at + 1, n)} of ${n}</span>
         <div class="h-deck-bar" role="progressbar" aria-label="Answered" aria-valuemin="0" aria-valuemax="${n}" aria-valuenow="${done}"><i style="width:${Math.round((done / n) * 100)}%"></i></div>
         ${btn('Undo', `data-deck="undo"${canUndo ? '' : ' disabled'}`, 'ghost')}</div>`;
@@ -296,7 +298,7 @@ export function ingestScreens(h) {
       const canNext = dk.cur != null && (at < n - 1 || allDone);
       const hint = '<p class="h-deck-hint"><span class="kb">1 to 9 answer, Enter takes the guess, J and K move, Z undoes, Esc goes to Year, ? for all shortcuts</span><span class="tch">Swipe right for the next card, left for the previous one</span></p>';
       const nav = `<div class="h-deck-nav">${btn('← Prev', `data-deck="prev"${at > 0 ? '' : ' disabled'}`, 'ghost')}${hint}${btn('Next →', `data-deck="next"${canNext ? '' : ' disabled'}`, 'ghost')}</div>`;
-      deck = `<div class="h-deck">${top}${stack}${nav}</div>`;
+      deck = `<div class="h-deck">${top}${note}${stack}${nav}</div>`;
     }
     const wait = waitingList() || '<p class="h-mute">No files are waiting.</p>';
     return shell(`${pageHead('Household', 'Confirm', 'A few short questions so imports land in the right place.')}
@@ -333,12 +335,18 @@ export function ingestScreens(h) {
     dk.busy = id;
     dk.busyOpt = String(opt);
     draw();
-    const req = revise ? api.reviseAnswer(id, opt) : api.answer(id, opt).then((item) => (item ? { item } : null));
+    dk.notice = '';
+    const req = revise ? api.reviseAnswer(id, opt) : api.answer(id, opt);
     req.then((r) => {
       dk.busy = null;
       dk.busyOpt = null;
       if (st.deck === dk && r) {
-        if (r.final) {
+        if (r.stale) {
+          // The question changed while it was being answered: the scenario was refetched, so move on.
+          dk.notice = STALE_LINE;
+          if (dk.cur === id) dk.cur = nextOpen(dk, id);
+          syncDeck(false);
+        } else if (r.final) {
           dk.final[id] = r.final;
           dk.hist = dk.hist.filter((x) => x !== id);
         } else {

@@ -65,6 +65,19 @@ function refreshPacks(packs) {
   }
 }
 
+// A reverse proxy keeps idle upstream connections open and reuses them; Node's default 5 s
+// keep-alive timeout can close one just as the proxy sends on it (a 502 with an EOF upstream).
+// Idle connections stay open longer than common proxy idle timeouts, and headersTimeout must
+// exceed keepAliveTimeout.
+export const KEEP_ALIVE_TIMEOUT_MS = 65000;
+export const HEADERS_TIMEOUT_MS = 66000;
+
+export function applyTimeouts(server) {
+  server.keepAliveTimeout = KEEP_ALIVE_TIMEOUT_MS;
+  server.headersTimeout = HEADERS_TIMEOUT_MS;
+  return server;
+}
+
 export async function startServer(config = loadConfig()) {
   const db = openStore(config);
   // One runtime engine per process, on the scenario clock so spend lands in the month the Engine
@@ -101,6 +114,7 @@ export async function startServer(config = loadConfig()) {
   const owners = loadOwnerLogins(config);
   if (getSetting(db, 'mode', null) !== 'demo' && owners.problem) console.error(ownerLoginsProblemLine(owners.problem));
   const server = http.createServer(createHandler({ db, config, answerer, engine, packs, keys, mcp, owners, scheduler, transport }));
+  applyTimeouts(server);
   try {
     await new Promise((resolveListen, reject) => {
       server.once('error', reject);
