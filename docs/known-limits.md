@@ -62,12 +62,14 @@ One line each, taken from merged pull request bodies and deduplicated. The numbe
 
 1. A model title made only of the owner's words can still carry a vague quantity word the denylist misses, such as "more" (#18).
 2. A sparse store can show fewer than three starter chips (#18).
-3. Naming a thread adds one Haiku call inside the request that completes turn 2 (#18).
-4. A migrated `ask` thread shows "New conversation" until its next turn (#18).
+3. Naming a thread adds one Haiku call inside the request that completes its first turn (#18).
+4. A migrated `ask` thread, or a rec conversation migration 016 moved into Ask, shows "New conversation" until its next turn names it (#18).
 5. Ctrl+Shift+L and Meta+L also focus the Ask input (#18).
-6. Streaming is used by the Ask page only; recommendation and pack chats still use the JSON request (#21).
+6. Streaming is used by the Ask page and the recommendation dialog; pack chats still use the JSON request (#21).
 7. The prompt no longer asks the model to cite pack entries by title, so provenance may list fewer entries; tools, figures and literals in Sources are unchanged (#21).
 8. Streamed figure tokens show the plain value in the checking style, or an ellipsis when unknown, never as a figure chip (#21).
+9. One question is in flight at a time across Ask and every recommendation dialog; the composers are read-only until it lands.
+10. A thread whose recommendation was retired or hidden keeps its history but shows no context chip.
 
 ## Owner gate
 
