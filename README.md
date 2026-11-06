@@ -5,8 +5,9 @@ mirroring from data dumps, goals in plain language, proactive recommendations wi
 games on tradeoff curves, curated knowledge packs, a monthly "it's covered" brief, and MCP access
 for your own AI. Advisory only: it never files taxes or moves money.
 
-Status: build phase. The product definition is [`docs/vision-v2.md`](docs/vision-v2.md); the
-architecture is [`docs/architecture.md`](docs/architecture.md).
+Status: build phase. Docs: product definition [`docs/vision-v2.md`](docs/vision-v2.md) (Status
+section for built versus deferred), architecture [`docs/architecture.md`](docs/architecture.md),
+known limits [`docs/known-limits.md`](docs/known-limits.md). The clickable mock is `mock-v2/`.
 
 ## Run it
 
@@ -35,9 +36,24 @@ November state) and keeps its state across restarts.
 | `FATHOM_EMAIL_TRANSPORT` | `dev` | `dev`, `smtp`, `resend`, `postmark` or `agentmail`. |
 | `FATHOM_PUBLIC_URL` | unset | URL MCP clients use to reach this server (http or https, no credentials, query or fragment). Its host is allowed on `/mcp` and every `/api` route. |
 | `FATHOM_ALLOWED_HOSTS` | unset | Comma separated extra host names (`host` or `host:port`) allowed on `/mcp` and every `/api` route. A deployment reached by a DNS name must set this or `FATHOM_PUBLIC_URL`. |
-| `FATHOM_OWNER_LOGINS` | unset | Comma separated Tailscale logins allowed into a real store. Unset on a real store, every page and `/api` route answers 401. |
-| `FATHOM_SIMPLEFIN_ALLOWED_HOSTS` | `bridge.simplefin.org,beta-bridge.simplefin.org` | Hosts the SimpleFIN client may call; everything else is refused. |
+| `FATHOM_OWNER_LOGINS` | unset | Comma or newline separated Tailscale logins allowed into a real store. Unset on a real store, every page and `/api` route answers 401. |
+| `FATHOM_SIMPLEFIN_ALLOWED_HOSTS` | `bridge.simplefin.org,beta-bridge.simplefin.org` | Hosts the SimpleFIN client may call (no scheme, port or path). Anything else refuses to start. |
 | `FATHOM_OWNER_LOGINS_FILE` | unset | Path to a file with the same list, instead of `FATHOM_OWNER_LOGINS` (not both). |
+| `FATHOM_EMAIL_FROM` | unset (`dev` uses `fathom@example.invalid`) | Sender address, or the AgentMail inbox id. Not with `FATHOM_EMAIL_FROM_FILE`. |
+| `FATHOM_EMAIL_FROM_FILE` | unset | File holding the sender address. Not with `FATHOM_EMAIL_FROM`. |
+| `FATHOM_EMAIL_TO` | unset (`dev` uses `owner@example.invalid`) | Recipient addresses, comma separated. Not with `FATHOM_EMAIL_TO_FILE`. |
+| `FATHOM_EMAIL_TO_FILE` | unset | File of recipients, comma or newline separated. Not with `FATHOM_EMAIL_TO`. |
+| `FATHOM_EMAIL_CREDENTIAL_FILE` | unset | API key or SMTP password file. Required except for `dev`. Mode 0400, 0440 with fsGroup, or 0600. |
+| `FATHOM_EMAIL_SMTP_USER` | unset | SMTP user name when the transport is `smtp`. |
+| `FATHOM_EMAIL_SMTP_HOST` | `smtp.gmail.com` | SMTP host. |
+| `FATHOM_EMAIL_SMTP_PORT` | `465` | `465` (TLS) or `587` (STARTTLS). |
+| `FATHOM_LIVE_EMAIL` | unset | `1` lets `npm run email:test` send one real message. Read only by that script. |
+| `FATHOM_LIVE` | unset | `1` lets `npm run smoke:live` call the live model. Read only by that test. |
+| `FATHOM_SMOKE_BASE_URL` | unset | Playwright smoke target. `BASE_URL` is the same switch. |
+| `FATHOM_SMOKE_TARGET` | `demo` | `real` for a finished real store: shells, empty states, provenance, GET and HEAD only. |
+| `FATHOM_SMOKE_HEADERS` | unset | JSON object of extra headers (the owner login) for real-store smoke. |
+
+Secret files, never committed: the Claude credential, the 32-byte data key, the email credential, and the owner-login list when you use the `_FILE` forms. The server also creates `api-key-secret` (64 hex characters, mode 0600) in the data directory on first start and uses it to hash API keys. A demo store creates `files/demo.key` for the vault.
 
 With `FATHOM_ENGINE=fake` (the demo default), Ask, recommendation chats and What if answer from a
 deterministic scripted source through the same grounding and provenance path as the live engine.
