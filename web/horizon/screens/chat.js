@@ -12,10 +12,18 @@
    from a fixed action map and the rec, never from model text; the wake label is escaped text.
    A goal proposal (provenance.goalProposal {title, note, horizon, target, targetDate}) saves a goal
    only when the owner taps Save, through the goals API (api.goalCreate). Its text is escaped; the
-   card reads Saved once an owner goal with that title exists. */
+   card reads Saved once an owner goal with that title exists.
+   Streaming: with the engine on, a question goes out through api.askStream / api.newThreadStream.
+   Until text arrives the pending block lists the run's progress labels; streamed text is raw model
+   output rendered by streamHtml (escaped, minimal markdown, every number and token in a neutral
+   .fx-checking span, never .fx-src or .fx-fig). The final grounded message replaces it. Only the
+   pending block is repainted per event; the page redraws once at the start and once at the end.
+   Scrolling: sending pins the owner's question under the thread header and the answer grows below
+   it; opening a thread lands on its latest question. */
 
 import { ACTION_STATUS } from '/shared/rules.mjs';
 import { escapeUserText, money } from '/shared/tokens.mjs';
+import { streamHtml } from '/shared/answer-text.mjs';
 import { horizonLabel } from '/shared/goals.mjs';
 
 let H = null;
@@ -275,9 +283,56 @@ function emptyHtml() {
   </section>`;
 }
 
+const WORKING = 'Working on it';
+const RECOVERING = 'Reconnecting to fetch your answer';
+
+// A streamed token shows its plain value (still in the checking style), or nothing when unknown.
+function plainToken(tok) {
+  const s = H.api.txt(tok);
+  return typeof s === 'string' && s && s !== tok && !/[{}]/.test(s) ? s : null;
+}
+
+// The live part of a pending question: progress steps until text arrives, then the streamed text
+// with the latest step under it.
+function liveHtml(p) {
+  const { esc } = H;
+  const steps = p.steps || [];
+  const last = steps.length ? steps[steps.length - 1] : WORKING;
+  if (p.stream) {
+    return `<div class="h-askx-stream" data-streaming="1"><div class="h-msg-b">${streamHtml(p.stream, plainToken)}</div></div>`
+      + `<div class="h-askx-wait" role="status"><i></i>${esc(last)}</div>`;
+  }
+  if (!steps.length) return `<div class="h-askx-wait" role="status"><i></i>${WORKING}</div>`;
+  return `<ol class="h-askx-steps" role="status">${steps.map((st, i) =>
+    `<li class="${i === steps.length - 1 ? 'on' : 'done'}"><i></i><span>${esc(st)}</span></li>`).join('')}</ol>`;
+}
+
 function pendingHtml(p) {
   return `<div class="h-thread h-askx-pend"><div class="h-msg me pending"><div class="h-msg-b"><p>${H.esc(p.text)}</p></div></div>`
-    + '<div class="h-askx-wait" role="status"><i></i>Working on it</div></div>';
+    + `<div class="h-askx-live" aria-live="polite">${liveHtml(p)}</div></div>`;
+}
+
+// Repaint only the live block of the pending question (no full redraw per streamed chunk).
+function paintLive(p) {
+  if (A.pending !== p || !H.root) return;
+  const el = H.root.querySelector('.h-askx-pend .h-askx-live');
+  if (el) el.innerHTML = liveHtml(p);
+}
+
+function streamEvent(p, name, data) {
+  if (A.pending !== p) return;
+  if (name === 'progress' && data && typeof data.label === 'string') {
+    if (p.steps[p.steps.length - 1] !== data.label) p.steps.push(data.label);
+  } else if (name === 'text' && data && typeof data.text === 'string') {
+    p.stream += data.text;
+    p.streamed = true;
+  } else if (name === 'reset') {
+    p.stream = '';
+  } else if (name === 'recovering') {
+    p.stream = '';
+    p.steps.push(RECOVERING);
+  } else return;
+  paintLive(p);
 }
 
 // th null with a pending new thread: the question shows in place while the thread is created.
@@ -315,10 +370,13 @@ export function render(id) {
     if (A.renaming && A.renaming !== shown) A.renaming = null;
     A.lastId = shown;
     A.lastN = n;
-    if (th) queueMicrotask(scrollEnd);
+    // Opening a thread lands on its latest question; a thread just created by a streamed answer
+    // keeps the place the owner was reading.
+    if (th && !(A.pending && A.pending.streamed && A.pending.key == null)) queueMicrotask(scrollToLastMine);
   } else if (th && n > A.lastN) {
     A.lastN = n;
-    queueMicrotask(scrollToLastMine);
+    // A streamed answer was read in place while it arrived; keep the owner where they are.
+    if (!(A.pending && A.pending.streamed)) queueMicrotask(scrollToLastMine);
   } else {
     A.lastN = n;
   }
@@ -334,7 +392,8 @@ function scrollEnd() {
 
 // A new answer: put the question that asked it just under the sticky headers.
 function scrollToLastMine() {
-  const list = H.root ? H.root.querySelectorAll('.h-askx-msgs .h-msg.me') : [];
+  if (!H.root) return;
+  const list = H.root.querySelectorAll('.h-askx-msgs .h-msg.me');
   const el = list[list.length - 1];
   if (!el) { scrollEnd(); return; }
   const head = H.root.querySelector('.h-askx-head');
@@ -365,13 +424,19 @@ export function newConversation() {
 // the core keeps the old state and shows its error line; the typed text goes back in the composer.
 function sendAsk({ key, text, draftKey, starter, refocus }) {
   if (A.pending || !text) return;
-  const pend = { key: key || null, text, n: key ? meCount(key) : 0 };
+  const pend = { key: key || null, text, n: key ? meCount(key) : 0, steps: [], stream: '', streamed: false };
   A.pending = pend;
   if (draftKey) H.ui.draft[draftKey] = '';
   H.draw();
-  scrollEnd();
+  // The question goes to the top of the view; the answer grows below it.
+  scrollToLastMine();
   const api = H.api;
-  const req = key ? api.askFree(text, key) : api.newThread(starter ? { questionId: starter } : { text });
+  const live = api.engineOn() && typeof api.askStream === 'function';
+  const onEvent = (name, data) => streamEvent(pend, name, data);
+  const q = starter ? { questionId: starter } : { text };
+  const req = live
+    ? (key ? api.askStream(text, key, onEvent) : api.newThreadStream(q, onEvent))
+    : (key ? api.askFree(text, key) : api.newThread(q));
   Promise.resolve(req).then((res) => {
     if (A.pending === pend) A.pending = null;
     if (!H.api) return;

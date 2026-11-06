@@ -7,12 +7,14 @@
 // Ask threads (src/api/threads.mjs): POST /api/threads creates one (and asks its first question),
 // POST /api/ask continues a thread, a rec conversation or a pack conversation by key. Naming runs
 // after the reply's transaction commits and before the response is built. Trash older than 30 days
-// is purged when the thread list, a thread or the scenario is read.
+// is purged when the thread list, a thread or the scenario is read. Both asking routes stream as
+// Server-Sent Events on request (src/api/router.mjs); the stored turn and the final body are the same.
 
 import { getSetting, setSetting, schemaVersion, tx, cents, parseJson as parse } from '../store/db.mjs';
 import { buildScenario, clockNow, loadContent, defaultPicks, wargameLists } from '../scenario/build.mjs';
 import { ACTION_STATUS, packStatus } from '../shared/rules.mjs';
 import { escapeUserText } from '../shared/tokens.mjs';
+import { wrapBlocks } from '../shared/answer-text.mjs';
 import { seedDemo } from '../../demo/seed.mjs';
 import { clearStoredFiles, loadDataKey, VaultError } from '../ingest/vault.mjs';
 import { HttpError } from './http.mjs';
@@ -31,7 +33,7 @@ const MAX_FILE_IDS = 50;
 const MAX_CAP_USD = 10000;
 const TOGGLE_NOTE = 'Recommendations update on the next planning run.';
 
-const paragraphs = list => (Array.isArray(list) ? list : []).map(p => `<p>${p}</p>`).join('');
+const paragraphs = list => wrapBlocks(Array.isArray(list) ? list : []);
 const nowIso = () => new Date().toISOString();
 
 export function scenarioOf(ctx) {
@@ -317,6 +319,14 @@ async function maybeName(ctx, key) {
   }
 }
 
+// Streaming routes (ctx.onEvent set by the router for an event-stream request): a 'start' event
+// names the conversation key before the model runs, so a client whose stream breaks knows which
+// conversation to reload; the answerer's progress and text events follow.
+function streamStart(ctx, key) {
+  if (typeof ctx.onEvent === 'function') ctx.onEvent({ type: 'start', key });
+}
+const streaming = ctx => (typeof ctx.onEvent === 'function' ? { onEvent: ctx.onEvent } : {});
+
 // Stores the owner message and the reply in `key`; `before` runs first inside the transaction.
 function storeTurn(ctx, key, mine, reply, before) {
   return tx(ctx.db, () => {
@@ -349,8 +359,9 @@ export async function ask(ctx) {
     mine = escapeUserText(clean);
   }
 
+  streamStart(ctx, key);
   const reply = await need(ctx, 'answerer').answer({ db, key, questionId: hasQ ? questionId : undefined,
-    text: hasQ ? undefined : clean, clock: ctx.config && ctx.config.clock });
+    text: hasQ ? undefined : clean, clock: ctx.config && ctx.config.clock, ...streaming(ctx) });
   if (!reply) throw new HttpError(404, `no question ${questionId}`);
   // A thread may have been trashed or deleted while the model answered; asking unarchives it.
   const id = storeTurn(ctx, key, mine, reply, thread ? () => {
@@ -405,7 +416,8 @@ export async function threadCreate(ctx) {
     question = clean;
   }
   const key = newThreadKey(db);
-  const reply = await need(ctx, 'answerer').answer({ db, key, text: question, clock: ctx.config && ctx.config.clock });
+  streamStart(ctx, key);
+  const reply = await need(ctx, 'answerer').answer({ db, key, text: question, clock: ctx.config && ctx.config.clock, ...streaming(ctx) });
   if (!reply) throw new HttpError(404, 'no answer');
   const id = storeTurn(ctx, key, mine, reply, () => insertThread(db, key, stamp(ctx)));
   await maybeName(ctx, key);
