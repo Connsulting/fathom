@@ -3,7 +3,7 @@ import { constants } from 'node:fs';
 import { checkGrounding } from './grounding.mjs';
 import { compileSchema } from './schema.mjs';
 import { createRegistryServer } from './tools.mjs';
-import { sdkRound, messagesRound, assistantText } from './live.mjs';
+import { sdkRound, messagesRound } from './live.mjs';
 import { modelFor, estimateUnknownCost } from './pricing.mjs';
 import { EngineOffError, BudgetExceededError, RoundLimitError, ModelCallError, ModelAccountingError } from './errors.mjs';
 export { EngineOffError, BudgetExceededError, RoundLimitError, ModelCallError, ModelAccountingError } from './errors.mjs';
@@ -187,7 +187,10 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
               for (const item of script.toolCalls ?? []) { emit({ type: 'tool', name: item.name }); await pause(streamDelayMs); }
             }
             await Promise.all((script.toolCalls ?? []).map(item => registry.invoke(item.name, item.args ?? {})));
-            const text = assistantText(script.content, script.text);
+            const blockTexts = Array.isArray(script.content)
+              ? script.content.filter(block => block && block.type === 'text' && typeof block.text === 'string').map(block => block.text)
+              : null;
+            const text = blockTexts && blockTexts.length ? blockTexts.join('') : (script.text ?? '');
             if (emit && text) {
               for (const chunk of fakeChunks(text)) { await pause(streamDelayMs); emit({ type: 'text', text: chunk }); }
             }

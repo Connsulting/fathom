@@ -50,7 +50,7 @@ export async function consumeSdkMessages(stream, onEvent) {
           frames = frames.filter(frame => !evicted.has(frame.uuid));
         }
         const replaced = frames.length !== before;
-        frames.push({ uuid: message.uuid, blocks: Array.isArray(message.message.content) ? message.message.content : [] });
+        frames.push({ uuid: message.uuid, blocks: Array.isArray(message.message.content) ? message.message.content.slice() : [] });
         content = frames.flatMap(frame => frame.blocks);
         if (onEvent && replaced) {
           try { onEvent({ type: 'replace', text: assistantText(content) }); } catch { /* listeners never fail a round */ }
