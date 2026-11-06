@@ -123,7 +123,7 @@ test.describe('routes', { tag: '@smoke' }, () => {
     const groups = panel.locator('.h-more-g:not(.h-more-phone)');
     await expect(groups).toHaveCount(2);
     await expect(groups.nth(0).locator('.h-more-h')).toHaveText('Household');
-    await expect(groups.nth(0).getByRole('link')).toHaveText(['Goals', 'Accounts', 'Advisor', 'Year end']);
+    await expect(groups.nth(0).getByRole('link')).toHaveText(['Goals', 'Accounts', 'Files', 'Advisor', 'Year end']);
     await expect(groups.nth(1).locator('.h-more-h')).toHaveText('System');
     await expect(groups.nth(1).getByRole('link')).toHaveText(['Connect', 'Engine', 'Email']);
 
