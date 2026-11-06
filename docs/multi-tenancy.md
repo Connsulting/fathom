@@ -157,6 +157,12 @@ tokens or email bodies. OS-level operators remain trusted custodians of backups.
    admin has enrolled. A crash leaves a resumable provisioning record, not an
    active half-created household. Automatic cleanup of failed provisioning must
    never delete an existing active root.
+   Until MT-10, platform setting `multi_household_enabled` defaults to false and
+   provisioning a second non-deleted household in real mode returns 409
+   `multi_household_gated`, counting provisioning rows as well as active rows.
+   MT-10 adds a release migration setting it true and makes true the new-instance
+   default. Before that, tests seed this setting only in their disposable
+   platform DB; demo mode is exempt. No HTTP or environment switch bypasses it.
 2. A household admin invites an exact email to an exact household with an
    explicit member or admin role. Store a hash of a random 256-bit token, target
    household, normalized email, inviter, role, expiry and consumed/revoked state.
@@ -197,12 +203,48 @@ an unavailable membership gets a generic 403. Thus a delayed write from the old
 tab cannot silently write into the newly selected household. Platform auth and
 membership-management routes have separate explicit policies.
 
+Fetch requests, including SSE, use headers `X-Fathom-Household` and
+`X-Fathom-Context-Version`. Top-level GET/HEAD downloads use query parameters
+`household` and `contextVersion`; the values are identifiers, not bearer secrets.
+Reject duplicate values and conflicting header/query assertions. MT-09 delivers
+both browser sending and server enforcement in one change, including advisor
+anchors and year-end download links. Before MT-09, sessions still resolve only
+their authorized household; the one-real-household gate prevents live switching.
+
 Switching clears all client scenario, conversation, pack and search state, aborts
 active requests/streams, then fetches the new scenario. Responses include their
 captured household/version, and the client drops stale responses. Do not persist
 financial payloads in shared local storage. Deep links include a household id;
 they require membership and explicit selection before opening financial data.
 Background work uses no browser session or browser-active household.
+
+### Required operational controls
+
+MT-03 adds `GET /api/household/outbound` and admin-only
+`POST /api/household/outbound` with explicit boolean fields `jobs`, `email`,
+`simplefin` and `engine`. Omitted fields retain their state. The server stores
+pause flags per household and checks them before new work and external dispatch.
+An enabled flag never overrides suspension, missing credentials, unverified
+recipients or funding limits. These routes let an admin inspect and explicitly
+resume the original migrated household and later a restored household. MT-04
+through MT-07 connect their implementations to this same control, without
+inventing another resume path.
+
+MT-05 adds OS-operator command `node scripts/reconcile-spend.mjs --household
+<id> --round <id> --cost-usd <amount> --receipt-ref <id>`. It accepts a finite nonnegative actual
+cost only after the operator has obtained the provider receipt, records receipt
+reference and audit outcome without its contents, settles idempotently and
+releases unused reservation. A cost above the reserved bound keeps the
+credential paused with `reservation_bound_exceeded`; never silently erase debt.
+Tests supply synthetic receipts. This command reconciles accounting; it does
+not automatically enable the household's engine pause flag.
+
+MT-08 adds admin-only `POST /api/household/backups` returning a queued operation
+id and `GET /api/household/backups/:id/status`. A fixed instance backup runner
+uses the operator-configured backup destination/key; users cannot choose paths,
+keys or another household. `node scripts/backup-household.mjs --household <id>`
+invokes the same runner at the OS-operator boundary. Status exposes counts and
+fixed codes only. Restore stays an operator command, never a household API.
 
 ## Complete storage inventory
 
@@ -285,6 +327,20 @@ tracked files. Sharing a master key is a recovery/operations choice; it does not
 make all households share the same data key. Loss or compromise of that master
 key has an instance-wide effect.
 
+After MT-03, real mode requires `FATHOM_PLATFORM_KEY_FILE` for the wrapping key
+and `FATHOM_MCP_SECRET_FILE` for the HMAC secret, both private regular mounted
+files. `FATHOM_DATA_KEY_FILE` is an input to the offline legacy conversion only;
+it is not a runtime fallback. `FATHOM_BACKUP_KEY_FILE` names the separate backup
+encryption key when backup operations are configured. Existing Claude and email
+credential variables keep their meanings. A missing real-mode secret refuses
+the affected operation, never generates a replacement. The migration verifies
+that `FATHOM_MCP_SECRET_FILE` contains exactly the existing HMAC bytes; an
+operator can mount the original file without rewriting it. Demo creates its
+own wrapping and HMAC keys under private `platform-secrets/` in its synthetic
+volume and needs no external secret. MT-02 adds codecs/config validation only;
+runtime selection of these secrets and the new envelope happens atomically with
+the MT-03 storage migration.
+
 Introduce one versioned vault envelope whose authenticated additional data binds
 the household id, object purpose, object id and data-key version. Use fresh
 AES-256-GCM nonces. Purposes distinguish uploads, advisor packets and SimpleFIN
@@ -341,7 +397,8 @@ and creator membership/version on every request; removal or role reduction
 revokes affected keys. A member in two households creates separate keys.
 
 Move the existing HMAC server secret to platform secret storage without changing
-its bytes so migrated keys still verify. New keys are also household-bound at
+its bytes by explicitly mounting it through `FATHOM_MCP_SECRET_FILE`, so migrated
+keys still verify. New keys are also household-bound at
 creation. Preserve the current wire token shape; no token prefix encodes an
 arbitrary filesystem path. Tool contexts include the key's resolved DB, root,
 clock and private pack directories. Tool discovery exposes no other household.
@@ -486,9 +543,11 @@ deletion does not claim immediate erasure from already retained backups.
 
 ## Migrating the current single household
 
-Deploy only after the account PR is merged and its actual auth schema has been
-reconciled. Before then this document's auth table names are assumptions. The
-migration utility is offline and resumable, with an exclusive instance lock and
+The auth separation in MT-01 runs first and keeps the original financial
+layout working; the steps here are the MT-03 financial cutover. Deploy only after
+the account PR is merged and its actual auth schema has been reconciled. Before
+then this document's auth table names are assumptions. The migration utility is
+offline and resumable, with an exclusive instance lock and
 an operation journal. There is no runtime legacy-storage fallback.
 
 1. Run preflight on the source ref: exactly one existing household, all users
@@ -501,9 +560,10 @@ an operation journal. There is no runtime legacy-storage fallback.
    together. Assign every existing financial row, file, private pack, job/run,
    cap/spend record, advisor artifact, outbox and SimpleFIN connection to the
    existing household id. No row is assigned by names, emails or account labels.
-3. Build platform identity/control state from the account tables. Convert
-   `users.household_id`/role to memberships, migrate passkeys unchanged and revoke
-   browser sessions/challenges/enrollment links for a clean login boundary.
+3. Validate the platform identity/control state already converted by MT-01 from
+   `users.household_id`/role to memberships and preserved passkeys. Do not recopy
+   identities from stale source tables. Revoke browser sessions/challenges and
+   enrollment links for a clean login boundary.
    Move all `api_keys` with their existing hashes/scopes and explicit original
    household binding; preserve the HMAC secret. Existing keys have no recorded
    creator, so bind them to the single admin when exactly one exists; otherwise
@@ -560,9 +620,11 @@ every `/mcp` method and tool:
 
 1. Create two synthetic households in one real application process, active admin
    and member sessions for each, an A+B member, and an operator without financial
-   membership. Use real passkey verification with Playwright virtual
-   authenticators and read enrollment links from a local test mail sink. Do not
-   inject authenticated identities or bypass the session resolver.
+   membership. The Node harness uses a client-side software WebAuthn authenticator
+   to sign real registration/assertion challenges; the actual server verifies
+   them. Read enrollment links from a local mail sink. Browser e2e separately uses
+   Playwright virtual authenticators. Do not mint sessions directly, inject
+   authenticated identities or bypass the session resolver.
 2. Create overlapping local ids, file hashes, pack ids, job/period ids, entity
    names, numeric amounts, Confirm subjects and account external ids. Also give
    B unique synthetic canaries in files, notes, facts, messages, private packs,
@@ -586,8 +648,8 @@ every `/mcp` method and tool:
    tools/list and each tools/call. A browser session alone never authenticates
    `/mcp`; use A and B bearer keys for its successful cases. MCP session-only,
    foreign-key, revoked-key and wrong-scope cases must all be covered.
-6. Use 100 fixed, recorded seeds with 20 mutations per route/method/tool per
-   direction in nightly CI; use 10 of those seeds per PR. Deterministic fixtures
+6. Use 100 fixed, recorded seeds with five mutations per route/method/tool per
+   direction in nightly CI; use two of those seeds per PR. Deterministic fixtures
    cover each authorization class on every PR regardless of the random seed.
    Print only synthetic seed, route template, mutation kind and assertion code.
    Save minimized synthetic repros on failure; never fuzz against real data.
@@ -602,8 +664,16 @@ path. Use local external-service emulators at the model, mail and SimpleFIN
 network boundaries, while keeping the changed internal code real. Fake engine
 mode tests deterministic grounding, but isolation integration also runs live-mode
 transport pointed at the local model emulator and observes its received context.
-No paid/provider credential is needed for the isolation gate; external provider
-smokes are separate, explicitly funded deployment checks.
+MT-05 adds programmatic `testTransport` injection into the server/engine test
+bootstrap for both Messages HTTP and SDK HTTP destinations. It requires explicit
+loopback endpoints and a synthetic credential generated by the fixture; the
+normal CLI bootstrap never accepts or passes it. There is no environment, HTTP
+or real-credential base-URL override. The SDK test child gets its loopback base
+URL through this harness only; production destinations remain fixed. This
+replaces only the external network destination, not internal engine, tools,
+authentication or accounting. No paid/provider credential is needed for the
+isolation gate; external provider smokes are separate, explicitly funded
+deployment checks.
 
 ### Lifecycle, recovery and browser proof
 
@@ -636,13 +706,46 @@ smokes are separate, explicitly funded deployment checks.
    household names/context against the fixtures. No real data in screenshots.
 
 Implementation gate: `npm test`, `npm run e2e` and the existing CI real-mode smoke
-remain required. The final ticket adds `node --test test/tenancy-route-fuzz.test.mjs`
-and `npx playwright test e2e/tenancy.spec.mjs --project=desktop` as runnable focused
-gates; nightly fuzz selects 100 seeds through `FATHOM_FUZZ_SEEDS=100`. Each package
-adds its tests under the existing npm test globs. A docs review or green current
-single-household suite is not evidence that multi-tenant isolation is implemented.
+remain required. The final ticket adds `node --test test-isolation/route-fuzz.mjs`
+and `npx playwright test e2e/tenancy.spec.mjs` as focused gates. Mark the phone
+cases `@mobile` so the existing mobile project selects them. Ordinary package
+tests remain under the npm test globs; the exhaustive fuzz runner deliberately
+lives outside them and needs no browser installation.
+
+MT-10 adds `.github/workflows/tenancy.yml` with pull-request, main-push and
+`17 3 * * *` UTC schedule triggers. Its browser-free PR job installs Node 24 and
+runs `npm ci` then the fuzz command with two seeds, five mutations and a
+600,000 ms execution budget; job timeout is 15 minutes. Its nightly job runs
+`FATHOM_FUZZ_SEEDS=100 FATHOM_FUZZ_BUDGET_MS=3600000 node --test
+test-isolation/route-fuzz.mjs`, with five mutations and a 75-minute job timeout.
+The runner enforces the elapsed budget and reports synthetic seed/case counts.
+Measure both suites before marking MT-10 finishable; keep every route/tool
+covered, and split independent CI shards if a measured run exceeds its budget.
+Playwright remains in the existing browser-equipped e2e job. A docs review or
+green single-household suite is not evidence that isolation is implemented.
 
 ## Ordered implementation ticket contracts
+
+### Mergeable intermediate states
+
+| Package | Identity/control storage | Financial storage served after merge | Cutover rule |
+|---|---|---|---|
+| MT-01 | Creates `platform.sqlite`; offline `node scripts/migrate-platform.mjs` moves auth rows and memberships into it, preserving passkeys. | Original singleton `fathom.sqlite`, existing vault and HMAC format. | Real startup refuses with `platform_migration_required` until this migration completes. Demo creates its synthetic platform state automatically. |
+| MT-02 | Adds wrapped-key records and the new codecs, without selecting them in the running server. | Unchanged singleton DB and existing vault envelope. | New codec tests and conversion utility land first; no dual-reader runtime or early format switch. |
+| MT-03 | Uses the platform DB established by MT-01 and installs root/generation records. | Per-household DB/root and the sole new envelope, including basic platform-key lookup preserving existing MCP use. | `node scripts/migrate-tenancy.mjs` converts financial storage and vault together; unmigrated real startup refuses with `tenancy_migration_required` and names that command. Delivers outbound pause/resume controls at cutover. |
+| MT-04 through MT-08 | Same platform registry; each package adds its own control tables. | Same per-household format; exactly one real household remains admitted. | Each package keeps existing demo and original-household paths working. New subsystems honor the shared pause flags. |
+| MT-09 | Adds context assertion checking and switching atomically with all browser senders. | Same per-household format. | Real second-household provisioning stays gated; test fixtures explicitly enable disposable platform policy. |
+| MT-10 | Release migration enables multi-household provisioning. | Same per-household format. | No second real household is created by tests, deployment or this docs PR. |
+
+Each offline phase journals its own operation and leaves an immutable source
+snapshot; new migrations remove moved tables only after verified extraction.
+MT-01 delivers the offline encrypted source-snapshot helper used by both
+migrations, loading `FATHOM_BACKUP_KEY_FILE`; it runs with the source server
+stopped and is tested with synthetic keys. Thus migration backup does not depend
+on the online single-household backup runner delivered later in MT-08.
+The MT-03 migration validates MT-01 platform identity rather than copying it a
+second time. There is one runtime storage format at each intermediate revision,
+not a compatibility branch selected by whichever files happen to exist.
 
 ### Readiness, execution and calendar estimate
 
@@ -651,7 +754,9 @@ These are ordered draft contracts, not filed issues. They follow the
 Acceptance criteria and Out of scope shape. The list is designed for one T3
 implementation run per package, ending at a ready PR with tests and an independent
 review. No package is dispatched by this document. Every package targets `main`
-after its dependencies merge. Native tracker blocking relations must be created
+after its dependencies merge. Every predecessor also requires its independent
+review, green checks and coordinator-authorized merge; a ready PR is not a
+merged dependency. Native tracker blocking relations must be created
 when real issues exist; the identifiers below are document labels, not fake
 tracker links.
 
@@ -696,13 +801,18 @@ isolated worktrees. Let T0 be the actual account-PR merge and design approval
 time. The earliest target is T0 + 72 hours. For illustration only, T0 at
 2026-11-09 00:00 UTC yields 2026-11-12 00:00 UTC. No start date is committed;
 every CI failure, review repair, merge-queue or external-access wait shifts it.
+Coordinator merge authorization is an external gate after every package; the
+72-hour illustration assumes zero wait at those gates and excludes their actual
+elapsed waits, which must be added along the dependency chain.
 
 1. **MT-01: Separate platform identity and household membership.**
 
    Problem: the account design binds each user to one household and has no
    distinct operator authority. Base: `main`. Blocked by: merged account change
-   and accepted design. Decisions: global users, multi-household membership,
-   explicit operator bootstrap and invite-only provisioning as specified above;
+   and accepted design. Decisions: create `platform.sqlite` and the offline auth
+   migration in this package; retain the singleton financial layout. Global users,
+   multi-household membership, explicit operator bootstrap and invite-only
+   provisioning as specified above;
    implement backend control records and enrollment policies with creation gated
    off until MT-10. Preconditions: inspect the merged account PR and verify its
    auth tests, fixture and migration command on the resolved base. Estimated
@@ -727,7 +837,8 @@ every CI failure, review repair, merge-queue or external-access wait shifts it.
 
    Problem: the current one-key vault and fixed SimpleFIN AAD cannot identify a
    tenant. Base: `main`. Blocked by: MT-01. Decisions: per-household wrapped keys,
-   one new envelope, migration-only old-format reader, contained private roots.
+   one new envelope codec, migration-only conversion reader, contained private
+   roots; leave the server on its original envelope until MT-03.
    Preconditions: synthetic mounted master/data keys and local ciphertext
    fixtures created by tests; no live key. Estimated production change: 300 to
    600 lines; one run. Acceptance criteria:
@@ -743,15 +854,18 @@ every CI failure, review repair, merge-queue or external-access wait shifts it.
    Out of scope: whole-database encryption and an operational key-rotation UI.
    Readiness now: startable no, finishable no; MT-01 absent. Required risk probe:
    swap equal-id ciphertext between two roots and observe authentication failure.
-   Contradiction review: verify every current vault reader, including SimpleFIN
-   and packets, uses the sole new runtime envelope.
+   Contradiction review: account for every vault reader, including SimpleFIN
+   and packets, in conversion tests; verify the server keeps its original
+   envelope until the MT-03 cutover.
 
 3. **MT-03: Resolve household runtimes and migrate the original store.**
 
    Problem: the server captures one DB/root/runtime and ingest has a global
    file-id lock. Base: `main`. Blocked by: MT-01 and MT-02. Decisions: platform
    registry, immutable contexts/generations, per-household runtime/locks and the
-   offline journaled migration above; keep extra production-household creation
+   offline journaled financial migration above, including platform-key lookup
+   preserving current MCP use; deliver the outbound status/pause/resume routes and
+   guards in this package. Keep extra production-household creation
    gated off. Preconditions: synthetic legacy fixture with every table and
    artifact, staged roots and local keys. Estimated production change: 800 to
    1400 lines; one run. Acceptance criteria:
@@ -764,6 +878,11 @@ every CI failure, review repair, merge-queue or external-access wait shifts it.
       valid key hashes and ownership; each phase failure resumes safely and
       source ambiguity refuses. Verified by:
       `node --test test/tenancy-migration.test.mjs`. Runs in: worker.
+
+   3. An admin can inspect and resume the migrated household through
+      `/api/household/outbound`; a member cannot change flags, and unavailable
+      credentials or funding never become an implicit bypass. Verified by:
+      `node --test test/tenancy-outbound.test.mjs`. Runs in: worker.
 
    Out of scope: changing financial math, production cutover and legacy runtime
    fallbacks. Readiness now: startable no, finishable no; MT-01/02 absent. Required
@@ -798,7 +917,8 @@ every CI failure, review repair, merge-queue or external-access wait shifts it.
    Problem: a shared credential with ledger-object queues cannot cap concurrent
    server/CLI spend. Base: `main`. Blocked by: MT-03. Decisions: operator-funded
    credential, zero new allocations, UTC funding months, transactional round
-   reservations and idempotent household mirrors. Preconditions: local model
+   reservations, operator reconciliation, programmatic loopback-only
+   `testTransport` injection and idempotent household mirrors. Preconditions: local model
    HTTP emulator exercising live-mode serialization and synthetic usage, no paid
    calls. Estimated production change: 500 to 900 lines; one run. Acceptance
    criteria:
@@ -811,6 +931,12 @@ every CI failure, review repair, merge-queue or external-access wait shifts it.
       household's poisoned accounting does not poison another runtime with
       unreserved credit. Verified by:
       `node --test test/tenancy-engine.test.mjs`. Runs in: worker.
+
+   3. The operator reconcile command validates receipt references, refuses a
+      foreign round and over-bound settlement, and clears a known-cost hold
+      idempotently without enabling outbound work. The normal bootstrap cannot
+      redirect a real credential through the test harness. Verified by:
+      `node --test test/tenancy-reconcile.test.mjs`. Runs in: worker.
 
    Out of scope: live billing integration and personal subscription credentials.
    Readiness now: startable no, finishable no; MT-03 absent. Required risk probe:
@@ -868,7 +994,8 @@ every CI failure, review repair, merge-queue or external-access wait shifts it.
    Problem: volume snapshots have no single-household recovery contract. Base:
    `main`. Blocked by: MT-07. Decisions: encrypted consistent bundles, same-id
    generation replacement, current membership/spend preservation, paused outbound
-   work and seven-day default retention. Preconditions: synthetic two-household
+   work, admin backup-request/status APIs, the fixed backup runner and seven-day
+   default retention. Preconditions: synthetic two-household
    fixtures, local backup key, writable test storage and disk-failure injection.
    Estimated production change: 500 to 900 lines; one run. Acceptance criteria:
 
@@ -880,6 +1007,11 @@ every CI failure, review repair, merge-queue or external-access wait shifts it.
       and current authorization/spend, revokes A contexts/keys and leaves
       outbound work paused. Verified by:
       `node --test test/tenancy-restore.test.mjs`. Runs in: worker.
+
+   3. An admin can queue and inspect only its own household backup; the fixed
+      runner uses the configured key/destination, while members and foreign ids
+      are refused before queuing. Verified by:
+      `node --test test/tenancy-backup-api.test.mjs`. Runs in: worker.
 
    Out of scope: cross-instance user transfer and restoring production. Readiness
    now: startable no, finishable no; prerequisites absent. Required risk probe:
@@ -903,7 +1035,7 @@ every CI failure, review repair, merge-queue or external-access wait shifts it.
       `node --test test/tenancy-management.test.mjs`. Runs in: worker.
    2. Desktop/phone rendering, two-tab stale writes, delayed responses/SSE,
       deep links and logout preserve visible household identity and isolation.
-      Verified by: `npx playwright test e2e/tenancy.spec.mjs --project=desktop`.
+      Verified by: `npx playwright test e2e/tenancy.spec.mjs`.
       Runs in: worker.
 
    Out of scope: open sign-up, public ingress and a cross-household dashboard.
@@ -917,7 +1049,8 @@ every CI failure, review repair, merge-queue or external-access wait shifts it.
     Problem: scoped happy paths cannot prove complete boundary coverage. Base:
     `main`. Blocked by: MT-09 and all prior packages. Decisions: route/tool/schema
     classification, deterministic mutation counts and black-box lifecycle gate
-    specified above; open provisioning only after this gate passes.
+    specified above; add the separate scheduled fuzz workflow and release
+    migration enabling `multi_household_enabled` only after this gate passes.
     Preconditions: all predecessor tests green on the resolved base, synthetic
     fixtures and local external-service emulators. Estimated production change:
     100 to 250 lines plus test harness/fixtures; one run. Acceptance criteria:
@@ -925,10 +1058,11 @@ every CI failure, review repair, merge-queue or external-access wait shifts it.
     1. Every `/api` and `/mcp` route/method/tool has a successful authorized case
        and symmetric foreign-household attacks, with zero unclassified entries;
        DB/files/email/model/SSE effects satisfy the stated isolation invariant.
-       Verified by: `node --test test/tenancy-route-fuzz.test.mjs` and
-       `FATHOM_FUZZ_SEEDS=100 node --test test/tenancy-route-fuzz.test.mjs`.
-       Runs in: worker; the second command is also scheduled in PR-delivered
-       nightly CI.
+       Verified by: `node --test test-isolation/route-fuzz.mjs` and
+       `FATHOM_FUZZ_SEEDS=100 FATHOM_FUZZ_BUDGET_MS=3600000 node --test test-isolation/route-fuzz.mjs`.
+       Runs in: worker and the new browser-free tenancy CI jobs. PR execution
+       fits 600,000 ms and nightly execution fits 3,600,000 ms; the package adds
+       the schedule trigger, per-job timeouts and measured timing receipts.
     2. Lifecycle/recovery, secret-free demo and real-session smoke pass; only
        then does operator provisioning admit a second real household.
        Verified by: `npm test`, `npm run e2e` and CI's real-mode smoke adapted
