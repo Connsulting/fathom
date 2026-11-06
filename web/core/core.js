@@ -982,15 +982,16 @@ async function boot() {
   if (def) mountDesign(def);
   else bootMessage('Fathom could not start.', 'No interface is registered.');
   // Engine switches and provenance popovers for any .fx-fig, unless a design handles the click
-  // and calls preventDefault.
-  root.addEventListener('click', e => {
+  // and calls preventDefault. These listen on the document, so they run after the design's own
+  // root listeners whichever registered first (a design that loads after boot mounts later).
+  document.addEventListener('click', e => {
     if (e.defaultPrevented) return;
     const sw = e.target.closest && e.target.closest('[data-fx-engine]');
     if (sw && root.contains(sw)) { e.preventDefault(); setEngine(!live().engine); return; }
     const el = e.target.closest && e.target.closest('.fx-fig');
     if (el && root.contains(el)) openPopover(el);
   });
-  root.addEventListener('keydown', e => {
+  document.addEventListener('keydown', e => {
     if (e.defaultPrevented || (e.key !== 'Enter' && e.key !== ' ')) return;
     const el = e.target.closest && e.target.closest('.fx-fig');
     if (el && root.contains(el)) { e.preventDefault(); openPopover(el); }
