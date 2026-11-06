@@ -305,6 +305,76 @@ test('AC2 the Ask row and thread header carry the rec chip, Open in Ask links ba
   expect(after.active.filter((t) => t.recId === REC_ID).map((t) => t.id).sort()).toEqual([...ids].sort());
 });
 
+test('AC2 a question sent while Start over is in flight goes to a fresh thread, never the detached one', async ({ page }) => {
+  test.setTimeout(120_000);
+  const SECOND_Q = 'Second question asked after starting over';
+  await openRec(page);
+  await askInDialog(page, FREE_Q);
+  await expectLanded(page, 1);
+
+  // Hold the start-over request so the in-flight state can be observed.
+  let startOverCalls = 0;
+  await page.route('**/api/recs/*/start-over', async (route) => {
+    if (route.request().method() !== 'POST') return route.fallback();
+    startOverCalls += 1;
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    await route.continue();
+  });
+  const reset = recDialog(page).locator('button.h-conv-reset');
+  await expect(reset).toBeEnabled();
+  await reset.click();
+
+  // In flight: the dialog renders as when a question is pending.
+  const form = recDialog(page).locator(`form.h-compose[data-free="rec:${REC_ID}"]`);
+  await expect(composer(page)).toHaveAttribute('readonly', '');
+  await expect(form).toHaveAttribute('aria-busy', 'true');
+  await expect(reset).toBeDisabled();
+  const chipCount = await chips(page).count();
+  expect(chipCount).toBeGreaterThan(0);
+  for (const c of await chips(page).all()) await expect(c).toBeDisabled();
+
+  // Sends are ignored: a forced chip click and Enter with text in the composer start nothing.
+  await chips(page).first().click({ force: true });
+  await composer(page).evaluate((el, v) => { el.value = v; }, SECOND_Q);
+  await composer(page).press('Enter');
+  await page.waitForTimeout(300); // the point is to give an ignored send time to show up
+  await expect(conv(page).locator('.h-askx-pend')).toHaveCount(0);
+  expect(startOverCalls, 'the start-over request was still held').toBe(1);
+
+  // After the response lands the dialog is clean and idle again.
+  await expect(conv(page).locator('.h-msg')).toHaveCount(0);
+  await expect(recDialog(page).locator('a.h-conv-open')).toHaveCount(0);
+  await expect(composer(page)).not.toHaveAttribute('readonly', /.*/);
+  await expect(form).not.toHaveAttribute('aria-busy', 'true');
+  await expect(conv(page).locator('.h-askx-pend')).toHaveCount(0);
+
+  // The next question goes to a new thread.
+  await askInDialog(page, SECOND_Q);
+  await expectLanded(page, 1);
+  await expect(conv(page).locator('.h-msg.me')).toHaveCount(1);
+  await expect(conv(page).locator('.h-msg.me').first()).toContainText(SECOND_Q);
+
+  await gotoRoute(page, 'ask');
+  await expect(ctxItems(page)).toHaveCount(2);
+  const ids = await ctxItems(page).locator('a.h-askx-row').evaluateAll((els) => els.map((e) => e.getAttribute('data-thread')));
+  expect(new Set(ids).size).toBe(2);
+  const mine = page.locator('section.h-askx-main .h-msg.me');
+  const [newerId, olderId] = ids; // the list is newest first
+
+  await ctxItems(page).locator(`a.h-askx-row[data-thread="${newerId}"]`).click();
+  await expect(page).toHaveURL(new RegExp(`#/ask/${newerId}$`));
+  await expect(page.locator('section.h-askx-main .h-msg.fathom')).toHaveCount(1);
+  await expect(mine).toHaveCount(1);
+  await expect(mine.first()).toContainText(SECOND_Q);
+
+  await ctxItems(page).locator(`a.h-askx-row[data-thread="${olderId}"]`).click();
+  await expect(page).toHaveURL(new RegExp(`#/ask/${olderId}$`));
+  await expect(page.locator('section.h-askx-main .h-msg.fathom')).toHaveCount(1);
+  await expect(mine).toHaveCount(1);
+  await expect(mine.first()).toContainText(FREE_Q);
+  await expect(mine.first()).not.toContainText(SECOND_Q);
+});
+
 test('AC2 clicking the Ask row chip opens the rec dialog', async ({ page, request }) => {
   await postJson(request, '/api/threads', { recId: REC_ID, text: 'Synthetic opening question' });
   await gotoRoute(page, 'ask');
