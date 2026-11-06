@@ -263,7 +263,7 @@ Money columns are dollars rounded to cents; JSON columns hold JSON text. The pro
 |---|---|
 | `schema_migrations` | `id` PK, `name`, `applied_at` |
 | `settings` | `key` PK, `value` JSON, `updated_at`. Keys: `mode`, `engine` `{on}`, `cap` `{usd}` (default 200), `clock`, `timezone` (IANA zone for job schedules, default `America/New_York`), `onboarding` `{done, step}`, `wargame.picks` `{salary, deferral}`, `seeded` `{at, scenario_sha}`, `packs.generation` (integer, bumped by every Your plans build), `yourPlans` `{builtAt, entries, dropped, sources: [file names]}` (the last build) |
-| `content` | `key` PK, `value` JSON, `src`, `updated_at`. Narrative sections with no data table yet: `meta` (product, household, dataThrough), `names`, `law`, `pct`, `series`, `verdict`, `domains`, `curve`, `wargame`, `ask`, `advisor`, `yearend`, `connect`, `engine.chat`, `onboarding`, `email` |
+| `content` | `key` PK, `value` JSON, `src`, `updated_at`. Narrative sections with no data table yet: `meta` (product, household, dataThrough), `names`, `law`, `pct`, `series`, `verdict`, `domains`, `curve`, `wargame`, `ask`, `advisor`, `connect`, `engine.chat`, `onboarding`, `email` |
 | `files` | `id` PK, `name`, `mime`, `size`, `sha256` (unique when set), `source_kind`, `uploaded_at`, `stored_path`, `status` (an ingest status, `pending` while routing), `note` (`limit_exceeded` for a `too_large` file), `parser`, `counts` JSON, `source_id`, `header_signature`, `period_from`, `period_to`, `coverage` JSON (the slots a workbook authoritatively covers) |
 | `sources` | `id` PK, `label`, `as_of`, `kind`, `last_ingest_at`, `note` |
 | `facts` | `key` PK, `value` JSON, `src`, `as_of`, `confirmed`, provenance, `updated_at` |
@@ -299,6 +299,8 @@ Money columns are dollars rounded to cents; JSON columns hold JSON text. The pro
 | `column_mappings` | `signature` PK (header signature), `mapping` JSON, `src`, `created_at`, `uses` |
 | `entity_aliases` | `alias` PK (normalized alias name), `entity` (canonical display name), `created_at` |
 | `held_facts` | `id` PK, `hold` (`employer:<employerKey>`), `key`, `value` JSON, `file_id`, `parser`, `locator`, `confidence`, `created_at` |
+| `yearend_marks` | (`tax_year`, `item_key`) PK, `reason`, `marked_at`. The owner's "not needed this year" marks on expected year-end documents (migration 013). |
+| `yearend_packets` | `id` PK, `tax_year`, `generated_at`, `counts` JSON, `bytes`. One row per accountant packet generated (migration 013). |
 | `advisor_reviews` | `id` PK, `rec_id` (references `recs.id`; NULL only for a demo item outside the plan), `title` (the rec title when sent), `sent_at`, `verdict` NULL (waiting), confirmed or vetoed, `note` (escaped owner text, at most 1000 characters before escaping), `reviewed_on` (the advisor's date), `recorded_at`, `grounding_hash` (the planner's hash for the rec when the verdict was recorded), `closed_at`, `closed_reason` (`sent again`, `inputs changed`); at most one open row per rec (migration 011) |
 | `advisor_checkin` | `id` PK (always 1), `date`, `time` (`HH:MM` or NULL), `length_min`, `updated_at`. The owner-set next check-in (migration 011). |
 | `advisor_packets` | `id` PK (`advpkt-` and 16 hex), `created_at`, `clock` (the scenario date it was built for), `rec_ids` JSON, `stored_path` (encrypted under the data key, `files/<id>.bin`), `bytes`, `sha256` (migration 011) |
@@ -334,6 +336,8 @@ Migration 011 (`011-advisor.sql`) creates `advisor_reviews`, `advisor_checkin` a
 It backfills `advisor_reviews` from an existing store's rec defs (`def.advisor`) and the advisor
 content row's `reviewed` items outside the plan, so an upgrade keeps every pending review and
 verdict; the content row's `next` label shows until the owner sets a check-in.
+
+Migration 013 (`013-yearend.sql`) creates `yearend_marks` and `yearend_packets` (see "Year end").
 
 ### Adding a migration
 
@@ -596,6 +600,8 @@ response is `{scenario, ...}` with the fresh scenario.
 | `POST /api/advisor/packets` | `{}` | `{scenario, packetId}`. Builds the review packet for every waiting review and stores it encrypted. 409 when nothing waits or a real store has no data key. |
 | `GET /api/advisor/packets/:id` | | The stored packet as `text/html` with `Content-Disposition: attachment`, the one non-JSON API response. 404 unknown id. |
 | `GET /api/jobs` | | `{jobs: [{id, name, cadence, does, lastRun, next, nextAt}], runs, timezone}`. Only jobs with a handler are listed; `runs` are recent `job_runs`. |
+| `POST /api/yearend/marks` | `{key, reason, year?}` | `{scenario}`. Marks the expected year-end item `key` not needed for `year` (default: the tax year on the clock) with `reason` (trimmed, 1 to 300 characters), or clears the mark with `reason: null`. 400 bad body or year, 404 a key that is not expected that year. |
+| `GET /api/yearend/packet?year=YYYY` | | The accountant packet as `application/zip` (attachment `tax-packet-YYYY.zip`), built on demand and recorded in `yearend_packets`; not JSON. `year` defaults to the tax year on the clock; 400 a bad year, 409 when the data key is unavailable. See "Year end". |
 | `POST /api/jobs/:id/run` | `{}` | `{scenario, run, jobs}`. Runs the job now through the scheduler under the lease (trigger `manual`); `run` is the scheduler's run (`{id, jobId, status, trigger, periodKey, startedAt, finishedAt, durationMs, errorClass, costUsd, note}`) and `scenario` the fresh scenario. `POST /api/jobs/plan/run` is this route: the manual planning run with the server's runtime engine and clock; on a demo store it answers 409 `{error: 'planning runs on real stores only'}` before the scheduler, leaving the store unchanged. 404 unknown job, 409 already running or the lease is held by another scheduler. |
 
 Key responses carry no `scenario`, the one exception to the rule above.
@@ -608,7 +614,8 @@ enforced again while the body streams. Error messages name the limit, never cont
 keep only their base name (directories of either slash style stripped), at most 255 characters.
 The parser has no dependencies. Every other route keeps the 64 KiB JSON cap. Errors on ingest
 routes log `fathom: ingest request failed` and an error code only, never the error object; errors
-on the email and jobs routes log `fathom: request failed` and a code the same way. An upload with
+on the email, jobs and packet routes log `fathom: request failed` and a code the same way. A route
+marked `raw` in the table (the packet) writes its own response instead of JSON. An upload with
 any `imported` result, and a retry whose file ends `imported`, call
 `ctx.scheduler.trigger('plan', 'ingest')` without waiting; a trigger failure logs a code and never
 fails the request.
@@ -1294,6 +1301,49 @@ fails. `node scripts/ingest-check.mjs <dir>` imports a directory twice into a th
 in the OS temp dir (engine off unless `FATHOM_ENGINE=fake`; `.key`, `.json` and dotfiles
 skipped), prints totals only, and always deletes its temp dir.
 
+## Year end
+
+`src/yearend/expected.mjs` derives the year-end section of the scenario (`yearend`) from the store;
+no content row feeds it. The tax year is the clock year, or the prior year through April 15.
+
+Expected documents, each with a deterministic key: a W-2 per employer named on that year's paystub
+or W-2 documents when fact `income.w2` (one generic `w2:any` with no names); per account with
+activity in the year (a transaction, balance or position dated in it): a composite 1099 (B, DIV,
+INT) for each `taxable` account, a 1099-INT for each `checking`, `cash` or non-payroll `business`
+account, a 1098 for a `loan` named mortgage or home, a 5498 for an IRA with deposits; a 1098 when
+the ledger shows mortgage payments; a generic 5498 when fact `retirement.ira`; a K-1 when
+`income.partnership`; 1099-NEC and 1099-K when `income.selfEmployed`; 1099-SA and 5498-SA when
+`benefits.hsa` or an `hsa` account; S corp payroll reports and 1120-S prep data when
+`income.sCorp`; and a full-year P&L per entity with P&L lines (one generic when `income.sCorp` and
+none). Each carries where it comes from, its usual arrival note and a due date.
+
+Received documents are `documents` rows for the tax year whose type is a tax form (`RECEIVABLE`:
+not paystubs, statements, notes or plan summaries) and that have a file. Each matches at most one
+item of its form: the item whose issuer name appears in the document's employer or payer name,
+else the only item of that form. The rest are listed as `unmatched`. A P&L item is received when
+all twelve months are stored. Status: `have` (matched), `skipped` (a `yearend_marks` row),
+`missing` (past the due date on the clock), else `expected`.
+
+Decisions: every open or decided decision, upcoming ones opening by December 31, and every
+visible rec whose window closes in the tax year or whose window label or title names filing.
+
+`yearend` is `{year, docs: [{key, form, t, status, src, note, due, why, files: [{id, name, date}],
+skip?}], unmatched, decisions: [{kind: decision or rec, id, t, status, done, when}], packets}`.
+All document text is plain text (demo tokens resolved on the server) and is rendered escaped.
+
+The packet (`src/yearend/packet.mjs`) is a zip with `index.html` and `documents/NN-<form>-<issuer>-
+<year>.<ext>` for every received document, decrypted from the vault. It is assembled in a fresh
+0700 temp directory under the OS temp directory, streamed with a known length, and the directory is
+removed when the response ends, fails or the client leaves (also when it left during the build),
+and on any build error. The index is
+static printable HTML: open items, expected against received, other documents, the year's
+`tax_payments` with totals (a jurisdiction is "Not totaled" while any of its rows is named by a
+pending `withholding_conflict` or sits in an employer slot holding both W-2 and paystub rows, as the
+planner treats them; those rows are listed as open items), P&L totals per entity and category, stored actual figures and the
+filing facts, each row naming its file, parser and locator or the calculation. A received document
+whose stored copy cannot be read is left out and listed as an open item. A demo store's documents
+have no stored bytes, so the packet carries a short synthetic text rendering of each.
+
 ## Demo data
 
 `demo/scenario.mjs` is the synthetic scenario (a faithful copy of the mock's). `demo/seed.mjs`
@@ -1307,7 +1357,9 @@ figure, positions for investment accounts, monthly P and L per business and quar
 tax payments. Every seeded row carries `file_id` and `parser` `demo-seed` and a locator. The seed
 also queues four synthetic pending confirm questions on demo rows (`account_owner`,
 `account_kind`, a `fact_check` on a key the demo facts lack, a `tax_year` with no workbook rows)
-and one stored guess (model `demo`) on the owner question, so the demo shows the confirm deck.
+and one stored guess (model `demo`) on the owner question, so the demo shows the confirm deck. For
+year end it seeds two paystub documents naming the employers, a 1098 (matched) and a property tax
+receipt (unmatched) for the demo tax year, through the same `files` and `documents` tables.
 
 ## Container
 

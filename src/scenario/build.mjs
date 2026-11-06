@@ -10,6 +10,7 @@ import { resolveTokens } from '../shared/tokens.mjs';
 import { ingestState, applyFreshness } from '../ingest/freshness.mjs';
 import { MODEL_PURPOSES, modelFor } from '../engine/pricing.mjs';
 import { factEventTitle } from '../shared/event-labels.mjs';
+import { buildYearend } from '../yearend/expected.mjs';
 import { CURVE_AXES, KNOWN_FIGURES, curvePosition, servesGoals } from '../shared/goals.mjs';
 import { deriveHeard } from '../onboarding/heard.mjs';
 import { withAdvisor, advisorSection } from '../advisor/index.mjs';
@@ -49,7 +50,6 @@ const EMPTY = {
   wargame: {},
   ask: { suggested: [], fallback: [] },
   advisor: { name: '', role: '', agenda: '', notAsking: [], shared: [], experts: [] },
-  yearend: { docs: [], decisions: [] },
   connect: { url: '', scopes: [], tools: [], transcript: [], config: '' },
   'engine.chat': { model: '', note: '' },
   onboarding: {
@@ -555,7 +555,7 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
       };
     }),
     advisor: advisorSection(db, section(content, 'advisor'), recs),
-    yearend: section(content, 'yearend'),
+    yearend: buildYearend(db, { clock: clk, recs, decisions, plain: s => resolveTokens({ names, law, pct, fig }, s, false) }),
     connect: section(content, 'connect'),
     engine,
     onboarding: onboardingWithPriorities(section(content, 'onboarding'), curve, positions),

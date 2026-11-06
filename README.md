@@ -127,6 +127,17 @@ uid 1000.
 The repository only ever contains synthetic demo data. Real household data lives only in a
 deployment's data volume (`FATHOM_DATA`) and is never committed.
 
+## Year end
+
+The Year end screen (`#/yearend`) lists the tax documents the household should expect for the tax
+year, derived from stored facts, accounts and ledger activity, and shows each as received (with
+the stored file) or missing (with where it comes from and when it usually arrives). Any item can
+be marked not needed this year with a reason. "Assemble packet" downloads a zip for the tax
+preparer: every received document decrypted from the vault plus a printable `index.html` with
+expected against received, the year's tax payments, key figures and open items, each with its
+source. The zip is built in a temporary directory that is removed after the download, and every
+generation is recorded. See docs/architecture.md, Year end.
+
 ## Advisor reviews
 
 The Advisor screen is a review workflow the owner runs; advisors have no accounts. Send a
