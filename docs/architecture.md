@@ -225,6 +225,7 @@ secrets are read there.
 | `FATHOM_PUBLIC_URL` | unset | The URL MCP clients reach this server at (an `http` or `https` URL with no credentials, query or fragment; anything else refuses to start). Emails link into the app from it. Its host is allowed on `/mcp` and every `/api` route, and `GET /api/mcp` advertises it with `/mcp` appended. |
 | `FATHOM_ALLOWED_HOSTS` | unset | Comma separated extra `Host` names allowed on `/mcp` and every `/api` route: `host` (any port) or `host:port`. |
 | `FATHOM_OWNER_LOGINS` | unset | Comma or newline separated Tailscale logins admitted on a real store (trimmed, case-insensitive). Unset or blank on a real store fails closed: every page and `/api` route answers 401. See "Owner identity". |
+| `FATHOM_SIMPLEFIN_ALLOWED_HOSTS` | `bridge.simplefin.org,beta-bridge.simplefin.org` | Comma separated host names the SimpleFIN client may call (no scheme, port or path; anything else refuses to start). Claim and access URLs on any other host are refused. |
 | `FATHOM_OWNER_LOGINS_FILE` | unset | Path to a file holding the same list (comma or newline separated). Use instead of `FATHOM_OWNER_LOGINS`; setting both, or an unreadable file, fails closed. |
 
 ## Store
@@ -299,6 +300,8 @@ Money columns are dollars rounded to cents; JSON columns hold JSON text. The pro
 | `column_mappings` | `signature` PK (header signature), `mapping` JSON, `src`, `created_at`, `uses` |
 | `entity_aliases` | `alias` PK (normalized alias name), `entity` (canonical display name), `created_at` |
 | `held_facts` | `id` PK, `hold` (`employer:<employerKey>`), `key`, `value` JSON, `file_id`, `parser`, `locator`, `confidence`, `created_at` |
+| `simplefin_connection` | `id` PK (always 1), `access_blob` (the SimpleFIN access URL encrypted with the data key, base64; never plaintext), `connected_at`, `last_sync_at`, `status` (`ok`, `reconnect` or `error`), `error_code`, `messages` JSON (sanitized bridge messages from the last sync), `accounts` (count). Migration 014. |
+| `simplefin_accounts` | `sf_key` PK (hash of the bridge connection and account ids), `account_id` (the Fathom account it writes into), `candidate_id` (the imported account a pending match question asks about), `status` (`mapped` or `pending_match`), `name`, `backfilled` (1 once it imported under the full first window), `created_at`. Migration 014. |
 | `yearend_marks` | (`tax_year`, `item_key`) PK, `reason`, `marked_at`. The owner's "not needed this year" marks on expected year-end documents (migration 013). |
 | `yearend_packets` | `id` PK, `tax_year`, `generated_at`, `counts` JSON, `bytes`. One row per accountant packet generated (migration 013). |
 | `advisor_reviews` | `id` PK, `rec_id` (references `recs.id`; NULL only for a demo item outside the plan), `title` (the rec title when sent), `sent_at`, `verdict` NULL (waiting), confirmed or vetoed, `note` (escaped owner text, at most 1000 characters before escaping), `reviewed_on` (the advisor's date), `recorded_at`, `grounding_hash` (the planner's hash for the rec when the verdict was recorded), `closed_at`, `closed_reason` (`sent again`, `inputs changed`); at most one open row per rec (migration 011) |
@@ -338,6 +341,8 @@ content row's `reviewed` items outside the plan, so an upgrade keeps every pendi
 verdict; the content row's `next` label shows until the owner sets a check-in.
 
 Migration 013 (`013-yearend.sql`) creates `yearend_marks` and `yearend_packets` (see "Year end").
+
+Migration 014 (`014-simplefin.sql`) creates `simplefin_connection` and `simplefin_accounts` (see "SimpleFIN connections").
 
 ### Adding a migration
 
@@ -600,6 +605,8 @@ response is `{scenario, ...}` with the fresh scenario.
 | `POST /api/advisor/packets` | `{}` | `{scenario, packetId}`. Builds the review packet for every waiting review and stores it encrypted. 409 when nothing waits or a real store has no data key. |
 | `GET /api/advisor/packets/:id` | | The stored packet as `text/html` with `Content-Disposition: attachment`, the one non-JSON API response. 404 unknown id. |
 | `GET /api/jobs` | | `{jobs: [{id, name, cadence, does, lastRun, next, nextAt}], runs, timezone}`. Only jobs with a handler are listed; `runs` are recent `job_runs`. |
+| `POST /api/simplefin/connect` | `{token}` (a SimpleFIN setup token, at most 4096 characters) | `{scenario, connected, run}`. Claims the token, stores the access URL encrypted and runs the first `simplefin-sync` under the lease (`run`, or null when the scheduler is busy). 400 a bad token or a host not allowed, 400 a used or unknown token ("That setup token was already used..."), 409 already connected or a real store without `FATHOM_DATA_KEY_FILE`, 502 the bridge failed. A demo store uses the synthetic fake bridge. |
+| `POST /api/simplefin/disconnect` | `{}` | `{scenario, disconnected}`. Deletes the stored access URL; connected accounts become `manual` and keep their rows. |
 | `POST /api/yearend/marks` | `{key, reason, year?}` | `{scenario}`. Marks the expected year-end item `key` not needed for `year` (default: the tax year on the clock) with `reason` (trimmed, 1 to 300 characters), or clears the mark with `reason: null`. 400 bad body or year, 404 a key that is not expected that year. |
 | `GET /api/yearend/packet?year=YYYY` | | The accountant packet as `application/zip` (attachment `tax-packet-YYYY.zip`), built on demand and recorded in `yearend_packets`; not JSON. `year` defaults to the tax year on the clock; 400 a bad year, 409 when the data key is unavailable. See "Year end". |
 | `POST /api/jobs/:id/run` | `{}` | `{scenario, run, jobs}`. Runs the job now through the scheduler under the lease (trigger `manual`); `run` is the scheduler's run (`{id, jobId, status, trigger, periodKey, startedAt, finishedAt, durationMs, errorClass, costUsd, note}`) and `scenario` the fresh scenario. `POST /api/jobs/plan/run` is this route: the manual planning run with the server's runtime engine and clock; on a demo store it answers 409 `{error: 'planning runs on real stores only'}` before the scheduler, leaving the store unchanged. 404 unknown job, 409 already running or the lease is held by another scheduler. |
@@ -770,7 +777,7 @@ serves) and stops it before closing the store.
    invalid zone falls back to the default). `plan` daily at 02:00 (key `YYYY-MM-DD`),
    `brief-email` monthly on the 1st at 07:00 (`YYYY-MM`), `deadline-alerts` daily at 07:00
    (`YYYY-MM-DD`), `trash-purge` daily at 03:00 (`YYYY-MM-DD`), `freshness` weekly on Monday at 06:00 (that Monday's date), `confirm-guess`
-   daily at 03:00 (`YYYY-MM-DD`). The due key is the
+   daily at 03:00 (`YYYY-MM-DD`), `simplefin-sync` daily at 05:00 (`YYYY-MM-DD`). The due key is the
    latest period whose start is at or before now. With `FATHOM_CLOCK` set, the clock date at 12:00
    is now, so every period of that day is due.
 2. Idempotence: one attempt per (`job_id`, `period_key`), enforced by the unique index. A failed
@@ -817,6 +824,59 @@ serves) and stops it before closing the store.
 10. Stop: `stop()` is graceful and never rejects. It stops ticking, refuses new runs (409) and
    drops queued reruns, waits for active runs to finish (at most `drainMs`, default 30 seconds),
    then releases the lease; the server awaits it before closing the store.
+
+## SimpleFIN connections
+
+Read-only bank and brokerage connections through SimpleFIN Bridge (`src/ingest/simplefin.mjs`,
+`src/api/simplefin-handlers.mjs`, `web/horizon/screens/simplefin.js`).
+
+1. Connect: the owner pastes a setup token (base64 of a claim URL) on the Accounts screen
+   ("Connect accounts"), the onboarding Accounts step, or through the switcher action "Connect
+   accounts". The server decodes it and refuses anything but `https` on a host in
+   `FATHOM_SIMPLEFIN_ALLOWED_HOSTS` with the default port and no credentials (the token is user
+   input: SSRF guard), POSTs the claim URL with redirects refused, and checks the answer is an
+   `https` access URL with credentials on an allowed host. A 403 claim is a used or unknown token.
+2. Storage: the access URL is encrypted with the data key (vault AES-256-GCM, AAD
+   `simplefin:access`) in `simplefin_connection.access_blob`. It never appears in a response, the
+   scenario, a log or an error. Requests send its credentials as a Basic `Authorization` header,
+   never in the request URL. Disconnect deletes the row.
+3. Sync: the scheduler job `simplefin-sync` (daily 05:00, Run now, after a match answer, and after
+   connect) GETs `<access>/accounts?version=2&start-date=<epoch>`: 90 days back until every known
+   bridge account has imported once under that window (`simplefin_accounts.backfilled`; an account
+   held by a match question or first seen later still gets it), then from 14 days before the last
+   sync. It reads protocol v2 (`connections`, `errlist`) and v1
+   (`org`, `errors`). Accounts in another currency than USD are skipped. Pending transactions are
+   skipped. Names keep at most the last four digits of any number; the mask is the last four digits
+   found in the name, or in an all-digit id (an id mask is never enough for a sure match).
+4. Mapping: rows go into one synthetic ingest file (`SimpleFIN sync <date>.json`, no credentials)
+   routed by the pipeline with the `simplefin` parser, so provenance, `externalId` and `dedupeKey`
+   dedupe, balance revisions, sources and account figures work as for uploads; an unchanged
+   answer is a duplicate file and writes nothing. Accounts written are `mirror` `connected`. Bridge
+   rows carry the account identity, so their dedupe keys are scoped to it, and the bridge
+   transaction id is authoritative: a resync with a changed description is the same posting. On an
+   account that also has file rows, a bridge transaction with the same date and amount as a file
+   transaction is that posting (one for one); the rest go through ingest dedupe and its
+   near-duplicate questions. A file uploaded later whose institution and mask match exactly one
+   connected account lands in it.
+5. Matching: a new bridge account is matched to an existing non-connected account at the same
+   institution: sure when exactly one shares its mask (or, without a mask, its name and has no
+   mask) and no stored balance on the bridge's balance date differs. Otherwise the closest
+   candidate by recent balance gets an `account_match` Confirm question ("Same account, merge
+   them" or "Different accounts, keep both") and the account imports nothing until it is
+   answered; the answer maps it and triggers a sync. Without candidates it gets its own account
+   (identity `simplefin:<sf_key>`).
+6. Errors: 403 (revoked), 402 (payment required) and `gen.auth` or `con.auth` in `errlist` set
+   status `reconnect`, and the UI shows a reconnect prompt with the token form; network and
+   unreadable replies set `error` and retry on the next sync. The job records counts only
+   (`accounts`, `transactions`, `balances`, `duplicates`, `matched`, `pending`, `queued`,
+   `skipped`, `changed`) and fails with `simplefin_<code>`. When it wrote rows it triggers the
+   `plan` job (reason `ingest`).
+7. Demo and tests: a demo store always uses the synthetic fake bridge (`createFakeSimplefin`): no
+   network. `live.simplefin.demoToken` is its reusable token; any other claim code is a used token.
+8. `live.simplefin` is `{demo, demoToken, pendingMatches, connected, accounts?, connectedAt?,
+   lastSyncAt?, status?, errorCode?, reconnect?, messages?}`.
+9. Egress: a real deployment needs outbound HTTPS (443) to the hosts in
+   `FATHOM_SIMPLEFIN_ALLOWED_HOSTS` and nothing else for this feature.
 
 ## Email
 

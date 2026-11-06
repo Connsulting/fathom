@@ -14,6 +14,7 @@ import * as connect from './screens/connect.js';
 import { ingestScreens } from './screens/ingest.js';
 import { emailScreen } from './screens/email.js';
 import * as switcher from './screens/switcher.js';
+import * as simplefin from './screens/simplefin.js';
 import { createKeys } from './keys.js';
 import { KNOWN_FIGURES } from '/shared/goals.mjs';
 
@@ -55,7 +56,7 @@ let bodyLocked = false;
 let connectOn = false;
 
 const freshUi = () => ({
-  curve: {}, prio: {}, connected: {}, modal: null, goalForm: null, goalDel: null,
+  curve: {}, prio: {}, modal: null, goalForm: null, goalDel: null,
   pick: { salary: null, deferral: null }, build: 0,
   buildTimer: 0, draft: {}, dumped: null, noteBusy: false, understood: null,
   more: false, under: null, inApp: false, closing: false, ret: null, y: 0, msgN: {}, det: {}
@@ -1032,7 +1033,7 @@ function pAccounts() {
     <div class="h-ro">${icon('lock')}<span>Read-only. ${esc(api.s.meta.product || 'Fathom')} can see balances and transactions. It cannot move, delete or change anything.</span></div>${ingest.pendingBanner()}
     ${series.length ? section('Trend', `<div class="h-sparks">${series.map(spark).join('')}</div>`, 'Solid is actual, dashed is projected') : ''}
     <div class="h-cols"><div class="h-col-main">${list}</div>
-    <div class="h-col-side">${ingest.addFiles('accounts')}${ingest.sourcesSection()}${section('Detected', evs.length ? `<ol class="h-evs">${evs.map((e) => `<li><time>${T(e.date)}</time><div><b>${T(e.title)}</b><p>${T(e.body)}</p></div></li>`).join('')}</ol>` : '<p class="h-mute">Nothing unusual detected.</p>')}</div></div>`, 'accounts');
+    <div class="h-col-side">${section('Connect accounts', simplefin.block(), 'Read-only, through SimpleFIN Bridge')}${ingest.addFiles('accounts')}${ingest.sourcesSection()}${section('Detected', evs.length ? `<ol class="h-evs">${evs.map((e) => `<li><time>${T(e.date)}</time><div><b>${T(e.title)}</b><p>${T(e.body)}</p></div></li>`).join('')}</ol>` : '<p class="h-mute">Nothing unusual detected.</p>')}</div></div>`, 'accounts');
 }
 
 /* ---------- advisor ---------- */
@@ -1109,19 +1110,15 @@ function pOnboarding(step) {
       ${ingest.addFiles('onboarding')}
       <div class="h-ob-nav">${back}${go}</div>`;
   } else if (s === 2) {
-    const insts = arr(ob.institutions);
-    const n = insts.filter((x, i) => ui.connected[i]).length;
-    body = `<h1>Mirror your accounts</h1><p class="h-lede">Read-only. ${esc(api.s.meta.product || 'Fathom')} sees balances and transactions so the brief stays current.</p>
-      <ul class="h-insts">${insts.map((x, i) => `<li><div><b>${T(x.inst)}</b><span>${typeof x.accounts === 'number' ? plural(x.accounts, 'account') : T(x.accounts)}, ${T(x.mode || 'read-only')}</span></div>${ui.connected[i] ? `<span class="h-acc">${icon('check')}Connected</span>` : btn('Connect', `data-inst="${i}"`, '')}</li>`).join('')}</ul>
-      <p class="h-mute sm">${n} of ${insts.length} connected. You can add the rest later.</p>
-      <div class="h-ob-nav">${back}${next(n ? 'Continue' : 'Skip for now')}</div>`;
-    if (ui.modal != null) {
-      const x = insts[ui.modal] || {};
-      body += `<div class="h-modal" role="dialog" aria-modal="true" aria-label="Read-only access"><div class="h-modal-b">
-        ${icon('lock')}<h2>Read-only access to ${T(x.inst)}</h2>
-        <ul><li>Sees balances, holdings and transactions.</li><li>Cannot move money, place trades, or pay anyone.</li><li>Cannot delete or change anything in the account.</li><li>You can disconnect at any time.</li></ul>
-        <div class="h-ob-nav">${btn('Cancel', 'data-modal="close"', 'ghost')}${btn('Allow read-only', `data-allow="${ui.modal}"`, 'pri')}</div></div></div>`;
-    }
+    // Real connections through SimpleFIN Bridge (a synthetic bridge on a demo store), plus the
+    // accounts already imported from files. Imported names are file text: escaped, never tokens.
+    const sf = api.s?.live?.simplefin || {};
+    const imported = arr(api.s.accounts).filter((a) => a.mirror !== 'connected');
+    const lbl = (a, v) => (a.imported === false ? T(v) : esc(v));
+    body = `<h1>Mirror your accounts</h1><p class="h-lede">Read-only. ${esc(api.s.meta.product || 'Fathom')} sees balances and transactions so the brief stays current. It cannot move money, place trades or change anything.</p>
+      ${simplefin.block()}
+      ${imported.length ? `<div class="h-sub-h">Already in Fathom, not mirrored</div><ul class="h-insts">${imported.map((a) => `<li><div><b>${lbl(a, a.name)}</b><span>${lbl(a, a.inst || '')}${a.mask ? `, ending ${esc(a.mask)}` : ''}</span></div></li>`).join('')}</ul>` : ''}
+      <div class="h-ob-nav">${back}${next(sf.connected ? 'Continue' : 'Skip for now')}</div>`;
   } else if (s === 3) {
     body = heardHtml(back, next);
   } else if (s === 4) {
@@ -1425,7 +1422,7 @@ function onClick(e) {
     goalClick(gt);
     return;
   }
-  const sel = '[data-go],[data-act],[data-askrec],[data-wg],[data-onboard],[data-savenote],[data-inst],[data-allow],[data-modal],[data-whatif],[data-packtoggle],[data-decide],[data-revisit],[data-more],[data-dlg]';
+  const sel = '[data-go],[data-act],[data-askrec],[data-wg],[data-onboard],[data-savenote],[data-modal],[data-whatif],[data-packtoggle],[data-decide],[data-revisit],[data-more],[data-dlg]';
   let t = e.target.closest(`${sel},.fx-fig`);
   if (!t || !root.contains(t)) return;
   // A figure inside a button or link is part of its label: the control takes the click, and the
@@ -1458,8 +1455,6 @@ function onClick(e) {
     api.onboard(Number(d.onboard));
     return;
   }
-  if (d.inst != null && d.inst !== '') { ui.modal = Number(d.inst); draw(); return; }
-  if (d.allow != null && d.allow !== '') { ui.connected[Number(d.allow)] = true; ui.modal = null; draw(); return; }
   if (d.modal === 'close') { ui.modal = null; draw(); return; }
   if (d.go) {
     e.preventDefault();
@@ -1580,7 +1575,7 @@ function onDocumentKey(e) {
 }
 
 // Helpers the screen modules use. Getters, because api, root and ui change on mount.
-const SCREENS = [switcher, chatScreen, packsScreen, engineScreen, advisorScreen, yearendScreen];
+const SCREENS = [switcher, chatScreen, packsScreen, engineScreen, advisorScreen, yearendScreen, simplefin];
 const KIT = {
   get api() { return api; }, get root() { return root; }, get ui() { return ui; }, get keys() { return keys; }, get ingest() { return ingest; },
   draw: () => draw(),

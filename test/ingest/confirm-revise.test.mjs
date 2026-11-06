@@ -31,7 +31,8 @@ const BOOKKEEPING = ['schema_migrations', 'confirm_undo', 'confirm_guesses', 'in
 const canon = (v) => (Array.isArray(v) ? v.map(canon)
   : v && typeof v === 'object' && !ArrayBuffer.isView(v) ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, canon(v[k])])) : v);
 
-// Every table's rows as canonical JSON strings, sorted. superseded_rows is compared without its id.
+// Every table's rows as canonical JSON strings, sorted. superseded_rows is compared without its id,
+// simplefin_connection without its ciphertext.
 function dataDump(db, skip = BOOKKEEPING) {
   const out = {};
   for (const t of DB.listTables(db)) {
@@ -39,6 +40,8 @@ function dataDump(db, skip = BOOKKEEPING) {
     out[t] = db.prepare(`SELECT * FROM "${t}"`).all().map((r) => {
       const row = { ...r };
       if (t === 'superseded_rows') delete row.id;
+      // Ciphertext under each store's own key and a random IV: never equal across stores.
+      if (t === 'simplefin_connection') delete row.access_blob;
       return JSON.stringify(canon(row));
     }).sort();
   }
@@ -149,6 +152,20 @@ const CASES = {
       await imported(s, aggregatorFile('near-a.csv', [near]));
       await imported(s, aggregatorFile('near-b.csv', [nearLater]));
       return firstPending(s.db, 'near_duplicate');
+    },
+    pairs: [['same', 'different'], ['different', 'same']],
+    reopen: ['same'],
+  },
+  account_match: {
+    // A SimpleFIN account (synthetic fake bridge) at the same bank as an imported account with no
+    // mask: the sync asks instead of guessing.
+    setup: async (s) => {
+      const SF = await src('src/ingest/simplefin.mjs');
+      await imported(s, aggregatorFile('other.csv', [{ date: '2032-01-05', amount: '5.00', inst: 'Other bank', account: 'Joint checking', number: '', description: 'Old' }]));
+      const o = { config: s.config, key: s.key, now: SETUP_AT, clock: SETUP_AT.slice(0, 10), fetch: SF.createFakeSimplefin({ today: () => SETUP_AT.slice(0, 10) }) };
+      await SF.connectSimplefin(s.db, SF.fakeToken(), o);
+      await SF.syncSimplefin(s.db, o);
+      return firstPending(s.db, 'account_match');
     },
     pairs: [['same', 'different'], ['different', 'same']],
     reopen: ['same'],

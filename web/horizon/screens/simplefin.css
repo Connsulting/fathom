@@ -1,0 +1,16 @@
+/* SimpleFIN connection block. Builds on the Horizon tokens and shared classes in design.css. */
+
+.d-horizon .h-sf { display: flex; flex-direction: column; gap: 10px; max-width: 640px; }
+.d-horizon .h-sf-form { display: flex; flex-direction: column; gap: 8px; }
+.d-horizon .h-sf-form label { color: var(--mu); font-size: 13px; }
+.d-horizon .h-sf-form textarea { width: 100%; box-sizing: border-box; min-height: 76px; padding: 10px 12px; background: var(--s1); color: var(--tx); border: 1px solid var(--line2); border-radius: 9px; font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; resize: vertical; overflow-wrap: anywhere; }
+.d-horizon .h-sf-form textarea:focus { outline: none; border-color: var(--ac); }
+.d-horizon .h-sf-act { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.d-horizon .h-sf-act .h-btn[disabled] { opacity: 0.6; cursor: progress; }
+.d-horizon .h-sf-st { display: flex; gap: 8px; align-items: flex-start; color: var(--tx2); font-size: 14px; margin: 0; }
+.d-horizon .h-sf-st .h-i { color: var(--ac); margin-top: 3px; flex: none; }
+.d-horizon .h-sf-st b { color: var(--tx); }
+.d-horizon .h-sf-warn { color: #f0a58f; font-size: 13.5px; margin: 0; }
+.d-horizon .h-sf-msgs { margin: 0; padding-left: 18px; color: var(--mu); font-size: 13px; }
+.d-horizon .h-sf.on .h-sf-form { margin-top: 6px; padding-top: 12px; border-top: 1px solid var(--line); }
+.d-horizon .h-ob-card .h-sf { margin: 18px 0 10px; }

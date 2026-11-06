@@ -3,6 +3,9 @@ import { institution, cents } from './format.mjs';
 
 const normalize = (value) => String(value ?? '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
 function accountKey(row) {
+  // A connected account carries its own identity (simplefin:<key> or the matched account's), so
+  // two bridge accounts with the same institution and name never share keys.
+  if (row.identity) return ['identity', row.identity];
   const account = row.account ?? {};
   const inst = normalize(institution(account.inst));
   if (account.mask) return [inst, 'mask', account.mask];

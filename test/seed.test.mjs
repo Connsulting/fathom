@@ -44,7 +44,7 @@ test('demo/scenario.mjs is a faithful port of mock-v2/scenario/example.js', () =
 });
 
 test('demo engine.jobs are the scheduler jobs, by id, name, cadence and does', () => {
-  assert.deepEqual(demo.engine.jobs.map(j => j.id), ['plan', 'brief-email', 'deadline-alerts', 'freshness', 'trash-purge', 'confirm-guess']);
+  assert.deepEqual(demo.engine.jobs.map(j => j.id), ['plan', 'brief-email', 'deadline-alerts', 'freshness', 'trash-purge', 'confirm-guess', 'simplefin-sync']);
   assert.deepEqual(demo.engine.jobs.map(j => j.id), JOBS.map(j => j.id));
   for (const job of demo.engine.jobs) {
     const real = JOBS.find(j => j.id === job.id);
