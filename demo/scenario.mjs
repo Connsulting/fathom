@@ -2973,7 +2973,7 @@ export default {
         "last": "Today 5:00 AM",
         "next": "Tomorrow 5:00 AM",
         "does": "Read balances and transactions from SimpleFIN Bridge, read-only.",
-        "cost": 0
+        "cost": null
       }
     ]
   },
