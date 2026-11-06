@@ -830,6 +830,18 @@ a.h-dec-t:hover { color: var(--ac2); }
   .d-horizon .h-packs { grid-template-columns: minmax(0, 1fr); }
   .d-horizon .h-seg button { min-width: 50%; flex: 1 1 50%; border-bottom: 1px solid var(--line2); }
 }
+.d-horizon .h-packet .h-btn { flex: none; }
+.d-horizon .h-ye-file { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 4px; color: var(--tx2); font-size: 12.5px; overflow-wrap: anywhere; }
+.d-horizon .h-ye-file .h-i { width: 13px; height: 13px; color: var(--fa); }
+.d-horizon .h-ye-file em { font-style: normal; color: var(--fa); }
+.d-horizon .h-ye-acts { margin-top: 8px; }
+.d-horizon .h-ye-mark label { display: block; font-size: 12.5px; color: var(--tx2); margin-bottom: 6px; }
+.d-horizon .h-ye-mark > div { display: flex; flex-wrap: wrap; gap: 8px; }
+.d-horizon .h-ye-mark input { flex: 1 1 200px; min-width: 0; padding: 8px 10px; border: 1px solid var(--line2); border-radius: 8px; background: transparent; color: var(--tx); font: inherit; font-size: 13.5px; }
+@media (max-width: 640px) {
+  .d-horizon .h-packet { flex-wrap: wrap; }
+  .d-horizon .h-packet .h-btn { width: 100%; justify-content: center; }
+}
 
 /* Goals: the add button, the inline goal form, per-goal actions, archived goals, Serves links. */
 .d-horizon .h-gadd { display: flex; align-items: center; gap: 12px; margin: 0 0 20px; }

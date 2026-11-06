@@ -8,6 +8,7 @@
 import * as chatScreen from './screens/chat.js';
 import * as packsScreen from './screens/packs.js';
 import * as engineScreen from './screens/engine.js';
+import * as yearendScreen from './screens/yearend.js';
 import * as advisorScreen from './screens/advisor.js';
 import * as connect from './screens/connect.js';
 import { ingestScreens } from './screens/ingest.js';
@@ -55,7 +56,7 @@ let connectOn = false;
 
 const freshUi = () => ({
   curve: {}, prio: {}, connected: {}, modal: null, goalForm: null, goalDel: null,
-  packet: false, pick: { salary: null, deferral: null }, build: 0,
+  pick: { salary: null, deferral: null }, build: 0,
   buildTimer: 0, draft: {}, dumped: null, noteBusy: false, understood: null,
   more: false, under: null, inApp: false, closing: false, ret: null, y: 0, msgN: {}, det: {}
 });
@@ -1036,34 +1037,7 @@ function pAccounts() {
 
 /* ---------- year end ---------- */
 
-function pYearend() {
-  const ye = api.s.yearend || {};
-  const docs = arr(ye.docs);
-  const decs = arr(ye.decisions).map((d) => {
-    const r = d.recId ? recById(d.recId) : null;
-    return { ...d, r, done: r ? r.status === 'done' : d.done };
-  });
-  const have = docs.filter((d) => d.status === 'have').length;
-  const decDone = decs.filter((d) => d.done).length;
-  const W = 100;
-  const meter = (n, t) => `<svg viewBox="0 0 ${W} 4" preserveAspectRatio="none" aria-hidden="true"><rect class="bg" width="${W}" height="4" rx="2"/><rect class="fg" width="${t ? (n / t) * W : 0}" height="4" rx="2"/></svg>`;
-  const stLab = { have: 'In hand', expected: 'Expected', missing: 'Missing' };
-  const docsHtml = ['missing', 'expected', 'have'].map((s) => {
-    const list = docs.filter((d) => d.status === s);
-    if (!list.length) return '';
-    return `<div class="h-docgrp"><div class="h-sub-h">${stLab[s]} <span>${list.length}</span></div><ul class="h-docs">${list.map((d) => `<li class="${s}"><i>${s === 'have' ? icon('check') : ''}</i><div><b>${T(d.t)}</b><p>${T(d.src)}${d.note ? `. ${T(d.note)}` : ''}</p></div></li>`).join('')}</ul></div>`;
-  }).join('');
-  const decHtml = `<ul class="h-docs">${decs.map((d) => `<li class="${d.done ? 'have' : 'expected'}"><i>${d.done ? icon('check') : ''}</i><div><b>${d.r ? goA('rec', T(d.t), { id: d.r.id }) : T(d.t)}</b>${d.r ? `<p>${statusText(d.r)}${d.r.status === 'done' ? '' : `, ${T(d.r.window?.label || '')}`}</p>` : ''}</div></li>`).join('')}</ul>`;
-  const ready = have === docs.length && decDone === decs.length;
-  const packet = ui.packet
-    ? `<div class="h-packet">${icon('doc')}<div><b>Packet assembled</b><p>${have} of ${docs.length} documents and ${decDone} of ${decs.length} decisions. ${ready ? 'Complete.' : 'Missing items are listed on the cover page.'}</p></div>${btn('Undo', 'data-packet="0"', 'ghost')}</div>`
-    : `<div class="h-acts">${btn('Assemble packet', 'data-packet="1"', 'pri')}</div>`;
-  return shell(`${pageHead('Year end', 'The packet for your accountant', 'Documents and decisions in one place, so nothing gets rebuilt in March.')}
-    <div class="h-next"><div><span>Documents in hand</span><b>${have} of ${docs.length}</b>${meter(have, docs.length)}</div><div><span>Decisions made</span><b>${decDone} of ${decs.length}</b>${meter(decDone, decs.length)}</div></div>
-    ${packet}
-    <div class="h-cols"><div class="h-col-main">${section('Documents', docsHtml || '<p class="h-mute">None listed.</p>')}</div>
-    <div class="h-col-side">${section('Decisions', decHtml)}</div></div>`, 'yearend');
-}
+/* The year end screen lives in screens/yearend.js. */
 
 /* ---------- connect ---------- */
 
@@ -1354,7 +1328,7 @@ function draw() {
     case 'confirm': html = ingest.confirmPage(routeChanged); break;
     case 'advisor': html = advisorScreen.render(); break;
     case 'packs': html = packsScreen.render(r.params?.id); break;
-    case 'yearend': html = pYearend(); break;
+    case 'yearend': html = yearendScreen.render(); break;
     case 'connect': html = connect.render(connectH); break;
     case 'engine': html = engineScreen.render(); break;
     case 'email': html = pEmail(routeChanged); break;
@@ -1443,7 +1417,7 @@ function onClick(e) {
     goalClick(gt);
     return;
   }
-  const sel = '[data-go],[data-act],[data-askrec],[data-wg],[data-onboard],[data-savenote],[data-inst],[data-allow],[data-modal],[data-packet],[data-whatif],[data-packtoggle],[data-more],[data-dlg]';
+  const sel = '[data-go],[data-act],[data-askrec],[data-wg],[data-onboard],[data-savenote],[data-inst],[data-allow],[data-modal],[data-whatif],[data-packtoggle],[data-more],[data-dlg]';
   let t = e.target.closest(`${sel},.fx-fig`);
   if (!t || !root.contains(t)) return;
   // A figure inside a button or link is part of its label: the control takes the click, and the
@@ -1477,7 +1451,6 @@ function onClick(e) {
   if (d.inst != null && d.inst !== '') { ui.modal = Number(d.inst); draw(); return; }
   if (d.allow != null && d.allow !== '') { ui.connected[Number(d.allow)] = true; ui.modal = null; draw(); return; }
   if (d.modal === 'close') { ui.modal = null; draw(); return; }
-  if (d.packet != null) { ui.packet = d.packet === '1'; draw(); return; }
   if (d.go) {
     e.preventDefault();
     if (d.go === 'rec' && d.id) { openRec(d.id, t); return; }
@@ -1597,7 +1570,7 @@ function onDocumentKey(e) {
 }
 
 // Helpers the screen modules use. Getters, because api, root and ui change on mount.
-const SCREENS = [switcher, chatScreen, packsScreen, engineScreen, advisorScreen];
+const SCREENS = [switcher, chatScreen, packsScreen, engineScreen, advisorScreen, yearendScreen];
 const KIT = {
   get api() { return api; }, get root() { return root; }, get ui() { return ui; }, get keys() { return keys; }, get ingest() { return ingest; },
   draw: () => draw(),

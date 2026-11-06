@@ -4,10 +4,10 @@
 // `upload: true` routes take multipart bodies (read by the handler through ctx.readUpload);
 // `download: true` routes answer { filename, type, bytes } as an attachment instead of JSON;
 // `ingest: true` routes never log error details, which could carry file contents; `quiet: true`
-// routes (email and jobs) likewise log an error code only. `stream: true` routes (the two that ask
-// a question) answer as Server-Sent Events when the request's Accept header asks for
+// routes (email, jobs and the packet) likewise log an error code only. `stream: true` routes (the two
+// that ask a question) answer as Server-Sent Events when the request's Accept header asks for
 // text/event-stream (see createEventStream); the gate, Host allowlist and POST guards run first,
-// exactly as for JSON.
+// exactly as for JSON. `raw: true` routes write the response themselves (the packet zip).
 
 import { fileURLToPath } from 'node:url';
 import { HttpError, setSecurityHeaders, sendJson, sendError, guardPost, readJsonBody, createEventStream, wantsEventStream } from './http.mjs';
@@ -20,6 +20,7 @@ import { createMcpHandler } from '../mcp/index.mjs';
 import { isAllowedHost } from '../mcp/guard.mjs';
 import * as ih from './ingest-handlers.mjs';
 import * as eh from './email-handlers.mjs';
+import * as yh from './yearend-handlers.mjs';
 import * as gh from './goals.mjs';
 import * as oh from './onboarding-handlers.mjs';
 import * as ah from './advisor-handlers.mjs';
@@ -77,6 +78,8 @@ const TABLE = [
   { method: 'POST', path: '/api/advisor/packets', handler: ah.createPacket, quiet: true },
   { method: 'GET', path: '/api/advisor/packets/:id', handler: ah.downloadPacket, quiet: true, download: true },
   { method: 'POST', path: '/api/jobs/:id/run', handler: eh.runJob, quiet: true },
+  { method: 'POST', path: '/api/yearend/marks', handler: yh.markItem },
+  { method: 'GET', path: '/api/yearend/packet', handler: yh.downloadPacket, raw: true, quiet: true },
 ];
 
 export const routes = TABLE.map(({ method, path }) => ({ method, path }));
@@ -174,7 +177,7 @@ export function createHandler({ db, config, answerer, engine = null, packs = nul
         const events = r.stream && wantsEventStream(req) ? createEventStream(req, res) : null;
         let out;
         try {
-          out = await r.handler({ db, config, answerer, engine, packs, identity, scheduler, transport, params, body, readUpload, req,
+          out = await r.handler({ db, config, answerer, engine, packs, identity, scheduler, transport, params, body, readUpload, req, res,
             ...(events ? { onEvent: events.send } : {}), get keys() { return getKeys(); } });
         } catch (err) {
           // Once the event stream has started, an error is its last event.
@@ -194,7 +197,7 @@ export function createHandler({ db, config, answerer, engine = null, packs = nul
           return;
         }
         if (events) events.finish(out);
-        else sendJson(res, 200, out);
+        else if (!r.raw) sendJson(res, 200, out);
         return;
       }
       if (req.method !== 'GET' && req.method !== 'HEAD') {

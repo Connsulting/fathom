@@ -39,7 +39,7 @@ export const PACK_MANIFEST = Object.freeze({
 });
 
 // Content rows: narrative sections with no data table yet.
-const CONTENT_KEYS = ['names', 'law', 'pct', 'series', 'verdict', 'domains', 'curve', 'wargame', 'ask', 'advisor', 'yearend', 'connect', 'onboarding', 'email'];
+const CONTENT_KEYS = ['names', 'law', 'pct', 'series', 'verdict', 'domains', 'curve', 'wargame', 'ask', 'advisor', 'connect', 'onboarding', 'email'];
 
 // Synthetic household facts consistent with the demo scenario (frozen fact keys).
 const FACTS = {
@@ -95,6 +95,26 @@ function seedConfirm(db, { clock, now }) {
   });
   db.prepare("INSERT INTO confirm_guesses (item_id, option_id, reason, model, ts) VALUES (?, ?, ?, 'demo', ?)")
     .run(owner.id, CONFIRM_GUESS.option, CONFIRM_GUESS.reason, now);
+}
+
+// Synthetic year-end documents for the demo tax year, stored through the documents table like an
+// import. Paystubs name the employers (so W-2s are expected); the 1098 matches the mortgage the
+// ledger pays; the property tax receipt matches nothing expected. Demo files have no stored bytes:
+// the packet renders each as a short synthetic text file.
+function seedYearendDocs(db, S, { year, now }) {
+  const file = db.prepare(`INSERT INTO files (id, name, mime, size, sha256, source_kind, uploaded_at, stored_path, status, note, parser)
+                           VALUES (?, ?, 'application/pdf', 0, NULL, 'tax_doc', ?, NULL, 'parsed', 'Synthetic demo document', ?)`);
+  const doc = db.prepare('INSERT INTO documents (doc_type, tax_year, fields, file_id, parser, locator) VALUES (?, ?, ?, ?, ?, ?)');
+  const docs = [
+    { type: 'paystub', fields: { employerName: S.names.w2, payDate: `${year}-10-31` }, file: SEED_ID },
+    { type: 'paystub', fields: { employerName: S.names.biz, payDate: `${year}-10-31` }, file: SEED_ID },
+    { type: '1098', fields: { issuer: S.names.bank, note: 'Mortgage paid off this year' }, file: 'demo-doc-1098', name: `1098-${year}-mortgage-payoff.pdf`, at: `${year}-10-14T12:00:00.000Z` },
+    { type: 'other', fields: { issuer: 'County treasurer', note: 'Property tax receipt' }, file: 'demo-doc-proptax', name: `property-tax-receipt-${year}.pdf`, at: `${year}-10-02T12:00:00.000Z` },
+  ];
+  docs.forEach((d, i) => {
+    if (d.file !== SEED_ID) file.run(d.file, d.name, d.at, SEED_ID);
+    doc.run(d.type, year, JSON.stringify(d.fields), d.file, SEED_ID, `yearendDocs[${i}]`);
+  });
 }
 
 // The advisor workflow tables from the scenario: each rec's advisor field (pending, confirmed or
@@ -249,6 +269,7 @@ export function seedDemo(db) {
     S.engine.jobs.forEach((j, i) => job.run(j.id, j.name, j.cadence, j.does, j.cost, j.next, j.last, i));
 
     seedConfirm(db, { clock, now });
+    seedYearendDocs(db, S, { year: Number(clock.slice(0, 4)), now });
     seedAdvisor(db, S, clock);
 
     // Month-to-date spend that sums to the scenario's engine.budget.used: one run of each job,
