@@ -74,14 +74,16 @@ test('free text with an invented amount is retried and stored with the amount ma
   assert.ok(m.provenance.grounding.unverified.includes(INVENTED));
 }));
 
-test('a rec conversation question answers with the rec as its ref and provenance', T, () => withServer({ env: FAKE }, async s => {
-  const r = await ask(s, { key: 'deferral', questionId: 0 });
+test('a rec thread question answers with the rec as its ref and provenance', T, () => withServer({ env: FAKE }, async s => {
+  const r = await ok(postJson(s.baseUrl, '/api/threads', { recId: 'deferral', questionId: 0 }));
+  assert.equal(r.thread.recId, 'deferral');
   assert.equal(r.message.notice, false);
   assert.ok(r.message.refs.includes('deferral'));
   assert.ok(toolNames(r.message).includes('get_recommendation'));
-  const conv = r.scenario.live.conversations.deferral;
-  assert.equal(conv.length, 3, 'opening summary, question, answer');
-  assert.equal(conv[1].role, 'me');
+  const conv = r.scenario.live.conversations[r.thread.key];
+  assert.equal(conv.length, 2, 'question, answer');
+  assert.equal(conv[0].role, 'me');
+  assert.ok(!('deferral' in r.scenario.live.conversations), 'no rec-keyed conversation');
 }));
 
 test('what-if runs a live conversation once, stores provenance and marks the pack done', T, () => withServer({ env: FAKE }, async s => {
@@ -175,13 +177,14 @@ test('B2: chat commands and a What if never change a rec status; an explicit com
   const before = statuses(await getScenario(s.baseUrl));
   const events = await toolRows(s.dbFile);
   const { thread } = await ok(postJson(s.baseUrl, '/api/threads', {}));
-  for (const key of [thread.key, 'deferral']) {
+  const recThread = (await ok(postJson(s.baseUrl, '/api/threads', { recId: 'deferral', text: 'Synthetic opening question' }))).thread;
+  for (const key of [thread.key, recThread.key]) {
     for (const text of ['Do not mark anything done', 'mark this done', 'Please mark this done', 'Snooze this until next month']) {
       const r = await ask(s, { key, text });
       assert.ok(!toolNames(r.message).includes('set_recommendation_status'), `${key}: ${text}`);
     }
   }
-  const proposed = await ask(s, { key: 'deferral', text: 'dismiss this' });
+  const proposed = await ask(s, { key: recThread.key, text: 'dismiss this' });
   assert.deepEqual(proposed.message.provenance.proposal, { recId: 'deferral', action: 'dismiss' });
   assert.equal(statuses(proposed.scenario).deferral, before.deferral, 'a proposal writes nothing');
 

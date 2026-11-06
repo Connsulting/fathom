@@ -199,7 +199,8 @@ test.describe('keys', () => {
     await expect(headers(page).filter({ hasText: /^Conversations$/ })).toHaveCount(1);
     await expect(page.locator(`#h-qs-list li.h-qs-o[data-qs-key="conv:${b.id}"]`)).toHaveCount(0);
     await expect(page.locator(`#h-qs-list li.h-qs-o[data-qs-key="conv:${a.id}"] .h-qs-t`)).toHaveText('Synthetic question alpha about cash');
-    await expect(page.locator(`#h-qs-list li.h-qs-o[data-qs-key="conv:${c.id}"] .h-qs-t`)).toHaveText('New conversation');
+    // Named after its first answer.
+    await expect(page.locator(`#h-qs-list li.h-qs-o[data-qs-key="conv:${c.id}"] .h-qs-t`)).toHaveText('Synthetic question gamma about goals');
 
     // Move to the second conversation option (c) and open it.
     const target = page.locator(`#h-qs-list li.h-qs-o[data-qs-key="conv:${c.id}"]`);

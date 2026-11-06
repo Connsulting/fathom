@@ -78,14 +78,10 @@ test('window.days is computed from the clock', () => withSeeded(db => {
   assert.equal(dec.meta.clock, '2026-12-01');
 }));
 
-test('the seed opens each rec conversation with its summary', () => withSeeded(db => {
+test('the seed writes no rec-keyed conversation or opening summary message', () => withSeeded(db => {
   const sc = buildScenario(db);
-  for (const r of demo.recs) {
-    const conv = sc.live.conversations[r.id];
-    assert.ok(Array.isArray(conv) && conv.length === 1, `${r.id} conversation`);
-    assert.equal(conv[0].role, 'fathom');
-    assert.ok(conv[0].text.includes(r.summary), `${r.id} opening message`);
-  }
+  for (const r of demo.recs) assert.ok(!(r.id in sc.live.conversations), `${r.id} has no rec-keyed conversation`);
+  assert.equal(db.prepare("SELECT count(*) AS n FROM conversations WHERE key NOT LIKE 'pack:%'").get().n, 0, 'no conversation besides packs');
   assert.ok(!('ask' in sc.live.conversations), 'no bare ask conversation');
   assert.ok(!Object.keys(sc.live.conversations).some(k => k.startsWith('ask:')), 'the seed has no Ask threads');
   assert.deepEqual(sc.live.threads, []);
