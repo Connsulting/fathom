@@ -91,6 +91,12 @@ export function listPackets(db) {
   });
 }
 
+function nextCheckin(db, fromContent) {
+  const c = getCheckin(db);
+  if (c.date || !fromContent || typeof fromContent.when !== 'string' || !fromContent.when) return c;
+  return { ...c, when: fromContent.when, length: typeof fromContent.length === 'string' ? fromContent.length : '' };
+}
+
 // The scenario's advisor section: narrative keys (name, role, agenda, notAsking, shared, experts)
 // from the content row, review state from the tables. `recs` is the scenario's rec list; hidden
 // recs never show. pending stays a list of rec ids (CONTRACT); waiting carries the send dates.
@@ -108,7 +114,9 @@ export function advisorSection(db, base, recs) {
     });
   return {
     ...base,
-    next: getCheckin(db),
+    // The owner-set check-in; before one is set, a check-in label from the content row (a store
+    // from before migration 011) still shows, without a date.
+    next: nextCheckin(db, base.next),
     reviewed,
     pending: waiting.map(w => w.recId),
     waiting,

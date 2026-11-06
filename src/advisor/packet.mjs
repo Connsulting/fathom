@@ -30,7 +30,7 @@ function plain(s, keepEdges = false) {
 }
 
 // Collects every figure the packet shows, numbered in first-use order.
-function notesBook(S) {
+function notesBook(S, sources = {}) {
   const list = [];
   const byKey = new Map();
   const srcOf = id => (S.src && id && S.src[id]) || null;
@@ -48,12 +48,17 @@ function notesBook(S) {
       byKey.set('f:' + key, n);
       return n;
     },
-    law(key) {
-      if (!S.law || typeof S.law[key] !== 'number') return null;
-      if (byKey.has('l:' + key)) return byKey.get('l:' + key);
+    // Statutory amounts ({l:}) and percentages ({p:}) come from the `law` and `pct` content rows;
+    // their note names the row's source (contentSources). No known source: no number.
+    param(type, key) {
+      const table = type === 'l' ? S.law : S.pct;
+      const src = type === 'l' ? sources.law : sources.pct;
+      if (!table || typeof table[key] !== 'number' || !Number.isFinite(table[key]) || !src) return null;
+      if (byKey.has(type + ':' + key)) return byKey.get(type + ':' + key);
       const n = list.length + 1;
-      list.push({ n, key, value: money(S.law[key]), label: key, kind: 'Statutory amount', source: 'Tax law parameters for the year', asOf: '', notes: [], unavailable: '' });
-      byKey.set('l:' + key, n);
+      list.push({ n, key, value: type === 'l' ? money(table[key]) : pct(table[key]), label: key, kind: type === 'l' ? 'Statutory amount' : 'Rate',
+        source: plain(src.label), asOf: plain(src.asOf), notes: [], unavailable: '' });
+      byKey.set(type + ':' + key, n);
       return n;
     },
   };
@@ -73,11 +78,9 @@ function rich(S, book, input) {
     if (type === 'f' || type === 'fk') {
       const n = book.fig(key);
       out += n == null ? NO_FIG : ref(money(S.fig[key].v), n) + (S.fig[key].unavailable ? ' (not current)' : '');
-    } else if (type === 'l') {
-      const n = book.law(key);
-      out += n == null ? NO_FIG : ref(money(S.law[key]), n);
-    } else if (type === 'p') {
-      out += typeof S.pct?.[key] === 'number' ? esc(pct(S.pct[key])) : '';
+    } else if (type === 'l' || type === 'p') {
+      const n = book.param(type, key);
+      out += n == null ? NO_FIG : ref(type === 'l' ? money(S.law[key]) : pct(S.pct[key]), n);
     } else {
       out += esc(plain(S.names?.[key] ?? ''));
     }
@@ -112,8 +115,9 @@ footer { margin-top: 40px; border-top: 1px solid #ccc; padding-top: 8px; color: 
 `;
 
 // The packet for the scenario's waiting reviews (S.advisor.pending, in order).
-export function buildPacketHtml(S, { generatedOn } = {}) {
-  const book = notesBook(S);
+// `sources` is contentSources(db): the provenance of the law and pct content rows.
+export function buildPacketHtml(S, { generatedOn, sources = {} } = {}) {
+  const book = notesBook(S, sources);
   const R = s => rich(S, book, s);
   const recs = arr(S.recs);
   const byId = new Map(recs.map(r => [r.id, r]));
@@ -182,6 +186,23 @@ ${notes ? `<ol class="notes">${notes}</ol>` : '<p class="mute">No figures in thi
 <footer>Advisory only. ${esc(product)} never files, moves money or picks securities. Every figure above comes from the household's stored data or a deterministic calculation, with its source listed.</footer>
 </main></body></html>
 `;
+}
+
+// Where the `law` and pct` content rows came from: a sources row or an imported file with the
+// row's src id, or the planner, which writes them from the tax calculator's parameters.
+export function contentSources(db) {
+  const out = {};
+  for (const key of ['law', 'pct']) {
+    const row = db.prepare('SELECT src, updated_at FROM content WHERE key = ?').get(key);
+    if (!row || !row.src) continue;
+    const s = db.prepare('SELECT label, as_of FROM sources WHERE id = ?').get(row.src);
+    const f = s ? null : db.prepare('SELECT name FROM files WHERE id = ?').get(row.src);
+    const asOf = dayLabel(s?.as_of || row.updated_at);
+    if (s) out[key] = { label: s.label, asOf };
+    else if (f) out[key] = { label: `Imported file: ${f.name}`, asOf };
+    else if (row.src === 'planner') out[key] = { label: 'Tax parameters for the year, from the tax calculator', asOf };
+  }
+  return out;
 }
 
 const PACKET_ID = /^advpkt-[a-f0-9]{16}$/;

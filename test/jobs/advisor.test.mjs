@@ -11,10 +11,10 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHandler } from '../../src/api/router.mjs';
 import { loadConfig } from '../../src/config.mjs';
-import { openMigrated } from '../../src/store/db.mjs';
+import { openMigrated, openDb, listMigrations, migrate } from '../../src/store/db.mjs';
 import { seedDemo } from '../../demo/seed.mjs';
 import { buildScenario } from '../../src/scenario/build.mjs';
-import { buildPacketHtml } from '../../src/advisor/packet.mjs';
+import { buildPacketHtml, contentSources } from '../../src/advisor/packet.mjs';
 import { MAX_NOTE } from '../../src/advisor/index.mjs';
 import { callTool, getTool } from '../../src/tools/index.mjs';
 import { request, postJson, TEST_OWNER } from '../helpers/server.mjs';
@@ -204,6 +204,26 @@ describe('advisor packet content', () => {
     db.close();
   });
 
+  test('every percentage and statutory amount carries a note naming its source (review fix)', () => {
+    const db = demo();
+    const s = buildScenario(db);
+    const sources = contentSources(db);
+    assert.ok(sources.pct && sources.law, 'the demo law and pct rows have a source');
+    const html = buildPacketHtml(s, { generatedOn: s.meta.clock, sources });
+    const body = html.split('<h2>Where each figure comes from</h2>')[0];
+    const pcts = [...body.matchAll(/\d+(\.\d+)?%/g)];
+    assert.ok(pcts.length > 0, 'the demo packet shows a percentage');
+    for (const m of pcts) assert.match(body.slice(m.index + m[0].length, m.index + m[0].length + 40), /^<sup><a href="#n\d+">/, `${m[0]} has a footnote`);
+    assert.match(html, /<li id="n\d+"><b>\d+%<\/b>, [^<]*Rate\. Source: Imported file: demo scenario/);
+    // Without a known source for the rows, no percentage or statutory number is printed.
+    const bare = buildPacketHtml(s, { generatedOn: s.meta.clock });
+    assert.ok(!/\d%/.test(bare.split('<h2>Where each figure comes from</h2>')[0]));
+    assert.ok(bare.includes('[figure unavailable]'));
+    db.prepare("UPDATE content SET src = 'planner' WHERE key = 'pct'").run();
+    assert.equal(contentSources(db).pct.label, 'Tax parameters for the year, from the tax calculator');
+    db.close();
+  });
+
   test('a figure with no source is shown as unavailable, never as a number', () => {
     const db = demo();
     const s = buildScenario(db);
@@ -231,6 +251,37 @@ describe('advisor packet content', () => {
     assert.ok(html.includes('Plain &amp; simple'));
     assert.ok(html.includes('<li>bold question?</li>'));
     assert.ok(!html.includes('<i>House</i>'));
+    db.close();
+  });
+});
+
+describe('upgrade from migration 010 (review fix)', () => {
+  test('existing review state in rec defs and the content row carries over', () => {
+    const db = openDb(':memory:');
+    db.exec('CREATE TABLE schema_migrations (id INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)');
+    for (const m of listMigrations().filter(m => m.id <= 10)) {
+      db.exec(readFileSync(m.file, 'utf8'));
+      db.prepare('INSERT INTO schema_migrations (id, name, applied_at) VALUES (?, ?, ?)').run(m.id, m.name, '2026-11-01T00:00:00.000Z');
+    }
+    const rec = db.prepare("INSERT INTO recs (id, def, status, sort, updated_at) VALUES (?, ?, ?, ?, '2026-10-20T09:00:00.000Z')");
+    rec.run('a', JSON.stringify({ id: 'a', title: 'Waiting one', advisor: { verdict: 'pending', note: 'On the agenda' } }), 'proposed', 0);
+    rec.run('b', JSON.stringify({ id: 'b', title: 'Confirmed one', advisor: { verdict: 'confirmed', note: 'Agree.' } }), 'accepted', 1);
+    rec.run('c', JSON.stringify({ id: 'c', title: 'Vetoed one', advisor: { verdict: 'vetoed', note: 'Not for you.' } }), 'dismissed', 2);
+    rec.run('d', JSON.stringify({ id: 'd', title: 'Never sent', advisor: null }), 'proposed', 3);
+    db.prepare("INSERT INTO content (key, value, src, updated_at) VALUES ('advisor', ?, 'x', '2026-10-21T09:00:00.000Z')").run(JSON.stringify({
+      name: 'Advisor', next: { when: 'Thu, Dec 10, 2:00 PM', length: '30 min' }, pending: ['a'],
+      reviewed: [{ recId: 'b', title: 'Confirmed one', verdict: 'confirmed', note: 'dup' }, { title: 'Outside the plan', verdict: 'confirmed', note: 'Hold.' }],
+    }));
+    migrate(db);
+    const s = buildScenario(db, { clock: '2026-11-05' });
+    const by = id => s.recs.find(r => r.id === id).advisor;
+    assert.equal(by('a').verdict, 'pending');
+    assert.deepEqual([by('b').verdict, by('b').note], ['confirmed', 'Agree.']);
+    assert.deepEqual([by('c').verdict, by('c').note], ['vetoed', 'Not for you.']);
+    assert.equal(by('d'), null);
+    assert.deepEqual(s.advisor.pending, ['a']);
+    assert.deepEqual(s.advisor.reviewed.map(v => v.title).sort(), ['Confirmed one', 'Outside the plan', 'Vetoed one']);
+    assert.deepEqual([s.advisor.next.when, s.advisor.next.length], ['Thu, Dec 10, 2:00 PM', '30 min']);
     db.close();
   });
 });

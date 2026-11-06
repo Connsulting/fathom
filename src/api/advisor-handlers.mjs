@@ -5,7 +5,7 @@
 import { tx } from '../store/db.mjs';
 import { clockNow } from '../scenario/build.mjs';
 import { sendToAdvisor, recordVerdict, setCheckin, AdvisorError, VETO_REASON } from '../advisor/index.mjs';
-import { buildPacketHtml, storePacket, readPacket } from '../advisor/packet.mjs';
+import { buildPacketHtml, storePacket, readPacket, contentSources } from '../advisor/packet.mjs';
 import { loadDataKey, VaultError } from '../ingest/vault.mjs';
 import { getSetting } from '../store/db.mjs';
 import { HttpError } from './http.mjs';
@@ -62,7 +62,7 @@ export async function createPacket(ctx) {
   const recIds = s.advisor.pending;
   if (!recIds.length) throw new HttpError(409, 'nothing is waiting on review');
   const key = await dataKey(ctx);
-  const html = buildPacketHtml(s, { generatedOn: s.meta.clock });
+  const html = buildPacketHtml(s, { generatedOn: s.meta.clock, sources: contentSources(ctx.db) });
   let id;
   try {
     id = await storePacket(ctx.db, { dataDir: ctx.config.dataDir, key, html, clock: s.meta.clock, recIds, now: stamp(ctx) });

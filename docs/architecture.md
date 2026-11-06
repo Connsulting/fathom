@@ -330,6 +330,9 @@ Migration 009 (`009-confirm-deck.sql`) creates `confirm_undo`, `confirm_guesses`
 
 Migration 011 (`011-advisor.sql`) creates `advisor_reviews`, `advisor_checkin` and
 `advisor_packets` (see "Advisor workflow"). The demo seed fills the first two from the scenario.
+It backfills `advisor_reviews` from an existing store's rec defs (`def.advisor`) and the advisor
+content row's `reviewed` items outside the plan, so an upgrade keeps every pending review and
+verdict; the content row's `next` label shows until the owner sets a check-in.
 
 ### Adding a migration
 
@@ -653,7 +656,9 @@ The review packet (`src/advisor/packet.mjs`) is one self-contained HTML document
 external resources: a household summary, each waiting rec with its why-now, figures, steps,
 knowledge sources and questions for the advisor, the figures' stated assumptions, and a numbered
 note for every figure (value, label, kind, source, as of). Figures come only from the scenario's
-stored or derived figures; a figure token whose source is unknown renders as "figure unavailable".
+stored or derived figures; statutory amounts and rates (`{l:}`, `{p:}`) cite the `law` and `pct`
+content rows' source (`contentSources`: a sources row, an imported file, or the planner's tax
+calculator parameters). Any token whose source is unknown renders as "figure unavailable".
 All stored text is reduced to plain text and escaped. The owner downloads it and prints to PDF
 from the browser. Packets are stored with the vault's AES-256-GCM under the data key and listed on
 the Advisor screen for re-download. The packet is not emailed.

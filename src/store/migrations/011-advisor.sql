@@ -40,3 +40,31 @@ CREATE TABLE advisor_packets (
   bytes INTEGER NOT NULL,
   sha256 TEXT NOT NULL
 );
+
+-- Backfill: a store from before 011 kept review state in each rec def's `advisor` field and in
+-- the advisor content row's `reviewed` list (items outside the plan). Carry both over so an
+-- upgrade loses no pending review or verdict; the rec's updated_at stands in for the dates. The
+-- content row's `next` check-in label keeps showing until the owner sets one (advisorSection).
+INSERT INTO advisor_reviews (rec_id, title, sent_at, verdict, note, reviewed_on, recorded_at)
+SELECT id,
+  coalesce(json_extract(def, '$.title'), ''),
+  updated_at,
+  nullif(json_extract(def, '$.advisor.verdict'), 'pending'),
+  CASE json_extract(def, '$.advisor.verdict') WHEN 'pending' THEN '' ELSE coalesce(json_extract(def, '$.advisor.note'), '') END,
+  CASE json_extract(def, '$.advisor.verdict') WHEN 'pending' THEN NULL ELSE substr(updated_at, 1, 10) END,
+  CASE json_extract(def, '$.advisor.verdict') WHEN 'pending' THEN NULL ELSE updated_at END
+FROM recs
+WHERE json_valid(def) AND json_extract(def, '$.advisor.verdict') IN ('pending', 'confirmed', 'vetoed')
+ORDER BY sort, id;
+
+INSERT INTO advisor_reviews (rec_id, title, sent_at, verdict, note, reviewed_on, recorded_at)
+SELECT NULL,
+  coalesce(json_extract(j.value, '$.title'), ''),
+  c.updated_at,
+  json_extract(j.value, '$.verdict'),
+  coalesce(json_extract(j.value, '$.note'), ''),
+  substr(c.updated_at, 1, 10),
+  c.updated_at
+FROM content c, json_each(c.value, '$.reviewed') j
+WHERE c.key = 'advisor' AND json_valid(c.value) AND json_type(c.value, '$.reviewed') = 'array'
+  AND json_extract(j.value, '$.recId') IS NULL AND json_extract(j.value, '$.verdict') IN ('confirmed', 'vetoed');
