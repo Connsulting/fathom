@@ -328,6 +328,7 @@ async function postJson(path, body) {
   if (!res.ok) {
     const err = new Error((data && typeof data.error === 'string' && data.error) || 'The server answered ' + res.status + '.');
     err.status = res.status;
+    if (data && typeof data.code === 'string') err.code = data.code;
     throw err;
   }
   if (!data || !data.scenario || typeof data.scenario !== 'object') throw new Error('The server sent an unexpected reply.');
@@ -581,9 +582,73 @@ function upload(fileList) {
   return send('/api/files', form, d => ({ files: arr(d.files), pending: Number(d.pending) || 0 }), null, 'Could not add those files. ');
 }
 
+// A failed answer POST is retried once only when the server confirms the first attempt did not
+// land: a network error or a 502, 503 or 504 (a proxy that lost the connection) re-reads the item,
+// and only a still pending item is posted again. An item answered with this option meanwhile
+// landed; any other state is reported stale. Never a blind second POST.
+const RETRY_STATUS = new Set([502, 503, 504]);
+const retryable = err => !!err && (err.status == null || RETRY_STATUS.has(err.status));
+
+async function confirmItemNow(id) {
+  try {
+    const res = await fetch('/api/confirm/' + encodeURIComponent(id), { headers: { accept: 'application/json' }, credentials: 'same-origin', cache: 'no-store' });
+    if (!res.ok) return null;
+    const d = await res.json();
+    return d && d.item && typeof d.item === 'object' ? d.item : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+// Re-read the scenario after an answer whose reply was lost or refused as stale.
+async function refetchScenario() {
+  try {
+    applyScenario(await loadScenario());
+  } catch (e) { /* keep the old state */ }
+  notify();
+}
+
+// Resolves { item } on success, { stale: true } when the question changed since it was asked (the
+// scenario is refetched first) and null on any other failure (error line shown). Never rejects.
 function answer(id, optionId) {
   if (id == null || id === '' || optionId == null || optionId === '') return done();
-  return send('/api/confirm/' + encodeURIComponent(id) + '/answer', { answer: String(optionId) }, d => d.item || null);
+  const path = '/api/confirm/' + encodeURIComponent(id) + '/answer';
+  const body = { answer: String(optionId) };
+  const stale = async () => { hideError(); await refetchScenario(); return { stale: true }; };
+  const fail = err => {
+    showError('Could not save that change. ' + (err && err.message ? err.message : ''));
+    return null;
+  };
+  const run = async () => {
+    let data;
+    try {
+      data = await postJson(path, body);
+    } catch (err) {
+      if (err && err.status === 409 && err.code === 'stale') return stale();
+      if (!retryable(err)) return fail(err);
+      const now = await confirmItemNow(id);
+      if (!now) return fail(err);
+      if (now.status === 'answered') {
+        if (String(now.answer) !== String(optionId)) return stale();
+        hideError();
+        await refetchScenario();
+        return { item: now };
+      }
+      try {
+        data = await postJson(path, body);
+      } catch (again) {
+        if (again && again.status === 409 && again.code === 'stale') return stale();
+        return fail(again);
+      }
+    }
+    applyScenario(data.scenario);
+    hideError();
+    notify();
+    return { item: data.item || null };
+  };
+  const p = queue.then(run);
+  queue = p;
+  return p;
 }
 
 // Change an answered question to another option.

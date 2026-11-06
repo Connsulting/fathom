@@ -53,6 +53,7 @@ const TABLE = [
   { method: 'POST', path: '/api/files/:id/retry', handler: ih.retryFile, ingest: true },
   { method: 'GET', path: '/api/confirm', handler: ih.listPendingConfirm, ingest: true },
   { method: 'POST', path: '/api/confirm/list', handler: ih.listConfirm, ingest: true },
+  { method: 'GET', path: '/api/confirm/:id', handler: ih.getConfirm, ingest: true },
   { method: 'POST', path: '/api/confirm/:id/answer', handler: ih.answerConfirm, ingest: true },
   { method: 'POST', path: '/api/confirm/:id/reopen', handler: ih.reopenConfirm, ingest: true },
   { method: 'GET', path: '/api/email', handler: eh.getEmail, quiet: true },

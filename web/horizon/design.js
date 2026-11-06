@@ -748,8 +748,22 @@ function decRow(d) {
   return `<article class="h-dec ${d.status}"><div class="h-dec-b">${title}${body}</div><div class="h-acts">${decideLinks(d, d.status === 'open')}</div></article>`;
 }
 
+// War games the planner could not build, each with the data that would unlock it (plain text
+// from the server, no figures) and a link to Add files or Confirm.
+function notBuiltRows() {
+  const nb = api.s.wargame?.notBuilt || {};
+  return ['salary', 'deferral'].filter((k) => nb[k] && typeof nb[k].text === 'string').map((k) => {
+    const answers = nb[k].unlock === 'answers';
+    const link = answers
+      ? `<a href="${href('confirm')}" data-go="confirm" class="h-btn ghost">Open Confirm</a>`
+      : `<a href="${href('add')}" data-go="add" class="h-btn ghost">Add files</a>`;
+    return `<article class="h-dec unbuilt" data-not-built="${esc(k)}"><div class="h-dec-b"><p>${esc(nb[k].text)}</p></div><div class="h-acts">${link}</div></article>`;
+  });
+}
+
 function pDecide() {
   const list = decisionList();
+  const unbuilt = notBuiltRows();
   const open = list.filter((d) => d.status === 'open');
   const soon = list.filter((d) => d.status === 'upcoming');
   const done = list.filter((d) => d.status === 'decided');
@@ -757,6 +771,7 @@ function pDecide() {
   const stats = `<div class="h-stats"><div><b>${open.length}</b><span>open</span></div><div><b>${soon.length}</b><span>coming up</span></div><div><b>${done.length}</b><span>decided</span></div></div>`;
   return shell(`${pageHead('Decide', 'What is open, and what is coming', 'Open choices come first. Each one opens its war game, or the item on your plan when there is nothing to trade off.')}${stats}
     ${section(`Open <em>${open.length}</em>`, open.length ? `<div class="h-decs">${open.map(decRow).join('')}</div>` : '<p class="h-mute">Nothing is waiting on a decision.</p>')}
+    ${unbuilt.length ? section(`Not built yet <em>${unbuilt.length}</em>`, `<div class="h-decs">${unbuilt.join('')}</div>`, 'Needs data') : ''}
     ${soon.length ? section(`Coming up <em>${soon.length}</em>`, `<div class="h-decs">${soon.map(decRow).join('')}</div>`, 'Not open yet') : ''}
     ${done.length ? `<details class="h-details" data-det="decided"${ui.det.decided ? ' open' : ''}><summary>Decided <em>${done.length}</em></summary><div class="h-decs">${done.map(decRow).join('')}</div></details>` : ''}
     ${gone.length ? `<details class="h-details" data-det="unavailable"${ui.det.unavailable ? ' open' : ''}><summary>No longer current <em>${gone.length}</em></summary><div class="h-decs">${gone.map(decRow).join('')}</div></details>` : ''}`, 'wargame');
