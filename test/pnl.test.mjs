@@ -705,7 +705,7 @@ test('pl-ac4 the module exports the contract, takes one object, never writes, an
 
 
 test('PN1: P&L lists spending ledgers separately and restores original tab names from locators', async t => {
-  const { db } = store(t);
+  const { db, root } = store(t);
   file(db);
   const id = line(db, 'Asters', '2032-03', 'Medical', -120);
   db.prepare('UPDATE pnl_lines SET locator = ? WHERE id = ?').run(JSON.stringify({ sheet: "Aster's - (Actual Expenses)", cells: ['D2'] }), id);
@@ -719,6 +719,6 @@ test('PN1: P&L lists spending ledgers separately and restores original tab names
   assert.equal(p.entity.kind, 'spending');
   assert.equal(p.entity.label, "Aster's");
   assert.equal(p.figures[p.expenses.total].v, 120);
-  const tool = await callTool('pnl_by_month', { entity: p.entity.label }, { db });
+  const tool = await callTool('business', { operation: 'pnl', entity: p.entity.label }, { db, dataDir: root });
   assert.deepEqual(tool.rows, [{ period: '2032-03', category: 'Medical', amount: -120 }]);
 });
