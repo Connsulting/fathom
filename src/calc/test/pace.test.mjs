@@ -32,6 +32,7 @@ test('missing, projected, undated and stale actuals never become known health', 
   assert.equal(stale.reason, 'stale_data');
   assert.equal(stale.dataThrough, '2032-03-01');
   assert.equal(stale.actual.v, 18000);
+  assert.equal(stale.timeGap, null);
   const mixed = actual(18000);
   mixed.dependencies.push({ kind: 'balances', asOf: '2032-03-01' });
   assert.equal(goalPace({ goal, actual: mixed, clock }).status, 'unknown');

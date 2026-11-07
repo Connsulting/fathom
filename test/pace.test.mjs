@@ -66,6 +66,7 @@ test('actual figures resolve nested row dependencies and unavailable figures sta
   const { db } = await store(t);
   account(db, 'a');
   const id = db.prepare('SELECT id FROM balances').get().id;
+  db.prepare("INSERT INTO sources (id,label) VALUES ('calc:cash','Cash calculation')").run();
   const fig = db.prepare("INSERT INTO figures (key,v,src,kind,label,locator,updated_at) VALUES (?,18000,'calc:cash','a','Cash',?,?)");
   fig.run('part', JSON.stringify({ rows: { table: 'balances', ids: [id], count: 1 } }), clock);
   fig.run('cash.total', JSON.stringify({ rows: { table: 'figures', ids: ['part'], count: 1 } }), clock);
@@ -111,7 +112,7 @@ test('monthly series and meters return explicit missing reasons and live when st
 });
 
 test('demo targets match the existing synthetic scenario and stale health is detected', async t => {
-  const { db } = await store(t); seedDemo(db);
+  const { db } = await store(t); setSetting(db, 'mode', 'demo'); seedDemo(db);
   const r = buildPace(db, { clock: demo.meta.clock });
   for (const [id, amount] of [['reserve',117900], ['port3',1978000]]) {
     const g = r.goals.find(g => g.id === id);
@@ -126,6 +127,24 @@ test('demo targets match the existing synthetic scenario and stale health is det
   assert.notEqual(fresh.goals.find(g => g.id === 'port3').status, 'unknown');
   assert.equal(r.goals.find(g => g.id === 'port3').targetDate, '2029-12-31');
   assert.equal(r.goals.find(g => g.id === 'arena').status, 'no target');
+});
+
+test('income meter uses current-year actual income, explicit plan and nested source rows', async t => {
+  const { db } = await store(t);
+  db.prepare("INSERT INTO sources (id,label) VALUES ('pnl','Business ledger')").run();
+  db.prepare("INSERT INTO pnl_lines (entity,period,category,amount) VALUES ('Example Business','2032-05','Income',18000)").run();
+  const id = db.prepare('SELECT id FROM pnl_lines').get().id;
+  db.prepare("INSERT INTO figures (key,v,kind,src,label,locator,updated_at) VALUES ('inc.ytd.total',18000,'a','pnl','Income',?,?)")
+    .run(JSON.stringify({ rows: { table: 'pnl_lines', ids: [id], count: 1 } }),clock);
+  upsertFact(db, { key: 'pace.income.2032', value: { annualPlan: 36600, asOf: clock }, src: 'you', confirmed: true, asOf: clock });
+  let m = buildPace(db, { clock }).meters.income;
+  assert.equal(m.meter.used.v, 18000);
+  assert.equal(m.meter.ratio.v, 0.49);
+  assert.equal(m.dataThrough, '2032-05-31');
+  assert.equal(m.reason, null);
+  db.prepare("UPDATE pnl_lines SET period = '2031-05'").run();
+  m = buildPace(db, { clock }).meters.income;
+  assert.equal(m.meter, null);
 });
 
 test('GET pace, scenario and MCP share the deterministic read-only result, including known health', async t => {
