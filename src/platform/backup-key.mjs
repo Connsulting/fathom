@@ -22,22 +22,21 @@ function parseKey(buf) {
     const key = Buffer.from(t, t.includes('+') || t.includes('/') || t.endsWith('=') ? 'base64' : 'base64url');
     if (key.length === KEY_BYTES) return key;
   }
-  return null;
+  throw new Error('invalid key');
 }
 
 // The 32 byte key in `file`, or an Error whose fixed code is `code`.
 export function loadKeyFile(file, code) {
-  const invalid = () => codeError(code);
-  if (typeof file !== 'string' || file === '') throw invalid();
+  if (typeof file !== 'string' || file === '') throw codeError(code);
   let fd;
   try {
     fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW);
   } catch {
-    throw invalid();
+    throw codeError(code);
   }
   try {
     const st = fstatSync(fd);
-    if (!st.isFile() || (st.mode & 0o077) !== 0 || st.size > MAX_KEY_FILE) throw invalid();
+    if (!st.isFile() || (st.mode & 0o077) !== 0 || st.size > MAX_KEY_FILE) throw new Error('invalid key file');
     const buf = Buffer.alloc(st.size);
     let off = 0;
     while (off < buf.length) {
@@ -45,11 +44,9 @@ export function loadKeyFile(file, code) {
       if (n === 0) break;
       off += n;
     }
-    const key = parseKey(buf.subarray(0, off));
-    if (!key) throw invalid();
-    return key;
+    return parseKey(buf.subarray(0, off));
   } catch {
-    throw invalid();
+    throw codeError(code);
   } finally {
     closeSync(fd);
   }
