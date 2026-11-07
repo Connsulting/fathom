@@ -19,7 +19,7 @@ test('catalog validates at least thirty cases and all question families', async 
   assert.ok(titleCase.turns.some(t => /529/.test(t.question) && /\$/.test(t.question)));
   for (const id of ['spending-annual-exclusions', 'spending-portfolio-withdrawal']) {
     const c = cases.find(c => c.id === id);
-    assert.ok(c.expectedFail.missingTools.length);
+    assert.ok(c.expectedFail.missingOperations.length);
     assert.ok(c.turns[0].expected.length);
   }
   for (const c of cases) for (const turn of c.turns) {
@@ -34,7 +34,7 @@ test('schema rejects invalid cases, duplicate ids and unknown predicates', async
   const cases = await loadCases();
   for (const mutate of [c => { c[0].turns[0].maxWords = -1; }, c => { c[0].turns[0].expected = [{ kind: 'magic' }]; },
     c => { c[0].turns[0].required[0].predicates = [{ path: 'keys', op: 'execute', value: 'x' }]; },
-    c => { c[1].id = c[0].id; }, c => { c[0].turns[0].question = ''; }]) {
+    c => { c[1].id = c[0].id; }, c => { c[0].turns[0].question = ''; }, c => { c[0].requires.script = true; delete c[0].requires.operations; }]) {
     const bad = structuredClone(cases); mutate(bad); assert.throws(() => validateCases(bad));
   }
 });
@@ -56,11 +56,11 @@ test('expected figures come from current demo rows and respond to a changed stor
 });
 
 test('required tools and all argument predicates reject wrong calls and errors', () => {
-  const required = [{ name: 'query', predicates: [
+  const required = [{ name: 'query', operation: 'search', predicates: [
     { path: 'keys', op: 'includes', value: 'cash' }, { path: 'from', op: 'eq', value: '2032-01-01' },
     { path: 'limit', op: 'gte', value: 2 }, { path: 'limit', op: 'lte', value: 10 }, { path: 'limit', op: 'exists' },
   ] }];
-  const good = { name: 'query', args: { keys: ['cash'], from: '2032-01-01', limit: 5 }, result: {} };
+  const good = { name: 'query', args: { operation: 'search', keys: ['cash'], from: '2032-01-01', limit: 5 }, result: {} };
   assert.equal(gradeRequiredTools(required, [good]).ok, true);
   for (const calls of [[], [{ ...good, isError: true }], [{ ...good, args: { ...good.args, from: '2031-01-01' } }],
     [{ ...good, args: { ...good.args, keys: ['other'] } }], [{ ...good, args: { ...good.args, limit: 20 } }],
@@ -104,7 +104,7 @@ test('earlier-turn values and context-only tokens fail independently of producti
     assert.equal(groundAnswer(text, { scenario }).ok, true);
     const figures = Object.fromEntries(store.db.prepare('SELECT key,v FROM figures').all().map(r => [r.key, r.v]));
     assert.equal(gradeFigures(text, [], { figures }).ok, false);
-    const sourced = [{ name: 'get_figures', args: { keys: ['hsa_left'] }, result: [{ key: 'hsa_left', v: figures.hsa_left }] }];
+    const sourced = [{ name: 'household', args: { operation: 'figures',  keys: ['hsa_left'] }, result: [{ key: 'hsa_left', v: figures.hsa_left }] }];
     assert.equal(gradeFigures(text, sourced, { figures }).ok, true);
     assert.equal(gradeFigures('$123', [], { contextNumbers: [123] }).contextOnly.length, 1);
   } finally { await store.close(); }
@@ -143,16 +143,16 @@ test('percent fractions compare at relative tolerance while money permits rounde
 });
 
 test('a case is required only when its tool and capability are both present', () => {
-  const turn = { question: 'What is elective spending?', required: [{ name: 'aggregate_transactions', predicates: [] }],
+  const turn = { question: 'What is elective spending?', required: [{ name: 'spending', operation: 'total', predicates: [] }],
     forbidden: ['unsourced-figure', 'self-computed-figure', 'owner-assumption-not-in-messages'], expected: [], maxWords: 40, rubric: 'Use the tool.' };
-  const c = { id: 'q09-elective-definition', family: 'spending', requires: { tools: ['aggregate_transactions'], capabilities: ['definitions'] }, turns: [turn] };
-  const absent = applyAvailability(c, { hasTool: () => false, capabilities: [] });
-  assert.ok(absent.expectedFail.missingTools.includes('aggregate_transactions'));
+  const c = { id: 'q09-elective-definition', family: 'spending', requires: { operations: ['spending.total'], capabilities: ['definitions'] }, turns: [turn] };
+  const absent = applyAvailability(c, { hasOperation: () => false, hasScript: () => false, capabilities: [] });
+  assert.ok(absent.expectedFail.missingOperations.includes('spending.total'));
   assert.deepEqual(absent.expectedFail.missingCapabilities, ['definitions']);
-  const toolOnly = applyAvailability(c, { hasTool: name => name === 'aggregate_transactions', capabilities: [] });
-  assert.deepEqual(toolOnly.expectedFail.missingTools, []);
+  const toolOnly = applyAvailability(c, { hasOperation: (name, op) => name === 'spending' && op === 'total', hasScript: () => false, capabilities: [] });
+  assert.deepEqual(toolOnly.expectedFail.missingOperations, []);
   assert.deepEqual(toolOnly.expectedFail.missingCapabilities, ['definitions']);
-  const ready = applyAvailability(c, { hasTool: name => name === 'aggregate_transactions', capabilities: ['definitions'] });
+  const ready = applyAvailability(c, { hasOperation: (name, op) => name === 'spending' && op === 'total', hasScript: () => true, capabilities: ['definitions'] });
   assert.equal(ready.expectedFail, undefined);
 });
 
@@ -175,7 +175,33 @@ test('annual expectations use complete covered months rather than a partial last
     const covered = store.db.prepare(`SELECT t.amount AS v, t.category, t.description FROM transactions t JOIN accounts a ON a.id=t.account_id
       WHERE a.kind IN ('checking','credit','card') AND t.date<'2026-03-01' AND t.amount<0`).all()
       .filter(r => !['transfer', 'income'].includes(r.category) && classOf(r.category) !== 'taxes' && classOf(r.category) !== 'debt_service'
-        && !/mortgage|income tax/i.test(r.description)).reduce((s, r) => s - r.v, 0);
+        ).reduce((s, r) => s - r.v, 0);
     assert.equal(expectedFigures(store.db, [{ kind: 'annual-spending' }])[0], Math.round(covered * 6 * 100) / 100);
   } finally { await store.close(); }
+});
+
+test('availability requires the exact operation, capability and script file together', async () => {
+  const file = new URL('../evals/catalog.json', import.meta.url);
+  const check = async (operation, capability, script) => (await loadCases(file, {
+    hasOperation: (name, op) => name === 'spending' && op === operation,
+    capabilities: capability ? ['definitions'] : [], hasScript: () => script,
+  })).find(c => c.id === 'q09-elective-definition');
+  assert.deepEqual((await check('compare', false, false)).expectedFail, {
+    missingOperations: ['spending.total'], missingCapabilities: ['definitions'], missingScript: 'scripts/q09-elective-definition.mjs',
+  });
+  assert.deepEqual((await check('total', true, false)).expectedFail.missingOperations, []);
+  assert.ok((await check('total', true, false)).expectedFail.missingScript);
+  assert.equal((await check('total', true, true)).expectedFail, undefined);
+});
+
+test('required-call grades distinguish absent pairs from failed predicates and omitted keys', () => {
+  const required = [{ name: 'household', operation: 'figures', predicates: [{ path: 'keys', op: 'includes_or_absent', value: 'cash' }] }];
+  const call = args => ({ name: 'household', args, result: [] });
+  assert.equal(gradeRequiredTools(required, [call({ operation: 'facts' })]).checks[0].status, 'missing');
+  const failed = gradeRequiredTools(required, [call({ operation: 'figures', keys: ['other'] })]).checks[0];
+  assert.equal(failed.status, 'predicate_failed');
+  assert.deepEqual(failed.failedPredicates, required[0].predicates);
+  for (const args of [{ operation: 'figures' }, { operation: 'figures', keys: ['cash'] }]) {
+    assert.equal(gradeRequiredTools(required, [call(args)]).checks[0].status, 'ok');
+  }
 });

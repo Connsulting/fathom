@@ -134,7 +134,7 @@ test('createEngine: request.fake takes precedence over the queue and request.too
   assert.equal((await engine.call(ask())).text, 'from the queue', 'the constructor queue is untouched by a per-call script');
 
   const seen = [];
-  const tool = { name: 'read_context', description: 'Synthetic tool that reads its context.', scope: 'read', inputSchema: emptyArgs,
+  const tool = { name: 'read_context', description: 'Synthetic tool that reads its context.', kind: 'read', operations: [{ name: 'read', scope: 'read' }], inputSchema: emptyArgs,
     handler: async (args, ctx) => { seen.push(ctx); return { value: 1 }; } };
   const db = { synthetic: true };
   await engine.call(ask({ tools: [tool], toolContext: { db, now: '2027-01-05T08:00:00.000Z' },

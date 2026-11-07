@@ -75,7 +75,7 @@ function scriptArgs(predicates) {
     let out = args;
     for (const part of parts.slice(0, -1)) out = out[part] ??= {};
     const key = parts.at(-1);
-    if (p.op === 'includes') (out[key] ??= []).push(p.value);
+    if (p.op === 'includes' || p.op === 'includes_or_absent') (out[key] ??= []).push(p.value);
     else if (p.op !== 'exists') out[key] = p.value;
   }
   return args;
@@ -105,10 +105,10 @@ export async function runCases({ cases, live = false, maxUsd = 100, outDir, scri
     const clock = JSON.parse(db.prepare("SELECT value FROM settings WHERE key='clock'").get().value);
     const figures = Object.fromEntries(db.prepare('SELECT key,v FROM figures').all().map(r => [r.key, r.v]));
     const rows = [];
-    let attempts = [], turn, missing = [], expected = [], requestLengths = [];
+    let attempts = [], turn, missing = [], expected = [], requestLengths = [], caseScript = null, scriptMissing = false, capabilitiesMissing = false;
     const engine = { mode, isOn: () => true, async call(request) {
-      const calls = turn.required.filter(r => tools.some(t => t.name === r.name)).map(r => ({ name: r.name, args: scriptArgs(r.predicates) }));
-      const supplied = scripts ? scripts({ turn, expected, db, purpose: request.purpose, attempt: attempts.length }) : [
+      const calls = scriptMissing || capabilitiesMissing ? [] : turn.required.filter(r => tools.some(t => t.name === r.name && t.operations.some(o => o.name === r.operation))).map(r => ({ name: r.name, args: { operation: r.operation, ...scriptArgs(r.predicates) } }));
+      const supplied = scripts ? await scripts({ turn, expected, db, purpose: request.purpose, attempt: attempts.length }) : caseScript ? await caseScript({ turn, expected, db, purpose: request.purpose, attempt: attempts.length, clock, tools }) : [
         ...(calls.length ? [{ toolCalls: calls, costUsd: 0 }] : []),
         { text: scriptedAnswer(turn, expected, missing), costUsd: 0 },
       ];
@@ -137,11 +137,15 @@ export async function runCases({ cases, live = false, maxUsd = 100, outDir, scri
       const goalId = `eval-${c.id}`;
       if (c.storedGoal) db.prepare("INSERT INTO goals (id, def, sort, origin, created_at) VALUES (?, ?, 100, 'owner', ?)")
         .run(goalId, JSON.stringify({ ...c.storedGoal, id: goalId, horizon: 'now', target: null, targetDate: null, track: null }), clock + 'T00:00:00.000Z');
-      missing = (c.expectedFail?.missingTools ?? []).filter(name => !tools.some(t => t.name === name));
+      missing = c.expectedFail?.missingOperations ?? [];
+      scriptMissing = Boolean(c.expectedFail?.missingScript);
+      caseScript = c.requires?.script && !scriptMissing && !live ? (await import(new URL(`./scripts/${c.id}.mjs`, import.meta.url))).script : null;
+      if (caseScript !== null && typeof caseScript !== 'function') throw new TypeError(`Invalid eval script ${c.id}`);
       const missingCapabilities = (c.expectedFail?.missingCapabilities ?? []).filter(name => !CAPABILITIES.includes(name));
+      capabilitiesMissing = missingCapabilities.length > 0;
       const beforeCost = ledger.costUsd;
       const beforeReserved = ledger.reservedUsd;
-      const result = { id: c.id, family: c.family, status: 'pass', missingTools: missing, missingCapabilities, turns: [] };
+      const result = { id: c.id, family: c.family, status: 'pass', missingOperations: missing, missingCapabilities, ...(scriptMissing ? { missingScript: c.expectedFail.missingScript } : {}), turns: [] };
       let key;
       for (turn of c.turns) {
         attempts = []; requestLengths = [];
@@ -161,11 +165,12 @@ export async function runCases({ cases, live = false, maxUsd = 100, outDir, scri
         const length = gradeLength(delivered, turn.maxWords);
         const expectedGrade = gradeExpected(delivered, expected, { figures });
         const refusal = !turn.refusal || /\b(?:don't|doesn't|do not|does not|cannot|can't|not available|not stored|not tracked|no access)\b/i.test(delivered);
-        const prohibited = gradeProhibited(turn.prohibit, { text: delivered, writeCalls: calls.filter(c => tools.some(t => t.name === c.name && t.scope !== 'read')).length });
-        const existingToolsOk = required.checks.filter(r => !missing.includes(r.name)).every(r => r.ok);
+        const prohibited = gradeProhibited(turn.prohibit, { text: delivered, writeCalls: calls.filter(c => tools.some(t => t.name === c.name && t.kind !== 'read')).length });
+        const scriptForTurn = (scriptMissing || capabilitiesMissing) && turn.required.some(r => c.requires?.operations?.includes(`${r.name}.${r.operation}`));
+        const existingToolsOk = scriptForTurn || required.checks.filter(r => !missing.includes(`${r.name}.${r.operation}`)).every(r => r.ok);
         const safe = numeric.ok && length.ok && refusal && prohibited.ok && gradedAttempts.every(a => a.figures.ok && a.length.ok && a.prohibited.ok && !a.error);
         const ok = safe && required.ok && expectedGrade.ok && !response.message?.notice;
-        const turnMissing = missingCapabilities.length > 0 || turn.required.some(r => missing.includes(r.name));
+        const turnMissing = scriptForTurn || turn.required.some(r => missing.includes(`${r.name}.${r.operation}`));
         const gapOnly = turnMissing && safe && existingToolsOk && !response.message?.notice;
         result.turns.push({ question: turn.question, rubric: turn.rubric, delivered, tools: calls, required,
           figures: numeric, expected: expectedGrade, length, refusal, attempts: gradedAttempts,
@@ -205,7 +210,7 @@ export async function writeScorecard(dir, scorecard) {
   const kindCount = (grade, kind) => (grade?.[kind === 'self-computed' ? 'selfComputed' : kind === 'spelled_out' ? 'spelledOut' : kind === 'context-only' ? 'contextOnly' : kind] ?? []).length;
   for (const c of scorecard.cases) {
     const names = c.turns.flatMap(t => t.tools.map(r => r.name)).join(', ');
-    const required = c.turns.flatMap(t => t.required.checks.map(r => `${r.name}:${r.ok ? 'ok' : 'missing'}`)).join(', ');
+    const required = c.turns.flatMap(t => t.required.checks.map(r => `${r.name}.${r.operation}:${r.status}`)).join(', ');
     const grades = c.turns.flatMap(t => [t.figures, ...t.attempts.map(a => a.figures)]);
     const counts = ['unsourced', 'self-computed', 'rounded', 'spelled_out', 'context-only']
       .map(kind => grades.reduce((s, grade) => s + kindCount(grade, kind), 0));

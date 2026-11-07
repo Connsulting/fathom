@@ -9,24 +9,30 @@
           "question": "What is our annual spending excluding mortgage and income tax, including healthcare? Annualize the complete covered months in the ledger.",
           "required": [
             {
-              "name": "aggregate_transactions",
+              "name": "spending",
               "predicates": [
                 {
-                  "path": "exclude",
-                  "op": "includes",
-                  "value": "mortgage"
+                  "path": "measure",
+                  "op": "eq",
+                  "value": "spending"
                 },
                 {
-                  "path": "includeHealthcare",
+                  "path": "annualize",
                   "op": "eq",
                   "value": true
                 },
                 {
-                  "path": "exclude",
+                  "path": "exclude.classes",
                   "op": "includes",
-                  "value": "income_tax"
+                  "value": "debt_service"
+                },
+                {
+                  "path": "exclude.buckets",
+                  "op": "includes",
+                  "value": "tax"
                 }
-              ]
+              ],
+              "operation": "total"
             }
           ],
           "forbidden": [
@@ -42,10 +48,11 @@
           "rubric": "Exclude mortgage, income tax, transfers and business activity; include health; annualize complete covered months and state coverage."
         }
       ],
-      "expectedFail": {
-        "missingTools": [
-          "aggregate_transactions"
-        ]
+      "requires": {
+        "operations": [
+          "spending.total"
+        ],
+        "script": true
       }
     },
     {
@@ -56,14 +63,30 @@
           "question": "How big a portfolio covers our annual spending excluding mortgage and income tax, including healthcare, at a 4% withdrawal rate?",
           "required": [
             {
-              "name": "independence_target",
+              "name": "retirement",
               "predicates": [
                 {
-                  "path": "withdrawalRate",
+                  "path": "withdrawalRate.value",
                   "op": "eq",
                   "value": 0.04
+                },
+                {
+                  "path": "withdrawalRate.source",
+                  "op": "eq",
+                  "value": "owner"
+                },
+                {
+                  "path": "definition",
+                  "op": "eq",
+                  "value": "core_living"
+                },
+                {
+                  "path": "roundTo",
+                  "op": "eq",
+                  "value": 1
                 }
-              ]
+              ],
+              "operation": "target"
             }
           ],
           "forbidden": [
@@ -80,10 +103,14 @@
           "rubric": "Use deterministic spending and portfolio tools; the tool must return the portfolio amount and a percentage value for the rate, rather than echoing its fractional argument. Never divide in prose."
         }
       ],
-      "expectedFail": {
-        "missingTools": [
-          "independence_target"
-        ]
+      "requires": {
+        "operations": [
+          "retirement.target"
+        ],
+        "capabilities": [
+          "ownerStatements"
+        ],
+        "script": true
       }
     },
     {
@@ -94,7 +121,7 @@
           "question": "What was the signed amount of our latest groceries transaction?",
           "required": [
             {
-              "name": "query_transactions",
+              "name": "transactions",
               "predicates": [
                 {
                   "path": "category",
@@ -106,7 +133,8 @@
                   "op": "eq",
                   "value": 1
                 }
-              ]
+              ],
+              "operation": "search"
             }
           ],
           "forbidden": [
@@ -122,7 +150,12 @@
           "maxWords": 90,
           "rubric": "Use the returned value, state what it measures and keep the answer brief."
         }
-      ]
+      ],
+      "requires": {
+        "operations": [
+          "transactions.search"
+        ]
+      }
     },
     {
       "id": "spending-latest-dining",
@@ -132,7 +165,7 @@
           "question": "What was the signed amount of our latest dining transaction?",
           "required": [
             {
-              "name": "query_transactions",
+              "name": "transactions",
               "predicates": [
                 {
                   "path": "category",
@@ -144,7 +177,8 @@
                   "op": "eq",
                   "value": 1
                 }
-              ]
+              ],
+              "operation": "search"
             }
           ],
           "forbidden": [
@@ -160,7 +194,12 @@
           "maxWords": 90,
           "rubric": "Use the returned value, state what it measures and keep the answer brief."
         }
-      ]
+      ],
+      "requires": {
+        "operations": [
+          "transactions.search"
+        ]
+      }
     },
     {
       "id": "spending-latest-health",
@@ -170,7 +209,7 @@
           "question": "What was the signed amount of our latest health transaction?",
           "required": [
             {
-              "name": "query_transactions",
+              "name": "transactions",
               "predicates": [
                 {
                   "path": "category",
@@ -182,7 +221,8 @@
                   "op": "eq",
                   "value": 1
                 }
-              ]
+              ],
+              "operation": "search"
             }
           ],
           "forbidden": [
@@ -198,7 +238,12 @@
           "maxWords": 90,
           "rubric": "Use the returned value, state what it measures and keep the answer brief."
         }
-      ]
+      ],
+      "requires": {
+        "operations": [
+          "transactions.search"
+        ]
+      }
     },
     {
       "id": "cash-personal",
@@ -208,14 +253,15 @@
           "question": "What is our stored personal cash balance?",
           "required": [
             {
-              "name": "get_figures",
+              "name": "household",
               "predicates": [
                 {
                   "path": "keys",
-                  "op": "includes",
+                  "op": "includes_or_absent",
                   "value": "personal_cash"
                 }
-              ]
+              ],
+              "operation": "figures"
             }
           ],
           "forbidden": [
@@ -231,7 +277,12 @@
           "maxWords": 90,
           "rubric": "Use the returned value, state what it measures and keep the answer brief."
         }
-      ]
+      ],
+      "requires": {
+        "operations": [
+          "household.figures"
+        ]
+      }
     },
     {
       "id": "cash-business",
@@ -241,14 +292,15 @@
           "question": "What is the stored business cash figure?",
           "required": [
             {
-              "name": "get_figures",
+              "name": "household",
               "predicates": [
                 {
                   "path": "keys",
-                  "op": "includes",
+                  "op": "includes_or_absent",
                   "value": "biz_cash"
                 }
-              ]
+              ],
+              "operation": "figures"
             }
           ],
           "forbidden": [
@@ -264,7 +316,12 @@
           "maxWords": 90,
           "rubric": "Use the returned value, state what it measures and keep the answer brief."
         }
-      ]
+      ],
+      "requires": {
+        "operations": [
+          "household.figures"
+        ]
+      }
     },
     {
       "id": "cash-true-reserve",
@@ -274,14 +331,15 @@
           "question": "What is our true reserve?",
           "required": [
             {
-              "name": "get_figures",
+              "name": "household",
               "predicates": [
                 {
                   "path": "keys",
-                  "op": "includes",
+                  "op": "includes_or_absent",
                   "value": "true_reserve"
                 }
-              ]
+              ],
+              "operation": "figures"
             }
           ],
           "forbidden": [
@@ -297,7 +355,12 @@
           "maxWords": 90,
           "rubric": "Use the returned value, state what it measures and keep the answer brief."
         }
-      ]
+      ],
+      "requires": {
+        "operations": [
+          "household.figures"
+        ]
+      }
     },
     {
       "id": "business-stored-revenue",
@@ -307,14 +370,15 @@
           "question": "What is stored business revenue year to date?",
           "required": [
             {
-              "name": "get_figures",
+              "name": "household",
               "predicates": [
                 {
                   "path": "keys",
-                  "op": "includes",
+                  "op": "includes_or_absent",
                   "value": "revenue_ytd"
                 }
-              ]
+              ],
+              "operation": "figures"
             }
           ],
           "forbidden": [
@@ -330,7 +394,12 @@
           "maxWords": 90,
           "rubric": "Use the returned value, state what it measures and keep the answer brief."
         }
-      ]
+      ],
+      "requires": {
+        "operations": [
+          "household.figures"
+        ]
+      }
     },
     {
       "id": "net-worth-current",
@@ -340,14 +409,15 @@
           "question": "What is our current stored net worth?",
           "required": [
             {
-              "name": "get_figures",
+              "name": "household",
               "predicates": [
                 {
                   "path": "keys",
-                  "op": "includes",
+                  "op": "includes_or_absent",
                   "value": "net_worth"
                 }
-              ]
+              ],
+              "operation": "figures"
             }
           ],
           "forbidden": [
@@ -363,7 +433,12 @@
           "maxWords": 90,
           "rubric": "Use the returned value, state what it measures and keep the answer brief."
         }
-      ]
+      ],
+      "requires": {
+        "operations": [
+          "household.figures"
+        ]
+      }
     },
     {
       "id": "retirement-hsa-room",
@@ -373,14 +448,15 @@
           "question": "How much HSA contribution room is left?",
           "required": [
             {
-              "name": "get_figures",
+              "name": "household",
               "predicates": [
                 {
                   "path": "keys",
-                  "op": "includes",
+                  "op": "includes_or_absent",
                   "value": "hsa_left"
                 }
-              ]
+              ],
+              "operation": "figures"
             }
           ],
           "forbidden": [
@@ -396,7 +472,12 @@
           "maxWords": 90,
           "rubric": "Use the returned value, state what it measures and keep the answer brief."
         }
-      ]
+      ],
+      "requires": {
+        "operations": [
+          "household.figures"
+        ]
+      }
     },
     {
       "id": "retirement-current-room",
@@ -406,14 +487,15 @@
           "question": "What retirement contribution room is available now?",
           "required": [
             {
-              "name": "get_figures",
+              "name": "household",
               "predicates": [
                 {
                   "path": "keys",
-                  "op": "includes",
+                  "op": "includes_or_absent",
                   "value": "ret_room_now"
                 }
-              ]
+              ],
+              "operation": "figures"
             }
           ],
           "forbidden": [
@@ -429,7 +511,12 @@
           "maxWords": 90,
           "rubric": "Use the returned value, state what it measures and keep the answer brief."
         }
-      ]
+      ],
+      "requires": {
+        "operations": [
+          "household.figures"
+        ]
+      }
     },
     {
       "id": "retirement-hsa-paid",
@@ -439,14 +526,15 @@
           "question": "How much have we contributed to the HSA?",
           "required": [
             {
-              "name": "get_figures",
+              "name": "household",
               "predicates": [
                 {
                   "path": "keys",
-                  "op": "includes",
+                  "op": "includes_or_absent",
                   "value": "hsa_paid"
                 }
-              ]
+              ],
+              "operation": "figures"
             }
           ],
           "forbidden": [
@@ -462,7 +550,12 @@
           "maxWords": 90,
           "rubric": "Use the returned value, state what it measures and keep the answer brief."
         }
-      ]
+      ],
+      "requires": {
+        "operations": [
+          "household.figures"
+        ]
+      }
     },
     {
       "id": "retirement-pretax",
@@ -472,14 +565,15 @@
           "question": "What is the owner pre-tax retirement balance?",
           "required": [
             {
-              "name": "get_figures",
+              "name": "household",
               "predicates": [
                 {
                   "path": "keys",
-                  "op": "includes",
+                  "op": "includes_or_absent",
                   "value": "my_pretax"
                 }
-              ]
+              ],
+              "operation": "figures"
             }
           ],
           "forbidden": [
@@ -495,7 +589,12 @@
           "maxWords": 90,
           "rubric": "Use the returned value, state what it measures and keep the answer brief."
         }
-      ]
+      ],
+      "requires": {
+        "operations": [
+          "household.figures"
+        ]
+      }
     },
     {
       "id": "taxes-safe-harbor",
@@ -505,14 +604,15 @@
           "question": "What is our stored safe harbor requirement?",
           "required": [
             {
-              "name": "get_figures",
+              "name": "household",
               "predicates": [
                 {
                   "path": "keys",
-                  "op": "includes",
+                  "op": "includes_or_absent",
                   "value": "safe_harbor"
                 }
-              ]
+              ],
+              "operation": "figures"
             }
           ],
           "forbidden": [
@@ -528,7 +628,12 @@
           "maxWords": 90,
           "rubric": "Use the returned value, state what it measures and keep the answer brief."
         }
-      ]
+      ],
+      "requires": {
+        "operations": [
+          "household.figures"
+        ]
+      }
     },
     {
       "id": "taxes-federal-paid",
@@ -538,14 +643,15 @@
           "question": "What federal estimated tax has been paid?",
           "required": [
             {
-              "name": "get_figures",
+              "name": "household",
               "predicates": [
                 {
                   "path": "keys",
-                  "op": "includes",
+                  "op": "includes_or_absent",
                   "value": "fed_paid"
                 }
-              ]
+              ],
+              "operation": "figures"
             }
           ],
           "forbidden": [
@@ -561,7 +667,12 @@
           "maxWords": 90,
           "rubric": "Use the returned value, state what it measures and keep the answer brief."
         }
-      ]
+      ],
+      "requires": {
+        "operations": [
+          "household.figures"
+        ]
+      }
     },
     {
       "id": "taxes-state-paid",
@@ -571,14 +682,15 @@
           "question": "What state estimated tax has been paid?",
           "required": [
             {
-              "name": "get_figures",
+              "name": "household",
               "predicates": [
                 {
                   "path": "keys",
-                  "op": "includes",
+                  "op": "includes_or_absent",
                   "value": "va_paid"
                 }
-              ]
+              ],
+              "operation": "figures"
             }
           ],
           "forbidden": [
@@ -594,7 +706,12 @@
           "maxWords": 90,
           "rubric": "Use the returned value, state what it measures and keep the answer brief."
         }
-      ]
+      ],
+      "requires": {
+        "operations": [
+          "household.figures"
+        ]
+      }
     },
     {
       "id": "taxes-liability",
@@ -604,14 +721,15 @@
           "question": "What is the estimated tax liability?",
           "required": [
             {
-              "name": "get_figures",
+              "name": "household",
               "predicates": [
                 {
                   "path": "keys",
-                  "op": "includes",
+                  "op": "includes_or_absent",
                   "value": "liability"
                 }
-              ]
+              ],
+              "operation": "figures"
             }
           ],
           "forbidden": [
@@ -627,7 +745,12 @@
           "maxWords": 90,
           "rubric": "Use the returned value, state what it measures and keep the answer brief."
         }
-      ]
+      ],
+      "requires": {
+        "operations": [
+          "household.figures"
+        ]
+      }
     },
     {
       "id": "taxes-april-due",
@@ -637,14 +760,15 @@
           "question": "What is the stored amount due in April?",
           "required": [
             {
-              "name": "get_figures",
+              "name": "household",
               "predicates": [
                 {
                   "path": "keys",
-                  "op": "includes",
+                  "op": "includes_or_absent",
                   "value": "april_due"
                 }
-              ]
+              ],
+              "operation": "figures"
             }
           ],
           "forbidden": [
@@ -660,7 +784,12 @@
           "maxWords": 90,
           "rubric": "Use the returned value, state what it measures and keep the answer brief."
         }
-      ]
+      ],
+      "requires": {
+        "operations": [
+          "household.figures"
+        ]
+      }
     },
     {
       "id": "cash-flow-month",
@@ -670,19 +799,25 @@
           "question": "What was household net cash flow in January, excluding transfers?",
           "required": [
             {
-              "name": "cash_flow",
+              "name": "spending",
               "predicates": [
+                {
+                  "path": "window",
+                  "op": "eq",
+                  "value": "custom"
+                },
                 {
                   "path": "from",
                   "op": "eq",
-                  "value": "2026-01-01"
+                  "value": "2026-01"
                 },
                 {
                   "path": "to",
                   "op": "eq",
-                  "value": "2026-01-31"
+                  "value": "2026-01"
                 }
-              ]
+              ],
+              "operation": "cash_flow"
             }
           ],
           "forbidden": [
@@ -699,10 +834,11 @@
           "rubric": "Use the returned value, state what it measures and keep the answer brief."
         }
       ],
-      "expectedFail": {
-        "missingTools": [
-          "cash_flow"
-        ]
+      "requires": {
+        "operations": [
+          "spending.cash_flow"
+        ],
+        "script": true
       }
     },
     {
@@ -713,7 +849,7 @@
           "question": "What is total business profit across both entities for january?",
           "required": [
             {
-              "name": "business_pnl",
+              "name": "business",
               "predicates": [
                 {
                   "path": "from",
@@ -725,7 +861,8 @@
                   "op": "eq",
                   "value": "2026-01"
                 }
-              ]
+              ],
+              "operation": "pnl"
             }
           ],
           "forbidden": [
@@ -741,7 +878,12 @@
           "maxWords": 90,
           "rubric": "Use the returned value, state what it measures and keep the answer brief."
         }
-      ]
+      ],
+      "requires": {
+        "operations": [
+          "business.pnl"
+        ]
+      }
     },
     {
       "id": "business-pnl-february",
@@ -751,7 +893,7 @@
           "question": "What is total business profit across both entities for february?",
           "required": [
             {
-              "name": "business_pnl",
+              "name": "business",
               "predicates": [
                 {
                   "path": "from",
@@ -763,7 +905,8 @@
                   "op": "eq",
                   "value": "2026-02"
                 }
-              ]
+              ],
+              "operation": "pnl"
             }
           ],
           "forbidden": [
@@ -779,7 +922,12 @@
           "maxWords": 90,
           "rubric": "Use the returned value, state what it measures and keep the answer brief."
         }
-      ]
+      ],
+      "requires": {
+        "operations": [
+          "business.pnl"
+        ]
+      }
     },
     {
       "id": "business-pnl-march",
@@ -789,7 +937,7 @@
           "question": "What is total business profit across both entities for march?",
           "required": [
             {
-              "name": "business_pnl",
+              "name": "business",
               "predicates": [
                 {
                   "path": "from",
@@ -801,7 +949,8 @@
                   "op": "eq",
                   "value": "2026-03"
                 }
-              ]
+              ],
+              "operation": "pnl"
             }
           ],
           "forbidden": [
@@ -817,7 +966,12 @@
           "maxWords": 90,
           "rubric": "Use the returned value, state what it measures and keep the answer brief."
         }
-      ]
+      ],
+      "requires": {
+        "operations": [
+          "business.pnl"
+        ]
+      }
     },
     {
       "id": "net-worth-history",
@@ -827,8 +981,15 @@
           "question": "Show net worth over time through the latest balance date.",
           "required": [
             {
-              "name": "net_worth",
-              "predicates": []
+              "name": "accounts",
+              "predicates": [
+                {
+                  "path": "series",
+                  "op": "eq",
+                  "value": true
+                }
+              ],
+              "operation": "net_worth"
             }
           ],
           "forbidden": [
@@ -844,10 +1005,11 @@
           "rubric": "Use the returned value, state what it measures and keep the answer brief."
         }
       ],
-      "expectedFail": {
-        "missingTools": [
-          "net_worth"
-        ]
+      "requires": {
+        "operations": [
+          "accounts.net_worth"
+        ],
+        "script": true
       }
     },
     {
@@ -858,14 +1020,20 @@
           "question": "How much did net worth change from the earliest balance snapshot to the latest?",
           "required": [
             {
-              "name": "net_worth",
+              "name": "accounts",
               "predicates": [
                 {
-                  "path": "includeChange",
+                  "path": "series",
                   "op": "eq",
                   "value": true
                 }
-              ]
+              ],
+              "operation": "net_worth"
+            },
+            {
+              "name": "calculate",
+              "operation": "subtract",
+              "predicates": []
             }
           ],
           "forbidden": [
@@ -881,10 +1049,12 @@
           "rubric": "Use the returned value, state what it measures and keep the answer brief."
         }
       ],
-      "expectedFail": {
-        "missingTools": [
-          "net_worth"
-        ]
+      "requires": {
+        "operations": [
+          "accounts.net_worth",
+          "calculate.subtract"
+        ],
+        "script": true
       }
     },
     {
@@ -895,8 +1065,9 @@
           "question": "What open goals are we tracking?",
           "required": [
             {
-              "name": "list_goals",
-              "predicates": []
+              "name": "goals",
+              "predicates": [],
+              "operation": "list"
             }
           ],
           "forbidden": [
@@ -907,7 +1078,12 @@
           "maxWords": 90,
           "rubric": "Name tracked goals without inventing targets."
         }
-      ]
+      ],
+      "requires": {
+        "operations": [
+          "goals.list"
+        ]
+      }
     },
     {
       "id": "goals-pace",
@@ -917,8 +1093,9 @@
           "question": "Are our goals on pace, and what is unknown?",
           "required": [
             {
-              "name": "get_pace",
-              "predicates": []
+              "name": "goals",
+              "predicates": [],
+              "operation": "pace"
             }
           ],
           "forbidden": [
@@ -929,7 +1106,12 @@
           "maxWords": 90,
           "rubric": "Preserve unknown and stale pace states."
         }
-      ]
+      ],
+      "requires": {
+        "operations": [
+          "goals.pace"
+        ]
+      }
     },
     {
       "id": "freshness-household",
@@ -939,8 +1121,9 @@
           "question": "How current is the household data?",
           "required": [
             {
-              "name": "household_summary",
-              "predicates": []
+              "name": "household",
+              "predicates": [],
+              "operation": "summary"
             }
           ],
           "forbidden": [
@@ -951,7 +1134,12 @@
           "maxWords": 90,
           "rubric": "State data-through and distinguish it from today."
         }
-      ]
+      ],
+      "requires": {
+        "operations": [
+          "household.summary"
+        ]
+      }
     },
     {
       "id": "freshness-facts",
@@ -961,8 +1149,9 @@
           "question": "Where do household facts come from, and are they confirmed?",
           "required": [
             {
-              "name": "get_facts",
-              "predicates": []
+              "name": "household",
+              "predicates": [],
+              "operation": "facts"
             }
           ],
           "forbidden": [
@@ -973,7 +1162,12 @@
           "maxWords": 90,
           "rubric": "Use fact provenance and confirmation state."
         }
-      ]
+      ],
+      "requires": {
+        "operations": [
+          "household.facts"
+        ]
+      }
     },
     {
       "id": "unavailable-credit-score",
@@ -983,8 +1177,9 @@
           "question": "What is my credit score?",
           "required": [
             {
-              "name": "get_facts",
-              "predicates": []
+              "name": "household",
+              "predicates": [],
+              "operation": "facts"
             }
           ],
           "forbidden": [
@@ -996,7 +1191,12 @@
           "rubric": "Say Fathom doesn't have that; never guess.",
           "refusal": true
         }
-      ]
+      ],
+      "requires": {
+        "operations": [
+          "household.facts"
+        ]
+      }
     },
     {
       "id": "unavailable-routing-number",
@@ -1006,8 +1206,9 @@
           "question": "What is my full bank routing number?",
           "required": [
             {
-              "name": "list_accounts",
-              "predicates": []
+              "name": "accounts",
+              "predicates": [],
+              "operation": "list"
             }
           ],
           "forbidden": [
@@ -1019,7 +1220,12 @@
           "rubric": "Say Fathom doesn't have that; never guess.",
           "refusal": true
         }
-      ]
+      ],
+      "requires": {
+        "operations": [
+          "accounts.list"
+        ]
+      }
     },
     {
       "id": "unavailable-market-forecast",
@@ -1029,8 +1235,9 @@
           "question": "What will stocks return next year?",
           "required": [
             {
-              "name": "list_positions",
-              "predicates": []
+              "name": "accounts",
+              "predicates": [],
+              "operation": "holdings"
             }
           ],
           "forbidden": [
@@ -1042,7 +1249,12 @@
           "rubric": "Say Fathom doesn't have that; never guess.",
           "refusal": true
         }
-      ]
+      ],
+      "requires": {
+        "operations": [
+          "accounts.holdings"
+        ]
+      }
     },
     {
       "id": "retirement-hsa-follow-up",
@@ -1052,14 +1264,15 @@
           "question": "How much HSA room remains?",
           "required": [
             {
-              "name": "get_figures",
+              "name": "household",
               "predicates": [
                 {
                   "path": "keys",
-                  "op": "includes",
+                  "op": "includes_or_absent",
                   "value": "hsa_left"
                 }
-              ]
+              ],
+              "operation": "figures"
             }
           ],
           "forbidden": [
@@ -1079,14 +1292,15 @@
           "question": "And how much have we already paid?",
           "required": [
             {
-              "name": "get_figures",
+              "name": "household",
               "predicates": [
                 {
                   "path": "keys",
-                  "op": "includes",
+                  "op": "includes_or_absent",
                   "value": "hsa_paid"
                 }
-              ]
+              ],
+              "operation": "figures"
             }
           ],
           "forbidden": [
@@ -1102,7 +1316,12 @@
           "maxWords": 90,
           "rubric": "Use the returned value, state what it measures and keep the answer brief."
         }
-      ]
+      ],
+      "requires": {
+        "operations": [
+          "household.figures"
+        ]
+      }
     },
     {
       "id": "q01-spend-excl-mortgage-tax",
@@ -1112,7 +1331,7 @@
           "question": "What is my yearly spending, excluding mortgage and income tax but including healthcare, so I can back into the investment balance I need",
           "required": [
             {
-              "name": "aggregate_transactions",
+              "name": "spending",
               "predicates": [
                 {
                   "path": "measure",
@@ -1139,7 +1358,8 @@
                   "op": "includes",
                   "value": "tax"
                 }
-              ]
+              ],
+              "operation": "total"
             }
           ],
           "forbidden": [
@@ -1153,13 +1373,14 @@
             }
           ],
           "maxWords": 160,
-          "rubric": "One aggregate_transactions call. Healthcare stays in. Annualize complete covered months across checking and card spending accounts."
+          "rubric": "One spending.total call. Healthcare stays in. Annualize complete covered months across checking and card spending accounts."
         }
       ],
       "requires": {
-        "tools": [
-          "aggregate_transactions"
-        ]
+        "operations": [
+          "spending.total"
+        ],
+        "script": true
       }
     },
     {
@@ -1170,7 +1391,7 @@
           "question": "What investment balance would cover yearly spending, excluding mortgage and income tax but including healthcare, at a 4 percent withdrawal rate?",
           "required": [
             {
-              "name": "independence_target",
+              "name": "retirement",
               "predicates": [
                 {
                   "path": "withdrawalRate.value",
@@ -1182,7 +1403,8 @@
                   "op": "eq",
                   "value": "owner"
                 }
-              ]
+              ],
+              "operation": "target"
             }
           ],
           "forbidden": [
@@ -1201,12 +1423,13 @@
         }
       ],
       "requires": {
-        "tools": [
-          "independence_target"
-        ],
         "capabilities": [
           "ownerStatements"
-        ]
+        ],
+        "operations": [
+          "retirement.target"
+        ],
+        "script": true
       }
     },
     {
@@ -1217,7 +1440,7 @@
           "question": "How far am I from the balance that covers yearly spending, excluding mortgage and income tax but including healthcare, at a 4 percent withdrawal rate, and when would I get there at my current savings rate?",
           "required": [
             {
-              "name": "independence_target",
+              "name": "retirement",
               "predicates": [
                 {
                   "path": "withdrawalRate.value",
@@ -1229,7 +1452,8 @@
                   "op": "eq",
                   "value": "owner"
                 }
-              ]
+              ],
+              "operation": "target"
             }
           ],
           "forbidden": [
@@ -1243,12 +1467,13 @@
         }
       ],
       "requires": {
-        "tools": [
-          "independence_target"
-        ],
         "capabilities": [
           "ownerStatements"
-        ]
+        ],
+        "operations": [
+          "retirement.target"
+        ],
+        "script": true
       }
     },
     {
@@ -1259,7 +1484,7 @@
           "question": "What do we spend on groceries and dining out each month?",
           "required": [
             {
-              "name": "aggregate_transactions",
+              "name": "spending",
               "predicates": [
                 {
                   "path": "measure",
@@ -1281,7 +1506,8 @@
                   "op": "includes",
                   "value": "dining"
                 }
-              ]
+              ],
+              "operation": "total"
             }
           ],
           "forbidden": [
@@ -1295,9 +1521,10 @@
         }
       ],
       "requires": {
-        "tools": [
-          "aggregate_transactions"
-        ]
+        "operations": [
+          "spending.total"
+        ],
+        "script": true
       }
     },
     {
@@ -1308,24 +1535,26 @@
           "question": "How much of our spending is essential and how much is discretionary?",
           "required": [
             {
-              "name": "aggregate_transactions",
+              "name": "spending",
               "predicates": [
                 {
                   "path": "definition",
                   "op": "eq",
                   "value": "essential"
                 }
-              ]
+              ],
+              "operation": "total"
             },
             {
-              "name": "aggregate_transactions",
+              "name": "spending",
               "predicates": [
                 {
                   "path": "definition",
                   "op": "eq",
                   "value": "discretionary"
                 }
-              ]
+              ],
+              "operation": "total"
             }
           ],
           "forbidden": [
@@ -1335,13 +1564,14 @@
           ],
           "expected": [],
           "maxWords": 160,
-          "rubric": "State both totals. No sum or difference unless calculate returned it."
+          "rubric": "State both totals. No sum or difference unless calculate.<arithmetic> returned it."
         }
       ],
       "requires": {
-        "tools": [
-          "aggregate_transactions"
-        ]
+        "operations": [
+          "spending.total"
+        ],
+        "script": true
       }
     },
     {
@@ -1352,7 +1582,7 @@
           "question": "Who are our ten biggest merchants this year?",
           "required": [
             {
-              "name": "aggregate_transactions",
+              "name": "spending",
               "predicates": [
                 {
                   "path": "groupBy",
@@ -1364,7 +1594,8 @@
                   "op": "eq",
                   "value": 10
                 }
-              ]
+              ],
+              "operation": "total"
             }
           ],
           "forbidden": [
@@ -1378,9 +1609,10 @@
         }
       ],
       "requires": {
-        "tools": [
-          "aggregate_transactions"
-        ]
+        "operations": [
+          "spending.total"
+        ],
+        "script": true
       }
     },
     {
@@ -1391,7 +1623,7 @@
           "question": "How much did we spend on childcare in 2025?",
           "required": [
             {
-              "name": "aggregate_transactions",
+              "name": "spending",
               "predicates": [
                 {
                   "path": "window",
@@ -1408,7 +1640,8 @@
                   "op": "includes",
                   "value": "childcare"
                 }
-              ]
+              ],
+              "operation": "total"
             }
           ],
           "forbidden": [
@@ -1422,9 +1655,10 @@
         }
       ],
       "requires": {
-        "tools": [
-          "aggregate_transactions"
-        ]
+        "operations": [
+          "spending.total"
+        ],
+        "script": true
       }
     },
     {
@@ -1435,14 +1669,15 @@
           "question": "How much did we spend on healthcare last year, premiums included?",
           "required": [
             {
-              "name": "aggregate_transactions",
+              "name": "spending",
               "predicates": [
                 {
                   "path": "include.classes",
                   "op": "includes",
                   "value": "healthcare"
                 }
-              ]
+              ],
+              "operation": "total"
             }
           ],
           "forbidden": [
@@ -1456,9 +1691,10 @@
         }
       ],
       "requires": {
-        "tools": [
-          "aggregate_transactions"
-        ]
+        "operations": [
+          "spending.total"
+        ],
+        "script": true
       }
     },
     {
@@ -1469,14 +1705,15 @@
           "question": "What is our spending in my elective spending definition?",
           "required": [
             {
-              "name": "aggregate_transactions",
+              "name": "spending",
               "predicates": [
                 {
                   "path": "definition",
                   "op": "eq",
                   "value": "elective_spending"
                 }
-              ]
+              ],
+              "operation": "total"
             }
           ],
           "forbidden": [
@@ -1490,12 +1727,13 @@
         }
       ],
       "requires": {
-        "tools": [
-          "aggregate_transactions"
-        ],
         "capabilities": [
           "definitions"
-        ]
+        ],
+        "operations": [
+          "spending.total"
+        ],
+        "script": true
       }
     },
     {
@@ -1506,14 +1744,15 @@
           "question": "What is our spending in my elective spending definition?",
           "required": [
             {
-              "name": "aggregate_transactions",
+              "name": "spending",
               "predicates": [
                 {
                   "path": "definition",
                   "op": "eq",
                   "value": "elective_spending"
                 }
-              ]
+              ],
+              "operation": "total"
             }
           ],
           "forbidden": [
@@ -1523,16 +1762,17 @@
           ],
           "expected": [],
           "maxWords": 160,
-          "rubric": "A later thread. The fixture already saved the definition. Do not call save_spending_definition."
+          "rubric": "A later thread. The fixture already saved the definition. Do not call update_preferences.save_definition."
         }
       ],
       "requires": {
-        "tools": [
-          "aggregate_transactions"
-        ],
         "capabilities": [
           "definitions"
-        ]
+        ],
+        "operations": [
+          "spending.total"
+        ],
+        "script": true
       }
     },
     {
@@ -1543,7 +1783,7 @@
           "question": "Remember elective spending as everything except housing, childcare, healthcare and taxes.",
           "required": [
             {
-              "name": "save_spending_definition",
+              "name": "update_preferences",
               "predicates": [
                 {
                   "path": "def.exclude.classes",
@@ -1570,7 +1810,8 @@
                   "op": "includes",
                   "value": "taxes"
                 }
-              ]
+              ],
+              "operation": "save_definition"
             }
           ],
           "forbidden": [
@@ -1580,16 +1821,17 @@
           ],
           "expected": [],
           "maxWords": 160,
-          "rubric": "Receipt present. Linked preference names the definition. No remember_preference call."
+          "rubric": "Receipt present. Linked preference names the definition. No update_preferences.remember call."
         }
       ],
       "requires": {
-        "tools": [
-          "save_spending_definition"
-        ],
         "capabilities": [
           "definitions"
-        ]
+        ],
+        "operations": [
+          "update_preferences.save_definition"
+        ],
+        "script": true
       }
     },
     {
@@ -1600,14 +1842,15 @@
           "question": "What was our net cash flow each month this year, with the business kept separate?",
           "required": [
             {
-              "name": "cash_flow",
+              "name": "spending",
               "predicates": [
                 {
                   "path": "scope",
                   "op": "eq",
                   "value": "all"
                 }
-              ]
+              ],
+              "operation": "cash_flow"
             }
           ],
           "forbidden": [
@@ -1621,9 +1864,10 @@
         }
       ],
       "requires": {
-        "tools": [
-          "cash_flow"
-        ]
+        "operations": [
+          "spending.cash_flow"
+        ],
+        "script": true
       }
     },
     {
@@ -1634,14 +1878,15 @@
           "question": "How much did we move from the business to our personal accounts this year?",
           "required": [
             {
-              "name": "cash_flow",
+              "name": "spending",
               "predicates": [
                 {
                   "path": "scope",
                   "op": "eq",
                   "value": "all"
                 }
-              ]
+              ],
+              "operation": "cash_flow"
             }
           ],
           "forbidden": [
@@ -1655,9 +1900,10 @@
         }
       ],
       "requires": {
-        "tools": [
-          "cash_flow"
-        ]
+        "operations": [
+          "spending.cash_flow"
+        ],
+        "script": true
       }
     },
     {
@@ -1668,14 +1914,15 @@
           "question": "Which months this year did more go out than came in?",
           "required": [
             {
-              "name": "cash_flow",
+              "name": "spending",
               "predicates": [
                 {
                   "path": "scope",
                   "op": "eq",
                   "value": "household"
                 }
-              ]
+              ],
+              "operation": "cash_flow"
             }
           ],
           "forbidden": [
@@ -1689,9 +1936,10 @@
         }
       ],
       "requires": {
-        "tools": [
-          "cash_flow"
-        ]
+        "operations": [
+          "spending.cash_flow"
+        ],
+        "script": true
       }
     },
     {
@@ -1702,24 +1950,20 @@
           "question": "What is our savings rate over the last twelve months?",
           "required": [
             {
-              "name": "aggregate_transactions",
+              "name": "spending",
               "predicates": [
                 {
                   "path": "window",
                   "op": "eq",
                   "value": "trailing_12"
                 }
-              ]
+              ],
+              "operation": "total"
             },
             {
               "name": "calculate",
-              "predicates": [
-                {
-                  "path": "op",
-                  "op": "eq",
-                  "value": "divide"
-                }
-              ]
+              "predicates": [],
+              "operation": "divide"
             }
           ],
           "forbidden": [
@@ -1733,10 +1977,11 @@
         }
       ],
       "requires": {
-        "tools": [
-          "aggregate_transactions",
-          "calculate"
-        ]
+        "operations": [
+          "spending.total",
+          "calculate.divide"
+        ],
+        "script": true
       }
     },
     {
@@ -1747,7 +1992,7 @@
           "question": "How much income came in this year, by source?",
           "required": [
             {
-              "name": "aggregate_transactions",
+              "name": "spending",
               "predicates": [
                 {
                   "path": "measure",
@@ -1759,11 +2004,13 @@
                   "op": "eq",
                   "value": "merchant"
                 }
-              ]
+              ],
+              "operation": "total"
             },
             {
-              "name": "business_pnl",
-              "predicates": []
+              "name": "business",
+              "predicates": [],
+              "operation": "pnl"
             }
           ],
           "forbidden": [
@@ -1777,10 +2024,11 @@
         }
       ],
       "requires": {
-        "tools": [
-          "aggregate_transactions",
-          "business_pnl"
-        ]
+        "operations": [
+          "spending.total",
+          "business.pnl"
+        ],
+        "script": true
       }
     },
     {
@@ -1791,7 +2039,7 @@
           "question": "What is our average monthly take-home pay over the last year?",
           "required": [
             {
-              "name": "aggregate_transactions",
+              "name": "spending",
               "predicates": [
                 {
                   "path": "measure",
@@ -1803,7 +2051,8 @@
                   "op": "eq",
                   "value": "trailing_12"
                 }
-              ]
+              ],
+              "operation": "total"
             }
           ],
           "forbidden": [
@@ -1817,9 +2066,10 @@
         }
       ],
       "requires": {
-        "tools": [
-          "aggregate_transactions"
-        ]
+        "operations": [
+          "spending.total"
+        ],
+        "script": true
       }
     },
     {
@@ -1830,14 +2080,15 @@
           "question": "What is the business's profit year to date, and its margin?",
           "required": [
             {
-              "name": "business_pnl",
+              "name": "business",
               "predicates": [
                 {
                   "path": "window",
                   "op": "eq",
                   "value": "ytd"
                 }
-              ]
+              ],
+              "operation": "pnl"
             }
           ],
           "forbidden": [
@@ -1851,9 +2102,13 @@
         }
       ],
       "requires": {
-        "tools": [
-          "business_pnl"
-        ]
+        "operations": [
+          "business.pnl"
+        ],
+        "capabilities": [
+          "businessPeriods"
+        ],
+        "script": true
       }
     },
     {
@@ -1864,14 +2119,15 @@
           "question": "How does business revenue this year compare with the same months last year?",
           "required": [
             {
-              "name": "business_pnl",
+              "name": "business",
               "predicates": [
                 {
                   "path": "compareToPriorYear",
                   "op": "eq",
                   "value": true
                 }
-              ]
+              ],
+              "operation": "pnl"
             }
           ],
           "forbidden": [
@@ -1885,9 +2141,13 @@
         }
       ],
       "requires": {
-        "tools": [
-          "business_pnl"
-        ]
+        "operations": [
+          "business.pnl"
+        ],
+        "capabilities": [
+          "businessPeriods"
+        ],
+        "script": true
       }
     },
     {
@@ -1898,7 +2158,7 @@
           "question": "What were the biggest business expense categories last quarter?",
           "required": [
             {
-              "name": "business_pnl",
+              "name": "business",
               "predicates": [
                 {
                   "path": "groupBy",
@@ -1910,7 +2170,8 @@
                   "op": "eq",
                   "value": "custom"
                 }
-              ]
+              ],
+              "operation": "pnl"
             }
           ],
           "forbidden": [
@@ -1924,9 +2185,13 @@
         }
       ],
       "requires": {
-        "tools": [
-          "business_pnl"
-        ]
+        "operations": [
+          "business.pnl"
+        ],
+        "capabilities": [
+          "businessPeriods"
+        ],
+        "script": true
       }
     },
     {
@@ -1937,14 +2202,15 @@
           "question": "What is our net worth today, split into cash, investments, retirement and debt?",
           "required": [
             {
-              "name": "net_worth",
+              "name": "accounts",
               "predicates": [
                 {
                   "path": "groupBy",
                   "op": "eq",
                   "value": "part"
                 }
-              ]
+              ],
+              "operation": "net_worth"
             }
           ],
           "forbidden": [
@@ -1962,9 +2228,10 @@
         }
       ],
       "requires": {
-        "tools": [
-          "net_worth"
-        ]
+        "operations": [
+          "accounts.net_worth"
+        ],
+        "script": true
       }
     },
     {
@@ -1975,24 +2242,20 @@
           "question": "How has our net worth changed over the last twelve months?",
           "required": [
             {
-              "name": "net_worth",
+              "name": "accounts",
               "predicates": [
                 {
                   "path": "series",
                   "op": "eq",
                   "value": true
                 }
-              ]
+              ],
+              "operation": "net_worth"
             },
             {
               "name": "calculate",
-              "predicates": [
-                {
-                  "path": "op",
-                  "op": "eq",
-                  "value": "subtract"
-                }
-              ]
+              "predicates": [],
+              "operation": "subtract"
             }
           ],
           "forbidden": [
@@ -2006,10 +2269,11 @@
         }
       ],
       "requires": {
-        "tools": [
-          "net_worth",
-          "calculate"
-        ]
+        "operations": [
+          "accounts.net_worth",
+          "calculate.subtract"
+        ],
+        "script": true
       }
     },
     {
@@ -2020,14 +2284,15 @@
           "question": "How much do we have in retirement accounts compared with taxable brokerage?",
           "required": [
             {
-              "name": "net_worth",
+              "name": "accounts",
               "predicates": [
                 {
                   "path": "groupBy",
                   "op": "eq",
                   "value": "treatment"
                 }
-              ]
+              ],
+              "operation": "net_worth"
             }
           ],
           "forbidden": [
@@ -2041,9 +2306,10 @@
         }
       ],
       "requires": {
-        "tools": [
-          "net_worth"
-        ]
+        "operations": [
+          "accounts.net_worth"
+        ],
+        "script": true
       }
     },
     {
@@ -2054,7 +2320,7 @@
           "question": "If we keep saving at our current rate, what will our investments be worth in ten years?",
           "required": [
             {
-              "name": "project_growth",
+              "name": "retirement",
               "predicates": [
                 {
                   "path": "solve",
@@ -2066,7 +2332,8 @@
                   "op": "eq",
                   "value": 10
                 }
-              ]
+              ],
+              "operation": "growth"
             }
           ],
           "forbidden": [
@@ -2080,9 +2347,10 @@
         }
       ],
       "requires": {
-        "tools": [
-          "project_growth"
-        ]
+        "operations": [
+          "retirement.growth"
+        ],
+        "script": true
       }
     },
     {
@@ -2093,11 +2361,12 @@
           "question": "How much would we need to save each month to hit the target by the time I am 55?",
           "required": [
             {
-              "name": "independence_target",
-              "predicates": []
+              "name": "retirement",
+              "predicates": [],
+              "operation": "target"
             },
             {
-              "name": "project_growth",
+              "name": "retirement",
               "predicates": [
                 {
                   "path": "solve",
@@ -2109,7 +2378,8 @@
                   "op": "eq",
                   "value": 55
                 }
-              ]
+              ],
+              "operation": "growth"
             }
           ],
           "forbidden": [
@@ -2123,10 +2393,11 @@
         }
       ],
       "requires": {
-        "tools": [
-          "independence_target",
-          "project_growth"
-        ]
+        "operations": [
+          "retirement.target",
+          "retirement.growth"
+        ],
+        "script": true
       }
     },
     {
@@ -2137,7 +2408,7 @@
           "question": "If returns are 3 percent instead of 4, when would we reach the target?",
           "required": [
             {
-              "name": "independence_target",
+              "name": "retirement",
               "predicates": [
                 {
                   "path": "realReturn.value",
@@ -2149,7 +2420,8 @@
                   "op": "eq",
                   "value": "owner"
                 }
-              ]
+              ],
+              "operation": "target"
             }
           ],
           "forbidden": [
@@ -2163,12 +2435,13 @@
         }
       ],
       "requires": {
-        "tools": [
-          "independence_target"
-        ],
         "capabilities": [
           "ownerStatements"
-        ]
+        ],
+        "operations": [
+          "retirement.target"
+        ],
+        "script": true
       }
     },
     {
@@ -2179,7 +2452,7 @@
           "question": "What target do we need at a 3.5 percent withdrawal rate?",
           "required": [
             {
-              "name": "independence_target",
+              "name": "retirement",
               "predicates": [
                 {
                   "path": "withdrawalRate.value",
@@ -2191,7 +2464,8 @@
                   "op": "eq",
                   "value": "owner"
                 }
-              ]
+              ],
+              "operation": "target"
             }
           ],
           "forbidden": [
@@ -2205,12 +2479,13 @@
         }
       ],
       "requires": {
-        "tools": [
-          "independence_target"
-        ],
         "capabilities": [
           "ownerStatements"
-        ]
+        ],
+        "operations": [
+          "retirement.target"
+        ],
+        "script": true
       }
     },
     {
@@ -2221,18 +2496,14 @@
           "question": "If we saved $1,000 more a month, how much sooner would we reach the target?",
           "required": [
             {
-              "name": "independence_target",
-              "predicates": []
+              "name": "retirement",
+              "predicates": [],
+              "operation": "target"
             },
             {
               "name": "calculate",
-              "predicates": [
-                {
-                  "path": "op",
-                  "op": "eq",
-                  "value": "subtract"
-                }
-              ]
+              "predicates": [],
+              "operation": "subtract"
             }
           ],
           "forbidden": [
@@ -2246,13 +2517,14 @@
         }
       ],
       "requires": {
-        "tools": [
-          "independence_target",
-          "calculate"
-        ],
         "capabilities": [
           "ownerStatements"
-        ]
+        ],
+        "operations": [
+          "retirement.target",
+          "calculate.subtract"
+        ],
+        "script": true
       }
     },
     {
@@ -2263,13 +2535,14 @@
           "question": "What is $15 million in retirement accounts worth after tax compared with $15 million in a brokerage account?",
           "required": [
             {
-              "name": "after_tax_value",
+              "name": "retirement",
               "predicates": [
                 {
                   "path": "hypothetical",
                   "op": "exists"
                 }
-              ]
+              ],
+              "operation": "after_tax"
             }
           ],
           "forbidden": [
@@ -2283,12 +2556,13 @@
         }
       ],
       "requires": {
-        "tools": [
-          "after_tax_value"
-        ],
         "capabilities": [
           "ownerStatements"
-        ]
+        ],
+        "operations": [
+          "retirement.after_tax"
+        ],
+        "script": true
       }
     },
     {
@@ -2299,14 +2573,15 @@
           "question": "When can each of us take money out of retirement accounts without a penalty?",
           "required": [
             {
-              "name": "access_schedule",
+              "name": "retirement",
               "predicates": [
                 {
                   "path": "people",
                   "op": "eq",
                   "value": "both"
                 }
-              ]
+              ],
+              "operation": "access"
             }
           ],
           "forbidden": [
@@ -2320,9 +2595,10 @@
         }
       ],
       "requires": {
-        "tools": [
-          "access_schedule"
-        ]
+        "operations": [
+          "retirement.access"
+        ],
+        "script": true
       }
     },
     {
@@ -2333,14 +2609,15 @@
           "question": "When do required minimum distributions start for each of us?",
           "required": [
             {
-              "name": "access_schedule",
+              "name": "retirement",
               "predicates": [
                 {
                   "path": "people",
                   "op": "eq",
                   "value": "both"
                 }
-              ]
+              ],
+              "operation": "access"
             }
           ],
           "forbidden": [
@@ -2354,9 +2631,10 @@
         }
       ],
       "requires": {
-        "tools": [
-          "access_schedule"
-        ]
+        "operations": [
+          "retirement.access"
+        ],
+        "script": true
       }
     },
     {
@@ -2367,7 +2645,7 @@
           "question": "If I stop working at 50, do we have enough outside retirement accounts to get to 59 and a half?",
           "required": [
             {
-              "name": "bridge_check",
+              "name": "retirement",
               "predicates": [
                 {
                   "path": "retireAge.value",
@@ -2379,7 +2657,8 @@
                   "op": "eq",
                   "value": "owner"
                 }
-              ]
+              ],
+              "operation": "bridge"
             }
           ],
           "forbidden": [
@@ -2393,12 +2672,13 @@
         }
       ],
       "requires": {
-        "tools": [
-          "bridge_check"
-        ],
         "capabilities": [
           "ownerStatements"
-        ]
+        ],
+        "operations": [
+          "retirement.bridge"
+        ],
+        "script": true
       }
     },
     {
@@ -2409,14 +2689,15 @@
           "question": "Which of our accounts are pre-tax, Roth or taxable?",
           "required": [
             {
-              "name": "net_worth",
+              "name": "accounts",
               "predicates": [
                 {
                   "path": "groupBy",
                   "op": "eq",
                   "value": "treatment"
                 }
-              ]
+              ],
+              "operation": "net_worth"
             }
           ],
           "forbidden": [
@@ -2430,9 +2711,10 @@
         }
       ],
       "requires": {
-        "tools": [
-          "net_worth"
-        ]
+        "operations": [
+          "accounts.net_worth"
+        ],
+        "script": true
       }
     },
     {
@@ -2443,18 +2725,20 @@
           "question": "How much unrealized gain is in our brokerage accounts, and what tax would selling everything trigger?",
           "required": [
             {
-              "name": "tax_estimate",
-              "predicates": []
+              "name": "tax",
+              "predicates": [],
+              "operation": "estimate"
             },
             {
-              "name": "after_tax_value",
+              "name": "retirement",
               "predicates": [
                 {
                   "path": "kinds",
                   "op": "includes",
                   "value": "taxable"
                 }
-              ]
+              ],
+              "operation": "after_tax"
             }
           ],
           "forbidden": [
@@ -2468,10 +2752,11 @@
         }
       ],
       "requires": {
-        "tools": [
-          "tax_estimate",
-          "after_tax_value"
-        ]
+        "operations": [
+          "tax.estimate",
+          "retirement.after_tax"
+        ],
+        "script": true
       }
     },
     {
@@ -2482,8 +2767,9 @@
           "question": "What will we owe in federal and state income tax this year?",
           "required": [
             {
-              "name": "tax_estimate",
-              "predicates": []
+              "name": "tax",
+              "predicates": [],
+              "operation": "estimate"
             }
           ],
           "forbidden": [
@@ -2497,9 +2783,10 @@
         }
       ],
       "requires": {
-        "tools": [
-          "tax_estimate"
-        ]
+        "operations": [
+          "tax.estimate"
+        ],
+        "script": true
       }
     },
     {
@@ -2510,8 +2797,9 @@
           "question": "Are our estimated payments on track for safe harbor, and when is the next one due?",
           "required": [
             {
-              "name": "tax_estimate",
-              "predicates": []
+              "name": "tax",
+              "predicates": [],
+              "operation": "estimate"
             }
           ],
           "forbidden": [
@@ -2525,9 +2813,10 @@
         }
       ],
       "requires": {
-        "tools": [
-          "tax_estimate"
-        ]
+        "operations": [
+          "tax.estimate"
+        ],
+        "script": true
       }
     },
     {
@@ -2538,7 +2827,7 @@
           "question": "How much would an extra $20,000 of business income add to our tax bill?",
           "required": [
             {
-              "name": "tax_estimate",
+              "name": "tax",
               "predicates": [
                 {
                   "path": "whatIf.extraIncome.value",
@@ -2550,7 +2839,8 @@
                   "op": "eq",
                   "value": "owner"
                 }
-              ]
+              ],
+              "operation": "estimate"
             }
           ],
           "forbidden": [
@@ -2564,12 +2854,13 @@
         }
       ],
       "requires": {
-        "tools": [
-          "tax_estimate"
-        ],
         "capabilities": [
           "ownerStatements"
-        ]
+        ],
+        "operations": [
+          "tax.estimate"
+        ],
+        "script": true
       }
     },
     {
@@ -2580,8 +2871,9 @@
           "question": "How much self-employment tax am I paying this year?",
           "required": [
             {
-              "name": "tax_estimate",
-              "predicates": []
+              "name": "tax",
+              "predicates": [],
+              "operation": "estimate"
             }
           ],
           "forbidden": [
@@ -2595,9 +2887,10 @@
         }
       ],
       "requires": {
-        "tools": [
-          "tax_estimate"
-        ]
+        "operations": [
+          "tax.estimate"
+        ],
+        "script": true
       }
     },
     {
@@ -2608,7 +2901,7 @@
           "question": "How much more can I put into my solo 401(k) this year, employee and employer?",
           "required": [
             {
-              "name": "contribution_room",
+              "name": "tax",
               "predicates": [
                 {
                   "path": "person",
@@ -2620,7 +2913,8 @@
                   "op": "includes",
                   "value": "solo401k_pretax"
                 }
-              ]
+              ],
+              "operation": "room"
             }
           ],
           "forbidden": [
@@ -2634,9 +2928,10 @@
         }
       ],
       "requires": {
-        "tools": [
-          "contribution_room"
-        ]
+        "operations": [
+          "tax.room"
+        ],
+        "script": true
       }
     },
     {
@@ -2647,14 +2942,15 @@
           "question": "Can we still contribute to traditional or Roth IRAs for this year, and how much?",
           "required": [
             {
-              "name": "contribution_room",
+              "name": "tax",
               "predicates": [
                 {
                   "path": "types",
                   "op": "includes",
                   "value": "traditional_ira"
                 }
-              ]
+              ],
+              "operation": "room"
             }
           ],
           "forbidden": [
@@ -2668,9 +2964,10 @@
         }
       ],
       "requires": {
-        "tools": [
-          "contribution_room"
-        ]
+        "operations": [
+          "tax.room"
+        ],
+        "script": true
       }
     },
     {
@@ -2681,14 +2978,15 @@
           "question": "How much HSA room is left this year?",
           "required": [
             {
-              "name": "contribution_room",
+              "name": "tax",
               "predicates": [
                 {
                   "path": "types",
                   "op": "includes",
                   "value": "hsa"
                 }
-              ]
+              ],
+              "operation": "room"
             }
           ],
           "forbidden": [
@@ -2702,9 +3000,10 @@
         }
       ],
       "requires": {
-        "tools": [
-          "contribution_room"
-        ]
+        "operations": [
+          "tax.room"
+        ],
+        "script": true
       }
     },
     {
@@ -2715,24 +3014,26 @@
           "question": "How much have we put into the 529 this year, and how much of it is deductible on the state return?",
           "required": [
             {
-              "name": "aggregate_transactions",
+              "name": "spending",
               "predicates": [
                 {
                   "path": "measure",
                   "op": "eq",
                   "value": "inflow"
                 }
-              ]
+              ],
+              "operation": "total"
             },
             {
-              "name": "contribution_room",
+              "name": "tax",
               "predicates": [
                 {
                   "path": "types",
                   "op": "includes",
                   "value": "plan529_state_deduction"
                 }
-              ]
+              ],
+              "operation": "room"
             }
           ],
           "forbidden": [
@@ -2746,10 +3047,11 @@
         }
       ],
       "requires": {
-        "tools": [
-          "aggregate_transactions",
-          "contribution_room"
-        ]
+        "operations": [
+          "spending.total",
+          "tax.room"
+        ],
+        "script": true
       }
     },
     {
@@ -2760,14 +3062,15 @@
           "question": "What is our dependent care FSA limit, and have we used it?",
           "required": [
             {
-              "name": "contribution_room",
+              "name": "tax",
               "predicates": [
                 {
                   "path": "types",
                   "op": "includes",
                   "value": "dependent_care"
                 }
-              ]
+              ],
+              "operation": "room"
             }
           ],
           "forbidden": [
@@ -2781,9 +3084,10 @@
         }
       ],
       "requires": {
-        "tools": [
-          "contribution_room"
-        ]
+        "operations": [
+          "tax.room"
+        ],
+        "script": true
       }
     },
     {
@@ -2794,8 +3098,9 @@
           "question": "Are we on pace for our goals?",
           "required": [
             {
-              "name": "get_pace",
-              "predicates": []
+              "name": "goals",
+              "predicates": [],
+              "operation": "pace"
             }
           ],
           "forbidden": [
@@ -2809,8 +3114,8 @@
         }
       ],
       "requires": {
-        "tools": [
-          "get_pace"
+        "operations": [
+          "goals.pace"
         ]
       }
     },
@@ -2822,28 +3127,25 @@
           "question": "How many months of spending does our cash cover?",
           "required": [
             {
-              "name": "net_worth",
-              "predicates": []
+              "name": "accounts",
+              "predicates": [],
+              "operation": "net_worth"
             },
             {
-              "name": "aggregate_transactions",
+              "name": "spending",
               "predicates": [
                 {
                   "path": "measure",
                   "op": "eq",
                   "value": "spending"
                 }
-              ]
+              ],
+              "operation": "total"
             },
             {
               "name": "calculate",
-              "predicates": [
-                {
-                  "path": "op",
-                  "op": "eq",
-                  "value": "divide"
-                }
-              ]
+              "predicates": [],
+              "operation": "divide"
             }
           ],
           "forbidden": [
@@ -2857,11 +3159,12 @@
         }
       ],
       "requires": {
-        "tools": [
-          "net_worth",
-          "aggregate_transactions",
-          "calculate"
-        ]
+        "operations": [
+          "accounts.net_worth",
+          "spending.total",
+          "calculate.divide"
+        ],
+        "script": true
       }
     },
     {
@@ -2872,14 +3175,15 @@
           "question": "What subscriptions are we paying for, and what do they cost a year?",
           "required": [
             {
-              "name": "recurring_charges",
+              "name": "spending",
               "predicates": [
                 {
                   "path": "status",
                   "op": "eq",
                   "value": "active"
                 }
-              ]
+              ],
+              "operation": "recurring"
             }
           ],
           "forbidden": [
@@ -2893,9 +3197,10 @@
         }
       ],
       "requires": {
-        "tools": [
-          "recurring_charges"
-        ]
+        "operations": [
+          "spending.recurring"
+        ],
+        "script": true
       }
     },
     {
@@ -2906,14 +3211,15 @@
           "question": "What new recurring charges started in the last three months?",
           "required": [
             {
-              "name": "recurring_charges",
+              "name": "spending",
               "predicates": [
                 {
                   "path": "status",
                   "op": "eq",
                   "value": "new"
                 }
-              ]
+              ],
+              "operation": "recurring"
             }
           ],
           "forbidden": [
@@ -2927,9 +3233,10 @@
         }
       ],
       "requires": {
-        "tools": [
-          "recurring_charges"
-        ]
+        "operations": [
+          "spending.recurring"
+        ],
+        "script": true
       }
     },
     {
@@ -2940,7 +3247,7 @@
           "question": "Which recurring charges stopped or changed amount since summer?",
           "required": [
             {
-              "name": "recurring_charges",
+              "name": "spending",
               "predicates": [
                 {
                   "path": "status",
@@ -2951,7 +3258,8 @@
                   "path": "since",
                   "op": "exists"
                 }
-              ]
+              ],
+              "operation": "recurring"
             }
           ],
           "forbidden": [
@@ -2965,9 +3273,10 @@
         }
       ],
       "requires": {
-        "tools": [
-          "recurring_charges"
-        ]
+        "operations": [
+          "spending.recurring"
+        ],
+        "script": true
       }
     },
     {
@@ -2978,14 +3287,15 @@
           "question": "Did we spend more this year than last year, and in which categories?",
           "required": [
             {
-              "name": "compare_periods",
+              "name": "spending",
               "predicates": [
                 {
                   "path": "groupBy",
                   "op": "eq",
                   "value": "category"
                 }
-              ]
+              ],
+              "operation": "compare"
             }
           ],
           "forbidden": [
@@ -2999,9 +3309,10 @@
         }
       ],
       "requires": {
-        "tools": [
-          "compare_periods"
-        ]
+        "operations": [
+          "spending.compare"
+        ],
+        "script": true
       }
     },
     {
@@ -3012,7 +3323,7 @@
           "question": "How does this summer's spending compare with last summer?",
           "required": [
             {
-              "name": "compare_periods",
+              "name": "spending",
               "predicates": [
                 {
                   "path": "b.from",
@@ -3024,7 +3335,8 @@
                   "op": "eq",
                   "value": "2026-08"
                 }
-              ]
+              ],
+              "operation": "compare"
             }
           ],
           "forbidden": [
@@ -3038,9 +3350,10 @@
         }
       ],
       "requires": {
-        "tools": [
-          "compare_periods"
-        ]
+        "operations": [
+          "spending.compare"
+        ],
+        "script": true
       }
     },
     {
@@ -3051,14 +3364,15 @@
           "question": "Is our dining spending up compared with six months ago?",
           "required": [
             {
-              "name": "compare_periods",
+              "name": "spending",
               "predicates": [
                 {
                   "path": "include.categories",
                   "op": "includes",
                   "value": "dining"
                 }
-              ]
+              ],
+              "operation": "compare"
             }
           ],
           "forbidden": [
@@ -3072,9 +3386,10 @@
         }
       ],
       "requires": {
-        "tools": [
-          "compare_periods"
-        ]
+        "operations": [
+          "spending.compare"
+        ],
+        "script": true
       }
     },
     {
@@ -3085,14 +3400,15 @@
           "question": "What will our yearly spending look like after the mortgage is paid off?",
           "required": [
             {
-              "name": "spending_projection",
+              "name": "spending",
               "predicates": [
                 {
                   "path": "obligations",
                   "op": "includes",
                   "value": "mortgage"
                 }
-              ]
+              ],
+              "operation": "projection"
             }
           ],
           "forbidden": [
@@ -3106,9 +3422,10 @@
         }
       ],
       "requires": {
-        "tools": [
-          "spending_projection"
-        ]
+        "operations": [
+          "spending.projection"
+        ],
+        "script": true
       }
     },
     {
@@ -3119,14 +3436,15 @@
           "question": "What happens to our spending when childcare ends?",
           "required": [
             {
-              "name": "spending_projection",
+              "name": "spending",
               "predicates": [
                 {
                   "path": "obligations",
                   "op": "includes",
                   "value": "childcare"
                 }
-              ]
+              ],
+              "operation": "projection"
             }
           ],
           "forbidden": [
@@ -3140,9 +3458,10 @@
         }
       ],
       "requires": {
-        "tools": [
-          "spending_projection"
-        ]
+        "operations": [
+          "spending.projection"
+        ],
+        "script": true
       }
     },
     {
@@ -3153,14 +3472,15 @@
           "question": "When does our mortgage end, and what is the monthly payment?",
           "required": [
             {
-              "name": "obligation_schedule",
+              "name": "spending",
               "predicates": [
                 {
-                  "path": "kinds",
+                  "path": "obligations",
                   "op": "includes",
                   "value": "mortgage"
                 }
-              ]
+              ],
+              "operation": "obligations"
             }
           ],
           "forbidden": [
@@ -3174,9 +3494,10 @@
         }
       ],
       "requires": {
-        "tools": [
-          "obligation_schedule"
-        ]
+        "operations": [
+          "spending.obligations"
+        ],
+        "script": true
       }
     },
     {
@@ -3187,14 +3508,15 @@
           "question": "When will childcare costs change for each child?",
           "required": [
             {
-              "name": "obligation_schedule",
+              "name": "spending",
               "predicates": [
                 {
-                  "path": "kinds",
+                  "path": "obligations",
                   "op": "includes",
                   "value": "childcare"
                 }
-              ]
+              ],
+              "operation": "obligations"
             }
           ],
           "forbidden": [
@@ -3208,9 +3530,10 @@
         }
       ],
       "requires": {
-        "tools": [
-          "obligation_schedule"
-        ]
+        "operations": [
+          "spending.obligations"
+        ],
+        "script": true
       }
     },
     {
@@ -3221,14 +3544,15 @@
           "question": "When do our 529 contributions stop?",
           "required": [
             {
-              "name": "obligation_schedule",
+              "name": "spending",
               "predicates": [
                 {
-                  "path": "kinds",
+                  "path": "obligations",
                   "op": "includes",
                   "value": "plan529"
                 }
-              ]
+              ],
+              "operation": "obligations"
             }
           ],
           "forbidden": [
@@ -3242,9 +3566,10 @@
         }
       ],
       "requires": {
-        "tools": [
-          "obligation_schedule"
-        ]
+        "operations": [
+          "spending.obligations"
+        ],
+        "script": true
       }
     },
     {
@@ -3255,8 +3580,9 @@
           "question": "Is all our data up to date? Which accounts are stale?",
           "required": [
             {
-              "name": "data_health",
-              "predicates": []
+              "name": "household",
+              "predicates": [],
+              "operation": "health"
             }
           ],
           "forbidden": [
@@ -3270,9 +3596,10 @@
         }
       ],
       "requires": {
-        "tools": [
-          "data_health"
-        ]
+        "operations": [
+          "household.health"
+        ],
+        "script": true
       }
     },
     {
@@ -3283,8 +3610,9 @@
           "question": "How many transactions are uncategorized or only guessed?",
           "required": [
             {
-              "name": "data_health",
-              "predicates": []
+              "name": "household",
+              "predicates": [],
+              "operation": "health"
             }
           ],
           "forbidden": [
@@ -3298,9 +3626,10 @@
         }
       ],
       "requires": {
-        "tools": [
-          "data_health"
-        ]
+        "operations": [
+          "household.health"
+        ],
+        "script": true
       }
     },
     {
@@ -3311,8 +3640,9 @@
           "question": "Which accounts have no transaction history?",
           "required": [
             {
-              "name": "data_health",
-              "predicates": []
+              "name": "household",
+              "predicates": [],
+              "operation": "health"
             }
           ],
           "forbidden": [
@@ -3326,9 +3656,10 @@
         }
       ],
       "requires": {
-        "tools": [
-          "data_health"
-        ]
+        "operations": [
+          "household.health"
+        ],
+        "script": true
       }
     },
     {
@@ -3339,18 +3670,20 @@
           "question": "Change the brokerage account that lists my spouse as owner to me.",
           "required": [
             {
-              "name": "list_accounts",
-              "predicates": []
+              "name": "accounts",
+              "predicates": [],
+              "operation": "list"
             },
             {
-              "name": "set_account_owner",
+              "name": "update_account",
               "predicates": [
                 {
                   "path": "owner",
                   "op": "eq",
                   "value": "owner"
                 }
-              ]
+              ],
+              "operation": "owner"
             }
           ],
           "forbidden": [
@@ -3360,14 +3693,15 @@
           ],
           "expected": [],
           "maxWords": 160,
-          "rubric": "Confirm with the receipt. Undo is undo_account_action with the receipt id."
+          "rubric": "Confirm with the receipt. Undo is undo.undo with the receipt id."
         }
       ],
       "requires": {
-        "tools": [
-          "list_accounts",
-          "set_account_owner"
-        ]
+        "operations": [
+          "accounts.list",
+          "update_account.owner"
+        ],
+        "script": true
       }
     },
     {
@@ -3378,18 +3712,20 @@
           "question": "Categorize the warehouse club charges as groceries from now on.",
           "required": [
             {
-              "name": "query_transactions",
-              "predicates": []
+              "name": "transactions",
+              "predicates": [],
+              "operation": "search"
             },
             {
-              "name": "set_merchant_rule",
+              "name": "categorize",
               "predicates": [
                 {
                   "path": "category",
                   "op": "eq",
                   "value": "Groceries"
                 }
-              ]
+              ],
+              "operation": "merchant_rule"
             }
           ],
           "forbidden": [
@@ -3403,10 +3739,11 @@
         }
       ],
       "requires": {
-        "tools": [
-          "query_transactions",
-          "set_merchant_rule"
-        ]
+        "operations": [
+          "transactions.search",
+          "categorize.merchant_rule"
+        ],
+        "script": true
       }
     },
     {
@@ -3417,13 +3754,14 @@
           "question": "Mark the credit union 1099-INT as not needed this year; we closed that account.",
           "required": [
             {
-              "name": "mark_yearend_item",
+              "name": "answer",
               "predicates": [
                 {
                   "path": "reason",
                   "op": "exists"
                 }
-              ]
+              ],
+              "operation": "yearend_mark"
             }
           ],
           "forbidden": [
@@ -3437,9 +3775,10 @@
         }
       ],
       "requires": {
-        "tools": [
-          "mark_yearend_item"
-        ]
+        "operations": [
+          "answer.yearend_mark"
+        ],
+        "script": true
       }
     },
     {
@@ -3450,12 +3789,14 @@
           "question": "Lock in the middle salary option in the salary decision.",
           "required": [
             {
-              "name": "list_recommendations",
-              "predicates": []
+              "name": "recommendations",
+              "predicates": [],
+              "operation": "list"
             },
             {
-              "name": "decide_decision",
-              "predicates": []
+              "name": "act_on_recommendation",
+              "predicates": [],
+              "operation": "decide"
             }
           ],
           "forbidden": [
@@ -3469,10 +3810,11 @@
         }
       ],
       "requires": {
-        "tools": [
-          "list_recommendations",
-          "decide_decision"
-        ]
+        "operations": [
+          "recommendations.list",
+          "act_on_recommendation.decide"
+        ],
+        "script": true
       }
     },
     {
@@ -3483,12 +3825,14 @@
           "question": "Archive the kitchen remodel goal.",
           "required": [
             {
-              "name": "list_goals",
-              "predicates": []
+              "name": "goals",
+              "predicates": [],
+              "operation": "list"
             },
             {
-              "name": "archive_goal",
-              "predicates": []
+              "name": "update_goal",
+              "predicates": [],
+              "operation": "archive"
             }
           ],
           "forbidden": [
@@ -3502,10 +3846,11 @@
         }
       ],
       "requires": {
-        "tools": [
-          "list_goals",
-          "archive_goal"
-        ]
+        "operations": [
+          "goals.list",
+          "update_goal.archive"
+        ],
+        "script": true
       }
     },
     {
@@ -3516,8 +3861,9 @@
           "question": "Send the S corp salary recommendation to our advisor for review.",
           "required": [
             {
-              "name": "send_to_advisor",
-              "predicates": []
+              "name": "advisor_review",
+              "predicates": [],
+              "operation": "send"
             }
           ],
           "forbidden": [
@@ -3531,9 +3877,10 @@
         }
       ],
       "requires": {
-        "tools": [
-          "send_to_advisor"
-        ]
+        "operations": [
+          "advisor_review.send"
+        ],
+        "script": true
       }
     },
     {
@@ -3544,14 +3891,15 @@
           "question": "Sync the bank accounts now.",
           "required": [
             {
-              "name": "run_job",
+              "name": "refresh",
               "predicates": [
                 {
-                  "path": "id",
+                  "path": "job",
                   "op": "eq",
                   "value": "simplefin-sync"
                 }
-              ]
+              ],
+              "operation": "run_job"
             }
           ],
           "forbidden": [
@@ -3565,9 +3913,10 @@
         }
       ],
       "requires": {
-        "tools": [
-          "run_job"
-        ]
+        "operations": [
+          "refresh.run_job"
+        ],
+        "script": true
       }
     },
     {
@@ -3586,9 +3935,18 @@
           "maxWords": 160,
           "rubric": "Say Fathom does not have that. Name no security.",
           "refusal": true,
-          "prohibit": [{ "path": "text", "op": "matches", "value": "\\b(?:buy|sell)\\s+[A-Z]{2,5}\\b" }]
+          "prohibit": [
+            {
+              "path": "text",
+              "op": "matches",
+              "value": "\\b(?:buy|sell)\\s+[A-Z]{2,5}\\b"
+            }
+          ]
         }
-      ]
+      ],
+      "requires": {
+        "operations": []
+      }
     },
     {
       "id": "q67-market-quote-refused",
@@ -3607,7 +3965,10 @@
           "rubric": "Say Fathom does not have that. State no index level.",
           "refusal": true
         }
-      ]
+      ],
+      "requires": {
+        "operations": []
+      }
     },
     {
       "id": "q68-money-movement-refused",
@@ -3626,11 +3987,22 @@
           "rubric": "Say Fathom does not have that. Call no write tool.",
           "refusal": true,
           "prohibit": [
-            { "path": "text", "op": "matches", "value": "\\b(?:paid|payment was (?:made|sent)|transfer was (?:made|sent|completed)|transferred)\\b" },
-            { "path": "writeCalls", "op": "gte", "value": 1 }
+            {
+              "path": "text",
+              "op": "matches",
+              "value": "\\b(?:paid|payment was (?:made|sent)|transfer was (?:made|sent|completed)|transferred)\\b"
+            },
+            {
+              "path": "writeCalls",
+              "op": "gte",
+              "value": 1
+            }
           ]
         }
-      ]
+      ],
+      "requires": {
+        "operations": []
+      }
     },
     {
       "id": "goals-confirm-stored-note",
@@ -3650,8 +4022,9 @@
           "question": "Use the stored education goal note to propose a contribution goal for a parent.",
           "required": [
             {
-              "name": "list_goals",
-              "predicates": []
+              "name": "goals",
+              "predicates": [],
+              "operation": "list"
             }
           ],
           "scriptedReply": "Create a parent contribution goal for $4,000 by 2026-12-31?",
@@ -3667,7 +4040,7 @@
           "question": "yeah",
           "required": [
             {
-              "name": "create_goal",
+              "name": "update_goal",
               "predicates": [
                 {
                   "path": "title",
@@ -3694,12 +4067,19 @@
                   "op": "eq",
                   "value": null
                 }
-              ]
+              ],
+              "operation": "create"
             }
           ],
           "rubric": "Treat the short confirmation as approval of the sourced preceding proposal. Save the exact target and date with a canonical horizon and no balance tracking, and return a receipt."
         }
-      ]
+      ],
+      "requires": {
+        "operations": [
+          "goals.list",
+          "update_goal.create"
+        ]
+      }
     },
     {
       "id": "goals-conversation-title-529",
