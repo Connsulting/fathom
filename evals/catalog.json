@@ -1,0 +1,1108 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "spending-annual-exclusions",
+      "family": "spending",
+      "turns": [
+        {
+          "question": "What is our annual spending excluding mortgage and income tax, including healthcare? Annualize the complete covered months in the ledger.",
+          "required": [
+            {
+              "name": "spending_summary",
+              "predicates": [
+                {
+                  "path": "exclude",
+                  "op": "includes",
+                  "value": "mortgage"
+                },
+                {
+                  "path": "includeHealthcare",
+                  "op": "eq",
+                  "value": true
+                },
+                {
+                  "path": "exclude",
+                  "op": "includes",
+                  "value": "income_tax"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [
+            {
+              "kind": "annual-spending"
+            }
+          ],
+          "maxWords": 90,
+          "rubric": "Exclude mortgage, income tax, transfers and business activity; include health; annualize complete covered months and state coverage."
+        }
+      ],
+      "expectedFail": {
+        "missingTools": [
+          "spending_summary"
+        ]
+      }
+    },
+    {
+      "id": "spending-portfolio-withdrawal",
+      "family": "spending",
+      "turns": [
+        {
+          "question": "How big a portfolio covers our annual spending excluding mortgage and income tax, including healthcare, at a 4% withdrawal rate?",
+          "required": [
+            {
+              "name": "portfolio_requirement",
+              "predicates": [
+                {
+                  "path": "withdrawalRate",
+                  "op": "eq",
+                  "value": 0.04
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [
+            {
+              "kind": "portfolio",
+              "rate": 0.04
+            }
+          ],
+          "maxWords": 90,
+          "rubric": "Use deterministic spending and portfolio tools; the tool must return the portfolio amount and a percentage value for the rate, rather than echoing its fractional argument. Never divide in prose."
+        }
+      ],
+      "expectedFail": {
+        "missingTools": [
+          "portfolio_requirement"
+        ]
+      }
+    },
+    {
+      "id": "spending-latest-groceries",
+      "family": "spending",
+      "turns": [
+        {
+          "question": "What was the signed amount of our latest groceries transaction?",
+          "required": [
+            {
+              "name": "query_transactions",
+              "predicates": [
+                {
+                  "path": "category",
+                  "op": "eq",
+                  "value": "groceries"
+                },
+                {
+                  "path": "limit",
+                  "op": "eq",
+                  "value": 1
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [
+            {
+              "kind": "transaction",
+              "category": "groceries"
+            }
+          ],
+          "maxWords": 90,
+          "rubric": "Use the returned value, state what it measures and keep the answer brief."
+        }
+      ]
+    },
+    {
+      "id": "spending-latest-dining",
+      "family": "spending",
+      "turns": [
+        {
+          "question": "What was the signed amount of our latest dining transaction?",
+          "required": [
+            {
+              "name": "query_transactions",
+              "predicates": [
+                {
+                  "path": "category",
+                  "op": "eq",
+                  "value": "dining"
+                },
+                {
+                  "path": "limit",
+                  "op": "eq",
+                  "value": 1
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [
+            {
+              "kind": "transaction",
+              "category": "dining"
+            }
+          ],
+          "maxWords": 90,
+          "rubric": "Use the returned value, state what it measures and keep the answer brief."
+        }
+      ]
+    },
+    {
+      "id": "spending-latest-health",
+      "family": "spending",
+      "turns": [
+        {
+          "question": "What was the signed amount of our latest health transaction?",
+          "required": [
+            {
+              "name": "query_transactions",
+              "predicates": [
+                {
+                  "path": "category",
+                  "op": "eq",
+                  "value": "health"
+                },
+                {
+                  "path": "limit",
+                  "op": "eq",
+                  "value": 1
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [
+            {
+              "kind": "transaction",
+              "category": "health"
+            }
+          ],
+          "maxWords": 90,
+          "rubric": "Use the returned value, state what it measures and keep the answer brief."
+        }
+      ]
+    },
+    {
+      "id": "cash-personal",
+      "family": "cash-flow",
+      "turns": [
+        {
+          "question": "What is our stored personal cash balance?",
+          "required": [
+            {
+              "name": "get_figures",
+              "predicates": [
+                {
+                  "path": "keys",
+                  "op": "includes",
+                  "value": "personal_cash"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [
+            {
+              "kind": "figure",
+              "key": "personal_cash"
+            }
+          ],
+          "maxWords": 90,
+          "rubric": "Use the returned value, state what it measures and keep the answer brief."
+        }
+      ]
+    },
+    {
+      "id": "cash-business",
+      "family": "cash-flow",
+      "turns": [
+        {
+          "question": "What is the stored business cash figure?",
+          "required": [
+            {
+              "name": "get_figures",
+              "predicates": [
+                {
+                  "path": "keys",
+                  "op": "includes",
+                  "value": "biz_cash"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [
+            {
+              "kind": "figure",
+              "key": "biz_cash"
+            }
+          ],
+          "maxWords": 90,
+          "rubric": "Use the returned value, state what it measures and keep the answer brief."
+        }
+      ]
+    },
+    {
+      "id": "cash-true-reserve",
+      "family": "cash-flow",
+      "turns": [
+        {
+          "question": "What is our true reserve?",
+          "required": [
+            {
+              "name": "get_figures",
+              "predicates": [
+                {
+                  "path": "keys",
+                  "op": "includes",
+                  "value": "true_reserve"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [
+            {
+              "kind": "figure",
+              "key": "true_reserve"
+            }
+          ],
+          "maxWords": 90,
+          "rubric": "Use the returned value, state what it measures and keep the answer brief."
+        }
+      ]
+    },
+    {
+      "id": "business-stored-revenue",
+      "family": "business",
+      "turns": [
+        {
+          "question": "What is stored business revenue year to date?",
+          "required": [
+            {
+              "name": "get_figures",
+              "predicates": [
+                {
+                  "path": "keys",
+                  "op": "includes",
+                  "value": "revenue_ytd"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [
+            {
+              "kind": "figure",
+              "key": "revenue_ytd"
+            }
+          ],
+          "maxWords": 90,
+          "rubric": "Use the returned value, state what it measures and keep the answer brief."
+        }
+      ]
+    },
+    {
+      "id": "net-worth-current",
+      "family": "net-worth",
+      "turns": [
+        {
+          "question": "What is our current stored net worth?",
+          "required": [
+            {
+              "name": "get_figures",
+              "predicates": [
+                {
+                  "path": "keys",
+                  "op": "includes",
+                  "value": "net_worth"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [
+            {
+              "kind": "figure",
+              "key": "net_worth"
+            }
+          ],
+          "maxWords": 90,
+          "rubric": "Use the returned value, state what it measures and keep the answer brief."
+        }
+      ]
+    },
+    {
+      "id": "retirement-hsa-room",
+      "family": "retirement",
+      "turns": [
+        {
+          "question": "How much HSA contribution room is left?",
+          "required": [
+            {
+              "name": "get_figures",
+              "predicates": [
+                {
+                  "path": "keys",
+                  "op": "includes",
+                  "value": "hsa_left"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [
+            {
+              "kind": "figure",
+              "key": "hsa_left"
+            }
+          ],
+          "maxWords": 90,
+          "rubric": "Use the returned value, state what it measures and keep the answer brief."
+        }
+      ]
+    },
+    {
+      "id": "retirement-current-room",
+      "family": "retirement",
+      "turns": [
+        {
+          "question": "What retirement contribution room is available now?",
+          "required": [
+            {
+              "name": "get_figures",
+              "predicates": [
+                {
+                  "path": "keys",
+                  "op": "includes",
+                  "value": "ret_room_now"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [
+            {
+              "kind": "figure",
+              "key": "ret_room_now"
+            }
+          ],
+          "maxWords": 90,
+          "rubric": "Use the returned value, state what it measures and keep the answer brief."
+        }
+      ]
+    },
+    {
+      "id": "retirement-hsa-paid",
+      "family": "retirement",
+      "turns": [
+        {
+          "question": "How much have we contributed to the HSA?",
+          "required": [
+            {
+              "name": "get_figures",
+              "predicates": [
+                {
+                  "path": "keys",
+                  "op": "includes",
+                  "value": "hsa_paid"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [
+            {
+              "kind": "figure",
+              "key": "hsa_paid"
+            }
+          ],
+          "maxWords": 90,
+          "rubric": "Use the returned value, state what it measures and keep the answer brief."
+        }
+      ]
+    },
+    {
+      "id": "retirement-pretax",
+      "family": "retirement",
+      "turns": [
+        {
+          "question": "What is the owner pre-tax retirement balance?",
+          "required": [
+            {
+              "name": "get_figures",
+              "predicates": [
+                {
+                  "path": "keys",
+                  "op": "includes",
+                  "value": "my_pretax"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [
+            {
+              "kind": "figure",
+              "key": "my_pretax"
+            }
+          ],
+          "maxWords": 90,
+          "rubric": "Use the returned value, state what it measures and keep the answer brief."
+        }
+      ]
+    },
+    {
+      "id": "taxes-safe-harbor",
+      "family": "taxes",
+      "turns": [
+        {
+          "question": "What is our stored safe harbor requirement?",
+          "required": [
+            {
+              "name": "get_figures",
+              "predicates": [
+                {
+                  "path": "keys",
+                  "op": "includes",
+                  "value": "safe_harbor"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [
+            {
+              "kind": "figure",
+              "key": "safe_harbor"
+            }
+          ],
+          "maxWords": 90,
+          "rubric": "Use the returned value, state what it measures and keep the answer brief."
+        }
+      ]
+    },
+    {
+      "id": "taxes-federal-paid",
+      "family": "taxes",
+      "turns": [
+        {
+          "question": "What federal estimated tax has been paid?",
+          "required": [
+            {
+              "name": "get_figures",
+              "predicates": [
+                {
+                  "path": "keys",
+                  "op": "includes",
+                  "value": "fed_paid"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [
+            {
+              "kind": "figure",
+              "key": "fed_paid"
+            }
+          ],
+          "maxWords": 90,
+          "rubric": "Use the returned value, state what it measures and keep the answer brief."
+        }
+      ]
+    },
+    {
+      "id": "taxes-state-paid",
+      "family": "taxes",
+      "turns": [
+        {
+          "question": "What state estimated tax has been paid?",
+          "required": [
+            {
+              "name": "get_figures",
+              "predicates": [
+                {
+                  "path": "keys",
+                  "op": "includes",
+                  "value": "va_paid"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [
+            {
+              "kind": "figure",
+              "key": "va_paid"
+            }
+          ],
+          "maxWords": 90,
+          "rubric": "Use the returned value, state what it measures and keep the answer brief."
+        }
+      ]
+    },
+    {
+      "id": "taxes-liability",
+      "family": "taxes",
+      "turns": [
+        {
+          "question": "What is the estimated tax liability?",
+          "required": [
+            {
+              "name": "get_figures",
+              "predicates": [
+                {
+                  "path": "keys",
+                  "op": "includes",
+                  "value": "liability"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [
+            {
+              "kind": "figure",
+              "key": "liability"
+            }
+          ],
+          "maxWords": 90,
+          "rubric": "Use the returned value, state what it measures and keep the answer brief."
+        }
+      ]
+    },
+    {
+      "id": "taxes-april-due",
+      "family": "taxes",
+      "turns": [
+        {
+          "question": "What is the stored amount due in April?",
+          "required": [
+            {
+              "name": "get_figures",
+              "predicates": [
+                {
+                  "path": "keys",
+                  "op": "includes",
+                  "value": "april_due"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [
+            {
+              "kind": "figure",
+              "key": "april_due"
+            }
+          ],
+          "maxWords": 90,
+          "rubric": "Use the returned value, state what it measures and keep the answer brief."
+        }
+      ]
+    },
+    {
+      "id": "cash-flow-month",
+      "family": "cash-flow",
+      "turns": [
+        {
+          "question": "What was household net cash flow in January, excluding transfers?",
+          "required": [
+            {
+              "name": "cash_flow",
+              "predicates": [
+                {
+                  "path": "from",
+                  "op": "eq",
+                  "value": "2026-01-01"
+                },
+                {
+                  "path": "to",
+                  "op": "eq",
+                  "value": "2026-01-31"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [
+            {
+              "kind": "cash-flow",
+              "month": "2026-01"
+            }
+          ],
+          "maxWords": 90,
+          "rubric": "Use the returned value, state what it measures and keep the answer brief."
+        }
+      ],
+      "expectedFail": {
+        "missingTools": [
+          "cash_flow"
+        ]
+      }
+    },
+    {
+      "id": "business-pnl-january",
+      "family": "business",
+      "turns": [
+        {
+          "question": "What is total business profit across both entities for january?",
+          "required": [
+            {
+              "name": "pnl_by_month",
+              "predicates": [
+                {
+                  "path": "from",
+                  "op": "eq",
+                  "value": "2026-01"
+                },
+                {
+                  "path": "to",
+                  "op": "eq",
+                  "value": "2026-01"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [
+            {
+              "kind": "pnl-month",
+              "month": "2026-01"
+            }
+          ],
+          "maxWords": 90,
+          "rubric": "Use the returned value, state what it measures and keep the answer brief."
+        }
+      ]
+    },
+    {
+      "id": "business-pnl-february",
+      "family": "business",
+      "turns": [
+        {
+          "question": "What is total business profit across both entities for february?",
+          "required": [
+            {
+              "name": "pnl_by_month",
+              "predicates": [
+                {
+                  "path": "from",
+                  "op": "eq",
+                  "value": "2026-02"
+                },
+                {
+                  "path": "to",
+                  "op": "eq",
+                  "value": "2026-02"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [
+            {
+              "kind": "pnl-month",
+              "month": "2026-02"
+            }
+          ],
+          "maxWords": 90,
+          "rubric": "Use the returned value, state what it measures and keep the answer brief."
+        }
+      ]
+    },
+    {
+      "id": "business-pnl-march",
+      "family": "business",
+      "turns": [
+        {
+          "question": "What is total business profit across both entities for march?",
+          "required": [
+            {
+              "name": "pnl_by_month",
+              "predicates": [
+                {
+                  "path": "from",
+                  "op": "eq",
+                  "value": "2026-03"
+                },
+                {
+                  "path": "to",
+                  "op": "eq",
+                  "value": "2026-03"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [
+            {
+              "kind": "pnl-month",
+              "month": "2026-03"
+            }
+          ],
+          "maxWords": 90,
+          "rubric": "Use the returned value, state what it measures and keep the answer brief."
+        }
+      ]
+    },
+    {
+      "id": "net-worth-history",
+      "family": "net-worth",
+      "turns": [
+        {
+          "question": "Show net worth over time through the latest balance date.",
+          "required": [
+            {
+              "name": "net_worth_history",
+              "predicates": []
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [
+            {
+              "kind": "net-worth"
+            }
+          ],
+          "maxWords": 90,
+          "rubric": "Use the returned value, state what it measures and keep the answer brief."
+        }
+      ],
+      "expectedFail": {
+        "missingTools": [
+          "net_worth_history"
+        ]
+      }
+    },
+    {
+      "id": "net-worth-change",
+      "family": "net-worth",
+      "turns": [
+        {
+          "question": "How much did net worth change from the earliest balance snapshot to the latest?",
+          "required": [
+            {
+              "name": "net_worth_history",
+              "predicates": [
+                {
+                  "path": "includeChange",
+                  "op": "eq",
+                  "value": true
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [
+            {
+              "kind": "net-worth-change"
+            }
+          ],
+          "maxWords": 90,
+          "rubric": "Use the returned value, state what it measures and keep the answer brief."
+        }
+      ],
+      "expectedFail": {
+        "missingTools": [
+          "net_worth_history"
+        ]
+      }
+    },
+    {
+      "id": "goals-open",
+      "family": "goals",
+      "turns": [
+        {
+          "question": "What open goals are we tracking?",
+          "required": [
+            {
+              "name": "list_goals",
+              "predicates": []
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [],
+          "maxWords": 90,
+          "rubric": "Name tracked goals without inventing targets."
+        }
+      ]
+    },
+    {
+      "id": "goals-pace",
+      "family": "goals",
+      "turns": [
+        {
+          "question": "Are our goals on pace, and what is unknown?",
+          "required": [
+            {
+              "name": "get_pace",
+              "predicates": []
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [],
+          "maxWords": 90,
+          "rubric": "Preserve unknown and stale pace states."
+        }
+      ]
+    },
+    {
+      "id": "freshness-household",
+      "family": "freshness",
+      "turns": [
+        {
+          "question": "How current is the household data?",
+          "required": [
+            {
+              "name": "household_summary",
+              "predicates": []
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [],
+          "maxWords": 90,
+          "rubric": "State data-through and distinguish it from today."
+        }
+      ]
+    },
+    {
+      "id": "freshness-facts",
+      "family": "freshness",
+      "turns": [
+        {
+          "question": "Where do household facts come from, and are they confirmed?",
+          "required": [
+            {
+              "name": "get_facts",
+              "predicates": []
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [],
+          "maxWords": 90,
+          "rubric": "Use fact provenance and confirmation state."
+        }
+      ]
+    },
+    {
+      "id": "unavailable-credit-score",
+      "family": "unavailable",
+      "turns": [
+        {
+          "question": "What is my credit score?",
+          "required": [
+            {
+              "name": "get_facts",
+              "predicates": []
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [],
+          "maxWords": 90,
+          "rubric": "Say Fathom doesn't have that; never guess.",
+          "refusal": true
+        }
+      ]
+    },
+    {
+      "id": "unavailable-routing-number",
+      "family": "unavailable",
+      "turns": [
+        {
+          "question": "What is my full bank routing number?",
+          "required": [
+            {
+              "name": "list_accounts",
+              "predicates": []
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [],
+          "maxWords": 90,
+          "rubric": "Say Fathom doesn't have that; never guess.",
+          "refusal": true
+        }
+      ]
+    },
+    {
+      "id": "unavailable-market-forecast",
+      "family": "unavailable",
+      "turns": [
+        {
+          "question": "What will stocks return next year?",
+          "required": [
+            {
+              "name": "list_positions",
+              "predicates": []
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [],
+          "maxWords": 90,
+          "rubric": "Say Fathom doesn't have that; never guess.",
+          "refusal": true
+        }
+      ]
+    },
+    {
+      "id": "retirement-hsa-follow-up",
+      "family": "retirement",
+      "turns": [
+        {
+          "question": "How much HSA room remains?",
+          "required": [
+            {
+              "name": "get_figures",
+              "predicates": [
+                {
+                  "path": "keys",
+                  "op": "includes",
+                  "value": "hsa_left"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [
+            {
+              "kind": "figure",
+              "key": "hsa_left"
+            }
+          ],
+          "maxWords": 90,
+          "rubric": "Use the returned value, state what it measures and keep the answer brief."
+        },
+        {
+          "question": "And how much have we already paid?",
+          "required": [
+            {
+              "name": "get_figures",
+              "predicates": [
+                {
+                  "path": "keys",
+                  "op": "includes",
+                  "value": "hsa_paid"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [
+            {
+              "kind": "figure",
+              "key": "hsa_paid"
+            }
+          ],
+          "maxWords": 90,
+          "rubric": "Use the returned value, state what it measures and keep the answer brief."
+        }
+      ]
+    }
+  ]
+}
