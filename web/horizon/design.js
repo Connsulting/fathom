@@ -353,35 +353,41 @@ function timeline(mode) {
 }
 
 function windowStrip(r) {
-  // A close-up of the rec's own window: today to close, with neighbouring deadlines.
+  // A close-up of the rec's own window: today to close, with neighbouring deadlines. Positioned by
+  // percent so the marker stays round at any width. Today and the close label share the top row:
+  // one merged label when the dates coincide, flared apart when they sit close, otherwise centered.
   const c = clock();
   const d = days(r);
   const close = recDate(r);
   const span = Math.max(45, d + 21);
-  const s = addDays(c, -10);
+  const s = addDays(c, Math.min(-10, d - 7));
   const e = addDays(c, span);
-  const W = 640, H = 64, pad = 14;
-  const x = (t) => pad + ((t.getTime() - s.getTime()) / (e.getTime() - s.getTime())) * (W - pad * 2);
+  const pct = (t) => ((t.getTime() - s.getTime()) / (e.getTime() - s.getTime())) * 100;
+  const at = (cls, t, extra = '') => `<i class="${cls}" style="left:${pct(t).toFixed(2)}%${extra}"></i>`;
+  let g = '<i class="h-strip-ax"></i>';
   const mons = [];
-  let g = `<svg class="h-strip" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">`;
-  g += `<line class="h-strip-ax" x1="${pad}" x2="${W - pad}" y1="34" y2="34"/>`;
   for (let k = new Date(s); k <= e; k = addDays(k, 1)) {
     if (k.getUTCDate() === 1) {
-      g += `<line class="h-strip-m" x1="${x(k)}" x2="${x(k)}" y1="26" y2="42"/>`;
-      mons.push(`<span class="mon" style="left:${(x(k) / W) * 100}%">${MON[k.getUTCMonth()]}</span>`);
+      g += at('h-strip-m', k);
+      mons.push(`<span class="mon" style="left:${pct(k).toFixed(2)}%">${MON[k.getUTCMonth()]}</span>`);
     }
   }
   arr(api.s.deadlines).forEach((dl) => {
-    const at = parseISO(dl.date);
-    if (!at || at < s || at > e || dl.recId === r.id) return;
-    g += `<rect class="h-tl-dia" x="${x(at) - 3}" y="31" width="6" height="6" transform="rotate(45 ${x(at)} 34)"/>`;
+    const when = parseISO(dl.date);
+    if (!when || when < s || when > e || dl.recId === r.id) return;
+    g += at('h-tl-dia', when);
   });
-  if (d >= 0) g += `<line class="h-strip-win" x1="${x(c)}" x2="${x(close)}" y1="34" y2="34"/>`;
-  g += `<line class="h-tl-now" x1="${x(c)}" x2="${x(c)}" y1="12" y2="46"/>`;
-  g += `<circle class="h-strip-close" cx="${x(close)}" cy="34" r="5"/>`;
-  g += '</svg>';
+  if (d >= 0) g += `<i class="h-strip-win" style="left:${pct(c).toFixed(2)}%;width:${(pct(close) - pct(c)).toFixed(2)}%"></i>`;
+  g += at('h-strip-now', c) + at('h-strip-close', close);
+  const lab = (cls, t, text) => `<span class="${cls}" style="left:${pct(t).toFixed(2)}%">${text}</span>`;
+  const endText = T(r.window?.label || fmt(close));
+  let labs;
+  if (d === 0) labs = lab('now', c, `Today, ${fmt(c)}`);
+  else if (Math.abs(pct(close) - pct(c)) < 16) {
+    labs = lab(d > 0 ? 'now l' : 'now r', c, 'Today') + lab(d > 0 ? 'end r' : 'end l', close, endText);
+  } else labs = lab('now', c, 'Today') + lab('end', close, endText);
   const cd = countdown(r);
-  return `<div class="h-strip-wrap">${g}<div class="h-strip-labs"><span style="left:${(x(c) / W) * 100}%">Today</span><span class="end" style="left:${(x(close) / W) * 100}%">${T(r.window?.label || fmt(close))}</span>${mons.join('')}</div>`
+  return `<div class="h-strip-wrap"><div class="h-strip-plot"><div class="h-strip">${g}<div class="h-strip-labs">${labs}${mons.join('')}</div></div></div>`
     + `<div class="h-strip-cd"><b>${cd.n}</b> ${cd.u}</div></div>`;
 }
 
@@ -1097,18 +1103,20 @@ function goalFormHtml() {
   const accts = arr(api.s.accounts).filter((a) => a.fig);
   const figs = trackFigures();
   const chip = (h) => `<button type="button" class="h-chip${d.horizon === h[0] ? ' on' : ''}" data-goal-h="${h[0]}" aria-pressed="${d.horizon === h[0]}">${h[1]}</button>`;
+  // One label line: the text, then a muted "optional" on the same line when the field is optional.
+  const gl = (text, optional = false) => `<span class="h-gl">${text}${optional ? '<span class="h-opt">optional</span>' : ''}</span>`;
   const opt = (v, l) => `<option value="${esc(v)}"${(d.trackKind === 'figure' ? d.figure : d.trackKind) === v ? ' selected' : ''}>${esc(l)}</option>`;
   const acctList = d.trackKind === 'accounts' ? `<div class="h-gaccts">${accts.length ? accts.map((a) => `<label class="h-gacct"><input type="checkbox" data-gf="acct" value="${esc(a.id)}"${d.accounts.includes(a.id) ? ' checked' : ''}><span>${a.imported ? esc(a.name) : T(a.name)}</span><small>${a.imported ? esc(a.inst) : T(a.inst)}</small></label>`).join('') : '<p class="h-mute sm">No accounts with a balance yet.</p>'}</div>` : '';
   return `<form class="h-gform" data-goalform="1" aria-label="${f.id ? 'Edit goal' : 'New goal'}" novalidate>
     <h2>${f.id ? 'Edit goal' : 'New goal'}</h2>
-    <label class="h-gf">Your goal, in your own words<input type="text" data-gf="title" maxlength="120" value="${esc(d.title)}" placeholder="For example, a year of cash in the bank" autocomplete="off"></label>
-    <label class="h-gf">A short note <span class="h-mute">optional</span><textarea data-gf="note" maxlength="500" rows="2">${esc(d.note)}</textarea></label>
-    <div class="h-gf"><span>When</span><div class="h-chips" role="group" aria-label="Horizon">${GOAL_BANDS.map(chip).join('')}</div></div>
+    <label class="h-gf">${gl('Your goal, in your own words')}<input type="text" data-gf="title" maxlength="120" value="${esc(d.title)}" placeholder="For example, a year of cash in the bank" autocomplete="off"></label>
+    <label class="h-gf">${gl('A short note', true)}<textarea data-gf="note" maxlength="500" rows="2">${esc(d.note)}</textarea></label>
+    <div class="h-gf">${gl('When')}<div class="h-chips" role="group" aria-label="Horizon">${GOAL_BANDS.map(chip).join('')}</div></div>
     <div class="h-gf2">
-      <label class="h-gf">Target amount <span class="h-mute">optional</span><input type="number" data-gf="target" min="0" step="any" inputmode="decimal" value="${esc(d.target)}" placeholder="0"></label>
-      <label class="h-gf">Target date <span class="h-mute">optional</span><input type="date" data-gf="targetDate" value="${esc(d.targetDate)}"></label>
+      <label class="h-gf">${gl('Target amount', true)}<input type="number" data-gf="target" min="0" step="any" inputmode="decimal" value="${esc(d.target)}" placeholder="0"></label>
+      <label class="h-gf">${gl('Target date', true)}<input type="date" data-gf="targetDate" value="${esc(d.targetDate)}"></label>
     </div>
-    <label class="h-gf">Track with <span class="h-mute">optional</span><select data-gf="track">${opt('none', 'Nothing yet')}${accts.length ? opt('accounts', 'One or more accounts') : ''}${figs.map((k) => opt(k.key, k.label)).join('')}</select></label>
+    <label class="h-gf">${gl('Track with', true)}<select data-gf="track">${opt('none', 'Nothing yet')}${accts.length ? opt('accounts', 'One or more accounts') : ''}${figs.map((k) => opt(k.key, k.label)).join('')}</select></label>
     ${acctList}
     ${f.err ? `<p class="h-gerr" role="alert">${esc(f.err)}</p>` : ''}
     <div class="h-ob-nav">${btn('Cancel', 'data-goal="cancel"', 'ghost')}<button type="submit" class="h-btn pri">${f.id ? 'Save changes' : 'Save goal'}</button></div>
@@ -1314,7 +1322,7 @@ function pSettings() {
   let list = rows.map(([k, l, d]) => row(goA(k, l), d)).join('');
   if (id) list += row('<a href="/account">Account</a>', 'Passkeys and sign out.');
   if (id?.role === 'admin') list += row('<a href="/admin/users">Household</a>', 'People, roles and invitations.');
-  return shell(`<section class="h-settings">${pageHead('System', 'Settings')}${whoLine()}<ul class="h-set">${list}</ul></section>`);
+  return shell(`<section class="h-settings h-narrow">${pageHead('System', 'Settings')}${whoLine()}<ul class="h-set">${list}</ul></section>`);
 }
 
 /* ---------- advisor ---------- */
