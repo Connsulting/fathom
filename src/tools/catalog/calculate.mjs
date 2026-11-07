@@ -195,7 +195,7 @@ export async function evaluate(node, ctx, where = 'args', depth = 1) {
     value, unit, formula, words: formula,
     projection: operation === 'divide' && unit === 'months',
     unavailable: missing ? missing.unavailable : undefined,
-    kind: KINDS[Math.max(...all.map(t => Math.max(0, KINDS.indexOf(t.kind ?? 'e'))))],
+    kind: KINDS[Math.max(...all.map(t => (KINDS.includes(t.kind) ? KINDS.indexOf(t.kind) : KINDS.indexOf('e'))))],
     asOf: oldest(all.map(t => t.asOf)),
     gaps: unionGaps(all.flatMap(t => t.gaps)),
     inputs: all.flatMap(t => t.inputs),
