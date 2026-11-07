@@ -1,17 +1,14 @@
 // AC7: the planner on a real-mode store, end to end through the UI. beforeAll builds the synthetic
-// household in .e2e-data-planner, runs the plan job through the scheduler with no engine and
+// household in an owned temporary store, runs the plan job through the scheduler with no engine and
 // starts a real-mode server in process; every page is reached by full URL on that server. Skipped
 // when BASE_URL targets a remote server (nothing local is created then).
 
-import { rmSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { test, expect, S as DEMO } from './helpers.mjs';
+import { createLocalData, removeLocalData, startEnrolledServer } from './local-store.mjs';
 
-const DIR = fileURLToPath(new URL('../.e2e-data-planner/', import.meta.url));
+let DIR;
 const CLOCK = '2026-11-05';
-const REMOTE = !!process.env.BASE_URL;
-const OWNER = 'owner@example.test';
-const AUTH = Object.freeze({ 'Tailscale-User-Login': OWNER });
+const REMOTE = !!(process.env.BASE_URL || process.env.FATHOM_SMOKE_BASE_URL);
 
 const PLANNER_SOURCES = /^(acct:|pnl$|tax-payments$|transactions$|docs$|calc:|plan-projection$|wargame-model$)/;
 const DEMO_NAMES = [...Object.values(DEMO.names), DEMO.meta.household].filter(Boolean);
@@ -25,7 +22,7 @@ let plain = (s) => String(s ?? '');
 let needs = [];
 
 async function fetchScenario() {
-  const res = await fetch(`${base}/api/scenario`, { headers: AUTH });
+  const res = await fetch(`${base}/api/scenario`, { headers: app.headers });
   expect(res.status).toBe(200);
   return res.json();
 }
@@ -38,11 +35,8 @@ async function go(page, route) {
 test.describe('AC7: planner on a real store', () => {
   test.skip(REMOTE, 'needs a local real-mode server; BASE_URL targets a remote one');
   test.describe.configure({ mode: 'serial' });
-  // Real mode admits only FATHOM_OWNER_LOGINS: every request carries the matching identity header
-  // (as e2e/identity.spec.mjs does). The browser sends it on cross-origin font requests too, whose
-  // CORS preflight would refuse it, so the font hosts are served locally (empty).
-  test.use({ extraHTTPHeaders: AUTH });
   test.beforeEach(async ({ context }) => {
+    await app.authenticate(context);
     await context.route(/^https:\/\/fonts\.(googleapis|gstatic)\.com\//, (route) => route.fulfill({
       status: 200, body: '', headers: { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*' },
     }));
@@ -51,12 +45,10 @@ test.describe('AC7: planner on a real store', () => {
   test.beforeAll(async () => {
     const { buildRealStore } = await import('../test/helpers/real-store.mjs');
     const { planRun } = await import('../test/helpers/plan.mjs');
-    const { startServer } = await import('../src/server.mjs');
-    const { loadConfig } = await import('../src/config.mjs');
     const { needsYou } = await import('../src/shared/rules.mjs');
     const { resolveTokens } = await import('../src/shared/tokens.mjs');
 
-    rmSync(DIR, { recursive: true, force: true });
+    DIR = createLocalData('planner-real');
     const db = await buildRealStore(DIR, { clock: CLOCK });
     try {
       const result = await planRun(db, { now: CLOCK, dataDir: DIR });
@@ -64,7 +56,7 @@ test.describe('AC7: planner on a real store', () => {
     } finally {
       db.close();
     }
-    app = await startServer({ ...loadConfig({ FATHOM_DATA: DIR, FATHOM_DEMO: '0', FATHOM_ENGINE: 'off', FATHOM_CLOCK: CLOCK, FATHOM_OWNER_LOGINS: OWNER }), port: 0 });
+    app = await startEnrolledServer({ dataDir: DIR, clock: CLOCK });
     base = app.url;
     scenario = await fetchScenario();
     plain = (s) => resolveTokens(scenario, s, false);
@@ -74,7 +66,7 @@ test.describe('AC7: planner on a real store', () => {
   test.afterAll(async () => {
     if (app) await app.close();
     app = null;
-    rmSync(DIR, { recursive: true, force: true });
+    removeLocalData(DIR);
   });
 
   test('AC7: the brief shows the planner verdict and the needs-you recs', async ({ page }) => {

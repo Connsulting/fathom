@@ -10,8 +10,8 @@ import demo from '../demo/scenario.mjs';
 import { needsYou, verdictLevel } from '../src/shared/rules.mjs';
 import { setSetting } from '../src/store/db.mjs';
 import {
-  ROOT, SERVER_TIMEOUT, spawnServer, withServer, expectServerExit, request, postJson, getScenario,
-  tempDb, tempDir, openStore, dumpStore, runCommand, recOf, src, TEST_OWNER,
+  ROOT, SERVER_TIMEOUT, spawnServer, withServer, expectServerExit,
+  tempDb, tempDir, openStore, dumpStore, runCommand, recOf, src, serveAppFixture, spawnAuthenticatedServer, withAuthenticatedServer,
 } from './helpers/server.mjs';
 
 const T = { timeout: SERVER_TIMEOUT };
@@ -21,10 +21,10 @@ const ENGINE_OFF = 'Engine is off, so answers are paused. Switch it back on to g
 const STORE_THREAD = 'ask:0123456789ab';
 // A suggested question's exact text: sent as free text, it gets the canned answer and its refs.
 const suggested = id => demo.ask.suggested.find(x => x.id === id);
-const newThread = (s, body = {}) => postJson(s.baseUrl, '/api/threads', body);
+const newThread = (s, body = {}) => s.postJson('/api/threads', body);
 
 const act = (s, id, action, arg) =>
-  postJson(s.baseUrl, `/api/recs/${encodeURIComponent(id)}/action`, arg === undefined ? { action } : { action, arg });
+  s.postJson(`/api/recs/${encodeURIComponent(id)}/action`, arg === undefined ? { action } : { action, arg });
 
 async function ok(resPromise) {
   const r = await resPromise;
@@ -55,7 +55,7 @@ async function nonPlannerRecs(file, sc) {
 
 async function populatedRealStore() {
   const dataDir = await tempDir();
-  await withServer({ dataDir, env: { FATHOM_DEMO: '0' } }, async () => {});
+  await withAuthenticatedServer({ dataDir, env: { FATHOM_DEMO: '0' } }, async () => {});
   const file = join(dataDir, 'fathom.sqlite');
   await readDb(file, db => {
     db.prepare(`INSERT INTO facts (key, value, src, as_of, confirmed, file_id, parser, locator, updated_at)
@@ -97,7 +97,7 @@ describe('rec actions', () => {
     for (let i = 1; i < events.length; i++) assert.equal(events[i].from_status, events[i - 1].to_status);
 
     await withServer({ dataDir: s.dataDir }, async s2 => {
-      assert.equal(recOf(await getScenario(s2.baseUrl), 'deferral').status, 'done', 'persists across restart');
+      assert.equal(recOf(await s2.getScenario(), 'deferral').status, 'done', 'persists across restart');
     });
   });
 
@@ -122,14 +122,14 @@ describe('rec actions', () => {
       await s.stop();
     }
     await withServer({ dataDir: s.dataDir }, async s2 => {
-      assert.ok(recOf(await getScenario(s2.baseUrl), 'offcycle').tasks.every(x => x.done), 'tasks persist');
+      assert.ok(recOf(await s2.getScenario(), 'offcycle').tasks.every(x => x.done), 'tasks persist');
     });
   });
 
   test('bad action 400, unknown rec 404, hidden rec 404', T, () => withServer({}, async s => {
     await fails(act(s, 'deferral', 'explode'), 400);
-    await fails(act(s, 'deferral', 'accept'), 400); // retired: Doing it is the start action
-    await fails(postJson(s.baseUrl, '/api/recs/deferral/action', {}), 400);
+    await fails(act(s, 'deferral', 'accept'), 400);
+    await fails(s.postJson('/api/recs/deferral/action', {}), 400);
     await fails(act(s, 'no-such-rec', 'start'), 404);
     await fails(act(s, 'daf', 'start'), 404);
     await fails(act(s, 'daf', 'task', 0), 404);
@@ -139,7 +139,7 @@ describe('rec actions', () => {
   test('completing every needs-you rec flips the verdict to clear and it persists', T2, async () => {
     const s = await spawnServer();
     try {
-      let scenario = await getScenario(s.baseUrl);
+      let scenario = await s.getScenario();
       const ny = needsYou(scenario.recs);
       assert.ok(ny.length > 0);
       assert.equal(verdictLevel(scenario.recs), 'attention');
@@ -150,7 +150,7 @@ describe('rec actions', () => {
       await s.stop();
     }
     await withServer({ dataDir: s.dataDir }, async s2 => {
-      assert.equal(verdictLevel((await getScenario(s2.baseUrl)).recs), 'clear');
+      assert.equal(verdictLevel((await s2.getScenario()).recs), 'clear');
     });
   });
 });
@@ -160,46 +160,46 @@ describe('war game, packs and engine', () => {
     const s = await spawnServer();
     const last = demo.wargame.deferral.options.length - 1;
     try {
-      const { scenario } = await ok(postJson(s.baseUrl, '/api/wargame/deferral/pick', { index: last }));
+      const { scenario } = await ok(s.postJson('/api/wargame/deferral/pick', { index: last }));
       assert.equal(scenario.live.picks.deferral, last);
-      await ok(postJson(s.baseUrl, '/api/wargame/salary/pick', { index: 0 }));
-      await fails(postJson(s.baseUrl, '/api/wargame/deferral/pick', { index: last + 1 }), 400);
-      await fails(postJson(s.baseUrl, '/api/wargame/deferral/pick', { index: -1 }), 400);
-      await fails(postJson(s.baseUrl, '/api/wargame/salary/pick', { index: demo.wargame.salary.points.length }), 400);
-      const bad = await postJson(s.baseUrl, '/api/wargame/bogus/pick', { index: 0 });
+      await ok(s.postJson('/api/wargame/salary/pick', { index: 0 }));
+      await fails(s.postJson('/api/wargame/deferral/pick', { index: last + 1 }), 400);
+      await fails(s.postJson('/api/wargame/deferral/pick', { index: -1 }), 400);
+      await fails(s.postJson('/api/wargame/salary/pick', { index: demo.wargame.salary.points.length }), 400);
+      const bad = await s.postJson('/api/wargame/bogus/pick', { index: 0 });
       assert.ok([400, 404].includes(bad.status), `unknown war game -> ${bad.status}`);
     } finally {
       await s.stop();
     }
     await withServer({ dataDir: s.dataDir }, async s2 => {
-      const sc = await getScenario(s2.baseUrl);
+      const sc = await s2.getScenario();
       assert.deepEqual(sc.live.picks, { salary: 0, deferral: last });
     });
   });
 
   test('pack toggle turns a hidden rec into proposed and back', T, () => withServer({}, async s => {
-    const on = await ok(postJson(s.baseUrl, '/api/packs/giving/toggle', {}));
+    const on = await ok(s.postJson('/api/packs/giving/toggle', {}));
     assert.equal(on.status, 'active');
     assert.equal(on.scenario.live.packs.giving.active, true);
     assert.equal(recOf(on.scenario, 'daf').status, 'proposed');
     await ok(act(s, 'daf', 'start'));
     await ok(act(s, 'daf', 'reopen'));
 
-    const off = await ok(postJson(s.baseUrl, '/api/packs/giving/toggle', {}));
+    const off = await ok(s.postJson('/api/packs/giving/toggle', {}));
     assert.equal(off.status, 'suggested');
     assert.notEqual(off.scenario.live.packs.giving.active, true);
     const daf = recOf(off.scenario, 'daf');
     assert.ok(!daf || daf.status === 'hidden', 'daf is hidden again');
     await fails(act(s, 'daf', 'start'), 404);
 
-    const scorp = await ok(postJson(s.baseUrl, '/api/packs/scorp/toggle', {}));
+    const scorp = await ok(s.postJson('/api/packs/scorp/toggle', {}));
     assert.equal(scorp.status, 'available', 'an active pack turned off reads available');
-    await fails(postJson(s.baseUrl, '/api/packs/no-such-pack/toggle', {}), 404);
+    await fails(s.postJson('/api/packs/no-such-pack/toggle', {}), 404);
   }));
 
   test('what-if marks the pack exploring and appends the live conversation once', T, () => withServer({}, async s => {
     const p = demo.packs.find(x => x.id === 'contractor');
-    const { scenario } = await ok(postJson(s.baseUrl, '/api/packs/contractor/whatif', {}));
+    const { scenario } = await ok(s.postJson('/api/packs/contractor/whatif', {}));
     assert.equal(scenario.live.packs.contractor.exploring, true);
     assert.equal(scenario.live.packs.contractor.whatIfDone, true);
     const conv = scenario.live.conversations['pack:contractor'];
@@ -211,15 +211,15 @@ describe('war game, packs and engine', () => {
     assert.ok(conv[1].text.length > 0);
     assert.equal(conv[1].provenance.engine, 'fake', 'the answer carries provenance');
     assert.deepEqual(conv[1].refs, [], 'the contractor unlocks name no rec');
-    const again = await ok(postJson(s.baseUrl, '/api/packs/contractor/whatif', {}));
+    const again = await ok(s.postJson('/api/packs/contractor/whatif', {}));
     assert.deepEqual(again.scenario.live.conversations['pack:contractor'], conv, 'no duplicate answer');
-    await fails(postJson(s.baseUrl, '/api/packs/no-such-pack/whatif', {}), 404);
+    await fails(s.postJson('/api/packs/no-such-pack/whatif', {}), 404);
   }));
 
   test('what-if with the engine off appends a single notice and does not mark done', T, () => withServer({}, async s => {
-    await ok(postJson(s.baseUrl, '/api/engine', { on: false }));
-    let { scenario } = await ok(postJson(s.baseUrl, '/api/packs/rental/whatif', {}));
-    ({ scenario } = await ok(postJson(s.baseUrl, '/api/packs/rental/whatif', {})));
+    await ok(s.postJson('/api/engine', { on: false }));
+    let { scenario } = await ok(s.postJson('/api/packs/rental/whatif', {}));
+    ({ scenario } = await ok(s.postJson('/api/packs/rental/whatif', {})));
     let conv = scenario.live.conversations['pack:rental'];
     assert.equal(conv.length, 2);
     assert.equal(conv[1].notice, true);
@@ -227,8 +227,8 @@ describe('war game, packs and engine', () => {
     assert.equal(scenario.live.packs.rental.whatIfDone, false);
     assert.equal(scenario.live.packs.rental.exploring, true);
 
-    await ok(postJson(s.baseUrl, '/api/engine', { on: true }));
-    ({ scenario } = await ok(postJson(s.baseUrl, '/api/packs/rental/whatif', {})));
+    await ok(s.postJson('/api/engine', { on: true }));
+    ({ scenario } = await ok(s.postJson('/api/packs/rental/whatif', {})));
     conv = scenario.live.conversations['pack:rental'];
     assert.equal(conv.length, 3);
     assert.equal(conv[2].role, 'fathom');
@@ -240,14 +240,14 @@ describe('war game, packs and engine', () => {
   test('engine off persists and ask stores the engine-off notice', T2, async () => {
     const s = await spawnServer();
     try {
-      const { scenario } = await ok(postJson(s.baseUrl, '/api/engine', { on: false }));
+      const { scenario } = await ok(s.postJson('/api/engine', { on: false }));
       assert.equal(scenario.live.engine, false);
-      await fails(postJson(s.baseUrl, '/api/engine', { on: 'no' }), 400);
+      await fails(s.postJson('/api/engine', { on: 'no' }), 400);
     } finally {
       await s.stop();
     }
     await withServer({ dataDir: s.dataDir }, async s2 => {
-      assert.equal((await getScenario(s2.baseUrl)).live.engine, false, 'engine setting persists');
+      assert.equal((await s2.getScenario()).live.engine, false, 'engine setting persists');
       const r = await ok(newThread(s2, { text: suggested('defer').q }));
       assert.equal(r.message.notice, true);
       assert.ok(r.message.text.includes(ENGINE_OFF));
@@ -256,9 +256,9 @@ describe('war game, packs and engine', () => {
       assert.equal(conv[0].role, 'me');
       assert.equal(conv[1].notice, true);
 
-      const back = await ok(postJson(s2.baseUrl, '/api/engine', { on: true }));
+      const back = await ok(s2.postJson('/api/engine', { on: true }));
       assert.equal(back.scenario.live.engine, true);
-      const ans = await ok(postJson(s2.baseUrl, '/api/ask', { key: r.thread.key, text: suggested('defer').q }));
+      const ans = await ok(s2.postJson('/api/ask', { key: r.thread.key, text: suggested('defer').q }));
       assert.ok(!ans.message.notice, 'answers return once the engine is on');
     });
   });
@@ -290,7 +290,7 @@ describe('ask', () => {
       await s.stop();
     }
     await withServer({ dataDir: s.dataDir }, async s2 => {
-      const conv = (await getScenario(s2.baseUrl)).live.conversations[key];
+      const conv = (await s2.getScenario()).live.conversations[key];
       assert.equal(conv.length, 2, 'conversation persists');
       assert.deepEqual(conv[1], answer, 'the answer and its provenance persist');
     });
@@ -317,7 +317,7 @@ describe('ask', () => {
     assert.ok(hit.message.provenance, 'the answer carries provenance');
     for (const id of q.refs) assert.ok(hit.message.refs.includes(id), `refs include ${id}`);
     assert.ok(hit.scenario.live.conversations[key][0].text.includes(q.q.toLowerCase()), 'the owner message is the text sent');
-    const miss = await ok(postJson(s.baseUrl, '/api/ask', { key, text: 'How tall is the office ficus?' }));
+    const miss = await ok(s.postJson('/api/ask', { key, text: 'How tall is the office ficus?' }));
     assert.equal(miss.message.notice, false);
     assert.ok(miss.message.provenance.tools.some(x => x.name === 'household_summary'));
     assert.deepEqual(miss.message.refs, []);
@@ -329,36 +329,36 @@ describe('ask', () => {
   test('ask validates its body', T, () => withServer({}, async s => {
     const { thread } = await ok(newThread(s));
     const key = thread.key;
-    await fails(postJson(s.baseUrl, '/api/ask', {}), 400);
-    await fails(postJson(s.baseUrl, '/api/ask', { key }), 400);
-    await fails(postJson(s.baseUrl, '/api/ask', { text: 'hello' }), 400);
-    await fails(postJson(s.baseUrl, '/api/ask', { key, questionId: 'defer', text: 'both' }), 400);
-    await fails(postJson(s.baseUrl, '/api/ask', { key, text: '   ' }), 400);
-    await fails(postJson(s.baseUrl, '/api/ask', { key, text: '' }), 400);
-    await fails(postJson(s.baseUrl, '/api/ask', { key, text: 7 }), 400);
-    await fails(postJson(s.baseUrl, '/api/ask', { key: 7, text: 'hello' }), 400);
-    await fails(postJson(s.baseUrl, '/api/ask', { key, text: 'x'.repeat(4001) }), 400);
-    const unknownQ = await postJson(s.baseUrl, '/api/ask', { key, questionId: 'no-such-question' });
+    await fails(s.postJson('/api/ask', {}), 400);
+    await fails(s.postJson('/api/ask', { key }), 400);
+    await fails(s.postJson('/api/ask', { text: 'hello' }), 400);
+    await fails(s.postJson('/api/ask', { key, questionId: 'defer', text: 'both' }), 400);
+    await fails(s.postJson('/api/ask', { key, text: '   ' }), 400);
+    await fails(s.postJson('/api/ask', { key, text: '' }), 400);
+    await fails(s.postJson('/api/ask', { key, text: 7 }), 400);
+    await fails(s.postJson('/api/ask', { key: 7, text: 'hello' }), 400);
+    await fails(s.postJson('/api/ask', { key, text: 'x'.repeat(4001) }), 400);
+    const unknownQ = await s.postJson('/api/ask', { key, questionId: 'no-such-question' });
     assert.ok([400, 404].includes(unknownQ.status), `unknown question -> ${unknownQ.status}`);
     // A key that is neither an Ask thread nor a pack conversation (a bare rec id included) is 400.
-    await fails(postJson(s.baseUrl, '/api/ask', { key: 'no-such-rec', text: 'hello' }), 400);
-    await fails(postJson(s.baseUrl, '/api/ask', { key: 'deferral', text: 'hello' }), 400);
+    await fails(s.postJson('/api/ask', { key: 'no-such-rec', text: 'hello' }), 400);
+    await fails(s.postJson('/api/ask', { key: 'deferral', text: 'hello' }), 400);
     for (const body of [{ questionId: 'yearend', text: 'both' }, { text: '' }, { text: '   ' }, { text: 7 }, { text: 'x'.repeat(4001) }]) {
       await fails(newThread(s, body), 400);
     }
-    await ok(postJson(s.baseUrl, '/api/ask', { key, text: 'hello' }));
+    await ok(s.postJson('/api/ask', { key, text: 'hello' }));
   }));
 
   test('free text is HTML escaped and cannot inject tokens', T, () => withServer({}, async s => {
     const first = await ok(newThread(s, { text: '<img src=x onerror=1>' }));
-    const r = await ok(postJson(s.baseUrl, '/api/ask', { key: first.thread.key, text: 'show {f:anything} and {n:spouse}' }));
+    const r = await ok(s.postJson('/api/ask', { key: first.thread.key, text: 'show {f:anything} and {n:spouse}' }));
     const mine = r.scenario.live.conversations[first.thread.key].filter(m => m.role === 'me').map(m => m.text);
     assert.equal(mine.length, 2);
     assert.ok(!mine[0].includes('<img'), mine[0]);
     assert.ok(mine[0].includes('&lt;img'), mine[0]);
     assert.ok(!mine[1].includes('{f:') && !mine[1].includes('{n:'), mine[1]);
     assert.ok(mine[1].includes('&#123;f:anything&#125;'), mine[1]);
-    const raw = (await request(s.baseUrl, { path: '/api/scenario' })).text;
+    const raw = (await s.request({ path: '/api/scenario' })).text;
     assert.ok(!raw.includes('{f:anything}'));
     assert.ok(!raw.includes('<img src=x'));
   }));
@@ -366,38 +366,38 @@ describe('ask', () => {
 
 describe('onboarding and demo reset', () => {
   test('onboarding step persists and step 6 completes it', T2, async () => {
-    const s = await spawnServer({ env: { FATHOM_DEMO: '0' } });
+    const s = await spawnAuthenticatedServer({ env: { FATHOM_DEMO: '0' } });
     try {
-      const first = await getScenario(s.baseUrl);
+      const first = await s.getScenario();
       assert.equal(first.live.demo, 'fresh');
-      const { scenario } = await ok(postJson(s.baseUrl, '/api/onboarding', { step: 3 }));
+      const { scenario } = await ok(s.postJson('/api/onboarding', { step: 3 }));
       assert.equal(scenario.live.onboardStep, 3);
       assert.equal(scenario.live.demo, 'fresh');
-      await fails(postJson(s.baseUrl, '/api/onboarding', { step: 7 }), 400);
-      await fails(postJson(s.baseUrl, '/api/onboarding', { step: -1 }), 400);
-      await fails(postJson(s.baseUrl, '/api/onboarding', { step: 'x' }), 400);
+      await fails(s.postJson('/api/onboarding', { step: 7 }), 400);
+      await fails(s.postJson('/api/onboarding', { step: -1 }), 400);
+      await fails(s.postJson('/api/onboarding', { step: 'x' }), 400);
     } finally {
       await s.stop();
     }
-    const s2 = await spawnServer({ dataDir: s.dataDir, env: { FATHOM_DEMO: '0' } });
+    const s2 = await spawnAuthenticatedServer({ dataDir: s.dataDir, env: { FATHOM_DEMO: '0' } });
     try {
-      assert.equal((await getScenario(s2.baseUrl)).live.onboardStep, 3, 'step persists');
-      const { scenario } = await ok(postJson(s2.baseUrl, '/api/onboarding', { step: 6 }));
+      assert.equal((await s2.getScenario()).live.onboardStep, 3, 'step persists');
+      const { scenario } = await ok(s2.postJson('/api/onboarding', { step: 6 }));
       assert.equal(scenario.live.demo, 'november');
     } finally {
       await s2.stop();
     }
-    await withServer({ dataDir: s.dataDir, env: { FATHOM_DEMO: '0' } }, async s3 => {
-      assert.equal((await getScenario(s3.baseUrl)).live.demo, 'november', 'completion persists');
+    await withAuthenticatedServer({ dataDir: s.dataDir, env: { FATHOM_DEMO: '0' } }, async s3 => {
+      assert.equal((await s3.getScenario()).live.demo, 'november', 'completion persists');
     });
   });
 
   test('demo reset restores the November store', T, () => withServer({}, async s => {
-    const initial = await getScenario(s.baseUrl);
+    const initial = await s.getScenario();
     await ok(act(s, 'deferral', 'complete'));
-    await ok(postJson(s.baseUrl, '/api/engine', { on: false }));
+    await ok(s.postJson('/api/engine', { on: false }));
     const asked = await ok(newThread(s, { text: 'hello' }));
-    const { scenario } = await ok(postJson(s.baseUrl, '/api/demo/reset', {}));
+    const { scenario } = await ok(s.postJson('/api/demo/reset', {}));
     assert.equal(recOf(scenario, 'deferral').status, 'proposed');
     assert.equal(scenario.live.engine, true);
     assert.deepEqual(scenario.live.conversations[asked.thread.key] || [], []);
@@ -416,7 +416,7 @@ describe('store modes', () => {
     }
     for (const env of [{}, { FATHOM_DEMO: '1' }]) {
       await withServer({ dataDir: s.dataDir, env }, async s2 => {
-        const sc = await getScenario(s2.baseUrl);
+        const sc = await s2.getScenario();
         assert.equal(sc.live.mode, 'demo');
         assert.equal(recOf(sc, 'dcfsa').status, 'dismissed');
       });
@@ -437,8 +437,8 @@ describe('store modes', () => {
   test('a populated real store survives npm start with FATHOM_DEMO unset and 0', T2, async () => {
     const { dataDir, file } = await populatedRealStore();
     for (const env of [{ FATHOM_DEMO: undefined }, { FATHOM_DEMO: '0' }]) {
-      await withServer({ dataDir, env, npm: env.FATHOM_DEMO === undefined }, async s => {
-        const sc = await getScenario(s.baseUrl);
+      await withAuthenticatedServer({ dataDir, env, npm: env.FATHOM_DEMO === undefined }, async s => {
+        const sc = await s.getScenario();
         assert.equal(sc.live.mode, 'real');
         assert.deepEqual(await nonPlannerRecs(file, sc), [], 'no seeded recs');
         assert.equal(sc.live.demo, 'november', 'onboarding setting kept');
@@ -464,9 +464,9 @@ describe('store modes', () => {
 
   test('demo reset and seed:demo refuse a real store and change nothing', T2, async () => {
     const { dataDir, file } = await populatedRealStore();
-    await withServer({ dataDir, env: { FATHOM_DEMO: '0' } }, async s => {
+    await withAuthenticatedServer({ dataDir, env: { FATHOM_DEMO: '0' } }, async s => {
       const before = await dumpStore(file);
-      await fails(postJson(s.baseUrl, '/api/demo/reset', {}), 404);
+      await fails(s.postJson('/api/demo/reset', {}), 404);
       assert.deepEqual(await dumpStore(file), before);
     });
     const before = await dumpStore(file);
@@ -478,8 +478,8 @@ describe('store modes', () => {
   test('a store file with no mode setting is treated as real', T2, async () => {
     const t = await tempDb();
     t.close();
-    await withServer({ dataDir: t.dataDir }, async s => {
-      const sc = await getScenario(s.baseUrl);
+    await withAuthenticatedServer({ dataDir: t.dataDir }, async s => {
+      const sc = await s.getScenario();
       assert.equal(sc.live.mode, 'real');
       assert.deepEqual(await nonPlannerRecs(t.file, sc), [], 'no seeded recs');
     });
@@ -494,10 +494,10 @@ describe('store modes', () => {
 describe('FATHOM_CLOCK', () => {
   test('a January server opens the 2027 salary decision and shifts windows; the stored clock is kept', T2, async () => {
     const s = await spawnServer();
-    const nov = await getScenario(s.baseUrl);
+    const nov = await s.getScenario();
     await s.stop();
     await withServer({ dataDir: s.dataDir, env: { FATHOM_CLOCK: '2027-01-05' } }, async j => {
-      const jan = await getScenario(j.baseUrl);
+      const jan = await j.getScenario();
       assert.equal(jan.meta.clock, '2027-01-05');
       assert.equal(jan.live.clock, '2027-01-05');
       assert.equal(jan.decisions.find(d => d.id === 'salary27').status, 'open');
@@ -507,7 +507,7 @@ describe('FATHOM_CLOCK', () => {
       }
     });
     await withServer({ dataDir: s.dataDir }, async s2 => {
-      const back = await getScenario(s2.baseUrl);
+      const back = await s2.getScenario();
       assert.equal(back.meta.clock, '2026-11-05');
       assert.equal(back.decisions.find(d => d.id === 'salary27').status, 'upcoming');
     });
@@ -520,48 +520,48 @@ describe('HTTP guards', () => {
   after(async () => { if (s) await s.stop(); });
 
   test('POST without a JSON content type is 415; JSON with a charset is accepted', async () => {
-    await fails(request(s.baseUrl, { method: 'POST', path: '/api/engine', headers: { 'content-type': 'text/plain' }, body: '{"on":true}' }), 415);
-    await fails(request(s.baseUrl, { method: 'POST', path: '/api/engine', body: '{"on":true}' }), 415);
-    await fails(request(s.baseUrl, { method: 'POST', path: '/api/engine', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: 'on=true' }), 415);
-    await ok(request(s.baseUrl, { method: 'POST', path: '/api/engine', headers: { 'content-type': 'application/json; charset=utf-8' }, body: '{"on":true}' }));
+    await fails(s.request({ method: 'POST', path: '/api/engine', headers: { 'content-type': 'text/plain' }, body: '{"on":true}' }), 415);
+    await fails(s.request({ method: 'POST', path: '/api/engine', body: '{"on":true}' }), 415);
+    await fails(s.request({ method: 'POST', path: '/api/engine', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: 'on=true' }), 415);
+    await ok(s.request({ method: 'POST', path: '/api/engine', headers: { 'content-type': 'application/json; charset=utf-8' }, body: '{"on":true}' }));
   });
 
   test('a cross-origin POST is 403; same-origin and no-origin POSTs are accepted', async () => {
     const host = new URL(s.baseUrl).host;
     for (const origin of ['http://evil.example', 'null', `http://127.0.0.1:${Number(s.port) + 1}`, `http://evil.example:${s.port}`]) {
-      await fails(postJson(s.baseUrl, '/api/engine', { on: true }, { origin }), 403);
+      await fails(s.postJson('/api/engine', { on: true }, { origin }), 403);
     }
-    await ok(postJson(s.baseUrl, '/api/engine', { on: true }, { origin: `http://${host}` }));
-    await ok(postJson(s.baseUrl, '/api/engine', { on: true }));
+    await ok(s.postJson('/api/engine', { on: true }, { origin: `http://${host}` }));
+    await ok(s.postJson('/api/engine', { on: true }));
   });
 
   test('a body over 64 KiB is 413; a large body under the cap is not', async () => {
     const big = JSON.stringify({ on: true, pad: 'x'.repeat(64 * 1024) });
-    await fails(postJson(s.baseUrl, '/api/engine', big), 413);
+    await fails(s.postJson('/api/engine', big), 413);
     const under = JSON.stringify({ text: 'y'.repeat(60 * 1024) });
-    const r = await postJson(s.baseUrl, '/api/ask', under);
+    const r = await s.postJson('/api/ask', under);
     assert.notEqual(r.status, 413);
   });
 
   test('malformed JSON is 400', async () => {
-    await fails(postJson(s.baseUrl, '/api/engine', '{"on":'), 400);
+    await fails(s.postJson('/api/engine', '{"on":'), 400);
   });
 
   test('unknown API path is 404 JSON and a wrong method is 405', async () => {
-    await fails(request(s.baseUrl, { path: '/api/no-such-thing' }), 404);
-    await fails(postJson(s.baseUrl, '/api/no-such-thing', {}), 404);
-    await fails(request(s.baseUrl, { path: '/api/engine' }), 405);
-    await fails(postJson(s.baseUrl, '/api/scenario', {}), 405);
-    await fails(request(s.baseUrl, { method: 'DELETE', path: '/api/recs/deferral/action' }), 405);
-    assert.equal((await request(s.baseUrl, { path: '/api/scenario' })).status, 200);
+    await fails(s.request({ path: '/api/no-such-thing' }), 404);
+    await fails(s.postJson('/api/no-such-thing', {}), 404);
+    await fails(s.request({ path: '/api/engine' }), 405);
+    await fails(s.postJson('/api/scenario', {}), 405);
+    await fails(s.request({ method: 'DELETE', path: '/api/recs/deferral/action' }), 405);
+    assert.equal((await s.request({ path: '/api/scenario' })).status, 200);
   });
 
   test('responses carry the security headers', async () => {
-    const api = await request(s.baseUrl, { path: '/api/scenario' });
+    const api = await s.request({ path: '/api/scenario' });
     assert.equal(api.headers['x-content-type-options'], 'nosniff');
     assert.match(api.headers['cache-control'] || '', /no-store/);
     assert.match(api.headers['content-type'], /application\/json/);
-    const page = await request(s.baseUrl, { path: '/' });
+    const page = await s.request({ path: '/' });
     assert.equal(page.headers['x-content-type-options'], 'nosniff');
     assert.equal(page.headers['referrer-policy'], 'no-referrer');
     const csp = page.headers['content-security-policy'] || '';
@@ -579,29 +579,29 @@ describe('HTTP guards', () => {
       '/shared/..%2f..%2fsrc%2fserver.mjs',
     ];
     for (const p of paths) {
-      const r = await request(s.baseUrl, { path: p });
+      const r = await s.request({ path: p });
       assert.equal(r.status, 404, `${p} -> ${r.status}`);
       assert.ok(!r.text.includes('"seed:demo"') && r.text !== pkg, `${p} leaked package.json`);
     }
     const server = readFileSync(join(ROOT, 'src/server.mjs'), 'utf8');
     for (const p of ['/src/server.mjs', '/package.json', '/demo/seed.mjs']) {
-      const r = await request(s.baseUrl, { path: p });
+      const r = await s.request({ path: p });
       assert.ok(r.text !== server && !r.text.includes('"seed:demo"') && !r.text.includes('seedDemo'), `${p} served a file outside web/`);
     }
   });
 
   test('static files and shared modules are served, and app routes fall back to index.html', async () => {
-    const rules = await request(s.baseUrl, { path: '/shared/rules.mjs' });
+    const rules = await s.request({ path: '/shared/rules.mjs' });
     assert.equal(rules.status, 200);
     assert.match(rules.headers['content-type'], /javascript/);
     assert.match(rules.text, /needsRule/);
-    const core = await request(s.baseUrl, { path: '/core/core.js' });
+    const core = await s.request({ path: '/core/core.js' });
     assert.equal(core.status, 200);
     assert.match(core.headers['content-type'], /javascript/);
-    const css = await request(s.baseUrl, { path: '/horizon/design.css' });
+    const css = await s.request({ path: '/horizon/design.css' });
     assert.equal(css.status, 200);
     assert.match(css.headers['content-type'], /text\/css/);
-    const fallback = await request(s.baseUrl, { path: '/plan' });
+    const fallback = await s.request({ path: '/plan' });
     assert.equal(fallback.status, 200);
     assert.match(fallback.text, /<div id="app"/);
   });
@@ -621,28 +621,22 @@ describe('static symlinks', () => {
     symlinkSync(outside, join(webDir, 'leak.txt'));
     symlinkSync(join(webDir, 'index.html'), join(webDir, 'alias.html'));
     indexText = readFileSync(join(webDir, 'index.html'), 'utf8');
-    const { createHandler } = await src('src/api/router.mjs');
-    const { loadConfig } = await src('src/config.mjs');
-    // tempDb has no mode row, so it is a real store: the handler admits TEST_OWNER, which
-    // request() sends by default.
-    const config = loadConfig({ FATHOM_DATA: td.dataDir, FATHOM_OWNER_LOGINS: TEST_OWNER });
-    srv = http.createServer(createHandler({ db: td.db, config, webDir }));
-    await new Promise(r => srv.listen(0, '127.0.0.1', r));
-    base = `http://127.0.0.1:${srv.address().port}`;
+    srv = await serveAppFixture({ authenticated: true, db: td.db, config: { dataDir: td.dataDir }, webDir });
+    base = srv.baseUrl;
   }, T);
   after(async () => {
-    if (srv) { srv.closeAllConnections(); await new Promise(r => srv.close(r)); }
+    if (srv) await srv.close();
     if (td) td.close();
   });
 
   test('a symlink to a file outside the root is a 404 and leaks nothing', async () => {
-    const r = await request(base, { path: '/leak.txt' });
+    const r = await srv.request({ path: '/leak.txt' });
     assert.equal(r.status, 404);
     assert.ok(!r.text.includes(secretText));
   });
 
   test('a symlink to a file inside the root may be served', async () => {
-    const r = await request(base, { path: '/alias.html' });
+    const r = await srv.request({ path: '/alias.html' });
     assert.equal(r.status, 200);
     assert.equal(r.text, indexText);
   });
@@ -668,7 +662,7 @@ describe('streamed body overflow', () => {
       req.end('"}');
     });
     assert.equal(status, 413);
-    const h = await request(s.baseUrl, { path: '/healthz' });
+    const h = await s.request({ path: '/healthz' });
     assert.equal(h.status, 200);
   });
 });

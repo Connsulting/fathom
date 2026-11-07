@@ -74,11 +74,23 @@ One line each, taken from merged pull request bodies and deduplicated. The numbe
 9. One question is in flight at a time across Ask and every recommendation dialog; the composers are read-only until it lands.
 10. A thread whose recommendation is missing from the store or hidden keeps its history but shows no context chip; a dismissed or retired recommendation keeps its chip.
 
-## Owner gate
+## Accounts and passkeys
 
-1. `Tailscale-User-Login` is trustworthy only when `tailscale serve` is the only path in; a direct pod or port-forward can forge it (#11).
-2. Any local process on the host that runs the loopback port-forward can send a forged header; there is no code fix (#11).
-3. `scripts/dump.mjs` sends no identity header, so a real-mode server answers 401 unless the script goes through `tailscale serve` (#11).
+The header-based owner gate (#11) and its limits are gone; these replace them.
+
+1. `scripts/dump.mjs` sends no session cookie and no `Origin`, so it cannot upload to a real store; it needs an operator-provided session mechanism in a separate change.
+2. Recovery mail and security notices are sent in process with no durable queue; if the process stops before the send, or a notice fails (logged as `security_notice_failed`), nothing retries.
+3. A sole admin who loses every passkey and the mailbox too needs trusted offline database work; the bootstrap CLI refuses once anyone has enrolled.
+4. Enrollment needs a browser or passkey provider that reports `credProps.rk` true; one that omits it cannot enroll. Only Chromium is proven by the tests.
+5. Passkey autofill in the Email field (conditional mediation) depends on the browser and provider; the browser test proves Chromium's virtual authenticator through the button path, not any specific password manager.
+6. Changing the `FATHOM_PUBLIC_URL` host name invalidates every passkey; everyone re-enrolls through recovery links.
+7. Sessions last a fixed seven days with no sliding renewal, and there is no "sign out everywhere" control other than revoking a passkey.
+8. Rate limits include a global bucket, so a flood can delay real sign-ins and recovery for the window; with `FATHOM_TRUSTED_PROXIES` unset, everyone behind the proxy also shares one per-client bucket.
+9. MCP keys created before accounts have no recorded creator; they stay valid as household keys that only admins can see or revoke.
+10. Auth email and security notices go through the transport directly, so they are not in the Email screen's send history.
+11. Revoking a passkey, even the last one, leaves that person's MCP keys live; only removing the person (which deletes the keys they created) or revoking each key ends them.
+12. Requesting recovery again replaces the earlier pending recovery link; only the newest link works.
+13. Response timing can still hint whether an address has an account: the recovery send is not awaited, but the remaining local work differs.
 
 ## Goals, year end, advisor
 

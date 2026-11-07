@@ -375,8 +375,19 @@ function windowStrip(r) {
 function whoLine() {
   const id = api.identity?.();
   if (!id) return '';
-  const name = id.name || id.login;
-  return `<div class="h-who">Signed in as ${esc(name)}${id.login && id.login !== name ? `<span>${esc(id.login)}</span>` : ''}</div>`;
+  const who = id.email || id.login || id.name;
+  const role = id.role === 'admin' ? 'Household admin' : id.role === 'member' ? 'Household member' : '';
+  return `<div class="h-who">Signed in as ${esc(who)}${role ? `<span>${role}</span>` : ''}</div>`;
+}
+
+// Real accounts only (a demo has no identity): Account for everyone signed in, Household for
+// admins. Plain links: they leave the hash router for the server's account pages. Not an
+// .h-more-g, so the screen groups below keep their order and count.
+function accountLinks() {
+  const id = api.identity?.();
+  if (!id) return '';
+  const admin = id.role === 'admin' ? '<a href="/admin/users" title="People, roles and invitations">Household</a>' : '';
+  return `<div class="h-more-acct" style="margin-bottom:6px;padding-bottom:6px;border-bottom:1px solid var(--line2)"><a href="/account" title="Passkeys and sign out">Account</a>${admin}</div>`;
 }
 
 // The label a NAV entry shows, in the top nav and the tab bar alike.
@@ -405,7 +416,7 @@ function shell(inner, active) {
   const setup = api.s?.live?.mode === 'real' ? [['onboarding', 'Setup']] : [];
   const groups = screens + MORE.map(([title, items]) => `<div class="h-more-g"><div class="h-more-h">${title}</div>${(title === 'System' ? [...items, ...setup] : items).map(([k, l]) => link(k, l)).join('')}</div>`).join('');
   const more = `<div class="h-more-wrap"><button type="button" class="h-more-btn${moreOn ? ' on' : ''}" data-more="toggle" aria-expanded="${ui.more}" aria-controls="h-more-p">More${icon('chev')}</button>
-    <div class="h-more-p" id="h-more-p" aria-label="More"${ui.more ? '' : ' hidden'}>${whoLine()}${groups}</div></div>`;
+    <div class="h-more-p" id="h-more-p" aria-label="More"${ui.more ? '' : ' hidden'}>${whoLine()}${accountLinks()}${groups}</div></div>`;
   const off = api.engineOn() ? '' : `<div class="h-engine-off">${icon('clock')}Engine off. Proactive jobs are paused. ${goA('engine', 'Engine settings')}</div>`;
   return `<header class="h-top"><div class="h-top-in">
     <a class="h-mark" href="${href('brief')}" data-go="brief" aria-label="${esc(api.s.meta.product || 'Fathom')}">${MARK}<span>${esc(api.s.meta.product || 'Fathom')}</span></a>

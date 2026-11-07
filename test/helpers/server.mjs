@@ -13,11 +13,6 @@ export const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 export const DB_FILE = 'fathom.sqlite';
 export const SERVER_TIMEOUT = 30000;
 
-// The login every test server admits by default (FATHOM_OWNER_LOGINS) and request() sends as
-// Tailscale-User-Login unless the caller passes that header itself.
-export const TEST_OWNER = 'owner@example.test';
-export const IDENTITY_HEADER = 'tailscale-user-login';
-
 const running = new Set();
 process.on('exit', () => { for (const c of running) killGroup(c, 'SIGKILL'); });
 
@@ -68,13 +63,12 @@ function waitExit(child, ms) {
   });
 }
 
-// FATHOM_OWNER_LOGINS defaults to TEST_OWNER; the caller's env overrides it (undefined unsets it).
 function launch({ dataDir, port, env, npm }) {
   const cmd = npm ? 'npm' : process.execPath;
   const args = npm ? ['start'] : ['src/server.mjs'];
   const child = spawn(cmd, args, {
     cwd: ROOT,
-    env: childEnv({ FATHOM_OWNER_LOGINS: TEST_OWNER, FATHOM_DATA: dataDir, FATHOM_PORT: port, ...env }),
+    env: childEnv({ FATHOM_DATA: dataDir, FATHOM_PORT: port, FATHOM_PUBLIC_URL: `http://localhost:${port}`, ...env }),
     detached: true,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -111,7 +105,7 @@ function listeningOn(text, port) {
 export async function spawnServer({ dataDir, env = {}, npm = false, timeoutMs = 20000 } = {}) {
   dataDir = dataDir || await tempDir();
   const port = await freePort();
-  const baseUrl = `http://127.0.0.1:${port}`;
+  const baseUrl = `http://localhost:${port}`;
   const { child, output } = launch({ dataDir, port, env, npm });
   const deadline = Date.now() + timeoutMs;
   for (;;) {
@@ -133,7 +127,7 @@ export async function spawnServer({ dataDir, env = {}, npm = false, timeoutMs = 
       await waitExit(child, 5000);
     }
   };
-  return { baseUrl, port, dataDir, dbFile: join(dataDir, DB_FILE), child, output, stop };
+  return { baseUrl, port, dataDir, dbFile: join(dataDir, DB_FILE), child, output, stop, ...sessionClient(baseUrl) };
 }
 
 // Run fn(server) against a fresh server and always stop it.
@@ -150,7 +144,7 @@ export async function withServer(opts, fn) {
 // true when it became healthy instead of exiting (it is then killed).
 export async function expectServerExit({ dataDir, env = {}, timeoutMs = 15000 } = {}) {
   const port = await freePort();
-  const baseUrl = `http://127.0.0.1:${port}`;
+  const baseUrl = `http://localhost:${port}`;
   const { child, output } = launch({ dataDir, port, env, npm: false });
   const deadline = Date.now() + timeoutMs;
   while (!exited(child)) {
@@ -178,14 +172,11 @@ export function runCommand(cmd, args, { env = {}, timeoutMs = 60000 } = {}) {
   });
 }
 
-// Raw HTTP so tests control every header (no implicit Origin) and the exact request path.
-// Tailscale-User-Login defaults to TEST_OWNER unless `headers` has that key (any case); a header
-// whose value is undefined is omitted, so { 'tailscale-user-login': undefined } sends none.
+// Raw anonymous HTTP with no implicit cookie or Origin.
 export function request(baseUrl, { method = 'GET', path = '/', headers = {}, body } = {}) {
   const url = new URL(baseUrl);
   const payload = body == null ? null : Buffer.isBuffer(body) ? body : Buffer.from(String(body));
   const h = {};
-  if (!Object.keys(headers).some(k => k.toLowerCase() === IDENTITY_HEADER)) h[IDENTITY_HEADER] = TEST_OWNER;
   for (const [k, v] of Object.entries(headers)) if (v !== undefined) h[k] = v;
   if (payload) h['content-length'] = String(payload.length);
   return new Promise((resolve, reject) => {
@@ -220,6 +211,74 @@ export async function getScenario(baseUrl) {
   const r = await request(baseUrl, { path: '/api/scenario' });
   if (r.status !== 200 || !r.json) throw new Error(`GET /api/scenario -> ${r.status}: ${r.text.slice(0, 200)}`);
   return r.json;
+}
+
+// Trusted fixture for non-WebAuthn tests, using only this test's synthetic database.
+export async function createSessionFixture(db, { email = 'admin@example.test', role = 'admin', now = () => Date.now() } = {}) {
+  const { createAuthStore } = await src('src/auth/store.mjs');
+  const store = createAuthStore(db, { now });
+  const invited = store.findUser(email) ?? store.inviteUser(email, { role });
+  if (invited.enrolledAt == null) db.prepare('UPDATE users SET enrolled_at = ? WHERE id = ?').run(now(), invited.id);
+  const user = store.getUser(invited.id);
+  const { token, expiresAt } = store.createSession(user.id);
+  return { user, token, expiresAt, cookie: `__Host-fathom-session=${token}` };
+}
+
+export function sessionClient(baseUrl, session = null) {
+  const headers = session ? { cookie: session.cookie, origin: new URL(baseUrl).origin } : {};
+  const read = (options = {}) => request(baseUrl, { ...options, headers: { ...headers, ...options.headers } });
+  return {
+    headers,
+    request: read,
+    postJson: (path, body = {}, extra = {}) => postJson(baseUrl, path, body, { ...headers, ...extra }),
+    async getScenario() {
+      const r = await read({ path: '/api/scenario' });
+      if (r.status !== 200 || !r.json) throw new Error(`GET /api/scenario -> ${r.status}`);
+      return r.json;
+    },
+  };
+}
+
+export async function spawnAuthenticatedServer(options = {}) {
+  const server = await spawnServer(options);
+  try {
+    const db = await openStore(server.dbFile);
+    let session;
+    try { session = await createSessionFixture(db, options.session); } finally { db.close(); }
+    const stop = server.stop;
+    return {
+      ...server, session, ...sessionClient(server.baseUrl, session),
+      async stop() {
+        await stop();
+        const db = await openStore(server.dbFile);
+        try {
+          const { createAuthStore } = await src('src/auth/store.mjs');
+          createAuthStore(db).revokeSession(session.token);
+        } finally { db.close(); }
+      },
+    };
+  } catch (err) { await server.stop(); throw err; }
+}
+
+export async function withAuthenticatedServer(options, fn) {
+  const server = await spawnAuthenticatedServer(options);
+  try { return await fn(server); } finally { await server.stop(); }
+}
+
+export async function serveAppFixture({ db, config, authenticated = false, ...context }) {
+  const port = await freePort();
+  const baseUrl = `http://localhost:${port}`;
+  const { createHandler } = await src('src/api/router.mjs');
+  const { getSetting } = await src('src/store/db.mjs');
+  const fixtureConfig = { ...config, port, publicUrl: baseUrl };
+  const session = authenticated && getSetting(db, 'mode', null) !== 'demo' ? await createSessionFixture(db) : null;
+  const server = http.createServer(createHandler({ db, config: fixtureConfig, ...context }));
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); });
+  return {
+    baseUrl, session, config: fixtureConfig, server,
+    ...sessionClient(baseUrl, session),
+    close: () => new Promise(resolve => { server.close(resolve); server.closeAllConnections(); }),
+  };
 }
 
 // Open a migrated store in a fresh temp dir. Returns { db, dataDir, file, close() }.

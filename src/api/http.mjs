@@ -105,11 +105,12 @@ const normHost = h => {
   try { return new URL('http://' + h).host; } catch { return null; }
 };
 
-// POST guards: JSON content type (415), same-origin when an Origin header is sent (403).
-export function guardPost(req) {
-  const type = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
-  if (type !== 'application/json') throw new HttpError(415, 'content-type must be application/json');
+export function guardOrigin(req, expectedOrigin = null) {
   const origin = req.headers.origin;
+  if (expectedOrigin !== null) {
+    if (origin !== expectedOrigin) throw new HttpError(403, 'cross-origin request refused');
+    return;
+  }
   if (origin !== undefined) {
     let ok = false;
     try {
@@ -118,6 +119,12 @@ export function guardPost(req) {
     } catch { ok = false; }
     if (!ok) throw new HttpError(403, 'cross-origin request refused');
   }
+}
+
+export function guardPost(req, { origin = null } = {}) {
+  guardOrigin(req, origin);
+  const type = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+  if (type !== 'application/json') throw new HttpError(415, 'content-type must be application/json');
 }
 
 // Read a JSON object body of at most `limit` bytes (413 over it, 400 when malformed).

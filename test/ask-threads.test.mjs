@@ -1,4 +1,4 @@
-// Ask threads (item 13): ChatGPT-style conversations. Schema and routes with the owner gate (AC9),
+// Ask threads (item 13): ChatGPT-style conversations. Schema and routes with the session gate (AC9),
 // the 010 migration of the old single 'ask' conversation and per-rec isolation (AC6), reopening
 // and continuing a thread with only its own history (AC5), archive, trash, restore, delete and the
 // 30 day trash-purge job (AC4), and naming over HTTP (AC3). Every fixture is synthetic.
@@ -18,7 +18,7 @@ import { createLiveAnswerer } from '../src/api/answerer.mjs';
 import { createThread, purgeTrash } from '../src/api/threads.mjs';
 import { defaultHandlers } from '../src/jobs/scheduler.mjs';
 import {
-  SERVER_TIMEOUT, IDENTITY_HEADER, withServer, spawnServer, request, postJson, getScenario, openStore, tempDb, tempDir,
+  SERVER_TIMEOUT, withAuthenticatedServer, withServer, spawnServer, openStore, tempDb, tempDir,
 } from './helpers/server.mjs';
 
 const T = { timeout: SERVER_TIMEOUT };
@@ -47,11 +47,11 @@ async function readDb(file, fn) {
   try { return await fn(db); } finally { db.close(); }
 }
 
-const listThreads = s => ok(request(s.baseUrl, { path: '/api/threads' }));
-const openThread = (s, id) => ok(request(s.baseUrl, { path: `/api/threads/${id}` }));
-const newThread = (s, body = {}) => ok(postJson(s.baseUrl, '/api/threads', body));
-const threadAct = (s, id, action, body = {}) => postJson(s.baseUrl, `/api/threads/${id}/${action}`, body);
-const ask = (s, key, text) => ok(postJson(s.baseUrl, '/api/ask', { key, text }));
+const listThreads = s => ok(s.request({ path: '/api/threads' }));
+const openThread = (s, id) => ok(s.request({ path: `/api/threads/${id}` }));
+const newThread = (s, body = {}) => ok(s.postJson('/api/threads', body));
+const threadAct = (s, id, action, body = {}) => s.postJson(`/api/threads/${id}/${action}`, body);
+const ask = (s, key, text) => ok(s.postJson('/api/ask', { key, text }));
 const idsOf = list => list.map(t => t.id);
 const allIds = lists => [...lists.active, ...lists.archived, ...lists.trash].map(t => t.id);
 const toolNamesOf = req => (req.tools || []).map(x => x.name);
@@ -140,7 +140,7 @@ test('AC9 POST /api/threads creates an empty thread; list, open and the scenario
   assert.equal(opened.thread.key, th.key);
   assert.deepEqual(opened.messages, []);
 
-  const sc = await getScenario(s.baseUrl);
+  const sc = await s.getScenario();
   assert.ok(Array.isArray(sc.live.threads));
   assert.deepEqual(sc.live.threads.map(x => x.key), [th.key]);
   assert.ok(!('ask' in sc.live.conversations), 'no bare ask conversation');
@@ -150,7 +150,7 @@ test('AC9 POST /api/threads creates an empty thread; list, open and the scenario
 }));
 
 test('AC9 the scenario lists Ask starters in the pinned order with yearend always last', T, () => withServer({ env: FAKE }, async s => {
-  const starters = (await getScenario(s.baseUrl)).live.askStarters;
+  const starters = (await s.getScenario()).live.askStarters;
   const order = ['attention', 'taxes', 'scorp', 'yearend'];
   assert.ok(Array.isArray(starters) && starters.length >= 1 && starters.length <= 4, JSON.stringify(starters));
   for (const st of starters) {
@@ -170,14 +170,14 @@ test('AC9 the scenario lists Ask starters in the pinned order with yearend alway
   const opened = await openThread(s, r.thread.id);
   assert.equal(opened.messages[0].role, 'me');
   assert.ok(opened.messages[0].text.includes('What should we do before the year ends?'), opened.messages[0].text);
-  const unknown = await postJson(s.baseUrl, '/api/threads', { questionId: 'no-such-starter' });
+  const unknown = await s.postJson('/api/threads', { questionId: 'no-such-starter' });
   assert.ok([400, 404].includes(unknown.status), `unknown starter -> ${unknown.status}`);
 }));
 
 test('AC9 unknown ids and ids with bad characters are 404 on every thread route', T, () => withServer({ env: FAKE }, async s => {
   const bad = ['0123456789ab', 'ZZZ', '..%2Fx', 'ask%3A0123456789ab', '0123456789AB', '0123456789abc'];
   for (const id of bad) {
-    await fails(request(s.baseUrl, { path: `/api/threads/${id}` }), 404);
+    await fails(s.request({ path: `/api/threads/${id}` }), 404);
     for (const action of ['rename', 'archive', 'trash', 'restore', 'delete']) {
       const body = action === 'rename' ? { title: 'Synthetic name' } : {};
       await fails(threadAct(s, id, action, body), 404);
@@ -209,14 +209,14 @@ test('AC9 rename, archive, trash, restore and delete answer as the API table say
   const gone = await ok(threadAct(s, thread.id, 'delete'));
   assert.ok(gone.scenario);
   assert.ok(!gone.scenario.live.threads.some(x => x.id === thread.id));
-  await fails(request(s.baseUrl, { path: `/api/threads/${thread.id}` }), 404);
+  await fails(s.request({ path: `/api/threads/${thread.id}` }), 404);
 }));
 
-test('AC9 on a real store the thread routes need the owner login', T, () => withServer({ env: REAL }, async s => {
-  const anon = { [IDENTITY_HEADER]: undefined };
-  const list = await request(s.baseUrl, { path: '/api/threads', headers: anon });
+test('AC9 on a real store the thread routes need an enrolled session', T, () => withAuthenticatedServer({ env: REAL }, async s => {
+  const anon = { cookie: undefined, origin: s.baseUrl };
+  const list = await s.request({ path: '/api/threads', headers: anon });
   assert.equal(list.status, 401, list.text);
-  const create = await postJson(s.baseUrl, '/api/threads', {}, anon);
+  const create = await s.postJson('/api/threads', {}, anon);
   assert.equal(create.status, 401, create.text);
   const r = await readDb(s.dbFile, db => db.prepare("SELECT count(*) AS n FROM conversations WHERE key LIKE 'ask:%'").get().n);
   assert.equal(r, 0, 'the refused POST created nothing');
@@ -225,15 +225,15 @@ test('AC9 on a real store the thread routes need the owner login', T, () => with
   assert.match(made.thread.key, THREAD_KEY);
   const lists = await listThreads(s);
   assert.deepEqual(idsOf(lists.active), [made.thread.id]);
-  const open = await request(s.baseUrl, { path: `/api/threads/${made.thread.id}`, headers: anon });
+  const open = await s.request({ path: `/api/threads/${made.thread.id}`, headers: anon });
   assert.equal(open.status, 401);
 }));
 
 test('AC9 POST /api/ask requires a key and the bare ask key is gone', T, () => withServer({ env: FAKE }, async s => {
-  await fails(postJson(s.baseUrl, '/api/ask', { text: 'hello' }), 400);
+  await fails(s.postJson('/api/ask', { text: 'hello' }), 400);
   // Neither an Ask thread key nor a pack key.
-  await fails(postJson(s.baseUrl, '/api/ask', { key: 'ask', text: 'hello' }), 400);
-  await fails(postJson(s.baseUrl, '/api/ask', { key: 'ask:0123456789ab', text: 'hello' }), 404);
+  await fails(s.postJson('/api/ask', { key: 'ask', text: 'hello' }), 400);
+  await fails(s.postJson('/api/ask', { key: 'ask:0123456789ab', text: 'hello' }), 404);
   const n = await readDb(s.dbFile, db => db.prepare('SELECT count(*) AS n FROM conversations WHERE key = ? OR key LIKE ?').get('ask', 'ask:%').n);
   assert.equal(n, 0, 'refused asks create no conversation');
 }));
@@ -319,10 +319,10 @@ test('AC6 an empty ask conversation migrates to no thread, and a store without o
 });
 
 test('AC6 pack conversations never appear as threads; a rec question is a thread carrying its rec', T, () => withServer({ env: FAKE }, async s => {
-  await ok(postJson(s.baseUrl, '/api/packs/giving/whatif', {}));
-  const follow = await ok(postJson(s.baseUrl, '/api/ask', { key: 'pack:giving', text: 'What would that change for us' }));
+  await ok(s.postJson('/api/packs/giving/whatif', {}));
+  const follow = await ok(s.postJson('/api/ask', { key: 'pack:giving', text: 'What would that change for us' }));
   assert.ok(follow.scenario.live.conversations['pack:giving'].length >= 4, 'the pack conversation has the follow up');
-  const sc = await getScenario(s.baseUrl);
+  const sc = await s.getScenario();
   assert.deepEqual(sc.live.threads, [], 'no threads from pack conversations');
   assert.deepEqual(allIds(await listThreads(s)), []);
 
@@ -333,7 +333,7 @@ test('AC6 pack conversations never appear as threads; a rec question is a thread
   assert.ok(!('deferral' in recAsk.scenario.live.conversations), 'no rec-keyed conversation');
   const { thread } = await newThread(s, { text: 'Synthetic thread question' });
   assert.equal(thread.recId, null);
-  const after = await getScenario(s.baseUrl);
+  const after = await s.getScenario();
   assert.deepEqual(new Set(after.live.threads.map(x => x.key)), new Set([recAsk.thread.key, thread.key]));
   assert.ok(after.live.threads.every(x => THREAD_KEY.test(x.key)));
   assert.equal(after.live.threads.find(x => x.key === recAsk.thread.key).recId, 'deferral');
@@ -346,7 +346,7 @@ test('AC6 the migrated thread is first in the active list of a restarted 007 sto
     setSetting(db, 'mode', 'real');
     addConversation(db, 'ask', OLD_ASK_CREATED, OLD_ASK);
   });
-  await withServer({ dataDir, env: REAL }, async s => {
+  await withAuthenticatedServer({ dataDir, env: REAL }, async s => {
     const lists = await listThreads(s);
     assert.equal(lists.active.length, 1);
     const th = lists.active[0];
@@ -442,7 +442,7 @@ test('AC5 asking in an archived thread unarchives it; asking in a trashed thread
 
   await ok(threadAct(s, thread.id, 'trash'));
   const before = (await openThread(s, thread.id)).messages.length;
-  await fails(postJson(s.baseUrl, '/api/ask', { key: thread.key, text: 'Synthetic question in trash' }), 409);
+  await fails(s.postJson('/api/ask', { key: thread.key, text: 'Synthetic question in trash' }), 409);
   assert.equal((await openThread(s, thread.id)).messages.length, before, 'nothing stored');
 }));
 
@@ -494,7 +494,7 @@ test('AC4 trash, restore to where it was, delete forever, and the 409 guards', T
     assert.equal(db.prepare('SELECT count(*) AS n FROM messages WHERE conversation_key = ?').get(active.key).n, 0);
     assert.equal(db.prepare('SELECT count(*) AS n FROM messages WHERE conversation_key = ?').get(arch.key).n, 2, 'other threads keep their messages');
   });
-  await fails(request(s.baseUrl, { path: `/api/threads/${active.id}` }), 404);
+  await fails(s.request({ path: `/api/threads/${active.id}` }), 404);
   assert.deepEqual(allIds(await listThreads(s)), [arch.id]);
 }));
 
@@ -503,7 +503,7 @@ test('AC4 trash, restore to where it was, delete forever, and the 409 guards', T
 async function settledRun(s, jobId, timeoutMs = 15000) {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    const job = (await ok(request(s.baseUrl, { path: '/api/jobs' }))).jobs.find(j => j.id === jobId);
+    const job = (await ok(s.request({ path: '/api/jobs' }))).jobs.find(j => j.id === jobId);
     assert.ok(job, `GET /api/jobs lists ${jobId}`);
     if (job.lastRun && job.lastRun.status !== 'running' && job.lastRun.finishedAt) return job.lastRun;
     assert.ok(Date.now() < deadline, `${jobId} has no finished run after ${timeoutMs} ms`);
@@ -522,7 +522,7 @@ test('AC4 reads and restarts purge nothing; the trash-purge job deletes 30 day t
     let keep;
     try {
       await settledRun(first, 'trash-purge');
-      const clock = (await getScenario(first.baseUrl)).meta.clock;
+      const clock = (await first.getScenario()).meta.clock;
       assert.match(clock, /^\d{4}-\d{2}-\d{2}$/);
       // The job's now is the clock date at the current time of day. Stamps computed from it here
       // are a moment older when the job runs: 30 days is purged, 29 days is kept.
@@ -543,7 +543,7 @@ test('AC4 reads and restarts purge nothing; the trash-purge job deletes 30 day t
       assert.deepEqual(idsOf(lists.trash).sort(), [a.id, b.id].sort(), 'both trashed threads are still listed');
       assert.deepEqual(idsOf(lists.active), [keep.id]);
       assert.equal((await openThread(first, a.id)).thread.id, a.id, 'the 30 day thread still opens');
-      assert.ok((await getScenario(first.baseUrl)).live.threads.some(x => x.id === a.id), 'the scenario still carries it');
+      assert.ok((await first.getScenario()).live.threads.some(x => x.id === a.id), 'the scenario still carries it');
       await readDb(first.dbFile, db => {
         assert.equal(countWhere(db, 'conversations', 'key', a.key), 1);
         assert.equal(countWhere(db, 'messages', 'conversation_key', a.key), 2);
@@ -564,7 +564,7 @@ test('AC4 reads and restarts purge nothing; the trash-purge job deletes 30 day t
       assert.deepEqual(idsOf((await listThreads(second)).trash).sort(), [a.id, b.id].sort());
 
       // The job, run now over HTTP, purges the 30 day thread and its messages only.
-      const r = await ok(postJson(second.baseUrl, '/api/jobs/trash-purge/run', {}));
+      const r = await ok(second.postJson('/api/jobs/trash-purge/run', {}));
       assert.ok(r.run, 'the response carries the run');
       assert.equal(r.run.jobId, 'trash-purge');
       assert.equal(r.run.status, 'ok');
@@ -586,7 +586,7 @@ test('AC4 reads and restarts purge nothing; the trash-purge job deletes 30 day t
       const lists = await listThreads(second);
       assert.deepEqual(idsOf(lists.trash), [b.id]);
       assert.deepEqual(idsOf(lists.active), [keep.id]);
-      await fails(request(second.baseUrl, { path: `/api/threads/${a.id}` }), 404);
+      await fails(second.request({ path: `/api/threads/${a.id}` }), 404);
     } finally {
       await second.stop();
     }
@@ -701,7 +701,7 @@ test('AC3 the fake engine names a thread once after the first turn', T, () => wi
   assert.equal(named.title, QUARTERLY_FALLBACK, 'the fake title is the fallback of the first question');
   assert.equal(named.titleSource, 'auto');
   assert.equal(await titleSpend(s.dbFile), 1, 'the title call is recorded with purpose title');
-  const sc = await getScenario(s.baseUrl);
+  const sc = await s.getScenario();
   assert.equal(sc.live.threads.find(x => x.id === first.thread.id).title, QUARTERLY_FALLBACK);
 
   await ask(s, first.thread.key, 'Synthetic third question');
@@ -710,7 +710,7 @@ test('AC3 the fake engine names a thread once after the first turn', T, () => wi
 }));
 
 test('AC3 with the engine off the first turn names the thread with the fallback and spends nothing', T, () => withServer({ env: FAKE }, async s => {
-  await ok(postJson(s.baseUrl, '/api/engine', { on: false }));
+  await ok(s.postJson('/api/engine', { on: false }));
   const first = await newThread(s, { text: QUARTERLY });
   assert.equal(first.message.notice, true);
   assert.equal(first.thread.title, QUARTERLY_FALLBACK, 'a notice reply completes the turn');

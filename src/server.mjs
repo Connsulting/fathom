@@ -15,10 +15,11 @@ import http from 'node:http';
 import { mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadConfig } from './config.mjs';
-import { openMigrated, readStoreMode, createStoreFile, getSetting, setSetting, DB_FILE } from './store/db.mjs';
+import { loadConfig, validatePublicUrl } from './config.mjs';
+import { openMigrated, readStoreMode, createStoreFile, setSetting, DB_FILE } from './store/db.mjs';
 import { createHandler } from './api/router.mjs';
-import { loadOwnerLogins, ownerLoginsProblemLine } from './api/identity.mjs';
+import { createAuthService } from './auth/service.mjs';
+import { createAuthStore } from './auth/store.mjs';
 import { createLiveAnswerer } from './api/answerer.mjs';
 import { createKeyService, loadServerSecret } from './mcp/keys.mjs';
 import { createMcpHandler } from './mcp/index.mjs';
@@ -37,9 +38,12 @@ export function openStore(config) {
   const file = join(config.dataDir, DB_FILE);
   const mode = readStoreMode(file);
   if (mode === null) {
+    if (config.demo === false) validatePublicUrl(config.publicUrl, { required: true });
     return createStoreFile(file, db => {
-      if (config.demo === false) setSetting(db, 'mode', 'real');
-      else seedDemo(db);
+      if (config.demo === false) {
+        setSetting(db, 'mode', 'real');
+        createAuthStore(db).ensureHousehold();
+      } else seedDemo(db);
     });
   }
   if (config.demo === true && mode !== 'demo') {
@@ -48,7 +52,10 @@ export function openStore(config) {
   if (config.demo === false && mode === 'demo') {
     throw new StartupError(`FATHOM_DEMO=0 but ${file} is a demo store. Refusing to start; it is unchanged. Point FATHOM_DATA at the real data directory.`);
   }
-  return openMigrated(file);
+  if (mode === 'real') validatePublicUrl(config.publicUrl, { required: true });
+  const db = openMigrated(file);
+  createAuthStore(db).ensureHousehold();
+  return db;
 }
 
 // Log-safe code for a startup failure: never the message, which could carry a value.
@@ -110,10 +117,8 @@ export async function startServer(config = loadConfig()) {
     console.error('fathom: scheduler unavailable', codeOf(err));
   }
   const answerer = createLiveAnswerer({ engine, packs });
-  // Real stores need an owner login list; a problem never stops startup, it fails closed (401).
-  const owners = loadOwnerLogins(config);
-  if (getSetting(db, 'mode', null) !== 'demo' && owners.problem) console.error(ownerLoginsProblemLine(owners.problem));
-  const server = http.createServer(createHandler({ db, config, answerer, engine, packs, keys, mcp, owners, scheduler, transport }));
+  const auth = createAuthService({ db, config, transport });
+  const server = http.createServer(createHandler({ db, config, answerer, engine, packs, keys, mcp, auth, scheduler, transport }));
   applyTimeouts(server);
   try {
     await new Promise((resolveListen, reject) => {

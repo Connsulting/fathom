@@ -1,0 +1,172 @@
+@import url('https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+
+/* Fathom account pages: sign in, enrollment, account and household. Served on their own (no
+   design.css), so the Horizon tokens are repeated here. One accent (teal), flat dark surfaces,
+   hairlines, no shadows. */
+
+html { color-scheme: dark; }
+body { margin: 0; background: #0a0c0d; color: #e6eaeb; }
+
+.au {
+  --bg: #0a0c0d;
+  --s1: #101315;
+  --s2: #15191b;
+  --line: #1c2124;
+  --line2: #283033;
+  --tx: #e6eaeb;
+  --tx2: #c2c9cb;
+  --mu: #8f999c;
+  --fa: #5f696c;
+  --ac: #3fcfae;
+  --ac2: #8be6d1;
+  --acd: rgba(63, 207, 174, 0.12);
+  --acl: rgba(63, 207, 174, 0.35);
+  --ink: #04120e;
+  --bad: #f0a59a;
+  --badl: #8a3b31;
+  --sans: 'Instrument Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--tx);
+  font-family: var(--sans);
+  font-size: 14.5px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+.au *, .au *::before, .au *::after { box-sizing: border-box; }
+.au a { color: inherit; text-decoration: none; }
+.au p { margin: 0; }
+.au h1, .au h2, .au h3 { margin: 0; font-weight: 500; letter-spacing: -0.01em; }
+.au ul { list-style: none; margin: 0; padding: 0; }
+.au button, .au input, .au select { font: inherit; color: inherit; }
+.au :focus-visible { outline: 2px solid var(--ac); outline-offset: 2px; border-radius: 4px; }
+.au .au-i { width: 15px; height: 15px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.au-boot { max-width: 440px; margin: 0 auto; padding: 64px 16px; color: #8f999c; font: 14px/1.5 system-ui, sans-serif; }
+
+/* ---------- mark ---------- */
+.au .au-mark { display: inline-flex; align-items: center; gap: 9px; font-weight: 600; font-size: 15px; letter-spacing: 0.01em; color: var(--tx); }
+.au .au-mark-g { width: 22px; height: 22px; fill: none; stroke: var(--ac); stroke-width: 1.7; stroke-linecap: round; }
+
+/* ---------- sign in and enroll: one centered card ---------- */
+.au .au-narrow { max-width: 440px; margin: 0 auto; padding: 72px 16px 64px; }
+.au .au-brand { display: flex; justify-content: center; margin-bottom: 28px; }
+.au .au-brand .au-mark-g { width: 26px; height: 26px; }
+.au .au-card { background: var(--s1); border: 1px solid var(--line2); border-radius: 14px; padding: 28px 26px 26px; }
+.au .au-card h1 { font-size: 26px; line-height: 1.2; }
+.au .au-lede { color: var(--mu); font-size: 15px; margin-top: 8px; }
+.au .au-foot { margin-top: 20px; color: var(--fa); font-size: 12.5px; text-align: center; }
+.au .au-foot a, .au .au-lede a, .au .au-note a, .au .au-msg a, .au .au-hint a { color: var(--ac); }
+.au .au-foot a:hover, .au .au-note a:hover, .au .au-msg a:hover, .au .au-hint a:hover { text-decoration: underline; }
+
+/* ---------- forms ---------- */
+.au .au-form { display: flex; flex-direction: column; gap: 14px; margin-top: 22px; }
+.au .au-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.au .au-field label, .au .au-lab { color: var(--mu); font-size: 13px; }
+.au .au-in, .au .au-sel {
+  width: 100%; min-width: 0; height: 42px; padding: 0 14px;
+  background: var(--bg); color: var(--tx); border: 1px solid var(--line2); border-radius: 9px;
+  font-size: 14.5px; color-scheme: dark;
+}
+.au .au-in::placeholder { color: var(--fa); }
+.au .au-in:focus, .au .au-sel:focus { outline: none; border-color: var(--ac); }
+.au .au-in[aria-invalid="true"] { border-color: var(--bad); }
+.au .au-sel { padding: 0 34px 0 12px; appearance: none; -webkit-appearance: none; cursor: pointer;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%238f999c' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 6.5l4 4 4-4'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 12px center; background-size: 14px 14px; }
+.au .au-sel[disabled] { cursor: default; opacity: 0.55; }
+.au .au-hint { color: var(--fa); font-size: 12.5px; }
+.au .au-row-in { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
+.au .au-row-in .au-field { flex: 1 1 220px; }
+.au .au-row-in .au-field.role { flex: 0 0 140px; }
+
+/* ---------- buttons ---------- */
+.au .au-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  height: 34px; padding: 0 14px; border-radius: 8px; border: 1px solid var(--line2);
+  background: transparent; color: var(--tx); font-size: 13.5px; font-weight: 500; cursor: pointer; white-space: nowrap;
+}
+.au .au-btn:hover { border-color: var(--fa); }
+.au .au-btn.pri { background: var(--ac); border-color: var(--ac); color: var(--ink); }
+.au .au-btn.pri:hover { background: var(--ac2); border-color: var(--ac2); }
+.au .au-btn.ghost { border-color: transparent; color: var(--mu); }
+.au .au-btn.ghost:hover { color: var(--tx); background: var(--s2); }
+.au .au-btn.danger { border-color: var(--badl); color: var(--bad); }
+.au .au-btn.danger:hover { background: rgba(240, 165, 154, 0.1); }
+.au .au-btn.wide { width: 100%; height: 44px; font-size: 14.5px; }
+.au .au-btn.tall { height: 42px; padding: 0 18px; }
+.au .au-btn.sm { height: 28px; padding: 0 10px; font-size: 12.5px; }
+.au .au-btn[disabled] { opacity: 0.55; cursor: default; }
+.au .au-btn[aria-busy="true"] { cursor: progress; }
+
+.au .au-or { display: flex; align-items: center; gap: 12px; margin: 6px 0 -2px; color: var(--fa); font-size: 12.5px; }
+.au .au-or::before, .au .au-or::after { content: ''; flex: 1; height: 1px; background: var(--line2); }
+
+/* ---------- messages ---------- */
+.au .au-msg { font-size: 13.5px; color: var(--tx2); overflow-wrap: anywhere; }
+.au .au-msg:empty { display: none; }
+.au .au-msg.ok { color: var(--ac2); }
+.au .au-msg.err { color: var(--bad); }
+.au .au-note { display: flex; gap: 12px; align-items: flex-start; margin-top: 18px; padding: 14px 16px; background: var(--s2); border: 1px solid var(--line2); border-radius: 10px; color: var(--tx2); font-size: 13.5px; overflow-wrap: anywhere; }
+.au .au-note .au-i { margin-top: 2px; color: var(--ac); }
+.au .au-note.warn .au-i { color: var(--bad); }
+.au .au-note b { color: var(--tx); font-weight: 500; }
+
+/* ---------- account and household: top bar and page ---------- */
+.au .au-top { border-bottom: 1px solid var(--line); background: var(--bg); position: sticky; top: 0; z-index: 20; padding-top: env(safe-area-inset-top); }
+.au .au-top-in { max-width: 960px; margin: 0 auto; padding: 0 48px; display: flex; align-items: center; gap: 28px; height: 56px; }
+.au .au-nav { display: flex; align-items: center; gap: 2px; min-width: 0; margin-left: auto; overflow-x: auto; scrollbar-width: none; }
+.au .au-nav::-webkit-scrollbar { display: none; }
+.au .au-nav a { padding: 6px 10px; border-radius: 6px; color: var(--mu); font-size: 13.5px; white-space: nowrap; }
+.au .au-nav a:hover { color: var(--tx); }
+.au .au-nav a[aria-current="page"] { color: var(--tx); background: var(--s2); }
+.au .au-main { max-width: 960px; margin: 0 auto; padding: 44px 48px 96px; }
+.au .au-ph h1 { font-size: 34px; line-height: 1.15; }
+.au .au-kicker { font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ac); font-weight: 500; margin-bottom: 10px; }
+.au .au-ph .au-lede { max-width: 64ch; margin-top: 10px; }
+.au .au-ph .au-lede b { color: var(--tx); font-weight: 500; overflow-wrap: anywhere; }
+.au .au-ph > .au-msg { margin-top: 14px; }
+.au .au-sec { margin-top: 44px; max-width: 760px; }
+.au .au-sec-h { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
+.au .au-sec-h h2 { font-size: 14px; font-weight: 500; letter-spacing: 0.01em; }
+.au .au-sec-h h2 em { font-style: normal; color: var(--fa); font-family: var(--mono); font-size: 12.5px; margin-left: 6px; }
+.au .au-sec-h span { color: var(--fa); font-size: 12.5px; text-align: right; }
+.au .au-sec > .au-hint, .au .au-sec > .au-msg, .au .au-sec > .au-note { margin-top: 12px; }
+.au .au-sec .au-form { margin-top: 16px; }
+.au .au-empty { padding: 14px 0; color: var(--mu); }
+
+/* rows: passkeys and people */
+.au .au-rows > li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px 20px; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--line); }
+.au .au-row-t { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.au .au-row-t b { font-weight: 500; font-size: 15px; overflow-wrap: anywhere; min-width: 0; }
+.au .au-meta { display: flex; flex-wrap: wrap; gap: 2px 14px; margin-top: 3px; color: var(--fa); font-size: 12.5px; }
+.au .au-tag { font-size: 11.5px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line2); color: var(--mu); white-space: nowrap; }
+.au .au-tag.ac { color: var(--ac); border-color: var(--acl); }
+.au .au-row-a { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: flex-end; }
+.au .au-role { display: flex; align-items: center; gap: 8px; }
+.au .au-role .au-lab { font-size: 12.5px; }
+.au .au-role .au-sel { width: 120px; height: 32px; font-size: 13.5px; }
+.au .au-keys { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; margin-top: -2px; }
+.au .au-key { display: inline-flex; align-items: center; gap: 8px; padding: 3px 4px 3px 10px; border: 1px solid var(--line2); border-radius: 8px; background: var(--s1); font-size: 12.5px; color: var(--tx2); max-width: 100%; }
+.au .au-key > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.au .au-key .au-btn.sm { height: 24px; padding: 0 8px; font-size: 12px; }
+.au .au-why { grid-column: 1 / -1; color: var(--fa); font-size: 12px; margin-top: -4px; }
+
+/* ---------- phone ---------- */
+@media (max-width: 720px) {
+  .au { font-size: 14px; }
+  .au .au-narrow { padding: 40px 16px 48px; }
+  .au .au-card { padding: 22px 18px 20px; }
+  .au .au-top-in { padding: 0 16px; gap: 12px; height: 52px; }
+  .au .au-nav a { padding: 12px 8px; }
+  .au .au-main { padding: 28px 16px 72px; }
+  .au .au-ph h1 { font-size: 28px; }
+  .au .au-sec { margin-top: 36px; }
+  .au .au-rows > li { grid-template-columns: minmax(0, 1fr); }
+  .au .au-row-a { justify-content: flex-start; }
+  .au .au-row-in .au-field.role { flex: 1 1 100%; }
+  .au .au-row-in .au-btn { width: 100%; }
+  .au .au-btn { min-height: 40px; }
+  .au .au-btn.sm { min-height: 32px; }
+  .au .au-key .au-btn.sm { min-height: 28px; }
+}

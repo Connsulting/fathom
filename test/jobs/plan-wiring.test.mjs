@@ -8,14 +8,12 @@
 
 import test, { after, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import http from 'node:http';
-import { createHandler } from '../../src/api/router.mjs';
 import { loadConfig } from '../../src/config.mjs';
 import { openStore } from '../../src/server.mjs';
 import { listTables } from '../../src/store/db.mjs';
 import { runPlanning } from '../../src/jobs/planner.mjs';
 import { createScheduler, defaultHandlers, SchedulerError } from '../../src/jobs/scheduler.mjs';
-import { postJson, TEST_OWNER } from '../helpers/server.mjs';
+import { serveAppFixture } from '../helpers/server.mjs';
 import { scratch, buildRealStore, dumpTables, parseJson, PACKS_DIR, CLOCK } from '../helpers/real-store.mjs';
 
 const S = scratch('fathom-plan-wiring-');
@@ -23,8 +21,7 @@ after(() => S.cleanup());
 
 const quiet = { log() {} };
 const JOB_TABLES = new Set(['jobs', 'job_runs', 'job_lock']);
-// Real mode admits only FATHOM_OWNER_LOGINS; postJson sends TEST_OWNER as Tailscale-User-Login.
-const realConfig = dir => loadConfig({ FATHOM_DATA: dir, FATHOM_DEMO: '0', FATHOM_ENGINE: 'off', FATHOM_CLOCK: CLOCK, FATHOM_OWNER_LOGINS: TEST_OWNER });
+const realConfig = dir => loadConfig({ FATHOM_DATA: dir, FATHOM_DEMO: '0', FATHOM_ENGINE: 'off', FATHOM_CLOCK: CLOCK });
 const demoConfig = dir => loadConfig({ FATHOM_DATA: dir, FATHOM_ENGINE: 'off', FATHOM_CLOCK: CLOCK });
 
 // 03:00 in New York on the store clock's date: the nightly plan period (02:00) of that day is due.
@@ -45,12 +42,7 @@ function schedulerOn(db, config, { now = () => new Date(), holder } = {}) {
 }
 
 async function serve(db, config, scheduler) {
-  const server = http.createServer(createHandler({ db, config, scheduler }));
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  return {
-    baseUrl: `http://127.0.0.1:${server.address().port}`,
-    close: () => new Promise(resolve => { server.close(resolve); server.closeAllConnections(); }),
-  };
+  return serveAppFixture({ authenticated: true, db, config, scheduler });
 }
 
 const planRuns = db => db.prepare("SELECT * FROM job_runs WHERE job_id = 'plan' ORDER BY id").all().map(r => ({ ...r }));
@@ -97,13 +89,13 @@ describe('plan runs on a real store go through the scheduler', () => {
     }
   });
 
-  test('manual: POST /api/jobs/plan/run with the owner identity runs the plan job and answers {scenario, run, jobs}', async () => {
+  test('manual: POST /api/jobs/plan/run with an enrolled session runs the plan job and answers {scenario, run, jobs}', async () => {
     const { dir, db } = await realStore();
     const config = realConfig(dir);
     const s = schedulerOn(db, config);
     const app = await serve(db, config, s);
     try {
-      const r = await postJson(app.baseUrl, '/api/jobs/plan/run', {});
+      const r = await app.postJson('/api/jobs/plan/run', {});
       assert.equal(r.status, 200, r.text.slice(0, 300));
       assert.deepEqual(Object.keys(r.json).sort(), ['jobs', 'run', 'scenario']);
       const run = assertOnePlanRun(db, 'manual');
@@ -155,13 +147,13 @@ describe('plan runs on a real store go through the scheduler', () => {
     const app = await serve(db, config, s);
     try {
       await assert.rejects(s.runNow('plan'), e => e instanceof SchedulerError && e.code === 'locked');
-      const r = await postJson(app.baseUrl, '/api/jobs/plan/run', {});
+      const r = await app.postJson('/api/jobs/plan/run', {});
       assert.equal(r.status, 409, r.text.slice(0, 300));
       assert.equal(r.json.error, 'another scheduler holds the job lock');
       assert.equal(planRuns(db).length, 0, 'nothing ran');
       assert.equal(planner(db).length, 0, 'nothing planned');
       await other.stop();
-      const ok = await postJson(app.baseUrl, '/api/jobs/plan/run', {});
+      const ok = await app.postJson('/api/jobs/plan/run', {});
       assert.equal(ok.status, 200, ok.text.slice(0, 300));
       assertOnePlanRun(db, 'manual');
     } finally {
@@ -197,7 +189,7 @@ describe('plan runs on a demo store', () => {
     const app = await serve(db, config, s);
     const before = allTables(db);
     try {
-      const r = await postJson(app.baseUrl, '/api/jobs/plan/run', {});
+      const r = await app.postJson('/api/jobs/plan/run', {});
       assert.equal(r.status, 409);
       assert.equal(r.json.error, 'planning runs on real stores only');
       assert.deepEqual(allTables(db), before, 'demo store unchanged');
