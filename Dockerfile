@@ -14,7 +14,7 @@ COPY packs ./packs
 COPY scripts ./scripts
 COPY evals ./evals
 
-RUN mkdir -p /data && chown node:node /data
+RUN mkdir -p /data /app/evals/out && chown node:node /data /app/evals/out
 
 ENV FATHOM_DATA=/data \
     FATHOM_PORT=8080 \
