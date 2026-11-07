@@ -19,6 +19,7 @@ ENV FATHOM_DATA=/data \
     FATHOM_PORT=8080 \
     FATHOM_HOST=0.0.0.0
 
+# hadolint ignore=DL3066
 USER node
 EXPOSE 8080
 VOLUME ["/data"]
