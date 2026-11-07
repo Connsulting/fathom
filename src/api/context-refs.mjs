@@ -15,8 +15,10 @@
 //   step         `<recId>:<index>`, a task index of a visible rec
 //   goal         an open goal in the scenario
 //   figure       a key in scenario.fig; a `txn.<id>` key becomes a transaction ref
-//   pnl          an entity with P&L lines
+//   pnl          an entity with P&L lines, or <key>|<category> for one of its categories
 //   spending     a transaction category
+//   Both take an optional |YYYY-MM suffix (a month selected on the page); the hint names the month.
+//   An invalid suffix stays part of the category, so the reference drops as an unknown category.
 //   confirm      a pending Confirm item id, or `group:<kind>` with pending items of that kind; the
 //                hint is the card question (no tool reads Confirm cards)
 //   money        overview or accounts
@@ -24,8 +26,8 @@
 //   page         a signed-in screen id
 // Any id may end in a view qualifier, `<id>@<key>=<value>;...`, naming what the screen showed:
 // month YYYY-MM, range 3M | 1Y | All, owner me | spouse, from and to YYYY-MM-DD, housing=off,
-// tax=on. A valid qualifier resolves the id before it; the ref keeps the full id and its hint ends
-// in `; on screen: month 2026-03, ...`. A suffix that is not a valid qualifier is part of the id
+// tax=on, type income | expenses. A valid qualifier resolves the id before it; the ref keeps the
+// full id and its hint ends in `; on screen: month 2026-03, ...`. A suffix that is not a valid qualifier is part of the id
 // (ids may contain '@'), so free text after '@' only ever fails to match a store row.
 // The answerer puts these in the conversation context for the model and keeps them out of the
 // grounding evidence: a reference id or hint never grounds a number.
@@ -33,6 +35,7 @@
 import { HttpError } from './http.mjs';
 import { resolveTokens } from '../shared/tokens.mjs';
 import { pnlEntities, businessPnl } from '../pnl/business.mjs';
+import { monthLabel } from '../pnl/shared.mjs';
 
 export const REF_KINDS = Object.freeze(['account', 'transaction', 'rec', 'step', 'goal', 'figure', 'pnl', 'spending',
   'confirm', 'money', 'pack', 'page']);
@@ -45,6 +48,13 @@ const PAGES = new Set(['home', 'pace', 'brief', 'goals', 'confirm', 'plan', 'yea
   'add', 'settings', 'connect', 'engine', 'email', 'onboarding', 'pnl']);
 
 const BAD = 'context must be a list of {kind, id}';
+const MONTH_SUFFIX = /\|(\d{4})-(0[1-9]|1[0-2])$/;
+
+// An id and its month suffix: { base, month } with month as 'Mar 2032', or '' when there is none.
+function splitMonth(id) {
+  const m = MONTH_SUFFIX.exec(id);
+  return m ? { base: id.slice(0, m.index), month: monthLabel(`${m[1]}-${m[2]}`) } : { base: id, month: '' };
+}
 
 export function parseRefs(raw) {
   if (raw === undefined || raw === null) return [];
@@ -99,6 +109,7 @@ const QUALIFIER_VALUES = {
   to: v => DAY.test(v),
   housing: v => v === 'off',
   tax: v => v === 'on',
+  type: v => v === 'income' || v === 'expenses',
 };
 
 // { base, q, words } for an id ending in a valid view qualifier, else null.
@@ -146,10 +157,11 @@ function resolveOne(db, scenario, { kind, id }) {
     }
     case 'pnl': {
       // A P&L entity key as /api/pnl lists it (entity:<name> or account:<id>), optionally
-      // <key>|<category> for one category row.
-      const bar = id.indexOf('|');
-      const key = bar < 0 ? id : id.slice(0, bar);
-      const category = bar < 0 ? '' : id.slice(bar + 1);
+      // <key>|<category> for one category row, and |YYYY-MM for one month of it.
+      const { base, month } = splitMonth(id);
+      const bar = base.indexOf('|');
+      const key = bar < 0 ? base : base.slice(0, bar);
+      const category = bar < 0 ? '' : base.slice(bar + 1);
       const clock = scenario.meta && scenario.meta.clock;
       let ent = null;
       try { ent = pnlEntities({ db, clock }).find(e => e.key === key) || null; } catch { ent = null; }
@@ -157,11 +169,13 @@ function resolveOne(db, scenario, { kind, id }) {
       // A category row must be one of this entity's real P&L categories before its name reaches
       // the prompt: an invented or misspelled category drops the reference.
       if (category && !pnlCategories(db, key, clock).has(category)) return null;
-      return { kind, id, use: `pnl_by_month with entity ${plain(ent.label)}${category ? `, the ${category} lines` : ''}` };
+      return { kind, id, use: `pnl_by_month with entity ${plain(ent.label)}${category ? `, the ${category} lines` : ''}${month ? `, ${month} only` : ''}` };
     }
-    case 'spending':
-      return db.prepare('SELECT 1 FROM transactions WHERE category = ? LIMIT 1').get(id)
-        ? { kind, id, use: `query_transactions with category ${id}, pnl_by_month` } : null;
+    case 'spending': {
+      const { base, month } = splitMonth(id);
+      return base && db.prepare('SELECT 1 FROM transactions WHERE category = ? LIMIT 1').get(base)
+        ? { kind, id, use: `query_transactions with category ${base}${month ? `, ${month} only` : ''}, pnl_by_month` } : null;
+    }
     case 'confirm': {
       const rows = id.startsWith('group:')
         ? db.prepare("SELECT question FROM confirm_items WHERE status = 'pending' AND kind = ? ORDER BY id").all(id.slice(6))

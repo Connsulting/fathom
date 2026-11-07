@@ -15,7 +15,8 @@ import { signInTarget } from '../auth/return-path.js';
 //  - Actions POST to the API, replace the scenario with the one in the response, then notify. They
 //    return a Promise (designs may ignore it). Requests run one at a time, in order. A failed
 //    request keeps the old state and shows a dismissible error line (role=alert).
-//  - api.go(name, params, opts) accepts opts.replace to replace the current history entry.
+//  - api.go(name, params, opts) accepts opts.replace to replace the current history entry, and
+//    opts.silent to change the URL only: no notify, no scroll to the top (a screen's own state in the hash).
 //  - The figure popover shows cents when the value has a nonzero cents part.
 //
 // Reading notes kept from the mock:
@@ -71,10 +72,11 @@ import { signInTarget } from '../auth/return-path.js';
 //    the scenario or the error line.
 //  - api.pnl({ entity, from, to }) GETs /api/pnl and resolves { entities, pnl, figures, sources } or null.
 //    api.pnlRows({ entity, from, to, section, category, month }) GETs /api/pnl/rows and resolves
-//    { items, total, figures, sources, note } or null. api.spending({ from, to, include, exclude }) GETs
+//    { items, total, sum, figures, sources, note } or null: sum is a figure over every matching row and
+//    each item carries amount (raw signed), value (counted) and fig (at value). api.spending({ from, to, include, exclude }) GETs
 //    /api/spending and resolves { spending, figures, sources } or null; include and exclude are arrays
 //    (or comma separated strings). api.spendingRows({ from, to, include, exclude, bucket, category, month })
-//    GETs /api/spending/rows. All four register the response's figures and sources like
+//    GETs /api/spending/rows (same shape as pnlRows). All four register the response's figures and sources like
 //    api.accountTransactions and never touch the scenario or the error line. A figure's optional
 //    detail list ({ k, v } plain text) is shown as rows in the figure popover.
 //  - api.accountMask(id, mask), api.accountOwner(id, { owner } | { undo }), api.accountKind(id, { kind } |
@@ -90,8 +92,11 @@ import { needsYou as needsYouOf, packStatus } from '/shared/rules.mjs';
 import { isOwner } from '/shared/rec-links.mjs';
 
 const ROUTES = new Set(['onboarding', 'home', 'pace', 'brief', 'plan', 'rec', 'ask', 'wargame', 'goals', 'accounts',
-  'advisor', 'yearend', 'connect', 'engine', 'email', 'packs', 'confirm', 'add', 'money', 'settings', 'account', 'pnl']);
-const PARAM_KEY = { rec: 'id', onboarding: 'step', wargame: 'name', packs: 'id', ask: 'id', account: 'id' };
+  'advisor', 'yearend', 'connect', 'engine', 'email', 'packs', 'confirm', 'add', 'money', 'settings', 'account', 'pnl', 'pnlrows']);
+const PARAM_KEY = { rec: 'id', onboarding: 'step', wargame: 'name', packs: 'id', ask: 'id', account: 'id', pnl: 'state', pnlrows: 'id' };
+// Routes whose param is a URLSearchParams string: kept as written in the hash ('=', '&' and the
+// string's own percent escapes literal), never decoded as one value.
+const QUERY_PARAM = new Set(['pnl', 'pnlrows']);
 const LAST_STEP = 5;
 
 // ---------------------------------------------------------------- small helpers
@@ -263,6 +268,9 @@ function normalizeRoute(r) {
   if (r.name === 'account') return p.id && arr(S && S.accounts).some(a => a.id === String(p.id)) ? { name: 'account', params: { id: String(p.id) } } : { name: 'accounts', params: {} };
   if (r.name === 'ask') return p.id && rawThread(String(p.id)) ? { name: 'ask', params: { id: String(p.id) } } : { name: 'ask', params: {} };
   if (r.name === 'packs') return p.id && rawPack(String(p.id)) ? { name: 'packs', params: { id: String(p.id) } } : { name: 'packs', params: {} };
+  // The P&L keeps its sort and filter as one state string; its rows dialog needs a spec.
+  if (r.name === 'pnl') return p.state ? { name: 'pnl', params: { state: String(p.state) } } : { name: 'pnl', params: {} };
+  if (r.name === 'pnlrows') return p.id ? { name: 'pnlrows', params: { id: String(p.id) } } : { name: 'pnl', params: {} };
   if (r.name === 'wargame') {
     const n = p.name != null ? String(p.name) : '';
     return { name: 'wargame', params: n === 'salary' || n === 'deferral' ? { name: n } : {} };
@@ -276,7 +284,7 @@ function parseHash(hash) {
   const name = parts[0];
   const key = PARAM_KEY[name];
   let val = parts[1];
-  if (val != null) { try { val = decodeURIComponent(val); } catch (e) { /* keep raw */ } }
+  if (val != null && !QUERY_PARAM.has(name)) { try { val = decodeURIComponent(val); } catch (e) { /* keep raw */ } }
   return { name, params: key && val != null ? { [key]: val } : {} };
 }
 
@@ -284,7 +292,9 @@ function routeHash(r) {
   if (!r) return '';
   const key = PARAM_KEY[r.name];
   const v = key && r.params ? r.params[key] : null;
-  return '#/' + r.name + (v != null && v !== '' ? '/' + encodeURIComponent(v) : '');
+  if (v == null || v === '') return '#/' + r.name;
+  const enc = QUERY_PARAM.has(r.name) ? encodeURIComponent(v).replace(/%(25|26|2B|3D)/g, (m) => decodeURIComponent(m)) : encodeURIComponent(v);
+  return '#/' + r.name + '/' + enc;
 }
 
 function urlWith(hash) {
@@ -320,7 +330,7 @@ function applyRoute(r, opts) {
 function go(name, params, opts) {
   let p = params;
   if (p != null && typeof p !== 'object') p = { [PARAM_KEY[name] || 'id']: p };
-  applyRoute({ name, params: p || {} }, { replace: !!(opts && opts.replace) });
+  applyRoute({ name, params: p || {} }, { replace: !!(opts && opts.replace), silent: !!(opts && opts.silent) });
 }
 
 function onHashChange() {

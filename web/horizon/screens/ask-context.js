@@ -25,9 +25,9 @@ const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'Ju
 const RANGE_WORDS = { '3M': 'last 3 months', '1Y': 'last year', All: 'all time' };
 const OWNER_WORDS = { me: 'my actions', spouse: "the spouse's actions" };
 // The named toggles a view may carry, in label order; any other pair is ignored.
-const FILTERS = [['housing', 'off', 'housing left out'], ['tax', 'on', 'tax included']];
+const FILTERS = [['housing', 'off', 'housing left out'], ['tax', 'on', 'tax included'], ['type', 'income', 'income only'], ['type', 'expenses', 'expenses only']];
 // The detail fields each route owns; every other route ignores the view's details.
-const OWNS = { money: ['range'], pnl: ['month', 'filters'], home: ['owner'], account: ['from', 'to'] };
+const OWNS = { money: ['range'], pnl: ['month', 'filters'], pnlrows: ['month', 'filters'], home: ['owner'], account: ['from', 'to'] };
 
 const str = (v) => (typeof v === 'string' ? v : '');
 const known = (map, v) => typeof v === 'string' && Object.hasOwn(map, v);
@@ -109,7 +109,8 @@ function pageDesc(route, c, view) {
     const r = id ? arr(c.recs).find((x) => x && String(x.id) === id) : null;
     return r && r.status !== 'hidden' ? desc(name, 'rec', id, `Plan > ${String(txt(String(r.title ?? '')))}`) : desc(name, 'page', 'plan', 'Plan');
   }
-  if (name === 'pnl') {
+  // The rows dialog sits over the P&L and shares its chip.
+  if (name === 'pnl' || name === 'pnlrows') {
     const v = view.pnl;
     return v && typeof v === 'object' && v.id ? desc(name, 'pnl', String(v.id), `Money > ${String(v.label ?? '')}`) : desc(name, 'page', 'pnl', 'Money > P&L');
   }

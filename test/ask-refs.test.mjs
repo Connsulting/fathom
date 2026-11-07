@@ -468,6 +468,7 @@ test('resolveRefs accepts a view qualifier on money, page, pnl and account ids, 
     ['page', 'home', 'owner=spouse', 'owner spouse'],
     ['page', 'home', 'owner=me', 'owner me'],
     ['pnl', ent.key, 'month=2025-12', 'month 2025-12'],
+    ['pnl', ent.key, 'month=2025-12;type=income', 'month 2025-12, type income'],
     ['account', 'a_biz', 'from=2026-01-01;to=2026-03-31', 'from 2026-01-01, to 2026-03-31'],
     ['account', 'a_biz', 'to=2026-03-31', 'to 2026-03-31'],
   ];
@@ -494,6 +495,7 @@ test('resolveRefs: an invalid qualifier is not a qualifier; the whole id resolve
     { kind: 'page', id: 'home@owner=both' },
     { kind: 'page', id: 'pnl@housing=on' },
     { kind: 'page', id: 'pnl@tax=off' },
+    { kind: 'page', id: 'pnl@type=all' },
     { kind: 'account', id: 'a_biz@from=2026-1-1' },
     { kind: 'account', id: 'a_biz@month=2026-03;evil=1' },
     { kind: 'page', id: '@month=2026-03' },
@@ -527,4 +529,59 @@ test('parseRefs keeps a qualified id as is and still caps ids at 200 characters'
   assert.deepEqual(parseRefs([{ kind: 'money', id: 'overview@range=1Y' }]), [{ kind: 'money', id: 'overview@range=1Y' }]);
   const long = `${'x'.repeat(190)}@month=2026-03`;
   throws400(() => parseRefs([{ kind: 'account', id: long }]), 'a qualified id over 200 characters');
+});
+
+// pnl2-ac3: a P&L or spending ref from a page with a month selected carries a |YYYY-MM suffix.
+const MONTH_LABEL = m => `${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][Number(m.slice(5, 7)) - 1]} ${m.slice(0, 4)}`;
+
+test('pnl2-ac3 resolveRefs keeps a P&L category row with a month suffix, names the month in the hint, and drops an invalid suffix as an unknown category', async t => {
+  const s = await demoStore(t);
+  const scenario = buildScenario(s.db, { packs: s.packs });
+  const { pnlEntities, businessPnl } = await import('../src/pnl/business.mjs');
+  const ent = pnlEntities({ db: s.db, clock: scenario.meta.clock }).find(e => e.kind === 'entity');
+  assert.ok(ent, 'the demo store has a business entity');
+  const p = businessPnl({ db: s.db, entity: ent.key, clock: scenario.meta.clock });
+  const real = p.expenses.categories[0].category;
+  const month = p.months[Math.min(2, p.months.length - 1)];
+  const label = MONTH_LABEL(month);
+  const out = resolveRefs(s.db, scenario, [
+    { kind: 'pnl', id: `${ent.key}|${real}|${month}` },
+    { kind: 'pnl', id: `${ent.key}|${real}` },
+    { kind: 'pnl', id: `${ent.key}|${real}|${month.slice(0, 4)}-13` },
+    { kind: 'pnl', id: `${ent.key}|${real}|${month.slice(0, 4)}-00` },
+    { kind: 'pnl', id: `${ent.key}|Synthetic invented category|${month}` },
+    { kind: 'pnl', id: `entity:nosuchbusiness|${real}|${month}` },
+  ]);
+  assert.deepEqual(out.map(r => `${r.kind}:${r.id}`), [`pnl:${ent.key}|${real}|${month}`, `pnl:${ent.key}|${real}`]);
+  const [withMonth, plain] = out;
+  assert.match(withMonth.use, /pnl_by_month/);
+  assert.ok(withMonth.use.includes(real), `the hint names the category: ${withMonth.use}`);
+  assert.ok(!withMonth.use.includes(`${real}|`), `the hint names the category without the suffix: ${withMonth.use}`);
+  assert.ok(withMonth.use.includes(label), `the hint names ${label}: ${withMonth.use}`);
+  assert.ok(!plain.use.includes(label), `the month-less hint names no month: ${plain.use}`);
+  assert.ok(!JSON.stringify(out).includes('-13'), 'an invalid month suffix never reaches the prompt');
+  assert.ok(!JSON.stringify(out).includes('Synthetic invented category'), 'an invented category with a month never reaches the prompt');
+});
+
+test('pnl2-ac3 resolveRefs keeps a spending category with a month suffix, names the month in the hint, and drops an invalid suffix as an unknown category', async t => {
+  const s = await demoStore(t);
+  const scenario = buildScenario(s.db, { packs: s.packs });
+  const row = s.db.prepare("SELECT category, substr(date, 1, 7) AS month FROM transactions WHERE category IS NOT NULL AND category != '' ORDER BY date DESC LIMIT 1").get();
+  assert.ok(row, 'the demo store has a categorized transaction');
+  const { category, month } = row;
+  const label = MONTH_LABEL(month);
+  const out = resolveRefs(s.db, scenario, [
+    { kind: 'spending', id: `${category}|${month}` },
+    { kind: 'spending', id: category },
+    { kind: 'spending', id: `${category}|${month.slice(0, 4)}-13` },
+    { kind: 'spending', id: `${category}|${month.slice(0, 4)}-1` },
+    { kind: 'spending', id: `Synthetic invented category|${month}` },
+  ]);
+  assert.deepEqual(out.map(r => `${r.kind}:${r.id}`), [`spending:${category}|${month}`, `spending:${category}`]);
+  const [withMonth, plain] = out;
+  assert.ok(withMonth.use.includes(category), `the hint names the category: ${withMonth.use}`);
+  assert.ok(!withMonth.use.includes(`${category}|`), `the hint names the category without the suffix: ${withMonth.use}`);
+  assert.ok(withMonth.use.includes(label), `the hint names ${label}: ${withMonth.use}`);
+  assert.ok(!plain.use.includes(label), `the month-less hint names no month: ${plain.use}`);
+  assert.ok(!JSON.stringify(out).includes('-13'), 'an invalid month suffix never reaches the prompt');
 });
