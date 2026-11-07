@@ -223,11 +223,17 @@ test.describe('goal kinds', TAGS, () => {
       { title: 'Synthetic people no split', entered: { asOf: '2026-11-01', people: [{ person: 'owner', amount: 1500 }, { person: 'spouse', amount: 1000 }] } },
       { title: 'Synthetic total with split', split: [{ person: 'owner', amount: 3000 }, { person: 'spouse', amount: 3000 }], entered: { asOf: '2026-11-01', total: 2500 } },
     ];
+    // Create every goal before the page loads its scenario: a second visit to the same route does
+    // not refetch it.
+    const ids = [];
     for (const c of cases) {
       const res = await request.post('/api/goals', { headers: { 'content-type': 'application/json' }, data: { ...base, ...c } });
       expect(res.status()).toBe(200);
-      const id = (await res.json()).goal.id;
-      await gotoGoals(page);
+      ids.push((await res.json()).goal.id);
+    }
+    await gotoGoals(page);
+    for (const [i, c] of cases.entries()) {
+      const id = ids[i];
       await goalsCard(page, id).getByRole('button', { name: 'Edit', exact: true }).click();
       await expect(form(page)).toBeVisible();
       await gf(page, 'priority').selectOption('high');
