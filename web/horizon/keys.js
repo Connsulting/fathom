@@ -170,7 +170,7 @@ export function createKeys({ now = () => Date.now(), seqWindow = 1500 } = {}) {
   }
 
   function active(opts = {}) {
-    const scopes = current && current !== 'global' ? [current, 'global'] : ['global'];
+    const scopes = current && current !== 'global' && !opts.globalOnly ? [current, 'global'] : ['global'];
     const out = [];
     for (const scope of scopes) {
       for (const r of regs) {
@@ -187,12 +187,13 @@ export function createKeys({ now = () => Date.now(), seqWindow = 1500 } = {}) {
 
   const find = (list, key) => list.find((b) => Array.isArray(b.keys) && b.keys.includes(key));
 
-  function handle(e, target) {
+  // opts.globalOnly: only the global table answers (focus is in a layer above the screen).
+  function handle(e, target, opts = {}) {
     if (!e || e.isComposing) return false;
     const key = normalizeKey(e);
     if (!key) return false;
     if (!passesGuard(key, target)) { prefix = ''; return false; }
-    const list = active();
+    const list = active(opts);
     if (prefix) {
       const p = prefix;
       const fresh = now() - prefixAt <= seqWindow;

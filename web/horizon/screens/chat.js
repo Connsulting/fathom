@@ -446,6 +446,12 @@ export function recPendingHtml(recId, threadKey) {
 // True while a question is in flight (one at a time, from the Ask page or a rec dialog).
 export function askBusy() { return !!A.pending; }
 
+// Moves a new conversation in flight (no thread yet, not asked from a rec) to another host, so the
+// thread its answer creates is adopted there (Open in panel while the first answer streams).
+export function handPending(host) {
+  if (newOnAsk(A.pending)) A.pending.host = host;
+}
+
 // A step, unless it repeats the item right before it (the stored list collapses the same way).
 function pushStep(p, label) {
   const last = p.items[p.items.length - 1];

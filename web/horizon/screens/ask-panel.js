@@ -233,6 +233,8 @@ function collapse() {
   const r = route();
   const id = r.name === 'ask' && r.params && r.params.id ? String(r.params.id) : null;
   P.threadId = id && threadOf(id) ? id : null;
+  // A first question still streaming on the Ask page: its thread lands in the panel.
+  if (!P.threadId) chatScreen.handPending('panel');
   P.open = true;
   P.view = 'thread';
   save();
