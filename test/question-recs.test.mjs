@@ -50,6 +50,18 @@ test('a secondary catch-up answer keeps the figured action and asks only its par
   assert.deepEqual(rec.question.fields[0].path, ['owner']);
 });
 
+test('salary questions ask only the plan participant for person-scoped answers', () => {
+  for (const person of ['owner', 'spouse']) {
+    for (const key of ['retirement.otherPlanDeferrals', 'retirement.priorYearFicaWages']) {
+      const ctx = context({ facts: { 'income.sCorp': true, 'household.filingStatus': 'mfj' }, info: { blocked: [], confirm: { salary: [key] }, solo: { person, kind: 'scorp' } } });
+      const rec = evaluateTriggers(ctx).find(h => h.rec.id === 'scorp-salary').rec;
+      assert.equal(rec.question.primary, true);
+      assert.ok(rec.question.fields.length > 0);
+      assert.ok(rec.question.fields.every(f => f.path[0] === person), `${person}: ${key}`);
+    }
+  }
+});
+
 test('accounts recognized as college savings by name have answer controls', () => {
   const q = questionFor(['accounts.va529'], { accounts: [{ id: 'named-plan', kind: 'taxable', name: '529 College Savings' }], facts: {} });
   assert.match(q.title, /529 College Savings/);

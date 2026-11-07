@@ -100,3 +100,15 @@ test('supplemental catch-up answers preserve the action, checklist and owner com
   assert.equal(after.status, 'done');
   assert.equal(after.tasks[0].done, true);
 });
+
+test('a salary answer does not require or overwrite the other participant deferrals', async () => {
+  const spouse = { deferral: 12000, catchUp: 0 };
+  const db = await s.store({ variant: { facts: { 'retirement.otherPlanDeferrals': { owner: { deferral: -1 }, spouse } } } });
+  await planRun(db);
+  const rec = buildScenario(db).recs.find(r => r.id === 'scorp-salary');
+  assert.deepEqual(rec.question.keys, ['retirement.otherPlanDeferrals']);
+  assert.ok(rec.question.fields.every(f => f.path[0] === 'owner'));
+  await answerFacts(db, [{ key: 'retirement.otherPlanDeferrals', value: { owner: { deferral: 0, catchUp: 0 } } }], { now, replan: () => planRun(db), recId: rec.id });
+  assert.deepEqual(getFacts(db)['retirement.otherPlanDeferrals'].spouse, spouse);
+  assert.equal(buildScenario(db).recs.find(r => r.id === rec.id).question, undefined);
+});
