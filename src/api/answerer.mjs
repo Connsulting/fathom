@@ -3,10 +3,14 @@ import { listPreferences } from '../actions/preferences.mjs';
 // runtime engine (live or fake), then through grounding and escaping before it is stored.
 //
 // createLiveAnswerer({ engine, packs }) (packs: the live pack view, src/packs/live.mjs) ->
-//   answer({ db, key, questionId?, text?, clock? }) -> { paragraphs, refs, notice?, provenance? } | null
+//   answer({ db, key, questionId?, text?, clock?, refs? }) -> { paragraphs, refs, notice?, provenance? } | null
 //   whatIf({ db, packId, clock? })                  -> { paragraphs, refs, notice?, provenance? }
 // paragraphs are paragraph inner HTML (the handler wraps each in <p>); null means questionId
-// names no question in that conversation.
+// names no question in that conversation. answer's `refs` input is the parsed request context
+// ([{ kind, id }], src/api/context-refs.mjs): the ones the store knows go into the conversation
+// context as `references` ([{ kind, id, use }], merged with a rec or pack context) and into
+// provenance.references ([{ kind, id }], absent when none resolved). References are never grounding
+// evidence: their ids and tool hints never ground a number.
 //
 // Prompt assembly (buildChatPrompt): the static product rules, then the answer style and the
 // spending guide (a separate section), plus the active packs' context go in `system` (before the
@@ -79,6 +83,7 @@ import { parseJson } from '../store/db.mjs';
 import { findQuestion, matchQuestion, recForKey, isThreadKey } from './questions.mjs';
 import { fakeAnswerScript } from './fake-answers.mjs';
 import { stripSources, listMarkerSpans, markdownBlocks } from '../shared/answer-text.mjs';
+import { resolveRefs } from './context-refs.mjs';
 import { DEMO_LIMIT_MESSAGE } from '../public-demo/control.mjs';
 
 export const PRODUCT_RULES = [
@@ -89,6 +94,7 @@ export const PRODUCT_RULES = [
   'Never write a Sources, References or Citations line and never cite sources in your prose: the app shows the sources it used under every answer.',
   'Call tools before you write the answer, and do not narrate tool use.',
   'Answer in short paragraphs separated by blank lines. You may use bullet lists (lines starting with "- "), numbered lists (lines starting with "1. ") and **bold**; use no other markdown (no headings, links or tables) and no HTML.',
+  'The conversation context may list references: items the owner pointed at on screen, as kind and id, each with the tools that read it. Read them with those tools; never guess what they hold and never state a number about them that a tool did not return.',
 ].join('\n');
 
 export const ASK_ACTION_RULES = [
@@ -699,7 +705,7 @@ export function createLiveAnswerer({ engine, packs } = {}) {
 
   // One grounded model answer: call, ground, regenerate once with a corrective turn when most
   // figures are unchecked (needsRevision), render.
-  async function run({ db, scenario, now, question, context, history, baseRefs, fakeArgs, actions = false, onEvent, actionContext = null }) {
+  async function run({ db, scenario, now, question, context, history, baseRefs, references = [], fakeArgs, actions = false, onEvent, actionContext = null }) {
     if (!engine.isOn()) return offNotice(engine);
     const t0 = performance.now();
     const stream = streamer(onEvent);
@@ -719,8 +725,10 @@ export function createLiveAnswerer({ engine, packs } = {}) {
       ...(stream.engineEvent ? { onEvent: stream.engineEvent } : {}) };
 
     // groundAnswer sanitizes each datum (and context.entries bodies lose their metadata lines there).
+    // References (ids and tool hints) are for the model only and never ground a number.
     const entryBodies = active.flatMap(({ pack }) => pack.entries.map(e => groundingBody(e.body)));
-    const data = [summary, context, entryBodies];
+    const { references: _references, ...groundedContext } = context || {};
+    const data = [summary, context ? groundedContext : null, entryBodies];
     const dataLabels = ['household summary', 'conversation context', 'knowledge pack entries'];
     const resultsOf = res => (res && Array.isArray(res.toolResults) ? res.toolResults : []);
     const textOf = res => stripSources(res.text);
@@ -804,13 +812,14 @@ export function createLiveAnswerer({ engine, packs } = {}) {
         grounding: { ok: grounding.ok, retried: revised > 0, unverified: grounding.violations.map(v => v.text),
           ...(revised ? { revised } : {}) },
         costUsd: Number(costUsd.toFixed(6)),
+        ...(references.length ? { references: references.map(({ kind, id }) => ({ kind, id })) } : {}),
         work: { ms: Math.max(0, Math.round(performance.now() - t0)), items: work.items },
       },
     };
   }
 
   return {
-    async answer({ db, key, questionId, text, clock, onEvent, actorId, ownerText, turnId, replan, queuePlan } = {}) {
+    async answer({ db, key, questionId, text, clock, refs, onEvent, actorId, ownerText, turnId, replan, queuePlan } = {}) {
       if (typeof key !== 'string' || !key) throw new TypeError('answer needs a conversation key');
       const scenario = buildScenario(db, { clock, packs });
       const now = clockNow(db, clock);
@@ -835,7 +844,9 @@ export function createLiveAnswerer({ engine, packs } = {}) {
       } else if (key.startsWith('pack:')) {
         context = packConversationContext(db, packs, key.slice(5)).context;
       }
-      return run({ db, scenario, now, question, context, history: scenario.live.conversations[key] || [], baseRefs,
+      const references = resolveRefs(db, scenario, refs);
+      if (references.length) context = { ...(context || {}), references };
+      return run({ db, scenario, now, question, context, history: scenario.live.conversations[key] || [], baseRefs, references,
         actions: isThreadKey(key), onEvent,
         actionContext: isThreadKey(key) && actorId ? { actorId, ownerText, turnId, replan, queuePlan, conversationKey: key, recId: rec?.id } : null,
         fakeArgs: { key, questionId: hasQ ? questionId : undefined, text: hasQ ? undefined : question } });
