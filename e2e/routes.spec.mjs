@@ -1,5 +1,5 @@
 // Every route renders with its heading, the product chrome is the Horizon shell with no review
-// harness, and the brief timeline shows today with past and future. Read-only, tagged @smoke:
+// harness, and the Plan timeline shows today with past and future and the What changed dots. Read-only, tagged @smoke:
 // against a base URL it never resets or mutates the target.
 //
 // FATHOM_SMOKE_TARGET=real (default demo) swaps the demo-scenario assertions for checks that hold
@@ -7,13 +7,13 @@
 // provenance markup on figures that render. Real mode also aborts any non-GET/HEAD request to
 // the app origin.
 
-import { test, expect, S, REMOTE, SMOKE_REAL, resetDemo, mainRoutes, needsYouIds, rec, plain, gotoRoute, expectH1, mainNav, recDialog } from './helpers.mjs';
+import { test, expect, S, REMOTE, SMOKE_REAL, resetDemo, mainRoutes, headingFor, needsYouIds, rec, plain, gotoRoute, expectH1, mainNav, recDialog } from './helpers.mjs';
 
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 // Routes whose heading is product chrome, not a row from the demo scenario.
 const REAL_ROUTES = [
-  'brief', 'plan', 'ask', 'wargame', 'wargame/salary', 'wargame/deferral',
+  'home', 'pace', 'plan', 'ask', 'wargame', 'wargame/salary', 'wargame/deferral',
   'goals', 'accounts', 'advisor', 'yearend', 'connect', 'engine', 'email', 'packs'
 ];
 
@@ -35,9 +35,9 @@ test.describe('routes', { tag: '@smoke' }, () => {
 
   if (!SMOKE_REAL) {
     for (const [route, heading] of mainRoutes()) {
-      test(`#/${route} renders its heading`, async ({ page }) => {
+      test(`#/${route} renders its heading`, async ({ page, request }) => {
         await gotoRoute(page, route);
-        await expectH1(page, heading);
+        await expectH1(page, await headingFor(heading, request));
         await expect(recDialog(page)).toHaveCount(0);
       });
     }
@@ -109,10 +109,12 @@ test.describe('routes', { tag: '@smoke' }, () => {
   }
 
   test('shell: no harness bar, top menu, More menu groups, logo mark', async ({ page, request }) => {
-    await gotoRoute(page, 'brief');
+    await gotoRoute(page, 'home');
     await expect(page.locator('.fx-harness')).toHaveCount(0);
 
-    await expect(mainNav(page).getByRole('link')).toHaveText(['Year', /^Confirm\d*$/, 'Plan', 'Decide', 'Ask', 'Packs']);
+    // Home is the first tab; Confirm carries no count badge (Home's data-health line does).
+    await expect(mainNav(page).getByRole('link')).toHaveText(['Home', 'Confirm', 'Plan', 'Decide', 'Ask', 'Packs']);
+    await expect(page.locator('.h-nav-n')).toHaveCount(0);
 
     const more = page.getByRole('button', { name: 'More', exact: true });
     await expect(more).toHaveAttribute('aria-expanded', 'false');
@@ -145,6 +147,7 @@ test.describe('routes', { tag: '@smoke' }, () => {
       : page.getByRole('link', { name: plain(S.meta.product), exact: true });
     await expect(mark).toHaveClass(/\bh-mark\b/);
     await expect(mark.locator('svg.h-mark-g')).toBeVisible();
+    await expect(mark).toHaveAttribute('data-go', 'home');
 
     const icon = page.locator('link[rel~="icon"]');
     await expect(icon).toHaveCount(1);
@@ -156,7 +159,7 @@ test.describe('routes', { tag: '@smoke' }, () => {
 
   test('nav stays put and Ctrl+K opens the switcher', async ({ page }) => {
     test.skip(!SMOKE_REAL, 'demo smoke covers the nav inside the shell test');
-    await gotoRoute(page, 'brief');
+    await gotoRoute(page, 'home');
     await expect(mainNav(page)).toBeVisible();
     await page.keyboard.press('Control+k');
     const qs = page.getByRole('dialog', { name: 'Quick switcher' });
@@ -165,9 +168,14 @@ test.describe('routes', { tag: '@smoke' }, () => {
     await expect(qs).toBeHidden();
   });
 
-  test('brief timeline: Today line, months before and after now, positioned items', async ({ page }) => {
-    await gotoRoute(page, 'brief');
-    const tl = page.locator('.h-tl[data-tl="brief"]');
+  test('Plan timeline: Today line, months before and after now, positioned items, past event dots', { tag: ['@ac5'] }, async ({ page }) => {
+    // The year timeline moved from Home to Plan; Home has none.
+    await gotoRoute(page, 'home');
+    await expect(page.locator('section.h-home')).toBeVisible();
+    await expect(page.locator('.h-tl')).toHaveCount(0);
+
+    await gotoRoute(page, 'plan');
+    const tl = page.locator('.h-tl[data-tl="plan"]');
     await expect(tl).toBeVisible();
 
     await expect(tl.locator('.h-tl-now-lab')).toContainText('Today');
@@ -191,6 +199,17 @@ test.describe('routes', { tag: '@smoke' }, () => {
       const lefts = await tl.locator('.h-tl-rec').evaluateAll((els) => els.map((el) => parseFloat(getComputedStyle(el).left)));
       expect(lefts.length).toBeGreaterThan(0);
       expect(lefts.some((x) => Number.isFinite(x) && x > 0), `timeline item lefts ${lefts.join(',')}`).toBe(true);
+
+      // What changed events on or before the clock are dots on the axis, as the brief timeline had.
+      const clock = Date.parse(S.meta.clock + 'T00:00:00Z');
+      const year = Number(S.meta.clock.slice(0, 4));
+      const past = (S.events || []).filter((e) => {
+        const [mon, day] = String(e.date).split(' ');
+        const at = Date.UTC(year, MON.indexOf(mon), Number(day));
+        return Number.isFinite(at) && at <= clock;
+      });
+      expect(past.length, 'the demo has past events').toBeGreaterThan(0);
+      await expect(tl.locator('circle.h-tl-ev')).toHaveCount(past.length);
     }
   });
 });

@@ -59,7 +59,7 @@ test.describe('keys', () => {
 
   // 1
   test('Control+K opens the quick switcher; Escape closes it and restores focus', async ({ page }) => {
-    await gotoRoute(page, 'brief');
+    await gotoRoute(page, 'home');
     const plan = page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Plan', exact: true });
     await plan.focus();
     await openSwitcher(page);
@@ -72,7 +72,7 @@ test.describe('keys', () => {
 
   // 2
   test('Meta+K opens the quick switcher too', async ({ page }) => {
-    await gotoRoute(page, 'brief');
+    await gotoRoute(page, 'home');
     await blur(page);
     await page.keyboard.press('Meta+k');
     await expect(switcher(page)).toBeVisible();
@@ -81,7 +81,7 @@ test.describe('keys', () => {
 
   // 3
   test('empty query shows group headers and the G hint on Go to Plan', async ({ page }) => {
-    await gotoRoute(page, 'brief');
+    await gotoRoute(page, 'home');
     await blur(page);
     await openSwitcher(page);
     const names = (await headers(page).allTextContents()).map((t) => t.trim());
@@ -96,7 +96,7 @@ test.describe('keys', () => {
     const r = proposedRec();
     const title = plain(r.title);
     const query = title.split(/\s+/).slice(0, 3).join(' ');
-    await gotoRoute(page, 'brief');
+    await gotoRoute(page, 'home');
     await blur(page);
     await openSwitcher(page);
     await qsInput(page).fill(query);
@@ -109,7 +109,7 @@ test.describe('keys', () => {
 
   // 5
   test('arrow keys and hover move the selection', async ({ page }) => {
-    await gotoRoute(page, 'brief');
+    await gotoRoute(page, 'home');
     await blur(page);
     await openSwitcher(page);
     const opts = options(page);
@@ -129,7 +129,7 @@ test.describe('keys', () => {
 
   // 6
   test('typing plan and Enter goes to Plan and closes the switcher', async ({ page }) => {
-    await gotoRoute(page, 'brief');
+    await gotoRoute(page, 'home');
     await blur(page);
     await openSwitcher(page);
     await qsInput(page).fill('plan');
@@ -142,7 +142,7 @@ test.describe('keys', () => {
   // 7
   test('a rec opened through the switcher comes back first under Recent; recents hold keys only', async ({ page }) => {
     const r = proposedRec();
-    await gotoRoute(page, 'brief');
+    await gotoRoute(page, 'home');
     await blur(page);
     await openSwitcher(page);
     await qsInput(page).fill(plain(r.title));
@@ -166,7 +166,7 @@ test.describe('keys', () => {
   // 8
   test('no match: Enter starts a conversation and sends the typed text', async ({ page }) => {
     const text = 'zzqxv nothing';
-    await gotoRoute(page, 'brief');
+    await gotoRoute(page, 'home');
     await blur(page);
     await openSwitcher(page);
     await qsInput(page).fill(text);
@@ -191,7 +191,7 @@ test.describe('keys', () => {
     const followUp = 'Synthetic follow up about the next quarter';
     expect(await askOnAsk(page, followUp)).toBe(a.id);
 
-    await gotoRoute(page, 'brief');
+    await gotoRoute(page, 'home');
     await blur(page);
     await openSwitcher(page);
     const convKeys = await options(page).evaluateAll((els) => els.map((e) => e.getAttribute('data-qs-key')).filter((k) => /^conv:/.test(k)));
@@ -218,7 +218,7 @@ test.describe('keys', () => {
     const name = 'Plan & review "Q"';
     const t = (await postJson(request, '/api/threads', { text: 'Synthetic question for the title test' })).thread;
     await postJson(request, `/api/threads/${t.id}/rename`, { title: name });
-    await gotoRoute(page, 'brief');
+    await gotoRoute(page, 'home');
     await blur(page);
     await openSwitcher(page);
     const opt = page.locator(`#h-qs-list li.h-qs-o[data-qs-key="conv:${t.id}"]`);
@@ -230,7 +230,7 @@ test.describe('keys', () => {
   });
 
   // 9
-  const G = [['y', 'brief'], ['p', 'plan'], ['d', 'wargame'], ['a', 'ask'], ['c', 'confirm'], ['k', 'packs'], ['f', 'add'], ['e', 'engine'], ['m', 'email'], ['n', 'connect']];
+  const G = [['h', 'home'], ['p', 'plan'], ['d', 'wargame'], ['a', 'ask'], ['c', 'confirm'], ['k', 'packs'], ['f', 'add'], ['e', 'engine'], ['m', 'email'], ['n', 'connect']];
   test('every G sequence reaches its route', async ({ page }) => {
     for (const [k, route] of G) {
       await gotoRoute(page, 'goals');
