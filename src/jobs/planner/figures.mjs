@@ -456,7 +456,7 @@ export function computeFigures(data, facts, ctx) {
     const cf = entry ? entry.carryforward : undefined;
     const inference = entry && typeof entry.virginiaPlan === 'boolean' ? null : activeInference(a, owner);
     const plan = entry && typeof entry.virginiaPlan === 'boolean' ? entry.virginiaPlan : inference ? inference.value : null;
-    const ownerAge = plan === true ? accountOwnerAge(birthYears, a.owner, data.year) : null;
+    const ownerAge = plan === true ? accountOwnerAge(birthYears, a.owner, data.year, { married: facts['household.filingStatus'] === 'mfj' }) : null;
     const cfKnown = typeof cf === 'number' && Number.isFinite(cf) && cf >= 0;
     const answersMissing = plan === null || (plan === true && !cfKnown);
     const ageMissing = plan === true && ownerAge === null;
@@ -485,7 +485,10 @@ export function computeFigures(data, facts, ctx) {
   const vaBlocked = !isVa ? null
     : itemized > stdDeduction(f) && vaItemized == null ? 'va_itemized_missing'
       : out.info.va529.missing.length ? 'va529_answers_missing' : null;
-  const ages = Array.isArray(facts['household.dependentAges']) ? facts['household.dependentAges'] : [];
+  // Dependent ages: from the birth years the owner told us, else the dependent ages a note or the
+  // seed recorded (the pack gates read that fact too).
+  const ages = Array.isArray(birthYears?.dependents) ? birthYears.dependents.map((_, i) => ageAtYearEnd(birthYears, { dependent: i }, data.year)).filter(a => a !== null)
+    : Array.isArray(facts['household.dependentAges']) ? facts['household.dependentAges'] : [];
   // D2: an owner-stated prior-year qualified business loss carryforward, else none (with a note).
   const qbiCarry = owner['tax.prior.qbiLossCarryforward'];
   const parts = {

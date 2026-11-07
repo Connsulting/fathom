@@ -18,10 +18,10 @@ export function ageAtYearEnd(birthYears, who, year) {
 }
 
 // The age of the person who owns an account. An account with no known person ('owner' or 'spouse')
-// takes the youngest known adult, so a missing owner never grants an older-owner rule. null when the
-// person, or every adult, has no birth year.
-export function accountOwnerAge(birthYears, person, year) {
+// takes the youngest adult, so a missing owner never grants an older-owner rule; every adult in the
+// household (the spouse too when `married`) must have a birth year, else the age is unknown (null).
+export function accountOwnerAge(birthYears, person, year, { married = false } = {}) {
   if (person === 'owner' || person === 'spouse') return ageAtYearEnd(birthYears, person, year);
-  const ages = ['owner', 'spouse'].map(p => ageAtYearEnd(birthYears, p, year)).filter(a => a !== null);
-  return ages.length ? Math.min(...ages) : null;
+  const ages = ['owner', ...(married ? ['spouse'] : [])].map(p => ageAtYearEnd(birthYears, p, year));
+  return ages.length && ages.every(a => a !== null) ? Math.min(...ages) : null;
 }
