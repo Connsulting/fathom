@@ -214,7 +214,7 @@ test.describe('account dialog and duplicates', { tag: '@ad-acN' }, () => {
     const dlg = recDialog(page);
     await expect(dlg).toBeVisible();
     await expect(dlg.getByText('Same account?').first()).toBeVisible();
-    await expect(dlg.getByRole('button', { name: /Merge/ })).toBeVisible();
+    await expect(dlg.getByRole('button', { name: /Merge$/ })).toBeVisible();
     await dlg.getByRole('button', { name: /Keep both/ }).click();
     await expect(dlg.getByRole('button', { name: /Keep both/ })).toHaveCount(0);
     await expect(dlg.locator('#h-dlg-t')).toBeVisible();
@@ -227,7 +227,7 @@ test.describe('account dialog and duplicates', { tag: '@ad-acN' }, () => {
     const dlg = recDialog(page);
     const item = (await (await request.get('/api/scenario')).json()).live.ingest.items.find((i) => i.context?.repair);
     const answered = page.waitForResponse((r) => r.url().endsWith(`/api/confirm/${item.id}/answer`));
-    await dlg.getByRole('button', { name: /Merge/ }).click();
+    await dlg.getByRole('button', { name: /Merge$/ }).click();
     expect((await answered).status()).toBe(200);
     const sc = await (await request.get('/api/scenario')).json();
     expect(sc.accounts.filter((a) => [pair.keep, pair.own].includes(a.id))).toHaveLength(1);
