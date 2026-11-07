@@ -6,7 +6,7 @@
 // dollars never carry a tax-cut claim (IRC 402A(a)).
 
 import {
-  isTrue, mineOf, padTasks, confirmTasks, confirmTask, salaryProjKey, salaryKey, positive,
+  isTrue, mineOf, padTasks, confirmTasks, salaryProjKey, salaryKey, positive,
   firstYearStatus, deferralDeadline, deadlineWindow, soloPlanOwner,
 } from './common.mjs';
 
@@ -72,7 +72,6 @@ export function build(ctx, hit) {
   }
   const value = [{ cls: 'retire', text: 'Moves income into retirement savings' }];
   if (positive(ctx, 'room.solo401k.pretax')) value.push({ cls: 'tax', text: 'Can lower this year tax if you choose pre-tax' });
-  const pending = hit.catchUpPending ? [confirmTask(hit.catchUpPending)] : [];
   if (hit.deadline === 'payroll') {
     return {
       title: 'Fill your retirement room before the last payroll',
@@ -85,7 +84,6 @@ export function build(ctx, hit) {
         'Elect the deferral before the last payroll runs',
         'Plan the employer contribution with your accountant',
         'Check that the deposit lands in the plan account',
-        ...pending,
       ]),
     };
   }
@@ -102,14 +100,12 @@ export function build(ctx, hit) {
         "Elect and deposit the deferral from this year's self-employment income before you file",
         'Plan the employer contribution with your accountant',
         'Tell us when the plan account is open',
-        ...pending,
       ]
       : [
         'Sign the deferral election by Dec 31',
         'Confirm the deposit date with your plan provider',
         'Plan the employer contribution with your accountant',
         'Check that the deposit lands in the plan account',
-        ...pending,
       ]),
   };
 }
