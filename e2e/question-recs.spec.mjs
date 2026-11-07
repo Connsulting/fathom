@@ -71,6 +71,10 @@ test.describe('answerable questions on the synthetic planning household', () => 
       await form.getByRole('spinbutton').fill('0');
       await expect(form.getByRole('spinbutton')).toHaveAttribute('step', '0.01');
       await expect(form).toContainText('USD');
+      if (process.env.QRECS_RENDER_DIR) {
+        mkdirSync(process.env.QRECS_RENDER_DIR, { recursive: true });
+        await page.screenshot({ path: resolve(process.env.QRECS_RENDER_DIR, `${test.info().project.name}-${surface}.png`), fullPage: true });
+      }
       const saved = page.waitForResponse(r => r.url().endsWith('/api/recs/va529/answers') && r.request().method() === 'POST');
       await form.getByRole('button', { name: 'Save', exact: true }).click();
       const response = await saved;
