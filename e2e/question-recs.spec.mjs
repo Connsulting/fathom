@@ -63,12 +63,12 @@ test.describe('answerable questions on the synthetic planning household', () => 
       const container = surface === 'home' ? page.locator('article.h-next') : surface === 'dialog' ? page.locator('.h-dlg') : page.locator('article.h-row').filter({ has: page.locator('[data-go="rec"][data-id="va529"]') });
       const form = container.locator('[data-rec-answers="va529"]');
       await expect(form).toBeVisible();
-      await expect(container).toContainText('Is College fund ending 3333 a Virginia plan?');
+      await expect(container).toContainText('Is College fund a Virginia plan?');
       await expect(container.getByRole('button', { name: 'Done', exact: true })).toHaveCount(0);
       await expect(form.getByRole('button', { name: 'Not now', exact: true })).toBeVisible();
       await expect(form.getByRole('button', { name: 'Ask', exact: true })).toBeVisible();
-      await form.getByRole('group', { name: 'Is College fund ending 3333 a Virginia plan?', exact: true }).getByLabel('Yes', { exact: true }).check();
-      await form.getByRole('group', { name: 'Is the owner of College fund ending 3333 age 70 or older?', exact: true }).getByLabel('No', { exact: true }).check();
+      await form.getByRole('group', { name: 'Is College fund a Virginia plan?', exact: true }).getByLabel('Yes', { exact: true }).check();
+      await form.getByRole('group', { name: 'Is the owner of College fund age 70 or older?', exact: true }).getByLabel('No', { exact: true }).check();
       await form.getByRole('spinbutton').fill('0');
       await expect(form.getByRole('spinbutton')).toHaveAttribute('step', '0.01');
       await expect(form).toContainText('USD');
