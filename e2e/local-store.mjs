@@ -50,6 +50,14 @@ export function householdStoreFile(dataDir) {
   return served.file;
 }
 
+// The original household's root of the instance in dataDir (households/<id>): its outbox/ and
+// packs/your-plans/ live here. Throws when the instance has none yet.
+export function householdRootDir(dataDir) {
+  const served = servedStore(dataDir);
+  if (!served) throw new Error('No household store in the data directory yet');
+  return served.root;
+}
+
 // Trusted financial-test fixture only. Auth ceremonies are exercised in identity.spec.mjs.
 // A real instance reads the synthetic instance secrets of secretsFor(dataDir), the same ones the
 // test store helpers built its data key with. Returns the app plus url, headers, storeFile and
