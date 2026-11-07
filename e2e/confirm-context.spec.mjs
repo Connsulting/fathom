@@ -79,6 +79,12 @@ async function openConfirm(page) {
 
 const decidedSection = (page) => page.locator('section.h-decided');
 
+// Decided for you shows a handful of rows; open the rest before looking for a particular one.
+async function showAllDecided(page) {
+  const more = decidedSection(page).locator('button[data-decided-more]');
+  if (await more.count() && /Show all/.test(await more.innerText())) await more.click();
+}
+
 async function openRowDetail(card, id) {
   const det = card.locator(`details[data-row-detail="${id}"]`);
   await expect(det).toHaveCount(1);
@@ -169,6 +175,7 @@ test('override one row (saved on click), see propagation in Decided for you, und
   const decided = (await ingestState(request)).decided;
   const section = decidedSection(page);
   await expect(section.getByRole('heading', { name: 'Decided for you' })).toBeVisible();
+  await showAllDecided(page);
   for (const id of auto) {
     const d = decided.find((x) => x.id === id);
     expect(d, `item ${id} is listed as decided`).toBeTruthy();
@@ -211,6 +218,7 @@ test('Decided for you lists the cross-format duplicates; Undo reopens one and it
   await openConfirm(page);
   const section = decidedSection(page);
   await expect(section.getByRole('heading', { name: 'Decided for you' })).toBeVisible();
+  await showAllDecided(page);
   for (const d of dups) {
     const li = section.locator(`li[data-decided="${d.id}"]`);
     await expect(li).toBeVisible();
