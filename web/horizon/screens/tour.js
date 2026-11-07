@@ -1,5 +1,6 @@
 /* Horizon guided product tour: a short walk through the main screens, one callout per stop.
-   TOUR_STOPS is the only place stops are declared. The pure part (the table, tourCount and
+   TOUR_STOPS is the only place stops are declared. A stop's anchor is a selector list tried left
+   to right: the first rendered match of the earliest part that has one wins. The pure part (the table, tourCount and
    placeCallout) does no DOM work at import, so node:test imports this module directly.
    The runtime opens from Settings, the quick switcher, or once on its own on a public demo. While
    it is open the page, the dialog host and the Ask panel are inert, every key is captured on the
@@ -8,7 +9,7 @@
    redraw, mutation, scroll and resize; no element is ever held across them. */
 
 export const TOUR_STOPS = Object.freeze([
-  { id: 'home-goals', route: 'home', anchor: '.h-gcard', title: 'Your goals, on pace',
+  { id: 'home-goals', route: 'home', anchor: '.h-gcard:has(.h-pbar), .h-gcard', title: 'Your goals, on pace',
     body: 'Home shows each goal and how far along it is against where the plan says it should be today.' },
   { id: 'home-next', route: 'home', anchor: '.h-gcard .h-gnext', title: 'The next thing to do',
     body: 'Each goal shows its most urgent action, who owns it and how many days are left.' },
@@ -103,14 +104,42 @@ function topInset() {
   return top ? Math.max(0, top.getBoundingClientRect().bottom) : 0;
 }
 
-// The first match of a stop's selector list, in document order, that renders with a size.
+// A selector list split on its top-level commas (commas inside parentheses do not separate).
+const partsCache = new Map();
+function partsOf(sel) {
+  if (partsCache.has(sel)) return partsCache.get(sel);
+  const parts = [];
+  let depth = 0, from = 0;
+  for (let i = 0; i < sel.length; i++) {
+    const c = sel[i];
+    if (c === '(') depth++;
+    else if (c === ')') depth--;
+    else if (c === ',' && depth === 0) { parts.push(sel.slice(from, i).trim()); from = i + 1; }
+  }
+  parts.push(sel.slice(from).trim());
+  partsCache.set(sel, parts);
+  return parts;
+}
+
+// The first rendered match of the earliest part of a stop's selector list that has one.
 function anchorOf(stop) {
-  for (const el of H.root.querySelectorAll(stop.anchor)) {
-    if (S.host.contains(el)) continue;
-    const r = el.getBoundingClientRect();
-    if (r.width > 0 && r.height > 0) return el;
+  for (const part of partsOf(stop.anchor)) {
+    for (const el of H.root.querySelectorAll(part)) {
+      if (S.host.contains(el)) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) return el;
+    }
   }
   return null;
+}
+
+// True for an element that does not scroll with the page: it or an ancestor is position fixed.
+function isFixed(el) {
+  if (el.offsetParent === null) return true;
+  for (let n = el; n && n.nodeType === 1; n = n.parentElement) {
+    if (getComputedStyle(n).position === 'fixed') return true;
+  }
+  return false;
 }
 
 // Moves data-tour-on to the current stop's anchor and returns it.
@@ -176,9 +205,15 @@ function sizeBox(box, phone, view) {
   return { width: box.offsetWidth, height: box.offsetHeight };
 }
 
+// The anchor rect grown by the spotlight padding: the callout keeps its gap from the ring, not the anchor.
+const inflate = (r) => ({
+  top: r.top - PAD, left: r.left - PAD, right: r.right + PAD, bottom: r.bottom + PAD,
+  width: r.width + PAD * 2, height: r.height + PAD * 2
+});
+
 function placeFor(rect, box, phone, view) {
-  const anchor = { top: rect.top, left: rect.left, width: rect.width, height: rect.height };
-  return placeCallout({ anchor, box, view, phone, gap: GAP, topInset: topInset() });
+  const { top, left, width, height } = inflate(rect);
+  return placeCallout({ anchor: { top, left, width, height }, box, view, phone, gap: GAP, topInset: topInset() });
 }
 
 const covers = (p, h, r) => p.left < r.right && r.left < p.left + p.width && p.top < r.bottom && r.top < p.top + h;
@@ -199,12 +234,17 @@ function reveal(el) {
   const size = sizeBox(box, phone, view);
   const ok = () => {
     const r = el.getBoundingClientRect();
-    return r.top >= topInset() && r.bottom <= view.height && !covers(placeFor(r, size, phone, view), size.height, r);
+    return r.top >= topInset() && r.bottom <= view.height && !covers(placeFor(r, size, phone, view), size.height, inflate(r));
   };
-  if (ok()) return;
+  if (isFixed(el)) return;
+  // A phone anchor in the lower half would push the sheet to the top: scroll it up anyway, so the
+  // sheet stays at the bottom wherever the page allows.
+  const r0 = el.getBoundingClientRect();
+  if (ok() && !(phone && r0.top + r0.height / 2 > view.height / 2)) return;
+  // Phone: anchor near the top so the sheet sits at the bottom; desktop: just below the header.
   scrollByY(el.getBoundingClientRect().top - topInset() - GAP);
   if (ok() || !phone) return;
-  // The page could not scroll that far: put the anchor at the bottom, under a sheet at the top.
+  // Still not clear of the sheet: put the anchor at the bottom, under a sheet at the top.
   scrollByY(el.getBoundingClientRect().bottom - (view.height - GAP));
 }
 
@@ -231,6 +271,12 @@ function position() {
   spot.style.top = `${r.top - PAD}px`;
   spot.style.width = `${r.width + PAD * 2}px`;
   spot.style.height = `${r.height + PAD * 2}px`;
+  // Follow the anchor's corner radius (px), or go round for 50% and the like; else the CSS default.
+  const rad = getComputedStyle(el).borderTopLeftRadius;
+  const px = /px$/.test(rad) ? parseFloat(rad) : 0;
+  if (px > 0) spot.style.borderRadius = `${px + PAD}px`;
+  else if (rad && rad !== '0px') spot.style.borderRadius = `${Math.min(r.width, r.height) / 2 + PAD}px`;
+  else spot.style.borderRadius = '';
 }
 
 function schedule() {
