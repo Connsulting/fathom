@@ -30,6 +30,10 @@ body { margin: 0; background: #0a0c0d; color: #e6eaeb; }
 .fx-pop .fx-pop-row { display: flex; gap: 10px; margin-top: 3px; }
 .fx-pop .fx-pop-k { flex: none; width: 44px; color: #6c727d; font-size: 11px; padding-top: 1px; }
 .fx-pop .fx-pop-v { flex: 1; min-width: 0; color: #c4c9d1; }
+.fx-pop:has(.fx-pop-sums) { max-width: min(340px, calc(100vw - 16px)); }
+.fx-pop .fx-pop-sums { max-height: 38vh; overflow-y: auto; margin-top: 6px; padding-top: 4px; border-top: 1px solid #2c3039; }
+.fx-pop .fx-pop-sums em { color: #8a8f99; font-style: normal; }
+.fx-pop .fx-pop-n { flex: none; color: #9aa1ad; font-variant-numeric: tabular-nums; text-align: right; }
 
 /* ---------- request error line ---------- */
 
