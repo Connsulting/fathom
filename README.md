@@ -181,7 +181,17 @@ BASE_URL=http://127.0.0.1:8080 npm run e2e:smoke   # read-only @smoke subset aga
 Run focused tests locally; CI runs the full unit and Playwright suites and is the gate.
 `scripts/e2e-all.sh` runs the full suite and then the smoke subset against a separately started
 server. `scripts/docker-smoke.sh` builds the image and smoke tests a container using your docker
-CLI configuration as is.
+CLI configuration as is. It needs the published port reachable on 127.0.0.1 from the caller.
+When that is not true, build the app image yourself and run:
+
+```bash
+scripts/remote-smoke.sh <app-image>
+```
+
+That command starts the image with a named volume, waits for `/healthz` inside the container,
+checks the process is uid 1000, builds `e2e/smoke.Dockerfile` from a `git archive` of the tracked
+tree (Playwright tag from `package-lock.json`), and runs the `@smoke` subset in the app
+container's network namespace against `http://127.0.0.1:8080`. It removes everything it created.
 
 Deployed smoke is that same `@smoke` subset against a server you already started: set `FATHOM_SMOKE_BASE_URL` (or `BASE_URL`). The default target is `demo`, which keeps the scenario assertions. For a real store set `FATHOM_SMOKE_TARGET=real`, which aborts any request to the app that is not GET or HEAD:
 
