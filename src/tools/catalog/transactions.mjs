@@ -14,7 +14,7 @@ export const operations = [
     name: 'search',
     summary: 'Search transaction examples by ids, account, dates, amount, category or text. Never sum rows.',
     route: 'Example transaction rows',
-    routes: ['GET /api/accounts/:id/transactions'],
+    routes: ['GET /api/accounts/:id/transactions', 'GET /api/spending/rows'],
     params: obj({
       ids: { type: 'array', items: { type: 'string', minLength: 1 }, minItems: 1, maxItems: 50 },
       accountId: { type: 'string' },

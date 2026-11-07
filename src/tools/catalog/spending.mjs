@@ -78,7 +78,7 @@ function op(name, params, summary, route, handler) {
     params,
     summary,
     route,
-    routes: [],
+    routes: name === 'total' ? ['GET /api/spending'] : [],
     scope: 'read',
     required: name === 'compare' ? ['a', 'b'] : [],
     referenceable: name !== 'definitions',
