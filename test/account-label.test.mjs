@@ -1,5 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { tempDb } from './helpers/server.mjs';
+import { seedDemo } from '../demo/seed.mjs';
+import { accountNaming } from '../src/accounts/naming.mjs';
+import { accountLabels } from '../src/pnl/shared.mjs';
+import { buildScenario } from '../src/scenario/build.mjs';
 import { defaultAccountLabel, accountLabel, accountSubtitle, accountLabelParts, composeLabel, validateDisplayName } from '../src/shared/account-label.mjs';
 
 const names = { me: 'Avery Example', spouse: 'Blair Example' };
@@ -110,4 +115,28 @@ test('label parts give a screen the bare name to edit and the pieces of the whol
   assert.deepEqual(accountLabelParts({ ...base, maskSure: false }), { labelPrefix: '', baseName: 'Everyday checking', labelMask: '' });
   assert.equal(composeLabel("Avery's", 'Typed name', '4455'), "Avery's Typed name (4455)");
   assert.equal(composeLabel('', 'Typed name', ''), 'Typed name');
+});
+
+test('the demo store names accounts with resolved owner names, before and after a rename', async (t) => {
+  const s = await tempDb();
+  t.after(() => s.close());
+  seedDemo(s.db);
+  const label = (id) => accountLabel(accountNaming(s.db).byId.get(id));
+  assert.equal(label('a_biz'), 'Northbeam Labs Business checking (1918)');
+  assert.equal(label('a_bsep'), "Alex's SEP-IRA (3657)");
+  assert.equal(label('a_jsep'), "Sam's SEP-IRA (3276)");
+  assert.equal(label('a_personal'), 'Joint checking (6643)');
+  assert.equal(label('a_jcash'), 'Sam\u2019s checking', 'a name that starts with the prefix is not doubled');
+
+  s.db.prepare("UPDATE accounts SET display_name = 'Studio operating' WHERE id = 'a_biz'").run();
+  s.db.prepare("UPDATE accounts SET display_name = 'Retirement' WHERE id = 'a_bsep'").run();
+  const naming = accountNaming(s.db);
+  const raw = s.db.prepare("SELECT * FROM accounts WHERE id = 'a_biz'").get();
+  assert.equal(label('a_biz'), 'Northbeam Labs Studio operating (1918)');
+  assert.equal(label('a_bsep'), "Alex's Retirement (3657)");
+  assert.equal(naming.label(raw), 'Northbeam Labs Studio operating (1918)', 'a raw row with the stored tokens reads the same');
+  assert.equal(accountLabels(s.db).get('a_biz').label, 'Northbeam Labs Studio operating (1918)');
+  const scenario = buildScenario(s.db, {});
+  assert.equal(scenario.accounts.find((a) => a.id === 'a_biz').name, 'Northbeam Labs Studio operating (1918)');
+  for (const a of scenario.accounts) assert.doesNotMatch(a.name, /[{}]|ending/, `${a.id} has no token in its label`);
 });
