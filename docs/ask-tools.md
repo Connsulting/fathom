@@ -434,8 +434,8 @@ MCP is stateless per request, so references are re-evaluable, not session handle
    tools; `destructiveHint` stays false (the one destructive operation, `update_account.merge`,
    needs `confirm: true` and the owner's confirming words).
 5. Ask runs the same registry through `createRegistryServer`. Read tools are offered for every
-   purpose that offers tools today; write tools only for purpose `chat`. `undo` is MCP-only on
-   main (as the five `undo_*_action` tools are) until C2 offers it to Ask too.
+   purpose that offers tools today; write tools, including `undo`, only for purpose `chat`.
+   MCP offers `undo` to a key with any write scope and checks the receipt's scope on each call.
 6. Results carry account masks only, resolve scenario tokens to plain text and never include
    hidden recs (existing rules).
 7. Write results carry the ask-actions receipt `{ id, scope, label, before, after, actorId, ts,
