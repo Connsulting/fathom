@@ -245,8 +245,39 @@ test('live demo boundary applies model/output caps and offers only local read to
 });
 test('route documentation assigns every server route a demo behavior', () => {
   const docs = readFileSync(new URL('../docs/public-demo.md', import.meta.url), 'utf8');
-  for (const route of routes) assert.ok(docs.includes(`| ${route.method} | \`${route.path}\` |`));
+  for (const route of routes) {
+    const behavior = route.path === '/healthz' ? 'Synthetic health only'
+      : route.path === '/api/auth/session' ? 'No-login demo bootstrap'
+        : demoRouteBehavior(route.method, route.path) === 'sandbox' ? 'Visitor sandbox' : 'Off, HTTP 403';
+    assert.ok(docs.includes(`| ${route.method} | \`${route.path}\` | ${behavior} |`), `${route.method} ${route.path}: ${behavior}`);
+  }
   assert.ok(docs.trimEnd().endsWith('provider key provisioning and external spend limits.'));
+});
+test('P&L and spending reads use the visitor sandbox and refuse writes', async t => {
+  const s = await app(t);
+  const v = visitor(s);
+  const before = readFileSync(join(s.dir, 'fathom.sqlite'));
+  const pnl = await v('/api/pnl');
+  assert.equal(pnl.status, 200);
+  assert.ok(pnl.body.entities.length > 0);
+  const category = pnl.body.pnl.income.categories[0].category;
+  const query = new URLSearchParams({ entity: pnl.body.pnl.entity.key, section: 'income', category });
+  const rows = await v(`/api/pnl/rows?${query}`);
+  assert.equal(rows.status, 200);
+  assert.ok(rows.body.items.length > 0);
+  const spending = await v('/api/spending');
+  assert.equal(spending.status, 200);
+  const bucket = spending.body.spending.buckets.find(b => b.categories.length > 0);
+  const spendingQuery = new URLSearchParams({ bucket: bucket.bucket, category: bucket.categories[0].category });
+  const spendingRows = await v(`/api/spending/rows?${spendingQuery}`);
+  assert.equal(spendingRows.status, 200);
+  assert.ok(spendingRows.body.items.length > 0);
+  for (const path of ['/api/pnl', '/api/pnl/rows', '/api/spending', '/api/spending/rows']) {
+    assert.equal(demoRouteBehavior('HEAD', path), 'sandbox');
+    assert.equal(demoRouteBehavior('POST', path), 'off');
+    assert.equal((await v(path, {})).status, 403);
+  }
+  assert.deepEqual(readFileSync(join(s.dir, 'fathom.sqlite')), before);
 });
 test('per-IP turn quota applies across visitors and persisted control handles', t => {
   const c = config(directory(t), { FATHOM_PUBLIC_DEMO_TURNS_PER_IP_PER_DAY: '1' });

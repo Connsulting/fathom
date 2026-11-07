@@ -17,6 +17,7 @@ const ALLOWED = new Set([
   'POST /api/threads/:id/rename', 'POST /api/threads/:id/archive', 'POST /api/threads/:id/trash',
   'POST /api/threads/:id/restore', 'POST /api/threads/:id/delete',
   'GET /api/accounts/:id', 'GET /api/accounts/:id/transactions', 'POST /api/accounts/:id/name',
+  'GET /api/pnl', 'GET /api/pnl/rows', 'GET /api/spending', 'GET /api/spending/rows',
   'POST /api/accounts/:id/mask', 'POST /api/accounts/:id/owner', 'POST /api/accounts/:id/kind',
   'GET /api/accounts/:id/merge-candidates', 'POST /api/accounts/:id/merge',
   'GET /api/goals/suggestions', 'POST /api/goals', 'POST /api/goals/:id',
