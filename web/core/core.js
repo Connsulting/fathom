@@ -59,6 +59,10 @@ import { signInTarget } from '../auth/return-path.js';
 //    stream breaks before its final event, the answer is fetched instead: the scenario is reloaded
 //    until the conversation has the new turn (the server stores it once, after grounding). A new
 //    thread counts only once it has a turn (a rec thread's row exists before its answer is stored).
+//  - api.accountDetail(id) GETs the account dialog's data and resolves it, or null. api.accountTransactions(id,
+//    { q, from, to, limit, cursor }) resolves one page { items, next, total } (newest first) or null; each item's
+//    fig and its source are registered, so api.fig(item.fig) and the figure popover work for it. Neither touches
+//    the scenario or the error line.
 //  - api.packEntry(packId, entryId) GETs one pack entry and resolves { id, title, body, cites } or
 //    null; it never touches the scenario or the error line.
 //  - api.reviseAnswer(id, optionId) and api.reopenAnswer(id) resolve { item }, or { final: message }
@@ -69,8 +73,8 @@ import { needsYou as needsYouOf, packStatus } from '/shared/rules.mjs';
 import { isOwner } from '/shared/rec-links.mjs';
 
 const ROUTES = new Set(['onboarding', 'home', 'pace', 'brief', 'plan', 'rec', 'ask', 'wargame', 'goals', 'accounts',
-  'advisor', 'yearend', 'connect', 'engine', 'email', 'packs', 'confirm', 'add', 'money', 'settings']);
-const PARAM_KEY = { rec: 'id', onboarding: 'step', wargame: 'name', packs: 'id', ask: 'id' };
+  'advisor', 'yearend', 'connect', 'engine', 'email', 'packs', 'confirm', 'add', 'money', 'settings', 'account']);
+const PARAM_KEY = { rec: 'id', onboarding: 'step', wargame: 'name', packs: 'id', ask: 'id', account: 'id' };
 const LAST_STEP = 5;
 
 // ---------------------------------------------------------------- small helpers
@@ -109,13 +113,21 @@ const isReal = () => live().mode === 'real';
 const minStep = () => (isReal() ? 1 : 0);
 const demoId = () => (live().demo === 'fresh' ? 'fresh' : 'november');
 
+// Figures and sources a screen fetched on its own (an account's transactions), kept beside the
+// scenario's so the provenance popover reads them the same way. Keys are namespaced by the server
+// (txn.<id>, txn-src:<id>) and never collide with a scenario key.
+const extraFig = new Map();
+const extraSrc = new Map();
+
 function figOf(key) {
   const f = S && S.fig && key != null ? S.fig[key] : null;
   if (f && typeof f === 'object') return f;
+  const x = key != null ? extraFig.get(String(key)) : null;
+  if (x) return x;
   return { v: 0, src: null, kind: 'e', label: String(key == null ? '' : key), missing: true };
 }
 function srcOf(id) {
-  const s = S && S.src && id != null ? S.src[id] : null;
+  const s = (S && S.src && id != null ? S.src[id] : null) || (id != null ? extraSrc.get(String(id)) : null);
   return { id: id == null ? null : id, label: (s && s.label) || 'Unknown source', asOf: (s && s.asOf) || '' };
 }
 
@@ -230,6 +242,8 @@ function normalizeRoute(r) {
   // A real store past first run reaches onboarding as Setup, landing on Goals (step 1).
   if (r.name === 'onboarding') return isReal() ? { name: 'onboarding', params: { step: p.step != null && p.step !== '' ? clampStep(Number(p.step)) : 1 } } : defaultRoute();
   if (r.name === 'rec') return p.id && rawRec(String(p.id)) ? { name: 'rec', params: { id: String(p.id) } } : { name: 'plan', params: {} };
+  // The account dialog is a route like the rec dialog; an account that is gone lands on Accounts.
+  if (r.name === 'account') return p.id && arr(S && S.accounts).some(a => a.id === String(p.id)) ? { name: 'account', params: { id: String(p.id) } } : { name: 'accounts', params: {} };
   if (r.name === 'ask') return p.id && rawThread(String(p.id)) ? { name: 'ask', params: { id: String(p.id) } } : { name: 'ask', params: {} };
   if (r.name === 'packs') return p.id && rawPack(String(p.id)) ? { name: 'packs', params: { id: String(p.id) } } : { name: 'packs', params: {} };
   if (r.name === 'wargame') {
@@ -863,6 +877,42 @@ function buildYourPlans(fileIds) {
   return send('/api/your-plans/build', { fileIds: ids }, d => (d.result && typeof d.result === 'object' ? d.result : null));
 }
 
+// GET a JSON read that never touches the scenario or the error line: the parsed body, or null on
+// any failure (a 401 still sends the page to sign-in).
+async function getRead(path) {
+  try {
+    const res = await fetch(path, { headers: { accept: 'application/json' }, credentials: 'same-origin', cache: 'no-store' });
+    if (res.status === 401) signedOut('expired');
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data && typeof data === 'object' ? data : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+// One account's dialog data, or null.
+function accountDetail(id) {
+  if (id == null || id === '') return Promise.resolve(null);
+  return getRead('/api/accounts/' + encodeURIComponent(id));
+}
+
+// One page of an account's transactions: opts { q, from, to, limit, cursor }. Resolves the page, with
+// its figures and sources registered for the provenance popover, or null.
+async function accountTransactions(id, opts) {
+  if (id == null || id === '') return null;
+  const qs = new URLSearchParams();
+  for (const k of ['q', 'from', 'to', 'limit', 'cursor']) {
+    const v = opts && opts[k];
+    if (v != null && v !== '') qs.set(k, String(v));
+  }
+  const page = await getRead('/api/accounts/' + encodeURIComponent(id) + '/transactions' + (qs.size ? '?' + qs : ''));
+  if (!page || !Array.isArray(page.items)) return null;
+  for (const [k, f] of Object.entries(page.figures || {})) if (f && typeof f === 'object') extraFig.set(k, f);
+  for (const [k, s] of Object.entries(page.sources || {})) if (s && typeof s === 'object') extraSrc.set(k, s);
+  return page;
+}
+
 async function packEntry(packId, entryId) {
   if (packId == null || entryId == null || packId === '' || entryId === '') return null;
   try {
@@ -1105,6 +1155,8 @@ const api = {
   revisit,
   onboard,
   accountRename,
+  accountDetail,
+  accountTransactions,
   goalCreate,
   goalUpdate,
   goalArchive,
