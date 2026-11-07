@@ -299,7 +299,9 @@ test.describe('demo build', () => {
     }
 
     // Home redraws with them: each goal with no target is its own card, with no quiet row.
-    const homeGoal = (title) => page.locator('section.h-home article.h-gcard[data-goal-card]').filter({ hasText: title });
+    // Match on the card title: a question's why text can name another goal's words.
+    const homeGoal = (title) => page.locator('section.h-home article.h-gcard[data-goal-card]')
+      .filter({ has: page.locator('.h-gcard-t', { hasText: new RegExp(`^${title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`) }) });
     for (const e of expected) {
       const g = sc.goals.find((x) => x.title === e.title);
       await expect(homeGoal(e.title)).toHaveCount(1);
