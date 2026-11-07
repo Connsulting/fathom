@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { checkGrounding } from '../grounding.mjs';
+import { checkGrounding, findDates } from '../grounding.mjs';
 
 test('tool and stored values ground dollars, conventional rounding, compact amounts and percentages', () => {
   const data = [{ value: 12345.67 }, { rate: 0.153 }, { count: 3 }, { loss: -25 }];
@@ -370,4 +370,52 @@ test('"one more" and "one another" are not exempt when a unit word follows in th
   for (const text of ['Take one more step.', 'There is one more thing to watch.', 'One of the accounts is late.']) {
     assert.equal(checkGrounding(text).ok, true, text);
   }
+});
+
+// AQ1 B.1: a capitalized number word inside a proper name (a card issuer, a clinic, a fund) is a
+// name, not a figure, so it is neither a violation nor a source. A sentence-initial count before a
+// capitalized word ("Two Roth accounts") and lowercase counts stay checked.
+test('a spelled number inside a proper name is not a figure', () => {
+  for (const text of [
+    'Your Capital One card is paid in full.',
+    'Book the visit at One Medical.',
+    'That puts the plan back at Square One.',
+    'Schedule your One HMG payment before it is due.',
+    'Compare it with the Two Sigma fund.',
+  ]) {
+    assert.deepEqual(checkGrounding(text, { toolResults: [], data: [] }).violations, [], text);
+  }
+});
+
+test('a spelled count outside a proper name is still checked', () => {
+  for (const [text, word] of [
+    ['Two Roth accounts are open.', 'Two'],
+    ['Make one payment.', 'one'],
+    ['Two payments were late.', 'Two'],
+    // Review r1 F1: an account type after the number word is a count, not a name.
+    ['One Roth account remains.', 'One'],
+    ['We hold One IRA account.', 'One'],
+    // Review r2 F4: a sentence-opening word before it does not make a count a name.
+    ['Only One Roth account remains.', 'One'],
+    ['Only One account remains.', 'One'],
+  ]) {
+    const result = checkGrounding(text, { toolResults: [], data: [] });
+    assert.equal(result.ok, false, text);
+    assert.deepEqual(result.violations.map(v => v.text), [word], text);
+  }
+});
+
+// AQ1 B.2: findDates reads the date forms grounding already masks, with their parts.
+test('findDates returns each date with its text, offset and parts', () => {
+  const cases = [
+    ['Paid on 2026-10-03.', { text: '2026-10-03', year: 2026, month: 10, day: 3 }],
+    ['Paid on 10/3/2026.', { text: '10/3/2026', year: 2026, month: 10, day: 3 }],
+    ['Paid on Oct 3, 2026.', { text: 'Oct 3, 2026', year: 2026, month: 10, day: 3 }],
+    ['Paid on October 3.', { text: 'October 3', year: null, month: 10, day: 3 }],
+    ['Paid on 3 Oct.', { text: '3 Oct', year: null, month: 10, day: 3 }],
+  ];
+  for (const [prose, want] of cases) {
+    assert.deepEqual(findDates(prose), [{ ...want, index: prose.indexOf(want.text) }], prose);
+  }
+  assert.deepEqual(findDates('No date here, only $2,400.'), []);
 });

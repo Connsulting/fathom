@@ -2,8 +2,10 @@
 // between tool calls is not part of the answer: the engine returns the final round's text and the
 // interim texts apart, streams an `interim` event before that round's tools, and the answerer
 // stores the steps and notes as provenance.work = { ms, items }. The scripted fake question
-// "Show your work" exercises the whole path. A grounding retry streams { type: 'reset', draft: true }
-// and keeps the replaced first attempt as a draft note. Every fixture is synthetic.
+// "Show your work" exercises the whole path. A regeneration (two or more unchecked figures, more
+// than half of them) streams one "Revised to remove N unchecked figures" progress step, then a plain
+// { type: 'reset' }, and stores that one step; the replaced first attempt is never kept as a draft
+// note. Every fixture is synthetic.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -15,7 +17,7 @@ import { createRuntimeEngine } from '../src/engine/runtime.mjs';
 import { createLivePacks } from '../src/packs/live.mjs';
 import { createEngine, fakeChunks } from '../src/engine/index.mjs';
 import * as engineModule from '../src/engine/index.mjs';
-import { createLiveAnswerer, groundAnswer, PROGRESS_LABELS, PROGRESS_START, PROGRESS_GROUNDING, PROGRESS_RETRY } from '../src/api/answerer.mjs';
+import { createLiveAnswerer, groundAnswer, PROGRESS_LABELS, PROGRESS_START, PROGRESS_GROUNDING } from '../src/api/answerer.mjs';
 import { fakeAnswerScript } from '../src/api/fake-answers.mjs';
 import { SERVER_TIMEOUT, withServer, request, postJson, tempDb } from './helpers/server.mjs';
 
@@ -27,6 +29,7 @@ const NOTE_1 = 'Let me start with your household summary.';
 const NOTE_2 = 'Now the details this rests on.';
 
 const step = label => ({ k: 'step', label });
+const REVISED_2 = 'Revised to remove 2 unchecked figures';
 const note = text => ({ k: 'note', text });
 
 /* ---------- A. engine: final round text, interim texts and the interim event ---------- */
@@ -211,31 +214,55 @@ test('provenance.work is the same with and without a stream listener', async t =
   assert.equal(seen.some(e => e.type === 'reset'), false);
 });
 
-test('a failed grounding check keeps the first final text as a draft note and streams a draft reset', async t => {
+test('a regeneration stores one revision step and no draft note, and streams the step before a plain reset', async t => {
   const s = await demoStore(t);
   const seen = [];
+  const first = 'You owe $987,654 this year and $876,543 next year.';
   const { reply, requests } = await askScripted(s, [
-    [{ text: 'Let me look.', toolCalls: [{ name: 'list_accounts', args: {} }] }, { text: 'You owe $987,654 this year.' }],
+    [{ text: 'Let me look.', toolCalls: [{ name: 'list_accounts', args: {} }] }, { text: first }],
     [{ text: 'Nothing to add.' }],
   ], { onEvent: e => seen.push(e) });
   assert.equal(reply.provenance.grounding.retried, true);
+  assert.equal(reply.provenance.grounding.revised, 2);
   assert.deepEqual(reply.paragraphs, ['Nothing to add.']);
   assert.deepEqual(reply.provenance.work.items, [
     step(PROGRESS_START),
     note('Let me look.'),
     step(PROGRESS_LABELS.list_accounts),
     step(PROGRESS_GROUNDING),
-    { k: 'note', text: 'You owe $987,654 this year.', draft: true },
-    step(PROGRESS_RETRY),
+    step(REVISED_2),
     step(PROGRESS_GROUNDING),
   ]);
+  assert.equal(reply.provenance.work.items.some(x => x.draft), false, 'no draft note');
   // The corrective turn feeds back the final text only.
   const assistant = requests[1].messages.filter(m => m.role === 'assistant').at(-1);
-  assert.equal(assistant.content, 'You owe $987,654 this year.');
+  assert.equal(assistant.content, first);
   const resets = seen.filter(e => e.type === 'reset');
-  assert.deepEqual(resets, [{ type: 'reset', draft: true }]);
+  assert.deepEqual(resets, [{ type: 'reset' }], 'one plain reset, no draft flag');
   const lastReset = seen.indexOf(resets[0]);
+  const revisedAt = seen.findIndex(e => e.type === 'progress' && e.label === REVISED_2);
+  assert.ok(revisedAt >= 0 && revisedAt < lastReset, 'the revision step streams before the reset');
   assert.equal(seen.slice(lastReset + 1).filter(e => e.type === 'text').map(e => e.text).join(''), 'Nothing to add.');
+  // The live items equal the stored ones: the replaced text never became a note.
+  assert.deepEqual(liveItems(seen), reply.provenance.work.items);
+});
+
+test('a single unchecked amount streams no reset and stores no revision step', async t => {
+  const s = await demoStore(t);
+  const seen = [];
+  const { reply, requests } = await askScripted(s, [
+    [{ text: 'Let me look.', toolCalls: [{ name: 'list_accounts', args: {} }] }, { text: 'You owe $987,654 this year.' }],
+    [{ text: 'must not run' }],
+  ], { onEvent: e => seen.push(e) });
+  assert.equal(requests.length, 1);
+  assert.equal(reply.provenance.grounding.retried, false);
+  assert.equal(seen.some(e => e.type === 'reset'), false);
+  assert.deepEqual(reply.provenance.work.items, [
+    step(PROGRESS_START),
+    note('Let me look.'),
+    step(PROGRESS_LABELS.list_accounts),
+    step(PROGRESS_GROUNDING),
+  ]);
 });
 
 test('an engine restream reset carries no draft flag', async t => {

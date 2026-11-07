@@ -12,7 +12,7 @@ function where(conds) {
 export const tools = [
   {
     name: 'pnl_by_month',
-    description: 'Business profit and loss by month (YYYY-MM) and category, with a total per month. Optionally one entity and a month range.',
+    description: 'Business profit and loss by month (YYYY-MM) and category, with a total per month: use it for business income, expenses and profit, not household spending. Optionally one entity and a month range.',
     inputSchema: obj({ entity: { type: 'string' }, from: { type: 'string', pattern: MONTH }, to: { type: 'string', pattern: MONTH } }),
     scope: 'read',
     handler(args, ctx) {
