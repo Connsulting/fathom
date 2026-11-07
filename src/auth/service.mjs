@@ -5,7 +5,8 @@ import {
 import { HttpError } from '../api/http.mjs';
 import { validatePublicUrl } from '../config.mjs';
 import { getSetting } from '../store/db.mjs';
-import { createAuthStore, normalizeEmail, digest, validHandle, CHALLENGE_TTL } from './store.mjs';
+import { createAuthStore, normalizeEmail, digest, validHandle, CHALLENGE_TTL, TOKEN_PURPOSES } from './store.mjs';
+import { authLinkMail, passkeyAddedMail, accountRecoveredMail } from './mail.mjs';
 import { readCookie, setCookie, SESSION_COOKIE, CEREMONY_COOKIE } from './cookies.mjs';
 import { createClientAddressResolver } from './client-ip.mjs';
 
@@ -28,13 +29,6 @@ function passkeyName(value) {
   return value.trim();
 }
 
-export function enrollmentMail(config, user, token) {
-  const link = `${validatePublicUrl(config.publicUrl, { required: true })}/enroll#${token}`;
-  const text = `Create a Fathom passkey using this link. It expires in 20 minutes and can be used once.\n\n${link}\n\nIf you did not request this, ignore this email.`;
-  const html = `<p>Create a Fathom passkey. This link expires in 20 minutes and can be used once.</p><p><a href="${link}">Create a passkey</a></p><p>If you did not request this, ignore this email.</p>`;
-  return { link, message: { to: user.email, subject: 'Your Fathom passkey link', text, html } };
-}
-
 export function createAuthService({ db, config, transport, now = () => Date.now() }) {
   const store = createAuthStore(db, { now });
   const clientAddress = createClientAddressResolver(config.trustedProxies ?? []);
@@ -53,7 +47,7 @@ export function createAuthService({ db, config, transport, now = () => Date.now(
   }
   function rate(req, kind) {
     const address = clientAddress(req);
-    if (kind === 'recover' || kind === 'invite') {
+    if (kind === 'recover' || kind === 'invite' || kind === 'device') {
       store.rateLimit(`${kind}:global`, { limit: 120, windowMs: 10 * 60_000 });
       store.rateLimit(`${kind}:socket:${address}`, { limit: 60, windowMs: 10 * 60_000 });
     } else {
@@ -61,18 +55,24 @@ export function createAuthService({ db, config, transport, now = () => Date.now(
       store.rateLimit(`ceremony:socket:${address}`, { limit: 120 });
     }
   }
+  // Adding a passkey, or asking for an add-a-device link, with only a session needs a sign-in from
+  // the last 10 minutes. Both answer the same 403.
+  function requireRecentSignin(req) {
+    const session = currentSession(req);
+    const signedInAt = store.sessionSignedInAt(session);
+    if (signedInAt === null || now() - signedInAt >= RECENT_SIGNIN_TTL) throw recentSigninRequired();
+    return session;
+  }
   function registrationContext(req, body) {
     if (body.token !== undefined) {
       const token = store.token(body.token);
-      if (!token) throw expiredLink();
+      if (!token || !TOKEN_PURPOSES.includes(token.purpose)) throw expiredLink();
       const user = store.userRow(token.userId);
       if (!user || (token.purpose === 'invite' ? user.enrolled_at !== null : user.enrolled_at === null)) throw expiredLink();
       return { user, token: body.token, purpose: token.purpose, session: null };
     }
     const user = requireUser(req);
-    const session = currentSession(req);
-    const signedInAt = store.sessionSignedInAt(session);
-    if (signedInAt === null || now() - signedInAt >= RECENT_SIGNIN_TTL) throw recentSigninRequired();
+    const session = requireRecentSignin(req);
     return { user: store.userRow(user.id), token: null, purpose: null, session };
   }
   function recheckRegistration(req, body, context) {
@@ -100,8 +100,8 @@ export function createAuthService({ db, config, transport, now = () => Date.now(
     try { store.revokeToken(token); } catch { /* The process may already have closed its store. */ }
     console.error('fathom: auth mail failed', 'send_failed');
   }
-  async function sendLink(user, token) {
-    const { message } = enrollmentMail(config, user, token);
+  async function sendLink(user, token, purpose) {
+    const { message } = authLinkMail(config, user, token, purpose);
     try {
       if (!transport) throw new Error();
       await transport.send(message);
@@ -110,6 +110,8 @@ export function createAuthService({ db, config, transport, now = () => Date.now(
       throw new HttpError(503, 'authentication email unavailable');
     }
   }
+  // Recovery tells the user and every enrolled admin; any other add (invite, add-a-device link or
+  // in place) tells the user only.
   async function sendSecurityNotices(user, purpose) {
     const recovery = purpose === 'recovery';
     const recipients = new Set([user.email]);
@@ -118,15 +120,12 @@ export function createAuthService({ db, config, transport, now = () => Date.now(
         if (admin.role === 'admin' && admin.enrolledAt !== null) recipients.add(admin.email);
       }
     }
-    const subject = recovery ? 'Fathom account recovered' : 'Fathom passkey added';
-    const text = recovery
-      ? 'Fathom account recovery completed and a new passkey was added.'
-      : 'A new passkey was added to your Fathom account.';
-    const html = `<p>${text}</p>`;
     for (const to of recipients) {
       try {
         if (!transport) throw new Error();
-        await transport.send({ to, subject, text, html });
+        await transport.send(recovery
+          ? accountRecoveredMail({ to, account: user.email })
+          : passkeyAddedMail({ to, account: user.email }));
       } catch {
         console.error('security_notice_failed');
       }
@@ -186,6 +185,7 @@ export function createAuthService({ db, config, transport, now = () => Date.now(
           if (fresh.purpose === 'recovery') {
             db.prepare('DELETE FROM passkeys WHERE user_id = ?').run(fresh.user.id);
             store.revokeUserSessions(fresh.user.id);
+            db.prepare("DELETE FROM auth_tokens WHERE user_id = ? AND purpose = 'add-passkey'").run(fresh.user.id);
           }
         }
         const transports = Array.isArray(credential.transports)
@@ -193,8 +193,12 @@ export function createAuthService({ db, config, transport, now = () => Date.now(
         db.prepare('INSERT INTO passkeys (id, user_id, public_key, counter, transports, name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
           .run(credential.id, fresh.user.id, credential.publicKey, credential.counter, JSON.stringify(transports), name, now());
         db.prepare('UPDATE users SET enrolled_at = coalesce(enrolled_at, ?) WHERE id = ?').run(now(), fresh.user.id);
+        // Invite and recovery replace this browser's session. An add-a-device link never revokes a
+        // session: the browser keeps a live session of the same user, or gets a new one beside any other.
         let session = null;
-        if (fresh.token) {
+        if (fresh.purpose === 'add-passkey') {
+          if (store.session(currentSession(req))?.id !== fresh.user.id) session = store.createSession(fresh.user.id);
+        } else if (fresh.token) {
           store.revokeSession(currentSession(req));
           session = store.createSession(fresh.user.id);
         }
@@ -252,7 +256,7 @@ export function createAuthService({ db, config, transport, now = () => Date.now(
       const user = email ? store.findUser(email) : null;
       if (user?.enrolledAt != null) {
         const issued = store.createToken(user.id, 'recovery');
-        void Promise.resolve().then(() => sendLink(user, issued.token)).catch(() => {});
+        void Promise.resolve().then(() => sendLink(user, issued.token, 'recovery')).catch(() => {});
       }
       return { ...GENERIC_MAIL };
     },
@@ -282,7 +286,17 @@ export function createAuthService({ db, config, transport, now = () => Date.now(
         const user = store.inviteUser(body.email, { role: body.role });
         return { user, ...store.createToken(user.id, 'invite') };
       });
-      await sendLink(issued.user, issued.token);
+      await sendLink(issued.user, issued.token, 'invite');
+      return { ...GENERIC_MAIL };
+    },
+    // An add-a-device link goes to the session user's own address; the body is ignored.
+    async requestDeviceLink({ req }) {
+      const user = requireUser(req);
+      requireRecentSignin(req);
+      rate(req, 'device');
+      store.rateLimit(`device:user:${user.id}`, { limit: 10, windowMs: 20 * 60_000 });
+      const { token } = store.createToken(user.id, 'add-passkey');
+      await sendLink(user, token, 'add-passkey');
       return { ...GENERIC_MAIL };
     },
     setRole({ req, params, body }) {

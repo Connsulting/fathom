@@ -344,7 +344,7 @@ Money columns are dollars rounded to cents; JSON columns hold JSON text. The pro
 | `households` | `id` PK, always 1: the one household. Created on demand before the first user. |
 | `users` | `id` PK (UUID), `household_id` (references `households.id`), `email` (canonical, unique), `role` in admin, member, `user_handle` (random, the WebAuthn user handle), `created_at`, `enrolled_at` (NULL until the first passkey verifies) |
 | `passkeys` | `id` PK (credential id), `user_id` (references `users.id`, cascade delete), `public_key` BLOB, `counter`, `transports` JSON, `name`, `created_at` |
-| `auth_tokens` | SHA-256 digest of an enrollment or recovery token PK, `user_id` (cascade delete), purpose `invite` or `recovery`, expiry. Never the token. |
+| `auth_tokens` | SHA-256 digest of an enrollment, recovery or add-a-device token PK, `user_id` (cascade delete), purpose `invite`, `recovery` or `add-passkey`, expiry. Never the token. |
 | `auth_sessions` | SHA-256 digest of a session cookie PK, `user_id` (cascade delete), `signed_in_at` (wall-clock milliseconds of the sign-in or link registration that created it, NOT NULL), expiry. Never the cookie. |
 | `auth_challenges` | digest of the ceremony cookie PK, ceremony, `user_id` (NULL for sign-in), the token and session digests it was issued for (NULL when none), the challenge, expiry. Used once. |
 | `auth_rate_limits` | hashed bucket key PK, window, attempts. No raw email or address. |
@@ -430,6 +430,11 @@ Migration 018 (`018-accounts.sql`) creates `households`, `users`, `passkeys`, `a
 keys keep NULL). It changes no household data table. The household row is created lazily by the
 auth store before the first user, so the demo seed's empty-store check and clear order are
 unchanged (see Accounts and sessions).
+
+Migration 020 (`020-auth-token-add-passkey.sql`, `-- REBUILDS_TABLE`) rebuilds `auth_tokens` so its
+purpose CHECK allows `add-passkey` besides `invite` and `recovery`. Rows, the primary key, the
+cascade foreign key to `users`, `UNIQUE (user_id, purpose)`, the `auth_tokens_expiry` index and the
+`auth_challenges.token_hash` reference are preserved; `foreign_key_check` is clean before commit.
 
 Migration 019 (`019-rec-owner-goal-links.sql`) adds `recs.owner`, `recs.owner_override` and
 `recs.goal_kinds` with `ALTER TABLE ADD COLUMN` (constant defaults and CHECKs, no rebuild).
@@ -689,7 +694,7 @@ known path with the wrong method is 405; signed out, both are 401. Every action 
 | `GET /api/identity` | | `{identity: {id, email, name, login, householdId, role} or null}`. The signed-in user (`name` and `login` are the email). Always `null` on a demo store. |
 | `GET /signin` | | Public page: `web/auth/index.html` (sign in with a passkey, email recovery link). Loads only `/auth/auth.js`, `/auth/auth.css` and `/favicon.svg`; never the scenario. |
 | `GET /enroll` | | Public page: the same file. Reads the token from the `#` fragment of an emailed link, removes it from history at once, and creates a passkey. |
-| `GET /account` | | Signed-in page: the same file. Passkeys (add, revoke) and sign out. |
+| `GET /account` | | Signed-in page: the same file. Passkeys (add, revoke), emailing an add-a-device link, and sign out. |
 | `GET /admin/users` | | Admin page: the same file. People, roles, invitations, removal and passkey revocation. A member gets a 403 page. |
 | `GET /api/auth/session` | | `{identity, demo}`. Public; `identity` as for `GET /api/identity` or null; no household data. A demo store answers `{identity: null, demo: true}`. Every other auth and admin route is 404 on a demo store. |
 | `POST /api/auth/signin/options` | `{}` | `{options}`: WebAuthn request options for a discoverable sign-in (no `allowCredentials`, `userVerification: required`). Sets the ceremony cookie. Public, rate limited (429). |
@@ -698,6 +703,7 @@ known path with the wrong method is 405; signed out, both are 401. Every action 
 | `POST /api/auth/register/verify` | `{response, token?, name?}` | `{identity}` and the session cookie. 400 when verification fails or `clientExtensionResults.credProps.rk` is not exactly `true`; 410 for an expired or used link; without a token, the same 403 `recent_signin_required` as options, checked again after verification. A recovery link replaces the user's passkeys and sessions only here, after the new passkey verifies. After the commit it sends the security notice (see Accounts and sessions); the response is the same whether that send succeeds. |
 | `POST /api/auth/recover` | `{email}` | The same fixed 200 body for every address, known or not, valid or not. An enrolled account gets a recovery email; nothing else does. Rate limited (429). |
 | `POST /api/auth/signout` | `{}` | 200. Deletes the current session and clears the cookie. |
+| `POST /api/auth/passkeys/link` | `{}` (ignored) | 200 `{sent: true}`. Signed in only (401 signed out); the same recent sign-in rule as adding a passkey (403 `recent_signin_required` at 10 minutes or older). Issues a single-use `add-passkey` token for the session user only, valid 20 minutes, and emails the `/enroll#<token>` link to that user's own address; no address is taken from the request. Rate limited (429): `device` global 120 and per client 60 per 10 minutes, and 10 per user per 20 minutes. A failed send revokes the token and answers 503. The Origin guard applies as for every POST. |
 | `GET /api/auth/passkeys` | | `{passkeys: [{id, name, createdAt, transports}]}` for the signed-in user; never key bytes or counters. |
 | `POST /api/auth/passkeys/:id/revoke` | `{}` | 200. Deletes one of the signed-in user's passkeys and every session of that user, the current one included. The last passkey may be revoked. The user's MCP keys stay live. |
 | `GET /api/admin/users` | | `{users}`: every user with `enrolledAt` (NULL while the invitation is pending). Admins only, 403 for members. |
@@ -848,7 +854,9 @@ Passkeys.
    `recent_signin_required` and a fixed message to sign in again; nothing is stored. Account shows a
    Sign in again link to `/signin`, which accepts a new sign-in from a signed-in browser; the person
    then comes back to Account. Enrollment and recovery links carry their own token and need no prior
-   session, so the rule does not apply to them.
+   session, so the rule does not apply to them. The add-a-device link is the one exception in
+   kind: it is requested from a recent session (`POST /api/auth/passkeys/link`), but redeeming it
+   needs no session.
 
 Sessions and challenges.
 
@@ -867,7 +875,7 @@ Sessions and challenges.
 5. Clocks are wall time. Chromium treats `http://localhost` as secure, so local tests get the
    Secure cookie over plain HTTP.
 
-Enrollment and recovery links.
+Enrollment, recovery and add-a-device links.
 
 1. A link is `<FATHOM_PUBLIC_URL origin>/enroll#<token>`: 32 random bytes, base64url, in the
    fragment only, so it never reaches a request line, a server log or a Referer. The page reads it
@@ -892,7 +900,8 @@ Enrollment and recovery links.
    Bucket keys are hashed. Anonymous options generation is capped the same way. Invitations have
    their own `invite` global and per-client buckets with the recovery limits (120 a window
    globally, 60 per client, 10-minute windows), separate from recovery's, so one never spends the
-   other's quota; recovery keeps its per-email bucket and generic answer.
+   other's quota; recovery keeps its per-email bucket and generic answer. Add-a-device requests
+   have their own `device` buckets (see item 8).
 6. The client address comes from `createClientAddressResolver` in `src/auth/client-ip.mjs` (on
    `proxy-addr`), built from `FATHOM_TRUSTED_PROXIES`. That setting is the `X-Forwarded-For` trust
    boundary. When the socket address is not in a trusted CIDR, `X-Forwarded-For` is ignored and the
@@ -904,6 +913,28 @@ Enrollment and recovery links.
 7. Mail needs a real transport in production (`FATHOM_EMAIL_TRANSPORT` and its settings; the
    existing `FATHOM_EMAIL_TO` setup is assumed). `dev` writes the message, link included, to
    `outbox/` in the data directory.
+8. Add-a-device: a signed-in user with a recent sign-in requests `POST /api/auth/passkeys/link`,
+   which issues an `add-passkey` token for that user only and emails the link to the user's own
+   address. Limits: `device` global 120 and per client 60 per 10 minutes, and 10 per user per 20
+   minutes.
+9. Opening the link on another device runs the same `/enroll` page and register options and verify
+   with the token. It adds a passkey and never deletes passkeys or sessions. The redeeming browser
+   is signed in: its live session of the same user is kept, else a new session is created. The
+   token works once; expired or used is 410. A pending (not enrolled) user cannot use one.
+10. There is one pending token per user and purpose, so a pending `add-passkey` link does not
+    affect invitation or recovery links, and the reverse. Completing recovery deletes the user's
+    pending `add-passkey` link together with the old passkeys and sessions.
+11. A failed send revokes the token and answers 503, as for the other link mails.
+
+Auth mail layout.
+
+1. `src/auth/mail.mjs` builds every auth email from one email-safe HTML layout plus a matching
+   plain-text part: tables, inline styles, 560px wide, a text wordmark, no images, scripts or
+   tracking, a light palette with the Horizon accent, and a dark-mode media query. Interpolated
+   values are escaped.
+2. The link emails ("Your Fathom invitation", "Your Fathom recovery link", "Add a Fathom passkey
+   on another device") carry one button, the expiry and single-use note, and the plain URL as a
+   fallback. The layout emits no URL when no button is given.
 
 Security notices.
 
@@ -911,12 +942,13 @@ Security notices.
    the configured transport, outside the transaction and before the response returns. These
    notices never go through `email_sends`, which records financial mail only, and add no durable
    queue or retry.
-2. `Fathom passkey added` goes to the user when an invitation link or a signed-in session adds a
-   passkey.
+2. `Fathom passkey added` goes to the user when an invitation link, an add-a-device link or a
+   signed-in session adds a passkey.
 3. `Fathom account recovered` goes to the recovered user and to every enrolled admin, each address
    once. It says recovery completed and a new passkey was added.
 4. Each notice is a separate message to one recipient, so no recipient sees another's address.
-   Notices carry no link, token, session or key material.
+   Notices carry no link, token, session or key material, add-a-device redemptions included. They
+   use the same mail layout as the link emails, without the button.
 5. A failed send logs only the fixed code `security_notice_failed`, never the address or the error.
    The new passkey and session stay in place and the response is unchanged.
 
