@@ -7,7 +7,7 @@
 //   (three rounds for "show your work", below)
 // The text round is the canned demo answer for a suggested or rec question (by id or by exact
 // free text), the pack's canned what-if answer, or a summary sentence whose number comes from the
-// household_summary result. Numbers in the owner's free text are echoed back, so an invented
+// household.summary result. Numbers in the owner's free text are echoed back, so an invented
 // amount reaches grounding the way a careless model would repeat it.
 // When `propose` is set (the proposal tool is offered), free text that is an explicit command
 // (it starts with start, complete, dismiss, snooze or reopen, optionally after "please")
@@ -18,7 +18,7 @@
 // and the text round says the owner can save it below. Its amounts are not echoed.
 // Free text matching "show your work" (word bounded, any case) scripts three rounds instead, the
 // way a live model narrates between tool calls: "Let me start with your household summary." with
-// the household_summary call, "Now the details this rests on." with the remaining calls (list_goals
+// the household.summary call, "Now the details this rests on." with the remaining calls (goals.list
 // when there are none), then the text round. That interim text exercises the work block.
 
 import { findQuestion, matchQuestion, recForKey, isThreadKey } from './questions.mjs';
@@ -116,19 +116,19 @@ export function fakeAnswerScript({ scenario, key, questionId, text, whatIfPack, 
   }
   const body = paragraphs.map(stripTags).filter(Boolean).join('\n\n');
   const keys = [...new Set([...body.matchAll(FIGURE_TOKEN)].map(m => m[1]))];
-  const toolCalls = [{ name: 'household_summary', args: {} }];
-  if (keys.length) toolCalls.push({ name: 'get_figures', args: { keys } });
+  const toolCalls = [{ name: 'household', args: { operation: 'summary', } }];
+  if (keys.length) toolCalls.push({ name: 'household', args: { operation: 'figures',  keys } });
   const rec = recForKey(scenario, key);
-  if (rec) toolCalls.push({ name: 'get_recommendation', args: { id: rec.id } });
-  if (command) toolCalls.push({ name: 'set_recommendation_status', args: { id: command.id, status: { start: 'doing', complete: 'done', dismiss: 'dismissed', snooze: 'snoozed', reopen: 'proposed' }[command.action] } });
-  if (goal) toolCalls.push({ name: 'create_goal', args: goal });
-  if (preference) toolCalls.push({ name: 'remember_preference', args: { text: preference, evidence: preference } });
-  if (date) toolCalls.push({ name: 'record_household_fact', args: { key: 'household.expectedDate', value: date, evidence: text } });
+  if (rec) toolCalls.push({ name: 'recommendations', args: { operation: 'detail',  id: rec.id } });
+  if (command) toolCalls.push({ name: 'act_on_recommendation', args: { operation: 'status',  id: command.id, status: { start: 'doing', complete: 'done', dismiss: 'dismissed', snooze: 'snoozed', reopen: 'proposed' }[command.action] } });
+  if (goal) toolCalls.push({ name: 'update_goal', args: { operation: 'create', ...goal } });
+  if (preference) toolCalls.push({ name: 'update_preferences', args: { operation: 'remember',  text: preference, evidence: preference } });
+  if (date) toolCalls.push({ name: 'answer', args: { operation: 'fact',  key: 'household.expectedDate', value: date, evidence: text } });
   if (typeof text === 'string' && SHOW_WORK.test(text)) {
     const rest = toolCalls.slice(1);
     return [
       { text: SHOW_NOTE_1, toolCalls: [toolCalls[0]] },
-      { text: SHOW_NOTE_2, toolCalls: rest.length ? rest : [{ name: 'list_goals', args: {} }] },
+      { text: SHOW_NOTE_2, toolCalls: rest.length ? rest : [{ name: 'goals', args: { operation: 'list', } }] },
       { text: body },
     ];
   }
