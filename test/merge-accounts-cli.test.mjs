@@ -46,6 +46,30 @@ test('operator dry run is read only, apply-sure merges only sure and normal Undo
     assert.equal(s.db.prepare('SELECT count(*) n FROM accounts').get().n,4);
   } finally {s.close();}
 });
+test('AC3: apply-sure fills the institution and last 4 of an already merged survivor, and a dry run does not', async () => {
+  const s = await realStore();
+  try {
+    const sure = await seedDuplicate(s, { sure: true });
+    const env = childEnv({ FATHOM_DATA: s.dataDir, FATHOM_DATA_KEY_FILE: s.keyFile, FATHOM_CLOCK: '2032-03-10', FATHOM_ENGINE: 'off' });
+    const first = spawnSync(process.execPath, ['scripts/merge-accounts.mjs', '--apply-sure'], { env, encoding: 'utf8' });
+    assert.equal(first.status, 0, first.stderr);
+    assert.equal(JSON.parse(first.stdout).merged, 1);
+    assert.equal(s.db.prepare('SELECT 1 FROM accounts WHERE id=?').get(sure.own), undefined, 'precondition: the pair is merged');
+    // An older merge: the survivor lost what the merge now fills.
+    s.db.prepare('UPDATE accounts SET inst=NULL, mask=NULL WHERE id=?').run(sure.keep);
+
+    const dry = spawnSync(process.execPath, ['scripts/merge-accounts.mjs'], { env, encoding: 'utf8' });
+    assert.equal(dry.status, 0, dry.stderr);
+    let survivor = s.db.prepare('SELECT inst, mask FROM accounts WHERE id=?').get(sure.keep);
+    assert.deepEqual({ ...survivor }, { inst: null, mask: null }, 'a dry run writes nothing');
+
+    const apply = spawnSync(process.execPath, ['scripts/merge-accounts.mjs', '--apply-sure'], { env, encoding: 'utf8' });
+    assert.equal(apply.status, 0, apply.stderr);
+    assert.equal(JSON.parse(apply.stdout).merged, 0, 'nothing left to merge');
+    survivor = s.db.prepare('SELECT inst, mask FROM accounts WHERE id=?').get(sure.keep);
+    assert.deepEqual({ ...survivor }, { inst: 'Example Bank', mask: '6294' });
+  } finally { s.close(); }
+});
 test('an unmigrated real store refuses platform_migration_required for dry run and apply, unchanged', async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'fathom-legacy-'));
   try {
