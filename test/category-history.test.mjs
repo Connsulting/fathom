@@ -11,6 +11,7 @@ import { guessCategories } from '../src/categories/guess.mjs';
 import { categoryQuestions, createJev, JEV_MODEL } from '../src/categories/jev.mjs';
 import { jevEvidence } from '../src/categories/policy.mjs';
 import { answerItem, pendingItems, autoInfo, reopenItem } from '../src/ingest/confirm.mjs';
+import { spendingInputs } from '../src/calc/targets.mjs';
 
 const accounts = [{id:'a',kind:'checking'}, {id:'b',kind:'business'}, {id:'c',kind:'card'}, {id:'d',kind:'savings'}];
 const row = (id, patch={}) => ({id,account_id:'a',date:`2032-01-${String(id).padStart(2,'0')}`,description:'Cobalt Market',amount:-36,...patch});
@@ -171,4 +172,17 @@ test('business draws keep personal income while business-card payments stay tran
   assert.equal(resolved.get(draw).layer,'uncategorized');
   assert.equal(db.prepare('SELECT count(*) AS n FROM transaction_category_corrections WHERE transaction_id=?').get(draw).n,0);
   assert.equal(resolved.get(card).bucket,'transfer');
+});
+
+test('undoing a learned business category restores spending through the calculator boundary',async t=>{
+  const db=store(t);
+  for(const r of history()) insert(db,{...r,category:'Business',parser:'aggregator'});
+  for(let month=2;month<=11;month++) insert(db,row(1,{date:`2032-${String(month).padStart(2,'0')}-15`,description:'Synthetic groceries',amount:-11,category:'Groceries',parser:'aggregator'}));
+  const target=insert(db,row(8,{date:'2032-10-20'}));
+  await guessCategories(db,off);
+  const spend=()=>spendingInputs({...loadCategoryInputs(db),clock:'2032-11-30'});
+  assert.ok(!spend().spendIds.includes(target));
+  const item=db.prepare("SELECT id FROM confirm_items WHERE kind='transaction_category' AND subject=?").get(String(target));
+  reopenItem(db,item.id);
+  assert.ok(spend().spendIds.includes(target));
 });
