@@ -28,7 +28,7 @@ import { stripSources, markdownBlocks } from '../src/shared/answer-text.mjs';
 import { ROOT, tempDb } from './helpers/server.mjs';
 import { writeSyntheticPack, ALWAYS } from './helpers/packs.mjs';
 
-const ACTIVE_DEMO_PACKS = ['advanced-retirement', 'kids-dependents', 's-corp-owner', 'self-employed-partnership', 'virginia-resident', 'w2-benefits'];
+const ACTIVE_DEMO_PACKS = ['advanced-retirement', 'kids-dependents', 's-corp-owner', 'self-employed-partnership', 'spending-and-obligations', 'virginia-resident', 'w2-benefits'];
 const UNVERIFIED = '<span class="fx-unverified" title="Not found in your data or tool results">';
 const INVENTED = '$987,654';
 // An Ask thread key: the answerer needs no stored row, and a new key has no history.
