@@ -582,7 +582,8 @@ function suggestHtml(s) {
   const amt = (k) => (k ? figHtml(k, { k: true }) : '');
   const nAccts = arr(s.track?.accounts).length;
   const tracks = !s.track ? ', tracks nothing automatically: contributions are not measured yet'
-    : s.trackLabel ? `, tracks ${T(s.trackLabel)}` : `, tracks ${plural(nAccts, 'account')}`;
+    : s.trackLabel && nAccts <= 3 ? `, tracks ${T(s.trackLabel)}`
+      : `, tracks ${plural(nAccts, s.kind === 'independence' ? 'investment account' : s.kind === 'cushion' ? 'cash account' : 'account')}`;
   let head;
   if (s.covered) {
     head = `Already covered: ${f.current ? `${amt(f.current)} against ${amt(f.target)}` : amt(f.target)}`;
