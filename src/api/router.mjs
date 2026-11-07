@@ -182,7 +182,7 @@ export function createHandler({ db, config, answerer, engine = null, packs = nul
       const read = req.method === 'GET' || req.method === 'HEAD';
       const candidate = compiled.find(r => (r.method === req.method || (req.method === 'HEAD' && r.method === 'GET')) && matchPath(r.parts, segments));
       route = candidate || null;
-      const publicPage = read && ['/signin', '/enroll', '/auth/auth.js', '/auth/auth.css', '/favicon.svg'].includes(path);
+      const publicPage = read && ['/signin', '/enroll', '/auth/auth.js', '/auth/auth.css', '/auth/return-path.js', '/favicon.svg'].includes(path);
       let identity = gated ? identityOf(req, authService) : null;
       if (gated && !candidate?.public && !publicPage && !identity) {
         sendUnauthorized(req, res, isApi);
