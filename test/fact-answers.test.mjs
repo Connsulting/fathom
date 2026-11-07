@@ -5,6 +5,7 @@ import { planRun } from './helpers/plan.mjs';
 import { answerFacts, FactAnswerError } from '../src/facts/answers.mjs';
 import { getFacts } from '../src/store/facts.mjs';
 import { buildScenario } from '../src/scenario/build.mjs';
+import { recAction } from '../src/api/handlers.mjs';
 
 const s = scratch('fathom-question-');
 after(() => s.cleanup());
@@ -71,4 +72,31 @@ test('planning failure retains the answers and is reported for retry', async () 
   await assert.rejects(answerFacts(db, [{ key: 'business.cashBasis', value: false }], { now, replan: async () => { throw new Error('unavailable'); } }), /saved.*planning/i);
   assert.equal(getFacts(db)['business.cashBasis'], false);
   await answerFacts(db, [{ key: 'business.cashBasis', value: false }], { now, replan: async () => {} });
+});
+
+test('college accounts recognized by name accept answers and produce deduction room', async () => {
+  const db = await s.store({ variant: { facts: { 'accounts.va529': undefined } } });
+  const id = db.prepare("SELECT id FROM accounts WHERE kind = '529'").get().id;
+  db.prepare("UPDATE accounts SET kind = 'taxable', name = '529 College Savings' WHERE id = ?").run(id);
+  await planRun(db);
+  await answerFacts(db, [{ key: 'accounts.va529', value: { [id]: { virginiaPlan: true, ownerAge70Plus: false, carryforward: 0 } } }], { now, replan: () => planRun(db), recId: 'va529' });
+  const scenario = buildScenario(db);
+  assert.equal(scenario.recs.find(r => r.id === 'va529').question, undefined);
+  assert.ok(scenario.fig['va529.deductionLeft'].v > 0);
+});
+
+test('supplemental catch-up answers preserve the action, checklist and owner completion', async () => {
+  const db = await s.store({ variant: { facts: { 'household.ownerAge': 55 } } });
+  await planRun(db);
+  const rec = buildScenario(db).recs.find(r => r.id === 'year-end-retirement');
+  assert.equal(rec.question.primary, false);
+  assert.equal(rec.question.fields.length, 1);
+  const ctx = { db, config: { clock: '2026-11-05' }, params: { id: rec.id }, body: { action: 'task', arg: 0 } };
+  assert.equal(recAction(ctx).scenario.recs.find(r => r.id === rec.id).tasks[0].done, true);
+  ctx.body = { action: 'complete' };
+  assert.equal(recAction(ctx).scenario.recs.find(r => r.id === rec.id).status, 'done');
+  await answerFacts(db, [{ key: 'retirement.priorYearFicaWages', value: { owner: 50000 } }], { now, replan: () => planRun(db), recId: rec.id });
+  const after = buildScenario(db).recs.find(r => r.id === rec.id);
+  assert.equal(after.status, 'done');
+  assert.equal(after.tasks[0].done, true);
 });
