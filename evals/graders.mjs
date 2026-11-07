@@ -42,7 +42,9 @@ export function numericFigures(text) {
     const n = Number(m[0].replace(/[^\d.+-]/g, '')) * scaleOf(m[0]);
     if (Number.isFinite(n)) values.push({ text: m[0].trim(), value: n,
       money: /\$/.test(m[0]) || /^\s*dollars?\b/i.test(clean.slice(m.index + m[0].length)),
-      percent: /%|percent/i.test(m[0]) });
+      percent: /%|percent/i.test(m[0]),
+      abbrev: /(?:^|[^a-z])[kmb](?![a-z])/i.test(m[0]) && !/(?:thousand|million|billion)/i.test(m[0]),
+      scale: scaleOf(m[0]), words: false });
   }
   for (const m of clean.matchAll(wordPattern)) {
     const after = clean.slice(m.index + m[0].length);
@@ -55,7 +57,7 @@ export function numericFigures(text) {
       else if (word === 'hundred') part = (part || 1) * 100;
       else if (scales[word]) { sum += (part || 1) * scales[word]; part = 0; }
     }
-    values.push({ text: m[0], value: sum + part, money: /^\s*dollars?\b/i.test(after), percent: /^\s*(?:%|percent)\b/i.test(after) });
+    values.push({ text: m[0], value: sum + part, money: /^\s*dollars?\b/i.test(after), percent: /^\s*(?:%|percent)\b/i.test(after), abbrev: false, scale: 1, words: true });
   }
   return values;
 }
@@ -99,6 +101,46 @@ function derivation(value, numbers, money) {
   }
   return null;
 }
+function arrayLengths(value, out = []) {
+  if (Array.isArray(value)) { out.push(value.length); value.forEach(v => arrayLengths(v, out)); }
+  else if (value && typeof value === 'object') Object.values(value).forEach(v => arrayLengths(v, out));
+  return out;
+}
+const magnitudes = v => [v, Math.abs(v)];
+const exactHit = (n, v) => close(v, n.value, n.money) || (n.percent && close(v, n.value / 100));
+function droppedCents(n, v) {
+  if (n.words || n.abbrev || n.percent || !n.money) return false;
+  if (/\.\d*[1-9]/.test(n.text)) return false;
+  return magnitudes(v).some(t => Math.abs(t - n.value) < 1 && Math.abs(t - n.value) > 0.005);
+}
+function listCount(n, calls) {
+  if (!n.words || n.money || n.percent || n.value < 1 || n.value > 20 || !Number.isInteger(n.value)) return false;
+  return calls.some(c => !c.isError && arrayLengths(c.result).includes(n.value));
+}
+function abbrevRounded(n, numbers) {
+  if (!n.abbrev) return false;
+  const fraction = n.text.replace(/[^\d.]/g, '').split('.')[1];
+  const unit = n.scale / 10 ** (fraction ? fraction.length : 0);
+  if (!unit) return false;
+  return numbers.some(v => magnitudes(v).some(t => {
+    const rounded = Math.round(t / unit) * unit;
+    return close(rounded, n.value, true) && Math.abs(t - n.value) > 0.005;
+  }));
+}
+function coarseRounded(n, numbers) {
+  if (n.words || n.percent || n.abbrev) return false;
+  return numbers.some(v => magnitudes(v).some(t => {
+    if (Math.abs(t - n.value) <= 1) return false;
+    for (const unit of [10, 100, 1000, 10000, 100000, 1e6, 1e9]) {
+      const rounded = Math.round(t / unit) * unit;
+      if (close(rounded, n.value, true) && Math.abs(t - rounded) <= unit / 2 + 1e-6) return true;
+    }
+    return false;
+  }));
+}
+function inContext(n, contextNumbers) {
+  return contextNumbers.some(v => exactHit(n, v) || (!n.percent && close(Math.abs(v), n.value, n.money)));
+}
 export function gradeFigures(text, calls, { figures = {}, contextNumbers = [] } = {}) {
   const numbers = evidenceNumbers(calls);
   const violations = [];
@@ -110,12 +152,25 @@ export function gradeFigures(text, calls, { figures = {}, contextNumbers = [] } 
     else tokenFigures.push({ text: token, value: figures[key] });
     return ' ';
   });
-  for (const n of numericFigures(cleaned)) if (!numbers.some(v => close(v, n.value, n.money) || (n.percent && close(v, n.value / 100)))) {
-    const arithmetic = derivation(n.value, numbers, n.money);
-    violations.push({ ...n, kind: arithmetic ? 'self-computed' : contextNumbers.some(v => close(v, n.value)) ? 'context-only' : 'unsourced', ...(arithmetic ? { arithmetic } : {}) });
+  for (const n of numericFigures(cleaned)) {
+    const exact = numbers.some(v => exactHit(n, v) || (!n.percent && magnitudes(v).some(t => close(t, n.value, n.money))));
+    if (exact && !(n.words && !listCount(n, calls))) continue;
+    if (!exact && (droppedCents(n, numbers.find(v => droppedCents(n, v)) ?? NaN) || listCount(n, calls))) continue;
+    let kind = 'unsourced';
+    let arithmetic = null;
+    if (n.words) kind = 'spelled_out';
+    else if (abbrevRounded(n, numbers) || coarseRounded(n, numbers)) kind = 'rounded';
+    else if (inContext(n, contextNumbers)) kind = 'context-only';
+    else {
+      arithmetic = derivation(n.value, numbers, n.money);
+      if (arithmetic) kind = 'self-computed';
+    }
+    violations.push({ ...n, kind, ...(arithmetic ? { arithmetic } : {}) });
   }
-  return { ok: violations.length === 0, unsourced: violations, selfComputed: violations.filter(v => v.kind === 'self-computed'),
-    contextOnly: violations.filter(v => v.kind === 'context-only'), evidence: numbers, tokenFigures };
+  const ofKind = kind => violations.filter(v => v.kind === kind);
+  return { ok: violations.length === 0, unsourced: ofKind('unsourced'), selfComputed: ofKind('self-computed'),
+    rounded: ofKind('rounded'), spelledOut: ofKind('spelled_out'), contextOnly: ofKind('context-only'),
+    evidence: numbers, tokenFigures };
 }
 export function gradeLength(text, maxWords) {
   const words = String(text).trim().split(/\s+/).filter(Boolean).length;
