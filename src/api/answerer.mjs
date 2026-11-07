@@ -557,7 +557,7 @@ function groundMasked(masked, { scenario, toolResults, data, dataLabels, account
     });
     for (const d of dates) {
       const hit = dated.find(({ parts }) => parts.month === d.month && parts.day === d.day
-        && (d.year === null || parts.year === null || parts.year === d.year));
+        && (d.year === null || parts.year === d.year));
       if (hit) literals.push({ text: d.text, index: d.index, source: hit.source(), date: true });
       else violations.push({ text: d.text, index: d.index, reason: 'date absent from sources', date: true });
     }
