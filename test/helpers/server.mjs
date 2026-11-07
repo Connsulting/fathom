@@ -3,14 +3,18 @@
 
 import { spawn } from 'node:child_process';
 import { mkdtemp } from 'node:fs/promises';
+import { existsSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import net from 'node:net';
+import { randomBytes } from 'node:crypto';
 import http from 'node:http';
 
 export const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 export const DB_FILE = 'fathom.sqlite';
+// Account rows (users, households, memberships, passkeys, auth_*) live here, beside the store.
+export const PLATFORM_FILE = 'platform.sqlite';
 export const SERVER_TIMEOUT = 30000;
 
 const running = new Set();
@@ -101,7 +105,7 @@ function listeningOn(text, port) {
 
 // Start `node src/server.mjs` (or `npm start` with npm: true) and wait for the child's own
 // `fathom listening on` line naming its port, then GET /healthz. Fails if the child exits first.
-// Returns { baseUrl, port, dataDir, dbFile, child, output(), stop() }.
+// Returns { baseUrl, port, dataDir, dbFile, platformFile, child, output(), stop() }.
 export async function spawnServer({ dataDir, env = {}, npm = false, timeoutMs = 20000 } = {}) {
   dataDir = dataDir || await tempDir();
   const port = await freePort();
@@ -127,7 +131,7 @@ export async function spawnServer({ dataDir, env = {}, npm = false, timeoutMs = 
       await waitExit(child, 5000);
     }
   };
-  return { baseUrl, port, dataDir, dbFile: join(dataDir, DB_FILE), child, output, stop, ...sessionClient(baseUrl) };
+  return { baseUrl, port, dataDir, dbFile: join(dataDir, DB_FILE), platformFile: join(dataDir, PLATFORM_FILE), child, output, stop, ...sessionClient(baseUrl) };
 }
 
 // Run fn(server) against a fresh server and always stop it.
@@ -213,15 +217,32 @@ export async function getScenario(baseUrl) {
   return r.json;
 }
 
-// Trusted fixture for non-WebAuthn tests, using only this test's synthetic database.
-export async function createSessionFixture(db, { email = 'admin@example.test', role = 'admin', now = () => Date.now() } = {}) {
+// Trusted fixture for non-WebAuthn tests, using only this test's synthetic platform database.
+// `platform` is an open platform DB handle or a data dir holding platform.sqlite. The user is
+// built only through the auth store: an invitation to the served household, consumed by the
+// invitee, then enrollment. An existing active member is reused with its role unchanged.
+// Returns { user, householdId, role, token, expiresAt, cookie }.
+export async function createSessionFixture(platform, { email = 'admin@example.test', role = 'admin', now = () => Date.now() } = {}) {
+  if (typeof platform === 'string') {
+    const handle = await openPlatformStore(join(platform, PLATFORM_FILE));
+    try { return await createSessionFixture(handle, { email, role, now }); } finally { handle.close(); }
+  }
   const { createAuthStore } = await src('src/auth/store.mjs');
-  const store = createAuthStore(db, { now });
-  const invited = store.findUser(email) ?? store.inviteUser(email, { role });
-  if (invited.enrolledAt == null) db.prepare('UPDATE users SET enrolled_at = ? WHERE id = ?').run(now(), invited.id);
-  const user = store.getUser(invited.id);
+  const store = createAuthStore(platform, { now });
+  const household = store.servedHousehold();
+  if (!household || typeof household.id !== 'string' || !household.id) throw new Error('the platform has no served household');
+  let user = store.findUser(email);
+  let membership = user ? store.membership(user.id, household.id) : null;
+  if (membership?.status !== 'active') {
+    const invited = store.invite(household.id, email, { role });
+    store.consumeInvitation(invited.token, invited.user.id);
+    user = invited.user;
+    membership = store.membership(user.id, household.id);
+  }
+  if (store.getUser(user.id).enrolledAt == null) store.markEnrolled(user.id);
+  user = store.getUser(user.id);
   const { token, expiresAt } = store.createSession(user.id);
-  return { user, token, expiresAt, cookie: `__Host-fathom-session=${token}` };
+  return { user, householdId: household.id, role: membership.role, token, expiresAt, cookie: `__Host-fathom-session=${token}` };
 }
 
 export function sessionClient(baseUrl, session = null) {
@@ -242,19 +263,19 @@ export function sessionClient(baseUrl, session = null) {
 export async function spawnAuthenticatedServer(options = {}) {
   const server = await spawnServer(options);
   try {
-    const db = await openStore(server.dbFile);
+    const platform = await openPlatformStore(server.platformFile);
     let session;
-    try { session = await createSessionFixture(db, options.session); } finally { db.close(); }
+    try { session = await createSessionFixture(platform, options.session); } finally { platform.close(); }
     const stop = server.stop;
     return {
       ...server, session, ...sessionClient(server.baseUrl, session),
       async stop() {
         await stop();
-        const db = await openStore(server.dbFile);
+        const platform = await openPlatformStore(server.platformFile);
         try {
           const { createAuthStore } = await src('src/auth/store.mjs');
-          createAuthStore(db).revokeSession(session.token);
-        } finally { db.close(); }
+          createAuthStore(platform).revokeSession(session.token);
+        } finally { platform.close(); }
       },
     };
   } catch (err) { await server.stop(); throw err; }
@@ -265,20 +286,87 @@ export async function withAuthenticatedServer(options, fn) {
   try { return await fn(server); } finally { await server.stop(); }
 }
 
-export async function serveAppFixture({ db, config, authenticated = false, ...context }) {
+// In-process router over `db`. The handler gets a platform DB: `platform` when given, else the
+// platform.sqlite beside the store in config.dataDir, else a disposable synthetic instance whose
+// served household matches the store's mode (for stores built without createInstance).
+export async function serveAppFixture({ db, platform, config, authenticated = false, ...context }) {
   const port = await freePort();
   const baseUrl = `http://localhost:${port}`;
   const { createHandler } = await src('src/api/router.mjs');
   const { getSetting } = await src('src/store/db.mjs');
   const fixtureConfig = { ...config, port, publicUrl: baseUrl };
-  const session = authenticated && getSetting(db, 'mode', null) !== 'demo' ? await createSessionFixture(db) : null;
-  const server = http.createServer(createHandler({ db, config: fixtureConfig, ...context }));
-  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); });
+  const owned = platform ? null : await fixturePlatform(db, config);
+  const handle = platform ?? owned.platform;
+  let server;
+  try {
+    const session = authenticated && getSetting(db, 'mode', null) !== 'demo' ? await createSessionFixture(handle) : null;
+    server = http.createServer(createHandler({ db, platform: handle, config: fixtureConfig, ...context }));
+    await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); });
+    return {
+      baseUrl, session, config: fixtureConfig, server, platform: handle,
+      ...sessionClient(baseUrl, session),
+      close: () => new Promise(resolve => { server.close(resolve); server.closeAllConnections(); }).then(() => owned?.close()),
+    };
+  } catch (err) {
+    owned?.close();
+    throw err;
+  }
+}
+
+async function fixturePlatform(db, config) {
+  const file = config?.dataDir ? join(config.dataDir, PLATFORM_FILE) : null;
+  if (file && existsSync(file)) {
+    const { openPlatform } = await src('src/platform/db.mjs');
+    const platform = openPlatform(file);
+    return { platform, close: () => platform.close() };
+  }
+  const { getSetting } = await src('src/store/db.mjs');
+  const { createInstance } = await src('src/platform/db.mjs');
+  const dir = await tempDir('fathom-platform-');
+  const instance = createInstance(dir, { mode: getSetting(db, 'mode', null) === 'demo' ? 'demo' : 'real', init: () => {} });
+  instance.db.close();
   return {
-    baseUrl, session, config: fixtureConfig, server,
-    ...sessionClient(baseUrl, session),
-    close: () => new Promise(resolve => { server.close(resolve); server.closeAllConnections(); }),
+    platform: instance.platform,
+    close() {
+      try { instance.platform.close(); } catch { /* already closed */ }
+      rmSync(dir, { recursive: true, force: true });
+    },
   };
+}
+
+// A fresh instance (platform.sqlite with one served household, and a migrated fathom.sqlite whose
+// store_identity names it) in a new temp dir, built by src/platform/db.mjs createInstance.
+// Returns { db, platform, householdId, dataDir, file, platformFile, close() }.
+export async function tempInstance({ mode = 'real', init = () => {} } = {}) {
+  const { createInstance } = await src('src/platform/db.mjs');
+  const dataDir = await tempDir();
+  const { db, platform, householdId } = createInstance(dataDir, { mode, init });
+  let closed = false;
+  return {
+    db, platform, householdId, dataDir,
+    file: join(dataDir, DB_FILE), platformFile: join(dataDir, PLATFORM_FILE),
+    close() {
+      if (closed) return;
+      closed = true;
+      try { db.close(); } catch { /* already closed */ }
+      try { platform.close(); } catch { /* already closed */ }
+    },
+  };
+}
+
+// Run the offline platform migration (src/platform/migrate.mjs) on a real store that has no
+// platform.sqlite yet, with a synthetic backup key kept outside the data dir. The store must be
+// closed by every other connection first. Returns the migration result.
+export async function migrateLegacyStore(dataDir) {
+  const { migratePlatform } = await src('src/platform/migrate.mjs');
+  const keyDir = await tempDir('fathom-backup-key-');
+  const backupKeyFile = join(keyDir, 'backup.key');
+  writeFileSync(backupKeyFile, randomBytes(32).toString('hex') + '\n', { mode: 0o600 });
+  try {
+    return await migratePlatform({ dataDir, backupKeyFile });
+  } finally {
+    rmSync(keyDir, { recursive: true, force: true });
+  }
 }
 
 // Open a migrated store in a fresh temp dir. Returns { db, dataDir, file, close() }.
@@ -295,6 +383,22 @@ export async function tempDb() {
 export async function openStore(file) {
   const { openDb } = await src('src/store/db.mjs');
   return openDb(file);
+}
+
+// Open an existing platform.sqlite without migrating it (a running server has already done so).
+export async function openPlatformStore(file) {
+  if (!existsSync(file)) throw new Error('no platform.sqlite at the given path');
+  const { openDb } = await src('src/store/db.mjs');
+  return openDb(file);
+}
+
+// Run fn(platform, authStore) on a platform file and close it.
+export async function withPlatform(file, fn) {
+  const platform = await openPlatformStore(file);
+  try {
+    const { createAuthStore } = await src('src/auth/store.mjs');
+    return await fn(platform, createAuthStore(platform));
+  } finally { platform.close(); }
 }
 
 // Logical dump of every user table (rows as sorted JSON strings) to compare "unchanged".

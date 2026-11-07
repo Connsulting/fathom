@@ -7,7 +7,7 @@ import { ConfigError, loadConfig } from '../src/config.mjs';
 import { createHandler } from '../src/api/router.mjs';
 import { createAuthService } from '../src/auth/service.mjs';
 import { setSetting } from '../src/store/db.mjs';
-import { createSessionFixture, freePort, postJson, request, sessionClient, tempDb } from './helpers/server.mjs';
+import { createSessionFixture, freePort, postJson, request, sessionClient, tempInstance } from './helpers/server.mjs';
 
 const START = Date.parse('2032-03-10T12:34:56.789Z');
 const RECENT = 600_000;
@@ -21,14 +21,13 @@ const malformedCredential = () => ({
 });
 
 async function fixture(t, { trustedProxies } = {}) {
-  const temp = await tempDb();
+  const temp = await tempInstance({ mode: 'real', init: db => setSetting(db, 'mode', 'real') });
   let server;
   t.after(async () => {
     if (server?.listening) await new Promise(resolve => { server.close(resolve); server.closeAllConnections(); });
     temp.close();
     rmSync(temp.dataDir, { recursive: true, force: true });
   });
-  setSetting(temp.db, 'mode', 'real');
   const port = await freePort();
   const baseUrl = `http://localhost:${port}`;
   const config = loadConfig({
@@ -39,14 +38,15 @@ async function fixture(t, { trustedProxies } = {}) {
   const now = () => clock;
   const sent = [];
   const transport = { name: 'dev', async send(message) { sent.push(message); return { id: 'synthetic-send', recipients: 1 }; } };
-  const auth = createAuthService({ db: temp.db, config, transport, now });
-  server = http.createServer(createHandler({ db: temp.db, config, auth, transport }));
+  const auth = createAuthService({ platform: temp.platform, config, transport, now });
+  server = http.createServer(createHandler({ db: temp.db, platform: temp.platform, config, auth, transport }));
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); });
+  const hh = auth.store.servedHousehold().id;
   return {
-    db: temp.db, auth, store: auth.store, sent, baseUrl, now,
+    db: temp.db, platform: temp.platform, auth, store: auth.store, hh, sent, baseUrl, now,
     advance: ms => { clock += ms; },
     async client(email = 'member@example.test', role = 'member') {
-      const session = await createSessionFixture(temp.db, { email, role, now });
+      const session = await createSessionFixture(temp.platform, { email, role, now });
       return { ...sessionClient(baseUrl, session), session };
     },
     post: (path, body = {}, headers = {}) => postJson(baseUrl, path, body, { origin: baseUrl, ...headers }),
@@ -69,7 +69,8 @@ function limited(response) {
   assert.match(response.headers['cache-control'], /no-store/);
 }
 
-test('HTTP reinvites apply both pending role changes and replace only the invite token', async t => {
+// Invite links are household invitations (plan Approach 3); the pending role lives on the invitation.
+test('HTTP reinvites apply both pending role changes and replace only the invitation', async t => {
   const app = await fixture(t);
   const admin = await app.client('admin@example.test', 'admin');
   for (const [initial, replacement] of [['admin', 'member'], ['member', 'admin']]) {
@@ -77,62 +78,74 @@ test('HTTP reinvites apply both pending role changes and replace only the invite
     const first = await admin.postJson('/api/admin/users/invite', { email, role: initial });
     assert.equal(first.status, 200);
     const user = app.store.findUser(email);
-    const before = { ...app.db.prepare('SELECT * FROM users WHERE id = ?').get(user.id) };
+    const before = { ...app.platform.prepare('SELECT * FROM users WHERE id = ?').get(user.id) };
     const firstMail = app.sent.at(-1);
     const oldToken = new URL(firstMail.text.match(/https?:\/\/\S+/)[0]).hash.slice(1);
     const recovery = app.store.createToken(user.id, 'recovery');
     const again = await admin.postJson('/api/admin/users/invite', { email: email.toUpperCase(), role: replacement });
     assert.equal(again.status, 200);
     assert.deepEqual(again.json, { sent: true });
-    assert.deepEqual({ ...app.db.prepare('SELECT * FROM users WHERE id = ?').get(user.id) }, { ...before, role: replacement });
+    assert.deepEqual({ ...app.platform.prepare('SELECT * FROM users WHERE id = ?').get(user.id) }, before);
     const token = new URL(app.sent.at(-1).text.match(/https?:\/\/\S+/)[0]).hash.slice(1);
     assert.notEqual(token, oldToken);
-    assert.equal(app.store.token(oldToken), null);
-    assert.equal(app.store.token(token).userId, user.id);
+    assert.equal(app.store.invitation(oldToken), null);
+    assert.equal(app.store.invitation(token).userId, user.id);
+    assert.equal(app.store.invitation(token).role, replacement);
+    assert.equal(app.store.invitation(token).householdId, app.hh);
     assert.ok(app.store.token(recovery.token));
     assert.ok(!again.text.includes(token));
   }
 });
 
-test('a failed token replacement rolls back the pending role and the old token atomically', async t => {
+test('a failed invitation replacement rolls back the pending role and the old link atomically', async t => {
   const app = await fixture(t);
   const admin = await app.client('admin@example.test', 'admin');
-  const user = app.store.inviteUser('pending@example.test', { role: 'admin' });
-  const original = app.store.createToken(user.id, 'invite');
-  const before = { ...app.db.prepare('SELECT * FROM users WHERE id = ?').get(user.id) };
-  const tokens = app.db.prepare('SELECT * FROM auth_tokens ORDER BY hash').all();
-  app.db.exec("CREATE TEMP TRIGGER fail_invite_token BEFORE INSERT ON auth_tokens BEGIN SELECT RAISE(ABORT, 'synthetic token storage failure'); END");
+  const original = app.store.invite(app.hh, 'pending@example.test', { role: 'admin' });
+  const user = original.user;
+  const before = { ...app.platform.prepare('SELECT * FROM users WHERE id = ?').get(user.id) };
+  const invitations = app.platform.prepare('SELECT * FROM household_invitations ORDER BY hash').all();
+  const tokens = app.platform.prepare('SELECT * FROM auth_tokens ORDER BY hash').all();
+  app.platform.exec("CREATE TEMP TRIGGER fail_invitation BEFORE INSERT ON household_invitations BEGIN SELECT RAISE(ABORT, 'synthetic invitation storage failure'); END");
   const failed = await admin.postJson('/api/admin/users/invite', { email: user.email, role: 'member' });
   assert.equal(failed.status, 500);
   assert.deepEqual(failed.json, { error: 'internal error' });
-  assert.deepEqual({ ...app.db.prepare('SELECT * FROM users WHERE id = ?').get(user.id) }, before);
-  assert.deepEqual(app.db.prepare('SELECT * FROM auth_tokens ORDER BY hash').all(), tokens);
-  assert.ok(app.store.token(original.token));
+  assert.deepEqual({ ...app.platform.prepare('SELECT * FROM users WHERE id = ?').get(user.id) }, before);
+  assert.deepEqual(app.platform.prepare('SELECT * FROM household_invitations ORDER BY hash').all(), invitations);
+  assert.deepEqual(app.platform.prepare('SELECT * FROM auth_tokens ORDER BY hash').all(), tokens);
+  assert.equal(app.store.invitation(original.token).role, 'admin');
   assert.equal(app.sent.length, 0);
-  app.db.exec('DROP TRIGGER fail_invite_token');
+  app.platform.exec('DROP TRIGGER fail_invitation');
   assert.equal((await admin.postJson('/api/admin/users/invite', { email: user.email, role: 'member' })).status, 200);
-  assert.equal(app.store.getUser(user.id).role, 'member');
-  assert.equal(app.store.token(original.token), null);
+  const reissued = new URL(app.sent.at(-1).text.match(/https?:\/\/\S+/)[0]).hash.slice(1);
+  assert.equal(app.store.invitation(reissued).role, 'member');
+  assert.equal(app.store.invitation(reissued).userId, user.id);
+  assert.equal(app.store.invitation(original.token), null);
 });
 
-test('HTTP enrolled reinvites direct callers to a role action without mutating either token purpose', async t => {
+// Was "either token purpose" (invite, recovery): invite links are invitations now, so the two auth
+// token purposes (recovery, add-passkey) and the membership and invitations are checked unchanged.
+test('HTTP active-member reinvites direct callers to a role action without mutating tokens, membership or invitations', async t => {
   const app = await fixture(t);
   const admin = await app.client('admin@example.test', 'admin');
   for (const initial of ['admin', 'member']) {
     const client = await app.client(`enrolled-${initial}@example.test`, initial);
     const user = client.session.user;
-    app.store.createToken(user.id, 'invite');
+    app.store.createToken(user.id, 'add-passkey');
     app.store.createToken(user.id, 'recovery');
-    const before = { ...app.db.prepare('SELECT * FROM users WHERE id = ?').get(user.id) };
-    const tokens = app.db.prepare('SELECT * FROM auth_tokens WHERE user_id = ? ORDER BY hash').all(user.id);
+    const before = { ...app.platform.prepare('SELECT * FROM users WHERE id = ?').get(user.id) };
+    const membership = app.store.membership(user.id, app.hh);
+    const invitations = app.platform.prepare('SELECT * FROM household_invitations ORDER BY hash').all();
+    const tokens = app.platform.prepare('SELECT * FROM auth_tokens WHERE user_id = ? ORDER BY hash').all(user.id);
     for (const role of ['admin', 'member']) {
       const response = await admin.postJson('/api/admin/users/invite', { email: user.email.toUpperCase(), role });
       assert.equal(response.status, 409);
       assert.match(response.json.error, /role/i);
       assert.match(response.json.error, /chang|\/role/i);
       assert.match(response.headers['cache-control'], /no-store/);
-      assert.deepEqual({ ...app.db.prepare('SELECT * FROM users WHERE id = ?').get(user.id) }, before);
-      assert.deepEqual(app.db.prepare('SELECT * FROM auth_tokens WHERE user_id = ? ORDER BY hash').all(user.id), tokens);
+      assert.deepEqual({ ...app.platform.prepare('SELECT * FROM users WHERE id = ?').get(user.id) }, before);
+      assert.deepEqual(app.store.membership(user.id, app.hh), membership);
+      assert.deepEqual(app.platform.prepare('SELECT * FROM household_invitations ORDER BY hash').all(), invitations);
+      assert.deepEqual(app.platform.prepare('SELECT * FROM auth_tokens WHERE user_id = ? ORDER BY hash').all(user.id), tokens);
       assert.equal((await client.request({ path: '/api/auth/session' })).json.identity.role, initial);
     }
   }
@@ -145,8 +158,13 @@ test('session fixtures reuse enrolled users without reinviting them or changing 
   const second = await app.client(' EXISTING@EXAMPLE.TEST ', 'admin');
   assert.equal(second.session.user.id, first.session.user.id);
   assert.notEqual(second.session.token, first.session.token);
-  assert.deepEqual(app.store.session(first.session.token), first.session.user);
-  assert.deepEqual(app.store.session(second.session.token), first.session.user);
+  assert.deepEqual(second.session.user, first.session.user);
+  assert.equal(app.store.session(first.session.token).id, first.session.user.id);
+  assert.equal(app.store.session(second.session.token).id, first.session.user.id);
+  assert.deepEqual(app.store.getUser(first.session.user.id), first.session.user);
+  assert.equal(app.store.membership(first.session.user.id, app.hh).role, 'admin');
+  assert.equal(app.platform.prepare('SELECT count(*) AS n FROM household_memberships WHERE user_id = ?').get(first.session.user.id).n, 1);
+  assert.equal(app.platform.prepare('SELECT count(*) AS n FROM household_invitations WHERE email = ?').get('existing@example.test').n, 1, 'no reinvitation');
 });
 
 test('add-passkey options and verify require a sign-in strictly less than ten minutes old', async t => {
@@ -166,7 +184,11 @@ test('add-passkey options and verify require a sign-in strictly less than ten mi
   const session = await client.request({ path: '/api/auth/session' });
   assert.equal(session.status, 200);
   assert.equal(session.json.identity.id, client.session.user.id);
-  assert.deepEqual(Object.keys(session.json.identity).sort(), ['email', 'householdId', 'id', 'login', 'name', 'role']);
+  // Identity gains operator and memberships (MT-01 contradiction 8).
+  assert.deepEqual(Object.keys(session.json.identity).sort(), ['email', 'householdId', 'id', 'login', 'memberships', 'name', 'operator', 'role']);
+  assert.equal(session.json.identity.householdId, app.hh);
+  assert.equal(session.json.identity.operator, false);
+  assert.deepEqual(session.json.identity.memberships, [{ householdId: app.hh, role: 'member' }]);
   assert.deepEqual(app.store.listPasskeys(client.session.user.id), []);
   const next = await app.client('another@example.test');
   app.advance(RECENT + 1);
@@ -198,10 +220,12 @@ test('fresh malformed registration reaches the real verifier and returns 400 whi
 test('invite and recovery registration are independent of an absent or stale browser session', async t => {
   const app = await fixture(t);
   const client = await app.client('recovered@example.test');
-  const pending = app.store.inviteUser('invited@example.test', { role: 'member' });
+  const invited = app.store.invite(app.hh, 'invited@example.test', { role: 'member' });
+  const pending = invited.user;
   app.advance(RECENT);
   for (const [user, purpose] of [[pending, 'invite'], [client.session.user, 'recovery']]) {
-    const issued = app.store.createToken(user.id, purpose);
+    const issued = purpose === 'invite' ? invited : app.store.createToken(user.id, purpose);
+    const live = () => (purpose === 'invite' ? app.store.invitation(issued.token) : app.store.token(issued.token));
     for (const sessionCookie of ['', client.session.cookie]) {
       const options = await app.post('/api/auth/register/options', { token: issued.token }, { cookie: sessionCookie });
       assert.equal(options.status, 200, `${purpose} options do not require recent sign-in`);
@@ -210,7 +234,7 @@ test('invite and recovery registration are independent of an absent or stale bro
       });
       assert.equal(failed.status, 400);
       assert.deepEqual(failed.json, { error: 'passkey verification failed' });
-      assert.ok(app.store.token(issued.token));
+      assert.ok(live());
     }
   }
   assert.equal(app.store.getUser(pending.id).enrolledAt, null);
@@ -291,7 +315,7 @@ test('forged forwarded clients share the default recovery quota while invitation
   limited(await admin.postJson('/api/admin/users/invite', { email: 'pending@example.test', role: 'member' }, { 'x-forwarded-for': '198.51.100.200' }));
   for (const kind of ['recover', 'invite']) {
     for (const suffix of ['global', 'socket:127.0.0.1']) {
-      const row = app.db.prepare('SELECT window_start, expires_at, attempts FROM auth_rate_limits WHERE key_hash = ?').get(digest(`${kind}:${suffix}`));
+      const row = app.platform.prepare('SELECT window_start, expires_at, attempts FROM auth_rate_limits WHERE key_hash = ?').get(digest(`${kind}:${suffix}`));
       assert.ok(row, `${kind}:${suffix} has an independent bucket`);
       assert.equal(row.window_start, START);
       assert.equal(row.expires_at, START + RECENT);
@@ -319,7 +343,7 @@ test('trusted loopback honors forwarded clients while recovery and invitation gl
     limited(await send(60, '203.0.113.1'));
     for (let i = 61; i < 120; i++) assert.equal((await send(i, '203.0.113.2')).status, 200, 'a second forwarded client gets its own bucket');
     limited(await send(120, '203.0.113.3'));
-    const global = app.db.prepare('SELECT attempts FROM auth_rate_limits WHERE key_hash = ?').get(digest(`${kind}:global`));
+    const global = app.platform.prepare('SELECT attempts FROM auth_rate_limits WHERE key_hash = ?').get(digest(`${kind}:global`));
     assert.equal(global.attempts, 121);
   }
 });
