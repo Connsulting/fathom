@@ -15,7 +15,7 @@ export function bind(kit) { H = kit; }
 
 // G sequences: letter, route, label. design.js reads these for its nav link hints.
 export const GO = [
-  ['y', 'brief', 'Year'], ['p', 'plan', 'Plan'], ['d', 'wargame', 'Decide'], ['a', 'ask', 'Ask'],
+  ['h', 'home', 'Home'], ['p', 'plan', 'Plan'], ['d', 'wargame', 'Decide'], ['a', 'ask', 'Ask'],
   ['c', 'confirm', 'Confirm'], ['k', 'packs', 'Packs'], ['f', 'add', 'Files'], ['e', 'engine', 'Engine'],
   ['m', 'email', 'Email'], ['n', 'connect', 'Connect']
 ];

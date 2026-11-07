@@ -1,16 +1,16 @@
 // Every displayed amount carries provenance (Horizon port item 5, oracle note 2): on every route,
 // no text node with a bare dollar amount sits outside .fx-fig, .fx-law, an axis tick or the popover.
 
-import { test, expect, S, resetDemo, mainRoutes, visibleRecs, plain, gotoRoute, expectH1, recDialog, bareDollarNodes, ASK_HELLO, askOnAsk } from './helpers.mjs';
+import { test, expect, S, resetDemo, mainRoutes, headingFor, visibleRecs, plain, gotoRoute, expectH1, recDialog, bareDollarNodes, ASK_HELLO, askOnAsk } from './helpers.mjs';
 
 test.beforeEach(async ({ request }) => {
   await resetDemo(request);
 });
 
 for (const [route, heading] of mainRoutes()) {
-  test(`#/${route} has no bare dollar amounts`, async ({ page }) => {
+  test(`#/${route} has no bare dollar amounts`, async ({ page, request }) => {
     await gotoRoute(page, route);
-    await expectH1(page, heading);
+    await expectH1(page, await headingFor(heading, request));
     expect(await bareDollarNodes(page)).toEqual([]);
   });
 }

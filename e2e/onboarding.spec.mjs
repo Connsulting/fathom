@@ -152,7 +152,7 @@ test.describe('real store past first run', () => {
 
   test('Setup in More opens Tell us; the note is saved while the engine is off; the heard step lists the household @mobile', async ({ page, context }) => {
     await page.goto(`${BASE}/`);
-    await expect(page).toHaveURL(/#\/brief$/);
+    await expect(page).toHaveURL(/#\/home$/);
     await page.locator('.h-more-btn').click();
     const setup = page.locator('.h-more-p a[data-go="onboarding"]', { hasText: 'Setup' });
     await expect(setup).toBeVisible();
@@ -201,14 +201,14 @@ test.describe('real store past first run', () => {
     await expect(page).toHaveURL(/#\/confirm$/);
   });
 
-  test('Setup finishes back on the brief, and Back to the app leaves at any step', async ({ page }) => {
+  test('Setup finishes back on Home, and Back to the app leaves at any step', async ({ page }) => {
     await page.goto(`${BASE}/#/onboarding/5`);
     await expect(page.locator('.h-ob-card h1')).toBeVisible();
     await page.getByRole('button', { name: /Back to my brief/ }).click({ timeout: 15_000 });
-    await expect(page).toHaveURL(/#\/brief$/);
+    await expect(page).toHaveURL(/#\/home$/);
     await page.goto(`${BASE}/#/onboarding`);
     await expect(page).toHaveURL(/#\/onboarding\/1$/);
     await page.getByRole('link', { name: 'Back to the app' }).click();
-    await expect(page).toHaveURL(/#\/brief$/);
+    await expect(page).toHaveURL(/#\/home$/);
   });
 });

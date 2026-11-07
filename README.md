@@ -118,11 +118,14 @@ needs a signed-in session; demo stores stay open with no accounts.
 4. Adding a passkey on Account needs a sign-in from the last 10 minutes. Once the sign-in is
    older, Account shows a Sign in again link; sign in with an existing passkey, then come back to
    Account to add the new one. Enrollment and recovery links do not need a prior sign-in.
-5. Enrollment and recovery links arrive by email, work once and expire after 20 minutes. The token
+   To add a passkey on another device, use Account, Email me a link to add a passkey on another
+   device, then open the emailed link on that device within 20 minutes. The link works once, goes
+   only to your own address, and nothing is revoked: your other passkeys and sessions stay.
+5. Enrollment, recovery and add-a-device links arrive by email, work once and expire after 20 minutes. The token
    is in the link's fragment, so it never reaches a server log. Recovery answers the same way for
    every address. Mail goes through the configured email transport, so a real deployment needs
    `FATHOM_EMAIL_TRANSPORT`, the sender and the credential set (`dev` writes links to `outbox/`).
-6. Security notices. When a passkey is added through an invitation link or on Account, that person
+6. Security notices. When a passkey is added through an invitation link, an add-a-device link or on Account, that person
    gets "Fathom passkey added". When a recovery link sets up a new passkey, the person and every
    enrolled admin get "Fathom account recovered". Each notice is sent separately, one recipient per
    message, carries no link or secret, and goes straight through the email transport, so it is not
@@ -141,7 +144,7 @@ the link to stdout for the operator. It refuses a demo store and stops working o
 invite from the Household page. If the only admin loses every passkey and the mailbox too, recovery
 needs offline work on the database outside these tools, so add a second admin or passkey early.
 
-Deployment. Run the container behind a reverse proxy that terminates HTTPS for the DNS name in
+Deployment. Invitation, recovery and add-a-device links all need the configured email transport. Run the container behind a reverse proxy that terminates HTTPS for the DNS name in
 `FATHOM_PUBLIC_URL`, serves the app at the root path and passes `Cookie` and `Origin` through
 unchanged. The app trusts no forwarded headers except `X-Forwarded-For` from proxies listed in
 `FATHOM_TRUSTED_PROXIES`, which only the rate limits read; by default no proxy is trusted and the

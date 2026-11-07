@@ -82,7 +82,8 @@ test('migration 015 leaves the recs table refusing accepted, with its index and 
   assert.throws(() => db.prepare(`INSERT INTO rec_events (rec_id, ts, action, actor) VALUES ('nope', 'x', 'start', 'ui')`).run(), /FOREIGN KEY/);
   assert.doesNotThrow(() => db.prepare("UPDATE recs SET status = 'doing' WHERE id = 'r0'").run());
   const cols = db.prepare('PRAGMA table_info(recs)').all().map(c => c.name);
-  assert.deepEqual(cols, ['id', 'def', 'status', 'waiting_on', 'wake', 'tasks_done', 'window_close', 'window_label', 'pack_id', 'sort', 'updated_at', 'file_id', 'parser', 'locator']);
+  // Later migrations add columns (019: owner, owner_override, goal_kinds) after the rebuilt ones.
+  assert.deepEqual(cols, ['id', 'def', 'status', 'waiting_on', 'wake', 'tasks_done', 'window_close', 'window_label', 'pack_id', 'sort', 'updated_at', 'file_id', 'parser', 'locator', 'owner', 'owner_override', 'goal_kinds']);
   assert.equal(db.prepare("SELECT sql FROM sqlite_master WHERE name = 'recs'").get().sql.includes('accepted'), false);
 });
 

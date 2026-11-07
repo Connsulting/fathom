@@ -24,7 +24,7 @@ async function openDecided(page) {
 }
 
 async function gotoDecide(page) {
-  await gotoRoute(page, 'brief');
+  await gotoRoute(page, 'home');
   await mainNav(page).getByRole('link', { name: 'Decide', exact: true }).click();
   await expect(page).toHaveURL(/#\/wargame$/);
   await expectH1(page, 'What is open, and what is coming');

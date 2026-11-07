@@ -172,16 +172,18 @@ test.describe('passkey accounts through the browser', () => {
     await test.step('authenticated boot precedes scenario fetch and the More menu links to real auth pages', async () => {
       seedReturningHousehold();
       await admin.page.goto(`${base}/`);
-      await expect(admin.page).toHaveURL(/#\/brief$/);
-      await expect(admin.page.locator('.h-ing-banner')).toContainText('1 quick check');
-      await admin.page.locator('.h-ing-banner[data-go="confirm"], .h-ing-banner [data-go="confirm"]').filter({ hasText: 'Start' }).last().click();
+      await expect(admin.page).toHaveURL(/#\/home$/);
+      // Home's data-health line counts the open question and links to Confirm.
+      await expect(admin.page.locator('div.h-dhealth')).toContainText('1 question to confirm');
+      await admin.page.locator('div.h-dhealth a[data-go="confirm"]').click();
       await expect(admin.page).toHaveURL(/#\/confirm$/);
       const answered = admin.page.waitForResponse((response) => new URL(response.url()).pathname === `/api/confirm/${confirmationId}/answer`);
       await admin.page.locator(`[data-answer="${confirmationId}"][data-option="owner"]`).click();
       expect((await answered).status()).toBe(200);
       await admin.page.goto(`${base}/`);
-      await expect(admin.page).toHaveURL(/#\/brief$/);
-      await expect(admin.page.locator('.h-ing-banner')).toHaveCount(0);
+      await expect(admin.page).toHaveURL(/#\/home$/);
+      await expect(admin.page.locator('div.h-dhealth')).not.toContainText('to confirm');
+      await expect(admin.page.locator('div.h-dhealth a[data-go="confirm"]')).toHaveCount(0);
       await admin.page.getByRole('button', { name: 'More', exact: true }).click();
       await expect(admin.page.getByRole('link', { name: 'Account', exact: true })).toHaveAttribute('href', '/account');
       await expect(admin.page.getByRole('link', { name: 'Household', exact: true })).toHaveAttribute('href', '/admin/users');
@@ -325,7 +327,7 @@ test.describe('passkey accounts through the browser', () => {
       await securityNotices(notice, 'Fathom passkey added', [MEMBER]);
       expect(registration.identity).toMatchObject({ email: MEMBER, role: 'member', householdId: 1 });
       await member.page.goto(`${base}/`);
-      await expect(member.page).toHaveURL(/#\/brief$/);
+      await expect(member.page).toHaveURL(/#\/home$/);
       await member.page.getByRole('button', { name: 'More', exact: true }).click();
       await expect(member.page.getByRole('link', { name: 'Account', exact: true })).toBeVisible();
       await expect(member.page.getByRole('link', { name: 'Household', exact: true })).toHaveCount(0);
@@ -585,7 +587,7 @@ async function signin(client, expectedStatus = 200) {
       expect(body.options.allowCredentials).toBeUndefined();
     }
     if (expectedStatus === 200) {
-      await expect(client.page).toHaveURL(/#\/brief$/);
+      await expect(client.page).toHaveURL(/#\/home$/);
       expect((await sessionIdentity(client)).email).toBe(OWNER);
       await assertAuthenticatedBoot(client);
     } else {

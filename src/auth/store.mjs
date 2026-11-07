@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { HttpError } from '../api/http.mjs';
 
 export const TOKEN_TTL = 20 * 60 * 1000;
+export const TOKEN_PURPOSES = Object.freeze(['invite', 'recovery', 'add-passkey']);
 export const CHALLENGE_TTL = 5 * 60 * 1000;
 export const SESSION_TTL = 7 * 24 * 60 * 60 * 1000;
 export const validHandle = value => typeof value === 'string' && /^[A-Za-z0-9_-]{43}$/.test(value);
@@ -125,7 +126,7 @@ export function createAuthStore(db, { now = () => Date.now() } = {}) {
       });
     },
     createToken(userId, purpose) {
-      if (!['invite', 'recovery'].includes(purpose)) throw new HttpError(400, 'invalid token purpose');
+      if (!TOKEN_PURPOSES.includes(purpose)) throw new HttpError(400, 'invalid token purpose');
       return transaction(() => {
         if (!userRow(userId)) throw new HttpError(404, 'no such user');
         const raw = randomHandle();

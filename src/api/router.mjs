@@ -42,6 +42,7 @@ const TABLE = [
   { method: 'POST', path: '/api/auth/recover', handler: authHandlers.recover, public: true, quiet: true, auth: true },
   { method: 'POST', path: '/api/auth/signout', handler: authHandlers.signout, quiet: true, auth: true },
   { method: 'GET', path: '/api/auth/passkeys', handler: authHandlers.passkeys, quiet: true, auth: true },
+  { method: 'POST', path: '/api/auth/passkeys/link', handler: authHandlers.requestDeviceLink, quiet: true, auth: true },
   { method: 'POST', path: '/api/auth/passkeys/:id/revoke', handler: authHandlers.revokePasskey, quiet: true, auth: true },
   { method: 'GET', path: '/api/admin/users', handler: authHandlers.users, quiet: true, auth: true, admin: true },
   { method: 'POST', path: '/api/admin/users/invite', handler: authHandlers.invite, quiet: true, auth: true, admin: true },

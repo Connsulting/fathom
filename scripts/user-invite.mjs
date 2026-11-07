@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { loadConfig, validatePublicUrl } from '../src/config.mjs';
 import { DB_FILE, readStoreMode, openMigrated } from '../src/store/db.mjs';
 import { createAuthStore, normalizeEmail } from '../src/auth/store.mjs';
-import { enrollmentMail } from '../src/auth/service.mjs';
+import { authLinkMail } from '../src/auth/mail.mjs';
 import { createTransport } from '../src/email/transport.mjs';
 
 const quiet = { info() {}, log() {}, warn() {}, error() {} };
@@ -33,7 +33,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
       db.exec('ROLLBACK');
       throw err;
     }
-    const { link, message } = enrollmentMail(config, issued.user, issued.token);
+    const { link, message } = authLinkMail(config, issued.user, issued.token, 'invite');
     const transport = createTransport(config, { log: quiet });
     await transport.send(message);
     console.log(link);

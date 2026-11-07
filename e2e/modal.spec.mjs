@@ -7,28 +7,28 @@ test.beforeEach(async ({ request }) => {
   await resetDemo(request);
 });
 
-// Brief first, then Plan through the menu, so Back from Plan has somewhere in the app to go.
-async function briefThenPlan(page) {
-  await gotoRoute(page, 'brief');
+// Home first, then Plan through the menu, so Back from Plan has somewhere in the app to go.
+async function homeThenPlan(page) {
+  await gotoRoute(page, 'home');
   await mainNav(page).getByRole('link', { name: 'Plan', exact: true }).click();
   await expect(page).toHaveURL(/#\/plan$/);
   await expectH1(page, 'Everything on the calendar');
 }
 
-// Brief first, then a real deep link: the page boots on #/rec/<id>.
-async function briefThenDeepLink(page, id) {
-  await gotoRoute(page, 'brief');
+// Home first, then a real deep link: the page boots on #/rec/<id>.
+async function homeThenDeepLink(page, id) {
+  await gotoRoute(page, 'home');
   await page.goto(`/#/rec/${id}`);
   await page.reload();
   await expect(recDialog(page)).toBeVisible();
   await expect(recDialog(page).locator('#h-dlg-t')).toHaveText(plain(rec(id).title));
 }
 
-async function backLandsOnBriefWithoutModal(page) {
+async function backLandsOnHomeWithoutModal(page) {
   await page.goBack();
-  await expect(page).toHaveURL(/#\/brief$/);
+  await expect(page).toHaveURL(/#\/home$/);
   await expect(recDialog(page)).toHaveCount(0);
-  await expect(page.locator('h1.h-verdict')).toBeVisible();
+  await expect(page.locator('h1.h-home-h')).toBeVisible();
 }
 
 // Ask rec A's thread a question whose answer refers to rec B, then follow that ref link.
@@ -45,7 +45,7 @@ async function followRefToB(page, pair) {
 }
 
 test('from Plan: dialog opens with the chat composer first, X lands on Plan, Back does not reopen', async ({ page }) => {
-  await briefThenPlan(page);
+  await homeThenPlan(page);
   const id = needsYouIds()[0];
   await openRecFromPage(page, id);
   const dlg = recDialog(page);
@@ -60,51 +60,51 @@ test('from Plan: dialog opens with the chat composer first, X lands on Plan, Bac
   await closeDialogWithX(page);
   await expect(page).toHaveURL(/#\/plan$/);
   await expectH1(page, 'Everything on the calendar');
-  await backLandsOnBriefWithoutModal(page);
+  await backLandsOnHomeWithoutModal(page);
 });
 
 test('deep link: X lands on Plan, Back does not reopen', async ({ page }) => {
   const id = needsYouIds()[0];
-  await briefThenDeepLink(page, id);
+  await homeThenDeepLink(page, id);
   await closeDialogWithX(page);
   await expect(page).toHaveURL(/#\/plan$/);
   await expectH1(page, 'Everything on the calendar');
-  await backLandsOnBriefWithoutModal(page);
+  await backLandsOnHomeWithoutModal(page);
 });
 
 test('Escape closes like X: lands on Plan, Back does not reopen', async ({ page }) => {
-  await briefThenPlan(page);
+  await homeThenPlan(page);
   await openRecFromPage(page, needsYouIds()[0]);
   await page.keyboard.press('Escape');
   await expect(recDialog(page)).toHaveCount(0);
   await expect(page).toHaveURL(/#\/plan$/);
-  await backLandsOnBriefWithoutModal(page);
+  await backLandsOnHomeWithoutModal(page);
 });
 
 test('in-app: rec A to rec B through a ref link, Close lands on Plan, Back does not reopen', async ({ page }) => {
   const pair = crossRefPair();
-  await briefThenPlan(page);
+  await homeThenPlan(page);
   await openRecFromPage(page, pair.a);
   await followRefToB(page, pair);
   await closeDialogWithX(page);
   await expect(page).toHaveURL(/#\/plan$/);
   await expectH1(page, 'Everything on the calendar');
-  await backLandsOnBriefWithoutModal(page);
+  await backLandsOnHomeWithoutModal(page);
 });
 
 test('deep link: rec A to rec B through a ref link, Close lands on Plan, Back does not reopen', async ({ page }) => {
   const pair = crossRefPair();
-  await briefThenDeepLink(page, pair.a);
+  await homeThenDeepLink(page, pair.a);
   await followRefToB(page, pair);
   await closeDialogWithX(page);
   await expect(page).toHaveURL(/#\/plan$/);
   await expectH1(page, 'Everything on the calendar');
-  await backLandsOnBriefWithoutModal(page);
+  await backLandsOnHomeWithoutModal(page);
 });
 
 test('a figure in the dialog opens the provenance popover with its Source', async ({ page }) => {
   const r = S.recs.find((x) => needsYouIds().includes(x.id) && (x.mine || []).length) || S.recs.find((x) => (x.mine || []).length);
-  await briefThenPlan(page);
+  await homeThenPlan(page);
   await openRecFromPage(page, r.id);
   const fig = recDialog(page).locator('.h-mine .fx-fig').first();
   const key = await fig.getAttribute('data-fig');

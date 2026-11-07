@@ -100,6 +100,31 @@ minimally. Data comes from `GET /api/scenario` (the CONTRACT.md scenario shape p
 actions POST to the API; each action response carries the fresh scenario. There is no review
 harness bar in the product. The demo build is a synthetic store seeded to the November state.
 
+Home (`#/home`, the default route; `#/brief` is an alias that core normalizes to `home`, so
+older email links keep working) is goals first. Its headline and health chip come from
+`scenario.pace.rollup`; each goal with a target gets a card with its pace chip, a bar of actual
+against target with a plan-today tick, and its next open action. Stale or otherwise unknown
+pace is never shown as on pace: the chip says "Data stale" or "Pace unknown". Goals with no
+target, and on-pace or ahead goals with nothing due, collapse into one quiet row; actions that
+serve no goal sit in a housekeeping row. An owner filter (Both, Me, Spouse) narrows every
+action list, and one data-health line (data through date, stale accounts or goals, Confirm
+questions, failed files) replaces the Confirm banner and nav badge. On a phone the first card
+is the single next thing, with Done, Later and Ask and a swipe (right is Done, left is Later)
+shared with the Confirm deck through `web/horizon/screens/swipe.js`, then the next three. The
+health chip opens the pace board at `#/pace`: monthly ahead-or-behind bars per series (observed
+months filled, projected months dashed, a "data ends" marker), the retirement, tax and income
+meters or the reason each is missing, and a freshness note. Every dollar figure on both pages
+is a `pace.*` figure with its provenance popover. The view model is the pure module
+`web/horizon/screens/home-model.js`. Domain cards (Covered), What changed and the monthly email
+note moved to Plan, whose timeline also draws past What-changed events.
+
+Owners and goal links come from the recs themselves (`loadLinkedRecs`): every rec has an
+`owner`, `serves` (its open goals) and `housekeeping`. The housekeeping row lists housekeeping
+recs that are not done, dismissed or hidden, so under Both its count equals
+`live.housekeeping`. The spouse is a filter, not yet the signed-in member: Me shows owners you
+and both, Spouse shows spouse and both, Both shows every action. Health is per goal and the
+household headline is derived from it; goals without targets are not counted.
+
 ### 5. Facts
 
 A store table of `{key, value JSON, src, asOf, confirmed}` (table `facts`, with provenance
@@ -182,8 +207,9 @@ constraint on `accounts.mask` enforces exactly four digits or NULL).
 Shared by the chat engine and the MCP server. `src/tools/index.mjs` exports `tools`, a registry
 of `{name, description, inputSchema (JSON Schema), scope: 'read'|'write:recs', handler(args, ctx)}`
 with `ctx = {db, now}`, plus `getTool(name)`, `callTool(name, args, ctx)` (validates args against
-`inputSchema`) and `ToolError` with `code` `'bad_input'` or `'not_found'`. The only write scope is
-recommendation status.
+`inputSchema`) and `ToolError` with `code` `'bad_input'` or `'not_found'`. The only write scope,
+`write:recs`, covers recommendation status (`set_recommendation_status`) and action owner
+(`set_recommendation_owner`).
 
 | Tool | Scope | Input | Output |
 |---|---|---|---|
@@ -193,14 +219,15 @@ recommendation status.
 | `query_transactions` | read | `accountId?, from?, to?, minAmount?, maxAmount?, category?, text?, limit? (1..200, default 50)` | `{rows: [{id, accountId, date, amount, description, category}], truncated, total}` |
 | `list_positions` | read | `accountId?` | `[{accountId, symbol, name, quantity, price, value, costBasis, asOf}]` |
 | `pnl_by_month` | read | `entity?, from?: 'YYYY-MM', to?` | `{rows: [{period, category, amount}], totals: {period: n}}` |
-| `list_recommendations` | read | `status?: string or string[]` | live recs, never hidden |
-| `get_recommendation` | read | `id` | the live rec |
+| `list_recommendations` | read | `status?: string or string[]` | live recs, never hidden, each with `owner`, `ownerOverride`, `goalKinds`, `serves: [{id, title, origin}]` and `housekeeping` |
+| `get_recommendation` | read | `id` | the live rec, linked the same way |
 | `list_deadlines` | read | `from?, to?` | `[{date, label, title, recId, hard}]` sorted by date |
 | `list_goals` | read | none | goals |
 | `get_figures` | read | `keys?: string[]` | `[{key, v, kind, label, source: {id, label, asOf}}]` |
 | `packs_status` | read | none | `[{id, name, status, why}]` |
 | `advisor_status` | read | none | `{advisor, nextCheckin: {date, time, lengthMin, label} or null, waiting: [{recId, title, sentOn}], reviewed: [{recId, title, sentOn, verdict, note, reviewedOn, recordedOn}], history (closed reviews with closedOn, closedReason), packets: [{id, date, recIds}]}` (see "Advisor workflow") |
-| `set_recommendation_status` | write:recs | `id, status: doing, done, dismissed, snoozed or proposed, wake?` | the rec; writes `rec_events` with actor `tool` |
+| `set_recommendation_status` | write:recs | `id, status: doing, done, dismissed, snoozed or proposed, wake?` | the linked rec; writes `rec_events` with actor `tool` |
+| `set_recommendation_owner` | write:recs | `id, owner: you, spouse, both, advisor or automatic` | the linked rec; sets `owner` and `owner_override = 1`, writes `rec_events` action `set_owner`, actor `tool`, from and to the current status |
 | `list_packs` | read | none | `[{id, name, status, why, version, taxYear, reviewed, covers, entries: [{file, title}]}]` sorted by id |
 | `get_pack_entry` | read | `packId, file` (the manifest file or the entry id) | `{packId, packName, file, id, title, markdown, citations: [{label, url}], version, taxYear, reviewed}`; any loaded pack, active or not |
 | `search_pack_entries` | read | `query (2..200 chars), packId?, limit? (1..20, default 10)` | `{results: [{packId, file, id, title, score, snippet}], total, truncated}` over active packs only (the query is not echoed) |
@@ -324,7 +351,7 @@ Money columns are dollars rounded to cents; JSON columns hold JSON text. The pro
 | `tax_payments` | `id` PK, `jurisdiction`, `tax_year`, `date`, `amount`, `kind` (the row's payment kind), `dedupe_key` (unique when set), `source_slot`, `payer`, `date_precision`, `tax_year_basis`, `recipient` (withholding: `owner`, `spouse` or `unknown`, the last segment of its `wh:` slot; NULL for workbook rows), provenance |
 | `documents` | `id` PK, `doc_type`, `tax_year`, `fields` JSON (extracted values only; a `notes` document holds the reference `{ref, sha256, chars, lines}`, never the text), `dedupe_key` (unique when set), provenance |
 | `figures` | `key` PK, `v`, `src` (references `sources.id`), `kind` in a, p, e, m, `label`, provenance, `updated_at` |
-| `recs` | `id` PK, `def` JSON (the CONTRACT rec minus live fields), `status`, `waiting_on`, `wake`, `tasks_done` JSON, `window_close` ISO date, `window_label`, `pack_id`, `sort`, `updated_at`, provenance |
+| `recs` | `id` PK, `def` JSON (the CONTRACT rec minus live fields), `status`, `waiting_on`, `wake`, `tasks_done` JSON, `window_close` ISO date, `window_label`, `pack_id`, `sort`, `updated_at`, provenance, `owner` (`you`, `spouse`, `both`, `advisor` or `automatic`, default `you`), `owner_override` (0 or 1: 1 once the owner set it), `goal_kinds` JSON array of goal topics (default `[]`); see "Rec owner and goal links" |
 | `rec_events` | `id` PK, `rec_id`, `ts`, `action`, `arg`, `from_status`, `to_status`, `actor` (`ui`, `tool`, ...) |
 | `conversations` | `key` PK (an Ask thread `ask:<12 lowercase hex>` or `pack:<id>`), `created_at`, `last_at` (newest message time, else `created_at`), and for Ask threads `title` (NULL until named), `title_source` (NULL, `auto` or `manual`), `archived_at`, `trashed_at` (migration 008; app clock ISO times), `rec_id` (the rec a thread was asked from, a context reference, never a foreign key) and `rec_detached_at` (set by Start over) (migration 016) |
 | `messages` | `id` PK, `conversation_key`, `role` in me, fathom, advisor, claude, `text` (token-bearing HTML), `refs` JSON, `notice`, `ts`, `provenance` JSON or NULL (migration 006; see "Answer provenance") |
@@ -342,7 +369,7 @@ Money columns are dollars rounded to cents; JSON columns hold JSON text. The pro
 | `households` | `id` PK, always 1: the one household. Created on demand before the first user. |
 | `users` | `id` PK (UUID), `household_id` (references `households.id`), `email` (canonical, unique), `role` in admin, member, `user_handle` (random, the WebAuthn user handle), `created_at`, `enrolled_at` (NULL until the first passkey verifies) |
 | `passkeys` | `id` PK (credential id), `user_id` (references `users.id`, cascade delete), `public_key` BLOB, `counter`, `transports` JSON, `name`, `created_at` |
-| `auth_tokens` | SHA-256 digest of an enrollment or recovery token PK, `user_id` (cascade delete), purpose `invite` or `recovery`, expiry. Never the token. |
+| `auth_tokens` | SHA-256 digest of an enrollment, recovery or add-a-device token PK, `user_id` (cascade delete), purpose `invite`, `recovery` or `add-passkey`, expiry. Never the token. |
 | `auth_sessions` | SHA-256 digest of a session cookie PK, `user_id` (cascade delete), `signed_in_at` (wall-clock milliseconds of the sign-in or link registration that created it, NOT NULL), expiry. Never the cookie. |
 | `auth_challenges` | digest of the ceremony cookie PK, ceremony, `user_id` (NULL for sign-in), the token and session digests it was issued for (NULL when none), the challenge, expiry. Used once. |
 | `auth_rate_limits` | hashed bucket key PK, window, attempts. No raw email or address. |
@@ -429,6 +456,21 @@ keys keep NULL). It changes no household data table. The household row is create
 auth store before the first user, so the demo seed's empty-store check and clear order are
 unchanged (see Accounts and sessions).
 
+Migration 020 (`020-auth-token-add-passkey.sql`, `-- REBUILDS_TABLE`) rebuilds `auth_tokens` so its
+purpose CHECK allows `add-passkey` besides `invite` and `recovery`. Rows, the primary key, the
+cascade foreign key to `users`, `UNIQUE (user_id, purpose)`, the `auth_tokens_expiry` index and the
+`auth_challenges.token_hash` reference are preserved; `foreign_key_check` is clean before commit.
+
+Migration 019 (`019-rec-owner-goal-links.sql`) adds `recs.owner`, `recs.owner_override` and
+`recs.goal_kinds` with `ALTER TABLE ADD COLUMN` (constant defaults and CHECKs, no rebuild).
+The backfill is deterministic: a planner rec (in `planner_recs`) takes its trigger's static
+`goalKinds` and `owner`, a demo seed rec (parser `demo-seed`, not planner) takes the demo
+scenario's, anything else keeps the defaults (housekeeping, owner `you`). SQL cannot run a
+trigger's `ownerFor`, so a contextual owner (for example the spouse's solo plan) settles at the next
+planning run, which applies it because `owner_override` stays 0. Statuses, defs, tasks, events,
+planner bookkeeping and advisor rows are untouched. `test/store-rec-owner-migration.test.mjs`
+checks the SQL against the trigger modules and the demo scenario.
+
 ### Adding a migration
 
 1. Add `src/store/migrations/NNN-name.sql` with the next number (three digits, no gaps, lowercase
@@ -513,6 +555,7 @@ live = {
   yourPlans: { sources: [ { fileId, name, docType } ], files: [ { id, name } ], built: settings.yourPlans | null },
   clock: 'YYYY-MM-DD',
   heard: { sections: [ { id, title, items: [ heard item ] } ], deadlines: int, pending: int, empty: boolean },  // see Onboarding below
+  housekeeping: int,                    // recs with housekeeping true that are not hidden, done or dismissed
   ingest: {
     pending: int,                       // pending confirm items
     items: [ confirm item ],            // pending items, shape below, plus fileName (string or null) and
@@ -676,7 +719,7 @@ known path with the wrong method is 405; signed out, both are 401. Every action 
 | `GET /api/identity` | | `{identity: {id, email, name, login, householdId, role} or null}`. The signed-in user (`name` and `login` are the email). Always `null` on a demo store. |
 | `GET /signin` | | Public page: `web/auth/index.html` (sign in with a passkey, email recovery link). Loads only `/auth/auth.js`, `/auth/auth.css` and `/favicon.svg`; never the scenario. |
 | `GET /enroll` | | Public page: the same file. Reads the token from the `#` fragment of an emailed link, removes it from history at once, and creates a passkey. |
-| `GET /account` | | Signed-in page: the same file. Passkeys (add, revoke) and sign out. |
+| `GET /account` | | Signed-in page: the same file. Passkeys (add, revoke), emailing an add-a-device link, and sign out. |
 | `GET /admin/users` | | Admin page: the same file. People, roles, invitations, removal and passkey revocation. A member gets a 403 page. |
 | `GET /api/auth/session` | | `{identity, demo}`. Public; `identity` as for `GET /api/identity` or null; no household data. A demo store answers `{identity: null, demo: true}`. Every other auth and admin route is 404 on a demo store. |
 | `POST /api/auth/signin/options` | `{}` | `{options}`: WebAuthn request options for a discoverable sign-in (no `allowCredentials`, `userVerification: required`). Sets the ceremony cookie. Public, rate limited (429). |
@@ -685,6 +728,7 @@ known path with the wrong method is 405; signed out, both are 401. Every action 
 | `POST /api/auth/register/verify` | `{response, token?, name?}` | `{identity}` and the session cookie. 400 when verification fails or `clientExtensionResults.credProps.rk` is not exactly `true`; 410 for an expired or used link; without a token, the same 403 `recent_signin_required` as options, checked again after verification. A recovery link replaces the user's passkeys and sessions only here, after the new passkey verifies. After the commit it sends the security notice (see Accounts and sessions); the response is the same whether that send succeeds. |
 | `POST /api/auth/recover` | `{email}` | The same fixed 200 body for every address, known or not, valid or not. An enrolled account gets a recovery email; nothing else does. Rate limited (429). |
 | `POST /api/auth/signout` | `{}` | 200. Deletes the current session and clears the cookie. |
+| `POST /api/auth/passkeys/link` | `{}` (ignored) | 200 `{sent: true}`. Signed in only (401 signed out); the same recent sign-in rule as adding a passkey (403 `recent_signin_required` at 10 minutes or older). Issues a single-use `add-passkey` token for the session user only, valid 20 minutes, and emails the `/enroll#<token>` link to that user's own address; no address is taken from the request. Rate limited (429): `device` global 120 and per client 60 per 10 minutes, and 10 per user per 20 minutes. A failed send revokes the token and answers 503. The Origin guard applies as for every POST. |
 | `GET /api/auth/passkeys` | | `{passkeys: [{id, name, createdAt, transports}]}` for the signed-in user; never key bytes or counters. |
 | `POST /api/auth/passkeys/:id/revoke` | `{}` | 200. Deletes one of the signed-in user's passkeys and every session of that user, the current one included. The last passkey may be revoked. The user's MCP keys stay live. |
 | `GET /api/admin/users` | | `{users}`: every user with `enrolledAt` (NULL while the invitation is pending). Admins only, 403 for members. |
@@ -693,7 +737,7 @@ known path with the wrong method is 405; signed out, both are 401. Every action 
 | `POST /api/admin/users/:id/remove` | `{}` | 200. Deletes the user with their passkeys, sessions, tokens and the MCP keys they created. 409 for the last enrolled admin. Admins only. |
 | `POST /api/admin/users/:id/passkeys/:keyId/revoke` | `{}` | 200. Deletes that passkey and every session of its user; their MCP keys stay live. Admins only. |
 | `POST /api/recs/:id/start-over` | `{}` | `{scenario}`. Detaches every thread asked from the rec that is still attached (sets `recDetachedAt` to the app clock time), so the rec dialog opens a fresh composer; an already detached thread keeps its time. Threads, messages, titles, archive and trash are untouched. 404 unknown or hidden rec. |
-| `POST /api/recs/:id/action` | `{action: start, snooze, dismiss, complete, reopen or task, arg?}` | `{scenario}`. `task` toggles task `arg`; `snooze` takes a wake label (default "Next month"). 400 bad action or task index, 404 unknown or hidden rec. Writes `rec_events` (actor `ui`). |
+| `POST /api/recs/:id/action` | `{action: start, snooze, dismiss, complete, reopen, task or owner, arg?}` | `{scenario}`. `task` toggles task `arg`; `snooze` takes a wake label (default "Next month"); `owner` sets the action owner to `arg` (one of `you`, `spouse`, `both`, `advisor`, `automatic`, case sensitive) with `owner_override = 1`, status unchanged. 400 bad action, task index or owner, 404 unknown or hidden rec. Writes `rec_events` (actor `ui`; for `owner` action `owner`, arg the owner, from and to the current status). |
 | `POST /api/wargame/:name/pick` | `{index}` (an index or an option id) | `{scenario}`. `name` is salary or deferral (404 otherwise); 400 out of range. |
 | `POST /api/decisions/:id/decide` | `{index?}` (a point index or id; default the stored pick) | `{scenario}`. Decide on the picked point of an open salary or deferral decision: status becomes decided and `decided_line` is built from the point's own label plus `{f:...}` tokens for the `wg.*` figures the registry holds (provenance stays on the figures). Records the pick in `wargame.picks`, writes the owner-stated assumption fact (`business.salaryDecided` = `{entity, salary}`, the S corp the game was built for and the point's `wg.salary.<id>.salary` value, or `business.deferralDecided` = `{option, amount}`; src `decide:salary` or `decide:deferral`, confirmed, locator names the decision and the figure), logs a `decide` rec event on the linked rec and schedules the plan job (trigger `decide`) on a real store. 404 unknown id, 400 no war game or bad index, 409 already decided, not open, upcoming or unavailable. |
 | `POST /api/decisions/:id/revisit` | `{}` | `{scenario}`. Reopens a decision decided that way: status open, `decided_line` cleared, the assumption fact deleted, a `revisit` rec event, plan job scheduled. 409 for a decision that is not decided with a stored choice. |
@@ -835,7 +879,9 @@ Passkeys.
    `recent_signin_required` and a fixed message to sign in again; nothing is stored. Account shows a
    Sign in again link to `/signin`, which accepts a new sign-in from a signed-in browser; the person
    then comes back to Account. Enrollment and recovery links carry their own token and need no prior
-   session, so the rule does not apply to them.
+   session, so the rule does not apply to them. The add-a-device link is the one exception in
+   kind: it is requested from a recent session (`POST /api/auth/passkeys/link`), but redeeming it
+   needs no session.
 
 Sessions and challenges.
 
@@ -854,7 +900,7 @@ Sessions and challenges.
 5. Clocks are wall time. Chromium treats `http://localhost` as secure, so local tests get the
    Secure cookie over plain HTTP.
 
-Enrollment and recovery links.
+Enrollment, recovery and add-a-device links.
 
 1. A link is `<FATHOM_PUBLIC_URL origin>/enroll#<token>`: 32 random bytes, base64url, in the
    fragment only, so it never reaches a request line, a server log or a Referer. The page reads it
@@ -879,7 +925,8 @@ Enrollment and recovery links.
    Bucket keys are hashed. Anonymous options generation is capped the same way. Invitations have
    their own `invite` global and per-client buckets with the recovery limits (120 a window
    globally, 60 per client, 10-minute windows), separate from recovery's, so one never spends the
-   other's quota; recovery keeps its per-email bucket and generic answer.
+   other's quota; recovery keeps its per-email bucket and generic answer. Add-a-device requests
+   have their own `device` buckets (see item 8).
 6. The client address comes from `createClientAddressResolver` in `src/auth/client-ip.mjs` (on
    `proxy-addr`), built from `FATHOM_TRUSTED_PROXIES`. That setting is the `X-Forwarded-For` trust
    boundary. When the socket address is not in a trusted CIDR, `X-Forwarded-For` is ignored and the
@@ -891,6 +938,28 @@ Enrollment and recovery links.
 7. Mail needs a real transport in production (`FATHOM_EMAIL_TRANSPORT` and its settings; the
    existing `FATHOM_EMAIL_TO` setup is assumed). `dev` writes the message, link included, to
    `outbox/` in the data directory.
+8. Add-a-device: a signed-in user with a recent sign-in requests `POST /api/auth/passkeys/link`,
+   which issues an `add-passkey` token for that user only and emails the link to the user's own
+   address. Limits: `device` global 120 and per client 60 per 10 minutes, and 10 per user per 20
+   minutes.
+9. Opening the link on another device runs the same `/enroll` page and register options and verify
+   with the token. It adds a passkey and never deletes passkeys or sessions. The redeeming browser
+   is signed in: its live session of the same user is kept, else a new session is created. The
+   token works once; expired or used is 410. A pending (not enrolled) user cannot use one.
+10. There is one pending token per user and purpose, so a pending `add-passkey` link does not
+    affect invitation or recovery links, and the reverse. Completing recovery deletes the user's
+    pending `add-passkey` link together with the old passkeys and sessions.
+11. A failed send revokes the token and answers 503, as for the other link mails.
+
+Auth mail layout.
+
+1. `src/auth/mail.mjs` builds every auth email from one email-safe HTML layout plus a matching
+   plain-text part: tables, inline styles, 560px wide, a text wordmark, no images, scripts or
+   tracking, a light palette with the Horizon accent, and a dark-mode media query. Interpolated
+   values are escaped.
+2. The link emails ("Your Fathom invitation", "Your Fathom recovery link", "Add a Fathom passkey
+   on another device") carry one button, the expiry and single-use note, and the plain URL as a
+   fallback. The layout emits no URL when no button is given.
 
 Security notices.
 
@@ -898,12 +967,13 @@ Security notices.
    the configured transport, outside the transaction and before the response returns. These
    notices never go through `email_sends`, which records financial mail only, and add no durable
    queue or retry.
-2. `Fathom passkey added` goes to the user when an invitation link or a signed-in session adds a
-   passkey.
+2. `Fathom passkey added` goes to the user when an invitation link, an add-a-device link or a
+   signed-in session adds a passkey.
 3. `Fathom account recovered` goes to the recovered user and to every enrolled admin, each address
    once. It says recovery completed and a new passkey was added.
 4. Each notice is a separate message to one recipient, so no recipient sees another's address.
-   Notices carry no link, token, session or key material.
+   Notices carry no link, token, session or key material, add-a-device redemptions included. They
+   use the same mail layout as the link emails, without the button.
 5. A failed send logs only the fixed code `security_notice_failed`, never the address or the error.
    The new passkey and session stay in place and the response is unchanged.
 
@@ -1003,7 +1073,7 @@ and JSON responses, closed when the response closes. Checks run in this order:
 5. The key's `last_used_at` is stamped, then the request runs with
    `ctx = {db, now, dataDir, clock}`.
 
-Scopes: `read` (every read tool) and `write:recs` (adds `set_recommendation_status`); every key
+Scopes: `read` (every read tool) and `write:recs` (adds `set_recommendation_status` and `set_recommendation_owner`); every key
 has `read`. `tools/list` returns only the key's tools, annotated `readOnlyHint` for read tools and
 `destructiveHint: false`, `openWorldHint: false`. Calling a registry tool outside the key's scopes
 returns an `isError` result `Permission denied: <name> needs the <scope> scope, which this key
@@ -2206,13 +2276,81 @@ November demo unknown because its actuals are stale; an August clock exercises k
 
 Goals and positions feed the planner and chat. `servesGoals` matches a rec to open goals by topic
 (retirement, education, cash, tax, giving, health, home) from the goal's words, kind and tracked
-sources and the rec's domain, value classes and id; the scenario sets `rec.serves` and the rec
-shows "Serves: <goal>". The planner ranks recs that tie on window close by whether they serve a
+sources and the rec's `goalKinds` (see "Rec owner and goal links"); the scenario sets `rec.serves`
+and the rec shows "Serves: <goal>". The planner ranks recs that tie on window close by whether they serve a
 goal, then by the owner's curve lean. `household_summary` and `list_goals` give the model the open
 goals (title, horizon, typed target with source `you`, tracked current value) and each curve's lean.
 In an Ask thread with no rec context the answerer also offers `propose_goal`; its last successful call becomes
 `provenance.goalProposal`, a target survives only when the owner's own message states it, and the
 chat card saves it through `POST /api/goals` when the owner taps Save. Chat never writes.
+
+## Rec owner and goal links
+
+Every rec has an action owner and either serves at least one open goal or is housekeeping
+(`recLinkError` in `src/shared/rec-links.mjs` is the rule; `OWNERS` and `OWNER_LABEL` live there too).
+
+Links are stored as goal kinds (`recs.goal_kinds`, the goal topics) and resolved at read time:
+`linkRecs` in `src/scenario/build.mjs` sets `rec.serves` (always an array, from `servesGoals` over
+the current open goals, specific topics before tax, at most three) and `rec.housekeeping`
+(`serves` is empty) on every rec. Adding or archiving a goal relinks at once, with no planning
+run. A rec's topics are exactly its `goalKinds`; a done goal does not link. `recFromRow` adds
+`owner`, `ownerOverride` (boolean) and `goalKinds`. `live.housekeeping` and `household_summary`
+`housekeepingCount` count open housekeeping recs (not hidden, done or dismissed). MCP rec tools
+return linked recs; an owner goal's title in `serves` stays literal (seed titles are resolved),
+as in `list_goals`.
+
+Planner recs take `goalKinds` and `owner` from their trigger (`src/jobs/triggers/*.mjs` exports
+`goalKinds`, `owner` and, where the owner depends on the household, `ownerFor(ctx, hit)`; `recOf`
+applies them). `applyRecs` rewrites `goal_kinds` every run and `owner` only while
+`owner_override = 0`, so an owner-set owner survives every later run, including retire then
+revive and block then unblock.
+
+| Trigger | Goal kinds | Static owner | `ownerFor` |
+|---|---|---|---|
+| fed-q4-estimate | tax | you | none |
+| va-q4-estimate | tax | you | none |
+| year-end-retirement | retirement, tax | you | the solo plan person (`info.solo.person`); none: static |
+| solo401k-setup | retirement | you | the solo plan person (`info.solo.person`); none: static |
+| scorp-salary | tax, retirement | you | the S corp owner the salary war game models (`model.salary.person`); the confirm form: static |
+| invoice-deferral | tax | you | the business owner the deferral war game models (`model.deferral.person`); the confirm form: static |
+| hsa-room | health, retirement, tax | you | none |
+| va529 | education, tax | both | none |
+| charitable-bunching | giving, tax | both | none |
+| backdoor-roth | retirement | you | people with room or basis: both is `both`, only the spouse is `spouse`, else `you` |
+| dependent-care-fsa | tax, cash | both | none |
+| new-child | cash, health | both | none |
+| missing-data | none (always housekeeping) | you | none |
+
+A person maps to an owner with `personOwner`: `spouse` is `spouse`, anyone else `you`.
+
+Demo recs name `goalKinds` and `owner` in `demo/scenario.mjs` (and the mock scenario); the seed
+writes them to the columns, not the def.
+
+| Demo rec | Goal kinds | Owner |
+|---|---|---|
+| offcycle | retirement, tax | you |
+| deferral | tax, cash | you |
+| dcfsa | tax | both |
+| va529 | education, tax | both |
+| vaq4 | tax | you |
+| reserve | cash, tax | automatic |
+| spsep | retirement, tax | spouse |
+| hsa | health, retirement, tax | you |
+| backdoor | retirement | you |
+| spouseentity | tax | spouse |
+| babyprep | cash, health | both |
+| umbrella | none | both |
+| compmemo | tax | advisor |
+| filingplan | none | both |
+| mortgage | home | both |
+| q3 | tax | automatic |
+| megabackdoor | retirement | advisor |
+| daf | giving, tax | both |
+
+The owner changes it through `POST /api/recs/:id/action` `{action: 'owner', arg}` (the rec
+dialog's "Action owner" select in the meta row) or the MCP `set_recommendation_owner` tool. The
+dialog reads "Serves: <goals>" or, for a housekeeping rec, "Housekeeping"; plan rows show the
+serves line only.
 
 ## Bank connections
 
