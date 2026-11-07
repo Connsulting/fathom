@@ -76,7 +76,7 @@ test('an emitted key without an answer shape fails through the trigger catalog',
 test('Virginia questions name display labels and use stable account ids', () => {
   const q = questionFor(['accounts.va529'], { accounts, facts: {} });
   assert.match(q.title, /College fund/);
-  assert.match(q.fields[0].group, /College fund ending 3333/);
+  assert.match(q.fields[0].group, /College fund \(3333\)/);
   assert.match(q.fields[0].label, /^Is this Virginia's own 529 program/);
   assert.deepEqual(q.fields[0].path, ['stable-college', 'virginiaPlan']);
   assert.equal(q.fields[1].unit, 'USD');
