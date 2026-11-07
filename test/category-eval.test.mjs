@@ -32,6 +32,28 @@ test('thresholds require precision over the entire accepted confidence tail',()=
   const scores=[...Array.from({length:99},()=>({confidence:.99,correct:true,top3:true})),{confidence:.99,correct:false,top3:true},...Array.from({length:10},()=>({confidence:.7,correct:false,top3:false}))];
   const c=calibration(scores); assert.equal(c.thresholds.autoApply,.99); assert.equal(c.thresholds.review,.7);
   assert.equal(calibration([{confidence:.9,correct:false,top3:false}]).thresholds.autoApply,null);
+  assert.equal(calibration([...Array.from({length:95},()=>({confidence:.91,correct:true})),
+    ...Array.from({length:5},()=>({confidence:.91,correct:false}))]).thresholds.autoApply,.91);
+});
+
+test('chronological replay excludes current labels, same-date labels, future rows and future Confirm answers',async t=>{
+  const dir=mkdtempSync(join(tmpdir(),'category-replay-')), s=createInstance(dir,{mode:'real'});
+  t.after(()=>{s.db.close();s.platform.close();rmSync(dir,{recursive:true,force:true});});
+  s.db.exec("INSERT INTO accounts (id,kind,name) VALUES ('a','checking','Synthetic account')");
+  for(let day=1;day<=7;day++) s.db.prepare("INSERT INTO transactions (account_id,date,description,amount,category,parser) VALUES ('a',?,'Cobalt Market',-45,?,'aggregator')")
+    .run(`2032-01-0${day}`,day<=5?'Groceries':'Business');
+  const seen=[];
+  const jev={isOn:()=>true,stats:()=>({costUsd:0,latenciesMs:[]}),choose:async qs=>qs.map(q=>{
+    seen.push(q);
+    for(const example of q.state.examples??[]) assert.ok(example.date<q.state.date);
+    assert.equal(q.state.category,undefined);
+    return {choice:'Groceries',confidence:.96,probabilities:{Groceries:.96,Business:.04}};
+  })};
+  const result=await evaluateCategories(s.db,jev,{sampleSize:7});
+  assert.equal(result.rows,7);assert.equal(result.evaluated,7);
+  assert.equal(result.stages.history.rows,3);assert.equal(result.stages.history.correct,2);
+  assert.equal(result.stages.model.rows,4);
+  assert.ok(seen.some(q=>q.state.date==='2032-01-01' && !q.state.examples));
 });
 
 test('read-only store refuses missing identity and missing eval schema without changing them',t=>{
