@@ -82,27 +82,30 @@ function cleanName(name) {
 export function createKeyService({ db, serverSecret, now = () => new Date() }) {
   const byId = db.prepare('SELECT * FROM api_keys WHERE id = ?');
   const all = db.prepare('SELECT * FROM api_keys ORDER BY created_at, id');
-  const insert = db.prepare('INSERT INTO api_keys (id, name, key_hash, scopes, created_at) VALUES (?, ?, ?, ?, ?)');
+  const owned = db.prepare('SELECT * FROM api_keys WHERE user_id = ? ORDER BY created_at, id');
+  const insert = db.prepare('INSERT INTO api_keys (id, name, key_hash, scopes, created_at, user_id) VALUES (?, ?, ?, ?, ?, ?)');
   const revokeStmt = db.prepare('UPDATE api_keys SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL');
   const touchStmt = db.prepare('UPDATE api_keys SET last_used_at = ? WHERE id = ?');
 
   return {
     // Returns { key, record }; the key is not kept anywhere after this call.
-    create({ name, scopes } = {}) {
+    create({ name, scopes, userId = null } = {}) {
       const clean = cleanName(name);
       const scopeList = normalizeScopes(scopes);
       const key = KEY_PREFIX + randomBytes(32).toString('base64url');
       const id = 'key_' + randomBytes(6).toString('hex');
-      insert.run(id, clean, hashKey(key, serverSecret), JSON.stringify(scopeList), now().toISOString());
+      insert.run(id, clean, hashKey(key, serverSecret), JSON.stringify(scopeList), now().toISOString(), userId);
       return { key, record: toRecord(byId.get(id)) };
     },
 
-    list() {
-      return all.all().map(toRecord);
+    list({ userId } = {}) {
+      return (userId === undefined ? all.all() : owned.all(userId)).map(toRecord);
     },
 
-    revoke(id) {
-      if (typeof id !== 'string' || !byId.get(id)) throw new KeyError('not_found', 'no such key');
+    revoke(id, { userId } = {}) {
+      const row = typeof id === 'string' ? byId.get(id) : null;
+      if (!row) throw new KeyError('not_found', 'no such key');
+      if (userId !== undefined && row.user_id !== userId) throw new KeyError('forbidden', 'cannot manage another user key');
       revokeStmt.run(now().toISOString(), id);
       return toRecord(byId.get(id));
     },

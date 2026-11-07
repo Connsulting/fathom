@@ -2,6 +2,7 @@
 // need them, from the files named here, never from this module or from tracked files.
 
 import { resolve } from 'node:path';
+import { isIP } from 'node:net';
 import { parseAllowedHosts } from './ingest/simplefin-hosts.mjs';
 
 const ENGINES = ['live', 'fake', 'off'];
@@ -9,6 +10,37 @@ const TRANSPORTS = ['dev', 'smtp', 'resend', 'postmark', 'agentmail'];
 const SMTP_PORTS = [465, 587];
 
 export class ConfigError extends Error {}
+
+export function validatePublicUrl(value, { required = false } = {}) {
+  const fail = () => { throw new ConfigError('FATHOM_PUBLIC_URL must be an HTTPS DNS origin or an explicit HTTP localhost port, with no credentials, path, query or fragment'); };
+  if (value == null || value === '') {
+    if (required) fail();
+    return null;
+  }
+  if (typeof value !== 'string') fail();
+  const match = /^(https?):\/\/([A-Za-z0-9.-]+)(?::([0-9]{1,5}))?\/?$/i.exec(value);
+  if (!match) fail();
+  let url;
+  try { url = new URL(value); } catch { fail(); }
+  if (isIP(url.hostname) || url.hostname.split('.').some(label => !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label))
+    || url.hostname.length > 253 || (match[3] !== undefined && Number(match[3]) < 1)
+    || (url.protocol === 'http:' && (url.hostname !== 'localhost' || !match[3]))) fail();
+  return url.protocol === 'http:' && !url.port ? `${url.origin}:80` : url.origin;
+}
+
+function trustedProxyCidrs(value) {
+  if (value == null || value === '') return [];
+  const fail = () => { throw new ConfigError('FATHOM_TRUSTED_PROXIES must contain comma-separated explicit IPv4 or IPv6 CIDRs'); };
+  if (typeof value !== 'string') fail();
+  const cidrs = value.split(',').map(cidr => cidr.trim());
+  for (const cidr of cidrs) {
+    const parts = cidr.split('/');
+    const family = isIP(parts[0]);
+    if (parts.length !== 2 || !family || !/^(0|[1-9]\d{0,2})$/.test(parts[1])
+      || Number(parts[1]) > (family === 4 ? 32 : 128)) fail();
+  }
+  return cidrs;
+}
 
 function isoDate(v) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
@@ -81,19 +113,8 @@ export function loadConfig(env = process.env) {
   const [emailFrom, emailFromFile] = valueOrFile(env, 'FATHOM_EMAIL_FROM');
   const [emailTo, emailToFile] = valueOrFile(env, 'FATHOM_EMAIL_TO');
 
-  // The URL MCP clients use to reach this server, when it sits behind a proxy or a name. The
-  // value is not echoed in the error: it could carry credentials.
-  let publicUrl = null;
-  if (!blank(env.FATHOM_PUBLIC_URL)) {
-    const raw = env.FATHOM_PUBLIC_URL;
-    let u = null;
-    try { u = new URL(raw); } catch { u = null; }
-    if (!u || !['http:', 'https:'].includes(u.protocol) || u.username || u.password || u.search || u.hash
-      || raw.includes('?') || raw.includes('#')) {
-      throw new ConfigError('FATHOM_PUBLIC_URL must be an absolute http or https URL with no credentials, query or fragment');
-    }
-    publicUrl = u.href;
-  }
+  const publicUrl = validatePublicUrl(opt(env.FATHOM_PUBLIC_URL));
+  const trustedProxies = trustedProxyCidrs(env.FATHOM_TRUSTED_PROXIES);
 
   const allowedHosts = blank(env.FATHOM_ALLOWED_HOSTS) ? []
     : env.FATHOM_ALLOWED_HOSTS.split(',').map(h => h.trim().toLowerCase()).filter(Boolean);
@@ -121,10 +142,8 @@ export function loadConfig(env = process.env) {
     emailSmtpHost: blank(env.FATHOM_EMAIL_SMTP_HOST) ? 'smtp.gmail.com' : env.FATHOM_EMAIL_SMTP_HOST,
     emailSmtpPort: smtpPort(env.FATHOM_EMAIL_SMTP_PORT),
     publicUrl,
+    trustedProxies,
     allowedHosts,
     simplefinHosts,
-    // Owner login list, raw: src/api/identity.mjs parses it and fails closed on a problem.
-    ownerLogins: blank(env.FATHOM_OWNER_LOGINS) ? null : env.FATHOM_OWNER_LOGINS,
-    ownerLoginsFile: blank(env.FATHOM_OWNER_LOGINS_FILE) ? null : env.FATHOM_OWNER_LOGINS_FILE,
   };
 }

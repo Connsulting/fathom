@@ -22,6 +22,9 @@ function fail(msg) {
 }
 
 const raw = process.env.E2E_DATA;
+if (process.env.BASE_URL || process.env.FATHOM_SMOKE_BASE_URL || process.env.FATHOM_SMOKE_TARGET === 'real') {
+  fail('refusing to reset data with a supplied smoke target');
+}
 if (!raw) fail('E2E_DATA is required');
 let dataDir;
 if (process.env.E2E_EXTERNAL === '1') {

@@ -1,0 +1,14 @@
+export const session = ctx => ctx.auth.session(ctx);
+export const registerOptions = ctx => ctx.auth.registerOptions(ctx);
+export const registerVerify = ctx => ctx.auth.registerVerify(ctx);
+export const signinOptions = ctx => ctx.auth.signinOptions(ctx);
+export const signinVerify = ctx => ctx.auth.signinVerify(ctx);
+export const recover = ctx => ctx.auth.recover(ctx);
+export const signout = ctx => ctx.auth.signout(ctx);
+export const passkeys = ctx => ctx.auth.passkeys(ctx);
+export const revokePasskey = ctx => ctx.auth.revokePasskey(ctx);
+export const users = ctx => ctx.auth.users(ctx);
+export const invite = ctx => ctx.auth.invite(ctx);
+export const setRole = ctx => ctx.auth.setRole(ctx);
+export const removeUser = ctx => ctx.auth.removeUser(ctx);
+export const adminRevokePasskey = ctx => ctx.auth.adminRevokePasskey(ctx);

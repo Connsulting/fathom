@@ -114,16 +114,16 @@ describe('config', () => {
     for (const p of ['25', '2525', 'abc', '465.5']) assert.throws(() => loadConfig({ FATHOM_EMAIL_SMTP_PORT: p }), ConfigError, p);
   });
 
-  test('FATHOM_PUBLIC_URL is an http or https URL, normalized with URL.href', () => {
-    assert.equal(loadConfig({ FATHOM_PUBLIC_URL: 'https://fathom.example.invalid' }).publicUrl, 'https://fathom.example.invalid/');
-    assert.equal(loadConfig({ FATHOM_PUBLIC_URL: 'http://fathom.example.invalid:8080' }).publicUrl, 'http://fathom.example.invalid:8080/');
-    for (const u of ['https://fathom.example.invalid/', 'https://fathom.example.invalid/app/']) {
-      assert.equal(loadConfig({ FATHOM_PUBLIC_URL: u }).publicUrl, new URL(u).href, `a trailing slash is accepted: ${u}`);
+  test('FATHOM_PUBLIC_URL is a secure public origin or explicit HTTP localhost origin', () => {
+    assert.equal(loadConfig({ FATHOM_PUBLIC_URL: 'https://fathom.example.invalid' }).publicUrl, 'https://fathom.example.invalid');
+    assert.equal(loadConfig({ FATHOM_PUBLIC_URL: 'http://localhost:8080' }).publicUrl, 'http://localhost:8080');
+    for (const u of ['https://fathom.example.invalid/', 'https://fathom.example.invalid:8443/']) {
+      assert.equal(loadConfig({ FATHOM_PUBLIC_URL: u }).publicUrl, new URL(u).origin, `a trailing slash is accepted: ${u}`);
     }
     for (const u of [
       'https://user:pass@fathom.example.invalid', 'https://user@fathom.example.invalid',
       'https://fathom.example.invalid/?a=1', 'https://fathom.example.invalid/#frag',
-      'ftp://fathom.example.invalid', 'javascript:alert(1)', 'not a url', 'fathom.example.invalid',
+      'https://fathom.example.invalid/app/', 'http://fathom.example.invalid:8080', 'http://localhost', 'http://127.0.0.1:8080', 'https://127.0.0.1', 'ftp://fathom.example.invalid', 'javascript:alert(1)', 'not a url', 'fathom.example.invalid',
     ]) {
       assert.throws(() => loadConfig({ FATHOM_PUBLIC_URL: u }), ConfigError, u);
     }

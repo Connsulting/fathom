@@ -10,7 +10,7 @@ import { Readable } from 'node:stream';
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync, rmSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
-import { src, spawnServer, request, postJson, runCommand, tempDir, freePort, openStore, SERVER_TIMEOUT, TEST_OWNER } from '../helpers/server.mjs';
+import { src, spawnServer, request, postJson, runCommand, tempDir, freePort, openStore, SERVER_TIMEOUT, spawnAuthenticatedServer } from '../helpers/server.mjs';
 import { fixturePath, aggregatorCsv } from '../helpers/ingest.mjs';
 import { writeXlsx } from '../helpers/xlsx.mjs';
 import { textPdf, markerFontPdf, inflateBombPdf } from '../helpers/pdf.mjs';
@@ -36,8 +36,8 @@ function form(files, extra = {}) {
   return fd;
 }
 
-async function upload(baseUrl, files, extra) {
-  const res = await fetch(`${baseUrl}/api/files`, { method: 'POST', headers: { 'tailscale-user-login': TEST_OWNER }, body: form(files, extra) });
+async function upload(baseUrl, files, extra, headers = {}) {
+  const res = await fetch(`${baseUrl}/api/files`, { method: 'POST', headers, body: form(files, extra) });
   const text = await res.text();
   let json = null;
   try { json = JSON.parse(text); } catch { /* not JSON */ }
@@ -314,14 +314,14 @@ describe('POST /api/files on a demo server', () => {
 
 describe('POST /api/files in real mode', () => {
   test('without FATHOM_DATA_KEY_FILE: 409 naming the variable, and nothing stored', T, async () => {
-    const s = await spawnServer({ env: { FATHOM_DEMO: '0', FATHOM_ENGINE: 'off' } });
+    const s = await spawnAuthenticatedServer({ env: { FATHOM_DEMO: '0', FATHOM_ENGINE: 'off' } });
     try {
-      const r = await upload(s.baseUrl, [{ name: 'canary.csv', bytes: Buffer.from(canaryCsv()), type: 'text/csv' }]);
+      const r = await upload(s.baseUrl, [{ name: 'canary.csv', bytes: Buffer.from(canaryCsv()), type: 'text/csv' }], undefined, s.headers);
       assert.equal(r.status, 409);
       assert.match(r.json.error, /FATHOM_DATA_KEY_FILE/);
       const files = join(s.dataDir, 'files');
       assert.ok(!existsSync(files) || readdirSync(files).length === 0, 'nothing under files/');
-      const list = await request(s.baseUrl, { path: '/api/files' });
+      const list = await s.request({ path: '/api/files' });
       assert.equal(list.status, 200);
       assert.deepEqual(list.json.files, []);
       for (const v of CANARIES) assert.ok(!s.output().includes(v));
@@ -335,9 +335,9 @@ describe('POST /api/files in real mode', () => {
     const keyDir = await tempDir('fathom-key-');
     const keyFile = join(keyDir, 'data.key');
     writeFileSync(keyFile, randomBytes(32), { mode: 0o600 });
-    const s = await spawnServer({ env: { FATHOM_DEMO: '0', FATHOM_ENGINE: 'off', FATHOM_DATA_KEY_FILE: keyFile } });
+    const s = await spawnAuthenticatedServer({ env: { FATHOM_DEMO: '0', FATHOM_ENGINE: 'off', FATHOM_DATA_KEY_FILE: keyFile } });
     try {
-      const r = await upload(s.baseUrl, [{ name: 'canary.csv', bytes: Buffer.from(canaryCsv()), type: 'text/csv' }]);
+      const r = await upload(s.baseUrl, [{ name: 'canary.csv', bytes: Buffer.from(canaryCsv()), type: 'text/csv' }], undefined, s.headers);
       assert.equal(r.status, 200, r.text.slice(0, 300));
       assert.equal(r.json.files[0].status, 'imported');
       const blob = readFileSync(join(s.dataDir, 'files', `${r.json.files[0].fileId}.bin`));

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { rm } from 'node:fs/promises';
-import { tempDb, spawnServer, request, postJson } from './helpers/server.mjs';
+import { tempDb, spawnAuthenticatedServer, request } from './helpers/server.mjs';
 import { seedDemo } from '../demo/seed.mjs';
 import demo from '../demo/scenario.mjs';
 import { setSetting } from '../src/store/db.mjs';
@@ -150,6 +150,8 @@ test('income meter uses current-year actual income, explicit plan and nested sou
 });
 
 test('GET pace, scenario and MCP share the deterministic read-only result, including known health', async t => {
+  let s;
+  t.after(async () => { if (s) await s.stop(); });
   const { db, dataDir } = await store(t);
   account(db, 'a'); putGoal(db);
   upsertFact(db, { key: 'pace.tax.2032', value: { reserved: 10000, owed: 20000, asOf: clock }, asOf: clock, src: 'you', confirmed: true });
@@ -158,15 +160,16 @@ test('GET pace, scenario and MCP share the deterministic read-only result, inclu
   assert.deepEqual(buildScenario(db).pace, direct);
   assert.deepEqual(await callTool('get_pace', {}, { db, clock }), direct);
   assert.equal(db.prepare('SELECT total_changes() AS n').get().n, before);
-  const s = await spawnServer({ dataDir, env: { FATHOM_DEMO: '0', FATHOM_ENGINE: 'off', FATHOM_CLOCK: clock } });
-  t.after(() => s.stop());
-  const response = await request(s.baseUrl, { path: '/api/pace' });
+  s = await spawnAuthenticatedServer({ dataDir, env: { FATHOM_DEMO: '0', FATHOM_ENGINE: 'off', FATHOM_CLOCK: clock } });
+  const response = await s.request({ path: '/api/pace' });
   assert.equal(response.status, 200);
   assert.equal(response.json.goals[0].status, 'on pace');
   assert.equal(response.json.meters.tax.meter.ratio.v, 0.5);
-  assert.deepEqual(response.json, (await request(s.baseUrl, { path: '/api/scenario' })).json.pace);
-  assert.equal((await request(s.baseUrl, { path: '/api/pace', headers: { 'tailscale-user-login': undefined } })).status, 401);
-  const create = await postJson(s.baseUrl, '/api/goals', { title: 'New savings', target: 40000, targetDate: '2033-01-01', track: { accounts: ['a'] } });
+  assert.deepEqual(response.json, (await s.request({ path: '/api/scenario' })).json.pace);
+  for (const headers of [{}, { 'tailscale-user-login': s.session.user.email }]) {
+    assert.equal((await request(s.baseUrl, { path: '/api/pace', headers })).status, 401);
+  }
+  const create = await s.postJson('/api/goals', { title: 'New savings', target: 40000, targetDate: '2033-01-01', track: { accounts: ['a'] } });
   assert.equal(create.status, 200);
   assert.equal(create.json.goal.pace.startValue, 18000);
 });

@@ -212,3 +212,20 @@ test('seedDemo itself refuses a real store', T, async () => {
   assert.equal(getSetting(t.db, 'mode', null), 'real');
   t.close();
 });
+
+test('demo seeding and reset tolerate the auth household singleton without duplicating or erasing financial seed data', T, async () => {
+  const { createAuthStore } = await import('../src/auth/store.mjs');
+  const { seedDemo } = await import('../demo/seed.mjs');
+  const t = await tempDb();
+  try {
+    createAuthStore(t.db).ensureHousehold();
+    seedDemo(t.db);
+    const accounts = t.db.prepare('SELECT id, mask, kind FROM accounts ORDER BY id').all();
+    const transactions = t.db.prepare('SELECT count(*) AS n FROM transactions').get().n;
+    assert.equal(getSetting(t.db, 'mode', null), 'demo');
+    seedDemo(t.db);
+    assert.equal(t.db.prepare('SELECT count(*) AS n FROM households').get().n, 1);
+    assert.deepEqual(t.db.prepare('SELECT id, mask, kind FROM accounts ORDER BY id').all(), accounts);
+    assert.equal(t.db.prepare('SELECT count(*) AS n FROM transactions').get().n, transactions);
+  } finally { t.close(); }
+});

@@ -1,7 +1,5 @@
 -- 019 rec owner and goal links: every rec gets an action owner and the goal kinds it serves.
 -- Additive only (ALTER TABLE ADD COLUMN with constant defaults and CHECKs), so no table rebuild.
--- 018 is reserved for the in-flight auth migration; a store at 017 applies 019 now and 018 when it
--- lands (migrations apply by id, each once).
 --
 -- owner: who acts on the rec (you, spouse, both, advisor, automatic). owner_override: 1 once the
 -- owner set it in the app or through the MCP tool; the planner never changes an overridden owner.

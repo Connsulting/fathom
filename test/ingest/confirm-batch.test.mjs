@@ -6,8 +6,7 @@
 
 import test, { describe, before } from 'node:test';
 import assert from 'node:assert/strict';
-import http from 'node:http';
-import { src, postJson, TEST_OWNER } from '../helpers/server.mjs';
+import { src, serveAppFixture } from '../helpers/server.mjs';
 import { fixture, realStore, offEngine, one, count } from '../helpers/ingest.mjs';
 
 let P;
@@ -141,21 +140,13 @@ describe('reopenItems', () => {
 
 describe('batch routes over HTTP', () => {
   async function withRouter(s, fn) {
-    const { createHandler } = await src('src/api/router.mjs');
-    // A real store: the handler admits TEST_OWNER, which postJson sends by default.
-    const config = { ...s.config, ownerLogins: TEST_OWNER, ownerLoginsFile: null };
-    const server = http.createServer(createHandler({ db: s.db, config, engine: await offEngine() }));
-    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-    try {
-      return await fn(`http://127.0.0.1:${server.address().port}`);
-    } finally {
-      await new Promise((resolve) => { server.close(resolve); server.closeAllConnections(); });
-    }
+    const app = await serveAppFixture({ db: s.db, config: s.config, engine: await offEngine(), authenticated: true });
+    try { return await fn(app); } finally { await app.close(); }
   }
 
-  test('POST /api/confirm/answers answers the batch and propagates; malformed bodies are 400', () => withHousehold((s) => withRouter(s, async (base) => {
+  test('POST /api/confirm/answers answers the batch and propagates; malformed bodies are 400', () => withHousehold((s) => withRouter(s, async (client) => {
     for (const body of [{}, { answers: 'owner' }, { answers: [{ id: ownerItem(s.db, 'card').id }] }]) {
-      const bad = await postJson(base, '/api/confirm/answers', body);
+      const bad = await client.postJson('/api/confirm/answers', body);
       assert.equal(bad.status, 400, `${JSON.stringify(body)}: ${bad.text.slice(0, 200)}`);
       assert.equal(typeof bad.json.error, 'string');
     }
@@ -163,7 +154,7 @@ describe('batch routes over HTTP', () => {
 
     const checking = ownerItem(s.db, 'checking').id;
     const card = ownerItem(s.db, 'card').id;
-    const ok = await postJson(base, '/api/confirm/answers', { answers: [{ id: checking, answer: 'owner' }, { id: card, answer: 'spouse' }] });
+    const ok = await client.postJson('/api/confirm/answers', { answers: [{ id: checking, answer: 'owner' }, { id: card, answer: 'spouse' }] });
     assert.equal(ok.status, 200, ok.text.slice(0, 300));
     assert.ok(ok.json.scenario && typeof ok.json.scenario === 'object', 'the body carries the scenario');
     assert.deepEqual(ok.json.items.map((i) => [i.id, i.status, i.answer, i.final]), [[checking, 'answered', 'owner', null], [card, 'answered', 'spouse', null]]);
@@ -174,17 +165,17 @@ describe('batch routes over HTTP', () => {
     assert.equal(brokerage.answer, 'owner', 'the route ran autoResolve: the same-holder brokerage is answered');
     assert.equal(C.autoInfo(s.db, brokerage.id).rule, 'holder_match');
 
-    const refusedBatch = await postJson(base, '/api/confirm/answers', { answers: [{ id: ownerItem(s.db, 'rainyDay').id, answer: 'joint' }, { id: card, answer: 'owner' }] });
+    const refusedBatch = await client.postJson('/api/confirm/answers', { answers: [{ id: ownerItem(s.db, 'rainyDay').id, answer: 'joint' }, { id: card, answer: 'owner' }] });
     assert.equal(refusedBatch.status, 409, 'an already answered row refuses the batch like the single answer route');
     assert.equal(ownerItem(s.db, 'rainyDay').status, 'pending');
   })));
 
-  test('POST /api/confirm/reopen-many reopens the group', () => withHousehold((s) => withRouter(s, async (base) => {
+  test('POST /api/confirm/reopen-many reopens the group', () => withHousehold((s) => withRouter(s, async (client) => {
     const card = ownerItem(s.db, 'card').id;
     const rainy = ownerItem(s.db, 'rainyDay').id;
-    const ok = await postJson(base, '/api/confirm/answers', { answers: [{ id: card, answer: 'spouse' }, { id: rainy, answer: 'joint' }] });
+    const ok = await client.postJson('/api/confirm/answers', { answers: [{ id: card, answer: 'spouse' }, { id: rainy, answer: 'joint' }] });
     assert.equal(ok.status, 200, ok.text.slice(0, 300));
-    const r = await postJson(base, '/api/confirm/reopen-many', { ids: [card, rainy] });
+    const r = await client.postJson('/api/confirm/reopen-many', { ids: [card, rainy] });
     assert.equal(r.status, 200, r.text.slice(0, 300));
     assert.ok(r.json.scenario && typeof r.json.scenario === 'object');
     assert.deepEqual(r.json.items.map((i) => [i.id, i.status, i.answer]), [[card, 'pending', null], [rainy, 'pending', null]]);

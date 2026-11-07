@@ -14,7 +14,7 @@ import { sdkStreamEvent, consumeSdkMessages } from '../src/engine/live.mjs';
 import { createLivePacks } from '../src/packs/live.mjs';
 import { createLiveAnswerer, renderAnswer, groundAnswer, PRODUCT_RULES, PROGRESS_LABELS, PROGRESS_START } from '../src/api/answerer.mjs';
 import { stripSources, markdownBlocks, streamHtml, wrapBlocks, listMarkerSpans } from '../src/shared/answer-text.mjs';
-import { SERVER_TIMEOUT, withServer, request, postJson, openStore, IDENTITY_HEADER, tempDb } from './helpers/server.mjs';
+import { SERVER_TIMEOUT, withServer, request, postJson, openStore, tempDb } from './helpers/server.mjs';
 
 const T = { timeout: SERVER_TIMEOUT };
 const FAKE = { FATHOM_ENGINE: 'fake', FATHOM_FAKE_STREAM_MS: '0' };
@@ -97,7 +97,7 @@ test('a client that disconnects mid-stream still gets its answer stored once', T
   const payload = JSON.stringify({ text: QUICK });
   const key = await new Promise((resolve, reject) => {
     const req = http.request({ host: url.hostname, port: url.port, method: 'POST', path: '/api/threads',
-      headers: { 'content-type': 'application/json', accept: 'text/event-stream', [IDENTITY_HEADER]: 'owner@example.test',
+      headers: { 'content-type': 'application/json', accept: 'text/event-stream',
         'content-length': Buffer.byteLength(payload) } }, res => {
       let buf = '';
       res.on('data', c => {

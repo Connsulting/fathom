@@ -18,6 +18,7 @@ const REAL_ROUTES = [
 ];
 
 test.describe('routes', { tag: '@smoke' }, () => {
+  test.skip(SMOKE_REAL && !process.env.FATHOM_SMOKE_STORAGE_STATE, 'authenticated real-store smoke requires supplied storageState');
   test.beforeEach(async ({ request }) => {
     // Locally the other specs mutate the shared demo store, so start from the seed. A remote
     // target is never reset. Real mode never reaches this reset: the shared fixture aborts writes.
@@ -125,7 +126,15 @@ test.describe('routes', { tag: '@smoke' }, () => {
     await expect(groups.nth(0).locator('.h-more-h')).toHaveText('Household');
     await expect(groups.nth(0).getByRole('link')).toHaveText(['Goals', 'Accounts', 'Files', 'Advisor', 'Year end']);
     await expect(groups.nth(1).locator('.h-more-h')).toHaveText('System');
-    await expect(groups.nth(1).getByRole('link')).toHaveText(SMOKE_REAL ? ['Connect', 'Engine', 'Email', 'Setup'] : ['Connect', 'Engine', 'Email']); // a real store also has Setup
+    if (SMOKE_REAL) {
+      for (const name of ['Connect', 'Engine', 'Email', 'Setup', 'Account']) {
+        await expect(panel.getByRole('link', { name, exact: true })).toBeVisible();
+      }
+      const { identity } = await (await request.get('/api/identity')).json();
+      await expect(panel.getByRole('link', { name: 'Household', exact: true })).toHaveCount(identity.role === 'admin' ? 1 : 0);
+    } else {
+      await expect(groups.nth(1).getByRole('link')).toHaveText(['Connect', 'Engine', 'Email']);
+    }
 
     await groups.nth(1).getByRole('link', { name: 'Engine', exact: true }).click();
     await expect(page).toHaveURL(/#\/engine$/);
