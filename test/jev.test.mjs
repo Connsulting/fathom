@@ -93,3 +93,14 @@ test('outbound pause is rechecked before each batch and retry, then resume permi
   await assert.rejects(jev.choose(questions()),/outbound_paused/);
   assert.equal(calls,2);
 });
+
+test('a pause during a failed attempt prevents its retry and resume remains live',async t=>{
+  let enabled=true,calls=0;
+  const jev=await createJev({...setup(t),canSend:()=>enabled,sleep:async()=>{},transport:async(_,o)=>{
+    calls++;
+    if(calls===1) {enabled=false;return new Response('',{status:503});}
+    return Response.json(response(JSON.parse(o.body)));
+  }});
+  await assert.rejects(jev.choose(questions()),/outbound_paused/);assert.equal(calls,1);
+  enabled=true;assert.equal((await jev.choose(questions())).length,1);assert.equal(calls,2);
+});

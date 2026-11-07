@@ -39,7 +39,9 @@ export async function evaluateCategories(db,jev,{sampleSize=1000}={}) {
     const resolved=resolveCategories(historical).get(row.id);
     if(['merchant','structural'].includes(resolved.layer)) {
       const stage=resolved.layer==='merchant'?'history':'rules';
-      stages[stage].push({correct:resolved.category===row.truth});
+      // Transfer aliases all exclude the same cash flow from spending; retain exact-label precision too.
+      const exact=resolved.category===row.truth;
+      stages[stage].push({correct:exact || (stage==='rules' && resolved.bucket==='transfer' && sourceBucket(row.truthParser,row.truth)==='transfer'),exact});
     } else {
       pending.push({row,question:categoryQuestions([target],{accounts:input.accounts,householdNames,categories:names,
         examples:[historyExamples(target,historical,createHistoryIndex(historical))]})[0]});
@@ -62,7 +64,8 @@ export async function evaluateCategories(db,jev,{sampleSize=1000}={}) {
     precision:rows.length?rows.filter(s=>s.correct).length/rows.length:null,coverage:sample.length?rows.length/sample.length:0});
   const stats=jev.stats();
   return {rows:sample.length,evaluated:Object.values(stages).reduce((n,s)=>n+s.length,0),
-    stages:Object.fromEntries(Object.entries(stages).map(([k,v])=>[k,summarize(v)])),modelAuto:summarize(accepted),
+    stages:Object.fromEntries(Object.entries(stages).map(([k,v])=>[k,{...summarize(v),
+      ...(k==='rules'?{comparison:'category or equivalent transfer category',exactCategoryPrecision:v.length?v.filter(s=>s.exact).length/v.length:null}:{})}])),modelAuto:summarize(accepted),
     top1:scores.length?scores.filter(s=>s.correct).length/scores.length:null,
     top3:scores.length?scores.filter(s=>s.top3).length/scores.length:null,...calibrated,costUsd:stats.costUsd,
     latencyMs:{p50:percentile(stats.latenciesMs,.5),p95:percentile(stats.latenciesMs,.95)},...(stopped?{stopped}:{})};

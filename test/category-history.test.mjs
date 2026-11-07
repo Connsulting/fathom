@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInstance } from '../src/platform/db.mjs';
@@ -8,7 +8,7 @@ import { setSetting } from '../src/store/db.mjs';
 import { loadCategoryInputs, queueCategoryChecks } from '../src/categories/store.mjs';
 import { resolveCategories, historyExamples, historyDecision } from '../src/categories/resolve.mjs';
 import { guessCategories } from '../src/categories/guess.mjs';
-import { categoryQuestions } from '../src/categories/jev.mjs';
+import { categoryQuestions, createJev, JEV_MODEL } from '../src/categories/jev.mjs';
 import { jevEvidence } from '../src/categories/policy.mjs';
 import { answerItem, pendingItems, autoInfo, reopenItem } from '../src/ingest/confirm.mjs';
 
@@ -103,4 +103,35 @@ test('generated evidence uses the product label without vendors or percentages',
     ...resolveCategories({accounts,transactions:[row(1,{account_id:'b',amount:99,description:'PayPal payout'}),row(2,{account_id:'c',amount:34,description:'Payment received'})]}).values()].map(v=>typeof v==='string'?v:JSON.stringify(v.evidence));
   for(const text of texts) assert.doesNotMatch(text,/jev|typesafe|anthropic|openai|claude|gpt|gemini|\d+\s*%/i);
   assert.match(jevEvidence(.99),/Fathom's categorization/);
+  const serviceHistory=history().map(t=>({...t,description:'OpenAI 20% invoice'}));
+  assert.doesNotMatch(historyDecision(row(8,{description:'OpenAI 20% invoice'}),{accounts,transactions:serviceHistory}).evidence.text,/openai|%/i);
+});
+
+test('one categorization run attempts all open transactions under its cost cap',async t=>{
+  const db=store(t),dir=mkdtempSync(join(tmpdir(),'history-budget-')),keyFile=join(dir,'key');
+  writeFileSync(keyFile,'synthetic-key',{mode:0o600});t.after(()=>rmSync(dir,{recursive:true,force:true}));
+  insert(db,row(1,{description:'Historical food',category:'Groceries',parser:'aggregator'}));
+  insert(db,row(2,{description:'Historical service',category:'Business',parser:'aggregator'}));
+  for(let i=0;i<35;i++) insert(db,row(8,{description:'New merchant '+String.fromCharCode(65+i)}));
+  let attempted=0;
+  const jev=await createJev({keyFile,transport:async(_,opts)=>{
+    const body=JSON.parse(opts.body);attempted+=Object.keys(body.questions).length;
+    return Response.json({model:JEV_MODEL,usage:{input_tokens:1500,output_tokens:12},answers:Object.fromEntries(Object.keys(body.questions)
+      .map(id=>[id,{type:'choice',choice:'Groceries',confidence:.88,probabilities:{Groceries:.88,Business:.12}}]))});
+  }});
+  const result=await guessCategories(db,jev);
+  assert.equal(result.stopped,undefined);assert.equal(attempted,35);assert.equal(result.guessed,35);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM transaction_category_guesses').get().n,35);
+  assert.ok(result.costUsd<=.05);
+});
+
+test('enrichment categories and Confirm source mappings are immediately usable training labels',t=>{
+  const db=store(t), ids=history().map(r=>insert(db,{...r,category:null}));
+  for(const id of ids) db.prepare('INSERT INTO transaction_category_imports VALUES (?,?,?,?,?,?,?,?,?)')
+    .run(id,'synthetic:'+id,'Synthetic supplies','synthetic-source',null,null,'2032-01-01','Cobalt Market','2032-01-01');
+  db.prepare('INSERT INTO category_source_rules VALUES (?,?,?,?)').run('synthetic-source','Synthetic supplies','business','2032-01-04');
+  const input=loadCategoryInputs(db),target=row(8);
+  assert.equal(historyExamples(target,input).length,3);
+  assert.equal(historyDecision(target,input).category,'Synthetic supplies');
+  assert.equal(historyDecision(target,input).bucket,'business');
 });
