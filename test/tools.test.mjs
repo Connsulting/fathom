@@ -13,19 +13,25 @@
 
 import test, { describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { readdir } from 'node:fs/promises';
 import demo from '../demo/scenario.mjs';
 import { seedDemo } from '../demo/seed.mjs';
-import { tools, getTool, callTool, ToolError } from '../src/tools/index.mjs';
+import { tools, getTool, callTool, ToolError, parity, CAPABILITIES } from '../src/tools/index.mjs';
+import { toolsForScopes } from '../src/mcp/keys.mjs';
 import { needsRule } from '../src/shared/rules.mjs';
 import { createRegistryServer } from '../src/engine/tools.mjs';
 import { compileSchema } from '../src/engine/schema.mjs';
 import { tempDb } from './helpers/server.mjs';
+import { assertRefsResolve } from './helpers/figures.mjs';
 
 const FROZEN = [
   'household_summary', 'get_facts', 'list_accounts', 'query_transactions', 'list_positions', 'pnl_by_month',
   'list_recommendations', 'get_recommendation', 'list_deadlines', 'list_goals', 'get_figures', 'packs_status',
   'set_recommendation_status', 'set_recommendation_owner', 'list_packs', 'get_pack_entry', 'search_pack_entries',
-];
+  'get_pace', 'advisor_status', 'get_fact_answer_shapes', 'remember_preference', 'record_household_fact',
+  'set_recommendation_step', 'create_goal', 'edit_goal', 'undo_preference_action', 'undo_fact_action',
+  'undo_step_action', 'undo_goal_action', 'undo_recommendation_action',
+].sort();
 const TEST_ROWS = 250;
 
 const novemberStatus = r => (r.statusByDemo && r.statusByDemo.november) || r.status;
@@ -59,7 +65,7 @@ describe('registry', () => {
   test('entries have the frozen shape and names', () => {
     const names = tools.map(x => x.name);
     assert.equal(new Set(names).size, names.length, 'names are unique');
-    for (const n of FROZEN) assert.ok(names.includes(n), `missing tool ${n}`);
+    assert.deepEqual(names, FROZEN, 'the loader preserves every current tool and sorts by name');
     for (const x of tools) {
       assert.equal(typeof x.name, 'string');
       assert.ok(typeof x.description === 'string' && x.description.length > 0, `${x.name} description`);
@@ -68,7 +74,33 @@ describe('registry', () => {
       assert.equal(typeof x.handler, 'function');
     }
     const writes = tools.filter(x => x.scope === 'write:recs').map(x => x.name);
-    assert.deepEqual(writes, ['set_recommendation_status', 'set_recommendation_owner', 'undo_recommendation_action']);
+    assert.deepEqual(writes, ['set_recommendation_owner', 'set_recommendation_status', 'undo_recommendation_action']);
+  });
+
+  test('MCP scope filtering sorts even an unsorted registry and preserves each scope', () => {
+    for (const scopes of [['read'], ['write:recs'], ['read', 'write:facts', 'write:goals'], []]) {
+      const expected = tools.filter(tool => scopes.includes(tool.scope)).map(tool => tool.name).sort();
+      assert.deepEqual(toolsForScopes(scopes, [...tools].reverse()).map(tool => tool.name), expected);
+    }
+  });
+
+  test('the loader collects catalog tools, route declarations and unique capabilities', async () => {
+    const directory = new URL('../src/tools/catalog/', import.meta.url);
+    const modules = await Promise.all((await readdir(directory)).filter(name => name.endsWith('.mjs')).sort()
+      .map(name => import(new URL(name, directory))));
+    assert.ok(modules.length > 0);
+    const names = modules.flatMap(module => module.tools || []).map(tool => tool.name).sort();
+    assert.deepEqual(names, FROZEN);
+    const routes = {};
+    for (const module of modules) {
+      for (const [route, names] of Object.entries(module.parity || {})) {
+        routes[route] = [...new Set([...(routes[route] || []), ...names])].sort();
+      }
+    }
+    assert.ok(Object.keys(routes).length > 0, 'catalog modules declare route parity');
+    assert.deepEqual(parity, routes);
+    for (const names of Object.values(parity)) for (const name of names) assert.ok(getTool(name), name);
+    assert.deepEqual(CAPABILITIES, [...new Set(modules.flatMap(module => module.capabilities || []))].sort());
   });
 
   test('getTool finds by name; unknown tools are not_found', async () => {
@@ -217,9 +249,50 @@ describe('read tools', () => {
       assert.deepEqual(
         { v: f.v, kind: f.kind, label: f.label, source: { ...f.source } },
         { v: want.v, kind: want.kind, label: want.label, source: { id: want.src, label: demo.src[want.src].label, asOf: demo.src[want.src].asOf } });
+      const stored = t.db.prepare('SELECT locator FROM figures WHERE key = ?').get(f.key);
+      let locator = stored.locator;
+      try { locator = JSON.parse(locator); } catch {}
+      assert.equal(f.value, f.v);
+      assert.equal(f.unit, 'usd');
+      assert.equal(f.asOf, f.source.asOf || null);
+      assert.deepEqual(f.provenance.stored, { src: want.src, locator });
+      assert.deepEqual(f.ref, { tool: 'get_figures', args: { keys: [f.key] }, path: '0' });
     }
+    await assertRefsResolve(two, ctx);
     const all = await call('get_figures');
     for (const k of Object.keys(demo.fig)) assert.ok(all.some(f => f.key === k), `figure ${k}`);
+    await assertRefsResolve(all, ctx);
+  });
+
+  test('get_figures preserves an unavailable legacy value while its envelope is unavailable', async () => {
+    const key = 'test.unavailable.total';
+    const locator = { calc: 'test.total', computedOn: '2026-10-31', inputs: { total: 123.456 },
+      sources: [{ rows: { table: 'facts', ids: ['test.total'], count: 1 } }],
+      steps: [{ label: 'Stored total', formula: 'stored total', value: 123.456 }] };
+    t.db.prepare(`INSERT INTO figures (key,v,src,kind,label,locator,unavailable_reason,updated_at)
+                  VALUES (?,123.456,'model','e','Stored total',?,'waiting for current inputs','2026-11-01')`)
+      .run(key, JSON.stringify(locator));
+    try {
+      const result = await call('get_figures', { keys: [key] });
+      assert.equal(result.length, 1);
+      assert.equal(result[0].v, 123.456);
+      assert.equal(result[0].value, null);
+      assert.equal(result[0].unavailable, 'waiting for current inputs');
+      assert.equal(result[0].asOf, locator.computedOn);
+      assert.deepEqual(result[0].provenance.stored, { src: 'model', locator });
+      await assertRefsResolve(result, ctx);
+    } finally {
+      t.db.prepare('DELETE FROM figures WHERE key = ?').run(key);
+    }
+  });
+
+  test('reference assertions reject empty results and compare the complete replayed envelope', async () => {
+    await assert.rejects(assertRefsResolve({}, ctx), /at least one figure/);
+    const result = await call('get_figures', { keys: ['biz_cash'] });
+    await assertRefsResolve(result, ctx);
+    const changed = structuredClone(result);
+    changed[0].provenance = { ...changed[0].provenance, calc: 'different calculation' };
+    await assert.rejects(assertRefsResolve(changed, ctx), /resolves through/);
   });
 
   test('packs_status', async () => {
