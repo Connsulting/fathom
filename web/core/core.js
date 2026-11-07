@@ -61,7 +61,7 @@
 import { money, resolveTokens, esc, KIND_WORDS } from '/shared/tokens.mjs';
 import { needsYou as needsYouOf, packStatus } from '/shared/rules.mjs';
 
-const ROUTES = new Set(['onboarding', 'brief', 'plan', 'rec', 'ask', 'wargame', 'goals', 'accounts',
+const ROUTES = new Set(['onboarding', 'home', 'pace', 'brief', 'plan', 'rec', 'ask', 'wargame', 'goals', 'accounts',
   'advisor', 'yearend', 'connect', 'engine', 'email', 'packs', 'confirm', 'add']);
 const PARAM_KEY = { rec: 'id', onboarding: 'step', wargame: 'name', packs: 'id', ask: 'id' };
 const LAST_STEP = 5;
@@ -206,12 +206,14 @@ function on(fn) {
 
 function defaultRoute() {
   if (demoId() === 'fresh') return { name: 'onboarding', params: { step: stateView().onboardStep || minStep() } };
-  return { name: 'brief', params: {} };
+  return { name: 'home', params: {} };
 }
 const clampStep = n => Math.max(minStep(), Math.min(LAST_STEP, Number.isFinite(n) ? Math.floor(n) : 0));
 
 function normalizeRoute(r) {
   if (!r || !ROUTES.has(r.name)) return defaultRoute();
+  // 'brief' is the old name of Home; email links still carry #/brief.
+  if (r.name === 'brief') return normalizeRoute({ name: 'home', params: {} });
   const p = r.params || {};
   if (demoId() === 'fresh') {
     const step = r.name === 'onboarding' && p.step != null && p.step !== '' ? clampStep(Number(p.step)) : stateView().onboardStep;
