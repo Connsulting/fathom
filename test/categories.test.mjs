@@ -148,6 +148,12 @@ test('AC2 live-row enrichment keeps one posting, parser provenance, replay and a
   const overlap=aggregatorFile('overlap.csv',[{date:'2032-06-12',amount:250,description:'Example Shop',category:'Business'}, {date:'2032-06-13',amount:12,description:'Other Merchant',category:'Groceries'}]);
   await ingestFile(db,overlap,opts);
   assert.equal(db.prepare('SELECT count(*) AS n FROM transactions WHERE amount=-250').get().n,1);
+  txn(db,{account_id:accountId,date:'2032-08-13',amount:-350,description:'Early export',dedupe_key:'live:early'});
+  await ingestFile(db,aggregatorFile('early-export.csv',[{date:'2032-08-11',amount:350,description:'Early export',category:'Taxes'}]),opts);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM transactions WHERE amount=-350').get().n,1);
+  txn(db,{account_id:accountId,date:'2032-09-10',amount:-375,description:'Late export',dedupe_key:'live:late'});
+  await ingestFile(db,aggregatorFile('late-export.csv',[{date:'2032-09-13',amount:375,description:'Late export',category:'Taxes'}]),opts);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM transactions WHERE amount=-375').get().n,2);
   txn(db,{account_id:accountId,date:'2032-07-10',amount:-400,description:'POS Example Shop',dedupe_key:'live:two'});
   txn(db,{account_id:accountId,date:'2032-07-10',amount:-400,description:'POS Example Shop',dedupe_key:'live:three'});
   await ingestFile(db,aggregatorFile('ambiguous.csv',[{date:'2032-07-11',amount:400,description:'Example Shop',category:'Business'}]),opts);
@@ -240,4 +246,13 @@ test('AC2 a corrected connected row survives the actual account merge and Undo',
   reopenItem(s.db,q.id);
   assert.equal(resolveCategories(loadCategoryInputs(s.db)).get(r.id).bucket,'business');
   assert.deepEqual(s.db.prepare('PRAGMA foreign_key_check').all(),[]);
+});
+
+
+test('AC7 source-name mapping is parser-specific, retains unknown names, and covers every matching row', () => {
+  const transactions=[row(1,{parser:'future-budget',category:'Custom label'}),row(2,{parser:'future-budget',category:'Custom label'}),row(3,{parser:'other-budget',category:'Custom label'})];
+  const c=resolve(transactions,{sourceRules:[{parser:'future-budget',category:'Custom label',bucket:'business'}]});
+  assert.equal(c.get(1).category,'Custom label'); assert.equal(c.get(2).bucket,'business');
+  assert.equal(c.get(1).layer,'correction'); assert.equal(c.get(3).layer,'uncategorized');
+  assert.match(readFileSync('docs/architecture.md','utf8'),/CATEGORY_TABLES/);
 });
