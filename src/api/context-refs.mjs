@@ -45,7 +45,7 @@ const MAX_GROUP_QUESTIONS = 5;
 
 const MONEY_VIEWS = new Set(['overview', 'accounts']);
 const PAGES = new Set(['home', 'pace', 'brief', 'goals', 'confirm', 'plan', 'yearend', 'advisor', 'wargame', 'packs',
-  'add', 'settings', 'connect', 'engine', 'email', 'onboarding', 'pnl']);
+  'add', 'settings', 'memories', 'connect', 'engine', 'email', 'onboarding', 'pnl']);
 
 const BAD = 'context must be a list of {kind, id}';
 const MONTH_SUFFIX = /\|(\d{4})-(0[1-9]|1[0-2])$/;
