@@ -104,8 +104,8 @@ Home (`#/home`, the default route; `#/brief` is an alias that core normalizes to
 older email links keep working) is goals first. Its headline and health chip come from
 `scenario.pace.rollup`; each goal with a target gets a card with its pace chip, a bar of actual
 against target with a plan-today tick, and its next open action. Stale or otherwise unknown
-pace is never shown as on pace: the chip says "Data stale" or "Pace unknown". Goals with no
-target, and on-pace or ahead goals with nothing due, collapse into one quiet row; actions that
+pace is never shown as on pace: the chip says "Data stale" or "Pace unknown". Every live goal
+gets a card (see "Suggested targets"), with a suggested target when it has none; actions that
 serve no goal sit in a housekeeping row. An owner filter (Both, Me, Spouse) narrows every
 action list, and one data-health line (data through date, stale accounts or goals, Confirm
 questions, failed files) replaces the Confirm banner and nav badge. On a phone the first card
@@ -797,6 +797,8 @@ known path with the wrong method is 405; signed out, both are 401. Every action 
 | `POST /api/goals` | `{title, note?, horizon?, target?, targetDate?, track?}` | `{scenario, goal}`. Creates an owner goal (`origin` owner). `title` 1 to 120 characters, no line breaks; `note` at most 500; `horizon` now, 1-3y or 3-10y (default now); `target` a non-negative number or null; `targetDate` a valid YYYY-MM-DD or null; `track` null, `{accounts: [account ids]}` (at most 20, known ids) or `{figure: key}` (a known figure the store holds). Anything else 400. |
 | `GET /api/pace` | none | Deterministic `clock`, `rollup`, `goals`, `series` and `meters`, identical to `scenario.pace`. Uses the same owner gate as the scenario. No writes or model calls. |
 | `POST /api/goals/:id` | any subset of the create fields | `{scenario, goal}`. Edits an owner goal; 409 for a seed (demo) goal, 404 unknown. |
+| `GET /api/goals/suggestions` | none | `{clock, suggestions}`. The same records as `scenario.suggestions` (see "Suggested targets"). Same owner gate; no writes or model calls. |
+| `POST /api/goals/:id/suggestion` | `{action: 'dismiss' \| 'restore'}` or `{withdrawalRate}` | `{scenario}`. Stores a dismissal (the record's fingerprint) or the independence withdrawal rate in `settings` `goals.suggestions`. 404 unknown goal, 409 seed goal or a goal with no suggestion, 400 for an unknown action, both fields, a rate outside 0.02 to 0.06, or a rate on a non-independence goal. |
 | `POST /api/goals/:id/archive` | `{archived?: boolean}` (default true) | `{scenario, goal}`. Archives or restores a goal. |
 | `POST /api/goals/:id/delete` | `{}` | `{scenario}`. Deletes a goal for good. |
 | `POST /api/curve` | `{id, value}` or `{positions: {id: value}}` | `{scenario}`. Stores tradeoff curve positions (0 to 1, rounded to hundredths) in `settings` `curve.positions`; 400 for an unknown axis or a value out of range. The onboarding Priorities step saves through this route too. |
@@ -2321,6 +2323,87 @@ goals (title, horizon, typed target with source `you`, tracked current value) an
 In an Ask thread with no rec context the answerer also offers `propose_goal`; its last successful call becomes
 `provenance.goalProposal`, a target survives only when the owner's own message states it, and the
 chat card saves it through `POST /api/goals` when the owner taps Save. Chat never writes.
+
+## Suggested targets
+
+An owner goal that is not archived, not done and has no target gets one record in `scenario.suggestions`
+(`buildSuggestions` in `src/suggest/build.mjs`, pure reads, never writes). Seed goals never do. The
+arithmetic is the pure `src/calc/targets.mjs`; no model is involved.
+
+Kind. `goalKind` matches the title and note (scenario tokens removed) against word patterns. Independence:
+work optional or less, stop working, financial independence, FIRE, retire early, investments cover or pay
+for, live off investments, on our terms. Tax: `tax` or `taxes`. Cushion: cushion, emergency, rainy day,
+runway, safety net, months of spending. Exactly one kind matching picks it. No match is `unsupported_goal`
+and more than one is `ambiguous_goal`; both become a question.
+
+Computations (`TARGET_PARAMETERS`).
+1. Spending window. Participating accounts are checking, savings, cash and card accounts with at least one
+   transaction up to the clock. Each has a complete-month run: the month after its first transaction to the
+   month before its last, split at a month with no transaction, latest run kept. The window is the
+   intersection of the runs, ends before the clock month and covers at most 12 months. Under 3 months is
+   `no_spending_history`. An outflow matched to an inflow on another household account (same cents, within
+   5 days, nearest date) is a transfer, not spending. An inflow is income unless matched to an outflow on
+   another non-business account, so business transfers in count. Spending accounts with no transactions are
+   named in the figure notes and not counted.
+2. Cushion: 6 months of monthly spending, rounded up to the next $100, held in checking, savings and cash.
+3. Independence: yearly spending (monthly times 12) over the withdrawal rate, rounded up to the next
+   $1,000, held in taxable, brokerage, retirement, Roth and IRA accounts. Rate default 4%, owner range 2% to
+   6%; real return 4% a year, compounded monthly.
+4. Savings is monthly income minus spending over the window. Date: `projected` only when the calculation
+   reaches the target (cushion: remaining over savings; independence: the annuity solution, at most 600
+   months), as the end of that month. Already covered, savings not positive or beyond 600 months uses the
+   end of the goal horizon (Dec 31 of the clock year plus 0, 3 or 10 years), `dateSource` `horizon`, and the
+   line says so. Covered sets `covered` and reads "Already covered".
+5. Tax: the sum of the planner's stored `room.*` figures (solo 401(k) pretax, SEP only when there is no
+   solo 401(k) room, HSA, dependent care), read straight from `figures`. A room counts only when kind is `m`
+   or `e`, available, positive and `planningYear(locator.computedOn)` equals the clock year, so January
+   rows computed for the prior tax year do not count. Target is the total, date Dec 31 of the clock year
+   (`deadline`), `track` null. Balances cannot tell contributions from gains, so it tracks nothing and the
+   line says contributions are not measured yet.
+
+Question path. A record is `state` `question` with `accept` null, `missing` codes (`unsupported_goal`,
+`ambiguous_goal`, `no_spending_history`, `no_cash_balance`, `no_investment_balance`, `no_tax_room`), a plain
+reason in `why` and `ask` "What amount would make this real?". No figures are written for it.
+
+Provenance. Figures are `suggest.<goalId>.target`, `.monthlySpend`, `.annualSpend` (independence),
+`.monthlySavings`, `.current` and `.room.<part>`, merged into `scenario.fig`. Each has `src` `calc:targets`
+(`scenario.src` label "Suggested target calculator"), a digit-free label, notes (window, parameters,
+accounts left out, date basis) and a locator with inputs, parameters, window, row sources (transactions,
+figures, goals; at most 50 ids) and steps. Cushion targets are kind `e`, independence and tax `m`.
+
+Dismissal and parameters live in settings `goals.suggestions`: `{<goalId>: {dismissed: fingerprint | null,
+withdrawalRate?}}`. The fingerprint is a sha256 of the goal text, horizon, kind, state, parameters, input
+values, tracked accounts, room keys, target date and clock year, so a changed goal or input revives a
+dismissed suggestion. A dismissed record keeps its fields with `state` `dismissed`.
+
+Accept is not a new route: it posts the record's `accept` (`target`, `targetDate`, `track`) to
+`POST /api/goals/:id`. After that the goal has a target and no longer gets a record. Pace: a plan that
+starts at or above its target is a flat reached path (`pathOf` in `src/calc/pace.mjs`): expected equals the
+target, `ahead` with time gap "Reached" at or above it, else `behind`, stale data stays unknown. A tax
+goal accepted with no track shows "Nothing tracks this goal yet."
+
+Deferred: model mapping of free-text goals to a kind, contribution tracking for the tax kind (needs a
+planner contributions figure with row provenance), dependent care room until the planner writes it, and an
+MCP tool for suggestions.
+
+### Home layout
+
+Home is one `article.h-gcard` per live goal, in pace order, then goals without pace. Each card holds the
+title and chip, then either the pace bar, the suggestion block, a question block, a "No target yet. Add one"
+line for a dismissed suggestion, or "Nothing tracks this goal yet.", then its next action. The suggestion
+block (shared with the Goals page) shows the amount with its provenance popover, the why, the basis line,
+a withdrawal rate input for independence, and Accept, Edit and Dismiss. Edit opens the goal form prefilled
+from the record on `#/goals`; saving is the existing update.
+
+`homeHeadline` takes the pace headline when any card has a target, else "Suggested targets for N goals"
+when records are pending, else "N goals need a target". Two or more pending suggestions add Accept all
+(posts each accept in card order, one redraw) and Review targets (to Goals).
+
+Desktop shows `due`, a "Due before Dec 31" list of the first five open, non-housekeeping actions that match
+the owner filter and fall due by Dec 31, by window. Phone shows the next card (`due[0]`, else the first
+non-housekeeping action) and "After that" (the next three of `due`). Neither list shows housekeeping, which
+stays one quiet `details.h-hk` row. Tabs, the gear, the owner filter and the data-health line are
+unchanged. The old quiet row for untargeted and on-pace goals is gone.
 
 ## Rec owner and goal links
 
