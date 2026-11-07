@@ -211,7 +211,6 @@ function factsHtml(a, d) {
 
 /* ---------- edits: last 4, merge, the status line ---------- */
 
-const withMask = (label, mask) => (mask && !String(label).includes(String(mask)) ? `${label} ending ${mask}` : String(label));
 
 function maskHtml() {
   const { esc, btn } = H;
@@ -228,7 +227,7 @@ function candidateHtml(c) {
   const { esc } = H;
   const bits = [c.inst ? esc(plain(c, c.inst)) : '', c.kind ? esc(kindLabel(c.kind)) : '', c.lastDataDate ? `Last data ${esc(dateLabel(c.lastDataDate))}` : 'No dated rows'].filter(Boolean);
   const why = c.refused ? `<span class="h-ad-pick-why">${esc(c.refused)}</span>` : '';
-  return `<li><button type="button" class="h-ad-pick" data-merge-with="${esc(c.id)}"${c.refused ? ' disabled' : ''}><b>${esc(withMask(plain(c, c.label), c.mask))}</b><span>${bits.join('<span class="h-dotsep"></span>')}</span>${why}</button></li>`;
+  return `<li><button type="button" class="h-ad-pick" data-merge-with="${esc(c.id)}"${c.refused ? ' disabled' : ''}><b>${esc(plain(c, c.label))}</b><span>${bits.join('<span class="h-dotsep"></span>')}</span>${why}</button></li>`;
 }
 
 function confirmHtml(a, c) {
@@ -556,8 +555,12 @@ function confirmMerge() {
   m.err = '';
   H.draw();
   Promise.resolve(H.api.accountMerge(id, c.id)).then((r) => {
-    if (S.id !== id || S.merge !== m) return;
+    // The reply's scenario no longer has the merged-away account, so applying it can already have
+    // reset this screen (S.id is null then). Only a different open account means the user moved on.
+    const live = S.id === id && S.merge === m;
+    if (!live && S.id !== null) return;
     if (!r || r.error) {
+      if (!live) return;
       m.busy = false;
       m.err = r?.error || 'Could not merge these accounts.';
       H.draw();
@@ -565,14 +568,16 @@ function confirmMerge() {
     }
     const p = c.plan || {};
     const undo = { kind: 'merge', itemId: r.data.itemId, text: `Merged ${plain(c, p.ownLabel)} into ${plain(c, p.keepLabel)}.` };
-    S.merge = null;
     const sid = r.data.survivorId;
     // The open account was the one merged away: show the survivor, with the same status line.
     if (sid != null && String(sid) !== id && !accountOf(id)) {
+      S.merge = null;
       CARRY = { to: String(sid), undo };
       H.api.go('account', { id: String(sid) }, { replace: true });
       return;
     }
+    if (!live) return;
+    S.merge = null;
     S.undo = undo;
     H.draw();
     focusIn('[data-ad="undo"]');

@@ -128,17 +128,19 @@ async function seedPair(request) {
   } finally { db.close(); }
 }
 
-async function mergeWith(page, request) {
+// from: which account's dialog starts the merge. The imported one survives either way.
+async function mergeWith(page, request, from = 'keep') {
   const pair = await seedPair(request);
-  await page.goto(`/#/account/${pair.keep}`);
+  const [open, other] = from === 'keep' ? [pair.keep, pair.own] : [pair.own, pair.keep];
+  await page.goto(`/#/account/${open}`);
   await page.reload();
   const dlg = recDialog(page);
   await expect(dlg).toBeVisible();
 
   // Cancel first: nothing changes.
   await dlg.locator('[data-ad="merge-open"]').click();
-  await expect(dlg.locator(`[data-merge-with="${pair.keep}"]`)).toHaveCount(0);
-  await dlg.locator(`[data-merge-with="${pair.own}"]`).click();
+  await expect(dlg.locator(`[data-merge-with="${open}"]`)).toHaveCount(0);
+  await dlg.locator(`[data-merge-with="${other}"]`).click();
   const panel = dlg.locator('.h-ad-merge-confirm');
   await expect(panel).toBeVisible();
   await noSideScroll(page);
@@ -147,10 +149,10 @@ async function mergeWith(page, request) {
   expect(await scenarioAccount(request, pair.own)).toBeTruthy();
 
   await dlg.locator('[data-ad="merge-open"]').click();
-  await dlg.locator(`[data-merge-with="${pair.own}"]`).click();
+  await dlg.locator(`[data-merge-with="${other}"]`).click();
   await expect(panel).toContainText(/transaction/i);
   await expect(panel).toContainText(/stays and keeps its history/i);
-  const merged = posted(page, `/api/accounts/${pair.keep}/merge`);
+  const merged = posted(page, `/api/accounts/${open}/merge`);
   await dlg.locator('[data-ad="merge-confirm"]').click();
   const res = await merged;
   expect(res.status()).toBe(200);
@@ -184,6 +186,10 @@ test.describe('account dialog edits', { tag: '@ade-ac' }, () => {
 
   test('Merge with... names the survivor and what moves, merges, and Undo brings both back', async ({ page, request }) => {
     await mergeWith(page, request);
+  });
+
+  test('Merge with... from the connected account shows the survivor with Undo', async ({ page, request }) => {
+    await mergeWith(page, request, 'own');
   });
 });
 
