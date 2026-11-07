@@ -101,8 +101,9 @@ export async function runCases({ cases, live = false, maxUsd = 100, outDir, scri
     const rows = [];
     let attempts = [], turn, missing = [], expected = [], requestLengths = [];
     const engine = { mode, isOn: () => true, async call(request) {
+      const calls = turn.required.filter(r => tools.some(t => t.name === r.name)).map(r => ({ name: r.name, args: scriptArgs(r.predicates) }));
       const supplied = scripts ? scripts({ turn, expected, db, attempt: attempts.length }) : [
-        { toolCalls: turn.required.filter(r => tools.some(t => t.name === r.name)).map(r => ({ name: r.name, args: scriptArgs(r.predicates) })), costUsd: 0 },
+        ...(calls.length ? [{ toolCalls: calls, costUsd: 0 }] : []),
         { text: scriptedAnswer(turn, expected, missing), costUsd: 0 },
       ];
       const scripted = !live ? { fake: supplied } : {};

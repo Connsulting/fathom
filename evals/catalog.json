@@ -20,6 +20,11 @@
                   "path": "includeHealthcare",
                   "op": "eq",
                   "value": true
+                },
+                {
+                  "path": "exclude",
+                  "op": "includes",
+                  "value": "income_tax"
                 }
               ]
             }
@@ -72,7 +77,7 @@
             }
           ],
           "maxWords": 90,
-          "rubric": "Use deterministic spending and portfolio tools; the tool must return the rate as well as the portfolio amount. Never divide in prose."
+          "rubric": "Use deterministic spending and portfolio tools; the tool must return the portfolio amount and a percentage value for the rate, rather than echoing its fractional argument. Never divide in prose."
         }
       ],
       "expectedFail": {
