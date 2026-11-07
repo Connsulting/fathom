@@ -28,7 +28,8 @@ export function categoryQuestions(rows, { accounts = [], householdNames = {}, ca
 
 export async function createJev({ keyFile = process.env.FATHOM_TYPESAFE_KEY_FILE, ledger,
   transport = fetch, maxTokens = 250_000, maxCostUsd = .05, monthlyCapUsd = 200,
-  batchSize = 10, timeoutMs = 10_000, retries = 2, sleep = delay, now = () => new Date() } = {}) {
+  batchSize = 10, timeoutMs = 10_000, retries = 2, sleep = delay, now = () => new Date(), admit = () => null } = {}) {
+  if (typeof admit !== 'function') throw fail('jev_bad_options');
   if (!keyFile || !existsSync(keyFile)) return { isOn:()=>false, stats:()=>({costUsd:0,tokens:0,latenciesMs:[]}) };
   const credential = await loadCredential(keyFile);
   for (const n of [maxTokens,maxCostUsd,monthlyCapUsd]) if (!Number.isFinite(n) || n<0) throw fail('jev_bad_budget');
@@ -51,6 +52,9 @@ export async function createJev({ keyFile = process.env.FATHOM_TYPESAFE_KEY_FILE
       return [...await request(qs.slice(0,mid)),...await request(qs.slice(mid))];
     }
     for (let attempt=0; attempt<=retries; attempt++) {
+      // Admission runs before every dispatch, retries included: a refusal code stops the call unsent.
+      const refused=admit();
+      if (refused!=null) throw fail(typeof refused==='string' && refused ? refused : 'jev_refused');
       const reservedCost=reserve*JEV_INPUT_USD, timestamp=now().toISOString();
       const monthSpend=ledger?.monthSpendUsd(timestamp.slice(0,7)) ?? 0;
       if (tokens+reserve>maxTokens || costUsd+reservedCost>maxCostUsd || monthSpend+reservedCost>monthlyCapUsd) throw fail('jev_budget');

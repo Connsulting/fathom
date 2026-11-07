@@ -4,6 +4,8 @@ import { resolve } from 'node:path';
 import { openReadOnlyHousehold } from '../src/platform/ready.mjs';
 import { householdArg } from '../src/platform/cli.mjs';
 import { parseJson } from '../src/store/db.mjs';
+import { readOutbound } from '../src/platform/outbound.mjs';
+import { instanceFunded } from '../src/platform/runtime.mjs';
 import { createJev, categoryQuestions } from '../src/categories/jev.mjs';
 import { sourceBucket } from '../src/categories/resolve.mjs';
 
@@ -43,6 +45,11 @@ export async function evaluateCategories(db,jev,{sampleSize=1000}={}) {
     top3:scores.length?scores.filter(s=>s.top3).length/scores.length:null,...calibration(scores),costUsd:stats.costUsd,
     latencyMs:{p50:percentile(stats.latenciesMs,.5),p95:percentile(stats.latenciesMs,.95)},...(stopped?{stopped}:{})};
 }
+// The household's model admission: its outbound engine flag and instance funding, as for the engine.
+export function evalAdmission(platform,householdId) {
+  if(readOutbound(platform,householdId)?.engine!==true) return 'engine_paused';
+  return instanceFunded(platform)?null:'funding_unavailable';
+}
 export async function main(argv=process.argv.slice(2)) {
   let store;
   try {
@@ -51,7 +58,10 @@ export async function main(argv=process.argv.slice(2)) {
     const sampleSize=Number(rest[1]??1000), maxCostUsd=Number(rest[2]??1);
     if(!path || !Number.isInteger(sampleSize) || sampleSize<1 || sampleSize>10000 || !Number.isFinite(maxCostUsd) || maxCostUsd<0 || maxCostUsd>1) throw new Error();
     store=openReadOnlyHousehold({dataDir:resolve(path)},householdId);
-    const jev=await createJev({maxCostUsd,maxTokens:Math.floor(maxCostUsd/(.042/1_000_000))});
+    const admit=()=>evalAdmission(store.platform,householdId);
+    const refused=admit();
+    if(refused) {console.error(`category_eval_failed: ${refused}`);return 1;}
+    const jev=await createJev({maxCostUsd,maxTokens:Math.floor(maxCostUsd/(.042/1_000_000)),admit});
     if(!jev.isOn()) throw new Error();
     const result=await evaluateCategories(store.db,jev,{sampleSize});
     console.log(JSON.stringify(result)); return result.stopped?1:0;

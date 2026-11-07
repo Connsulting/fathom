@@ -100,12 +100,15 @@ test('scheduled Jev work uses the configured key independently of the general en
     }))});
   };
   const {defaultHandlers}=await import('../src/jobs/scheduler.mjs');
-  // The household's outbound engine pause stops Jev before any request; resuming it lets Jev run.
-  const household=engine=>({outbound:{enabled:kind=>kind==='engine'?engine:true}});
+  // The household's outbound engine pause and missing instance funding each stop Jev before any
+  // request; with both admitted Jev runs.
+  const household=(engine,funded=true)=>({outbound:{enabled:kind=>kind==='engine'?engine:true},funded:()=>funded});
   const calls=[];const answer=globalThis.fetch;globalThis.fetch=async(...a)=>{calls.push(a);return answer(...a);};
   const job=ctx=>defaultHandlers({})['confirm-guess']({db,now:'2032-11-05T00:00:00Z',config:{engine:'live',typesafeKeyFile:keyFile},engine:{isOn:()=>false},...ctx});
   await job({household:household(false)});
   assert.equal(calls.length,0,'a paused household sends Jev nothing');
+  await job({household:household(true,false)});
+  assert.equal(calls.length,0,'an unfunded instance sends Jev nothing');
   assert.equal(db.prepare('SELECT count(*) AS n FROM spend_ledger').get().n,0);
   const result=await job({household:household(true)});
   assert.ok(calls.length>0);

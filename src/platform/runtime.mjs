@@ -15,7 +15,9 @@
 //   answerer and scheduler (allowed: outbound jobs; ctx.household is this context); tests may
 //   inject any of transport, engine, packs, answerer, scheduler. Returns a frozen
 //   { householdId, generation, mode, db, root, config, inFlight, vault(), packs, engine, answerer,
-//   scheduler, transport, outbound, close() } where root is the absolute household root path.
+//   scheduler, transport, outbound, funded(), close() } where root is the absolute household root
+//   path and funded() is the instance funding check (instance_model_cap_usd > 0) for model calls
+//   made outside the engine.
 //   vault() resolves once per context to { root, handle } (household-vault root and data key
 //   handle); a refusal is a VaultError with code platform_key_missing | platform_key_invalid |
 //   data_key_missing (or the root's code) and clears the cache. A household with no data key row
@@ -206,6 +208,7 @@ export function createHouseholdContext({
   context = Object.freeze({
     householdId, generation, mode, db, root, config, inFlight: new Set(), vault, packs: livePacks, engine: householdEngine,
     answerer: householdAnswerer, scheduler: householdScheduler, transport: householdTransport, outbound,
+    funded: () => instanceFunded(platform),
     close() {
       closing ??= (async () => {
         try { await householdScheduler?.stop(); } catch { /* stop never rejects; close anyway */ }

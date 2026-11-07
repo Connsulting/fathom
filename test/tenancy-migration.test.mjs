@@ -468,6 +468,65 @@ describe('risk probe: the process dies mid-migration and restarts', T, () => {
     assert.deepEqual(await endState(fx), await referenceState());
   });
 
+  // A source file changed after a crash before the manifest: the store digest alone misses it, so
+  // publication refuses source_changed with nothing published; restored, the rerun completes.
+  const firstFile = dir => {
+    for (const e of readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const path = join(dir, e.name);
+      if (e.isFile()) return path;
+      if (e.isDirectory()) { const f = firstFile(path); if (f) return f; }
+    }
+    return null;
+  };
+  const TREE_CHANGES = [
+    ['an edited source pack file', fx => {
+      const path = firstFile(join(fx.dataDir, 'packs'));
+      assert.ok(path, 'the fixture has a pack file');
+      const was = readFileSync(path);
+      writeFileSync(path, Buffer.concat([was, Buffer.from('\nsynthetic later edit\n')]));
+      return () => writeFileSync(path, was);
+    }],
+    ['a file added to the source outbox', fx => {
+      mkdirSync(join(fx.dataDir, 'outbox'), { recursive: true, mode: 0o700 });
+      const path = join(fx.dataDir, 'outbox', 'synthetic-later.eml');
+      writeFileSync(path, 'synthetic later message\n', { mode: 0o600 });
+      return () => rmSync(path);
+    }],
+  ];
+  for (const [label, change] of TREE_CHANGES) {
+    test(`${label} between a crash before the manifest and the rerun refuses source_changed; restored, the rerun completes`, async () => {
+      const fx = fresh();
+      const first = await migrateExitingAt(fx, 'before-manifest');
+      assert.equal(first.code, 9, first.stderr);
+      const restore = change(fx);
+      await refuses(runMigration(fx), 'source_changed', label);
+      withSqlite(join(fx.dataDir, 'platform.sqlite'), p => {
+        assert.equal(p.prepare('SELECT storage_root FROM households WHERE id = ?').get(fx.householdId).storage_root ?? null, null, 'nothing published');
+      });
+      assert.ok(existsSync(join(fx.dataDir, 'fathom.sqlite')), 'the source is not retired');
+      restore();
+      const r = await runMigration(fx);
+      assert.equal(r.status, 'complete');
+      assert.deepEqual(await endState(fx), await referenceState());
+    });
+  }
+
+  test('another MCP secret on the rerun after a crash before the manifest refuses mcp_secret_mismatch; the right one completes', async () => {
+    const fx = fresh();
+    const first = await migrateExitingAt(fx, 'before-manifest');
+    assert.equal(first.code, 9, first.stderr);
+    const other = writePrivate(join(fx.root, 'other-keys', 'mcp-other.secret'), randomBytes(32).toString('hex') + '\n');
+    await refuses(runMigration(fx, { mcpSecretFile: other }), 'mcp_secret_mismatch', 'another MCP secret');
+    withSqlite(join(fx.dataDir, 'platform.sqlite'), p => {
+      assert.equal(p.prepare('SELECT storage_root FROM households WHERE id = ?').get(fx.householdId).storage_root ?? null, null, 'nothing published');
+      assert.equal(p.prepare('SELECT count(*) AS n FROM api_keys').get().n, 0, 'no key moved');
+    });
+    assert.ok(existsSync(join(fx.dataDir, 'api-key-secret')), 'the source secret is not retired');
+    const r = await runMigration(fx);
+    assert.equal(r.status, 'complete');
+    assert.deepEqual(await endState(fx), await referenceState());
+  });
+
   test('exit right after the root is published, then a rerun completes', async () => {
     const fx = fresh();
     const died = await migrateExitingAt(fx, 'root-published');

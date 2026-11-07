@@ -32,8 +32,10 @@
 //                  invitations revoked, storage_root and generation set, the operation row recorded;
 //                  checked by digest before COMMIT. This is the single publication point. Before it
 //                  and again before COMMIT the passkeys must equal the journal's fingerprint
-//                  (passkeys_changed otherwise), and the source must equal its journaled digest
-//                  (source_changed otherwise).
+//                  (passkeys_changed otherwise); the source store and its files/, packs/ and
+//                  outbox/ trees must equal their digests journaled at source-schema
+//                  (source_changed otherwise); and the supplied MCP secret must still equal the
+//                  source api-key-secret (mcp_secret_mismatch otherwise), since a rerun may differ.
 //   retire         root store (+ side files), api-key-secret, files/, packs/, outbox/ renamed into
 //                  legacy-<op>/ (renames only)
 //   complete       the operation marked done, the lock removed
@@ -299,14 +301,32 @@ function preflight({ dataDir, platform, source, legacyKey, mcpSecret, diskFree }
 
   checkLegacyKey(dataDir, source, legacyKey);
 
-  const keys = hasTable(source, MOVED_TABLE) ? source.prepare(`SELECT count(*) AS n FROM ${MOVED_TABLE}`).get().n : 0;
-  const secret = sourceSecret(dataDir);
-  if (secret ? !timingSafeEqual(secret, mcpSecret) : keys > 0) throw refuse('mcp_secret_mismatch');
+  checkMcpSecret(dataDir, source, mcpSecret);
 
   const store = treeSize(join(dataDir, DB_FILE)) + treeSize(join(dataDir, `${DB_FILE}-wal`));
   const trees = ['files', ...TREES].reduce((n, t) => n + treeSize(join(dataDir, t)), 0);
   if (!(Number(diskFree(dataDir)) >= store * 3 + trees * 2 + 16 * MIB)) throw refuse('insufficient_space');
   return hh;
+}
+
+// The supplied MCP secret must equal the source's api-key-secret, so moved MCP keys keep verifying.
+// Checked in preflight and again before every manifest attempt (a rerun may supply another file).
+function checkMcpSecret(dataDir, source, mcpSecret) {
+  const keys = hasTable(source, MOVED_TABLE) ? source.prepare(`SELECT count(*) AS n FROM ${MOVED_TABLE}`).get().n : 0;
+  const secret = sourceSecret(dataDir);
+  if (secret ? !timingSafeEqual(secret, mcpSecret) : keys > 0) throw refuse('mcp_secret_mismatch');
+}
+
+// The source's file trees (vault blobs, packs, outbox) as one digest each: recorded with the source
+// digest and rechecked before publication, since a store-only digest misses a changed file.
+const SOURCE_TREES = Object.freeze(['files', ...TREES]);
+function sourceTrees(dataDir) {
+  return Object.fromEntries(SOURCE_TREES.map(t => [t, hashesDigest(treeHashes(join(dataDir, t)))]));
+}
+function sameSourceTrees(dataDir, recorded) {
+  if (!recorded || typeof recorded !== 'object') return false;
+  const now = sourceTrees(dataDir);
+  return SOURCE_TREES.every(t => sameDigest(now[t], recorded[t]));
 }
 
 // The legacy key must open the first vault object, if there is one.
@@ -530,6 +550,8 @@ function publishManifest(ctx) {
   // The published root was verified against the journal; a source that changed since the journal
   // recorded it (a write between a crash and this rerun) refuses rather than being retired unseen.
   if (!journal.sourceDigest || logicalDigest(source) !== journal.sourceDigest) throw refuse('source_changed');
+  if (!sameSourceTrees(ctx.dataDir, journal.sourceTrees)) throw refuse('source_changed');
+  checkMcpSecret(ctx.dataDir, source, ctx.mcpSecret);
   const rows = hasTable(source, MOVED_TABLE) ? keyRows(source) : [];
   if (!sameDigest(keyDigest(rows), journal.apiKeys)) throw refuse('source_changed');
   checkPasskeys(platform, journal);
@@ -616,7 +638,7 @@ export async function migrateTenancy({
   const legacyKey = loadLegacyKey(legacyKeyFile);
   const mcpSecret = loadMcpSecretFile(mcpSecretFile);
 
-  const ctx = { dataDir: root, platformFile, journalFile, lockFile, journal, backupKey, platformKey, legacyKey, onPhase, source: null, platform: null };
+  const ctx = { dataDir: root, platformFile, journalFile, lockFile, journal, backupKey, platformKey, legacyKey, mcpSecret, onPhase, source: null, platform: null };
   ctx.platform = new DatabaseSync(platformFile);
   try {
     ctx.platform.exec('PRAGMA busy_timeout = 5000');
@@ -695,8 +717,10 @@ async function fromSnapshot(ctx) {
 
   migrate(ctx.source, { through: PRE_TENANCY_SCHEMA });
   const digest = logicalDigest(ctx.source);
-  if (journal.sourceDigest && journal.sourceDigest !== digest) throw refuse('source_changed');
+  const trees = sourceTrees(ctx.dataDir);
+  if (journal.sourceDigest && (journal.sourceDigest !== digest || !sameSourceTrees(ctx.dataDir, journal.sourceTrees))) throw refuse('source_changed');
   journal.sourceDigest = digest;
+  journal.sourceTrees = trees;
   await nextPhase(ctx, 'source-schema');
 
   reopenPlatform(ctx);
