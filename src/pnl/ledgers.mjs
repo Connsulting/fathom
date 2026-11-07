@@ -29,7 +29,7 @@ export function looksLikeSpending(entity, facts) {
   if (lines.some(l => /^income$|revenue|sales|client fees|consulting fees/i.test(l.category))) return false;
   const totals = new Map();
   for (const line of lines) totals.set(line.category, (totals.get(line.category) || 0) + line.amount);
-  if ([...totals.values()].some(amount => amount > 0)) return false;
+  if ([...totals].some(([category, amount]) => amount > 0 && !PERSONAL_CATEGORIES.has(String(category).trim().toLowerCase()))) return false;
   const categories = [...new Set(lines.map(l => String(l.category).trim().toLowerCase()))];
   return categories.filter(c => PERSONAL_CATEGORIES.has(c)).length > categories.length / 2;
 }

@@ -850,12 +850,12 @@ test('PN1: a confirmed spending ledger clears the tax block without business fig
   assert.ok(!JSON.stringify(recRow(db, 'missing-data')?.def).includes('how Aster'));
 });
 
-test('PN1: personal-category inference asks for confirmation, preserves display text and records nothing before yes', async () => {
+test('PN1: personal-category inference includes refunds, preserves display text and records nothing before yes', async () => {
   const db = await S.store();
   for (const [entity, sheet] of [['Asters', "Aster's Expenses"], ['Birchs', "Birch's Expenses"]]) {
     for (const category of ['Medical', 'Shopping', 'Groceries', 'HSA', 'Dining', 'Software']) {
       db.prepare('INSERT INTO pnl_lines (entity, period, category, amount, locator) VALUES (?, ?, ?, ?, ?)')
-        .run(entity, '2026-10', category, -100, JSON.stringify({ sheet, cells: ['D2'] }));
+        .run(entity, '2026-10', category, category === 'Medical' ? 25 : -100, JSON.stringify({ sheet, cells: ['D2'] }));
     }
   }
   await plan(db);
