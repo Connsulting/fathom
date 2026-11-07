@@ -131,7 +131,7 @@ test('progress comes from tracked stored data with its provenance, never a parti
   assert.equal(stale.progress, undefined);
   assert.equal(stale.current, undefined);
   assert.equal(stale.trackWaiting, true);
-  const sum = await callTool('household_summary', {}, { db: s.db, now: NOW });
+  const sum = await callTool('household', { operation: 'summary', }, { db: s.db, now: NOW });
   assert.equal(sum.goals.find(g => g.id === one.id).current, undefined);
   s.db.prepare("UPDATE figures SET unavailable_reason = NULL WHERE key = 'bal.a1'").run();
 
@@ -229,7 +229,7 @@ test('the household summary grounds on goals, typed targets and curve leans', as
   const hidden = goalCreate(s.ctx({ title: 'Hidden' })).goal;
   goalArchive(s.ctx({}, { id: hidden.id }));
   curveSet(s.ctx({ id: 'ret_life', value: 0.2 }));
-  const sum = await callTool('household_summary', {}, { db: s.db, now: NOW });
+  const sum = await callTool('household', { operation: 'summary', }, { db: s.db, now: NOW });
   assert.equal(sum.goals.length, 1, 'archived goals are left out');
   const g = sum.goals[0];
   assert.equal(g.title, 'Savings goal');
@@ -238,7 +238,7 @@ test('the household summary grounds on goals, typed targets and curve leans', as
   assert.deepEqual(g.current, { amount: 12000, kind: 'a' });
   assert.equal(sum.curve.find(c => c.between.startsWith('Max retirement')).leansToward, 'Max retirement room');
   assert.equal(sum.curve.find(c => c.between.startsWith('Pay less tax')).leansToward, 'no lean');
-  const list = await callTool('list_goals', {}, { db: s.db, now: NOW });
+  const list = await callTool('goals', { operation: 'list', }, { db: s.db, now: NOW });
   assert.deepEqual(list, sum.goals);
 });
 
@@ -256,7 +256,7 @@ test('"add a goal" in Ask saves a goal with a durable Undo receipt', async t => 
   const before = s.db.prepare('SELECT count(*) n FROM goals').get().n;
   const r = await threadCreate({ db: s.db, config: s.config, answerer, engine, body: { text: 'Add a goal: a boat fund of $40k, next few years' }, params: {} });
   assert.equal(s.db.prepare('SELECT count(*) n FROM goals').get().n, before + 1);
-  assert.ok(r.message.provenance.tools.some(x => x.name === 'create_goal'));
+  assert.ok(r.message.provenance.tools.some(x => x.name === 'update_goal'));
   assert.equal(r.message.provenance.actions[0].after.target, 40000);
   assert.equal(r.message.provenance.actions[0].after.horizon, '1-3y');
 });

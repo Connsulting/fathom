@@ -1,4 +1,3 @@
-// Knowledge pack tools: list_packs, get_pack_entry, search_pack_entries. All read scope.
 // Packs load from ctx.packDirs, else the repo packs/ plus `<ctx.dataDir>/packs/your-plans` when it
 // exists, where ctx.dataDir is the calling household's root (required: there is no default
 // household directory). Status is what the owner sees: a manifest pack linked to a packs_state row (by the row's
@@ -8,15 +7,15 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadPacks, activePacks, manifestIdOf } from '../packs/index.mjs';
-import { parseJson } from '../store/db.mjs';
-import { getFacts } from '../store/facts.mjs';
-import { packStatus } from '../shared/rules.mjs';
-import { resolveTokens } from '../shared/tokens.mjs';
-import { tokenScope } from '../scenario/build.mjs';
-import { ToolError } from './errors.mjs';
+import { loadPacks, activePacks, manifestIdOf } from '../../packs/index.mjs';
+import { parseJson } from '../../store/db.mjs';
+import { getFacts } from '../../store/facts.mjs';
+import { packStatus } from '../../shared/rules.mjs';
+import { resolveTokens } from '../../shared/tokens.mjs';
+import { loadPacks as loadScenarioPacks, tokenScope } from '../../scenario/build.mjs';
+import { ToolError } from '../errors.mjs';
 
-export const REPO_PACKS_DIR = fileURLToPath(new URL('../../packs/', import.meta.url)).replace(/[\\/]$/, '');
+export const REPO_PACKS_DIR = fileURLToPath(new URL('../../../packs/', import.meta.url)).replace(/[\\/]$/, '');
 
 const SEARCH_DEFAULT = 10;
 const SNIPPET = 200;
@@ -85,14 +84,13 @@ function snippetOf(body, terms) {
 
 const noArgs = { type: 'object', properties: {}, required: [], additionalProperties: false };
 
-export const packTools = [
+export const operations = [
   {
-    name: 'list_packs',
-    description: 'Knowledge packs (sourced tax and planning guidance) with their status for this household (active, suggested, available), why, version, tax year, review date, coverage and entry titles.',
-    inputSchema: noArgs,
+    tool: 'knowledge', name: 'packs', summary: 'List knowledge packs with live status, guidance coverage and entry titles.', route: 'Knowledge packs and status', routes: [],
+    params: {}, required: [],
     scope: 'read',
     handler(args, ctx) {
-      return loadPackView(ctx).map(({ pack, status, why }) => ({
+      const entries = loadPackView(ctx).map(({ pack, status, why }) => ({
         id: pack.id,
         name: pack.name,
         status,
@@ -103,20 +101,22 @@ export const packTools = [
         covers: [...pack.covers],
         entries: pack.entries.map(e => ({ file: e.file, title: e.title })),
       }));
+      const scope = tokenScope(ctx.db);
+      for (const { id, def, live } of loadScenarioPacks(ctx.db)) {
+        const status = packStatus(def.status, live);
+        const row = { id, name: resolveTokens(scope, def.name || id, false), status, why: resolveTokens(scope, def.why || '', false) };
+        const existing = entries.find(p => p.id === id);
+        if (!existing) entries.push(row);
+      }
+      return entries.sort((a, b) => compare(a.id, b.id));
     },
   },
   {
-    name: 'get_pack_entry',
-    description: 'One knowledge pack entry as markdown with its citations. `file` is the entry file from list_packs or its id (the file name without .md). Works for any pack, active or not.',
-    inputSchema: {
-      type: 'object',
-      properties: {
+    tool: 'knowledge', name: 'entry', summary: 'Read one sourced knowledge pack entry.', route: 'One knowledge entry', routes: [],
+    params: {
         packId: { type: 'string', minLength: 1 },
         file: { type: 'string', minLength: 1, maxLength: 200 },
-      },
-      required: ['packId', 'file'],
-      additionalProperties: false,
-    },
+      }, required: ['packId', 'file'],
     scope: 'read',
     handler(args, ctx) {
       const view = loadPackView(ctx).find(v => v.pack.id === args.packId);
@@ -139,18 +139,12 @@ export const packTools = [
     },
   },
   {
-    name: 'search_pack_entries',
-    description: 'Search the entries of active knowledge packs (optionally one pack) for every word of the query. Title hits weigh more than body hits. Returns at most `limit` results (default 10, max 20) with a short snippet, the total match count and whether the list was cut.',
-    inputSchema: {
-      type: 'object',
-      properties: {
+    tool: 'knowledge', name: 'search', summary: 'Search active pack entries; returns matching snippets.', route: 'Tax or planning guidance', routes: [],
+    params: {
         query: { type: 'string', minLength: 2, maxLength: 200 },
-        packId: { type: 'string' },
+        packId: { type: 'string', minLength: 1 },
         limit: { type: 'integer', minimum: 1, maximum: 20 },
-      },
-      required: ['query'],
-      additionalProperties: false,
-    },
+      }, required: ['query'],
     scope: 'read',
     handler(args, ctx) {
       const terms = [...new Set(args.query.toLowerCase().match(/[a-z0-9]{2,}/g) || [])];

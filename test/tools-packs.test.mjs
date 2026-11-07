@@ -1,4 +1,4 @@
-// AC2: the knowledge pack tools (list_packs, get_pack_entry, search_pack_entries) on the demo store
+// AC2: the knowledge pack tools (knowledge.packs, knowledge.entry, knowledge.search) on the demo store
 // with the repo packs, and on a synthetic temp pack dir passed as ctx.packDirs.
 
 import test, { describe, before, after, beforeEach, afterEach } from 'node:test';
@@ -16,7 +16,7 @@ import { resolveTokens } from '../src/shared/tokens.mjs';
 import { tokenScope } from '../src/scenario/build.mjs';
 import { ROOT, tempDb, tempDir } from './helpers/server.mjs';
 
-const NAMES = ['list_packs', 'get_pack_entry', 'search_pack_entries'];
+const NAMES = ['knowledge'];
 const PACK_FIELDS = ['covers', 'entries', 'id', 'name', 'reviewed', 'status', 'taxYear', 'version', 'why'];
 const ENTRY_FIELDS = ['citations', 'file', 'id', 'markdown', 'packId', 'packName', 'reviewed', 'taxYear', 'title', 'version'];
 const RESULT_FIELDS = ['file', 'id', 'packId', 'score', 'snippet', 'title'];
@@ -85,7 +85,7 @@ function expectedView(db, dirs = [REPO_PACKS]) {
 }
 
 const viewOf = (db, manifestId) => expectedView(db).find(v => v.pack.id === manifestId);
-const listed = async (ctx, id) => (await callTool('list_packs', {}, ctx)).find(p => p.id === id);
+const listed = async (ctx, id) => (await callTool('knowledge', { operation: 'packs', }, ctx)).find(p => p.id === id);
 const packOf = id => loadPacks([REPO_PACKS]).find(p => p.id === id);
 
 // The full title of the pack's first entry as a query: every term sits in that entry, so it matches
@@ -93,7 +93,7 @@ const packOf = id => loadPacks([REPO_PACKS]).find(p => p.id === id);
 const titleQuery = id => packOf(id).entries[0].title;
 
 async function hits(ctx, id, extra = {}) {
-  const r = await callTool('search_pack_entries', { query: titleQuery(id), limit: 20, ...extra }, ctx);
+  const r = await callTool('knowledge', { operation: 'search',  query: titleQuery(id), limit: 20, ...extra }, ctx);
   return r.results.filter(x => x.packId === id);
 }
 
@@ -164,7 +164,7 @@ describe('registry entries', () => {
     for (const n of NAMES) {
       const x = getTool(n);
       assert.ok(x, `registered ${n}`);
-      assert.equal(x.scope, 'read');
+      assert.equal(x.kind, 'read');
       assert.ok(typeof x.description === 'string' && x.description.length > 0);
       assert.equal(x.inputSchema.type, 'object');
       assert.equal(x.inputSchema.additionalProperties, false);
@@ -172,9 +172,9 @@ describe('registry entries', () => {
       const props = x.inputSchema.properties || {};
       for (const [k, v] of Object.entries(props)) assert.ok(!Array.isArray(v.type), `${n}.${k} has no type array`);
     }
-    assert.deepEqual(getTool('get_pack_entry').inputSchema.required.slice().sort(), ['file', 'packId']);
-    assert.deepEqual(getTool('search_pack_entries').inputSchema.required, ['query']);
-    assert.deepEqual(tools.filter(x => x.scope === 'write:recs').map(x => x.name), ['set_recommendation_owner', 'set_recommendation_status', 'undo_recommendation_action']);
+    assert.deepEqual(getTool('knowledge').operations.find(o => o.name === 'entry').required.slice().sort(), ['file', 'packId']);
+    assert.deepEqual(getTool('knowledge').operations.find(o => o.name === 'search').required, ['query']);
+    assert.deepEqual(tools.filter(x => x.operations.some(o => o.scope === 'write:recs' || o.scopes?.includes('write:recs'))).map(x => x.name), ['act_on_recommendation', 'undo']);
   });
 });
 
@@ -190,8 +190,8 @@ describe('demo store with the repo packs', () => {
   });
   after(() => t && t.close());
 
-  test('list_packs lists every repo pack sorted by id with the status of its linked demo row', async () => {
-    const list = await callTool('list_packs', {}, ctx);
+  test('knowledge.packs lists every repo pack sorted by id with the status of its linked demo row', async () => {
+    const list = (await callTool('knowledge', { operation: 'packs' }, ctx)).filter(p => p.entries);
     assert.deepEqual(list.map(p => p.id), expected.map(e => e.pack.id));
     assert.deepEqual(Object.fromEntries(list.map(p => [p.id, p.status])), SEEDED_STATUS);
     assert.deepEqual(list.map(p => p.id), [...list.map(p => p.id)].sort());
@@ -213,7 +213,7 @@ describe('demo store with the repo packs', () => {
   });
 
   test('a linked row supplies the why: scenario tokens resolved to plain text, no braces left', async () => {
-    const list = await callTool('list_packs', {}, ctx);
+    const list = (await callTool('knowledge', { operation: 'packs' }, ctx)).filter(p => p.entries);
     const scope = tokenScope(t.db);
     for (const [rowId, manifest] of Object.entries(LINKS)) {
       const row = rowOf(t.db, rowId);
@@ -228,7 +228,7 @@ describe('demo store with the repo packs', () => {
   });
 
   test('name, version, tax year and review date still come from the manifest, id stays the manifest id', async () => {
-    const list = await callTool('list_packs', {}, ctx);
+    const list = (await callTool('knowledge', { operation: 'packs' }, ctx)).filter(p => p.entries);
     for (const { pack } of expected) {
       const p = list.find(x => x.id === pack.id);
       assert.equal(p.name, pack.name);
@@ -240,7 +240,7 @@ describe('demo store with the repo packs', () => {
   });
 
   test('with no overrides the linked rows read packStatus(def.status, live) and the active ones are searchable', async () => {
-    const list = await callTool('list_packs', {}, ctx);
+    const list = (await callTool('knowledge', { operation: 'packs' }, ctx)).filter(p => p.entries);
     for (const [rowId, manifest] of Object.entries(LINKS)) {
       const row = rowOf(t.db, rowId);
       assert.equal(row.active, null, `${rowId} has no override`);
@@ -255,14 +255,14 @@ describe('demo store with the repo packs', () => {
     }
   });
 
-  test('list_packs is deterministic', async () => {
-    assert.deepEqual(await callTool('list_packs', {}, ctx), await callTool('list_packs', {}, ctx));
+  test('knowledge.packs is deterministic', async () => {
+    assert.deepEqual(await callTool('knowledge', { operation: 'packs', }, ctx), await callTool('knowledge', { operation: 'packs', }, ctx));
   });
 
-  test('get_pack_entry returns any repo entry, active or not', async () => {
+  test('knowledge.entry returns any repo entry, active or not', async () => {
     for (const { pack } of expected) {
       const entry = pack.entries[0];
-      const got = await callTool('get_pack_entry', { packId: pack.id, file: entry.file }, ctx);
+      const got = await callTool('knowledge', { operation: 'entry',  packId: pack.id, file: entry.file }, ctx);
       assert.equal(got.packId, pack.id);
       assert.equal(got.title, entry.title);
       assert.equal(got.markdown, entry.body);
@@ -272,7 +272,7 @@ describe('demo store with the repo packs', () => {
 
   test('search only reaches active packs', async () => {
     const active = new Set(expected.filter(e => e.status === 'active').map(e => e.pack.id));
-    const r = await callTool('search_pack_entries', { query: 'tax', limit: 20 }, ctx);
+    const r = await callTool('knowledge', { operation: 'search',  query: 'tax', limit: 20 }, ctx);
     assert.ok(r.results.length > 0, 'the active demo packs mention tax');
     for (const x of r.results) assert.ok(active.has(x.packId), `${x.packId} is active`);
   });
@@ -280,7 +280,7 @@ describe('demo store with the repo packs', () => {
   test('an empty real store still lists packs', async () => {
     const empty = await tempDb();
     try {
-      const list = await callTool('list_packs', {}, { db: empty.db, now: NOW, dataDir: empty.dataDir });
+      const list = await callTool('knowledge', { operation: 'packs' }, { db: empty.db, now: NOW, dataDir: empty.dataDir });
       const want = activePacks(loadPacks([join(ROOT, 'packs')]), {});
       assert.deepEqual(list.map(p => [p.id, p.status]), want.map(e => [e.pack.id, e.status]));
     } finally {
@@ -300,7 +300,7 @@ describe('owner overrides on the demo rows reach the pack tools', () => {
   const run = (sql, ...args) => t.db.prepare(sql).run(...args);
   const entryOf = id => packOf(id).entries[0];
 
-  test('turning the UI pack scorp off takes s-corp-owner out of list_packs and search; entries stay readable', async () => {
+  test('turning the UI pack scorp off takes s-corp-owner out of knowledge.packs and search; entries stay readable', async () => {
     assert.equal((await listed(ctx, 's-corp-owner')).status, 'active', 'precondition');
     assert.ok((await hits(ctx, 's-corp-owner')).some(x => x.id === entryOf('s-corp-owner').id), 'precondition: searchable');
 
@@ -313,11 +313,11 @@ describe('owner overrides on the demo rows reach the pack tools', () => {
 
     assert.deepEqual(await hits(ctx, 's-corp-owner'), [], 'no s-corp-owner result');
     assert.deepEqual(await hits(ctx, 's-corp-owner', { packId: 's-corp-owner' }), [], 'none when asked for the pack by id');
-    const only = await callTool('search_pack_entries', { query: titleQuery('s-corp-owner'), packId: 's-corp-owner' }, ctx);
+    const only = await callTool('knowledge', { operation: 'search',  query: titleQuery('s-corp-owner'), packId: 's-corp-owner' }, ctx);
     assert.deepEqual([only.results, only.total, only.truncated], [[], 0, false]);
 
-    const got = await callTool('get_pack_entry', { packId: 's-corp-owner', file: entryOf('s-corp-owner').file }, ctx);
-    assert.equal(got.markdown, entryOf('s-corp-owner').body, 'get_pack_entry works for a pack that is off');
+    const got = await callTool('knowledge', { operation: 'entry',  packId: 's-corp-owner', file: entryOf('s-corp-owner').file }, ctx);
+    assert.equal(got.markdown, entryOf('s-corp-owner').body, 'knowledge.entry works for a pack that is off');
 
     // The other demo packs are untouched.
     for (const id of ['kids-dependents', 'w2-benefits', 'virginia-resident']) assert.equal((await listed(ctx, id)).status, 'active', id);
@@ -344,7 +344,7 @@ describe('owner overrides on the demo rows reach the pack tools', () => {
     for (const [rowId, manifest] of Object.entries(LINKS)) {
       if (SEEDED_STATUS[manifest] !== 'active') continue;
       run('UPDATE packs_state SET active = 0 WHERE id = ?', rowId);
-      const list = await callTool('list_packs', {}, ctx);
+      const list = (await callTool('knowledge', { operation: 'packs' }, ctx)).filter(p => p.entries);
       for (const p of list) {
         if (p.id === manifest) {
           assert.equal(p.status, 'available', `${manifest} off`);
@@ -365,7 +365,7 @@ describe('owner overrides on the demo rows reach the pack tools', () => {
     assert.equal(p.why, resolveTokens(tokenScope(t.db), rowOf(t.db, 'giving').def.why, false), 'no override, so the row why');
     assert.deepEqual(await hits(ctx, 'charitable-giving'), []);
     assert.deepEqual(await hits(ctx, 'charitable-giving', { packId: 'charitable-giving' }), []);
-    const got = await callTool('get_pack_entry', { packId: 'charitable-giving', file: entryOf('charitable-giving').file }, ctx);
+    const got = await callTool('knowledge', { operation: 'entry',  packId: 'charitable-giving', file: entryOf('charitable-giving').file }, ctx);
     assert.equal(got.markdown, entryOf('charitable-giving').body);
   });
 
@@ -460,23 +460,23 @@ describe('owner overrides on the demo rows reach the pack tools', () => {
     assert.match(p.why, /income\.sCorp/);
     assert.ok((await hits(ctx, 's-corp-owner')).length > 0, 'facts-derived active is searchable');
 
-    const list = await callTool('list_packs', {}, ctx);
+    const list = (await callTool('knowledge', { operation: 'packs' }, ctx)).filter(p => p.entries);
     assert.equal(list.length, 9, 'every manifest pack is still listed');
   });
 
-  test('rows without a manifest (contractor, abroad, rental) add no pack and change nothing', async () => {
-    const before = await callTool('list_packs', {}, ctx);
+  test('rows without a manifest preserve live status beside unchanged manifest packs', async () => {
+    const before = (await callTool('knowledge', { operation: 'packs' }, ctx)).filter(p => p.entries);
     run("UPDATE packs_state SET active = 1 WHERE id IN ('contractor', 'abroad', 'rental')");
-    assert.deepEqual(await callTool('list_packs', {}, ctx), before);
+    assert.deepEqual((await callTool('knowledge', { operation: 'packs' }, ctx)).filter(p => p.entries), before);
     run("DELETE FROM packs_state WHERE id IN ('contractor', 'abroad', 'rental')");
-    assert.deepEqual(await callTool('list_packs', {}, ctx), before);
+    assert.deepEqual((await callTool('knowledge', { operation: 'packs' }, ctx)).filter(p => p.entries), before);
   });
 
   test('the whole list follows the rule after a mix of overrides', async () => {
     run("UPDATE packs_state SET active = 0 WHERE id IN ('scorp', 'w2')");
     run("UPDATE packs_state SET active = 1 WHERE id = 'giving'");
     run("UPDATE packs_state SET exploring = 1 WHERE id = 'virginia'");
-    const list = await callTool('list_packs', {}, ctx);
+    const list = (await callTool('knowledge', { operation: 'packs' }, ctx)).filter(p => p.entries);
     const want = expectedView(t.db);
     assert.deepEqual(list.map(p => [p.id, p.status, p.why]), want.map(v => [v.pack.id, v.status, v.why]));
     assert.deepEqual(Object.fromEntries(list.map(p => [p.id, p.status])), {
@@ -490,7 +490,7 @@ describe('owner overrides on the demo rows reach the pack tools', () => {
       'virginia-resident': 'active',
       'w2-benefits': 'available',
     });
-    const all = await callTool('search_pack_entries', { query: 'tax', limit: 20 }, ctx);
+    const all = await callTool('knowledge', { operation: 'search',  query: 'tax', limit: 20 }, ctx);
     const activeIds = new Set(list.filter(p => p.status === 'active').map(p => p.id));
     for (const x of all.results) assert.ok(activeIds.has(x.packId), `${x.packId} is active`);
   });
@@ -515,7 +515,7 @@ describe('a real-store shaped row (untagged, id equal to the manifest id)', () =
     assert.equal(p.status, 'available');
     assert.equal(p.why, OFF);
     assert.deepEqual(await hits(ctx, 's-corp-owner'), []);
-    const got = await callTool('get_pack_entry', { packId: 's-corp-owner', file: packOf('s-corp-owner').entries[0].file }, ctx);
+    const got = await callTool('knowledge', { operation: 'entry',  packId: 's-corp-owner', file: packOf('s-corp-owner').entries[0].file }, ctx);
     assert.equal(got.markdown, packOf('s-corp-owner').entries[0].body);
   });
 
@@ -547,7 +547,7 @@ describe('a real-store shaped row (untagged, id equal to the manifest id)', () =
   test('a tagged row links to its manifest, not to a manifest named like the row', async () => {
     t.db.prepare(`INSERT INTO packs_state (id, def, active, exploring, what_if_asked, what_if_done, unhid, sort, updated_at)
                   VALUES ('mine', '{"manifest":"w2-benefits","status":"available"}', 1, 0, 0, 0, '[]', 0, '2026-11-01T09:00:00Z')`).run();
-    const list = await callTool('list_packs', {}, ctx);
+    const list = (await callTool('knowledge', { operation: 'packs' }, ctx)).filter(p => p.entries);
     assert.ok(!list.some(p => p.id === 'mine'));
     assert.equal(list.find(p => p.id === 'w2-benefits').status, 'active');
     assert.equal(list.find(p => p.id === 'w2-benefits').why, ON);
@@ -570,8 +570,8 @@ describe('synthetic pack dir via ctx.packDirs', () => {
 
   const ids = list => Object.fromEntries(list.map(p => [p.id, p.status]));
 
-  test('list_packs shape and statuses from facts', async () => {
-    const list = await callTool('list_packs', {}, ctx);
+  test('knowledge.packs shape and statuses from facts', async () => {
+    const list = (await callTool('knowledge', { operation: 'packs' }, ctx)).filter(p => p.entries);
     assert.deepEqual(list.map(p => p.id), ['alpha-test', 'beta-test', 'gamma-test']);
     assert.deepEqual(ids(list), { 'alpha-test': 'active', 'beta-test': 'suggested', 'gamma-test': 'available' });
     const alpha = list[0];
@@ -591,12 +591,12 @@ describe('synthetic pack dir via ctx.packDirs', () => {
     setFact(t.db, 'household.expectingChild', true);
     setFact(t.db, 'test.flag', true);
     try {
-      assert.deepEqual(ids(await callTool('list_packs', {}, ctx)), { 'alpha-test': 'active', 'beta-test': 'active', 'gamma-test': 'active' });
+      assert.deepEqual(ids(await callTool('knowledge', { operation: 'packs', }, ctx)), { 'alpha-test': 'active', 'beta-test': 'active', 'gamma-test': 'active' });
     } finally {
       setFact(t.db, 'household.expectingChild', false);
       t.db.prepare("DELETE FROM facts WHERE key = 'test.flag'").run();
     }
-    assert.deepEqual(ids(await callTool('list_packs', {}, ctx)), { 'alpha-test': 'active', 'beta-test': 'suggested', 'gamma-test': 'available' });
+    assert.deepEqual(ids(await callTool('knowledge', { operation: 'packs', }, ctx)), { 'alpha-test': 'active', 'beta-test': 'suggested', 'gamma-test': 'available' });
   });
 
   test('packs_state override: active 1 turns a pack on, 0 turns it off, null leaves it', async () => {
@@ -604,18 +604,18 @@ describe('synthetic pack dir via ctx.packDirs', () => {
     setPackState(t.db, 'alpha-test', 0);
     setPackState(t.db, 'beta-test', null);
     try {
-      assert.deepEqual(ids(await callTool('list_packs', {}, ctx)), { 'alpha-test': 'available', 'beta-test': 'suggested', 'gamma-test': 'active' });
-      const r = await callTool('search_pack_entries', { query: 'widget' }, ctx);
+      assert.deepEqual(ids(await callTool('knowledge', { operation: 'packs', }, ctx)), { 'alpha-test': 'available', 'beta-test': 'suggested', 'gamma-test': 'active' });
+      const r = await callTool('knowledge', { operation: 'search',  query: 'widget' }, ctx);
       assert.deepEqual(r.results.map(x => x.packId), ['gamma-test'], 'search follows the override');
     } finally {
       t.db.prepare("DELETE FROM packs_state WHERE id IN ('alpha-test', 'beta-test', 'gamma-test')").run();
     }
-    assert.deepEqual(ids(await callTool('list_packs', {}, ctx)), { 'alpha-test': 'active', 'beta-test': 'suggested', 'gamma-test': 'available' });
+    assert.deepEqual(ids(await callTool('knowledge', { operation: 'packs', }, ctx)), { 'alpha-test': 'active', 'beta-test': 'suggested', 'gamma-test': 'available' });
   });
 
-  test('get_pack_entry by file and by id, with citations', async () => {
-    const byFile = await callTool('get_pack_entry', { packId: 'alpha-test', file: 'guides/deep-dive.md' }, ctx);
-    const byId = await callTool('get_pack_entry', { packId: 'alpha-test', file: 'deep-dive' }, ctx);
+  test('knowledge.entry by file and by id, with citations', async () => {
+    const byFile = await callTool('knowledge', { operation: 'entry',  packId: 'alpha-test', file: 'guides/deep-dive.md' }, ctx);
+    const byId = await callTool('knowledge', { operation: 'entry',  packId: 'alpha-test', file: 'deep-dive' }, ctx);
     assert.deepEqual(byFile, byId);
     assert.deepEqual(Object.keys(byFile).sort(), ENTRY_FIELDS);
     assert.equal(byFile.packId, 'alpha-test');
@@ -631,29 +631,29 @@ describe('synthetic pack dir via ctx.packDirs', () => {
     assert.equal(byFile.reviewed, '2026-10-01');
   });
 
-  test('get_pack_entry works for a pack that is not active', async () => {
-    const got = await callTool('get_pack_entry', { packId: 'gamma-test', file: 'gamma-widget.md' }, ctx);
+  test('knowledge.entry works for a pack that is not active', async () => {
+    const got = await callTool('knowledge', { operation: 'entry',  packId: 'gamma-test', file: 'gamma-widget.md' }, ctx);
     assert.equal(got.title, 'Gamma widget entry');
   });
 
-  test('get_pack_entry: unknown pack or entry is not_found', async () => {
-    await assert.rejects(callTool('get_pack_entry', { packId: 'no-such-pack', file: 'zebra-notes.md' }, ctx), isCode('not_found'));
-    await assert.rejects(callTool('get_pack_entry', { packId: 'alpha-test', file: 'no-such-entry.md' }, ctx), isCode('not_found'));
-    await assert.rejects(callTool('get_pack_entry', { packId: 'alpha-test', file: 'deep-dive.md' }, ctx), isCode('not_found'));
-    await assert.rejects(callTool('get_pack_entry', { packId: 'beta-test', file: 'zebra-notes.md' }, ctx), isCode('not_found'));
-    await assert.rejects(callTool('get_pack_entry', { packId: 'alpha-test', file: '../beta-test/beta-widget.md' }, ctx), isCode('not_found'));
+  test('knowledge.entry: unknown pack or entry is not_found', async () => {
+    await assert.rejects(callTool('knowledge', { operation: 'entry',  packId: 'no-such-pack', file: 'zebra-notes.md' }, ctx), isCode('not_found'));
+    await assert.rejects(callTool('knowledge', { operation: 'entry',  packId: 'alpha-test', file: 'no-such-entry.md' }, ctx), isCode('not_found'));
+    await assert.rejects(callTool('knowledge', { operation: 'entry',  packId: 'alpha-test', file: 'deep-dive.md' }, ctx), isCode('not_found'));
+    await assert.rejects(callTool('knowledge', { operation: 'entry',  packId: 'beta-test', file: 'zebra-notes.md' }, ctx), isCode('not_found'));
+    await assert.rejects(callTool('knowledge', { operation: 'entry',  packId: 'alpha-test', file: '../beta-test/beta-widget.md' }, ctx), isCode('not_found'));
   });
 
-  test('get_pack_entry: bad input', async () => {
+  test('knowledge.entry: bad input', async () => {
     for (const args of [{}, { packId: 'alpha-test' }, { file: 'zebra-notes.md' }, { packId: '', file: 'zebra-notes.md' },
       { packId: 'alpha-test', file: '' }, { packId: 'alpha-test', file: 'x'.repeat(201) }, { packId: 'alpha-test', file: 7 },
       { packId: 'alpha-test', file: 'zebra-notes.md', extra: true }]) {
-      await assert.rejects(callTool('get_pack_entry', args, ctx), isCode('bad_input'), JSON.stringify(args).slice(0, 80));
+      await assert.rejects(callTool('knowledge', { operation: 'entry', ...args }, ctx), isCode('bad_input'), JSON.stringify(args).slice(0, 80));
     }
   });
 
   test('search scores title hits over body hits and orders deterministically', async () => {
-    const r = await callTool('search_pack_entries', { query: 'widget' }, ctx);
+    const r = await callTool('knowledge', { operation: 'search',  query: 'widget' }, ctx);
     assert.ok(!Object.hasOwn(r, 'query'), 'the query argument is not echoed');
     assert.deepEqual(r.results.map(x => x.id), ['quarterly-widgets', 'zebra-notes']);
     assert.deepEqual(r.results.map(x => x.score), [6, 3]);
@@ -668,37 +668,37 @@ describe('synthetic pack dir via ctx.packDirs', () => {
     }
     assert.equal(r.results[0].file, 'quarterly-widgets.md');
     assert.equal(r.results[0].title, 'Quarterly widget planning');
-    assert.deepEqual(await callTool('search_pack_entries', { query: 'widget' }, ctx), r, 'same query, same answer');
+    assert.deepEqual(await callTool('knowledge', { operation: 'search',  query: 'widget' }, ctx), r, 'same query, same answer');
   });
 
   test('search needs every term and is case-insensitive', async () => {
-    const r = await callTool('search_pack_entries', { query: 'Widget ZEBRA' }, ctx);
+    const r = await callTool('knowledge', { operation: 'search',  query: 'Widget ZEBRA' }, ctx);
     assert.deepEqual(r.results.map(x => x.id), ['zebra-notes']);
-    const none = await callTool('search_pack_entries', { query: 'widget unicorn' }, ctx);
+    const none = await callTool('knowledge', { operation: 'search',  query: 'widget unicorn' }, ctx);
     assert.deepEqual(none.results, []);
     assert.equal(none.total, 0);
     assert.equal(none.truncated, false);
   });
 
   test('search is active-only and honors packId', async () => {
-    const all = await callTool('search_pack_entries', { query: 'widget' }, ctx);
+    const all = await callTool('knowledge', { operation: 'search',  query: 'widget' }, ctx);
     assert.ok(!all.results.some(x => x.packId !== 'alpha-test'), 'suggested and available packs are not searched');
-    const gamma = await callTool('search_pack_entries', { query: 'widget', packId: 'gamma-test' }, ctx);
+    const gamma = await callTool('knowledge', { operation: 'search',  query: 'widget', packId: 'gamma-test' }, ctx);
     assert.deepEqual(gamma.results, []);
-    const alpha = await callTool('search_pack_entries', { query: 'widget', packId: 'alpha-test' }, ctx);
+    const alpha = await callTool('knowledge', { operation: 'search',  query: 'widget', packId: 'alpha-test' }, ctx);
     assert.deepEqual(alpha.results.map(x => x.id), ['quarterly-widgets', 'zebra-notes']);
   });
 
   test('search caps results at the limit and reports truncation', async () => {
-    const def = await callTool('search_pack_entries', { query: 'gizmo' }, ctx);
+    const def = await callTool('knowledge', { operation: 'search',  query: 'gizmo' }, ctx);
     assert.equal(def.results.length, 10);
     assert.equal(def.total, GIZMOS);
     assert.equal(def.truncated, true);
     assert.deepEqual(def.results.map(x => x.id), Array.from({ length: 10 }, (_, i) => `item-${pad(i + 1)}`), 'ties break by entry id');
-    const max = await callTool('search_pack_entries', { query: 'gizmo', limit: 20 }, ctx);
+    const max = await callTool('knowledge', { operation: 'search',  query: 'gizmo', limit: 20 }, ctx);
     assert.equal(max.results.length, 20);
     assert.equal(max.truncated, true);
-    const one = await callTool('search_pack_entries', { query: 'gizmo', limit: 1 }, ctx);
+    const one = await callTool('knowledge', { operation: 'search',  query: 'gizmo', limit: 1 }, ctx);
     assert.deepEqual(one.results.map(x => x.id), ['item-01']);
     for (const x of max.results) assert.ok(x.snippet.length <= 200);
   });
@@ -707,11 +707,24 @@ describe('synthetic pack dir via ctx.packDirs', () => {
     for (const args of [{}, { query: 'a' }, { query: '!!' }, { query: '? x' }, { query: 'q'.repeat(201) }, { query: 7 },
       { query: 'widget', limit: 0 }, { query: 'widget', limit: 21 }, { query: 'widget', limit: 2.5 }, { query: 'widget', packId: 3 },
       { query: 'widget', extra: 1 }]) {
-      await assert.rejects(callTool('search_pack_entries', args, ctx), isCode('bad_input'), JSON.stringify(args).slice(0, 80));
+      await assert.rejects(callTool('knowledge', { operation: 'search', ...args }, ctx), isCode('bad_input'), JSON.stringify(args).slice(0, 80));
     }
   });
 
-  test('list_packs takes no arguments', async () => {
-    await assert.rejects(callTool('list_packs', { extra: 1 }, ctx), isCode('bad_input'));
+  test('knowledge.packs takes no arguments', async () => {
+    await assert.rejects(callTool('knowledge', { operation: 'packs',  extra: 1 }, ctx), isCode('bad_input'));
   });
+});
+
+test('merged pack listing preserves every scenario pack id and live status', async () => {
+  const { t, ctx } = await freshDemo();
+  try {
+    const result = await callTool('knowledge', { operation: 'packs' }, ctx);
+    for (const row of t.db.prepare('SELECT id, def, active, exploring FROM packs_state').all()) {
+      const def = parseJson(row.def, {});
+      const expected = packStatus(def.status, { active: row.active == null ? null : !!row.active, exploring: !!row.exploring });
+      assert.equal(result.find(p => p.id === row.id)?.status, expected, row.id);
+    }
+    for (const row of result.filter(p => !p.entries)) assert.deepEqual(Object.keys(row).sort(), ['id', 'name', 'status', 'why']);
+  } finally { t.close(); }
 });

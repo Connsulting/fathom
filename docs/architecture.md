@@ -255,35 +255,47 @@ constraint on `accounts.mask` enforces exactly four digits or NULL).
 
 ### 8. Tool interface
 
-Shared by the chat engine and the MCP server. `src/tools/index.mjs` exports `tools`, a registry
-of `{name, description, inputSchema (JSON Schema), scope: 'read'|'write:recs', handler(args, ctx)}`
-with `ctx = {db, now}`, plus `getTool(name)`, `callTool(name, args, ctx)` (validates args against
-`inputSchema`) and `ToolError` with `code` `'bad_input'` or `'not_found'`. The recommendation write scope,
-`write:recs`, covers recommendation status (`set_recommendation_status`) and action owner
-(`set_recommendation_owner`).
+Shared by the chat engine and MCP server. `src/tools/index.mjs` collects catalog operations
+into `{name, kind, description, inputSchema, operations, handler}` tools. Every call includes a
+required `operation` enum. The shared schema contains all parameters, and dispatch rejects a
+parameter unused by the selected operation or a missing required parameter as `bad_input`.
+Each operation declares its scope, summary, routing line and API routes. Headers in
+`src/tools/tools.mjs` own purpose, progress and source labels. Generated routing and rules are
+shared by Ask and MCP instructions. `getTool`, `callTool`, `tools`, `parity`, `CAPABILITIES` and
+`instructions` expose the registry. There are no retired-name aliases.
+
+The twelve registered tools and their operations are shown below. Dot notation means a call to
+the tool before the dot with the `operation` after it; it is not a dotted MCP tool name.
 
 | Tool | Scope | Input | Output |
 |---|---|---|---|
-| `household_summary` | read | none | `{facts, verdictLevel, needsYouCount, statusCounts, dataThrough, clock}` |
-| `get_facts` | read | `keys?: string[]` | `[{key, value, src, asOf, confirmed}]` |
-| `list_accounts` | read | none | `[{id, inst, mask, name, owner, kind, mirror, note, balance, asOf}]` |
-| `query_transactions` | read | `accountId?, from?, to?, minAmount?, maxAmount?, category?, text?, limit? (1..200, default 50)` | `{rows: [{id, accountId, date, amount, description, category}], truncated, total}` |
-| `list_positions` | read | `accountId?` | `[{accountId, symbol, name, quantity, price, value, costBasis, asOf}]` |
-| `pnl_by_month` | read | `entity?, from?: 'YYYY-MM', to?` | `{rows: [{period, category, amount}], totals: {period: n}}` |
-| `list_recommendations` | read | `status?: string or string[]` | live recs, never hidden, each with `owner`, `ownerOverride`, `goalKinds`, `serves: [{id, title, origin}]` and `housekeeping` |
-| `get_recommendation` | read | `id` | the live rec, linked the same way |
-| `list_deadlines` | read | `from?, to?` | `[{date, label, title, recId, hard}]` sorted by date |
-| `list_goals` | read | none | goals |
-| `get_figures` | read | `keys?: string[]` | `[{key, v, kind, label, source: {id, label, asOf}}]` |
-| `packs_status` | read | none | `[{id, name, status, why}]` |
-| `advisor_status` | read | none | `{advisor, nextCheckin: {date, time, lengthMin, label} or null, waiting: [{recId, title, sentOn}], reviewed: [{recId, title, sentOn, verdict, note, reviewedOn, recordedOn}], history (closed reviews with closedOn, closedReason), packets: [{id, date, recIds}]}` (see "Advisor workflow") |
-| `set_recommendation_status` | write:recs | `id, status: doing, done, dismissed, snoozed or proposed, wake?` | the linked rec; writes `rec_events` attributed to the signed-in person or key creator |
-| `set_recommendation_owner` | write:recs | `id, owner: you, spouse, both, advisor or automatic` | the linked rec; sets `owner` and `owner_override = 1`, writes `rec_events` action `set_owner`, actor `tool`, from and to the current status |
-| `list_packs` | read | none | `[{id, name, status, why, version, taxYear, reviewed, covers, entries: [{file, title}]}]` sorted by id |
-| `get_pack_entry` | read | `packId, file` (the manifest file or the entry id) | `{packId, packName, file, id, title, markdown, citations: [{label, url}], version, taxYear, reviewed}`; any loaded pack, active or not |
-| `search_pack_entries` | read | `query (2..200 chars), packId?, limit? (1..20, default 10)` | `{results: [{packId, file, id, title, score, snippet}], total, truncated}` over active packs only (the query is not echoed) |
+| `household.summary` | read | none | `{facts, verdictLevel, needsYouCount, statusCounts, dataThrough, clock}` |
+| `household.facts` | read | `keys?: string[]` | `[{key, value, src, asOf, confirmed}]` |
+| `accounts.list` | read | none | `[{id, inst, mask, name, owner, kind, mirror, note, balance, asOf}]` |
+| `transactions.search` | read | `accountId?, from?, to?, minAmount?, maxAmount?, category?, text?, limit? (1..200, default 50)` | `{rows: [{id, accountId, date, amount, description, category}], truncated, total}` |
+| `accounts.holdings` | read | `id?` | `[{accountId, symbol, name, quantity, price, value, costBasis, asOf}]` |
+| `business.pnl` | read | `entity?, from?: 'YYYY-MM', to?` | `{rows: [{period, category, amount}], totals: {period: n}}` |
+| `recommendations.list` | read | `status?: string or string[]` | live recs, never hidden, each with `owner`, `ownerOverride`, `goalKinds`, `serves: [{id, title, origin}]` and `housekeeping` |
+| `recommendations.detail` | read | `id` | the live rec, linked the same way |
+| `household.deadlines` | read | `from?, to?` | `[{date, label, title, recId, hard}]` sorted by date |
+| `goals.list` | read | none | goals |
+| `household.figures` | read | `keys?: string[]` | `[{key, v, kind, label, source: {id, label, asOf}}]` |
+| `recommendations.advisor` | read | none | `{advisor, nextCheckin: {date, time, lengthMin, label} or null, waiting: [{recId, title, sentOn}], reviewed: [{recId, title, sentOn, verdict, note, reviewedOn, recordedOn}], history (closed reviews with closedOn, closedReason), packets: [{id, date, recIds}]}` (see "Advisor workflow") |
+| `act_on_recommendation.status` | write:recs | `id, status: doing, done, dismissed, snoozed or proposed, wake?` | the linked rec; writes `rec_events` attributed to the signed-in person or key creator |
+| `act_on_recommendation.owner` | write:recs | `id, owner: you, spouse, both, advisor or automatic` | the linked rec; sets `owner` and `owner_override = 1`, writes `rec_events` action `set_owner`, actor `tool`, from and to the current status |
+| `knowledge.packs` | read | none | `[{id, name, status, why, version, taxYear, reviewed, covers, entries: [{file, title}]}]` sorted by id |
+| `knowledge.entry` | read | `packId, file` (the manifest file or the entry id) | `{packId, packName, file, id, title, markdown, citations: [{label, url}], version, taxYear, reviewed}`; any loaded pack, active or not |
+| `knowledge.search` | read | `query (2..200 chars), packId?, limit? (1..20, default 10)` | `{results: [{packId, file, id, title, score, snippet}], total, truncated}` over active packs only (the query is not echoed) |
 
-The pack tools (`src/tools/packs.mjs`) load packs from `ctx.packDirs`, else the repo `packs/` plus
+| `goals.pace` | read | none | deterministic pace with referenceable figure envelopes |
+| `household.fact_shapes` | read | none | accepted fact keys and answer shapes |
+| `answer.fact` | write:facts | `key, value, evidence, conversationKey?` | fact and change receipt |
+| `act_on_recommendation.step` | write:steps | `id, index, checked` | tasks and change receipt |
+| `update_goal.create`, `update_goal.edit` | write:goals | goal fields; edit requires `id` | saved goal and change receipt |
+| `update_preferences.remember` | write:preferences | `text, evidence, id?, conversationKey?` | preference and change receipt |
+| `undo.undo` | receipt scope | `id` | restored change receipt; MCP-only |
+
+The knowledge tool (`src/tools/catalog/knowledge.mjs`) load packs from `ctx.packDirs`, else the repo `packs/` plus
 `<ctx.dataDir>/packs/your-plans` when it exists. Status is what the owner sees in the UI, not the
 facts alone. A manifest pack links to a `packs_state` row by the row's `def.manifest` (a manifest
 id), else by the row id (`manifestIdOf` in `src/packs/index.mjs`, shared with the live pack view).
@@ -294,9 +306,12 @@ from `activePacks(packs, facts)`, and `active` and `exploring` are the row's col
 `Turned off by the owner.` when `active` is set, else the row's `def.why` with scenario tokens
 resolved to plain text, else the activation reason. A pack with no linked row keeps the
 facts-derived status and reason. Name, version, tax year, review date and entries always come from
-the manifest files. `search_pack_entries` reads only packs whose status is `active`. Search terms are the lowercase alphanumeric runs of two or more characters in the
+the manifest files. `knowledge.search` reads only packs whose status is `active`. Search terms are the lowercase alphanumeric runs of two or more characters in the
 query; an entry matches when every term appears in its title or body; score is 5 per title
 occurrence plus 1 per body occurrence; order is score descending, then pack id, then entry id.
+
+Scenario rows absent from the manifest list are included with their own id, name, live status and
+reason. Every scenario pack id remains visible in the merged list.
 
 Tool outputs resolve scenario tokens to plain text and expose masks only.
 
@@ -304,8 +319,8 @@ The planned deterministic tool layer is specified in [ask-tools.md](ask-tools.md
 intent-level tools, each with a closed enum of operations and typed parameters (for example
 `spending.total`, `retirement.target`, `update_account.owner`), the figure envelope and
 references, `calculate`, API parity as (tool, operation) coverage of every household route, the
-model's routing rules, the migration from the names below, and the tickets that build it. Until
-its first ticket (C1) merges, this table is the tool interface.
+model's routing rules, and the tickets that extend this registry. C1 provides operation dispatch and the current
+operations above; later tickets add the remaining operations.
 
 `src/engine/tools.mjs` `createRegistryServer` consumes this registry. Input schemas must compile
 under strict Ajv, so no union types (`type` arrays); use `anyOf`. `ctx.now` may be a Date, an ISO
@@ -517,7 +532,7 @@ provenance are a log and keep their original text.
 Rec actions and their buttons: `start` "Doing it" (-> `doing`), `complete` "Done" (-> `done`),
 `snooze` "Later" (-> `snoozed`, with a wake label), `dismiss` "Not for us" (-> `dismissed`) and `reopen`
 (Reopen, Wake now or Restore, by state). The keys in the Plan list and the rec dialog are D, E, L and
-Shift+X. The `accept` action no longer exists; the MCP `set_recommendation_status` enum drops
+Shift+X. The `accept` action no longer exists; the MCP `act_on_recommendation.status` enum drops
 `accepted` with it, a change to that external tool contract.
 
 Migration 017 (`017-confirm-context.sql`) creates `account_holders`, `confirm_auto`,
@@ -684,7 +699,7 @@ Rec context: a question asked from a rec dialog is an Ask thread whose `recId` n
 context lookup: a rec id resolves to that rec, an Ask thread to the rec its `recId` names in
 `live.threads`, anything else (no rec, a rec no longer in the scenario, `pack:<id>`) to null. The
 answerer, `findQuestion`, `matchQuestion` and the fake answer source read it, so a rec thread gets
-the rec as conversation context (`get_recommendation`), the rec in its refs, the rec's own `qa`
+the rec as conversation context (`recommendations.detail`), the rec in its refs, the rec's own `qa`
 questions and the same scoped action tools as other Ask threads. A hidden rec still
 resolves. `POST /api/ask` refuses a key that is neither an Ask thread nor `pack:<id>` (400). Start
 over (`POST /api/recs/:id/start-over`) sets `recDetachedAt` on every attached thread of the rec;
@@ -1269,10 +1284,10 @@ and JSON responses, closed when the response closes. Checks run in this order:
 5. The key's `last_used_at` is stamped, then the request runs with
    `ctx = {db, now, dataDir, clock}`.
 
-Scopes: `read` (every read tool) and `write:recs` (adds `set_recommendation_status` and `set_recommendation_owner`); every key
-has `read`. `tools/list` returns only the key's tools, annotated `readOnlyHint` for read tools and
-`destructiveHint: false`, `openWorldHint: false`. Calling a registry tool outside the key's scopes
-returns an `isError` result `Permission denied: <name> needs the <scope> scope, which this key
+Scopes: `read` (every read tool) and `write:recs` (adds `act_on_recommendation.status` and `act_on_recommendation.owner`); every key
+has `read`. `tools/list` returns tools with at least one allowed operation, narrows the operation enum to those scopes, and is annotated `readOnlyHint` for read tools and
+`destructiveHint: false`, `openWorldHint: false`. Calling an operation outside the key's scopes, before argument validation,
+returns an `isError` result `Permission denied: <tool>.<operation> needs the <scope> scope, which this key
 does not have.`; an unknown name is `no tool <name>`; a `ToolError` returns its message; any other
 failure returns `Tool execution failed` and logs only the tool name and error class. Keys, tool
 arguments and tool results are never logged.
@@ -1525,16 +1540,16 @@ process, so accounting poison lasts for the process, and awaits `init()` once at
 
 1. Before a model call: off by the switch answers with the engine-off notice, off by configuration
    with "The engine is off in this deployment's configuration, so answers are paused." The answerer
-   then reads `household_summary` (tool time is the scenario clock), and for a thread asked from a
-   rec (`recForKey`) the rec (`get_recommendation`) or for `pack:<id>` the pack metadata and entries, as conversation
+   then reads `household.summary` (tool time is the scenario clock), and for a thread asked from a
+   rec (`recForKey`) the rec (`recommendations.detail`) or for `pack:<id>` the pack metadata and entries, as conversation
    context.
 2. Prompt (`buildChatPrompt`): `system` = `PRODUCT_RULES` plus `<knowledge_packs>` holding
    `packContext` of the effectively active manifest packs (base status plus overrides), with no
-   household data; `systemDynamic` = `<household_summary>`, optional `<conversation_context>` and
+   household data; `systemDynamic` = `<household.summary>`, optional `<conversation_context>` and
    today; `messages` = the last 20 non-notice messages as plain text turns plus the question.
    `PRODUCT_RULES` states: advisory only, no tax filing, no money movement or account changes, no
    securities selection, no number not taken from a tool result or the provided data, stored
-   figures as `{f:key}` tokens from `get_figures`, cite pack entries by title, plain text paragraphs,
+   figures as `{f:key}` tokens from `household.figures`, cite pack entries by title, plain text paragraphs,
    and explicit in-product actions through the scoped write tools described below.
    A What if question is the pack prompt: a manifest-backed prompt is sent as the raw literal text
    (no token resolution), an illustrative demo prompt with its tokens resolved to plain text. The
@@ -1570,12 +1585,12 @@ process, so accounting poison lasts for the process, and awaits `init()` once at
    `files`, `path`, and any key ending in `_ids`, `Mask`, `Masks`, `_mask`, `Number`, `Numbers` or
    `_number` (a plain `number` key stays a value). Every `body` string loses its metadata lines in
    the same pass. Value fields (amounts, balances, rec `value` text, `why`) still ground. So a pack
-   id such as `plan4821`, a pack name, curator or version, a rec id, or a `list_accounts` mask
+   id such as `plan4821`, a pack name, curator or version, a rec id, or a `accounts.list` mask
    never grounds a number, though the model still sees all of them. The argument-echo rule stays
    specific to tool results. Any value under a key other than the equal argument's is evidence
-   even when it equals an argument, so an exact amount query (`query_transactions` with
+   even when it equals an argument, so an exact amount query (`transactions.search` with
    `minAmount` equal to `maxAmount`) grounds its matching `rows[].amount`, and a computed total
-   (`query_transactions` `total` equal to `limit`) grounds. The sanitizer also drops `fig`
+   (`transactions.search` `total` equal to `limit`) grounds. The sanitizer also drops `fig`
    (a rec's figure reference, such as `mine[].fig`) and any string leaf, under any key, that is a
    single token (no whitespace) that is not one whole numeric expression, for example `plan529`,
    `rec8263`, `acct-4821k`, a month period `2026-11`, a date `2026-11-05`, an ISO timestamp or a
@@ -1617,7 +1632,7 @@ process, so accounting poison lasts for the process, and awaits `init()` once at
    both sides, so it needs percent evidence, not number evidence. Number-word phrases (`two million`)
    are still read word by word, and one followed by a percent sign (with or without a space) or the
    word `percent` (`one thousand %`) is likewise a percent quantity that needs percent evidence.
-5. Same-turn sourcing and in-place neutralization. A query_transactions row's negative amount also
+5. Same-turn sourcing and in-place neutralization. A transactions.search row's negative amount also
    grounds its unsigned form, and the literal names that row ("your transactions: account label,
    date, description"); other tool literals carry a plain label, never the tool name. A date that
    matches a date in a same-turn tool row or in the context data is sourced to it (a stated year
@@ -1642,7 +1657,7 @@ process, so accounting poison lasts for the process, and awaits `init()` once at
 8. Refs: the canned question's refs when the question matches one, the rec of a rec thread,
    a what-if's unlock recs, recs the answer read through tools, and the rec of its proposal.
 9. Fake answer source (`fakeAnswerScript`, `FATHOM_ENGINE=fake`): one tool round
-   (`household_summary`, `get_figures` with the answer's figure keys, `get_recommendation` with the
+   (`household.summary`, `household.figures` with the answer's figure keys, `recommendations.detail` with the
    resolved rec id in a rec thread) and one text round: the canned demo answer for a suggested or rec question (by id
    or exact free text), the pack's canned what-if answer (else a numberless sentence naming the pack
    and its covers), or "From your household summary, N items need you right now." with N from the
@@ -1650,7 +1665,7 @@ process, so accounting poison lasts for the process, and awaits `init()` once at
    invented amount is marked unverified after the retry. In Ask threads, free text
    that is an explicit command (`^(please\s+)?(start|complete|dismiss|snooze|reopen)\b`)
    naming a rec (a rec thread's own rec, else a visible rec's id or exact title)
-   adds a `set_recommendation_status` call to the tool round, and the result carries a receipt with Undo. Negations and questions ("Do not mark anything done", "Should I dismiss
+   adds a `act_on_recommendation.status` call to the tool round, and the result carries a receipt with Undo. Negations and questions ("Do not mark anything done", "Should I dismiss
    this?") never match.
 
 ### Answer provenance
@@ -2355,7 +2370,7 @@ A planner figure not produced by a run but kept because something references it 
 `figures.unavailable_reason`: the readable text for `info.withheld[key]`, else the run's first
 blocked code, else a generic "no longer computed" line (`reasonText(ctx, code)` in
 `triggers/missing-data.mjs`). A produced figure clears it. The scenario serves it as
-`fig[key].unavailable`, `get_figures` as `unavailable`, plain token text appends " (not current)",
+`fig[key].unavailable`, `household.figures` as `unavailable`, plain token text appends " (not current)",
 HTML figure spans carry `data-unavailable="1"`, and the popover shows a "Not current" row.
 Triggers never read stored figures, so a retained value never drives a current recommendation.
 
@@ -2424,7 +2439,7 @@ Status is never stored in the def. `loadGoals` gives every goal a canonical `sta
 when `archived_at` is set, `done` when `done_at` is set (or, for a seed goal, when its display
 status is `done`), else `open`. A seed goal's display text (`on track`, `watch`, ...) stays in its
 def and reads as `statusLabel`. `doneAt` is the `done_at` time. Done goals stay listed on Goals
-and in `list_goals` but drop out of pace, rec links, suggestions and Home. A legacy def `kind` that
+and in `goals.list` but drop out of pace, rec links, suggestions and Home. A legacy def `kind` that
 names a topic (for example `education`) reads as kind balance with `topic` set, and keeps linking.
 A contribution's destination account labels read as `accountsLabel`.
 
@@ -2451,8 +2466,8 @@ onboarding Priorities step shows the same axes and saves to the same setting.
 ### Goal pace
 
 `src/calc/pace.mjs` contains pure calculations. `src/pace/build.mjs` reads the store and builds
-`scenario.pace`; `GET /api/pace` and the read-only MCP tool `get_pace` expose the same result.
-`get_figures` keeps its contract. `list_goals` adds the goal model fields: `kind`, `owner` with
+`scenario.pace`; `GET /api/pace` and the read-only MCP tool `goals.pace` expose the same result.
+`household.figures` keeps its contract. `goals.list` adds the goal model fields: `kind`, `owner` with
 `ownerLabel`, `priority`, the canonical `status` (open or done; `statusLabel` for a seed goal), and
 the kind's amounts as typed (`range: {low, high}`, `floor`, `contribution: {taxYear, deadline,
 accounts, split, entered}`), with source `you` for owner goals and `plan` for seed goals (an entered
@@ -2569,9 +2584,9 @@ Goals and positions feed the planner and chat. `servesGoals` matches a rec to op
 (retirement, education, cash, tax, giving, health, home) from the goal's words, kind and tracked
 sources and the rec's `goalKinds` (see "Rec owner and goal links"); the scenario sets `rec.serves`
 and the rec shows "Serves: <goal>". The planner ranks recs that tie on window close by whether they serve a
-goal, then by the owner's curve lean. `household_summary` and `list_goals` give the model the open
+goal, then by the owner's curve lean. `household.summary` and `goals.list` give the model the open
 goals (title, horizon, typed target with source `you`, tracked current value) and each curve's lean.
-Ask threads offer `create_goal` and `edit_goal`, sharing the screen's goal writer and validation.
+Ask threads offer `update_goal.create` and `update_goal.edit`, sharing the screen's goal writer and validation.
 Targets and dates require the person's words or stored data. Every change carries a receipt and Undo.
 
 
@@ -2674,10 +2689,10 @@ Links are stored as goal kinds (`recs.goal_kinds`, the goal topics) and resolved
 the current open goals, specific topics before tax, at most three) and `rec.housekeeping`
 (`serves` is empty) on every rec. Adding or archiving a goal relinks at once, with no planning
 run. A rec's topics are exactly its `goalKinds`; a done goal does not link. `recFromRow` adds
-`owner`, `ownerOverride` (boolean) and `goalKinds`. `live.housekeeping` and `household_summary`
+`owner`, `ownerOverride` (boolean) and `goalKinds`. `live.housekeeping` and `household.summary`
 `housekeepingCount` count open housekeeping recs (not hidden, done or dismissed). MCP rec tools
 return linked recs; an owner goal's title in `serves` stays literal (seed titles are resolved),
-as in `list_goals`.
+as in `goals.list`.
 
 Planner recs take `goalKinds` and `owner` from their trigger (`src/jobs/triggers/*.mjs` exports
 `goalKinds`, `owner` and, where the owner depends on the household, `ownerFor(ctx, hit)`; `recOf`
@@ -2728,7 +2743,7 @@ writes them to the columns, not the def.
 | daf | giving, tax | both |
 
 The owner changes it through `POST /api/recs/:id/action` `{action: 'owner', arg}` (the rec
-dialog's "Action owner" select in the meta row) or the MCP `set_recommendation_owner` tool. The
+dialog's "Action owner" select in the meta row) or the MCP `act_on_recommendation.owner` tool. The
 dialog reads "Serves: <goals>" or, for a housekeeping rec, "Housekeeping"; plan rows show the
 serves line only.
 
@@ -2820,17 +2835,17 @@ then smoke against a server. `scripts/docker-smoke.sh` builds the image and smok
 
 ## Ask actions
 
-Ask threads, including recommendation conversations, can act on explicit requests. `ASK_ACTION_RULES`
-is a separate prompt section. Ambiguous requests need clarification. Advisor sends and email remain
+Ask threads, including recommendation conversations, can act on explicit requests. The generated registry instructions
+are a separate prompt section. Ambiguous requests need clarification. Advisor sends and email remain
 product buttons; there are no outbound action tools.
 
 | Tool | Scope | Shared write path |
 | --- | --- | --- |
-| `record_household_fact` | `write:facts` | `answerFacts`, typed answer shapes and replanning |
-| `set_recommendation_step` | `write:steps` | `writeRec`, also used by dialog checkboxes |
-| `set_recommendation_status`, `set_recommendation_owner` | `write:recs` | shared recommendation writers |
-| `create_goal`, `edit_goal` | `write:goals` | `createGoal` / `updateGoal`, also used by the goals API |
-| `remember_preference` | `write:preferences` | `writePreference`, also used by Settings |
+| `answer.fact` | `write:facts` | `answerFacts`, typed answer shapes and replanning |
+| `act_on_recommendation.step` | `write:steps` | `writeRec`, also used by dialog checkboxes |
+| `act_on_recommendation.status`, `act_on_recommendation.owner` | `write:recs` | shared recommendation writers |
+| `update_goal.create`, `update_goal.edit` | `write:goals` | `createGoal` / `updateGoal`, also used by the goals API |
+| `update_preferences.remember` | `write:preferences` | `writePreference`, also used by Settings |
 
 Fact values, goal targets and dates require typed owner evidence in the same conversation, with
 matching actor id, or stored data. Unknown fact keys are refused. Generated starters, question chips,
@@ -2844,11 +2859,11 @@ Migration 025 adds durable `action_receipts` and `preferences`. Each receipt com
 transaction as its write and records actor, conversation, changed fields and prior values. Receipts
 hydrate beside the answer's work block, including notice or missing replies, and keep their conversation
 reachable. Undo restores the prior value and provenance, refuses another actor or a later conflicting
-edit, and replans facts. MCP-only undo tools use the matching scope. Ask gets the Undo button through
+edit, and replans facts. The MCP-only undo operation checks the loaded receipt scope against the key scopes. Ask gets the Undo button through
 `POST /api/actions/:id/undo`. A busy planner preserves the fact and receipt, reports planning pending,
 and queues planning again. Ask queues replanning until the paid model round releases its engine lock, then drains that work before continuing; planner prose may safely call the same engine. Demo baby dates use the same deterministic new-child window calculation.
 
-`remember_preference` stores a short verbatim preference or definition. Settings shows it and allows
+`update_preferences.remember` stores a short verbatim preference or definition. Settings shows it and allows
 editing or deletion through the same validation. Preferences enter the dynamic Ask prompt as household
 data; they never override product boundaries, evidence requirements or permissions.
 

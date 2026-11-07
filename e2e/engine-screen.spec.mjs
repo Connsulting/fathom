@@ -86,7 +86,7 @@ test('after an Ask, Recent spend lists a chat row with a cost figure and no prom
   const text = (await page.locator('.h-ledger').innerText());
   expect(text).not.toContain(plain(q.q));
   expect(text).not.toContain(answerText.slice(0, 40));
-  for (const marker of ['household_summary', 'knowledge_packs', 'conversation_context', '<', '{']) {
+  for (const marker of ['household', 'knowledge_packs', 'conversation_context', '<', '{']) {
     expect(text, `ledger text contains ${marker}`).not.toContain(marker);
   }
 });

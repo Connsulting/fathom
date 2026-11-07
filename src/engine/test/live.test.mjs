@@ -10,7 +10,7 @@ test('opt-in live SDK tool, caching, per-round accounting and continuation cap',
     Array.from({ length: 600 }, (_, i) => `Policy ${String.fromCharCode(65 + i % 26)}: Read stored data, give brief grounded advice, and never infer amounts. `).join('') +
     'When asked for a balance call synthetic_balance exactly once. If a tool result is already in the transcript, answer with its amount and do not call a tool again.';
   let calls = 0;
-  const tool = { name: 'synthetic_balance', description: 'Read the synthetic balance.', scope: 'read',
+  const tool = { name: 'synthetic_balance', description: 'Read the synthetic balance.', kind: 'read', operations: [{ name: 'read', scope: 'read' }],
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     handler: async () => { calls++; return { amount: 42 }; } };
   const request = { purpose: 'chat', system, messages: [{ role: 'user', content: 'Call synthetic_balance once, then tell me the balance.' }], tools: [tool], maxTokens: 256 };
