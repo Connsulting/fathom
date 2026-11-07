@@ -17,7 +17,7 @@
 import { describe, test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   expectServerExit, runCommand, spawnServer, tempDir,
@@ -759,6 +759,203 @@ describe('household membership on a real instance (AC1)', () => {
   });
 });
 
+// A pending invitation is not household presence: an admin's credential actions need an active
+// membership of the target. Admin actions over HTTP and every passkey revocation are audited with
+// ids only. Own instance so the per-household invitation limit of the suite above is not shared.
+describe('admin credential scoping and audit attribution (AC1)', () => {
+  let root;
+  let dataDir;
+  let server;
+  let base;
+  let platform;
+  let store;
+  let hh;
+  let admin;
+  const secrets = [];
+  const as = person => sessionBrowser(base, person.token);
+  const passkeysOf = id => count(platform, 'SELECT count(*) AS n FROM passkeys WHERE user_id = ?', id);
+  const sessionsOf = id => count(platform, 'SELECT count(*) AS n FROM auth_sessions WHERE user_id = ?', id);
+  const openInvitations = id => count(platform,
+    'SELECT count(*) AS n FROM household_invitations WHERE user_id = ? AND household_id = ? AND consumed_at IS NULL AND revoked_at IS NULL', id, hh);
+  const lastAuditId = () => platform.prepare('SELECT coalesce(max(id), 0) AS n FROM audit_events').get().n;
+  const auditSince = id => platform.prepare('SELECT * FROM audit_events WHERE id > ? ORDER BY id').all(id).map(r => ({ ...r }));
+  const AUDIT_COLUMNS = ['action', 'actor_user_id', 'at', 'household_id', 'id', 'outcome', 'target_user_id'];
+  const enroll = (email, role = 'member') => {
+    const person = enrollMember(store, hh, email, role);
+    secrets.push(email, person.token);
+    return person;
+  };
+
+  // Every column of every row is an id, a fixed action string, a fixed outcome or a timestamp.
+  function assertIdsOnly(list, userIds, start) {
+    for (const row of list) {
+      assert.deepEqual(Object.keys(row).sort(), AUDIT_COLUMNS, 'audit rows have only the fixed columns');
+      assert.ok(Number.isInteger(row.id), 'id is a row id');
+      assert.ok(Number.isInteger(row.at) && row.at >= start - 1000 && row.at <= Date.now() + 1000, 'at is a timestamp');
+      for (const k of ['actor_user_id', 'target_user_id']) assert.ok(row[k] === null || userIds.includes(row[k]), `${k} is a user id`);
+      assert.ok(row.household_id === null || row.household_id === hh, 'household_id is the household id');
+      assert.match(row.action, /^[a-z]+(?:\.[a-z_-]+)+$/, 'action is a fixed action string');
+      assert.match(row.outcome, /^[a-z_]{1,32}$/, 'outcome is a fixed outcome');
+      for (const value of Object.values(row)) {
+        const text = String(value);
+        assert.ok(!text.includes('@'), 'no email in an audit row');
+        for (const s of secrets) assert.ok(!text.includes(s), 'no email, token or name in an audit row');
+      }
+    }
+  }
+  const only = (list, action) => {
+    const hits = list.filter(r => r.action === action);
+    assert.equal(hits.length, 1, `exactly one ${action} row: ${JSON.stringify(list.map(r => r.action))}`);
+    return hits[0];
+  };
+
+  before(async () => {
+    root = await tempDir('fathom-mt01-scope-');
+    dataDir = join(root, 'data');
+    ({ householdId: hh } = await freshInstance(dataDir, 'real'));
+    server = await spawnServer({ dataDir, env: REAL });
+    base = server.baseUrl;
+    const m = await platformModules();
+    platform = m.openPlatform(join(dataDir, PLATFORM_FILE));
+    store = m.createAuthStore(platform);
+    admin = enroll('scope-admin@example.test', 'admin');
+  }, T);
+
+  after(async () => {
+    platform?.close();
+    if (server) await server.stop();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test('a pending invitation (live or expired) gives an admin no hold on an enrolled outsider\'s passkeys or sessions', T, async () => {
+    // An enrolled operator who has never been a member of the household.
+    const email = 'scope-outsider@example.test';
+    const outsider = { id: `usr-${randomBytes(6).toString('hex')}`, email };
+    platform.prepare('INSERT INTO users (id, email, user_handle, created_at, enrolled_at) VALUES (?, ?, ?, ?, ?)')
+      .run(outsider.id, email, randomBytes(32).toString('base64url'), Date.now() - 60_000, Date.now() - 60_000);
+    store.grantOperator(outsider.id);
+    outsider.token = store.createSession(outsider.id).token;
+    const pk = insertPasskey(platform, outsider.id);
+    secrets.push(email, outsider.token, pk);
+    const held = () => ({ passkeys: passkeysOf(outsider.id), sessions: sessionsOf(outsider.id) });
+    const kept = held();
+    assert.deepEqual(kept, { passkeys: 1, sessions: 1 });
+    assert.equal(store.membership(outsider.id, hh), null, 'no membership row in the household');
+
+    for (const state of ['live', 'expired']) {
+      const invited = await as(admin).post('/api/admin/users/invite', { email, role: 'member' });
+      assert.equal(invited.status, 200, `${state}: ${invited.text}`);
+      assert.equal(openInvitations(outsider.id), 1, `${state}: one open invitation`);
+      if (state === 'expired') {
+        platform.prepare('UPDATE household_invitations SET expires_at = ? WHERE user_id = ? AND household_id = ? AND consumed_at IS NULL AND revoked_at IS NULL')
+          .run(Date.now() - 1000, outsider.id, hh);
+      }
+
+      const list = await as(admin).get('/api/admin/users');
+      assert.equal(list.status, 200, list.text);
+      const listed = list.json.users.find(u => u.id === outsider.id);
+      assert.ok(listed, `${state}: the pending invitee is listed`);
+      assert.equal(listed.role, 'member', `${state}: with the invitation role`);
+      assert.deepEqual(listed.passkeys, [], `${state}: without the outsider's passkeys`);
+      assert.ok(!list.text.includes(pk), `${state}: the outsider's credential id is not in the response`);
+
+      const revoke = await as(admin).post(`/api/admin/users/${outsider.id}/passkeys/${pk}/revoke`, {});
+      assert.equal(revoke.status, 404, `${state}: ${revoke.text}`);
+      assert.deepEqual(held(), kept, `${state}: passkeys and sessions unchanged by the refused revocation`);
+      assert.equal((await as(outsider).get('/api/identity')).status, 200, `${state}: the outsider's session still works`);
+
+      const removed = await as(admin).post(`/api/admin/users/${outsider.id}/remove`, {});
+      assert.equal(removed.status, 200, `${state}: ${removed.text}`);
+      assert.equal(openInvitations(outsider.id), 0, `${state}: the invitation is revoked`);
+      assert.notEqual(store.getUser(outsider.id), null, `${state}: the account is kept`);
+      assert.equal(store.isOperator(outsider.id), true, `${state}: the operator grant is kept`);
+      assert.deepEqual(held(), kept, `${state}: removing the invitee leaves passkeys and global sessions untouched`);
+      assert.equal(store.membership(outsider.id, hh), null, `${state}: no membership is created`);
+      const who = await as(outsider).get('/api/identity');
+      assert.equal(who.status, 200, `${state}: the outsider is still signed in`);
+      assert.equal(who.json.identity.operator, true);
+      assert.ok(!(await as(admin).get('/api/admin/users')).json.users.some(u => u.id === outsider.id), `${state}: no longer listed`);
+    }
+  });
+
+  test('removing a pending invitee who never enrolled revokes the invitation and deletes the new account', T, async () => {
+    const email = 'scope-new-invitee@example.test';
+    secrets.push(email);
+    const invited = await as(admin).post('/api/admin/users/invite', { email, role: 'member' });
+    assert.equal(invited.status, 200, invited.text);
+    const user = store.findUser(email);
+    assert.ok(user && user.enrolledAt === null, 'a new, never-enrolled account');
+    assert.equal(openInvitations(user.id), 1);
+    const listed = (await as(admin).get('/api/admin/users')).json.users.find(u => u.id === user.id);
+    assert.deepEqual(pick(listed, ['role', 'enrolledAt', 'passkeys']), { role: 'member', enrolledAt: null, passkeys: [] });
+    const removed = await as(admin).post(`/api/admin/users/${user.id}/remove`, {});
+    assert.equal(removed.status, 200, removed.text);
+    assert.equal(store.getUser(user.id), null, 'the never-enrolled account is deleted');
+    assert.equal(count(platform, 'SELECT count(*) AS n FROM household_invitations WHERE user_id = ? AND consumed_at IS NULL AND revoked_at IS NULL', user.id), 0);
+  });
+
+  test('an admin lists and revokes an active member\'s passkeys; the revocation is audited with ids only', T, async () => {
+    const start = Date.now();
+    const member = enroll('scope-member@example.test');
+    const pk = insertPasskey(platform, member.id);
+    secrets.push(pk);
+    const list = await as(admin).get('/api/admin/users');
+    assert.equal(list.status, 200, list.text);
+    assert.deepEqual(list.json.users.find(u => u.id === member.id).passkeys.map(p => p.id), [pk], 'an active member\'s passkeys are listed');
+
+    const mark = lastAuditId();
+    const revoked = await as(admin).post(`/api/admin/users/${member.id}/passkeys/${pk}/revoke`, {});
+    assert.equal(revoked.status, 200, revoked.text);
+    assert.deepEqual(revoked.json.passkeys, []);
+    assert.equal(passkeysOf(member.id), 0);
+    assert.equal(sessionsOf(member.id), 0, 'the member\'s sessions are revoked with the passkey');
+    const rowsNow = auditSince(mark);
+    assertIdsOnly(rowsNow, [admin.id, member.id], start);
+    assert.deepEqual(pick(only(rowsNow, 'passkey.revoke'), ['actor_user_id', 'target_user_id', 'household_id', 'outcome']),
+      { actor_user_id: admin.id, target_user_id: member.id, household_id: hh, outcome: 'ok' });
+  });
+
+  test('a user revoking their own passkey writes a passkey.revoke audit row with ids only', T, async () => {
+    const start = Date.now();
+    const user = enroll('scope-self@example.test');
+    const [keep, drop] = [insertPasskey(platform, user.id), insertPasskey(platform, user.id)];
+    secrets.push(keep, drop);
+    const mark = lastAuditId();
+    const revoked = await as(user).post(`/api/auth/passkeys/${drop}/revoke`, {});
+    assert.equal(revoked.status, 200, revoked.text);
+    assert.deepEqual(revoked.json.passkeys.map(p => p.id), [keep]);
+    const rowsNow = auditSince(mark);
+    assertIdsOnly(rowsNow, [user.id], start);
+    const row = only(rowsNow, 'passkey.revoke');
+    assert.deepEqual(pick(row, ['actor_user_id', 'target_user_id', 'outcome']), { actor_user_id: user.id, target_user_id: user.id, outcome: 'ok' });
+    // A passkey is global; the household is the session's household or none.
+    assert.ok(row.household_id === hh || row.household_id === null, 'household_id is the session household or null');
+  });
+
+  test('role changes and member removals over HTTP record the acting admin, with ids only', T, async () => {
+    const start = Date.now();
+    const target = enroll('scope-role@example.test');
+    const leaver = enroll('scope-leaver@example.test');
+
+    let mark = lastAuditId();
+    const promoted = await as(admin).post(`/api/admin/users/${target.id}/role`, { role: 'admin' });
+    assert.equal(promoted.status, 200, promoted.text);
+    let rowsNow = auditSince(mark);
+    assertIdsOnly(rowsNow, [admin.id, target.id], start);
+    assert.deepEqual(pick(only(rowsNow, 'membership.role'), ['actor_user_id', 'target_user_id', 'household_id', 'outcome']),
+      { actor_user_id: admin.id, target_user_id: target.id, household_id: hh, outcome: 'ok' });
+
+    mark = lastAuditId();
+    const removed = await as(admin).post(`/api/admin/users/${leaver.id}/remove`, {});
+    assert.equal(removed.status, 200, removed.text);
+    rowsNow = auditSince(mark);
+    assertIdsOnly(rowsNow, [admin.id, leaver.id], start);
+    assert.deepEqual(pick(only(rowsNow, 'membership.remove'), ['actor_user_id', 'target_user_id', 'household_id', 'outcome']),
+      { actor_user_id: admin.id, target_user_id: leaver.id, household_id: hh, outcome: 'ok' });
+    assert.equal(store.getUser(leaver.id), null, 'liveness: the removal itself still happens');
+  });
+});
+
 describe('instance operators (AC1)', () => {
   test('operator.mjs grants enrolled users only and refuses revoking the last operator (409)', T, async t => {
     const root = await scratch(t);
@@ -1097,5 +1294,39 @@ describe('rollback from the migration snapshot (migration safety)', () => {
     const again = await snapshotCli(['rollback', '--snapshot', snapshot, '--from', fx.dataDir, '--out', out], { FATHOM_BACKUP_KEY_FILE: fx.keyFile });
     assert.equal(again.code, 1, 'an existing --out is refused');
     assert.deepEqual(stable(out), outHashes);
+  });
+
+  test('rollback refuses an --out inside --from (out_inside_source) or a --from inside --out (source_inside_out) before writing anything', T, async t => {
+    const fx = await legacyFixture(t);
+    const migrated = await migrateCli(fx.dataDir, fx.keyFile);
+    assert.equal(migrated.code, 0, migrated.stderr);
+    const { snapshot } = assertMigrated(fx);
+    const rollback = (from, out) => snapshotCli(['rollback', '--snapshot', snapshot, '--from', from, '--out', out], { FATHOM_BACKUP_KEY_FILE: fx.keyFile });
+    const dataBefore = stable(fx.dataDir);
+    const listing = readdirSync(fx.dataDir).sort();
+    const rootListing = readdirSync(fx.root).sort();
+    const alias = join(fx.root, 'data-alias');
+    symlinkSync(fx.dataDir, alias);
+    const cases = [
+      ['--out <data>/rollback', fx.dataDir, join(fx.dataDir, 'rollback'), 'out_inside_source'],
+      ['--out nested below <data>', fx.dataDir, join(fx.dataDir, 'files', 'nested', 'rollback'), 'out_inside_source'],
+      ['--out under a symlink to <data>', fx.dataDir, join(alias, 'rollback'), 'out_inside_source'],
+      ['--from a symlink to <data>, --out inside it', alias, join(fx.dataDir, 'rollback'), 'out_inside_source'],
+      ['--out the parent of <data>', fx.dataDir, fx.root, 'source_inside_out'],
+    ];
+    for (const [label, from, out, code] of cases) {
+      const r = await rollback(from, out);
+      assert.equal(r.code, 1, `${label}: ${r.stdout}${r.stderr}`);
+      assert.equal(r.stderr.trim(), `source-snapshot: ${code}`, label);
+      assert.deepEqual(stable(fx.dataDir), dataBefore, `${label}: the data directory is unchanged`);
+      assert.deepEqual(readdirSync(fx.dataDir).sort(), listing, `${label}: nothing is created inside the data directory`);
+      assert.deepEqual(readdirSync(fx.root).sort(), [...rootListing, 'data-alias'].sort(), `${label}: nothing is created next to it`);
+    }
+    // Liveness: a sibling --out still rolls back from the same snapshot.
+    const sibling = join(fx.root, 'rolled-back');
+    const ok = await rollback(fx.dataDir, sibling);
+    assert.equal(ok.code, 0, ok.stderr);
+    assert.deepEqual(dump(join(sibling, 'fathom.sqlite')), fx.preDump);
+    assert.deepEqual(stable(fx.dataDir), dataBefore, 'the migrated directory is untouched');
   });
 });

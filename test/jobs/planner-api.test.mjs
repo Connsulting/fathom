@@ -30,7 +30,8 @@ const leaks = text => AMOUNTS.filter(a => text.includes(a));
 
 function demoStore() {
   const dir = S.dir();
-  const db = openStore({ dataDir: dir, demo: 'auto' });
+  const { db, platform } = openStore({ dataDir: dir, demo: 'auto' });
+  S.track(platform);
   return { dir, db: S.track(db) };
 }
 

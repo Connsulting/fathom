@@ -253,7 +253,9 @@ describe('war games', () => {
 
   test('AC6: a stored war-game figure wins over the derived value, and the demo store is unchanged (R17)', async () => {
     const dir = S.dir();
-    const demoDb = S.track(openStore({ dataDir: dir, demo: 'auto' }));
+    const { db: demoDb, platform } = openStore({ dataDir: dir, demo: 'auto' });
+    S.track(platform);
+    S.track(demoDb);
     assert.equal(demoDb.prepare("SELECT count(*) AS n FROM figures WHERE key LIKE 'wg.%'").get().n, 0, 'demo stores no wg rows');
     const demoScenario = buildScenario(demoDb);
     for (const p of demo.wargame.salary.points) {
