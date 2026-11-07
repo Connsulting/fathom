@@ -1,0 +1,81 @@
+/* Household trend (Money) and the per-group line on Accounts. Horizon tokens only; the part colors
+   are the chart's own categorical set, each also named by its toggle label. */
+
+.d-horizon .h-trend { --tr-cash: #79a8ff; --tr-investments: #f2b45e; --tr-retirement: #b79cff; --tr-education-health: #ff8fa3; --tr-business: #9bd36a; --tr-debt: #ff7a6b; --tr-other: #a0a8ab; }
+.d-horizon .tr-c-total { --tc: var(--ac); }
+.d-horizon .tr-c-cash { --tc: var(--tr-cash); }
+.d-horizon .tr-c-investments { --tc: var(--tr-investments); }
+.d-horizon .tr-c-retirement { --tc: var(--tr-retirement); }
+.d-horizon .tr-c-education-health { --tc: var(--tr-education-health); }
+.d-horizon .tr-c-business { --tc: var(--tr-business); }
+.d-horizon .tr-c-debt { --tc: var(--tr-debt); }
+.d-horizon .tr-c-other { --tc: var(--tr-other); }
+
+.d-horizon .tr-card { background: var(--s1); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px 14px; min-width: 0; }
+.d-horizon .tr-top { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 10px 16px; }
+.d-horizon .tr-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; min-width: 0; }
+.d-horizon .tr-head span { color: var(--mu); font-size: 13px; }
+.d-horizon .tr-head b { font-weight: 400; font-size: 26px; letter-spacing: -0.01em; }
+.d-horizon .tr-head small { color: var(--fa); font-size: 12px; }
+.d-horizon .tr-rngs { display: inline-flex; border: 1px solid var(--line2); border-radius: 8px; overflow: hidden; }
+.d-horizon .tr-rng { appearance: none; background: none; border: 0; border-right: 1px solid var(--line2); color: var(--mu); cursor: pointer; font-size: 13px; min-height: 36px; min-width: 52px; padding: 0 14px; }
+.d-horizon .tr-rng:last-child { border-right: 0; }
+.d-horizon .tr-rng:hover { color: var(--tx); }
+.d-horizon .tr-rng.on { background: var(--acd); color: var(--ac2); }
+.d-horizon .tr-rng:focus-visible { outline-offset: -2px; }
+
+.d-horizon .tr-plot { margin-top: 10px; }
+.d-horizon .tr-svg { width: 100%; height: auto; display: block; overflow: visible; touch-action: pan-y; }
+.d-horizon .tr-grid { stroke: var(--line); stroke-width: 1; }
+.d-horizon .tr-grid.zero { stroke: var(--line2); }
+.d-horizon .tr-t { fill: var(--fa); font: 10.5px var(--mono); }
+.d-horizon .tr-l { fill: none; stroke: var(--tc); stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.d-horizon .tr-l.total { stroke-width: 2.4; }
+.d-horizon .tr-l.carried { stroke-dasharray: 4 4; stroke-opacity: 0.6; }
+.d-horizon .tr-carry { fill: var(--tx); fill-opacity: 0.045; }
+.d-horizon .tr-guide { stroke: var(--line2); stroke-width: 1; }
+.d-horizon .tr-dot { fill: var(--tc); stroke: var(--s1); stroke-width: 1.5; }
+.d-horizon .tr-hit { fill: transparent; cursor: crosshair; }
+.d-horizon .tr-hit:focus-visible { outline: 2px solid var(--ac); outline-offset: 2px; }
+
+.d-horizon .tr-key { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 4px; font-size: 11.5px; color: var(--fa); }
+.d-horizon .tr-key span { display: inline-flex; align-items: center; gap: 6px; }
+.d-horizon .tr-k { width: 18px; height: 0; border-top: 2px solid var(--mu); }
+.d-horizon .tr-k.dash { border-top-style: dashed; border-top-color: var(--fa); }
+
+.d-horizon .tr-read { margin-top: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 4px 18px; font-size: 13px; }
+.d-horizon .tr-read time { grid-column: 1 / -1; color: var(--mu); font-size: 12px; }
+.d-horizon .tr-r { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.d-horizon .tr-r span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--tx2); }
+.d-horizon .tr-r b { font: 400 13px var(--mono); font-variant-numeric: tabular-nums; }
+.d-horizon .tr-rn { grid-column: 1 / -1; color: var(--fa); font-size: 12px; }
+.d-horizon .tr-sw { width: 9px; height: 9px; border-radius: 2px; background: var(--tc); flex: none; }
+
+.d-horizon .tr-parts { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px 14px; margin-top: 14px; }
+.d-horizon .tr-part { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; }
+.d-horizon .tr-part b { font-weight: 400; font-size: 13px; flex: none; }
+.d-horizon .tr-tog { appearance: none; display: inline-flex; align-items: center; gap: 8px; min-height: 36px; max-width: 100%; padding: 0 12px; background: none; border: 1px solid var(--line2); border-radius: 18px; color: var(--mu); cursor: pointer; font-size: 13px; text-align: left; }
+.d-horizon .tr-tog .tr-sw { opacity: 0.35; }
+.d-horizon .tr-tog:hover { color: var(--tx); border-color: var(--fa); }
+.d-horizon .tr-tog.on { color: var(--tx); border-color: var(--tc, var(--ac)); background: var(--acd); }
+.d-horizon .tr-tog.on .tr-sw { opacity: 1; }
+.d-horizon .tr-note { margin-top: 10px; color: var(--fa); font-size: 12px; }
+.d-horizon .tr-note + .tr-note { margin-top: 4px; }
+
+/* Accounts: one line per group heading. */
+.d-horizon .tr-gs { display: flex; align-items: center; gap: 4px 16px; margin: 0 0 10px; min-width: 0; flex-wrap: wrap; }
+.d-horizon .tr-gs b { font-weight: 400; font-size: 15px; flex: none; }
+.d-horizon .tr-gs svg { flex: 1 1 140px; min-width: 100px; max-width: 320px; height: 36px; overflow: visible; }
+.d-horizon .tr-gs polyline { fill: none; stroke: var(--ac); stroke-width: 1.6; vector-effect: non-scaling-stroke; }
+.d-horizon .tr-gs polyline.carried { stroke-dasharray: 3 3; stroke-opacity: 0.6; }
+.d-horizon .tr-gs circle { fill: var(--ac); }
+.d-horizon .tr-gs span { color: var(--fa); font-size: 11.5px; }
+
+@media (max-width: 700px) {
+  .d-horizon .tr-card { padding: 14px 12px 12px; }
+  .d-horizon .tr-head b { font-size: 24px; }
+  .d-horizon .tr-rngs { width: 100%; }
+  .d-horizon .tr-rng { flex: 1 1 0; }
+  .d-horizon .tr-read { grid-template-columns: 1fr; }
+  .d-horizon .tr-parts { grid-template-columns: 1fr; }
+}

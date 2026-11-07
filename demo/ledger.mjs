@@ -69,6 +69,7 @@ const POSITION_KINDS = ['taxable', 'retirement', 'roth', '529'];
 // entities: business names for P and L; year: the clock year; through: ISO data-through date.
 export function buildLedger({ accounts, fig, entities, year, through, seed = 20261105 }) {
   const rnd = prng(seed);
+  const history = prng(seed + 7);
   const between = (min, max) => min + (max - min) * rnd();
   const int = (min, max) => Math.floor(between(min, max + 1));
   const lastMonth = Number(through.slice(5, 7));
@@ -112,6 +113,15 @@ export function buildLedger({ accounts, fig, entities, year, through, seed = 202
     const f = a.fig && fig[a.fig];
     if (!f || typeof f.v !== 'number') continue;
     balances.push({ accountId: a.id, date: through, amount: cents(f.v), locator: `balances:${a.id}` });
+    // Month-end history, walked back from the current balance with its own generator so the rows
+    // above and below do not change: invested kinds grew, cash moves around.
+    let v = f.v;
+    for (let m = lastMonth - 1; m >= 1; m--) {
+      const growth = POSITION_KINDS.includes(a.kind) ? 0.012 + (history() - 0.5) * 0.03 : (history() - 0.5) * 0.12;
+      v = Math.max(0, v / (1 + growth));
+      const date = `${year}-${pad(m)}-${pad(new Date(Date.UTC(Number(year), m, 0)).getUTCDate())}`;
+      balances.push({ accountId: a.id, date, amount: cents(v), locator: `balances:${a.id}:${date}` });
+    }
     if (!POSITION_KINDS.includes(a.kind) || f.v <= 0) continue;
     const count = int(2, 3);
     const picks = [];
