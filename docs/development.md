@@ -305,8 +305,9 @@ release steps.
 
 Deciding and trends. On a real store the Decide screen's war games end in a choice: pick a point,
 press "Decide on this", and the decision is saved with its figures. A decided salary becomes the
-payroll assumption on the next planning run until you press "Revisit". Accounts shows monthly trend
-lines built from the balances you uploaded. The Engine screen lists the model each purpose runs on,
+payroll assumption on the next planning run until you press "Revisit". Money opens with one net worth
+trend (and its parts) summed from the balances you uploaded, Accounts has a line per group, and
+each account's own trend is in its dialog. The Engine screen lists the model each purpose runs on,
 and Files is in the quick switcher (Ctrl or Cmd K) and the Money tab's sub-nav.
 
 Year end. The Year end screen (`#/yearend`) lists the tax documents the household should expect for
@@ -340,3 +341,5 @@ cd mock-v2
 python3 -m http.server 4600 --bind 127.0.0.1
 # open http://127.0.0.1:4600/?d=horizon
 ```
+
+For a focused local browser run, set `E2E_SINGLE_SERVER=1`, `E2E_PORT` to an owned port and `E2E_DATA` to a checkout-local `.e2e-data-<name>` directory. This starts only the main demo server. The browser explicitly permits the selected test port, including ports reserved by Chromium. Leave `BASE_URL` unset for tests which reset their owned demo store; supplied targets remain protected from resets.
