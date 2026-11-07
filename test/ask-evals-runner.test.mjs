@@ -29,6 +29,7 @@ test('tier one CLI executes all cases without credentials and writes scorecards 
   assert.equal(r.scorecard.costUsd, 0);
   assert.equal(r.scorecard.live, false);
   assert.match(r.summary, /Required|Tools/);
+  assert.match(r.summary, /unsourced \/ self-computed \/ rounded \/ spelled_out \/ context-only/);
 });
 
 test('filters select exact cases and reject unknown filters or invalid budget', async () => {
