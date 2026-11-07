@@ -129,3 +129,12 @@ test('account docs distinguish passkey revocation from user removal and say boot
       && /print/i.test(block) && /after|before|success/i.test(block)), `${name} says bootstrap emails before printing its link`);
   }
 });
+
+test('account docs describe add-a-device passkey links', () => {
+  assert.match(doc, /add-passkey/, 'architecture names the add-passkey token purpose');
+  assert.ok(doc.split('\n').some(line => line.includes('/api/auth/passkeys/link') && line.includes('POST')),
+    'architecture lists POST /api/auth/passkeys/link');
+  const blocks = readme.split(/\n\s*\n/).map(block => block.replace(/\s+/g, ' '));
+  assert.ok(blocks.some(block => /another device/i.test(block) && /passkey/i.test(block)),
+    'README explains adding a passkey on another device');
+});
