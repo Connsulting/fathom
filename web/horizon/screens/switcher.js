@@ -97,7 +97,7 @@ function openAccount(id, ret) {
   H.openAccount(id, trigger);
 }
 
-const isDialog = (name) => name === 'rec' || name === 'account' || name === 'pnlrows';
+const isDialog = (name) => H.isDlgRoute(name);
 
 function goSource() {
   const row = (route, label, hint) => ({ key: `go:${route}`, title: label, group: 'Go to', sub: 'Screen', hint, run: () => go(route) });

@@ -74,6 +74,8 @@ function plRuns(items, field) {
 }
 const plPct = (share) => `${Math.round(Number(share || 0) * 1000) / 10}%`;
 const plPhone = () => typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 720px)').matches;
+// Phone width, read once per page render rather than once per figure.
+let PL_PHONE = false;
 const plCap = (s) => String(s || '').charAt(0).toUpperCase() + String(s || '').slice(1);
 const plDay = (d) => {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(d || ''));
@@ -180,7 +182,7 @@ function chooser() {
 const nil = '<span class="pl-nil" aria-label="None">&middot;</span>';
 
 function cell(key, opts = {}) {
-  return key ? H.figHtml(key, { k: plPhone(), ...opts }) : nil;
+  return key ? H.figHtml(key, { k: PL_PHONE, ...opts }) : nil;
 }
 
 // A figure's value for sorting and hide-zero; null when there is none.
@@ -273,7 +275,7 @@ function filterRow(business) {
   return `<div class="pl-filters" data-pl-filters><input type="search" class="pl-q" data-pl-filter aria-label="Filter categories" placeholder="Filter categories" value="${esc(P.q)}" autocomplete="off" spellcheck="false">${types}${zero}</div>${note}`;
 }
 
-const compactCells = (months) => plPhone() || months.length > 6;
+const compactCells = (months) => PL_PHONE || months.length > 6;
 
 /* ---------- business ---------- */
 
@@ -552,6 +554,7 @@ export function dialogClosed() { D = null; }
 
 export function render() {
   const { shell, pageHead } = H;
+  PL_PHONE = plPhone();
   syncFromRoute();
   plEnsure();
   let body;
