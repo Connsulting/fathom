@@ -26,7 +26,7 @@ import { ROOT, src, tempDir, freePort, migrateLegacyStore, runCommand, sessionCl
 import { buildLegacyStore, fileHashes } from './tenancy.mjs';
 import { aggregatorCsv } from './ingest.mjs';
 import { writeSyntheticPack } from './packs.mjs';
-import { openDb, listTables, setSetting } from '../../src/store/db.mjs';
+import { openDb, listTables, listMigrations, setSetting } from '../../src/store/db.mjs';
 
 export const CLOCK = '2026-11-05';
 export const T0 = '2026-10-01T09:00:00.000Z';
@@ -541,6 +541,8 @@ export function migrateExitingAt(fx, exitAt) {
 // access blob (the ciphertext changes envelope), schema_migrations only up to `throughId`.
 export const digestRules = throughId => ({
   simplefin_connection: { omit: ['access_blob'] },
+  // Store migration 028 adds two nullable columns the pre-tenancy store (schema 26) does not have.
+  preferences: { omit: ['origin', 'conversation_key'] },
   schema_migrations: { where: `id <= ${Number(throughId)}` },
 });
 
@@ -556,6 +558,9 @@ export async function legacyScenario(fx) {
   try { await backup(source, copy); } finally { source.close(); }
   const db = openDb(copy);
   try {
+    // The pre-tenancy store sits at schema 26. The scenario code reads columns added after 027
+    // (which only the tenancy migration applies), so bring this throwaway copy up with those.
+    for (const m of listMigrations().filter(x => x.id > 27)) db.exec(readFileSync(m.file, 'utf8'));
     const packs = createLivePacks(db, { dataDir: fx.dataDir });
     packs.refresh();
     const config = { clock: CLOCK, engine: 'fake', dataDir: fx.dataDir };
