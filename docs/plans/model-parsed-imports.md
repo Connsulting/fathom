@@ -14,8 +14,9 @@ not filed issues or dispatched work. One cross-provider plan review precedes coo
    base. IMP-7 waits for C10 and uses those operations, rather than creating competing tools.
    The operation-registry consolidation PR #92 is open; workers must refresh its merge state.
    C2 owns `write:imports` and `registerReceiptKind`; IMP-3, IMP-4 and IMP-5 wait for C2.
-   MT-05 owns transactional engine round reservations and household/instance allocations;
-   IMP-2 waits for MT-05 and attaches file limits to its reservations.
+   IMP-2 waits only for IMP-1. It uses the household engine's existing monthly `cap`
+   setting and `spend_ledger`, platform `funded()` check, outbound engine pause, and its own
+   per-file limit. MT-05 reservation integration is deferred to MT-05's own ticket.
 3. The multi-household document is a specification, but household runtimes, vaults, and outbound
    controls already exist in `src/platform/runtime.mjs` and `src/platform/outbound.mjs`.
    All new state belongs to the captured household database and vault, never platform tables.
@@ -328,17 +329,24 @@ still bounds decoding; a file larger than the model envelope waits with `budget_
 Never silently sample away uncovered sheets. A user can supply a smaller file; the agent cannot
 raise a cap. The default file cap also applies to a note treated as a file.
 
-Build on MT-05's merged transactional round-reservation and settlement API in the existing
-engine/runtime. IMP-2 adds a call-level remaining-file-budget envelope and a household-local
-`import_model_spend` correlation ledger linking each file to those same reserved rounds;
-it does not reserve household/instance funding independently or add a second gateway.
-Use purpose `extract` and an import/file correlation id. The provider allowance is the minimum
-of remaining file cap, household monthly cap, and funded allocation. Reserve conservative input/output cost before
-each dispatch, count failed/unknown calls conservatively, reconcile known usage afterward,
-and persist reservations so retry/restart cannot reset the cap. Concurrent files share the
-existing household engine serialization and funding control. Validate ceilings against the
-selected engine model's configured prices; if one legal call cannot fit, dispatch none and
-record `budget_exhausted`. Test that boundary rather than assuming a token-to-dollar price.
+IMP-2 admits every file through the existing household engine in `src/engine/runtime.mjs`:
+read its monthly `cap` setting and `spend_ledger`, require the platform `funded()` check and
+`ctx.household.outbound.enabled('engine')`, and apply the remaining per-file limit before
+calling it. Use purpose `extract` and an import/file correlation id. Persist the file's calls,
+tokens, actual cost, and conservative failed/unknown cost in household `import_model_spend`;
+retry/restart cannot reset these counters. The existing engine remains responsible for its
+monthly cap admission and ledger. The per-file request allowance is the smaller of remaining
+file budget and the engine's current remaining monthly cap. A false funding or outbound check
+dispatches nothing. Do not add household/instance round reservations in IMP-2.
+
+Validate file ceilings against the selected engine model's configured prices; if one legal
+call cannot fit, dispatch none and record `budget_exhausted`. Test that boundary rather than
+assuming a token-to-dollar price.
+
+Deferred to MT-05: when its transactional round reservations land, MT-05 attaches these existing
+per-file limits and `import_model_spend` correlations to its round-reservation/settlement API in
+its own ticket. IMP-2 does not wait for MT-05 or promise the cross-process reservation guarantees
+that MT-05 will supply.
 
 Check `ctx.household.outbound.enabled('engine')`, runtime `isOn()`, funding, remaining budget,
 and household generation before every provider dispatch, retry included. A pause after a call
@@ -518,30 +526,35 @@ remain authoritative; only additive tables/columns are introduced.
 ### IMP-2 Big: bounded source interpretation and file budgets
 
 Problem: custom layouts and raw-image extraction cannot meet the new evidence contract.
-Base: `main`. Blocked by: IMP-1 and MT-05 merged.
+Base: `main`. Blocked by: IMP-1 merged.
 Decisions: implement all-sheet source indexing, text/PDF spans, semantic-leaf scrubbing and
 local tokens, engine typed proposals, and durable per-file admission in household
-`import_model_spend` linked to MT-05's round reservations and settlements, plus the call-level
-remaining-file-budget envelope. MT-05 retains funding/reservation ownership.
-Expose this service internally; route cutover belongs to IMP-4. Size: 500 to 750 production lines plus tests.
-Preconditions: IMP-1 schemas/oracles and actual merged MT-05 reservation API with
-`test/tenancy-budget.test.mjs` passing; existing fake engine and runtime, no credentials.
+`import_model_spend`, plus the remaining-file-budget envelope. Admit through the existing
+household engine monthly `cap`/`spend_ledger`, platform `funded()` check, and
+`ctx.household.outbound.enabled('engine')`; MT-05 attaches reservation accounting later in
+its own ticket. Expose this service internally; route cutover belongs to IMP-4.
+Size: 500 to 750 production lines plus tests.
+Preconditions: IMP-1 schemas/oracles; existing fake engine, household runtime, monthly cap
+setting, spend ledger, platform funding check and outbound controls, no credentials.
 
 1. Every indexed populated region has a disposition, all values resolve locally, and model
    literals, uncached formulas, prompt instructions, and raw scans cannot produce accepted
    values. Verified by: `node --test test/ingest/model-source.test.mjs test/ingest/model-parse.test.mjs`.
    Runs in: worker.
-2. Pause, 4-call/token/USD ceilings, conservative failed-call accounting, retry/restart, and
-   competing files cannot exceed reservations; engine/runtime existing callers all migrate
-   to the single request contract. Verified by:
+2. Pause and unfunded checks dispatch nothing; every file obeys its 4-call/token/USD ceilings,
+   conservative failed-call accounting and retry/restart counters while existing monthly
+   engine admission/ledger checks remain active. Engine/runtime callers use the single request
+   contract. Verified by:
    `node --test test/ingest/model-budget.test.mjs test/engine-runtime.test.mjs src/engine/test/engine.test.mjs`.
    Runs in: worker.
 
 Out of scope: replacing parser routing, provider credentials or deployments.
-Readiness: startable no now, IMP-1 and MT-05 absent; finishable yes as a contract.
+Readiness: startable no now, IMP-1 absent; finishable yes as a contract.
 Riskiest step/probe: fail a provider round after admission, restart, then retry with synthetic
-pricing; `model-budget.test.mjs` proves the original reservation still counts.
-Contradiction review: reuse the household engine and `extract` purpose; no separate provider path.
+pricing; `model-budget.test.mjs` proves its recorded conservative spend and call count still
+apply, including current monthly cap, funding and outbound refusals.
+Contradiction review: reuse the current household engine and `extract` purpose; no separate
+provider path or dependency on MT-05.
 
 ### IMP-3 Big: validated mappings and approval lifecycle
 
@@ -700,7 +713,7 @@ Preconditions: IMP-1 oracles and integrated APIs, no credentials for ticket acce
 
 Out of scope: paying for a live run, model-judged scores, production uploads and deployment.
 Readiness: startable no now, dependencies absent; finishable yes as a contract.
-Riskiest step/probe: a failed live-mode call consumes its conservative reservation and later
+Riskiest step/probe: a failed live-mode call counts its conservative recorded cost and later
 cases stay unrun at cap; exercised by `import-evals-live-cap.test.mjs`.
 Contradiction review: the authorized live command remains a separate coordinator check, never
 an implicit credential/spend gate on this unattended implementation package.
@@ -710,9 +723,12 @@ an implicit credential/spend gate on this unattended implementation package.
 One cross-provider plan review examined `b51a588` and returned five blocking findings. This
 revision resolves them: C2 owns scopes and receipt registration; note approval/Undo require
 all child scopes; the review service/route/tool contract and cutover ownership are pinned;
-relative dates reuse the existing timezone setting; per-file limits depend on MT-05's funding
-reservations. The payroll example is generic and IMP-5 includes the Ask context-budget gate.
-No second review round is requested. The coordinator reviews this final revision.
+relative dates reuse the existing timezone setting; file admission uses existing household
+engine controls and a per-file spend ledger. The payroll example is generic and IMP-5 includes
+the Ask context-budget gate. Coordinator review approved the spec with one change: prioritize
+IMP-2 delivery using the existing monthly cap/ledger, funding and outbound checks, with no
+MT-05 dependency. MT-05 attaches per-file limits to round reservations later in its own ticket.
+This revision applies that decision. No further review round is required.
 
 ## Acceptance outside the ticket runs
 
@@ -723,7 +739,7 @@ needs document integrity checks and its one plan review, not any implementation 
 
 ## Assumptions, recommendations, and deferred scope
 
-Assumptions: files fit existing bounded readers; the engine exposes actual usage or reserves
+Assumptions: files fit existing bounded readers; the engine exposes actual usage or records
 unknown cost conservatively; one household's members share financial access. An unsupported
 format or unclear source remains waiting, with known stored facts still answerable.
 
