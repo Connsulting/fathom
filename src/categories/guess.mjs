@@ -1,6 +1,6 @@
 import { tx, parseJson } from '../store/db.mjs';
 import { resolveCategories, importedCategory, sourceBucket } from './resolve.mjs';
-import { loadCategoryInputs, queueCategoryChecks, categoryOptions } from './store.mjs';
+import { loadCategoryInputs, queueCategoryChecks, categoryOptions, isJevProposal } from './store.mjs';
 import { categoryQuestions, JEV_MODEL } from './jev.mjs';
 import { confidenceBand, jevEvidence } from './policy.mjs';
 import { ask, getItem, recordAutoAnswer } from '../ingest/confirm.mjs';
@@ -19,7 +19,7 @@ export async function guessCategories(db, jev, { now, batchSize = 10, maxBatches
     for(let n=0;n<maxBatches;n++) {
       const input=loadCategoryInputs(db), resolved=resolveCategories(input), names=categoryNames(input);
       if(names.length<2) break;
-      const attempted=new Set(input.guesses.map(g=>g.transaction_id));
+      const attempted=new Set(input.guesses.filter(isJevProposal).map(g=>g.transaction_id));
       const rows=input.transactions.filter(t=>resolved.get(t.id)?.layer==='uncategorized' && !attempted.has(t.id)).slice(0,batchSize);
       if(!rows.length) break;
       const answers=await jev.choose(categoryQuestions(rows,{accounts:input.accounts,householdNames:householdNames(db),categories:names}));
@@ -30,7 +30,7 @@ export async function guessCategories(db, jev, { now, batchSize = 10, maxBatches
           if(current.get(t.id)?.layer!=='uncategorized') continue;
           const a=answers[i], prediction={category:a.choice,confidence:a.confidence,probabilities:a.probabilities};
           const at=now ?? new Date().toISOString();
-          db.prepare('INSERT INTO transaction_category_guesses VALUES (?,?,?,?) ON CONFLICT(transaction_id) DO NOTHING')
+          db.prepare('INSERT INTO transaction_category_guesses VALUES (?,?,?,?) ON CONFLICT(transaction_id) DO UPDATE SET category=excluded.category,model=excluded.model,updated_at=excluded.updated_at')
             .run(t.id,JSON.stringify(prediction),JEV_MODEL,at);
           const band=confidenceBand(a.confidence,policy);
           if(band==='uncategorized') continue;
