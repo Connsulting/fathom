@@ -1276,10 +1276,10 @@ failure returns `Tool execution failed` and logs only the tool name and error cl
 arguments and tool results are never logged.
 
 Keys (`src/mcp/keys.mjs`) are `fathom_` plus 43 base64url characters (32 random bytes), shown once
-by `POST /api/keys`. `api_keys` stores only HMAC-SHA256 of the key under a server secret: the file
-`api-key-secret` in `FATHOM_DATA`, 64 hex characters, created 0600 on first start and never
-rewritten (a malformed file stops startup; removing it invalidates every key). Verification
-compares against every stored hash with `crypto.timingSafeEqual`.
+by `POST /api/keys`. The platform `api_keys` table stores only HMAC-SHA256 of the key under the
+instance secret in `FATHOM_MCP_SECRET_FILE` (64 hex characters, mode 0600, read at runtime and
+never written by the server; changing it invalidates every key), bound to one household.
+Verification compares against every stored hash with `crypto.timingSafeEqual`.
 
 ## Advisor workflow
 
