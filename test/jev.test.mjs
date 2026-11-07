@@ -65,3 +65,31 @@ test('timeout is bounded, charged, and a later valid request remains live',async
   await assert.rejects(jev.choose(questions()),/jev_unavailable/); hanging=false;
   assert.equal((await jev.choose(questions())).length,1); assert.ok(jev.stats().costUsd>0);
 });
+
+test('a cost-derived token cap attempts every question that fits the run budget',async t=>{
+  let attempted=0;
+  const jev=await createJev({...setup(t),transport:async(_,o)=>{
+    const body=JSON.parse(o.body), data=response(body);
+    attempted+=Object.keys(body.questions).length;
+    data.usage.input_tokens=Buffer.byteLength(o.body)+1024*Object.keys(body.questions).length+4096;
+    return Response.json(data);
+  }});
+  const n=300;
+  assert.equal((await jev.choose(Array.from({length:n},()=>questions()[0]))).length,n);
+  assert.equal(attempted,n);
+  assert.ok(jev.stats().costUsd<=.05);
+});
+
+test('outbound pause is rechecked before each batch and retry, then resume permits dispatch',async t=>{
+  let enabled=true,calls=0;
+  const jev=await createJev({...setup(t),batchSize:1,canSend:()=>enabled,transport:async(_,o)=>{
+    calls++;enabled=false;return Response.json(response(JSON.parse(o.body)));
+  }});
+  await assert.rejects(jev.choose([...questions(),...questions()]),/outbound_paused/);
+  assert.equal(calls,1);
+  enabled=true;
+  assert.equal((await jev.choose(questions())).length,1);
+  enabled=false;
+  await assert.rejects(jev.choose(questions()),/outbound_paused/);
+  assert.equal(calls,2);
+});
