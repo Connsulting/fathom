@@ -497,6 +497,7 @@ export function defaultHandlers({ publicUrl = null, simplefinFetch = null } = {}
       const planning = await runPlanning(ctx.db, ctx.engine || null, {
         now: ctx.clock, packDirs: defaultPackDirs(ctx.config && ctx.config.dataDir), runId: ctx.jobRunId,
       });
+      ctx.db.prepare('UPDATE action_receipts SET planning_pending = 0 WHERE planning_pending = 1').run();
       return { costUsd: planning.costUsd, note: planning.counts, planning };
     },
     async 'brief-email'(ctx) {

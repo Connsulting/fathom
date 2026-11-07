@@ -32,7 +32,7 @@ const FAKE = { FATHOM_ENGINE: 'fake', FATHOM_FAKE_STREAM_MS: '0' };
 const THREAD_KEY = /^ask:[a-f0-9]{12}$/;
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/;
 const AT = '2026-10-01T00:00:00.000Z';
-const GOAL_CONFIRM = 'You can save this goal below.';
+const GOAL_CONFIRM = 'You can undo the change below.';
 
 // ---------------------------------------------------------------- AC4: migration 016
 
@@ -438,14 +438,14 @@ test('the fake engine scripts no goal proposal in a rec thread and still does in
   const GOAL = 'add a goal: a synthetic boat fund';
   const recThread = await threadCreate(s.ctx({ recId: 'deferral', text: 'Synthetic first question' }));
   const inRec = await ask(s.ctx({ key: recThread.thread.key, text: GOAL }));
-  assert.ok(!toolNames(inRec.message).includes('propose_goal'), JSON.stringify(toolNames(inRec.message)));
-  assert.ok(!inRec.message.text.includes(GOAL_CONFIRM), inRec.message.text);
+  assert.ok(toolNames(inRec.message).includes('create_goal'), JSON.stringify(toolNames(inRec.message)));
+  assert.ok(inRec.message.text.includes(GOAL_CONFIRM), inRec.message.text);
   assert.equal(inRec.message.provenance.goalProposal ?? null, null);
   assert.deepEqual(recTool(inRec.message).args, { id: 'deferral' });
 
   const plain = await threadCreate(s.ctx({ text: GOAL }));
   assert.equal(plain.thread.recId, null);
-  assert.ok(toolNames(plain.message).includes('propose_goal'));
+  assert.ok(toolNames(plain.message).includes('create_goal'));
   assert.ok(plain.message.text.includes(GOAL_CONFIRM), plain.message.text);
 });
 
@@ -463,12 +463,12 @@ test('fakeAnswerScript reads the resolved rec in a rec thread and offers no goal
   assert.ok(!calls('ask:bbbbbbbbbbbb', 'How does this work').some(c => c.name === 'get_recommendation'), 'a plain thread reads no rec');
   assert.deepEqual(calls('deferral', 'How does this work').find(c => c.name === 'get_recommendation').args, { id: 'deferral' });
 
-  assert.ok(!calls('ask:aaaaaaaaaaaa', 'add a goal: a synthetic boat fund').some(c => c.name === 'propose_goal'));
-  assert.ok(!text('ask:aaaaaaaaaaaa', 'add a goal: a synthetic boat fund').includes(GOAL_CONFIRM));
-  assert.ok(calls('ask:bbbbbbbbbbbb', 'add a goal: a synthetic boat fund').some(c => c.name === 'propose_goal'));
+  assert.ok(calls('ask:aaaaaaaaaaaa', 'add a goal: a synthetic boat fund').some(c => c.name === 'create_goal'));
+  assert.ok(text('ask:aaaaaaaaaaaa', 'add a goal: a synthetic boat fund').includes(GOAL_CONFIRM));
+  assert.ok(calls('ask:bbbbbbbbbbbb', 'add a goal: a synthetic boat fund').some(c => c.name === 'create_goal'));
   assert.ok(text('ask:bbbbbbbbbbbb', 'add a goal: a synthetic boat fund').includes(GOAL_CONFIRM));
   // An explicit command in a rec thread still names its own rec.
-  assert.deepEqual(calls('ask:aaaaaaaaaaaa', 'dismiss this').find(c => c.name === 'propose_recommendation_action').args, { id: 'deferral', action: 'dismiss' });
+  assert.deepEqual(calls('ask:aaaaaaaaaaaa', 'dismiss this').find(c => c.name === 'set_recommendation_status').args, { id: 'deferral', status: 'dismissed' });
 });
 
 // ---------------------------------------------------------------- API over HTTP

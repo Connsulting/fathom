@@ -22,7 +22,7 @@ import { callTool, tools as REGISTRY } from '../src/tools/index.mjs';
 import { sdkOptions } from '../src/engine/live.mjs';
 import { createRuntimeEngine, createSpendLedger } from '../src/engine/runtime.mjs';
 import { createLivePacks } from '../src/packs/live.mjs';
-import { PRODUCT_RULES, NOTICES, buildChatPrompt, groundAnswer, renderAnswer, createLiveAnswerer } from '../src/api/answerer.mjs';
+import { PRODUCT_RULES, ASK_ACTION_RULES, NOTICES, buildChatPrompt, groundAnswer, renderAnswer, createLiveAnswerer } from '../src/api/answerer.mjs';
 import { ACTION_STATUS } from '../src/shared/rules.mjs';
 import { stripSources, markdownBlocks } from '../src/shared/answer-text.mjs';
 import { ROOT, tempDb } from './helpers/server.mjs';
@@ -238,7 +238,7 @@ test('PRODUCT_RULES states the advisory boundaries, the figure token rule and th
   assert.ok(PRODUCT_RULES.includes('{f:'), 'figure tokens are explained');
   assert.ok(PRODUCT_RULES.includes('get_figures'));
   // B2: chat never writes; the rule names the proposal tool instead of the write tool.
-  assert.ok(PRODUCT_RULES.includes('propose_recommendation_action'));
+  assert.ok(ASK_ACTION_RULES.includes('Confirm only when their request is ambiguous'));
   assert.ok(!PRODUCT_RULES.includes('set_recommendation_status'));
 });
 
@@ -917,190 +917,30 @@ test('a model error answers with the model-error notice and never stores the fai
 
 // ---------------------------------------------------------------- B2: chat proposes, never writes
 
-const PROPOSE = 'propose_recommendation_action';
-const WRITE = 'set_recommendation_status';
-const recStatus = (db, id) => db.prepare('SELECT status FROM recs WHERE id = ?').get(id).status;
-const recEvents = db => db.prepare('SELECT count(*) AS n FROM rec_events').get().n;
-const allStatuses = db => Object.fromEntries(db.prepare('SELECT id, status FROM recs ORDER BY id').all().map(r => [r.id, r.status]));
-const proposeResults = responses => responses.flatMap(r => r.toolResults || []).filter(r => r.name === PROPOSE);
-const STATUS_TEXTS = ['Please mark this done', 'mark this done', 'Do not mark anything done', 'Snooze this until next month',
-  'Should I mark this done?', 'Tell me about the payroll cash', 'dismiss this'];
-
-test('B2: ask and rec conversations offer propose_recommendation_action and never set_recommendation_status for any text', async t => {
+test('Ask offers write tools only with trusted identity, while pack and bare rec contexts remain read-only', async t => {
   const s = await demoStore(t);
   const { engine, requests } = scripted(s.runtime);
   const answerer = createLiveAnswerer({ engine, packs: s.packs });
-  for (const key of ['deferral', THREAD]) {
-    for (const text of STATUS_TEXTS) await answerer.answer({ db: s.db, key, text });
-  }
-  await answerer.answer({ db: s.db, key: 'deferral', questionId: 0 });
-  await answerer.answer({ db: s.db, key: THREAD, text: LEAVE });
-  assert.equal(requests.length, STATUS_TEXTS.length * 2 + 2);
-  for (const r of requests) {
-    const names = toolNames(r);
-    assert.ok(names.includes(PROPOSE), `${PROPOSE} is offered: ${r.messages.at(-1).content}`);
-    assert.ok(!names.includes(WRITE), `${WRITE} is never offered: ${r.messages.at(-1).content}`);
-    assert.ok(names.includes('household_summary'), 'read tools are always offered');
-  }
+  await answerer.answer({ db: s.db, key: THREAD, text: 'Update my goal', actorId: 'demo', ownerText: 'Update my goal' });
+  await answerer.answer({ db: s.db, key: THREAD, text: 'Update my goal' });
+  await answerer.answer({ db: s.db, key: 'pack:giving', text: 'Update my goal', actorId: 'demo' });
+  await answerer.answer({ db: s.db, key: 'deferral', text: 'Update my goal', actorId: 'demo' });
+  assert.ok(toolNames(requests[0]).includes('set_recommendation_status'));
+  assert.ok(toolNames(requests[0]).includes('record_household_fact'));
+  assert.ok(toolNames(requests[0]).includes('create_goal'));
+  assert.ok(!toolNames(requests[0]).includes('undo_fact_action'));
+  for (const r of requests.slice(1)) assert.ok(r.tools.every(t2 => t2.scope === 'read'));
 });
 
-test('B2: pack conversations and What if offer neither the proposal tool nor the write tool', async t => {
+ test('fake actions execute explicit recommendation commands and refuse negations', async t => {
   const s = await demoStore(t);
-  const { engine, requests } = scripted(s.runtime);
-  const answerer = createLiveAnswerer({ engine, packs: s.packs });
-  await answerer.answer({ db: s.db, key: 'pack:giving', text: 'Please mark this done' });
-  await answerer.answer({ db: s.db, key: 'pack:giving', text: 'dismiss this' });
-  await answerer.whatIf({ db: s.db, packId: 'giving' });
-  assert.equal(requests.length, 3);
-  for (const r of requests) {
-    assert.ok(!toolNames(r).includes(PROPOSE), 'no proposal tool');
-    assert.ok(!toolNames(r).includes(WRITE), 'no write tool');
-    assert.ok(toolNames(r).includes('household_summary'));
-  }
-});
-
-test('B2: the proposal tool is a read-scoped tool with a closed schema over the rec actions', async t => {
-  const s = await demoStore(t);
-  const { engine, requests } = scripted(s.runtime);
-  await createLiveAnswerer({ engine, packs: s.packs }).answer({ db: s.db, key: THREAD, text: 'Synthetic question' });
-  const tool = requests[0].tools.find(x => x.name === PROPOSE);
-  assert.ok(tool, 'offered');
-  assert.equal(tool.scope, 'read');
-  assert.equal(typeof tool.description, 'string');
-  assert.equal(typeof tool.handler, 'function');
-  const schema = tool.inputSchema;
-  assert.equal(schema.type, 'object');
-  assert.equal(schema.additionalProperties, false);
-  assert.deepEqual(sorted(schema.required), ['action', 'id']);
-  assert.deepEqual(sorted(Object.keys(schema.properties)), ['action', 'id', 'wake']);
-  assert.equal(schema.properties.id.type, 'string');
-  assert.equal(schema.properties.action.type, 'string');
-  assert.deepEqual(sorted(schema.properties.action.enum), sorted(Object.keys(ACTION_STATUS)));
-  assert.ok(!schema.properties.action.enum.includes('none'));
-  assert.equal(schema.properties.wake.type, 'string');
-  assert.equal(schema.properties.wake.maxLength, 200);
-});
-
-test('B2: a scripted proposal yields provenance.proposal and leaves the rec and its history unchanged', async t => {
-  const s = await demoStore(t);
-  const status = recStatus(s.db, 'deferral');
-  const events = recEvents(s.db);
-  const { engine, responses } = scripted(s.runtime, [[
-    { toolCalls: [{ name: PROPOSE, args: { id: 'deferral', action: 'dismiss' } }] },
-    { text: 'You can confirm setting this aside below.' },
-  ]]);
-  const reply = await createLiveAnswerer({ engine, packs: s.packs }).answer({ db: s.db, key: 'deferral', text: 'dismiss this' });
-  assert.ok(!reply.notice);
-  assert.deepEqual(reply.provenance.proposal, { recId: 'deferral', action: 'dismiss' });
-  const [result] = proposeResults(responses);
-  assert.ok(result && !result.isError, JSON.stringify(result));
-  assert.deepEqual(result.result, { proposed: true }, 'the handler returns only { proposed: true }, no echo of its arguments');
-  assert.equal(recStatus(s.db, 'deferral'), status, 'the store is not touched');
-  assert.equal(recEvents(s.db), events, 'no rec history row');
-  const call = reply.provenance.tools.find(x => x.name === PROPOSE);
-  assert.deepEqual(call.args, { id: 'deferral', action: 'dismiss' }, 'tool provenance keeps the call');
-});
-
-test('B2: a snooze proposal in ask carries its wake label, and the last successful proposal wins', async t => {
-  const s = await demoStore(t);
-  const before = allStatuses(s.db);
-  const { engine } = scripted(s.runtime, [[
-    { toolCalls: [{ name: PROPOSE, args: { id: 'dcfsa', action: 'start' } }] },
-    { toolCalls: [{ name: PROPOSE, args: { id: 'dcfsa', action: 'snooze', wake: 'Next month' } }] },
-    { toolCalls: [{ name: PROPOSE, args: { id: 'daf', action: 'dismiss' } }] },
-    { text: 'You can confirm the snooze below.' },
-  ]]);
-  const reply = await createLiveAnswerer({ engine, packs: s.packs }).answer({ db: s.db, key: THREAD, text: 'Snooze the dependent care one' });
-  assert.ok(!reply.notice);
-  assert.deepEqual(reply.provenance.proposal, { recId: 'dcfsa', action: 'snooze', wake: 'Next month' },
-    'one proposal: the last successful call (the later hidden-rec call fails)');
-  assert.deepEqual(allStatuses(s.db), before);
-});
-
-test('B2: in a rec conversation a proposal for a different rec is dropped', async t => {
-  const s = await demoStore(t);
-  const before = allStatuses(s.db);
-  const { engine, requests, responses } = scripted(s.runtime, [[
-    { toolCalls: [{ name: PROPOSE, args: { id: 'dcfsa', action: 'dismiss' } }] },
-    { text: 'You can confirm it below.' },
-  ]]);
-  const reply = await createLiveAnswerer({ engine, packs: s.packs }).answer({ db: s.db, key: 'deferral', text: 'dismiss the other one' });
-  assert.ok(!reply.notice);
-  assert.ok(toolNames(requests[0]).includes(PROPOSE), 'the proposal tool is offered in a rec conversation');
-  const [result] = proposeResults(responses);
-  assert.ok(result, 'the call ran');
-  assert.ok(reply.provenance.proposal == null, 'no proposal for a rec other than the conversation rec');
-  assert.deepEqual(allStatuses(s.db), before);
-});
-
-test('B2: a proposal for a hidden or unknown rec, an unknown action or an extra argument is an error with no proposal', async t => {
-  const s = await demoStore(t);
-  assert.equal(recStatus(s.db, 'daf'), 'hidden', 'daf is behind an inactive pack');
-  const before = allStatuses(s.db);
-  const bad = [
-    { id: 'daf', action: 'dismiss' },
-    { id: 'no-such-rec', action: 'start' },
-    { id: 'dcfsa', action: 'accept' }, // retired: Doing it is the start action
-    { id: 'dcfsa', action: 'delete' },
-    { id: 'dcfsa', action: 'none' },
-    { id: 'dcfsa', action: 'complete', status: 'done' },
-    { id: 'dcfsa', action: 'snooze', wake: 'w'.repeat(201) },
-  ];
-  for (const args of bad) {
-    const { engine, requests, responses } = scripted(s.runtime, [[
-      { toolCalls: [{ name: PROPOSE, args }] },
-      { text: 'Nothing to confirm here.' },
-    ]]);
-    const reply = await createLiveAnswerer({ engine, packs: s.packs }).answer({ db: s.db, key: THREAD, text: 'Synthetic proposal question' });
-    assert.ok(!reply.notice, JSON.stringify(args));
-    assert.ok(toolNames(requests[0]).includes(PROPOSE), 'the proposal tool is offered in ask');
-    const results = proposeResults(responses);
-    assert.equal(results.length, 1, JSON.stringify(args));
-    assert.equal(results[0].isError, true, `an error result for ${JSON.stringify(args)}`);
-    assert.ok(reply.provenance.proposal == null, `no proposal for ${JSON.stringify(args)}`);
-  }
-  assert.deepEqual(allStatuses(s.db), before);
-});
-
-test('B2: the fake engine proposes an explicit command that names the rec, and never a negation', async t => {
-  const s = await demoStore(t);
-  const before = allStatuses(s.db);
-  const dcfsaTitle = buildScenario(s.db).recs.find(r => r.id === 'dcfsa').title;
-  assert.ok(!dcfsaTitle.includes('{'), 'a title with no tokens to name in the text');
   const answerer = createLiveAnswerer({ engine: s.runtime, packs: s.packs });
-  const cases = [
-    ['deferral', 'dismiss this', { recId: 'deferral', action: 'dismiss' }],
-    ['deferral', 'Please complete this', { recId: 'deferral', action: 'complete' }],
-    ['deferral', 'start this one', { recId: 'deferral', action: 'start' }],
-    [THREAD, 'Please start dcfsa', { recId: 'dcfsa', action: 'start' }],
-    [THREAD, `Dismiss ${dcfsaTitle}`, { recId: 'dcfsa', action: 'dismiss' }],
-  ];
-  for (const [key, text, want] of cases) {
-    const reply = await answerer.answer({ db: s.db, key, text });
-    assert.ok(!reply.notice, text);
-    const got = reply.provenance.proposal;
-    assert.ok(got, `a proposal for "${text}"`);
-    assert.deepEqual({ recId: got.recId, action: got.action }, want, text);
-    const call = reply.provenance.tools.find(x => x.name === PROPOSE);
-    assert.ok(call, `the scripted tool round calls ${PROPOSE} for "${text}"`);
-    assert.equal(call.args.id, want.recId);
-    assert.equal(call.args.action, want.action);
-    assert.match(joined(reply), /confirm/i, 'the text says the owner can confirm it below');
-  }
-  const none = [
-    ['deferral', 'Do not mark anything done'],
-    ['deferral', 'Should I dismiss this?'],
-    ['deferral', 'Tell me why I should not dismiss this'],
-    [THREAD, 'dismiss something'],
-    [THREAD, 'Do not dismiss dcfsa'],
-    ['pack:giving', 'dismiss this'],
-  ];
-  for (const [key, text] of none) {
-    const reply = await answerer.answer({ db: s.db, key, text });
-    assert.ok(!reply.provenance || reply.provenance.proposal == null, `no proposal for "${text}" in ${key}`);
-    assert.ok(!(reply.provenance ? reply.provenance.tools : []).some(x => x.name === PROPOSE), `no proposal call for "${text}"`);
-  }
-  assert.deepEqual(allStatuses(s.db), before, 'no rec status changed');
+  const text = 'Dismiss dcfsa';
+  await answerer.answer({ db: s.db, key: THREAD, text, actorId: 'demo', ownerText: text, turnId: 'synthetic-action' });
+  assert.equal(s.db.prepare('SELECT status FROM recs WHERE id = ?').get('dcfsa').status, 'dismissed');
+  const count = s.db.prepare('SELECT count(*) n FROM action_receipts').get().n;
+  await answerer.answer({ db: s.db, key: THREAD, text: 'Do not dismiss deferral', actorId: 'demo', ownerText: 'Do not dismiss deferral' });
+  assert.equal(s.db.prepare('SELECT count(*) n FROM action_receipts').get().n, count);
 });
 
 test('a rec conversation answer refs the rec and reads it through get_recommendation', async t => {
@@ -1237,8 +1077,8 @@ test('R3 A contract: no tool the answerer offers returns a sentinel argument out
   const s = await demoStore(t);
   const offered = await offeredTools(s);
   const names = offered.map(tool => tool.name);
-  assert.deepEqual(sorted(names), sorted([...REGISTRY.filter(x => x.scope === 'read').map(x => x.name), PROPOSE, 'propose_goal']),
-    'every read tool and the local proposal tools, nothing else');
+  assert.deepEqual(sorted(names), sorted(REGISTRY.filter(x => x.scope === 'read').map(x => x.name)),
+    'a context without trusted identity offers read tools only');
   const recId = s.db.prepare("SELECT id FROM recs WHERE status != 'hidden' ORDER BY id LIMIT 1").get().id;
   const realPack = s.packs.loaded().find(p => p.id === 's-corp-owner');
   const ctx = { db: s.db, now: clockNow(s.db) };
