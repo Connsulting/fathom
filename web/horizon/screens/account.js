@@ -222,7 +222,6 @@ export function html(id) {
   const repairs = H.ingest.accountRepairsFor ? H.ingest.accountRepairsFor(id) : '';
   return frame('Account', `<div class="h-rec-head h-ad-head">
       ${titleHtml(a)}
-      ${a.subtitle ? `<p class="h-lede">${lbl(a, a.subtitle)}</p>` : ''}
       ${factsHtml(a, d)}
     </div>
     ${repairs}
