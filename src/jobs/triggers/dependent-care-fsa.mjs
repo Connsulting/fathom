@@ -4,6 +4,9 @@ import { isTrue, mineOf, padTasks, yearOf, factDate } from './common.mjs';
 
 export const id = 'dependent-care-fsa';
 export const domain = 'family';
+// Goal kinds this rec serves (resolved to open goals at read time) and its default action owner.
+export const goalKinds = Object.freeze(['tax', 'cash']);
+export const owner = 'both';
 export const trigger = 'calendar';
 export const packs = ['kids-dependents', 'w2-benefits'];
 export const gate = {

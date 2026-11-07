@@ -1,7 +1,9 @@
 // Recs upsert, blocking and retirement for planner-owned recs (base plan, R13, R14, S10, S12, T6).
 // The owner's status and task flags always survive; the planner only changes status when its own
-// retire or block event was the last word. The planner writes no conversation: a question asked
-// from a rec is an Ask thread carrying the rec id, and it outlives the rec.
+// retire or block event was the last word. Goal kinds follow the trigger on every run; the action
+// owner follows the trigger default only while the owner has not set it (owner_override = 0). The
+// planner writes no conversation: a question asked from a rec is an Ask thread carrying the rec id,
+// and it outlives the rec.
 //
 // applyRecs(db, results, ctx) -> {byTrigger, counts: {new, updated, retired, unchanged}, domains}
 
@@ -91,14 +93,18 @@ export function applyRecs(db, results, ctx) {
       const p = prose[id];
       const def = buildDef(hit, p.fields);
       const defText = JSON.stringify(def);
+      const goalKinds = JSON.stringify(hit.rec.goalKinds);
+      const recOwner = hit.rec.owner;
       const close = hit.window ? hit.window.close : null;
       const label = hit.window ? hit.window.label : null;
       const sort = sorts.get(id);
       if (!rr) {
         const status = overridden(hit.packId) ? 'hidden' : 'proposed';
-        db.prepare(`INSERT INTO recs (id, def, status, waiting_on, wake, tasks_done, window_close, window_label, pack_id, sort, updated_at, file_id, parser, locator)
-                    VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, NULL, 'planner', ?)`)
-          .run(id, defText, status, JSON.stringify(def.tasks.map(() => false)), close, label, hit.packId, sort, now, JSON.stringify({ trigger: id }));
+        db.prepare(`INSERT INTO recs (id, def, status, waiting_on, wake, tasks_done, window_close, window_label, pack_id, sort, updated_at, file_id, parser, locator,
+                      owner, owner_override, goal_kinds)
+                    VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, NULL, 'planner', ?, ?, 0, ?)`)
+          .run(id, defText, status, JSON.stringify(def.tasks.map(() => false)), close, label, hit.packId, sort, now, JSON.stringify({ trigger: id }),
+            recOwner, goalKinds);
         db.prepare(`INSERT INTO planner_recs (rec_id, trigger_id, grounding_hash, prose_src, first_run, last_run, retired_at, retired_reason, retired_from, held_from)
                     VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL)`).run(id, id, p.hash, p.src, runId, runId);
         mark(id, 'new', t.domain);
@@ -130,11 +136,13 @@ export function applyRecs(db, results, ctx) {
       const oldDone = parseJson(rr.tasks_done, []);
       const doneByText = new Map((Array.isArray(oldDef.tasks) ? oldDef.tasks : []).map((x, i) => [x && x.t, !!oldDone[i]]));
       const tasksDone = JSON.stringify(def.tasks.map(x => doneByText.get(x.t) ?? false));
+      // An owner-set owner is never touched by the planner (through update, revive and unblock).
+      const owner = rr.owner_override ? rr.owner : recOwner;
       const rowChanged = rr.def !== defText || rr.window_close !== close || rr.window_label !== label || rr.pack_id !== hit.packId
-        || rr.status !== status || rr.waiting_on !== waitingOn || rr.tasks_done !== tasksDone;
+        || rr.status !== status || rr.waiting_on !== waitingOn || rr.tasks_done !== tasksDone || rr.goal_kinds !== goalKinds || rr.owner !== owner;
       if (rowChanged) {
-        db.prepare(`UPDATE recs SET def = ?, status = ?, waiting_on = ?, tasks_done = ?, window_close = ?, window_label = ?, pack_id = ?, sort = ?, updated_at = ?
-                    WHERE id = ?`).run(defText, status, waitingOn, tasksDone, close, label, hit.packId, sort, now, id);
+        db.prepare(`UPDATE recs SET def = ?, status = ?, waiting_on = ?, tasks_done = ?, window_close = ?, window_label = ?, pack_id = ?, sort = ?, updated_at = ?,
+                      goal_kinds = ?, owner = ? WHERE id = ?`).run(defText, status, waitingOn, tasksDone, close, label, hit.packId, sort, now, goalKinds, owner, id);
       } else if (rr.sort !== sort) {
         db.prepare('UPDATE recs SET sort = ? WHERE id = ?').run(sort, id);
       }

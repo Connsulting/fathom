@@ -8,6 +8,9 @@ import { BUSINESS, has, mineOf, padTasks, positive } from './common.mjs';
 
 export const id = 'fed-q4-estimate';
 export const domain = 'tax';
+// Goal kinds this rec serves (resolved to open goals at read time) and its default action owner.
+export const goalKinds = Object.freeze(['tax']);
+export const owner = 'you';
 export const trigger = 'calendar';
 export const packs = ['s-corp-owner', 'self-employed-partnership'];
 export const gate = BUSINESS;

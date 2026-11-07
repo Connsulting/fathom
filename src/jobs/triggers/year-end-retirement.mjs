@@ -7,11 +7,15 @@
 
 import {
   isTrue, mineOf, padTasks, confirmTasks, confirmTask, salaryProjKey, salaryKey, positive,
-  firstYearStatus, deferralDeadline, deadlineWindow,
+  firstYearStatus, deferralDeadline, deadlineWindow, soloPlanOwner,
 } from './common.mjs';
 
 export const id = 'year-end-retirement';
 export const domain = 'retirement';
+// Goal kinds this rec serves (resolved to open goals at read time) and its default action owner.
+export const goalKinds = Object.freeze(['retirement', 'tax']);
+export const owner = 'you';
+export const ownerFor = soloPlanOwner(owner);
 export const trigger = 'calendar';
 export const packs = ['advanced-retirement', 's-corp-owner', 'self-employed-partnership'];
 export const gate = { any: [isTrue('retirement.solo401k'), isTrue('income.sCorp'), isTrue('income.selfEmployed')] };

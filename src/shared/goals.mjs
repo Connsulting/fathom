@@ -6,8 +6,8 @@
 // prose/status/progress as the design reference did.
 // track is null, {accounts: [accountId, ...]} or {figure: key} (a KNOWN_FIGURES key).
 // Topic matching is deterministic: a goal's topics come from its kind, its words and what it
-// tracks; a rec's topics from its domain, value classes and id. A rec serves a goal when they
-// share a topic.
+// tracks; a rec's topics are the goal kinds it names (rec.goalKinds). A rec serves a goal when
+// they share a topic. Links resolve at read time, so a new or archived goal relinks at once.
 
 export const HORIZONS = Object.freeze([
   Object.freeze({ id: 'now', label: 'This year' }),
@@ -139,22 +139,12 @@ export function goalTopics(goal, accounts = []) {
   return out;
 }
 
-const REC_DOMAIN = { retirement: 'retirement', retire: 'retirement', tax: 'tax', cash: 'cash', giving: 'giving' };
-const REC_VALUE = { retire: 'retirement', tax: 'tax', cash: 'cash' };
-const REC_ID = [
-  ['retirement', /401k|roth|sep|ira|retire|backdoor/i],
-  ['education', /529|college/i],
-  ['health', /hsa/i],
-  ['giving', /charit|daf|giving/i],
-  ['home', /mortgage/i],
-];
-
+// A rec's topics are exactly the known goal kinds it names (rec.goalKinds: set by the trigger for
+// planner recs, by the scenario for demo recs, read from recs.goal_kinds for stored recs).
 export function recTopics(rec) {
   const out = new Set();
-  if (!rec) return out;
-  if (REC_DOMAIN[rec.domain]) out.add(REC_DOMAIN[rec.domain]);
-  for (const v of Array.isArray(rec.value) ? rec.value : []) if (v && REC_VALUE[v.cls]) out.add(REC_VALUE[v.cls]);
-  for (const [topic, re] of REC_ID) if (re.test(String(rec.id || ''))) out.add(topic);
+  if (!rec || !Array.isArray(rec.goalKinds)) return out;
+  for (const k of rec.goalKinds) if (typeof k === 'string' && Object.hasOwn(TOPIC_LABEL, k)) out.add(k);
   return out;
 }
 

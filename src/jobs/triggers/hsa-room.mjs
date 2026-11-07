@@ -4,6 +4,9 @@ import { isTrue, mineOf, padTasks, confirmTasks, positive } from './common.mjs';
 
 export const id = 'hsa-room';
 export const domain = 'retirement';
+// Goal kinds this rec serves (resolved to open goals at read time) and its default action owner.
+export const goalKinds = Object.freeze(['health', 'retirement', 'tax']);
+export const owner = 'you';
 export const trigger = 'calendar';
 export const packs = ['w2-benefits', 'advanced-retirement'];
 export const gate = isTrue('benefits.hsa');

@@ -4,6 +4,7 @@
 
 import { isIsoDate } from '../../scenario/build.mjs';
 import { esc } from '../../shared/tokens.mjs';
+import { personOwner } from '../../shared/rec-links.mjs';
 
 // Data-derived text (entity and account names) as stored rec HTML: escaped, braces included, so it
 // can never carry markup or a scenario token.
@@ -91,3 +92,9 @@ export function deadlineWindow(ctx, deadline, payrollLabel) {
   return { close: lastPayroll(ctx), label: payrollLabel, hard: true };
 }
 
+
+// Default owners that follow a person in the household data; without one, the trigger's static
+// owner. soloPlanOwner: the person whose solo plan this is (retirement recs). modelPersonOwner: the
+// person whose business the war-game model covers (hit.person); a confirm form has no model.
+export const soloPlanOwner = fallback => ctx => (ctx.info && ctx.info.solo ? personOwner(ctx.info.solo.person) : fallback);
+export const modelPersonOwner = fallback => (ctx, hit) => (hit && hit.person ? personOwner(hit.person) : fallback);
