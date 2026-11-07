@@ -77,10 +77,11 @@ export function importedCategory(t) {
 // transferSourceIds gives the calculator's in-window spending rows first claim on counterpart rows.
 export function resolveCategories({ transactions, accounts, corrections = [], merchantRules = [], sourceRules = [], guesses = [], transferSourceIds, transferDays = 5 }) {
   const rows = transactions.toSorted(order), byId = new Map(accounts.map(a=>[a.id,a]));
-  const correction = new Map(corrections.map(r=>[r.transaction_id,r]));
+  const correction = new Map(corrections.filter(r=>!r.auto).map(r=>[r.transaction_id,r]));
+  const automatic = new Map(corrections.filter(r=>r.auto).map(r=>[r.transaction_id,r]));
   const merchants = new Map(merchantRules.map(r=>[r.merchant,r]));
   const sources = new Map(sourceRules.map(r=>[JSON.stringify([r.parser,r.category]),r]));
-  const guessed = new Map(guesses.filter(r=>sourceBucket('aggregator',r.category)).map(r=>[r.transaction_id,r]));
+
   const result = new Map(), memory = new Map();
   const set = (t, category, bucket, layer, evidence = {}) => result.set(t.id, {category,bucket,layer,evidence});
   for (const t of rows) {
@@ -108,9 +109,9 @@ export function resolveCategories({ transactions, accounts, corrections = [], me
     const finish = (category,bucket,layer,evidence) => set(t,unknown ? imported.category : category,bucket,layer,{...evidence,...(unknown ? {imported} : {})});
     if (out.has(t.id) || incoming.has(t.id) || cardPayment(t,byId,accounts)) finish('Internal Transfers','transfer','structural',{transactionId:t.id});
     else {
-      const learned = memory.get(normalizeMerchant(t.description)), guess = guessed.get(t.id);
+      const learned = memory.get(normalizeMerchant(t.description)), auto = automatic.get(t.id);
       if (learned) finish(learned.category,learned.bucket,'merchant',{transactionId:learned.id,...learned.evidence});
-      else if (guess) finish(guess.category,sourceBucket('aggregator',guess.category),'guess',{transactionId:t.id,model:guess.model});
+      else if (auto) finish(auto.category,auto.bucket,'guess',{transactionId:t.id,...auto.auto});
       else finish('Uncategorized',t.amount>0 ? 'income' : 'household','uncategorized',{transactionId:t.id});
     }
   }

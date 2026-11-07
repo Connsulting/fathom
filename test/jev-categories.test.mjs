@@ -60,22 +60,22 @@ test('auto application is provenance-marked, does not teach memory, and undo/rev
   assert.equal(getItem(db,item.id).status,'answered'); assert.equal(resolutions(db).get(id).layer,'guess');
   const later=transaction(db,'Synthetic Shop'); assert.equal(resolutions(db).get(later).layer,'uncategorized');
   assert.equal(db.prepare('SELECT count(*) AS n FROM category_merchant_rules').get().n,0);
-  db.exec('UPDATE ingest_epoch SET epoch=epoch+1');
+  db.exec('INSERT INTO ingest_epoch (id,n) VALUES (1,1) ON CONFLICT(id) DO UPDATE SET n=n+1');
   reopenItem(db,item.id); queueCategoryChecks(db); assert.equal(resolutions(db).get(id).layer,'uncategorized');
   await guessCategories(db,provider(.99),{policy}); assert.equal(getItem(db,item.id).status,'pending');
   const {answerItem}=await import('../src/ingest/confirm.mjs'); answerItem(db,item.id,'Business');
   assert.equal(resolutions(db).get(id).layer,'correction');
   const another=transaction(db,'Another merchant'); await guessCategories(db,provider(.99),{policy});
   const q=db.prepare("SELECT id FROM confirm_items WHERE subject=? AND kind='transaction_category'").get(String(another));
-  db.exec('UPDATE ingest_epoch SET epoch=epoch+1'); reviseItem(db,q.id,'Business');
+  db.exec('INSERT INTO ingest_epoch (id,n) VALUES (1,1) ON CONFLICT(id) DO UPDATE SET n=n+1'); reviseItem(db,q.id,'Business');
   assert.equal(resolutions(db).get(another).category,'Business');
 });
 
 test('Confirm preserves deterministic kind guesses and sends only owner-match features',async t=>{
   const db=store(t); db.exec("UPDATE accounts SET name='Everyday checking' WHERE id='a'");
   setSetting(db,'unused',true);
-  db.prepare("INSERT INTO facts (key,value) VALUES ('household.names',?)").run(JSON.stringify({me:'Jordan Example',spouse:'Taylor Sample'}));
-  db.exec("INSERT INTO account_holders (account_id,holder) VALUES ('a','Jordan Example')");
+  db.prepare("INSERT INTO facts (key,value,updated_at) VALUES ('household.names',?,'2032-01-01')").run(JSON.stringify({me:'Jordan Example',spouse:'Taylor Sample'}));
+  db.exec("INSERT INTO account_holders (account_id,holder,created_at) VALUES ('a','Jordan Example','2032-01-01')");
   const kind=ask(db,{kind:'account_kind',subject:'a',question:'Kind?',options:KIND_OPTIONS});
   const owner=ask(db,{kind:'account_owner',subject:'a',question:'Owner?',options:[{id:'owner',label:'You'},{id:'spouse',label:'Spouse'}]});
   let sent;
