@@ -43,10 +43,10 @@ from that, and when would I get there at my current savings rate?" (Q02 and Q03 
 
 ## Risks and external dependencies
 
-Calendar estimate: about four to six calendar days end to end at four parallel workers. Each
+Calendar estimate: about four to six calendar days end to end at up to five parallel workers. Each
 ticket is one agent run plus CI and one cross-provider review. The date is set by the owner's
 merge gate (two open PRs first, then every ticket), by C1, which is one large ticket every other
-ticket waits on, and by the four-deep chain C1, C4, C6, C7. Section 7 gives the waves.
+ticket waits on, and by the four-deep chain C1, C3, C6, C7. Section 7 gives the waves.
 
 1. C1 is the critical path. It changes the registry shape and renames all 30 live tools in one
    ticket, with every caller, because the repository forbids aliases and compatibility paths: a
@@ -564,7 +564,7 @@ Progress label "Looking through your transactions".
 
 | Operation | Parameters | Returns | Replaces |
 |---|---|---|---|
-| search | `accountId?`, `from?`, `to?` (`YYYY-MM-DD`), `minAmount?`, `maxAmount?`, `category?`, `text?` (1..200), `limit?` (1..200, default 50); `ids?` when PR #76 is on main; from C4 also `bucket?` (Bucket), `class?` (Class), `merchant?` (normalized, 1..200) | `{ rows: [ { id, accountId, date, amount, description, category } ], truncated, total }`; from C4 each row also has `bucket`, `class`, `layer`, `merchant` | live `query_transactions` |
+| search | `accountId?`, `from?`, `to?` (`YYYY-MM-DD`), `minAmount?`, `maxAmount?`, `category?`, `text?` (1..200), `limit?` (1..200, default 50); `ids?` when PR #76 is on main; from C4 also `bucket?` (Bucket), `class?` (Class), `merchant?` (normalized, 1..200), `cursor?` (the `next` of an earlier page) | `{ rows: [ { id, accountId, date, amount, description, category } ], truncated, total }`; from C4 each row also has `bucket`, `class`, `layer`, `merchant`, and the result has `next` (a date-and-id keyset cursor, as `GET /api/accounts/:id/transactions` pages) while rows remain | live `query_transactions` |
 
 Scope: read. `category` in C4 rows is the resolved category and `layer` the `resolveCategories`
 layer (`correction`, `import`, `guess`, `uncategorized` and so on). The answerer's special
@@ -696,14 +696,17 @@ Purpose: business profit and loss per entity. Progress label "Looking at your bu
 | Operation | Parameters | Returns | Replaces |
 |---|---|---|---|
 | pnl | `entity?`, `from?`, `to?` (`YYYY-MM`); from C4 also `window?` (`ytd` default, `trailing_12`, `calendar_year`, `custom`), `year?`, `groupBy?` (`none`, `month` default, `category`), `compareToPriorYear?` | C1: the `pnl_by_month` result unchanged. C4: `{ entities: [ { entity, revenue, expenses, profit, margin (ratio), groups: [ { key, revenue, expenses, profit } ], prior?: { revenue, expenses, profit, margin, revenueDifference, revenueRatio, profitDifference, profitRatio } } ], gaps }`, every number a figure; referenceable | live `pnl_by_month`, planned `business_pnl` |
-| rows | `entity?`, `from?`, `to?`, `section?` (`revenue`, `expenses`), `category?`, `month?` | the `businessPnlRows` result: the lines behind a P&L figure | new (covers `GET /api/pnl/rows`) |
+| rows | `section` (`income`, `expenses`), `category`, `entity?`, `from?`, `to?`, `month?` | the `businessPnlRows` result: the workbook lines and transactions behind a P&L figure | new (covers `GET /api/pnl/rows`) |
 
 Scope: read. C4 builds `pnl` on `businessPnl` and `rows` on `businessPnlRows`
 (`src/pnl/business.mjs`, the functions `GET /api/pnl` and `GET /api/pnl/rows` call), so the agent
 and the Money screen read one implementation. Revenue is the sum of positive lines, expenses the
 negated sum of negative lines, margin profit over revenue (absent at zero revenue).
 `incomplete_month` when the period's last month has no lines yet. `from` and `to` alone keep
-meaning a custom period, so C1's calls stay valid after C4.
+meaning a custom period, so C1's calls stay valid after C4. C1's `pnl` is `pnl_by_month` moved
+unchanged: it reads workbook lines (`pnl_lines`) only, so `GET /api/pnl`, which also derives P&L
+from categorized transactions, counts as covered from C4. C4 exports the capability
+`businessPeriods`, which the eval cases that use the C4 parameters require.
 
 #### `tax`
 
@@ -1039,8 +1042,8 @@ plans pack, run a job now. Progress label "Bringing in your data". Ticket: C10.
 
 | Operation | Parameters | Scope | Returns | Undo | Replaces |
 |---|---|---|---|---|---|
-| import_file | `name` (1..200), `mime`, exactly one of `contentBase64` or `text` | write:imports | `{ file: { id, name, status, counts }, pending, receipt }` | not available: imported rows are undone per Confirm answer; the file stays on record | planned `import_file` |
-| retry_import | `fileId` | write:imports | `{ file, receipt }` | not available (as `import_file`) | planned `retry_import` |
+| import_file | `name` (1..200), `mime`, exactly one of `contentBase64` or `text` | write:imports | MCP `{ file: { id, name, status, counts }, pending, receipt }`; Ask `{ status: 'queued', name, receipt }` | not available: imported rows are undone per Confirm answer; the file stays on record | planned `import_file` |
+| retry_import | `fileId` | write:imports | MCP `{ file, receipt }`; Ask `{ status: 'queued', name, receipt }` | not available (as `import_file`) | planned `retry_import` |
 | build_your_plans | `fileIds?` | write:imports | MCP `{ status: 'built', written, entries, sources, warnings, dropped, receipt }`; Ask `{ status: 'queued', receipt }` | not available: the pack is rebuilt from the files | planned `build_your_plans` |
 | run_job | `job` (`plan`, `simplefin-sync`, `freshness`, `confirm-guess`) | write:jobs | `{ run: { id, status, startedAt, finishedAt } or { id, status: 'queued' }, receipt }` | not available: a job run reads and replans; its effects are undone where they land | planned `run_job` (its `id` becomes `job`) |
 
@@ -1048,11 +1051,14 @@ plans pack, run a job now. Progress label "Bringing in your data". Ticket: C10.
 note) in Ask; either way the decoded content is at most 1 MiB less the request envelope
 (`MCP_BODY_LIMIT`). A setup note is a `text/markdown` file, which covers `/api/onboarding/notes`.
 Jobs that send email (`brief-email`, `deadline-alerts`) and `trash-purge` are not in the enum;
-`plan` on a demo store is refused as the route refuses it. Execution in Ask: `build_your_plans`,
-and `run_job` for `plan` and `confirm-guess`, call the engine, which would wait on the engine
-ledger the running answer holds, so in Ask they are scheduled with `ctx.queueAfterTools` to run
-when the round ends and return `status: 'queued'`; without `ctx.queueAfterTools` the call is
-refused, never awaited inline. Over MCP every operation runs inline. Reuses `ingestFiles`,
+`plan` on a demo store is refused as the route refuses it. Execution in Ask: `import_file` and `retry_import` (document
+extraction, including markdown notes, calls `extractDocument`, which awaits the engine's
+`extract`), `build_your_plans`, and `run_job` for `plan` and `confirm-guess` all call the engine,
+which would wait on the engine ledger the running answer holds. In Ask they are scheduled with
+`ctx.queueAfterTools` to run when the round ends and return `{ status: 'queued', receipt }` (for
+the two import operations also `name`); the receipt's later state records the outcome, including
+the file id. Without `ctx.queueAfterTools` the call is refused, never awaited inline. Over MCP
+every operation runs inline and returns the finished result. Reuses `ingestFiles`,
 `retryFile` (`src/ingest/pipeline.mjs`), `buildYourPlans`, `refreshLivePacks`,
 `ctx.services.scheduler.runNow` (C2), `SCHEDULER_STATUS`, and the triggers `triggerPlan`,
 `triggerFreshness`, `triggerGuesses`.
@@ -1361,7 +1367,7 @@ lands the covering operation.
 | `POST /api/threads/:id/delete` | excluded: conversation chrome | | |
 | `GET /api/accounts/:id` | `accounts.detail` | C5 |  |
 | `GET /api/accounts/:id/transactions` | `transactions.search` | C1 | `accountId` set |
-| `GET /api/pnl` | `business.pnl` | C1 |  |
+| `GET /api/pnl` | `business.pnl` | C4 | C1's `pnl` reads workbook lines only, as `pnl_by_month` does; the route also derives P&L from categorized transactions, which C4's `businessPnl` build covers |
 | `GET /api/pnl/rows` | `business.rows` | C4 |  |
 | `GET /api/spending` | `spending.total` | C4 |  |
 | `GET /api/spending/rows` | `transactions.search` | C4 | bucket, class and category filters |
@@ -1488,9 +1494,10 @@ the retirement tickets C6 and C7 import from it rather than absorbing it. T16 is
 first, as it stands, and C1 re-points every case (section 8). The old T4 to T15 and T17 to T28 are
 replaced by C1 to C10 below.
 
-Calendar estimate: about four to six calendar days end to end at four parallel workers, each
+Calendar estimate: about four to six calendar days end to end at up to five parallel workers, each
 ticket one agent run plus CI and one cross-provider review. Set by the owner's merge gate (PRs #83
-and #84 before wave 1, then each ticket), by C1 alone in wave 1, and by the chain C1, C4, C6, C7.
+and #84 before wave 1, then each ticket), by C1 alone in wave 1, and by the chain C1, C3, C6,
+C7.
 It stretches if C1 needs a second review round, if PR #76 merges mid-C1 and forces a rebase, or if
 CI reruns pile up on a loaded host.
 
@@ -1500,8 +1507,8 @@ Waves (dependency graph). A ticket starts when everything in its Depends on line
 |---|---|---|---|
 | 0 | now | owner merges PR #83 and PR #84 (both green) | none |
 | 1 | PR #84 merged | C1 | 1 |
-| 2 | C1 merged | C2, C3, C4, C5 (C5 also needs PR #83) | 4 |
-| 3 | its inputs merge | C6 (C3, C4, C5), C8 (C2), C9 (C2), C10 (C2, C4) | 4 |
+| 2 | C1 merged | C2, C3, C4 | 3 |
+| 3 | its inputs merge | C5 (C3, PR #83), C6 (C3, C4, PR #83), C8 (C2), C9 (C2, C3), C10 (C2, C4) | 5 |
 | 4 | C6 merged | C7 (C4, C6) | 1 |
 
 Serialized files: `src/api/answerer.mjs` and `test/answerer.test.mjs` (C1, then C2; no other
@@ -1526,8 +1533,10 @@ Standing acceptance, part of every ticket below:
    `createRealStore` from `test/helpers/real-store.mjs`) on the synthetic demo household and
    assert figures against a deterministic recomputation from the same store, never hard-coded
    amounts.
-5. After C1, no ticket edits `evals/`: registering an operation or a capability is what turns its
-   cases into required passes (section 8).
+5. After C1, a ticket's only `evals/` change is adding `evals/scripts/<case-id>.mjs` for the
+   cases section 8 assigns to it; registering its operations, capabilities and scripts is what
+   turns those cases into required passes, and `npm run eval:ask` (in its Test command) shows them
+   passing.
 6. The ticket runs only its own test command locally (AGENTS.md agent workflow); CI runs the full
    suite and Playwright.
 
@@ -1608,11 +1617,14 @@ Done when:
 8. No tracked file except `docs/ask-tools.md` contains any of the 30 old names as a word
    (ignoring the `<household_summary>` prompt tag); the test reads `git ls-files`. Verified by
    `test/tools-registry.test.mjs`.
-9. Every eval case is re-pointed as section 8 lists; each required call carries `operation`; the
-   loader's availability probe checks (tool, operation) pairs (`requires.operations` replaces
-   `requires.tools`); a loader test flips a case to required only when a stub operation with its
-   pair registers; `npm run eval:ask` reports the same number of required passes as on its base
-   and every expected failure names its missing pairs. Verified by `test/ask-evals.test.mjs`,
+9. Every eval case is re-pointed as section 8 lists, including the `portfolio` and
+   `annual-spending` oracle changes there; each required call carries `operation`; the loader's
+   availability probe checks (tool, operation) pairs (`requires.operations` replaces
+   `requires.tools`), capabilities and `requires.script`; a loader test flips a case to required
+   only when a stub operation with its pair registers and, for a scripted case, its script file
+   exists; `npm run eval:ask` passes, every case whose "Tier 1 required after" column says C1 is a
+   required pass, no case that was a required pass on the base fails, and every expected failure
+   names its missing pairs, capabilities or script. Verified by `test/ask-evals.test.mjs`,
    `test/ask-evals-runner.test.mjs` and `npm run eval:ask`.
 10. The MCP smoke calls each read tool's first operation and gets the permission denial for
     `act_on_recommendation.status` on a read key. Verified by `test/mcp-deploy-smoke.test.mjs`.
@@ -1659,7 +1671,7 @@ Done when:
    `PARITY_EXCLUDED` and `PARITY_PENDING` exactly as the section 6 route map gives them. Verified
    by `test/tools-parity.test.mjs`.
 
-Test command: `node --test test/write-scopes.test.mjs test/tool-services.test.mjs test/tools-parity.test.mjs src/mcp/test/keys.test.mjs test/ask-actions.test.mjs test/answerer.test.mjs`
+Test command: `node --test test/write-scopes.test.mjs test/tool-services.test.mjs test/tools-parity.test.mjs src/mcp/test/keys.test.mjs test/ask-actions.test.mjs test/answerer.test.mjs && npm run eval:ask`
 
 ### C3 calculate, figure references and quoting
 
@@ -1698,7 +1710,7 @@ Done when:
    and `groundAnswer` grounds each `quote` form. Verified by `test/figure-quote.test.mjs`.
 7. The assembled rule text holds section 4 rules 2 to 6. Verified by `test/tools-registry.test.mjs`.
 
-Test command: `node --test test/tools-calculate.test.mjs test/assumption-evidence.test.mjs test/figure-quote.test.mjs test/figure-envelope.test.mjs test/tools-registry.test.mjs`
+Test command: `node --test test/tools-calculate.test.mjs test/assumption-evidence.test.mjs test/figure-quote.test.mjs test/figure-envelope.test.mjs test/tools-registry.test.mjs && npm run eval:ask`
 
 ### C4 Spending and business reads
 
@@ -1739,15 +1751,17 @@ Done when:
    returns what `GET /api/pnl/rows` returns for the same arguments. Verified by
    `test/tools-business.test.mjs`.
 7. `transactions.search` filters by bucket, class and merchant and returns the resolved fields;
-   its C1 tests pass unchanged. Verified by `test/tools.test.mjs`.
+   its C1 tests pass unchanged; on a `createRealStore` account with 450 transactions, 300 of them
+   on one date with equal amounts and descriptions, following `next` from the first page returns
+   every row exactly once. Verified by `test/tools.test.mjs`.
 
-Test command: `node --test test/tools-spending.test.mjs test/tools-cash-flow.test.mjs test/tools-recurring.test.mjs test/tools-business.test.mjs test/categories.test.mjs test/tools.test.mjs test/tools-registry.test.mjs`
+Test command: `node --test test/tools-spending.test.mjs test/tools-cash-flow.test.mjs test/tools-recurring.test.mjs test/tools-business.test.mjs test/categories.test.mjs test/tools.test.mjs test/tools-registry.test.mjs && npm run eval:ask`
 
 ### C5 Balances, tax and data health
 
 Size: about 550 production lines, 500 test lines.
 
-Depends on: C1, PR #83 merged.
+Depends on: C1, C3 (the Assumption validation `tax.estimate` what-ifs use), PR #83 merged.
 
 Files: `src/tools/catalog/balances.mjs` (new: `accounts.net_worth`, `accounts.detail`),
 `src/tools/catalog/health.mjs` (new: `household.health`), `src/tools/catalog/tax.mjs` (new:
@@ -1772,13 +1786,13 @@ Done when:
 5. `tax.room` returns stored `room.*` figures when the planning run is in the tax year and
    calculator limits with `used` null and the gap otherwise. Verified by `test/tools-tax.test.mjs`.
 
-Test command: `node --test test/tools-net-worth.test.mjs test/tools-health.test.mjs test/tools-tax.test.mjs test/treatment.test.mjs test/tools-registry.test.mjs`
+Test command: `node --test test/tools-net-worth.test.mjs test/tools-health.test.mjs test/tools-tax.test.mjs test/treatment.test.mjs test/tools-registry.test.mjs && npm run eval:ask`
 
 ### C6 Retirement: target, growth and after-tax value
 
 Size: about 450 production lines, 450 test lines.
 
-Depends on: C3, C4, C5, PR #83 merged.
+Depends on: C3, C4, PR #83 merged.
 
 Files: `src/tools/catalog/retirement.mjs` (new: `retirement.target`, `retirement.growth`,
 `retirement.after_tax`, and section 4 rule 12), `test/tools-retirement.test.mjs` (new),
@@ -1803,9 +1817,10 @@ Done when:
    plus state; a taxable row with a position missing basis returns `afterTax` unavailable with a
    `no_cost_basis` gap counting positions; an HSA row returns both medical and nonmedical values;
    a `retirement` kind without a plan type is unavailable with `missing_fact`. Rates passed as refs
-   to `tax.estimate` resolve. Verified by `test/tools-after-tax.test.mjs`.
+   to a `calculate` figure and as owner assumptions both resolve (refs to `tax.estimate` need C5
+   and are covered by its eval cases, not by this test). Verified by `test/tools-after-tax.test.mjs`.
 
-Test command: `node --test test/tools-retirement.test.mjs test/tools-after-tax.test.mjs test/tools-calculate.test.mjs test/tools-registry.test.mjs`
+Test command: `node --test test/tools-retirement.test.mjs test/tools-after-tax.test.mjs test/tools-calculate.test.mjs test/tools-registry.test.mjs && npm run eval:ask`
 
 ### C7 Obligations and access
 
@@ -1813,8 +1828,10 @@ Size: about 600 production lines, 550 test lines.
 
 Depends on: C4, C6.
 
-Files: `src/facts/answers.mjs` (the fact shapes in section 5: the `dates` shape type, the
-obligation objects, the per-person and per-account keys), `src/calc/obligations.mjs` (new),
+Files: `src/jobs/triggers/common.mjs` (declarations: the new keys in `ANSWER_SHAPES`, their
+`answerShape` entries, and account eligibility by kind and plan type for the per-account keys),
+`src/facts/answers.mjs` (value validation: the new `dates` list type and the obligation object
+shapes), `src/calc/obligations.mjs` (new),
 `src/tools/catalog/obligations.mjs` (new: `spending.obligations`, `spending.projection`),
 `src/tools/catalog/access.mjs` (new: `retirement.access`, `retirement.bridge`),
 `test/fact-shapes-obligations.test.mjs` (new), `test/tools-obligations.test.mjs` (new),
@@ -1839,7 +1856,7 @@ Done when:
    and cash, never the listed exceptions, and returns shortfall or surplus recomputed in the test.
    Verified by `test/tools-access.test.mjs`.
 
-Test command: `node --test test/fact-shapes-obligations.test.mjs test/tools-obligations.test.mjs test/tools-access.test.mjs test/fact-answers.test.mjs test/tools-registry.test.mjs`
+Test command: `node --test test/fact-shapes-obligations.test.mjs test/tools-obligations.test.mjs test/tools-access.test.mjs test/fact-answers.test.mjs test/tools-registry.test.mjs && npm run eval:ask`
 
 ### C8 Account, category and Confirm writes
 
@@ -1874,13 +1891,13 @@ Done when:
    `GET /api/confirm/:id` and `GET /api/accounts/:id/merge-candidates` return. Verified by
    `test/tools-confirm-writes.test.mjs`.
 
-Test command: `node --test test/tools-account-writes.test.mjs test/tools-category-writes.test.mjs test/tools-confirm-writes.test.mjs test/account-edit.test.mjs test/categories.test.mjs test/tools-parity.test.mjs test/tools-registry.test.mjs`
+Test command: `node --test test/tools-account-writes.test.mjs test/tools-category-writes.test.mjs test/tools-confirm-writes.test.mjs test/account-edit.test.mjs test/categories.test.mjs test/tools-parity.test.mjs test/tools-registry.test.mjs && npm run eval:ask`
 
 ### C9 Recommendation, advisor and goal writes
 
 Size: about 550 production lines, 600 test lines.
 
-Depends on: C2.
+Depends on: C2, C3 (the Assumption validation `update_goal.suggestion` uses for `withdrawalRate`).
 
 Files: `src/decisions/write.mjs` (new), `src/store/recs.mjs` (`detachRecThreads`),
 `src/goals/write.mjs` (new), `src/goals/curve.mjs` (`setCurvePositions`),
@@ -1904,7 +1921,7 @@ Done when:
    routes and undo (`delete` restores every column); `goals.suggestions` returns what
    `GET /api/goals/suggestions` returns. Verified by `test/tools-goal-writes.test.mjs`.
 
-Test command: `node --test test/tools-rec-writes.test.mjs test/tools-advisor-writes.test.mjs test/tools-goal-writes.test.mjs test/goals.test.mjs test/rec-threads.test.mjs test/tools-parity.test.mjs test/tools-registry.test.mjs`
+Test command: `node --test test/tools-rec-writes.test.mjs test/tools-advisor-writes.test.mjs test/tools-goal-writes.test.mjs test/goals.test.mjs test/rec-threads.test.mjs test/tools-parity.test.mjs test/tools-registry.test.mjs && npm run eval:ask`
 
 ### C10 Preferences, definitions and refresh
 
@@ -1930,15 +1947,17 @@ Done when:
    rows. Verified by `test/definitions.test.mjs`.
 2. `update_preferences.pack` is idempotent, matches the toggle's effect on recs, and its undo
    restores `wasActive`. Verified by `test/tools-pack-writes.test.mjs`.
-3. `refresh.import_file` with base64 over MCP and with pasted text in Ask produces the same file
-   row as `POST /api/files`; content over the limit is refused; `retry_import` matches the route;
-   `build_your_plans` and `run_job` for `plan` and `confirm-guess` return `queued` in Ask and run
-   inline over MCP; a refused demo `plan` matches the route; `household.imports` equals
-   `GET /api/files`. Verified by `test/tools-refresh.test.mjs`.
+3. `refresh.import_file` with base64 over MCP produces the same file row as `POST /api/files`;
+   content over the limit is refused; `retry_import` matches the route; over MCP every operation
+   runs inline; `plan` on a demo store is refused as the route refuses it; `household.imports`
+   equals `GET /api/files`. In an Ask answer with the fake engine enabled (its `extract` scripted),
+   `import_file` with a pasted markdown note, `retry_import`, `build_your_plans` and `run_job`
+   for `plan` and `confirm-guess` each return `queued` within the round and complete after it,
+   with no ledger wait (the test fails on a timeout of 5 seconds). Verified by `test/tools-refresh.test.mjs`.
 4. The migration's table is listed in `docs/architecture.md`. Verified by
    `node --test test/docs.test.mjs`.
 
-Test command: `node --test test/definitions.test.mjs test/tools-refresh.test.mjs test/tools-pack-writes.test.mjs test/preferences.test.mjs test/docs.test.mjs test/tools-parity.test.mjs test/tools-registry.test.mjs`
+Test command: `node --test test/definitions.test.mjs test/tools-refresh.test.mjs test/tools-pack-writes.test.mjs test/preferences.test.mjs test/docs.test.mjs test/tools-parity.test.mjs test/tools-registry.test.mjs && npm run eval:ask`
 
 ## 8. Eval coverage
 
@@ -1953,8 +1972,21 @@ format so that every required call is `{ name, operation, predicates }`; `requir
 `requires.operations` (`'spending.total'`); the availability probe checks the pair against the
 registry; and `evals/graders.mjs` matches name and operation before predicates (its
 `get_figures` check becomes `household.figures`). A case missing any required pair or capability
-(`ownerStatements` from C2, `definitions` from C10) is expected-fail and names what is missing;
-once everything is present it is a required pass. No ticket after C1 edits a case.
+(`ownerStatements` from C2, `businessPeriods` from C4, `definitions` from C10) is expected-fail
+and names what is missing; once everything is present it is a required pass.
+
+Scripted transcripts. Tier 1 builds each scripted call's arguments from the case's predicates,
+which is enough for a read whose required arguments the predicates name, and not enough for a
+`calculate` call (operands and label), a call with refs or evidence (`retirement.growth`,
+`retirement.target` with an owner rate), or a write (target ids from an earlier read). C1 adds
+optional per-case script modules, `evals/scripts/<case-id>.mjs`, each exporting `script(ctx)`,
+which builds the full scripted transcript from the demo store: the prerequisite reads, the ids
+they return, refs copied from earlier results, and evidence quoted from the case's question. C1
+sets `requires.script: true` on every case whose "Tier 1 required after" ticket below is not C1,
+and the loader treats a missing script file as a missing requirement (named in the expected
+failure). Each ticket from C2 to C10 writes the script files for exactly the cases that name it in
+that column, with a runner test that the script's calls validate against the registry; that is
+the only `evals/` change a later ticket makes. A case's catalog entry never changes after C1.
 
 How PR #84 is re-pointed: merge it first, unchanged (it is green: 29 tier 1 passes and 73 expected
 failures, all availability-based). Then C1 rewrites every case in `evals/catalog.json` as the
@@ -1991,7 +2023,7 @@ the "Change beyond the name" column lists the cases whose predicates or requirem
 | Case ID | Required calls (tool.operation, key predicates) | Change beyond the name | Tier 1 required after | Live expected after |
 |---|---|---|---|---|
 | spending-annual-exclusions | `spending.total` (measure spending, annualize true, exclude.classes has debt_service, exclude.buckets has tax) | predicates rewritten: the old exclude, includeHealthcare and income_tax paths name no parameter | C4 | C4 |
-| spending-portfolio-withdrawal | `retirement.target` (withdrawalRate.value 0.04, withdrawalRate.source owner); capability ownerStatements | predicate path withdrawalRate becomes withdrawalRate.value; adds capability ownerStatements | C6 | C6 |
+| spending-portfolio-withdrawal | `retirement.target` (withdrawalRate.value 0.04, withdrawalRate.source owner, definition core_living, roundTo 1); capability ownerStatements | predicate path withdrawalRate becomes withdrawalRate.value; adds `definition core_living` and `roundTo 1`; adds capability ownerStatements; its `portfolio` expectation changes (below) | C6 | C6 |
 | spending-latest-groceries | `transactions.search` (category groceries, limit 1) | name | C1 | C3 |
 | spending-latest-dining | `transactions.search` (category dining, limit 1) | name | C1 | C3 |
 | spending-latest-health | `transactions.search` (category health, limit 1) | name | C1 | C3 |
@@ -2040,9 +2072,9 @@ the "Change beyond the name" column lists the cases whose predicates or requirem
 | q14-savings-rate | `spending.total` (window trailing_12); `calculate.divide` | calculate op predicate becomes the operation | C4 | C4 |
 | q15-income-by-source | `spending.total` (measure income, groupBy merchant); `business.pnl` | name | C4 | C4 |
 | q16-monthly-take-home | `spending.total` (measure income, window trailing_12) | name | C4 | C4 |
-| q17-business-profit-margin | `business.pnl` (window ytd) | name | C1 | C3 |
-| q18-revenue-vs-last-year | `business.pnl` (compareToPriorYear true) | name | C1 | C3 |
-| q19-expense-categories-quarter | `business.pnl` (groupBy category, window custom) | name | C1 | C3 |
+| q17-business-profit-margin | `business.pnl` (window ytd); capability businessPeriods | adds capability businessPeriods (its parameters arrive in C4) | C4 | C4 |
+| q18-revenue-vs-last-year | `business.pnl` (compareToPriorYear true); capability businessPeriods | adds capability businessPeriods (its parameters arrive in C4) | C4 | C4 |
+| q19-expense-categories-quarter | `business.pnl` (groupBy category, window custom); capability businessPeriods | adds capability businessPeriods (its parameters arrive in C4) | C4 | C4 |
 | q20-net-worth-parts | `accounts.net_worth` (groupBy part) | name | C5 | C5 |
 | q21-net-worth-change | `accounts.net_worth` (series true); `calculate.subtract` | calculate op predicate becomes the operation | C5 | C5 |
 | q22-retirement-vs-taxable | `accounts.net_worth` (groupBy treatment) | name | C5 | C5 |
@@ -2097,6 +2129,16 @@ Predicate paths keep their names except: `spending.obligations` uses `obligation
 cases q53 to q55), `refresh.run_job` uses `job` (was `id`, q65), and a `calculate` call's `op`
 becomes its operation (q14, q21, q27, q44, net-worth-change). The three refusal cases keep their
 forbidden checks (q68 forbids any write tool).
+
+Oracle changes in `evals/cases.mjs` (C1). The `portfolio` expectation (case
+`spending-portfolio-withdrawal`) and the `annual-spending` expectation (cases
+`spending-annual-exclusions` and `q01-spend-excl-mortgage-tax`) compute the same selection the
+calls now name: household spending on checking and card accounts over the complete months on
+file, annualized, leaving out the `debt_service` class and the `tax` bucket by the
+`CATEGORY_CLASSES` table, computed independently from the transactions table rather than by
+calling the tool. `portfolio` divides that by the rate and rounds up to the whole dollar, which is
+what `retirement.target` returns with `definition: 'core_living'` and `roundTo: 1`; it no longer
+rounds to cents.
 
 ## 9. Migration from the old names
 
