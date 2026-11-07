@@ -291,3 +291,47 @@ test('a structural count does not hide an unsourced spelled figure elsewhere in 
   assert.equal(result.ok, false);
   assert.deepEqual(result.violations.map(v => v.text), ['five']);
 });
+
+test('"one" after a determiner is a pronoun only with at most one non-verb word between', () => {
+  for (const text of ['The total is one.', 'The answer is one.', 'The count equals one.', 'This is one.', 'That was one.', 'Each has one.', 'The result becomes one.']) {
+    assert.equal(checkGrounding(text).ok, false, `${text} is a quantity`);
+    assert.equal(checkGrounding(text, { data: [1] }).ok, true, `${text} grounds when 1 is in the sources`);
+  }
+  for (const text of ['Take the one that fits.', 'Pick the next one.', 'A late-December birth gets the same credit as a January one.', 'Which one is better?', 'No one knows yet.', 'Pick another one.', 'One of the accounts is closed.', 'Add one more.']) {
+    assert.equal(checkGrounding(text).ok, true, text);
+  }
+});
+
+test('a structural count must sit in the last sentence of a paragraph that ends with a colon', () => {
+  for (const prose of [
+    `Your reserve lasts three full years.\n\n${bullets(3)}`,
+    `Your reserve lasts three years. Watch these:\n\n${bullets(3)}`,
+    `There are three things. Watch these:\n\n${bullets(3)}`,
+    `Here are three things\n\n${bullets(3)}`,
+    `Here are three things\n${bullets(3)}`,
+    `Here are three things.\n\n${bullets(3)}`,
+  ]) {
+    const result = checkGrounding(prose);
+    assert.equal(result.ok, false, prose);
+    assert.deepEqual(result.violations.map(v => v.text), ['three'], prose);
+  }
+  assert.equal(checkGrounding(`There are three things. Watch these:\n\n${bullets(3)}`, { data: [3] }).ok, true, 'a sourced count still grounds');
+  for (const prose of [
+    `There are three things to watch:\n\n${bullets(3)}`,
+    `There are three things to watch:\n\n${numbered(3)}`,
+    `There is one thing to watch:\n\n${bullets(1)}`,
+    `There is one thing to watch:\n\n${numbered(1)}`,
+    `The review is quick. There are three things to watch:\n\n${bullets(3)}`,
+  ]) assert.deepEqual(wordViolations(prose), [], prose);
+});
+
+test('a unit word one word after the count still makes it a figure claim', () => {
+  const cases = [['three', 'full years', 3], ['three', 'more accounts', 3], ['two', 'recent payments', 2]];
+  for (const [word, rest, items] of cases) {
+    const prose = `You have ${word} ${rest}:\n\n${bullets(items)}`;
+    const result = checkGrounding(prose);
+    assert.equal(result.ok, false, `${word} ${rest}`);
+    assert.deepEqual(result.violations.map(v => v.text), [word], `${word} ${rest}`);
+    assert.equal(checkGrounding(prose, { data: [items] }).ok, true, `${word} ${rest} grounds when the value is in the sources`);
+  }
+});

@@ -44,8 +44,8 @@
 // Only the engine's final text (the round after the last tool round) is grounded, rendered and fed
 // back in the corrective turn. provenance.work = { ms, items } records how the answer was reached,
 // built after the fact so it is the same with or without onEvent: items are { k: 'step', label }
-// and { k: 'note', text, draft?: true } in order: the start step; per tool round its interim note,
-// then its tool steps; the grounding step; after a failed check the first final text as a draft
+// and { k: 'note', text, draft?: true } in order: the start step; per tool round its notes and tool
+// steps in content order (the live order); the grounding step; after a failed check the first final text as a draft
 // note, the retry step, the second call's rounds and the grounding step. A step equal to the
 // previous step collapses (notes in between too), notes are cut at 2000 characters, the list at 40 items, and ms is the answer's
 // wall time in whole milliseconds. A notice reply has no work.
@@ -531,11 +531,14 @@ function workList() {
       const t = String(text ?? '').trim();
       if (t) items.push({ k: 'note', text: t.slice(0, WORK_NOTE_CHARS), ...(draft ? { draft: true } : {}) });
     },
-    // Each tool round of an engine result: its interim note, then its tool steps.
+    // Each tool round of an engine result: its notes and tool steps in content order (parts), so
+    // the stored order equals the live order.
     rounds(res) {
       for (const r of (res && Array.isArray(res.toolRounds) ? res.toolRounds : [])) {
-        list.note(r.text);
-        for (const name of Array.isArray(r.tools) ? r.tools : []) list.step(progressLabel(String(name || '')));
+        for (const p of Array.isArray(r.parts) ? r.parts : []) {
+          if (p && typeof p.text === 'string') list.note(p.text);
+          else if (p && p.tool !== undefined) list.step(progressLabel(String(p.tool || '')));
+        }
       }
     },
   };

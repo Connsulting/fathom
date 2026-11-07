@@ -126,15 +126,20 @@ function matches(value, item) {
 }
 
 // A spelled count that names a figure (money, percent, time, or a counted record) is always checked.
-const unitAfter = /^\s*(?:%|(?:dollars?|cents?|percent|seconds?|minutes?|hours?|days?|weeks?|months?|quarters?|years?|decades?|accounts?|transactions?|payments?|holdings?|positions?|dependents?|child|children|kids?)\b)/i;
+const unitAfter = /^\s*(?:%|(?:\p{L}+\s+)?(?:dollars?|cents?|percent|seconds?|minutes?|hours?|days?|weeks?|months?|quarters?|years?|decades?|accounts?|transactions?|payments?|holdings?|positions?|dependents?|child|children|kids?)\b)/iu;
 const listItem = /^ {0,3}(?:[-*•]|\d+[.)])(?:\s|$)/;
-const determiner = /\b(?:a|an|the|this|that|these|those|each|every|any|which|another|no|some|whichever)(?:\s+\p{L}+){0,2}\s+$/iu;
+const verbs = 'is|are|was|were|be|am|equals|becomes|remains|means|has|have|had|gets|got';
+const determiner = new RegExp(`\\b(?:a|an|the|this|that|these|those|each|every|any|which|another|no|some|whichever)\\s+(?:(?!(?:${verbs})\\b)\\p{L}+\\s+)?$`, 'iu');
 
-// Top-level items in the list block right after the paragraph holding `from`; 0 when no list follows.
+// Top-level items in the list block right after the paragraph holding `from` (the end of a count
+// phrase); 0 when no list follows, the phrase is not in the paragraph's last sentence, or the
+// paragraph does not end with a colon.
 function listLength(text, from) {
-  const lines = text.slice(from).split('\n').slice(1);
-  let index = 0;
+  const lines = text.slice(from).split('\n');
+  let index = 1;
   while (index < lines.length && lines[index].trim() && !listItem.test(lines[index])) index++;
+  const tail = lines.slice(0, index).join('\n').trimEnd();
+  if (!tail.endsWith(':') || /[.!?]\s/.test(tail)) return 0;
   let count = 0;
   let gap = false;
   for (const line of lines.slice(index)) {
@@ -156,7 +161,7 @@ function isStructural(text, phrase) {
     const lineStart = text.lastIndexOf('\n', phrase.index - 1) + 1;
     if (determiner.test(text.slice(lineStart, phrase.index)) || /^\s+(?:of|more|another)\b/i.test(rest)) return true;
   }
-  return phrase.value > 0 && !/hundred|thousand|million|billion/.test(word) && phrase.value === listLength(text, phrase.index);
+  return phrase.value > 0 && !/hundred|thousand|million|billion/.test(word) && phrase.value === listLength(text, phrase.index + phrase.text.length);
 }
 
 export function checkGrounding(prose, { toolResults = [], data = [], figures = {} } = {}) {

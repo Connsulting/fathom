@@ -138,9 +138,30 @@ function explicitCredential(credential) {
 // answer: the returned `text` is the final round's text, and `interim` lists the trimmed non-empty
 // text of each tool round in order. When the final round has no text, `text` falls back to every
 // earlier round's text joined and `interim` is empty. `toolRounds` lists each tool round as
-// { text, tools } (its interim text, '' when none or after the fallback, and its tool names) for
-// the answerer's work list. Every other purpose returns every round's text joined.
+// { text, tools, parts } for the answerer's work list: its interim text ('' when none or after the
+// fallback), its tool names, and `parts`, its text and tools in content order as { text } and
+// { tool } entries (text blocks trimmed, empty ones and, after the fallback, all text dropped; tool
+// names without the SDK prefix). Content with no tool_use block gives the text first, then the
+// tools. Every other purpose returns every round's text joined.
 export const FAKE_CHUNK_WORDS = 3;
+
+const TOOL_PREFIX = 'mcp__fathom__';
+const toolName = name => { const s = String(name ?? ''); return s.startsWith(TOOL_PREFIX) ? s.slice(TOOL_PREFIX.length) : s; };
+const hasToolUse = content => Array.isArray(content) && content.some(block => block && block.type === 'tool_use');
+
+// One tool round's parts in content order (see toolRounds above).
+function roundParts(round) {
+  if (hasToolUse(round.content)) {
+    const parts = [];
+    for (const block of round.content) {
+      if (block && block.type === 'text' && typeof block.text === 'string' && block.text.trim()) parts.push({ text: block.text.trim() });
+      else if (block && block.type === 'tool_use') parts.push({ tool: toolName(block.name) });
+    }
+    return parts;
+  }
+  const text = typeof round.text === 'string' ? round.text.trim() : '';
+  return [...(text ? [{ text }] : []), ...round.toolResults.map(r => ({ tool: r.name }))];
+}
 
 export function fakeChunks(text) {
   const parts = String(text ?? '').split(/(?<=\s)(?=\S)/);
@@ -225,12 +246,20 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
               ? script.content.filter(block => block && block.type === 'text' && typeof block.text === 'string').map(block => block.text)
               : null;
             const text = blockTexts && blockTexts.length ? blockTexts.join('') : (script.text ?? '');
-            // A live model writes before it calls tools: the round's text streams first.
-            if (emit && text) {
-              for (const chunk of fakeChunks(text)) { await pause(streamDelayMs); emit({ type: 'text', text: chunk }); }
-            }
+            // Content with tool_use blocks streams in block order (text chunks, then the tool event,
+            // then the next text); otherwise a live model writes before it calls tools, so the
+            // round's text streams first, then its tool events.
             if (emit) {
-              for (const item of script.toolCalls ?? []) { emit({ type: 'tool', name: item.name }); await pause(streamDelayMs); }
+              const streamText = async s => { for (const chunk of fakeChunks(s)) { await pause(streamDelayMs); emit({ type: 'text', text: chunk }); } };
+              if (hasToolUse(script.content)) {
+                for (const block of script.content) {
+                  if (block && block.type === 'text' && typeof block.text === 'string' && block.text) await streamText(block.text);
+                  else if (block && block.type === 'tool_use') { emit({ type: 'tool', name: toolName(block.name) }); await pause(streamDelayMs); }
+                }
+              } else {
+                if (text) await streamText(text);
+                for (const item of script.toolCalls ?? []) { emit({ type: 'tool', name: item.name }); await pause(streamDelayMs); }
+              }
             }
             await Promise.all((script.toolCalls ?? []).map(item => registry.invoke(item.name, item.args ?? {})));
             round = { text, costUsd: Object.hasOwn(script, 'costUsd') ? script.costUsd : 0.001, model: 'fake', tokens: script.tokens ?? {},
@@ -274,7 +303,8 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
       answer.endRound(round.text, { interim: chatToolRound });
       endStream(chatToolRound);
       if (chatToolRound) {
-        toolRounds.push({ text: typeof round.text === 'string' ? round.text.trim() : '', tools: round.toolResults.map(r => r.name) });
+        toolRounds.push({ text: typeof round.text === 'string' ? round.text.trim() : '', tools: round.toolResults.map(r => r.name),
+          parts: roundParts(round) });
       }
       const toolBoundary = round.status === 'error_max_turns' && round.toolResults.length > 0;
       if (round.api_error_status != null || (round.is_error && !toolBoundary && round.status !== 'error_max_budget_usd')) {
@@ -290,7 +320,7 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
         const text = fallback ? answer.joined : answer.text;
         const chatParts = purpose === 'chat'
           ? { interim: fallback ? [] : toolRounds.map(r => r.text).filter(Boolean),
-            toolRounds: fallback ? toolRounds.map(r => ({ ...r, text: '' })) : toolRounds }
+            toolRounds: fallback ? toolRounds.map(r => ({ ...r, text: '', parts: r.parts.filter(p => !('text' in p)) })) : toolRounds }
           : {};
         return { text, content: round.content, costUsd: Number(cost.toFixed(12)), model: round.model,
           toolResults: allResults, rounds, ...chatParts, grounding: checkGrounding(text, { ...grounding, toolResults: allResults }) };
