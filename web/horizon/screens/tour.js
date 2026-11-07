@@ -169,8 +169,13 @@ function sigOf(el) {
   if (el.hasAttribute('data-tour-start')) return '[data-tour-start]';
   if (a('data-keys') != null) return attr('data-keys');
   if (a('data-go') != null) return attr('data-go') + (a('data-id') != null ? attr('data-id') : '');
+  // A text field (the Ask composer, a rename box) keeps its draft key across redraws.
+  if (a('data-draft') != null) return attr('data-draft');
   if (el.id) return `#${CSS.escape(el.id)}`;
   const tag = el.tagName.toLowerCase();
+  if ((tag === 'textarea' || tag === 'input' || tag === 'select') && a('name') != null) {
+    return `${tag}${attr('name')}${a('aria-label') != null ? attr('aria-label') : ''}`;
+  }
   if ((tag === 'button' || tag === 'a') && el.classList.length) {
     return `${tag}.${CSS.escape(el.classList[0])}${a('aria-label') != null ? attr('aria-label') : ''}`;
   }

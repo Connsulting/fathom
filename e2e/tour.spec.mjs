@@ -451,6 +451,24 @@ test.describe('tour on the private demo, desktop', () => {
     await expect(anchorOn(page)).toHaveCount(0);
   });
 
+  test('@tour-ac2 desktop: Escape returns focus to the Ask composer it was started from', async ({ page }) => {
+    await gotoRoute(page, 'ask');
+    const composer = page.locator('form.h-askx-compose textarea[name="q"]');
+    await expect(composer).toBeVisible({ timeout: STEP_WAIT });
+    await composer.focus();
+    await page.keyboard.press('Control+K');
+    await expect(page.locator('input.h-qs-in')).toBeFocused({ timeout: STEP_WAIT });
+    await page.keyboard.type('take the tour');
+    await expect(page.locator('#h-qs-list li.h-qs-o[data-qs-key="act:tour"]')).toBeVisible();
+    await page.keyboard.press('Enter');
+    const first = await stopAfter(page, null);
+    expect(first).toMatchObject({ id: TOUR_STOPS[0].id, k: 1 });
+    await page.keyboard.press('Escape');
+    await expect(dialog(page)).toHaveCount(0, { timeout: STEP_WAIT });
+    await expect.poll(() => hashRoute(page), { timeout: STEP_WAIT }).toBe('ask');
+    await expect(page.locator('form.h-askx-compose textarea[name="q"]')).toBeFocused({ timeout: STEP_WAIT });
+  });
+
   test('@tour-ac2 desktop: Escape returns focus to the header search button redrawn on another page', async ({ page }) => {
     await gotoRoute(page, 'money');
     await expect(page.locator('.h-search-btn')).toBeVisible({ timeout: STEP_WAIT });
