@@ -157,7 +157,7 @@ function confirmAction(ctx, fn) {
     return { ...now, final: finalReason(ctx.db, now) };
   };
   if (Array.isArray(out.items)) return { scenario: scenarioOf(ctx), items: out.items.map(withFinal) };
-  return { scenario: scenarioOf(ctx), item: withFinal(out.item) };
+  return { scenario: scenarioOf(ctx), item: out.item ? withFinal(out.item) : null };
 }
 
 // Auto-resolution after the confirm transaction committed: a failure logs a code and never fails
@@ -183,7 +183,9 @@ export function schedulePlan(ctx) {
   }
 }
 
-function afterAnswer(ctx, fn) {
+// A confirm action with its follow-ups: auto-resolution, the plan schedule and, for an account
+// question, a freshness run. Shared by the account dialog's owner, kind and merge edits.
+export function afterAnswer(ctx, fn) {
   try {
     const out = confirmAction(ctx, fn);
     schedulePlan(ctx);
