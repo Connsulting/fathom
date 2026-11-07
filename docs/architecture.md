@@ -2737,7 +2737,7 @@ then smoke against a server. `scripts/docker-smoke.sh` builds the image and smok
 
 ## Ask actions
 
-Ask threads, including recommendation conversations, can act on explicit requests. `ASK_ACTION_RULES`
+Ask threads, including recommendation conversations, can act on explicit requests. the generated registry instructions
 is a separate prompt section. Ambiguous requests need clarification. Advisor sends and email remain
 product buttons; there are no outbound action tools.
 

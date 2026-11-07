@@ -87,7 +87,7 @@ test('consumeSdkMessages keeps every completed block frame', async () => {
   const split = await replay([
     ...sdkResponse('msg_split', [
       { type: 'text', text: head },
-      { type: 'tool_use', id: 'toolu_synthetic', name: 'mcp__fathom__get_figures', input: {} },
+      { type: 'tool_use', id: 'toolu_synthetic', name: 'mcp__fathom__household', input: {} },
       { type: 'text', text: tail },
     ]),
     resultFrame(tail),

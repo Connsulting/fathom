@@ -266,7 +266,7 @@ test('buildChatPrompt keeps the static system identical across summaries and que
   }
   assert.ok(one.systemDynamic.includes('<household_summary>'));
   assert.ok(one.system.includes(instructions));
-  assert.ok(one.systemDynamic.includes('</household.summary>'));
+  assert.ok(one.systemDynamic.includes('</household_summary>'));
   assert.ok(one.systemDynamic.includes('SUMMARY-MARKER-ONE'));
   assert.ok(one.systemDynamic.includes('7351'));
   assert.ok(!one.systemDynamic.includes('<conversation_context>'), 'no context block without context');

@@ -278,7 +278,7 @@ test('one invented amount among two sourced ones, or two among four, does not re
 test('the static system prompt carries PRODUCT_RULES, then the answer style and the spending guide', () => {
   const { system } = buildChatPrompt({ packContextText: '{}', summary: { needsYouCount: 3 }, question: 'Synthetic question?' });
   assert.equal(typeof ANSWER_STYLE, 'string');
-  assert.equal(typeof 'string');
+  assert.equal(typeof instructions, 'string');
   assert.ok(system.includes(PRODUCT_RULES), 'the product rules stay');
   assert.ok(system.includes(ANSWER_STYLE), 'the answer style is in the system prompt');
   assert.ok(system.includes(instructions), 'registry instructions are in the system prompt');
@@ -294,9 +294,8 @@ test('the static system prompt carries PRODUCT_RULES, then the answer style and 
   assert.match(ANSWER_STYLE, /offer/i);
   assert.match(ANSWER_STYLE, /next (?:useful )?step/i);
 
-  assert.match(/card/i);
-  assert.match(/categor/i);
-  assert.match(/business.pnl/);
+  assert.match(instructions, /business.pnl/);
+  assert.match(instructions, /transactions.search/);
 });
 
 /* ---------- (f) tool descriptions ---------- */
