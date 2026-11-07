@@ -515,6 +515,18 @@ test('AC3: a merged survivor is still an imported account, so merging it with an
   assert.deepEqual(snapshot(s.db), before);
 }));
 
+test('AC1: a goal tracking a connected account does not show a mask the bridge is unsure of', () => withStore(async (s, m) => {
+  const own = await connectedAccount(s, m, { sfKey: 'synthetic-goal', mask: '1234', name: 'Checking' });
+  putGoal(s.db, own);
+  const snap = (patch) => s.db.prepare('UPDATE simplefin_snapshots SET snapshot = ? WHERE sf_key = ?')
+    .run(JSON.stringify({ inst: INST, name: 'Checking', mask: '1234', ...patch }), 'synthetic-goal');
+  const trackLabel = async () => (await m.A.accountRename(ctx(s, own, { displayName: null }))).scenario.goals.find((g) => g.id === 'synthetic-goal').trackLabel;
+  snap({ maskSure: false });
+  assert.doesNotMatch(await trackLabel(), /ending/);
+  snap({ maskSure: true });
+  assert.match(await trackLabel(), /ending 1234$/);
+}));
+
 test('AC1: the last 4 shown is the stored one, not a later snapshot mask the account never took', () => withStore(async (s, m) => {
   const own = await connectedAccount(s, m, { sfKey: 'synthetic-drift', mask: '1234', name: 'Checking' });
   s.db.prepare('UPDATE simplefin_snapshots SET snapshot = ? WHERE sf_key = ?')
