@@ -8,6 +8,7 @@
 import { emailStatus } from '../email/transport.mjs';
 import { sendEmail, listSends } from '../email/send.mjs';
 import { composeBrief } from '../email/brief.mjs';
+import { simpleDarkEmail } from '../email/palette.mjs';
 import { SchedulerError, ownerTimezone } from '../jobs/scheduler.mjs';
 import { PLAN_JOB_ID } from '../jobs/planner.mjs';
 import { getSetting } from '../store/db.mjs';
@@ -19,7 +20,7 @@ const RUNS_LIMIT = 20;
 
 const TEST_SUBJECT = 'Fathom test email';
 const TEST_TEXT = 'This is a test email from Fathom. Email delivery is working.';
-const TEST_HTML = '<p style="font-family:sans-serif;font-size:14px">This is a test email from Fathom. Email delivery is working.</p>';
+const TEST_HTML = simpleDarkEmail({ title: TEST_SUBJECT, paragraphs: [TEST_TEXT] });
 
 const SCHEDULER_STATUS = { unknown_job: 404, running: 409, locked: 409 };
 const SCHEDULER_MESSAGE = {

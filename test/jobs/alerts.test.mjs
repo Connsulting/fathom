@@ -225,7 +225,7 @@ test('hostile stored titles are escaped in the HTML and never token-resolved', a
       assert.ok(!part.includes('[?secret'), 'not token-resolved');
     }
     assert.ok(!/[\r\n]/.test(mail.subject));
-    assert.ok(!/<style[\s>]/i.test(mail.html) && !/<script[\s>]/i.test(mail.html), 'inline styles only, no script');
+    assert.ok((mail.html.match(/<style[\s>]/gi) || []).length === 1 && !/<script[\s>]/i.test(mail.html), 'one head style for the color scheme, inline styles elsewhere, no script');
   } finally { t.done(); }
 });
 
