@@ -19,7 +19,9 @@ function actualValue(v, dependencies, sources, label = 'Tracked stored value') {
     locator: { sources } };
 }
 
-function accountHistory(db, id, clock) {
+// One account's stored values up to the clock, oldest first: [{date, value}], value an actual figure
+// (balances, or positions summed per as_of date) or null when a snapshot is incomplete.
+export function accountHistory(db, id, clock) {
   if (!db.prepare('SELECT 1 FROM accounts WHERE id = ?').get(id)) return [];
   const snapshots = new Map();
   const positions = db.prepare('SELECT id, as_of, value, quantity, price FROM positions WHERE account_id = ? AND as_of <= ? ORDER BY as_of, id').all(id, clock);

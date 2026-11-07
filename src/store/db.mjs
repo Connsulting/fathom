@@ -15,9 +15,11 @@ const REBUILDS_TABLE = /^-- REBUILDS_TABLE\b/m;
 
 export function openDb(path) {
   const db = new DatabaseSync(path);
+  // The busy timeout comes first, so switching to WAL waits out another process's lock (a server
+  // still checkpointing as it closes) instead of failing at once.
+  db.exec('PRAGMA busy_timeout = 5000');
   db.exec('PRAGMA journal_mode = WAL');
   db.exec('PRAGMA foreign_keys = ON');
-  db.exec('PRAGMA busy_timeout = 5000');
   return db;
 }
 

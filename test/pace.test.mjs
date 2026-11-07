@@ -173,3 +173,51 @@ test('GET pace, scenario and MCP share the deterministic read-only result, inclu
   assert.equal(create.status, 200);
   assert.equal(create.json.goal.pace.startValue, 18000);
 });
+
+// Suggested goal targets, Revision 1 item 8: a plan that starts at or above its target is a flat
+// reached path, so an accepted already-covered goal reads 'Reached' instead of an unknown pace.
+test('a plan that starts at or above its target is reached while the fresh actual stays there', async t => {
+  const { db } = await store(t);
+  account(db, 'a', clock, 40000);
+  putGoal(db, { pace: { startDate: '2032-01-01', startValue: 40000 } });
+  const r = buildPace(db, { clock }).goals[0];
+  assert.equal(r.status, 'ahead');
+  assert.equal(r.timeGap, 'Reached');
+  assert.equal(r.reason, null);
+  assert.equal(r.expected.v, 36600);
+  assert.equal(r.expected.kind, 'p');
+  assert.equal(r.gap.v, 3400);
+  assert.equal(r.gapDays, null);
+});
+
+test('a reached plan with stale data stays unknown', async t => {
+  const { db } = await store(t);
+  account(db, 'a', '2032-01-01', 40000);
+  putGoal(db, { pace: { startDate: '2032-01-01', startValue: 40000 } });
+  const r = buildPace(db, { clock }).goals[0];
+  assert.equal(r.status, 'unknown');
+  assert.equal(r.reason, 'stale_data');
+  assert.equal(r.timeGap, null);
+});
+
+test('a reached plan whose actual has fallen below the target is behind', async t => {
+  const { db } = await store(t);
+  account(db, 'a', clock, 30000);
+  putGoal(db, { pace: { startDate: '2032-01-01', startValue: 40000 } });
+  const r = buildPace(db, { clock }).goals[0];
+  assert.equal(r.status, 'behind');
+  assert.equal(r.timeGap, null);
+  assert.equal(r.expected.v, 36600);
+});
+
+test('a reached plan has a monthly series for the Pace board', async t => {
+  const { db } = await store(t);
+  account(db, 'a', clock, 36600);
+  putGoal(db, { pace: { startDate: '2032-01-01', startValue: 36600 } });
+  const s = buildPace(db, { clock }).series.goals.goal;
+  assert.equal(s.reason, null);
+  assert.ok(Array.isArray(s.series), 'series is not null');
+  assert.equal(s.series.length, 12);
+  assert.ok(s.series.every(m => m.plan.v === 36600), 'the plan stays at the target');
+  assert.equal(s.series[5].actual.v, 36600);
+});

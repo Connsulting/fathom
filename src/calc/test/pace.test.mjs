@@ -43,7 +43,10 @@ test('targets, missing baselines, flat paths and overdue goals have explicit out
   assert.equal(goalPace({ goal: { ...goal, targetDate: null }, actual: actual(0), clock }).status, 'no target');
   assert.equal(goalPace({ goal: { ...goal, pace: null }, actual: actual(0), clock }).reason, 'missing_plan_start');
   const flat = { ...goal, pace: { ...goal.pace, startValue: goal.target } };
-  assert.equal(goalPace({ goal: flat, actual: actual(18000), clock }).reason, 'non_increasing_path');
+  // A plan that starts at its target is a reached path: below the target now is behind, not unknown.
+  const flatOut = goalPace({ goal: flat, actual: actual(18000), clock });
+  assert.equal(flatOut.status, 'behind');
+  assert.equal(flatOut.reason, null);
   const overdue = goalPace({ goal, actual: actual(33000, '2033-02-01'), clock: '2033-02-01' });
   assert.equal(overdue.status, 'behind');
   assert.equal(overdue.expected.v, 36600);

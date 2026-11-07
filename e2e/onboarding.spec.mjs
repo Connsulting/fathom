@@ -25,7 +25,8 @@ import { ask, FACT_CHECK_OPTIONS } from '../src/ingest/confirm.mjs';
 const NOTE = 'We file jointly in Virginia, I run an S corporation and my spouse freelances. Two kids.';
 
 // The main demo server's store (playwright.config.mjs runs it on .e2e-data at the repo root).
-const DEMO_STORE = fileURLToPath(new URL('../.e2e-data/fathom.sqlite', import.meta.url));
+// The main demo server's store: the E2E_DATA directory playwright.config.mjs gives it.
+const DEMO_STORE = fileURLToPath(new URL(`../${process.env.E2E_DATA || '.e2e-data'}/fathom.sqlite`, import.meta.url));
 
 // The Goals step copy and its starter cards (pinned by the design).
 const GOALS_H1 = 'What is the money for?';
@@ -298,9 +299,16 @@ test.describe('demo build', () => {
       expect(g).toMatchObject({ origin: 'owner', archived: false, note: e.note, horizon: e.horizon, target: null, targetDate: null });
     }
 
-    // Home redraws with them (goals with no target sit with the quiet goals).
-    const homeGoal = (title) => page.locator('section.h-home').locator('[data-goal-card], [data-quiet-goal]').filter({ hasText: title });
-    for (const e of expected) await expect(homeGoal(e.title)).toHaveCount(1);
+    // Home redraws with them: each goal with no target is its own card, with no quiet row.
+    // Match on the card title: a question's why text can name another goal's words.
+    const homeGoal = (title) => page.locator('section.h-home article.h-gcard[data-goal-card]')
+      .filter({ has: page.locator('.h-gcard-t', { hasText: new RegExp(`^${title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`) }) });
+    for (const e of expected) {
+      const g = sc.goals.find((x) => x.title === e.title);
+      await expect(homeGoal(e.title)).toHaveCount(1);
+      await expect(homeGoal(e.title)).toHaveAttribute('data-goal-card', g.id);
+    }
+    await expect(page.locator('section.h-home details.h-quiet, section.h-home [data-quiet-goal]')).toHaveCount(0);
 
     // And they are on Goals.
     await gotoRoute(page, 'goals');
