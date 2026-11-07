@@ -392,6 +392,9 @@ test('a spelled count outside a proper name is still checked', () => {
     ['Two Roth accounts are open.', 'Two'],
     ['Make one payment.', 'one'],
     ['Two payments were late.', 'Two'],
+    // Review r1 F1: an account type after the number word is a count, not a name.
+    ['One Roth account remains.', 'One'],
+    ['We hold One IRA account.', 'One'],
   ]) {
     const result = checkGrounding(text, { toolResults: [], data: [] });
     assert.equal(result.ok, false, text);
