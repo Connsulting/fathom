@@ -261,7 +261,7 @@ test('pausing between engine rounds stops the next round', T, async () => {
   let allowed = true;
   const ledger = createMemoryLedger();
   const probe = {
-    name: 'synthetic_probe', description: 'Synthetic probe tool.', scope: 'read',
+    name: 'synthetic_probe', description: 'Synthetic probe tool.', kind: 'read', operations: [{ name: 'read', scope: 'read' }],
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     handler: () => { allowed = false; return { ok: true }; },
   };

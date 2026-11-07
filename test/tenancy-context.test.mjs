@@ -13,9 +13,9 @@
 //
 // Assumptions (the plan is silent):
 // 1. No existing fake Ask script calls the pack entry tool (src/api/fake-answers.mjs scripts
-//    household_summary, get_figures, get_recommendation and the proposal tools), so the Ask tool
+//    household.summary, household.figures, recommendations.detail and the proposal tools), so the Ask tool
 //    context is proven at the engine boundary: each household's runtime engine runs a scripted fake
-//    round calling get_pack_entry with the tool context the answerer builds (db, now, the household
+//    round calling knowledge.entry with the tool context the answerer builds (db, now, the household
 //    root), and through the packs entry route and MCP tools/call (cases 2 and 5).
 // 2. B resumes only email and engine outbound work, so no background job writes to B's store
 //    while case 2 compares B's logical digest before and after A's foreign-id requests.
@@ -252,9 +252,9 @@ test('a scripted tool round reads the private pack entry of its own household on
     const otherCtx = h.ctx(hh === h.A ? h.B.id : h.A.id);
     const [mine, theirs] = [spend(ctx.db), spend(otherCtx.db)];
     const res = await ctx.engine.call({
-      purpose: 'chat', messages: [{ role: 'user', content: 'Synthetic question' }], tools: tools.filter(t => t.scope === 'read'),
+      purpose: 'chat', messages: [{ role: 'user', content: 'Synthetic question' }], tools: tools.filter(t => t.kind === 'read'),
       toolContext: { db: ctx.db, now: NOW, dataDir: ctx.root },
-      fake: [{ toolCalls: [{ name: 'get_pack_entry', args: { packId: 'your-plans', file: PLAN_ENTRY } }] }, { text: 'Synthetic answer.' }],
+      fake: [{ toolCalls: [{ name: 'knowledge', args: { operation: 'entry', packId: 'your-plans', file: PLAN_ENTRY } }] }, { text: 'Synthetic answer.' }],
     });
     const results = JSON.stringify(res.toolResults);
     assert.equal(res.toolResults[0].isError ?? false, false, results.slice(0, 300));
@@ -298,16 +298,16 @@ test('an MCP key answers for its own household only, whatever session cookie rid
     const list = await mcp(h.baseUrl, key, 'tools/list', {}, extra);
     assert.equal(list.status, 200, list.text.slice(0, 200));
     const names = list.json.result.tools.map(t => t.name);
-    for (const n of ['household_summary', 'list_accounts', 'get_pack_entry']) assert.ok(names.includes(n), n);
-    const accounts = await mcp(h.baseUrl, key, 'tools/call', { name: 'list_accounts', arguments: {} }, extra);
+    for (const n of ['household', 'accounts', 'knowledge']) assert.ok(names.includes(n), n);
+    const accounts = await mcp(h.baseUrl, key, 'tools/call', { name: 'accounts', arguments: { operation: 'list' } }, extra);
     assert.equal(accounts.status, 200);
     assert.ok(toolText(accounts).includes(own), 'own accounts');
     assert.ok(!toolText(accounts).includes(other), 'no foreign accounts');
-    const entry = await mcp(h.baseUrl, key, 'tools/call', { name: 'get_pack_entry', arguments: { packId: 'your-plans', file: PLAN_ENTRY } }, extra);
+    const entry = await mcp(h.baseUrl, key, 'tools/call', { name: 'knowledge', arguments: { operation: 'entry', packId: 'your-plans', file: PLAN_ENTRY } }, extra);
     assert.equal(entry.status, 200);
     assert.ok(toolText(entry).includes(own), 'own private entry');
     assert.ok(!toolText(entry).includes(other), 'never the foreign entry');
-    const summary = await mcp(h.baseUrl, key, 'tools/call', { name: 'household_summary', arguments: {} }, extra);
+    const summary = await mcp(h.baseUrl, key, 'tools/call', { name: 'household', arguments: { operation: 'summary' } }, extra);
     assert.equal(summary.status, 200);
     assert.ok(!toolText(summary).includes(other));
   }

@@ -71,7 +71,7 @@ test('@mobile progress shows before text, text streams, and numbers flip from ch
 
   const log = await askLog(page);
   expect(log.order).toEqual(['steps', 'text']);
-  expect(log.steps[0]).toBe('Reading your household summary');
+  expect(log.steps[0]).toBe('Looking at your household');
   // Labels are fixed plain text: no tool names, arguments or values.
   for (const s of log.steps) expect(s).toMatch(/^[A-Z][a-z ]+$/);
   // The text grew over several paints, and its numbers were only ever in the checking style.

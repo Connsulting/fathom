@@ -1,7 +1,7 @@
 // Goal model v2 through the real paths: the goals HTTP handlers (POST /api/goals and
 // POST /api/goals/:id, as test/goals.test.mjs drives them), the scenario they answer with, Home's
-// view model, and the create_goal, edit_goal, undo_goal_action, list_goals and get_pace tools.
-// Store-level contribution coverage (plan review r1 items 2 and 3) is checked through get_pace.
+// view model, and the update_goal.create, update_goal.edit, undo.undo, goals.list and goals.pace tools.
+// Store-level contribution coverage (plan review r1 items 2 and 3) is checked through goals.pace.
 // Fixtures are synthetic: invented accounts, balances, transactions and household names.
 
 import test from 'node:test';
@@ -254,27 +254,27 @@ test('status done and open mark a goal done and reopen it', async t => {
 /* ---------- tools ---------- */
 
 const toolCtx = (db, ownerText) => ({ db, now: NOW, actorId: 'person-a', ownerText, conversationKey: KEY, turnId: 'turn-a' });
-const undo = (ctx, id) => callTool('undo_goal_action', { id }, { ...ctx, channel: 'mcp' });
+const undo = (ctx, id) => callTool('undo', { operation: 'undo',  id }, { ...ctx, channel: 'mcp' });
 
 test('the goal tool schemas list every new field', () => {
   const fields = ['kind', 'owner', 'priority', 'status', 'targetLow', 'targetHigh', 'floor', 'taxYear', 'accounts', 'split', 'entered'];
-  for (const name of ['create_goal', 'edit_goal']) {
+  for (const name of ['update_goal']) {
     const props = getTool(name).inputSchema.properties;
     for (const f of [...fields, 'title', 'target', 'targetDate', 'track']) assert.ok(Object.hasOwn(props, f), `${name} takes ${f}`);
     assert.doesNotMatch(getTool(name).description, /\u2014|\u2013/, `${name} description has no dashes`);
   }
-  assert.deepEqual(getTool('create_goal').inputSchema.required, ['title']);
-  assert.deepEqual(getTool('edit_goal').inputSchema.required, ['id']);
-  assert.match(getTool('list_goals').description, /priority/);
+  assert.deepEqual(getTool('update_goal').operations.find(o => o.name === 'create').required, ['title']);
+  assert.deepEqual(getTool('update_goal').operations.find(o => o.name === 'edit').required, ['id']);
+  assert.match(getTool('goals').description, /priority/);
 });
 
-test('create_goal and edit_goal take the new fields and need owner evidence for every amount and date', async t => {
+test('update_goal.create and update_goal.edit take the new fields and need owner evidence for every amount and date', async t => {
   const s = await store(t);
   seedAccounts(s.db);
   const said = toolCtx(s.db, 'Keep a floor of $3,000 in business checking, and it is high priority');
-  await assert.rejects(callTool('create_goal', { ...FLOOR, floor: 3500 }, said), /stated|evidence/);
-  await assert.rejects(callTool('create_goal', { ...FLOOR, floor: 3000, kind: 'florr' }, said));
-  const floor = await callTool('create_goal', { ...FLOOR, floor: 3000 }, said);
+  await assert.rejects(callTool('update_goal', { operation: 'create',  ...FLOOR, floor: 3500 }, said), /stated|evidence/);
+  await assert.rejects(callTool('update_goal', { operation: 'create',  ...FLOOR, floor: 3000, kind: 'florr' }, said));
+  const floor = await callTool('update_goal', { operation: 'create',  ...FLOOR, floor: 3000 }, said);
   assert.equal(floor.goal.kind, 'floor');
   assert.equal(floor.goal.floor, 3000);
   assert.equal(floor.goal.status, 'open');
@@ -291,35 +291,35 @@ test('create_goal and edit_goal take the new fields and need owner evidence for 
     { entered: { asOf: '2026-11-01', people: [{ person: 'owner', amount: 3200 }, { person: 'spouse', amount: 1500 }] } },
     { entered: { asOf: '2026-10-15', people: ENTERED.people } },
     { taxYear: 2025, targetDate: '2026-04-15' },
-  ]) await assert.rejects(callTool('create_goal', { ...CONTRIB, ...wrong }, c), /stated|evidence/, JSON.stringify(wrong));
-  const contrib = await callTool('create_goal', { ...CONTRIB }, c);
+  ]) await assert.rejects(callTool('update_goal', { operation: 'create',  ...CONTRIB, ...wrong }, c), /stated|evidence/, JSON.stringify(wrong));
+  const contrib = await callTool('update_goal', { operation: 'create',  ...CONTRIB }, c);
   assert.equal(contrib.goal.kind, 'contribution');
   assert.deepEqual(contrib.goal.split, SPLIT);
   assert.deepEqual(contrib.receipt.after.entered, ENTERED);
 
   // Status, owner and priority need no evidence; an unstated amount on edit is still refused.
   const plain = toolCtx(s.db, 'Mark the business floor done');
-  await assert.rejects(callTool('edit_goal', { id: floor.goal.id, floor: 2500 }, plain), /stated|evidence/);
-  const pri = await callTool('edit_goal', { id: floor.goal.id, priority: 'low', owner: 'spouse' }, plain);
+  await assert.rejects(callTool('update_goal', { operation: 'edit',  id: floor.goal.id, floor: 2500 }, plain), /stated|evidence/);
+  const pri = await callTool('update_goal', { operation: 'edit',  id: floor.goal.id, priority: 'low', owner: 'spouse' }, plain);
   assert.equal(pri.goal.priority, 'low');
-  const done = await callTool('edit_goal', { id: floor.goal.id, status: 'done' }, plain);
+  const done = await callTool('update_goal', { operation: 'edit',  id: floor.goal.id, status: 'done' }, plain);
   assert.equal(done.goal.status, 'done');
   assert.ok(done.receipt);
   assert.equal(done.receipt.after.status, 'done');
   assert.ok(rowOf(s.db, floor.goal.id).done_at);
   // A stored value is its own evidence.
-  const same = await callTool('edit_goal', { id: floor.goal.id, floor: 3000, title: 'Business floor kept' }, plain);
+  const same = await callTool('update_goal', { operation: 'edit',  id: floor.goal.id, floor: 3000, title: 'Business floor kept' }, plain);
   assert.equal(same.goal.title, 'Business floor kept');
-  await assert.rejects(callTool('edit_goal', { id: 'reserve', status: 'done' }, plain), /no such goal|demo|cannot/);
+  await assert.rejects(callTool('update_goal', { operation: 'edit',  id: 'reserve', status: 'done' }, plain), /no such goal|demo|cannot/);
 });
 
 test('undo of a create receipt after the goal is marked done is refused, and undo restores done_at', async t => {
   const s = await store(t);
   seedAccounts(s.db);
   const ctx = toolCtx(s.db, 'Add a goal for a family trip');
-  const created = await callTool('create_goal', { title: 'A family trip' }, ctx);
+  const created = await callTool('update_goal', { operation: 'create',  title: 'A family trip' }, ctx);
   const id = created.goal.id;
-  const done = await callTool('edit_goal', { id, status: 'done' }, ctx);
+  const done = await callTool('update_goal', { operation: 'edit',  id, status: 'done' }, ctx);
   await assert.rejects(undo(ctx, created.receipt.id), /changed since/);
   assert.ok(rowOf(s.db, id), 'the goal remains');
   assert.ok(rowOf(s.db, id).done_at, 'and stays done');
@@ -336,7 +336,7 @@ test('an old-shape receipt without done_at still refuses undo once the goal is d
   const s = await store(t);
   const ctx = toolCtx(s.db, 'Add two goals');
   const oldShape = async title => {
-    const r = await callTool('create_goal', { title }, ctx);
+    const r = await callTool('update_goal', { operation: 'create',  title }, ctx);
     // A receipt written before migration 026 has no done_at in its after-state.
     s.db.prepare("UPDATE action_receipts SET after_state = json_remove(after_state, '$.done_at') WHERE id = ?").run(r.receipt.id);
     assert.equal(Object.hasOwn(JSON.parse(s.db.prepare('SELECT after_state FROM action_receipts WHERE id = ?').get(r.receipt.id).after_state), 'done_at'), false);
@@ -356,7 +356,7 @@ test('an old-shape receipt without done_at still refuses undo once the goal is d
   assert.equal(rowOf(s.db, untouched.goal.id), undefined, 'an unchanged goal undoes from an old receipt');
 });
 
-test('list_goals carries kind, whose goal with its label, priority, status and kind amounts', async t => {
+test('goals.list carries kind, whose goal with its label, priority, status and kind amounts', async t => {
   const s = await store(t);
   seedAccounts(s.db);
   s.db.prepare("INSERT INTO content (key, value, src, updated_at) VALUES ('names', ?, NULL, ?)").run(JSON.stringify({ me: 'Person One', spouse: 'Person Two' }), NOW);
@@ -369,7 +369,7 @@ test('list_goals carries kind, whose goal with its label, priority, status and k
   const gone = goalCreate(s.ctx({ title: 'Archived goal' })).goal;
   goalArchive(s.ctx({}, { id: gone.id }));
 
-  const list = await callTool('list_goals', {}, { db: s.db, now: NOW });
+  const list = await callTool('goals', { operation: 'list', }, { db: s.db, now: NOW });
   const by = id => list.find(g => g.id === id);
   assert.equal(by(gone.id), undefined, 'an archived goal is not listed');
   assert.equal(by(done.id).status, 'done', 'a done goal is listed as done');
@@ -410,12 +410,12 @@ test('list_goals carries kind, whose goal with its label, priority, status and k
   for (const k of ['owner', 'ownerLabel', 'priority', 'range', 'floor', 'contribution']) assert.equal(Object.hasOwn(p, k), false, `unset ${k} is left out`);
 
   // The household summary shares the same goal list.
-  assert.deepEqual((await callTool('household_summary', {}, { db: s.db, now: NOW })).goals, list);
+  assert.deepEqual((await callTool('household', { operation: 'summary', }, { db: s.db, now: NOW })).goals, list);
 });
 
-test('list_goals serializes the demo kind goals for the model, the contribution entry complete', async t => {
+test('goals.list serializes the demo kind goals for the model, the contribution entry complete', async t => {
   const s = await store(t, { demo: true });
-  const list = await callTool('list_goals', {}, { db: s.db, now: NOW });
+  const list = await callTool('goals', { operation: 'list', }, { db: s.db, now: NOW });
   const by = id => list.find(g => g.id === id);
   for (const g of list) assert.ok(['open', 'done'].includes(g.status), `${g.id} status ${g.status} is canonical`);
   const reserve = by('reserve');
@@ -461,13 +461,13 @@ test('list_goals serializes the demo kind goals for the model, the contribution 
   });
 });
 
-/* ---------- pace through get_pace ---------- */
+/* ---------- pace through goals.pace ---------- */
 
-const pacePath = async db => callTool('get_pace', {}, { db, now: NOW });
+const pacePath = async db => callTool('goals', { operation: 'pace', }, { db, now: NOW });
 const txIds = f => (f?.locator?.sources || []).filter(x => x.rows?.table === 'transactions').flatMap(x => x.rows.ids);
 const acctIds = f => (f?.locator?.sources || []).filter(x => x.rows?.table === 'accounts').flatMap(x => x.rows.ids);
 
-test('get_pace carries kind, owner, priority and each kind\'s result', async t => {
+test('goals.pace carries kind, owner, priority and each kind\'s result', async t => {
   const s = await store(t);
   seedAccounts(s.db);
   const q1 = txn(s.db, 'r1', '2026-02-10', 1000);
