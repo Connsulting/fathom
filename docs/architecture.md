@@ -755,7 +755,7 @@ known path with the wrong method is 405; signed out, both are 401. Every action 
 | `GET /healthz` | | `{ok: true, schema: <latest migration id>}` |
 | `GET /api/scenario` | | the scenario with `live` |
 | `GET /api/identity` | | `{identity: {id, email, name, login, householdId, role} or null}`. The signed-in user (`name` and `login` are the email). Always `null` on a demo store. |
-| `GET /signin` | | Public page: `web/auth/index.html` (sign in with a passkey, email recovery link). Loads only `/auth/auth.js`, `/auth/auth.css` and `/favicon.svg`; never the scenario. |
+| `GET /signin` | | Public page: `web/auth/index.html` (sign in with a passkey, email recovery link). Loads only `/auth/auth.js`, `/auth/return-path.js`, `/auth/auth.css` and `/favicon.svg`; never the scenario. |
 | `GET /enroll` | | Public page: the same file. Reads the token from the `#` fragment of an emailed link, removes it from history at once, and creates a passkey. |
 | `GET /account` | | Signed-in page: the same file. Passkeys (add, revoke), emailing an add-a-device link, and sign out. |
 | `GET /admin/users` | | Admin page: the same file. People, roles, invitations, removal and passkey revocation. A member gets a 403 page. |
@@ -858,7 +858,7 @@ only: any `.` or `..` segment (raw or percent-encoded), dotfile, backslash or sy
 404. Unknown extensionless paths fall back to `web/index.html`, except the account pages
 (`/signin`, `/enroll`, `/account`, `/admin/users`), which serve `web/auth/index.html`; the main
 app shell is never served as a sign-in page. Signed out on a real store, the only static files
-served are `/auth/auth.js`, `/auth/auth.css` and `/favicon.svg`. Every response sets
+served are `/auth/auth.js`, `/auth/return-path.js`, `/auth/auth.css` and `/favicon.svg`. Every response sets
 `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY` and this
 CSP: `default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com;
 style-src-attr 'unsafe-inline'; font-src https://fonts.gstatic.com; img-src 'self' data:;
@@ -1035,7 +1035,7 @@ Gate and origins.
 
 1. `/mcp` (exactly that path) is handled first and only with bearer keys; it never reads cookies.
 2. Public without a session: `GET` and `HEAD /healthz`; `GET /signin` and `GET /enroll`;
-   `/auth/auth.js`, `/auth/auth.css` and `/favicon.svg`; `GET /api/auth/session` (no household
+   `/auth/auth.js`, `/auth/return-path.js`, `/auth/auth.css` and `/favicon.svg`; `GET /api/auth/session` (no household
    data); and the sign-in, link registration and recovery POSTs.
 3. Everything else needs a session. Signed out, an `/api` path, unknown paths included, is 401
    `{error: 'unauthorized'}` and any other path is a 401 page with a Sign in link and

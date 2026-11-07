@@ -1,3 +1,5 @@
+import { signInTarget } from '../auth/return-path.js';
+
 // Fathom client core: window.Fathom, hash router, API-backed store, figure popover.
 // Port of mock-v2/core/core.js. Keeps every `api` member of mock-v2/CONTRACT.md (Core API) with the
 // same semantics, plus api.src and api.figPopover. Designs only touch window.Fathom.api.
@@ -347,7 +349,7 @@ function signedOut(notice) {
   version += 1;
   if (root) { root.className = ''; root.innerHTML = ''; }
   if (notice) { try { window.sessionStorage.setItem(NOTICE_KEY, notice); } catch (e) { /* the page still works */ } }
-  try { window.location.replace('/signin'); } catch (e) { /* ignore */ }
+  try { window.location.replace(signInTarget(window.location.pathname, window.location.hash)); } catch (e) { /* ignore */ }
 }
 
 // A FormData body goes out as multipart with no content-type header (the browser sets the boundary).
