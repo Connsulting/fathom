@@ -680,19 +680,22 @@ export function ingestScreens(h) {
         <div class="h-deck-bar" role="progressbar" aria-label="Answered" aria-valuemin="0" aria-valuemax="${total}" aria-valuenow="${done}"><i style="width:${total ? Math.round((done / total) * 100) : 0}%"></i></div>
         ${btn('Undo', `data-deck="undo"${canUndo ? '' : ' disabled'}`, 'ghost')}</div>`;
       let stack;
-      if (dk.cur == null) stack = caught('All answered', 'Every question here is answered. Prev goes back to the last card.');
+      if (dk.cur == null) {
+        const left = dk.units.flatMap((k) => itemsOf(dk, k)).filter((id) => dk.answers[id] == null).length;
+        stack = left
+          ? caught(`${plural(left, 'question')} still open.`, 'Prev goes back to them.')
+          : caught('All answered', 'Every question here is answered. Prev goes back to the last card.');
+      }
       else {
         const peeks = dk.units.slice(at + 1, at + 3).map((_, i) => `<div class="h-deck-peek p${i + 1}" aria-hidden="true"></div>`).reverse().join('');
         const card = isGroup(dk.cur) ? groupHtml(dk, dk.cur) : cardHtml(dk, dk.cur, files.get(String(dk.data[dk.cur].fileId)));
         stack = `<div class="h-deck-stack${peeks ? ` n${Math.min(2, n - at - 1)}` : ''}">${peeks}${card}</div>`;
       }
-      const anyOpen = dk.units.some((k) => unitOpen(dk, k));
+      const mode = forwardMode(dk);
       let fwd = '<span></span>';
-      if (dk.cur != null) {
-        if (!anyOpen) fwd = btn('Done', 'data-deck="done"', 'pri');
-        else if (at === n - 1 && nextOpen(dk, dk.cur) != null) fwd = btn('Next open →', 'data-deck="next"', 'ghost');
-        else fwd = btn('Next →', 'data-deck="next"', 'ghost');
-      }
+      if (mode === 'done') fwd = btn('Done', 'data-deck="done"', 'pri');
+      else if (mode === 'open') fwd = btn('Next open →', 'data-deck="next"', 'ghost');
+      else if (mode === 'next') fwd = btn('Next →', 'data-deck="next"', 'ghost');
       const hint = '<p class="h-deck-hint"><span class="kb">1 to 9 answer, Enter takes the best guess, J and K move, Z undoes, Esc goes to Year, ? for all shortcuts</span><span class="tch">Swipe right for the next card, left for the previous one</span></p>';
       const nav = `<div class="h-deck-nav">${btn('← Prev', `data-deck="prev"${at > 0 ? '' : ' disabled'}`, 'ghost')}${hint}${fwd}</div>`;
       deck = `<div class="h-deck">${top}${note}${stack}${nav}</div>`;
@@ -703,21 +706,22 @@ export function ingestScreens(h) {
       <div class="h-col-side">${section('Waiting files', wait)}</div></div>`);
   }
 
-  // Go forward one unit. From the last unit it wraps to the next open one, and with nothing open
-  // anywhere it ends on the All answered state.
+  // What forward does from the current card, which is also what the button says:
+  // 'done' ends on the finished block (nothing open anywhere, or this last card is the only open
+  // one), 'open' wraps from the last card to the first open one, 'next' goes to the next card.
+  function forwardMode(dk) {
+    if (dk.cur == null || !dk.units.length) return null;
+    if (!dk.units.some((k) => unitOpen(dk, k))) return 'done';
+    if (dk.units.indexOf(dk.cur) < dk.units.length - 1) return 'next';
+    return nextOpen(dk, dk.cur) != null ? 'open' : 'done';
+  }
+
+  // Go forward per forwardMode().
   function forward() {
     const dk = st.deck;
-    const n = dk.units.length;
-    if (!n || dk.cur == null) return false;
-    if (!dk.units.some((k) => unitOpen(dk, k))) {
-      dk.cur = null;
-      draw();
-      return true;
-    }
-    const at = dk.units.indexOf(dk.cur);
-    const to = at < n - 1 ? dk.units[at + 1] : (nextOpen(dk, dk.cur) ?? (n > 1 ? dk.units[0] : null));
-    if (to == null) return false;
-    dk.cur = to;
+    const mode = forwardMode(dk);
+    if (mode == null) return false;
+    dk.cur = mode === 'done' ? null : (mode === 'open' ? nextOpen(dk, dk.cur) : dk.units[dk.units.indexOf(dk.cur) + 1]);
     draw();
     return true;
   }

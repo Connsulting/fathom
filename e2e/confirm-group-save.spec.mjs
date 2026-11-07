@@ -161,6 +161,8 @@ async function finishDeck(page) {
 
 for (const [label, size] of SIZES) {
   test.describe(`confirm group card at ${label} width`, () => {
+    // Long multi-step flows: triple the default timeout so a loaded CI host does not cut them off.
+    test.slow();
     test(`@cfgs-ac1 @cfgs-ac2 @cfgs-ac3 @cfgs-ac4 [${label}] rows save on click, Undo and revise work, Accept saves the rest, finishing returns Home`, async ({ page, request }) => {
       const items = await seed(page, request, size);
       const owners = items.filter((i) => i.kind === 'account_owner');
@@ -265,7 +267,8 @@ for (const [label, size] of SIZES) {
       expect(items.every((i) => i.kind === 'account_owner') && items.length >= 2, 'only the owner group is open').toBe(true);
       await openDirect(page);
       const card = await deckFind(page, OWNER);
-      await expect(nextBtn(page)).toBeEnabled();
+      // The group is the last and only open card, so the button is Done from the start.
+      await expect(doneBtn(page)).toBeEnabled();
       await answerRows(card);
       await expect(apply(page)).toHaveCount(0);
       await expect(doneBtn(page)).toBeEnabled();
@@ -312,6 +315,34 @@ for (const [label, size] of SIZES) {
       await expect(nextBtn(page)).toBeEnabled();
       await nextBtn(page).click();
       await expect.poll(() => deckKey(page)).toBe(firstKey);
+    });
+
+    test(`@cfgs-ac3 [${label}] on the last card as the only open one Done ends on an honest finished block and Prev returns to it`, async ({ page, request }) => {
+      const left = await seed(page, request, size, (i, all) => i.id === singleOf(all)?.id || i.kind === 'account_owner');
+      expect(left.length, 'the owner group and one single card are open').toBeGreaterThanOrEqual(3);
+      await openDirect(page);
+      const prev = page.locator('button[data-deck="prev"]');
+      for (let i = 0; i < 6 && await prev.isEnabled(); i++) await prev.click();
+      await expect(prev).toBeDisabled();
+      // Answer the first card; the other, last card stays open.
+      const firstKey = await deckKey(page);
+      const card = deckCard(page);
+      if (await card.getAttribute('data-group')) {
+        await answerRows(card);
+        await nextBtn(page).click();
+      } else {
+        await card.locator('button[data-answer]').first().click();
+      }
+      await expect.poll(() => deckKey(page)).not.toBe(firstKey);
+      const lastKey = await deckKey(page);
+      await expect(doneBtn(page)).toBeEnabled();
+      await expect(doneBtn(page)).toHaveText(/^Done/);
+      await doneBtn(page).click();
+      await expect(page.locator('.h-deck', { hasText: /\d+ questions? still open/ })).toBeVisible();
+      await expect(page.locator('.h-deck', { hasText: 'All answered' })).toHaveCount(0);
+      await expect(homeBtn(page)).toHaveText('Back to Home');
+      await prev.click();
+      await expect.poll(() => deckKey(page)).toBe(lastKey);
     });
 
     test(`@cfgs-ac4 [${label}] opened from Home, Back returns Home`, async ({ page, request }) => {
