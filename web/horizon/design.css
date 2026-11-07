@@ -105,6 +105,7 @@
 .d-horizon .h-money .h-ro { margin-top: 28px; }
 .d-horizon .h-engine-off { max-width: 1336px; margin: 0 auto; padding: 10px 48px; color: var(--mu); font-size: 13px; display: flex; gap: 8px; align-items: center; border-bottom: 1px solid var(--line); }
 .d-horizon .h-engine-off a { color: var(--ac); }
+.d-horizon .h-demo-marker { padding: 6px 16px; text-align: center; color: var(--mu); font-size: 12px; border-bottom: 1px solid var(--line); }
 
 .d-horizon .h-main { max-width: 1336px; margin: 0 auto; padding: 44px 48px 96px; }
 /* A page whose whole body is one column narrower than .h-main: put .h-narrow on the page wrapper,

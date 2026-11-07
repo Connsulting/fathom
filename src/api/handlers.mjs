@@ -48,7 +48,9 @@ const nowIso = () => new Date().toISOString();
 
 export function scenarioOf(ctx) {
   queueAccountPairs(ctx.db);
-  return buildScenario(ctx.db, { clock: ctx.config && ctx.config.clock, engineMode: ctx.config && ctx.config.engine, packs: ctx.packs || null });
+  const scenario = buildScenario(ctx.db, { clock: ctx.config && ctx.config.clock, engineMode: ctx.config && ctx.config.engine, packs: ctx.packs || null });
+  scenario.live.publicDemo = ctx.config?.publicDemo === true;
+  return scenario;
 }
 
 // The current "today" for message timestamps: the scenario clock's date at the current time.
@@ -440,7 +442,7 @@ function openThreadRow(db, key) {
 async function maybeName(ctx, key) {
   if (!isThreadKey(key)) return;
   try {
-    await nameThread({ db: ctx.db, engine: ctx.engine || null, key, clock: ctx.config && ctx.config.clock });
+    await nameThread({ db: ctx.db, engine: ctx.config?.publicDemo ? null : ctx.engine || null, key, clock: ctx.config && ctx.config.clock });
   } catch (e) {
     console.error('fathom: thread naming failed', e && e.name);
   }
