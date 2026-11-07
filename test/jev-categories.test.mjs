@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInstance } from '../src/platform/db.mjs';
@@ -84,4 +84,24 @@ test('Confirm preserves deterministic kind guesses and sends only owner-match fe
   assert.equal(sent.length,1); assert.ok(!JSON.stringify(sent).includes('Jordan')); assert.ok(!JSON.stringify(sent).includes('3456'));
   assert.equal(bestGuess(db,getItem(db,kind.id),{account:{name:'Everyday checking'}}).source,'rule');
   assert.equal(bestGuess(db,getItem(db,owner.id),{type:'account',account:{holder:'Jordan Example'}}).confidence,.88);
+});
+
+
+test('scheduled Jev work uses the configured key independently of the general engine and records spend',async t=>{
+  const db=store(t); vocabulary(db); const id=transaction(db);
+  const dir=mkdtempSync(join(tmpdir(),'jev-job-')), keyFile=join(dir,'key');
+  writeFileSync(keyFile,'synthetic-key',{mode:0o600});t.after(()=>rmSync(dir,{recursive:true,force:true}));
+  const previous=globalThis.fetch;t.after(()=>{globalThis.fetch=previous;});
+  globalThis.fetch=async(_,o)=>{
+    const body=JSON.parse(o.body);
+    return Response.json({model:'jev-1.14.0',usage:{input_tokens:120,output_tokens:12},answers:Object.fromEntries(Object.entries(body.questions).map(([id,q])=>{
+      const names=Object.keys(q.criteria);return [id,{type:'choice',choice:'Groceries',confidence:.99,
+        probabilities:Object.fromEntries(names.map(c=>[c,c==='Groceries'?.9:.1/(names.length-1)]))}];
+    }))});
+  };
+  const {defaultHandlers}=await import('../src/jobs/scheduler.mjs');
+  const result=await defaultHandlers({})['confirm-guess']({db,now:'2032-11-05T00:00:00Z',config:{engine:'live',typesafeKeyFile:keyFile},engine:{isOn:()=>false}});
+  assert.ok(result.note.guessed>=1);assert.equal(resolutions(db).get(id).layer,'guess');
+  const spend=db.prepare('SELECT purpose,model,cost_usd FROM spend_ledger').all();
+  assert.ok(spend.length);assert.ok(spend.every(r=>r.purpose==='categorize'&&r.model==='jev-1.14.0'&&r.cost_usd>0));
 });
