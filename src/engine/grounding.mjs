@@ -105,14 +105,18 @@ const sentenceStart = /(?:^\s*|[.!?]["')\]]*\s+|\n[ \t]*(?:[•*-]|\d+[.)])?[ \t
 const ACCOUNT_TYPES = new Set(['roth', 'ira', 'iras', 'hsa', 'hsas', 'fsa', 'fsas', 'sep', 'simple', 'solo', 'traditional',
   'checking', 'savings', 'brokerage', 'cd', 'cds', 'credit', 'card', 'cards', 'account', 'accounts', 'loan', 'loans', 'mortgage',
   'payment', 'payments', 'transaction', 'transactions', 'holding', 'holdings', 'goal', 'goals', 'recommendation', 'recommendations']);
+// A sentence-opening word before it (Only One, Capital One opening a sentence) names it only when no
+// account type follows.
 function isProperName(text, phrase) {
   if (!/^\p{Lu}/u.test(phrase.text)) return false;
   const before = text.slice(0, phrase.index);
-  const previous = /(?<![\p{L}\p{N}])(\p{L}+) $/u.exec(before)?.[1];
-  if (previous && /^\p{Lu}/u.test(previous) && !isNumberWord(previous)) return true;
-  const next = /^ (\p{Lu}\p{L}*)(?![\p{L}\p{N}])/u.exec(text.slice(phrase.index + phrase.text.length))?.[1];
-  return !!next && !isNumberWord(next) && !ACCOUNT_TYPES.has(next.toLowerCase())
-    && (phrase.text === 'One' || !sentenceStart.test(before));
+  const after = text.slice(phrase.index + phrase.text.length);
+  const typed = ACCOUNT_TYPES.has((/^ (\p{L}+)(?![\p{L}\p{N}])/u.exec(after)?.[1] ?? '').toLowerCase());
+  const previous = /(?<![\p{L}\p{N}])(\p{L}+) $/u.exec(before);
+  if (previous && /^\p{Lu}/u.test(previous[1]) && !isNumberWord(previous[1])
+    && (!typed || !sentenceStart.test(before.slice(0, previous.index)))) return true;
+  const next = /^ (\p{Lu}\p{L}*)(?![\p{L}\p{N}])/u.exec(after)?.[1];
+  return !!next && !isNumberWord(next) && !typed && (phrase.text === 'One' || !sentenceStart.test(before));
 }
 
 function collect(value, sources, kind = 'number') {
