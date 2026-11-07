@@ -234,10 +234,10 @@ test.describe('connect', () => {
 
     // Tool list: the write tool carries a write marker, read tools carry a read marker.
     const tools = page.getByTestId('tool-row');
-    const writeTool = tools.filter({ has: page.locator('code', { hasText: /^set_recommendation_status$/ }) });
+    const writeTool = tools.filter({ has: page.locator('code', { hasText: /^act_on_recommendation$/ }) });
     await expect(writeTool).toHaveCount(1);
     await expect(writeTool).toContainText(/\bwrite\b/i);
-    for (const t of ['household_summary', 'list_packs', 'get_pack_entry', 'search_pack_entries']) {
+    for (const t of ['household', 'knowledge', 'knowledge', 'knowledge']) {
       // Match the tool by its name element: descriptions may mention other tools by name.
       const r = tools.filter({ has: page.locator('code', { hasText: new RegExp(`^${t}$`) }) });
       await expect(r, `${t} tool row`).toHaveCount(1);

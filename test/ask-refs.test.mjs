@@ -1,7 +1,7 @@
 // Ask everywhere, the server side of references: parseRefs validates the wire list (kind and id
 // only), resolveRefs keeps what the store knows and gives each kept ref a tool hint, the answerer
 // puts the references in the conversation context and provenance, the hinted tools reach the
-// referenced rows (query_transactions ids), reference ids and hints never ground a number, and the
+// referenced rows (transactions.search ids), reference ids and hints never ground a number, and the
 // three ask entry points refuse a malformed context with 400 (JSON and streaming).
 //
 // The answerer runs over the production runtime engine in fake mode with scripted responses on a
@@ -83,9 +83,9 @@ function insertDigitRec(db, recId) {
       base.pack_id, 999, base.updated_at, base.file_id, base.parser, base.locator);
 }
 
-// Transactions outside the newest 200 (the most query_transactions returns without ids), oldest first.
+// Transactions outside the newest 200 (the most transactions.search returns without ids), oldest first.
 async function oldTransactions(db, now) {
-  const newest = await callTool('query_transactions', { limit: 200 }, { db, now });
+  const newest = await callTool('transactions', { operation: 'search',  limit: 200 }, { db, now });
   const shown = new Set(newest.rows.map(r => String(r.id)));
   return db.prepare('SELECT id, account_id, date, amount FROM transactions ORDER BY date ASC, id ASC').all()
     .filter(r => !shown.has(String(r.id))).map(r => ({ ...r }));
@@ -136,22 +136,22 @@ test('parseRefs refuses more than 8 entries; exactly 8 pass', () => {
   assert.deepEqual(parseRefs(nine.slice(0, 8)), nine.slice(0, 8));
 });
 
-/* ---------- query_transactions ids ---------- */
+/* ---------- transactions.search ids ---------- */
 
-test('query_transactions with ids returns an old transaction that is not among the newest 200', async t => {
+test('transactions.search with ids returns an old transaction that is not among the newest 200', async t => {
   const s = await demoStore(t);
   const now = clockNow(s.db);
   const old = await oldTransactions(s.db, now);
   assert.ok(old.length > 0, 'the demo store has more than 200 transactions');
   const pick = old[0];
-  const r = await callTool('query_transactions', { ids: [String(pick.id)] }, { db: s.db, now });
+  const r = await callTool('transactions', { operation: 'search',  ids: [String(pick.id)] }, { db: s.db, now });
   const row = r.rows.find(x => String(x.id) === String(pick.id));
   assert.ok(row, `the old row comes back by id: ${JSON.stringify(r).slice(0, 300)}`);
   assert.equal(row.amount, pick.amount);
   assert.equal(row.date, pick.date);
   // Several ids at once, with a limit that would otherwise cut them off.
   const ids = old.slice(0, 3).map(x => String(x.id));
-  const many = await callTool('query_transactions', { ids, limit: 1 }, { db: s.db, now });
+  const many = await callTool('transactions', { operation: 'search',  ids, limit: 1 }, { db: s.db, now });
   for (const id of ids) assert.ok(many.rows.some(x => String(x.id) === id), `row ${id} returned despite limit 1`);
 });
 
@@ -199,13 +199,13 @@ test('resolveRefs keeps what the store knows, with a tool hint for each, and dro
   }
   assert.deepEqual(byKey(out.map(({ kind, id }) => ({ kind, id }))), byKey(known));
   const hint = (kind, id) => out.find(r => r.kind === kind && r.id === id).use;
-  assert.match(hint('transaction', txnId), /query_transactions/);
+  assert.match(hint('transaction', txnId), /transactions.search/);
   assert.ok(hint('transaction', txnId).includes(txnId), 'the transaction hint names its id');
-  assert.match(hint('account', 'a_biz'), /query_transactions|list_accounts/);
-  assert.match(hint('rec', 'deferral'), /get_recommendation/);
-  assert.match(hint('goal', goalId), /list_goals|get_pace/);
+  assert.match(hint('account', 'a_biz'), /transactions.search|accounts.list/);
+  assert.match(hint('rec', 'deferral'), /recommendations.detail/);
+  assert.match(hint('goal', goalId), /goals.list|goals.pace/);
   for (const key of ['true_reserve', 'trend.total', 'pace.rollup.total']) {
-    assert.match(hint('figure', key), /get_figures/);
+    assert.match(hint('figure', key), /household.figures/);
     assert.ok(hint('figure', key).includes(`{f:${key}}`), `the ${key} hint names its token`);
   }
 
@@ -227,7 +227,7 @@ test('resolveRefs maps a txn.<id> figure key to a transaction ref', async t => {
   assert.equal(out.length, 1, JSON.stringify(out));
   assert.equal(out[0].kind, 'transaction');
   assert.equal(String(out[0].id), String(txn.id));
-  assert.match(out[0].use, /query_transactions/);
+  assert.match(out[0].use, /transactions.search/);
 });
 
 test('resolveRefs of an empty list is empty', async t => {
@@ -301,8 +301,8 @@ test('the scripted model calls the hinted tools for an account and a transaction
   const said = `That transaction was ${amount}.`;
   const { engine, requests, responses } = scripted(s.runtime, [
     [{ toolCalls: [
-      { name: 'query_transactions', args: { ids: [String(pick.id)] } },
-      { name: 'query_transactions', args: { accountId: pick.account_id, limit: 5 } },
+      { name: 'transactions', args: { operation: 'search',  ids: [String(pick.id)] } },
+      { name: 'transactions', args: { operation: 'search',  accountId: pick.account_id, limit: 5 } },
     ] }, { text: said }],
     [{ text: said }],
   ]);
@@ -311,12 +311,12 @@ test('the scripted model calls the hinted tools for an account and a transaction
   const context = contextOf(requests[0].systemDynamic);
   const txnRef = context.references.find(r => r.kind === 'transaction');
   assert.ok(txnRef && String(txnRef.id) === String(pick.id), JSON.stringify(context.references));
-  assert.match(txnRef.use, /query_transactions/);
+  assert.match(txnRef.use, /transactions.search/);
   const accRef = context.references.find(r => r.kind === 'account');
   assert.ok(accRef && accRef.id === pick.account_id);
-  assert.match(accRef.use, /query_transactions|list_accounts/);
+  assert.match(accRef.use, /transactions.search|accounts.list/);
 
-  const byIds = responses[0].toolResults.find(r => r.name === 'query_transactions' && r.args && Array.isArray(r.args.ids));
+  const byIds = responses[0].toolResults.find(r => r.name === 'transactions' && r.args && Array.isArray(r.args.ids));
   assert.ok(byIds && !byIds.isError, JSON.stringify(responses[0].toolResults).slice(0, 400));
   assert.ok(byIds.result.rows.some(r => String(r.id) === String(pick.id) && r.amount === pick.amount), 'the real tool returned the old row');
   const { unverified } = reply.provenance.grounding;
@@ -439,7 +439,7 @@ test('resolveRefs keeps a P&L entity and a real category row as /api/pnl keys th
     { kind: 'pnl', id: 'entity:nosuchbusiness' }, { kind: 'page', id: 'pnl' },
   ]);
   assert.deepEqual(out.map(r => `${r.kind}:${r.id}`), [`pnl:${ent.key}`, `pnl:${ent.key}|${real}`, 'page:pnl']);
-  for (const r of out.filter(x => x.kind === 'pnl')) assert.match(r.use, /pnl_by_month/);
+  for (const r of out.filter(x => x.kind === 'pnl')) assert.match(r.use, /business.pnl/);
   assert.ok(out[1].use.includes(real), 'the hint names the real category');
   assert.ok(!JSON.stringify(out).includes('Synthetic invented category'), 'an invented category never reaches the prompt');
 });
@@ -522,7 +522,7 @@ test('resolveRefs: an id without a qualifier is unchanged', async t => {
   const out = resolveRefs(s.db, scenario, [{ kind: 'money', id: 'overview' }, { kind: 'page', id: 'pnl' }, { kind: 'account', id: 'a_biz' }]);
   assert.deepEqual(out.map(r => `${r.kind}:${r.id}`), ['money:overview', 'page:pnl', 'account:a_biz']);
   for (const r of out) assert.ok(!r.use.includes('on screen'), r.use);
-  assert.equal(out[0].use, 'list_accounts, get_figures');
+  assert.equal(out[0].use, 'accounts.list, household.figures');
 });
 
 test('parseRefs keeps a qualified id as is and still caps ids at 200 characters', () => {
@@ -554,7 +554,7 @@ test('pnl2-ac3 resolveRefs keeps a P&L category row with a month suffix, names t
   ]);
   assert.deepEqual(out.map(r => `${r.kind}:${r.id}`), [`pnl:${ent.key}|${real}|${month}`, `pnl:${ent.key}|${real}`]);
   const [withMonth, plain] = out;
-  assert.match(withMonth.use, /pnl_by_month/);
+  assert.match(withMonth.use, /business\.pnl/);
   assert.ok(withMonth.use.includes(real), `the hint names the category: ${withMonth.use}`);
   assert.ok(!withMonth.use.includes(`${real}|`), `the hint names the category without the suffix: ${withMonth.use}`);
   assert.ok(withMonth.use.includes(label), `the hint names ${label}: ${withMonth.use}`);
