@@ -4,7 +4,9 @@
 //
 // pnlEntities({db, clock}) -> [{key, label, kind, accounts, workbook, transactions}]
 // businessPnl({db, entity, from, to, clock}) -> see docs/architecture.md "P&L and household spending"
-// businessPnlRows({db, entity, from, to, section, category, month, clock}) -> {items, total, figures, sources, note}
+// businessPnlRows({db, entity, from, to, section, category, month, clock}) -> {items, total, sum, figures, sources, note}
+//   sum: a figure over every matching row (not just the capped items), equal to the cell it opens from.
+//   Each item: amount (raw signed), value (counted: income as is, expenses negated) and fig (at value).
 
 import { normalizeName } from '../ingest/confirm.mjs';
 import { businessAccount } from '../categories/resolve.mjs';
@@ -375,8 +377,9 @@ export function businessPnlRows({ db, entity, from, to, section, category, month
     label: row.table === 'pnl_lines' ? `Workbook line, ${spanLabel(row.month, row.month)}` : `Transaction on ${row.date}`,
   }));
   const where = month ? spanLabel(month, month) : spanLabel(r.from, r.to);
+  const sum = reg.add(`${base}.rows.${section}.${enc(category)}.${month ?? 'total'}`, { v: sumOf(rows), label: `${category}, ${where}`, rows, counted: true, notes: NOTE[section] });
   const covered = a.perMonth.some((p) => p.source === 'workbook' && p.txns.length && (!month || p.month === month));
   const note = `Rows behind ${category} ${section === 'income' ? 'income' : 'expenses'}, ${where}.`
     + (covered ? ' Transactions in months that use the imported workbook are not counted and not listed.' : '');
-  return { items, total: rows.length, ...reg.done(), note };
+  return { items, total: rows.length, sum, ...reg.done(), note };
 }
