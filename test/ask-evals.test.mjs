@@ -31,7 +31,7 @@ test('schema rejects invalid cases, duplicate ids and unknown predicates', async
   const cases = await loadCases();
   for (const mutate of [c => { c[0].turns[0].maxWords = -1; }, c => { c[0].turns[0].expected = [{ kind: 'magic' }]; },
     c => { c[0].turns[0].required[0].predicates = [{ path: 'keys', op: 'execute', value: 'x' }]; },
-    c => { c[1].id = c[0].id; }, c => { c[0].turns[0].question = ''; }]) {
+    c => { c[1].id = c[0].id; }, c => { c[0].turns[0].question = ''; }, c => { c[0].requires.script = true; delete c[0].requires.operations; }]) {
     const bad = structuredClone(cases); mutate(bad); assert.throws(() => validateCases(bad));
   }
 });

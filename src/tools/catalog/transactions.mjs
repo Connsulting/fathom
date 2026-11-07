@@ -47,3 +47,5 @@ export const operations = [
     },
   },
 ];
+
+export const rules = ['A card payment from checking moves money to the card; it is not new spending.'];
