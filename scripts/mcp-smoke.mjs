@@ -2,7 +2,7 @@
 // The bearer key is the file named by FATHOM_SMOKE_KEY_FILE. Neither value is read from argv.
 //
 // Calls initialize, tools/list, then every listed read tool whose schema requires no arguments.
-// Also calls set_recommendation_status (write scope) and requires the permission-denied result.
+// Also calls act_on_recommendation.status (write scope) and requires the permission-denied result.
 // Prints one line per check: "<name> <pass|fail> <byte size>". Never prints result contents or the key.
 
 import { readFileSync } from 'node:fs';
@@ -11,8 +11,8 @@ import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
-const WRITE_TOOL = 'set_recommendation_status';
-const WRITE_ARGS = { id: 'smoke', status: 'doing' };
+const WRITE_TOOL = 'act_on_recommendation';
+const WRITE_ARGS = { operation: 'status', id: 'smoke', status: 'doing' };
 
 function line(name, ok, bytes) {
   process.stdout.write(`${name} ${ok ? 'pass' : 'fail'} ${bytes}\n`);
@@ -33,7 +33,7 @@ function textOf(result) {
 
 function needsNoArgs(tool) {
   const required = tool.inputSchema && tool.inputSchema.required;
-  return !Array.isArray(required) || required.length === 0;
+  return Array.isArray(required) && required.length === 1 && required[0] === 'operation';
 }
 
 function endpoint(base) {
@@ -103,13 +103,13 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
       if (tool.name === WRITE_TOOL || !needsNoArgs(tool)) continue;
       if (tool.annotations && tool.annotations.readOnlyHint === false) continue;
       try {
-        const result = await client.callTool({ name: tool.name, arguments: {} });
+        const result = await client.callTool({ name: tool.name, arguments: { operation: tool.inputSchema.properties.operation.enum[0] } });
         const ok = result && result.isError !== true;
         if (!ok) failed = true;
-        line(tool.name, ok, sizeOf(result));
+        line(`${tool.name}.${tool.inputSchema.properties.operation.enum[0]}`, ok, sizeOf(result));
       } catch (err) {
         failed = true;
-        line(tool.name, false, sizeOf(err && err.message ? err.message : 'error'));
+        line(`${tool.name}.${tool.inputSchema.properties.operation.enum[0]}`, false, sizeOf(err && err.message ? err.message : 'error'));
       }
     }
 
@@ -118,10 +118,10 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
       const text = textOf(denied);
       const ok = denied && denied.isError === true && text.startsWith('Permission denied:');
       if (!ok) failed = true;
-      line(WRITE_TOOL, ok, sizeOf({ isError: denied && denied.isError, bytes: Buffer.byteLength(text) }));
+      line(`${WRITE_TOOL}.status`, ok, sizeOf({ isError: denied && denied.isError, bytes: Buffer.byteLength(text) }));
     } catch (err) {
       failed = true;
-      line(WRITE_TOOL, false, sizeOf(err && err.message ? err.message : 'error'));
+      line(`${WRITE_TOOL}.status`, false, sizeOf(err && err.message ? err.message : 'error'));
     }
   } finally {
     try { await client.close(); } catch { /* already closed */ }
