@@ -146,3 +146,11 @@ test('unknown accounting basis remains held and a month can cite its separate ye
   tax.rows[0].fields.paymentDate.refs.push('c1');
   assert.equal(validateProposal(tax, source()).valid, false);
 });
+
+
+test('shared action fact keys are accepted alongside frozen ingest fact keys', () => {
+  for (const key of ['retirement.planOffersRoth', 'business.cashBasis', 'household.filingStatus']) {
+    const p = proposal('fact'); p.rows[0].key = key;
+    assert.equal(validateProposal(p, source()).valid, true, key);
+  }
+});
