@@ -17,43 +17,49 @@ owner pick a point as an Ask write with Undo.
 
 ## Risks and external dependencies (read first)
 
-Calendar estimate: about three to five calendar days after C2, C3 and C4 merge, at up to three
-parallel workers. Each ticket is one agent run plus CI and one cross-provider review. The date is
-set by the four-deep chain B1, B2, B4, B5, by C9 (which B4 needs and which itself waits on C2 and
-C3), and by the owner's merge gate on each PR.
+Calendar estimate: four waves of tickets, each ticket one agent run of about 90 minutes plus CI
+and one cross-provider review. Four tickets start at once (B1, B3, B5, B7). The date is set by the
+chain B1, B2, B6, B9 and by two upstream merges: C2 (PR #105, open) gates B2, and C9 (not opened
+yet; it waits on C2 and C3) gates B6. If C9 is not merged by the time B2 and B4 are, B6 and B9
+slip with it; everything else in this plan finishes without C9.
 
-1. Upstream tickets in flight. B1 needs C2 (PR #105: write plumbing, the last ticket allowed to
-   edit `src/api/answerer.mjs` before B1), C3 (PR #106: `src/tools/refs.mjs`, `quote`) and C4
-   (PR #104: `spending.total` groups and C4 transaction rows, the first list-of-figures reads). B4
-   needs C9 (`act_on_recommendation.pick_point`, `decide`, `revisit`), which is not opened yet.
-   If any of them changes the figure envelope or the Ref shape before merging, sections 3 and 4
-   follow the merged shape and the ticket that hits the difference says so in its PR.
-2. Serialized files. `src/api/answerer.mjs` and `test/answerer.test.mjs` are C1 then C2 in
-   `docs/ask-tools.md`; B1 is the next and only B ticket to edit them. `src/tools/tools.mjs` and
-   `src/tools/index.mjs` are "never edited by a ticket" in the C series; B1 edits both once (the
-   `show` header and the Ask-only flag) and is the only B ticket that does. `evals/catalog.json`
-   gets new case ids from B1 and B4 only, never an edit to an existing entry. `web/horizon/design.js`
-   is edited by B4 (rec dialog link) and B5 (page removal); B5 merges second.
+1. Upstream tickets in flight. B2 needs C2 (PR #105: write plumbing, the last ticket allowed to
+   edit `src/api/answerer.mjs` before B2). B6 needs C9 (`act_on_recommendation.pick_point`,
+   `decide`, `revisit`). Nothing else here waits on the C series: B1 checks figures with `UNITS`
+   from `src/calc/figure.mjs` (on main), and `quote` (C3) is optional in a snapshot figure. Eval
+   cases that need C4 or C6 operations are expected failures until those merge, through the
+   existing availability probe. If C2 or C9 changes a shape this plan relies on, the ticket that
+   hits the difference follows the merged code and says so in its PR.
+2. Serialized files. `src/api/answerer.mjs` and `test/answerer.test.mjs`: C1, C2, then B2 only.
+   `src/tools/tools.mjs` and `src/tools/index.mjs` ("never edited by a ticket" in the C series):
+   B2 only (the `show` header and the Ask-only flag). `evals/catalog.json`: new case ids from B2
+   and B6 only, never an edit to an existing entry. `web/horizon/screens/ask-blocks.js`: created
+   by B3; B4 adds two lines to its renderer map; B8 adds the stale badge. `web/horizon/design.js`:
+   B7 (Plan section), B6 (rec dialog button), B9 (removal), in different functions; the later one
+   rebases. `docs/ask-tools.md`: B2, B5, B6, B8 and B9 each edit their own rows.
 3. Context budget. `show` adds its description, schema and rules to the Ask tool list (not to
    MCP). The C1 budget test caps the MCP list at 30,000 characters and the rule text at 8,000;
-   B1 adds the same 30,000 cap for the Ask-offered list and keeps the rule text under 8,000. The
+   B2 adds the same 30,000 cap for the Ask-offered list and keeps the rule text under 8,000. The
    estimate is about 2,400 schema and description characters and about 700 rule characters.
 4. Model behavior is a hypothesis. Tier 1 evals prove a scripted block validates and renders; only
    the tier 2 live run (`npm run eval:ask:live`, never in CI, spends against the engine cap) shows
-   whether a live model calls `show` with valid references. The coordinator runs it after B1 and
-   again after B4. It is not a ticket gate.
+   whether a live model calls `show` with valid references. The coordinator runs it after B2 and
+   again after B6. It is not a ticket gate.
+5. Parallel renderer and builder. B1 (server snapshot builder) and B3 (client renderer) start
+   together against the snapshot contract in section 5. A drift between them shows up in B2's
+   end-to-end spec, which runs the real builder into the real renderer; B2 fixes either side.
 5. War-game freshness. The war-game model is computed by the planning run (`buildWargames` in
    `src/jobs/planner/wargame.mjs`) and stored as `wg.*` figures. Ask reads that stored model, so
    its figures are as of the last planning run, exactly as the page showed them. A live re-run
    with different inputs is deferred (section 7).
-6. Scenario payload size. Blocks are stored in message provenance and reach the client with the
+6. Thread payload size. Blocks are stored in message provenance and reach the client with the
    thread. A block's stored form is capped at 64 KB and an answer at four blocks, so one answer
    adds at most 256 KB; a long thread of block-heavy answers grows the thread payload. Nothing here
    pages messages; if threads get slow, paging messages is a separate ticket.
 7. Decide list relocation. The `#/wargame` route also hosts the Decide list (every open, upcoming,
    decided and not-built decision, including decisions with no war game). Removing the page needs
    a new home for that list; this plan pins it as a section on the Plan screen (section 7). This is
-   an assumption the coordinator should confirm with the owner before B5 dispatches.
+   an assumption the coordinator should confirm with the owner before B7 dispatches.
 
 ## Pinned decisions
 
@@ -76,9 +82,9 @@ C3), and by the owner's merge gate on each PR.
    gets renderer-bound actions: Pick this (`act_on_recommendation.pick_point`) and Decide on this
    (`act_on_recommendation.decide`), each a registry write with a receipt and Undo in the
    conversation.
-7. The What-if page, its route, the Ask sub-tab entry, the rec dialog's "War-game this" link and
-   the Decide page are removed in B5, after B4 ships the replacement. The Decide list moves to the
-   Plan screen.
+7. The Decide list moves to the Plan screen (B7). The What-if page, its route, the Ask sub-tab
+   entry, the rec dialog's "War-game this" link and the Decide page are removed in B9, after B6
+   ships the replacement.
 
 Rejected:
 
@@ -123,7 +129,7 @@ Shapes:
 
 What each value becomes:
 
-1. A figure envelope at the path (`isFigure` from `src/tools/refs.mjs`): drawn from `value` and
+1. A figure envelope at the path (an object with `value`, a `unit` in `UNITS` from `src/calc/figure.mjs` and `provenance`): drawn from `value` and
    `quote`, with the provenance popover.
 2. A row number from the row-number allowlist: `transactions.search` `rows[].amount` and
    `business.rows` item `amount`. Its provenance is the row itself (account label, date,
@@ -154,9 +160,14 @@ Labels the renderer derives:
 ## 2. Where blocks live
 
 Blocks render wherever `web/horizon/screens/chat.js` renders a Fathom message: the full Ask page,
-the Ask side panel (docked, sheet and full-height sheet), and the rec dialog's thread. One module,
-`web/horizon/screens/ask-blocks.js`, renders all four types; chat.js calls it for each message with
-`provenance.blocks` and places each block after paragraph `after`.
+the Ask side panel (docked, sheet and full-height sheet), and the rec dialog's thread.
+`web/horizon/screens/ask-blocks.js` is the shell: it takes a message's `provenance.blocks`, wraps
+each in its `<figure>`, registers its figures, renders `blockNotes`, and calls the renderer for the
+block's `op` from a map `{ table, compare, chart, timeline }`. Each renderer is its own module
+(`ask-block-table.js`, `ask-block-compare.js`, `ask-block-chart.js`, `ask-block-timeline.js`)
+exporting `render(snapshot, ctx) -> html` and `bind(root, snapshot, ctx)` for its keyboard and
+sort state. An `op` with no renderer in the map renders the dropped note. chat.js calls the shell
+for each message and places each block after paragraph `after`.
 
 Layout:
 
@@ -276,12 +287,36 @@ blockNotes: [ { op, reason, text } ]
 ```
 
 1. The snapshot is the render model the client draws, built by `buildSnapshot(op, spec, results)`
-   in `src/blocks/snapshot.mjs`: for charts `{ kind, x: [ { text } ], series: [ { label, unit,
-   points: [ Figure or null ] } ] }`; for tables `{ columns: [ { label, unit?, kind: 'figure' |
-   'row_number' | 'text' } ], rows: [ { cells: [...], drill?: Drill } ] }`; for compare `{
-   options: [ { label, id?, cells: [...] } ], fields: [ { label, unit } ], action?: Action }`; for
-   timelines `{ events: [ { date, label, value? } ] }`. A Figure in a snapshot is the envelope
-   with `provenance.steps` cut to 20 and `provenance.inputs` cut to 20 (with a count of the rest).
+   in `src/blocks/snapshot.mjs`. It is the contract between B1 (builder) and B3 and B4
+   (renderers), pinned here so they can be built in parallel:
+
+   ```
+   Figure  = { value, unit, label, kind, asOf, window?, quote?, direction?, gaps,
+               provenance: { calc?, formula?, sources?, accounts?, assumptions?, packRefs?,
+                             steps? (at most 20), inputs? (at most 20), more?: { steps, inputs } },
+               source }                      // source: the tool's plain source label
+   Cell    = { t: 'fig', fig: Figure }
+           | { t: 'row', value, unit: 'usd', row: { account, date, description } }
+           | { t: 'text', text }
+           | { t: 'none' }                   // unavailable figure: fig gaps carry the reason
+   chart   = { title, kind: 'line' | 'bar' | 'area', stacked,
+               x: [ { text } ], series: [ { label, unit, points: [ Figure | null ] } ] }
+           | { title, kind: 'scatter', xLabel, yLabel, xUnit, yUnit,
+               points: [ { id?, label, x: Figure, y: Figure, frontier, current } ] }
+   table   = { title, columns: [ { label, unit?, type: 'fig' | 'row' | 'text' } ],
+               rows: [ { cells: [ Cell ], drill?: Drill } ], sort?: { column, dir } }
+   compare = { title, fields: [ { label, unit } ], options: [ { id?, label, cells: [ Cell ] } ],
+               action?: { kind: 'wargame', name, decisionId?, status } }
+   timeline = { title, events: [ { date, label, value?: Figure } ] }
+   Drill   = { route: 'spending' | 'pnl', query: { ...route query parameters } }
+   ```
+
+   `title` is always set (the model's title or the default). `sort.column` is a column index.
+   `quote` is present once C3 has merged; without it the renderer formats `value` by `unit` with
+   `api.money` and the existing ratio, month and date formatters. B3 and B4 keep hand-written
+   fixtures in this shape under `test/fixtures/blocks/`; B1's tests assert its builder output
+   against `src/blocks/snapshot-shape.mjs`, a pure shape check of this contract, and B2's
+   end-to-end spec runs the two together.
 2. Placement: the answerer splits the final text on lines that are exactly `{b:<id>}`; a block's
    `after` is the number of rendered paragraphs before its marker. A marker inside a sentence is
    removed and the block goes after that paragraph. A shown block with no marker goes after the
@@ -315,7 +350,7 @@ through the existing Money routes, which register their figures and sources for 
 `drillQuery(ref, item)` in `src/blocks/drill.mjs` builds the query; it returns null for any call it
 cannot express exactly (a definition, a selector field the route does not take, another `groupBy`),
 and a null query means no drill button. The snapshot stores the query as `drill`. The drilled list
-shows the route's `sum` figure beside the block figure; B3's tests assert they are equal for every
+shows the route's `sum` figure beside the block figure; B8's tests assert they are equal for every
 mapping above on the demo store.
 
 ## 7. War games as Ask flows
@@ -396,7 +431,7 @@ choose beyond what a recommendation already says.
 7. Parity: the new act route maps to `act_on_recommendation.pick_point` and `decide` in the
    section 6 route map.
 
-### What is removed, and where the Decide list goes (B5)
+### What is removed (B9), and where the Decide list goes (B7)
 
 1. Routes: `wargame` leaves `ROUTES`, `PARAM_KEY` and the parse in `web/core/core.js`, the
    allowlist in `web/auth/return-path.js`, and the label in `web/horizon/screens/ask-context.js`.
@@ -406,8 +441,8 @@ choose beyond what a recommendation already says.
    `data-decide` handlers and the war-game CSS (`.h-sc*`, `.h-def*`, `.h-bars*`, `.h-wg*`,
    `.h-decide-bar`) leave `web/horizon/design.js` and `design.css`. `api.pickWargame` leaves core.js.
 4. Plan card link: the rec dialog's "War-game this" link becomes "Ask about this tradeoff", which
-   opens the Ask panel with the war-game starter question and the rec as a context chip (B4 adds
-   the button beside the link; B5 removes the link).
+   opens the Ask panel with the war-game starter question and the rec as a context chip (B6 adds
+   the button beside the link; B9 removes the link).
 5. Decide list: the Plan screen gets a "Decisions" section above the rec groups with the same rows
    and groups Decide had (Open, Not built yet, Coming up, Decided collapsed, No longer current
    collapsed). A war-game decision's button is "Ask", opening the panel with its starter; a rec
@@ -428,7 +463,7 @@ Deterministic (tier 1, CI):
 
 1. `test/blocks-validate.test.mjs`: one fixture per reason code in section 4 over real demo-store
    tool results, plus valid fixtures for each block type.
-2. `evals/graders.mjs` `gradeBlocks` (B1): for every block in an answer, each `calls` entry
+2. `evals/graders.mjs` `gradeBlocks` (B2): for every block in an answer, each `calls` entry
    deep-equals a call in the transcript; every snapshot figure equals (value and unit) the figure
    at the same path in that call's transcript result; the stored `spec` has no number-typed leaf
    outside Ref args and no digit in `title`; the answer's dropped count is zero for cases that list
@@ -438,274 +473,304 @@ Deterministic (tier 1, CI):
 
 | Case id | Question | Required calls | Ticket |
 |---|---|---|---|
-| `block-spending-by-month` | Show our monthly spending this year as a chart. | `spending.total {groupBy: 'month'}`, `show.chart` over its `groups` | B1 |
-| `block-top-merchants` | Who are our ten biggest merchants this year? Put them in a table. | `spending.total {groupBy: 'merchant', limit: 10}`, `show.table` | B1 |
-| `block-recurring` | List our subscriptions with what they cost a year. | `spending.recurring {}`, `show.table` | B1 |
-| `block-dropped-not-in-answer` | Chart our net worth. (scripted `show` with a source the answer never called) | `show` returns `dropped` `not_in_answer`; the answer mentions no chart | B1 |
-| `block-compare-returns` | Compare when we reach the target at 3 and 4 percent returns. | two `retirement.target`, `show.compare` with two `options` | B1 (expected-fail until C6) |
-| `wargame-salary` | the `wargame-salary` starter | `recommendations.wargame {name: 'salary'}`, `show.chart {kind: 'scatter'}`, `show.compare` | B4 |
-| `wargame-deferral` | the `wargame-deferral` starter | `recommendations.wargame {name: 'deferral'}`, `show.compare` | B4 |
-| `wargame-pick-typed` | Pick the second deferral option. (follow-up) | `recommendations.wargame`, `act_on_recommendation.pick_point {name: 'deferral', point: <second option id>}` | B4 |
+| `block-spending-by-month` | Show our monthly spending this year as a chart. | `spending.total {groupBy: 'month'}`, `show.chart` over its `groups` | B2 |
+| `block-top-merchants` | Who are our ten biggest merchants this year? Put them in a table. | `spending.total {groupBy: 'merchant', limit: 10}`, `show.table` | B2 |
+| `block-recurring` | List our subscriptions with what they cost a year. | `spending.recurring {}`, `show.table` | B2 |
+| `block-dropped-not-in-answer` | Chart our net worth. (scripted `show` with a source the answer never called) | `show` returns `dropped` `not_in_answer`; the answer mentions no chart | B2 |
+| `block-compare-returns` | Compare when we reach the target at 3 and 4 percent returns. | two `retirement.target`, `show.compare` with two `options` | B2 (expected-fail until C6) |
+| `wargame-salary` | the `wargame-salary` starter | `recommendations.wargame {name: 'salary'}`, `show.chart {kind: 'scatter'}`, `show.compare` | B6 |
+| `wargame-deferral` | the `wargame-deferral` starter | `recommendations.wargame {name: 'deferral'}`, `show.compare` | B6 |
+| `wargame-pick-typed` | Pick the second deferral option. (follow-up) | `recommendations.wargame`, `act_on_recommendation.pick_point {name: 'deferral', point: <second option id>}` | B6 |
 
 Live (tier 2, coordinator-run, not a gate): the same cases with a live model, graded by the same
 graders, plus a report of how many answers used `show` where the case lists `blocks` and how many
 blocks were dropped by reason.
 
-End to end (Playwright, demo build, fake engine): B2 (`e2e/ask-blocks.spec.mjs`: blocks in the
-panel and on the page, light and dark, 390 px phone, keyboard on chart and table), B3 (drill and
-stale), B4 (`e2e/ask-wargame.spec.mjs`: starter to compare to pick to Undo to decide), B5 (updated
+End to end (Playwright, demo build): B3 and B4 (`e2e/ask-blocks.spec.mjs`: fixture blocks in the
+panel and on the page, light and dark, 390 px phone, keyboard on chart and table), B2 (the real
+builder into the renderer, fake engine), B8 (drill and stale), B6 (`e2e/ask-wargame.spec.mjs`:
+starter to compare to pick to Undo to decide), B7 and B9 (updated
 decide and nav specs).
 
 ## 9. Tickets
 
-Every ticket targets `main`, is one agent run, follows `AGENTS.md` (focused local tests on a
-private Playwright port, CI for the full suite, a cross-provider review) and the standing acceptance
-of `docs/ask-tools.md` section 7 where it applies (real demo stores, figures recomputed in tests,
-never hard-coded amounts). Small and Big are the repository's review tiers.
+Every ticket targets `main`, is one agent run of about 90 minutes, follows `AGENTS.md` (focused
+local tests, Playwright only for the ticket's own specs on a private port, CI for the full suite,
+one cross-provider review) and the standing acceptance of `docs/ask-tools.md` section 7 where it
+applies (real demo stores, figures recomputed in tests, never hard-coded amounts). Small and Big
+are the repository's review tiers. Every ticket's decisions are the plan sections it names, as
+written; none needs a person at run time.
 
 | Ticket | Tier | Blocked by | Size (production, test lines) |
 |---|---|---|---|
-| B1 Block contract: `show`, validation, snapshot, storage | Big (new subsystem) | C2 (PR #105), C3 (PR #106), C4 (PR #104) | about 650, 700 |
-| B2 Block renderer: chart, table, compare in Ask | Big | B1 | about 900, 450 |
-| B3 Drill-down and staleness | Small | B2 | about 300, 300 |
-| B4 War games in Ask | Big | B2, C9 | about 550, 550 |
-| B5 Retire the What-if page; Decide list to Plan | Small | B4 | about 150 added, 500 removed; 300 test |
-| B6 Timeline block | Small | B2 | about 200, 200 |
+| B1 Block validator and snapshot builder | Big (new subsystem) | none | about 400, 450 |
+| B3 Block shell, table and compare renderers | Big | none | about 450, 350 |
+| B5 `recommendations.wargame` read | Small | none | about 150, 200 |
+| B7 Decide list moves to the Plan screen | Small | none | about 150, 200 |
+| B2 `show` tool and answer integration | Big | B1, B3, C2 (PR #105) | about 350, 400 |
+| B4 Chart and timeline renderers | Big | B3 | about 450, 300 |
+| B6 War games in Ask | Big | B2, B4, B5, C9 | about 400, 450 |
+| B8 Drill-down and staleness | Small | B2 | about 300, 300 |
+| B9 Retire the What-if page | Small | B6, B7 | about 100 added, 500 removed; 300 test |
 
-Waves: B1 when C2, C3 and C4 merge; B2; then B3, B6 and (once C9 merges) B4 in parallel; then B5.
+Waves: 1 now: B1, B3, B5, B7. 2: B2 (once C2 merges) and B4. 3: B8, and B6 once C9 merges. 4: B9.
+Serial edges: B1 to B2, B3 to B2 and B4, B2 to B6 and B8, B6 and B7 to B9.
 
-### B1 Block contract: `show`, validation, snapshot, storage
+### B1 Block validator and snapshot builder
 
-Problem: Ask answers are paragraphs only; a trend or a ranking has no way to be drawn, and nothing
-lets the model ask for a drawing without stating numbers.
+Problem: nothing can check a block declaration or turn tool results into a drawable snapshot.
 
-Base: `main`. Blocked by: C2, C3, C4 merged.
+Blocked by: none. Decisions: sections 1, 4 and 5 (items 1 and 2). Pure functions; no tool, route
+or answerer change. Figures are recognized by the envelope shape with `UNITS` from
+`src/calc/figure.mjs`.
 
-Decisions: sections 1, 3, 4 and 5 of this plan, as written. `show` is Ask-only. Blocks are built
-from `ctx.turnResults()`, not re-run. Storage in `provenance.blocks`, no migration. B1 owns the
-answerer change; no later B ticket edits `src/api/answerer.mjs`.
-
-Files: `src/tools/tools.mjs` (header, `askOnly`), `src/tools/index.mjs` (`askOnly` listing and
-Ask-only rule text), `src/tools/catalog/show.mjs` (new), `src/blocks/validate.mjs`,
-`snapshot.mjs`, `labels.mjs` (new), `src/engine/tools.mjs` (`ctx.turnResults`), `src/mcp/server.mjs`
-and `src/mcp/keys.mjs` (skip `askOnly`), `src/api/answerer.mjs` (shared collector, markers,
-`provenance.blocks`, `blockNotes`, `b` token kind), `src/shared/answer-text.mjs` (marker
-placeholder in `streamHtml`), `src/api/fake-answers.mjs` (a scripted `show` path), `evals/graders.mjs`
-(`gradeBlocks`), `evals/catalog.json` (B1 cases only), `evals/scripts/` (B1 scripts),
-`docs/ask-tools.md` (catalog row for `show`), `docs/architecture.md` (Ask answer shape),
-`test/blocks-validate.test.mjs`, `test/blocks-snapshot.test.mjs`, `test/blocks-answer.test.mjs`
-(new).
+Files: `src/blocks/validate.mjs`, `snapshot.mjs`, `snapshot-shape.mjs`, `labels.mjs`, `paths.mjs`
+(new), `test/blocks-validate.test.mjs`, `test/blocks-snapshot.test.mjs` (new).
 
 Done when:
 
-1. Each reason code in section 4 is returned for its fixture and the block is not stored; each
-   block type has a valid fixture whose snapshot figures equal the figures at the same paths in
-   the source results. Verified by `test/blocks-validate.test.mjs` and
-   `test/blocks-snapshot.test.mjs`. Runs in: worker.
-2. An Ask answer with the fake engine that calls `spending.total {groupBy: 'month'}`, then
-   `show.chart`, then writes text with `{b:b1}` on its own line stores one block with `after` equal
-   to the paragraphs before the marker, renders no marker text, grounds without counting the
-   marker, and stores `blockNotes` for a second, invalid `show` call. A block in a regenerated
-   answer may reference a first-attempt call. Verified by `test/blocks-answer.test.mjs` and
-   `test/answerer.test.mjs`. Runs in: worker.
-3. `show` is absent from MCP `tools/list` for a key with every scope, a direct MCP call to it is
-   refused as unknown, and the MCP `instructions` hold none of its rules. Verified by
-   `src/mcp/test/server.test.mjs`. Runs in: worker.
-4. The budget test measures the Ask-offered list (including `show`) under 30,000 characters and the
-   Ask rule text under 8,000, printing both. Verified by `test/tools-registry.test.mjs`. Runs in:
-   worker.
-5. `gradeBlocks` reports each violation kind on a fixture, and `npm run eval:ask` passes with the
-   four runnable B1 cases as required passes and `block-compare-returns` as an expected failure
-   naming its missing pairs. Verified by `test/ask-evals-runner.test.mjs` and `npm run eval:ask`.
-   Runs in: worker and PR CI.
+1. `validateBlock(op, args, turnResults)` returns each reason code in section 4 for its fixture,
+   built from real demo-store results of `goals.pace`, `household.figures`, `transactions.search`
+   and `household.deadlines` called through `callTool`. Verified by `test/blocks-validate.test.mjs`.
+   Runs in: worker.
+2. For a valid fixture of each block type (chart line, chart scatter, table, compare, timeline),
+   `buildSnapshot` passes `snapshot-shape.mjs`, every snapshot figure equals the figure at the
+   same path in the source result, labels come from data per section 1, and no snapshot exceeds
+   65,536 bytes. Verified by `test/blocks-snapshot.test.mjs`. Runs in: worker.
 
-Out of scope: rendering (B2); any change to existing eval case entries.
+Test command: `node --test test/blocks-validate.test.mjs test/blocks-snapshot.test.mjs`
 
-Test command: `node --test test/blocks-validate.test.mjs test/blocks-snapshot.test.mjs test/blocks-answer.test.mjs test/answerer.test.mjs test/tools-registry.test.mjs test/ask-evals-runner.test.mjs src/mcp/test/server.test.mjs && npm run eval:ask`
+### B3 Block shell, table and compare renderers
 
-### B2 Block renderer: chart, table, compare in Ask
+Problem: stored blocks have no client renderer.
 
-Problem: stored blocks (B1) have no client renderer.
+Blocked by: none. Decisions: section 2 (layout, accessibility, provenance hover) and the section 5
+snapshot contract. The shell's renderer map holds `table` and `compare`; B4 adds the other two.
 
-Base: `main`. Blocked by: B1 merged.
-
-Decisions: section 2 as written; one renderer module shared by the page, panel and rec dialog;
-`niceTicks` moves from design.js into the renderer and design.js imports it until B5 removes its
-last caller.
-
-Files: `web/horizon/screens/ask-blocks.js` (new), `web/horizon/screens/chat.js` (call the renderer
-after paragraph `after`, register figures, render `blockNotes`), `web/horizon/screens/ask.css`
-(block styles, series ramp), `web/core/core.js` (`api.registerFigures`), `web/horizon/design.js`
-(import `niceTicks`), `test/ask-blocks.test.mjs` (new, pure render functions over B1 snapshots),
-`test/block-palette.test.mjs` (new), `e2e/ask-blocks.spec.mjs` (new).
+Files: `web/horizon/screens/ask-blocks.js`, `ask-block-table.js`, `ask-block-compare.js` (new),
+`web/horizon/screens/chat.js` (place blocks after paragraph `after`, render `blockNotes`),
+`web/horizon/screens/ask.css` (block styles, series ramp tokens), `web/core/core.js`
+(`api.registerFigures`), `test/fixtures/blocks/` (table, compare, notes), `test/ask-blocks.test.mjs`,
+`test/block-palette.test.mjs`, `e2e/ask-blocks.spec.mjs` (new).
 
 Done when:
 
-1. Each chart kind, a table and a compare render from B1 snapshot fixtures with every data value
-   as a `.fx-fig` registered under `blk:` keys, labels from data only, and no model text other than
-   the escaped title. Verified by `test/ask-blocks.test.mjs`. Runs in: worker.
-2. Table sort by each column type and the filter work on the snapshot rows, with `aria-sort`
-   updated. Verified by `test/ask-blocks.test.mjs`. Runs in: worker.
-3. Every series ramp color meets 3:1 against the panel background in light and dark. Verified by
+1. From the fixtures, the shell and both renderers produce every value as a `.fx-fig` span
+   registered under a `blk:` key, labels from the snapshot only, the escaped title, and the dropped
+   note for an unknown `op`; table sort by each column type and the filter change row order and
+   `aria-sort`. Verified by `test/ask-blocks.test.mjs`. Runs in: worker.
+2. Every series ramp color meets 3:1 against the panel background in light and dark. Verified by
    `test/block-palette.test.mjs`. Runs in: worker.
-4. On the demo build with the fake engine, a scripted answer shows a chart, a table and a compare
-   in the docked panel and on the Ask page, at 1280 px and 390 px, in light and dark; the page has
-   no horizontal scroll at 390 px; the chart's Table toggle, arrow keys, the live region and the
-   popover on Enter work; the popover shows the figure's source and as-of date. Verified by
-   `e2e/ask-blocks.spec.mjs`. Runs in: PR CI (local run on a private port for this spec only).
-
-Out of scope: drill and stale states (B3); war-game actions (B4).
+3. On the demo build, a thread whose API response is rewritten by Playwright `page.route` to carry
+   the fixture blocks shows the table and compare in the docked panel and on the Ask page at 1280
+   px and 390 px, light and dark, with no horizontal page scroll at 390 px, sort buttons operable
+   by keyboard, and the popover on a block figure showing its source and as-of date. Verified by
+   `e2e/ask-blocks.spec.mjs`. Runs in: PR CI.
 
 Test command: `node --test test/ask-blocks.test.mjs test/block-palette.test.mjs test/ask-convo.test.mjs`, then `npx playwright test e2e/ask-blocks.spec.mjs` on a private port.
 
-### B3 Drill-down and staleness
+### B5 `recommendations.wargame` read
 
-Problem: a table figure cannot show the rows behind it, and a reopened answer cannot tell the owner
-its data changed.
+Problem: no tool reads the war-game model.
 
-Base: `main`. Blocked by: B2 merged.
+Blocked by: none. Decisions: section 7 "The read".
 
-Decisions: sections 5 (items 4 and 5) and 6 as written.
+Files: `src/tools/catalog/wargame.mjs` (new), `docs/ask-tools.md` (`recommendations` row),
+`test/tools-wargame.test.mjs` (new).
+
+Done when:
+
+1. On the demo store each game returns every point or option with figures equal to the stored
+   `wg.*` figures, status and decision equal to the scenario's, `picked` equal to the stored picks,
+   and refs that pass `assertRefsResolve`; a store with no S corp returns `not_built` with the
+   `notBuiltReason` text and no points. Verified by `test/tools-wargame.test.mjs`. Runs in: worker.
+2. The registry and budget tests stay green with the new operation. Verified by
+   `test/tools-registry.test.mjs`. Runs in: worker.
+
+Test command: `node --test test/tools-wargame.test.mjs test/tools-registry.test.mjs`
+
+### B7 Decide list moves to the Plan screen
+
+Problem: the Decide list lives on the page the owner is retiring.
+
+Blocked by: none (the coordinator confirms risk 7 with the owner first). Decisions: section 7
+"What is removed", item 5, except that war-game rows keep linking to the war-game page until B9.
+
+Files: `web/horizon/design.js` (`pPlan` gains the Decisions section built from `decisionList` and
+`notBuiltRows`), `web/horizon/screens/switcher.js` (Decide goes to `#/plan`), `e2e/decide.spec.mjs`,
+`e2e/decide-not-built.spec.mjs`.
+
+Done when:
+
+1. The Plan screen shows the Decisions section with the same groups and rows Decide shows on the
+   demo store, and the switcher's Decide entry lands on it. Verified by `e2e/decide.spec.mjs` and
+   `e2e/decide-not-built.spec.mjs`. Runs in: PR CI.
+
+Test command: `npx playwright test e2e/decide.spec.mjs e2e/decide-not-built.spec.mjs` on a private port.
+
+### B2 `show` tool and answer integration
+
+Problem: the model has no way to declare a block, and answers do not store or place them.
+
+Blocked by: B1, B3, C2. Decisions: sections 2 (streaming and MCP paragraphs), 3, and 5 items 2
+and 3. B2 is the only B ticket that edits `src/api/answerer.mjs`, `src/tools/tools.mjs` and
+`src/tools/index.mjs`.
+
+Files: `src/tools/tools.mjs` (header, `askOnly`), `src/tools/index.mjs` (Ask-only listing and rule
+text), `src/tools/catalog/show.mjs` (new), `src/engine/tools.mjs` (`ctx.turnResults`),
+`src/mcp/server.mjs`, `src/mcp/keys.mjs`, `src/api/answerer.mjs`, `src/shared/answer-text.mjs`,
+`src/api/fake-answers.mjs` (a scripted chart and table answer), `evals/graders.mjs` (`gradeBlocks`),
+`evals/catalog.json` and `evals/scripts/` (the B2 cases in section 8), `docs/ask-tools.md`,
+`docs/architecture.md`, `test/blocks-answer.test.mjs` (new), `test/answerer.test.mjs`,
+`e2e/ask-blocks.spec.mjs` (one end-to-end case with no route rewrite).
+
+Done when:
+
+1. An answer with the fake engine that calls `transactions.search`, then `show.table`, then writes
+   `{b:b1}` on its own line stores one block whose `after` equals the paragraphs before the marker,
+   renders no marker text, grounds without counting the marker, and stores `blockNotes` for a
+   second, invalid `show` call; a block in a regenerated answer may use a first-attempt call.
+   Verified by `test/blocks-answer.test.mjs` and `test/answerer.test.mjs`. Runs in: worker.
+2. `show` is absent from MCP `tools/list` for a key with every scope, an MCP call to it is refused,
+   and the MCP `instructions` hold none of its rules. Verified by `src/mcp/test/server.test.mjs`.
+   Runs in: worker.
+3. The budget test measures the Ask-offered list under 30,000 characters and the Ask rule text
+   under 8,000, printing both. Verified by `test/tools-registry.test.mjs`. Runs in: worker.
+4. `gradeBlocks` reports each violation kind on a fixture; `npm run eval:ask` passes with every B2
+   case whose operations are registered as a required pass and the rest as expected failures naming
+   their missing pairs. Verified by `test/ask-evals-runner.test.mjs` and `npm run eval:ask`. Runs
+   in: worker and PR CI.
+5. On the demo build with the fake engine, the scripted answer's table renders in the panel from
+   the real builder. Verified by `e2e/ask-blocks.spec.mjs`. Runs in: PR CI.
+
+Test command: `node --test test/blocks-answer.test.mjs test/answerer.test.mjs test/tools-registry.test.mjs test/ask-evals-runner.test.mjs src/mcp/test/server.test.mjs && npm run eval:ask`
+
+### B4 Chart and timeline renderers
+
+Problem: the shell has no chart or timeline renderer.
+
+Blocked by: B3. Decisions: section 2 (charts, timeline, keyboard, Table toggle). `niceTicks` is
+copied from design.js into `ask-block-chart.js`; B9 deletes the design.js copy.
+
+Files: `web/horizon/screens/ask-block-chart.js`, `ask-block-timeline.js` (new), `ask-blocks.js`
+(two map entries), `ask.css`, `test/fixtures/blocks/` (chart kinds, timeline),
+`test/ask-blocks.test.mjs`, `e2e/ask-blocks.spec.mjs`.
+
+Done when:
+
+1. Line, bar, area, scatter and timeline render from fixtures with every data value reachable as a
+   registered figure, an `aria-label` summary built from data, and a Table toggle that renders the
+   same values as a table. Verified by `test/ask-blocks.test.mjs`. Runs in: worker.
+2. In the browser (fixture blocks through `page.route`), arrow keys move the active point and update
+   the live region, Enter opens the popover, Escape returns focus, at 1280 px and 390 px in light
+   and dark. Verified by `e2e/ask-blocks.spec.mjs`. Runs in: PR CI.
+
+Test command: `node --test test/ask-blocks.test.mjs`, then `npx playwright test e2e/ask-blocks.spec.mjs` on a private port.
+
+### B6 War games in Ask
+
+Problem: Ask cannot offer the war games or pick and decide a point.
+
+Blocked by: B2, B4, B5, C9. Decisions: section 7 "The suggested questions" and "Pick and decide as
+Ask writes". Point ids, not indexes, cross the tool boundary.
+
+Files: `src/blocks/actions.mjs` (new), `src/blocks/snapshot.mjs` (attach the action),
+`src/api/ask-blocks.mjs` (new: the act route), `src/api/router.mjs`, `src/scenario/build.mjs`
+(starters), `src/api/fake-answers.mjs` (both starters), `web/horizon/screens/ask-block-compare.js`
+(Pick this, Decide footer, live picked state), `web/core/core.js` (`api.blockAct`),
+`web/horizon/design.js` (rec dialog "Ask about this tradeoff" button), `docs/ask-tools.md` (route
+map), `evals/catalog.json` and `evals/scripts/` (B6 cases), `test/blocks-act.test.mjs` (new),
+`test/scenario.test.mjs`, `e2e/ask-wargame.spec.mjs` (new).
+
+Done when:
+
+1. The starters appear first only when their game is open or upcoming. Verified by
+   `test/scenario.test.mjs`. Runs in: worker.
+2. The act route with `pick` writes the same `wargame.picks` setting as `pickWargame`, stores a
+   receipt whose Undo restores the prior picks, and appends one Fathom message with that receipt;
+   `decide` matches `act_on_recommendation.decide` and its Undo revisits; an option out of range is
+   400, an unavailable game 409, and no point id is read from the request. Verified by
+   `test/blocks-act.test.mjs`. Runs in: worker.
+3. On the demo build with the fake engine, the salary starter shows a scatter and a compare; Pick
+   this, Undo, Pick this, Decide on this leaves the decision decided on the picked point; the rec
+   dialog's Ask about this tradeoff opens the panel with the starter. Verified by
+   `e2e/ask-wargame.spec.mjs`. Runs in: PR CI.
+4. `npm run eval:ask` passes with the three B6 cases as required passes. Verified by `npm run
+   eval:ask`. Runs in: worker and PR CI.
+
+Test command: `node --test test/blocks-act.test.mjs test/scenario.test.mjs test/tools-parity.test.mjs && npm run eval:ask`
+
+### B8 Drill-down and staleness
+
+Problem: a table figure cannot show its rows, and a reopened answer cannot say its data changed.
+
+Blocked by: B2. Decisions: section 5 items 4 and 5, section 6.
 
 Files: `src/blocks/drill.mjs` (new), `src/blocks/snapshot.mjs` (store `drill`),
-`src/api/ask-blocks.mjs` (new: `GET /api/threads/:id/blocks`), `src/api/router.mjs`,
-`docs/ask-tools.md` (route map: the status route is excluded as conversation chrome),
-`web/horizon/screens/ask-blocks.js`, `web/core/core.js` (`api.blockStatus`),
+`src/api/ask-blocks.mjs` (status route; create the file if B6 has not), `src/api/router.mjs`,
+`docs/ask-tools.md` (status route excluded as conversation chrome), `web/horizon/screens/ask-blocks.js`
+(stale badge, Ask again), `ask-block-table.js` (Show rows), `web/core/core.js` (`api.blockStatus`),
 `test/blocks-drill.test.mjs`, `test/blocks-stale.test.mjs` (new), `e2e/ask-blocks.spec.mjs`.
 
 Done when:
 
-1. For each drill mapping in section 6 on the demo store, the drill route's `sum` equals the
-   block figure to the cent; `drillQuery` returns null for a definition, a merchant group and a
-   class group. Verified by `test/blocks-drill.test.mjs`. Runs in: worker.
-2. The status route returns `current` for an unchanged store, `stale` with the changed count after
-   a test inserts a transaction in the window, and `unavailable` after the source call starts to
-   error; it writes nothing (row counts and the stored message unchanged). Verified by
-   `test/blocks-stale.test.mjs`. Runs in: worker.
-3. In the browser, Show rows expands the rows with focus on the region heading and Escape returns
-   focus; a stale block shows the badge and Ask again sends the question. Verified by
-   `e2e/ask-blocks.spec.mjs`. Runs in: PR CI.
+1. For each drill mapping in section 6 that the merged reads support on the demo store, the route's
+   `sum` equals the block figure to the cent; `drillQuery` returns null for a definition and a
+   merchant group. Verified by `test/blocks-drill.test.mjs`. Runs in: worker.
+2. The status route returns `current` on an unchanged store, `stale` with the changed count after
+   the test inserts a transaction in the window, and `unavailable` after the source call starts to
+   error, and changes no row. Verified by `test/blocks-stale.test.mjs`. Runs in: worker.
+3. In the browser, Show rows expands with focus on its heading and Escape returns focus; a stale
+   block shows the badge and Ask again sends the question. Verified by `e2e/ask-blocks.spec.mjs`.
+   Runs in: PR CI.
 
 Test command: `node --test test/blocks-drill.test.mjs test/blocks-stale.test.mjs test/ask-blocks.test.mjs test/tools-parity.test.mjs`
 
-### B4 War games in Ask
+### B9 Retire the What-if page
 
-Problem: the war games live on a page the owner is retiring; Ask cannot read them or pick a point.
+Problem: once B6 ships, the What-if page duplicates Ask.
 
-Base: `main`. Blocked by: B2 and C9 merged.
+Blocked by: B6, B7. Decisions: section 7 "What is removed", items 1 to 4, 6 and 7; war-game rows
+in the Plan Decisions section switch to the Ask button; no route alias.
 
-Decisions: section 7 "The read", "The suggested questions" and "Pick and decide as Ask writes", as
-written. Point ids, not indexes, cross the tool boundary.
-
-Files: `src/tools/catalog/wargame.mjs` (new), `src/blocks/actions.mjs` (new),
-`src/blocks/snapshot.mjs` (attach the action), `src/api/ask-blocks.mjs` (act route),
-`src/api/router.mjs`, `src/scenario/build.mjs` (starters), `src/api/fake-answers.mjs` (both
-starters), `web/horizon/screens/ask-blocks.js` (Pick this, Decide footer, live picked state),
-`web/core/core.js` (`api.blockAct`), `web/horizon/design.js` (rec dialog "Ask about this tradeoff"
-button), `docs/ask-tools.md` (catalog and route map), `evals/catalog.json` and `evals/scripts/` (B4
-cases), `test/tools-wargame.test.mjs`, `test/blocks-act.test.mjs` (new),
-`e2e/ask-wargame.spec.mjs` (new).
-
-Done when:
-
-1. `recommendations.wargame` returns, for each game on the demo store, every point or option with
-   figures equal to the stored `wg.*` figures, status and decision equal to the scenario's, and
-   refs that pass `assertRefsResolve`; a store with no S corp returns `not_built` with the
-   `notBuiltReason` text. Verified by `test/tools-wargame.test.mjs`. Runs in: worker.
-2. The starters appear first only when their game is open or upcoming. Verified by
-   `test/scenario.test.mjs`. Runs in: worker.
-3. The act route with `pick` writes the same `wargame.picks` setting as `pickWargame`, stores a
-   receipt whose Undo restores the prior picks, and appends one Fathom message with that receipt;
-   with `decide` it matches `act_on_recommendation.decide`, and Undo revisits; a request option out
-   of range is 400, an unavailable game 409, and the server never reads a point id from the request.
-   Verified by `test/blocks-act.test.mjs`. Runs in: worker.
-4. On the demo build with the fake engine, the salary starter shows a scatter and a compare; Pick
-   this then Undo then Pick this then Decide on this leaves the decision decided with the picked
-   point, and the rec dialog's Ask about this tradeoff opens the panel with the starter. Verified by
-   `e2e/ask-wargame.spec.mjs`. Runs in: PR CI.
-5. `npm run eval:ask` passes with the three B4 cases as required passes. Verified by `npm run
-   eval:ask`. Runs in: worker and PR CI.
-
-Out of scope: removing the What-if page (B5).
-
-Test command: `node --test test/tools-wargame.test.mjs test/blocks-act.test.mjs test/scenario.test.mjs test/tools-registry.test.mjs test/tools-parity.test.mjs && npm run eval:ask`
-
-### B5 Retire the What-if page; Decide list to Plan
-
-Problem: once B4 ships, the What-if page duplicates Ask and the owner wants it gone; its Decide
-list still needs a home.
-
-Base: `main`. Blocked by: B4 merged.
-
-Decisions: section 7 "What is removed" as written; no route alias.
-
-Files: `web/horizon/design.js`, `web/horizon/design.css`, `web/horizon/screens/switcher.js`,
-`web/horizon/screens/ask-context.js`, `web/core/core.js`, `web/auth/return-path.js`,
-`src/api/router.mjs` and `src/api/handlers.mjs` (remove the pick route and `wargamePick`),
-`test/tools-rec-writes.test.mjs` (created by C9; compare with `pickWargame`),
-`test/wargame-retired.test.mjs` (new), `docs/ask-tools.md` (route map),
-the e2e specs that name the page (`decide`, `decide-not-built`, `nav`, `routes`, `mobile`, `keys`,
-`alignment`, `january`, `planner-mg`, `planner-real`, `real-polish`, `helpers`), and the unit tests
-that name the route (`test/api.test.mjs`, `test/ask-context.test.mjs`, `test/tour.test.mjs`).
+Files: `web/horizon/design.js`, `design.css`, `web/horizon/screens/switcher.js`, `ask-context.js`,
+`web/core/core.js`, `web/auth/return-path.js`, `src/api/router.mjs`, `src/api/handlers.mjs`
+(remove the pick route and `wargamePick`), `test/tools-rec-writes.test.mjs` (created by C9;
+compare with `pickWargame`), `test/wargame-retired.test.mjs` (new), `docs/ask-tools.md` (route
+map), the e2e specs that name the page (`decide`, `decide-not-built`, `nav`, `routes`, `mobile`,
+`keys`, `alignment`, `january`, `planner-mg`, `planner-real`, `real-polish`, `helpers`), and
+`test/api.test.mjs`, `test/ask-context.test.mjs`, `test/tour.test.mjs`.
 
 Done when:
 
 1. No tracked file under `web/` or `src/api/` names the `wargame` route, `pWargame`, `pDecide`,
-   `salaryChart`, `deferralView` or `/api/wargame/`. Verified by `test/wargame-retired.test.mjs`
-   (new), which reads `git ls-files`. Runs in: worker.
-2. The Plan screen shows the Decisions section with the same rows Decide showed on the demo store
-   (open, not built, coming up, decided, no longer current), each button going where section 7
-   says; Revisit still works. Verified by `e2e/decide.spec.mjs` and `e2e/decide-not-built.spec.mjs`
-   (rewritten against Plan). Runs in: PR CI.
-3. The Ask sub-nav lists Conversations and Packs only, and `#/wargame` lands on the default route.
-   Verified by `e2e/nav.spec.mjs` and `e2e/routes.spec.mjs`. Runs in: PR CI.
-4. `act_on_recommendation.pick_point` still matches `pickWargame` and undoes. Verified by
+   `salaryChart`, `deferralView` or `/api/wargame/`. Verified by `test/wargame-retired.test.mjs`,
+   which reads `git ls-files`. Runs in: worker.
+2. The Ask sub-nav lists Conversations and Packs only, `#/wargame` lands on the default route, and
+   a war-game decision row on Plan opens the Ask panel with its starter. Verified by
+   `e2e/nav.spec.mjs`, `e2e/routes.spec.mjs` and `e2e/decide.spec.mjs`. Runs in: PR CI.
+3. `act_on_recommendation.pick_point` still matches `pickWargame` and undoes. Verified by
    `test/tools-rec-writes.test.mjs`. Runs in: worker.
 
 Test command: `node --test test/api.test.mjs test/ask-context.test.mjs test/tour.test.mjs test/tools-rec-writes.test.mjs test/tools-parity.test.mjs test/wargame-retired.test.mjs`
-
-### B6 Timeline block
-
-Problem: dated results (access ages, obligation changes, deadlines) read better as a timeline.
-
-Base: `main`. Blocked by: B2 merged.
-
-Decisions: section 1 `timeline` row and section 2 item 5, as written.
-
-Files: `src/tools/catalog/show.mjs` (`timeline`), `src/blocks/validate.mjs`, `snapshot.mjs`,
-`web/horizon/screens/ask-blocks.js`, `test/blocks-validate.test.mjs`, `test/ask-blocks.test.mjs`.
-
-Done when:
-
-1. `show.timeline` over `household.deadlines` on the demo store validates and its events equal the
-   deadlines in date order; a `date` path to a money figure is `mixed_units`. Verified by
-   `test/blocks-validate.test.mjs`. Runs in: worker.
-2. The timeline renders as a list with dates, labels and value figures, keyboard reachable.
-   Verified by `test/ask-blocks.test.mjs`. Runs in: worker.
-
-Test command: `node --test test/blocks-validate.test.mjs test/ask-blocks.test.mjs test/tools-registry.test.mjs`
 
 ### Readiness
 
 Probed 2026-11-07 on `main` at `6306899`:
 
-1. Can start: no for every ticket today, by design. B1 waits on PRs #104, #105 and #106 (open);
-   B4 on C9 (not opened); the rest on earlier B tickets. Base health at `6306899`: actionlint,
-   gitleaks, hadolint, npm-audit, publish and unit succeeded; e2e was in progress; build skipped.
-   The coordinator reruns both probes before each dispatch.
-2. Collisions found and resolved: PR #105 edits `src/api/answerer.mjs`, `src/tools/tools.mjs` and
-   `test/answerer.test.mjs`, and PR #106 edits `test/answerer.test.mjs`; B1 is blocked by both, so
-   it starts on their merged result. PR #106 exports `resolveRef`, `isFigure` and `MAX_REF_DEPTH`
-   from `src/tools/refs.mjs`; B1 uses `isFigure` and walks list paths itself.
+1. Can start now: B1, B3, B5 and B7 (no blockers; B7 after the coordinator confirms risk 7). Base
+   health at `6306899`: actionlint, gitleaks, hadolint, npm-audit, publish and unit succeeded; e2e
+   was in progress; build skipped. The coordinator reruns the check before each dispatch.
+2. Waiting: B2 on C2 (PR #105, open), B6 on C9 (not opened). PR #105 edits `src/api/answerer.mjs`,
+   `src/tools/tools.mjs` and `test/answerer.test.mjs`, which B2 also edits; B2 starts on its merged
+   result. No open PR touches the wave 1 files.
 3. Can finish: yes for each ticket. Every Done when item names a unit test, `npm run eval:ask` or a
    Playwright spec that the worker or PR CI runs on the demo build with no secrets, no network and
-   no live model. No item needs a person.
-4. Riskiest step: B1 item 2, a regenerated answer's block referencing a first-attempt call. It
-   depends on the answerer sharing one collector across two engine calls; `createRegistryServer`
-   keeps a per-server `results` list today (`src/engine/tools.mjs`), so B1 passes a shared list in
-   rather than relying on that one.
-5. Open question carried to the coordinator: whether the owner accepts the Decide list on the Plan
-   screen (risk 7). B5 is not dispatched until that is answered.
+   no live model. B3 and B4 fake only the network response at the browser boundary, to render
+   fixture blocks before B2 exists; B2's spec covers the real path.
+4. Riskiest step: B2 item 1, a regenerated answer's block referencing a first-attempt call. It
+   needs one collector shared across two engine calls; `createRegistryServer` keeps a per-server
+   `results` list today (`src/engine/tools.mjs`), so B2 passes a shared list in.
 
 ## Assumptions and deferred scope
 
