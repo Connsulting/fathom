@@ -796,6 +796,11 @@ function onboard(step) {
 // ---------------------------------------------------------------- goals and the curve
 
 // Resolve with the saved goal (or true for a delete), or null on failure (error line shown).
+function accountRename(id, displayName) {
+  if (id == null || id === '') return done();
+  return send('/api/accounts/' + encodeURIComponent(id) + '/name', { displayName: displayName ?? '' }, d => d.account || null, null, 'Could not rename that account. ');
+}
+
 function goalCreate(fields) {
   if (!fields || typeof fields !== 'object') return done();
   return send('/api/goals', fields, d => d.goal || null, null, 'Could not save that goal. ');
@@ -1099,6 +1104,7 @@ const api = {
   decide,
   revisit,
   onboard,
+  accountRename,
   goalCreate,
   goalUpdate,
   goalArchive,
