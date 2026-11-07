@@ -58,6 +58,48 @@ async function threads(request) {
 
 const ids = (list) => (list || []).map((t) => t.id);
 
+test('AC10 opening a fallback thread requests its one title repair and reload does not repeat it', async ({ page, request }) => {
+  test.skip(REMOTE, 'This check reads the local demo spend ledger.');
+  const thread = await newThread(request, '529 contributions.');
+  const store = new DatabaseSync(STORE);
+  try { store.prepare("UPDATE conversations SET title = '529 contributions.', title_source = 'auto' WHERE key = ?").run(thread.key); }
+  finally { store.close(); }
+  const titleCalls = () => {
+    const db = new DatabaseSync(STORE, { readOnly: true });
+    try { return db.prepare("SELECT count(*) AS n FROM spend_ledger WHERE purpose = 'title'").get().n; }
+    finally { db.close(); }
+  };
+  const before = titleCalls();
+  await gotoRoute(page, 'ask');
+  const opened = page.waitForResponse(r => r.request().method() === 'GET' && new URL(r.url()).pathname === `/api/threads/${thread.id}`);
+  await row(page, thread.id).click();
+  expect((await opened).status()).toBe(200);
+  expect(titleCalls()).toBe(before + 1);
+  await expect(title(page)).toHaveText('529 contributions');
+  await expect(row(page, thread.id)).toContainText('529 contributions');
+  const reopened = page.waitForResponse(r => r.request().method() === 'GET' && new URL(r.url()).pathname === `/api/threads/${thread.id}`);
+  await page.reload();
+  expect((await reopened).status()).toBe(200);
+  expect(titleCalls()).toBe(before + 1);
+});
+
+test('AC10 creating a thread preserves its repair attempt for a later opening', async ({ page }) => {
+  test.skip(REMOTE, 'This check reads the local demo spend ledger.');
+  await gotoRoute(page, 'ask');
+  const reads = [];
+  page.on('request', r => { if (r.method() === 'GET' && /\/api\/threads\/[a-f0-9]{12}$/.test(new URL(r.url()).pathname)) reads.push(r.url()); });
+  const id = await askOnAsk(page, '529 contributions');
+  const db = new DatabaseSync(STORE, { readOnly: true });
+  try {
+    expect(db.prepare('SELECT value FROM settings WHERE key = ?').get(`ask.titleRetried.ask:${id}`)).toBeUndefined();
+    expect(reads).toEqual([]);
+  } finally { db.close(); }
+  await gotoRoute(page, 'ask');
+  const opened = page.waitForResponse(r => r.request().method() === 'GET' && new URL(r.url()).pathname === `/api/threads/${id}`);
+  await row(page, id).click();
+  expect((await opened).status()).toBe(200);
+});
+
 /* ---------- page ---------- */
 
 const side = (page) => page.locator('aside.h-askx-side');

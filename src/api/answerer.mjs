@@ -94,6 +94,7 @@ export const PRODUCT_RULES = [
   'Write stored figures as {f:key} tokens using returned figure keys, never as typed amounts.',
   'Never write a Sources, References or Citations line and never cite sources in your prose: the app shows the sources it used under every answer.',
   'Call tools before you write the answer, and do not narrate tool use.',
+  'Do the read-only lookups needed to answer fully before replying. Check every relevant account, including all 529s and checking for transfers. Never ask permission to read household data.',
   'Answer in short paragraphs separated by blank lines. You may use bullet lists (lines starting with "- "), numbered lists (lines starting with "1. ") and **bold**; use no other markdown (no headings, links or tables) and no HTML.',
   'The conversation context may list references: items the owner pointed at on screen, as kind and id, each with the tools that read it. Read them with those tools; never guess what they hold and never state a number about them that a tool did not return.',
 ].join('\n');
@@ -404,13 +405,14 @@ export function groundAnswer(text, { scenario, toolResults = [], data = [], data
 }
 
 function groundMasked(masked, { scenario, toolResults, data, dataLabels, accountLabels, violations, figureKeys }) {
+  const check = (text, options = {}) => checkGrounding(text, { ...options, allowCounts: true });
   const raws = Array.isArray(toolResults) ? toolResults : [];
   const results = raws.map(groundingResult);
   const values = (Array.isArray(data) ? data : [data]).map(evidence);
-  const unsupported = checkGrounding(masked, { toolResults: results, data: values }).violations;
+  const unsupported = check(masked, { toolResults: results, data: values }).violations;
   if (unsupported.length) {
     const figureValues = Object.values((scenario && scenario.fig) || {}).map(f => f && f.v).filter(Number.isFinite);
-    const notFigures = new Set(checkGrounding(masked, { data: [figureValues] }).violations.map(v => v.index));
+    const notFigures = new Set(check(masked, { data: [figureValues] }).violations.map(v => v.index));
     for (const v of unsupported) {
       violations.push(notFigures.has(v.index) ? v : { ...v, reason: 'stored figure written as a literal' });
     }
@@ -418,7 +420,7 @@ function groundMasked(masked, { scenario, toolResults, data, dataLabels, account
 
   const literals = [];
   const unsupportedAt = new Set(unsupported.map(v => v.index));
-  const spans = checkGrounding(masked, {}).violations.filter(v => !unsupportedAt.has(v.index));
+  const spans = checkGrounding(masked).violations.filter(v => !unsupportedAt.has(v.index));
   if (spans.length) {
     const sources = [
       ...results.map(r => ({ label: toolSource(r && r.name), check: () => checkGrounding(masked, { toolResults: [r] }) })),
@@ -748,7 +750,7 @@ export function createLiveAnswerer({ engine, packs, root } = {}) {
         ...(actionContext?.turnId ? { actionTurn: actionContext.turnId } : {}),
         engine: engine.mode,
         model: chosen.model,
-        tools: toolResults.map(r => ({ name: r.name, args: r.args ?? {} })),
+        tools: toolResults.map(r => ({ name: r.name, args: r.args ?? {}, ...(r.isError ? { isError: true, result: r.result } : {}) })),
         figures: grounding.figureKeys,
         packIds,
         packEntries: unique([...active.flatMap(({ pack }) => pack.entries.map(e => e.title)),

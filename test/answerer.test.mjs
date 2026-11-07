@@ -10,6 +10,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { compileSchema } from '../src/engine/schema.mjs';
 import { rm } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -1122,7 +1123,7 @@ function candidates(schema, name, intSentinel) {
 test('R3 A contract: no tool the answerer offers returns a sentinel argument outside identifier keys', async t => {
   const s = await demoStore(t);
   const listed = await offeredTools(s);
-  const offered = listed.flatMap(t => t.operations.map(op => ({ ...t, operation: op.name, inputSchema: { properties: { operation: { type: 'string', enum: [op.name] }, ...op.params }, required: ['operation', ...op.required] } })));
+  const offered = listed.flatMap(t => t.operations.map(op => ({ ...t, operation: op.name, inputSchema: { type: 'object', additionalProperties: false, properties: { operation: { type: 'string', enum: [op.name] }, ...op.params }, required: ['operation', ...op.required] } })));
   const names = [...new Set(offered.map(tool => tool.name))];
   assert.deepEqual(sorted(names), sorted(REGISTRY.filter(x => x.kind === 'read').map(x => x.name)),
     'a context without trusted identity offers read tools only');
@@ -1178,7 +1179,7 @@ test('R3 A contract: no tool the answerer offers returns a sentinel argument out
   const results = responses[0].toolResults;
   assert.equal(results.length, calls.length, 'every scripted call ran');
   for (const r of results) {
-    assert.ok(!(r.isError && r.result && r.result.error), `schema-valid arguments: ${r.name} ${JSON.stringify(r.args)}`);
+    assert.ok(compileSchema(offered.find(t => t.name === r.name && t.operation === r.args.operation).inputSchema)(r.args), `schema-valid arguments: ${r.name} ${JSON.stringify(r.args)}`);
   }
   for (const name of names) {
     assert.ok(results.some(r => r.name === name && !r.isError), `${name} answers some sentinel call`);

@@ -77,6 +77,7 @@ function scriptArgs(predicates) {
 }
 function scriptedAnswer(turn, expected, missing) {
   if (turn.refusal || missing.length) return "Fathom doesn't have that.";
+  if (turn.scriptedReply) return turn.scriptedReply;
   if (expected.length) return 'The stored result is ' + turn.expected.map((e, i) => e.kind === 'figure' ? `{f:${e.key}}` : String(expected[i])).join(', ') + '.';
   return 'The requested information is available in the returned tool data.';
 }
@@ -122,6 +123,9 @@ export async function runCases({ cases, live = false, maxUsd = 100, outDir, scri
     } };
     const answerer = createLiveAnswerer({ engine, packs, root: store.root });
     for (const c of cases) {
+      const goalId = `eval-${c.id}`;
+      if (c.storedGoal) db.prepare("INSERT INTO goals (id, def, sort, origin, created_at) VALUES (?, ?, 100, 'owner', ?)")
+        .run(goalId, JSON.stringify({ ...c.storedGoal, id: goalId, horizon: 'now', target: null, targetDate: null, track: null }), clock + 'T00:00:00.000Z');
       missing = c.expectedFail?.missingOperations ?? [];
       scriptMissing = Boolean(c.expectedFail?.missingScript);
       caseScript = c.requires?.script && !scriptMissing && !live ? (await import(new URL(`./scripts/${c.id}.mjs`, import.meta.url))).script : null;
@@ -166,6 +170,7 @@ export async function runCases({ cases, live = false, maxUsd = 100, outDir, scri
       }
       result.costUsd = Number((ledger.costUsd - beforeCost).toFixed(12));
       rows.push(result);
+      if (c.storedGoal) db.prepare('DELETE FROM goals WHERE id = ?').run(goalId);
       if (ledger.state.stopped) break;
     }
     const scorecard = { version: 1, live, generatedAt: new Date().toISOString(), maxUsd, costUsd: ledger.costUsd,
