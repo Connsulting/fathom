@@ -124,3 +124,38 @@ test('assumption shapes are validated: value finite, known source, bounds and no
   assert.throws(() => checkAssumption(owner(0.01, '1 percent'), spec, ask(['1 percent'])), e => e.code === 'bad_input' && /0\.02/.test(e.message));
   assert.equal(checkAssumption({ value: 0.04, source: 'owner', evidence: '4 percent', note: 'their rule of thumb' }, spec, ctx).note, 'their rule of thumb');
 });
+
+// Review round 1 regressions.
+test('owner evidence never splits a number out of the owner\'s words', () => {
+  const spec = { name: 'withdrawalRate', unit: 'ratio' };
+  assert.throws(() => checkAssumption(owner(0.04, '4 percent'), spec, ask(['Use 14 percent'])), e => e.code === 'bad_input');
+  assert.equal(checkAssumption(owner(0.14, '14 percent'), spec, ask(['Use 14 percent'])).value, 0.14);
+  assert.throws(() => checkAssumption(owner(0.04, '0.04'), spec, ask(['A rate of 10.04 is fine'])), e => e.code === 'bad_input');
+  assert.throws(() => checkAssumption(owner(1000, '1,000'), { name: 'amount', unit: 'usd' }, ask(['Spend $21,000 a year'])), e => e.code === 'bad_input');
+  assert.equal(checkAssumption(owner(0.04, '4 percent withdrawal rate'), spec, ask([Q02])).value, 0.04, 'an excerpt on word boundaries still counts');
+});
+
+test('a fact assumption needs a stored number, never a coerced boolean or list', () => {
+  const fact = t.db.prepare(`INSERT OR REPLACE INTO facts (key, value, src, as_of, confirmed, file_id, parser, locator, updated_at)
+                             VALUES (?, ?, 'you', '2026-11-01', 1, NULL, NULL, NULL, '2026-11-01T09:00:00Z')`);
+  fact.run('test.flag', 'true');
+  fact.run('test.list', '[2]');
+  fact.run('test.text', '"12"');
+  const ctx = ask([]);
+  assert.throws(() => checkAssumption({ value: 1, source: 'fact', factKey: 'test.flag' }, { name: 'n', unit: 'usd' }, ctx), e => e.code === 'bad_input' && /test\.flag/.test(e.message));
+  assert.throws(() => checkAssumption({ value: 2, source: 'fact', factKey: 'test.list' }, { name: 'n', unit: 'usd' }, ctx), e => e.code === 'bad_input');
+  assert.throws(() => checkAssumption({ value: 12, source: 'fact', factKey: 'test.text' }, { name: 'n', unit: 'usd' }, ctx), e => e.code === 'bad_input');
+});
+
+test('money evidence keeps its sign', () => {
+  assert.equal(assumptionStated(-1000, 'usd', ['-$1,000']), true);
+  assert.equal(assumptionStated(1000, 'usd', ['-$1,000']), false);
+  assert.equal(assumptionStated(-1000, 'usd', ['minus $1,000']), true);
+  assert.equal(assumptionStated(-1000, 'usd', ['$-1,000']), true);
+  assert.equal(assumptionStated(1000, 'usd', ['$1,000-2,000']), true, 'a range dash is not a sign');
+  assert.equal(assumptionStated(-2000, 'usd', ['$1,000-2,000']), false);
+  const mcp = { db: t.db, channel: 'mcp' };
+  const kept = checkAssumption(owner(-1000, 'a -$1,000 adjustment'), { name: 'adjustment', unit: 'usd' }, mcp);
+  assert.equal(kept.stated, '-$1,000');
+  assert.throws(() => checkAssumption(owner(1000, 'a -$1,000 adjustment'), { name: 'adjustment', unit: 'usd' }, mcp), e => e.code === 'bad_input');
+});
