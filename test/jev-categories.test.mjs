@@ -40,7 +40,7 @@ test('review stays Uncategorized, crosses the spending window and amount filters
   await guessCategories(db,provider(.8),{policy});
   assert.equal(resolutions(db).get(id).layer,'uncategorized');
   const item=pendingItems(db).find(i=>i.subject===String(id)); assert.ok(item);
-  const g=bestGuess(db,item,{}); assert.equal(g.option,'Groceries'); assert.match(g.evidence,/Jev guess, 80% confident/);
+  const g=bestGuess(db,item,{}); assert.equal(g.option,'Groceries'); assert.equal(g.evidence,"Fathom's categorization");
   for(let i=0;i<15;i++)transaction(db,'More merchant '+i);
   queueCategoryChecks(db,{policy}); assert.ok(getItem(db,item.id)); assert.equal(bestGuess(db,getItem(db,item.id),{}).confidence,.8);
 });

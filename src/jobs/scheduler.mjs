@@ -536,7 +536,8 @@ export function defaultHandlers({ publicUrl = null, simplefinFetch = null } = {}
       const enabled=getSetting(ctx.db,'mode',null)==='real' && ctx.config?.engine!=='off' && getSetting(ctx.db,'engine',{on:true})?.on!==false;
       const cap=getSetting(ctx.db,'cap',{usd:200})?.usd;
       const jev=await createJev({keyFile:enabled ? ctx.config?.typesafeKeyFile : null,ledger:createSpendLedger(ctx.db),
-        monthlyCapUsd:Number.isFinite(cap)&&cap>=0?cap:0});
+        monthlyCapUsd:Number.isFinite(cap)&&cap>=0?cap:0,
+        canSend:()=>getSetting(ctx.db,'engine',{on:true})?.on!==false});
       const categories = await guessCategories(ctx.db, jev, { now: ctx.now });
       const closed = await guessClosedOptions(ctx.db, jev, { now: ctx.now });
       const out = await guessPending(ctx.db, ctx.engine, { now: ctx.now });
