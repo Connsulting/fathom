@@ -7,7 +7,7 @@ import { householdStoreFile, localDataDir } from './local-store.mjs';
 import { guessCategories } from '../src/categories/guess.mjs';
 import { createJev, JEV_MODEL } from '../src/categories/jev.mjs';
 
-test('Jev review confidence appears in Confirm and an accepted guess can be undone',async ({page,request})=>{
+test('a model categorization appears in Confirm as Fathom\'s categorization, with no vendor or percentage, and an accepted guess can be undone',async ({page,request})=>{
   await resetDemo(request);
   const db=openDb(householdStoreFile(localDataDir()));
   const dir=mkdtempSync(join(tmpdir(),'jev-e2e-'));
@@ -31,7 +31,8 @@ test('Jev review confidence appears in Confirm and an accepted guess can be undo
   const item=pending.items.find(i=>i.kind==='transaction_category'&&i.subject===String(id));
   expect(item).toBeTruthy();
   await gotoRoute(page,'confirm');await deckTo(page,await deckOrder(request),item.id);
-  await expect(deckCard(page).locator('.h-cf-guess')).toContainText('Jev guess, 90% confident');
+  await expect(deckCard(page).locator('.h-cf-guess')).toContainText("Fathom's categorization");
+  expect(await page.locator('.h-deck').innerText()).not.toMatch(/%|jev|typesafe/i);
   const answer=await request.post(`/api/confirm/${item.id}/answer`,{data:{answer:'Groceries'}});expect(answer.status()).toBe(200);
   const undo=await request.post(`/api/confirm/${item.id}/reopen`,{data:{}});expect(undo.status()).toBe(200);
   expect((await (await request.get(`/api/confirm/${item.id}`)).json()).item.status).toBe('pending');

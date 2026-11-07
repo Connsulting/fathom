@@ -7,7 +7,7 @@ export const ACCEPT = 'application/json, text/event-stream';
 export const PROTOCOL = '2025-06-18';
 export const KEY_RE = /^fathom_[A-Za-z0-9_-]{43}$/;
 export const UNAUTHORIZED = '{"error":"unauthorized"}';
-export const PERMISSION_TEXT = 'Permission denied: set_recommendation_status needs the write:recs scope, which this key does not have.';
+export const PERMISSION_TEXT = 'Permission denied: act_on_recommendation.status needs the write:recs scope, which this key does not have.';
 
 // Create a key through the real route. Returns { key, record, keys }.
 export async function createKey(baseUrl, name, scopes) {

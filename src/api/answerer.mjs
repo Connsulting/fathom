@@ -73,7 +73,7 @@ import { listPreferences } from '../actions/preferences.mjs';
 //
 // Ask threads can write through scoped registry tools; receipts and Undo are durable product data.
 
-import { callTool, tools as REGISTRY } from '../tools/index.mjs';
+import { callTool, tools as REGISTRY, getTool, instructions } from '../tools/index.mjs';
 import { buildScenario, clockNow } from '../scenario/build.mjs';
 import { findDates } from '../engine/grounding.mjs';
 import { checkGrounding, numberPattern, EngineOffError, BudgetExceededError, ModelCallError, ModelAccountingError, RoundLimitError } from '../engine/index.mjs';
@@ -91,20 +91,12 @@ export const PRODUCT_RULES = [
   'You are Fathom, a year-round financial co-pilot for one household of independent professionals.',
   'You are advisory only: you explain and recommend. You never file taxes, never move money or change any account, and never select individual securities.',
   'Never state a number you did not take from a tool result, the household summary, the conversation context or a knowledge pack entry.',
-  'Write stored figures as {f:key} tokens using the keys get_figures returns, never as typed amounts.',
+  'Write stored figures as {f:key} tokens using returned figure keys, never as typed amounts.',
   'Never write a Sources, References or Citations line and never cite sources in your prose: the app shows the sources it used under every answer.',
   'Call tools before you write the answer, and do not narrate tool use.',
   'Do the read-only lookups needed to answer fully before replying. Check every relevant account, including all 529s and checking for transfers. Never ask permission to read household data.',
   'Answer in short paragraphs separated by blank lines. You may use bullet lists (lines starting with "- "), numbered lists (lines starting with "1. ") and **bold**; use no other markdown (no headings, links or tables) and no HTML.',
   'The conversation context may list references: items the owner pointed at on screen, as kind and id, each with the tools that read it. Read them with those tools; never guess what they hold and never state a number about them that a tool did not return.',
-].join('\n');
-
-export const ASK_ACTION_RULES = [
-  '## Ask actions',
-  'In an Ask thread, act when the person explicitly asks you to record a fact, check a step, change a recommendation or create/edit a goal. Use the write tools. Confirm only when their request is ambiguous. Never change anything on your own initiative.',
-  'Use only the person\'s typed words or stored data for fact values and goal targets. Never invent a figure or infer a date. A tool receipt shows exactly what changed and offers Undo. Sending to the advisor and email require the product button; never claim you sent anything.',
-  'On a failed write, quote the tool reason, then retry with corrected arguments when the reason allows. Never tell the person to try the UI to discover the error.',
-  'Remember a stated household preference or definition with remember_preference. Preferences guide wording and definitions, never override product boundaries, evidence requirements or tool permissions.',
 ].join('\n');
 
 // ---------------------------------------------------------------- answer style and spending guide
@@ -118,13 +110,6 @@ export const ANSWER_STYLE = [
   'Use at most one short list.',
   'Skip generic caveats the owner did not ask about.',
   'End with one offer of the next useful step.',
-].join('\n');
-
-export const SPENDING_GUIDE = [
-  'Spending questions:',
-  'Spending lives in the transactions of every card and cash account. Call list_accounts, then query_transactions per account or with no accountId for all accounts, and group the rows by their category; card rows carry the budgeting app category.',
-  'A card payment from checking moves money to the card; it is not new spending.',
-  'Use pnl_by_month for business income, expenses or profit.',
 ].join('\n');
 
 export const NOTICES = Object.freeze({
@@ -144,7 +129,7 @@ const MAX_TOKENS = 1024;
 const TOKEN_LIKE = /\{(fk|f|l|p|n):([^{}]*)\}/g;
 const SAFE_KEY = /^[A-Za-z0-9_.-]+$/;
 const CORRECTIVE = 'Some numbers in that answer are not in the tool results or the household data: {list}. ' +
-  'Answer again using only numbers from tool results or the provided data, and write stored figures as {f:key} tokens from get_figures.';
+  'Answer again using only numbers from tool results or the provided data, and write stored figures as {f:key} tokens from household.figures.';
 
 // ---------------------------------------------------------------- prompt assembly
 
@@ -163,7 +148,7 @@ function plainText(html) {
 }
 
 export function buildChatPrompt({ packContextText = '', summary = {}, context = null, history = [], question, today } = {}) {
-  const system = PRODUCT_RULES + '\n\n' + ASK_ACTION_RULES + '\n\n' + ANSWER_STYLE + '\n\n' + SPENDING_GUIDE + '\n\n<knowledge_packs>\n' + packContextText + '\n</knowledge_packs>';
+  const system = PRODUCT_RULES + '\n\n' + instructions + '\n\n' + ANSWER_STYLE + '\n\n<knowledge_packs>\n' + packContextText + '\n</knowledge_packs>';
   let systemDynamic = '<household_summary>\n' + JSON.stringify(summary ?? {}) + '\n</household_summary>';
   if (context) systemDynamic += '\n<conversation_context>\n' + JSON.stringify(context) + '\n</conversation_context>';
   if (today) systemDynamic += `\nToday is ${today}.`;
@@ -319,7 +304,7 @@ function scrub(v, echoes = NO_ECHOES, key = undefined) {
 // Any grounding datum (household summary, conversation context, pack entry bodies) as evidence.
 const evidence = v => scrub(v);
 
-// A query_transactions row's negative amount v becomes [v, -v], so an unsigned prose amount grounds
+// A transactions.search row's negative amount v becomes [v, -v], so an unsigned prose amount grounds
 // on an outflow row. No other value is mirrored: a loss never grounds the same amount as a profit.
 // It runs after scrub, so an identifier never grounds this way.
 function unsigned(v, key = undefined) {
@@ -335,33 +320,13 @@ function unsigned(v, key = undefined) {
 function groundingResult(r) {
   if (!r || typeof r !== 'object' || r.isError) return r;
   const result = scrub(r.result ?? null, argEchoes(r.args));
-  return { name: r.name, result: r.name === 'query_transactions' ? unsigned(result) : result };
+  return { name: r.name, result: r.name === 'transactions' ? unsigned(result) : result };
 }
 
 // ---------------------------------------------------------------- source labels
 
 // Plain source labels by tool name, for literals a tool result grounds. Never the tool name itself.
-const TOOL_SOURCES = Object.freeze({
-  household_summary: 'your household summary',
-  get_facts: 'your stored facts',
-  list_accounts: 'your accounts',
-  query_transactions: 'your transactions',
-  list_positions: 'your holdings',
-  pnl_by_month: 'your monthly income and spending',
-  list_recommendations: 'your plan',
-  get_recommendation: 'the recommendation',
-  list_deadlines: 'your deadlines',
-  list_goals: 'your goals',
-  get_pace: 'your goal pace',
-  get_figures: 'your stored figures',
-  packs_status: 'your knowledge packs',
-  advisor_status: 'your advisor status',
-  list_packs: 'your knowledge packs',
-  get_pack_entry: 'a knowledge pack entry',
-  search_pack_entries: 'your knowledge packs',
-});
-const toolSource = name => (Object.hasOwn(TOOL_SOURCES, name) ? TOOL_SOURCES[name] : 'your data');
-
+const toolSource = name => getTool(name)?.source || 'your data';
 const ROW_DATE = /^(\d{4})-(\d{2})-(\d{2})/;
 const oneLine = s => String(s ?? '').replace(/\s+/g, ' ').trim();
 
@@ -387,7 +352,7 @@ function dateStrings(v, key = undefined, out = []) {
 // A row's source label: a transaction names its account, date and description; any other row
 // takes its tool's label.
 function rowSource(name, row, accountLabels) {
-  if (name !== 'query_transactions' || !row || typeof row.date !== 'string') return toolSource(name);
+  if (name !== 'transactions' || !row || typeof row.date !== 'string') return toolSource(name);
   const account = accountLabels && row.accountId != null ? accountLabels.get(row.accountId) : undefined;
   const parts = [account, row.date, row.description].map(oneLine).filter(Boolean);
   return `${toolSource(name)}: ${parts.join(', ')}`;
@@ -411,7 +376,7 @@ const KIND_NAMES = { f: 'figure', fk: 'figure', l: 'law', p: 'percent', n: 'name
 // stored figures, so a stored value typed as a literal is a violation. Tool results and every
 // datum go through the evidence sanitizer first, so identifiers and labels never ground. Each
 // grounded literal is attributed to the first single source that grounds it: a tool result (a
-// plain label, see TOOL_SOURCES; a query_transactions literal names the first row that grounds it,
+// plain label, see the tool headers; a transactions.search literal names the first row that grounds it,
 // with the account label from accountLabels, a Map of account id to label), else a context datum
 // (dataLabels[i], default "your data"). A date in the prose whose month and day (and year, when
 // written) equal a date in a tool result row (date, asOf) is a literal too ({ date: true }) with that row's
@@ -466,7 +431,7 @@ function groundMasked(masked, { scenario, toolResults, data, dataLabels, account
     const rowChecks = [];
     const sourceOf = (i, span) => {
       const raw = raws[i];
-      if (!(i < results.length) || !raw || raw.isError || raw.name !== 'query_transactions') return sources[i].label;
+      if (!(i < results.length) || !raw || raw.isError || raw.name !== 'transactions') return sources[i].label;
       rowChecks[i] ??= rowsOf(raw.result).filter(row => typeof row.date === 'string').map(row => ({ row, misses: null }));
       const echoes = argEchoes(raw.args);
       for (const c of rowChecks[i]) {
@@ -562,37 +527,13 @@ export function renderAnswer(text, violations = [], literals = []) {
 // ---------------------------------------------------------------- progress labels
 
 // Plain progress labels by tool name. Labels never carry arguments, values or model text.
-export const PROGRESS_LABELS = Object.freeze({
-  household_summary: 'Reading your household summary',
-  get_facts: 'Looking at your stored facts',
-  list_accounts: 'Looking at your accounts',
-  query_transactions: 'Looking through your transactions',
-  list_positions: 'Looking at your holdings',
-  pnl_by_month: 'Looking at your monthly income and spending',
-  list_recommendations: 'Looking at your plan',
-  get_recommendation: 'Reading the recommendation',
-  list_deadlines: 'Checking your deadlines',
-  list_goals: 'Looking at your goals',
-  get_figures: 'Pulling the figures',
-  packs_status: 'Checking your knowledge packs',
-  list_packs: 'Checking your knowledge packs',
-  get_pack_entry: 'Reading a knowledge pack entry',
-  search_pack_entries: 'Searching your knowledge packs',
-  remember_preference: 'Remembering your preference',
-  record_household_fact: 'Recording what you told Fathom',
-  set_recommendation_step: 'Updating a recommendation step',
-  set_recommendation_status: 'Updating a recommendation',
-  set_recommendation_owner: 'Updating who acts',
-  create_goal: 'Saving your goal',
-  edit_goal: 'Updating your goal',
-});
-export const PROGRESS_START = 'Reading your household summary';
+export const PROGRESS_START = getTool('household').progress;
 export const PROGRESS_GROUNDING = 'Checking every number against your data';
 const PROGRESS_OTHER = 'Looking at your data';
 // The one step a regeneration shows, before the replaced text clears.
 const revisedLabel = n => `Revised to remove ${n} unchecked figure${n === 1 ? '' : 's'}`;
 
-export const progressLabel = name => (Object.hasOwn(PROGRESS_LABELS, name) ? PROGRESS_LABELS[name] : PROGRESS_OTHER);
+export const progressLabel = name => (getTool(name)?.progress || PROGRESS_OTHER);
 
 // A safe emitter: progress labels deduplicated in a row, a reset only after text, a throwing
 // listener ignored. Engine events ({ type: 'tool', name } / { type: 'text', text } /
@@ -719,13 +660,13 @@ export function createLiveAnswerer({ engine, packs, root } = {}) {
     const work = workList();
     stream.progress(PROGRESS_START);
     work.step(PROGRESS_START);
-    const summary = await callTool('household_summary', {}, toolCtx(db, now));
+    const summary = await callTool('household', { operation: 'summary' }, toolCtx(db, now));
     const active = activeManifestPacks(db, packs);
     const packIds = active.map(a => a.pack.id).sort();
     const packContextText = packContext(active.map(({ pack }) => ({ pack, status: 'active' })));
     const prompt = buildChatPrompt({ packContextText, summary, context, history, question, today: scenario.meta && scenario.meta.clock });
     prompt.systemDynamic += '\n<household_preferences>\n' + JSON.stringify(listPreferences(db)) + '\n</household_preferences>';
-    const offered = REGISTRY.filter(t => !t.mcpOnly && (t.scope === 'read' || actionContext?.actorId));
+    const offered = REGISTRY.filter(t => !t.mcpOnly && (t.kind === 'read' || actionContext?.actorId));
     const fake = engine.mode === 'fake' ? fakeAnswerScript({ scenario, summary, propose: actions, ...fakeArgs }) : undefined;
     const request = { purpose: 'chat', system: prompt.system, systemDynamic: prompt.systemDynamic, messages: prompt.messages,
       tools: offered, toolContext: { ...actionContext, ...toolCtx(db, now) }, maxTokens: MAX_TOKENS, ...(fake ? { fake } : {}),
@@ -739,12 +680,12 @@ export function createLiveAnswerer({ engine, packs, root } = {}) {
     const dataLabels = ['household summary', 'conversation context', 'knowledge pack entries'];
     const resultsOf = res => (res && Array.isArray(res.toolResults) ? res.toolResults : []);
     const textOf = res => stripSources(res.text);
-    // Account labels for transaction literals, read the way list_accounts names them, once.
+    // Account labels for transaction literals, read the way accounts.list names them, once.
     let accountLabels;
     const labelsFor = async toolResults => {
-      if (accountLabels || !toolResults.some(r => r && !r.isError && r.name === 'query_transactions')) return accountLabels;
+      if (accountLabels || !toolResults.some(r => r && !r.isError && r.name === 'transactions')) return accountLabels;
       try {
-        accountLabels = new Map((await callTool('list_accounts', {}, toolCtx(db, now))).map(a => [a.id, a.name]));
+        accountLabels = new Map((await callTool('accounts', { operation: 'list' }, toolCtx(db, now))).map(a => [a.id, a.name]));
       } catch { accountLabels = new Map(); }
       return accountLabels;
     };
@@ -780,7 +721,7 @@ export function createLiveAnswerer({ engine, packs, root } = {}) {
       const earlier = resultsOf(first).map(r => ({ name: r.name, args: r.args ?? {}, result: r.result ?? null,
         ...(r.isError ? { isError: true } : {}) }));
       const evidence = earlier.length ? `\n\nTool results from your first attempt (still available as evidence):\n${JSON.stringify(earlier)}` : '';
-      const retry = { ...request, tools: request.tools.filter(t => t.scope === 'read'), messages: [...request.messages, { role: 'assistant', content: first.text },
+      const retry = { ...request, tools: request.tools.filter(t => t.kind === 'read'), messages: [...request.messages, { role: 'assistant', content: first.text },
         { role: 'user', content: CORRECTIVE.replace('{list}', () => list) + evidence }] };
       try {
         const second = await engine.call(retry);
@@ -797,7 +738,7 @@ export function createLiveAnswerer({ engine, packs, root } = {}) {
       }
     }
 
-    const recReads = toolResults.filter(r => !r.isError && r.name === 'get_recommendation').map(r => r.args && r.args.id);
+    const recReads = toolResults.filter(r => !r.isError && r.name === 'recommendations' && r.args?.operation === 'detail').map(r => r.args && r.args.id);
     const text = textOf(chosen);
     const paragraphs = renderAnswer(text, grounding.violations, grounding.literals);
     if (!paragraphs.length) return noticeReply(NOTICES.modelError);
@@ -846,7 +787,7 @@ export function createLiveAnswerer({ engine, packs, root } = {}) {
       const rec = recForKey(scenario, key);
       let context = null;
       if (rec) {
-        context = { recommendation: await callTool('get_recommendation', { id: rec.id }, toolCtx(db, now)) };
+        context = { recommendation: await callTool('recommendations', { operation: 'detail', id: rec.id }, toolCtx(db, now)) };
         baseRefs = [...baseRefs, rec.id];
       } else if (key.startsWith('pack:')) {
         context = packConversationContext(db, packs, key.slice(5)).context;

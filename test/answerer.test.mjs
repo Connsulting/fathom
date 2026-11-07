@@ -20,11 +20,11 @@ import { seedDemo } from '../demo/seed.mjs';
 import { loadConfig } from '../src/config.mjs';
 import { setSetting } from '../src/store/db.mjs';
 import { buildScenario, clockNow } from '../src/scenario/build.mjs';
-import { callTool, tools as REGISTRY } from '../src/tools/index.mjs';
+import { callTool, tools as REGISTRY, instructions } from '../src/tools/index.mjs';
 import { sdkOptions } from '../src/engine/live.mjs';
 import { createRuntimeEngine, createSpendLedger } from '../src/engine/runtime.mjs';
 import { createLivePacks } from '../src/packs/live.mjs';
-import { PRODUCT_RULES, ASK_ACTION_RULES, NOTICES, buildChatPrompt, groundAnswer, renderAnswer, createLiveAnswerer } from '../src/api/answerer.mjs';
+import { PRODUCT_RULES, NOTICES, buildChatPrompt, groundAnswer, renderAnswer, createLiveAnswerer } from '../src/api/answerer.mjs';
 import { ACTION_STATUS } from '../src/shared/rules.mjs';
 import { stripSources, markdownBlocks } from '../src/shared/answer-text.mjs';
 import { ROOT, tempDb } from './helpers/server.mjs';
@@ -90,7 +90,7 @@ test('a tool preamble is interim: it streams, moves out with an interim event, a
   const s = await demoStore(t);
   const seen = [];
   const { engine } = scripted(s.runtime, [[
-    { text: 'Let me check your figures.', toolCalls: [{ name: 'household_summary', args: {} }] },
+    { text: 'Let me check your figures.', toolCalls: [{ name: 'household', args: { operation: 'summary', } }] },
     { text: 'Keep a reserve.' },
   ]]);
   const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).answer({
@@ -142,8 +142,8 @@ test('text before a tool round is interim and stays out of the answer, even when
   const { engine } = scripted(s.runtime, [[
     { content: [
       { type: 'text', text: head },
-      { type: 'tool_use', id: 'synthetic', name: 'household_summary', input: {} },
-    ], toolCalls: [{ name: 'household_summary', args: {} }] },
+      { type: 'tool_use', id: 'synthetic', name: 'household', input: {} },
+    ], toolCalls: [{ name: 'household', args: { operation: 'summary', } }] },
     { text: tail },
   ]]);
   const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).answer({ db: s.db, key: THREAD, text: 'What am I missing?' });
@@ -161,7 +161,7 @@ test('text before a tool round is interim and stays out of the answer, even when
 // earlier rounds joined (the engine's fallback for an empty final round).
 async function twoRounds(s, first, second, { fallback = false } = {}) {
   const seen = [];
-  const tool = { name: 'household_summary', args: {} };
+  const tool = { name: 'household', args: { operation: 'summary', } };
   const run = scripted(s.runtime, [fallback
     ? [{ text: first, toolCalls: [tool] }, { text: second, toolCalls: [tool] }, {}]
     : [{ text: first, toolCalls: [tool] }, { text: second }]]);
@@ -245,10 +245,12 @@ test('PRODUCT_RULES states the advisory boundaries, the figure token rule and th
   assert.equal(typeof PRODUCT_RULES, 'string');
   assert.match(PRODUCT_RULES, /advisory/i);
   assert.ok(PRODUCT_RULES.includes('{f:'), 'figure tokens are explained');
-  assert.ok(PRODUCT_RULES.includes('get_figures'));
+  assert.ok(instructions.includes('household.figures'));
+  assert.ok(instructions.includes('Sending to the advisor and email require the product button; never claim you sent anything.'));
+  assert.ok(instructions.includes('A card payment from checking moves money to the card; it is not new spending.'));
   // B2: chat never writes; the rule names the proposal tool instead of the write tool.
-  assert.ok(ASK_ACTION_RULES.includes('Confirm only when their request is ambiguous'));
-  assert.ok(!PRODUCT_RULES.includes('set_recommendation_status'));
+  assert.ok(instructions.includes('Confirm only when their request is ambiguous'));
+  assert.ok(!PRODUCT_RULES.includes('act_on_recommendation'));
 });
 
 test('buildChatPrompt keeps the static system identical across summaries and questions and free of household data', () => {
@@ -262,12 +264,13 @@ test('buildChatPrompt keeps the static system identical across summaries and que
     context: { rec: { id: 'synthetic-rec', title: 'CONTEXT-MARKER' } }, history: [], question: 'Second synthetic question?',
   });
   assert.equal(one.system, two.system);
-  assert.ok(one.system.startsWith(PRODUCT_RULES + '\n\n' + ASK_ACTION_RULES), 'the product and action rules open the static system');
+  assert.ok(one.system.startsWith(PRODUCT_RULES + '\n\n' + instructions), 'the product and action rules open the static system');
   assert.ok(one.system.includes('\n<knowledge_packs>\n' + packContextText + '\n</knowledge_packs>'), 'the pack context is in the static system');
   for (const value of ['SUMMARY-MARKER-ONE', 'SUMMARY-MARKER-TWO', '7351', '8462', 'CONTEXT-MARKER', 'First synthetic', 'Second synthetic']) {
     assert.ok(!one.system.includes(value), `static system has no ${value}`);
   }
   assert.ok(one.systemDynamic.includes('<household_summary>'));
+  assert.ok(one.system.includes(instructions));
   assert.ok(one.systemDynamic.includes('</household_summary>'));
   assert.ok(one.systemDynamic.includes('SUMMARY-MARKER-ONE'));
   assert.ok(one.systemDynamic.includes('7351'));
@@ -350,7 +353,7 @@ test('groundAnswer treats a stored figure written as a literal as a violation un
   assert.equal(bare.violations[0].reason, 'stored figure written as a literal');
 
   const supported = groundAnswer(text, { scenario, data: [],
-    toolResults: [{ name: 'get_figures', args: { keys: ['fixed_fee'] }, result: [{ key: 'fixed_fee', v: value }] }] });
+    toolResults: [{ name: 'household', args: { operation: 'figures',  keys: ['fixed_fee'] }, result: [{ key: 'fixed_fee', v: value }] }] });
   assert.equal(supported.ok, true, JSON.stringify(supported.violations));
 });
 
@@ -358,7 +361,7 @@ test('groundAnswer grounds literals in tool results and context data, and flags 
   const s = await demoStore(t);
   const scenario = buildScenario(s.db);
   const fromTool = groundAnswer('You have 37 open items.', { scenario, data: [],
-    toolResults: [{ name: 'household_summary', args: {}, result: { needsYouCount: 37 } }] });
+    toolResults: [{ name: 'household', args: { operation: 'summary', }, result: { needsYouCount: 37 } }] });
   assert.equal(fromTool.ok, true, JSON.stringify(fromTool.violations));
   const fromData = groundAnswer('You have 37 open items.', { scenario, toolResults: [], data: [{ openItems: 37 }] });
   assert.equal(fromData.ok, true, JSON.stringify(fromData.violations));
@@ -376,13 +379,13 @@ const LAUNDERED = 'The synthetic amount is 4821.';
 const laundered = r => r.violations.map(v => v.text);
 
 // A literal grounded by a tool result names a plain source, never the raw tool name (AQ1 C.2); a
-// query_transactions source starts with "your transactions".
+// transactions.search source starts with "your transactions".
 function expectToolSource(literal, name, context = '') {
   assert.ok(literal, context);
   assert.equal(typeof literal.source, 'string', context);
   assert.notEqual(literal.source, name, `not the raw tool name: ${context}`);
   assert.doesNotMatch(literal.source, /_/, `not a tool name: ${literal.source}`);
-  if (name === 'query_transactions') assert.match(literal.source, /^your transactions/, context);
+  if (name === 'transactions') assert.match(literal.source, /^your transactions/, context);
 }
 
 test('B3: a tool result value that echoes a call argument does not ground the number', async t => {
@@ -390,14 +393,14 @@ test('B3: a tool result value that echoes a call argument does not ground the nu
   const scenario = buildScenario(s.db);
   const echoes = [
     // A number echoed under an ordinary key.
-    { name: 'get_recommendation', args: { id: 'synthetic', amount: 4821 }, result: { amount: 4821, title: 'Synthetic' } },
+    { name: 'recommendations', args: { operation: 'detail',  id: 'synthetic', amount: 4821 }, result: { amount: 4821, title: 'Synthetic' } },
     // A number echoed under the same key, compared numerically. (A number under a different key
     // is a value since round 3; see "R3 A" below.)
-    { name: 'query_transactions', args: { minAmount: 4821 }, result: { rows: [], minAmount: 4821.0, total: 0 } },
+    { name: 'transactions', args: { operation: 'search',  minAmount: 4821 }, result: { rows: [], minAmount: 4821.0, total: 0 } },
     // A string echoed verbatim (after trim).
-    { name: 'query_transactions', args: { text: ' 4821 ' }, result: { rows: [], query: '4821', total: 0 } },
+    { name: 'transactions', args: { operation: 'search',  text: ' 4821 ' }, result: { rows: [], query: '4821', total: 0 } },
     // A string that contains an argument string of length 3 or more with a digit.
-    { name: 'query_transactions', args: { text: 'plan 4821' }, result: { rows: [], note: 'No rows matched plan 4821 this year', total: 0 } },
+    { name: 'transactions', args: { operation: 'search',  text: 'plan 4821' }, result: { rows: [], note: 'No rows matched plan 4821 this year', total: 0 } },
   ];
   for (const echo of echoes) {
     const r = groundAnswer(LAUNDERED, { scenario, toolResults: [echo], data: [] });
@@ -416,7 +419,7 @@ test('B3: identifier and citation keys in a tool result do not ground a number',
   for (const key of keys) {
     for (const value of values) {
       const result = { title: 'Synthetic', entry: { [key]: value } };
-      const r = groundAnswer(LAUNDERED, { scenario, toolResults: [{ name: 'get_recommendation', args: {}, result }], data: [] });
+      const r = groundAnswer(LAUNDERED, { scenario, toolResults: [{ name: 'recommendations', args: { operation: 'detail', }, result }], data: [] });
       assert.equal(r.ok, false, `${key}: ${JSON.stringify(value)} must not ground 4821`);
       assert.ok(laundered(r).includes('4821'));
     }
@@ -428,11 +431,11 @@ test('B3: a real value field still grounds, also next to an unrelated argument a
   const scenario = buildScenario(s.db);
   const result = [{ key: 'synthetic', v: 4821, page: 77, source: { id: 'synthetic-source', name: 'plan 9517' } }];
   const r = groundAnswer(LAUNDERED, { scenario, data: [],
-    toolResults: [{ name: 'get_figures', args: { keys: ['synthetic'] }, result }] });
+    toolResults: [{ name: 'household', args: { operation: 'figures',  keys: ['synthetic'] }, result }] });
   assert.equal(r.ok, true, JSON.stringify(r.violations));
-  expectToolSource(r.literals.find(l => l.text === '4821'), 'get_figures', JSON.stringify(r.literals));
+  expectToolSource(r.literals.find(l => l.text === '4821'), 'household', JSON.stringify(r.literals));
   const other = groundAnswer('It is page 77 of plan 9517.', { scenario, data: [],
-    toolResults: [{ name: 'get_figures', args: { keys: ['synthetic'] }, result }] });
+    toolResults: [{ name: 'household', args: { operation: 'figures',  keys: ['synthetic'] }, result }] });
   assert.deepEqual(laundered(other), ['77', '9517'], 'the page and the source label are metadata');
 });
 
@@ -542,7 +545,7 @@ test('B3: a rec id in a rec conversation context never grounds a number; its val
   const scenario = buildScenario(s.db);
   assert.ok(scenario.recs.some(r => r.id === recId), 'the synthetic rec is visible');
   // Self-check: without its id, the rec context has no 8263 to ground.
-  const { id: _id, ...rest } = await callTool('get_recommendation', { id: recId }, { db: s.db, now: '2026-11-05' });
+  const { id: _id, ...rest } = await callTool('recommendations', { operation: 'detail',  id: recId }, { db: s.db, now: '2026-11-05' });
   assert.equal(groundAnswer('$8,263', { scenario, data: [rest] }).ok, false, 'only the id carries 8263');
 
   const said = 'This one is worth $8,263, and about $2,750 arrives early.';
@@ -559,16 +562,16 @@ test('B3: a rec id in a rec conversation context never grounds a number; its val
 
 const asAmount = n => `$${Number(n).toLocaleString('en-US', { maximumFractionDigits: 2 })}`;
 
-test('B3: an account mask from the real list_accounts result never grounds a number; that account balance does', async t => {
+test('B3: an account mask from the real accounts.list result never grounds a number; that account balance does', async t => {
   const s = await demoStore(t);
   const scenario = buildScenario(s.db);
   const now = '2026-11-05';
-  const accounts = await callTool('list_accounts', {}, { db: s.db, now });
+  const accounts = await callTool('accounts', { operation: 'list', }, { db: s.db, now });
   const masked = accounts.filter(a => typeof a.mask === 'string' && /^\d+$/.test(a.mask) && Number.isFinite(a.balance) && a.balance > 0);
   assert.ok(masked.length > 0, 'the demo store has masked accounts with balances');
 
   // The household summary carries no masks or account ids, so only the tool result could leak one.
-  const summaryJson = JSON.stringify(await callTool('household_summary', {}, { db: s.db, now }));
+  const summaryJson = JSON.stringify(await callTool('household', { operation: 'summary', }, { db: s.db, now }));
   assert.ok(!/"(?:masks?|accountIds?|account_ids?)"/i.test(summaryJson), 'no mask or account id keys in the summary');
   for (const a of accounts) assert.ok(!summaryJson.includes(`"${a.id}"`), `the summary does not name account ${a.id}`);
 
@@ -580,26 +583,26 @@ test('B3: an account mask from the real list_accounts result never grounds a num
   // ...and that no other field of the tool result states.
   const stripped = accounts.map(({ mask: _mask, ...rest }) => rest);
   const account = masked.find(a => free.has(asAmount(a.mask)) && Number(a.mask) !== a.balance
-    && !groundAnswer(asAmount(a.mask), { scenario, toolResults: [{ name: 'list_accounts', args: {}, result: stripped }] }).ok);
+    && !groundAnswer(asAmount(a.mask), { scenario, toolResults: [{ name: 'accounts', args: { operation: 'list', }, result: stripped }] }).ok);
   assert.ok(account, 'some masked account has a mask nothing else grounds');
   const mask = asAmount(account.mask);
   const balance = asAmount(account.balance);
 
   const said = `The account holds ${balance}, and ${mask} is worth noting.`;
   const { engine, responses } = scripted(s.runtime, [
-    [{ toolCalls: [{ name: 'list_accounts', args: {} }] }, { text: said }],
+    [{ toolCalls: [{ name: 'accounts', args: { operation: 'list', } }] }, { text: said }],
     [{ text: said }],
   ]);
   const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).answer({ db: s.db, key: THREAD, text: 'Synthetic accounts question' });
   assert.ok(!reply.notice);
-  const listed = responses[0].toolResults.find(r => r.name === 'list_accounts');
+  const listed = responses[0].toolResults.find(r => r.name === 'accounts');
   assert.ok(listed && !listed.isError, JSON.stringify(responses[0].toolResults));
   const real = listed.result.find(a => a.id === account.id);
   assert.ok(real && real.mask === account.mask, 'the scripted round ran the real tool and its result carries the mask');
   const { unverified } = reply.provenance.grounding;
   assert.ok(unverified.includes(mask), `the account mask ${account.mask} grounds ${mask}: ${JSON.stringify(reply.provenance.grounding)}`);
   assert.ok(!unverified.includes(balance), `the balance ${balance} still grounds`);
-  expectToolSource(reply.provenance.literals.find(l => l.text === balance), 'list_accounts', JSON.stringify(reply.provenance.literals));
+  expectToolSource(reply.provenance.literals.find(l => l.text === balance), 'accounts', JSON.stringify(reply.provenance.literals));
 });
 
 test('B3 r2: a figure reference (mine[].fig = plan529) in the va529 rec context never grounds $529; a real amount does', async t => {
@@ -613,21 +616,21 @@ test('B3 r2: a figure reference (mine[].fig = plan529) in the va529 rec context 
   assert.ok(!unverified.includes('$4,000'), 'a real amount of the rec still grounds');
 });
 
-test('B3 r2: a figure reference in a scripted get_recommendation result never grounds $529; a real amount does', async t => {
+test('B3 r2: a figure reference in a scripted recommendations.detail result never grounds $529; a real amount does', async t => {
   const s = await demoStore(t);
   const said = 'The 529 holds $529 today, and the cap is $4,000.';
   const { engine, responses } = scripted(s.runtime, [
-    [{ toolCalls: [{ name: 'get_recommendation', args: { id: 'va529' } }] }, { text: said }],
+    [{ toolCalls: [{ name: 'recommendations', args: { operation: 'detail',  id: 'va529' } }] }, { text: said }],
     [{ text: said }],
   ]);
   const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).answer({ db: s.db, key: THREAD, text: 'Synthetic ask' });
   assert.ok(!reply.notice);
-  const got = responses[0].toolResults.find(r => r.name === 'get_recommendation');
+  const got = responses[0].toolResults.find(r => r.name === 'recommendations');
   assert.ok(got && !got.isError && got.result.mine[0].fig === 'plan529', 'the real reader returns the fig reference');
   const { unverified } = reply.provenance.grounding;
   assert.ok(unverified.includes('$529'), `the fig reference must not ground $529: ${JSON.stringify(reply.provenance.grounding)}`);
   assert.ok(!unverified.includes('$4,000'), 'a real amount still grounds');
-  expectToolSource(reply.provenance.literals.find(l => l.text === '$4,000'), 'get_recommendation', JSON.stringify(reply.provenance.literals));
+  expectToolSource(reply.provenance.literals.find(l => l.text === '$4,000'), 'recommendations', JSON.stringify(reply.provenance.literals));
 });
 
 test('B3 r2: an identifier-like string under an unremarkable key never grounds its digits', async t => {
@@ -636,20 +639,20 @@ test('B3 r2: an identifier-like string under an unremarkable key never grounds i
   for (const [text, value] of [['8263', 'rec8263'], ['$529', 'plan529'], ['4821', 'acct4821x']]) {
     for (const key of ['ref', 'note', 'fig', 'detail', 'tag']) {
       const result = { title: 'Synthetic', entry: { [key]: value, v: 12 } };
-      const r = groundAnswer(`The amount is ${text}.`, { scenario, data: [], toolResults: [{ name: 'get_recommendation', args: {}, result }] });
+      const r = groundAnswer(`The amount is ${text}.`, { scenario, data: [], toolResults: [{ name: 'recommendations', args: { operation: 'detail', }, result }] });
       assert.equal(r.ok, false, `${key}: ${value} must not ground ${text}`);
       assert.ok(laundered(r).includes(text));
     }
   }
   const pos = groundAnswer('The amount is 4821.', { scenario, data: [],
-    toolResults: [{ name: 'get_recommendation', args: {}, result: { entry: { note: 'plan529', amount: 4821 } } }] });
+    toolResults: [{ name: 'recommendations', args: { operation: 'detail', }, result: { entry: { note: 'plan529', amount: 4821 } } }] });
   assert.equal(pos.ok, true, JSON.stringify(pos.violations));
 });
 
-test('B3 r2: an exact amount query keeps the stored row amounts as grounding, attributed to query_transactions', async t => {
+test('B3 r2: an exact amount query keeps the stored row amounts as grounding, attributed to transactions.search', async t => {
   const s = await demoStore(t);
   const now = '2026-11-05';
-  const all = await callTool('query_transactions', { limit: 200 }, { db: s.db, now });
+  const all = await callTool('transactions', { operation: 'search',  limit: 200 }, { db: s.db, now });
   const pick = all.rows.find(r => Math.abs(r.amount) >= 100 && !all.rows.some(o => o !== r && o.amount === r.amount));
   assert.ok(pick, 'some stored transaction has a unique amount');
   const amount = pick.amount;
@@ -660,17 +663,17 @@ test('B3 r2: an exact amount query keeps the stored row amounts as grounding, at
   assert.ok(baseline.provenance.grounding.unverified.includes(text), 'nothing else grounds the amount');
 
   const { engine, responses } = scripted(s.runtime, [
-    [{ toolCalls: [{ name: 'query_transactions', args: { minAmount: amount, maxAmount: amount } }] }, { text: said }],
+    [{ toolCalls: [{ name: 'transactions', args: { operation: 'search',  minAmount: amount, maxAmount: amount } }] }, { text: said }],
     [{ text: said }],
   ]);
   const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).answer({ db: s.db, key: THREAD, text: 'Synthetic exact amount' });
   assert.ok(!reply.notice);
-  const got = responses[0].toolResults.find(r => r.name === 'query_transactions');
+  const got = responses[0].toolResults.find(r => r.name === 'transactions');
   assert.ok(got && !got.isError && got.result.rows.some(r => r.amount === amount), 'the real tool returns the row');
   const { unverified } = reply.provenance.grounding;
   assert.ok(!unverified.includes(text), `the row amount grounds ${text}: ${JSON.stringify(reply.provenance.grounding)}`);
   const literal = reply.provenance.literals.find(l => l.text === text);
-  expectToolSource(literal, 'query_transactions', JSON.stringify(reply.provenance.literals));
+  expectToolSource(literal, 'transactions', JSON.stringify(reply.provenance.literals));
   // The row it came from: its date and description (AQ1 C.2).
   assert.ok(literal.source.includes(pick.date), literal.source);
   assert.ok(literal.source.includes(pick.description), literal.source);
@@ -680,15 +683,15 @@ test('B3 r2: argument echoes under the same key still do not ground, while other
   const s = await demoStore(t);
   const scenario = buildScenario(s.db);
   const echoed = groundAnswer(LAUNDERED, { scenario, data: [],
-    toolResults: [{ name: 'query_transactions', args: { minAmount: 4821, maxAmount: 4821 }, result: { minAmount: 4821, maxAmount: 4821, rows: [], total: 0 } }] });
+    toolResults: [{ name: 'transactions', args: { operation: 'search',  minAmount: 4821, maxAmount: 4821 }, result: { minAmount: 4821, maxAmount: 4821, rows: [], total: 0 } }] });
   assert.equal(echoed.ok, false);
   const contained = groundAnswer(LAUNDERED, { scenario, data: [],
-    toolResults: [{ name: 'query_transactions', args: { text: 'plan 4821' }, result: { rows: [], note: 'No rows matched plan 4821 this year', total: 0 } }] });
+    toolResults: [{ name: 'transactions', args: { operation: 'search',  text: 'plan 4821' }, result: { rows: [], note: 'No rows matched plan 4821 this year', total: 0 } }] });
   assert.equal(contained.ok, false);
   const real = groundAnswer(LAUNDERED, { scenario, data: [],
-    toolResults: [{ name: 'query_transactions', args: { minAmount: 4821, maxAmount: 4821 }, result: { rows: [{ id: 1, amount: 4821 }], total: 1 } }] });
+    toolResults: [{ name: 'transactions', args: { operation: 'search',  minAmount: 4821, maxAmount: 4821 }, result: { rows: [{ id: 1, amount: 4821 }], total: 1 } }] });
   assert.equal(real.ok, true, JSON.stringify(real.violations));
-  expectToolSource(real.literals.find(l => l.text === '4821'), 'query_transactions', JSON.stringify(real.literals));
+  expectToolSource(real.literals.find(l => l.text === '4821'), 'transactions', JSON.stringify(real.literals));
 });
 
 // ---------------------------------------------------------------- rendering
@@ -741,10 +744,10 @@ test('a suggested question answers through the fake engine with tools, figures, 
   assert.deepEqual(p.grounding, { ok: true, retried: false, unverified: [] });
   const figures = ['fixed_fee', 'reserve_target', 'true_reserve', 'yearend_cash'];
   assert.deepEqual(sorted(p.figures), figures);
-  const summary = p.tools.find(x => x.name === 'household_summary');
+  const summary = p.tools.find(x => x.name === 'household' && x.args.operation === 'summary');
   assert.ok(summary, JSON.stringify(p.tools));
-  assert.deepEqual(summary.args, {});
-  const figs = p.tools.find(x => x.name === 'get_figures');
+  assert.deepEqual(summary.args, { operation: 'summary' });
+  const figs = p.tools.find(x => x.name === 'household' && x.args.operation === 'figures');
   assert.ok(figs, JSON.stringify(p.tools));
   assert.deepEqual(sorted(figs.args.keys), figures);
   assert.deepEqual(sorted(p.packIds), ACTIVE_DEMO_PACKS);
@@ -871,9 +874,9 @@ test('B1: a corrective retry that fails in the model answers with the model-erro
 
 test('a literal number grounded by a tool result is bound to its source and listed in provenance', async t => {
   const s = await demoStore(t);
-  const n = (await callTool('household_summary', {}, { db: s.db, now: '2026-11-05' })).needsYouCount;
+  const n = (await callTool('household', { operation: 'summary', }, { db: s.db, now: '2026-11-05' })).needsYouCount;
   const { engine } = scripted(s.runtime, [[
-    { toolCalls: [{ name: 'household_summary', args: {} }] },
+    { toolCalls: [{ name: 'household', args: { operation: 'summary', } }] },
     { text: `From your household summary, ${n} items need you right now.` },
   ]]);
   const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).answer({ db: s.db, key: THREAD, text: 'How many items need me?' });
@@ -882,7 +885,7 @@ test('a literal number grounded by a tool result is bound to its source and list
   assert.match(joined(reply), new RegExp(`<span class="fx-src" data-src="[^"]*" title="From [^"]+">${n}</span>`));
   const literal = (reply.provenance.literals || []).find(x => x.text === String(n));
   assert.ok(literal, JSON.stringify(reply.provenance.literals));
-  assert.match(String(literal.source), /household.summary/i);
+  assert.match(String(literal.source), /household summary/i);
 });
 
 test('a retry that drops the tool call stays grounded by the first attempt tool results', async t => {
@@ -891,7 +894,7 @@ test('a retry that drops the tool call stays grounded by the first attempt tool 
   const amount = `$${value.toLocaleString('en-US')}`;
   const { engine, requests } = scripted(s.runtime, [
     [
-      { toolCalls: [{ name: 'get_figures', args: { keys: ['fixed_fee'] } }] },
+      { toolCalls: [{ name: 'household', args: { operation: 'figures',  keys: ['fixed_fee'] } }] },
       { text: `About ${amount} of delivered work is not invoiced, and you could save ${INVENTED} or ${INVENTED_2}.` },
     ],
     [{ text: `About ${amount} of delivered work is not invoiced.` }],
@@ -904,9 +907,9 @@ test('a retry that drops the tool call stays grounded by the first attempt tool 
   assert.ok(!html.includes('987,654') && !html.includes('876,543'), html);
   assert.ok(new RegExp(`<span class="fx-src"[^>]*>${amount.replace('$', '\\$')}</span>`).test(html), html);
   assert.deepEqual(reply.provenance.grounding, { ok: true, retried: true, unverified: [], revised: 2 });
-  const call = reply.provenance.tools.find(x => x.name === 'get_figures');
+  const call = reply.provenance.tools.find(x => x.name === 'household');
   assert.ok(call, JSON.stringify(reply.provenance.tools));
-  assert.deepEqual(call.args, { keys: ['fixed_fee'] });
+  assert.deepEqual(call.args, { operation: 'figures', keys: ['fixed_fee'] });
 });
 
 test('engine off by the switch answers with the engine-off notice and spends nothing; back on answers again', async t => {
@@ -969,11 +972,11 @@ test('Ask offers write tools only with trusted identity, while pack and bare rec
   await answerer.answer({ db: s.db, key: THREAD, text: 'Update my goal' });
   await answerer.answer({ db: s.db, key: 'pack:giving', text: 'Update my goal', actorId: 'demo' });
   await answerer.answer({ db: s.db, key: 'deferral', text: 'Update my goal', actorId: 'demo' });
-  assert.ok(toolNames(requests[0]).includes('set_recommendation_status'));
-  assert.ok(toolNames(requests[0]).includes('record_household_fact'));
-  assert.ok(toolNames(requests[0]).includes('create_goal'));
-  assert.ok(!toolNames(requests[0]).includes('undo_fact_action'));
-  for (const r of requests.slice(1)) assert.ok(r.tools.every(t2 => t2.scope === 'read'));
+  assert.ok(toolNames(requests[0]).includes('act_on_recommendation'));
+  assert.ok(toolNames(requests[0]).includes('answer'));
+  assert.ok(toolNames(requests[0]).includes('update_goal'));
+  assert.ok(!toolNames(requests[0]).includes('undo'));
+  for (const r of requests.slice(1)) assert.ok(r.tools.every(t2 => t2.kind === 'read'));
 });
 
  test('fake actions execute explicit recommendation commands and refuse negations', async t => {
@@ -987,14 +990,14 @@ test('Ask offers write tools only with trusted identity, while pack and bare rec
   assert.equal(s.db.prepare('SELECT count(*) n FROM action_receipts').get().n, count);
 });
 
-test('a rec conversation answer refs the rec and reads it through get_recommendation', async t => {
+test('a rec conversation answer refs the rec and reads it through recommendations.detail', async t => {
   const s = await demoStore(t);
   const reply = await createLiveAnswerer({ engine: s.runtime, packs: s.packs, root: s.root }).answer({ db: s.db, key: 'deferral', questionId: 0 });
   assert.ok(!reply.notice);
   assert.ok(reply.refs.includes('deferral'));
-  const rec = reply.provenance.tools.find(x => x.name === 'get_recommendation');
+  const rec = reply.provenance.tools.find(x => x.name === 'recommendations');
   assert.ok(rec, JSON.stringify(reply.provenance.tools));
-  assert.deepEqual(rec.args, { id: 'deferral' });
+  assert.deepEqual(rec.args, { operation: 'detail', id: 'deferral' });
 });
 
 test('a manual pack override changes the prompt pack context and the provenance pack ids', async t => {
@@ -1119,9 +1122,10 @@ function candidates(schema, name, intSentinel) {
 
 test('R3 A contract: no tool the answerer offers returns a sentinel argument outside identifier keys', async t => {
   const s = await demoStore(t);
-  const offered = await offeredTools(s);
-  const names = offered.map(tool => tool.name);
-  assert.deepEqual(sorted(names), sorted(REGISTRY.filter(x => x.scope === 'read').map(x => x.name)),
+  const listed = await offeredTools(s);
+  const offered = listed.flatMap(t => t.operations.map(op => ({ ...t, operation: op.name, inputSchema: { type: 'object', additionalProperties: false, properties: { operation: { type: 'string', enum: [op.name] }, ...op.params }, required: ['operation', ...op.required] } })));
+  const names = [...new Set(offered.map(tool => tool.name))];
+  assert.deepEqual(sorted(names), sorted(REGISTRY.filter(x => x.kind === 'read').map(x => x.name)),
     'a context without trusted identity offers read tools only');
   const recId = s.db.prepare("SELECT id FROM recs WHERE status != 'hidden' ORDER BY id LIMIT 1").get().id;
   const realPack = s.packs.loaded().find(p => p.id === 's-corp-owner');
@@ -1165,7 +1169,7 @@ test('R3 A contract: no tool the answerer offers returns a sentinel argument out
       if (!required.has(name)) all[name] = list[0].value;
     }
     args.push(all);
-    plan.set(tool.name, { intSentinel });
+    plan.set(`${tool.name}.${tool.operation}`, { intSentinel });
     for (const a of args) calls.push({ name: tool.name, args: a });
   }
 
@@ -1175,7 +1179,7 @@ test('R3 A contract: no tool the answerer offers returns a sentinel argument out
   const results = responses[0].toolResults;
   assert.equal(results.length, calls.length, 'every scripted call ran');
   for (const r of results) {
-    assert.ok(compileSchema(offered.find(t => t.name === r.name).inputSchema)(r.args), `schema-valid arguments: ${r.name} ${JSON.stringify(r.args)}`);
+    assert.ok(compileSchema(offered.find(t => t.name === r.name && t.operation === r.args.operation).inputSchema)(r.args), `schema-valid arguments: ${r.name} ${JSON.stringify(r.args)}`);
   }
   for (const name of names) {
     assert.ok(results.some(r => r.name === name && !r.isError), `${name} answers some sentinel call`);
@@ -1185,7 +1189,7 @@ test('R3 A contract: no tool the answerer offers returns a sentinel argument out
     }
   }
   for (const r of results.filter(x => !x.isError)) {
-    const { intSentinel } = plan.get(r.name);
+    const { intSentinel } = plan.get(`${r.name}.${r.args.operation}`);
     for (const leaf of leaves(r.result)) {
       if (!leaf.isKey && leaf.key !== undefined && IDENTIFIER_KEY.test(leaf.key)) continue;
       const where = `${r.name}(${JSON.stringify(r.args)}) ${leaf.isKey ? 'key' : `under ${leaf.key}`}: ${JSON.stringify(leaf.value)}`;
@@ -1200,7 +1204,7 @@ test('R3 A contract: no tool the answerer offers returns a sentinel argument out
   }
 });
 
-test('R3 A (F2): query_transactions total equal to the limit argument grounds, attributed to query_transactions', async t => {
+test('R3 A (F2): transactions.search total equal to the limit argument grounds, attributed to transactions.search', async t => {
   const s = await demoStore(t);
   const scenario = buildScenario(s.db);
   // The real match count per account, read from the store; one whose count fits in a single page.
@@ -1212,9 +1216,9 @@ test('R3 A (F2): query_transactions total equal to the limit argument grounds, a
     const baseline = await createLiveAnswerer({ engine: always(s.runtime, said).engine, packs: s.packs, root: s.root })
       .answer({ db: s.db, key: THREAD, text: 'Synthetic baseline' });
     if (!baseline.provenance.grounding.unverified.includes(String(c.n))) continue;
-    const page = await callTool('query_transactions', { accountId: c.id, limit: c.n }, { db: s.db, now: '2026-11-05' });
+    const page = await callTool('transactions', { operation: 'search',  accountId: c.id, limit: c.n }, { db: s.db, now: '2026-11-05' });
     const { total: _total, ...withoutTotal } = page;
-    if (groundAnswer(said, { scenario, toolResults: [{ name: 'query_transactions', args: {}, result: withoutTotal }] }).ok) continue;
+    if (groundAnswer(said, { scenario, toolResults: [{ name: 'transactions', args: { operation: 'search', }, result: withoutTotal }] }).ok) continue;
     pick = c;
     break;
   }
@@ -1222,25 +1226,25 @@ test('R3 A (F2): query_transactions total equal to the limit argument grounds, a
   const n = pick.n;
   const said = `There are ${n} matching transactions.`;
   const { engine, responses } = scripted(s.runtime, [
-    [{ toolCalls: [{ name: 'query_transactions', args: { accountId: pick.id, limit: n } }] }, { text: said }],
+    [{ toolCalls: [{ name: 'transactions', args: { operation: 'search',  accountId: pick.id, limit: n } }] }, { text: said }],
     [{ text: said }],
   ]);
   const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).answer({ db: s.db, key: THREAD, text: 'Synthetic count question' });
   assert.ok(!reply.notice);
-  const got = responses[0].toolResults.find(r => r.name === 'query_transactions');
+  const got = responses[0].toolResults.find(r => r.name === 'transactions');
   assert.ok(got && !got.isError, JSON.stringify(responses[0].toolResults));
   assert.equal(got.result.total, n, 'the real tool counts every match');
   assert.equal(got.result.rows.length, n);
   assert.equal(got.result.truncated, false);
   const { unverified } = reply.provenance.grounding;
   assert.ok(!unverified.includes(String(n)), `the computed total ${n} grounds: ${JSON.stringify(reply.provenance.grounding)}`);
-  expectToolSource(reply.provenance.literals.find(l => l.text === String(n)), 'query_transactions', JSON.stringify(reply.provenance.literals));
+  expectToolSource(reply.provenance.literals.find(l => l.text === String(n)), 'transactions', JSON.stringify(reply.provenance.literals));
 
   // A top-level number under a different key than the equal argument is a value, not an echo.
   const other = groundAnswer(LAUNDERED, { scenario, data: [],
-    toolResults: [{ name: 'query_transactions', args: { minAmount: 4821 }, result: { rows: [], floor: 4821, total: 0 } }] });
+    toolResults: [{ name: 'transactions', args: { operation: 'search',  minAmount: 4821 }, result: { rows: [], floor: 4821, total: 0 } }] });
   assert.equal(other.ok, true, JSON.stringify(other.violations));
-  expectToolSource(other.literals.find(l => l.text === '4821'), 'query_transactions', JSON.stringify(other.literals));
+  expectToolSource(other.literals.find(l => l.text === '4821'), 'transactions', JSON.stringify(other.literals));
 });
 
 // B: prose sentences that carry bare numbers only, and ones that carry one marked quantity each.
@@ -1258,7 +1262,7 @@ const MARKED = [
 // The four places prose evidence reaches groundAnswer, each carrying `prose`.
 const proseSources = prose => [
   { label: 'pack entry body', toolResults: [], data: [[`# Synthetic entry\n\n${prose}\n`]] },
-  { label: 'tool result description', data: [], toolResults: [{ name: 'list_recommendations', args: {}, result: [{ status: 'doing', description: prose }] }] },
+  { label: 'tool result description', data: [], toolResults: [{ name: 'recommendations', args: { operation: 'list', }, result: [{ status: 'doing', description: prose }] }] },
   { label: 'rec context', toolResults: [], data: [{ recommendation: { status: 'doing', why: prose } }] },
   { label: 'household summary', toolResults: [], data: [{ facts: { 'synthetic.note': prose } }] },
 ];
@@ -1287,7 +1291,7 @@ test('R3 B: bare numbers in prose evidence never ground; marked quantities and J
   }
   // JSON number fields stay evidence.
   const json = [
-    { toolResults: [{ name: 'list_recommendations', args: {}, result: [{ catchUpAge: 50, cap: 560 }] }], data: [] },
+    { toolResults: [{ name: 'recommendations', args: { operation: 'list', }, result: [{ catchUpAge: 50, cap: 560 }] }], data: [] },
     { toolResults: [], data: [{ recommendation: { catchUpAge: 50, cap: 560 } }] },
   ];
   for (const where of json) {
@@ -1391,9 +1395,9 @@ test('R3 D: K-12 and 2026-01 never read as negatives in evidence or in the answe
   const s = await demoStore(t);
   const scenario = buildScenario(s.db);
   const evidence = [
-    { name: 'list_recommendations', args: {}, result: [{ status: 'doing', description: 'Private K-12 tuition can qualify.' }] },
-    { name: 'list_recommendations', args: {}, result: [{ status: 'doing', grade: 'K-12' }] },
-    { name: 'pnl_by_month', args: {}, result: { rows: [{ period: '2026-01', category: 'synthetic', amount: 0 }], totals: {} } },
+    { name: 'recommendations', args: { operation: 'list', }, result: [{ status: 'doing', description: 'Private K-12 tuition can qualify.' }] },
+    { name: 'recommendations', args: { operation: 'list', }, result: [{ status: 'doing', grade: 'K-12' }] },
+    { name: 'business', args: { operation: 'pnl', }, result: { rows: [{ period: '2026-01', category: 'synthetic', amount: 0 }], totals: {} } },
   ];
   for (const r of evidence) {
     for (const text of ['-12', '−12', '-$12', '-1', '−1', '-$1']) {
@@ -1471,7 +1475,7 @@ test('R4 F1: a single-token URL string under an unremarkable key never grounds i
   for (const link of ['https://example.invalid/4821k', 'https://example.invalid/$4821', 'https://example.invalid/4821%25', 'https://example.invalid/4821%']) {
     for (const text of URL_INVENTED) {
       for (const where of [
-        { label: 'tool result', data: [], toolResults: [{ name: 'list_recommendations', args: {}, result: [{ status: 'doing', link }] }] },
+        { label: 'tool result', data: [], toolResults: [{ name: 'recommendations', args: { operation: 'list', }, result: [{ status: 'doing', link }] }] },
         { label: 'rec context', toolResults: [], data: [{ recommendation: { status: 'doing', link } }] },
       ]) {
         const r = groundAnswer(`The figure is ${text}.`, { scenario, ...where });
@@ -1503,17 +1507,17 @@ test('R4 F1: a marked quantity in link text outside the URL still grounds', asyn
 const DATE_TOKENS = ['2026-11', '2026-11-05', '2026-11-05T10:00:00Z'];
 const DATE_INVENTED = ['$11', '11', '-11', '$5', '5', '-5', '$10', '$2,026'];
 
-test('R4 F2: the real pnl_by_month result over the demo store never grounds its month or year as a number', async t => {
+test('R4 F2: the real business.pnl result over the demo store never grounds its month or year as a number', async t => {
   const s = await demoStore(t);
   const scenario = buildScenario(s.db);
-  const result = await callTool('pnl_by_month', {}, { db: s.db, now: clockNow(s.db) });
+  const result = await callTool('business', { operation: 'pnl', }, { db: s.db, now: clockNow(s.db) });
   assert.ok(result.rows.length > 0, 'the demo store has P&L rows');
   const period = result.rows.map(r => r.period).sort().at(-1);
   assert.match(period, /^\d{4}-\d{2}$/);
   const month = String(Number(period.slice(5)));
   const year = Number(period.slice(0, 4)).toLocaleString('en-US');
   const said = [`$${month}`, month, `$${year}`];
-  const ground = (r, text) => groundAnswer(`The figure is ${text}.`, { scenario, data: [], toolResults: [{ name: 'pnl_by_month', args: {}, result: r }] });
+  const ground = (r, text) => groundAnswer(`The figure is ${text}.`, { scenario, data: [], toolResults: [{ name: 'business', args: { operation: 'pnl', }, result: r }] });
 
   // Self-check: without the periods nothing in the result states these values.
   const stripped = { rows: result.rows.map(({ period: _p, ...row }) => row), totals: Object.values(result.totals) };
@@ -1522,18 +1526,18 @@ test('R4 F2: the real pnl_by_month result over the demo store never grounds its 
   for (const text of said) {
     assert.ok(laundered(ground(result, text)).includes(text), `period ${period} must not ground ${text}`);
   }
-  // A stored row amount still grounds, attributed to pnl_by_month.
+  // A stored row amount still grounds, attributed to business.pnl.
   const row = result.rows.find(r => r.amount > 0);
   const amount = `$${row.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   const kept = ground(result, amount);
   assert.equal(kept.ok, true, `${amount}: ${JSON.stringify(kept.violations)}`);
-  expectToolSource(kept.literals.find(l => l.text === amount), 'pnl_by_month', JSON.stringify(kept.literals));
+  expectToolSource(kept.literals.find(l => l.text === amount), 'business', JSON.stringify(kept.literals));
 });
 
 test('R4 F2: a synthetic period next to an unrelated amount grounds the amount and not $11 or 11', async t => {
   const s = await demoStore(t);
   const scenario = buildScenario(s.db);
-  const toolResults = [{ name: 'pnl_by_month', args: {},
+  const toolResults = [{ name: 'business', args: { operation: 'pnl', },
     result: { rows: [{ period: '2026-11', category: 'synthetic', amount: 4321.5 }], totals: { '2026-11': 4321.5 } } }];
   for (const text of ['$11', '11', '$2,026']) {
     const r = groundAnswer(`The figure is ${text}.`, { scenario, data: [], toolResults });
@@ -1548,8 +1552,8 @@ test('R4 F2: date-shaped single-token strings under unremarkable keys ground no 
   for (const value of DATE_TOKENS) {
     for (const key of ['asOf', 'month', 'note', 'when']) {
       const wheres = [
-        { label: 'tool result', data: [], toolResults: [{ name: 'list_recommendations', args: {}, result: [{ status: 'doing', [key]: value }] }] },
-        { label: 'tool result array', data: [], toolResults: [{ name: 'list_recommendations', args: {}, result: { [key]: [value] } }] },
+        { label: 'tool result', data: [], toolResults: [{ name: 'recommendations', args: { operation: 'list', }, result: [{ status: 'doing', [key]: value }] }] },
+        { label: 'tool result array', data: [], toolResults: [{ name: 'recommendations', args: { operation: 'list', }, result: { [key]: [value] } }] },
         { label: 'household summary', toolResults: [], data: [{ facts: { [`synthetic.${key}`]: value } }] },
         { label: 'rec context', toolResults: [], data: [{ recommendation: { status: 'doing', [key]: value } }] },
       ];
@@ -1654,9 +1658,9 @@ const LAUNDERING_FORMS = [
 const EVIDENCE_SOURCES = [
   { label: 'pack entry body', make: ({ prose }) => ({ toolResults: [], data: [[`# Synthetic entry\n\n${prose}\n`]] }) },
   { label: 'tool result prose', make: ({ prose }) => ({ data: [],
-    toolResults: [{ name: 'list_recommendations', args: {}, result: [{ status: 'doing', description: prose }] }] }) },
+    toolResults: [{ name: 'recommendations', args: { operation: 'list', }, result: [{ status: 'doing', description: prose }] }] }) },
   { label: 'tool result JSON', make: ({ field }) => ({ data: [],
-    toolResults: [{ name: 'list_recommendations', args: {}, result: [{ status: 'doing', ...field }] }] }) },
+    toolResults: [{ name: 'recommendations', args: { operation: 'list', }, result: [{ status: 'doing', ...field }] }] }) },
   { label: 'household summary', make: ({ prose, field }) => ({ toolResults: [], data: [{ facts: { 'synthetic.note': prose }, ...field }] }) },
   { label: 'rec context', make: ({ prose, field }) => ({ toolResults: [], data: [{ recommendation: { status: 'doing', why: prose, ...field } }] }) },
 ];
