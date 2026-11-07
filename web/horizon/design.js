@@ -23,7 +23,7 @@ import { addButtonHtml } from './screens/ask-context.js';
 import * as pnlScreen from './screens/pnl.js';
 import { createKeys } from './keys.js';
 import { createSwipe } from './screens/swipe.js';
-import { homeModel, homeHeadline, healthChip, healthLine, paceReason, boardCharts, reasonText, servedGoalIds, shortDate, longDate, windowSpan, kindLine, orderGoals, orderServes, planOrder } from './screens/home-model.js';
+import { homeModel, homeHeadline, healthChip, healthLine, paceReason, boardCharts, reasonText, servedGoalIds, shortDate, longDate, windowSpan, kindLine, orderGoals, orderServes, planOrder, enteredDraft, enteredFields, enteredInputs } from './screens/home-model.js';
 import { STARTERS, existingStarterIds, otherGoals, goalsToCreate, inviteLine } from './screens/onboard-model.js';
 import { KNOWN_FIGURES, GOAL_KINDS, KIND_LABEL, PRIORITIES, PRIORITY_LABEL, personLabel, goalOwnerOptions } from '/shared/goals.mjs';
 import { OWNERS, OWNER_LABEL } from '/shared/rec-links.mjs';
@@ -1293,7 +1293,6 @@ function draftOf(g) {
   const t = g.track || null;
   const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? String(v) : '');
   const amountOf = (list, person) => num(arr(list).find((x) => x && x.person === person)?.amount);
-  const e = g.entered && typeof g.entered === 'object' ? g.entered : null;
   return {
     ...emptyDraft(g.horizon || 'now'),
     title: g.title || '', note: g.note || '', horizon: g.horizon || 'now',
@@ -1304,8 +1303,7 @@ function draftOf(g) {
     targetLow: num(g.targetLow), targetHigh: num(g.targetHigh), floor: num(g.floor),
     ...(Number.isInteger(g.taxYear) ? { taxYear: String(g.taxYear) } : {}),
     dest: arr(g.accounts).slice(), shareOwner: amountOf(g.split, 'owner'), shareSpouse: amountOf(g.split, 'spouse'),
-    enteredTotal: e ? num(e.total) : '', enteredOwner: e ? amountOf(e.people, 'owner') : '', enteredSpouse: e ? amountOf(e.people, 'spouse') : '',
-    enteredAsOf: e && e.asOf ? e.asOf : ''
+    ...enteredDraft(g.entered)
   };
 }
 
@@ -1328,7 +1326,7 @@ function goalFormHtml() {
   const figs = trackFigures();
   const chip = (h) => `<button type="button" class="h-chip${d.horizon === h[0] ? ' on' : ''}" data-goal-h="${h[0]}" aria-pressed="${d.horizon === h[0]}">${h[1]}</button>`;
   // One label line: the text, then a muted "optional" on the same line when the field is optional.
-  const gl = (text, optional = false) => `<span class="h-gl">${text}${optional ? '<span class="h-opt">optional</span>' : ''}</span>`;
+  const gl = (text, optional = false) => `<span class="h-gl">${esc(text)}${optional ? '<span class="h-opt">optional</span>' : ''}</span>`;
   const opt = (v, l) => `<option value="${esc(v)}"${(d.trackKind === 'figure' ? d.figure : d.trackKind) === v ? ' selected' : ''}>${esc(l)}</option>`;
   const kind = GOAL_KINDS.includes(d.kind) ? d.kind : 'balance';
   const nm = hhNames();
@@ -1373,9 +1371,12 @@ function goalFormHtml() {
       const all = arr(api.s.accounts);
       const dest = `<div class="h-gf">${gl('Into these accounts', true)}<div class="h-gaccts">${all.length ? all.map((a) => `<label class="h-gacct"><input type="checkbox" data-gf="dest" value="${esc(a.id)}"${arr(d.dest).includes(a.id) ? ' checked' : ''}><span>${a.imported ? esc(a.name) : T(a.name)}</span><small>${a.imported ? esc(a.inst) : T(a.inst)}</small></label>`).join('') : '<p class="h-mute sm">No accounts yet.</p>'}</div></div>`;
       const shared = ['owner', 'spouse'].filter((id) => String(d[id === 'owner' ? 'shareOwner' : 'shareSpouse']).trim() !== '');
-      const entered = shared.length
-        ? `<div class="h-gf2">${shared.map((id) => money(id === 'owner' ? 'enteredOwner' : 'enteredSpouse', by(id), true)).join('')}</div>`
-        : money('enteredTotal', 'Contributed so far', true);
+      const splitDraft = shared.map((id) => ({ person: id, amount: 1 }));
+      const show = enteredInputs(d, splitDraft);
+      const entered = [
+        show.people ? `<div class="h-gf2">${['owner', 'spouse'].filter((id) => shared.includes(id) || String(d[id === 'owner' ? 'enteredOwner' : 'enteredSpouse']).trim() !== '').map((id) => money(id === 'owner' ? 'enteredOwner' : 'enteredSpouse', by(id), true)).join('')}</div>` : '',
+        show.total ? money('enteredTotal', 'Contributed so far', true) : ''
+      ].join('');
       return `<div class="h-gf2">${money('target', 'Amount to contribute')}<label class="h-gf">${gl('Tax year')}<input type="number" data-gf="taxYear" min="2000" max="2100" step="1" inputmode="numeric" value="${esc(d.taxYear)}"></label></div>
     ${date('targetDate', 'Deadline')}
     ${dest}
@@ -1436,22 +1437,9 @@ function goalFields(d) {
     if (split.length && split.reduce((sum, x) => sum + Math.round(x.amount * 100), 0) !== Math.round(amt * 100)) {
       return { err: 'The shares must add up to the amount.' };
     }
-    const asOf = d.enteredAsOf || clockIso();
-    let entered = null;
-    if (split.length) {
-      const people = [];
-      for (const [person, , ek] of persons) {
-        if (!split.some((x) => x.person === person) || blank(ek)) continue;
-        const v = amount(ek);
-        if (v == null) return { err: 'What was contributed must be zero or more.' };
-        people.push({ person, amount: v });
-      }
-      if (people.length) entered = { asOf, people };
-    } else if (!blank('enteredTotal')) {
-      const v = amount('enteredTotal');
-      if (v == null) return { err: 'What was contributed must be zero or more.' };
-      entered = { asOf, total: v };
-    }
+    const en = enteredFields(d, split, d.enteredAsOf || clockIso());
+    if (en.err) return { err: en.err };
+    const entered = en.entered;
     return { fields: { ...out, target: amt, taxYear: year, targetDate: d.targetDate, accounts: arr(d.dest).length ? arr(d.dest).slice() : null, split: split.length ? split : null, entered } };
   }
   const bal = { ...out, target: null, targetDate: d.targetDate || null, track: null };
