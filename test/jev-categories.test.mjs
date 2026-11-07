@@ -23,7 +23,7 @@ function store(t) {
 }
 function transaction(db,description='Synthetic Shop',patch={}) {
   return Number(db.prepare('INSERT INTO transactions (account_id,date,amount,description,category,parser) VALUES (?,?,?,?,?,?)')
-    .run('a',patch.date??'2032-10-03',patch.amount??-20,description,patch.category??null,patch.parser??'simplefin').lastInsertRowid);
+    .run(patch.account_id??'a',patch.date??'2032-10-03',patch.amount??-20,description,patch.category??null,patch.parser??'simplefin').lastInsertRowid);
 }
 const provider=(confidence)=>({isOn:()=>true,stats:()=>({costUsd:0}),choose:async qs=>qs.map(()=>({choice:'Groceries',confidence,probabilities:{Groceries:.9,Business:.1}}))});
 const resolutions=db=>resolveCategories(loadCategoryInputs(db));
@@ -42,7 +42,7 @@ test('review stays Uncategorized, crosses the spending window and amount filters
   const item=pendingItems(db).find(i=>i.subject===String(id)); assert.ok(item);
   const g=bestGuess(db,item,{}); assert.equal(g.option,'Groceries'); assert.match(g.evidence,/Jev guess, 80% confident/);
   for(let i=0;i<15;i++)transaction(db,'More merchant '+i);
-  queueCategoryChecks(db); assert.ok(getItem(db,item.id)); assert.equal(bestGuess(db,getItem(db,item.id),{}).confidence,.8);
+  queueCategoryChecks(db,{policy}); assert.ok(getItem(db,item.id)); assert.equal(bestGuess(db,getItem(db,item.id),{}).confidence,.8);
 });
 
 test('below-review attempts are persisted and never re-sent or applied',async t=>{
@@ -160,5 +160,48 @@ test('duplicate consolidation keeps a model correction from becoming owner memor
   assert.equal(resolutions(db).get(later).layer,'uncategorized');
   reopenItem(db,duplicate.id);assert.equal(resolutions(db).get(drop).layer,'guess');
   reopenItem(db,auto.id);assert.equal(resolutions(db).get(drop).layer,'uncategorized');
+  assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(),[]);
+});
+
+
+test('export enrichment retires its Jev review card and preserves another unresolved review',async t=>{
+  const db=store(t);vocabulary(db);
+  const {ingestFile,accountIdOf}=await import('../src/ingest/pipeline.mjs');
+  const {aggregatorFile}=await import('./helpers/ingest.mjs');
+  const {answerItem}=await import('../src/ingest/confirm.mjs');
+  const accountId=accountIdOf('examplebank|mask:1111');
+  db.prepare("INSERT INTO accounts (id,kind,inst,mask,name,identity) VALUES (?,'checking','Example Bank','1111','Synthetic checking','examplebank|mask:1111')").run(accountId);
+  const target=transaction(db,'POS DEBIT Enrollment merchant',{account_id:accountId,date:'2032-06-10',amount:-240});
+  db.prepare("UPDATE transactions SET external_id='live-synthetic',dedupe_key='live:synthetic' WHERE id=?").run(target);
+  const other=transaction(db,'Different unresolved review');
+  await guessCategories(db,provider(.9),{policy});
+  const card=pendingItems(db).find(q=>q.kind==='transaction_category'&&q.subject===String(target));assert.ok(card);
+  const dir=mkdtempSync(join(tmpdir(),'jev-export-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
+  await ingestFile(db,aggregatorFile('synthetic-export.csv',[{date:'2032-06-10',amount:240,description:'Enrollment merchant',category:'Business'}]),
+    {dataDir:dir,key:Buffer.alloc(32,7),now:'2032-08-01T12:00:00Z'});
+  queueCategoryChecks(db,{policy});
+  assert.equal(db.prepare('SELECT count(*) AS n FROM transactions WHERE account_id=?').get(accountId).n,1);
+  assert.equal(resolutions(db).get(target).layer,'import');assert.equal(resolutions(db).get(target).category,'Business');
+  assert.equal(getItem(db,card.id),null);
+  assert.throws(()=>answerItem(db,card.id,'Groceries'));
+  assert.equal(db.prepare('SELECT count(*) AS n FROM transaction_category_corrections WHERE transaction_id=?').get(target).n,0);
+  assert.ok(pendingItems(db).find(q=>q.kind==='transaction_category'&&q.subject===String(other))?.context.jev);
+});
+
+test('near-duplicate consolidation retires the dropped Jev review and undo can recreate it',async t=>{
+  const db=store(t);vocabulary(db);
+  const {answerItem}=await import('../src/ingest/confirm.mjs');
+  const keep=transaction(db,'First review merchant'),drop=transaction(db,'Dropped review merchant');
+  db.prepare("UPDATE transactions SET dedupe_key='review-keep' WHERE id=?").run(keep);
+  db.prepare("UPDATE transactions SET dedupe_key='review-drop' WHERE id=?").run(drop);
+  await guessCategories(db,provider(.9),{policy});
+  const droppedCard=pendingItems(db).find(q=>q.kind==='transaction_category'&&q.subject===String(drop));assert.ok(droppedCard);
+  const duplicate=ask(db,{kind:'near_duplicate',subject:'review-keep|review-drop',question:'Same posting?',options:[{id:'same',label:'Same'},{id:'different',label:'Different'}],context:{keys:['review-keep','review-drop']}});
+  answerItem(db,duplicate.id,'same');queueCategoryChecks(db,{policy});
+  assert.equal(getItem(db,droppedCard.id),null);
+  const current=pendingItems(db).filter(q=>q.kind==='transaction_category');
+  assert.equal(current.length,1);assert.equal(current[0].subject,String(keep));assert.equal(bestGuess(db,current[0],{}).confidence,.9);
+  reopenItem(db,duplicate.id);queueCategoryChecks(db,{policy});
+  assert.equal(pendingItems(db).filter(q=>q.kind==='transaction_category').length,2);
   assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(),[]);
 });

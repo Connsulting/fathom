@@ -65,8 +65,8 @@ export function categoryOptions(context) {
 }
 export function queueCategoryChecks(db,options={}) {
   const candidates=checks(db,options), active=new Set(candidates.map(c=>JSON.stringify([c.kind,c.subject])));
-  for(const r of db.prepare("SELECT i.id,i.kind,i.subject,i.context FROM confirm_items i WHERE i.status='pending' AND i.kind IN ('transaction_category','category_mapping') AND NOT EXISTS (SELECT 1 FROM confirm_auto_declined d WHERE d.item_id=i.id)").all()) {
-    if(!parseJson(r.context,{})?.jev && !active.has(JSON.stringify([r.kind,r.subject]))) db.prepare('DELETE FROM confirm_items WHERE id=?').run(r.id);
+  for(const r of db.prepare("SELECT i.id,i.kind,i.subject FROM confirm_items i WHERE i.status='pending' AND i.kind IN ('transaction_category','category_mapping') AND NOT EXISTS (SELECT 1 FROM confirm_auto_declined d WHERE d.item_id=i.id)").all()) {
+    if(!active.has(JSON.stringify([r.kind,r.subject]))) db.prepare('DELETE FROM confirm_items WHERE id=?').run(r.id);
   }
   const now=nowOf(options.now);
   for(const c of candidates) {
