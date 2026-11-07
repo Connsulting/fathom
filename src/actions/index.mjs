@@ -43,7 +43,7 @@ export async function recordFact(args, ctx) {
   await answerFacts(ctx.db, [{ key: args.key, value: args.value }], { now: new Date(ctx.now ?? Date.now()).toISOString(),
     channel: ctx.channel === 'mcp' ? 'mcp' : 'ask', actorId,
     replan: async () => {}, onWrite(before, after) {
-      receipt = saveReceipt(ctx, { scope: 'write:facts', kind: 'fact', id: args.key, label: shape.label,
+      receipt = saveReceipt(ctx, { scope: 'write:facts', kind: 'fact', id: args.key, label: shape.label ?? args.key,
         before: select(before, FACT_FIELDS), after: select(after, FACT_FIELDS),
         from: before ? parse(before.value, null) : null, to: parse(after.value, null) });
     } });

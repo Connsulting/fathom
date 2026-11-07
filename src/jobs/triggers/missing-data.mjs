@@ -55,7 +55,8 @@ const REASONS = Object.freeze({
   retirement_contribution_unattributed: ['A retirement contribution does not say which of your businesses sponsors the plan, so tax projections are on hold.', 'Tell us which business sponsors each retirement contribution'],
   retirement_contribution_over_limit: ['A retirement contribution is above what the plan rules allow for your earnings or wages, so tax projections are on hold.', 'Check your retirement contribution amounts with your plan provider or accountant'],
   retirement_other_deferrals_missing: ['We need your deferrals to other workplace plans this year before your self-employed retirement deduction can be figured.', confirmTask('retirement.otherPlanDeferrals')],
-  va529_answers_missing: ["We need each college savings account's Virginia answers, including any carryforward, before projecting Virginia tax.", confirmTask('accounts.va529')],
+  va529_answers_missing: ["We need each college savings account's Virginia answers, including any carryforward, and your birth year before projecting Virginia tax.", confirmTask('accounts.va529')],
+  'household.birthYears': ['We need your birth year, and your spouse\'s when you file jointly, before sizing age based limits.', confirmTask('household.birthYears')],
   ira_room_missing: ['IRA contribution room could not be figured for everyone in the household, so the backdoor Roth recommendation is on hold.', 'Check the household ages and income on file'],
   'retirement.otherPlanDeferrals': ['We need your deferrals to other workplace plans this year before sizing retirement room.', confirmTask('retirement.otherPlanDeferrals')],
   'retirement.priorYearFicaWages': ["We need last year's Social Security wages from your business before sizing catch-up room.", confirmTask('retirement.priorYearFicaWages')],
@@ -75,8 +76,28 @@ const REASONS = Object.freeze({
 });
 const RETAINED = 'No longer computed from your current data, so it is shown for reference only.';
 
+// Where an item is cleared: what kind of work it is (an answer, an upload or a check) and the link
+// that takes the owner there. 'upload' is the Files page; 'ask' is Ask with this recommendation
+// attached, where a question is answered in plain words.
+const UPLOAD_NOUN = Object.freeze({
+  paystub_ytd_missing: 'a paystub', paystub_deferrals_unknown: 'a W-2', w2_box12_unreadable: 'a W-2', w2_wages_missing: 'a W-2', w2_medicare_wages_missing: 'a W-2',
+  w2_plan_compensation_unknown: 'a W-2', w2_duplicate_unresolved: 'a W-2', withholding_state_unknown: 'a clearer copy', k1_unmatched: 'partnership statements',
+  k1_scorp_unmatched: 'a profit and loss', prior_year_missing: "last year's return", partnership_incomplete: 'partnership statements',
+});
+export function classify(task, code, answerKey) {
+  if (/^Upload\b/.test(task)) return { kind: 'upload', link: 'upload', noun: UPLOAD_NOUN[code] || 'a file' };
+  if (answerKey || /\bin Confirm$|^Answer\b/.test(task)) return { kind: 'question', link: 'ask' };
+  if (/^(Tell us|Enter|Confirm)\b/.test(task)) return { kind: 'question', link: 'ask' };
+  return { kind: 'check', link: 'ask' };
+}
+const withKind = item => ({ ...item, ...classify(item.task, item.code, item.answerKey) });
+
 // `name` formats a data-derived name: dataText for stored rec HTML, plain for a plain-text reason.
 function reasonItem(ctx, reason, name = dataText) {
+  return withKind(rawReasonItem(ctx, reason, name));
+}
+
+function rawReasonItem(ctx, reason, name) {
   if (reason.startsWith('entity_unclassified:')) {
     const slug = reason.slice('entity_unclassified:'.length);
     const e = (ctx.entities || []).find(x => x.slug === slug);
@@ -118,14 +139,14 @@ export function items(ctx) {
     out.push({
       code: s.id, tax: TAX_CODES.has(s.id),
       text: s.state === 'missing' ? `${s.label}: nothing uploaded yet.` : `${s.label}: out of date.`,
-      task: `Upload the latest ${s.label.toLowerCase()}`,
+      task: `Upload the latest ${s.label.toLowerCase()}`, kind: 'upload', link: 'upload', noun: `the latest ${s.label.toLowerCase()}`,
     });
   }
   if (ctx.warnings.includes('prior_year_missing')) {
-    out.push({ code: 'prior_year_missing', tax: true, text: "Last year's tax return is missing, so the federal target uses this year's projection.", task: "Upload last year's tax return" });
+    out.push({ code: 'prior_year_missing', tax: true, text: "Last year's tax return is missing, so the federal target uses this year's projection.", task: "Upload last year's tax return", ...classify("Upload last year's tax return", 'prior_year_missing') });
   }
   if (ctx.warnings.includes('filing_status_assumed')) {
-    out.push({ code: 'filing_status_assumed', tax: true, text: 'Your filing status is not set, so we assumed single.', task: 'Tell us your filing status' });
+    out.push({ code: 'filing_status_assumed', tax: true, text: 'Your filing status is not set, so we assumed single.', task: 'Tell us your filing status', kind: 'question', link: 'ask' });
   }
   const reasons = [...(ctx.info.blocked || []), ...(ctx.info.heldReasons || []), ...(ctx.blockedReasons || []).map(b => b.reason)];
   for (const r of reasons) out.push(reasonItem(ctx, r));
@@ -145,29 +166,65 @@ export function window(ctx) {
 
 export function evaluate(ctx) {
   const factFor = { va529_answers_missing: 'accounts.va529', retirement_other_deferrals_missing: 'retirement.otherPlanDeferrals', deferral_split_unknown: 'retirement.otherPlanDeferrals', va_itemized_missing: 'tax.vaItemizedEstimate', filing_status_assumed: 'household.filingStatus' };
-  const list = items(ctx).map(i => ({ ...i, answerKey: factFor[i.code] || (Object.hasOwn(ANSWER_SHAPES, i.code) ? i.code : null) }))
-    .filter(i => !i.answerKey || !ctx.questionKeys?.has(i.answerKey));
+  const list = items(ctx).map(i => {
+    const answerKey = factFor[i.code] || (Object.hasOwn(ANSWER_SHAPES, i.code) ? i.code : null);
+    return { ...i, answerKey, ...(answerKey ? { kind: 'question', link: 'ask' } : {}) };
+  }).filter(i => !i.answerKey || !ctx.questionKeys?.has(i.answerKey));
   if (!list.length) return null;
   const questions = [...new Set(list.map(i => i.answerKey).filter(Boolean))];
   const answers = questions.length ? list.every(i => i.answerKey) ? { confirm: questions } : { questions } : {};
   return { grounding: [], items: list, ...answers };
 }
 
+// The count of a kind of item as words for a title: one reads "a", more read the number.
+const count = (n, one, many) => (n === 1 ? `a ${one}` : `${n} ${many}`);
+
+// What the owner has to do to clear the list, for the title and summary: "Answer 2 tax questions
+// and upload a paystub". Questions come first, then uploads, then checks.
+export function listTitle(list) {
+  const of = kind => list.filter(i => i.kind === kind);
+  const asks = of('question');
+  const ups = of('upload');
+  const checks = of('check');
+  const parts = [];
+  if (asks.length) {
+    const tax = asks.every(i => i.tax);
+    parts.push(`answer ${count(asks.length, tax ? 'tax question' : 'question', tax ? 'tax questions' : 'questions')}`);
+  }
+  if (ups.length) {
+    const nouns = [...new Set(ups.map(i => i.noun))];
+    parts.push(ups.length === 1 || nouns.length === 1 ? `upload ${nouns[0]}` : `upload ${ups.length} files`);
+  }
+  if (checks.length) parts.push(`check ${count(checks.length, 'item', 'items')}`);
+  const text = parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}` : parts[0] || 'update your data';
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+// The tasks beside the question form: every item that is not a form field, each with where it is done.
+const taskOf = i => ({ t: i.task, link: i.link });
+
 export function build(ctx, hit) {
   return {
-    title: 'Bring your data up to date',
+    title: listTitle(hit.items),
     effort: 'A few minutes',
     value: [{ cls: 'risk', text: 'Keeps every figure on your plan current' }],
     mine: [],
     cross: [],
-    tasks: padTasks(hit.items.filter(i => !i.answerKey).map(i => i.task)),
+    tasks: padTasks(hit.items.filter(i => !i.answerKey).map(taskOf)),
   };
 }
 
 export function template(ctx, hit) {
   return {
-    summary: 'Some of your data is missing or out of date, so parts of your plan are on hold.',
+    summary: `${listTitle(hit.items)} so the parts of your plan that are on hold can update.`,
     why: hit.items.slice(0, 4).map(i => i.text),
     qa: [{ q: 'What happens to recommendations in the meantime?', a: ['They keep their last figures and wait for the data. Nothing is retired because a file is late.'] }],
   };
+}
+
+// What a trigger is waiting on, for the Plan card and dialog: the plain reason, the task that clears
+// it and the link to where it is done. Built from the same reason text the missing-data rec lists.
+export function blockerOf(ctx, code) {
+  const item = reasonItem(ctx, code, v => String(v));
+  return { code, text: item.text, task: item.task, link: item.link };
 }
