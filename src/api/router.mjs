@@ -38,6 +38,7 @@ import { identityOf, sendUnauthorized } from './identity.mjs';
 import { createAuthService } from '../auth/service.mjs';
 import * as authHandlers from '../auth/handlers.mjs';
 import { getSetting } from '../store/db.mjs';
+import { demoRouteBehavior, DEMO_OFF_MESSAGE } from '../public-demo/control.mjs';
 
 const TABLE = [
   { method: 'GET', path: '/healthz', handler: h.healthz, public: true },
@@ -152,7 +153,7 @@ function matchPath(parts, segments) {
   return params;
 }
 
-function findRoute(method, segments) {
+export function findRoute(method, segments) {
   const hits = compiled.map(r => ({ r, params: matchPath(r.parts, segments) })).filter(x => x.params);
   if (!hits.length) throw new HttpError(404, 'not found');
   const hit = hits.find(x => x.r.method === method || (method === 'HEAD' && x.r.method === 'GET'));
@@ -160,7 +161,7 @@ function findRoute(method, segments) {
   return hit;
 }
 
-function normalizePath(rawPath) {
+export function normalizePath(rawPath) {
   if (!rawPath.startsWith('/')) throw new HttpError(404, 'not found');
   let segments;
   try { segments = rawPath.split('/').slice(1).map(decodeURIComponent); }
@@ -197,13 +198,19 @@ export function createHandler({ db, platform, config, answerer, engine = null, p
   const serveStatic = createStatic({ webDir, sharedDir });
   let keyService = keys;
   let mcpHandler = mcp;
-  const getKeys = () => (keyService ??= createKeyService({ db, serverSecret: loadServerSecret(config.dataDir), creatorActive: authService.creatorActive }));
+  const getKeys = () => {
+    if (config.publicDemo) throw new HttpError(403, DEMO_OFF_MESSAGE);
+    return (keyService ??= createKeyService({ db, serverSecret: loadServerSecret(config.dataDir), creatorActive: authService.creatorActive }));
+  };
   // Route access beyond a session (see the header).
   const checkAccess = (r, identity) => {
     if (r.admin && !authService.servedAdmin(identity)) throw adminRequired();
     if (!r.public && !r.auth && !r.session && !r.operator && !authService.servedMember(identity)) throw membershipRequired();
   };
-  const getMcp = () => (mcpHandler ??= createMcpHandler({ db, keys: getKeys(), config }));
+  const getMcp = () => {
+    if (config.publicDemo) throw new HttpError(403, DEMO_OFF_MESSAGE);
+    return (mcpHandler ??= createMcpHandler({ db, keys: getKeys(), config }));
+  };
   return async function handle(req, res) {
     setSecurityHeaders(res);
     const url = req.url || '/';
@@ -234,6 +241,7 @@ export function createHandler({ db, platform, config, answerer, engine = null, p
         if (isApi && !isAllowedHost(req.headers.host, config)) throw new HttpError(403, 'forbidden host');
         const { r, params } = findRoute(req.method, segments);
         route = r;
+        if (config.publicDemo && demoRouteBehavior(r.method, r.path) === 'off') throw new HttpError(403, DEMO_OFF_MESSAGE);
         if (gated && !r.public) checkAccess(r, identity);
         let body = {};
         let readUpload = null;
@@ -241,13 +249,16 @@ export function createHandler({ db, platform, config, answerer, engine = null, p
           guardUpload(req, { origin: gated ? new URL(config.publicUrl).origin : null });
           readUpload = () => readMultipart(req);
         } else if (r.method === 'POST') {
-          guardPost(req, { origin: gated ? new URL(config.publicUrl).origin : null });
+          guardPost(req, { origin: gated || config.publicDemo ? new URL(config.publicUrl).origin : null });
           body = await readJsonBody(req);
         }
         if (gated && !r.public) {
           identity = identityOf(req, authService);
           if (!identity) throw new HttpError(401, 'unauthorized');
           checkAccess(r, identity);
+        }
+        if (!gated && !config.publicDemo && r.method === 'POST' && path !== '/api/demo/reset') {
+          db.prepare("DELETE FROM settings WHERE key = 'synthetic_demo'").run();
         }
         const events = r.stream && wantsEventStream(req) ? createEventStream(req, res) : null;
         let out;
