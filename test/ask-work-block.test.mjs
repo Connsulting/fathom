@@ -401,3 +401,67 @@ test('a thread asked from a rec streams and stores the same work, reading the re
   const { stored } = await showYourWork(s, { recId: 'deferral', text: SHOW }, PROGRESS_LABELS.get_recommendation);
   assert.ok(!stored.provenance.work.items.some(x => x.k === 'step' && x.label === PROGRESS_LABELS.list_goals));
 }));
+
+/* ---------- F. order inside one tool round: text, tool, text, tool ---------- */
+
+// One round whose content interleaves text and tool_use blocks, as the SDK emits them.
+const interleaved = (first, second) => ({
+  content: [
+    { type: 'text', text: 'First note.' },
+    { type: 'tool_use', id: 'synthetic-1', name: first, input: {} },
+    { type: 'text', text: 'Second note.' },
+    { type: 'tool_use', id: 'synthetic-2', name: second, input: {} },
+  ],
+  toolCalls: [{ name: first, args: {} }, { name: second, args: {} }],
+});
+
+test('the engine keeps a round\'s text and tools in content order, in its parts and its events', async () => {
+  const open = { type: 'object', properties: {}, additionalProperties: false };
+  const tools = [{ ...balance, inputSchema: open }, { ...alpha, inputSchema: open }];
+  const engine = createEngine({ mode: 'fake' });
+  const seen = [];
+  const res = await engine.call({ ...chat, tools, fake: [interleaved('balance', 'alpha'), { text: 'Your balance is $125.' }],
+    onEvent: e => seen.push(e) });
+  assert.equal(res.text, 'Your balance is $125.');
+  assert.ok(Array.isArray(res.toolRounds), 'the result carries toolRounds');
+  assert.deepEqual(res.toolRounds[0].parts, [{ text: 'First note.' }, { tool: 'balance' }, { text: 'Second note.' }, { tool: 'alpha' }]);
+  const order = seen.filter(e => e.type !== 'text').map(e => (e.type === 'tool' ? `tool:${e.name}` : `interim:${e.text}`));
+  assert.deepEqual(order, ['interim:First note.', 'tool:balance', 'interim:Second note.', 'tool:alpha']);
+  const lastInterim = seen.map(e => e.type).lastIndexOf('interim');
+  assert.equal(seen.slice(lastInterim + 1).filter(e => e.type === 'text').map(e => e.text).join(''), res.text);
+  // A round with text and toolCalls but no tool_use content keeps the text-then-tools parts.
+  const plain = await engine.call({ ...chat, tools: [balance], fake: [{ text: 'Let me look.', toolCalls: [call('balance')] }, { text: 'Done.' }] });
+  assert.deepEqual(plain.toolRounds[0].parts, [{ text: 'Let me look.' }, { tool: 'balance' }]);
+});
+
+// The items the client builds from the stream: progress pushes a step (a repeat in a row of steps
+// is dropped), interim pushes a note.
+function liveItems(seen) {
+  const items = [];
+  let last = null;
+  for (const e of seen) {
+    if (e.type === 'progress' && e.label !== last) { last = e.label; items.push(step(e.label)); }
+    else if (e.type === 'interim' && e.text.trim()) items.push(note(e.text.trim()));
+  }
+  return items;
+}
+
+test('stored work keeps notes and steps in content order inside one round, identical to the live items', async t => {
+  const s = await demoStore(t);
+  const seen = [];
+  const { reply } = await askScripted(s, [[interleaved('list_accounts', 'list_goals'), { text: 'Keep a reserve.' }]],
+    { onEvent: e => seen.push(e) });
+  const expected = [
+    step(PROGRESS_START),
+    note('First note.'),
+    step(PROGRESS_LABELS.list_accounts),
+    note('Second note.'),
+    step(PROGRESS_LABELS.list_goals),
+    step(PROGRESS_GROUNDING),
+  ];
+  const order = seen.filter(e => e.type === 'interim' || e.type === 'progress').map(e => (e.type === 'interim' ? e.text : e.label));
+  assert.deepEqual(order, [PROGRESS_START, 'First note.', PROGRESS_LABELS.list_accounts, 'Second note.', PROGRESS_LABELS.list_goals, PROGRESS_GROUNDING]);
+  assert.deepEqual(reply.provenance.work.items, expected);
+  assert.deepEqual(liveItems(seen), reply.provenance.work.items);
+  assert.deepEqual(reply.paragraphs, ['Keep a reserve.']);
+});
