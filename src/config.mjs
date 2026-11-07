@@ -134,6 +134,7 @@ export function loadConfig(env = process.env) {
     fakeStreamMs,
     clock,
     claudeCredentialFile: blank(env.FATHOM_CLAUDE_CREDENTIAL_FILE) ? null : env.FATHOM_CLAUDE_CREDENTIAL_FILE,
+    typesafeKeyFile: opt(env.FATHOM_TYPESAFE_KEY_FILE),
     dataKeyFile: blank(env.FATHOM_DATA_KEY_FILE) ? null : env.FATHOM_DATA_KEY_FILE,
     emailTransport,
     emailFrom,
