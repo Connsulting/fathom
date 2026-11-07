@@ -1,0 +1,52 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { tempDb } from './helpers/server.mjs';
+import { seedDemo } from '../demo/seed.mjs';
+import { callTool } from '../src/tools/index.mjs';
+import { accountFreshness, freshnessOf } from '../src/ingest/freshness.mjs';
+import { categoryCoverage } from '../src/categories/store.mjs';
+import { pendingItems } from '../src/ingest/confirm.mjs';
+import { yearendChecklist, taxYearFor } from '../src/yearend/expected.mjs';
+import { assertRefsResolve } from './helpers/figures.mjs';
+
+test('health recomputes ages and exposes category, Confirm, year-end and job state without writes', async t => {
+  const s = await tempDb();
+  t.after(() => s.close());
+  const { db } = s;
+  seedDemo(db);
+  db.prepare("INSERT INTO sources (id,label,kind,as_of) VALUES ('ing:health','Synthetic feed','bank_csv','2026-10-31')").run();
+  for (const id of ['stale','silent','fresh']) db.prepare("INSERT INTO accounts (id,name,kind,source_id) VALUES (?,?,'checking','ing:health')").run(id, `Synthetic ${id}`);
+  db.prepare("INSERT INTO balances (account_id,date,amount) VALUES ('stale','2026-06-01',123)").run();
+  db.prepare("INSERT INTO balances (account_id,date,amount) VALUES ('fresh','2026-10-31',456)").run();
+  db.prepare("INSERT INTO figures (key,v,kind,label,updated_at,unavailable_reason) VALUES ('missing',0,'e','Missing input','2026-10-01','missing_fact')").run();
+  const ctx = { db, dataDir: s.dataDir, clock: '2026-11-05' };
+  const before = db.prepare('SELECT total_changes() AS n').get().n;
+  const out = await callTool('household', { operation: 'health' }, ctx);
+  assert.equal(db.prepare('SELECT total_changes() AS n').get().n, before);
+  for (const id of ['stale','silent','fresh']) {
+    const a = out.accounts.find(a => a.id === id);
+    const fresh = accountFreshness(db, id, { clock: ctx.clock });
+    assert.equal(a.freshness, fresh.fresh);
+    assert.equal(a.ageDays.value, freshnessOf({ kind: 'bank_csv', asOf: fresh.asOf }, ctx.clock).ageDays);
+  }
+  assert.ok(out.gaps.some(g => g.code === 'stale_account'));
+  assert.ok(out.gaps.some(g => g.code === 'account_no_history' && g.message.includes('silent')));
+  const c = categoryCoverage(db);
+  assert.equal(out.categories.rows.value, c.rows);
+  assert.equal(out.categories.guessed.value, c.layers.guess);
+  assert.equal(out.categories.corrected.value, c.layers.correction);
+  assert.equal(out.categories.uncategorized.value, c.uncategorized);
+  assert.equal(out.categories.queueSize.value, c.queueSize);
+  assert.equal(out.pendingConfirm.total.value, pendingItems(db).length);
+  const expected = yearendChecklist(db, { year: taxYearFor(ctx.clock), clock: ctx.clock });
+  assert.deepEqual(out.yearend.items.map(i => [i.key,i.status]), expected.items.map(i => [i.key,i.status === 'have' ? 'received' : i.status === 'skipped' ? 'marked' : 'missing']));
+  assert.deepEqual(out.jobs.map(j => j.id).sort(), db.prepare('SELECT id FROM jobs').all().map(j => j.id).sort());
+  assert.ok(out.unavailableFigures.some(f => f.key === 'missing'));
+  await assertRefsResolve(out, ctx);
+  const later = await callTool('household', { operation: 'health', accounts: ['fresh'] }, { ...ctx, clock: '2027-02-01' });
+  assert.equal(later.accounts.length, 1);
+  assert.equal(later.accounts[0].freshness, 'stale');
+  assert.ok(later.accounts[0].ageDays.value > out.accounts.find(a => a.id === 'fresh').ageDays.value);
+  assert.equal((await callTool('household', { operation: 'health', accounts: [] }, ctx)).categories.rows.value, 0);
+  await assert.rejects(callTool('household', { operation: 'health', accounts: ['absent'] }, ctx), e => e.code === 'not_found');
+});
