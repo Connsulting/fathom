@@ -8,8 +8,7 @@
 .d-horizon .h-ad-pen:focus-visible { outline: 2px solid var(--ac); outline-offset: 1px; }
 .d-horizon .h-ad-edit { font-size: inherit; font-weight: inherit; line-height: inherit; width: min(30ch, 100%); }
 .d-horizon .h-ad-edit:focus-visible { outline: 2px solid var(--ac); outline-offset: 2px; border-radius: 2px; }
-.d-horizon .h-ad-head .h-lede { margin-top: 8px; }
-.d-horizon .h-ad-facts { align-items: center; }
+.d-horizon .h-ad-facts { align-items: center; margin-top: 12px; }
 
 .d-horizon .h-acc-open { margin-left: 12px; color: var(--mu); font-size: 12.5px; }
 .d-horizon .h-acc-open:hover { color: var(--ac2); }
@@ -28,7 +27,7 @@
 
 .d-horizon .h-ad-filter { display: grid; grid-template-columns: minmax(0, 1fr) 150px 150px auto; gap: 12px; align-items: end; }
 .d-horizon .h-ad-f { display: flex; flex-direction: column; gap: 4px; min-width: 0; font-size: 12px; color: var(--fa); }
-.d-horizon .h-ad-f input { font: inherit; font-size: 14px; color: var(--tx); background: var(--s1, transparent); border: 1px solid var(--line2); border-radius: 8px; padding: 8px 10px; min-width: 0; width: 100%; box-sizing: border-box; color-scheme: dark; }
+.d-horizon .h-ad-f input { font: inherit; font-size: 14px; color: var(--tx); background: var(--s1, transparent); border: 1px solid var(--line2); border-radius: 8px; padding: 0 10px; height: 40px; min-width: 0; width: 100%; box-sizing: border-box; color-scheme: dark; }
 .d-horizon .h-ad-f input:focus-visible { outline: 2px solid var(--ac); outline-offset: 1px; }
 .d-horizon .h-ad-count { margin-top: 12px; color: var(--fa); font-size: 12.5px; }
 .d-horizon .h-ad-err { color: var(--tx2); font-size: 13px; margin-top: 8px; }
