@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createEvalStore, writeScorecard } from '../evals/harness.mjs';
-import { evidenceNumbers, gradeFigures } from '../evals/graders.mjs';
+import { gradeFigures } from '../evals/graders.mjs';
 import { tools } from '../src/tools/index.mjs';
 
 const read = result => [{ name: 'read', args: {}, result }];
@@ -30,20 +30,40 @@ test('sourced-number table: sign, cents, abbreviations, rounding, words and cont
   assert.equal(gradeFigures('$123', read({ amount: 123 }), { contextNumbers: [123] }).ok, true);
 });
 
+test('formatting preserves units, cent precision and dropped-cent direction', () => {
+  assert.equal(gradeFigures('1.5m', read({ amount: 1500000.50 })).ok, false);
+  assert.equal(gradeFigures('$1,188', read({ amount: 1187.40 })).ok, false);
+  assert.equal(gradeFigures('$1,187', read({ amount: -1187.40 })).ok, true);
+  assert.equal(gradeFigures('$1.5 million', read({ amount: 1500000 })).ok, true);
+  assert.equal(gradeFigures('$1,000,000', read({ amount: 1000000.01 })).ok, false);
+  assert.equal(gradeFigures('1,000,000', read({ amount: 1000000.01 })).ok, false);
+});
+
 test('tier 1 demo fixtures state unsigned, dropped-cent and word-count figures', async () => {
   const store = await createEvalStore();
   try {
     const byName = Object.fromEntries(tools.map(tool => [tool.name, tool]));
     const ctx = { db: store.db };
     const specs = [
-      ['business-pnl-january', 'pnl_by_month', { from: '2026-01', to: '2026-01' }],
-      ['goals-pace', 'get_pace', {}],
-      ['spending-latest-health', 'query_transactions', { category: 'health', limit: 1 }],
+      ['business-pnl-january', 'pnl_by_month', { from: '2026-01', to: '2026-01' }, result =>
+        [...result.rows.map(row => row.amount), ...Object.values(result.totals)]],
+      ['goals-pace', 'get_pace', {}, result => {
+        const values = [];
+        const walk = value => {
+          if (!value || typeof value !== 'object') return;
+          if (Number.isFinite(value.v)) values.push(value.v);
+          else Object.values(value).forEach(walk);
+        };
+        walk(result);
+        return values;
+      }],
+      ['spending-latest-health', 'query_transactions', { category: 'health', limit: 1 }, result =>
+        [...result.rows.map(row => row.amount), result.total]],
     ];
-    for (const [id, name, args] of specs) {
+    for (const [id, name, args, values] of specs) {
       const result = await byName[name].handler(args, ctx);
       const calls = [{ name, args, result }];
-      const answer = fixtureAnswer(calls, result);
+      const answer = fixtureAnswer(values(result), result);
       const grade = gradeFigures(answer, calls);
       assert.equal(grade.ok, true, `${id}: ${JSON.stringify(grade)}`);
       const invented = gradeFigures(`${answer} Invented $424,242.42.`, calls);
@@ -68,16 +88,18 @@ test('violation kinds are the five adjudication kinds and the harness counts the
     await writeScorecard(dir, { live: false, costUsd: 0, stopped: null, cases: [{
       id: 'sample', status: 'fail', costUsd: 0, turns: [{
         tools: [], required: { checks: [] }, length: { words: 1, maxWords: 40 },
-        figures: flat[0], attempts: [{ figures: flat[2] }],
+        figures: flat[0], attempts: flat.slice(1).map(figures => ({ figures })),
       }],
     }] });
     const summary = await readFile(join(dir, 'summary.md'), 'utf8');
     for (const kind of kinds) assert.match(summary, new RegExp(kind));
-    assert.match(summary, /\| sample \|/);
+    assert.match(summary, /\| sample \| fail \| none \/  \| 1 \/ 1 \/ 1 \/ 1 \/ 1 \|/);
+    const json = JSON.parse(await readFile(join(dir, 'scorecard.json'), 'utf8'));
+    assert.equal(json.cases[0].turns[0].attempts.length, 4);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
-function fixtureAnswer(calls, result) {
+function fixtureAnswer(values, result) {
   const words = ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen', 'twenty'];
   const lengths = [];
   const walk = value => {
@@ -86,7 +108,7 @@ function fixtureAnswer(calls, result) {
   };
   walk(result);
   const counts = [...new Set(lengths.filter(n => n >= 1 && n <= 20))].map(n => `${words[n - 1]} rows`);
-  const money = evidenceNumbers(calls).map(n => {
+  const money = values.map(n => {
     const abs = Math.abs(n);
     const whole = Math.trunc(abs);
     const exact = abs.toLocaleString('en-US', { maximumFractionDigits: 20 });
