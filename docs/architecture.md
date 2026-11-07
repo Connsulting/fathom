@@ -2711,7 +2711,6 @@ and queues planning again. Demo baby dates use the same deterministic new-child 
 `remember_preference` stores a short verbatim preference or definition. Settings shows it and allows
 editing or deletion through the same validation. Preferences enter the dynamic Ask prompt as household
 data; they never override product boundaries, evidence requirements or permissions.
-||||||| 46c2db9
 
 
 ## Transaction categories
