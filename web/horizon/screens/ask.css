@@ -330,7 +330,7 @@
 
 /* The launcher: a round accent button, bottom right; beside the docked panel while it is open. */
 .d-horizon .h-askp-launch {
-  position: fixed; z-index: 45; right: 24px; bottom: 24px;
+  position: fixed; z-index: 105; right: 24px; bottom: 24px;
   width: 48px; height: 48px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 50%;
   background: var(--ac); color: var(--ink); cursor: pointer; box-shadow: 0 0 0 3px var(--bg);
   transition: background 0.12s;
@@ -415,7 +415,8 @@
 .d-horizon .h-askx-bar:has(.h-askp-collapse) { display: flex; padding-top: 10px; }
 
 @media (max-width: 720px) {
-  .d-horizon .h-askp-launch { right: 16px; bottom: calc(72px + env(safe-area-inset-bottom)); width: 52px; height: 52px; }
+  /* A phone dialog fills the screen, so the launcher stays under it; wider, it sits above the backdrop. */
+  .d-horizon .h-askp-launch { z-index: 45; right: 16px; bottom: calc(72px + env(safe-area-inset-bottom)); width: 52px; height: 52px; }
   .d-horizon .h-add { opacity: 1; }
   .d-horizon .h-askp .h-askx-main { padding: 0 14px; }
   .d-horizon .tr-part { position: relative; }
