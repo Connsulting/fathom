@@ -326,3 +326,44 @@ export function boardCharts(pace) {
     id: p.id, title: p.title, series: goals[p.id].series, dataEnd: goals[p.id].dataEnd ?? null, figBase: `pace.series.goals.${p.id}.series`
   }));
 }
+
+/* Contribution progress ("entered") in the goal form: the stored shape (per person or one total) is kept
+   regardless of whether a split exists, so an unrelated save never drops it. */
+const numStr = (v) => (finite(v) ? String(v) : '');
+const blankStr = (v) => String(v ?? '').trim() === '';
+
+export function enteredDraft(entered) {
+  const e = entered && typeof entered === 'object' ? entered : null;
+  const of = (person) => numStr(arr(e?.people).find((x) => x && x.person === person)?.amount);
+  return { enteredTotal: e ? numStr(e.total) : '', enteredOwner: of('owner'), enteredSpouse: of('spouse'), enteredAsOf: e && e.asOf ? e.asOf : '' };
+}
+
+export function enteredFields(draft, split, asOfDefault) {
+  const d = draft || {};
+  const asOf = blankStr(d.enteredAsOf) ? asOfDefault : String(d.enteredAsOf).trim();
+  const amount = (k) => { const n = Number(String(d[k]).trim()); return Number.isFinite(n) && n >= 0 ? n : null; };
+  const BAD = { err: 'What was contributed must be zero or more.' };
+  const shares = arr(split);
+  const people = [];
+  for (const [person, key] of [['owner', 'enteredOwner'], ['spouse', 'enteredSpouse']]) {
+    if (blankStr(d[key])) continue;
+    if (shares.length && !shares.some((x) => x && x.person === person)) return { err: 'Contributed amounts are only for people with a share.' };
+    const v = amount(key);
+    if (v == null) return BAD;
+    people.push({ person, amount: v });
+  }
+  if (people.length) return { entered: { asOf, people } };
+  if (!blankStr(d.enteredTotal)) {
+    const v = amount('enteredTotal');
+    if (v == null) return BAD;
+    return { entered: { asOf, total: v } };
+  }
+  return { entered: null };
+}
+
+export function enteredInputs(draft, split) {
+  const d = draft || {};
+  const hasSplit = arr(split).length > 0;
+  const personal = !blankStr(d.enteredOwner) || !blankStr(d.enteredSpouse);
+  return { people: hasSplit || personal, total: !hasSplit || !blankStr(d.enteredTotal) };
+}

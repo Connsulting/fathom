@@ -232,7 +232,7 @@ test.describe('goal kinds', TAGS, () => {
       await expect(form(page)).toBeVisible();
       await gf(page, 'priority').selectOption('high');
       const post = posted(page, `/api/goals/${id}`);
-      await form(page).getByRole('button', { name: 'Save goal' }).click();
+      await form(page).getByRole('button', { name: 'Save changes' }).click();
       await post;
       await expect(form(page)).toHaveCount(0);
       const saved = (await fetchScenario(request)).goals.find((g) => g.id === id);
