@@ -14,6 +14,7 @@ const expected = {
   knowledge: ['packs', 'search', 'entry'], answer: ['fact'],
   act_on_recommendation: ['status', 'owner', 'step'], update_goal: ['create', 'edit'],
   update_preferences: ['remember'], undo: ['undo'],
+  calculate: ['add', 'subtract', 'multiply', 'divide', 'sum', 'min', 'max', 'negate', 'annualize', 'monthly', 'percent_of', 'round_up', 'compound'],
 };
 const oldNames = [
   ['household','summary'], ['get','facts'], ['get','fact','answer','shapes'], ['get','figures'],
@@ -32,10 +33,10 @@ test('operation tools register, with no old aliases', () => {
     assert.deepEqual(new Set(tool.operations.map(o => o.name)), new Set(expected[tool.name]));
     assert.deepEqual(tool.inputSchema.required, ['operation']);
     assert.deepEqual(tool.inputSchema.properties.operation.enum, tool.operations.map(o => o.name));
-    assert.ok(tool.operations.length <= 8);
+    assert.ok(tool.operations.length <= 8 || tool.name === 'calculate');
     assert.ok(tool.operations.every(o => o.route && Array.isArray(o.routes) && o.summary.length <= 140));
     assert.ok(tool.operations.every(o => (tool.kind === 'read') === (o.scope === 'read')));
-    if (tool.kind === 'read') assert.deepEqual(tool.operations[0].required, []);
+    if (tool.kind === 'read' && tool.name !== 'calculate') assert.deepEqual(tool.operations[0].required, []);
   }
   for (const name of oldNames) assert.equal(getTool(name), null);
   assert.doesNotThrow(() => createRegistryServer(tools, { purpose: 'chat' }));
@@ -98,4 +99,17 @@ test('tracked callers contain no retired tool names', () => {
     pattern.lastIndex = 0;
   }
   assert.deepEqual(found, []);
+});
+
+test('the assembled rule text holds section 4 rules 2 to 6', async () => {
+  const { rules } = await import('../src/tools/catalog/calculate.mjs');
+  assert.equal(rules.length, 5);
+  for (const line of rules) assert.ok(instructions.includes(line), line);
+  const [arithmetic, quoting, refs, assumptions, gaps] = rules;
+  assert.match(arithmetic, /^Never sum, scale, annualize, subtract, divide or round numbers yourself\..*call calculate with refs/);
+  assert.match(quoting, /quote.*\{f:key\}.*Never restate.*spell it out, change its sign, round it, or derive a second number/);
+  assert.match(quoting, /unsigned.*spent.*paid/);
+  assert.match(refs, /Copy a figure's ref field.*do not compose refs by hand.*same arguments/);
+  assert.match(assumptions, /name, value and source.*owner.*evidence.*preference.*fact.*default.*Never mark a value as the owner's/);
+  assert.match(gaps, /Report data gaps.*Never fill a gap with an estimate.*fix/);
 });

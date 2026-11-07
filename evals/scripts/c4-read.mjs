@@ -49,7 +49,7 @@ export async function script({ turn, db, clock }) {
     { toolCalls: calls, costUsd: 0 },
     {
       text: primary
-        ? `The returned result is ${primary.quote ?? primary.value}.`
+        ? `${primary.direction === 'out' && calls[0].args.operation === 'cash_flow' ? 'The net cash outflow is' : 'The returned result is'} ${primary.quote ?? primary.value}.`
         : 'No matching figures are available in this selection.',
       costUsd: 0,
     },
