@@ -11,6 +11,8 @@ import { SERVER_TIMEOUT, withServer, postJson, getScenario, openStore } from './
 const T = { timeout: SERVER_TIMEOUT };
 const FAKE = { FATHOM_ENGINE: 'fake' };
 const INVENTED = '$987,654';
+const INVENTED_2 = '$876,543';
+const UNCHECKED = '<span class="fx-checking fx-unchecked" title="Not checked against your data">';
 
 async function ok(resPromise) {
   const r = await resPromise;
@@ -46,7 +48,7 @@ test('an Ask chip stores a grounded answer with provenance in the message row an
   const conv = r.scenario.live.conversations[r.thread.key];
   assert.equal(conv.length, 2);
   assert.equal(conv[0].role, 'me');
-  assert.equal(conv[0].provenance, null, 'the owner message carries no provenance');
+  assert.equal(conv[0].provenance.ownerInput.actorId, 'demo');
   assert.deepEqual(conv[1], m);
   const stored = await readDb(s.dbFile, db => db.prepare("SELECT provenance FROM messages WHERE conversation_key = ? AND role = 'fathom'").get(r.thread.key));
   assert.deepEqual(JSON.parse(stored.provenance), m.provenance);
@@ -64,14 +66,34 @@ test('unmatched free text gets a grounded answer from the household summary with
   assert.deepEqual(m.refs, []);
 }));
 
-test('free text with an invented amount is retried and stored with the amount marked unverified', T, () => withServer({ env: FAKE }, async s => {
+// The fake engine echoes the owner's amounts next to the household summary count, which grounds.
+test('free text with one invented amount is stored once with the amount unchecked in place, no regeneration', T, () => withServer({ env: FAKE }, async s => {
   const r = await askNew(s, `Could we spend ${INVENTED} on a sailboat`);
   const m = r.message;
   assert.equal(m.notice, false);
-  assert.ok(m.text.includes(`<span class="fx-unverified" title="Not found in your data or tool results">${INVENTED}</span>`), m.text);
+  assert.ok(m.text.includes(`${UNCHECKED}${INVENTED}</span>`), m.text);
+  assert.ok(!m.text.includes('fx-unverified'), m.text);
+  assert.equal(m.provenance.grounding.ok, false);
+  assert.equal(m.provenance.grounding.retried, false);
+  assert.equal(m.provenance.grounding.revised, undefined);
+  assert.deepEqual(m.provenance.grounding.unverified, [INVENTED]);
+  assert.equal(m.provenance.work.items.some(x => x.draft || (x.k === 'step' && /^Revised/.test(x.label))), false);
+}));
+
+test('free text with two invented amounts is regenerated once and stored with both unchecked and one revision step', T, () => withServer({ env: FAKE }, async s => {
+  const r = await askNew(s, `Could we spend ${INVENTED} or ${INVENTED_2} on a sailboat`);
+  const m = r.message;
+  assert.equal(m.notice, false);
+  // The fake engine repeats the same answer, so both amounts are still unchecked after the regeneration.
+  for (const amount of [INVENTED, INVENTED_2]) assert.ok(m.text.includes(`${UNCHECKED}${amount}</span>`), m.text);
   assert.equal(m.provenance.grounding.ok, false);
   assert.equal(m.provenance.grounding.retried, true);
-  assert.ok(m.provenance.grounding.unverified.includes(INVENTED));
+  assert.equal(m.provenance.grounding.revised, 2);
+  const { items } = m.provenance.work;
+  assert.deepEqual(items.filter(x => x.k === 'step' && /^Revised/.test(x.label)), [{ k: 'step', label: 'Revised to remove 2 unchecked figures' }]);
+  assert.equal(items.some(x => x.draft), false, 'no draft note');
+  const conv = r.scenario.live.conversations[r.thread.key];
+  assert.deepEqual(conv.map(x => x.role), ['me', 'fathom'], 'one answer for the turn');
 }));
 
 test('a rec thread question answers with the rec as its ref and provenance', T, () => withServer({ env: FAKE }, async s => {
@@ -175,27 +197,15 @@ test('each answer records spend rows in the clock month that the scenario ledger
 const statuses = scenario => Object.fromEntries(scenario.recs.map(r => [r.id, r.status]));
 const toolRows = file => readDb(file, db => db.prepare("SELECT count(*) AS n FROM rec_events WHERE actor = 'tool'").get().n);
 
-test('B2: chat commands and a What if never change a rec status; an explicit command is a proposal', T, () => withServer({ env: FAKE }, async s => {
+test('Ask commands update recommendations with a receipt, while pack conversations remain read-only', T, () => withServer({ env: FAKE }, async s => {
+  const { thread } = await ok(postJson(s.baseUrl, '/api/threads', { recId: 'deferral', text: 'Synthetic opening question' }));
+  const changed = await ask(s, { key: thread.key, text: 'dismiss this' });
+  assert.equal(statuses(changed.scenario).deferral, 'dismissed');
+  assert.equal(changed.message.provenance.actions.length, 1);
+  const id = changed.message.provenance.actions[0].id;
+  await ok(postJson(s.baseUrl, `/api/actions/${id}/undo`, {}));
   const before = statuses(await getScenario(s.baseUrl));
-  const events = await toolRows(s.dbFile);
-  const { thread } = await ok(postJson(s.baseUrl, '/api/threads', {}));
-  const recThread = (await ok(postJson(s.baseUrl, '/api/threads', { recId: 'deferral', text: 'Synthetic opening question' }))).thread;
-  for (const key of [thread.key, recThread.key]) {
-    for (const text of ['Do not mark anything done', 'mark this done', 'Please mark this done', 'Snooze this until next month']) {
-      const r = await ask(s, { key, text });
-      assert.ok(!toolNames(r.message).includes('set_recommendation_status'), `${key}: ${text}`);
-    }
-  }
-  const proposed = await ask(s, { key: recThread.key, text: 'dismiss this' });
-  assert.deepEqual(proposed.message.provenance.proposal, { recId: 'deferral', action: 'dismiss' });
-  assert.equal(statuses(proposed.scenario).deferral, before.deferral, 'a proposal writes nothing');
-
   await ok(postJson(s.baseUrl, '/api/packs/giving/whatif', {}));
   await ask(s, { key: 'pack:giving', text: 'dismiss this' });
-  assert.deepEqual(statuses(await getScenario(s.baseUrl)), before, 'every rec status is unchanged');
-  assert.equal(await toolRows(s.dbFile), events, 'no tool-made status change in the rec history');
-
-  // The owner's confirmation goes through the ordinary rec action endpoint.
-  const confirmed = await ok(postJson(s.baseUrl, '/api/recs/deferral/action', { action: 'dismiss' }));
-  assert.equal(statuses(confirmed.scenario).deferral, 'dismissed');
+  assert.deepEqual(statuses(await getScenario(s.baseUrl)), before);
 }));

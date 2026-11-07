@@ -1,15 +1,14 @@
 // Tool registry shared by the chat engine and the MCP server (frozen architecture, tool interface).
-// Each tool: { name, description, inputSchema (JSON Schema subset), scope: 'read'|'write:recs',
+// Each tool has a name, description, JSON input schema, read or write scope and handler.
 // handler(args, ctx) } with ctx = { db, now } (pack tools also read optional packDirs, dataDir;
 // see ./packs.mjs). callTool validates args against inputSchema and
-// throws ToolError ('bad_input' | 'not_found'). The only writes are a recommendation's status and
-// its action owner.
+// throws ToolError. Writes use the shared action services and durable receipts.
 //
 // Outputs resolve scenario tokens to plain text, carry masks only (never account numbers), and
 // never include hidden recs. Recs carry their goal links (serves, housekeeping) and action owner;
 // an owner goal's title in serves is the owner's own text, kept literal as in goalsForModel.
 
-import { getSetting, tx, cents, parseJson as parse } from '../store/db.mjs';
+import { getSetting, cents, parseJson as parse } from '../store/db.mjs';
 import { loadContent, loadPacks, tokenScope, resolveClock, todayUtc, loadGoals, loadCurve, loadFigures, loadLinkedRecs, loadLinkedRec, housekeepingCount } from '../scenario/build.mjs';
 import { horizonLabel } from '../shared/goals.mjs';
 import { accountLabel } from '../shared/account-label.mjs';
@@ -19,14 +18,17 @@ import { needsYou, verdictLevel, packStatus, STATUSES } from '../shared/rules.mj
 import { resolveTokens } from '../shared/tokens.mjs';
 import { ToolError } from './errors.mjs';
 import { packTools } from './packs.mjs';
-import { setRecOwner } from '../store/recs.mjs';
+import { SETTABLE_REC_STATUSES } from '../store/recs.mjs';
 import { advisorStatus } from '../advisor/index.mjs';
 import { buildPace } from '../pace/build.mjs';
+import { actionTools } from './actions.mjs';
+import { changeRec } from '../actions/index.mjs';
+import { ANSWER_SHAPES, answerShape } from '../jobs/triggers/common.mjs';
 
 export { ToolError };
 export { packDirsFor } from './packs.mjs';
 
-const SETTABLE = ['doing', 'done', 'dismissed', 'snoozed', 'proposed'];
+const SETTABLE = SETTABLE_REC_STATUSES;
 const DATE = '^\\d{4}-\\d{2}-\\d{2}$';
 const MONTH = '^\\d{4}-\\d{2}$';
 
@@ -243,7 +245,9 @@ export const tools = [
   },
   {
     name: 'query_transactions',
-    description: 'Search transactions by account, date range (inclusive, YYYY-MM-DD), amount range, category or description text. Returns at most `limit` rows (default 50, max 200), newest first, with the total match count.',
+    description: 'Search transactions by account, date range (inclusive, YYYY-MM-DD), amount range, category or description text. ' +
+      'Without accountId it covers every account, credit cards included. Each row has accountId, date, a signed amount (money out is negative, money in positive), description and category; ' +
+      'credit card rows carry the budgeting app category, so group spending by it. Returns at most `limit` rows (default 50, max 200), newest first, with the total match count.',
     inputSchema: obj({
       accountId: { type: 'string' },
       from: { type: 'string', pattern: DATE },
@@ -289,7 +293,7 @@ export const tools = [
   },
   {
     name: 'pnl_by_month',
-    description: 'Business profit and loss by month (YYYY-MM) and category, with a total per month. Optionally one entity and a month range.',
+    description: 'Business profit and loss by month (YYYY-MM) and category, with a total per month: use it for business income, expenses and profit, not household spending. Optionally one entity and a month range.',
     inputSchema: obj({ entity: { type: 'string' }, from: { type: 'string', pattern: MONTH }, to: { type: 'string', pattern: MONTH } }),
     scope: 'read',
     handler(args, ctx) {
@@ -401,18 +405,8 @@ export const tools = [
     }, ['id', 'status']),
     scope: 'write:recs',
     handler(args, ctx) {
-      const db = ctx.db;
-      const row = recRow(db, args.id);
-      const def = parse(row.def, {});
-      if (def.question?.primary && args.status === 'done') throw new ToolError('bad_input', 'Save the answers before completing this recommendation.');
-      const wake = args.status === 'snoozed' ? (args.wake ? args.wake : 'Next month') : (def.wake != null ? def.wake : null);
-      const ts = nowOf(ctx).toISOString();
-      tx(db, () => {
-        db.prepare('UPDATE recs SET status = ?, wake = ?, updated_at = ? WHERE id = ?').run(args.status, wake, ts, args.id);
-        db.prepare(`INSERT INTO rec_events (rec_id, ts, action, arg, from_status, to_status, actor)
-                    VALUES (?, ?, 'set_status', ?, ?, ?, 'tool')`).run(args.id, ts, args.wake == null ? null : args.wake, row.status, args.status);
-      });
-      return recOutById(db, clockOf(ctx), args.id);
+      const { receipt } = changeRec(args, ctx, 'status');
+      return { ...recOutById(ctx.db, clockOf(ctx), args.id), receipt };
     },
   },
   {
@@ -424,11 +418,8 @@ export const tools = [
     }, ['id', 'owner']),
     scope: 'write:recs',
     handler(args, ctx) {
-      const db = ctx.db;
-      const row = recRow(db, args.id);
-      const ts = nowOf(ctx).toISOString();
-      tx(db, () => setRecOwner(db, row, args.owner, { ts, action: 'set_owner', actor: 'tool' }));
-      return recOutById(db, clockOf(ctx), args.id);
+      const { receipt } = changeRec(args, ctx, 'owner');
+      return { ...recOutById(ctx.db, clockOf(ctx), args.id), receipt };
     },
   },
   {
@@ -442,6 +433,9 @@ export const tools = [
       return plainDeep(scope, { advisor: names.advisor || 'Your advisor', ...advisorStatus(ctx.db) });
     },
   },
+  { name: 'get_fact_answer_shapes', scope: 'read', description: 'Accepted household fact keys and their typed answer shapes, units and choices for record_household_fact.',
+    inputSchema: obj(), handler() { return Object.fromEntries(Object.keys(ANSWER_SHAPES).map(key => [key, answerShape(key)])); } },
+  ...actionTools,
   ...packTools,
 ];
 
