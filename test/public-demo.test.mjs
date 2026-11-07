@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadConfig } from '../src/config.mjs';
@@ -8,6 +9,8 @@ import { startServer, openStore } from '../src/server.mjs';
 import { getSetting } from '../src/store/db.mjs';
 import { createDemoControl, DEMO_LIMIT_MESSAGE, demoRouteBehavior } from '../src/public-demo/control.mjs';
 import { routes } from '../src/api/router.mjs';
+import { createPublicDemoEngine } from '../src/public-demo/engine.mjs';
+import { ingestFile } from '../src/ingest/pipeline.mjs';
 
 const ORIGIN = 'http://localhost:5031';
 function config(dir, extra = {}) {
@@ -35,6 +38,11 @@ function visitor(s) {
     if (res.headers.has('set-cookie')) cookie = res.headers.get('set-cookie').split(';')[0];
     return { status: res.status, headers: res.headers, body: await res.json() };
   };
+}
+function calls(s) {
+  const db = new DatabaseSync(join(s.dir, 'public-demo.sqlite'), { readOnly: true });
+  try { return db.prepare("SELECT coalesce(sum(calls), 0) AS n FROM usage WHERE subject = 'global'").get().n; }
+  finally { db.close(); }
 }
 
 const refused = ['FATHOM_DATA_KEY_FILE', 'FATHOM_BACKUP_KEY_FILE', 'FATHOM_PLATFORM_KEY_FILE', 'FATHOM_MCP_SECRET_FILE',
@@ -98,6 +106,7 @@ test('visitor writes, what-if, Ask and reset never touch another visitor or base
   const reply = await a('/api/threads', { text: 'What should I focus on?' });
   assert.equal(reply.status, 200);
   assert.ok(reply.body.message);
+  assert.equal(reply.body.message.notice, false);
   assert.ok(!(await b('/api/threads')).body.active.some(row => row.id === reply.body.thread.id));
   const sc = (await a('/api/scenario')).body;
   const pack = sc.packs.find(p => p.id === 'scorp') || sc.packs[0];
@@ -110,10 +119,13 @@ test('turn cap survives reset and returns a fixed notice without another model c
   const s = await app(t, { FATHOM_PUBLIC_DEMO_TURNS_PER_DAY: '1' });
   const v = visitor(s);
   assert.equal((await v('/api/threads', { text: 'What should I focus on?' })).status, 200);
+  const before = calls(s);
+  assert.ok(before > 0);
   await v('/api/demo/reset', {});
   const limited = await v('/api/threads', { text: 'What next?' });
   assert.equal(limited.status, 200);
   assert.match(limited.body.message.text, new RegExp(DEMO_LIMIT_MESSAGE.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.equal(calls(s), before);
 });
 test('IP limits ignore spoofed forwarded addresses and survive restarts', async t => {
   const s = await app(t, { FATHOM_PUBLIC_DEMO_REQUESTS_PER_MINUTE: '2' });
@@ -146,6 +158,85 @@ test('durable quotas reserve atomically and roll over at UTC midnight', t => {
   assert.equal(ctl.reserveTurn('a', 'ip'), true);
   assert.equal(ctl.reserveRound('a', 10, 0.1), true);
   ctl.close();
+});
+test('the API enforces token and global call caps before any fake model round', async t => {
+  for (const settings of [{ FATHOM_PUBLIC_DEMO_TOKENS_PER_DAY: '1' }, { FATHOM_PUBLIC_DEMO_CALLS_PER_DAY: '1' }]) {
+    const s = await app(t, settings);
+    const v = visitor(s);
+    if (settings.FATHOM_PUBLIC_DEMO_CALLS_PER_DAY) {
+      await v('/api/threads', { text: 'What should I focus on?' });
+      assert.equal(calls(s), 1);
+    }
+    const before = calls(s);
+    const result = await v('/api/threads', { text: 'What next?' });
+    assert.equal(result.status, 200);
+    assert.ok(result.body.message.text.includes(DEMO_LIMIT_MESSAGE));
+    assert.equal(calls(s), before);
+  }
+});
+test('static, health and blocked requests allocate no sandbox; trusted proxies get separate IP buckets', async t => {
+  const s = await app(t, { FATHOM_PUBLIC_DEMO_REQUESTS_PER_MINUTE: '1', FATHOM_TRUSTED_PROXIES: '127.0.0.1/32' });
+  await fetch(s.url + '/');
+  await fetch(s.url + '/healthz');
+  await fetch(s.url + '/api/keys');
+  assert.equal(existsSync(join(s.dir, 'sandboxes')), false);
+  const v = visitor(s);
+  assert.equal((await v('/api/auth/session', undefined, { 'x-forwarded-for': '192.0.2.41' })).status, 200);
+  assert.equal((await v('/api/auth/session', undefined, { 'x-forwarded-for': '192.0.2.42' })).status, 200);
+  assert.equal((await v('/api/auth/session', undefined, { 'x-forwarded-for': '192.0.2.41' })).status, 429);
+});
+test('public startup refuses a demo after an import attempt', async t => {
+  const dir = directory(t);
+  const privateConfig = { ...loadConfig({ FATHOM_DATA: dir, FATHOM_DEMO: '1' }), port: 0 };
+  const { db, platform } = openStore(privateConfig);
+  try {
+    await ingestFile(db, { name: 'sample.csv', bytes: Buffer.from('Date,Description,Amount\n2026-11-01,Sample,10\n') }, { config: privateConfig });
+    assert.equal(getSetting(db, 'synthetic_demo', null), null);
+  } finally { db.close(); platform.close(); }
+  assert.throws(() => openStore(config(dir)), /synthetic seeder marker/);
+});
+test('live demo boundary applies model/output caps and offers only local read tools', async t => {
+  const dir = directory(t);
+  const credentialFile = join(dir, 'model-key');
+  writeFileSync(credentialFile, 'synthetic', { mode: 0o600 });
+  const c = config(dir, { FATHOM_ENGINE: 'live', FATHOM_CLAUDE_CREDENTIAL_FILE: credentialFile,
+    FATHOM_PUBLIC_DEMO_MAX_TOKENS: '32', FATHOM_PUBLIC_DEMO_CALLS_PER_DAY: '2' });
+  const { db, platform } = openStore(c);
+  const control = createDemoControl(c);
+  t.after(() => { control.close(); db.close(); platform.close(); });
+  const requests = [];
+  // Messages API response shape: https://platform.claude.com/docs/en/api/messages/create
+  const original = globalThis.fetch;
+  t.after(() => { globalThis.fetch = original; });
+  globalThis.fetch = async (url, options) => {
+    assert.equal(new URL(url).hostname, 'api.anthropic.com');
+    const body = JSON.parse(options.body);
+    requests.push(body);
+    const first = requests.length === 1;
+    return new Response(JSON.stringify({ id: 'msg_sample', type: 'message', role: 'assistant', model: c.publicDemoLimits.model,
+      content: first ? [{ type: 'tool_use', id: 'tool_sample', name: 'read_sample', input: {} }] : [{ type: 'text', text: 'Safe sample answer.' }],
+      stop_reason: first ? 'tool_use' : 'end_turn', stop_sequence: null, usage: { input_tokens: 10, output_tokens: 8 } }),
+    { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  const engine = createPublicDemoEngine({ db, config: c, control, visitorId: 'sample' });
+  const tools = [{ name: 'read_sample', scope: 'read', description: 'Read synthetic state', inputSchema: { type: 'object', properties: {} }, handler: (_, ctx) => ({ demo: getSetting(ctx.db, 'mode') }) },
+    { name: 'write_sample', scope: 'write:recs', description: 'Write state', inputSchema: { type: 'object', properties: {} }, handler: () => assert.fail('write tool ran') }];
+  const result = await engine.call({ purpose: 'chat', messages: [{ role: 'user', content: 'Explain sample data' }], tools, toolContext: { db }, maxTokens: 999 });
+  assert.equal(result.text, 'Safe sample answer.');
+  assert.equal(requests.length, 2);
+  for (const request of requests) {
+    assert.equal(request.max_tokens, 32);
+    assert.equal(request.model, c.publicDemoLimits.model);
+    assert.deepEqual(request.tools.map(tool => tool.name), ['read_sample']);
+  }
+  assert.equal(requests[1].messages.at(-1).content[0].tool_use_id, 'tool_sample');
+  await assert.rejects(engine.call({ purpose: 'chat', messages: [{ role: 'user', content: 'Again' }] }), e => e.demoLimit);
+  assert.equal(requests.length, 2);
+});
+test('route documentation assigns every server route a demo behavior', () => {
+  const docs = readFileSync(new URL('../docs/public-demo.md', import.meta.url), 'utf8');
+  for (const route of routes) assert.ok(docs.includes(`| ${route.method} | \`${route.path}\` |`));
+  assert.ok(docs.trimEnd().endsWith('provider key provisioning and external spend limits.'));
 });
 test('global USD reservations, sandbox TTL/cap and per-IP creation cap are enforced', t => {
   const dir = directory(t);
