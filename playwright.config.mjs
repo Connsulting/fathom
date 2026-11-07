@@ -39,7 +39,6 @@ if (SMOKE_TARGET === 'real' && !BASE_URL) {
   throw new Error('FATHOM_SMOKE_TARGET=real needs FATHOM_SMOKE_BASE_URL or BASE_URL');
 }
 const PORT = portFrom(process.env.E2E_PORT, 4173);
-const SINGLE_SERVER = process.env.E2E_SINGLE_SERVER === '1';
 const JAN_PORT = PORT + 1;
 const YP_PORT = PORT + 2;
 const baseURL = BASE_URL || `http://127.0.0.1:${PORT}`;
