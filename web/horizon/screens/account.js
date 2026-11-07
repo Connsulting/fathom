@@ -472,6 +472,7 @@ function undoChange() {
 }
 
 function openMask() {
+  S.merge = null;
   S.mask = { value: '', err: '', busy: false };
   H.draw();
   focusIn('[data-ad-mask]');
@@ -519,6 +520,7 @@ function openMerge() {
   if (S.merge) { S.merge = null; H.draw(); return; }
   const seq = ++GEN;
   const m = { seq, items: null, failed: false, pick: null, busy: false, err: '' };
+  if (!S.mask?.busy) S.mask = null;
   S.merge = m;
   H.draw();
   Promise.resolve(H.api.accountMergeCandidates(id)).then((r) => {
