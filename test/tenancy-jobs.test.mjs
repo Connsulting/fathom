@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { rmSync } from 'node:fs';
 import { tempInstance } from './helpers/server.mjs';
 import { createHouseholdStorage } from '../src/platform/db.mjs';
-import { createRuntimeRegistry, buildHouseholdContext } from '../src/platform/runtime.mjs';
+import { createRuntimeRegistry, createHouseholdContext, openHouseholdDb } from '../src/platform/runtime.mjs';
 import { runPlanning } from '../src/jobs/planner.mjs';
 
 const quiet = { log() {} };
@@ -22,7 +22,7 @@ async function fixture(t, handler, count = 3) {
   const config = { dataDir: instance.dataDir, engine: 'off', clock: '2026-11-05', emailTransport: 'dev' };
   const makeRegistry = () => createRuntimeRegistry({
     platform: instance.platform, config, secrets: instance.secrets,
-    build: opts => buildHouseholdContext({ ...opts, handlers: {
+    build: opts => createHouseholdContext({ ...opts, db: openHouseholdDb({ dataDir: opts.config.dataDir, householdId: opts.householdId, storageRoot: opts.relativeRoot }), handlers: {
       plan: handler, freshness: handler, 'simplefin-sync': handler,
     }, now: () => new Date('2026-11-05T12:00:00Z'), log: quiet }),
   });
