@@ -1,17 +1,13 @@
 // S corp salary: the salary war game over the owner-approved range (S3, R6).
 
-import { isTrue, lastPayroll, mineOf, padTasks, confirmTasks, salaryProjKey, salaryKey } from './common.mjs';
-import { personOwner } from '../../shared/rec-links.mjs';
+import { isTrue, lastPayroll, mineOf, padTasks, confirmTasks, salaryProjKey, salaryKey, modelPersonOwner } from './common.mjs';
 
 export const id = 'scorp-salary';
 export const domain = 'business';
 // Goal kinds this rec serves (resolved to open goals at read time) and its default action owner.
 export const goalKinds = Object.freeze(['tax', 'retirement']);
 export const owner = 'you';
-// The person whose business the war game models; the confirm form (no model) keeps the static owner.
-export function ownerFor(ctx, hit) {
-  return hit && hit.person ? personOwner(hit.person) : owner;
-}
+export const ownerFor = modelPersonOwner(owner);
 export const trigger = 'income';
 export const packs = ['s-corp-owner'];
 export const gate = isTrue('income.sCorp');

@@ -180,8 +180,9 @@ constraint on `accounts.mask` enforces exactly four digits or NULL).
 Shared by the chat engine and the MCP server. `src/tools/index.mjs` exports `tools`, a registry
 of `{name, description, inputSchema (JSON Schema), scope: 'read'|'write:recs', handler(args, ctx)}`
 with `ctx = {db, now}`, plus `getTool(name)`, `callTool(name, args, ctx)` (validates args against
-`inputSchema`) and `ToolError` with `code` `'bad_input'` or `'not_found'`. The only write scope is
-recommendation status.
+`inputSchema`) and `ToolError` with `code` `'bad_input'` or `'not_found'`. The only write scope,
+`write:recs`, covers recommendation status (`set_recommendation_status`) and action owner
+(`set_recommendation_owner`).
 
 | Tool | Scope | Input | Output |
 |---|---|---|---|

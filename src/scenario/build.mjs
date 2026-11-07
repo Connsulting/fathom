@@ -185,8 +185,17 @@ export const housekeepingCount = recs => recs.filter(r => r.housekeeping === tru
 
 // loadRecs with goal links, for readers outside a full build (the tools).
 export function loadLinkedRecs(db, clock) {
+  return linkWithStoredGoals(db, loadRecs(db, clock));
+}
+
+// One stored rec row, with its advisor field and goal links.
+export function loadLinkedRec(db, clock, row) {
+  return linkWithStoredGoals(db, withAdvisor(db, [recFromRow(row, clock)]))[0];
+}
+
+function linkWithStoredGoals(db, recs) {
   const accounts = db.prepare('SELECT * FROM accounts ORDER BY sort, id').all();
-  return linkRecs(loadRecs(db, clock), loadGoals(db, { fig: loadFigures(db), accounts }), accounts);
+  return linkRecs(recs, loadGoals(db, { fig: loadFigures(db), accounts }), accounts);
 }
 
 export function messageOut(row) {

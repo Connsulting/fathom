@@ -6,19 +6,14 @@
 // 1.401(k)-1(a)(6)(iii)). Until the only-employee answer is in, this is a confirm form whose window
 // stays at Apr 15, so it never closes in December while the answer is pending.
 
-import { isTrue, absentOrFalse, mineOf, padTasks, confirmTasks, firstYearStatus, deferralDeadline, deadlineWindow } from './common.mjs';
-import { personOwner } from '../../shared/rec-links.mjs';
+import { isTrue, absentOrFalse, mineOf, padTasks, confirmTasks, firstYearStatus, deferralDeadline, deadlineWindow, soloPlanOwner } from './common.mjs';
 
 export const id = 'solo401k-setup';
 export const domain = 'retirement';
 // Goal kinds this rec serves (resolved to open goals at read time) and its default action owner.
 export const goalKinds = Object.freeze(['retirement']);
 export const owner = 'you';
-// The person whose solo plan this is; no solo plan keeps the static owner.
-export function ownerFor(ctx) {
-  const solo = ctx.info && ctx.info.solo;
-  return solo ? personOwner(solo.person) : owner;
-}
+export const ownerFor = soloPlanOwner(owner);
 export const trigger = 'calendar';
 export const packs = ['advanced-retirement', 's-corp-owner', 'self-employed-partnership'];
 export const gate = { all: [{ any: [isTrue('income.sCorp'), isTrue('income.selfEmployed')] }, absentOrFalse('retirement.solo401k')] };

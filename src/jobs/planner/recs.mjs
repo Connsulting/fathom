@@ -1,8 +1,9 @@
 // Recs upsert, blocking and retirement for planner-owned recs (base plan, R13, R14, S10, S12, T6).
 // The owner's status and task flags always survive; the planner only changes status when its own
 // retire or block event was the last word. Goal kinds follow the trigger on every run; the action
-// owner follows the trigger default only while the owner has not set it (owner_override = 0). The planner writes no conversation: a question asked
-// from a rec is an Ask thread carrying the rec id, and it outlives the rec.
+// owner follows the trigger default only while the owner has not set it (owner_override = 0). The
+// planner writes no conversation: a question asked from a rec is an Ask thread carrying the rec id,
+// and it outlives the rec.
 //
 // applyRecs(db, results, ctx) -> {byTrigger, counts: {new, updated, retired, unchanged}, domains}
 

@@ -1,17 +1,13 @@
 // Invoice deferral: moving December invoices into January (S13, R16).
 
-import { isTrue, mineOf, padTasks, confirmTasks, keyMatching } from './common.mjs';
-import { personOwner } from '../../shared/rec-links.mjs';
+import { isTrue, mineOf, padTasks, confirmTasks, keyMatching, modelPersonOwner } from './common.mjs';
 
 export const id = 'invoice-deferral';
 export const domain = 'business';
 // Goal kinds this rec serves (resolved to open goals at read time) and its default action owner.
 export const goalKinds = Object.freeze(['tax']);
 export const owner = 'you';
-// The person whose business the war game models; the confirm form (no model) keeps the static owner.
-export function ownerFor(ctx, hit) {
-  return hit && hit.person ? personOwner(hit.person) : owner;
-}
+export const ownerFor = modelPersonOwner(owner);
 export const trigger = 'calendar';
 export const packs = ['s-corp-owner', 'self-employed-partnership'];
 export const gate = { any: [isTrue('income.sCorp'), isTrue('income.selfEmployed')] };

@@ -10,13 +10,14 @@
 // an owner goal's title in serves is the owner's own text, kept literal as in goalsForModel.
 
 import { getSetting, tx, cents, parseJson as parse } from '../store/db.mjs';
-import { loadContent, loadPacks, tokenScope, resolveClock, todayUtc, loadGoals, loadCurve, loadFigures, loadLinkedRecs, housekeepingCount } from '../scenario/build.mjs';
+import { loadContent, loadPacks, tokenScope, resolveClock, todayUtc, loadGoals, loadCurve, loadFigures, loadLinkedRecs, loadLinkedRec, housekeepingCount } from '../scenario/build.mjs';
 import { horizonLabel } from '../shared/goals.mjs';
 import { OWNERS } from '../shared/rec-links.mjs';
 import { needsYou, verdictLevel, packStatus, STATUSES } from '../shared/rules.mjs';
 import { resolveTokens } from '../shared/tokens.mjs';
 import { ToolError } from './errors.mjs';
 import { packTools } from './packs.mjs';
+import { setRecOwner } from '../store/recs.mjs';
 import { advisorStatus } from '../advisor/index.mjs';
 import { buildPace } from '../pace/build.mjs';
 
@@ -137,8 +138,7 @@ function recOut(scope, rec) {
 
 // One visible rec, linked, for the model.
 function recOutById(db, clock, id) {
-  recRow(db, id);
-  return recOut(tokenScope(db), loadLinkedRecs(db, clock).find(r => r.id === id));
+  return recOut(tokenScope(db), loadLinkedRec(db, clock, recRow(db, id)));
 }
 
 // Goals as the model sees them: open goals only, owner text verbatim (seed text token-resolved),
@@ -419,11 +419,7 @@ export const tools = [
       const db = ctx.db;
       const row = recRow(db, args.id);
       const ts = nowOf(ctx).toISOString();
-      tx(db, () => {
-        db.prepare('UPDATE recs SET owner = ?, owner_override = 1, updated_at = ? WHERE id = ?').run(args.owner, ts, args.id);
-        db.prepare(`INSERT INTO rec_events (rec_id, ts, action, arg, from_status, to_status, actor)
-                    VALUES (?, ?, 'set_owner', ?, ?, ?, 'tool')`).run(args.id, ts, args.owner, row.status, row.status);
-      });
+      tx(db, () => setRecOwner(db, row, args.owner, { ts, action: 'set_owner', actor: 'tool' }));
       return recOutById(db, clockOf(ctx), args.id);
     },
   },

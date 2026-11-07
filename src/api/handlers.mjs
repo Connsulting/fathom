@@ -21,6 +21,7 @@ import { seedDemo } from '../../demo/seed.mjs';
 import { clearStoredFiles, loadDataKey, VaultError } from '../ingest/vault.mjs';
 import { HttpError } from './http.mjs';
 import { upsertFact } from '../store/facts.mjs';
+import { setRecOwner } from '../store/recs.mjs';
 import { findQuestion, isIndex } from './questions.mjs';
 import { whatIfOwnerText } from './answerer.mjs';
 import { buildYourPlans, YourPlansRefusal } from '../packs/your-plans.mjs';
@@ -136,10 +137,7 @@ export function recAction(ctx) {
   // The owner sets who acts on the rec; owner_override keeps the planner from changing it later.
   if (action === 'owner') {
     if (!isOwner(arg)) throw new HttpError(400, `owner must be one of ${OWNERS.join(', ')}`);
-    tx(db, () => {
-      db.prepare('UPDATE recs SET owner = ?, owner_override = 1, updated_at = ? WHERE id = ?').run(arg, nowIso(), id);
-      recEvent(db, id, 'owner', arg, row.status, row.status);
-    });
+    tx(db, () => setRecOwner(db, row, arg, { ts: nowIso(), action: 'owner', actor: 'ui' }));
     return { scenario: scenarioOf(ctx) };
   }
 
