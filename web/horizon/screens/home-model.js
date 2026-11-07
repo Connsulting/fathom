@@ -203,10 +203,8 @@ export function homeHeadline({ cards, pace, pending } = {}) {
 
 // 'Jun 30, 2027' from an ISO date, in UTC; null when the date does not parse.
 export function longDate(iso) {
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || ''));
-  if (!m) return null;
-  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
-  return `${MON[d.getUTCMonth()]} ${d.getUTCDate()}, ${d.getUTCFullYear()}`;
+  const s = shortDate(iso);
+  return s ? `${s}, ${String(iso).slice(0, 4)}` : null;
 }
 
 // A suggestion's spending window: 'Feb to Jul 2026' within one year, else 'Nov 2025 to Jul 2026'.
@@ -215,22 +213,6 @@ export function windowSpan(w) {
   if (!a || !b) return '';
   const mon = (x) => MON[Number(x[2]) - 1] || x[2];
   return a[1] === b[1] ? `${mon(a)} to ${mon(b)} ${b[1]}` : `${mon(a)} ${a[1]} to ${mon(b)} ${b[1]}`;
-}
-
-// Why a goal gets a question instead of a number, one plain sentence per missing input code.
-export const ASK_TEXT = Object.freeze({
-  unsupported_goal: 'There is no calculator for this kind of goal yet.',
-  ambiguous_goal: 'The goal reads as more than one kind, so no single calculator fits it.',
-  no_spending_history: 'There are not yet three complete months of spending on file to size it from.',
-  no_cash_balance: 'No cash account has a balance on file yet.',
-  no_investment_balance: 'No investment account has a balance on file yet.',
-  no_tax_room: 'This year\'s unused contribution room is not computed yet.',
-  no_room_account: 'No account to contribute to is on file yet.'
-});
-
-export function askReason(record) {
-  const code = arr(record?.missing).find((c) => Object.prototype.hasOwnProperty.call(ASK_TEXT, c));
-  return code ? ASK_TEXT[code] : 'There is not enough on file to suggest an amount yet.';
 }
 
 export function healthLine({ pace, ingest, accounts, metaDataThrough } = {}) {

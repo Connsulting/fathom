@@ -17,7 +17,7 @@ import * as switcher from './screens/switcher.js';
 import * as simplefin from './screens/simplefin.js';
 import { createKeys } from './keys.js';
 import { createSwipe } from './screens/swipe.js';
-import { homeModel, homeHeadline, healthChip, healthLine, paceReason, boardCharts, reasonText, servedGoalIds, shortDate, longDate, windowSpan, askReason } from './screens/home-model.js';
+import { homeModel, homeHeadline, healthChip, healthLine, paceReason, boardCharts, reasonText, servedGoalIds, shortDate, longDate, windowSpan } from './screens/home-model.js';
 import { STARTERS, existingStarterIds, otherGoals, goalsToCreate, inviteLine } from './screens/onboard-model.js';
 import { KNOWN_FIGURES } from '/shared/goals.mjs';
 import { OWNERS, OWNER_LABEL } from '/shared/rec-links.mjs';
@@ -575,8 +575,8 @@ function suggestHtml(s) {
     return `<p class="h-gnone">No target yet. <button type="button" class="h-link" data-sugg-act="edit" data-id="${id}">Add one</button></p>`;
   }
   if (s.state !== 'suggested') {
-    return `<div class="h-sugg ask" data-sugg="${id}"><p class="h-sugg-q">${esc(s.ask || 'What amount would make this real?')}</p>`
-      + `<p class="h-sugg-why">${esc(askReason(s))}</p><div class="h-sugg-acts">${edit('Edit goal', '')}</div></div>`;
+    return `<div class="h-sugg ask" data-sugg="${id}"><p class="h-sugg-q">${esc(s.ask)}</p>`
+      + `<p class="h-sugg-why">${esc(s.why)}</p><div class="h-sugg-acts">${edit('Edit goal', '')}</div></div>`;
   }
   const f = s.figures || {};
   const amt = (k) => (k ? figHtml(k, { k: true }) : '');

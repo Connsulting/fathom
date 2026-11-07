@@ -7,6 +7,7 @@
 //   current, room.<part>). Settings 'goals.suggestions' = {<goalId>: {dismissed: fingerprint|null,
 //   withdrawalRate?}} holds dismissals and the per-goal withdrawal rate.
 
+import { finite } from '../calc/pace.mjs';
 import { getSetting, parseJson as parse } from '../store/db.mjs';
 import { accountHistory, paceClock } from '../pace/build.mjs';
 import { loadGoals } from '../scenario/build.mjs';
@@ -19,7 +20,6 @@ import {
 
 export const SUGGEST_SETTING = 'goals.suggestions';
 
-const finite = v => typeof v === 'number' && Number.isFinite(v);
 const isoDay = v => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v) ? v.slice(0, 10) : null;
 
 // A stored per-goal withdrawal rate inside the allowed range, else the default.
@@ -159,8 +159,6 @@ function suggestionFor({ goal, entry, clock, spending, cash, invested, rooms }) 
   if (rec.state === 'question') {
     rec.ask = ASK;
     rec.why = questionWhy(rec.missing);
-    for (const k of Object.keys(figs)) delete figs[k];
-    rec.figures = {};
   }
   rec.fingerprint = suggestionFingerprint({
     title: goal.title ?? '', note: goal.note ?? '', horizon, kind, state: rec.state, missing: rec.missing, params: rec.params,
