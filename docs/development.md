@@ -341,3 +341,5 @@ cd mock-v2
 python3 -m http.server 4600 --bind 127.0.0.1
 # open http://127.0.0.1:4600/?d=horizon
 ```
+
+For a focused local browser run, set `E2E_SINGLE_SERVER=1`, `E2E_PORT` to an owned port and `E2E_DATA` to a checkout-local `.e2e-data-<name>` directory. This starts only the main demo server. The browser explicitly permits the selected test port, including ports reserved by Chromium. Leave `BASE_URL` unset for tests which reset their owned demo store; supplied targets remain protected from resets.
