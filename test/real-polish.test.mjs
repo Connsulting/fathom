@@ -60,7 +60,7 @@ describe('series from balances', () => {
     assert.deepEqual(buildSeries(db, NOW)['acct-brk'].points.map(p => p.v), [5000, 7600]);
   });
 
-  test('net worth sums assets, subtracts debts, carries a balance forward and starts once every account has begun', async () => {
+  test('each account keeps its own series with the statement balance and a plain key', async () => {
     const db = await emptyDb();
     account(db, 'a', { name: 'Savings', kind: 'checking', sort: 1 });
     account(db, 'b', { name: 'Brokerage', kind: 'taxable', sort: 2 });
@@ -70,9 +70,7 @@ describe('series from balances', () => {
     balance(db, 'b', '2026-10-31', 1200);
     for (const [d, v] of [['2026-09-30', 50], ['2026-10-31', 60]]) balance(db, 'c', d, v);
     const series = buildSeries(db, NOW);
-    assert.equal(Object.keys(series)[0], 'net', 'net worth first');
-    // Brokerage begins in September; the card balance is owed, so it is subtracted.
-    assert.deepEqual(series.net.points.map(p => [p.x, p.v]), [['Sep 2026', 1070], ['Oct 2026', 1270]]);
+    assert.deepEqual(Object.keys(series), ['acct-a', 'acct-b', 'acct-c'], 'accounts in store order, no combined line (the household trend is src/accounts/trend.mjs)');
     assert.ok(series['acct-c'], 'the card keeps its own trend');
     assert.equal(series['acct-c'].points[1].v, 60, 'its own trend shows the statement balance');
     assert.equal(seriesKey('acct-ab12'), 'acct-ab12');
@@ -90,7 +88,6 @@ describe('series from balances', () => {
     assert.equal(series['acct-one'], undefined);
     assert.equal(series['acct-long'].points.length, MAX_POINTS);
     assert.equal(series['acct-long'].label, 'Odd f:cash.total bname/b');
-    assert.equal(series.net.points.length, MAX_POINTS, 'the combined series keeps the same window');
     assert.deepEqual(buildSeries(await emptyDb(), NOW), {});
   });
 

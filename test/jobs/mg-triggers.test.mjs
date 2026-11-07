@@ -153,7 +153,7 @@ test('MG7: without the only-employee answer setup is a confirm form that does no
   assert.equal(r.state, 'hit');
   assert.deepEqual(r.hit.confirm, ['business.onlyEmployee']);
   assert.equal(r.window.close, '2027-04-15');
-  assert.ok(taskTexts(r).some(t => /employee/i.test(t) && /own/i.test(t)), `a task asks about sole ownership and employees: ${taskTexts(r)}`);
+  assert.deepEqual(taskTexts(r), [], 'eligibility is answered through the question controls');
 });
 
 test('MG7: year-end retirement for a sole proprietor with no plan and no eligibility answer is a confirm form', () => {
@@ -276,14 +276,15 @@ test('MG6: zero regular, zero catch-up does not fire', () => {
   assert.equal(yearEnd.evaluate(ctx), null);
 });
 
-test('MG6: a pending Roth answer adds its confirm task to the year-end rec', () => {
+test('MG6: a pending Roth answer stays supplemental to the year-end action', () => {
   const ctx = scorpCtx({
     fig: { 'room.solo401k.employee': 24500, 'room.solo401k.employer': 45000, 'room.solo401k.rothCatchUp': 0, 'room.solo401k.pretax': 69500, 'room.solo401k': 69500 },
     info: { retireCatchUp: 'retirement.planOffersRoth' },
   });
   const r = runOne(yearEnd, ctx);
   assert.equal(r.state, 'hit');
-  assert.ok(taskTexts(r).includes('Tell us whether your plan offers Roth deferrals'), taskTexts(r).join(' | '));
+  assert.equal(r.hit.catchUpPending, 'retirement.planOffersRoth');
+  assert.ok(taskTexts(r).some(t => /Elect the deferral/.test(t)));
 });
 
 test('MG6: unknown prior-year wages add the wage task and say why catch-up is left out', () => {
@@ -293,7 +294,8 @@ test('MG6: unknown prior-year wages add the wage task and say why catch-up is le
   });
   const r = runOne(yearEnd, ctx);
   assert.equal(r.state, 'hit');
-  assert.ok(taskTexts(r).includes("Tell us last year's Social Security wages from your business"), taskTexts(r).join(' | '));
+  assert.equal(r.hit.catchUpPending, 'retirement.priorYearFicaWages');
+  assert.ok(taskTexts(r).some(t => /Elect the deferral/.test(t)));
   assert.ok(r.prose.why.includes('Catch-up room is left out until we know whether it must be Roth.'), r.prose.why.join(' | '));
 });
 

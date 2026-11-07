@@ -22,6 +22,7 @@ export function buildDef(hit, fields) {
     tasks: r.tasks, qa: fields.qa,
   };
   if (r.scenario) def.scenario = r.scenario;
+  if (r.question) def.question = r.question;
   return def;
 }
 

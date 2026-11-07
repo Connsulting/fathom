@@ -5,6 +5,8 @@
 import { isIsoDate } from '../../scenario/build.mjs';
 import { esc } from '../../shared/tokens.mjs';
 import { personOwner } from '../../shared/rec-links.mjs';
+import { accountLabel } from '../../shared/account-label.mjs';
+import { isCollegeAccount } from '../../shared/account-kinds.mjs';
 
 // Data-derived text (entity and account names) as stored rec HTML: escaped, braces included, so it
 // can never carry markup or a scenario token.
@@ -42,7 +44,7 @@ export function padTasks(list) {
   return tasks.map(t => ({ t }));
 }
 
-const CONFIRM_TASKS = Object.freeze({
+export const CONFIRM_TASKS = Object.freeze({
   'retirement.planTermsConfirmed': 'Confirm your retirement plan terms with your advisor',
   'retirement.aggregationConfirmed': 'Confirm no related business shares your plan limits',
   'benefits.hsaEligible': 'Confirm your health plan is HSA eligible for the whole year',
@@ -56,12 +58,75 @@ const CONFIRM_TASKS = Object.freeze({
   'retirement.priorYearFicaWages': "Tell us last year's Social Security wages from your business",
   'retirement.planOffersRoth': 'Tell us whether your plan offers Roth deferrals',
   'retirement.otherPlanDeferrals': 'Tell us your deferrals to other workplace plans this year',
+  'household.expectedDate': 'Tell us the expected date for the baby',
+  'tax.vaItemizedEstimate': 'Enter your Virginia itemized deduction estimate',
+  'household.filingStatus': 'Tell us your filing status',
 });
 
-export const confirmTask = key => CONFIRM_TASKS[key] || 'Answer the open question in your household settings';
+const yesNo = label => ({ type: 'boolean', label });
+const dollars = label => ({ type: 'number', unit: 'USD', min: 0, label });
+const age = label => ({ type: 'number', unit: 'years', min: 0, max: 120, integer: true, label });
+
+export const ANSWER_SHAPES = Object.freeze({
+  'retirement.planTermsConfirmed': { scope: 'household', ...yesNo('Has your advisor confirmed your retirement plan terms and eligibility?') },
+  'retirement.aggregationConfirmed': { scope: 'household', ...yesNo('Has your advisor confirmed no related business shares your plan limits?') },
+  'benefits.hsaEligible': { scope: 'household', ...yesNo('Is your health plan HSA eligible for the whole year?') },
+  'benefits.hsaCoverage': { scope: 'household', type: 'choice', label: 'Who does your HSA health plan cover?', choices: [{ value: 'self', label: 'Just you' }, { value: 'family', label: 'Family' }] },
+  'business.salaryRange': { scope: 'household', type: 'object', fields: { min: { ...dollars('What is the lowest annual salary your advisor considers reasonable?'), exclusiveMin: 0 }, max: { ...dollars('What is the highest annual salary your advisor considers reasonable?'), exclusiveMin: 0 } } },
+  'business.cashBasis': { scope: 'household', ...yesNo('Does your business keep its books on a cash basis?') },
+  'household.ownerAge': { scope: 'household', ...age('How old are you at the end of the planning tax year?') },
+  'household.spouseAge': { scope: 'household', ...age('How old is your spouse at the end of the planning tax year?') },
+  'accounts.va529': { scope: 'account', accountKind: '529', type: 'object', fields: {
+    virginiaPlan: yesNo('Is {account} a Virginia plan?'),
+    ownerAge70Plus: { ...yesNo('Is the owner of {account} age 70 or older?'), when: { virginiaPlan: true } },
+    carryforward: { ...dollars('How much unused Virginia deduction carries forward to this year for {account}?'), when: { virginiaPlan: true } },
+  } },
+  'business.onlyEmployee': { scope: 'household', ...yesNo('Do you own the whole business with no employees, including your spouse?') },
+  'retirement.priorYearFicaWages': { scope: 'person', ...dollars('How much did {person} receive in Social Security wages from the plan sponsor last year?') },
+  'retirement.planOffersRoth': { scope: 'household', ...yesNo('Does your retirement plan offer Roth deferrals?') },
+  'retirement.otherPlanDeferrals': { scope: 'person', type: 'object', fields: { deferral: dollars('How much did {person} defer to other workplace plans this year, excluding catch-up?'), catchUp: dollars('How much did {person} contribute as catch-up to other workplace plans this year?') } },
+  'household.expectedDate': { scope: 'household', type: 'date', label: 'When is the baby expected?' },
+  'tax.vaItemizedEstimate': { scope: 'household', ...dollars('What is your Virginia itemized deduction estimate for this year?') },
+  'household.filingStatus': { scope: 'household', type: 'choice', label: 'What is your filing status?', choices: [{ value: 'mfj', label: 'Married filing jointly' }, { value: 'mfs', label: 'Married filing separately' }, { value: 'single', label: 'Single' }, { value: 'hoh', label: 'Head of household' }, { value: 'qss', label: 'Qualifying surviving spouse' }] },
+});
+
+export function answerShape(key) {
+  if (!Object.hasOwn(ANSWER_SHAPES, key)) throw new TypeError(`No answer shape for ${key}`);
+  return ANSWER_SHAPES[key];
+}
+
+export const acceptsAnswerAccount = (shape, account) => shape.accountKind === '529' ? isCollegeAccount(account) : account.kind === shape.accountKind;
+
+export function questionFor(keys, { accounts = [], facts = {}, names = {}, people } = {}) {
+  const fields = [];
+  const unique = [...new Set(keys)];
+  for (const key of unique) {
+    const shape = answerShape(key);
+    const groups = shape.scope === 'account'
+      ? accounts.filter(a => acceptsAnswerAccount(shape, a)).map(a => ({ path: [a.id], account: accountLabel({ ...a, householdNames: names }) }))
+      : shape.scope === 'person'
+        ? (people || (facts['household.filingStatus'] === 'mfj' ? ['owner', 'spouse'] : ['owner'])).map(p => ({ path: [p], person: p === 'owner' ? 'you' : 'your spouse' }))
+        : [{ path: [] }];
+    for (const group of groups) {
+      const parts = shape.type === 'object' ? Object.entries(shape.fields) : [['', shape]];
+      for (const [part, def] of parts) {
+        const path = [...group.path, ...(part ? [part] : [])];
+        const value = path.reduce((v, p) => v && typeof v === 'object' && Object.hasOwn(v, p) ? v[p] : undefined, facts[key]);
+        const label = def.label.replaceAll('{account}', group.account || '').replaceAll('{person}', group.person || 'you');
+        fields.push({ ...def, key, path, id: JSON.stringify([key, ...path]), label, ...(value !== undefined ? { value } : {}), ...(def.when ? { when: { path: [...group.path, Object.keys(def.when)[0]], value: Object.values(def.when)[0] } } : {}) });
+      }
+    }
+  }
+  const labels = unique.includes('accounts.va529') ? accounts.filter(isCollegeAccount).map(a => accountLabel({ ...a, householdNames: names })) : [];
+  const summary = labels.length ? `For ${labels.map(dataText).join(', ')}, tell us whether it is a Virginia plan. For each Virginia plan, enter the owner age answer and unused deduction carryforward.` : 'Save these answers to update your plan automatically.';
+  return { keys: unique, ...(people ? { people } : {}), title: fields[0]?.label || 'Answer the questions for your plan', summary, fields };
+}
+
+export const confirmTask = key => (answerShape(key), CONFIRM_TASKS[key]);
 
 export function confirmTasks(keys) {
-  return padTasks([...keys.map(confirmTask), 'Run planning again once you have answered']);
+  keys.forEach(answerShape);
+  return [];
 }
 
 // First plan year of a sole proprietor's solo 401(k) (IRC 401(b)(2) as amended by SECURE 2.0

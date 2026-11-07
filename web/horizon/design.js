@@ -11,10 +11,12 @@ import * as engineScreen from './screens/engine.js';
 import * as yearendScreen from './screens/yearend.js';
 import * as advisorScreen from './screens/advisor.js';
 import * as connect from './screens/connect.js';
+import * as trendScreen from './screens/trend.js';
 import { ingestScreens } from './screens/ingest.js';
 import { emailScreen } from './screens/email.js';
 import * as switcher from './screens/switcher.js';
 import * as simplefin from './screens/simplefin.js';
+import * as recAnswers from './screens/rec-answers.js';
 import * as accountScreen from './screens/account.js';
 import { createKeys } from './keys.js';
 import { createSwipe } from './screens/swipe.js';
@@ -34,8 +36,6 @@ const STATUS = {
 const WAITING = { data: 'on data', advisor: 'on advisor', date: 'on a date' };
 const VALUE = { tax: 'Tax', timing: 'Timing', retire: 'Retirement', risk: 'Risk', cash: 'Cash', goal: 'Goal' };
 const TRIGGER = { calendar: 'Calendar', income: 'Income change', life: 'Life event', goal: 'Goal', advisor: 'Advisor' };
-const KIND = { business: 'Business', checking: 'Cash', cash: 'Cash', taxable: 'Investing', retirement: 'Retirement', roth: 'Retirement', hsa: 'Health', '529': 'Education' };
-
 // Four tabs, in order: route, label, phone bar icon. Every route belongs to one tab or to the gear
 // (settings); the active one comes from the current route, never from the screen.
 const TABS = [['home', 'Home', 'year'], ['plan', 'Plan', 'cal'], ['ask', 'Ask', 'chat'], ['money', 'Money', 'money']];
@@ -200,6 +200,7 @@ function snoozeLabel() { return fmt(addDays(clock(), 14)); }
 const ACT_KEY = { start: 'D', snooze: 'L', complete: 'E', dismiss: 'Shift+X' };
 
 function actionsFor(r, compact) {
+  if (r.question?.primary) return [];
   const a = (act, label, cls = '', arg) => {
     const hint = ACT_KEY[act] ? ` title="${esc(`${label} (${ACT_KEY[act]})`)}"` : '';
     return btn(label, `data-act="${act}" data-rec="${esc(r.id)}"${arg != null ? ` data-arg="${esc(arg)}"` : ''}${hint}`, cls);
@@ -579,9 +580,9 @@ function nextHtml(m, subject) {
     ${why ? `<p class="h-next-why">${why}</p>` : ''}
     <p class="h-serves-l">${serves}</p>
     <p class="h-next-win">${windowText(r)}</p>
-    <div class="h-next-acts"><button type="button" class="h-btn pri" data-act="complete" data-rec="${id}">Done</button><button type="button" class="h-btn" data-act="snooze" data-rec="${id}" data-arg="${esc(snoozeLabel())}">Later</button><button type="button" class="h-btn" data-ask-next="${id}">Ask</button></div>
+    ${recAnswers.html(r, 'home')}${r.question?.primary ? '' : `<div class="h-next-acts"><button type="button" class="h-btn pri" data-act="complete" data-rec="${id}">Done</button><button type="button" class="h-btn" data-act="snooze" data-rec="${id}" data-arg="${esc(snoozeLabel())}">Later</button><button type="button" class="h-btn" data-ask-next="${id}">Ask</button></div>`}
   </article></div>
-  <p class="h-next-hint"><span>Swipe left for later, right for done</span></p>`;
+  ${r.question ? '' : '<p class="h-next-hint"><span>Swipe left for later, right for done</span></p>'}`;
 }
 
 function afterHtml(m) {
@@ -733,7 +734,7 @@ function pHome() {
   const rest = `${goalsH}${cards}${hkHtml(m.housekeeping)}`;
   const inner = isPhone()
     ? `${ownerFilterHtml(m)}${head}${nextHtml(m, subject)}${afterHtml(m)}${health}${rest}`
-    : `<header class="h-home-top">${head}${ownerFilterHtml(m)}</header>${dueHtml(m)}${health}${rest}`;
+    : `<header class="h-home-top">${head}${ownerFilterHtml(m)}</header>${m.nextThing?.question?.primary ? nextHtml(m, subject) : ''}${dueHtml(m)}${health}${rest}`;
   return shell(`<section class="h-home">${inner}</section>`);
 }
 
@@ -847,6 +848,7 @@ function recRow(r, ny) {
     <div class="h-row-b">
       <div class="h-row-top"><a href="${href('rec', { id: r.id })}" data-go="rec" data-id="${esc(r.id)}">${T(r.title)}</a><span class="h-st ${r.status}">${statusText(r)}</span></div>
       <p>${T(r.summary)}</p>
+      ${recAnswers.html(r, 'plan')}
       <div class="h-meta"><span>${T(r.triggerText || TRIGGER[r.trigger] || '')}</span>${r.status === 'done' || r.status === 'dismissed' ? '' : `<span>${T(r.window?.label || '')}</span>`}${r.effort ? `<span>${T(r.effort)}</span>` : ''}${values(r) ? `<span>${values(r)}</span>` : ''}${r.advisor ? `<span class="h-adv ${r.advisor.verdict}">${advisorText(r)}</span>` : ''}${servesHtml(r)}</div>
     </div>
     <div class="h-acts">${actionsFor(r, true).join('')}${advisorScreen.rowAction(r)}</div>
@@ -971,6 +973,7 @@ function dlgHtml(id) {
       <div class="h-meta"><span class="h-st ${r.status}">${statusText(r)}</span>${ownerHtml(r)}${isNeeds(r, ny) ? '<span class="h-acc">Needs you</span>' : ''}${r.effort ? `<span>${T(r.effort)}</span>` : ''}${values(r) ? `<span>${values(r)}</span>` : ''}${servesHtml(r, { dialog: true })}</div>
     </div>
     ${windowStrip(r)}
+    ${recAnswers.html(r, 'dialog')}
     <div class="h-acts big">${actionsFor(r, false).join('')}</div>
     <div class="h-dcols">
       <div class="h-dmain">
@@ -981,7 +984,7 @@ function dlgHtml(id) {
         ${cross ? section('Touches', cross) : ''}
       </div>
       <div class="h-dside">
-        ${section('Steps', check)}
+        ${r.question?.primary ? '' : section('Steps', check)}
         ${section('Advisor', adv)}
         ${wg}
       </div>
@@ -1401,11 +1404,11 @@ function spark([key, sr]) {
 
 // The account mirror: balances by kind, trend, connections, files and sources. Accounts and the
 // Money overview both render it, so neither carries its own account or file logic.
-function accountsBody() {
+function accountsBody({ groupTrends = false } = {}) {
   const accs = arr(api.s.accounts);
-  const order = ['Business', 'Cash', 'Investing', 'Retirement', 'Health', 'Education'];
+  const order = ['Business', 'Cash', 'Investing', 'Retirement', 'Health', 'Education', 'Debt'];
   const groups = {};
-  accs.forEach((a) => { const k = KIND[a.kind] || 'Other'; (groups[k] = groups[k] || []).push(a); });
+  accs.forEach((a) => { const k = a.group || 'Other'; (groups[k] = groups[k] || []).push(a); });
   const keys = Object.keys(groups).sort((a, b) => (order.indexOf(a) + 99) % 99 - (order.indexOf(b) + 99) % 99);
   const mirror = { connected: 'Mirrored', manual: 'Manual', missing: 'Not connected' };
   // Imported accounts carry text from uploaded files: plain text, no tokens or markup.
@@ -1421,15 +1424,13 @@ function accountsBody() {
     const sub = a.subtitle != null ? a.subtitle : [a.inst, a.owner].filter(Boolean).join(', ');
     return sub ? lbl(a, sub) : '';
   };
-  const list = keys.map((k) => section(k, `<div class="h-accs">${groups[k].map((a) => `<div class="h-acc ${a.mirror}" data-account="${esc(a.id)}" data-go="account" data-id="${esc(a.id)}">
+  const list = keys.map((k) => section(k, `${groupTrends ? trendScreen.groupSpark(k) : ''}<div class="h-accs">${groups[k].map((a) => `<div class="h-acc ${a.mirror}" data-account="${esc(a.id)}" data-go="account" data-id="${esc(a.id)}">
       <div class="h-acc-n"><b>${nameHtml(a)}</b><span>${subHtml(a)}</span></div>
       <div class="h-acc-v">${a.fig ? figHtml(a.fig) : '<span class="h-mute">No balance</span>'}</div>
       <div class="h-acc-m"><i></i>${mirror[a.mirror] || esc(a.mirror)}<a class="h-acc-open" href="${href('account', { id: a.id })}" data-go="account" data-id="${esc(a.id)}" aria-label="Open ${esc(a.imported === false ? api.txt(String(a.name ?? '')) : a.name)}">Details</a></div>
       ${ingest.accountMeta(a)}${a.note ? `<p>${lbl(a, a.note)}</p>` : ''}</div>`).join('')}</div>`)).join('');
-  const series = Object.entries(api.s.series || {});
   const evs = arr(api.s.events).filter((e) => ['income', 'account'].includes(e.kind));
   return `<div class="h-ro">${icon('lock')}<span>Read-only. ${esc(api.s.meta.product || 'Fathom')} can see balances and transactions. It cannot move, delete or change anything.</span></div>${ingest.pendingBanner()}${ingest.accountRepairs()}
-    ${series.length ? section('Trend', `<div class="h-sparks">${series.map(spark).join('')}</div>`, 'Solid is actual, dashed is projected') : ''}
     <div class="h-cols"><div class="h-col-main">${list}</div>
     <div class="h-col-side">${section('Connect accounts', simplefin.block(), 'Read-only, through SimpleFIN Bridge')}${ingest.addFiles('accounts')}${ingest.sourcesSection()}${section('Detected', evs.length ? `<ol class="h-evs">${evs.map((e) => `<li><time>${T(e.date)}</time><div><b>${T(e.title)}</b><p>${T(e.body)}</p></div></li>`).join('')}</ol>` : '<p class="h-mute">Nothing unusual detected.</p>')}</div></div>`;
 }
@@ -1440,7 +1441,7 @@ const mirrorText = () => {
 };
 
 function pAccounts() {
-  return shell(`${pageHead('Accounts', 'Read-only mirror', `${mirrorText()} Data through ${T(api.s.meta.dataThrough)}. ${goA('add', 'Add more files')}`)}${accountsBody()}`);
+  return shell(`${pageHead('Accounts', 'Read-only mirror', `${mirrorText()} Data through ${T(api.s.meta.dataThrough)}. ${goA('add', 'Add more files')}`)}${accountsBody({ groupTrends: true })}`);
 }
 
 // The Home data-health line, spelled out: one row per part of the same healthLine() model, then
@@ -1454,7 +1455,7 @@ function moneyHealthHtml(h) {
 
 function pMoney() {
   return shell(`<section class="h-money">${pageHead('Household', 'Money', `${mirrorText()} Balances, files and the data behind every figure.`)}
-    ${moneyHealthHtml(homeHealth())}${accountsBody()}</section>`);
+    ${trendScreen.render()}${moneyHealthHtml(homeHealth())}${accountsBody()}</section>`);
 }
 
 /* ---------- settings ---------- */
@@ -2112,6 +2113,7 @@ function startOver(recId) {
 }
 
 function onSubmit(e) {
+  if (recAnswers.onSubmit(e)) return;
   if (SCREENS.some((s) => s.onSubmit?.(e))) return;
   const f = e.target;
   if (f.dataset.connForm) { e.preventDefault(); connect.onSubmit(f, connectH); return; }
@@ -2134,6 +2136,7 @@ function onSubmit(e) {
 }
 
 function onInput(e) {
+  if (recAnswers.onChange(e)) return;
   if (SCREENS.some((s) => s.onInput?.(e))) return;
   if (ingest.handleChange(e)) return;
   const t = e.target;
@@ -2166,6 +2169,7 @@ function onInput(e) {
 // (saved to the store, so both feed the planner and chat).
 function onChange(e) {
   if (SCREENS.some((s) => s.onChange?.(e))) return;
+  if (recAnswers.onChange(e)) return;
   const t = e.target;
   if (t?.dataset?.gf === 'track' || t?.dataset?.gf === 'acct') { goalInput(t); return; }
   if (t?.dataset?.suggRate) { suggRate(t); return; }
@@ -2184,7 +2188,7 @@ function onToggle(e) {
 // action saves; the redraw replaces it, and a failed save brings it back.
 const homeSwipe = createSwipe({
   when: () => routeNow().name === 'home' && isPhone(),
-  card: 'article.h-next',
+  card: 'article.h-next:not(:has([data-rec-answers]))',
   onSwipe: (dir, el) => {
     const id = el.dataset.nextRec;
     if (!id) return;
@@ -2193,7 +2197,7 @@ const homeSwipe = createSwipe({
     if (dir > 0) api.act(id, 'complete'); else api.act(id, 'snooze', snoozeLabel());
   }
 });
-const onPointer = (e) => ingest?.handlePointer(e) || homeSwipe(e);
+const onPointer = (e) => trendScreen.handlePointer(e) || ingest?.handlePointer(e) || homeSwipe(e);
 const POINTER = ['pointerdown', 'pointermove', 'pointerup', 'pointercancel'];
 
 // Root keys that are not shortcuts: Enter in the Ask composer and rename field first. Shortcuts go
@@ -2230,12 +2234,12 @@ function onDocumentKey(e) {
 }
 
 // Helpers the screen modules use. Getters, because api, root and ui change on mount.
-const SCREENS = [switcher, chatScreen, packsScreen, engineScreen, advisorScreen, yearendScreen, simplefin, accountScreen];
+const SCREENS = [switcher, chatScreen, packsScreen, engineScreen, advisorScreen, yearendScreen, simplefin, recAnswers, accountScreen, trendScreen];
 const KIT = {
   get api() { return api; }, get root() { return root; }, get ui() { return ui; }, get keys() { return keys; }, get ingest() { return ingest; },
   draw: () => draw(),
-  esc, T, X, arr, plural, icon, btn, goA, href, shell, section, pageHead, thread, composer, figHtml, recById,
-  openRec, openAccount, closeRec, decisionList, statusText, routeNow, visibleRecs, spark,
+  esc, T, X, arr, plural, icon, btn, goA, href, shell, section, pageHead, thread, composer, figHtml, recById, snoozeLabel,
+  openRec, openAccount, closeRec, decisionList, statusText, routeNow, visibleRecs, spark, niceTicks,
   sfStatus: () => simplefin.status(),
   newGoal: () => { if (routeNow().name !== 'goals') api.go('goals', {}); openGoalForm(null); }
 };

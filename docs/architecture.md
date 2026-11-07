@@ -818,6 +818,7 @@ known path with the wrong method is 405; signed out, both are 401. Every action 
 | `POST /api/operator/households` | `{displayName, adminEmail}` | `{household: {id, status: 'provisioning'}}` and an admin invitation emailed to `adminEmail`. Instance operators only (403 otherwise); no membership needed. 409 `{error, code: 'multi_household_gated'}` while the platform setting `multi_household_enabled` is off and a non-deleted real household exists (provisioning included); demo instances are exempt. |
 | `POST /api/recs/:id/start-over` | `{}` | `{scenario}`. Detaches every thread asked from the rec that is still attached (sets `recDetachedAt` to the app clock time), so the rec dialog opens a fresh composer; an already detached thread keeps its time. Threads, messages, titles, archive and trash are untouched. 404 unknown or hidden rec. |
 | `POST /api/recs/:id/action` | `{action: start, snooze, dismiss, complete, reopen, task or owner, arg?}` | `{scenario}`. `task` toggles task `arg`; `snooze` takes a wake label (default "Next month"); `owner` sets the action owner to `arg` (one of `you`, `spouse`, `both`, `advisor`, `automatic`, case sensitive) with `owner_override = 1`, status unchanged. 400 bad action, task index or owner, 404 unknown or hidden rec. Writes `rec_events` (actor `ui`; for `owner` action `owner`, arg the owner, from and to the current status). |
+| `POST /api/recs/:id/answers` | `{answers: [{key, value}]}` | `{scenario}` after validation, confirmed fact writes with dated owner provenance and an automatic planning run. Only keys requested by the visible recommendation are accepted. Question recommendations require answers rather than completion. |
 | `POST /api/wargame/:name/pick` | `{index}` (an index or an option id) | `{scenario}`. `name` is salary or deferral (404 otherwise); 400 out of range. |
 | `POST /api/decisions/:id/decide` | `{index?}` (a point index or id; default the stored pick) | `{scenario}`. Decide on the picked point of an open salary or deferral decision: status becomes decided and `decided_line` is built from the point's own label plus `{f:...}` tokens for the `wg.*` figures the registry holds (provenance stays on the figures). Records the pick in `wargame.picks`, writes the owner-stated assumption fact (`business.salaryDecided` = `{entity, salary}`, the S corp the game was built for and the point's `wg.salary.<id>.salary` value, or `business.deferralDecided` = `{option, amount}`; src `decide:salary` or `decide:deferral`, confirmed, locator names the decision and the figure), logs a `decide` rec event on the linked rec and schedules the plan job (trigger `decide`) on a real store. 404 unknown id, 400 no war game or bad index, 409 already decided, not open, upcoming or unavailable. |
 | `POST /api/decisions/:id/revisit` | `{}` | `{scenario}`. Reopens a decision decided that way: status open, `decided_line` cleared, the assumption fact deleted, a `revisit` rec event, plan job scheduled. 409 for a decision that is not decided with a stored choice. |
@@ -2249,9 +2250,24 @@ income detected"; no title holds a figure or a raw key, and the scenario rewrite
 "<key> changed" title the same way. The `series` content row (src `planner`) is built by
 `src/jobs/planner/series.mjs` from the balances table (positions values for months a brokerage
 account has no balance): one `acct-<id>` series per account with at least two months in the last 12,
-and `net` ("Net worth, accounts with a trend": only accounts with a series of their own, debts such as
-card, credit and loan kinds subtracted, each counted from its first month with its last balance carried
-forward; it ends at the newest month any upload covers).
+used by the account dialog. There is no combined line in it; the household trend is separate.
+
+The household trend (`scenario.trend`, `src/accounts/trend.mjs`) is computed live in `buildScenario`
+from the same monthly readings (`monthlyReadings` in `series.mjs`), not stored. Each account adds its
+newest reading on or before each month end and nothing before its first balance; an account whose data
+stopped carries its last balance forward and is counted as carried from the month after its last
+balance (and at the final point when `accountFreshness` says stale). Debt kinds (card, credit, loan,
+mortgage) are negative. Accounts fall into the groups Business, Cash, Investing, Retirement, Health,
+Education, Debt and Other (`groupOfKind`, also sent on every scenario account as `group`), and the
+groups into the parts cash, investments, retirement, education-health, business, debt and other.
+Business cash is its own part and stays in the net worth total, as the earlier net worth series had
+it. `trend` carries `points` (date, total, parts, groups, carried counts), the shown `parts` and
+`groups`, a carried-forward `note` and `fig` keys. Figures `trend.total`, `trend.part.<id>` and
+`trend.group.<slug>` (kind a, source `trend`, "Account balances, summed") carry `sums`: each account's
+label, reading, date of that reading, freshness and carried flag; the figure popover lists the label, reading,
+date and carried flag. With
+fewer than two months of data `trend` is null. Money draws the chart (`screens/trend.js`: one line at
+a time, range 3M, 1Y or All, a readout of every part by date); Accounts draws one line per group.
 
 ### Deferral deadlines
 

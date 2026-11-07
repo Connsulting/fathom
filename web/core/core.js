@@ -658,6 +658,7 @@ const ACTIONS = new Set(['start', 'complete', 'dismiss', 'snooze', 'reopen']);
 function act(recId, action, arg) {
   const r = rawRec(recId);
   if (!r || r.status === 'hidden') return done();
+  if (r.question?.primary && (action === 'complete' || action === 'task')) return done();
   const body = { action };
   if (action === 'task') {
     const i = Number(arg);
@@ -1227,6 +1228,7 @@ const api = {
   needsYou,
   verdict,
   act,
+  answerRec: (id, answers) => send('/api/recs/' + encodeURIComponent(id) + '/answers', { answers }),
   ask,
   askFree,
   askStream,
@@ -1322,7 +1324,13 @@ function openPopover(anchor) {
     '<div class="fx-pop-row"><span class="fx-pop-k">Kind</span><span class="fx-pop-v">' + esc(kind) + '</span></div>' +
     // Kept only for reference (R2-9), then readable assumptions (MGN1); both are stored plain text.
     (typeof f.unavailable === 'string' && f.unavailable ? '<div class="fx-pop-row"><span class="fx-pop-k">Not current</span><span class="fx-pop-v">' + esc(f.unavailable) + '</span></div>' : '') +
-    (Array.isArray(f.notes) ? f.notes.filter(n => typeof n === 'string').map(n => '<div class="fx-pop-row"><span class="fx-pop-k">Assumes</span><span class="fx-pop-v">' + esc(n) + '</span></div>').join('') : '');
+    (Array.isArray(f.notes) ? f.notes.filter(n => typeof n === 'string').map(n => '<div class="fx-pop-row"><span class="fx-pop-k">Assumes</span><span class="fx-pop-v">' + esc(n) + '</span></div>').join('') : '') +
+    // An aggregate lists what it adds up: each account, its balance and the date of that balance.
+    (Array.isArray(f.sums) && f.sums.length
+      ? '<div class="fx-pop-sums" role="list" aria-label="Accounts added up">' + f.sums.map(a =>
+        '<div class="fx-pop-row" role="listitem"><span class="fx-pop-v">' + esc(a.label) + (a.carried ? ' <em>(carried forward)</em>' : '') +
+        '</span><span class="fx-pop-n">' + esc(moneyCents(a.v)) + ', ' + esc(a.asOf) + '</span></div>').join('') + '</div>'
+      : '');
   document.body.appendChild(el);
   const r = anchor.getBoundingClientRect();
   const w = el.offsetWidth;

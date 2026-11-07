@@ -2,7 +2,7 @@
 // tax inputs (R1, R14, R19, T9.5). Evaluated last so it sees every other trigger's block.
 
 import { addDays } from '../planner/data.mjs';
-import { padTasks, dataText, confirmTask } from './common.mjs';
+import { padTasks, dataText, confirmTask, ANSWER_SHAPES } from './common.mjs';
 
 export const id = 'missing-data';
 export const domain = 'data';
@@ -144,9 +144,13 @@ export function window(ctx) {
 }
 
 export function evaluate(ctx) {
-  const list = items(ctx);
+  const factFor = { va529_answers_missing: 'accounts.va529', retirement_other_deferrals_missing: 'retirement.otherPlanDeferrals', deferral_split_unknown: 'retirement.otherPlanDeferrals', va_itemized_missing: 'tax.vaItemizedEstimate', filing_status_assumed: 'household.filingStatus' };
+  const list = items(ctx).map(i => ({ ...i, answerKey: factFor[i.code] || (Object.hasOwn(ANSWER_SHAPES, i.code) ? i.code : null) }))
+    .filter(i => !i.answerKey || !ctx.questionKeys?.has(i.answerKey));
   if (!list.length) return null;
-  return { grounding: [], items: list.map(i => ({ code: i.code, text: i.text, task: i.task })) };
+  const questions = [...new Set(list.map(i => i.answerKey).filter(Boolean))];
+  const answers = questions.length ? list.every(i => i.answerKey) ? { confirm: questions } : { questions } : {};
+  return { grounding: [], items: list, ...answers };
 }
 
 export function build(ctx, hit) {
@@ -156,7 +160,7 @@ export function build(ctx, hit) {
     value: [{ cls: 'risk', text: 'Keeps every figure on your plan current' }],
     mine: [],
     cross: [],
-    tasks: padTasks([...hit.items.map(i => i.task), 'Run planning again once the files are in']),
+    tasks: padTasks(hit.items.filter(i => !i.answerKey).map(i => i.task)),
   };
 }
 
