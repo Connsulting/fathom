@@ -12,6 +12,9 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
 const WRITE_TOOL = 'act_on_recommendation';
+// Design rule 8: every read tool's first operation needs no argument except calculate, whose
+// operations all take operands, so the smoke does not call it.
+const NEEDS_OPERANDS = new Set(['calculate']);
 const WRITE_ARGS = { operation: 'status', id: 'smoke', status: 'doing' };
 
 function line(name, ok, bytes) {
@@ -100,7 +103,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     line('tools/list', true, sizeOf(tools.map(t => t.name)));
 
     for (const tool of tools) {
-      if (tool.name === WRITE_TOOL || !needsNoArgs(tool)) continue;
+      if (tool.name === WRITE_TOOL || NEEDS_OPERANDS.has(tool.name) || !needsNoArgs(tool)) continue;
       if (tool.annotations && tool.annotations.readOnlyHint === false) continue;
       try {
         const result = await client.callTool({ name: tool.name, arguments: { operation: tool.inputSchema.properties.operation.enum[0] } });
