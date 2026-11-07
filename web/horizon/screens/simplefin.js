@@ -3,7 +3,7 @@
    access. State comes from live.simplefin in the scenario, which never holds the access URL. The
    pasted token lives only in the form field and this module's memory until it is sent; it is
    cleared on success and never written to storage, the URL or the console. Rendered on the
-   Accounts screen and the onboarding Accounts step; design.js delegates events here. */
+   Accounts screen and the onboarding Tell us step; design.js delegates events here. */
 
 let H = null;
 export function bind(kit) { H = kit; }

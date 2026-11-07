@@ -666,9 +666,31 @@ stores follow onboarding alone.
 
 ### Onboarding
 
-Onboarding is six steps (Sign in, Tell us, Accounts, Confirm, Priorities, First brief). Nothing in
-it is fake or hand-written any more except the Accounts (connections) and Priorities steps, which
-other items own.
+Onboarding is goals first. The steps keep the numbers 0 to 6 (`POST /api/onboarding` and the stored
+`onboarding` setting are unchanged), and the rail shows three labelled steps, Goals, Curve and Tell
+us, each headed "Step N of 3":
+
+1. Step 0, Sign in (demo only, below).
+2. Step 1, Goals: "What is the money for?". Four starter cards ("A cash cushion", "Work less, on our
+   terms", "Kids and family", "Pay less tax, without stress") toggle with a tap, Space or Enter, and
+   "Write your own" adds the owner's own titles. The primary button creates each selected goal
+   through `POST /api/goals` with its sub line as the note and its horizon, and no target or target
+   date (Fathom asks for one later). A starter whose title (trimmed, case-insensitive) matches a
+   non-archived goal is shown preselected and is never created again; other non-archived goals are
+   listed as "Already your goals". Nothing deletes or archives a goal. The pure logic (`STARTERS`,
+   `existingStarterIds`, `otherGoals`, `goalsToCreate`, `inviteLine`) lives in
+   `web/horizon/screens/onboard-model.js`. An "Add your spouse" line links an admin on a real store
+   to `/admin/users` (Settings, Household), explains the invite on the demo, and is hidden for
+   anyone else.
+3. Step 2, Where on the curve: the priority sliders, saved through `POST /api/curve`.
+4. Step 3, Tell us: the note (below), file uploads, and the connections block (SimpleFIN and the
+   accounts already in Fathom).
+5. Step 4, Here is what we heard (Confirm, below), and step 5, Building your year, which finishes
+   (step 6) on Home. The rail shows complete on both.
+
+Home on any store with no open goals (none non-archived and not done) renders the same Goals block
+inside the normal shell, in place of the head and the goal cards (the data-health line stays), with
+the primary button "Save goals"; once goals exist Home is unchanged.
 
 Sign in. A real store signs people in before the app loads, on the account pages (see Accounts and
 sessions), so it skips step 0 (the first step is 1) and shows the signed-in email in the page
@@ -689,9 +711,10 @@ successful import triggers the plan and confirm-guess jobs, like an upload. The 
 `understood` from `understoodOf` (`src/onboarding/heard.mjs`):
 `{fileId, status, engineOn, waiting, facts: [{key, label, value, confirmed}], goals: [{title, when}], asked}`,
 the stored rows that file wrote and the open questions it raised; the page shows it after the
-save. A returning owner reaches the same step again as Setup in Settings (real stores only): the route
-`#/onboarding` is allowed on a real store after first run, lands on step 1, shows Back to the app,
-and finishing returns to the brief.
+save. A returning owner reaches onboarding again as Setup in Settings (real stores only): the route
+`#/onboarding` is allowed on a real store after first run, lands on step 1 (Goals) with the existing
+goals preselected, shows Back to the app, and finishing returns to the brief. Setup only adds: it
+never deletes goals, notes or files.
 
 Confirm ("Here is what we heard"). `live.heard` is `deriveHeard(db, {clock})`: stored facts (filing
 status, state, dependents and ages, expecting a child, income types, benefits, giving), entities
@@ -705,9 +728,10 @@ unconfirmed fact and raises a check against a confirmed one. A value of the wron
 shown. `onboarding.heard` in the content table is no longer read. File-sourced text (file, entity
 and account names) is rendered escaped, never as tokens or markup.
 
-Seams. The Accounts step (item 22) and the Priorities step (item 20) are unchanged `else if (s === 2)`
-and `(s === 4)` branches of `pOnboarding` in `web/horizon/design.js`; the Confirm step is
-`heardHtml`, the Tell us panel `understoodHtml`.
+Seams. In `pOnboarding` (`web/horizon/design.js`) the Goals step is `goalsStartHtml` (shared with
+Home), the Priorities sliders are `prioHtml`, Tell us adds the connections block (`simplefin.block()`
+and the accounts already in Fathom) below the note and files, the Confirm step is `heardHtml` and the
+Tell us panel `understoodHtml`.
 
 ## API
 
@@ -776,7 +800,7 @@ known path with the wrong method is 405; signed out, both are 401. Every action 
 | `POST /api/goals/:id/archive` | `{archived?: boolean}` (default true) | `{scenario, goal}`. Archives or restores a goal. |
 | `POST /api/goals/:id/delete` | `{}` | `{scenario}`. Deletes a goal for good. |
 | `POST /api/curve` | `{id, value}` or `{positions: {id: value}}` | `{scenario}`. Stores tradeoff curve positions (0 to 1, rounded to hundredths) in `settings` `curve.positions`; 400 for an unknown axis or a value out of range. The onboarding Priorities step saves through this route too. |
-| `POST /api/onboarding` | `{step}` | `{scenario}`. 0 to 5 set the step, 6 completes onboarding; anything else 400. |
+| `POST /api/onboarding` | `{step}` | `{scenario}`. 0 to 5 set the step (0 sign in, 1 Goals, 2 curve, 3 Tell us, 4 heard, 5 build), 6 completes onboarding; anything else 400. |
 | `POST /api/onboarding/notes` | `{text}` | `{scenario, file, understood}`. Saves the Tell us note as a notes document through the ingest pipeline (see Onboarding below). 400 for a missing, empty or control-character text, 413 over 30000 bytes, 409 without a data key on a real store, 422 when the note could not be stored. The text never appears in an error, a log or the database. |
 | `POST /api/demo/reset` | `{}` | `{scenario}`. Rebuilds the demo store and removes stored uploads (`$FATHOM_DATA/files/*.bin`); 404 unless the store is a demo store. Clears `api_keys`; the server secret file survives. |
 | `GET /api/keys` | | `{keys: [{id, name, scopes, createdAt, lastUsedAt, revokedAt}]}` ordered by creation; never a key or hash. A member sees the keys they created; an admin sees every key, including keys with no creator. A demo store lists every key. |
@@ -1225,7 +1249,7 @@ Read-only bank and brokerage connections through SimpleFIN Bridge (`src/ingest/s
 `src/api/simplefin-handlers.mjs`, `web/horizon/screens/simplefin.js`).
 
 1. Connect: the owner pastes a setup token (base64 of a claim URL) on the Accounts screen
-   ("Connect accounts"), the onboarding Accounts step, or through the switcher action "Connect
+   ("Connect accounts"), the onboarding Tell us step (step 3), or through the switcher action "Connect
    accounts". The server decodes it and refuses anything but `https` on a host in
    `FATHOM_SIMPLEFIN_ALLOWED_HOSTS` with the default port and no credentials (the token is user
    input: SSRF guard), POSTs the claim URL with redirects refused, and checks the answer is an

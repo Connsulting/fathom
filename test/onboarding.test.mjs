@@ -175,7 +175,7 @@ describe('what we heard (deriveHeard)', () => {
     const filing = item('household', 'fact:household.filingStatus');
     assert.equal(filing.value, 'Married filing jointly');
     assert.equal(filing.prov, 'Entered by you, confirmed by you');
-    assert.deepEqual(filing.edit, { route: 'onboarding', step: 1, label: 'Correct in notes' });
+    assert.deepEqual(filing.edit, { route: 'onboarding', step: 3, label: 'Correct in notes' });
     assert.equal(item('household', 'fact:household.state').value, 'VA');
     assert.equal(item('household', 'fact:household.state').prov, 'From Setup notes 2026-11-05.md');
     assert.equal(item('household', 'fact:household.dependentAges').value, '2, 5');
