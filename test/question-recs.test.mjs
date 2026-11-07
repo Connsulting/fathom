@@ -21,7 +21,7 @@ const context = extra => ({ clock: '2026-11-05', year: 2026, facts: {}, owner: {
 test('mixed missing data keeps upload steps and its summary beside the answer form', async () => {
   const ctx = context({ warnings: ['filing_status_assumed'], freshness: [{ id: 'bank', label: 'Bank statements', state: 'stale' }] });
   const hit = evaluateTriggers(ctx).find(h => h.rec.id === 'missing-data');
-  assert.equal(hit.rec.title, 'Bring your data up to date');
+  assert.equal(hit.rec.title, 'Answer a tax question and upload the latest bank statements');
   assert.ok(hit.rec.tasks.some(t => /Upload the latest bank statements/.test(t.t)));
   assert.equal(hit.rec.question.primary, false);
   assert.deepEqual(hit.rec.question.keys, ['household.filingStatus']);
@@ -65,7 +65,7 @@ test('salary questions ask only the plan participant for person-scoped answers',
 test('accounts recognized as college savings by name have answer controls', () => {
   const q = questionFor(['accounts.va529'], { accounts: [{ id: 'named-plan', kind: 'taxable', name: '529 College Savings' }], facts: {} });
   assert.match(q.title, /529 College Savings/);
-  assert.equal(q.fields.length, 3);
+  assert.equal(q.fields.length, 2);
   assert.deepEqual(q.fields[0].path, ['named-plan', 'virginiaPlan']);
 });
 
@@ -76,9 +76,10 @@ test('an emitted key without an answer shape fails through the trigger catalog',
 test('Virginia questions name display labels and use stable account ids', () => {
   const q = questionFor(['accounts.va529'], { accounts, facts: {} });
   assert.match(q.title, /College fund/);
-  assert.match(q.fields[0].label, /Is College fund ending 3333 a Virginia plan\?/);
+  assert.match(q.fields[0].group, /College fund ending 3333/);
+  assert.match(q.fields[0].label, /^Is this Virginia's own 529 program/);
   assert.deepEqual(q.fields[0].path, ['stable-college', 'virginiaPlan']);
-  assert.equal(q.fields[2].unit, 'USD');
+  assert.equal(q.fields[1].unit, 'USD');
   const no = questionFor(['accounts.va529'], { accounts, facts: { 'accounts.va529': { 'stable-college': { virginiaPlan: false } } } });
   assert.equal(no.fields[0].value, false);
 });

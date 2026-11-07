@@ -152,16 +152,16 @@ test('AC4: a stored confirmation belongs to its actor and thread', async t => {
 
 test('AC4: goal evidence never loosens household fact attribution', async t => {
   const { db, ctx, registry } = await setup(t);
-  db.prepare("INSERT INTO facts (key, value, confirmed, updated_at) VALUES ('household.spouseAge', '52', 1, ?) ON CONFLICT(key) DO UPDATE SET value = '52'").run(now);
-  db.prepare("DELETE FROM facts WHERE key = 'household.ownerAge'").run();
-  const out = await registry().invoke('record_household_fact', { key: 'household.ownerAge', value: 52, evidence: 'yeah' });
+  db.prepare("INSERT INTO facts (key, value, confirmed, updated_at) VALUES ('household.dependents', '2', 1, ?) ON CONFLICT(key) DO UPDATE SET value = '2'").run(now);
+  db.prepare("DELETE FROM facts WHERE key = 'household.birthYears'").run();
+  const out = await registry().invoke('record_household_fact', { key: 'household.birthYears', value: { owner: 1974 }, evidence: 'yeah' });
   assert.equal(out.isError, true);
-  assert.equal(db.prepare("SELECT value FROM facts WHERE key = 'household.ownerAge'").get(), undefined);
-  proposal(db, { target: 57 });
-  assert.equal((await registry().invoke('record_household_fact', { key: 'household.ownerAge', value: 57, evidence: 'yeah' })).isError, true);
-  ctx.ownerText = 'I am 52 years old';
-  const good = await registry().invoke('record_household_fact', { key: 'household.ownerAge', value: 52, evidence: ctx.ownerText });
-  assert.ok(!good.isError, good.content[0].text);
+  assert.equal(db.prepare("SELECT value FROM facts WHERE key = 'household.birthYears'").get(), undefined);
+  proposal(db, { target: 1969 });
+  assert.equal((await registry().invoke('record_household_fact', { key: 'household.birthYears', value: { owner: 1969 }, evidence: 'yeah' })).isError, true);
+  ctx.ownerText = 'I was born in 1974';
+  const good = await registry().invoke('record_household_fact', { key: 'household.birthYears', value: { owner: 1974 }, evidence: ctx.ownerText });
+  assert.ok(!good.isError, JSON.stringify(good.content));
 });
 
 test('AC4: date components from a goal note are not target amounts', async t => {

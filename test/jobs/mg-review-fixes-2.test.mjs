@@ -209,7 +209,7 @@ test('MG5: D4 liveness: the P&L line alone and the fact alone each give 15,000',
 
 const priorW2 = box3 => w2Doc({ taxYear: 2025, employerName: CEDAR, person: 'owner', wages: box3 - 10000, socialSecurityWages: box3 });
 const cedarWages = (box3, fact) => ({
-  ...cedarOnly(15000, 40000, { 'household.ownerAge': 61, 'retirement.priorYearFicaWages': { owner: fact } }),
+  ...cedarOnly(15000, 40000, { 'household.birthYears': { owner: 1965 }, 'retirement.priorYearFicaWages': { owner: fact } }),
   payroll: [priorW2(box3)],
 });
 const priorStep = db => fig(db, 'room.solo401k.employee').locator.steps.find(s => /Social Security wages from the plan sponsor/.test(s.label));
@@ -229,7 +229,7 @@ test('MG5: D4 a prior-year W-2 box 3 from the sponsor beats the owner wage fact'
 });
 
 test('MG5: D4 liveness: with no prior-year W-2 the owner wage fact is used', async () => {
-  const { db } = await planned(cedarOnly(15000, 40000, { 'household.ownerAge': 61, 'retirement.priorYearFicaWages': { owner: 140000 } }));
+  const { db } = await planned(cedarOnly(15000, 40000, { 'household.birthYears': { owner: 1965 }, 'retirement.priorYearFicaWages': { owner: 140000 } }));
   near(fig(db, 'room.solo401k.catchUp').v, 11250, 'fact 140,000: pre-tax catch-up');
 });
 

@@ -11,6 +11,7 @@ import { monthEnd } from './format.mjs';
 import { pendingItems, finalReason } from './confirm.mjs';
 import { cardDetail } from './context.mjs';
 import { bestGuess } from './bestguess.mjs';
+import { coveredFileSources } from './coverage.mjs';
 
 const MONTHLY = Object.freeze({ label: 'monthly', staleAfterDays: 45 });
 
@@ -240,6 +241,7 @@ export function ingestState(db, { clock } = {}) {
                               WHERE stored_path IS NOT NULL AND status IN ('needs_mapping', 'needs_extraction')
                               ORDER BY uploaded_at DESC, rowid DESC`).all().map(fileOf);
 
+  const covered = coveredFileSources(db);
   const sources = db.prepare("SELECT id, label, as_of, kind, last_ingest_at FROM sources WHERE substr(id, 1, 4) = 'ing:' ORDER BY label, id")
     .all().map((row) => {
       const f = freshnessOf({ kind: row.kind, asOf: row.as_of }, at);
@@ -250,7 +252,8 @@ export function ingestState(db, { clock } = {}) {
         asOf: row.as_of ?? '',
         lastIngestAt: row.last_ingest_at ?? null,
         cadence: f.cadence ? f.cadence.label : null,
-        state: f.state,
+        // A file source whose accounts SimpleFIN covers is never stale (coverage.mjs).
+        state: f.state === 'stale' && covered.has(row.id) ? 'covered' : f.state,
         ageDays: f.ageDays,
         howTo: howToFor(row.kind),
       };

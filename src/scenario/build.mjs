@@ -204,6 +204,9 @@ export function loadRecs(db, clock) {
     const rec = recs.find(r => r.id === 'babyprep');
     if (rec && window) rec.window = { ...window, days: daysBetween(clock, window.close) };
   }
+  // A rec waiting on the planner names its blocker (stored with the last run, gone once it is unblocked).
+  const blockers = parse(db.prepare("SELECT value FROM content WHERE key = 'rec.blockers'").get()?.value, null) || {};
+  for (const r of recs) if (r.status === 'waiting' && Object.hasOwn(blockers, r.id)) r.blocker = blockers[r.id];
   for (const r of recs) if (r.question) {
     r.question = { ...questionFor(r.question.keys, { accounts, facts, names: facts['household.names'], people: r.question.people }), primary: r.question.primary };
     if (r.question.primary) {

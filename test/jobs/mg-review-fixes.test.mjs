@@ -301,7 +301,7 @@ test('MG6: C4 liveness: a valid outside-deferral fact sizes room and the curve',
 const CEDAR = 'Cedar Advisory';
 const cedar = (monthlySalary, income, facts = {}) => ({
   entities: [{ name: CEDAR, type: 's_corp', owner: 'owner', income, expenses: { 'Officer salary': monthlySalary, 'Payroll taxes': monthlySalary * 0.0765 } }, SOLE_PROP],
-  facts: { 'household.ownerAge': 61, ...facts },
+  facts: { 'household.birthYears': { owner: 1965 }, ...facts },
 });
 
 test('MG6: C5 unknown prior-year sponsor wages withhold employer room that depends on the catch-up', async () => {

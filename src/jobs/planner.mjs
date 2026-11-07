@@ -19,7 +19,7 @@ import { deriveFacts, deriveFigureFacts, mergeFacts, factProvenance, ownerFactsO
 import { computeFigures } from './planner/figures.mjs';
 import { writeProse } from './planner/prose.mjs';
 import { applyRecs } from './planner/recs.mjs';
-import { writeBrief, namesOf } from './planner/brief.mjs';
+import { writeBrief, namesOf, upsertContent } from './planner/brief.mjs';
 import { evaluateCatalog } from './triggers/index.mjs';
 import { reasonText } from './triggers/missing-data.mjs';
 import { wargameFigurePrefixes } from './planner/wargame.mjs';
@@ -139,6 +139,9 @@ async function plan(db, engine, { clock, runId, packDirs }) {
     const changes = applyRecs(db, results, {
       clock, now, runId, prose, packOverride: id => overrides[id] ?? null, warn: code => warnings.add(code), prefs,
     });
+    // What each blocked rec is waiting on (plain reason, the task that clears it, where it is done),
+    // read back by the scenario for recs in the waiting status.
+    upsertContent(db, 'rec.blockers', Object.fromEntries(results.filter(r => r.state === 'blocked' && r.blocker).map(r => [r.trigger.id, r.blocker])), now);
     // A vetoed rec stays dismissed (applyRecs keeps the owner's status) unless its inputs changed.
     liftStaleVetoes(db, { now });
     refreshPackState(db, { packDirs });
