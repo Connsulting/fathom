@@ -65,7 +65,7 @@ const FIELD = {
   kind: { opts: KIND_OPTS, key: 'kindKey', name: 'Kind', unset: 'Set kind' }
 };
 
-// The meta line as plain text parts, in order: institution, kind, owner, mirror state, last data
+// The meta line as plain text parts, in order: institution, kind, owner, last 4, mirror state, last data
 // and the freshness chip. The mirror state is said once: a kind or owner that only repeats the
 // mirror word (an account whose kind is "manual" on a manual account) is left out. tok marks text
 // the demo may write as tokens. Pure, so it runs without a page.
@@ -82,6 +82,8 @@ export function metaParts(info, a, d) {
   if (kind && !repeats(kind)) parts.push({ cls: 'h-ad-kind', text: kind });
   const owner = i.owner || acct.owner;
   if (owner && !repeats(owner)) parts.push({ cls: 'h-ad-owner', text: String(owner), tok: true });
+  const last4 = String(i.mask ?? acct.mask ?? '');
+  if (/^\d{4}$/.test(last4)) parts.push({ cls: 'h-ad-last4', text: `Last 4 ${last4}` });
   if (mirror) parts.push({ cls: 'h-ad-mirror', text: mirror });
   const asOf = acct.asOf || d?.asOf;
   if (asOf) parts.push({ cls: 'h-ad-asof', text: `Last data ${dateLabel(asOf)}` });
@@ -390,7 +392,7 @@ const inDialog = (el) => !!el?.closest?.('.h-dlg-host');
 function beginRename(id) {
   const a = accountOf(id);
   if (!a) return;
-  // A custom name starts from the name as typed, without the "ending 1234" the label adds.
+  // A custom name starts from the name as typed, without the "(1234)" a duplicate name gets.
   S.edit = { value: a.displayName ? String(a.displayName) : (a.imported === false ? H.api.txt(String(a.name ?? '')) : String(a.name ?? '')) };
   H.draw();
   const el = H.root?.querySelector('.h-dlg-host [data-dlg-name]');
@@ -508,7 +510,7 @@ function saveMask() {
     }
     S.mask = null;
     patchDetail({ mask: v, maskEditable: false });
-    S.undo = { kind: 'mask', text: `Last 4 saved. The account now shows ending ${v}.` };
+    S.undo = { kind: 'mask', text: `Last 4 saved as ${v}.` };
     H.draw();
     focusIn('[data-ad="merge-open"]');
   });

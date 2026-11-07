@@ -109,23 +109,16 @@ export function defaultAccountLabel(account) {
   const bad = !raw || manual || !!slug || generic || personal || !!repeated || /^[,.\s]|[,.\s]$/.test(raw);
 
   if (!bad) {
-    const once = mask && new RegExp(`\\b${mask}\\b`).test(raw) ? raw : raw;
-    return cleanJoin(once) || 'Account';
+    return cleanJoin(raw) || 'Account';
   }
 
   let imported = slug || (manual || generic || personal ? '' : stripToken(raw, repeated || mask));
   if (imported && mask && imported === mask) imported = '';
-  const ending = mask ? `ending ${mask}` : '';
   if (inst || kind) {
-    const head = [inst, kind].filter(Boolean).join(' ');
-    const label = [head, ending].filter(Boolean).join(' ');
+    const label = [inst, kind].filter(Boolean).join(' ');
     if (label) return label;
   }
-  if (imported) {
-    const base = stripToken(imported, mask);
-    return [base, ending].filter(Boolean).join(' ') || 'Account';
-  }
-  if (ending) return ending.charAt(0).toUpperCase() + ending.slice(1);
+  if (imported) return stripToken(imported, mask) || 'Account';
   return 'Account';
 }
 
@@ -136,13 +129,39 @@ export function accountSubtitle(account) {
   return [inst, owner].filter(Boolean).join(', ');
 }
 
-// The shown name, custom or default, with "ending NNNN" when the last 4 is sure and the name does
-// not already carry those digits, so two accounts of one kind at one bank read apart.
+// The account's name: the owner's custom name if set, otherwise the default name. The last 4 is
+// added as "Name (1234)" only when the row carries labelMask, which duplicateMasks sets on the
+// accounts of one household whose labels would otherwise read the same.
 export function accountLabel(account) {
+  const shown = baseLabel(account);
+  const mask = String(account?.labelMask ?? '');
+  return /^\d{4}$/.test(mask) && !new RegExp(`\\b${mask}\\b`).test(shown) ? `${shown} (${mask})` : shown;
+}
+
+function baseLabel(account) {
   const custom = String(account?.displayName ?? account?.display_name ?? '').trim();
-  const shown = custom || defaultAccountLabel(account);
-  const mask = sureMask(account);
-  return mask && !new RegExp(`\\b${mask}\\b`).test(shown) ? `${shown} ending ${mask}` : shown;
+  return custom || defaultAccountLabel(account);
+}
+
+// For a household's accounts: Map of account id to the sure last 4, for each account whose name
+// matches another account's. An unsure or missing mask is never used, and a name that already
+// carries its digits needs none.
+export function duplicateMasks(accounts) {
+  const groups = new Map();
+  for (const a of accounts) {
+    const key = norm(baseLabel(a));
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(a);
+  }
+  const out = new Map();
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    for (const a of group) {
+      const mask = sureMask(a);
+      if (mask && !new RegExp(`\\b${mask}\\b`).test(baseLabel(a))) out.set(a.id, mask);
+    }
+  }
+  return out;
 }
 
 function sureMask(account) {
@@ -151,12 +170,12 @@ function sureMask(account) {
   return mask;
 }
 
-// Trend title: the shared label (which already carries a sure mask once), braces and markup stripped.
+// Trend title: the shared label, braces and markup stripped.
 export function trendLabel(account) {
   return String(accountLabel(account)).replace(/[{}<>]/g, '').replace(/\s+/g, ' ').trim();
 }
 
-// Planner source line for one account: the shared label, so the mask is never repeated.
+// Planner source line for one account: the shared label.
 export function sourceLabel(account) {
   return accountLabel(account);
 }

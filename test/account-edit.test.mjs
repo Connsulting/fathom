@@ -97,7 +97,7 @@ test('AC1: last 4 refuses an account that already has a mask or a SimpleFIN iden
   assert.equal(await status(() => A.accountMask(ctx(s, '', { mask: '1234' }))), 400);
 }));
 
-test('AC1: a good last 4 is stored, the label says ending 1234, and the control is offered only while it can be used', () => withStore(async (s, { A, D }) => {
+test('AC1: a good last 4 is stored, the name shows it only because another account has the same name, and the control is offered only while it can be used', () => withStore(async (s, { A, D }) => {
   const id = plainAccount(s);
   const masked = plainAccount(s, 'acct-masked', { mask: '5555' });
   const linked = plainAccount(s, 'acct-linked', { identity: 'simplefin:synthetic-linked' });
@@ -109,10 +109,12 @@ test('AC1: a good last 4 is stored, the label says ending 1234, and the control 
   assert.equal(row(s.db, id).mask, '1234');
   assert.ok(res.scenario && Array.isArray(res.scenario.accounts), 'the write returns the scenario');
   assert.equal(res.account.id, id);
-  assert.match(res.account.name, /ending 1234/);
-  assert.match(scenarioAccount(res, id).name, /ending 1234/);
+  // acct-masked has the same name, so both accounts now read apart by their last 4.
+  assert.equal(res.account.name, 'Reserve savings (1234)');
+  assert.equal(scenarioAccount(res, id).name, res.account.name);
   const d = D.accountDetail(ctx(s, id));
-  assert.match(d.account.label, /ending 1234/);
+  assert.equal(d.account.label, 'Reserve savings (1234)');
+  assert.equal(d.account.mask, '1234', 'the dialog still has the last 4 as its own field');
   assert.equal(d.account.maskEditable, false, 'once set, last 4 is not offered again');
   assert.equal(await status(() => A.accountMask(ctx(s, id, { mask: '9999' }))), 409, 'a second write is refused');
   assert.equal(row(s.db, id).mask, '1234');
@@ -245,16 +247,16 @@ test('AC2: restating a final owner reverts the auto answers that rested on it', 
   assert.equal(row(s.db, b).owner, null);
 }));
 
-test('AC1: a connected account shows its last 4 only when the bridge is sure of it', () => withStore(async (s, m) => {
+test('AC1: a connected account label never carries its last 4, sure or not', () => withStore(async (s, m) => {
   const own = await connectedAccount(s, m, { sfKey: 'synthetic-unsure', mask: '5432', name: 'Checking' });
   const { accountNaming } = await src('src/accounts/naming.mjs');
   const { accountLabel } = await src('src/shared/account-label.mjs');
   const snap = (patch) => s.db.prepare('UPDATE simplefin_snapshots SET snapshot = ? WHERE sf_key = ?')
     .run(JSON.stringify({ inst: INST, name: 'Checking', mask: '5432', ...patch }), 'synthetic-unsure');
   snap({ maskSure: false });
-  assert.doesNotMatch(accountLabel(accountNaming(s.db).byId.get(own)), /ending/);
+  assert.doesNotMatch(accountLabel(accountNaming(s.db).byId.get(own)), /ending|5432/);
   snap({ maskSure: true });
-  assert.match(accountLabel(accountNaming(s.db).byId.get(own)), /ending 5432$/);
+  assert.doesNotMatch(accountLabel(accountNaming(s.db).byId.get(own)), /ending|5432/);
 }));
 
 test('AC2: undo restores an answered owner, including one that was final', () => withStore(async (s, { A, C }) => {
@@ -515,16 +517,16 @@ test('AC3: a merged survivor is still an imported account, so merging it with an
   assert.deepEqual(snapshot(s.db), before);
 }));
 
-test('AC1: a goal tracking a connected account does not show a mask the bridge is unsure of', () => withStore(async (s, m) => {
+test('AC1: a goal tracking a connected account shows its name, not its mask', () => withStore(async (s, m) => {
   const own = await connectedAccount(s, m, { sfKey: 'synthetic-goal', mask: '1234', name: 'Checking' });
   putGoal(s.db, own);
   const snap = (patch) => s.db.prepare('UPDATE simplefin_snapshots SET snapshot = ? WHERE sf_key = ?')
     .run(JSON.stringify({ inst: INST, name: 'Checking', mask: '1234', ...patch }), 'synthetic-goal');
   const trackLabel = async () => (await m.A.accountRename(ctx(s, own, { displayName: null }))).scenario.goals.find((g) => g.id === 'synthetic-goal').trackLabel;
   snap({ maskSure: false });
-  assert.doesNotMatch(await trackLabel(), /ending/);
+  assert.doesNotMatch(await trackLabel(), /ending|1234/);
   snap({ maskSure: true });
-  assert.match(await trackLabel(), /ending 1234$/);
+  assert.doesNotMatch(await trackLabel(), /ending|1234/);
 }));
 
 test('AC1: the last 4 shown is the stored one, not a later snapshot mask the account never took', () => withStore(async (s, m) => {
@@ -554,7 +556,8 @@ test('AC3: a manual merge fills a survivor with no institution or last 4 from th
   assert.equal(after.mask, '1234');
   assert.equal(after.name, before.name, 'nothing else on the survivor changed');
   assert.equal(after.kind, before.kind);
-  assert.match(m.D.accountDetail(ctx(s, pair.file)).account.label, /ending 1234$/);
+  assert.doesNotMatch(m.D.accountDetail(ctx(s, pair.file)).account.label, /ending|1234/);
+  assert.equal(m.D.accountDetail(ctx(s, pair.file)).account.mask, '1234');
 }));
 
 test('AC3: a detected merge carries the institution and last 4 over the same way', () => withStore(async (s, m) => {
@@ -563,7 +566,7 @@ test('AC3: a detected merge carries the institution and last 4 over the same way
   const after = row(s.db, pair.file);
   assert.equal(after.inst, INST);
   assert.equal(after.mask, '1234');
-  assert.match(m.D.accountDetail(ctx(s, pair.file)).account.label, /ending 1234$/);
+  assert.doesNotMatch(m.D.accountDetail(ctx(s, pair.file)).account.label, /ending|1234/);
 }));
 
 test('AC3: an unreliable last 4 is not carried, but the institution still is', async () => {

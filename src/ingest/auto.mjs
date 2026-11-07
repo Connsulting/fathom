@@ -12,7 +12,7 @@
 // declined (undid an auto answer) are never answered again.
 
 import { parseJson } from '../store/db.mjs';
-import { accountLabel } from '../shared/account-label.mjs';
+import { accountNaming } from '../accounts/naming.mjs';
 import {
   pendingItems, getItem, recordAutoAnswer, autoInfo, normalizeName, ConfirmError, KIND_OPTIONS,
 } from './confirm.mjs';
@@ -73,9 +73,9 @@ function evidence(db, text, basis, refs) {
   return { text, basis: ids, ancestors, refs };
 }
 
-const accountOf = (db, id) => db.prepare('SELECT id, inst, mask, name, kind, identity FROM accounts WHERE id = ?').get(id) ?? null;
+const accountOf = (db, id) => db.prepare('SELECT id, inst, mask, name, kind, identity, display_name FROM accounts WHERE id = ?').get(id) ?? null;
 const holderOf = (db, id) => db.prepare('SELECT holder FROM account_holders WHERE account_id = ?').get(id)?.holder ?? null;
-const describe = (a) => accountLabel(a);
+const describe = (db, a) => accountNaming(db).label(a);
 const bridged = (a) => String(a?.identity ?? '').startsWith('simplefin:');
 
 const OWNER_TEXT = { owner: 'yours', spouse: "your spouse's", joint: 'joint', business: 'a business account' };
@@ -122,7 +122,7 @@ function crossFormatDuplicate(db, item) {
   if (!collision && (fileRowsOn(db, a.file_id, a.account_id, a.date, cents) !== 1 || fileRowsOn(db, b.file_id, b.account_id, b.date, cents) !== 1)) return null;
   const account = accountOf(db, a.account_id);
   const [fa, fb] = [fileName(db, a.file_id), fileName(db, b.file_id)];
-  const text = `${account ? describe(account) : 'This account'} shows ${(cents / 100).toFixed(2)} on ${a.date} once in ${fa} ("${a.description ?? ''}") `
+  const text = `${account ? describe(db, account) : 'This account'} shows ${(cents / 100).toFixed(2)} on ${a.date} once in ${fa} ("${a.description ?? ''}") `
     + `and once in ${fb} ("${b.description ?? ''}"): the same posting in two formats.`;
   return {
     option: 'same', rule: 'cross_format_duplicate',
@@ -170,7 +170,7 @@ function holderMatch(db, item) {
   const said = (r) => {
     const other = accountOf(db, r.subject);
     const who = autoInfo(db, r.id) ? 'Fathom answered that' : 'You said';
-    return `${who} ${other ? describe(other) : 'another account'} (also held by "${holder}") is ${labelOf('account_owner', r.answer)}.`;
+    return `${who} ${other ? describe(db, other) : 'another account'} (also held by "${holder}") is ${labelOf('account_owner', r.answer)}.`;
   };
   const text = [`The source names the holder "${holder}".`,
     ...fromFact.map((m) => `Your household names list ${m.name} as ${m.option === 'owner' ? 'you' : 'your spouse'}.`),
@@ -203,7 +203,7 @@ function sharedMask(db, item) {
   const inst = normalizeName(account.inst);
   const holder = normalizeName(holderOf(db, account.id));
   const different = differentPairs(db);
-  const siblings = db.prepare('SELECT id, inst, mask, name, kind, identity FROM accounts WHERE mask = ? AND id != ? ORDER BY id').all(account.mask, account.id)
+  const siblings = db.prepare('SELECT id, inst, mask, name, kind, identity, display_name FROM accounts WHERE mask = ? AND id != ? ORDER BY id').all(account.mask, account.id)
     .filter((s) => !bridged(s) && (!inst || !normalizeName(s.inst) || normalizeName(s.inst) === inst) && !different.has(`${account.id}|${s.id}`))
     .filter((s) => { const h = normalizeName(holderOf(db, s.id)); return !holder || !h || h === holder; });
   const supports = [];
@@ -220,7 +220,7 @@ function sharedMask(db, item) {
   if (options.size !== 1) return null;
   const [option] = options;
   if (!validOption(item, option)) return null;
-  const text = supports.map((s) => `${describe({ ...s.account, mask: null })} also ends in ${account.mask}, and ${s.how} ${labelOf(item.kind, s.option)}.`).join(' ');
+  const text = supports.map((s) => `${describe(db, s.account)} also ends in ${account.mask}, and ${s.how} ${labelOf(item.kind, s.option)}.`).join(' ');
   return {
     option, rule: 'shared_mask',
     evidence: evidence(db, text, supports.filter((s) => s.itemId != null).map((s) => s.itemId), { accountId: account.id, mask: account.mask, accounts: supports.map((s) => s.account.id) }),

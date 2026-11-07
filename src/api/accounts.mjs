@@ -25,7 +25,7 @@ export function accountRename(ctx) {
   });
   const scenario = scenarioOf(ctx);
   const account = scenario.accounts.find((a) => a.id === id) || null;
-  return { scenario, account, label: accountLabel({ ...row, display_name: res.value }) };
+  return { scenario, account, label: accountNaming(ctx.db).label({ ...row, display_name: res.value }) };
 }
 
 // POST /api/accounts/:id/mask  {mask: "NNNN"} -> {scenario, account}

@@ -161,10 +161,9 @@ function conversationSource() {
 
 function accountSource() {
   return H.arr(H.api.s.accounts).map((a) => {
-    const digits = String(a.mask ?? a.last4 ?? '').replace(/\D/g, '');
     return {
       key: `acc:${a.id}`, title: a.imported === false ? plain(a.name) : String(a.name ?? ''), group: 'Accounts',
-      sub: digits ? `ending ${digits.slice(-4)}` : 'Account', hint: '',
+      sub: 'Account', hint: '',
       run: (ret) => openAccount(a.id, ret)
     };
   });

@@ -5,7 +5,7 @@ import { queueCategoryChecks } from '../categories/store.mjs';
 
 import { getSetting, parseJson } from '../store/db.mjs';
 import { escapeUserText } from '../shared/tokens.mjs';
-import { accountLabel } from '../shared/account-label.mjs';
+import { accountNaming } from '../accounts/naming.mjs';
 import { howToFor, listHowTo } from './howto.mjs';
 import { monthEnd } from './format.mjs';
 import { pendingItems, finalReason } from './confirm.mjs';
@@ -265,7 +265,7 @@ export function ingestState(db, { clock } = {}) {
     // fresh source needs its own.
     const source = sources.find((s) => s.id === row.source_id);
     if (f && f.state === 'stale' && DOMAIN_OF[kind] && source && source.state !== 'stale') {
-      accountNotes.push({ domain: DOMAIN_OF[kind], text: `${accountLabel(row) || row.id} data is ${f.ageDays} days old. Export a fresh copy.` });
+      accountNotes.push({ domain: DOMAIN_OF[kind], text: `${accountNaming(db).label(row) || row.id} data is ${f.ageDays} days old. Export a fresh copy.` });
     }
   }
 
