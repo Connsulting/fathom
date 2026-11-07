@@ -29,7 +29,7 @@ export function html(r, surface) {
     let control;
     if (f.type === 'boolean') {
       control = `<div class="h-answer-toggle">${[[true, 'Yes'], [false, 'No']].map(([v, label]) => `<label><input type="radio" name="${esc(id)}" value="${v}" ${attrs}${value === v ? ' checked' : ''}><span>${label}</span></label>`).join('')}</div>`;
-    } else if (f.type === 'choice' || f.type === 'account') {
+    } else if (f.type === 'choice') {
       control = `<select id="${esc(id)}" ${attrs}><option value="">Choose an answer</option>${(f.choices || []).map(c => `<option value="${esc(c.value)}"${value === c.value ? ' selected' : ''}>${esc(c.label)}</option>`).join('')}</select>`;
     } else {
       const limits = f.type === 'number' ? ` min="${f.exclusiveMin != null ? f.exclusiveMin + 0.01 : f.min ?? 0}"${f.max != null ? ` max="${f.max}"` : ''} step="${f.integer ? '1' : '0.01'}" inputmode="${f.integer ? 'numeric' : 'decimal'}"` : '';
@@ -37,7 +37,7 @@ export function html(r, surface) {
     }
     return `<fieldset class="h-answer-field" data-qr-wrap="${esc(f.id)}"${on ? '' : ' hidden'}><legend>${esc(f.label)}</legend>${f.type === 'boolean' ? '' : `<label class="sr-only" for="${esc(id)}">${esc(f.label)}${f.unit ? ` (${esc(f.unit)})` : ''}</label>`}${control}</fieldset>`;
   }).join('');
-  return `<form class="h-answers" data-rec-answers="${esc(r.id)}" aria-label="Answer questions for your plan" aria-busy="${pending}">${fields}<p class="h-answer-note">Your answers update the plan automatically.</p><div class="h-answer-acts"><button type="submit" class="h-btn pri"${pending ? ' disabled' : ''}>${pending ? 'Saving...' : 'Save'}</button><button type="button" class="h-btn" data-act="snooze" data-rec="${esc(r.id)}" data-arg="${esc(H.snoozeLabel())}"${pending ? ' disabled' : ''}>Not now</button><button type="button" class="h-btn" data-ask-next="${esc(r.id)}">Ask</button></div></form>`;
+  return `<form class="h-answers" data-rec-answers="${esc(r.id)}" aria-label="Answer questions for your plan" aria-busy="${pending}">${fields}<p class="h-answer-note">Your answers update the plan automatically.</p><div class="h-answer-acts"><button type="submit" class="h-btn pri"${pending ? ' disabled' : ''}>${pending ? 'Saving...' : r.question.primary ? 'Save' : 'Save answers'}</button>${r.question.primary ? `<button type="button" class="h-btn" data-act="snooze" data-rec="${esc(r.id)}" data-arg="${esc(H.snoozeLabel())}"${pending ? ' disabled' : ''}>Not now</button><button type="button" class="h-btn" data-ask-next="${esc(r.id)}">Ask</button>` : ''}</div></form>`;
 }
 
 export function onChange(e) {

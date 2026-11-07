@@ -200,7 +200,7 @@ function snoozeLabel() { return fmt(addDays(clock(), 14)); }
 const ACT_KEY = { start: 'D', snooze: 'L', complete: 'E', dismiss: 'Shift+X' };
 
 function actionsFor(r, compact) {
-  if (r.question) return [];
+  if (r.question?.primary) return [];
   const a = (act, label, cls = '', arg) => {
     const hint = ACT_KEY[act] ? ` title="${esc(`${label} (${ACT_KEY[act]})`)}"` : '';
     return btn(label, `data-act="${act}" data-rec="${esc(r.id)}"${arg != null ? ` data-arg="${esc(arg)}"` : ''}${hint}`, cls);
@@ -580,9 +580,9 @@ function nextHtml(m, subject) {
     ${why ? `<p class="h-next-why">${why}</p>` : ''}
     <p class="h-serves-l">${serves}</p>
     <p class="h-next-win">${windowText(r)}</p>
-    ${r.question ? recAnswers.html(r, 'home') : `<div class="h-next-acts"><button type="button" class="h-btn pri" data-act="complete" data-rec="${id}">Done</button><button type="button" class="h-btn" data-act="snooze" data-rec="${id}" data-arg="${esc(snoozeLabel())}">Later</button><button type="button" class="h-btn" data-ask-next="${id}">Ask</button></div>`}
+    ${recAnswers.html(r, 'home')}${r.question?.primary ? '' : `<div class="h-next-acts"><button type="button" class="h-btn pri" data-act="complete" data-rec="${id}">Done</button><button type="button" class="h-btn" data-act="snooze" data-rec="${id}" data-arg="${esc(snoozeLabel())}">Later</button><button type="button" class="h-btn" data-ask-next="${id}">Ask</button></div>`}
   </article></div>
-  ${r.question ? '' : '<p class="h-next-hint"><span>Swipe left for later, right for done</span></p>'}`;
+  ${r.question?.primary ? '' : '<p class="h-next-hint"><span>Swipe left for later, right for done</span></p>'}`;
 }
 
 function afterHtml(m) {
@@ -734,7 +734,7 @@ function pHome() {
   const rest = `${goalsH}${cards}${hkHtml(m.housekeeping)}`;
   const inner = isPhone()
     ? `${ownerFilterHtml(m)}${head}${nextHtml(m, subject)}${afterHtml(m)}${health}${rest}`
-    : `<header class="h-home-top">${head}${ownerFilterHtml(m)}</header>${nextHtml(m, subject)}${dueHtml(m)}${health}${rest}`;
+    : `<header class="h-home-top">${head}${ownerFilterHtml(m)}</header>${m.nextThing?.question?.primary ? nextHtml(m, subject) : ''}${dueHtml(m)}${health}${rest}`;
   return shell(`<section class="h-home">${inner}</section>`);
 }
 
@@ -984,7 +984,7 @@ function dlgHtml(id) {
         ${cross ? section('Touches', cross) : ''}
       </div>
       <div class="h-dside">
-        ${r.question ? '' : section('Steps', check)}
+        ${r.question?.primary ? '' : section('Steps', check)}
         ${section('Advisor', adv)}
         ${wg}
       </div>

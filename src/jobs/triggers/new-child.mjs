@@ -20,7 +20,7 @@ export function window(ctx) {
 }
 
 export function evaluate(ctx) {
-  return { grounding: ['cash.personal', 'cash.monthlyOut'], ...(!factDate(ctx, 'household.expectedDate') ? { confirm: ['household.expectedDate'] } : {}) };
+  return { grounding: ['cash.personal', 'cash.monthlyOut'], ...(!factDate(ctx, 'household.expectedDate') ? { questions: ['household.expectedDate'] } : {}) };
 }
 
 export function build(ctx, hit) {

@@ -196,9 +196,11 @@ export function loadRecs(db, clock) {
   const accounts = db.prepare('SELECT * FROM accounts').all();
   const recs = db.prepare('SELECT * FROM recs ORDER BY sort, id').all().map(r => recFromRow(r, clock));
   for (const r of recs) if (r.question) {
-    r.question = questionFor(r.question.keys, { accounts, facts, names: facts['household.names'] });
-    r.title = dataText(r.question.title);
-    r.summary = r.question.summary;
+    r.question = { ...questionFor(r.question.keys, { accounts, facts, names: facts['household.names'], people: r.question.people }), primary: r.question.primary };
+    if (r.question.primary) {
+      r.title = dataText(r.question.title);
+      r.summary = r.question.summary;
+    }
   }
   return withAdvisor(db, recs);
 }

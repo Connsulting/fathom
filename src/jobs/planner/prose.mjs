@@ -117,7 +117,7 @@ const storedFields = def => ({
 
 export async function writeProse(hit, ctx, { engine = null, stored = null } = {}) {
   const hash = groundingHash(hit, ctx);
-  if (hit.rec.question) {
+  if (hit.rec.question?.primary) {
     const draft = hit.trigger.template(ctx, hit.vars);
     const fields = { ...draft, summary: hit.rec.question.summary };
     const kept = stored?.hash === hash && stored.src === 'template' && stable(pickFields(stored.def)) === stable(fields);

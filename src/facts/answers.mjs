@@ -1,6 +1,6 @@
 import { tx, parseJson } from '../store/db.mjs';
 import { upsertFact } from '../store/facts.mjs';
-import { answerShape } from '../jobs/triggers/common.mjs';
+import { answerShape, acceptsAnswerAccount } from '../jobs/triggers/common.mjs';
 import { isoDate } from '../ingest/format.mjs';
 
 export class FactAnswerError extends Error {}
@@ -42,8 +42,8 @@ export async function answerFacts(db, answers, { now = new Date().toISOString(),
       if (!object(value) || !Object.keys(value).length) fail();
       for (const [id, entry] of Object.entries(value)) {
         if (shape.scope === 'account') {
-          const account = db.prepare('SELECT kind FROM accounts WHERE id = ?').get(id);
-          if (!account || account.kind !== shape.accountKind) fail();
+          const account = db.prepare('SELECT kind, name FROM accounts WHERE id = ?').get(id);
+          if (!account || !acceptsAnswerAccount(shape, account)) fail();
         } else if (!['owner', 'spouse'].includes(id)) fail();
         validate(entry, shape);
       }
@@ -60,7 +60,7 @@ export async function answerFacts(db, answers, { now = new Date().toISOString(),
     for (const w of writes) upsertFact(db, { ...w, src, asOf: date, confirmed: true, now, provenance: { parser: 'answer', locator: { note: label, ...(recId ? { recId } : {}) } } });
     if (recId) {
       const row = db.prepare('SELECT status, def FROM recs WHERE id = ?').get(recId);
-      if (row && parseJson(row.def, {}).question) {
+      if (row && parseJson(row.def, {}).question?.primary) {
         db.prepare("UPDATE recs SET status = 'proposed', waiting_on = NULL, wake = NULL, updated_at = ? WHERE id = ?").run(now, recId);
         db.prepare("INSERT INTO rec_events (rec_id, ts, action, arg, from_status, to_status, actor) VALUES (?, ?, 'answer', NULL, ?, 'proposed', 'ui')").run(recId, now, row.status);
       }

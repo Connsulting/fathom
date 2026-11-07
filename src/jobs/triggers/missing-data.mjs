@@ -144,11 +144,13 @@ export function window(ctx) {
 }
 
 export function evaluate(ctx) {
-  const list = items(ctx);
-  if (!list.length) return null;
   const factFor = { va529_answers_missing: 'accounts.va529', retirement_other_deferrals_missing: 'retirement.otherPlanDeferrals', deferral_split_unknown: 'retirement.otherPlanDeferrals', va_itemized_missing: 'tax.vaItemizedEstimate', filing_status_assumed: 'household.filingStatus' };
-  const confirm = [...new Set(list.map(i => factFor[i.code] || (Object.hasOwn(ANSWER_SHAPES, i.code) ? i.code : null)).filter(Boolean))];
-  return { grounding: [], items: list.map(i => ({ code: i.code, text: i.text, task: i.task })), ...(confirm.length ? { confirm } : {}) };
+  const list = items(ctx).map(i => ({ ...i, answerKey: factFor[i.code] || (Object.hasOwn(ANSWER_SHAPES, i.code) ? i.code : null) }))
+    .filter(i => !i.answerKey || !ctx.questionKeys?.has(i.answerKey));
+  if (!list.length) return null;
+  const questions = [...new Set(list.map(i => i.answerKey).filter(Boolean))];
+  const answers = questions.length ? list.every(i => i.answerKey) ? { confirm: questions } : { questions } : {};
+  return { grounding: [], items: list, ...answers };
 }
 
 export function build(ctx, hit) {
@@ -158,7 +160,7 @@ export function build(ctx, hit) {
     value: [{ cls: 'risk', text: 'Keeps every figure on your plan current' }],
     mine: [],
     cross: [],
-    tasks: padTasks(hit.items.map(i => i.task)),
+    tasks: padTasks(hit.items.filter(i => !i.answerKey).map(i => i.task)),
   };
 }
 

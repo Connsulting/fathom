@@ -641,7 +641,7 @@ const ACTIONS = new Set(['start', 'complete', 'dismiss', 'snooze', 'reopen']);
 function act(recId, action, arg) {
   const r = rawRec(recId);
   if (!r || r.status === 'hidden') return done();
-  if (r.question && (action === 'complete' || action === 'task')) return done();
+  if (r.question?.primary && (action === 'complete' || action === 'task')) return done();
   const body = { action };
   if (action === 'task') {
     const i = Number(arg);
