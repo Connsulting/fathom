@@ -173,6 +173,18 @@ test('a date in the answer that matches a same-turn row date is a literal with t
   assert.equal(reply.provenance.grounding.retried, false);
 });
 
+// Review r3 F6: yearless evidence ("April 15" in pack prose) sources a yearless prose date only; a
+// prose date that states a year needs evidence with that year.
+test('a stated year needs evidence with that year; yearless evidence sources only a yearless date', () => {
+  const data = ['Quarterly estimates are due April 15 and June 15.'];
+  const g = text => groundAnswer(text, { scenario: { fig: {} }, toolResults: [], data, dataLabels: ['knowledge pack entries'] });
+  const bare = g('Your installment is due April 15.');
+  assert.equal(bare.literals.find(l => l.text === 'April 15')?.source, 'knowledge pack entries', JSON.stringify(bare.literals));
+  const yeared = g('Your installment is due April 15, 2028.');
+  assert.deepEqual(yeared.violations.map(v => v.text), ['April 15, 2028'], JSON.stringify(yeared));
+  assert.ok(!yeared.literals.some(l => l.text === 'April 15, 2028'));
+});
+
 test('unmatched dates never trigger a regeneration; a date in the household data is sourced to it', async t => {
   const s = await cardStore(t);
   const { reply, calls } = await ask(s, [[{ toolCalls: [QUERY] }, { text: `On October 9 and October 11 you paid ${ROOF_TEXT}.` }]]);
