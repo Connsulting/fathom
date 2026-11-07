@@ -77,7 +77,7 @@ async function openConfirm(page) {
   await expect(page.locator('.h-deck')).toBeVisible();
 }
 
-const decidedSection = (page) => page.locator('section.h-decided');
+const decidedSection = (page) => page.locator('section.h-cf-decided');
 
 // Decided for you shows a handful of rows; open the rest before looking for a particular one.
 async function showAllDecided(page) {
