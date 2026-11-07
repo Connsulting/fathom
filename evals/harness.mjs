@@ -142,7 +142,9 @@ export async function runCases({ cases, live = false, maxUsd = 100, outDir, scri
         const response = key ? await ask(ctx) : await threadCreate(ctx);
         key ??= response.thread.key;
         const delivered = plain(response.message?.text);
-        const calls = attempts.flatMap(a => a.toolResults);
+        // A confirmed stored proposal runs without the model; its recorded execution is graded too.
+        const confirmed = response.message?.provenance?.confirmedProposal ? response.message.provenance.tools ?? [] : [];
+        const calls = [...attempts.flatMap(a => a.toolResults), ...confirmed];
         const contextNumbers = evidenceNumbers([{ name: 'context', args: {}, result: { figures: Object.values(figures) } }]);
         const gradedAttempts = attempts.map((a, i) => ({ text: a.text, error: a.error ?? null,
           figures: gradeFigures(a.text, attempts.slice(0, i + 1).flatMap(r => r.toolResults), { figures, contextNumbers }),

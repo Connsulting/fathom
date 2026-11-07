@@ -2,6 +2,7 @@ import { writePreference } from '../actions/preferences.mjs';
 import { randomUUID } from 'node:crypto';
 import { requireActor, undoAction, ensureActionConversation, receiptsFor, receiptMessages } from '../actions/receipts.mjs';
 import { writeRec } from '../store/recs.mjs';
+import { latestProposal, claimProposal, markProposal, executeProposal, isExplicitYes } from '../actions/proposals.mjs';
 import { ToolError } from '../tools/errors.mjs';
 import { queueAccountPairs } from '../ingest/account-merge.mjs';
 // API handlers. Each takes { household, db, config, engine, packs, answerer, params, body } and
@@ -18,6 +19,12 @@ import { queueAccountPairs } from '../ingest/account-merge.mjs';
 // after the reply's transaction commits and before the response is built. Trash older than 30 days
 // is purged when the thread list, a thread or the scenario is read. Both asking routes stream as
 // Server-Sent Events on request (src/api/router.mjs); the stored turn and the final body are the same.
+// Stored proposals (src/actions/proposals.mjs): when an Ask thread's latest message carries an
+// unresolved provenance.pendingAction, a typed explicit yes (POST /api/ask) or POST
+// /api/threads/:id/proposals/:messageId decides it without a model call. The claim is one
+// synchronous transaction before any await, so a double click or a second yes runs it once. A stale
+// proposal (not the latest message, changed data, no longer allowed, or refused when it runs)
+// writes nothing and goes to the model with a note that leads the reply.
 // Both asking routes take an optional `context: [{ kind, id }]` (the references the owner pointed
 // at, src/api/context-refs.mjs), validated before any write or stream start (400 when malformed)
 // and passed to the answerer as `refs`.
@@ -459,6 +466,7 @@ function streamStart(ctx, key) {
 }
 const streaming = ctx => ({
   ...(typeof ctx.onEvent === 'function' ? { onEvent: ctx.onEvent } : {}),
+  scopes: Array.isArray(ctx.scopes) ? ctx.scopes : undefined,
   actorId: ctx.identity?.id || (getSetting(ctx.db, 'mode', null) === 'demo' ? 'demo' : null),
   ownerText: typeof ctx.body.text === 'string' && ctx.body.questionId == null ? ctx.body.text.trim() : null,
   turnId: randomUUID(),
@@ -495,6 +503,12 @@ export async function ask(ctx) {
   if (thread) openThreadRow(db, key);
   else packRow(db, key.slice(5));
 
+  // A typed explicit yes to the thread's latest, unresolved proposal runs it (no await before the claim).
+  if (thread && !hasQ && isExplicitYes(clean)) {
+    const proposal = latestProposal(db, key);
+    if (proposal) return decideProposal(ctx, key, proposal.id, 'confirm', clean);
+  }
+
   const scenario = scenarioOf(ctx);
   let mine;
   if (hasQ) {
@@ -517,6 +531,68 @@ export async function ask(ctx) {
   await maybeName(ctx, key);
   const fresh = scenarioOf(ctx);
   return { scenario: fresh, message: replyIn(fresh, key, id) };
+}
+
+// ---------------------------------------------------------------- stored proposals
+
+const CONFIRMED_TEXT = 'Done. The change is saved. You can undo it below.';
+const DECLINED_TEXT = 'Okay, nothing was changed.';
+const STALE_NOTE = 'That proposal is out of date, so nothing was saved.';
+
+// Decides proposal row `id` in Ask thread `key` ('confirm' or 'decline') and stores the owner's
+// `ownerText` with the reply. The claim runs synchronously before any await.
+async function decideProposal(ctx, key, id, decision, ownerText) {
+  const { db } = ctx;
+  const claim = claimProposal(db, { key, id, decision, scopes: Array.isArray(ctx.scopes) ? ctx.scopes : undefined, at: stamp(ctx) });
+  if (claim.status === 'missing') throw new HttpError(404, 'no such proposal');
+  if (claim.status === 'resolved') throw new HttpError(409, 'this proposal was already answered');
+  const turn = { ...ctx, body: { text: ownerText } };
+  streamStart(ctx, key);
+  let reply = null;
+  let note = claim.status === 'stale' ? STALE_NOTE : null;
+  if (claim.status === 'declined') reply = { paragraphs: [DECLINED_TEXT], refs: [] };
+  else if (claim.status === 'confirmed') {
+    const run = streaming(turn);
+    const { pending } = claim;
+    try {
+      const result = await executeProposal(pending, { db, now: stamp(ctx), dataDir: ctx.household?.root, actorId: run.actorId,
+        ownerText, turnId: run.turnId, replan: run.replan, queuePlan: run.queuePlan, conversationKey: key,
+        recId: db.prepare('SELECT rec_id FROM conversations WHERE key = ?').get(key)?.rec_id ?? null, scopes: run.scopes, evidenceMessageId: id });
+      reply = { paragraphs: [CONFIRMED_TEXT], refs: [], provenance: { actionTurn: run.turnId, confirmedProposal: 'm' + id,
+        tools: [{ name: pending.tool, args: { operation: pending.operation, ...pending.args }, result: JSON.parse(JSON.stringify(result ?? null)) }] } };
+    } catch (e) {
+      markProposal(db, id, 'stale', stamp(ctx));
+      if (e?.name !== 'ToolError' && e?.name !== 'FactAnswerError') throw e;
+      note = `That change was not saved: ${e.message}`;
+    }
+  }
+  if (note) {
+    reply = await need(ctx, 'answerer').answer({ db, key, text: ownerText, clock: ctx.config && ctx.config.clock, ...streaming(turn), staleNote: note });
+    if (!reply) throw new HttpError(404, 'no answer');
+  }
+  const replyId = storeTurn(turn, key, escapeUserText(ownerText), reply, () => {
+    openThreadRow(db, key);
+    db.prepare('UPDATE conversations SET archived_at = NULL WHERE key = ?').run(key);
+  });
+  await maybeName(ctx, key);
+  const fresh = scenarioOf(ctx);
+  return { scenario: fresh, message: replyIn(fresh, key, replyId) };
+}
+
+// POST /api/threads/:id/proposals/:messageId { decision: 'confirm' | 'decline' }: Confirm stores
+// "Confirmed" and runs the proposal as a typed yes would; Not now stores "Not now" and a fixed reply
+// with no model call. 400 bad decision; 404 unknown thread or message, or no proposal on it; 409
+// trashed thread or already decided.
+export async function proposalDecide(ctx) {
+  const { db } = ctx;
+  const decision = ctx.body?.decision;
+  if (decision !== 'confirm' && decision !== 'decline') throw new HttpError(400, 'decision must be confirm or decline');
+  const thread = threadOrThrow(db, ctx.params.id);
+  openThreadRow(db, thread.key);
+  const m = /^m(\d{1,15})$/.exec(String(ctx.params.messageId ?? ''));
+  if (!m) throw new HttpError(404, 'no such proposal');
+  const out = await decideProposal(ctx, thread.key, Number(m[1]), decision, decision === 'confirm' ? 'Confirmed' : 'Not now');
+  return { scenario: out.scenario, thread: threadOrThrow(db, thread.id), message: out.message };
 }
 
 // ---------------------------------------------------------------- Ask threads

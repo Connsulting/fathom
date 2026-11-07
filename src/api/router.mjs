@@ -93,6 +93,7 @@ const TABLE = [
   { method: 'POST', path: '/api/threads/:id/trash', handler: h.threadTrash },
   { method: 'POST', path: '/api/threads/:id/restore', handler: h.threadRestore },
   { method: 'POST', path: '/api/threads/:id/delete', handler: h.threadDelete },
+  { method: 'POST', path: '/api/threads/:id/proposals/:messageId', handler: h.proposalDecide },
   { method: 'GET', path: '/api/accounts/:id', handler: ad.accountDetail },
   { method: 'GET', path: '/api/accounts/:id/transactions', handler: ad.accountTransactions },
   { method: 'GET', path: '/api/pnl', handler: pl.getPnl },
