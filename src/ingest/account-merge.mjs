@@ -1,3 +1,5 @@
+import { accountNaming } from '../accounts/naming.mjs';
+import { accountLabel } from '../shared/account-label.mjs';
 import { createHash } from 'node:crypto';
 import { parseJson, getSetting } from '../store/db.mjs';
 import { ask, archive, normalizeName, ConfirmError } from './confirm.mjs';
@@ -47,15 +49,20 @@ export function queueAccountPairs(db, { now = new Date().toISOString() } = {}) {
     if (parseJson(item.context,{})?.repair && !current.has(item.subject))
       db.prepare("UPDATE confirm_items SET status='answered',answer='superseded',answered_at=? WHERE id=?").run(now,item.id);
   }
-  const priorOf = db.prepare("SELECT id,answer FROM confirm_items WHERE kind='account_match' AND subject=?");
+  const naming = accountNaming(db);
+  const priorOf = db.prepare("SELECT id,status,answer FROM confirm_items WHERE kind='account_match' AND subject=?");
   for (const pair of pairs) {
     const subject = subjectOf(pair.candidateId, pair.ownId);
     const prior = priorOf.get(subject);
-    if (prior && prior.answer !== 'superseded') continue;
-    const keep = db.prepare('SELECT name FROM accounts WHERE id=?').get(pair.candidateId);
-    const own = db.prepare('SELECT name FROM accounts WHERE id=?').get(pair.ownId);
-    const question = `Same account? ${own.name} from SimpleFIN and ${keep.name} from a file.`;
+    if (prior?.status === 'answered' && prior.answer !== 'superseded') continue;
+    const keep = naming.byId.get(pair.candidateId);
+    const own = naming.byId.get(pair.ownId);
+    const question = `Same account? ${accountLabel(own)} from SimpleFIN and ${accountLabel(keep)} from a file.`;
     const context = { ...pair, repair:true };
+    if (prior?.status === 'pending') {
+      db.prepare('UPDATE confirm_items SET question=? WHERE id=? AND question IS NOT ?').run(question,prior.id,question);
+      continue;
+    }
     if (prior) {
       db.prepare("UPDATE confirm_items SET status='pending',answer=NULL,answered_at=NULL,question=?,context=?,created_at=? WHERE id=?")
         .run(question,JSON.stringify(context),now,prior.id);
