@@ -2,7 +2,7 @@
 // through here, so a known kind does not keep a legal name on one screen and drop it on another.
 
 import { parseJson } from '../store/db.mjs';
-import { accountLabel, sourceLabel, trendLabel } from '../shared/account-label.mjs';
+import { accountLabel, duplicateMasks, sourceLabel, trendLabel } from '../shared/account-label.mjs';
 import { lastFour } from '../ingest/account-match.mjs';
 
 export function accountNaming(db) {
@@ -21,7 +21,20 @@ export function accountNaming(db) {
   for (const a of db.prepare('SELECT * FROM accounts').all()) {
     byId.set(a.id, { ...a, householdNames, holder: holders.get(a.id) || null, ...(unsure.has(a.id) ? { maskSure: false } : {}) });
   }
-  return { householdNames, holders, byId };
+  // An account shows its last 4 only when another account of the household has the same name.
+  for (const [id, labelMask] of duplicateMasks([...byId.values()])) byId.get(id).labelMask = labelMask;
+  // What a row from another query needs to be named like the rest of the household.
+  const hint = (id) => {
+    const a = byId.get(id);
+    return a ? { ...(a.maskSure === false ? { maskSure: false } : {}), ...(a.labelMask ? { labelMask: a.labelMask } : {}) } : {};
+  };
+  return { householdNames, holders, byId, hint, label: (row) => accountLabel({ ...row, ...hint(row?.id) }) };
+}
+
+// Account rows from any query, carrying the hints that keep their label the household's label.
+export function withLabelHints(db, rows) {
+  const naming = accountNaming(db);
+  return rows.map((a) => ({ ...a, ...naming.hint(a.id) }));
 }
 
 const seriesKeyOf = (id) => {

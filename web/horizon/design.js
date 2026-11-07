@@ -1577,7 +1577,7 @@ function pOnboarding(step) {
       ${ingest.addFiles('onboarding')}
       <div class="h-ob-conn"><div class="h-sub-h">Mirror your accounts</div><p class="h-mute sm">Read-only. ${esc(api.s.meta.product || 'Fathom')} sees balances and transactions so the brief stays current. It cannot move money, place trades or change anything.</p>
       ${simplefin.block()}
-      ${imported.length ? `<div class="h-sub-h">Already in Fathom, not mirrored</div><ul class="h-insts">${imported.map((a) => `<li><div><b>${lbl(a, a.name)}</b><span>${lbl(a, a.inst || '')}${a.mask ? `, ending ${esc(a.mask)}` : ''}</span></div></li>`).join('')}</ul>` : ''}</div>
+      ${imported.length ? `<div class="h-sub-h">Already in Fathom, not mirrored</div><ul class="h-insts">${imported.map((a) => `<li><div><b>${lbl(a, a.name)}</b><span>${lbl(a, a.inst || '')}</span></div></li>`).join('')}</ul>` : ''}</div>
       <div class="h-ob-nav">${back}${go}</div>`;
   } else if (s === 4) {
     body = heardHtml(back, next);
