@@ -129,10 +129,12 @@ export function createAuthStore(platform, { now = () => Date.now() } = {}) {
     if (!held) db.prepare('DELETE FROM users WHERE id = ?').run(userId);
     return !held;
   }
+  // status is 'active' for an active member and 'pending' for an invitee with an open invitation.
   function personOf(householdId, row) {
     const m = membershipRow(row.id, householdId);
-    const role = m?.status === 'active' ? m.role : pendingInvitationRow(householdId, row.id)?.role ?? null;
-    return { ...projectUser(row), role };
+    const active = m?.status === 'active';
+    const role = active ? m.role : pendingInvitationRow(householdId, row.id)?.role ?? null;
+    return { ...projectUser(row), role, status: active ? 'active' : 'pending' };
   }
   function consume(raw, userId) {
     const row = liveInvitationRow(raw);
@@ -236,14 +238,15 @@ export function createAuthStore(platform, { now = () => Date.now() } = {}) {
           UNION SELECT user_id FROM household_invitations WHERE household_id = ? AND consumed_at IS NULL AND revoked_at IS NULL)
         ORDER BY u.created_at, u.id`).all(householdId, householdId).map(row => personOf(householdId, row));
     },
-    // The person in this household (active member or pending invitee), or null.
+    // The person in this household (active member or pending invitee), or null. Only an active
+    // member's credentials are the household's to list or revoke; check status before touching them.
     person(householdId, userId) {
       const row = userRow(userId);
       if (!row) return null;
       const active = membershipRow(userId, householdId)?.status === 'active';
       return active || pendingInvitationRow(householdId, userId) ? personOf(householdId, row) : null;
     },
-    setRole(householdId, userId, role) {
+    setRole(householdId, userId, role, { actorId = null } = {}) {
       checkRole(role);
       return transaction(() => {
         const row = userRow(userId);
@@ -257,34 +260,38 @@ export function createAuthStore(platform, { now = () => Date.now() } = {}) {
           if (!pending) throw new HttpError(404, 'no such user');
           db.prepare('UPDATE household_invitations SET role = ? WHERE hash = ?').run(role, pending.hash);
         }
-        audit('membership.role', { householdId, targetUserId: userId });
+        audit('membership.role', { actorId, householdId, targetUserId: userId });
         return personOf(householdId, row);
       });
     },
-    // Removes the membership (or the pending invitation) and signs the user out, revokes the
-    // invitations they issued in this household, then deletes the account when nothing holds it.
+    // An active member: removes the membership, revokes their open invitation and the invitations
+    // they issued in this household, signs them out, then deletes the account when nothing holds it.
+    // A pending invitee: revokes the invitation only; a never-enrolled account the invitation
+    // created is then deleted when nothing holds it, an enrolled account is left untouched.
     // The caller deletes the user's MCP keys from the household's store. False when the user is not
     // in the household.
-    removeMember(householdId, userId) {
+    removeMember(householdId, userId, { actorId = null } = {}) {
       return transaction(() => {
         const row = userRow(userId);
         if (!row) return false;
         const m = membershipRow(userId, householdId);
+        const active = m?.status === 'active';
+        if (!active && !pendingInvitationRow(householdId, userId)) return false;
         const at = now();
-        if (m?.status === 'active') {
+        if (active) {
           guardLastAdmin(householdId, userId);
           db.prepare("UPDATE household_memberships SET status = 'removed', version = version + 1, updated_at = ? WHERE user_id = ? AND household_id = ?")
             .run(at, userId, householdId);
-        } else if (!pendingInvitationRow(householdId, userId)) {
-          return false;
         }
         db.prepare('UPDATE household_invitations SET revoked_at = ? WHERE household_id = ? AND user_id = ? AND consumed_at IS NULL AND revoked_at IS NULL')
           .run(at, householdId, userId);
-        db.prepare('UPDATE household_invitations SET revoked_at = ? WHERE household_id = ? AND inviter_user_id = ? AND consumed_at IS NULL AND revoked_at IS NULL')
-          .run(at, householdId, userId);
-        revokeUserSessions(userId);
-        audit('membership.remove', { householdId, targetUserId: userId });
-        deleteIfUnheld(userId);
+        if (active) {
+          db.prepare('UPDATE household_invitations SET revoked_at = ? WHERE household_id = ? AND inviter_user_id = ? AND consumed_at IS NULL AND revoked_at IS NULL')
+            .run(at, householdId, userId);
+          revokeUserSessions(userId);
+        }
+        audit('membership.remove', { actorId, householdId, targetUserId: userId });
+        if (active || row.enrolled_at === null) deleteIfUnheld(userId);
         return true;
       });
     },
@@ -341,12 +348,15 @@ export function createAuthStore(platform, { now = () => Date.now() } = {}) {
       return db.prepare('SELECT id, name, created_at, transports FROM passkeys WHERE user_id = ? ORDER BY created_at, id').all(userId)
         .map(row => ({ id: row.id, name: row.name, createdAt: row.created_at, transports: JSON.parse(row.transports) }));
     },
-    revokePasskey(userId, id) {
+    // Audited as passkey.revoke with the household it was revoked in (the admin's, or the
+    // session's for self revocation) when one applies.
+    revokePasskey(userId, id, { actorId = null, householdId = null } = {}) {
       return transaction(() => {
         const removed = db.prepare('DELETE FROM passkeys WHERE user_id = ? AND id = ?').run(userId, id).changes > 0;
         if (removed) {
           revokeUserSessions(userId);
           clearAddPasskey(userId);
+          audit('passkey.revoke', { actorId, householdId, targetUserId: userId });
         }
         return removed;
       });

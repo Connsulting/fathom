@@ -318,13 +318,16 @@ export function createAuthService({ platform, config, transport, now = () => Dat
     passkeys({ req }) { return { passkeys: store.listPasskeys(requireUser(req).id) }; },
     revokePasskey({ req, res, params }) {
       const user = requireUser(req);
-      if (!store.revokePasskey(user.id, params.id)) throw new HttpError(404, 'no such passkey');
+      if (!store.revokePasskey(user.id, params.id, { actorId: user.id, householdId: user.householdId })) throw new HttpError(404, 'no such passkey');
       setCookie(res, SESSION_COOKIE, null);
       return { passkeys: store.listPasskeys(user.id) };
     },
     users({ req }) {
       requireUser(req, { admin: true });
-      return { users: store.listPeople(servedId()).map(person => ({ ...person, passkeys: store.listPasskeys(person.id) })) };
+      // Only an active member's passkeys are listed; a pending invitee may hold an account elsewhere.
+      return { users: store.listPeople(servedId()).map(person => ({
+        ...person, passkeys: person.status === 'active' ? store.listPasskeys(person.id) : [],
+      })) };
     },
     async invite({ req, body }) {
       const admin = requireUser(req, { admin: true });
@@ -346,19 +349,22 @@ export function createAuthService({ platform, config, transport, now = () => Dat
     // Admin actions resolve the target inside the admin's household first: anyone else is 404
     // before any change.
     setRole({ req, params, body }) {
-      requireUser(req, { admin: true });
+      const admin = requireUser(req, { admin: true });
       const hh = servedId();
       if (!store.person(hh, params.id)) throw new HttpError(404, 'no such user');
-      return { user: store.setRole(hh, params.id, body.role) };
+      return { user: store.setRole(hh, params.id, body.role, { actorId: admin.id }) };
     },
     removeUser({ req, params }) {
-      requireUser(req, { admin: true });
-      if (!store.removeMember(servedId(), params.id)) throw new HttpError(404, 'no such user');
+      const admin = requireUser(req, { admin: true });
+      if (!store.removeMember(servedId(), params.id, { actorId: admin.id })) throw new HttpError(404, 'no such user');
       return { removed: true };
     },
+    // Only an active member's passkeys: a pending invitee's are 404 with nothing changed.
     adminRevokePasskey({ req, params }) {
-      requireUser(req, { admin: true });
-      if (!store.person(servedId(), params.id) || !store.revokePasskey(params.id, params.keyId)) throw new HttpError(404, 'no such passkey');
+      const admin = requireUser(req, { admin: true });
+      const hh = servedId();
+      if (store.person(hh, params.id)?.status !== 'active'
+        || !store.revokePasskey(params.id, params.keyId, { actorId: admin.id, householdId: hh })) throw new HttpError(404, 'no such passkey');
       return { passkeys: store.listPasskeys(params.id) };
     },
     // A signed-in user joins a household through an invitation to their own address.
