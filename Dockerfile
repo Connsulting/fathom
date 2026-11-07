@@ -12,6 +12,7 @@ COPY web ./web
 COPY demo ./demo
 COPY packs ./packs
 COPY scripts ./scripts
+COPY evals ./evals
 
 RUN mkdir -p /data && chown node:node /data
 
