@@ -42,6 +42,7 @@ function check(schema, v, path) {
     if (schema.pattern && !new RegExp(schema.pattern).test(v)) throw new ToolError('bad_input', `${path} has the wrong format`);
   }
   if (Array.isArray(v)) {
+    if (schema.minItems != null && v.length < schema.minItems) throw new ToolError('bad_input', `${path} has too few items`);
     if (schema.maxItems != null && v.length > schema.maxItems) throw new ToolError('bad_input', `${path} has too many items`);
     if (schema.items) v.forEach((x, i) => check(schema.items, x, `${path}[${i}]`));
   }
