@@ -5,7 +5,10 @@
    [data-conn-form] submits and [data-conn-input] input here. */
 
 const PLACEHOLDER = '<your-key>';
-const SCOPE_TEXT = (scopes) => (Array.isArray(scopes) && scopes.includes('write:recs') ? 'Read and write recs' : 'Read only');
+const SCOPE_TEXT = scopes => {
+  const writes = (Array.isArray(scopes) ? scopes : []).filter(s => s !== 'read');
+  return writes.length ? 'Read + ' + writes.map(id => st.mcp?.scopes?.find(s => s.id === id)?.label || id).join(', ') : 'Read only';
+};
 
 let st = blank();
 let gen = 0;
@@ -13,7 +16,7 @@ let gen = 0;
 function blank() {
   return {
     loading: false, loadError: '', mcp: null, keys: [],
-    draft: '', write: false, busy: false, formError: '',
+    draft: '', writeScopes: [], busy: false, formError: '',
     revealed: null, confirming: null, revoking: null, listError: '',
     copied: '', copyTimer: 0
   };
@@ -138,8 +141,7 @@ function createForm(h) {
     <ul class="h-scopes cn-scopes">
       <li><button type="button" class="h-toggle on" role="switch" aria-checked="true" aria-disabled="true" disabled aria-labelledby="cn-scope-read"><i></i></button>
         <div><b id="cn-scope-read">Read your plan, data and packs</b><span>Always on</span></div></li>
-      <li><button type="button" class="h-toggle${st.write ? ' on' : ''}" role="switch" aria-checked="${st.write}" data-conn="write-toggle" data-testid="key-write-toggle" aria-labelledby="cn-scope-write"><i></i></button>
-        <div><b id="cn-scope-write">Can change recommendation status and owner</b><span>Write: mark items doing it, done, later or not for us, and set who acts on them</span></div></li>
+      ${(st.mcp?.scopes || []).filter(sc => sc.id !== 'read').map(sc => `<li><button type="button" class="h-toggle${st.writeScopes.includes(sc.id) ? ' on' : ''}" role="switch" aria-checked="${st.writeScopes.includes(sc.id)}" data-conn="scope-toggle" data-scope="${h.esc(sc.id)}" data-testid="key-scope-${h.esc(sc.id)}" aria-labelledby="cn-scope-${h.esc(sc.id)}"><i></i></button><div><b id="cn-scope-${h.esc(sc.id)}">${h.esc(sc.label)}</b><span>${h.esc(sc.access)}</span></div></li>`).join('')}
     </ul>
   </form>`;
 }
@@ -242,10 +244,11 @@ export function onInput(target) {
 export function onClick(target, h) {
   const d = target.dataset;
   switch (d.conn) {
-    case 'write-toggle': {
-      st.write = !st.write;
-      target.classList.toggle('on', st.write);
-      target.setAttribute('aria-checked', String(st.write));
+    case 'scope-toggle': {
+      const selected = !st.writeScopes.includes(d.scope);
+      st.writeScopes = selected ? [...st.writeScopes, d.scope] : st.writeScopes.filter(s => s !== d.scope);
+      target.classList.toggle('on', selected);
+      target.setAttribute('aria-checked', String(selected));
       return;
     }
     case 'copy': {
@@ -326,7 +329,7 @@ export function onSubmit(form, h) {
     return;
   }
   const body = { name };
-  if (st.write) body.scopes = ['write:recs'];
+  if (st.writeScopes.length) body.scopes = st.writeScopes;
   st.busy = true;
   st.formError = '';
   clearSecret();
@@ -343,7 +346,7 @@ export function onSubmit(form, h) {
         st.revealed = { key: data.key, name: data.record?.name || name, scopes: data.record?.scopes || ['read'] };
       }
       st.draft = '';
-      st.write = false;
+      st.writeScopes = [];
       h.redraw();
       focus('#cn-reveal-t');
     })

@@ -4,6 +4,7 @@ import { scratch } from './helpers/real-store.mjs';
 import { callTool } from '../src/tools/index.mjs';
 import { buildScenario } from '../src/scenario/build.mjs';
 import { createLiveAnswerer } from '../src/api/answerer.mjs';
+import { preferenceSave, preferenceDelete, actionUndo } from '../src/api/handlers.mjs';
 
 const s = scratch('fathom-preferences-');
 after(() => s.cleanup());
@@ -25,4 +26,17 @@ test('remembered preferences need owner words, enter the prompt, and undo restor
   assert.equal(buildScenario(db).preferences[0].text, 'keep answers short');
   await callTool('undo_preference_action', { id: saved.receipt.id }, { ...ctx, channel: 'mcp' });
   assert.equal(buildScenario(db).preferences.length, 0);
+});
+
+test('Settings validates, edits and deletes preferences through the same writer, with reversible deletion', async () => {
+  const db = await s.store();
+  const ctx = { db, config: {}, identity: { id: 'person-a' }, params: {}, body: { text: 'Keep answers short' } };
+  const saved = preferenceSave(ctx);
+  for (const text of ['', 'x'.repeat(301), 'line\nbreak']) assert.throws(() => preferenceSave({ ...ctx, body: { text } }));
+  const edited = preferenceSave({ ...ctx, params: { id: saved.preference.id }, body: { text: 'Use plain language' } });
+  assert.equal(edited.scenario.preferences[0].text, 'Use plain language');
+  const removed = preferenceDelete({ ...ctx, params: { id: saved.preference.id }, body: {} });
+  assert.equal(removed.scenario.preferences.length, 0);
+  const undone = await actionUndo({ ...ctx, params: { id: removed.receipt.id } });
+  assert.equal(undone.scenario.preferences[0].text, 'Use plain language');
 });

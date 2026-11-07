@@ -157,3 +157,19 @@ test('a saved fact with busy planning retains its receipt and queues planning', 
   assert.equal(getFacts(db)[factArgs.key], factArgs.value);
   assert.equal(buildScenario(db).live.conversations[key].at(-1).provenance.actions[0].planningPending, true);
 });
+
+test('a thrown answer after a committed write keeps a receipt-only recommendation conversation', async () => {
+  const db = await s.store();
+  addFact(db, 'household.expectingChild', true);
+  await planRun(db);
+  const answerer = { async answer(request) {
+    await callTool('record_household_fact', factArgs, { ...request, now, conversationKey: request.key, recId: 'new-child' });
+    throw new Error('transport disconnected');
+  } };
+  await assert.rejects(threadCreate({ db, config: {}, identity: { id: 'person-a' }, answerer,
+    body: { recId: 'new-child', text: words }, scheduler: { runNow: () => planRun(db) } }), /transport disconnected/);
+  const scenario = buildScenario(db);
+  assert.equal(scenario.live.threads.length, 1);
+  assert.equal(scenario.live.threads[0].recId, 'new-child');
+  assert.equal(scenario.live.conversations[scenario.live.threads[0].key][0].provenance.actions[0].after, factArgs.value);
+});

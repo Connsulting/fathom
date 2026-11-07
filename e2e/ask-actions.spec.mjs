@@ -21,7 +21,7 @@ test('@mobile @ax-ac6 Ask from a recommendation records the expected date and Un
   await expect(dialog).toContainText(recAfter.window.label);
   await page.reload();
   await expect(page.getByRole('dialog').locator('.h-action-receipt')).toContainText('2027-03-19');
-  await page.screenshot({ path: info.outputPath('ask-actions.png'), fullPage: true });
+  await page.screenshot({ path: info.outputPath('ask-actions.png'), fullPage: false, animations: 'disabled', timeout: 15000 });
   await page.getByRole('dialog').getByRole('button', { name: 'Undo', exact: true }).click();
   await expect(page.getByRole('dialog').locator('.h-action-receipt')).toContainText('Undone');
   const undone = await (await request.get('/api/scenario')).json();
@@ -33,7 +33,7 @@ test('@mobile @ax-ac6 Ask from a recommendation records the expected date and Un
 test('@mobile @ax-ac8 Ask remembers a preference and Settings edits and deletes it', async ({ page, request }) => {
   expect((await request.post('/api/demo/reset', { data: {} })).ok()).toBeTruthy();
   await page.goto('/#/ask');
-  const input = page.locator('form.h-askx-compose input, form.h-compose input').first();
+  const input = page.locator('form.h-askx-compose textarea[name="q"]').first();
   await input.fill('Remember: keep answers short');
   await input.press('Enter');
   await expect(page.locator('.h-action-receipt')).toContainText('keep answers short');
@@ -47,4 +47,19 @@ test('@mobile @ax-ac8 Ask remembers a preference and Settings edits and deletes 
   await expect(preference).toHaveValue('Elective spending excludes mortgage, income tax and transfers');
   await preference.locator('xpath=ancestor::form').getByRole('button', { name: 'Delete', exact: true }).click();
   await expect(preference).toHaveCount(0);
+});
+
+test('@mobile @ax-ac5 key creation offers separate action permissions', async ({ page, request }) => {
+  expect((await request.post('/api/demo/reset', { data: {} })).ok()).toBeTruthy();
+  await page.goto('/#/connect');
+  await expect(page.getByRole('switch', { name: 'Record household facts' })).toBeVisible();
+  await expect(page.getByRole('switch', { name: 'Check recommendation steps' })).toBeVisible();
+  await expect(page.getByRole('switch', { name: 'Create and edit goals' })).toBeVisible();
+  await expect(page.getByRole('switch', { name: 'Remember preferences' })).toBeVisible();
+  await page.getByRole('textbox', { name: 'Key name' }).fill('Synthetic goal agent');
+  await page.getByRole('switch', { name: 'Create and edit goals' }).click();
+  await page.getByRole('button', { name: 'Create key', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'New key for Synthetic goal agent' })).toBeVisible();
+  const keys = await (await request.get('/api/keys')).json();
+  expect(keys.keys.find(k => k.name === 'Synthetic goal agent').scopes).toEqual(['read', 'write:goals']);
 });

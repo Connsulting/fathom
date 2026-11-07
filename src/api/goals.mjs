@@ -36,7 +36,7 @@ export function goalCreate(ctx) {
     const row = createGoal(ctx.db, ctx.body, { now: stamp(ctx) });
     const scenario = scenarioOf(ctx);
     return { scenario, goal: goalOut(scenario, row.id) };
-  } catch (e) { if (e instanceof ToolError) throw new HttpError(e.code === 'not_found' ? 404 : 400, e.message); throw e; }
+  } catch (e) { if (e instanceof ToolError) throw new HttpError(e.code === 'not_found' ? 404 : e.code === 'conflict' ? 409 : 400, e.message); throw e; }
 }
 
 export function goalUpdate(ctx) {

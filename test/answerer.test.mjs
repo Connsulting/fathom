@@ -253,7 +253,7 @@ test('buildChatPrompt keeps the static system identical across summaries and que
     context: { rec: { id: 'synthetic-rec', title: 'CONTEXT-MARKER' } }, history: [], question: 'Second synthetic question?',
   });
   assert.equal(one.system, two.system);
-  assert.equal(one.system, PRODUCT_RULES + '\n\n<knowledge_packs>\n' + packContextText + '\n</knowledge_packs>');
+  assert.equal(one.system, PRODUCT_RULES + '\n\n' + ASK_ACTION_RULES + '\n\n<knowledge_packs>\n' + packContextText + '\n</knowledge_packs>');
   for (const value of ['SUMMARY-MARKER-ONE', 'SUMMARY-MARKER-TWO', '7351', '8462', 'CONTEXT-MARKER', 'First synthetic', 'Second synthetic']) {
     assert.ok(!one.system.includes(value), `static system has no ${value}`);
   }

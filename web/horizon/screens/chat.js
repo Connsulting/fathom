@@ -7,7 +7,7 @@
    Message bodies arrive as stored HTML: figure tokens render through api.t as .fx-fig, numbers a
    tool grounded are .fx-src spans, and numbers nothing supports are .fx-unverified spans. This
    module only adds the provenance list and the card; it never re-renders the body.
-   Chat never writes: a proposal (provenance.proposal {recId, action, wake?}) changes the rec only
+   Historical proposal messages: a proposal (provenance.proposal {recId, action, wake?}) changes the rec only
    when the owner clicks Confirm, through the ordinary rec action (api.act). The card wording comes
    from a fixed action map and the rec, never from model text; the wake label is escaped text.
    A goal proposal (provenance.goalProposal {title, note, horizon, target, targetDate}) saves a goal

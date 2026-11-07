@@ -46,7 +46,7 @@ test('an Ask chip stores a grounded answer with provenance in the message row an
   const conv = r.scenario.live.conversations[r.thread.key];
   assert.equal(conv.length, 2);
   assert.equal(conv[0].role, 'me');
-  assert.equal(conv[0].provenance, null, 'the owner message carries no provenance');
+  assert.equal(conv[0].provenance.ownerInput.actorId, 'demo');
   assert.deepEqual(conv[1], m);
   const stored = await readDb(s.dbFile, db => db.prepare("SELECT provenance FROM messages WHERE conversation_key = ? AND role = 'fathom'").get(r.thread.key));
   assert.deepEqual(JSON.parse(stored.provenance), m.provenance);

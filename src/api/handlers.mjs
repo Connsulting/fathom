@@ -138,21 +138,14 @@ export function recAction(ctx) {
     return { scenario: scenarioOf(ctx) };
   }
 
-  // The owner sets who acts on the rec; owner_override keeps the planner from changing it later.
-  if (action === 'owner') {
-    if (!isOwner(arg)) throw new HttpError(400, `owner must be one of ${OWNERS.join(', ')}`);
-    tx(db, () => setRecOwner(db, row, arg, { ts: nowIso(), action: 'owner', actor: 'ui' }));
-    return { scenario: scenarioOf(ctx) };
-  }
-
-  if (!Object.hasOwn(ACTION_STATUS, action)) throw new HttpError(400, `unknown action ${action}`);
-  let wake = null;
-  if (action === 'snooze') {
-    if (arg != null && typeof arg !== 'string') throw new HttpError(400, 'snooze arg must be a label');
-    if (arg && arg.length > MAX_LABEL) throw new HttpError(400, 'snooze label is too long');
-    wake = arg ? arg : 'Next month';
-  }
-  tx(db, () => applyStatusAction(db, row, action, wake));
+  try {
+    if (action === 'owner') writeRec(db, id, 'owner', arg, { now: nowIso(), actor: 'ui', eventAction: 'owner' });
+    else {
+      if (!Object.hasOwn(ACTION_STATUS, action)) throw new ToolError('bad_input', `unknown action ${action}`);
+      writeRec(db, id, 'status', { status: ACTION_STATUS[action], ...(action === 'snooze' ? { wake: arg } : {}) },
+        { now: nowIso(), actor: 'ui', eventAction: action });
+    }
+  } catch (e) { if (e instanceof ToolError) throw new HttpError(400, e.message); throw e; }
   return { scenario: scenarioOf(ctx) };
 }
 
@@ -475,7 +468,7 @@ function storeTurn(ctx, key, mine, reply, before) {
     if (before) before();
     const actorId = ctx.identity?.id || (getSetting(ctx.db, 'mode', null) === 'demo' ? 'demo' : null);
     const ownerInput = typeof ctx.body.text === 'string' && ctx.body.questionId == null && actorId
-      ? { ownerInput: { actorId, text: ctx.body.text.trim() } } : null;
+      ? { ownerInput: { actorId } } : null;
     pushMessage(ctx, key, 'me', mine, { provenance: ownerInput });
     return pushReply(ctx, key, reply);
   });

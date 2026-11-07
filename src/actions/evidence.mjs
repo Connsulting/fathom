@@ -10,9 +10,12 @@ export function statedAmounts(text) {
 export function ownerStatements(ctx) {
   const out = ctx.ownerText ? [ctx.ownerText] : [];
   if (!ctx.conversationKey || !ctx.actorId) return out;
-  for (const row of ctx.db.prepare("SELECT provenance FROM messages WHERE conversation_key = ? AND role = 'me'").all(ctx.conversationKey)) {
+  for (const row of ctx.db.prepare("SELECT text, provenance FROM messages WHERE conversation_key = ? AND role = 'me'").all(ctx.conversationKey)) {
     const input = parse(row.provenance, null)?.ownerInput;
-    if (input?.actorId === ctx.actorId && typeof input.text === 'string') out.push(input.text);
+    if (input?.actorId === ctx.actorId) {
+      const entities = { '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'", '&#123;': '{', '&#125;': '}' };
+      out.push(row.text.replace(/&(?:amp|lt|gt|quot|#39|#123|#125);/g, m => entities[m]));
+    }
   }
   return out;
 }
