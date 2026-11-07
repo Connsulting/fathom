@@ -33,10 +33,22 @@
 // Streaming: answer({ ..., onEvent }) and whatIf({ ..., onEvent }) report progress while the model
 // runs: { type: 'progress', label } (a fixed plain label per tool, never arguments or values),
 // { type: 'text', text } (raw model text deltas, untrusted: the client escapes them and shows every
-// number as still being checked) and { type: 'reset' } (drop the streamed text because the answer is
-// being redone after a failed grounding check, or the engine restreams it after the SDK superseded
-// refused frames; a tool call does not reset it). The returned reply is the
-// only grounded result; nothing streamed is stored. A throwing onEvent never fails the answer.
+// number as still being checked), { type: 'interim', text } (the text streamed so far in a tool
+// round, sent before that round's tools: it is working text, not the answer, and moves into the
+// work block) and { type: 'reset', draft?: true } (drop the streamed text: with draft set the answer
+// is being redone after a failed grounding check and the replaced text is kept as a draft note;
+// without it the engine restreams after the SDK superseded refused frames; a tool call does not
+// reset it). The returned reply is the only grounded result; nothing streamed is stored. A throwing
+// onEvent never fails the answer.
+//
+// Only the engine's final text (the round after the last tool round) is grounded, rendered and fed
+// back in the corrective turn. provenance.work = { ms, items } records how the answer was reached,
+// built after the fact so it is the same with or without onEvent: items are { k: 'step', label }
+// and { k: 'note', text, draft?: true } in order: the start step; per tool round its interim note,
+// then its tool steps; the grounding step; after a failed check the first final text as a draft
+// note, the retry step, the second call's rounds and the grounding step. A step equal to the
+// previous step collapses (notes in between too), notes are cut at 2000 characters, the list at 40 items, and ms is the answer's
+// wall time in whole milliseconds. A notice reply has no work.
 //
 // The model's text loses its Source, Reference or Citation lines and sentences (stripSources) before grounding,
 // and the rendered blocks keep a minimal markdown subset (src/shared/answer-text.mjs): paragraphs,
@@ -364,10 +376,11 @@ export function groundAnswer(text, { scenario, toolResults = [], data = [], data
     }
     return ' '.repeat(token.length);
   });
-  // Ordered-list markers ("1. ") are list numbering, not figures.
+  // Ordered-list markers ("1. ") are list numbering, not figures. The mask keeps the line a list
+  // item (a bullet, then spaces of equal length) so grounding's structural count sees the list.
   let unlisted = masked;
   for (const m of listMarkerSpans(masked)) {
-    unlisted = unlisted.slice(0, m.index) + ' '.repeat(m.length) + unlisted.slice(m.index + m.length);
+    unlisted = unlisted.slice(0, m.index) + '•' + ' '.repeat(m.length - 1) + unlisted.slice(m.index + m.length);
   }
   return groundMasked(unlisted, { scenario, toolResults, data, dataLabels, violations, figureKeys });
 }
@@ -475,9 +488,11 @@ const PROGRESS_OTHER = 'Looking at your data';
 export const progressLabel = name => (Object.hasOwn(PROGRESS_LABELS, name) ? PROGRESS_LABELS[name] : PROGRESS_OTHER);
 
 // A safe emitter: progress labels deduplicated in a row, a reset only after text, a throwing
-// listener ignored. Engine events ({ type: 'tool', name } / { type: 'text', text } / { type: 'reset' })
-// go through engineEvent. A tool call does not reset streamed text. reset() is the grounding retry
-// and the engine's restream after superseded frames.
+// listener ignored. Engine events ({ type: 'tool', name } / { type: 'text', text } /
+// { type: 'interim', text } / { type: 'reset' }) go through engineEvent. A tool call does not reset
+// streamed text; an interim event moves it into the work block. reset({ draft: true }) is the
+// grounding retry (the client keeps the replaced text as a draft note); the engine's restream after
+// superseded frames resets without the flag.
 function streamer(onEvent) {
   if (typeof onEvent !== 'function') return { progress() {}, reset() {}, engineEvent: undefined };
   let lastLabel = null;
@@ -485,15 +500,46 @@ function streamer(onEvent) {
   const send = e => { try { onEvent(e); } catch { /* the stream never fails an answer */ } };
   const out = {
     progress(label) { if (label !== lastLabel) { lastLabel = label; send({ type: 'progress', label }); } },
-    reset() { if (texted) { texted = false; send({ type: 'reset' }); } },
+    reset({ draft = false } = {}) { if (texted) { texted = false; send(draft ? { type: 'reset', draft: true } : { type: 'reset' }); } },
     engineEvent(e) {
       if (!e || typeof e !== 'object') return;
       if (e.type === 'tool') out.progress(progressLabel(String(e.name || '')));
       else if (e.type === 'text' && typeof e.text === 'string' && e.text) { texted = true; send({ type: 'text', text: e.text }); }
+      else if (e.type === 'interim' && typeof e.text === 'string' && e.text) { texted = false; send({ type: 'interim', text: e.text }); }
       else if (e.type === 'reset') out.reset();
     },
   };
   return out;
+}
+
+// provenance.work: the steps and notes of one answer, built after the fact from the engine
+// results, so a streamed and an unstreamed ask store the same list. A step equal to the previous
+// step collapses, notes in between or not (as the live emitter dedupes progress labels); notes are trimmed and cut at
+// WORK_NOTE_CHARS; the list stops at WORK_ITEMS.
+const WORK_ITEMS = 40;
+const WORK_NOTE_CHARS = 2000;
+function workList() {
+  const items = [];
+  let lastStep = null;
+  const list = {
+    items,
+    // A step equal to the previous step collapses even with notes in between, as live progress does.
+    step(label) {
+      if (label !== lastStep) { lastStep = label; items.push({ k: 'step', label }); }
+    },
+    note(text, draft = false) {
+      const t = String(text ?? '').trim();
+      if (t) items.push({ k: 'note', text: t.slice(0, WORK_NOTE_CHARS), ...(draft ? { draft: true } : {}) });
+    },
+    // Each tool round of an engine result: its interim note, then its tool steps.
+    rounds(res) {
+      for (const r of (res && Array.isArray(res.toolRounds) ? res.toolRounds : [])) {
+        list.note(r.text);
+        for (const name of Array.isArray(r.tools) ? r.tools : []) list.step(progressLabel(String(name || '')));
+      }
+    },
+  };
+  return list;
 }
 
 // ---------------------------------------------------------------- the live answerer
@@ -559,8 +605,11 @@ export function createLiveAnswerer({ engine, packs } = {}) {
   // way). Proposals for any other rec are ignored.
   async function run({ db, scenario, now, question, context, history, baseRefs, fakeArgs, proposeFor = null, onEvent }) {
     if (!engine.isOn()) return offNotice(engine);
+    const t0 = performance.now();
     const stream = streamer(onEvent);
+    const work = workList();
     stream.progress(PROGRESS_START);
+    work.step(PROGRESS_START);
     const summary = await callTool('household_summary', {}, { db, now });
     const active = activeManifestPacks(db, packs);
     const packIds = active.map(a => a.pack.id).sort();
@@ -583,6 +632,8 @@ export function createLiveAnswerer({ engine, packs } = {}) {
     let first;
     try { first = await engine.call(request); } catch (e) { return noticeFor(e, engine); }
     stream.progress(PROGRESS_GROUNDING);
+    work.rounds(first);
+    work.step(PROGRESS_GROUNDING);
     let chosen = first;
     let toolResults = resultsOf(first);
     let grounding = ground(first, toolResults);
@@ -590,8 +641,10 @@ export function createLiveAnswerer({ engine, packs } = {}) {
     let costUsd = first.costUsd || 0;
     if (!grounding.ok) {
       retried = true;
-      stream.reset();
+      stream.reset({ draft: true });
       stream.progress(PROGRESS_RETRY);
+      work.note(first.text, true);
+      work.step(PROGRESS_RETRY);
       const list = grounding.violations.map(v => v.text).join(', ');
       const earlier = resultsOf(first).map(r => ({ name: r.name, args: r.args ?? {}, result: r.result ?? null,
         ...(r.isError ? { isError: true } : {}) }));
@@ -601,6 +654,8 @@ export function createLiveAnswerer({ engine, packs } = {}) {
       try {
         const second = await engine.call(retry);
         stream.progress(PROGRESS_GROUNDING);
+        work.rounds(second);
+        work.step(PROGRESS_GROUNDING);
         costUsd += second.costUsd || 0;
         chosen = second;
         toolResults = [...resultsOf(first), ...resultsOf(second)];
@@ -639,6 +694,7 @@ export function createLiveAnswerer({ engine, packs } = {}) {
         costUsd: Number(costUsd.toFixed(6)),
         ...(proposal ? { proposal } : {}),
         ...(goalProposal ? { goalProposal } : {}),
+        work: { ms: Math.max(0, Math.round(performance.now() - t0)), items: work.items.slice(0, WORK_ITEMS) },
       },
     };
   }

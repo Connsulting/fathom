@@ -14,10 +14,17 @@
    only when the owner taps Save, through the goals API (api.goalCreate). Its text is escaped; the
    card reads Saved once an owner goal with that title exists.
    Streaming: with the engine on, a question goes out through api.askStream / api.newThreadStream.
-   Until text arrives the pending block lists the run's progress labels; streamed text is raw model
-   output rendered by streamHtml (escaped, minimal markdown, every number and token in a neutral
-   .fx-checking span, never .fx-src or .fx-fig). The final grounded message replaces it. Only the
-   pending blocks are repainted per event; the page redraws once at the start and once at the end.
+   The pending block is a work block (a row button: spinner, "Working…", step count, chevron; its
+   body lists steps and notes) above the text streaming in the current round. Progress labels are
+   steps; an interim event (text a tool round streamed) and a reset with draft (a first attempt the
+   number check replaced) move the streamed text into the block as a note, so nothing on screen
+   vanishes. The block is open while nothing streams and collapsed while text streams, until the
+   owner toggles it for that answer. Streamed text and notes are raw model output rendered by
+   streamHtml (escaped, minimal markdown, every number and token in a neutral .fx-checking span,
+   never .fx-src or .fx-fig). The final grounded message replaces the pending block and carries
+   the stored block (workHtml, provenance.work { ms, items }), collapsed by default, its open
+   state in ui.det. Only the pending blocks are repainted per event (a focused live row keeps
+   focus); the page redraws once at the start and once at the end.
    Recs: a question asked in a rec dialog is an Ask thread carrying recId (api.recThread is the
    thread the dialog shows). This module is the one pending and streaming implementation for both:
    design.js asks through askFromRec and renders recPendingHtml in the dialog, so the same question
@@ -306,8 +313,10 @@ function emptyHtml() {
   </section>`;
 }
 
-const WORKING = 'Working on it';
+const WORKING = 'Working…';
 const RECOVERING = 'Reconnecting to fetch your answer';
+const DRAFT_TAG = 'Earlier draft, replaced after the number check';
+const LIVE_ROW = 'button.h-work-row[data-work="live"]';
 
 // A streamed token shows its plain value (still in the checking style), or nothing when unknown.
 function plainToken(tok) {
@@ -315,19 +324,60 @@ function plainToken(tok) {
   return typeof s === 'string' && s && s !== tok && !/[{}]/.test(s) ? s : null;
 }
 
-// The live part of a pending question: progress steps until text arrives, then the streamed text
-// with the latest step under it.
-function liveHtml(p) {
+/* ---------- the work block ---------- */
+
+const stepCount = (items) => items.filter((x) => x.k === 'step').length;
+const stepsLabel = (n) => (n === 0 ? '' : n === 1 ? '1 step' : `${n} steps`);
+
+// The block's item list. pulse marks the last step as the one running (live, nothing streaming).
+// Notes are model text: escaped and rendered by the neutral streamHtml, never as figures.
+function itemsHtml(items, pulse) {
   const { esc } = H;
-  const steps = p.steps || [];
-  const last = steps.length ? steps[steps.length - 1] : WORKING;
-  if (p.stream) {
-    return `<div class="h-askx-stream" data-streaming="1"><div class="h-msg-b">${streamHtml(p.stream, plainToken)}</div></div>`
-      + `<div class="h-askx-wait" role="status"><i></i>${esc(last)}</div>`;
-  }
-  if (!steps.length) return `<div class="h-askx-wait" role="status"><i></i>${WORKING}</div>`;
-  return `<ol class="h-askx-steps" role="status">${steps.map((st, i) =>
-    `<li class="${i === steps.length - 1 ? 'on' : 'done'}"><i></i><span>${esc(st)}</span></li>`).join('')}</ol>`;
+  let last = -1;
+  if (pulse) items.forEach((x, i) => { if (x.k === 'step') last = i; });
+  return `<ol class="h-work-items">${items.map((x, i) => (x.k === 'note'
+    ? `<li class="note${x.draft ? ' draft' : ''}">${x.draft ? `<span class="h-work-tag">${DRAFT_TAG}</span>` : ''}<div class="h-work-note">${streamHtml(x.text, plainToken)}</div></li>`
+    : `<li class="step${i === last ? ' on' : ''}"><i></i><span>${esc(x.label)}</span></li>`)).join('')}</ol>`;
+}
+
+// One block: a row button (label, step count, chevron; a spinner while live) and, only while
+// open, the body with the items. key is 'live' or the message id.
+function blockHtml({ key, live, open, label, items, pulse }) {
+  const { esc } = H;
+  const k = esc(key);
+  const bid = `h-work-b-${k}`;
+  const n = stepsLabel(stepCount(items));
+  return `<div class="h-work${live ? ' live' : ''}"><button type="button" class="h-work-row" data-work="${k}" aria-expanded="${open}" aria-controls="${bid}">`
+    + (live ? '<i class="h-work-spin" aria-hidden="true"></i>' : '')
+    + `<span class="h-work-l">${label}</span>${n ? `<span class="h-work-n">${n}</span>` : ''}</button>`
+    + (open ? `<div class="h-work-body" id="${bid}">${itemsHtml(items, pulse)}</div>` : '')
+    + '</div>';
+}
+
+// Stored items, shape checked: { k:'step', label } or { k:'note', text, draft? }.
+function workItems(list) {
+  return H.arr(list).filter((x) => isObj(x) && ((x.k === 'step' && typeof x.label === 'string' && x.label)
+    || (x.k === 'note' && typeof x.text === 'string' && x.text.trim())));
+}
+
+// The finished block above a Fathom answer (provenance.work { ms, items }), collapsed by default,
+// open state kept per message in ui.det. A message stored before the block existed has none.
+export function workHtml(m) {
+  if (!H || !m || m.role !== 'fathom' || m.notice || !isObj(m.provenance) || !isObj(m.provenance.work)) return '';
+  const w = m.provenance.work;
+  const ms = Number(w.ms);
+  const secs = Math.max(1, Math.round((Number.isFinite(ms) && ms > 0 ? ms : 0) / 1000));
+  const open = !!H.ui.det[`work-${m.id}`];
+  return blockHtml({ key: String(m.id), live: false, open, label: `Worked for ${secs}s`, items: workItems(w.items), pulse: false });
+}
+
+// Open while nothing streams, collapsed while text streams, unless the owner chose for this answer.
+const liveOpen = (p) => (p.open == null ? !p.stream : p.open);
+
+// The live part of a pending question: the work block, then the text streaming in this round.
+function liveHtml(p) {
+  return blockHtml({ key: 'live', live: true, open: liveOpen(p), label: WORKING, items: p.items, pulse: !p.stream })
+    + (p.stream ? `<div class="h-askx-stream" data-streaming="1"><div class="h-msg-b">${streamHtml(p.stream, plainToken)}</div></div>` : '');
 }
 
 function pendingHtml(p) {
@@ -336,11 +386,35 @@ function pendingHtml(p) {
 }
 
 // Repaint only the live blocks of the pending question (no full redraw per streamed chunk). With
-// the rec dialog open over the Ask page both may show the same question, and both stream.
+// the rec dialog open over the Ask page both may show the same question, and both stream. A
+// focused live row keeps focus across the repaint.
 function paintLive(p) {
   if (A.pending !== p || !H.root) return;
   const html = liveHtml(p);
-  H.root.querySelectorAll('.h-askx-pend .h-askx-live').forEach((el) => { el.innerHTML = html; });
+  const a = document.activeElement;
+  H.root.querySelectorAll('.h-askx-pend .h-askx-live').forEach((el) => {
+    const had = !!(a && el.contains(a) && a.matches(LIVE_ROW));
+    el.innerHTML = html;
+    if (had) el.querySelector(LIVE_ROW)?.focus({ preventScroll: true });
+  });
+}
+
+// A row click: the live row sets the owner's choice for this answer and repaints the live block;
+// a finished row flips its stored open state and redraws, then focus goes back to that row.
+// w: { key, open, inDlg } read from the clicked row.
+function toggleWork({ key, open, inDlg }) {
+  if (key === 'live') {
+    const p = A.pending;
+    if (!p) return;
+    p.open = !open;
+    paintLive(p);
+    return;
+  }
+  H.ui.det[`work-${key}`] = !open;
+  H.draw();
+  const sel = `button.h-work-row[data-work="${CSS.escape(key)}"]`;
+  const el = [...H.root.querySelectorAll(sel)].find((x) => !!x.closest('.h-dlg') === inDlg);
+  if (el) el.focus({ preventScroll: true });
 }
 
 // The pending question, or null once its turn is stored (the final answer replaces the block).
@@ -364,18 +438,35 @@ export function recPendingHtml(recId, threadKey) {
 // True while a question is in flight (one at a time, from the Ask page or a rec dialog).
 export function askBusy() { return !!A.pending; }
 
+// A step, unless it repeats the item right before it (the stored list collapses the same way).
+function pushStep(p, label) {
+  const last = p.items[p.items.length - 1];
+  if (!(last && last.k === 'step' && last.label === label)) p.items.push({ k: 'step', label });
+}
+
+function pushNote(p, text, draft) {
+  if (typeof text === 'string' && text.trim()) p.items.push(draft ? { k: 'note', text, draft: true } : { k: 'note', text });
+}
+
+// Streamed text only ever moves into the block: an interim round's text becomes a note, and a
+// first attempt the number check replaced becomes a draft note. Nothing on screen just vanishes.
 function streamEvent(p, name, data) {
   if (A.pending !== p) return;
   if (name === 'progress' && data && typeof data.label === 'string') {
-    if (p.steps[p.steps.length - 1] !== data.label) p.steps.push(data.label);
+    pushStep(p, data.label);
   } else if (name === 'text' && data && typeof data.text === 'string') {
     p.stream += data.text;
     p.streamed = true;
+  } else if (name === 'interim') {
+    const t = data && typeof data.text === 'string' && data.text.trim() ? data.text : p.stream;
+    pushNote(p, t, false);
+    p.stream = '';
   } else if (name === 'reset') {
+    if (data && data.draft) pushNote(p, p.stream, true);
     p.stream = '';
   } else if (name === 'recovering') {
     p.stream = '';
-    p.steps.push(RECOVERING);
+    pushStep(p, RECOVERING);
   } else return;
   paintLive(p);
 }
@@ -487,7 +578,9 @@ function sendAsk({ key, recId, text, questionId, draftKey, refocus }) {
   const k = key || null;
   const rid = recId || null;
   const hasQ = questionId != null && questionId !== '';
-  const pend = { key: k, recId: rid, text, n: k ? meCount(k) : 0, steps: [], stream: '', streamed: false };
+  // items: the work block's steps and notes; stream: this round's tentative text; open: null
+  // follows the auto rule, true or false is the owner's choice for this answer.
+  const pend = { key: k, recId: rid, text, n: k ? meCount(k) : 0, items: [], stream: '', streamed: false, open: null, t0: Date.now() };
   A.pending = pend;
   if (draftKey) H.ui.draft[draftKey] = '';
   H.draw();
@@ -569,8 +662,11 @@ export function onClick(e) {
   // A context chip opens the rec dialog (design.js, data-go="rec"); the phone sidebar closes first.
   if (A.side && e.target.closest('a.h-askx-ctx')) A.side = false;
   const t = e.target.closest(ASK_SEL);
+  const w0 = e.target.closest('button.h-work-row');
+  const w = w0 && root.contains(w0) ? { key: w0.dataset.work, open: w0.getAttribute('aria-expanded') === 'true', inDlg: !!w0.closest('.h-dlg') } : null;
   // A click anywhere else while renaming saves the name, like leaving the field.
   if (A.renaming && !e.target.closest('input.h-askx-rename') && !(t && t.dataset.threadAct === 'rename')) commitRename(false);
+  if (w) { e.preventDefault(); toggleWork(w); return true; }
   if (!t || !root.contains(t)) return false;
   const d = t.dataset;
   if (d.starter != null) {

@@ -146,22 +146,53 @@
 .d-horizon .h-askx .h-msg.me.pending .h-msg-b { white-space: pre-wrap; }
 .d-horizon .h-askx .h-msg.fathom .h-msg-b { color: var(--tx); font-size: 15px; line-height: 1.65; }
 .d-horizon .h-askx .h-msg.fathom.notice .h-msg-b { color: var(--mu); }
-.d-horizon .h-askx-wait { display: flex; align-items: center; gap: 10px; color: var(--fa); font-size: 13px; }
-.d-horizon .h-askx-wait i { width: 8px; height: 8px; border-radius: 50%; background: var(--ac); animation: h-askx-pulse 1.1s ease-in-out infinite; }
-@keyframes h-askx-pulse { 0%, 100% { opacity: 0.25; } 50% { opacity: 1; } }
 
 /* A question in flight: tall enough that the question can sit under the header while the answer
    grows below it. */
 .d-horizon .h-askx .h-askx-pend { min-height: calc(100vh - var(--askx-top) - var(--askx-off) - 52px - 24px - var(--askx-tabs, 0px)); }
 .d-horizon .h-askx-live { display: flex; flex-direction: column; gap: 12px; }
-.d-horizon .h-askx-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; font-size: 13px; color: var(--fa); }
-.d-horizon .h-askx-steps li { display: flex; align-items: center; gap: 10px; }
-.d-horizon .h-askx-steps li i { width: 8px; height: 8px; border-radius: 50%; background: var(--line2); flex: none; }
-.d-horizon .h-askx-steps li.on { color: var(--tx2); }
-.d-horizon .h-askx-steps li.on i { background: var(--ac); animation: h-askx-pulse 1.1s ease-in-out infinite; }
 .d-horizon .h-askx-stream .h-msg-b { color: var(--tx); font-size: 15px; line-height: 1.65; }
 /* A number in streamed text is not checked yet: plain, muted, no source underline, no popover. */
 .d-horizon .fx-checking { color: var(--mu); }
+
+/* ---------- work block ----------
+   Above a Fathom answer, live and finished: a quiet row in the Sources disclosure style (muted
+   12px, chevron first) and, when open, a bordered list of steps and notes. Notes are model text
+   the answer does not keep: muted, smaller, behind a rule, never figure styling. */
+.d-horizon .h-work { max-width: 70ch; min-width: 0; font-size: 12.5px; color: var(--fa); }
+.d-horizon .h-msg > .h-work { margin-bottom: 8px; }
+.d-horizon .h-work-row {
+  all: unset; box-sizing: border-box; cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+  max-width: 100%; padding: 2px 0; border-radius: 4px; color: var(--fa); font-size: 12px; line-height: 1.4; white-space: nowrap;
+}
+.d-horizon .h-work-row::before {
+  content: ''; flex: none; width: 5px; height: 5px; border-right: 1.4px solid currentColor; border-bottom: 1.4px solid currentColor;
+  transform: rotate(-45deg); transition: transform 0.15s; margin-right: 2px;
+}
+.d-horizon .h-work-row[aria-expanded="true"]::before { transform: rotate(45deg); }
+.d-horizon .h-work-row:hover { color: var(--tx2); }
+.d-horizon .h-work-row:focus-visible { outline: 2px solid var(--ac); outline-offset: 2px; }
+.d-horizon .h-work-n::before { content: '\00b7'; margin-right: 6px; }
+.d-horizon .h-work-spin {
+  flex: none; width: 9px; height: 9px; border-radius: 50%; box-sizing: border-box;
+  border: 1.5px solid var(--line2); border-top-color: var(--ac); animation: h-work-spin 0.9s linear infinite;
+}
+@keyframes h-work-spin { to { transform: rotate(360deg); } }
+.d-horizon .h-work-body { margin-top: 8px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; }
+.d-horizon .h-work-items { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.d-horizon .h-work-items li.step { display: flex; align-items: baseline; gap: 10px; color: var(--mu); min-width: 0; }
+.d-horizon .h-work-items li.step i { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--line2); transform: translateY(-1px); }
+.d-horizon .h-work-items li.step.on { color: var(--tx2); }
+.d-horizon .h-work-items li.step.on i { background: var(--ac); animation: h-askx-pulse 1.1s ease-in-out infinite; }
+.d-horizon .h-work-items li.note { margin-left: 2px; padding-left: 12px; border-left: 2px solid var(--line2); color: var(--mu); min-width: 0; }
+.d-horizon .h-work-note { line-height: 1.55; overflow-wrap: anywhere; }
+.d-horizon .h-work-note p + p, .d-horizon .h-work-note :is(ul, ol) { margin-top: 6px; }
+.d-horizon .h-work-note :is(ul, ol) { padding-left: 1.4em; }
+.d-horizon .h-work-note ul { list-style: disc; }
+.d-horizon .h-work-note ol { list-style: decimal; }
+.d-horizon .h-work-items li.note.draft { color: var(--fa); }
+.d-horizon .h-work-tag { display: block; margin-bottom: 2px; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--fa); }
+@keyframes h-askx-pulse { 0%, 100% { opacity: 0.25; } 50% { opacity: 1; } }
 
 /* The markdown subset in answers: lists and bold. */
 .d-horizon .h-msg-b :is(ul, ol) { margin: 10px 0 0; padding-left: 1.4em; }
@@ -241,5 +272,7 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .d-horizon .h-askx-side, .d-horizon .h-askx-side.open { transition: none; }
-  .d-horizon .h-askx-wait i, .d-horizon .h-askx-steps li.on i { animation: none; opacity: 0.7; }
+  .d-horizon .h-work-items li.step.on i { animation: none; opacity: 0.7; }
+  .d-horizon .h-work-spin { animation: none; border-color: var(--ac); opacity: 0.7; }
+  .d-horizon .h-work-row::before { transition: none; }
 }
