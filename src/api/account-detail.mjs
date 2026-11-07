@@ -52,9 +52,11 @@ export function accountDetail(ctx) {
   const acct = db.prepare('SELECT * FROM accounts WHERE id = ?').get(id);
   const live = accountFreshness(db, id, { clock });
 
-  // The date of the balance itself (a balance row or positions), not of the newest transaction.
-  const bal = db.prepare(`SELECT max(d) AS d FROM (SELECT max(date) AS d FROM balances WHERE account_id = ?1
-    UNION ALL SELECT max(as_of) FROM positions WHERE account_id = ?1)`).get(id);
+  // The date of the balance actually shown: the newest balance row when there is one, else the
+  // newest positions date (the same choice refreshFigures makes), never the newest transaction.
+  const bal = db.prepare(`SELECT coalesce(
+      (SELECT max(date) FROM balances WHERE account_id = ?1),
+      (SELECT max(as_of) FROM positions WHERE account_id = ?1)) AS d`).get(id);
 
   const txn = db.prepare('SELECT count(*) AS n, min(date) AS a, max(date) AS b FROM transactions WHERE account_id = ?').get(id);
 

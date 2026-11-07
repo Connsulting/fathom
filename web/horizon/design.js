@@ -1725,6 +1725,8 @@ function syncDialog(r, page) {
     host.innerHTML = '';
     delete host.dataset.id;
     delete host.dataset.kind;
+    // Closing forgets the account dialog's state, so reopening loads it afresh (a failed load included).
+    accountScreen.reset();
     page.inert = false;
     lockBody(false);
     ui.under = null;

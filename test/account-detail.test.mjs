@@ -66,6 +66,12 @@ test('the balance date is the balance row, not the newest transaction', async ()
     const d = accountDetail(ctx(s, chase));
     assert.equal(d.balance.asOf, '2032-01-15');
     assert.equal(d.txn.to, '2032-02-07');
+    // Positions newer than the balance row do not move the date: the balance row is what is shown.
+    s.db.prepare('INSERT INTO positions (account_id, as_of, symbol, value) VALUES (?, ?, ?, ?)').run(chase, '2032-02-05', 'XYZ', 50);
+    assert.equal(accountDetail(ctx(s, chase)).balance.asOf, '2032-01-15');
+    // With no balance row the positions date is used.
+    s.db.prepare('DELETE FROM balances WHERE account_id = ?').run(chase);
+    assert.equal(accountDetail(ctx(s, chase)).balance.asOf, '2032-02-05');
   } finally {
     s.close();
   }
