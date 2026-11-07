@@ -159,6 +159,17 @@ test.describe('no horizontal overflow at 375px', { tag: '@al-ac2' }, () => {
       await expect(page.locator('main.h-main h1, .h-dlg h1').first()).toBeVisible();
       const over = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
       expect(over, `${route} overflows by ${over}px`).toBeLessThanOrEqual(0);
+      // The document width alone can be hidden by a clipping ancestor, so also look at elements:
+      // none may stick out past the viewport unless a scrolling box around it contains them.
+      const stray = await page.evaluate(() => [...document.querySelectorAll('body *')].filter((el) => {
+        const r = el.getBoundingClientRect();
+        if (r.width === 0 || r.right <= innerWidth + 1) return false;
+        for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+          if (getComputedStyle(p).overflowX !== 'visible') return false;
+        }
+        return getComputedStyle(el).position !== 'fixed';
+      }).map((el) => `${el.tagName.toLowerCase()}.${el.className} right ${Math.round(el.getBoundingClientRect().right)}`).slice(0, 5));
+      expect(stray, `${route} has elements past the right edge`).toEqual([]);
     });
   }
 
@@ -228,41 +239,40 @@ function collisions(boxes, gap = 0) {
 }
 
 test.describe('timeline labels never collide', { tag: '@al-ac3' }, () => {
+  // Items due today, soon, in two months, late and far out; with a short date label and with a
+  // long text label, which is what the demo rec windows carry.
   for (const vp of [DESKTOP, PHONE]) {
-    for (const days of [0, 3, 60]) {
-      test(`rec dialog strip, due in ${days} days, at ${vp.width}px`, async ({ page }) => {
-        await page.setViewportSize(vp);
-        await editScenario(page, (j, at) => {
-          const r = j.recs.find((x) => x.id === 'offcycle');
-          r.window = { ...r.window, days, label: shortDate(at(days)) };
+    for (const days of [0, 3, 9, 60, -2, 520]) {
+      for (const long of [false, true]) {
+        if (days === 0 && long) continue;
+        test(`rec dialog strip, due in ${days} days, ${long ? 'long' : 'short'} label, at ${vp.width}px`, async ({ page }) => {
+          await page.setViewportSize(vp);
+          await editScenario(page, (j, at) => {
+            const r = j.recs.find((x) => x.id === 'offcycle');
+            r.window = { ...r.window, days, label: long ? `Schedule by ${shortDate(at(days))}` : shortDate(at(days)) };
+          });
+          await gotoRoute(page, 'rec/offcycle');
+          await expect(page.locator('.h-strip-wrap')).toBeVisible();
+          const boxes = await textBoxes(page, '.h-strip-wrap');
+          expect(boxes.length).toBeGreaterThanOrEqual(3);
+          // The countdown stacks its figure over its unit by design; the plot labels must be apart.
+          expect(collisions(await textBoxes(page, '.h-strip-plot'), 3), 'plot labels are 3px apart at least').toEqual([]);
+          const wrap = await page.locator('.h-strip-wrap').boundingBox();
+          for (const b of boxes) {
+            expect(b.left, `"${b.text}" starts inside the strip`).toBeGreaterThanOrEqual(wrap.x - 0.5);
+            expect(b.right, `"${b.text}" ends inside the strip`).toBeLessThanOrEqual(wrap.x + wrap.width + 0.5);
+          }
+          const labels = (await page.locator('.h-strip-labs span:not(.mon)').allTextContents()).map((t) => t.trim());
+          if (days === 0) {
+            expect(labels, 'one merged label when the dates coincide').toHaveLength(1);
+            expect(labels[0]).toMatch(/^Today/);
+          } else {
+            expect(labels).toHaveLength(2);
+          }
         });
-        await gotoRoute(page, 'rec/offcycle');
-        await expect(page.locator('.h-strip-wrap')).toBeVisible();
-        const boxes = await textBoxes(page, '.h-strip-wrap');
-        expect(boxes.length).toBeGreaterThanOrEqual(3);
-        expect(collisions(boxes), 'strip text boxes').toEqual([]);
-        expect(collisions(await textBoxes(page, '.h-strip-plot'), 3), 'plot labels are 3px apart at least').toEqual([]);
-        const labels = (await page.locator('.h-strip-labs span:not(.mon)').allTextContents()).map((t) => t.trim());
-        if (days === 0) {
-          expect(labels, 'one merged label when the dates coincide').toHaveLength(1);
-          expect(labels[0]).toMatch(/^Today/);
-        } else {
-          expect(labels).toHaveLength(2);
-        }
-      });
+      }
     }
   }
-
-  test('a late rec keeps its labels apart', async ({ page }) => {
-    await page.setViewportSize(PHONE);
-    await editScenario(page, (j, at) => {
-      const r = j.recs.find((x) => x.id === 'offcycle');
-      r.window = { ...r.window, days: -2, label: shortDate(at(-2)) };
-    });
-    await gotoRoute(page, 'rec/offcycle');
-    await expect(page.locator('.h-strip-wrap')).toBeVisible();
-    expect(collisions(await textBoxes(page, '.h-strip-plot'), 3)).toEqual([]);
-  });
 
   for (const vp of [DESKTOP, PHONE]) {
     test(`Plan timeline with items crowded around today, at ${vp.width}px`, async ({ page }) => {
