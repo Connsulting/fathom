@@ -5,8 +5,10 @@ import { readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   SERVER_TIMEOUT, spawnServer, spawnAuthenticatedServer, request, postJson,
-  openStore, createSessionFixture, sessionClient, serveAppFixture, tempDb, tempDir, expectServerExit, runCommand,
+  openStore, openPlatformStore, createSessionFixture, sessionClient, serveAppFixture, tempDb, tempDir, tempInstance,
+  expectServerExit, runCommand, PLATFORM_FILE,
 } from './helpers/server.mjs';
+import { existsSync } from 'node:fs';
 import { createAuthStore } from '../src/auth/store.mjs';
 import { setSetting } from '../src/store/db.mjs';
 import { aggregatorCsv } from './helpers/ingest.mjs';
@@ -30,12 +32,20 @@ const adminPosts = [
   ['/api/admin/users/no-user/passkeys/no-key/revoke', {}],
 ];
 
+// Financial store reads (facts, email_sends) and platform reads (accounts, auth rows) are separate.
 async function dbCall(server, fn) {
   const db = await openStore(server.dbFile);
-  try { return await fn(db, createAuthStore(db)); } finally { db.close(); }
+  try { return await fn(db); } finally { db.close(); }
+}
+async function authCall(server, fn) {
+  const platform = await openPlatformStore(server.platformFile);
+  try {
+    const store = createAuthStore(platform);
+    return await fn(platform, store, store.servedHousehold().id);
+  } finally { platform.close(); }
 }
 async function clientFor(server, options) {
-  const fixture = await dbCall(server, db => createSessionFixture(db, options));
+  const fixture = await authCall(server, platform => createSessionFixture(platform, options));
   return { ...sessionClient(server.baseUrl, fixture), fixture };
 }
 const cookies = response => (response.headers['set-cookie'] || []).map(c => c.split(';', 1)[0]).join('; ');
@@ -46,8 +56,8 @@ function safeError(response, expected) {
   assert.equal(typeof response.json.error, 'string');
   assert.match(response.headers['cache-control'] || '', /no-store/);
 }
-function passkey(db, userId, id) {
-  db.prepare('INSERT INTO passkeys (id, user_id, public_key, counter, transports, name, created_at) VALUES (?, ?, ?, 0, ?, ?, ?)')
+function passkey(platform, userId, id) {
+  platform.prepare('INSERT INTO passkeys (id, user_id, public_key, counter, transports, name, created_at) VALUES (?, ?, ?, 0, ?, ?, ?)')
     .run(id, userId, Buffer.from('synthetic bytes'), '["internal"]', 'Synthetic credential', Date.now());
 }
 
@@ -113,8 +123,13 @@ describe('real HTTP session gate', () => {
   });
 
   test('session and identity expose only the current user projection; authenticated route errors survive', async () => {
-    const { id, email, householdId, role } = member.fixture.user;
-    const identity = { id, email, householdId, role, name: email, login: email };
+    // householdId is the opaque served household id; identity adds operator and memberships
+    // (MT-01 contradiction 8).
+    const { id, email } = member.fixture.user;
+    const { householdId } = member.fixture;
+    assert.equal(typeof householdId, 'string');
+    assert.ok(householdId.length > 0);
+    const identity = { id, email, householdId, role: 'member', name: email, login: email, operator: false, memberships: [{ householdId, role: 'member' }] };
     assert.deepEqual((await member.request({ path: '/api/identity' })).json, { identity });
     const session = await member.request({ path: '/api/auth/session' });
     assert.deepEqual(session.json, { identity, demo: false });
@@ -191,7 +206,7 @@ describe('real HTTP session gate', () => {
       const account = await clientFor(server, { email: `revoke-${asAdmin}@example.test` });
       const other = await clientFor(server, { email: `revoke-${asAdmin}@example.test` });
       const keyId = `credential-${asAdmin}`;
-      await dbCall(server, db => passkey(db, account.fixture.user.id, keyId));
+      await authCall(server, platform => passkey(platform, account.fixture.user.id, keyId));
       const listed = await account.request({ path: '/api/auth/passkeys' });
       assert.equal(listed.status, 200);
       assert.deepEqual(listed.json.passkeys.map(key => key.id), [keyId]);
@@ -200,7 +215,7 @@ describe('real HTTP session gate', () => {
       assert.equal((await (asAdmin ? admin : account).postJson(path)).status, 200);
       assert.equal((await account.request({ path: '/api/scenario' })).status, 401);
       assert.equal((await other.request({ path: '/api/scenario' })).status, 401);
-      assert.deepEqual(await dbCall(server, (db, store) => store.listPasskeys(account.fixture.user.id)), []);
+      assert.deepEqual(await authCall(server, (platform, store) => store.listPasskeys(account.fixture.user.id)), []);
       assert.equal((await member.request({ path: '/api/scenario' })).status, 200);
     }
   });
@@ -227,17 +242,18 @@ test('real uploads enforce exact Origin before reading the body and accept a val
 test('registration links expire or consume once while fresh invitations produce strict resident options', T, async () => {
   const server = await spawnServer({ env: REAL });
   try {
-    const issued = await dbCall(server, (db, store) => {
-      const user = store.inviteUser('new@example.test', { role: 'member' });
-      const expiredStore = createAuthStore(db, { now: () => Date.now() - 21 * 60 * 1000 });
-      const expiredUser = store.inviteUser('expired@example.test', { role: 'member' });
-      const expired = expiredStore.createToken(expiredUser.id, 'invite');
-      const used = store.createToken(user.id, 'recovery');
+    const enrolledUser = await clientFor(server, { email: 'enrolled@example.test', role: 'member' });
+    const issued = await authCall(server, (platform, store, hh) => {
+      const expiredStore = createAuthStore(platform, { now: () => Date.now() - 21 * 60 * 1000 });
+      const expired = expiredStore.invite(hh, 'expired@example.test', { role: 'member' });
+      const usedInvite = store.invite(hh, 'used@example.test', { role: 'member' });
+      store.consumeInvitation(usedInvite.token, usedInvite.user.id);
+      const used = store.createToken(enrolledUser.fixture.user.id, 'recovery');
       store.consumeToken(used.token);
-      const fresh = store.createToken(user.id, 'invite');
-      return { expired, used, fresh };
+      const fresh = store.invite(hh, 'new@example.test', { role: 'member' });
+      return { expired, usedInvite, used, fresh };
     });
-    for (const token of [issued.expired.token, issued.used.token, randomBytes(32).toString('base64url')]) {
+    for (const token of [issued.expired.token, issued.usedInvite.token, issued.used.token, randomBytes(32).toString('base64url')]) {
       safeError(await postJson(server.baseUrl, '/api/auth/register/options', { token }, { origin: server.baseUrl }), 410);
     }
     const valid = await postJson(server.baseUrl, '/api/auth/register/options', { token: issued.fresh.token }, { origin: server.baseUrl });
@@ -257,7 +273,7 @@ test('registration links expire or consume once while fresh invitations produce 
     safeError(failed, 400);
     assert.ok(!failed.text.includes('private-verifier-payload'));
     assert.ok(!server.output().includes('private-verifier-payload'));
-    assert.equal(await dbCall(server, (db, store) => store.findUser('new@example.test').enrolledAt), null);
+    assert.equal(await authCall(server, (platform, store) => store.findUser('new@example.test').enrolledAt), null);
     assert.equal((await postJson(server.baseUrl, '/api/auth/register/options', { token: issued.fresh.token }, { origin: server.baseUrl })).status, 200);
   } finally { await server.stop(); }
 });
@@ -265,24 +281,22 @@ test('registration links expire or consume once while fresh invitations produce 
 test('registration requires credProps rk exactly true and consumes refused challenges without enrolling', T, async () => {
   const server = await spawnServer({ env: REAL });
   try {
-    const issued = await dbCall(server, (db, store) => {
-      const user = store.inviteUser('discoverability@example.test', { role: 'member' });
-      return { user, ...store.createToken(user.id, 'invite') };
-    });
+    const issued = await authCall(server, (platform, store, hh) => store.invite(hh, 'discoverability@example.test', { role: 'member' }));
     for (const extensions of [{ credProps: { rk: false } }, { credProps: {} }, {}]) {
       const options = await postJson(server.baseUrl, '/api/auth/register/options', { token: issued.token }, { origin: server.baseUrl });
       assert.equal(options.status, 200);
-      assert.equal(await dbCall(server, db => db.prepare('SELECT count(*) AS n FROM auth_challenges WHERE user_id = ?').get(issued.user.id).n), 1);
+      assert.equal(await authCall(server, platform => platform.prepare('SELECT count(*) AS n FROM auth_challenges WHERE user_id = ?').get(issued.user.id).n), 1);
       const headers = { origin: server.baseUrl, cookie: cookies(options) };
       const body = { token: issued.token, response: { clientExtensionResults: extensions } };
       const refused = await postJson(server.baseUrl, '/api/auth/register/verify', body, headers);
       assert.equal(refused.status, 400);
       assert.deepEqual(refused.json, { error: 'a discoverable passkey is required' });
-      await dbCall(server, (db, store) => {
+      await authCall(server, (platform, store, hh) => {
         assert.deepEqual(store.listPasskeys(issued.user.id), []);
         assert.equal(store.getUser(issued.user.id).enrolledAt, null);
-        assert.equal(db.prepare('SELECT count(*) AS n FROM auth_challenges WHERE user_id = ?').get(issued.user.id).n, 0);
-        assert.ok(store.token(issued.token), 'the invitation remains usable for a fresh ceremony');
+        assert.equal(platform.prepare('SELECT count(*) AS n FROM auth_challenges WHERE user_id = ?').get(issued.user.id).n, 0);
+        assert.ok(store.invitation(issued.token), 'the invitation remains usable for a fresh ceremony');
+        assert.equal(store.membership(issued.user.id, hh), null, 'a refused registration creates no membership');
       });
       const replay = await postJson(server.baseUrl, '/api/auth/register/verify', body, headers);
       assert.equal(replay.status, 400);
@@ -327,7 +341,7 @@ test('anonymous options are bounded, persist hashed rate keys and leave health a
     }
     assert.ok(limited, 'changing spoofed forwarding addresses cannot evade the socket/global limit');
     safeError(limited, 429);
-    const rates = await dbCall(server, db => JSON.stringify(db.prepare('SELECT * FROM auth_rate_limits').all()));
+    const rates = await authCall(server, platform => JSON.stringify(platform.prepare('SELECT * FROM auth_rate_limits').all()));
     assert.ok(!rates.includes('127.0.0.1'));
     assert.ok(!rates.includes('192.0.2.'));
     assert.equal((await request(server.baseUrl, { path: '/healthz' })).status, 200);
@@ -360,7 +374,10 @@ test('demo stays anonymous without a public URL and every auth/admin API except 
     for (const path of ['/api/auth/passkeys', '/api/admin/users']) assert.equal((await request(server.baseUrl, { path })).status, 404);
     assert.equal((await postJson(server.baseUrl, '/api/engine', { on: false })).status, 200, 'demo keeps CLI-friendly mutation semantics');
     assert.equal((await postJson(server.baseUrl, '/api/demo/reset')).status, 200);
-    assert.equal(await dbCall(server, db => db.prepare('SELECT count(*) AS n FROM households').get().n), 1);
+    // The demo platform is synthetic and created at startup; the financial store keeps no households.
+    assert.equal(await authCall(server, platform => platform.prepare('SELECT count(*) AS n FROM households').get().n), 1);
+    assert.equal(await authCall(server, (platform, store) => store.servedHousehold().mode), 'demo');
+    assert.equal(await dbCall(server, db => db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'households'").get().n), 0);
     assert.equal((await request(server.baseUrl, { path: '/api/scenario' })).json.live.mode, 'demo');
   } finally { await server.stop(); }
 });
@@ -399,7 +416,7 @@ test('recovery response is generic for known, unknown, invalid and pending addre
   const server = await spawnServer({ env: REAL });
   try {
     const client = await clientFor(server, { email: ' Recover+Tag@EXAMPLE.TEST ', role: 'member' });
-    await dbCall(server, (db, store) => store.inviteUser('pending@example.test', { role: 'member' }));
+    await authCall(server, (platform, store, hh) => store.invite(hh, 'pending@example.test', { role: 'member' }));
     await waitStartupJobs(server);
     const sendsBefore = await dbCall(server, db => db.prepare('SELECT count(*) AS n FROM email_sends').get().n);
     const responses = [];
@@ -414,9 +431,9 @@ test('recovery response is generic for known, unknown, invalid and pending addre
     assert.equal(messages.length, 1);
     assert.deepEqual(messages[0].to, ['recover+tag@example.test']);
     const { token } = linkFrom(messages[0].text);
-    assert.equal(await dbCall(server, (db, store) => store.token(token).purpose), 'recovery');
+    assert.equal(await authCall(server, (platform, store) => store.token(token).purpose), 'recovery');
     assert.equal(await dbCall(server, db => db.prepare('SELECT count(*) AS n FROM email_sends').get().n), sendsBefore);
-    const rates = await dbCall(server, db => JSON.stringify(db.prepare('SELECT * FROM auth_rate_limits').all()));
+    const rates = await authCall(server, platform => JSON.stringify(platform.prepare('SELECT * FROM auth_rate_limits').all()));
     assert.ok(!rates.includes('recover+tag@example.test'));
     assert.ok(!rates.includes('127.0.0.1'));
     assert.ok(!server.output().includes(token));
@@ -444,41 +461,46 @@ test('admin invitations return no bearer and use the canonical stored address wi
     assert.ok(!result.text.includes('/enroll#'));
     assert.ok(!server.output().includes(token));
     assert.equal(await dbCall(server, db => db.prepare('SELECT count(*) AS n FROM email_sends').get().n), sendsBefore);
-    const member = await dbCall(server, (db, store) => store.findUser('new+tag@example.test'));
-    assert.equal(member.role, 'member');
+    const member = await authCall(server, (platform, store) => store.findUser('new+tag@example.test'));
     assert.equal(member.enrolledAt, null);
+    const pending = await authCall(server, (platform, store) => store.invitation(token));
+    assert.deepEqual({ ...pending, expiresAt: typeof pending.expiresAt },
+      { householdId: server.session.householdId, email: 'new+tag@example.test', role: 'member', userId: member.id, expiresAt: 'number' });
     const again = await server.postJson('/api/admin/users/invite', { email: 'NEW+TAG@example.test', role: 'admin' });
     assert.equal(again.status, 200);
     const mails = await outbox(server, 2);
     const replacement = mails.map(mail => linkFrom(mail.text).token).find(value => value !== token);
     assert.ok(replacement);
-    assert.equal(await dbCall(server, (db, store) => store.token(token)), null);
-    assert.ok(await dbCall(server, (db, store) => store.token(replacement)));
-    assert.equal(await dbCall(server, (db, store) => store.getUser(member.id).role), 'admin', 'reissue applies the requested pending role');
+    assert.equal(await authCall(server, (platform, store) => store.invitation(token)), null);
+    assert.ok(await authCall(server, (platform, store) => store.invitation(replacement)));
+    assert.equal(await authCall(server, (platform, store) => store.invitation(replacement).userId), member.id, 'the reissue keeps the pending user');
+    assert.equal(await authCall(server, (platform, store) => store.invitation(replacement).role), 'admin', 'reissue applies the requested pending role');
   } finally { await server.stop(); }
 });
 
 test('expired sessions are denied and request entry lazily removes expired auth rows while keeping live rows and financial data', T, async () => {
   const server = await spawnAuthenticatedServer({ env: REAL });
   try {
-    const rows = await dbCall(server, (db, store) => {
-      const user = store.inviteUser('expiry@example.test', { role: 'member' });
-      db.prepare('UPDATE users SET enrolled_at = ? WHERE id = ?').run(Date.now(), user.id);
-      const old = createAuthStore(db, { now: () => Date.now() - 8 * 24 * 60 * 60 * 1000 });
+    const facts = await dbCall(server, db => db.prepare('SELECT * FROM facts ORDER BY key').all());
+    const rows = await authCall(server, (platform, store, hh) => {
+      const { user, token } = store.invite(hh, 'expiry@example.test', { role: 'member' });
+      store.consumeInvitation(token, user.id);
+      store.markEnrolled(user.id);
+      const old = createAuthStore(platform, { now: () => Date.now() - 8 * 24 * 60 * 60 * 1000 });
       const expiredSession = old.createSession(user.id);
       old.createToken(user.id, 'recovery');
       const liveToken = store.createToken(server.session.user.id, 'recovery');
-      return { expiredSession, liveToken, facts: db.prepare('SELECT * FROM facts ORDER BY key').all() };
+      return { expiredSession, liveToken };
     });
     assert.equal((await request(server.baseUrl, { path: '/api/scenario', headers: { cookie: `__Host-fathom-session=${rows.expiredSession.token}` } })).status, 401);
     assert.equal((await server.request({ path: '/api/scenario' })).status, 200);
-    await dbCall(server, (db, store) => {
+    await authCall(server, (platform, store) => {
       assert.equal(store.session(rows.expiredSession.token), null);
       assert.ok(store.token(rows.liveToken.token));
-      assert.deepEqual(db.prepare('SELECT * FROM facts ORDER BY key').all(), rows.facts);
-      assert.equal(db.prepare('SELECT count(*) AS n FROM auth_sessions').get().n, 1);
-      assert.equal(db.prepare('SELECT count(*) AS n FROM auth_tokens').get().n, 1);
+      assert.equal(platform.prepare('SELECT count(*) AS n FROM auth_sessions').get().n, 1);
+      assert.equal(platform.prepare('SELECT count(*) AS n FROM auth_tokens').get().n, 1);
     });
+    assert.deepEqual(await dbCall(server, db => db.prepare('SELECT * FROM facts ORDER BY key').all()), facts);
   } finally { await server.stop(); }
 });
 
@@ -487,17 +509,24 @@ const cliEnv = dataDir => ({ ...REAL, FATHOM_DATA: dataDir, FATHOM_PUBLIC_URL: '
 const financialDump = db => Object.fromEntries(['facts', 'files', 'accounts', 'transactions', 'messages', 'recs', 'email_sends']
   .map(table => [table, db.prepare(`SELECT * FROM ${table}`).all()]));
 
+// Bootstrap targets the served household of an instance's platform.sqlite. The CLI writes from
+// its own process while this test reads through `temp.platform`.
+const realInstance = () => tempInstance({ mode: 'real', init: db => setSetting(db, 'mode', 'real') });
+const liveInvitations = platform => platform.prepare('SELECT count(*) AS n FROM household_invitations WHERE consumed_at IS NULL AND revoked_at IS NULL AND expires_at > ?').get(Date.now()).n;
+
 test('bootstrap CLI requires explicit admin, reissues only before enrollment, and prints its link only after dev email succeeds', T, async () => {
-  const temp = await tempDb();
+  const temp = await realInstance();
   try {
-    setSetting(temp.db, 'mode', 'real');
     const initial = financialDump(temp.db);
+    const store = createAuthStore(temp.platform);
+    const hh = store.servedHousehold().id;
     for (const args of [['bootstrap@example.test'], ['bootstrap@example.test', '--member'], ['bootstrap@example.test', '--admin', '--unknown']]) {
       const failed = await inviteCli(args, cliEnv(temp.dataDir));
       assert.notEqual(failed.code, 0);
       assert.equal(failed.stdout.trim(), '');
       assert.ok(!failed.stderr.includes('bootstrap@example.test'));
-      assert.equal(createAuthStore(temp.db).listUsers().length, 0);
+      assert.equal(store.listPeople(hh).length, 0);
+      assert.equal(store.findUser('bootstrap@example.test'), null);
     }
     const first = await inviteCli([' Bootstrap@EXAMPLE.TEST ', '--admin'], cliEnv(temp.dataDir));
     assert.equal(first.code, 0, first.stderr);
@@ -506,9 +535,10 @@ test('bootstrap CLI requires explicit admin, reissues only before enrollment, an
     assert.ok(!first.stdout.toLowerCase().includes('bootstrap@example.test'));
     assert.ok(!first.stderr.includes(token));
     assert.ok(!first.stderr.includes('bootstrap@example.test'));
-    const store = createAuthStore(temp.db);
-    assert.equal(store.findUser('bootstrap@example.test').role, 'admin');
-    assert.equal(store.token(token).purpose, 'invite');
+    const user = store.findUser('bootstrap@example.test');
+    assert.ok(user);
+    assert.deepEqual({ ...store.invitation(token), expiresAt: typeof store.invitation(token).expiresAt },
+      { householdId: hh, email: 'bootstrap@example.test', role: 'admin', userId: user.id, expiresAt: 'number' });
     const [message] = await outbox({ dataDir: temp.dataDir }, 1);
     assert.deepEqual(message.to, ['bootstrap@example.test']);
     assert.ok(message.text.includes(token));
@@ -516,55 +546,74 @@ test('bootstrap CLI requires explicit admin, reissues only before enrollment, an
     assert.equal(second.code, 0, second.stderr);
     const replacement = linkFrom(second.stdout).token;
     assert.notEqual(replacement, token);
-    assert.equal(store.token(token), null);
-    assert.ok(store.token(replacement));
-    const user = store.findUser('bootstrap@example.test');
-    temp.db.prepare('UPDATE users SET enrolled_at = ? WHERE id = ?').run(Date.now(), user.id);
+    assert.equal(store.invitation(token), null);
+    assert.equal(store.invitation(replacement).role, 'admin');
+    // The bootstrap admin redeems the invitation and enrolls; bootstrap then refuses.
+    store.consumeInvitation(replacement, user.id);
+    store.markEnrolled(user.id);
     const refused = await inviteCli(['another@example.test', '--admin'], cliEnv(temp.dataDir));
     assert.notEqual(refused.code, 0);
     assert.equal(refused.stdout.trim(), '');
     assert.equal(store.findUser('another@example.test'), null);
+    assert.equal(store.membership(user.id, hh).role, 'admin');
     assert.deepEqual(financialDump(temp.db), initial);
   } finally { temp.close(); rmSync(temp.dataDir, { recursive: true, force: true }); }
 });
 
-test('bootstrap CLI refuses demo, absent database and invalid public origin without seeding financial data', T, async () => {
-  const temp = await tempDb();
+test('bootstrap CLI refuses demo, absent database, an unmigrated real store and invalid public origin without seeding financial data', T, async () => {
+  const demoInstance = await tempInstance({ mode: 'demo', init: db => setSetting(db, 'mode', 'demo') });
+  const real = await realInstance();
+  const legacy = await tempDb();
   const missing = await tempDir();
   try {
-    setSetting(temp.db, 'mode', 'demo');
-    const initial = financialDump(temp.db);
-    const demo = await inviteCli(['admin@example.test', '--admin'], cliEnv(temp.dataDir));
+    const demoInitial = financialDump(demoInstance.db);
+    const demo = await inviteCli(['admin@example.test', '--admin'], cliEnv(demoInstance.dataDir));
     assert.notEqual(demo.code, 0);
     assert.equal(demo.stdout.trim(), '');
-    assert.deepEqual(financialDump(temp.db), initial);
+    assert.deepEqual(financialDump(demoInstance.db), demoInitial);
+    assert.equal(createAuthStore(demoInstance.platform).findUser('admin@example.test'), null);
     const absent = await inviteCli(['admin@example.test', '--admin'], cliEnv(missing));
     assert.notEqual(absent.code, 0);
     assert.equal(absent.stdout.trim(), '');
     assert.deepEqual(readdirSync(missing), []);
-    setSetting(temp.db, 'mode', 'real');
-    const invalid = await inviteCli(['admin@example.test', '--admin'], { ...cliEnv(temp.dataDir), FATHOM_PUBLIC_URL: 'http://foreign.example.test' });
+    // A real store without platform.sqlite needs the offline platform migration first.
+    setSetting(legacy.db, 'mode', 'real');
+    const legacyInitial = financialDump(legacy.db);
+    const unmigrated = await inviteCli(['admin@example.test', '--admin'], cliEnv(legacy.dataDir));
+    assert.notEqual(unmigrated.code, 0);
+    assert.equal(unmigrated.stdout.trim(), '');
+    assert.match(unmigrated.stderr, /platform_migration_required/);
+    assert.equal(existsSync(join(legacy.dataDir, PLATFORM_FILE)), false, 'no platform is created');
+    assert.deepEqual(financialDump(legacy.db), legacyInitial);
+    const realInitial = financialDump(real.db);
+    const invalid = await inviteCli(['admin@example.test', '--admin'], { ...cliEnv(real.dataDir), FATHOM_PUBLIC_URL: 'http://foreign.example.test' });
     assert.notEqual(invalid.code, 0);
     assert.equal(invalid.stdout.trim(), '');
-    assert.equal(createAuthStore(temp.db).listUsers().length, 0);
-    assert.deepEqual(financialDump(temp.db), initial);
-  } finally { temp.close(); rmSync(temp.dataDir, { recursive: true, force: true }); rmSync(missing, { recursive: true, force: true }); }
+    const store = createAuthStore(real.platform);
+    assert.equal(store.listPeople(store.servedHousehold().id).length, 0);
+    assert.equal(store.findUser('admin@example.test'), null);
+    assert.deepEqual(financialDump(real.db), realInitial);
+  } finally {
+    for (const temp of [demoInstance, real, legacy]) { temp.close(); rmSync(temp.dataDir, { recursive: true, force: true }); }
+    rmSync(missing, { recursive: true, force: true });
+  }
 });
 
 test('email failure revokes the bootstrap link and writes only a fixed sanitized error', T, async () => {
-  const temp = await tempDb();
+  const temp = await realInstance();
   try {
-    setSetting(temp.db, 'mode', 'real');
     const failed = await inviteCli(['private-test-address@example.test', '--admin'], {
       ...cliEnv(temp.dataDir), FATHOM_EMAIL_TRANSPORT: 'smtp', FATHOM_EMAIL_CREDENTIAL_FILE: join(temp.dataDir, 'missing-credential'),
     });
     assert.notEqual(failed.code, 0);
     assert.equal(failed.stdout.trim(), '');
     for (const text of ['private-test-address@example.test', 'missing-credential', 'ENOENT', '/enroll#']) assert.ok(!failed.stderr.includes(text));
-    assert.equal(temp.db.prepare('SELECT count(*) AS n FROM auth_tokens').get().n, 0);
+    assert.equal(liveInvitations(temp.platform), 0, 'the failed link is revoked');
+    assert.equal(temp.platform.prepare('SELECT count(*) AS n FROM auth_tokens').get().n, 0);
     const good = await inviteCli(['private-test-address@example.test', '--admin'], cliEnv(temp.dataDir));
     assert.equal(good.code, 0, good.stderr);
-    assert.ok(createAuthStore(temp.db).token(linkFrom(good.stdout).token));
+    assert.ok(createAuthStore(temp.platform).invitation(linkFrom(good.stdout).token));
+    assert.equal(liveInvitations(temp.platform), 1);
     assert.equal(temp.db.prepare('SELECT count(*) AS n FROM email_sends').get().n, 0);
   } finally { temp.close(); rmSync(temp.dataDir, { recursive: true, force: true }); }
 });
@@ -574,10 +623,10 @@ test('adding a credential excludes every current credential and malformed verifi
   try {
     const first = await clientFor(server, { email: 'add-first@example.test', role: 'member' });
     const second = await clientFor(server, { email: 'add-second@example.test', role: 'member' });
-    await dbCall(server, db => {
-      passkey(db, first.fixture.user.id, 'c3ludGhldGljLW9uZQ');
-      passkey(db, first.fixture.user.id, 'c3ludGhldGljLXR3bw');
-      passkey(db, second.fixture.user.id, 'c3ludGhldGljLW90aGVy');
+    await authCall(server, platform => {
+      passkey(platform, first.fixture.user.id, 'c3ludGhldGljLW9uZQ');
+      passkey(platform, first.fixture.user.id, 'c3ludGhldGljLXR3bw');
+      passkey(platform, second.fixture.user.id, 'c3ludGhldGljLW90aGVy');
     });
     const options = await first.postJson('/api/auth/register/options', { name: 'Additional synthetic credential' });
     assert.equal(options.status, 200, options.text);
@@ -585,7 +634,7 @@ test('adding a credential excludes every current credential and malformed verifi
     const failed = await first.postJson('/api/auth/register/verify', { response: {} }, { cookie: [first.fixture.cookie, cookies(options)].join('; ') });
     assert.equal(failed.status, 400);
     assert.equal(typeof failed.json.error, 'string');
-    await dbCall(server, (db, store) => {
+    await authCall(server, (platform, store) => {
       assert.equal(store.listPasskeys(first.fixture.user.id).length, 2);
       assert.equal(store.listPasskeys(second.fixture.user.id).length, 1);
     });
@@ -600,9 +649,9 @@ test('a member cannot revoke another account credential and their own remaining 
   try {
     const first = await clientFor(server, { email: 'credential-first@example.test', role: 'member' });
     const second = await clientFor(server, { email: 'credential-second@example.test', role: 'member' });
-    await dbCall(server, db => {
-      passkey(db, first.fixture.user.id, 'first-only');
-      passkey(db, second.fixture.user.id, 'second-only');
+    await authCall(server, platform => {
+      passkey(platform, first.fixture.user.id, 'first-only');
+      passkey(platform, second.fixture.user.id, 'second-only');
     });
     const refused = await first.postJson('/api/auth/passkeys/second-only/revoke');
     assert.ok([403, 404].includes(refused.status));
@@ -617,9 +666,8 @@ test('a member cannot revoke another account credential and their own remaining 
 });
 
 test('recovery does not await mail latency, sanitizes send failures and revokes a failed link before retry', T, async t => {
-  const temp = await tempDb();
-  setSetting(temp.db, 'mode', 'real');
-  const fixture = await createSessionFixture(temp.db, { email: 'latency@example.test', role: 'member' });
+  const temp = await realInstance();
+  const fixture = await createSessionFixture(temp.platform, { email: 'latency@example.test', role: 'member' });
   const sent = [];
   const logs = [];
   t.mock.method(console, 'error', (...args) => logs.push(args.join(' ')));
@@ -636,7 +684,7 @@ test('recovery does not await mail latency, sanitizes send failures and revokes 
       return completed ? Promise.resolve({ id: 'synthetic-delivery', recipients: 1 }) : pending;
     },
   };
-  const app = await serveAppFixture({ db: temp.db, config: { dataDir: temp.dataDir, emailTransport: 'dev',
+  const app = await serveAppFixture({ db: temp.db, platform: temp.platform, config: { dataDir: temp.dataDir, emailTransport: 'dev',
     emailFrom: REAL.FATHOM_EMAIL_FROM, emailTo: REAL.FATHOM_EMAIL_TO }, transport });
   let timer;
   try {
@@ -655,7 +703,7 @@ test('recovery does not await mail latency, sanitizes send failures and revokes 
     assert.deepEqual(unknown.json, response.json);
     rejectMail(new Error('synthetic-provider-private-diagnostic latency@example.test'));
     completed = true;
-    const store = createAuthStore(temp.db);
+    const store = createAuthStore(temp.platform);
     for (let i = 0; store.token(token) && i < 100; i++) await new Promise(resolve => setTimeout(resolve, 10));
     assert.equal(store.token(token), null);
     const logged = logs.join('\n');
@@ -678,16 +726,16 @@ test('recovery does not await mail latency, sanitizes send failures and revokes 
 });
 
 test('bootstrap CLI refuses after any member has enrolled and preserves that account and session', T, async () => {
-  const temp = await tempDb();
+  const temp = await realInstance();
   try {
-    setSetting(temp.db, 'mode', 'real');
-    const member = await createSessionFixture(temp.db, { email: 'existing-member@example.test', role: 'member' });
+    const member = await createSessionFixture(temp.platform, { email: 'existing-member@example.test', role: 'member' });
     const initial = financialDump(temp.db);
     const refused = await inviteCli(['new-admin@example.test', '--admin'], cliEnv(temp.dataDir));
     assert.notEqual(refused.code, 0);
     assert.equal(refused.stdout.trim(), '');
-    const store = createAuthStore(temp.db);
-    assert.equal(store.listUsers().length, 1);
+    const store = createAuthStore(temp.platform);
+    assert.deepEqual(store.listPeople(member.householdId).map(person => person.id), [member.user.id]);
+    assert.equal(store.membership(member.user.id, member.householdId).role, 'member');
     assert.equal(store.findUser('new-admin@example.test'), null);
     assert.equal(store.session(member.token).id, member.user.id);
     assert.deepEqual(financialDump(temp.db), initial);
