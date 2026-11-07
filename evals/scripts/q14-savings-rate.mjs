@@ -20,7 +20,7 @@ export async function script({ db, clock }) {
     };
     const result = await callTool('calculate', args, { db, clock });
     calls.push({ name: 'calculate', args });
-    const figure = result.result ?? result;
+    const figure = result.figure;
     return [
       { toolCalls: calls, costUsd: 0 },
       { text: `The returned savings rate is ${figure.quote ?? figure.value}.`, costUsd: 0 },
