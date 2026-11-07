@@ -31,7 +31,6 @@ import { loadPlanningData, resolveEntities } from '../../src/jobs/planner/data.m
 import { deriveFacts, mergeFacts, ownerFactsOf } from '../../src/jobs/planner/facts.mjs';
 import { notesFor } from '../../src/jobs/planner/assumptions.mjs';
 import { reasonText } from '../../src/jobs/triggers/missing-data.mjs';
-import { confirmTask } from '../../src/jobs/triggers/common.mjs';
 import { nameKey } from '../../src/ingest/extract.mjs';
 import {
   scratch, addFact, addFile, addNotes, addPayroll, factRow, contentValue, answerPending, figureRow, plannerFigures, recRow, activeRecIds, parseJson, pnlWorkbook,
@@ -488,8 +487,8 @@ test('MGI1: E1 an unread box 12 blocks only the deferral-dependent retirement ro
   assert.ok(typeof code === 'string' && code, `room.solo401k.employee withheld with a code: ${JSON.stringify(info.withheld)}`);
   assert.notEqual(reasonText({ info, entities: [] }, code), GENERIC, `${code} has its own reason text`);
   // An owner-answerable gap is shown on the retirement rec as the question to answer.
-  const task = confirmTask(code);
-  assert.ok(JSON.stringify((recRow(db, 'year-end-retirement') || {}).def || {}).includes(task), `the retirement rec asks: ${task}`);
+  const rec = recRow(db, 'year-end-retirement');
+  assert.ok(rec.def.question.fields.some(f => f.key === code), `the retirement rec asks through typed fields: ${code}`);
 });
 
 // Liveness, box 12 read. Form 8959 Part I: Additional Medicare Tax is 0.9% of Medicare wages (box 5)

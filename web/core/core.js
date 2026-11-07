@@ -655,6 +655,7 @@ const ACTIONS = new Set(['start', 'complete', 'dismiss', 'snooze', 'reopen']);
 function act(recId, action, arg) {
   const r = rawRec(recId);
   if (!r || r.status === 'hidden') return done();
+  if (r.question?.primary && (action === 'complete' || action === 'task')) return done();
   const body = { action };
   if (action === 'task') {
     const i = Number(arg);
@@ -1173,6 +1174,7 @@ const api = {
   needsYou,
   verdict,
   act,
+  answerRec: (id, answers) => send('/api/recs/' + encodeURIComponent(id) + '/answers', { answers }),
   ask,
   askFree,
   askStream,

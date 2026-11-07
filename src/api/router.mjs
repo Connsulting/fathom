@@ -20,6 +20,7 @@ import { HttpError, setSecurityHeaders, sendJson, sendError, guardPost, readJson
 import { guardUpload, readMultipart } from './upload.mjs';
 import { createStatic } from './static.mjs';
 import * as h from './handlers.mjs';
+import { recAnswers } from './fact-answers.mjs';
 import * as k from './keys.mjs';
 import { createKeyService, loadServerSecret } from '../mcp/keys.mjs';
 import { createMcpHandler } from '../mcp/index.mjs';
@@ -61,6 +62,7 @@ const TABLE = [
   { method: 'GET', path: '/api/pace', handler: gh.getPace },
   { method: 'GET', path: '/api/identity', handler: h.getIdentity, session: true },
   { method: 'POST', path: '/api/recs/:id/action', handler: h.recAction },
+  { method: 'POST', path: '/api/recs/:id/answers', handler: recAnswers, quiet: true },
   { method: 'POST', path: '/api/recs/:id/start-over', handler: h.recStartOver },
   { method: 'POST', path: '/api/wargame/:name/pick', handler: h.wargamePick },
   { method: 'POST', path: '/api/decisions/:id/decide', handler: h.decisionDecide },
