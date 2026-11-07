@@ -21,6 +21,9 @@ const fresh = () => ({
   seq: 0, tseq: 0, timer: 0
 });
 let S = fresh();
+// Request tokens come from one counter that never resets, so a response from an earlier visit to
+// an account can never match a later request's token (switching A to B to A included).
+let GEN = 0;
 
 export function reset() { clearTimeout(S.timer); S = fresh(); }
 
@@ -54,7 +57,8 @@ function ensure(id) {
 
 function loadDetail(id, sc) {
   S.sc = sc;
-  const seq = ++S.seq;
+  const seq = ++GEN;
+  S.seq = seq;
   Promise.resolve(H.api.accountDetail(id)).then((d) => {
     if (S.id !== id || seq !== S.seq) return;
     const prev = S.detail;
@@ -62,7 +66,8 @@ function loadDetail(id, sc) {
     if (d) {
       S.detail = d;
       // A sync or import changed the ledger: fetch the first page again.
-      if (prev && (prev.txn.count !== d.txn.count || prev.txn.to !== d.txn.to)) { S.items = null; S.next = null; }
+      // An append still in flight belongs to the old list: drop it so it cannot land on the new one.
+      if (prev && (prev.txn.count !== d.txn.count || prev.txn.to !== d.txn.to)) { S.items = null; S.next = null; S.tseq = ++GEN; S.txnBusy = false; }
     }
     H.draw();
   });
@@ -73,7 +78,8 @@ const rangeBad = () => !!(S.from && S.to && S.from > S.to);
 function loadTxns(append) {
   const id = S.id;
   if (rangeBad()) { S.items = S.items || []; S.total = 0; S.next = null; return; }
-  const seq = ++S.tseq;
+  const seq = ++GEN;
+  S.tseq = seq;
   S.txnBusy = true;
   const opts = { q: S.q.trim(), from: S.from, to: S.to, limit: PAGE, cursor: append ? S.next : null };
   Promise.resolve(H.api.accountTransactions(id, opts)).then((page) => {
@@ -144,7 +150,8 @@ function trendHtml(a, d) {
 
 function balanceHtml(a, d) {
   const { section, figHtml, esc } = H;
-  const asOf = a.asOf || d?.asOf;
+  // The balance's own date: newer transactions do not make an older balance current.
+  const asOf = d?.balance?.asOf || '';
   const body = `<div class="h-ad-balance"><div class="h-ad-bal">${a.fig ? figHtml(a.fig) : '<span class="h-mute">No balance</span>'}</div>${asOf ? `<p class="h-mute sm">As of ${esc(dateLabel(asOf))}</p>` : ''}${trendHtml(a, d)}</div>`;
   return section('Balance', body);
 }

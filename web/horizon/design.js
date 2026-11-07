@@ -2097,7 +2097,7 @@ function onDocumentKey(e) {
   if (e.key === 'Tab' && isDlgRoute(api.route?.name)) {
     const host = root.querySelector('.h-dlg-host');
     if (!host || host.hidden) return;
-    const f = [...host.querySelectorAll('a[href],button:not([disabled]),input:not([disabled]),textarea,[tabindex]:not([tabindex="-1"])')].filter((el) => el.offsetParent !== null);
+    const f = [...host.querySelectorAll('a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea,summary,[tabindex]:not([tabindex="-1"])')].filter((el) => el.offsetParent !== null);
     if (!f.length) return;
     const first = f[0], last = f[f.length - 1], act = document.activeElement;
     if (!host.contains(act) || act === host.querySelector('.h-dlg')) { e.preventDefault(); (e.shiftKey ? last : first).focus(); }
