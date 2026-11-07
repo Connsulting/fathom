@@ -513,3 +513,19 @@ describe('engine compatibility', () => {
     assert.equal(JSON.parse(got.content[0].text).id, expected[0].id);
   });
 });
+
+test('resolved transaction filters and keyset pages preserve every tied real-store row', async t => {
+  const { spendingStore } = await import('./helpers/spending.mjs');
+  const s = await spendingStore(t); s.account('paged', 'card');
+  for (let i=0;i<450;i++) s.tx('paged',i<300?'2026-10-01':'2026-10-02',-12,'Groceries','Example Market');
+  const args={operation:'search',accountId:'paged',bucket:'household',class:'essential_other',merchant:'example market',limit:200};
+  const seen=[]; let next;
+  do {
+    const page=await callTool('transactions',{...args,...(next?{cursor:next}:{})},s.ctx);
+    assert.equal(page.total,450);
+    for(const row of page.rows) { assert.equal(row.category,'Groceries'); assert.equal(row.bucket,'household'); assert.equal(row.class,'essential_other'); assert.equal(row.layer,'import'); assert.equal(row.merchant,'example market'); seen.push(row.id); }
+    next=page.next;
+  } while(next);
+  assert.equal(seen.length,450); assert.equal(new Set(seen).size,450);
+  await assert.rejects(callTool('transactions',{operation:'search',cursor:'invalid'},s.ctx),e=>e.code==='bad_input');
+});
