@@ -100,11 +100,14 @@ export function loadPlanningData(db, clock) {
   const listed = ownerFact(db, 'business.entities');
   const businessNames = [...new Map([...(Array.isArray(listed) ? listed.map(e => e && e.name) : []), ...pnl.map(l => l.entity)]
     .filter(n => typeof n === 'string' && normalizeName(n)).map(n => [normalizeName(n), n.trim()])).values()];
+  const householdNames = parseJson(db.prepare("SELECT value FROM facts WHERE key = 'household.names'").get()?.value, {}) || {};
+  const holders = new Map(db.prepare('SELECT account_id, holder FROM account_holders').all().map((r) => [r.account_id, r.holder]));
   const accounts = db.prepare('SELECT * FROM accounts ORDER BY sort, id').all().map(a => {
     const kind = String(a.kind || '').toLowerCase();
     const stated = typeof byAccount[a.id] === 'string' && byAccount[a.id].trim() ? byAccount[a.id].trim() : null;
     return {
-      id: a.id, inst: a.inst, mask: a.mask, name: a.name || '', display_name: a.display_name || null, owner: ownerOf(a.owner), kind,
+      id: a.id, inst: a.inst, mask: a.mask, name: a.name || '', display_name: a.display_name || null,
+      holder: holders.get(a.id) || null, householdNames, owner: ownerOf(a.owner), kind,
       fileId: a.file_id, entity: stated ?? (kind === 'business' && businessNames.length === 1 ? businessNames[0] : null),
       latest: latestBalance(db, a.id, clock),
     };

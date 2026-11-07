@@ -226,10 +226,14 @@ export const tools = [
     handler(args, ctx) {
       const scope = tokenScope(ctx.db);
       const latest = ctx.db.prepare('SELECT date, amount FROM balances WHERE account_id = ? ORDER BY date DESC LIMIT 1');
+      const householdNames = parse(ctx.db.prepare("SELECT value FROM facts WHERE key = 'household.names'").get()?.value, {}) || {};
+      const holders = new Map(ctx.db.prepare('SELECT account_id, holder FROM account_holders').all().map((r) => [r.account_id, r.holder]));
       return ctx.db.prepare('SELECT * FROM accounts ORDER BY sort, id').all().map(a => {
         const b = latest.get(a.id);
         const out = {
-          id: a.id, inst: a.inst, mask: a.mask, name: accountLabel(a), importedName: a.name, owner: a.owner, kind: a.kind, mirror: a.mirror,
+          id: a.id, inst: a.inst, mask: a.mask,
+          name: accountLabel({ ...a, householdNames, holder: holders.get(a.id) || null }),
+          importedName: a.name, owner: a.owner, kind: a.kind, mirror: a.mirror,
           note: a.note || '', balance: b ? b.amount : null, asOf: b ? b.date : null,
         };
         // Imported accounts carry text from uploaded files: verbatim, never token-resolved.

@@ -69,7 +69,10 @@ function accountView(db, id) {
     id: a.id,
     institution: a.inst || null,
     name: a.name ?? null,
-    label: accountLabel({ ...a, holder }),
+    label: accountLabel({
+      ...a, holder,
+      householdNames: parseJson(db.prepare("SELECT value FROM facts WHERE key = 'household.names'").get()?.value, {}) || {},
+    }),
     mask: a.mask ?? null,
     kind: a.kind ?? null,
     owner: a.owner ?? null,

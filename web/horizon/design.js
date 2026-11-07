@@ -2066,7 +2066,7 @@ SCREENS.forEach((s) => s.bind(KIT));
 function mount(r, a) {
   api = a; root = r; ui = freshUi(); lastKey = ''; connectOn = false;
   SCREENS.forEach((s) => s.reset?.());
-  ingest = ingestScreens({ api, shell, section, pageHead, btn, icon, esc, T, X, draw, goA });
+  ingest = ingestScreens({ api, shell, section, pageHead, btn, icon, esc, T, X, draw, goA, getUi: () => ui });
   email = emailScreen({ shell, section, pageHead, btn, esc, draw });
   root.innerHTML = '<div class="h-root"></div><div class="h-dlg-host" hidden></div>';
   keys = createKeys();
