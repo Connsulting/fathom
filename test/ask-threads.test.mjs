@@ -18,7 +18,7 @@ import { createLiveAnswerer } from '../src/api/answerer.mjs';
 import { createThread, purgeTrash } from '../src/api/threads.mjs';
 import { defaultHandlers } from '../src/jobs/scheduler.mjs';
 import {
-  SERVER_TIMEOUT, withAuthenticatedServer, withServer, spawnServer, openStore, tempDb, tempDir,
+  SERVER_TIMEOUT, withAuthenticatedServer, withServer, spawnServer, openStore, tempDb, tempDir, migrateLegacyStore,
 } from './helpers/server.mjs';
 
 const T = { timeout: SERVER_TIMEOUT };
@@ -346,6 +346,8 @@ test('AC6 the migrated thread is first in the active list of a restarted 007 sto
     setSetting(db, 'mode', 'real');
     addConversation(db, 'ask', OLD_ASK_CREATED, OLD_ASK);
   });
+  // Since MT-01 a real store reaches the new release through the offline platform migration.
+  await migrateLegacyStore(dataDir);
   await withAuthenticatedServer({ dataDir, env: REAL }, async s => {
     const lists = await listThreads(s);
     assert.equal(lists.active.length, 1);

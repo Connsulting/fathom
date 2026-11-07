@@ -75,7 +75,7 @@ An upload commits rows, then the scheduler is asked to plan and to guess confirm
 9. MCP and keys: MCP server.
 10. Packs and Your plans: Live pack state, Your plans.
 11. Email: Email.
-12. Accounts, passkeys and sessions: Accounts and sessions.
+12. Accounts, passkeys and sessions: Accounts and sessions, Platform database.
 13. Onboarding: Onboarding.
 14. Goals: Goals and the tradeoff curve.
 15. Advisor: Advisor workflow.
@@ -102,7 +102,8 @@ over every module's test directory (`npm test`), end-to-end tests with Playwrigh
 | `src/store/` | `db.mjs` plus `migrations/NNN-name.sql`. Owned by the foundation item. |
 | `src/scenario/build.mjs` | Store to CONTRACT.md scenario object (`buildScenario`). |
 | `src/api/` | Router, handlers, HTTP guards, static serving, the live answerer and its fake answer source. |
-| `src/auth/` | Accounts: the auth store (users, passkeys, tokens, sessions, challenges, rate limits), the WebAuthn service and the auth and admin handlers. |
+| `src/auth/` | Accounts: the auth store (users, memberships, invitations, operators, passkeys, tokens, sessions, challenges, rate limits; it opens `platform.sqlite`, never the financial store), the WebAuthn service and the auth, admin and operator handlers. |
+| `src/platform/` | The platform database: `db.mjs` (`openPlatform`, `createInstance`, `store_identity` DDL), `ready.mjs` (startup refusals), `migrate.mjs` (the offline account migration), `snapshot.mjs` (encrypted source snapshots and rollback) and `migrations/`. |
 | `src/shared/` | Browser-safe logic used by the server and the UI (`rules.mjs`, `tokens.mjs`). |
 | `src/tools/` | Tool registry shared by the chat engine and the MCP server. |
 | `src/calc/` | Deterministic calculators (tax, payroll, retirement room, cash). |
@@ -324,7 +325,8 @@ secrets are read there.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `FATHOM_DATA` | `./data` (gitignored) | Data directory; holds `fathom.sqlite`. |
+| `FATHOM_DATA` | `./data` (gitignored) | Data directory; holds `fathom.sqlite` and `platform.sqlite`. |
+| `FATHOM_BACKUP_KEY_FILE` | unset | Path to a private file holding a 32-byte key. Read only by `scripts/migrate-platform.mjs` and `scripts/source-snapshot.mjs`, which encrypt source snapshots with it; the server never reads it. |
 | `FATHOM_PORT` | `8080` | HTTP port. |
 | `FATHOM_HOST` | `127.0.0.1` (the image sets `0.0.0.0`) | Bind address. |
 | `FATHOM_DEMO` | unset (auto) | `1` demo store required, `0` real store required, unset follows the store (a new store is demo). |
@@ -414,14 +416,8 @@ Money columns are dollars rounded to cents; JSON columns hold JSON text. The pro
 | `job_lock` | `id` PK (always 1), `holder`, `expires_at`: the scheduler lease |
 | `email_sends` | `id` PK, `ts`, `kind` in brief, alert, test, `subject`, `status` in sent, failed, `error_code`, `transport`, `recipients` (a count), `message_id`, `job_run_id`. No bodies and no addresses. |
 | `deadline_alerts` | `key`, `threshold` (14, 7 or 1), `deadline_date`, `sent_at`, `send_id`; PK (`key`, `threshold`) |
-| `api_keys` | `id` PK, `name`, `key_hash`, `scopes` JSON, `created_at`, `last_used_at`, `revoked_at`, `user_id` (references `users.id`, cascade delete; the creator, NULL for keys made before accounts) |
-| `households` | `id` PK, always 1: the one household. Created on demand before the first user. |
-| `users` | `id` PK (UUID), `household_id` (references `households.id`), `email` (canonical, unique), `role` in admin, member, `user_handle` (random, the WebAuthn user handle), `created_at`, `enrolled_at` (NULL until the first passkey verifies) |
-| `passkeys` | `id` PK (credential id), `user_id` (references `users.id`, cascade delete), `public_key` BLOB, `counter`, `transports` JSON, `name`, `created_at` |
-| `auth_tokens` | SHA-256 digest of an enrollment, recovery or add-a-device token PK, `user_id` (cascade delete), purpose `invite`, `recovery` or `add-passkey`, expiry. Never the token. |
-| `auth_sessions` | SHA-256 digest of a session cookie PK, `user_id` (cascade delete), `signed_in_at` (wall-clock milliseconds of the sign-in or link registration that created it, NOT NULL), expiry. Never the cookie. |
-| `auth_challenges` | digest of the ceremony cookie PK, ceremony, `user_id` (NULL for sign-in), the token and session digests it was issued for (NULL when none), the challenge, expiry. Used once. |
-| `auth_rate_limits` | hashed bucket key PK, window, attempts. No raw email or address. |
+| `api_keys` | `id` PK, `name`, `key_hash`, `scopes` JSON, `created_at`, `last_used_at`, `revoked_at`, `user_id` (the creator's platform user id, no foreign key; NULL for keys made before accounts). A key whose creator is not an active member of the served household fails closed (`creatorActive` in `src/mcp/keys.mjs`). `/mcp` keys stay in the financial store until a later package. |
+| `store_identity` | `id` PK (always 1), `household_id` (the platform household this store serves), `platform_operation` (the operation that bound it, NULL for a synthetic demo binding). Migration 022 and the offline migration create it with identical DDL. |
 | `spend_ledger` | `id` PK, `ts`, `yyyymm` `'YYYY-MM'`, `purpose`, `cost_usd` (full precision), `model`, `tokens` JSON (usage counts only, never prompt text) |
 | `superseded_rows` | `id` PK, `table_name`, `dedupe_key`, `row` JSON (the archived row), `file_id`, `superseded_by` (references `files.id`), `reason` (`revised`, `removed`, `older_snapshot`, `alias_merged`, `duplicate_confirmed`, `duplicate_cross_format`, `duplicate`, `summarized`), `at`, `survivor_key` (for `duplicate_confirmed`, the dedupe key of the row it was confirmed against) |
 | `confirm_items` | `id` PK, `kind`, `subject`, `question`, `options` JSON `[{id, label}]`, `context` JSON, `status` in pending, answered, `answer`, `file_id`, `created_at`, `answered_at`; unique (`kind`, `subject`) |
@@ -499,9 +495,9 @@ Migration 017 (`017-confirm-context.sql`) creates `account_holders`, `confirm_au
 new column on `accounts` or `confirm_items` would make every stored undo log, which holds
 whole-row images, fail its revert.
 
-Migration 018 (`018-accounts.sql`) creates `households`, `users`, `passkeys`, `auth_tokens`,
-`auth_sessions`, `auth_challenges` and `auth_rate_limits`, and adds `api_keys.user_id` (existing
-keys keep NULL). It changes no household data table. The household row is created lazily by the
+Migration 018 (`018-accounts.sql`) created `households`, `users`, `passkeys`, `auth_tokens`,
+`auth_sessions`, `auth_challenges` and `auth_rate_limits` in the financial store, and added
+`api_keys.user_id` (existing keys keep NULL); migration 022 moved them out (below). It changes no household data table. The household row is created lazily by the
 auth store before the first user, so the demo seed's empty-store check and clear order are
 unchanged (see Accounts and sessions).
 
@@ -509,6 +505,15 @@ Migration 020 (`020-auth-token-add-passkey.sql`, `-- REBUILDS_TABLE`) rebuilds `
 purpose CHECK allows `add-passkey` besides `invite` and `recovery`. Rows, the primary key, the
 cascade foreign key to `users`, `UNIQUE (user_id, purpose)`, the `auth_tokens_expiry` index and the
 `auth_challenges.token_hash` reference are preserved; `foreign_key_check` is clean before commit.
+
+Migration 022 (`022-platform-identity.sql`, `-- REBUILDS_TABLE`) ends accounts in the financial store.
+It creates `store_identity` if absent, then rebuilds `api_keys` without the `users` foreign key (every
+column, row and the `api_keys_user` index stay) and drops `auth_challenges`, `auth_sessions`,
+`auth_tokens`, `passkeys`, `auth_rate_limits`, `users` and `households`. A guard aborts it, keeping
+every row, unless `store_identity` has a row or the store never held a user, passkey, token or
+session. The offline migration (see Platform database) copies the account rows to `platform.sqlite`
+and writes `store_identity` before this migration may run. A new demo store gets its identity from
+`createInstance`; a demo store from before the platform gets a synthetic platform at startup.
 
 Migration 019 (`019-rec-owner-goal-links.sql`) adds `recs.owner`, `recs.owner_override` and
 `recs.goal_kinds` with `ALTER TABLE ADD COLUMN` (constant defaults and CHECKs, no rebuild).
@@ -789,7 +794,7 @@ known path with the wrong method is 405; signed out, both are 401. Every action 
 |---|---|---|
 | `GET /healthz` | | `{ok: true, schema: <latest migration id>}` |
 | `GET /api/scenario` | | the scenario with `live` |
-| `GET /api/identity` | | `{identity: {id, email, name, login, householdId, role} or null}`. The signed-in user (`name` and `login` are the email). Always `null` on a demo store. |
+| `GET /api/identity` | | `{identity: {id, email, name, login, householdId, role, operator, memberships} or null}`. The signed-in user (`name` and `login` are the email). `householdId` is the opaque id of the session's household (null without an active membership there), `role` that membership's role while the household is active (else null), `operator` the instance operator flag, `memberships` the user's own `[{householdId, role}]`. Needs a session only, no membership. Always `null` on a demo store. Every other non-public `/api` route needs an active membership in the served household: 403 `{error: 'household membership required'}` otherwise. |
 | `GET /signin` | | Public page: `web/auth/index.html` (sign in with a passkey, email recovery link). Loads only `/auth/auth.js`, `/auth/return-path.js`, `/auth/auth.css` and `/favicon.svg`; never the scenario. |
 | `GET /enroll` | | Public page: the same file. Reads the token from the `#` fragment of an emailed link, removes it from history at once, and creates a passkey. |
 | `GET /account` | | Signed-in page: the same file. Passkeys (add, revoke), emailing an add-a-device link, and sign out. |
@@ -808,7 +813,9 @@ known path with the wrong method is 405; signed out, both are 401. Every action 
 | `POST /api/admin/users/invite` | `{email, role}` | A generic 200 that never includes the link. Creates the user if new, or for a pending invitation sets the requested role, and emails a fresh enrollment link, revoking older ones. 409 for an enrolled address, even with the same role: change its role with the role action instead. Rate limited (429). Admins only. |
 | `POST /api/admin/users/:id/role` | `{role}` | 200. `admin` or `member`. 409 when it would leave no enrolled admin. Admins only. |
 | `POST /api/admin/users/:id/remove` | `{}` | 200. Deletes the user with their passkeys, sessions, tokens and the MCP keys they created. 409 for the last enrolled admin. Admins only. |
-| `POST /api/admin/users/:id/passkeys/:keyId/revoke` | `{}` | 200. Deletes that passkey and every session of its user; their MCP keys stay live. Admins only. |
+| `POST /api/admin/users/:id/passkeys/:keyId/revoke` | `{}` | 200. Deletes that passkey and every session of its user; their MCP keys stay live. Admins only. Every admin action resolves the target inside the admin's household first and answers 404 for anyone else, before any change. |
+| `POST /api/auth/invitations/accept` | `{token}` | `{identity}`. A signed-in user joins the invitation's household with the invitation's role (a body role is ignored). 410 for an unknown, expired, consumed or revoked link; 403 when the invitation is for another address (nothing changes). Session required. |
+| `POST /api/operator/households` | `{displayName, adminEmail}` | `{household: {id, status: 'provisioning'}}` and an admin invitation emailed to `adminEmail`. Instance operators only (403 otherwise); no membership needed. 409 `{error, code: 'multi_household_gated'}` while the platform setting `multi_household_enabled` is off and a non-deleted real household exists (provisioning included); demo instances are exempt. |
 | `POST /api/recs/:id/start-over` | `{}` | `{scenario}`. Detaches every thread asked from the rec that is still attached (sets `recDetachedAt` to the app clock time), so the rec dialog opens a fresh composer; an already detached thread keeps its time. Threads, messages, titles, archive and trash are untouched. 404 unknown or hidden rec. |
 | `POST /api/recs/:id/action` | `{action: start, snooze, dismiss, complete, reopen, task or owner, arg?}` | `{scenario}`. `task` toggles task `arg`; `snooze` takes a wake label (default "Next month"); `owner` sets the action owner to `arg` (one of `you`, `spouse`, `both`, `advisor`, `automatic`, case sensitive) with `owner_override = 1`, status unchanged. 400 bad action, task index or owner, 404 unknown or hidden rec. Writes `rec_events` (actor `ui`; for `owner` action `owner`, arg the owner, from and to the current status). |
 | `POST /api/wargame/:name/pick` | `{index}` (an index or an option id) | `{scenario}`. `name` is salary or deferral (404 otherwise); 400 out of range. |
@@ -907,7 +914,8 @@ API responses also set `Cache-Control: no-store`.
 
 ### Accounts and sessions
 
-A real store has accounts for one household; a demo store has none and stays open. `src/auth/`
+A real store has accounts; a demo store has none and stays open. Accounts live in `platform.sqlite`,
+not in `fathom.sqlite` (see Platform database). `src/auth/`
 holds the store (`createAuthStore`), the WebAuthn service (`createAuthService`, on
 `@simplewebauthn/server`) and the handlers; `src/api/identity.mjs` resolves the session and serves
 the unauthorized page; the router runs the gate once per request. Handlers see the signed-in user
@@ -915,9 +923,10 @@ as `ctx.identity` (null on a demo store).
 
 Model.
 
-1. One household (`households`, a single row with id 1). Every user belongs to it with role
-   `admin` or `member`. Household data is not scoped by user: every signed-in person reads and
-   changes the same store. This is access control for one household, not multi-tenancy.
+1. One served household. A user is a global account (`users`) and holds a role, `admin` or `member`,
+   in a household through `household_memberships`. The singleton financial store serves the one
+   household marked `serves_store` and named by `store_identity`. Household data is not scoped by
+   user: every active member of the served household reads and changes the same store.
 2. Members have the whole app, including MCP keys of their own. Admins also invite people, change
    roles, remove people, revoke anyone's passkeys, and list or revoke every MCP key. Admin routes
    answer 403 to members, and `/admin/users` is a 403 page for them, whatever the URL.
@@ -928,8 +937,69 @@ Model.
    characters and a DNS-style domain of letters, digits and hyphens. No Unicode or IDN, quoted
    local parts, comments, lists or plus-tag stripping. Lookup, uniqueness and delivery all use the
    stored canonical address.
-5. The user projection is `{id, email, name, login, householdId, role}` with `name` and `login`
-   equal to the email, so the UI's identity shape is unchanged.
+5. The user projection is `{id, email, name, login, householdId, role, operator, memberships}` with
+   `name` and `login` equal to the email (see `GET /api/identity`).
+6. Instance operators (`instance_operators`) are granted at the OS boundary with
+   `node scripts/operator.mjs grant <email>` or `revoke <email>`, for an enrolled account only; the
+   last operator cannot be revoked. Operators may provision households; they get no data access
+   without a membership.
+
+### Platform database
+
+`platform.sqlite` sits beside `fathom.sqlite` in `FATHOM_DATA`. It is opened by `openPlatform`
+(`src/platform/db.mjs`), which applies `src/platform/migrations/NNN-name.sql` with the same
+migration runner as the store. Times are epoch milliseconds. Secrets are stored as SHA-256 digests
+only. `src/auth/store.mjs` is the only module that reads or writes it, apart from the migration and
+CLIs.
+
+| Table | Columns |
+|---|---|
+| `households` | `id` PK, `status` in provisioning, active, suspended, deleted, `mode` in real, demo, `display_name`, `serves_store` (0 or 1; a unique index allows at most one served household), `created_at`, `updated_at` |
+| `users` | `id` PK, `email` (canonical, unique), `user_handle` (random, unique, the WebAuthn user handle), `created_at`, `enrolled_at` (NULL until the first passkey verifies) |
+| `household_memberships` | `user_id` (cascade delete), `household_id`, `role` in admin, member, `status` in active, removed, `version`, `created_at`, `updated_at`; unique (`user_id`, `household_id`) |
+| `instance_operators` | `user_id` PK (cascade delete), `granted_at`, `granted_by` |
+| `passkeys` | `id` PK (credential id), `user_id` (cascade delete), `public_key` BLOB, `counter`, `transports` JSON, `name`, `created_at` |
+| `auth_tokens` | digest of a recovery or add-a-device token PK, `user_id` (cascade delete), purpose `recovery` or `add-passkey`, expiry; unique (`user_id`, `purpose`). Never the token. |
+| `household_invitations` | digest of the invitation token PK, `household_id`, `email`, `role`, `user_id` (the invitee's account row, created pending when the email is new), `inviter_user_id`, `created_at`, `expires_at`, `consumed_at`, `revoked_at`. At most one live (unconsumed, unrevoked) invitation per household and email. |
+| `auth_sessions` | digest of a session cookie PK, `user_id` (cascade delete), `signed_in_at`, `expires_at`, `household_id` (the session's household), `context_version`. Never the cookie. |
+| `auth_challenges` | digest of the ceremony cookie PK, ceremony `register` or `signin`, `user_id`, the token, session and invitation digests it was issued for (each NULL when none), the challenge, expiry. Used once. |
+| `auth_rate_limits` | hashed bucket key PK, window, attempts. No raw email or address. |
+| `platform_settings` | `key` PK, `value` JSON, `updated_at`. `multi_household_enabled` (boolean, false when absent). |
+| `audit_events` | `id` PK, `at`, `actor_user_id`, `household_id`, `target_user_id`, fixed `action` and `outcome` codes. No payloads, emails or tokens. |
+| `platform_operations` | `id` PK, `kind`, `phase`, `status` in running, done, `started_at`, `updated_at`, `detail` JSON (counts and hashes only) |
+
+Memberships and invitations.
+
+1. Every non-public `/api` route needs an active membership in the served household, else 403
+   `{error: 'household membership required'}`. Session-only and operator routes are the exceptions.
+   Removing a user marks the membership `removed`, revokes their pending invitations and sessions,
+   and deletes the account when no other membership holds it.
+2. An invitation targets one household. Accepting it (`POST /api/auth/invitations/accept`) adds an
+   active membership with the invitation's role for the signed-in user; the invitation must be for
+   that user's own address (403 otherwise) and unexpired, unconsumed and unrevoked (410). A new
+   address enrolls through the emailed `/enroll` link first. At most 20 invitations per household per hour.
+3. `POST /api/operator/households` creates a household in `provisioning` and emails its first admin
+   an invitation. While `multi_household_enabled` is off and a non-deleted real household exists,
+   it answers 409 `multi_household_gated`; demo instances are exempt.
+
+Startup and the offline migration.
+
+1. `openServedStore` (`src/platform/ready.mjs`) is the only way the server and CLIs open an existing
+   instance. It refuses with a fixed code: `platform_migration_in_progress` while
+   `platform-migration.lock` exists; `platform_migration_required` for a real store with no
+   `platform.sqlite`, before the store is opened or migrated; `household_store_mismatch` when
+   `store_identity` does not name the platform's served household of the same mode. A demo store with
+   no platform gets a synthetic one.
+2. `node scripts/migrate-platform.mjs` (`FATHOM_DATA`, `FATHOM_BACKUP_KEY_FILE`) migrates a real
+   store offline: it holds the store's exclusive lock (`source_in_use` when anything else has it
+   open), writes an encrypted source snapshot to `snapshots/` in the data directory, stages and
+   verifies `platform.sqlite` against the source rows, publishes it, writes `store_identity`, then
+   applies migration 022. State is in `platform-migration.json` and `platform-migration.lock`
+   (counts and digests, never row values). A rerun resumes an interrupted run or verifies a finished one.
+3. `node scripts/source-snapshot.mjs create|restore|rollback` handles encrypted snapshots. `rollback`
+   builds a data directory for the previous release from a snapshot and the current directory,
+   leaving the current one untouched. It is valid only until the new release has taken writes,
+   because the previous release does not see them.
 
 Passkeys.
 
@@ -972,7 +1042,8 @@ Sessions and challenges.
 2. A ceremony cookie with the same attributes ties each WebAuthn challenge (five minutes, single
    use) to the browser that asked for it. The server manages it.
 3. Sign out deletes the current session only. Removing a user deletes their passkeys, sessions,
-   tokens and the MCP keys they created, so their bearer keys fail at once.
+   tokens and the MCP keys they created, so their bearer keys fail at once (the `creatorActive` check
+   in `src/mcp/keys.mjs` also fails them closed against the platform).
 4. Expired token, session, challenge and rate-limit rows are deleted lazily when the auth service
    handles a request and when the CLI runs. Nothing unexpired and no household data is touched.
 5. Clocks are wall time. Chromium treats `http://localhost` as secure, so local tests get the

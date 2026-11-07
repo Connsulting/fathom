@@ -20,11 +20,15 @@ const LIST_FIELDS = ['createdAt', 'id', 'lastUsedAt', 'name', 'revokedAt', 'scop
 let t;
 let clock;
 let svc;
+// Creators with an active membership in the served household (the platform's answer, faked here:
+// the key service only sees creatorActive).
+const active = new Set();
+const creatorActive = userId => active.has(userId);
 
 before(async () => {
   t = await tempDb();
   clock = new Date('2026-11-05T15:00:00.000Z');
-  svc = createKeyService({ db: t.db, serverSecret: SECRET, now: () => clock });
+  svc = createKeyService({ db: t.db, serverSecret: SECRET, creatorActive, now: () => clock });
 });
 after(() => t && t.close());
 
@@ -193,6 +197,39 @@ describe('key service', () => {
     assert.equal(again.revokedAt, stamp, 'second revoke keeps the first timestamp');
     assert.equal(svc.list().find(k => k.id === record.id).revokedAt, stamp);
     assert.equal(svc.verify(key), null);
+  });
+
+  // Contradiction 1: with no users foreign key, verify fails closed on a creator who is no longer an
+  // active member; ownerless keys do not depend on any member.
+  test('a creator-owned key verifies only while its creator is an active member; ownerless keys are unaffected', () => {
+    active.add('user-creator');
+    const owned = svc.create({ name: 'Creator key', userId: 'user-creator' });
+    const ownerless = svc.create({ name: 'Ownerless key' });
+    assert.equal(svc.verify(owned.key).id, owned.record.id);
+    assert.equal(svc.verify(ownerless.key).id, ownerless.record.id);
+    active.delete('user-creator');
+    assert.equal(svc.verify(owned.key), null, 'a removed creator key no longer verifies');
+    assert.equal(svc.verify(ownerless.key).id, ownerless.record.id);
+    assert.ok(rows().some(r => r.id === owned.record.id), 'verification alone deletes nothing');
+    active.add('user-creator');
+    assert.equal(svc.verify(owned.key).id, owned.record.id, 'an active creator verifies again');
+    active.delete('user-creator');
+    tick();
+  });
+
+  test('ownerless keys stay manageable by an unscoped (admin) caller and refused to a member caller', () => {
+    const ownerless = svc.create({ name: 'Admin managed key' });
+    assert.ok(svc.list().some(k => k.id === ownerless.record.id), 'the unscoped listing carries it');
+    assert.ok(!svc.list({ userId: 'user-member' }).some(k => k.id === ownerless.record.id));
+    assert.throws(() => svc.revoke(ownerless.record.id, { userId: 'user-member' }), isCode('forbidden'));
+    tick();
+    assert.equal(svc.revoke(ownerless.record.id).revokedAt, clock.toISOString());
+    assert.equal(svc.verify(ownerless.key), null);
+    tick();
+  });
+
+  test('createKeyService requires creatorActive', () => {
+    assert.throws(() => createKeyService({ db: t.db, serverSecret: SECRET, now: () => clock }));
   });
 
   test('revoke of an unknown id is not_found', () => {

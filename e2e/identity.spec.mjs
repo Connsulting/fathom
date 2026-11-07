@@ -139,13 +139,16 @@ test.describe('passkey accounts through the browser', () => {
       expect(refused.status()).toBe(400);
       expect(await refused.json()).toEqual({ error: 'a discoverable passkey is required' });
       await expect(admin.page.locator('body')).toContainText('Try another browser or passkey provider.');
-      const db = openDb(join(dataDir, 'fathom.sqlite'));
+      // Accounts live in platform.sqlite; the bootstrap link is a household invitation, not an auth token.
+      const db = openDb(join(dataDir, 'platform.sqlite'));
       try {
         const user = db.prepare('SELECT id, enrolled_at FROM users WHERE email = ?').get(OWNER);
         expect(user.enrolled_at).toBe(null);
         expect(db.prepare('SELECT count(*) AS n FROM passkeys WHERE user_id = ?').get(user.id).n).toBe(0);
         expect(db.prepare('SELECT count(*) AS n FROM auth_challenges WHERE user_id = ?').get(user.id).n).toBe(0);
-        expect(db.prepare('SELECT count(*) AS n FROM auth_tokens WHERE user_id = ?').get(user.id).n).toBe(1);
+        expect(db.prepare('SELECT count(*) AS n FROM auth_tokens WHERE user_id = ?').get(user.id).n).toBe(0);
+        expect(db.prepare('SELECT count(*) AS n FROM household_invitations WHERE user_id = ? AND consumed_at IS NULL AND revoked_at IS NULL').get(user.id).n).toBe(1);
+        expect(db.prepare('SELECT count(*) AS n FROM household_memberships WHERE user_id = ?').get(user.id).n).toBe(0);
       } finally { db.close(); }
       expect((await admin.context.request.get('/api/scenario')).status()).toBe(401);
       await admin.auth.replace();
@@ -158,7 +161,10 @@ test.describe('passkey accounts through the browser', () => {
       expect(registration.options.extensions.credProps).toBe(true);
       expect(registration.options.attestation).toBe('none');
       ownerIdentity = registration.identity;
-      expect(ownerIdentity).toMatchObject({ email: OWNER, login: OWNER, name: OWNER, householdId: 1, role: 'admin' });
+      // householdId is the opaque platform household id (MT-01 contradiction 8), no longer the integer 1.
+      expect(ownerIdentity).toMatchObject({ email: OWNER, login: OWNER, name: OWNER, householdId: expect.any(String), role: 'admin', operator: false });
+      expect(ownerIdentity.householdId.length).toBeGreaterThan(0);
+      expect(ownerIdentity.memberships).toEqual([{ householdId: ownerIdentity.householdId, role: 'admin' }]);
       expect((await sessionIdentity(admin)).id).toBe(ownerIdentity.id);
       const cookies = await admin.context.cookies(base);
       const cookie = cookies.find((item) => item.name === '__Host-fathom-session');
@@ -281,7 +287,8 @@ test.describe('passkey accounts through the browser', () => {
       await visitEnrollment(secondAdmin, link);
       const notice = securitySnapshot();
       const registration = await register(secondAdmin, 'Second admin device');
-      expect(registration.identity).toMatchObject({ email: SECOND_ADMIN, role: 'admin', householdId: 1 });
+      expect(registration.identity).toMatchObject({ email: SECOND_ADMIN, role: 'admin', householdId: ownerIdentity.householdId, operator: false });
+      expect(registration.identity.memberships).toEqual([{ householdId: ownerIdentity.householdId, role: 'admin' }]);
       expect(registration.identity.id).not.toBe(ownerIdentity.id);
       await securityNotices(notice, 'Fathom passkey added', [SECOND_ADMIN]);
       expect((await secondAdmin.context.request.get('/api/admin/users')).status()).toBe(200);
@@ -336,7 +343,8 @@ test.describe('passkey accounts through the browser', () => {
       const notice = securitySnapshot();
       const registration = await register(member, 'Member device');
       await securityNotices(notice, 'Fathom passkey added', [MEMBER]);
-      expect(registration.identity).toMatchObject({ email: MEMBER, role: 'member', householdId: 1 });
+      expect(registration.identity).toMatchObject({ email: MEMBER, role: 'member', householdId: ownerIdentity.householdId, operator: false });
+      expect(registration.identity.memberships).toEqual([{ householdId: ownerIdentity.householdId, role: 'member' }]);
       await member.page.goto(`${base}/`);
       await expect(member.page).toHaveURL(/#\/home$/);
       await member.page.locator('header.h-top a.h-gear').click();
@@ -444,7 +452,7 @@ test.describe('passkey accounts through the browser', () => {
       await signin(returning, 200, '#/plan');
       await expect(returning.page).toHaveURL(/#\/plan$/);
       const raw = (await returning.context.cookies(base)).find((item) => item.name === '__Host-fathom-session').value;
-      const db = openDb(join(dataDir, 'fathom.sqlite'));
+      const db = openDb(join(dataDir, 'platform.sqlite'));
       try { db.prepare('DELETE FROM auth_sessions WHERE hash = ?').run(digest(raw)); }
       finally { db.close(); }
       await returning.page.evaluate(() => window.Fathom.api.goalCreate({ name: 'Synthetic' })).catch(() => {});

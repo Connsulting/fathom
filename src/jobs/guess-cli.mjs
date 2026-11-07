@@ -3,11 +3,13 @@
 // scheduler, so the run takes the job lease and gets its job_runs row like any other). Prints one
 // JSON line {status, note} (counts only, never a question or a value). Exit 0 when the run is ok
 // or skipped, 1 when there is no store (nothing is created) or the run fails, 3 when another
-// process (the server) holds the job lease.
+// process (the server) holds the job lease. A real store opens only through openServedStore; a
+// demo store opens directly.
 
 import { join } from 'node:path';
 import { loadConfig } from '../config.mjs';
 import { openMigrated, readStoreMode, DB_FILE } from '../store/db.mjs';
+import { openServedStore } from '../platform/ready.mjs';
 import { createRuntimeEngine } from '../engine/runtime.mjs';
 import { createScheduler, defaultHandlers, SchedulerError } from './scheduler.mjs';
 
@@ -23,11 +25,23 @@ async function main() {
     return 1;
   }
   const file = join(config.dataDir, DB_FILE);
-  if (readStoreMode(file) === null) {
+  const mode = readStoreMode(file);
+  if (mode === null) {
     console.error('confirm:guess: no store in FATHOM_DATA; start the server once to create one.');
     return 1;
   }
-  const db = openMigrated(file);
+  let db;
+  try {
+    if (mode === 'demo') db = openMigrated(file);
+    else {
+      const served = openServedStore(config);
+      served.platform.close();
+      db = served.db;
+    }
+  } catch (e) {
+    console.error(`confirm:guess: ${e.name === 'StartupError' ? e.message : 'store_unavailable'}`);
+    return 1;
+  }
   let scheduler = null;
   try {
     const engine = createRuntimeEngine({ db, config });

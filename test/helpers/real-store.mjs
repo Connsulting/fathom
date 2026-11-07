@@ -4,7 +4,8 @@
 // rows, documents and questions production stores hold (plan Revision 6, R6-1 item 9).
 //
 // createRealStore(dataDir, {clock})           -> Promise<db> (empty real store: mode real, clock,
-//                                                onboarding done, a data key at keyFileOf(dataDir))
+//                                                onboarding done, a data key at keyFileOf(dataDir),
+//                                                and a synthetic platform at platformFileOf(dataDir))
 // addFile(db, file, {answers})                -> Promise<ingest result> (CSV and workbook files, off engine)
 // addPayroll(db, entry)                       -> Promise<ingest result> (one W-2, paystub, K-1 or
 //                                                form1040 as a text file read by a scripted engine)
@@ -20,7 +21,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createStoreFile, setSetting, getSetting, parseJson as parseStored, DB_FILE } from '../../src/store/db.mjs';
+import { setSetting, getSetting, parseJson as parseStored } from '../../src/store/db.mjs';
+import { createInstance, PLATFORM_FILE } from '../../src/platform/db.mjs';
 import { ingestFile } from '../../src/ingest/pipeline.mjs';
 import { answer, pendingItems } from '../../src/ingest/confirm.mjs';
 import { nameKey } from '../../src/ingest/extract.mjs';
@@ -114,6 +116,7 @@ export const OWNER_FACTS = Object.freeze({
 // ---------------------------------------------------------------- store primitives
 
 export const keyFileOf = (dataDir) => join(dataDir, 'data.key');
+export const platformFileOf = (dataDir) => join(dataDir, PLATFORM_FILE);
 
 // Per-store ingest context: the data key and config ingest needs, and a file counter.
 const CTX = new WeakMap();
@@ -128,13 +131,20 @@ export async function createRealStore(dataDir, { clock = CLOCK } = {}) {
   const keyFile = keyFileOf(dataDir);
   writeFileSync(keyFile, randomBytes(32), { mode: 0o600 });
   const key = await loadDataKey({ dataDir, keyFile, mode: 'real' });
-  const db = createStoreFile(join(dataDir, DB_FILE), d => {
-    setSetting(d, 'mode', 'real');
-    setSetting(d, 'clock', clock);
-    setSetting(d, 'onboarding', { done: true, step: 6 });
+  // A real instance: platform.sqlite (one served real household, no accounts) beside the store,
+  // so the server, the CLIs and serveAppFixture open it as a migrated real deployment. The
+  // platform handle is closed here; callers that need accounts open platformFileOf(dataDir).
+  const { db, platform, householdId } = createInstance(dataDir, {
+    mode: 'real',
+    init: d => {
+      setSetting(d, 'mode', 'real');
+      setSetting(d, 'clock', clock);
+      setSetting(d, 'onboarding', { done: true, step: 6 });
+    },
   });
+  platform.close();
   const config = { dataDir, dataKeyFile: keyFile, engine: 'off', clock, demo: false, port: 0, host: '127.0.0.1', claudeCredentialFile: null, emailTransport: 'dev' };
-  CTX.set(db, { config, key, seq: 0 });
+  CTX.set(db, { config, key, seq: 0, householdId, platformFile: platformFileOf(dataDir) });
   return db;
 }
 
