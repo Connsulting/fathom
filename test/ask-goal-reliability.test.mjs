@@ -100,10 +100,12 @@ test('AC4: stored goal definitions and notes, facts and available figures suppor
 
 test('AC4: sourced immediate stored proposals accept short explicit confirmations', async t => {
   const { db, ctx, registry } = await setup(t);
-  proposal(db, { target: 97361 });
+  let target = 97361;
   for (const reply of ['yes', 'yeah', 'sure', 'do it', 'go ahead', 'ok', 'okay', 'Yes, please create it.']) {
+    proposal(db, { target: ++target });
     ctx.ownerText = reply;
-    const out = await registry().invoke('create_goal', { ...args, target: 97361 });
+    assert.equal(db.prepare("SELECT count(*) AS n FROM goals WHERE json_extract(def, '$.target') = ?").get(target).n, 0);
+    const out = await registry().invoke('create_goal', { ...args, target });
     assert.ok(!out.isError, `${reply}: ${out.content[0].text}`);
   }
 });
@@ -136,9 +138,40 @@ test('AC4: a stored confirmation belongs to its actor and thread', async t => {
   db.prepare("DELETE FROM messages WHERE role = 'me' AND conversation_key = ?").run(key);
   message(db, 'yeah', { ownerInput: { actorId: 'demo' } }, 'me');
   assert.ok(!(await registry().invoke('create_goal', { ...args, target: 97361 })).isError);
+  proposal(db, { target: 97372 });
   db.prepare('INSERT INTO conversations (key, created_at) VALUES (?, ?)').run('ask:abcdef012345', now);
   ctx.conversationKey = 'ask:abcdef012345'; ctx.ownerText = 'yeah';
-  assert.equal((await registry().invoke('create_goal', { ...args, title: 'Other thread', target: 97361, targetDate: '2029-03-07' })).isError, true);
+  const wrongThread = await registry().invoke('create_goal', { ...args, title: 'Other thread', target: 97372 });
+  assert.equal(wrongThread.isError, true);
+  assert.match(wrongThread.content[0].text, /^target:/);
+  ctx.conversationKey = key;
+  assert.ok(!(await registry().invoke('create_goal', { ...args, target: 97372 })).isError);
+});
+
+test('AC4: goal evidence never loosens household fact attribution', async t => {
+  const { db, ctx, registry } = await setup(t);
+  db.prepare("INSERT INTO facts (key, value, confirmed, updated_at) VALUES ('household.spouseAge', '52', 1, ?) ON CONFLICT(key) DO UPDATE SET value = '52'").run(now);
+  db.prepare("DELETE FROM facts WHERE key = 'household.ownerAge'").run();
+  const out = await registry().invoke('record_household_fact', { key: 'household.ownerAge', value: 52, evidence: 'yeah' });
+  assert.equal(out.isError, true);
+  assert.equal(db.prepare("SELECT value FROM facts WHERE key = 'household.ownerAge'").get(), undefined);
+  ctx.ownerText = 'I am 52 years old';
+  const good = await registry().invoke('record_household_fact', { key: 'household.ownerAge', value: 52, evidence: ctx.ownerText });
+  assert.ok(!good.isError, good.content[0].text);
+});
+
+test('AC4: date components from a goal note are not target amounts', async t => {
+  const { db, registry } = await setup(t);
+  db.prepare('DELETE FROM facts').run();
+  db.prepare('DELETE FROM goals').run();
+  db.prepare('DELETE FROM figures WHERE v IN (12, 31, 2026)').run();
+  storedGoal(db, 'Due 2026-12-31.');
+  for (const target of [12, 31, 2026]) {
+    const out = await registry().invoke('create_goal', { ...args, target });
+    assert.equal(out.isError, true, String(target));
+    assert.match(out.content[0].text, /^target:/);
+  }
+  assert.ok(!(await registry().invoke('create_goal', { ...args, target: 8000 })).isError);
 });
 
 test('AC4: current engine text and invented source claims cannot supply proposal evidence', async t => {
