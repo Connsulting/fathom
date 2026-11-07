@@ -437,10 +437,10 @@ function whoLine() {
   return `<div class="h-who">Signed in as ${esc(who)}${role ? `<span>${role}</span>` : ''}</div>`;
 }
 
-// The route the tabs read: the page under the rec dialog when one is open.
+// The route the tabs read: the page under a dialog (rec, account, P&L rows) when one is open.
 function navRoute() {
   const r = routeNow();
-  return r.name === 'rec' ? underRoute() : r;
+  return isDlgRoute(r.name) ? underRoute(r.name) : r;
 }
 const tabOf = (name) => TAB_OF[name] || 'home';
 const onAttr = (on) => (on ? ' class="on" aria-current="page"' : '');
