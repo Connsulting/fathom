@@ -33,7 +33,7 @@
 .d-horizon .h-adv-hint, .d-horizon .h-adv-status { margin: 10px 0 0; font-size: 14px; }
 .d-horizon .h-adv-status.err { color: var(--tx); }
 .d-horizon .h-adv-hint a { color: var(--ac); }
-.d-horizon button.h-btn[disabled] { opacity: 0.55; cursor: not-allowed; background: transparent; color: var(--mu); border-color: var(--line2); }
+.d-horizon .h-btn.h-adv-prep[disabled] { opacity: 0.55; cursor: not-allowed; background: transparent; color: var(--mu); border-color: var(--line2); }
 .d-horizon .h-spin {
   width: 12px; height: 12px; border: 2px solid currentColor; border-right-color: transparent;
   border-radius: 50%; animation: h-adv-spin 0.7s linear infinite; flex: none;

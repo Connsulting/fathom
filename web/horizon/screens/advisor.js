@@ -109,7 +109,7 @@ export function render() {
     ? `<p class="h-adv-status err" role="alert">${esc(S.packetErr)}</p>`
     : (S.packetOk ? '<p class="h-adv-status" role="status">Packet ready.</p>' : '');
   const packetSec = section('Review packet', `<p class="h-mute">A printable summary of everything waiting on review, with each figure's source. Download it, then print to PDF from your browser.</p>
-      <div class="h-acts">${btn(prepLabel, prepAttrs, canPrepare ? 'pri' : '')}</div>
+      <div class="h-acts">${btn(prepLabel, prepAttrs, canPrepare ? 'pri h-adv-prep' : 'h-adv-prep')}</div>
       ${emptyHint}${packetStatus}
       ${packets ? `<ul class="h-advpk">${packets}</ul>` : ''}`);
   return shell(`${pageHead('Advisor', a.name ? T(a.name) : esc(api.s.names?.advisor || 'Your advisor'), T(a.role))}
@@ -147,8 +147,9 @@ export function onClick(e) {
   if (d.advCheckinCancel != null) { S.checkin = false; H.draw(); return true; }
   if (d.advPacket != null) {
     if (S.busy || t.disabled) return true;
-    S.busy = true; H.draw();
+    S.busy = true;
     S.packetErr = '';
+    H.draw();
     H.api.advisorPacket().then((id) => {
       S.busy = false;
       if (id) {
