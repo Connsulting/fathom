@@ -8,6 +8,8 @@
 import * as chatScreen from './screens/chat.js';
 import * as packsScreen from './screens/packs.js';
 import * as engineScreen from './screens/engine.js';
+import * as memoriesScreen from './screens/memories.js';
+import { settingsRow } from './screens/memories-model.js';
 import * as yearendScreen from './screens/yearend.js';
 import * as advisorScreen from './screens/advisor.js';
 import * as connect from './screens/connect.js';
@@ -54,7 +56,7 @@ const SUBNAV = {
 // Routes with no sub-nav are listed by hand; every sub-nav view maps to its tab.
 const TAB_OF = {
   home: 'home', pace: 'home', brief: 'home', goals: 'home', confirm: 'home',
-  settings: 'settings', connect: 'settings', engine: 'settings', email: 'settings', onboarding: 'settings',
+  settings: 'settings', memories: 'settings', connect: 'settings', engine: 'settings', email: 'settings', onboarding: 'settings',
   ...Object.fromEntries(Object.entries(SUBNAV).flatMap(([tab, views]) => views.map(([k]) => [k, tab])))
 };
 
@@ -1718,6 +1720,8 @@ function pSettings() {
     ['engine', 'Engine', 'Proactive jobs, their schedule and what they last did.'],
     ['email', 'Email', 'The monthly digest and what lands in your inbox.']
   ];
+  const mem = settingsRow(arr(api.s.preferences));
+  rows.push([mem.route, mem.label, mem.desc]);
   // A real store reaches onboarding again as Setup, to add more context.
   if (api.s?.live?.mode === 'real') rows.push(['onboarding', 'Setup', 'Goals, priorities, notes and files.']);
   const row = (link, desc) => `<li class="h-set-r">${link}<p>${esc(desc)}</p>${icon('arrow')}</li>`;
@@ -1725,7 +1729,7 @@ function pSettings() {
   if (id) list += row('<a href="/account">Account</a>', 'Passkeys and sign out.');
   if (id?.role === 'admin') list += row('<a href="/admin/users">Household</a>', 'People, roles and invitations.');
   list += row('<button type="button" class="h-set-tour" data-tour-start>Take the tour</button>', 'A short guided walk through the main screens.');
-  return shell(`<section class="h-settings h-narrow">${pageHead('System', 'Settings')}${whoLine()}<ul class="h-set">${list}</ul><section class="h-sec" aria-label="Remembered preferences"><h2>Remembered preferences</h2><p class="h-mute">How you want Fathom to answer, and what your household means by a term.</p>${arr(api.s.preferences).map(p => `<form data-preference-form="${esc(p.id)}" class="h-pref-form"><label>Preference<input name="text" aria-label="Household preference" maxlength="300" required value="${esc(p.text)}"></label><button type="submit" class="h-btn">Save</button><button type="button" class="h-btn" data-preference-delete="${esc(p.id)}">Delete</button></form>`).join('')}<form data-preference-form="" class="h-pref-form"><label>Add a preference<input name="text" aria-label="New household preference" maxlength="300" required></label><button type="submit" class="h-btn">Remember</button></form></section></section>`);
+  return shell(`<section class="h-settings h-narrow">${pageHead('System', 'Settings')}${whoLine()}<ul class="h-set">${list}</ul></section>`);
 }
 
 /* ---------- advisor ---------- */
@@ -2152,6 +2156,7 @@ function draw() {
     case 'engine': html = engineScreen.render(); break;
     case 'email': html = pEmail(routeChanged); break;
     case 'settings': html = pSettings(); break;
+    case 'memories': html = memoriesScreen.render(); break;
     default: html = pHome();
   }
   page.innerHTML = html;
@@ -2182,6 +2187,7 @@ function draw() {
   askPanel.sync();
   switcher.afterDraw(rr.name);
   tour.afterDraw(rr.name);
+  memoriesScreen.afterDraw(r.name, routeChanged);
 }
 
 // History: one entry per modal session. Opening a rec from a page pushes one entry and remembers the
@@ -2233,8 +2239,6 @@ function saveAccountRename(id, raw) {
 }
 
 function onClick(e) {
-  const preferenceDelete = e.target.closest('[data-preference-delete]');
-  if (preferenceDelete) { e.preventDefault(); api.preferenceDelete(preferenceDelete.dataset.preferenceDelete); return; }
   const ren = e.target.closest?.('[data-acc-rename]');
   if (ren && root.contains(ren)) {
     e.preventDefault();
@@ -2378,8 +2382,6 @@ function startOver(recId) {
 }
 
 function onSubmit(e) {
-  const preference = e.target.closest('[data-preference-form]');
-  if (preference) { e.preventDefault(); api.preferenceSave(preference.dataset.preferenceForm, new FormData(preference).get('text')); return; }
   if (recAnswers.onSubmit(e)) return;
   if (SCREENS.some((s) => s.onSubmit?.(e))) return;
   const f = e.target;
@@ -2530,7 +2532,7 @@ function trapTab(e) {
 }
 
 // Helpers the screen modules use. Getters, because api, root and ui change on mount.
-const SCREENS = [askPanel, switcher, chatScreen, packsScreen, engineScreen, advisorScreen, yearendScreen, simplefin, recAnswers, recBlocker, accountScreen, trendScreen, pnlScreen, tour];
+const SCREENS = [askPanel, switcher, chatScreen, packsScreen, engineScreen, advisorScreen, yearendScreen, simplefin, recAnswers, recBlocker, accountScreen, trendScreen, pnlScreen, tour, memoriesScreen];
 const KIT = {
   get api() { return api; }, get root() { return root; }, get ui() { return ui; }, get keys() { return keys; }, get ingest() { return ingest; },
   draw: () => draw(), composeLabel,

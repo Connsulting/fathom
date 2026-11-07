@@ -76,7 +76,7 @@ const PAGES = {
   home: 'Home', pace: 'Home > Pace', brief: 'Home > Brief', goals: 'Home > Goals',
   plan: 'Plan', yearend: 'Plan > Year end', advisor: 'Plan > Advisor',
   wargame: 'Ask > What-if', add: 'Money > Files',
-  settings: 'Settings', connect: 'Settings > Connect', engine: 'Settings > Engine', email: 'Settings > Email',
+  settings: 'Settings', memories: 'Settings > Memories', connect: 'Settings > Connect', engine: 'Settings > Engine', email: 'Settings > Email',
   onboarding: 'Setup'
 };
 

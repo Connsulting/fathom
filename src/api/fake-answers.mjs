@@ -90,7 +90,7 @@ export function fakeAnswerScript({ scenario, key, questionId, text, whatIfPack, 
   const goal = propose && !command && typeof text === 'string' ? goalCommandOf(scenario, key, text) : null;
   let paragraphs;
   if (preference) {
-    paragraphs = ['Your preference is saved. You can edit it in Settings or undo it below.'];
+    paragraphs = ['Your preference is saved. You can edit it on the Memories page or undo it below.'];
   } else if (date) {
     paragraphs = ['The expected date is saved. You can undo the change below.'];
   } else if (whatIfPack) {

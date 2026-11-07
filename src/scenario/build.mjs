@@ -1,4 +1,4 @@
-import { listPreferences } from '../actions/preferences.mjs';
+import { listMemories } from '../actions/preferences.mjs';
 import { expectedChildWindow } from '../shared/child-window.mjs';
 import { receiptMessages } from '../actions/receipts.mjs';
 // Store to scenario: assembles the CONTRACT.md scenario object from the store, with live state
@@ -688,7 +688,7 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
     goals,
     pace,
     suggestions: suggested.suggestions,
-    preferences: listPreferences(db),
+    preferences: listMemories(db),
     curve,
     wargame,
     decisions,

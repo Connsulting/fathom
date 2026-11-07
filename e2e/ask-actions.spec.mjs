@@ -30,23 +30,25 @@ test('@mobile @ax-ac6 Ask from a recommendation records the expected date and Un
   await expect(page.locator('section.h-askx-main .h-action-receipt')).toContainText('Undone');
 });
 
-test('@mobile @ax-ac8 Ask remembers a preference and Settings edits and deletes it', async ({ page, request }) => {
+test('@mobile @ax-ac8 Ask remembers a preference and the receipt links to its memory', async ({ page, request }) => {
   expect((await request.post('/api/demo/reset', { data: {} })).ok()).toBeTruthy();
   await page.goto('/#/ask');
   const input = page.locator('form.h-askx-compose textarea[name="q"]').first();
   await input.fill('Remember: keep answers short');
   await input.press('Enter');
-  await expect(page.locator('.h-action-receipt')).toContainText('keep answers short');
-  await page.goto('/#/settings');
-  const preference = page.getByRole('textbox', { name: 'Household preference', exact: true });
-  await expect(preference).toHaveValue('keep answers short');
-  await preference.fill('Elective spending excludes mortgage, income tax and transfers');
-  await preference.locator('xpath=ancestor::form').getByRole('button', { name: 'Save', exact: true }).click();
-  await expect(preference).toHaveValue('Elective spending excludes mortgage, income tax and transfers');
-  await page.reload();
-  await expect(preference).toHaveValue('Elective spending excludes mortgage, income tax and transfers');
-  await preference.locator('xpath=ancestor::form').getByRole('button', { name: 'Delete', exact: true }).click();
-  await expect(preference).toHaveCount(0);
+  const receipt = page.locator('.h-action-receipt');
+  await expect(receipt).toContainText('Memory saved');
+  await expect(receipt).toContainText('keep answers short');
+  await receipt.getByRole('link', { name: 'See all memories' }).click();
+  await expect(page).toHaveURL(/#\/memories$/);
+  const row = page.getByRole('list', { name: 'Memories' }).locator('li.h-mem-r').filter({ hasText: 'keep answers short' });
+  await expect(row).toBeVisible();
+  const source = row.locator('.h-mem-meta a');
+  await expect(source).toHaveCount(1);
+  await expect(source).toHaveAttribute('href', /^#\/ask\/[a-f0-9]{12}$/);
+  await source.click();
+  await expect(page).toHaveURL(/#\/ask\/[a-f0-9]{12}$/);
+  await expect(page.locator('.h-action-receipt')).toContainText('Memory saved');
 });
 
 test('@mobile @ax-ac5 key creation offers separate action permissions', async ({ page, request }) => {
