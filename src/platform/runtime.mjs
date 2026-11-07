@@ -9,13 +9,13 @@
 //   segment 0700, no symlink); store_identity must name householdId before and after migrate()
 //   (household_store_mismatch). Closed again on any failure.
 // createHouseholdContext({ householdId, generation, mode, db, relativeRoot, config, platform,
-//   secrets, transport, transportOptions, engine, packs, answerer, scheduler, handlers, now })
+//   secrets, transport, transportOptions, engine, packs, answerer, answererFactory, scheduler, handlers, now })
 //   builds, in order, the outbound guard, the vault accessor, the financial transport, packs,
 //   engine (allowed: outbound engine; funded: platform setting instance_model_cap_usd > 0),
 //   answerer and scheduler (allowed: outbound jobs; ctx.household is this context); tests may
 //   inject any of transport, engine, packs, answerer, scheduler. Returns a frozen
 //   { householdId, generation, mode, db, root, config, inFlight, vault(), packs, engine, answerer,
-//   scheduler, transport, outbound, funded(), close() } where root is the absolute household root
+//   scheduler, transport, outbound, services, funded(), close() } where root is the absolute household root
 //   path and funded() is the instance funding check (instance_model_cap_usd > 0) for model calls
 //   made outside the engine.
 //   vault() resolves once per context to { root, handle } (household-vault root and data key
@@ -173,7 +173,7 @@ function refreshPacks(packs) {
 
 export function createHouseholdContext({
   householdId, generation = 1, mode, db, relativeRoot = householdRootRel(householdId), config, platform, secrets,
-  transport = null, transportOptions = {}, engine = null, packs = null, answerer = null, scheduler = null, handlers = null, now = null,
+  transport = null, transportOptions = {}, engine = null, packs = null, answerer = null, answererFactory = createLiveAnswerer, scheduler = null, handlers = null, now = null,
 } = {}) {
   if (typeof householdId !== 'string' || !db || !platform || !config || !secrets) throw new TypeError('createHouseholdContext needs a household, store, platform, config and secrets');
   if (mode !== 'real' && mode !== 'demo') throw new TypeError('createHouseholdContext mode must be real or demo');
@@ -208,7 +208,7 @@ export function createHouseholdContext({
     config: Object.freeze({ dataDir: root, clock: config.clock }), vault,
     get household() { return context; },
   });
-  const householdAnswerer = answerer ?? createLiveAnswerer({ engine: householdEngine, packs: livePacks, root, services });
+  const householdAnswerer = answerer ?? answererFactory({ engine: householdEngine, packs: livePacks, root, services });
   let closing = null;
   context = Object.freeze({
     householdId, generation, mode, db, root, config, inFlight: new Set(), vault, packs: livePacks, engine: householdEngine,

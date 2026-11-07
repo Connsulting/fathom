@@ -81,10 +81,10 @@ export function createPublicDemoHandler(config, { platform: basePlatform }) {
           const root = join(sandboxConfig.dataDir, relativeRoot);
           const packs = createLivePacks(db, { dataDir: root });
           const engine = createPublicDemoEngine({ db, config: sandboxConfig, control, visitorId: id });
-          const answerer = limitDemoAnswerer(createLiveAnswerer({ engine, packs, root }), control, id, () => requestAddress.getStore());
           // No jobs run in a sandbox: its scheduler has no handlers and is never started.
           return createHouseholdContext({ householdId, generation, mode, db, relativeRoot, config: sandboxConfig, platform, secrets,
-            engine, packs, answerer, handlers: {} });
+            engine, packs, handlers: {},
+            answererFactory: options => limitDemoAnswerer(createLiveAnswerer(options), control, id, () => requestAddress.getStore()) });
         } catch (err) {
           db.close();
           throw err;

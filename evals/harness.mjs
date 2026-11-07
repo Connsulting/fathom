@@ -2,11 +2,12 @@ import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInstance } from '../src/platform/db.mjs';
+import { createHouseholdContext } from '../src/platform/runtime.mjs';
+import { createInstanceSecrets } from '../src/platform/secrets.mjs';
 import { seedDemo } from '../demo/seed.mjs';
 import { createEngine, loadCredential, BudgetExceededError, ModelAccountingError } from '../src/engine/index.mjs';
 import { createSpendLedger } from '../src/engine/runtime.mjs';
 import { estimateUnknownCost, DEFAULT_MODEL } from '../src/engine/pricing.mjs';
-import { createLiveAnswerer } from '../src/api/answerer.mjs';
 import { threadCreate, ask } from '../src/api/handlers.mjs';
 import { createLivePacks } from '../src/packs/live.mjs';
 import { tools, CAPABILITIES } from '../src/tools/index.mjs';
@@ -121,7 +122,10 @@ export async function runCases({ cases, live = false, maxUsd = 100, outDir, scri
         throw error;
       }
     } };
-    const answerer = createLiveAnswerer({ engine, packs, root: store.root });
+    const config = { dataDir: store.dataDir, clock };
+    const household = createHouseholdContext({ householdId: store.householdId, mode: 'demo', db, platform: store.platform,
+      config, secrets: createInstanceSecrets({ config, mode: 'demo' }), engine, packs });
+    const answerer = household.answerer;
     for (const c of cases) {
       const goalId = `eval-${c.id}`;
       if (c.storedGoal) db.prepare("INSERT INTO goals (id, def, sort, origin, created_at) VALUES (?, ?, 100, 'owner', ?)")

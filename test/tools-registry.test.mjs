@@ -71,7 +71,8 @@ test('scope filtering narrows operation enums and hides all writes from read-onl
   const rec = mixed.find(t => t.name === 'act_on_recommendation');
   assert.deepEqual(rec.inputSchema.properties.operation.enum, ['owner', 'status']);
   assert.ok(mixed.some(t => t.name === 'undo'));
-  assert.ok(!createRegistryServer(tools, { purpose: 'chat' }).names.includes('undo'));
+  assert.ok(createRegistryServer(tools, { purpose: 'chat' }).names.includes('undo'));
+  assert.ok(!createRegistryServer(tools, { purpose: 'plan' }).names.includes('undo'));
 });
 
 test('catalog and instructions stay within the context budget', t => {

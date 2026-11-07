@@ -984,8 +984,8 @@ Progress label "Updating the advisor review". Ticket: C9. Scope: `write:recs`.
 | checkin | `date`, `time?` (`HH:MM`), `lengthMin?` (15..480) | `{ checkin, receipt }` | `advisor_checkin` (table `advisor_checkin`) | planned `set_advisor_checkin` |
 | packet | none | `{ packetId, recIds, receipt }` | not available: a stored packet is a record | planned `create_review_packet` |
 
-The verdict and note must come from the owner's words (`requireEvidence`). `packet` needs the data
-key from `ctx.services` (C2); `createPacket`'s body moves into `buildAndStorePacket`
+The verdict and note must come from the owner's words (`requireEvidence`). `packet` gets its
+household vault from `ctx.services.vault()` (C2); `createPacket`'s body moves into `buildAndStorePacket`
 (`src/advisor/packet.mjs`). Reuses `sendToAdvisor`, `recordVerdict`, `applyStatusAction` with
 `VETO_REASON`, `setCheckin`, `storePacket`, `buildPacketHtml`.
 
@@ -1343,7 +1343,7 @@ route's response shape is the screen's, not the tool's.
 
 ### Route map
 
-All 96 routes on main at this revision: 52 covered, 44 excluded. "Ticket" is the ticket that
+All 98 routes on main at this revision: 52 covered, 46 excluded. "Ticket" is the ticket that
 lands the covering operation.
 
 | Route | Covered by | Ticket | Note |
@@ -1444,6 +1444,8 @@ lands the covering operation.
 | `POST /api/simplefin/disconnect` | excluded: bank credentials | | |
 | `POST /api/yearend/marks` | `answer.yearend_mark` | C8 |  |
 | `GET /api/yearend/packet` | excluded: file download | | |
+| `GET /api/household/outbound` | excluded: administration | | |
+| `POST /api/household/outbound` | excluded: administration | | |
 
 ### Exclusions
 
@@ -1709,15 +1711,18 @@ Depends on: C1.
 Files: `src/shared/action-scopes.mjs`, `src/mcp/keys.mjs` (`SCOPE_INFO`), `src/actions/receipts.mjs`
 (`registerReceiptKind(kind, { table, pk } or { restore })` replaces the fixed table; kind
 `setting`), `src/tools/catalog/undo.mjs` (`undo` loses `mcpOnly`; `capabilities:
-['ownerStatements']`), `src/server.mjs` (one `services` object), `src/mcp/index.mjs`
+['ownerStatements']`), `src/platform/runtime.mjs` (one `services` object per household), `src/mcp/index.mjs`
 (`ctx.services`, `ctx.ownerStatements`), `src/api/answerer.mjs` (`createLiveAnswerer` accepts
 `services` and puts it, with `ownerStatements` bound to `src/actions/evidence.mjs`, on the tool
 context), `src/tools/parity.mjs` (new), `src/mcp/test/keys.test.mjs`,
 `test/write-scopes.test.mjs` (new), `test/tool-services.test.mjs` (new),
 `test/tools-parity.test.mjs` (new).
 
-`services` is `{ scheduler, engine, config: { dataDir, dataKeyFile, clock }, dataKey() }`, built
-once in `src/server.mjs` and passed to both `createMcpHandler` and `createLiveAnswerer`.
+`services` is `{ scheduler, engine, config: { dataDir, clock }, vault(), household }`, built
+once per household in `src/platform/runtime.mjs` and shared by MCP and `createLiveAnswerer`.
+`dataDir` is the household root; `vault()` returns that household's vault root and key handle.
+`household` resolves the immutable runtime. Public demo sandboxes use the same factory before
+wrapping the answerer with visitor limits. `createLiveAnswerer` requires `services`.
 
 Done when:
 

@@ -649,8 +649,9 @@ export function whatIfOwnerText(def) {
 export function createLiveAnswerer({ engine, packs, root, services } = {}) {
   if (!engine || typeof engine.call !== 'function') throw new TypeError('createLiveAnswerer needs an engine');
   if (typeof root !== 'string' || !root) throw new TypeError('createLiveAnswerer needs the household root');
+  if (!services || typeof services !== 'object') throw new TypeError('createLiveAnswerer needs household services');
   // The tool context of every call this answerer makes: its household's db and root.
-  const toolCtx = (db, now) => ({ db, now, dataDir: root, services, household: services?.household });
+  const toolCtx = (db, now) => ({ db, now, dataDir: root, services, household: services.household });
 
   // One grounded model answer: call, ground, regenerate once with a corrective turn when most
   // figures are unchecked (needsRevision), render.
