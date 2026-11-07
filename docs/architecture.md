@@ -327,6 +327,7 @@ secrets are read there.
 |---|---|---|
 | `FATHOM_DATA` | `./data` (gitignored) | Data directory; holds `fathom.sqlite` and `platform.sqlite`. |
 | `FATHOM_BACKUP_KEY_FILE` | unset | Path to a private file holding a 32-byte key. Read only by `scripts/migrate-platform.mjs` and `scripts/source-snapshot.mjs`, which encrypt source snapshots with it; the server never reads it. |
+| `FATHOM_PLATFORM_KEY_FILE` | unset | Path to a private file holding the 32-byte platform key that wraps household data keys (`loadPlatformKey`, `platformKeyFromEnv` in `src/platform/backup-key.mjs`). Read by no server path yet; for offline tooling and the MT-03 cutover. |
 | `FATHOM_PORT` | `8080` | HTTP port. |
 | `FATHOM_HOST` | `127.0.0.1` (the image sets `0.0.0.0`) | Bind address. |
 | `FATHOM_DEMO` | unset (auto) | `1` demo store required, `0` real store required, unset follows the store (a new store is demo). |
@@ -967,6 +968,7 @@ CLIs.
 | `platform_settings` | `key` PK, `value` JSON, `updated_at`. `multi_household_enabled` (boolean, false when absent). |
 | `audit_events` | `id` PK, `at`, `actor_user_id`, `household_id`, `target_user_id`, fixed `action` and `outcome` codes. No payloads, emails or tokens. |
 | `platform_operations` | `id` PK, `kind`, `phase`, `status` in running, done, `started_at`, `updated_at`, `detail` JSON (counts and hashes only) |
+| `household_data_keys` | (`household_id`, `key_version`) PK, `wrapped_key` BLOB (the household data key wrapped under the platform key, never raw), `status` in active, retired (a unique partial index allows one active key per household), `created_at`. Written only by `provisionDataKey` (`src/platform/household-vault.mjs`); the server does not read it before MT-03. |
 
 Memberships and invitations.
 
@@ -1783,6 +1785,18 @@ reads `FATHOM_DATA_KEY_FILE` (32 raw bytes, 64 hex characters or base64 of 32 by
 refused). A real store without the key file refuses uploads with "uploads need
 FATHOM_DATA_KEY_FILE: set it to a file holding a 32 byte key" (HTTP 409). A demo store generates
 `$FATHOM_DATA/files/demo.key` on first use. `clearStoredFiles(dataDir)` removes `*.bin` only.
+
+Household envelope (MT-02, not wired). `src/platform/household-vault.mjs` defines FTHM2: `FTHM2`,
+the key version (uint32 BE), a fresh 12 byte nonce, the ciphertext and the 16 byte tag, with
+length-prefixed additional data binding `fathom-vault/2`, household id, purpose (`upload`,
+`advisor-packet`, `simplefin-access`), object id, key version and the header itself. Each household
+has a random 32 byte data key, stored only wrapped (`FTHMK1`) under the platform key in platform
+`household_data_keys` with household id and version authenticated. Objects live under a contained
+household root (`households/<seg>...` below the data root, every segment an lstat-checked private
+directory, never a symlink) at `files/<id>.bin`. `src/platform/vault-convert.mjs` converts a legacy
+instance offline into a validated bundle at `<root>/work/vault-<operationId>`, published by one
+rename; it only reads the legacy store and files. The server still uses FTHM1 until the MT-03
+cutover; nothing in the server imports these modules yet.
 
 ### Mapping unknown tables
 
