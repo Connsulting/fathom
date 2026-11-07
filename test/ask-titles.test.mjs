@@ -11,6 +11,7 @@ import { createEngine, createMemoryLedger, EngineOffError, BudgetExceededError }
 import { DEFAULT_MODEL, TITLE_MODEL, usageCostUsd } from '../src/engine/pricing.mjs';
 import { buildScenario } from '../src/scenario/build.mjs';
 import { tempDb } from './helpers/server.mjs';
+import { threadGet, ask } from '../src/api/handlers.mjs';
 
 const SC = { fig: {}, names: {} };
 const CLOCK = '2026-11-05';
@@ -496,6 +497,74 @@ function seqEngine(replies, { on = true } = {}) {
 
 const titleCalls = calls => calls.filter(c => c.purpose === 'title').length;
 const rejects = db => getSetting(db, 'ask.titleRejects', null);
+
+test('AC8: model titles keep conversation identifiers and refuse invented numbers or money', () => {
+  const conversationWords = words('Discuss 529 contributions, the 401(k), estimates for 2026, and account 1234.');
+  for (const title of ['529 contributions', '401(k) contributions', '2026 estimates', 'Account 1234']) {
+    assert.deepEqual(checkTitle(title, { fromModel: true, conversationWords }), { title });
+  }
+  for (const title of ['$4,000 plan', '529 contributions 7%', '529 dollar contributions', '2027 estimates', 'Account 123', 'Account 91234']) {
+    assert.ok(checkTitle(title, { fromModel: true, conversationWords }).reason, title);
+  }
+});
+
+test('AC9: rejected title retries once with a plain reason before falling back', async t => {
+  const { db, thread, add } = await namingStore(t);
+  add(thread.key, 'me', 'Have I made 529 contributions in 2026?');
+  add(thread.key, 'fathom', '<p>The 529 contributions are stored.</p>');
+  const { engine, calls } = seqEngine([{ title: '$4,000 plan' }, { title: '529 contributions' }]);
+  assert.deepEqual(await nameThread({ db, engine, key: thread.key }), { title: '529 contributions', titleSource: 'auto', from: 'model' });
+  assert.equal(calls.length, 2);
+  assert.match(calls[1].messages.at(-1).content, /currency|percent|numbers.*conversation/i);
+  assert.deepEqual(rejects(db), { number: 1 });
+  const other = createThread(db, '2026-11-05T09:00:00Z');
+  twoTurns(add, other.key);
+  const invalid = seqEngine([{ title: '$4,000 plan' }]);
+  assert.equal((await nameThread({ db, engine: invalid.engine, key: other.key })).from, 'fallback');
+  assert.equal(invalid.calls.length, 2);
+});
+
+test('AC10: opening an old fallback thread after many turns repairs its title only once', async t => {
+  const { db, thread, add } = await namingStore(t);
+  for (let i = 0; i < 4; i++) {
+    add(thread.key, 'me', 'Have I made 529 contributions in 2026?');
+    add(thread.key, 'fathom', '<p>The 529 contributions are stored.</p>');
+  }
+  db.prepare("UPDATE conversations SET title = ?, title_source = 'auto' WHERE key = ?").run('Have I made 529 contributions in 2026?', thread.key);
+  const { engine, calls } = seqEngine([{ title: '529 contributions' }]);
+  const ctx = { db, engine, config: {}, params: { id: thread.id } };
+  const opened = await threadGet(ctx);
+  assert.equal(opened.thread.title, '529 contributions');
+  assert.equal(opened.messages.length, 8);
+  await threadGet(ctx);
+  assert.equal(calls.length, 1);
+});
+
+test('AC10: rejected repair is consumed once and manual names survive opening', async t => {
+  const { db, thread, add } = await namingStore(t);
+  twoTurns(add, thread.key);
+  db.prepare("UPDATE conversations SET title = ?, title_source = 'auto' WHERE key = ?").run(FIRST_Q, thread.key);
+  const { engine, calls } = seqEngine([{ title: '$4,000 plan' }]);
+  const ctx = { db, engine, config: {}, params: { id: thread.id } };
+  assert.equal((await threadGet(ctx)).thread.title, FIRST_Q);
+  assert.equal(calls.length, 2, 'one repair attempt, with one correction retry');
+  await threadGet(ctx);
+  assert.equal(calls.length, 2, 'opening again cannot repeat the consumed repair');
+  db.prepare("UPDATE conversations SET title = 'Manual 529 plan', title_source = 'manual' WHERE key = ?").run(thread.key);
+  assert.equal((await threadGet(ctx)).thread.title, 'Manual 529 plan');
+  assert.equal(calls.length, 2);
+});
+
+test('AC10: answering an old fallback thread also repairs its title', async t => {
+  const { db, thread, add } = await namingStore(t);
+  for (let i = 0; i < 3; i++) twoTurns(add, thread.key);
+  db.prepare("UPDATE conversations SET title = ?, title_source = 'auto' WHERE key = ?").run(FIRST_Q, thread.key);
+  const { engine, calls } = seqEngine([{ title: 'Quarterly estimate planning' }]);
+  await ask({ db, engine, config: {}, body: { key: thread.key, text: 'Continue the estimate plan.' },
+    answerer: { answer: async () => ({ paragraphs: ['The estimate plan is available.'], refs: [] }) } });
+  assert.equal(rowOf(db, thread.key).title, 'Quarterly estimate planning');
+  assert.equal(calls.length, 1);
+});
 
 test('AC3 a rejected model title records only its reason in ask.titleRejects', async t => {
   const cases = [
