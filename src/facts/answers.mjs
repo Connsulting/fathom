@@ -27,7 +27,7 @@ function validate(value, shape) {
   } else fail();
 }
 
-export async function answerFacts(db, answers, { now = new Date().toISOString(), replan, recId = null } = {}) {
+export async function answerFacts(db, answers, { now = new Date().toISOString(), replan, recId = null, channel = null, actorId = null, onWrite } = {}) {
   if (!Array.isArray(answers) || !answers.length || answers.length > 30 || typeof replan !== 'function') fail();
   const date = now.slice(0, 10);
   if (isoDate(date) !== date) fail();
@@ -54,10 +54,17 @@ export async function answerFacts(db, answers, { now = new Date().toISOString(),
     return { key: a.key, value };
   });
   tx(db, () => {
-    const src = `answer:${date}`;
-    const label = `you answered on ${date}`;
+    const src = channel ? `${channel}:${date}` : `answer:${date}`;
+    const label = channel ? `you told Fathom ${channel === 'ask' ? 'in Ask' : 'through MCP'} on ${date}` : `you answered on ${date}`;
     db.prepare('INSERT OR IGNORE INTO sources (id, label, as_of, kind, note) VALUES (?, ?, ?, ?, ?)').run(src, label, date, 'owner', '');
-    for (const w of writes) upsertFact(db, { ...w, src, asOf: date, confirmed: true, now, provenance: { parser: 'answer', locator: { note: label, ...(recId ? { recId } : {}) } } });
+    for (const w of writes) {
+      const before = db.prepare('SELECT * FROM facts WHERE key = ?').get(w.key) || null;
+      if (!channel || !before || before.value !== JSON.stringify(w.value)) {
+        upsertFact(db, { ...w, src, asOf: date, confirmed: true, now, provenance: { parser: channel || 'answer', locator: { note: label,
+          ...(actorId ? { actorId } : {}), ...(recId ? { recId } : {}) } } });
+      }
+      onWrite?.(before, db.prepare('SELECT * FROM facts WHERE key = ?').get(w.key));
+    }
     if (recId) {
       const row = db.prepare('SELECT status, def FROM recs WHERE id = ?').get(recId);
       if (row && parseJson(row.def, {}).question?.primary) {

@@ -419,16 +419,18 @@ async function deckPress(page, key) {
 }
 
 // Rewind the deck to its first card with k, then call fn(key) on every card while moving forward
-// with j until Next is disabled. Item cards and group cards alike; works without knowing the order.
+// with j until the position reads n of n. Item cards and group cards alike; works without knowing the order.
 export async function deckEach(page, fn) {
   const prev = page.locator('button[data-deck="prev"]');
-  const next = page.locator('button[data-deck="next"]');
   await expect(deckCard(page)).toHaveCount(1);
   await page.evaluate(() => { if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur(); });
   for (let i = 0; i < 100 && await prev.isEnabled(); i++) await deckPress(page, 'k');
+  const pos = page.locator('[data-deck-progress]');
   for (let i = 0; i < 100; i++) {
     if ((await fn(await deckKey(page))) === false) return;
-    if (!(await next.isEnabled())) return;
+    // Next never disables (it wraps or reads Done), so the end is the position n of n.
+    const m = /^(\d+) of (\d+)$/.exec(((await pos.textContent()) || '').trim());
+    if (!m || Number(m[1]) >= Number(m[2])) return;
     await deckPress(page, 'j');
   }
 }
