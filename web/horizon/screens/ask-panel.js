@@ -4,12 +4,16 @@
    Modes by viewport: docked at 1040px and wider (the page reflows beside it, width clamped so the
    page keeps 720px), a modal right-side sheet from 721 to 1039px, a modal full-height sheet at
    720px and below. Expand opens the same thread on the Ask page; Open in panel there comes back.
-   Context: the page chip names what the owner is looking at (screens/ask-context.js); "+" buttons
-   across the app and the figure popover's Add to chat add chips. A question carries them as
-   references, kind and id only. Open state, width, thread and chips persist in localStorage
+   Context: the page chip names what the owner is looking at, with what its screen published this
+   draw (pageContext: a month, a range, a filter, an open goal; screens/ask-context.js); the Ask
+   about buttons across the app and the figure popover's Add to chat add chips. A question carries
+   them as references, kind and id only. A conversation belongs to the page it started on
+   (screens/ask-convo.js): on another page the next add or question starts a new one.
+   Open state, width, thread, chips, page and each thread's context persist in localStorage
    (fathom.askPanel); every access is guarded and a blocked store falls back to defaults. */
 
 import * as chatScreen from './chat.js';
+import * as convo from './ask-convo.js';
 import { KINDS, MAX_REFS, routeContext, refKey, chipPayload, chipHtml } from './ask-context.js';
 
 let H = null;
@@ -25,6 +29,8 @@ const PAGE_MIN = 720;
 const DOCK_Q = '(min-width: 1040px)';
 const SHEET_Q = '(max-width: 720px)';
 const NEW_TITLE = 'New conversation';
+const STALE_NOTE = 'Your next question starts a new conversation about this page.';
+const Q_RE = /^[a-z]+=[A-Za-z0-9-]+(;[a-z]+=[A-Za-z0-9-]+)*$/;
 
 const svg = (p) => `<svg class="h-i" viewBox="0 0 16 16" aria-hidden="true">${p}</svg>`;
 const I = {
@@ -34,21 +40,31 @@ const I = {
   dock: svg('<rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M9.5 3v10"/>')
 };
 
+// The conversation (page, threadId, chips, gen, ctx, pageOff, asking: see ask-convo.js), then the
+// panel's own state.
 const fresh = () => ({
-  open: false, width: W_DEF, threadId: null, chips: [],
-  pageOff: new Set(), offKey: null, // page chips removed on the current route
+  open: false, width: W_DEF, ...convo.freshConvo(),
+  offKey: null,                     // the route pageOff was kept for
   view: 'thread', origin: null,     // 'thread' or 'list'; the page an Expand came from
   focus: false,                     // focus the composer after the next draw
   shown: null,                      // what the body showed last draw, for its scroll position
   drag: null
 });
 let P = fresh();
+// What the screens drawn this draw publish about their view (design.js clears it per draw).
+let PV = {};
 
 /* ---------- persistence ---------- */
 
 function cleanChip(c) {
   if (!c || typeof c !== 'object' || !KINDS.includes(c.kind) || typeof c.id !== 'string' || !c.id || c.id.length > 200) return null;
-  return { kind: c.kind, id: c.id, label: typeof c.label === 'string' ? c.label : '' };
+  return { kind: c.kind, id: c.id, label: typeof c.label === 'string' ? c.label : '', q: typeof c.q === 'string' && Q_RE.test(c.q) ? c.q : '' };
+}
+
+function cleanChips(list) {
+  const seen = new Set();
+  return (Array.isArray(list) ? list : []).map(cleanChip)
+    .filter((c) => c && !seen.has(refKey(c)) && seen.add(refKey(c))).slice(0, MAX_REFS);
 }
 
 function load() {
@@ -59,18 +75,23 @@ function load() {
   const w = Number(v.width);
   if (Number.isFinite(w)) P.width = Math.round(Math.max(W_MIN, Math.min(W_MAX, w)));
   P.threadId = typeof v.threadId === 'string' && v.threadId ? v.threadId : null;
-  const seen = new Set();
-  P.chips = (Array.isArray(v.chips) ? v.chips : []).map(cleanChip)
-    .filter((c) => c && !seen.has(refKey(c)) && seen.add(refKey(c))).slice(0, MAX_REFS);
+  P.chips = cleanChips(v.chips);
+  P.page = typeof v.page === 'string' && v.page && v.page.length <= 400 ? v.page : null;
+  if (v.ctx && typeof v.ctx === 'object' && !Array.isArray(v.ctx)) {
+    for (const [id, e] of Object.entries(v.ctx)) {
+      if (!e || typeof e !== 'object' || id.length > 200) continue;
+      convo.rememberCtx(P, id, { origin: cleanChip(e.origin), chips: cleanChips(e.chips) });
+    }
+  }
 }
 
 function save() {
   try {
-    window.localStorage.setItem(STORE, JSON.stringify({ open: P.open, width: P.width, threadId: P.threadId, chips: P.chips }));
+    window.localStorage.setItem(STORE, JSON.stringify({ open: P.open, width: P.width, threadId: P.threadId, chips: P.chips, page: P.page, ctx: P.ctx }));
   } catch (e) { /* storage blocked: the panel still works for this visit */ }
 }
 
-export function reset() { P = fresh(); load(); }
+export function reset() { P = fresh(); PV = {}; load(); }
 
 /* ---------- mode, width, route ---------- */
 
@@ -81,6 +102,8 @@ const dockW = () => Math.max(W_MIN, Math.min(maxW(), P.width));
 const overlayW = () => Math.max(W_MIN, Math.min(P.width, window.innerWidth - 64));
 const route = () => H.routeNow();
 const onAsk = () => route().name === 'ask';
+// The conversation's page: the page under any dialog, the design.js draw() key.
+const pageKey = () => convo.pageKeyOf(H.pageRoute());
 const threadOf = (id) => (id ? H.arr(H.api.threads ? H.api.threads() : []).find((t) => t && t.id === id) || null : null);
 
 // Shown: open and not on the Ask page (the page is the expanded panel).
@@ -101,20 +124,23 @@ function confirmCard() {
   return b ? { id: b.dataset.ctxId, label: b.dataset.ctxLabel || '' } : null;
 }
 
-// The P&L entity on screen, read from the chooser (household spending has no entity: null).
-function pnlView() {
-  const b = H.root && H.root.querySelector('.h-root button.pl-view.on[data-pl-view]');
-  const key = b ? b.dataset.plView : '';
-  return key && key !== 'household' ? { id: key, label: b.querySelector('span') ? b.querySelector('span').textContent : '' } : null;
-}
-
-function pageChip() {
+// The page chip of a route, with the view the screens published this draw.
+function chipFor(r, view) {
   const { api } = H;
-  const r = route();
   return routeContext(r, {
     accounts: api.s && api.s.accounts, recs: api.recs(), packs: api.packs ? api.packs() : [],
-    txt: (s) => api.txt(s), confirm: r.name === 'confirm' ? confirmCard() : null, pnl: r.name === 'pnl' ? pnlView() : null
+    txt: (s) => api.txt(s), confirm: r.name === 'confirm' ? confirmCard() : null, view
   });
+}
+
+const pageChip = () => chipFor(route(), PV);
+
+// Called by design.js at the start of every draw; the page and then the dialog publish again.
+export function clearView() { PV = {}; }
+
+// A screen's view details (KIT.pageContext), merged into this draw's view.
+export function pageContext(v) {
+  if (v && typeof v === 'object' && !Array.isArray(v)) Object.assign(PV, v);
 }
 
 // A removed page chip stays removed until the route changes.
@@ -124,21 +150,21 @@ function syncOff() {
   if (k !== P.offKey) { P.offKey = k; P.pageOff.clear(); }
 }
 
-// The page chip (unless removed or already added), then the added chips.
+// The page chip (unless removed or already added), then the added chips; on another page than
+// the conversation's, the page chip alone.
 function shownChips() {
   syncOff();
-  const pc = pageChip();
-  const added = new Set(P.chips.map(refKey));
-  const page = pc && !P.pageOff.has(refKey(pc)) && !added.has(refKey(pc)) ? [{ kind: pc.kind, id: pc.id, label: pc.label, page: true }] : [];
-  return [...page, ...P.chips];
+  return convo.visibleChips(P, pageKey(), pageChip());
 }
 
-// The chip row above a composer (the panel's and the Ask page's), or ''.
+// The chip row above a composer (the panel's and the Ask page's), or ''. On another page than an
+// open thread's, a note says the next question starts a new conversation.
 export function chipsHtml() {
   if (!H || !H.api) return '';
   const list = shownChips();
-  if (!list.length) return '';
-  return `<div class="h-ctx-row" role="group" aria-label="Context for the question">${list.map((c) => chipHtml(c, { esc: H.esc, removable: true, page: !!c.page })).join('')}</div>`;
+  const note = P.threadId && convo.isStale(P, pageKey()) ? `<p class="h-ctx-note">${H.esc(STALE_NOTE)}</p>` : '';
+  if (!list.length) return note;
+  return `<div class="h-ctx-row" role="group" aria-label="Context for the question">${list.map((c) => chipHtml(c, { esc: H.esc, removable: true, page: !!c.page })).join('')}</div>${note}`;
 }
 
 // The references a question asked from host carries; a rec dialog question carries none.
@@ -147,13 +173,12 @@ export function refs(host) {
   return chipPayload(shownChips());
 }
 
+// On another page than the conversation's, the add starts a new conversation for this page.
 export function addChip(c) {
   const chip = cleanChip(c);
   if (!H || !chip) return;
-  if (!P.chips.some((x) => refKey(x) === refKey(chip))) {
-    P.chips.push(chip);
-    if (P.chips.length > MAX_REFS) P.chips.splice(0, P.chips.length - MAX_REFS);
-  }
+  syncOff();
+  convo.beginAdd(P, pageKey(), chip);
   if (!onAsk()) { P.open = true; P.view = 'thread'; }
   save();
   P.focus = true;
@@ -161,17 +186,34 @@ export function addChip(c) {
 }
 
 function removeChip(key, isPage) {
-  if (isPage) P.pageOff.add(key);
-  else P.chips = P.chips.filter((c) => refKey(c) !== key);
+  convo.removeChip(P, key, isPage);
   save();
   P.focus = true;
   H.draw();
 }
 
-// A new thread asked from the panel becomes the panel's thread.
+// A new thread asked from the panel becomes the panel's thread, unless the owner has started or
+// reopened another conversation since; either way its context is remembered.
 export function onThread(thread, host) {
   if (host !== 'panel' || !thread || typeof thread.id !== 'string' || !thread.id) return;
-  P.threadId = thread.id;
+  if (convo.adoptThread(P, thread.id, pageChip())) P.view = 'thread';
+  save();
+}
+
+// chat.js, before a panel question is sent: true when it just started a new conversation (the
+// question then goes as a new thread with this page's context only).
+export function askBegin() {
+  if (!H || !H.api) return false;
+  syncOff();
+  const started = convo.beginAsk(P, pageKey(), pageChip());
+  save();
+  return started;
+}
+
+// chat.js newConversation on the Ask page: clear the conversation; chat.js draws.
+export function clearConversation() {
+  if (!H) return;
+  convo.newConversation(P, pageKey());
   P.view = 'thread';
   save();
 }
@@ -226,7 +268,7 @@ function expand() {
   P.origin = { name: r.name, params: { ...(r.params || {}) } };
   const pc = pageChip();
   if (pc && !P.pageOff.has(refKey(pc)) && !P.chips.some((c) => refKey(c) === refKey(pc))) {
-    P.chips.unshift({ kind: pc.kind, id: pc.id, label: pc.label });
+    P.chips.unshift({ kind: pc.kind, id: pc.id, label: pc.label, q: pc.q || '' });
     P.chips = P.chips.slice(0, MAX_REFS);
   }
   P.view = 'thread';
@@ -236,31 +278,40 @@ function expand() {
 }
 
 // Open in panel, from the Ask page: back to the page the panel expanded from, on this thread.
+// Another thread than the panel's comes back with its own context; the conversation belongs to
+// the page the panel returns to.
 function collapse() {
   const r = route();
   const id = r.name === 'ask' && r.params && r.params.id ? String(r.params.id) : null;
-  P.threadId = id && threadOf(id) ? id : null;
+  const next = id && threadOf(id) ? id : null;
+  const o = P.origin || { name: 'home', params: {} };
+  P.origin = null;
+  const key = convo.pageKeyOf(o);
+  if (next && next !== P.threadId) convo.restoreCtx(P, next, key, chipFor(o, {}));
+  else { P.threadId = next; P.page = key; }
   // A first question still streaming on the Ask page: its thread lands in the panel.
   if (!P.threadId) chatScreen.handPending('panel');
   P.open = true;
   P.view = 'thread';
   save();
   P.focus = true;
-  const o = P.origin || { name: 'home', params: {} };
-  P.origin = null;
   H.api.go(o.name, o.params);
 }
 
 function newConversation() {
-  P.threadId = null;
+  convo.newConversation(P, pageKey());
   P.view = 'thread';
   save();
   P.focus = true;
   H.draw();
 }
 
+// A thread picked from the panel's list comes back with its own context, on this page.
 function pick(id) {
-  P.threadId = threadOf(id) ? id : null;
+  const next = threadOf(id) ? id : null;
+  if (next && next !== P.threadId) convo.restoreCtx(P, next, pageKey(), pageChip());
+  else if (next) P.page = pageKey(); // the current thread picked again here: it belongs to this page now
+  else P.threadId = null;
   P.view = 'thread';
   save();
   P.focus = true;
@@ -353,6 +404,8 @@ export function sync() {
   const r = route();
   syncOff();
   if (P.threadId && !threadOf(P.threadId)) { P.threadId = null; save(); }
+  // Stored state from before conversations had a page: it takes the page it is shown on.
+  if (P.page == null && r.name !== 'ask') { convo.adoptPage(P, pageKey()); if (P.page != null) save(); }
   const show = P.open && r.name !== 'ask';
   const m = mode();
   const dock = show && m === 'dock';

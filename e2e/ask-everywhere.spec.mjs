@@ -37,7 +37,6 @@ const askMain = (page) => page.locator('.h-root .h-askx-main');
 
 const isDock = (page) => page.viewportSize().width >= DOCK_MIN;
 const isPhone = (page) => page.viewportSize().width <= 720;
-const reEsc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const stored = (page) => page.evaluate((k) => {
   try { return JSON.parse(window.localStorage.getItem(k) || 'null'); } catch { return null; }
@@ -370,8 +369,8 @@ test.describe('ask everywhere', () => {
     await page.keyboard.press('ControlOrMeta+i');
     await expect(panel(page)).toBeVisible();
     await expect(pageChip(page)).toHaveAttribute('data-ref', `account:${ACC}`);
-    // The account name, plus any view detail the page under the dialog publishes.
-    await expect(pageChip(page).locator('.h-ctx-l')).toHaveText(new RegExp(`^On: Money > ${reEsc(name)}(, .+)?$`));
+    // The account name alone: the trend range of Money beneath the dialog is not the dialog's.
+    await expect(pageChip(page).locator('.h-ctx-l')).toHaveText(`On: Money > ${name}`);
 
     await gotoRoute(page, `rec/${REC_ID}`);
     await expect(recDialog(page)).toBeVisible();

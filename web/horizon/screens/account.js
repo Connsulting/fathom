@@ -368,6 +368,8 @@ export function html(id) {
   }
   const a = accountOf(id);
   if (!a) return frame('Account', '<h1 id="h-dlg-t" class="h-dlg-title">Account not found</h1><p class="h-mute">That account is not in your data right now.</p>');
+  // The date filter, when set, for the Ask page chip (the text search is not sent).
+  if (H.pageContext && (S.from || S.to)) H.pageContext({ from: S.from || undefined, to: S.to || undefined });
   ensure(id);
   const d = S.detail;
   const repairs = H.ingest.accountRepairsFor ? H.ingest.accountRepairsFor(id) : '';
