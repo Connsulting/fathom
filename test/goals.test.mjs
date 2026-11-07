@@ -178,7 +178,9 @@ test('recs link to the goals they serve, by topic, and archived goals do not lin
   const rec = id => sc.recs.find(r => r.id === id);
   assert.deepEqual(rec('va529').serves.map(g => g.id), ['kids'], 'the 529 rec serves the education goal');
   assert.ok(rec('spsep').serves.some(g => g.id === 'port4'), 'a retirement rec serves the retirement goal');
-  assert.equal(rec('umbrella').serves, undefined);
+  assert.deepEqual(rec('umbrella').serves, [], 'serves is always an array');
+  assert.equal(rec('umbrella').housekeeping, true);
+  assert.equal(rec('va529').housekeeping, false);
 
   const g = goalCreate(s.ctx({ title: 'Retire at 55' })).goal;
   const after = goalCreate(s.ctx({ title: 'unrelated' })).scenario;
@@ -188,27 +190,29 @@ test('recs link to the goals they serve, by topic, and archived goals do not lin
 
   // A specific topic beats tax; tracking a 529 account makes a goal an education goal.
   const goals = [{ id: 't', title: 'Pay less tax' }, { id: 'c', title: 'Kids', track: { accounts: ['x'] } }];
-  assert.deepEqual(servesGoals({ id: 'va529', value: [{ cls: 'tax' }] }, goals, [{ id: 'x', kind: '529' }]).map(x => x.id), ['c']);
-  assert.deepEqual(servesGoals({ id: 'vaq4', domain: 'tax' }, goals, []).map(x => x.id), ['t']);
+  assert.deepEqual(servesGoals({ id: 'va529', goalKinds: ['education', 'tax'] }, goals, [{ id: 'x', kind: '529' }]).map(x => x.id), ['c']);
+  assert.deepEqual(servesGoals({ id: 'vaq4', goalKinds: ['tax'] }, goals, []).map(x => x.id), ['t']);
 });
 
 test('the planner ranks recs that tie on their window by goal, then by curve lean', () => {
   const hit = (id, rec, close = '2032-12-31') => ({ state: 'hit', trigger: { id }, hit: { rec: { id, ...rec }, window: { close } } });
   const results = [
-    hit('umbrella', { domain: 'family' }),
-    hit('hsa-room', { domain: 'retirement', value: [{ cls: 'tax' }] }),
-    hit('invoice-deferral', { domain: 'business', value: [{ cls: 'cash' }] }),
-    hit('early', { domain: 'family' }, '2032-06-30'),
+    hit('umbrella', { domain: 'family', goalKinds: [] }),
+    hit('hsa-room', { domain: 'retirement', goalKinds: ['health', 'retirement', 'tax'] }),
+    hit('dependent-care-fsa', { domain: 'family', goalKinds: ['tax', 'cash'] }),
+    hit('early', { domain: 'family', goalKinds: [] }, '2032-06-30'),
   ];
   const plain = sortOrder(results);
-  assert.deepEqual([...plain.keys()], ['early', 'umbrella', 'hsa-room', 'invoice-deferral'], 'no prefs: window, then catalog order');
+  assert.deepEqual([...plain.keys()], ['early', 'umbrella', 'hsa-room', 'dependent-care-fsa'], 'no prefs: window, then catalog order');
   const goals = [{ id: 'g', title: 'A cash reserve' }];
   const withGoal = sortOrder(results, { goals });
-  assert.deepEqual([...withGoal.keys()], ['early', 'invoice-deferral', 'umbrella', 'hsa-room'], 'the rec serving a goal moves up within its window');
+  assert.deepEqual([...withGoal.keys()], ['early', 'dependent-care-fsa', 'umbrella', 'hsa-room'], 'the rec serving a goal moves up within its window');
   const leanRetire = sortOrder(results, { curve: { ret_life: 0.1 } });
-  assert.deepEqual([...leanRetire.keys()], ['early', 'hsa-room', 'umbrella', 'invoice-deferral']);
-  assert.ok(curveLean({ domain: 'retirement' }, { ret_life: 0.1 }) > 0);
-  assert.equal(curveLean({ domain: 'family' }, { ret_life: 0.1 }), 0);
+  assert.deepEqual([...leanRetire.keys()], ['early', 'hsa-room', 'umbrella', 'dependent-care-fsa']);
+  assert.ok(curveLean({ goalKinds: ['retirement'] }, { ret_life: 0.1 }) > 0);
+  assert.equal(curveLean({ goalKinds: [] }, { ret_life: 0.1 }), 0);
+  // Topics come from goal kinds only: a domain alone no longer leans or links.
+  assert.equal(curveLean({ domain: 'retirement' }, { ret_life: 0.1 }), 0);
 });
 
 test('the household summary grounds on goals, typed targets and curve leans', async t => {

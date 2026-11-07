@@ -17,6 +17,7 @@ import * as switcher from './screens/switcher.js';
 import * as simplefin from './screens/simplefin.js';
 import { createKeys } from './keys.js';
 import { KNOWN_FIGURES } from '/shared/goals.mjs';
+import { OWNERS, OWNER_LABEL } from '/shared/rec-links.mjs';
 
 const MS = 864e5;
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -614,7 +615,7 @@ function dlgHtml(id) {
   return frame(`${T(TRIGGER[r.trigger] || r.trigger || '')}<span>${T(r.triggerText)}</span>`, `<div class="h-rec-head">
       <h1 id="h-dlg-t" class="h-dlg-title">${T(r.title)}</h1>
       <p class="h-lede">${T(r.summary)}</p>
-      <div class="h-meta"><span class="h-st ${r.status}">${statusText(r)}</span>${isNeeds(r, ny) ? '<span class="h-acc">Needs you</span>' : ''}${r.effort ? `<span>${T(r.effort)}</span>` : ''}${values(r) ? `<span>${values(r)}</span>` : ''}${servesHtml(r)}</div>
+      <div class="h-meta"><span class="h-st ${r.status}">${statusText(r)}</span>${ownerHtml(r)}${isNeeds(r, ny) ? '<span class="h-acc">Needs you</span>' : ''}${r.effort ? `<span>${T(r.effort)}</span>` : ''}${values(r) ? `<span>${values(r)}</span>` : ''}${servesHtml(r, { dialog: true })}</div>
     </div>
     ${windowStrip(r)}
     <div class="h-acts big">${actionsFor(r, false).join('')}</div>
@@ -845,10 +846,18 @@ function pWargame(name) {
 const gText = (g, s) => (g && g.origin === 'owner' ? esc(s) : T(s));
 const goalTitle = (g) => gText(g, g.title);
 
-function servesHtml(r) {
+// The goals a rec serves. In the dialog a rec that serves no open goal reads Housekeeping; plan
+// rows show nothing for it.
+function servesHtml(r, { dialog = false } = {}) {
   const list = arr(r.serves);
-  if (!list.length) return '';
+  if (!list.length) return dialog && r.housekeeping ? '<span class="h-serves h-hk">Housekeeping</span>' : '';
   return `<span class="h-serves">Serves: ${list.map((g) => `<a href="${href('goals')}" data-go="goals">${g.origin === 'owner' ? esc(g.title) : T(g.title)}</a>`).join(', ')}</span>`;
+}
+
+// Who acts on the rec: a select in the dialog's meta row; a change saves it as an owner override.
+function ownerHtml(r) {
+  const opts = OWNERS.map((o) => `<option value="${o}"${o === r.owner ? ' selected' : ''}>${OWNER_LABEL[o]}</option>`).join('');
+  return `<label class="h-owner"><span>Owner</span><select data-recowner="${esc(r.id)}" aria-label="Action owner">${opts}</select></label>`;
 }
 
 const emptyDraft = (horizon = 'now') => ({ title: '', note: '', horizon, target: '', targetDate: '', trackKind: 'none', accounts: [], figure: '' });
@@ -1259,6 +1268,7 @@ function focusSig(el) {
   const a = (n) => el.getAttribute(n);
   if (a('data-dlg')) return `[data-dlg="${a('data-dlg')}"].h-dlg-x`;
   if (a('data-act')) return `[data-act="${a('data-act')}"][data-rec="${CSS.escape(a('data-rec') || '')}"]${a('data-arg') != null ? `[data-arg="${CSS.escape(a('data-arg'))}"]` : ''}`;
+  if (a('data-recowner') != null) return `[data-recowner="${CSS.escape(a('data-recowner'))}"]`;
   if (a('data-askrec') != null) return '[data-draft]';
   if (a('data-draft')) return `[data-draft="${CSS.escape(a('data-draft'))}"]`;
   return null;
@@ -1582,6 +1592,7 @@ function onInput(e) {
 function onChange(e) {
   const t = e.target;
   if (t?.dataset?.gf === 'track' || t?.dataset?.gf === 'acct') { goalInput(t); return; }
+  if (t?.dataset?.recowner) { api.act(t.dataset.recowner, 'owner', t.value); return; }
   if (t?.dataset?.curve) { api.setCurve(t.dataset.curve, Number(t.value) / 100); return; }
   if (t?.dataset?.prio) { api.setCurve(t.dataset.prio, Number(t.value) / 100); return; }
   ingest?.handleChange(e);
