@@ -888,6 +888,14 @@ function actionUndo(id) {
   return send('/api/actions/' + encodeURIComponent(id) + '/undo', {}, null, null, 'Could not undo that change. ');
 }
 
+// Confirm or decline (decision) the stored proposal on message `messageId` ('m<id>') in Ask thread
+// `threadId`; the fresh scenario carries the thread's new messages. Resolves the reply or null.
+function proposalDecide(threadId, messageId, decision) {
+  if (threadId == null || threadId === '' || !/^m\d+$/.test(String(messageId)) || (decision !== 'confirm' && decision !== 'decline')) return done();
+  return send('/api/threads/' + encodeURIComponent(threadId) + '/proposals/' + encodeURIComponent(messageId), { decision },
+    d => (d.message ? mapMsg(d.message) : null), null, 'Could not save that decision. ');
+}
+
 function goalCreate(fields) {
   if (!fields || typeof fields !== 'object') return done();
   return send('/api/goals', fields, d => d.goal || null, null, 'Could not save that goal. ');
@@ -1354,6 +1362,7 @@ const api = {
   preferenceSave,
   preferenceDelete,
   actionUndo,
+  proposalDecide,
   accountMask,
   accountOwner,
   accountKind,

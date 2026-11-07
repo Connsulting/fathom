@@ -15,6 +15,10 @@
    A goal proposal (provenance.goalProposal {title, note, horizon, target, targetDate}) saves a goal
    only when the owner taps Save, through the goals API (api.goalCreate). Its text is escaped; the
    card reads Saved once an owner goal with that title exists.
+   A stored proposal (provenance.pendingAction {tool, operation, args, resolved?}) shows a card
+   with its operation label and escaped arguments, plus Confirm and Not now while it is unresolved
+   and the latest message of its thread (api.proposalDecide); else its state (Confirmed, Not now,
+   Out of date). Nothing is written until the owner confirms.
    Streaming: with the engine on, a question goes out through api.askStream / api.newThreadStream.
    The pending block is a work block (a row button: spinner, "Working…", step count, chevron; its
    body lists steps and notes) above the text streaming in the current round. Progress labels are
@@ -150,7 +154,53 @@ export function goalProposalHtml(m) {
     + '</div>';
 }
 
+const PENDING_LABEL = { 'update_goal.create': 'Create goal', 'update_goal.edit': 'Edit goal' };
+const RESOLVED_LABEL = { confirmed: 'Confirmed', declined: 'Not now', stale: 'Out of date' };
+const pendingLabel = (p) => PENDING_LABEL[`${p.tool}.${p.operation}`]
+  || `${String(p.tool || '').replace(/_/g, ' ')}: ${String(p.operation || '').replace(/_/g, ' ')}`.replace(/^./, (c) => c.toUpperCase());
+const argValue = (v) => (v == null ? 'none' : typeof v === 'object' ? JSON.stringify(v) : String(v));
+
+// The card for a Fathom message that carries a stored proposal. opts.latest: the message is the
+// latest in its thread (default true); an older unresolved proposal reads Out of date.
+export function pendingActionHtml(m, { latest = true } = {}) {
+  if (!H || !m || m.role !== 'fathom' || m.notice || !isObj(m.provenance) || !isObj(m.provenance.pendingAction)) return '';
+  const { esc } = H;
+  const p = m.provenance.pendingAction;
+  const args = isObj(p.args) ? Object.entries(p.args) : [];
+  const status = isObj(p.resolved) ? p.resolved.status : latest ? null : 'stale';
+  const id = esc(m.id);
+  return `<div class="h-proposal h-pending-action"><p><span class="h-proposal-k">Proposed:</span> <b>${esc(pendingLabel(p))}</b></p>`
+    + (args.length ? `<ul class="h-pending-args">${args.map(([k, v]) => `<li>${esc(k)}: ${esc(argValue(v))}</li>`).join('')}</ul>` : '')
+    + (status
+      ? `<span class="h-proposal-done">${esc(RESOLVED_LABEL[status] || 'Out of date')}</span>`
+      : `<div class="h-pending-btns"><button type="button" class="h-btn pri" data-proposal-decide="confirm" data-proposal-message="${id}">Confirm</button>`
+        + `<button type="button" class="h-btn" data-proposal-decide="decline" data-proposal-message="${id}">Not now</button></div>`)
+    + '</div>';
+}
+
+// The id of the thread holding message `messageId`: the open Ask thread, else any thread.
+function proposalThread(messageId) {
+  const has = (th) => th && H.arr(H.api.conversation(keyOf(th))).some((m) => m.id === messageId);
+  const r = H.api.route;
+  const open = r && r.name === 'ask' && r.params && r.params.id ? threadById(r.params.id) : null;
+  if (has(open)) return open.id;
+  const th = threads().find(has);
+  return th ? th.id : null;
+}
+
 function proposalClick(e) {
+  const pd = e.target.closest('button[data-proposal-decide]');
+  if (pd && H.root.contains(pd)) {
+    e.preventDefault();
+    const id = pd.dataset.proposalMessage;
+    const threadId = proposalThread(id);
+    const buttons = [...(pd.closest('.h-pending-action') || pd).querySelectorAll('button[data-proposal-decide]')];
+    if (!threadId || pd.disabled) return true;
+    buttons.forEach((b) => { b.disabled = true; });
+    Promise.resolve(H.api.proposalDecide(threadId, id, pd.dataset.proposalDecide))
+      .finally(() => buttons.forEach((b) => { if (b.isConnected) b.disabled = false; }));
+    return true;
+  }
   const g = e.target.closest('button.h-propose[data-propose-goal]');
   if (g && H.root.contains(g)) {
     e.preventDefault();
