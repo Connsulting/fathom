@@ -117,6 +117,6 @@
   .d-horizon .pl-m { flex: 0 0 74px; }
   .d-horizon .pl-table { font-size: 13.5px; }
   .d-horizon .pl-table th, .d-horizon .pl-table td { padding: 9px 6px; }
-  .d-horizon .pl-table .pl-ly { display: none; }
+  .d-horizon .pl-table .pl-ly, .d-horizon .pl-table .pl-avg { display: none; }
   .d-horizon .pl-tag { display: inline-block; margin: 2px 0 0; }
 }
