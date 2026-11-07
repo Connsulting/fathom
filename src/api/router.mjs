@@ -30,6 +30,7 @@ import * as sf from './simplefin-handlers.mjs';
 import * as yh from './yearend-handlers.mjs';
 import * as gh from './goals.mjs';
 import * as accts from './accounts.mjs';
+import * as ad from './account-detail.mjs';
 import * as oh from './onboarding-handlers.mjs';
 import * as ah from './advisor-handlers.mjs';
 import { identityOf, sendUnauthorized } from './identity.mjs';
@@ -79,6 +80,8 @@ const TABLE = [
   { method: 'POST', path: '/api/threads/:id/trash', handler: h.threadTrash },
   { method: 'POST', path: '/api/threads/:id/restore', handler: h.threadRestore },
   { method: 'POST', path: '/api/threads/:id/delete', handler: h.threadDelete },
+  { method: 'GET', path: '/api/accounts/:id', handler: ad.accountDetail },
+  { method: 'GET', path: '/api/accounts/:id/transactions', handler: ad.accountTransactions },
   { method: 'POST', path: '/api/accounts/:id/name', handler: accts.accountRename },
   { method: 'GET', path: '/api/goals/suggestions', handler: gh.goalSuggestions },
   { method: 'POST', path: '/api/goals', handler: gh.goalCreate },
@@ -161,6 +164,18 @@ function normalizePath(rawPath) {
   return { segments, path: '/' + segments.join('/') };
 }
 
+// The query string as { key: string }, or { key: [strings] } for a repeated key. Handlers that read
+// a query validate every value they use.
+function queryOf(url, q) {
+  const out = Object.create(null);
+  if (q < 0) return out;
+  for (const [k, v] of new URLSearchParams(url.slice(q + 1))) {
+    if (!Object.hasOwn(out, k)) out[k] = v;
+    else out[k] = [].concat(out[k], v);
+  }
+  return out;
+}
+
 // A log-safe error code: the error's code or class name when it is a plain identifier.
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 const safeCode = err => [err && err.code, err && err.name].find(v => typeof v === 'string' && IDENT.test(v)) || 'unknown';
@@ -230,7 +245,7 @@ export function createHandler({ db, platform, config, answerer, engine = null, p
         const events = r.stream && wantsEventStream(req) ? createEventStream(req, res) : null;
         let out;
         try {
-          out = await r.handler({ db, config, answerer, engine, packs, identity, scheduler, transport, auth: authService, params, body, readUpload, req, res,
+          out = await r.handler({ db, config, answerer, engine, packs, identity, scheduler, transport, auth: authService, params, query: queryOf(url, q), body, readUpload, req, res,
             ...(events ? { onEvent: events.send } : {}), get keys() { return getKeys(); } });
         } catch (err) {
           // Once the event stream has started, an error is its last event.

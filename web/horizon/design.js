@@ -15,6 +15,7 @@ import { ingestScreens } from './screens/ingest.js';
 import { emailScreen } from './screens/email.js';
 import * as switcher from './screens/switcher.js';
 import * as simplefin from './screens/simplefin.js';
+import * as accountScreen from './screens/account.js';
 import { createKeys } from './keys.js';
 import { createSwipe } from './screens/swipe.js';
 import { homeModel, homeHeadline, healthChip, healthLine, paceReason, boardCharts, reasonText, servedGoalIds, shortDate, longDate, windowSpan } from './screens/home-model.js';
@@ -1420,10 +1421,10 @@ function accountsBody() {
     const sub = a.subtitle != null ? a.subtitle : [a.inst, a.owner].filter(Boolean).join(', ');
     return sub ? lbl(a, sub) : '';
   };
-  const list = keys.map((k) => section(k, `<div class="h-accs">${groups[k].map((a) => `<div class="h-acc ${a.mirror}" data-account="${esc(a.id)}">
+  const list = keys.map((k) => section(k, `<div class="h-accs">${groups[k].map((a) => `<div class="h-acc ${a.mirror}" data-account="${esc(a.id)}" data-go="account" data-id="${esc(a.id)}">
       <div class="h-acc-n"><b>${nameHtml(a)}</b><span>${subHtml(a)}</span></div>
       <div class="h-acc-v">${a.fig ? figHtml(a.fig) : '<span class="h-mute">No balance</span>'}</div>
-      <div class="h-acc-m"><i></i>${mirror[a.mirror] || esc(a.mirror)}</div>
+      <div class="h-acc-m"><i></i>${mirror[a.mirror] || esc(a.mirror)}<a class="h-acc-open" href="${href('account', { id: a.id })}" data-go="account" data-id="${esc(a.id)}" aria-label="Open ${esc(a.imported === false ? api.txt(String(a.name ?? '')) : a.name)}">Details</a></div>
       ${ingest.accountMeta(a)}${a.note ? `<p>${lbl(a, a.note)}</p>` : ''}</div>`).join('')}</div>`)).join('');
   const series = Object.entries(api.s.series || {});
   const evs = arr(api.s.events).filter((e) => ['income', 'account'].includes(e.kind));
@@ -1748,9 +1749,14 @@ function onboardStep() {
   return Number.isFinite(v) ? v : 0;
 }
 
-function underRoute() {
+// The dialog routes: a recommendation and an account share one host, chrome and history rule.
+const isDlgRoute = (name) => name === 'rec' || name === 'account';
+
+// The page under an open dialog. After a deep link or reload there is none remembered: a rec falls
+// back to Plan and an account to Accounts.
+function underRoute(dlgName = 'rec') {
   const u = ui.under;
-  return u && u.name !== 'rec' && u.name !== 'onboarding' ? u : { name: 'plan', params: {} };
+  return u && !isDlgRoute(u.name) && u.name !== 'onboarding' ? u : { name: dlgName === 'account' ? 'accounts' : 'plan', params: {} };
 }
 
 function lockBody(on) {
@@ -1773,6 +1779,8 @@ function focusSig(el) {
   if (a('data-dlg')) return `[data-dlg="${a('data-dlg')}"].h-dlg-x`;
   if (a('data-act')) return `[data-act="${a('data-act')}"][data-rec="${CSS.escape(a('data-rec') || '')}"]${a('data-arg') != null ? `[data-arg="${CSS.escape(a('data-arg'))}"]` : ''}`;
   if (a('data-recowner') != null) return `[data-recowner="${CSS.escape(a('data-recowner'))}"]`;
+  if (a('data-ad')) return `[data-ad="${CSS.escape(a('data-ad'))}"]`;
+  if (a('data-dlg-name') != null) return '[data-dlg-name]';
   if (a('data-askrec') != null) return '[data-draft]';
   if (a('data-draft')) return `[data-draft="${CSS.escape(a('data-draft'))}"]`;
   return null;
@@ -1781,7 +1789,7 @@ function focusSig(el) {
 function retSig(el) {
   if (!el || !el.dataset) return null;
   const d = el.dataset;
-  const sel = d.go === 'rec' && d.id ? `[data-go="rec"][data-id="${CSS.escape(d.id)}"]` : d.go ? `[data-go="${d.go}"]` : null;
+  const sel = isDlgRoute(d.go) && d.id ? `[data-go="${d.go}"][data-id="${CSS.escape(d.id)}"]` : d.go ? `[data-go="${d.go}"]` : null;
   if (!sel) return null;
   const idx = [...root.querySelectorAll(sel)].indexOf(el);
   return idx < 0 ? null : { sel, idx };
@@ -1789,26 +1797,28 @@ function retSig(el) {
 
 function syncDialog(r, page) {
   const host = root.querySelector('.h-dlg-host');
-  const isRec = r.name === 'rec';
+  const isRec = isDlgRoute(r.name);
+  const isAcct = r.name === 'account';
   const wasOpen = !host.hidden;
   if (isRec) {
     const id = String(r.params?.id || '');
-    const same = host.dataset.id === id;
+    const same = host.dataset.id === id && host.dataset.kind === r.name;
     const body0 = host.querySelector('.h-dlg-body');
     const top = same && body0 ? body0.scrollTop : 0;
     const active = document.activeElement;
     const sig = wasOpen && active && host.contains(active) ? focusSig(active) : null;
     const caret = sig && active.selectionStart != null ? active.selectionStart : null;
     host.classList.toggle('enter', !wasOpen);
-    host.innerHTML = dlgHtml(id);
+    host.innerHTML = isAcct ? accountScreen.html(id) : dlgHtml(id);
     host.dataset.id = id;
+    host.dataset.kind = r.name;
     host.hidden = false;
     page.inert = true;
     lockBody(true);
     const body = host.querySelector('.h-dlg-body');
     if (body) body.scrollTop = top;
     // Messages of the rec's attached thread: a landed answer scrolls to its question.
-    const rth = api.recThread(id);
+    const rth = isAcct ? null : api.recThread(id);
     const n = rth ? arr(api.conversation(chatScreen.keyOf(rth))).length : 0;
     const prev = ui.msgN[id];
     ui.msgN[id] = n;
@@ -1830,6 +1840,9 @@ function syncDialog(r, page) {
     host.hidden = true;
     host.innerHTML = '';
     delete host.dataset.id;
+    delete host.dataset.kind;
+    // Closing forgets the account dialog's state, so reopening loads it afresh (a failed load included).
+    accountScreen.reset();
     page.inert = false;
     lockBody(false);
     ui.under = null;
@@ -1842,7 +1855,7 @@ function syncDialog(r, page) {
 function draw() {
   if (!root || !api) return;
   const rr = routeNow();
-  const r = rr.name === 'rec' ? underRoute() : rr;
+  const r = isDlgRoute(rr.name) ? underRoute(rr.name) : rr;
   const key = `${r.name}/${r.params?.id ?? r.params?.name ?? r.params?.step ?? ''}`;
   const routeChanged = key !== lastKey;
   if (r.name !== 'onboarding' || (r.name === 'onboarding' && routeChanged && Number(r.params?.step ?? onboardStep()) !== 5)) {
@@ -1910,19 +1923,22 @@ function draw() {
 // page under it; moving from rec to rec inside the modal replaces that entry. Closing goes back to
 // the page when the modal was opened in the app, and replaces the entry with the page under it after
 // a deep link or reload. Either way Back after closing never shows the modal again.
-function openRec(id, trigger) {
+function openDialog(name, id, trigger) {
   const cur = api.route || { name: 'plan', params: {} };
-  if (cur.name === 'rec') {
-    api.go('rec', { id }, { replace: true });
+  if (isDlgRoute(cur.name)) {
+    api.go(name, { id }, { replace: true });
     return;
   }
   ui.under = { name: cur.name, params: { ...(cur.params || {}) } };
   ui.y = window.scrollY;
   ui.ret = retSig(trigger);
   ui.inApp = true;
-  api.go('rec', { id });
-  if (api.route?.name !== 'rec') ui.inApp = false;
+  api.go(name, { id });
+  if (api.route?.name !== name) ui.inApp = false;
 }
+
+const openRec = (id, trigger) => openDialog('rec', id, trigger);
+const openAccount = (id, trigger) => openDialog('account', id, trigger);
 
 function closeRec() {
   if (ui.closing) return;
@@ -1931,7 +1947,7 @@ function closeRec() {
     window.history.back();
     return;
   }
-  const u = underRoute();
+  const u = underRoute(api.route?.name);
   api.go(u.name, u.params, { replace: true });
 }
 
@@ -1959,6 +1975,12 @@ function onClick(e) {
     return;
   }
   if (SCREENS.some((s) => s.onClick?.(e))) return;
+  // An account row, or its Details link, opens the account dialog. A control inside the row (the
+  // rename field, a figure, a link elsewhere) keeps its own click.
+  const ao = e.target.closest('[data-go="account"]');
+  if (ao && root.contains(ao)) {
+    if (!e.target.closest('input,textarea,select,button,.fx-fig,a:not([data-go="account"])')) { e.preventDefault(); openAccount(ao.dataset.id, ao); return; }
+  }
   const cn = e.target.closest('[data-conn]');
   if (cn && root.contains(cn)) { e.preventDefault(); connect.onClick(cn, connectH); return; }
   if (ingest.handleClick(e)) return;
@@ -2014,6 +2036,7 @@ function onClick(e) {
     return;
   }
   if (d.modal === 'close') { ui.modal = null; draw(); return; }
+  if (d.go === 'account') return;
   if (d.go) {
     e.preventDefault();
     if (d.go === 'rec' && d.id) { openRec(d.id, t); return; }
@@ -2173,6 +2196,7 @@ const POINTER = ['pointerdown', 'pointermove', 'pointerup', 'pointercancel'];
 // Root keys that are not shortcuts: Enter in the Ask composer and rename field first. Shortcuts go
 // through the registry in onDocumentKey, so Escape is never prevented here.
 function onKey(e) {
+  if (SCREENS.some((s) => s.onKey?.(e))) return;
   // Enter in the own-goal field adds it and submits nothing else.
   if (e.key === 'Enter' && !e.isComposing && e.target.matches?.('[data-goal-own-input]')) { e.preventDefault(); addOwnGoal(); return; }
   if (e.target.matches?.('[data-acc-name]')) {
@@ -2190,10 +2214,10 @@ function onDocumentKey(e) {
   if (!root || !api || !keys) return;
   if (switcher.captures(e)) return;
   if (!e.defaultPrevented && keys.handle(e, document.activeElement)) { e.preventDefault(); return; }
-  if (e.key === 'Tab' && api.route?.name === 'rec') {
+  if (e.key === 'Tab' && isDlgRoute(api.route?.name)) {
     const host = root.querySelector('.h-dlg-host');
     if (!host || host.hidden) return;
-    const f = [...host.querySelectorAll('a[href],button:not([disabled]),input:not([disabled]),textarea,[tabindex]:not([tabindex="-1"])')].filter((el) => el.offsetParent !== null);
+    const f = [...host.querySelectorAll('a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea,summary,[tabindex]:not([tabindex="-1"])')].filter((el) => el.offsetParent !== null);
     if (!f.length) return;
     const first = f[0], last = f[f.length - 1], act = document.activeElement;
     if (!host.contains(act) || act === host.querySelector('.h-dlg')) { e.preventDefault(); (e.shiftKey ? last : first).focus(); }
@@ -2203,12 +2227,13 @@ function onDocumentKey(e) {
 }
 
 // Helpers the screen modules use. Getters, because api, root and ui change on mount.
-const SCREENS = [switcher, chatScreen, packsScreen, engineScreen, advisorScreen, yearendScreen, simplefin];
+const SCREENS = [switcher, chatScreen, packsScreen, engineScreen, advisorScreen, yearendScreen, simplefin, accountScreen];
 const KIT = {
   get api() { return api; }, get root() { return root; }, get ui() { return ui; }, get keys() { return keys; }, get ingest() { return ingest; },
   draw: () => draw(),
   esc, T, X, arr, plural, icon, btn, goA, href, shell, section, pageHead, thread, composer, figHtml, recById,
-  openRec, closeRec, decisionList, statusText, routeNow, visibleRecs,
+  openRec, openAccount, closeRec, decisionList, statusText, routeNow, visibleRecs, spark,
+  sfStatus: () => simplefin.status(),
   newGoal: () => { if (routeNow().name !== 'goals') api.go('goals', {}); openGoalForm(null); }
 };
 SCREENS.forEach((s) => s.bind(KIT));
