@@ -330,3 +330,18 @@ test('createKeys: hintText formats keys for display', () => {
   assert.equal(keys.hintText('enter'), 'Enter');
   assert.equal(keys.hintText('j'), 'J');
 });
+
+test('createKeys: handle with globalOnly skips the screen table and still runs global keys', () => {
+  const { keys, b } = setup();
+  const ran = [];
+  keys.register('global', [{ ...b('?', 'Shortcuts'), action: () => ran.push('global') }]);
+  keys.register('confirm', [{ ...b('1', 'Option 1'), action: () => ran.push('screen') }]);
+  keys.setScreen('confirm');
+  // A layer above the screen (the Ask panel) has focus: the screen's own keys stay out.
+  assert.equal(keys.handle(ev('1'), DIV, { globalOnly: true }), false);
+  assert.equal(keys.handle(ev('?'), DIV, { globalOnly: true }), true);
+  assert.deepEqual(ran, ['global']);
+  // Liveness: without the option the screen key still runs.
+  assert.equal(keys.handle(ev('1'), DIV), true);
+  assert.deepEqual(ran, ['global', 'screen']);
+});

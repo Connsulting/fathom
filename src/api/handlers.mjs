@@ -16,6 +16,9 @@ import { queueAccountPairs } from '../ingest/account-merge.mjs';
 // after the reply's transaction commits and before the response is built. Trash older than 30 days
 // is purged when the thread list, a thread or the scenario is read. Both asking routes stream as
 // Server-Sent Events on request (src/api/router.mjs); the stored turn and the final body are the same.
+// Both asking routes take an optional `context: [{ kind, id }]` (the references the owner pointed
+// at, src/api/context-refs.mjs), validated before any write or stream start (400 when malformed)
+// and passed to the answerer as `refs`.
 
 import { getSetting, setSetting, schemaVersion, tx, cents, parseJson as parse } from '../store/db.mjs';
 import { buildScenario, clockNow, loadContent, defaultPicks, wargameLists } from '../scenario/build.mjs';
@@ -26,6 +29,7 @@ import { wrapBlocks } from '../shared/answer-text.mjs';
 import { seedDemo } from '../../demo/seed.mjs';
 import { clearStoredFiles, loadDataKey, VaultError } from '../ingest/vault.mjs';
 import { HttpError } from './http.mjs';
+import { parseRefs } from './context-refs.mjs';
 import { upsertFact } from '../store/facts.mjs';
 import { setRecOwner } from '../store/recs.mjs';
 import { findQuestion, isIndex } from './questions.mjs';
@@ -483,6 +487,7 @@ export async function ask(ctx) {
   const { key } = ctx.body;
   if (typeof key !== 'string' || !key) throw new HttpError(400, 'key must be a conversation key');
   const { hasQ, questionId, clean } = askBody(ctx.body);
+  const refs = parseRefs(ctx.body.context);
 
   const thread = isThreadKey(key);
   if (!thread && !key.startsWith('pack:')) {
@@ -503,7 +508,7 @@ export async function ask(ctx) {
 
   streamStart(ctx, key);
   const reply = await need(ctx, 'answerer').answer({ db, key, questionId: hasQ ? questionId : undefined,
-    text: hasQ ? undefined : clean, clock: ctx.config && ctx.config.clock, ...streaming(ctx) });
+    text: hasQ ? undefined : clean, clock: ctx.config && ctx.config.clock, refs, ...streaming(ctx) });
   if (!reply) throw new HttpError(404, `no question ${questionId}`);
   // A thread may have been trashed or deleted while the model answered; asking unarchives it.
   const id = storeTurn(ctx, key, mine, reply, thread ? () => {
@@ -542,7 +547,8 @@ export async function threadCreate(ctx) {
   const { db } = ctx;
   const body = ctx.body;
   const empty = (body.text === undefined || body.text === null) && (body.questionId === undefined || body.questionId === null);
-  if (body.recId !== undefined && body.recId !== null) return threadCreateFromRec(ctx, empty);
+  const refs = parseRefs(body.context);
+  if (body.recId !== undefined && body.recId !== null) return threadCreateFromRec(ctx, empty, refs);
   if (empty) {
     const thread = tx(db, () => insertThread(db, newThreadKey(db), stamp(ctx)));
     return { scenario: scenarioOf(ctx), thread };
@@ -561,7 +567,7 @@ export async function threadCreate(ctx) {
   }
   const key = newThreadKey(db);
   streamStart(ctx, key);
-  const reply = await need(ctx, 'answerer').answer({ db, key, text: question, clock: ctx.config && ctx.config.clock, ...streaming(ctx) });
+  const reply = await need(ctx, 'answerer').answer({ db, key, text: question, clock: ctx.config && ctx.config.clock, refs, ...streaming(ctx) });
   if (!reply) throw new HttpError(404, 'no answer');
   const id = storeTurn(ctx, key, mine, reply, () => { if (!db.prepare('SELECT 1 FROM conversations WHERE key = ?').get(key)) insertThread(db, key, stamp(ctx)); });
   await maybeName(ctx, key);
@@ -573,7 +579,7 @@ export async function threadCreate(ctx) {
 // hidden); a question is required (400) and questionId is a rec.qa index, id or exact question (404
 // unknown). The row is written before the model call so the answerer's scenario resolves the rec
 // context (recForKey); a failed or empty answer deletes it again while it holds no message.
-async function threadCreateFromRec(ctx, empty) {
+async function threadCreateFromRec(ctx, empty, refs) {
   const { db } = ctx;
   const { recId } = ctx.body;
   if (typeof recId !== 'string' || !recId) throw new HttpError(400, 'recId must be a recommendation id');
@@ -594,7 +600,7 @@ async function threadCreateFromRec(ctx, empty) {
   try {
     streamStart(ctx, key);
     reply = await need(ctx, 'answerer').answer({ db, key, questionId: hasQ ? questionId : undefined,
-      text: hasQ ? undefined : clean, clock: ctx.config && ctx.config.clock, ...streaming(ctx) });
+      text: hasQ ? undefined : clean, clock: ctx.config && ctx.config.clock, refs, ...streaming(ctx) });
     if (!reply) throw new HttpError(404, hasQ ? `no question ${questionId}` : 'no answer');
   } catch (e) {
     dropIfEmpty(db, key);
