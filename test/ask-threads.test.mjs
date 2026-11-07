@@ -428,7 +428,7 @@ test('AC5 the answer request carries this thread history and nothing from anothe
     const sent = JSON.stringify({ system: r.system, systemDynamic: r.systemDynamic, messages: r.messages });
     assert.ok(!sent.includes('Synthetic other thread'), 'nothing from the other thread reaches the model');
   }
-  assert.ok(toolNamesOf(req).includes('propose_recommendation_action'), 'the proposal tool is offered in a thread');
+  assert.ok(!toolNamesOf(req).includes('set_recommendation_status'), 'a direct answerer call without trusted identity is read-only');
 });
 
 test('AC5 asking in an archived thread unarchives it; asking in a trashed thread is 409', T, () => withServer({ env: FAKE }, async s => {
