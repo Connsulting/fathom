@@ -114,3 +114,60 @@ test('planner refuses integers that do not identify a running local plan claim',
   await assert.rejects(runPlanning(b.db, null, { now: '2026-11-05', runId: run.id }), /claimed|claim|runId/);
   await assert.rejects(runPlanning(a.db, null, { now: '2026-11-05', runId: run.id }), /claimed|claim|runId/);
 });
+
+test('manual HTTP, successful upload and Confirm dispatch only to the initiating household', { timeout: 60000 }, async () => {
+  const { twoHouseholds, uploadFiles } = await import('./helpers/tenancy-runtime.mjs');
+  const { aggregatorCsv } = await import('./helpers/ingest.mjs');
+  const { ask, FACT_CHECK_OPTIONS } = await import('../src/ingest/confirm.mjs');
+  const fx = await twoHouseholds({ engine: 'off' });
+  try {
+    await fx.B.client.postJson('/api/household/outbound', { jobs: true });
+    const a = fx.ctx(fx.A.id); const b = fx.ctx(fx.B.id);
+    await b.scheduler.tick();
+    const before = b.scheduler.runs({ limit: 200 });
+    assert.equal((await fx.A.client.postJson('/api/jobs/freshness/run', {})).status, 200);
+    const uploaded = await uploadFiles(fx.baseUrl, fx.A.admin, [{ name: 'synthetic.csv', bytes: Buffer.from(aggregatorCsv([
+      { date: '2026-11-01', amount: '18.25', description: 'Synthetic household purchase', number: '5550098765' },
+    ])) }]);
+    assert.equal(uploaded.status, 200, uploaded.text);
+    assert.equal(uploaded.json.files[0].status, 'imported');
+    for (let i = 0; i < 30; i++) await turn();
+    assert.ok(a.scheduler.runs({ limit: 200 }).some(r => r.jobId === 'plan' && r.trigger === 'ingest'));
+    const item = ask(a.db, { kind: 'fact_check', subject: 'synthetic.scheduler', question: 'Use this synthetic fact?',
+      options: FACT_CHECK_OPTIONS, context: { key: 'synthetic.scheduler', value: true }, now: '2026-11-05T12:00:00Z' });
+    const answer = await fx.A.client.postJson(`/api/confirm/${item.id}/answer`, { answer: 'yes' });
+    assert.equal(answer.status, 200, answer.text);
+    const deadline = Date.now() + 35000;
+    while (!a.scheduler.runs({ limit: 200 }).some(r => r.jobId === 'plan' && r.trigger === 'confirm') && Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 50));
+    }
+    assert.ok(a.scheduler.runs({ limit: 200 }).some(r => r.jobId === 'plan' && r.trigger === 'confirm'));
+    assert.deepEqual(b.scheduler.runs({ limit: 200 }), before);
+  } finally { await fx.close(); }
+});
+
+test('SimpleFIN sync queues local planning and freshness without holding its handler slot', { timeout: 15000 }, async () => {
+  const { seedDemo } = await import('../demo/seed.mjs');
+  const { connectSimplefin, fakeToken, createFakeSimplefin } = await import('../src/ingest/simplefin.mjs');
+  const instance = await tempInstance({ mode: 'demo', init: seedDemo });
+  const other = 'hh_synthetic_simplefin';
+  instance.platform.prepare("INSERT INTO households (id, status, mode, created_at, updated_at) VALUES (?, 'active', 'demo', 1, 1)").run(other);
+  createHouseholdStorage({ platform: instance.platform, dataDir: instance.dataDir, householdId: other, mode: 'demo', secrets: instance.secrets, enabled: true });
+  const config = { dataDir: instance.dataDir, engine: 'off', clock: '2026-11-05', emailTransport: 'dev' };
+  const registry = createRuntimeRegistry({ platform: instance.platform, config, secrets: instance.secrets });
+  try {
+    const a = registry.get(instance.householdId); const b = registry.get(other);
+    await connectSimplefin(a.db, fakeToken(), { household: a, now: '2026-11-05T12:00:00Z', fetch: createFakeSimplefin({ today: () => '2026-11-05' }) });
+    const run = await a.scheduler.runNow('simplefin-sync');
+    assert.equal(run.status, 'ok');
+    assert.equal(run.note.changed, true);
+    for (let i = 0; i < 30; i++) await turn();
+    const runs = a.scheduler.runs();
+    assert.ok(runs.some(r => r.jobId === 'plan' && r.trigger === 'ingest'));
+    assert.ok(runs.some(r => r.jobId === 'freshness' && r.trigger === 'ingest'));
+    assert.equal(b.scheduler.runs().length, 0);
+    assert.equal(b.db.prepare('SELECT count(*) AS n FROM transactions').get().n, 0);
+  } finally {
+    await registry.close(); instance.close(); rmSync(instance.dataDir, { recursive: true, force: true });
+  }
+});

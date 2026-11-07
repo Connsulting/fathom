@@ -3,8 +3,7 @@
 // file_id 'demo-seed', parser 'demo-seed' and a locator into the scenario or the ledger.
 //
 // CLI: `npm run seed:demo -- --household <id>` rebuilds an existing demo household
-// resolved by the platform registry, with only that household's stored objects
-// cleared). It refuses a real instance or an outdated layout and exits 1 without changing it.
+// resolved by the platform registry, clearing only that household's stored objects. It refuses a real instance or an outdated layout and exits 1 without changing it.
 
 import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
