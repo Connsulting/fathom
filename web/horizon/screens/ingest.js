@@ -601,7 +601,7 @@ export function ingestScreens(h) {
     }).join('');
     const others = arr(d.sameName).length;
     const flag = others ? `<span class="h-cf-flag">Same name as ${plural(others, 'other account')}</span>` : '';
-    const where = v ? [v.institution ? esc(v.institution) : '', v.mask ? `ending ${esc(v.mask)}` : ''].filter(Boolean).join(', ') : '';
+    const where = v && v.institution ? esc(v.institution) : '';
     const acct = `<td data-col="account"><b>${esc(v ? (v.label || v.name || 'Unnamed account') : it.question)}</b>${addBtn('confirm', id, v ? (v.label || v.name || 'Unnamed account') : (KIND[it.kind] || 'Question'))}${flag}${where ? `<span>${where}</span>` : ''}</td>`;
     const holder = `<td data-col="holder" data-l="Holder">${v && v.holder ? esc(v.holder) : '<span class="h-cf-none">Not in the source</span>'}</td>`;
     const bal = `<td data-col="balance" data-l="Latest balance">${(v && balanceHtml(v.balance, true)) || '<span class="h-cf-none">No balance yet</span>'}</td>`;

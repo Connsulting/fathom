@@ -4,6 +4,7 @@
 
 import { cents, parseJson } from '../store/db.mjs';
 import { accountLabel } from '../shared/account-label.mjs';
+import { accountNaming } from '../accounts/naming.mjs';
 import { resolveTokens } from '../shared/tokens.mjs';
 import { resolveClock, tokenScope } from '../scenario/build.mjs';
 import { loadCategoryInputs } from '../categories/store.mjs';
@@ -102,14 +103,15 @@ export function classified(db, clock) {
 export function accountLabels(db) {
   const rows = db.prepare('SELECT * FROM accounts ORDER BY sort, id').all();
   let plain = null;
+  const naming = accountNaming(db);
   const out = new Map();
   rows.forEach((a, i) => {
-    let row = a;
+    let label = accountLabel({ ...a, ...naming.hint(a.id) });
     if (a.parser === 'demo-seed') {
       if (!plain) { const scope = tokenScope(db); plain = (s) => resolveTokens(scope, s, false); }
-      row = { ...a, inst: plain(a.inst || ''), name: plain(a.name || ''), owner: plain(a.owner || '') };
+      label = plain(label);
     }
-    out.set(a.id, { label: accountLabel(row), order: i });
+    out.set(a.id, { label, order: i });
   });
   return out;
 }
