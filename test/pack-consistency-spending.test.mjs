@@ -26,7 +26,11 @@ test('every shipped category name has one class', () => {
       assert.equal(Object.hasOwn(CATEGORY_CLASSES, name), true, name);
       const row = CATEGORY_CLASSES[name];
       assert.ok(CLASSES.includes(row.class), `${name} -> ${row.class}`);
-      assert.equal(classOf(name, table[name]), row.class, name);
+      const bucket = table[name];
+      const expected = bucket != null && bucket !== 'household'
+        ? { business: 'business', income: 'income', transfer: 'transfer', tax: 'taxes', saving: 'savings', excluded: 'excluded' }[bucket]
+        : row.class;
+      assert.equal(classOf(name, bucket), expected, name);
     }
   }
   assert.deepEqual(Object.keys(CATEGORY_CLASSES).sort(), [...seen].sort());
@@ -37,6 +41,9 @@ test('every shipped category name has one class', () => {
   assert.equal(classOf('not-a-category', 'transfer'), 'transfer');
   assert.equal(classOf('not-a-category', 'excluded'), 'excluded');
   assert.equal(classOf('not-a-category', 'household'), 'unclassified');
+  assert.equal(classOf('Groceries', 'business'), 'business');
+  assert.equal(classOf('Uncategorized', 'income'), 'income');
+  assert.equal(classOf('Mortgage', 'household'), 'debt_service');
   assert.equal(classOf('not-a-category', null), null);
 });
 
@@ -75,6 +82,5 @@ test('the spending pack is always active and its prose states the encoded rules'
   const college = entryBody(OBLIGATION_RULES.plan529.packRef);
   assert.match(college, /\bage 18\b/);
   const mortgage = entryBody(OBLIGATION_RULES.mortgage.packRef);
-  assert.match(mortgage, /escrow/i);
-  assert.match(mortgage, /continues/);
+  assert.match(mortgage, /Escrow continues as housing after the mortgage payoff/);
 });

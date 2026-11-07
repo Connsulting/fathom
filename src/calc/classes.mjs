@@ -55,13 +55,14 @@ export const CATEGORY_CLASSES = Object.freeze({
 });
 
 const BUCKET_CLASSES = Object.freeze({
-  household: 'unclassified', business: 'business', income: 'income', transfer: 'transfer',
+  business: 'business', income: 'income', transfer: 'transfer',
   tax: 'taxes', saving: 'savings', excluded: 'excluded',
 });
 
 export function classOf(category, bucket) {
-  if (category != null && Object.hasOwn(CATEGORY_CLASSES, category)) return CATEGORY_CLASSES[category].class;
   if (bucket != null && Object.hasOwn(BUCKET_CLASSES, bucket)) return BUCKET_CLASSES[bucket];
+  if (category != null && Object.hasOwn(CATEGORY_CLASSES, category)) return CATEGORY_CLASSES[category].class;
+  if (bucket === 'household') return 'unclassified';
   return null;
 }
 
