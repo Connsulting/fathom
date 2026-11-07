@@ -62,3 +62,21 @@ test('Confirm shares the repair question and Keep both clears the Money warning 
   await expect(page.locator('[data-account-duplicates]')).toHaveCount(0);
   await expect(series(page)).toContainText('2.4');
 });
+
+test('Money retires a stale pair warning and offers review again when evidence returns @sm-ac4 @mobile', async ({page,request}) => {
+  const pair=await seed(request);
+  await gotoRoute(page,'money');
+  await expect(page.locator('[data-account-duplicates]')).toBeVisible();
+  const changeKind = kind => {
+    const db=openDb(resolve(process.env.E2E_DATA || '.e2e-data',DB_FILE));
+    try { db.prepare('UPDATE accounts SET kind=? WHERE id=?').run(kind,pair.own); } finally {db.close();}
+  };
+  changeKind('card');
+  await page.reload();
+  await expect(page.locator('[data-account-duplicates]')).toHaveCount(0);
+  changeKind('cash');
+  await page.reload();
+  await expect(page.locator('[data-account-duplicates]')).toBeVisible();
+  const sc=await (await request.get('/api/scenario')).json();
+  expect(sc.live.ingest.items.filter(i=>i.context.repair)).toHaveLength(1);
+});

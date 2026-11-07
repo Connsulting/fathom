@@ -138,7 +138,7 @@ function answerable(db, id, optionId) {
   if (!item) throw new ConfirmError('not_found');
   if (item.status === 'answered') throw new ConfirmError(item.answer === 'superseded' ? 'stale' : 'answered');
   if (!item.options.some((o) => o.id === optionId)) throw new ConfirmError('bad_option');
-  assertCurrentPair(db, item);
+  if (optionId !== 'different') assertCurrentPair(db, item);
   if (item.kind === 'fact_check' && factIsStale(db, item)) throw new ConfirmError('stale');
   if (item.kind === 'withholding_conflict' && !conflictCurrent(db, item)) throw new ConfirmError('stale');
   return item;
@@ -297,7 +297,7 @@ export function reviseItem(db, id, optionId, { now } = {}) {
     const dependents = revertDependents(db, item.id);
     const reverted = revertAnswer(db, getItem(db, item.id));
     const fresh = getItem(db, item.id);
-    assertCurrentPair(db, fresh);
+    if (optionId !== 'different') assertCurrentPair(db, fresh);
     if (fresh.kind === 'fact_check' && factIsStale(db, fresh)) throw new ConfirmError('stale');
     if (fresh.kind === 'withholding_conflict' && !conflictCurrent(db, fresh)) throw new ConfirmError('stale');
     const { changes } = recordAnswer(db, fresh, optionId, { now });
@@ -407,7 +407,6 @@ export function applyAnswer(db, item, optionId, { now } = {}) {
       return {};
     case 'account_match': {
       if (item.context?.repair) {
-        assertCurrentPair(db, item);
         if (optionId === 'same') mergeAccounts(db, item, { now: stamp(now) });
         return {};
       }
