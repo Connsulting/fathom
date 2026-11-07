@@ -71,6 +71,8 @@ export function openOrCreateInstance(config) {
   }
   const { platform, mode } = opened;
   try {
+    // A public demo serves only a synthetic seeded demo; that refusal comes before any other.
+    if (config.publicDemo) assertPublicDemoInstance(config, platform, mode);
     if ((config.demo === true && mode !== 'demo') || (config.demo === false && mode === 'demo')) {
       throw new StartupError('instance_mode_mismatch', MODE_MISMATCH[mode]);
     }
@@ -131,10 +133,9 @@ async function listen(server, config) {
 
 const urlOf = (server, config) => `http://${config.host.includes(':') ? `[${config.host}]` : config.host}:${server.address().port}`;
 
-async function startPublicDemo(config, platform, mode) {
+async function startPublicDemo(config, platform) {
   let demo;
   try {
-    assertPublicDemoInstance(config, platform, mode);
     demo = createPublicDemoHandler(config, { platform });
   } catch (err) {
     try { platform.close(); } catch { /* already closed */ }
@@ -163,7 +164,7 @@ async function startPublicDemo(config, platform, mode) {
 
 export async function startServer(config = loadConfig()) {
   const { platform, mode, secrets } = openOrCreateInstance(config);
-  if (config.publicDemo) return startPublicDemo(config, platform, mode);
+  if (config.publicDemo) return startPublicDemo(config, platform);
   let runtimes = null;
   const closeAll = async () => {
     try { await runtimes?.close(); } catch { /* close anyway */ }

@@ -26,7 +26,8 @@
 //   platform generation changed (the old one closes once every acquire has been released), else
 //   null; a build failure logs a code and returns null. demo() is the original household's context
 //   on a demo instance and throws otherwise. forIdentity needs identity.householdId and role.
-//   startAll() starts every active household's scheduler (contexts built later start theirs too);
+//   startAll() starts every active household (pack state refresh, then its scheduler); contexts
+//   built later start the same way.
 //   close() stops schedulers and closes every store.
 
 import { existsSync, lstatSync, realpathSync } from 'node:fs';
@@ -181,11 +182,9 @@ export function createHouseholdContext({
     ...transportOptions, outboxDir: join(root, 'outbox'), outbound,
     verifyRecipients: mode === 'real' ? addresses => recipientsVerified(platform, householdId, addresses) : null,
   });
-  let livePacks = packs;
-  if (!livePacks) {
-    livePacks = createLivePacks(db, { dataDir: root });
-    refreshPacks(livePacks);
-  }
+  // Packs load lazily on read; the pack state refresh (a store write) runs when the household
+  // starts serving (startAll, or a later build once started), never on a read path.
+  const livePacks = packs ?? createLivePacks(db, { dataDir: root });
   let householdEngine = engine;
   if (!householdEngine) {
     householdEngine = createRuntimeEngine({
@@ -249,7 +248,8 @@ export function createRuntimeRegistry({ platform, config, secrets, transportOpti
     context.close().catch(() => {});
   }
 
-  function startScheduler(context) {
+  function startHousehold(context) {
+    if (context.packs) refreshPacks(context.packs);
     try {
       const out = context.scheduler?.start();
       if (out && typeof out.then === 'function') out.then(null, err => console.error('fathom: scheduler start failed', codeOf(err)));
@@ -277,7 +277,7 @@ export function createRuntimeRegistry({ platform, config, secrets, transportOpti
       return null;
     }
     entries.set(householdId, { context, generation });
-    if (started) startScheduler(context);
+    if (started) startHousehold(context);
     return context;
   }
 
@@ -313,7 +313,7 @@ export function createRuntimeRegistry({ platform, config, secrets, transportOpti
       started = true;
       for (const id of servable.all().map(r => r.id)) {
         const context = get(id);
-        if (context) startScheduler(context);
+        if (context) startHousehold(context);
       }
     },
     async close() {
