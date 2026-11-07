@@ -508,3 +508,51 @@ test('every suggested figure carries calculator provenance; only untargeted owne
   assert.ok(figOf(r, cushion, 'target').locator.window, 'the window rides on the locator');
   assert.ok(figOf(r, recOf(r, 'tax'), 'target').locator.sources.some(s => s.rows.table === 'figures'));
 });
+
+// ---------------------------------------------------------------- business-owned accounts
+
+// A checking account that belongs to the business: monthly outflows of 700 (January to August),
+// a stored balance of 9,000 and a 1,500 transfer into Joint checking on May 3 and 5.
+function businessChecking(db, id = 'bchk') {
+  account(db, id, 'checking', 'Studio operating');
+  for (const m of [1, 2, 3, 4, 5, 6, 7, 8]) txn(db, id, `2026-${pad(m)}-12`, -700, 'Vendor');
+  balance(db, id, '2026-10-31', 9000);
+  txn(db, id, '2026-05-03', -1500, 'Owner draw');
+  txn(db, 'chk', '2026-05-05', 1500, 'Draw from business');
+}
+
+for (const owner of ['business', 'Business']) {
+  test(`a checking account owned by "${owner}" is not personal spending or cash; its transfer in is income`, async t => {
+    const db = await store(t);
+    household(db);
+    putGoal(db, 'cushion', { title: 'A cash cushion', horizon: '1-3y' });
+    businessChecking(db);
+    db.prepare('UPDATE accounts SET owner = ? WHERE id = ?').run(owner, 'bchk');
+    const r = build(db);
+    const rec = recOf(r, 'cushion');
+    assert.equal(rec.state, 'suggested');
+    assert.equal(figOf(r, rec, 'monthlySpend').v, 3005, 'business outflows are not personal spending');
+    assert.equal(figOf(r, rec, 'current').v, 7000, 'business cash is not the cushion');
+    assert.deepEqual([...rec.track.accounts].sort(), ['chk', 'sav']);
+    assert.doesNotMatch(rec.trackLabel, /Studio/);
+    assert.equal(rec.accept.target, 18100);
+    assert.equal(figOf(r, rec, 'monthlySavings').v, 1250, 'the 1,500 transfer in over six months is income: 1,000 + 250');
+  });
+}
+
+test('a checking account named in the accounts.businessEntity owner fact is not personal spending or cash', async t => {
+  const db = await store(t);
+  household(db);
+  putGoal(db, 'cushion', { title: 'A cash cushion', horizon: '1-3y' });
+  businessChecking(db, 'echk');
+  db.prepare("INSERT INTO facts (key, value, src, confirmed, updated_at) VALUES ('accounts.businessEntity', ?, 'owner', 1, ?)")
+    .run(JSON.stringify({ echk: 'Some LLC' }), CLOCK);
+  const r = build(db);
+  const rec = recOf(r, 'cushion');
+  assert.equal(rec.state, 'suggested');
+  assert.equal(figOf(r, rec, 'monthlySpend').v, 3005);
+  assert.equal(figOf(r, rec, 'current').v, 7000);
+  assert.deepEqual([...rec.track.accounts].sort(), ['chk', 'sav']);
+  assert.doesNotMatch(rec.trackLabel, /Studio/);
+  assert.equal(figOf(r, rec, 'monthlySavings').v, 1250);
+});

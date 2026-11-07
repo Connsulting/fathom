@@ -587,4 +587,66 @@ test.describe('suggested goal targets', () => {
     await expect(act(homeCard(page, tax.id), tax.id, 'edit')).toHaveText('Edit goal');
     await expect(home(page)).not.toContainText('No goals with targets');
   });
+  /* ---------- review regressions (raw account names, null accept.track) ---------- */
+
+  // Serve GET /api/scenario with `mutate` applied to the real response.
+  async function routeScenario(page, mutate) {
+    await page.route('**/api/scenario*', async (route) => {
+      if (route.request().method() !== 'GET') { await route.continue(); return; }
+      const res = await route.fetch();
+      const body = await res.json();
+      mutate(body);
+      await route.fulfill({ status: res.status(), contentType: 'application/json', body: JSON.stringify(body) });
+    });
+  }
+
+  const cashAccount = (s) => s.accounts.find((a) => ['checking', 'savings', 'cash'].includes(a.kind) && a.fig && s.fig[a.fig]);
+
+  test('an imported account name with markup shows as literal text on Home and Goals', { tag: ['@tg-ac2', '@mobile'] }, async ({ page, request }) => {
+    const ids = await zeroTargets(request);
+    const raw = '<img src=x onerror="window.__xss=1">Joint';
+    await routeScenario(page, (s) => {
+      const base = cashAccount(s);
+      const evil = { ...base, id: 'acct-markup', name: raw, imported: true };
+      s.accounts.push(evil);
+      const rec = recordOf(s, ids.cushion);
+      rec.track = { accounts: [evil.id] };
+      rec.trackLabel = raw;
+      rec.accept = { ...rec.accept, track: { accounts: [evil.id] } };
+    });
+    for (const route of ['home', 'goals']) {
+      await gotoRoute(page, route);
+      const scope = route === 'home' ? homeCard(page, ids.cushion) : goalsCard(page, ids.cushion);
+      await expect(line(scope, ids.cushion)).toContainText('<img');
+      expect(await page.evaluate(() => window.__xss), `no markup ran on ${route}`).toBeUndefined();
+      await expect(page.locator('.h-sugg img[src="x"]')).toHaveCount(0);
+    }
+  });
+
+  test('Edit on a tax suggestion with no tracking clears the goal\'s existing tracking', { tag: ['@tg-ac2', '@mobile'] }, async ({ page, request }) => {
+    await resetDemo(request);
+    await archiveSeedGoals(request);
+    const s0 = await fetchScenario(request);
+    const acct = cashAccount(s0);
+    expect(acct, 'the demo has a cash account').toBeTruthy();
+    const tax = await createGoal(request, { ...STARTERS.tax, track: { accounts: [acct.id] } });
+    const year = s0.meta.clock.slice(0, 4);
+    await routeScenario(page, (s) => {
+      s.fig['suggest.test.tax.target'] = { v: 1000, src: 'calc:targets', kind: 'm', label: 'Unused tax room this year', notes: ['test'], locator: {} };
+      const rec = {
+        goalId: tax.id, title: STARTERS.tax.title, kind: 'tax', state: 'suggested', targetDate: `${year}-12-31`, dateSource: 'deadline',
+        horizonLabel: 'This year', track: null, trackLabel: null, accept: { target: 1000, targetDate: `${year}-12-31`, track: null },
+        figures: { target: 'suggest.test.tax.target', rooms: [] }, window: null, params: {}, editable: [], covered: false,
+        why: 'Test room.', missing: [], ask: null, fingerprint: 'f'.repeat(64)
+      };
+      s.suggestions = [...(s.suggestions || []).filter((r) => r.goalId !== tax.id), rec];
+    });
+    await gotoRoute(page, 'goals');
+    await act(goalsCard(page, tax.id), tax.id, 'edit').click();
+    const form = page.locator('form.h-gform');
+    await expect(form).toBeVisible();
+    await expect(form.locator('[data-gf="target"]')).toHaveValue('1000');
+    await expect(form.locator('select[data-gf="track"]')).toHaveValue('none');
+    await expect(form.locator('input[data-gf="acct"]:checked')).toHaveCount(0);
+  });
 });
