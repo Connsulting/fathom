@@ -15,7 +15,7 @@ export const CATEGORY_TABLES = Object.freeze({
   aggregator,
   'demo-seed': Object.freeze({ income: 'income', payroll: 'business', software: 'business', contractors: 'business',
     fees: 'business', transfer: 'transfer', groceries: 'household', utilities: 'household', dining: 'household',
-    childcare: 'household', housing: 'household', health: 'household', Uncategorized: null }),
+    childcare: 'household', housing: 'household', health: 'household', taxes: 'tax', Uncategorized: null }),
 });
 export const DEFAULT_CATEGORY = Object.freeze({ household: 'Shopping', business: 'Business', income: 'Income',
   transfer: 'Internal Transfers', tax: 'Taxes', saving: 'Investment', excluded: 'Ignore' });

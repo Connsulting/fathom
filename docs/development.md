@@ -123,6 +123,17 @@ not measure a model's ability to choose a tool.
 
 Run `npm run eval:ask:live -- --max-usd 5` explicitly for real Ask evaluation, with only
 `FATHOM_CLAUDE_CREDENTIAL_FILE` pointing to a private API-key file. Live runs are refused in CI.
+The production image includes `evals/`. The server does not import that directory and does not
+serve it over HTTP. After a deploy, run the live eval once in the deployed image:
+
+```bash
+docker run --rm \
+  -e FATHOM_CLAUDE_CREDENTIAL_FILE=/run/secrets/claude \
+  -v /path/to/credential:/run/secrets/claude:ro \
+  <image> npm run eval:ask:live -- --max-usd 5
+```
+
+`npm run eval:ask` and `npm run eval:ask:live -- --help` also run in that image and do not call a model.
 Use `--cases spending,retirement-hsa-room` to select families or exact case IDs, and `--out <dir>`
 to choose a report directory. Without `--out`, each run writes gitignored
 `evals/out/<timestamp>/scorecard.json` and `summary.md`.

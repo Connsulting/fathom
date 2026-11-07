@@ -74,6 +74,7 @@ function add(value, kind, sources) {
 
 // Number-word phrases ("two million") with their value; a percent sign or the word percent right
 // after the phrase makes it a percent quantity. `text` is searched as given, `after` is read for the tail.
+// A phrase inside a proper name (isProperName) is not a quantity.
 function wordQuantities(text) {
   const phrases = new RegExp(`\\b(?:${wordPattern})(?:[ -]+(?:and[ -]+)?(?:${wordPattern}))*\\b`, 'gi');
   const found = [];
@@ -86,9 +87,36 @@ function wordQuantities(text) {
       else if (scales.has(word)) { total += (part || 1) * scales.get(word); part = 0; }
     }
     const percent = /^\s*(?:percent\b|%)/i.test(text.slice(match.index + match[0].length));
-    found.push({ text: match[0], index: match.index, value: total + part, percent });
+    const phrase = { text: match[0], index: match.index, value: total + part, percent };
+    if (!isProperName(text, phrase)) found.push(phrase);
   }
   return found;
+}
+
+const isNumberWord = word => words.has(word.toLowerCase()) || /^(?:hundred|thousand|million|billion)$/i.test(word);
+// Sentence start: the text start, end punctuation and space, or a line start with an optional list
+// marker; emphasis markers in between are ignored.
+const sentenceStart = /(?:^\s*|[.!?]["')\]]*\s+|\n[ \t]*(?:[•*-]|\d+[.)])?[ \t]*)[*_]*$/u;
+
+// A capitalized spelled number inside a proper name (Capital One, Square One, One Medical, the Two
+// Sigma fund): a capitalized non-number word right before it, separated by one space, or one right
+// after it when the phrase is "One" or not at a sentence start. "Two Roth accounts" opening a
+// sentence stays a count, and so does any number word before an account type (One Roth account).
+const ACCOUNT_TYPES = new Set(['roth', 'ira', 'iras', 'hsa', 'hsas', 'fsa', 'fsas', 'sep', 'simple', 'solo', 'traditional',
+  'checking', 'savings', 'brokerage', 'cd', 'cds', 'credit', 'card', 'cards', 'account', 'accounts', 'loan', 'loans', 'mortgage',
+  'payment', 'payments', 'transaction', 'transactions', 'holding', 'holdings', 'goal', 'goals', 'recommendation', 'recommendations']);
+// A sentence-opening word before it (Only One, Capital One opening a sentence) names it only when no
+// account type follows.
+function isProperName(text, phrase) {
+  if (!/^\p{Lu}/u.test(phrase.text)) return false;
+  const before = text.slice(0, phrase.index);
+  const after = text.slice(phrase.index + phrase.text.length);
+  const typed = ACCOUNT_TYPES.has((/^ (\p{L}+)(?![\p{L}\p{N}])/u.exec(after)?.[1] ?? '').toLowerCase());
+  const previous = /(?<![\p{L}\p{N}])(\p{L}+) $/u.exec(before);
+  if (previous && /^\p{Lu}/u.test(previous[1]) && !isNumberWord(previous[1])
+    && (!typed || !sentenceStart.test(before.slice(0, previous.index)))) return true;
+  const next = /^ (\p{Lu}\p{L}*)(?![\p{L}\p{N}])/u.exec(after)?.[1];
+  return !!next && !isNumberWord(next) && !typed && (phrase.text === 'One' || !sentenceStart.test(before));
 }
 
 function collect(value, sources, kind = 'number') {
@@ -174,6 +202,36 @@ function isStructural(text, phrase) {
       || (/^\s+(?:more|another)\b/i.test(rest) && !unitWord.test(sentence))) return true;
   }
   return phrase.value > 0 && !/hundred|thousand|million|billion/.test(word) && phrase.value === listLength(text, phrase.index + phrase.text.length);
+}
+
+const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+
+function dateParts(text) {
+  let m = /^(\d{4})-(\d{2})-(\d{2})/.exec(text);
+  if (m) return { year: Number(m[1]), month: Number(m[2]), day: Number(m[3]) };
+  m = /^(\d{1,2})\/(\d{1,2})(?:\/(\d{4}))?$/.exec(text);
+  if (m) return { year: m[3] ? Number(m[3]) : null, month: Number(m[1]), day: Number(m[2]) };
+  m = /^(\p{L}+)\.?\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s+(\d{4}))?$/iu.exec(text);
+  if (m) return { year: m[3] ? Number(m[3]) : null, month: MONTHS.indexOf(m[1].slice(0, 3).toLowerCase()) + 1, day: Number(m[2]) };
+  m = /^(\d{1,2})(?:st|nd|rd|th)?\s+(\p{L}+)\.?(?:\s+(\d{4}))?$/iu.exec(text);
+  if (m) return { year: m[3] ? Number(m[3]) : null, month: MONTHS.indexOf(m[2].slice(0, 3).toLowerCase()) + 1, day: Number(m[1]) };
+  return null;
+}
+
+// findDates(text) -> [{ text, index, year|null, month, day }]: the date forms grounding masks
+// (ISO, M/D[/Y], Mon D[, Y], D Mon [Y]), in text order, the first pattern winning an overlap.
+export function findDates(text) {
+  const s = String(text ?? '');
+  const found = [];
+  for (const pattern of dates) {
+    for (const m of s.matchAll(pattern)) {
+      const end = m.index + m[0].length;
+      if (found.some(d => m.index < d.index + d.text.length && d.index < end)) continue;
+      const parts = dateParts(m[0]);
+      if (parts && parts.month >= 1) found.push({ text: m[0], index: m.index, ...parts });
+    }
+  }
+  return found.sort((a, b) => a.index - b.index);
 }
 
 export function checkGrounding(prose, { toolResults = [], data = [], figures = {} } = {}) {
