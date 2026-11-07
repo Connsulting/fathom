@@ -17,7 +17,9 @@
     "plan": "node src/jobs/plan-cli.mjs",
     "email:test": "node scripts/email-test.mjs",
     "confirm:guess": "node src/jobs/guess-cli.mjs",
-    "user:invite": "node scripts/user-invite.mjs"
+    "user:invite": "node scripts/user-invite.mjs",
+    "eval:ask": "node evals/run.mjs",
+    "eval:ask:live": "node evals/run.mjs --live"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.318",
