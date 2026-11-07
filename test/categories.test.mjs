@@ -80,11 +80,11 @@ test('AC1 normalizes feed merchant descriptions and leaves conflicting history u
   assert.equal(resolve([a,b,row(3, { description: 'POS DEBIT Example Shop #0099' })]).get(3).category, 'Uncategorized');
 });
 
-test('AC1 structural layer recognizes card payments and both sides of own-account transfers and loses to imports', () => {
+test('AC1 structural layer recognizes card payments, preserves business draws and loses to imports', () => {
   const r = resolve([row(1,{description:'AUTOPAY Example Card 5678'}),row(2,{account_id:'card',amount:250,description:'PAYMENT THANK YOU'}),
     row(3,{account_id:'biz',amount:-900}),row(4,{amount:900}),row(5,{category:'Groceries',parser:'aggregator',description:'AUTOPAY Example Card 5678'}),row(6,{description:'Payment Unknown Lender'})]);
   assert.equal(r.get(1).bucket,'transfer'); assert.equal(r.get(2).bucket,'transfer');
-  assert.equal(r.get(4).bucket,'transfer'); assert.equal(r.get(4).layer,'structural');
+  assert.equal(r.get(4).bucket,'income'); assert.equal(r.get(4).layer,'uncategorized');
   assert.equal(r.get(5).bucket,'household'); assert.equal(r.get(6).layer,'uncategorized');
 });
 
