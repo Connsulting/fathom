@@ -45,17 +45,28 @@ export const EMPLOYER_PLAN_TYPES = Object.freeze(Object.assign(
 export const ACCESS_RULES = Object.freeze({
   penaltyFreeAge: Object.freeze({ years: 59, months: 6, packRef: access }),
   ruleOf55: Object.freeze({ years: 55, employerPlansOnly: true, packRef: access }),
+  // plan type 457b does not say governmental or not. The no-penalty-after-separation
+  // rule applies only when a separate governmental fact is true. Rolled-in amounts
+  // from other plan types stay under the usual additional tax.
+  governmental457b: Object.freeze({
+    planType: '457b',
+    needsFact: 'governmental',
+    additionalTaxAfterSeparation: false,
+    rolledInExcepted: true,
+    packRef: access,
+  }),
   fiveYear: Object.freeze({ years: 5, packRef: rothBasis }),
   hsaAnyUse: Object.freeze({ years: 65, packRef: special }),
   hsaAdditionalTax: Object.freeze({ rate: 0.2, untilAge: 65, packRef: special }),
 });
 
 export function rmdStartAge(birthDate) {
-  const match = /^(\d{4})-\d{2}-\d{2}$/.exec(String(birthDate ?? ''));
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(birthDate ?? ''));
   if (!match) throw new TypeError('birthDate must be YYYY-MM-DD');
-  const year = Number(match[1]);
-  if (year <= 1950) return 72;
-  if (year <= 1959) return 73;
+  const iso = `${match[1]}-${match[2]}-${match[3]}`;
+  if (iso < '1949-07-01') return 70.5;
+  if (iso <= '1950-12-31') return 72;
+  if (iso <= '1959-12-31') return 73;
   return 75;
 }
 rmdStartAge.packRef = rmd;
