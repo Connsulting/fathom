@@ -383,6 +383,9 @@ async function populateLegacy(dataDir, legacyKey) {
     run(`INSERT INTO decisions (id, title, status, rec_id, note, sort, src) VALUES ('dec-synthetic', 'Synthetic decision', 'open', 'syn-rec-alpha', 'Synthetic note', 0, 'you')`);
     run("INSERT INTO goals (id, def, sort, origin, created_at, updated_at) VALUES ('g000000000001', ?, 0, 'owner', ?, ?)",
       JSON.stringify({ id: 'g000000000001', title: 'Synthetic cushion', note: '', horizon: '1-3y' }), T0, T0);
+    // A goal marked done (store migration 026's goals.done_at), which the tenancy migration carries.
+    run("INSERT INTO goals (id, def, sort, origin, created_at, updated_at, done_at) VALUES ('g000000000002', ?, 1, 'owner', ?, ?, ?)",
+      JSON.stringify({ id: 'g000000000002', title: 'Synthetic finished goal', note: '', horizon: 'now' }), T0, T0, DONE_AT);
 
     run("INSERT INTO jobs (id, name, cadence, does, cost, next_label, last_label, enabled, sort) VALUES ('plan', 'Plan', 'nightly', 'Synthetic planning', NULL, NULL, NULL, 1, 0)");
     const jobRun = (note, period) => Number(run(`INSERT INTO job_runs (job_id, started_at, finished_at, status, cost_usd, note, period_key, trigger, duration_ms)
@@ -468,6 +471,8 @@ async function populateLegacy(dataDir, legacyKey) {
 // outbox/. Keys (platform, backup, legacy data key, MCP secret) live in `<root>/keys`.
 // admins: 1 (the ownerless key binds to the admin) or 2 (the member is promoted; the ownerless key
 // is revoked with migration_no_creator).
+export const DONE_AT = '2026-10-15T12:00:00.000Z';
+
 export async function buildMigrationFixture(root, { admins = 1 } = {}) {
   const dataDir = join(root, 'data');
   const legacy = await buildLegacyStore(dataDir, { users: true });

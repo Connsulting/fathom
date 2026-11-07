@@ -38,7 +38,7 @@ import { src, tempDir, request, createSessionFixture, sessionClient, runCommand 
 import {
   CLOCK, SIMPLEFIN_URL, buildMigrationFixture, copyFixture, recordExpectations, runMigration, migrationEnv, migrateCli,
   migrateExitingAt, migratedPlaintexts, endState, tableDigests, digestRules, withSqlite, startRuntime, startRefusal, stableHashes,
-  writePrivate, mcp,
+  writePrivate, mcp, DONE_AT,
 } from './helpers/tenancy-runtime.mjs';
 import { fileHashes, credentialFor, signIn } from './helpers/tenancy.mjs';
 import { createAuthenticator } from './helpers/webauthn.mjs';
@@ -157,6 +157,12 @@ describe('a complete migration preserves the household', T, () => {
       assert.deepEqual(after[t], expected.digests[t], `${t}: digest`);
     }
     assert.ok(expected.digests.accounts.count > 0 && expected.digests.files.count > 0, 'the comparison covers populated tables');
+  });
+
+  test('goals carry across with their done state (store migration 026, goals.done_at)', () => {
+    const published = join(fx.dataDir, 'households', fx.householdId, 'fathom.sqlite');
+    const goals = withSqlite(published, db => db.prepare('SELECT id, done_at FROM goals ORDER BY id').all().map(r => ({ ...r })));
+    assert.deepEqual(goals, [{ id: 'g000000000001', done_at: null }, { id: 'g000000000002', done_at: DONE_AT }]);
   });
 
   test('every upload, packet and the SimpleFIN URL decrypt to the same plaintext; packs and outbox are byte-equal', async () => {
