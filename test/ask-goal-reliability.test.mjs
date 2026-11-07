@@ -138,13 +138,15 @@ test('AC4: a stored confirmation belongs to its actor and thread', async t => {
   db.prepare("DELETE FROM messages WHERE role = 'me' AND conversation_key = ?").run(key);
   message(db, 'yeah', { ownerInput: { actorId: 'demo' } }, 'me');
   assert.ok(!(await registry().invoke('create_goal', { ...args, target: 97361 })).isError);
-  proposal(db, { target: 97372 });
   db.prepare('INSERT INTO conversations (key, created_at) VALUES (?, ?)').run('ask:abcdef012345', now);
-  ctx.conversationKey = 'ask:abcdef012345'; ctx.ownerText = 'yeah';
+  message(db, 'An unrelated proposal.', null, 'fathom', 'ask:abcdef012345');
+  proposal(db, { target: 97372 });
+  message(db, 'yeah', { ownerInput: { actorId: 'demo' } }, 'me', 'ask:abcdef012345');
+  ctx.conversationKey = 'ask:abcdef012345'; ctx.ownerText = null;
   const wrongThread = await registry().invoke('create_goal', { ...args, title: 'Other thread', target: 97372 });
   assert.equal(wrongThread.isError, true);
   assert.match(wrongThread.content[0].text, /^target:/);
-  ctx.conversationKey = key;
+  ctx.conversationKey = key; ctx.ownerText = 'yeah';
   assert.ok(!(await registry().invoke('create_goal', { ...args, target: 97372 })).isError);
 });
 

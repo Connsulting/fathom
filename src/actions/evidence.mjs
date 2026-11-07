@@ -1,5 +1,6 @@
 import { parseJson as parse } from '../store/db.mjs';
 import { ToolError } from '../tools/errors.mjs';
+import { checkGrounding } from '../engine/grounding.mjs';
 
 const AMOUNT = /\$?(\d[\d,]*(?:\.\d+)?)\s*(k|m|thousand|million)?\b/gi;
 export function statedAmounts(text) {
@@ -64,6 +65,9 @@ function householdValues(db) {
   return values;
 }
 
+const goalTextStates = (value, text, shape) => typeof value === 'number'
+  ? statedAmounts(text).includes(value) && checkGrounding(`$${value}`, { data: [text] }).ok : stated(value, text, shape);
+
 function confirmedProposal(ctx, value, shape) {
   if (!ctx.conversationKey || !ctx.actorId) return false;
   const rows = ctx.db.prepare(`SELECT role, text, provenance FROM messages WHERE conversation_key = ? AND id <= ? ORDER BY id DESC LIMIT 2`)
@@ -81,16 +85,18 @@ function confirmedProposal(ctx, value, shape) {
   if (previous?.role !== 'fathom') return false;
   const provenance = parse(previous.provenance, null);
   return (provenance?.literals ?? []).some(l => typeof l.source === 'string' && l.source.trim()
-    && typeof l.text === 'string' && previous.text.includes(l.text) && stated(value, l.text, shape));
+    && typeof l.text === 'string' && previous.text.includes(l.text) && goalTextStates(value, l.text, shape));
 }
 
-export function requireEvidence(ctx, value, { evidence, stored = [], shape, argument = 'value' } = {}) {
+export function requireEvidence(ctx, value, { evidence, stored = [], shape, argument = 'value', household = false } = {}) {
   const statements = ownerStatements(ctx);
   const words = evidence ? statements.filter(s => s.includes(evidence)).map(() => evidence) : statements;
   const same = v => JSON.stringify(v) === JSON.stringify(value);
   if (stored.some(same) || words.some(text => stated(value, text, shape))) return;
   const quantity = typeof value === 'number' || (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value));
-  if (quantity && (householdValues(ctx.db).some(v => same(v) || (typeof v === 'string' && stated(value, v, shape)))
+  if (household && quantity && (householdValues(ctx.db).some(v => same(v) || (typeof v === 'string' && goalTextStates(value, v, shape)))
     || confirmedProposal(ctx, value, shape))) return;
-  throw new ToolError('bad_input', `${argument}: Use a value you stated in this conversation or a stored value. Include the exact words as evidence, or confirm a sourced proposal.`);
+  const reason = household ? 'Use a value you stated, a stored household value, or a value from a sourced earlier proposal you explicitly confirmed.'
+    : 'Use a value you stated in this conversation or a stored value. Include the exact words as evidence.';
+  throw new ToolError('bad_input', `${argument}: ${reason}`);
 }
