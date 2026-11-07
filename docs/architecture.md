@@ -1954,12 +1954,16 @@ absolute latest balance first), 3 `account_match` and `entity_alias`, 4 `near_du
 is `account_owner` or `account_kind` for account questions. It also returns `decided`: the answered
 items with a `confirm_auto` row, newest first, with rule, evidence and `final`. The Confirm deck
 (`web/horizon/screens/ingest.js`) walks the items in that order. A single card shows the detail
-panel, the guessed option marked Best guess and preselected, and a Use best guess button; two or
-more pending account questions of one kind fold into one grouped card with a row per account (its
-own detail, same-named accounts marked) and Use best guesses for all, which answers through
-`POST /api/confirm/answers`. A Decided for you section lists `decided` with each rule's evidence and
-an Undo (`POST /api/confirm/:id/reopen`, or `reopen-many` for a group); a final answer shows why
-instead.
+panel and its options. The guessed option is marked Best guess where it already sits and is never
+preselected or moved up: nothing is answered until the owner picks an option or presses Use best
+guess. A category card lists the categories in one fixed order, so a number key names the same
+category on every card. Two or more pending account questions of one kind fold into one grouped
+card with a row per account (its own detail, same-named accounts marked) and an
+"Accept N best guesses" button that takes the guess of every unanswered row through
+`POST /api/confirm/answers`. A category is decided in order: the owner's labeled history first,
+then rules, then the model; an answer Fathom settles on its own goes to the Decided for you
+section, which lists `decided` with each rule's evidence and an Undo (`POST /api/confirm/:id/reopen`,
+or `reopen-many` for a group); a final answer shows why instead.
 
 Engine guesses (`src/ingest/guess.mjs`): `guessPending(db, engine, {now, batchSize = 20,
 maxBatches, fake})` sends pending items with no `confirm_guesses` row in batches, one engine call
