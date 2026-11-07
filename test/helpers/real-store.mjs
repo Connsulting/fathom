@@ -113,8 +113,7 @@ export const OWNER_FACTS = Object.freeze({
   'benefits.hsaEligible': true,
   'benefits.hsaCoverage': 'family',
   'business.salaryRange': { min: 50000, max: 110000 },
-  'household.ownerAge': 45,
-  'household.spouseAge': 43,
+  'household.birthYears': { owner: 1981, spouse: 1983 }, // ages 45 and 43 in the tax year
   'business.cashBasis': true,
 });
 
@@ -444,7 +443,7 @@ export async function buildRealStore(dataDir, { clock = CLOCK, variant = {} } = 
     ...(listed.length ? { 'business.entities': listed } : {}),
     ...(Object.keys(businessEntity).length ? { 'accounts.businessEntity': businessEntity } : {}),
     ...(variant.priorReturn !== false ? { 'tax.prior.virginia': SYNTH.prior.virginiaTax } : {}),
-    ...(collegeId ? { 'accounts.va529': { [collegeId]: { virginiaPlan: true, ownerAge70Plus: false, carryforward: 0 } } } : {}),
+    ...(collegeId ? { 'accounts.va529': { [collegeId]: { virginiaPlan: true, carryforward: 0 } } } : {}),
     ...(variant.facts || {}),
   };
   for (const [key, value] of Object.entries(facts)) {
