@@ -404,7 +404,7 @@ test('pl-ac1 prior year present when it has data and null otherwise; default ran
   assert.equal(val(early, early.expenses.total), 9150, 'the Jul 20 cost is after that clock');
 });
 
-test('pl-ac1 errors: unknown entity, from after to, more than 36 months, malformed months; nearby valid input is accepted', (t) => {
+test('pl-ac1 errors: unknown entity, from after to, more than 120 months, malformed months; nearby valid input is accepted', (t) => {
   const { db } = store(t);
   business(db);
   assert.equal(code(() => businessPnl({ db, entity: 'entity:nosuchname' })), 'unknown_entity');
@@ -413,8 +413,8 @@ test('pl-ac1 errors: unknown entity, from after to, more than 36 months, malform
   assert.equal(code(() => businessPnl({ db, entity: 'Example Studio' })), 'ok');
   assert.equal(code(() => businessPnl({ db, entity: STUDIO, from: '2032-05', to: '2032-04' })), 'bad_range');
   assert.equal(code(() => businessPnl({ db, entity: STUDIO, from: '2032-04', to: '2032-04' })), 'ok');
-  assert.equal(code(() => businessPnl({ db, entity: STUDIO, from: '2029-08', to: '2032-08' })), 'bad_range', '37 months');
-  assert.equal(code(() => businessPnl({ db, entity: STUDIO, from: '2029-09', to: '2032-08' })), 'ok', '36 months');
+  assert.equal(code(() => businessPnl({ db, entity: STUDIO, from: '2022-08', to: '2032-08' })), 'bad_range', '121 months');
+  assert.equal(code(() => businessPnl({ db, entity: STUDIO, from: '2022-09', to: '2032-08' })), 'ok', '120 months');
   for (const bad of ['2032-13', '2032-1', '2032/01', 'soon', '2032-00']) {
     assert.equal(code(() => businessPnl({ db, entity: STUDIO, from: bad, to: '2032-08' })), 'bad_range', bad);
     assert.equal(code(() => businessPnl({ db, entity: STUDIO, from: '2032-01', to: bad })), 'bad_range', bad);

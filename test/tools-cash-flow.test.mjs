@@ -4,22 +4,30 @@ import { spendingStore, custom } from './helpers/spending.mjs';
 import { matchTransfers } from '../src/categories/resolve.mjs';
 import { assertRefsResolve } from './helpers/figures.mjs';
 
-test('cash flow keeps matched transfers out of inflow and outflow on both sides', async t => {
+test('cash flow keeps matched transfers out of inflow and outflow on both sides', async (t) => {
   const s = await spendingStore(t);
-  const out = s.tx('business','2026-04-15',-77,'Business','Owner distribution');
-  s.tx('checking','2026-04-16',77,'Income','Distribution');
-  s.tx('checking','2026-05-01',-33,null,'Capital'); s.tx('business','2026-05-02',33,null,'Capital');
-  s.tx('business','2026-04-10',137,'Income','Client');
-  const rows=s.db.prepare('SELECT * FROM transactions').all();
-  assert.ok(matchTransfers(rows.filter(x=>x.amount<0),rows.filter(x=>x.amount>0)).has(out));
-  const r=await s.call('cash_flow',custom);
-  assert.equal(r.totals.transfersBusinessToHousehold.value,77);
-  assert.equal(r.totals.transfersHouseholdToBusiness.value,33);
-  assert.equal(r.totals.household.inflow.value,3000);
-  assert.equal(r.totals.household.outflow.value,1650);
-  assert.equal(r.totals.business.inflow.value,137);
-  assert.equal(r.totals.business.outflow.value,0);
-  for (const side of ['business','household']) assert.equal(r.totals[side].net.value,r.totals[side].inflow.value-r.totals[side].outflow.value);
-  await assertRefsResolve(r,s.ctx);
-  const hh=await s.call('cash_flow',{...custom,scope:'household'}); assert.equal(hh.totals.business.inflow.value,0);
+  const out = s.tx('business', '2026-04-15', -77, 'Business', 'Owner distribution');
+  s.tx('checking', '2026-04-16', 77, 'Income', 'Distribution');
+  s.tx('checking', '2026-05-01', -33, null, 'Capital');
+  s.tx('business', '2026-05-02', 33, null, 'Capital');
+  s.tx('business', '2026-04-10', 137, 'Income', 'Client');
+  const rows = s.db.prepare('SELECT * FROM transactions').all();
+  assert.ok(
+    matchTransfers(
+      rows.filter((x) => x.amount < 0),
+      rows.filter((x) => x.amount > 0),
+    ).has(out),
+  );
+  const r = await s.call('cash_flow', custom);
+  assert.equal(r.totals.transfersBusinessToHousehold.value, 77);
+  assert.equal(r.totals.transfersHouseholdToBusiness.value, 33);
+  assert.equal(r.totals.household.inflow.value, 3000);
+  assert.equal(r.totals.household.outflow.value, 1650);
+  assert.equal(r.totals.business.inflow.value, 137);
+  assert.equal(r.totals.business.outflow.value, 0);
+  for (const side of ['business', 'household'])
+    assert.equal(r.totals[side].net.value, r.totals[side].inflow.value - r.totals[side].outflow.value);
+  await assertRefsResolve(r, s.ctx);
+  const hh = await s.call('cash_flow', { ...custom, scope: 'household' });
+  assert.equal(hh.totals.business.inflow.value, 0);
 });
