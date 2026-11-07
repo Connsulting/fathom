@@ -1956,7 +1956,7 @@ function closeRec() {
 function beginAccountRename(id) {
   const a = arr(api.s.accounts).find((x) => x.id === id);
   if (!a) return;
-  ui.accEdit = { id, value: a.displayName ? a.name : (a.imported === false ? api.txt(String(a.name ?? '')) : String(a.name ?? '')) };
+  ui.accEdit = { id, value: a.displayName ? a.displayName : (a.imported === false ? api.txt(String(a.name ?? '')) : String(a.name ?? '')) };
   draw();
   const el = root?.querySelector(`[data-acc-name="${CSS.escape(id)}"]`);
   if (el) { el.focus(); el.select(); }

@@ -3,13 +3,22 @@
 
 import { parseJson } from '../store/db.mjs';
 import { accountLabel, sourceLabel, trendLabel } from '../shared/account-label.mjs';
+import { lastFour } from '../ingest/account-match.mjs';
 
 export function accountNaming(db) {
   const householdNames = parseJson(db.prepare("SELECT value FROM facts WHERE key = 'household.names'").get()?.value, {}) || {};
   const holders = new Map(db.prepare('SELECT account_id, holder FROM account_holders').all().map((r) => [r.account_id, r.holder]));
+  // A connected account's mask is shown only when the bridge is sure of it (or its name ends with
+  // the same digits), the rule detectAccountPairs uses; otherwise labels leave it out.
+  const unsure = new Set();
+  for (const r of db.prepare(`SELECT m.account_id, s.snapshot FROM simplefin_accounts m JOIN simplefin_snapshots s ON s.sf_key = m.sf_key
+      JOIN accounts a ON a.id = m.account_id WHERE m.status = 'mapped' AND a.identity LIKE 'simplefin:%'`).all()) {
+    const snap = parseJson(r.snapshot, {}) || {};
+    if (snap.maskSure !== true && lastFour(snap.name) !== snap.mask) unsure.add(r.account_id);
+  }
   const byId = new Map();
   for (const a of db.prepare('SELECT * FROM accounts').all()) {
-    byId.set(a.id, { ...a, householdNames, holder: holders.get(a.id) || null });
+    byId.set(a.id, { ...a, householdNames, holder: holders.get(a.id) || null, ...(unsure.has(a.id) ? { maskSure: false } : {}) });
   }
   return { householdNames, holders, byId };
 }

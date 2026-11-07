@@ -340,6 +340,8 @@ export function setAccountAnswer(db, kind, accountId, optionId, { now } = {}) {
     if (item.status === 'pending') recordAnswer(db, item, optionId, { now });
     else if (item.answer !== optionId && !finalReason(db, item)) revise(db, item, optionId, { now });
     else if (item.answer !== optionId) {
+      // Auto answers that rested on the old answer no longer hold.
+      revertDependents(db, item.id);
       if (hasAuto(db, item.id)) {
         db.prepare('DELETE FROM confirm_auto WHERE item_id = ?').run(item.id);
         decline(db, item.id, { now });

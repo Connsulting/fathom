@@ -1,15 +1,16 @@
 // Account dialog edits: Owner and Kind selects, Add last 4, and Merge with... with a confirmation
-// panel, each with Undo. Two synthetic manual accounts with no mask are written into the served
+// panel, each with Undo. One synthetic manual account with no mask is written into the served
 // store after the demo reset, the same way account-dialog.spec.mjs seeds its duplicate pair.
 
 import { resolve } from 'node:path';
 import { test, expect, resetDemo, gotoRoute, recDialog, REMOTE } from './helpers.mjs';
-import { openDb, DB_FILE } from '../src/store/db.mjs';
+import { openDb, setSetting, DB_FILE } from '../src/store/db.mjs';
+import { dataKeyFor } from '../src/ingest/simplefin.mjs';
+import { seedDuplicate as seedDuplicateRows } from '../test/helpers/account-merge.mjs';
+import { refreshMergedAccounts } from '../src/ingest/account-merge.mjs';
 
 const A = 'e2e_reserve';
-const B = 'e2e_spare';
 const A_NAME = 'Reserve savings';
-const B_NAME = 'Spare cash';
 
 async function seed(request) {
   await resetDemo(request);
@@ -18,15 +19,11 @@ async function seed(request) {
     const acct = db.prepare(`INSERT INTO accounts (id, inst, mask, name, owner, kind, mirror, note, sort)
       VALUES (?, 'Sample Bank', NULL, ?, 'You', 'cash', 'manual', '', ?)`);
     acct.run(A, A_NAME, 900);
-    acct.run(B, B_NAME, 901);
     const txn = db.prepare('INSERT INTO transactions (account_id, date, amount, description) VALUES (?, ?, ?, ?)');
     txn.run(A, '2026-10-03', -42.5, 'Synthetic grocery');
     txn.run(A, '2026-10-12', 300, 'Synthetic transfer in');
-    txn.run(B, '2026-10-05', -18, 'Synthetic coffee');
-    txn.run(B, '2026-10-20', -64.25, 'Synthetic utility');
     const bal = db.prepare('INSERT INTO balances (account_id, date, amount) VALUES (?, ?, ?)');
     bal.run(A, '2026-10-31', 2500);
-    bal.run(B, '2026-10-31', 700);
   } finally { db.close(); }
 }
 
@@ -115,45 +112,59 @@ async function addLastFour(page, request) {
   await expect(accountRow(page, A).locator('.h-acc-name')).toHaveText(`${A_NAME} ending 1234`);
 }
 
+// An imported account and a connected copy of it, seeded the way account-dialog.spec.mjs does.
+// Two imported accounts cannot be merged, so the merge runs on this pair.
+async function seedPair(request) {
+  await resetDemo(request);
+  const dataDir = resolve(process.env.E2E_DATA || '.e2e-data');
+  const db = openDb(resolve(dataDir, DB_FILE));
+  try {
+    setSetting(db, 'clock', '2032-03-10');
+    const key = await dataKeyFor(db, { dataDir });
+    const s = { db, config: { dataDir }, key, opts: (engine, extra = {}) => ({ config: { dataDir }, key, engine, now: '2032-03-10T12:00:00.000Z', ...extra }) };
+    const pair = await seedDuplicateRows(s, { sure: true });
+    refreshMergedAccounts(db, { now: '2032-03-10T12:00:00.000Z' });
+    return pair;
+  } finally { db.close(); }
+}
+
 async function mergeWith(page, request) {
-  await seed(request);
-  await openFromAccounts(page, A);
+  const pair = await seedPair(request);
+  await page.goto(`/#/account/${pair.keep}`);
+  await page.reload();
   const dlg = recDialog(page);
+  await expect(dlg).toBeVisible();
 
   // Cancel first: nothing changes.
   await dlg.locator('[data-ad="merge-open"]').click();
-  await dlg.locator(`[data-merge-with="${B}"]`).click();
+  await expect(dlg.locator(`[data-merge-with="${pair.keep}"]`)).toHaveCount(0);
+  await dlg.locator(`[data-merge-with="${pair.own}"]`).click();
   const panel = dlg.locator('.h-ad-merge-confirm');
   await expect(panel).toBeVisible();
   await noSideScroll(page);
   await dlg.locator('[data-ad="merge-cancel"]').click();
   await expect(panel).toHaveCount(0);
-  expect(await scenarioAccount(request, B)).toBeTruthy();
+  expect(await scenarioAccount(request, pair.own)).toBeTruthy();
 
   await dlg.locator('[data-ad="merge-open"]').click();
-  await expect(dlg.locator(`[data-merge-with="${A}"]`)).toHaveCount(0);
-  await dlg.locator(`[data-merge-with="${B}"]`).click();
-  await expect(panel).toContainText(A_NAME);
-  await expect(panel).toContainText(B_NAME);
+  await dlg.locator(`[data-merge-with="${pair.own}"]`).click();
   await expect(panel).toContainText(/transaction/i);
-  const merged = posted(page, `/api/accounts/${A}/merge`);
+  await expect(panel).toContainText(/stays and keeps its history/i);
+  const merged = posted(page, `/api/accounts/${pair.keep}/merge`);
   await dlg.locator('[data-ad="merge-confirm"]').click();
   const res = await merged;
   expect(res.status()).toBe(200);
   const body = await res.json();
-  expect(body.survivorId).toBe(A);
-  await expect(dlg.locator('#h-dlg-t')).toHaveText(A_NAME);
-  await expect(page).toHaveURL(new RegExp(`#/account/${A}$`));
-  await expect(accountRow(page, B)).toHaveCount(0);
-  expect(await scenarioAccount(request, B)).toBeFalsy();
+  expect(body.survivorId).toBe(pair.keep);
+  await expect(page).toHaveURL(new RegExp(`#/account/${pair.keep}$`));
+  expect(await scenarioAccount(request, pair.own)).toBeFalsy();
+  expect((await scenarioAccount(request, pair.keep)).mirror).toBe('connected');
 
   const undone = posted(page, `/api/confirm/${body.itemId}/reopen`);
   await dlg.locator('.h-ad-undo [data-ad="undo"]').click();
   expect((await undone).status()).toBe(200);
-  await expect(accountRow(page, B)).toHaveCount(1);
-  await expect(accountRow(page, A)).toHaveCount(1);
-  expect(await scenarioAccount(request, B)).toBeTruthy();
-  expect(await scenarioAccount(request, A)).toBeTruthy();
+  expect(await scenarioAccount(request, pair.own)).toBeTruthy();
+  expect(await scenarioAccount(request, pair.keep)).toBeTruthy();
 }
 
 test.describe('account dialog edits', { tag: '@ade-ac' }, () => {
