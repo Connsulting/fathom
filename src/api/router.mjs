@@ -261,9 +261,8 @@ export function createHandler({ db, platform, config, answerer, engine = null, p
           if (!identity) throw new HttpError(401, 'unauthorized');
           checkAccess(r, identity);
         }
-        if (!gated && !config.publicDemo && r.method === 'POST' && path !== '/api/demo/reset') {
-          db.prepare("DELETE FROM settings WHERE key = 'synthetic_demo'").run();
-        }
+        const invalidateSeed = !gated && !config.publicDemo && r.method === 'POST' && path !== '/api/demo/reset';
+        const changesBefore = invalidateSeed ? db.prepare('SELECT total_changes() AS n').get().n : 0;
         const events = r.stream && wantsEventStream(req) ? createEventStream(req, res) : null;
         let out;
         try {
@@ -275,6 +274,10 @@ export function createHandler({ db, platform, config, answerer, engine = null, p
           if (!(err instanceof HttpError)) console.error(err);
           events.fail(err);
           return;
+        } finally {
+          if (invalidateSeed && db.prepare('SELECT total_changes() AS n').get().n !== changesBefore) {
+            db.prepare("DELETE FROM settings WHERE key = 'synthetic_demo'").run();
+          }
         }
         if (r.download) {
           res.writeHead(200, {
