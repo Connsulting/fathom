@@ -1,7 +1,8 @@
 // AC2 and AC3: the live answerer. Prompt assembly keeps the cacheable system prompt free of
 // household data (D1), groundAnswer validates every token and refuses stored figures written as
-// literals (R9, R14, R15), renderAnswer escapes untrusted model text (D6), one corrective retry
-// (D5), notices instead of fabricated text (D13, R7), write-tool gating (D12) and provenance.
+// literals (R9, R14, R15), renderAnswer escapes untrusted model text (D6) and neutralizes an
+// unchecked figure in place, one regeneration only when most figures are unchecked (D5, AQ1 C.5),
+// notices instead of fabricated text (D13, R7), write-tool gating (D12) and provenance.
 //
 // The answerer runs over a real runtime engine in fake mode on a temp demo store. Where a test
 // needs specific model output it wraps the runtime so the next call carries a scripted
@@ -29,8 +30,13 @@ import { ROOT, tempDb } from './helpers/server.mjs';
 import { writeSyntheticPack, ALWAYS } from './helpers/packs.mjs';
 
 const ACTIVE_DEMO_PACKS = ['advanced-retirement', 'kids-dependents', 's-corp-owner', 'self-employed-partnership', 'virginia-resident', 'w2-benefits'];
-const UNVERIFIED = '<span class="fx-unverified" title="Not found in your data or tool results">';
+const UNCHECKED = '<span class="fx-checking fx-unchecked" title="Not checked against your data">';
 const INVENTED = '$987,654';
+// A second invented amount: a regeneration needs two or more unchecked figures that are more than
+// half of the answer's figures (AQ1 C.5).
+const INVENTED_2 = '$876,543';
+const TWO_INVENTED = `You could save ${INVENTED} this year and ${INVENTED_2} next year.`;
+const REVISED_2 = 'Revised to remove 2 unchecked figures';
 // An Ask thread key: the answerer needs no stored row, and a new key has no history.
 const THREAD = 'ask:0123456789ab';
 // The suggested question 'leave', sent as free text (suggested ids resolve only through matchQuestion).
@@ -253,7 +259,8 @@ test('buildChatPrompt keeps the static system identical across summaries and que
     context: { rec: { id: 'synthetic-rec', title: 'CONTEXT-MARKER' } }, history: [], question: 'Second synthetic question?',
   });
   assert.equal(one.system, two.system);
-  assert.equal(one.system, PRODUCT_RULES + '\n\n<knowledge_packs>\n' + packContextText + '\n</knowledge_packs>');
+  assert.ok(one.system.startsWith(PRODUCT_RULES), 'the product rules open the static system');
+  assert.ok(one.system.includes('\n<knowledge_packs>\n' + packContextText + '\n</knowledge_packs>'), 'the pack context is in the static system');
   for (const value of ['SUMMARY-MARKER-ONE', 'SUMMARY-MARKER-TWO', '7351', '8462', 'CONTEXT-MARKER', 'First synthetic', 'Second synthetic']) {
     assert.ok(!one.system.includes(value), `static system has no ${value}`);
   }
@@ -365,6 +372,16 @@ test('groundAnswer grounds literals in tool results and context data, and flags 
 const LAUNDERED = 'The synthetic amount is 4821.';
 const laundered = r => r.violations.map(v => v.text);
 
+// A literal grounded by a tool result names a plain source, never the raw tool name (AQ1 C.2); a
+// query_transactions source starts with "your transactions".
+function expectToolSource(literal, name, context = '') {
+  assert.ok(literal, context);
+  assert.equal(typeof literal.source, 'string', context);
+  assert.notEqual(literal.source, name, `not the raw tool name: ${context}`);
+  assert.doesNotMatch(literal.source, /_/, `not a tool name: ${literal.source}`);
+  if (name === 'query_transactions') assert.match(literal.source, /^your transactions/, context);
+}
+
 test('B3: a tool result value that echoes a call argument does not ground the number', async t => {
   const s = await demoStore(t);
   const scenario = buildScenario(s.db);
@@ -410,7 +427,7 @@ test('B3: a real value field still grounds, also next to an unrelated argument a
   const r = groundAnswer(LAUNDERED, { scenario, data: [],
     toolResults: [{ name: 'get_figures', args: { keys: ['synthetic'] }, result }] });
   assert.equal(r.ok, true, JSON.stringify(r.violations));
-  assert.equal(r.literals.find(l => l.text === '4821').source, 'get_figures');
+  expectToolSource(r.literals.find(l => l.text === '4821'), 'get_figures', JSON.stringify(r.literals));
   const other = groundAnswer('It is page 77 of plan 9517.', { scenario, data: [],
     toolResults: [{ name: 'get_figures', args: { keys: ['synthetic'] }, result }] });
   assert.deepEqual(laundered(other), ['77', '9517'], 'the page and the source label are metadata');
@@ -579,8 +596,7 @@ test('B3: an account mask from the real list_accounts result never grounds a num
   const { unverified } = reply.provenance.grounding;
   assert.ok(unverified.includes(mask), `the account mask ${account.mask} grounds ${mask}: ${JSON.stringify(reply.provenance.grounding)}`);
   assert.ok(!unverified.includes(balance), `the balance ${balance} still grounds`);
-  const literal = reply.provenance.literals.find(l => l.text === balance);
-  assert.equal(literal && literal.source, 'list_accounts', JSON.stringify(reply.provenance.literals));
+  expectToolSource(reply.provenance.literals.find(l => l.text === balance), 'list_accounts', JSON.stringify(reply.provenance.literals));
 });
 
 test('B3 r2: a figure reference (mine[].fig = plan529) in the va529 rec context never grounds $529; a real amount does', async t => {
@@ -608,8 +624,7 @@ test('B3 r2: a figure reference in a scripted get_recommendation result never gr
   const { unverified } = reply.provenance.grounding;
   assert.ok(unverified.includes('$529'), `the fig reference must not ground $529: ${JSON.stringify(reply.provenance.grounding)}`);
   assert.ok(!unverified.includes('$4,000'), 'a real amount still grounds');
-  const literal = reply.provenance.literals.find(l => l.text === '$4,000');
-  assert.equal(literal && literal.source, 'get_recommendation', JSON.stringify(reply.provenance.literals));
+  expectToolSource(reply.provenance.literals.find(l => l.text === '$4,000'), 'get_recommendation', JSON.stringify(reply.provenance.literals));
 });
 
 test('B3 r2: an identifier-like string under an unremarkable key never grounds its digits', async t => {
@@ -652,7 +667,10 @@ test('B3 r2: an exact amount query keeps the stored row amounts as grounding, at
   const { unverified } = reply.provenance.grounding;
   assert.ok(!unverified.includes(text), `the row amount grounds ${text}: ${JSON.stringify(reply.provenance.grounding)}`);
   const literal = reply.provenance.literals.find(l => l.text === text);
-  assert.equal(literal && literal.source, 'query_transactions', JSON.stringify(reply.provenance.literals));
+  expectToolSource(literal, 'query_transactions', JSON.stringify(reply.provenance.literals));
+  // The row it came from: its date and description (AQ1 C.2).
+  assert.ok(literal.source.includes(pick.date), literal.source);
+  assert.ok(literal.source.includes(pick.description), literal.source);
 });
 
 test('B3 r2: argument echoes under the same key still do not ground, while other keys with the same value do', async t => {
@@ -667,7 +685,7 @@ test('B3 r2: argument echoes under the same key still do not ground, while other
   const real = groundAnswer(LAUNDERED, { scenario, data: [],
     toolResults: [{ name: 'query_transactions', args: { minAmount: 4821, maxAmount: 4821 }, result: { rows: [{ id: 1, amount: 4821 }], total: 1 } }] });
   assert.equal(real.ok, true, JSON.stringify(real.violations));
-  assert.equal(real.literals.find(l => l.text === '4821').source, 'query_transactions');
+  expectToolSource(real.literals.find(l => l.text === '4821'), 'query_transactions', JSON.stringify(real.literals));
 });
 
 // ---------------------------------------------------------------- rendering
@@ -687,16 +705,18 @@ test('renderAnswer escapes markup, quotes and stray braces, keeps valid tokens, 
   assert.ok(out[1].includes('{f:true_reserve}'), 'a valid token stays raw for the UI to resolve');
 });
 
-test('renderAnswer wraps each violation in an fx-unverified span and neutralizes an invalid token', () => {
+test('renderAnswer wraps each violation in a neutral fx-unchecked span and neutralizes an invalid token', () => {
   const text = `You could save ${INVENTED} next year, see {f:nope}.`;
   const violations = [
     { text: INVENTED, index: text.indexOf(INVENTED), reason: 'number or unit absent from sources' },
     { text: '{f:nope}', index: text.indexOf('{f:nope}'), reason: 'unknown figure token' },
   ];
   const html = renderAnswer(text, violations).join('');
-  assert.ok(html.includes(`${UNVERIFIED}${INVENTED}</span>`), html);
+  assert.ok(html.includes(`${UNCHECKED}${INVENTED}</span>`), html);
   assert.ok(!html.includes('{f:nope}'), 'an invalid token is never left resolvable');
-  assert.equal(html.split('class="fx-unverified"').length - 1, 2, html);
+  assert.ok(html.includes(`${UNCHECKED}&#123;f:nope&#125;</span>`), html);
+  assert.equal(html.split('class="fx-checking fx-unchecked"').length - 1, 2, html);
+  assert.ok(!html.includes('fx-unverified'), 'new answers never use the legacy class');
 });
 
 // ---------------------------------------------------------------- the live answerer
@@ -729,16 +749,31 @@ test('a suggested question answers through the fake engine with tools, figures, 
   assert.ok(spendCount(s.db) > before, 'spend was recorded');
 });
 
-test('an answer that fails grounding is retried once and the grounded retry is stored', async t => {
+test('a single unchecked amount is neutralized in place, with no regeneration', async t => {
   const s = await demoStore(t);
   const { engine, requests } = scripted(s.runtime, [
     [{ text: `You could save ${INVENTED} this year.` }],
+    [{ text: 'must not run' }],
+  ]);
+  const reply = await createLiveAnswerer({ engine, packs: s.packs }).answer({ db: s.db, key: THREAD, text: 'Synthetic retry question' });
+  assert.equal(requests.length, 1, 'one model call');
+  assert.ok(!reply.notice);
+  assert.deepEqual(reply.provenance.grounding, { ok: false, retried: false, unverified: [INVENTED] });
+  assert.ok(joined(reply).includes(`${UNCHECKED}${INVENTED}</span>`), joined(reply));
+  assert.ok(!joined(reply).includes('must not run'));
+});
+
+test('an answer whose figures are mostly unchecked is regenerated once and the grounded regeneration is stored', async t => {
+  const s = await demoStore(t);
+  const { engine, requests } = scripted(s.runtime, [
+    [{ text: TWO_INVENTED }],
     [{ text: 'Your plan already covers the leave months.' }],
   ]);
   const reply = await createLiveAnswerer({ engine, packs: s.packs }).answer({ db: s.db, key: THREAD, text: 'Synthetic retry question' });
   assert.equal(requests.length, 2, 'two model calls');
   assert.ok(!reply.notice);
-  assert.deepEqual(reply.provenance.grounding, { ok: true, retried: true, unverified: [] });
+  assert.deepEqual(reply.provenance.grounding, { ok: true, retried: true, unverified: [], revised: 2 });
+  assert.ok(!joined(reply).includes('876,543'), joined(reply));
   assert.ok(!joined(reply).includes('987,654'), joined(reply));
   assert.ok(joined(reply).includes('leave months'));
   assert.equal(requests[1].system, requests[0].system, 'the corrective turn keeps the cached system');
@@ -746,23 +781,29 @@ test('an answer that fails grounding is retried once and the grounded retry is s
   assert.equal(requests[1].messages.at(-1).role, 'user');
 });
 
-test('an answer still ungrounded after the retry is stored with the number marked unverified', async t => {
+test('an answer still ungrounded after the regeneration is stored with its numbers neutralized, never regenerated twice', async t => {
   const s = await demoStore(t);
   const { engine, requests } = scripted(s.runtime, [
-    [{ text: `You could save ${INVENTED} this year.` }],
-    [{ text: `You could still save ${INVENTED} this year.` }],
+    [{ text: TWO_INVENTED }],
+    [{ text: `You could still save ${INVENTED} this year and ${INVENTED_2} next year.` }],
+    [{ text: 'must not run' }],
   ]);
   const reply = await createLiveAnswerer({ engine, packs: s.packs }).answer({ db: s.db, key: THREAD, text: 'Synthetic retry question' });
   assert.equal(requests.length, 2);
   assert.ok(!reply.notice);
-  assert.ok(joined(reply).includes(`${UNVERIFIED}${INVENTED}</span>`), joined(reply));
+  assert.ok(joined(reply).includes(`${UNCHECKED}${INVENTED}</span>`), joined(reply));
+  assert.ok(joined(reply).includes(`${UNCHECKED}${INVENTED_2}</span>`), joined(reply));
   assert.equal(reply.provenance.grounding.ok, false);
   assert.equal(reply.provenance.grounding.retried, true);
-  assert.ok(reply.provenance.grounding.unverified.includes(INVENTED));
+  assert.equal(reply.provenance.grounding.revised, 2);
+  assert.deepEqual(reply.provenance.grounding.unverified, [INVENTED, INVENTED_2]);
+  const steps = reply.provenance.work.items.filter(x => x.k === 'step' && /^Revised/.test(x.label));
+  assert.deepEqual(steps, [{ k: 'step', label: REVISED_2 }]);
 });
 
 // B1: a corrective retry that fails answers with the matching notice, never the first ungrounded
-// text, and the spend the engine recorded before it threw stays in the ledger.
+// text, and the spend the engine recorded before it threw stays in the ledger. The first answer has
+// two invented amounts and no other figure, so it is regenerated (AQ1 C.5).
 
 const chatRows = db => db.prepare("SELECT id, purpose, model, cost_usd FROM spend_ledger WHERE purpose = 'chat' ORDER BY id").all().map(r => ({ ...r }));
 // The runtime records spend at the current time (no clock-based now in this fixture).
@@ -771,7 +812,7 @@ const thisMonth = () => new Date().toISOString().slice(0, 7);
 test('B1: a corrective retry refused by the engine switch answers with the engine-off notice and keeps the first spend row', async t => {
   const s = await demoStore(t);
   const { engine, requests } = scripted(s.runtime, [
-    [{ text: `You could save ${INVENTED} this year.` }],
+    [{ text: TWO_INVENTED }],
     [{ text: 'must not run' }],
   ], { before: n => { if (n === 1) setSetting(s.db, 'engine', { on: false }); } });
   const before = chatRows(s.db).length;
@@ -792,7 +833,7 @@ test('B1: a corrective retry refused over the cap the first call exhausted answe
   // The cap sits half a dollar above this month's spend; the first call spends a whole dollar.
   setSetting(s.db, 'cap', { usd: createSpendLedger(s.db).monthSpendUsd(thisMonth()) + 0.5 });
   const { engine, requests } = scripted(s.runtime, [
-    [{ text: `You could save ${INVENTED} this year.`, costUsd: 1 }],
+    [{ text: TWO_INVENTED, costUsd: 1 }],
     [{ text: 'must not run' }],
   ]);
   const before = chatRows(s.db).length;
@@ -810,7 +851,7 @@ test('B1: a corrective retry refused over the cap the first call exhausted answe
 test('B1: a corrective retry that fails in the model answers with the model-error notice and keeps both spend rows', async t => {
   const s = await demoStore(t);
   const { engine, requests } = scripted(s.runtime, [
-    [{ text: `You could save ${INVENTED} this year.` }],
+    [{ text: TWO_INVENTED }],
     [{ text: 'Fabricated $123,456 figure', is_error: true, status: 'error_during_execution' }],
   ]);
   const before = chatRows(s.db).length;
@@ -848,7 +889,7 @@ test('a retry that drops the tool call stays grounded by the first attempt tool 
   const { engine, requests } = scripted(s.runtime, [
     [
       { toolCalls: [{ name: 'get_figures', args: { keys: ['fixed_fee'] } }] },
-      { text: `About ${amount} of delivered work is not invoiced, and you could save ${INVENTED}.` },
+      { text: `About ${amount} of delivered work is not invoiced, and you could save ${INVENTED} or ${INVENTED_2}.` },
     ],
     [{ text: `About ${amount} of delivered work is not invoiced.` }],
   ]);
@@ -856,10 +897,10 @@ test('a retry that drops the tool call stays grounded by the first attempt tool 
   assert.equal(requests.length, 2);
   assert.ok(!reply.notice);
   const html = joined(reply);
-  assert.ok(!html.includes('fx-unverified'), html);
-  assert.ok(!html.includes('987,654'), html);
+  assert.ok(!html.includes('fx-unverified') && !html.includes('fx-unchecked'), html);
+  assert.ok(!html.includes('987,654') && !html.includes('876,543'), html);
   assert.ok(new RegExp(`<span class="fx-src"[^>]*>${amount.replace('$', '\\$')}</span>`).test(html), html);
-  assert.deepEqual(reply.provenance.grounding, { ok: true, retried: true, unverified: [] });
+  assert.deepEqual(reply.provenance.grounding, { ok: true, retried: true, unverified: [], revised: 2 });
   const call = reply.provenance.tools.find(x => x.name === 'get_figures');
   assert.ok(call, JSON.stringify(reply.provenance.tools));
   assert.deepEqual(call.args, { keys: ['fixed_fee'] });
@@ -1349,14 +1390,13 @@ test('R3 A (F2): query_transactions total equal to the limit argument grounds, a
   assert.equal(got.result.truncated, false);
   const { unverified } = reply.provenance.grounding;
   assert.ok(!unverified.includes(String(n)), `the computed total ${n} grounds: ${JSON.stringify(reply.provenance.grounding)}`);
-  const literal = reply.provenance.literals.find(l => l.text === String(n));
-  assert.equal(literal && literal.source, 'query_transactions', JSON.stringify(reply.provenance.literals));
+  expectToolSource(reply.provenance.literals.find(l => l.text === String(n)), 'query_transactions', JSON.stringify(reply.provenance.literals));
 
   // A top-level number under a different key than the equal argument is a value, not an echo.
   const other = groundAnswer(LAUNDERED, { scenario, data: [],
     toolResults: [{ name: 'query_transactions', args: { minAmount: 4821 }, result: { rows: [], floor: 4821, total: 0 } }] });
   assert.equal(other.ok, true, JSON.stringify(other.violations));
-  assert.equal(other.literals.find(l => l.text === '4821').source, 'query_transactions');
+  expectToolSource(other.literals.find(l => l.text === '4821'), 'query_transactions', JSON.stringify(other.literals));
 });
 
 // B: prose sentences that carry bare numbers only, and ones that carry one marked quantity each.
@@ -1641,7 +1681,7 @@ test('R4 F2: the real pnl_by_month result over the demo store never grounds its 
   const amount = `$${row.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   const kept = ground(result, amount);
   assert.equal(kept.ok, true, `${amount}: ${JSON.stringify(kept.violations)}`);
-  assert.equal(kept.literals.find(l => l.text === amount).source, 'pnl_by_month');
+  expectToolSource(kept.literals.find(l => l.text === amount), 'pnl_by_month', JSON.stringify(kept.literals));
 });
 
 test('R4 F2: a synthetic period next to an unrelated amount grounds the amount and not $11 or 11', async t => {
