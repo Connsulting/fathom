@@ -35,7 +35,7 @@ export function html(r, surface) {
     const group = f.group ? `<span class="h-answer-for">${esc(f.group)}</span>` : '';
     // An answer inferred from stored data is shown with its evidence, not asked; Undo asks instead.
     if (f.inferred && on) {
-      return `<fieldset class="h-answer-field h-answer-inferred" data-qr-wrap="${esc(f.id)}">${group}<legend>${esc(f.label)}</legend><p><b>${value ? 'Yes' : 'No'}.</b> ${esc(f.inferred.evidence)}</p><button type="button" class="h-btn ghost" data-qr-undo="${esc(f.inferred.accountId)}" data-rec="${esc(r.id)}"${pending ? ' disabled' : ''}>Undo</button></fieldset>`;
+      return `<fieldset class="h-answer-field h-answer-inferred" data-qr-wrap="${esc(f.id)}"><legend>${group}${esc(f.label)}</legend><p><b>${value ? 'Yes' : 'No'}.</b> ${esc(f.inferred.evidence)}</p><button type="button" class="h-btn ghost" data-qr-undo="${esc(f.inferred.accountId)}" data-rec="${esc(r.id)}"${pending ? ' disabled' : ''}>Undo</button></fieldset>`;
     }
     const attrs = `data-qr-field="${esc(f.id)}"${on ? ' required' : ' disabled'}${pending && on ? ' disabled' : ''}`;
     let control;
@@ -47,7 +47,7 @@ export function html(r, surface) {
       const limits = f.type === 'number' ? ` min="${f.exclusiveMin != null ? f.exclusiveMin + 0.01 : f.min ?? 0}"${f.max != null ? ` max="${f.max}"` : ''} step="${f.integer ? '1' : '0.01'}" inputmode="${f.integer ? 'numeric' : 'decimal'}"` : '';
       control = `<div class="h-answer-value"><input id="${esc(id)}" type="${esc(f.type)}" value="${esc(value ?? '')}" ${attrs}${limits}>${f.unit ? `<span class="h-answer-unit">${esc(f.unit)}</span>` : ''}</div>`;
     }
-    return `<fieldset class="h-answer-field" data-qr-wrap="${esc(f.id)}"${on ? '' : ' hidden'}>${group}<legend>${esc(f.label)}</legend>${f.type === 'boolean' ? '' : `<label class="sr-only" for="${esc(id)}">${esc(f.label)}${f.unit ? ` (${esc(f.unit)})` : ''}</label>`}${control}</fieldset>`;
+    return `<fieldset class="h-answer-field" data-qr-wrap="${esc(f.id)}"${on ? '' : ' hidden'}><legend>${group}${esc(f.label)}</legend>${f.type === 'boolean' ? '' : `<label class="sr-only" for="${esc(id)}">${esc(f.label)}${f.unit ? ` (${esc(f.unit)})` : ''}</label>`}${control}</fieldset>`;
   }).join('');
   return `<form class="h-answers" data-rec-answers="${esc(r.id)}" aria-label="Answer questions for your plan" aria-busy="${pending}">${fields}<p class="h-answer-note">Your answers update the plan automatically.</p><div class="h-answer-acts"><button type="submit" class="h-btn pri"${pending ? ' disabled' : ''}>${pending ? 'Saving...' : r.question.primary ? 'Save' : 'Save answers'}</button>${r.question.primary ? `<button type="button" class="h-btn" data-act="snooze" data-rec="${esc(r.id)}" data-arg="${esc(H.snoozeLabel())}"${pending ? ' disabled' : ''}>Not now</button><button type="button" class="h-btn" data-ask-next="${esc(r.id)}">Ask</button>` : ''}</div></form>`;
 }
