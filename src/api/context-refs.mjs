@@ -30,6 +30,7 @@
 import { HttpError } from './http.mjs';
 import { resolveTokens } from '../shared/tokens.mjs';
 import { pnlEntities, businessPnl } from '../pnl/business.mjs';
+import { monthLabel } from '../pnl/shared.mjs';
 
 export const REF_KINDS = Object.freeze(['account', 'transaction', 'rec', 'step', 'goal', 'figure', 'pnl', 'spending',
   'confirm', 'money', 'pack', 'page']);
@@ -43,12 +44,11 @@ const PAGES = new Set(['home', 'pace', 'brief', 'goals', 'confirm', 'plan', 'yea
 
 const BAD = 'context must be a list of {kind, id}';
 const MONTH_SUFFIX = /\|(\d{4})-(0[1-9]|1[0-2])$/;
-const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 // An id and its month suffix: { base, month } with month as 'Mar 2032', or '' when there is none.
 function splitMonth(id) {
   const m = MONTH_SUFFIX.exec(id);
-  return m ? { base: id.slice(0, m.index), month: `${MONTH_NAMES[Number(m[2]) - 1]} ${m[1]}` } : { base: id, month: '' };
+  return m ? { base: id.slice(0, m.index), month: monthLabel(`${m[1]}-${m[2]}`) } : { base: id, month: '' };
 }
 
 export function parseRefs(raw) {
