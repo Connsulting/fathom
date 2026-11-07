@@ -690,14 +690,18 @@ after its first answer. The engine gets one
 thread's non-notice messages as plain text, newest last, at most 12 messages and 6000 characters.
 The model title is trimmed, loses one pair of quotes and a trailing period, and is refused when
 empty, over 60 characters or 8 words, with a line break, control character, `< > { }` or backtick,
-or any digit, currency or percent sign, or spelled-out number or money word, or any word
-(lowercased, with a plural `s`/`es` and a possessive `'s` folded) that is not a function word and
-was not used in this thread's owner messages. Engine off, over the cap, any error or a
-refused title uses the fallback: the first owner message as plain text (figure tokens removed,
-other tokens resolved, tags stripped, entities decoded) cut to 48 characters at a word boundary.
-The fake engine returns the fallback as its title. Writes only land while `title_source` is NULL,
-so an owner rename (`manual`, 1 to 60 characters, digits allowed) always wins. Titles render
-escaped.
+or any digit, currency or percent sign, or spelled-out number or money word, or when none of its
+non-function words (lowercased, with a plural `s`/`es` and a possessive `'s` folded) appears in
+the thread's messages, owner or reply. Each refusal adds one to its reason code (`not_text`,
+`empty`, `too_long`, `markup`, `too_many_words`, `number`, `money_word`, `off_topic`,
+`unparsable`, `call_failed`) in the `ask.titleRejects` setting and logs the code, never the
+title. Engine off, over the cap, any error or a refused title uses the fallback: the first owner
+message as plain text (figure tokens removed, other tokens resolved, tags stripped, entities
+decoded) cut to 48 characters at a word boundary. A thread still carrying that fallback gets one
+more title call after its second completed turn. The fake engine returns the fallback as its
+title. The first write only lands while `title_source` is NULL and the retry only while the
+fallback is unchanged, so an owner rename (`manual`, 1 to 60 characters, digits allowed) always
+wins. Titles render escaped.
 
 `live.askStarters` lists, in this order and only when its condition holds: `attention` "What needs
 my attention right now?" (a visible rec proposed or doing), `taxes` "How are our tax
@@ -1584,11 +1588,19 @@ process, so accounting poison lasts for the process, and awaits `init()` once at
    both sides, so it needs percent evidence, not number evidence. Number-word phrases (`two million`)
    are still read word by word, and one followed by a percent sign (with or without a space) or the
    word `percent` (`one thousand %`) is likewise a percent quantity that needs percent evidence.
-5. One corrective retry (same `system`, the first answer plus a corrective user turn). An answer
-   still ungrounded is stored with each violation in `<span class="fx-unverified" title="Not found
-   in your data or tool results">`. If the retry call itself fails, the answer is the matching
+5. Same-turn sourcing and in-place neutralization. A query_transactions row's negative amount also
+   grounds its unsigned form, and the literal names that row ("your transactions: account label,
+   date, description"); other tool literals carry a plain label, never the tool name. A date that
+   matches a date in a same-turn tool row or in the context data is sourced to it (a stated year
+   must match). Every remaining violation, dates included, is stored in place as
+   `<span class="fx-checking fx-unchecked" title="Not checked against your data">`. Only when two
+   or more figures and more than half of the answer's figures (dates excluded) are unchecked is
+   the answer regenerated once, with a corrective user turn; the stream and the work block then
+   show one step "Revised to remove N unchecked figures" before the reset, never the earlier
+   draft, and `provenance.grounding.revised` is N. If that call fails, the answer is the matching
    notice (engine off, over the cap, model error), never the first ungrounded text; the spend the
-   engine recorded for each completed round stays in the ledger.
+   engine recorded for each completed round stays in the ledger. Answers stored before this rule
+   keep their `.fx-unverified` spans and draft notes.
 6. Rendering (`renderAnswer`): model text is untrusted. Everything is HTML-escaped (quotes and
    apostrophes included) with `{` and `}` as `&#123;` and `&#125;`, except valid tokens; bound
    literals are wrapped in `<span class="fx-src" data-src="<literal index>" title="From <source>">`;

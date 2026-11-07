@@ -48,7 +48,9 @@ test('arithmetic transcript fails through real Ask and corrected retries cannot 
     const values = db.prepare("SELECT v FROM figures WHERE key IN ('hsa_left','hsa_paid')").all();
     return [
       { toolCalls: [{ name: 'get_figures', args: { keys: ['hsa_left', 'hsa_paid'] } }], costUsd: 0 },
-      { text: String(values[0].v + values[1].v), costUsd: 0 },
+      // Two self-computed figures: since AQ1 a lone unchecked figure is neutralized in place, and only
+      // an answer whose figures are mostly unchecked (two or more) is regenerated.
+      { text: `${values[0].v + values[1].v}, or ${2 * (values[0].v + values[1].v)} over two years`, costUsd: 0 },
     ];
   } });
   assert.equal(r.cases[0].status, 'fail');
@@ -115,7 +117,7 @@ test('budget and unknown accounting stop on their originating case and start no 
 
 test('a corrective Ask retry receives fresh budget admission and stops before a second charge', async () => {
   const c = (await loadCases()).find(c => c.id === 'retirement-hsa-room');
-  const r = await runCases({ cases: [c], maxUsd: 10, scripts: () => [{ text: '$987654321', costUsd: 9.99 }] });
+  const r = await runCases({ cases: [c], maxUsd: 10, scripts: () => [{ text: '$987654321 and $876543219', costUsd: 9.99 }] });
   assert.equal(r.cases[0].status, 'budget-stopped');
   assert.equal(r.costUsd, 9.99);
   assert.equal(r.cases[0].turns[0].attempts.length, 2);
