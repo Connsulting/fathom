@@ -16,13 +16,25 @@ const KEYS = new Set(['value', 'source', 'evidence', 'factKey', 'preferenceId', 
 // sign, so "$1,000" never yields 000 and "3-4 percent" never yields minus 4.
 const RATIO = /(?<![\w.,$-])(minus\s+|-)?(\d+(?:\.\d+)?|\.\d+)(?![\d.])\s*(%|percent\b|per\s*cent\b|pct\b)?/gi;
 const AGE = /(?<![\w.,$-])(\d+(?:\.\d+)?)(?![\d.])(\s+and\s+a\s+half\b)?/gi;
+// Money with its sign: "-$1,000", "$-1,000" and "minus $1,000" are negative; a range dash glued to
+// the previous number ("$1,000-2,000") is not a sign, and the number after it is not read.
+const MONEY_AMOUNT = /(?<![\w.,$-])(minus\s+|-\s*)?\$?\s*(-\s*)?(\d[\d,]*(?:\.\d+)?)\s*(k|m|thousand|million)?\b/gi;
+const SCALE = { k: 1e3, thousand: 1e3, m: 1e6, million: 1e6 };
+
+function moneyAmounts(text) {
+  return [...text.matchAll(MONEY_AMOUNT)].map(m => {
+    const n = Number(m[3].replace(/,/g, '')) * (SCALE[(m[4] || '').toLowerCase()] || 1);
+    return Math.round(((m[1] || m[2]) ? -n : n) * 100) / 100;
+  });
+}
 const ISO = /\b\d{4}-\d{2}-\d{2}\b/g;
 
 // The values a text states in `unit`, deterministic:
 // ratio: a number followed by %, percent, per cent or pct (optional space) is that number over 100;
 //   a bare decimal below 1 ("0.04") is itself; any other bare number states no rate.
-// usd, usd_per_month, usd_per_year, months, days, count: statedAmounts ($, commas, k, thousand, m,
-//   million), to the cent.
+// usd, usd_per_month, usd_per_year: $, commas, k, thousand, m, million, to the cent, with a leading
+//   minus sign or the word minus kept.
+// months, days, count: statedAmounts.
 // age, years: a whole or half number ("59 and a half", "59.5").
 // date: the ISO dates in the text.
 export function statedValues(text, unit) {
@@ -40,6 +52,7 @@ export function statedValues(text, unit) {
     return [...s.matchAll(AGE)].map(m => Number(m[1]) + (m[2] ? 0.5 : 0)).filter(n => Number.isInteger(n * 2));
   }
   if (unit === 'date') return [...s.matchAll(ISO)].map(m => m[0]);
+  if (MONEY.has(unit)) return moneyAmounts(s);
   return statedAmounts(s);
 }
 
@@ -62,6 +75,25 @@ export function statedText(value, unit) {
 }
 
 const squash = s => String(s).replace(/\s+/g, ' ').trim().toLowerCase();
+// Characters that would make an excerpt edge cut through a number: a digit, or a decimal point,
+// comma, currency sign or minus joined to one.
+const CUT_BEFORE = /[\d$-]$|[.,]$/;
+const CUT_AFTER = /^\d|^[.,]\d/;
+
+// True when `words` occurs in `text` without cutting a number at either edge, so "4 percent" is
+// not an excerpt of "14 percent" and "1,000" is not one of "$21,000".
+function quotedFrom(text, words) {
+  const haystack = squash(text);
+  const needle = squash(words);
+  for (let at = haystack.indexOf(needle); at !== -1; at = haystack.indexOf(needle, at + 1)) {
+    const before = haystack.slice(0, at);
+    const after = haystack.slice(at + needle.length);
+    const cutBefore = /^[\d.,$-]/.test(needle) && CUT_BEFORE.test(before);
+    const cutAfter = /[\d.,]$/.test(needle) && CUT_AFTER.test(after);
+    if (!cutBefore && !cutAfter) return true;
+  }
+  return false;
+}
 
 function ownerWords(assumption, path, ctx) {
   const { value, evidence } = assumption;
@@ -76,7 +108,7 @@ function ownerWords(assumption, path, ctx) {
       throw new ToolError('bad_input', `${path}: an owner assumption needs the owner's messages in this conversation, which are not available here. Ask the owner, or use a fact, preference or default.`);
     }
     const statements = ctx.ownerStatements() || [];
-    if (!statements.some(text => squash(text).includes(squash(evidence)))) {
+    if (!statements.some(text => quotedFrom(text, evidence))) {
       throw new ToolError('bad_input', `${path}: the evidence is not in the owner's messages of this conversation. Quote the owner's exact words.`);
     }
   }
@@ -111,8 +143,9 @@ export function checkAssumption(assumption, { name, unit, default: fallback, min
     if (typeof factKey !== 'string' || !factKey) throw new ToolError('bad_input', `${path}: source fact needs factKey`);
     const row = ctx?.db?.prepare('SELECT value FROM facts WHERE key = ?').get(factKey);
     if (!row) throw new ToolError('bad_input', `${path}: no stored fact ${factKey}`);
-    const stored = Number(parseJson(row.value, row.value));
-    if (!Number.isFinite(stored) || !same(stored, value, unit)) {
+    // Only a stored number counts: a boolean, list or text fact is never coerced into one.
+    const stored = parseJson(row.value, null);
+    if (typeof stored !== 'number' || !Number.isFinite(stored) || !same(stored, value, unit)) {
       throw new ToolError('bad_input', `${path}: the stored fact ${factKey} does not hold ${record.stated}`);
     }
     record.factKey = factKey;

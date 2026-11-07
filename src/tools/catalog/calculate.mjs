@@ -108,8 +108,18 @@ function compute(operation, values, node, extra) {
 
 // One evaluated term: { value (unrounded, or null when unavailable), unit, kind, asOf, gaps,
 // unavailable?, words, inputs, assumptions, steps }.
+// A calculate figure's last step holds its result before rounding; chaining through a ref uses that
+// value so rounding happens once, at the end (section 3, precision). The ref was re-run here, so
+// the provenance is this tool's own output, never the caller's.
+function exactValue(figure) {
+  if (figure.value === null || figure.provenance?.calc !== 'calculate') return figure.value;
+  const steps = figure.provenance.steps;
+  const last = Array.isArray(steps) ? steps[steps.length - 1]?.value : undefined;
+  return typeof last === 'number' && Number.isFinite(last) ? last : figure.value;
+}
+
 function leafOfFigure(figure, ref) {
-  return { value: figure.value, unit: figure.unit, kind: figure.kind, asOf: figure.asOf ?? null, gaps: figure.gaps || [],
+  return { value: exactValue(figure), unit: figure.unit, kind: figure.kind, asOf: figure.asOf ?? null, gaps: figure.gaps || [],
     unavailable: figure.value === null ? (figure.unavailable || 'missing_fact') : undefined,
     words: figure.label || 'a figure', inputs: [{ ...figure, ref: figure.ref ?? ref }], assumptions: [], steps: [] };
 }
@@ -238,7 +248,37 @@ async function handler(params, ctx, operation) {
     provenance: { calc: 'calculate', formula: result.formula, inputs: result.inputs, assumptions: result.assumptions, steps },
     gaps, ...(unavailable ? { unavailable } : {}),
   });
-  return { figure };
+  return fit({ figure });
+}
+
+// Section 3, Limits 6: a result is at most 256 KB of JSON. Past that the longest provenance lists
+// are cut (inputs first, then steps keeping the final one that holds the exact result, then
+// assumptions) and the result says truncated: true. The figure itself never changes.
+export const MAX_RESULT_BYTES = 256 * 1024;
+const bytes = v => Buffer.byteLength(JSON.stringify(v));
+
+function fit(result) {
+  if (bytes(result) <= MAX_RESULT_BYTES) return result;
+  const provenance = result.figure.provenance;
+  result.truncated = true;
+  for (const key of ['inputs', 'steps', 'assumptions']) {
+    const list = provenance[key];
+    const keep = key === 'steps' ? list.slice(-1) : [];
+    const cut = key === 'steps' ? list.slice(0, -1) : list;
+    provenance[key] = keep;
+    let room = MAX_RESULT_BYTES - bytes(result);
+    const kept = [];
+    for (const item of cut) {
+      const size = bytes(item) + 1;
+      if (size > room) break;
+      kept.push(item);
+      room -= size;
+    }
+    provenance[key] = [...kept, ...keep];
+    if (kept.length === cut.length) continue;
+    return result;
+  }
+  return result;
 }
 
 const operand = { type: 'object', properties: { ref: { type: 'object' }, assumption: { type: 'object' }, expr: { type: 'object' } } };
