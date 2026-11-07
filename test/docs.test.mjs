@@ -34,7 +34,7 @@ const FACT_KEYS = [
 const ENV_KEYS = [
   'FATHOM_DATA', 'FATHOM_PORT', 'FATHOM_HOST', 'FATHOM_DEMO', 'FATHOM_ENGINE', 'FATHOM_CLOCK',
   'FATHOM_CLAUDE_CREDENTIAL_FILE', 'FATHOM_DATA_KEY_FILE', 'FATHOM_EMAIL_TRANSPORT',
-  'FATHOM_PUBLIC_URL', 'FATHOM_ALLOWED_HOSTS', 'FATHOM_OWNER_LOGINS', 'FATHOM_OWNER_LOGINS_FILE',
+  'FATHOM_PUBLIC_URL', 'FATHOM_ALLOWED_HOSTS', 'FATHOM_TRUSTED_PROXIES',
 ];
 
 const readme = readFileSync(join(ROOT, 'README.md'), 'utf8');
@@ -74,12 +74,58 @@ test('architecture.md lists every API route with its method', () => {
   }
 });
 
-test('architecture.md and README.md state the owner identity trust model', () => {
+test('architecture.md and README.md describe passkey accounts and separate MCP bearer access', () => {
   for (const [name, text] of [['architecture.md', doc], ['README.md', readme]]) {
-    assert.match(text, /tailscale serve/i, `${name} names tailscale serve as the only path in`);
-    assert.match(text, /Tailscale-User-Login/i, `${name} names the identity header`);
-    assert.ok(text.includes('FATHOM_OWNER_LOGINS'), `${name} names FATHOM_OWNER_LOGINS`);
+    assert.match(text, /passkey/i, name);
+    assert.match(text, /session/i, name);
+    assert.match(text, /FATHOM_PUBLIC_URL/, name);
+    assert.match(text, /user:invite|user-invite\.mjs/, name);
+    assert.match(text, /--admin/, name);
+    assert.match(text, /recover/i, name);
+    assert.match(text, /bearer/i, name);
+    assert.match(text, /demo/i, name);
   }
-  assert.match(headings, /owner identity/i, 'architecture.md has an Owner identity section');
-  assert.ok(!doc.includes('There is no authentication in this item'), 'the old no-authentication note is gone');
+  assert.match(doc, /one household|single household/i);
+  assert.match(doc, /ownerless|creator|creating user/i);
+  assert.match(doc, /Origin/);
+  assert.match(doc, /credProps|discoverab|resident/i);
+  assert.match(doc, /unrecoverable|offline database/i);
+});
+
+test('account docs explain explicit proxy trust, recent sign-in and security notices', () => {
+  for (const [name, text] of [['architecture.md', doc], ['README.md', readme]]) {
+    const proxy = text.split('\n').find(line => line.includes('FATHOM_TRUSTED_PROXIES') && line.includes('|'));
+    assert.ok(proxy, `${name} lists the trusted proxy setting`);
+    assert.match(proxy, /CIDR/, name);
+    assert.match(proxy, /comma/i, name);
+    assert.match(proxy, /IPv4/i, name);
+    assert.match(proxy, /IPv6/i, name);
+    assert.match(proxy, /\[\]|none|empty|no proxies/i, `${name} defaults to trusting no proxies`);
+    assert.match(text, /X-Forwarded-For/i, name);
+    const blocks = text.split(/\n\s*\n/).map(block => block.replace(/\s+/g, ' '));
+    assert.ok(blocks.some(block => /passkey/i.test(block) && /sign[ -]?in|signed in/i.test(block)
+      && /(?:10|ten)[ -]minutes?/i.test(block)), `${name} explains the ten-minute add-passkey requirement`);
+    for (const subject of ['Fathom passkey added', 'Fathom account recovered']) assert.ok(text.includes(subject), `${name} lists ${subject}`);
+    assert.ok(blocks.some(block => /recover/i.test(block) && /admin/i.test(block) && /notif|notice|email/i.test(block)),
+      `${name} explains recovery notifications to admins`);
+    assert.ok(blocks.some(block => /notif|notice/i.test(block) && /separate|individ|one recipient/i.test(block)),
+      `${name} explains separate security mail recipients`);
+  }
+  assert.match(doc, /signed_in_at/, 'architecture documents the stored sign-in timestamp');
+  assert.match(doc, /recent_signin_required/, 'architecture documents the stable stale-registration code');
+  assert.ok(doc.split(/\n\s*\n/).some(block => /notice|notification/i.test(block) && /email_sends/.test(block)),
+    'architecture distinguishes direct security notices from financial email bookkeeping');
+});
+
+test('account docs distinguish passkey revocation from user removal and say bootstrap sends before printing', () => {
+  for (const [name, text] of [['architecture.md', doc], ['README.md', readme]]) {
+    const blocks = text.split(/\n\s*\n/).map(block => block.replace(/\s+/g, ' '));
+    assert.ok(blocks.some(block => /passkey/i.test(block) && /revok|revoc/i.test(block) && /MCP/i.test(block)
+      && /remain|stay|leav|keep|unaffected|does not revoke|not revoked|do not revoke/i.test(block)),
+      `${name} explicitly says MCP keys survive passkey revocation`);
+    assert.ok(blocks.some(block => /remov/i.test(block) && /MCP/i.test(block) && /revok|delet/i.test(block)
+      && /creat|own/i.test(block)), `${name} says removing a user revokes the keys they own`);
+    assert.ok(blocks.some(block => /bootstrap|user:invite|user-invite\.mjs/i.test(block) && /email|send|sent/i.test(block)
+      && /print/i.test(block) && /after|before|success/i.test(block)), `${name} says bootstrap emails before printing its link`);
+  }
 });

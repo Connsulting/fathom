@@ -4,8 +4,12 @@
 //
 // Differences from the mock:
 //  - No review harness, no demo switcher, no design switcher, nothing in localStorage.
-//  - The scenario comes from GET /api/scenario at boot. The server has already merged live state
-//    (rec status, tasks, wake) and adds `scenario.live`; api.state is derived from it.
+//  - Boot reads GET /api/auth/session first. A real store with no signed-in identity goes to
+//    /signin before any household request; a demo store is open (identity null). The scenario
+//    then comes from GET /api/scenario. The server has already merged live state (rec status,
+//    tasks, wake) and adds `scenario.live`; api.state is derived from it.
+//  - Any later 401 drops the scenario from memory and the page, then goes to /signin (leaving
+//    one notice code in sessionStorage for that page to explain why).
 //  - Actions POST to the API, replace the scenario with the one in the response, then notify. They
 //    return a Promise (designs may ignore it). Requests run one at a time, in order. A failed
 //    request keeps the old state and shows a dismissible error line (role=alert).
@@ -85,7 +89,8 @@ const tokenOpts = {
 // ---------------------------------------------------------------- scenario and derived state
 
 let S = null;           // scenario object from the API (replaced after every action)
-let IDENT = null;       // { login, name } from GET /api/identity, or null (demo, or the fetch failed)
+let IDENT = null;       // { id, email, role, login, name } from GET /api/auth/session, or null (demo)
+let leaving = false;    // set once a 401 sent the page to /signin
 let version = 0;        // bumped on every change; caches key off it
 let routeStep = null;   // onboarding step of the current route (route state, not stored)
 const pendingPicks = {}; // war-game picks sent but not yet answered (shown immediately)
@@ -251,6 +256,7 @@ function urlWith(hash) {
 }
 
 function applyRoute(r, opts) {
+  if (leaving) return false;
   opts = opts || {};
   const next = normalizeRoute(r);
   const h = routeHash(next);
@@ -304,6 +310,7 @@ function hideError() {
 }
 
 function showError(message) {
+  if (leaving) return;
   hideError();
   const el = document.createElement('div');
   el.className = 'fx-err';
@@ -322,9 +329,21 @@ function showError(message) {
   errEl = el;
 }
 
-// The identity gate answered 401: reload so the server serves its 401 page.
-function reloadUnauthorized() {
-  try { window.location.reload(); } catch (e) { /* ignore */ }
+// The session is gone (a protected request answered 401, or boot found no identity): drop the
+// household from memory and the page, then go to sign in. Runs once. `notice` is the code the
+// sign-in page explains (null for a plain signed-out boot).
+const NOTICE_KEY = 'fathom.auth.notice';
+function signedOut(notice) {
+  if (leaving) return;
+  leaving = true;
+  hideError();
+  closePopover();
+  unmountCurrent();
+  S = null;
+  version += 1;
+  if (root) { root.className = ''; root.innerHTML = ''; }
+  if (notice) { try { window.sessionStorage.setItem(NOTICE_KEY, notice); } catch (e) { /* the page still works */ } }
+  try { window.location.replace('/signin'); } catch (e) { /* ignore */ }
 }
 
 // A FormData body goes out as multipart with no content-type header (the browser sets the boundary).
@@ -343,7 +362,7 @@ async function postJson(path, body) {
   }
   let data = null;
   try { data = await res.json(); } catch (e) { data = null; }
-  if (res.status === 401) reloadUnauthorized();
+  if (res.status === 401) signedOut('expired');
   if (!res.ok) {
     const err = new Error((data && typeof data.error === 'string' && data.error) || 'The server answered ' + res.status + '.');
     err.status = res.status;
@@ -388,7 +407,7 @@ async function postStream(path, body, onEvent) {
   } catch (e) {
     throw broken(null);
   }
-  if (res.status === 401) reloadUnauthorized();
+  if (res.status === 401) signedOut('expired');
   if (!/text\/event-stream/i.test(res.headers.get('content-type') || '')) {
     let data = null;
     try { data = await res.json(); } catch (e) { data = null; }
@@ -445,7 +464,7 @@ const threadIds = (scenario) => new Set(arr(scenario && scenario.live && scenari
 // Resolves { scenario, key } or null after RECOVER_FOR_MS.
 async function recoverTurn({ key, before, ids }) {
   const until = Date.now() + RECOVER_FOR_MS;
-  while (Date.now() < until) {
+  while (!leaving && Date.now() < until) {
     await new Promise(r => setTimeout(r, RECOVER_EVERY_MS));
     let next;
     try { next = await loadScenario(); } catch (e) { continue; }
@@ -546,6 +565,7 @@ function newThreadStream(q, onEvent) {
 
 // Swap in a new scenario and keep the route valid for it (for example onboarding finishing).
 function applyScenario(next) {
+  if (leaving) return;
   S = next;
   version += 1;
   if (cur) {
@@ -832,6 +852,7 @@ async function packEntry(packId, entryId) {
     const res = await fetch('/api/packs/' + encodeURIComponent(packId) + '/entries/' + encodeURIComponent(entryId), {
       headers: { accept: 'application/json' }, credentials: 'same-origin', cache: 'no-store',
     });
+    if (res.status === 401) signedOut('expired');
     if (!res.ok) return null;
     const data = await res.json();
     const e = data && data.entry;
@@ -887,6 +908,7 @@ const retryable = err => !!err && (err.status == null || RETRY_STATUS.has(err.st
 async function confirmItemNow(id) {
   try {
     const res = await fetch('/api/confirm/' + encodeURIComponent(id), { headers: { accept: 'application/json' }, credentials: 'same-origin', cache: 'no-store' });
+    if (res.status === 401) signedOut('expired');
     if (!res.ok) return null;
     const d = await res.json();
     return d && d.item && typeof d.item === 'object' ? d.item : null;
@@ -1083,7 +1105,7 @@ const api = {
   packEntry,
   buildYourPlans,
   ingest,
-  identity: () => (IDENT ? { login: IDENT.login, name: IDENT.name } : null),
+  identity: () => (IDENT ? { ...IDENT } : null),
   upload,
   simplefinConnect,
   simplefinSync,
@@ -1215,26 +1237,38 @@ function registerDesign(def) {
 
 async function loadScenario() {
   const res = await fetch('/api/scenario', { headers: { accept: 'application/json' }, credentials: 'same-origin', cache: 'no-store' });
-  if (res.status === 401) reloadUnauthorized();
+  if (res.status === 401) signedOut('expired');
   if (!res.ok) throw new Error('The server answered ' + res.status + '.');
   const data = await res.json();
   if (!data || typeof data !== 'object' || !data.meta) throw new Error('The server sent an unexpected reply.');
   return data;
 }
 
-async function loadIdentity() {
+// The signed-in user in the shape api.identity() has always had ({ login, name }, both the email
+// here) plus id, email and role. Null when nobody is signed in or on a demo store.
+function identityOf(i) {
+  if (!i || typeof i !== 'object') return null;
+  const email = typeof i.email === 'string' ? i.email : '';
+  const login = typeof i.login === 'string' && i.login ? i.login : email;
+  const name = typeof i.name === 'string' && i.name ? i.name : login;
+  if (!login) return null;
+  return { id: i.id == null ? null : String(i.id), email: email || login, role: i.role === 'admin' ? 'admin' : 'member', login, name };
+}
+
+// GET /api/auth/session, before any household request: { demo, identity }.
+async function loadSession() {
+  let res;
   try {
-    const res = await fetch('/api/identity', { headers: { accept: 'application/json' }, credentials: 'same-origin', cache: 'no-store' });
-    if (!res.ok) return null;
-    const d = await res.json();
-    const i = d && d.identity;
-    if (!i || typeof i !== 'object') return null;
-    const login = typeof i.login === 'string' ? i.login : '';
-    const name = typeof i.name === 'string' && i.name ? i.name : login;
-    return login || name ? { login, name } : null;
+    res = await fetch('/api/auth/session', { headers: { accept: 'application/json' }, credentials: 'same-origin', cache: 'no-store' });
   } catch (e) {
-    return null;
+    throw new Error('The server could not be reached.');
   }
+  if (res.status === 401) return { demo: false, identity: null };
+  if (!res.ok) throw new Error('The server answered ' + res.status + '.');
+  let d = null;
+  try { d = await res.json(); } catch (e) { d = null; }
+  if (!d || typeof d !== 'object') throw new Error('The server sent an unexpected reply.');
+  return { demo: d.demo === true, identity: identityOf(d.identity) };
 }
 
 async function boot() {
@@ -1245,10 +1279,13 @@ async function boot() {
     document.body.appendChild(root);
   }
   try {
-    const [scenario, ident] = await Promise.all([loadScenario(), loadIdentity()]);
-    S = scenario;
-    IDENT = ident;
+    // The session comes first: a real store never asks for the household without a signed-in user.
+    const session = await loadSession();
+    if (!session.demo && !session.identity) { signedOut(null); return; }
+    IDENT = session.identity;
+    S = await loadScenario();
   } catch (e) {
+    if (leaving) return;
     bootMessage('Fathom could not load your plan.', (e && e.message ? e.message : 'Unknown error.'), true);
     return;
   }

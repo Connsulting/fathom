@@ -204,7 +204,7 @@ describe('key routes: Host allowlist (DNS rebinding)', () => {
 describe('GET /api/mcp', () => {
   let s;
   // The Host allowlist covers every /api route, so the DNS name these tests send is configured.
-  before(async () => { s = await spawnServer({ env: { FATHOM_ENGINE: 'fake', FATHOM_ALLOWED_HOSTS: 'fathom.example.test' } }); }, T);
+  before(async () => { s = await spawnServer({ env: { FATHOM_ENGINE: 'fake', FATHOM_PUBLIC_URL: undefined, FATHOM_ALLOWED_HOSTS: 'fathom.example.test' } }); }, T);
   after(async () => { if (s) await s.stop(); });
 
   test('url defaults to http on the request Host; tools and scopes are listed', async () => {
@@ -226,21 +226,18 @@ describe('GET /api/mcp', () => {
     }
   });
 
-  test('url follows the Host header and X-Forwarded-Proto', async () => {
-    assert.equal((await ok(mcpInfo(s, { host: 'fathom.example.test:8443' }))).json.url, 'http://fathom.example.test:8443/mcp');
-    assert.equal((await ok(mcpInfo(s, { host: 'fathom.example.test', 'x-forwarded-proto': 'https' }))).json.url, 'https://fathom.example.test/mcp');
-    assert.equal((await ok(mcpInfo(s, { host: 'fathom.example.test', 'x-forwarded-proto': 'https, http' }))).json.url, 'https://fathom.example.test/mcp');
-    assert.equal((await ok(mcpInfo(s, { host: 'fathom.example.test', 'x-forwarded-proto': 'http' }))).json.url, 'http://fathom.example.test/mcp');
-    assert.equal((await ok(mcpInfo(s, { host: 'fathom.example.test', 'x-forwarded-proto': 'ftp' }))).json.url, 'http://fathom.example.test/mcp');
-    assert.equal((await ok(mcpInfo(s, { host: 'fathom.example.test', 'x-forwarded-proto': 'javascript' }))).json.url, 'http://fathom.example.test/mcp');
+  test('demo URL without public configuration uses the socket scheme and ignores forwarding headers', async () => {
+    for (const forwarded of ['https', 'https, http', 'http', 'ftp', 'javascript']) {
+      const r = await ok(mcpInfo(s, { host: 'fathom.example.test:8443', 'x-forwarded-proto': forwarded, 'x-forwarded-host': 'foreign.example.test' }));
+      assert.equal(r.json.url, 'http://fathom.example.test:8443/mcp');
+    }
   });
 
-  test('FATHOM_PUBLIC_URL wins over Host and keeps its path', T3, async () => {
+  test('configured MCP URL is always the public origin plus /mcp', T3, async () => {
     const cases = [
       ['https://fathom.example.test', 'https://fathom.example.test/mcp'],
       ['https://fathom.example.test/', 'https://fathom.example.test/mcp'],
-      ['https://fathom.example.test/base/', 'https://fathom.example.test/base/mcp'],
-      ['http://fathom.example.test:9000/mcp', 'http://fathom.example.test:9000/mcp'],
+      ['http://localhost:9000', 'http://localhost:9000/mcp'],
     ];
     for (const [publicUrl, want] of cases) {
       await withServer({ env: { FATHOM_ENGINE: 'fake', FATHOM_PUBLIC_URL: publicUrl, FATHOM_ALLOWED_HOSTS: 'other.example.test' } }, async p => {
@@ -267,19 +264,19 @@ describe('routes and config', () => {
     assert.deepEqual(c.allowedHosts, []);
   });
 
-  test('loadConfig accepts an http(s) public url and lowercases allowed hosts', () => {
-    const c = loadConfig({ FATHOM_PUBLIC_URL: 'https://Fathom.Example.Test/base', FATHOM_ALLOWED_HOSTS: 'Agent.Example.Test,box.example.test:8080' });
+  test('loadConfig accepts HTTPS DNS names and explicit HTTP localhost ports', () => {
+    const c = loadConfig({ FATHOM_PUBLIC_URL: 'https://Fathom.Example.Test', FATHOM_ALLOWED_HOSTS: 'Agent.Example.Test,box.example.test:8080' });
     assert.equal(typeof c.publicUrl, 'string');
     const u = new URL(c.publicUrl);
     assert.equal(u.protocol, 'https:');
     assert.equal(u.host, 'fathom.example.test');
     assert.deepEqual(c.allowedHosts, ['agent.example.test', 'box.example.test:8080']);
-    assert.equal(loadConfig({ FATHOM_PUBLIC_URL: 'http://10.0.0.5:8080' }).publicUrl !== null, true);
+    assert.equal(new URL(loadConfig({ FATHOM_PUBLIC_URL: 'http://localhost:8080' }).publicUrl).origin, 'http://localhost:8080');
   });
 
   test('loadConfig refuses a bad public url', () => {
     for (const bad of ['not a url', 'ftp://fathom.example.test', 'javascript:alert(1)', 'https://user:pw@fathom.example.test',
-      'https://user@fathom.example.test', 'https://fathom.example.test/?q=1', 'https://fathom.example.test/#frag', 'fathom.example.test']) {
+      'https://user@fathom.example.test', 'https://fathom.example.test/base', 'http://example.test', 'http://localhost', 'http://127.0.0.1:8080', 'https://127.0.0.1', 'https://[::1]', 'https://fathom.example.test/?q=1', 'https://fathom.example.test/#frag', 'fathom.example.test']) {
       assert.throws(() => loadConfig({ FATHOM_PUBLIC_URL: bad }), ConfigError, bad);
     }
   });

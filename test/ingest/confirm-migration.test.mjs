@@ -46,18 +46,37 @@ const accountOf = (mask) => {
   return { id: P.accountIdOf(identity), identity };
 };
 
+function applyThrough(db, target) {
+  const done = new Set(db.prepare('SELECT id FROM schema_migrations').all().map((row) => row.id));
+  const record = db.prepare('INSERT INTO schema_migrations (id, name, applied_at) VALUES (?, ?, ?)');
+  const applied = [];
+  for (const migration of DB.listMigrations().filter((m) => m.id <= target && !done.has(m.id))) {
+    const sql = readFileSync(migration.file, 'utf8');
+    const rebuild = /^-- REBUILDS_TABLE\b/m.test(sql);
+    if (rebuild) db.exec('PRAGMA foreign_keys = OFF');
+    db.exec('BEGIN');
+    try {
+      db.exec(sql);
+      assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), []);
+      record.run(migration.id, migration.name, AT);
+      db.exec('COMMIT');
+      applied.push(migration.id);
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    } finally {
+      if (rebuild) db.exec('PRAGMA foreign_keys = ON');
+    }
+  }
+  return applied;
+}
+
 async function storeAt014() {
   const dataDir = await tempDir('fathom-confirm-migration-');
   const keyDir = await tempDir('fathom-key-');
   const db = DB.openDb(join(dataDir, 'fathom.sqlite'));
   db.exec('CREATE TABLE IF NOT EXISTS schema_migrations (id INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)');
-  const record = db.prepare('INSERT INTO schema_migrations (id, name, applied_at) VALUES (?, ?, ?)');
-  for (const m of DB.listMigrations().filter((x) => x.id <= 14)) {
-    db.exec('BEGIN');
-    db.exec(readFileSync(m.file, 'utf8'));
-    record.run(m.id, m.name, AT);
-    db.exec('COMMIT');
-  }
+  applyThrough(db, 14);
   DB.setSetting(db, 'mode', 'real');
   const keyFile = join(keyDir, 'data.key');
   writeFileSync(keyFile, randomBytes(32), { mode: 0o600 });
@@ -122,19 +141,23 @@ const snapshot = (db) => Object.fromEntries(['accounts', 'confirm_items', 'confi
   [t, db.prepare(`SELECT * FROM "${t}" ORDER BY rowid`).all().map((r) => JSON.stringify({ ...r }))]));
 
 test('migrate applies the confirm-context migration, creates exactly its four tables and changes no stored row', () => withOldStore((s, ids) => {
-  const tables = DB.listTables(s.db);
-  for (const t of Object.keys(NEW_TABLES)) assert.ok(!tables.includes(t), `precondition: ${t} is new`);
   const before = snapshot(s.db);
 
   const mig = DB.listMigrations().find((m) => m.name === 'confirm-context');
   assert.ok(mig, 'a confirm-context migration exists');
   assert.ok(mig.id > 14);
-  assert.ok(DB.migrate(s.db).applied.includes(mig.id));
+  applyThrough(s.db, mig.id - 1);
+  assert.deepEqual(snapshot(s.db), before, 'preceding migrations keep every stored row');
+  const tables = DB.listTables(s.db);
+  for (const t of Object.keys(NEW_TABLES)) assert.ok(!tables.includes(t), `precondition: ${t} is new`);
+  assert.deepEqual(applyThrough(s.db, mig.id), [mig.id]);
   const added = DB.listTables(s.db).filter((t) => !tables.includes(t)).sort();
   assert.deepEqual(added, Object.keys(NEW_TABLES).sort(), 'exactly the four tables');
   for (const [t, cols] of Object.entries(NEW_TABLES)) assert.deepEqual(columnsOf(s.db, t), cols, `${t} columns`);
   for (const t of tables) assert.ok(DB.listTables(s.db).includes(t), `${t} is kept`);
   assert.deepEqual(snapshot(s.db), before, 'every stored row is unchanged');
+  assert.deepEqual(DB.migrate(s.db).applied, DB.listMigrations().filter((m) => m.id > mig.id).map((m) => m.id));
+  assert.deepEqual(snapshot(s.db), before, 'later migrations keep every stored row');
 
   const owner = C.getItem(s.db, ids.ownerId);
   assert.equal(owner.status, 'answered');

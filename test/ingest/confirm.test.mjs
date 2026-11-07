@@ -5,9 +5,8 @@
 
 import test, { describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import http from 'node:http';
 import { readFileSync, rmSync } from 'node:fs';
-import { src, spawnServer, request, postJson, SERVER_TIMEOUT, TEST_OWNER } from '../helpers/server.mjs';
+import { src, spawnServer, request, postJson, SERVER_TIMEOUT, serveAppFixture } from '../helpers/server.mjs';
 import {
   fixture, fixturePath, textFile, aggregatorFile, activityFile, northwindFile, realStore, fakeEngine, offEngine, all, one, count, items, NOW,
 } from '../helpers/ingest.mjs';
@@ -289,20 +288,15 @@ describe('fact check', () => {
     await P.ingestFile(s.db, fixture('notes.md'), s.opts(await fakeEngine([[NOTES_A]])));
     F.upsertFact(s.db, { key: 'household.state', value: 'NM', src: 'you', asOf: '2032-03-10', confirmed: true });
     const st = bySubject(s.db, '|household.state|"CO"');
-    const { createHandler } = await src('src/api/router.mjs');
-    // A real store: the handler admits TEST_OWNER, which postJson sends by default.
-    const config = { ...s.config, ownerLogins: TEST_OWNER, ownerLoginsFile: null };
-    const server = http.createServer(createHandler({ db: s.db, config, engine: await offEngine() }));
-    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const server = await serveAppFixture({ authenticated: true, db: s.db, config: s.config, engine: await offEngine() });
     try {
-      const base = `http://127.0.0.1:${server.address().port}`;
-      const stale = await postJson(base, `/api/confirm/${st.id}/answer`, { answer: 'yes' });
+      const stale = await server.postJson(`/api/confirm/${st.id}/answer`, { answer: 'yes' });
       assert.equal(stale.status, 409, stale.text.slice(0, 300));
       assert.equal(typeof stale.json.error, 'string');
-      const ok = await postJson(base, `/api/confirm/${bySubject(s.db, '|household.dependents|2').id}/answer`, { answer: 'yes' });
+      const ok = await server.postJson(`/api/confirm/${bySubject(s.db, '|household.dependents|2').id}/answer`, { answer: 'yes' });
       assert.equal(ok.status, 200, ok.text.slice(0, 300));
     } finally {
-      await new Promise((resolve) => { server.close(resolve); server.closeAllConnections(); });
+      await server.close();
     }
     assert.equal(F.getFacts(s.db)['household.state'], 'NM');
   }));

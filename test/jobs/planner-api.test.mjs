@@ -5,16 +5,15 @@
 
 import test, { after, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import http from 'node:http';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runPlanning, PlannerError, PLAN_JOB_ID } from '../../src/jobs/planner.mjs';
 import { createScheduler, defaultHandlers, JOBS } from '../../src/jobs/scheduler.mjs';
-import { createHandler, routes } from '../../src/api/router.mjs';
+import { routes } from '../../src/api/router.mjs';
 import { loadConfig } from '../../src/config.mjs';
 import { openStore } from '../../src/server.mjs';
 import { openDb, listTables, DB_FILE } from '../../src/store/db.mjs';
-import { postJson, runCommand, TEST_OWNER } from '../helpers/server.mjs';
+import { runCommand, serveAppFixture } from '../helpers/server.mjs';
 import { scratch, buildRealStore, dumpTables, activeRecIds, parseJson, PACKS_DIR } from '../helpers/real-store.mjs';
 import { planRun, claimPlanRun } from '../helpers/plan.mjs';
 
@@ -23,8 +22,7 @@ const S = scratch();
 after(() => S.cleanup());
 
 const plan = (db, opts = {}) => planRun(db, { engine: opts.engine ?? null, now: opts.now ?? NOW, dataDir: opts.dataDir ?? null });
-// Real mode admits only FATHOM_OWNER_LOGINS; postJson sends TEST_OWNER as Tailscale-User-Login.
-const realConfig = dir => loadConfig({ FATHOM_DATA: dir, FATHOM_DEMO: '0', FATHOM_ENGINE: 'off', FATHOM_CLOCK: NOW, FATHOM_OWNER_LOGINS: TEST_OWNER });
+const realConfig = dir => loadConfig({ FATHOM_DATA: dir, FATHOM_DEMO: '0', FATHOM_ENGINE: 'off', FATHOM_CLOCK: NOW });
 
 // Amounts from the synthetic dataset and its main results; none may leak into counts or notes.
 const AMOUNTS = ['143175', '143,175', '171810', '171,810', '18000', '18,000', '25000', '25,000', '40000', '40,000', '50000', '50,000', '290147', '290,147', '6000', '15000'];
@@ -43,15 +41,8 @@ function allTables(db) {
 // The in-process router with the server's scheduler (default handlers, not started).
 async function serve(db, config, engine = null) {
   const scheduler = createScheduler({ db, config, engine, handlers: defaultHandlers({ publicUrl: null }), tickMs: 3600000, log: { log() {} } });
-  const server = http.createServer(createHandler({ db, config, engine, scheduler }));
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  return {
-    baseUrl: `http://127.0.0.1:${server.address().port}`,
-    close: async () => {
-      await new Promise(resolve => { server.close(resolve); server.closeAllConnections(); });
-      await scheduler.stop();
-    },
-  };
+  const app = await serveAppFixture({ authenticated: true, db, config, engine, scheduler });
+  return { ...app, async close() { await app.close(); await scheduler.stop(); } };
 }
 
 describe('runPlanning', () => {
@@ -181,7 +172,7 @@ describe('POST /api/jobs/plan/run', () => {
     const db = S.track(await buildRealStore(dir));
     const app = await serve(db, realConfig(dir));
     try {
-      const r = await postJson(app.baseUrl, '/api/jobs/plan/run', {});
+      const r = await app.postJson('/api/jobs/plan/run', {});
       assert.equal(r.status, 200, r.text.slice(0, 300));
       assert.equal(r.json.run.status, 'ok');
       assert.equal(r.json.run.jobId, 'plan');
@@ -202,7 +193,7 @@ describe('POST /api/jobs/plan/run', () => {
     const before = allTables(db);
     const app = await serve(db, loadConfig({ FATHOM_DATA: dir, FATHOM_ENGINE: 'off' }));
     try {
-      const r = await postJson(app.baseUrl, '/api/jobs/plan/run', {});
+      const r = await app.postJson('/api/jobs/plan/run', {});
       assert.equal(r.status, 409);
       assert.equal(r.json.error, 'planning runs on real stores only');
     } finally {
