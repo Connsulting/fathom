@@ -42,3 +42,12 @@ test('cash flow attaches partial and missing-month gaps to monthly figures and t
   const old=await s.call('cash_flow',{from:'2025-01',to:'2025-02',scope:'household'});
   assert.equal(old.gaps.find(g=>g.code==='incomplete_month').count,2);
 });
+
+test('expected-value grading recognizes an unsigned net cash outflow without accepting an inflow', async () => {
+  const {gradeExpected}=await import('../evals/graders.mjs');
+  assert.equal(gradeExpected('The net cash outflow is $5,031.16.',[-5031.16]).ok,true);
+  assert.equal(gradeExpected('The net cash inflow is $5,031.16.',[-5031.16]).ok,false);
+  assert.equal(gradeExpected('The returned result is $5,031.16.',[-5031.16]).ok,false);
+  assert.equal(gradeExpected('The net cash outflow is $5,031.16.',[5031.16]).ok,false);
+  assert.equal(gradeExpected('The net cash outflow is $5,031.16.',[-5000]).ok,false);
+});

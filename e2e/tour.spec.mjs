@@ -1,7 +1,7 @@
 // Guided product tour: a short walk through the main screens, one callout per stop, declared in
 // TOUR_STOPS (web/horizon/screens/tour.js). On a public demo server it starts on its own once per
 // browser; on the private demo server (the config's baseURL) it starts only from Settings or the
-// quick switcher. The public demo server runs in-process here, like e2e/public-demo.spec.mjs, and
+// quick switcher; for a signed-in user it starts once after onboarding, from the server's flag. The public demo server runs in-process here, like e2e/public-demo.spec.mjs, and
 // every browser context on it is a fresh sandbox.
 // Tags: @tour-ac1 the walk, a missing anchor (including a missing last stop) and the Ask panel the
 // Ask stop opens and closes, @tour-ac2 layout, dialog semantics, keys and focus at desktop and
@@ -360,6 +360,55 @@ test.describe('tour on the private demo, desktop', () => {
     const first = await stopAfter(page, null);
     expect(first, 'the switcher action opens the first stop').toMatchObject({ id: TOUR_STOPS[0].id, k: 1 });
     await expect(countEl(page)).toHaveText(`1 of ${N}`);
+  });
+
+  // The signed-in rule: the server flag (scenario.live.tourPending) starts the tour once, the end
+  // is reported to POST /api/tour/seen, and with the flag cleared a reload and another browser
+  // (a fresh context with no local storage) stay closed. The private demo has no accounts, so the
+  // server's per-user flag is played by routes over this server's real scenario; the server side
+  // is covered by test/tour-user.test.mjs.
+  test('@tour-ac3 a pending server flag starts the tour once, and finishing reports it so it never returns', async ({ page, browser, baseURL }) => {
+    let pending = true;
+    let seen = 0;
+    const withFlag = async (route) => {
+      const res = await route.fetch();
+      const json = await res.json();
+      json.live.tourPending = pending;
+      await route.fulfill({ response: res, json });
+    };
+    const wire = async (p) => {
+      await p.route('**/api/scenario', withFlag);
+      await p.route('**/api/tour/seen', async (route) => {
+        seen += 1;
+        pending = false;
+        const res = await route.fetch({ url: `${baseURL}/api/scenario`, method: 'GET', postData: undefined });
+        const json = await res.json();
+        json.live.tourPending = false;
+        await route.fulfill({ response: res, json });
+      });
+    };
+    await wire(page);
+    await page.goto('/');
+    await homeReady(page);
+    expect(await stopAfter(page, null), 'auto-started on the first stop').toMatchObject({ id: TOUR_STOPS[0].id, k: 1, of: N });
+    await page.keyboard.press('Escape');
+    await expect(dialog(page)).toHaveCount(0, { timeout: STEP_WAIT });
+    await expect.poll(() => seen, { timeout: STEP_WAIT }).toBe(1);
+    await page.reload();
+    await homeReady(page);
+    await page.waitForTimeout(1000);
+    await expect(page.locator('.h-tour')).toHaveCount(0);
+
+    const other = await browser.newContext({ baseURL, viewport: DESKTOP });
+    try {
+      const second = await other.newPage();
+      await wire(second);
+      await second.goto('/');
+      await homeReady(second);
+      await second.waitForTimeout(1000);
+      await expect(second.locator('.h-tour')).toHaveCount(0);
+    } finally { await other.close(); }
+    expect(seen, 'the end was reported once').toBe(1);
   });
 
   test.describe('with the P&L read failing', () => {

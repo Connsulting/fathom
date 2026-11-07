@@ -31,6 +31,7 @@ import { wrapBlocks } from '../shared/answer-text.mjs';
 import { seedDemo } from '../../demo/seed.mjs';
 import { clearStoredFiles, openVault, VaultError } from '../ingest/vault.mjs';
 import { HttpError } from './http.mjs';
+import { tourPending, setTourPending } from '../auth/tour.mjs';
 import { parseRefs } from './context-refs.mjs';
 import { upsertFact } from '../store/facts.mjs';
 import { setRecOwner } from '../store/recs.mjs';
@@ -56,6 +57,8 @@ export function scenarioOf(ctx) {
   queueAccountPairs(ctx.db);
   const scenario = buildScenario(ctx.db, { clock: ctx.config && ctx.config.clock, engineMode: ctx.config && ctx.config.engine, packs: ctx.packs || null });
   scenario.live.publicDemo = ctx.config?.publicDemo === true;
+  // The signed-in user's own tour flag; false for a demo or any caller without an identity.
+  scenario.live.tourPending = tourPending(ctx);
   return scenario;
 }
 
@@ -671,6 +674,9 @@ export function onboarding(ctx) {
   if (!Number.isInteger(step) || step < 0 || step > 6) throw new HttpError(400, 'step must be an integer from 0 to 6');
   const cur = getSetting(ctx.db, 'onboarding', { done: false, step: 0 }) || { done: false, step: 0 };
   setSetting(ctx.db, 'onboarding', step === 6 ? { done: true, step: 6 } : { done: !!cur.done, step });
+  // Only the not-done to done transition starts the tour, so users who finished onboarding before
+  // the tour existed are never flagged.
+  if (step === 6 && !cur.done) setTourPending(ctx, true);
   return { scenario: scenarioOf(ctx) };
 }
 
