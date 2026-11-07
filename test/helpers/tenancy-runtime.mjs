@@ -604,7 +604,8 @@ const strip = (row, keys) => { const out = { ...row }; for (const k of keys) del
 const dirEntries = dir => (existsSync(dir) ? readdirSync(dir).sort() : null);
 
 // The end state of a completed migration with operation ids normalized to OP, comparable across
-// runs of copies of one fixture: published store digests (schema_migrations without applied_at),
+// runs of copies of one fixture: published store digests (schema_migrations without applied_at,
+// simplefin_connection without its freshly sealed access_blob; the plaintext is in `vault`),
 // platform rows, vault plaintexts, pack and outbox files, retired legacy entries and root entries.
 export async function endState(fx) {
   const { dataDir, householdId } = fx;
@@ -629,7 +630,7 @@ export async function endState(fx) {
   return {
     rootEntries: readdirSync(dataDir).filter(n => !/-(wal|shm)$/.test(n)).map(norm).sort(),
     householdEntries: dirEntries(join(dataDir, 'households')),
-    store: tableDigests(join(rootPath, 'fathom.sqlite'), { schema_migrations: { omit: ['applied_at'] } }),
+    store: tableDigests(join(rootPath, 'fathom.sqlite'), { schema_migrations: { omit: ['applied_at'] }, simplefin_connection: { omit: ['access_blob'] } }),
     platform,
     vault,
     files: dirEntries(join(rootPath, 'files')),

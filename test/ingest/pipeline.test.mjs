@@ -63,9 +63,9 @@ describe('routing and persistence per fixture', () => {
     assert.deepEqual(JSON.parse(f.counts), r.counts);
     assert.match(f.source_id, /^ing:aggregator:/);
 
-    const blob = readFileSync(join(s.dataDir, f.stored_path));
+    const blob = readFileSync(join(s.root, f.stored_path));
     assert.ok(!blob.includes(Buffer.from('EXAMPLE SHOP')), 'stored bytes are encrypted');
-    const back = await V.readStoredFile({ dataDir: s.dataDir, key: s.key, id: r.fileId, storedPath: f.stored_path });
+    const back = await V.readStoredFile({ vault: await s.household.vault(), id: r.fileId, storedPath: f.stored_path, purpose: 'upload' });
     assert.ok(Buffer.from(back).equals(Buffer.from(file.bytes)));
 
     const tx = all(s.db, 'SELECT * FROM transactions ORDER BY date');
@@ -313,7 +313,7 @@ describe('interrupted ingest', () => {
   async function interrupted(s, file) {
     const hash = sha256(file.bytes);
     const fileId = fileIdOf(file.bytes);
-    const storedPath = await V.storeFile({ dataDir: s.config.dataDir, key: s.key, id: fileId, bytes: file.bytes });
+    const storedPath = await V.storeFile({ vault: await s.household.vault(), id: fileId, bytes: file.bytes, purpose: 'upload' });
     s.db.prepare(`INSERT INTO files (id, name, mime, size, sha256, uploaded_at, stored_path, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')`)
       .run(fileId, file.name, file.mime ?? null, file.bytes.length, hash, NOW, storedPath);
     return fileId;
@@ -411,12 +411,13 @@ describe('supersede', () => {
   }));
 });
 
-test('stored uploads exist only as encrypted blobs under files/', () => withStore(async (s) => {
+test('stored uploads exist only as encrypted blobs under the household root files/', () => withStore(async (s) => {
   const r = await P.ingestFile(s.db, fixture('positions.csv', 'text/csv'), s.opts(await offEngine()));
-  const path = join(s.dataDir, 'files', `${r.fileId}.bin`);
+  const path = join(s.root, 'files', `${r.fileId}.bin`);
   assert.ok(existsSync(path));
+  assert.ok(!existsSync(join(s.dataDir, 'files')), 'nothing is stored at the data root');
   const blob = readFileSync(path);
-  assert.equal(blob.subarray(0, 5).toString('latin1'), 'FTHM1');
+  assert.equal(blob.subarray(0, 5).toString('latin1'), 'FTHM2');
   assert.ok(!blob.includes(Buffer.from('Example Fund')));
 }));
 
@@ -779,7 +780,7 @@ describe('bounded parsing (D1)', () => {
     assert.equal(f.status, 'too_large');
     assert.equal(f.note, 'limit_exceeded');
     assert.deepEqual(JSON.parse(f.counts).warningCodes, { limit_exceeded: 1 });
-    const back = await V.readStoredFile({ dataDir: s.dataDir, key: s.key, id: r.fileId, storedPath: f.stored_path });
+    const back = await V.readStoredFile({ vault: await s.household.vault(), id: r.fileId, storedPath: f.stored_path, purpose: 'upload' });
     assert.ok(Buffer.from(back).equals(Buffer.from(file.bytes)), 'the encrypted bytes are kept');
     for (const table of ['transactions', 'balances', 'positions', 'pnl_lines', 'tax_payments', 'documents']) assert.equal(count(s.db, table), 0, `${table} untouched`);
   }
@@ -909,7 +910,7 @@ describe('no plaintext notes (D2)', () => {
 // or broken pack dir marked fact-changing uploads failed after their rows were stored).
 describe('pack refresh failure after commit', () => {
   test('a broken your-plans pack does not mark a fact-changing file failed', () => withStore(async (s) => {
-    const plans = join(s.dataDir, 'packs', 'your-plans');
+    const plans = join(s.root, 'packs', 'your-plans');
     mkdirSync(plans, { recursive: true });
     writeFileSync(join(plans, 'manifest.json'), '{"id": "Broken Pack"}');
     const note = textFile('household-notes.md', '# Synthetic notes\n\nWe keep two dependents in mind.\n', 'text/markdown');
@@ -1326,22 +1327,32 @@ describe('no silently dropped transactions (D3)', () => {
       const { workerData, parentPort } = require('node:worker_threads');
       (async () => {
         const { openDb } = await import(workerData.dbUrl);
+        const { openPlatform } = await import(workerData.platformUrl);
+        const { createInstanceSecrets } = await import(workerData.secretsUrl);
+        const { createHouseholdContext } = await import(workerData.runtimeUrl);
         const P = await import(workerData.pipelineUrl);
         const db = openDb(workerData.file);
+        const platform = openPlatform(workerData.platformFile);
         try {
+          const household = createHouseholdContext({
+            householdId: workerData.householdId, mode: 'real', db, config: workerData.config, platform,
+            secrets: createInstanceSecrets({ config: workerData.config, mode: 'real' }),
+          });
           const r = await P.ingestFile(db, { ...workerData.input, bytes: new Uint8Array(workerData.input.bytes) },
-            { config: workerData.config, now: workerData.now, key: Buffer.from(workerData.key) });
+            { config: workerData.config, now: workerData.now, household });
           parentPort.postMessage({ ok: true, result: r });
         } catch (error) {
           parentPort.postMessage({ ok: false, error: String(error && error.stack || error) });
-        } finally { db.close(); }
+        } finally { db.close(); platform.close(); }
       })();`;
     const { ROOT } = await import('../helpers/server.mjs');
     const worker = new Worker(code, {
       eval: true,
       workerData: {
         dbUrl: pathToFileURL(join(ROOT, 'src/store/db.mjs')).href, pipelineUrl: pathToFileURL(join(ROOT, 'src/ingest/pipeline.mjs')).href,
-        file: s.file, input: file, config: s.config, now: NOW, key: new Uint8Array(s.key),
+        platformUrl: pathToFileURL(join(ROOT, 'src/platform/db.mjs')).href, secretsUrl: pathToFileURL(join(ROOT, 'src/platform/secrets.mjs')).href,
+        runtimeUrl: pathToFileURL(join(ROOT, 'src/platform/runtime.mjs')).href,
+        file: s.file, platformFile: s.platformFile, householdId: s.householdId, input: file, config: s.config, now: NOW,
       },
     });
     try {

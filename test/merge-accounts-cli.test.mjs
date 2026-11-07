@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { realStore, NOW } from './helpers/ingest.mjs';
 import { seedDuplicate } from './helpers/account-merge.mjs';
-import { childEnv, dumpStore } from './helpers/server.mjs';
+import { childEnv, dumpStore, secretEnv } from './helpers/server.mjs';
 import { buildLegacyStore } from './helpers/tenancy.mjs';
 import { reopenItem, pendingItems } from '../src/ingest/confirm.mjs';
 
@@ -31,12 +31,12 @@ test('operator dry run is read only, apply-sure merges only sure and normal Undo
   try {
     const sure = await seedDuplicate(s, { sure: true });
     await seedDuplicate(s, { mask: '5837', sfKey: 'synthetic-unsure' });
-    const env = childEnv({ FATHOM_DATA: s.dataDir, FATHOM_DATA_KEY_FILE: s.keyFile, FATHOM_CLOCK: '2032-03-10', FATHOM_ENGINE: 'off' });
+    const env = childEnv({ FATHOM_DATA: s.dataDir, ...secretEnv(s.keys), FATHOM_CLOCK: '2032-03-10', FATHOM_ENGINE: 'off' });
     const before = dump(s.db);
-    const dry = spawnSync(process.execPath, ['scripts/merge-accounts.mjs'], { env, encoding:'utf8' });
+    const dry = spawnSync(process.execPath, ['scripts/merge-accounts.mjs', '--household', s.householdId], { env, encoding:'utf8' });
     assert.equal(dry.status,0,dry.stderr); assert.deepEqual(JSON.parse(dry.stdout),{ pairs:2,sure:1,likely:1,merged:0 });
     assert.deepEqual(dump(s.db),before);
-    const apply = spawnSync(process.execPath, ['scripts/merge-accounts.mjs','--apply-sure'], { env,encoding:'utf8' });
+    const apply = spawnSync(process.execPath, ['scripts/merge-accounts.mjs', '--household', s.householdId, '--apply-sure'], { env,encoding:'utf8' });
     assert.equal(apply.status,0,apply.stderr); assert.deepEqual(JSON.parse(apply.stdout),{pairs:2,sure:1,likely:1,merged:1});
     assert.equal(s.db.prepare('SELECT count(*) n FROM accounts').get().n,3);
     assert.equal(pendingItems(s.db).filter(i=>i.context.repair).length,1);
@@ -54,7 +54,7 @@ test('an unmigrated real store refuses platform_migration_required for dry run a
     const before = await dumpStore(legacy.file);
     const env = childEnv({ FATHOM_DATA: dataDir, FATHOM_CLOCK: '2032-03-10', FATHOM_ENGINE: 'off' });
     for (const args of [[], ['--apply-sure']]) {
-      const r = spawnSync(process.execPath, ['scripts/merge-accounts.mjs', ...args], { env, encoding:'utf8' });
+      const r = spawnSync(process.execPath, ['scripts/merge-accounts.mjs', '--household', 'hh-synthetic-legacy', ...args], { env, encoding:'utf8' });
       assert.equal(r.status, 1);
       assert.equal(r.stdout, '');
       assert.equal(r.stderr, 'merge-accounts: platform_migration_required\n');
@@ -68,12 +68,12 @@ test('apply-sure merges both month-end history pairs', async () => {
   try {
     historyPair(s.db, { fileId: 'file-check', sfId: 'sf-cash', sfKey: 'sf-cash', fileName: 'checking', fileKind: 'checking', connectedKind: 'cash', august: '2032-08-28' });
     historyPair(s.db, { fileId: 'file-biz', sfId: 'sf-biz', sfKey: 'sf-biz', fileName: 'business', fileKind: 'business', connectedKind: 'business', august: '2032-08-27' });
-    const env = childEnv({ FATHOM_DATA: s.dataDir, FATHOM_DATA_KEY_FILE: s.keyFile, FATHOM_CLOCK: '2032-09-15', FATHOM_ENGINE: 'off' });
-    const dry = spawnSync(process.execPath, ['scripts/merge-accounts.mjs'], { env, encoding:'utf8' });
+    const env = childEnv({ FATHOM_DATA: s.dataDir, ...secretEnv(s.keys), FATHOM_CLOCK: '2032-09-15', FATHOM_ENGINE: 'off' });
+    const dry = spawnSync(process.execPath, ['scripts/merge-accounts.mjs', '--household', s.householdId], { env, encoding:'utf8' });
     assert.equal(dry.status, 0, dry.stderr);
     assert.deepEqual(JSON.parse(dry.stdout), { pairs: 2, sure: 2, likely: 0, merged: 0 });
     assert.equal(s.db.prepare('SELECT count(*) n FROM accounts').get().n, 4);
-    const apply = spawnSync(process.execPath, ['scripts/merge-accounts.mjs', '--apply-sure'], { env, encoding:'utf8' });
+    const apply = spawnSync(process.execPath, ['scripts/merge-accounts.mjs', '--household', s.householdId, '--apply-sure'], { env, encoding:'utf8' });
     assert.equal(apply.status, 0, apply.stderr);
     assert.deepEqual(JSON.parse(apply.stdout), { pairs: 2, sure: 2, likely: 0, merged: 2 });
     assert.equal(s.db.prepare('SELECT count(*) n FROM accounts').get().n, 2);
@@ -94,8 +94,8 @@ test('apply-sure merges a survivor with a balance-only file and Undo restores it
       put.run('survivor', date, amount);
     for (const [date, amount] of [['2032-06-30', 1000], ['2032-07-31', 1100.5], ['2032-08-31', 900.25]])
       put.run('file-only', date, amount);
-    const env = childEnv({ FATHOM_DATA: s.dataDir, FATHOM_DATA_KEY_FILE: s.keyFile, FATHOM_CLOCK: '2032-09-15', FATHOM_ENGINE: 'off' });
-    const apply = spawnSync(process.execPath, ['scripts/merge-accounts.mjs', '--apply-sure'], { env, encoding: 'utf8' });
+    const env = childEnv({ FATHOM_DATA: s.dataDir, ...secretEnv(s.keys), FATHOM_CLOCK: '2032-09-15', FATHOM_ENGINE: 'off' });
+    const apply = spawnSync(process.execPath, ['scripts/merge-accounts.mjs', '--household', s.householdId, '--apply-sure'], { env, encoding: 'utf8' });
     assert.equal(apply.status, 0, apply.stderr);
     assert.deepEqual(JSON.parse(apply.stdout), { pairs: 1, sure: 1, likely: 0, merged: 1 });
     assert.equal(s.db.prepare('SELECT count(*) n FROM accounts').get().n, 1);

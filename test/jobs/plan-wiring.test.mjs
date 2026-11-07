@@ -9,12 +9,13 @@
 import test, { after, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { loadConfig } from '../../src/config.mjs';
-import { openStore } from '../../src/server.mjs';
+import { createInstance } from '../../src/platform/db.mjs';
+import { seedDemo } from '../../demo/seed.mjs';
 import { listTables } from '../../src/store/db.mjs';
 import { runPlanning } from '../../src/jobs/planner.mjs';
 import { createScheduler, defaultHandlers, SchedulerError } from '../../src/jobs/scheduler.mjs';
-import { serveAppFixture } from '../helpers/server.mjs';
-import { scratch, buildRealStore, dumpTables, parseJson, PACKS_DIR, CLOCK } from '../helpers/real-store.mjs';
+import { serveAppFixture, instanceSecretsOf } from '../helpers/server.mjs';
+import { scratch, buildRealStore, householdOf, dumpTables, parseJson, PACKS_DIR, CLOCK } from '../helpers/real-store.mjs';
 
 const S = scratch('fathom-plan-wiring-');
 after(() => S.cleanup());
@@ -27,20 +28,33 @@ const demoConfig = dir => loadConfig({ FATHOM_DATA: dir, FATHOM_ENGINE: 'off', F
 // 03:00 in New York on the store clock's date: the nightly plan period (02:00) of that day is due.
 const NIGHTLY = '2026-11-05T08:00:00Z';
 
+// The household context a scheduler on `db` runs its handlers in (the plan handler reads the
+// household root's packs); a demo store plans nothing and has none here.
+const contexts = new WeakMap();
+
 async function realStore() {
   const dir = S.dir();
-  return { dir, db: S.track(await buildRealStore(dir)) };
+  const db = S.track(await buildRealStore(dir));
+  contexts.set(db, householdOf(db));
+  return { dir, db };
 }
 
-function demoStore() {
+// A fresh demo instance, created and seeded as the server creates one on an empty data directory.
+async function demoStore() {
   const dir = S.dir();
-  const { db, platform } = openStore({ dataDir: dir, demo: 'auto' });
+  const { secrets } = await instanceSecretsOf(dir, 'demo');
+  const platformKey = secrets.platformKey();
+  const { db, platform } = createInstance(dir, { mode: 'demo', init: seedDemo, platformKey });
+  platformKey.fill(0);
   S.track(platform);
   return { dir, db: S.track(db) };
 }
 
 function schedulerOn(db, config, { now = () => new Date(), holder } = {}) {
-  return createScheduler({ db, config, handlers: { plan: defaultHandlers({ publicUrl: null }).plan }, now, tickMs: 3600000, log: quiet, ...(holder ? { holder } : {}) });
+  return createScheduler({
+    db, config, handlers: { plan: defaultHandlers({ publicUrl: null }).plan }, now, tickMs: 3600000, log: quiet,
+    household: () => contexts.get(db) ?? null, ...(holder ? { holder } : {}),
+  });
 }
 
 async function serve(db, config, scheduler) {
@@ -168,7 +182,7 @@ describe('plan runs on a real store go through the scheduler', () => {
 
 describe('plan runs on a demo store', () => {
   test('scheduled and ingest runs are recorded skipped and change no planner tables', async () => {
-    const { dir, db } = demoStore();
+    const { dir, db } = await demoStore();
     const before = nonJobTables(db);
     const s = schedulerOn(db, { clock: null, dataDir: dir }, { now: () => new Date(NIGHTLY) });
     try {
@@ -185,7 +199,7 @@ describe('plan runs on a demo store', () => {
   });
 
   test('POST /api/jobs/plan/run answers 409 with the error text and changes nothing', async () => {
-    const { dir, db } = demoStore();
+    const { dir, db } = await demoStore();
     const config = demoConfig(dir);
     const s = schedulerOn(db, config);
     const app = await serve(db, config, s);

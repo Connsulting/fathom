@@ -14,7 +14,8 @@ import {
 const T = { timeout: SERVER_TIMEOUT };
 const T3 = { timeout: SERVER_TIMEOUT * 3 };
 const KEY_RE = /^fathom_[A-Za-z0-9_-]{43}$/;
-const LIST_FIELDS = ['createdAt', 'id', 'lastUsedAt', 'name', 'revokedAt', 'scopes'];
+// MT-03: every key record names the household it is bound to.
+const LIST_FIELDS = ['createdAt', 'householdId', 'id', 'lastUsedAt', 'name', 'revokedAt', 'scopes'];
 
 async function ok(resPromise) {
   const r = await resPromise;
@@ -57,6 +58,7 @@ describe('key routes', () => {
     assert.equal(r.json.scenario, undefined, 'key responses carry no scenario');
     assert.deepEqual(Object.keys(record).sort(), LIST_FIELDS);
     assert.equal(record.name, 'Laptop agent');
+    assert.equal(record.householdId, s.householdId, 'the key is bound to the demo household');
     assert.deepEqual(record.scopes, ['read']);
     assert.equal(record.revokedAt, null);
     assert.equal(record.lastUsedAt, null);
@@ -136,23 +138,26 @@ describe('key routes', () => {
     await ok(revoke(s, record.id, { origin: `http://${host}` }));
   });
 
-  test('the store holds only a hash of the key', async () => {
+  test('the platform holds only a hash of the key', async () => {
     const { key, record } = (await ok(create(s, { name: 'Hash only', scopes: ['write:recs'] }))).json;
-    const rows = await readDb(s.dbFile, db => db.prepare('SELECT * FROM api_keys').all().map(r => ({ ...r })));
+    const rows = await readDb(s.platformFile, db => db.prepare('SELECT * FROM api_keys').all().map(r => ({ ...r })));
     const row = rows.find(r => r.id === record.id);
     assert.ok(row);
+    assert.equal(row.household_id, s.householdId);
     assert.match(row.key_hash, /^[0-9a-f]{64}$/);
     assert.deepEqual(JSON.parse(row.scopes), ['read', 'write:recs']);
     const body = key.slice(7);
     assert.ok(!JSON.stringify(rows).includes(body), 'no api_keys row holds the key');
-    for (const f of [s.dbFile, s.dbFile + '-wal']) {
-      if (existsSync(f)) assert.ok(!readFileSync(f).includes(body), `${f.endsWith('-wal') ? 'WAL' : 'store'} file does not hold the key`);
+    for (const f of [s.platformFile, s.platformFile + '-wal', s.dbFile, s.dbFile + '-wal']) {
+      if (existsSync(f)) assert.ok(!readFileSync(f).includes(body), `${f} does not hold the key`);
     }
   });
 
-  test('the server secret lives in the data dir as a 0600 file', () => {
-    const file = join(s.dataDir, 'api-key-secret');
+  // MT-03: the demo instance keeps its synthetic MCP secret under platform-secrets/ (0700).
+  test('the demo MCP secret lives in the data dir as a 0600 file', () => {
+    const file = join(s.dataDir, 'platform-secrets', 'mcp.secret');
     assert.ok(existsSync(file));
+    assert.equal(statSync(join(s.dataDir, 'platform-secrets')).mode & 0o777, 0o700);
     assert.equal(statSync(file).mode & 0o777, 0o600);
     assert.match(readFileSync(file, 'utf8').trim(), /^[0-9a-f]{64}$/);
   });

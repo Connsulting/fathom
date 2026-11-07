@@ -95,10 +95,12 @@ async function hits(ctx, id, extra = {}) {
   return r.results.filter(x => x.packId === id);
 }
 
+// Tool contexts carry the household root as dataDir (MT-03); a temp store's directory stands in as
+// one with no private Your plans pack, so only the repo packs load.
 async function freshDemo() {
   const t = await tempDb();
   seedDemo(t.db);
-  return { t, ctx: { db: t.db, now: NOW } };
+  return { t, ctx: { db: t.db, now: NOW, dataDir: t.dataDir } };
 }
 
 // ---------------------------------------------------------------- synthetic pack fixture
@@ -181,7 +183,7 @@ describe('demo store with the repo packs', () => {
   before(async () => {
     t = await tempDb();
     seedDemo(t.db);
-    ctx = { db: t.db, now: NOW };
+    ctx = { db: t.db, now: NOW, dataDir: t.dataDir };
     expected = expectedView(t.db);
   });
   after(() => t && t.close());
@@ -276,7 +278,7 @@ describe('demo store with the repo packs', () => {
   test('an empty real store still lists packs', async () => {
     const empty = await tempDb();
     try {
-      const list = await callTool('list_packs', {}, { db: empty.db, now: NOW });
+      const list = await callTool('list_packs', {}, { db: empty.db, now: NOW, dataDir: empty.dataDir });
       const want = activePacks(loadPacks([join(ROOT, 'packs')]), {});
       assert.deepEqual(list.map(p => [p.id, p.status]), want.map(e => [e.pack.id, e.status]));
     } finally {
@@ -495,7 +497,7 @@ describe('a real-store shaped row (untagged, id equal to the manifest id)', () =
   let ctx;
   beforeEach(async () => {
     t = await tempDb();
-    ctx = { db: t.db, now: NOW };
+    ctx = { db: t.db, now: NOW, dataDir: t.dataDir };
   });
   afterEach(() => t && t.close());
 

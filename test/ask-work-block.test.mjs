@@ -130,9 +130,11 @@ async function demoStore(t) {
   seedDemo(s.db);
   const config = loadConfig({ FATHOM_DATA: s.dataDir, FATHOM_ENGINE: 'fake', FATHOM_FAKE_STREAM_MS: '0' });
   const runtime = createRuntimeEngine({ db: s.db, config });
-  const packs = createLivePacks(s.db, { dataDir: s.dataDir });
+  // The temp store's directory stands in as the household root.
+  const root = s.dataDir;
+  const packs = createLivePacks(s.db, { dataDir: root });
   packs.refresh();
-  return { ...s, config, runtime, packs };
+  return { ...s, root, config, runtime, packs };
 }
 
 // The runtime with call() intercepted: each call sends the next script as request.fake.
@@ -157,7 +159,7 @@ function scripted(runtime, scripts = []) {
 
 async function askScripted(s, scripts, { onEvent, text = 'What should I keep?' } = {}) {
   const run = scripted(s.runtime, scripts);
-  const reply = await createLiveAnswerer({ engine: run.engine, packs: s.packs }).answer({
+  const reply = await createLiveAnswerer({ engine: run.engine, packs: s.packs, root: s.root }).answer({
     db: s.db, key: THREAD, text, ...(onEvent ? { onEvent } : {}),
   });
   return { reply, requests: run.requests };
@@ -256,7 +258,7 @@ test('an engine restream reset carries no draft flag', async t => {
     },
   });
   const seen = [];
-  await createLiveAnswerer({ engine, packs: s.packs }).answer({ db: s.db, key: THREAD, text: 'What should I keep?', onEvent: e => seen.push(e) });
+  await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).answer({ db: s.db, key: THREAD, text: 'What should I keep?', onEvent: e => seen.push(e) });
   assert.deepEqual(seen.filter(e => e.type === 'reset'), [{ type: 'reset' }]);
 });
 
@@ -288,7 +290,7 @@ test('a notice reply has no work', async t => {
     const value = Reflect.get(target, key, target);
     return typeof value === 'function' ? value.bind(target) : value;
   } });
-  const offReply = await createLiveAnswerer({ engine: off, packs: s.packs }).answer({ db: s.db, key: THREAD, text: 'What should I keep?' });
+  const offReply = await createLiveAnswerer({ engine: off, packs: s.packs, root: s.root }).answer({ db: s.db, key: THREAD, text: 'What should I keep?' });
   assert.equal(offReply.notice, true);
   assert.equal(offReply.provenance?.work, undefined);
   const failed = await askScripted(s, [[{ is_error: true, text: '' }]]);

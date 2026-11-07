@@ -445,8 +445,18 @@ test('the accounts migration preserves existing MCP bearers as ownerless and is 
     .run('legacy-key', 'Existing synthetic household key', 'a'.repeat(64), '["read"]', '2032-03-10T12:00:00.000Z');
   const before = { ...db.prepare('SELECT * FROM api_keys WHERE id = ?').get('legacy-key') };
   // Through 022: a store with no users passes the platform-identity guard and keeps api_keys rows.
-  migrate(db);
+  // MT-03 store migration 025 moves keys to the platform and refuses while the store still holds
+  // any, so the store side stops before it (the offline tenancy migration moves the rows first).
+  const dropped = listMigrations().find(migration => /platform-api-keys/.test(migration.name));
+  assert.ok(dropped, 'the platform api_keys migration is registered');
+  migrate(db, { through: dropped.id - 1 });
   const after = { ...db.prepare('SELECT * FROM api_keys WHERE id = ?').get('legacy-key') };
   assert.deepEqual(after, { ...before, user_id: null });
+  assert.deepEqual(migrate(db, { through: dropped.id - 1 }).applied, []);
+  assert.throws(() => migrate(db), /CHECK constraint failed/, '025 refuses while the store holds a key row');
+  assert.deepEqual({ ...db.prepare('SELECT * FROM api_keys WHERE id = ?').get('legacy-key') }, after, 'the refused migration changed nothing');
+  db.prepare('DELETE FROM api_keys').run();
+  migrate(db);
+  assert.equal(db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'api_keys'").get().n, 0, 'an emptied store drops its api_keys');
   assert.deepEqual(migrate(db).applied, []);
 });

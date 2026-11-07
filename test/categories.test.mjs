@@ -14,6 +14,7 @@ import { ingestFile, accountIdOf } from '../src/ingest/pipeline.mjs';
 import { bestGuess } from '../src/ingest/bestguess.mjs';
 import { validateGuesses } from '../src/ingest/guess.mjs';
 import { aggregatorFile } from './helpers/ingest.mjs';
+import { householdContext, instanceSecretsOf } from './helpers/server.mjs';
 import { spendingInputs, spendingFigures } from '../src/calc/targets.mjs';
 import { visibleOptions, categoryAnswerOption } from '../web/horizon/screens/ingest.js';
 
@@ -136,11 +137,13 @@ test('AC3 amount threshold/top ten, one source-name mapping, rules past/future a
 });
 
 test('AC2 live-row enrichment keeps one posting, parser provenance, replay and ambiguous rows', async t => {
-  const {db,dir}=store(t); const accountId=accountIdOf('examplebank|mask:1111'); account(db,accountId);
+  const {db,dir,platform,householdId}=store(t); const accountId=accountIdOf('examplebank|mask:1111'); account(db,accountId);
   db.prepare("UPDATE accounts SET identity='examplebank|mask:1111' WHERE id=?").run(accountId);
   const id=txn(db,{account_id:accountId,date:'2032-06-10',amount:-250,description:'POS DEBIT Example Shop',dedupe_key:'live:one',external_id:'live-one'});
   const file=aggregatorFile('export.csv',[{date:'2032-06-12',amount:250,description:'Example Shop',category:'Business'}]);
-  const opts={dataDir:dir,key:Buffer.alloc(32,7),now:'2032-08-01T12:00:00Z'};
+  const {secrets,keys}=await instanceSecretsOf(dir,'real');
+  const household=await householdContext({db,platform,householdId,mode:'real',config:{dataDir:dir,platformKeyFile:keys.platformKeyFile,mcpSecretFile:keys.mcpSecretFile},secrets});
+  const opts={household,now:'2032-08-01T12:00:00Z'};
   assert.equal((await ingestFile(db,file,opts)).status,'imported');
   assert.equal(db.prepare('SELECT count(*) AS n FROM transactions').get().n,1);
   const c=resolveCategories(loadCategoryInputs(db)).get(id);
@@ -203,9 +206,12 @@ test('AC3 only explicit checkbox can produce an always option; engine and best g
 });
 
 test('AC5 coverage CLI uses platform readiness and emits only counts; architecture documents source tables', t => {
-  const {db,dir}=store(t); account(db); txn(db);
+  const {db,dir,householdId}=store(t); account(db); txn(db);
   const coverage=categoryCoverage(db,{clock}); assert.equal(coverage.uncategorized,1);
-  const out=spawnSync(process.execPath,['scripts/category-coverage.mjs',dir],{encoding:'utf8'});
+  const env={...process.env,FATHOM_DATA:dir};
+  const unnamed=spawnSync(process.execPath,['scripts/category-coverage.mjs'],{encoding:'utf8',env});
+  assert.equal(unnamed.status,1); assert.equal(unnamed.stdout,''); assert.equal(unnamed.stderr.trim(),'household_required');
+  const out=spawnSync(process.execPath,['scripts/category-coverage.mjs','--household',householdId],{encoding:'utf8',env});
   assert.equal(out.status,0,out.stderr);
   const counts=JSON.parse(out.stdout); assert.equal(counts.uncategorized,1);
   assert.ok(!out.stdout.includes('Example'));
