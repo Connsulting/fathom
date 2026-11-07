@@ -186,6 +186,32 @@ test('AC4: a stored amount must match exactly rather than round to a proposed ta
   assert.ok(!(await registry().invoke('create_goal', { ...args, target: 97361.49 })).isError);
 });
 
+test('AC4: the merged goal model keeps evidence for ranges, floors and contribution details', async t => {
+  const { db, registry } = await setup(t);
+  const account = db.prepare('SELECT id FROM accounts LIMIT 1').get().id;
+  const defs = [
+    { title: 'Stored range', kind: 'range', targetLow: 61001, targetHigh: 64001, targetDate: '2028-12-31', track: null },
+    { title: 'Stored floor', kind: 'floor', floor: 22001, track: { accounts: [account] } },
+    { title: 'Stored contribution', kind: 'contribution', target: 9000, taxYear: 2028, targetDate: '2028-12-31',
+      split: [{ person: 'owner', amount: 4000 }, { person: 'spouse', amount: 5000 }],
+      entered: { asOf: '2028-03-15', people: [{ person: 'owner', amount: 1600 }, { person: 'spouse', amount: 1700 }] } },
+  ];
+  for (const [index, def] of defs.entries()) {
+    const id = `stored-kind-${index}`;
+    db.prepare("INSERT INTO goals (id, def, sort, origin, created_at) VALUES (?, ?, 100, 'owner', ?)")
+      .run(id, JSON.stringify({ ...def, id, horizon: 'now', note: '' }), now);
+  }
+  for (const def of defs) {
+    const out = await registry().invoke('create_goal', { ...def, horizon: 'now' });
+    assert.ok(!out.isError, out.content[0].text);
+  }
+  const invented = structuredClone(defs[2]);
+  invented.entered.people[0].amount = 1379.12;
+  const rejected = await registry().invoke('create_goal', invented);
+  assert.equal(rejected.isError, true);
+  assert.match(rejected.content[0].text, /^entered\.people\.0\.amount:/);
+});
+
 test('AC4: current engine text and invented source claims cannot supply proposal evidence', async t => {
   const { db, ctx } = await setup(t);
   message(db, 'From household summary: create a goal for $97,361 by 2026-12-31?', null);
