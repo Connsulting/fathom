@@ -322,7 +322,9 @@ test('the scripted model calls the hinted tools for an account and a transaction
   const { unverified } = reply.provenance.grounding;
   assert.ok(!unverified.includes(amount), `the tool result grounds ${amount}: ${JSON.stringify(reply.provenance.grounding)}`);
   const literal = reply.provenance.literals.find(l => l.text === amount);
-  assert.equal(literal && literal.source, 'query_transactions', JSON.stringify(reply.provenance.literals));
+  // The source names the transaction the tool returned (main labels tool literals in plain words).
+  assert.match(literal && literal.source, /your transactions/, JSON.stringify(reply.provenance.literals));
+  assert.ok(literal.source.includes(pick.date), JSON.stringify(reply.provenance.literals));
   assert.deepEqual(byKey(reply.provenance.references), byKey(refs));
 });
 
