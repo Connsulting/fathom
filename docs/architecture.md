@@ -2246,9 +2246,24 @@ income detected"; no title holds a figure or a raw key, and the scenario rewrite
 "<key> changed" title the same way. The `series` content row (src `planner`) is built by
 `src/jobs/planner/series.mjs` from the balances table (positions values for months a brokerage
 account has no balance): one `acct-<id>` series per account with at least two months in the last 12,
-and `net` ("Net worth, accounts with a trend": only accounts with a series of their own, debts such as
-card, credit and loan kinds subtracted, each counted from its first month with its last balance carried
-forward; it ends at the newest month any upload covers).
+used by the account dialog. There is no combined line in it; the household trend is separate.
+
+The household trend (`scenario.trend`, `src/accounts/trend.mjs`) is computed live in `buildScenario`
+from the same monthly readings (`monthlyReadings` in `series.mjs`), not stored. Each account adds its
+newest reading on or before each month end and nothing before its first balance; an account whose data
+stopped carries its last balance forward and is counted as carried from the month after its last
+balance (and at the final point when `accountFreshness` says stale). Debt kinds (card, credit, loan,
+mortgage) are negative. Accounts fall into the groups Business, Cash, Investing, Retirement, Health,
+Education, Debt and Other (`groupOfKind`, also sent on every scenario account as `group`), and the
+groups into the parts cash, investments, retirement, education-health, business, debt and other.
+Business cash is its own part and stays in the net worth total, as the earlier net worth series had
+it. `trend` carries `points` (date, total, parts, groups, carried counts), the shown `parts` and
+`groups`, a carried-forward `note` and `fig` keys. Figures `trend.total`, `trend.part.<id>` and
+`trend.group.<slug>` (kind a, source `trend`, "Account balances, summed") carry `sums`: each account's
+label, reading, date of that reading, freshness and carried flag; the figure popover lists the label, reading,
+date and carried flag. With
+fewer than two months of data `trend` is null. Money draws the chart (`screens/trend.js`: one line at
+a time, range 3M, 1Y or All, a readout of every part by date); Accounts draws one line per group.
 
 ### Deferral deadlines
 
