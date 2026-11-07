@@ -469,7 +469,6 @@
 /* ---------- accounts ---------- */
 .d-horizon .h-ro { display: flex; gap: 10px; align-items: center; color: var(--mu); font-size: 13.5px; padding: 12px 16px; border: 1px solid var(--line); border-radius: 10px; }
 .d-horizon .h-ro .h-i { color: var(--ac); }
-.d-horizon .h-sparks { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 28px 40px; }
 .d-horizon .h-spark-h { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; color: var(--mu); }
 .d-horizon .h-spark-h b { font-family: var(--mono); font-weight: 400; color: var(--tx); }
 .d-horizon .h-spark svg { width: 100%; height: 56px; display: block; margin-top: 8px; overflow: visible; }
@@ -1031,3 +1030,24 @@ a.h-dec-t:hover { color: var(--ac2); }
 .d-horizon .h-eng-models li { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
 .d-horizon .h-eng-models li span { color: var(--mu, inherit); }
 .d-horizon .h-eng-models li b { font-weight: 500; overflow-wrap: anywhere; text-align: right; }
+
+.d-horizon .h-answers { display: grid; gap: 16px; margin: 18px 0; max-width: 660px; min-width: 0; }
+.d-horizon .h-answer-field { border: 0; padding: 0; margin: 0; min-width: 0; }
+.d-horizon .h-answer-field[hidden] { display: none; }
+.d-horizon .h-answer-field legend { font-size: 13px; line-height: 1.5; color: var(--tx2); margin-bottom: 8px; overflow-wrap: anywhere; }
+.d-horizon .h-answer-toggle { display: flex; gap: 8px; }
+.d-horizon .h-answer-toggle label { position: relative; cursor: pointer; }
+.d-horizon .h-answer-toggle input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.d-horizon .h-answer-toggle span { display: block; min-width: 72px; padding: 10px 16px; text-align: center; border: 1px solid var(--line2); border-radius: 8px; color: var(--mu); font-size: 13px; }
+.d-horizon .h-answer-toggle input:checked + span { background: var(--acd); border-color: var(--ac); color: var(--ac); }
+.d-horizon .h-answer-toggle input:focus-visible + span { outline: 2px solid var(--ac); outline-offset: 3px; }
+.d-horizon .h-answer-value { display: flex; align-items: center; gap: 10px; }
+.d-horizon .h-answer-field input:not([type=radio]), .d-horizon .h-answer-field select { box-sizing: border-box; min-width: 0; max-width: 100%; width: 240px; min-height: 44px; border: 1px solid var(--line2); border-radius: 8px; background: var(--bg); color: var(--tx); padding: 10px 12px; font: inherit; font-size: 16px; color-scheme: dark; }
+.d-horizon .h-answer-unit, .d-horizon .h-answer-note { font-size: 12px; color: var(--mu); }
+.d-horizon .h-answer-acts { display: flex; flex-wrap: wrap; gap: 8px; }
+.d-horizon .h-answer-acts .h-btn { min-height: 44px; }
+.d-horizon .h-answers .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.d-horizon article.h-next .h-answers { margin: 0; gap: 16px; }
+.d-horizon article.h-next .h-answer-toggle { flex-direction: row; gap: 8px; }
+.d-horizon article.h-next .h-answer-value { flex-direction: row; justify-content: flex-start; gap: 10px; }
+.d-horizon article.h-next .h-answer-acts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
