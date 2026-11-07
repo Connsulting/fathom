@@ -187,6 +187,7 @@ columns). Frozen fact keys:
 | `household.dependents` | int |
 | `household.expectingChild` | bool |
 | `household.dependentAges` | int[] |
+| `household.birthYears` | object: owner, spouse and dependents birth years |
 | `income.w2` | bool |
 | `income.sCorp` | bool |
 | `income.selfEmployed` | bool |
@@ -899,6 +900,7 @@ known path with the wrong method is 405; signed out, both are 401. Every action 
 | `POST /api/accounts/:id/merge` | `{withId}` | `{scenario, survivorId, itemId}`. Merges through a manual `account_match` item answered `same`, the same path and undo log as a detected pair; the survivor takes a missing institution and a reliable last 4 from the SimpleFIN snapshot. Undo is `POST /api/confirm/:itemId/reopen`. 400 for a missing or same id, 404 unknown, 409 for two connected accounts. |
 | `POST /api/goals` | `{title, note?, horizon?, kind?, owner?, priority?, status?, ...kind fields}` | `{scenario, goal}`. Creates an owner goal (`origin` owner). `title` 1 to 120 characters, no line breaks; `note` at most 500; `horizon` now, 1-3y or 3-10y (default now); `kind` balance (default), range, floor or contribution; `owner` (whose goal) owner, spouse, joint, a dependent key such as kid, or null; `priority` high, medium, low or null; `status` open (default), done or archived. Kind fields (only the kind's own; another kind's field is 400 "`<field>` does not apply to a `<kind>` goal"): balance `target` (non-negative number or null), `targetDate` (YYYY-MM-DD or null), `track` (null, `{accounts: [account ids]}` at most 20 known ids, or `{figure: key}` a known figure the store holds); range `targetLow` and `targetHigh` (both required, low not above high), `targetDate`, `track`; floor `floor` and `track` (both required); contribution `target` (the amount, above zero), `taxYear` (2000 to 2100), `targetDate` (the deadline, after Jan 1 of the tax year), optional `accounts` (destination account ids), `split` (`[{person, amount}]`, owner and spouse once each, adding up to the amount to the cent) and `entered` (`{asOf, total}` or `{asOf, people: [{person, amount}]}`, people within the split when one is set). Anything else 400 with the validation message. |
 | `GET /api/pace` | none | Deterministic `clock`, `rollup`, `goals`, `series` and `meters`, identical to `scenario.pace`. Uses the same owner gate as the scenario. No writes or model calls. |
+| `POST /api/tour/seen` | none | `{scenario}`. The signed-in user finished or dismissed the guided tour: clears `users.tour_pending` on the caller's own platform row (a body or path id never selects another user) and answers with the fresh scenario. 401 without an identity. `scenario.live.tourPending` is that flag, set when the user completes onboarding (the not-done to done change of `POST /api/onboarding`), so the tour auto-starts once per user on a real instance. The public demo has no accounts and keeps its once-per-browser rule. |
 | `POST /api/goals/:id` | any subset of the create fields | `{scenario, goal}`. Edits an owner goal, validated against the stored def (a kind change drops the old kind's fields); `status` done marks it done (keeping the first done time), open reopens it, archived archives it. Per-kind 400s as for create; 409 for a seed (demo) goal, status included; 404 unknown. |
 | `GET /api/goals/suggestions` | none | `{clock, suggestions}`. The same records as `scenario.suggestions` (see "Suggested targets"). Same owner gate; no writes or model calls. |
 | `POST /api/goals/:id/suggestion` | `{action: 'dismiss' \| 'restore'}` or `{withdrawalRate}` | `{scenario}`. Stores a dismissal (the record's fingerprint) or the independence withdrawal rate in `settings` `goals.suggestions`. 404 unknown goal, 409 seed goal or a goal with no suggestion, 400 for an unknown action, both fields, a rate outside 0.02 to 0.06, or a rate on a non-independence goal. |
@@ -2133,8 +2135,10 @@ and K-1 `entityKind` documents), `income.w2` (an outside employer, never the hou
 `retirement.backdoorRothCandidate` (AGI as the MAGI proxy above the Roth phase-out). Calculator
 confirmations come only from owner-set facts: `retirement.planTermsConfirmed`,
 `retirement.aggregationConfirmed`, `benefits.hsaEligible`, `benefits.hsaCoverage`,
-`business.salaryRange`, `business.cashBasis`, `household.ownerAge`, `household.spouseAge` and
-`accounts.va529`. A missing one produces no figure and turns the trigger that needs it into a
+`business.salaryRange`, `business.cashBasis`, `household.birthYears` (the one source of every
+age: owner, spouse and dependents; an age is the age by the end of the planning year) and
+`accounts.va529` (the Virginia plan answer is inferred from the institution unless undone through
+`accounts.va529Inference`; the account owner's age comes from `household.birthYears`). A missing one produces no figure and turns the trigger that needs it into a
 confirm form. Other owner inputs: `tax.itemizedEstimate`, `tax.vaItemizedEstimate`,
 `tax.withholding.federal`, `tax.withholding.virginia`, `tax.prior.*`, `retirement.contributions`,
 `income.partnershipEstimate`, `plan.nextYearBusinessIncome`, `business.lastPayrollDate`,
