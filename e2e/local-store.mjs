@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
+import { secretEnv, secretsFor, servedStore } from '../test/helpers/server.mjs';
 
 const ownedDirectories = new Set();
 
@@ -41,8 +42,19 @@ export async function localPort() {
   return port;
 }
 
+// The original household's store of the instance in dataDir (households/<id>/fathom.sqlite, read
+// from platform.sqlite). Throws when the instance has none yet.
+export function householdStoreFile(dataDir) {
+  const served = servedStore(dataDir);
+  if (!served) throw new Error('No household store in the data directory yet');
+  return served.file;
+}
+
 // Trusted financial-test fixture only. Auth ceremonies are exercised in identity.spec.mjs.
-export async function startEnrolledServer({ dataDir, clock, dataKeyFile } = {}) {
+// A real instance reads the synthetic instance secrets of secretsFor(dataDir), the same ones the
+// test store helpers built its data key with. Returns the app plus url, headers, storeFile and
+// authenticate(context).
+export async function startEnrolledServer({ dataDir, clock } = {}) {
   refuseSuppliedTarget();
   if (!ownedDirectories.has(dataDir)) throw new Error('An owned temporary store is required');
   const [{ startServer }, { loadConfig }, { createAuthStore }, { openDb }, { PLATFORM_FILE }] = await Promise.all([
@@ -62,7 +74,7 @@ export async function startEnrolledServer({ dataDir, clock, dataKeyFile } = {}) 
     FATHOM_EMAIL_FROM: 'fathom@example.test',
     FATHOM_EMAIL_TO: 'owner@example.test',
     ...(clock ? { FATHOM_CLOCK: clock } : {}),
-    ...(dataKeyFile ? { FATHOM_DATA_KEY_FILE: dataKeyFile } : {}),
+    ...secretEnv(secretsFor(dataDir)),
   });
   const app = await startServer(config);
   try {
@@ -80,6 +92,7 @@ export async function startEnrolledServer({ dataDir, clock, dataKeyFile } = {}) 
     return {
       ...app,
       url,
+      storeFile: householdStoreFile(dataDir),
       headers: { Cookie: `__Host-fathom-session=${session.token}`, Origin: url },
       async authenticate(context) {
         await context.addCookies([{

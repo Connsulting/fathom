@@ -7,7 +7,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { ROOT, SERVER_TIMEOUT, withServer, request, postJson, getScenario, openStore, tempDir, tempDb } from './helpers/server.mjs';
+import { ROOT, SERVER_TIMEOUT, withServer, request, postJson, getScenario, openStore, tempDb, tempInstance } from './helpers/server.mjs';
 import { writeSyntheticPack, NEVER } from './helpers/packs.mjs';
 import { escapeUserText, money } from '../src/shared/tokens.mjs';
 import { seedDemo } from '../demo/seed.mjs';
@@ -95,9 +95,13 @@ const HOSTILE_PROMPT = 'Would <img src=x onerror=alert(1)> change {f:true_reserv
 const HOSTILE_PACK = { id: HOSTILE_ID, name: 'Synthetic what if', prompt: HOSTILE_PROMPT, appliesWhen: NEVER, covers: ['synthetic choices'] };
 
 test('B4: POST /api/packs/:id/whatif stores a manifest prompt as escaped literal text', T, async t => {
-  const dataDir = await tempDir();
+  // A demo instance built as the server builds one, with the synthetic pack in its household root
+  // (households/<id>/packs/your-plans) before the server starts.
+  const inst = await tempInstance({ mode: 'demo', init: seedDemo });
+  const dataDir = inst.dataDir;
+  inst.close();
   t.after(() => rmSync(dataDir, { recursive: true, force: true }));
-  writeSyntheticPack(dataDir, HOSTILE_PACK);
+  writeSyntheticPack(inst.root, HOSTILE_PACK);
   await withServer({ dataDir, env: FAKE }, async s => {
     const def = packOf(await getScenario(s.baseUrl), HOSTILE_ID);
     assert.ok(def, 'the synthetic pack is loaded from the data volume');
@@ -128,6 +132,7 @@ test('B4: the What if question for a manifest pack is the raw prompt, and its st
   const s = await tempDb();
   t.after(() => { s.close(); rmSync(s.dataDir, { recursive: true, force: true }); });
   seedDemo(s.db);
+  // The temp store's directory stands in as the household root.
   writeSyntheticPack(s.dataDir, HOSTILE_PACK);
   const runtime = createRuntimeEngine({ db: s.db, config: loadConfig({ FATHOM_DATA: s.dataDir, FATHOM_ENGINE: 'fake' }) });
   const packs = createLivePacks(s.db, { dataDir: s.dataDir });
@@ -140,7 +145,7 @@ test('B4: the What if question for a manifest pack is the raw prompt, and its st
       return typeof value === 'function' ? value.bind(target) : value;
     },
   });
-  const answerer = createLiveAnswerer({ engine, packs });
+  const answerer = createLiveAnswerer({ engine, packs, root: s.dataDir });
   const figure = money(buildScenario(s.db).fig.true_reserve.v);
 
   const first = await answerer.whatIf({ db: s.db, packId: HOSTILE_ID });

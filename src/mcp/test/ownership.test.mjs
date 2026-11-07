@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  SERVER_TIMEOUT, spawnAuthenticatedServer, createSessionFixture, sessionClient, openStore, openPlatformStore, request, postJson,
+  SERVER_TIMEOUT, spawnAuthenticatedServer, createSessionFixture, sessionClient, openPlatformStore, request, postJson,
 } from '../../../test/helpers/server.mjs';
 import { mcpPost, bearer, rpcResult, UNAUTHORIZED } from './helpers.mjs';
 
@@ -9,11 +9,7 @@ const T = { timeout: SERVER_TIMEOUT * 3 };
 const REAL = { FATHOM_DEMO: '0', FATHOM_ENGINE: 'off', FATHOM_EMAIL_TRANSPORT: 'dev',
   FATHOM_EMAIL_FROM: 'sender@example.test', FATHOM_EMAIL_TO: 'recipient@example.test' };
 
-async function store(server, fn) {
-  const db = await openStore(server.dbFile);
-  try { return await fn(db); } finally { db.close(); }
-}
-// Accounts live in platform.sqlite; api_keys stay in the financial store.
+// Accounts and (MT-03) the household-bound api_keys live in platform.sqlite.
 async function platformOf(server, fn) {
   const platform = await openPlatformStore(server.platformFile);
   try { return await fn(platform); } finally { platform.close(); }
@@ -65,7 +61,7 @@ test('members manage their own keys, admins manage all keys, and session ownersh
     const own = await create(alice, 'Member A key', { scopes: ['write:recs'], userId: bob.fixture.user.id, user_id: bob.fixture.user.id });
     const other = await create(bob, 'Member B key');
     const legacy = await create(server, 'Existing household key');
-    await store(server, db => {
+    await platformOf(server, db => {
       assert.equal(db.prepare('SELECT user_id FROM api_keys WHERE id = ?').get(own.record.id).user_id, alice.fixture.user.id);
       db.prepare('UPDATE api_keys SET user_id = NULL WHERE id = ?').run(legacy.record.id);
     });
@@ -99,7 +95,7 @@ test('removing a user invalidates sessions and their bearer keys immediately, pr
     const own = await create(removed, 'Removed user key');
     const other = await create(retained, 'Retained user key');
     const legacy = await create(server, 'Existing ownerless key');
-    await store(server, db => db.prepare('UPDATE api_keys SET user_id = NULL WHERE id = ?').run(legacy.record.id));
+    await platformOf(server, db => db.prepare('UPDATE api_keys SET user_id = NULL WHERE id = ?').run(legacy.record.id));
     await working(server, own.key);
     await working(server, other.key);
     await working(server, legacy.key);
@@ -107,7 +103,7 @@ test('removing a user invalidates sessions and their bearer keys immediately, pr
     assert.equal(result.status, 200);
     assert.equal((await removed.request({ path: '/api/scenario' })).status, 401);
     await denied(server, own.key);
-    assert.equal(await store(server, db => db.prepare('SELECT count(*) AS n FROM api_keys WHERE id = ?').get(own.record.id).n), 0);
+    assert.equal(await platformOf(server, db => db.prepare('SELECT count(*) AS n FROM api_keys WHERE id = ?').get(own.record.id).n), 0);
     await working(server, other.key);
     await working(server, legacy.key);
     assert.equal((await retained.request({ path: '/api/scenario' })).status, 200);
@@ -137,12 +133,12 @@ test('a creator-owned key stops verifying once its creator has no active members
     const member = await userClient(server, 'lapsed@example.test');
     const own = await create(member, 'Lapsed member key');
     const legacy = await create(server, 'Existing ownerless key');
-    await store(server, db => db.prepare('UPDATE api_keys SET user_id = NULL WHERE id = ?').run(legacy.record.id));
+    await platformOf(server, db => db.prepare('UPDATE api_keys SET user_id = NULL WHERE id = ?').run(legacy.record.id));
     await working(server, own.key);
     await working(server, legacy.key);
     await platformOf(server, platform => platform.prepare("UPDATE household_memberships SET status = 'removed' WHERE user_id = ?").run(member.fixture.user.id));
     await denied(server, own.key);
-    assert.equal(await store(server, db => db.prepare('SELECT count(*) AS n FROM api_keys WHERE id = ?').get(own.record.id).n), 1, 'the row is still there; verification fails closed');
+    assert.equal(await platformOf(server, db => db.prepare('SELECT count(*) AS n FROM api_keys WHERE id = ?').get(own.record.id).n), 1, 'the row is still there; verification fails closed');
     await working(server, legacy.key);
     const all = await server.request({ path: '/api/keys' });
     assert.equal(all.status, 200);

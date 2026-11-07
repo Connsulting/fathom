@@ -164,18 +164,19 @@ async function demoAnswerer(t) {
   seedDemo(s.db);
   const config = loadConfig({ FATHOM_DATA: s.dataDir, FATHOM_ENGINE: 'fake', FATHOM_FAKE_STREAM_MS: '0' });
   const engine = createRuntimeEngine({ db: s.db, config });
+  // The temp store's directory stands in as the household root.
   const packs = createLivePacks(s.db, { dataDir: s.dataDir });
   packs.refresh();
-  return { s, engine, packs };
+  return { s, engine, packs, root: s.dataDir };
 }
 
 test('a failed grounding check resets the streamed text before the retry streams', async t => {
-  const { s, engine, packs } = await demoAnswerer(t);
+  const { s, engine, packs, root } = await demoAnswerer(t);
   let n = 0;
   const wrapped = { ...engine, mode: engine.mode, isOn: () => engine.isOn(), call: req => engine.call({ ...req,
     fake: n++ === 0 ? [{ text: 'You owe $987,654 this year.' }] : [{ toolCalls: [{ name: 'household_summary', args: {} }] }, { text: 'Nothing to add.' }] }) };
   const seen = [];
-  const reply = await createLiveAnswerer({ engine: wrapped, packs }).answer({ db: s.db, key: 'ask:0123456789ab', text: 'How much?', onEvent: e => seen.push(e) });
+  const reply = await createLiveAnswerer({ engine: wrapped, packs, root }).answer({ db: s.db, key: 'ask:0123456789ab', text: 'How much?', onEvent: e => seen.push(e) });
   assert.equal(reply.provenance.grounding.retried, true);
   const types = seen.map(e => e.type);
   const reset = types.indexOf('reset');
@@ -185,7 +186,7 @@ test('a failed grounding check resets the streamed text before the retry streams
   for (const e of seen.filter(x => x.type === 'text')) assert.doesNotMatch(e.text, /</);
   // Engine off keeps today's notice and streams nothing.
   const off = [];
-  const offReply = await createLiveAnswerer({ engine: { ...wrapped, isOn: () => false, mode: 'fake' }, packs })
+  const offReply = await createLiveAnswerer({ engine: { ...wrapped, isOn: () => false, mode: 'fake' }, packs, root })
     .answer({ db: s.db, key: 'ask:0123456789ab', text: 'How much?', onEvent: e => off.push(e) });
   assert.equal(offReply.notice, true);
   assert.deepEqual(off, []);

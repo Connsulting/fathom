@@ -5,15 +5,19 @@ import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { openDb, migrate, listTables, listMigrations, MIGRATIONS_DIR, getSetting, setSetting, DB_FILE } from '../src/store/db.mjs';
-import { tempDb, tempDir, withServer, request, expectServerExit, dumpStore, migrateLegacyStore, PLATFORM_FILE, SERVER_TIMEOUT } from './helpers/server.mjs';
+import {
+  tempDb, tempDir, withServer, request, expectServerExit, dumpStore, migrateLegacyStore, migrateTenancyStore, servedStore, PLATFORM_FILE, SERVER_TIMEOUT,
+} from './helpers/server.mjs';
 import { existsSync } from 'node:fs';
 
 const TABLES = [
   'schema_migrations', 'settings', 'content', 'files', 'sources', 'facts', 'accounts', 'transactions',
   'balances', 'positions', 'pnl_lines', 'tax_payments', 'documents', 'figures', 'recs', 'rec_events',
   'conversations', 'messages', 'goals', 'deadlines', 'events', 'packs_state', 'decisions', 'jobs',
-  'job_runs', 'api_keys', 'spend_ledger', 'store_identity',
+  'job_runs', 'spend_ledger', 'store_identity',
 ];
+// MCP keys moved to platform.sqlite (bound to a household) and migration 025 drops them here.
+const PLATFORM_KEY_TABLES = ['api_keys'];
 // Account tables moved to platform.sqlite by migration 022 (platform identity).
 const ACCOUNT_TABLES = ['households', 'users', 'passkeys', 'auth_tokens', 'auth_sessions', 'auth_challenges', 'auth_rate_limits'];
 const PROVENANCE_TABLES = [
@@ -33,7 +37,7 @@ test('migrate on an empty db creates every foundation table', async () => {
   try {
     const tables = listTables(t.db);
     for (const name of TABLES) assert.ok(tables.includes(name), `missing table ${name}`);
-    for (const name of ACCOUNT_TABLES) assert.ok(!tables.includes(name), `${name} belongs to platform.sqlite`);
+    for (const name of [...ACCOUNT_TABLES, ...PLATFORM_KEY_TABLES]) assert.ok(!tables.includes(name), `${name} belongs to platform.sqlite`);
     assert.equal(t.db.prepare('SELECT count(*) AS n FROM store_identity').get().n, 0, 'a bare migrated store names no household');
     assert.deepEqual([...tables].sort(), tables, 'listTables is sorted');
     assert.ok(!tables.some(n => n.startsWith('sqlite_')), 'listTables excludes sqlite internals');
@@ -150,13 +154,21 @@ test('settings hold JSON values with a fallback', async () => {
   }
 });
 
+// 024 is claimed by an open branch (AGENTS.md: migrations are numbered in merge order); MT-03's 025
+// applies after a later 024 on existing stores. Once 024 lands this list must be emptied again.
+const RESERVED_MIGRATION_IDS = [24];
+
 test('migration files are NNN-name.sql numbered from 001 without gaps', () => {
   const files = readdirSync(MIGRATIONS_DIR).filter(f => f.endsWith('.sql')).sort();
   assert.ok(files.length >= 1);
   assert.equal(files[0], '001-foundation.sql');
+  const ids = files.map(f => Number(f.slice(0, 3)));
+  for (const id of RESERVED_MIGRATION_IDS) assert.ok(!ids.includes(id), `reserved migration ${id} has landed: remove it from RESERVED_MIGRATION_IDS`);
+  const expected = [];
+  for (let id = 1; expected.length < files.length; id++) if (!RESERVED_MIGRATION_IDS.includes(id)) expected.push(id);
   files.forEach((f, i) => {
     assert.match(f, /^\d{3}-[a-z0-9-]+\.sql$/);
-    assert.equal(Number(f.slice(0, 3)), i + 1, `${f} is numbered ${i + 1}`);
+    assert.equal(ids[i], expected[i], `${f} is numbered ${expected[i]}`);
   });
   const identity = listMigrations().find(m => m.name === 'platform-identity');
   assert.ok(identity, 'the platform identity migration is registered');
@@ -166,6 +178,10 @@ test('migration files are NNN-name.sql numbered from 001 without gaps', () => {
 // Migration 022 drops the account tables only from a store whose accounts were extracted (it
 // carries a store_identity row) or that never had any (a new store).
 const IDENTITY = listMigrations().find(m => m.name === 'platform-identity');
+// Store migration 025 (MT-03) refuses while api_keys holds rows (the offline tenancy migration moves
+// them to the platform first), so the 022 cases below stop just before it.
+const KEYS_MOVED = listMigrations().find(m => m.name === 'platform-api-keys');
+const BEFORE_KEYS_MOVED = { through: KEYS_MOVED.id - 1 };
 const storeBeforePlatform = () => {
   const db = openDb(':memory:');
   migrate(db, { through: IDENTITY.id - 1 });
@@ -197,12 +213,14 @@ test('migration 022 applies to a store without users and drops the account table
   try {
     db.prepare(`INSERT INTO api_keys (id, name, key_hash, scopes, created_at) VALUES ('key-ownerless', 'Synthetic key', ?, '["read"]', '2032-03-10T12:00:00.000Z')`).run('c'.repeat(64));
     const before = { ...db.prepare("SELECT * FROM api_keys WHERE id = 'key-ownerless'").get() };
-    assert.ok(migrate(db).applied.includes(IDENTITY.id));
+    assert.ok(migrate(db, BEFORE_KEYS_MOVED).applied.includes(IDENTITY.id));
     const tables = listTables(db);
     for (const name of ACCOUNT_TABLES) assert.ok(!tables.includes(name), `${name} is dropped`);
     assert.ok(tables.includes('store_identity'));
     assert.deepEqual({ ...db.prepare("SELECT * FROM api_keys WHERE id = 'key-ownerless'").get() }, before);
-    assert.deepEqual(migrate(db).applied, []);
+    assert.deepEqual(migrate(db, BEFORE_KEYS_MOVED).applied, []);
+    assert.throws(() => migrate(db), new RegExp(`migration ${KEYS_MOVED.id}-platform-api-keys failed`), '025 refuses while a key row remains');
+    assert.deepEqual({ ...db.prepare("SELECT * FROM api_keys WHERE id = 'key-ownerless'").get() }, before, 'the refusal keeps the row');
   } finally { db.close(); }
 });
 
@@ -218,7 +236,7 @@ test('migration 022 on a marked store drops the account tables and keeps creator
     // The marker the offline migration writes after publishing platform.sqlite.
     db.exec('CREATE TABLE IF NOT EXISTS store_identity (id INTEGER PRIMARY KEY CHECK (id = 1), household_id TEXT NOT NULL, platform_operation TEXT)');
     db.prepare("INSERT INTO store_identity (id, household_id, platform_operation) VALUES (1, 'hh-synthetic', 'op-synthetic')").run();
-    assert.ok(migrate(db).applied.includes(IDENTITY.id));
+    assert.ok(migrate(db, BEFORE_KEYS_MOVED).applied.includes(IDENTITY.id));
     const tables = listTables(db);
     for (const name of ACCOUNT_TABLES) assert.ok(!tables.includes(name), `${name} is dropped`);
     assert.deepEqual(db.prepare('PRAGMA table_info(api_keys)').all().map(c => c.name), columnsBefore);
@@ -271,6 +289,12 @@ test('a store migrated to exactly 005 upgrades to 006-chat through the platform 
   assert.deepEqual(await dumpStore(file), before, 'the refused start leaves the store unchanged');
   assert.equal(existsSync(join(dataDir, PLATFORM_FILE)), false);
   await migrateLegacyStore(dataDir);
+  // MT-03: the platform-migrated single-store layout still refuses until the offline tenancy
+  // migration moves the store into its household root.
+  const unrooted = await expectServerExit({ dataDir, env: { FATHOM_DEMO: '0', FATHOM_ENGINE: 'off' } });
+  assert.equal(unrooted.started, false, unrooted.output);
+  assert.match(unrooted.output, /tenancy_migration_required/);
+  await migrateTenancyStore(dataDir);
 
   await withServer({ dataDir, env: { FATHOM_DEMO: '0', FATHOM_ENGINE: 'off' } }, async s => {
     const h = await request(s.baseUrl, { path: '/healthz' });
@@ -279,7 +303,8 @@ test('a store migrated to exactly 005 upgrades to 006-chat through the platform 
     assert.equal(h.json.schema, latest, 'the schema version reports the highest migration after startup');
   });
 
-  const db = openDb(file);
+  assert.equal(existsSync(file), false, 'the original store moved out of the data root');
+  const db = openDb(servedStore(dataDir).file);
   try {
     assert.ok(db.prepare('PRAGMA table_info(messages)').all().some(c => c.name === 'provenance'), 'messages.provenance exists');
     const applied = db.prepare('SELECT id, name FROM schema_migrations ORDER BY id').all().map(r => `${r.id}-${r.name}`);

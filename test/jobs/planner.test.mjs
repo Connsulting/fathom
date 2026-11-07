@@ -18,7 +18,7 @@ import { reasonText } from '../../src/jobs/triggers/missing-data.mjs';
 import {
   scratch, createRealStore, addPayroll, w2Doc, paystubDoc, addFact, removeFact, accountIdByMask, figureRow, plannerFigures,
   factRow, recRow, plannerRec, activeRecIds, recEvents, parseJson, SCORP, SOLE_PROP, SYNTH, MASKS,
-  HINTS, INST,
+  HINTS, INST, householdOf,
 } from '../helpers/real-store.mjs';
 
 const NOW = '2026-11-05';
@@ -34,8 +34,9 @@ function fig(db, key) {
   assert.ok(row, `figure ${key} exists`);
   return row;
 }
-// Ask goes through main's live answerer on the fake engine, as the server wires it.
-const answererFor = db => createLiveAnswerer({ engine: createRuntimeEngine({ db, config: { engine: 'fake' } }) });
+// Ask goes through main's live answerer on the fake engine, as the server wires it: per household,
+// with that household's root.
+const answererFor = db => createLiveAnswerer({ engine: createRuntimeEngine({ db, config: { engine: 'fake' } }), root: householdOf(db).root });
 const ctxOf = (db, params = {}, body = {}) => ({ db, config: { clock: NOW }, answerer: answererFor(db), params, body });
 
 // ---------------------------------------------------------------- expected values (hand check)
