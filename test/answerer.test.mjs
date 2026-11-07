@@ -242,7 +242,9 @@ test('PRODUCT_RULES states the advisory boundaries, the figure token rule and th
   assert.equal(typeof PRODUCT_RULES, 'string');
   assert.match(PRODUCT_RULES, /advisory/i);
   assert.ok(PRODUCT_RULES.includes('{f:'), 'figure tokens are explained');
-  assert.ok(PRODUCT_RULES.includes('household'));
+  assert.ok(instructions.includes('household.figures'));
+  assert.ok(instructions.includes('Sending to the advisor and email require the product button; never claim you sent anything.'));
+  assert.ok(instructions.includes('A card payment from checking moves money to the card; it is not new spending.'));
   // B2: chat never writes; the rule names the proposal tool instead of the write tool.
   assert.ok(instructions.includes('Confirm only when their request is ambiguous'));
   assert.ok(!PRODUCT_RULES.includes('act_on_recommendation'));

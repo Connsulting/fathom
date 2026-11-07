@@ -31,8 +31,8 @@ export function createToolServer({ scopes, ctx }) {
     const operation = request.params.arguments?.operation;
     const op = tool.operations.find(o => o.name === operation);
     if (op && !operationScopes(op).some(scope => scopes.includes(scope))) {
-      const needed = op.scope || 'a write';
-      return errorResult(`Permission denied: ${name}.${operation} needs the ${needed} scope, which this key does not have.`);
+      const needed = op.scope ? `the ${op.scope} scope` : 'a write scope';
+      return errorResult(`Permission denied: ${name}.${operation} needs ${needed}, which this key does not have.`);
     }
     try {
       const result = await callTool(name, request.params.arguments ?? {}, { ...ctx, scopes });

@@ -45,6 +45,7 @@ export function validateCases(cases) {
   if (!validate(cases)) throw new TypeError(`Invalid eval cases: ${JSON.stringify(validate.errors)}`);
   if (new Set(cases.map(c => c.id)).size !== cases.length) throw new TypeError('Duplicate eval case id');
   for (const c of cases) {
+    if (c.requires?.script && !Array.isArray(c.requires.operations)) throw new TypeError('Scripted case requires operations');
     for (const turn of c.turns) {
       for (const requirement of turn.required) for (const p of requirement.predicates) {
         if (p.op !== 'exists' && !Object.hasOwn(p, 'value')) throw new TypeError('Predicate needs a value');
