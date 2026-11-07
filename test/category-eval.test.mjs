@@ -5,7 +5,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInstance } from '../src/platform/db.mjs';
 import { openReadOnlyHousehold } from '../src/platform/ready.mjs';
-import { evaluateCategories, calibration, sampleRows } from '../scripts/category-eval.mjs';
+import { evaluateCategories, calibration, sampleRows, evalAdmission, main } from '../scripts/category-eval.mjs';
+import { setOutbound } from '../src/platform/outbound.mjs';
+import { FUNDING_SETTING } from '../src/platform/runtime.mjs';
 
 test('deterministic holdout and aggregate calibration never return per-row values',async t=>{
   const dir=mkdtempSync(join(tmpdir(),'category-eval-')); const s=createInstance(dir,{mode:'real'});
@@ -39,4 +41,20 @@ test('read-only store refuses missing identity and missing eval schema without c
   assert.throws(()=>openReadOnlyHousehold({dataDir:dir},s.householdId),/store_schema_required/);
   assert.throws(()=>openReadOnlyHousehold({dataDir:dir},'hh-synthetic-unknown'),/household_unavailable/);
   assert.equal(s.db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name='transaction_category_imports'").get().n,0);
+});
+
+test('the eval takes the household engine pause and instance funding before any Jev call',async t=>{
+  const dir=mkdtempSync(join(tmpdir(),'category-adm-')); const s=createInstance(dir,{mode:'real'});
+  t.after(()=>{s.db.close();s.platform.close();rmSync(dir,{recursive:true,force:true});});
+  const fund=v=>s.platform.prepare('INSERT INTO platform_settings (key,value,updated_at) VALUES (?,?,0) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(FUNDING_SETTING,JSON.stringify(v));
+  setOutbound(s.platform,s.householdId,{engine:false});
+  assert.equal(evalAdmission(s.platform,s.householdId),'engine_paused');
+  setOutbound(s.platform,s.householdId,{engine:true});
+  assert.equal(evalAdmission(s.platform,s.householdId),'funding_unavailable');
+  fund(0); assert.equal(evalAdmission(s.platform,s.householdId),'funding_unavailable');
+  fund(5); assert.equal(evalAdmission(s.platform,s.householdId),null);
+  setOutbound(s.platform,s.householdId,{engine:false});
+  const errors=[]; const log=console.error; console.error=m=>errors.push(String(m)); t.after(()=>{console.error=log;});
+  assert.equal(await main(['--household',s.householdId,dir,'3','0.01']),1);
+  console.error=log; assert.deepEqual(errors,['category_eval_failed: engine_paused']);
 });

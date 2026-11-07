@@ -549,12 +549,15 @@ export function defaultHandlers({ publicUrl = null, simplefinFetch = null } = {}
       };
     },
     async 'confirm-guess'(ctx) {
-      // Jev is a model call outside the engine: the household's outbound engine pause stops it too.
+      // Jev is a model call outside the engine, so it takes the engine's admission: the household's
+      // outbound engine flag and instance funding, checked at start and again before every dispatch.
+      const admit=()=>ctx.household?.outbound?.enabled('engine')!==true ? 'engine_paused'
+        : ctx.household?.funded?.()!==true ? 'funding_unavailable' : null;
       const enabled=getSetting(ctx.db,'mode',null)==='real' && ctx.config?.engine!=='off' && getSetting(ctx.db,'engine',{on:true})?.on!==false
-        && ctx.household?.outbound?.enabled('engine')===true;
+        && admit()===null;
       const cap=getSetting(ctx.db,'cap',{usd:200})?.usd;
       const jev=await createJev({keyFile:enabled ? ctx.config?.typesafeKeyFile : null,ledger:createSpendLedger(ctx.db),
-        monthlyCapUsd:Number.isFinite(cap)&&cap>=0?cap:0});
+        monthlyCapUsd:Number.isFinite(cap)&&cap>=0?cap:0,admit});
       const categories = await guessCategories(ctx.db, jev, { now: ctx.now });
       const closed = await guessClosedOptions(ctx.db, jev, { now: ctx.now });
       const out = await guessPending(ctx.db, ctx.engine, { now: ctx.now });
