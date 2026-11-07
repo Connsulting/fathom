@@ -11,10 +11,10 @@
 // with length-prefixed 'fathom-dek/1', household id, key version and the header as additional data.
 
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
-import { closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync } from 'node:fs';
+import { closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { codeError } from './db.mjs';
-import { fsyncDir, writeAll } from './fsutil.mjs';
+import { writeAll, writeFileAtomic } from './fsutil.mjs';
 
 const MAGIC = Buffer.from('FTHM2', 'latin1');
 const KEY_MAGIC = Buffer.from('FTHMK1', 'latin1');
@@ -34,7 +34,7 @@ const KEYS = new WeakMap(); // data key handle -> raw key
 const ROOTS = new WeakMap(); // household root -> { base: real data root, segments }
 
 const isBytes = v => v instanceof Uint8Array;
-const isId = v => typeof v === 'string' && ID.test(v);
+export const isId = v => typeof v === 'string' && ID.test(v);
 const isVersion = v => Number.isInteger(v) && v >= 1 && v <= 0xffffffff;
 const isPurpose = v => Object.values(PURPOSES).includes(v);
 const view = b => Buffer.from(b.buffer, b.byteOffset, b.byteLength);
@@ -155,11 +155,11 @@ const aadOf = (handle, purpose, objectId, header) => fields('fathom-vault/2', ha
 export function sealObject(handle, { purpose, objectId, bytes } = {}) {
   const key = keyOf(handle);
   check(isPurpose(purpose) && isId(objectId) && isBytes(bytes));
-  const header = Buffer.alloc(HEADER);
-  MAGIC.copy(header);
-  header.writeUInt32BE(handle.version, MAGIC.length);
-  randomBytes(NONCE).copy(header, MAGIC.length + 4);
-  return Buffer.concat([header, gcmSeal(key, header.subarray(MAGIC.length + 4), aadOf(handle, purpose, objectId, header), bytes)]);
+  const version = Buffer.alloc(4);
+  version.writeUInt32BE(handle.version);
+  const nonce = randomBytes(NONCE);
+  const header = Buffer.concat([MAGIC, version, nonce]);
+  return Buffer.concat([header, gcmSeal(key, nonce, aadOf(handle, purpose, objectId, header), bytes)]);
 }
 
 // The plaintext; vault_auth_failed for any other household, purpose, object, version or byte.
@@ -313,14 +313,9 @@ export async function storeObject({ root, handle, purpose, objectId, bytes } = {
   assertSameHousehold(root, handle);
   const blob = sealObject(handle, { purpose, objectId, bytes });
   const dir = containedDir(root, 'files', { create: true });
-  const final = join(dir, `${objectId}.bin`);
-  const tmp = join(dir, `.${objectId}.${randomBytes(6).toString('hex')}.tmp`);
-  writePrivateFile(tmp, blob);
   try {
-    renameSync(tmp, final);
-    fsyncDir(final);
+    writeFileAtomic(join(dir, `${objectId}.bin`), blob);
   } catch {
-    rmSync(tmp, { force: true });
     throw codeError('vault_write_failed');
   }
   return `files/${objectId}.bin`;

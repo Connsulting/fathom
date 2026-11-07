@@ -15,18 +15,21 @@ import { lstatSync, mkdirSync, readdirSync, renameSync, rmdirSync, rmSync } from
 import { join } from 'node:path';
 import { decrypt } from '../ingest/vault.mjs';
 import { codeError } from './db.mjs';
-import { fsyncDir } from './fsutil.mjs';
+import { fsyncFile } from './fsutil.mjs';
 import {
-  PURPOSES, SIMPLEFIN_OBJECT_ID, assertSameHousehold, containedDir, openObject, readRegularFile, sealObject, writePrivateFile,
+  PURPOSES, SIMPLEFIN_OBJECT_ID, assertSameHousehold, containedDir, isId, openObject, readRegularFile, sealObject, writePrivateFile,
 } from './household-vault.mjs';
 
-const ID = /^[A-Za-z0-9_-]{1,128}$/;
 const LEGACY_SIMPLEFIN_AAD = 'simplefin:access';
 const SIMPLEFIN_FILE = 'simplefin-access.fthm2';
 const FORMAT = 'fathom-vault-bundle/1';
 
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
-const fileOf = o => (o.purpose === PURPOSES.simplefinAccess ? SIMPLEFIN_FILE : `files/${o.objectId}.bin`);
+// Where and in what form each staged object is kept: the SimpleFIN secret as the base64 text its
+// column stores, every other object as raw FTHM2 bytes at files/<id>.bin.
+const storedForm = o => (o.purpose === PURPOSES.simplefinAccess
+  ? { file: SIMPLEFIN_FILE, encode: blob => Buffer.from(blob.toString('base64')), decode: bytes => Buffer.from(bytes.toString('latin1'), 'base64') }
+  : { file: `files/${o.objectId}.bin`, encode: blob => blob, decode: bytes => bytes });
 
 // Run a filesystem step; its raw error (which names paths) becomes `code`.
 function fsStep(fn, code = 'vault_write_failed') {
@@ -37,8 +40,7 @@ function fsStep(fn, code = 'vault_write_failed') {
   }
 }
 const lstatOrNull = path => fsStep(() => lstatSync(path, { throwIfNoEntry: false }) ?? null);
-// fsyncDir syncs the directory holding its argument.
-const syncDir = dir => fsStep(() => fsyncDir(join(dir, 'entry')));
+const syncDir = dir => fsStep(() => fsyncFile(dir));
 
 function legacyOpen(key, blob, aad) {
   try {
@@ -57,7 +59,7 @@ function inventory(db) {
       .map(r => ({ ...r, purpose: PURPOSES.advisorPacket })),
   ];
   for (const r of rows) {
-    if (!ID.test(r.id) || r.stored_path !== `files/${r.id}.bin`) throw codeError('vault_stored_path_invalid');
+    if (!isId(r.id) || r.stored_path !== `files/${r.id}.bin`) throw codeError('vault_stored_path_invalid');
   }
   const conn = db.prepare('SELECT access_blob FROM simplefin_connection WHERE id = 1').get();
   return { rows, secret: conn ? String(conn.access_blob) : null };
@@ -66,7 +68,7 @@ function inventory(db) {
 // Returns { path (relative to the root), uploads, packets, simplefin, unreferenced, objects }, where
 // each object is { purpose, objectId, sha256 (plaintext), ciphertextSha256 (the FTHM2 blob) }.
 export async function convertHouseholdVault({ db, sourceDir, legacyKey, root, handle, operationId, onPhase = async () => {} } = {}) {
-  if (typeof operationId !== 'string' || !ID.test(operationId) || typeof sourceDir !== 'string'
+  if (!isId(operationId) || typeof sourceDir !== 'string'
     || !(legacyKey instanceof Uint8Array) || legacyKey.length !== 32) throw codeError('vault_invalid_input');
   assertSameHousehold(root, handle);
   const { rows, secret } = inventory(db);
@@ -98,26 +100,30 @@ export async function convertHouseholdVault({ db, sourceDir, legacyKey, root, ha
     fsStep(() => mkdirSync(filesDir, { mode: 0o700 }));
 
     const objects = [];
-    const stage = (purpose, objectId, plain) => {
+    const stage = (purpose, objectId, plain, plainSha) => {
       const blob = sealObject(handle, { purpose, objectId, bytes: plain });
-      const o = { purpose, objectId, sha256: sha256(plain), ciphertextSha256: sha256(blob) };
-      writePrivateFile(join(partial, fileOf(o)), purpose === PURPOSES.simplefinAccess ? Buffer.from(blob.toString('base64')) : blob);
+      const o = { purpose, objectId, sha256: plainSha, ciphertextSha256: sha256(blob) };
+      writePrivateFile(join(partial, storedForm(o).file), storedForm(o).encode(blob));
       objects.push(o);
     };
     for (const r of rows) {
       const plain = legacyOpen(legacyKey, readRegularFile(join(legacyDir, `${r.id}.bin`)), r.id);
-      if (sha256(plain) !== r.sha256 || plain.length !== r.size) throw codeError('vault_plaintext_mismatch');
-      stage(r.purpose, r.id, plain);
+      const plainSha = sha256(plain);
+      if (plainSha !== r.sha256 || plain.length !== r.size) throw codeError('vault_plaintext_mismatch');
+      stage(r.purpose, r.id, plain, plainSha);
     }
-    if (secret !== null) stage(PURPOSES.simplefinAccess, SIMPLEFIN_OBJECT_ID, legacyOpen(legacyKey, Buffer.from(secret, 'base64'), LEGACY_SIMPLEFIN_AAD));
+    if (secret !== null) {
+      const plain = legacyOpen(legacyKey, Buffer.from(secret, 'base64'), LEGACY_SIMPLEFIN_AAD);
+      stage(PURPOSES.simplefinAccess, SIMPLEFIN_OBJECT_ID, plain, sha256(plain));
+    }
     syncDir(filesDir);
     syncDir(partial);
     await onPhase('staged');
 
     // Validate before publish: every staged object, read back from disk, opens to the legacy plaintext.
     for (const o of objects) {
-      const stored = readRegularFile(join(partial, fileOf(o)));
-      const blob = o.purpose === PURPOSES.simplefinAccess ? Buffer.from(stored.toString('latin1'), 'base64') : stored;
+      const form = storedForm(o);
+      const blob = form.decode(readRegularFile(join(partial, form.file)));
       if (sha256(blob) !== o.ciphertextSha256
         || sha256(openObject(handle, { purpose: o.purpose, objectId: o.objectId, blob })) !== o.sha256) throw codeError('vault_plaintext_mismatch');
     }
