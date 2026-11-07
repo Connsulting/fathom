@@ -33,8 +33,9 @@ async function openSources(msg) {
   return src;
 }
 
-function tool(src, name) {
-  return src.locator('li.h-src-tool').filter({ has: src.page().locator('code', { hasText: new RegExp(`^${name}$`) }) });
+function tool(src, name, operation) {
+  const rows = src.locator('li.h-src-tool').filter({ has: src.page().locator('code', { hasText: new RegExp(`^${name}$`) }) });
+  return operation ? rows.filter({ hasText: `"operation":"${operation}"` }) : rows;
 }
 
 // Free text in a rec dialog composer (the Ask page has its own composer, see askOnAsk).
@@ -60,10 +61,10 @@ test('an Ask answer to a suggested question shows a figure and Sources listing t
 
   const src = await openSources(msg);
   await expect(src.locator('li.h-src-tool').first()).toBeVisible();
-  await expect(tool(src, 'household')).toHaveCount(1);
-  await expect(tool(src, 'household').locator('span')).toHaveText('no arguments');
-  await expect(tool(src, 'household')).toHaveCount(1);
-  await expect(tool(src, 'household').locator('span')).toContainText(key);
+  await expect(tool(src, 'household', 'summary')).toHaveCount(1);
+  await expect(tool(src, 'household', 'summary').locator('span')).toHaveText('{"operation":"summary"}');
+  await expect(tool(src, 'household', 'figures')).toHaveCount(1);
+  await expect(tool(src, 'household', 'figures').locator('span')).toContainText(key);
   await expect(src.locator(`li.h-src-fig .fx-fig[data-fig="${key}"]`)).toBeVisible();
 
   // Sources keep the provenance rule: amounts there are figures too.
