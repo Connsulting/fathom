@@ -352,6 +352,9 @@ function timeline(mode) {
     + `<div class="h-tl-key"><span><i class="k needs"></i>Needs you</span><span><i class="k open"></i>In motion</span><span><i class="k idle"></i>Waiting or snoozed</span><span><i class="k done"></i>Done</span><span><i class="k dia"></i>Deadline</span>${evs.length ? '<span><i class="k ev"></i>What changed</span>' : ''}</div></div>`;
 }
 
+// The narrowest a window strip's plot gets, in px (a 320px phone dialog), for label room checks.
+const STRIP_PX = 260;
+
 function windowStrip(r) {
   // A close-up of the rec's own window: today to close, with neighbouring deadlines. Positioned by
   // percent so the marker stays round at any width. Today and the close label share the top row:
@@ -360,18 +363,20 @@ function windowStrip(r) {
   const d = days(r);
   const close = recDate(r);
   const span = Math.max(45, d + 21);
-  const s = addDays(c, Math.min(-10, d - 7));
+  const s = addDays(c, Math.min(-10, d - 14));
   const e = addDays(c, span);
   const pct = (t) => ((t.getTime() - s.getTime()) / (e.getTime() - s.getTime())) * 100;
   const at = (cls, t, extra = '') => `<i class="${cls}" style="left:${pct(t).toFixed(2)}%${extra}"></i>`;
   let g = '<i class="h-strip-ax"></i>';
-  const mons = [];
-  for (let k = new Date(s); k <= e; k = addDays(k, 1)) {
-    if (k.getUTCDate() === 1) {
-      g += at('h-strip-m', k);
-      mons.push(`<span class="mon" style="left:${pct(k).toFixed(2)}%">${MON[k.getUTCMonth()]}</span>`);
-    }
-  }
+  const firsts = [];
+  for (let k = new Date(s); k <= e; k = addDays(k, 1)) if (k.getUTCDate() === 1) firsts.push(k);
+  firsts.forEach((k) => { g += at('h-strip-m', k); });
+  // A month name needs about 34px. Plots are never narrower than STRIP_PX, so name every nth month
+  // when the months sit closer than that.
+  const gapPct = firsts.length > 1 ? pct(firsts[1]) - pct(firsts[0]) : 100;
+  const nth = Math.max(1, Math.ceil(34 / ((gapPct / 100) * STRIP_PX)));
+  const mons = firsts.filter((_, i) => i % nth === 0)
+    .map((k) => `<span class="mon" style="left:${pct(k).toFixed(2)}%">${MON[k.getUTCMonth()]}</span>`);
   arr(api.s.deadlines).forEach((dl) => {
     const when = parseISO(dl.date);
     if (!when || when < s || when > e || dl.recId === r.id) return;
@@ -379,13 +384,31 @@ function windowStrip(r) {
   });
   if (d >= 0) g += `<i class="h-strip-win" style="left:${pct(c).toFixed(2)}%;width:${(pct(close) - pct(c)).toFixed(2)}%"></i>`;
   g += at('h-strip-now', c) + at('h-strip-close', close);
-  const lab = (cls, t, text) => `<span class="${cls}" style="left:${pct(t).toFixed(2)}%">${text}</span>`;
+  // Today and the close label share the top row. Each sits beside its marker, on the side with room,
+  // and a label squeezed between the two markers is cut with an ellipsis at the gap, so two labels
+  // never meet at any text length. Widths are estimated; STRIP_PX is the narrowest plot.
+  const estW = (text) => String(text).replace(/<[^>]*>/g, '').length * 6.6 + 4;
   const endText = T(r.window?.label || fmt(close));
+  const place = (cls, t, text, dir, maxPct, inward = false) => `<span class="${cls} ${dir}" style="left:${pct(t).toFixed(2)}%;max-width:${inward ? `max(0px, calc(${maxPct.toFixed(2)}% - 14px))` : `calc(${maxPct.toFixed(2)}% - 2px)`}" title="${esc(String(text).replace(/<[^>]*>/g, ''))}">${text}</span>`;
   let labs;
-  if (d === 0) labs = lab('now', c, `Today, ${fmt(c)}`);
-  else if (Math.abs(pct(close) - pct(c)) < 16) {
-    labs = lab(d > 0 ? 'now l' : 'now r', c, 'Today') + lab(d > 0 ? 'end r' : 'end l', close, endText);
-  } else labs = lab('now', c, 'Today') + lab('end', close, endText);
+  if (d === 0) labs = place('now', c, `Today, ${fmt(c)}`, 'r', 100 - pct(c));
+  else {
+    const todayFirst = d > 0;
+    const A = todayFirst ? { cls: 'now', t: c, text: 'Today' } : { cls: 'end', t: close, text: endText };
+    const B = todayFirst ? { cls: 'end', t: close, text: endText } : { cls: 'now', t: c, text: 'Today' };
+    const pa = pct(A.t), pb = pct(B.t), gap = pb - pa;
+    // The left label prefers the side left of its marker, the right one the right side. A label
+    // with no room on its preferred side goes between the markers when the whole text fits there,
+    // otherwise it stays outside and is cut with an ellipsis.
+    const gapPx = (gap / 100) * STRIP_PX - 14;
+    const da = pa / 100 * STRIP_PX >= estW(A.text) + 8 ? 'l' : (gapPx >= estW(A.text) ? 'r' : 'l');
+    let db = (100 - pb) / 100 * STRIP_PX >= estW(B.text) + 8 ? 'r' : (gapPx >= estW(B.text) ? 'l' : 'r');
+    if (da === 'r' && db === 'l' && estW(A.text) + estW(B.text) + 14 > gapPx) db = 'r';
+    const inward = (da === 'r') + (db === 'l');
+    const share = gap / Math.max(1, inward);
+    labs = place(A.cls, A.t, A.text, da, da === 'l' ? pa : share, da === 'r')
+      + place(B.cls, B.t, B.text, db, db === 'r' ? 100 - pb : share, db === 'l');
+  }
   const cd = countdown(r);
   return `<div class="h-strip-wrap"><div class="h-strip-plot"><div class="h-strip">${g}<div class="h-strip-labs">${labs}${mons.join('')}</div></div></div>`
     + `<div class="h-strip-cd"><b>${cd.n}</b> ${cd.u}</div></div>`;
