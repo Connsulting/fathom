@@ -308,6 +308,7 @@ function applyRoute(r, opts) {
   const h = routeHash(next);
   const changed = h !== routeHash(cur);
   cur = next;
+  if (changed && opts.titleRepair !== false && next.name === 'ask' && next.params.id) refreshThreadTitle(next.params.id);
   routeStep = next.name === 'onboarding' ? next.params.step : null;
   stateCache.ver = -1;
   if (window.location.hash !== h) {
@@ -330,7 +331,7 @@ function applyRoute(r, opts) {
 function go(name, params, opts) {
   let p = params;
   if (p != null && typeof p !== 'object') p = { [PARAM_KEY[name] || 'id']: p };
-  applyRoute({ name, params: p || {} }, { replace: !!(opts && opts.replace), silent: !!(opts && opts.silent) });
+  applyRoute({ name, params: p || {} }, { replace: !!(opts && opts.replace), silent: !!(opts && opts.silent), titleRepair: opts?.titleRepair });
 }
 
 function onHashChange() {
@@ -622,7 +623,7 @@ function newThreadStream(q, onEvent) {
   return sendStream('/api/threads', body, cb, d => {
     let th = d.thread && typeof d.thread === 'object' ? d.thread : null;
     if (!th && d.recoveredKey) th = rawThread(d.recoveredKey.replace(/^ask:/, ''));
-    if (th && th.id && cur && cur.name === 'ask' && !(cur.params && cur.params.id)) go('ask', { id: th.id }, { replace: true });
+    if (th && th.id && cur && cur.name === 'ask' && !(cur.params && cur.params.id)) go('ask', { id: th.id }, { replace: true, titleRepair: false });
     const key = th ? threadKey(th) : null;
     return { thread: th, message: d.message ? mapMsg(d.message) : key ? lastReply(key) : null };
   });
@@ -761,6 +762,17 @@ function threads() {
   return threadList().slice();
 }
 
+async function refreshThreadTitle(id) {
+  const before = rawThread(id);
+  const data = await getRead('/api/threads/' + encodeURIComponent(id));
+  const current = rawThread(id);
+  if (!data?.thread || !before || !current || current.title !== before.title || current.titleSource !== before.titleSource) return;
+  if (current.title === data.thread.title && current.titleSource === data.thread.titleSource) return;
+  current.title = data.thread.title;
+  current.titleSource = data.thread.titleSource;
+  notify();
+}
+
 function askStarters() {
   return arr(live().askStarters).filter(s => s && s.id != null && typeof s.q === 'string');
 }
@@ -772,7 +784,7 @@ function newThread(q) {
   if (!body) return done();
   return send('/api/threads', body, d => {
     const th = d.thread && typeof d.thread === 'object' ? d.thread : null;
-    if (th && th.id && cur && cur.name === 'ask' && !(cur.params && cur.params.id)) go('ask', { id: th.id }, { replace: true });
+    if (th && th.id && cur && cur.name === 'ask' && !(cur.params && cur.params.id)) go('ask', { id: th.id }, { replace: true, titleRepair: false });
     return { thread: th, message: d.message ? mapMsg(d.message) : null };
   });
 }
