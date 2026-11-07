@@ -1761,17 +1761,17 @@ test('PN1: Ask records a spending ledger from the owner sentence using the adver
   const s = await demoStore(t);
   const text = "Aster's is a spending ledger for my personal cards.";
   const { engine } = scripted(s.runtime, [[
-    { toolCalls: [{ name: 'get_fact_answer_shapes', args: {} }] },
-    { toolCalls: [{ name: 'record_household_fact', args: { key: 'pnl.ledgers', value: { "Aster's": { kind: 'spending' } }, evidence: text } }] },
+    { toolCalls: [{ name: 'household', args: { operation: 'fact_shapes' } }] },
+    { toolCalls: [{ name: 'answer', args: { operation: 'fact', key: 'pnl.ledgers', value: { "Aster's": { kind: 'spending' } }, evidence: text } }] },
     { text: 'Saved the spending ledger classification.' },
   ]]);
   const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).answer({ db: s.db, key: THREAD, text, ownerText: text, actorId: 'demo', turnId: 'synthetic-ledger' });
   assert.ok(!reply.notice);
-  const shapes = await callTool('get_fact_answer_shapes', {}, { db: s.db });
+  const shapes = await callTool('household', { operation: 'fact_shapes' }, { db: s.db, dataDir: s.root });
   assert.ok(shapes['pnl.ledgers']);
   const fact = s.db.prepare("SELECT value, confirmed FROM facts WHERE key = 'pnl.ledgers'").get();
   assert.ok(fact, JSON.stringify(reply));
   assert.deepEqual(JSON.parse(fact.value), { "Aster's": { kind: 'spending' } });
   assert.equal(fact.confirmed, 1);
-  assert.ok(reply.provenance.tools.some(x => x.name === 'record_household_fact'));
+  assert.ok(reply.provenance.tools.some(x => x.name === 'answer' && x.args.operation === 'fact'));
 });
