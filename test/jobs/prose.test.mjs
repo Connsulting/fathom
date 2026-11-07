@@ -14,6 +14,8 @@ import { scratch, recRow, activeRecIds, parseJson } from '../helpers/real-store.
 
 const NOW = '2026-11-05';
 const S = scratch();
+const store = S.store.bind(S);
+S.store = opts => store({ ...opts, variant: { ...opts?.variant, facts: { 'household.expectedDate': '2027-02-15', ...opts?.variant?.facts } } });
 after(() => S.cleanup());
 const plan = (db, engine = null) => planRun(db, { engine, now: NOW });
 

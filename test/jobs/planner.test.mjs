@@ -525,7 +525,10 @@ function assertRecShape(rec, scenario, packIds) {
     assert.ok(k.body.length <= 420, `${where}.kb body at most 420 chars`);
   }
   assert.ok(Array.isArray(rec.cross) && rec.cross.length <= 2, `${where}.cross`);
-  assert.ok(Array.isArray(rec.tasks) && rec.tasks.length >= 3 && rec.tasks.length <= 6, `${where}.tasks 3..6 (${rec.tasks.length})`);
+  if (rec.question) {
+    assert.ok(rec.question.fields.length > 0);
+    assert.deepEqual(rec.tasks, []);
+  } else assert.ok(Array.isArray(rec.tasks) && rec.tasks.length >= 3 && rec.tasks.length <= 6, `${where}.tasks 3..6 (${rec.tasks.length})`);
   for (const t of rec.tasks) {
     assert.equal(typeof t.t, 'string');
     assert.equal(typeof t.done, 'boolean');
@@ -732,8 +735,8 @@ describe('recs', () => {
     assert.ok(activeRecIds(db).includes('hsa-room'), 'still fires');
     assert.equal(figureRow(db, 'room.hsa'), null, 'no room figure without confirmed eligibility');
     const def = recRow(db, 'hsa-room').def;
-    assert.match(def.title, /^Confirm\b/);
-    assert.ok(def.tasks.length >= 1);
+    assert.match(def.title, /HSA eligible/);
+    assert.ok(def.question.fields.some(f => f.key === 'benefits.hsaEligible'));
     for (const m of def.mine) assert.equal(fig(db, m.fig).kind, 'a', `confirm-form mine ${m.fig} is an actual`);
     // liveness: with the confirmation the base store sizes the room
     assert.doesNotMatch(recRow(base, 'hsa-room').def.title, /^Confirm\b/);
@@ -743,7 +746,7 @@ describe('recs', () => {
     const db = await S.store({ variant: { facts: { 'accounts.va529': undefined } } });
     await plan(db);
     assert.ok(activeRecIds(db).includes('va529'));
-    assert.match(recRow(db, 'va529').def.title, /^Confirm\b/);
+    assert.ok(recRow(db, 'va529').def.question.fields.some(f => f.key === 'accounts.va529'));
     assert.equal(figureRow(db, 'va529.deductionLeft'), null);
   });
 
