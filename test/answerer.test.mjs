@@ -77,7 +77,7 @@ function scripted(runtime, scripts = [], { before } = {}) {
   return { engine, requests, responses };
 }
 
-test('a tool preamble and the answer stay as two paragraphs and the stream matches', async t => {
+test('a tool preamble is interim: it streams, moves out with an interim event, and only the answer is stored', async t => {
   const s = await demoStore(t);
   const seen = [];
   const { engine } = scripted(s.runtime, [[
@@ -87,10 +87,12 @@ test('a tool preamble and the answer stay as two paragraphs and the stream match
   const reply = await createLiveAnswerer({ engine, packs: s.packs }).answer({
     db: s.db, key: THREAD, text: 'What should I keep?', onEvent: e => seen.push(e),
   });
-  const streamed = seen.filter(e => e.type === 'text').map(e => e.text).join('');
+  const interim = seen.map(e => e.type).lastIndexOf('interim');
+  const streamed = seen.slice(interim + 1).filter(e => e.type === 'text').map(e => e.text).join('');
   assert.equal(seen.some(e => e.type === 'reset'), false);
-  assert.equal(streamed, 'Let me check your figures.\n\nKeep a reserve.');
-  assert.deepEqual(reply.paragraphs, ['Let me check your figures.', 'Keep a reserve.']);
+  assert.deepEqual(seen[interim], { type: 'interim', text: 'Let me check your figures.' });
+  assert.equal(streamed, 'Keep a reserve.');
+  assert.deepEqual(reply.paragraphs, ['Keep a reserve.']);
   assert.equal(reply.paragraphs.join('\n\n'), streamed);
 });
 
@@ -124,7 +126,7 @@ test('superseded SDK frames leave the stream equal to storage', async t => {
   assert.deepEqual(reply.paragraphs, ['Keep a reserve.']);
 });
 
-test('text before a tool round is kept when the model resumes mid-word', async t => {
+test('text before a tool round is interim and stays out of the answer, even when the model resumes mid-word', async t => {
   const s = await demoStore(t);
   const head = 'Give appreciated assets instead of cash.\n\nSources: "G';
   const tail = 'ifts of appreciated stock" and "Evaluate bunching across tax years."\n\nQuarterly tax payments. The federal safe harbor follows last year.\n\nThe most useful next steps are to schedule the payment.';
@@ -137,47 +139,52 @@ test('text before a tool round is kept when the model resumes mid-word', async t
   ]]);
   const reply = await createLiveAnswerer({ engine, packs: s.packs }).answer({ db: s.db, key: THREAD, text: 'What am I missing?' });
   const body = joined(reply);
-  assert.match(body, /Give appreciated assets instead of cash/);
+  assert.doesNotMatch(body, /Give appreciated assets instead of cash/);
   assert.match(body, /Quarterly tax payments/);
   assert.match(body, /most useful next steps/);
-  assert.doesNotMatch(body, /ifts of appreciated/);
   assert.doesNotMatch(body, /Sources:/);
+  assert.ok(reply.provenance.work.items.some(x => x.k === 'note' && /Give appreciated assets instead of cash/.test(x.text)),
+    'the interim text is kept as a work note');
 });
 
 // Two scripted rounds in one answer call: the first calls a tool, so the second round follows.
-async function twoRounds(s, first, second) {
+// With `fallback` both texts are tool rounds and a third round has no text, so the answer is the
+// earlier rounds joined (the engine's fallback for an empty final round).
+async function twoRounds(s, first, second, { fallback = false } = {}) {
   const seen = [];
-  const run = scripted(s.runtime, [[
-    { text: first, toolCalls: [{ name: 'household_summary', args: {} }] },
-    { text: second },
-  ]]);
+  const tool = { name: 'household_summary', args: {} };
+  const run = scripted(s.runtime, [fallback
+    ? [{ text: first, toolCalls: [tool] }, { text: second, toolCalls: [tool] }, {}]
+    : [{ text: first, toolCalls: [tool] }, { text: second }]]);
   const reply = await createLiveAnswerer({ engine: run.engine, packs: s.packs }).answer({
     db: s.db, key: THREAD, text: 'What should I keep?', onEvent: e => seen.push(e),
   });
-  const streamed = seen.filter(e => e.type === 'text').map(e => e.text).join('');
+  const interim = seen.map(e => e.type).lastIndexOf('interim');
+  const streamed = seen.slice(interim + 1).filter(e => e.type === 'text').map(e => e.text).join('');
   return { reply, stored: run.responses[0].text, streamed, seen };
 }
 
-test('answer assembly joins tool rounds without editing words', async t => {
+test('an empty final round joins the tool rounds without editing words', async t => {
   const s = await demoStore(t);
-  const word = await twoRounds(s, 'We can set this aside for the appreci', 'ated stock gift.');
+  const fallback = { fallback: true };
+  const word = await twoRounds(s, 'We can set this aside for the appreci', 'ated stock gift.', fallback);
   assert.match(word.stored, /appreciated stock/);
   assert.match(joined(word.reply), /appreciated stock/);
   assert.doesNotMatch(joined(word.reply), /appreci ated/);
   assert.doesNotMatch(word.stored, /appreci\s+ated/);
 
-  const fresh = await twoRounds(s, 'Plan A', 'Keep a reserve.');
+  const fresh = await twoRounds(s, 'Plan A', 'Keep a reserve.', fallback);
   assert.deepEqual(fresh.reply.paragraphs, ['Plan A', 'Keep a reserve.']);
 
-  const sentence = await twoRounds(s, 'Let me check your figures.', 'Keep a reserve.');
+  const sentence = await twoRounds(s, 'Let me check your figures.', 'Keep a reserve.', fallback);
   assert.deepEqual(sentence.reply.paragraphs, ['Let me check your figures.', 'Keep a reserve.']);
 
   // A figure cut across the tool round: the engine's stored text, before grounding.
-  const figure = await twoRounds(s, 'Set aside $1,2', '00 into savings.');
+  const figure = await twoRounds(s, 'Set aside $1,2', '00 into savings.', fallback);
   assert.equal(figure.stored, 'Set aside $1,200 into savings.');
 });
 
-test('streamed and stored answer text match across tool rounds', async t => {
+test('the text streamed after the last interim event equals the stored final-round text', async t => {
   const s = await demoStore(t);
   const pairs = [
     ['Ready. ', ' Keep a reserve.'],
@@ -188,12 +195,11 @@ test('streamed and stored answer text match across tool rounds', async t => {
   for (const [first, second] of pairs) {
     const run = await twoRounds(s, first, second);
     assert.equal(run.seen.some(e => e.type === 'reset'), false, `${first} | ${second}: no reset`);
+    assert.deepEqual(run.seen.filter(e => e.type === 'interim').map(e => e.text.trim()), [first.trim()], `${first} | ${second}: one interim`);
+    assert.equal(run.stored, second, `${first} | ${second}: only the final round is stored`);
     assert.equal(run.streamed, run.stored, `${first} | ${second}: stream equals storage`);
     assert.deepEqual(run.reply.paragraphs, markdownBlocks(stripSources(run.streamed)), `${first} | ${second}: reply renders the stream`);
   }
-  const spaced = await twoRounds(s, 'Ready. ', ' Keep a reserve.');
-  assert.equal(spaced.stored, 'Ready.  Keep a reserve.', 'the model characters stand, nothing inserted');
-  assert.equal(spaced.streamed, 'Ready.  Keep a reserve.');
 });
 
 test('a removed citation list item leaves no bare marker', async t => {

@@ -43,11 +43,16 @@ function roundSeparator(prev, next) {
 // the separator from the same stored text and the same first character of the round, so the
 // streamed text always equals the stored text. A round with no text adds nothing. replaceRound
 // (superseded SDK frames) returns the full answer so far with the round's kept text, to restream.
+// endRound(roundText, { interim: true }) ends a round whose text is not part of the answer (a chat
+// tool round): the answer starts over, so the next round's first piece has no separator and a
+// replace restreams only the text after it. `joined` keeps the legacy join of every round's text.
 export function createAnswerAssembler() {
   let text = '';
+  let joined = '';
   let started = false;
   return {
     get text() { return text; },
+    get joined() { return joined; },
     beginRound() { started = false; },
     streamPiece(delta) {
       const piece = typeof delta === 'string' ? delta : '';
@@ -62,8 +67,11 @@ export function createAnswerAssembler() {
       if (!kept) return text;
       return text + roundSeparator(text, kept) + kept;
     },
-    endRound(roundText) {
-      if (typeof roundText === 'string' && roundText) text += roundSeparator(text, roundText) + roundText;
+    endRound(roundText, { interim = false } = {}) {
+      const kept = typeof roundText === 'string' ? roundText : '';
+      if (kept) joined += roundSeparator(joined, kept) + kept;
+      if (interim) text = '';
+      else if (kept) text += roundSeparator(text, kept) + kept;
     },
   };
 }
@@ -114,13 +122,46 @@ function explicitCredential(credential) {
 // request.systemDynamic (optional): system text placed after the dynamic boundary (not cached).
 // request.toolContext (optional): { db, now } for this call's tools instead of the constructed one.
 // request.onEvent (optional, purpose 'chat'): called with { type: 'tool', name } as each tool call
-// starts and { type: 'text', text } for each text delta, in every round; a round's first delta is
-// prefixed with roundSeparator, so the deltas join to exactly the returned text. When the SDK
-// supersedes refused frames, { type: 'reset' } drops everything streamed and is followed by the
-// full answer text so far; the text after the last reset equals the returned text. In fake mode the round's
-// scripted text arrives in deterministic chunks of FAKE_CHUNK_WORDS words, streamDelayMs apart.
-// A throwing listener is ignored; events never change the result, the spend or the ledger.
+// starts and { type: 'text', text } for each text delta, in every round. When a tool event arrives
+// after text streamed in the current round, { type: 'interim', text } (the round's text so far,
+// trimmed) comes first, and a tool round's text not yet flushed is sent as interim at round end;
+// after an interim event the round's streamed text starts over. The text deltas after the last
+// interim event join to exactly the returned text (a round's first delta is prefixed with
+// roundSeparator within the answer rounds). When the SDK supersedes refused frames,
+// { type: 'reset' } drops the answer text streamed since the last interim event and is followed by
+// that text so far; the text after the last reset equals the returned text. In fake mode a round's
+// scripted text arrives first, in deterministic chunks of FAKE_CHUNK_WORDS words streamDelayMs
+// apart, then its tool events. A throwing listener is ignored; events never change the result, the
+// spend or the ledger.
+//
+// Purpose 'chat': a round that ends with tool results is interim. Its text is not part of the
+// answer: the returned `text` is the final round's text, and `interim` lists the trimmed non-empty
+// text of each tool round in order. When the final round has no text, `text` falls back to every
+// earlier round's text joined and `interim` is empty. `toolRounds` lists each tool round as
+// { text, tools, parts } for the answerer's work list: its interim text ('' when none or after the
+// fallback), its tool names, and `parts`, its text and tools in content order as { text } and
+// { tool } entries (text blocks trimmed, empty ones and, after the fallback, all text dropped; tool
+// names without the SDK prefix). Content with no tool_use block gives the text first, then the
+// tools. Every other purpose returns every round's text joined.
 export const FAKE_CHUNK_WORDS = 3;
+
+const TOOL_PREFIX = 'mcp__fathom__';
+const toolName = name => { const s = String(name ?? ''); return s.startsWith(TOOL_PREFIX) ? s.slice(TOOL_PREFIX.length) : s; };
+const hasToolUse = content => Array.isArray(content) && content.some(block => block && block.type === 'tool_use');
+
+// One tool round's parts in content order (see toolRounds above).
+function roundParts(round) {
+  if (hasToolUse(round.content)) {
+    const parts = [];
+    for (const block of round.content) {
+      if (block && block.type === 'text' && typeof block.text === 'string' && block.text.trim()) parts.push({ text: block.text.trim() });
+      else if (block && block.type === 'tool_use') parts.push({ tool: toolName(block.name) });
+    }
+    return parts;
+  }
+  const text = typeof round.text === 'string' ? round.text.trim() : '';
+  return [...(text ? [{ text }] : []), ...round.toolResults.map(r => ({ tool: r.name }))];
+}
 
 export function fakeChunks(text) {
   const parts = String(text ?? '').split(/(?<=\s)(?=\S)/);
@@ -142,20 +183,37 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
     toolContext: callContext, onEvent } = {}) => {
     if (mode === 'off') throw new EngineOffError();
     const answer = createAnswerAssembler();
+    // The text streamed in the current round since its last interim event.
+    let roundStream = '';
+    const flushInterim = () => {
+      const text = roundStream.trim();
+      roundStream = '';
+      if (text) onEvent({ type: 'interim', text });
+    };
     const emit = typeof onEvent === 'function' && purpose === 'chat'
       ? event => {
         try {
           if (event && event.type === 'text') {
             const text = answer.streamPiece(event.text);
-            if (text) onEvent({ type: 'text', text });
+            if (text) { roundStream += text; onEvent({ type: 'text', text }); }
           } else if (event && event.type === 'replace') {
             const full = answer.replaceRound(event.text);
+            roundStream = typeof event.text === 'string' ? event.text : '';
             onEvent({ type: 'reset' });
             if (full) onEvent({ type: 'text', text: full });
+          } else if (event && event.type === 'tool') {
+            flushInterim();
+            onEvent(event);
           } else onEvent(event);
         } catch { /* listeners never fail a call */ }
       }
       : null;
+    // Round end: a tool round's unflushed text goes out as interim; the next round starts empty.
+    const endStream = toolRound => {
+      if (!emit) return;
+      try { if (toolRound) flushInterim(); } catch { /* listeners never fail a call */ }
+      roundStream = '';
+    };
     if (!PURPOSES.includes(purpose)) throw new TypeError('Invalid call purpose');
     const model = modelFor(purpose);
     if (typeof system !== 'string' || typeof systemDynamic !== 'string' || !Array.isArray(messages) || messages.length === 0 || !Number.isInteger(maxTokens) || maxTokens <= 0 || maxTokens > 128000) {
@@ -166,6 +224,7 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
     const transcript = structuredClone(messages);
     const allResults = [];
     const rounds = [];
+    const toolRounds = [];
     let cost = 0;
     for (let roundIndex = 0; roundIndex < 8; roundIndex++) {
       let round;
@@ -183,17 +242,26 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
           if (mode === 'fake') {
             if (!queue.length) throw new ModelCallError('Fake engine has no scripted response');
             const script = structuredClone(queue.shift());
-            if (emit) {
-              for (const item of script.toolCalls ?? []) { emit({ type: 'tool', name: item.name }); await pause(streamDelayMs); }
-            }
-            await Promise.all((script.toolCalls ?? []).map(item => registry.invoke(item.name, item.args ?? {})));
             const blockTexts = Array.isArray(script.content)
               ? script.content.filter(block => block && block.type === 'text' && typeof block.text === 'string').map(block => block.text)
               : null;
             const text = blockTexts && blockTexts.length ? blockTexts.join('') : (script.text ?? '');
-            if (emit && text) {
-              for (const chunk of fakeChunks(text)) { await pause(streamDelayMs); emit({ type: 'text', text: chunk }); }
+            // Content with tool_use blocks streams in block order (text chunks, then the tool event,
+            // then the next text); otherwise a live model writes before it calls tools, so the
+            // round's text streams first, then its tool events.
+            if (emit) {
+              const streamText = async s => { for (const chunk of fakeChunks(s)) { await pause(streamDelayMs); emit({ type: 'text', text: chunk }); } };
+              if (hasToolUse(script.content)) {
+                for (const block of script.content) {
+                  if (block && block.type === 'text' && typeof block.text === 'string' && block.text) await streamText(block.text);
+                  else if (block && block.type === 'tool_use') { emit({ type: 'tool', name: toolName(block.name) }); await pause(streamDelayMs); }
+                }
+              } else {
+                if (text) await streamText(text);
+                for (const item of script.toolCalls ?? []) { emit({ type: 'tool', name: item.name }); await pause(streamDelayMs); }
+              }
             }
+            await Promise.all((script.toolCalls ?? []).map(item => registry.invoke(item.name, item.args ?? {})));
             round = { text, costUsd: Object.hasOwn(script, 'costUsd') ? script.costUsd : 0.001, model: 'fake', tokens: script.tokens ?? {},
               status: script.status ?? (script.toolCalls?.length ? 'error_max_turns' : 'success'),
               is_error: script.is_error === true, api_error_status: script.api_error_status ?? null,
@@ -231,7 +299,13 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
       cost += round.costUsd;
       rounds.push(round.details);
       allResults.push(...round.toolResults);
-      answer.endRound(round.text);
+      const chatToolRound = purpose === 'chat' && round.toolResults.length > 0;
+      answer.endRound(round.text, { interim: chatToolRound });
+      endStream(chatToolRound);
+      if (chatToolRound) {
+        toolRounds.push({ text: typeof round.text === 'string' ? round.text.trim() : '', tools: round.toolResults.map(r => r.name),
+          parts: roundParts(round) });
+      }
       const toolBoundary = round.status === 'error_max_turns' && round.toolResults.length > 0;
       if (round.api_error_status != null || (round.is_error && !toolBoundary && round.status !== 'error_max_budget_usd')) {
         throw new ModelCallError('Model did not complete a valid response');
@@ -242,9 +316,14 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
       if (!['success', 'error_max_turns'].includes(round.status)) throw new ModelCallError('Model did not complete a valid response');
       if (round.status === 'error_max_turns' && round.toolResults.length === 0) throw new ModelCallError('Model reached a turn limit without a tool result');
       if (round.toolResults.length === 0 || SINGLE_ROUND.includes(purpose)) {
-        const text = answer.text;
+        const fallback = purpose === 'chat' && !answer.text;
+        const text = fallback ? answer.joined : answer.text;
+        const chatParts = purpose === 'chat'
+          ? { interim: fallback ? [] : toolRounds.map(r => r.text).filter(Boolean),
+            toolRounds: fallback ? toolRounds.map(r => ({ ...r, text: '', parts: r.parts.filter(p => !('text' in p)) })) : toolRounds }
+          : {};
         return { text, content: round.content, costUsd: Number(cost.toFixed(12)), model: round.model,
-          toolResults: allResults, rounds, grounding: checkGrounding(text, { ...grounding, toolResults: allResults }) };
+          toolResults: allResults, rounds, ...chatParts, grounding: checkGrounding(text, { ...grounding, toolResults: allResults }) };
       }
       transcript.push({ role: 'assistant', content: round.content }, { role: 'tool', content: round.toolResults });
     }

@@ -1,11 +1,13 @@
 // Goals-first Home (#/home, with #/brief as an alias) on the demo build: the pace rollup headline
-// with its health chip, goal cards with pace bars and each goal's next action, the quiet row for
-// collapsed goals, the housekeeping row, the owner filter, the data-health line that replaced the
-// Year banner and the Confirm badge, and the phone next-thing card with Done, Later, Ask and
-// swipes. Domain cards, What changed and the timeline now live on Plan.
+// with its health chip, one card per live goal with its pace bar and next action (no quiet row),
+// the desktop list of goal actions due before Dec 31, the housekeeping row, the owner filter, the
+// data-health line that replaced the Year banner and the Confirm badge, and the phone next-thing
+// card with Done, Later, Ask and swipes. Domain cards, What changed and the timeline live on Plan.
+// Suggested targets have their own spec (e2e/goal-targets.spec.mjs); the demo's seed goals never
+// get suggestions, so this spec sees none.
 // Expected values come from GET /api/scenario (its pace block) at test time; amounts are never
-// hard-coded. A small oracle below mirrors the plan's collapse, ordering and owner rules over the
-// stored rec shape: owner, housekeeping and serves ([{ id, title, origin }]) on every rec.
+// hard-coded. A small oracle below mirrors the contract's card order, due list and owner rules over
+// the stored rec shape: owner, housekeeping and serves ([{ id, title, origin }]) on every rec.
 
 import {
   test, expect, S, resetDemo, gotoRoute, plain, money, fetchScenario, recDialog, openRecFromPage,
@@ -25,7 +27,7 @@ const FILTER_OK = {
 const servedIds = (r) => r.serves.map((g) => g.id);
 // Counted like the server's live.housekeeping: housekeeping and not hidden, done or dismissed.
 const isHousekeepingItem = (r) => r.housekeeping === true && !CLOSED.includes(r.status);
-const daysOf = (r) => Number(r.window?.days ?? 9999);
+const daysOf = (r) => (r.window?.days != null && Number.isFinite(Number(r.window.days)) ? Number(r.window.days) : Infinity);
 const byWindow = (a, b) => daysOf(a) - daysOf(b) || String(a.title).localeCompare(String(b.title)) || String(a.id).localeCompare(String(b.id));
 
 function fmtDay(iso) {
@@ -36,6 +38,13 @@ function daysToYearEnd(s) {
   return Math.round((Date.UTC(Number(s.meta.clock.slice(0, 4)), 11, 31) - c) / 86400000);
 }
 const thingsLabel = (n) => `${n} thing${n === 1 ? '' : 's'} before Dec 31`;
+// The header sub line counts the due list. With nothing due it may read either "0 things before
+// Dec 31" or "Nothing due before Dec 31" (the plan's wording for an empty queue).
+async function expectSub(page, n) {
+  const sub = page.locator('p.h-home-sub');
+  if (n === 0) await expect(sub).toContainText(/(0 things|Nothing due) before Dec 31/);
+  else await expect(sub).toContainText(thingsLabel(n));
+}
 
 function goalChip(p) {
   if (!p || p.status === 'no target') return { tone: 'mute', label: 'No target' };
@@ -56,6 +65,10 @@ function healthChip(pace) {
   return { tone: 'ok', label: 'On pace' };
 }
 
+const finiteV = (f) => f && typeof f.v === 'number' && Number.isFinite(f.v);
+// A pace bar is drawn when target, actual and expected are finite and the target is positive.
+const hasBar = (p) => !!p && finiteV(p.target) && finiteV(p.actual) && finiteV(p.expected) && p.target.v > 0;
+
 function model(s, filter = 'both') {
   const recs = s.recs.filter((r) => OPEN.includes(r.status) && FILTER_OK[filter](r.owner)).sort(byWindow);
   const goals = s.goals.filter((g) => !g.archived && g.status !== 'done');
@@ -65,17 +78,18 @@ function model(s, filter = 'both') {
     const paceIndex = s.pace.goals.findIndex((p) => p.id === g.id);
     const pace = paceIndex < 0 ? null : s.pace.goals[paceIndex];
     const actions = recs.filter((r) => servedIds(r).includes(g.id));
-    const collapsed = !pace || pace.status === 'no target' || (['on pace', 'ahead'].includes(pace.status) && !actions.length);
-    return { id: g.id, goal: g, pace, paceIndex, actions, next: actions[0] || null, collapsed };
+    return { id: g.id, goal: g, pace, paceIndex, actions, next: actions[0] || null, bar: hasBar(pace) };
   });
   const counts = Object.fromEntries(Object.keys(FILTER_OK).map((f) => [f, s.recs.filter((r) => OPEN.includes(r.status) && FILTER_OK[f](r.owner)).length]));
   const yearEnd = daysToYearEnd(s);
+  // Due: open goal actions (not housekeeping) for this filter with a window up to Dec 31.
+  const due = recs.filter((r) => r.housekeeping !== true && daysOf(r) <= yearEnd);
+  const nextThing = due[0] || recs.find((r) => r.housekeeping !== true) || null;
+  const at = due.indexOf(nextThing);
   return {
-    cards, counts, queue: recs,
-    expanded: cards.filter((c) => !c.collapsed),
-    collapsed: cards.filter((c) => c.collapsed),
-    housekeeping: s.recs.filter((r) => isHousekeepingItem(r) && FILTER_OK[filter](r.owner)).sort(byWindow),
-    beforeYearEnd: recs.filter((r) => daysOf(r) <= yearEnd).length
+    cards, counts, queue: recs, due, nextThing,
+    afterThat: at >= 0 ? due.slice(at + 1, at + 4) : [],
+    housekeeping: s.recs.filter((r) => isHousekeepingItem(r) && FILTER_OK[filter](r.owner)).sort(byWindow)
   };
 }
 
@@ -84,11 +98,9 @@ function model(s, filter = 'both') {
 const home = (page) => page.locator('section.h-home');
 const h1 = (page) => page.locator('h1.h-home-h');
 const chip = (page) => page.locator('a.h-hchip');
-// A full goal card (the quiet row's body is not a full card).
-const fullCards = (page) => page.locator('section.h-home article.h-gcard[data-goal-card]:not(details.h-quiet *)');
-const card = (page, id) => page.locator(`section.h-home article.h-gcard[data-goal-card="${id}"]:not(details.h-quiet *)`);
+const fullCards = (page) => page.locator('section.h-home article.h-gcard[data-goal-card]');
+const card = (page, id) => page.locator(`section.h-home article.h-gcard[data-goal-card="${id}"]`);
 const ownerBtn = (page, f) => page.locator(`div.h-ownerf[role="group"][aria-label="Whose actions"] button[data-owner="${f}"]`);
-const quiet = (page) => page.locator('details.h-quiet[data-det="home-quiet"]');
 const hk = (page) => page.locator('details.h-hk[data-det="home-hk"]');
 const nextCard = (page) => page.locator('article.h-next');
 
@@ -142,7 +154,7 @@ test.describe('Home', () => {
     await expect(chip(page)).toHaveAttribute('href', '#/pace');
     await expect(chip(page)).toHaveClass(new RegExp(`\\b${want.tone}\\b`));
     await expect(chip(page)).toContainText(want.label);
-    await expect(page.locator('p.h-home-sub')).toContainText(thingsLabel(model(s).beforeYearEnd));
+    await expectSub(page, model(s).due.length);
   });
 
   test('the health chip opens the pace board', { tag: ['@ac1'] }, async ({ page, request }) => {
@@ -154,20 +166,20 @@ test.describe('Home', () => {
     await expect(page.locator('p.h-pace-why')).toBeVisible();
   });
 
-  test('goal cards at the top carry a pace chip, a pace bar and the next action', { tag: ['@ac1', '@ac6'] }, async ({ page, request }) => {
+  test('goal cards carry a pace chip, a pace bar when the goal has a target, and the next action', { tag: ['@ac1', '@ac6'] }, async ({ page, request }) => {
     const s = await fetchScenario(request);
     const m = model(s);
-    expect(m.expanded.length, 'the demo has goals that get a full card').toBeGreaterThan(0);
+    expect(m.cards.filter((c) => c.bar).length, 'the demo has goals with a pace bar').toBeGreaterThan(0);
     await gotoRoute(page, 'home');
-    await expect(fullCards(page)).toHaveCount(m.expanded.length);
-    expect(await fullCards(page).evaluateAll((els) => els.map((e) => e.getAttribute('data-goal-card')))).toEqual(m.expanded.map((c) => c.id));
+    await expect(fullCards(page)).toHaveCount(m.cards.length);
+    expect(await fullCards(page).evaluateAll((els) => els.map((e) => e.getAttribute('data-goal-card')))).toEqual(m.cards.map((c) => c.id));
 
-    // The goal cards come before the quiet and housekeeping rows.
+    // The goal cards come before the housekeeping row.
     const firstCard = await fullCards(page).first().boundingBox();
-    const quietBox = await quiet(page).boundingBox();
-    expect(firstCard.y).toBeLessThan(quietBox.y);
+    const hkBox = await hk(page).boundingBox();
+    expect(firstCard.y).toBeLessThan(hkBox.y);
 
-    for (const c of m.expanded) {
+    for (const c of m.cards) {
       const el = card(page, c.id);
       const p = c.pace;
       const want = goalChip(p);
@@ -175,33 +187,39 @@ test.describe('Home', () => {
       const pchip = el.locator('span.h-pchip');
       await expect(pchip).toHaveText(want.label);
       await expect(pchip).toHaveClass(new RegExp(`\\b${want.tone}\\b`));
+      // Seed goals never get a suggested target.
+      await expect(el.locator('.h-sugg')).toHaveCount(0);
 
       // The bar draws actual and plan today over the target, muted when pace is not current.
       const bar = el.locator('div.h-pbar');
-      await expect(bar).toHaveCount(1);
-      const current = ['ahead', 'on pace', 'behind'].includes(p.status);
-      if (current) await expect(bar).not.toHaveClass(/\bmuted\b/);
-      else await expect(bar).toHaveClass(/\bmuted\b/);
-      const clamp = (v) => Math.max(0, Math.min(1, v));
-      const fill = clamp(p.actual.v / p.target.v);
-      const tick = clamp(p.expected.v / p.target.v);
-      const bb = await bar.boundingBox();
-      const fb = await bar.locator('i.fill').boundingBox();
-      const tb = await bar.locator('i.tick').boundingBox();
-      expect(Math.abs(fb.width / bb.width - fill), `${c.id} fill ${fb.width}/${bb.width} vs ${fill}`).toBeLessThan(0.03);
-      expect(Math.abs((tb.x + tb.width / 2 - bb.x) / bb.width - tick), `${c.id} tick vs ${tick}`).toBeLessThan(0.03);
+      if (!c.bar) {
+        await expect(bar, `${c.id} has no target, so no bar`).toHaveCount(0);
+      } else {
+        await expect(bar).toHaveCount(1);
+        const current = ['ahead', 'on pace', 'behind'].includes(p.status);
+        if (current) await expect(bar).not.toHaveClass(/\bmuted\b/);
+        else await expect(bar).toHaveClass(/\bmuted\b/);
+        const clamp = (v) => Math.max(0, Math.min(1, v));
+        const fill = clamp(p.actual.v / p.target.v);
+        const tick = clamp(p.expected.v / p.target.v);
+        const bb = await bar.boundingBox();
+        const fb = await bar.locator('i.fill').boundingBox();
+        const tb = await bar.locator('i.tick').boundingBox();
+        expect(Math.abs(fb.width / bb.width - fill), `${c.id} fill ${fb.width}/${bb.width} vs ${fill}`).toBeLessThan(0.03);
+        expect(Math.abs((tb.x + tb.width / 2 - bb.x) / bb.width - tick), `${c.id} tick vs ${tick}`).toBeLessThan(0.03);
 
-      // Labels: actual of target, plan today, and the data date when stale. Figures are pace figures.
-      const labels = el.locator('div.h-pbar-l');
-      const i = c.paceIndex;
-      for (const [k, f] of [['actual', p.actual], ['target', p.target], ['expected', p.expected]]) {
-        const fig = labels.locator(`.fx-fig[data-fig="pace.goals.${i}.${k}"]`);
-        await expect(fig, `${c.id} ${k}`).toHaveCount(1);
-        await expect(fig).toHaveText(money(f.v, { k: true }));
+        // Labels: actual of target, plan today, and the data date when stale. Figures are pace figures.
+        const labels = el.locator('div.h-pbar-l');
+        const i = c.paceIndex;
+        for (const [k, f] of [['actual', p.actual], ['target', p.target], ['expected', p.expected]]) {
+          const fig = labels.locator(`.fx-fig[data-fig="pace.goals.${i}.${k}"]`);
+          await expect(fig, `${c.id} ${k}`).toHaveCount(1);
+          await expect(fig).toHaveText(money(f.v, { k: true }));
+        }
+        await expect(labels).toContainText(' of ');
+        await expect(labels).toContainText('plan today');
+        if (p.stale) await expect(labels).toContainText(`as of ${fmtDay(p.dataThrough)}`);
       }
-      await expect(labels).toContainText(' of ');
-      await expect(labels).toContainText('plan today');
-      if (p.stale) await expect(labels).toContainText(`as of ${fmtDay(p.dataThrough)}`);
 
       // The next action: countdown, title link, owner tag.
       if (c.next) {
@@ -218,7 +236,7 @@ test.describe('Home', () => {
 
   test('stale goals say Data stale and never On pace', { tag: ['@ac6'] }, async ({ page, request }) => {
     const s = await fetchScenario(request);
-    const stale = model(s).expanded.filter((c) => c.pace && c.pace.stale);
+    const stale = model(s).cards.filter((c) => c.pace && c.pace.stale);
     expect(stale.length, 'the demo has stale goals').toBeGreaterThan(0);
     await gotoRoute(page, 'home');
     for (const c of stale) {
@@ -243,30 +261,61 @@ test.describe('Home', () => {
   });
 
   test('a goal card next action opens its rec', { tag: ['@ac1'] }, async ({ page, request }) => {
-    const c = model(await fetchScenario(request)).expanded.find((x) => x.next);
-    expect(c, 'a full card with a next action').toBeTruthy();
+    const c = model(await fetchScenario(request)).cards.find((x) => x.next);
+    expect(c, 'a goal card with a next action').toBeTruthy();
     await gotoRoute(page, 'home');
     await openRecFromPage(page, c.next.id, `article.h-gcard[data-goal-card="${c.id}"] .h-gnext`);
   });
 
-  test('the quiet row lists the collapsed goals with their chips and next actions', { tag: ['@ac1'] }, async ({ page, request }) => {
+  test('every live goal has its own card, with no quiet row and no comma list of goals', { tag: ['@ac1'] }, async ({ page, request }) => {
     const s = await fetchScenario(request);
     const m = model(s);
     const noTarget = s.pace.goals.filter((p) => p.status === 'no target').map((p) => p.id);
     expect(noTarget.length, 'the demo has goals without a target').toBeGreaterThan(0);
-    for (const id of noTarget) expect(m.collapsed.map((c) => c.id)).toContain(id);
+    for (const id of noTarget) {
+      if (s.goals.some((g) => g.id === id && !g.archived && g.status !== 'done')) expect(m.cards.map((c) => c.id)).toContain(id);
+    }
     await gotoRoute(page, 'home');
-    const summary = quiet(page).locator('summary');
-    for (const c of m.collapsed) {
-      await expect(summary).toContainText(plain(c.goal.title));
-      await expect(card(page, c.id), `${c.id} has no full card`).toHaveCount(0);
+    await expect(page.locator('details.h-quiet')).toHaveCount(0);
+    await expect(page.locator('[data-quiet-goal]')).toHaveCount(0);
+    await expect(page.locator('.h-qi')).toHaveCount(0);
+    await expect(fullCards(page)).toHaveCount(m.cards.length);
+    for (const c of m.cards) {
+      const el = card(page, c.id);
+      await expect(el, `${c.id} has exactly one card`).toHaveCount(1);
+      // Each card names exactly one goal.
+      await expect(el.locator('a.h-gcard-t')).toHaveCount(1);
+      await expect(el.locator('a.h-gcard-t')).toHaveText(plain(c.goal.title));
     }
-    await expect(summary).toContainText(goalChip(null).label);
-    await openDetails(quiet(page));
-    for (const c of m.collapsed.filter((x) => x.next)) {
-      await expect(quiet(page).locator(`.h-gnext[data-rec="${c.next.id}"]`).first()).toBeVisible();
+    await expect(home(page)).not.toContainText('No goals with targets');
+  });
+
+  test('the due list shows the next goal actions before Dec 31 with date and owner, never housekeeping', { tag: ['@ac1'] }, async ({ page, request }) => {
+    const s = await fetchScenario(request);
+    const m = model(s);
+    expect(m.due.length, 'the demo has goal actions due before Dec 31').toBeGreaterThan(0);
+    await gotoRoute(page, 'home');
+    const list = home(page).locator('div.h-due');
+    await expect(list).toHaveCount(1);
+    await expect(list).toContainText('Due before Dec 31');
+    const rows = list.locator('div.h-due-r[data-rec]');
+    await expect(rows).toHaveCount(Math.min(5, m.due.length));
+    const ids = await rows.evaluateAll((els) => els.map((e) => e.getAttribute('data-rec')));
+    const dueIds = m.due.map((r) => r.id);
+    const hkIds = m.housekeeping.map((r) => r.id);
+    for (const id of ids) {
+      expect(dueIds, `${id} is a due goal action`).toContain(id);
+      expect(hkIds, `${id} is not housekeeping`).not.toContain(id);
+      const r = m.due.find((x) => x.id === id);
+      const row = list.locator(`div.h-due-r[data-rec="${id}"]`);
+      await expect(row.locator('.h-due-d')).toBeVisible();
+      await expect(row.locator('.h-due-d')).toHaveText(/\S/);
+      await expect(row.locator(`a[data-go="rec"][data-id="${id}"]`)).toBeVisible();
+      await expect(row.locator('.h-who')).toHaveText(WHO[r.owner]);
     }
-    if (m.collapsed.some((x) => !x.next)) await expect(quiet(page)).toContainText('Nothing due');
+    // Window order: no row is due later than the one after it.
+    const days = ids.map((id) => daysOf(m.due.find((x) => x.id === id)));
+    for (let i = 1; i < days.length; i++) expect(days[i], `row ${i} is not due before row ${i - 1}`).toBeGreaterThanOrEqual(days[i - 1]);
   });
 
   test('the housekeeping row counts the actions that serve no goal and expands to list them', { tag: ['@ac1'] }, async ({ page, request }) => {
@@ -315,23 +364,22 @@ test.describe('Home', () => {
       await expect(ownerBtn(page, 'me')).toHaveAttribute('aria-pressed', 'false');
 
       const shown = async (id) => {
-        await openDetails(quiet(page));
         await openDetails(hk(page));
-        return home(page).locator(`.h-gnext[data-rec="${id}"]`).count();
+        return home(page).locator(`.h-gnext[data-rec="${id}"], .h-due-r[data-rec="${id}"]`).count();
       };
       const spouseGoal = servedIds(spouseRec)[0];
       expect(await shown(spouseRec.id), 'Both shows the spouse action').toBeGreaterThan(0);
       expect(await shown(youRec.id), 'Both shows your action').toBeGreaterThan(0);
-      await expect(page.locator('p.h-home-sub')).toContainText(thingsLabel(mm.both.beforeYearEnd));
+      await expectSub(page, mm.both.due.length);
 
       await ownerBtn(page, 'me').click();
       await expect(ownerBtn(page, 'me')).toHaveAttribute('aria-pressed', 'true');
       await expect(ownerBtn(page, 'both')).toHaveAttribute('aria-pressed', 'false');
       await expect.poll(() => shown(spouseRec.id), 'Me hides the spouse-only action').toBe(0);
       expect(await shown(youRec.id), 'Me keeps your action').toBeGreaterThan(0);
-      await expect(page.locator('p.h-home-sub')).toContainText(thingsLabel(mm.me.beforeYearEnd));
+      await expectSub(page, mm.me.due.length);
       const spouseCard = mm.me.cards.find((c) => c.id === spouseGoal);
-      if (!spouseCard.collapsed && !spouseCard.next) await expect(card(page, spouseGoal).locator('p.h-gnext-none')).toContainText('Nothing due for');
+      if (spouseCard && !spouseCard.next) await expect(card(page, spouseGoal).locator('p.h-gnext-none')).toContainText('Nothing due for');
       // Counts stay the same whichever filter is active.
       for (const f of ['both', 'me', 'spouse']) await expect(ownerBtn(page, f).locator('span')).toHaveText(String(mm.both.counts[f]));
 
@@ -340,7 +388,7 @@ test.describe('Home', () => {
       await expect(ownerBtn(page, 'me')).toHaveAttribute('aria-pressed', 'false');
       await expect.poll(() => shown(youRec.id), 'Spouse hides the you-only action').toBe(0);
       expect(await shown(spouseRec.id), 'Spouse keeps the spouse action').toBeGreaterThan(0);
-      await expect(page.locator('p.h-home-sub')).toContainText(thingsLabel(mm.spouse.beforeYearEnd));
+      await expectSub(page, mm.spouse.due.length);
 
       await ownerBtn(page, 'both').click();
       await expect(ownerBtn(page, 'both')).toHaveAttribute('aria-pressed', 'true');
@@ -435,17 +483,20 @@ test.describe('Home on a phone', { tag: ['@mobile', '@mobile-only'] }, () => {
     await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
   }
 
+  // The next card is the first due goal action, else the first goal action at all; never housekeeping.
   async function expectNext(page, request) {
     const m = model(await fetchScenario(request));
-    expect(m.queue.length, 'something is open').toBeGreaterThan(0);
-    await expect(nextCard(page)).toHaveAttribute('data-next-rec', m.queue[0].id);
+    expect(m.nextThing, 'a goal action is open').toBeTruthy();
+    await expect(nextCard(page)).toHaveAttribute('data-next-rec', m.nextThing.id);
     return m;
   }
 
-  test('the next-thing card shows the most urgent action with Done, Later and Ask, then After that', { tag: ['@ac2'] }, async ({ page, request }) => {
+  test('the next-thing card shows the most urgent goal action with Done, Later and Ask, then After that', { tag: ['@ac2'] }, async ({ page, request }) => {
     const s = await fetchScenario(request);
     const m = model(s);
-    const r = m.queue[0];
+    const r = m.nextThing;
+    expect(r, 'a goal action is open').toBeTruthy();
+    expect(r.housekeeping, 'the next card is never housekeeping').not.toBe(true);
     await gotoRoute(page, 'home');
     await expect(nextCard(page)).toHaveCount(1);
     await expect(nextCard(page)).toHaveAttribute('data-next-rec', r.id);
@@ -470,7 +521,13 @@ test.describe('Home on a phone', { tag: ['@mobile', '@mobile-only'] }, () => {
     const after = page.locator('div.h-after');
     await expect(after).toContainText('After that');
     const ids = await after.locator('a[data-go="rec"]').evaluateAll((els) => els.map((e) => e.getAttribute('data-id')));
-    expect(ids).toEqual(m.queue.slice(1, 4).map((x) => x.id));
+    expect(ids).toEqual(m.afterThat.map((x) => x.id));
+    expect(ids.length, 'at least the next three actions show with the next card').toBe(Math.min(3, Math.max(0, m.due.length - 1)));
+    for (const x of m.afterThat) {
+      const row = after.locator(`div.h-after-r[data-rec="${x.id}"]`);
+      await expect(row.locator('.h-after-d')).toHaveText(/\S/);
+      await expect(row.locator('span.h-who')).toHaveText(WHO[x.owner]);
+    }
 
     // Phone order: owner filter, headline, next thing, After that, data-health line, goal cards.
     const tops = [];
@@ -483,7 +540,7 @@ test.describe('Home on a phone', { tag: ['@mobile', '@mobile-only'] }, () => {
   test('Done completes the next thing and the card moves to the next action', { tag: ['@ac2'] }, async ({ page, request }) => {
     await gotoRoute(page, 'home');
     const m = await expectNext(page, request);
-    const id = m.queue[0].id;
+    const id = m.nextThing.id;
     await nextCard(page).locator(`button[data-act="complete"][data-rec="${id}"]`).click();
     await expect.poll(() => statusOf(request, id)).toBe('done');
     await expect(nextCard(page)).not.toHaveAttribute('data-next-rec', id);
@@ -493,7 +550,7 @@ test.describe('Home on a phone', { tag: ['@mobile', '@mobile-only'] }, () => {
   test('Later snoozes the next thing and the card moves to the next action', { tag: ['@ac2'] }, async ({ page, request }) => {
     await gotoRoute(page, 'home');
     const m = await expectNext(page, request);
-    const id = m.queue[0].id;
+    const id = m.nextThing.id;
     await nextCard(page).locator(`button[data-act="snooze"][data-rec="${id}"]`).click();
     await expect.poll(() => statusOf(request, id)).toBe('snoozed');
     await expect(nextCard(page)).not.toHaveAttribute('data-next-rec', id);
@@ -502,7 +559,7 @@ test.describe('Home on a phone', { tag: ['@mobile', '@mobile-only'] }, () => {
 
   test('Ask on the next thing opens its conversation, or the rec with its composer focused', { tag: ['@ac2'] }, async ({ page, request }) => {
     const s = await fetchScenario(request);
-    const id = model(s).queue[0].id;
+    const id = model(s).nextThing.id;
     const thread = (s.live.threads || []).find((t) => t && t.recId === id && !t.trashedAt && !t.recDetachedAt);
     await gotoRoute(page, 'home');
     await nextCard(page).locator(`button[data-ask-next="${id}"]`).click();
@@ -517,7 +574,7 @@ test.describe('Home on a phone', { tag: ['@mobile', '@mobile-only'] }, () => {
 
   test('swipe right marks the next thing done', { tag: ['@ac2'] }, async ({ page, request }) => {
     await gotoRoute(page, 'home');
-    const id = (await expectNext(page, request)).queue[0].id;
+    const id = (await expectNext(page, request)).nextThing.id;
     const cdp = await page.context().newCDPSession(page);
     await drag(page, cdp, 160, { follow: true });
     await expect.poll(() => statusOf(request, id)).toBe('done');
@@ -526,7 +583,7 @@ test.describe('Home on a phone', { tag: ['@mobile', '@mobile-only'] }, () => {
 
   test('swipe left puts the next thing off until later', { tag: ['@ac2'] }, async ({ page, request }) => {
     await gotoRoute(page, 'home');
-    const id = (await expectNext(page, request)).queue[0].id;
+    const id = (await expectNext(page, request)).nextThing.id;
     const cdp = await page.context().newCDPSession(page);
     await drag(page, cdp, -160, { follow: true });
     await expect.poll(() => statusOf(request, id)).toBe('snoozed');
@@ -535,7 +592,7 @@ test.describe('Home on a phone', { tag: ['@mobile', '@mobile-only'] }, () => {
 
   test('a short drag springs back and changes nothing', { tag: ['@ac2'] }, async ({ page, request }) => {
     await gotoRoute(page, 'home');
-    const id = (await expectNext(page, request)).queue[0].id;
+    const id = (await expectNext(page, request)).nextThing.id;
     const posts = [];
     page.on('request', (r) => {
       if (r.method() === 'POST' && new URL(r.url()).pathname.startsWith('/api/recs/')) posts.push(new URL(r.url()).pathname);
@@ -578,6 +635,6 @@ test.describe('Home on a phone', { tag: ['@mobile', '@mobile-only'] }, () => {
     await gotoRoute(page, 'home');
     await expect(nextCard(page)).toHaveCount(0);
     await expect(page.locator('div.h-next-empty')).toContainText('Nothing open for');
-    await expect(page.locator('p.h-home-sub')).toContainText(thingsLabel(0));
+    await expectSub(page, 0);
   });
 });

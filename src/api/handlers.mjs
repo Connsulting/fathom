@@ -1,3 +1,4 @@
+import { queueAccountPairs } from '../ingest/account-merge.mjs';
 // API handlers. Each takes { db, config, engine, packs, answerer, params, body } and returns the
 // JSON response body (status 200) or throws HttpError. Every action writes the store and answers
 // with the fresh scenario, so the browser swaps it in. Model calls are awaited before any write
@@ -41,6 +42,7 @@ const paragraphs = list => wrapBlocks(Array.isArray(list) ? list : []);
 const nowIso = () => new Date().toISOString();
 
 export function scenarioOf(ctx) {
+  queueAccountPairs(ctx.db);
   return buildScenario(ctx.db, { clock: ctx.config && ctx.config.clock, engineMode: ctx.config && ctx.config.engine, packs: ctx.packs || null });
 }
 
