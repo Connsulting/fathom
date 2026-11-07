@@ -14,6 +14,7 @@ import { accountNaming } from '../../accounts/naming.mjs';
 import { addDays, daysBetween } from '../../scenario/build.mjs';
 import { monthEnd } from '../../ingest/format.mjs';
 import { ledgerDisplayName, ledgerKind } from '../../pnl/ledgers.mjs';
+import { connectedThrough } from '../../ingest/coverage.mjs';
 import { OWNER_OPTIONS, normalizeName } from '../../ingest/confirm.mjs';
 
 export const SUPPORTED_TAX_YEARS = Object.freeze([2026]);
@@ -167,7 +168,8 @@ function freshness(db, clock) {
   const period = one('SELECT max(period) AS d FROM pnl_lines WHERE period <= substr(?, 1, 7)');
   const latest = {
     balances: [bal, pos].filter(Boolean).sort().at(-1) || null,
-    transactions: one('SELECT max(date) AS d FROM transactions WHERE date <= ?'),
+    // SimpleFIN covering every account with transactions keeps the log current (ingest/coverage.mjs).
+    transactions: [one('SELECT max(date) AS d FROM transactions WHERE date <= ?'), connectedThrough(db, clock)].filter(Boolean).sort().at(-1) || null,
     pnl: period ? monthEnd(period) : null,
     tax_payments: one('SELECT max(date) AS d FROM tax_payments WHERE date <= ?'),
   };
