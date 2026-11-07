@@ -247,7 +247,7 @@ async function fakeAnswerer(s) {
   const engine = createRuntimeEngine({ db: s.db, config });
   const packs = createLivePacks(s.db, { dataDir: s.root });
   packs.refresh();
-  return { engine, answerer: createLiveAnswerer({ engine, packs, root: s.root }) };
+  return { engine, answerer: createLiveAnswerer({ engine, packs, root: s.root, services: { engine, config: { dataDir: s.root } } }) };
 }
 
 test('"add a goal" in Ask saves a goal with a durable Undo receipt', async t => {
