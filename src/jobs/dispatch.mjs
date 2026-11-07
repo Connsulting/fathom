@@ -16,7 +16,9 @@ export function createJobDispatcher() {
       if (!queue.length) waiting.delete(id);
       active.add(id);
       lastTurn.set(id, ++turn);
-      Promise.resolve().then(item.work).then(
+      let result;
+      try { result = item.work(); } catch (error) { result = Promise.reject(error); }
+      Promise.resolve(result).then(
         value => { active.delete(id); pump(); item.resolve(value); },
         error => { active.delete(id); pump(); item.reject(error); },
       );

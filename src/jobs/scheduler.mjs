@@ -39,6 +39,8 @@ import { guessCategories } from '../categories/guess.mjs';
 //    and jobs() lists without refreshing job rows while paused.
 // 11. Handlers get ctx.household, the household context (household() at run time), beside db,
 //    config, engine and transport, all of that one household.
+// 12. Registry schedulers share round-robin admission: one handler per household and two for the
+//    instance. Queued runs recheck admission and the lease before claiming a local job_runs row.
 
 import { getSetting } from '../store/db.mjs';
 import { createJobDispatcher } from './dispatch.mjs';
