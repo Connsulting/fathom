@@ -7,8 +7,8 @@
 //   contents.
 // refreshLivePacks(db, { dataDir, now? }) -> { packs, warnings }: refreshPackState over the
 //   loadable dirs (real stores), then, in a demo store, one row for each loaded pack no row backs
-//   when that pack is not a repository pack (the Your plans pack). The seed holds the repository
-//   packs, including ones that are always active.
+//   when it is outside the repository (the Your plans pack) or active for every household. The seed
+//   already holds the other repository packs, and those rows are left as seeded.
 // createLivePacks(db, { dataDir }) -> { loaded(), backing(rowId, def), view(rowId, def), entry(rowId, entryId), refresh() }
 //   loaded() reloads when settings['packs.generation'] or the Your plans directory changes, so a
 //   build in this process or the CLI is picked up without a restart.
@@ -21,7 +21,7 @@
 
 import { existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { loadPacks, activePacks, getEntry, manifestIdOf } from './index.mjs';
+import { loadPacks, activePacks, evaluate, getEntry, manifestIdOf } from './index.mjs';
 import { REPO_PACKS_DIR, refreshPackState } from './state.mjs';
 import { getFacts } from '../store/facts.mjs';
 import { getSetting, parseJson, tx } from '../store/db.mjs';
@@ -64,7 +64,12 @@ export function refreshLivePacks(db, { dataDir, now } = {}) {
       const dir = resolve(pack.directory);
       return dir === repoRoot || dir.startsWith(`${repoRoot}/`);
     };
-    const missing = packs.filter(p => !repositoryPack(p) && !backed.has(p.id) && !rows.some(r => r.id === p.id));
+    const alwaysActive = pack => {
+      try { return evaluate(pack.appliesWhen, {}) === true; }
+      catch { return false; }
+    };
+    const missing = packs.filter(p => !backed.has(p.id) && !rows.some(r => r.id === p.id)
+      && (!repositoryPack(p) || alwaysActive(p)));
     const insert = db.prepare(`INSERT INTO packs_state (id, def, active, exploring, what_if_asked, what_if_done, unhid, sort, updated_at)
                                VALUES (?, ?, NULL, 0, 0, 0, '[]', (SELECT coalesce(max(sort) + 1, 0) FROM packs_state), ?)`);
     for (const { pack, status, why } of activePacks(missing, getFacts(db))) {

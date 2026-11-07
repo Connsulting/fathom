@@ -162,7 +162,11 @@ test('a demo store keeps its seeded rows; the view adds the backing manifest fie
   const before = rows(db);
   const packs = createLivePacks(db, { dataDir });
   packs.refresh();
-  assert.deepEqual(rows(db), before, 'the refresh leaves demo rows alone');
+  const after = rows(db);
+  const added = after.filter(r => !before.some(b => b.id === r.id));
+  assert.deepEqual(added.map(r => r.id), ['spending-and-obligations'], 'only the unseeded always-active pack is added');
+  assert.equal(added[0].def.status, 'active');
+  for (const prior of before) assert.deepEqual(after.find(r => r.id === prior.id), prior, 'seeded rows stay untouched');
   for (const [id, manifestId] of Object.entries(ALIASES)) {
     const prior = before.find(r => r.id === id).def;
     const def = packs.view(id, prior);
@@ -213,7 +217,8 @@ test('a your-plans pack from the data dir becomes an active row in a real store 
   }
   const { db, dataDir } = store(t);
   refreshLivePacks(db, { dataDir });
-  assert.deepEqual(rows(db).map(r => r.id).sort(), DEMO_IDS, 'a demo store gains no repository rows');
+  assert.deepEqual(rows(db).map(r => r.id).sort(), [...DEMO_IDS, 'spending-and-obligations'].sort(),
+    'a demo store gains the unseeded always-active pack and no other repository row');
 });
 
 // ---------------------------------------------------------------- demo upgrade (R2)
@@ -249,7 +254,7 @@ test('an existing demo store upgrades through the migration: ids, names and over
   }
   const packs = createLivePacks(db, { dataDir });
   packs.refresh();
-  assert.deepEqual(rows(db).map(r => r.id).sort(), DEMO_IDS, 'no duplicate manifest rows');
+  assert.deepEqual(rows(db).map(r => r.id).sort(), [...DEMO_IDS, 'spending-and-obligations'].sort(), 'no duplicate manifest rows');
   assert.equal(row(db, 'giving').active, 1);
   assert.equal(packs.view('giving', row(db, 'giving').def).version, manifestOf('charitable-giving').version);
   assert.equal(row(db, 'scorp').exploring, 1);
