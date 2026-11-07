@@ -104,7 +104,10 @@ Rejected:
 
 ## 1. Block types
 
-Every block has an optional `title`: plain words, 1 to 80 characters, no digits, escaped on render.
+Every block has an optional `title`: plain words, 1 to 80 characters, escaped on render, refused
+when it holds a digit, a currency or percent sign, or a number word (`NUMBER_WORDS` in
+`src/blocks/labels.mjs`: zero to twenty, the tens, hundred, thousand, million, billion, half,
+quarter, dozen, percent, double, triple).
 Without one the renderer uses the source tool's plain source label ("Your spending"). Axis, series,
 column and option labels always come from data (section 3), never from the model.
 
@@ -143,6 +146,9 @@ What each value becomes:
 
 Labels the renderer derives:
 
+0. A label is never taken from model input. A figure label that equals, or contains, any string
+   in the source call's arguments (an argument echo, such as a `calculate` `label`) is ignored and
+   the fallback below is used.
 1. Series and column labels: the figure `label` when every item's figure at that path shares it;
    otherwise the field name in words from a fixed `FIELD_LABEL` map in `src/blocks/labels.mjs`
    (`total`: Total, `net`: Net, `inflow`: Money in, `outflow`: Money out, `annualCost`: Per year,
@@ -153,14 +159,20 @@ Labels the renderer derives:
    or `year` formatted (`2026-03` reads "Mar 2026"). For `options` given as separate Refs whose
    calls differ only in one assumption, the option label is the assumption's `name` in words plus
    its `stated` text from provenance ("Real return 3%"), both tool data.
-3. Axis tick marks are scale marks computed by the renderer (`niceTicks`, moved from design.js into
-   the block renderer), formatted with `api.money`; they are `aria-hidden` and carry no provenance.
+3. Axis tick marks are scale marks computed by the renderer (`niceTicks`, copied from design.js
+   into the chart renderer), formatted by unit through one `formatByUnit(value, unit, { short })`
+   in `web/horizon/screens/ask-blocks.js`: money with `api.money` (short form `k`), `ratio` as a
+   percent, `count`, `months`, `years`, `days` and `age` as numbers with their unit word, `date`
+   as a month or day label; they are `aria-hidden` and carry no provenance.
    Every data value stays reachable as a figure through the popover and the table view.
 
 ## 2. Where blocks live
 
-Blocks render wherever `web/horizon/screens/chat.js` renders a Fathom message: the full Ask page,
-the Ask side panel (docked, sheet and full-height sheet), and the rec dialog's thread.
+Blocks render wherever a Fathom message renders: the full Ask page and the Ask side panel (docked,
+sheet and full-height sheet) through `web/horizon/screens/chat.js`, and the rec dialog and the
+Packs page conversation through `thread()` in `web/horizon/design.js`, which inserts `m.html`
+directly today. Both call the same shell. Packs answers (the pack What if) may carry blocks: they
+go through the same answerer `run` with read tools.
 `web/horizon/screens/ask-blocks.js` is the shell: it takes a message's `provenance.blocks`, wraps
 each in its `<figure>`, registers its figures, renders `blockNotes`, and calls the renderer for the
 block's `op` from a map `{ table, compare, chart, timeline }`. Each renderer is its own module
@@ -205,13 +217,20 @@ Accessibility:
    collapses it and returns focus to the button.
 5. Compare: each option is a group with a heading; Pick this is a button whose accessible name
    includes the option label; the picked state is text, not color alone.
-6. Figures inside blocks use the existing `.fx-fig` spans with `tabindex="0"` (none inside
+6. Every block control carries `data-blk-ctl="<messageId>:<blockId>:<control>"`, and the panel's
+   focus signature (`sigOf` in `web/horizon/screens/ask-panel.js`, which today sends unknown
+   focused elements back to the composer after a redraw) restores focus by it, so sorting, picking
+   and Undo keep keyboard focus.
+7. Figures inside blocks use the existing `.fx-fig` spans with `tabindex="0"` (none inside
    buttons), so the popover works by click, Enter and Space as everywhere else.
 
 Provenance hover: when a message with blocks renders, chat.js registers each snapshot figure into
 the client figure registry under `blk:<messageId>:<blockId>:<n>` with its value, kind, label, as-of
 date, source label and provenance, the same way `api.pnlRows` registers row figures today. A new
-`api.registerFigures(map)` in `web/core/core.js` exposes that registration. A stale block's figures
+`api.registerFigures(map)` in `web/core/core.js` exposes that registration, and the popover
+formats a registered figure by its `unit` (it formats every value as money today, `moneyCents`)
+and shows "Unavailable" with the gap message for a null value. B3 adds non-money fixtures (ratio,
+count, months, date, unavailable). A stale block's figures
 add "Changed since this answer" to the popover.
 
 Streaming: while an answer streams, a `{b:<id>}` line renders as a neutral placeholder box ("Chart
@@ -231,15 +250,18 @@ Operations live in `src/tools/catalog/show.mjs`; the builder and validator in `s
 
 1. `askOnly` tools are offered to Ask in every purpose that offers read tools and are never listed
    or callable over MCP (`src/mcp/server.mjs`, `toolsForScopes`). The parity test ignores them.
-2. `show` is not `referenceable`: a Ref to `show` is invalid in a block and in `calculate`.
-3. The handler reads the answer's earlier calls through `ctx.turnResults()`, a new accessor that
+2. `buildRegistry` (`src/tools/index.mjs`) refuses a read tool whose first operation needs
+   arguments; `askOnly` tools are exempt, because the rule exists for the MCP smoke, which never
+   sees them. The registry test covers the exemption.
+3. `show` is not `referenceable`: a Ref to `show` is invalid in a block and in `calculate`.
+4. The handler reads the answer's earlier calls through `ctx.turnResults()`, a new accessor that
    `createRegistryServer` (`src/engine/tools.mjs`) puts on the tool context: the `results` list it
    already keeps, in call order. The answerer shares one collector across the first engine call and
    a regeneration, so a block in the second call may use the first call's results.
-4. Result to the model on success: `{ block: '<id>', status: 'shown', place: '{b:<id>}' }`, ids
+5. Result to the model on success: `{ block: '<id>', status: 'shown', place: '{b:<id>}' }`, ids
    `b1` to `b4` in call order. On failure: `{ status: 'dropped', reason: <code>, note: <plain
    text> }` as a normal (not `isError`) result, so the model can carry on without it.
-5. Rules for the model (in the assembled rule text, Ask only):
+6. Rules for the model (in the assembled rule text, Ask only):
    1. When a trend, breakdown, ranking or side-by-side choice would be clearer drawn than written,
       call `show` after the reads it draws from, copying their exact tool and arguments as
       `source`. At most four blocks per answer.
@@ -256,17 +278,23 @@ every rule holds; the first failing rule names the reason. Nothing partial is ev
 
 | # | Rule | Reason code |
 |---|---|---|
-| 1 | Schema valid (registry Ajv; no numeric property outside Ref args; title has no digit) | `bad_input` (registry) |
+| 1 | Schema valid (registry Ajv; no numeric property outside Ref args) and title passes the number check | `bad_input` |
 | 2 | Every Ref's `tool` and `args` deep-equal (canonical JSON, sorted keys) a non-error call in `turnResults()` | `not_in_answer` |
 | 3 | Every Ref's tool is a read tool other than `show`; a write tool, `undo` or an unknown tool fails | `not_a_read` |
 | 4 | Every Ref `path` resolves in that call's result to an array (list Ref) or object (object Ref) | `bad_path` |
 | 5 | Every field path resolves in every item to a figure, an allowlisted row number or an allowed string (section 1) | `bad_field` |
 | 6 | Units: one unit across a chart's series (per axis for scatter), per table column, per compare field; a chart's y values are not dates; a timeline's `date` is a date | `mixed_units` |
 | 7 | Sizes: the limits in section 1; at most 4 blocks per answer; stored snapshot JSON at most 65,536 bytes | `too_large`, `too_many` |
-| 8 | Chart `x` values are unique; series given with their own `source` align on the same `x` values | `misaligned` |
+| 8 | For `line`, `bar` and `area`, `x` values are unique and series given with their own `source` align on the same `x` values; `scatter` allows repeated x values | `misaligned` |
 
 Unavailable figures (value null with a gap) are valid: they draw as a gap in a line, an empty bar,
 or "Unavailable" text with the gap message in the popover.
+
+Registry schema failures return `isError` before the handler runs (`createRegistryServer`). The
+answerer treats any `show` result with `isError` as a dropped block with reason `bad_input` and
+stores its note the same way, so every malformed call, whether refused by Ajv or by the handler,
+ends as a note and never as a block. B2 tests a missing argument, an extra property and a title
+with a number word through the Ask answer path.
 
 The plain note stored for a dropped block is fixed per reason: "A chart was left out because its
 data did not check out." (table: "A table ...", compare: "A comparison ...", timeline: "A timeline
@@ -282,7 +310,7 @@ blocks: [ { id: 'b1', op: 'chart', after: <paragraph index>,
             spec: <the validated show args without operation>,
             calls: [ { tool, args } ],            // distinct source calls
             snapshot: <render model, below>,
-            asOf: <newest figure asOf>, builtAt: <app clock ISO> } ]
+            asOf: <newest figure asOf, or null>, builtAt: <app clock ISO> } ]
 blockNotes: [ { op, reason, text } ]
 ```
 
@@ -317,6 +345,7 @@ blockNotes: [ { op, reason, text } ]
    fixtures in this shape under `test/fixtures/blocks/`; B1's tests assert its builder output
    against `src/blocks/snapshot-shape.mjs`, a pure shape check of this contract, and B2's
    end-to-end spec runs the two together.
+   A block with no figures (a timeline of plain dates) shows "as of <builtAt date>".
 2. Placement: the answerer splits the final text on lines that are exactly `{b:<id>}`; a block's
    `after` is the number of rendered paragraphs before its marker. A marker inside a sentence is
    removed and the block goes after that paragraph. A shown block with no marker goes after the
@@ -326,8 +355,9 @@ blockNotes: [ { op, reason, text } ]
    calls a tool.
 4. Staleness: `GET /api/threads/:id/blocks` re-runs each stored block's `calls` (deduplicated,
    read tools only, today's clock, the household's tool context) for the 20 most recent Fathom
-   messages with blocks, rebuilds each snapshot from the same spec, and compares figure by figure
-   (value to the cent for money, exactly otherwise, and `asOf`). It returns `{ blocks: [ {
+   messages with blocks, rebuilds each snapshot from the same spec, and compares all displayed data: every figure's value
+   (to the cent for money, exactly otherwise) and `asOf`, every text cell, label, date and x value,
+   and the item count and order. It returns `{ blocks: [ {
    messageId, id, state: 'current' | 'stale' | 'unavailable', changed: <count> } ] }` and writes
    nothing. A call that now errors, or a spec that no longer validates, is `unavailable`.
 5. The client calls it once when a thread opens. A stale block keeps its stored values and shows a
@@ -341,17 +371,21 @@ A table row (or a chart point, through the Table view) is drillable when its fig
 operation in the drill table. Drilling never calls the model; it fetches the rows behind the figure
 through the existing Money routes, which register their figures and sources for the popover.
 
-| Source operation | Item | Drill fetch |
+| Source operation and field | Item | Drill fetch |
 |---|---|---|
-| `spending.total` with `groupBy` `category`, `month` | a group | `api.spendingRows` (`GET /api/spending/rows`) with the call's window as `from`/`to`, its `include`/`exclude`, and the group key as `category` or `month` |
-| `spending.total` with `groupBy: 'none'` | the total | `api.spendingRows` with the window, `include`, `exclude` |
-| `business.pnl` with `groupBy` `month`, `category` | an entity group | `api.pnlRows` (`GET /api/pnl/rows`) with entity, period, section and the group key |
+| `spending.total` (`measure: 'spending'`, `scope: 'household'`, `groupBy: 'category'`), field `figure` | a category group | `api.spendingRows` (`GET /api/spending/rows`) with `bucket: 'household'`, `category` the group key, `from`/`to` the call's window, and the call's `include`/`exclude` categories |
+| `business.pnl` (`groupBy: 'category'`), fields `revenue` or `expenses` of a group | an entity's category group | `api.pnlRows` (`GET /api/pnl/rows`) with the entity, the period, `section` `income` for `revenue` and `expenses` for `expenses`, and `category` the group key |
 
-`drillQuery(ref, item)` in `src/blocks/drill.mjs` builds the query; it returns null for any call it
-cannot express exactly (a definition, a selector field the route does not take, another `groupBy`),
-and a null query means no drill button. The snapshot stores the query as `drill`. The drilled list
-shows the route's `sum` figure beside the block figure; B8's tests assert they are equal for every
-mapping above on the demo store.
+The two row routes need a single category (`householdSpendingRows` requires `bucket` and
+`category`; `businessPnlRows` requires `section` and `category`), so only those mappings drill.
+Totals, month groups, `profit` and every other operation get no drill button in this plan; an
+aggregate drill across categories is deferred.
+
+`drillQuery(ref, item, field)` in `src/blocks/drill.mjs` builds the query; it returns null for any
+call it cannot express exactly (a definition, a selector field the route does not take, another
+`groupBy` or field), and a null query means no drill button. The snapshot stores the query as
+`drill` on the cell. The drilled list shows the route's `sum` figure beside the block figure; B8's
+tests assert they are equal for both mappings on the demo store.
 
 ## 7. War games as Ask flows
 
@@ -395,8 +429,8 @@ its game's status is `open` or `upcoming`:
 
 | Starter id | Question | The answer calls |
 |---|---|---|
-| `wargame-salary` | Compare the salary options for my S corp side by side. | `recommendations.wargame {name: 'salary'}`, then `show.chart {kind: 'scatter', x: 'figures.room', series: [{path: 'figures.taxChange'}]}` over `salary.points`, then `show.compare` over `salary.points` with fields `salary`, `tax`, `room`, `distributions` |
-| `wargame-deferral` | Should I move some December invoices into January? Compare the options. | `recommendations.wargame {name: 'deferral'}`, then `show.compare` over `deferral.options` with fields `amount`, `taxThisYear`, `taxNextYear`, `net`, `decemberCash`, `payrollNeed` |
+| `wargame-salary` | Compare the salary options for my S corp side by side. | `recommendations.wargame {name: 'salary'}`, then `show.chart {kind: 'scatter', x: 'figures.room', series: [{path: 'figures.taxChange'}]}` over `salary.points`, then `show.compare` over `salary.points` with fields `figures.salary`, `figures.tax`, `figures.room`, `figures.distributions` |
+| `wargame-deferral` | Should I move some December invoices into January? Compare the options. | `recommendations.wargame {name: 'deferral'}`, then `show.compare` over `deferral.options` with fields `figures.amount`, `figures.taxThisYear`, `figures.taxNextYear`, `figures.net`, `figures.decemberCash`, `figures.payrollNeed` |
 
 The starter cap of four in chat.js stays; the war-game starters lead because open decisions are
 time-bound. The fake engine (`src/api/fake-answers.mjs`) scripts both starters, including their
@@ -420,15 +454,18 @@ choose beyond what a recommendation already says.
    `act_on_recommendation {operation: 'pick_point', name, point: <option id>}` or
    `act_on_recommendation {operation: 'decide', decisionId, point: <picked id>}`. A game that is no
    longer pickable or a decision no longer open returns the tool's refusal as a 409 with its text.
-4. On success the server appends a Fathom message with fixed text ("You picked <label>." or "You
+4. The route allocates a turn id, passes it as `turnId` in the tool context (as chat writes do),
+   and stores it as `provenance.actionTurn` on the message it appends, so `receiptMessages`
+   (`src/actions/receipts.mjs`) refreshes that one receipt after Undo instead of adding a copy.
+5. On success the server appends a Fathom message with fixed text ("You picked <label>." or "You
    decided on <label>. Your plan uses it from the next planning run."), the label from the
    snapshot and escaped, and `provenance.actions: [receipt]`, so the existing receipt line and Undo
    button render. No model call is made.
-5. The block's picked state is read live from the scenario's war-game picks, not the snapshot, so
+6. The block's picked state is read live from the scenario's war-game picks, not the snapshot, so
    Undo of a pick (receipt kind `setting`, C9) and Undo of a decide (revisit, C9) show at once.
-6. Typed requests ("pick the middle salary point", "revisit my salary decision") go through the
+7. Typed requests ("pick the middle salary point", "revisit my salary decision") go through the
    model as ordinary chat writes under rule 9 of `docs/ask-tools.md`.
-7. Parity: the new act route maps to `act_on_recommendation.pick_point` and `decide` in the
+8. Parity: the new act route maps to `act_on_recommendation.pick_point` and `decide` in the
    section 6 route map.
 
 ### What is removed (B9), and where the Decide list goes (B7)
@@ -466,9 +503,12 @@ Deterministic (tier 1, CI):
 2. `evals/graders.mjs` `gradeBlocks` (B2): for every block in an answer, each `calls` entry
    deep-equals a call in the transcript; every snapshot figure equals (value and unit) the figure
    at the same path in that call's transcript result; the stored `spec` has no number-typed leaf
-   outside Ref args and no digit in `title`; the answer's dropped count is zero for cases that list
-   `blocks`. Violations are kinds `block_unreferenced`, `block_value_mismatch`, `block_literal`,
-   `block_dropped`.
+   outside Ref args and its `title` passes the number check; the answer's dropped count is zero for
+   cases that list `blocks`. A case lists required blocks as `blocks: [ { op, kind? } ]` (the closed
+   case schema in `evals/cases.mjs` gains that field), and an answer missing one is
+   `block_missing`, so a required block cannot pass vacuously. `evals/harness.mjs` counts block
+   violations in the case result like figure violations. Violations are kinds `block_missing`,
+   `block_unreferenced`, `block_value_mismatch`, `block_literal`, `block_dropped`.
 3. New cases in `evals/catalog.json`, each with a script in `evals/scripts/`:
 
 | Case id | Question | Required calls | Ticket |
@@ -507,14 +547,24 @@ written; none needs a person at run time.
 | B3 Block shell, table and compare renderers | Big | none | about 450, 350 |
 | B5 `recommendations.wargame` read | Small | none | about 150, 200 |
 | B7 Decide list moves to the Plan screen | Small | none | about 150, 200 |
-| B2 `show` tool and answer integration | Big | B1, B3, C2 (PR #105) | about 350, 400 |
+| B2 `show` tool and answer integration | Big | B1, B4, C2 (PR #105) | about 400, 450 |
 | B4 Chart and timeline renderers | Big | B3 | about 450, 300 |
-| B6 War games in Ask | Big | B2, B4, B5, C9 | about 400, 450 |
+| B6 War games in Ask | Big | B2, B5, C9 | about 400, 450 |
 | B8 Drill-down and staleness | Small | B2 | about 300, 300 |
 | B9 Retire the What-if page | Small | B6, B7 | about 100 added, 500 removed; 300 test |
 
-Waves: 1 now: B1, B3, B5, B7. 2: B2 (once C2 merges) and B4. 3: B8, and B6 once C9 merges. 4: B9.
-Serial edges: B1 to B2, B3 to B2 and B4, B2 to B6 and B8, B6 and B7 to B9.
+Waves: 1 now: B1, B3, B5, B7. 2: B4. 3: B2 (once C2 merges). 4: B8, and B6 once C9 merges. 5: B9.
+Serial edges: B3 to B4, B1 and B4 to B2, B2 to B6 and B8, B6 and B7 to B9. B2 waits for B4 so
+that `show` never offers an operation whose renderer has not shipped. B2 usually waits on C2 at
+that point anyway.
+
+Shared files and merge order: `src/blocks/snapshot.mjs` is created by B1 and edited by B6 (action)
+and B8 (drill) in different functions; the second of B6 and B8 rebases. `ask-blocks.js` is created
+by B3, gains two map entries in B4 and the stale badge in B8, in that order. `ask-block-compare.js`
+(B3, then B6) and `ask-block-table.js` (B3, then B8). B6's route is `src/api/block-actions.mjs` and
+B8's is `src/api/block-status.mjs`; each adds one line to `src/api/router.mjs` and its own function
+to `web/core/core.js`, and the second rebases. Timeline is owned once: validator and builder in
+B1, renderer in B4, offered by B2.
 
 ### B1 Block validator and snapshot builder
 
@@ -531,8 +581,9 @@ Done when:
 
 1. `validateBlock(op, args, turnResults)` returns each reason code in section 4 for its fixture,
    built from real demo-store results of `goals.pace`, `household.figures`, `transactions.search`
-   and `household.deadlines` called through `callTool`. Verified by `test/blocks-validate.test.mjs`.
-   Runs in: worker.
+   and `household.deadlines` called through `callTool`, plus a title holding a number word
+   ("Save ten thousand") and a figure label that echoes a call argument (it is replaced by the
+   fallback label). Verified by `test/blocks-validate.test.mjs`. Runs in: worker.
 2. For a valid fixture of each block type (chart line, chart scatter, table, compare, timeline),
    `buildSnapshot` passes `snapshot-shape.mjs`, every snapshot figure equals the figure at the
    same path in the source result, labels come from data per section 1, and no snapshot exceeds
@@ -549,8 +600,11 @@ snapshot contract. The shell's renderer map holds `table` and `compare`; B4 adds
 
 Files: `web/horizon/screens/ask-blocks.js`, `ask-block-table.js`, `ask-block-compare.js` (new),
 `web/horizon/screens/chat.js` (place blocks after paragraph `after`, render `blockNotes`),
+`web/horizon/design.js` (`thread()` renders blocks for the rec dialog and Packs),
+`web/horizon/screens/ask-panel.js` (`sigOf` restores focus by `data-blk-ctl`),
 `web/horizon/screens/ask.css` (block styles, series ramp tokens), `web/core/core.js`
-(`api.registerFigures`), `test/fixtures/blocks/` (table, compare, notes), `test/ask-blocks.test.mjs`,
+(`api.registerFigures`, popover formatting by unit), `test/fixtures/blocks/` (table, compare,
+notes, non-money and unavailable figures), `test/ask-blocks.test.mjs`,
 `test/block-palette.test.mjs`, `e2e/ask-blocks.spec.mjs` (new).
 
 Done when:
@@ -564,8 +618,10 @@ Done when:
 3. On the demo build, a thread whose API response is rewritten by Playwright `page.route` to carry
    the fixture blocks shows the table and compare in the docked panel and on the Ask page at 1280
    px and 390 px, light and dark, with no horizontal page scroll at 390 px, sort buttons operable
-   by keyboard, and the popover on a block figure showing its source and as-of date. Verified by
-   `e2e/ask-blocks.spec.mjs`. Runs in: PR CI.
+   by keyboard, focus kept on a sort button after the redraw, the popover on a block figure showing
+   its source, as-of date and a unit-formatted value (a ratio fixture reads as a percent), and the
+   same blocks in the rec dialog. The docked panel at its 320 px minimum width (288 px content) is
+   tested explicitly. Verified by `e2e/ask-blocks.spec.mjs`. Runs in: PR CI.
 
 Test command: `node --test test/ask-blocks.test.mjs test/block-palette.test.mjs test/ask-convo.test.mjs`, then `npx playwright test e2e/ask-blocks.spec.mjs` on a private port.
 
@@ -612,14 +668,14 @@ Test command: `npx playwright test e2e/decide.spec.mjs e2e/decide-not-built.spec
 
 Problem: the model has no way to declare a block, and answers do not store or place them.
 
-Blocked by: B1, B3, C2. Decisions: sections 2 (streaming and MCP paragraphs), 3, and 5 items 2
-and 3. B2 is the only B ticket that edits `src/api/answerer.mjs`, `src/tools/tools.mjs` and
+Blocked by: B1, B4, C2. Decisions: sections 2 (streaming and MCP paragraphs), 3, 4 (schema
+failures become notes) and 5 items 2 and 3. B2 is the only B ticket that edits `src/api/answerer.mjs`, `src/tools/tools.mjs` and
 `src/tools/index.mjs`.
 
 Files: `src/tools/tools.mjs` (header, `askOnly`), `src/tools/index.mjs` (Ask-only listing and rule
 text), `src/tools/catalog/show.mjs` (new), `src/engine/tools.mjs` (`ctx.turnResults`),
 `src/mcp/server.mjs`, `src/mcp/keys.mjs`, `src/api/answerer.mjs`, `src/shared/answer-text.mjs`,
-`src/api/fake-answers.mjs` (a scripted chart and table answer), `evals/graders.mjs` (`gradeBlocks`),
+`src/api/fake-answers.mjs` (a scripted chart and table answer), `evals/graders.mjs` (`gradeBlocks`), `evals/cases.mjs` (`blocks` field), `evals/harness.mjs`,
 `evals/catalog.json` and `evals/scripts/` (the B2 cases in section 8), `docs/ask-tools.md`,
 `docs/architecture.md`, `test/blocks-answer.test.mjs` (new), `test/answerer.test.mjs`,
 `e2e/ask-blocks.spec.mjs` (one end-to-end case with no route rewrite).
@@ -629,14 +685,18 @@ Done when:
 1. An answer with the fake engine that calls `transactions.search`, then `show.table`, then writes
    `{b:b1}` on its own line stores one block whose `after` equals the paragraphs before the marker,
    renders no marker text, grounds without counting the marker, and stores `blockNotes` for a
-   second, invalid `show` call; a block in a regenerated answer may use a first-attempt call.
+   second, invalid `show` call; a missing argument, an extra property and a title with a number
+   word each end as a stored note, never a block; a block in a regenerated answer may use a
+   first-attempt call.
    Verified by `test/blocks-answer.test.mjs` and `test/answerer.test.mjs`. Runs in: worker.
 2. `show` is absent from MCP `tools/list` for a key with every scope, an MCP call to it is refused,
    and the MCP `instructions` hold none of its rules. Verified by `src/mcp/test/server.test.mjs`.
    Runs in: worker.
 3. The budget test measures the Ask-offered list under 30,000 characters and the Ask rule text
-   under 8,000, printing both. Verified by `test/tools-registry.test.mjs`. Runs in: worker.
-4. `gradeBlocks` reports each violation kind on a fixture; `npm run eval:ask` passes with every B2
+   under 8,000, printing both. Verified by `test/tools-registry.test.mjs`, which also covers the `askOnly` first-operation exemption. Runs
+   in: worker.
+4. `gradeBlocks` reports each violation kind on a fixture, and a case whose scripted answer omits
+   a required block fails the runner; `npm run eval:ask` passes with every B2
    case whose operations are registered as a required pass and the rest as expected failures naming
    their missing pairs. Verified by `test/ask-evals-runner.test.mjs` and `npm run eval:ask`. Runs
    in: worker and PR CI.
@@ -671,11 +731,11 @@ Test command: `node --test test/ask-blocks.test.mjs`, then `npx playwright test 
 
 Problem: Ask cannot offer the war games or pick and decide a point.
 
-Blocked by: B2, B4, B5, C9. Decisions: section 7 "The suggested questions" and "Pick and decide as
+Blocked by: B2, B5, C9. Decisions: section 7 "The suggested questions" and "Pick and decide as
 Ask writes". Point ids, not indexes, cross the tool boundary.
 
 Files: `src/blocks/actions.mjs` (new), `src/blocks/snapshot.mjs` (attach the action),
-`src/api/ask-blocks.mjs` (new: the act route), `src/api/router.mjs`, `src/scenario/build.mjs`
+`src/api/block-actions.mjs` (new: the act route), `src/api/router.mjs`, `src/scenario/build.mjs`
 (starters), `src/api/fake-answers.mjs` (both starters), `web/horizon/screens/ask-block-compare.js`
 (Pick this, Decide footer, live picked state), `web/core/core.js` (`api.blockAct`),
 `web/horizon/design.js` (rec dialog "Ask about this tradeoff" button), `docs/ask-tools.md` (route
@@ -688,12 +748,14 @@ Done when:
    `test/scenario.test.mjs`. Runs in: worker.
 2. The act route with `pick` writes the same `wargame.picks` setting as `pickWargame`, stores a
    receipt whose Undo restores the prior picks, and appends one Fathom message with that receipt;
-   `decide` matches `act_on_recommendation.decide` and its Undo revisits; an option out of range is
+   `decide` matches `act_on_recommendation.decide` and its Undo revisits; after Undo, reloading the
+   thread shows one receipt for the action, marked undone (the `actionTurn` linkage); an option out of range is
    400, an unavailable game 409, and no point id is read from the request. Verified by
    `test/blocks-act.test.mjs`. Runs in: worker.
 3. On the demo build with the fake engine, the salary starter shows a scatter and a compare; Pick
    this, Undo, Pick this, Decide on this leaves the decision decided on the picked point; the rec
-   dialog's Ask about this tradeoff opens the panel with the starter. Verified by
+   dialog's Ask about this tradeoff opens the panel with the starter; in the 390 px panel sheet,
+   keyboard focus stays on the block after Pick this and after Undo. Verified by
    `e2e/ask-wargame.spec.mjs`. Runs in: PR CI.
 4. `npm run eval:ask` passes with the three B6 cases as required passes. Verified by `npm run
    eval:ask`. Runs in: worker and PR CI.
@@ -707,19 +769,20 @@ Problem: a table figure cannot show its rows, and a reopened answer cannot say i
 Blocked by: B2. Decisions: section 5 items 4 and 5, section 6.
 
 Files: `src/blocks/drill.mjs` (new), `src/blocks/snapshot.mjs` (store `drill`),
-`src/api/ask-blocks.mjs` (status route; create the file if B6 has not), `src/api/router.mjs`,
+`src/api/block-status.mjs` (new: the status route), `src/api/router.mjs`,
 `docs/ask-tools.md` (status route excluded as conversation chrome), `web/horizon/screens/ask-blocks.js`
 (stale badge, Ask again), `ask-block-table.js` (Show rows), `web/core/core.js` (`api.blockStatus`),
 `test/blocks-drill.test.mjs`, `test/blocks-stale.test.mjs` (new), `e2e/ask-blocks.spec.mjs`.
 
 Done when:
 
-1. For each drill mapping in section 6 that the merged reads support on the demo store, the route's
-   `sum` equals the block figure to the cent; `drillQuery` returns null for a definition and a
-   merchant group. Verified by `test/blocks-drill.test.mjs`. Runs in: worker.
+1. For both drill mappings in section 6 on the demo store, the route's `sum` equals the block
+   figure to the cent; `drillQuery` returns null for a definition, a merchant group, a month group,
+   a total and a `profit` field. Verified by `test/blocks-drill.test.mjs`. Runs in: worker.
 2. The status route returns `current` on an unchanged store, `stale` with the changed count after
-   the test inserts a transaction in the window, and `unavailable` after the source call starts to
-   error, and changes no row. Verified by `test/blocks-stale.test.mjs`. Runs in: worker.
+   the test inserts a transaction in the window, `stale` for a timeline over `household.deadlines`
+   after a deadline's date changes, and `unavailable` after the source call starts to error, and
+   changes no row. Verified by `test/blocks-stale.test.mjs`. Runs in: worker.
 3. In the browser, Show rows expands with focus on its heading and Escape returns focus; a stale
    block shows the badge and Ask again sends the question. Verified by `e2e/ask-blocks.spec.mjs`.
    Runs in: PR CI.
@@ -768,7 +831,8 @@ Probed 2026-11-07 on `main` at `6306899`:
    Playwright spec that the worker or PR CI runs on the demo build with no secrets, no network and
    no live model. B3 and B4 fake only the network response at the browser boundary, to render
    fixture blocks before B2 exists; B2's spec covers the real path.
-4. Riskiest step: B2 item 1, a regenerated answer's block referencing a first-attempt call. It
+4. Plan review: one cross-provider round (13 findings, all fixed in this revision).
+5. Riskiest step: B2 item 1, a regenerated answer's block referencing a first-attempt call. It
    needs one collector shared across two engine calls; `createRegistryServer` keeps a per-server
    `results` list today (`src/engine/tools.mjs`), so B2 passes a shared list in.
 
