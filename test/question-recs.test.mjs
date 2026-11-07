@@ -4,7 +4,7 @@ import { CONFIRM_TASKS, ANSWER_SHAPES, questionFor } from '../src/jobs/triggers/
 import { triggers, evaluateTriggers } from '../src/jobs/triggers/index.mjs';
 import { writeProse } from '../src/jobs/planner/prose.mjs';
 
-const accounts = [{ id: 'stable-college', kind: '529', name: 'manual', mask: '7939', display_name: 'College fund' }];
+const accounts = [{ id: 'stable-college', kind: '529', name: 'manual', mask: '3333', display_name: 'College fund' }];
 
 test('every confirm task has a declared, usable answer shape', () => {
   for (const key of Object.keys(CONFIRM_TASKS)) {
