@@ -2232,7 +2232,10 @@ function onDocumentKey(e) {
   if (!root || !api || !keys) return;
   if (switcher.captures(e)) return;
   if (e.key === 'Escape' && !e.defaultPrevented && !e.isComposing && askPanelEscape()) { e.preventDefault(); return; }
-  if (!e.defaultPrevented && keys.handle(e, document.activeElement)) { e.preventDefault(); return; }
+  // Focus in the panel, or a modal panel over the page: the screen's own keys (Confirm answers,
+  // rec actions, list moves) must not act on the page behind it, so only global keys answer.
+  const globalOnly = askPanel.focusInside() || askPanel.modalOpen();
+  if (!e.defaultPrevented && keys.handle(e, document.activeElement, { globalOnly })) { e.preventDefault(); return; }
   if (e.key === 'Tab') trapTab(e);
 }
 
@@ -2259,11 +2262,12 @@ function trapTab(e) {
   } else return;
   const f = set.flatMap((el) => [...el.querySelectorAll(FOCUSABLE)]).filter((el) => el.offsetParent !== null || el.getClientRects().length > 0);
   if (!f.length) return;
-  const first = f[0], last = f[f.length - 1], act = document.activeElement;
-  const inside = set.some((el) => el.contains(act));
-  if (!inside || act === root.querySelector('.h-dlg-host .h-dlg')) { e.preventDefault(); (e.shiftKey ? last : first).focus(); }
-  else if (e.shiftKey && act === first) { e.preventDefault(); last.focus(); }
-  else if (!e.shiftKey && act === last) { e.preventDefault(); first.focus(); }
+  // Tab walks the allowed sequence itself, so moving between containers (dialog, panel, popover)
+  // never lands on something outside them, such as the launcher between the dialog and the panel.
+  e.preventDefault();
+  const i = f.indexOf(document.activeElement);
+  const next = i < 0 ? (e.shiftKey ? f.length - 1 : 0) : (i + (e.shiftKey ? -1 : 1) + f.length) % f.length;
+  f[next].focus();
 }
 
 // Helpers the screen modules use. Getters, because api, root and ui change on mount.

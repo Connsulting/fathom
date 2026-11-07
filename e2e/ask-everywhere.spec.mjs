@@ -668,4 +668,54 @@ test.describe('ask everywhere', () => {
     await page.evaluate(() => document.fonts.ready);
     await page.screenshot({ path: testInfo.outputPath(`ask-panel-${testInfo.project.name}.png`) });
   });
+  test('@ae-ac1 with focus in the panel, Confirm keys do not answer the card behind it', async ({ page }) => {
+    await gotoRoute(page, 'confirm');
+    await expect(page.locator('.h-root article.h-deck-card.cur').first()).toBeVisible();
+    const writes = [];
+    page.on('request', (r) => { if (r.method() === 'POST' && /\/api\/confirm\//.test(r.url())) writes.push(r.url()); });
+    await openPanel(page);
+    await bar(page, 'new').focus();
+    await page.keyboard.press('1');
+    await page.keyboard.press('2');
+    // A negative check needs a window: give any write the time a real answer takes to leave.
+    await page.waitForTimeout(800);
+    expect(writes).toEqual([]);
+    await expect(panel(page)).toBeVisible();
+  });
+
+  test('@ae-ac5 a first question sent on the Ask page and moved to the panel before it completes lands in the panel thread', async ({ page }) => {
+    test.setTimeout(180_000);
+    await gotoRoute(page, 'ask');
+    const ta = page.locator('.h-root form.h-askx-compose textarea[name="q"]');
+    await ta.fill(LONG_Q(600, 5000));
+    await ta.press('Enter');
+    await expect(page.locator('.h-root .h-work.live')).toBeVisible({ timeout: 30_000 });
+    await page.locator('.h-root button[data-askp="collapse"]').click();
+    await expect(panel(page)).toBeVisible();
+    await expect(answers(page)).toHaveCount(1, { timeout: 120_000 });
+    await expect(mine(page)).toHaveCount(1);
+    expect((await stored(page)).threadId).toMatch(/^[a-f0-9]{12}$/);
+  });
+
+  test('@ae-ac1 Tab moves between a dialog and the docked panel in both directions and never reaches the launcher', async ({ page }) => {
+    test.skip(!isDock(page), 'docked panel only');
+    for (const route of [`account/${ACC}`, `rec/${REC_ID}`]) {
+      await gotoRoute(page, route);
+      await expect(page.locator('.h-dlg-host .h-dlg')).toBeVisible();
+      if (!(await panel(page).isVisible())) await launcher(page).click();
+      await expect(panel(page)).toBeVisible();
+      const SEL = 'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea,summary,[tabindex]:not([tabindex="-1"])';
+      const focusEdge = (host, last) => page.evaluate(([h, sel, l]) => {
+        const f = [...document.querySelector(h).querySelectorAll(sel)].filter((el) => el.getClientRects().length > 0);
+        (l ? f[f.length - 1] : f[0]).focus();
+      }, [host, SEL, last]);
+      await focusEdge('.h-dlg-host', true);
+      await page.keyboard.press('Tab');
+      expect(await focusedWithin(page, '#h-askp')).toBe(true);
+      await focusEdge('#h-askp', false);
+      await page.keyboard.press('Shift+Tab');
+      expect(await focusedWithin(page, '.h-dlg-host')).toBe(true);
+      expect(await focusedWithin(page, '.h-askp-launch')).toBe(false);
+    }
+  });
 });
