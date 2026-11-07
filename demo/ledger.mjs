@@ -165,5 +165,16 @@ export function buildLedger({ accounts, fig, entities, year, through, seed = 202
   }
   taxPayments.forEach((p, i) => { p.locator = `tax:row ${i + 1}`; });
 
+  // Each estimated payment on or before data-through also leaves the first funded checking account,
+  // numbered after the rows above so their locators and dedupe keys do not move.
+  if (personal) {
+    for (const p of taxPayments) {
+      if (p.date > through) continue;
+      const n = transactions.length + 1;
+      transactions.push({ accountId: personal.id, date: p.date, amount: -p.amount, description: 'Estimated tax payment', category: 'taxes',
+        locator: `ledger:row ${n}`, dedupeKey: `demo-seed:${n}` });
+    }
+  }
+
   return { masks, transactions, balances, positions, pnl, taxPayments };
 }
