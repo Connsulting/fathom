@@ -114,6 +114,10 @@ function crossFormatDuplicate(db, item) {
   if (a.account_id !== b.account_id || a.date !== b.date || centsOf(b.amount) !== cents) return null;
   if (!a.parser || !b.parser || a.parser === b.parser || !a.file_id || !b.file_id || a.file_id === b.file_id) return null;
   if (a.external_id && b.external_id && a.external_id !== b.external_id) return null;
+  const bridge = a.parser === 'simplefin' ? a : b.parser === 'simplefin' ? b : null;
+  const file = bridge === a ? b : a;
+  if (bridge?.external_id && db.prepare("SELECT row FROM superseded_rows WHERE table_name='transactions' AND survivor_key=? AND reason='duplicate_cross_format'").all(file.dedupe_key)
+    .some(r => { const prior = parseJson(r.row,null); return prior?.parser === 'simplefin' && prior.external_id && prior.external_id !== bridge.external_id; })) return null;
   const collision = a.dedupe_key.startsWith(`${b.dedupe_key}:d:`) || b.dedupe_key.startsWith(`${a.dedupe_key}:d:`);
   if (!collision && (fileRowsOn(db, a.file_id, a.account_id, a.date, cents) !== 1 || fileRowsOn(db, b.file_id, b.account_id, b.date, cents) !== 1)) return null;
   const account = accountOf(db, a.account_id);
