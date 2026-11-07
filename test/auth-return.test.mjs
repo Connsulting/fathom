@@ -14,6 +14,7 @@ test('a document GET redirects to sign-in and an API path does not', () => {
 
 test('a fragment route or a same-origin path returns there, and hostile targets fall back to Home', () => {
   assert.equal(afterSignIn({ hash: '#/plan', href: 'http://localhost/signin#/plan' }), '/#/plan');
+  assert.equal(afterSignIn({ hash: '#/ask/ask%3A0123456789ab', href: 'http://localhost/signin#/ask/ask%3A0123456789ab' }), '/#/ask/ask%3A0123456789ab');
   assert.equal(afterSignIn({ hash: '#/rec/abc', href: 'http://localhost/signin#/rec/abc' }), '/#/rec/abc');
   assert.equal(afterSignIn({ hash: '', href: 'http://localhost/signin?next=' + encodeURIComponent('/account') }), '/account');
   assert.equal(afterSignIn({ hash: '#/plan', href: 'http://localhost/signin?next=' + encodeURIComponent('https://evil.example') + '#/plan' }), '/#/plan');

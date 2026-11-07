@@ -10,6 +10,14 @@ export const APP_ROUTES = Object.freeze([
 
 const ROUTE_NAMES = new Set(APP_ROUTES);
 
+function safeSegment(raw) {
+  let value = raw;
+  if (value.includes('%')) {
+    try { value = decodeURIComponent(value); } catch { return false; }
+  }
+  return value.length > 0 && value.length <= 80 && /^[A-Za-z0-9._~:-]+$/.test(value);
+}
+
 export function safeHash(hash) {
   if (typeof hash !== 'string' || hash.length < 3 || hash.length > 180) return null;
   if (!hash.startsWith('#/')) return null;
@@ -20,7 +28,7 @@ export function safeHash(hash) {
   const name = parts[0];
   const extra = parts[1];
   if (!ROUTE_NAMES.has(name)) return null;
-  if (extra !== undefined && (extra.length === 0 || extra.length > 80 || !/^[A-Za-z0-9._~-]+$/.test(extra))) return null;
+  if (extra !== undefined && !safeSegment(extra)) return null;
   return '#/' + name + (extra ? '/' + extra : '');
 }
 
