@@ -19,6 +19,7 @@ test.beforeAll(async () => {
 test.afterAll(async () => { await app?.close(); rmSync(data, { recursive: true, force: true }); });
 
 test('@mobile public demo visitor flow and two-context isolation', async ({ page, browser }) => {
+  await page.context().addInitScript(() => { try { localStorage.setItem('fathom.tour.done', '1'); } catch {} });
   await page.goto('/');
   await expect(page.locator('.h-demo-marker')).toHaveText('Demo with sample data');
   expect(page.url()).not.toContain('/signin');
@@ -47,6 +48,7 @@ test('@mobile public demo visitor flow and two-context isolation', async ({ page
   const threadId = page.url().split('/').pop();
 
   const other = await browser.newContext({ baseURL: origin });
+  await other.addInitScript(() => { try { localStorage.setItem('fathom.tour.done', '1'); } catch {} });
   try {
     const second = await other.newPage();
     await second.goto('/');
