@@ -18,6 +18,7 @@ import { deriveHeard } from '../onboarding/heard.mjs';
 import { withAdvisor, advisorSection } from '../advisor/index.mjs';
 import { buildPace, indexPaceFigures } from '../pace/build.mjs';
 import { buildSuggestions } from '../suggest/build.mjs';
+import { buildTrend, groupOfKind, TREND_SRC } from '../accounts/trend.mjs';
 
 const DAY = 86400000;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -585,6 +586,11 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
   const suggested = buildSuggestions(db, { clock: clk, goals });
   Object.assign(fig, suggested.figures);
   src['calc:targets'] = { label: 'Suggested target calculator', asOf: clk };
+  const household = buildTrend(db, clk);
+  if (household) {
+    Object.assign(fig, household.figures);
+    src[TREND_SRC] = household.source;
+  }
   const curve = loadCurve(db, content);
   const positions = getSetting(db, 'curve.positions', null) || {};
   linkRecs(recs, goals, accountRows);
@@ -603,6 +609,7 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
     src,
     fig,
     series,
+    trend: household ? household.trend : null,
     verdict: section(content, 'verdict'),
     domains: applyFreshness(section(content, 'domains'), ingest),
     // A store written before titles were plain language may still hold "<fact key> changed".
@@ -628,7 +635,7 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
       return {
         id: a.id, inst: a.inst, name: label, sourceName: a.name, displayName: a.display_name || null,
         subtitle: accountSubtitle(a),
-        owner: a.owner, kind: a.kind, fig: a.fig_key, mirror: a.mirror, note: a.note || '', mask: a.mask,
+        owner: a.owner, kind: a.kind, group: groupOfKind(a.kind), fig: a.fig_key, mirror: a.mirror, note: a.note || '', mask: a.mask,
         asOf: f.asOf || '', fresh: f.fresh || 'unknown', sourceId: f.sourceId || null,
         // Text that came from an uploaded file: render as plain text, never as tokens or markup.
         imported: a.parser !== 'demo-seed',
