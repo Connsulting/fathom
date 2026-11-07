@@ -395,16 +395,34 @@ test('routeContext view: account dialog from and to dates', () => {
     { kind: 'account', id: 'acc_plain', label: 'Money > Studio checking, to 2026-03-31', q: 'to=2026-03-31' });
 });
 
-test('routeContext view: details keep the order month, range, owner, dates, then housing and tax', () => {
-  const view = {
-    filters: [{ key: 'tax', value: 'on' }, { key: 'housing', value: 'off' }],
-    to: '2026-03-31', from: '2026-01-01', owner: 'me', range: '3M', month: '2026-03',
-  };
-  assert.deepEqual(shown(route('home'), view), {
-    kind: 'page', id: 'home',
-    label: 'Home, March 2026, last 3 months, my actions, from 2026-01-01 to 2026-03-31, housing left out, tax included',
-    q: 'month=2026-03;range=3M;owner=me;from=2026-01-01;to=2026-03-31;housing=off;tax=on',
+test('routeContext view: details keep the order month, then housing, then tax', () => {
+  const view = { filters: [{ key: 'tax', value: 'on' }, { key: 'housing', value: 'off' }], month: '2026-03' };
+  assert.deepEqual(shown(route('pnl'), view), {
+    kind: 'page', id: 'pnl', label: 'Money > P&L, March 2026, housing left out, tax included', q: 'month=2026-03;housing=off;tax=on',
   });
+});
+
+test('routeContext view: each route keeps only the view fields it owns', () => {
+  const all = {
+    pnl: { id: 'entity:studio', label: 'Studio LLC' }, month: '2026-03', range: '3M', owner: 'me', from: '2026-01-01', to: '2026-03-31',
+    filters: [{ key: 'housing', value: 'off' }], item: { kind: 'goal', id: 'g_synth', label: 'Synthetic reserve' },
+  };
+  assert.deepEqual(shown(route('money'), all), { kind: 'money', id: 'overview', label: 'Money > Overview, last 3 months', q: 'range=3M' });
+  assert.deepEqual(shown(route('pnl'), all),
+    { kind: 'pnl', id: 'entity:studio', label: 'Money > Studio LLC, March 2026, housing left out', q: 'month=2026-03;housing=off' });
+  assert.deepEqual(shown(route('home'), all), { kind: 'page', id: 'home', label: 'Home, my actions', q: 'owner=me' });
+  assert.deepEqual(shown(route('goals'), all), { kind: 'goal', id: 'g_synth', label: 'Home > Goals > Synthetic reserve', q: '' });
+  // The account dialog over Money: the trend range of the page beneath is not the dialog's.
+  assert.deepEqual(shown(route('account', { id: 'acc_plain' }), all),
+    { kind: 'account', id: 'acc_plain', label: 'Money > Studio checking, from 2026-01-01 to 2026-03-31', q: 'from=2026-01-01;to=2026-03-31' });
+  assert.deepEqual(shown(route('account', { id: 'acc_plain' }), { range: '1Y' }),
+    { kind: 'account', id: 'acc_plain', label: 'Money > Studio checking', q: '' });
+  // Every other route ignores the view.
+  for (const r of [route('accounts'), route('plan'), route('pace'), route('rec', { id: 'rec_open' }), route('packs'), route('settings'), route('confirm'), route('nowhere')]) {
+    const plain = routeContext(r, ctx);
+    assert.deepEqual(routeContext(r, { ...ctx, view: all }), plain, r.name);
+    assert.equal(plain.q, '', r.name);
+  }
 });
 
 test('routeContext view: an open goal form names the goal under the page', () => {

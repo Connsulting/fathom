@@ -22,6 +22,11 @@
 //   money        overview or accounts
 //   pack         a pack in the scenario
 //   page         a signed-in screen id
+// Any id may end in a view qualifier, `<id>@<key>=<value>;...`, naming what the screen showed:
+// month YYYY-MM, range 3M | 1Y | All, owner me | spouse, from and to YYYY-MM-DD, housing=off,
+// tax=on. A valid qualifier resolves the id before it; the ref keeps the full id and its hint ends
+// in `; on screen: month 2026-03, ...`. A suffix that is not a valid qualifier is part of the id
+// (ids may contain '@'), so free text after '@' only ever fails to match a store row.
 // The answerer puts these in the conversation context for the model and keeps them out of the
 // grounding evidence: a reference id or hint never grounds a number.
 
@@ -82,6 +87,37 @@ function pnlCategories(db, entity, clock) {
     for (const s of ['income', 'expenses']) for (const c of (p && p[s] && Array.isArray(p[s].categories) ? p[s].categories : [])) out.add(c.category);
   }
   return out;
+}
+
+const QUALIFIER = /^[a-z]+=[A-Za-z0-9-]+(;[a-z]+=[A-Za-z0-9-]+)*$/;
+const DAY = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+const QUALIFIER_VALUES = {
+  month: v => /^\d{4}-(0[1-9]|1[0-2])$/.test(v),
+  range: v => v === '3M' || v === '1Y' || v === 'All',
+  owner: v => v === 'me' || v === 'spouse',
+  from: v => DAY.test(v),
+  to: v => DAY.test(v),
+  housing: v => v === 'off',
+  tax: v => v === 'on',
+};
+
+// { base, q, words } for an id ending in a valid view qualifier, else null.
+function splitQualifier(id) {
+  const at = id.lastIndexOf('@');
+  if (at <= 0) return null;
+  const q = id.slice(at + 1);
+  if (!QUALIFIER.test(q)) return null;
+  const pairs = q.split(';').map(p => p.split('='));
+  if (!pairs.every(([k, v]) => Object.hasOwn(QUALIFIER_VALUES, k) && QUALIFIER_VALUES[k](v))) return null;
+  return { base: id.slice(0, at), q, words: pairs.map(([k, v]) => `${k} ${v}`).join(', ') };
+}
+
+// One ref, with or without a view qualifier.
+function resolveRef(db, scenario, ref) {
+  const sq = ref && typeof ref.id === 'string' ? splitQualifier(ref.id) : null;
+  if (!sq) return resolveOne(db, scenario, ref);
+  const r = resolveOne(db, scenario, { kind: ref.kind, id: sq.base });
+  return r ? { kind: r.kind, id: `${r.id}@${sq.q}`, use: `${r.use}; on screen: ${sq.words}` } : null;
 }
 
 // One ref as { kind, id, use } or null when the store does not know it.
@@ -150,7 +186,7 @@ export function resolveRefs(db, scenario, refs) {
   const out = [];
   const seen = new Set();
   for (const ref of arr(refs)) {
-    const r = resolveOne(db, scenario || {}, ref);
+    const r = resolveRef(db, scenario || {}, ref);
     if (!r || seen.has(`${r.kind}:${r.id}`)) continue;
     seen.add(`${r.kind}:${r.id}`);
     out.push(r);
