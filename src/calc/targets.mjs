@@ -8,6 +8,7 @@
 // contribution room from the planner's stored room figures). Anything else is a question.
 
 import { createHash } from 'node:crypto';
+import { resolveCategories } from '../categories/resolve.mjs';
 import { finite, round } from './pace.mjs';
 import { HORIZON_IDS, horizonLabel } from '../shared/goals.mjs';
 
@@ -103,32 +104,6 @@ export const plainAccountName = a => typeof a?.name === 'string' && a.name.trim(
 
 // ---------------------------------------------------------------- spending
 
-// Pairs each source row with at most one candidate row: another account, the opposite amount to
-// the cent, within transferDays. Nearest date wins, then the lowest id. -> Set of matched source ids.
-function matchTransfers(sources, candidates, days) {
-  const used = new Set();
-  const matched = new Set();
-  const byCents = new Map();
-  for (const c of candidates) {
-    const k = cents(c.amount);
-    const list = byCents.get(k);
-    const entry = { c, d: day(c.date) };
-    if (list) list.push(entry); else byCents.set(k, [entry]);
-  }
-  for (const s of sources) {
-    let best = null;
-    const sd = day(s.date);
-    for (const { c, d } of byCents.get(-cents(s.amount)) || []) {
-      if (used.has(c.id) || c.account_id === s.account_id) continue;
-      const gap = Math.abs(d - sd);
-      if (gap > days) continue;
-      if (!best || gap < best.gap || (gap === best.gap && c.id < best.c.id)) best = { c, gap };
-    }
-    if (best) { used.add(best.c.id); matched.add(s.id); }
-  }
-  return matched;
-}
-
 // The complete-month run of one account: the month after its first transaction to the month before
 // its last, split at months without a transaction, the latest run kept. -> {from, to} indexes or null.
 function accountRun(months) {
@@ -150,7 +125,7 @@ function accountRun(months) {
 // A business account: kind business, or flagged by the store side (owner or stated entity).
 export const isBusinessAccount = a => !!a && (a.business === true || a.kind === 'business');
 
-export function spendingInputs({ accounts, transactions, clock, parameters = TARGET_PARAMETERS }) {
+export function spendingInputs({ accounts, transactions, corrections = [], merchantRules = [], sourceRules = [], guesses = [], clock, parameters = TARGET_PARAMETERS }) {
   const P = parameters;
   const byId = new Map(accounts.map(a => [a.id, a]));
   const isSpending = a => SPENDING_KINDS.includes(a.kind) && !isBusinessAccount(a);
@@ -178,14 +153,17 @@ export function spendingInputs({ accounts, transactions, clock, parameters = TAR
   const inWindow = t => { const m = monthIndex(t.date.slice(0, 7)); return m >= from && m <= to; };
   const ordered = rows.toSorted((a, b) => a.date.localeCompare(b.date) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   const onSpending = ordered.filter(t => isSpending(byId.get(t.account_id)) && inWindow(t));
-  const outflows = onSpending.filter(t => t.amount < 0);
-  const inflows = onSpending.filter(t => t.amount > 0);
-  // Spending leaves out an outflow matched to an inflow on any other household account.
-  const notSpend = matchTransfers(outflows, ordered.filter(t => t.amount > 0), P.transferDays);
-  // Income leaves out an inflow matched to an outflow on another account that is not a business account.
-  const notIncome = matchTransfers(inflows, ordered.filter(t => t.amount < 0 && !isBusinessAccount(byId.get(t.account_id))), P.transferDays);
-  const spend = outflows.filter(t => !notSpend.has(t.id));
-  const income = inflows.filter(t => !notIncome.has(t.id));
+  const categories = resolveCategories({ accounts, transactions: ordered, corrections, merchantRules, sourceRules, guesses,
+    transferSourceIds: onSpending.map(t => t.id), transferDays: P.transferDays });
+  const spend = onSpending.filter(t => t.amount < 0 && categories.get(t.id).bucket === 'household');
+  const income = onSpending.filter(t => t.amount > 0 && categories.get(t.id).bucket === 'income');
+  for (const [layer, prefix] of [['guess', 'guessed'], ['uncategorized', 'uncategorized']]) {
+    const uncertainSpend = spend.filter(t => categories.get(t.id).layer === layer);
+    const uncertainIncome = income.filter(t => categories.get(t.id).layer === layer);
+    out[prefix + 'Spend'] = round(-uncertainSpend.reduce((sum,t) => sum+t.amount,0));
+    out[prefix + 'Income'] = round(uncertainIncome.reduce((sum,t) => sum+t.amount,0));
+    out[prefix + 'Count'] = uncertainSpend.length + uncertainIncome.length;
+  }
   const spendTotal = -spend.reduce((s, t) => s + t.amount, 0);
   const incomeTotal = income.reduce((s, t) => s + t.amount, 0);
   out.spendIds = spend.map(t => t.id);
@@ -205,20 +183,23 @@ export function spendingFigures(sp, { clock, parameters = TARGET_PARAMETERS }) {
   const silentNote = sp.silent.length
     ? `No transactions on file for ${listText(sp.silent.map(plainAccountName))}; ${sp.silent.length === 1 ? 'its' : 'their'} spending is not counted.` : null;
   const P = { transferDays: parameters.transferDays, maxWindowMonths: parameters.maxWindowMonths, minWindowMonths: parameters.minWindowMonths };
-  const inputs = { months: sp.months, spendTotal: sp.spendTotal, incomeTotal: sp.incomeTotal };
+  const inputs = { months: sp.months, spendTotal: sp.spendTotal, incomeTotal: sp.incomeTotal,
+    guessedSpend: sp.guessedSpend, uncategorizedSpend: sp.uncategorizedSpend, guessedIncome: sp.guessedIncome,
+    uncategorizedIncome: sp.uncategorizedIncome, guessedCount: sp.guessedCount, uncategorizedCount: sp.uncategorizedCount };
   const base = { clock, inputs, parameters: P, window: sp.window };
   const spendSources = [rowsSource('transactions', sp.spendIds)];
-  const transferNote = `Transfers between household accounts of the same amount within ${word(parameters.transferDays)} days are left out.`;
+  const transferNote = `Only household spending counts; business, transfers, taxes, saving and excluded categories are left out. Unclassified transfers match opposite amounts within ${word(parameters.transferDays)} days.`;
+  const uncertaintyNote = `Spending includes ${usd(sp.guessedSpend ?? 0)} from guesses and ${usd(sp.uncategorizedSpend ?? 0)} from Uncategorized rows. Income includes ${usd(sp.guessedIncome ?? 0)} from guesses and ${usd(sp.uncategorizedIncome ?? 0)} from Uncategorized rows.`;
   return {
     monthlySpend: figure(sp.monthlySpend, { ...base, label: 'Monthly spending, recent average', calc: 'monthlySpend', sources: spendSources,
-      formula: 'outflows on spending accounts in the window, less matched transfers, divided by the months in the window',
-      notes: [windowNote, countedNote, transferNote, silentNote, 'Spending accounts are checking, savings, cash and card accounts; business accounts are left out.'] }),
+      formula: 'household bucket outflows on spending accounts in the window divided by the months in the window',
+      notes: [windowNote, countedNote, uncertaintyNote, transferNote, silentNote] }),
     annualSpend: figure(sp.annualSpend, { ...base, label: 'Yearly spending, recent average', calc: 'annualSpend', sources: spendSources,
-      formula: 'monthly spending times twelve', notes: [windowNote, 'Yearly spending is monthly spending times twelve.', countedNote, silentNote] }),
+      formula: 'monthly spending times twelve', notes: [windowNote, uncertaintyNote, 'Yearly spending is monthly spending times twelve.', countedNote, silentNote] }),
     monthlySavings: figure(sp.monthlySavings, { ...base, label: 'Monthly savings, recent average', calc: 'monthlySavings',
       sources: [rowsSource('transactions', [...sp.incomeIds, ...sp.spendIds])],
-      formula: 'inflows on spending accounts in the window, less matched transfers from non-business accounts, minus spending, divided by the months',
-      notes: [windowNote, 'Savings is money coming into spending accounts minus spending, per month.',
+      formula: 'income bucket inflows minus household bucket outflows on spending accounts in the window divided by the months',
+      notes: [windowNote, uncertaintyNote, 'Savings is money coming into spending accounts minus spending, per month.',
         'Transfers in from other household accounts that are not business accounts are not income; business transfers in are.', countedNote] }),
   };
 }

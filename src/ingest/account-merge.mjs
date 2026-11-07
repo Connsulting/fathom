@@ -1,3 +1,4 @@
+import { moveCategoryRows } from '../categories/store.mjs';
 import { accountNaming } from '../accounts/naming.mjs';
 import { accountLabel } from '../shared/account-label.mjs';
 import { createHash } from 'node:crypto';
@@ -121,6 +122,7 @@ export function mergeAccounts(db, item, { now = new Date().toISOString() } = {})
     if (duplicate) {
       archive(db,'transactions',{ ...row,account_id:keepId,dedupe_key:key },{ by:duplicate.file_id,reason:'duplicate_cross_format',survivorKey:duplicate.dedupe_key,now });
       removedKeys.add(row.dedupe_key);
+      moveCategoryRows(db,row.id,duplicate.id);
       db.prepare('DELETE FROM transactions WHERE id=?').run(row.id);
     } else {
       db.prepare('UPDATE transactions SET account_id=?,dedupe_key=? WHERE id=?').run(keepId,key,row.id);

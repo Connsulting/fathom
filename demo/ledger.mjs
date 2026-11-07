@@ -105,6 +105,8 @@ export function buildLedger({ accounts, fig, entities, year, through, seed = 202
       }
     }
   }
+  const personal = accounts.find(a => a.kind === 'checking' && a.fig);
+  if (personal) for (const month of [4,6]) transactions.push({ accountId:personal.id,date:`${year}-${pad(month)}-12`,amount:-640,description:'Example Service',category:'Uncategorized' });
   transactions.sort((x, y) => (x.accountId < y.accountId ? -1 : x.accountId > y.accountId ? 1 : 0) || (x.date < y.date ? -1 : x.date > y.date ? 1 : 0));
   transactions.forEach((t, i) => { t.locator = `ledger:row ${i + 1}`; t.dedupeKey = `demo-seed:${i + 1}`; });
 
