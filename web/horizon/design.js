@@ -1781,6 +1781,8 @@ function focusSig(el) {
   if (a('data-recowner') != null) return `[data-recowner="${CSS.escape(a('data-recowner'))}"]`;
   if (a('data-ad')) return `[data-ad="${CSS.escape(a('data-ad'))}"]`;
   if (a('data-dlg-name') != null) return '[data-dlg-name]';
+  for (const k of ['data-ad-owner', 'data-ad-kind', 'data-ad-mask']) if (a(k) != null) return `[${k}]`;
+  if (a('data-merge-with') != null) return `[data-merge-with="${CSS.escape(a('data-merge-with'))}"]`;
   if (a('data-askrec') != null) return '[data-draft]';
   if (a('data-draft')) return `[data-draft="${CSS.escape(a('data-draft'))}"]`;
   return null;
@@ -2163,6 +2165,7 @@ function onInput(e) {
 // Committed changes: a goal form select or checkbox, and a released curve or priority slider
 // (saved to the store, so both feed the planner and chat).
 function onChange(e) {
+  if (SCREENS.some((s) => s.onChange?.(e))) return;
   const t = e.target;
   if (t?.dataset?.gf === 'track' || t?.dataset?.gf === 'acct') { goalInput(t); return; }
   if (t?.dataset?.suggRate) { suggRate(t); return; }
