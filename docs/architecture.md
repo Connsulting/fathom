@@ -187,6 +187,7 @@ columns). Frozen fact keys:
 | `household.dependents` | int |
 | `household.expectingChild` | bool |
 | `household.dependentAges` | int[] |
+| `household.birthYears` | object: owner, spouse and dependents birth years |
 | `income.w2` | bool |
 | `income.sCorp` | bool |
 | `income.selfEmployed` | bool |
