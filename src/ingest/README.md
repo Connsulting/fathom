@@ -271,10 +271,15 @@ bytes; a concurrent upload of bytes being ingested is a `duplicate`.
 
    Decided for you lists the answered items that have a `confirm_auto` row, newest
    first, each with its rule, evidence and Undo (a final one shows why it is final).
-   In the Confirm deck an account question shows a Best guess tag on the guessed
-   option with a Use best guess button, and when two or more account_owner or
+   In the Confirm deck the guessed option carries a Best guess tag where it
+   already sits (never preselected or moved up; nothing is answered until the
+   owner picks an option or presses Use best guess), and a category card lists
+   the categories in one fixed order. When two or more account_owner or
    account_kind questions are pending they fold into one grouped card with a row
-   per account, the guess preselected, and Use best guesses for all.
+   per account and an Accept N best guesses button for the rows still open. A
+   category is decided in order from the owner's labeled history, then rules,
+   then the model; what Fathom settles on its own appears in Decided for you
+   with its evidence and an Undo.
 
    Rank and group: `ingestState` sorts pending items by impact and the deck walks
    them in that order. Rank 0 tax_year, employer_relation, employer_recipient,
