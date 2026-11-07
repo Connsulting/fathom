@@ -333,6 +333,7 @@ secrets are read there.
 |---|---|---|
 | `FATHOM_DATA` | `./data` (gitignored) | Data directory; holds `fathom.sqlite` and `platform.sqlite`. |
 | `FATHOM_BACKUP_KEY_FILE` | unset | Path to a private file holding a 32-byte key. Read only by `scripts/migrate-platform.mjs` and `scripts/source-snapshot.mjs`, which encrypt source snapshots with it; the server never reads it. |
+| `FATHOM_PLATFORM_KEY_FILE` | unset | Path to a private file holding the 32-byte platform key that wraps household data keys (`loadPlatformKey`, `platformKeyFromEnv` in `src/platform/backup-key.mjs`). Read by no server path yet; for offline tooling and the MT-03 cutover. |
 | `FATHOM_PORT` | `8080` | HTTP port. |
 | `FATHOM_HOST` | `127.0.0.1` (the image sets `0.0.0.0`) | Bind address. |
 | `FATHOM_DEMO` | unset (auto) | `1` demo store required, `0` real store required, unset follows the store (a new store is demo). |
@@ -843,9 +844,14 @@ known path with the wrong method is 405; signed out, both are 401. Every action 
 | `POST /api/threads/:id/restore` | `{}` | `{scenario, thread}`. Clears `trashedAt` when trashed, else `archivedAt`. |
 | `POST /api/threads/:id/delete` | `{}` | `{scenario}`. Deletes the thread and its messages forever; 409 unless it is in Trash. |
 | `POST /api/your-plans/build` | `{fileIds?: string[]}` (at most 50) | `{scenario, result: {written, entries, sources, warnings, dropped}}`. Builds the Your plans pack (`dropped` counts the extracted sections that did not match their document); 400 for a bad body; 409 while the engine is off, over the cap, or when the data directory is inside the repository. |
-| `GET /api/accounts/:id` | none | `{account, fresh, asOf, balance: {asOf}, trendKey, txn: {count, from, to}, feeds, syncable}` for the account dialog. `balance.asOf` is the newest balance or positions date, which can be older than `asOf` (the newest row of any kind). `fresh` and `asOf` are the account's entry in `live.ingest.accounts` (the rule the Home health line counts). Each feed is a file source or SimpleFIN with its last data date, freshness state, cadence and how to refresh it; a SimpleFIN feed adds `lastSyncAt` and `balanceDate`. `syncable` is true when SimpleFIN is connected, maps this account and does not need a reconnect. 400 for a missing id, 404 unknown. Read-only. |
+| `GET /api/accounts/:id` | none | `{account, fresh, asOf, balance: {asOf}, trendKey, txn: {count, from, to}, feeds, syncable}` for the account dialog. `balance.asOf` is the newest balance or positions date, which can be older than `asOf` (the newest row of any kind). `fresh` and `asOf` are the account's entry in `live.ingest.accounts` (the rule the Home health line counts). Each feed is a file source or SimpleFIN with its last data date, freshness state, cadence and how to refresh it; a SimpleFIN feed adds `lastSyncAt` and `balanceDate`. `syncable` is true when SimpleFIN is connected, maps this account and does not need a reconnect. `account` also carries the edit controls: `maskEditable`, `ownerKey` and `kindKey` (confirm option ids or null) and `ownerOptions` and `kindOptions`. 400 for a missing id, 404 unknown. Read-only. |
 | `GET /api/accounts/:id/transactions` | query `q` (at most 100 characters, matched against description and category), `from` and `to` (YYYY-MM-DD, `from` not after `to`), `limit` (1 to 200, default 50), `cursor` (the previous page's `next`) | `{items, next, total, figures, sources}`. Newest first, only this account's rows. `next` is null on the last page; `total` counts every row the filters match. Each item names a figure in `figures` whose source is in `sources`. 400 for any bad parameter, 404 unknown. Read-only. |
 | `POST /api/accounts/:id/name` | `{displayName}` | `{scenario, account}`. Sets the owner's display name for that account (trimmed, at most 120 characters, no line breaks or control characters). Empty or null clears it and the screens use the default label. 400 for a bad name, 404 unknown. Imports and SimpleFIN refreshes do not write this column. |
+| `POST /api/accounts/:id/mask` | `{mask}` (exactly four digits) | `{scenario, account}`. Stores the last 4 on an account with none and no SimpleFIN identity, then asks any "Same account?" question the new mask makes detectable. 400 for a bad mask, 404 unknown, 409 when the account already has a mask or is connected. |
+| `POST /api/accounts/:id/owner` | `{owner}` (a confirm option id) or `{undo: before}` | `{scenario, account, before}`. Records the value as the account's `account_owner` confirm answer (asked, answered, revised, or restated when final), so a later import keeps it; schedules a replan like a Confirm answer. `{undo: before}` sets the prior answer back, reopens a question that was pending, or removes one the edit created. 400 for a bad value, 404 unknown, 409 when the answer can no longer be undone. |
+| `POST /api/accounts/:id/kind` | `{kind}` (a confirm option id) or `{undo: before}` | `{scenario, account, before}`. Same as the owner route, for the `account_kind` answer.
+| `GET /api/accounts/:id/merge-candidates` | none | `{items: [{id, label, inst, kind, mask, lastDataDate, mirror, plan: {keepId, keepLabel, ownId, ownLabel, moves: {transactions, balances, positions, sources}}, refused?}]}`. Every other account with what a merge would keep and move: a connected account is merged into the other one; between two file accounts the open one survives; two connected accounts carry `refused`. 404 unknown. Read-only. |
+| `POST /api/accounts/:id/merge` | `{withId}` | `{scenario, survivorId, itemId}`. Merges through a manual `account_match` item answered `same`, the same path and undo log as a detected pair; the survivor takes a missing institution and a reliable last 4 from the SimpleFIN snapshot. Undo is `POST /api/confirm/:itemId/reopen`. 400 for a missing or same id, 404 unknown, 409 for two connected accounts. |
 | `POST /api/goals` | `{title, note?, horizon?, target?, targetDate?, track?}` | `{scenario, goal}`. Creates an owner goal (`origin` owner). `title` 1 to 120 characters, no line breaks; `note` at most 500; `horizon` now, 1-3y or 3-10y (default now); `target` a non-negative number or null; `targetDate` a valid YYYY-MM-DD or null; `track` null, `{accounts: [account ids]}` (at most 20, known ids) or `{figure: key}` (a known figure the store holds). Anything else 400. |
 | `GET /api/pace` | none | Deterministic `clock`, `rollup`, `goals`, `series` and `meters`, identical to `scenario.pace`. Uses the same owner gate as the scenario. No writes or model calls. |
 | `POST /api/goals/:id` | any subset of the create fields | `{scenario, goal}`. Edits an owner goal; 409 for a seed (demo) goal, 404 unknown. |
@@ -974,6 +980,7 @@ CLIs.
 | `platform_settings` | `key` PK, `value` JSON, `updated_at`. `multi_household_enabled` (boolean, false when absent). |
 | `audit_events` | `id` PK, `at`, `actor_user_id`, `household_id`, `target_user_id`, fixed `action` and `outcome` codes. No payloads, emails or tokens. |
 | `platform_operations` | `id` PK, `kind`, `phase`, `status` in running, done, `started_at`, `updated_at`, `detail` JSON (counts and hashes only) |
+| `household_data_keys` | (`household_id`, `key_version`) PK, `wrapped_key` BLOB (the household data key wrapped under the platform key, never raw), `status` in active, retired (a unique partial index allows one active key per household), `created_at`. Written only by `provisionDataKey` (`src/platform/household-vault.mjs`); the server does not read it before MT-03. |
 
 Memberships and invitations.
 
@@ -1790,6 +1797,18 @@ reads `FATHOM_DATA_KEY_FILE` (32 raw bytes, 64 hex characters or base64 of 32 by
 refused). A real store without the key file refuses uploads with "uploads need
 FATHOM_DATA_KEY_FILE: set it to a file holding a 32 byte key" (HTTP 409). A demo store generates
 `$FATHOM_DATA/files/demo.key` on first use. `clearStoredFiles(dataDir)` removes `*.bin` only.
+
+Household envelope (MT-02, not wired). `src/platform/household-vault.mjs` defines FTHM2: `FTHM2`,
+the key version (uint32 BE), a fresh 12 byte nonce, the ciphertext and the 16 byte tag, with
+length-prefixed additional data binding `fathom-vault/2`, household id, purpose (`upload`,
+`advisor-packet`, `simplefin-access`), object id, key version and the header itself. Each household
+has a random 32 byte data key, stored only wrapped (`FTHMK1`) under the platform key in platform
+`household_data_keys` with household id and version authenticated. Objects live under a contained
+household root (`households/<seg>...` below the data root, every segment an lstat-checked private
+directory, never a symlink) at `files/<id>.bin`. `src/platform/vault-convert.mjs` converts a legacy
+instance offline into a validated bundle at `<root>/work/vault-<operationId>`, published by one
+rename; it only reads the legacy store and files. The server still uses FTHM1 until the MT-03
+cutover; nothing in the server imports these modules yet.
 
 ### Mapping unknown tables
 
