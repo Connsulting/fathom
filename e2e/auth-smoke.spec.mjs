@@ -35,14 +35,20 @@ test.describe('signed-out real server', { tag: '@auth-smoke' }, () => {
       expect(householdRequests).toEqual([]);
 
       for (const headers of [{}, { 'Tailscale-User-Login': 'owner@example.test', 'Tailscale-User-Name': 'Synthetic Administrator' }]) {
-        for (const path of ['/api/scenario', '/api/identity', '/', '/account', '/admin/users']) {
+        for (const path of ['/api/scenario', '/api/identity']) {
           const response = await context.request.get(path, { headers });
           expect(response.status(), `signed-out GET ${path}`).toBe(401);
         }
+        for (const path of ['/', '/account', '/admin/users']) {
+          const response = await context.request.get(path, { headers, maxRedirects: 0 });
+          expect(response.status(), `signed-out GET ${path}`).toBe(303);
+          expect(response.headers().location).toBe(path === '/' ? '/signin' : `/signin?next=${encodeURIComponent(path)}`);
+        }
       }
       const denied = await page.goto('/');
-      expect(denied.status()).toBe(401);
-      await expect(page.getByRole('link', { name: /sign in/i })).toBeVisible();
+      expect(denied.status()).toBe(200);
+      await expect(page).toHaveURL(/\/signin$/);
+      await expect(page.getByRole('button', { name: 'Sign in with a passkey', exact: true })).toBeVisible();
       expect(householdRequests).toEqual([]);
       // Passive conditional mediation may ask for options; the guard blocks it before sending.
       expect(blocked.filter((entry) => entry !== 'POST /api/auth/signin/options'), 'unexpected smoke write attempt').toEqual([]);
