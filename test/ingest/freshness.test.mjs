@@ -13,12 +13,14 @@ let H;
 let P;
 let B;
 let C;
+let SF;
 before(async () => {
   FR = await src('src/ingest/freshness.mjs');
   H = await src('src/ingest/howto.mjs');
   P = await src('src/ingest/pipeline.mjs');
   B = await src('src/scenario/build.mjs');
   C = await src('src/ingest/confirm.mjs');
+  SF = await src('src/ingest/simplefin.mjs');
 });
 
 async function withStore(fn) {
@@ -39,7 +41,7 @@ async function seeded(s) {
 describe('cadence and domains', () => {
   test('CADENCE by source kind', () => {
     const monthly = { label: 'monthly', staleAfterDays: 45 };
-    for (const k of ['bank_csv', 'card_csv', 'aggregator_csv', 'balances', 'brokerage_positions', 'statement', 'pnl_workbook']) {
+    for (const k of ['bank_csv', 'card_csv', 'aggregator_csv', 'balances', 'brokerage_positions', 'statement', 'pnl_workbook', 'simplefin']) {
       assert.deepEqual(FR.CADENCE[k], monthly, k);
     }
     assert.deepEqual(FR.CADENCE.paystub, { label: 'per pay period', staleAfterDays: 35 });
@@ -50,7 +52,7 @@ describe('cadence and domains', () => {
   });
 
   test('DOMAIN_OF by source kind', () => {
-    for (const k of ['bank_csv', 'card_csv', 'aggregator_csv', 'balances']) assert.equal(FR.DOMAIN_OF[k], 'cash', k);
+    for (const k of ['bank_csv', 'card_csv', 'aggregator_csv', 'balances', 'simplefin']) assert.equal(FR.DOMAIN_OF[k], 'cash', k);
     for (const k of ['brokerage_positions', 'statement']) assert.equal(FR.DOMAIN_OF[k], 'invest', k);
     assert.equal(FR.DOMAIN_OF.pnl_workbook, 'entities');
     assert.equal(FR.DOMAIN_OF.tax_payments, 'tax');
@@ -358,5 +360,58 @@ describe('waiting files', () => {
     const again = await P.retryFile(s.db, odd.fileId, s.opts(off));
     assert.equal(again.status, 'needs_mapping');
     assert.ok(FR.ingestState(s.db, { clock: '2032-03-10' }).waiting.some((f) => f.id === odd.fileId));
+  }));
+});
+
+// Newest stored row wins over an older file source. refreshFreshness is the function a merge or
+// undo calls when it does not itself rebuild the scenario.
+describe('freshness after import, sync and merge', () => {
+  test('an import sets data through from the imported rows', () => withStore(async (s) => {
+    await seeded(s);
+    const fresh = FR.refreshFreshness(s.db, { clock: '2032-03-10' });
+    assert.equal(fresh.dataThrough, '2032-03-05');
+    const sc = B.buildScenario(s.db, { clock: '2032-03-10' });
+    assert.equal(sc.meta.dataThrough, 'Mar 5, 2032');
+    assert.equal(sc.pace.rollup.dataThrough, '2032-03-05');
+  }));
+
+  test('a newer balance on a file account stays fresh after the file source date is rolled back, and a sync moves data through', () => withStore(async (s) => {
+    const { cash } = await seeded(s);
+    s.db.prepare('UPDATE sources SET as_of = ? WHERE id = ?').run('2032-01-05', cash.source_id);
+    s.db.prepare('INSERT INTO balances (account_id, date, amount) VALUES (?, ?, ?)').run(cash.id, '2032-06-01', 10);
+    const merged = FR.refreshFreshness(s.db, { clock: '2032-06-15' });
+    assert.equal(merged.accounts[cash.id].asOf, '2032-06-01');
+    assert.equal(merged.accounts[cash.id].fresh, 'fresh');
+    assert.equal(merged.dataThrough, '2032-06-01');
+
+    const day = '2032-06-20';
+    const fetch = SF.createFakeSimplefin({ today: () => day });
+    const opt = { config: s.config, key: s.key, now: `${day}T12:00:00.000Z`, clock: day, fetch };
+    await SF.connectSimplefin(s.db, SF.fakeToken(), opt);
+    const sync = await SF.syncSimplefin(s.db, opt);
+    assert.equal(sync.status, 'ok');
+    const after = FR.refreshFreshness(s.db, { clock: day });
+    assert.equal(after.dataThrough, day);
+    const connected = s.db.prepare("SELECT id FROM accounts WHERE mirror = 'connected'").all();
+    assert.ok(connected.length > 0);
+    for (const a of connected) assert.equal(after.accounts[a.id].fresh, 'fresh', a.id);
+    const sc = B.buildScenario(s.db, { clock: day });
+    assert.equal(sc.meta.dataThrough, 'Jun 20, 2032');
+    assert.equal(sc.pace.rollup.dataThrough, day);
+  }));
+
+  test('a later tax payment or P&L month moves Home and Money together', () => withStore(async (s) => {
+    const { cash } = await seeded(s);
+    s.db.prepare('INSERT INTO balances (account_id, date, amount) VALUES (?, ?, ?)').run(cash.id, '2032-06-01', 10);
+    s.db.prepare(`INSERT INTO content (key, value, src, updated_at) VALUES ('meta', ?, 'test', ?)`)
+      .run(JSON.stringify({ product: 'Fathom', household: '', dataThrough: 'Jun 20, 2032' }), NOW);
+    s.db.prepare(`INSERT INTO tax_payments (jurisdiction, tax_year, date, amount, kind) VALUES ('US', 2032, '2032-06-20', 100, 'estimated')`).run();
+    const tax = B.buildScenario(s.db, { clock: '2032-06-30' });
+    assert.equal(tax.meta.dataThrough, 'Jun 20, 2032');
+    assert.equal(tax.pace.rollup.dataThrough, '2032-06-20');
+    s.db.prepare(`INSERT INTO pnl_lines (entity, period, category, amount) VALUES ('Synthetic Co', '2032-06', 'revenue', 50)`).run();
+    const pnl = B.buildScenario(s.db, { clock: '2032-06-30' });
+    assert.equal(pnl.meta.dataThrough, 'Jun 30, 2032');
+    assert.equal(pnl.pace.rollup.dataThrough, '2032-06-30');
   }));
 });
