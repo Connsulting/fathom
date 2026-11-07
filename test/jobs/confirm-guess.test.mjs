@@ -8,15 +8,13 @@
 
 import test, { describe } from 'node:test';
 import assert from 'node:assert/strict';
-import http from 'node:http';
 import { rmSync } from 'node:fs';
-import { tempDb, request, postJson, TEST_OWNER } from '../helpers/server.mjs';
+import { tempDb, serveAppFixture } from '../helpers/server.mjs';
 import { realStore, count, all } from '../helpers/ingest.mjs';
 import { setSetting } from '../../src/store/db.mjs';
 import { seedDemo } from '../../demo/seed.mjs';
 import { createRuntimeEngine } from '../../src/engine/runtime.mjs';
 import { ask, KIND_OPTIONS } from '../../src/ingest/confirm.mjs';
-import { createHandler } from '../../src/api/router.mjs';
 import { JOBS, localParts, periodKey, createScheduler, defaultHandlers } from '../../src/jobs/scheduler.mjs';
 
 const JOB = 'confirm-guess';
@@ -360,14 +358,10 @@ describe('confirm-guess triggers', () => {
 
 describe('confirm-guess over the jobs API', () => {
   async function serve(st, engine) {
-    const config = { ...st.config, ownerLogins: TEST_OWNER, ownerLoginsFile: null };
+    const config = { ...st.config };
     const scheduler = schedulerFor(st.db, { engine, config });
-    const server = http.createServer(createHandler({ db: st.db, config, engine, scheduler }));
-    await new Promise((r) => server.listen(0, '127.0.0.1', r));
-    return {
-      base: `http://127.0.0.1:${server.address().port}`,
-      async close() { await new Promise((r) => { server.close(r); server.closeAllConnections(); }); await scheduler.stop(); },
-    };
+    const app = await serveAppFixture({ authenticated: true, db: st.db, config, engine, scheduler });
+    return { ...app, async close() { await app.close(); await scheduler.stop(); } };
   }
 
   test('GET /api/jobs lists confirm-guess; POST /api/jobs/confirm-guess/run runs it and stores guesses', async () => {
@@ -376,14 +370,14 @@ describe('confirm-guess over the jobs API', () => {
     const engine = liveEngine({ costs: [0.125] });
     const app = await serve(st, engine);
     try {
-      const list = await request(app.base, { path: '/api/jobs' });
+      const list = await app.request({ path: '/api/jobs' });
       assert.equal(list.status, 200, list.text.slice(0, 300));
       const job = list.json.jobs.find((j) => j.id === JOB);
       assert.ok(job, 'GET /api/jobs lists confirm-guess');
       assert.equal(job.name, 'Confirm best guesses');
       assert.equal(typeof job.next, 'string');
 
-      const r = await postJson(app.base, `/api/jobs/${JOB}/run`, {});
+      const r = await app.postJson(`/api/jobs/${JOB}/run`, {});
       assert.equal(r.status, 200, r.text.slice(0, 300));
       assert.equal(r.json.run.jobId, JOB);
       assert.equal(r.json.run.status, 'ok');
@@ -403,7 +397,7 @@ describe('confirm-guess over the jobs API', () => {
     queue(st.db, 1);
     const app = await serve(st, offRuntime(st.db));
     try {
-      const r = await postJson(app.base, `/api/jobs/${JOB}/run`, {});
+      const r = await app.postJson(`/api/jobs/${JOB}/run`, {});
       assert.equal(r.status, 200, r.text.slice(0, 300));
       assert.equal(r.json.run.status, 'skipped');
       assert.deepEqual(r.json.run.note, { pending: 1 });

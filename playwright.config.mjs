@@ -4,10 +4,15 @@
 // whose clock is pinned to 2027-01-05 for e2e/january.spec.mjs, and a Your plans one whose data
 // directory sits outside the checkout (in the temp directory) for e2e/your-plans.spec.mjs.
 // FATHOM_SMOKE_TARGET=real (default demo) selects the real-store smoke assertions. Real mode
-// requires a base URL. FATHOM_SMOKE_HEADERS is an optional JSON object of extra request headers.
+// requires a base URL. Without a signed-in session only the signed-out @auth-smoke assertions
+// can pass against a real store. FATHOM_SMOKE_STORAGE_STATE optionally names a Playwright
+// storage-state file holding a session for that supplied server (made by signing in with a
+// passkey); it becomes use.storageState for the authenticated real smoke. It needs a supplied
+// base URL, and specs that must start signed out reset their own storage state.
 
+import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { defineConfig } from '@playwright/test';
 
 function portFrom(value, fallback) {
@@ -17,29 +22,18 @@ function portFrom(value, fallback) {
   return n;
 }
 
-function smokeHeaders(raw) {
-  if (raw == null || raw === '') return {};
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new Error('FATHOM_SMOKE_HEADERS must be a JSON object of header names to string values');
-  }
-  if (parsed == null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error('FATHOM_SMOKE_HEADERS must be a JSON object of header names to string values');
-  }
-  const out = {};
-  for (const [name, value] of Object.entries(parsed)) {
-    if (typeof value !== 'string') throw new Error(`FATHOM_SMOKE_HEADERS.${name} must be a string`);
-    out[name] = value;
-  }
-  return out;
+function smokeStorageState(raw, baseURL) {
+  if (raw == null || raw === '') return undefined;
+  if (!baseURL) throw new Error('FATHOM_SMOKE_STORAGE_STATE needs FATHOM_SMOKE_BASE_URL or BASE_URL');
+  const file = resolve(raw);
+  if (!existsSync(file)) throw new Error('FATHOM_SMOKE_STORAGE_STATE must name an existing storage-state file');
+  return file;
 }
 
 const CI = !!process.env.CI;
 const SMOKE_TARGET = process.env.FATHOM_SMOKE_TARGET === 'real' ? 'real' : 'demo';
 const BASE_URL = process.env.FATHOM_SMOKE_BASE_URL || process.env.BASE_URL || '';
-const EXTRA_HEADERS = smokeHeaders(process.env.FATHOM_SMOKE_HEADERS);
+const STORAGE_STATE = smokeStorageState(process.env.FATHOM_SMOKE_STORAGE_STATE, BASE_URL);
 if (SMOKE_TARGET === 'real' && !BASE_URL) {
   throw new Error('FATHOM_SMOKE_TARGET=real needs FATHOM_SMOKE_BASE_URL or BASE_URL');
 }
@@ -82,7 +76,7 @@ export default defineConfig({
   metadata: { janBaseURL, ypBaseURL, ypDataDir, smokeTarget: SMOKE_TARGET },
   use: {
     baseURL,
-    extraHTTPHeaders: EXTRA_HEADERS,
+    ...(STORAGE_STATE ? { storageState: STORAGE_STATE } : {}),
     browserName: 'chromium',
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure'

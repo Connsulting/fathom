@@ -6,10 +6,8 @@
 
 import test, { after, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import http from 'node:http';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { createHandler } from '../../src/api/router.mjs';
 import { loadConfig } from '../../src/config.mjs';
 import { openMigrated, openDb, listMigrations, migrate } from '../../src/store/db.mjs';
 import { seedDemo } from '../../demo/seed.mjs';
@@ -17,7 +15,7 @@ import { buildScenario } from '../../src/scenario/build.mjs';
 import { buildPacketHtml, contentSources } from '../../src/advisor/packet.mjs';
 import { MAX_NOTE } from '../../src/advisor/index.mjs';
 import { callTool, getTool } from '../../src/tools/index.mjs';
-import { request, postJson, TEST_OWNER } from '../helpers/server.mjs';
+import { request, serveAppFixture } from '../helpers/server.mjs';
 import { scratch, keyFileOf } from '../helpers/real-store.mjs';
 import { planRun } from '../helpers/plan.mjs';
 
@@ -26,15 +24,10 @@ const REC = 'fed-q4-estimate';
 const S = scratch();
 after(() => S.cleanup());
 
-const configFor = dir => ({ ...loadConfig({ FATHOM_DATA: dir, FATHOM_DEMO: '0', FATHOM_ENGINE: 'off', FATHOM_CLOCK: NOW, FATHOM_OWNER_LOGINS: TEST_OWNER, FATHOM_DATA_KEY_FILE: keyFileOf(dir) }) });
+const configFor = dir => ({ ...loadConfig({ FATHOM_DATA: dir, FATHOM_DEMO: '0', FATHOM_ENGINE: 'off', FATHOM_CLOCK: NOW, FATHOM_DATA_KEY_FILE: keyFileOf(dir) }) });
 
 async function serve(db, config) {
-  const server = http.createServer(createHandler({ db, config }));
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  return {
-    url: `http://127.0.0.1:${server.address().port}`,
-    close: () => new Promise(resolve => { server.close(resolve); server.closeAllConnections(); }),
-  };
+  return serveAppFixture({ authenticated: true, db, config });
 }
 
 // A planned real store behind the in-process router.
@@ -48,7 +41,7 @@ async function planned() {
   return { db, dir, srv };
 }
 
-const scen = async url => (await request(url, { path: '/api/scenario' })).json;
+const scen = async srv => (await srv.request({ path: '/api/scenario' })).json;
 const recOf = (s, id) => s.recs.find(r => r.id === id);
 const status = (db, id) => db.prepare('SELECT status FROM recs WHERE id = ?').get(id).status;
 
@@ -56,11 +49,11 @@ describe('advisor workflow, real store', () => {
   test('send marks the rec for review with a timestamp, idempotently, and lists it as waiting', async () => {
     const { db, srv } = await planned();
     try {
-      let s = await scen(srv.url);
+      let s = await scen(srv);
       assert.equal(recOf(s, REC).advisor, null, 'planner recs start unsent');
-      const r1 = await postJson(srv.url, '/api/advisor/reviews', { recId: REC });
+      const r1 = await srv.postJson('/api/advisor/reviews', { recId: REC });
       assert.equal(r1.status, 200, r1.text);
-      const r2 = await postJson(srv.url, '/api/advisor/reviews', { recId: REC });
+      const r2 = await srv.postJson('/api/advisor/reviews', { recId: REC });
       assert.equal(r2.json.reviewId, r1.json.reviewId, 'sending twice keeps one waiting review');
       s = r2.json.scenario;
       assert.equal(recOf(s, REC).advisor.verdict, 'pending');
@@ -68,17 +61,17 @@ describe('advisor workflow, real store', () => {
       assert.equal(s.advisor.waiting[0].sentOn, NOW);
       const row = db.prepare('SELECT * FROM advisor_reviews WHERE rec_id = ?').get(REC);
       assert.match(row.sent_at, /^2026-11-05T/);
-      assert.equal((await postJson(srv.url, '/api/advisor/reviews', { recId: 'nope' })).status, 404);
-      assert.equal((await postJson(srv.url, '/api/advisor/reviews', {})).status, 400);
+      assert.equal((await srv.postJson('/api/advisor/reviews', { recId: 'nope' })).status, 404);
+      assert.equal((await srv.postJson('/api/advisor/reviews', {})).status, 400);
     } finally { await srv.close(); }
   });
 
   test('a veto dismisses through the rec action path, survives a rerun, and lifts when inputs change', async () => {
     const { db, srv } = await planned();
     try {
-      const { json } = await postJson(srv.url, '/api/advisor/reviews', { recId: REC });
+      const { json } = await srv.postJson('/api/advisor/reviews', { recId: REC });
       const note = '<img src=x onerror=alert(1)> {f:agi.est} & more';
-      const v = await postJson(srv.url, `/api/advisor/reviews/${json.reviewId}/verdict`, { verdict: 'vetoed', note, date: '2026-11-04' });
+      const v = await srv.postJson(`/api/advisor/reviews/${json.reviewId}/verdict`, { verdict: 'vetoed', note, date: '2026-11-04' });
       assert.equal(v.status, 200, v.text);
       assert.equal(status(db, REC), 'dismissed');
       const ev = db.prepare("SELECT * FROM rec_events WHERE rec_id = ? AND action = 'dismiss' ORDER BY id DESC").get(REC);
@@ -90,11 +83,11 @@ describe('advisor workflow, real store', () => {
       assert.equal(a.date, 'Nov 4, 2026');
       assert.equal(v.json.scenario.advisor.reviewed[0].recId, REC);
       // A second verdict on the same review is refused.
-      assert.equal((await postJson(srv.url, `/api/advisor/reviews/${json.reviewId}/verdict`, { verdict: 'confirmed', note: '', date: NOW })).status, 409);
+      assert.equal((await srv.postJson(`/api/advisor/reviews/${json.reviewId}/verdict`, { verdict: 'confirmed', note: '', date: NOW })).status, 409);
 
       await planRun(db, { now: NOW });
       assert.equal(status(db, REC), 'dismissed', 'the planner keeps a vetoed rec dismissed');
-      assert.equal(recOf(await scen(srv.url), REC).advisor.verdict, 'vetoed');
+      assert.equal(recOf(await scen(srv), REC).advisor.verdict, 'vetoed');
 
       // The rec's inputs changed since the verdict: the next run lifts the veto.
       db.prepare("UPDATE advisor_reviews SET grounding_hash = 'older-inputs' WHERE id = ?").run(json.reviewId);
@@ -102,7 +95,7 @@ describe('advisor workflow, real store', () => {
       assert.equal(status(db, REC), 'proposed');
       const lifted = db.prepare("SELECT * FROM rec_events WHERE rec_id = ? ORDER BY id DESC").get(REC);
       assert.deepEqual([lifted.action, lifted.actor], ['advisor_veto_lifted', 'planner']);
-      assert.equal(recOf(await scen(srv.url), REC).advisor, null);
+      assert.equal(recOf(await scen(srv), REC).advisor, null);
       assert.equal(db.prepare('SELECT closed_reason FROM advisor_reviews WHERE id = ?').get(json.reviewId).closed_reason, 'inputs changed');
     } finally { await srv.close(); }
   });
@@ -110,14 +103,14 @@ describe('advisor workflow, real store', () => {
   test('a confirmed verdict keeps its status and badge across reruns', async () => {
     const { db, srv } = await planned();
     try {
-      await postJson(srv.url, '/api/recs/' + REC + '/action', { action: 'start' });
-      const { json } = await postJson(srv.url, '/api/advisor/reviews', { recId: REC });
-      const v = await postJson(srv.url, `/api/advisor/reviews/${json.reviewId}/verdict`, { verdict: 'confirmed', note: 'Fine as written.', date: NOW });
+      await srv.postJson('/api/recs/' + REC + '/action', { action: 'start' });
+      const { json } = await srv.postJson('/api/advisor/reviews', { recId: REC });
+      const v = await srv.postJson(`/api/advisor/reviews/${json.reviewId}/verdict`, { verdict: 'confirmed', note: 'Fine as written.', date: NOW });
       assert.equal(v.status, 200);
       assert.equal(status(db, REC), 'doing', 'a confirmation does not change the owner status');
       await planRun(db, { now: NOW });
       await planRun(db, { now: NOW });
-      const s = await scen(srv.url);
+      const s = await scen(srv);
       assert.equal(recOf(s, REC).status, 'doing');
       assert.equal(recOf(s, REC).advisor.verdict, 'confirmed');
       assert.equal(recOf(s, REC).advisor.note, 'Fine as written.');
@@ -127,34 +120,34 @@ describe('advisor workflow, real store', () => {
   test('verdict validation: verdict, note length and date', async () => {
     const { srv } = await planned();
     try {
-      const { json } = await postJson(srv.url, '/api/advisor/reviews', { recId: REC });
+      const { json } = await srv.postJson('/api/advisor/reviews', { recId: REC });
       const url = `/api/advisor/reviews/${json.reviewId}/verdict`;
-      assert.equal((await postJson(srv.url, url, { verdict: 'maybe', note: '', date: NOW })).status, 400);
-      assert.equal((await postJson(srv.url, url, { verdict: 'confirmed', note: 'x'.repeat(MAX_NOTE + 1), date: NOW })).status, 400);
-      assert.equal((await postJson(srv.url, url, { verdict: 'confirmed', note: '', date: '2026-02-30' })).status, 400);
-      assert.equal((await postJson(srv.url, '/api/advisor/reviews/999/verdict', { verdict: 'confirmed', note: '', date: NOW })).status, 404);
+      assert.equal((await srv.postJson(url, { verdict: 'maybe', note: '', date: NOW })).status, 400);
+      assert.equal((await srv.postJson(url, { verdict: 'confirmed', note: 'x'.repeat(MAX_NOTE + 1), date: NOW })).status, 400);
+      assert.equal((await srv.postJson(url, { verdict: 'confirmed', note: '', date: '2026-02-30' })).status, 400);
+      assert.equal((await srv.postJson('/api/advisor/reviews/999/verdict', { verdict: 'confirmed', note: '', date: NOW })).status, 404);
     } finally { await srv.close(); }
   });
 
   test('the check-in persists with its date and length', async () => {
     const { db, srv } = await planned();
     try {
-      const r = await postJson(srv.url, '/api/advisor/checkin', { date: '2026-12-10', time: '14:00', lengthMin: 45 });
+      const r = await srv.postJson('/api/advisor/checkin', { date: '2026-12-10', time: '14:00', lengthMin: 45 });
       assert.equal(r.status, 200, r.text);
       assert.deepEqual(r.json.scenario.advisor.next, { when: 'Thu, Dec 10, 2026, 2:00 PM', length: '45 min', date: '2026-12-10', time: '14:00', lengthMin: 45 });
       assert.equal(db.prepare('SELECT length_min FROM advisor_checkin').get().length_min, 45);
-      assert.equal((await postJson(srv.url, '/api/advisor/checkin', { date: 'soon', lengthMin: 30 })).status, 400);
-      assert.equal((await postJson(srv.url, '/api/advisor/checkin', { date: '2026-12-10', lengthMin: 2 })).status, 400);
-      assert.equal((await postJson(srv.url, '/api/advisor/checkin', { date: '2026-12-10', time: '25:00', lengthMin: 30 })).status, 400);
+      assert.equal((await srv.postJson('/api/advisor/checkin', { date: 'soon', lengthMin: 30 })).status, 400);
+      assert.equal((await srv.postJson('/api/advisor/checkin', { date: '2026-12-10', lengthMin: 2 })).status, 400);
+      assert.equal((await srv.postJson('/api/advisor/checkin', { date: '2026-12-10', time: '25:00', lengthMin: 30 })).status, 400);
     } finally { await srv.close(); }
   });
 
   test('the packet is stored encrypted, listed with its date and downloads as an HTML attachment', async () => {
     const { db, dir, srv } = await planned();
     try {
-      assert.equal((await postJson(srv.url, '/api/advisor/packets', {})).status, 409, 'nothing waiting');
-      await postJson(srv.url, '/api/advisor/reviews', { recId: REC });
-      const p = await postJson(srv.url, '/api/advisor/packets', {});
+      assert.equal((await srv.postJson('/api/advisor/packets', {})).status, 409, 'nothing waiting');
+      await srv.postJson('/api/advisor/reviews', { recId: REC });
+      const p = await srv.postJson('/api/advisor/packets', {});
       assert.equal(p.status, 200, p.text);
       const id = p.json.packetId;
       assert.match(id, /^advpkt-[a-f0-9]{16}$/);
@@ -162,15 +155,15 @@ describe('advisor workflow, real store', () => {
       const stored = readFileSync(join(dir, 'files', `${id}.bin`));
       assert.ok(!stored.includes(Buffer.from('Advisor review packet')), 'stored ciphertext, not HTML');
       assert.ok(readdirSync(join(dir, 'files')).includes(`${id}.bin`));
-      const d = await request(srv.url, { path: `/api/advisor/packets/${id}` });
+      const d = await srv.request({ path: `/api/advisor/packets/${id}` });
       assert.equal(d.status, 200);
       assert.match(d.headers['content-type'], /^text\/html/);
       assert.match(d.headers['content-disposition'], /^attachment; filename="advisor-packet-2026-11-05\.html"$/);
       assert.match(d.text, /Advisor review packet/);
       assert.ok(d.text.includes(db.prepare('SELECT def FROM recs WHERE id = ?').get(REC).def.match(/"title":"([^"]+)"/)[1].replace(/&/g, '&amp;')));
-      assert.equal((await request(srv.url, { path: '/api/advisor/packets/advpkt-0000000000000000' })).status, 404);
-      assert.equal((await request(srv.url, { path: '/api/advisor/packets/..%2Fx' })).status, 404);
-      assert.equal((await request(srv.url, { path: `/api/advisor/packets/${id}`, headers: { 'tailscale-user-login': 'someone@example.test' } })).status, 401, 'owner gate');
+      assert.equal((await srv.request({ path: '/api/advisor/packets/advpkt-0000000000000000' })).status, 404);
+      assert.equal((await srv.request({ path: '/api/advisor/packets/..%2Fx' })).status, 404);
+      assert.equal((await request(srv.baseUrl, { path: `/api/advisor/packets/${id}` })).status, 401, 'session gate');
     } finally { await srv.close(); }
   });
 });

@@ -8,10 +8,9 @@
 
 import test, { describe, before } from 'node:test';
 import assert from 'node:assert/strict';
-import http from 'node:http';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { src, tempDb, tempDir, runCommand, request, postJson, DB_FILE, TEST_OWNER } from '../helpers/server.mjs';
+import { src, tempDb, tempDir, runCommand, DB_FILE, serveAppFixture } from '../helpers/server.mjs';
 import { fixture, fixturePath, realStore, offEngine, all, one, count, NOW } from '../helpers/ingest.mjs';
 
 let G;
@@ -504,14 +503,7 @@ describe('imports trigger the confirm-guess job through the scheduler', () => {
   const sorted = (calls) => [...calls].sort((a, b) => a[0].localeCompare(b[0]));
 
   async function serve(s, engine, scheduler) {
-    const { createHandler } = await src('src/api/router.mjs');
-    const config = { ...s.config, ownerLogins: TEST_OWNER, ownerLoginsFile: null };
-    const server = http.createServer(createHandler({ db: s.db, config, engine, scheduler }));
-    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-    return {
-      base: `http://127.0.0.1:${server.address().port}`,
-      close: () => new Promise((resolve) => { server.close(resolve); server.closeAllConnections(); }),
-    };
+    return serveAppFixture({ authenticated: true, db: s.db, config: s.config, engine, scheduler });
   }
 
   function multipart(name, bytes, mime = 'text/csv') {
@@ -533,7 +525,7 @@ describe('imports trigger the confirm-guess job through the scheduler', () => {
     const scheduler = fakeScheduler();
     const app = await serve(s, engine, scheduler);
     try {
-      const r = await request(app.base, multipart('Chase7766_Activity_20320305.csv', readFileSync(fixturePath('Chase7766_Activity_20320305.csv'))));
+      const r = await app.request(multipart('Chase7766_Activity_20320305.csv', readFileSync(fixturePath('Chase7766_Activity_20320305.csv'))));
       assert.equal(r.status, 200, r.text.slice(0, 300));
       assert.equal(r.json.files[0].status, 'imported');
       assert.ok(C.pendingItems(s.db).length > 0, 'the upload asked questions');
@@ -551,20 +543,20 @@ describe('imports trigger the confirm-guess job through the scheduler', () => {
     const scheduler = fakeScheduler();
     const app = await serve(s, await offEngine(), scheduler);
     try {
-      const waiting = await request(app.base, multipart('novel-export.csv', novelCsv()));
+      const waiting = await app.request(multipart('novel-export.csv', novelCsv()));
       assert.equal(waiting.status, 200, waiting.text.slice(0, 300));
       const file = waiting.json.files[0];
       assert.equal(file.status, 'needs_mapping');
       assert.deepEqual(scheduler.calls, [], 'an upload that imports nothing does not trigger');
 
-      const stillWaiting = await postJson(app.base, `/api/files/${file.fileId}/retry`, {});
+      const stillWaiting = await app.postJson(`/api/files/${file.fileId}/retry`, {});
       assert.equal(stillWaiting.status, 200, stillWaiting.text.slice(0, 300));
       assert.equal(stillWaiting.json.file.status, 'needs_mapping');
       assert.deepEqual(scheduler.calls, [], 'an unsuccessful retry does not trigger');
 
       s.db.prepare("INSERT INTO column_mappings (signature, mapping, src, created_at, uses) VALUES (?, ?, 'test', ?, 0)")
         .run(headerSignature(HEADERS), JSON.stringify(MAPPING), NOW);
-      const done = await postJson(app.base, `/api/files/${file.fileId}/retry`, {});
+      const done = await app.postJson(`/api/files/${file.fileId}/retry`, {});
       assert.equal(done.status, 200, done.text.slice(0, 300));
       assert.equal(done.json.file.status, 'imported');
       assert.deepEqual(sorted(scheduler.calls), [['confirm-guess', 'ingest'], ['plan', 'ingest']], 'a successful retry triggers each once');
@@ -581,7 +573,7 @@ describe('imports trigger the confirm-guess job through the scheduler', () => {
     };
     const app = await serve(s, await offEngine(), scheduler);
     try {
-      const r = await request(app.base, multipart('Chase7766_Activity_20320305.csv', readFileSync(fixturePath('Chase7766_Activity_20320305.csv'))));
+      const r = await app.request(multipart('Chase7766_Activity_20320305.csv', readFileSync(fixturePath('Chase7766_Activity_20320305.csv'))));
       assert.equal(r.status, 200, r.text.slice(0, 300));
       assert.equal(r.json.files[0].status, 'imported');
       assert.deepEqual([...calls].sort(), ['confirm-guess', 'plan']);

@@ -20,7 +20,7 @@ Sources, in priority order:
 
 ## Status
 
-Built, on `main`: the SQLite store and Horizon UI in one process; dump-everything ingest with an encrypted file vault and a Confirm deck (revisable answers, engine guesses from fixed basis codes); the planner (figures, provenance, war games); in-process jobs (nightly plan, monthly brief, deadline alerts, freshness, Ask trash purge, confirm guesses, SimpleFIN sync); the budgeted engine (`chat`, `job`, `extract`, `confirm`, `title`, with `modelFor` choosing the model); Ask conversations with streamed, grounded answers; MCP with app-issued keys; knowledge packs and Your plans; email transports; the owner gate on the Tailscale login header; real onboarding (Tell us, sign-in display, Confirm); owner-editable goals and the tradeoff curve; the advisor review workflow; the year-end checklist and accountant packet; the keyboard layer and Ctrl+K switcher; the phone layout and home-screen install; a real-store smoke mode; read-only SimpleFIN bank and brokerage connections (balances and transactions; holdings are not mapped); account trend series from balances; plain event labels; war-game Decide and Revisit (a decided salary is the payroll assumption); and Files in More and in the switcher.
+Built, on `main`: the SQLite store and Horizon UI in one process; dump-everything ingest with an encrypted file vault and a Confirm deck (revisable answers, engine guesses from fixed basis codes); the planner (figures, provenance, war games); in-process jobs (nightly plan, monthly brief, deadline alerts, freshness, Ask trash purge, confirm guesses, SimpleFIN sync); the budgeted engine (`chat`, `job`, `extract`, `confirm`, `title`, with `modelFor` choosing the model); Ask conversations with streamed, grounded answers; MCP with app-issued keys; knowledge packs and Your plans; email transports; household accounts (one household, admin and member roles) with passkey sign-in, emailed enrollment and recovery links, server-side sessions and several passkeys per person; real onboarding (Tell us, Confirm); owner-editable goals and the tradeoff curve; the advisor review workflow; the year-end checklist and accountant packet; the keyboard layer and Ctrl+K switcher; the phone layout and home-screen install; a real-store smoke mode (signed-out checks, or a supplied signed-in storage state); read-only SimpleFIN bank and brokerage connections (balances and transactions; holdings are not mapped); account trend series from balances; plain event labels; war-game Decide and Revisit (a decided salary is the payroll assumption); and Files in More and in the switcher.
 
 Still deferred: tax filing and money movement (out of scope); multi-household tenancy; a real advisor login (the owner records the verdict); a service worker for the installed phone app; mapping SimpleFIN holdings.
 
@@ -172,8 +172,8 @@ tailnet.
 | Engine switch | Global on/off and a monthly spend cap enforced in code before every model call. Off means jobs pause and chat answers stay canned. |
 
 Deployment: one image, one volume for data, one mounted secret for the Claude credential and the
-aggregator token, served on the tailnet with `tailscale serve`. No public ingress. Backups are
-volume snapshots.
+aggregator token, served on the private network through an HTTPS ingress. Passkeys and server-side
+sessions authenticate household users. Backups are volume snapshots.
 
 The mock already has the shape this needs: a static UI that renders whatever scenario it is given,
 with the real scenario loaded at runtime from a gitignored directory that becomes the container's
@@ -258,8 +258,8 @@ split panes with a command palette), **Horizon** (the calendar year as the spine
 
 This list is the original mock-era deferral. The Status section above is what shipped. Still
 deferred from the product: multi-household tenancy; tax filing integrations; money movement (out
-of scope permanently). Real model calls, the calculators, and owner identity (Tailscale, not a
-password) are built. Read-only SimpleFIN aggregation is built; holdings are not mapped.
+of scope permanently). Real model calls, the calculators, and household accounts (passkeys, not
+passwords) are built. Read-only SimpleFIN aggregation is built; holdings are not mapped.
 
 ## 12. Run and review
 

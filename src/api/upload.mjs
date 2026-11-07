@@ -2,7 +2,7 @@
 // multipart/form-data reader that enforces the request and per-file caps as bytes arrive.
 // Errors name limits, never contents; file names keep only their base name.
 
-import { HttpError } from './http.mjs';
+import { HttpError, guardOrigin } from './http.mjs';
 
 export const UPLOAD_FILE_LIMIT = 50 * 1024 * 1024;
 export const UPLOAD_REQUEST_LIMIT = 200 * 1024 * 1024;
@@ -42,23 +42,9 @@ function boundaryOf(req) {
   return b && b.length <= 200 && !/[\r\n]/.test(b) ? b : null;
 }
 
-// Same rule as JSON posts (guardPost in http.mjs): an Origin header, when sent, must name this host.
-function sameOrigin(req) {
-  const origin = req.headers.origin;
-  if (origin === undefined) return true;
-  try {
-    const u = new URL(origin);
-    const host = new URL('http://' + (req.headers.host || '')).host;
-    return (u.protocol === 'http:' || u.protocol === 'https:') && u.host === host;
-  } catch {
-    return false;
-  }
-}
-
-// Upload POST guard: multipart/form-data with a boundary (415), same origin when sent (403).
-export function guardUpload(req) {
+export function guardUpload(req, { origin = null } = {}) {
+  guardOrigin(req, origin);
   if (!boundaryOf(req)) throw new HttpError(415, 'content-type must be multipart/form-data with a boundary');
-  if (!sameOrigin(req)) throw new HttpError(403, 'cross-origin request refused');
 }
 
 function decodeExtended(v) {

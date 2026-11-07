@@ -15,6 +15,7 @@ import { buildLedger, isoFromLabel } from './ledger.mjs';
 import { openMigrated, getSetting, setSetting, listTables, readStoreMode, createStoreFile, tx, cents, DB_FILE } from '../src/store/db.mjs';
 import { addDays, defaultPicks, BUILTIN_SOURCES, DEFAULT_CAP_USD } from '../src/scenario/build.mjs';
 import { loadConfig } from '../src/config.mjs';
+import { createAuthStore } from '../src/auth/store.mjs';
 import { REASON_TEXT } from '../src/ingest/guess.mjs';
 import { ask, canonicalJson, OWNER_OPTIONS, KIND_OPTIONS, FACT_CHECK_OPTIONS, taxYearOptions } from '../src/ingest/confirm.mjs';
 
@@ -64,11 +65,12 @@ const FACTS = {
 
 // Children before parents so foreign keys hold while clearing.
 const CLEAR_ORDER = [
+  'auth_challenges', 'auth_tokens', 'auth_sessions', 'auth_rate_limits', 'passkeys', 'api_keys', 'users',
   'advisor_reviews', 'advisor_checkin', 'advisor_packets', 'messages', 'conversations', 'rec_events', 'job_runs', 'jobs', 'superseded_rows', 'confirm_undo', 'confirm_guesses', 'confirm_items',
   'ingest_epoch', 'held_facts',
   'column_mappings', 'entity_aliases', 'transactions', 'balances', 'positions',
   'pnl_lines', 'tax_payments', 'documents', 'figures', 'accounts', 'facts', 'sources', 'recs', 'goals',
-  'deadlines', 'events', 'packs_state', 'decisions', 'api_keys', 'spend_ledger', 'content', 'settings', 'files',
+  'deadlines', 'events', 'packs_state', 'decisions', 'spend_ledger', 'content', 'settings', 'files',
 ];
 
 // Synthetic pending confirm questions so the demo shows the confirm deck: one per kind below, on
@@ -151,7 +153,7 @@ function seedAdvisor(db, S, clock) {
 const LIVE_REC_FIELDS = ['status', 'statusByDemo', 'window', 'waitingOn'];
 
 function clearStore(db) {
-  const tables = listTables(db).filter(t => t !== 'schema_migrations');
+  const tables = listTables(db).filter(t => t !== 'schema_migrations' && t !== 'households');
   const rest = tables.filter(t => !CLEAR_ORDER.includes(t));
   for (const t of [...rest, ...CLEAR_ORDER.filter(t => tables.includes(t))]) db.prepare(`DELETE FROM "${t}"`).run();
 }
@@ -159,7 +161,7 @@ function clearStore(db) {
 // Rebuild the demo content in a migrated store that is empty or already a demo store. A store
 // with no mode setting but any rows is treated as real, so this refuses it and changes nothing.
 function isEmptyStore(db) {
-  return listTables(db).filter(t => t !== 'schema_migrations')
+  return listTables(db).filter(t => t !== 'schema_migrations' && t !== 'households')
     .every(t => db.prepare(`SELECT 1 FROM "${t}" LIMIT 1`).get() === undefined);
 }
 
@@ -290,6 +292,7 @@ export function seedDemo(db) {
     setSetting(db, 'cap', { usd: typeof S.engine.budget.monthly === 'number' ? S.engine.budget.monthly : DEFAULT_CAP_USD });
     setSetting(db, 'wargame.picks', defaultPicks(S.wargame));
     setSetting(db, 'seeded', { at: now, scenario_sha: sha });
+    createAuthStore(db).ensureHousehold();
   });
 }
 
