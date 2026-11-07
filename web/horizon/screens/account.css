@@ -10,6 +10,36 @@
 .d-horizon .h-ad-edit:focus-visible { outline: 2px solid var(--ac); outline-offset: 2px; border-radius: 2px; }
 .d-horizon .h-ad-facts { align-items: center; margin-top: 12px; }
 
+/* Owner and Kind in the meta line: the rec dialog's owner select, sized to the line. */
+.d-horizon .h-ad-field { min-width: 0; max-width: 100%; }
+.d-horizon .h-ad-sel { min-width: 0; max-width: 100%; background: var(--bg); color: var(--tx2); border: 1px solid var(--line2); border-radius: 6px; font: inherit; font-size: 12.5px; padding: 2px 6px; color-scheme: dark; cursor: pointer; }
+.d-horizon .h-ad-sel:hover { border-color: var(--fa); }
+.d-horizon .h-ad-sel:focus-visible { outline: none; border-color: var(--ac); }
+
+.d-horizon .h-ad-acts { margin-top: 10px; margin-left: -13px; }
+.d-horizon .h-ad-panel { margin-top: 12px; padding: 14px 16px; border: 1px solid var(--line2); border-radius: 10px; background: var(--s1); max-width: 560px; min-width: 0; }
+.d-horizon .h-ad-panel p { margin: 0; }
+.d-horizon .h-ad-panel p + p { margin-top: 8px; }
+.d-horizon .h-ad-panel .h-acts { margin-top: 12px; }
+.d-horizon .h-ad-maskf .h-ad-f { max-width: 240px; }
+.d-horizon .h-ad-maskf .h-ad-f input { font-variant-numeric: tabular-nums; letter-spacing: 0.08em; }
+.d-horizon .h-ad-merge-confirm { border-color: var(--acl); }
+.d-horizon .h-ad-merge-confirm b { color: var(--tx); font-weight: 600; overflow-wrap: anywhere; }
+
+.d-horizon .h-ad-picks { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.d-horizon .h-ad-pick { all: unset; box-sizing: border-box; display: flex; flex-direction: column; gap: 3px; width: 100%; padding: 10px 12px; border: 1px solid var(--line2); border-radius: 8px; cursor: pointer; min-width: 0; }
+.d-horizon .h-ad-pick:hover { border-color: var(--fa); background: var(--s2); }
+.d-horizon .h-ad-pick:focus-visible { outline: 2px solid var(--ac); outline-offset: 1px; }
+.d-horizon .h-ad-pick b { font-weight: 500; color: var(--tx); overflow-wrap: anywhere; }
+.d-horizon .h-ad-pick span { color: var(--fa); font-size: 12.5px; overflow-wrap: anywhere; }
+.d-horizon .h-ad-pick[disabled] { cursor: not-allowed; opacity: 0.6; }
+.d-horizon .h-ad-pick[disabled]:hover { border-color: var(--line2); background: transparent; }
+.d-horizon .h-ad-pick .h-ad-pick-why { color: var(--mu); }
+
+.d-horizon .h-ad-undo { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin-top: 12px; padding: 8px 8px 8px 14px; border-left: 2px solid var(--ac); background: var(--acd); border-radius: 0 8px 8px 0; color: var(--tx2); font-size: 13px; max-width: 560px; }
+.d-horizon .h-ad-undo > span:first-child { flex: 1 1 200px; min-width: 0; overflow-wrap: anywhere; }
+.d-horizon .h-ad-undo .h-ad-err { margin-top: 0; flex-basis: 100%; }
+
 .d-horizon .h-acc-open { margin-left: 12px; color: var(--mu); font-size: 12.5px; }
 .d-horizon .h-acc-open:hover { color: var(--ac2); }
 .d-horizon .h-accs .h-acc[data-go="account"] { cursor: pointer; }
