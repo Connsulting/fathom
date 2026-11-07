@@ -7,7 +7,12 @@ export function predicateMatches(args, p) {
   if (p.op === 'includes') return Array.isArray(v) && v.some(x => same(x, p.value));
   if (p.op === 'gte') return typeof v === 'number' && v >= p.value;
   if (p.op === 'lte') return typeof v === 'number' && v <= p.value;
+  if (p.op === 'matches') return typeof v === 'string' && new RegExp(p.value, 'i').test(v);
   return false;
+}
+export function gradeProhibited(predicates = [], subject) {
+  const hits = predicates.filter(p => predicateMatches(subject, p));
+  return { ok: hits.length === 0, hits };
 }
 export function gradeRequiredTools(required, calls) {
   const checks = required.map(r => ({ ...r, ok: calls.some(c => !c.isError && c.name === r.name && r.predicates.every(p => predicateMatches(c.args, p))) }));
