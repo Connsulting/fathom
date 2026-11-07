@@ -235,7 +235,7 @@ describe('a complete migration preserves the household', T, () => {
     for (const k of [fx.ownedKey, fx.ownerlessKey]) {
       const r = await mcp(server.baseUrl, k.key, 'tools/list');
       assert.equal(r.status, 200, r.text.slice(0, 200));
-      assert.ok(r.json.result.tools.some(t => t.name === 'household_summary'));
+      assert.ok(r.json.result.tools.some(t => t.name === 'household'));
     }
     assert.equal((await mcp(server.baseUrl, 'fathom_' + randomBytes(32).toString('base64url'), 'tools/list')).status, 401);
 
