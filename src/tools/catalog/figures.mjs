@@ -2,7 +2,7 @@ import { getSetting, parseJson as parse } from '../../store/db.mjs';
 import { loadContent, loadPacks, tokenScope, resolveClock, todayUtc, loadGoals, loadCurve, loadFigures, loadLinkedRecs, loadLinkedRec, housekeepingCount } from '../../scenario/build.mjs';
 import { horizonLabel } from '../../shared/goals.mjs';
 import { accountLabel } from '../../shared/account-label.mjs';
-import { accountNaming, relabelStoredFigure } from '../../accounts/naming.mjs';
+import { accountNaming, relabelStoredFigure, withLabelHints } from '../../accounts/naming.mjs';
 import { OWNERS } from '../../shared/rec-links.mjs';
 import { needsYou, verdictLevel, packStatus, STATUSES } from '../../shared/rules.mjs';
 import { resolveTokens } from '../../shared/tokens.mjs';
@@ -75,7 +75,7 @@ function recOutById(db, clock, id) {
 function goalsForModel(db) {
   const scope = tokenScope(db);
   const fig = loadFigures(db);
-  const accounts = db.prepare('SELECT * FROM accounts').all();
+  const accounts = withLabelHints(db, db.prepare('SELECT * FROM accounts').all());
   return loadGoals(db, { fig, accounts }).filter(g => !g.archived).map(g => {
     const owner = g.origin === 'owner';
     const text = v => (owner ? String(v ?? '') : resolveTokens(scope, String(v ?? ''), false));

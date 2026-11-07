@@ -10,6 +10,7 @@ import { loadCategoryInputs } from '../categories/store.mjs';
 
 import { finite } from '../calc/pace.mjs';
 import { getSetting, parseJson as parse } from '../store/db.mjs';
+import { accountNaming } from '../accounts/naming.mjs';
 import { accountHistory, paceClock } from '../pace/build.mjs';
 import { loadGoals } from '../scenario/build.mjs';
 import { planningYear, ownerOf } from '../jobs/planner/data.mjs';
@@ -59,8 +60,9 @@ function loadAccounts(db) {
   const row = db.prepare("SELECT value FROM facts WHERE key = 'accounts.businessEntity' AND (src IS NULL OR src != 'planner')").get();
   const named = row ? parse(row.value, undefined) : undefined;
   const byAccount = named && typeof named === 'object' && !Array.isArray(named) ? named : {};
+  const naming = accountNaming(db);
   return db.prepare('SELECT id, name, kind, owner, inst, mask, display_name FROM accounts ORDER BY sort, id').all().map(a => ({
-    id: a.id, name: a.name, kind: a.kind, inst: a.inst, mask: a.mask, display_name: a.display_name,
+    id: a.id, name: a.name, kind: a.kind, inst: a.inst, mask: a.mask, display_name: a.display_name, ...naming.hint(a.id),
     business: String(a.kind || '').toLowerCase() === 'business' || ownerOf(a.owner) === 'business'
       || (typeof byAccount[a.id] === 'string' && byAccount[a.id].trim() !== ''),
   }));
