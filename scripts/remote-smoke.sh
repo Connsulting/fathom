@@ -27,31 +27,49 @@ harness_started=""
 
 cleanup() {
   status=$?
+  left=""
+  if [ -n "$app_started" ] && [ "$status" -ne 0 ]; then
+    echo "remote-smoke: app log follows"
+    docker logs --tail 50 "$app_name" 2>&1 || true
+  fi
   if [ -n "$harness_started" ]; then
-    docker rm -f "$harness_name" >/dev/null 2>&1 || true
+    if ! docker rm -f "$harness_name" >/dev/null 2>&1; then
+      left="${left} container ${harness_name}"
+    fi
   fi
   if [ -n "$app_started" ]; then
-    if [ "$status" -ne 0 ]; then
-      echo "remote-smoke: app log follows"
-      docker logs --tail 50 "$app_name" 2>&1 || true
+    if ! docker rm -f "$app_name" >/dev/null 2>&1; then
+      left="${left} container ${app_name}"
     fi
-    docker rm -f "$app_name" >/dev/null 2>&1 || true
   fi
   if [ -n "$volume_made" ]; then
-    docker volume rm -f "$volume" >/dev/null 2>&1 || true
+    if ! docker volume rm -f "$volume" >/dev/null 2>&1; then
+      left="${left} volume ${volume}"
+    fi
   fi
   if [ -n "$harness_built" ]; then
-    docker image rm "$harness_image" >/dev/null 2>&1 || true
+    if ! docker image rm "$harness_image" >/dev/null 2>&1; then
+      left="${left} image ${harness_image}"
+    fi
   fi
   if [ -n "$tmpdir" ]; then
-    rm -rf "$tmpdir"
+    if ! rm -rf "$tmpdir"; then
+      left="${left} temp ${tmpdir}"
+    fi
+  fi
+  if [ -n "$left" ]; then
+    echo "remote-smoke: still present:${left}" >&2
+    if [ "$status" -eq 0 ]; then
+      status=1
+    fi
+  else
+    echo "remote-smoke: cleaned up"
   fi
   if [ "$status" -eq 0 ]; then
     echo "remote-smoke: pass"
   else
     echo "remote-smoke: fail"
   fi
-  echo "remote-smoke: cleaned up"
   exit "$status"
 }
 trap cleanup EXIT
@@ -97,7 +115,12 @@ if [ "$uid" != "1000" ]; then
 fi
 echo "remote-smoke: runs as uid ${uid}"
 
-pw_version="$(node -e 'const lock=require("./package-lock.json"); const pkg=lock.packages && lock.packages["node_modules/@playwright/test"]; if (!pkg || !pkg.version) { process.exit(1); } process.stdout.write(pkg.version);')"
+tmpdir="$(mktemp -d)"
+mkdir -p "${tmpdir}/checkout"
+git archive HEAD | tar -x -C "${tmpdir}/checkout"
+archive="${tmpdir}/checkout"
+
+pw_version="$(node -e 'const lock=require(process.argv[1]); const pkg=lock.packages && lock.packages["node_modules/@playwright/test"]; if (!pkg || !pkg.version) { process.exit(1); } process.stdout.write(pkg.version);' "${archive}/package-lock.json")"
 case "$pw_version" in
   *[!0-9.]*)
     echo "remote-smoke: refusing playwright version ${pw_version}" >&2
@@ -106,14 +129,10 @@ case "$pw_version" in
 esac
 echo "remote-smoke: playwright ${pw_version}"
 
-tmpdir="$(mktemp -d)"
-mkdir -p "${tmpdir}/checkout"
-git archive HEAD | tar -x -C "${tmpdir}/checkout"
-
 echo "remote-smoke: building harness ${harness_image}"
 harness_built=1
 docker build \
-  -f "${PWD}/e2e/smoke.Dockerfile" \
+  -f "${archive}/e2e/smoke.Dockerfile" \
   --build-arg "PLAYWRIGHT_VERSION=${pw_version}" \
   -t "$harness_image" \
   "$tmpdir"

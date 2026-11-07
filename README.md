@@ -189,8 +189,8 @@ scripts/remote-smoke.sh <app-image>
 ```
 
 That command starts the image with a named volume, waits for `/healthz` inside the container,
-checks the process is uid 1000, builds `e2e/smoke.Dockerfile` from a `git archive` of the tracked
-tree (Playwright tag from `package-lock.json`), and runs the `@smoke` subset in the app
+checks the process is uid 1000, archives the tracked tree, then builds that archive's
+`e2e/smoke.Dockerfile` (Playwright tag from that archive's `package-lock.json`), and runs the `@smoke` subset in the app
 container's network namespace against `http://127.0.0.1:8080`. It removes everything it created.
 
 Deployed smoke is that same `@smoke` subset against a server you already started: set `FATHOM_SMOKE_BASE_URL` (or `BASE_URL`). The default target is `demo`, which keeps the scenario assertions. For a real store set `FATHOM_SMOKE_TARGET=real`, which aborts any request to the app that is not GET or HEAD:
