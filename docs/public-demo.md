@@ -89,6 +89,10 @@ Invalid or nonpositive values refuse startup. An IP request limit returns HTTP 4
 | POST | `/api/threads/:id/delete` | Visitor sandbox |
 | GET | `/api/accounts/:id` | Visitor sandbox |
 | GET | `/api/accounts/:id/transactions` | Visitor sandbox |
+| GET | `/api/pnl` | Visitor sandbox |
+| GET | `/api/pnl/rows` | Visitor sandbox |
+| GET | `/api/spending` | Visitor sandbox |
+| GET | `/api/spending/rows` | Visitor sandbox |
 | POST | `/api/accounts/:id/name` | Visitor sandbox |
 | POST | `/api/accounts/:id/mask` | Visitor sandbox |
 | POST | `/api/accounts/:id/owner` | Visitor sandbox |
