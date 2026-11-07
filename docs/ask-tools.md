@@ -238,14 +238,15 @@ Every number a new tool returns is a figure:
 
 1. `value`: a finite number, an ISO date string when `unit` is `date`, or null when the figure
    is unavailable (then `unavailable` holds the gap code and the gap explains it).
-2. `unit`: `usd`, `usd_per_month`, `usd_per_year`, `ratio`, `months`, `years`, `age`, `date`,
-   `count`. Percents are never a unit. A `ratio` result is any finite number (a growth of 1.4, a
+2. `unit`: `usd`, `usd_per_month`, `usd_per_year`, `ratio`, `days`, `months`, `years`, `age`,
+   `date`, `count`. Percents are never a unit. A `ratio` result is any finite number (a growth of 1.4, a
    negative change of minus 0.2); bounds belong to rate arguments, not to results.
 3. Precision by unit: `usd`, `usd_per_month` and `usd_per_year` round to cents (`round` from
    `src/calc/pace.mjs`); `ratio` is not rounded (full double precision; `stated` text shows 6
    significant digits at most); `months` is an integer when it counts calendar months and a
    projection's months round up to the next whole month, as `dated` does; `years` round to 2
-   decimals; `age` is an integer or a half year (59.5); `count` is an integer. Rounding happens
+   decimals; `days` round to 2 decimals; `age` is an integer or a half year (59.5); `count` is an
+   integer. Rounding happens
    once, when the figure is built, never on an input that feeds another figure (calculate works
    on the unrounded inputs and rounds its own result).
 4. `label`: plain words, no digits, as the current `calc:targets` figures do.
@@ -270,7 +271,19 @@ existing shapes into envelopes, so `get_figures` and `get_pace` results are refe
    row's `src`, `inputs`, `sources` and `steps` from the locator, `unavailable` from
    `unavailable_reason`, and the untouched `{ src, locator }` kept as `provenance.stored`.
 2. `fromPace(fig, { ref })` for a `paceFigure` (`{v, src, kind, label, locator}`): the same
-   mapping, with `asOf` from the locator's data-through date.
+   mapping, with `unit` from `locator.unit` and `asOf` from `locator.dataThrough`. Today
+   `paceFigure` (`src/calc/pace.mjs`) carries neither and rounds every value to cents, so T1
+   changes the producer: `paceFigure` takes `unit` (required) and `dataThrough` options, writes
+   both into the locator, and rounds by unit with the envelope's rule. The callers in
+   `src/calc/pace.mjs` pass, per figure: `goalPace` target, actual, expected, tolerance and gap
+   `usd`, and `gapDays` `days`; `paceRollup` counts and total `count`; `monthlyPace` actual, plan
+   and gap `usd`; `paceMeter` used and limit `usd`, and ratio `ratio` (no longer rounded). Each
+   caller passes the `dataThrough` its result already reports (the goal's `actual.dataThrough`,
+   the rollup's and the meter's `dataThrough`). `fromPace` refuses a pace figure with no unit, so a
+   new producer cannot fall back to dollars.
+3. Stored `figures` rows are money values by the `get_figures` contract, so `fromStored` defaults
+   to `usd` only for rows whose locator names no unit; a stored row that is not money must state
+   its unit in the locator.
 
 `get_figures` keeps every current field (`key`, `v`, `kind`, `label`, `source`, `unavailable`)
 and adds the envelope fields beside them, with `ref: { tool: 'get_figures', args: { keys: [key] },
@@ -316,10 +329,20 @@ MCP is stateless per request, so references are re-evaluable, not session handle
    `source: 'preference'` requires `preferenceId` and checks the preference exists.
    `source: 'default'` is accepted only when the value equals the tool's documented default.
    `source: 'owner'` requires `evidence`, the owner's words. In Ask the tool checks the value
-   appears in the owner's messages of this conversation with `requireEvidence`
-   (`src/actions/evidence.mjs` on feat/ask-actions) and refuses otherwise; over MCP the evidence
-   is kept verbatim in provenance. Until feat/ask-actions merges, owner assumptions are refused in
-   Ask and accepted with evidence over MCP.
+   against the owner's messages of this conversation and refuses otherwise; over MCP the evidence
+   is kept verbatim in provenance and checked against itself.
+   The check is `assumptionStated(value, unit, statements)` in `src/tools/assumption-evidence.mjs`
+   (T5). It does not use `requireEvidence` from feat/ask-actions, which compares bare numbers, so
+   "4 percent" yields 4 and a withdrawal rate of 0.04 would fail. Normalization, deterministic:
+   for `ratio` units, a number followed by `%`, `percent`, `per cent` or `pct` (optional space)
+   maps to the number divided by 100, and a bare decimal below 1 ("0.04") maps to itself; both
+   forms are accepted and compared within 1e-9. For `usd` units, the same amounts and magnitudes
+   `statedAmounts` reads (`$`, commas, `k`, `thousand`, `m`, `million`), compared to the cent. For
+   `age` and `years`, a whole or half number ("59 and a half", "59.5"). Statements come from
+   `ctx.ownerStatements()`, which T17 wires to `ownerStatements` from
+   `src/actions/evidence.mjs` once feat/ask-actions has merged (that sibling file is read, never
+   edited). Without `ctx.ownerStatements`, Ask refuses owner assumptions and MCP checks the
+   value against `evidence` alone.
 7. Every referenceable read tool fills `ref` on each figure it returns; `assertRefsResolve` (T1,
    `test/helpers/figures.mjs`) re-evaluates every ref in a result and asserts an equal figure, and
    every read-tool ticket runs it over its results.
@@ -333,8 +356,9 @@ MCP is stateless per request, so references are re-evaluable, not session handle
    adds a write tool adds a test that a read-only key gets that denial for it.
 3. Ask runs the same registry through `createRegistryServer`. Every tool is offered to both Ask
    and MCP under its scope; write tools in Ask are offered only for purpose `chat`. No tool in
-   this catalog is `mcpOnly`. (The feat/ask-actions undo tools are `mcpOnly` on that branch; the
-   new undo tools here are not.)
+   this catalog is `mcpOnly`. The feat/ask-actions undo tools are `mcpOnly` on that branch; T17
+   removes that flag from them, so all nine undo tools are on both surfaces (Ask also keeps its
+   Undo button).
 4. Results carry account masks only, resolve scenario tokens to plain text and never include
    hidden recs (existing rules).
 5. Write results carry the ask-actions receipt `{ id, scope, label, before, after, actorId, ts,
@@ -367,7 +391,8 @@ MCP is stateless per request, so references are re-evaluable, not session handle
 `advisor_status`, `set_recommendation_status`, `set_recommendation_owner`, `list_packs`,
 `get_pack_entry`, `search_pack_entries`, and the feat/ask-actions tools (`get_fact_answer_shapes`,
 `record_household_fact`, `remember_preference`, `set_recommendation_step`, `create_goal`,
-`edit_goal`, `undo_<kind>_action`) stay as they are. `pnl_by_month` is removed by T8.
+`edit_goal`) stay as they are. The feat/ask-actions `undo_<kind>_action` tools change only by
+losing their `mcpOnly` flag (T17). `pnl_by_month` is removed by T8.
 
 ### Shared argument types
 
@@ -816,9 +841,12 @@ Inputs and what happens without them:
 1. Birth date (`household.ownerBirthDate`, `household.spouseBirthDate`); without it, the age
    fact gives year precision (dates fall on December 31) with a `missing_fact` gap; without either,
    every milestone date is unavailable.
-2. `rule_of_55` lists only accounts whose `accounts.planType` is an employer plan (`401k`,
-   `roth_401k`, `solo_401k`, `403b`, `457b`); IRA types never qualify. Accounts with no plan type
-   are named in a `missing_fact` gap, not listed.
+2. `rule_of_55` applies per account and only when both facts show it: `accounts.planType` is an
+   employer plan (`401k`, `roth_401k`, `solo_401k`, `403b`, `457b`), and
+   `accounts.separationYear` (the year the person left or will leave the employer that sponsors
+   that plan) is on or after the year the person turns 55. IRA types never qualify. An employer
+   plan with no separation year, or an account with no plan type, is not listed and is named in a
+   `missing_fact` gap. The milestone date is January 1 of the separation year.
 3. `roth_earnings_qualified` needs `accounts.rothFirstContributionYear` per Roth account; without
    it the milestone date is unavailable for that account with a gap.
 4. `rmd_start` excludes Roth IRA and Roth 401(k) accounts (no lifetime RMD for the owner).
@@ -845,9 +873,11 @@ Inputs and what happens without them:
 
 1. `accessible.rothContributions` is the sum of `accounts.rothBasis`; a Roth account without it
    adds nothing and is named in a `missing_fact` gap.
-2. `accessible.ruleOf55` counts employer-plan balances (by `accounts.planType`) only when
-   `retireAge` is 55 or more; otherwise it is zero with a note. Accounts with no plan type are
-   named in a gap.
+2. `accessible.ruleOf55` counts an employer-plan balance only for an account that qualifies
+   under `access_schedule`'s rule (employer plan type and `accounts.separationYear` on or after the
+   year the person turns 55); a retirement age of 55 or more is not enough by itself. Every other
+   employer-plan balance stays out of accessible money, and each one missing a plan type or a
+   separation year is named in a `missing_fact` gap.
 3. `accessible.taxable` is the market value (selling has a tax cost; the note points at
    `after_tax_value`).
 4. Exceptions listed as text with pack refs: substantially equal periodic payments and HSA
@@ -1304,9 +1334,17 @@ Scope: write:jobs
 Arguments: `{ id: 'plan'|'simplefin-sync'|'freshness'|'confirm-guess' }`. Jobs that send email
 (`brief-email`, `deadline-alerts`) and `trash-purge` are not in the enum.
 
-Result: `{ run: { id, status, startedAt, finishedAt }, receipt }`. Undo: not available (reason: a
-job run reads and replans; its effects are undone where they land). `plan` on a demo store is
-refused as the route refuses it.
+Result: `{ run: { id, status, startedAt, finishedAt } or { id, status: 'queued' }, receipt }`.
+Undo: not available (reason: a job run reads and replans; its effects are undone where they land).
+`plan` on a demo store is refused as the route refuses it.
+
+Execution. `plan` and `confirm-guess` call the engine. In Ask, an engine call inside the tool
+would wait on the engine ledger the running answer holds, so for those two ids the tool schedules
+`scheduler.runNow(id)` with `ctx.queueAfterTools`, which runs after the round releases the ledger,
+and returns `status: 'queued'`; the receipt's later state records the outcome. Without
+`ctx.queueAfterTools` the call is refused, never awaited inline. `freshness` and `simplefin-sync`
+call no engine and run inline on both surfaces. Over MCP no engine call is in progress, so every
+id runs inline and returns the finished run.
 
 Reuses: `ctx.services.scheduler.runNow` (T17), `SCHEDULER_STATUS`.
 
@@ -1587,6 +1625,7 @@ Household facts the tools need:
 | `accounts.planType` | per account choice: `traditional_ira`, `roth_ira`, `sep_ira`, `401k`, `roth_401k`, `solo_401k`, `403b`, `457b`, `hsa`, `529`, `taxable` | no | after T19 (account scope, kinds retirement, roth, ira, taxable, brokerage) |
 | `accounts.rothFirstContributionYear` | per account year (1975 to the current year) | no | after T19 (account scope, kind roth, or plan type roth_ira or roth_401k) |
 | `accounts.rothBasis` | per account dollars | no | after T19 (account scope, kind roth) |
+| `accounts.separationYear` | per account year (1975 to 2100): the year the person left or will leave the plan's sponsoring employer | no | after T19 (account scope, accounts whose plan type is an employer plan; the owner states it, never inferred from a retirement age) |
 
 `accounts.planType` replaces the `accounts.taxTreatment` key an earlier draft named: one fact
 gives the treatment, the employer-plan status rule of 55 needs, and the Roth IRA or Roth 401(k)
@@ -1695,8 +1734,9 @@ Choices the table settles:
 3. The pack what-if is excluded: it is itself an Ask answer, and the agent answers what-ifs with
    the tools directly.
 4. Every tool is on both surfaces. `import_file` takes base64 content over MCP and owner-pasted
-   text in Ask, with the same 1 MiB limit. `build_your_plans` runs inline over MCP and is queued to
-   run after the round in Ask. `merge_accounts` needs `confirm: true` and the owner's confirming
+   text in Ask, with the same 1 MiB limit. `build_your_plans`, and `run_job` for the engine-calling
+   `plan` and `confirm-guess` jobs, run inline over MCP and are queued to run after the round in
+   Ask. `merge_accounts` needs `confirm: true` and the owner's confirming
    words on both.
 
 ### Exclusions
@@ -1779,7 +1819,7 @@ Waves (dependency graph). A ticket starts when everything in its Depends on line
 | 3 | its wave 2 inputs merge | T7 (T3), T13 (T6), T14 (T5, T6), T15 (T3, T5) |
 | Sibling-gated | feat/ask-evals merges | T16 |
 | Sibling-gated | feat/ask-actions merges | T17 (also T8), T19 |
-| 4 | T17 or T19 merges | T18 (T6, T8, T17), T20 (T6, T19) |
+| 4 | T17 or T19 merges | T18 (T6, T8, T17), T20 (T5, T6, T19) |
 | 5 | T20 merges | T21 (T3, T15, T19, T20) |
 | Writes | T4 and T17 merge | T22, T23, T24, T25, T26 |
 | Writes, late | T25 and feat/account-dialog-edit merge | T27 |
@@ -1810,7 +1850,8 @@ Standing acceptance, part of every ticket below:
    `createRealStore` from `test/helpers/real-store.mjs`) on the synthetic demo household and
    assert figures against a deterministic recomputation from the same store, never hard-coded
    amounts.
-4. The ticket edits only its Files.
+4. The ticket edits only its Files. Eval cases are never among them: a ticket's Evals line lists
+   the cases that become required passes when its tools register (T16's availability rule).
 
 ### T1 Figure envelope, adapters and the registry loader
 
@@ -1820,7 +1861,8 @@ Depends on: none.
 
 Files: `src/calc/figure.mjs` (new: `figure`, `envelope`, `fromStored`, `fromPace`, `rowsSource`,
 `mergeSources`, `UNITS`, `GAP_CODES`, precision by unit), `src/calc/targets.mjs` (imports the
-moved helpers), `src/tools/index.mjs` (the loader; validation and `callTool` stay),
+moved helpers), `src/calc/pace.mjs` (`paceFigure` takes `unit` and `dataThrough` and rounds by
+unit; every caller passes them), `test/pace.test.mjs` (non-money pace figures), `src/tools/index.mjs` (the loader; validation and `callTool` stay),
 `src/tools/catalog/figures.mjs` (new: `get_figures` and `get_pace` with envelopes),
 `src/tools/catalog/transactions.mjs` (new: `query_transactions` moved unchanged),
 `src/tools/catalog/business.mjs` (new: `pnl_by_month` moved unchanged), `src/mcp/keys.mjs`
@@ -1836,10 +1878,14 @@ Acceptance:
 3. `get_figures` returns every field it returned before plus the envelope; `fromStored` keeps the
    stored `src` and `locator` under `provenance.stored`; a `get_figures` ref and a `get_pace` ref
    each resolve through `assertRefsResolve`.
-4. The registry built by the loader holds the same tools as before, sorted by name, and the MCP
+4. Pace figures carry their units: on the demo store, `gapDays` is `days`, rollup counts are
+   integer `count`, the meter ratio is an unrounded `ratio` equal to used over limit recomputed in
+   the test, and money figures are `usd` to cents; every pace envelope's `asOf` equals its
+   result's `dataThrough`. `fromPace` refuses a figure with no unit.
+5. The registry built by the loader holds the same tools as before, sorted by name, and the MCP
    tool list is sorted by name.
 
-Test command: `node --test test/figure-envelope.test.mjs test/tools.test.mjs src/calc/test/*.test.mjs src/mcp/test/server.test.mjs`
+Test command: `node --test test/figure-envelope.test.mjs test/pace.test.mjs test/tools.test.mjs src/calc/test/*.test.mjs src/mcp/test/server.test.mjs`
 
 Parallel: beside T2 (no shared files).
 
@@ -1933,8 +1979,10 @@ Size: about 260 production lines, 260 test lines.
 
 Depends on: T1.
 
-Files: `src/tools/refs.mjs` (new), `src/tools/catalog/calculate.mjs` (new), `src/calc/growth.mjs`
-(new: `futureValue`, `requiredMonthly`), `test/tools-calculate.test.mjs` (new).
+Files: `src/tools/refs.mjs` (new), `src/tools/assumption-evidence.mjs` (new: `statedValues`,
+`assumptionStated`), `src/tools/catalog/calculate.mjs` (new), `src/calc/growth.mjs` (new:
+`futureValue`, `requiredMonthly`), `test/tools-calculate.test.mjs` (new),
+`test/assumption-evidence.test.mjs` (new).
 
 Acceptance:
 
@@ -1944,13 +1992,19 @@ Acceptance:
 2. Unit mismatches, division by zero, more than 20 operands, depth over 6, ref depth over 3, refs
    to write tools and bare numbers are `bad_input` with a message naming the cause.
 3. `source: 'fact'` with a value that differs from the stored fact is refused; `source: 'default'`
-   with a non-default value is refused; `source: 'owner'` without `evidence` is refused, and in an
-   Ask context with owner text that lacks the value it is refused.
-4. A grounding test runs `groundAnswer` over a reply that states "4 percent" and the calculate
+   with a non-default value is refused; `source: 'owner'` without `evidence` is refused.
+4. `assumptionStated` over the questions' actual wording, with `ctx.ownerStatements` stubbed in
+   the test: Q02 "What investment balance would cover that at a 4 percent withdrawal rate?"
+   accepts `withdrawalRate` 0.04 and refuses 0.05; Q25 "If returns are 3 percent instead of 4,
+   when would we reach the target?" accepts `realReturn` 0.03; Q26 "What target do we need at a
+   3.5 percent withdrawal rate?" accepts 0.035 and refuses 3.5; "4%" and "0.04" each accept 0.04;
+   Q27 "$1,000 more a month" accepts 1000 usd_per_month; Q28 "$15 million" accepts 15000000 usd.
+   With no `ctx.ownerStatements` in an Ask context, owner assumptions are refused.
+5. A grounding test runs `groundAnswer` over a reply that states "4 percent" and the calculate
    result's value and finds both grounded; if the answerer's echo rule blocks it, the test is
    committed as `todo` naming T28 and this ticket still passes.
 
-Test command: `node --test test/tools-calculate.test.mjs`
+Test command: `node --test test/tools-calculate.test.mjs test/assumption-evidence.test.mjs`
 
 Parallel: beside T3, T4, T6, T8 to T12.
 
@@ -2221,15 +2275,22 @@ Acceptance:
    argument predicates, forbidden behavior (unsourced figure, self-computed figure, an assumption
    with source `owner` whose value is not in the owner's messages), expected figures computed at
    run time from the demo store by the named deterministic call, and a word budget.
-2. Cases whose tools are not built are marked expected-fail naming the missing tool and ticket.
-3. `npm run eval:ask` passes with the expected-fail cases counted as expected.
+2. Expectation is availability-based and computed at run time, never written into a case: the
+   case loader reads each case's required tool names and checks them against the registry
+   (`getTool`). A case with any required tool absent is expected-fail and reports the missing
+   tools; a case whose required tools are all registered is a required pass. No later ticket edits
+   `evals/cases/`; registering a tool is what turns its cases into required passes.
+3. `npm run eval:ask` passes on main with the absent-tool cases reported as expected failures, and
+   a test of the loader shows a case flipping to required when a stub tool with its name is added to
+   the registry.
 
 Test command: `npm run eval:ask`
 
 Parallel: beside any ticket; it owns only `evals/cases/`.
 
-Evals: creates every case; turns green those whose tools already exist (`q43-goal-pace`,
-`q66-security-pick-refused`, `q67-market-quote-refused`, `q68-money-movement-refused`).
+Evals: creates every case; the ones whose tools already exist are required passes at once
+(`q43-goal-pace`, `q66-security-pick-refused`, `q67-market-quote-refused`,
+`q68-money-movement-refused`).
 
 ### T17 Write scopes, receipt kinds and tool services
 
@@ -2240,9 +2301,12 @@ Depends on: feat/ask-actions merged, T1, T8 (serialized on `src/api/answerer.mjs
 Files: `src/shared/action-scopes.mjs`, `src/mcp/keys.mjs` (`SCOPE_INFO`),
 `src/actions/receipts.mjs` (`registerReceiptKind` replaces the fixed `TABLES`, kind `setting`),
 `src/tools/catalog/undo.mjs` (new: `undo_account_action`, `undo_category_action`,
-`undo_confirm_action`, `undo_decision_action`), `src/server.mjs` (one `services` object),
-`src/mcp/index.mjs` (`ctx.services`), `src/api/answerer.mjs` (`createLiveAnswerer` accepts
-`services` and puts it on the tool context), `src/mcp/test/keys.test.mjs`,
+`undo_confirm_action`, `undo_decision_action`), `src/tools/actions.mjs` (removes `mcpOnly` from
+the five feat/ask-actions undo tools), `src/server.mjs` (one `services` object),
+`src/mcp/index.mjs` (`ctx.services`, `ctx.ownerStatements` from the request evidence),
+`src/api/answerer.mjs` (`createLiveAnswerer` accepts `services` and puts it, with
+`ownerStatements` bound to `ownerStatements` from `src/actions/evidence.mjs`, on the tool
+context), `src/mcp/test/keys.test.mjs`,
 `test/write-scopes.test.mjs` (new), `test/tool-services.test.mjs` (new).
 
 `services` is `{ scheduler, engine, config: { dataDir, dataKeyFile, clock }, dataKey() }`, built
@@ -2261,7 +2325,13 @@ Acceptance:
    kind registered from a test module with a table restores; one with a `restore` hook calls it;
    an unregistered kind is refused; kind `setting` restores a settings row by key.
 4. A test tool reading `ctx.services` sees the same scheduler, engine and config through an MCP
-   request (`createMcpHandler` over a real store) and through an Ask answer with the fake engine.
+   request (`createMcpHandler` over a real store) and through an Ask answer with the fake engine,
+   and in Ask `ctx.ownerStatements()` returns the owner's messages of that conversation.
+5. All nine undo tools (`undo_preference_action`, `undo_fact_action`, `undo_step_action`,
+   `undo_goal_action`, `undo_recommendation_action` and the four new ones) carry no `mcpOnly`
+   flag, are listed over MCP under their scope and offered to Ask in chat purpose, and each undoes
+   a receipt of its scope through an MCP request and through an Ask answer with the fake engine
+   scripting the call (new-scope undo tools use a receipt kind registered by the test).
 
 Test command: `node --test test/write-scopes.test.mjs test/tool-services.test.mjs src/mcp/test/keys.test.mjs test/ask-actions.test.mjs`
 
@@ -2322,7 +2392,9 @@ Acceptance:
 2. `record_household_fact` accepts each new key with a valid value and the owner's words as
    evidence, and refuses an invalid one.
 3. `accounts.planType` is offered only for retirement, roth, ira, taxable and brokerage accounts;
-   `accounts.rothFirstContributionYear` and `accounts.rothBasis` only for Roth accounts.
+   `accounts.rothFirstContributionYear` and `accounts.rothBasis` only for Roth accounts;
+   `accounts.separationYear` only for accounts whose stored plan type is an employer plan, as a
+   year from 1975 to 2100.
 
 Test command: `node --test test/fact-shapes.test.mjs test/fact-answers.test.mjs`
 
@@ -2334,7 +2406,7 @@ Evals: none alone; T20 and T21 cases need it.
 
 Size: about 280 production lines, 260 test lines.
 
-Depends on: T6, T19.
+Depends on: T5 (the ref resolver for `base` refs), T6, T19.
 
 Files: `src/calc/obligations.mjs` (new), `src/tools/catalog/obligations.mjs` (new),
 `test/tools-obligations.test.mjs` (new).
@@ -2373,12 +2445,16 @@ Acceptance:
 1. Milestone ages and dates follow `ACCESS_RULES` and `rmdStartAge` from birth date facts for both
    people; with only ages, dates fall at year precision with a gap; with neither, dates are
    unavailable.
-2. `rule_of_55` lists only accounts whose plan type is an employer plan; an account with no plan
-   type is named in a gap; Roth accounts are absent from `rmd_start`; a Roth account without a
+2. `rule_of_55` lists only an employer-plan account whose `accounts.separationYear` is on or after
+   the year the person turns 55; an employer plan with no separation year, one with an earlier
+   separation year, and an account with no plan type are not listed, and the first and last are
+   named in a gap; Roth accounts are absent from `rmd_start`; a Roth account without a
    first contribution year has an unavailable `roth_earnings_qualified` date.
 3. `bridge_check` spending until access equals the annual figure times the years, and accessible
-   money equals taxable plus cash plus stated Roth contributions plus employer-plan balances only
-   when `retireAge` is 55 or more, recomputed in the test.
+   money equals taxable plus cash plus stated Roth contributions plus only the balances of
+   employer plans that qualify under the rule above (a test with `retireAge` 56 and no separation
+   year counts none of them and reports the gap; the bare age is never enough), recomputed in
+   the test.
 4. Results contain no recommendation wording (a test scans for "should").
 
 Test command: `node --test test/tools-access.test.mjs`
@@ -2506,11 +2582,17 @@ Acceptance:
    scheduler; `build_your_plans` with the fake engine returns `status: 'built'` and writes the
    pack.
 2. Through an Ask answer with the fake engine scripting the calls: `import_file` with pasted CSV
-   text imports the same rows; `run_job` runs; `build_your_plans` returns `status: 'queued'` and
-   the build has run once the answer returns.
-3. Content over the limit is refused on both surfaces; a markdown note imports as the notes route
+   text imports the same rows; `run_job {id: 'freshness'}` runs inline; `run_job {id:
+   'confirm-guess'}` and `run_job {id: 'plan'}` (on a `createRealStore` household) return
+   `status: 'queued'`, and once the answer returns each job's run is recorded finished and its
+   engine call is in the engine ledger after the answer's own calls (serialized, no deadlock under
+   a test timeout); `build_your_plans` returns `status: 'queued'` and the build has run once the
+   answer returns.
+3. Without `ctx.queueAfterTools` in an Ask context, `run_job` for `plan` or `confirm-guess` and
+   `build_your_plans` are refused, not awaited.
+4. Content over the limit is refused on both surfaces; a markdown note imports as the notes route
    does; `run_job` accepts only the four ids and refuses `plan` on a demo store.
-4. The four tools return `undo.available: false` with a reason.
+5. The four tools return `undo.available: false` with a reason.
 
 Test command: `node --test test/tools-import-writes.test.mjs test/tools-parity.test.mjs`
 
@@ -2569,8 +2651,9 @@ Test command: `node --test test/ask-rules.test.mjs test/answerer.test.mjs`
 Parallel: beside any ticket that has merged its answerer edits; last in the `src/api/answerer.mjs`
 chain.
 
-Evals: flips the routing-sensitive cases in tier 2 (`npm run eval:ask:live`); tier 1 cases are
-already green from their tool tickets.
+Evals: none in tier 1 (every case's status there follows tool availability). The tier 2 run
+(`npm run eval:ask:live`, never in CI) is the manual check that the live model routes as the rules
+say.
 
 ## 8. Eval coverage
 
@@ -2579,9 +2662,13 @@ with argument predicates, forbidden behavior (an unsourced figure, a self-comput
 expected figures computed at run time from the demo store, and a word budget. Tier 1 (`npm run
 eval:ask`) runs in CI over scripted transcripts; tier 2 (`npm run eval:ask:live`) runs a live model
 and never runs in CI. The branch has published no case names, so the IDs below are proposals, one
-per question, `qNN-short-slug`, plus one cross-conversation case. T16 writes them. A case for a
-tool not built yet is expected-fail naming the missing tool until its ticket lands, and that ticket
-flips it. Every case forbids an unsourced figure, a self-computed figure, and an assumption with
+per question, `qNN-short-slug`, plus one cross-conversation case. T16 writes them once.
+Expectation is availability-based: at run time a case whose required tools are not all in the
+registry is expected-fail and names the missing tools; once every required tool is registered it
+is a required pass. No ticket edits a case file. The Ticket column names the ticket that supplies
+the case's main tool; where a case also needs a tool from an independent ticket (marked "with Tn"
+in the Evals lines), it becomes a required pass when the second of them merges, whichever that
+is. Every case forbids an unsourced figure, a self-computed figure, and an assumption with
 source `owner` whose value does not appear in the owner's messages of that conversation.
 
 | Case ID | Question | Required tools (key predicates) | Expected figures (deterministic call) | Ticket |
