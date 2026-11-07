@@ -192,12 +192,15 @@ describe('POST /api/files on a demo server', () => {
     const manual = r.json.scenario.accounts.filter((a) => a.mirror === 'manual' && ['7766', '5544'].includes(a.mask));
     assert.equal(manual.length, 2);
 
+    // Stored in the demo household's root; the demo's synthetic platform key is private.
     for (const f of r.json.files) {
-      const bin = join(s.dataDir, 'files', `${f.fileId}.bin`);
+      const bin = join(s.root, 'files', `${f.fileId}.bin`);
       assert.ok(existsSync(bin), `${f.name} stored`);
     }
-    assert.ok(!readFileSync(join(s.dataDir, 'files', `${r.json.files[0].fileId}.bin`)).includes(Buffer.from('EXAMPLE SHOP')));
-    assert.equal(statSync(join(s.dataDir, 'files', 'demo.key')).mode & 0o777, 0o600);
+    assert.ok(!readFileSync(join(s.root, 'files', `${r.json.files[0].fileId}.bin`)).includes(Buffer.from('EXAMPLE SHOP')));
+    assert.ok(!existsSync(join(s.dataDir, 'files')), 'nothing is stored at the data root');
+    assert.equal(statSync(join(s.dataDir, 'platform-secrets', 'platform.key')).mode & 0o777, 0o600);
+    assert.equal(statSync(join(s.dataDir, 'platform-secrets')).mode & 0o777, 0o700);
 
     const list = await request(s.baseUrl, { path: '/api/files' });
     assert.equal(list.status, 200);
@@ -313,14 +316,15 @@ describe('POST /api/files on a demo server', () => {
 });
 
 describe('POST /api/files in real mode', () => {
-  test('without FATHOM_DATA_KEY_FILE: 409 naming the variable, and nothing stored', T, async () => {
-    const s = await spawnAuthenticatedServer({ env: { FATHOM_DEMO: '0', FATHOM_ENGINE: 'off' } });
+  test('without FATHOM_PLATFORM_KEY_FILE: 409 naming the variable, and nothing stored', T, async () => {
+    const s = await spawnAuthenticatedServer({ env: { FATHOM_DEMO: '0', FATHOM_ENGINE: 'off', FATHOM_PLATFORM_KEY_FILE: undefined } });
     try {
       const r = await upload(s.baseUrl, [{ name: 'canary.csv', bytes: Buffer.from(canaryCsv()), type: 'text/csv' }], undefined, s.headers);
       assert.equal(r.status, 409);
-      assert.match(r.json.error, /FATHOM_DATA_KEY_FILE/);
-      const files = join(s.dataDir, 'files');
-      assert.ok(!existsSync(files) || readdirSync(files).length === 0, 'nothing under files/');
+      assert.match(r.json.error, /FATHOM_PLATFORM_KEY_FILE/);
+      for (const files of [join(s.root, 'files'), join(s.dataDir, 'files')]) {
+        assert.ok(!existsSync(files) || readdirSync(files).length === 0, 'nothing under files/');
+      }
       const list = await s.request({ path: '/api/files' });
       assert.equal(list.status, 200);
       assert.deepEqual(list.json.files, []);
@@ -331,24 +335,22 @@ describe('POST /api/files in real mode', () => {
     }
   });
 
-  test('with a 32 byte key file: the upload imports and is stored encrypted', T, async () => {
-    const keyDir = await tempDir('fathom-key-');
-    const keyFile = join(keyDir, 'data.key');
-    writeFileSync(keyFile, randomBytes(32), { mode: 0o600 });
-    const s = await spawnAuthenticatedServer({ env: { FATHOM_DEMO: '0', FATHOM_ENGINE: 'off', FATHOM_DATA_KEY_FILE: keyFile } });
+  test('with a 32 byte FATHOM_PLATFORM_KEY_FILE: the upload imports and is stored encrypted in the household root', T, async () => {
+    // spawnServer names synthetic FATHOM_PLATFORM_KEY_FILE and FATHOM_MCP_SECRET_FILE files kept outside the data dir.
+    const s = await spawnAuthenticatedServer({ env: { FATHOM_DEMO: '0', FATHOM_ENGINE: 'off' } });
     try {
       const r = await upload(s.baseUrl, [{ name: 'canary.csv', bytes: Buffer.from(canaryCsv()), type: 'text/csv' }], undefined, s.headers);
       assert.equal(r.status, 200, r.text.slice(0, 300));
       assert.equal(r.json.files[0].status, 'imported');
-      const blob = readFileSync(join(s.dataDir, 'files', `${r.json.files[0].fileId}.bin`));
-      assert.equal(blob.subarray(0, 5).toString('latin1'), 'FTHM1');
+      const blob = readFileSync(join(s.root, 'files', `${r.json.files[0].fileId}.bin`));
+      assert.equal(blob.subarray(0, 5).toString('latin1'), 'FTHM2');
       assert.ok(!blob.includes(Buffer.from(CANARY_DESC)));
-      assert.ok(!existsSync(join(s.dataDir, 'files', 'demo.key')), 'real mode never generates a key');
+      assert.ok(!existsSync(join(s.dataDir, 'files')), 'nothing is stored at the data root');
+      assert.ok(!existsSync(join(s.dataDir, 'platform-secrets')), 'real mode never generates a key');
       for (const v of CANARIES) assert.ok(!s.output().includes(v));
     } finally {
       await s.stop();
       rmSync(s.dataDir, { recursive: true, force: true });
-      rmSync(keyDir, { recursive: true, force: true });
     }
   });
 });

@@ -1,5 +1,6 @@
 // AC1: `npm ci && npm start` serves the Horizon UI and the JSON API from one process on FATHOM_PORT,
-// backed by SQLite in FATHOM_DATA, seeding the demo when the data dir has no store.
+// backed by SQLite in FATHOM_DATA (platform.sqlite and households/<id>/fathom.sqlite), seeding the
+// demo when the data dir has no instance.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -7,14 +8,13 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import net from 'node:net';
 import {
-  ROOT, DB_FILE, PLATFORM_FILE, SERVER_TIMEOUT, withServer, tempDir, freePort, childEnv, src, withAuthenticatedServer, withPlatform,
+  ROOT, DB_FILE, PLATFORM_FILE, SERVER_TIMEOUT, withServer, tempDir, freePort, childEnv, src, withAuthenticatedServer, withPlatform, servedStore,
 } from './helpers/server.mjs';
 import { spawn } from 'node:child_process';
 
 const T = { timeout: SERVER_TIMEOUT };
 
-function latestMigrationId() {
-  const dir = join(ROOT, 'src/store/migrations');
+function latestMigrationId(dir = join(ROOT, 'src/store/migrations')) {
   const ids = readdirSync(dir).map(f => /^(\d{3})-.+\.sql$/.exec(f)).filter(Boolean).map(m => Number(m[1]));
   return Math.max(...ids);
 }
@@ -37,12 +37,16 @@ test('npm start on an empty data dir with FATHOM_DEMO unset serves the demo UI a
     assert.equal(h.status, 200);
     assert.equal(h.json.ok, true);
     assert.equal(h.json.schema, latestMigrationId());
+    // MT-03: healthz names the shipped store and platform schemas only, no household, count or path.
+    assert.deepEqual(Object.keys(h.json).sort(), ['ok', 'platformSchema', 'schema']);
+    assert.equal(h.json.platformSchema, latestMigrationId(join(ROOT, 'src/platform/migrations')));
 
-    assert.ok(existsSync(join(dataDir, DB_FILE)), 'fathom.sqlite is created in FATHOM_DATA');
-    assert.ok(existsSync(join(dataDir, PLATFORM_FILE)), 'a synthetic platform.sqlite is created beside it');
+    assert.ok(existsSync(join(dataDir, PLATFORM_FILE)), 'a synthetic platform.sqlite is created in FATHOM_DATA');
     const served = await withPlatform(join(dataDir, PLATFORM_FILE), (platform, store) => store.servedHousehold());
     assert.equal(served.mode, 'demo');
     assert.equal(served.status, 'active');
+    assert.ok(existsSync(join(dataDir, 'households', served.id, DB_FILE)), 'fathom.sqlite is created in the household root');
+    assert.ok(!existsSync(join(dataDir, DB_FILE)), 'no store at the data root');
     assert.match(s.output(), /fathom listening on http:\/\//);
   });
 });
@@ -52,7 +56,7 @@ test('FATHOM_DEMO=0 on an empty data dir serves a valid empty scenario', T, asyn
     const sc = await s.getScenario();
     // The startup tick may run the nightly plan job; any rec is the planner's, never a seeded one.
     const { openDb } = await src('src/store/db.mjs');
-    const db = openDb(join(s.dataDir, DB_FILE));
+    const db = openDb(servedStore(s.dataDir).file);
     let planned;
     let identity;
     try {
@@ -110,11 +114,15 @@ test('loadConfig defaults and env mapping', async () => {
   assert.equal(d.demo, 'auto');
   assert.equal(d.clock, null);
   assert.equal(d.emailTransport, 'dev');
+  assert.equal(d.platformKeyFile, null);
+  assert.equal(d.mcpSecretFile, null);
+  assert.equal(d.backupKeyFile, null);
 
   const c = loadConfig({
     FATHOM_DATA: '/tmp/fathom-x', FATHOM_PORT: '9123', FATHOM_HOST: '0.0.0.0', FATHOM_DEMO: '1',
     FATHOM_CLOCK: '2027-01-05', FATHOM_EMAIL_TRANSPORT: 'resend',
-    FATHOM_CLAUDE_CREDENTIAL_FILE: '/run/secrets/c', FATHOM_DATA_KEY_FILE: '/run/secrets/k',
+    FATHOM_CLAUDE_CREDENTIAL_FILE: '/run/secrets/c', FATHOM_PLATFORM_KEY_FILE: '/run/secrets/p',
+    FATHOM_MCP_SECRET_FILE: '/run/secrets/m', FATHOM_BACKUP_KEY_FILE: '/run/secrets/b', FATHOM_DATA_KEY_FILE: '/run/secrets/k',
   });
   assert.equal(c.dataDir, '/tmp/fathom-x');
   assert.equal(c.port, 9123);
@@ -124,7 +132,12 @@ test('loadConfig defaults and env mapping', async () => {
   assert.equal(c.clock, '2027-01-05');
   assert.equal(c.emailTransport, 'resend');
   assert.equal(c.claudeCredentialFile, '/run/secrets/c');
-  assert.equal(c.dataKeyFile, '/run/secrets/k');
+  assert.equal(c.platformKeyFile, '/run/secrets/p');
+  assert.equal(c.mcpSecretFile, '/run/secrets/m');
+  assert.equal(c.backupKeyFile, '/run/secrets/b');
+  // MT-03: FATHOM_DATA_KEY_FILE is read only by the offline tenancy migration, never the runtime.
+  assert.ok(!Object.values(c).includes('/run/secrets/k'), 'the legacy data key path is not in the runtime config');
+  assert.ok(!('dataKeyFile' in c));
 
   const off = loadConfig({ FATHOM_DEMO: '0' });
   assert.equal(off.demo, false);

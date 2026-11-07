@@ -15,8 +15,8 @@ import { MODEL_PURPOSES, modelFor } from '../engine/pricing.mjs';
 import { factEventTitle } from '../shared/event-labels.mjs';
 import { buildYearend } from '../yearend/expected.mjs';
 import { CURVE_AXES, KNOWN_FIGURES, curvePosition, servesGoals, GOAL_KINDS, PRIORITIES, kindOf, isGoalOwner, goalStatusOf } from '../shared/goals.mjs';
-import { accountLabel, accountSubtitle } from '../shared/account-label.mjs';
-import { applyNaming } from '../accounts/naming.mjs';
+import { accountLabel, accountLabelParts, accountSubtitle } from '../shared/account-label.mjs';
+import { applyNaming, withLabelHints } from '../accounts/naming.mjs';
 import { deriveHeard } from '../onboarding/heard.mjs';
 import { withAdvisor, advisorSection } from '../advisor/index.mjs';
 import { buildPace, indexPaceFigures } from '../pace/build.mjs';
@@ -197,7 +197,7 @@ export function recFromRow(row, clock) {
 // Each rec's `advisor` field comes from the advisor tables (src/advisor), never from its def.
 export function loadRecs(db, clock) {
   const facts = getFacts(db);
-  const accounts = db.prepare('SELECT * FROM accounts').all();
+  const accounts = withLabelHints(db, db.prepare('SELECT * FROM accounts').all());
   const recs = db.prepare('SELECT * FROM recs ORDER BY sort, id').all().map(r => recFromRow(r, clock));
   if (getSetting(db, 'mode', null) === 'demo') {
     const window = expectedChildWindow(facts);
@@ -240,7 +240,7 @@ export function loadLinkedRec(db, clock, row) {
 }
 
 function linkWithStoredGoals(db, recs) {
-  const accounts = db.prepare('SELECT * FROM accounts ORDER BY sort, id').all();
+  const accounts = withLabelHints(db, db.prepare('SELECT * FROM accounts ORDER BY sort, id').all());
   return linkRecs(recs, loadGoals(db, { fig: loadFigures(db), accounts }), accounts);
 }
 
@@ -695,7 +695,7 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
       const named = naming.byId.get(a.id) || { ...a, householdNames };
       const label = accountLabel(named);
       return {
-        id: a.id, inst: a.inst, name: label, sourceName: a.name, displayName: a.display_name || null,
+        id: a.id, inst: a.inst, name: label, ...accountLabelParts(named), sourceName: a.name, displayName: a.display_name || null,
         subtitle: accountSubtitle(a),
         owner: a.owner, kind: a.kind, group: groupOfKind(a.kind), fig: a.fig_key, mirror: a.mirror, note: a.note || '', mask: a.mask,
         asOf: f.asOf || '', fresh: f.fresh || 'unknown', sourceId: f.sourceId || null,

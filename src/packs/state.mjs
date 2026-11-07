@@ -14,6 +14,7 @@ import { activePacks, loadPacks } from './index.mjs';
 
 export const REPO_PACKS_DIR = fileURLToPath(new URL('../../packs/', import.meta.url)).replace(/[\\/]$/, '');
 
+// The repository packs plus the Your plans pack under `dataDir`, the household root, when present.
 export function defaultPackDirs(dataDir) {
   const dirs = [REPO_PACKS_DIR];
   if (dataDir) {

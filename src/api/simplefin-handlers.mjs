@@ -1,6 +1,8 @@
 // SimpleFIN connection API: connect with a setup token, disconnect, and the status that rides in
 // the scenario (live.simplefin). The access URL never appears in a response, a log or an error:
-// errors map to fixed messages and the router logs these routes as a code only. Sync runs only
+// errors map to fixed messages and the router logs these routes as a code only. Connecting while
+// the household's simplefin outbound flag is off is 409; a vault refusal is 409 naming
+// FATHOM_PLATFORM_KEY_FILE. Sync runs only
 // through the scheduler job 'simplefin-sync' (POST /api/jobs/simplefin-sync/run is Sync now).
 
 import { getSetting } from '../store/db.mjs';
@@ -24,10 +26,10 @@ export async function connect(ctx) {
   if (typeof token !== 'string' || !token.trim() || token.length > MAX_TOKEN) throw new HttpError(400, 'paste the SimpleFIN setup token');
   let status;
   try {
-    status = await connectSimplefin(ctx.db, token, { config: ctx.config, hosts: ctx.config.simplefinHosts, fetch: simplefinFetchFor(ctx), now: new Date().toISOString() });
+    status = await connectSimplefin(ctx.db, token, { household: ctx.household, hosts: ctx.config.simplefinHosts, fetch: simplefinFetchFor(ctx), now: new Date().toISOString() });
   } catch (err) {
     if (err instanceof SimplefinError) throw new HttpError(err.status, err.message);
-    if (err instanceof VaultError) throw new HttpError(409, 'connecting accounts needs FATHOM_DATA_KEY_FILE: set it to a file holding a 32 byte key');
+    if (err instanceof VaultError) throw new HttpError(409, err.message);
     throw err;
   }
   // The first sync runs now, under the lease; a busy scheduler leaves it to the next run.

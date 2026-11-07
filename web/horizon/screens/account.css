@@ -43,7 +43,7 @@
 .d-horizon .h-acc-open { margin-left: 12px; color: var(--mu); font-size: 12.5px; }
 .d-horizon .h-acc-open:hover { color: var(--ac2); }
 .d-horizon .h-accs .h-acc[data-go="account"] { cursor: pointer; }
-.d-horizon .h-accs .h-acc[data-go="account"]:hover { background: var(--s1, transparent); }
+.d-horizon .h-accs .h-acc[data-go="account"]:hover, .d-horizon .h-accs .h-acc:focus-within { background-color: var(--s1, transparent); }
 
 .d-horizon .h-ad-balance .h-ad-bal { font-size: 28px; line-height: 1.2; }
 .d-horizon .h-ad-balance .h-spark { margin-top: 14px; }

@@ -3,6 +3,7 @@ import { confidenceBand, jevEvidence } from './policy.mjs';
 import { spendingInputs } from '../calc/targets.mjs';
 import { getSetting, parseJson } from '../store/db.mjs';
 import { accountLabel } from '../shared/account-label.mjs';
+import { accountNaming } from '../accounts/naming.mjs';
 import { ask, ConfirmError } from '../ingest/confirm.mjs';
 import { resolveCategories, BUCKETS, DEFAULT_CATEGORY, importedCategory, knownCategory, normalizeMerchant, sourceBucket, spendingAccount } from './resolve.mjs';
 
@@ -14,7 +15,8 @@ export const isJevProposal = g => g?.model===JEV_MODEL && typeof g.category==='s
   && Number.isFinite(g.confidence) && g.confidence>=0 && g.confidence<=1;
 export function loadCategoryInputs(db) {
   const named = parseJson(db.prepare("SELECT value FROM facts WHERE key='accounts.businessEntity' AND (src IS NULL OR src!='planner')").get()?.value,{});
-  const accounts = db.prepare('SELECT * FROM accounts ORDER BY sort,id').all().map(a=>({...a,business:typeof named?.[a.id]==='string' && !!named[a.id].trim()}));
+  const naming=accountNaming(db);
+  const accounts = db.prepare('SELECT * FROM accounts ORDER BY sort,id').all().map(a=>({...a,...naming.hint(a.id),business:typeof named?.[a.id]==='string' && !!named[a.id].trim()}));
   const transactions = db.prepare(`SELECT t.*, i.category AS imported_category, i.parser AS category_parser,
     i.file_id AS category_file_id, i.locator AS category_locator, coalesce(i.updated_at,f.uploaded_at,t.date) AS category_at
     FROM transactions t LEFT JOIN transaction_category_imports i ON i.transaction_id=t.id
@@ -106,7 +108,7 @@ export function categoryDetail(db,item) {
   if(item.kind==='category_mapping') return {type:'values',values:[{label:'Source',value:c.parser==='demo-seed' ? 'Demo ledger' : 'Budgeting export'},{label:'Category',value:c.category},{label:'Transactions',value:c.count}]};
   const t=db.prepare('SELECT * FROM transactions WHERE id=?').get(c.transactionId);
   const a=t && db.prepare('SELECT * FROM accounts WHERE id=?').get(t.account_id);
-  return {type:'values',values:[{label:'Account',value:a ? accountLabel(a) : c.account},{label:'Date',value:t?.date ?? c.date},
+  return {type:'values',values:[{label:'Account',value:a ? accountNaming(db).label(a) : c.account},{label:'Date',value:t?.date ?? c.date},
     {label:'Transaction',value:t?.description ?? c.description},{label:'Amount',value:t?.amount ?? c.amount},
     {label:'Category',value:c.category},{label:'Best guess',value:c.guess}]};
 }

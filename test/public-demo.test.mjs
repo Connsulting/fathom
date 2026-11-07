@@ -5,7 +5,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadConfig } from '../src/config.mjs';
-import { startServer, openStore } from '../src/server.mjs';
+import { startServer, openOrCreateInstance } from '../src/server.mjs';
+import { openHouseholdDb } from '../src/platform/runtime.mjs';
 import { getSetting } from '../src/store/db.mjs';
 import { createDemoControl, DEMO_LIMIT_MESSAGE, demoRouteBehavior } from '../src/public-demo/control.mjs';
 import { routes } from '../src/api/router.mjs';
@@ -39,6 +40,29 @@ function visitor(s) {
     return { status: res.status, headers: res.headers, body: await res.json() };
   };
 }
+// The instance's base household store file (households/<id>/fathom.sqlite).
+function storeFile(dir) {
+  const platform = new DatabaseSync(join(dir, 'platform.sqlite'), { readOnly: true });
+  try { return join(dir, platform.prepare('SELECT storage_root FROM households WHERE serves_store = 1').get().storage_root, 'fathom.sqlite'); }
+  finally { platform.close(); }
+}
+// A setting of the base household store, read without writing it.
+function baseSetting(dir, key) {
+  const db = new DatabaseSync(storeFile(dir), { readOnly: true });
+  try { return getSetting(db, key, null); }
+  finally { db.close(); }
+}
+// Open (or create) the instance at c.dataDir as the server does; returns its base store and platform.
+function openBase(c) {
+  const { platform } = openOrCreateInstance(c);
+  try {
+    const row = platform.prepare('SELECT id, storage_root FROM households WHERE serves_store = 1').get();
+    return { db: openHouseholdDb({ dataDir: c.dataDir, householdId: row.id, storageRoot: row.storage_root }), platform };
+  } catch (err) {
+    platform.close();
+    throw err;
+  }
+}
 function calls(s) {
   const db = new DatabaseSync(join(s.dir, 'public-demo.sqlite'), { readOnly: true });
   try { return db.prepare("SELECT coalesce(sum(calls), 0) AS n FROM usage WHERE subject = 'global'").get().n; }
@@ -66,12 +90,12 @@ test('startup refuses unmarked demo and real stores without changing them', t =>
   for (const mode of ['demo', 'real']) {
     const dir = directory(t);
     const c = { ...loadConfig({ FATHOM_DATA: dir, FATHOM_DEMO: mode === 'demo' ? '1' : '0', FATHOM_PUBLIC_URL: ORIGIN }), port: 0 };
-    const opened = openStore(c);
+    const opened = openBase(c);
     if (mode === 'demo') opened.db.prepare("DELETE FROM settings WHERE key = 'synthetic_demo'").run();
     opened.db.close(); opened.platform.close();
-    const before = readFileSync(join(dir, 'fathom.sqlite'));
-    assert.throws(() => openStore(config(dir)), /public.demo/i);
-    assert.deepEqual(readFileSync(join(dir, 'fathom.sqlite')), before);
+    const before = readFileSync(storeFile(dir));
+    assert.throws(() => openOrCreateInstance(config(dir)), /public.demo/i);
+    assert.deepEqual(readFileSync(storeFile(dir)), before);
   }
 });
 test('valid public startup serves no-login bootstrap and blocks unsafe routes before effects', async t => {
@@ -95,7 +119,7 @@ test('valid public startup serves no-login bootstrap and blocks unsafe routes be
 });
 test('visitor writes, what-if, Ask and reset never touch another visitor or base store', async t => {
   const s = await app(t);
-  const before = readFileSync(join(s.dir, 'fathom.sqlite'));
+  const before = readFileSync(storeFile(s.dir));
   const a = visitor(s), b = visitor(s);
   const pending = (await a('/api/confirm')).body.items;
   const item = pending.find(i => i.options?.length);
@@ -112,8 +136,8 @@ test('visitor writes, what-if, Ask and reset never touch another visitor or base
   const pack = sc.packs.find(p => p.id === 'scorp') || sc.packs[0];
   assert.equal((await a(`/api/packs/${pack.id}/whatif`, {})).status, 200);
   assert.equal((await a('/api/demo/reset', {})).status, 200);
-  assert.deepEqual(readFileSync(join(s.dir, 'fathom.sqlite')), before);
-  assert.equal(getSetting(s.db, 'synthetic_demo'), 'synthetic-v1');
+  assert.deepEqual(readFileSync(storeFile(s.dir)), before);
+  assert.equal(baseSetting(s.dir, 'synthetic_demo'), 'synthetic-v1');
 });
 test('turn cap survives reset and returns a fixed notice without another model call', async t => {
   const s = await app(t, { FATHOM_PUBLIC_DEMO_TURNS_PER_DAY: '1' });
@@ -188,12 +212,13 @@ test('static, health and blocked requests allocate no sandbox; trusted proxies g
 test('public startup refuses a demo after an import attempt', async t => {
   const dir = directory(t);
   const privateConfig = { ...loadConfig({ FATHOM_DATA: dir, FATHOM_DEMO: '1' }), port: 0 };
-  const { db, platform } = openStore(privateConfig);
+  const s = await startServer(privateConfig);
   try {
-    await ingestFile(db, { name: 'sample.csv', bytes: Buffer.from('Date,Description,Amount\n2026-11-01,Sample,10\n') }, { config: privateConfig });
-    assert.equal(getSetting(db, 'synthetic_demo', null), null);
-  } finally { db.close(); platform.close(); }
-  assert.throws(() => openStore(config(dir)), /synthetic seeder marker/);
+    const household = s.runtimes.demo();
+    await ingestFile(household.db, { name: 'sample.csv', bytes: Buffer.from('Date,Description,Amount\n2026-11-01,Sample,10\n') }, { config: privateConfig, household });
+    assert.equal(getSetting(household.db, 'synthetic_demo', null), null);
+  } finally { await s.close(); }
+  assert.throws(() => openOrCreateInstance(config(dir)), /synthetic seeder marker/);
 });
 test('a refused private-demo request preserves the marker and a successful write invalidates it', async t => {
   const dir = directory(t);
@@ -201,9 +226,10 @@ test('a refused private-demo request preserves the marker and a successful write
   t.after(() => s.close());
   const post = (path, body) => fetch(s.url + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
   assert.equal((await post('/api/jobs/plan/run', {})).status, 409);
-  assert.equal(getSetting(s.db, 'synthetic_demo'), 'synthetic-v1');
+  const { db } = s.runtimes.demo();
+  assert.equal(getSetting(db, 'synthetic_demo'), 'synthetic-v1');
   assert.equal((await post('/api/goals', { title: 'Private demo goal', horizon: 'now' })).status, 200);
-  assert.equal(getSetting(s.db, 'synthetic_demo', null), null);
+  assert.equal(getSetting(db, 'synthetic_demo', null), null);
 });
 test('live demo boundary applies model/output caps and offers only local read tools', async t => {
   const dir = directory(t);
@@ -211,7 +237,7 @@ test('live demo boundary applies model/output caps and offers only local read to
   writeFileSync(credentialFile, 'synthetic', { mode: 0o600 });
   const c = config(dir, { FATHOM_ENGINE: 'live', FATHOM_CLAUDE_CREDENTIAL_FILE: credentialFile,
     FATHOM_PUBLIC_DEMO_MAX_TOKENS: '32', FATHOM_PUBLIC_DEMO_CALLS_PER_DAY: '2' });
-  const { db, platform } = openStore(c);
+  const { db, platform } = openBase(c);
   const control = createDemoControl(c);
   t.after(() => { control.close(); db.close(); platform.close(); });
   const requests = [];
@@ -256,7 +282,7 @@ test('route documentation assigns every server route a demo behavior', () => {
 test('P&L and spending reads use the visitor sandbox and refuse writes', async t => {
   const s = await app(t);
   const v = visitor(s);
-  const before = readFileSync(join(s.dir, 'fathom.sqlite'));
+  const before = readFileSync(storeFile(s.dir));
   const pnl = await v('/api/pnl');
   assert.equal(pnl.status, 200);
   assert.ok(pnl.body.entities.length > 0);
@@ -277,7 +303,7 @@ test('P&L and spending reads use the visitor sandbox and refuse writes', async t
     assert.equal(demoRouteBehavior('POST', path), 'off');
     assert.equal((await v(path, {})).status, 403);
   }
-  assert.deepEqual(readFileSync(join(s.dir, 'fathom.sqlite')), before);
+  assert.deepEqual(readFileSync(storeFile(s.dir)), before);
 });
 test('per-IP turn quota applies across visitors and persisted control handles', t => {
   const c = config(directory(t), { FATHOM_PUBLIC_DEMO_TURNS_PER_IP_PER_DAY: '1' });

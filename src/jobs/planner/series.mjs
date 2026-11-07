@@ -9,6 +9,7 @@
 
 import { cents, parseJson } from '../../store/db.mjs';
 import { trendLabel } from '../../shared/account-label.mjs';
+import { accountNaming } from '../../accounts/naming.mjs';
 import { monthLabel } from './data.mjs';
 
 export const SERIES_SRC = 'balances';
@@ -56,12 +57,9 @@ export function monthlyValues(db, accountId, clock) {
   return new Map([...monthlyReadings(db, accountId, clock)].map(([k, r]) => [k, r.v]));
 }
 
-// Imported names are plain text; the label also carries the holder and last four.
+// Imported names are plain text; the label is the account's name.
 export function trendLabels(db) {
-  const householdNames = parseJson(db.prepare("SELECT value FROM facts WHERE key = 'household.names'").get()?.value, {}) || {};
-  const holders = new Map(db.prepare('SELECT account_id, holder FROM account_holders').all().map((r) => [r.account_id, r.holder]));
-  return new Map(db.prepare('SELECT id, name, inst, mask, kind, display_name FROM accounts').all()
-    .map(a => [a.id, trendLabel({ ...a, householdNames, holder: holders.get(a.id) || null })]));
+  return new Map([...accountNaming(db).byId].map(([id, a]) => [id, trendLabel(a)]));
 }
 
 export function buildSeries(db, clock) {

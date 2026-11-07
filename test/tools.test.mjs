@@ -160,7 +160,7 @@ describe('read tools', () => {
       const rows = await call('list_accounts');
       const got = rows.find(x => x.id === 'acct_imported');
       assert.ok(got);
-      assert.equal(got.name, 'Bank {f:nope} <b>x</b> ending 9876');
+      assert.equal(got.name, 'Bank {f:nope} <b>x</b> (9876)');
       assert.equal(got.inst, 'Inst {n:owner}');
       assert.equal(got.owner, 'Owner {n:owner}');
       assert.equal(got.note, 'Note {f:nope}');

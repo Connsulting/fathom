@@ -11,7 +11,7 @@ import { upsertFact, deleteFact } from '../store/facts.mjs';
 import { dedupeKey } from './dedupe.mjs';
 import { cents } from './format.mjs';
 import { captureChanges, revertChanges, touches } from './undo.mjs';
-import { accountLabel } from '../shared/account-label.mjs';
+import { accountNaming } from '../accounts/naming.mjs';
 
 export const KINDS = Object.freeze([
   'account_owner', 'account_kind', 'entity_alias', 'tax_year', 'fact_check', 'near_duplicate', 'employer_relation', 'employer_recipient', 'document_recipient',
@@ -335,7 +335,7 @@ export function setAccountAnswer(db, kind, accountId, optionId, { now } = {}) {
     const before = { answer: item?.status === 'answered' ? item.answer : null, present: Boolean(item), created: !item };
     if (!item) {
       const row = db.prepare('SELECT * FROM accounts WHERE id = ?').get(accountId);
-      const { id } = ask(db, { kind, subject: accountId, question: spec.question(accountLabel(row)), options: spec.options, context: {}, now });
+      const { id } = ask(db, { kind, subject: accountId, question: spec.question(accountNaming(db).label(row)), options: spec.options, context: {}, now });
       item = getItem(db, id);
     }
     if (item.status === 'pending') recordAnswer(db, item, optionId, { now });

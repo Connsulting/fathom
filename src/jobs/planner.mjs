@@ -9,6 +9,7 @@
 
 import { looksLikeSpending, spendingStatement } from '../pnl/ledgers.mjs';
 import { getSetting, tx, parseJson } from '../store/db.mjs';
+import { withLabelHints } from '../accounts/naming.mjs';
 import { upsertFact } from '../store/facts.mjs';
 import { withholdingRecipient, ask, canonicalJson, FACT_CHECK_OPTIONS } from '../ingest/confirm.mjs';
 import { loadPacks, activePacks } from '../packs/index.mjs';
@@ -98,7 +99,7 @@ async function plan(db, engine, { clock, runId, packDirs }) {
   const fig = Object.fromEntries(Object.entries(computed.figures).map(([k, f]) => [k, { v: f.v, kind: f.kind, label: f.label, src: f.src }]));
 
   // The owner's goals and tradeoff curve positions rank recs that tie on their window.
-  const accountRows = db.prepare('SELECT * FROM accounts').all();
+  const accountRows = withLabelHints(db, db.prepare('SELECT * FROM accounts').all());
   const prefs = {
     goals: loadGoals(db, { fig: { ...fig }, accounts: accountRows }),
     accounts: accountRows,

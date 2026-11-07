@@ -8,6 +8,7 @@ import { createAuthStore, normalizeEmail, digest, validHandle, CHALLENGE_TTL } f
 import { authLinkMail, passkeyAddedMail, accountRecoveredMail } from './mail.mjs';
 import { readCookie, setCookie, SESSION_COOKIE, CEREMONY_COOKIE } from './cookies.mjs';
 import { createClientAddressResolver } from './client-ip.mjs';
+import { createHouseholdStorage } from '../platform/db.mjs';
 
 const badVerification = () => new HttpError(400, 'passkey verification failed');
 const expiredLink = () => new HttpError(410, 'link expired or already used');
@@ -24,11 +25,16 @@ function passkeyName(value) {
   return value.trim();
 }
 
-// Accounts and sessions live in the platform DB (`platform`); the service never reads the
+// Accounts and sessions live in the platform DB (`platform`); the service never reads a
 // financial store. Identity: { id, email, login, name, householdId, role, operator, memberships }.
-// householdId is the session's household when the user is an active member of it; role is that
-// membership's role while the household is active; memberships lists only the user's own.
-export function createAuthService({ platform, config, transport, now = () => Date.now() }) {
+// householdId is the session's household while the user is an active member of it (else, with no
+// session household, the user's only active membership); role is that membership's role while the
+// household is active; memberships lists only the user's own. Every household-scoped check works on
+// the identity's own household: servedMember(identity) is an active membership in an active
+// household, servedAdmin(identity) adds the admin role, and the admin user routes act on
+// identity.householdId. `demo` is the instance mode. `secrets` (src/platform/secrets.mjs) lets the
+// operator route create a provisioned household's storage (createHouseholdStorage).
+export function createAuthService({ platform, config, transport, secrets = null, now = () => Date.now() }) {
   if (!platform) throw new TypeError('createAuthService needs the platform database');
   const db = platform;
   const store = createAuthStore(platform, { now });
@@ -52,10 +58,10 @@ export function createAuthService({ platform, config, transport, now = () => Dat
     };
   }
   const identityOfUser = id => identityFor(store.getUser(id));
-  // True when the identity is an active member of the household the store serves.
+  // True when the identity holds an active membership in its own household and that household is active.
   function servedMember(identity) {
-    const served = store.servedHousehold();
-    return Boolean(identity && served && identity.householdId === served.id && identity.role !== null);
+    if (!identity || typeof identity.householdId !== 'string' || !identity.role) return false;
+    return db.prepare('SELECT status FROM households WHERE id = ?').get(identity.householdId)?.status === 'active';
   }
   const servedAdmin = identity => servedMember(identity) && identity.role === 'admin';
   function requireUser(req, { admin = false } = {}) {
@@ -64,11 +70,11 @@ export function createAuthService({ platform, config, transport, now = () => Dat
     if (admin && !servedAdmin(identity)) throw new HttpError(403, 'administrator required');
     return identity;
   }
-  const servedId = () => store.servedHousehold().id;
-  // A creator-owned MCP key verifies only while its creator is an active member of the served household.
-  function creatorActive(userId) {
-    const served = store.servedHousehold();
-    return Boolean(served && typeof userId === 'string' && store.membership(userId, served.id)?.status === 'active');
+  // The admin's own household (requireUser with admin has already checked the membership).
+  const adminHousehold = admin => admin.householdId;
+  // A creator-owned MCP key verifies only while its creator is an active member of the key's household.
+  function creatorActive(userId, householdId) {
+    return typeof userId === 'string' && typeof householdId === 'string' && store.membership(userId, householdId)?.status === 'active';
   }
   function rate(req, kind) {
     const address = clientAddress(req);
@@ -323,16 +329,16 @@ export function createAuthService({ platform, config, transport, now = () => Dat
       return { passkeys: store.listPasskeys(user.id) };
     },
     users({ req }) {
-      requireUser(req, { admin: true });
+      const admin = requireUser(req, { admin: true });
       // Only an active member's passkeys are listed; a pending invitee may hold an account elsewhere.
-      return { users: store.listPeople(servedId()).map(person => ({
+      return { users: store.listPeople(adminHousehold(admin)).map(person => ({
         ...person, passkeys: person.status === 'active' ? store.listPasskeys(person.id) : [],
       })) };
     },
     async invite({ req, body }) {
       const admin = requireUser(req, { admin: true });
       rate(req, 'invite');
-      const issued = store.invite(servedId(), body.email, { role: body.role, inviterId: admin.id });
+      const issued = store.invite(adminHousehold(admin), body.email, { role: body.role, inviterId: admin.id });
       await sendLink(issued.user, issued.token, 'invite');
       return { ...GENERIC_MAIL };
     },
@@ -350,19 +356,19 @@ export function createAuthService({ platform, config, transport, now = () => Dat
     // before any change.
     setRole({ req, params, body }) {
       const admin = requireUser(req, { admin: true });
-      const hh = servedId();
+      const hh = adminHousehold(admin);
       if (!store.person(hh, params.id)) throw new HttpError(404, 'no such user');
       return { user: store.setRole(hh, params.id, body.role, { actorId: admin.id }) };
     },
     removeUser({ req, params }) {
       const admin = requireUser(req, { admin: true });
-      if (!store.removeMember(servedId(), params.id, { actorId: admin.id })) throw new HttpError(404, 'no such user');
+      if (!store.removeMember(adminHousehold(admin), params.id, { actorId: admin.id })) throw new HttpError(404, 'no such user');
       return { removed: true };
     },
     // Only an active member's passkeys: a pending invitee's are 404 with nothing changed.
     adminRevokePasskey({ req, params }) {
       const admin = requireUser(req, { admin: true });
-      const hh = servedId();
+      const hh = adminHousehold(admin);
       if (store.person(hh, params.id)?.status !== 'active'
         || !store.revokePasskey(params.id, params.keyId, { actorId: admin.id, householdId: hh })) throw new HttpError(404, 'no such passkey');
       return { passkeys: store.listPasskeys(params.id) };
@@ -375,11 +381,21 @@ export function createAuthService({ platform, config, transport, now = () => Dat
       return { identity: identityFor(currentUser(req)) };
     },
     // An operator provisions another household; the gate refuses it with 409 multi_household_gated.
+    // Its storage (root, empty store, data key when available, all-paused outbound) is created
+    // before the invitation is sent; the household turns active when its first admin joins. A
+    // storage failure revokes the invitation and leaves a provisioning row with no root.
     async provisionHousehold({ req, body }) {
       const user = requireUser(req);
       if (!store.isOperator(user.id)) throw new HttpError(403, 'operator required');
       rate(req, 'invite');
       const made = store.provisionHousehold({ displayName: body.displayName, adminEmail: body.adminEmail }, { actorId: user.id });
+      try {
+        createHouseholdStorage({ platform, dataDir: config.dataDir, householdId: made.household.id, mode: demo ? 'demo' : 'real', secrets });
+      } catch (err) {
+        store.revokeInvitation(made.token);
+        console.error('fathom: household storage failed', typeof err?.code === 'string' && /^[a-z_]{1,64}$/.test(err.code) ? err.code : 'unknown');
+        throw new HttpError(503, 'household storage unavailable');
+      }
       await sendLink(made.user, made.token, 'invite');
       return { household: made.household };
     },

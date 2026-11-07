@@ -1,13 +1,13 @@
 // Email and jobs API (src/api/email-handlers.mjs through the real server): GET /api/email,
 // POST /api/email/test and /api/email/brief over the dev transport (outbox file, history row
 // with no body), GET /api/jobs, POST /api/jobs/:id/run (known and unknown ids), and the POST
-// guards. Revision r2 item 4 runs in-process: createHandler with a fake scheduler records
+// guards. MT-03: household email goes to the household root's outbox/ (households/<id>/outbox).
+// Revision r2 item 4 runs in-process: createHandler with a fake scheduler records
 // trigger('plan', 'ingest') and trigger('confirm-guess', 'ingest') for an imported upload and a
 // successful retry, and nothing for an upload or retry that imports nothing.
 
 import test, { describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import http from 'node:http';
 import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnServer, request, postJson, openStore, src, tempInstance, SERVER_TIMEOUT, serveAppFixture } from '../helpers/server.mjs';
@@ -53,15 +53,15 @@ describe('email and jobs routes on a demo server', () => {
   });
 
   test('POST /api/email/test sends through the dev transport and history gains a row with no body', T, async () => {
-    const before = outbox(s.dataDir);
+    const before = outbox(s.root);
     const r = await postJson(s.baseUrl, '/api/email/test', {});
     assert.equal(r.status, 200, r.text.slice(0, 300));
     assert.equal(r.json.send.kind, 'test');
     assert.equal(r.json.send.status, 'sent');
     assert.equal(r.json.send.transport, 'dev');
-    const after = outbox(s.dataDir);
+    const after = outbox(s.root);
     // The scheduler's startup catch-up may send the brief at the same time, so other new files are allowed.
-    const added = after.filter((f) => !before.includes(f)).filter((f) => outboxSubject(s.dataDir, f) === r.json.send.subject);
+    const added = after.filter((f) => !before.includes(f)).filter((f) => outboxSubject(s.root, f) === r.json.send.subject);
     assert.equal(added.length, 1, 'exactly one new outbox file carries the test email subject');
     assert.equal(r.json.history[0].id, r.json.send.id, 'newest first');
     r.json.history.forEach(assertHistoryRow);
@@ -70,14 +70,14 @@ describe('email and jobs routes on a demo server', () => {
   });
 
   test('POST /api/email/brief sends the brief and records it', T, async () => {
-    const before = outbox(s.dataDir);
+    const before = outbox(s.root);
     const r = await postJson(s.baseUrl, '/api/email/brief', {});
     assert.equal(r.status, 200, r.text.slice(0, 300));
     assert.equal(r.json.send.kind, 'brief');
     assert.equal(r.json.send.status, 'sent');
-    const added = outbox(s.dataDir).filter((f) => !before.includes(f)).filter((f) => outboxSubject(s.dataDir, f) === r.json.send.subject);
+    const added = outbox(s.root).filter((f) => !before.includes(f)).filter((f) => outboxSubject(s.root, f) === r.json.send.subject);
     assert.equal(added.length, 1, 'exactly one new outbox file carries the brief subject');
-    const msg = JSON.parse(readFileSync(join(s.dataDir, 'outbox', added[0]), 'utf8'));
+    const msg = JSON.parse(readFileSync(join(s.root, 'outbox', added[0]), 'utf8'));
     assert.ok(msg.html.length > 0 && msg.text.length > 0);
     assert.equal(r.json.history[0].kind, 'brief');
     assertHistoryRow(r.json.history[0]);
@@ -147,18 +147,16 @@ describe('GET /api/email preview (in-process router, fake engine)', () => {
     const t = await tempInstance({ mode: 'demo', init: seedDemo });
     let calls = 0;
     const engine = { isOn: () => true, call: () => { calls++; throw new Error('should not be called'); } };
-    const { createHandler } = await src('src/api/router.mjs');
     const config = { dataDir: t.dataDir, clock: '2026-11-05', demo: true, engine: 'fake', port: 0, host: '127.0.0.1', claudeCredentialFile: null, emailTransport: 'dev', publicUrl: null };
     const transport = { name: 'capture', async send() { return { id: 'unused' }; } };
-    const server = http.createServer(createHandler({ db: t.db, platform: t.platform, config, engine, transport }));
-    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const server = await serveAppFixture({ db: t.db, platform: t.platform, config, engine, transport });
     try {
-      const r = await request(`http://localhost:${server.address().port}`, { path: '/api/email' });
+      const r = await request(server.baseUrl, { path: '/api/email' });
       assert.equal(r.status, 200, r.text.slice(0, 300));
       assert.equal(calls, 0, 'the engine was not called');
       assert.equal(r.json.preview.summarySrc, 'template');
     } finally {
-      await new Promise((r) => { server.close(r); server.closeAllConnections(); });
+      await server.close();
       t.close();
       rmSync(t.dataDir, { recursive: true, force: true });
     }

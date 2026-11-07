@@ -6,7 +6,7 @@ import test, { describe, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { src, tempDb } from './helpers/server.mjs';
+import { src, tempDb, householdContext } from './helpers/server.mjs';
 import { realStore, recordingEngine, fakeEngine, offEngine, all, one, count, textFile } from './helpers/ingest.mjs';
 
 let H;
@@ -32,7 +32,7 @@ const NOTES_OUT = {
   goals: [{ title: 'Build a cash reserve', when: '2033', confidence: 0.9 }],
 };
 
-const ctxOf = (s, engine, body) => ({ db: s.db, config: s.config, engine, scheduler: null, body });
+const ctxOf = (s, engine, body, household = s.household) => ({ household, db: s.db, config: s.config, engine, scheduler: null, body });
 
 async function withStore(fn) {
   const s = await realStore();
@@ -50,7 +50,7 @@ describe('Tell us note save path', () => {
     assert.match(row.name, /^Setup notes \d{4}-\d{2}-\d{2}\.md$/);
     assert.equal(row.source_kind, 'notes');
     assert.ok(row.stored_path, 'the encrypted bytes are in the vault');
-    const stored = readFileSync(join(s.dataDir, row.stored_path));
+    const stored = readFileSync(join(s.root, row.stored_path));
     assert.ok(!stored.includes(Buffer.from('Virginia')), 'stored bytes are encrypted');
     assert.equal(count(s.db, 'documents', "doc_type = 'notes' AND file_id = ?", out.file.fileId), 1);
     assert.ok(!JSON.stringify(all(s.db, 'SELECT fields FROM documents')).includes('Virginia'), 'no plaintext note in the documents table');
@@ -124,14 +124,19 @@ describe('Tell us note save path', () => {
     assert.equal(count(s.db, 'files'), 0);
   }));
 
-  test('a real store without a data key refuses before storing anything', async () => {
+  // MT-03: the vault key is the instance platform key (FATHOM_PLATFORM_KEY_FILE), not a data key file.
+  test('a real household without the platform key refuses before storing anything', async () => {
     const s = await realStore();
     try {
-      const ctx = ctxOf(s, await fakeEngine([]), { text: NOTE });
-      ctx.config = { ...s.config, dataKeyFile: null };
-      await assert.rejects(O.saveNotes(ctx), (err) => err.status === 409);
+      const { createInstanceSecrets } = await src('src/platform/secrets.mjs');
+      const config = { ...s.config, platformKeyFile: null };
+      const household = await householdContext({
+        db: s.db, platform: s.platform, householdId: s.householdId, config, secrets: createInstanceSecrets({ config, mode: 'real' }),
+      });
+      const ctx = ctxOf(s, await fakeEngine([]), { text: NOTE }, household);
+      await assert.rejects(O.saveNotes(ctx), (err) => err.status === 409 && /FATHOM_PLATFORM_KEY_FILE/.test(err.message));
       assert.equal(count(s.db, 'files'), 0);
-      assert.deepEqual(readdirSync(s.dataDir).filter((n) => n === 'files'), []);
+      assert.deepEqual(readdirSync(s.root).filter((n) => n === 'files'), []);
     } finally { s.close(); }
   });
 });

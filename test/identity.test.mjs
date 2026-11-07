@@ -1,7 +1,7 @@
 import test, { describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
-import { readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { readFileSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   SERVER_TIMEOUT, spawnServer, spawnAuthenticatedServer, request, postJson,
@@ -234,10 +234,8 @@ describe('real HTTP session gate', () => {
 });
 
 test('real uploads enforce exact Origin before reading the body and accept a valid local upload', T, async () => {
-  const dir = await tempDir();
-  const keyFile = join(dir, 'data.key');
-  writeFileSync(keyFile, randomBytes(32), { mode: 0o600 });
-  const server = await spawnAuthenticatedServer({ env: { ...REAL, FATHOM_DATA_KEY_FILE: keyFile } });
+  // The vault key: spawnServer gives a real instance its synthetic FATHOM_PLATFORM_KEY_FILE (MT-03).
+  const server = await spawnAuthenticatedServer({ env: REAL });
   try {
     const boundary = 'synthetic-origin-test';
     const body = `--${boundary}\r\nContent-Disposition: form-data; name="files"; filename="synthetic.csv"\r\nContent-Type: text/csv\r\n\r\n${aggregatorCsv([{ date: '2032-03-09', amount: '-12.50', description: 'SYNTHETIC SHOP' }])}\r\n--${boundary}--\r\n`;
@@ -248,7 +246,7 @@ test('real uploads enforce exact Origin before reading the body and accept a val
     const valid = await server.request({ method: 'POST', path: '/api/files', headers: { 'content-type': `multipart/form-data; boundary=${boundary}` }, body });
     assert.equal(valid.status, 200, valid.text.slice(0, 200));
     assert.equal(valid.json.files[0].status, 'imported');
-  } finally { await server.stop(); rmSync(dir, { recursive: true, force: true }); }
+  } finally { await server.stop(); }
 });
 
 test('registration links expire or consume once while fresh invitations produce strict resident options', T, async () => {

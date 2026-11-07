@@ -332,9 +332,10 @@ secrets are read there.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `FATHOM_DATA` | `./data` (gitignored) | Data directory; holds `fathom.sqlite` and `platform.sqlite`. |
+| `FATHOM_DATA` | `./data` (gitignored) | Data directory; holds `platform.sqlite` and `households/<id>/` (see Household runtimes). |
 | `FATHOM_BACKUP_KEY_FILE` | unset | Path to a private file holding a 32-byte key. Read only by `scripts/migrate-platform.mjs` and `scripts/source-snapshot.mjs`, which encrypt source snapshots with it; the server never reads it. |
-| `FATHOM_PLATFORM_KEY_FILE` | unset | Path to a private file holding the 32-byte platform key that wraps household data keys (`loadPlatformKey`, `platformKeyFromEnv` in `src/platform/backup-key.mjs`). Read by no server path yet; for offline tooling and the MT-03 cutover. |
+| `FATHOM_PLATFORM_KEY_FILE` | unset | Path to a private file holding the 32-byte platform key that wraps household data keys (`loadPlatformKey`, `platformKeyFromEnv` in `src/platform/backup-key.mjs`). Real mode uploads, advisor packets and SimpleFIN connections refuse without it. |
+| `FATHOM_MCP_SECRET_FILE` | unset | Path to a private file holding 64 hex characters, the HMAC secret for MCP keys. Real mode key routes refuse without it. |
 | `FATHOM_PORT` | `8080` | HTTP port. |
 | `FATHOM_HOST` | `127.0.0.1` (the image sets `0.0.0.0`) | Bind address. |
 | `FATHOM_DEMO` | unset (auto) | `1` demo store required, `0` real store required, unset follows the store (a new store is demo). |
@@ -342,7 +343,6 @@ secrets are read there.
 | `FATHOM_CLOCK` | unset | ISO date that overrides "today" (`settings.clock`) for demos and tests. Never written to the store. |
 | `FATHOM_FAKE_STREAM_MS` | `25` | Fake engine only: milliseconds between streamed answer chunks (0 to 1000). |
 | `FATHOM_CLAUDE_CREDENTIAL_FILE` | unset | Path to the mounted Claude credential. |
-| `FATHOM_DATA_KEY_FILE` | unset | Path to the raw file encryption key. |
 | `FATHOM_EMAIL_TRANSPORT` | `dev` | `dev`, `smtp`, `resend`, `postmark` or `agentmail` (see Email). |
 | `FATHOM_EMAIL_FROM` | unset (`dev` uses `fathom@example.invalid`) | Sender address; for `agentmail` the inbox id. Not with `FATHOM_EMAIL_FROM_FILE`. |
 | `FATHOM_EMAIL_FROM_FILE` | unset | Path to a file holding the sender address. Not with `FATHOM_EMAIL_FROM`. |
@@ -386,6 +386,27 @@ never inferred from what the store contains.
    (exit 1, data untouched). `POST /api/demo/reset` does the same rebuild in place and is a 404
    unless the store's mode is `demo`.
 5. Real household data lives only in the data volume, never in the repository.
+
+## Household runtimes
+
+The data directory holds `platform.sqlite` (accounts, memberships, sessions, MCP keys, household
+data keys, outbound flags) and one directory per household: `households/<id>/{fathom.sqlite,files,
+packs/your-plans,outbox,work}`. A request resolves its runtime (store, engine, packs, scheduler,
+transport) through the session's household membership; a session with no household or no runtime
+is 403. MCP keys are bound to a household (platform `api_keys.household_id`); a CLI that opens a
+store takes `--household <id>`. Files, advisor packets and SimpleFIN access URLs are stored in the
+FTHM2 vault (see Encryption at rest) under the household's data key, wrapped by
+`FATHOM_PLATFORM_KEY_FILE`.
+
+Each household has outbound pause flags (`jobs`, `email`, `simplefin`, `engine`; 1 enabled, a
+missing row means every kind is paused). A paused kind does no work that can leave the instance:
+no scheduled jobs, no email, no bank sync, no model calls. Live model calls also need the platform
+setting `instance_model_cap_usd`, set by a later operator command (MT-05), so live calls stay off
+on a migrated instance until then.
+
+An instance that predates households is converted offline by `node scripts/migrate-tenancy.mjs`,
+which reads the old `fathom.sqlite`, `files/` and (as an input only) `FATHOM_DATA_KEY_FILE`, and
+writes the per-household layout. `FATHOM_DATA_KEY_FILE` is read by no other path.
 
 ### Tables
 
@@ -871,12 +892,14 @@ known path with the wrong method is 405; signed out, both are 401. Every action 
 | `POST /api/curve` | `{id, value}` or `{positions: {id: value}}` | `{scenario}`. Stores tradeoff curve positions (0 to 1, rounded to hundredths) in `settings` `curve.positions`; 400 for an unknown axis or a value out of range. The onboarding Priorities step saves through this route too. |
 | `POST /api/onboarding` | `{step}` | `{scenario}`. 0 to 5 set the step (0 sign in, 1 Goals, 2 curve, 3 Tell us, 4 heard, 5 build), 6 completes onboarding; anything else 400. |
 | `POST /api/onboarding/notes` | `{text}` | `{scenario, file, understood}`. Saves the Tell us note as a notes document through the ingest pipeline (see Onboarding below). 400 for a missing, empty or control-character text, 413 over 30000 bytes, 409 without a data key on a real store, 422 when the note could not be stored. The text never appears in an error, a log or the database. |
-| `POST /api/demo/reset` | `{}` | `{scenario}`. Rebuilds the demo store and removes stored uploads (`$FATHOM_DATA/files/*.bin`); 404 unless the store is a demo store. Clears `api_keys`; the server secret file survives. |
+| `GET /api/household/outbound` | | `{outbound: {jobs, email, simplefin, engine}}`, each `{enabled, effective, reason}`. `enabled` is the stored pause flag, `effective` whether that work would run, `reason` null when effective, else `paused`, `not_configured`, `recipient_unverified`, `not_connected`, `credential_unavailable`, `funding_unavailable` or `funding_exhausted`. Members. |
+| `POST /api/household/outbound` | `{jobs?, email?, simplefin?, engine?}` booleans | As GET. Admins. Omitted kinds keep their value; anything else is 400 and nothing changes. One audited transaction. |
+| `POST /api/demo/reset` | `{}` | `{scenario}`. Rebuilds the demo store and removes stored uploads (`files/*.bin` under the household root); 404 unless the store is a demo store. Deletes this household's rows from the platform `api_keys` table; the MCP secret file survives. |
 | `GET /api/keys` | | `{keys: [{id, name, scopes, createdAt, lastUsedAt, revokedAt}]}` ordered by creation; never a key or hash. A member sees the keys they created; an admin sees every key, including keys with no creator. A demo store lists every key. |
 | `POST /api/keys` | `{name, scopes?: ('read' or 'write:recs')[]}` | `{key, record, keys}`. The only time the key is shown. Name trimmed, 1 to 80 characters, no control characters; scopes always include `read`; else 400. Any signed-in user may create one; the creator comes from the session, never the body. |
 | `POST /api/keys/:id/revoke` | `{}` | `{record, keys}`. Sets `revokedAt` once (a second revoke keeps it); 404 unknown id. A member may revoke only keys they created (403 otherwise); an admin may revoke any. |
 | `GET /api/mcp` | | `{url, publicUrlSet, tools: [{name, description, scope}], scopes: [{id, label, access}]}`. `url` is the `FATHOM_PUBLIC_URL` origin with `/mcp` appended. |
-| `POST /api/files` | multipart/form-data, field `files` (one or more) | `{scenario, files: [result], pending}`. A result is `{fileId, name, status, sourceKind, parser, counts, duplicateOf?}` with status `imported`, `duplicate`, `needs_mapping`, `needs_extraction`, `unsupported`, `too_large` (past a parse limit, see Ingest) or `failed`. 400 no files or malformed body, 409 a real store without `FATHOM_DATA_KEY_FILE` (nothing stored), 413 over a size cap, 415 not multipart with a boundary. |
+| `POST /api/files` | multipart/form-data, field `files` (one or more) | `{scenario, files: [result], pending}`. A result is `{fileId, name, status, sourceKind, parser, counts, duplicateOf?}` with status `imported`, `duplicate`, `needs_mapping`, `needs_extraction`, `unsupported`, `too_large` (past a parse limit, see Ingest) or `failed`. 400 no files or malformed body, 409 a real household without `FATHOM_PLATFORM_KEY_FILE` (nothing stored), 413 over a size cap, 415 not multipart with a boundary. |
 | `GET /api/files` | | `{files: [{id, name, status, sourceKind, parser, counts, uploadedAt}]}`, newest first. |
 | `POST /api/files/:id/retry` | `{}` | `{scenario, file: result}`. Routes a `needs_mapping` or `needs_extraction` file again under the same id; 404 unknown file, 409 a file that is not waiting. |
 | `GET /api/confirm` | | `{items: [pending confirm items]}`. |
@@ -895,7 +918,7 @@ known path with the wrong method is 405; signed out, both are 401. Every action 
 | `POST /api/advisor/packets` | `{}` | `{scenario, packetId}`. Builds the review packet for every waiting review and stores it encrypted. 409 when nothing waits or a real store has no data key. |
 | `GET /api/advisor/packets/:id` | | The stored packet as `text/html` with `Content-Disposition: attachment`, the one non-JSON API response. 404 unknown id. |
 | `GET /api/jobs` | | `{jobs: [{id, name, cadence, does, lastRun, next, nextAt}], runs, timezone}`. Only jobs with a handler are listed; `runs` are recent `job_runs`. |
-| `POST /api/simplefin/connect` | `{token}` (a SimpleFIN setup token, at most 4096 characters) | `{scenario, connected, run}`. Claims the token, stores the access URL encrypted and runs the first `simplefin-sync` under the lease (`run`, or null when the scheduler is busy). 400 a bad token or a host not allowed, 400 a used or unknown token ("That setup token was already used..."), 409 already connected or a real store without `FATHOM_DATA_KEY_FILE`, 502 the bridge failed. A demo store uses the synthetic fake bridge. |
+| `POST /api/simplefin/connect` | `{token}` (a SimpleFIN setup token, at most 4096 characters) | `{scenario, connected, run}`. Claims the token, stores the access URL encrypted and runs the first `simplefin-sync` under the lease (`run`, or null when the scheduler is busy). 400 a bad token or a host not allowed, 400 a used or unknown token ("That setup token was already used..."), 409 already connected or a real household without `FATHOM_PLATFORM_KEY_FILE`, 502 the bridge failed. A demo store uses the synthetic fake bridge. |
 | `POST /api/simplefin/disconnect` | `{}` | `{scenario, disconnected}`. Deletes the stored access URL; connected accounts become `manual` and keep their rows. |
 | `POST /api/yearend/marks` | `{key, reason, year?}` | `{scenario}`. Marks the expected year-end item `key` not needed for `year` (default: the tax year on the clock) with `reason` (trimmed, 1 to 300 characters), or clears the mark with `reason: null`. 400 bad body or year, 404 a key that is not expected that year. |
 | `GET /api/yearend/packet?year=YYYY` | | The accountant packet as `application/zip` (attachment `tax-packet-YYYY.zip`), built on demand and recorded in `yearend_packets`; not JSON. `year` defaults to the tax year on the clock; 400 a bad year, 409 when the data key is unavailable. See "Year end". |
@@ -1254,10 +1277,10 @@ failure returns `Tool execution failed` and logs only the tool name and error cl
 arguments and tool results are never logged.
 
 Keys (`src/mcp/keys.mjs`) are `fathom_` plus 43 base64url characters (32 random bytes), shown once
-by `POST /api/keys`. `api_keys` stores only HMAC-SHA256 of the key under a server secret: the file
-`api-key-secret` in `FATHOM_DATA`, 64 hex characters, created 0600 on first start and never
-rewritten (a malformed file stops startup; removing it invalidates every key). Verification
-compares against every stored hash with `crypto.timingSafeEqual`.
+by `POST /api/keys`. The platform `api_keys` table stores only HMAC-SHA256 of the key under the
+instance secret in `FATHOM_MCP_SECRET_FILE` (64 hex characters, mode 0600, read at runtime and
+never written by the server; changing it invalidates every key), bound to one household.
+Verification compares against every stored hash with `crypto.timingSafeEqual`.
 
 ## Advisor workflow
 
@@ -1684,8 +1707,7 @@ included.
    `document-<id>` when the row has no file) plus the files named in `fileIds` (an unknown id warns).
    Stored files are read the way ingest reads its own uploads: through the vault
    (`readStoredFile`, `stored_path` must be `files/<id>.bin`, the file id is the associated data)
-   under the data key, which the builder takes as `key` (the API handler and the CLI load it with
-   `loadDataKey` from `FATHOM_DATA_KEY_FILE` or the demo store's generated key, as the ingest
+   under the data key, which the builder takes as `key` (the API handler and the CLI take it from the household's vault, as the ingest
    handlers do; a missing key is a 409 or a CLI failure with the vault's message). A file that
    fails authentication, or cannot be read, is skipped with a warning naming it, and nothing from it
    reaches the engine. Text (`text/*`, `.md`, `.txt`) is read as UTF-8. A PDF (`application/pdf`
@@ -1796,15 +1818,13 @@ and anything ambiguous becomes a short question in the confirm queue.
 
 ### Encryption at rest
 
-`src/ingest/vault.mjs`: every uploaded file is stored as `$FATHOM_DATA/files/<id>.bin` (mode 0600,
-directory 0700, written atomically) in AES-256-GCM: `FTHM1`, a 12 byte IV, the ciphertext and the
-16 byte tag, with the file id bound as additional data. `loadDataKey({dataDir, keyFile, mode})`
-reads `FATHOM_DATA_KEY_FILE` (32 raw bytes, 64 hex characters or base64 of 32 bytes; symlinks
-refused). A real store without the key file refuses uploads with "uploads need
-FATHOM_DATA_KEY_FILE: set it to a file holding a 32 byte key" (HTTP 409). A demo store generates
-`$FATHOM_DATA/files/demo.key` on first use. `clearStoredFiles(dataDir)` removes `*.bin` only.
+`src/ingest/vault.mjs` opens a household's vault (`openVault(household)`) over the FTHM2 envelope
+below: every uploaded file is stored as `households/<id>/files/<id>.bin` (mode 0600, directories
+0700, written atomically). A real household without `FATHOM_PLATFORM_KEY_FILE` refuses uploads,
+packets and SimpleFIN connections with the vault's message (HTTP 409); a demo household uses a
+generated key. `clearStoredFiles(vault)` removes `*.bin` only.
 
-Household envelope (MT-02, not wired). `src/platform/household-vault.mjs` defines FTHM2: `FTHM2`,
+Household envelope. `src/platform/household-vault.mjs` defines FTHM2: `FTHM2`,
 the key version (uint32 BE), a fresh 12 byte nonce, the ciphertext and the 16 byte tag, with
 length-prefixed additional data binding `fathom-vault/2`, household id, purpose (`upload`,
 `advisor-packet`, `simplefin-access`), object id, key version and the header itself. Each household
@@ -1813,8 +1833,7 @@ has a random 32 byte data key, stored only wrapped (`FTHMK1`) under the platform
 household root (`households/<seg>...` below the data root, every segment an lstat-checked private
 directory, never a symlink) at `files/<id>.bin`. `src/platform/vault-convert.mjs` converts a legacy
 instance offline into a validated bundle at `<root>/work/vault-<operationId>`, published by one
-rename; it only reads the legacy store and files. The server still uses FTHM1 until the MT-03
-cutover; nothing in the server imports these modules yet.
+rename; it only reads the legacy store and files. The server uses it for every stored object.
 
 ### Mapping unknown tables
 
@@ -2854,7 +2873,7 @@ Category persistence uses `transaction_category_corrections` for personal transa
 
 Jev calls reserve token and cost bounds before each attempt, including retries, and check both the run cap and household monthly cap. Actual usage replaces the reservation; a failed request with unknown usage is conservatively charged. Spend is recorded under purpose `categorize` with the pinned model. The scheduler shares one budget between category and closed-option guesses. Demo and disabled-engine jobs never call Jev.
 
-`node scripts/category-eval.mjs <store> [sample-size] [cost-cap-usd]` opens both databases through `openServedStore(config, {readOnly:true})`, with WAL-aware read-only SQLite handles, no migrations or writes. It holds out a deterministic sample of budgeting-export categories and emits aggregate accuracy, confidence calibration, qualifying precision thresholds, cost and latency only. The evaluation ledger is in memory. The CLI cost cap cannot exceed one dollar.
+`node scripts/category-eval.mjs --household <id> <data-directory> [sample-size] [cost-cap-usd]` opens the platform and that household's store through `openReadOnlyHousehold` (`src/platform/ready.mjs`), with WAL-aware read-only SQLite handles, no migrations or writes. It holds out a deterministic sample of budgeting-export categories and emits aggregate accuracy, confidence calibration, qualifying precision thresholds, cost and latency only. The evaluation ledger is in memory. The CLI cost cap cannot exceed one dollar.
 
 | Preference API | Input | Result |
 | --- | --- | --- |

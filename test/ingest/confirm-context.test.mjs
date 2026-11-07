@@ -202,7 +202,7 @@ describe('compare cards', () => {
   // The unsure-match setup of simplefin.test.mjs: an imported "Joint checking" at Other bank with no
   // mask, and the fake bridge's "Checking" at Other bank (balance 3120.00).
   const TODAY = NOW.slice(0, 10);
-  const sfOpts = (s) => ({ config: s.config, key: s.key, now: NOW, clock: TODAY, fetch: S.createFakeSimplefin({ today: () => TODAY }) });
+  const sfOpts = (s) => ({ config: s.config, household: s.household, now: NOW, clock: TODAY, fetch: S.createFakeSimplefin({ today: () => TODAY }) });
 
   test('account_match: the imported candidate beside the SimpleFIN snapshot, with no bridge account ids', () => withStore(async (s) => {
     await P.ingestFile(s.db, aggregatorFile('other.csv', [
