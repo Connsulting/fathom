@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { tools, getTool, callTool, buildRegistry, instructions } from '../src/tools/index.mjs';
+import { tools, getTool, callTool, buildRegistry, instructions, parity } from '../src/tools/index.mjs';
 import { toolsForScopes, SCOPES } from '../src/mcp/keys.mjs';
 import { createRegistryServer } from '../src/engine/tools.mjs';
 
@@ -112,4 +112,11 @@ test('the assembled rule text holds section 4 rules 2 to 6', async () => {
   assert.match(refs, /Copy a figure's ref field.*do not compose refs by hand.*same arguments/);
   assert.match(assumptions, /name, value and source.*owner.*evidence.*preference.*fact.*default.*Never mark a value as the owner's/);
   assert.match(gaps, /Report data gaps.*Never fill a gap with an estimate.*fix/);
+});
+
+test('C4 declares spending and business API intent coverage for the parity gate', () => {
+  assert.deepEqual(parity['GET /api/spending'], ['spending.total']);
+  assert.deepEqual(parity['GET /api/spending/rows'], ['transactions.search']);
+  assert.deepEqual(parity['GET /api/pnl'], ['business.pnl']);
+  assert.deepEqual(parity['GET /api/pnl/rows'], ['business.rows']);
 });
