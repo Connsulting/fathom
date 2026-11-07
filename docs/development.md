@@ -124,7 +124,8 @@ node scripts/screenshots.mjs --port 5320   # or SCREENSHOT_PORT=5320
 ```
 
 It starts the demo build itself on the port you give it with `--port <n>` or `SCREENSHOT_PORT`
-(never the default 4173, so it does not collide with Playwright runs), writes the images to
+(there is no default; pick a free port that no Playwright run uses, and it stops if the port is
+taken), writes the images to
 [`images/`](images/), and re-renders `architecture/fathom-architecture.png` from
 [`architecture/fathom-architecture.html`](architecture/fathom-architecture.html). Rerun it after UI
 changes, and check every image shows only synthetic demo data before committing.
