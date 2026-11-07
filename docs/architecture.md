@@ -2260,7 +2260,8 @@ Business cash is its own part and stays in the net worth total, as the earlier n
 it. `trend` carries `points` (date, total, parts, groups, carried counts), the shown `parts` and
 `groups`, a carried-forward `note` and `fig` keys. Figures `trend.total`, `trend.part.<id>` and
 `trend.group.<slug>` (kind a, source `trend`, "Account balances, summed") carry `sums`: each account's
-label, reading, date of that reading, freshness and carried flag, which the figure popover lists. With
+label, reading, date of that reading, freshness and carried flag; the figure popover lists the label, reading,
+date and carried flag. With
 fewer than two months of data `trend` is null. Money draws the chart (`screens/trend.js`: one line at
 a time, range 3M, 1Y or All, a readout of every part by date); Accounts draws one line per group.
 
