@@ -147,7 +147,7 @@ test('missing tool markers never mask an unrelated failed follow-up', async () =
   const cases = await loadCases();
   const c = structuredClone(cases.find(c => c.id === 'spending-annual-exclusions'));
   c.turns.push(structuredClone(cases.find(c => c.id === 'retirement-hsa-room').turns[0]));
-  const r = await runCases({ cases: [c], scripts: ({ turn }) => turn.required[0].name === 'spending_summary'
+  const r = await runCases({ cases: [c], scripts: ({ turn }) => turn.required[0].name === 'aggregate_transactions'
     ? [{ text: "Fathom doesn't have that.", costUsd: 0 }]
     : [{ toolCalls: [{ name: 'get_figures', args: { keys: ['hsa_left'] } }], costUsd: 0 }, { text: 'No figure provided.', costUsd: 0 }] });
   assert.equal(r.cases[0].status, 'fail');
