@@ -975,7 +975,7 @@ test('Ask offers write tools only with trusted identity, while pack and bare rec
   assert.ok(toolNames(requests[0]).includes('act_on_recommendation'));
   assert.ok(toolNames(requests[0]).includes('answer'));
   assert.ok(toolNames(requests[0]).includes('update_goal'));
-  assert.ok(!toolNames(requests[0]).includes('undo'));
+  assert.ok(toolNames(requests[0]).includes('undo'));
   for (const r of requests.slice(1)) assert.ok(r.tools.every(t2 => t2.kind === 'read'));
 });
 

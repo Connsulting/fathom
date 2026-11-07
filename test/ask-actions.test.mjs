@@ -124,11 +124,11 @@ for (const recId of [null, 'new-child']) for (const fail of [false, true]) {
   });
 }
 
-test('registry assigns the action scopes and marks undo tools MCP-only', () => {
+test('registry assigns the action scopes and offers undo to Ask', () => {
   for (const [name, operation, scope] of [['answer', 'fact', 'write:facts'], ['act_on_recommendation', 'step', 'write:steps'], ['update_goal', 'create', 'write:goals'], ['update_goal', 'edit', 'write:goals']]) {
     assert.equal(tools.find(t => t.name === name)?.operations.find(o => o.name === operation)?.scope, scope);
   }
-  assert.equal(tools.find(t => t.name === 'undo')?.mcpOnly, true);
+  assert.ok(!tools.find(t => t.name === 'undo')?.mcpOnly);
 });
 
 test('only typed statements by this actor in this thread are evidence', async () => {
