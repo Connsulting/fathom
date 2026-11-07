@@ -3,8 +3,9 @@
 // browser; on the private demo server (the config's baseURL) it starts only from Settings or the
 // quick switcher. The public demo server runs in-process here, like e2e/public-demo.spec.mjs, and
 // every browser context on it is a fresh sandbox.
-// Tags: @tour-ac1 the walk and a missing anchor, @tour-ac2 layout, dialog semantics, keys and
-// focus at desktop and phone width, @tour-ac3 auto-start once and restart, @tour-ac4 every anchor
+// Tags: @tour-ac1 the walk, a missing anchor (including a missing last stop) and the Ask panel the
+// Ask stop opens and closes, @tour-ac2 layout, dialog semantics, keys and focus at desktop and
+// phone width (including starting over an open dialog and focus back on a redrawn opener), @tour-ac3 auto-start once and restart, @tour-ac4 every anchor
 // renders, @tour-ac5 Skip and Escape end the tour. Every test runs in the desktop project only; the
 // phone blocks set their own viewport.
 // The shared page fixture fails on any console error. One test forces the P&L read to fail and the
@@ -199,6 +200,7 @@ async function walkEveryStop(page, label) {
     expect(cur, `stop ${i + 1}`).toMatchObject({ id: stop.id, k: i + 1, of: N });
     await checkCallout(page, stop, cur);
     await checkStop(page, stop);
+    await checkAskPanel(page, stop.id);
     await page.screenshot({ path: shotPath(label, stop) });
 
     if (i === 1) {
@@ -234,9 +236,17 @@ async function walkEveryStop(page, label) {
     cur = await stopAfter(page, stop.id);
   }
   await expect(anchorOn(page)).toHaveCount(0);
+  await expect(page.locator('#h-askp'), 'the Ask panel the tour opened is closed after Done').toHaveCount(0, { timeout: STEP_WAIT });
   await expect.poll(() => hashRoute(page), { timeout: STEP_WAIT, message: 'Done returns to the start route' }).toBe('settings');
   expect(await tourDone(page)).toBe('1');
   expect(posts, 'no Confirm answer was posted during the walk').toEqual([]);
+}
+
+// The Ask stop shows the Ask side panel; every other stop has it closed again.
+async function checkAskPanel(page, stopId) {
+  const panel = page.locator('#h-askp');
+  if (stopId === 'ask') await expect(panel, 'the Ask stop opens the Ask panel').toBeVisible({ timeout: STEP_WAIT });
+  else await expect(panel, `the Ask panel is closed on ${stopId}`).toHaveCount(0, { timeout: STEP_WAIT });
 }
 
 async function focusReturns(page) {
@@ -293,6 +303,7 @@ test.describe('tour on a public demo', () => {
       expect(cur.k, `count on ${cur.id}`).toBe(visited.length);
       expect(cur.of, 'no stop is missing on a fresh sandbox').toBe(N);
       await checkCallout(page, stop, cur);
+      await checkAskPanel(page, cur.id);
       if (cur.k === cur.of) break;
       await tourBtn(page, 'next').click();
       cur = await stopAfter(page, cur.id);
@@ -381,6 +392,79 @@ test.describe('tour on the private demo, desktop', () => {
       await tourBtn(page, 'done').click();
       await expect(dialog(page)).toHaveCount(0, { timeout: STEP_WAIT });
     });
+  });
+
+  test('@tour-ac1 a last stop whose anchor is missing hands Done back to the stop before it at N-1 of N-1', async ({ page }) => {
+    test.setTimeout(240_000);
+    await page.route('**/api/scenario', async (route) => {
+      const response = await route.fetch();
+      const json = await response.json();
+      json.packs = [];
+      await route.fulfill({ response, json });
+    });
+    const missing = TOUR_STOPS.filter((s) => s.route === 'packs').map((s) => s.id);
+    expect(missing.length, 'the table has a packs stop').toBeGreaterThan(0);
+    const lastIdx = TOUR_STOPS.findIndex((s) => s.route === 'packs') - 1;
+    expect(lastIdx, 'a stop comes before packs').toBeGreaterThanOrEqual(0);
+    const lastStop = TOUR_STOPS[lastIdx];
+    expect(lastStop.id).toBe('add-context');
+    let cur = await startFromSettings(page);
+    const visited = [];
+    for (let guard = 0; guard < N + 2; guard++) {
+      visited.push(cur.id);
+      if (cur.id === lastStop.id) break;
+      await tourBtn(page, 'next').click();
+      cur = await stopAfter(page, cur.id);
+    }
+    expect(cur.id, 'the walk reaches the stop before packs').toBe(lastStop.id);
+    await expect(countEl(page)).toHaveText(`${N - 1} of ${N}`);
+    // Next looks for the packs anchor, finds none, and comes back here as the last stop.
+    await tourBtn(page, 'next').click();
+    await expect(countEl(page)).toHaveText(`${N - 1} of ${N - 1}`, { timeout: STEP_WAIT });
+    await expect(dialog(page)).toHaveAttribute('data-tour-stop', lastStop.id);
+    for (const id of missing) await expect(dialog(page), `${id} never shows`).not.toHaveAttribute('data-tour-stop', id);
+    await expect(tourBtn(page, 'done')).toBeVisible();
+    await expect(tourBtn(page, 'done')).toHaveText('Done');
+    await expect(tourBtn(page, 'next')).toHaveCount(0);
+    await tourBtn(page, 'done').click();
+    await expect(dialog(page)).toHaveCount(0, { timeout: STEP_WAIT });
+  });
+
+  test('@tour-ac2 desktop: a recommendation dialog open over Home gives way to the tour, which starts outside it', async ({ page }) => {
+    await gotoRoute(page, 'home');
+    await homeReady(page);
+    await page.locator('section.h-home a[data-go="rec"]').first().click();
+    await expect(page.locator('.h-dlg-host')).toBeVisible({ timeout: STEP_WAIT });
+    await page.keyboard.press('Control+K');
+    await expect(page.locator('input.h-qs-in')).toBeFocused({ timeout: STEP_WAIT });
+    await page.keyboard.type('take the tour');
+    await expect(page.locator('#h-qs-list li.h-qs-o[data-qs-key="act:tour"]')).toBeVisible();
+    await page.keyboard.press('Enter');
+    const first = await stopAfter(page, null);
+    expect(first, 'the tour opens on the first stop').toMatchObject({ id: TOUR_STOPS[0].id, k: 1, of: N });
+    await expect(page.locator('.h-dlg-host')).toBeHidden({ timeout: STEP_WAIT });
+    await expect(anchorOn(page)).toHaveCount(1);
+    await expect(page.locator('.h-dlg-host [data-tour-on]'), 'the anchor is not inside the dialog host').toHaveCount(0);
+    await expect.poll(() => layoutProblem(page), { timeout: STEP_WAIT, message: 'layout with the dialog closed' }).toBe('');
+    await page.keyboard.press('Escape');
+    await expect(dialog(page)).toHaveCount(0, { timeout: STEP_WAIT });
+    await expect(anchorOn(page)).toHaveCount(0);
+  });
+
+  test('@tour-ac2 desktop: Escape returns focus to the header search button redrawn on another page', async ({ page }) => {
+    await gotoRoute(page, 'money');
+    await expect(page.locator('.h-search-btn')).toBeVisible({ timeout: STEP_WAIT });
+    await page.locator('.h-search-btn').click();
+    await expect(page.locator('input.h-qs-in')).toBeFocused({ timeout: STEP_WAIT });
+    await page.keyboard.type('take the tour');
+    await expect(page.locator('#h-qs-list li.h-qs-o[data-qs-key="act:tour"]')).toBeVisible();
+    await page.keyboard.press('Enter');
+    const first = await stopAfter(page, null);
+    expect(first).toMatchObject({ id: TOUR_STOPS[0].id, k: 1, of: N });
+    await page.keyboard.press('Escape');
+    await expect(dialog(page)).toHaveCount(0, { timeout: STEP_WAIT });
+    await expect.poll(() => hashRoute(page), { timeout: STEP_WAIT }).toBe('money');
+    await expect(page.locator('.h-search-btn')).toBeFocused({ timeout: STEP_WAIT });
   });
 
   test('@tour-ac2 desktop: every stop is laid out clear of its anchor, keyboard driven, with no Confirm answer', async ({ page }) => {
