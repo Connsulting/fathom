@@ -6,6 +6,7 @@ import { buildRealStore } from '../test/helpers/real-store.mjs';
 import { secretEnv, secretsFor } from '../test/helpers/server.mjs';
 import { planRun } from '../test/helpers/plan.mjs';
 import { startServer } from '../src/server.mjs';
+import { dataName } from './data-dir.mjs';
 import { loadConfig } from '../src/config.mjs';
 import { createAuthStore } from '../src/auth/store.mjs';
 
@@ -24,8 +25,9 @@ test.describe('answerable questions on the synthetic planning household', () => 
   test.describe.configure({ mode: 'serial' });
   test.beforeAll(async () => {
     const repo = resolve(import.meta.dirname, '..');
-    dataDir = resolve(repo, process.env.E2E_DATA || '.e2e-data-qrecs');
-    if (dirname(dataDir) !== repo || !/^\.e2e-data-qrecs(?:-|$)/.test(basename(dataDir)) || existsSync(dataDir)) throw new Error('Question fixture needs a fresh owned directory');
+    dataDir = resolve(repo, process.env.E2E_DATA || dataName('qrecs'));
+    const owned = dataName('qrecs');
+    if (dirname(dataDir) !== repo || (basename(dataDir) !== owned && !basename(dataDir).startsWith(`${owned}-`)) || existsSync(dataDir)) throw new Error('Question fixture needs a fresh owned directory');
     mkdirSync(dataDir);
     const db = await buildRealStore(dataDir, { clock, variant: { facts: { 'accounts.va529': undefined } } });
     db.prepare("UPDATE accounts SET display_name = 'College fund' WHERE kind = '529'").run();

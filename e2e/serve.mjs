@@ -13,6 +13,7 @@ import { mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { DATA_ROOT } from './data-dir.mjs';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -36,7 +37,7 @@ if (process.env.E2E_EXTERNAL === '1') {
   dataDir = resolve(repo, raw);
   const rel = relative(repo, dataDir);
   if (!rel || isAbsolute(rel) || rel === '..' || rel.startsWith('..' + sep)) fail(`E2E_DATA must be inside the repository, got ${raw}`);
-  if (rel.includes(sep) || !rel.startsWith('.e2e-data')) fail(`E2E_DATA must be a top-level .e2e-data* directory, got ${raw}`);
+  if (rel.includes(sep) || !rel.startsWith(DATA_ROOT)) fail(`E2E_DATA must be a top-level ${DATA_ROOT}* directory, got ${raw}`);
 }
 
 rmSync(dataDir, { recursive: true, force: true });
