@@ -1484,7 +1484,7 @@ function pSettings() {
   let list = rows.map(([k, l, d]) => row(goA(k, l), d)).join('');
   if (id) list += row('<a href="/account">Account</a>', 'Passkeys and sign out.');
   if (id?.role === 'admin') list += row('<a href="/admin/users">Household</a>', 'People, roles and invitations.');
-  return shell(`<section class="h-settings h-narrow">${pageHead('System', 'Settings')}${whoLine()}<ul class="h-set">${list}</ul></section>`);
+  return shell(`<section class="h-settings h-narrow">${pageHead('System', 'Settings')}${whoLine()}<ul class="h-set">${list}</ul><section class="h-sec" aria-label="Remembered preferences"><h2>Remembered preferences</h2><p class="h-mute">How you want Fathom to answer, and what your household means by a term.</p>${arr(api.s.preferences).map(p => `<form data-preference-form="${esc(p.id)}" class="h-pref-form"><label>Preference<input name="text" aria-label="Household preference" maxlength="300" required value="${esc(p.text)}"></label><button type="submit" class="h-btn">Save</button><button type="button" class="h-btn" data-preference-delete="${esc(p.id)}">Delete</button></form>`).join('')}<form data-preference-form="" class="h-pref-form"><label>Add a preference<input name="text" aria-label="New household preference" maxlength="300" required></label><button type="submit" class="h-btn">Remember</button></form></section></section>`);
 }
 
 /* ---------- advisor ---------- */
@@ -1980,6 +1980,8 @@ function saveAccountRename(id, raw) {
 }
 
 function onClick(e) {
+  const preferenceDelete = e.target.closest('[data-preference-delete]');
+  if (preferenceDelete) { e.preventDefault(); api.preferenceDelete(preferenceDelete.dataset.preferenceDelete); return; }
   const ren = e.target.closest?.('[data-acc-rename]');
   if (ren && root.contains(ren)) {
     e.preventDefault();
@@ -2122,6 +2124,8 @@ function startOver(recId) {
 }
 
 function onSubmit(e) {
+  const preference = e.target.closest('[data-preference-form]');
+  if (preference) { e.preventDefault(); api.preferenceSave(preference.dataset.preferenceForm, new FormData(preference).get('text')); return; }
   if (recAnswers.onSubmit(e)) return;
   if (SCREENS.some((s) => s.onSubmit?.(e))) return;
   const f = e.target;

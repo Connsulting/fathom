@@ -144,17 +144,12 @@ test.describe('goals', TAGS, () => {
     await expect(page.locator('input[data-curve="tax_cash"]')).toHaveValue('15');
   });
 
-  test('"add a goal" in Ask shows a save card that adds the goal', async ({ page }, info) => {
+  test('@mobile @ax-ac1 add a goal in Ask saves it with a receipt', async ({ page }) => {
     await gotoRoute(page, 'ask');
     await askOnAsk(page, 'Add a goal: sabbatical fund of $30k, next few years');
-    const card = page.locator('.h-goal-proposal');
-    await expect(card).toContainText('sabbatical fund of $30k, next few years');
-    await expect(card).toContainText('Next few years');
-    await page.screenshot({ path: info.outputPath('ask-goal-card.png'), fullPage: true });
-    const post = saved(page, '/api/goals');
-    await card.getByRole('button', { name: 'Save' }).click();
-    await post;
-    await expect(card.locator('.h-proposal-done')).toHaveText('Saved');
+    const receipt = page.locator('.h-action-receipt');
+    await expect(receipt).toContainText('sabbatical fund of $30k');
+    await expect(receipt.getByRole('button', { name: 'Undo' })).toBeVisible();
     await gotoGoals(page);
     await expect(goalCard(page, 'sabbatical fund')).toHaveCount(1);
   });

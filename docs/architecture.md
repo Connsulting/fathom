@@ -257,7 +257,7 @@ constraint on `accounts.mask` enforces exactly four digits or NULL).
 Shared by the chat engine and the MCP server. `src/tools/index.mjs` exports `tools`, a registry
 of `{name, description, inputSchema (JSON Schema), scope: 'read'|'write:recs', handler(args, ctx)}`
 with `ctx = {db, now}`, plus `getTool(name)`, `callTool(name, args, ctx)` (validates args against
-`inputSchema`) and `ToolError` with `code` `'bad_input'` or `'not_found'`. The only write scope,
+`inputSchema`) and `ToolError` with `code` `'bad_input'` or `'not_found'`. The recommendation write scope,
 `write:recs`, covers recommendation status (`set_recommendation_status`) and action owner
 (`set_recommendation_owner`).
 
@@ -276,7 +276,7 @@ with `ctx = {db, now}`, plus `getTool(name)`, `callTool(name, args, ctx)` (valid
 | `get_figures` | read | `keys?: string[]` | `[{key, v, kind, label, source: {id, label, asOf}}]` |
 | `packs_status` | read | none | `[{id, name, status, why}]` |
 | `advisor_status` | read | none | `{advisor, nextCheckin: {date, time, lengthMin, label} or null, waiting: [{recId, title, sentOn}], reviewed: [{recId, title, sentOn, verdict, note, reviewedOn, recordedOn}], history (closed reviews with closedOn, closedReason), packets: [{id, date, recIds}]}` (see "Advisor workflow") |
-| `set_recommendation_status` | write:recs | `id, status: doing, done, dismissed, snoozed or proposed, wake?` | the linked rec; writes `rec_events` with actor `tool` |
+| `set_recommendation_status` | write:recs | `id, status: doing, done, dismissed, snoozed or proposed, wake?` | the linked rec; writes `rec_events` attributed to the signed-in person or key creator |
 | `set_recommendation_owner` | write:recs | `id, owner: you, spouse, both, advisor or automatic` | the linked rec; sets `owner` and `owner_override = 1`, writes `rec_events` action `set_owner`, actor `tool`, from and to the current status |
 | `list_packs` | read | none | `[{id, name, status, why, version, taxYear, reviewed, covers, entries: [{file, title}]}]` sorted by id |
 | `get_pack_entry` | read | `packId, file` (the manifest file or the entry id) | `{packId, packName, file, id, title, markdown, citations: [{label, url}], version, taxYear, reviewed}`; any loaded pack, active or not |
@@ -298,6 +298,12 @@ query; an entry matches when every term appears in its title or body; score is 5
 occurrence plus 1 per body occurrence; order is score descending, then pack id, then entry id.
 
 Tool outputs resolve scenario tokens to plain text and expose masks only.
+
+The planned deterministic tool layer is specified in [ask-tools.md](ask-tools.md): the figure
+envelope and references, `calculate`, the spending, cash flow, net worth, tax, room, obligation and
+access tools, the write tools that give the agent parity with every mutating route, the model's
+routing rules, and the ordered tickets that build them. Until a ticket there merges, this table is
+the tool interface.
 
 `src/engine/tools.mjs` `createRegistryServer` consumes this registry. Input schemas must compile
 under strict Ajv, so no union types (`type` arrays); use `anyOf`. `ctx.now` may be a Date, an ISO
@@ -656,7 +662,7 @@ context lookup: a rec id resolves to that rec, an Ask thread to the rec its `rec
 `live.threads`, anything else (no rec, a rec no longer in the scenario, `pack:<id>`) to null. The
 answerer, `findQuestion`, `matchQuestion` and the fake answer source read it, so a rec thread gets
 the rec as conversation context (`get_recommendation`), the rec in its refs, the rec's own `qa`
-questions and a proposal scope of that rec only, and no `propose_goal`. A hidden rec still
+questions and the same scoped action tools as other Ask threads. A hidden rec still
 resolves. `POST /api/ask` refuses a key that is neither an Ask thread nor `pack:<id>` (400). Start
 over (`POST /api/recs/:id/start-over`) sets `recDetachedAt` on every attached thread of the rec;
 the thread keeps its messages, title, `recId` and list place in Ask.
@@ -1496,24 +1502,14 @@ process, so accounting poison lasts for the process, and awaits `init()` once at
    `PRODUCT_RULES` states: advisory only, no tax filing, no money movement or account changes, no
    securities selection, no number not taken from a tool result or the provided data, stored
    figures as `{f:key}` tokens from `get_figures`, cite pack entries by title, plain text paragraphs,
-   and never changing a recommendation itself: on the owner's explicit request it calls
-   `propose_recommendation_action` so the owner can confirm.
+   and explicit in-product actions through the scoped write tools described below.
    A What if question is the pack prompt: a manifest-backed prompt is sent as the raw literal text
    (no token resolution), an illustrative demo prompt with its tokens resolved to plain text. The
    history filter drops an earlier copy of the prompt in its stored form.
-3. Tools: every read tool of the registry, never `set_recommendation_status` (the registry keeps it
-   for other surfaces; chat never writes). In Ask threads the answerer adds one
-   local, non-writing tool, `propose_recommendation_action` (scope `read`, input `{id, action:
-   start|complete|dismiss|snooze|reopen, wake?: string up to 200}`, no other keys). Its
-   handler checks that the rec exists and is not hidden and that the action is in `ACTION_STATUS`,
-   returns only `{proposed: true}` and never touches the store. It is never offered in `pack:<id>`
-   conversations or a What if. The last successful call becomes `provenance.proposal` `{recId,
-   action, wake?}` (one per answer); in a thread asked from a rec a proposal for any other rec is ignored.
-   The UI shows a confirm card in that Fathom message ("Proposed: <action label> <rec title>", the
-   label from a fixed map, the wake label escaped) with a Confirm button
-   (`button.h-propose[data-propose-rec][data-propose-action]`) that calls the ordinary rec action
-   (`api.act`, `POST /api/recs/:id/action`). The card reads Done, with no button, once the rec's
-   status equals `ACTION_STATUS[action]`.
+3. Tools: every read tool plus the scoped action tools in an authenticated Ask thread, including
+   threads asked from a recommendation. Pack conversations and What if remain read-only.
+   Historical proposal messages retain their confirm-card renderer; new requests act directly
+   and show receipts with Undo.
 4. Grounding (`groundAnswer`): every `{f|fk|l|p|n:key}` token is validated against `fig`, `law`,
    `pct` and `names` (key characters `[A-Za-z0-9_.-]`), recorded once as a violation when invalid,
    and masked; then `checkGrounding` checks the remaining numbers and number words against tool
@@ -1613,8 +1609,7 @@ process, so accounting poison lasts for the process, and awaits `init()` once at
    invented amount is marked unverified after the retry. In Ask threads, free text
    that is an explicit command (`^(please\s+)?(start|complete|dismiss|snooze|reopen)\b`)
    naming a rec (a rec thread's own rec, else a visible rec's id or exact title)
-   adds a `propose_recommendation_action` call to the tool round, and the text round says the owner
-   can confirm it below. Negations and questions ("Do not mark anything done", "Should I dismiss
+   adds a `set_recommendation_status` call to the tool round, and the result carries a receipt with Undo. Negations and questions ("Do not mark anything done", "Should I dismiss
    this?") never match.
 
 ### Answer provenance
@@ -1622,7 +1617,7 @@ process, so accounting poison lasts for the process, and awaits `init()` once at
 Stored in `messages.provenance` and returned on the message: `{engine: mode, model, tools: [{name,
 args}], figures: [figure keys], packIds: [active manifest ids in the prompt], packEntries: [entry
 titles named in the answer], literals: [{text, source}], grounding: {ok, retried, unverified:
-[texts]}, costUsd, proposal?: {recId, action, wake?}}`. No prompt text is ever stored.
+[texts]}, costUsd, actionTurn?}`. Typed owner messages carry `ownerInput` with actor id for action evidence from the escaped message text; generated questions do not.
 
 ## Live pack state
 
@@ -2464,9 +2459,9 @@ sources and the rec's `goalKinds` (see "Rec owner and goal links"); the scenario
 and the rec shows "Serves: <goal>". The planner ranks recs that tie on window close by whether they serve a
 goal, then by the owner's curve lean. `household_summary` and `list_goals` give the model the open
 goals (title, horizon, typed target with source `you`, tracked current value) and each curve's lean.
-In an Ask thread with no rec context the answerer also offers `propose_goal`; its last successful call becomes
-`provenance.goalProposal`, a target survives only when the owner's own message states it, and the
-chat card saves it through `POST /api/goals` when the owner taps Save. Chat never writes.
+Ask threads offer `create_goal` and `edit_goal`, sharing the screen's goal writer and validation.
+Targets and dates require the person's words or stored data. Every change carries a receipt and Undo.
+
 
 ## Suggested targets
 
@@ -2708,6 +2703,41 @@ Changes run focused tests locally; CI runs the full unit and Playwright suites a
 and `FATHOM_CLAUDE_CREDENTIAL_FILE` is set. `scripts/e2e-all.sh` runs the full Playwright suite and
 then smoke against a server. `scripts/docker-smoke.sh` builds the image and smokes a container.
 
+## Ask actions
+
+Ask threads, including recommendation conversations, can act on explicit requests. `ASK_ACTION_RULES`
+is a separate prompt section. Ambiguous requests need clarification. Advisor sends and email remain
+product buttons; there are no outbound action tools.
+
+| Tool | Scope | Shared write path |
+| --- | --- | --- |
+| `record_household_fact` | `write:facts` | `answerFacts`, typed answer shapes and replanning |
+| `set_recommendation_step` | `write:steps` | `writeRec`, also used by dialog checkboxes |
+| `set_recommendation_status`, `set_recommendation_owner` | `write:recs` | shared recommendation writers |
+| `create_goal`, `edit_goal` | `write:goals` | `createGoal` / `updateGoal`, also used by the goals API |
+| `remember_preference` | `write:preferences` | `writePreference`, also used by Settings |
+
+Fact values, goal targets and dates require typed owner evidence in the same conversation, with
+matching actor id, or stored data. Unknown fact keys are refused. Generated starters, question chips,
+assistant messages, imported prose and account masks cannot supply evidence. Facts record
+"you told Fathom in Ask on <date>" with the signed-in actor id. MCP provenance says "through MCP".
+MCP new fact values require existing typed Fathom conversation evidence or stored data; an invented
+caller quote is insufficient. Read-only keys receive `Permission denied:` before argument validation.
+New scopes appear in key creation with plain descriptions. Ownerless keys use a stable key actor.
+
+Migration 025 adds durable `action_receipts` and `preferences`. Each receipt commits in the same
+transaction as its write and records actor, conversation, changed fields and prior values. Receipts
+hydrate beside the answer's work block, including notice or missing replies, and keep their conversation
+reachable. Undo restores the prior value and provenance, refuses another actor or a later conflicting
+edit, and replans facts. MCP-only undo tools use the matching scope. Ask gets the Undo button through
+`POST /api/actions/:id/undo`. A busy planner preserves the fact and receipt, reports planning pending,
+and queues planning again. Ask queues replanning until the paid model round releases its engine lock, then drains that work before continuing; planner prose may safely call the same engine. Demo baby dates use the same deterministic new-child window calculation.
+
+`remember_preference` stores a short verbatim preference or definition. Settings shows it and allows
+editing or deletion through the same validation. Preferences enter the dynamic Ask prompt as household
+data; they never override product boundaries, evidence requirements or permissions.
+
+
 ## Transaction categories
 
 `src/categories/resolve.mjs` exports `resolveCategories({transactions, accounts, corrections, merchantRules, sourceRules, guesses, transferSourceIds})`, returning a map by stable transaction id with category, coarse bucket, first answering layer and evidence. The order is personal corrections and explicit rules, imported category, structural transfer, merchant memory, stored model guess, then Uncategorized. Merchant rules precede source-name rules; a transaction correction precedes both. Guesses never teach merchant memory. Personal spending outflows in the calculator window get first claim on opposite-amount transfer matches; business draws into personal accounts remain income.
@@ -2721,3 +2751,9 @@ Check these reuses Confirm cards and undo. Uncategorized and guessed transaction
 `node scripts/category-coverage.mjs <store-directory-or-file>` opens an existing instance through `openServedStore`, including its platform readiness gate and migrations, and prints counts only: rows per layer and bucket, Uncategorized rows and current queue size. It never prints transaction, account or merchant values.
 
 Category persistence uses `transaction_category_corrections` for personal transaction answers, `category_merchant_rules` for explicit merchant choices, `category_source_rules` for source-name bucket mappings, `transaction_category_guesses` for model attempts and `transaction_category_imports` for export enrichment evidence. These are additive tables; migration 023 does not rewrite transaction rows or existing undo logs.
+
+| Preference API | Input | Result |
+| --- | --- | --- |
+| `POST /api/preferences` | `{text}` | save a preference and return the scenario |
+| `POST /api/preferences/:id` | `{text}` | edit a preference and return the scenario |
+| `POST /api/preferences/:id/delete` | `{}` | delete a preference and return the scenario |
