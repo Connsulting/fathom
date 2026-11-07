@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { loadCases, validateCases, expectedFigures } from '../evals/cases.mjs';
+import { loadCases, validateCases, expectedFigures, applyAvailability } from '../evals/cases.mjs';
 import { gradeRequiredTools, gradeFigures, gradeLength, gradeExpected } from '../evals/graders.mjs';
 import { createEvalStore } from '../evals/harness.mjs';
 import { groundAnswer } from '../src/api/answerer.mjs';
@@ -20,7 +20,7 @@ test('catalog validates at least thirty cases and all question families', async 
   }
   for (const c of cases) for (const turn of c.turns) {
     assert.ok(turn.rubric && turn.maxWords > 0);
-    assert.deepEqual(turn.forbidden, ['unsourced-figure', 'self-computed-figure']);
+    assert.deepEqual(turn.forbidden.filter(x => x !== 'owner-assumption-not-in-messages'), ['unsourced-figure', 'self-computed-figure']);
     assert.ok(turn.required.every(r => r.name && Array.isArray(r.predicates)));
     assert.ok(turn.expected.every(e => !Object.hasOwn(e, 'value')));
   }
@@ -136,6 +136,20 @@ test('percent fractions compare at relative tolerance while money permits rounde
   assert.equal(gradeFigures('0.045', [result(0.04)]).ok, false);
 });
 
+test('a case is required only when its tool and capability are both present', () => {
+  const turn = { question: 'What is elective spending?', required: [{ name: 'aggregate_transactions', predicates: [] }],
+    forbidden: ['unsourced-figure', 'self-computed-figure', 'owner-assumption-not-in-messages'], expected: [], maxWords: 40, rubric: 'Use the tool.' };
+  const c = { id: 'q09-elective-definition', family: 'spending', requires: { tools: ['aggregate_transactions'], capabilities: ['definitions'] }, turns: [turn] };
+  const absent = applyAvailability(c, { hasTool: () => false, capabilities: [] });
+  assert.ok(absent.expectedFail.missingTools.includes('aggregate_transactions'));
+  assert.deepEqual(absent.expectedFail.missingCapabilities, ['definitions']);
+  const toolOnly = applyAvailability(c, { hasTool: name => name === 'aggregate_transactions', capabilities: [] });
+  assert.deepEqual(toolOnly.expectedFail.missingTools, []);
+  assert.deepEqual(toolOnly.expectedFail.missingCapabilities, ['definitions']);
+  const ready = applyAvailability(c, { hasTool: name => name === 'aggregate_transactions', capabilities: ['definitions'] });
+  assert.equal(ready.expectedFail, undefined);
+});
+
 test('annual expectations use complete covered months rather than a partial last month', async () => {
   const store = await createEvalStore();
   try {
@@ -143,7 +157,7 @@ test('annual expectations use complete covered months rather than a partial last
     meta.dataThrough = 'Mar 10, 2026';
     store.db.prepare("UPDATE content SET value=? WHERE key='meta'").run(JSON.stringify(meta));
     const covered = store.db.prepare(`SELECT sum(-t.amount) AS v FROM transactions t JOIN accounts a ON a.id=t.account_id
-      WHERE a.kind='checking' AND t.date<'2026-03-01' AND t.amount<0
+      WHERE a.kind IN ('checking','credit','card') AND t.date<'2026-03-01' AND t.amount<0
       AND t.category NOT IN ('transfer','income','income_tax') AND lower(t.description) NOT LIKE '%mortgage%'
       AND lower(t.description) NOT LIKE '%income tax%'`).get().v;
     assert.equal(expectedFigures(store.db, [{ kind: 'annual-spending' }])[0], Math.round(covered * 6 * 100) / 100);
