@@ -352,6 +352,8 @@ export function enteredFields(draft, split, asOfDefault) {
     if (v == null) return BAD;
     people.push({ person, amount: v });
   }
+  // Both shapes filled means the person changed one of them; saving either would drop the other.
+  if (people.length && !blankStr(d.enteredTotal)) return { err: 'Give either a total or an amount per person, not both.' };
   if (people.length) return { entered: { asOf, people } };
   if (!blankStr(d.enteredTotal)) {
     const v = amount('enteredTotal');
