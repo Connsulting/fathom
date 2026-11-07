@@ -81,7 +81,7 @@ export function render() {
     ${packetBox}
     <div class="h-cols"><div class="h-col-main">${section('Documents', docsHtml || '<p class="h-mute">Nothing is expected from the facts and accounts stored so far.</p>')}
     ${unHtml ? section('Received, not on the list', unHtml, 'Goes in the packet too') : ''}</div>
-    <div class="h-col-side">${section('Decisions', decHtml)}${history ? section('Packets assembled', history) : ''}</div></div>`, 'yearend');
+    <div class="h-col-side">${section('Decisions', decHtml)}${history ? section('Packets assembled', history) : ''}</div></div>`);
 }
 
 export function onClick(e) {

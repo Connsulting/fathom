@@ -13,11 +13,11 @@ let H = null;
 
 export function bind(kit) { H = kit; }
 
-// G sequences: letter, route, label. design.js reads these for its nav link hints.
+// G sequences: letter, route, label. design.js reads these for its tab and gear hints.
 export const GO = [
   ['h', 'home', 'Home'], ['p', 'plan', 'Plan'], ['d', 'wargame', 'Decide'], ['a', 'ask', 'Ask'],
   ['c', 'confirm', 'Confirm'], ['k', 'packs', 'Packs'], ['f', 'add', 'Files'], ['e', 'engine', 'Engine'],
-  ['m', 'email', 'Email'], ['n', 'connect', 'Connect']
+  ['m', 'email', 'Email'], ['n', 'connect', 'Connect'], ['o', 'money', 'Money'], ['s', 'settings', 'Settings']
 ];
 const GO_MORE = [['goals', 'Goals'], ['accounts', 'Accounts'], ['advisor', 'Advisor'], ['yearend', 'Year end']];
 
@@ -79,13 +79,11 @@ function writeRecent(key) {
 /* ---------- item sources ---------- */
 
 function go(route, params) {
-  H.setMore(false);
   H.api.go(route, params || {});
 }
 
 // No match: the text becomes the first question of a new conversation, sent at once.
 function askWith(text) {
-  H.setMore(false);
   askNew(text);
 }
 
@@ -105,10 +103,10 @@ function goSource() {
 function actionSource() {
   return [
     { key: 'act:shortcuts', title: 'Show keyboard shortcuts', group: 'Actions', sub: 'Action', hint: '?', run: () => openSheet() },
-    { key: 'act:ask', title: 'Ask a question', group: 'Actions', sub: 'Action', hint: '', run: () => { H.setMore(false); newConversation(); } },
+    { key: 'act:ask', title: 'Ask a question', group: 'Actions', sub: 'Action', hint: '', run: () => newConversation() },
     { key: 'act:add', title: 'Add files', group: 'Actions', sub: 'Action', hint: '', run: () => go('add') },
     { key: 'act:connect-accounts', title: 'Connect accounts', group: 'Actions', sub: 'SimpleFIN, read-only', hint: '', run: () => go('accounts') },
-    { key: 'act:goal', title: 'New goal', group: 'Actions', sub: 'Action', hint: '', run: () => { H.setMore(false); H.newGoal(); } },
+    { key: 'act:goal', title: 'New goal', group: 'Actions', sub: 'Action', hint: '', run: () => H.newGoal() },
     ...pendingChecks()
   ];
 }
@@ -286,7 +284,6 @@ export function open() {
   if (!H || !S.qs || isOpen() || !notOnboarding()) return;
   let ret = document.activeElement;
   if (S.ks && shown(S.ks)) ret = closeSheet(false);
-  H.setMore(false);
   S.ret = ret;
   S.items = buildItems();
   lockInert();
@@ -379,7 +376,6 @@ export function openSheet() {
   if (!H || !S.ks || shown(S.ks) || !notOnboarding()) return;
   let ret = document.activeElement;
   if (isOpen()) ret = close(false);
-  H.setMore(false);
   S.ksRet = ret;
   S.ks.querySelector('.h-ks-body').innerHTML = sheetHtml();
   lockInert();
@@ -535,7 +531,6 @@ const SCREEN_TABLES = {
 };
 
 function onEscape() {
-  if (H.ui.more) { H.setMore(false); H.root.querySelector('.h-more-btn')?.focus(); return; }
   if (H.api.route?.name === 'rec') { H.closeRec(); return; }
   if (ringIdx() >= 0) clearRing();
 }

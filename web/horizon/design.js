@@ -34,14 +34,21 @@ const VALUE = { tax: 'Tax', timing: 'Timing', retire: 'Retirement', risk: 'Risk'
 const TRIGGER = { calendar: 'Calendar', income: 'Income change', life: 'Life event', goal: 'Goal', advisor: 'Advisor' };
 const KIND = { business: 'Business', checking: 'Cash', cash: 'Cash', taxable: 'Investing', retirement: 'Retirement', roth: 'Retirement', hsa: 'Health', '529': 'Education' };
 
-const NAV = [['home', 'Home'], ['confirm', 'Confirm'], ['plan', 'Plan'], ['wargame', 'Decide'], ['ask', 'Ask'], ['packs', 'Packs']];
-const MORE = [
-  ['Household', [['goals', 'Goals'], ['accounts', 'Accounts'], ['add', 'Files'], ['advisor', 'Advisor'], ['yearend', 'Year end']]],
-  ['System', [['connect', 'Connect'], ['engine', 'Engine'], ['email', 'Email']]]
-];
-// Phone width: these NAV entries move to the bottom tab bar, in NAV order, with these icons. NAV
-// entries not listed here go to the More menu instead.
-const TAB_ICON = { home: 'year', plan: 'cal', wargame: 'fork', ask: 'chat', confirm: 'check' };
+// Four tabs, in order: route, label, phone bar icon. Every route belongs to one tab or to the gear
+// (settings); the active one comes from the current route, never from the screen.
+const TABS = [['home', 'Home', 'year'], ['plan', 'Plan', 'cal'], ['ask', 'Ask', 'chat'], ['money', 'Money', 'money']];
+// The views inside a tab, shown as a sub-nav on each of them. Home and the gear have none.
+const SUBNAV = {
+  plan: [['plan', 'Plan'], ['yearend', 'Year end'], ['advisor', 'Advisor']],
+  ask: [['ask', 'Conversations'], ['wargame', 'What-if'], ['packs', 'Packs']],
+  money: [['money', 'Overview'], ['accounts', 'Accounts'], ['add', 'Files']]
+};
+// Routes with no sub-nav are listed by hand; every sub-nav view maps to its tab.
+const TAB_OF = {
+  home: 'home', pace: 'home', brief: 'home', goals: 'home', confirm: 'home',
+  settings: 'settings', connect: 'settings', engine: 'settings', email: 'settings', onboarding: 'settings',
+  ...Object.fromEntries(Object.entries(SUBNAV).flatMap(([tab, views]) => views.map(([k]) => [k, tab])))
+};
 
 let api = null;
 let root = null;
@@ -62,7 +69,7 @@ const freshUi = () => ({
   curve: {}, prio: {}, modal: null, goalForm: null, goalDel: null,
   pick: { salary: null, deferral: null }, build: 0,
   buildTimer: 0, draft: {}, recReset: {}, dumped: null, noteBusy: false, understood: null,
-  more: false, under: null, inApp: false, closing: false, ret: null, y: 0, msgN: {}, det: {}, owner: 'both'
+  under: null, inApp: false, closing: false, ret: null, y: 0, msgN: {}, det: {}, owner: 'both'
 });
 
 /* ---------- small helpers ---------- */
@@ -163,7 +170,9 @@ function icon(name) {
     fork: '<circle cx="5" cy="3.5" r="1.5"/><circle cx="11" cy="3.5" r="1.5"/><circle cx="5" cy="12.5" r="1.5"/><path d="M5 5v6M11 5c0 3.5-6 2.5-6 6"/>',
     stack: '<path d="M8 2.5l5.5 3-5.5 3-5.5-3z"/><path d="M2.5 8.5l5.5 3 5.5-3"/>',
     year: '<path d="M3.5 10.5a4.5 4.5 0 019 0"/><path d="M1.5 10.5h13M4.5 13h7"/>',
-    chat: '<path d="M2.5 3.5h11v7.5H7l-3 2.5V11H2.5z"/>'
+    chat: '<path d="M2.5 3.5h11v7.5H7l-3 2.5V11H2.5z"/>',
+    gear: '<circle cx="8" cy="8" r="3.5"/><circle cx="8" cy="8" r="1.25"/><path d="M8 1.75v1.5M8 12.75v1.5M1.75 8h1.5M12.75 8h1.5M3.6 3.6l1.05 1.05M11.35 11.35l1.05 1.05M3.6 12.4l1.05-1.05M11.35 4.65l1.05-1.05"/>',
+    money: '<rect x="1.75" y="4" width="12.5" height="8" rx="1.5"/><circle cx="8" cy="8" r="1.75"/><path d="M4.25 8h.01M11.75 8h.01"/>'
   }[name] || '';
   return `<svg class="h-i" viewBox="0 0 16 16" aria-hidden="true">${p}</svg>`;
 }
@@ -382,43 +391,51 @@ function whoLine() {
   return `<div class="h-who">Signed in as ${esc(who)}${role ? `<span>${role}</span>` : ''}</div>`;
 }
 
-// Real accounts only (a demo has no identity): Account for everyone signed in, Household for
-// admins. Plain links: they leave the hash router for the server's account pages. Not an
-// .h-more-g, so the screen groups below keep their order and count.
-function accountLinks() {
-  const id = api.identity?.();
-  if (!id) return '';
-  const admin = id.role === 'admin' ? '<a href="/admin/users" title="People, roles and invitations">Household</a>' : '';
-  return `<div class="h-more-acct" style="margin-bottom:6px;padding-bottom:6px;border-bottom:1px solid var(--line2)"><a href="/account" title="Passkeys and sign out">Account</a>${admin}</div>`;
+// The route the tabs read: the page under the rec dialog when one is open.
+function navRoute() {
+  const r = routeNow();
+  return r.name === 'rec' ? underRoute() : r;
+}
+const tabOf = (name) => TAB_OF[name] || 'home';
+const onAttr = (on) => (on ? ' class="on" aria-current="page"' : '');
+
+// Desktop header tabs, with the G hint in the title. Hidden at phone width by CSS.
+function tabLinks(tab) {
+  return TABS.map(([k, l]) => {
+    const hint = switcher.goHint(k);
+    return `<a href="${href(k)}" data-go="${k}"${onAttr(tab === k)}${hint ? ` title="${esc(`${l} (${hint})`)}"` : ''}>${l}</a>`;
+  }).join('');
 }
 
-// Phone-width bottom tab bar: the NAV entries in TAB_ICON, hidden above 720px by CSS.
-function tabBar(active) {
-  const tabs = NAV.filter(([k]) => TAB_ICON[k]).map(([k, l]) =>
-    `<a href="${href(k)}" data-go="${k}" class="${active === k ? 'on' : ''}"${active === k ? ' aria-current="page"' : ''}>${icon(TAB_ICON[k])}<span>${l}</span></a>`).join('');
+// Phone-width bottom tab bar: the same four tabs with icons, hidden above 720px by CSS.
+function tabBar(tab) {
+  const tabs = TABS.map(([k, l, ic]) => `<a href="${href(k)}" data-go="${k}"${onAttr(tab === k)}>${icon(ic)}<span>${l}</span></a>`).join('');
   return `<nav class="h-tabs" aria-label="Tabs">${tabs}</nav>`;
 }
 
-function shell(inner, active) {
-  const link = (k, l) => {
-    const hint = switcher.goHint(k);
-    return `<a href="${href(k)}" data-go="${k}" class="${active === k ? 'on' : ''}"${active === k ? ' aria-current="page"' : ''}${hint ? ` title="${esc(`${l} (${hint})`)}"` : ''}>${l}</a>`;
-  };
-  const nav = NAV.map(([k, l]) => link(k, l)).join('');
-  const rest = NAV.filter(([k]) => !TAB_ICON[k]);
-  const moreOn = MORE.some((g) => g[1].some((i) => i[0] === active)) || rest.some(([k]) => k === active);
-  const screens = rest.length ? `<div class="h-more-g h-more-phone"><div class="h-more-h">Screens</div>${rest.map(([k, l]) => link(k, l)).join('')}</div>` : '';
-  // A real store reaches onboarding again as Setup, to add more context.
-  const setup = api.s?.live?.mode === 'real' ? [['onboarding', 'Setup']] : [];
-  const groups = screens + MORE.map(([title, items]) => `<div class="h-more-g"><div class="h-more-h">${title}</div>${(title === 'System' ? [...items, ...setup] : items).map(([k, l]) => link(k, l)).join('')}</div>`).join('');
-  const more = `<div class="h-more-wrap"><button type="button" class="h-more-btn${moreOn ? ' on' : ''}" data-more="toggle" aria-expanded="${ui.more}" aria-controls="h-more-p">More${icon('chev')}</button>
-    <div class="h-more-p" id="h-more-p" aria-label="More"${ui.more ? '' : ' hidden'}>${whoLine()}${accountLinks()}${groups}</div></div>`;
+function gearLink(tab) {
+  const on = tab === 'settings';
+  const hint = switcher.goHint('settings');
+  return `<a class="h-gear${on ? ' on' : ''}" href="${href('settings')}" data-go="settings" aria-label="Settings"${on ? ' aria-current="page"' : ''}${hint ? ` title="${esc(`Settings (${hint})`)}"` : ''}>${icon('gear')}</a>`;
+}
+
+// The views of the current tab, at the top of the page. A pack or a named what-if lights its list.
+function subNav(tab, route) {
+  const views = SUBNAV[tab];
+  if (!views) return '';
+  const label = TABS.find(([k]) => k === tab)[1];
+  return `<nav class="h-subnav" aria-label="${label} views">${views.map(([k, l]) => `<a href="${href(k)}" data-go="${k}"${onAttr(route === k)}>${l}</a>`).join('')}</nav>`;
+}
+
+function shell(inner) {
+  const r = navRoute();
+  const tab = tabOf(r.name);
   const off = api.engineOn() ? '' : `<div class="h-engine-off">${icon('clock')}Engine off. Proactive jobs are paused. ${goA('engine', 'Engine settings')}</div>`;
   return `<header class="h-top"><div class="h-top-in">
     <a class="h-mark" href="${href('home')}" data-go="home" aria-label="${esc(api.s.meta.product || 'Fathom')}">${MARK}<span>${esc(api.s.meta.product || 'Fathom')}</span></a>
-    <div class="h-navbar"><nav class="h-nav" aria-label="Main">${nav}</nav><span class="h-nav-sep"></span>${more}</div>
-    <button type="button" class="h-search-btn" data-keys="switcher" aria-label="Search" title="Search (Ctrl+K)">${icon('search')}</button>
-  </div></header>${off}<main class="h-main">${inner}</main>${tabBar(active)}`;
+    <div class="h-navbar"><nav class="h-nav" aria-label="Main">${tabLinks(tab)}</nav></div>
+    <div class="h-top-act"><button type="button" class="h-search-btn" data-keys="switcher" aria-label="Search" title="Search (Ctrl+K)">${icon('search')}</button>${gearLink(tab)}</div>
+  </div></header>${off}<main class="h-main">${subNav(tab, r.name)}${inner}</main>${tabBar(tab)}`;
 }
 
 function section(title, body, aside = '', cls = '') {
@@ -504,8 +521,10 @@ function ownerFilterHtml(m) {
   return `<div class="h-ownerf" role="group" aria-label="Whose actions">${b('both', 'Both')}${b('me', 'Me')}${b('spouse', 'Spouse')}</div>`;
 }
 
+const healthLinks = (h) => `${h.pending > 0 ? goA('confirm', 'Confirm') : ''}${goA('add', 'Files')}${goA('accounts', 'Accounts')}`;
+
 function dhealthHtml(h) {
-  const links = `${h.pending > 0 ? goA('confirm', 'Confirm') : ''}${goA('add', 'Files')}${goA('accounts', 'Accounts')}`;
+  const links = healthLinks(h);
   return `<div class="h-dhealth${h.stale ? ' stale' : ''}"><i class="h-dh-dot" aria-hidden="true"></i><span class="h-dhealth-t">${esc(h.parts.join(', '))}</span><span class="h-dhealth-a">${links}</span></div>`;
 }
 
@@ -562,7 +581,7 @@ function pHome() {
   const inner = isPhone()
     ? `${ownerFilterHtml(m)}${head}${nextHtml(m, subject)}${afterHtml(m)}${health}${rest}`
     : `<header class="h-home-top">${head}${ownerFilterHtml(m)}</header>${health}${rest}`;
-  return shell(`<section class="h-home">${inner}</section>`, 'home');
+  return shell(`<section class="h-home">${inner}</section>`);
 }
 
 /* ---------- pace board ---------- */
@@ -661,7 +680,7 @@ function pPace() {
     <div class="h-pace-head"><span class="h-hchip ${hc.tone}">${esc(hc.label)}</span><h1>${esc(pace?.rollup?.headline || 'No goals with targets')}</h1><p class="h-pace-why">${esc(paceReason(pace))}</p></div>
     ${section(charts.length && charts[0].id === 'householdSavings' ? 'Household savings' : 'By goal', body, charts.length ? 'Solid is observed, dashed is projected' : '')}
     ${section('This year', `<div class="h-meters">${METERS.map(meterHtml).join('')}</div>`)}
-    <p class="h-pace-fresh">${icon('clock')}<span>${esc(h.dataLabel)}.${projected ? ' Later months are projected.' : ''} ${goA('add', 'Files')} ${goA('accounts', 'Accounts')}</span></p></section>`, 'home');
+    <p class="h-pace-fresh">${icon('clock')}<span>${esc(h.dataLabel)}.${projected ? ' Later months are projected.' : ''} ${goA('add', 'Files')} ${goA('accounts', 'Accounts')}</span></p></section>`);
 }
 
 /* ---------- plan ---------- */
@@ -718,7 +737,7 @@ function pPlan() {
         <div class="h-mailnote">${icon('doc')}<div>This brief also went out as your monthly email. ${goA('email', 'Read the email')}</div></div></div>
     </div>`;
   return shell(`${pageHead('Plan', 'Everything on the calendar', 'Each item sits at the date its window closes. Decide, do it, or set it aside.')}${stats}
-    ${section('Timeline', timeline('plan'))}${body || '<p class="h-mute">No recommendations yet.</p>'}${more}`, 'plan');
+    ${section('Timeline', timeline('plan'))}${body || '<p class="h-mute">No recommendations yet.</p>'}${more}`);
 }
 
 /* ---------- rec detail ---------- */
@@ -983,7 +1002,7 @@ function pDecide() {
     ${unbuilt.length ? section(`Not built yet <em>${unbuilt.length}</em>`, `<div class="h-decs">${unbuilt.join('')}</div>`, 'Needs data') : ''}
     ${soon.length ? section(`Coming up <em>${soon.length}</em>`, `<div class="h-decs">${soon.map(decRow).join('')}</div>`, 'Not open yet') : ''}
     ${done.length ? `<details class="h-details" data-det="decided"${ui.det.decided ? ' open' : ''}><summary>Decided <em>${done.length}</em></summary><div class="h-decs">${done.map(decRow).join('')}</div></details>` : ''}
-    ${gone.length ? `<details class="h-details" data-det="unavailable"${ui.det.unavailable ? ' open' : ''}><summary>No longer current <em>${gone.length}</em></summary><div class="h-decs">${gone.map(decRow).join('')}</div></details>` : ''}`, 'wargame');
+    ${gone.length ? `<details class="h-details" data-det="unavailable"${ui.det.unavailable ? ' open' : ''}><summary>No longer current <em>${gone.length}</em></summary><div class="h-decs">${gone.map(decRow).join('')}</div></details>` : ''}`);
 }
 
 function pWargame(name) {
@@ -1017,7 +1036,7 @@ function pWargame(name) {
   return shell(`${back}${pageHead(past ? 'Decide' : 'Open decision', T(g.title), past ? '' : T(g.question))}${lead}
     ${section(secTitle, intro + body + decideBar, aside)}
     ${g.takeaway ? `<div class="h-takeaway"><div class="h-kicker">${past ? 'What the curve said' : 'Takeaway'}</div><p>${T(g.takeaway)}</p></div>` : ''}
-    ${linked.length ? section('On your plan', `<div class="h-refs wide">${linked.map((r) => `<a href="${href('rec', { id: r.id })}" data-go="rec" data-id="${esc(r.id)}"><span>${T(r.title)}</span><em>${T(r.window?.label || '')}</em>${icon('arrow')}</a>`).join('')}</div>`) : ''}`, 'wargame');
+    ${linked.length ? section('On your plan', `<div class="h-refs wide">${linked.map((r) => `<a href="${href('rec', { id: r.id })}" data-go="rec" data-id="${esc(r.id)}"><span>${T(r.title)}</span><em>${T(r.window?.label || '')}</em>${icon('arrow')}</a>`).join('')}</div>`) : ''}`);
 }
 
 /* ---------- goals ---------- */
@@ -1170,7 +1189,7 @@ function pGoals() {
   return shell(`${pageHead('Goals', 'Where you are headed', 'Goals in your own words, placed on the years they live in.')}
     ${add}${form}
     ${axis}${cols}${arch}
-    ${curve ? section('Where on the curve', `<p class="h-mute">Every plan trades one thing for another. These set where you sit. Recommendations respect them.</p><div class="h-curves">${curve}</div>`) : ''}`, 'goals');
+    ${curve ? section('Where on the curve', `<p class="h-mute">Every plan trades one thing for another. These set where you sit. Recommendations respect them.</p><div class="h-curves">${curve}</div>`) : ''}`);
 }
 
 function goalClick(t) {
@@ -1223,7 +1242,9 @@ function spark([key, sr]) {
     <text x="${P}" y="${H - 1}">${X(pts[0].x)}</text><text x="${W - P}" y="${H - 1}" text-anchor="end">${X(last.x)}</text></svg></div>`;
 }
 
-function pAccounts() {
+// The account mirror: balances by kind, trend, connections, files and sources. Accounts and the
+// Money overview both render it, so neither carries its own account or file logic.
+function accountsBody() {
   const accs = arr(api.s.accounts);
   const order = ['Business', 'Cash', 'Investing', 'Retirement', 'Health', 'Education'];
   const groups = {};
@@ -1239,12 +1260,54 @@ function pAccounts() {
       ${ingest.accountMeta(a)}${a.note ? `<p>${lbl(a, a.note)}</p>` : ''}</div>`).join('')}</div>`)).join('');
   const series = Object.entries(api.s.series || {});
   const evs = arr(api.s.events).filter((e) => ['income', 'account'].includes(e.kind));
-  const conn = accs.filter((a) => a.mirror === 'connected').length;
-  return shell(`${pageHead('Accounts', 'Read-only mirror', `${conn} of ${accs.length} accounts mirrored. Data through ${T(api.s.meta.dataThrough)}. ${goA('add', 'Add more files')}`)}
-    <div class="h-ro">${icon('lock')}<span>Read-only. ${esc(api.s.meta.product || 'Fathom')} can see balances and transactions. It cannot move, delete or change anything.</span></div>${ingest.pendingBanner()}
+  return `<div class="h-ro">${icon('lock')}<span>Read-only. ${esc(api.s.meta.product || 'Fathom')} can see balances and transactions. It cannot move, delete or change anything.</span></div>${ingest.pendingBanner()}
     ${series.length ? section('Trend', `<div class="h-sparks">${series.map(spark).join('')}</div>`, 'Solid is actual, dashed is projected') : ''}
     <div class="h-cols"><div class="h-col-main">${list}</div>
-    <div class="h-col-side">${section('Connect accounts', simplefin.block(), 'Read-only, through SimpleFIN Bridge')}${ingest.addFiles('accounts')}${ingest.sourcesSection()}${section('Detected', evs.length ? `<ol class="h-evs">${evs.map((e) => `<li><time>${T(e.date)}</time><div><b>${T(e.title)}</b><p>${T(e.body)}</p></div></li>`).join('')}</ol>` : '<p class="h-mute">Nothing unusual detected.</p>')}</div></div>`, 'accounts');
+    <div class="h-col-side">${section('Connect accounts', simplefin.block(), 'Read-only, through SimpleFIN Bridge')}${ingest.addFiles('accounts')}${ingest.sourcesSection()}${section('Detected', evs.length ? `<ol class="h-evs">${evs.map((e) => `<li><time>${T(e.date)}</time><div><b>${T(e.title)}</b><p>${T(e.body)}</p></div></li>`).join('')}</ol>` : '<p class="h-mute">Nothing unusual detected.</p>')}</div></div>`;
+}
+
+const mirrorText = () => {
+  const accs = arr(api.s.accounts);
+  return `${accs.filter((a) => a.mirror === 'connected').length} of ${accs.length} accounts mirrored.`;
+};
+
+function pAccounts() {
+  return shell(`${pageHead('Accounts', 'Read-only mirror', `${mirrorText()} Data through ${T(api.s.meta.dataThrough)}. ${goA('add', 'Add more files')}`)}${accountsBody()}`);
+}
+
+// The Home data-health line, spelled out: one row per part of the same healthLine() model, then
+// the places that fix it.
+function moneyHealthHtml(h) {
+  const suffix = { ok: '', ask: ' ask', bad: ' bad' };
+  const rows = h.rows.map(({ text, tone }) => `<li class="h-mh-r${suffix[tone]}"><i class="h-dh-dot" aria-hidden="true"></i><span>${esc(text.charAt(0).toUpperCase() + text.slice(1))}</span></li>`).join('');
+  const links = healthLinks(h);
+  return `<div class="h-money-health${h.stale ? ' stale' : ''}"><div class="h-mh-h">Data health</div><ul class="h-mh-rows">${rows}</ul><div class="h-dhealth-a">${links}</div></div>`;
+}
+
+function pMoney() {
+  return shell(`<section class="h-money">${pageHead('Household', 'Money', `${mirrorText()} Balances, files and the data behind every figure.`)}
+    ${moneyHealthHtml(homeHealth())}${accountsBody()}</section>`);
+}
+
+/* ---------- settings ---------- */
+
+// The gear: system screens and, on a real store, the account pages. Account and Household are plain
+// links that leave the hash router for the server's pages. The description sits outside the link,
+// so each link is named by its label alone.
+function pSettings() {
+  const id = api.identity?.();
+  const rows = [
+    ['connect', 'Connect', 'Point your own AI client at the household, read-only.'],
+    ['engine', 'Engine', 'Proactive jobs, their schedule and what they last did.'],
+    ['email', 'Email', 'The monthly digest and what lands in your inbox.']
+  ];
+  // A real store reaches onboarding again as Setup, to add more context.
+  if (api.s?.live?.mode === 'real') rows.push(['onboarding', 'Setup', 'Tell us more about the household, or attach more files.']);
+  const row = (link, desc) => `<li class="h-set-r">${link}<p>${esc(desc)}</p>${icon('arrow')}</li>`;
+  let list = rows.map(([k, l, d]) => row(goA(k, l), d)).join('');
+  if (id) list += row('<a href="/account">Account</a>', 'Passkeys and sign out.');
+  if (id?.role === 'admin') list += row('<a href="/admin/users">Household</a>', 'People, roles and invitations.');
+  return shell(`<section class="h-settings">${pageHead('System', 'Settings')}${whoLine()}<ul class="h-set">${list}</ul></section>`);
 }
 
 /* ---------- advisor ---------- */
@@ -1283,7 +1346,7 @@ function pEmail(fresh) {
 
 function pAdd() {
   return shell(pageHead('Files', 'Add more files', 'Drop in statements, exports and other documents. New accounts and open questions show up in Confirm.')
-    + ingest.addFiles('add') + ingest.sourcesSection(), 'accounts');
+    + ingest.addFiles('add') + ingest.sourcesSection());
 }
 
 /* ---------- onboarding ---------- */
@@ -1522,7 +1585,6 @@ function draw() {
   const r = rr.name === 'rec' ? underRoute() : rr;
   const key = `${r.name}/${r.params?.id ?? r.params?.name ?? r.params?.step ?? ''}`;
   const routeChanged = key !== lastKey;
-  if (routeChanged) ui.more = false;
   if (r.name !== 'onboarding' || (r.name === 'onboarding' && routeChanged && Number(r.params?.step ?? onboardStep()) !== 5)) {
     if (ui.buildTimer) { clearTimeout(ui.buildTimer); ui.buildTimer = 0; }
     if (routeChanged) ui.build = 0;
@@ -1543,6 +1605,7 @@ function draw() {
     case 'ask': html = chatScreen.render(r.params?.id); break;
     case 'wargame': html = pWargame(r.params?.name); break;
     case 'goals': html = pGoals(); break;
+    case 'money': html = pMoney(); break;
     case 'accounts': html = pAccounts(); break;
     case 'add': html = pAdd(); break;
     case 'confirm': html = ingest.confirmPage(routeChanged); break;
@@ -1552,14 +1615,16 @@ function draw() {
     case 'connect': html = connect.render(connectH); break;
     case 'engine': html = engineScreen.render(); break;
     case 'email': html = pEmail(routeChanged); break;
+    case 'settings': html = pSettings(); break;
     default: html = pHome();
   }
   page.innerHTML = html;
-  // On a narrow screen the main nav scrolls inside itself; keep the active link in view.
-  const navOn = page.querySelector('.h-nav a.on');
-  if (navOn) {
-    const over = navOn.getBoundingClientRect().right - navOn.parentElement.getBoundingClientRect().right;
-    if (over > 0) navOn.parentElement.scrollLeft = over;
+  // On a narrow screen the sub-nav scrolls inside itself; keep the active link in view.
+  const navOn = page.querySelector('.h-subnav a.on');
+  const navEl = navOn?.parentElement;
+  if (navEl && navEl.scrollWidth > navEl.clientWidth) {
+    const over = navOn.getBoundingClientRect().right - navEl.getBoundingClientRect().right;
+    if (over > 0) navEl.scrollLeft = over;
   }
   page.querySelectorAll('.h-tl-scroll').forEach((el, i) => {
     if (!routeChanged && scrollers[i] != null) el.scrollLeft = scrollers[i];
@@ -1581,21 +1646,12 @@ function draw() {
   switcher.afterDraw(rr.name);
 }
 
-function setMore(on) {
-  ui.more = on;
-  const b = root?.querySelector('.h-more-btn');
-  const p = root?.querySelector('.h-more-p');
-  if (b) b.setAttribute('aria-expanded', String(on));
-  if (p) p.hidden = !on;
-}
-
 // History: one entry per modal session. Opening a rec from a page pushes one entry and remembers the
 // page under it; moving from rec to rec inside the modal replaces that entry. Closing goes back to
 // the page when the modal was opened in the app, and replaces the entry with the page under it after
 // a deep link or reload. Either way Back after closing never shows the modal again.
 function openRec(id, trigger) {
   const cur = api.route || { name: 'plan', params: {} };
-  setMore(false);
   if (cur.name === 'rec') {
     api.go('rec', { id }, { replace: true });
     return;
@@ -1620,7 +1676,6 @@ function closeRec() {
 }
 
 function onClick(e) {
-  if (ui.more && !e.target.closest('.h-more-wrap')) setMore(false);
   if (SCREENS.some((s) => s.onClick?.(e))) return;
   const cn = e.target.closest('[data-conn]');
   if (cn && root.contains(cn)) { e.preventDefault(); connect.onClick(cn, connectH); return; }
@@ -1641,7 +1696,7 @@ function onClick(e) {
   if (ow && root.contains(ow)) { e.preventDefault(); ui.owner = ow.dataset.owner; draw(); return; }
   const an = e.target.closest('[data-ask-next]');
   if (an && root.contains(an)) { e.preventDefault(); askNext(an.dataset.askNext, an); return; }
-  const sel = '[data-go],[data-act],[data-askrec],[data-recstart],[data-wg],[data-onboard],[data-savenote],[data-modal],[data-whatif],[data-packtoggle],[data-decide],[data-revisit],[data-more],[data-dlg]';
+  const sel = '[data-go],[data-act],[data-askrec],[data-recstart],[data-wg],[data-onboard],[data-savenote],[data-modal],[data-whatif],[data-packtoggle],[data-decide],[data-revisit],[data-dlg]';
   let t = e.target.closest(`${sel},.fx-fig`);
   if (!t || !root.contains(t)) return;
   // A figure inside a button or link is part of its label: the control takes the click, and the
@@ -1651,7 +1706,6 @@ function onClick(e) {
     if (ctl && root.contains(ctl) && ctl.matches('button,a[href]')) { e.preventDefault(); t = ctl; }
   }
   const d = t.dataset;
-  if (d.more) { e.preventDefault(); setMore(!ui.more); return; }
   if (d.dlg === 'close') { e.preventDefault(); closeRec(); return; }
   if (t.classList.contains('fx-fig')) {
     e.preventDefault();
@@ -1679,7 +1733,6 @@ function onClick(e) {
   if (d.go) {
     e.preventDefault();
     if (d.go === 'rec' && d.id) { openRec(d.id, t); return; }
-    setMore(false);
     const params = {};
     if (d.id) params.id = d.id;
     if (d.name) params.name = d.name;
@@ -1847,7 +1900,7 @@ const KIT = {
   get api() { return api; }, get root() { return root; }, get ui() { return ui; }, get keys() { return keys; }, get ingest() { return ingest; },
   draw: () => draw(),
   esc, T, X, arr, plural, icon, btn, goA, href, shell, section, pageHead, thread, composer, figHtml, recById,
-  openRec, closeRec, decisionList, statusText, setMore, routeNow, visibleRecs,
+  openRec, closeRec, decisionList, statusText, routeNow, visibleRecs,
   newGoal: () => { if (routeNow().name !== 'goals') api.go('goals', {}); openGoalForm(null); }
 };
 SCREENS.forEach((s) => s.bind(KIT));

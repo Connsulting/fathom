@@ -112,7 +112,7 @@ export function render() {
       ${notAsk ? section('Not asking you', `<ul class="h-qs">${notAsk}</ul>`) : ''}
       ${shared ? section('Shared with the advisor', `<ul class="h-kv">${shared}</ul>`) : ''}
       ${experts ? section('Specialists', `<ul class="h-experts">${experts}</ul>`) : ''}
-    </div></div>`, 'advisor');
+    </div></div>`);
 }
 
 function showErr(form, text) {
