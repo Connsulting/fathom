@@ -22,7 +22,7 @@ import { withAdvisor, advisorSection } from '../advisor/index.mjs';
 import { buildPace, indexPaceFigures } from '../pace/build.mjs';
 import { buildSuggestions } from '../suggest/build.mjs';
 import { buildTrend, groupOfKind, TREND_SRC } from '../accounts/trend.mjs';
-import { questionFor, dataText } from '../jobs/triggers/common.mjs';
+import { questionFor, dataText, LISTED_RECS } from '../jobs/triggers/common.mjs';
 import { getFacts } from '../store/facts.mjs';
 
 const DAY = 86400000;
@@ -204,9 +204,12 @@ export function loadRecs(db, clock) {
     const rec = recs.find(r => r.id === 'babyprep');
     if (rec && window) rec.window = { ...window, days: daysBetween(clock, window.close) };
   }
+  // A rec waiting on the planner names its blocker (stored with the last run, gone once it is unblocked).
+  const blockers = parse(db.prepare("SELECT value FROM content WHERE key = 'rec.blockers'").get()?.value, null) || {};
+  for (const r of recs) if (r.status === 'waiting' && Object.hasOwn(blockers, r.id)) r.blocker = blockers[r.id];
   for (const r of recs) if (r.question) {
     r.question = { ...questionFor(r.question.keys, { accounts, facts, names: facts['household.names'], people: r.question.people }), primary: r.question.primary };
-    if (r.question.primary) {
+    if (r.question.primary && !LISTED_RECS.has(r.id)) {
       r.title = dataText(r.question.title);
       r.summary = r.question.summary;
     }
