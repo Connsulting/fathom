@@ -1,3 +1,4 @@
+import { applyCategoryAnswer, moveCategoryRows } from '../categories/store.mjs';
 import { assertCurrentPair, mergeAccounts, refreshMergedAccounts } from './account-merge.mjs';
 // Confirm queue: short questions an import asks so its rows land in the right place, answered by
 // the owner and remembered by (kind, subject) so an equivalent re-import asks nothing new.
@@ -10,10 +11,11 @@ import { upsertFact, deleteFact } from '../store/facts.mjs';
 import { dedupeKey } from './dedupe.mjs';
 import { cents } from './format.mjs';
 import { captureChanges, revertChanges, touches } from './undo.mjs';
+import { accountLabel } from '../shared/account-label.mjs';
 
 export const KINDS = Object.freeze([
   'account_owner', 'account_kind', 'entity_alias', 'tax_year', 'fact_check', 'near_duplicate', 'employer_relation', 'employer_recipient', 'document_recipient',
-  'withholding_conflict', 'account_match',
+  'withholding_conflict', 'account_match', 'transaction_category', 'category_mapping',
 ]);
 
 export const OWNER_OPTIONS = Object.freeze([
@@ -292,17 +294,81 @@ export function reviseItem(db, id, optionId, { now } = {}) {
   if (optionId === item.answer) return { item, factsChanged: false };
   const reason = finalReason(db, item);
   if (reason) throw new ConfirmError('final', reason);
+  return tx(db, () => revise(db, item, optionId, { now }));
+}
+
+// reviseItem inside the caller's transaction.
+function revise(db, item, optionId, { now }) {
+  const auto = hasAuto(db, item.id);
+  const dependents = revertDependents(db, item.id);
+  const reverted = revertAnswer(db, getItem(db, item.id));
+  const fresh = getItem(db, item.id);
+  if (optionId !== 'different') assertCurrentPair(db, fresh);
+  if (fresh.kind === 'fact_check' && factIsStale(db, fresh)) throw new ConfirmError('stale');
+  if (fresh.kind === 'withholding_conflict' && !conflictCurrent(db, fresh)) throw new ConfirmError('stale');
+  const { changes } = recordAnswer(db, fresh, optionId, { now });
+  if (auto) decline(db, item.id, { now });
+  return { item: getItem(db, item.id), factsChanged: [dependents, reverted, changes].some((log) => touches(log, 'facts')) };
+}
+
+const ACCOUNT_QUESTIONS = {
+  account_owner: { options: OWNER_OPTIONS, question: (label) => `Whose account is ${label}?` },
+  account_kind: { options: KIND_OPTIONS, question: (label) => `What kind of account is ${label}?` },
+};
+
+function accountQuestion(kind) {
+  const spec = ACCOUNT_QUESTIONS[kind];
+  if (!spec) throw new TypeError('Not an account question');
+  return spec;
+}
+
+// An owner or kind set from the account dialog, recorded as the answer to that account's confirm
+// item so a later import asking the same question re-applies it. No item: ask, then answer.
+// Pending: answer. Answered: revise, or when the answer is final (any later import marks it used),
+// restate it: apply and record it with a fresh undo log, and decline any auto answer.
+// Returns {item, before: {answer, present, created}, factsChanged}; before is what undo needs.
+export function setAccountAnswer(db, kind, accountId, optionId, { now } = {}) {
+  const spec = accountQuestion(kind);
+  if (!spec.options.some((o) => o.id === optionId)) throw new ConfirmError('bad_option');
   return tx(db, () => {
-    const auto = hasAuto(db, item.id);
-    const dependents = revertDependents(db, item.id);
-    const reverted = revertAnswer(db, getItem(db, item.id));
-    const fresh = getItem(db, item.id);
-    if (optionId !== 'different') assertCurrentPair(db, fresh);
-    if (fresh.kind === 'fact_check' && factIsStale(db, fresh)) throw new ConfirmError('stale');
-    if (fresh.kind === 'withholding_conflict' && !conflictCurrent(db, fresh)) throw new ConfirmError('stale');
-    const { changes } = recordAnswer(db, fresh, optionId, { now });
-    if (auto) decline(db, item.id, { now });
-    return { item: getItem(db, item.id), factsChanged: [dependents, reverted, changes].some((log) => touches(log, 'facts')) };
+    let item = findItem(db, kind, accountId);
+    const before = { answer: item?.status === 'answered' ? item.answer : null, present: Boolean(item), created: !item };
+    if (!item) {
+      const row = db.prepare('SELECT * FROM accounts WHERE id = ?').get(accountId);
+      const { id } = ask(db, { kind, subject: accountId, question: spec.question(accountLabel(row)), options: spec.options, context: {}, now });
+      item = getItem(db, id);
+    }
+    if (item.status === 'pending') recordAnswer(db, item, optionId, { now });
+    else if (item.answer !== optionId && !finalReason(db, item)) revise(db, item, optionId, { now });
+    else if (item.answer !== optionId) {
+      // Auto answers that rested on the old answer no longer hold.
+      revertDependents(db, item.id);
+      if (hasAuto(db, item.id)) {
+        db.prepare('DELETE FROM confirm_auto WHERE item_id = ?').run(item.id);
+        decline(db, item.id, { now });
+      }
+      recordAnswer(db, item, optionId, { now });
+    }
+    return { item: getItem(db, item.id), before, factsChanged: false };
+  });
+}
+
+// Undo a setAccountAnswer from its before: a prior answer is set again; an item the edit created
+// is reverted and removed; an item that was pending is reopened. Returns {item, factsChanged}.
+export function undoAccountAnswer(db, kind, accountId, before, { now } = {}) {
+  accountQuestion(kind);
+  if (before?.answer != null) return setAccountAnswer(db, kind, accountId, before.answer, { now });
+  const item = findItem(db, kind, accountId);
+  if (!item || item.status !== 'answered' || (!before?.present && !before?.created)) return { item, factsChanged: false };
+  const reason = finalReason(db, item);
+  if (reason) throw new ConfirmError('final', reason);
+  return tx(db, () => {
+    if (before.created) {
+      revertDependents(db, item.id);
+      revertAnswer(db, item);
+      db.prepare('DELETE FROM confirm_items WHERE id = ?').run(item.id);
+    } else reopenOne(db, item, { now });
+    return { item, factsChanged: false };
   });
 }
 
@@ -373,6 +439,8 @@ function factIsStale(db, item) {
 // Apply an answer by kind. Returns {factsChanged}.
 export function applyAnswer(db, item, optionId, { now } = {}) {
   switch (item.kind) {
+    case 'transaction_category':
+    case 'category_mapping': return applyCategoryAnswer(db,item,optionId,{now});
     case 'account_owner': {
       const option = OWNER_OPTIONS.find((o) => o.id === optionId);
       if (option) db.prepare('UPDATE accounts SET owner = ? WHERE id = ?').run(option.label, item.subject);
@@ -484,6 +552,7 @@ function confirmDuplicate(db, item, { now }) {
   if (rows.length < 2) return;
   const [keep, drop] = rows.sort((a, b) => a.id - b.id);
   archive(db, 'transactions', { ...drop, normalized_description: normalizeName(drop.description) }, { by: keep.file_id, reason: 'duplicate_confirmed', now, survivorKey: keep.dedupe_key });
+  moveCategoryRows(db,drop.id,keep.id);
   db.prepare('DELETE FROM transactions WHERE id = ?').run(drop.id);
 }
 

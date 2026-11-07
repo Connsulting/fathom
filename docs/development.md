@@ -115,6 +115,46 @@ Deployed smoke is that same `@smoke` subset against a server you already started
 
 `e2e/identity.spec.mjs` covers accounts end to end on its own `http://localhost` server with synthetic data in the OS temp directory: the bootstrap CLI, emailed links, enrollment, discoverable sign-in, a second passkey, revocation, member denial, removal, sign-out and recovery, all through Chromium's virtual WebAuthn authenticator. It proves the button path and that conditional mediation is set up in Chromium, not that a particular password manager offers passkeys in the Email field.
 
+## Ask evals
+
+`npm run eval:ask` runs the synthetic scripted tier without a model or credential. CI exercises
+that CLI through `test/ask-evals-runner.test.mjs`. It checks the graders and tool wiring; it does
+not measure a model's ability to choose a tool.
+
+Run `npm run eval:ask:live -- --max-usd 5` explicitly for real Ask evaluation, with only
+`FATHOM_CLAUDE_CREDENTIAL_FILE` pointing to a private API-key file. Live runs are refused in CI.
+Use `--cases spending,retirement-hsa-room` to select families or exact case IDs, and `--out <dir>`
+to choose a report directory. Without `--out`, each run writes gitignored
+`evals/out/<timestamp>/scorecard.json` and `summary.md`.
+
+The JSON records each turn's required argument predicates, tool results, runtime expected figures,
+numeric violations, raw attempts, delivered answer, word budget and cost. The Markdown table
+summarizes those checks. Expected financial amounts come from the seeded demo store at runtime.
+A `pass` meets the mechanical checks; the rubric remains a human judgment. An `xfail` names a
+missing tool, while other failures remain failures. `xpass` means the tool gap disappeared and the
+case marker needs updating. Case IDs will be aligned with the tool catalog when it merges.
+
+Numeric grading is independent of production grounding. Only successful tool result payloads from
+this turn count as evidence, excluding argument echoes and metadata such as identifiers, labels
+and dates. A figure token must have been read through `get_figures` this turn. A bad numeric
+attempt fails even if Ask corrects it. The grader detects digit amounts, magnitudes and numeric
+words; arithmetic classification checks pairwise addition, subtraction, multiplication, division
+and ratios. Dates, bare years, tax-form and plan identifiers, and idiomatic uses of "one" are not figures.
+Percentages can use a returned fraction. Comparisons allow rounded cents for money and a relative
+tolerance of one part per million for other quantities; this is a bounded arithmetic detector, not a proof
+about all possible expressions.
+
+Live cost comes from new spend-ledger rows, excluding demo spend. A conservative reserve is
+checked before every paid engine round, including tool continuations and grounding retries;
+the run may stop with budget remaining. A budget or unknown-accounting stop ends the run and
+returns nonzero, preserving the current case and charged cost in the report. No later case starts.
+
+`evals/catalog.json` is the versioned case file. Each turn declares `question`, required tool
+names and argument predicates (`eq`, `includes`, `gte`, `lte`, `exists`), forbidden numeric behavior,
+expectation descriptors, `maxWords`, and a rubric. Optional follow-ups are additional turns.
+`expectedFail.missingTools` names required tools still absent from the registry. The executable
+schema and deterministic expectation queries live in `evals/cases.mjs`.
+
 ## Screenshots
 
 The README images come from [`scripts/screenshots.mjs`](../scripts/screenshots.mjs):
@@ -305,8 +345,9 @@ release steps.
 
 Deciding and trends. On a real store the Decide screen's war games end in a choice: pick a point,
 press "Decide on this", and the decision is saved with its figures. A decided salary becomes the
-payroll assumption on the next planning run until you press "Revisit". Accounts shows monthly trend
-lines built from the balances you uploaded. The Engine screen lists the model each purpose runs on,
+payroll assumption on the next planning run until you press "Revisit". Money opens with one net worth
+trend (and its parts) summed from the balances you uploaded, Accounts has a line per group, and
+each account's own trend is in its dialog. The Engine screen lists the model each purpose runs on,
 and Files is in the quick switcher (Ctrl or Cmd K) and the Money tab's sub-nav.
 
 Year end. The Year end screen (`#/yearend`) lists the tax documents the household should expect for
@@ -340,3 +381,5 @@ cd mock-v2
 python3 -m http.server 4600 --bind 127.0.0.1
 # open http://127.0.0.1:4600/?d=horizon
 ```
+
+For a focused local browser run, set `E2E_SINGLE_SERVER=1`, `E2E_PORT` to an owned port and `E2E_DATA` to a checkout-local `.e2e-data-<name>` directory. This starts only the main demo server. The browser explicitly permits the selected test port, including ports reserved by Chromium. Leave `BASE_URL` unset for tests which reset their owned demo store; supplied targets remain protected from resets.
