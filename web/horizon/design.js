@@ -18,6 +18,7 @@ import * as switcher from './screens/switcher.js';
 import * as simplefin from './screens/simplefin.js';
 import * as recAnswers from './screens/rec-answers.js';
 import * as accountScreen from './screens/account.js';
+import { composeLabel } from '/shared/account-label.mjs';
 import * as askPanel from './screens/ask-panel.js';
 import { addButtonHtml } from './screens/ask-context.js';
 import * as pnlScreen from './screens/pnl.js';
@@ -1977,7 +1978,7 @@ function closeRec() {
 function beginAccountRename(id) {
   const a = arr(api.s.accounts).find((x) => x.id === id);
   if (!a) return;
-  ui.accEdit = { id, value: a.displayName ? a.displayName : (a.imported === false ? api.txt(String(a.name ?? '')) : String(a.name ?? '')) };
+  ui.accEdit = { id, value: a.displayName ? a.displayName : (a.imported === false ? api.txt(String(a.baseName ?? a.name ?? '')) : String(a.baseName ?? a.name ?? '')) };
   draw();
   const el = root?.querySelector(`[data-acc-name="${CSS.escape(id)}"]`);
   if (el) { el.focus(); el.select(); }
@@ -2289,7 +2290,7 @@ function trapTab(e) {
 const SCREENS = [askPanel, switcher, chatScreen, packsScreen, engineScreen, advisorScreen, yearendScreen, simplefin, recAnswers, accountScreen, trendScreen, pnlScreen, tour];
 const KIT = {
   get api() { return api; }, get root() { return root; }, get ui() { return ui; }, get keys() { return keys; }, get ingest() { return ingest; },
-  draw: () => draw(),
+  draw: () => draw(), composeLabel,
   esc, T, X, arr, plural, icon, btn, goA, href, shell, section, pageHead, thread, composer, figHtml, recById, snoozeLabel,
   openRec, openAccount, closeRec, decisionList, statusText, routeNow, visibleRecs, spark, niceTicks,
   sfStatus: () => simplefin.status(),

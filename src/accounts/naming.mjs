@@ -2,7 +2,7 @@
 // through here, so a known kind does not keep a legal name on one screen and drop it on another.
 
 import { parseJson } from '../store/db.mjs';
-import { accountLabel, duplicateMasks, sourceLabel, trendLabel } from '../shared/account-label.mjs';
+import { accountLabel, labelPrefix, sourceLabel, trendLabel } from '../shared/account-label.mjs';
 import { lastFour } from '../ingest/account-match.mjs';
 
 export function accountNaming(db) {
@@ -17,16 +17,23 @@ export function accountNaming(db) {
     const shown = r.mask;
     if (!(snap.maskSure === true && snap.mask === shown) && lastFour(snap.name) !== shown) unsure.add(r.account_id);
   }
+  // The business a business-owned account is named for: the owner's answer for that account, else the
+  // household's only business.
+  const stated = parseJson(db.prepare("SELECT value FROM facts WHERE key = 'accounts.businessEntity' AND (src IS NULL OR src != 'planner')").get()?.value, {}) || {};
+  const listed = parseJson(db.prepare("SELECT value FROM facts WHERE key = 'business.entities'").get()?.value, []);
+  const entities = new Map([...(Array.isArray(listed) ? listed.map((e) => e && e.name) : []), ...db.prepare('SELECT DISTINCT entity FROM pnl_lines').all().map((r) => r.entity)]
+    .filter((n) => typeof n === 'string' && n.trim()).map((n) => [n.trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(), n.trim()]));
+  const onlyBusiness = entities.size === 1 ? [...entities.values()][0] : '';
   const byId = new Map();
   for (const a of db.prepare('SELECT * FROM accounts').all()) {
-    byId.set(a.id, { ...a, householdNames, holder: holders.get(a.id) || null, ...(unsure.has(a.id) ? { maskSure: false } : {}) });
+    const businessName = typeof stated?.[a.id] === 'string' && stated[a.id].trim() ? stated[a.id].trim() : onlyBusiness;
+    const row = { ...a, householdNames, holder: holders.get(a.id) || null, businessName, ...(unsure.has(a.id) ? { maskSure: false } : {}) };
+    byId.set(a.id, { ...row, labelPrefix: labelPrefix(row) });
   }
-  // An account shows its last 4 only when another account of the household has the same name.
-  for (const [id, labelMask] of duplicateMasks([...byId.values()])) byId.get(id).labelMask = labelMask;
   // What a row from another query needs to be named like the rest of the household.
   const hint = (id) => {
     const a = byId.get(id);
-    return a ? { ...(a.maskSure === false ? { maskSure: false } : {}), ...(a.labelMask ? { labelMask: a.labelMask } : {}) } : {};
+    return a ? { householdNames, holder: a.holder, businessName: a.businessName, labelPrefix: a.labelPrefix, ...(a.maskSure === false ? { maskSure: false } : {}) } : {};
   };
   return { householdNames, holders, byId, hint, label: (row) => accountLabel({ ...row, ...hint(row?.id) }) };
 }

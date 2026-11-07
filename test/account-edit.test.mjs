@@ -97,7 +97,7 @@ test('AC1: last 4 refuses an account that already has a mask or a SimpleFIN iden
   assert.equal(await status(() => A.accountMask(ctx(s, '', { mask: '1234' }))), 400);
 }));
 
-test('AC1: a good last 4 is stored, the name shows it only because another account has the same name, and the control is offered only while it can be used', () => withStore(async (s, { A, D }) => {
+test('AC1: a good last 4 is stored, the label shows it after the name, and the control is offered only while it can be used', () => withStore(async (s, { A, D }) => {
   const id = plainAccount(s);
   const masked = plainAccount(s, 'acct-masked', { mask: '5555' });
   const linked = plainAccount(s, 'acct-linked', { identity: 'simplefin:synthetic-linked' });
@@ -109,7 +109,6 @@ test('AC1: a good last 4 is stored, the name shows it only because another accou
   assert.equal(row(s.db, id).mask, '1234');
   assert.ok(res.scenario && Array.isArray(res.scenario.accounts), 'the write returns the scenario');
   assert.equal(res.account.id, id);
-  // acct-masked has the same name, so both accounts now read apart by their last 4.
   assert.equal(res.account.name, 'Reserve savings (1234)');
   assert.equal(scenarioAccount(res, id).name, res.account.name);
   const d = D.accountDetail(ctx(s, id));
@@ -247,16 +246,16 @@ test('AC2: restating a final owner reverts the auto answers that rested on it', 
   assert.equal(row(s.db, b).owner, null);
 }));
 
-test('AC1: a connected account label never carries its last 4, sure or not', () => withStore(async (s, m) => {
+test('AC1: a connected account shows its last 4 only when the bridge is sure of it', () => withStore(async (s, m) => {
   const own = await connectedAccount(s, m, { sfKey: 'synthetic-unsure', mask: '5432', name: 'Checking' });
   const { accountNaming } = await src('src/accounts/naming.mjs');
   const { accountLabel } = await src('src/shared/account-label.mjs');
   const snap = (patch) => s.db.prepare('UPDATE simplefin_snapshots SET snapshot = ? WHERE sf_key = ?')
     .run(JSON.stringify({ inst: INST, name: 'Checking', mask: '5432', ...patch }), 'synthetic-unsure');
   snap({ maskSure: false });
-  assert.doesNotMatch(accountLabel(accountNaming(s.db).byId.get(own)), /ending|5432/);
+  assert.equal(accountLabel(accountNaming(s.db).byId.get(own)), 'Checking');
   snap({ maskSure: true });
-  assert.doesNotMatch(accountLabel(accountNaming(s.db).byId.get(own)), /ending|5432/);
+  assert.equal(accountLabel(accountNaming(s.db).byId.get(own)), 'Checking (5432)');
 }));
 
 test('AC2: undo restores an answered owner, including one that was final', () => withStore(async (s, { A, C }) => {
@@ -517,16 +516,16 @@ test('AC3: a merged survivor is still an imported account, so merging it with an
   assert.deepEqual(snapshot(s.db), before);
 }));
 
-test('AC1: a goal tracking a connected account shows its name, not its mask', () => withStore(async (s, m) => {
+test('AC1: a goal tracking a connected account shows the last 4 only when the bridge is sure of it', () => withStore(async (s, m) => {
   const own = await connectedAccount(s, m, { sfKey: 'synthetic-goal', mask: '1234', name: 'Checking' });
   putGoal(s.db, own);
   const snap = (patch) => s.db.prepare('UPDATE simplefin_snapshots SET snapshot = ? WHERE sf_key = ?')
     .run(JSON.stringify({ inst: INST, name: 'Checking', mask: '1234', ...patch }), 'synthetic-goal');
   const trackLabel = async () => (await m.A.accountRename(ctx(s, own, { displayName: null }))).scenario.goals.find((g) => g.id === 'synthetic-goal').trackLabel;
   snap({ maskSure: false });
-  assert.doesNotMatch(await trackLabel(), /ending|1234/);
+  assert.equal(await trackLabel(), 'Checking');
   snap({ maskSure: true });
-  assert.doesNotMatch(await trackLabel(), /ending|1234/);
+  assert.equal(await trackLabel(), 'Checking (1234)');
 }));
 
 test('AC1: the last 4 shown is the stored one, not a later snapshot mask the account never took', () => withStore(async (s, m) => {
@@ -556,7 +555,7 @@ test('AC3: a manual merge fills a survivor with no institution or last 4 from th
   assert.equal(after.mask, '1234');
   assert.equal(after.name, before.name, 'nothing else on the survivor changed');
   assert.equal(after.kind, before.kind);
-  assert.doesNotMatch(m.D.accountDetail(ctx(s, pair.file)).account.label, /ending|1234/);
+  assert.match(m.D.accountDetail(ctx(s, pair.file)).account.label, /\(1234\)$/);
   assert.equal(m.D.accountDetail(ctx(s, pair.file)).account.mask, '1234');
 }));
 
@@ -566,7 +565,7 @@ test('AC3: a detected merge carries the institution and last 4 over the same way
   const after = row(s.db, pair.file);
   assert.equal(after.inst, INST);
   assert.equal(after.mask, '1234');
-  assert.doesNotMatch(m.D.accountDetail(ctx(s, pair.file)).account.label, /ending|1234/);
+  assert.match(m.D.accountDetail(ctx(s, pair.file)).account.label, /\(1234\)$/);
 }));
 
 test('AC3: an unreliable last 4 is not carried, but the institution still is', async () => {
@@ -718,3 +717,54 @@ test('AC4: a checking account that is manual shows Checking and Manual once each
   assert.ok(texts.includes('Joint'));
   assert.equal(count(texts, /^Last data /), 1);
 });
+
+/* ---------- labels: owner prefix, name, sure last 4 ---------- */
+
+test('the label is owner prefix, name and last 4 on every surface, and the dialog edits the bare name', () => withStore(async (s, m) => {
+  const { upsertFact } = await src('src/store/facts.mjs');
+  const { accountNaming } = await src('src/accounts/naming.mjs');
+  const { accountLabels } = await src('src/pnl/shared.mjs');
+  upsertFact(s.db, { key: 'household.names', value: { me: 'Avery Example', spouse: 'Blair Example' }, src: 'you', asOf: '2032-02-01', confirmed: true, now: NOW });
+  upsertFact(s.db, { key: 'accounts.businessEntity', value: { 'acct-biz': 'Sample Studio LLC' }, src: 'you', asOf: '2032-02-01', confirmed: true, now: NOW });
+  const mine = plainAccount(s, 'acct-mine', { owner: 'You', name: 'Venture One', mask: '0323' });
+  const hers = plainAccount(s, 'acct-hers', { owner: 'Your spouse', name: 'Venture Two', mask: '1111' });
+  const joint = plainAccount(s, 'acct-joint', { owner: 'Joint', name: 'Venture Three', mask: '2222' });
+  const biz = plainAccount(s, 'acct-biz', { owner: 'Business', name: 'Operating', mask: '3333' });
+  const nobody = plainAccount(s, 'acct-nobody', { owner: null, name: 'Loose account', mask: '4444' });
+  const unsure = plainAccount(s, 'acct-unsure', { owner: 'You', name: 'Bridge checking', mask: '5555' });
+  s.db.prepare("UPDATE accounts SET identity = 'simplefin:synthetic-unsure' WHERE id = ?").run(unsure);
+  s.db.prepare("INSERT INTO simplefin_accounts (sf_key, account_id, status, name, created_at) VALUES ('synthetic-unsure', ?, 'mapped', 'Bridge checking', ?)").run(unsure, NOW);
+  s.db.prepare('INSERT INTO simplefin_snapshots (sf_key, snapshot, at) VALUES (?, ?, ?)').run('synthetic-unsure', JSON.stringify({ inst: INST, name: 'Bridge checking', mask: '5555', maskSure: false }), NOW);
+
+  const expected = {
+    [mine]: "Avery's Venture One (0323)",
+    [hers]: "Blair's Venture Two (1111)",
+    [joint]: 'Joint Venture Three (2222)',
+    [biz]: 'Sample Studio LLC Operating (3333)',
+    [nobody]: 'Loose account (4444)',
+    [unsure]: "Avery's Bridge checking",
+  };
+  const naming = accountNaming(s.db);
+  const pnl = accountLabels(s.db);
+  const scenario = (await m.A.accountRename(ctx(s, mine, { displayName: 'Venture One' }))).scenario;
+  for (const [id, label] of Object.entries(expected)) {
+    assert.equal(naming.label(row(s.db, id)), label, `${id} through the naming hint on a raw row`);
+    assert.equal(naming.label(naming.byId.get(id)), label, `${id} through the household row`);
+    assert.equal(pnl.get(id).label, label, `${id} on P&L rows`);
+    assert.equal(scenario.accounts.find((a) => a.id === id).name, label, `${id} in the scenario`);
+    assert.equal(m.D.accountDetail(ctx(s, id)).account.label, label, `${id} in the dialog`);
+  }
+  assert.doesNotMatch(Object.values(expected).join('\n'), /ending/);
+
+  const d = m.D.accountDetail(ctx(s, mine)).account;
+  assert.deepEqual([d.labelPrefix, d.baseName, d.labelMask], ["Avery's", 'Venture One', '0323'], 'the dialog gets the parts to edit and preview');
+  assert.equal(m.D.accountDetail(ctx(s, unsure)).account.labelMask, '', 'an unsure mask is not in the label');
+  assert.equal(m.D.accountDetail(ctx(s, unsure)).account.mask, '5555', 'but the field still shows it');
+
+  // A custom name that already starts with the owner prefix is not doubled; a bare custom name is prefixed.
+  const typed = await m.A.accountRename(ctx(s, mine, { displayName: "Avery's Venture One" }));
+  assert.equal(typed.account.name, "Avery's Venture One (0323)");
+  const bare = await m.A.accountRename(ctx(s, hers, { displayName: 'VentureX' }));
+  assert.equal(bare.account.name, "Blair's VentureX (1111)");
+  assert.equal(bare.account.baseName, 'VentureX');
+}));

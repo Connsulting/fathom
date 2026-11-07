@@ -15,7 +15,7 @@ import { MODEL_PURPOSES, modelFor } from '../engine/pricing.mjs';
 import { factEventTitle } from '../shared/event-labels.mjs';
 import { buildYearend } from '../yearend/expected.mjs';
 import { CURVE_AXES, KNOWN_FIGURES, curvePosition, servesGoals } from '../shared/goals.mjs';
-import { accountLabel, accountSubtitle } from '../shared/account-label.mjs';
+import { accountLabel, accountLabelParts, accountSubtitle } from '../shared/account-label.mjs';
 import { applyNaming, withLabelHints } from '../accounts/naming.mjs';
 import { deriveHeard } from '../onboarding/heard.mjs';
 import { withAdvisor, advisorSection } from '../advisor/index.mjs';
@@ -656,7 +656,7 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
       const named = naming.byId.get(a.id) || { ...a, householdNames };
       const label = accountLabel(named);
       return {
-        id: a.id, inst: a.inst, name: label, sourceName: a.name, displayName: a.display_name || null,
+        id: a.id, inst: a.inst, name: label, ...accountLabelParts(named), sourceName: a.name, displayName: a.display_name || null,
         subtitle: accountSubtitle(a),
         owner: a.owner, kind: a.kind, group: groupOfKind(a.kind), fig: a.fig_key, mirror: a.mirror, note: a.note || '', mask: a.mask,
         asOf: f.asOf || '', fresh: f.fresh || 'unknown', sourceId: f.sourceId || null,
