@@ -25,7 +25,11 @@ test('Check these learns a merchant rule, changes displayed spending, and undoes
   const id=await start(request); const before=await scenario(request); const baseline=spending(before,id);
   const card=await serviceCard(page);
   await expect(card).toContainText('Check these');
-  await expect(card).toContainText('Account');
+  await expect(card.locator('details[data-bank-details] summary')).toHaveText('Bank details');
+  await expect(card.locator('details[data-bank-details]')).not.toHaveAttribute('open','');
+  const order=await card.locator('button[data-answer]').evaluateAll(b=>b.map(x=>x.getAttribute('data-option')));
+  expect(order.slice(0,7),'one fixed category order on every card').toEqual(['Shopping','Business','Income','Internal Transfers','Taxes','Investment','Ignore']);
+  expect(await card.innerText()).not.toMatch(/%|jev|typesafe/i);
   await expect(card).toContainText('Uncategorized');
   await card.getByLabel('Always for this merchant').check();
   const sent=page.waitForResponse(r=>r.request().method()==='POST' && /\/api\/confirm\/\d+\/answer$/.test(new URL(r.url()).pathname));
