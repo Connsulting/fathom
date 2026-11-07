@@ -57,7 +57,8 @@ test('sourced-number table grades answers over real demo tool results', async ()
 
 test('formatting preserves units, cent precision and dropped-cent direction', () => {
   assert.equal(gradeFigures('1.5m', read({ amount: 1500000.50 })).ok, false);
-  assert.equal(gradeFigures('$1,188', read({ amount: 1187.40 })).rounded.length, 1);
+  assert.equal(gradeFigures('$1,188', read({ amount: 1187.40 })).ok, false);
+  assert.equal(gradeFigures('$1,188', read({ amount: 1187.60 })).rounded.length, 1);
   assert.equal(gradeFigures('$1,187', read({ amount: -1187.40 })).ok, true);
   assert.equal(gradeFigures('$1.5 million', read({ amount: 1500000 })).ok, true);
   assert.equal(gradeFigures('$1,000,000.01', read({ amount: 1000000.02 })).ok, false);
