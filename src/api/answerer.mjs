@@ -2,10 +2,14 @@
 // runtime engine (live or fake), then through grounding and escaping before it is stored.
 //
 // createLiveAnswerer({ engine, packs }) (packs: the live pack view, src/packs/live.mjs) ->
-//   answer({ db, key, questionId?, text?, clock? }) -> { paragraphs, refs, notice?, provenance? } | null
+//   answer({ db, key, questionId?, text?, clock?, refs? }) -> { paragraphs, refs, notice?, provenance? } | null
 //   whatIf({ db, packId, clock? })                  -> { paragraphs, refs, notice?, provenance? }
 // paragraphs are paragraph inner HTML (the handler wraps each in <p>); null means questionId
-// names no question in that conversation.
+// names no question in that conversation. answer's `refs` input is the parsed request context
+// ([{ kind, id }], src/api/context-refs.mjs): the ones the store knows go into the conversation
+// context as `references` ([{ kind, id, use }], merged with a rec or pack context) and into
+// provenance.references ([{ kind, id }], absent when none resolved). References are never grounding
+// evidence: their ids and tool hints never ground a number.
 //
 // Prompt assembly (buildChatPrompt): the static product rules plus the active packs' context go
 // in `system` (before the SDK dynamic boundary, prompt cached, no household data); the household
@@ -74,6 +78,7 @@ import { findQuestion, matchQuestion, recForKey, isThreadKey } from './questions
 import { fakeAnswerScript } from './fake-answers.mjs';
 import { HORIZON_IDS, LIMITS, validateGoal } from '../shared/goals.mjs';
 import { stripSources, listMarkerSpans, markdownBlocks } from '../shared/answer-text.mjs';
+import { resolveRefs } from './context-refs.mjs';
 
 export const PRODUCT_RULES = [
   'You are Fathom, a year-round financial co-pilot for one household of independent professionals.',
@@ -84,6 +89,7 @@ export const PRODUCT_RULES = [
   'Call tools before you write the answer, and do not narrate tool use.',
   'Answer in short paragraphs separated by blank lines. You may use bullet lists (lines starting with "- "), numbered lists (lines starting with "1. ") and **bold**; use no other markdown (no headings, links or tables) and no HTML.',
   'You never change a recommendation yourself. When the owner explicitly asks to change one, call propose_recommendation_action so the owner can confirm it; never propose on your own initiative.',
+  'The conversation context may list references: items the owner pointed at on screen, as kind and id, each with the tools that read it. Read them with those tools; never guess what they hold and never state a number about them that a tool did not return.',
   'You never add a goal yourself. When the owner explicitly asks to add one, call propose_goal with the goal in their own words so the owner can save it; include a target amount only when the owner stated it.',
 ].join('\n');
 
@@ -606,7 +612,7 @@ export function createLiveAnswerer({ engine, packs } = {}) {
   // proposeFor: null (no proposal tool), '*' (any visible rec, an Ask thread with no rec)
   // or the rec id of an Ask thread asked from that rec (a bare rec id still resolves the same
   // way). Proposals for any other rec are ignored.
-  async function run({ db, scenario, now, question, context, history, baseRefs, fakeArgs, proposeFor = null, onEvent }) {
+  async function run({ db, scenario, now, question, context, history, baseRefs, references = [], fakeArgs, proposeFor = null, onEvent }) {
     if (!engine.isOn()) return offNotice(engine);
     const t0 = performance.now();
     const stream = streamer(onEvent);
@@ -625,8 +631,10 @@ export function createLiveAnswerer({ engine, packs } = {}) {
       ...(stream.engineEvent ? { onEvent: stream.engineEvent } : {}) };
 
     // groundAnswer sanitizes each datum (and context.entries bodies lose their metadata lines there).
+    // References (ids and tool hints) are for the model only and never ground a number.
     const entryBodies = active.flatMap(({ pack }) => pack.entries.map(e => groundingBody(e.body)));
-    const data = [summary, context, entryBodies];
+    const { references: _references, ...groundedContext } = context || {};
+    const data = [summary, context ? groundedContext : null, entryBodies];
     const dataLabels = ['household summary', 'conversation context', 'knowledge pack entries'];
     const resultsOf = res => (res && Array.isArray(res.toolResults) ? res.toolResults : []);
     const textOf = res => stripSources(res.text);
@@ -697,13 +705,14 @@ export function createLiveAnswerer({ engine, packs } = {}) {
         costUsd: Number(costUsd.toFixed(6)),
         ...(proposal ? { proposal } : {}),
         ...(goalProposal ? { goalProposal } : {}),
+        ...(references.length ? { references: references.map(({ kind, id }) => ({ kind, id })) } : {}),
         work: { ms: Math.max(0, Math.round(performance.now() - t0)), items: work.items },
       },
     };
   }
 
   return {
-    async answer({ db, key, questionId, text, clock, onEvent } = {}) {
+    async answer({ db, key, questionId, text, clock, refs, onEvent } = {}) {
       if (typeof key !== 'string' || !key) throw new TypeError('answer needs a conversation key');
       const scenario = buildScenario(db, { clock, packs });
       const now = clockNow(db, clock);
@@ -728,7 +737,9 @@ export function createLiveAnswerer({ engine, packs } = {}) {
       } else if (key.startsWith('pack:')) {
         context = packConversationContext(db, packs, key.slice(5)).context;
       }
-      return run({ db, scenario, now, question, context, history: scenario.live.conversations[key] || [], baseRefs,
+      const references = resolveRefs(db, scenario, refs);
+      if (references.length) context = { ...(context || {}), references };
+      return run({ db, scenario, now, question, context, history: scenario.live.conversations[key] || [], baseRefs, references,
         proposeFor: rec ? rec.id : isThreadKey(key) ? '*' : null, onEvent,
         fakeArgs: { key, questionId: hasQ ? questionId : undefined, text: hasQ ? undefined : question } });
     },
