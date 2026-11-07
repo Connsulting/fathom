@@ -61,7 +61,7 @@ const ids = (list) => (list || []).map((t) => t.id);
 test('AC10 opening a fallback thread requests its one title repair and reload does not repeat it', async ({ page, request }) => {
   test.skip(REMOTE, 'This check reads the local demo spend ledger.');
   const thread = await newThread(request, '529 contributions.');
-  const store = new DatabaseSync(STORE);
+  const store = new DatabaseSync(STORE());
   try { store.prepare("UPDATE conversations SET title = '529 contributions.', title_source = 'auto' WHERE key = ?").run(thread.key); }
   finally { store.close(); }
   const titleCalls = () => {
