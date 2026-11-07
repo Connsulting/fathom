@@ -19,7 +19,7 @@ test('the Ask smoke in fake mode is grounded, records spend and carries provenan
   }
   assert.equal(r.provenance.engine, 'fake');
   assert.equal(r.provenance.grounding.ok, true);
-  assert.ok(r.provenance.tools.some(x => x.name === 'household_summary'));
+  assert.ok(r.provenance.tools.some(x => x.name === 'household'));
   assert.ok(r.provenance.costUsd > 0);
 });
 

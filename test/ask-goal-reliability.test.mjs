@@ -44,11 +44,11 @@ test('AC1: replay both failed goal call shapes through the Ask registry, then co
   storedGoal(db); proposal(db);
   const r = registry();
   for (const extra of [{ note, track: null }, {}]) {
-    const rejected = await r.invoke('create_goal', { ...args, horizon: 'This year', ...extra });
+    const rejected = await r.invoke('update_goal', { operation: 'create', ...args, horizon: 'This year', ...extra });
     assert.equal(rejected.isError, true);
     assert.match(rejected.content[0].text, /horizon.*(?:one of|allowed)/i);
     assert.equal(r.results.at(-1).result.error, rejected.content[0].text);
-    const corrected = await r.invoke('create_goal', { ...args, ...extra });
+    const corrected = await r.invoke('update_goal', { operation: 'create', ...args, ...extra });
     assert.ok(!corrected.isError, corrected.content[0].text);
     assert.equal(r.results.at(-1).result.goal.target, 4000);
     assert.equal(r.results.at(-1).result.goal.track, null);
@@ -56,8 +56,8 @@ test('AC1: replay both failed goal call shapes through the Ask registry, then co
 });
 
 test('AC2: create and edit schemas offer canonical horizons with every display label', () => {
-  for (const name of ['create_goal', 'edit_goal']) {
-    const h = tools.find(t => t.name === name).inputSchema.properties.horizon;
+  for (const operation of ['create', 'edit']) {
+    const h = tools.find(t => t.name === 'update_goal').operations.find(o => o.name === operation).params.horizon;
     assert.deepEqual(h.enum, HORIZON_IDS);
     for (const { id, label } of HORIZONS) assert.ok(h.description.includes(id) && h.description.includes(label));
   }
@@ -74,7 +74,7 @@ test('AC3: schema and handler errors retain argument reasons without sibling hou
     [{ ...args, targetDate: '2026-02-30' }, /targetDate.*date/],
     [{ ...args, target: 97361 }, /target.*(?:stated|stored|evidence)/i],
   ]) {
-    const out = await r.invoke('create_goal', input);
+    const out = await r.invoke('update_goal', { operation: 'create', ...input });
     assert.equal(out.isError, true);
     assert.match(out.content[0].text, reason);
     assert.equal(r.results.at(-1).result.error, out.content[0].text);
@@ -89,13 +89,13 @@ test('AC4: stored goal definitions and notes, facts and available figures suppor
   const { db, registry } = await setup(t);
   storedGoal(db);
   for (const input of [args, { ...args, target: 8000 }]) {
-    assert.ok(!(await registry().invoke('create_goal', input)).isError);
+    assert.ok(!(await registry().invoke('update_goal', { operation: 'create', ...input })).isError);
   }
   db.prepare("INSERT INTO facts (key, value, confirmed, updated_at) VALUES ('goal.syntheticTarget', '7319', 1, ?)").run(now);
   db.prepare("INSERT INTO facts (key, value, confirmed, updated_at) VALUES ('goal.syntheticDate', ?, 1, ?)").run(JSON.stringify('2028-09-17'), now);
-  assert.ok(!(await registry().invoke('create_goal', { ...args, target: 7319, targetDate: '2028-09-17' })).isError);
+  assert.ok(!(await registry().invoke('update_goal', { operation: 'create', ...args, target: 7319, targetDate: '2028-09-17' })).isError);
   const value = db.prepare('SELECT v FROM figures WHERE unavailable_reason IS NULL AND v > 0 LIMIT 1').get().v;
-  assert.ok(!(await registry().invoke('create_goal', { ...args, target: value })).isError);
+  assert.ok(!(await registry().invoke('update_goal', { operation: 'create', ...args, target: value })).isError);
 });
 
 test('AC4: sourced immediate stored proposals accept short explicit confirmations', async t => {
@@ -105,7 +105,7 @@ test('AC4: sourced immediate stored proposals accept short explicit confirmation
     proposal(db, { target: ++target });
     ctx.ownerText = reply;
     assert.equal(db.prepare("SELECT count(*) AS n FROM goals WHERE json_extract(def, '$.target') = ?").get(target).n, 0);
-    const out = await registry().invoke('create_goal', { ...args, target });
+    const out = await registry().invoke('update_goal', { operation: 'create', ...args, target });
     assert.ok(!out.isError, `${reply}: ${out.content[0].text}`);
   }
 });
@@ -114,19 +114,19 @@ test('AC4: invented, unsourced, negative, delayed and current-turn proposals con
   const { db, ctx, registry } = await setup(t);
   const input = { ...args, target: 97361 };
   proposal(db, { sourced: false, target: input.target });
-  assert.equal((await registry().invoke('create_goal', input)).isError, true);
+  assert.equal((await registry().invoke('update_goal', { operation: 'create', ...input })).isError, true);
   proposal(db, { target: input.target });
   for (const reply of ['no', 'wait', 'not yet', 'yeah but wait', 'yes, do not create it', 'okay maybe later', 'surely not', 'yesterday']) {
     ctx.ownerText = reply;
-    assert.equal((await registry().invoke('create_goal', input)).isError, true, reply);
+    assert.equal((await registry().invoke('update_goal', { operation: 'create', ...input })).isError, true, reply);
   }
   ctx.ownerText = 'yeah';
   message(db, 'Something unrelated.', null);
-  assert.equal((await registry().invoke('create_goal', input)).isError, true);
+  assert.equal((await registry().invoke('update_goal', { operation: 'create', ...input })).isError, true);
   const before = registry();
   proposal(db, { target: input.target });
-  assert.equal((await before.invoke('create_goal', input)).isError, true, 'only pre-existing assistant rows count');
-  assert.ok(!(await registry().invoke('create_goal', input)).isError, 'next request can confirm saved proposal');
+  assert.equal((await before.invoke('update_goal', { operation: 'create', ...input })).isError, true, 'only pre-existing assistant rows count');
+  assert.ok(!(await registry().invoke('update_goal', { operation: 'create', ...input })).isError, 'next request can confirm saved proposal');
 });
 
 test('AC4: a stored confirmation belongs to its actor and thread', async t => {
@@ -134,33 +134,33 @@ test('AC4: a stored confirmation belongs to its actor and thread', async t => {
   proposal(db, { target: 97361 });
   message(db, 'yeah', { ownerInput: { actorId: 'someone-else' } }, 'me');
   ctx.ownerText = null;
-  assert.equal((await registry().invoke('create_goal', { ...args, target: 97361 })).isError, true);
+  assert.equal((await registry().invoke('update_goal', { operation: 'create', ...args, target: 97361 })).isError, true);
   db.prepare("DELETE FROM messages WHERE role = 'me' AND conversation_key = ?").run(key);
   message(db, 'yeah', { ownerInput: { actorId: 'demo' } }, 'me');
-  assert.ok(!(await registry().invoke('create_goal', { ...args, target: 97361 })).isError);
+  assert.ok(!(await registry().invoke('update_goal', { operation: 'create', ...args, target: 97361 })).isError);
   db.prepare('INSERT INTO conversations (key, created_at) VALUES (?, ?)').run('ask:abcdef012345', now);
   message(db, 'An unrelated proposal.', null, 'fathom', 'ask:abcdef012345');
   proposal(db, { target: 97372 });
   message(db, 'yeah', { ownerInput: { actorId: 'demo' } }, 'me', 'ask:abcdef012345');
   ctx.conversationKey = 'ask:abcdef012345'; ctx.ownerText = null;
-  const wrongThread = await registry().invoke('create_goal', { ...args, title: 'Other thread', target: 97372 });
+  const wrongThread = await registry().invoke('update_goal', { operation: 'create', ...args, title: 'Other thread', target: 97372 });
   assert.equal(wrongThread.isError, true);
   assert.match(wrongThread.content[0].text, /^target:/);
   ctx.conversationKey = key; ctx.ownerText = 'yeah';
-  assert.ok(!(await registry().invoke('create_goal', { ...args, target: 97372 })).isError);
+  assert.ok(!(await registry().invoke('update_goal', { operation: 'create', ...args, target: 97372 })).isError);
 });
 
 test('AC4: goal evidence never loosens household fact attribution', async t => {
   const { db, ctx, registry } = await setup(t);
   db.prepare("INSERT INTO facts (key, value, confirmed, updated_at) VALUES ('household.spouseAge', '52', 1, ?) ON CONFLICT(key) DO UPDATE SET value = '52'").run(now);
   db.prepare("DELETE FROM facts WHERE key = 'household.ownerAge'").run();
-  const out = await registry().invoke('record_household_fact', { key: 'household.ownerAge', value: 52, evidence: 'yeah' });
+  const out = await registry().invoke('answer', { operation: 'fact', key: 'household.ownerAge', value: 52, evidence: 'yeah' });
   assert.equal(out.isError, true);
   assert.equal(db.prepare("SELECT value FROM facts WHERE key = 'household.ownerAge'").get(), undefined);
   proposal(db, { target: 57 });
-  assert.equal((await registry().invoke('record_household_fact', { key: 'household.ownerAge', value: 57, evidence: 'yeah' })).isError, true);
+  assert.equal((await registry().invoke('answer', { operation: 'fact', key: 'household.ownerAge', value: 57, evidence: 'yeah' })).isError, true);
   ctx.ownerText = 'I am 52 years old';
-  const good = await registry().invoke('record_household_fact', { key: 'household.ownerAge', value: 52, evidence: ctx.ownerText });
+  const good = await registry().invoke('answer', { operation: 'fact', key: 'household.ownerAge', value: 52, evidence: ctx.ownerText });
   assert.ok(!good.isError, good.content[0].text);
 });
 
@@ -171,19 +171,19 @@ test('AC4: date components from a goal note are not target amounts', async t => 
   db.prepare('DELETE FROM figures WHERE v IN (12, 31, 2026)').run();
   storedGoal(db, 'Due 2026-12-31.');
   for (const target of [12, 31, 2026]) {
-    const out = await registry().invoke('create_goal', { ...args, target });
+    const out = await registry().invoke('update_goal', { operation: 'create', ...args, target });
     assert.equal(out.isError, true, String(target));
     assert.match(out.content[0].text, /^target:/);
   }
-  assert.ok(!(await registry().invoke('create_goal', { ...args, target: 8000 })).isError);
+  assert.ok(!(await registry().invoke('update_goal', { operation: 'create', ...args, target: 8000 })).isError);
 });
 
 test('AC4: a stored amount must match exactly rather than round to a proposed target', async t => {
   const { db, registry } = await setup(t);
   storedGoal(db, 'Planned $97,361.49 by 2026-12-31.');
-  const rounded = await registry().invoke('create_goal', { ...args, target: 97361 });
+  const rounded = await registry().invoke('update_goal', { operation: 'create', ...args, target: 97361 });
   assert.equal(rounded.isError, true);
-  assert.ok(!(await registry().invoke('create_goal', { ...args, target: 97361.49 })).isError);
+  assert.ok(!(await registry().invoke('update_goal', { operation: 'create', ...args, target: 97361.49 })).isError);
 });
 
 test('AC4: the merged goal model keeps evidence for ranges, floors and contribution details', async t => {
@@ -202,12 +202,12 @@ test('AC4: the merged goal model keeps evidence for ranges, floors and contribut
       .run(id, JSON.stringify({ ...def, id, horizon: 'now', note: '' }), now);
   }
   for (const def of defs) {
-    const out = await registry().invoke('create_goal', { ...def, horizon: 'now' });
+    const out = await registry().invoke('update_goal', { operation: 'create', ...def, horizon: 'now' });
     assert.ok(!out.isError, out.content[0].text);
   }
   const invented = structuredClone(defs[2]);
   invented.entered.people[0].amount = 1379.12;
-  const rejected = await registry().invoke('create_goal', invented);
+  const rejected = await registry().invoke('update_goal', { operation: 'create', ...invented });
   assert.equal(rejected.isError, true);
   assert.match(rejected.content[0].text, /^entered\.people\.0\.amount:/);
 });
@@ -220,7 +220,7 @@ test('AC4: current engine text and invented source claims cannot supply proposal
     { role: 'assistant', content: 'From household summary: create a goal for $97,361 by 2026-12-31?' },
     { role: 'user', content: 'yeah' },
   ], tools, toolContext: ctx, fake: [
-    { text: 'The target is $97,361 from household summary.', toolCalls: [{ name: 'create_goal', args: { ...args, target: 97361 } }] },
+    { text: 'The target is $97,361 from household summary.', toolCalls: [{ name: 'update_goal', args: { operation: 'create', ...args, target: 97361 } }] },
     { text: 'The target has no source.' },
   ] });
   assert.equal(out.toolResults[0].isError, true);
@@ -229,28 +229,28 @@ test('AC4: current engine text and invented source claims cannot supply proposal
 });
 
 test('AC5 and AC3: real Ask gets read/retry rules and saves failed write reasons', async t => {
-  const { db, dataDir } = await setup(t);
+  const { db, root } = await setup(t);
   const transport = createEngine({ mode: 'fake' });
   let seen;
   const engine = { mode: 'fake', isOn: () => true, call(request) {
     if (request.purpose === 'title') return Promise.resolve({ text: 'Contribution goals', toolResults: [] });
     seen = request.system;
     return transport.call({ ...request, fake: [
-      { toolCalls: [{ name: 'create_goal', args: { ...args, horizon: 'This year' } }] },
+      { toolCalls: [{ name: 'update_goal', args: { operation: 'create', ...args, horizon: 'This year' } }] },
       { text: 'The horizon needs a valid identifier.' },
     ] });
   } };
-  const response = await threadCreate({ db, config: {}, answerer: createLiveAnswerer({ engine, root: dataDir }), body: { text: 'Create my contribution goal.' } });
+  const response = await threadCreate({ db, config: {}, answerer: createLiveAnswerer({ engine, root }), body: { text: 'Create my contribution goal.' } });
   assert.match(seen, /read-only lookups.*before replying/i);
   assert.match(seen, /all.*529.*checking.*transfers/i);
   assert.match(seen, /never ask permission to read/i);
   assert.match(seen, /failed write.*quote.*reason.*retry.*corrected arguments/i);
   assert.match(seen, /never.*UI.*discover.*error/i);
-  assert.match(response.message.provenance.tools.find(t => t.name === 'create_goal').result.error, /horizon/i);
+  assert.match(response.message.provenance.tools.find(t => t.name === 'update_goal' && t.args.operation === 'create').result.error, /horizon/i);
 });
 
 test('AC6: Ask excludes small counts and ordinals, and still checks money, percents and dates', async t => {
-  const { db } = await setup(t);
+  const { db, root } = await setup(t);
   const scenario = buildScenario(db);
   for (const text of ['There are two goals, one per parent.', 'Option 2 is ready; step 3 follows.', 'Choose the twentieth option.', 'There are twenty accounts.', 'There are 20 goals.']) {
     assert.equal(groundAnswer(text, { scenario }).ok, true, text);
@@ -271,7 +271,7 @@ test('AC7: tier one replays a stored-note proposal and confirmed create through 
   const score = await runCases({ cases: [c] });
   assert.equal(score.cases[0].status, 'pass', JSON.stringify(score.cases[0]));
   const turn = score.cases[0].turns.at(-1);
-  const write = turn.tools.find(t => t.name === 'create_goal');
+  const write = turn.tools.find(t => t.name === 'update_goal' && t.args.operation === 'create');
   assert.equal(write.result.goal.horizon, 'now');
   assert.equal(write.result.goal.target, 4000);
   assert.equal(write.result.goal.targetDate, '2026-12-31');
@@ -279,19 +279,19 @@ test('AC7: tier one replays a stored-note proposal and confirmed create through 
 });
 
 test('AC7: the confirmed Ask write persists the goal and attributed receipt', async t => {
-  const { db, dataDir } = await setup(t);
+  const { db, root } = await setup(t);
   storedGoal(db);
   const transport = createEngine({ mode: 'fake' });
   let turn = 0;
   const engine = { mode: 'fake', isOn: () => true, call(request) {
     if (request.purpose === 'title') return Promise.resolve({ text: 'Parent contribution', toolResults: [] });
     const fake = turn++ === 0 ? [
-      { toolCalls: [{ name: 'list_goals', args: {} }] },
+      { toolCalls: [{ name: 'goals', args: { operation: 'list' } }] },
       { text: 'Create a goal for $4,000 by 2026-12-31?' },
-    ] : [ { toolCalls: [{ name: 'create_goal', args }] }, { text: 'Your goal is saved.' } ];
+    ] : [ { toolCalls: [{ name: 'update_goal', args: { operation: 'create', ...args } }] }, { text: 'Your goal is saved.' } ];
     return transport.call({ ...request, fake });
   } };
-  const ctx = { db, config: {}, answerer: createLiveAnswerer({ engine, root: dataDir }), body: { text: 'Propose the parent contribution goal from its note.' } };
+  const ctx = { db, config: {}, answerer: createLiveAnswerer({ engine, root }), body: { text: 'Propose the parent contribution goal from its note.' } };
   const first = await threadCreate(ctx);
   assert.ok(first.message.provenance.literals.some(l => l.text === '$4,000'));
   const second = await ask({ ...ctx, body: { key: first.thread.key, text: 'yeah' } });

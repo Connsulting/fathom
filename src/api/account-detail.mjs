@@ -5,7 +5,7 @@
 // source so the browser can show where it came from, like any other figure.
 
 import { parseJson } from '../store/db.mjs';
-import { accountLabel, accountSubtitle } from '../shared/account-label.mjs';
+import { accountLabel, accountLabelParts, accountSubtitle } from '../shared/account-label.mjs';
 import { accountNaming } from '../accounts/naming.mjs';
 import { accountFreshness, freshnessOf } from '../ingest/freshness.mjs';
 import { howToFor } from '../ingest/howto.mjs';
@@ -124,6 +124,7 @@ export function accountDetail(ctx) {
     account: {
       id,
       label: accountLabel(named || acct),
+      ...accountLabelParts(named || acct),
       sourceName: acct.name,
       displayName: acct.display_name || null,
       subtitle: accountSubtitle(acct),

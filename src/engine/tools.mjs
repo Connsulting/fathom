@@ -1,6 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { compileSchema } from './schema.mjs';
+import { operationScopes } from '../tools/tools.mjs';
 import { WRITE_SCOPES } from '../shared/action-scopes.mjs';
 
 export function createRegistryServer(registry = [], { purpose, ctx } = {}) {
@@ -9,11 +10,11 @@ export function createRegistryServer(registry = [], { purpose, ctx } = {}) {
   const offered = [];
   for (const entry of registry) {
     if (!entry || !/^[a-zA-Z0-9_-]{1,64}$/.test(entry.name) || names.has(entry.name) ||
-      !['read', ...WRITE_SCOPES].includes(entry.scope) || typeof entry.description !== 'string' || typeof entry.handler !== 'function') {
+      !['read', 'write'].includes(entry.kind) || !Array.isArray(entry.operations) || entry.operations.some(o => operationScopes(o).some(s => !['read', ...WRITE_SCOPES].includes(s))) || typeof entry.description !== 'string' || typeof entry.handler !== 'function') {
       throw new TypeError('Invalid tool registry entry');
     }
     names.add(entry.name);
-    if (purpose === 'extract' || purpose === 'confirm' || (entry.scope !== 'read' && purpose !== 'chat') || entry.mcpOnly) continue;
+    if (purpose === 'extract' || purpose === 'confirm' || (entry.kind !== 'read' && purpose !== 'chat') || entry.mcpOnly) continue;
     offered.push({ entry, validate: compileSchema(entry.inputSchema) });
   }
   offered.sort((a, b) => a.entry.name.localeCompare(b.entry.name));
@@ -37,7 +38,7 @@ export function createRegistryServer(registry = [], { purpose, ctx } = {}) {
           : e.keyword === 'additionalProperties' ? 'is not a known argument' : e.message;
         return `${path} ${reason}`;
       }).join('; ');
-      return reject(name, args, error);
+      return reject(name, args, `${name}.${args?.operation ?? '(missing operation)'}: bad_input: ${error}`);
     }
     try {
       const result = await found.entry.handler(args, ctx);
@@ -52,7 +53,7 @@ export function createRegistryServer(registry = [], { purpose, ctx } = {}) {
   instance.server.registerCapabilities({ tools: {} });
   instance.server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: offered.map(({ entry }) => ({
     name: entry.name, description: entry.description, inputSchema: entry.inputSchema,
-    annotations: { readOnlyHint: entry.scope === 'read', destructiveHint: false, openWorldHint: false },
+    annotations: { readOnlyHint: entry.kind === 'read', destructiveHint: false, openWorldHint: false },
   })) }));
   instance.server.setRequestHandler(CallToolRequestSchema, request => invoke(request.params.name, request.params.arguments ?? {}));
   return { type: 'sdk', name: 'fathom', instance, results, invoke, names: offered.map(item => item.entry.name) };
