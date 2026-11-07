@@ -19,6 +19,7 @@ export const headers = [
   ['update_preferences', 'write', 'Remember household preferences.', 'Remembering your preference', 'your preferences'],
   ['refresh', 'write', 'Refresh household data and plans.', 'Refreshing your data', 'data refresh'],
   ['undo', 'write', 'Undo an earlier change by receipt.', 'Undoing your change', 'undone change'],
-].map(([name, kind, purpose, progress, source]) => ({ name, kind, purpose, progress, source, ...(name === 'undo' ? { mcpOnly: true } : {}) }));
+].map(([name, kind, purpose, progress, source]) => ({ name, kind, purpose, progress, source,
+  firstOperation: ({ household: 'summary', accounts: 'list', transactions: 'search', spending: 'total', business: 'pnl', tax: 'estimate', retirement: 'target', goals: 'list', recommendations: 'list', knowledge: 'packs' })[name], ...(name === 'undo' ? { mcpOnly: true } : {}) }));
 
 export const operationScopes = op => op.scopes || [op.scope];

@@ -87,7 +87,7 @@ export function buildRegistry(modules, toolHeaders = headers) {
   }
   const tools = toolHeaders.filter(t => grouped.has(t.name)).map(header => {
     const operations = grouped.get(header.name);
-    const first = operations.find(o => ['summary', 'list', 'packs', 'pnl', 'search'].includes(o.name) && !o.required.length);
+    const first = operations.find(o => !o.required.length && o.name === header.firstOperation) || operations.find(o => !o.required.length);
     operations.sort((a, b) => a === first ? -1 : b === first ? 1 : a.name.localeCompare(b.name));
     if (operations.length > 8 && header.name !== 'calculate') throw new TypeError(`Too many operations for ${header.name}`);
     if (header.kind === 'read' && header.name !== 'calculate' && operations[0].required.length) throw new TypeError(`First read operation requires arguments: ${header.name}`);

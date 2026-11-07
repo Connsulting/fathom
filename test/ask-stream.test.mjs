@@ -1,3 +1,4 @@
+import { tools as REGISTRY } from '../src/tools/index.mjs';
 // Item 19: Ask answers stream. The event protocol over HTTP (start, progress, text, reset, final,
 // error), the rule that nothing streamed is ever styled as verified, the trailing Sources strip and
 // the markdown subset over escaped text.
@@ -12,7 +13,7 @@ import { createRuntimeEngine } from '../src/engine/runtime.mjs';
 import { createEngine, fakeChunks } from '../src/engine/index.mjs';
 import { sdkStreamEvent, consumeSdkMessages } from '../src/engine/live.mjs';
 import { createLivePacks } from '../src/packs/live.mjs';
-import { createLiveAnswerer, renderAnswer, groundAnswer, PRODUCT_RULES, PROGRESS_LABELS, PROGRESS_START } from '../src/api/answerer.mjs';
+import { createLiveAnswerer, renderAnswer, groundAnswer, PRODUCT_RULES, PROGRESS_START } from '../src/api/answerer.mjs';
 import { stripSources, markdownBlocks, streamHtml, wrapBlocks, listMarkerSpans } from '../src/shared/answer-text.mjs';
 import { SERVER_TIMEOUT, withServer, request, postJson, openStore, tempDb } from './helpers/server.mjs';
 
@@ -51,7 +52,7 @@ test('POST /api/threads streams start, progress, text and a final event equal to
   assert.ok(firstText > 1, 'progress comes before any text');
   assert.ok(names.filter(n => n === 'text').length > 2, 'the text arrives in several chunks');
   // Progress labels are the fixed plain labels only.
-  const labels = new Set(Object.values(PROGRESS_LABELS));
+  const labels = new Set(REGISTRY.map(t => t.progress));
   for (const e of evs.filter(x => x.name === 'progress')) {
     assert.ok(labels.has(e.data.label) || /^[A-Z][a-z ]+$/.test(e.data.label), e.data.label);
     assert.deepEqual(Object.keys(e.data), ['label']);
@@ -141,7 +142,7 @@ test('the fake engine emits tool and text events in deterministic chunks without
 });
 
 test('live SDK partial messages map to tool and text events', async () => {
-  assert.deepEqual(sdkStreamEvent({ type: 'stream_event', event: { type: 'content_block_start', content_block: { type: 'tool_use', name: 'mcp__fathom__get_figures', input: {} } } }),
+  assert.deepEqual(sdkStreamEvent({ type: 'stream_event', event: { type: 'content_block_start', content_block: { type: 'tool_use', name: 'mcp__fathom__household', input: {} } } }),
     { type: 'tool', name: 'household' });
   assert.deepEqual(sdkStreamEvent({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'Hi' } } }),
     { type: 'text', text: 'Hi' });
