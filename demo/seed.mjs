@@ -17,6 +17,7 @@ import { addDays, defaultPicks, BUILTIN_SOURCES, DEFAULT_CAP_USD } from '../src/
 import { loadConfig } from '../src/config.mjs';
 import { REASON_TEXT } from '../src/ingest/guess.mjs';
 import { ask, canonicalJson, OWNER_OPTIONS, KIND_OPTIONS, FACT_CHECK_OPTIONS, taxYearOptions } from '../src/ingest/confirm.mjs';
+import { captureGoalPath } from '../src/pace/build.mjs';
 
 export const SEED_ID = 'demo-seed';
 
@@ -77,6 +78,24 @@ const CLEAR_ORDER = [
 // demo rows, from the seed file. The fact key is one FACTS does not hold; the tax year has no
 // workbook rows, so answering it changes no payment. One stored guess, on the owner question.
 const CONFIRM_FACT = { key: 'retirement.planOffersRoth', value: true };
+
+// Synthetic goals of the newer goal model kinds (balance is the seed goals with targets). Seed
+// origin: they came with the demo and cannot be edited. Plain text, no dollar amounts, no tax words.
+// status is the seed display text, as for the scenario's goals. The IRA accounts have no
+// transactions, so the contribution reads its entered amount.
+export const KIND_GOALS = Object.freeze([
+  { id: 'checking-range', kind: 'range', title: 'Keep household checking in a working range', horizon: 'now', status: 'on track',
+    prose: 'Enough for the month ahead, with the rest swept to the reserve.', owner: 'joint', priority: 'medium',
+    targetLow: 5000, targetHigh: 8000, targetDate: '2026-12-31', track: { accounts: ['a_personal'] } },
+  { id: 'biz-floor', kind: 'floor', title: 'Business cash never drops below its floor', horizon: 'now', status: 'on track',
+    prose: '{n:biz} keeps a standing minimum for payroll.', owner: 'owner', priority: 'high',
+    floor: 15000, track: { accounts: ['a_biz'] } },
+  { id: 'ira-fill', kind: 'contribution', title: 'Fill both IRAs for 2026', horizon: 'now', status: 'open',
+    prose: 'Each of us puts in the full amount before the April deadline.', owner: 'joint', priority: 'medium',
+    target: 15000, taxYear: 2026, targetDate: '2027-04-15', accounts: ['a_broth', 'a_jroth'],
+    split: [{ person: 'owner', amount: 7500 }, { person: 'spouse', amount: 7500 }],
+    entered: { asOf: '2026-10-31', people: [{ person: 'owner', amount: 7500 }, { person: 'spouse', amount: 4000 }] } },
+].map(g => Object.freeze(g)));
 const CONFIRM_TAX_YEAR = 2025;
 const CONFIRM_GUESS = { option: 'owner', reason: REASON_TEXT.institution };
 
@@ -253,6 +272,8 @@ export function seedDemo(db) {
 
     const goal = db.prepare('INSERT INTO goals (id, def, sort) VALUES (?, ?, ?)');
     S.goals.forEach((g, i) => goal.run(g.id, JSON.stringify(g), i));
+    // Balances are in, so a range captures its path from the tracked balance at the demo clock.
+    KIND_GOALS.forEach((g, i) => goal.run(g.id, JSON.stringify({ ...g, pace: g.kind === 'range' ? captureGoalPath(db, g, clock) : null }), S.goals.length + i));
     const deadline = db.prepare('INSERT INTO deadlines (date, label, title, rec_id, hard) VALUES (?, ?, ?, ?, ?)');
     for (const d of S.deadlines) deadline.run(d.date, d.label, d.title, d.recId || null, d.hard ? 1 : 0);
     const event = db.prepare('INSERT INTO events (date, kind, title, body, sort) VALUES (?, ?, ?, ?, ?)');

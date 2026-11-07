@@ -9,9 +9,9 @@ import { estimateUnknownCost, DEFAULT_MODEL } from '../src/engine/pricing.mjs';
 import { createLiveAnswerer } from '../src/api/answerer.mjs';
 import { threadCreate, ask } from '../src/api/handlers.mjs';
 import { createLivePacks } from '../src/packs/live.mjs';
-import { tools } from '../src/tools/index.mjs';
+import { tools, CAPABILITIES } from '../src/tools/index.mjs';
 import { expectedFigures, validateCases } from './cases.mjs';
-import { gradeRequiredTools, gradeFigures, gradeLength, gradeExpected, evidenceNumbers } from './graders.mjs';
+import { gradeRequiredTools, gradeFigures, gradeLength, gradeExpected, gradeProhibited, evidenceNumbers } from './graders.mjs';
 
 export async function createEvalStore() {
   const dir = await mkdtemp(join(tmpdir(), 'fathom-ask-eval-'));
@@ -123,8 +123,9 @@ export async function runCases({ cases, live = false, maxUsd = 100, outDir, scri
     const answerer = createLiveAnswerer({ engine, packs, root: store.root });
     for (const c of cases) {
       missing = (c.expectedFail?.missingTools ?? []).filter(name => !tools.some(t => t.name === name));
+      const missingCapabilities = (c.expectedFail?.missingCapabilities ?? []).filter(name => !CAPABILITIES.includes(name));
       const beforeCost = ledger.costUsd;
-      const result = { id: c.id, family: c.family, status: 'pass', missingTools: missing, turns: [] };
+      const result = { id: c.id, family: c.family, status: 'pass', missingTools: missing, missingCapabilities, turns: [] };
       let key;
       for (turn of c.turns) {
         attempts = []; requestLengths = [];
@@ -137,16 +138,18 @@ export async function runCases({ cases, live = false, maxUsd = 100, outDir, scri
         const contextNumbers = evidenceNumbers([{ name: 'context', args: {}, result: { figures: Object.values(figures) } }]);
         const gradedAttempts = attempts.map((a, i) => ({ text: a.text, error: a.error ?? null,
           figures: gradeFigures(a.text, attempts.slice(0, i + 1).flatMap(r => r.toolResults), { figures, contextNumbers }),
-          length: gradeLength(a.text, turn.maxWords) }));
+          length: gradeLength(a.text, turn.maxWords),
+          prohibited: gradeProhibited(turn.prohibit, { text: a.text ?? '', writeCalls: 0 }) }));
         const required = gradeRequiredTools(turn.required, calls);
         const numeric = gradeFigures(delivered, calls, { figures, contextNumbers });
         const length = gradeLength(delivered, turn.maxWords);
         const expectedGrade = gradeExpected(delivered, expected, { figures });
         const refusal = !turn.refusal || /\b(?:don't|doesn't|do not|does not|cannot|can't|not available|not stored|not tracked|no access)\b/i.test(delivered);
+        const prohibited = gradeProhibited(turn.prohibit, { text: delivered, writeCalls: calls.filter(c => tools.some(t => t.name === c.name && t.scope !== 'read')).length });
         const existingToolsOk = required.checks.filter(r => !missing.includes(r.name)).every(r => r.ok);
-        const safe = numeric.ok && length.ok && refusal && gradedAttempts.every(a => a.figures.ok && a.length.ok && !a.error);
+        const safe = numeric.ok && length.ok && refusal && prohibited.ok && gradedAttempts.every(a => a.figures.ok && a.length.ok && a.prohibited.ok && !a.error);
         const ok = safe && required.ok && expectedGrade.ok && !response.message?.notice;
-        const turnMissing = turn.required.some(r => missing.includes(r.name));
+        const turnMissing = missingCapabilities.length > 0 || turn.required.some(r => missing.includes(r.name));
         const gapOnly = turnMissing && safe && existingToolsOk && !response.message?.notice;
         result.turns.push({ question: turn.question, rubric: turn.rubric, delivered, tools: calls, required,
           figures: numeric, expected: expectedGrade, length, refusal, attempts: gradedAttempts,
@@ -169,14 +172,16 @@ export async function runCases({ cases, live = false, maxUsd = 100, outDir, scri
 export async function writeScorecard(dir, scorecard) {
   await mkdir(dir, { recursive: true });
   const lines = ['# Ask evals', '', `Tier: ${scorecard.live ? 'live' : 'scripted'}. Cost: $${scorecard.costUsd.toFixed(6)}. Stop: ${scorecard.stopped ?? 'none'}.`, '',
-    '| Case | Result | Tools called / required | Unsourced / self-computed | Words / budget | Cost |',
+    '| Case | Result | Tools called / required | unsourced / self-computed / rounded / spelled_out / context-only | Words / budget | Cost |',
     '| --- | --- | --- | --- | --- | --- |'];
+  const kindCount = (grade, kind) => (grade?.[kind === 'self-computed' ? 'selfComputed' : kind === 'spelled_out' ? 'spelledOut' : kind === 'context-only' ? 'contextOnly' : kind] ?? []).length;
   for (const c of scorecard.cases) {
     const names = c.turns.flatMap(t => t.tools.map(r => r.name)).join(', ');
     const required = c.turns.flatMap(t => t.required.checks.map(r => `${r.name}:${r.ok ? 'ok' : 'missing'}`)).join(', ');
-    const un = c.turns.reduce((s, t) => s + t.figures.unsourced.length + t.attempts.reduce((n, a) => n + a.figures.unsourced.length, 0), 0);
-    const arithmetic = c.turns.reduce((s, t) => s + t.figures.selfComputed.length + t.attempts.reduce((n, a) => n + a.figures.selfComputed.length, 0), 0);
-    lines.push(`| ${c.id} | ${c.status} | ${names || 'none'} / ${required} | ${un} / ${arithmetic} | ${c.turns.map(t => `${t.length.words}/${t.length.maxWords}`).join(', ')} | $${c.costUsd.toFixed(6)} |`);
+    const grades = c.turns.flatMap(t => [t.figures, ...t.attempts.map(a => a.figures)]);
+    const counts = ['unsourced', 'self-computed', 'rounded', 'spelled_out', 'context-only']
+      .map(kind => grades.reduce((s, grade) => s + kindCount(grade, kind), 0));
+    lines.push(`| ${c.id} | ${c.status} | ${names || 'none'} / ${required} | ${counts.join(' / ')} | ${c.turns.map(t => `${t.length.words}/${t.length.maxWords}`).join(', ')} | $${c.costUsd.toFixed(6)} |`);
   }
   await writeFile(join(dir, 'scorecard.json'), JSON.stringify(scorecard, null, 2) + '\n');
   await writeFile(join(dir, 'summary.md'), lines.join('\n') + '\n');

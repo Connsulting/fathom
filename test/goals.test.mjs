@@ -186,6 +186,9 @@ test('recs link to the goals they serve, by topic, and archived goals do not lin
   assert.equal(rec('umbrella').housekeeping, true);
   assert.equal(rec('va529').housekeeping, false);
 
+  // A rec links at most three goals; archive the demo's contribution goal (a retirement goal too)
+  // so the new owner goal is within the cap.
+  goalArchive(s.ctx({}, { id: 'ira-fill' }));
   const g = goalCreate(s.ctx({ title: 'Retire at 55' })).goal;
   const after = goalCreate(s.ctx({ title: 'unrelated' })).scenario;
   assert.ok(after.recs.find(r => r.id === 'backdoor').serves.some(x => x.id === g.id && x.origin === 'owner'));
