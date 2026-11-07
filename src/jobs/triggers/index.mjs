@@ -53,7 +53,7 @@ function recOf(ctx, t, hit, window) {
   const questions = hit.confirm || hit.questions || (hit.catchUpPending ? [hit.catchUpPending] : []);
   if (questions.length) {
     const primary = !!hit.confirm?.length;
-    const people = t.id === 'year-end-retirement' && ctx.info.solo?.person ? [ctx.info.solo.person] : undefined;
+    const people = ['year-end-retirement', 'scorp-salary'].includes(t.id) && ctx.info.solo?.person ? [ctx.info.solo.person] : undefined;
     rec.question = { ...questionFor(questions, { accounts: ctx.data?.accounts || [], facts: ctx.facts, names: ctx.names, people }), primary };
     if (primary) {
       rec.title = dataText(rec.question.title);

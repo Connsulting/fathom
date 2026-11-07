@@ -583,7 +583,7 @@ function nextHtml(m, subject) {
     <p class="h-next-win">${windowText(r)}</p>
     ${recAnswers.html(r, 'home')}${r.question?.primary ? '' : `<div class="h-next-acts"><button type="button" class="h-btn pri" data-act="complete" data-rec="${id}">Done</button><button type="button" class="h-btn" data-act="snooze" data-rec="${id}" data-arg="${esc(snoozeLabel())}">Later</button><button type="button" class="h-btn" data-ask-next="${id}">Ask</button></div>`}
   </article></div>
-  ${r.question?.primary ? '' : '<p class="h-next-hint"><span>Swipe left for later, right for done</span></p>'}`;
+  ${r.question ? '' : '<p class="h-next-hint"><span>Swipe left for later, right for done</span></p>'}`;
 }
 
 function afterHtml(m) {
