@@ -423,7 +423,7 @@ test('pl-ac1 errors: unknown entity, from after to, more than 120 months, malfor
   assert.equal(code(() => businessPnlRows({ db, entity: STUDIO, section: 'income', category: 'Income', from: '2032-13' })), 'bad_range');
 });
 
-test('pl-ac1 demo store: two workbook entities and the unassigned business checking account', async (t) => {
+test('pl-ac1 demo store: workbook entities own their mapped business checking account', async (t) => {
   const s = await tempDb();
   t.after(() => s.close());
   seedDemo(s.db);
@@ -431,9 +431,10 @@ test('pl-ac1 demo store: two workbook entities and the unassigned business check
   const ents = list.filter((e) => e.kind === 'entity');
   assert.equal(ents.length, 2);
   for (const e of ents) assert.ok(e.workbook && e.workbook.lines > 0, e.key);
-  const own = list.find((e) => e.key === 'account:a_biz');
-  assert.ok(own, 'a_biz is its own P&L');
-  assert.equal(own.kind, 'account');
+  const own = list.find((e) => e.accounts.some(a => a.id === 'a_biz'));
+  assert.ok(own, 'a_biz belongs to a workbook entity');
+  assert.equal(own.kind, 'entity');
+  assert.equal(list.length, 2);
   assert.ok(own.transactions.rows > 0);
   for (const e of list) {
     const p = businessPnl({ db: s.db, entity: e.key });
@@ -631,7 +632,9 @@ test('pnl2-ac2 a capped rows read still sums every matching row, not just the li
   const c = cat(p.expenses, 'Business');
   const r = businessPnlRows({ db, entity, section: 'expenses', category: 'Business', month: '2032-05' });
   assert.equal(r.total, n);
-  assert.equal(r.items.length, ITEM_LIMIT, 'items are capped');
+  assert.ok(r.items.length <= ITEM_LIMIT && r.items.length > 0, 'items are capped');
+  assert.ok(Buffer.byteLength(JSON.stringify(r)) <= 256 * 1024);
+  assert.equal(r.truncated, true);
   assert.equal(val(r, r.sum), val(p, c.months['2032-05']), 'the sum counts every row');
   assert.notEqual(r2(r.items.reduce((a, i) => a + i.value, 0)), val(r, r.sum), 'the listed items alone fall short');
   const all = businessPnlRows({ db, entity, section: 'expenses', category: 'Business' });
@@ -694,8 +697,8 @@ test('pl-ac4 the module exports the contract, takes one object, never writes, an
   await get(`/api/pnl?entity=${encodeURIComponent('entity:nosuchname')}`, 404);
   await get(`/api/pnl?entity=${encodeURIComponent(STUDIO)}&from=2032-13`, 400);
   await get(`/api/pnl?entity=${encodeURIComponent(STUDIO)}&from=2032-06&to=2032-05`, 400);
-  await get(`/api/pnl?entity=${encodeURIComponent(STUDIO)}&from=2029-08&to=2032-08`, 400);
-  await get(`/api/pnl?entity=${encodeURIComponent(STUDIO)}&from=2029-09&to=2032-08`, 200);
+  await get(`/api/pnl?entity=${encodeURIComponent(STUDIO)}&from=2022-08&to=2032-08`, 400);
+  await get(`/api/pnl?entity=${encodeURIComponent(STUDIO)}&from=2022-09&to=2032-08`, 200);
   await get(`/api/pnl/rows?entity=${encodeURIComponent('entity:nosuchname')}&section=income&category=Income`, 404);
   await get(`/api/pnl/rows?entity=${encodeURIComponent(STUDIO)}&section=sideways&category=Income`, 400);
   await get(`/api/pnl/rows?entity=${encodeURIComponent(STUDIO)}&section=income&category=Income&month=2032-7`, 400);

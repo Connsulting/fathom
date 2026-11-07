@@ -182,7 +182,7 @@ test('compare uses two totals and folds their group union with unequal-period ga
   assert.equal(zero.ratio, undefined);
 });
 
-test('C4 eval scripts call valid operations and reproduce the independent expected figures', async (t) => {
+test('C4 eval scripts call valid operations', async (t) => {
   const { loadCases } = await import('../evals/cases.mjs');
   const { createEvalStore } = await import('../evals/harness.mjs');
   const store = await createEvalStore();

@@ -150,8 +150,54 @@ const fieldKey = {
   accounts: 'account_id',
   merchants: 'merchant',
 };
-const matches = (t, f, values) => values.includes(t[fieldKey[f]]);
+const matches = (t, f, values) => (f === 'merchants' ? values.map(normalizeMerchant) : values).includes(t[fieldKey[f]]);
 const scopeHas = (a, scope) => scope === 'all' || (scope === 'business' ? businessAccount(a) : spendingAccount(a));
+export function coverageGaps(input, window, scope = 'household') {
+  if (!window) return [{ code: 'incomplete_month', message: 'No complete spending window.' }];
+  const accounts = input.accounts.filter((a) => (spendingAccount(a) || businessAccount(a)) && scopeHas(a, scope));
+  const missingMonths = new Set();
+  const silent = [];
+  for (const account of accounts) {
+    const months = new Set(
+      input.transactions
+        .filter((t) => t.account_id === account.id && t.date <= input.clock)
+        .map((t) => t.date.slice(0, 7)),
+    );
+    if (!months.size) {
+      silent.push(account.id);
+      continue;
+    }
+    for (let i = monthIndex(window.from); i <= monthIndex(window.to); i++) {
+      const month = monthAt(i);
+      if (!months.has(month)) missingMonths.add(month);
+    }
+  }
+  for (let i = monthIndex(window.from); i <= monthIndex(window.to); i++) {
+    const month = monthAt(i);
+    if (month >= input.clock.slice(0, 7)) missingMonths.add(month);
+  }
+  return [
+    ...(silent.length
+      ? [
+          {
+            code: 'account_no_history',
+            message: 'Spending accounts have no transaction history.',
+            count: silent.length,
+          },
+        ]
+      : []),
+    ...(missingMonths.size
+      ? [
+          {
+            code: 'incomplete_month',
+            message: 'The requested period has incomplete or unavailable months.',
+            count: missingMonths.size,
+          },
+        ]
+      : []),
+  ];
+}
+
 export function aggregate(input, args = {}, definition = null) {
   const selected = selectSpendingRows(input),
     { rows, categories, resolved, onSpending } = selected;
@@ -222,16 +268,31 @@ export function aggregate(input, args = {}, definition = null) {
         count: uncertain.length,
       });
   }
-  const silent = input.accounts.filter((a) => scopeHas(a, scope) && !rows.some((t) => t.account_id === a.id));
-  const incomplete = (resolved.incomplete ?? []).filter((a) => scopeHas(a, scope));
-  if (silent.length || incomplete?.length)
-    gaps.push({
-      code: 'account_no_history',
-      message: 'Spending accounts have no complete history.',
-      count: new Set([...silent, ...(incomplete ?? [])].map((a) => a.id)).size,
+  const coverage = coverageGaps(input, window, scope);
+  const incomplete = (resolved.incomplete ?? []).filter(
+    (a) => (spendingAccount(a) || businessAccount(a)) && scopeHas(a, scope),
+  );
+  const noHistory = coverage.find((g) => g.code === 'account_no_history');
+  if (incomplete.length) {
+    const ids = new Set(incomplete.map((a) => a.id));
+    for (const a of input.accounts)
+      if ((spendingAccount(a) || businessAccount(a)) && scopeHas(a, scope) && !rows.some((t) => t.account_id === a.id))
+        ids.add(a.id);
+    if (noHistory) noHistory.count = ids.size;
+    else
+      coverage.push({
+        code: 'account_no_history',
+        message: 'Spending accounts have no complete history.',
+        count: ids.size,
+      });
+  }
+  if (defaultWindow && window && window.months < 12 && !coverage.some((g) => g.code === 'incomplete_month'))
+    coverage.push({
+      code: 'incomplete_month',
+      message: 'The complete spending window is shorter than requested.',
+      count: 12 - window.months,
     });
-  if (!window || (defaultWindow && window.months < 12) || (window && window.to >= input.clock.slice(0, 7)))
-    gaps.push({ code: 'incomplete_month', message: 'The requested period has incomplete or unavailable months.' });
+  gaps.push(...coverage);
   if (counted.some((t) => t.bucket === 'household' && t.class === 'unclassified'))
     gaps.push({
       code: 'unclassified_category',
@@ -308,7 +369,7 @@ export function aggregate(input, args = {}, definition = null) {
       const removedRows = included.filter((t) => matches(t, field, [v]));
       return {
         selector: { field, value: v },
-        matched: f(-sumRows(rs), 'Matched outflows', rs),
+        matched: f(-sumRows(rs) * scale, 'Matched outflows', rs, { unit: total.unit }),
         removed: f(sumRows(removedRows, value) * scale, 'Removed from total', removedRows, { unit: total.unit }),
       };
     }),
@@ -427,7 +488,8 @@ export function cashFlow(input, args) {
   const inWindow = (t) => window && t.date.slice(0, 7) >= window.from && t.date.slice(0, 7) <= window.to;
   const windowRows = rows.filter(inWindow);
   const make = (rs, w) => {
-    const f = (v, label, r) => figureFor(v, label, r, { window: w });
+    const gaps = coverageGaps(input, w, args.scope ?? 'all');
+    const f = (v, label, r) => figureFor(v, label, r, { window: w, gaps });
     const side = (scope) => {
       const r = rs.filter(
         (t) =>
@@ -468,7 +530,7 @@ export function cashFlow(input, args) {
   return {
     months,
     totals: make(windowRows, window),
-    gaps: window ? [] : [{ code: 'incomplete_month', message: 'No complete spending window.' }],
+    gaps: coverageGaps(input, window, args.scope ?? 'all'),
   };
 }
 
