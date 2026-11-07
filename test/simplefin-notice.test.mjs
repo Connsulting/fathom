@@ -8,9 +8,10 @@ test('an ok sync names the account count and the data-through date', () => {
   assert.equal(syncNotice({ scenario, run: { status: 'ok' } }), 'Synced 4 accounts, data through Jun 20, 2032');
 });
 
-test('a failed or skipped sync does not claim success', () => {
-  assert.equal(syncNotice({ scenario, run: { status: 'error' } }), '');
-  assert.equal(syncNotice({ scenario, run: { status: 'skipped' } }), '');
-  assert.equal(syncNotice({ scenario, run: null }), '');
-  assert.equal(syncNotice(null), '');
+test('a failed or skipped sync replaces a previous success line with nothing', () => {
+  const previous = syncNotice({ scenario, run: { status: 'ok' } });
+  assert.match(previous, /^Synced 4 accounts/);
+  for (const res of [{ scenario, run: { status: 'error' } }, { scenario, run: { status: 'skipped' } }, null]) {
+    assert.equal(syncNotice(res), '', 'the caller assigns this, including the empty string');
+  }
 });

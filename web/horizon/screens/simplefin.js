@@ -72,13 +72,14 @@ export function syncNotice(res) {
 }
 
 function run(kind, p) {
-  S.busy = kind; H.draw();
+  S.busy = kind;
+  S.notice = '';
+  H.draw();
   return p.then((res) => {
     S.busy = '';
-    if (res && (kind === 'connect' || kind === 'sync')) {
-      S.token = '';
-      const line = syncNotice(res);
-      if (line) S.notice = line;
+    if (kind === 'connect' || kind === 'sync') {
+      if (res) S.token = '';
+      S.notice = syncNotice(res);
     }
     H.draw();
     return res;
