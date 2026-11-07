@@ -77,7 +77,7 @@ export function render() {
     : on ? 'Proactive jobs run on schedule and stay inside the monthly budget.' : 'Proactive jobs are paused. Chat answers only from what is on file. Turn it back on here.')}
     <div class="h-card">${summary}</div>
     ${ledgerHtml(en)}
-    ${section('Jobs', table, `${jobsList.length} scheduled`)}`, 'engine');
+    ${section('Jobs', table, `${jobsList.length} scheduled`)}`);
 }
 
 /* ---------- events ---------- */

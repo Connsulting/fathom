@@ -66,9 +66,9 @@ const typing = (el) => !!el && (el.isContentEditable === true || /^(INPUT|TEXTAR
 const DECK_WHEN = {
   // Enter on a focused button or link is its native activation.
   guess: { when: () => !active()?.closest?.('button,a[href]'), sheetWhen: () => true },
-  // Escape closes an open More menu (the global row) and never leaves from a text field.
+  // Escape never leaves from a text field.
   leave: {
-    when: () => !typing(active()) && !(typeof document !== 'undefined' && document.querySelector('.h-more-btn[aria-expanded="true"]')),
+    when: () => !typing(active()),
     sheetWhen: () => true
   }
 };
@@ -641,7 +641,7 @@ export function ingestScreens(h) {
     const wait = waitingList() || '<p class="h-mute">No files are waiting.</p>';
     return shell(`${pageHead('Household', 'Confirm', 'A few short questions so imports land in the right place.')}
       <div class="h-cols"><div class="h-col-main">${deck}${decidedSection()}</div>
-      <div class="h-col-side">${section('Waiting files', wait)}</div></div>`, 'confirm');
+      <div class="h-col-side">${section('Waiting files', wait)}</div></div>`);
   }
 
   // Move by d units. Next past the last unit reaches All caught up only when nothing is left open.
