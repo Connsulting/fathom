@@ -6,7 +6,7 @@
 // preceded this did. Accounts merged as duplicates are one row already, so they count once.
 //
 // buildTrend(db, clock) -> null | { trend, figures, source }
-//   trend: { end, includesBusiness, pending, note, parts, groups, points, fig }
+//   trend: { end, includesBusiness, note, parts, groups, points, fig }
 //   figures: scenario figures (trend.total, trend.part.<id>, trend.group.<slug>) whose `sums` list
 //            the accounts, balances and dates each one adds up.
 
@@ -84,15 +84,13 @@ export function buildTrend(db, clock) {
     const months = [...values.keys()].sort();
     return { id: a.id, label: labels.get(a.id), group: groupOfKind(a.kind), values, months, last: lastDate(db, a.id, clock) };
   }).filter(x => x.months.length);
-  // An account with one month of data has no trend of its own; counting it would start the whole
-  // series at its first month, so it waits and is reported.
-  const counted = stored.filter(x => x.months.length >= 2);
-  const pending = stored.length - counted.length;
+  // An account counts from its first balance on and adds nothing before it.
+  const counted = stored;
   if (!counted.length) return null;
 
   const endMonth = counted.map(x => x.months.at(-1)).sort().at(-1);
   const endDate = counted.map(x => x.last).sort().at(-1);
-  const startMonth = counted.map(x => x.months[0]).sort().at(-1);
+  const startMonth = counted.map(x => x.months[0]).sort()[0];
   const months = monthsBetween(startMonth, endMonth).slice(-MAX_MONTHS);
   if (months.length < 2) return null;
 
@@ -112,6 +110,7 @@ export function buildTrend(db, clock) {
     const sum = { total: 0, parts: {}, groups: {} };
     const car = { total: 0, parts: {}, groups: {} };
     for (const x of counted) {
+      if (x.months[0] > m) continue;
       const part = PART_OF.get(x.group);
       const v = valueAt(x, m);
       sum.total += v;
@@ -149,7 +148,6 @@ export function buildTrend(db, clock) {
   const trend = {
     end: last.date,
     includesBusiness: true,
-    pending,
     note: carriedNote(carriedNow),
     parts: partIds.map(id => ({ id, label: PARTS.find(x => x[0] === id)[1] })),
     groups: groupIds.map(id => ({ id, part: PART_OF.get(id) })),
