@@ -1,3 +1,4 @@
+import { applyCategoryAnswer, moveCategoryRows } from '../categories/store.mjs';
 import { assertCurrentPair, mergeAccounts, refreshMergedAccounts } from './account-merge.mjs';
 // Confirm queue: short questions an import asks so its rows land in the right place, answered by
 // the owner and remembered by (kind, subject) so an equivalent re-import asks nothing new.
@@ -14,7 +15,7 @@ import { accountLabel } from '../shared/account-label.mjs';
 
 export const KINDS = Object.freeze([
   'account_owner', 'account_kind', 'entity_alias', 'tax_year', 'fact_check', 'near_duplicate', 'employer_relation', 'employer_recipient', 'document_recipient',
-  'withholding_conflict', 'account_match',
+  'withholding_conflict', 'account_match', 'transaction_category', 'category_mapping',
 ]);
 
 export const OWNER_OPTIONS = Object.freeze([
@@ -438,6 +439,8 @@ function factIsStale(db, item) {
 // Apply an answer by kind. Returns {factsChanged}.
 export function applyAnswer(db, item, optionId, { now } = {}) {
   switch (item.kind) {
+    case 'transaction_category':
+    case 'category_mapping': return applyCategoryAnswer(db,item,optionId,{now});
     case 'account_owner': {
       const option = OWNER_OPTIONS.find((o) => o.id === optionId);
       if (option) db.prepare('UPDATE accounts SET owner = ? WHERE id = ?').run(option.label, item.subject);
@@ -549,6 +552,7 @@ function confirmDuplicate(db, item, { now }) {
   if (rows.length < 2) return;
   const [keep, drop] = rows.sort((a, b) => a.id - b.id);
   archive(db, 'transactions', { ...drop, normalized_description: normalizeName(drop.description) }, { by: keep.file_id, reason: 'duplicate_confirmed', now, survivorKey: keep.dedupe_key });
+  moveCategoryRows(db,drop.id,keep.id);
   db.prepare('DELETE FROM transactions WHERE id = ?').run(drop.id);
 }
 

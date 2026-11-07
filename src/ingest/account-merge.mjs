@@ -1,3 +1,4 @@
+import { moveCategoryRows } from '../categories/store.mjs';
 import { accountNaming } from '../accounts/naming.mjs';
 import { accountLabel } from '../shared/account-label.mjs';
 import { createHash } from 'node:crypto';
@@ -52,8 +53,9 @@ export function formatMatchedDates(dates) {
 
 export function detectAccountPairs(db, { includeAnswered = false } = {}) {
   const connected = db.prepare(`SELECT a.*, m.sf_key, s.snapshot FROM simplefin_accounts m JOIN accounts a ON a.id=m.account_id
-    LEFT JOIN simplefin_snapshots s ON s.sf_key=m.sf_key WHERE m.status='mapped' AND a.identity='simplefin:' || m.sf_key ORDER BY a.id`).all();
-  const imported = db.prepare("SELECT * FROM accounts WHERE coalesce(identity,'') NOT LIKE 'simplefin:%' ORDER BY id").all();
+    LEFT JOIN simplefin_snapshots s ON s.sf_key=m.sf_key WHERE m.status='mapped' ORDER BY a.id`).all();
+  const imported = db.prepare(`SELECT * FROM accounts a WHERE NOT EXISTS (
+    SELECT 1 FROM simplefin_accounts m WHERE m.status='mapped' AND m.account_id=a.id) ORDER BY a.id`).all();
   const different = includeAnswered ? [] : differentPairs(db);
   const pairs = [];
   for (const own of connected) for (const keep of imported) {
@@ -170,6 +172,7 @@ export function mergeAccounts(db, item, { now = new Date().toISOString() } = {})
     if (duplicate) {
       archive(db,'transactions',{ ...row,account_id:keepId,dedupe_key:key },{ by:duplicate.file_id,reason:'duplicate_cross_format',survivorKey:duplicate.dedupe_key,now });
       removedKeys.add(row.dedupe_key);
+      moveCategoryRows(db,row.id,duplicate.id);
       db.prepare('DELETE FROM transactions WHERE id=?').run(row.id);
     } else {
       db.prepare('UPDATE transactions SET account_id=?,dedupe_key=? WHERE id=?').run(keepId,key,row.id);
