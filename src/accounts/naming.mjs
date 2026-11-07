@@ -2,8 +2,10 @@
 // through here, so a known kind does not keep a legal name on one screen and drop it on another.
 
 import { parseJson } from '../store/db.mjs';
-import { accountLabel, sourceLabel, trendLabel } from '../shared/account-label.mjs';
+import { accountLabel, labelPrefix, sourceLabel, trendLabel } from '../shared/account-label.mjs';
 import { lastFour } from '../ingest/account-match.mjs';
+import { resolveTokens } from '../shared/tokens.mjs';
+import { tokenScope } from '../scenario/build.mjs';
 
 export function accountNaming(db) {
   const householdNames = parseJson(db.prepare("SELECT value FROM facts WHERE key = 'household.names'").get()?.value, {}) || {};
@@ -17,11 +19,40 @@ export function accountNaming(db) {
     const shown = r.mask;
     if (!(snap.maskSure === true && snap.mask === shown) && lastFour(snap.name) !== shown) unsure.add(r.account_id);
   }
+  // The business a business-owned account is named for: the owner's answer for that account, else the
+  // household's only business.
+  const stated = parseJson(db.prepare("SELECT value FROM facts WHERE key = 'accounts.businessEntity' AND (src IS NULL OR src != 'planner')").get()?.value, {}) || {};
+  const listed = parseJson(db.prepare("SELECT value FROM facts WHERE key = 'business.entities'").get()?.value, []);
+  const entities = new Map([...(Array.isArray(listed) ? listed.map((e) => e && e.name) : []), ...db.prepare('SELECT DISTINCT entity FROM pnl_lines').all().map((r) => r.entity)]
+    .filter((n) => typeof n === 'string' && n.trim()).map((n) => [n.trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(), n.trim()]));
+  const onlyBusiness = entities.size === 1 ? [...entities.values()][0] : '';
+  // The demo seed writes names as {n:key} tokens. They are resolved here, so a label never carries one
+  // whatever path builds it (first render, rename response, tool output).
+  let scope = null;
+  const demoScope = () => (scope ??= tokenScope(db));
+  const plain = (s) => (s == null ? s : resolveTokens(demoScope(), String(s), false));
   const byId = new Map();
   for (const a of db.prepare('SELECT * FROM accounts').all()) {
-    byId.set(a.id, { ...a, householdNames, holder: holders.get(a.id) || null, ...(unsure.has(a.id) ? { maskSure: false } : {}) });
+    const demo = a.parser === 'demo-seed';
+    const names = demo ? { ...(demoScope().names.me ? { me: demoScope().names.me } : {}), ...(demoScope().names.spouse ? { spouse: demoScope().names.spouse } : {}), ...householdNames } : householdNames;
+    const businessName = typeof stated?.[a.id] === 'string' && stated[a.id].trim() ? stated[a.id].trim() : (onlyBusiness || (demo ? String(demoScope().names.biz ?? '') : ''));
+    const row = { ...(demo ? { ...a, inst: plain(a.inst), name: plain(a.name), owner: plain(a.owner) } : a), householdNames, holder: holders.get(a.id) || null, businessName, ...(unsure.has(a.id) ? { maskSure: false } : {}) };
+    // The demo's names decide the prefix only; the default name keeps following the stored household names.
+    const prefix = labelPrefix({ ...row, householdNames: names });
+    byId.set(a.id, { ...row, labelPrefix: prefix, labelText: accountLabel({ ...row, labelPrefix: prefix }) });
   }
-  return { householdNames, holders, byId };
+  // What a row from another query needs to be named like the rest of the household.
+  const hint = (id) => {
+    const a = byId.get(id);
+    return a ? { householdNames: a.householdNames, holder: a.holder, businessName: a.businessName, labelPrefix: a.labelPrefix, labelText: a.labelText, ...(a.maskSure === false ? { maskSure: false } : {}) } : {};
+  };
+  return { householdNames, holders, byId, hint, label: (row) => accountLabel({ ...row, ...hint(row?.id) }) };
+}
+
+// Account rows from any query, carrying the hints that keep their label the household's label.
+export function withLabelHints(db, rows) {
+  const naming = accountNaming(db);
+  return rows.map((a) => ({ ...a, ...naming.hint(a.id) }));
 }
 
 const seriesKeyOf = (id) => {

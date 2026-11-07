@@ -19,6 +19,7 @@ import * as simplefin from './screens/simplefin.js';
 import * as recAnswers from './screens/rec-answers.js';
 import * as recBlocker from './screens/rec-blocker.js';
 import * as accountScreen from './screens/account.js';
+import { composeLabel } from '/shared/account-label.mjs';
 import * as askPanel from './screens/ask-panel.js';
 import { addButtonHtml } from './screens/ask-context.js';
 import * as pnlScreen from './screens/pnl.js';
@@ -90,7 +91,7 @@ const T = (s) => (s == null || s === '' ? '' : api.t(String(s)));
 const X = (s) => (s == null || s === '' ? '' : esc(api.txt(String(s))));
 const arr = (a) => (Array.isArray(a) ? a : []);
 const plural = (n, one, many) => `${n} ${n === 1 ? one : (many || one + 's')}`;
-// The shared "+" (Add to chat) for any item; label is plain text (a name or title, never a figure).
+// The shared Ask about button (a chat icon) for any item; label is plain text (a name or title, never a figure).
 const addBtn = (kind, id, label) => addButtonHtml(kind, String(id ?? ''), String(label ?? ''), esc);
 // An account's name as plain text, the way the Accounts list shows it.
 const accName = (a) => (a.displayName ? String(a.name ?? '') : a.imported === false ? api.txt(String(a.name ?? '')) : String(a.name ?? ''));
@@ -775,6 +776,8 @@ function pHome() {
   if (!m.cards.length || ui.goalsBusy === 'home') {
     return shell(`<section class="h-home h-home-gs">${goalsStartHtml('home')}${dhealthHtml(homeHealth())}</section>`);
   }
+  // The owner filter, when not Both, is part of what the page shows.
+  if (ui.owner === 'me' || ui.owner === 'spouse') askPanel.pageContext({ owner: ui.owner });
   const subject = SUBJECT[m.filter];
   const hd = homeHeadline({ cards: m.cards, pace, pending: m.pending });
   const hc = healthChip(pace);
@@ -1555,6 +1558,9 @@ function pGoals() {
   }).join('');
   const add = ui.goalForm && !ui.goalForm.id ? '' : `<div class="h-gadd">${btn(`${icon('plus')}Goal`, 'data-goal="new" aria-keyshortcuts="n"', 'pri')}<span class="h-mute sm">Press N</span></div>`;
   const form = ui.goalForm ? goalFormHtml() : '';
+  // An open edit form names its goal for the Ask page chip.
+  const formGoal = ui.goalForm && ui.goalForm.id ? all.find((g) => g.id === ui.goalForm.id) : null;
+  if (formGoal) askPanel.pageContext({ item: { kind: 'goal', id: formGoal.id, label: goalText(formGoal) } });
   const arch = archived.length ? `<details class="h-garch" data-det="goals-archived"${ui.det['goals-archived'] ? ' open' : ''}><summary>${plural(archived.length, 'archived goal')}</summary><div class="h-garch-l">${archived.map(goalCard).join('')}</div></details>` : '';
   return shell(`${pageHead('Goals', 'Where you are headed', 'Goals in your own words, placed on the years they live in.')}
     ${add}${form}
@@ -1808,7 +1814,7 @@ function pOnboarding(step) {
       ${ingest.addFiles('onboarding')}
       <div class="h-ob-conn"><div class="h-sub-h">Mirror your accounts</div><p class="h-mute sm">Read-only. ${esc(api.s.meta.product || 'Fathom')} sees balances and transactions so the brief stays current. It cannot move money, place trades or change anything.</p>
       ${simplefin.block()}
-      ${imported.length ? `<div class="h-sub-h">Already in Fathom, not mirrored</div><ul class="h-insts">${imported.map((a) => `<li><div><b>${lbl(a, a.name)}</b><span>${lbl(a, a.inst || '')}${a.mask ? `, ending ${esc(a.mask)}` : ''}</span></div></li>`).join('')}</ul>` : ''}</div>
+      ${imported.length ? `<div class="h-sub-h">Already in Fathom, not mirrored</div><ul class="h-insts">${imported.map((a) => `<li><div><b>${lbl(a, a.name)}</b><span>${lbl(a, a.inst || '')}</span></div></li>`).join('')}</ul>` : ''}</div>
       <div class="h-ob-nav">${back}${go}</div>`;
   } else if (s === 4) {
     body = heardHtml(back, next);
@@ -2103,6 +2109,8 @@ function syncDialog(r, page) {
 
 function draw() {
   if (!root || !api) return;
+  // The page and then the dialog publish what they show for the Ask page chip, afresh each draw.
+  askPanel.clearView();
   const rr = routeNow();
   const r = isDlgRoute(rr.name) ? underRoute(rr.name) : rr;
   const key = `${r.name}/${r.params?.id ?? r.params?.name ?? r.params?.step ?? ''}`;
@@ -2211,7 +2219,7 @@ function closeRec() {
 function beginAccountRename(id) {
   const a = arr(api.s.accounts).find((x) => x.id === id);
   if (!a) return;
-  ui.accEdit = { id, value: a.displayName ? a.displayName : (a.imported === false ? api.txt(String(a.name ?? '')) : String(a.name ?? '')) };
+  ui.accEdit = { id, value: a.displayName ? a.displayName : (a.imported === false ? api.txt(String(a.baseName ?? a.name ?? '')) : String(a.baseName ?? a.name ?? '')) };
   draw();
   const el = root?.querySelector(`[data-acc-name="${CSS.escape(id)}"]`);
   if (el) { el.focus(); el.select(); }
@@ -2525,7 +2533,7 @@ function trapTab(e) {
 const SCREENS = [askPanel, switcher, chatScreen, packsScreen, engineScreen, advisorScreen, yearendScreen, simplefin, recAnswers, recBlocker, accountScreen, trendScreen, pnlScreen, tour];
 const KIT = {
   get api() { return api; }, get root() { return root; }, get ui() { return ui; }, get keys() { return keys; }, get ingest() { return ingest; },
-  draw: () => draw(),
+  draw: () => draw(), composeLabel,
   esc, T, X, arr, plural, icon, btn, goA, href, shell, section, pageHead, thread, composer, figHtml, recById, snoozeLabel,
   openRec, openAccount, closeRec, decisionList, statusText, routeNow, visibleRecs, spark, niceTicks,
   sfStatus: () => simplefin.status(),
@@ -2533,6 +2541,8 @@ const KIT = {
   // adoption by the panel, the Ask page's Open in panel button, and the panel itself.
   addBtn, ctxChipsHtml: () => askPanel.chipsHtml(), askRefs: (host) => askPanel.refs(host),
   onThread: (thread, host) => askPanel.onThread(thread, host), askPanelBtn: () => askPanel.collapseBtn(),
+  // A screen's view details for the page chip; a panel question's and the Ask page's new conversation.
+  pageContext: (v) => askPanel.pageContext(v), askBegin: () => askPanel.askBegin(), askClear: () => askPanel.clearConversation(),
   askPanelToggle: () => askPanel.toggle(), askModal: () => askPanel.modalOpen(),
   askPanelOpen: () => askPanel.open(), askPanelClose: () => askPanel.close(), askPanelIsOpen: () => askPanel.isOpen(),
   isDlgRoute: (name) => isDlgRoute(name),

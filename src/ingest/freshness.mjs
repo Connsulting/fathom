@@ -5,13 +5,14 @@ import { queueCategoryChecks } from '../categories/store.mjs';
 
 import { getSetting, parseJson } from '../store/db.mjs';
 import { escapeUserText } from '../shared/tokens.mjs';
-import { accountLabel } from '../shared/account-label.mjs';
+import { accountNaming } from '../accounts/naming.mjs';
 import { howToFor, listHowTo } from './howto.mjs';
 import { monthEnd } from './format.mjs';
 import { pendingItems, finalReason } from './confirm.mjs';
 import { cardDetail } from './context.mjs';
 import { bestGuess } from './bestguess.mjs';
 import { coveredFileSources } from './coverage.mjs';
+import { merchantDisplayName, plainEvidence } from '../categories/display.mjs';
 
 const MONTHLY = Object.freeze({ label: 'monthly', staleAfterDays: 45 });
 
@@ -127,6 +128,17 @@ const GROUPED = new Set(['account_owner', 'account_kind']);
 const rankOf = (kind) => RANK[kind] ?? 5;
 const balanceSize = (item) => Math.abs(item.detail?.account?.balance?.amount ?? 0);
 
+// The transaction a category question is about, as the Confirm screen shows it: a clean merchant
+// name, the raw bank text (behind a toggle), signed amount, ISO date and account. null for any
+// other kind of question.
+function txnOf(kind, context) {
+  if (kind !== 'transaction_category') return null;
+  const c = context && typeof context === 'object' ? context : {};
+  return { name: merchantDisplayName(c.description), raw: String(c.description ?? ''), amount: c.amount ?? null, date: c.date ?? null, account: String(c.account ?? '') };
+}
+// Category evidence is shown to a person: no vendor name, model id or percentage.
+const evidenceFor = (kind, text) => (kind === 'transaction_category' ? plainEvidence(text) : String(text ?? ''));
+
 // Pending items with fileName (the item's file name or null), detail (cardDetail), guess (the best
 // guess as {option, label, reason, evidence, source, model?, ts?}, reason being the evidence text;
 // model and ts for an engine guess), rank and group. Sorted by rank, then (account questions) the
@@ -140,8 +152,9 @@ function pendingWithGuesses(db) {
     const r = extra.get(item.id);
     const detail = cardDetail(db, item);
     const g = bestGuess(db, item, detail);
+    const evidence = g ? evidenceFor(item.kind, g.evidence) : '';
     const guess = g ? {
-      option: g.option, label: g.label, reason: g.evidence, evidence: g.evidence, source: g.source,
+      option: g.option, label: g.label, reason: evidence, evidence, source: g.source,
       ...(g.confidence==null?{}:{confidence:g.confidence}),
       ...(g.source === 'engine' ? { model: r?.model ?? null, ts: r?.ts ?? null } : {}),
     } : null;
@@ -151,15 +164,16 @@ function pendingWithGuesses(db) {
         : label && detail.account?.name && detail.account.name !== label
           ? String(item.question).split(detail.account.name).join(label)
           : item.question;
-    return { ...item, question, fileName: r?.file_name ?? null, detail, guess, rank: rankOf(item.kind), group: GROUPED.has(item.kind) ? item.kind : null };
+    const txn = txnOf(item.kind, item.context);
+    return { ...item, question, fileName: r?.file_name ?? null, detail, guess, rank: rankOf(item.kind), group: GROUPED.has(item.kind) ? item.kind : null, ...(txn ? { txn } : {}) };
   });
   return items.sort((a, b) => a.rank - b.rank || (['transaction_category','category_mapping'].includes(a.kind) && ['transaction_category','category_mapping'].includes(b.kind) ? Math.abs(b.context.amount)-Math.abs(a.context.amount) : 0) || (a.group && b.group ? balanceSize(b) - balanceSize(a) : 0) || a.id - b.id);
 }
 
 // Answers Fathom recorded itself, newest first: {id, kind, question, answer, answerLabel, rule,
-// evidence (the evidence text), final (finalReason or null)}.
+// evidence (the evidence text), final (finalReason or null), txn (category answers only)}.
 function decidedItems(db) {
-  return db.prepare(`SELECT ci.id, ci.kind, ci.question, ci.options, ci.status, ci.answer, a.rule, a.evidence
+  return db.prepare(`SELECT ci.id, ci.kind, ci.question, ci.options, ci.context, ci.status, ci.answer, a.rule, a.evidence
                      FROM confirm_auto a JOIN confirm_items ci ON ci.id = a.item_id
                      WHERE ci.status = 'answered' ORDER BY a.created_at DESC, ci.id DESC`).all().map((r) => {
     const option = parseJson(r.options, []).find((o) => o.id === r.answer);
@@ -171,8 +185,9 @@ function decidedItems(db) {
       answer: r.answer,
       answerLabel: option ? option.label : r.answer,
       rule: r.rule,
-      evidence: typeof evidence?.text === 'string' ? evidence.text : '',
+      evidence: evidenceFor(r.kind, typeof evidence?.text === 'string' ? evidence.text : ''),
       final: finalReason(db, { id: r.id, kind: r.kind, status: r.status, answer: r.answer }),
+      ...(r.kind === 'transaction_category' ? { txn: txnOf(r.kind, parseJson(r.context, {})) } : {}),
     };
   });
 }
@@ -262,13 +277,14 @@ export function ingestState(db, { clock } = {}) {
 
   const accounts = {};
   const accountNotes = [];
+  const naming = accountNaming(db);
   for (const { row, asOf, kind, f } of accountFreshnessRows(db, at, kindOf)) {
     accounts[row.id] = { asOf, fresh: f ? f.state : 'unknown', sourceId: row.source_id };
     // A stale source already yields a note covering its accounts; only a stale account in a
     // fresh source needs its own.
     const source = sources.find((s) => s.id === row.source_id);
     if (f && f.state === 'stale' && DOMAIN_OF[kind] && source && source.state !== 'stale') {
-      accountNotes.push({ domain: DOMAIN_OF[kind], text: `${accountLabel(row) || row.id} data is ${f.ageDays} days old. Export a fresh copy.` });
+      accountNotes.push({ domain: DOMAIN_OF[kind], text: `${naming.label(row) || row.id} data is ${f.ageDays} days old. Export a fresh copy.` });
     }
   }
 

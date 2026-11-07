@@ -9,6 +9,7 @@ import { createReadStream } from 'node:fs';
 import { join, extname } from 'node:path';
 import { readStoredFile, workDir, VaultError } from '../ingest/vault.mjs';
 import { getSetting } from '../store/db.mjs';
+import { accountNaming, relabelStoredFigure } from '../accounts/naming.mjs';
 import { esc, money, resolveTokens } from '../shared/tokens.mjs';
 import { tokenScope, resolveClock, loadRecs, deriveDecisions } from '../scenario/build.mjs';
 import { yearendChecklist, yearendDecisions, recordPacket, formLabel } from './expected.mjs';
@@ -42,13 +43,14 @@ const provText = (r, files) => {
 export function packetData(db, { year, clock }) {
   const scope = tokenScope(db);
   const checklist = yearendChecklist(db, { year, clock, plain: (s) => resolveTokens(scope, s, false) });
+  const naming = accountNaming(db);
   const files = new Map(db.prepare('SELECT id, name, uploaded_at, stored_path, mime, parser FROM files').all().map((f) => [f.id, f]));
   const payments = heldPayments(db, db.prepare('SELECT * FROM tax_payments WHERE tax_year = ? ORDER BY date, id').all(year));
   const pnl = db.prepare(`SELECT entity, category, round(sum(amount), 2) AS total, count(*) AS n, group_concat(DISTINCT file_id) AS file_ids
                           FROM pnl_lines WHERE substr(period, 1, 4) = ? GROUP BY entity, category ORDER BY entity, category`).all(String(year));
   const figures = db.prepare(`SELECT f.key, f.v, f.label, f.kind, f.file_id, f.parser, f.locator, s.label AS src_label, s.as_of
                               FROM figures f LEFT JOIN sources s ON s.id = f.src WHERE f.kind = 'a' AND f.label != '' AND f.unavailable_reason IS NULL ORDER BY f.key`).all()
-    .map((f) => ({ ...f, label: resolveTokens(scope, f.label, false) }));
+    .map((f) => ({ ...f, label: resolveTokens(scope, relabelStoredFigure(naming, f).label, false) }));
   const facts = db.prepare("SELECT key, value, src, file_id, parser, locator, confirmed FROM facts WHERE key IN ('household.filingStatus', 'household.state', 'household.dependents') ORDER BY key").all();
   const recs = loadRecs(db, clock);
   const recsById = new Map(recs.map((r) => [r.id, r]));

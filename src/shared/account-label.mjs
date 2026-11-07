@@ -109,23 +109,16 @@ export function defaultAccountLabel(account) {
   const bad = !raw || manual || !!slug || generic || personal || !!repeated || /^[,.\s]|[,.\s]$/.test(raw);
 
   if (!bad) {
-    const once = mask && new RegExp(`\\b${mask}\\b`).test(raw) ? raw : raw;
-    return cleanJoin(once) || 'Account';
+    return cleanJoin(raw) || 'Account';
   }
 
   let imported = slug || (manual || generic || personal ? '' : stripToken(raw, repeated || mask));
   if (imported && mask && imported === mask) imported = '';
-  const ending = mask ? `ending ${mask}` : '';
   if (inst || kind) {
-    const head = [inst, kind].filter(Boolean).join(' ');
-    const label = [head, ending].filter(Boolean).join(' ');
+    const label = [inst, kind].filter(Boolean).join(' ');
     if (label) return label;
   }
-  if (imported) {
-    const base = stripToken(imported, mask);
-    return [base, ending].filter(Boolean).join(' ') || 'Account';
-  }
-  if (ending) return ending.charAt(0).toUpperCase() + ending.slice(1);
+  if (imported) return stripToken(imported, mask) || 'Account';
   return 'Account';
 }
 
@@ -136,13 +129,70 @@ export function accountSubtitle(account) {
   return [inst, owner].filter(Boolean).join(', ');
 }
 
-// The shown name, custom or default, with "ending NNNN" when the last 4 is sure and the name does
-// not already carry those digits, so two accounts of one kind at one bank read apart.
+// The label of an account: owner prefix, name, then the sure last 4, as "Alex's Everyday (1234)".
+// The name is the owner's custom name if set, otherwise the default name. A name that already
+// starts with the prefix is not prefixed twice, and one that already carries the digits does not
+// get them twice.
 export function accountLabel(account) {
+  // A household row from accountNaming carries its finished label.
+  if (typeof account?.labelText === 'string') return account.labelText;
+  return composeLabel(labelPrefix(account), baseLabel(account), sureMask(account));
+}
+
+// The three parts of the label, for a screen that edits the name and previews the whole:
+// {labelPrefix, baseName, labelMask}.
+export function accountLabelParts(account) {
+  return { labelPrefix: labelPrefix(account), baseName: baseLabel(account), labelMask: sureMask(account) };
+}
+
+// The name as the person edits it: custom if set, otherwise the default, with no prefix or last 4.
+export function baseLabel(account) {
   const custom = String(account?.displayName ?? account?.display_name ?? '').trim();
-  const shown = custom || defaultAccountLabel(account);
-  const mask = sureMask(account);
-  return mask && !new RegExp(`\\b${mask}\\b`).test(shown) ? `${shown} ending ${mask}` : shown;
+  return custom || defaultAccountLabel(account);
+}
+
+const quotes = (s) => String(s ?? '').replace(/[\u2018\u2019]/g, "'").toLowerCase();
+
+export function composeLabel(prefix, name, mask) {
+  let out = String(name ?? '');
+  const pre = String(prefix ?? '').trim();
+  if (pre) {
+    const have = quotes(out);
+    const want = quotes(pre);
+    if (!(have.startsWith(want) && (have.length === want.length || /\s/.test(have[want.length])))) out = `${pre} ${out}`;
+  }
+  const last4 = /^\d{4}$/.test(String(mask ?? '')) ? String(mask) : '';
+  if (last4 && !new RegExp(`\\b${last4}\\b`).test(out)) out = `${out} (${last4})`;
+  return out;
+}
+
+const OWNER_WORDS = {
+  me: ['you', 'me', 'owner', 'yours', 'mine', 'myself'],
+  spouse: ['your spouse', 'spouse', 'partner'],
+  joint: ['joint', 'joint account', 'both', 'both of you', 'household', 'shared'],
+};
+const firstName = (n) => String(n ?? '').trim().split(/\s+/)[0];
+const possessive = (n) => (firstName(n) ? `${firstName(n)}'s` : '');
+
+// The owner prefix: the person's first name, possessive, from the household names ("Alex's"),
+// "Joint" for a joint account, the business's name for a business account when one is on file,
+// and nothing when the owner is unknown. The demo's owner tokens ({n:me}) stay tokens, resolved
+// where the label is shown. A caller that already worked the prefix out passes it as labelPrefix.
+export function labelPrefix(account) {
+  if (typeof account?.labelPrefix === 'string') return account.labelPrefix;
+  const raw = String(account?.owner ?? '').trim();
+  if (!raw) return '';
+  const token = /^\{n:(\w+)\}$/.exec(raw);
+  if (token) return token[1] === 'me' || token[1] === 'spouse' ? `${raw}'s` : token[1] === 'biz' ? raw : '';
+  const key = norm(raw);
+  const names = account?.householdNames && typeof account.householdNames === 'object' ? account.householdNames : {};
+  const is = (n) => !!n && (norm(n) === key || norm(firstName(n)) === key);
+  const business = String(account?.businessName ?? '').trim();
+  if (OWNER_WORDS.me.includes(key) || is(names.me)) return possessive(names.me);
+  if (OWNER_WORDS.spouse.includes(key) || is(names.spouse)) return possessive(names.spouse);
+  if (OWNER_WORDS.joint.includes(key)) return 'Joint';
+  if (key === 'business' || (business && key === norm(business))) return business;
+  return '';
 }
 
 function sureMask(account) {
@@ -151,12 +201,13 @@ function sureMask(account) {
   return mask;
 }
 
-// Trend title: the shared label (which already carries a sure mask once), braces and markup stripped.
+// Trend title: the shared label, markup stripped.
 export function trendLabel(account) {
-  return String(accountLabel(account)).replace(/[{}<>]/g, '').replace(/\s+/g, ' ').trim();
+  // The demo's {n:key} name tokens keep their braces; everything else is plain text.
+  return String(accountLabel(account)).split(/(\{n:\w+\})/).map((part, i) => (i % 2 ? part : part.replace(/[{}<>]/g, ''))).join('').replace(/\s+/g, ' ').trim();
 }
 
-// Planner source line for one account: the shared label, so the mask is never repeated.
+// Planner source line for one account: the shared label.
 export function sourceLabel(account) {
   return accountLabel(account);
 }
