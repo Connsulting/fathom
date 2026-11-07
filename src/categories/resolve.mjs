@@ -124,14 +124,14 @@ export function historyDecision(t,input,index,examples=historyExamples(t,input,i
 }
 
 // transferSourceIds gives the calculator's in-window spending rows first claim on counterpart rows.
-export function resolveCategories({ transactions, accounts, corrections = [], merchantRules = [], sourceRules = [], guesses = [], declinedTransactionIds = [], transferSourceIds, transferDays = 5 }) {
+export function resolveCategories({ transactions, accounts, corrections = [], merchantRules = [], sourceRules = [], guesses = [], transferSourceIds, transferDays = 5 }) {
   const rows = transactions.toSorted(order), byId = new Map(accounts.map(a=>[a.id,a]));
   const correction = new Map(corrections.filter(r=>!r.auto).map(r=>[r.transaction_id,r]));
   const automatic = new Map(corrections.filter(r=>r.auto).map(r=>[r.transaction_id,r]));
   const merchants = new Map(merchantRules.map(r=>[r.merchant,r]));
   const sources = new Map(sourceRules.map(r=>[JSON.stringify([r.parser,r.category]),r]));
 
-  const input={transactions,corrections,sourceRules}, history=createHistoryIndex(input), declined=new Set(declinedTransactionIds);
+  const input={transactions,corrections,sourceRules}, history=createHistoryIndex(input), declined=new Set(rows.filter(t=>t.category_declined).map(t=>t.id));
   const result = new Map();
   const set = (t, category, bucket, layer, evidence = {}) => result.set(t.id, {category,bucket,layer,evidence});
   for (const t of rows) {
@@ -146,12 +146,12 @@ export function resolveCategories({ transactions, accounts, corrections = [], me
   const ranked = rows.toSorted((a,b)=>Number(priority.has(b.id))-Number(priority.has(a.id))
     || Number(spendingAccount(byId.get(b.account_id)))-Number(spendingAccount(byId.get(a.account_id))) || order(a,b));
   const out = matchTransfers(ranked.filter(t=>t.amount<0 && !result.has(t.id)), rows.filter(t=>t.amount>0),transferDays);
-  const incoming = matchTransfers(ranked.filter(t=>t.amount>0 && !result.has(t.id)), rows.filter(t=>t.amount<0),transferDays);
+  const incoming = matchTransfers(ranked.filter(t=>t.amount>0 && !result.has(t.id)), rows.filter(t=>t.amount<0 && !businessAccount(byId.get(t.account_id))),transferDays);
   for (const t of rows) {
     if (result.has(t.id)) continue;
     const imported = importedCategory(t), unknown = imported.category && imported.category !== 'Uncategorized' && !knownCategory(imported.parser,imported.category);
     const finish = (category,bucket,layer,evidence) => set(t,unknown ? imported.category : category,bucket,layer,{...evidence,...(unknown ? {imported} : {})});
-    const learned=historyDecision(t,input,history), auto=automatic.get(t.id);
+    const auto=automatic.get(t.id), learned=!auto && !declined.has(t.id) ? historyDecision(t,input,history) : null;
     if(auto) finish(auto.category,auto.bucket,'guess',{transactionId:t.id,...auto.auto});
     else if(!declined.has(t.id) && learned) finish(learned.category,learned.bucket,'merchant',learned.evidence);
     else if(!declined.has(t.id) && (out.has(t.id) || incoming.has(t.id) || cardPayment(t,byId,accounts)))
