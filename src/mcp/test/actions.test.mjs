@@ -6,9 +6,9 @@ import { createKey, callToolRpc, listToolNames, rpcResult } from './helpers.mjs'
 test('MCP action scopes deny before validation and permit only matching writes and undo', async () => {
   await withServer({ env: { FATHOM_ENGINE: 'fake', FATHOM_FAKE_STREAM_MS: '0' } }, async s => {
     const read = (await createKey(s.baseUrl, 'Read actions')).key;
-    const scopes = [['write:facts', 'record_household_fact'], ['write:steps', 'set_recommendation_step'], ['write:goals', 'create_goal']];
-    for (const [scope, tool] of scopes) {
-      const denied = rpcResult(await callToolRpc(s.baseUrl, read, tool, { malformed: true }));
+    const scopes = [['write:facts', 'answer', 'fact'], ['write:steps', 'act_on_recommendation', 'step'], ['write:goals', 'update_goal', 'create']];
+    for (const [scope, tool, operation] of scopes) {
+      const denied = rpcResult(await callToolRpc(s.baseUrl, read, tool, { operation, malformed: true }));
       assert.equal(denied.isError, true);
       assert.match(denied.content[0].text, /^Permission denied:/);
       const key = (await createKey(s.baseUrl, scope, [scope])).key;
@@ -16,21 +16,21 @@ test('MCP action scopes deny before validation and permit only matching writes a
       assert.ok(!(await listToolNames(s.baseUrl, read)).includes(tool));
     }
     const key = (await createKey(s.baseUrl, 'Steps', ['write:steps'])).key;
-    const changed = rpcResult(await callToolRpc(s.baseUrl, key, 'set_recommendation_step', { id: 'babyprep', index: 0, checked: true }));
+    const changed = rpcResult(await callToolRpc(s.baseUrl, key, 'act_on_recommendation', { operation: 'step',  id: 'babyprep', index: 0, checked: true }));
     assert.equal(changed.isError, undefined);
     const out = JSON.parse(changed.content[0].text);
     assert.ok(out.receipt.actorId.startsWith('key:'));
-    const wrongScope = rpcResult(await callToolRpc(s.baseUrl, key, 'undo_fact_action', { id: out.receipt.id }));
+    const wrongScope = rpcResult(await callToolRpc(s.baseUrl, read, 'undo', { operation: 'undo', id: out.receipt.id }));
     assert.match(wrongScope.content[0].text, /^Permission denied:/);
-    const undone = rpcResult(await callToolRpc(s.baseUrl, key, 'undo_step_action', { id: out.receipt.id }));
+    const undone = rpcResult(await callToolRpc(s.baseUrl, key, 'undo', { operation: 'undo',  id: out.receipt.id }));
     assert.equal(undone.isError, undefined);
     const scenario = (await request(s.baseUrl, { path: '/api/scenario' })).json;
     assert.equal(scenario.recs.find(r => r.id === 'babyprep').tasks[0].done, false);
     const goalKey = (await createKey(s.baseUrl, 'Goals', ['write:goals'])).key;
-    const goal = rpcResult(await callToolRpc(s.baseUrl, goalKey, 'create_goal', { title: 'Cash reserve' }));
+    const goal = rpcResult(await callToolRpc(s.baseUrl, goalKey, 'update_goal', { operation: 'create',  title: 'Cash reserve' }));
     assert.equal(goal.isError, undefined);
     const factKey = (await createKey(s.baseUrl, 'Facts', ['write:facts'])).key;
-    const invented = rpcResult(await callToolRpc(s.baseUrl, factKey, 'record_household_fact', {
+    const invented = rpcResult(await callToolRpc(s.baseUrl, factKey, 'answer', { operation: 'fact',
       key: 'household.expectedDate', value: '2027-03-19', evidence: 'Set expected date to 2027-03-19',
     }));
     assert.equal(invented.isError, true);
@@ -38,7 +38,7 @@ test('MCP action scopes deny before validation and permit only matching writes a
     const first = await postJson(s.baseUrl, '/api/threads', { text: 'Set the expected date to 2027-03-19' });
     assert.equal(first.status, 200);
     assert.notEqual(before.recs.find(r => r.id === 'babyprep').window.close, '2027-03-19');
-    const second = rpcResult(await callToolRpc(s.baseUrl, factKey, 'record_household_fact', {
+    const second = rpcResult(await callToolRpc(s.baseUrl, factKey, 'answer', { operation: 'fact',
       key: 'household.expectedDate', value: '2027-03-19', evidence: 'Set the expected date to 2027-03-19',
     }));
     assert.equal(second.isError, undefined);

@@ -59,7 +59,7 @@ function storeBeforeRecThreads(file) {
   return db;
 }
 
-const PROV = JSON.stringify({ engine: 'fake', model: 'fake', tools: [{ name: 'household_summary', args: {} }, { name: 'get_recommendation', args: { id: 'syn-alpha' } }],
+const PROV = JSON.stringify({ engine: 'fake', model: 'fake', tools: [{ name: 'household', args: { operation: 'summary', } }, { name: 'recommendations', args: { operation: 'detail',  id: 'syn-alpha' } }],
   figures: [], packs: [], literals: [], grounding: { ok: true, retried: false, unverified: [] }, costUsd: 0.01 });
 
 const ALPHA_LAST = '2026-10-04T00:00:00.000Z';
@@ -308,7 +308,7 @@ async function demoCtx(t) {
 
 const httpError = status => e => e instanceof HttpError && e.status === status;
 const toolNames = m => (m.provenance && m.provenance.tools || []).map(x => x.name);
-const recTool = m => (m.provenance && m.provenance.tools || []).find(x => x.name === 'get_recommendation');
+const recTool = m => (m.provenance && m.provenance.tools || []).find(x => x.name === 'recommendations');
 const recRows = db => db.prepare('SELECT count(*) AS n FROM conversations WHERE rec_id IS NOT NULL').get().n;
 const allConvs = db => db.prepare('SELECT count(*) AS n FROM conversations').get().n;
 
@@ -321,7 +321,7 @@ test('POST /api/threads with recId and text asks in a new thread grounded in tha
   assert.equal(r.thread.turns, 1);
   assert.equal(r.message.role, 'fathom');
   assert.equal(r.message.notice, false);
-  assert.deepEqual(recTool(r.message).args, { id: 'deferral' }, 'get_recommendation reads the rec, not the thread key');
+  assert.deepEqual(recTool(r.message).args, { operation: 'detail', id: 'deferral' }, 'recommendations.detail reads the rec, not the thread key');
   assert.ok(r.message.refs.includes('deferral'), 'the reply refs the rec');
   assert.equal(r.scenario.live.threads.find(x => x.key === r.thread.key).recId, 'deferral');
   assert.equal(getThread(s.db, r.thread.id).recId, 'deferral');
@@ -347,7 +347,7 @@ test('POST /api/threads with recId and questionId answers that rec.qa question e
     assert.deepEqual(r.message.refs, direct.refs);
     assert.ok(r.message.refs.includes('deferral'));
     assert.deepEqual(toolNames(r.message), direct.provenance.tools.map(x => x.name));
-    assert.deepEqual(recTool(r.message).args, { id: 'deferral' });
+    assert.deepEqual(recTool(r.message).args, { operation: 'detail', id: 'deferral' });
   }
   // By rec.qa id or exact question too, the way findQuestion resolves it.
   assert.equal(findQuestion(buildScenario(s.db), 'deferral', qa[0].q).q, qa[0].q);
@@ -402,7 +402,7 @@ test('POST /api/ask refuses a bare rec id key and continues a rec thread with re
   const first = await threadCreate(s.ctx({ recId: 'deferral', text: 'Synthetic first question' }));
   const next = await ask(s.ctx({ key: first.thread.key, text: 'Synthetic follow up question' }));
   assert.equal(next.message.role, 'fathom');
-  assert.deepEqual(recTool(next.message).args, { id: 'deferral' }, 'the follow up is grounded in the rec');
+  assert.deepEqual(recTool(next.message).args, { operation: 'detail', id: 'deferral' }, 'the follow up is grounded in the rec');
   assert.ok(next.message.refs.includes('deferral'));
   const qa = demo.recs.find(x => x.id === 'deferral').qa;
   const chip = await ask(s.ctx({ key: first.thread.key, questionId: 1 }));
@@ -439,14 +439,14 @@ test('the fake engine scripts no goal proposal in a rec thread and still does in
   const GOAL = 'add a goal: a synthetic boat fund';
   const recThread = await threadCreate(s.ctx({ recId: 'deferral', text: 'Synthetic first question' }));
   const inRec = await ask(s.ctx({ key: recThread.thread.key, text: GOAL }));
-  assert.ok(toolNames(inRec.message).includes('create_goal'), JSON.stringify(toolNames(inRec.message)));
+  assert.ok(toolNames(inRec.message).includes('update_goal'), JSON.stringify(toolNames(inRec.message)));
   assert.ok(inRec.message.text.includes(GOAL_CONFIRM), inRec.message.text);
   assert.equal(inRec.message.provenance.goalProposal ?? null, null);
-  assert.deepEqual(recTool(inRec.message).args, { id: 'deferral' });
+  assert.deepEqual(recTool(inRec.message).args, { operation: 'detail', id: 'deferral' });
 
   const plain = await threadCreate(s.ctx({ text: GOAL }));
   assert.equal(plain.thread.recId, null);
-  assert.ok(toolNames(plain.message).includes('create_goal'));
+  assert.ok(toolNames(plain.message).includes('update_goal'));
   assert.ok(plain.message.text.includes(GOAL_CONFIRM), plain.message.text);
 });
 
@@ -460,16 +460,16 @@ test('fakeAnswerScript reads the resolved rec in a rec thread and offers no goal
   const text = (key, t2) => fakeAnswerScript({ scenario, key, text: t2, propose: true })[1].text;
 
   const inRec = calls('ask:aaaaaaaaaaaa', 'How does this work');
-  assert.deepEqual(inRec.find(c => c.name === 'get_recommendation'), { name: 'get_recommendation', args: { id: 'deferral' } });
-  assert.ok(!calls('ask:bbbbbbbbbbbb', 'How does this work').some(c => c.name === 'get_recommendation'), 'a plain thread reads no rec');
-  assert.deepEqual(calls('deferral', 'How does this work').find(c => c.name === 'get_recommendation').args, { id: 'deferral' });
+  assert.deepEqual(inRec.find(c => c.name === 'recommendations'), { name: 'recommendations', args: { operation: 'detail',  id: 'deferral' } });
+  assert.ok(!calls('ask:bbbbbbbbbbbb', 'How does this work').some(c => c.name === 'recommendations'), 'a plain thread reads no rec');
+  assert.deepEqual(calls('deferral', 'How does this work').find(c => c.name === 'recommendations').args, { operation: 'detail', id: 'deferral' });
 
-  assert.ok(calls('ask:aaaaaaaaaaaa', 'add a goal: a synthetic boat fund').some(c => c.name === 'create_goal'));
+  assert.ok(calls('ask:aaaaaaaaaaaa', 'add a goal: a synthetic boat fund').some(c => c.name === 'update_goal'));
   assert.ok(text('ask:aaaaaaaaaaaa', 'add a goal: a synthetic boat fund').includes(GOAL_CONFIRM));
-  assert.ok(calls('ask:bbbbbbbbbbbb', 'add a goal: a synthetic boat fund').some(c => c.name === 'create_goal'));
+  assert.ok(calls('ask:bbbbbbbbbbbb', 'add a goal: a synthetic boat fund').some(c => c.name === 'update_goal'));
   assert.ok(text('ask:bbbbbbbbbbbb', 'add a goal: a synthetic boat fund').includes(GOAL_CONFIRM));
   // An explicit command in a rec thread still names its own rec.
-  assert.deepEqual(calls('ask:aaaaaaaaaaaa', 'dismiss this').find(c => c.name === 'set_recommendation_status').args, { id: 'deferral', status: 'dismissed' });
+  assert.deepEqual(calls('ask:aaaaaaaaaaaa', 'dismiss this').find(c => c.name === 'act_on_recommendation').args, { operation: 'status', id: 'deferral', status: 'dismissed' });
 });
 
 // ---------------------------------------------------------------- API over HTTP
@@ -513,7 +513,7 @@ test('POST /api/threads with recId streams start with the thread key, then progr
   assert.equal(final.thread.key, evs[0].data.key);
   assert.equal(final.thread.recId, 'deferral');
   assert.equal(final.message.role, 'fathom');
-  assert.deepEqual(recTool(final.message).args, { id: 'deferral' });
+  assert.deepEqual(recTool(final.message).args, { operation: 'detail', id: 'deferral' });
   assert.ok(final.message.refs.includes('deferral'));
   const db = await openStore(s.dbFile);
   try {
@@ -536,7 +536,7 @@ test('POST /api/threads and /api/ask refusals over HTTP, each next to a request 
   const made = await ok(postJson(s.baseUrl, '/api/threads', { recId: 'deferral', text: 'Synthetic question' }));
   assert.equal(made.thread.recId, 'deferral');
   const more = await ok(postJson(s.baseUrl, '/api/ask', { key: made.thread.key, text: 'Synthetic follow up' }));
-  assert.deepEqual(recTool(more.message).args, { id: 'deferral' });
+  assert.deepEqual(recTool(more.message).args, { operation: 'detail', id: 'deferral' });
   assert.equal(more.scenario.live.conversations[made.thread.key].length, 4);
 }));
 

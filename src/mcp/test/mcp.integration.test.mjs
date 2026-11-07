@@ -11,7 +11,7 @@ import { ROOT, SERVER_TIMEOUT, spawnServer, request } from '../../../test/helper
 import { PERMISSION_TEXT, createKey, revokeKey, withStore } from './helpers.mjs';
 
 const T = { timeout: SERVER_TIMEOUT };
-const PACK_TOOLS = ['list_packs', 'get_pack_entry', 'search_pack_entries'];
+const PACK_TOOLS = ['knowledge', 'knowledge', 'knowledge'];
 
 // The first pack (by id) under packs/ and its first manifest entry, read from disk.
 function firstPackEntry() {
@@ -67,13 +67,13 @@ describe('read key', () => {
   test('lists read tools, including the pack tools, and not the write tool', async () => {
     const { tools } = await client.listTools();
     const names = tools.map(x => x.name);
-    assert.ok(!names.includes('set_recommendation_status'));
-    for (const n of ['household_summary', ...PACK_TOOLS]) assert.ok(names.includes(n), `lists ${n}`);
+    assert.ok(!names.includes('act_on_recommendation'));
+    for (const n of ['household', ...PACK_TOOLS]) assert.ok(names.includes(n), `lists ${n}`);
     for (const x of tools) assert.equal(x.annotations && x.annotations.readOnlyHint, true, `${x.name} is read-only`);
   });
 
-  test('household_summary returns the household overview', async () => {
-    const r = await client.callTool({ name: 'household_summary', arguments: {} });
+  test('household.summary returns the household overview', async () => {
+    const r = await client.callTool({ name: 'household', arguments: { operation: 'summary', } });
     assert.ok(!r.isError, textOf(r));
     const body = JSON.parse(textOf(r));
     assert.equal(typeof body.facts, 'object');
@@ -81,9 +81,9 @@ describe('read key', () => {
     assert.equal(typeof body.clock, 'string');
   });
 
-  test('get_pack_entry returns a real entry with its citations', async () => {
+  test('knowledge.entry returns a real entry with its citations', async () => {
     const { manifest, entry, markdown } = firstPackEntry();
-    const r = await client.callTool({ name: 'get_pack_entry', arguments: { packId: manifest.id, file: entry.file } });
+    const r = await client.callTool({ name: 'knowledge', arguments: { operation: 'entry',  packId: manifest.id, file: entry.file } });
     assert.ok(!r.isError, textOf(r));
     const body = JSON.parse(textOf(r));
     assert.equal(body.packId, manifest.id);
@@ -95,35 +95,35 @@ describe('read key', () => {
     assert.deepEqual(body.citations.map(c => c.label).sort(), entry.cites.map(c => c.label).sort());
   });
 
-  test('list_packs and search_pack_entries answer', async () => {
-    const packs = JSON.parse(textOf(await client.callTool({ name: 'list_packs', arguments: {} })));
+  test('knowledge.packs and knowledge.search answer', async () => {
+    const packs = JSON.parse(textOf(await client.callTool({ name: 'knowledge', arguments: { operation: 'packs', } })));
     assert.ok(Array.isArray(packs) && packs.length > 0);
-    const search = await client.callTool({ name: 'search_pack_entries', arguments: { query: 'tax' } });
+    const search = await client.callTool({ name: 'knowledge', arguments: { operation: 'search',  query: 'tax' } });
     assert.ok(!search.isError, textOf(search));
     assert.ok(Array.isArray(JSON.parse(textOf(search)).results));
   });
 
   test('the write tool is refused with a permission error', async () => {
-    const recs = JSON.parse(textOf(await client.callTool({ name: 'list_recommendations', arguments: {} })));
-    const r = await client.callTool({ name: 'set_recommendation_status', arguments: { id: recs[0].id, status: 'doing' } });
+    const recs = JSON.parse(textOf(await client.callTool({ name: 'recommendations', arguments: { operation: 'list', } })));
+    const r = await client.callTool({ name: 'act_on_recommendation', arguments: { operation: 'status',  id: recs[0].id, status: 'doing' } });
     assert.equal(r.isError, true);
     assert.equal(textOf(r), PERMISSION_TEXT);
   });
 });
 
 describe('write key', () => {
-  test('lists the write tool and set_recommendation_status writes a tool rec event', T, async () => {
+  test('lists the write tool and act_on_recommendation.status writes a tool rec event', T, async () => {
     const key = (await createKey(s.baseUrl, 'SDK write agent', ['write:recs'])).key;
     const client = await connect(key);
     const names = (await client.listTools()).tools.map(x => x.name);
-    assert.ok(names.includes('set_recommendation_status'));
+    assert.ok(names.includes('act_on_recommendation'));
     for (const n of PACK_TOOLS) assert.ok(names.includes(n));
 
-    const recs = JSON.parse(textOf(await client.callTool({ name: 'list_recommendations', arguments: {} })));
+    const recs = JSON.parse(textOf(await client.callTool({ name: 'recommendations', arguments: { operation: 'list', } })));
     const target = recs.find(r => r.status !== 'doing');
     assert.ok(target, 'a rec to move');
     const before = await withStore(s.dbFile, db => db.prepare("SELECT count(*) AS n FROM rec_events WHERE actor LIKE 'key:%' AND rec_id = ?").get(target.id).n);
-    const r = await client.callTool({ name: 'set_recommendation_status', arguments: { id: target.id, status: 'doing' } });
+    const r = await client.callTool({ name: 'act_on_recommendation', arguments: { operation: 'status',  id: target.id, status: 'doing' } });
     assert.ok(!r.isError, textOf(r));
     assert.equal(JSON.parse(textOf(r)).status, 'doing');
     const events = await withStore(s.dbFile, db => db.prepare(
