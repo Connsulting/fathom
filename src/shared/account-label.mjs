@@ -134,6 +134,8 @@ export function accountSubtitle(account) {
 // starts with the prefix is not prefixed twice, and one that already carries the digits does not
 // get them twice.
 export function accountLabel(account) {
+  // A household row from accountNaming carries its finished label.
+  if (typeof account?.labelText === 'string') return account.labelText;
   return composeLabel(labelPrefix(account), baseLabel(account), sureMask(account));
 }
 
