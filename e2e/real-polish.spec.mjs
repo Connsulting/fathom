@@ -1,5 +1,5 @@
-// Real-mode polish, end to end through the UI on a real-mode server built in process: Accounts
-// trend lines from uploaded balances, plain "what changed" titles on Plan, the Engine screen's model per
+// Real-mode polish, end to end through the UI on a real-mode server built in process: the Money
+// trend from uploaded balances, plain "what changed" titles on Plan, the Engine screen's model per
 // purpose, Decide on this and Revisit on the salary war game, and Files in the switcher and the
 // Money sub-nav. Runs at desktop and at 390px (every test carries @mobile). Skipped against a remote
 // server.
@@ -65,18 +65,16 @@ test.describe('real-mode polish', () => {
     removeLocalData(DIR);
   });
 
-  test('@mobile Accounts draws a trend line per account and for net worth, from uploaded balances', async ({ page }) => {
+  test('@mobile Money draws one household trend from uploaded balances, not a line per account', async ({ page }) => {
     const sc = await fetchScenario();
-    const keys = Object.keys(sc.series);
-    expect(keys[0]).toBe('net');
-    expect(keys.length).toBeGreaterThanOrEqual(3);
-    await go(page, 'accounts');
-    await expect(page.locator('.h-sparks .h-spark')).toHaveCount(keys.length);
-    await expect(page.locator('.h-spark[data-series="net"] svg polyline.a')).toHaveCount(1);
-    await expect(page.locator('.h-spark[data-series="net"] svg text').first()).toHaveText('Aug 2026');
-    // The last point is a figure that opens its provenance.
-    await page.locator('.h-spark[data-series="net"] .fx-fig').click();
-    await expectPopoverSource(page, 'Account balances you uploaded');
+    expect(sc.trend.points.map((p) => p.date.slice(0, 7))).toEqual(['2026-08', '2026-09', '2026-10']);
+    await go(page, 'money');
+    await expect(page.locator('[data-trend] .tr-svg')).toHaveCount(1);
+    await expect(page.locator('.h-spark')).toHaveCount(0);
+    await expect(page.locator('[data-trend] .tr-x').first()).toHaveText('Aug 2026');
+    // The current value is a figure that opens its provenance.
+    await page.locator('[data-trend-total] .fx-fig').click();
+    await expectPopoverSource(page, 'Account balances, summed');
     const widths = await page.evaluate(() => ({ inner: window.innerWidth, doc: document.documentElement.scrollWidth }));
     expect(widths.doc).toBeLessThanOrEqual(widths.inner);
   });

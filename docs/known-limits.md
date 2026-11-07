@@ -120,4 +120,4 @@ The header-based owner gate (#11) and its limits are gone; these replace them.
 1. A decided deferral is recorded and shown, but no projection reads it (#24).
 2. With a W-2 on file for the year, the actual W-2 wins over a decided salary (#24).
 3. A decided salary is dropped for a run when a W-2 exists or it would leave negative distributions; the decided line still shows (#24).
-4. Net worth counts only accounts with at least two months of data and subtracts card, credit and loan kinds (#24).
+4. Net worth counts every account from its first balance on and subtracts card, credit and loan kinds, business cash included (#24). A stopped account is carried forward and marked, not dropped.
