@@ -7,7 +7,7 @@
 
 import { getSetting, cents, parseJson as parse } from '../store/db.mjs';
 import { resolveTokens } from '../shared/tokens.mjs';
-import { ingestState, applyFreshness } from '../ingest/freshness.mjs';
+import { ingestState, applyFreshness, householdDataThrough } from '../ingest/freshness.mjs';
 import { MODEL_PURPOSES, modelFor } from '../engine/pricing.mjs';
 import { factEventTitle } from '../shared/event-labels.mjs';
 import { buildYearend } from '../yearend/expected.mjs';
@@ -20,6 +20,28 @@ const DAY = 86400000;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+// 'Aug 30, 2026' to '2026-08-30', or null. Matches the planner's dateLabel.
+function isoOfLabel(label) {
+  const m = /^([A-Za-z]{3}) (\d{1,2}), (\d{4})$/.exec(String(label || '').trim());
+  if (!m) return null;
+  const month = MONTHS.indexOf(m[1]);
+  if (month < 0) return null;
+  return `${m[3]}-${String(month + 1).padStart(2, '0')}-${String(Number(m[2])).padStart(2, '0')}`;
+}
+
+function labelOfIso(iso) {
+  const month = MONTHS[Number(iso.slice(5, 7)) - 1];
+  return `${month} ${Number(iso.slice(8, 10))}, ${iso.slice(0, 4)}`;
+}
+
+// Keep a stored label when it is the same day or later. Otherwise the newest row date.
+function newerThrough(stored, iso) {
+  if (!iso) return stored || '';
+  const prior = isoOfLabel(stored);
+  if (prior && prior >= iso) return stored;
+  return labelOfIso(iso);
+}
 
 export const DEFAULT_CAP_USD = 200;
 
@@ -543,10 +565,16 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
   const picks = { ...defaultPicks(wargame), ...(getSetting(db, 'wargame.picks', null) || {}) };
   const engineOn = getSetting(db, 'engine', { on: true });
   const ingest = ingestState(db, { clock: clk });
+  const dataThrough = householdDataThrough(db, clk);
   const ingestAccounts = ingest.accounts || {};
   const accountRows = db.prepare('SELECT * FROM accounts ORDER BY sort, id').all();
   const goals = loadGoals(db, { fig, accounts: accountRows });
   const pace = buildPace(db, { clock: clk });
+  // The rollup date is the newest stored row when that is later than the oldest goal input.
+  // Home reads this field; Money reads meta.dataThrough. Both follow the same ISO day.
+  if (dataThrough && pace.rollup && (!pace.rollup.dataThrough || dataThrough > pace.rollup.dataThrough)) {
+    pace.rollup.dataThrough = dataThrough;
+  }
   Object.assign(fig, indexPaceFigures(pace));
   src['calc:pace'] = { label: 'Goal pace calculator', asOf: clk };
   const curve = loadCurve(db, content);
@@ -558,7 +586,7 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
       product: metaC.product || 'Fathom',
       clock: clk,
       clockLabel: clockLabel(clk),
-      dataThrough: metaC.dataThrough || '',
+      dataThrough: newerThrough(metaC.dataThrough, dataThrough),
       household: metaC.household || '',
     },
     names,
