@@ -384,10 +384,21 @@ function receiptValue(value, scope) {
   return Object.entries(value).filter(([, v]) => v != null && v !== '').map(([k, v]) => `${k === 'targetDate' ? 'date' : k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`).join(', ');
 }
 
+// A remembered preference reads as a memory with a link to the Memories page; any other receipt
+// shows its label and the value before and after.
+function receiptLine(a) {
+  const { esc } = H;
+  if (a.scope !== 'write:preferences') return `<p><b>${esc(a.label)}</b>: ${esc(receiptValue(a.before, a.scope))} → ${esc(receiptValue(a.after, a.scope))}</p>`;
+  const had = a.before != null && a.before !== '';
+  const head = a.after == null ? 'Memory deleted' : had ? 'Memory updated' : 'Memory saved';
+  const text = a.after == null ? a.before : a.after;
+  return `<p><b>${head}</b>: ${esc(receiptValue(text, a.scope))} <a href="${H.href('memories')}" data-go="memories" class="h-mem-all">See all memories</a></p>`;
+}
+
 export function workHtml(m) {
   if (!H || !m || m.role !== 'fathom' || !isObj(m.provenance)) return '';
   const { esc } = H;
-  const actions = H.arr(m.provenance.actions).map(a => `<div class="h-action-receipt" data-receipt="${esc(a.id)}" role="status"><p><b>${esc(a.label)}</b>: ${esc(receiptValue(a.before, a.scope))} → ${esc(receiptValue(a.after, a.scope))}</p>`
+  const actions = H.arr(m.provenance.actions).map(a => `<div class="h-action-receipt" data-receipt="${esc(a.id)}" role="status">${receiptLine(a)}`
     + (a.planningPending ? '<p class="h-mute">Saved. Planning is pending.</p>' : '')
     + (a.undone ? '<span class="h-mute">Undone</span>' : `<button type="button" class="h-btn" data-undo-action="${esc(a.id)}">Undo</button>`) + '</div>').join('');
   if (m.notice || !isObj(m.provenance.work)) return actions;

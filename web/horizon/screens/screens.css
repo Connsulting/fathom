@@ -228,3 +228,46 @@
   .d-horizon .h-ks-body { grid-template-columns: minmax(0, 1fr); padding: 4px 16px 16px; }
   .d-horizon .h-ks-bar { padding-left: 16px; }
 }
+
+/* ---------- memories (#/memories): calm rows, edit in place ---------- */
+.d-horizon .h-mem { --h-col: 680px; }
+.d-horizon .h-mem-add, .d-horizon .h-mem-filter { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.d-horizon .h-mem-filter { margin-top: 18px; }
+.d-horizon .h-mem-add label, .d-horizon .h-mem-filter label { color: var(--fa); font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; }
+.d-horizon .h-mem-line { display: flex; gap: 8px; align-items: center; }
+.d-horizon .h-mem input {
+  flex: 1 1 auto; min-width: 0; width: 100%; height: 36px; padding: 0 11px; background: var(--bg); color: var(--tx);
+  border: 1px solid var(--line2); border-radius: 7px; font: inherit; font-size: 14px;
+}
+.d-horizon .h-mem input:focus { outline: none; border-color: var(--ac); }
+.d-horizon .h-mem-sum { margin: 26px 0 4px; font-size: 13px; }
+.d-horizon .h-mem-list { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+.d-horizon .h-mem-r, .d-horizon .h-mem-gone { padding: 14px 2px; border-bottom: 1px solid var(--line); }
+.d-horizon .h-mem-r[hidden] { display: none; }
+.d-horizon .h-mem-t { margin: 0; color: var(--tx); font-size: 15px; line-height: 1.5; overflow-wrap: anywhere; }
+.d-horizon .h-mem-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 16px; margin-top: 4px; }
+.d-horizon .h-mem-meta { display: flex; flex-wrap: wrap; gap: 2px 14px; margin: 0; font-size: 12.5px; }
+.d-horizon .h-mem-meta a { color: var(--tx2); text-decoration: underline; text-decoration-color: var(--line2); text-underline-offset: 3px; }
+.d-horizon .h-mem-meta a:hover { color: var(--ac); }
+.d-horizon .h-mem-acts { display: flex; gap: 4px; align-items: center; }
+.d-horizon .h-mem-b {
+  appearance: none; background: none; border: 0; padding: 0 8px; min-height: 32px; border-radius: 6px;
+  color: var(--mu); font: inherit; font-size: 13px; cursor: pointer;
+}
+.d-horizon .h-mem-b:hover { color: var(--tx); background: var(--s1); }
+.d-horizon .h-mem-b:focus-visible { outline: 2px solid var(--ac); outline-offset: 1px; }
+.d-horizon .h-mem-edit { display: flex; flex-direction: column; gap: 8px; }
+.d-horizon .h-mem-edit .h-mem-acts { gap: 8px; }
+.d-horizon .h-mem-gone { display: flex; align-items: center; gap: 10px; font-size: 13.5px; }
+.d-horizon .h-mem-gone .h-mem-b { color: var(--ac); }
+.d-horizon .h-mem-none, .d-horizon .h-mem-empty { margin-top: 24px; font-size: 14px; }
+.d-horizon .h-action-receipt .h-mem-all { margin-left: 6px; white-space: nowrap; }
+@media (max-width: 720px) {
+  .d-horizon .h-mem-line { flex-direction: column; align-items: stretch; }
+  .d-horizon .h-mem input { height: 44px; font-size: 16px; }
+  .d-horizon .h-mem .h-btn { min-height: 44px; }
+  .d-horizon .h-mem-foot { flex-direction: column; align-items: flex-start; }
+  .d-horizon .h-mem-acts { margin-left: -8px; }
+  .d-horizon .h-mem-b { min-height: 44px; min-width: 44px; padding: 0 10px; }
+  .d-horizon .h-mem-edit .h-mem-acts { margin-left: 0; }
+}
