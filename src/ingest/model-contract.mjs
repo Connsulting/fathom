@@ -45,7 +45,7 @@ function citedShape(schema) {
 export const TARGET_SCHEMAS = Object.freeze({
   transaction: target('transaction', fields(['accountId', 'postedDate', 'amount', 'description'], ['category', 'externalId'])),
   balance: target('balance', fields(['accountId', 'asOf', 'amount']), { basis: choice('running', 'closing'), datePrecision }),
-  pnl: target('pnl', fields(['entity', 'period', 'category', 'amount', 'basis']), { purpose: choice('business', 'household_spending') }),
+  pnl: target('pnl', fields(['entity', 'period', 'category', 'amount', 'basis'], [], ['basis']), { purpose: choice('business', 'household_spending') }),
   fact: target('fact', fields(['value', 'asOf', 'subject']), { key: choice(...Object.keys(FACT_TYPES)), scope: choice('household', 'person', 'entity', 'account'), datePrecision }),
   tax_payment: target('tax_payment', fields(['jurisdiction', 'payer', 'recipient', 'amount', 'taxYear', 'taxYearBasis', 'paymentDate']),
     { kind: choice('estimate', 'withholding', 'extension', 'return', 'other'), status: choice('paid', 'required'), datePrecision }),
@@ -116,7 +116,7 @@ export function validateProposal(proposal, source) {
     if (Object.hasOwn(value, 'refs') && Object.hasOwn(value, 'transform')) {
       refs(value.refs);
       const n = value.refs.length, op = value.transform.op;
-      if (op === 'debit_credit' ? n !== 2 : op !== 'sum' && n !== 1) errors.push('transform_arity');
+      if (op === 'debit_credit' ? n !== 2 : op === 'month_anchor' ? n > 2 : op !== 'sum' && n !== 1) errors.push('transform_arity');
     } else for (const child of Object.values(value)) visit(child);
   }
   for (const row of proposal.rows) visit(row.fields);

@@ -135,3 +135,14 @@ test('every existing document shape supports cited tax boxes and plan terms with
     assert.equal(validateProposal(p, source()).valid, false, docType);
   }
 });
+
+
+test('unknown accounting basis remains held and a month can cite its separate year', () => {
+  const p = proposal('pnl'); p.rows[0].fields.basis = null;
+  assert.equal(validateProposal(p, source()).valid, true);
+  const tax = proposal('tax_payment');
+  tax.rows[0].fields.paymentDate = field(['r1', 't1'], { op: 'month_anchor', locale: 'en-US', epoch: '1900' });
+  assert.equal(validateProposal(tax, source()).valid, true);
+  tax.rows[0].fields.paymentDate.refs.push('c1');
+  assert.equal(validateProposal(tax, source()).valid, false);
+});
