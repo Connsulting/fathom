@@ -1,7 +1,9 @@
-// The offline backup key (FATHOM_BACKUP_KEY_FILE): a private regular file (no group or other
-// permission bits, not a symlink) holding a 32 byte key in the formats the upload vault accepts
-// (src/ingest/vault.mjs): 32 raw bytes, 64 hex characters, or base64/base64url of 32 bytes.
-// Every failure is the fixed code backup_key_invalid; no path or key material reaches an error.
+// Offline key files: a private regular file (no group or other permission bits, not a symlink)
+// holding a 32 byte key in the formats the upload vault accepts (src/ingest/vault.mjs): 32 raw
+// bytes, 64 hex characters, or base64/base64url of 32 bytes. The backup key
+// (FATHOM_BACKUP_KEY_FILE) encrypts source snapshots; the platform key (FATHOM_PLATFORM_KEY_FILE)
+// wraps household data keys (src/platform/household-vault.mjs) and is read by no server path until
+// MT-03. Every failure is the caller's fixed code; no path or key material reaches an error.
 
 import { closeSync, constants, fstatSync, openSync, readSync } from 'node:fs';
 import { codeError } from './db.mjs';
@@ -9,8 +11,6 @@ import { codeError } from './db.mjs';
 const KEY_BYTES = 32;
 const MAX_KEY_FILE = 4096;
 const KEY_TEXT = /^[A-Za-z0-9+/=_\s-]*$/;
-
-const invalid = () => codeError('backup_key_invalid');
 
 // Mirrors the vault parser: a 32 byte file made only of text-key characters is a text key.
 function parseKey(buf) {
@@ -22,20 +22,21 @@ function parseKey(buf) {
     const key = Buffer.from(t, t.includes('+') || t.includes('/') || t.endsWith('=') ? 'base64' : 'base64url');
     if (key.length === KEY_BYTES) return key;
   }
-  throw invalid();
+  throw new Error('invalid key');
 }
 
-export function loadBackupKey(file) {
-  if (typeof file !== 'string' || file === '') throw invalid();
+// The 32 byte key in `file`, or an Error whose fixed code is `code`.
+export function loadKeyFile(file, code) {
+  if (typeof file !== 'string' || file === '') throw codeError(code);
   let fd;
   try {
     fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW);
   } catch {
-    throw invalid();
+    throw codeError(code);
   }
   try {
     const st = fstatSync(fd);
-    if (!st.isFile() || (st.mode & 0o077) !== 0 || st.size > MAX_KEY_FILE) throw invalid();
+    if (!st.isFile() || (st.mode & 0o077) !== 0 || st.size > MAX_KEY_FILE) throw new Error('invalid key file');
     const buf = Buffer.alloc(st.size);
     let off = 0;
     while (off < buf.length) {
@@ -44,13 +45,16 @@ export function loadBackupKey(file) {
       off += n;
     }
     return parseKey(buf.subarray(0, off));
-  } catch (e) {
-    if (e && e.code === 'backup_key_invalid') throw e;
-    throw invalid();
+  } catch {
+    throw codeError(code);
   } finally {
     closeSync(fd);
   }
 }
 
-// The backup key file named by the environment, or a backup_key_invalid refusal.
+export const loadBackupKey = file => loadKeyFile(file, 'backup_key_invalid');
+export const loadPlatformKey = file => loadKeyFile(file, 'platform_key_invalid');
+
+// The key files named by the environment, or the matching fixed-code refusal.
 export const backupKeyFromEnv = (env = process.env) => loadBackupKey(env.FATHOM_BACKUP_KEY_FILE);
+export const platformKeyFromEnv = (env = process.env) => loadPlatformKey(env.FATHOM_PLATFORM_KEY_FILE);
