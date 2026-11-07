@@ -101,14 +101,18 @@ const sentenceStart = /(?:^\s*|[.!?]["')\]]*\s+|\n[ \t]*(?:[•*-]|\d+[.)])?[ \t
 // A capitalized spelled number inside a proper name (Capital One, Square One, One Medical, the Two
 // Sigma fund): a capitalized non-number word right before it, separated by one space, or one right
 // after it when the phrase is "One" or not at a sentence start. "Two Roth accounts" opening a
-// sentence stays a count.
+// sentence stays a count, and so does any number word before an account type (One Roth account).
+const ACCOUNT_TYPES = new Set(['roth', 'ira', 'iras', 'hsa', 'hsas', 'fsa', 'fsas', 'sep', 'simple', 'solo', 'traditional',
+  'checking', 'savings', 'brokerage', 'cd', 'cds', 'credit', 'card', 'cards', 'account', 'accounts', 'loan', 'loans', 'mortgage',
+  'payment', 'payments', 'transaction', 'transactions', 'holding', 'holdings', 'goal', 'goals', 'recommendation', 'recommendations']);
 function isProperName(text, phrase) {
   if (!/^\p{Lu}/u.test(phrase.text)) return false;
   const before = text.slice(0, phrase.index);
   const previous = /(?<![\p{L}\p{N}])(\p{L}+) $/u.exec(before)?.[1];
   if (previous && /^\p{Lu}/u.test(previous) && !isNumberWord(previous)) return true;
   const next = /^ (\p{Lu}\p{L}*)(?![\p{L}\p{N}])/u.exec(text.slice(phrase.index + phrase.text.length))?.[1];
-  return !!next && !isNumberWord(next) && (phrase.text === 'One' || !sentenceStart.test(before));
+  return !!next && !isNumberWord(next) && !ACCOUNT_TYPES.has(next.toLowerCase())
+    && (phrase.text === 'One' || !sentenceStart.test(before));
 }
 
 function collect(value, sources, kind = 'number') {
