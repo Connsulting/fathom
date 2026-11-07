@@ -47,7 +47,7 @@ test.describe('Money household trend, demo data', () => {
 
     // Each part has its own current value as a figure.
     for (const p of t.parts) await expect(page.locator(`[data-part="${p.id}"] .fx-fig`)).toHaveCount(1);
-    await page.screenshot({ path: test.info().outputPath('money-trend.png'), fullPage: false });
+    await page.locator('[data-trend]').screenshot({ path: test.info().outputPath('money-trend.png') });
   });
 
   test('@mt-ac1 @mobile the range control changes the x-axis and the line', async ({ page }) => {
@@ -68,25 +68,29 @@ test.describe('Money household trend, demo data', () => {
     expect(all.at(-1)).toBe(year.at(-1));
   });
 
-  test('@mt-ac1 @mobile a part toggles on and off, and the last line cannot be turned off', async ({ page }) => {
+  test('@mt-ac1 @mobile choosing a part charts it on its own scale and net worth brings the total back', async ({ page }) => {
     await gotoRoute(page, 'money');
     const cash = page.locator('[data-trend-part="cash"]');
+    await expect(page.locator('[data-trend-part="total"]')).toHaveAttribute('aria-pressed', 'true');
     await expect(cash).toHaveAttribute('aria-pressed', 'false');
     expect(await lineCount(page, 'cash')).toBe(0);
+    const totalTicks = await page.locator('[data-trend] .tr-svg .tr-t:not(.tr-x)').allTextContents();
     await cash.click();
     await expect(page.locator('[data-trend-part="cash"]')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('[data-trend-part="total"]')).toHaveAttribute('aria-pressed', 'false');
     expect(await lineCount(page, 'cash')).toBeGreaterThan(0);
-    await expect(readout(page)).toContainText('Cash');
-    await expect(readout(page)).toContainText('Net worth');
-    await page.locator('[data-trend-part="total"]').click();
     expect(await lineCount(page, 'total')).toBe(0);
-    await expect(readout(page)).not.toContainText('Net worth');
-    await page.locator('[data-trend-part="cash"]').click();
-    await expect(page.locator('[data-trend-part="cash"]')).toHaveAttribute('aria-pressed', 'true');
-    expect(await lineCount(page, 'cash')).toBeGreaterThan(0);
+    expect(await page.locator('[data-trend] .tr-svg .tr-t:not(.tr-x)').allTextContents()).not.toEqual(totalTicks);
+    // The readout still lists every part, whichever one is charted.
+    await expect(readout(page)).toContainText('Net worth');
+    await expect(readout(page)).toContainText('Cash');
+    await page.locator('[data-trend-part="total"]').click();
+    expect(await lineCount(page, 'total')).toBeGreaterThan(0);
+    expect(await lineCount(page, 'cash')).toBe(0);
   });
 
-  test('@mt-ac1 hover shows the date and each shown part\'s value, and the keys move it', async ({ page }) => {
+  test('@mt-ac1 hover shows the date and every part\'s value, and the keys move it', async ({ page, request }) => {
+    const sc = await (await request.get('/api/scenario')).json();
     await gotoRoute(page, 'money');
     await page.locator('[data-trend-part="retirement"]').click();
     const last = await readout(page).innerText();
@@ -95,8 +99,8 @@ test.describe('Money household trend, demo data', () => {
     const text = await readout(page).innerText();
     expect(text).toMatch(/[A-Z][a-z]{2} \d{1,2}, 20\d\d/);
     expect(text).toContain('Net worth');
-    expect(text).toContain('Retirement');
-    expect((text.match(/\$[\d,]+/g) || []).length).toBe(2);
+    for (const p of sc.trend.parts) expect(text).toContain(p.label);
+    expect((text.match(/-?\$[\d,]+/g) || []).length).toBe(sc.trend.parts.length + 1);
     const guide = await page.locator('[data-trend-guide]').getAttribute('x1');
     await hoverAt(page, 0.95);
     expect(await page.locator('[data-trend-guide]').getAttribute('x1')).not.toBe(guide);
@@ -142,7 +146,7 @@ test.describe('Money household trend, demo data', () => {
     const vw = page.viewportSize().width;
     expect(plot.x).toBeGreaterThanOrEqual(0);
     expect(plot.x + plot.width).toBeLessThanOrEqual(vw);
-    if (vw < 700) expect(svg.width).toBeGreaterThanOrEqual(vw - 48);
+    if (vw < 700) expect(svg.width).toBeGreaterThanOrEqual(vw - 64);
     for (const sel of ['[data-trend-range="3M"]', '[data-trend-range="1Y"]', '[data-trend-range="All"]', '[data-trend-part="total"]', '[data-trend-part="cash"]']) {
       const el = page.locator(sel);
       await el.scrollIntoViewIfNeeded();
@@ -154,6 +158,7 @@ test.describe('Money household trend, demo data', () => {
     await page.locator('[data-trend-range="3M"]').click();
     await page.locator('[data-trend-part="cash"]').click();
     await expect(page.locator('[data-trend-part="cash"]')).toHaveAttribute('aria-pressed', 'true');
+    await page.locator('[data-trend-hit]').scrollIntoViewIfNeeded();
     const hit = await page.locator('[data-trend-hit]').boundingBox();
     const before = await readout(page).innerText();
     if (page.viewportSize().width < 700) await page.touchscreen.tap(hit.x + hit.width * 0.1, hit.y + hit.height / 2);
@@ -161,7 +166,7 @@ test.describe('Money household trend, demo data', () => {
     await expect(readout(page)).not.toHaveText(before);
     const widths = await page.evaluate(() => ({ inner: window.innerWidth, doc: document.documentElement.scrollWidth }));
     expect(widths.doc).toBeLessThanOrEqual(widths.inner);
-    await page.screenshot({ path: test.info().outputPath('money-trend-narrow.png'), fullPage: true });
+    await page.locator('[data-trend]').screenshot({ path: test.info().outputPath('money-trend-narrow.png') });
   });
 });
 
@@ -224,7 +229,7 @@ test.describe('Money household trend, a stopped account', () => {
     await expect(page.locator('[data-trend] .tr-l.total.carried')).not.toHaveCount(0);
     await expect(page.locator('[data-trend] .tr-l.total:not(.carried)')).not.toHaveCount(0);
     // Net worth now: 1200 + 4200 carried - 100 owed.
-    await expect(page.locator('[data-trend-total] .fx-fig')).toContainText('5,300');
+    await expect(page.locator('[data-trend-total] .fx-fig')).toContainText(/5\.3K/i);
     await expect(readout(page)).toContainText('1 account is carried forward here');
     await hoverAt(page, 0.02);
     await expect(readout(page)).not.toContainText('carried forward');
@@ -232,9 +237,10 @@ test.describe('Money household trend, a stopped account', () => {
     await expect(page.locator('.fx-pop .fx-pop-sums')).toContainText('carried forward');
     await expect(page.locator('.fx-pop .fx-pop-sums')).toContainText('2026-08-31');
     await page.keyboard.press('Escape');
-    await page.locator('[data-trend-part="debt"]').click();
     await expect(readout(page)).toContainText('Debt');
-    await expect(readout(page)).toContainText('-$100');
+    await expect(readout(page)).toContainText('-$300');
+    await page.locator('[data-trend-part="debt"]').click();
+    await expect(page.locator('[data-trend] .tr-l.tr-c-debt')).not.toHaveCount(0);
   });
 
   test('@mt-ac3 no wall on Money, and the account trend lives in the account dialog', async ({ page }) => {

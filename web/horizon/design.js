@@ -1451,7 +1451,7 @@ function moneyHealthHtml(h) {
 
 function pMoney() {
   return shell(`<section class="h-money">${pageHead('Household', 'Money', `${mirrorText()} Balances, files and the data behind every figure.`)}
-    ${moneyHealthHtml(homeHealth())}${trendScreen.render()}${accountsBody()}</section>`);
+    ${trendScreen.render()}${moneyHealthHtml(homeHealth())}${accountsBody()}</section>`);
 }
 
 /* ---------- settings ---------- */

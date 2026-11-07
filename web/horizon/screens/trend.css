@@ -36,7 +36,7 @@
 .d-horizon .tr-guide { stroke: var(--line2); stroke-width: 1; }
 .d-horizon .tr-dot { fill: var(--tc); stroke: var(--s1); stroke-width: 1.5; }
 .d-horizon .tr-hit { fill: transparent; cursor: crosshair; }
-.d-horizon .tr-hit:focus-visible { outline: 2px solid var(--ac); outline-offset: 2px; }
+.d-horizon .tr-hit:focus-visible { outline: none; stroke: var(--ac2); stroke-opacity: 0.45; stroke-width: 1; vector-effect: non-scaling-stroke; }
 
 .d-horizon .tr-key { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 4px; font-size: 11.5px; color: var(--fa); }
 .d-horizon .tr-key span { display: inline-flex; align-items: center; gap: 6px; }
@@ -47,11 +47,12 @@
 .d-horizon .tr-read time { grid-column: 1 / -1; color: var(--mu); font-size: 12px; }
 .d-horizon .tr-r { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .d-horizon .tr-r span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--tx2); }
+.d-horizon .tr-r.sel span { color: var(--tx); }
 .d-horizon .tr-r b { font: 400 13px var(--mono); font-variant-numeric: tabular-nums; }
 .d-horizon .tr-rn { grid-column: 1 / -1; color: var(--fa); font-size: 12px; }
 .d-horizon .tr-sw { width: 9px; height: 9px; border-radius: 2px; background: var(--tc); flex: none; }
 
-.d-horizon .tr-parts { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px 14px; margin-top: 14px; }
+.d-horizon .tr-parts { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 8px 14px; margin-top: 14px; }
 .d-horizon .tr-part { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; }
 .d-horizon .tr-part b { font-weight: 400; font-size: 13px; flex: none; }
 .d-horizon .tr-tog { appearance: none; display: inline-flex; align-items: center; gap: 8px; min-height: 36px; max-width: 100%; padding: 0 12px; background: none; border: 1px solid var(--line2); border-radius: 18px; color: var(--mu); cursor: pointer; font-size: 13px; text-align: left; }
@@ -77,5 +78,8 @@
   .d-horizon .tr-rngs { width: 100%; }
   .d-horizon .tr-rng { flex: 1 1 0; }
   .d-horizon .tr-read { grid-template-columns: 1fr; }
-  .d-horizon .tr-parts { grid-template-columns: 1fr; }
+  .d-horizon .tr-parts { grid-template-columns: 1fr 1fr; gap: 10px 8px; }
+  .d-horizon .tr-part { flex-direction: column; align-items: stretch; gap: 2px; }
+  .d-horizon .tr-part b { padding-left: 12px; }
+  .d-horizon .tr-tog { min-height: 40px; line-height: 1.2; padding: 6px 12px; }
 }
