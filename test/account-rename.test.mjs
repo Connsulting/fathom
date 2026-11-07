@@ -51,7 +51,7 @@ test('a display name survives a re-import and a SimpleFIN refresh, and clearing 
   }
 });
 
-test('a rename updates the trend, the source and the question, and list_accounts hides a holder name', async () => {
+test('a rename updates the trend, the source and the question, and accounts.list hides a holder name', async () => {
   const s = await realStore();
   const P = await src('src/ingest/pipeline.mjs');
   const { accountRename } = await src('src/api/accounts.mjs');
@@ -66,7 +66,7 @@ test('a rename updates the trend, the source and the question, and list_accounts
     assert.equal(imported.status, 'imported');
     const acct = s.db.prepare('SELECT * FROM accounts').get();
     s.db.prepare('INSERT INTO account_holders (account_id, holder, created_at) VALUES (?, ?, ?)').run(acct.id, 'Avery Example', NOW);
-    const listed = await callTool('list_accounts', {}, { db: s.db, now: NOW });
+    const listed = await callTool('accounts', { operation: 'list', }, { db: s.db, now: NOW });
     const got = listed.find((a) => a.id === acct.id);
     assert.equal(got.name, 'Harbor brokerage (3046)');
     assert.equal(got.name.includes('Avery'), false);
@@ -82,7 +82,7 @@ test('a rename updates the trend, the source and the question, and list_accounts
     assert.equal(scenario.src[`acct:${acct.id}`].label, 'Household reserve (3046)');
     s.db.prepare(`INSERT INTO figures (key, v, src, kind, label, updated_at) VALUES (?, 10, ?, 'a', ?, ?)`).run(
       `bal.${acct.id}`, `acct:${acct.id}`, 'Balance, Individual 3046', NOW);
-    const figures = await callTool('get_figures', { keys: [`bal.${acct.id}`] }, { db: s.db, now: NOW });
+    const figures = await callTool('household', { operation: 'figures', keys: [`bal.${acct.id}`] }, { db: s.db, now: NOW });
     assert.equal(figures[0].label, 'Balance, Household reserve (3046)');
     assert.equal(figures[0].source.label, 'Household reserve (3046)');
     const question = scenario.live.ingest.items.find((i) => i.subject === acct.id);

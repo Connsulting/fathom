@@ -255,8 +255,8 @@ test('live demo boundary applies model/output caps and offers only local read to
     { status: 200, headers: { 'content-type': 'application/json' } });
   };
   const engine = createPublicDemoEngine({ db, config: c, control, visitorId: 'sample' });
-  const tools = [{ name: 'read_sample', scope: 'read', description: 'Read synthetic state', inputSchema: { type: 'object', properties: {} }, handler: (_, ctx) => ({ demo: getSetting(ctx.db, 'mode') }) },
-    { name: 'write_sample', scope: 'write:recs', description: 'Write state', inputSchema: { type: 'object', properties: {} }, handler: () => assert.fail('write tool ran') }];
+  const tools = [{ name: 'read_sample', kind: 'read', operations: [{ name: 'read', scope: 'read' }], description: 'Read synthetic state', inputSchema: { type: 'object', properties: {} }, handler: (_, ctx) => ({ demo: getSetting(ctx.db, 'mode') }) },
+    { name: 'write_sample', kind: 'write', operations: [{ name: 'write', scope: 'write:recs' }], description: 'Write state', inputSchema: { type: 'object', properties: {} }, handler: () => assert.fail('write tool ran') }];
   const result = await engine.call({ purpose: 'chat', messages: [{ role: 'user', content: 'Explain sample data' }], tools, toolContext: { db }, maxTokens: 999 });
   assert.equal(result.text, 'Safe sample answer.');
   assert.equal(requests.length, 2);

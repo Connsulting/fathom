@@ -37,8 +37,8 @@ test('sourced-number table grades answers over real demo tool results', async ()
   try {
     const call = async (name, args) => ({ name, args,
       result: await tools.find(tool => tool.name === name).handler(args, { db: store.db }) });
-    const health = await call('query_transactions', { category: 'health', limit: 1 });
-    const pace = await call('get_pace', {});
+    const health = await call('transactions', { operation: 'search', category: 'health', limit: 1 });
+    const pace = await call('goals', { operation: 'pace' });
     const expense = Math.abs(health.result.rows[0].amount);
     assert.ok(health.result.rows[0].amount < 0);
     const target = pace.result.goals.find(goal => Number.isInteger(goal.target?.v)).target.v;
@@ -53,7 +53,7 @@ test('sourced-number table grades answers over real demo tool results', async ()
     store.db.prepare(`INSERT INTO figures (key, v, src, kind, label, locator, updated_at)
       VALUES (?, ?, 'calc:fixture', 'e', 'Demo ratio', ?, ?)`)
       .run('eval_ratio', ratio, JSON.stringify({ unit: 'ratio' }), new Date().toISOString());
-    const ratioCall = await call('get_figures', { keys: ['eval_ratio'] });
+    const ratioCall = await call('household', { operation: 'figures', keys: ['eval_ratio'] });
     assert.equal(ratioCall.result[0].value, ratio);
     assert.equal(ratioCall.result[0].unit, 'ratio');
     assert.equal(gradeFigures(`${ratio * 100}%`, [ratioCall]).ok, true);
@@ -86,9 +86,9 @@ test('tier 1 demo fixtures state unsigned, dropped-cent and word-count figures',
     const byName = Object.fromEntries(tools.map(tool => [tool.name, tool]));
     const ctx = { db: store.db };
     const specs = [
-      ['business-pnl-january', 'pnl_by_month', { from: '2026-01', to: '2026-01' }, result =>
+      ['business-pnl-january', 'business', { operation: 'pnl', from: '2026-01', to: '2026-01' }, result =>
         [...result.rows.map(row => row.amount), ...Object.values(result.totals)]],
-      ['goals-pace', 'get_pace', {}, result => {
+      ['goals-pace', 'goals', { operation: 'pace' }, result => {
         const values = [];
         const walk = value => {
           if (!value || typeof value !== 'object') return;
@@ -98,7 +98,7 @@ test('tier 1 demo fixtures state unsigned, dropped-cent and word-count figures',
         walk(result);
         return values;
       }],
-      ['spending-latest-health', 'query_transactions', { category: 'health', limit: 1 }, result =>
+      ['spending-latest-health', 'transactions', { operation: 'search', category: 'health', limit: 1 }, result =>
         [...result.rows.map(row => row.amount), result.total]],
     ];
     for (const [id, name, args, values] of specs) {

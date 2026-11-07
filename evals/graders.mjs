@@ -4,7 +4,8 @@ export function predicateMatches(args, p) {
   const v = at(args, p.path);
   if (p.op === 'exists') return v !== undefined;
   if (p.op === 'eq') return same(v, p.value);
-  if (p.op === 'includes') return Array.isArray(v) && v.some(x => same(x, p.value));
+  if (p.op === 'includes_or_absent' && v === undefined) return true;
+  if (p.op === 'includes' || p.op === 'includes_or_absent') return Array.isArray(v) && v.some(x => same(x, p.value));
   if (p.op === 'gte') return typeof v === 'number' && v >= p.value;
   if (p.op === 'lte') return typeof v === 'number' && v <= p.value;
   if (p.op === 'matches') return typeof v === 'string' && new RegExp(p.value, 'i').test(v);
@@ -15,7 +16,13 @@ export function gradeProhibited(predicates = [], subject) {
   return { ok: hits.length === 0, hits };
 }
 export function gradeRequiredTools(required, calls) {
-  const checks = required.map(r => ({ ...r, ok: calls.some(c => !c.isError && c.name === r.name && r.predicates.every(p => predicateMatches(c.args, p))) }));
+  const checks = required.map(r => {
+    const pairCalls = calls.filter(c => c.name === r.name && c.args?.operation === r.operation);
+    const ok = pairCalls.some(c => !c.isError && r.predicates.every(p => predicateMatches(c.args, p)));
+    const failures = pairCalls.map(c => r.predicates.filter(p => c.isError || !predicateMatches(c.args, p)));
+    const failedPredicates = ok ? [] : failures.sort((a, b) => a.length - b.length)[0] || r.predicates;
+    return { ...r, ok, status: ok ? 'ok' : pairCalls.length ? 'predicate_failed' : 'missing', failedPredicates };
+  });
   return { ok: checks.every(c => c.ok), checks };
 }
 
@@ -147,7 +154,7 @@ export function gradeFigures(text, calls, { figures = {}, contextNumbers = [] } 
   const violations = [];
   const tokenFigures = [];
   const cleaned = String(text).replace(/\{(?:fk|f):([^{}]+)\}/g, (token, key) => {
-    const returned = calls.some(c => !c.isError && c.name === 'get_figures' && Array.isArray(c.result)
+    const returned = calls.some(c => !c.isError && c.name === 'household' && c.args?.operation === 'figures' && Array.isArray(c.result)
       && c.result.some(f => f.key === key && !f.unavailable && Number.isFinite(f.v)));
     if (!returned) violations.push({ text: token, value: figures[key] ?? null, kind: 'context-only' });
     else tokenFigures.push({ text: token, value: figures[key] });

@@ -26,7 +26,7 @@ async function create(client, name, extra = {}) {
 }
 async function working(server, key) {
   const result = rpcResult(await mcpPost(server.baseUrl, { auth: bearer(key), method: 'tools/list' }));
-  assert.ok(result.tools.some(tool => tool.name === 'household_summary'));
+  assert.ok(result.tools.some(tool => tool.name === 'household'));
   assert.ok(!result.tools.some(tool => /admin|invite_user|remove_user|set_role/.test(tool.name)));
 }
 async function denied(server, key) {
@@ -119,7 +119,7 @@ test('demotion keeps financial MCP permissions while revoking administrative ses
     assert.equal((await server.postJson(`/api/admin/users/${promoted.fixture.user.id}/role`, { role: 'member' })).status, 200);
     assert.equal((await promoted.request({ path: '/api/admin/users' })).status, 403);
     const tools = rpcResult(await mcpPost(server.baseUrl, { auth: bearer(key.key), method: 'tools/list' })).tools;
-    assert.ok(tools.some(tool => tool.name === 'set_recommendation_status'));
+    assert.ok(tools.some(tool => tool.name === 'act_on_recommendation'));
     await working(server, key.key);
     assert.equal((await promoted.request({ path: '/api/scenario' })).status, 200);
   } finally { await server.stop(); }

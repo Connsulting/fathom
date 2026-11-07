@@ -1,3 +1,4 @@
+import { tools as REGISTRY } from '../src/tools/index.mjs';
 // Item 19: Ask answers stream. The event protocol over HTTP (start, progress, text, reset, final,
 // error), the rule that nothing streamed is ever styled as verified, the trailing Sources strip and
 // the markdown subset over escaped text.
@@ -12,7 +13,7 @@ import { createRuntimeEngine } from '../src/engine/runtime.mjs';
 import { createEngine, fakeChunks } from '../src/engine/index.mjs';
 import { sdkStreamEvent, consumeSdkMessages } from '../src/engine/live.mjs';
 import { createLivePacks } from '../src/packs/live.mjs';
-import { createLiveAnswerer, renderAnswer, groundAnswer, PRODUCT_RULES, PROGRESS_LABELS, PROGRESS_START } from '../src/api/answerer.mjs';
+import { createLiveAnswerer, renderAnswer, groundAnswer, PRODUCT_RULES, PROGRESS_START } from '../src/api/answerer.mjs';
 import { stripSources, markdownBlocks, streamHtml, wrapBlocks, listMarkerSpans } from '../src/shared/answer-text.mjs';
 import { SERVER_TIMEOUT, withServer, request, postJson, openStore, tempDb } from './helpers/server.mjs';
 
@@ -51,7 +52,7 @@ test('POST /api/threads streams start, progress, text and a final event equal to
   assert.ok(firstText > 1, 'progress comes before any text');
   assert.ok(names.filter(n => n === 'text').length > 2, 'the text arrives in several chunks');
   // Progress labels are the fixed plain labels only.
-  const labels = new Set(Object.values(PROGRESS_LABELS));
+  const labels = new Set(REGISTRY.map(t => t.progress));
   for (const e of evs.filter(x => x.name === 'progress')) {
     assert.ok(labels.has(e.data.label) || /^[A-Z][a-z ]+$/.test(e.data.label), e.data.label);
     assert.deepEqual(Object.keys(e.data), ['label']);
@@ -141,8 +142,8 @@ test('the fake engine emits tool and text events in deterministic chunks without
 });
 
 test('live SDK partial messages map to tool and text events', async () => {
-  assert.deepEqual(sdkStreamEvent({ type: 'stream_event', event: { type: 'content_block_start', content_block: { type: 'tool_use', name: 'mcp__fathom__get_figures', input: {} } } }),
-    { type: 'tool', name: 'get_figures' });
+  assert.deepEqual(sdkStreamEvent({ type: 'stream_event', event: { type: 'content_block_start', content_block: { type: 'tool_use', name: 'mcp__fathom__household', input: {} } } }),
+    { type: 'tool', name: 'household' });
   assert.deepEqual(sdkStreamEvent({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'Hi' } } }),
     { type: 'text', text: 'Hi' });
   assert.equal(sdkStreamEvent({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'input_json_delta', partial_json: '{"a":1}' } } }), null);
@@ -174,7 +175,7 @@ test('a regeneration streams its revision step, then a plain reset, before the n
   const { s, engine, packs, root } = await demoAnswerer(t);
   let n = 0;
   const wrapped = { ...engine, mode: engine.mode, isOn: () => engine.isOn(), call: req => engine.call({ ...req,
-    fake: n++ === 0 ? [{ text: 'You owe $987,654 this year and $876,543 next year.' }] : [{ toolCalls: [{ name: 'household_summary', args: {} }] }, { text: 'Nothing to add.' }] }) };
+    fake: n++ === 0 ? [{ text: 'You owe $987,654 this year and $876,543 next year.' }] : [{ toolCalls: [{ name: 'household', args: { operation: 'summary', } }] }, { text: 'Nothing to add.' }] }) };
   const seen = [];
   const reply = await createLiveAnswerer({ engine: wrapped, packs, root }).answer({ db: s.db, key: 'ask:0123456789ab', text: 'How much?', onEvent: e => seen.push(e) });
   assert.equal(reply.provenance.grounding.retried, true);
@@ -218,11 +219,11 @@ test('streamHtml shows numbers and tokens only in the neutral checking style, es
 /* ---------- Sources ---------- */
 
 test('stripSources removes a trailing Sources paragraph, heading block or sentence only', () => {
-  assert.equal(stripSources('Pay the estimate.\n\nSources: household summary, get_figures'), 'Pay the estimate.');
+  assert.equal(stripSources('Pay the estimate.\n\nSources: household summary, household.figures'), 'Pay the estimate.');
   assert.equal(stripSources('Pay the estimate.\n\n**Sources:**\n- household summary\n- tax pack'), 'Pay the estimate.');
   assert.equal(stripSources('Pay the estimate.\n\nSources\n- household summary'), 'Pay the estimate.');
   assert.equal(stripSources('Pay the estimate. Sources: household summary.'), 'Pay the estimate.');
-  assert.equal(stripSources('Pay the estimate.\nSource: get_figures'), 'Pay the estimate.');
+  assert.equal(stripSources('Pay the estimate.\nSource: household.figures'), 'Pay the estimate.');
   assert.equal(stripSources('Pay it.\n\nReferences: a, b\n\nSources: c'), 'Pay it.');
   // Not a trailing source line: kept.
   assert.equal(stripSources('Your sources of income are steady.'), 'Your sources of income are steady.');
