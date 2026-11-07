@@ -307,6 +307,7 @@ function onHashChange() {
 
 let queue = Promise.resolve();
 let errEl = null;
+let lastError = '';
 
 function hideError() {
   if (errEl) { errEl.remove(); errEl = null; }
@@ -589,6 +590,7 @@ function send(path, body, onOk, onDone, failText) {
       if (onDone) onDone();
       applyScenario(data.scenario);
       hideError();
+      lastError = '';
       let out = data;
       try { out = onOk ? onOk(data) : data; } catch (e) { out = null; }
       notify();
@@ -596,7 +598,8 @@ function send(path, body, onOk, onDone, failText) {
     },
     err => {
       if (onDone) { onDone(); notify(); }
-      showError((failText || 'Could not save that change. ') + (err && err.message ? err.message : ''));
+      lastError = (err && err.message) ? err.message : 'The server could not complete that.';
+      showError((failText || 'Could not save that change. ') + lastError);
       return null;
     }
   );
@@ -1130,6 +1133,7 @@ const api = {
   advisorVerdict,
   advisorCheckin,
   advisorPacket,
+  lastError: () => lastError,
   figPopover: el => openPopover(el),
 };
 

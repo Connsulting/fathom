@@ -16,7 +16,8 @@ import { buildScenario, addDays } from '../../src/scenario/build.mjs';
 import { needsYou, verdictLevel } from '../../src/shared/rules.mjs';
 import { KIND_WORDS } from '../../src/shared/tokens.mjs';
 import { createEngine, EngineOffError, BudgetExceededError, ModelCallError } from '../../src/engine/index.mjs';
-import { buildBrief, briefSummary, renderBrief, composeBrief, stripLayout, appLink, urgencyOf, C } from '../../src/email/brief.mjs';
+import { buildBrief, briefSummary, renderBrief, composeBrief, stripLayout, appLink, urgencyOf } from '../../src/email/brief.mjs';
+import { C } from '../../src/email/palette.mjs';
 
 const CLOCK = scenarioDemo.meta.clock; // 2026-11-05
 const URL_BASE = 'https://fathom.example.invalid';
@@ -359,9 +360,9 @@ test('the HTML is dark, email safe and structured like the mock on the demo stor
   // Email-safe: no script, SVG, image, external font or stylesheet; one inline head style only.
   assert.ok(!/<script|<svg|<img|<link|@import|@font-face|url\(/i.test(html));
   assert.equal((html.match(/<style/g) || []).length, 1, 'a single head style for color-scheme and the mobile gutter');
-  assert.ok(html.includes('<meta name="color-scheme" content="dark light">'));
-  assert.ok(html.includes('<meta name="supported-color-schemes" content="dark light">'));
-  assert.ok(html.includes(':root{color-scheme:dark light'));
+  assert.ok(html.includes('<meta name="color-scheme" content="dark">'));
+  assert.ok(html.includes('<meta name="supported-color-schemes" content="dark">'));
+  assert.ok(html.includes(':root{color-scheme:dark;'));
   assert.ok(html.includes('max-width:600px'));
   assert.ok(html.includes('name="viewport"'));
 
