@@ -1,3 +1,4 @@
+import { categoryGuess } from '../categories/store.mjs';
 // Best guess for a pending confirm question, with evidence that names a field or a document and
 // quotes stored values. Rule guesses come from stored rows (account kind from the account name,
 // same for a near duplicate on the same date with the same amount, joint for a holder naming both
@@ -168,5 +169,7 @@ function engineGuess(db, item, detail) {
 
 export function bestGuess(db, item, detail) {
   if (!item || item.status === 'answered') return null;
+  if (item.kind === 'transaction_category') return categoryGuess(item);
+  if (item.kind === 'category_mapping') return null;
   return ruleGuess(db, item, detail) ?? engineGuess(db, item, detail);
 }

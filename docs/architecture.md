@@ -327,6 +327,7 @@ secrets are read there.
 |---|---|---|
 | `FATHOM_DATA` | `./data` (gitignored) | Data directory; holds `fathom.sqlite` and `platform.sqlite`. |
 | `FATHOM_BACKUP_KEY_FILE` | unset | Path to a private file holding a 32-byte key. Read only by `scripts/migrate-platform.mjs` and `scripts/source-snapshot.mjs`, which encrypt source snapshots with it; the server never reads it. |
+| `FATHOM_PLATFORM_KEY_FILE` | unset | Path to a private file holding the 32-byte platform key that wraps household data keys (`loadPlatformKey`, `platformKeyFromEnv` in `src/platform/backup-key.mjs`). Read by no server path yet; for offline tooling and the MT-03 cutover. |
 | `FATHOM_PORT` | `8080` | HTTP port. |
 | `FATHOM_HOST` | `127.0.0.1` (the image sets `0.0.0.0`) | Bind address. |
 | `FATHOM_DEMO` | unset (auto) | `1` demo store required, `0` real store required, unset follows the store (a new store is demo). |
@@ -972,6 +973,7 @@ CLIs.
 | `platform_settings` | `key` PK, `value` JSON, `updated_at`. `multi_household_enabled` (boolean, false when absent). |
 | `audit_events` | `id` PK, `at`, `actor_user_id`, `household_id`, `target_user_id`, fixed `action` and `outcome` codes. No payloads, emails or tokens. |
 | `platform_operations` | `id` PK, `kind`, `phase`, `status` in running, done, `started_at`, `updated_at`, `detail` JSON (counts and hashes only) |
+| `household_data_keys` | (`household_id`, `key_version`) PK, `wrapped_key` BLOB (the household data key wrapped under the platform key, never raw), `status` in active, retired (a unique partial index allows one active key per household), `created_at`. Written only by `provisionDataKey` (`src/platform/household-vault.mjs`); the server does not read it before MT-03. |
 
 Memberships and invitations.
 
@@ -1788,6 +1790,18 @@ reads `FATHOM_DATA_KEY_FILE` (32 raw bytes, 64 hex characters or base64 of 32 by
 refused). A real store without the key file refuses uploads with "uploads need
 FATHOM_DATA_KEY_FILE: set it to a file holding a 32 byte key" (HTTP 409). A demo store generates
 `$FATHOM_DATA/files/demo.key` on first use. `clearStoredFiles(dataDir)` removes `*.bin` only.
+
+Household envelope (MT-02, not wired). `src/platform/household-vault.mjs` defines FTHM2: `FTHM2`,
+the key version (uint32 BE), a fresh 12 byte nonce, the ciphertext and the 16 byte tag, with
+length-prefixed additional data binding `fathom-vault/2`, household id, purpose (`upload`,
+`advisor-packet`, `simplefin-access`), object id, key version and the header itself. Each household
+has a random 32 byte data key, stored only wrapped (`FTHMK1`) under the platform key in platform
+`household_data_keys` with household id and version authenticated. Objects live under a contained
+household root (`households/<seg>...` below the data root, every segment an lstat-checked private
+directory, never a symlink) at `files/<id>.bin`. `src/platform/vault-convert.mjs` converts a legacy
+instance offline into a validated bundle at `<root>/work/vault-<operationId>`, published by one
+rename; it only reads the legacy store and files. The server still uses FTHM1 until the MT-03
+cutover; nothing in the server imports these modules yet.
 
 ### Mapping unknown tables
 
@@ -2692,3 +2706,17 @@ Changes run focused tests locally; CI runs the full unit and Playwright suites a
 `npm run smoke:live` is separate: it calls the live model only when `FATHOM_LIVE=1`
 and `FATHOM_CLAUDE_CREDENTIAL_FILE` is set. `scripts/e2e-all.sh` runs the full Playwright suite and
 then smoke against a server. `scripts/docker-smoke.sh` builds the image and smokes a container.
+
+## Transaction categories
+
+`src/categories/resolve.mjs` exports `resolveCategories({transactions, accounts, corrections, merchantRules, sourceRules, guesses, transferSourceIds})`, returning a map by stable transaction id with category, coarse bucket, first answering layer and evidence. The order is personal corrections and explicit rules, imported category, structural transfer, merchant memory, stored model guess, then Uncategorized. Merchant rules precede source-name rules; a transaction correction precedes both. Guesses never teach merchant memory. Personal spending outflows in the calculator window get first claim on opposite-amount transfer matches; business draws into personal accounts remain income.
+
+`CATEGORY_TABLES` keys category-name tables by the parser id which supplied the category, initially `aggregator`; `demo-seed` describes the synthetic ledger. The key is never an account source id or a file source id. Adding an export format means adding its parser and its category table. Unknown names survive imports, provide no imported bucket, and fall through to later layers. Check these asks once per parser and exact category name, and an explicit source-name rule then applies to all matching rows. Shipped tables have an independent exhaustive-name test.
+
+Export enrichment attaches category, category-bearing parser, file and locator to an unambiguous live posting on the same stable account, same signed cents and dates within two days. Cross-format observations retain the incoming dedupe key and survivor key for overlap replays. Ambiguous matches remain separate and enter the existing duplicate question flow. Corrections and enrichment move with duplicate survivors before deletion, using deferred non-cascading foreign keys so the existing captured undo can restore parents first.
+
+Check these reuses Confirm cards and undo. Uncategorized and guessed transactions on personal spending accounts inside the active spending window enter the queue at an absolute amount of one hundred or more, largest first, with at most ten category cards at a time. Unknown source names share one mapping card. Only the person's checked Always for this merchant control selects an `always:` option; model guesses, number shortcuts and best-guess actions otherwise use plain options. Category guesses run through the existing configured engine and confirm job using a category-only schema. Spending figures disclose guessed and Uncategorized amounts in their notes and calculator inputs.
+
+`node scripts/category-coverage.mjs <store-directory-or-file>` opens an existing instance through `openServedStore`, including its platform readiness gate and migrations, and prints counts only: rows per layer and bucket, Uncategorized rows and current queue size. It never prints transaction, account or merchant values.
+
+Category persistence uses `transaction_category_corrections` for personal transaction answers, `category_merchant_rules` for explicit merchant choices, `category_source_rules` for source-name bucket mappings, `transaction_category_guesses` for model attempts and `transaction_category_imports` for export enrichment evidence. These are additive tables; migration 023 does not rewrite transaction rows or existing undo logs.

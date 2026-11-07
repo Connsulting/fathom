@@ -104,3 +104,29 @@ test('apply-sure merges both month-end history pairs', async () => {
     assert.deepEqual(s.db.prepare('SELECT account_id FROM simplefin_accounts ORDER BY sf_key').all().map(r => r.account_id), ['file-biz', 'file-check']);
   } finally { s.close(); }
 });
+test('apply-sure merges a survivor with a balance-only file and Undo restores it', async () => {
+  const s = await realStore();
+  try {
+    s.db.prepare('INSERT INTO accounts (id, identity, name, kind, mirror) VALUES (?,?,?,?,?)')
+      .run('survivor', 'file:survivor', 'operating', 'cash', 'connected');
+    s.db.prepare("INSERT INTO simplefin_accounts (sf_key, account_id, status, name, created_at, backfilled) VALUES (?,?,'mapped',?,?,1)")
+      .run('sf-survivor', 'survivor', 'operating', NOW);
+    s.db.prepare("INSERT INTO accounts (id, identity, name, kind, mirror) VALUES (?,?,?,?,?)")
+      .run('file-only', 'file:file-only', 'checking', 'checking', 'manual');
+    const put = s.db.prepare('INSERT INTO balances (account_id, date, amount) VALUES (?,?,?)');
+    for (const [date, amount] of [['2032-06-15', 800], ['2032-06-30', 1000], ['2032-07-15', 1050], ['2032-07-31', 1100.5], ['2032-08-15', 950], ['2032-08-31', 900.25], ['2032-09-15', 40]])
+      put.run('survivor', date, amount);
+    for (const [date, amount] of [['2032-06-30', 1000], ['2032-07-31', 1100.5], ['2032-08-31', 900.25]])
+      put.run('file-only', date, amount);
+    const env = childEnv({ FATHOM_DATA: s.dataDir, FATHOM_DATA_KEY_FILE: s.keyFile, FATHOM_CLOCK: '2032-09-15', FATHOM_ENGINE: 'off' });
+    const apply = spawnSync(process.execPath, ['scripts/merge-accounts.mjs', '--apply-sure'], { env, encoding: 'utf8' });
+    assert.equal(apply.status, 0, apply.stderr);
+    assert.deepEqual(JSON.parse(apply.stdout), { pairs: 1, sure: 1, likely: 0, merged: 1 });
+    assert.equal(s.db.prepare('SELECT count(*) n FROM accounts').get().n, 1);
+    assert.equal(s.db.prepare('SELECT account_id FROM simplefin_accounts').get().account_id, 'file-only');
+    const q = s.db.prepare("SELECT id FROM confirm_items WHERE kind='account_match' AND answer='same'").get();
+    reopenItem(s.db, q.id, { now: NOW });
+    assert.ok(s.db.prepare('SELECT 1 FROM accounts WHERE id=?').get('survivor'));
+    assert.equal(s.db.prepare('SELECT count(*) n FROM accounts').get().n, 2);
+  } finally { s.close(); }
+});

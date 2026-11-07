@@ -1,3 +1,4 @@
+import { queueCategoryChecks } from '../categories/store.mjs';
 import { queueAccountPairs } from '../ingest/account-merge.mjs';
 // Ingest API handlers: file uploads, the file list, retries and the confirm queue. Each takes the
 // router ctx ({db, config, engine, scheduler, params, body, readUpload}) and returns the JSON body or
@@ -114,11 +115,13 @@ export function getConfirm(ctx) {
 
 export function listPendingConfirm(ctx) {
   queueAccountPairs(ctx.db);
+  queueCategoryChecks(ctx.db);
   return { items: pendingItems(ctx.db) };
 }
 
 export function listConfirm(ctx) {
   queueAccountPairs(ctx.db);
+  queueCategoryChecks(ctx.db);
   const { status = 'pending' } = ctx.body;
   if (!LIST_STATUSES.includes(status)) throw new HttpError(400, `status must be one of ${LIST_STATUSES.join(', ')}`);
   return { items: listItems(ctx.db, { status }) };

@@ -523,7 +523,7 @@ describe('ingestState', () => {
     A.autoResolve(s.db, { now: LATER });
     const state = FR.ingestState(s.db);
 
-    const groups = { account_owner: 'account_owner', account_kind: 'account_kind', near_duplicate: null };
+    const groups = { account_owner: 'account_owner', account_kind: 'account_kind', near_duplicate: null, category_mapping: null, transaction_category: null };
     assert.ok(state.items.length > 0);
     for (const i of state.items) {
       assert.equal(typeof i.rank, 'number', `${i.kind} has a rank`);
