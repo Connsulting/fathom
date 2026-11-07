@@ -272,7 +272,12 @@ function persist(db, fileId, file, plan, opts) {
   const rows = pnlRows ? [...parsed.rows.filter((r) => r.kind !== 'pnl_line'), ...pnlRows] : parsed.rows;
   const balances = closingBalances(rows);
   const holds = new Map();
-  ctx.categoryRows = rows.filter(r => r.kind === 'transaction');
+  ctx.categoryRows = new Map();
+  for (const row of rows.filter(r => r.kind === 'transaction')) {
+    const key = JSON.stringify([row.accountId,cents(row.amount)]);
+    const grouped = ctx.categoryRows.get(key) ?? [];
+    grouped.push(row); ctx.categoryRows.set(key,grouped);
+  }
   for (const row of rows) {
     const parser = row.parser ?? ctx.parser;
     const locator = json(row.locator ?? null);
@@ -467,8 +472,8 @@ function categoryCounterpart(ctx,row,parser) {
     AND NOT EXISTS (SELECT 1 FROM transaction_category_imports i WHERE i.transaction_id=t.id) ORDER BY t.date,t.id`)
     .all(row.accountId,Math.round(row.amount*100),addDays(row.date,-2),addDays(row.date,2));
   const matches=candidates.filter(c=>samePosting([c],row.description,parser));
-  const overlapping=ctx.categoryRows.filter(r=>r.accountId===row.accountId && moneyEq(r.amount,row.amount)
-    && Math.abs(Date.parse(r.date)-Date.parse(row.date))<=4*86400000);
+  const overlapping=(ctx.categoryRows.get(JSON.stringify([row.accountId,cents(row.amount)])) ?? [])
+    .filter(r=>Math.abs(Date.parse(r.date)-Date.parse(row.date))<=4*86400000);
   if (matches.length===1) {
     const hit=matches[0];
     const competitors=overlapping.filter(r=>samePosting([hit],r.description,parser));

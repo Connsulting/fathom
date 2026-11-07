@@ -17,7 +17,7 @@ const KIND = {
   tax_year: 'Tax year',
   fact_check: 'Check a value',
   near_duplicate: 'Possible duplicate',
-  employer_relation: 'Employer'
+  employer_relation: 'Employer', transaction_category: 'Check these', category_mapping: 'Check these'
 };
 
 const reEsc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -40,7 +40,7 @@ async function pending(request) {
   const { items } = await res.json();
   const order = await deckOrder(request);
   expect([...order].sort((a, b) => a - b), 'the deck order lists every pending item').toEqual(items.map((i) => i.id).sort((a, b) => a - b));
-  return [...items].sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
+  return items.map(i => ({...i,options:i.options.filter(o=>!o.id.startsWith('always:'))})).sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
 }
 
 async function allItems(request) {

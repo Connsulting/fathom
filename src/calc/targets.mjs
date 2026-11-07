@@ -32,10 +32,7 @@ export const ROOM_PARTS = Object.freeze([
 const SRC = 'calc:targets';
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const NUMBER_WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
-const DAY = 86400000;
 
-const cents = v => Math.round(v * 100);
-const day = iso => Date.parse(iso + 'T00:00:00Z') / DAY;
 const word = n => NUMBER_WORDS[n] ?? String(n);
 const pct = r => `${round(r * 100)}%`;
 const usd = v => `$${round(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -192,7 +189,7 @@ export function spendingInputs({ accounts, transactions, corrections = [], merch
   const out = {
     window: resolved.window, months: resolved.months, counted: resolved.counted, silent: resolved.silent,
     incomplete: resolved.incomplete, closed: resolved.closed, limitedBy: resolved.limitedBy,
-    spendIds: [], incomeIds: [], missing: [...resolved.missing],
+    spendIds: [], incomeIds: [], windowTransactionIds: [], missing: [...resolved.missing],
   };
   if (!resolved.window) return out;
 
@@ -204,6 +201,7 @@ export function spendingInputs({ accounts, transactions, corrections = [], merch
   };
   const ordered = rows.toSorted((a, b) => a.date.localeCompare(b.date) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   const onSpending = ordered.filter(t => isSpending(byId.get(t.account_id)) && inWindow(t));
+  out.windowTransactionIds = onSpending.map(t => t.id);
   const categories = resolveCategories({ accounts, transactions: ordered, corrections, merchantRules, sourceRules, guesses,
     transferSourceIds: onSpending.map(t => t.id), transferDays: P.transferDays });
   const spend = onSpending.filter(t => t.amount < 0 && categories.get(t.id).bucket === 'household');
