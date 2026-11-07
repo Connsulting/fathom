@@ -8,8 +8,8 @@
 let H = null;
 export function bind(kit) { H = kit; }
 
-const S = { token: '', busy: '' };
-export function reset() { S.token = ''; S.busy = ''; }
+const S = { token: '', busy: '', notice: '' };
+export function reset() { S.token = ''; S.busy = ''; S.notice = ''; }
 
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 function when(iso) {
@@ -36,7 +36,7 @@ function form(sf, reconnect) {
       <label for="h-sf-token">${reconnect ? 'New SimpleFIN setup token' : 'SimpleFIN setup token'}</label>
       <textarea id="h-sf-token" name="token" rows="3" data-sf-token autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Paste the token here">${esc(S.token)}</textarea>
       <p class="h-mute sm">Create a setup token on the SimpleFIN Bridge site (bridge.simplefin.org) and paste it here. Each token works once. Fathom keeps the access encrypted and only reads.</p>
-      <div class="h-sf-act">${sf.demo && sf.demoToken ? btn('Use the demo token', 'type="button" data-sf="demo"', 'ghost') : ''}<button type="submit" class="h-btn pri"${S.busy ? ' disabled' : ''}>${S.busy === 'connect' ? 'Connecting' : reconnect ? 'Reconnect' : 'Connect'}</button></div>
+      <div class="h-sf-act">${sf.demo && sf.demoToken ? btn('Use the demo token', 'type="button" data-sf="demo"', 'ghost') : ''}<button type="submit" class="h-btn pri"${S.busy ? ' disabled' : ''}>${S.busy === 'connect' ? 'Syncing' : reconnect ? 'Reconnect' : 'Connect'}</button></div>
       ${sf.demo ? '<p class="h-mute sm">Demo: this uses a synthetic SimpleFIN bridge with made up accounts. Nothing leaves this machine.</p>' : ''}
     </form>`;
 }
@@ -50,6 +50,7 @@ export function block() {
   const msgs = Array.isArray(sf.messages) ? sf.messages : [];
   return `<div class="h-sf on" data-sf-box data-sf-connected>
       <p class="h-sf-st">${icon('check')}<span><b>Connected to SimpleFIN</b>, ${plural(Number(sf.accounts) || 0, 'account')}, last sync ${esc(when(sf.lastSyncAt))}</span></p>
+      ${S.notice ? `<p class="h-sf-sync" data-sf-sync>${esc(S.notice)}</p>` : ''}
       ${problem ? `<p class="h-sf-warn" role="alert">${esc(problem)}</p>` : ''}
       ${msgs.length ? `<ul class="h-sf-msgs">${msgs.map((m) => `<li>${esc(m)}</li>`).join('')}</ul>` : ''}
       ${sf.pendingMatches ? `<p class="h-mute sm">${plural(sf.pendingMatches, 'connected account')} ${sf.pendingMatches === 1 ? 'needs' : 'need'} an answer first: is it an account you already imported? ${goA('confirm', 'Answer in Confirm')}</p>` : ''}
@@ -58,9 +59,26 @@ export function block() {
     </div>`;
 }
 
+function syncedLine(res) {
+  const sc = res && res.scenario;
+  const through = sc && sc.meta && sc.meta.dataThrough;
+  if (!through) return '';
+  const n = Number(sc.live && sc.live.simplefin && sc.live.simplefin.accounts) || 0;
+  return `Synced ${n} accounts, data through ${through}`;
+}
+
 function run(kind, p) {
   S.busy = kind; H.draw();
-  return p.then((res) => { S.busy = ''; if (res && kind === 'connect') S.token = ''; H.draw(); return res; });
+  return p.then((res) => {
+    S.busy = '';
+    if (res && (kind === 'connect' || kind === 'sync')) {
+      S.token = '';
+      const line = syncedLine(res);
+      if (line) S.notice = line;
+    }
+    H.draw();
+    return res;
+  });
 }
 
 export function onClick(e) {
