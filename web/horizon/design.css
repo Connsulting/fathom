@@ -679,6 +679,48 @@
 .d-horizon .h-insts span { color: var(--fa); font-size: 12.5px; }
 .d-horizon .h-insts li > .h-acc { font-size: 13px; color: var(--ac); }
 .d-horizon .h-insts + .h-mute { margin-top: 12px; }
+/* The Goals step (onboarding step 1 and an empty Home): starter cards, Write your own, the goals
+   already chosen and the Add your spouse line. Cards are full-width buttons at least 44px tall. */
+.d-horizon .h-home-gs .h-gs { max-width: 680px; }
+.d-horizon .h-gs h1 { font-size: 30px; line-height: 1.15; }
+.d-horizon .h-starters { display: flex; flex-direction: column; gap: 10px; margin-top: 28px; }
+.d-horizon .h-starter { display: flex; align-items: center; gap: 14px; width: 100%; min-height: 56px; padding: 13px 16px; background: var(--s1); border: 1px solid var(--line2); border-radius: 12px; color: var(--tx); font: inherit; text-align: left; cursor: pointer; }
+.d-horizon button.h-starter:hover { border-color: var(--fa); }
+.d-horizon button.h-starter:focus-visible { outline: 2px solid var(--ac); outline-offset: 2px; }
+.d-horizon .h-starter.on, .d-horizon button.h-starter.on:hover { border-color: var(--ac); background: var(--acd); }
+.d-horizon .h-starter[aria-disabled="true"] { cursor: default; }
+.d-horizon .h-starter-t { flex: 1; min-width: 0; }
+.d-horizon .h-starter-t b { display: block; font-weight: 500; font-size: 15px; overflow-wrap: anywhere; }
+.d-horizon .h-starter-t span { display: block; margin-top: 2px; color: var(--mu); font-size: 13.5px; }
+.d-horizon .h-starter-c { flex: none; display: grid; place-items: center; width: 22px; height: 22px; border: 1px solid var(--line2); border-radius: 50%; color: transparent; }
+.d-horizon .h-starter-c .h-i { width: 14px; height: 14px; }
+.d-horizon .h-starter.on .h-starter-c { background: var(--ac); border-color: var(--ac); color: var(--ink); }
+.d-horizon .h-starter-own { background: transparent; border-style: dashed; }
+.d-horizon .h-starter-own .h-starter-c { border-style: dashed; color: var(--mu); }
+.d-horizon .h-own-add { display: flex; gap: 10px; margin-top: 10px; }
+.d-horizon .h-own-in { flex: 1; min-width: 0; height: 44px; padding: 0 14px; background: var(--s1); color: var(--tx); border: 1px solid var(--line2); border-radius: 9px; font: inherit; font-size: 14.5px; }
+.d-horizon .h-own-in:focus { outline: none; border-color: var(--ac); }
+.d-horizon .h-own-add .h-btn { height: 44px; padding: 0 18px; }
+.d-horizon .h-own-l { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+.d-horizon .h-own-x { flex: none; display: grid; place-items: center; width: 44px; height: 44px; margin: -10px -12px -10px 0; background: none; border: 0; border-radius: 8px; color: var(--mu); cursor: pointer; }
+.d-horizon .h-own-x:hover { color: var(--tx); background: var(--s2); }
+.d-horizon .h-own-x:focus-visible { outline: 2px solid var(--ac); outline-offset: -2px; }
+.d-horizon .h-gs-have { margin-top: 24px; }
+.d-horizon .h-gs-have li { display: flex; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); color: var(--tx2); font-size: 14px; }
+.d-horizon .h-gs-have li .h-i { flex: none; color: var(--ac); }
+.d-horizon .h-gs-have li span { min-width: 0; overflow-wrap: anywhere; }
+.d-horizon .h-gs-have p { margin-top: 8px; }
+.d-horizon .h-gs-have p a, .d-horizon .h-ob-inv a { color: var(--ac); }
+.d-horizon .h-ob-inv { display: flex; gap: 12px; align-items: flex-start; margin-top: 24px; color: var(--mu); font-size: 13.5px; }
+.d-horizon .h-inv-dot { flex: none; width: 18px; height: 18px; margin-top: 1px; border: 1.5px dashed var(--fa); border-radius: 50%; }
+.d-horizon .h-gs .h-ob-nav .h-btn, .d-horizon .h-ob-conn + .h-ob-nav .h-btn { min-height: 44px; }
+.d-horizon .h-ob-conn { margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--line); }
+.d-horizon .h-ob-conn > .h-mute { margin-bottom: 14px; }
+.d-horizon .h-ob-conn > .h-sub-h ~ .h-sub-h { margin-top: 24px; }
+@media (max-width: 720px) {
+  .d-horizon .h-gs h1 { font-size: 25px; }
+  .d-horizon .h-gs .h-ob-nav .h-btn.pri { flex: 1; }
+}
 .d-horizon .h-modal { position: fixed; inset: 0; z-index: 100; background: rgba(4, 6, 7, 0.78); display: grid; place-items: center; padding: 16px; }
 .d-horizon .h-modal-b { width: min(440px, 100%); background: var(--s2); border: 1px solid var(--line2); border-radius: 14px; padding: 26px; }
 .d-horizon .h-modal-b > .h-i { width: 26px; height: 26px; color: var(--ac); margin-bottom: 14px; }

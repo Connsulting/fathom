@@ -46,7 +46,7 @@ test.skip(REMOTE, 'starts its own local server and writes notes; not part of a r
 /* ---------- shared locators and actions ---------- */
 
 const goalsStart = (page) => page.locator('[data-goals-start]');
-const starterCard = (page, id) => goalsStart(page).locator(`button[data-starter="${id}"]`);
+const starterCard = (page, id) => goalsStart(page).locator(`button[data-goal-starter="${id}"]`);
 const kicker = (page) => page.locator('.h-ob-card [data-ob-kicker]');
 const continueBtn = (page) => page.getByRole('button', { name: 'Continue', exact: true });
 
@@ -223,7 +223,7 @@ test.describe('demo build', () => {
     await expect(block).toContainText(GOALS_LEDE);
 
     // Four starter cards and the write-your-own card, all unselected.
-    await expect(block.locator('button[data-starter]')).toHaveCount(STARTER_CARDS.length);
+    await expect(block.locator('button[data-goal-starter]')).toHaveCount(STARTER_CARDS.length);
     for (const s of STARTER_CARDS) {
       const card = starterCard(page, s.id);
       await expect(card).toHaveAttribute('type', 'button');
@@ -329,7 +329,7 @@ test.describe('demo build', () => {
     const block = goalsStart(page);
     await expect(block).toBeVisible();
     await expectH1(page, GOALS_H1);
-    await expect(block.locator('button[data-starter]')).toHaveCount(STARTER_CARDS.length);
+    await expect(block.locator('button[data-goal-starter]')).toHaveCount(STARTER_CARDS.length);
     await expect(block.getByRole('button', { name: 'Save goals' })).toBeVisible();
     await expect(page.locator('[data-goal-card]')).toHaveCount(0);
     // Inside the normal shell, not the onboarding frame.
@@ -429,7 +429,7 @@ async function openSetup(page) {
   await expect(page).toHaveURL(/#\/settings$/);
   const setup = page.locator('section.h-settings a[data-go="onboarding"]', { hasText: 'Setup' });
   await expect(setup).toBeVisible();
-  await expect(page.locator('section.h-settings li.h-set-r', { has: setup })).toContainText('Goals, priorities, notes and files.');
+  await expect(page.locator('section.h-settings li.h-set-r', { has: page.locator('a[data-go="onboarding"]', { hasText: 'Setup' }) })).toContainText('Goals, priorities, notes and files.');
   await setup.click();
   await expect(page).toHaveURL(/#\/onboarding\/1$/);
   await expectH1(page, GOALS_H1);

@@ -225,7 +225,7 @@ function normalizeRoute(r) {
     const step = r.name === 'onboarding' && p.step != null && p.step !== '' ? clampStep(Number(p.step)) : stateView().onboardStep;
     return { name: 'onboarding', params: { step } };
   }
-  // A real store past first run reaches onboarding as Setup, landing on Tell us.
+  // A real store past first run reaches onboarding as Setup, landing on Goals (step 1).
   if (r.name === 'onboarding') return isReal() ? { name: 'onboarding', params: { step: p.step != null && p.step !== '' ? clampStep(Number(p.step)) : 1 } } : defaultRoute();
   if (r.name === 'rec') return p.id && rawRec(String(p.id)) ? { name: 'rec', params: { id: String(p.id) } } : { name: 'plan', params: {} };
   if (r.name === 'ask') return p.id && rawThread(String(p.id)) ? { name: 'ask', params: { id: String(p.id) } } : { name: 'ask', params: {} };
