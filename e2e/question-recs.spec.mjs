@@ -37,9 +37,10 @@ test.describe('answerable questions on the synthetic planning household', () => 
     await new Promise(done => socket.close(done));
     origin = `http://localhost:${port}`;
     app = await startServer(loadConfig({ FATHOM_DATA: dataDir, FATHOM_DEMO: '0', FATHOM_ENGINE: 'off', FATHOM_HOST: 'localhost', FATHOM_PORT: String(port), FATHOM_PUBLIC_URL: origin, FATHOM_CLOCK: clock }));
-    const auth = createAuthStore(app.db);
-    const user = auth.inviteUser('owner@example.test', { role: 'admin' });
-    app.db.prepare('UPDATE users SET enrolled_at = ? WHERE id = ?').run(Date.now(), user.id);
+    const auth = createAuthStore(app.platform);
+    const { user, token } = auth.invite(auth.servedHousehold().id, 'owner@example.test', { role: 'admin' });
+    auth.consumeInvitation(token, user.id);
+    auth.markEnrolled(user.id);
     session = auth.createSession(user.id);
   });
   test.afterAll(async () => {
