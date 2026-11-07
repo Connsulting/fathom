@@ -143,10 +143,10 @@ export function authLinkMail(config, user, token, purpose) {
   return { link, message };
 }
 
-export function passkeyAddedMail({ to, account, passkeyName }) {
+export function passkeyAddedMail({ to, account }) {
   return build(to, 'Fathom passkey added', {
     heading: 'A passkey was added',
-    lede: `A passkey named "${passkeyName}" was added to the Fathom account ${account}.`,
+    lede: `A new passkey was added to the Fathom account ${account}.`,
     lines: ['To review it, open Fathom and go to Account.'],
     footer: 'If this was not you, sign in, revoke it on Account and ask a household admin for help.',
   });

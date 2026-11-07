@@ -92,9 +92,8 @@ test('enrollmentMail is gone from the auth service', () => {
 });
 
 for (const [name, build, check] of [
-  ['passkey added', () => passkeyAddedMail({ to: user.email, account: user.email, passkeyName: 'Synthetic phone' }), (all) => {
-    assert.match(all, /Synthetic phone/);
-    assert.match(all, /owner@example\.test/);
+  ['passkey added', () => passkeyAddedMail({ to: user.email, account: user.email }), (all) => {
+    assert.match(all, /A new passkey was added to the Fathom account owner@example\.test\./);
     assert.match(all, /passkey/i);
   }],
   ['account recovered', () => accountRecoveredMail({ to: user.email, account: user.email }), (all) => {
@@ -124,18 +123,20 @@ test('notices go to the given recipient while naming the account', () => {
   assert.match(out.text, /owner@example\.test/);
 });
 
-test('passkey names and account values are escaped in html and verbatim in text', () => {
+test('the passkey added notice takes no passkey name and never carries one', () => {
+  const added = passkeyAddedMail({ to: user.email, account: user.email, passkeyName: 'Review https://example.test' });
+  for (const part of [added.subject, added.text, added.html]) {
+    assert.doesNotMatch(part, /Review https|example\.test\/|https?:\/\/|href/i);
+  }
+  assert.equal(passkeyAddedMail.length, 1);
+});
+
+test('account values are escaped in html and verbatim in text', () => {
   const entity = /&lt;script&gt;alert\((?:&quot;|&#34;|&#x22;)x(?:&quot;|&#34;|&#x22;)\)&lt;\/script&gt; &amp; (?:'|&#39;|&#x27;)q(?:'|&#39;|&#x27;)/i;
-  const added = passkeyAddedMail({ to: user.email, account: user.email, passkeyName: HOSTILE });
-  assert.doesNotMatch(added.html, /<script/i);
-  assert.ok(!added.html.includes(HOSTILE));
-  assert.ok(!added.html.includes('alert("x")'));
-  assert.match(added.html, entity);
-  assert.ok(added.text.includes(HOSTILE), 'the text part keeps the name verbatim');
 
   const account = `o'w"n<er>&@example.test`;
   for (const out of [
-    passkeyAddedMail({ to: user.email, account, passkeyName: 'Synthetic phone' }),
+    passkeyAddedMail({ to: user.email, account }),
     accountRecoveredMail({ to: user.email, account }),
   ]) {
     assert.ok(!out.html.includes(account));

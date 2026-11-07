@@ -112,7 +112,7 @@ export function createAuthService({ db, config, transport, now = () => Date.now(
   }
   // Recovery tells the user and every enrolled admin; any other add (invite, add-a-device link or
   // in place) tells the user only.
-  async function sendSecurityNotices(user, purpose, name) {
+  async function sendSecurityNotices(user, purpose) {
     const recovery = purpose === 'recovery';
     const recipients = new Set([user.email]);
     if (recovery) {
@@ -125,7 +125,7 @@ export function createAuthService({ db, config, transport, now = () => Date.now(
         if (!transport) throw new Error();
         await transport.send(recovery
           ? accountRecoveredMail({ to, account: user.email })
-          : passkeyAddedMail({ to, account: user.email, passkeyName: name }));
+          : passkeyAddedMail({ to, account: user.email }));
       } catch {
         console.error('security_notice_failed');
       }
@@ -205,7 +205,7 @@ export function createAuthService({ db, config, transport, now = () => Date.now(
         return { identity: publicIdentity(store.getUser(fresh.user.id)), session };
       });
       if (result.session) setCookie(res, SESSION_COOKIE, result.session, now());
-      await sendSecurityNotices(result.identity, context.purpose, name);
+      await sendSecurityNotices(result.identity, context.purpose);
       return { identity: result.identity };
     },
     async signinOptions({ req, res }) {

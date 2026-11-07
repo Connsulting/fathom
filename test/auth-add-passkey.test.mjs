@@ -266,6 +266,27 @@ test('redeeming the link in the requesting browser adds a passkey and keeps that
   assert.deepEqual(recipients(sentNotices[0]), [owner.user.email]);
 });
 
+test('the passkey added notice stays link-free even when the passkey name contains a URL', async t => {
+  const app = await fixture(t);
+  const owner = await enrolled(app, 'owner@example.test');
+  const name = 'Review https://example.test now';
+  const token = await requestLink(app, owner.client, owner.user.email);
+  const mark = app.sent.length;
+  const { verify } = await register(app, owner.client, createAuthenticator(), { token }, name);
+  assert.equal(verify.status, 200, verify.text);
+  const sentNotices = notices(app, mark).filter(mail => mail.subject === ADDED);
+  assert.equal(sentNotices.length, 1);
+  const [notice] = sentNotices;
+  for (const part of [notice.subject, notice.text, notice.html]) {
+    assert.doesNotMatch(part, /http:\/\/|https:\/\/|href|example\.test\//i);
+    assert.ok(!part.includes(name), 'the passkey name is not in the notice');
+    assert.ok(!part.includes('Review'), 'no part of the passkey name is in the notice');
+  }
+  const listed = await owner.client.get('/api/auth/passkeys');
+  assert.equal(listed.status, 200);
+  assert.ok(JSON.stringify(listed.json).includes(name), 'the passkey is stored and listed under that name');
+});
+
 test('a fresh browser consumes the link, adds a second passkey without revoking anything, and both passkeys sign in', async t => {
   const app = await fixture(t);
   const owner = await enrolled(app, 'owner@example.test', 'admin');
