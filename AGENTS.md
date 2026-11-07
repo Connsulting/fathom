@@ -34,9 +34,16 @@ does not.
 2. A test that times out locally while unrelated to your change is host load. Rerun that one file
    alone once. If it passes alone, leave it to CI; do not keep rerunning the suite.
 3. Run Playwright on a port of your own (not the default 4173) so parallel agents do not collide.
-4. Plan review happens only for security or authentication changes, store migrations that rewrite
-   existing data, and new subsystems, and is capped at two rounds. Every other change goes straight
-   to tests and implementation.
+4. Change tiers decide how much process a change gets.
+   Small: UI or copy, or a fix or feature in a few files, under about 300 lines, with no auth,
+   security, store migration, money math or new subsystem. A Small change gets one review round and
+   no local Playwright.
+   Big: anything else. A Big change gets one review round; auth, security and data-rewriting store
+   migrations get two. Plan review happens only for security or authentication changes,
+   data-rewriting store migrations and new subsystems, and is capped at two rounds. Every other
+   change goes straight to tests and implementation.
+   Every review round has a 30-minute deadline. Cleanup commits get no review round of their own,
+   and the final commit is reviewed before merge.
 5. Every PR still gets a code review from a provider other than the author's before merge.
 6. Commit and push to the remote branch at every checkpoint, starting with the failing tests.
    Uncommitted worktrees have been lost to cleanup.
