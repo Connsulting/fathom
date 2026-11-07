@@ -53,6 +53,7 @@ const SEEDED_STATUS = {
   'kids-dependents': 'active',
   's-corp-owner': 'active',
   'self-employed-partnership': 'active',
+  'spending-and-obligations': 'active',
   'virginia-resident': 'active',
   'w2-benefits': 'active',
 };
@@ -170,7 +171,7 @@ describe('registry entries', () => {
     }
     assert.deepEqual(getTool('get_pack_entry').inputSchema.required.slice().sort(), ['file', 'packId']);
     assert.deepEqual(getTool('search_pack_entries').inputSchema.required, ['query']);
-    assert.deepEqual(tools.filter(x => x.scope === 'write:recs').map(x => x.name), ['set_recommendation_status', 'set_recommendation_owner', 'undo_recommendation_action']);
+    assert.deepEqual(tools.filter(x => x.scope === 'write:recs').map(x => x.name), ['set_recommendation_owner', 'set_recommendation_status', 'undo_recommendation_action']);
   });
 });
 
@@ -457,7 +458,7 @@ describe('owner overrides on the demo rows reach the pack tools', () => {
     assert.ok((await hits(ctx, 's-corp-owner')).length > 0, 'facts-derived active is searchable');
 
     const list = await callTool('list_packs', {}, ctx);
-    assert.equal(list.length, 7, 'every manifest pack is still listed');
+    assert.equal(list.length, 8, 'every manifest pack is still listed');
   });
 
   test('rows without a manifest (contractor, abroad, rental) add no pack and change nothing', async () => {
@@ -481,6 +482,7 @@ describe('owner overrides on the demo rows reach the pack tools', () => {
       'kids-dependents': 'active',
       's-corp-owner': 'available',
       'self-employed-partnership': 'active',
+      'spending-and-obligations': 'active',
       'virginia-resident': 'active',
       'w2-benefits': 'available',
     });

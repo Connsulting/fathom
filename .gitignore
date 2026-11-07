@@ -9,6 +9,7 @@ coverage/
 
 # Real financial data must never be committed.
 data/
+/demo-data/
 imports/
 exports/
 fixtures/private/

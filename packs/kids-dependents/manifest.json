@@ -1,7 +1,7 @@
 {
   "id": "kids-dependents",
   "name": "Kids and dependents",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "taxYear": 2026,
   "reviewed": "2026-11-05",
   "curator": "Public primary-source review",
@@ -11,7 +11,8 @@
     "child tax credit",
     "child and dependent care",
     "education savings",
-    "household employment"
+    "household employment",
+    "care cost by age"
   ],
   "appliesWhen": {
     "fact": "household.dependents",
@@ -139,6 +140,16 @@
         },
         {
           "label": "IRS Publication 503: enduring qualifying-care rules",
+          "url": "https://www.irs.gov/publications/p503"
+        }
+      ]
+    },
+    {
+      "file": "care-cost-by-age.md",
+      "title": "Care cost by age",
+      "cites": [
+        {
+          "label": "IRS Publication 503: child and dependent care",
           "url": "https://www.irs.gov/publications/p503"
         }
       ]
