@@ -226,7 +226,7 @@ export function finalReason(db, item) {
   const undo = db.prepare('SELECT ingest_epoch, used_at FROM confirm_undo WHERE item_id = ?').get(item.id);
   if (!undo) return 'no_undo';
   if (undo.used_at != null) return 'used_since';
-  if (undo.ingest_epoch !== ingestEpoch(db) && !(IMPORT_EXEMPT.includes(item.kind) && hasAuto(db, item.id))) return 'imported_since';
+  if (undo.ingest_epoch !== ingestEpoch(db) && !((IMPORT_EXEMPT.includes(item.kind) && hasAuto(db, item.id)) || (item.kind==='transaction_category' && autoInfo(db,item.id)?.rule==='jev_category'))) return 'imported_since';
   return null;
 }
 

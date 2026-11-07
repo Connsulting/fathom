@@ -830,7 +830,9 @@ a.h-dec-t:hover { color: var(--ac2); }
 .d-horizon .h-compose .h-btn:disabled { cursor: default; opacity: 0.45; }
 
 /* Ask: the rec a thread was asked from, as a quiet link in its sidebar row (a second line under
-   the title, beside the row link) and in its header. Plain text; the dot marks it as a rec. */
+   the title, beside the row link) and in its header. Plain text; the dot marks it as a rec. It
+   renders through the shared context chip, whose wrapper stays out of the layout here. */
+.d-horizon .h-ctx:has(> .h-askx-ctx) { display: contents; }
 .d-horizon .h-askx-ctx {
   position: relative; display: block; min-width: 0; max-width: 100%; padding-left: 11px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -843,7 +845,7 @@ a.h-dec-t:hover { color: var(--ac2); }
 .d-horizon .h-askx-ctx:hover { color: var(--tx); }
 .d-horizon .h-askx-ctx:hover::before { background: var(--ac); }
 .d-horizon .h-askx-item.ctx .h-askx-row { align-items: flex-start; min-height: 52px; padding-top: 7px; }
-.d-horizon .h-askx-item.ctx > .h-askx-ctx { position: absolute; top: 28px; left: 10px; max-width: calc(100% - 20px); }
+.d-horizon .h-askx-item.ctx > .h-ctx > .h-askx-ctx { position: absolute; top: 28px; left: 10px; max-width: calc(100% - 20px); }
 .d-horizon .h-askx-item.ctx:not(.stack) .h-askx-acts { top: 17px; }
 .d-horizon .h-askx-head .h-askx-ctx {
   flex: 0 1 auto; max-width: 45%; margin-left: 4px; padding: 2px 9px 2px 19px;
