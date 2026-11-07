@@ -9,6 +9,7 @@ export const passkeys = ctx => ctx.auth.passkeys(ctx);
 export const revokePasskey = ctx => ctx.auth.revokePasskey(ctx);
 export const users = ctx => ctx.auth.users(ctx);
 export const invite = ctx => ctx.auth.invite(ctx);
+export const requestDeviceLink = ctx => ctx.auth.requestDeviceLink(ctx);
 export const setRole = ctx => ctx.auth.setRole(ctx);
 export const removeUser = ctx => ctx.auth.removeUser(ctx);
 export const adminRevokePasskey = ctx => ctx.auth.adminRevokePasskey(ctx);

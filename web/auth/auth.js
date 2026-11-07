@@ -7,7 +7,7 @@
 // each credential back into JSON, including getClientExtensionResults so credProps reaches the
 // server.
 //
-// An enrollment or recovery token arrives only in the fragment of /enroll. It is read into this
+// An enrollment, recovery or add-a-device token arrives only in the fragment of /enroll. It is read into this
 // module's memory and removed from history before anything else runs. It is never stored, logged,
 // shown or put in a request URL; it travels only in the JSON body of the two register requests.
 
@@ -520,8 +520,8 @@ function signinView() {
 
 function deadLinkView() {
   root.innerHTML = narrow(`<h1>This link no longer works</h1>
-    <p class="au-lede">It has expired or was already used. Enrollment and recovery links work once, for 20 minutes.</p>
-    ${note('info', 'New to this household: ask a household admin to send a new invitation. Already have an account: request a recovery link from the sign-in page.')}
+    <p class="au-lede">It has expired or was already used. Invitation, recovery and add-a-device links work once, for 20 minutes.</p>
+    ${note('info', 'New to this household: ask a household admin to send a new invitation. Already have an account: request a recovery link from the sign-in page. Add-a-device link: request a new one from Account on a signed-in device.')}
     <div class="au-form"><a class="au-btn pri wide" href="/signin">Go to sign in</a></div>`);
 }
 
@@ -529,7 +529,7 @@ function enrollView() {
   document.title = 'Create a passkey | Fathom';
   if (!enrollToken) {
     root.innerHTML = narrow(`<h1>Open the link from your email</h1>
-      <p class="au-lede">This page needs the full link from an invitation or recovery email. If you already opened it here and reloaded, open it from the email again.</p>
+      <p class="au-lede">This page needs the full link from an invitation, recovery or add-a-device email. If you already opened it here and reloaded, open it from the email again. An add-a-device link that no longer works: request a new one from Account on a signed-in device.</p>
       <div class="au-form"><a class="au-btn pri wide" href="/signin">Go to sign in</a></div>`);
     return;
   }
@@ -648,6 +648,12 @@ async function accountView() {
         <p class="au-msg" data-msg="add" role="status" aria-live="polite"></p>
       </form>
     </section>
+    <section class="au-sec" aria-labelledby="au-dev-h">
+      <div class="au-sec-h"><h2 id="au-dev-h">Add a passkey on another device</h2></div>
+      <p class="au-hint">We email you a link. Open it on the other device within 20 minutes; it works once. Nothing here changes until the new passkey is saved.</p>
+      <div class="au-form"><div><button type="button" class="au-btn" data-act="device-link">${icon('mail')}Email me a link to add a passkey on another device</button></div>
+        <p class="au-msg" data-msg="device" role="status" aria-live="polite"></p></div>
+    </section>
     <section class="au-sec" aria-labelledby="au-out-h">
       <div class="au-sec-h"><h2 id="au-out-h">Sign out</h2></div>
       <p class="au-hint">Ends the session in this browser. Your other devices stay signed in.</p>
@@ -680,7 +686,7 @@ async function addPasskey(form) {
     await loadKeys();
   } catch (err) {
     if (err && err.status === 401) { leave('/signin', 'expired'); return; }
-    if (err && err.status === 403 && err.code === 'recent_signin_required') { sayRecentSignin(); return; }
+    if (err && err.status === 403 && err.code === 'recent_signin_required') { sayRecentSignin('add'); return; }
     say('add', 'err', explain(err, 'register'));
   } finally {
     busy = '';
@@ -690,14 +696,34 @@ async function addPasskey(form) {
 
 // Adding a passkey with only a session needs a sign-in from the last 10 minutes. The session stays
 // as it is; /signin already accepts a new sign-in from a signed-in browser.
-function sayRecentSignin() {
-  say('add', 'err', 'Adding a passkey needs a sign-in from the last 10 minutes. ');
-  const el = root.querySelector('[data-msg="add"]');
+function sayRecentSignin(slot) {
+  say(slot, 'err', 'Adding a passkey needs a sign-in from the last 10 minutes. ');
+  const el = root.querySelector(`[data-msg="${slot}"]`);
   if (!el) return;
   const link = document.createElement('a');
   link.href = '/signin';
   link.textContent = 'Sign in again';
   el.append(link, ', then come back to Account to add it.');
+}
+
+// The link goes to the signed-in account's own address; the server ignores any body.
+async function requestDeviceLink(btn) {
+  if (busy) return;
+  busy = 'device';
+  setBusy(btn, true);
+  say('device', '', 'Sending the link.');
+  try {
+    await call('POST', '/api/auth/passkeys/link', {});
+    say('device', 'ok', `A link is on its way to ${me.email}. Open it on the other device within 20 minutes; it works once.`);
+  } catch (err) {
+    if (err && err.status === 401) { leave('/signin', 'expired'); return; }
+    if (err && err.status === 403 && err.code === 'recent_signin_required') { sayRecentSignin('device'); return; }
+    if (err && err.status === 503) { say('device', 'err', 'Fathom could not send the email. Try again later.'); return; }
+    say('device', 'err', explain(err, 'account'));
+  } finally {
+    busy = '';
+    if (!leaving) setBusy(btn, false);
+  }
 }
 
 async function revokeOwn(btn) {
@@ -983,6 +1009,7 @@ root.addEventListener('click', (e) => {
   else if (act === 'reload') window.location.reload();
   else if (act === 'revoke') revokeOwn(el);
   else if (act === 'signout') signOut(el);
+  else if (act === 'device-link') requestDeviceLink(el);
   else if (act === 'resend') resend(el);
   else if (act === 'remove') removeUser(el);
   else if (act === 'ukey') revokeUserKey(el);
