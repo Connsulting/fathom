@@ -56,6 +56,43 @@ test('account detail names the account, its feeds and its freshness, scoped to t
   }
 });
 
+test('the balance date is the balance row, not the newest transaction', async () => {
+  const s = await realStore();
+  const { accountDetail } = await src('src/api/account-detail.mjs');
+  try {
+    const { chase } = await twoAccounts(s);
+    assert.equal(accountDetail(ctx(s, chase)).balance.asOf, null);
+    s.db.prepare('INSERT INTO balances (account_id, date, amount) VALUES (?, ?, ?)').run(chase, '2032-01-15', 100);
+    const d = accountDetail(ctx(s, chase));
+    assert.equal(d.balance.asOf, '2032-01-15');
+    assert.equal(d.txn.to, '2032-02-07');
+  } finally {
+    s.close();
+  }
+});
+
+test('paging does not skip or repeat rows that share a date', async () => {
+  const s = await realStore();
+  const { accountTransactions } = await src('src/api/account-detail.mjs');
+  try {
+    const { chase } = await twoAccounts(s);
+    const add = s.db.prepare('INSERT INTO transactions (account_id, date, amount, description) VALUES (?, ?, ?, ?)');
+    for (let i = 0; i < 5; i++) add.run(chase, '2032-02-07', 100 + i, `Tie ${i}`);
+    const seen = [];
+    let cursor = null;
+    for (let i = 0; i < 20; i++) {
+      const page = accountTransactions(ctx(s, chase, { limit: '2', ...(cursor ? { cursor } : {}) }));
+      seen.push(...page.items.map((t) => t.id));
+      cursor = page.next;
+      if (!cursor) break;
+    }
+    assert.equal(seen.length, 12);
+    assert.equal(new Set(seen).size, 12);
+  } finally {
+    s.close();
+  }
+});
+
 test('account detail rejects a missing or unknown account', async () => {
   const s = await realStore();
   const { accountDetail } = await src('src/api/account-detail.mjs');
