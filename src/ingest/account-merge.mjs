@@ -60,7 +60,8 @@ export function assertCurrentPair(db, item) {
   if (!detectAccountPairs(db, { includeAnswered:true }).some(p => p.candidateId === candidateId && p.ownId === ownId)) throw new ConfirmError('stale');
 }
 
-const keyFor = (table, row, identity) => dedupeKey({ identity,
+const keyFor = (table, row, account) => dedupeKey({
+  ...(row.parser === 'simplefin' || account.identity?.startsWith('simplefin:') ? { identity:account.identity } : { account }),
   kind: { transactions:'transaction', balances:'balance', positions:'position' }[table],
   date:row.date, amount:row.amount, asOf:row.as_of, symbol:row.symbol, externalId:row.external_id,
   occurrence:row.occurrence ?? 1, extOccurrence:row.extOccurrence ?? 1,
@@ -76,7 +77,6 @@ export function mergeAccounts(db, item, { now = new Date().toISOString() } = {})
   const { candidateId: keepId, ownId } = item.context;
   const keep = db.prepare('SELECT * FROM accounts WHERE id=?').get(keepId);
   const own = db.prepare('SELECT * FROM accounts WHERE id=?').get(ownId);
-  const identity = keep.identity;
   const movedKeys = new Map();
   const removedKeys = new Set();
   const fileSlots = new Map();
@@ -86,12 +86,13 @@ export function mergeAccounts(db, item, { now = new Date().toISOString() } = {})
     fileSlots.get(slot).push(r);
   }
   const extCounts = new Map();
+  const movedTransactions = [];
   for (const row of db.prepare('SELECT * FROM transactions WHERE account_id=? ORDER BY id').all(ownId)) {
     if (row.external_id) {
       const ext = `${row.file_id}|${row.external_id}|${Math.round(row.amount*100)}`;
       row.extOccurrence = (extCounts.get(ext) ?? 0)+1; extCounts.set(ext,row.extOccurrence);
     }
-    let key = keyFor('transactions', row, identity);
+    let key = keyFor('transactions', row, keep);
     let duplicate = db.prepare('SELECT * FROM transactions WHERE dedupe_key=?').get(key);
     if (duplicate && row.parser !== 'simplefin' && normalizeName(duplicate.description) !== normalizeName(row.description) && duplicate.parser === row.parser) {
       key += ':d:' + createHash('sha256').update(normalizeName(row.description)).digest('hex').slice(0,16);
@@ -103,10 +104,13 @@ export function mergeAccounts(db, item, { now = new Date().toISOString() } = {})
       archive(db,'transactions',{ ...row,account_id:keepId,dedupe_key:key },{ by:duplicate.file_id,reason:'duplicate_cross_format',survivorKey:duplicate.dedupe_key,now });
       removedKeys.add(row.dedupe_key);
       db.prepare('DELETE FROM transactions WHERE id=?').run(row.id);
-    } else db.prepare('UPDATE transactions SET account_id=?,dedupe_key=? WHERE id=?').run(keepId,key,row.id);
+    } else {
+      db.prepare('UPDATE transactions SET account_id=?,dedupe_key=? WHERE id=?').run(keepId,key,row.id);
+      movedTransactions.push(row.id);
+    }
   }
   for (const table of ['balances','positions']) for (const row of db.prepare(`SELECT * FROM ${table} WHERE account_id=? ORDER BY id`).all(ownId)) {
-    const key = keyFor(table,row,identity);
+    const key = keyFor(table,row,keep);
     const target = table === 'balances' ? db.prepare('SELECT * FROM balances WHERE account_id=? AND date=?').get(keepId,row.date)
       : db.prepare('SELECT * FROM positions WHERE account_id=? AND as_of=? AND symbol IS ?').get(keepId,row.as_of,row.symbol);
     movedKeys.set(row.dedupe_key,target?.dedupe_key ?? key);
@@ -124,14 +128,14 @@ export function mergeAccounts(db, item, { now = new Date().toISOString() } = {})
   for (const r of db.prepare('SELECT * FROM superseded_rows ORDER BY id').all()) {
     const row = parseJson(r.row,null);
     if (row?.account_id === ownId) {
-      const key = keyFor(r.table_name,row,identity);
+      const key = keyFor(r.table_name,row,keep);
       db.prepare('UPDATE superseded_rows SET row=?,dedupe_key=?,survivor_key=? WHERE id=?')
         .run(JSON.stringify({ ...row,account_id:keepId,dedupe_key:key }),key,movedKeys.get(r.survivor_key) ?? r.survivor_key,r.id);
     } else if (movedKeys.has(r.survivor_key)) db.prepare('UPDATE superseded_rows SET survivor_key=? WHERE id=?').run(movedKeys.get(r.survivor_key),r.id);
   }
   for (const [table,col] of [['goals','def'],['recs','def']]) for (const r of db.prepare(`SELECT id,${col} FROM ${table}`).all()) {
     let value = parseJson(r[col],{});
-    if (!matchesRef(value,ownId) && !matchesRef(value,own.fig_key)) continue;
+    if (!matchesRef(value,ownId) && (!own.fig_key || !matchesRef(value,own.fig_key))) continue;
     value = replaceRef(value,ownId,keepId);
     if (own.fig_key) value = replaceRef(value,own.fig_key,keep.fig_key ?? `acct.${keepId}.balance`);
     db.prepare(`UPDATE ${table} SET ${col}=? WHERE id=?`).run(JSON.stringify(value),r.id);
@@ -145,14 +149,18 @@ export function mergeAccounts(db, item, { now = new Date().toISOString() } = {})
   }
   db.prepare("UPDATE accounts SET mirror='connected' WHERE id=?").run(keepId);
   db.prepare('DELETE FROM accounts WHERE id=?').run(ownId);
-  const txs = db.prepare('SELECT * FROM transactions WHERE account_id=? ORDER BY id').all(keepId);
-  for (let i=0;i<txs.length;i++) for (let j=i+1;j<txs.length;j++) {
-    const a=txs[i],b=txs[j];
-    if (a.file_id === b.file_id || Math.round(a.amount*100)!==Math.round(b.amount*100) || Math.abs(Date.parse(a.date)-Date.parse(b.date))>3*86400000) continue;
-    const keys=[a.dedupe_key,b.dedupe_key].sort();
-    ask(db,{kind:'near_duplicate',subject:keys.join('|'),question:'Two imports show the same amount on this account within three days. Are they the same transaction?',
-      options:[{id:'same',label:'Same transaction, keep one'},{id:'different',label:'Different, keep both'}],context:{accountId:keepId,keys},now});
+  for (const id of movedTransactions) {
+    const a = db.prepare('SELECT * FROM transactions WHERE id=?').get(id);
+    const others = db.prepare(`SELECT * FROM transactions WHERE account_id=? AND id!=? AND round(amount*100)=?
+      AND date BETWEEN date(?,'-3 days') AND date(?,'+3 days') AND file_id IS NOT ? ORDER BY id`).all(keepId,a.id,Math.round(a.amount*100),a.date,a.date,a.file_id);
+    for (const b of others) {
+      const keys=[a.dedupe_key,b.dedupe_key].sort();
+      if (db.prepare("SELECT 1 FROM confirm_items WHERE kind='near_duplicate' AND subject=?").get(keys.join('|'))) continue;
+      ask(db,{kind:'near_duplicate',subject:keys.join('|'),question:'Two imports show the same amount on this account within three days. Are they the same transaction?',
+        options:[{id:'same',label:'Same transaction, keep one'},{id:'different',label:'Different, keep both'}],context:{accountId:keepId,keys},now});
+    }
   }
+
 }
 
 export function refreshMergedAccounts(db, { now = new Date().toISOString() } = {}) {
@@ -166,10 +174,13 @@ export function refreshMergedAccounts(db, { now = new Date().toISOString() } = {
   const facts=Object.fromEntries(db.prepare('SELECT key,value FROM facts').all().map(r=>[r.key,parseJson(r.value,null)]));
   const data = loadPlanningData(db,clock);
   const computed = computeFigures(data,facts,{clock,owner:facts,entities:resolveEntities(data,facts)});
+  for (const row of db.prepare("SELECT key FROM figures WHERE key LIKE 'cash.%'").all()) {
+    if (!computed.figures[row.key]) db.prepare('UPDATE figures SET unavailable_reason=? WHERE key=?').run('Account data changed; confirm account types to recompute.',row.key);
+  }
   for (const [key,f] of Object.entries(computed.figures).filter(([key])=>key.startsWith('cash.'))) {
     const source = computed.sources[f.src];
     if (source) db.prepare('INSERT OR IGNORE INTO sources (id,label,as_of,kind) VALUES (?,?,?,?)').run(f.src,source.label,source.asOf ?? clock,source.kind);
-    db.prepare("INSERT INTO figures (key,v,src,kind,label,file_id,parser,locator,updated_at) VALUES (?,?,?,?,?,?, 'planner',?,?) ON CONFLICT(key) DO UPDATE SET v=excluded.v,src=excluded.src,kind=excluded.kind,label=excluded.label,file_id=excluded.file_id,parser=excluded.parser,locator=excluded.locator,updated_at=excluded.updated_at")
+    db.prepare("INSERT INTO figures (key,v,src,kind,label,file_id,parser,locator,updated_at) VALUES (?,?,?,?,?,?, 'planner',?,?) ON CONFLICT(key) DO UPDATE SET v=excluded.v,src=excluded.src,kind=excluded.kind,label=excluded.label,file_id=excluded.file_id,parser=excluded.parser,locator=excluded.locator,updated_at=excluded.updated_at,unavailable_reason=NULL")
       .run(key,f.v,f.src,f.kind,f.label,f.fileId,JSON.stringify(f.locator),now);
   }
 }

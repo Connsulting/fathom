@@ -165,3 +165,41 @@ test('connect, sync and later positions upload expose repair through the real HT
     assert.equal(scenario.live.ingest.items.filter(i=>i.context.repair).length,1);
   } finally {await app.close();}
 }));
+
+test('a file routed into the redundant bridge account reimports without resurrecting rows after merge', () => withStore(async s => {
+  await seedDuplicate(s,{sure:true});
+  const f=aggregatorFile('alias.csv',[{date:'2032-02-12',amount:'17',inst:'Example Bank N.A.',account:'Synthetic checking',number:'0006294',description:'Distinct file posting'}]);
+  await P.ingestFile(s.db,f,s.opts(null));
+  M.queueAccountPairs(s.db,{now:NOW});
+  C.answer(s.db,pending(s.db)[0].id,'same',{now:NOW});
+  const before=s.db.prepare('SELECT count(*) n FROM transactions').get().n;
+  await P.ingestFile(s.db,{...f,bytes:Buffer.from(Buffer.from(f.bytes).toString()+'\n')},s.opts(null));
+  assert.equal(s.db.prepare('SELECT count(*) n FROM transactions').get().n,before);
+  assert.equal(s.db.prepare('SELECT count(*) n FROM accounts').get().n,1);
+}));
+
+test('balance contradictions, name-only masks and multiple candidates remain owner questions', () => withStore(async s => {
+  const p=await seedDuplicate(s,{sure:true,conflict:true});
+  assert.equal(M.detectAccountPairs(s.db)[0].confidence,'likely');
+  s.db.prepare('UPDATE balances SET amount=1200 WHERE account_id=? AND date=?').run(p.own,'2032-02-29');
+  s.db.prepare('UPDATE accounts SET mask=NULL,name=? WHERE id=?').run('Synthetic checking x6294',p.keep);
+  assert.equal(M.detectAccountPairs(s.db)[0].confidence,'likely');
+  s.db.prepare("UPDATE accounts SET mask='6294' WHERE id=?").run(p.keep);
+  s.db.prepare("INSERT INTO accounts (id,identity,inst,mask,name,kind,mirror) VALUES ('synthetic-other','synthetic:other','Example Bank','6294','Other checking','cash','manual')").run();
+  assert.deepEqual(M.detectAccountPairs(s.db).map(p=>p.confidence),['likely','likely']);
+}));
+
+test('stale repair answers refuse without changing the store; valid repairs remain answerable', () => withStore(async s => {
+  const p=await seedDuplicate(s,{sure:true});
+  M.queueAccountPairs(s.db,{now:NOW}); const q=pending(s.db)[0];
+  s.db.prepare("UPDATE accounts SET mask='5837' WHERE id=?").run(p.own);
+  assert.throws(()=>C.answer(s.db,q.id,'same'),e=>e.code==='stale');
+  assert.equal(s.db.prepare('SELECT count(*) n FROM accounts').get().n,2);
+  s.db.prepare("UPDATE accounts SET mask='6294' WHERE id=?").run(p.own);
+  C.answer(s.db,q.id,'different',{now:NOW});
+  s.db.prepare("UPDATE accounts SET kind='card' WHERE id=?").run(p.own);
+  assert.throws(()=>C.reviseItem(s.db,q.id,'same',{now:NOW}),e=>e.code==='stale');
+  s.db.prepare("UPDATE accounts SET kind='cash' WHERE id=?").run(p.own);
+  C.reviseItem(s.db,q.id,'same',{now:NOW});
+  assert.equal(s.db.prepare('SELECT count(*) n FROM accounts').get().n,1);
+}));

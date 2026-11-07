@@ -314,15 +314,23 @@ function connectedAccountFor(db) {
   return row => {
     if (row.identity || !accountMask(row.account ?? {})) return null;
     const own = accountIdOf(accountIdentity(row));
-    if (cache.has(own)) return cache.get(own);
+    if (cache.has(own)) {
+      const target = cache.get(own);
+      if (target && !target.identity?.startsWith('simplefin:')) row.account = { ...row.account, inst:target.inst, mask:target.mask, name:target.name };
+      return target?.id ?? null;
+    }
     let out = null;
     if (!db.prepare('SELECT 1 FROM accounts WHERE id=?').get(own)) {
       const hits = db.prepare(`SELECT DISTINCT a.* FROM simplefin_accounts m JOIN accounts a ON a.id=m.account_id WHERE m.status='mapped'`).all()
         .filter(a => accountMask(a) === accountMask(row.account) && compatibleKind(a,row.account)
           && (sameInstitution(a.inst,row.account.inst) || (a.identity && !a.identity.startsWith('simplefin:') && !row.account.inst)));
-      if (hits.length === 1) out = hits[0].id;
+      if (hits.length === 1) {
+        const target = hits[0];
+        out = target.id;
+        if (!target.identity?.startsWith('simplefin:')) row.account = { ...row.account, inst:target.inst, mask:target.mask, name:target.name };
+      }
     }
-    cache.set(own,out);
+    cache.set(own,out ? db.prepare('SELECT * FROM accounts WHERE id=?').get(out) : null);
     return out;
   };
 }

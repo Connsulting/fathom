@@ -20,7 +20,7 @@ import { ingestFile, accountIdOf } from './pipeline.mjs';
 import { identifyAccountRows } from './dedupe.mjs';
 import { ask, normalizeName, ACCOUNT_MATCH_OPTIONS } from './confirm.mjs';
 import { autoResolve } from './auto.mjs';
-import { institution, cents } from './format.mjs';
+import { cents } from './format.mjs';
 import { DEFAULT_HOSTS, parseAllowedHosts } from './simplefin-hosts.mjs';
 
 export { DEFAULT_HOSTS, parseAllowedHosts };
@@ -259,7 +259,7 @@ export function matchAccount(db, acct) {
   const closest = (list) => [...list].sort((a, b) => distance(a) - distance(b))[0].id;
   if (acct.mask) {
     const same = pool.filter((c) => accountMask(c) === acct.mask);
-    if (same.length === 1 && acct.maskSure && sameInstitution(same[0].inst, acct.inst) && accountKind(same[0]) && accountKind(acct) && !contradicts(same[0])) return { sure: same[0].id };
+    if (same.length === 1 && acct.maskSure && /^\d{4}$/.test(same[0].mask ?? '') && sameInstitution(same[0].inst, acct.inst) && accountKind(same[0]) && accountKind(acct) && !contradicts(same[0])) return { sure: same[0].id };
     if (same.length) return { candidate: closest(same) };
     const unmasked = pool.filter((c) => sameInstitution(c.inst, acct.inst) && !accountMask(c));
     return unmasked.length ? { candidate: closest(unmasked) } : {};
