@@ -1,12 +1,30 @@
 # Ask and MCP tool catalog
 
-This is the plan for Fathom's deterministic tool layer: the read tools that compute every figure
-Ask and an MCP client need, the write tools that put the whole internal API in the agent's reach,
-the rules the model follows when it uses them, and the tickets that build it. It extends the
-frozen tool interface in [architecture.md, section 8](architecture.md#8-tool-interface). Status:
-planned. Nothing here is built until its ticket in section 7 merges.
+This is the plan for Fathom's deterministic tool layer: twenty intent-level tools, each with a small
+closed set of operations and typed parameters, that compute every figure Ask and an MCP client
+need and put every household read and write the API can do in the agent's reach. It replaces both
+the registry on main (30 tools) and the previous revision of this plan (55 planned tool names in
+28 tickets). It extends the frozen tool interface in
+[architecture.md, section 8](architecture.md#8-tool-interface). Status: planned. Nothing here is
+built until its ticket in section 7 merges.
 
-Owner direction:
+The design rule, stated first because everything else follows from it: one tool per question a
+person asks, with its operations as a closed enum and its parameters typed; no tool is a router
+over unrelated domains. Every tool's description and schema together stay under about 8,000
+tokens, measured by a test (see "Design rule").
+
+Owner direction, 2026-11-07:
+
+> "Should we have a smaller number of tools that have more available parameters to them? ... I
+> just know that it can lead to a little bit of MCP bloat. I don't know if too many tools make it
+> hard for the agent to pick which one, whereas a smaller number of tools with more flexible
+> parameters allows it to conceptualize what the right tool is."
+
+> "What I meant by having a tool call for every API is that for every action the API can do, we
+> need a tool call that can also do that. Not necessarily that we have to have a one-to-one
+> mapping between API calls and MCPs though."
+
+The earlier direction still holds:
 
 > "One of the core reasons we're building Fathom is the power of an agent combined with the
 > structured data, deterministic API and tools of a financial tool. We need to provide far richer
@@ -25,50 +43,119 @@ from that, and when would I get there at my current savings rate?" (Q02 and Q03 
 
 ## Risks and external dependencies
 
-Calendar estimate: about three to five calendar days end to end at three parallel workers, each
-ticket one agent run plus CI and a cross-provider review. The sibling merges and the owner's merge
-gate set the date, not agent runs. Section 7 gives the waves.
+Calendar estimate: about four to six calendar days end to end at up to five parallel workers. Each
+ticket is one agent run plus CI and one cross-provider review. The date is set by the owner's
+merge gate (two open PRs first, then every ticket), by C1, which is one large ticket every other
+ticket waits on, and by the four-deep chain C1, C3, C6, C7. C0, the grader adjudication, runs
+beside C1 and merges before any live run is used to judge a tool ticket. Section 7 gives the waves.
 
-1. feat/auto-categories has merged to main. `resolveCategories`, `loadCategoryInputs`,
-   `categoryCoverage` and the category-aware `spendingInputs` are available. It no longer blocks
-   anything.
-2. feat/account-dialog-edit (open) adds the account mask, owner, kind, merge-candidates and merge
-   routes in `src/api/accounts.mjs`. The account write tools (T27) wrap the store functions those
-   handlers call (`setAccountAnswer`, `undoAccountAnswer`, `mergePlan`, `manualMerge`,
-   `queueAccountPairs`) and wait for it to merge.
-3. feat/ask-actions (open) adds the `write:facts`, `write:steps`, `write:goals` and
-   `write:preferences` scopes (`WRITE_SCOPES` in `src/shared/action-scopes.mjs`), action receipts
-   with Undo (`src/actions/receipts.mjs`), `record_household_fact`, `remember_preference`,
-   `create_goal`, `edit_goal`, `set_recommendation_step`, and migration 025 (`action_receipts`,
-   `preferences`). Saved spending definitions (T18), the new fact shapes (T19), the scope work
-   (T17) and every write ticket after it depend on it.
-4. fix/ask-answer-quality (open, no commits yet) owns the system prompt and grounding in
-   `src/api/answerer.mjs`. The model-rules ticket (T28) edits the prompt only after it merges.
-   T8 (a progress label) and T17 (tool services in the Ask context) also edit that file, so T8,
-   T17 and T28 are serialized in that order.
-5. feat/ask-evals (open, nothing published) will own the eval case format and runner. The case IDs
-   in section 8 are proposals. T16 writes the cases once the runner merges; until then each
-   ticket's unit tests are its gate.
-6. Grounding of assumptions. The answerer drops argument echoes from tool results (a leaf under an
-   argument's key with an equal value). An assumption the model passes, such as a 4 percent
-   withdrawal rate, may not ground when the model repeats it, because the result's
-   `provenance.assumptions[].value` sits under the same key name as the argument. T5 adds a test
-   that a stated assumption and a `calculate` result both ground through `groundAnswer`; the
-   result carries each assumption also as a `stated` text leaf ("4%") under a key no argument uses.
-   An assumption with source `owner` must carry the owner's words as `evidence`, so the model
-   cannot attribute a number to the owner that the owner never said.
-   If that test cannot pass without an answerer change, T5 records the failure as an expected-fail
-   case for T28, which makes the change after fix/ask-answer-quality merges.
-7. Prompt size. The registry grows from 20 tools to about 70. Every description stays at or under
-   300 characters, and the routing rules in section 4 matter more than tool count. T28 measures the
-   tool list size in the prompt and fails if it passes 24 KB.
-8. Migration numbering. T18 adds one table. Its number is set at merge time per AGENTS.md rule 7;
-   025 is taken by feat/ask-actions.
-9. Cost of re-evaluating references. A reference re-runs its read call server-side. Depth is
-   capped at 3 and every read tool is bounded by the household store size, so a chained answer
-   costs a few extra milliseconds at household scale.
-10. Merge gate. The owner approves merges. Three workers can finish wave 2 in a day; whether wave 2
-    lands in a day depends on review and merge cadence.
+1. C1 is the critical path. It changes the registry shape and renames all 30 live tools in one
+   ticket, with every caller, because the repository forbids aliases and compatibility paths: a
+   loader that served old-shape and new-shape tools side by side would be one. Nothing else can
+   start until it merges, so wave 1 has only C1 and the small grader ticket C0. It is mostly mechanical (call sites in about
+   30 test files and the eval catalog), but its review and CI time are the first day.
+2. Owner merges first. PR #84 (T16, eval cases; green) must merge before C1 starts so that C1
+   re-points the whole eval catalog once (section 8). PR #83 (T3, account tax treatment
+   constants; green) should merge now; C5, C6 and C7 need it. If the owner closes either instead,
+   the dependent tickets cannot start, and section 8 or the treatment constants must be redone.
+3. Open PRs on shared files. PR #76 (Ask everywhere) edits `src/tools/index.mjs`,
+   `src/tools/catalog/transactions.mjs` and `src/api/answerer.mjs`, all of which C1 rewrites; it
+   adds an `ids` argument to `query_transactions`. Whichever of #76 and C1 merges second rebases,
+   and `transactions.search` carries `ids` if #76 is on main when C1 starts. PR #79 (bounded
+   category and Confirm suggestions) edits `src/categories/store.mjs` and `src/ingest/confirm.mjs`,
+   which C8 also edits; the second to merge rebases.
+4. Context budget. The estimate for the full design here is about 26,000 of the 30,000-character
+   ceiling (section "Design rule"), after declaring the shared Ref, Assumption and Operand shapes
+   loosely in schemas and fully in the handlers and rules. Every ticket after C1 runs the budget
+   test. A ticket that would cross the ceiling shortens descriptions or schema text inside its own
+   operations; no ticket raises the ceiling.
+5. External MCP clients. Tool names change on the first deploy after C1, with no aliases. Any MCP
+   client configuration that allowlists Fathom tools by name needs the new names, and the
+   deployment's MCP smoke list (kept in the deployment repository, outside this one) must change
+   in the same rollout. Nothing in this repository can do that; it is a deploy step.
+6. Operation-level scopes. A write tool can hold operations under different scopes (`answer` has
+   `write:facts` and `write:confirm` operations). The MCP server reads `operation` before argument
+   validation to decide permission, and a key's listed schema shows only the operations it may
+   call. Keys and their stored scopes do not change.
+7. Grounding of assumptions. The answerer drops argument echoes (a result leaf under an argument's
+   key with an equal value). An assumption's `stated` text ("4%") therefore lives under
+   `provenance.assumptions[].stated`, a key no argument uses; C3 tests that a stated assumption
+   and a `calculate` result both ground through `groundAnswer`. An assumption with source `owner`
+   carries the owner's words as `evidence`.
+8. Routing quality is a hypothesis. Fewer tools with operations is expected to route better than
+   55 narrow tools; the tier 1 evals (CI) prove the calls a scripted answer makes are valid, not
+   that a live model picks them. The tier 2 run (`npm run eval:ask:live`, never in CI, spends
+   against the engine cap) is the check, run by the coordinator after C4 merges and again at the
+   end. It is not a ticket gate.
+9. A noisy grader. In the full live run at `2393850`, nine cases called the required tool, or no
+   tool, with zero self-computed figures and still failed on "unsourced" numbers (section 8, group
+   3). Until C0 settles what the grader counts as a sourced number, a live pass count measures the
+   grader as much as the tools, so no tool ticket is judged on a live run taken before C0 merges.
+10. Migration numbering. C10 adds one table. Its number is set at merge time per AGENTS.md rule 7.
+11. Cost of re-evaluating references. A reference re-runs its read call server-side. Depth is
+    capped at 3 and every read is bounded by the household store size, so a chained answer costs
+    a few extra milliseconds at household scale.
+
+## Design rule
+
+1. One tool per question a person asks. A tool is named for the thing the question is about
+   (`spending`, `retirement`, `accounts`) or, for writes, the change the person asks for
+   (`update_account`, `categorize`, `answer`). A read tool's operations answer different
+   questions about the same subject; a write tool's operations make different changes to the
+   same subject.
+2. Operations are a closed enum. Every tool takes a required `operation` argument whose schema is
+   an `enum` of its operation names. A tool with one operation still takes it (`transactions`
+   takes `operation: 'search'`, `undo` takes `operation: 'undo'`), so every call names a
+   (tool, operation) pair and evals, refs, parity and permissions all key on that pair. For
+   `calculate` the operation is the arithmetic operator.
+3. Parameters are typed. A tool's schema is the union of its operations' parameters with
+   `additionalProperties: false`. Within one tool a parameter name has exactly one schema and one
+   meaning. The registry validates per operation: an argument the operation does not use, or a
+   missing argument the operation requires, is `bad_input` naming the operation.
+4. No router. A tool never dispatches over unrelated domains: no `fathom` tool with an `action`
+   argument, no `read` or `write` catch-all. Reads and writes never share a tool, so Ask can keep
+   offering write tools only for the chat purpose and MCP can mark read tools `readOnlyHint`.
+5. At most eight operations per tool, except `calculate`, whose enum is arithmetic. A tool that
+   needs a ninth operation is two questions and splits.
+6. Schemas compile under strict Ajv (`createRegistryServer` in `src/engine/tools.mjs`): no type
+   arrays, `anyOf` for unions, no `oneOf` per operation, no `$ref`. Shared shapes (Ref, Assumption,
+   Operand) are declared loosely in schemas (`type: 'object'` with their top-level keys) and fully
+   in the handler validation and in the rules (section 4), which keeps the budget.
+7. Descriptions are generated. A tool header states the purpose in one sentence; the loader
+   appends one line per operation, `name (parameters): summary`, from the operation definitions.
+   A tool description is at most 900 characters; an operation summary at most 140.
+8. The first operation in a read tool's enum needs no argument besides `operation` (except
+   `calculate`), so the MCP smoke can call every read tool.
+
+Context budget. Every tool's name, description and input schema together, as `tools/list`
+returns them to a key holding every scope, stay under about 8,000 tokens. The measure is a
+character count as a proxy: `test/tools-registry.test.mjs` (C1) builds the tool list for a key
+with every scope through `toolsForScopes`, serializes `[{ name, description, inputSchema }]` with
+`JSON.stringify`, and fails above 30,000 characters (8,000 tokens at 3.75 characters per token, a
+conservative ratio for JSON schema text). The same test fails on a description over 900
+characters, and on the assembled routing and rule text (section 4) over 8,000 characters. It
+prints the measured totals so a ticket's PR can quote them. Today's 30 tools measure 12,633
+characters.
+
+Why this shape. The owner asked for fewer, more flexible tools so the agent can tell which one
+applies, and for every API action to be reachable without a tool per route. Rejected: one tool
+per route or per narrow question (the previous revision's 55 names: the bloat the owner named);
+one generic tool with an action argument (the model cannot see what it does, and scopes and evals
+lose their key); `oneOf` per operation in the schema (doubles schema size, and strict Ajv and
+several MCP clients handle top-level `oneOf` poorly).
+
+How tools register (C1). `src/tools/tools.mjs` declares the twenty tool headers once: `name`,
+`kind` (`read` or `write`), `purpose`, `progress` (the plain progress label Ask shows while the
+tool runs) and `source` (the plain source label for figures it grounds). Each module in
+`src/tools/catalog/` exports `operations`, a list of `{ tool, name, scope, summary, route,
+params, required, referenceable?, routes, handler }`, plus optional `rules` (lines for section 4)
+and `capabilities`. `route` is the question-shape line for the routing table; `routes` lists the
+API routes the operation covers (`'POST /api/accounts/:id/name'`). The loader in
+`src/tools/index.mjs` merges operations into their tools, refuses a duplicate operation, a
+parameter name with two schemas in one tool, or an operation whose scope does not match its
+tool's kind, and lists only tools with at least one operation. A ticket adds its own catalog
+modules and can contribute operations to any tool; it never edits `src/tools/index.mjs`,
+`src/tools/tools.mjs` or `src/tools/parity.mjs`.
 
 ## 1. Question taxonomy
 
@@ -77,6 +164,8 @@ Q02 and Q03 its assumed follow-ups. Q66, Q67 and Q68 are questions Fathom must a
 "Fathom does not have that": a security pick (advisory boundary), a live market quote (no market
 data feed) and money movement (read-only accounts).
 
+| ID | Area | Question |
+|---|---|---|
 | ID | Area | Question |
 |---|---|---|
 | Q01 | Spending and budgets | What is my yearly spending, excluding mortgage and income tax but including healthcare, so I can back into the investment balance I need |
@@ -150,145 +239,127 @@ data feed) and money movement (read-only accounts).
 
 ## 2. Answer plans
 
-Calls are in order, with key arguments. `R(Qnn)` means a figure reference (section 3) to the named
-figure of that question's call, copied from the figure's own `ref` field. The model's part is
-always: choose the tools, state the assumptions with their source, explain, report the gaps. It
-never computes. "Window" below is `spending_window` unless stated.
+Calls are in order. `spending.total {measure: 'spending'}` means a call to the `spending` tool
+with `operation: 'total'` plus the arguments shown. `R(Qnn x)` means a figure reference (section
+3) to figure `x` of that question's call, copied from the figure's own `ref` field. An assumption
+argument is `{value, source, evidence}`; its name and unit come from the parameter. The model's
+part is always: choose the calls, state the assumptions with their source, explain, report the
+gaps. It never computes. "Window" below is `spending_window` unless stated.
 
 | ID | Calls | Model's part |
 |---|---|---|
-| Q01 | `aggregate_transactions {measure: 'spending', window: 'spending_window', annualize: true, groupBy: 'class', exclude: {categories: ['Mortgage', 'housing'], classes: ['debt_service'], buckets: ['tax']}}`. No include: healthcare stays in because it is household spending and is not excluded; the `healthcare` group shows its amount. `definition: 'core_living'` selects the same rows. | State the yearly total, the window, that healthcare is in (with its group figure), and what was left out with `excluded[].matched` amounts (mortgage payments, income tax). Report every gap: uncategorized and guessed rows with amounts, card or other spending accounts with no history, and the `outside_household_ledger` gap that premiums paid through payroll or a business account are not in household transactions. |
-| Q02 | `independence_target {spending: R(Q01 total), withdrawalRate: {name: 'withdrawalRate', value: 0.04, unit: 'ratio', source: 'owner'}}` | Name the spending figure it divides (Q01's), the rate as the owner's, and the rounding to the next thousand. Say the target inherits Q01's gaps. |
-| Q03 | Same `independence_target` call as Q02 (re-run, same arguments) | Report `gap`, `months` and `projectedDate`. State the defaults it used: real return 4 percent (default), monthly savings from recent data (window named), and which accounts count as invested now. If status is `no_savings` or `too_long`, say so instead of a date. |
-| Q04 | `aggregate_transactions {measure: 'spending', include: {categories: ['Groceries', 'groceries', 'Dining & Drinks', 'dining']}, groupBy: 'month'}`, then the same with `groupBy: 'category'` | Report the monthly figures and the split. Note that warehouse-club rows may sit under Shopping (gap: classified by category, not merchant). |
-| Q05 | `aggregate_transactions {measure: 'spending', definition: 'essential', annualize: true}` and `aggregate_transactions {measure: 'spending', definition: 'discretionary', annualize: true}` | Report the two totals as returned (each is one figure over its whole include set) and say what each definition contains, citing the spending pack entry. |
-| Q06 | `aggregate_transactions {measure: 'spending', window: 'ytd', groupBy: 'merchant', limit: 10}` | List the ten groups and the `other` group. Merchants are normalized descriptions. |
-| Q07 | `aggregate_transactions {measure: 'spending', window: 'calendar_year', year: 2025, include: {classes: ['childcare']}}` | Report the total; if `incomplete_month` or `account_no_history` gaps cover part of 2025, say how much of the year is on file. |
-| Q08 | `aggregate_transactions {measure: 'spending', window: 'calendar_year', year: 2025, include: {classes: ['healthcare']}, groupBy: 'category'}` | Report the total and the premium category. State the `outside_household_ledger` gap: premiums withheld from pay or paid by the business do not appear. |
-| Q09 | `aggregate_transactions {measure: 'spending', definition: 'elective_spending', annualize: true}` (the Ask context lists saved definitions by name and id, so no lookup call is needed; MCP clients call `list_spending_definitions` first) | Resolve "my elective spending" to the saved definition, even in a later conversation than the one that saved it. Say which selectors the definition applies. |
-| Q10 | `save_spending_definition {id: 'elective_spending', name: 'Elective spending', def: {exclude: {classes: ['housing', 'debt_service', 'childcare', 'healthcare', 'taxes']}}, evidence: <the owner's words>}` (chat purpose; never `remember_preference` for a definition) | Confirm what was saved with the receipt and Undo, and that it is remembered as a preference that names the definition. Offer to compute it. |
-| Q11 | `cash_flow {window: 'ytd', scope: 'all'}` | Read the monthly inflow, outflow and net for household and business, and the transfers between them, from the result. |
-| Q12 | `cash_flow {window: 'ytd', scope: 'all'}` | Report `totals.transfersBusinessToHousehold`. Say transfers are matched pairs within five days. |
-| Q13 | `cash_flow {window: 'ytd', scope: 'household'}` | Name the months whose `net` figure is negative. |
-| Q14 | `aggregate_transactions {measure: 'income', window: 'trailing_12'}`, `aggregate_transactions {measure: 'spending', window: 'trailing_12'}`, then `calculate {op: 'divide', operands: [{expr: {op: 'subtract', operands: [R(income total), R(spending total)]}}, R(income total)]}` | State the rate as a share of household income, and that business retained earnings are not counted. |
-| Q15 | `aggregate_transactions {measure: 'income', window: 'ytd', groupBy: 'merchant'}` and `business_pnl {window: 'ytd', groupBy: 'none'}` | Separate household deposits by payer from business revenue. Say owner distributions are transfers, not income, unless the business account is the source. |
-| Q16 | `aggregate_transactions {measure: 'income', window: 'trailing_12'}` | Report `perMonth`. Say it is deposits to household accounts, after withholding. |
-| Q17 | `business_pnl {window: 'ytd', groupBy: 'none'}` | Report profit and margin per entity. |
-| Q18 | `business_pnl {window: 'ytd', groupBy: 'month', compareToPriorYear: true}` | Report `revenue`, `prior.revenue`, `prior.revenueDifference` and `prior.revenueRatio` as returned. |
-| Q19 | `business_pnl {window: 'custom', from: '2026-07', to: '2026-09', groupBy: 'category'}` | Pick last quarter's months from today's date; list the largest expense groups. |
-| Q20 | `net_worth {groupBy: 'part'}` | Report the total and the parts; name carried accounts (stale balances carried forward). |
-| Q21 | `net_worth {series: true, months: 12}` then `calculate {op: 'subtract', operands: [R(last point total), R(first point total)]}` | Report the change; mention carried accounts at the ends of the series. |
-| Q22 | `net_worth {groupBy: 'treatment'}` | Report the pre-tax, Roth and taxable group totals as returned. A difference between them is a `calculate subtract` call, never a mental one. |
-| Q23 | `project_growth {solve: 'balance', balance: R(independence_target investedNow), monthlyContribution: R(independence_target monthlySavings), years: 10}` | State the real return default and that the result is in today's dollars. |
-| Q24 | `independence_target {}` (default spending), then `project_growth {solve: 'monthly', balance: R(investedNow), target: R(target), byAge: {person: 'owner', age: 55}}` | State the target source and assumptions. If the owner's birth date or age is missing, say so and offer to record it. |
-| Q25 | `independence_target {realReturn: {name: 'realReturn', value: 0.03, unit: 'ratio', source: 'owner'}}` and the default call, then `calculate {op: 'subtract', operands: [R(months at 3%), R(months at 4%)]}` | Report both dates and the difference in months. |
-| Q26 | `independence_target {withdrawalRate: {name: 'withdrawalRate', value: 0.035, unit: 'ratio', source: 'owner'}}` | Report the target; note the rate is inside the allowed range of 2 to 6 percent. |
-| Q27 | `independence_target {}`, then `independence_target {monthlySavings: {expr: {op: 'add', operands: [R(monthlySavings), {assumption: {name: 'extraMonthlySavings', value: 1000, unit: 'usd_per_month', source: 'owner'}}]}}}`, then `calculate subtract` on the two `months` figures | Report both dates and the months saved. |
-| Q28 | `tax_estimate {}`, then `after_tax_value {hypothetical: [{treatment: 'pretax', value: {name: 'amount', value: 15000000, unit: 'usd', source: 'owner', evidence: '$15 million in retirement accounts'}}, {treatment: 'taxable', value: {name: 'amount', value: 15000000, unit: 'usd', source: 'owner', evidence: '$15 million in a brokerage account'}}], ordinaryRate: R(marginal.federal), stateRate: R(marginal.state), capitalGainsRate: R(marginal.capitalGains)}`. No basis is passed: the owner stated none. | Report the pre-tax row's after-tax value. For the brokerage row, `taxOnWithdrawal` and `afterTax` come back unavailable with a `no_cost_basis` gap: say the tax depends on the cost basis and ask for it; never supply one. Explain where the tax shows up and when the money can come out, citing the treatment pack. Never call one better. |
-| Q29 | `access_schedule {people: 'both'}` | Read each milestone with its pack citation (59 and a half, rule of 55, Roth basis, HSA at 65). |
-| Q30 | `access_schedule {people: 'both'}` | Report the RMD start age and date per person and the birth-year rule cited. |
-| Q31 | `bridge_check {retireAge: {name: 'retireAge', value: 50, unit: 'age', source: 'owner'}, person: 'owner', spending: R(Q01 total)}` or with `definition: 'household_spending'` | Report spending needed until access age against accessible money, the shortfall or surplus, and the exceptions the tool notes. Recommend nothing. |
-| Q32 | `net_worth {groupBy: 'treatment'}` | List the accounts per treatment from the groups; name accounts whose treatment is inferred from kind. |
-| Q33 | `tax_estimate {}`, then `after_tax_value {kinds: ['taxable', 'brokerage'], ordinaryRate: R(marginal.federal), stateRate: R(marginal.state), capitalGainsRate: R(marginal.capitalGains)}` | Report unrealized gain and the tax figure; state the `missing_fact` gap for positions with no cost basis. |
-| Q34 | `tax_estimate {}` | Report federal, state and self-employment projections, kind and as-of; say they come from the last planning run. |
-| Q35 | `tax_estimate {}` and `list_deadlines {from: today}` | Report required, paid and remaining safe-harbor amounts and the next due date. |
-| Q36 | `tax_estimate {whatIf: {extraIncome: {name: 'extraIncome', value: 20000, unit: 'usd', source: 'owner'}, incomeType: 'business'}}` | Report `whatIf.totalDelta` and its parts. |
-| Q37 | `tax_estimate {}` | Report `federal.selfEmployment`. |
-| Q38 | `contribution_room {person: 'owner', types: ['solo401k_pretax', 'solo401k_employer', 'employee_deferral']}` | Report limit, used and remaining per type, and the deadline. |
-| Q39 | `contribution_room {person: 'both', types: ['traditional_ira', 'roth_ira']}` | Report remaining room and the deadline; say when income limits apply (pack). |
-| Q40 | `contribution_room {types: ['hsa']}` | Report remaining room; say coverage type comes from the stored fact. |
-| Q41 | `aggregate_transactions {measure: 'inflow', window: 'ytd', include: {accounts: [<529 account ids from list_accounts>]}}` after `list_accounts`, then `contribution_room {types: ['plan529_state_deduction']}` | Report contributions and the deductible part; cite the state pack. |
-| Q42 | `contribution_room {types: ['dependent_care']}` | Report the limit; say payroll elections are outside the household ledger (gap) so used is unknown. |
-| Q43 | `get_pace` | Report each goal's pace as returned. |
-| Q44 | `net_worth {groupBy: 'part'}`, `aggregate_transactions {measure: 'spending'}`, then `calculate {op: 'divide', operands: [R(part cash), R(spending perMonth)]}` | Report months of cover; name the accounts counted as cash. |
-| Q45 | `recurring_charges {status: 'active'}` | List the charges with cadence and annual cost, and the total. |
-| Q46 | `recurring_charges {status: 'new', since: <date three months ago>}` | Pick the date from today; list new charges. |
-| Q47 | `recurring_charges {status: 'all', since: '2026-06-01'}` | List stopped charges and those whose `changed` is set. |
-| Q48 | `compare_periods {measure: 'spending', a: {window: 'custom', from: '2025-01', to: '2025-10'}, b: {window: 'custom', from: '2026-01', to: '2026-10'}, groupBy: 'category'}` | Choose matching complete months; report the difference and the largest group deltas. |
-| Q49 | `compare_periods {measure: 'spending', a: {window: 'custom', from: '2025-06', to: '2025-08'}, b: {window: 'custom', from: '2026-06', to: '2026-08'}}` | Say which months "summer" means (an assumption, source default). |
-| Q50 | `compare_periods {measure: 'spending', include: {categories: ['Dining & Drinks', 'dining']}, a: {window: 'custom', from: '2026-02', to: '2026-04'}, b: {window: 'custom', from: '2026-08', to: '2026-10'}}` | State the three-month windows chosen and report the ratio. |
-| Q51 | `spending_projection {definition: 'household_spending', years: 10, obligations: ['mortgage']}` | Report the payoff year and the spending after, as returned; say the stated escrow continues as housing (pack). If `obligations.mortgage` is missing, the change is unavailable: report the gap and offer to record the fact. |
-| Q52 | `spending_projection {definition: 'household_spending', years: 15, obligations: ['childcare']}` | Report each change date and new amount, and how each was derived. A change whose new amount is not stated (no `obligations.childcare` stage amount and no owner assumption) is listed as unavailable and not applied; say so and offer to record it. |
-| Q53 | `obligation_schedule {kinds: ['mortgage']}` | Report end date, monthly payment and the derivation (stated payoff date or amortization). |
-| Q54 | `obligation_schedule {kinds: ['childcare']}` | Report each child's change dates and the pack rule used. |
-| Q55 | `obligation_schedule {kinds: ['plan529']}` | Report the end dates and the college-age assumption. |
-| Q56 | `data_health {}` | List stale accounts with last data dates and ages. |
-| Q57 | `data_health {}` | Report uncategorized and guessed counts; offer the Confirm items. |
-| Q58 | `data_health {}` | List accounts whose `lastData` is empty. |
-| Q59 | `list_accounts`, then `set_account_owner {id, owner: 'owner'}` (chat purpose) | Pick the account by name and current owner; if two match, ask which. Confirm with the receipt. |
-| Q60 | `query_transactions {text: 'warehouse', limit: 5}`, then `set_merchant_rule {merchant: <normalized merchant from a row>, category: 'Groceries'}` | Confirm the rule and how many rows it reclassified. |
-| Q61 | `data_health {}` (its `yearend.items` lists each expected document's key and issuer), then `mark_yearend_item {key: <that item's key>, reason: 'Account closed this year'}` | Pick the item by issuer and form; use the owner's reason in their words. |
-| Q62 | `list_recommendations`, then `decide_decision {id, index: 1}` | Name the point decided and its figures from the result. |
-| Q63 | `list_goals`, then `archive_goal {id}` | Confirm with the receipt. |
-| Q64 | `list_recommendations`, then `send_to_advisor {recId}` | Confirm it is waiting on the advisor. |
-| Q65 | `run_job {id: 'simplefin-sync'}` | Report the run status; if the connection is not set up, give the in-app link to Settings. |
+| Q01 | `spending.total {measure: 'spending', window: 'spending_window', annualize: true, groupBy: 'class', exclude: {categories: ['Mortgage', 'housing'], classes: ['debt_service'], buckets: ['tax']}}`. No include: healthcare stays in because it is household spending and is not excluded; the `healthcare` group shows its amount. `definition: 'core_living'` selects the same rows. | State the yearly total, the window, that healthcare is in (with its group figure), and what was left out with `excluded[].matched` amounts (mortgage payments, income tax). Report every gap: uncategorized and guessed rows with amounts, card or other spending accounts with no history, and the `outside_household_ledger` gap that premiums paid through payroll or a business account are not in household transactions. |
+| Q02 | `retirement.target {spending: R(Q01 total), withdrawalRate: {value: 0.04, source: 'owner', evidence: '4 percent withdrawal rate'}}` | Name the spending figure it divides (Q01's), the rate as the owner's, and the rounding to the next thousand. Say the target inherits Q01's gaps. |
+| Q03 | Same `retirement.target` call as Q02 (re-run, same arguments) | Report `gap`, `months` and `projectedDate`. State the defaults it used: real return 4 percent (default), monthly savings from recent data (window named), and which accounts count as invested now. If status is `no_savings` or `too_long`, say so instead of a date. |
+| Q04 | `spending.total {measure: 'spending', include: {categories: ['Groceries', 'groceries', 'Dining & Drinks', 'dining']}, groupBy: 'month'}`, then the same with `groupBy: 'category'` | Report the monthly figures and the split. Note that warehouse-club rows may sit under Shopping (gap: classified by category, not merchant). |
+| Q05 | `spending.total {measure: 'spending', definition: 'essential', annualize: true}` and `spending.total {measure: 'spending', definition: 'discretionary', annualize: true}` | Report the two totals as returned (each is one figure over its whole include set) and say what each definition contains, citing the spending pack entry. |
+| Q06 | `spending.total {measure: 'spending', window: 'ytd', groupBy: 'merchant', limit: 10}` | List the ten groups and the `other` group. Merchants are normalized descriptions. |
+| Q07 | `spending.total {measure: 'spending', window: 'calendar_year', year: 2025, include: {classes: ['childcare']}}` | Report the total; if `incomplete_month` or `account_no_history` gaps cover part of 2025, say how much of the year is on file. |
+| Q08 | `spending.total {measure: 'spending', window: 'calendar_year', year: 2025, include: {classes: ['healthcare']}, groupBy: 'category'}` | Report the total and the premium category. State the `outside_household_ledger` gap: premiums withheld from pay or paid by the business do not appear. |
+| Q09 | `spending.total {measure: 'spending', definition: 'elective_spending', annualize: true}` (the Ask context lists saved definitions by name and id, so no lookup call is needed; MCP clients call `spending.definitions` first) | Resolve "my elective spending" to the saved definition, even in a later conversation than the one that saved it. Say which selectors the definition applies. |
+| Q10 | `update_preferences.save_definition {definitionId: 'elective_spending', name: 'Elective spending', def: {exclude: {classes: ['housing', 'debt_service', 'childcare', 'healthcare', 'taxes']}}, evidence: <the owner's words>}` (chat purpose; never `update_preferences.remember` for a definition) | Confirm what was saved with the receipt and Undo, and that it is remembered as a preference that names the definition. Offer to compute it. |
+| Q11 | `spending.cash_flow {window: 'ytd', scope: 'all'}` | Read the monthly inflow, outflow and net for household and business, and the transfers between them, from the result. |
+| Q12 | `spending.cash_flow {window: 'ytd', scope: 'all'}` | Report `totals.transfersBusinessToHousehold`. Say transfers are matched pairs within five days. |
+| Q13 | `spending.cash_flow {window: 'ytd', scope: 'household'}` | Name the months whose `net` figure is negative. |
+| Q14 | `spending.total {measure: 'income', window: 'trailing_12'}`, `spending.total {measure: 'spending', window: 'trailing_12'}`, then `calculate.divide {operands: [{expr: {operation: 'subtract', operands: [R(income total), R(spending total)]}}, R(income total)], label: 'savings rate'}` | State the rate as a share of household income, and that business retained earnings are not counted. |
+| Q15 | `spending.total {measure: 'income', window: 'ytd', groupBy: 'merchant'}` and `business.pnl {window: 'ytd', groupBy: 'none'}` | Separate household deposits by payer from business revenue. Say owner distributions are transfers, not income, unless the business account is the source. |
+| Q16 | `spending.total {measure: 'income', window: 'trailing_12'}` | Report `perMonth`. Say it is deposits to household accounts, after withholding. |
+| Q17 | `business.pnl {window: 'ytd', groupBy: 'none'}` | Report profit and margin per entity. |
+| Q18 | `business.pnl {window: 'ytd', groupBy: 'month', compareToPriorYear: true}` | Report `revenue`, `prior.revenue`, `prior.revenueDifference` and `prior.revenueRatio` as returned. |
+| Q19 | `business.pnl {window: 'custom', from: '2026-07', to: '2026-09', groupBy: 'category'}` | Pick last quarter's months from today's date; list the largest expense groups. |
+| Q20 | `accounts.net_worth {groupBy: 'part'}` | Report the total and the parts; name carried accounts (stale balances carried forward). |
+| Q21 | `accounts.net_worth {series: true, months: 12}` then `calculate.subtract {operands: [R(last point total), R(first point total)], label: 'net worth change'}` | Report the change; mention carried accounts at the ends of the series. |
+| Q22 | `accounts.net_worth {groupBy: 'treatment'}` | Report the pre-tax, Roth and taxable group totals as returned. A difference between them is a `calculate.subtract` call, never a mental one. |
+| Q23 | `retirement.target {}`, then `retirement.growth {solve: 'balance', balance: {ref: R(investedNow)}, monthlyContribution: {ref: R(monthlySavings)}, years: 10}` | State the real return default and that the result is in today's dollars. |
+| Q24 | `retirement.target {}` (default spending), then `retirement.growth {solve: 'monthly', balance: {ref: R(investedNow)}, target: {ref: R(target)}, byAge: {person: 'owner', age: 55}}` | State the target source and assumptions. If the owner's birth date or age is missing, say so and offer to record it. |
+| Q25 | `retirement.target {realReturn: {value: 0.03, source: 'owner', evidence: 'returns are 3 percent'}}` and the default call, then `calculate.subtract {operands: [R(months at 3%), R(months at 4%)], label: 'months later'}` | Report both dates and the difference in months. |
+| Q26 | `retirement.target {withdrawalRate: {value: 0.035, source: 'owner', evidence: '3.5 percent withdrawal rate'}}` | Report the target; note the rate is inside the allowed range of 2 to 6 percent. |
+| Q27 | `retirement.target {}`, then `retirement.target {monthlySavings: {expr: {operation: 'add', operands: [R(monthlySavings), {assumption: {name: 'extraMonthlySavings', value: 1000, unit: 'usd_per_month', source: 'owner', evidence: '$1,000 more a month'}}]}}}`, then `calculate.subtract` on the two `months` figures | Report both dates and the months saved. |
+| Q28 | `tax.estimate {}`, then `retirement.after_tax {hypothetical: [{treatment: 'pretax', value: {value: 15000000, source: 'owner', evidence: '$15 million in retirement accounts'}}, {treatment: 'taxable', value: {value: 15000000, source: 'owner', evidence: '$15 million in a brokerage account'}}], ordinaryRate: {ref: R(marginal.federal)}, stateRate: {ref: R(marginal.state)}, capitalGainsRate: {ref: R(marginal.capitalGains)}}`. No basis is passed: the owner stated none. | Report the pre-tax row's after-tax value. For the brokerage row, `taxOnWithdrawal` and `afterTax` come back unavailable with a `no_cost_basis` gap: say the tax depends on the cost basis and ask for it; never supply one. Explain where the tax shows up and when the money can come out, citing the treatment pack. Never call one better. |
+| Q29 | `retirement.access {people: 'both'}` | Read each milestone with its pack citation (59 and a half, rule of 55, Roth basis, HSA at 65). |
+| Q30 | `retirement.access {people: 'both'}` | Report the RMD start age and date per person and the birth-year rule cited. |
+| Q31 | `retirement.bridge {retireAge: {value: 50, source: 'owner', evidence: 'stop working at 50'}, person: 'owner', spending: R(Q01 total)}` or with `definition: 'household_spending'` | Report spending needed until access age against accessible money, the shortfall or surplus, and the exceptions the tool notes. Recommend nothing. |
+| Q32 | `accounts.net_worth {groupBy: 'treatment'}` | List the accounts per treatment from the groups; name accounts whose treatment is inferred from kind. |
+| Q33 | `tax.estimate {}`, then `retirement.after_tax {kinds: ['taxable', 'brokerage'], ordinaryRate: {ref: R(marginal.federal)}, stateRate: {ref: R(marginal.state)}, capitalGainsRate: {ref: R(marginal.capitalGains)}}` | Report unrealized gain and the tax figure; state the `missing_fact` gap for positions with no cost basis. |
+| Q34 | `tax.estimate {}` | Report federal, state and self-employment projections, kind and as-of; say they come from the last planning run. |
+| Q35 | `tax.estimate {}` and `household.deadlines {from: today}` | Report required, paid and remaining safe-harbor amounts and the next due date. |
+| Q36 | `tax.estimate {whatIf: {extraIncome: {value: 20000, source: 'owner', evidence: 'an extra $20,000 of business income'}, incomeType: 'business'}}` | Report `whatIf.totalDelta` and its parts. |
+| Q37 | `tax.estimate {}` | Report `federal.selfEmployment`. |
+| Q38 | `tax.room {person: 'owner', types: ['solo401k_pretax', 'solo401k_employer', 'employee_deferral']}` | Report limit, used and remaining per type, and the deadline. |
+| Q39 | `tax.room {person: 'both', types: ['traditional_ira', 'roth_ira']}` | Report remaining room and the deadline; say when income limits apply (pack). |
+| Q40 | `tax.room {types: ['hsa']}` | Report remaining room; say coverage type comes from the stored fact. |
+| Q41 | `accounts.list {}`, then `spending.total {measure: 'inflow', window: 'ytd', include: {accounts: [<529 account ids>]}}`, then `tax.room {types: ['plan529_state_deduction']}` | Report contributions and the deductible part; cite the state pack. |
+| Q42 | `tax.room {types: ['dependent_care']}` | Report the limit; say payroll elections are outside the household ledger (gap) so used is unknown. |
+| Q43 | `goals.pace {}` | Report each goal's pace as returned. |
+| Q44 | `accounts.net_worth {groupBy: 'part'}`, `spending.total {measure: 'spending'}`, then `calculate.divide {operands: [R(part cash), R(spending perMonth)], label: 'months of cover'}` | Report months of cover; name the accounts counted as cash. |
+| Q45 | `spending.recurring {status: 'active'}` | List the charges with cadence and annual cost, and the total. |
+| Q46 | `spending.recurring {status: 'new', since: <date three months ago>}` | Pick the date from today; list new charges. |
+| Q47 | `spending.recurring {status: 'all', since: '2026-06-01'}` | List stopped charges and those whose `changed` is set. |
+| Q48 | `spending.compare {measure: 'spending', a: {window: 'custom', from: '2025-01', to: '2025-10'}, b: {window: 'custom', from: '2026-01', to: '2026-10'}, groupBy: 'category'}` | Choose matching complete months; report the difference and the largest group deltas. |
+| Q49 | `spending.compare {measure: 'spending', a: {window: 'custom', from: '2025-06', to: '2025-08'}, b: {window: 'custom', from: '2026-06', to: '2026-08'}}` | Say which months "summer" means (an assumption, source default). |
+| Q50 | `spending.compare {measure: 'spending', include: {categories: ['Dining & Drinks', 'dining']}, a: {window: 'custom', from: '2026-02', to: '2026-04'}, b: {window: 'custom', from: '2026-08', to: '2026-10'}}` | State the three-month windows chosen and report the ratio. |
+| Q51 | `spending.projection {definition: 'household_spending', years: 10, obligations: ['mortgage']}` | Report the payoff year and the spending after, as returned; say the stated escrow continues as housing (pack). If `obligations.mortgage` is missing, the change is unavailable: report the gap and offer to record the fact. |
+| Q52 | `spending.projection {definition: 'household_spending', years: 15, obligations: ['childcare']}` | Report each change date and new amount, and how each was derived. A change whose new amount is not stated (no `obligations.childcare` stage amount and no owner assumption) is listed as unavailable and not applied; say so and offer to record it. |
+| Q53 | `spending.obligations {obligations: ['mortgage']}` | Report end date, monthly payment and the derivation (stated payoff date or amortization). |
+| Q54 | `spending.obligations {obligations: ['childcare']}` | Report each child's change dates and the pack rule used. |
+| Q55 | `spending.obligations {obligations: ['plan529']}` | Report the end dates and the college-age assumption. |
+| Q56 | `household.health {}` | List stale accounts with last data dates and ages. |
+| Q57 | `household.health {}` | Report uncategorized and guessed counts; offer the Confirm items. |
+| Q58 | `household.health {}` | List accounts whose `lastData` is empty. |
+| Q59 | `accounts.list {}`, then `update_account.owner {id, owner: 'owner'}` (chat purpose) | Pick the account by name and current owner; if two match, ask which. Confirm with the receipt. |
+| Q60 | `transactions.search {text: 'warehouse', limit: 5}`, then `categorize.merchant_rule {merchant: <normalized merchant from a row>, category: 'Groceries'}` | Confirm the rule and how many rows it reclassified. |
+| Q61 | `household.health {}` (its `yearend.items` lists each expected document's key and issuer), then `answer.yearend_mark {itemKey: <that item's key>, reason: 'Account closed this year'}` | Pick the item by issuer and form; use the owner's reason in their words. |
+| Q62 | `recommendations.list {}`, then `act_on_recommendation.decide {decisionId, point: 1}` | Name the point decided and its figures from the result. |
+| Q63 | `goals.list {}`, then `update_goal.archive {id}` | Confirm with the receipt. |
+| Q64 | `recommendations.list {}`, then `advisor_review.send {recId}` | Confirm it is waiting on the advisor. |
+| Q65 | `refresh.run_job {job: 'simplefin-sync'}` | Report the run status; if the connection is not set up, give the in-app link to Settings. |
 | Q66 | none | Say Fathom does not have that: it does not select securities. Offer what it does have (contribution room, account treatment). |
 | Q67 | none | Say Fathom does not have that: it has no live market data; holdings values are as of the last import. |
-| Q68 | none | Say Fathom does not have that: it never moves money. Offer `tax_estimate` and the due date. |
+| Q68 | none | Say Fathom does not have that: it never moves money. Offer `tax.estimate` and the due date. |
 
 ## 3. Tool catalog
 
 ### Figure envelope
 
-Every number a new tool returns is a figure:
+Every number a read operation returns is a figure:
 
 ```
-{ value, unit, label, kind, asOf, window?, ref, provenance, gaps }
+{ value, unit, label, kind, asOf, window?, quote, ref, provenance, gaps }
 ```
 
 1. `value`: a finite number, an ISO date string when `unit` is `date`, or null when the figure
    is unavailable (then `unavailable` holds the gap code and the gap explains it).
 2. `unit`: `usd`, `usd_per_month`, `usd_per_year`, `ratio`, `days`, `months`, `years`, `age`,
-   `date`, `count`. Percents are never a unit. A `ratio` result is any finite number (a growth of 1.4, a
-   negative change of minus 0.2); bounds belong to rate arguments, not to results.
+   `date`, `count`. Percents are never a unit. A `ratio` result is any finite number (a growth of
+   1.4, a negative change of minus 0.2); bounds belong to rate arguments, not to results.
 3. Precision by unit: `usd`, `usd_per_month` and `usd_per_year` round to cents (`round` from
-   `src/calc/pace.mjs`); `ratio` is not rounded (full double precision; `stated` text shows 6
-   significant digits at most); `months` is an integer when it counts calendar months and a
-   projection's months round up to the next whole month, as `dated` does; `years` round to 2
+   `src/calc/pace.mjs`); `ratio` is not rounded (full double precision; `stated` and `quote` text
+   show 6 significant digits at most); `months` is an integer when it counts calendar months and
+   a projection's months round up to the next whole month, as `dated` does; `years` round to 2
    decimals; `days` round to 2 decimals; `age` is an integer or a half year (59.5); `count` is an
-   integer. Rounding happens
-   once, when the figure is built, never on an input that feeds another figure (calculate works
-   on the unrounded inputs and rounds its own result).
+   integer. Rounding happens once, when the figure is built, never on an input that feeds another
+   figure (`calculate` works on the unrounded inputs and rounds its own result).
 4. `label`: plain words, no digits, as the current `calc:targets` figures do.
 5. `kind`: the existing letters: `a` actual, `p` projected, `e` estimate, `m` model, `t` target.
 6. `asOf`: the latest data date the figure depends on (the newest row, balance or planner run it
    reads), not today.
 7. `window`: `{ from: 'YYYY-MM', to: 'YYYY-MM', months }` when the figure covers a period.
-8. `ref`: the figure reference that reproduces this figure (see below), filled in by the tool so
-   the model copies it rather than composing one. Every figure a referenceable read tool returns
+8. `quote` (C3): the figure as the answer must write it, built by `envelope` from `value` and
+   `unit`: digits, never words; `$12,345.67` for money, unsigned, with `direction: 'out'` beside
+   it for money leaving the household (the answer says "spent" or "paid", never a minus sign);
+   `4%` for a ratio shown as a percent, `18 months`, `2031-06`, `59 and a half`. A stored figure
+   from `household.figures` keeps its `{f:key}` token as `token`, and `quote` is that token. This
+   closes the live failure where the model restated or recomputed a stored figure (section 8).
+9. `ref`: the figure reference that reproduces this figure (see below), filled in by the tool so
+   the model copies it rather than composing one. Every figure a referenceable operation returns
    carries one.
 
-This generalizes the `calc:targets` and `calc:pace` figure shape (`{v, src, kind, label, notes,
-locator: {calc, inputs, parameters, window, sources, steps, computedOn}}`). T1 moves `figure`,
-`rowsSource` and `mergeSources` out of `src/calc/targets.mjs` into one shared module,
-`src/calc/figure.mjs`, which builds both shapes, and `targets.mjs` imports them from there.
-Stored figures keep their shape in the store. Two adapters in `src/calc/figure.mjs` turn the
-existing shapes into envelopes, so `get_figures` and `get_pace` results are referenceable:
-
-1. `fromStored(row, { ref })` for a `figures` row: `value` from `v`, `unit` from
-   `locator.unit` when stated else `usd`, `kind` and `label` as stored, `asOf` from
-   `locator.computedOn` else the source's `as_of`, `provenance.calc` from `locator.calc` else the
-   row's `src`, `inputs`, `sources` and `steps` from the locator, `unavailable` from
-   `unavailable_reason`, and the untouched `{ src, locator }` kept as `provenance.stored`.
-2. `fromPace(fig, { ref })` for a `paceFigure` (`{v, src, kind, label, locator}`): the same
-   mapping, with `unit` from `locator.unit` and `asOf` from `locator.dataThrough`. Today
-   `paceFigure` (`src/calc/pace.mjs`) carries neither and rounds every value to cents, so T1
-   changes the producer: `paceFigure` takes `unit` (required) and `dataThrough` options, writes
-   both into the locator, and rounds by unit with the envelope's rule. The callers in
-   `src/calc/pace.mjs` pass, per figure: `goalPace` target, actual, expected, tolerance and gap
-   `usd`, and `gapDays` `days`; `paceRollup` counts and total `count`; `monthlyPace` actual, plan
-   and gap `usd`; `paceMeter` used and limit `usd`, and ratio `ratio` (no longer rounded). Each
-   caller passes the `dataThrough` its result already reports (the goal's `actual.dataThrough`,
-   the rollup's and the meter's `dataThrough`). `fromPace` refuses a pace figure with no unit, so a
-   new producer cannot fall back to dollars.
-3. Stored `figures` rows are money values by the `get_figures` contract, so `fromStored` defaults
-   to `usd` only for rows whose locator names no unit; a stored row that is not money must state
-   its unit in the locator.
-
-`get_figures` keeps every current field (`key`, `v`, `kind`, `label`, `source`, `unavailable`)
-and adds the envelope fields beside them, with `ref: { tool: 'get_figures', args: { keys: [key] },
-path: '0' }`. `get_pace` keeps its result and adds an envelope beside each figure it holds. Both
-changes are T1's.
+T1 (merged) built `figure`, `envelope`, `fromStored` and `fromPace` in `src/calc/figure.mjs`, and
+`get_figures` and `get_pace` already return envelopes beside their old fields. C1 moves those to
+`household.figures` and `goals.pace` with their refs re-pointed:
+`ref: { tool: 'household', args: { operation: 'figures', keys: [key] }, path: '0' }` and
+`ref: { tool: 'goals', args: { operation: 'pace' }, path: <dotted path>.envelope }`. C3 adds
+`quote` and `direction` in `envelope`, so every producer gets them at once.
 
 ### Provenance and data gaps
 
@@ -302,162 +373,227 @@ gaps = [ { code, message, amount?, count? } ]
 
 1. `accounts` carry labels and masks only, never account numbers.
 2. `assumptions[].stated` is the assumption as text ("4%", "$1,000 a month") so it can ground.
-   `evidence` is the owner's words for an owner-sourced assumption.
+   `evidence` is the owner's words for an owner-sourced assumption. `name` and `unit` come from
+   the parameter the assumption was passed in (or from the operand, inside `calculate`).
 3. `packRefs` name the pack entry that states each rule the figure applies.
 4. Gap codes: `uncategorized_rows`, `guessed_rows`, `account_no_history`, `incomplete_month`,
    `stale_account`, `outside_household_ledger`, `missing_fact`, `carried_balance`,
-   `unclassified_category`, `no_cost_basis`, `unequal_periods`. `amount` and `count` appear when the
-   tool can measure the gap. A gap never changes the figure; the tool reports what it left out.
+   `unclassified_category`, `no_cost_basis`, `unequal_periods`. `amount` and `count` appear when
+   the tool can measure the gap. A gap never changes the figure; the tool reports what it left out.
 5. A result's top-level `gaps` is the union of its figures' gaps, deduplicated by code and message.
 
 ### Figure references and chaining
 
 MCP is stateless per request, so references are re-evaluable, not session handles.
 
-1. A `ref` is `{ tool, args, path }`: a read tool call and a dotted path to a figure in its result
-   (`total`, `groups.2.figure`, `federal.projected`, `series.11.total`).
-2. `calculate`, `independence_target`, `project_growth`, `spending_projection`, `bridge_check` and
-   `after_tax_value` accept refs. They re-run the call server-side with the same `ctx` (same store,
-   same clock) through `callTool`, take the figure at `path`, and append its provenance as an input.
-3. Only read tools are referenceable. A ref to a write tool, to an unknown tool, or to a path that
-   is not a figure is `bad_input`.
+1. A `ref` is `{ tool, args, path }`: a read call (its `args` include `operation`) and a dotted
+   path to a figure in its result (`total`, `groups.2.figure`, `federal.projected`,
+   `series.11.total`).
+2. `calculate` and the operations whose parameters accept an Operand (`retirement.target`,
+   `retirement.growth`, `retirement.after_tax`, `retirement.bridge`, `spending.projection`)
+   re-run the referenced call server-side with the same `ctx` (same store, same clock) through
+   `callTool`, take the figure at `path`, and append its provenance as an input.
+3. Only operations marked `referenceable` can be referenced. A ref to a write tool, to an unknown
+   tool or operation, or to a path that is not a figure is `bad_input`.
 4. Nesting depth is at most 3 (a ref whose call holds a ref whose call holds a ref). Refs to
    `calculate` are allowed; that is chaining.
 5. Literal numbers enter only as named assumptions with a source. A tool never accepts a bare
    number where a figure belongs.
 6. `source: 'fact'` requires `factKey`; the tool reads that fact and refuses a value that differs.
    `source: 'preference'` requires `preferenceId` and checks the preference exists.
-   `source: 'default'` is accepted only when the value equals the tool's documented default.
+   `source: 'default'` is accepted only when the value equals the operation's documented default.
    `source: 'owner'` requires `evidence`, the owner's words. In Ask the tool checks the value
    against the owner's messages of this conversation and refuses otherwise; over MCP the evidence
-   is kept verbatim in provenance and checked against itself.
-   The check is `assumptionStated(value, unit, statements)` in `src/tools/assumption-evidence.mjs`
-   (T5). It does not use `requireEvidence` from feat/ask-actions, which compares bare numbers, so
-   "4 percent" yields 4 and a withdrawal rate of 0.04 would fail. Normalization, deterministic:
-   for `ratio` units, a number followed by `%`, `percent`, `per cent` or `pct` (optional space)
-   maps to the number divided by 100, and a bare decimal below 1 ("0.04") maps to itself; both
-   forms are accepted and compared within 1e-9. For `usd` units, the same amounts and magnitudes
-   `statedAmounts` reads (`$`, commas, `k`, `thousand`, `m`, `million`), compared to the cent. For
-   `age` and `years`, a whole or half number ("59 and a half", "59.5"). Statements come from
-   `ctx.ownerStatements()`, which T17 wires to `ownerStatements` from
-   `src/actions/evidence.mjs` once feat/ask-actions has merged (that sibling file is read, never
-   edited). Without `ctx.ownerStatements`, Ask refuses owner assumptions and MCP checks the
-   value against `evidence` alone.
-7. Every referenceable read tool fills `ref` on each figure it returns; `assertRefsResolve` (T1,
-   `test/helpers/figures.mjs`) re-evaluates every ref in a result and asserts an equal figure, and
-   every read-tool ticket runs it over its results.
+   is kept verbatim in provenance and checked against itself. The check is
+   `assumptionStated(value, unit, statements)` in `src/tools/assumption-evidence.mjs` (C3), not
+   `requireEvidence`, which compares bare numbers (so "4 percent" yields 4 and a rate of 0.04
+   would fail). Normalization, deterministic: for `ratio` units, a number followed by `%`,
+   `percent`, `per cent` or `pct` (optional space) maps to the number divided by 100, and a bare
+   decimal below 1 ("0.04") maps to itself; both forms are accepted and compared within 1e-9. For
+   `usd` units, the amounts and magnitudes `statedAmounts` reads (`$`, commas, `k`, `thousand`,
+   `m`, `million`), compared to the cent. For `age` and `years`, a whole or half number ("59 and a
+   half", "59.5"). Statements come from `ctx.ownerStatements()`, which C2 wires to
+   `ownerStatements` in `src/actions/evidence.mjs`. Without `ctx.ownerStatements`, Ask refuses
+   owner assumptions and MCP checks the value against `evidence` alone.
+7. Every referenceable operation fills `ref` on each figure it returns; `assertRefsResolve`
+   (T1, `test/helpers/figures.mjs`) re-evaluates every ref in a result and asserts an equal
+   figure, and every read ticket runs it over its results.
 
 ### Scopes and MCP behavior
 
-1. Every new read tool has scope `read`. Write scopes are listed per tool. `save_spending_definition`
-   and `forget_preference` use `write:preferences` from feat/ask-actions.
-2. MCP lists tools sorted by name. A call outside the key's scopes returns an `isError` result
-   starting "Permission denied:" before argument validation; keep that order. Every ticket that
-   adds a write tool adds a test that a read-only key gets that denial for it.
-3. Ask runs the same registry through `createRegistryServer`. Every tool is offered to both Ask
-   and MCP under its scope; write tools in Ask are offered only for purpose `chat`. No tool in
-   this catalog is `mcpOnly`. The feat/ask-actions undo tools are `mcpOnly` on that branch; T17
-   removes that flag from them, so all nine undo tools are on both surfaces (Ask also keeps its
-   Undo button).
-4. Results carry account masks only, resolve scenario tokens to plain text and never include
+1. Every read operation has scope `read`. Each write operation names its own scope; the scopes
+   are the existing six plus the six C2 adds (section 6). Keys keep their stored scopes.
+2. A tool is listed to a key when the key holds the scope of at least one of its operations. The
+   listed schema's `operation` enum holds only those operations, and the description still lists
+   all of them so the model can say what it cannot do with this key.
+3. A call names an operation outside the key's scopes: the result is an `isError` text starting
+   `Permission denied: <tool>.<operation> needs the <scope> scope` before any other argument
+   validation. An unknown operation is `bad_input` listing the tool's operations. Every ticket
+   that adds a write operation tests that a read-only key gets the denial for it.
+4. MCP lists tools sorted by name, with `readOnlyHint` true for read tools and false for write
+   tools; `destructiveHint` stays false (the one destructive operation, `update_account.merge`,
+   needs `confirm: true` and the owner's confirming words).
+5. Ask runs the same registry through `createRegistryServer`. Read tools are offered for every
+   purpose that offers tools today; write tools only for purpose `chat`. `undo` is MCP-only on
+   main (as the five `undo_*_action` tools are) until C2 offers it to Ask too.
+6. Results carry account masks only, resolve scenario tokens to plain text and never include
    hidden recs (existing rules).
-5. Write results carry the ask-actions receipt `{ id, scope, label, before, after, actorId, ts,
+7. Write results carry the ask-actions receipt `{ id, scope, label, before, after, actorId, ts,
    undone, planningPending }` plus `undo: { available, tool?, args?, reason? }`. When `available`
-   is true, `tool` and `args` are a call that validates against that tool's schema: either
-   `undo_<scope>_action` with `{ id: <receipt id> }`, or a named domain inverse. When false,
-   `reason` says why.
-6. Receipt restoration. `undoAction` on feat/ask-actions restores only the kinds in its fixed
-   `TABLES` map. T17 replaces that map with `registerReceiptKind(kind, { table, pk } or { restore
-   })` in `src/actions/receipts.mjs`, keeps the existing kinds, and adds the four undo tools the new
-   scopes need: `undo_account_action` (write:accounts), `undo_category_action`
-   (write:categories), `undo_confirm_action` (write:confirm) and `undo_decision_action`
-   (write:decisions). Each write ticket registers the receipt kinds it creates, from its own
-   module, and tests that undo restores them.
+   is true, `tool` is `undo` and `args` is `{ operation: 'undo', id: <receipt id> }`; there are no
+   per-scope undo tools and no domain-inverse undo calls. A receipt kind whose undo is a domain
+   inverse (a decision decide is undone by a revisit, a Confirm answer by a reopen, a pack toggle
+   by the opposite toggle) registers a `restore` hook that performs that inverse (C2's
+   `registerReceiptKind`). When false, `reason` says why.
+8. Undo checks the receipt's scope against the caller's scopes after loading the receipt and
+   before anything else, and refuses another person's change or an item edited since (existing
+   rules).
 
 ### Limits
 
 1. `calculate`: at most 20 operands per expression, expression depth at most 6.
 2. Refs: nesting depth at most 3 across all tools.
-3. Group lists: `limit` default 25, max 200, plus an `other` group so groups always sum to the total.
+3. Group lists: `limit` default 25, max 200, plus an `other` group so groups always sum to the
+   total.
 4. Periods: at most 120 months (`MAX_MONTHS` in `src/accounts/trend.mjs`).
-5. Every new tool description is at most 300 characters.
+5. A tool description is at most 900 characters, an operation summary at most 140, and the whole
+   listed catalog at most 30,000 characters (Design rule).
 6. A tool result is at most 256 KB of JSON; past that the tool truncates its longest list and sets
    `truncated: true`.
-
-### Unchanged tools
-
-`household_summary`, `get_facts`, `list_accounts`, `list_positions`, `list_recommendations`,
-`get_recommendation`, `list_deadlines`, `list_goals`, `packs_status`,
-`advisor_status`, `set_recommendation_status`, `set_recommendation_owner`, `list_packs`,
-`get_pack_entry`, `search_pack_entries`, and the feat/ask-actions tools (`get_fact_answer_shapes`,
-`record_household_fact`, `remember_preference`, `set_recommendation_step`, `create_goal`,
-`edit_goal`) stay as they are. The feat/ask-actions `undo_<kind>_action` tools change only by
-losing their `mcpOnly` flag (T17). `pnl_by_month` is removed by T8.
-
-feat/goal-model-v2 adds the goal model fields to `create_goal` and `edit_goal` (kind, owner,
-priority, status and the kind fields: `targetLow`, `targetHigh`, `floor`, `taxYear`, `accounts`,
-`split`, `entered`) and to the `list_goals` output; it adds no goal tool. Every amount and date in
-those fields needs the person's words or a stored value, as `target` and `targetDate` do; owner,
-priority, kind and status need none. Owner and person ids follow `OWNER_OPTIONS` (`owner`,
-`spouse`, `joint`) plus dependent keys (`kid`, `kid2`, ...). T23's `goal_row` restore includes
-`done_at`.
 
 ### Shared argument types
 
 | Type | Shape |
 |---|---|
-| Period | `window`: `spending_window` (default), `trailing_12`, `ytd`, `calendar_year`, `custom`; `year` (integer 2000..2100, required with `calendar_year`); `from`, `to` (`YYYY-MM`, required with `custom`, span at most 120 months) |
+| Period | `window`: `spending_window` (default), `trailing_12`, `ytd`, `calendar_year`, `custom`; `year` (integer 2000..2100, required with `calendar_year`); `from`, `to` (`YYYY-MM`, required with `custom`, span at most 120 months). `from` and `to` given without `window` mean `custom`. |
 | Selector | `{ buckets?: Bucket[], categories?: string[] (max 50), classes?: Class[], accounts?: string[] (max 50), merchants?: string[] (normalized, max 50) }` |
 | Bucket | `household`, `business`, `income`, `transfer`, `tax`, `saving`, `excluded` (`BUCKETS`) |
 | Class | `housing`, `debt_service`, `healthcare`, `childcare`, `essential_other`, `discretionary`, `unclassified`, `savings`, `taxes`, `business`, `income`, `transfer`, `excluded` (section 5) |
-| Assumption | `{ name (1..60), value: number, unit, source: 'owner', 'preference', 'fact' or 'default', note? (max 200), evidence? (required for owner), factKey?, preferenceId? }` |
-| Rate bounds | Each rate argument has its own range: `withdrawalRate` 0.02..0.06; `realReturn` minus 0.05..0.10; `ordinaryRate`, `capitalGainsRate`, `stateRate` 0..0.6. `calculate` operands and every result are unbounded finite numbers. |
-| Ref | `{ tool, args: object, path }` |
-| Operand | `{ ref } or { assumption } or { expr: { op, operands, places?, rate?, years? } }` |
+| Assumption | `{ value: number, source: 'owner', 'preference', 'fact' or 'default', evidence? (required for owner), factKey? (required for fact), preferenceId? (required for preference), note? (max 200) }`. Name and unit come from the parameter. |
+| Operand | exactly one of `{ ref: Ref }`, `{ assumption: Assumption plus name (1..60) and unit }`, `{ expr: { operation, operands, places?, rate?, years? } }` |
+| Ref | `{ tool, args: object (with operation), path }` |
+| Rate bounds | Each rate parameter has its own range: `withdrawalRate` 0.02..0.06; `realReturn` minus 0.05..0.10; `ordinaryRate`, `capitalGainsRate`, `stateRate` 0..0.6. `calculate` operands and every result are unbounded finite numbers. |
+
+A parameter typed "Assumption or Operand" accepts either shape; the handler tells them apart by
+their keys.
+
+### Catalog at a glance
+
+Twenty tools: eleven read, nine write. "Ticket" is the ticket that adds the operation (section 7).
+
+| Tool | Kind | Operations (ticket) |
+|---|---|---|
+| `household` | read | summary, facts, fact_shapes, figures, deadlines (C1); health (C5); confirm_items (C8); imports (C10) |
+| `accounts` | read | list, holdings (C1); detail, net_worth (C5); merge_candidates (C8) |
+| `transactions` | read | search (C1; filters C4) |
+| `spending` | read | total, compare, definitions, cash_flow, recurring (C4); obligations, projection (C7) |
+| `business` | read | pnl (C1; upgraded C4); rows (C4) |
+| `tax` | read | estimate, room (C5) |
+| `retirement` | read | target, growth, after_tax (C6); access, bridge (C7) |
+| `goals` | read | list, pace (C1); suggestions (C9) |
+| `recommendations` | read | list, detail, advisor (C1) |
+| `knowledge` | read | packs, search, entry (C1) |
+| `calculate` | read | add, subtract, multiply, divide, sum, min, max, negate, annualize, monthly, percent_of, round_up, compound (C3) |
+| `update_account` | write | rename, mask, owner, kind, merge (C8) |
+| `categorize` | write | transaction, merchant_rule (C8) |
+| `answer` | write | fact (C1); rec_questions, confirm, reopen, yearend_mark (C8) |
+| `act_on_recommendation` | write | status, owner, step (C1); start_over, decide, revisit, pick_point (C9) |
+| `advisor_review` | write | send, verdict, checkin, packet (C9) |
+| `update_goal` | write | create, edit (C1); archive, delete, suggestion (C9) |
+| `update_preferences` | write | remember (C1); curve (C9); forget, save_definition, delete_definition, pack (C10) |
+| `refresh` | write | import_file, retry_import, build_your_plans, run_job (C10) |
+| `undo` | write | undo (C1) |
+
+Every operation below lists its parameters (`?` optional), its scope, what it returns and the old
+names it replaces, live (on main) or planned (the previous revision). Section 9 has the complete
+old-to-new table.
 
 ### Read tools
 
-#### calculate
+#### `household`
 
-Purpose: the only arithmetic the model gets. Combines figures from refs and named assumptions into
-one figure with chained provenance.
+Purpose: what Fathom knows about the household and how complete and current it is. Progress
+label "Looking at your household".
 
-Scope: read
+| Operation | Parameters | Returns | Replaces |
+|---|---|---|---|
+| summary | none | the `household_summary` result, unchanged | live `household_summary` |
+| facts | `keys?` (string[], max 500) | the `get_facts` result, unchanged | live `get_facts` |
+| fact_shapes | none | accepted fact keys and their typed answer shapes for `answer.fact` | live `get_fact_answer_shapes` |
+| figures | `keys?` (string[], max 500) | stored figures with their `get_figures` fields plus the envelope; referenceable | live `get_figures` |
+| deadlines | `from?`, `to?` (`YYYY-MM-DD`) | calendar deadlines sorted by date, unchanged | live `list_deadlines` |
+| health | `accounts?` (ids, max 50) | freshness, last import, category coverage, unavailable figures, pending Confirm, year-end documents, jobs; count figures referenceable | planned `data_health` |
+| confirm_items | `status?` (`pending` default, `answered`, `all`), `kinds?` (string[]), `ids?` (integer[], max 500) | the Confirm queue | planned `list_confirm_items` |
+| imports | none | imported files with id, name, status, parser and counts, newest first | new (covers `GET /api/files`) |
 
-Arguments:
+Scope: read. Behavior changes in C1: `facts` takes up to 500 keys (was 200), because one tool has
+one schema for `keys`.
 
-| Name | Type | Notes |
-|---|---|---|
-| `op` | enum | `add`, `subtract` (first minus the rest), `multiply`, `divide` (two operands), `sum` (one ref whose path is a list of figures, or many operands), `min`, `max`, `negate`, `annualize` (usd_per_month to usd_per_year, times 12), `monthly` (usd_per_year to usd_per_month, divided by 12), `percent_of` (ratio, base), `round_up` (with `places`), `compound` (future value) |
-| `operands` | Operand[] | 1..20 |
-| `places` | 1, 100 or 1000 | `round_up` only, default 1 |
-| `rate` | Operand (ratio, per year) | `compound` only |
-| `years` | Operand (years) | `compound` only |
-| `label` | string 1..80 | required, no digits |
+`health` result: `{ accounts: [ { id, label, mask, kind, lastData, freshness:
+'fresh'|'stale'|'unknown', ageDays, source } ], lastImport: { fileId, name, at, status } or null,
+categories: { rows, uncategorized, guessed, corrected, queueSize } (count figures),
+unavailableFigures: [ { key, label, reason } ], pendingConfirm: { total, byKind }, yearend: {
+year, items: [ { key, form, issuer, status: 'received'|'missing'|'marked' } ] }, jobs: [ { id,
+lastRun, status } ], gaps }`. Reuses `freshnessOf`, `accountFreshness`
+(`src/ingest/freshness.mjs`), `categoryCoverage` (`src/categories/store.mjs`), `pendingItems`
+(`src/ingest/confirm.mjs`), `yearendChecklist` (`src/yearend/expected.mjs`),
+`figures.unavailable_reason`, and the job list `listJobs` reads.
 
-Unit algebra is checked: usd plus usd is usd; usd times ratio is usd; usd divided by ratio is usd;
-usd divided by usd is ratio; usd_per_year divided by a per-year ratio (a withdrawal or return rate)
-is usd; usd divided by usd_per_month is months; months times usd_per_month is usd. Adding usd to
-usd_per_year, or any other mismatch, is `bad_input` naming both units. Division by zero is
-`bad_input`.
+`confirm_items` result: `{ items: [ { id, kind, question, options: [ { id, label } ], context
+(masks only), status, answer?, final? } ] }`. Reuses `queueAccountPairs`, `queueCategoryChecks`,
+`listItems`, `getItem`, `finalReason`.
 
-Result: `{ figure }`: one figure, `kind` the weakest of its inputs (a, then e, m, p, t), `asOf` the
-oldest input `asOf`, `provenance.inputs` holding every operand's figure and provenance,
-`provenance.formula` the expression in words ("Q01 yearly spending divided by withdrawalRate"),
-`gaps` the union of the inputs' gaps. Q02 as a calculation: `divide(ref to Q01 total, assumption
-withdrawalRate 0.04 source owner)`.
+#### `accounts`
 
-Reuses: `round` from `src/calc/pace.mjs`, `figure` from the new `src/calc/figure.mjs`, the ref
-resolver `src/tools/refs.mjs` (T5) over `callTool`.
+Purpose: accounts, balances, holdings and net worth. Masks only. Progress label "Looking at your
+accounts".
 
-#### aggregate_transactions
+| Operation | Parameters | Returns | Replaces |
+|---|---|---|---|
+| list | none | accounts with latest balance and its date, unchanged | live `list_accounts` |
+| detail | `id` | one account: the `accountDetail` result (`account`, `fresh`, `asOf`, `trendKey`, `feeds`, `syncable`) with its balance as a figure | new (covers `GET /api/accounts/:id`) |
+| holdings | `id?` (account id) | positions with symbol, name, quantity, price, value, cost basis | live `list_positions` (its `accountId` becomes `id`) |
+| net_worth | `accounts?` (ids, max 50), `includeBusiness?` (default true), `groupBy?` (`part` default, `group`, `treatment`), `series?` (default false), `months?` (1..120, default 12) | `{ total, groups: [ { key, label, figure, accounts } ], series?: [ { month, total, groups } ], carried: [ { id, label, lastDate } ], gaps }`; referenceable | planned `net_worth` |
+| merge_candidates | `id` | `{ items: [ { id, label, inst, kind, mask, lastDataDate, mirror, plan: { keepId, keepLabel, moves }, refused? } ] }` | planned `list_merge_candidates` |
 
-Purpose: deterministic sums of transactions with explicit selection, grouping and period: the tool
-that answers Q01.
+Scope: read. `net_worth` gives `carried_balance` gaps for balances carried forward; `treatment`
+groups use `ACCOUNT_TREATMENT` (PR #83) by account kind, overridden by the `accounts.planType`
+fact (C7); a `retirement` or `ira` account without one is named in a `missing_fact` gap. Reuses
+`buildTrend`, `groupOfKind`, `PARTS`, `GROUPS` (`src/accounts/trend.mjs`), `accountFreshness`,
+`mergePlan`, `accountMergeCandidates`.
 
-Scope: read
+#### `transactions`
 
-Arguments:
+Purpose: find transaction rows to show examples. It never sums; totals come from `spending`.
+Progress label "Looking through your transactions".
+
+| Operation | Parameters | Returns | Replaces |
+|---|---|---|---|
+| search | `accountId?`, `from?`, `to?` (`YYYY-MM-DD`), `minAmount?`, `maxAmount?`, `category?`, `text?` (1..200), `limit?` (1..200, default 50); `ids?` when PR #76 is on main; from C4 also `bucket?` (Bucket), `class?` (Class), `merchant?` (normalized, 1..200), `cursor?` (the `next` of an earlier page) | `{ rows: [ { id, accountId, date, amount, description, category } ], truncated, total }`; from C4 each row also has `bucket`, `class`, `layer`, `merchant`, and the result has `next` (a date-and-id keyset cursor, as `GET /api/accounts/:id/transactions` pages) while rows remain | live `query_transactions` |
+
+Scope: read. `category` in C4 rows is the resolved category and `layer` the `resolveCategories`
+layer (`correction`, `import`, `guess`, `uncategorized` and so on). The answerer's special
+handling of `query_transactions` rows (unsigned amounts for grounding, row-named sources) moves to
+`transactions` in C1.
+
+#### `spending`
+
+Purpose: spending, income and cash flow from categorized transactions, with every gap reported.
+Progress label "Adding up your spending".
+
+| Operation | Parameters | Returns | Replaces |
+|---|---|---|---|
+| total | `measure?`, `groupBy?`, `include?`, `exclude?` (Selector), `definition?`, Period fields, `annualize?`, `scope?`, `limit?` | one total plus groups; referenceable | planned `aggregate_transactions` |
+| compare | as `total` without the Period fields, plus `a`, `b` (Period objects) | difference, ratio and group deltas; referenceable | planned `compare_periods` |
+| definitions | none | built-in and saved spending definitions | planned `list_spending_definitions` |
+| cash_flow | Period fields (default `ytd`), `scope?` (default `all`) | monthly inflow, outflow, net and business transfers; referenceable | planned `cash_flow` |
+| recurring | `status?`, `since?`, `cadence?`, `scope?`, `minOccurrences?`, `limit?` (default 50) | repeating charges with cadence and annual cost; referenceable | planned `recurring_charges` |
+| obligations | `obligations?` (`mortgage`, `childcare`, `plan529`; default all), `horizonYears?` (1..40, default 30), `changes?` | each obligation's amount now, end or change dates, new amounts and derivation; referenceable | planned `obligation_schedule` (its `kinds` becomes `obligations`) |
+| projection | `base?` (Ref) or `definition?`, `years?` (1..40, default 10), `obligations?`, `changes?` | yearly spending forward with each obligation applied on its date; referenceable | planned `spending_projection` |
+
+Scope: read. Ticket: C4 for the first five, C7 for `obligations` and `projection`.
+
+`total` parameters:
 
 | Name | Type | Default | Notes |
 |---|---|---|---|
@@ -471,7 +607,7 @@ Arguments:
 | `scope` | `household`, `business`, `all` | `household` | business accounts via `businessAccount` and the `accounts.businessEntity` fact; for `business`, spending means business-bucket outflows on business accounts |
 | `limit` | integer 1..200 | 25 | groups beyond it fold into `other` |
 
-Result:
+`total` result:
 
 ```
 { total: Figure, perMonth: Figure, months, window,
@@ -481,275 +617,58 @@ Result:
   notes: [string], gaps: [Gap] }
 ```
 
-`total` is one figure over the whole selection, however many classes or categories the include set
-names (the `essential` definition returns one total for its five classes). `excluded[].matched` is every window outflow on in-scope accounts that matches the selector, in or
-out of the measure's base, so the model can say "income tax payments of X were left out" even when
-taxes were never household spending; `removed` is the part that left the total. Groups always sum
-to `total`. Gaps: `uncategorized_rows` and `guessed_rows` with amount and count (from the
+`total` is one figure over the whole selection, however many classes or categories the include
+set names (the `essential` definition returns one total for its five classes).
+`excluded[].matched` is every window outflow on in-scope accounts that matches the selector, in or
+out of the measure's base, so the model can say "income tax payments of X were left out" even
+when taxes were never household spending; `removed` is the part that left the total. Groups always
+sum to `total`. Gaps: `uncategorized_rows` and `guessed_rows` with amount and count (from the
 `guess` and `uncategorized` layers), `account_no_history` for spending accounts that are silent or
-have no complete month (the `silent` and `incomplete` lists, card accounts included),
-`incomplete_month` when the window is shorter than requested, `outside_household_ledger` when the
-result includes healthcare and the facts show W-2, S corp or self-employment income (premiums paid
-through payroll or a business account are not household transactions), `unclassified_category`
-for household rows whose category has no class.
+have no complete month (card accounts included), `incomplete_month` when the window is shorter
+than requested, `outside_household_ledger` when the result includes healthcare and the facts show
+W-2, S corp or self-employment income, `unclassified_category` for household rows whose category
+has no class. The pure aggregation lives in `src/calc/aggregate.mjs`; `spendingInputs` and
+`total` share one row selection so `total {measure: 'spending'}` over the spending window equals
+`spendingInputs().spendTotal` exactly (a test asserts it). Reuses `resolveSpendingWindow`,
+`spendingInputs`, `isBusinessAccount` (`src/calc/targets.mjs`), `resolveCategories`,
+`matchTransfers`, `normalizeMerchant`, `businessAccount` (`src/categories/resolve.mjs`),
+`loadCategoryInputs` (`src/categories/store.mjs`), `CATEGORY_CLASSES` and `BUILTIN_DEFINITIONS`
+(T2, `src/calc/classes.mjs`). Definitions resolve through `resolveDefinition(db, id)` in
+`src/spending/definitions.mjs` (C4 creates it for built-ins; C10 adds saved rows).
 
-Reuses: `resolveSpendingWindow`, `spendingInputs`, `isBusinessAccount` (`src/calc/targets.mjs`),
-`resolveCategories`, `matchTransfers`, `normalizeMerchant`, `businessAccount` (`src/categories/
-resolve.mjs`), `loadCategoryInputs` (`src/categories/store.mjs`), `CATEGORY_CLASSES` (T2). The
-pure aggregation lives in `src/calc/aggregate.mjs`; `spendingInputs` and `aggregate` share one row
-selection so `aggregate {measure: 'spending'}` over the spending window equals `spendingInputs`'
-`spendTotal` exactly (a test asserts it).
+`compare` result: `{ a: { total, window }, b: { total, window }, difference: Figure (b minus a),
+ratio: Figure (b over a, absent when a is zero), groups: [ { key, label, a, b, difference } ],
+gaps }`. `unequal_periods` gap when the month counts differ (the model should then pass
+`annualize: true` or matching months). `limit` applies to the union of groups.
 
-#### compare_periods
+`definitions` result: `[ { id, name, source: 'builtin'|'saved', def: { include?, exclude? },
+packRef?, preferenceId?, updatedAt? } ]`. Built-ins: `household_spending`, `essential`,
+`discretionary`, `core_living` (section 5).
 
-Purpose: the same aggregation over two periods with the difference, the ratio and per-group deltas.
+`cash_flow` result: `{ months: [ { month, household: { inflow, outflow, net }, business: {
+inflow, outflow, net }, transfersBusinessToHousehold, transfersHouseholdToBusiness } ], totals: {
+same fields }, gaps }`, every number a figure. A transfer between a business and a household
+account is a pair `matchTransfers` finds across the two sides; it appears only in the transfer
+fields, never in inflow or outflow.
 
-Scope: read
-
-Arguments: every `aggregate_transactions` argument except the period fields, plus `a` and `b`
-(each a Period object; `a` is the earlier by convention). `limit` applies to the union of groups.
-
-Result: `{ a: { total, window }, b: { total, window }, difference: Figure (b minus a), ratio:
-Figure (b over a, absent when a is zero), groups: [ { key, label, a: Figure, b: Figure,
-difference: Figure } ], gaps }`. `unequal_periods` gap when the month counts differ (the model
-should then pass `annualize: true` or matching months).
-
-Reuses: `src/calc/aggregate.mjs` (T6) twice, `figure`.
-
-#### cash_flow
-
-Purpose: monthly inflow, outflow and net for household and business, with transfers between them
-separated.
-
-Scope: read
-
-Arguments: Period fields (default `ytd`), `scope` (`household`, `business`, `all`, default
-`all`).
-
-Result: `{ months: [ { month, household: { inflow, outflow, net }, business: { inflow, outflow,
-net }, transfersBusinessToHousehold, transfersHouseholdToBusiness } ], totals: { same fields },
-gaps }`, every number a figure. A transfer between a business and a household account is a pair
-`matchTransfers` finds across the two sides; it appears only in the transfer fields, never in
-inflow or outflow.
-
-Reuses: `matchTransfers`, `businessAccount`, `resolveCategories`, `loadCategoryInputs`,
-`src/calc/aggregate.mjs`.
-
-#### recurring_charges
-
-Purpose: detect repeating charges by merchant: cadence, amount stability, annual cost, last and
-next expected date, and what is new or stopped.
-
-Scope: read
-
-Arguments:
-
-| Name | Type | Default | Notes |
-|---|---|---|---|
-| `status` | `active`, `new`, `stopped`, `all` | `active` | new: first seen on or after `since`; stopped: expected date passed by more than one cadence with no charge |
-| `since` | `YYYY-MM-DD` | 90 days before today | for new and stopped |
-| `cadence` | `monthly`, `quarterly`, `annual` | any | |
-| `scope` | `household`, `business`, `all` | `household` | |
-| `minOccurrences` | integer 2..12 | 3 (2 for annual) | |
-| `limit` | integer 1..200 | 50 | |
-
+`recurring` parameters: `status` (`active` default, `new`: first seen on or after `since`,
+`stopped`: expected date passed by more than one cadence with no charge, `all`); `since`
+(`YYYY-MM-DD`, default 90 days before today); `cadence` (`monthly`, `quarterly`, `annual`; any by
+default); `scope` (default `household`); `minOccurrences` (2..12, default 3, 2 for annual).
 Detection: outflows grouped by `normalizeMerchant`; cadence from the median gap between charges
-(monthly 25 to 35 days, quarterly 80 to 100, annual 350 to 380); amount stable when every charge is
-within 10 percent of the median; `changed` set when the last two charges differ by more than 10
-percent.
+(monthly 25 to 35 days, quarterly 80 to 100, annual 350 to 380); amount stable when every charge
+is within 10 percent of the median; `changed` set when the last two charges differ by more than 10
+percent; matched transfers are never recurring charges. Result: `{ charges: [ { merchant,
+cadence, occurrences, firstDate, lastDate, nextExpected, typicalAmount (usd), annualCost
+(usd_per_year), amountStable, changed?: { from, to, on }, status, account: { id, label } } ],
+totalAnnual, gaps }`. New pure detector `src/calc/recurring.mjs`.
 
-Result: `{ charges: [ { merchant, cadence, occurrences, firstDate, lastDate, nextExpected,
-typicalAmount: Figure (usd), annualCost: Figure (usd_per_year), amountStable, changed?: { from:
-Figure, to: Figure, on }, status, account: { id, label } } ], totalAnnual: Figure, gaps }`.
-
-Reuses: `normalizeMerchant`, `loadCategoryInputs`, `matchTransfers` (transfers are never
-recurring charges), new pure detector `src/calc/recurring.mjs`.
-
-#### net_worth
-
-Purpose: net worth now and as a monthly series, by part, group or tax treatment.
-
-Scope: read
-
-Arguments: `accounts?` (ids, max 50), `includeBusiness` (boolean, default true, as the trend does),
-`groupBy` (`part`, `group`, `treatment`, default `part`), `series` (boolean, default false),
-`months` (1..120, default 12).
-
-Result: `{ total: Figure, groups: [ { key, label, figure, accounts: [ { id, label } ] } ], series?:
-[ { month, total: Figure, groups } ], carried: [ { id, label, lastDate } ], gaps }`.
-`carried_balance` gap for accounts whose last balance is carried forward. `treatment` groups use
-`ACCOUNT_TREATMENT` (T3) by account kind, overridden by the `accounts.planType` fact (T19); a `retirement` or `ira` account without one is named in a
-`missing_fact` gap.
-
-Reuses: `buildTrend`, `groupOfKind`, `PARTS`, `GROUPS` (`src/accounts/trend.mjs`),
-`accountFreshness`, `ACCOUNT_TREATMENT`.
-
-#### business_pnl
-
-Purpose: replaces `pnl_by_month`. Business profit and loss per entity: revenue, expenses, profit,
-margin, by month or category, with a prior-year comparison.
-
-Scope: read
-
-Arguments: `entity?`, Period fields restricted to `ytd` (default), `trailing_12`,
-`calendar_year`, `custom`; `groupBy` (`none`, `month`, `category`, default `month`);
-`compareToPriorYear` (boolean, default false).
-
-Result: `{ entities: [ { entity, revenue, expenses, profit, margin (ratio), groups: [ { key,
-revenue, expenses, profit } ], prior?: { revenue, expenses, profit, margin, revenueDifference,
-revenueRatio, profitDifference, profitRatio } } ], gaps }`, every number a figure. Revenue is the sum of positive lines,
-expenses the negated sum of negative lines, margin profit over revenue (absent at zero revenue).
-`incomplete_month` when the period's last month has no lines yet.
-
-Reuses: the `pnl_lines` query from `pnl_by_month`, `cents` from `src/store/db.mjs`, `figure`. T8
-migrates every caller and test of `pnl_by_month` (the registry, `test/tools.test.mjs`,
-`test/answerer.test.mjs`, the progress label in `src/api/answerer.mjs`, the section 8 table in
-`docs/architecture.md`) with no alias.
-
-#### independence_target
-
-Purpose: the invested amount that covers yearly spending at a withdrawal rate, how far the
-household is from it, and when it gets there.
-
-Scope: read
-
-Arguments:
-
-| Name | Type | Default | Notes |
-|---|---|---|---|
-| `spending` | Ref (usd_per_year) | none | exactly one of `spending` or `definition`; neither means `definition: 'household_spending'` |
-| `definition` | slug | `household_spending` | aggregated over `spending_window`, annualized |
-| `withdrawalRate` | Assumption (ratio 0.02..0.06) | 0.04, source default (`TARGET_PARAMETERS`) | |
-| `invested` | `{ kinds?, treatments?, accounts? }` | `INVESTMENT_KINDS`, non-business | |
-| `monthlySavings` | Ref or Assumption or expr (usd_per_month) | `spendingInputs` `monthlySavings` | |
-| `realReturn` | Assumption (ratio, minus 0.05..0.10) | 0.04, source default | |
-| `roundTo` | 1 or 1000 | 1000 | as `independencePlan` |
-
-Result: `{ target: Figure (usd), investedNow: Figure, gap: Figure (zero when covered), months:
-Figure (months) or null, projectedDate: Figure (date) or null, monthlySavings: Figure, status:
-'covered'|'projected'|'no_savings'|'too_long', gaps }`. `too_long` past
-`maxProjectionMonths` (600).
-
-Reuses: `independencePlan`'s formula, `monthsToReach`, `holdingsTotal`, `TARGET_PARAMETERS`
-(`src/calc/targets.mjs`), `withdrawalRateOf` (`src/suggest/build.mjs`), `accountHistory`
-(`src/pace/build.mjs`), the ref resolver.
-
-#### project_growth
-
-Purpose: what-if growth of a balance with monthly contributions at a real return: the balance
-after some years, the months to a target, or the monthly saving a target needs by a date or age.
-
-Scope: read
-
-Arguments: `solve` (`balance`, `months`, `monthly`, required); `balance` (Ref or Assumption,
-required); `monthlyContribution` (Ref, Assumption or expr, default zero, for `balance` and
-`months`); `realReturn` (Assumption, default 0.04); `years` (0..60, for `balance`); `target` (Ref
-or Assumption, for `months` and `monthly`); `byDate` (`YYYY-MM-DD`) or `byAge` (`{ person:
-'owner'|'spouse', age: 18..100 }`, for `monthly`; age resolves from the birth date fact, else the
-age fact with a `missing_fact` note on month precision).
-
-Result: `{ figure }` (usd, months or usd_per_month) with `provenance.steps` showing the formula
-(future value of a balance plus an annuity, compounded monthly). `realReturn` is bounded minus
-0.05..0.10.
-
-Reuses: `monthsToReach`, new `futureValue` and `requiredMonthly` in `src/calc/growth.mjs`.
-
-#### contribution_room
-
-Purpose: this year's contribution room per person and account type: limit, used where data shows
-it, remaining and deadline.
-
-Scope: read
-
-Arguments: `person` (`owner`, `spouse`, `both`, default `both`); `types` (array of
-`employee_deferral`, `solo401k_pretax`, `solo401k_employer`, `sep`, `traditional_ira`,
-`roth_ira`, `hsa`, `dependent_care`, `plan529_state_deduction`; default all); `year` (2026 only,
-the supported tax year).
-
-Result: `{ rows: [ { person, type, limit: Figure, used: Figure or null, remaining: Figure or null,
-deadline: Figure (date), basis: 'planner'|'calculator', packRefs } ], gaps }`. `remaining` comes
-from the stored planner `room.*` figures when the last planning run is in this tax year; otherwise
-the limit comes from the calculator and `used` is null with a `missing_fact` or
-`outside_household_ledger` gap (payroll deferrals and FSA elections).
-
-Reuses: `solo401kRoom`, `sepRoom`, `hsaLimit`, `dependentCareLimit`, `employerLimit`, `TAX_2026`,
-`LAW_REFS` (`src/calc/index.mjs`), stored `room.solo401k.*`, `room.sep`, `room.hsa`,
-`room.ira.household`, `room.dependentCare` figures, `planningYear`.
-
-#### tax_estimate
-
-Purpose: projected federal, state and self-employment tax, safe harbor, payments made against
-required, the next due date, marginal rates, and a what-if delta.
-
-Scope: read
-
-Arguments: `year` (2026 only); `whatIf?` (`{ extraIncome?: Assumption (usd), extraDeduction?:
-Assumption (usd), incomeType: 'business'|'wages'|'other' (default business) }`).
-
-Result: `{ federal: { projected, selfEmployment, paid, withheld, remaining }, state: { projected,
-paid, withheld, remaining }, safeHarbor: { federal: { required, paid, remaining }, state: {
-required, paid, remaining }, nextDueDate }, marginal: { federal, state, capitalGains } (ratios),
-whatIf?: { federalDelta, stateDelta, selfEmploymentDelta, totalDelta }, gaps }`. Stored figures
-(`tax.fed.proj`, `tax.fed.se`, `tax.fed.paid`, `tax.fed.withheld`, `tax.va.*`, `sh.fed.*`,
-`sh.va.*`) come through as figures with the planner run's date as `asOf`. The what-if reruns the
-household computation with the extra amount on the chosen line and returns differences only.
-
-Reuses: `householdTax` (`src/jobs/planner/household.mjs`), `federalIncomeTax`,
-`selfEmploymentTax`, `virginiaIncomeTax`, `estimatedPaymentSafeHarbor` (`src/calc/index.mjs`),
-`classifyPayments` (`src/jobs/planner/payments.mjs`), stored planner figures.
-
-#### data_health
-
-Purpose: is the data complete and current: per-account freshness, the last import, category
-coverage, stale or unavailable figures and pending Confirm items.
-
-Scope: read
-
-Arguments: `accounts?` (ids, max 50).
-
-Result: `{ accounts: [ { id, label, mask, kind, lastData, freshness: 'fresh'|'stale'|'unknown',
-ageDays, source } ], lastImport: { fileId, name, at, status } or null, categories: { rows,
-uncategorized, guessed, corrected, queueSize } (count figures), unavailableFigures: [ { key, label,
-reason } ], pendingConfirm: { total, byKind }, yearend: { year, items: [ { key, form, issuer,
-status: 'received'|'missing'|'marked' } ] }, gaps }`.
-
-Reuses: `freshnessOf`, `accountFreshness` (`src/ingest/freshness.mjs`), `categoryCoverage`
-(`src/categories/store.mjs`), `pendingItems` (`src/ingest/confirm.mjs`), `yearendChecklist`
-(`src/yearend/expected.mjs`), `figures.unavailable_reason`.
-
-#### list_spending_definitions
-
-Purpose: the built-in and saved spending definitions, so "my elective spending" resolves to an id.
-
-Scope: read
-
-Arguments: none.
-
-Result: `[ { id, name, source: 'builtin'|'saved', def: { include?, exclude? }, packRef?,
-preferenceId?, updatedAt? } ]`. Built-ins: `household_spending`, `essential`, `discretionary`,
-`core_living` (section 5), each citing the spending pack entry. A saved definition carries the id
-of its linked preference.
-
-Reuses: `BUILTIN_DEFINITIONS` (T2), the `spending_definitions` table (T18).
-
-#### obligation_schedule
-
-Purpose: each known obligation, its monthly amount now, when it ends or changes, the new amount,
-and how each was derived, or the fact that is missing.
-
-Scope: read
-
-Arguments: `kinds` (array of `mortgage`, `childcare`, `plan529`; default all); `horizonYears`
-(1..40, default 30); `changes?` (array of `{ kind, stage?: 'school_age'|'after_care_end',
+`obligations` parameters: `changes` is an array of `{ kind, stage?: 'school_age'|'after_care_end',
 newMonthly: Assumption (usd_per_month) }`, max 10: owner-stated amounts for a change the facts do
-not cover).
-
-Result: `{ obligations: [ { kind, label, monthly: Figure (usd_per_month), changes: [ { stage, date:
-Figure, newMonthly: Figure (unavailable when no source), reason, derivedFrom:
-'fact'|'amortization'|'birth_date'|'pack_default'|'assumption' } ], endDate: Figure or null,
-missing: [ factKey ] } ], gaps }`.
-
-Amounts, in order of precedence:
+not cover. Result: `{ obligations: [ { kind, label, monthly (usd_per_month), changes: [ { stage,
+date, newMonthly (unavailable when no source), reason, derivedFrom:
+'fact'|'amortization'|'birth_date'|'pack_default'|'assumption' } ], endDate or null, missing: [
+factKey ] } ], gaps }`. Amounts, in order of precedence:
 
 1. Monthly amount now: the obligation's class group over the spending window (mortgage from
    `debt_service`, childcare from `childcare`, 529 from inflows to 529 accounts), or
@@ -762,747 +681,505 @@ Amounts, in order of precedence:
    with a `missing_fact` gap naming `obligations.childcare`.
 4. 529 at college start: contributions stop (new amount zero, pack default).
 
-Dates come from the facts in section 5 and `OBLIGATION_RULES`.
+Dates come from the facts in section 5 and `OBLIGATION_RULES` (T2). New
+`src/calc/obligations.mjs` holds the amortization and age rules.
 
-Reuses: `src/calc/aggregate.mjs`, new `src/calc/obligations.mjs` (amortization and age rules),
-`getFacts`, `OBLIGATION_RULES` (T2), loan account balances through `accountHistory`.
-
-#### spending_projection
-
-Purpose: yearly spending forward with each obligation dropped or changed on its date: "spending
-after the mortgage ends".
-
-Scope: read
-
-Arguments: `base` (Ref to an `aggregate_transactions` usd_per_year figure) or `definition`
-(default `household_spending`); `years` (1..40, default 10); `obligations` (kinds to apply,
-default all); `changes?` (as `obligation_schedule`). Figures are in today's dollars; the tool
-applies no inflation and says so in a note.
-
-Result: `{ years: [ { year, spending: Figure (usd_per_year), changes: [ { kind, date, delta: Figure,
-applied: boolean } ] } ], gaps }`.
-
-Base rule. A change subtracts only the part of the obligation that is inside the base: the tool
-re-runs the base's selection (the definition's selectors, or the ref's `aggregate_transactions`
-arguments) restricted to the obligation's class, and the in-base monthly amount times twelve is
-the most a change can remove. A base that already excludes `debt_service` (such as
-`core_living`) gets no mortgage drop and a note says why. A ref to any other tool is
+`projection` result: `{ years: [ { year, spending (usd_per_year), changes: [ { kind, date, delta,
+applied } ] } ], gaps }`, in today's dollars with no inflation (a note says so). Base rule: a
+change subtracts only the part of the obligation that is inside the base. The tool re-runs the
+base's selection (the definition's selectors, or the referenced `spending.total` arguments)
+restricted to the obligation's class, and the in-base monthly amount times twelve is the most a
+change can remove. A base that already excludes `debt_service` (such as `core_living`) gets no
+mortgage drop and a note says why. A `base` ref to any operation other than `spending.total` is
 `bad_input`. A change whose new amount is unavailable is listed with `applied: false` and its gap,
 and the spending figure keeps the current amount.
 
-Reuses: `obligation_schedule`'s calculator, `src/calc/aggregate.mjs`, the ref resolver.
+#### `business`
 
-#### after_tax_value
+Purpose: business profit and loss per entity. Progress label "Looking at your business numbers".
 
-Purpose: holdings by tax treatment and what they are worth after the tax that applies when the
-money comes out, under stated rate assumptions.
+| Operation | Parameters | Returns | Replaces |
+|---|---|---|---|
+| pnl | `entity?`, `from?`, `to?` (`YYYY-MM`); from C4 also `window?` (`ytd` default, `trailing_12`, `calendar_year`, `custom`), `year?`, `groupBy?` (`none`, `month` default, `category`), `compareToPriorYear?` | C1: the `pnl_by_month` result unchanged. C4: `{ entities: [ { entity, revenue, expenses, profit, margin (ratio), groups: [ { key, revenue, expenses, profit } ], prior?: { revenue, expenses, profit, margin, revenueDifference, revenueRatio, profitDifference, profitRatio } } ], gaps }`, every number a figure; referenceable | live `pnl_by_month`, planned `business_pnl` |
+| rows | `section` (`income`, `expenses`), `category`, `entity?`, `from?`, `to?`, `month?` | the `businessPnlRows` result: the workbook lines and transactions behind a P&L figure | new (covers `GET /api/pnl/rows`) |
 
-Scope: read
+Scope: read. C4 builds `pnl` on `businessPnl` and `rows` on `businessPnlRows`
+(`src/pnl/business.mjs`, the functions `GET /api/pnl` and `GET /api/pnl/rows` call), so the agent
+and the Money screen read one implementation. Revenue is the sum of positive lines, expenses the
+negated sum of negative lines, margin profit over revenue (absent at zero revenue).
+`incomplete_month` when the period's last month has no lines yet. `from` and `to` alone keep
+meaning a custom period, so C1's calls stay valid after C4. C1's `pnl` is `pnl_by_month` moved
+unchanged: it reads workbook lines (`pnl_lines`) only, so `GET /api/pnl`, which also derives P&L
+from categorized transactions, counts as covered from C4. C4 exports the capability
+`businessPeriods`, which the eval cases that use the C4 parameters require.
 
-Arguments: `accounts?` or `kinds?`; `hypothetical?` (array of `{ treatment, value: Assumption,
-basis?: Assumption, contributions?: Assumption }`, max 10; `basis` applies to taxable,
-`contributions` to Roth); `ordinaryRate`, `capitalGainsRate`, `stateRate` (each Ref or
-Assumption, bounds in the shared types, all required; refs to `tax_estimate` marginal rates are
-the usual source). Fathom never assumes a tax rate.
+#### `tax`
 
-Result: `{ rows: [ { treatment, accounts, value: Figure, basis: Figure, unrealizedGain: Figure,
-taxOnWithdrawal: Figure, afterTax: Figure, qualifiedFrom: Figure (date), afterTaxMedical?: Figure,
-afterTaxNonmedical?: Figure, whenTaxed, packRef } ], total: { value, afterTax }, gaps }`.
+Purpose: taxes and contribution room for the supported tax year. Progress label "Looking at your
+taxes".
 
-Rules and missing inputs:
+| Operation | Parameters | Returns | Replaces |
+|---|---|---|---|
+| estimate | `year?` (2026 only), `whatIf?` (`{ extraIncome?: Assumption (usd), extraDeduction?: Assumption (usd), incomeType: 'business'|'wages'|'other' (default business) }`) | federal, state and SE tax, safe harbor, payments, next due date, marginal rates, what-if deltas; referenceable | planned `tax_estimate` |
+| room | `person?` (`owner`, `spouse`, `both` default), `types?` (`employee_deferral`, `solo401k_pretax`, `solo401k_employer`, `sep`, `traditional_ira`, `roth_ira`, `hsa`, `dependent_care`, `plan529_state_deduction`; default all), `year?` | limit, used, remaining and deadline per person and type; referenceable | planned `contribution_room` |
+
+Scope: read. Ticket: C5.
+
+`estimate` result: `{ federal: { projected, selfEmployment, paid, withheld, remaining }, state: {
+projected, paid, withheld, remaining }, safeHarbor: { federal: { required, paid, remaining },
+state: { required, paid, remaining }, nextDueDate }, marginal: { federal, state, capitalGains }
+(ratios), whatIf?: { federalDelta, stateDelta, selfEmploymentDelta, totalDelta }, gaps }`. Stored
+figures (`tax.fed.proj`, `tax.fed.se`, `tax.fed.paid`, `tax.fed.withheld`, `tax.va.*`, `sh.fed.*`,
+`sh.va.*`) come through as figures with the planner run's date as `asOf`. The what-if reruns the
+household computation with the extra amount on the chosen line and returns differences only.
+Reuses `householdTax` (`src/jobs/planner/household.mjs`), `federalIncomeTax`,
+`selfEmploymentTax`, `virginiaIncomeTax`, `estimatedPaymentSafeHarbor` (`src/calc/index.mjs`),
+`classifyPayments` (`src/jobs/planner/payments.mjs`).
+
+`room` result: `{ rows: [ { person, type, limit, used or null, remaining or null, deadline (date),
+basis: 'planner'|'calculator', packRefs } ], gaps }`. `remaining` comes from the stored planner
+`room.*` figures when the last planning run is in this tax year; otherwise the limit comes from the
+calculator and `used` is null with a `missing_fact` or `outside_household_ledger` gap (payroll
+deferrals and FSA elections). Reuses `solo401kRoom`, `sepRoom`, `hsaLimit`, `dependentCareLimit`,
+`employerLimit`, `TAX_2026`, `LAW_REFS`, `planningYear`.
+
+#### `retirement`
+
+Purpose: how much invested is enough, how it grows, what it is worth after tax and when it can
+come out. It reports; it never recommends a strategy. Progress label "Working through your
+retirement numbers".
+
+| Operation | Parameters | Returns | Replaces |
+|---|---|---|---|
+| target | `spending?` (Ref, usd_per_year) or `definition?` (default `household_spending`), `withdrawalRate?` (Assumption, default 0.04), `invested?` (`{ kinds?, treatments?, accounts? }`), `monthlySavings?` (Assumption or Operand), `realReturn?` (Assumption, default 0.04), `roundTo?` (1 or 1000, default 1000) | `{ target, investedNow, gap, months or null, projectedDate or null, monthlySavings, status: 'covered'|'projected'|'no_savings'|'too_long', gaps }`; referenceable | planned `independence_target` |
+| growth | `solve` (`balance`, `months`, `monthly`), `balance` (Assumption or Operand), `monthlyContribution?`, `realReturn?`, `years?` (0..60), `target?`, `byDate?` (`YYYY-MM-DD`) or `byAge?` (`{ person, age: 18..100 }`) | `{ figure }` (usd, months or usd_per_month) with `provenance.steps`; referenceable | planned `project_growth` |
+| after_tax | `accounts?` or `kinds?`, `hypothetical?` (max 10 of `{ treatment, value: Assumption, basis?: Assumption, contributions?: Assumption }`), `ordinaryRate`, `capitalGainsRate`, `stateRate` (each Assumption or Operand, all required) | `{ rows: [ { treatment, accounts, value, basis, unrealizedGain, taxOnWithdrawal, afterTax, qualifiedFrom (date), afterTaxMedical?, afterTaxNonmedical?, whenTaxed, packRef } ], total: { value, afterTax }, gaps }`; referenceable | planned `after_tax_value` |
+| access | `people?` (`owner`, `spouse`, `both` default) | `{ people: [ { person, born or unavailable, ageNow, milestones: [ { event, age, date, accounts, packRef } ] } ], gaps }`; referenceable | planned `access_schedule` |
+| bridge | `retireAge?` (Assumption, age; default the `household.retireAge` fact, else required), `person?` (`owner` default, `spouse`), `spending?` (Ref) or `definition?`, `realReturn?` (Assumption, default 0) | `{ yearsToAccess, spendingUntilAccess, accessible: { taxable, cash, rothContributions, ruleOf55 }, shortfall, surplus, exceptions: [ { rule, note, packRef } ], gaps }`; referenceable | planned `bridge_check` |
+
+Scope: read. Ticket: C6 for `target`, `growth` and `after_tax`; C7 for `access` and `bridge`.
+Every operation reads the treatment constants PR #83 adds (`ACCOUNT_TREATMENT`,
+`EMPLOYER_PLAN_TYPES`, `ACCESS_RULES`, `rmdStartAge` in `src/calc/treatment.mjs`).
+
+`target`: exactly one of `spending` or `definition`; neither means `definition:
+'household_spending'`, aggregated over `spending_window` and annualized through `spending.total`.
+`monthlySavings` defaults to `spendingInputs` `monthlySavings`; `invested` defaults to
+`INVESTMENT_KINDS`, non-business. `too_long` past `maxProjectionMonths` (600). Reuses
+`independencePlan`'s formula, `monthsToReach`, `holdingsTotal`, `TARGET_PARAMETERS`
+(`src/calc/targets.mjs`), `withdrawalRateOf` (`src/suggest/build.mjs`), `accountHistory`
+(`src/pace/build.mjs`).
+
+`growth`: `monthlyContribution` (default zero) for `balance` and `months`; `years` for
+`balance`; `target` for `months` and `monthly`; `byDate` or `byAge` for `monthly`, where age
+resolves from the birth date fact, else the age fact with a `missing_fact` note on month
+precision. Future value of a balance plus an annuity, compounded monthly; `futureValue` and
+`requiredMonthly` in `src/calc/growth.mjs` (C3).
+
+`after_tax`: Fathom never assumes a tax rate; refs to `tax.estimate` marginal rates are the usual
+source. Rules and missing inputs:
 
 1. Pre-tax (traditional IRA, SEP, pre-tax 401(k), 403(b), 457(b)): ordinary plus state rate on
    the whole value. Needs nothing else.
 2. Roth: tax-free once qualified. `qualifiedFrom` is the later of age 59 and a half and five
    years after `accounts.rothFirstContributionYear`; without that fact it is unavailable with a
    `missing_fact` gap, and `afterTax` is reported as the qualified value with a note that it
-   holds only from that unknown date. Roth IRA and Roth 401(k) differ in access, not in this
-   figure; the subtype comes from `accounts.planType`.
+   holds only from that unknown date. The subtype comes from `accounts.planType`.
 3. Taxable: capital gains plus state rate on value less basis, basis from
-   `positions.cost_basis` (or a hypothetical's `basis`). When any position lacks basis,
-   `basis`, `unrealizedGain`, `taxOnWithdrawal` and `afterTax` for that row are unavailable with a
+   `positions.cost_basis` (or a hypothetical's `basis`). When any position lacks basis, `basis`,
+   `unrealizedGain`, `taxOnWithdrawal` and `afterTax` for that row are unavailable with a
    `no_cost_basis` gap counting the positions; nothing is assumed.
-4. HSA: the purpose decides the tax, so the row returns both `afterTaxMedical` (no tax) and
-   `afterTaxNonmedical` (ordinary plus state, plus the 20 percent additional tax before 65 from
-   the person's age), and `afterTax` is unavailable with a note to choose.
+4. HSA: the row returns both `afterTaxMedical` (no tax) and `afterTaxNonmedical` (ordinary plus
+   state, plus the 20 percent additional tax before 65 from the person's age), and `afterTax` is
+   unavailable with a note to choose.
 5. Cash: no tax on withdrawal.
 6. An account whose kind does not fix its treatment (`retirement`, `ira`) uses
    `accounts.planType`; without it the row is unavailable with a `missing_fact` gap.
 
-Reuses: `ACCOUNT_TREATMENT` (T3), `list_positions`' query, `holdingsTotal`, the ref resolver.
-
-#### access_schedule
-
-Purpose: by age of the owner and the spouse, what becomes penalty-free when, and when RMDs start.
-
-Scope: read
-
-Arguments: `people` (`owner`, `spouse`, `both`, default `both`).
-
-Result: `{ people: [ { person, born: Figure (date) or unavailable, ageNow: Figure, milestones: [ {
-event, age: Figure, date: Figure, accounts: [ { id, label } ], packRef } ] } ], gaps }`. Events:
-`penalty_free_59_half`, `rule_of_55`, `roth_earnings_qualified`, `hsa_nonmedical_no_penalty_65`,
-`rmd_start`.
-
-Inputs and what happens without them:
+`access` events: `penalty_free_59_half`, `rule_of_55`, `roth_earnings_qualified`,
+`hsa_nonmedical_no_penalty_65`, `rmd_start`. Inputs and what happens without them:
 
 1. Birth date (`household.ownerBirthDate`, `household.spouseBirthDate`); without it, the age
-   fact gives year precision (dates fall on December 31) with a `missing_fact` gap; without either,
-   every milestone date is unavailable.
+   fact gives year precision (dates fall on December 31) with a `missing_fact` gap; without
+   either, every milestone date is unavailable.
 2. `rule_of_55` applies per account and only when both facts show it: `accounts.planType` is an
    employer plan (`401k`, `roth_401k`, `solo_401k`, `403b`, `457b`), and
-   `accounts.separationDate` (the day the person left or will leave the employer that sponsors
-   that plan) falls in or after the calendar year the person turns 55. IRA types never qualify.
-   An employer plan with no separation date, or an account with no plan type, is not listed and
-   is named in a `missing_fact` gap. The exception applies only after separation (IRS Publication
-   575), so the milestone date is the separation date itself.
+   `accounts.separationDate` falls in or after the calendar year the person turns 55. IRA types
+   never qualify. An employer plan with no separation date, or an account with no plan type, is
+   not listed and is named in a `missing_fact` gap. The milestone date is the separation date
+   itself (IRS Publication 575).
 3. `roth_earnings_qualified` needs `accounts.rothFirstContributionYear` per Roth account; without
    it the milestone date is unavailable for that account with a gap.
 4. `rmd_start` excludes Roth IRA and Roth 401(k) accounts (no lifetime RMD for the owner).
 
-Reuses: `ACCESS_RULES`, `rmdStartAge` (T3, `src/calc/treatment.mjs`), `getFacts`.
-
-#### bridge_check
-
-Purpose: retiring at a stated age before access age: spending until access age against money
-reachable without penalty. It reports; it never recommends a strategy.
-
-Scope: read
-
-Arguments: `retireAge` (Assumption, age; default the `household.retireAge` fact, else required);
-`person` (`owner` or `spouse`, default `owner`); `spending` (Ref) or `definition` (default
-`household_spending`); `realReturn` (Assumption, default 0, so the check is conservative unless
-the owner states one).
-
-Result: `{ yearsToAccess: Figure, spendingUntilAccess: Figure (usd), accessible: { taxable, cash,
-rothContributions, ruleOf55 } (figures), shortfall: Figure (zero when covered), surplus: Figure,
-exceptions: [ { rule, note, packRef } ], gaps }`.
-
-Inputs and what happens without them:
+`bridge`: retiring at a stated age before access age, spending until access age against money
+reachable without penalty.
 
 1. `accessible.rothContributions` is the sum of `accounts.rothBasis`; a Roth account without it
    adds nothing and is named in a `missing_fact` gap.
-2. `accessible.ruleOf55` counts an employer-plan balance only for an account that qualifies
-   under `access_schedule`'s rule (employer plan type and `accounts.separationDate` in or after
-   the calendar year the person turns 55), and only from its separation date: a qualifying balance
-   whose separation date is after the bridge's start (the date the person reaches `retireAge`)
-   is excluded until that date, with a note. A retirement age of 55 or more is not enough by
-   itself. Every other employer-plan balance stays out of accessible money, and each one missing a
-   plan type or a separation date is named in a `missing_fact` gap.
+2. `accessible.ruleOf55` counts an employer-plan balance only for an account that qualifies under
+   `access`'s rule, and only from its separation date: a qualifying balance whose separation date
+   is after the bridge's start (the date the person reaches `retireAge`) is excluded until that
+   date, with a note. A retirement age of 55 or more is not enough by itself. Every other
+   employer-plan balance stays out of accessible money, and each one missing a plan type or a
+   separation date is named in a `missing_fact` gap.
 3. `accessible.taxable` is the market value (selling has a tax cost; the note points at
-   `after_tax_value`).
+   `retirement.after_tax`).
 4. Exceptions listed as text with pack refs: substantially equal periodic payments and HSA
    reimbursement of past medical costs. They are never counted as accessible money.
 
-Reuses: `access_schedule`'s rules, `holdingsTotal`, `spending_projection`'s calculator (T20).
+#### `goals`
 
-### Changed read tools
+Purpose: household goals and their pace. Progress label "Looking at your goals".
 
-#### get_figures
+| Operation | Parameters | Returns | Replaces |
+|---|---|---|---|
+| list | none | open goals with title, horizon, note, target and tracked value, unchanged | live `list_goals` |
+| pace | none | the `buildPace` result with an `envelope` beside each pace figure; referenceable | live `get_pace` |
+| suggestions | none | the `buildSuggestions` result: suggested targets per goal with their inputs | new (covers `GET /api/goals/suggestions`) |
 
-Purpose: stored figures, now as referenceable envelopes.
+Scope: read.
 
-Scope: read
+#### `recommendations`
 
-Arguments: unchanged (`keys?: string[]`, max 500).
+Purpose: the recommendations in the plan. Hidden recommendations never appear. Progress label
+"Looking at your plan".
 
-Result: every current field (`key`, `v`, `kind`, `label`, `source: { id, label, asOf }`,
-`unavailable`) plus the envelope fields from `fromStored` (`value`, `unit`, `asOf`, `ref`,
-`provenance`, `gaps`). No field is dropped.
+| Operation | Parameters | Returns | Replaces |
+|---|---|---|---|
+| list | `status?` (a status or a list) | recommendations with live status, window, tasks, owner and goals served, unchanged | live `list_recommendations` |
+| detail | `id` | one recommendation with figures, pack excerpts, owner, goals, unchanged | live `get_recommendation` |
+| advisor | none | the advisor workflow: next check-in, waiting reviews, verdicts, packets, unchanged | live `advisor_status` |
 
-Reuses: `fromStored` (T1), `relabelStoredFigure`, `accountNaming`.
+Scope: read.
 
-#### get_pace
+#### `knowledge`
 
-Purpose: goal pace and health, now with referenceable figures.
+Purpose: knowledge packs, the sourced tax and planning guidance. Progress label "Checking your
+knowledge packs".
 
-Scope: read
+| Operation | Parameters | Returns | Replaces |
+|---|---|---|---|
+| packs | none | every pack with status, why, version, tax year, review date, coverage and entry titles | live `list_packs` and `packs_status` |
+| search | `query` (2..200), `packId?`, `limit?` (1..20, default 10) | matching entries of active packs with snippets, the total and whether the list was cut, unchanged | live `search_pack_entries` |
+| entry | `packId`, `file` (1..200) | one entry as markdown with its citations, unchanged | live `get_pack_entry` |
 
-Arguments: unchanged (none).
+Scope: read. `packs` returns the `list_packs` rows, and each row's `status` is the live status
+`packs_status` computes (`active`, `exploring`, `suggested`, `available`). A scenario pack row
+with no manifest, which only `packs_status` listed, is included with `id`, `name`, `status` and
+`why` only. C1 tests that every id and status `packs_status` returned on the demo store appears in
+`packs` with the same status.
 
-Result: the current `buildPace` result, unchanged in shape, with an `envelope` field beside each
-pace figure (from `fromPace`) whose `ref` is `{ tool: 'get_pace', args: {}, path: <the figure's
-dotted path>.envelope }`.
+#### `calculate`
 
-Reuses: `buildPace`, `paceFigure`, `fromPace` (T1).
+Purpose: the only arithmetic the model gets. Combines figures from refs and named assumptions into
+one figure with chained provenance. Progress label "Working out the numbers".
 
-#### query_transactions
+| Operation | Parameters | Returns | Replaces |
+|---|---|---|---|
+| add, subtract (first minus the rest), multiply, divide (two operands), sum (one ref whose path is a list of figures, or many operands), min, max, negate, annualize (usd_per_month to usd_per_year), monthly (usd_per_year to usd_per_month), percent_of (ratio, base), round_up (with `places`), compound (future value, with `rate` and `years`) | `operands` (Operand[], 1..20), `places?` (1, 100 or 1000; `round_up` only), `rate?` (Operand, ratio per year; `compound` only), `years?` (Operand; `compound` only), `label` (1..80, no digits) | `{ figure }`; referenceable | planned `calculate` (its `op` becomes `operation`; nested expressions use `{ expr: { operation, operands } }`) |
 
-Purpose: the row lookup, now aware of buckets, classes and merchants.
-
-Scope: read
-
-Arguments: the current ones plus `bucket` (Bucket), `class` (Class), `merchant` (normalized
-merchant string, 1..200).
-
-Result: `{ rows: [ { id, accountId, date, amount, description, category, bucket, class, layer,
-merchant } ], truncated, total }`. `category` is the resolved category; `layer` is the
-`resolveCategories` layer (`correction`, `import`, `guess`, `uncategorized` and so on).
-
-Reuses: `resolveCategories`, `loadCategoryInputs`, `normalizeMerchant`, `CATEGORY_CLASSES`.
+Scope: read. Ticket: C3. Unit algebra is checked: usd plus usd is usd; usd times ratio is usd;
+usd divided by ratio is usd; usd divided by usd is ratio; usd_per_year divided by a per-year ratio
+is usd; usd divided by usd_per_month is months; months times usd_per_month is usd. Any other
+mismatch is `bad_input` naming both units. Division by zero is `bad_input`. The figure's `kind` is
+the weakest of its inputs (a, then e, m, p, t), `asOf` the oldest input `asOf`,
+`provenance.inputs` holds every operand's figure and provenance, `provenance.formula` the
+expression in words, `gaps` the union of the inputs' gaps. Q02 as a calculation:
+`calculate.divide {operands: [{ref: R(Q01 total)}, {assumption: {name: 'withdrawalRate', value:
+0.04, unit: 'ratio', source: 'owner', evidence: '4 percent'}}], label: 'investment needed'}`.
+Reuses `round`, `figure` and `envelope` (`src/calc/figure.mjs`) and the ref resolver
+`src/tools/refs.mjs` (C3) over `callTool`.
 
 ### Write tools
 
-Every write tool records an action receipt through the ask-actions receipts module
-(`saveReceipt`) and shares the handler's store function, so the API and the agent cannot drift.
-Where a handler has its logic inline, the ticket first moves that logic into a named store
-function and points the handler at it. Every write tool is offered to Ask (chat purpose) and to
-MCP under its scope. "Undo" below names the `undo` field the result carries and the receipt kind
-the ticket registers.
+Every write operation records an action receipt through `saveReceipt` and shares the route
+handler's store function, so the API and the agent cannot drift. Where a handler has its logic
+inline, the ticket first moves that logic into a named store function and points the handler at
+it. Every write tool is offered to Ask (chat purpose) and to MCP under each operation's scope.
+"Receipt kind" names the kind the ticket registers through `registerReceiptKind` (C2) and how
+`undo` restores it.
 
-#### save_spending_definition
+#### `update_account`
 
-Purpose: save or replace a named spending definition, and remember it as a preference that names
-it.
+Purpose: change an account the way the account dialog does. Progress label "Updating your
+account". Ticket: C8. Scope: `write:accounts` for every operation.
 
-Scope: write:preferences
+| Operation | Parameters | Returns | Receipt kind and undo | Replaces |
+|---|---|---|---|---|
+| rename | `id`, `displayName` (string or null) | `{ account: { id, label }, receipt }` | `account_field` (the changed `accounts` columns) | planned `rename_account` |
+| mask | `id`, `mask` (four digits) | `{ account, receipt }`; only on an account with no mask and no bridge identity | `account_field`; the restore re-runs `queueAccountPairs` | planned `set_account_mask` |
+| owner | `id`, `owner` (`owner`, `spouse`, `joint`, `business`; `OWNER_OPTIONS`) | `{ account, receipt }` | `account_answer`, restore calls `undoAccountAnswer` with the receipt's before value | planned `set_account_owner` |
+| kind | `id`, `kind` (`KIND_OPTIONS`: checking, cash, card, taxable, retirement, roth, hsa, 529, business, loan) | `{ account, receipt }` | `account_answer` | planned `set_account_kind` |
+| merge | `id`, `withId`, `confirm` (literal `true`), `evidence` | `{ survivorId, itemId, receipt }` | `account_merge`, restore reopens the merge's Confirm item through `revertChanges` until a moved row changes | planned `merge_accounts` |
 
-Arguments: `{ id: slug (2..40, not a built-in id), name: string (1..60), def: { include?: Selector,
-exclude?: Selector }, evidence: string (the owner's words) }`; at most 50 saved definitions.
+`merge` is the one destructive write. The caller passes it only after the person explicitly
+confirmed this merge; in Ask that is a later owner message than the one where the model showed the
+candidates from `accounts.merge_candidates`, and the tool checks it with `requireEvidence` against
+`evidence`. Reuses `validateDisplayName`, `setAccountAnswer`, `undoAccountAnswer`, `afterAnswer`,
+`queueAccountPairs`, `mergePlan`, `manualMerge`, with the `accountRename` and `accountMask`
+writes moved into `src/accounts/write.mjs`.
 
-Result: `{ definition: { id, name, def, preferenceId }, receipt }`. Undo: `undo_preference_action
-{ id: <receipt id> }`; receipt kind `spending_definition` (T18) whose restore puts back both the
-definition row and its linked preference row as they were (or removes both when the save created
-them).
+#### `categorize`
 
-Linkage, pinned (T18):
+Purpose: correct transaction categories. Progress label "Updating categories". Ticket: C8. Scope:
+`write:categories`.
+
+| Operation | Parameters | Returns | Receipt kind and undo | Replaces |
+|---|---|---|---|---|
+| transaction | `transactionId` (integer), `category` (aggregator category name) | `{ transaction: { id, category, bucket, class }, receipt }` | `category_correction` (table `transaction_category_corrections` by `transaction_id`) | planned `set_transaction_category` |
+| merchant_rule | `merchant` (normalized, 1..200), `category` | `{ rule: { merchant, category, bucket }, affected (count figure), receipt }` | `merchant_rule` (table `category_merchant_rules` by `merchant`) | planned `set_merchant_rule` |
+
+The bucket follows the category through `sourceBucket`. The correction and merchant-rule writes
+in `applyCategoryAnswer` move into `setTransactionCategory` and `setMerchantRule`
+(`src/categories/store.mjs`); Confirm answers call the same functions.
+
+#### `answer`
+
+Purpose: tell Fathom something it asked for or needs: a household fact, a recommendation's
+questions, Confirm items and expected tax documents, always in the person's own words. Progress
+label "Recording what you told Fathom".
+
+| Operation | Parameters | Scope | Returns | Receipt kind and undo | Replaces |
+|---|---|---|---|---|---|
+| fact | `key`, `value`, `evidence`, `conversationKey?` | write:facts | the `record_household_fact` result, unchanged | `fact` (existing) | live `record_household_fact` |
+| rec_questions | `recId`, `answers` (1..50 of `{ key, path?, value }`), `evidence` | write:facts | `{ rec, receipts, planningPending }` | `fact` per fact | planned `answer_recommendation_questions` |
+| confirm | `items` (1..500 of `{ id, answer }`), `revise?` (one item only) | write:confirm | `{ items, receipt }` | `confirm_answer`, restore reopens the items through `revertChanges` | planned `answer_confirm_item` |
+| reopen | `ids` (1..500) | write:confirm | `{ items, receipt }`; `changed_since` refusal when a row changed after the answer | `confirm_reopen`, restore re-answers with the prior answers | planned `reopen_confirm_item` |
+| yearend_mark | `year?` (2000..2100), `itemKey` (1..200), `reason` (1..300, or null to clear) | write:confirm | `{ item: { key, marked, reason }, receipt }` | `yearend_mark` (table `yearend_marks` by year and key) | planned `mark_yearend_item` |
+
+Tickets: C1 for `fact`, C8 for the rest. `fact` keys and shapes come from `household.fact_shapes`;
+unknown keys are refused and an amount or date is never inferred. `rec_questions` keys must be in
+`ANSWER_SHAPES` and in the rec's question; the body of `recAnswers` (`src/api/fact-answers.mjs`)
+moves into `saveRecAnswers`. Reuses `answerFacts`, `answerItem`, `answerItems`, `reviseItem`,
+`reopenItem`, `reopenItems`, `revertChanges`, `setMark`, `taxYearFor`, and the `afterAnswer`
+replan and freshness triggers.
+
+#### `act_on_recommendation`
+
+Purpose: act on a recommendation or its decision. Progress label "Updating your plan".
+
+| Operation | Parameters | Scope | Returns | Receipt kind and undo | Replaces |
+|---|---|---|---|---|---|
+| status | `id`, `status` (`doing`, `done`, `dismissed`, `snoozed`, `proposed`), `wake?` | write:recs | unchanged | existing | live `set_recommendation_status` |
+| owner | `id`, `owner` (`you`, `spouse`, `both`, `advisor`, `automatic`) | write:recs | unchanged | existing | live `set_recommendation_owner` |
+| step | `id`, `index` (integer, zero-based), `checked` | write:steps | unchanged | `step` (existing) | live `set_recommendation_step` |
+| start_over | `id` | write:recs | `{ detached (count figure), receipt }` | `rec_detach`, restore clears `rec_detached_at` on the threads it set | planned `start_recommendation_over` |
+| decide | `decisionId`, `point?` (integer or point id) | write:decisions | `{ decision: { id, status, decidedLine }, receipt }` | `decision_decide`, restore revisits (it also removes the decided fact and replans) | planned `decide_decision` |
+| revisit | `decisionId` | write:decisions | `{ decision: { id, status }, decidedIndex, receipt }` | `decision_revisit`, restore decides again on `decidedIndex` | planned `revisit_decision` |
+| pick_point | `name` (`salary`, `deferral`), `point` (integer or point id) | write:decisions | `{ picked: { name, index, label }, receipt }` | `setting` (generic over `settings` by key) | planned `pick_wargame_point` |
+
+Tickets: C1 for `status`, `owner` and `step`; C9 for the rest. The `recStartOver`,
+`wargamePick`, `decisionDecide` and `decisionRevisit` logic moves into `detachRecThreads`
+(`src/store/recs.mjs`) and `pickWargame`, `decide`, `revisit` (`src/decisions/write.mjs`).
+
+#### `advisor_review`
+
+Purpose: the advisor review workflow. The household records verdicts; nothing leaves the product.
+Progress label "Updating the advisor review". Ticket: C9. Scope: `write:recs`.
+
+| Operation | Parameters | Returns | Receipt kind and undo | Replaces |
+|---|---|---|---|---|
+| send | `recId` | `{ reviewId, receipt }` | not available: a sent review is a record; a new verdict or review supersedes it | planned `send_to_advisor` |
+| verdict | `reviewId`, `verdict` (`confirmed`, `vetoed`), `note?` (max 1000), `date` (`YYYY-MM-DD`), `evidence` | `{ review: { id, verdict, date }, receipt }`; a veto dismisses the rec | not available: it records an outside person's decision; send the rec again to reopen review | planned `record_advisor_verdict` |
+| checkin | `date`, `time?` (`HH:MM`), `lengthMin?` (15..480) | `{ checkin, receipt }` | `advisor_checkin` (table `advisor_checkin`) | planned `set_advisor_checkin` |
+| packet | none | `{ packetId, recIds, receipt }` | not available: a stored packet is a record | planned `create_review_packet` |
+
+The verdict and note must come from the owner's words (`requireEvidence`). `packet` needs the data
+key from `ctx.services` (C2); `createPacket`'s body moves into `buildAndStorePacket`
+(`src/advisor/packet.mjs`). Reuses `sendToAdvisor`, `recordVerdict`, `applyStatusAction` with
+`VETO_REASON`, `setCheckin`, `storePacket`, `buildPacketHtml`.
+
+#### `update_goal`
+
+Purpose: create or change goals, with amounts and dates only from the person's words or stored
+data. Progress label "Saving your goal". Scope: `write:goals`.
+
+| Operation | Parameters | Returns | Receipt kind and undo | Replaces |
+|---|---|---|---|---|
+| create | `title`, `note?`, `horizon?`, `target?`, `targetDate?`, `track?` | the `create_goal` result, unchanged | `goal` (existing) | live `create_goal` |
+| edit | `id` plus any changed field above | the `edit_goal` result, unchanged | `goal` (existing) | live `edit_goal` |
+| archive | `id` | `{ goal: { id, archived: true }, receipt }` | `goal` | planned `archive_goal` |
+| delete | `id` (the owner's own goals only, as the route allows) | `{ deleted: id, receipt }` | `goal_row`, restore reinserts every column | planned `delete_goal` |
+| suggestion | `id`, exactly one of `action` (`dismiss`, `restore`) or `withdrawalRate` (Assumption, 0.02..0.06) | `{ suggestion: { goalId, dismissed, withdrawalRate }, receipt }` | `setting` | planned `set_goal_suggestion` |
+
+Tickets: C1 for `create` and `edit`, C9 for the rest. The consolidated tool is deliberately not
+named `edit_goal`, so no live name keeps a new meaning. Writes move into `src/goals/write.mjs`
+and `setGoalSuggestion` (`src/suggest/write.mjs`).
+
+Goal model fields (feat/goal-model-v2, live in `create_goal`, `edit_goal` and `list_goals` before
+C1; C1 and C9 carry them into `update_goal` and `goals` under these exact names):
+
+1. `kind`: `balance` (the default), `range`, `floor` or `contribution`. A body field of another
+   kind is refused; a kind change drops the old kind's fields.
+2. `owner` (whose goal): `owner`, `spouse`, `joint`, a dependent key (`kid`, `kid2`, ...) or null.
+   Labels come from the household names. Distinct from the row's `origin`.
+3. `priority`: `high`, `medium`, `low` or null.
+4. `status`: `open`, `done` or `archived`. `done` sets the `done_at` column and `open` clears it;
+   every goal reads a canonical status, and a seed goal's display text is `statusLabel`.
+5. Range: `targetLow`, `targetHigh` (low not above high), `targetDate`, `track`.
+6. Floor: `floor`, `track` (required), no `targetDate`.
+7. Contribution: `target` is the amount, `taxYear` (integer), `targetDate` is the deadline (after
+   January 1 of the tax year), `accounts` (destination account ids, optional), `split`
+   (optional `[{ person: 'owner'|'spouse', amount }]`, adding up to `target`), `entered`
+   (optional `{ asOf, total }` or `{ asOf, people: [{ person, amount }] }`).
+
+Every amount and date among them needs the person's words or a stored value, as `target` and
+`targetDate` do; `owner`, `priority`, `kind` and `status` need none. `list_goals` adds `kind`,
+`owner`, `ownerLabel`, `priority`, `status`, `statusLabel` and `range`, `floor` or `contribution`
+objects with their sources; `get_pace` entries add `kind`, `owner`, `priority` and `range`, `floor`
+or `contribution`. A goal receipt's undo also compares `done_at` and `archived_at`, and the
+`goal_row` restore (C9) reinserts `done_at` with every other column.
+
+#### `update_preferences`
+
+Purpose: preferences, saved spending definitions, which packs are on and where the household sits
+on its tradeoff curves. Progress label "Saving your preference". Scope: `write:preferences`.
+
+| Operation | Parameters | Returns | Receipt kind and undo | Replaces |
+|---|---|---|---|---|
+| remember | `text` (1..300), `evidence`, `id?` (edit), `conversationKey?` | the `remember_preference` result, unchanged | `preference` (existing) | live `remember_preference` |
+| forget | `id` | `{ receipt }` | `preference`, or `spending_definition` for a linked preference | planned `forget_preference` |
+| save_definition | `definitionId` (slug 2..40, not a built-in), `name` (1..60), `def` (`{ include?: Selector, exclude?: Selector }`), `evidence` | `{ definition: { id, name, def, preferenceId }, receipt }`; at most 50 saved | `spending_definition`, restore puts back both rows as they were or removes both | planned `save_spending_definition` |
+| delete_definition | `definitionId` (built-ins refused) | `{ deleted, receipt }` | `spending_definition` | planned `delete_spending_definition` |
+| pack | `packId`, `active` (idempotent, unlike the toggle route) | `{ pack: { id, status }, wasActive, receipt }` | `pack_active`, restore sets `wasActive` back (the toggle also hides and unhides recs) | planned `set_pack_active` |
+| curve | `positions` (`{ [axisId]: 0..1 }`, 1..20 axes) | `{ positions, receipt }` | `setting` | planned `set_curve_position` |
+
+Tickets: C1 for `remember`, C9 for `curve`, C10 for the rest. Definition linkage, pinned (C10):
 
 1. The migration adds `spending_definitions` and a nullable `preferences.definition_id` column
    with a unique index.
 2. Saving a definition writes or updates exactly one linked preference in the same transaction,
-   with text "When I say <name>, use my saved spending definition <id>." and
-   `definition_id` set. Saving again with the same id and a new name or selectors updates both.
-3. `remember_preference` on a linked preference is refused with "Change the definition instead".
-   `forget_preference` on a linked preference deletes both rows (one receipt, kind
-   `spending_definition`).
-4. `delete_spending_definition` deletes both rows.
+   with text "When I say <name>, use my saved spending definition <id>." and `definition_id`
+   set. Saving again with the same id and a new name or selectors updates both.
+3. `remember` on a linked preference is refused with "Change the definition instead". `forget` on
+   a linked preference deletes both rows (one receipt, kind `spending_definition`).
+4. `delete_definition` deletes both rows.
 5. Ask's dynamic context already lists every preference (`listPreferences` into
-   `household_preferences` on feat/ask-actions). The linked preference's text names the
-   definition's id, and `listPreferences` gains `definitionId`, so a later conversation resolves
-   "my elective spending" to `definition: 'elective_spending'` with no lookup and no answerer
-   edit.
-
-Reuses: `saveReceipt`, `requireActor`, `requireEvidence`, `validatePreference` (feat/ask-actions),
-new `src/spending/definitions.mjs`.
-
-#### delete_spending_definition
-
-Purpose: delete a saved definition and its linked preference.
-
-Scope: write:preferences
-
-Arguments: `{ id: slug }` (built-ins refused).
-
-Result: `{ deleted: id, receipt }`. Undo: `undo_preference_action { id: <receipt id> }`, kind
-`spending_definition`.
-
-Reuses: `src/spending/definitions.mjs`.
-
-#### forget_preference
-
-Purpose: delete a remembered preference; covers `/api/preferences/:id/delete`.
-
-Scope: write:preferences
-
-Arguments: `{ id: string }`.
-
-Result: `{ receipt }`. Undo: `undo_preference_action { id: <receipt id> }`, kind `preference`
-(existing) or `spending_definition` for a linked preference.
-
-Reuses: `writePreference(ctx, { id }, { remove: true })` (`src/actions/preferences.mjs`).
-
-#### answer_recommendation_questions
-
-Purpose: save the answers a recommendation asks for, the same write and replan as the rec dialog.
-
-Scope: write:facts
-
-Arguments: `{ id: rec id, answers: [ { key, path?: string[], value } ] (1..50), evidence: string }`;
-keys must be in `ANSWER_SHAPES` and in the rec's question.
-
-Result: `{ rec, receipts: [receipt], planningPending }`. Undo: `undo_fact_action { id: <receipt
-id> }` per fact, kind `fact` (existing).
-
-Reuses: `answerFacts` (`src/facts/answers.mjs`), the body of `recAnswers`
-(`src/api/fact-answers.mjs`) moved into `saveRecAnswers`.
-
-#### start_recommendation_over
-
-Purpose: detach a recommendation's Ask threads so its dialog opens fresh.
-
-Scope: write:recs
-
-Arguments: `{ id: rec id }`.
-
-Result: `{ detached: Figure (count), receipt }`. Undo: `undo_recommendation_action { id: <receipt
-id> }`, kind `rec_detach` (T22) whose restore clears `rec_detached_at` on the threads it set.
-
-Reuses: the `recStartOver` update moved into `detachRecThreads` (`src/store/recs.mjs`).
-
-#### pick_wargame_point
-
-Purpose: pick a point on the salary or deferral war game.
-
-Scope: write:decisions
-
-Arguments: `{ name: 'salary'|'deferral', index: integer or point id }`.
-
-Result: `{ picked: { name, index, label }, receipt }`. Undo: `undo_decision_action { id: <receipt
-id> }`, kind `setting` (T17, generic over `settings` by key).
-
-Reuses: `wargamePick`'s logic moved into `pickWargame` (`src/decisions/write.mjs`).
-
-#### decide_decision
-
-Purpose: decide an open war-game decision on the picked point.
-
-Scope: write:decisions
-
-Arguments: `{ id: decision id, index?: integer or point id }`.
-
-Result: `{ decision: { id, status, decidedLine (tokens resolved) }, receipt }`. Undo:
-`revisit_decision { id }` (a domain inverse; it also removes the decided fact and replans).
-
-Reuses: `decisionDecide` moved into `decide` (`src/decisions/write.mjs`), `upsertFact`,
-`scheduleReplan`.
-
-#### revisit_decision
-
-Purpose: reopen a decided decision.
-
-Scope: write:decisions
-
-Arguments: `{ id: decision id }`.
-
-Result: `{ decision: { id, status }, decidedIndex, receipt }`. Undo: `decide_decision { id, index:
-<decidedIndex> }`.
-
-Reuses: `decisionRevisit` moved into `revisit` (`src/decisions/write.mjs`).
-
-#### set_pack_active
-
-Purpose: turn a knowledge pack on or off, as the Packs toggle does.
-
-Scope: write:preferences
-
-Arguments: `{ id: pack id, active: boolean }` (idempotent, unlike the toggle route).
-
-Result: `{ pack: { id, status }, wasActive, receipt }`. Undo: `set_pack_active { id, active:
-<wasActive> }` (a domain inverse, because the toggle also hides and unhides recs).
-
-Reuses: `packToggle` moved into `setPackActive` (`src/packs/state.mjs`).
-
-#### set_curve_position
-
-Purpose: set where the household sits on a tradeoff curve.
-
-Scope: write:preferences
-
-Arguments: `{ positions: { [axisId]: number 0..1 } }` (1..20 axes).
-
-Result: `{ positions, receipt }`. Undo: `undo_preference_action { id: <receipt id> }`, kind
-`setting`.
-
-Reuses: `curveSet` moved into `setCurvePositions` (`src/goals/curve.mjs`).
-
-#### archive_goal
-
-Purpose: archive a goal.
-
-Scope: write:goals
-
-Arguments: `{ id: goal id }`.
-
-Result: `{ goal: { id, archived: true }, receipt }`. Undo: `undo_goal_action { id: <receipt id>
-}`, kind `goal` (existing).
-
-Reuses: `goalArchive`'s write moved into `archiveGoal` (`src/goals/write.mjs`).
-
-#### delete_goal
-
-Purpose: delete a goal (the owner's own goals only, as the route allows).
-
-Scope: write:goals
-
-Arguments: `{ id: goal id }`.
-
-Result: `{ deleted: id, receipt }`. Undo: `undo_goal_action { id: <receipt id> }`, kind
-`goal_row` (T23) whose restore reinserts every column of the deleted row.
-
-Reuses: `goalDelete` moved into `deleteGoal` (`src/goals/write.mjs`).
-
-#### set_goal_suggestion
-
-Purpose: dismiss or restore a goal's suggested target, or set its withdrawal rate.
-
-Scope: write:goals
-
-Arguments: `{ id: goal id, action?: 'dismiss'|'restore', withdrawalRate?: Assumption (0.02..0.06)
-}`, exactly one of `action` or `withdrawalRate`.
-
-Result: `{ suggestion: { goalId, dismissed, withdrawalRate }, receipt }`. Undo:
-`undo_goal_action { id: <receipt id> }`, kind `setting`.
-
-Reuses: `goalSuggestion` moved into `setGoalSuggestion` (`src/suggest/write.mjs`),
-`buildSuggestions`, `SUGGEST_SETTING`.
-
-#### send_to_advisor
-
-Purpose: send a recommendation to the advisor for review.
-
-Scope: write:recs
-
-Arguments: `{ recId }`.
-
-Result: `{ reviewId, receipt }`. Undo: not available (reason: a sent review is a record; a new
-verdict or review supersedes it).
-
-Reuses: `sendToAdvisor` (`src/advisor/index.mjs`).
-
-#### record_advisor_verdict
-
-Purpose: record the advisor's verdict on a waiting review (a veto dismisses the rec).
-
-Scope: write:recs
-
-Arguments: `{ reviewId, verdict: 'confirmed'|'vetoed', note?: string (max 1000), date:
-'YYYY-MM-DD', evidence: string }`; the verdict and note must come from the owner's words
-(`requireEvidence`).
-
-Result: `{ review: { id, verdict, date }, receipt }`. Undo: not available (reason: it records an
-outside person's decision; send the rec again to reopen review).
-
-Reuses: `recordVerdict`, `applyStatusAction` with `VETO_REASON`.
-
-#### set_advisor_checkin
-
-Purpose: set the next advisor check-in.
-
-Scope: write:recs
-
-Arguments: `{ date: 'YYYY-MM-DD', time?: 'HH:MM', lengthMin?: 15..480 }`.
-
-Result: `{ checkin, receipt }`. Undo: `undo_recommendation_action { id: <receipt id> }`, kind
-`advisor_checkin` (T24, table `advisor_checkin`).
-
-Reuses: `setCheckin` (`src/advisor/index.mjs`).
-
-#### create_review_packet
-
-Purpose: build and store the advisor packet for every waiting review.
-
-Scope: write:recs
-
-Arguments: none.
-
-Result: `{ packetId, recIds, receipt }`. Undo: not available (reason: a stored packet is a
-record; it never leaves the product). Needs the data key from `ctx.services` (T17).
-
-Reuses: `createPacket`'s body moved into `buildAndStorePacket` (`src/advisor/packet.mjs`),
-`storePacket`, `buildPacketHtml`.
-
-#### mark_yearend_item
-
-Purpose: mark an expected tax document not needed this year, or clear the mark.
-
-Scope: write:confirm
-
-Arguments: `{ year?: 2000..2100, key: string (1..200), reason: string (1..300) or null }`.
-
-Result: `{ item: { key, marked, reason }, receipt }`. Undo: `undo_confirm_action { id: <receipt
-id> }`, kind `yearend_mark` (T24, table `yearend_marks` by year and key).
-
-Reuses: `setMark`, `yearendChecklist`, `taxYearFor` (`src/yearend/expected.mjs`).
-
-#### list_confirm_items
-
-Purpose: the Confirm queue, pending or answered; a read despite its POST route.
-
-Scope: read
-
-Arguments: `{ status: 'pending'|'answered'|'all' (default pending), kinds?: string[] }`.
-
-Result: `{ items: [ { id, kind, question, options: [ { id, label } ], context (masks only), status,
-answer? } ] }`.
-
-Reuses: `queueAccountPairs`, `queueCategoryChecks`, `listItems`.
-
-#### answer_confirm_item
-
-Purpose: answer one or many Confirm items, or revise one answer.
-
-Scope: write:confirm
-
-Arguments: `{ items: [ { id: integer, answer: option id } ] (1..500), revise?: boolean (only with
-one item) }`.
-
-Result: `{ items, receipt }`. Undo: `reopen_confirm_item { ids: [<the answered ids>] }` (a domain
-inverse through the change log).
-
-Reuses: `answerItem`, `answerItems`, `reviseItem` (`src/ingest/confirm.mjs`), the `afterAnswer`
-replan and freshness triggers.
-
-#### reopen_confirm_item
-
-Purpose: reopen answered Confirm items, which reverts what the answers changed.
-
-Scope: write:confirm
-
-Arguments: `{ ids: integer[] (1..500) }`.
-
-Result: `{ items, receipt }`. Undo: `answer_confirm_item { items: [ { id, answer: <prior answer> }
-] }`. Refused with `changed_since` when a row changed after the answer (`revertChanges` in
-`src/ingest/undo.mjs`).
-
-Reuses: `reopenItem`, `reopenItems`, `revertChanges`.
-
-#### set_transaction_category
-
-Purpose: correct one transaction's category.
-
-Scope: write:categories
-
-Arguments: `{ transactionId: integer, category: aggregator category name }` (bucket follows the
-category through `sourceBucket`).
-
-Result: `{ transaction: { id, category, bucket, class }, receipt }`. Undo: `undo_category_action {
-id: <receipt id> }`, kind `category_correction` (T25, table `transaction_category_corrections` by
-`transaction_id`).
-
-Reuses: the correction write in `applyCategoryAnswer` moved into `setTransactionCategory`
-(`src/categories/store.mjs`); Confirm answers call the same function, so the two share one write
-path.
-
-#### set_merchant_rule
-
-Purpose: categorize every transaction from a merchant from now on.
-
-Scope: write:categories
-
-Arguments: `{ merchant: normalized merchant (1..200), category: aggregator category name }`.
-
-Result: `{ rule: { merchant, category, bucket }, affected: Figure (count), receipt }`. Undo:
-`undo_category_action { id: <receipt id> }`, kind `merchant_rule` (T25, table
-`category_merchant_rules` by `merchant`).
-
-Reuses: the merchant-rule write in `applyCategoryAnswer` moved into `setMerchantRule`,
-`normalizeMerchant`.
-
-#### import_file
-
-Purpose: feed a file to the import pipeline, from a headless client or from text the owner pastes
-in Ask.
-
-Scope: write:imports
-
-Arguments: `{ name: string (1..200), mime: string, contentBase64?: string, text?: string }`, exactly
-one of `contentBase64` (MCP clients sending a file) or `text` (an owner-pasted CSV or markdown
-note in Ask, stored as UTF-8). Either way the decoded content is at most 1 MiB less the request
-envelope (`MCP_BODY_LIMIT`), and Ask applies the same limit. A setup note is a `text/markdown`
-file, which covers `/api/onboarding/notes`.
-
-Result: `{ file: { id, name, status, counts }, pending, receipt }`. Undo: not available (reason:
-imported rows are undone per Confirm answer; the file stays on record).
-
-Reuses: `ingestFiles` (`src/ingest/pipeline.mjs`), the data key, scheduler and config from
-`ctx.services` (T17), the triggers `triggerPlan`, `triggerFreshness`, `triggerGuesses`
-(`src/api/ingest-handlers.mjs`).
-
-#### retry_import
-
-Purpose: retry a file waiting for a mapping or extraction.
-
-Scope: write:imports
-
-Arguments: `{ fileId }`.
-
-Result: `{ file, receipt }`. Undo: not available (reason as `import_file`).
-
-Reuses: `retryFile` (`src/ingest/pipeline.mjs`), `ctx.services`, the same triggers.
-
-#### build_your_plans
-
-Purpose: extract the owner's plan and benefits documents into the private Your plans pack.
-
-Scope: write:imports
-
-Arguments: `{ fileIds?: string[] (max as the route) }`.
-
-Result: over MCP, `{ status: 'built', written, entries, sources, warnings, dropped, receipt }`. In
-Ask, the build cannot run inside the engine call that is running the tool (both hold the engine
-ledger), so the tool schedules it with `ctx.queueAfterTools` to run when the round ends and
-returns `{ status: 'queued', receipt }`; the receipt's later state records the outcome. Undo: not
-available (reason: the pack is rebuilt from the files).
-
-Reuses: `buildYourPlans`, `refreshLivePacks`, `ctx.services.engine` and the data key (T17).
-
-#### run_job
-
-Purpose: run a scheduled job now.
-
-Scope: write:jobs
-
-Arguments: `{ id: 'plan'|'simplefin-sync'|'freshness'|'confirm-guess' }`. Jobs that send email
-(`brief-email`, `deadline-alerts`) and `trash-purge` are not in the enum.
-
-Result: `{ run: { id, status, startedAt, finishedAt } or { id, status: 'queued' }, receipt }`.
-Undo: not available (reason: a job run reads and replans; its effects are undone where they land).
-`plan` on a demo store is refused as the route refuses it.
-
-Execution. `plan` and `confirm-guess` call the engine. In Ask, an engine call inside the tool
-would wait on the engine ledger the running answer holds, so for those two ids the tool schedules
-`scheduler.runNow(id)` with `ctx.queueAfterTools`, which runs after the round releases the ledger,
-and returns `status: 'queued'`; the receipt's later state records the outcome. Without
-`ctx.queueAfterTools` the call is refused, never awaited inline. `freshness` and `simplefin-sync`
-call no engine and run inline on both surfaces. Over MCP no engine call is in progress, so every
-id runs inline and returns the finished run.
-
-Reuses: `ctx.services.scheduler.runNow` (T17), `SCHEDULER_STATUS`.
-
-#### rename_account
-
-Purpose: set or clear an account's display name.
-
-Scope: write:accounts
-
-Arguments: `{ id, displayName: string or null }`.
-
-Result: `{ account: { id, label }, receipt }`. Undo: `undo_account_action { id: <receipt id> }`,
-kind `account_field` (T27, the changed `accounts` columns only).
-
-Reuses: `validateDisplayName`, the update in `accountRename` moved into `renameAccount`
-(`src/accounts/write.mjs`).
-
-#### set_account_mask
-
-Purpose: store a last four the owner typed, only on an account with none and no bridge identity.
-
-Scope: write:accounts
-
-Arguments: `{ id, mask: four digits }`.
-
-Result: `{ account, receipt }`. Undo: `undo_account_action { id: <receipt id> }`, kind
-`account_field`; the restore re-runs `queueAccountPairs`.
-
-Reuses: the `accountMask` write and `queueAccountPairs` moved into `setAccountMask`.
-
-#### set_account_owner
-
-Purpose: set who owns an account: owner, spouse, joint or business.
-
-Scope: write:accounts
-
-Arguments: `{ id, owner: 'owner'|'spouse'|'joint'|'business' }` (`OWNER_OPTIONS`).
-
-Result: `{ account, receipt }`. Undo: `undo_account_action { id: <receipt id> }`, kind
-`account_answer` (T27) whose restore calls `undoAccountAnswer` with the before value the receipt
-holds.
-
-Reuses: `setAccountAnswer`, `undoAccountAnswer` (`src/ingest/confirm.mjs`), `afterAnswer`.
-
-#### set_account_kind
-
-Purpose: set an account's kind.
-
-Scope: write:accounts
-
-Arguments: `{ id, kind: KIND_OPTIONS id }` (checking, cash, card, taxable, retirement, roth, hsa,
-529, business, loan).
-
-Result: as `set_account_owner`, same undo and receipt kind.
-
-Reuses: `setAccountAnswer`, `undoAccountAnswer`, `afterAnswer`.
-
-#### list_merge_candidates
-
-Purpose: accounts that could be merged with one account, with the merge plan or the refusal.
-
-Scope: read
-
-Arguments: `{ id }`.
-
-Result: `{ items: [ { id, label, inst, kind, mask, lastDataDate, mirror, plan: { keepId, keepLabel,
-moves }, refused? } ] }`.
-
-Reuses: `mergePlan` (`src/ingest/account-merge.mjs`), `accountMergeCandidates`.
-
-#### merge_accounts
-
-Purpose: merge two accounts that are the same account: the one destructive write.
-
-Scope: write:accounts
-
-Arguments: `{ id, withId, confirm: true, evidence: string }` (`confirm` must be the literal `true`). On both
-surfaces the caller passes it only after the person explicitly confirmed this merge; in Ask that
-is a later owner message than the one where the model showed the candidates, and the tool checks
-it with `requireEvidence` against an `evidence` argument quoting that confirmation.
-
-Result: `{ survivorId, itemId, receipt }`. Undo: `reopen_confirm_item { ids: [<itemId>] }`, which
-reverts the merge through `revertChanges` until a moved row changes (T25's tool, so T27 depends on
-T25).
-
-Reuses: `mergePlan`, `manualMerge`, `afterAnswer`.
+   `household_preferences`). The linked preference's text names the definition's id, and
+   `listPreferences` gains `definitionId`, so a later conversation resolves "my elective
+   spending" to `definition: 'elective_spending'` with no lookup and no answerer edit.
+
+Reuses `writePreference` (`src/actions/preferences.mjs`), `saveReceipt`, `requireActor`,
+`requireEvidence`, `validatePreference`, new `src/spending/definitions.mjs`, `packToggle` moved
+into `setPackActive` (`src/packs/state.mjs`), `curveSet` moved into `setCurvePositions`
+(`src/goals/curve.mjs`).
+
+#### `refresh`
+
+Purpose: bring new data into Fathom and recompute: import a file, retry one, rebuild the Your
+plans pack, run a job now. Progress label "Bringing in your data". Ticket: C10.
+
+| Operation | Parameters | Scope | Returns | Undo | Replaces |
+|---|---|---|---|---|---|
+| import_file | `name` (1..200), `mime`, exactly one of `contentBase64` or `text` | write:imports | MCP `{ file: { id, name, status, counts }, pending, receipt }`; Ask `{ status: 'queued', name, receipt }` | not available: imported rows are undone per Confirm answer; the file stays on record | planned `import_file` |
+| retry_import | `fileId` | write:imports | MCP `{ file, receipt }`; Ask `{ status: 'queued', name, receipt }` | not available (as `import_file`) | planned `retry_import` |
+| build_your_plans | `fileIds?` | write:imports | MCP `{ status: 'built', written, entries, sources, warnings, dropped, receipt }`; Ask `{ status: 'queued', receipt }` | not available: the pack is rebuilt from the files | planned `build_your_plans` |
+| run_job | `job` (`plan`, `simplefin-sync`, `freshness`, `confirm-guess`) | write:jobs | `{ run: { id, status, startedAt, finishedAt } or { id, status: 'queued' }, receipt }` | not available: a job run reads and replans; its effects are undone where they land | planned `run_job` (its `id` becomes `job`) |
+
+`import_file` takes base64 content from an MCP client or owner-pasted text (a CSV or a markdown
+note) in Ask; either way the decoded content is at most 1 MiB less the request envelope
+(`MCP_BODY_LIMIT`). A setup note is a `text/markdown` file, which covers `/api/onboarding/notes`.
+Jobs that send email (`brief-email`, `deadline-alerts`) and `trash-purge` are not in the enum;
+`plan` on a demo store is refused as the route refuses it. Execution in Ask: `import_file` and `retry_import` (document
+extraction, including markdown notes, calls `extractDocument`, which awaits the engine's
+`extract`), `build_your_plans`, and `run_job` for `plan` and `confirm-guess` all call the engine,
+which would wait on the engine ledger the running answer holds. In Ask they are scheduled with
+`ctx.queueAfterTools` to run when the round ends and return `{ status: 'queued', receipt }` (for
+the two import operations also `name`); the receipt's later state records the outcome, including
+the file id. Without `ctx.queueAfterTools` the call is refused, never awaited inline. Over MCP
+every operation runs inline and returns the finished result. Reuses `ingestFiles`,
+`retryFile` (`src/ingest/pipeline.mjs`), `buildYourPlans`, `refreshLivePacks`,
+`ctx.services.scheduler.runNow` (C2), `SCHEDULER_STATUS`, and the triggers `triggerPlan`,
+`triggerFreshness`, `triggerGuesses`.
+
+#### `undo`
+
+Purpose: undo an earlier change by its receipt id, from any write result's `undo` field.
+Progress label "Undoing a change".
+
+| Operation | Parameters | Scope | Returns | Replaces |
+|---|---|---|---|---|
+| undo | `id` (receipt id) | the receipt's scope, checked after loading it | the restored item and the updated receipt | live `undo_fact_action`, `undo_goal_action`, `undo_preference_action`, `undo_recommendation_action`, `undo_step_action`; planned `undo_account_action`, `undo_category_action`, `undo_confirm_action`, `undo_decision_action` |
+
+Listed to any key with at least one write scope. Refuses another person's change or an item edited
+since. Ticket: C1 (MCP only, as the five tools are on main); C2 offers it to Ask in chat purpose and
+replaces the fixed restore table with `registerReceiptKind`.
 
 ## 4. Rules for the model
 
-These rules go into the Ask system prompt (T28) and into the MCP server instructions.
+The rules reach the model in two parts, both assembled by C1's loader so no tool ticket edits
+`src/api/answerer.mjs`: each operation's `route` line forms the routing table, and each catalog
+module's `rules` lines join the static rules. The same text goes into the Ask system prompt
+(`buildChatPrompt`) and the MCP server `instructions`. The budget test (Design rule) caps the
+assembled text at 8,000 characters.
 
-1. Route by question shape. Call the tool in this table first; reach for `query_transactions` only
-   to show example rows.
+1. Route by question shape. Call the operation in this table first; reach for
+   `transactions.search` only to show example rows.
 
-   | Question shape | Tool |
+   | Question shape | Call |
    |---|---|
-   | A total, average or breakdown of spending or income over a period | `aggregate_transactions` |
-   | This period against that one | `compare_periods` |
-   | Money in and out by month, household against business | `cash_flow` |
-   | Subscriptions, repeating bills, what started or stopped | `recurring_charges` |
-   | Net worth, balances by part, retirement against taxable | `net_worth` |
-   | Business profit, revenue, margin | `business_pnl` |
-   | How much invested is enough, how far, when | `independence_target` |
-   | Growth, months to a number, saving needed by a date | `project_growth` |
-   | Contribution room and deadlines | `contribution_room` |
-   | Tax owed, safe harbor, marginal rate, tax what-if | `tax_estimate` |
-   | Freshness, uncategorized rows, missing history | `data_health` |
-   | Mortgage end, childcare change, 529 end | `obligation_schedule` |
-   | Spending after an obligation ends | `spending_projection` |
-   | After-tax value by account type | `after_tax_value` |
-   | When money can come out, RMDs | `access_schedule` |
-   | Retiring before access age | `bridge_check` |
+   | A total, average or breakdown of spending or income over a period | `spending.total` |
+   | This period against that one | `spending.compare` |
+   | Money in and out by month, household against business | `spending.cash_flow` |
+   | Subscriptions, repeating bills, what started or stopped | `spending.recurring` |
+   | A named definition ("my elective spending") | `spending.total` with `definition`; `spending.definitions` to list them |
+   | Mortgage end, childcare change, 529 end | `spending.obligations` |
+   | Spending after an obligation ends | `spending.projection` |
+   | Net worth, balances by part, retirement against taxable | `accounts.net_worth` |
+   | One account's balance history and freshness | `accounts.detail` |
+   | Business profit, revenue, margin | `business.pnl` |
+   | The lines behind a business figure | `business.rows` |
+   | Tax owed, safe harbor, marginal rate, tax what-if | `tax.estimate` |
+   | Contribution room and deadlines | `tax.room` |
+   | How much invested is enough, how far, when | `retirement.target` |
+   | Growth, months to a number, saving needed by a date | `retirement.growth` |
+   | After-tax value by account type | `retirement.after_tax` |
+   | When money can come out, RMDs | `retirement.access` |
+   | Retiring before access age | `retirement.bridge` |
+   | Freshness, uncategorized rows, missing history, expected tax documents | `household.health` |
+   | A stored figure (cash, taxes paid, room, net worth today) | `household.figures` |
+   | Goal pace | `goals.pace` |
    | Any arithmetic on figures already returned | `calculate` |
-   | Goal pace | `get_pace` |
-   | A named definition ("my elective spending") | `list_spending_definitions`, then the tool with `definition` |
 
 2. Never sum, scale, annualize, subtract, divide or round numbers yourself. When an answer needs a
    number no tool returned, call `calculate` with refs to the figures and named assumptions.
-3. Copy a figure's `ref` field to reference it; do not compose refs by hand. Pass the same
+3. Write each figure exactly as its `quote` field gives it (for a stored figure, its `{f:key}`
+   token). Never restate a figure in other words, spell it out, change its sign, round it, or
+   derive a second number from it (a remaining amount, a difference, a monthly figure). Money
+   leaving the household is quoted unsigned with a word that says so ("spent", "paid"). When a
+   different form is needed, call `calculate` (`round_up`, `monthly`, `subtract`).
+4. Copy a figure's `ref` field to reference it; do not compose refs by hand. Pass the same
    arguments when you re-run a call so the figure is the same.
-4. State every assumption with its name, value and source: "the owner said it" (`owner`, with
-   the owner's words as `evidence`), a saved preference (`preference`, with its id), a stored fact
-   (`fact`, with its key), or the tool's default (`default`). Pass defaults by omitting the
+5. State every assumption with its name, value and source: "the owner said it" (`owner`, with the
+   owner's words as `evidence`), a saved preference (`preference`, with its id), a stored fact
+   (`fact`, with its key), or the operation's default (`default`). Pass defaults by omitting the
    argument, and name them in the answer. Never mark a value as the owner's when the owner did not
-   say it; when a tool needs a value nobody stated (a cost basis, a tax rate), leave it out, report
-   the unavailable figure, and ask.
-5. Report data gaps. For each gap in a result, say what is missing and its size when the gap gives
+   say it; when a tool needs a value nobody stated (a cost basis, a tax rate), leave it out,
+   report the unavailable figure, and ask.
+6. Report data gaps. For each gap in a result, say what is missing and its size when the gap gives
    an amount or count. Never fill a gap with an estimate. Offer the fix the gap implies (a Confirm
    item, an import, a fact to record).
-6. When a request needs a fact Fathom lacks (a birth date, a mortgage rate), say which fact, and in
-   chat offer to record it with `record_household_fact` using the owner's own words.
-7. When no tool covers the question, say "Fathom does not have that" and what it does have. That
+7. When a request needs a fact Fathom lacks (a birth date, a mortgage rate), say which fact, and in
+   chat offer to record it with `answer.fact` using the owner's own words.
+8. When no tool covers the question, say "Fathom does not have that" and what it does have. That
    covers security selection, live market prices, money movement and tax filing.
-8. Stored figures from `get_figures` are written as `{f:key}` tokens. Figures from the new tools
-   are written as plain numbers exactly as the result gives them; the tool result grounds them.
-   Never reformat a figure into a rounder number; ask `calculate` with `round_up` instead.
-9. Use a write tool only in chat, only when the owner asked for the change in this conversation,
-   and confirm each change with its receipt and the Undo it offers. Never chain writes the owner
-   did not ask for.
-10. For an account merge, show the candidates from `list_merge_candidates` and what the merge
-    moves, ask the owner to confirm, and call `merge_accounts` with `confirm: true` only after the
-    owner's explicit yes in a later message, quoting it as `evidence`.
-11. A named spending selection the owner wants kept ("remember elective spending as") is a
-    `save_spending_definition` call, never `remember_preference`. A saved definition named in a
-    question ("my elective spending") is passed as `definition`, by the id the context lists.
+9. Use a write operation only in chat, only when the owner asked for the change in this
+   conversation, and confirm each change with its receipt and the Undo it offers. Never chain
+   writes the owner did not ask for.
+10. For an account merge, show the candidates from `accounts.merge_candidates` and what the merge
+    moves, ask the owner to confirm, and call `update_account.merge` with `confirm: true` only
+    after the owner's explicit yes in a later message, quoting it as `evidence`.
+11. A named spending selection the owner wants kept ("remember elective spending as") is
+    `update_preferences.save_definition`, never `update_preferences.remember`. A saved definition
+    named in a question ("my elective spending") is passed as `definition`, by the id the context
+    lists.
 12. Explain, do not advise on securities. Comparisons by account type describe where tax shows up
     and when money can come out; they never say which to choose.
+
+Which ticket adds which rule: C1 rules 1 (lines for its operations), 7, 8 and 9 (today's prompt
+already says most of them); C3 rules 2 to 6; C8 rule 10; C10 rule 11; C6 rule 12. Each ticket adds
+its own operations' routing lines. C1 removes today's prompt lines that name old tools
+(`get_figures`, `remember_preference`, `list_accounts`, `query_transactions`, `pnl_by_month`).
 
 ## 5. Packs as structured knowledge for tools
 
@@ -1522,9 +1199,9 @@ And the correction:
 > "I'm not saying the packs have to be tools to parse. I need that information incorporated.
 > That's the whole value of the pack. You determine how best to pull that information in."
 
-Today packs are cited markdown entries plus activation rules. Ask's system prompt already includes
-the active packs' full context (`packContext` in `buildChatPrompt`), and `list_packs`,
-`get_pack_entry` and `search_pack_entries` exist.
+Packs are cited markdown entries plus activation rules. Ask's system prompt already includes the
+active packs' full context (`packContext` in `buildChatPrompt`), and `knowledge.packs`,
+`knowledge.search` and `knowledge.entry` read them.
 
 ### The knowledge
 
@@ -1577,32 +1254,31 @@ for 1960 and later.
 
 Pinned choice, the simplest mix that gets it right:
 
-1. Pack prose is the home of the knowledge and reaches answers the way packs already do: the active
-   pack context in the prompt, plus `get_pack_entry` and search. Both new packs are always active
-   (`appliesWhen: {"all": []}` is true per `packs/README.md`), so the model always has the
-   definitions.
+1. Pack prose is the home of the knowledge and reaches answers the way packs already do: the
+   active pack context in the prompt, plus `knowledge.entry` and `knowledge.search`. Both new
+   packs are always active (`appliesWhen: {"all": []}`), so the model always has the definitions.
 2. Every rule a figure depends on is encoded once in deterministic code in `src/calc`, as
    `LAW_REFS` and `parameters-2026.mjs` are, with a `packRef` to the entry that states it. The
    figure's provenance carries that `packRef`, so the answer cites the pack.
-3. Structured tables exist only where a calculator needs data: `CATEGORY_CLASSES` and
-   `BUILTIN_DEFINITIONS` and `OBLIGATION_RULES` in `src/calc/classes.mjs`, `ACCOUNT_TREATMENT`,
-   `ACCESS_RULES` and `rmdStartAge` in `src/calc/treatment.mjs`, all frozen code constants, not a
-   new manifest schema.
-4. A consistency test per pack (`test/pack-consistency-spending.test.mjs`,
-   `test/pack-consistency-treatment.test.mjs`) asserts every `packRef` resolves through `getEntry`,
-   and that the entry's prose states the encoded value (the access ages, each RMD age and its birth years, the
-   childcare ages, the college age, every class and category name in the map), so prose and code
-   cannot drift silently.
+3. Structured tables exist only where a calculator needs data: `CATEGORY_CLASSES`,
+   `BUILTIN_DEFINITIONS` and `OBLIGATION_RULES` in `src/calc/classes.mjs` (T2, merged), and
+   `ACCOUNT_TREATMENT`, `EMPLOYER_PLAN_TYPES`, `ACCESS_RULES` and `rmdStartAge` in
+   `src/calc/treatment.mjs` (PR #83), all frozen code constants, not a new manifest schema.
+4. A consistency test per pack (`test/pack-consistency-spending.test.mjs`, merged;
+   `test/pack-consistency-treatment.test.mjs`, PR #83) asserts every `packRef` resolves through
+   `getEntry` and that the entry's prose states the encoded value, so prose and code cannot drift
+   silently.
 
 Rejected: a versioned rule-table schema in manifests parsed at runtime (more surface, a second
 source of truth to validate, and the owner said parsing is not the point); prose only (the model
 would do the arithmetic).
 
-### Tools that use it
+### Operations that use it
 
-Spending by class (`aggregate_transactions` with `groupBy: 'class'` and the built-in definitions
-`essential` and `discretionary`), `obligation_schedule`, `spending_projection`, `after_tax_value`,
-`access_schedule` and `bridge_check`, each with an H4 block in section 3.
+Spending by class (`spending.total` with `groupBy: 'class'` and the built-in definitions
+`essential` and `discretionary`), `spending.obligations`, `spending.projection`,
+`accounts.net_worth` with `groupBy: 'treatment'`, `retirement.after_tax`, `retirement.access` and
+`retirement.bridge`, each described in section 3.
 
 ### Pack changes and facts
 
@@ -1621,34 +1297,37 @@ premiums outside the household ledger).
 
 Household facts the tools need:
 
-| Key | Type | Exists today | Collectable by `record_household_fact` |
+| Key | Type | Exists today | Collectable by `answer.fact` |
 |---|---|---|---|
 | `household.ownerAge` | age | yes, `ANSWER_SHAPES` | yes |
 | `household.spouseAge` | age | yes, `ANSWER_SHAPES` | yes |
 | `household.expectedDate` | date | yes, `ANSWER_SHAPES` | yes |
-| `household.dependentAges` | int list | frozen key, no answer shape | after T19 adds the shape |
-| `household.dependentBirthDates` | date list (new `dates` shape type, 1..10) | no | after T19 |
-| `household.ownerBirthDate`, `household.spouseBirthDate` | date | no | after T19 |
-| `household.retireAge` | age per person | no | after T19 (person scope) |
-| `obligations.mortgage` | object `{ balance, rate (ratio), monthlyPayment, escrowMonthly, payoffDate? }` | no | after T19 |
-| `obligations.childcare` | object `{ schoolAgeMonthly?, afterCareEndMonthly? }` (dollars per month) | no | after T19 |
-| `obligations.childcareChangeDate` | date | no | after T19 |
-| `accounts.planType` | per account choice: `traditional_ira`, `roth_ira`, `sep_ira`, `401k`, `roth_401k`, `solo_401k`, `403b`, `457b`, `hsa`, `529`, `taxable` | no | after T19 (account scope, kinds retirement, roth, ira, taxable, brokerage) |
-| `accounts.rothFirstContributionYear` | per account year (1975 to the current year) | no | after T19 (account scope, kind roth, or plan type roth_ira or roth_401k) |
-| `accounts.rothBasis` | per account dollars | no | after T19 (account scope, kind roth) |
-| `accounts.separationDate` | per account date: the day the person left or will leave the plan's sponsoring employer | no | after T19 (account scope, `date` answer shape, accounts whose plan type is an employer plan; the owner states it, never inferred from a retirement age) |
+| `household.dependentAges` | int list | frozen key, no answer shape | after C7 adds the shape |
+| `household.dependentBirthDates` | date list (new `dates` shape type, 1..10) | no | after C7 |
+| `household.ownerBirthDate`, `household.spouseBirthDate` | date | no | after C7 |
+| `household.retireAge` | age per person | no | after C7 (person scope) |
+| `obligations.mortgage` | object `{ balance, rate (ratio), monthlyPayment, escrowMonthly, payoffDate? }` | no | after C7 |
+| `obligations.childcare` | object `{ schoolAgeMonthly?, afterCareEndMonthly? }` (dollars per month) | no | after C7 |
+| `obligations.childcareChangeDate` | date | no | after C7 |
+| `accounts.planType` | per account choice: `traditional_ira`, `roth_ira`, `sep_ira`, `401k`, `roth_401k`, `solo_401k`, `403b`, `457b`, `hsa`, `529`, `taxable` | no | after C7 (account scope, kinds retirement, roth, ira, taxable, brokerage) |
+| `accounts.rothFirstContributionYear` | per account year (1975 to the current year) | no | after C7 (account scope, kind roth, or plan type roth_ira or roth_401k) |
+| `accounts.rothBasis` | per account dollars | no | after C7 (account scope, kind roth) |
+| `accounts.separationDate` | per account date: the day the person left or will leave the plan's sponsoring employer | no | after C7 (account scope, `date` answer shape, accounts whose plan type is an employer plan; the owner states it, never inferred from a retirement age) |
 
 `accounts.planType` replaces the `accounts.taxTreatment` key an earlier draft named: one fact
 gives the treatment, the employer-plan status rule of 55 needs, and the Roth IRA or Roth 401(k)
-subtype. HSA withdrawal purpose is not a fact: `after_tax_value` returns both outcomes. Facts can
+subtype. HSA withdrawal purpose is not a fact: `retirement.after_tax` returns both outcomes. Facts can
 also come from data: a mirrored loan account's balance gives the mortgage balance, and
 the dependent ages fact gives birth years when no dates are stored.
 
-The tickets for this section are T2, T3, T19, T20 and T21 in the single ordered list in section 7.
+The `spending-and-obligations` pack and its sibling entries merged with T2. The
+`account-tax-treatment` pack and the `advanced-retirement` pointer entry are PR #83. The fact
+shapes are C7.
 
 ## 6. API parity
 
-Owner principle:
+Owner principle, refined 2026-11-07: every action the API can do, the agent can do through some
+tool call; not a one-to-one mapping between routes and tools.
 
 > "Anything that can happen through the API should be doable by the agent. If I want the agent to
 > categorize things for me, it can. If I want it to change some of my accounts from my spouse to
@@ -1656,1111 +1335,1030 @@ Owner principle:
 > first-class citizen to the agent. And if I just want to use my own agent, Fathom becomes
 > headless through MCP."
 
-### Route inventory
+Parity is capability coverage. Every route in `src/api/router.mjs` that reads or changes
+household data maps to at least one (tool, operation) pair that does the same thing for the same
+caller, or it sits on the exclusion list below with its reason. Coverage means the capability, not
+identical output: `GET /api/spending` and `spending.total` both sum household spending, and the
+route's response shape is the screen's, not the tool's.
 
-Every mutating route in `src/api/router.mjs` on main, plus the account routes on
-feat/account-dialog-edit and the preference and undo routes on feat/ask-actions. The account
-merge-candidates route is a GET and is covered by the read tool `list_merge_candidates`.
+### Route map
 
-| Route | What it does | Covering tool | Status | Scope |
-|---|---|---|---|---|
-| `/api/auth/register/options` | Passkey registration options | none | Excluded | none |
-| `/api/auth/register/verify` | Passkey registration | none | Excluded | none |
-| `/api/auth/signin/options` | Sign-in options | none | Excluded | none |
-| `/api/auth/signin/verify` | Sign in | none | Excluded | none |
-| `/api/auth/recover` | Account recovery | none | Excluded | none |
-| `/api/auth/signout` | Sign out | none | Excluded | none |
-| `/api/auth/passkeys/link` | Link a new device | none | Excluded | none |
-| `/api/auth/passkeys/:id/revoke` | Revoke a passkey | none | Excluded | none |
-| `/api/admin/users/invite` | Invite a user | none | Excluded | none |
-| `/api/admin/users/:id/role` | Change a user's role | none | Excluded | none |
-| `/api/admin/users/:id/remove` | Remove a user | none | Excluded | none |
-| `/api/admin/users/:id/passkeys/:keyId/revoke` | Revoke a user's passkey | none | Excluded | none |
-| `/api/auth/invitations/accept` | Accept an invitation | none | Excluded | none |
-| `/api/operator/households` | Provision a household | none | Excluded | none |
-| `/api/recs/:id/action` | Rec status, owner, step, snooze | `set_recommendation_status`, `set_recommendation_owner`; `set_recommendation_step` | exists on main; step coming in feat/ask-actions | write:recs; write:steps |
-| `/api/recs/:id/answers` | Save a rec's fact answers and replan | `answer_recommendation_questions` | new in T22 | write:facts |
-| `/api/recs/:id/start-over` | Detach a rec's threads | `start_recommendation_over` | new in T22 | write:recs |
-| `/api/wargame/:name/pick` | Pick a war-game point | `pick_wargame_point` | new in T22 | write:decisions |
-| `/api/decisions/:id/decide` | Decide a decision | `decide_decision` | new in T22 | write:decisions |
-| `/api/decisions/:id/revisit` | Reopen a decision | `revisit_decision` | new in T22 | write:decisions |
-| `/api/packs/:id/toggle` | Turn a pack on or off | `set_pack_active` | new in T22 | write:preferences |
-| `/api/packs/:id/whatif` | Run a pack's what-if answer | none | Excluded | none |
-| `/api/engine` | Engine on or off | none | Excluded | none |
-| `/api/engine/cap` | Engine budget cap | none | Excluded | none |
-| `/api/your-plans/build` | Build the private Your plans pack | `build_your_plans` | new in T26 | write:imports |
-| `/api/ask` | Ask a question | none | Excluded | none |
-| `/api/threads` | Start a thread | none | Excluded | none |
-| `/api/threads/:id/rename` | Rename a thread | none | Excluded | none |
-| `/api/threads/:id/archive` | Archive a thread | none | Excluded | none |
-| `/api/threads/:id/trash` | Trash a thread | none | Excluded | none |
-| `/api/threads/:id/restore` | Restore a thread | none | Excluded | none |
-| `/api/threads/:id/delete` | Delete a thread | none | Excluded | none |
-| `/api/accounts/:id/name` | Display name | `rename_account` | new in T27 | write:accounts |
-| `/api/accounts/:id/mask` | Last four | `set_account_mask` | new in T27 | write:accounts |
-| `/api/accounts/:id/owner` | Owner | `set_account_owner` | new in T27 | write:accounts |
-| `/api/accounts/:id/kind` | Kind | `set_account_kind` | new in T27 | write:accounts |
-| `/api/accounts/:id/merge` | Merge two accounts | `merge_accounts` (explicit confirm) | new in T27 | write:accounts |
-| `/api/goals` | Create a goal | `create_goal` | coming in feat/ask-actions | write:goals |
-| `/api/goals/:id` | Edit a goal | `edit_goal` | coming in feat/ask-actions | write:goals |
-| `/api/goals/:id/archive` | Archive a goal | `archive_goal` | new in T23 | write:goals |
-| `/api/goals/:id/delete` | Delete a goal | `delete_goal` | new in T23 | write:goals |
-| `/api/goals/:id/suggestion` | Dismiss, restore or rate a suggestion | `set_goal_suggestion` | new in T23 | write:goals |
-| `/api/curve` | Tradeoff curve positions | `set_curve_position` | new in T23 | write:preferences |
-| `/api/onboarding` | First-run wizard step | none | Excluded | none |
-| `/api/onboarding/notes` | Save setup notes as a markdown file | `import_file` (a `text/markdown` note) | new in T26 | write:imports |
-| `/api/demo/reset` | Reset the demo | none | Excluded | none |
-| `/api/keys` | Create an API key | none | Excluded | none |
-| `/api/keys/:id/revoke` | Revoke an API key | none | Excluded | none |
-| `/api/files` | Upload files | `import_file` | new in T26 | write:imports |
-| `/api/files/:id/retry` | Retry a file | `retry_import` | new in T26 | write:imports |
-| `/api/confirm/list` | List Confirm items (a read) | `list_confirm_items` | new in T25 | read |
-| `/api/confirm/answers` | Answer many items | `answer_confirm_item` | new in T25 | write:confirm |
-| `/api/confirm/reopen-many` | Reopen many items | `reopen_confirm_item` | new in T25 | write:confirm |
-| `/api/confirm/:id/answer` | Answer or revise one item | `answer_confirm_item` | new in T25 | write:confirm |
-| `/api/confirm/:id/reopen` | Reopen one item | `reopen_confirm_item` | new in T25 | write:confirm |
-| `/api/email/test` | Send a test email | none | Excluded | none |
-| `/api/email/brief` | Send the brief email | none | Excluded | none |
-| `/api/advisor/reviews` | Send a rec to the advisor | `send_to_advisor` | new in T24 | write:recs |
-| `/api/advisor/reviews/:id/verdict` | Record a verdict | `record_advisor_verdict` | new in T24 | write:recs |
-| `/api/advisor/checkin` | Set the next check-in | `set_advisor_checkin` | new in T24 | write:recs |
-| `/api/advisor/packets` | Build a review packet | `create_review_packet` | new in T24 | write:recs |
-| `/api/jobs/:id/run` | Run a job now | `run_job` | new in T26 | write:jobs |
-| `/api/simplefin/connect` | Connect the bank bridge | none | Excluded | none |
-| `/api/simplefin/disconnect` | Disconnect the bank bridge | none | Excluded | none |
-| `/api/yearend/marks` | Mark an expected document not needed | `mark_yearend_item` | new in T24 | write:confirm |
-| `/api/actions/:id/undo` | Undo an action receipt | `undo_<kind>_action` | coming in feat/ask-actions; four more in T17 | the receipt's scope |
-| `/api/preferences` | Remember a preference | `remember_preference` | coming in feat/ask-actions | write:preferences |
-| `/api/preferences/:id` | Edit a preference | `remember_preference` with `id` | coming in feat/ask-actions | write:preferences |
-| `/api/preferences/:id/delete` | Delete a preference | `forget_preference` | new in T18 | write:preferences |
+All 96 routes on main at this revision: 52 covered, 44 excluded. "Ticket" is the ticket that
+lands the covering operation.
 
-Choices the table settles:
-
-1. Onboarding notes are covered by `import_file`: the route only wraps `ingestFile` on a markdown
-   note, so a second tool would duplicate it. Facts said in chat go through
-   `record_household_fact`. The onboarding step route is first-run sequencing for the wizard and is
-   excluded.
-2. Threads and `/api/ask` are excluded as conversation chrome: an MCP client keeps its own
-   conversations, and Ask creating or renaming its own threads is a loop with no owner value.
-3. The pack what-if is excluded: it is itself an Ask answer, and the agent answers what-ifs with
-   the tools directly.
-4. Every tool is on both surfaces. `import_file` takes base64 content over MCP and owner-pasted
-   text in Ask, with the same 1 MiB limit. `build_your_plans`, and `run_job` for the engine-calling
-   `plan` and `confirm-guess` jobs, run inline over MCP and are queued to run after the round in
-   Ask. `merge_accounts` needs `confirm: true` and the owner's confirming
-   words on both.
+| Route | Covered by | Ticket | Note |
+|---|---|---|---|
+| `GET /healthz` | excluded: health check | | |
+| `GET /api/auth/session` | excluded: identity and sessions | | |
+| `POST /api/auth/register/options` | excluded: identity and sessions | | |
+| `POST /api/auth/register/verify` | excluded: identity and sessions | | |
+| `POST /api/auth/signin/options` | excluded: identity and sessions | | |
+| `POST /api/auth/signin/verify` | excluded: identity and sessions | | |
+| `POST /api/auth/recover` | excluded: identity and sessions | | |
+| `POST /api/auth/signout` | excluded: identity and sessions | | |
+| `GET /api/auth/passkeys` | excluded: identity and sessions | | |
+| `POST /api/auth/passkeys/link` | excluded: identity and sessions | | |
+| `POST /api/auth/passkeys/:id/revoke` | excluded: identity and sessions | | |
+| `GET /api/admin/users` | excluded: administration | | |
+| `POST /api/admin/users/invite` | excluded: administration | | |
+| `POST /api/admin/users/:id/role` | excluded: administration | | |
+| `POST /api/admin/users/:id/remove` | excluded: administration | | |
+| `POST /api/admin/users/:id/passkeys/:keyId/revoke` | excluded: administration | | |
+| `POST /api/auth/invitations/accept` | excluded: administration | | |
+| `POST /api/operator/households` | excluded: administration | | |
+| `GET /api/scenario` | `household.summary` | C1 | the UI payload; its parts are also `recommendations.list`, `household.figures`, `household.deadlines` and `goals.list` |
+| `GET /api/pace` | `goals.pace` | C1 |  |
+| `GET /api/identity` | excluded: identity and sessions | | |
+| `POST /api/recs/:id/action` | `act_on_recommendation.status`, `act_on_recommendation.owner`, `act_on_recommendation.step` | C1 | snooze is status snoozed with wake |
+| `POST /api/actions/:id/undo` | `undo.undo` | C1 |  |
+| `POST /api/preferences` | `update_preferences.remember` | C1 |  |
+| `POST /api/preferences/:id` | `update_preferences.remember` | C1 | with id |
+| `POST /api/preferences/:id/delete` | `update_preferences.forget` | C10 |  |
+| `POST /api/recs/:id/answers` | `answer.rec_questions` | C8 |  |
+| `POST /api/recs/:id/start-over` | `act_on_recommendation.start_over` | C9 |  |
+| `POST /api/wargame/:name/pick` | `act_on_recommendation.pick_point` | C9 |  |
+| `POST /api/decisions/:id/decide` | `act_on_recommendation.decide` | C9 |  |
+| `POST /api/decisions/:id/revisit` | `act_on_recommendation.revisit` | C9 |  |
+| `POST /api/packs/:id/toggle` | `update_preferences.pack` | C10 |  |
+| `POST /api/packs/:id/whatif` | excluded: conversation chrome | | |
+| `GET /api/packs/:id/entries/:entryId` | `knowledge.entry` | C1 |  |
+| `POST /api/engine` | excluded: engine controls | | |
+| `POST /api/engine/cap` | excluded: engine controls | | |
+| `POST /api/your-plans/build` | `refresh.build_your_plans` | C10 |  |
+| `POST /api/ask` | excluded: conversation chrome | | |
+| `GET /api/threads` | excluded: conversation chrome | | |
+| `POST /api/threads` | excluded: conversation chrome | | |
+| `GET /api/threads/:id` | excluded: conversation chrome | | |
+| `POST /api/threads/:id/rename` | excluded: conversation chrome | | |
+| `POST /api/threads/:id/archive` | excluded: conversation chrome | | |
+| `POST /api/threads/:id/trash` | excluded: conversation chrome | | |
+| `POST /api/threads/:id/restore` | excluded: conversation chrome | | |
+| `POST /api/threads/:id/delete` | excluded: conversation chrome | | |
+| `GET /api/accounts/:id` | `accounts.detail` | C5 |  |
+| `GET /api/accounts/:id/transactions` | `transactions.search` | C1 | `accountId` set |
+| `GET /api/pnl` | `business.pnl` | C4 | C1's `pnl` reads workbook lines only, as `pnl_by_month` does; the route also derives P&L from categorized transactions, which C4's `businessPnl` build covers |
+| `GET /api/pnl/rows` | `business.rows` | C4 |  |
+| `GET /api/spending` | `spending.total` | C4 |  |
+| `GET /api/spending/rows` | `transactions.search` | C4 | bucket, class and category filters |
+| `POST /api/accounts/:id/name` | `update_account.rename` | C8 |  |
+| `POST /api/accounts/:id/mask` | `update_account.mask` | C8 |  |
+| `POST /api/accounts/:id/owner` | `update_account.owner` | C8 |  |
+| `POST /api/accounts/:id/kind` | `update_account.kind` | C8 |  |
+| `GET /api/accounts/:id/merge-candidates` | `accounts.merge_candidates` | C8 |  |
+| `POST /api/accounts/:id/merge` | `update_account.merge` | C8 | explicit confirm |
+| `GET /api/goals/suggestions` | `goals.suggestions` | C9 |  |
+| `POST /api/goals` | `update_goal.create` | C1 |  |
+| `POST /api/goals/:id` | `update_goal.edit` | C1 |  |
+| `POST /api/goals/:id/archive` | `update_goal.archive` | C9 |  |
+| `POST /api/goals/:id/delete` | `update_goal.delete` | C9 |  |
+| `POST /api/goals/:id/suggestion` | `update_goal.suggestion` | C9 |  |
+| `POST /api/curve` | `update_preferences.curve` | C9 |  |
+| `POST /api/onboarding` | excluded: onboarding wizard | | |
+| `POST /api/onboarding/notes` | `refresh.import_file` | C10 | a `text/markdown` note |
+| `POST /api/demo/reset` | excluded: demo reset | | |
+| `GET /api/keys` | excluded: API keys | | |
+| `POST /api/keys` | excluded: API keys | | |
+| `POST /api/keys/:id/revoke` | excluded: API keys | | |
+| `GET /api/mcp` | excluded: API keys | | |
+| `POST /api/files` | `refresh.import_file` | C10 |  |
+| `GET /api/files` | `household.imports` | C10 |  |
+| `POST /api/files/:id/retry` | `refresh.retry_import` | C10 |  |
+| `GET /api/confirm` | `household.confirm_items` | C8 | status pending |
+| `POST /api/confirm/list` | `household.confirm_items` | C8 | a read despite POST |
+| `POST /api/confirm/answers` | `answer.confirm` | C8 |  |
+| `POST /api/confirm/reopen-many` | `answer.reopen` | C8 |  |
+| `GET /api/confirm/:id` | `household.confirm_items` | C8 | `ids` |
+| `POST /api/confirm/:id/answer` | `answer.confirm` | C8 | one item; `revise` |
+| `POST /api/confirm/:id/reopen` | `answer.reopen` | C8 |  |
+| `GET /api/email` | excluded: outbound email | | |
+| `POST /api/email/test` | excluded: outbound email | | |
+| `POST /api/email/brief` | excluded: outbound email | | |
+| `GET /api/jobs` | `household.health` | C5 | its `jobs` list |
+| `POST /api/advisor/reviews` | `advisor_review.send` | C9 |  |
+| `POST /api/advisor/reviews/:id/verdict` | `advisor_review.verdict` | C9 |  |
+| `POST /api/advisor/checkin` | `advisor_review.checkin` | C9 |  |
+| `POST /api/advisor/packets` | `advisor_review.packet` | C9 |  |
+| `GET /api/advisor/packets/:id` | excluded: file download | | |
+| `POST /api/jobs/:id/run` | `refresh.run_job` | C10 |  |
+| `POST /api/simplefin/connect` | excluded: bank credentials | | |
+| `POST /api/simplefin/disconnect` | excluded: bank credentials | | |
+| `POST /api/yearend/marks` | `answer.yearend_mark` | C8 |  |
+| `GET /api/yearend/packet` | excluded: file download | | |
 
 ### Exclusions
 
-1. Sign-in, registration, recovery, sign-out and passkeys: identity belongs to the person, never an
-   agent. The agent offers a link to the sign-in or Settings screen.
-2. Admin user management and operator provisioning: administration of who can see the household is
-   not delegated to a key. The agent links to Settings, People.
-3. API key create and revoke: a key must never mint or widen keys. The agent links to Settings,
-   Connections.
-4. Anything that sends email or leaves the product (`/api/email/test`, `/api/email/brief`): no
-   outbound actions from an agent. The agent links to Settings, Email.
-5. SimpleFIN connect and disconnect: bank credential handling stays with the person. The agent
-   links to Settings, Connections; `run_job {id: 'simplefin-sync'}` covers a sync once connected.
-6. Engine switch and cap: the agent never turns itself on or raises its own budget. The agent links
-   to Settings, Engine.
+Eleven reasons, each a whole class of routes:
+
+1. Identity and sessions (sign-in, registration, recovery, sign-out, passkeys, session and
+   identity reads): identity belongs to the person, never an agent. The agent offers a link to
+   the sign-in or Settings screen.
+2. Administration (user management, invitations, operator provisioning): who can see the
+   household is not delegated to a key. The agent links to Settings, People.
+3. API keys (list, create, revoke, the MCP info route): a key must never mint, widen or read keys.
+   The agent links to Settings, Connections.
+4. Outbound email (settings read, test send, brief send): no outbound actions from an agent. The
+   agent links to Settings, Email.
+5. Bank credentials (SimpleFIN connect and disconnect): credential handling stays with the person.
+   `refresh.run_job {job: 'simplefin-sync'}` covers a sync once connected.
+6. Engine controls (engine on or off, budget cap): the agent never turns itself on or raises its
+   own budget. The agent links to Settings, Engine.
 7. Demo reset: demo-only and destructive. No link.
+8. Conversation chrome (`/api/ask`, threads, the pack what-if): an MCP client keeps its own
+   conversations, Ask creating or renaming its own threads is a loop with no owner value, and the
+   pack what-if is itself an Ask answer.
+9. Onboarding wizard step: first-run sequencing for the wizard. Facts said in chat go through
+   `answer.fact`; setup notes through `refresh.import_file`.
+10. File downloads (the advisor packet and the year-end packet): binary attachments for a
+    browser, not data for an agent; the data inside them is readable through
+    `recommendations.advisor` and `household.health`.
+11. Health check: no household data.
 
-### New scopes
+### Scopes
 
-The scopes today are `read` and `write:recs` on main, plus `write:facts`, `write:steps`,
-`write:goals` and `write:preferences` from feat/ask-actions. The minimal additions:
+The scopes on main are `read`, `write:recs`, `write:facts`, `write:steps`, `write:goals` and
+`write:preferences`. C2 adds:
 
-| Scope | Tools | SCOPE_INFO access text |
+| Scope | Operations | SCOPE_INFO access text |
 |---|---|---|
-| `write:accounts` | `rename_account`, `set_account_mask`, `set_account_owner`, `set_account_kind`, `merge_accounts` | Rename accounts, set their last four, owner and kind, and merge duplicates with confirmation. |
-| `write:categories` | `set_transaction_category`, `set_merchant_rule` | Correct transaction categories and set merchant rules. |
-| `write:confirm` | `answer_confirm_item`, `reopen_confirm_item`, `mark_yearend_item` | Answer and reopen Confirm questions and mark expected tax documents. |
-| `write:imports` | `import_file`, `retry_import`, `build_your_plans` | Import files and retry or build from imported documents. |
-| `write:jobs` | `run_job` | Run planning, sync, freshness and guess jobs now. |
-| `write:decisions` | `pick_wargame_point`, `decide_decision`, `revisit_decision` | Pick and decide war-game options and reopen decisions. |
+| `write:accounts` | `update_account` (all five) | Rename accounts, set their last four, owner and kind, and merge duplicates with confirmation. |
+| `write:categories` | `categorize` (both) | Correct transaction categories and set merchant rules. |
+| `write:confirm` | `answer.confirm`, `answer.reopen`, `answer.yearend_mark` | Answer and reopen Confirm questions and mark expected tax documents. |
+| `write:imports` | `refresh.import_file`, `refresh.retry_import`, `refresh.build_your_plans` | Import files and retry or build from imported documents. |
+| `write:jobs` | `refresh.run_job` | Run planning, sync, freshness and guess jobs now. |
+| `write:decisions` | `act_on_recommendation.decide`, `revisit`, `pick_point` | Pick and decide war-game options and reopen decisions. |
 
-Advisor tools use `write:recs` (the advisor workflow acts on recommendations), and its
-`SCOPE_INFO` text gains them. Pack activation and curve positions use `write:preferences`. T17
-adds the six scopes to `WRITE_SCOPES` (`src/shared/action-scopes.mjs`) and `SCOPE_INFO`
-(`src/mcp/keys.mjs`); `createRegistryServer`'s whitelist already reads `WRITE_SCOPES` after
-feat/ask-actions merges, so T17 asserts it accepts each one. Every tool is offered to Ask (writes
-in chat purpose) and to MCP under its scope, with no exceptions. A headless client with a
+`advisor_review` and `act_on_recommendation.start_over` use `write:recs`; `update_preferences`
+uses `write:preferences` throughout; `answer.rec_questions` uses `write:facts`. The `SCOPE_INFO`
+access texts name operations, never tool names that no longer exist. A headless client with a
 full-scope key can then do everything the UI can except the exclusions.
 
 ### Parity test
 
-T1 makes each tool module declare the routes it covers: a module in `src/tools/catalog/` exports
-`tools` and `parity` (`{ '<route path>': ['<tool name>'] }`), and the registry loader collects
-both. T4 adds `src/tools/parity.mjs` with two checked-in maps, `PARITY_EXCLUDED` (route to a
-one-sentence reason) and `PARITY_PENDING` (route to the tool names a later ticket or a sibling
-branch will add, with the ticket or branch named), and `test/tools-parity.test.mjs`, which imports
-`routes` from `src/api/router.mjs` and fails when:
+C2 adds `src/tools/parity.mjs` with two checked-in maps, `PARITY_EXCLUDED` (`'METHOD path'` to one
+of the eleven reasons above) and `PARITY_PENDING` (`'METHOD path'` to the `tool.operation` pairs a
+later ticket adds, with the ticket named), and `test/tools-parity.test.mjs`, which imports
+`routes` from `src/api/router.mjs` and the registry's declared routes (each operation's `routes`)
+and fails when:
 
-1. a route with method POST, PUT, PATCH or DELETE is not covered: no module declares it, it is not
-   excluded, and it is not pending;
+1. a route of any method is neither declared by a registered operation, nor excluded, nor
+   pending;
 2. a route is both excluded and declared or pending;
-3. a declared tool name is not in the registry, or a declared or excluded route is not in the
-   router;
-4. `process.env.PARITY_STRICT === '1'` and a pending tool name is absent from the registry.
+3. a declared, excluded or pending route is not in the router;
+4. a pending pair is registered but does not declare that route (a ticket that lands an operation
+   must declare the routes it covers);
+5. `process.env.PARITY_STRICT === '1'` and a pending pair is not registered.
 
-A pending entry passes whether its tool is absent or present, and a pending route need not exist
-in the router yet. So the parity test stays green when a sibling branch merges its routes or
-tools, and when a ticket lands its tool: nobody edits `src/tools/parity.mjs` after T4. Strict mode
-is the completion check (`PARITY_STRICT=1 node --test test/tools-parity.test.mjs` passes once every
-pending tool exists); CI does not set it. A pending entry whose tool exists is redundant and
-harmless; removing them is optional cleanup, not a ticket step. New routes still cannot skip the
-agent, because rule 1 fails on any route nobody declared, excluded or listed as pending.
+A pending entry passes while its operation is absent, so tickets land in any order and nobody
+edits `src/tools/parity.mjs` after C2. A new route added by any later change fails rule 1 until
+someone maps or excludes it. `PARITY_STRICT=1 node --test test/tools-parity.test.mjs` passing is
+the program's completion check, run by the coordinator after the last ticket merges; CI does not
+set it. This test replaces the previous revision's T4.
 
 ## 7. Implementation tickets
 
-Calendar estimate: about three to five calendar days end to end at three parallel workers, each
-ticket one agent run plus CI and a cross-provider review, closer to five because of the serialized
-chains below. Dominated by the sibling merges (feat/ask-actions, feat/account-dialog-edit,
-fix/ask-answer-quality, feat/ask-evals) and the owner's merge gate. It stretches if a sibling slips
-(every write ticket waits on feat/ask-actions through T17), if review rounds exceed one per ticket,
-if CI reruns pile up on a loaded host, or if a migration number collides.
+Done from the previous cut: T1 and T2 (the figure envelope and loader; spending classes and the
+spending-and-obligations pack) have merged and stay as they are. T3 is PR #83: it merges first, as
+it stands, as the treatment constants and pack; it adds no tool, so no tool name in it changes, and
+the retirement tickets C6 and C7 import from it rather than absorbing it. T16 is PR #84: it merges
+first, as it stands, and C1 re-points every case (section 8). The old T4 to T15 and T17 to T28 are
+replaced by C0 to C10 below.
+
+Calendar estimate: about four to six calendar days end to end at up to five parallel workers, each
+ticket one agent run plus CI and one cross-provider review. Set by the owner's merge gate (PRs #83
+and #84 before wave 1, then each ticket), by C1 in wave 1 (C0 beside it), and by the chain C1, C3, C6,
+C7.
+It stretches if C1 needs a second review round, if PR #76 merges mid-C1 and forces a rebase, or if
+CI reruns pile up on a loaded host.
 
 Waves (dependency graph). A ticket starts when everything in its Depends on line has merged.
 
-| Wave | Starts when | Tickets |
-|---|---|---|
-| 1 | now | T1, T2 |
-| 2 | T1 merges (T3 needs T2, T6 needs T2) | T3, T4, T5, T6, T8, T9, T10, T11, T12 |
-| 3 | its wave 2 inputs merge | T7 (T3), T13 (T6), T14 (T5, T6), T15 (T3, T5, T10) |
-| Sibling-gated | feat/ask-evals merges | T16 |
-| Sibling-gated | feat/ask-actions merges | T17 (also T8), T19 |
-| 4 | T17 or T19 merges | T18 (T6, T8, T17), T20 (T5, T6, T19) |
-| 5 | T20 merges | T21 (T3, T15, T19, T20) |
-| Writes | T4 and T17 merge | T22, T23, T24, T25, T26 |
-| Writes, late | T25 and feat/account-dialog-edit merge | T27 |
-| Last | fix/ask-answer-quality, T5, T6, T14, T17, T18 merge | T28 |
+| Wave | Starts when | Tickets | Workers |
+|---|---|---|---|
+| 0 | now | owner merges PR #83 and PR #84 (both green) | none |
+| 1 | PR #84 merged | C0, C1 | 2 |
+| 2 | C1 merged | C2, C3, C4 | 3 |
+| 3 | its inputs merge | C5 (C3, PR #83), C6 (C3, C4, PR #83), C8 (C2), C9 (C2, C3), C10 (C2, C4) | 5 |
+| 4 | C6 merged | C7 (C4, C6) | 1 |
 
-Serialized chains, by shared file: `src/api/answerer.mjs` (T8, then T17, then T28);
-`test/answerer.test.mjs` (T8, then T28); `docs/architecture.md` (T8, then T18);
-`src/packs/test/content.test.mjs` (T2, then T3); `src/calc/targets.mjs` and
-`test/tools.test.mjs` (T1, then T6 and T8); `src/tools/catalog/transactions.mjs` (T1, then T6);
-`src/tools/catalog/business.mjs` (T1, then T8). Every other file has one owning ticket, and
-tickets marked parallel share no file.
-
-How tools register. T1 turns `src/tools/index.mjs` into a loader: it imports every module in
-`src/tools/catalog/` (sorted by file name, top-level `await`), concatenates their `tools`
-exports into the sorted `tools` array, their `parity` exports into the route map, and their
-optional `capabilities` exports (string names) into `CAPABILITIES`, which the eval loader reads
-(T16). A tool ticket
-adds its own catalog module and never edits `src/tools/index.mjs` or `src/tools/parity.mjs`. Write
-tickets register their receipt kinds from their own module through `registerReceiptKind` (T17).
-No ticket edits this file.
+Serialized files: `src/api/answerer.mjs` and `test/answerer.test.mjs` (C1, then C2; no other
+ticket edits them); `src/mcp/keys.mjs` (C1, then C2); `src/calc/figure.mjs` (C3 only);
+`src/spending/definitions.mjs` (C4, then C10); `src/tools/catalog/business.mjs` and
+`src/tools/catalog/transactions.mjs` (C1, then C4); `docs/architecture.md` (C1, then C10);
+`evals/graders.mjs` (C0 and C1 in different functions: C0 the number matching in
+`evidenceNumbers` and `gradeFigures`, C1 `gradeRequiredTools` and the stored-figure token check;
+the second to merge rebases); the rest of `evals/` (C1 only, then per-case scripts by their
+tickets). `src/api/handlers.mjs` is edited by C9 and C10 in different functions
+(rec, decision and war-game handlers in C9; pack toggle, preference delete and Your plans build in
+C10), and `src/api/ingest-handlers.mjs` by C8 (Confirm) and C10 (files); in each pair the second
+to merge rebases. Every other file has one owning ticket.
 
 Standing acceptance, part of every ticket below:
 
-1. Every figure a new or changed read tool returns passes `assertRefsResolve` (T1).
-2. Every new write tool: a read-only MCP key gets "Permission denied:" for it before argument
-   validation; it is offered to Ask in chat purpose and listed over MCP under its scope; every
-   receipt kind it creates restores through its undo, and every advertised undo call validates
-   against the named tool's schema.
-3. Tests build real stores (`tempDb` from `test/helpers/server.mjs` with `seedDemo`, or
+1. Every figure a new or changed referenceable operation returns passes `assertRefsResolve`.
+2. Every new write operation: a read-only MCP key gets `Permission denied: <tool>.<operation>`
+   for it before argument validation; it is offered to Ask in chat purpose and listed over MCP
+   under its scope; every receipt kind it creates restores through `undo`, and every advertised
+   `undo` field validates against the `undo` tool's schema.
+3. Every new operation declares its `route` line, its `routes`, and its summary; the budget test
+   (`test/tools-registry.test.mjs`) stays green.
+4. Tests build real stores (`tempDb` from `test/helpers/server.mjs` with `seedDemo`, or
    `createRealStore` from `test/helpers/real-store.mjs`) on the synthetic demo household and
    assert figures against a deterministic recomputation from the same store, never hard-coded
    amounts.
-4. The ticket edits only its Files. Eval cases are never among them: a ticket's Evals line lists
-   the cases that become required passes when its tools register (T16's availability rule).
-
-### T1 Figure envelope, adapters and the registry loader
-
-Size: about 260 production lines, 200 test lines.
-
-Depends on: none.
-
-Files: `src/calc/figure.mjs` (new: `figure`, `envelope`, `fromStored`, `fromPace`, `rowsSource`,
-`mergeSources`, `UNITS`, `GAP_CODES`, precision by unit), `src/calc/targets.mjs` (imports the
-moved helpers), `src/calc/pace.mjs` (`paceFigure` takes `unit` and `dataThrough` and rounds by
-unit; every caller passes them), `test/pace.test.mjs` (non-money pace figures), `src/tools/index.mjs` (the loader; validation and `callTool` stay),
-`src/tools/catalog/figures.mjs` (new: `get_figures` and `get_pace` with envelopes),
-`src/tools/catalog/transactions.mjs` (new: `query_transactions` moved unchanged),
-`src/tools/catalog/business.mjs` (new: `pnl_by_month` moved unchanged), `src/mcp/keys.mjs`
-(`toolsForScopes` sorts by name), `test/helpers/figures.mjs` (new: `assertRefsResolve`),
-`test/figure-envelope.test.mjs` (new), `test/tools.test.mjs` (envelope assertions).
-
-Acceptance:
-
-1. `targets.mjs` defines none of the moved helpers and its tests pass unchanged.
-2. `envelope` rounds per unit as section 3 states (a ratio of 1/3 keeps full precision, a usd
-   value rounds to cents, months from a projection round up), accepts ratios above 1 and below 0,
-   rejects an unknown unit or gap code, and allows a null value only with `unavailable`.
-3. `get_figures` returns every field it returned before plus the envelope; `fromStored` keeps the
-   stored `src` and `locator` under `provenance.stored`; a `get_figures` ref and a `get_pace` ref
-   each resolve through `assertRefsResolve`.
-4. Pace figures carry their units: on the demo store, `gapDays` is `days`, rollup counts are
-   integer `count`, the meter ratio is an unrounded `ratio` equal to used over limit recomputed in
-   the test, and money figures are `usd` to cents; every pace envelope's `asOf` equals its
-   result's `dataThrough`. `fromPace` refuses a figure with no unit.
-5. The registry built by the loader holds the same tools as before, sorted by name, and the MCP
-   tool list is sorted by name.
-
-Test command: `node --test test/figure-envelope.test.mjs test/pace.test.mjs test/tools.test.mjs src/calc/test/*.test.mjs src/mcp/test/server.test.mjs`
-
-Parallel: beside T2 (no shared files).
-
-Evals: none turn green alone; every new-tool case depends on it.
-
-### T2 Spending classes and the spending-and-obligations pack
-
-Size: about 120 production lines and 6 pack entries, 150 test lines.
-
-Depends on: none.
-
-Files: `src/calc/classes.mjs` (new: `CATEGORY_CLASSES`, `classOf(category, bucket)`,
-`BUILTIN_DEFINITIONS`, `OBLIGATION_RULES`, each with `packRef`), `packs/spending-and-obligations/`
-(new: manifest and the six entries in section 5), `packs/kids-dependents/care-cost-by-age.md`,
-`packs/w2-benefits/premiums-through-payroll.md`,
-`packs/self-employed-partnership/premiums-paid-by-business.md` (and those three manifests),
-`src/packs/test/content.test.mjs` (inventory and entry subjects), `test/pack-consistency-spending.test.mjs` (new).
-
-Acceptance:
-
-1. Every category in `CATEGORY_TABLES` (both parsers) has a class; a test fails on a new category
-   without one.
-2. The pack has `appliesWhen: {"all": []}`, six entries, and is active for an empty fact set.
-3. The consistency test resolves every `packRef` with `getEntry` and finds each class name, each
-   category name, the childcare ages (5 and 13), the college age (18) and the escrow rule in the
-   cited entry's body.
-4. Entries carry `Tax year: 2026`, `Reviewed:` and inline links matching their citations.
-
-Test command: `node --test test/pack-consistency-spending.test.mjs src/packs/test/engine.test.mjs src/packs/test/content.test.mjs`
-
-Parallel: beside T1. Owns `src/packs/test/content.test.mjs` until it merges; T3 follows it.
-
-Evals: none alone; feeds `q05-essential-vs-discretionary` with T6.
-
-### T3 Account tax treatment pack and constants
-
-Size: about 160 production lines and 6 pack entries, 170 test lines.
-
-Depends on: T2 (serialized on `src/packs/test/content.test.mjs`).
-
-Files: `src/calc/treatment.mjs` (new: `ACCOUNT_TREATMENT` by kind and by plan type,
-`EMPLOYER_PLAN_TYPES`, `ACCESS_RULES`, `rmdStartAge(birthDate)`, each with `packRef`),
-`packs/account-tax-treatment/` (new), `packs/advanced-retirement/access-and-rmd-pointer.md` and
-its manifest, `src/packs/test/content.test.mjs`, `test/pack-consistency-treatment.test.mjs` (new),
-`test/treatment.test.mjs` (new).
-
-Acceptance:
-
-1. `rmdStartAge` returns 72, 73 and 75 for birth dates in 1950, 1955 and 1965, and the
-   `required-minimum-distributions` entry states each age with its birth years.
-2. Every account kind in `KIND_OPTIONS` and `INVESTMENT_KINDS`, and every `accounts.planType`
-   value, maps to a treatment; `retirement` and `ira` kinds map to "needs plan type".
-3. The consistency test finds 59 and a half, 55, 65, the five-year rule and the HSA 20 percent
-   additional tax in the cited entries.
-4. The pack is always active and has six entries.
-
-Test command: `node --test test/treatment.test.mjs test/pack-consistency-treatment.test.mjs src/packs/test/content.test.mjs`
-
-Parallel: beside T4 to T6, T8 to T12.
-
-Evals: none alone; feeds `q29-penalty-free-access` and `q30-rmd-start` with T21.
-
-### T4 API parity test and exclusion list
-
-Size: about 120 production lines, 110 test lines.
-
-Depends on: T1 (the loader collects each module's `parity` export).
-
-Files: `src/tools/parity.mjs` (new), `src/tools/catalog/core-parity.mjs` (new: the `parity`
-declarations for the existing write tools on main), `test/tools-parity.test.mjs` (new).
-
-Acceptance:
-
-1. `PARITY_EXCLUDED` holds every excluded route with the reason section 6 gives; `PARITY_PENDING`
-   holds every route a later ticket or sibling branch covers, with the tool names and owner.
-2. Each of the four failure rules in section 6 has a test over a synthetic routes list and
-   registry, plus one run over the real router and registry that passes.
-3. A pending entry passes with its tool absent and with it present; a pending route absent from
-   the router passes.
-4. `PARITY_STRICT=1 node --test test/tools-parity.test.mjs` fails while a pending tool is absent.
-
-Test command: `node --test test/tools-parity.test.mjs`
-
-Parallel: beside T3, T5, T6, T8 to T12.
-
-Evals: none (a structural gate, not an Ask behavior).
-
-### T5 calculate and figure references
-
-Size: about 260 production lines, 260 test lines.
-
-Depends on: T1.
-
-Files: `src/tools/refs.mjs` (new), `src/tools/assumption-evidence.mjs` (new: `statedValues`,
-`assumptionStated`), `src/tools/catalog/calculate.mjs` (new), `src/calc/growth.mjs` (new:
-`futureValue`, `requiredMonthly`), `test/tools-calculate.test.mjs` (new),
-`test/assumption-evidence.test.mjs` (new).
-
-Acceptance:
-
-1. Every operation in section 3 computes the expected value and unit on refs to real
-   `get_figures` and `get_pace` figures over the demo store, recomputed in the test from the same
-   figures; ratio results above 1 and below 0 are returned unrounded.
-2. Unit mismatches, division by zero, more than 20 operands, depth over 6, ref depth over 3, refs
-   to write tools and bare numbers are `bad_input` with a message naming the cause.
-3. `source: 'fact'` with a value that differs from the stored fact is refused; `source: 'default'`
-   with a non-default value is refused; `source: 'owner'` without `evidence` is refused.
-4. `assumptionStated` over the questions' actual wording, with `ctx.ownerStatements` stubbed in
-   the test: Q02 "What investment balance would cover that at a 4 percent withdrawal rate?"
-   accepts `withdrawalRate` 0.04 and refuses 0.05; Q25 "If returns are 3 percent instead of 4,
-   when would we reach the target?" accepts `realReturn` 0.03; Q26 "What target do we need at a
-   3.5 percent withdrawal rate?" accepts 0.035 and refuses 3.5; "4%" and "0.04" each accept 0.04;
-   Q27 "$1,000 more a month" accepts 1000 usd_per_month; Q28 "$15 million" accepts 15000000 usd.
-   With no `ctx.ownerStatements` in an Ask context, owner assumptions are refused.
-5. A grounding test runs `groundAnswer` over a reply that states "4 percent" and the calculate
-   result's value and finds both grounded; if the answerer's echo rule blocks it, the test is
-   committed as `todo` naming T28 and this ticket still passes.
-
-Test command: `node --test test/tools-calculate.test.mjs test/assumption-evidence.test.mjs`
-
-Parallel: beside T3, T4, T6, T8 to T12.
-
-Evals: `q14-savings-rate`, `q21-net-worth-change`, `q44-cash-cushion-months` (with T6 and T7).
-
-### T6 aggregate_transactions and query_transactions filters
-
-Size: about 300 production lines, 280 test lines.
-
-Depends on: T1, T2.
-
-Files: `src/calc/aggregate.mjs` (new), `src/calc/targets.mjs` (`spendingInputs` reuses the shared
-row selection), `src/tools/catalog/spending.mjs` (new), `src/tools/catalog/transactions.mjs`
-(`query_transactions` filters and fields), `test/tools-spending.test.mjs` (new).
-
-Acceptance:
-
-1. `{measure: 'spending'}` over `spending_window` equals `spendingInputs(...).spendTotal` on the
-   demo store and on a `createRealStore` household with a card account.
-2. The Q01 arguments return a total that equals household spending less the mortgage rows,
-   recomputed in the test from `resolveCategories`; `excluded` reports the mortgage and tax rows'
-   matched amounts; groups sum to the total; the healthcare class group is present.
-3. `definition: 'essential'` returns one total equal to the sum of its five class groups,
-   recomputed in the test.
-4. Gaps appear with correct amounts and counts for uncategorized, guessed, a silent card account,
-   and `outside_household_ledger` when `income.w2` is true.
-5. Every period, group, scope and definition merge rule has a test; `limit` folds into `other`.
-6. `query_transactions` filters by bucket, class and merchant and returns the resolved fields; its
-   existing tests in `test/tools.test.mjs` pass unchanged.
-
-Test command: `node --test test/tools-spending.test.mjs test/categories.test.mjs test/tools.test.mjs`
-
-Parallel: beside T3 to T5, T8 to T12.
-
-Evals: `q01-spend-excl-mortgage-tax`, `q04-groceries-dining-monthly`,
-`q05-essential-vs-discretionary`, `q06-top-merchants`, `q07-childcare-2025`,
-`q08-healthcare-premiums`, `q15-income-by-source` (with T8), `q16-monthly-take-home`,
-`q41-529-contributions` (with T9).
-
-### T7 net_worth
-
-Size: about 160 production lines, 150 test lines.
-
-Depends on: T1, T3.
-
-Files: `src/tools/catalog/net-worth.mjs` (new), `test/tools-net-worth.test.mjs` (new).
-
-Acceptance:
-
-1. `total` and part figures equal `buildTrend` on the demo store at the last point.
-2. `series` returns `months` points matching the trend's points.
-3. `groupBy: 'treatment'` groups every demo account by `ACCOUNT_TREATMENT`, with `accounts.planType`
-   overriding kind when stated, and names accounts whose kind needs a plan type in a gap.
-4. Carried accounts produce `carried_balance` gaps.
-
-Test command: `node --test test/tools-net-worth.test.mjs test/trend.test.mjs`
-
-Parallel: beside T13 to T15.
-
-Evals: `q20-net-worth-parts`, `q22-retirement-vs-taxable`, `q32-accounts-by-treatment`.
-
-### T8 business_pnl replaces pnl_by_month
-
-Size: about 150 production lines, 160 test lines changed or added.
-
-Depends on: T1.
-
-Files: `src/tools/catalog/business.mjs` (`business_pnl` replaces `pnl_by_month`),
-`src/api/answerer.mjs` (the progress label only), `test/tools.test.mjs`, `test/answerer.test.mjs`
-(migrate the `pnl_by_month` cases), `docs/architecture.md` (section 8 table row),
-`test/tools-business.test.mjs` (new).
-
-Acceptance:
-
-1. No file outside `mock-v2/` names `pnl_by_month`.
-2. Revenue, expenses, profit and margin per entity equal sums recomputed from `pnl_lines` in the
-   test, for ytd, a custom range and calendar year.
-3. `compareToPriorYear` returns the prior year's same months with `revenueDifference`,
-   `revenueRatio`, `profitDifference` and `profitRatio` equal to the test's recomputation.
-4. The migrated answerer grounding tests pass against `business_pnl` results.
-
-Test command: `node --test test/tools-business.test.mjs test/tools.test.mjs test/answerer.test.mjs`
-
-Parallel: beside T3 to T6, T9 to T12. First in the `src/api/answerer.mjs` and
-`docs/architecture.md` chains.
-
-Evals: `q17-business-profit-margin`, `q18-revenue-vs-last-year`, `q19-expense-categories-quarter`.
-
-### T9 contribution_room
-
-Size: about 200 production lines, 170 test lines.
-
-Depends on: T1.
-
-Files: `src/tools/catalog/room.mjs` (new), `test/tools-room.test.mjs` (new).
-
-Acceptance:
-
-1. On a `createRealStore` household after a planning run, `remaining` equals the stored `room.*`
-   figures and `limit` equals the calculator output for the same inputs.
-2. Without a planning run in the tax year, rows come from the calculators with `used`
-   unavailable and a gap.
-3. Every type in the enum returns a row or a gap naming why not.
-
-Test command: `node --test test/tools-room.test.mjs`
-
-Parallel: beside T3 to T8, T10 to T12.
-
-Evals: `q38-solo401k-room`, `q39-ira-room`, `q40-hsa-room`, `q42-dependent-care-limit`.
-
-### T10 tax_estimate
-
-Size: about 240 production lines, 200 test lines.
-
-Depends on: T1.
-
-Files: `src/tools/catalog/tax.mjs` (new), `src/jobs/planner/household.mjs` (export a pure entry
-the what-if reuses, no behavior change), `test/tools-tax.test.mjs` (new).
-
-Acceptance:
-
-1. Projected, paid, withheld and safe-harbor figures equal the stored `tax.*` and `sh.*` figures.
-2. A what-if of zero returns zero deltas; a positive extra business income returns deltas equal to
-   rerunning `householdTax` with and without it in the test.
-3. Marginal rates equal the bracket the projected taxable income falls in, from `TAX_2026`, as
-   unrounded ratios.
-4. `nextDueDate` equals the next estimated-payment deadline after the clock.
-
-Test command: `node --test test/tools-tax.test.mjs`
-
-Parallel: beside T3 to T9, T11, T12.
-
-Evals: `q34-tax-owed`, `q35-safe-harbor`, `q36-extra-income-whatif`, `q37-se-tax`.
-
-### T11 data_health
-
-Size: about 140 production lines, 120 test lines.
-
-Depends on: T1.
-
-Files: `src/tools/catalog/health.mjs` (new), `test/tools-health.test.mjs` (new).
-
-Acceptance:
-
-1. Account freshness equals `accountFreshness` for every demo account.
-2. Category counts equal `categoryCoverage`; year-end items equal `yearendChecklist`.
-3. An account with no rows has empty `lastData` and an `account_no_history` gap.
-
-Test command: `node --test test/tools-health.test.mjs`
-
-Parallel: beside T3 to T10, T12.
-
-Evals: `q56-stale-accounts`, `q57-uncategorized-count`, `q58-no-history-accounts`.
-
-### T12 recurring_charges
-
-Size: about 200 production lines, 200 test lines.
-
-Depends on: T1.
-
-Files: `src/calc/recurring.mjs` (new), `src/tools/catalog/recurring.mjs` (new),
-`test/tools-recurring.test.mjs` (new).
-
-Acceptance:
-
-1. On a store with synthetic monthly, quarterly and annual charges added through `addFile`, each
-   is detected with its cadence, typical amount and next date; a one-off charge is not.
-2. A charge that stops is `stopped`; one that starts after `since` is `new`; a price change sets
-   `changed`.
-3. Matched transfers are never charges; annual cost equals typical amount times cadence per year.
-
-Test command: `node --test test/tools-recurring.test.mjs`
-
-Parallel: beside T3 to T11.
-
-Evals: `q45-subscriptions-annual`, `q46-new-recurring`, `q47-stopped-or-changed`.
-
-### T13 compare_periods and cash_flow
-
-Size: about 200 production lines, 180 test lines.
-
-Depends on: T6.
-
-Files: `src/tools/catalog/flows.mjs` (new), `test/tools-flows.test.mjs` (new).
-
-Acceptance:
-
-1. `compare_periods` totals equal two `aggregate_transactions` calls; difference and ratio follow,
-   and the ratio is absent when `a` is zero.
-2. `unequal_periods` appears when month counts differ.
-3. `cash_flow` household plus business inflow and outflow equal the totals of every non-transfer
-   row; business to household transfers equal the matched pairs recomputed in the test.
-
-Test command: `node --test test/tools-flows.test.mjs`
-
-Parallel: beside T7, T14, T15.
-
-Evals: `q11-monthly-net-cash-flow`, `q12-business-to-personal`, `q13-negative-months`,
-`q48-this-year-vs-last`, `q49-summer-vs-summer`, `q50-dining-trend`.
-
-### T14 independence_target and project_growth
-
-Size: about 230 production lines, 220 test lines.
-
-Depends on: T5, T6.
-
-Files: `src/tools/catalog/targets.mjs` (new), `test/tools-targets.test.mjs` (new).
-
-Acceptance:
-
-1. With defaults, `target`, `investedNow`, `months` and `projectedDate` equal `independencePlan`
-   over the same inputs on the demo store.
-2. With a ref to the Q01 aggregate, the target equals the ref's value over the rate, rounded up to
-   the next thousand, and provenance holds the ref's provenance.
-3. A withdrawal rate outside 0.02 to 0.06 or a real return outside minus 0.05 to 0.10 is refused;
-   covered, no-savings and too-long statuses each have a test.
-4. `project_growth` balance, months and monthly agree with `futureValue`, `monthsToReach` and
-   `requiredMonthly`; `byAge` resolves from a birth date fact and falls back to the age fact.
-
-Test command: `node --test test/tools-targets.test.mjs`
-
-Parallel: beside T7, T13, T15.
-
-Evals: `q02-independence-target-4pct`, `q03-gap-and-date`, `q23-ten-year-growth`,
-`q24-monthly-to-target-by-55`, `q25-return-3pct-whatif`, `q26-withdrawal-35pct`,
-`q27-extra-1000-sooner`.
-
-### T15 after_tax_value
-
-Size: about 190 production lines, 200 test lines.
-
-Depends on: T3, T5, T10 (refs to `tax_estimate` marginal rates).
-
-Files: `src/tools/catalog/after-tax.mjs` (new), `test/tools-after-tax.test.mjs` (new).
-
-Acceptance:
-
-1. Each treatment's after-tax value equals the section 3 rule recomputed in the test from the
-   positions and the passed rates.
-2. A taxable row with a position lacking cost basis returns `basis`, `unrealizedGain`,
-   `taxOnWithdrawal` and `afterTax` unavailable with `no_cost_basis` counting the positions; a
-   hypothetical taxable row without `basis` does the same.
-3. An HSA row returns both `afterTaxMedical` and `afterTaxNonmedical` and an unavailable
-   `afterTax`; a Roth row without `accounts.rothFirstContributionYear` returns `qualifiedFrom`
-   unavailable with a gap; a `retirement` account without `accounts.planType` is unavailable with
-   a gap. Facts for these cases are written with `addFact` once T19 is on main, else the cases
-   assert the gaps.
-4. Missing rates are refused; refs to `tax_estimate` marginal rates are accepted.
-
-Test command: `node --test test/tools-after-tax.test.mjs`
-
-Parallel: beside T7, T13, T14 once T10 has merged.
-
-Evals: `q28-15m-retirement-vs-brokerage`, `q33-unrealized-gains-tax`.
-
-### T16 Ask eval cases
-
-Size: about 60 production lines of case loader glue, 69 case files of about 25 lines each.
-
-Depends on: feat/ask-evals merged.
-
-Files: `evals/cases/` (one file per case ID in section 8), and only the case index file the
-feat/ask-evals runner defines.
-
-Acceptance:
-
-1. Every case ID in section 8 exists with the question, follow-ups, required tool calls with
-   argument predicates, forbidden behavior (unsourced figure, self-computed figure, an assumption
-   with source `owner` whose value is not in the owner's messages), expected figures computed at
-   run time from the demo store by the named deterministic call, and a word budget.
-2. Expectation is availability-based and computed at run time, never written into a case: each
-   case lists `requires`, its tool names plus named capabilities, and the case loader checks the
-   tools against the registry (`getTool`) and the capabilities against `CAPABILITIES` (exported by
-   `src/tools/index.mjs`, collected by T1's loader from each catalog module's `capabilities`
-   export). A case with any requirement absent is expected-fail and reports what is missing; a
-   case with every requirement present is a required pass. No later ticket edits `evals/cases/`;
-   registering a tool or a capability is what turns its cases into required passes.
-3. Capabilities and the tickets that register them: `ownerStatements` (T17, from
-   `src/tools/catalog/undo.mjs`: owner assumptions are checkable in Ask) and `definitions` (T18,
-   from `src/tools/catalog/definitions.mjs`: saved definitions resolve in `aggregate_transactions`).
-4. `npm run eval:ask` passes on main with the cases missing a requirement reported as expected
-   failures, and a test of the loader shows a case flipping to required only when both a stub tool
-   with its name and a stub capability it requires are added.
-
-Test command: `npm run eval:ask`
-
-Parallel: beside any ticket; it owns only `evals/cases/`.
-
-Evals: creates every case; the ones whose tools already exist are required passes at once
-(`q43-goal-pace`, `q66-security-pick-refused`, `q67-market-quote-refused`,
-`q68-money-movement-refused`).
-
-### T17 Write scopes, receipt kinds and tool services
-
-Size: about 180 production lines, 220 test lines.
-
-Depends on: feat/ask-actions merged, T1, T8 (serialized on `src/api/answerer.mjs`).
-
-Files: `src/shared/action-scopes.mjs`, `src/mcp/keys.mjs` (`SCOPE_INFO`),
-`src/actions/receipts.mjs` (`registerReceiptKind` replaces the fixed `TABLES`, kind `setting`),
-`src/tools/catalog/undo.mjs` (new: `undo_account_action`, `undo_category_action`,
-`undo_confirm_action`, `undo_decision_action`, and `capabilities: ['ownerStatements']`), `src/tools/actions.mjs` (removes `mcpOnly` from
-the five feat/ask-actions undo tools), `src/server.mjs` (one `services` object),
-`src/mcp/index.mjs` (`ctx.services`, `ctx.ownerStatements` from the request evidence),
-`src/api/answerer.mjs` (`createLiveAnswerer` accepts `services` and puts it, with
-`ownerStatements` bound to `ownerStatements` from `src/actions/evidence.mjs`, on the tool
-context), `src/mcp/test/keys.test.mjs`,
-`test/write-scopes.test.mjs` (new), `test/tool-services.test.mjs` (new).
+5. After C1, a ticket's only `evals/` change is adding `evals/scripts/<case-id>.mjs` for the
+   cases section 8 assigns to it; registering its operations, capabilities and scripts is what
+   turns those cases into required passes, and `npm run eval:ask` (in its Test command) shows them
+   passing.
+6. The ticket runs only its own test command locally (AGENTS.md agent workflow); CI runs the full
+   suite and Playwright.
+
+Each ticket below is written to the implementable-ticket contract: its Depends on lines name
+merges only, its decisions are made here, and every Done when item names the test that proves it,
+run by the worker or by PR CI. No item needs a person at run time.
+
+### C0 Eval grader adjudication
+
+Size: about 120 production lines, 220 test lines.
+
+Depends on: PR #84 merged.
+
+Files: `evals/graders.mjs` (`evidenceNumbers`, `gradeFigures`, `numericFigures`), `evals/harness.mjs`
+(passes the answer's dynamic context numbers as `contextNumbers`), `test/eval-grader.test.mjs` (new).
+
+Decisions (section 8, "Sourced number"): the grader's sourced-number test follows the six rules
+in that table, so a live run measures tool use and the model's quoting, not formatting noise.
+
+Done when:
+
+1. For each number form in the "Sourced number" table, a fixture answer over real tool results
+   from the demo store gets the verdict the table gives: an unsigned amount of a negative result
+   value is sourced; the same cent value with or without commas or trailing `.00` is sourced; a
+   `k` or `m` abbreviation is sourced only when exact to the cent; a rounded restatement is a
+   `rounded` violation; a spelled-out number is a `spelled_out` violation, except a count up to
+   twenty that equals the length of a list in a tool result of the turn, which is sourced; a
+   number found only in the answer's dynamic context (the household summary block) is
+   `context-only`. Verified by `test/eval-grader.test.mjs`.
+2. Fixtures built from tier 1 scripted answers for `business-pnl-january`, `goals-pace` and
+   `spending-latest-health`, each stating every figure in the forms the live run used (unsigned
+   expenses, dropped cents, counts in words), grade as sourced; the same answers with one
+   invented amount still fail as `unsourced`. Verified by `test/eval-grader.test.mjs`.
+3. A violation's `kind` is one of `unsourced`, `self-computed`, `rounded`, `spelled_out`,
+   `context-only`, and the harness report counts each kind per case. Verified by
+   `test/eval-grader.test.mjs` and `test/ask-evals-runner.test.mjs`.
+4. `npm run eval:ask` passes with the same required passes as its base. Verified by
+   `npm run eval:ask`.
+
+Test command: `node --test test/eval-grader.test.mjs test/ask-evals.test.mjs test/ask-evals-runner.test.mjs && npm run eval:ask`
+
+### C1 Operation registry, context budget and the live-tool migration
+
+Size: about 450 production lines added or changed, about 1,200 test and fixture lines changed
+(mostly call sites in about 30 test files and the 102 eval cases), one PR.
+
+Depends on: T1 (merged), PR #84 merged.
+
+Files: `src/tools/index.mjs` (operation loader, per-operation validation, generated descriptions,
+assembled routing and rule text, parity collection), `src/tools/tools.mjs` (new: the twenty tool
+headers), `src/tools/catalog/` (the existing `figures.mjs`, `business.mjs` and `transactions.mjs`
+become operation modules; new `household.mjs`, `accounts.mjs`, `goals.mjs`,
+`recommendations.mjs`, `knowledge.mjs`, `answer.mjs`, `act-on-recommendation.mjs`,
+`update-goal.mjs`, `update-preferences.mjs`, `undo.mjs`), `src/tools/actions.mjs` and
+`src/tools/packs.mjs` (folded into those modules and removed), `src/mcp/server.mjs`
+(per-operation permission, narrowed enum, `instructions`), `src/mcp/keys.mjs` (`toolsForScopes`
+by operation scope, `SCOPE_INFO` text), `src/engine/tools.mjs` (`createRegistryServer` accepts
+tool kinds and operation scopes), `src/api/answerer.mjs` (labels and routing text from the
+registry, the `transactions` special cases, the internal `callTool` calls), `src/api/fake-answers.mjs`,
+`scripts/mcp-smoke.mjs`, `evals/catalog.json`, `evals/cases.mjs`, `evals/graders.mjs`,
+`evals/harness.mjs`, `docs/architecture.md` (section 8 tool table and the pack search paragraph),
+`docs/development.md` (MCP smoke section), `docs/known-limits.md`, `e2e/chat.spec.mjs`,
+`e2e/connect.spec.mjs`, `e2e/engine-screen.spec.mjs`, `src/engine/test/transport.test.mjs`,
+`src/mcp/test/` (`actions`, `helpers`, `keys`, `mcp.integration`, `ownership`, `server`), and in
+`test/`: `account-rename`, `answerer`, `api-keys`, `api`, `ask-actions`, `ask-evals-runner`,
+`ask-evals`, `ask-quality` (its `TOOL_NAMES` fixture), `ask-stream`, `ask-threads`,
+`ask-work-block`, `chat-api`, `figure-envelope`, `goals`, `jobs/advisor`, `jobs/mg-triggers`,
+`live-smoke-shape`, `mcp-deploy-smoke`, `pace`, `preferences`, `rec-owner`, `rec-threads`,
+`tools-packs`, `tools`, and `tools-registry` (new).
+
+Decisions: the 30 live names map as section 9 says, with no alias; `undo` stays MCP-only;
+`knowledge.packs` merges `list_packs` and `packs_status` as section 3 says; `household.facts`
+takes up to 500 keys; `business.pnl` and `transactions.search` keep their old arguments and
+results (C4 extends both); `accounts.holdings` renames `accountId` to `id`; progress and source
+labels move from `src/api/answerer.mjs` into the tool headers, one per tool (the engine's tool
+event carries only the tool name, because the live stream announces a tool before its arguments
+arrive); the MCP smoke prints `<tool>.<operation> pass|fail <bytes>` and probes
+`act_on_recommendation.status` for the write denial.
+
+Done when:
+
+1. The registry lists exactly `household` (summary, facts, fact_shapes, figures, deadlines),
+   `accounts` (list, holdings), `transactions` (search), `business` (pnl), `goals` (list, pace),
+   `recommendations` (list, detail, advisor), `knowledge` (packs, search, entry), `answer`
+   (fact), `act_on_recommendation` (status, owner, step), `update_goal` (create, edit),
+   `update_preferences` (remember) and `undo` (undo), and `getTool` returns null for each of the
+   30 old names. Verified by `test/tools-registry.test.mjs`.
+2. Every tool obeys the Design rule: required `operation` enum, reads and writes never in one
+   tool, at most eight operations (except `calculate`), one schema per parameter name per tool,
+   every parameter used by an operation, the first read operation needs no other argument, every
+   schema compiles through `createRegistryServer`; the loader refuses a duplicate operation and a
+   conflicting parameter schema (each with a test over a synthetic module). Verified by
+   `test/tools-registry.test.mjs`.
+3. An unknown operation, an argument the operation does not use, and a missing argument the
+   operation requires are each `bad_input` naming the operation, through `callTool` and through
+   the Ask registry server. Verified by `test/tools-registry.test.mjs`.
+4. A key with `read` and `write:recs` lists `act_on_recommendation` with operation enum `owner`,
+   `status`; calling `step` returns text starting `Permission denied:
+   act_on_recommendation.step needs the write:steps scope` even with invalid arguments; a read
+   key lists no write tool. Verified by `src/mcp/test/server.test.mjs`.
+5. Every migrated test keeps its assertions with only the call changed; on the demo store every id
+   and status `packs_status` returned (recorded in the test from its old handler logic) appears in
+   `knowledge.packs` with the same status. Verified by `test/tools.test.mjs` and
+   `test/tools-packs.test.mjs`.
+6. `src/api/answerer.mjs` holds no map keyed by tool name; progress labels, source labels and the
+   routing and rule text come from the registry; the Ask prompt and the MCP `instructions` carry
+   the same assembled text. Verified by `test/answerer.test.mjs` and
+   `test/ask-work-block.test.mjs`.
+7. The budget test builds the full-scope tool list, serializes it and passes under 30,000
+   characters, each description at most 900 and the assembled rule text at most 8,000, printing
+   the three numbers. Verified by `test/tools-registry.test.mjs`.
+8. No tracked file except `docs/ask-tools.md` contains any of the 30 old names as a word
+   (ignoring the `<household_summary>` prompt tag); the test reads `git ls-files`. Verified by
+   `test/tools-registry.test.mjs`.
+9. Every eval case is re-pointed as section 8 lists, including the `portfolio` and
+   `annual-spending` oracle changes there; each required call carries `operation`; the loader's
+   availability probe checks (tool, operation) pairs (`requires.operations` replaces
+   `requires.tools`), capabilities and `requires.script`; a loader test flips a case to required
+   only when a stub operation with its pair registers and, for a scripted case, its script file
+   exists; `npm run eval:ask` passes, every case whose "Tier 1 required after" column says C1 is a
+   required pass, no case that was a required pass on the base fails, and every expected failure
+   names its missing pairs, capabilities or script; `gradeRequiredTools` reports each required
+   call as `ok`, `missing` (pair not called) or `predicate_failed` (pair called; names the
+   failing predicates); predicate op `includes_or_absent` passes when the array includes the value
+   or the argument is omitted. Verified by `test/ask-evals.test.mjs`,
+   `test/ask-evals-runner.test.mjs` and `npm run eval:ask`.
+10. The MCP smoke calls each read tool's first operation and gets the permission denial for
+    `act_on_recommendation.status` on a read key. Verified by `test/mcp-deploy-smoke.test.mjs`.
+
+Test command: `node --test test/tools-registry.test.mjs test/tools.test.mjs test/tools-packs.test.mjs test/answerer.test.mjs test/ask-quality.test.mjs test/ask-actions.test.mjs test/ask-work-block.test.mjs test/ask-evals.test.mjs test/ask-evals-runner.test.mjs test/mcp-deploy-smoke.test.mjs src/mcp/test/*.test.mjs && npm run eval:ask`
+
+### C2 Write plumbing and the API parity gate
+
+Size: about 320 production lines, 330 test lines.
+
+Depends on: C1.
+
+Files: `src/shared/action-scopes.mjs`, `src/mcp/keys.mjs` (`SCOPE_INFO`), `src/actions/receipts.mjs`
+(`registerReceiptKind(kind, { table, pk } or { restore })` replaces the fixed table; kind
+`setting`), `src/tools/catalog/undo.mjs` (`undo` loses `mcpOnly`; `capabilities:
+['ownerStatements']`), `src/server.mjs` (one `services` object), `src/mcp/index.mjs`
+(`ctx.services`, `ctx.ownerStatements`), `src/api/answerer.mjs` (`createLiveAnswerer` accepts
+`services` and puts it, with `ownerStatements` bound to `src/actions/evidence.mjs`, on the tool
+context), `src/tools/parity.mjs` (new), `src/mcp/test/keys.test.mjs`,
+`test/write-scopes.test.mjs` (new), `test/tool-services.test.mjs` (new),
+`test/tools-parity.test.mjs` (new).
 
 `services` is `{ scheduler, engine, config: { dataDir, dataKeyFile, clock }, dataKey() }`, built
-once in `src/server.mjs` and passed to both `createMcpHandler` and `createLiveAnswerer`. Neither
-context has these today (the MCP context on feat/ask-actions carries `replan` and `queuePlan`
-only; Ask's carries the action context).
-
-Acceptance:
-
-1. `WRITE_SCOPES` and `SCOPE_INFO` hold `write:accounts`, `write:categories`, `write:confirm`,
-   `write:imports`, `write:jobs` and `write:decisions` with the section 6 access text, and the
-   `write:recs` text names the advisor tools.
-2. `createRegistryServer` accepts an entry with each new scope and offers it only for purpose chat;
-   key creation accepts the new scopes; a `read` key lists no write tool.
-3. The existing receipt kinds still undo exactly as before (the feat/ask-actions tests pass); a
-   kind registered from a test module with a table restores; one with a `restore` hook calls it;
-   an unregistered kind is refused; kind `setting` restores a settings row by key.
-4. A test tool reading `ctx.services` sees the same scheduler, engine and config through an MCP
-   request (`createMcpHandler` over a real store) and through an Ask answer with the fake engine,
-   and in Ask `ctx.ownerStatements()` returns the owner's messages of that conversation.
-5. All nine undo tools (`undo_preference_action`, `undo_fact_action`, `undo_step_action`,
-   `undo_goal_action`, `undo_recommendation_action` and the four new ones) carry no `mcpOnly`
-   flag, are listed over MCP under their scope and offered to Ask in chat purpose, and each undoes
-   a receipt of its scope through an MCP request and through an Ask answer with the fake engine
-   scripting the call (new-scope undo tools use a receipt kind registered by the test).
-
-Test command: `node --test test/write-scopes.test.mjs test/tool-services.test.mjs src/mcp/test/keys.test.mjs test/ask-actions.test.mjs`
-
-Parallel: beside T19 and the wave 3 tickets. Second in the `src/api/answerer.mjs` chain.
-
-Evals: none (plumbing).
-
-### T18 Saved spending definitions linked to preferences
-
-Size: about 230 production lines plus one migration, 230 test lines.
-
-Depends on: T6, T8 (serialized on `docs/architecture.md`), T17, feat/ask-actions merged.
-
-Files: `src/store/migrations/<next>-spending-definitions.sql` (number set at merge; adds
-`spending_definitions` and `preferences.definition_id`), `src/spending/definitions.mjs` (new),
-`src/actions/preferences.mjs` (refuse editing a linked preference, delete both on forget,
-`listPreferences` returns `definitionId`), `src/tools/catalog/definitions.mjs` (new:
-`list_spending_definitions`, `save_spending_definition`, `delete_spending_definition`,
-`forget_preference`, receipt kind `spending_definition`, and `capabilities: ['definitions']`), `docs/architecture.md` (Tables),
-`test/tools-definitions.test.mjs` (new).
-
-Acceptance:
-
-1. After migration, `spending_definitions (id slug primary key, name, def JSON, actor_id,
-   created_at, updated_at)` and `preferences.definition_id` (unique, nullable) exist.
-2. `save_spending_definition` creates the definition and one linked preference whose text names it
-   and its id; saving again updates both; `undo_preference_action` on its receipt restores both
-   rows or removes both.
-3. `remember_preference` on a linked preference is refused; `forget_preference` on it deletes both
-   rows; `delete_spending_definition` deletes both; each undo restores both.
-4. A second conversation over the same store whose prompt context comes from `listPreferences`
-   contains the definition's id, and `aggregate_transactions {definition: 'elective_spending'}`
-   uses the saved selectors.
-5. A built-in id is refused.
-
-Test command: `node --test test/tools-definitions.test.mjs test/preferences.test.mjs`
-
-Parallel: beside T20, T22 to T26.
-
-Evals: `q09-elective-definition`, `q10-save-elective-definition`.
-
-### T19 Household fact shapes for obligations and access
-
-Size: about 140 production lines, 160 test lines.
-
-Depends on: feat/ask-actions merged.
-
-Files: `src/jobs/triggers/common.mjs` (`ANSWER_SHAPES`, `CONFIRM_TASKS`, `acceptsAnswerAccount`
-taking a list of kinds or plan types), `src/facts/answers.mjs` (the `dates` type),
-`test/fact-shapes.test.mjs` (new). The new keys are documented in section 5 of this file, so the
-ticket does not edit `docs/architecture.md`.
-
-Acceptance:
-
-1. Every new key in the section 5 facts table has a shape and a confirm task; the `dates` type
-   accepts 1 to 10 ISO dates and refuses anything else; `obligations.mortgage` requires
-   `escrowMonthly`.
-2. `record_household_fact` accepts each new key with a valid value and the owner's words as
-   evidence, and refuses an invalid one.
-3. `accounts.planType` is offered only for retirement, roth, ira, taxable and brokerage accounts;
-   `accounts.rothFirstContributionYear` and `accounts.rothBasis` only for Roth accounts;
-   `accounts.separationDate` only for accounts whose stored plan type is an employer plan, as a
-   `date` answer shape.
-
-Test command: `node --test test/fact-shapes.test.mjs test/fact-answers.test.mjs`
-
-Parallel: beside T17, T18 and the wave 3 tickets.
-
-Evals: none alone; T20 and T21 cases need it.
-
-### T20 obligation_schedule and spending_projection
-
-Size: about 280 production lines, 260 test lines.
-
-Depends on: T5 (the ref resolver for `base` refs), T6, T19.
-
-Files: `src/calc/obligations.mjs` (new), `src/tools/catalog/obligations.mjs` (new),
-`test/tools-obligations.test.mjs` (new).
-
-Acceptance:
-
-1. A stated payoff date is used as is; with balance, rate and payment the payoff month equals an
-   amortization recomputed in the test; with no mortgage fact, the change is unavailable with a
-   `missing_fact` gap naming `obligations.mortgage`.
-2. After payoff the mortgage's amount drops to `escrowMonthly`.
-3. Childcare change dates follow `OBLIGATION_RULES` from birth dates and fall back to ages; a
-   stage with a stated amount (fact or `changes` assumption) applies it; a stage without one is
-   `applied: false` with a gap and the projection keeps the current amount.
-4. With `definition: 'core_living'` (debt service excluded) the projection subtracts nothing at
-   payoff and says why; with `household_spending` it subtracts the in-base mortgage amount less
-   escrow, recomputed in the test; a ref base to a tool other than `aggregate_transactions` is
-   `bad_input`.
-
-Test command: `node --test test/tools-obligations.test.mjs`
-
-Parallel: beside T18, T22 to T26.
-
-Evals: `q51-spending-after-mortgage`, `q52-spending-after-childcare`, `q53-mortgage-end`,
-`q54-childcare-changes`, `q55-529-end`.
-
-### T21 access_schedule and bridge_check
-
-Size: about 240 production lines, 240 test lines.
-
-Depends on: T3, T15, T19, T20 (bridge_check reuses the spending-projection calculator).
-
-Files: `src/tools/catalog/access.mjs` (new), `test/tools-access.test.mjs` (new).
-
-Acceptance:
-
-1. Milestone ages and dates follow `ACCESS_RULES` and `rmdStartAge` from birth date facts for both
-   people; with only ages, dates fall at year precision with a gap; with neither, dates are
-   unavailable.
-2. `rule_of_55` lists only an employer-plan account whose `accounts.separationDate` falls in or
-   after the calendar year the person turns 55, dated on the separation date; a December
-   separation in the year the person turns 55 qualifies and its milestone date is that December
-   day, not January 1; an employer plan with no separation date, one separated in an earlier
-   year, and an account with no plan type are not listed, and the first and last are named in a
-   gap; Roth accounts are absent from `rmd_start`; a Roth account without a
-   first contribution year has an unavailable `roth_earnings_qualified` date.
-3. `bridge_check` spending until access equals the annual figure times the years, and accessible
-   money equals taxable plus cash plus stated Roth contributions plus only the balances of
-   employer plans that qualify under the rule above (a test with `retireAge` 56 and no separation
-   date counts none of them and reports the gap; the bare age is never enough; a qualifying plan
-   whose separation date is after the bridge's start date is excluded until that date), recomputed
-   in the test.
-4. Results contain no recommendation wording (a test scans for "should").
-
-Test command: `node --test test/tools-access.test.mjs`
-
-Parallel: beside T22 to T26.
-
-Evals: `q29-penalty-free-access`, `q30-rmd-start`, `q31-bridge-to-59-half`.
-
-### T22 Recommendation, decision and pack writes
-
-Size: about 300 production lines, 280 test lines.
-
-Depends on: T4, T17.
-
-Files: `src/decisions/write.mjs` (new), `src/packs/state.mjs` (new), `src/store/recs.mjs`
-(`detachRecThreads`), `src/api/handlers.mjs` (handlers call the moved functions),
-`src/api/fact-answers.mjs` (`saveRecAnswers`), `src/tools/catalog/rec-writes.mjs` (new: the six
-tools and receipt kind `rec_detach`), `test/tools-rec-writes.test.mjs` (new).
-
-Acceptance:
-
-1. Each of the six tools produces the same store state as its route for the same input (the test
-   runs both on two copies of the demo store and compares the touched tables).
-2. Each advertised undo restores the prior state: `undo_recommendation_action` for a detach,
-   `undo_decision_action` for a pick, `revisit_decision` after decide, `decide_decision` with the
-   returned index after revisit, `set_pack_active` with `wasActive`, `undo_fact_action` per answer.
-3. Existing handler tests pass unchanged.
-
-Test command: `node --test test/tools-rec-writes.test.mjs test/rec-threads.test.mjs test/question-recs.test.mjs test/tools-parity.test.mjs`
-
-Parallel: beside T18, T20, T21, T23 to T26. Only ticket editing `src/api/handlers.mjs`.
-
-Evals: `q62-decide-salary-option`.
-
-### T23 Goal and curve writes
-
-Size: about 190 production lines, 190 test lines.
-
-Depends on: T4, T17.
-
-Files: `src/goals/write.mjs` (`archiveGoal`, `deleteGoal`), `src/goals/curve.mjs` (new),
-`src/suggest/write.mjs` (new), `src/api/goals.mjs`, `src/tools/catalog/goal-writes.mjs` (new:
-the four tools and receipt kind `goal_row`), `test/tools-goal-writes.test.mjs` (new).
-
-Acceptance:
-
-1. `archive_goal`, `delete_goal`, `set_goal_suggestion` and `set_curve_position` each match their
-   route's store state for the same input.
-2. Each undo restores: a deleted goal's undo reinserts every column of the row; curve and
-   suggestion undo restore the settings rows.
-3. Existing goal handler tests pass unchanged.
-
-Test command: `node --test test/tools-goal-writes.test.mjs test/goals.test.mjs test/goal-targets-api.test.mjs test/tools-parity.test.mjs`
-
-Parallel: beside T18, T20 to T22, T24 to T26. Only ticket editing `src/api/goals.mjs`.
-
-Evals: `q63-archive-goal`.
-
-### T24 Advisor and year-end writes
-
-Size: about 190 production lines, 190 test lines.
-
-Depends on: T4, T17.
-
-Files: `src/advisor/packet.mjs` (new), `src/api/advisor-handlers.mjs`,
-`src/tools/catalog/advisor-writes.mjs` (new: the five tools and receipt kinds `advisor_checkin`
-and `yearend_mark`), `test/tools-advisor-writes.test.mjs` (new).
-
-Acceptance:
-
-1. `send_to_advisor`, `record_advisor_verdict`, `set_advisor_checkin`, `create_review_packet` and
-   `mark_yearend_item` each match their route's store state for the same input; the packet tool
-   gets the data key from `ctx.services`.
-2. Check-in and year-end mark undo restore their rows; the three non-undoable tools return
-   `undo.available: false` with a reason.
-3. A verdict note not in the owner's words is refused.
-
-Test command: `node --test test/tools-advisor-writes.test.mjs test/yearend.test.mjs test/tools-parity.test.mjs`
-
-Parallel: beside T18, T20 to T23, T25, T26. Only ticket editing `src/api/advisor-handlers.mjs`.
-
-Evals: `q61-mark-1099-not-needed`, `q64-send-to-advisor`.
-
-### T25 Confirm and category writes
-
-Size: about 230 production lines, 230 test lines.
-
-Depends on: T4, T17.
-
-Files: `src/categories/store.mjs` (`setTransactionCategory`, `setMerchantRule`; `applyCategoryAnswer`
-calls them), `src/api/ingest-handlers.mjs` (export `afterAnswer` when feat/account-dialog-edit has
-not already), `src/tools/catalog/confirm-writes.mjs` (new: the five tools and receipt kinds
-`category_correction` and `merchant_rule`), `test/tools-confirm-writes.test.mjs` (new).
-
-Acceptance:
-
-1. The five tools match their routes' store state for the same input; a Confirm category answer and
-   `set_transaction_category` with the same input leave identical rows.
-2. `undo_category_action` restores a correction and a merchant rule; `reopen_confirm_item` with
-   the advertised ids reverts an answer, and `answer_confirm_item` with the advertised items
-   re-applies it.
-3. Existing category and Confirm tests pass unchanged.
-
-Test command: `node --test test/tools-confirm-writes.test.mjs test/categories.test.mjs test/confirm-deck-web.test.mjs test/tools-parity.test.mjs`
-
-Parallel: beside T18, T20 to T24, T26. Only ticket editing `src/api/ingest-handlers.mjs` and
-`src/categories/store.mjs`.
-
-Evals: `q60-merchant-rule-groceries`.
-
-### T26 Imports and jobs
-
-Size: about 190 production lines, 240 test lines.
-
-Depends on: T4, T17.
-
-Files: `src/tools/catalog/import-writes.mjs` (new: `import_file`, `retry_import`,
-`build_your_plans`, `run_job`), `test/tools-import-writes.test.mjs` (new). The context wiring these
-tools need (`ctx.services`) is T17's.
-
-Acceptance:
-
-1. Through an MCP request to `createMcpHandler` over a real store: `import_file` with a base64 CSV
-   imports the same rows as the upload route; `run_job {id: 'freshness'}` runs through the
-   scheduler; `build_your_plans` with the fake engine returns `status: 'built'` and writes the
-   pack.
-2. Through an Ask answer with the fake engine scripting the calls: `import_file` with pasted CSV
-   text imports the same rows; `run_job {id: 'freshness'}` runs inline; `run_job {id:
-   'confirm-guess'}` and `run_job {id: 'plan'}` (on a `createRealStore` household) return
-   `status: 'queued'`, and once the answer returns each job's run is recorded finished and its
-   engine call is in the engine ledger after the answer's own calls (serialized, no deadlock under
-   a test timeout); `build_your_plans` returns `status: 'queued'` and the build has run once the
-   answer returns.
-3. Without `ctx.queueAfterTools` in an Ask context, `run_job` for `plan` or `confirm-guess` and
-   `build_your_plans` are refused, not awaited.
-4. Content over the limit is refused on both surfaces; a markdown note imports as the notes route
-   does; `run_job` accepts only the four ids and refuses `plan` on a demo store.
-5. The four tools return `undo.available: false` with a reason.
-
-Test command: `node --test test/tools-import-writes.test.mjs test/tools-parity.test.mjs`
-
-Parallel: beside T18, T20 to T25. Edits no shared file.
-
-Evals: `q65-sync-now`.
-
-### T27 Account writes
-
-Size: about 210 production lines, 210 test lines.
-
-Depends on: T4, T17, T25 (merge undo goes through `reopen_confirm_item`), feat/account-dialog-edit
-merged.
-
-Files: `src/accounts/write.mjs` (new), `src/api/accounts.mjs` (handlers call it),
-`src/tools/catalog/account-writes.mjs` (new: the six tools and receipt kinds `account_field` and
-`account_answer`), `test/tools-account-writes.test.mjs` (new).
-
-Acceptance:
-
-1. The five account writes and `list_merge_candidates` match their routes for the same input.
-2. `undo_account_action` with `{ id: <receipt id> }` restores a rename, a mask, an owner and a
-   kind (owner and kind through `undoAccountAnswer`).
-3. `merge_accounts` without `confirm: true` or without evidence is refused on both surfaces; it is
-   offered to Ask in chat and over MCP; `reopen_confirm_item {ids: [itemId]}` restores both
-   accounts.
-
-Test command: `node --test test/tools-account-writes.test.mjs test/account-rename.test.mjs test/merge-accounts-cli.test.mjs test/tools-parity.test.mjs`
-
-Parallel: beside T18, T20 to T24, T26. Only ticket editing `src/api/accounts.mjs`.
-
-Evals: `q59-change-account-owner`.
-
-### T28 Model routing rules in the Ask prompt
-
-Size: about 90 production lines of prompt text and code, 160 test lines.
-
-Depends on: fix/ask-answer-quality merged, T5, T6, T14, T17 (serialized on
-`src/api/answerer.mjs`), T18 (the definition rule replaces the prompt line that sends definitions
-to `remember_preference`).
-
-Files: `src/api/answerer.mjs` (static rules in `buildChatPrompt`, and the echo-rule fix if T5 left
-a `todo`), `src/mcp/server.mjs` (server instructions), `test/answerer.test.mjs`,
-`test/ask-rules.test.mjs` (new).
-
-Acceptance:
-
-1. The static prompt holds the section 4 rules and routing table, and no longer tells the model to
-   store definitions with `remember_preference`; the tool list plus rules stay under 24 KB (a test
-   measures it).
-2. The T5 grounding test passes with no `todo`.
-3. The MCP server instructions carry the same rules.
-
-Test command: `node --test test/ask-rules.test.mjs test/answerer.test.mjs`
-
-Parallel: beside any ticket that has merged its answerer edits; last in the `src/api/answerer.mjs`
-chain.
-
-Evals: none in tier 1 (every case's status there follows tool availability). The tier 2 run
-(`npm run eval:ask:live`, never in CI) is the manual check that the live model routes as the rules
-say.
+once in `src/server.mjs` and passed to both `createMcpHandler` and `createLiveAnswerer`.
+
+Done when:
+
+1. `WRITE_SCOPES` and `SCOPE_INFO` hold the six new scopes with section 6's access text; key
+   creation accepts them; `createRegistryServer` offers an operation under each only for purpose
+   chat. Verified by `test/write-scopes.test.mjs` and `src/mcp/test/keys.test.mjs`.
+2. The existing receipt kinds undo exactly as before; a kind registered from a test module with a
+   table restores; one with a `restore` hook calls it; an unregistered kind is refused; kind
+   `setting` restores a settings row by key. Verified by `test/write-scopes.test.mjs` and
+   `test/ask-actions.test.mjs`.
+3. A test operation reading `ctx.services` sees the same scheduler, engine and config through an
+   MCP request over a real store and through an Ask answer with the fake engine; in Ask
+   `ctx.ownerStatements()` returns the owner's messages of that conversation. Verified by
+   `test/tool-services.test.mjs`.
+4. `undo` is listed over MCP to any key with a write scope and offered to Ask in chat purpose, and
+   undoes a receipt of each existing scope through both surfaces; a receipt whose scope the key
+   lacks is refused with `Permission denied:`. Verified by `test/write-scopes.test.mjs`.
+5. The parity test enforces the five rules in section 6, each with a test over a synthetic routes
+   list and registry, plus one run over the real router and registry that passes with
+   `PARITY_EXCLUDED` and `PARITY_PENDING` exactly as the section 6 route map gives them. Verified
+   by `test/tools-parity.test.mjs`.
+
+Test command: `node --test test/write-scopes.test.mjs test/tool-services.test.mjs test/tools-parity.test.mjs src/mcp/test/keys.test.mjs test/ask-actions.test.mjs test/answerer.test.mjs && npm run eval:ask`
+
+### C3 calculate, figure references and quoting
+
+Size: about 300 production lines, 300 test lines.
+
+Depends on: C1.
+
+Files: `src/tools/refs.mjs` (new), `src/tools/assumption-evidence.mjs` (new: `statedValues`,
+`assumptionStated`), `src/tools/catalog/calculate.mjs` (new, with section 4 rules 2 to 6),
+`src/calc/growth.mjs` (new: `futureValue`, `requiredMonthly`), `src/calc/figure.mjs` (`quote`
+and `direction` in `envelope`), `test/tools-calculate.test.mjs` (new),
+`test/assumption-evidence.test.mjs` (new), `test/figure-quote.test.mjs` (new).
+
+Done when:
+
+1. Every `calculate` operation computes the expected value and unit on refs to real
+   `household.figures` and `goals.pace` figures over the demo store, recomputed in the test from
+   the same figures; ratio results above 1 and below 0 come back unrounded. Verified by
+   `test/tools-calculate.test.mjs`.
+2. Unit mismatches, division by zero, more than 20 operands, expression depth over 6, ref depth
+   over 3, refs to write tools or non-referenceable operations, and bare numbers are `bad_input`
+   naming the cause. Verified by `test/tools-calculate.test.mjs`.
+3. `source: 'fact'` with a value that differs from the stored fact, `source: 'default'` with a
+   non-default value and `source: 'owner'` without `evidence` are refused. Verified by
+   `test/tools-calculate.test.mjs`.
+4. `assumptionStated` over the questions' wording, with `ctx.ownerStatements` stubbed: Q02
+   accepts `withdrawalRate` 0.04 and refuses 0.05; Q25 accepts `realReturn` 0.03; Q26 accepts
+   0.035 and refuses 3.5; "4%" and "0.04" each accept 0.04; Q27 "$1,000 more a month" accepts
+   1000 usd_per_month; Q28 "$15 million" accepts 15000000 usd; with no `ctx.ownerStatements` in
+   an Ask context owner assumptions are refused. Verified by `test/assumption-evidence.test.mjs`.
+5. `groundAnswer` over a reply that states "4 percent" and the `calculate` result's `quote`
+   grounds both, with no change to `src/api/answerer.mjs`. Verified by
+   `test/tools-calculate.test.mjs`.
+6. Every envelope carries `quote` per section 3 (money unsigned to cents with `direction: 'out'`
+   for outflows, percent, months, dates, half ages), stored figures quote their `{f:key}` token,
+   and `groundAnswer` grounds each `quote` form. Verified by `test/figure-quote.test.mjs`.
+7. The assembled rule text holds section 4 rules 2 to 6. Verified by `test/tools-registry.test.mjs`.
+
+Test command: `node --test test/tools-calculate.test.mjs test/assumption-evidence.test.mjs test/figure-quote.test.mjs test/figure-envelope.test.mjs test/tools-registry.test.mjs && npm run eval:ask`
+
+### C4 Spending and business reads
+
+Size: about 700 production lines, 650 test lines.
+
+Depends on: C1, T2 (merged).
+
+Files: `src/calc/aggregate.mjs` (new), `src/calc/recurring.mjs` (new), `src/calc/targets.mjs`
+(`spendingInputs` reuses the shared row selection), `src/spending/definitions.mjs` (new:
+`resolveDefinition` for built-ins), `src/tools/catalog/spending.mjs` (new: `total`, `compare`,
+`definitions`, `cash_flow`, `recurring`), `src/tools/catalog/transactions.mjs` (filters and
+fields), `src/tools/catalog/business.mjs` (`pnl` upgrade, `rows`), `test/tools-spending.test.mjs`
+(new), `test/tools-cash-flow.test.mjs` (new), `test/tools-recurring.test.mjs` (new),
+`test/tools-business.test.mjs` (new).
+
+Done when:
+
+1. `spending.total {measure: 'spending'}` over `spending_window` equals
+   `spendingInputs(...).spendTotal` on the demo store and on a `createRealStore` household with a
+   card account. Verified by `test/tools-spending.test.mjs`.
+2. The Q01 arguments return a total equal to household spending less the mortgage rows,
+   recomputed from `resolveCategories`; `excluded` reports the mortgage and tax rows' matched
+   amounts; groups sum to the total; the healthcare class group is present; `definition:
+   'essential'` returns one total equal to the sum of its five class groups. Verified by
+   `test/tools-spending.test.mjs`.
+3. Gaps carry correct amounts and counts for uncategorized, guessed, a silent card account, and
+   `outside_household_ledger` when `income.w2` is true; every period, group, scope and definition
+   merge rule has a test; `limit` folds into `other`. Verified by `test/tools-spending.test.mjs`.
+4. `spending.compare` returns difference, ratio and group deltas recomputed from two `total`
+   calls, with `unequal_periods` when month counts differ. Verified by
+   `test/tools-spending.test.mjs`.
+5. `spending.cash_flow` separates matched business transfers from inflow and outflow, recomputed
+   from `matchTransfers`; `spending.recurring` finds a monthly, a quarterly and an annual series
+   in a `createRealStore` household, flags a stopped and a changed one, and never lists a
+   transfer. Verified by `test/tools-cash-flow.test.mjs` and `test/tools-recurring.test.mjs`.
+6. `business.pnl` with C1's arguments returns the same entities and totals as before, and with
+   `compareToPriorYear` returns prior figures recomputed from `businessPnl`; `business.rows`
+   returns what `GET /api/pnl/rows` returns for the same arguments. Verified by
+   `test/tools-business.test.mjs`.
+7. `transactions.search` filters by bucket, class and merchant and returns the resolved fields;
+   its C1 tests pass unchanged; on a `createRealStore` account with 450 transactions, 300 of them
+   on one date with equal amounts and descriptions, following `next` from the first page returns
+   every row exactly once. Verified by `test/tools.test.mjs`.
+
+Test command: `node --test test/tools-spending.test.mjs test/tools-cash-flow.test.mjs test/tools-recurring.test.mjs test/tools-business.test.mjs test/categories.test.mjs test/tools.test.mjs test/tools-registry.test.mjs && npm run eval:ask`
+
+### C5 Balances, tax and data health
+
+Size: about 550 production lines, 500 test lines.
+
+Depends on: C1, C3 (the Assumption validation `tax.estimate` what-ifs use), PR #83 merged.
+
+Files: `src/tools/catalog/balances.mjs` (new: `accounts.net_worth`, `accounts.detail`),
+`src/tools/catalog/health.mjs` (new: `household.health`), `src/tools/catalog/tax.mjs` (new:
+`tax.estimate`, `tax.room`), `test/tools-net-worth.test.mjs` (new), `test/tools-health.test.mjs`
+(new), `test/tools-tax.test.mjs` (new).
+
+Done when:
+
+1. `accounts.net_worth` total and parts equal `buildTrend` for the same months; `groupBy:
+   'treatment'` groups by `ACCOUNT_TREATMENT` and names a `retirement` account without a plan type
+   in a `missing_fact` gap; carried accounts carry `carried_balance`. Verified by
+   `test/tools-net-worth.test.mjs`.
+2. `accounts.detail` returns what `GET /api/accounts/:id` returns plus the balance figure.
+   Verified by `test/tools-net-worth.test.mjs`.
+3. `household.health` lists stale and silent accounts with ages recomputed from
+   `accountFreshness`, category counts equal to `categoryCoverage`, pending Confirm counts equal
+   to `pendingItems`, year-end items equal to `yearendChecklist`, and the job list. Verified by
+   `test/tools-health.test.mjs`.
+4. `tax.estimate` returns the stored planner figures as envelopes with the planner run date as
+   `asOf`, and a what-if of 20000 business income returns deltas equal to two `householdTax` runs
+   recomputed in the test. Verified by `test/tools-tax.test.mjs`.
+5. `tax.room` returns stored `room.*` figures when the planning run is in the tax year and
+   calculator limits with `used` null and the gap otherwise. Verified by `test/tools-tax.test.mjs`.
+
+Test command: `node --test test/tools-net-worth.test.mjs test/tools-health.test.mjs test/tools-tax.test.mjs test/treatment.test.mjs test/tools-registry.test.mjs && npm run eval:ask`
+
+### C6 Retirement: target, growth and after-tax value
+
+Size: about 450 production lines, 450 test lines.
+
+Depends on: C3, C4, PR #83 merged.
+
+Files: `src/tools/catalog/retirement.mjs` (new: `retirement.target`, `retirement.growth`,
+`retirement.after_tax`, and section 4 rule 12), `test/tools-retirement.test.mjs` (new),
+`test/tools-after-tax.test.mjs` (new).
+
+PR #83 folds in as merged constants: this ticket and C7 import `ACCOUNT_TREATMENT`,
+`EMPLOYER_PLAN_TYPES`, `ACCESS_RULES` and `rmdStartAge` from `src/calc/treatment.mjs` and do not
+change that file.
+
+Done when:
+
+1. `retirement.target` with a ref to the Q01 `spending.total` and an owner rate of 0.04 returns a
+   target equal to the referenced total divided by 0.04 rounded up to the thousand, and `gap`,
+   `months` and `projectedDate` equal to `independencePlan` over the same inputs; each status
+   (`covered`, `projected`, `no_savings`, `too_long`) has a test. Verified by
+   `test/tools-retirement.test.mjs`.
+2. `retirement.growth` solves `balance`, `months` and `monthly` with values equal to
+   `futureValue`, `monthsToReach` and `requiredMonthly` recomputed in the test; `byAge` without a
+   birth date or age fact returns the `missing_fact` note. Verified by
+   `test/tools-retirement.test.mjs`.
+3. `retirement.after_tax` applies each of the six section 3 rules: a pre-tax row taxed at ordinary
+   plus state; a taxable row with a position missing basis returns `afterTax` unavailable with a
+   `no_cost_basis` gap counting positions; an HSA row returns both medical and nonmedical values;
+   a `retirement` kind without a plan type is unavailable with `missing_fact`. Rates passed as refs
+   to a `calculate` figure and as owner assumptions both resolve (refs to `tax.estimate` need C5
+   and are covered by its eval cases, not by this test). Verified by `test/tools-after-tax.test.mjs`.
+
+Test command: `node --test test/tools-retirement.test.mjs test/tools-after-tax.test.mjs test/tools-calculate.test.mjs test/tools-registry.test.mjs && npm run eval:ask`
+
+### C7 Obligations and access
+
+Size: about 600 production lines, 550 test lines.
+
+Depends on: C4, C6.
+
+Files: `src/jobs/triggers/common.mjs` (declarations: the new keys in `ANSWER_SHAPES`, their
+`answerShape` entries, and account eligibility by kind and plan type for the per-account keys),
+`src/facts/answers.mjs` (value validation: the new `dates` list type and the obligation object
+shapes), `src/calc/obligations.mjs` (new),
+`src/tools/catalog/obligations.mjs` (new: `spending.obligations`, `spending.projection`),
+`src/tools/catalog/access.mjs` (new: `retirement.access`, `retirement.bridge`),
+`test/fact-shapes-obligations.test.mjs` (new), `test/tools-obligations.test.mjs` (new),
+`test/tools-access.test.mjs` (new).
+
+Done when:
+
+1. `answer.fact` accepts each fact in section 5's table marked "after C7" with its shape and
+   scope, and refuses a wrong shape. Verified by `test/fact-shapes-obligations.test.mjs`.
+2. `spending.obligations` derives a mortgage end from a stated payoff date and, without one, from
+   amortization of balance, rate and payment; childcare change dates from birth dates at ages 5
+   and 13; 529 end at 18; a missing fact yields `missing_fact`. Verified by
+   `test/tools-obligations.test.mjs`.
+3. `spending.projection` drops only the in-base part of an obligation (no mortgage drop for
+   `core_living`), lists an unstated new amount with `applied: false`, and refuses a base ref to
+   anything but `spending.total`. Verified by `test/tools-obligations.test.mjs`.
+4. `retirement.access` returns each event with the rules in section 3: rule of 55 only for an
+   employer plan with a separation date in or after the year the person turns 55; RMD start 72,
+   73 or 75 by birth year from `rmdStartAge`; Roth accounts excluded from RMDs; year precision
+   with a gap when only the age fact exists. Verified by `test/tools-access.test.mjs`.
+5. `retirement.bridge` counts Roth basis, rule of 55 balances from their separation date, taxable
+   and cash, never the listed exceptions, and returns shortfall or surplus recomputed in the test.
+   Verified by `test/tools-access.test.mjs`.
+
+Test command: `node --test test/fact-shapes-obligations.test.mjs test/tools-obligations.test.mjs test/tools-access.test.mjs test/fact-answers.test.mjs test/tools-registry.test.mjs && npm run eval:ask`
+
+### C8 Account, category and Confirm writes
+
+Size: about 600 production lines, 650 test lines.
+
+Depends on: C2.
+
+Files: `src/accounts/write.mjs` (new), `src/api/accounts.mjs` (handlers call the store
+functions), `src/categories/store.mjs` (`setTransactionCategory`, `setMerchantRule`),
+`src/api/fact-answers.mjs` (`saveRecAnswers`), `src/api/ingest-handlers.mjs` (Confirm handlers
+share the answer functions), `src/tools/catalog/update-account.mjs` (new),
+`src/tools/catalog/categorize.mjs` (new), `src/tools/catalog/answer-confirm.mjs` (new:
+`answer.rec_questions`, `confirm`, `reopen`, `yearend_mark`, and section 4 rule 10),
+`src/tools/catalog/confirm-read.mjs` (new: `household.confirm_items`,
+`accounts.merge_candidates`), `test/tools-account-writes.test.mjs` (new),
+`test/tools-category-writes.test.mjs` (new), `test/tools-confirm-writes.test.mjs` (new).
+
+Done when:
+
+1. Each `update_account` operation makes the same change as its route on a real store, the route
+   tests in `test/account-edit.test.mjs` pass unchanged, and `undo` restores each receipt kind;
+   `merge` without `confirm: true` or without evidence quoting a later owner message is refused,
+   and its undo reopens the merge until a moved row changes. Verified by
+   `test/tools-account-writes.test.mjs` and `test/account-edit.test.mjs`.
+2. `categorize.transaction` and Confirm category answers write through one function;
+   `merchant_rule` returns the affected count recomputed in the test; both undo. Verified by
+   `test/tools-category-writes.test.mjs`.
+3. `answer.confirm`, `reopen`, `rec_questions` and `yearend_mark` match their routes on a real
+   store and undo through their receipt kinds; `reopen` after a changed row is refused with
+   `changed_since`. Verified by `test/tools-confirm-writes.test.mjs`.
+4. `household.confirm_items` and `accounts.merge_candidates` return what `GET /api/confirm`,
+   `GET /api/confirm/:id` and `GET /api/accounts/:id/merge-candidates` return. Verified by
+   `test/tools-confirm-writes.test.mjs`.
+
+Test command: `node --test test/tools-account-writes.test.mjs test/tools-category-writes.test.mjs test/tools-confirm-writes.test.mjs test/account-edit.test.mjs test/categories.test.mjs test/tools-parity.test.mjs test/tools-registry.test.mjs && npm run eval:ask`
+
+### C9 Recommendation, advisor and goal writes
+
+Size: about 550 production lines, 600 test lines.
+
+Depends on: C2, C3 (the Assumption validation `update_goal.suggestion` uses for `withdrawalRate`).
+
+Files: `src/decisions/write.mjs` (new), `src/store/recs.mjs` (`detachRecThreads`),
+`src/goals/write.mjs` (new), `src/goals/curve.mjs` (`setCurvePositions`),
+`src/suggest/write.mjs` (new), `src/advisor/packet.mjs` (`buildAndStorePacket`),
+`src/api/handlers.mjs` (rec start-over, war game, decision handlers), `src/api/goals.mjs`,
+`src/api/advisor-handlers.mjs`, `src/tools/catalog/recommendation-writes.mjs` (new),
+`src/tools/catalog/advisor-review.mjs` (new), `src/tools/catalog/goal-writes.mjs` (new: the
+three `update_goal` operations, `update_preferences.curve`, `goals.suggestions`),
+`test/tools-rec-writes.test.mjs` (new), `test/tools-advisor-writes.test.mjs` (new),
+`test/tools-goal-writes.test.mjs` (new).
+
+Done when:
+
+1. `act_on_recommendation.start_over`, `decide`, `revisit` and `pick_point` match their routes on
+   a real store; `undo` of a decide revisits and removes the decided fact; `undo` of a revisit
+   decides on the prior point. Verified by `test/tools-rec-writes.test.mjs`.
+2. `advisor_review.send`, `verdict`, `checkin` and `packet` match their routes; a veto dismisses
+   the rec; `checkin` undoes; the other three return `undo.available: false` with the reasons in
+   section 3. Verified by `test/tools-advisor-writes.test.mjs`.
+3. `update_goal.archive`, `delete` and `suggestion` and `update_preferences.curve` match their
+   routes and undo (`delete` restores every column); `goals.suggestions` returns what
+   `GET /api/goals/suggestions` returns. Verified by `test/tools-goal-writes.test.mjs`.
+
+Test command: `node --test test/tools-rec-writes.test.mjs test/tools-advisor-writes.test.mjs test/tools-goal-writes.test.mjs test/goals.test.mjs test/rec-threads.test.mjs test/tools-parity.test.mjs test/tools-registry.test.mjs && npm run eval:ask`
+
+### C10 Preferences, definitions and refresh
+
+Size: about 600 production lines plus one migration, 600 test lines.
+
+Depends on: C2, C4.
+
+Files: `src/store/migrations/` (one new migration, numbered at merge), `src/spending/definitions.mjs`
+(saved rows in `resolveDefinition`), `src/actions/preferences.mjs` (linked preference rules),
+`src/packs/state.mjs` (`setPackActive`), `src/api/handlers.mjs` (pack toggle, preference delete,
+Your plans build), `src/api/ingest-handlers.mjs` (file upload and retry share the pipeline
+functions), `src/api/email-handlers.mjs` (job run shares `runNow`),
+`src/tools/catalog/definitions.mjs` (new: `save_definition`, `delete_definition`, `forget`,
+`capabilities: ['definitions']`, section 4 rule 11), `src/tools/catalog/packs-write.mjs` (new:
+`update_preferences.pack`), `src/tools/catalog/refresh.mjs` (new), `src/tools/catalog/imports-read.mjs`
+(new: `household.imports`), `docs/architecture.md` (the new table), `test/definitions.test.mjs`
+(new), `test/tools-refresh.test.mjs` (new), `test/tools-pack-writes.test.mjs` (new).
+
+Done when:
+
+1. The five linkage rules in section 3 hold on a real store, each with a test; a definition saved
+   in one conversation resolves by id in `spending.total` from a later one; `undo` restores both
+   rows. Verified by `test/definitions.test.mjs`.
+2. `update_preferences.pack` is idempotent, matches the toggle's effect on recs, and its undo
+   restores `wasActive`. Verified by `test/tools-pack-writes.test.mjs`.
+3. `refresh.import_file` with base64 over MCP produces the same file row as `POST /api/files`;
+   content over the limit is refused; `retry_import` matches the route; over MCP every operation
+   runs inline; `plan` on a demo store is refused as the route refuses it; `household.imports`
+   equals `GET /api/files`. In an Ask answer with the fake engine enabled (its `extract` scripted),
+   `import_file` with a pasted markdown note, `retry_import`, `build_your_plans` and `run_job`
+   for `plan` and `confirm-guess` each return `queued` within the round and complete after it,
+   with no ledger wait (the test fails on a timeout of 5 seconds). Verified by `test/tools-refresh.test.mjs`.
+4. The migration's table is listed in `docs/architecture.md`. Verified by
+   `node --test test/docs.test.mjs`.
+
+Test command: `node --test test/definitions.test.mjs test/tools-refresh.test.mjs test/tools-pack-writes.test.mjs test/preferences.test.mjs test/docs.test.mjs test/tools-parity.test.mjs test/tools-registry.test.mjs && npm run eval:ask`
 
 ## 8. Eval coverage
 
-The Ask eval suite on feat/ask-evals runs cases with a question, follow-ups, required tool calls
-with argument predicates, forbidden behavior (an unsourced figure, a self-computed figure),
-expected figures computed at run time from the demo store, and a word budget. Tier 1 (`npm run
-eval:ask`) runs in CI over scripted transcripts; tier 2 (`npm run eval:ask:live`) runs a live model
-and never runs in CI. The branch has published no case names, so the IDs below are proposals, one
-per question, `qNN-short-slug`, plus one cross-conversation case. T16 writes them once.
-Expectation is availability-based: each case lists `requires`, its tool names plus named
-capabilities (`ownerStatements` from T17, `definitions` from T18; see T16). At run time a case
-missing any of them is expected-fail and names what is missing; once every requirement is present
-it is a required pass. Rows below name a capability where a case needs one. No ticket edits a case file. The Ticket column names the ticket that supplies
-the case's main tool; where a case also needs a tool from an independent ticket (marked "with Tn"
-in the Evals lines), it becomes a required pass when the second of them merges, whichever that
-is. Every case forbids an unsourced figure, a self-computed figure, and an assumption with
-source `owner` whose value does not appear in the owner's messages of that conversation.
+The Ask eval suite runs cases with a question, follow-ups, required calls with argument
+predicates, forbidden behavior (an unsourced figure, a self-computed figure, an owner assumption
+not in the owner's messages), expected figures computed at run time from the demo store, and a
+word budget. Tier 1 (`npm run eval:ask`) runs in CI over scripted transcripts; tier 2
+(`npm run eval:ask:live`) runs a live model, spends against the engine cap and never runs in CI.
 
-| Case ID | Question | Required tools (key predicates) | Expected figures (deterministic call) | Ticket |
+Evals assert (tool, operation) pairs and parameters, not tool names alone. C1 changes the case
+format so that every required call is `{ name, operation, predicates }`; `requires.tools` becomes
+`requires.operations` (`'spending.total'`); the availability probe checks the pair against the
+registry; and `evals/graders.mjs` matches name and operation before predicates (its
+`get_figures` check becomes `household.figures`). A case missing any required pair or capability
+(`ownerStatements` from C2, `businessPeriods` from C4, `definitions` from C10) is expected-fail
+and names what is missing; once everything is present it is a required pass.
+
+Scripted transcripts. Tier 1 builds each scripted call's arguments from the case's predicates,
+which is enough for a read whose required arguments the predicates name, and not enough for a
+`calculate` call (operands and label), a call with refs or evidence (`retirement.growth`,
+`retirement.target` with an owner rate), or a write (target ids from an earlier read). C1 adds
+optional per-case script modules, `evals/scripts/<case-id>.mjs`, each exporting `script(ctx)`,
+which builds the full scripted transcript from the demo store: the prerequisite reads, the ids
+they return, refs copied from earlier results, and evidence quoted from the case's question. C1
+sets `requires.script: true` on every case whose "Tier 1 required after" ticket below is not C1,
+and the loader treats a missing script file as a missing requirement (named in the expected
+failure). Each ticket from C2 to C10 writes the script files for exactly the cases that name it in
+that column, with a runner test that the script's calls validate against the registry; that is
+the only `evals/` change a later ticket makes. A case's catalog entry never changes after C1.
+
+How PR #84 is re-pointed: merge it first, unchanged (it is green: 29 tier 1 passes and 73 expected
+failures, all availability-based). Then C1 rewrites every case in `evals/catalog.json` as the
+table below gives it, and `evals/cases.mjs` and `evals/harness.mjs` for the pair format, in the
+same ticket that renames the live tools. Re-pointing on the PR #84 branch before C1 would need the
+loader to accept old names and pairs at once, which is a compatibility path. If the owner prefers
+to hold PR #84, it rebases onto C1 and applies the same table; nothing else changes.
+
+Live baseline, the bar later tier 2 runs must beat. The full live run at `2393850` ran all 33
+cases on main: 2 pass (`spending-latest-groceries`, `spending-latest-dining`), 31 fail, $5.37.
+An earlier partial run on `bb2c2f6` (2 pass, 22 fail, 1 stopped by budget, 8 unrun, $5.19)
+showed the same pattern. The failures fall into three groups:
+
+1. Required tools that do not exist yet (`spending_summary`, `portfolio_requirement`, `cash_flow`,
+   `net_worth_history`); the model used `query_transactions`, `list_accounts`, `get_figures` or
+   `get_pace` instead. These are the five rewritten cases marked below (`spending-annual-exclusions`,
+   `spending-portfolio-withdrawal`, `cash-flow-month`, `net-worth-history`, `net-worth-change`);
+   they turn green when C4, C5 and C6 land the operations they now require.
+2. Stored-figure cases where the model called `get_figures` but restated or computed figures,
+   flagged as self-computed (`cash-personal`, `cash-true-reserve`, `net-worth-current`,
+   `retirement-hsa-room`, `retirement-current-room`, `retirement-pretax`, `taxes-safe-harbor`,
+   `taxes-federal-paid`, `taxes-state-paid`, `taxes-liability`, `taxes-april-due`). C3 closes this
+   group with a tool change and a rule: every envelope carries a ready-to-quote `quote` (the
+   `{f:key}` token for a stored figure, digits only, money unsigned with `direction: 'out'`), and
+   section 4 rule 3 says to write `quote` exactly and never derive a second number.
+3. Cases with zero self-computed figures that still failed on unsourced numbers. With the
+   required call satisfied: `business-pnl-january` (10), `business-pnl-february` (10),
+   `business-pnl-march` (8), `goals-pace` (14), `spending-latest-health` (2), `freshness-facts`
+   (2). With the required tool not called, numbers apparently read from the household summary
+   the prompt carries: `goals-open` (22), `freshness-household` (4), `unavailable-routing-number`
+   (5). This is either the grader failing to match tool output the model formatted (an expense
+   written unsigned while the tool returns it negative, dropped cents, counts in words) or the
+   model restating numbers without provenance. C0 adjudicates it before any tool ticket is
+   measured: it fixes the grader to the table below and proves each form with fixtures, so the
+   remaining violations are the model's.
+
+Sourced number, as C0 pins it (the grader's rules; the answerer's own grounding is unchanged):
+
+| Number in the answer | Verdict |
+|---|---|
+| Equal to a tool result value in the turn, to the cent for money, or its absolute value (expenses are returned negative and written unsigned) | sourced |
+| The same cent value with or without commas, `$`, or trailing `.00`; a ratio written as a percent | sourced |
+| A `k` or `m` abbreviation equal to a result value to the cent | sourced; otherwise `rounded` |
+| A rounded restatement of a result value (`about $1,200` for 1,187.40) | `rounded` violation (section 4 rule 3) |
+| A spelled-out number | `spelled_out` violation, except a count up to twenty equal to the length of a list in a result of the turn, which is sourced |
+| Found only in the prompt's dynamic context (the household summary block), not in any tool result | `context-only` violation, reported apart from `unsourced` |
+
+Argument predicates. The live run reported `get_figures` as missing in a case where it was called
+(`retirement-hsa-follow-up`): the call failed the case's argument predicate (`keys` includes
+`hsa_left`), and the grader reported that as a missing tool. With typed operations the predicate
+is explicit and checkable on its own: the case requires the pair `household.figures` and states
+its predicate on that operation's typed `keys` parameter, and C1's `gradeRequiredTools` reports
+`missing` (the pair was not called) apart from `predicate_failed` (the pair was called; the report
+names the failing predicate). Because the `figures` operation defines an omitted `keys` as every
+stored figure, a call without `keys` returns the figure the case needs, so C1 rewrites the
+stored-figure predicates as `includes_or_absent` on `keys`; a call naming other keys still fails
+the predicate, and says so.
+
+Each later tier 2 run reports against this baseline: more than 2 passes, no case that passed
+regressing, the count of each violation kind per case (C0), and the cost of the run. The
+checkpoints are a run right after C0 (the adjudicated baseline that replaces the numbers above
+as the bar), then runs after C1, C3, C4 and the last ticket. "Live expected after" below is the
+ticket after which a case should pass live: the later of the ticket that makes it a tier 1
+required pass and C3, except for the refusal cases; every live column assumes C0 has merged.
+
+Every case in `evals/catalog.json` with PR #84 merged (102). Every case changes its call names;
+the "Change beyond the name" column lists the cases whose predicates or requirements change too.
+
+| Case ID | Required calls (tool.operation, key predicates) | Change beyond the name | Tier 1 required after | Live expected after |
 |---|---|---|---|---|
-| q01-spend-excl-mortgage-tax | Q01 | `aggregate_transactions` measure spending, annualize true, exclude has debt_service or Mortgage, tax bucket excluded or absent, healthcare not excluded; exactly one call | the same call's `total` | T6 |
-| q02-independence-target-4pct | Q02 | `independence_target` with spending ref to Q01 and withdrawalRate 0.04 source owner; requires capability `ownerStatements` | that call's `target` | T14 |
-| q03-gap-and-date | Q03 | `independence_target` same args; requires capability `ownerStatements` | `gap`, `projectedDate` | T14 |
-| q04-groceries-dining-monthly | Q04 | `aggregate_transactions` include categories groceries and dining, groupBy month | the call's groups | T6 |
-| q05-essential-vs-discretionary | Q05 | two `aggregate_transactions` calls, definition essential and definition discretionary | each call's `total`; the answer states both totals and no number that is their sum or difference unless a `calculate` call returned it | T6 |
-| q06-top-merchants | Q06 | `aggregate_transactions` groupBy merchant, limit 10 | the ten groups | T6 |
-| q07-childcare-2025 | Q07 | `aggregate_transactions` calendar_year 2025, include class childcare | `total` | T6 |
-| q08-healthcare-premiums | Q08 | `aggregate_transactions` include class healthcare | `total`; answer mentions the outside-ledger gap | T6 |
-| q09-elective-definition | Q09 | `aggregate_transactions` with definition elective_spending; requires capability `definitions` | `total` | T18 |
-| q09b-elective-definition-later-thread | Q09 asked in a new thread after Q10 was saved in an earlier one (the fixture saves the definition, then opens a fresh conversation) | `aggregate_transactions` with definition elective_spending; no `save_spending_definition` call; requires capability `definitions` | `total` | T18 |
-| q10-save-elective-definition | Q10 | `save_spending_definition` exclude classes housing, debt_service, childcare, healthcare, taxes; no `remember_preference` call; requires capability `definitions` | receipt present; linked preference names the definition | T18 |
-| q11-monthly-net-cash-flow | Q11 | `cash_flow` scope all | monthly nets | T13 |
-| q12-business-to-personal | Q12 | `cash_flow` | `totals.transfersBusinessToHousehold` | T13 |
-| q13-negative-months | Q13 | `cash_flow` scope household | months with negative net | T13 |
-| q14-savings-rate | Q14 | two aggregates trailing_12, `calculate` divide | the calculate figure | T5 |
-| q15-income-by-source | Q15 | `aggregate_transactions` measure income groupBy merchant; `business_pnl` | groups, revenue | T6 |
-| q16-monthly-take-home | Q16 | `aggregate_transactions` measure income trailing_12 | `perMonth` | T6 |
-| q17-business-profit-margin | Q17 | `business_pnl` ytd | profit, margin | T8 |
-| q18-revenue-vs-last-year | Q18 | `business_pnl` compareToPriorYear true | `revenue`, `prior.revenue`, `prior.revenueDifference`, `prior.revenueRatio` | T8 |
-| q19-expense-categories-quarter | Q19 | `business_pnl` custom quarter, groupBy category | groups | T8 |
-| q20-net-worth-parts | Q20 | `net_worth` groupBy part | total, parts | T7 |
-| q21-net-worth-change | Q21 | `net_worth` series, `calculate` subtract | the calculate figure | T5 |
-| q22-retirement-vs-taxable | Q22 | `net_worth` groupBy treatment | groups | T7 |
-| q23-ten-year-growth | Q23 | `project_growth` solve balance, years 10 | the figure | T14 |
-| q24-monthly-to-target-by-55 | Q24 | `independence_target`, `project_growth` solve monthly byAge 55 | the figure | T14 |
-| q25-return-3pct-whatif | Q25 | `independence_target` realReturn 0.03 source owner; requires capability `ownerStatements` | months, date | T14 |
-| q26-withdrawal-35pct | Q26 | `independence_target` withdrawalRate 0.035; requires capability `ownerStatements` | target | T14 |
-| q27-extra-1000-sooner | Q27 | two `independence_target` calls, `calculate` subtract; requires capability `ownerStatements` | the calculate figure | T14 |
-| q28-15m-retirement-vs-brokerage | Q28 | `after_tax_value` hypothetical pretax and taxable with owner evidence, rate refs, no `basis` argument; requires capability `ownerStatements` | pre-tax `afterTax`; taxable `afterTax` unavailable with `no_cost_basis`; the answer asks for the basis and states no taxable after-tax number | T15 |
-| q29-penalty-free-access | Q29 | `access_schedule` both | milestones | T21 |
-| q30-rmd-start | Q30 | `access_schedule` | rmd_start milestones | T21 |
-| q31-bridge-to-59-half | Q31 | `bridge_check` retireAge 50 source owner; requires capability `ownerStatements` | shortfall or surplus | T21 |
-| q32-accounts-by-treatment | Q32 | `net_worth` groupBy treatment | groups | T7 |
-| q33-unrealized-gains-tax | Q33 | `tax_estimate`, `after_tax_value` taxable kinds with rate refs | unrealizedGain, taxOnWithdrawal | T15 |
-| q34-tax-owed | Q34 | `tax_estimate` | federal and state projected | T10 |
-| q35-safe-harbor | Q35 | `tax_estimate` | safeHarbor fields | T10 |
-| q36-extra-income-whatif | Q36 | `tax_estimate` whatIf extraIncome 20000 source owner; requires capability `ownerStatements` | `whatIf.totalDelta` | T10 |
-| q37-se-tax | Q37 | `tax_estimate` | `federal.selfEmployment` | T10 |
-| q38-solo401k-room | Q38 | `contribution_room` owner, solo 401(k) types | remaining per type | T9 |
-| q39-ira-room | Q39 | `contribution_room` IRA types | remaining | T9 |
-| q40-hsa-room | Q40 | `contribution_room` hsa | remaining | T9 |
-| q41-529-contributions | Q41 | `aggregate_transactions` inflow to 529 accounts; `contribution_room` plan529_state_deduction | total, deductible | T6 |
-| q42-dependent-care-limit | Q42 | `contribution_room` dependent_care | limit; gap mentioned | T9 |
-| q43-goal-pace | Q43 | `get_pace` | pace per goal | T16 |
-| q44-cash-cushion-months | Q44 | `net_worth`, `aggregate_transactions`, `calculate` divide | months figure | T5 |
-| q45-subscriptions-annual | Q45 | `recurring_charges` active | annual costs, total | T12 |
-| q46-new-recurring | Q46 | `recurring_charges` status new | charges | T12 |
-| q47-stopped-or-changed | Q47 | `recurring_charges` status all, since | stopped and changed | T12 |
-| q48-this-year-vs-last | Q48 | `compare_periods` matching months, groupBy category | difference, group deltas | T13 |
-| q49-summer-vs-summer | Q49 | `compare_periods` June to August both years | difference | T13 |
-| q50-dining-trend | Q50 | `compare_periods` include dining | ratio | T13 |
-| q51-spending-after-mortgage | Q51 | `spending_projection` obligations mortgage | year rows; with no mortgage fact in the demo store, the change is unavailable and the answer names the missing fact | T20 |
-| q52-spending-after-childcare | Q52 | `spending_projection` obligations childcare | year rows; changes without a stated amount reported as not applied | T20 |
-| q53-mortgage-end | Q53 | `obligation_schedule` mortgage | endDate, monthly | T20 |
-| q54-childcare-changes | Q54 | `obligation_schedule` childcare | change dates | T20 |
-| q55-529-end | Q55 | `obligation_schedule` plan529 | endDate | T20 |
-| q56-stale-accounts | Q56 | `data_health` | stale accounts | T11 |
-| q57-uncategorized-count | Q57 | `data_health` | category counts | T11 |
-| q58-no-history-accounts | Q58 | `data_health` | accounts with empty lastData | T11 |
-| q59-change-account-owner | Q59 | `list_accounts`, `set_account_owner` owner owner | receipt; `undo` is `undo_account_action` with the receipt id | T27 |
-| q60-merchant-rule-groceries | Q60 | `query_transactions`, `set_merchant_rule` category Groceries | affected count | T25 |
-| q61-mark-1099-not-needed | Q61 | `mark_yearend_item` reason from the owner's words | receipt | T24 |
-| q62-decide-salary-option | Q62 | `list_recommendations`, `decide_decision` | receipt | T22 |
-| q63-archive-goal | Q63 | `list_goals`, `archive_goal` | receipt | T23 |
-| q64-send-to-advisor | Q64 | `send_to_advisor` | reviewId | T24 |
-| q65-sync-now | Q65 | `run_job` id simplefin-sync | run status | T26 |
-| q66-security-pick-refused | Q66 | none; forbids any security name | none; answer says Fathom does not have that | T16 |
-| q67-market-quote-refused | Q67 | none; forbids any index level | none | T16 |
-| q68-money-movement-refused | Q68 | no write tool | none | T16 |
+| spending-annual-exclusions | `spending.total` (measure spending, annualize true, exclude.classes has debt_service, exclude.buckets has tax) | predicates rewritten: the old exclude, includeHealthcare and income_tax paths name no parameter | C4 | C4 |
+| spending-portfolio-withdrawal | `retirement.target` (withdrawalRate.value 0.04, withdrawalRate.source owner, definition core_living, roundTo 1); capability ownerStatements | predicate path withdrawalRate becomes withdrawalRate.value; adds `definition core_living` and `roundTo 1`; adds capability ownerStatements; its `portfolio` expectation changes (below) | C6 | C6 |
+| spending-latest-groceries | `transactions.search` (category groceries, limit 1) | name | C1 | C3 |
+| spending-latest-dining | `transactions.search` (category dining, limit 1) | name | C1 | C3 |
+| spending-latest-health | `transactions.search` (category health, limit 1) | name | C1 | C3 |
+| cash-personal | `household.figures` (keys has personal_cash or absent) | predicate becomes `includes_or_absent` on `keys` | C1 | C3 |
+| cash-business | `household.figures` (keys has biz_cash or absent) | predicate becomes `includes_or_absent` on `keys` | C1 | C3 |
+| cash-true-reserve | `household.figures` (keys has true_reserve or absent) | predicate becomes `includes_or_absent` on `keys` | C1 | C3 |
+| business-stored-revenue | `household.figures` (keys has revenue_ytd or absent) | predicate becomes `includes_or_absent` on `keys` | C1 | C3 |
+| net-worth-current | `household.figures` (keys has net_worth or absent) | predicate becomes `includes_or_absent` on `keys` | C1 | C3 |
+| retirement-hsa-room | `household.figures` (keys has hsa_left or absent) | predicate becomes `includes_or_absent` on `keys` | C1 | C3 |
+| retirement-current-room | `household.figures` (keys has ret_room_now or absent) | predicate becomes `includes_or_absent` on `keys` | C1 | C3 |
+| retirement-hsa-paid | `household.figures` (keys has hsa_paid or absent) | predicate becomes `includes_or_absent` on `keys` | C1 | C3 |
+| retirement-pretax | `household.figures` (keys has my_pretax or absent) | predicate becomes `includes_or_absent` on `keys` | C1 | C3 |
+| taxes-safe-harbor | `household.figures` (keys has safe_harbor or absent) | predicate becomes `includes_or_absent` on `keys` | C1 | C3 |
+| taxes-federal-paid | `household.figures` (keys has fed_paid or absent) | predicate becomes `includes_or_absent` on `keys` | C1 | C3 |
+| taxes-state-paid | `household.figures` (keys has va_paid or absent) | predicate becomes `includes_or_absent` on `keys` | C1 | C3 |
+| taxes-liability | `household.figures` (keys has liability or absent) | predicate becomes `includes_or_absent` on `keys` | C1 | C3 |
+| taxes-april-due | `household.figures` (keys has april_due or absent) | predicate becomes `includes_or_absent` on `keys` | C1 | C3 |
+| cash-flow-month | `spending.cash_flow` (window custom, from 2026-01, to 2026-01) | predicates rewritten: from and to are months, not days | C4 | C4 |
+| business-pnl-january | `business.pnl` (from 2026-01, to 2026-01) | name | C1 | C3 |
+| business-pnl-february | `business.pnl` (from 2026-02, to 2026-02) | name | C1 | C3 |
+| business-pnl-march | `business.pnl` (from 2026-03, to 2026-03) | name | C1 | C3 |
+| net-worth-history | `accounts.net_worth` (series true) | adds the series predicate | C5 | C5 |
+| net-worth-change | `accounts.net_worth` (series true); `calculate.subtract` | includeChange names no parameter; the change is a calculate subtract over the series ends | C5 | C5 |
+| goals-open | `goals.list` | name | C1 | C3 |
+| goals-pace | `goals.pace` | name | C1 | C3 |
+| freshness-household | `household.summary` | name | C1 | C3 |
+| freshness-facts | `household.facts` | name | C1 | C3 |
+| unavailable-credit-score | `household.facts` | name | C1 | C3 |
+| unavailable-routing-number | `accounts.list` | name | C1 | C3 |
+| unavailable-market-forecast | `accounts.holdings` | name | C1 | C3 |
+| retirement-hsa-follow-up | `household.figures` (keys has hsa_left or absent); `household.figures` (keys has hsa_paid or absent) | predicate becomes `includes_or_absent` on `keys` | C1 | C3 |
+| q01-spend-excl-mortgage-tax | `spending.total` (measure spending, annualize true, exclude.classes has debt_service, exclude.categories has Mortgage, exclude.buckets has tax) | name | C4 | C4 |
+| q02-independence-target-4pct | `retirement.target` (withdrawalRate.value 0.04, withdrawalRate.source owner); capability ownerStatements | name | C6 | C6 |
+| q03-gap-and-date | `retirement.target` (withdrawalRate.value 0.04, withdrawalRate.source owner); capability ownerStatements | name | C6 | C6 |
+| q04-groceries-dining-monthly | `spending.total` (measure spending, groupBy month, include.categories has groceries, include.categories has dining) | name | C4 | C4 |
+| q05-essential-vs-discretionary | `spending.total` (definition essential); `spending.total` (definition discretionary) | name | C4 | C4 |
+| q06-top-merchants | `spending.total` (groupBy merchant, limit 10) | name | C4 | C4 |
+| q07-childcare-2025 | `spending.total` (window calendar_year, year 2025, include.classes has childcare) | name | C4 | C4 |
+| q08-healthcare-premiums | `spending.total` (include.classes has healthcare) | name | C4 | C4 |
+| q09-elective-definition | `spending.total` (definition elective_spending); capability definitions | name | C10 | C10 |
+| q09b-elective-definition-later-thread | `spending.total` (definition elective_spending); capability definitions | name | C10 | C10 |
+| q10-save-elective-definition | `update_preferences.save_definition` (def.exclude.classes has housing, def.exclude.classes has debt_service, def.exclude.classes has childcare, def.exclude.classes has healthcare, def.exclude.classes has taxes); capability definitions | name | C10 | C10 |
+| q11-monthly-net-cash-flow | `spending.cash_flow` (scope all) | name | C4 | C4 |
+| q12-business-to-personal | `spending.cash_flow` (scope all) | name | C4 | C4 |
+| q13-negative-months | `spending.cash_flow` (scope household) | name | C4 | C4 |
+| q14-savings-rate | `spending.total` (window trailing_12); `calculate.divide` | calculate op predicate becomes the operation | C4 | C4 |
+| q15-income-by-source | `spending.total` (measure income, groupBy merchant); `business.pnl` | name | C4 | C4 |
+| q16-monthly-take-home | `spending.total` (measure income, window trailing_12) | name | C4 | C4 |
+| q17-business-profit-margin | `business.pnl` (window ytd); capability businessPeriods | adds capability businessPeriods (its parameters arrive in C4) | C4 | C4 |
+| q18-revenue-vs-last-year | `business.pnl` (compareToPriorYear true); capability businessPeriods | adds capability businessPeriods (its parameters arrive in C4) | C4 | C4 |
+| q19-expense-categories-quarter | `business.pnl` (groupBy category, window custom); capability businessPeriods | adds capability businessPeriods (its parameters arrive in C4) | C4 | C4 |
+| q20-net-worth-parts | `accounts.net_worth` (groupBy part) | name | C5 | C5 |
+| q21-net-worth-change | `accounts.net_worth` (series true); `calculate.subtract` | calculate op predicate becomes the operation | C5 | C5 |
+| q22-retirement-vs-taxable | `accounts.net_worth` (groupBy treatment) | name | C5 | C5 |
+| q23-ten-year-growth | `retirement.growth` (solve balance, years 10) | name | C6 | C6 |
+| q24-monthly-to-target-by-55 | `retirement.target`; `retirement.growth` (solve monthly, byAge.age 55) | name | C6 | C6 |
+| q25-return-3pct-whatif | `retirement.target` (realReturn.value 0.03, realReturn.source owner); capability ownerStatements | name | C6 | C6 |
+| q26-withdrawal-35pct | `retirement.target` (withdrawalRate.value 0.035, withdrawalRate.source owner); capability ownerStatements | name | C6 | C6 |
+| q27-extra-1000-sooner | `retirement.target`; `calculate.subtract`; capability ownerStatements | calculate op predicate becomes the operation | C6 | C6 |
+| q28-15m-retirement-vs-brokerage | `retirement.after_tax` (hypothetical exists); capability ownerStatements | name | C6 | C6 |
+| q29-penalty-free-access | `retirement.access` (people both) | name | C7 | C7 |
+| q30-rmd-start | `retirement.access` (people both) | name | C7 | C7 |
+| q31-bridge-to-59-half | `retirement.bridge` (retireAge.value 50, retireAge.source owner); capability ownerStatements | name | C7 | C7 |
+| q32-accounts-by-treatment | `accounts.net_worth` (groupBy treatment) | name | C5 | C5 |
+| q33-unrealized-gains-tax | `tax.estimate`; `retirement.after_tax` (kinds has taxable) | name | C6 | C6 |
+| q34-tax-owed | `tax.estimate` | name | C5 | C5 |
+| q35-safe-harbor | `tax.estimate` | name | C5 | C5 |
+| q36-extra-income-whatif | `tax.estimate` (whatIf.extraIncome.value 20000, whatIf.extraIncome.source owner); capability ownerStatements | name | C5 | C5 |
+| q37-se-tax | `tax.estimate` | name | C5 | C5 |
+| q38-solo401k-room | `tax.room` (person owner, types has solo401k_pretax) | name | C5 | C5 |
+| q39-ira-room | `tax.room` (types has traditional_ira) | name | C5 | C5 |
+| q40-hsa-room | `tax.room` (types has hsa) | name | C5 | C5 |
+| q41-529-contributions | `spending.total` (measure inflow); `tax.room` (types has plan529_state_deduction) | name | C5 | C5 |
+| q42-dependent-care-limit | `tax.room` (types has dependent_care) | name | C5 | C5 |
+| q43-goal-pace | `goals.pace` | name | C1 | C3 |
+| q44-cash-cushion-months | `accounts.net_worth`; `spending.total` (measure spending); `calculate.divide` | calculate op predicate becomes the operation | C5 | C5 |
+| q45-subscriptions-annual | `spending.recurring` (status active) | name | C4 | C4 |
+| q46-new-recurring | `spending.recurring` (status new) | name | C4 | C4 |
+| q47-stopped-or-changed | `spending.recurring` (status all, since exists) | name | C4 | C4 |
+| q48-this-year-vs-last | `spending.compare` (groupBy category) | name | C4 | C4 |
+| q49-summer-vs-summer | `spending.compare` (b.from 2026-06, b.to 2026-08) | name | C4 | C4 |
+| q50-dining-trend | `spending.compare` (include.categories has dining) | name | C4 | C4 |
+| q51-spending-after-mortgage | `spending.projection` (obligations has mortgage) | name | C7 | C7 |
+| q52-spending-after-childcare | `spending.projection` (obligations has childcare) | name | C7 | C7 |
+| q53-mortgage-end | `spending.obligations` (obligations has mortgage) | predicate path kinds becomes obligations | C7 | C7 |
+| q54-childcare-changes | `spending.obligations` (obligations has childcare) | predicate path kinds becomes obligations | C7 | C7 |
+| q55-529-end | `spending.obligations` (obligations has plan529) | predicate path kinds becomes obligations | C7 | C7 |
+| q56-stale-accounts | `household.health` | name | C5 | C5 |
+| q57-uncategorized-count | `household.health` | name | C5 | C5 |
+| q58-no-history-accounts | `household.health` | name | C5 | C5 |
+| q59-change-account-owner | `accounts.list`; `update_account.owner` (owner owner) | name | C8 | C8 |
+| q60-merchant-rule-groceries | `transactions.search`; `categorize.merchant_rule` (category Groceries) | name | C8 | C8 |
+| q61-mark-1099-not-needed | `answer.yearend_mark` (reason exists) | name | C8 | C8 |
+| q62-decide-salary-option | `recommendations.list`; `act_on_recommendation.decide` | name | C9 | C9 |
+| q63-archive-goal | `goals.list`; `update_goal.archive` | name | C9 | C9 |
+| q64-send-to-advisor | `advisor_review.send` | name | C9 | C9 |
+| q65-sync-now | `refresh.run_job` (job simplefin-sync) | predicate path id becomes job | C10 | C10 |
+| q66-security-pick-refused | none | name | C1 | C1 |
+| q67-market-quote-refused | none | name | C1 | C1 |
+| q68-money-movement-refused | none | name | C1 | C1 |
+
+Predicate paths keep their names except: `spending.obligations` uses `obligations` (was `kinds`,
+cases q53 to q55), `refresh.run_job` uses `job` (was `id`, q65), and a `calculate` call's `op`
+becomes its operation (q14, q21, q27, q44, net-worth-change). The three refusal cases keep their
+forbidden checks (q68 forbids any write tool).
+
+Oracle changes in `evals/cases.mjs` (C1). The `portfolio` expectation (case
+`spending-portfolio-withdrawal`) and the `annual-spending` expectation (cases
+`spending-annual-exclusions` and `q01-spend-excl-mortgage-tax`) compute the same selection the
+calls now name: household spending on checking and card accounts over the complete months on
+file, annualized, leaving out the `debt_service` class and the `tax` bucket by the
+`CATEGORY_CLASSES` table, computed independently from the transactions table rather than by
+calling the tool. `portfolio` divides that by the rate and rounds up to the whole dollar, which is
+what `retirement.target` returns with `definition: 'core_living'` and `roundTo: 1`; it no longer
+rounds to cents.
+
+## 9. Migration from the old names
+
+Every caller of a current tool name moves to its new (tool, operation) pair in the same ticket that
+replaces the name, and the old name stops existing in that ticket. No aliases, no compatibility
+shims, no dual-format loader (AGENTS.md and the repository rule against compatibility paths). The
+callers for the live names, all in C1:
+
+1. The Ask prompt and rules in `src/api/answerer.mjs`: the static lines that name `get_figures`,
+   `remember_preference`, `list_accounts`, `query_transactions` and `pnl_by_month`, the
+   `TOOL_SOURCES` and `PROGRESS_LABELS` maps, the `query_transactions` grounding special cases, and
+   the internal `callTool('household_summary')`, `callTool('list_accounts')` and
+   `callTool('get_recommendation')` calls.
+2. `src/api/fake-answers.mjs`, the scripted engine's calls.
+3. The ask-quality `TOOL_NAMES` fixture in `test/ask-quality.test.mjs`, which becomes the sorted
+   list of (tool, operation) pairs, and every other test and e2e spec listed in C1's Files.
+4. Evals: `evals/catalog.json`, `evals/cases.mjs`, `evals/graders.mjs`, `evals/harness.mjs`
+   (section 8).
+5. The MCP smoke: `scripts/mcp-smoke.mjs`, `test/mcp-deploy-smoke.test.mjs`, the smoke section of
+   `docs/development.md`, and the deployment's MCP smoke list, kept with the deployment outside
+   this repository, which the deploy that ships C1 updates.
+6. `src/mcp/keys.mjs` `SCOPE_INFO` access text.
+7. Docs: `docs/architecture.md` (section 8 tool table, pack search paragraph), `docs/development.md`,
+   `docs/known-limits.md`.
+
+Planned names never existed in code; their only callers are this document and PR #84's cases,
+which C1 re-points. Stored data holds no tool name anything re-reads: thread history keeps the
+names and labels it was answered with, and refs are computed per call. MCP clients see the new
+names on the first deploy after C1 merges.
+
+Every old name and its replacement:
+
+| Old name | Status | New (tool.operation) | Ticket |
+|---|---|---|---|
+| `household_summary` | live | `household.summary` | C1 |
+| `get_facts` | live | `household.facts` | C1 |
+| `get_fact_answer_shapes` | live | `household.fact_shapes` | C1 |
+| `get_figures` | live | `household.figures` | C1 |
+| `list_deadlines` | live | `household.deadlines` | C1 |
+| `list_accounts` | live | `accounts.list` | C1 |
+| `list_positions` | live | `accounts.holdings` | C1 |
+| `query_transactions` | live | `transactions.search` | C1 |
+| `pnl_by_month` | live | `business.pnl` | C1 |
+| `list_goals` | live | `goals.list` | C1 |
+| `get_pace` | live | `goals.pace` | C1 |
+| `list_recommendations` | live | `recommendations.list` | C1 |
+| `get_recommendation` | live | `recommendations.detail` | C1 |
+| `advisor_status` | live | `recommendations.advisor` | C1 |
+| `list_packs` | live | `knowledge.packs` | C1 |
+| `packs_status` | live | `knowledge.packs` | C1 |
+| `search_pack_entries` | live | `knowledge.search` | C1 |
+| `get_pack_entry` | live | `knowledge.entry` | C1 |
+| `record_household_fact` | live | `answer.fact` | C1 |
+| `set_recommendation_status` | live | `act_on_recommendation.status` | C1 |
+| `set_recommendation_owner` | live | `act_on_recommendation.owner` | C1 |
+| `set_recommendation_step` | live | `act_on_recommendation.step` | C1 |
+| `create_goal` | live | `update_goal.create` | C1 |
+| `edit_goal` | live | `update_goal.edit` | C1 |
+| `remember_preference` | live | `update_preferences.remember` | C1 |
+| `undo_fact_action` | live | `undo.undo` | C1 |
+| `undo_goal_action` | live | `undo.undo` | C1 |
+| `undo_preference_action` | live | `undo.undo` | C1 |
+| `undo_recommendation_action` | live | `undo.undo` | C1 |
+| `undo_step_action` | live | `undo.undo` | C1 |
+| `calculate` | planned | `calculate.<arithmetic>` | C3 |
+| `aggregate_transactions` | planned | `spending.total` | C4 |
+| `compare_periods` | planned | `spending.compare` | C4 |
+| `cash_flow` | planned | `spending.cash_flow` | C4 |
+| `recurring_charges` | planned | `spending.recurring` | C4 |
+| `list_spending_definitions` | planned | `spending.definitions` | C4 |
+| `business_pnl` | planned | `business.pnl` | C4 |
+| `net_worth` | planned | `accounts.net_worth` | C5 |
+| `data_health` | planned | `household.health` | C5 |
+| `tax_estimate` | planned | `tax.estimate` | C5 |
+| `contribution_room` | planned | `tax.room` | C5 |
+| `independence_target` | planned | `retirement.target` | C6 |
+| `project_growth` | planned | `retirement.growth` | C6 |
+| `after_tax_value` | planned | `retirement.after_tax` | C6 |
+| `obligation_schedule` | planned | `spending.obligations` | C7 |
+| `spending_projection` | planned | `spending.projection` | C7 |
+| `access_schedule` | planned | `retirement.access` | C7 |
+| `bridge_check` | planned | `retirement.bridge` | C7 |
+| `list_confirm_items` | planned | `household.confirm_items` | C8 |
+| `list_merge_candidates` | planned | `accounts.merge_candidates` | C8 |
+| `answer_recommendation_questions` | planned | `answer.rec_questions` | C8 |
+| `answer_confirm_item` | planned | `answer.confirm` | C8 |
+| `reopen_confirm_item` | planned | `answer.reopen` | C8 |
+| `mark_yearend_item` | planned | `answer.yearend_mark` | C8 |
+| `set_transaction_category` | planned | `categorize.transaction` | C8 |
+| `set_merchant_rule` | planned | `categorize.merchant_rule` | C8 |
+| `rename_account` | planned | `update_account.rename` | C8 |
+| `set_account_mask` | planned | `update_account.mask` | C8 |
+| `set_account_owner` | planned | `update_account.owner` | C8 |
+| `set_account_kind` | planned | `update_account.kind` | C8 |
+| `merge_accounts` | planned | `update_account.merge` | C8 |
+| `start_recommendation_over` | planned | `act_on_recommendation.start_over` | C9 |
+| `decide_decision` | planned | `act_on_recommendation.decide` | C9 |
+| `revisit_decision` | planned | `act_on_recommendation.revisit` | C9 |
+| `pick_wargame_point` | planned | `act_on_recommendation.pick_point` | C9 |
+| `send_to_advisor` | planned | `advisor_review.send` | C9 |
+| `record_advisor_verdict` | planned | `advisor_review.verdict` | C9 |
+| `set_advisor_checkin` | planned | `advisor_review.checkin` | C9 |
+| `create_review_packet` | planned | `advisor_review.packet` | C9 |
+| `archive_goal` | planned | `update_goal.archive` | C9 |
+| `delete_goal` | planned | `update_goal.delete` | C9 |
+| `set_goal_suggestion` | planned | `update_goal.suggestion` | C9 |
+| `set_curve_position` | planned | `update_preferences.curve` | C9 |
+| `forget_preference` | planned | `update_preferences.forget` | C10 |
+| `save_spending_definition` | planned | `update_preferences.save_definition` | C10 |
+| `delete_spending_definition` | planned | `update_preferences.delete_definition` | C10 |
+| `set_pack_active` | planned | `update_preferences.pack` | C10 |
+| `import_file` | planned | `refresh.import_file` | C10 |
+| `retry_import` | planned | `refresh.retry_import` | C10 |
+| `build_your_plans` | planned | `refresh.build_your_plans` | C10 |
+| `run_job` | planned | `refresh.run_job` | C10 |
+| `undo_account_action` | planned | `undo.undo` | C1 |
+| `undo_category_action` | planned | `undo.undo` | C1 |
+| `undo_confirm_action` | planned | `undo.undo` | C1 |
+| `undo_decision_action` | planned | `undo.undo` | C1 |
