@@ -266,7 +266,8 @@ history and goal links. Undo restores the pair until a later import uses the mer
 Money warns while a duplicate pair is waiting for an answer.
 
 Operators can run `node scripts/merge-accounts.mjs` with the server's environment to inspect only
-counts by confidence class. This default opens the store read-only and does not migrate it.
+counts by confidence class. Like the server, it opens a real store through the platform
+readiness check, which applies pending store migrations; it changes no account data.
 After deployment, `node scripts/merge-accounts.mjs --apply-sure` merges only unambiguous pairs
 with reliable last four digits, matching known institutions, compatible kinds and no conflicting
 same-day balance. It records normal Confirm answers with undo and replans; every uncertain pair
