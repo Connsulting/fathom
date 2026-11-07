@@ -211,3 +211,12 @@ export function rowItem(reg, key, r, { account, category, label }) {
     ? { id: r.id, kind: 'workbook', date: r.month, description: 'Workbook line', account, category, amount: r.amount, value, fig }
     : { id: r.id, kind: 'transaction', date: r.date, description: r.description, account, category, amount: r.amount, value, fig };
 }
+
+export function boundedRows(result) {
+  while (Buffer.byteLength(JSON.stringify(result)) > 256 * 1024 && result.items.length) {
+    const item = result.items.pop();
+    delete result.figures[item.fig];
+    result.truncated = true;
+  }
+  return result;
+}
