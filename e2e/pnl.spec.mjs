@@ -255,7 +255,7 @@ test('PN1 @mobile confirmed spending ledgers appear apart from businesses with t
     answerItem(db, q.id, 'yes');
     await planRun(db);
     app = await serveAppFixture({ db, authenticated: true, config: loadConfig({ FATHOM_DATA: dir, FATHOM_DEMO: '0', FATHOM_ENGINE: 'off', FATHOM_CLOCK: '2026-11-05' }) });
-    await page.context().setExtraHTTPHeaders({ cookie: app.session.cookie });
+    await page.context().addCookies([{ name: '__Host-fathom-session', value: app.session.token, url: app.baseUrl, secure: true, httpOnly: true, sameSite: 'Strict' }]);
     await page.goto(`${app.baseUrl}/#/pnl`);
     await expectH1(page, 'P&L');
     const ledgers = page.getByRole('group', { name: 'Spending ledgers', exact: true });
