@@ -78,7 +78,7 @@
 .d-horizon .h-subnav + .h-askx { --askx-top: calc(var(--top-h) + var(--subnav-h)); }
 
 /* Settings: the signed-in line, then one row per screen or account page. */
-.d-horizon .h-settings { max-width: 720px; }
+.d-horizon .h-settings { --h-col: 720px; }
 .d-horizon .h-settings .h-ph { margin-bottom: 24px; }
 .d-horizon .h-settings .h-who { margin-bottom: 18px; padding: 12px 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--s1); color: var(--tx); font-size: 14px; overflow-wrap: anywhere; }
 .d-horizon .h-settings .h-who span { display: block; margin-top: 2px; color: var(--fa); font-size: 12.5px; }
@@ -107,6 +107,9 @@
 .d-horizon .h-engine-off a { color: var(--ac); }
 
 .d-horizon .h-main { max-width: 1336px; margin: 0 auto; padding: 44px 48px 96px; }
+/* A page whose whole body is one column narrower than .h-main: put .h-narrow on the page wrapper,
+   set --h-col to the column width, and the title, lede, actions and body all center together. */
+.d-horizon .h-narrow { width: 100%; max-width: var(--h-col, 720px); margin-inline: auto; }
 
 /* ---------- type ---------- */
 .d-horizon .h-kicker { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: baseline; font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ac); font-weight: 500; margin-bottom: 12px; }
@@ -287,18 +290,24 @@
 .d-horizon .h-back:hover { color: var(--tx); }
 .d-horizon .h-rec-head h1 { font-size: 32px; line-height: 1.15; max-width: 30ch; }
 .d-horizon .h-rec-head .h-meta { margin-top: 14px; font-size: 13px; }
-.d-horizon .h-strip-wrap { position: relative; margin-top: 28px; padding: 18px 120px 10px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
-.d-horizon .h-strip { width: 100%; height: 64px; display: block; margin-bottom: 8px; }
-.d-horizon .h-strip-ax { stroke: var(--line2); stroke-width: 1.5; }
-.d-horizon .h-strip-m { stroke: var(--line2); }
-.d-horizon .h-strip-t { fill: var(--fa); font: 11px var(--sans); }
-.d-horizon .h-strip-win { stroke: var(--ac); stroke-width: 3; stroke-linecap: round; }
-.d-horizon .h-strip-close { fill: var(--bg); stroke: var(--ac); stroke-width: 2; }
-.d-horizon .h-strip-labs { position: absolute; left: 0; right: 120px; top: 8px; bottom: 0; pointer-events: none; }
-.d-horizon .h-strip-labs span.mon { top: auto; bottom: 8px; color: var(--fa); transform: none; margin-left: 4px; }
-.d-horizon .h-strip-labs span { position: absolute; transform: translateX(-50%); font-size: 11.5px; color: var(--ac); white-space: nowrap; }
+/* The rec's window strip: today to close on one axis. Elements are positioned by percent inside the
+   plot, so the marker stays round at any width. Labels sit in the top row and the month names in the
+   bottom row; labels that would meet are merged or flared apart in windowStrip(). */
+.d-horizon .h-strip-wrap { margin-top: 28px; padding: 24px 0 20px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 0 36px; }
+.d-horizon .h-strip-plot { min-width: 0; padding: 0 16px; }
+.d-horizon .h-strip { position: relative; height: 80px; }
+.d-horizon .h-strip-ax { position: absolute; left: 0; right: 0; top: 40px; height: 1.5px; margin-top: -0.75px; background: var(--line2); }
+.d-horizon .h-strip-m { position: absolute; top: 32px; width: 1px; height: 16px; background: var(--line2); }
+.d-horizon .h-strip-win { position: absolute; top: 40px; height: 3px; margin-top: -1.5px; border-radius: 2px; background: var(--ac); }
+.d-horizon .h-strip-now { position: absolute; top: 22px; width: 1.5px; height: 36px; margin-left: -0.75px; background: var(--ac); }
+.d-horizon .h-strip-close { position: absolute; top: 40px; width: 12px; height: 12px; margin: -6px 0 0 -6px; border-radius: 50%; box-sizing: border-box; background: var(--bg); border: 2px solid var(--ac); }
+.d-horizon .h-strip .h-tl-dia { position: absolute; top: 40px; width: 7px; height: 7px; margin: -3.5px 0 0 -3.5px; box-sizing: border-box; background: var(--bg); border: 1.3px solid var(--mu); transform: rotate(45deg); }
+.d-horizon .h-strip-labs span { position: absolute; top: 0; line-height: 16px; font-size: 11.5px; color: var(--ac); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transform: translateX(-50%); }
+.d-horizon .h-strip-labs span.l { transform: translateX(calc(-100% - 8px)); }
+.d-horizon .h-strip-labs span.r { transform: translateX(8px); }
 .d-horizon .h-strip-labs span.end { color: var(--tx); }
-.d-horizon .h-strip-cd { position: absolute; right: 0; top: 50%; transform: translateY(-50%); text-align: right; color: var(--mu); font-size: 12.5px; }
+.d-horizon .h-strip-labs span.mon { top: auto; bottom: 0; color: var(--fa); transform: translateX(5px); }
+.d-horizon .h-strip-cd { text-align: right; color: var(--mu); font-size: 12.5px; white-space: nowrap; }
 .d-horizon .h-strip-cd b { display: block; font-family: var(--mono); font-weight: 400; font-size: 32px; color: var(--ac); line-height: 1; margin-bottom: 4px; }
 .d-horizon .h-prose p { color: var(--tx2); max-width: 70ch; }
 .d-horizon .h-prose p + p { margin-top: 12px; }
@@ -502,9 +511,9 @@
 .d-horizon .h-links a em { font-style: normal; color: var(--fa); font-size: 12.5px; }
 .d-horizon .h-links a .h-i { color: var(--ac); }
 .d-horizon .h-links a:hover { border-color: var(--ac); }
-.d-horizon .h-qs li { padding: 0 0 14px; }
-.d-horizon .h-qs b { font-weight: 500; font-size: 14px; }
-.d-horizon .h-qs p { color: var(--mu); font-size: 13.5px; margin-top: 3px; }
+.d-horizon .h-advq li { padding: 0 0 14px; }
+.d-horizon .h-advq b { font-weight: 500; font-size: 14px; }
+.d-horizon .h-advq p { color: var(--mu); font-size: 13.5px; margin-top: 3px; }
 .d-horizon .h-kv li { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
 .d-horizon .h-kv li:first-child { padding-top: 0; }
 .d-horizon .h-kv time { color: var(--fa); font-size: 12.5px; white-space: nowrap; font-family: var(--mono); }
@@ -923,9 +932,10 @@ a.h-dec-t:hover { color: var(--ac2); }
   .d-horizon .h-mine { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .d-horizon .h-mine dd { font-size: 16px; }
   .d-horizon .h-stats { gap: 28px; }
-  .d-horizon .h-strip-wrap { padding-right: 76px; }
-  .d-horizon .h-strip-labs { right: 76px; }
-  .d-horizon .h-strip-cd b { font-size: 24px; }
+  .d-horizon .h-strip-wrap { grid-template-columns: minmax(0, 1fr); gap: 6px 0; padding: 20px 0 16px; }
+  .d-horizon .h-strip-plot { padding: 0 14px; }
+  .d-horizon .h-strip-cd { display: flex; align-items: baseline; justify-content: flex-end; gap: 8px; padding: 0 14px; }
+  .d-horizon .h-strip-cd b { display: inline; font-size: 24px; margin: 0; }
   .d-horizon .h-def-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .d-horizon .h-bars-wrap { grid-template-columns: 130px minmax(0, 1fr); gap: 10px; }
   .d-horizon .h-bar-row em { display: none; }
@@ -971,7 +981,8 @@ a.h-dec-t:hover { color: var(--ac2); }
 .d-horizon .h-gform { background: var(--s1); border: 1px solid var(--line2); border-radius: 12px; padding: 18px 18px 14px; margin: 0 0 24px; max-width: 640px; display: grid; gap: 14px; }
 .d-horizon .h-gform h2 { font-size: 15px; font-weight: 500; }
 .d-horizon .h-gf { display: grid; gap: 6px; font-size: 13px; color: var(--tx2); min-width: 0; }
-.d-horizon .h-gf .h-mute { font-size: 12px; }
+.d-horizon .h-gl { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.d-horizon .h-opt { color: var(--mu); font-size: 11.5px; letter-spacing: 0.02em; }
 .d-horizon .h-gf input, .d-horizon .h-gf textarea, .d-horizon .h-gf select { width: 100%; min-width: 0; background: var(--bg); color: var(--tx); border: 1px solid var(--line2); border-radius: 8px; font: inherit; font-size: 14.5px; padding: 9px 12px; color-scheme: dark; }
 .d-horizon .h-gf textarea { resize: vertical; line-height: 1.5; }
 .d-horizon .h-gf input:focus, .d-horizon .h-gf textarea:focus, .d-horizon .h-gf select:focus { outline: none; border-color: var(--ac); }
