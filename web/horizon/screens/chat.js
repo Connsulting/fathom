@@ -350,7 +350,7 @@ function blockHtml({ key, live, open, label, items, pulse }) {
   return `<div class="h-work${live ? ' live' : ''}"><button type="button" class="h-work-row" data-work="${k}" aria-expanded="${open}" aria-controls="${bid}">`
     + (live ? '<i class="h-work-spin" aria-hidden="true"></i>' : '')
     + `<span class="h-work-l">${label}</span>${n ? `<span class="h-work-n">${n}</span>` : ''}</button>`
-    + (open ? `<div class="h-work-body" id="${bid}">${itemsHtml(items, pulse)}</div>` : '')
+    + (open ? `<div class="h-work-body" id="${bid}">${items.length ? itemsHtml(items, pulse) : ''}</div>` : '')
     + '</div>';
 }
 
