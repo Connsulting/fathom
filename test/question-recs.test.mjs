@@ -15,6 +15,10 @@ test('every confirm task has a declared, usable answer shape', () => {
   assert.throws(() => questionFor(['unknown.key'], { accounts, facts: {} }), /answer shape/i);
 });
 
+test('an emitted key without an answer shape fails through the trigger catalog', () => {
+  assert.throws(() => evaluateTriggers({ clock: '2026-11-05', year: 2026, facts: { 'benefits.hsa': true }, owner: {}, fig: {}, names: {}, data: { accounts }, packs: [], packStatus: {}, warnings: [], freshness: [], info: { blocked: [], confirm: { hsa: ['unknown.key'] } } }), /answer shape/i);
+});
+
 test('Virginia questions name display labels and use stable account ids', () => {
   const q = questionFor(['accounts.va529'], { accounts, facts: {} });
   assert.match(q.title, /College fund/);

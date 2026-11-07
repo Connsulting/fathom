@@ -21,13 +21,15 @@ test('answers validate atomically, preserve confirmed data and replan to a figur
   await assert.rejects(answerFacts(db, [{ key: 'household.ownerAge', value: 43 }, { key: 'accounts.va529', value: { [account.id]: { virginiaPlan: true, ownerAge70Plus: false, carryforward: -1 } } }], { now, replan }), FactAnswerError);
   assert.notEqual(getFacts(db)['household.ownerAge'], 43);
   assert.equal(replans, 0);
-  await answerFacts(db, [{ key: 'accounts.va529', value: { [account.id]: { virginiaPlan: true, ownerAge70Plus: false, carryforward: 0 } } }], { now, replan });
+  db.prepare("UPDATE recs SET status = 'snoozed' WHERE id = 'va529'").run();
+  await answerFacts(db, [{ key: 'accounts.va529', value: { [account.id]: { virginiaPlan: true, ownerAge70Plus: false, carryforward: 0 } } }], { now, replan, recId: 'va529' });
   assert.equal(replans, 1);
   const f = db.prepare("SELECT * FROM facts WHERE key = 'accounts.va529'").get();
   assert.equal(f.confirmed, 1);
   assert.equal(f.as_of, '2026-11-05');
   assert.match(db.prepare('SELECT label FROM sources WHERE id = ?').get(f.src).label, /you answered on 2026-11-05/);
   const rec = buildScenario(db).recs.find(r => r.id === 'va529');
+  assert.equal(rec.status, 'proposed');
   assert.equal(rec.question, undefined);
   assert.match(rec.title, /Use the rest/);
   assert.ok(rec.mine.some(x => x.fig === 'va529.deductionLeft'));

@@ -121,6 +121,8 @@ export function recAction(ctx) {
   if (typeof action !== 'string') throw new HttpError(400, 'action is required');
   const def = parse(row.def, {});
 
+  if (def.question && ['complete', 'task'].includes(action)) throw new HttpError(409, 'save the answers to update this recommendation');
+
   if (action === 'task') {
     const tasks = Array.isArray(def.tasks) ? def.tasks : [];
     if (!isIndex(arg) || Number(arg) >= tasks.length) throw new HttpError(400, `task index must be 0 to ${tasks.length - 1}`);

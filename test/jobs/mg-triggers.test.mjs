@@ -153,7 +153,7 @@ test('MG7: without the only-employee answer setup is a confirm form that does no
   assert.equal(r.state, 'hit');
   assert.deepEqual(r.hit.confirm, ['business.onlyEmployee']);
   assert.equal(r.window.close, '2027-04-15');
-  assert.ok(taskTexts(r).some(t => /employee/i.test(t) && /own/i.test(t)), `a task asks about sole ownership and employees: ${taskTexts(r)}`);
+  assert.deepEqual(taskTexts(r), [], 'eligibility is answered through the question controls');
 });
 
 test('MG7: year-end retirement for a sole proprietor with no plan and no eligibility answer is a confirm form', () => {

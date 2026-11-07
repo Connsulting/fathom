@@ -22,6 +22,7 @@ import * as backdoorRoth from './backdoor-roth.mjs';
 import * as dependentCareFsa from './dependent-care-fsa.mjs';
 import * as newChild from './new-child.mjs';
 import * as missingData from './missing-data.mjs';
+import { questionFor, dataText } from './common.mjs';
 
 export const triggers = Object.freeze([
   fedQ4, vaQ4, yearEndRetirement, solo401kSetup, scorpSalary, invoiceDeferral, hsaRoom, va529,
@@ -49,6 +50,12 @@ function recOf(ctx, t, hit, window) {
     goalKinds: [...t.goalKinds], owner: typeof t.ownerFor === 'function' ? t.ownerFor(ctx, hit) : t.owner,
   };
   if (b.scenario) rec.scenario = b.scenario;
+  const questions = hit.confirm || (hit.catchUpPending ? [hit.catchUpPending] : []);
+  if (questions.length) {
+    rec.question = questionFor(questions, { accounts: ctx.data?.accounts || [], facts: ctx.facts, names: ctx.names });
+    rec.title = dataText(rec.question.title);
+    rec.tasks = [];
+  }
   return rec;
 }
 
