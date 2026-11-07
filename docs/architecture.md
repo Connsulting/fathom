@@ -1604,7 +1604,7 @@ process, so accounting poison lasts for the process, and awaits `init()` once at
 Stored in `messages.provenance` and returned on the message: `{engine: mode, model, tools: [{name,
 args}], figures: [figure keys], packIds: [active manifest ids in the prompt], packEntries: [entry
 titles named in the answer], literals: [{text, source}], grounding: {ok, retried, unverified:
-[texts]}, costUsd, actionTurn?}`. Typed owner messages carry `ownerInput` with actor id and raw typed words for action evidence; generated questions do not.
+[texts]}, costUsd, actionTurn?}`. Typed owner messages carry `ownerInput` with actor id for action evidence from the escaped message text; generated questions do not.
 
 ## Live pack state
 

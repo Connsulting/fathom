@@ -546,10 +546,7 @@ export function createLiveAnswerer({ engine, packs } = {}) {
   if (!engine || typeof engine.call !== 'function') throw new TypeError('createLiveAnswerer needs an engine');
 
   // One grounded model answer: call, ground, retry once with a corrective turn, render.
-  // proposeFor: null (no proposal tool), '*' (any visible rec, an Ask thread with no rec)
-  // or the rec id of an Ask thread asked from that rec (a bare rec id still resolves the same
-  // way). Proposals for any other rec are ignored.
-  async function run({ db, scenario, now, question, context, history, baseRefs, fakeArgs, proposeFor = null, onEvent, actionContext = null }) {
+  async function run({ db, scenario, now, question, context, history, baseRefs, fakeArgs, actions = false, onEvent, actionContext = null }) {
     if (!engine.isOn()) return offNotice(engine);
     const t0 = performance.now();
     const stream = streamer(onEvent);
@@ -563,7 +560,7 @@ export function createLiveAnswerer({ engine, packs } = {}) {
     const prompt = buildChatPrompt({ packContextText, summary, context, history, question, today: scenario.meta && scenario.meta.clock });
     prompt.systemDynamic += '\n<household_preferences>\n' + JSON.stringify(listPreferences(db)) + '\n</household_preferences>';
     const offered = REGISTRY.filter(t => !t.mcpOnly && (t.scope === 'read' || actionContext?.actorId));
-    const fake = engine.mode === 'fake' ? fakeAnswerScript({ scenario, summary, propose: !!proposeFor, ...fakeArgs }) : undefined;
+    const fake = engine.mode === 'fake' ? fakeAnswerScript({ scenario, summary, propose: actions, ...fakeArgs }) : undefined;
     const request = { purpose: 'chat', system: prompt.system, systemDynamic: prompt.systemDynamic, messages: prompt.messages,
       tools: offered, toolContext: { ...actionContext, db, now }, maxTokens: MAX_TOKENS, ...(fake ? { fake } : {}),
       ...(stream.engineEvent ? { onEvent: stream.engineEvent } : {}) };
@@ -667,7 +664,7 @@ export function createLiveAnswerer({ engine, packs } = {}) {
         context = packConversationContext(db, packs, key.slice(5)).context;
       }
       return run({ db, scenario, now, question, context, history: scenario.live.conversations[key] || [], baseRefs,
-        proposeFor: rec ? rec.id : isThreadKey(key) ? '*' : null, onEvent,
+        actions: isThreadKey(key), onEvent,
         actionContext: isThreadKey(key) && actorId ? { actorId, ownerText, turnId, replan, queuePlan, conversationKey: key, recId: rec?.id } : null,
         fakeArgs: { key, questionId: hasQ ? questionId : undefined, text: hasQ ? undefined : question } });
     },

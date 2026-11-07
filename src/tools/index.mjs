@@ -1,15 +1,14 @@
 // Tool registry shared by the chat engine and the MCP server (frozen architecture, tool interface).
-// Each tool: { name, description, inputSchema (JSON Schema subset), scope: 'read'|'write:recs',
+// Each tool has a name, description, JSON input schema, read or write scope and handler.
 // handler(args, ctx) } with ctx = { db, now } (pack tools also read optional packDirs, dataDir;
 // see ./packs.mjs). callTool validates args against inputSchema and
-// throws ToolError ('bad_input' | 'not_found'). The only writes are a recommendation's status and
-// its action owner.
+// throws ToolError. Writes use the shared action services and durable receipts.
 //
 // Outputs resolve scenario tokens to plain text, carry masks only (never account numbers), and
 // never include hidden recs. Recs carry their goal links (serves, housekeeping) and action owner;
 // an owner goal's title in serves is the owner's own text, kept literal as in goalsForModel.
 
-import { getSetting, tx, cents, parseJson as parse } from '../store/db.mjs';
+import { getSetting, cents, parseJson as parse } from '../store/db.mjs';
 import { loadContent, loadPacks, tokenScope, resolveClock, todayUtc, loadGoals, loadCurve, loadFigures, loadLinkedRecs, loadLinkedRec, housekeepingCount } from '../scenario/build.mjs';
 import { horizonLabel } from '../shared/goals.mjs';
 import { accountLabel } from '../shared/account-label.mjs';
@@ -19,7 +18,7 @@ import { needsYou, verdictLevel, packStatus, STATUSES } from '../shared/rules.mj
 import { resolveTokens } from '../shared/tokens.mjs';
 import { ToolError } from './errors.mjs';
 import { packTools } from './packs.mjs';
-import { setRecOwner } from '../store/recs.mjs';
+import { SETTABLE_REC_STATUSES } from '../store/recs.mjs';
 import { advisorStatus } from '../advisor/index.mjs';
 import { buildPace } from '../pace/build.mjs';
 import { actionTools } from './actions.mjs';
@@ -29,7 +28,7 @@ import { ANSWER_SHAPES, answerShape } from '../jobs/triggers/common.mjs';
 export { ToolError };
 export { packDirsFor } from './packs.mjs';
 
-const SETTABLE = ['doing', 'done', 'dismissed', 'snoozed', 'proposed'];
+const SETTABLE = SETTABLE_REC_STATUSES;
 const DATE = '^\\d{4}-\\d{2}-\\d{2}$';
 const MONTH = '^\\d{4}-\\d{2}$';
 
