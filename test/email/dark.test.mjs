@@ -70,7 +70,7 @@ function assertDark(html, name) {
     assert.ok(PALETTE.has(bg), `${name}: background ${bg} is a palette color`);
     assert.ok(bg !== '#ffffff' && bg !== '#fff' && luminance(bg) < 0.6, `${name}: background ${bg} is not light`);
   }
-  assert.ok(!/#fff\b|#ffffff|\bwhite\b|rgb\(|hsl\(/i.test(html), `${name}: no white or functional color spelling`);
+  assert.ok(!/#fff\b|#ffffff|\bwhite\b(?!-)|rgb\(|hsl\(/i.test(html), `${name}: no white or functional color spelling`);
 
   // Every text color is a palette color; all but the dark ink read at AA on every dark surface.
   const surfaceSet = [C.page, C.card, C.tile];

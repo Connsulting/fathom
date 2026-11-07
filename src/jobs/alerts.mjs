@@ -17,6 +17,7 @@ import { resolveClock, addDays, daysBetween, clockLabel, tokenScope, loadSources
 import { parseJson, tx } from '../store/db.mjs';
 import { esc } from '../shared/tokens.mjs';
 import { sendEmail } from '../email/send.mjs';
+import { C, FONT, darkDocument } from '../email/palette.mjs';
 import { STYLE, figureRegistry, narrativeParts, partsRenderer, footnoteText, footnoteHtml } from '../email/brief.mjs';
 
 export const THRESHOLDS = Object.freeze([14, 7, 1]);
@@ -115,16 +116,19 @@ export function renderAlerts(alerts, { clock, publicUrl = null } = {}) {
     return `<li style="${STYLE.li}"><span style="${STYLE.muted}">${esc(lead(a))}:</span> `
       + (link ? `<a href="${esc(link)}" style="${STYLE.link}">${title}</a>` : title) + '</li>';
   });
-  const H = [
-    `<!doctype html><html><body style="${STYLE.body}"><div style="${STYLE.wrap}">`,
+  const inner = [
     `<h1 style="${STYLE.h1}">${esc(subject.replace(/^Fathom: /, ''))}</h1>`,
     `<p style="${STYLE.date}">${esc(intro)}</p>`,
     `<ol style="${STYLE.ol}">${items.join('')}</ol>`,
   ];
-  if (figures.length) H.push(`<h2 style="${STYLE.h2}">Figures</h2>`, ...figures.map((f) => footnoteHtml(f)));
-  H.push(`<p style="${STYLE.date}">Advisory only. Fathom never files, moves money or picks securities.</p>`, '</div></body></html>');
+  if (figures.length) inner.push(`<h2 style="${STYLE.h2}">Figures</h2>`, ...figures.map((f) => footnoteHtml(f)));
+  inner.push(`<p style="${STYLE.date}">Advisory only. Fathom never files, moves money or picks securities.</p>`);
+  // One dark card in the shared dark shell; the cell and table carry the surface twice.
+  const card = `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="${C.card}" style="background-color:${C.card};border-collapse:separate;border-radius:14px"><tr>`
+    + `<td bgcolor="${C.card}" style="background-color:${C.card};font-family:${FONT};color:${C.text};font-size:15px;line-height:1.5;padding:24px 22px">${inner.join('\n')}</td></tr></table>`;
+  const html = darkDocument({ title: subject, rows: `<tr><td bgcolor="${C.page}" style="background-color:${C.page};padding:0">${card}</td></tr>` });
 
-  return { subject, text: T.join('\n') + '\n', html: H.join('\n') };
+  return { subject, text: T.join('\n') + '\n', html };
 }
 
 // Sends one alert email when anything is due. Returns {alerts: count, send: email_sends row|null}.
