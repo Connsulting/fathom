@@ -12,6 +12,7 @@ import { howToFor } from '../ingest/howto.mjs';
 import { seriesKey } from '../jobs/planner/series.mjs';
 import { resolveClock } from '../scenario/build.mjs';
 import { HttpError } from './http.mjs';
+import { OWNER_OPTIONS, KIND_OPTIONS } from '../ingest/confirm.mjs';
 
 export const PAGE_DEFAULT = 50;
 export const PAGE_MAX = 200;
@@ -131,6 +132,13 @@ export function accountDetail(ctx) {
       kind: acct.kind,
       mirror: acct.mirror,
       mask: acct.mask,
+      // The dialog's edit controls: last 4 only while the account has none and no bridge identity;
+      // owner and kind as the confirm option ids, with the options the Confirm screen offers.
+      maskEditable: !/^\d{4}$/.test(acct.mask ?? '') && !String(acct.identity ?? '').startsWith('simplefin:'),
+      ownerKey: OWNER_OPTIONS.find((o) => o.label === acct.owner)?.id ?? null,
+      kindKey: KIND_OPTIONS.some((o) => o.id === acct.kind) ? acct.kind : null,
+      ownerOptions: OWNER_OPTIONS.map((o) => ({ ...o })),
+      kindOptions: KIND_OPTIONS.map((o) => ({ ...o })),
     },
     fresh: live.fresh,
     asOf: live.asOf,
