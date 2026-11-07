@@ -5,12 +5,12 @@
 
 import crypto, { randomBytes, createHmac } from 'node:crypto';
 import { parseJson } from '../store/db.mjs';
-import { tools } from '../tools/index.mjs';
+import { tools, operationScopes } from '../tools/index.mjs';
 
 export const KEY_PREFIX = 'fathom_';
 export const SCOPE_INFO = Object.freeze([
   { id: 'read', label: 'Read', access: 'Read household facts, accounts, transactions, recommendations, deadlines, goals, figures and knowledge packs.' },
-  { id: 'write:recs', label: 'Change recommendation status and owner', access: 'Set a recommendation status (doing it, done, later, not for us) with set_recommendation_status, and who acts on it (you, spouse, both, advisor, automatic) with set_recommendation_owner. No outbound actions are available.' },
+  { id: 'write:recs', label: 'Change recommendation status and owner', access: 'Set a recommendation status (doing it, done, later, not for us) with act_on_recommendation.status, and who acts on it (you, spouse, both, advisor, automatic) with act_on_recommendation.owner. No outbound actions are available.' },
   { id: 'write:preferences', label: 'Remember preferences', access: 'Remember your stated household preferences and definitions, edit them and undo your changes.' },
   { id: 'write:facts', label: 'Record household facts', access: 'Record or correct facts from your typed Ask statements or stored data, and undo your changes.' },
   { id: 'write:steps', label: 'Check recommendation steps', access: 'Check or uncheck recommendation steps, and undo your changes.' },
@@ -47,7 +47,11 @@ export function hashKey(secret, serverSecret) {
 
 // Registry entries a key with `scopes` may see and call.
 export function toolsForScopes(scopes, registry = tools) {
-  return registry.filter(t => scopes.includes(t.scope)).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+  return registry.flatMap(t => {
+    const allowed = t.operations.filter(o => operationScopes(o).some(scope => scopes.includes(scope)));
+    if (!allowed.length) return [];
+    return [{ ...t, inputSchema: { ...t.inputSchema, properties: { ...t.inputSchema.properties, operation: { ...t.inputSchema.properties.operation, enum: allowed.map(o => o.name) } } } }];
+  }).sort((a, b) => a.name.localeCompare(b.name));
 }
 
 const toRecord = r => ({

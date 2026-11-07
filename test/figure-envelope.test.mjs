@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { envelope, fromStored, fromPace, figure, rowsSource, mergeSources, UNITS, GAP_CODES } from '../src/calc/figure.mjs';
 
-const ref = { tool: 'get_figures', args: { keys: ['synthetic.total'] }, path: '0' };
+const ref = { tool: 'household', args: { operation: 'figures',  keys: ['synthetic.total'] }, path: '0' };
 const options = { unit: 'usd', label: 'Stored total', asOf: '2032-06-01', ref };
 
 test('units and gap codes publish the frozen contract', () => {
