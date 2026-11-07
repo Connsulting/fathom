@@ -29,7 +29,8 @@ const ANSWER_AT = '2032-03-09T09:00:00.000Z';
 // store and a directly answered one. confirm_auto_declined is the marker a reopen leaves so the item
 // is always asked again and never auto-answered; it is bookkeeping by design, not a row the answer
 // touched, so a reopen is expected to add it.
-const BOOKKEEPING = ['schema_migrations', 'confirm_undo', 'confirm_guesses', 'ingest_epoch', 'spend_ledger', 'settings', 'confirm_auto_declined'];
+// store_identity names each store's own platform household, so two separately built stores differ there.
+const BOOKKEEPING = ['schema_migrations', 'store_identity', 'confirm_undo', 'confirm_guesses', 'ingest_epoch', 'spend_ledger', 'settings', 'confirm_auto_declined'];
 const canon = (v) => (Array.isArray(v) ? v.map(canon)
   : v && typeof v === 'object' && !ArrayBuffer.isView(v) ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, canon(v[k])])) : v);
 

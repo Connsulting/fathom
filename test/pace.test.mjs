@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { rm } from 'node:fs/promises';
-import { tempDb, spawnAuthenticatedServer, request } from './helpers/server.mjs';
+import { tempInstance, spawnAuthenticatedServer, request } from './helpers/server.mjs';
 import { seedDemo } from '../demo/seed.mjs';
 import demo from '../demo/scenario.mjs';
 import { setSetting } from '../src/store/db.mjs';
@@ -12,11 +12,10 @@ import { goalCreate, goalUpdate } from '../src/api/goals.mjs';
 import { callTool } from '../src/tools/index.mjs';
 
 const clock = '2032-06-29';
+// A real instance (store plus its synthetic platform.sqlite), so the server can start on it.
 async function store(t) {
-  const s = await tempDb();
+  const s = await tempInstance({ mode: 'real', init: db => { setSetting(db, 'clock', clock); setSetting(db, 'mode', 'real'); } });
   t.after(async () => { s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
-  setSetting(s.db, 'clock', clock);
-  setSetting(s.db, 'mode', 'real');
   return s;
 }
 function account(db, id, date = clock, amount = 18000) {

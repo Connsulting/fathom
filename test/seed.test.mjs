@@ -8,8 +8,9 @@ import { join } from 'node:path';
 import vm from 'node:vm';
 import demo from '../demo/scenario.mjs';
 import {
-  ROOT, DB_FILE, SERVER_TIMEOUT, tempDir, tempDb, runCommand, openStore, dumpStore, withServer, postJson,
+  ROOT, DB_FILE, PLATFORM_FILE, SERVER_TIMEOUT, tempDir, tempDb, tempInstance, runCommand, openStore, dumpStore, withServer, withPlatform, postJson,
 } from './helpers/server.mjs';
+import { rmSync } from 'node:fs';
 import { setSetting, getSetting } from '../src/store/db.mjs';
 import { JOBS } from '../src/jobs/scheduler.mjs';
 
@@ -94,6 +95,10 @@ test('seed:demo rebuilds a demo store, discarding actions taken since', T, async
     assert.equal(a.status, 200);
     threadKey = a.json.thread.key;
   });
+  // A demo store with no platform gets a synthetic one at startup.
+  assert.ok(existsSync(join(dataDir, PLATFORM_FILE)), 'the demo server created its synthetic platform');
+  const served = await withPlatform(join(dataDir, PLATFORM_FILE), (platform, store) => store.servedHousehold());
+  assert.equal(served.mode, 'demo');
   await withStore(dataDir, db => {
     assert.equal(db.prepare("SELECT status FROM recs WHERE id = 'deferral'").get().status, 'done');
     assert.equal(db.prepare('SELECT count(*) AS n FROM messages WHERE conversation_key = ?').get(threadKey).n, 2);
@@ -106,6 +111,12 @@ test('seed:demo rebuilds a demo store, discarding actions taken since', T, async
     assert.equal(db.prepare("SELECT count(*) AS n FROM conversations WHERE key LIKE 'ask:%'").get().n, 0, 'no threads survive the reseed');
     assert.equal(db.prepare("SELECT count(*) AS n FROM rec_events WHERE actor = 'ui'").get().n, 0);
   });
+  // The reseeded store still belongs to the same platform household, so it restarts.
+  await withServer({ dataDir }, async s => {
+    const r = await postJson(s.baseUrl, '/api/recs/deferral/action', { action: 'complete' });
+    assert.equal(r.status, 200);
+  });
+  assert.equal((await withPlatform(join(dataDir, PLATFORM_FILE), (platform, store) => store.servedHousehold())).id, served.id);
 });
 
 test('the synthetic ledger is deterministic and stamped with demo-seed provenance', T, async () => {
@@ -213,19 +224,35 @@ test('seedDemo itself refuses a real store', T, async () => {
   t.close();
 });
 
-test('demo seeding and reset tolerate the auth household singleton without duplicating or erasing financial seed data', T, async () => {
-  const { createAuthStore } = await import('../src/auth/store.mjs');
+// The households singleton left fathom.sqlite in MT-01; the store now carries store_identity, which
+// seeding and reset keep while they clear and reload every financial table.
+test('demo seeding and reset keep store_identity without duplicating or erasing financial seed data', T, async () => {
+  const { seedDemo } = await import('../demo/seed.mjs');
+  const t = await tempInstance({ mode: 'demo', init: seedDemo });
+  try {
+    const identity = t.db.prepare('SELECT * FROM store_identity').all().map(r => ({ ...r }));
+    assert.equal(identity.length, 1);
+    assert.equal(identity[0].household_id, t.householdId);
+    const accounts = t.db.prepare('SELECT id, mask, kind FROM accounts ORDER BY id').all();
+    const transactions = t.db.prepare('SELECT count(*) AS n FROM transactions').get().n;
+    assert.ok(accounts.length > 0 && transactions > 0);
+    assert.equal(getSetting(t.db, 'mode', null), 'demo');
+    seedDemo(t.db);
+    assert.deepEqual(t.db.prepare('SELECT * FROM store_identity').all().map(r => ({ ...r })), identity, 'reset keeps the store identity');
+    assert.equal(t.db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'households'").get().n, 0, 'no households table in the store');
+    assert.deepEqual(t.db.prepare('SELECT id, mask, kind FROM accounts ORDER BY id').all(), accounts);
+    assert.equal(t.db.prepare('SELECT count(*) AS n FROM transactions').get().n, transactions);
+    assert.equal(t.platform.prepare('SELECT count(*) AS n FROM households').get().n, 1, 'the platform keeps one demo household');
+  } finally { t.close(); rmSync(t.dataDir, { recursive: true, force: true }); }
+});
+
+test('seedDemo seeds a fresh migrated store that has an empty store_identity table', T, async () => {
   const { seedDemo } = await import('../demo/seed.mjs');
   const t = await tempDb();
   try {
-    createAuthStore(t.db).ensureHousehold();
+    assert.equal(t.db.prepare('SELECT count(*) AS n FROM store_identity').get().n, 0);
     seedDemo(t.db);
-    const accounts = t.db.prepare('SELECT id, mask, kind FROM accounts ORDER BY id').all();
-    const transactions = t.db.prepare('SELECT count(*) AS n FROM transactions').get().n;
     assert.equal(getSetting(t.db, 'mode', null), 'demo');
-    seedDemo(t.db);
-    assert.equal(t.db.prepare('SELECT count(*) AS n FROM households').get().n, 1);
-    assert.deepEqual(t.db.prepare('SELECT id, mask, kind FROM accounts ORDER BY id').all(), accounts);
-    assert.equal(t.db.prepare('SELECT count(*) AS n FROM transactions').get().n, transactions);
+    assert.ok(t.db.prepare('SELECT count(*) AS n FROM accounts').get().n > 0);
   } finally { t.close(); }
 });
