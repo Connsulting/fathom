@@ -21,6 +21,7 @@ import * as accountScreen from './screens/account.js';
 import * as askPanel from './screens/ask-panel.js';
 import { addButtonHtml } from './screens/ask-context.js';
 import * as pnlScreen from './screens/pnl.js';
+import * as tour from './screens/tour.js';
 import { createKeys } from './keys.js';
 import { createSwipe } from './screens/swipe.js';
 import { homeModel, homeHeadline, healthChip, healthLine, paceReason, boardCharts, reasonText, servedGoalIds, shortDate, longDate, windowSpan } from './screens/home-model.js';
@@ -1486,6 +1487,7 @@ function pSettings() {
   let list = rows.map(([k, l, d]) => row(goA(k, l), d)).join('');
   if (id) list += row('<a href="/account">Account</a>', 'Passkeys and sign out.');
   if (id?.role === 'admin') list += row('<a href="/admin/users">Household</a>', 'People, roles and invitations.');
+  list += row('<button type="button" class="h-set-tour" data-tour-start>Take the tour</button>', 'A short guided walk through the main screens.');
   return shell(`<section class="h-settings h-narrow">${pageHead('System', 'Settings')}${whoLine()}<ul class="h-set">${list}</ul><section class="h-sec" aria-label="Remembered preferences"><h2>Remembered preferences</h2><p class="h-mute">How you want Fathom to answer, and what your household means by a term.</p>${arr(api.s.preferences).map(p => `<form data-preference-form="${esc(p.id)}" class="h-pref-form"><label>Preference<input name="text" aria-label="Household preference" maxlength="300" required value="${esc(p.text)}"></label><button type="submit" class="h-btn">Save</button><button type="button" class="h-btn" data-preference-delete="${esc(p.id)}">Delete</button></form>`).join('')}<form data-preference-form="" class="h-pref-form"><label>Add a preference<input name="text" aria-label="New household preference" maxlength="300" required></label><button type="submit" class="h-btn">Remember</button></form></section></section>`);
 }
 
@@ -1937,6 +1939,7 @@ function draw() {
   }
   askPanel.sync();
   switcher.afterDraw(rr.name);
+  tour.afterDraw(rr.name);
 }
 
 // History: one entry per modal session. Opening a rec from a page pushes one entry and remembers the
@@ -2283,7 +2286,7 @@ function trapTab(e) {
 }
 
 // Helpers the screen modules use. Getters, because api, root and ui change on mount.
-const SCREENS = [askPanel, switcher, chatScreen, packsScreen, engineScreen, advisorScreen, yearendScreen, simplefin, recAnswers, accountScreen, trendScreen, pnlScreen];
+const SCREENS = [askPanel, switcher, chatScreen, packsScreen, engineScreen, advisorScreen, yearendScreen, simplefin, recAnswers, accountScreen, trendScreen, pnlScreen, tour];
 const KIT = {
   get api() { return api; }, get root() { return root; }, get ui() { return ui; }, get keys() { return keys; }, get ingest() { return ingest; },
   draw: () => draw(),
@@ -2296,6 +2299,7 @@ const KIT = {
   onThread: (thread, host) => askPanel.onThread(thread, host), askPanelBtn: () => askPanel.collapseBtn(),
   askPanelToggle: () => askPanel.toggle(), askModal: () => askPanel.modalOpen(),
   pageRoute: () => { const r = routeNow(); return isDlgRoute(r.name) ? underRoute(r.name) : r; },
+  startTour: (opener) => tour.start(opener),
   newGoal: () => { if (routeNow().name !== 'goals') api.go('goals', {}); openGoalForm(null); }
 };
 SCREENS.forEach((s) => s.bind(KIT));
@@ -2329,6 +2333,9 @@ function mount(r, a) {
     draw();
   });
   draw();
+  // The tour's host sits after the page, dialog and panel hosts; it starts once on a public demo.
+  tour.mount();
+  tour.autoStart();
 }
 
 function unmount() {
@@ -2342,6 +2349,7 @@ function unmount() {
     root.removeEventListener('keydown', onKey);
     root.removeEventListener('toggle', onToggle, true);
     POINTER.forEach((t) => root.removeEventListener(t, onPointer));
+    tour.unmount();
     askPanel.unmount();
     switcher.unmount();
     root.innerHTML = '';

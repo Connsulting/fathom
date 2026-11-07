@@ -114,6 +114,7 @@ function actionSource() {
     { key: 'act:add', title: 'Add files', group: 'Actions', sub: 'Action', hint: '', run: () => go('add') },
     { key: 'act:connect-accounts', title: 'Connect accounts', group: 'Actions', sub: 'SimpleFIN, read-only', hint: '', run: () => go('accounts') },
     { key: 'act:goal', title: 'New goal', group: 'Actions', sub: 'Action', hint: '', run: () => H.newGoal() },
+    { key: 'act:tour', title: 'Take the tour', group: 'Actions', sub: 'A short guided walk', hint: '', run: (ret) => H.startTour(ret) },
     ...pendingChecks()
   ];
 }
