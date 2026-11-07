@@ -18,10 +18,13 @@ export function loadCategoryInputs(db) {
   const naming=accountNaming(db);
   const accounts = db.prepare('SELECT * FROM accounts ORDER BY sort,id').all().map(a=>({...a,...naming.hint(a.id),business:typeof named?.[a.id]==='string' && !!named[a.id].trim()}));
   const transactions = db.prepare(`SELECT t.*, i.category AS imported_category, i.parser AS category_parser,
-    i.file_id AS category_file_id, i.locator AS category_locator, coalesce(i.updated_at,f.uploaded_at,t.date) AS category_at
+    i.file_id AS category_file_id, i.locator AS category_locator, coalesce(i.updated_at,f.uploaded_at,t.date) AS category_at,
+    EXISTS (SELECT 1 FROM confirm_items q JOIN confirm_auto_declined d ON d.item_id=q.id
+      WHERE q.kind='transaction_category' AND q.subject=cast(t.id AS TEXT)) AS category_declined
     FROM transactions t LEFT JOIN transaction_category_imports i ON i.transaction_id=t.id
     LEFT JOIN files f ON f.id=t.file_id ORDER BY t.date,t.id`).all();
-  return { accounts,transactions,corrections:db.prepare(`SELECT c.*, a.evidence AS auto_evidence FROM transaction_category_corrections c
+  return { accounts,transactions,
+    corrections:db.prepare(`SELECT c.*, a.evidence AS auto_evidence FROM transaction_category_corrections c
       LEFT JOIN confirm_items i ON i.kind='transaction_category' AND i.subject=cast(c.transaction_id AS TEXT)
       LEFT JOIN confirm_auto a ON a.item_id=i.id AND a.rule='jev_category'`).all().map(r=>({...r,auto:parseJson(r.auto_evidence,null)})),
     merchantRules:db.prepare('SELECT * FROM category_merchant_rules').all(), sourceRules:db.prepare('SELECT * FROM category_source_rules').all(),
@@ -61,8 +64,14 @@ function checks(db,{clock = getSetting(db,'clock',new Date().toISOString().slice
   const ranked=[...list,...unknown.values()].sort(order);
   return [...ranked.filter(c=>c.jev),...ranked.filter(c=>!c.jev).slice(0,CATEGORY_LIMIT)].sort(order);
 }
-export function categoryOptions(context) {
-  const names=[...new Set([context.guess,...Object.values(DEFAULT_CATEGORY)].filter(Boolean))];
+export function categoryNames(input) {
+  return [...new Set([...input.transactions.flatMap(t=>{
+    const c=importedCategory(t); return sourceBucket(c.parser,c.category) ? [c.category] : [];
+  }),...input.corrections.map(r=>r.category),...input.sourceRules.map(r=>r.category),...input.merchantRules.map(r=>r.category)])].sort();
+}
+export function categoryOptions(input) {
+  const standing=Object.values(DEFAULT_CATEGORY), extra=new Set([...categoryNames(input),...input.guesses.filter(isJevProposal).map(g=>g.category)]);
+  const names=[...standing,...[...extra].filter(c=>!standing.includes(c)).sort()];
   return names.flatMap(category=>[{id:category,label:category},{id:'always:'+category,label:category}]);
 }
 export function queueCategoryChecks(db,options={}) {
@@ -71,9 +80,12 @@ export function queueCategoryChecks(db,options={}) {
     if(!active.has(JSON.stringify([r.kind,r.subject]))) db.prepare('DELETE FROM confirm_items WHERE id=?').run(r.id);
   }
   const now=nowOf(options.now);
+  const choices=categoryOptions(loadCategoryInputs(db)), serializedChoices=JSON.stringify(choices);
+  db.prepare("UPDATE confirm_items SET options=? WHERE kind='transaction_category' AND status='pending' AND options!=?")
+    .run(serializedChoices,serializedChoices);
   for(const c of candidates) {
     const question=c.kind==='category_mapping' ? `Treat ${c.category} as ...` : 'Check this transaction category';
-    const opts=c.kind==='category_mapping' ? BUCKETS.map(id=>({id,label:labels[id]})) : categoryOptions(c);
+    const opts=c.kind==='category_mapping' ? BUCKETS.map(id=>({id,label:labels[id]})) : choices;
     const prior=db.prepare('SELECT id,status FROM confirm_items WHERE kind=? AND subject=?').get(c.kind,c.subject);
     if(prior?.status==='answered') continue;
     if(prior) db.prepare('UPDATE confirm_items SET context=?,options=? WHERE id=? AND (context!=? OR options!=?)')

@@ -14,7 +14,7 @@ const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct
 // Routes whose heading is product chrome, not a row from the demo scenario.
 const REAL_ROUTES = [
   'home', 'pace', 'plan', 'ask', 'wargame', 'wargame/salary', 'wargame/deferral',
-  'goals', 'accounts', 'pnl', 'advisor', 'yearend', 'connect', 'engine', 'email', 'packs', 'money', 'settings'
+  'goals', 'accounts', 'pnl', 'advisor', 'yearend', 'connect', 'engine', 'email', 'packs', 'money', 'settings', 'memories'
 ];
 
 test.describe('routes', { tag: '@smoke' }, () => {
