@@ -27,7 +27,7 @@ const ROUTE_MAP = [
   ['plan', 'plan'], ['yearend', 'plan'], ['advisor', 'plan'],
   ['ask', 'ask'], ['wargame', 'ask'], ['wargame/salary', 'ask'], ['wargame/deferral', 'ask'],
   ['packs', 'ask'], [`packs/${PACK.id}`, 'ask', plain(PACK.name)],
-  ['money', 'money', null], ['accounts', 'money'], ['add', 'money', 'Add more files'],
+  ['money', 'money', null], ['accounts', 'money'], ['pnl', 'money', 'P&L'], ['add', 'money', 'Add more files'],
   ['settings', 'settings', 'Settings'], ['connect', 'settings'], ['engine', 'settings'], ['email', 'settings']
 ].map(([route, tab, h]) => {
   const heading = h !== undefined ? h : HEAD.get(route);
@@ -39,12 +39,12 @@ const ROUTE_MAP = [
 const SUBNAV = {
   plan: ['Plan views', [['plan', 'Plan'], ['yearend', 'Year end'], ['advisor', 'Advisor']]],
   ask: ['Ask views', [['ask', 'Conversations'], ['wargame', 'What-if'], ['packs', 'Packs']]],
-  money: ['Money views', [['money', 'Overview'], ['accounts', 'Accounts'], ['add', 'Files']]]
+  money: ['Money views', [['money', 'Overview'], ['accounts', 'Accounts'], ['pnl', 'P&L'], ['add', 'Files']]]
 };
 
 // Every Go to destination in the quick switcher (pinned decision 10).
 const GO_TITLES = ['Home', 'Plan', 'Decide', 'Ask', 'Confirm', 'Packs', 'Files', 'Engine', 'Email', 'Connect',
-  'Money', 'Settings', 'Goals', 'Accounts', 'Advisor', 'Year end'];
+  'Money', 'Settings', 'Goals', 'Accounts', 'P&L', 'Advisor', 'Year end'];
 const G = [['h', 'home'], ['p', 'plan'], ['d', 'wargame'], ['a', 'ask'], ['c', 'confirm'], ['k', 'packs'],
   ['f', 'add'], ['e', 'engine'], ['m', 'email'], ['n', 'connect'], ['o', 'money'], ['s', 'settings']];
 
@@ -104,7 +104,7 @@ async function expectLit(page, tab) {
   await expect(gear(page)).not.toHaveClass(/\bon\b/);
 }
 
-// The sub-nav for the route's tab lists its three views and lights the current one; Home-group
+// The sub-nav for the route's tab lists its views and lights the current one; Home-group
 // and settings-group routes have none.
 async function expectSubnav(page, route, tab) {
   if (!SUBNAV[tab]) {

@@ -50,6 +50,10 @@ export function routeContext(route, ctx) {
     const r = id ? arr(c.recs).find((x) => x && String(x.id) === id) : null;
     return r && r.status !== 'hidden' ? desc(name, 'rec', id, `Plan > ${String(txt(String(r.title ?? '')))}`) : desc(name, 'page', 'plan', 'Plan');
   }
+  if (name === 'pnl') {
+    const v = c.pnl;
+    return v && v.id ? desc(name, 'pnl', String(v.id), `Money > ${String(v.label ?? '')}`) : desc(name, 'page', 'pnl', 'Money > P&L');
+  }
   if (name === 'confirm') {
     const card = c.confirm;
     return card && card.id ? desc(name, 'confirm', String(card.id), `Confirm > ${String(card.label ?? '')}`) : desc(name, 'page', 'confirm', 'Home > Confirm');

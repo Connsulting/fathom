@@ -426,3 +426,16 @@ test('POST /api/threads with recId (rec thread): malformed context is 400; a val
   expect400(await stream(s, '/api/threads', { recId: 'dcfsa', text: 'Synthetic rec question', context: BAD }), 'stream bad kind');
   expectRefs(finalOf(await stream(s, '/api/threads', { recId: 'dcfsa', text: 'Synthetic rec question', context: GOOD }), 'stream').message, 'stream');
 }));
+
+test('resolveRefs keeps a P&L entity and an entity category row as /api/pnl keys them, and drops an unknown entity', async t => {
+  const s = await demoStore(t);
+  const scenario = buildScenario(s.db, { packs: s.packs });
+  const { pnlEntities } = await import('../src/pnl/business.mjs');
+  const ent = pnlEntities({ db: s.db, clock: scenario.meta.clock }).find(e => e.kind === 'entity');
+  assert.ok(ent, 'the demo store has a business entity');
+  const out = resolveRefs(s.db, scenario, [
+    { kind: 'pnl', id: ent.key }, { kind: 'pnl', id: `${ent.key}|Payroll` }, { kind: 'pnl', id: 'entity:nosuchbusiness' }, { kind: 'page', id: 'pnl' },
+  ]);
+  assert.deepEqual(out.map(r => `${r.kind}:${r.id}`), [`pnl:${ent.key}`, `pnl:${ent.key}|Payroll`, 'page:pnl']);
+  for (const r of out.filter(x => x.kind === 'pnl')) assert.match(r.use, /pnl_by_month/);
+});

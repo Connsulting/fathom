@@ -32,6 +32,7 @@ import * as yh from './yearend-handlers.mjs';
 import * as gh from './goals.mjs';
 import * as accts from './accounts.mjs';
 import * as ad from './account-detail.mjs';
+import * as pl from './pnl-handlers.mjs';
 import * as oh from './onboarding-handlers.mjs';
 import * as ah from './advisor-handlers.mjs';
 import { identityOf, sendUnauthorized } from './identity.mjs';
@@ -88,6 +89,10 @@ const TABLE = [
   { method: 'POST', path: '/api/threads/:id/delete', handler: h.threadDelete },
   { method: 'GET', path: '/api/accounts/:id', handler: ad.accountDetail },
   { method: 'GET', path: '/api/accounts/:id/transactions', handler: ad.accountTransactions },
+  { method: 'GET', path: '/api/pnl', handler: pl.getPnl },
+  { method: 'GET', path: '/api/pnl/rows', handler: pl.getPnlRows },
+  { method: 'GET', path: '/api/spending', handler: pl.getSpending },
+  { method: 'GET', path: '/api/spending/rows', handler: pl.getSpendingRows },
   { method: 'POST', path: '/api/accounts/:id/name', handler: accts.accountRename },
   { method: 'POST', path: '/api/accounts/:id/mask', handler: accts.accountMask },
   { method: 'POST', path: '/api/accounts/:id/owner', handler: accts.accountOwner },
