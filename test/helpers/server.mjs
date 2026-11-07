@@ -499,14 +499,16 @@ export async function tempInstance({ mode = 'real', init = () => {} } = {}) {
 
 // Run the offline tenancy migration (src/platform/migrate-tenancy.mjs) on an MT-02-layout real
 // instance (platform.sqlite plus fathom.sqlite at the data root), with synthetic backup and legacy
-// keys kept outside the data dir and the instance secrets of secretsFor(dataDir) (its MCP secret
-// is the source's api-key-secret when one exists; the secrets must not have been created for this
-// directory yet in that case). Every connection to the store must be closed. Returns the result.
+// keys kept outside the data dir and the instance secrets of secretsFor(dataDir). Its MCP secret
+// file is set to the source's api-key-secret when one exists, as the operator steps require, even
+// when an earlier refusal check already created the secrets. Every connection to the store must be
+// closed. Returns the result.
 export async function migrateTenancyStore(dataDir, { legacyKeyFile = null } = {}) {
   const { migrateTenancy } = await src('src/platform/migrate-tenancy.mjs');
   const secretFile = join(dataDir, 'api-key-secret');
   const mcpSecretHex = existsSync(secretFile) ? readFileSync(secretFile, 'latin1').trim() : undefined;
   const keys = secretsFor(dataDir, { mcpSecretHex });
+  if (mcpSecretHex) writeFileSync(keys.mcpSecretFile, mcpSecretHex + '\n', { mode: 0o600 });
   const keyDir = await tempDir('fathom-tenancy-keys-');
   const backupKeyFile = join(keyDir, 'backup.key');
   writeFileSync(backupKeyFile, randomBytes(32).toString('hex') + '\n', { mode: 0o600 });
