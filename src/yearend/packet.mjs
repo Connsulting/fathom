@@ -1,13 +1,13 @@
 // The accountant packet: a zip of every received document for the tax year, decrypted from the
 // vault, plus a self-contained printable index.html (expected against received, the year's tax
 // payments, key figures and open items, each with its provenance). Built in a private temp
-// directory that is always removed; nothing decrypted is written anywhere else.
+// directory under the household's `<root>/work` that is always removed (success, failure or client
+// disconnect); nothing decrypted is written anywhere else.
 
 import { mkdtemp, open, rm, stat } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join, extname } from 'node:path';
-import { readStoredFile, VaultError } from '../ingest/vault.mjs';
+import { readStoredFile, workDir, VaultError } from '../ingest/vault.mjs';
 import { getSetting } from '../store/db.mjs';
 import { esc, money, resolveTokens } from '../shared/tokens.mjs';
 import { tokenScope, resolveClock, loadRecs, deriveDecisions } from '../scenario/build.mjs';
@@ -145,11 +145,12 @@ ${rowsPayTotal ? table(['Total', 'Amount', 'Calculation'], rowsPayTotal, '') : '
 `;
 }
 
-// Builds the packet zip in a fresh private temp directory and records the generation. Returns
+// Builds the packet zip in a fresh private temp directory under the household's work directory and
+// records the generation. `vault` is the household's { root, handle }. Returns
 // {file, dir, size, filename, counts, cleanup}; the caller streams `file` and must call cleanup().
 // On any failure the directory is removed before the error propagates.
-export async function buildPacket(db, { year, clock, dataDir, key, tmpRoot = tmpdir(), now = new Date().toISOString() }) {
-  const dir = await mkdtemp(join(tmpRoot, TEMP_PREFIX));
+export async function buildPacket(db, { year, clock, vault, now = new Date().toISOString() }) {
+  const dir = await mkdtemp(join(workDir(vault), TEMP_PREFIX));
   const cleanup = () => rm(dir, { recursive: true, force: true });
   try {
     const d = packetData(db, { year, clock: clock || resolveClock(db) });
@@ -164,7 +165,7 @@ export async function buildPacket(db, { year, clock, dataDir, key, tmpRoot = tmp
       let bytes = null;
       let ext = extOf(file?.name, file?.mime);
       if (file?.stored_path) {
-        try { bytes = await readStoredFile({ dataDir, key, id: file.id, storedPath: file.stored_path }); } catch (e) { if (!(e instanceof VaultError)) throw e; }
+        try { bytes = await readStoredFile({ vault, id: file.id, storedPath: file.stored_path, purpose: 'upload' }); } catch (e) { if (!(e instanceof VaultError)) throw e; }
       } else if (demo && file) {
         bytes = demoBytes(docRows.get(f.docId) || { tax_year: year, fields: {} }, label);
         ext = '.txt';

@@ -590,7 +590,7 @@ describe('guess CLI (npm run confirm:guess runs the confirm-guess job once throu
     try {
       queue(store.db, 1);
       store.close();
-      const r = await runCommand(process.execPath, ['src/jobs/guess-cli.mjs'], { env: { FATHOM_DATA: store.dataDir, FATHOM_ENGINE: 'off', FATHOM_DEMO: '0' } });
+      const r = await runCommand(process.execPath, ['src/jobs/guess-cli.mjs', '--household', store.householdId], { env: { FATHOM_DATA: store.dataDir, FATHOM_ENGINE: 'off', FATHOM_DEMO: '0' } });
       assert.equal(r.code, 0, r.stderr);
       const lines = r.stdout.trim().split('\n').filter(Boolean);
       assert.equal(lines.length, 1, r.stdout);
@@ -598,7 +598,7 @@ describe('guess CLI (npm run confirm:guess runs the confirm-guess job once throu
       assert.equal(out.status, 'skipped');
       assert.deepEqual(out.note, { pending: 1 });
       assert.ok(!r.stdout.includes('Synthetic account'), 'no question text is printed');
-      const db = DB.openDb(join(store.dataDir, DB_FILE));
+      const db = DB.openDb(store.file);
       try {
         const runs = db.prepare("SELECT status, trigger, period_key FROM job_runs WHERE job_id = 'confirm-guess'").all().map((x) => ({ ...x }));
         assert.equal(runs.length, 1, 'one job_runs row for the CLI run');
@@ -615,9 +615,11 @@ describe('guess CLI (npm run confirm:guess runs the confirm-guess job once throu
   test('with no store in FATHOM_DATA it exits 1 and creates nothing', async () => {
     const dir = await tempDir('fathom-guess-empty-');
     try {
-      const r = await runCommand(process.execPath, ['src/jobs/guess-cli.mjs'], { env: { FATHOM_DATA: dir, FATHOM_ENGINE: 'off', FATHOM_DEMO: '0' } });
+      const r = await runCommand(process.execPath, ['src/jobs/guess-cli.mjs', '--household', 'hh-synthetic-absent'], { env: { FATHOM_DATA: dir, FATHOM_ENGINE: 'off', FATHOM_DEMO: '0' } });
       assert.equal(r.code, 1, r.stdout + r.stderr);
       assert.equal(existsSync(join(dir, DB_FILE)), false);
+      assert.equal(existsSync(join(dir, 'platform.sqlite')), false, 'no instance is created');
+      assert.equal(existsSync(join(dir, 'households')), false, 'no household root is created');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

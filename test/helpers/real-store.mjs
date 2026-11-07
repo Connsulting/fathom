@@ -4,8 +4,12 @@
 // rows, documents and questions production stores hold (plan Revision 6, R6-1 item 9).
 //
 // createRealStore(dataDir, {clock})           -> Promise<db> (empty real store: mode real, clock,
-//                                                onboarding done, a data key at keyFileOf(dataDir),
-//                                                and a synthetic platform at platformFileOf(dataDir))
+//                                                onboarding done, a synthetic platform at
+//                                                platformFileOf(dataDir), the store at
+//                                                storeFileOf(dataDir) and its data key wrapped under
+//                                                the platform key of secretsFor(dataDir))
+// householdOf(db)                             -> the household context ingest ran in (its vault,
+//                                                root and platform)
 // addFile(db, file, {answers})                -> Promise<ingest result> (CSV and workbook files, off engine)
 // addPayroll(db, entry)                       -> Promise<ingest result> (one W-2, paystub, K-1 or
 //                                                form1040 as a text file read by a scripted engine)
@@ -16,19 +20,20 @@
 // Every name, institution and amount below is invented. Variant options are documented on
 // buildRealStore.
 
-import { randomBytes } from 'node:crypto';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setSetting, getSetting, parseJson as parseStored } from '../../src/store/db.mjs';
 import { createInstance, PLATFORM_FILE } from '../../src/platform/db.mjs';
+import { createInstanceSecrets } from '../../src/platform/secrets.mjs';
+import { createHouseholdContext } from '../../src/platform/runtime.mjs';
 import { ingestFile } from '../../src/ingest/pipeline.mjs';
 import { answer, pendingItems } from '../../src/ingest/confirm.mjs';
 import { nameKey } from '../../src/ingest/extract.mjs';
-import { loadDataKey } from '../../src/ingest/vault.mjs';
 import { createEngine } from '../../src/engine/index.mjs';
 import { writeXlsx, XLSX_MIME } from './xlsx.mjs';
+import { secretsFor, servedStore } from './server.mjs';
 
 export const CLOCK = '2026-11-05';
 export const TAX_YEAR = 2026;
@@ -115,10 +120,11 @@ export const OWNER_FACTS = Object.freeze({
 
 // ---------------------------------------------------------------- store primitives
 
-export const keyFileOf = (dataDir) => join(dataDir, 'data.key');
 export const platformFileOf = (dataDir) => join(dataDir, PLATFORM_FILE);
+// The original household's store file of the instance in dataDir (households/<id>/fathom.sqlite).
+export const storeFileOf = (dataDir) => servedStore(dataDir)?.file ?? null;
 
-// Per-store ingest context: the data key and config ingest needs, and a file counter.
+// Per-store ingest context: the household context and config ingest needs, and a file counter.
 const CTX = new WeakMap();
 const ctxOf = (db) => {
   const c = CTX.get(db);
@@ -128,24 +134,39 @@ const ctxOf = (db) => {
 
 export async function createRealStore(dataDir, { clock = CLOCK } = {}) {
   mkdirSync(dataDir, { recursive: true });
-  const keyFile = keyFileOf(dataDir);
-  writeFileSync(keyFile, randomBytes(32), { mode: 0o600 });
-  const key = await loadDataKey({ dataDir, keyFile, mode: 'real' });
-  // A real instance: platform.sqlite (one served real household, no accounts) beside the store,
-  // so the server, the CLIs and serveAppFixture open it as a migrated real deployment. The
-  // platform handle is closed here; callers that need accounts open platformFileOf(dataDir).
+  const keys = secretsFor(dataDir);
+  // A real instance: platform.sqlite (one served real household, no accounts) and the household
+  // root, so the server, the CLIs and serveAppFixture open it as a migrated real deployment. The
+  // platform handle stays open for the household context ingest runs in and is closed with the
+  // store by scratch().cleanup() or closeRealStore(db); callers that need accounts open
+  // platformFileOf(dataDir).
   const { db, platform, householdId } = createInstance(dataDir, {
     mode: 'real',
+    platformKey: keys.platformKey,
     init: d => {
       setSetting(d, 'mode', 'real');
       setSetting(d, 'clock', clock);
       setSetting(d, 'onboarding', { done: true, step: 6 });
     },
   });
-  platform.close();
-  const config = { dataDir, dataKeyFile: keyFile, engine: 'off', clock, demo: false, port: 0, host: '127.0.0.1', claudeCredentialFile: null, emailTransport: 'dev' };
-  CTX.set(db, { config, key, seq: 0, householdId, platformFile: platformFileOf(dataDir) });
+  const config = {
+    dataDir, platformKeyFile: keys.platformKeyFile, mcpSecretFile: keys.mcpSecretFile,
+    engine: 'off', clock, demo: false, port: 0, host: '127.0.0.1', claudeCredentialFile: null, emailTransport: 'dev',
+  };
+  const secrets = createInstanceSecrets({ config, mode: 'real' });
+  const household = createHouseholdContext({ householdId, mode: 'real', db, config, platform, secrets });
+  CTX.set(db, { config, household, platform, seq: 0, householdId, platformFile: platformFileOf(dataDir) });
   return db;
+}
+
+// The household context of a store built here.
+export const householdOf = (db) => ctxOf(db).household;
+
+// Close a store built here and the platform handle its household context holds.
+export function closeRealStore(db) {
+  const c = CTX.get(db);
+  try { db.close(); } catch { /* already closed */ }
+  if (c) { try { c.platform.close(); } catch { /* already closed */ } }
 }
 
 export const stampOf = (db) => `${getSetting(db, 'clock', CLOCK)}T09:00:00.000Z`;
@@ -193,7 +214,7 @@ function answerAccounts(db, hints) {
 // {hints, taxYear: 'tax_year' | 'payment_year' | null}. Throws when ingest does not import it.
 export async function addFile(db, file, { answers = {} } = {}) {
   const c = ctxOf(db);
-  const out = await ingestFile(db, file, { engine: engineOf('off'), config: c.config, key: c.key, now: stampOf(db) });
+  const out = await ingestFile(db, file, { engine: engineOf('off'), config: c.config, household: c.household, now: stampOf(db) });
   if (out.status !== 'imported') throw new Error(`synthetic file ${file.name} was not imported (${out.status})`);
   if (answers.hints) answerAccounts(db, answers.hints);
   if (answers.taxYear) answerPending(db, 'tax_year', answers.taxYear);
@@ -220,7 +241,7 @@ export async function addPayroll(db, entry) {
     bytes: new TextEncoder().encode(`Synthetic ${docType} statement number ${c.seq} for a test household.\n`),
   };
   const engine = engineOf('fake', [[{ docType, taxYear: DOC_TAX_YEAR(docType, fields), confidence: 0.95 }], [{ confidence: 0.95, ...fields }]]);
-  const out = await ingestFile(db, file, { engine, config: c.config, key: c.key, now: stampOf(db) });
+  const out = await ingestFile(db, file, { engine, config: c.config, household: c.household, now: stampOf(db) });
   if (out.status !== 'imported') throw new Error(`synthetic ${docType} was not imported (${out.status})`);
   const employer = fields.employerName;
   const key = employer !== undefined ? nameKey(employer) : null;
@@ -249,7 +270,7 @@ export async function addNotes(db, extraction) {
     name: `household-notes-${c.seq}.md`, mime: 'text/markdown',
     bytes: new TextEncoder().encode(`# Household notes\n\nSynthetic owner note number ${c.seq} for a test household.\n`),
   };
-  const out = await ingestFile(db, file, { engine: engineOf('fake', [[{ goals: [], ...extraction }]]), config: c.config, key: c.key, now: stampOf(db) });
+  const out = await ingestFile(db, file, { engine: engineOf('fake', [[{ goals: [], ...extraction }]]), config: c.config, household: c.household, now: stampOf(db) });
   if (out.status !== 'imported') throw new Error(`synthetic notes were not imported (${out.status})`);
   return out;
 }
@@ -451,7 +472,7 @@ export function scratch(prefix = 'fathom-planner-') {
     track(db) { dbs.push(db); return db; },
     async store(opts) { const d = this.dir(); return this.track(await buildRealStore(d, opts)); },
     cleanup() {
-      for (const db of dbs) { try { db.close(); } catch { /* already closed */ } }
+      for (const db of dbs) closeRealStore(db);
       for (const d of dirs) rmSync(d, { recursive: true, force: true });
     },
   };

@@ -6,9 +6,10 @@ export { lastFour } from './account-match.mjs';
 // Read-only bank and brokerage connections through SimpleFIN Bridge (simplefin.org protocol).
 // The owner pastes a one-time setup token; the server decodes it to a claim URL, refuses any URL
 // that is not https on an allowed host (the token is user input: SSRF guard), claims it and gets
-// the access URL, which embeds Basic credentials. The access URL is stored only encrypted with the
-// data key (vault AES-256-GCM, bound to a fixed AAD), never logged, never returned to the client
-// and never put in an error. A sync GETs <access>/accounts over a start-date window, maps accounts,
+// the access URL, which embeds Basic credentials. The access URL is stored only sealed by the
+// household vault (FTHM2, purpose simplefin-access), never logged, never returned to the client
+// and never put in an error. Connecting is outbound work: it refuses 'paused' (409) while the
+// household's simplefin outbound flag is off, before the token is claimed. A sync GETs <access>/accounts over a start-date window, maps accounts,
 // balances and transactions into one synthetic ingest file (no credentials in it) and runs it
 // through the ingest pipeline with the simplefin parser, so dedupe, provenance, sources and
 // figures work as for uploads. Accounts it writes are mirror 'connected'. Every account a sync sees
@@ -16,8 +17,7 @@ export { lastFour } from './account-match.mjs';
 // one auto-resolution pass.
 
 import { createHash } from 'node:crypto';
-import { getSetting } from '../store/db.mjs';
-import { encrypt, decrypt, loadDataKey } from './vault.mjs';
+import { openVault, sealAccess, openAccess } from './vault.mjs';
 import { ingestFile, accountIdOf } from './pipeline.mjs';
 import { identifyAccountRows } from './dedupe.mjs';
 import { ask, normalizeName, ACCOUNT_MATCH_OPTIONS } from './confirm.mjs';
@@ -27,7 +27,6 @@ import { DEFAULT_HOSTS, parseAllowedHosts } from './simplefin-hosts.mjs';
 
 export { DEFAULT_HOSTS, parseAllowedHosts };
 
-const AAD = 'simplefin:access';
 const MAX_BODY = 20 * 1024 * 1024;
 const MAX_TOKEN = 4096;
 const TIMEOUT_MS = 30000;
@@ -48,8 +47,9 @@ const MESSAGES = {
   bad_response: 'SimpleFIN sent a reply Fathom could not read.',
   not_connected: 'SimpleFIN is not connected.',
   already_connected: 'SimpleFIN is already connected. Disconnect first to use a new token.',
+  paused: 'SimpleFIN connections are paused for this household. An administrator can resume them.',
 };
-const STATUS = { not_connected: 409, already_connected: 409, network: 502, bad_response: 502, bad_access: 502, revoked: 502, payment_required: 502, claim_failed: 502 };
+const STATUS = { not_connected: 409, already_connected: 409, paused: 409, network: 502, bad_response: 502, bad_access: 502, revoked: 502, payment_required: 502, claim_failed: 502 };
 // Sync failures that need a new setup token from the owner.
 const RECONNECT = new Set(['revoked', 'payment_required', 'auth', 'bad_access']);
 
@@ -213,16 +213,24 @@ export const parser = Object.freeze({
 const ownIdentity = (sfKey) => `simplefin:${sfKey}`;
 export const connection = (db) => db.prepare('SELECT * FROM simplefin_connection WHERE id = 1').get() ?? null;
 
-export async function dataKeyFor(db, config = {}) {
-  return loadDataKey({ dataDir: config.dataDir, keyFile: config.dataKeyFile, mode: getSetting(db, 'mode', 'real') });
+function householdOf(db, household) {
+  if (!household || typeof household.vault !== 'function' || typeof household.outbound?.enabled !== 'function') {
+    throw new TypeError('SimpleFIN needs the household context');
+  }
+  if (household.db !== db) throw new TypeError('SimpleFIN household must own the db');
+  return household;
 }
 
-export async function connectSimplefin(db, token, { config = {}, hosts, fetch: fetchImpl, now, key } = {}) {
+// The household vault is opened before the token is claimed, so a missing platform key refuses
+// (VaultError) without spending the one-time token.
+export async function connectSimplefin(db, token, { household, hosts, fetch: fetchImpl, now } = {}) {
+  householdOf(db, household);
+  if (!household.outbound.enabled('simplefin')) throw new SimplefinError('paused');
   db.prepare("DELETE FROM settings WHERE key = 'synthetic_demo'").run();
   if (connection(db)?.status === 'ok') throw new SimplefinError('already_connected');
-  const k = key ?? await dataKeyFor(db, config);
+  const vault = await openVault(household);
   const access = await claimToken(token, { hosts, fetch: fetchImpl });
-  const blob = encrypt(k, Buffer.from(access, 'utf8'), AAD).toString('base64');
+  const blob = sealAccess(vault, access);
   db.prepare(`INSERT INTO simplefin_connection (id, access_blob, connected_at, status) VALUES (1, ?, ?, 'ok')
               ON CONFLICT(id) DO UPDATE SET access_blob = excluded.access_blob, connected_at = excluded.connected_at,
                 status = 'ok', error_code = NULL, messages = NULL`)
@@ -346,18 +354,19 @@ function setStatus(db, status, code, messages) {
 
 // One sync. Returns {status: 'skipped' | 'ok' | 'reconnect' | 'error', code?, changed, counts}.
 // Counts only; nothing here logs account data or the access URL.
-export async function syncSimplefin(db, { config = {}, hosts, fetch: fetchImpl, now, clock, key, engine = null } = {}) {
+export async function syncSimplefin(db, { household, config = {}, hosts, fetch: fetchImpl, now, clock, engine = null } = {}) {
+  householdOf(db, household);
   const row = connection(db);
   const counts = { accounts: 0, transactions: 0, balances: 0, duplicates: 0, matched: 0, pending: 0, queued: 0, skipped: 0 };
   if (!row) return { status: 'skipped', changed: false, counts };
   const stamp = now || new Date().toISOString();
   const today = clock || stamp.slice(0, 10);
-  const k = key ?? await dataKeyFor(db, config);
+  const vault = await openVault(household);
   const start = startDate(db, row, today);
   const full = start === addDays(today, -FIRST_DAYS);
   let set;
   try {
-    const access = decrypt(k, Buffer.from(row.access_blob, 'base64'), AAD).toString('utf8');
+    const access = openAccess(vault, row.access_blob);
     set = normalizeAccountSet(await fetchAccounts(access, { hosts, fetch: fetchImpl, startDate: start }));
   } catch (e) {
     const code = e instanceof SimplefinError ? e.code : 'bad_access';
@@ -396,7 +405,7 @@ export async function syncSimplefin(db, { config = {}, hosts, fetch: fetchImpl, 
   let changed = false;
   if (docAccounts.length) {
     const bytes = Buffer.from(JSON.stringify({ format: 'fathom-simplefin-1', accounts: docAccounts }), 'utf8');
-    const result = await ingestFile(db, { name: `SimpleFIN sync ${today}.json`, bytes, mime: 'application/json' }, { config, key: k, now: stamp, engine, parser });
+    const result = await ingestFile(db, { name: `SimpleFIN sync ${today}.json`, bytes, mime: 'application/json' }, { household, config, now: stamp, engine, parser });
     const c = result.counts ?? {};
     counts.transactions = c.rows?.transaction ?? 0;
     counts.balances = c.rows?.balance ?? 0;

@@ -14,7 +14,7 @@ import demo from '../demo/scenario.mjs';
 import { buildScenario, loadFigures } from '../src/scenario/build.mjs';
 import { goalCreate } from '../src/api/goals.mjs';
 import { demoReset } from '../src/api/handlers.mjs';
-import { tempDb } from './helpers/server.mjs';
+import { tempInstance } from './helpers/server.mjs';
 
 const ACCOUNTS = Object.freeze([
   { id: 'chk', kind: 'checking' }, { id: 'biz', kind: 'business' },
@@ -389,12 +389,14 @@ const KIND_IDS = ['checking-range', 'biz-floor', 'ira-fill'];
 const pick = (o, keys) => Object.fromEntries(keys.filter(k => Object.hasOwn(o, k)).map(k => [k, o[k]]));
 
 test('a reset demo store has one goal of each kind (balance, range, floor, contribution)', async t => {
-  const s = await tempDb();
+  // A demo instance, so demo reset gets the household context it clears the vault through.
+  const s = await tempInstance({ mode: 'demo', init: seed.seedDemo });
   t.after(async () => { s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
-  seed.seedDemo(s.db);
   const config = { clock: demo.meta.clock, dataDir: s.dataDir };
-  goalCreate({ db: s.db, config, body: { title: 'An extra goal that reset removes' }, params: {} });
-  await demoReset({ db: s.db, config, body: {}, params: {} });
+  const household = await s.household(config);
+  const ctx = body => ({ db: s.db, config, body, params: {}, household, platform: s.platform });
+  goalCreate(ctx({ title: 'An extra goal that reset removes' }));
+  await demoReset(ctx({}));
 
   assert.ok(Array.isArray(seed.KIND_GOALS), 'demo/seed.mjs exports KIND_GOALS');
   assert.deepEqual(seed.KIND_GOALS.map(g => g.id), KIND_IDS);

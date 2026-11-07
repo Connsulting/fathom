@@ -13,7 +13,7 @@ npm ci && npm start
 # open http://127.0.0.1:8080/
 ```
 
-One process serves the Horizon UI and the JSON API, backed by SQLite in `./data/fathom.sqlite` (financial data) and `./data/platform.sqlite` (accounts).
+One process serves the Horizon UI and the JSON API, backed by SQLite in `./data/platform.sqlite` (accounts, memberships, MCP keys) and one `./data/households/<id>/fathom.sqlite` per household (financial data). CLIs that open a store take `--household <id>`.
 On a data directory with no store it creates a demo store seeded with synthetic data (the
 November state) and keeps its state across restarts.
 
@@ -36,7 +36,7 @@ npm run seed:demo
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `FATHOM_DATA` | `./data` | Data directory holding `fathom.sqlite` and `platform.sqlite`. |
+| `FATHOM_DATA` | `./data` | Data directory holding `platform.sqlite` and `households/<id>/`. |
 | `FATHOM_BACKUP_KEY_FILE` | unset | Path to a private file holding a 32-byte key. Read only by the platform migration and snapshot scripts, never by the server. |
 | `FATHOM_PORT` | `8080` | HTTP port. |
 | `FATHOM_HOST` | `127.0.0.1` | Bind address (the container uses `0.0.0.0`). |
@@ -45,7 +45,9 @@ npm run seed:demo
 | `FATHOM_CLOCK` | unset | ISO date that overrides "today", for demos and tests. |
 | `FATHOM_FAKE_STREAM_MS` | `25` | Fake engine only: milliseconds between streamed answer chunks (0 to 1000). |
 | `FATHOM_CLAUDE_CREDENTIAL_FILE` | unset | Path to the mounted Claude credential. |
-| `FATHOM_DATA_KEY_FILE` | unset | Path to the file encryption key. |
+| `FATHOM_PLATFORM_KEY_FILE` | unset | Path to the platform key that wraps household data keys. Real mode uploads, packets and SimpleFIN refuse without it. |
+| `FATHOM_MCP_SECRET_FILE` | unset | Path to a file of 64 hex characters, the HMAC secret for MCP keys. Real mode key routes refuse without it. |
+| `FATHOM_BACKUP_KEY_FILE` | unset | Path to the key for offline snapshots. |
 | `FATHOM_EMAIL_TRANSPORT` | `dev` | `dev`, `smtp`, `resend`, `postmark` or `agentmail`. |
 | `FATHOM_PUBLIC_URL` | unset | Required on a real store, which refuses to start without a valid one. The origin people and MCP clients use: `https://<dns name>` at the root (no path, credentials, query or fragment, and no IP address), or `http://localhost:<port>` for local tests only. Passkeys bind to its host name, every mutation must carry its exact origin, emailed links start with it and MCP clients use it plus `/mcp`. Optional on a demo. |
 | `FATHOM_ALLOWED_HOSTS` | unset | Comma separated extra host names (`host` or `host:port`) allowed on `/mcp` and every `/api` route besides the `FATHOM_PUBLIC_URL` host. |
@@ -67,7 +69,7 @@ npm run seed:demo
 
 Every key is also listed in [`architecture.md`](architecture.md).
 
-Secret files, never committed: the Claude credential, the 32-byte data key and the email credential. The server also creates `api-key-secret` (64 hex characters, mode 0600) in the data directory on first start and uses it to hash API keys. A demo store creates `files/demo.key` for the vault. Accounts, sessions, passkeys and link tokens live in `platform.sqlite`, hashed where they are secrets. MCP keys stay in `fathom.sqlite`.
+Secret files, never committed: the Claude credential, the 32-byte platform key, the MCP secret (64 hex characters) and the email credential. A demo household generates its own vault key. Accounts, sessions, passkeys and link tokens live in `platform.sqlite`, hashed where they are secrets. MCP keys live in the platform `api_keys` table, bound to a household.
 
 ## Tests
 
@@ -202,10 +204,10 @@ email settings, and the first admin invited with `docker exec fathom npm run use
 The repository only ever contains synthetic demo data. Real household data lives only in a
 deployment's data volume (`FATHOM_DATA`) and is never committed.
 
-Fathom has no built-in backup job. Back up the whole data volume, which holds `fathom.sqlite`, the
-encrypted file vault and `api-key-secret`. Keep the secret files (the Claude credential, the data
-key and the email credential) in your secret store, not only on the host: the vault is unreadable
-without the data key. To restore, put the volume back and start the server with the same data key.
+Fathom has no built-in backup job. Back up the whole data volume, which holds `platform.sqlite` and
+every household's store and encrypted file vault. Keep the secret files (the Claude credential, the
+platform key, the MCP secret and the email credential) in your secret store, not only on the host: the vault is unreadable
+without the platform key. To restore, put the volume back and start the server with the same platform key and MCP secret.
 
 ## Accounts and access
 
@@ -274,30 +276,52 @@ has signed in with a passkey on their own devices.
 
 ### Upgrading an existing real store
 
-A real store from before the platform database needs a one-time offline migration. A new release
-refuses to start on it with `platform_migration_required`.
+A real store from before the per-household layout needs two one-time offline migrations, in order.
+A new release refuses to start on a store that needs the first with `platform_migration_required`,
+and on one that needs the second with `tenancy_migration_required`. Stop the service before each,
+so nothing holds the store open; each refuses with `source_in_use` otherwise.
 
-1. Stop the service, so nothing holds the store open.
-2. Provide a private file holding a 32-byte backup key and point `FATHOM_BACKUP_KEY_FILE` at it.
-3. Run `node scripts/migrate-platform.mjs` with `FATHOM_DATA` set to the data directory. It refuses
-   with `source_in_use` while anything holds the store open, writes an encrypted snapshot under the
-   data directory's `snapshots` folder, and prints `migrate-platform: complete`. After an
-   interruption, run it again; it resumes or verifies. While it is unfinished the server refuses to
-   start with `platform_migration_in_progress`.
-4. Start the new release.
-5. Verify: sign in with an existing passkey, confirm existing sessions and MCP keys still work, and
-   check `/healthz`.
+Platform migration (only when the data directory has no `platform.sqlite` yet):
+
+1. Provide a private file holding a 32-byte backup key and point `FATHOM_BACKUP_KEY_FILE` at it.
+2. Run `node scripts/migrate-platform.mjs` with `FATHOM_DATA` set to the data directory. It writes an
+   encrypted snapshot under the data directory's `snapshots` folder and prints
+   `migrate-platform: complete`. After an interruption, run it again; it resumes or verifies. While
+   it is unfinished the server refuses to start with `platform_migration_in_progress`.
+
+Tenancy migration (moves the household into `households/<id>/`):
+
+1. Make four private files (mode 0600, outside the data directory's `files`, `packs` and `outbox`
+   and not the data directory's `api-key-secret` itself, which the migration retires):
+   1. `FATHOM_BACKUP_KEY_FILE`: the backup key above.
+   2. `FATHOM_DATA_KEY_FILE`: the current upload key, an input to this migration only.
+   3. `FATHOM_PLATFORM_KEY_FILE`: new, 32 random bytes as 64 hex characters. It wraps every
+      household data key; keep a copy apart from the data directory.
+   4. `FATHOM_MCP_SECRET_FILE`: a copy of the data directory's `api-key-secret`, so existing MCP
+      keys keep verifying.
+2. Run `node scripts/migrate-tenancy.mjs` with `FATHOM_DATA` and those four variables. It writes an
+   encrypted snapshot `snapshots/tenancy-<operation>.fsnap`, refuses with a fixed code if anything
+   would be lost (for example `passkeys_changed` when the passkeys differ from those it recorded),
+   and prints `migrate-tenancy: complete <householdId>`. After an interruption, run it again.
+3. Start the new release with `FATHOM_PLATFORM_KEY_FILE` and `FATHOM_MCP_SECRET_FILE`, without
+   `FATHOM_DATA_KEY_FILE`.
+4. Verify: `/healthz` answers; sign in again with an existing passkey (users, memberships and
+   passkeys carry over; sessions, sign-in challenges, one-time links and pending invitations are
+   revoked); an existing MCP key lists tools.
+5. Outbound work starts paused. An admin resumes it with `POST /api/household/outbound`, for example
+   `{"jobs":true,"email":true,"simplefin":true,"engine":true}`.
 6. Optional: `node scripts/operator.mjs grant <email>` for an enrolled user.
 
-Rollback: `node scripts/source-snapshot.mjs rollback --snapshot <file> --from <data dir> --out <new data dir>`
-(with `FATHOM_BACKUP_KEY_FILE` set) builds a data directory for the previous release from the
-snapshot, leaving the current one untouched. Start the previous release on the new directory. This
-is valid only until the new release has taken writes; later changes are not in the snapshot.
+Rollback after the tenancy migration: `node scripts/source-snapshot.mjs restore --snapshot <data dir>/snapshots/tenancy-<operation>.fsnap --out <new dir>`
+(with `FATHOM_BACKUP_KEY_FILE` set) writes the exact pre-migration instance into a new directory;
+start the previous release on it with its old environment. Rollback after only the platform
+migration: `node scripts/source-snapshot.mjs rollback --snapshot <file> --from <data dir> --out <new data dir>`.
+Either is valid only until the new release has taken writes; later changes are not in the snapshot.
 
 ## Email
 
 Fathom sends a monthly brief and short deadline alerts. The default `dev` transport writes each
-message to `outbox/` in the data directory and sends nothing. For real delivery set
+message to `outbox/` under the household's root (`households/<id>/`) and sends nothing. For real delivery set
 `FATHOM_EMAIL_TRANSPORT` (AgentMail is the production target), the sender and recipients
 (`FATHOM_EMAIL_FROM`, `FATHOM_EMAIL_TO` or their `_FILE` forms) and mount the API key as a file other
 users cannot read (mode 0400, 0440 with fsGroup, or 0600) named by `FATHOM_EMAIL_CREDENTIAL_FILE`. The Email screen shows the
@@ -308,7 +332,7 @@ email:test` sends one real test email; every key is listed in [`architecture.md`
 
 Accounts connect read-only through SimpleFIN Bridge. Create a setup token on the SimpleFIN Bridge
 site and paste it under Connect accounts on the Accounts screen (or in onboarding). Fathom claims it
-once, keeps the access URL encrypted with the data key (a real store needs `FATHOM_DATA_KEY_FILE`),
+once, keeps the access URL encrypted with the data key (a real household needs `FATHOM_PLATFORM_KEY_FILE`),
 and syncs daily with the `simplefin-sync` job or on Sync now. The deployment needs outbound HTTPS
 to the hosts in `FATHOM_SIMPLEFIN_ALLOWED_HOSTS`. The demo uses a synthetic bridge and needs no
 network.
@@ -340,8 +364,8 @@ A deployment is one container behind a reverse proxy that terminates HTTPS for t
 
 1. Mount a persistent data volume at `/data` (`FATHOM_DATA`) and back it up as described in Data
    and backups.
-2. Set the real-store environment: `FATHOM_DEMO=0`, `FATHOM_PUBLIC_URL`, `FATHOM_DATA_KEY_FILE`
-   (the vault and SimpleFIN access URLs are encrypted with it),
+2. Set the real-store environment: `FATHOM_DEMO=0`, `FATHOM_PUBLIC_URL`, `FATHOM_PLATFORM_KEY_FILE`
+   (it wraps the household data keys that encrypt the vault and SimpleFIN access URLs), `FATHOM_MCP_SECRET_FILE`,
    the email transport, sender, recipients and credential file, `FATHOM_TRUSTED_PROXIES` for the
    ingress, and `FATHOM_ENGINE=live` with `FATHOM_CLAUDE_CREDENTIAL_FILE` if the engine should run.
    Mount the secret files from your secret store.

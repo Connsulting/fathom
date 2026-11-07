@@ -2,17 +2,17 @@
 // plus a deterministic synthetic ledger (demo/ledger.mjs). Every row it writes carries
 // file_id 'demo-seed', parser 'demo-seed' and a locator into the scenario or the ledger.
 //
-// CLI: `npm run seed:demo` creates or rebuilds $FATHOM_DATA/fathom.sqlite as a demo store. It
-// refuses a real store (settings.mode not 'demo', including a store with no mode) and exits 1
-// without changing it.
+// CLI: `npm run seed:demo` creates a demo instance in $FATHOM_DATA, or rebuilds the demo household
+// of an existing demo instance (resolved through the runtime registry's demo(), its stored objects
+// cleared). It refuses a real instance or an outdated layout and exits 1 without changing it.
 
 import { createHash } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import scenario from './scenario.mjs';
 import { buildLedger, isoFromLabel } from './ledger.mjs';
-import { openMigrated, getSetting, setSetting, listTables, readStoreMode, createStoreFile, tx, cents, DB_FILE } from '../src/store/db.mjs';
+import { getSetting, setSetting, listTables, tx, cents } from '../src/store/db.mjs';
 import { addDays, defaultPicks, BUILTIN_SOURCES, DEFAULT_CAP_USD } from '../src/scenario/build.mjs';
 import { loadConfig } from '../src/config.mjs';
 import { REASON_TEXT } from '../src/ingest/guess.mjs';
@@ -319,28 +319,57 @@ export function seedDemo(db) {
   });
 }
 
-function main() {
+async function main() {
+  // Imported here: the runtime modules import this module (the server seeds new demo instances).
+  const { createInstance } = await import('../src/platform/db.mjs');
+  const { openInstance } = await import('../src/platform/ready.mjs');
+  const { createInstanceSecrets } = await import('../src/platform/secrets.mjs');
+  const { createRuntimeRegistry } = await import('../src/platform/runtime.mjs');
+  const { clearStoredFiles } = await import('../src/ingest/vault.mjs');
   let config;
   try {
     config = loadConfig();
   } catch (e) {
     console.error(`seed:demo: ${e.message}`);
-    process.exit(1);
+    return 1;
   }
-  const file = join(config.dataDir, DB_FILE);
-  const mode = readStoreMode(file);
-  if (mode === 'real') {
-    console.error(`seed:demo: refusing to touch ${file}: it is a real store (settings.mode is not 'demo'). Point FATHOM_DATA at another directory for the demo.`);
-    process.exit(1);
-  }
-  mkdirSync(config.dataDir, { recursive: true });
-  const db = mode === null ? createStoreFile(file, seedDemo) : openMigrated(file);
+  let opened;
   try {
-    if (mode !== null) seedDemo(db);
-  } finally {
-    db.close();
+    mkdirSync(config.dataDir, { recursive: true });
+    opened = openInstance(config);
+  } catch (e) {
+    console.error(`seed:demo: ${typeof e?.code === 'string' ? e.code : 'instance_unavailable'}`);
+    return 1;
   }
-  console.log(`seed:demo: demo store ${mode ? 'rebuilt' : 'created'} at ${file}`);
+  if (!opened) {
+    const secrets = createInstanceSecrets({ config, mode: 'demo' });
+    const made = createInstance(config.dataDir, { mode: 'demo', init: seedDemo, platformKey: secrets.platformKey() });
+    made.db.close();
+    made.platform.close();
+    console.log('seed:demo: demo instance created');
+    return 0;
+  }
+  const { platform, mode } = opened;
+  if (mode !== 'demo') {
+    platform.close();
+    console.error('seed:demo: refusing to touch a real instance. Point FATHOM_DATA at another directory for the demo.');
+    return 1;
+  }
+  const runtimes = createRuntimeRegistry({ platform, config, secrets: createInstanceSecrets({ config, mode }) });
+  try {
+    const household = runtimes.demo();
+    seedDemo(household.db);
+    await clearStoredFiles(await household.vault());
+    household.packs.refresh();
+    console.log('seed:demo: demo household rebuilt');
+    return 0;
+  } catch (e) {
+    console.error(`seed:demo: ${typeof e?.code === 'string' ? e.code : 'seed_failed'}`);
+    return 1;
+  } finally {
+    await runtimes.close();
+    platform.close();
+  }
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) main();
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) process.exitCode = await main();

@@ -5,14 +5,15 @@
 // sidebar is an overlay behind the Conversations button. Every test title carries its AC tag.
 //
 // The age bucketing test writes conversations.last_at straight into the main demo server's store
-// (.e2e-data/fathom.sqlite, the E2E_DATA playwright.config.mjs gives it), because the app clock
+// (its household store under the E2E_DATA playwright.config.mjs gives it), because the app clock
 // stamps every new thread with today. It skips when BASE_URL targets a remote server.
 
 import { DatabaseSync } from 'node:sqlite';
-import { fileURLToPath } from 'node:url';
 import { test, expect, S, REMOTE, resetDemo, gotoRoute, expectH1, ASK_HELLO, ASK_THREAD_URL, askInput, askOnAsk } from './helpers.mjs';
+import { householdStoreFile, localDataDir } from './local-store.mjs';
 
-const STORE = fileURLToPath(new URL('../.e2e-data/fathom.sqlite', import.meta.url));
+// The main demo server's household store (households/<id>/fathom.sqlite under E2E_DATA).
+const STORE = () => householdStoreFile(localDataDir());
 
 const STARTERS = [
   ['attention', 'What needs my attention right now?'],
@@ -325,7 +326,7 @@ test('AC1: rows group into Today, Yesterday, Previous 7 days and Older by last a
   const made = {};
   for (const n of ages) made[n] = await newThread(request, `Synthetic question for the ${n} day bucket`);
 
-  const db = new DatabaseSync(STORE);
+  const db = new DatabaseSync(STORE());
   try {
     db.exec('PRAGMA busy_timeout = 5000');
     const set = db.prepare('UPDATE conversations SET last_at = ? WHERE key = ?');

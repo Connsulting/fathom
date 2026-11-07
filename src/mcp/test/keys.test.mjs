@@ -1,39 +1,57 @@
-// AC3/AC5 (unit): app-issued API keys in src/mcp/keys.mjs against a temp migrated store.
+// AC3/AC5 (unit): app-issued API keys in src/mcp/keys.mjs against the platform api_keys table of a
+// temp instance (MT-03: keys moved to the platform, bound to one household each).
 
 import test, { describe, before, after, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto, { createHmac } from 'node:crypto';
 import { syncBuiltinESMExports } from 'node:module';
-import { readFileSync, writeFileSync, statSync, existsSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, writeFileSync, statSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { tempDb, tempDir } from '../../../test/helpers/server.mjs';
+import { tempInstance, tempDir } from '../../../test/helpers/server.mjs';
 import {
-  KEY_PREFIX, SCOPES, normalizeScopes, loadServerSecret, hashKey, createKeyService, toolsForScopes,
+  KEY_PREFIX, SCOPES, normalizeScopes, hashKey, createKeyService, toolsForScopes,
 } from '../keys.mjs';
+import { createInstanceSecrets, DEMO_SECRETS_DIR, DEMO_MCP_SECRET } from '../../platform/secrets.mjs';
+import { createAuthStore } from '../../auth/store.mjs';
 import { tools } from '../../tools/index.mjs';
 import { KEY_RE } from './helpers.mjs';
 
 const isCode = code => err => err instanceof Error && err.code === code;
 const SECRET = Buffer.alloc(32, 7);
-const LIST_FIELDS = ['createdAt', 'id', 'lastUsedAt', 'name', 'revokedAt', 'scopes'];
+const LIST_FIELDS = ['createdAt', 'householdId', 'id', 'lastUsedAt', 'name', 'revokedAt', 'scopes'];
 
 let t;
 let clock;
+let raw;
 let svc;
-// Creators with an active membership in the served household (the platform's answer, faked here:
+let hh;
+// Creators with an active membership in the key's household (the platform's answer, faked here:
 // the key service only sees creatorActive).
 const active = new Set();
 const creatorActive = userId => active.has(userId);
+const users = {};
 
 before(async () => {
-  t = await tempDb();
+  t = await tempInstance();
+  hh = t.householdId;
+  // Real platform users, so the api_keys.user_id foreign key holds.
+  const store = createAuthStore(t.platform);
+  for (const name of ['creator', 'member']) users[name] = store.invite(hh, `${name}@example.test`).user.id;
   clock = new Date('2026-11-05T15:00:00.000Z');
-  svc = createKeyService({ db: t.db, serverSecret: SECRET, creatorActive, now: () => clock });
+  raw = createKeyService({ platform: t.platform, secret: () => SECRET, creatorActive, now: () => clock });
+  // The tests below act inside the instance's household unless they say otherwise.
+  svc = {
+    create: (opts = {}) => raw.create({ householdId: hh, ...opts }),
+    list: (opts = {}) => raw.list({ householdId: hh, ...opts }),
+    revoke: (id, opts = {}) => raw.revoke(id, { householdId: hh, ...opts }),
+    verify: k => raw.verify(k),
+    touch: id => raw.touch(id),
+  };
 });
 after(() => t && t.close());
 
 const tick = () => { clock = new Date(clock.getTime() + 1000); };
-const rows = () => t.db.prepare('SELECT * FROM api_keys ORDER BY created_at, id').all().map(r => ({ ...r }));
+const rows = () => t.platform.prepare('SELECT * FROM api_keys ORDER BY created_at, id').all().map(r => ({ ...r }));
 
 describe('constants and scopes', () => {
   test('prefix and scope list', () => {
@@ -69,37 +87,66 @@ describe('constants and scopes', () => {
   });
 });
 
-describe('server secret', () => {
-  test('created on first use as a 0600 file of 64 hex chars and reused after', async () => {
+// MT-03: the HMAC secret is an instance secret (src/platform/secrets.mjs), no longer created
+// beside the store on first use. A real instance reads FATHOM_MCP_SECRET_FILE and never generates
+// it; a demo instance creates its own once under platform-secrets/.
+describe('MCP secret', () => {
+  const writeSecret = (file, text, mode = 0o600) => { writeFileSync(file, text, { mode }); chmodSync(file, mode); return file; };
+  const realSecrets = (dataDir, mcpSecretFile) => createInstanceSecrets({ config: { dataDir, platformKeyFile: null, mcpSecretFile }, mode: 'real' });
+
+  test('a demo instance creates it on first use as a 0600 file of 64 hex chars and reuses it after', async () => {
     const dir = await tempDir();
-    const file = join(dir, 'api-key-secret');
+    const file = join(dir, DEMO_SECRETS_DIR, DEMO_MCP_SECRET);
     assert.ok(!existsSync(file));
-    const first = loadServerSecret(dir);
+    const first = createInstanceSecrets({ config: { dataDir: dir }, mode: 'demo' }).mcpSecret();
     assert.ok(Buffer.isBuffer(first));
-    assert.ok(first.length > 0);
+    assert.equal(first.length, 32);
     assert.ok(existsSync(file));
     assert.match(readFileSync(file, 'utf8').trim(), /^[0-9a-f]{64}$/);
     assert.equal(statSync(file).mode & 0o777, 0o600);
+    assert.equal(statSync(join(dir, DEMO_SECRETS_DIR)).mode & 0o777, 0o700);
     const before = readFileSync(file, 'utf8');
-    const second = loadServerSecret(dir);
+    const second = createInstanceSecrets({ config: { dataDir: dir }, mode: 'demo' }).mcpSecret();
     assert.ok(first.equals(second), 'the same secret is returned on reuse');
     assert.equal(readFileSync(file, 'utf8'), before, 'the file is not rewritten');
   });
 
-  test('two data dirs get different secrets', async () => {
-    const a = loadServerSecret(await tempDir());
-    const b = loadServerSecret(await tempDir());
+  test('two demo data dirs get different secrets', async () => {
+    const a = createInstanceSecrets({ config: { dataDir: await tempDir() }, mode: 'demo' }).mcpSecret();
+    const b = createInstanceSecrets({ config: { dataDir: await tempDir() }, mode: 'demo' }).mcpSecret();
     assert.ok(!a.equals(b));
+  });
+
+  test('a real instance reads FATHOM_MCP_SECRET_FILE and never creates one', async () => {
+    const dir = await tempDir();
+    const hex = 'ab'.repeat(32);
+    const file = writeSecret(join(dir, 'mcp.secret'), hex + '\n');
+    assert.ok(realSecrets(dir, file).mcpSecret().equals(Buffer.from(hex, 'hex')));
+    assert.throws(() => realSecrets(dir, null).mcpSecret(), isCode('mcp_secret_missing'));
+    assert.throws(() => realSecrets(dir, join(dir, 'absent.secret')).mcpSecret(), isCode('mcp_secret_missing'));
+    assert.ok(!existsSync(join(dir, 'absent.secret')), 'a missing secret is not generated');
+    assert.ok(!existsSync(join(dir, DEMO_SECRETS_DIR)), 'a real instance creates no demo secrets');
   });
 
   test('a corrupt secret file is refused, not replaced', async () => {
     for (const bad of ['', 'not hex at all', 'ab'.repeat(16), 'zz'.repeat(32), 'ab'.repeat(33)]) {
       const dir = await tempDir();
-      const file = join(dir, 'api-key-secret');
-      writeFileSync(file, bad, { mode: 0o600 });
-      assert.throws(() => loadServerSecret(dir), Error, JSON.stringify(bad));
+      const file = writeSecret(join(dir, 'mcp.secret'), bad);
+      assert.throws(() => realSecrets(dir, file).mcpSecret(), isCode('mcp_secret_invalid'), JSON.stringify(bad));
       assert.equal(readFileSync(file, 'utf8'), bad, 'the corrupt file is left as it was');
     }
+    const dir = await tempDir();
+    const open = writeSecret(join(dir, 'mcp.secret'), 'ab'.repeat(32), 0o640);
+    assert.throws(() => realSecrets(dir, open).mcpSecret(), isCode('mcp_secret_invalid'), 'a group-readable file is refused');
+  });
+
+  test('a key service whose secret is unavailable refuses every call with unavailable', () => {
+    const none = createKeyService({ platform: t.platform, secret: () => { throw new Error('mcp_secret_missing'); }, creatorActive, now: () => clock });
+    const before = rows().length;
+    assert.throws(() => none.create({ householdId: hh, name: 'No secret' }), isCode('unavailable'));
+    assert.throws(() => none.list({ householdId: hh }), isCode('unavailable'));
+    assert.throws(() => none.verify('fathom_' + 'Q'.repeat(43)), isCode('unavailable'));
+    assert.equal(rows().length, before, 'nothing stored without the secret');
   });
 });
 
@@ -120,12 +167,14 @@ describe('key service', () => {
     assert.match(key, KEY_RE);
     assert.equal(key.length, 50);
     assert.match(record.id, /^key_[0-9a-f]+$/);
+    assert.equal(record.householdId, hh);
     assert.equal(record.name, 'Laptop agent');
     assert.deepEqual(record.scopes, ['read']);
     assert.equal(record.createdAt, clock.toISOString());
     assert.equal(record.lastUsedAt, null);
     assert.equal(record.revokedAt, null);
-    const row = t.db.prepare('SELECT * FROM api_keys WHERE id = ?').get(record.id);
+    const row = t.platform.prepare('SELECT * FROM api_keys WHERE id = ?').get(record.id);
+    assert.equal(row.household_id, hh);
     assert.equal(row.key_hash, hashKey(key, SECRET));
     assert.deepEqual(JSON.parse(row.scopes), ['read']);
     const dump = JSON.stringify(rows());
@@ -173,6 +222,7 @@ describe('key service', () => {
     const got = svc.verify(key);
     assert.ok(got);
     assert.equal(got.id, record.id);
+    assert.equal(got.householdId, hh, 'verify names the key household');
     assert.deepEqual(got.scopes, ['read', 'write:recs']);
     const other = 'fathom_' + 'Q'.repeat(43);
     const flipped = key.slice(0, -1) + (key.endsWith('A') ? 'B' : 'A');
@@ -202,26 +252,26 @@ describe('key service', () => {
   // Contradiction 1: with no users foreign key, verify fails closed on a creator who is no longer an
   // active member; ownerless keys do not depend on any member.
   test('a creator-owned key verifies only while its creator is an active member; ownerless keys are unaffected', () => {
-    active.add('user-creator');
-    const owned = svc.create({ name: 'Creator key', userId: 'user-creator' });
+    active.add(users.creator);
+    const owned = svc.create({ name: 'Creator key', userId: users.creator });
     const ownerless = svc.create({ name: 'Ownerless key' });
     assert.equal(svc.verify(owned.key).id, owned.record.id);
     assert.equal(svc.verify(ownerless.key).id, ownerless.record.id);
-    active.delete('user-creator');
+    active.delete(users.creator);
     assert.equal(svc.verify(owned.key), null, 'a removed creator key no longer verifies');
     assert.equal(svc.verify(ownerless.key).id, ownerless.record.id);
     assert.ok(rows().some(r => r.id === owned.record.id), 'verification alone deletes nothing');
-    active.add('user-creator');
+    active.add(users.creator);
     assert.equal(svc.verify(owned.key).id, owned.record.id, 'an active creator verifies again');
-    active.delete('user-creator');
+    active.delete(users.creator);
     tick();
   });
 
   test('ownerless keys stay manageable by an unscoped (admin) caller and refused to a member caller', () => {
     const ownerless = svc.create({ name: 'Admin managed key' });
     assert.ok(svc.list().some(k => k.id === ownerless.record.id), 'the unscoped listing carries it');
-    assert.ok(!svc.list({ userId: 'user-member' }).some(k => k.id === ownerless.record.id));
-    assert.throws(() => svc.revoke(ownerless.record.id, { userId: 'user-member' }), isCode('forbidden'));
+    assert.ok(!svc.list({ userId: users.member }).some(k => k.id === ownerless.record.id));
+    assert.throws(() => svc.revoke(ownerless.record.id, { userId: users.member }), isCode('forbidden'));
     tick();
     assert.equal(svc.revoke(ownerless.record.id).revokedAt, clock.toISOString());
     assert.equal(svc.verify(ownerless.key), null);
@@ -229,12 +279,22 @@ describe('key service', () => {
   });
 
   test('createKeyService requires creatorActive', () => {
-    assert.throws(() => createKeyService({ db: t.db, serverSecret: SECRET, now: () => clock }));
+    assert.throws(() => createKeyService({ platform: t.platform, secret: () => SECRET, now: () => clock }));
   });
 
   test('revoke of an unknown id is not_found', () => {
     assert.throws(() => svc.revoke('key_000000000000'), isCode('not_found'));
     assert.throws(() => svc.revoke(''), isCode('not_found'));
+  });
+
+  test('a key is bound to its household: another household cannot list, revoke or manage it', () => {
+    const { key, record } = svc.create({ name: 'Bound key' });
+    const other = 'hh-synthetic-other';
+    assert.ok(!raw.list({ householdId: other }).some(k => k.id === record.id));
+    assert.throws(() => raw.revoke(record.id, { householdId: other }), isCode('not_found'));
+    assert.throws(() => raw.list({}), isCode('not_found'), 'no household, no listing');
+    assert.equal(raw.verify(key).householdId, hh);
+    tick();
   });
 
   test('verify compares against every stored row with timingSafeEqual', () => {

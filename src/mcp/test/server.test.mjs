@@ -243,16 +243,16 @@ describe('protocol', () => {
   test('last_used_at is set after an authenticated call', async () => {
     const k = await createKey(s.baseUrl, 'Usage tracked');
     seenKeys.push(k.key);
-    assert.equal((await apiKeyRow(s.dbFile, k.record.id)).last_used_at, null);
+    assert.equal((await apiKeyRow(s.platformFile, k.record.id)).last_used_at, null);
     assert.equal((await listToolNames(s.baseUrl, k.key)).length > 0, true);
-    const used = (await apiKeyRow(s.dbFile, k.record.id)).last_used_at;
+    const used = (await apiKeyRow(s.platformFile, k.record.id)).last_used_at;
     assert.ok(typeof used === 'string' && !Number.isNaN(Date.parse(used)), `last_used_at: ${used}`);
     const listed = (await request(s.baseUrl, { path: '/api/keys' })).json.keys.find(x => x.id === k.record.id);
     assert.equal(listed.lastUsedAt, used);
   });
 
   test('a refused request does not touch last_used_at', async () => {
-    const row = await apiKeyRow(s.dbFile, revokedKey.record.id);
+    const row = await apiKeyRow(s.platformFile, revokedKey.record.id);
     assert.equal(row.last_used_at, null);
   });
 });

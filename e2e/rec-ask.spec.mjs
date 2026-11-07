@@ -7,10 +7,11 @@
 // Every title carries AC1 or AC2. The demo's fake engine streams answers in chunks 25 ms apart.
 
 import { DatabaseSync } from 'node:sqlite';
-import { fileURLToPath } from 'node:url';
 import { test, expect, REMOTE, resetDemo, gotoRoute, plain, rec, recDialog, liveStatus, ASK_THREAD_URL, askInput } from './helpers.mjs';
+import { householdStoreFile, localDataDir } from './local-store.mjs';
 
-const STORE = fileURLToPath(new URL('../.e2e-data/fathom.sqlite', import.meta.url));
+// The main demo server's household store (households/<id>/fathom.sqlite under E2E_DATA).
+const STORE = () => householdStoreFile(localDataDir());
 
 // A visible rec with three follow-up chips and a title without tokens.
 const REC_ID = 'dcfsa';
@@ -390,7 +391,7 @@ test('AC2 no chip for a thread without a rec or whose rec no longer exists', asy
   const plainThread = (await postJson(request, '/api/threads', { text: 'Synthetic plain question' })).thread;
   const retired = (await postJson(request, '/api/threads', { recId: REC_ID, text: 'Synthetic question about a retired rec' })).thread;
   // The rec named by the thread is gone (a retired planner rec id that no longer exists).
-  const db = new DatabaseSync(STORE);
+  const db = new DatabaseSync(STORE());
   try {
     db.exec('PRAGMA busy_timeout = 5000');
     db.prepare('UPDATE conversations SET rec_id = ? WHERE key = ?').run('synthetic-retired-rec', retired.key);

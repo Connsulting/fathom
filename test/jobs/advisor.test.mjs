@@ -15,8 +15,8 @@ import { buildScenario } from '../../src/scenario/build.mjs';
 import { buildPacketHtml, contentSources } from '../../src/advisor/packet.mjs';
 import { MAX_NOTE } from '../../src/advisor/index.mjs';
 import { callTool, getTool } from '../../src/tools/index.mjs';
-import { request, serveAppFixture } from '../helpers/server.mjs';
-import { scratch, keyFileOf } from '../helpers/real-store.mjs';
+import { request, serveAppFixture, secretsFor, secretEnv } from '../helpers/server.mjs';
+import { scratch, householdOf } from '../helpers/real-store.mjs';
 import { planRun } from '../helpers/plan.mjs';
 
 const NOW = '2026-11-05';
@@ -24,7 +24,8 @@ const REC = 'fed-q4-estimate';
 const S = scratch();
 after(() => S.cleanup());
 
-const configFor = dir => ({ ...loadConfig({ FATHOM_DATA: dir, FATHOM_DEMO: '0', FATHOM_ENGINE: 'off', FATHOM_CLOCK: NOW, FATHOM_DATA_KEY_FILE: keyFileOf(dir) }) });
+// The instance secrets the store helper wrapped the household data key under.
+const configFor = dir => ({ ...loadConfig({ FATHOM_DATA: dir, FATHOM_DEMO: '0', FATHOM_ENGINE: 'off', FATHOM_CLOCK: NOW, ...secretEnv(secretsFor(dir)) }) });
 
 async function serve(db, config) {
   return serveAppFixture({ authenticated: true, db, config });
@@ -38,7 +39,7 @@ async function planned() {
   const res = await planRun(db, { now: NOW });
   assert.equal(res.status, 'ok');
   const srv = await serve(db, configFor(dir));
-  return { db, dir, srv };
+  return { db, dir, root: householdOf(db).root, srv };
 }
 
 const scen = async srv => (await srv.request({ path: '/api/scenario' })).json;
@@ -143,7 +144,7 @@ describe('advisor workflow, real store', () => {
   });
 
   test('the packet is stored encrypted, listed with its date and downloads as an HTML attachment', async () => {
-    const { db, dir, srv } = await planned();
+    const { db, root, srv } = await planned();
     try {
       assert.equal((await srv.postJson('/api/advisor/packets', {})).status, 409, 'nothing waiting');
       await srv.postJson('/api/advisor/reviews', { recId: REC });
@@ -152,9 +153,10 @@ describe('advisor workflow, real store', () => {
       const id = p.json.packetId;
       assert.match(id, /^advpkt-[a-f0-9]{16}$/);
       assert.deepEqual(p.json.scenario.advisor.packets.map(x => [x.id, x.date, x.recIds]), [[id, 'Nov 5, 2026', [REC]]]);
-      const stored = readFileSync(join(dir, 'files', `${id}.bin`));
+      // Stored in the household's own vault under its root.
+      const stored = readFileSync(join(root, 'files', `${id}.bin`));
       assert.ok(!stored.includes(Buffer.from('Advisor review packet')), 'stored ciphertext, not HTML');
-      assert.ok(readdirSync(join(dir, 'files')).includes(`${id}.bin`));
+      assert.ok(readdirSync(join(root, 'files')).includes(`${id}.bin`));
       const d = await srv.request({ path: `/api/advisor/packets/${id}` });
       assert.equal(d.status, 200);
       assert.match(d.headers['content-type'], /^text\/html/);

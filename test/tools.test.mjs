@@ -57,7 +57,7 @@ before(async () => {
     const day = String(1 + (i % 28)).padStart(2, '0');
     tx.run(`2026-07-${day}`, i, `Test payment ${i}`, `x${i}`, `test-${i}`, `row ${i + 1}`);
   }
-  ctx = { db: t.db, now: new Date('2026-11-05T15:00:00Z') };
+  ctx = { db: t.db, dataDir: t.dataDir, now: new Date('2026-11-05T15:00:00Z') };
 });
 after(() => t && t.close());
 

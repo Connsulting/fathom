@@ -11,7 +11,7 @@ import { needsYou, verdictLevel } from '../src/shared/rules.mjs';
 import { setSetting } from '../src/store/db.mjs';
 import {
   ROOT, SERVER_TIMEOUT, spawnServer, withServer, expectServerExit,
-  tempDb, tempDir, tempInstance, openStore, dumpStore, runCommand, recOf, src, serveAppFixture, spawnAuthenticatedServer, withAuthenticatedServer,
+  tempDb, tempDir, tempInstance, openStore, dumpStore, runCommand, recOf, src, serveAppFixture, spawnAuthenticatedServer, withAuthenticatedServer, servedStore,
 } from './helpers/server.mjs';
 
 const T = { timeout: SERVER_TIMEOUT };
@@ -56,7 +56,8 @@ async function nonPlannerRecs(file, sc) {
 async function populatedRealStore() {
   const dataDir = await tempDir();
   await withAuthenticatedServer({ dataDir, env: { FATHOM_DEMO: '0' } }, async () => {});
-  const file = join(dataDir, 'fathom.sqlite');
+  // MT-03: the store is the original household's, under households/<id>/.
+  const file = servedStore(dataDir).file;
   await readDb(file, db => {
     db.prepare(`INSERT INTO facts (key, value, src, as_of, confirmed, file_id, parser, locator, updated_at)
                 VALUES ('household.dependents', '2', 'you', '2026-11-01', 1, NULL, NULL, NULL, '2026-11-01T09:00:00Z')`).run();

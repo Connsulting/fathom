@@ -15,7 +15,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createRealStore, CLOCK } from './helpers/real-store.mjs';
+import { createRealStore, householdOf, CLOCK } from './helpers/real-store.mjs';
 import { createEngine } from '../src/engine/index.mjs';
 import { createLivePacks } from '../src/packs/live.mjs';
 import { callTool, tools as REGISTRY, instructions } from '../src/tools/index.mjs';
@@ -53,11 +53,12 @@ async function cardStore(t) {
     .run(CARD, 'Example Card Co', '7319', 'Rewards card', null, 'card', 'connected', CARD_NAME, 0);
   const tx = db.prepare('INSERT INTO transactions (account_id, date, amount, description, category) VALUES (?, ?, ?, ?, ?)');
   for (const r of [ROOF, GROCER]) tx.run(CARD, r.date, r.amount, r.description, r.category);
-  const packs = createLivePacks(db, { dataDir });
+  const root = householdOf(db).root;
+  const packs = createLivePacks(db, { dataDir: root });
   packs.refresh();
   // The account label every surface shows, read the way accounts.list reads it.
-  const label = (await callTool('accounts', { operation: 'list', }, { db, now: CLOCK })).find(a => a.id === CARD).name;
-  return { db, dataDir, packs, label };
+  const label = (await callTool('accounts', { operation: 'list' }, { db, now: CLOCK })).find(a => a.id === CARD).name;
+  return { db, dataDir, root, packs, label };
 }
 
 // A real fake-mode engine whose n-th call runs scripts[n] (the last script repeats).
@@ -78,7 +79,7 @@ function fakeEngine(scripts) {
 
 async function ask(s, scripts, { onEvent } = {}) {
   const { engine, calls } = fakeEngine(scripts);
-  const reply = await createLiveAnswerer({ engine, packs: s.packs }).answer({
+  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).answer({
     db: s.db, key: THREAD, text: 'Where did my card spending go last month?', ...(onEvent ? { onEvent } : {}),
   });
   return { reply, calls };

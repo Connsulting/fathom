@@ -9,6 +9,7 @@ import vm from 'node:vm';
 import demo from '../demo/scenario.mjs';
 import {
   ROOT, DB_FILE, PLATFORM_FILE, SERVER_TIMEOUT, tempDir, tempDb, tempInstance, runCommand, openStore, dumpStore, withServer, withPlatform, postJson,
+  servedStore,
 } from './helpers/server.mjs';
 import { rmSync } from 'node:fs';
 import { setSetting, getSetting } from '../src/store/db.mjs';
@@ -26,8 +27,9 @@ async function seededDir() {
   return dataDir;
 }
 
+// The demo household's store (MT-03: households/<id>/fathom.sqlite, named by platform.sqlite).
 async function withStore(dataDir, fn) {
-  const db = await openStore(join(dataDir, DB_FILE));
+  const db = await openStore(servedStore(dataDir).file);
   try { return await fn(db); } finally { db.close(); }
 }
 
@@ -71,7 +73,12 @@ test('demo/ does not import from or reference mock-v2', () => {
 
 test('seed:demo creates a demo store at the November state', T, async () => {
   const dataDir = await seededDir();
-  assert.ok(existsSync(join(dataDir, DB_FILE)));
+  const served = servedStore(dataDir);
+  assert.ok(served, 'the seed created an instance with a rooted household');
+  assert.equal(served.mode, 'demo');
+  assert.equal(served.root, join(dataDir, 'households', served.householdId));
+  assert.ok(existsSync(served.file), 'the store is in the household root');
+  assert.ok(!existsSync(join(dataDir, DB_FILE)), 'no store at the data root');
   await withStore(dataDir, db => {
     assert.equal(getSetting(db, 'mode', null), 'demo');
     assert.equal(getSetting(db, 'clock', null), demo.meta.clock);
@@ -181,6 +188,22 @@ test('account balances at data-through equal the account figure, and masks are 4
 });
 
 test('seed:demo refuses a real store and leaves it untouched', T, async () => {
+  const t = await tempInstance({ mode: 'real' });
+  t.db.prepare(`INSERT INTO facts (key, value, src, as_of, confirmed, file_id, parser, locator, updated_at)
+                VALUES ('household.dependents', '2', 'you', '2026-11-01', 1, NULL, NULL, NULL, '2026-11-01T09:00:00Z')`).run();
+  t.close();
+  const before = await dumpStore(t.file);
+  const platformBefore = await dumpStore(t.platformFile);
+  const r = await seed(t.dataDir);
+  assert.notEqual(r.code, 0);
+  assert.match(r.stdout + r.stderr, /real/i);
+  assert.deepEqual(await dumpStore(t.file), before);
+  assert.deepEqual(await dumpStore(t.platformFile), platformBefore);
+});
+
+// MT-03: a real single-store layout (fathom.sqlite at the data root, no platform) is refused with a
+// fixed code before anything is opened for writing.
+test('seed:demo refuses an unmigrated real store with a fixed code and leaves it untouched', T, async () => {
   const t = await tempDb();
   setSetting(t.db, 'mode', 'real');
   t.db.prepare(`INSERT INTO facts (key, value, src, as_of, confirmed, file_id, parser, locator, updated_at)
@@ -189,8 +212,9 @@ test('seed:demo refuses a real store and leaves it untouched', T, async () => {
   const before = await dumpStore(t.file);
   const r = await seed(t.dataDir);
   assert.notEqual(r.code, 0);
-  assert.match(r.stdout + r.stderr, /real/i);
+  assert.match(r.stdout + r.stderr, /seed:demo: platform_migration_required/);
   assert.deepEqual(await dumpStore(t.file), before);
+  assert.ok(!existsSync(join(t.dataDir, PLATFORM_FILE)), 'no platform is created');
 });
 
 test('seed:demo treats a store with no mode setting as real and refuses it', T, async () => {

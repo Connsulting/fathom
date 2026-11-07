@@ -1,6 +1,6 @@
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
-import { scratch, addFact } from './helpers/real-store.mjs';
+import { scratch, addFact, householdOf } from './helpers/real-store.mjs';
 import { planRun } from './helpers/plan.mjs';
 import { callTool, tools } from '../src/tools/index.mjs';
 import { getFacts } from '../src/store/facts.mjs';
@@ -111,7 +111,7 @@ for (const recId of [null, 'new-child']) for (const fail of [false, true]) {
       ? Promise.resolve({ text: 'Expected date', toolResults: [] })
       : transport.call({ ...request, fake: [ { toolCalls: [{ name: 'answer', args: factArgs }] },
         fail ? { status: 'transport_error', is_error: true } : { text: 'The expected date is saved.' } ] }) };
-    const answerer = createLiveAnswerer({ engine });
+    const answerer = createLiveAnswerer({ engine, root: householdOf(db).root });
     const ctx = { db, config: {}, identity: { id: 'person-a' }, scheduler: { runNow: () => planRun(db) }, answerer,
       body: { text: words, ...(recId ? { recId } : {}) } };
     const out = await threadCreate(ctx);
@@ -211,7 +211,7 @@ test('a fact action replans with the same locked engine after the model round re
     return core.call({ ...request, fake });
   } };
   const out = await threadCreate({ db, config: {}, identity: { id: 'person-a' },
-    body: { recId: 'new-child', text: words }, answerer: createLiveAnswerer({ engine }),
+    body: { recId: 'new-child', text: words }, answerer: createLiveAnswerer({ engine, root: householdOf(db).root }),
     scheduler: { runNow: () => planRun(db, { engine }) } });
   assert.ok(proseCalls > 0, 'planning rewrote prose through the very same engine lock');
   assert.equal(getFacts(db)[factArgs.key], factArgs.value);
