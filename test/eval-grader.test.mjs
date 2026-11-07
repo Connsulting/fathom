@@ -23,10 +23,12 @@ test('sourced-number table: sign, cents, abbreviations, rounding, words and cont
   const spelled = gradeFigures('The gap is twelve hundred dollars.', read({ amount: 1200 }));
   assert.equal(spelled.spelledOut[0]?.kind, 'spelled_out');
   assert.equal(gradeFigures('There are three open items.', read({ items: [{}, {}, {}] })).ok, true);
+  assert.equal(gradeFigures('There are zero items.', read({ items: [] })).ok, true);
   const over = gradeFigures('There are twenty one open items.', read({ items: Array.from({ length: 21 }, () => ({})) }));
   assert.equal(over.spelledOut[0]?.kind, 'spelled_out');
   const context = gradeFigures('$123', [], { contextNumbers: [123] });
   assert.equal(context.contextOnly[0]?.kind, 'context-only');
+  assert.equal(gradeFigures('$1,200', read({ amount: 1187.4 }), { contextNumbers: [1200] }).contextOnly.length, 1);
   assert.equal(gradeFigures('$123', read({ amount: 123 }), { contextNumbers: [123] }).ok, true);
 });
 
@@ -46,6 +48,16 @@ test('sourced-number table grades answers over real demo tool results', async ()
       `$${target / 1000}k`, `${target / 1e6}m`,
       `$${Math.trunc(expense)}`, 'one transaction',
     ]) assert.equal(gradeFigures(text, [health, pace]).ok, true, text);
+    const ratio = expense / target;
+    store.db.prepare("INSERT INTO sources (id, label, kind) VALUES ('calc:fixture', 'Demo calculation', 'demo')").run();
+    store.db.prepare(`INSERT INTO figures (key, v, src, kind, label, locator, updated_at)
+      VALUES (?, ?, 'calc:fixture', 'e', 'Demo ratio', ?, ?)`)
+      .run('eval_ratio', ratio, JSON.stringify({ unit: 'ratio' }), new Date().toISOString());
+    const ratioCall = await call('get_figures', { keys: ['eval_ratio'] });
+    assert.equal(ratioCall.result[0].value, ratio);
+    assert.equal(ratioCall.result[0].unit, 'ratio');
+    assert.equal(gradeFigures(`${ratio * 100}%`, [ratioCall]).ok, true);
+    assert.equal(gradeFigures(`${ratio * 100 + 0.1}%`, [ratioCall]).ok, false);
     const rounded = `$${Math.round(expense / 10) * 10}`;
     assert.equal(gradeFigures(rounded, [health]).rounded.length, 1);
     assert.equal(gradeFigures(`${Math.round(target / 1e6 * 10) / 10}m`, [pace]).rounded.length, 1);
@@ -60,6 +72,9 @@ test('formatting preserves units, cent precision and dropped-cent direction', ()
   assert.equal(gradeFigures('$1,188', read({ amount: 1187.40 })).ok, false);
   assert.equal(gradeFigures('$1,188', read({ amount: 1187.60 })).rounded.length, 1);
   assert.equal(gradeFigures('$1,187', read({ amount: -1187.40 })).ok, true);
+  assert.equal(gradeFigures('$1,187.00', read({ amount: 1187.40 })).ok, false);
+  assert.equal(gradeFigures('$17.00', read({ amount: -17.05 })).ok, false);
+  assert.equal(gradeFigures('$17.00', read({ amount: 17 })).ok, true);
   assert.equal(gradeFigures('$1.5 million', read({ amount: 1500000 })).ok, true);
   assert.equal(gradeFigures('$1,000,000.01', read({ amount: 1000000.02 })).ok, false);
   assert.equal(gradeFigures('1,000,000.01', read({ amount: 1000000.02 })).ok, false);
@@ -90,6 +105,7 @@ test('tier 1 demo fixtures state unsigned, dropped-cent and word-count figures',
       const result = await byName[name].handler(args, ctx);
       const calls = [{ name, args, result }];
       const answer = fixtureAnswer(values(result), result);
+      assert.match(answer, /\b(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty) rows\b/, id);
       const grade = gradeFigures(answer, calls);
       assert.equal(grade.ok, true, `${id}: ${JSON.stringify(grade)}`);
       const invented = gradeFigures(`${answer} Invented $424,242.42.`, calls);
