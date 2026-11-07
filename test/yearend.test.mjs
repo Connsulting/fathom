@@ -4,10 +4,9 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { serveAppFixture } from './helpers/server.mjs';
+import { serveAppFixture, tempInstance } from './helpers/server.mjs';
 import { randomBytes } from 'node:crypto';
-import { mkdtemp, readdir, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { openDb, migrate, setSetting } from '../src/store/db.mjs';
@@ -146,18 +145,22 @@ test('zip: write then read round-trips names and bytes', async () => {
   assert.equal(out[0].data.toString(), 'hello');
 });
 
+// A real instance (createInstance layout) whose household vault holds two stored uploads. The packet
+// builds its intermediates under the household's work directory (tmpRoot, <root>/work).
 async function packetStore() {
-  const dataDir = await mkdtemp(join(tmpdir(), 'fathom-ye-data-'));
-  const tmpRoot = await mkdtemp(join(tmpdir(), 'fathom-ye-tmp-'));
-  const key = randomBytes(32);
-  const db = realStore();
+  const inst = await tempInstance({ mode: 'real' });
+  const household = await inst.household();
+  const vault = await household.vault();
+  const db = inst.db;
+  const dataDir = inst.dataDir;
+  const tmpRoot = join(inst.root, 'work');
   upsertFact(db, { key: 'income.w2', value: true, confirmed: true });
   upsertFact(db, { key: 'income.partnership', value: true, confirmed: true });
   upsertFact(db, { key: 'household.filingStatus', value: 'mfj', confirmed: true });
   const w2 = Buffer.from('%PDF-1.4 synthetic w2');
   const other = Buffer.from('synthetic receipt');
-  await storeFile({ dataDir, key, id: 'fw2', bytes: w2 });
-  await storeFile({ dataDir, key, id: 'fot', bytes: other });
+  assert.equal(await storeFile({ vault, id: 'fw2', bytes: w2, purpose: 'upload' }), 'files/fw2.bin');
+  assert.equal(await storeFile({ vault, id: 'fot', bytes: other, purpose: 'upload' }), 'files/fot.bin');
   addDoc(db, { id: 'fw2', name: 'scan 0001.pdf', type: 'w2', fields: { employerName: 'Acme Corp' }, storedPath: 'files/fw2.bin' });
   addDoc(db, { id: 'fot', name: 'receipt.txt', type: 'other', fields: { issuer: 'County' }, storedPath: 'files/fot.bin' });
   addDoc(db, { id: 'gone', name: 'lost.pdf', type: '1099-int', fields: { payerName: 'Bank' }, storedPath: 'files/gone.bin' });
@@ -166,7 +169,10 @@ async function packetStore() {
   db.prepare("INSERT INTO tax_payments (jurisdiction, tax_year, date, amount, kind, file_id, parser, locator) VALUES ('federal', 2025, '2026-01-15', 999, 'estimate', 'wb', 'tax-workbook', 'Sheet 2025!C9')").run();
   db.prepare("INSERT INTO sources (id, label, as_of) VALUES ('bank', 'Bank export', 'Oct 31')").run();
   db.prepare("INSERT INTO figures (key, v, src, kind, label, file_id, parser, locator, updated_at) VALUES ('cash_now', 4321, 'bank', 'a', 'Cash on hand', 'wb', 'tax-workbook', 'Sheet 2026!B2', '2026-10-01')").run();
-  return { db, dataDir, tmpRoot, key, w2, other, cleanup: () => Promise.all([rm(dataDir, { recursive: true, force: true }), rm(tmpRoot, { recursive: true, force: true })]) };
+  return {
+    db, dataDir, tmpRoot, vault, w2, other,
+    async cleanup() { await household.close(); inst.close(); await rm(dataDir, { recursive: true, force: true }); },
+  };
 }
 
 function fakeRes() {
@@ -181,7 +187,7 @@ function fakeRes() {
 test('packet: index plus every received document and nothing else, temp directory removed, generation recorded', async () => {
   const s = await packetStore();
   try {
-    const packet = await buildPacket(s.db, { year: 2026, clock: '2027-02-20', dataDir: s.dataDir, key: s.key, tmpRoot: s.tmpRoot, now: '2027-02-20T09:30:00.000Z' });
+    const packet = await buildPacket(s.db, { year: 2026, clock: '2027-02-20', vault: s.vault, now: '2027-02-20T09:30:00.000Z' });
     assert.ok((await readdir(s.tmpRoot)).every((n) => n.startsWith(TEMP_PREFIX)));
     const res = fakeRes();
     await streamPacket(res, packet);
@@ -208,7 +214,7 @@ test('packet: index plus every received document and nothing else, temp director
 test('packet index: tax payments, totals and figures carry their provenance; other years are left out', async () => {
   const s = await packetStore();
   try {
-    const packet = await buildPacket(s.db, { year: 2026, clock: '2027-02-20', dataDir: s.dataDir, key: s.key, tmpRoot: s.tmpRoot });
+    const packet = await buildPacket(s.db, { year: 2026, clock: '2027-02-20', vault: s.vault });
     const res = fakeRes();
     await streamPacket(res, packet);
     const html = readZip(res.body())[0].data.toString('utf8');
@@ -227,7 +233,7 @@ test('packet: a failure while building removes the temp directory', async () => 
   const s = await packetStore();
   try {
     s.db.exec('DROP TABLE yearend_packets');
-    await assert.rejects(buildPacket(s.db, { year: 2026, clock: '2027-02-20', dataDir: s.dataDir, key: s.key, tmpRoot: s.tmpRoot }));
+    await assert.rejects(buildPacket(s.db, { year: 2026, clock: '2027-02-20', vault: s.vault }));
     assert.deepEqual(await readdir(s.tmpRoot), []);
   } finally { await s.cleanup(); }
 });
@@ -237,7 +243,7 @@ test('packet: imported text is escaped in the index', async () => {
   try {
     s.db.prepare("UPDATE files SET name = '<img src=x onerror=alert(1)>.pdf' WHERE id = 'fot'").run();
     const res = fakeRes();
-    await streamPacket(res, await buildPacket(s.db, { year: 2026, clock: '2027-02-20', dataDir: s.dataDir, key: s.key, tmpRoot: s.tmpRoot }));
+    await streamPacket(res, await buildPacket(s.db, { year: 2026, clock: '2027-02-20', vault: s.vault }));
     const html = readZip(res.body())[0].data.toString('utf8');
     assert.ok(!html.includes('<img'), html);
   } finally { await s.cleanup(); }
@@ -249,11 +255,8 @@ async function serve(db, config) {
 
 test('API: marks validate input; the packet streams behind the session gate in a real store', async () => {
   const s = await packetStore();
-  const key = join(s.dataDir, 'k.key');
-  const { writeFile } = await import('node:fs/promises');
-  await writeFile(key, s.key, { mode: 0o600 });
   setSetting(s.db, 'clock', '2027-02-20');
-  const srv = await serve(s.db, { dataDir: s.dataDir, dataKeyFile: key });
+  const srv = await serve(s.db, { dataDir: s.dataDir });
   const sessionHeaders = srv.headers;
   const post = (body, headers = sessionHeaders) => fetch(`${srv.baseUrl}/api/yearend/marks`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) });
   try {
@@ -279,10 +282,9 @@ test('API: marks validate input; the packet streams behind the session gate in a
 });
 
 test('demo: the seeded store builds the year-end section through the same tables and downloads a packet', async () => {
-  const dataDir = await mkdtemp(join(tmpdir(), 'fathom-ye-demo-'));
-  const db = openDb(':memory:');
-  migrate(db);
-  seedDemo(db);
+  // A demo instance seeded as the server seeds one; the packet route uses its household vault.
+  const inst = await tempInstance({ mode: 'demo', init: seedDemo });
+  const { db, dataDir } = inst;
   const srv = await serve(db, { dataDir });
   try {
     const sc = await (await fetch(`${srv.baseUrl}/api/scenario`)).json();
@@ -297,13 +299,13 @@ test('demo: the seeded store builds the year-end section through the same tables
     assert.equal(res.status, 200);
     const names = readZip(Buffer.from(await res.arrayBuffer())).map((e) => e.name);
     assert.deepEqual(names, ['index.html', 'documents/01-1098-Harbor-Bank-2026.txt', 'documents/02-Document-County-treasurer-2026.txt']);
-  } finally { await srv.close(); await rm(dataDir, { recursive: true, force: true }); }
+  } finally { await srv.close(); inst.close(); await rm(dataDir, { recursive: true, force: true }); }
 });
 
 test('review fix: a client gone before streaming starts still removes the temp directory', async () => {
   const s = await packetStore();
   try {
-    const packet = await buildPacket(s.db, { year: 2026, clock: '2027-02-20', dataDir: s.dataDir, key: s.key, tmpRoot: s.tmpRoot });
+    const packet = await buildPacket(s.db, { year: 2026, clock: '2027-02-20', vault: s.vault });
     assert.equal((await readdir(s.tmpRoot)).length, 1);
     const res = fakeRes();
     res.destroy();
@@ -324,7 +326,7 @@ test('review fix: payments a pending withholding conflict names, or an unreconci
     ins.run('ny', 500, 'wh:north:2026:ny:owner', 'w2:north:2026:1');
     ins.run('ny', 40, 'wh:north:2026:ny:owner', 'paystub:north:2026-06-30:1');
     const res = fakeRes();
-    await streamPacket(res, await buildPacket(s.db, { year: 2026, clock: '2027-02-20', dataDir: s.dataDir, key: s.key, tmpRoot: s.tmpRoot }));
+    await streamPacket(res, await buildPacket(s.db, { year: 2026, clock: '2027-02-20', vault: s.vault }));
     const html = readZip(res.body())[0].data.toString('utf8');
     assert.ok(!html.includes('$26,234.50') && !html.includes('$25,000.00'), 'no total includes the disputed rows');
     assert.match(html, /Total federal<\/td><td class="r">Not totaled<\/td><td><small>2 of 3 payments wait on a question/);
@@ -336,7 +338,7 @@ test('review fix: payments a pending withholding conflict names, or an unreconci
     s.db.prepare("UPDATE confirm_items SET status = 'answered'").run();
     s.db.prepare('DELETE FROM tax_payments WHERE id = ?').run(a);
     const res2 = fakeRes();
-    await streamPacket(res2, await buildPacket(s.db, { year: 2026, clock: '2027-02-20', dataDir: s.dataDir, key: s.key, tmpRoot: s.tmpRoot }));
+    await streamPacket(res2, await buildPacket(s.db, { year: 2026, clock: '2027-02-20', vault: s.vault }));
     assert.match(readZip(res2.body())[0].data.toString('utf8'), /Total federal<\/td><td class="r">\$14,234\.50<\/td><td><small>Sum of 2 payments/);
   } finally { await s.cleanup(); }
 });

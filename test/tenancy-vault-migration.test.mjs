@@ -1,12 +1,13 @@
 // MT-02 AC2: old-format synthetic objects convert and validate without changing their plaintext;
 // failed conversion publishes nothing.
 //
-// A synthetic legacy instance is built with the real producers: createInstance, uploads through
-// the ingest pipeline (ingestFile), an advisor packet through storePacket and a SimpleFIN
-// connection through connectSimplefin, all under a synthetic 32 byte legacy data key. The
-// migration-only converter (src/platform/vault-convert.mjs) rewrites every vault object into a
-// FTHM2 bundle under the household root's work area. Expected plaintexts are computed
-// independently with the legacy reader (src/ingest/vault.mjs). Every value here is synthetic.
+// A synthetic legacy instance: createInstance for the store and platform, then rows for two
+// uploads, an advisor packet and a SimpleFIN connection whose FTHM1 objects are sealed under a
+// synthetic 32 byte legacy data key with the legacy codec (src/platform/legacy-vault.mjs), as the
+// pre-tenancy server wrote them (the running server no longer writes FTHM1). The migration-only
+// converter (src/platform/vault-convert.mjs) rewrites every vault object into a FTHM2 bundle under
+// the household root's work area. Expected plaintexts are computed independently with the legacy
+// decrypt. Every value here is synthetic.
 
 import test, { before } from 'node:test';
 import assert from 'node:assert/strict';
@@ -16,22 +17,19 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { src } from './helpers/server.mjs';
-import { aggregatorFile, textFile, offEngine, NOW } from './helpers/ingest.mjs';
+import { NOW } from './helpers/ingest.mjs';
 import { createInstance } from '../src/platform/db.mjs';
 import { logicalDigest } from '../src/platform/digest.mjs';
 import { setSetting } from '../src/store/db.mjs';
-import { ingestFile } from '../src/ingest/pipeline.mjs';
-import { decrypt, encrypt, readStoredFile, VaultError } from '../src/ingest/vault.mjs';
-import { storePacket } from '../src/advisor/packet.mjs';
-import { connectSimplefin, createFakeSimplefin, fakeToken } from '../src/ingest/simplefin.mjs';
+import { decrypt, encrypt } from '../src/platform/legacy-vault.mjs';
 
 const TODAY = NOW.slice(0, 10);
 const NOW_MS = Date.parse(NOW);
 const PHASES = ['staged', 'validated', 'manifest', 'renamed'];
 const LEGACY_SIMPLEFIN_AAD = 'simplefin:access';
-// The fake bridge's claim answer (createFakeSimplefin in src/ingest/simplefin.mjs, the same fake
-// claim fetch test/ingest/simplefin.test.mjs uses and whose recorded access URL shape it asserts).
+// A synthetic SimpleFIN access URL in the bridge's shape.
 const ACCESS_URL = 'https://demo:fake-demo-password@bridge.simplefin.org/simplefin';
+const CSV_BYTES = Buffer.from('Date,Amount,Description\n2032-02-01,25.00,Synthetic grocery\n2032-02-03,-900.00,Synthetic client payment\n');
 const PACKET_HTML = '<!doctype html><html><body><h1>Synthetic advisor packet</h1><p>Synthetic figures only.</p></body></html>\n';
 const PLAN_TEXT = '# Synthetic household plan\n\nKeep a synthetic emergency fund of six months.\n';
 const OP = 'op-synthetic-convert';
@@ -69,18 +67,29 @@ async function legacyInstance(t, { content = true } = {}) {
     rmSync(dataDir, { recursive: true, force: true });
   });
   const legacyKey = randomBytes(32);
-  const config = { dataDir, dataKeyFile: null, engine: 'off', clock: TODAY, demo: false, port: 0, host: '127.0.0.1', claudeCredentialFile: null, emailTransport: 'dev' };
   const fx = { dataDir, db, platform, householdId, legacyKey, uploads: [], packets: [] };
   if (content) {
-    const opts = { engine: await offEngine(), config, key: legacyKey, now: NOW };
-    const csv = await ingestFile(db, aggregatorFile('synthetic-checking.csv', [
-      { date: '2032-02-01', amount: '25.00', description: 'Synthetic grocery' },
-      { date: '2032-02-03', amount: '-900.00', description: 'Synthetic client payment' },
-    ]), opts);
-    const md = await ingestFile(db, textFile('synthetic-plan.md', PLAN_TEXT, 'text/markdown'), opts);
-    fx.uploads = [csv.fileId, md.fileId];
-    fx.packets = [await storePacket(db, { dataDir, key: legacyKey, html: PACKET_HTML, clock: TODAY, recIds: [], now: NOW })];
-    await connectSimplefin(db, fakeToken(), { config, key: legacyKey, now: NOW, fetch: createFakeSimplefin({ today: () => TODAY }) });
+    const filesDir = join(dataDir, 'files');
+    mkdirSync(filesDir, { recursive: true, mode: 0o700 });
+    const seal = (id, bytes) => writeFileSync(join(filesDir, `${id}.bin`), encrypt(legacyKey, bytes, id), { mode: 0o600 });
+    const upload = (id, name, mime, bytes, kind, parser) => {
+      db.prepare(`INSERT INTO files (id, name, mime, size, sha256, source_kind, uploaded_at, stored_path, status, parser, counts)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'imported', ?, '{}')`).run(id, name, mime, bytes.length, sha256(bytes), kind, NOW, `files/${id}.bin`, parser);
+      seal(id, bytes);
+      return id;
+    };
+    fx.uploads = [
+      upload('f-synthetic-checking-0001', 'synthetic-checking.csv', 'text/csv', CSV_BYTES, 'aggregator_csv', 'aggregator'),
+      upload('f-synthetic-plan-0000001', 'synthetic-plan.md', 'text/markdown', Buffer.from(PLAN_TEXT), 'notes', 'notes'),
+    ];
+    const packetId = `advpkt-${randomBytes(8).toString('hex')}`;
+    const packet = Buffer.from(PACKET_HTML);
+    db.prepare(`INSERT INTO advisor_packets (id, created_at, clock, rec_ids, stored_path, bytes, sha256) VALUES (?, ?, ?, '[]', ?, ?, ?)`)
+      .run(packetId, NOW, TODAY, `files/${packetId}.bin`, packet.length, sha256(packet));
+    seal(packetId, packet);
+    fx.packets = [packetId];
+    db.prepare("INSERT INTO simplefin_connection (id, access_blob, connected_at, status, accounts) VALUES (1, ?, ?, 'ok', 0)")
+      .run(encrypt(legacyKey, Buffer.from(ACCESS_URL, 'utf8'), LEGACY_SIMPLEFIN_AAD).toString('base64'), NOW);
     const stored = db.prepare('SELECT count(*) AS n FROM files WHERE stored_path IS NOT NULL').get().n;
     assert.equal(stored, 2, 'fixture: two stored uploads');
   }
@@ -99,13 +108,13 @@ const convert = (fx, over = {}) => VC.convertHouseholdVault({
 async function legacyPlaintexts(fx) {
   const out = new Map();
   for (const r of fx.db.prepare('SELECT id, stored_path, sha256, size FROM files WHERE stored_path IS NOT NULL').all()) {
-    const bytes = Buffer.from(await readStoredFile({ dataDir: fx.dataDir, key: fx.legacyKey, id: r.id, storedPath: r.stored_path }));
+    const bytes = decrypt(fx.legacyKey, readFileSync(join(fx.dataDir, r.stored_path)), r.id);
     assert.equal(sha256(bytes), r.sha256, 'fixture: files row hash matches its plaintext');
     assert.equal(bytes.length, r.size);
     out.set(`upload:${r.id}`, bytes);
   }
   for (const r of fx.db.prepare('SELECT id, stored_path, sha256, bytes FROM advisor_packets').all()) {
-    const bytes = Buffer.from(await readStoredFile({ dataDir: fx.dataDir, key: fx.legacyKey, id: r.id, storedPath: r.stored_path }));
+    const bytes = decrypt(fx.legacyKey, readFileSync(join(fx.dataDir, r.stored_path)), r.id);
     assert.equal(sha256(bytes), r.sha256, 'fixture: packet row hash matches its plaintext');
     assert.equal(bytes.length, r.bytes);
     out.set(`advisor-packet:${r.id}`, bytes);
@@ -348,12 +357,12 @@ test('no dual reader: the converted SimpleFIN secret fails the legacy decrypt an
   assert.equal(HV.openConnectionSecret(fx.handle, converted), ACCESS_URL, 'liveness: the new codec reads the converted secret');
   assert.equal(decrypt(fx.legacyKey, Buffer.from(legacy, 'base64'), LEGACY_SIMPLEFIN_AAD).toString('utf8'), ACCESS_URL, 'liveness: the legacy reader reads the legacy secret');
 
-  assert.throws(() => decrypt(fx.legacyKey, Buffer.from(converted, 'base64'), LEGACY_SIMPLEFIN_AAD), err => err instanceof VaultError, 'legacy reader, converted secret');
+  assert.throws(() => decrypt(fx.legacyKey, Buffer.from(converted, 'base64'), LEGACY_SIMPLEFIN_AAD), err => err.code === 'legacy_auth_failed', 'legacy reader, converted secret');
   await refuses(() => HV.openConnectionSecret(fx.handle, legacy), 'vault_auth_failed', 'new codec, legacy secret');
   // The formats differ, not just the keys: under one raw key neither reader accepts the other's blob.
   const sameKey = HV.dataKeyHandle({ householdId: fx.householdId, version: 1, key: fx.legacyKey });
   await refuses(() => HV.openConnectionSecret(sameKey, legacy), 'vault_auth_failed', 'new codec under the legacy key');
-  assert.throws(() => decrypt(fx.legacyKey, Buffer.from(HV.sealConnectionSecret(sameKey, ACCESS_URL), 'base64'), LEGACY_SIMPLEFIN_AAD), err => err instanceof VaultError);
+  assert.throws(() => decrypt(fx.legacyKey, Buffer.from(HV.sealConnectionSecret(sameKey, ACCESS_URL), 'base64'), LEGACY_SIMPLEFIN_AAD), err => err.code === 'legacy_auth_failed');
 });
 
 // ---------------------------------------------------------------- 6. edge cases

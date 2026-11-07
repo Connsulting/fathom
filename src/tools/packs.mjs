@@ -1,6 +1,7 @@
 // Knowledge pack tools: list_packs, get_pack_entry, search_pack_entries. All read scope.
 // Packs load from ctx.packDirs, else the repo packs/ plus `<ctx.dataDir>/packs/your-plans` when it
-// exists. Status is what the owner sees: a manifest pack linked to a packs_state row (by the row's
+// exists, where ctx.dataDir is the calling household's root (required: there is no default
+// household directory). Status is what the owner sees: a manifest pack linked to a packs_state row (by the row's
 // def.manifest, else the row id) reads packStatus(row base status, row active/exploring); a pack
 // with no row keeps the status derived from the stored facts.
 
@@ -20,13 +21,12 @@ export const REPO_PACKS_DIR = fileURLToPath(new URL('../../packs/', import.meta.
 const SEARCH_DEFAULT = 10;
 const SNIPPET = 200;
 
-// Pack directories for a data dir: the repo packs, plus the owner's private plans when present.
-export function packDirsFor(dataDir) {
+// Pack directories for a household root: the repo packs, plus its private plans when present.
+export function packDirsFor(root) {
+  if (typeof root !== 'string' || !root) throw new TypeError('pack tools need the household root as ctx.dataDir');
   const dirs = [REPO_PACKS_DIR];
-  if (dataDir) {
-    const mine = join(dataDir, 'packs', 'your-plans');
-    if (existsSync(mine)) dirs.push(mine);
-  }
+  const mine = join(root, 'packs', 'your-plans');
+  if (existsSync(mine)) dirs.push(mine);
   return dirs;
 }
 

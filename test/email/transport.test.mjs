@@ -256,11 +256,12 @@ describe('loadEmailSettings and emailStatus', () => {
 });
 
 describe('dev transport', () => {
-  test('writes one 0600 JSON file per message under <dataDir>/outbox and logs only subject and count', async () => {
+  // MT-03: the outbox directory is the caller's (a household root's outbox/, or the instance's).
+  test('writes one 0600 JSON file per message under the given outboxDir and logs only subject and count', async () => {
     const s = await secretsDir();
     try {
       const log = captureLog();
-      const transport = await createTransport(await configFor({}, s), { log });
+      const transport = await createTransport(await configFor({}, s), { outboxDir: join(s.dir, 'outbox'), log });
       assert.equal(transport.name, 'dev');
       const r1 = await transport.send(MSG);
       const r2 = await transport.send({ ...MSG, subject: 'Second synthetic subject' });
@@ -285,6 +286,15 @@ describe('dev transport', () => {
       for (const secret of [BODY_TEXT, 'SYNTHETIC-BODY-HTML', 'owner@example.invalid', 'fathom@example.invalid']) {
         assert.ok(!logged.includes(secret), `log carries no ${secret}`);
       }
+    } finally { s.done(); }
+  });
+
+  test('the dev transport needs an outboxDir and has no default location', async () => {
+    const s = await secretsDir();
+    try {
+      const config = await configFor({}, s);
+      assert.throws(() => createTransport(config, { log: captureLog() }), TypeError);
+      assert.ok(!existsSync(join(s.dir, 'outbox')), 'no outbox in the data directory');
     } finally { s.done(); }
   });
 });
@@ -537,7 +547,7 @@ describe('sendEmail and listSends', () => {
 
 test('EMAIL_CODES holds exactly the fixed failure codes', () => {
   const codes = Array.isArray(EMAIL_CODES) ? EMAIL_CODES : Object.values(EMAIL_CODES);
-  assert.deepEqual([...codes].sort(), ['auth', 'invalid', 'missing_config', 'missing_credential', 'network', 'not_found', 'other', 'rate_limited', 'rejected']);
+  assert.deepEqual([...codes].sort(), ['auth', 'invalid', 'missing_config', 'missing_credential', 'network', 'not_found', 'other', 'paused', 'rate_limited', 'recipient_unverified', 'rejected']);
 });
 
 test('no outbox appears for a non-dev transport', async () => {

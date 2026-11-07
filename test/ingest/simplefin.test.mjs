@@ -5,6 +5,7 @@
 
 import test, { before } from 'node:test';
 import assert from 'node:assert/strict';
+import { rmSync } from 'node:fs';
 import { src } from '../helpers/server.mjs';
 import { realStore, aggregatorFile, NOW } from '../helpers/ingest.mjs';
 
@@ -38,7 +39,7 @@ async function captureLogs(fn) {
   return lines.join('\n');
 }
 
-const opts = (s, extra = {}) => ({ config: s.config, key: s.key, now: NOW, clock: TODAY, fetch: S.createFakeSimplefin({ today: () => TODAY }), ...extra });
+const opts = (s, extra = {}) => ({ config: s.config, household: s.household, now: NOW, clock: TODAY, fetch: S.createFakeSimplefin({ today: () => TODAY }), ...extra });
 
 test('setup tokens decode to their claim URL; malformed tokens are refused', () => {
   assert.equal(S.decodeSetupToken(S.fakeToken()), 'https://bridge.simplefin.org/simplefin/claim/demo-fathom');
@@ -97,8 +98,10 @@ test('the access URL is encrypted at rest and never logged', () => withStore(asy
   assert.ok(!text.includes(PASSWORD), 'password not in the store');
   assert.ok(!text.includes('demo:'), 'credentials not in the store');
   assert.ok(!logs.includes(PASSWORD));
-  const { decrypt } = await src('src/ingest/vault.mjs');
-  assert.match(decrypt(s.key, Buffer.from(row.access_blob, 'base64'), 'simplefin:access').toString('utf8'), /^https:\/\/demo:fake-demo-password@bridge\.simplefin\.org\/simplefin$/);
+  // Sealed as an FTHM2 object under this household's data key, opened only through its vault.
+  assert.equal(Buffer.from(row.access_blob, 'base64').subarray(0, 5).toString('latin1'), 'FTHM2');
+  const { openAccess } = await src('src/ingest/vault.mjs');
+  assert.match(openAccess(await s.household.vault(), row.access_blob), /^https:\/\/demo:fake-demo-password@bridge\.simplefin\.org\/simplefin$/);
 }));
 
 test('a sync maps accounts, last four digits, balances and transactions; a resync dedupes', () => withStore(async (s) => {
@@ -230,21 +233,22 @@ test('Disconnect deletes the stored access URL and stops mirroring', () => withS
   assert.equal((await S.syncSimplefin(s.db, opts(s))).status, 'skipped');
 }));
 
-// The scheduler job on a demo store (the fake bridge): counts-only note, a plan run triggered after
-// rows were written, skipped when not connected, and an error code when access is revoked.
+// The scheduler job on a demo household (the fake bridge): counts-only note, a plan run triggered
+// after rows were written, skipped when not connected, and an error code when access is revoked.
 test('the simplefin-sync job runs under the scheduler, records counts and triggers planning', async () => {
-  const { tempDb } = await src('test/helpers/server.mjs');
+  const { tempInstance } = await src('test/helpers/server.mjs');
   const { seedDemo } = await src('demo/seed.mjs');
   const { createScheduler, defaultHandlers } = await src('src/jobs/scheduler.mjs');
-  const t = await tempDb();
+  const t = await tempInstance({ mode: 'demo', init: seedDemo });
   try {
-    seedDemo(t.db);
     const config = { dataDir: t.dataDir, clock: '2026-11-05', demo: true, engine: 'off', emailTransport: 'dev', publicUrl: null, simplefinHosts: S.DEFAULT_HOSTS };
     const handlers = defaultHandlers({});
-    const s = createScheduler({ db: t.db, config, handlers, now: () => new Date('2026-11-05T15:00:00Z'), tickMs: 3600000, holder: 'sf-test' });
+    let household = null;
+    const s = createScheduler({ db: t.db, config, handlers, now: () => new Date('2026-11-05T15:00:00Z'), tickMs: 3600000, holder: 'sf-test', household: () => household });
+    household = await t.household(config, { scheduler: s });
     const skipped = await s.runNow('simplefin-sync');
     assert.equal(skipped.status, 'skipped');
-    await S.connectSimplefin(t.db, S.fakeToken(), { config, now: '2026-11-05T15:00:00Z', fetch: S.createFakeSimplefin({ today: () => '2026-11-05' }) });
+    await S.connectSimplefin(t.db, S.fakeToken(), { household, now: '2026-11-05T15:00:00Z', fetch: S.createFakeSimplefin({ today: () => '2026-11-05' }) });
     const run = await s.runNow('simplefin-sync');
     assert.equal(run.status, 'ok');
     assert.equal(run.note.accounts, 4);
@@ -256,12 +260,13 @@ test('the simplefin-sync job runs under the scheduler, records counts and trigge
     await new Promise((r) => setTimeout(r, 50));
     assert.ok(t.db.prepare("SELECT count(*) AS n FROM job_runs WHERE job_id = 'plan' AND trigger = 'ingest'").get().n >= 1, 'planning triggered');
     t.db.prepare('DELETE FROM simplefin_connection').run();
-    await S.connectSimplefin(t.db, S.fakeToken('demo-revoked'), { config, now: '2026-11-05T15:00:00Z', fetch: S.createFakeSimplefin() });
+    await S.connectSimplefin(t.db, S.fakeToken('demo-revoked'), { household, now: '2026-11-05T15:00:00Z', fetch: S.createFakeSimplefin() });
     const failed = await s.runNow('simplefin-sync');
     assert.deepEqual([failed.status, failed.errorClass], ['error', 'simplefin_revoked']);
     await s.stop();
   } finally {
-    try { t.db.close(); } catch { /* closed */ }
+    t.close();
+    rmSync(t.dataDir, { recursive: true, force: true });
   }
 });
 

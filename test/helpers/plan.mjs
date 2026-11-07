@@ -3,14 +3,16 @@
 //
 // planRun(db, {engine, now, dataDir})  -> Promise<{runId, status, counts, warnings, costUsd, run}>
 //   one manual run (runNow('plan')) on a scheduler built for this call and stopped after it.
-//   `now` is the scheduler's fixed clock (an ISO date); `dataDir` feeds defaultPackDirs (null:
-//   the repo packs only). A run whose handler threw rejects with that error after the scheduler
+//   `now` is the scheduler's fixed clock (an ISO date); `dataDir` is the instance data directory
+//   whose original household root (households/<id>, its packs/your-plans) feeds defaultPackDirs
+//   through ctx.household.root (null: the repo packs only). A run whose handler threw rejects with that error after the scheduler
 //   recorded it; a skipped run (demo store) resolves with status 'skipped' and no planner fields.
 // claimPlanRun(db, {now})                -> job_runs id, for tests that call runPlanning directly
 //   (a manual-style claim, as the scheduler makes, with the plan jobs row ensured).
 
 import { createScheduler, defaultHandlers, JOBS } from '../../src/jobs/scheduler.mjs';
 import { CLOCK } from './real-store.mjs';
+import { servedStore } from './server.mjs';
 
 const quiet = { log() {} };
 let seq = 0;
@@ -28,7 +30,12 @@ export async function planRun(db, { engine = null, now = CLOCK, dataDir = null }
       throw e;
     }
   };
-  const s = createScheduler({ db, config: { clock: now, dataDir }, engine, handlers: { plan }, tickMs: 3600000, holder: `test-plan-${process.pid}-${++seq}`, log: quiet });
+  // The plan handler reads only the household root from its household context.
+  const household = { root: dataDir ? servedStore(dataDir)?.root ?? null : null };
+  const s = createScheduler({
+    db, config: { clock: now, dataDir }, engine, handlers: { plan }, household: () => household,
+    tickMs: 3600000, holder: `test-plan-${process.pid}-${++seq}`, log: quiet,
+  });
   try {
     const run = await s.runNow('plan');
     if (failure) throw failure;

@@ -4,15 +4,17 @@ import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInstance } from '../src/platform/db.mjs';
-import { openServedStore } from '../src/platform/ready.mjs';
-import { evaluateCategories, calibration, sampleRows } from '../scripts/category-eval.mjs';
+import { openReadOnlyHousehold } from '../src/platform/ready.mjs';
+import { evaluateCategories, calibration, sampleRows, evalAdmission, main } from '../scripts/category-eval.mjs';
+import { setOutbound } from '../src/platform/outbound.mjs';
+import { FUNDING_SETTING } from '../src/platform/runtime.mjs';
 
 test('deterministic holdout and aggregate calibration never return per-row values',async t=>{
   const dir=mkdtempSync(join(tmpdir(),'category-eval-')); const s=createInstance(dir,{mode:'real'});
   t.after(()=>{s.db.close();s.platform.close();rmSync(dir,{recursive:true,force:true});});
   s.db.exec("INSERT INTO accounts (id,kind,name,mask) VALUES ('a','checking','Private label','3456')");
   for(let i=0;i<5;i++) s.db.prepare("INSERT INTO transactions (account_id,date,description,amount,category,parser) VALUES ('a','2032-01-01',?,-25,?,'aggregator')").run('Secret payee '+i,i%2?'Business':'Groceries');
-  const before=readFileSync(join(dir,'fathom.sqlite')); const ro=openServedStore({dataDir:dir},{readOnly:true});
+  const before=readFileSync(join(s.root,'fathom.sqlite')); const ro=openReadOnlyHousehold({dataDir:dir},s.householdId);
   t.after(()=>{ro.db.close();ro.platform.close();});
   assert.throws(()=>ro.db.exec("UPDATE settings SET value='true' WHERE key='mode'"),/readonly/i);
   const jev={stats:()=>({costUsd:.001,latenciesMs:[10,20]}),choose:async qs=>qs.map(q=>{
@@ -22,7 +24,7 @@ test('deterministic holdout and aggregate calibration never return per-row value
   const result=await evaluateCategories(ro.db,jev,{sampleSize:3});
   assert.equal(result.rows,3); assert.equal(result.evaluated,3);
   const output=JSON.stringify(result); for(const secret of ['Secret payee','Private label','Groceries','Business','3456'])assert.ok(!output.includes(secret));
-  assert.deepEqual(before,readFileSync(join(dir,'fathom.sqlite')));
+  assert.deepEqual(before,readFileSync(join(s.root,'fathom.sqlite')));
   const rows=[{id:1},{id:2},{id:3}]; assert.deepEqual(sampleRows(rows,2),sampleRows([...rows].reverse(),2));
 });
 
@@ -36,6 +38,23 @@ test('read-only store refuses missing identity and missing eval schema without c
   const dir=mkdtempSync(join(tmpdir(),'category-ro-')); const s=createInstance(dir,{mode:'real'});
   t.after(()=>{s.db.close();s.platform.close();rmSync(dir,{recursive:true,force:true});});
   s.db.exec('DROP TABLE transaction_category_imports');
-  assert.throws(()=>openServedStore({dataDir:dir},{readOnly:true}),/store_schema_required/);
+  assert.throws(()=>openReadOnlyHousehold({dataDir:dir},s.householdId),/store_schema_required/);
+  assert.throws(()=>openReadOnlyHousehold({dataDir:dir},'hh-synthetic-unknown'),/household_unavailable/);
   assert.equal(s.db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name='transaction_category_imports'").get().n,0);
+});
+
+test('the eval takes the household engine pause and instance funding before any Jev call',async t=>{
+  const dir=mkdtempSync(join(tmpdir(),'category-adm-')); const s=createInstance(dir,{mode:'real'});
+  t.after(()=>{s.db.close();s.platform.close();rmSync(dir,{recursive:true,force:true});});
+  const fund=v=>s.platform.prepare('INSERT INTO platform_settings (key,value,updated_at) VALUES (?,?,0) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(FUNDING_SETTING,JSON.stringify(v));
+  setOutbound(s.platform,s.householdId,{engine:false});
+  assert.equal(evalAdmission(s.platform,s.householdId),'engine_paused');
+  setOutbound(s.platform,s.householdId,{engine:true});
+  assert.equal(evalAdmission(s.platform,s.householdId),'funding_unavailable');
+  fund(0); assert.equal(evalAdmission(s.platform,s.householdId),'funding_unavailable');
+  fund(5); assert.equal(evalAdmission(s.platform,s.householdId),null);
+  setOutbound(s.platform,s.householdId,{engine:false});
+  const errors=[]; const log=console.error; console.error=m=>errors.push(String(m)); t.after(()=>{console.error=log;});
+  assert.equal(await main(['--household',s.householdId,dir,'3','0.01']),1);
+  console.error=log; assert.deepEqual(errors,['category_eval_failed: engine_paused']);
 });

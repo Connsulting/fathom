@@ -1,33 +1,40 @@
-// API key and MCP connection handlers. Same contract as ./handlers.mjs, with ctx.keys the key
-// service. Key responses carry no scenario. A new key appears only in the create response.
+// API key and MCP connection handlers. Same contract as ./handlers.mjs, with ctx.keys the platform
+// key service and ctx.household the request's household: every key listed, created or revoked
+// belongs to that household. Key responses carry no scenario. A new key appears only in the create
+// response. A missing MCP secret answers 503 on every key route.
 
 import { HttpError } from './http.mjs';
 import { tools } from '../tools/index.mjs';
 import { KeyError, SCOPE_INFO } from '../mcp/keys.mjs';
-import { getSetting } from '../store/db.mjs';
+
+const KEY_STATUS = { not_found: 404, forbidden: 403, unavailable: 503 };
 
 function keyCall(fn) {
   try {
     return fn();
   } catch (err) {
-    if (err instanceof KeyError) throw new HttpError(err.code === 'not_found' ? 404 : err.code === 'forbidden' ? 403 : 400, err.message);
+    if (err instanceof KeyError) throw new HttpError(KEY_STATUS[err.code] ?? 400, err.message);
     throw err;
   }
 }
 
+const isDemo = ctx => ctx.household.mode === 'demo';
+
+// Admins (and the demo) manage every key of the household; members only their own.
 function keyOwner(ctx) {
-  if (getSetting(ctx.db, 'mode', null) === 'demo') return {};
+  const scope = { householdId: ctx.household.householdId };
+  if (isDemo(ctx)) return scope;
   const identity = ctx.auth.requireUser(ctx.req);
-  return identity.role === 'admin' ? {} : { userId: identity.id };
+  return identity.role === 'admin' ? scope : { ...scope, userId: identity.id };
 }
 
 export function listKeys(ctx) {
-  return { keys: ctx.keys.list(keyOwner(ctx)) };
+  return { keys: keyCall(() => ctx.keys.list(keyOwner(ctx))) };
 }
 
 export function createKey(ctx) {
-  const userId = getSetting(ctx.db, 'mode', null) === 'demo' ? null : ctx.auth.requireUser(ctx.req).id;
-  const { key, record } = keyCall(() => ctx.keys.create({ name: ctx.body.name, scopes: ctx.body.scopes, userId }));
+  const userId = isDemo(ctx) ? null : ctx.auth.requireUser(ctx.req).id;
+  const { key, record } = keyCall(() => ctx.keys.create({ householdId: ctx.household.householdId, name: ctx.body.name, scopes: ctx.body.scopes, userId }));
   return { key, record, ...listKeys(ctx) };
 }
 
@@ -42,7 +49,7 @@ export function mcpUrl(config) {
 
 export function mcpInfo(ctx) {
   let config = ctx.config;
-  if (!config.publicUrl && getSetting(ctx.db, 'mode', null) === 'demo') {
+  if (!config.publicUrl && isDemo(ctx)) {
     const proto = ctx.req.socket?.encrypted ? 'https' : 'http';
     config = { ...config, publicUrl: `${proto}://${ctx.req.headers.host}` };
   }
