@@ -162,6 +162,10 @@ Upgrading an existing deployment: set `FATHOM_PUBLIC_URL`, remove the former own
 configuration and Secret, and invite the first admin. Retire the old exposure only after the owner
 has signed in with a passkey on their own devices.
 
+Provision a read-only deploy key once, against the store the server already uses. `node scripts/mcp-key.mjs create --name <name> --owner <email>` writes the raw key to stdout and nothing else, and refuses an unknown owner or a second active key of the same name. Put that stdout into the secret store. The command never logs the key.
+
+After a roll, point `FATHOM_SMOKE_URL` at the server origin and `FATHOM_SMOKE_KEY_FILE` at the file holding that key, then run `node scripts/mcp-smoke.mjs`. It initializes MCP, lists tools, calls each read tool that takes no arguments, and checks that `set_recommendation_status` is refused as permission denied. It prints tool names, pass or fail, and result sizes, and exits nonzero on any failure. The request host must match `FATHOM_PUBLIC_URL` or `FATHOM_ALLOWED_HOSTS`.
+
 Onboarding on a real store starts at Tell us, because signing in happened first. The Tell us note
 is saved as an encrypted notes file and read the way an uploaded notes file is (with the engine off
 it is stored and waits). "Here is what we heard" lists only what the store holds, with where each
