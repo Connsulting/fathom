@@ -115,10 +115,6 @@
 .d-horizon .h-quiet-b li .h-gnext-none { padding: 8px 0 14px; }
 .d-horizon .h-hk-b .h-gnext:first-child { border-top-color: var(--line); }
 
-.d-horizon .h-home-empty { padding: 20px; border: 1px dashed var(--line2); border-radius: 12px; }
-.d-horizon .h-home-empty b { font-weight: 500; font-size: 16px; }
-.d-horizon .h-home-empty p { color: var(--mu); margin-top: 4px; }
-.d-horizon .h-home-empty a { color: var(--ac); }
 
 /* ---------- phone: next-thing card (overrides the shared .h-next stat row) ---------- */
 .d-horizon .h-next-deck { position: relative; }

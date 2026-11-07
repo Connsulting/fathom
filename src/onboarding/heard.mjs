@@ -53,7 +53,7 @@ const ACCOUNT_KIND = {
   roth: 'Roth', hsa: 'HSA', '529': '529 plan', business: 'Business', loan: 'Loan',
 };
 
-const EDIT_NOTES = { route: 'onboarding', step: 1, label: 'Correct in notes' };
+const EDIT_NOTES = { route: 'onboarding', step: 3, label: 'Correct in notes' };
 const EDIT_CONFIRM = { route: 'confirm', label: 'Review in Confirm' };
 const EDIT_ACCOUNTS = { route: 'accounts', label: 'Edit in Accounts' };
 
@@ -85,7 +85,8 @@ function factProv(db, row) {
 // The household as stored. `deriveHeard(db, {clock})` returns
 // { sections: [{id, title, items: [{id, label, value, prov, edit}]}], deadlines, pending, empty }.
 // edit is { route, step?, label }: the Confirm deck when a question about that item is open, the
-// Accounts page for accounts, else the Tell us step, where a corrected note supersedes it.
+// Accounts page for accounts, else the Tell us step (onboarding step 3), where a corrected note
+// supersedes it.
 export function deriveHeard(db, { clock } = {}) {
   const pending = pendingItems(db);
   const askedKeys = new Set(pending.filter(i => i.kind === 'fact_check').map(i => i.context && i.context.key).filter(Boolean));

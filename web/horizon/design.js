@@ -18,6 +18,7 @@ import * as simplefin from './screens/simplefin.js';
 import { createKeys } from './keys.js';
 import { createSwipe } from './screens/swipe.js';
 import { homeModel, healthChip, healthLine, paceReason, boardCharts, reasonText, servedGoalIds, shortDate } from './screens/home-model.js';
+import { STARTERS, existingStarterIds, otherGoals, goalsToCreate, inviteLine } from './screens/onboard-model.js';
 import { KNOWN_FIGURES } from '/shared/goals.mjs';
 import { OWNERS, OWNER_LABEL } from '/shared/rec-links.mjs';
 
@@ -69,7 +70,10 @@ const freshUi = () => ({
   curve: {}, prio: {}, modal: null, goalForm: null, goalDel: null,
   pick: { salary: null, deferral: null }, build: 0,
   buildTimer: 0, draft: {}, recReset: {}, dumped: null, noteBusy: false, understood: null,
-  under: null, inApp: false, closing: false, ret: null, y: 0, msgN: {}, det: {}, owner: 'both'
+  under: null, inApp: false, closing: false, ret: null, y: 0, msgN: {}, det: {}, owner: 'both',
+  // The Goals step (onboarding step 1 and an empty Home): selected starter ids, own titles, whether
+  // the own-goal field is open, and where a save is running ('onboarding' or 'home', else '').
+  starterSel: [], ownGoals: [], ownOpen: false, goalsBusy: ''
 });
 
 /* ---------- small helpers ---------- */
@@ -564,6 +568,10 @@ function afterHtml(m) {
 function pHome() {
   const pace = api.s.pace || null;
   const m = homeModel({ goals: api.s.goals, pace, recs: api.recs(), filter: ui.owner });
+  // No open goals: Home is the Goals step (kept while its save runs), with the data-health line.
+  if (!m.cards.length || ui.goalsBusy === 'home') {
+    return shell(`<section class="h-home h-home-gs">${goalsStartHtml('home')}${dhealthHtml(homeHealth())}</section>`);
+  }
   const subject = SUBJECT[m.filter];
   const c = clock();
   const ye = daysBetween(c, new Date(Date.UTC(c.getUTCFullYear(), 11, 31)));
@@ -575,9 +583,8 @@ function pHome() {
     + `<p class="h-home-sub">${plural(before, 'thing')} before Dec 31</p></div>`;
   const health = dhealthHtml(homeHealth());
   const cards = m.expanded.length ? `<div class="h-gcards">${m.expanded.map((x) => goalCardHome(x, subject)).join('')}</div>` : '';
-  const empty = m.cards.length ? '' : `<div class="h-home-empty"><b>No goals yet.</b><p>Pace and next actions hang off your goals. ${goA('goals', 'Add a goal')}</p></div>`;
   const goalsH = `<div class="h-home-sec"><h2>Goals</h2>${goA('goals', 'All goals')}</div>`;
-  const rest = `${goalsH}${cards}${empty}${quietHtml(m.collapsed)}${hkHtml(m.housekeeping)}`;
+  const rest = `${goalsH}${cards}${quietHtml(m.collapsed)}${hkHtml(m.housekeeping)}`;
   const inner = isPhone()
     ? `${ownerFilterHtml(m)}${head}${nextHtml(m, subject)}${afterHtml(m)}${health}${rest}`
     : `<header class="h-home-top">${head}${ownerFilterHtml(m)}</header>${health}${rest}`;
@@ -1302,7 +1309,7 @@ function pSettings() {
     ['email', 'Email', 'The monthly digest and what lands in your inbox.']
   ];
   // A real store reaches onboarding again as Setup, to add more context.
-  if (api.s?.live?.mode === 'real') rows.push(['onboarding', 'Setup', 'Tell us more about the household, or attach more files.']);
+  if (api.s?.live?.mode === 'real') rows.push(['onboarding', 'Setup', 'Goals, priorities, notes and files.']);
   const row = (link, desc) => `<li class="h-set-r">${link}<p>${esc(desc)}</p>${icon('arrow')}</li>`;
   let list = rows.map(([k, l, d]) => row(goA(k, l), d)).join('');
   if (id) list += row('<a href="/account">Account</a>', 'Passkeys and sign out.');
@@ -1351,20 +1358,23 @@ function pAdd() {
 
 /* ---------- onboarding ---------- */
 
-const STEPS = ['Sign in', 'Tell us', 'Accounts', 'Confirm', 'Priorities', 'First brief'];
+// The rail's three labelled steps; step 0 (demo sign-in) comes before them, steps 4 and 5 after.
+const OB_RAIL = ['Goals', 'Curve', 'Tell us'];
 
 function pOnboarding(step) {
   const ob = api.s.onboarding || {};
   const first = api.s?.live?.mode === 'real' ? 1 : 0; // a real store has no demo sign-in step
   const s = Math.max(first, Math.min(5, step));
   const W = 600;
-  const rs = STEPS.slice(first);
-  const ri = s - first;
-  const sx = (i) => 10 + (i / (rs.length - 1)) * (W - 20);
-  const rail = `<div class="h-ob-rail"><svg viewBox="0 0 ${W} 20" preserveAspectRatio="none" aria-hidden="true"><line class="bg" x1="10" x2="${W - 10}" y1="10" y2="10"/><line class="fg" x1="10" x2="${sx(ri)}" y1="10" y2="10"/>${rs.map((_, i) => `<circle class="${i < ri ? 'done' : i === ri ? 'cur' : ''}" cx="${sx(i)}" cy="10" r="${i === ri ? 5 : 3.5}"/>`).join('')}</svg>
-    <div class="h-ob-steps">${rs.map((l, i) => `<span class="${i === ri ? 'on' : ''}" style="left:${(sx(i) / W) * 100}%">${l}</span>`).join('')}</div></div>`;
-  const next = (label = 'Continue', n = s + 1) => btn(`${label}${icon('arrow')}`, `data-onboard="${n}"`, 'pri');
+  const n = OB_RAIL.length;
+  // Rail position: -1 before Goals (step 0), 0 to 2 on steps 1 to 3, n (all done) on steps 4 and 5.
+  const ri = s < 1 ? -1 : Math.min(s - 1, n);
+  const sx = (i) => 10 + (i / (n - 1)) * (W - 20);
+  const rail = `<div class="h-ob-rail"><svg viewBox="0 0 ${W} 20" preserveAspectRatio="none" aria-hidden="true"><line class="bg" x1="10" x2="${W - 10}" y1="10" y2="10"/><line class="fg" x1="10" x2="${ri < 0 ? 10 : sx(Math.min(ri, n - 1))}" y1="10" y2="10"/>${OB_RAIL.map((_, i) => `<circle class="${i < ri ? 'done' : i === ri ? 'cur' : ''}" cx="${sx(i)}" cy="10" r="${i === ri ? 5 : 3.5}"/>`).join('')}</svg>
+    <div class="h-ob-steps">${OB_RAIL.map((l, i) => `<span class="${i === ri ? 'on' : ''}" style="left:${(sx(i) / W) * 100}%">${l}</span>`).join('')}</div></div>`;
+  const next = (label = 'Continue', to = s + 1) => btn(`${label}${icon('arrow')}`, `data-onboard="${to}"`, 'pri');
   const back = s > first ? btn('Back', `data-onboard="${s - 1}"`, 'ghost') : '';
+  const kick = s >= 1 && s <= 3 ? `<div class="h-kicker" data-ob-kicker="1">Step ${s} of ${n}</div>` : '';
   let body = '';
   if (s === 0) {
     const who = api.identity?.();
@@ -1375,37 +1385,28 @@ function pOnboarding(step) {
       <div class="h-ob-who" data-ob-who="1">${icon('lock')}<div>${line}</div></div>
       <div class="h-ob-nav">${next()}</div>`;
   } else if (s === 1) {
+    body = kick + goalsStartHtml('onboarding', back);
+  } else if (s === 2) {
+    body = `${kick}${prioHtml(ob)}
+      <div class="h-ob-nav">${back}${next()}</div>`;
+  } else if (s === 3) {
+    // Tell us, then the connections: SimpleFIN Bridge (a synthetic bridge on a demo store) and the
+    // accounts already imported from files. Imported names are file text: escaped, never tokens.
     const draft = String(ui.dumped ?? '');
     const dirty = draft.trim() !== '';
     const go = noteGo(dirty, ui.noteBusy);
-    body = `<h1>Dump everything in</h1><p class="h-lede">Write it the way you would tell a friend: who is in the house, how money comes in, what is coming up, what worries you. It is stored encrypted and read the way an uploaded notes file is. Attach whatever you have.</p>
+    const imported = arr(api.s.accounts).filter((a) => a.mirror !== 'connected');
+    const lbl = (a, v) => (a.imported === false ? T(v) : esc(v));
+    body = `${kick}<h1>Dump everything in</h1><p class="h-lede">Write it the way you would tell a friend: who is in the house, how money comes in, what is coming up, what worries you. It is stored encrypted and read the way an uploaded notes file is. Attach whatever you have.</p>
       <textarea class="h-dump" rows="9" data-dump="1" aria-label="Tell us about your household" placeholder="For example: we file jointly in Virginia, I run an S corporation, my spouse freelances, we have two kids and a third on the way.">${esc(draft)}</textarea>
       ${understoodHtml()}
       ${ingest.addFiles('onboarding')}
-      <div class="h-ob-nav">${back}${go}</div>`;
-  } else if (s === 2) {
-    // Real connections through SimpleFIN Bridge (a synthetic bridge on a demo store), plus the
-    // accounts already imported from files. Imported names are file text: escaped, never tokens.
-    const sf = api.s?.live?.simplefin || {};
-    const imported = arr(api.s.accounts).filter((a) => a.mirror !== 'connected');
-    const lbl = (a, v) => (a.imported === false ? T(v) : esc(v));
-    body = `<h1>Mirror your accounts</h1><p class="h-lede">Read-only. ${esc(api.s.meta.product || 'Fathom')} sees balances and transactions so the brief stays current. It cannot move money, place trades or change anything.</p>
+      <div class="h-ob-conn"><div class="h-sub-h">Mirror your accounts</div><p class="h-mute sm">Read-only. ${esc(api.s.meta.product || 'Fathom')} sees balances and transactions so the brief stays current. It cannot move money, place trades or change anything.</p>
       ${simplefin.block()}
-      ${imported.length ? `<div class="h-sub-h">Already in Fathom, not mirrored</div><ul class="h-insts">${imported.map((a) => `<li><div><b>${lbl(a, a.name)}</b><span>${lbl(a, a.inst || '')}${a.mask ? `, ending ${esc(a.mask)}` : ''}</span></div></li>`).join('')}</ul>` : ''}
-      <div class="h-ob-nav">${back}${next(sf.connected ? 'Continue' : 'Skip for now')}</div>`;
-  } else if (s === 3) {
-    body = heardHtml(back, next);
+      ${imported.length ? `<div class="h-sub-h">Already in Fathom, not mirrored</div><ul class="h-insts">${imported.map((a) => `<li><div><b>${lbl(a, a.name)}</b><span>${lbl(a, a.inst || '')}${a.mask ? `, ending ${esc(a.mask)}` : ''}</span></div></li>`).join('')}</ul>` : ''}</div>
+      <div class="h-ob-nav">${back}${go}</div>`;
   } else if (s === 4) {
-    body = `<h1>Where on the curve</h1><p class="h-lede">Every choice trades one good thing for another. Tell us how much each matters. You can change this any time.</p>
-      <div class="h-prios">${arr(ob.priorities).map((p) => {
-        const raw = ui.prio[p.id] ?? p.value;
-        const v = raw > 1 ? raw / 100 : raw;
-        const parts = api.txt(p.label).split(/\s+vs\.?\s+/i);
-        const cap = (x) => x.charAt(0).toUpperCase() + x.slice(1);
-        const ends = parts.length === 2 ? parts.map(cap) : [api.txt(p.label), ''];
-        return `<div class="h-curve" data-prio-box><div class="h-curve-ends"><span class="${v < 0.5 ? 'lean' : ''}">${esc(ends[0])}</span><span class="${v > 0.5 ? 'lean' : ''}">${esc(ends[1])}</span></div><input type="range" min="0" max="100" value="${Math.round(v * 100)}" data-prio="${esc(p.id)}" aria-label="${esc(api.txt(p.label))}"></div>`;
-      }).join('')}</div>
-      <div class="h-ob-nav">${back}${next('Build my year')}</div>`;
+    body = heardHtml(back, next);
   } else {
     const h = api.heard();
     const lines = [
@@ -1429,11 +1430,110 @@ function pOnboarding(step) {
   return `<div class="h-ob"><div class="h-ob-top"><span class="h-mark">${MARK}<span>${esc(api.s.meta.product || 'Fathom')}</span></span>${exit}</div>${rail}<div class="h-ob-card">${body}</div></div>`;
 }
 
+// "Where on the curve": the priority sliders, saved to the tradeoff curve on release.
+function prioHtml(ob) {
+  return `<h1>Where on the curve</h1><p class="h-lede">Every choice trades one good thing for another. Tell us how much each matters. You can change this any time.</p>
+      <div class="h-prios">${arr(ob.priorities).map((p) => {
+        const raw = ui.prio[p.id] ?? p.value;
+        const v = raw > 1 ? raw / 100 : raw;
+        const parts = api.txt(p.label).split(/\s+vs\.?\s+/i);
+        const cap = (x) => x.charAt(0).toUpperCase() + x.slice(1);
+        const ends = parts.length === 2 ? parts.map(cap) : [api.txt(p.label), ''];
+        return `<div class="h-curve" data-prio-box><div class="h-curve-ends"><span class="${v < 0.5 ? 'lean' : ''}">${esc(ends[0])}</span><span class="${v > 0.5 ? 'lean' : ''}">${esc(ends[1])}</span></div><input type="range" min="0" max="100" value="${Math.round(v * 100)}" data-prio="${esc(p.id)}" aria-label="${esc(api.txt(p.label))}"></div>`;
+      }).join('')}</div>`;
+}
+
+// The Goals step, on onboarding step 1 (where 'onboarding', primary Continue) and on a Home with no
+// open goals (where 'home', primary Save goals). Selection is ui state until the primary button.
+function goalsStartHtml(where, back = '') {
+  const goals = arr(api.s.goals);
+  const have = new Set(existingStarterIds(goals));
+  const check = `<i class="h-starter-c" aria-hidden="true">${icon('check')}</i>`;
+  const cards = STARTERS.map((st) => {
+    const on = have.has(st.id) || ui.starterSel.includes(st.id);
+    return `<button type="button" class="h-starter${on ? ' on' : ''}" data-goal-starter="${esc(st.id)}" aria-pressed="${on}"${have.has(st.id) ? ' aria-disabled="true"' : ''}><span class="h-starter-t"><b>${esc(st.title)}</b><span>${esc(st.sub)}</span></span>${check}</button>`;
+  }).join('');
+  const own = `<button type="button" class="h-starter h-starter-own" data-goal-own="1" aria-expanded="${ui.ownOpen}"><span class="h-starter-t"><b>Write your own</b><span>In your words. Fathom asks for a target later.</span></span><i class="h-starter-c" aria-hidden="true">${icon('plus')}</i></button>`;
+  const field = ui.ownOpen
+    ? `<div class="h-own-add"><input type="text" class="h-own-in" maxlength="120" autocomplete="off" data-goal-own-input="1" data-draft="goals-own" aria-label="Your own goal, in your words" placeholder="For example: a sabbatical in the mountains" value="${esc(ui.draft['goals-own'] || '')}">${btn('Add', 'data-goal-own-add="1"')}</div>` : '';
+  const owned = ui.ownGoals.length
+    ? `<ul class="h-own-l">${ui.ownGoals.map((t, i) => `<li class="h-starter on" data-goal-own-item="${i}"><span class="h-starter-t"><b>${esc(t)}</b><span>Your own goal</span></span><button type="button" class="h-own-x" data-goal-own-remove="${i}" aria-label="Remove ${esc(t)}">${icon('x')}</button></li>`).join('')}</ul>` : '';
+  const others = otherGoals(goals);
+  const goalsLink = api.demo() !== 'fresh' ? goA('goals', 'Goals') : 'Goals';
+  const existing = others.length
+    ? `<div class="h-gs-have" data-goals-existing="1"><div class="h-sub-h">Already your goals</div><ul>${others.map((g) => `<li>${icon('check')}<span>${goalTitle(g)}</span></li>`).join('')}</ul><p class="h-mute sm">These stay as they are. Change them on ${goalsLink}.</p></div>` : '';
+  const busy = ui.goalsBusy === where;
+  const label = where === 'home' ? 'Save goals' : `Continue${icon('arrow')}`;
+  const primary = busy
+    ? btn('Saving goals', `data-goals-save="${where}" disabled aria-busy="true"`, 'pri')
+    : btn(label, `data-goals-save="${where}"`, 'pri');
+  return `<div class="h-gs" data-goals-start="1"><h1>What is the money for?</h1><p class="h-lede">Fathom can only say if you are ahead or behind once it knows where you are going. Pick a few or write your own. You can change them any time.</p>
+      <div class="h-starters">${cards}${own}</div>${field}${owned}${existing}${obInviteHtml()}
+      <div class="h-ob-nav">${back}${primary}</div></div>`;
+}
+
+// "Add your spouse": a link to the household page for an admin on a real store, an explanation on
+// the demo, nothing for anyone else.
+function obInviteHtml() {
+  const line = inviteLine({ mode: api.s?.live?.mode, identity: api.identity?.() });
+  const same = 'They see their own actions and the same goals.';
+  const dot = '<i class="h-inv-dot" aria-hidden="true"></i>';
+  if (line.kind === 'link') return `<div class="h-ob-inv" data-ob-invite="1" data-kind="link">${dot}<p><a href="${esc(line.href)}">Add your spouse</a>. ${same}</p></div>`;
+  if (line.kind === 'text') return `<div class="h-ob-inv" data-ob-invite="1" data-kind="text">${dot}<p>In your own ${esc(api.s.meta.product || 'Fathom')}, the household admin adds a spouse from Settings, Household. ${same}</p></div>`;
+  return '';
+}
+
+// A starter card toggles in place (no redraw), so focus stays on it for Space and Enter.
+function toggleStarter(el) {
+  const id = el.dataset.goalStarter;
+  if (el.getAttribute('aria-disabled') === 'true' || ui.goalsBusy) return;
+  const on = !ui.starterSel.includes(id);
+  ui.starterSel = on ? [...ui.starterSel, id] : ui.starterSel.filter((x) => x !== id);
+  el.setAttribute('aria-pressed', String(on));
+  el.classList.toggle('on', on);
+}
+
+// Adds the typed own goal to the selection; a blank or repeated title adds nothing.
+function addOwnGoal() {
+  const t = String(ui.draft['goals-own'] ?? '').trim();
+  if (!t) return;
+  if (!ui.ownGoals.some((x) => x.toLowerCase() === t.toLowerCase())) ui.ownGoals = [...ui.ownGoals, t];
+  ui.draft['goals-own'] = '';
+  draw();
+  root.querySelector('[data-goal-own-input]')?.focus();
+}
+
+// Creates the selected goals one at a time through the goals API, with no target. A failure stops
+// there and keeps what is still unsaved selected (core shows the error line). On onboarding it then
+// goes on to the curve; on Home the new goals redraw it as the normal Home.
+async function saveStarterGoals(where) {
+  if (ui.goalsBusy) return;
+  const bodies = goalsToCreate({ starterIds: ui.starterSel, ownTitles: ui.ownGoals, goals: api.s.goals });
+  if (bodies.length) {
+    ui.goalsBusy = where;
+    draw();
+    for (const b of bodies) {
+      const saved = await api.goalCreate(b);
+      if (!saved) { ui.goalsBusy = ''; draw(); return; }
+      const k = b.title.toLowerCase();
+      ui.starterSel = ui.starterSel.filter((id) => STARTERS.find((st) => st.id === id)?.title.toLowerCase() !== k);
+      ui.ownGoals = ui.ownGoals.filter((t) => t.toLowerCase() !== k);
+    }
+  }
+  ui.goalsBusy = '';
+  ui.starterSel = [];
+  ui.ownGoals = [];
+  ui.ownOpen = false;
+  ui.draft['goals-own'] = '';
+  if (where === 'onboarding') { ui.modal = null; ui.build = 0; api.onboard(2); return; }
+  draw();
+}
+
 // The Tell us primary button: Continue with nothing typed, Save and read once there is text.
 function noteGo(dirty, busy) {
   if (busy) return btn('Reading your note', 'data-ob-go="1" disabled aria-busy="true"', 'pri');
   if (dirty) return btn(`Save and read${icon('arrow')}`, 'data-ob-go="1" data-savenote="1"', 'pri');
-  return btn(`Continue${icon('arrow')}`, 'data-ob-go="1" data-onboard="2"', 'pri');
+  return btn(`Continue${icon('arrow')}`, 'data-ob-go="1" data-onboard="4"', 'pri');
 }
 
 // What the Tell us note added, as the server read it. Facts, goals and open questions come from the
@@ -1460,7 +1560,7 @@ function heardHtml(back, next) {
   const h = api.heard();
   const canLeave = api.demo() !== 'fresh';
   const edit = (e) => {
-    if (!e || e.route === 'onboarding' || !canLeave) return `<a href="${href('onboarding', { step: 1 })}" data-onboard="1">Correct in notes</a>`;
+    if (!e || e.route === 'onboarding' || !canLeave) return `<a href="${href('onboarding', { step: 3 })}" data-onboard="3">Correct in notes</a>`;
     return goA(e.route, esc(e.label));
   };
   const sections = arr(h.sections).map((sec) => `<div class="h-heard" data-heard="${esc(sec.id)}"><div class="h-sub-h">${esc(sec.title)}</div><ul class="h-heard-l">${arr(sec.items).map((it) =>
@@ -1681,6 +1781,7 @@ function onClick(e) {
   if (cn && root.contains(cn)) { e.preventDefault(); connect.onClick(cn, connectH); return; }
   if (ingest.handleClick(e)) return;
   if (email.handleClick(e)) return;
+  if (goalsStartClick(e)) return;
   const gt = e.target.closest('[data-goal],[data-goal-h]');
   if (gt && root.contains(gt)) {
     e.preventDefault();
@@ -1738,6 +1839,23 @@ function onClick(e) {
     if (d.name) params.name = d.name;
     api.go(d.go, params);
   }
+}
+
+// The Goals step's controls: starter cards, Write your own, Add, Remove and the primary button.
+function goalsStartClick(e) {
+  const t = e.target.closest('[data-goal-starter],[data-goal-own],[data-goal-own-add],[data-goal-own-remove],[data-goals-save]');
+  if (!t || !root.contains(t) || !t.closest('[data-goals-start]')) return false;
+  e.preventDefault();
+  const d = t.dataset;
+  if (d.goalStarter != null) toggleStarter(t);
+  else if (d.goalOwn != null) {
+    ui.ownOpen = !ui.ownOpen;
+    draw();
+    if (ui.ownOpen) root.querySelector('[data-goal-own-input]')?.focus();
+  } else if (d.goalOwnAdd != null) addOwnGoal();
+  else if (d.goalOwnRemove != null) { ui.ownGoals = ui.ownGoals.filter((_, i) => i !== Number(d.goalOwnRemove)); draw(); }
+  else if (d.goalsSave) saveStarterGoals(d.goalsSave);
+  return true;
 }
 
 // Ask on the Home next-thing card: the rec's Ask thread when it has one, else the rec dialog with
@@ -1871,6 +1989,8 @@ const POINTER = ['pointerdown', 'pointermove', 'pointerup', 'pointercancel'];
 // Root keys that are not shortcuts: Enter in the Ask composer and rename field first. Shortcuts go
 // through the registry in onDocumentKey, so Escape is never prevented here.
 function onKey(e) {
+  // Enter in the own-goal field adds it and submits nothing else.
+  if (e.key === 'Enter' && !e.isComposing && e.target.matches?.('[data-goal-own-input]')) { e.preventDefault(); addOwnGoal(); return; }
   if (chatScreen.onFieldKey(e)) return;
   if ((e.key === 'Enter' || e.key === ' ') && e.target.matches?.('[data-wg][tabindex]')) { e.preventDefault(); onClick(e); }
   if (e.key === 'Escape' && ui.modal != null) { ui.modal = null; draw(); }

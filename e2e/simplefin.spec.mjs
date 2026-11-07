@@ -67,25 +67,26 @@ plainTest('a used setup token shows a clear error and stays disconnected', async
   await expect(page.locator('[data-sf-connected]')).toHaveCount(0);
 });
 
-// The demo store has finished onboarding; serve every scenario as fresh on the Accounts step.
+// The demo store has finished onboarding; serve every scenario as fresh on Tell us (step 3), which
+// holds the connections block.
 async function forceAccountsStep(page) {
   await page.route('**/api/**', async (route) => {
     const res = await route.fetch();
     if (!String(res.headers()['content-type'] || '').includes('application/json')) return route.fulfill({ response: res });
     const body = await res.json();
     const sc = body && body.meta ? body : body && body.scenario;
-    if (sc && sc.live) Object.assign(sc.live, { demo: 'fresh', onboardStep: 2 });
+    if (sc && sc.live) Object.assign(sc.live, { demo: 'fresh', onboardStep: 3 });
     return route.fulfill({ response: res, json: body });
   });
 }
 
-test('the onboarding Accounts step connects through SimpleFIN and lists imported accounts', async ({ page }) => {
+test('the onboarding Tell us step connects through SimpleFIN and lists imported accounts', async ({ page }) => {
   await forceAccountsStep(page);
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: 'Mirror your accounts' })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 1, name: 'Dump everything in' })).toBeVisible();
+  await expect(page.locator('[data-sf-box]')).toBeVisible();
   await expect(page.locator('.h-insts button', { hasText: 'Connect' })).toHaveCount(0);
   await expect(page.getByText('Already in Fathom, not mirrored')).toBeVisible();
-  await expect(page.getByRole('button', { name: /Skip for now/ })).toBeVisible();
   await connectDemo(page);
   await expect(page.locator('[data-sf-connected]')).toContainText('Connected to SimpleFIN, 4 accounts');
   await expect(page.getByRole('button', { name: /^Continue/ })).toBeVisible();
