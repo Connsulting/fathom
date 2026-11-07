@@ -1,6 +1,7 @@
 .git
 .github
 node_modules
+evals/out
 data
 .e2e-data*
 mock-v2/private
