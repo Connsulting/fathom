@@ -298,6 +298,7 @@ function applyRoute(r, opts) {
   const h = routeHash(next);
   const changed = h !== routeHash(cur);
   cur = next;
+  if (changed && next.name === 'ask' && next.params.id) refreshThreadTitle(next.params.id);
   routeStep = next.name === 'onboarding' ? next.params.step : null;
   stateCache.ver = -1;
   if (window.location.hash !== h) {
@@ -749,6 +750,17 @@ const THREAD_ACTS = new Set(['archive', 'trash', 'restore', 'delete']);
 
 function threads() {
   return threadList().slice();
+}
+
+async function refreshThreadTitle(id) {
+  const before = rawThread(id);
+  const data = await getRead('/api/threads/' + encodeURIComponent(id));
+  const current = rawThread(id);
+  if (!data?.thread || !before || !current || current.title !== before.title || current.titleSource !== before.titleSource) return;
+  if (current.title === data.thread.title && current.titleSource === data.thread.titleSource) return;
+  current.title = data.thread.title;
+  current.titleSource = data.thread.titleSource;
+  notify();
 }
 
 function askStarters() {
