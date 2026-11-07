@@ -172,14 +172,16 @@ export async function runCases({ cases, live = false, maxUsd = 100, outDir, scri
 export async function writeScorecard(dir, scorecard) {
   await mkdir(dir, { recursive: true });
   const lines = ['# Ask evals', '', `Tier: ${scorecard.live ? 'live' : 'scripted'}. Cost: $${scorecard.costUsd.toFixed(6)}. Stop: ${scorecard.stopped ?? 'none'}.`, '',
-    '| Case | Result | Tools called / required | Unsourced / self-computed | Words / budget | Cost |',
+    '| Case | Result | Tools called / required | unsourced / self-computed / rounded / spelled_out / context-only | Words / budget | Cost |',
     '| --- | --- | --- | --- | --- | --- |'];
+  const kindCount = (grade, kind) => (grade?.[kind === 'self-computed' ? 'selfComputed' : kind === 'spelled_out' ? 'spelledOut' : kind === 'context-only' ? 'contextOnly' : kind] ?? []).length;
   for (const c of scorecard.cases) {
     const names = c.turns.flatMap(t => t.tools.map(r => r.name)).join(', ');
     const required = c.turns.flatMap(t => t.required.checks.map(r => `${r.name}:${r.ok ? 'ok' : 'missing'}`)).join(', ');
-    const un = c.turns.reduce((s, t) => s + t.figures.unsourced.length + t.attempts.reduce((n, a) => n + a.figures.unsourced.length, 0), 0);
-    const arithmetic = c.turns.reduce((s, t) => s + t.figures.selfComputed.length + t.attempts.reduce((n, a) => n + a.figures.selfComputed.length, 0), 0);
-    lines.push(`| ${c.id} | ${c.status} | ${names || 'none'} / ${required} | ${un} / ${arithmetic} | ${c.turns.map(t => `${t.length.words}/${t.length.maxWords}`).join(', ')} | $${c.costUsd.toFixed(6)} |`);
+    const grades = c.turns.flatMap(t => [t.figures, ...t.attempts.map(a => a.figures)]);
+    const counts = ['unsourced', 'self-computed', 'rounded', 'spelled_out', 'context-only']
+      .map(kind => grades.reduce((s, grade) => s + kindCount(grade, kind), 0));
+    lines.push(`| ${c.id} | ${c.status} | ${names || 'none'} / ${required} | ${counts.join(' / ')} | ${c.turns.map(t => `${t.length.words}/${t.length.maxWords}`).join(', ')} | $${c.costUsd.toFixed(6)} |`);
   }
   await writeFile(join(dir, 'scorecard.json'), JSON.stringify(scorecard, null, 2) + '\n');
   await writeFile(join(dir, 'summary.md'), lines.join('\n') + '\n');
