@@ -1,16 +1,19 @@
 // Owner display names on Money Accounts: inline rename, then the same name in the switcher and
 // on the confirm card that names the account.
 
-import { test, expect, resetDemo, gotoRoute } from './helpers.mjs';
+import { test, expect, resetDemo, gotoRoute, deckFind } from './helpers.mjs';
 
 test.describe('account display names', { tag: '@an-acN' }, () => {
   test.beforeEach(async ({ request }) => {
     await resetDemo(request);
   });
 
-  test('rename on Accounts shows in the switcher and on a question card', async ({ page }) => {
+  test('rename on Accounts shows in the switcher and on a question card', async ({ page, request }) => {
+    const scenario = await (await request.get('/api/scenario')).json();
+    const item = scenario.live.ingest.items.find((i) => i.kind === 'account_owner' && i.subject);
+    expect(item, 'demo has an account question').toBeTruthy();
     await gotoRoute(page, 'accounts');
-    const first = page.locator('.h-acc-name').first();
+    const first = page.locator(`[data-account="${item.subject}"] .h-acc-name`);
     await expect(first).toBeVisible();
     await first.click();
     const input = page.locator('[data-acc-name]');
@@ -23,7 +26,8 @@ test.describe('account display names', { tag: '@an-acN' }, () => {
     await page.keyboard.press('Escape');
 
     await gotoRoute(page, 'confirm');
-    await expect(page.getByText('Household reserve').first()).toBeVisible();
+    const card = await deckFind(page, `[data-item="${item.id}"]`);
+    await expect(card.locator('[data-field="name"]')).toContainText('Household reserve');
   });
 });
 

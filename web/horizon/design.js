@@ -1272,7 +1272,7 @@ function accountsBody() {
     const sub = a.subtitle != null ? a.subtitle : [a.inst, a.owner].filter(Boolean).join(', ');
     return sub ? lbl(a, sub) : '';
   };
-  const list = keys.map((k) => section(k, `<div class="h-accs">${groups[k].map((a) => `<div class="h-acc ${a.mirror}">
+  const list = keys.map((k) => section(k, `<div class="h-accs">${groups[k].map((a) => `<div class="h-acc ${a.mirror}" data-account="${esc(a.id)}">
       <div class="h-acc-n"><b>${nameHtml(a)}</b><span>${subHtml(a)}</span></div>
       <div class="h-acc-v">${a.fig ? figHtml(a.fig) : '<span class="h-mute">No balance</span>'}</div>
       <div class="h-acc-m"><i></i>${mirror[a.mirror] || esc(a.mirror)}</div>
