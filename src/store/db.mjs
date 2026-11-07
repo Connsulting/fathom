@@ -23,15 +23,18 @@ export function openDb(path) {
   return db;
 }
 
-export function listMigrations() {
-  return readdirSync(MIGRATIONS_DIR)
+// Migrations in `dir` (default: the financial store's), in numeric order.
+export function listMigrations(dir = MIGRATIONS_DIR) {
+  return readdirSync(dir)
     .map(f => MIGRATION_FILE.exec(f))
     .filter(Boolean)
-    .map(m => ({ id: Number(m[1]), name: m[2], file: join(MIGRATIONS_DIR, m[0]) }))
+    .map(m => ({ id: Number(m[1]), name: m[2], file: join(dir, m[0]) }))
     .sort((a, b) => a.id - b.id);
 }
 
-export function migrate(db) {
+// Apply pending migrations from `dir` with ids up to `through` (the offline platform migration
+// stops the financial store just before the platform migration, 022, extracts accounts).
+export function migrate(db, { dir = MIGRATIONS_DIR, through = Infinity } = {}) {
   db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
@@ -40,7 +43,8 @@ export function migrate(db) {
   const done = new Set(db.prepare('SELECT id FROM schema_migrations').all().map(r => r.id));
   const applied = [];
   const record = db.prepare('INSERT INTO schema_migrations (id, name, applied_at) VALUES (?, ?, ?)');
-  for (const m of listMigrations()) {
+  for (const m of listMigrations(dir)) {
+    if (m.id > through) break;
     if (done.has(m.id)) continue;
     const sql = readFileSync(m.file, 'utf8');
     // A migration that rebuilds a table other tables reference (SQLite cannot alter a CHECK) opens

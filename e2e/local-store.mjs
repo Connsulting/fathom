@@ -45,8 +45,9 @@ export async function localPort() {
 export async function startEnrolledServer({ dataDir, clock, dataKeyFile } = {}) {
   refuseSuppliedTarget();
   if (!ownedDirectories.has(dataDir)) throw new Error('An owned temporary store is required');
-  const [{ startServer }, { loadConfig }, { createAuthStore }] = await Promise.all([
+  const [{ startServer }, { loadConfig }, { createAuthStore }, { openDb }, { PLATFORM_FILE }] = await Promise.all([
     import('../src/server.mjs'), import('../src/config.mjs'), import('../src/auth/store.mjs'),
+    import('../src/store/db.mjs'), import('../src/platform/db.mjs'),
   ]);
   const port = await localPort();
   const url = `http://localhost:${port}`;
@@ -65,11 +66,17 @@ export async function startEnrolledServer({ dataDir, clock, dataKeyFile } = {}) 
   });
   const app = await startServer(config);
   try {
-    const store = createAuthStore(app.db);
-    store.ensureHousehold();
-    const user = store.inviteUser('owner@example.test', { role: 'admin' });
-    app.db.prepare('UPDATE users SET enrolled_at = ? WHERE id = ?').run(Date.now(), user.id);
-    const session = store.createSession(user.id);
+    // Accounts live in the platform DB beside the store; the server created or opened it.
+    const platform = openDb(join(dataDir, PLATFORM_FILE));
+    let session;
+    try {
+      const store = createAuthStore(platform);
+      const household = store.servedHousehold();
+      const { user, token } = store.invite(household.id, 'owner@example.test', { role: 'admin' });
+      store.consumeInvitation(token, user.id);
+      store.markEnrolled(user.id);
+      session = store.createSession(user.id);
+    } finally { platform.close(); }
     return {
       ...app,
       url,

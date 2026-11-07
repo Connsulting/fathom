@@ -7,7 +7,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import net from 'node:net';
 import {
-  ROOT, DB_FILE, SERVER_TIMEOUT, withServer, tempDir, freePort, childEnv, src, withAuthenticatedServer,
+  ROOT, DB_FILE, PLATFORM_FILE, SERVER_TIMEOUT, withServer, tempDir, freePort, childEnv, src, withAuthenticatedServer, withPlatform,
 } from './helpers/server.mjs';
 import { spawn } from 'node:child_process';
 
@@ -39,6 +39,10 @@ test('npm start on an empty data dir with FATHOM_DEMO unset serves the demo UI a
     assert.equal(h.json.schema, latestMigrationId());
 
     assert.ok(existsSync(join(dataDir, DB_FILE)), 'fathom.sqlite is created in FATHOM_DATA');
+    assert.ok(existsSync(join(dataDir, PLATFORM_FILE)), 'a synthetic platform.sqlite is created beside it');
+    const served = await withPlatform(join(dataDir, PLATFORM_FILE), (platform, store) => store.servedHousehold());
+    assert.equal(served.mode, 'demo');
+    assert.equal(served.status, 'active');
     assert.match(s.output(), /fathom listening on http:\/\//);
   });
 });
@@ -50,7 +54,15 @@ test('FATHOM_DEMO=0 on an empty data dir serves a valid empty scenario', T, asyn
     const { openDb } = await src('src/store/db.mjs');
     const db = openDb(join(s.dataDir, DB_FILE));
     let planned;
-    try { planned = db.prepare('SELECT rec_id FROM planner_recs').all().map(r => r.rec_id); } finally { db.close(); }
+    let identity;
+    try {
+      planned = db.prepare('SELECT rec_id FROM planner_recs').all().map(r => r.rec_id);
+      identity = db.prepare('SELECT household_id FROM store_identity').get();
+    } finally { db.close(); }
+    const served = await withPlatform(s.platformFile, (platform, store) => store.servedHousehold());
+    assert.equal(served.mode, 'real');
+    assert.equal(identity.household_id, served.id, 'the new store names the served household');
+    assert.equal(s.session.householdId, served.id);
     assert.deepEqual(sc.recs.filter(r => !planned.includes(r.id)).map(r => r.id), []);
     assert.equal(sc.live.mode, 'real');
     const page = await s.request({ path: '/' });
