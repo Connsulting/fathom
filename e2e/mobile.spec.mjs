@@ -44,6 +44,7 @@ const OTHER = [
   ['wargame', 'ask', ['ask', 'Ask views', 'What-if']],
   ['packs', 'ask', ['ask', 'Ask views', 'Packs']],
   ['accounts', 'money', ['money', 'Money views', 'Accounts']],
+  ['pnl', 'money', ['money', 'Money views', 'P&L']],
   ['add', 'money', ['money', 'Money views', 'Files']],
   ['connect', 'settings', ['settings', 'Connect']],
   ['engine', 'settings', ['settings', 'Engine']],
