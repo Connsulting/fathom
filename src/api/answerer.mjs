@@ -372,20 +372,23 @@ function scrub(v, echoes = NO_ECHOES, key = undefined) {
 // Any grounding datum (household summary, conversation context, pack entry bodies) as evidence.
 const evidence = v => scrub(v);
 
-// A negative number leaf v becomes [v, -v], so an unsigned prose amount grounds on an outflow row.
+// A query_transactions row's negative amount v becomes [v, -v], so an unsigned prose amount grounds
+// on an outflow row. No other value is mirrored: a loss never grounds the same amount as a profit.
 // It runs after scrub, so an identifier never grounds this way.
-function unsigned(v) {
-  if (typeof v === 'number') return v < 0 ? [v, -v] : v;
-  if (Array.isArray(v)) return v.map(unsigned);
-  if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, unsigned(x)]));
+function unsigned(v, key = undefined) {
+  if (typeof v === 'number') return key === 'amount' && v < 0 ? [v, -v] : v;
+  if (Array.isArray(v)) return v.map(x => unsigned(x, key));
+  if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, unsigned(x, k)]));
   return v;
 }
 
 // A tool result as grounding evidence: the evidence sanitizer plus argument echoes (see isEcho),
-// then signed amounts (see unsigned). Error results pass through (checkGrounding ignores them).
+// then, for transactions, unsigned outflow amounts (see unsigned). Error results pass through
+// (checkGrounding ignores them).
 function groundingResult(r) {
   if (!r || typeof r !== 'object' || r.isError) return r;
-  return { name: r.name, result: unsigned(scrub(r.result ?? null, argEchoes(r.args))) };
+  const result = scrub(r.result ?? null, argEchoes(r.args));
+  return { name: r.name, result: r.name === 'query_transactions' ? unsigned(result) : result };
 }
 
 // ---------------------------------------------------------------- source labels
@@ -521,12 +524,15 @@ function groundMasked(masked, { scenario, toolResults, data, dataLabels, account
     }
   }
 
-  // Dates are not checked figures; one matching a same-turn row date is sourced to that row.
+  // Dates are not checked figures; one matching a date in a same-turn row (a YYYY-MM-DD string
+  // under any data key: date, asOf, dataThrough) is sourced to that row.
   const dates = findDates(masked);
   if (dates.length) {
     const dated = raws.filter(r => r && !r.isError).flatMap(r => rowsOf(r.result)
-      .map(row => ({ name: r.name, row, parts: typeof row.date === 'string' ? ROW_DATE.exec(row.date) : null }))
-      .filter(x => x.parts));
+      .flatMap(row => Object.entries(row)
+        .filter(([k, v]) => typeof v === 'string' && !isMetaKey(k))
+        .map(([, v]) => ({ name: r.name, row, parts: ROW_DATE.exec(v) }))
+        .filter(x => x.parts)));
     for (const d of dates) {
       const hit = dated.find(({ parts }) => Number(parts[2]) === d.month && Number(parts[3]) === d.day
         && (d.year === null || Number(parts[1]) === d.year));
