@@ -322,6 +322,21 @@ test('enteredFields rejects bad amounts and amounts for a person with no share',
   }
 });
 
+test('enteredFields refuses a total and per-person amounts together, from either stored shape', () => {
+  const MIXED = 'Give either a total or an amount per person, not both.';
+  // Stored per person, then a total typed into the total input shown beside them.
+  const fromPeople = { ...H.enteredDraft(PEOPLE), enteredTotal: '3000' };
+  assert.deepEqual(H.enteredFields(fromPeople, null, 'x'), { err: MIXED });
+  // Stored as a total with a split, then a per-person amount typed into the share rows.
+  const fromTotal = { ...H.enteredDraft(TOTAL), enteredOwner: '1200' };
+  assert.deepEqual(H.enteredFields(fromTotal, SPLIT, 'x'), { err: MIXED });
+  // Clearing the other input saves the new shape; unchanged stored shapes still round trip.
+  assert.deepEqual(H.enteredFields({ ...fromPeople, enteredOwner: '', enteredSpouse: '' }, null, 'x').entered.total, 3000);
+  assert.deepEqual(H.enteredFields({ ...fromTotal, enteredTotal: '' }, SPLIT, 'x').entered.people, [{ person: 'owner', amount: 1200 }]);
+  assert.deepEqual(H.enteredFields(H.enteredDraft(PEOPLE), null, 'x'), { entered: PEOPLE });
+  assert.deepEqual(H.enteredFields(H.enteredDraft(TOTAL), SPLIT, 'x'), { entered: TOTAL });
+});
+
 test('enteredInputs shows the inputs for the stored representation', () => {
   assert.deepEqual(H.enteredInputs(blank, null), { people: false, total: true });
   assert.deepEqual(H.enteredInputs(blank, []), { people: false, total: true });
