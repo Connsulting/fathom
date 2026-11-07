@@ -69,7 +69,8 @@ export function render() {
   const add = `<form class="h-mem-add" data-mem-add><label for="h-mem-new">Add a memory</label>
     <div class="h-mem-line"><input id="h-mem-new" type="text" name="text" maxlength="300" required autocomplete="off" data-mem-new value="${esc(S.add)}">
     <button type="submit" class="h-btn">Add</button></div></form>`;
-  const filter = list.length >= FILTER_MIN ? `<div class="h-mem-filter"><label for="h-mem-q">Search memories</label>
+  // The box stays while a query is active, so a delete that shortens the list never strands a filter.
+  const filter = list.length >= FILTER_MIN || S.query ?`<div class="h-mem-filter"><label for="h-mem-q">Search memories</label>
     <input id="h-mem-q" type="search" autocomplete="off" data-mem-q value="${esc(S.query)}"></div>` : '';
   const none = list.length && !shown.size;
   const body = list.length || S.undo

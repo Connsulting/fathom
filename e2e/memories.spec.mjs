@@ -88,3 +88,17 @@ test('@mobile the filter box appears past five memories and filters the list', a
   await search.fill('');
   await expect(list(page).locator('li.h-mem-r:visible')).toHaveCount(6);
 });
+
+test('@mobile the search box stays while a query is active after a delete shortens the list', async ({ page, request }) => {
+  await reset(request);
+  for (const text of ['Keep answers short', 'Use plain words', 'Round to the nearest hundred', 'Short trips count as travel', 'The budget means the plan', 'Gifts come from the fun budget'])
+    await remember(request, text);
+  await page.goto('/#/memories');
+  const search = page.getByRole('searchbox', { name: 'Search memories' });
+  await search.fill('gifts');
+  await row(page, 'Gifts come from the fun budget').getByRole('button', { name: 'Delete', exact: true }).click();
+  await expect(page.getByText('Memory deleted.')).toBeVisible();
+  await expect(search).toBeVisible();
+  await search.fill('');
+  await expect(list(page).locator('li.h-mem-r:visible')).toHaveCount(5);
+});
