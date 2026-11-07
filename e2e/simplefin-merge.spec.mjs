@@ -1,7 +1,6 @@
-import { resolve } from 'node:path';
 import { test, expect, resetDemo, gotoRoute, deckTo, REMOTE } from './helpers.mjs';
-import { openDb, setSetting, DB_FILE } from '../src/store/db.mjs';
-import { dataKeyFor } from '../src/ingest/simplefin.mjs';
+import { openDb, setSetting } from '../src/store/db.mjs';
+import { householdStoreFile, localDataDir, withLocalHousehold } from './local-store.mjs';
 import { seedDuplicate } from '../test/helpers/account-merge.mjs';
 import { refreshMergedAccounts } from '../src/ingest/account-merge.mjs';
 
@@ -9,17 +8,12 @@ test.skip(REMOTE, 'requires a local synthetic store');
 
 async function seed(request) {
   await resetDemo(request);
-  const dataDir = resolve(process.env.E2E_DATA || '.e2e-data');
-  const db = openDb(resolve(dataDir,DB_FILE));
-  try {
-    setSetting(db,'clock','2032-03-10');
-    const config = {dataDir};
-    const key = await dataKeyFor(db,config);
-    const s={db,config,key,opts:(engine,extra={})=>({config,key,engine,now:'2032-03-10T12:00:00.000Z',...extra})};
+  return withLocalHousehold('2032-03-10T12:00:00.000Z', async s => {
+    setSetting(s.db,'clock','2032-03-10');
     const pair=await seedDuplicate(s,{sure:true});
-    refreshMergedAccounts(db,{now:'2032-03-10T12:00:00.000Z'});
+    refreshMergedAccounts(s.db,{now:'2032-03-10T12:00:00.000Z'});
     return pair;
-  } finally {db.close();}
+  });
 }
 // The household total now, read from the scenario: merged duplicates count once.
 const total = async request => (await (await request.get('/api/scenario')).json()).trend.points.at(-1).total;
@@ -71,7 +65,7 @@ test('Money retires a stale pair warning and offers review again when evidence r
   await gotoRoute(page,'money');
   await expect(page.locator('[data-account-duplicates]')).toBeVisible();
   const changeKind = kind => {
-    const db=openDb(resolve(process.env.E2E_DATA || '.e2e-data',DB_FILE));
+    const db=openDb(householdStoreFile(localDataDir()));
     try { db.prepare('UPDATE accounts SET kind=? WHERE id=?').run(kind,pair.own); } finally {db.close();}
   };
   changeKind('card');

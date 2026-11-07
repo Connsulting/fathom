@@ -134,8 +134,12 @@ export function loadConfig(env = process.env) {
     fakeStreamMs,
     clock,
     claudeCredentialFile: blank(env.FATHOM_CLAUDE_CREDENTIAL_FILE) ? null : env.FATHOM_CLAUDE_CREDENTIAL_FILE,
+    // Instance secrets (src/platform/secrets.mjs): the platform key that wraps household data keys,
+    // the MCP key HMAC secret, and the backup key for source snapshots. Paths only.
+    platformKeyFile: opt(env.FATHOM_PLATFORM_KEY_FILE),
+    mcpSecretFile: opt(env.FATHOM_MCP_SECRET_FILE),
+    backupKeyFile: opt(env.FATHOM_BACKUP_KEY_FILE),
     typesafeKeyFile: opt(env.FATHOM_TYPESAFE_KEY_FILE),
-    dataKeyFile: blank(env.FATHOM_DATA_KEY_FILE) ? null : env.FATHOM_DATA_KEY_FILE,
     emailTransport,
     emailFrom,
     emailFromFile,

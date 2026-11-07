@@ -1,6 +1,8 @@
 // Live packs over main's pack state (src/packs/state.mjs): the loaded manifests, the manifest
 // backing each packs_state row, and the manifest fields the Packs screen and the answerer read.
 //
+// `dataDir` below is always a household root (households/<id> under FATHOM_DATA).
+//
 // yourPlansDir(dataDir) -> <dataDir>/packs/your-plans
 // loadLivePacks(dataDir) -> { packs, dirs, warnings }: the repository packs (any error throws) plus
 //   the Your plans pack when it loads; a broken one is skipped with a warning carrying none of its

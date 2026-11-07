@@ -2,10 +2,9 @@
 // same dialog style as a recommendation. Rename in place, sources and freshness, balance, and a
 // read-only transaction list with a text filter and a date range. #/account/<id> survives reload.
 
-import { resolve } from 'node:path';
 import { test, expect, resetDemo, gotoRoute, recDialog, closeDialogWithX, REMOTE } from './helpers.mjs';
-import { openDb, setSetting, DB_FILE } from '../src/store/db.mjs';
-import { dataKeyFor } from '../src/ingest/simplefin.mjs';
+import { setSetting } from '../src/store/db.mjs';
+import { withLocalHousehold } from './local-store.mjs';
 import { seedDuplicate as seedDuplicateRows } from '../test/helpers/account-merge.mjs';
 import { refreshMergedAccounts } from '../src/ingest/account-merge.mjs';
 
@@ -167,16 +166,12 @@ test.describe('account dialog', { tag: '@ad-acN' }, () => {
 // A connected account that looks like one already imported from a file, as the merge change seeds it.
 async function seedDuplicate(request) {
   await resetDemo(request);
-  const dataDir = resolve(process.env.E2E_DATA || '.e2e-data');
-  const db = openDb(resolve(dataDir, DB_FILE));
-  try {
-    setSetting(db, 'clock', '2032-03-10');
-    const key = await dataKeyFor(db, { dataDir });
-    const s = { db, config: { dataDir }, key, opts: (engine, extra = {}) => ({ config: { dataDir }, key, engine, now: '2032-03-10T12:00:00.000Z', ...extra }) };
+  return withLocalHousehold('2032-03-10T12:00:00.000Z', async s => {
+    setSetting(s.db, 'clock', '2032-03-10');
     const pair = await seedDuplicateRows(s, { sure: true });
-    refreshMergedAccounts(db, { now: '2032-03-10T12:00:00.000Z' });
+    refreshMergedAccounts(s.db, { now: '2032-03-10T12:00:00.000Z' });
     return pair;
-  } finally { db.close(); }
+  });
 }
 
 test.describe('account dialog and duplicates', { tag: '@ad-acN' }, () => {

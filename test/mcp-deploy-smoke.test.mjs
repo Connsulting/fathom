@@ -1,4 +1,5 @@
-// End to end: a real server on a synthetic store, a key from scripts/mcp-key.mjs, then scripts/mcp-smoke.mjs.
+// End to end: a real server on a synthetic store, a key from scripts/mcp-key.mjs (bound to the household
+// named by --household), then scripts/mcp-smoke.mjs.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -7,7 +8,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnServer, runCommand, createSessionFixture, withPlatform, dumpStore } from './helpers/server.mjs';
 import { buildLegacyStore } from './helpers/tenancy.mjs';
-import { openMigrated } from '../src/store/db.mjs';
 
 const OWNER = 'owner@example.test';
 
@@ -31,7 +31,7 @@ test('mcp-key creates a read-only key and mcp-smoke passes against the server', 
   const s = await server();
   const keyFile = join(s.dataDir, 'smoke-key');
   try {
-    const created = await runCommand(process.execPath, ['scripts/mcp-key.mjs', 'create', '--name', 'deploy-smoke', '--owner', OWNER], {
+    const created = await runCommand(process.execPath, ['scripts/mcp-key.mjs', 'create', '--name', 'deploy-smoke', '--owner', OWNER, '--household', s.householdId], {
       env: { FATHOM_DATA: s.dataDir },
     });
     assert.equal(created.code, 0, created.stderr);
@@ -40,16 +40,14 @@ test('mcp-key creates a read-only key and mcp-smoke passes against the server', 
     assert.equal(created.stdout.trim().length, created.stdout.length - 1);
     writeFileSync(keyFile, created.stdout, { mode: 0o600 });
 
-    const db = openMigrated(s.dbFile);
-    try {
-      const row = db.prepare('SELECT scopes, user_id, revoked_at FROM api_keys WHERE name = ?').get('deploy-smoke');
-      const user = await withPlatform(s.platformFile, (_, auth) => auth.findUser(OWNER));
+    // MT-03: keys live in the platform, bound to the household named by --household.
+    await withPlatform(s.platformFile, (platform, auth) => {
+      const row = platform.prepare('SELECT household_id, scopes, user_id, revoked_at FROM api_keys WHERE name = ?').get('deploy-smoke');
+      assert.equal(row.household_id, s.householdId);
       assert.deepEqual(JSON.parse(row.scopes), ['read']);
-      assert.equal(row.user_id, user.id);
+      assert.equal(row.user_id, auth.findUser(OWNER).id);
       assert.equal(row.revoked_at, null);
-    } finally {
-      db.close();
-    }
+    });
 
     const smoke = await runCommand(process.execPath, ['scripts/mcp-smoke.mjs'], {
       env: { FATHOM_SMOKE_URL: s.baseUrl, FATHOM_SMOKE_KEY_FILE: keyFile },
@@ -70,7 +68,15 @@ test('mcp-key creates a read-only key and mcp-smoke passes against the server', 
 test('mcp-key refuses an unknown owner and a duplicate active name', async () => {
   const s = await server();
   try {
-    const unknown = await runCommand(process.execPath, ['scripts/mcp-key.mjs', 'create', '--name', 'no-owner', '--owner', 'missing@example.test'], {
+    // MT-03: a store-opening CLI has no default household.
+    const unnamed = await runCommand(process.execPath, ['scripts/mcp-key.mjs', 'create', '--name', 'no-household', '--owner', OWNER], {
+      env: { FATHOM_DATA: s.dataDir },
+    });
+    assert.notEqual(unnamed.code, 0);
+    assert.equal(unnamed.stdout, '');
+    assert.equal(unnamed.stderr, 'mcp-key: household_required\n');
+
+    const unknown = await runCommand(process.execPath, ['scripts/mcp-key.mjs', 'create', '--name', 'no-owner', '--owner', 'missing@example.test', '--household', s.householdId], {
       env: { FATHOM_DATA: s.dataDir },
     });
     assert.notEqual(unknown.code, 0);
@@ -78,18 +84,18 @@ test('mcp-key refuses an unknown owner and a duplicate active name', async () =>
     assert.match(unknown.stderr, /unknown owner/);
 
     await withPlatform(s.platformFile, (_, auth) => auth.invite(auth.servedHousehold().id, 'pending@example.test', { role: 'admin' }));
-    const pending = await runCommand(process.execPath, ['scripts/mcp-key.mjs', 'create', '--name', 'pending-owner', '--owner', 'pending@example.test'], {
+    const pending = await runCommand(process.execPath, ['scripts/mcp-key.mjs', 'create', '--name', 'pending-owner', '--owner', 'pending@example.test', '--household', s.householdId], {
       env: { FATHOM_DATA: s.dataDir },
     });
     assert.notEqual(pending.code, 0);
     assert.equal(pending.stdout, '');
     assert.equal(pending.stderr, 'mcp-key: unknown owner\n');
 
-    const first = await runCommand(process.execPath, ['scripts/mcp-key.mjs', 'create', '--name', 'once', '--owner', OWNER], {
+    const first = await runCommand(process.execPath, ['scripts/mcp-key.mjs', 'create', '--name', 'once', '--owner', OWNER, '--household', s.householdId], {
       env: { FATHOM_DATA: s.dataDir },
     });
     assert.equal(first.code, 0, first.stderr);
-    const again = await runCommand(process.execPath, ['scripts/mcp-key.mjs', 'create', '--name', 'once', '--owner', OWNER], {
+    const again = await runCommand(process.execPath, ['scripts/mcp-key.mjs', 'create', '--name', 'once', '--owner', OWNER, '--household', s.householdId], {
       env: { FATHOM_DATA: s.dataDir },
     });
     assert.notEqual(again.code, 0);
@@ -97,7 +103,7 @@ test('mcp-key refuses an unknown owner and a duplicate active name', async () =>
     assert.match(again.stderr, /already exists/);
     assert.equal(again.stderr.includes(first.stdout.trim()), false);
 
-    const padded = await runCommand(process.execPath, ['scripts/mcp-key.mjs', 'create', '--name', ' once ', '--owner', OWNER], {
+    const padded = await runCommand(process.execPath, ['scripts/mcp-key.mjs', 'create', '--name', ' once ', '--owner', OWNER, '--household', s.householdId], {
       env: { FATHOM_DATA: s.dataDir },
     });
     assert.notEqual(padded.code, 0);
@@ -139,7 +145,7 @@ test('mcp-key refuses an unmigrated real store and leaves it unchanged', async (
     const legacy = await buildLegacyStore(dataDir);
     const files = listing(dataDir);
     const before = await dumpStore(legacy.file);
-    const refused = await runCommand(process.execPath, ['scripts/mcp-key.mjs', 'create', '--name', 'legacy', '--owner', legacy.admin.email], {
+    const refused = await runCommand(process.execPath, ['scripts/mcp-key.mjs', 'create', '--name', 'legacy', '--owner', legacy.admin.email, '--household', 'hh-synthetic-legacy'], {
       env: { FATHOM_DATA: dataDir },
     });
     assert.equal(refused.code, 1);

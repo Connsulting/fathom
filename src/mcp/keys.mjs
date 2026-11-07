@@ -1,10 +1,9 @@
 // App-issued API keys for the MCP server. A key is `fathom_` plus 43 base64url characters, shown
-// once at creation. The store holds only HMAC-SHA256(key) under a per-deployment server secret
-// kept in `$FATHOM_DATA/api-key-secret` (0600), so a copied database alone cannot verify a guess.
+// once at creation. The platform's api_keys table holds only HMAC-SHA256(key) under the instance
+// MCP secret (FATHOM_MCP_SECRET_FILE, read by src/platform/secrets.mjs), so a copied database alone
+// cannot verify a guess. Every key is bound to one household for life (household_id).
 
 import crypto, { randomBytes, createHmac } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { parseJson } from '../store/db.mjs';
 import { tools, operationScopes } from '../tools/index.mjs';
 
@@ -18,7 +17,6 @@ export const SCOPE_INFO = Object.freeze([
   { id: 'write:goals', label: 'Create and edit goals', access: 'Create or edit goals, target amounts and dates from your statements or stored data, and undo your changes.' },
 ]);
 export const SCOPES = Object.freeze(SCOPE_INFO.map(s => s.id));
-export const SECRET_FILE = 'api-key-secret';
 
 const KEY_LENGTH = KEY_PREFIX.length + 43;
 const NAME_MAX = 80;
@@ -43,21 +41,6 @@ export function normalizeScopes(input) {
   return SCOPES.filter(s => want.has(s));
 }
 
-// The server secret as a Buffer: created on first use (32 random bytes as 64 hex chars, 0600,
-// never overwritten), refused when the file holds anything else.
-export function loadServerSecret(dataDir) {
-  mkdirSync(dataDir, { recursive: true });
-  const file = join(dataDir, SECRET_FILE);
-  try {
-    writeFileSync(file, randomBytes(32).toString('hex') + '\n', { flag: 'wx', mode: 0o600 });
-  } catch (e) {
-    if (e.code !== 'EEXIST') throw e;
-  }
-  const text = readFileSync(file, 'utf8').trim();
-  if (!/^[0-9a-f]{64}$/i.test(text)) throw new Error(`${file} must hold 64 hex characters; fix or remove it (removing it invalidates every API key)`);
-  return Buffer.from(text, 'hex');
-}
-
 export function hashKey(secret, serverSecret) {
   return createHmac('sha256', serverSecret).update(secret).digest('hex');
 }
@@ -73,6 +56,7 @@ export function toolsForScopes(scopes, registry = tools) {
 
 const toRecord = r => ({
   id: r.id,
+  householdId: r.household_id,
   name: r.name,
   scopes: parseJson(r.scopes, []),
   createdAt: r.created_at,
@@ -87,44 +71,74 @@ function cleanName(name) {
   return trimmed;
 }
 
-// creatorActive(userId) -> boolean answers whether a key's creator is still an active member of
-// the served household (the platform's answer); api_keys has no users foreign key, so a key whose
-// creator is not active fails closed here. Ownerless keys (user_id NULL) do not depend on it.
-export function createKeyService({ db, serverSecret, creatorActive, now = () => new Date() }) {
+// createKeyService({ platform, secret, creatorActive }): `secret()` returns the MCP HMAC secret or
+// throws (a missing or invalid secret makes every call throw KeyError('unavailable'));
+// creatorActive(userId, householdId) answers whether a key's creator is still an active member of
+// the key's household. A key whose creator is not active fails closed in verify; ownerless keys
+// (user_id NULL) do not depend on it.
+// create({ householdId, name, scopes, userId }) -> { key, record }
+// list({ householdId, userId }) -> records of that household (only userId's own when userId is set)
+// revoke(id, { householdId, userId }) -> record; an id of another household is not_found, another
+//   user's key is forbidden when userId is set
+// verify(presented) -> live record incl. householdId, or null (constant time over all rows)
+export function createKeyService({ platform, secret, creatorActive, now = () => new Date() }) {
+  if (!platform) throw new TypeError('createKeyService needs the platform database');
+  if (typeof secret !== 'function') throw new TypeError('createKeyService needs the secret');
   if (typeof creatorActive !== 'function') throw new TypeError('createKeyService needs creatorActive');
-  const byId = db.prepare('SELECT * FROM api_keys WHERE id = ?');
-  const all = db.prepare('SELECT * FROM api_keys ORDER BY created_at, id');
-  const owned = db.prepare('SELECT * FROM api_keys WHERE user_id = ? ORDER BY created_at, id');
-  const insert = db.prepare('INSERT INTO api_keys (id, name, key_hash, scopes, created_at, user_id) VALUES (?, ?, ?, ?, ?, ?)');
-  const revokeStmt = db.prepare('UPDATE api_keys SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL');
-  const touchStmt = db.prepare('UPDATE api_keys SET last_used_at = ? WHERE id = ?');
+  const byId = platform.prepare('SELECT * FROM api_keys WHERE id = ? AND household_id = ?');
+  const all = platform.prepare('SELECT * FROM api_keys ORDER BY created_at, id');
+  const ofHousehold = platform.prepare('SELECT * FROM api_keys WHERE household_id = ? ORDER BY created_at, id');
+  const owned = platform.prepare('SELECT * FROM api_keys WHERE household_id = ? AND user_id = ? ORDER BY created_at, id');
+  const insert = platform.prepare('INSERT INTO api_keys (id, household_id, name, key_hash, scopes, created_at, user_id) VALUES (?, ?, ?, ?, ?, ?, ?)');
+  const revokeStmt = platform.prepare('UPDATE api_keys SET revoked_at = ? WHERE id = ? AND household_id = ? AND revoked_at IS NULL');
+  const touchStmt = platform.prepare('UPDATE api_keys SET last_used_at = ? WHERE id = ?');
+
+  function hmacSecret() {
+    try {
+      return secret();
+    } catch {
+      throw new KeyError('unavailable', 'API keys are unavailable on this instance');
+    }
+  }
+  const household = id => {
+    if (typeof id !== 'string' || !id) throw new KeyError('not_found', 'no such key');
+    return id;
+  };
 
   return {
     // Returns { key, record }; the key is not kept anywhere after this call.
-    create({ name, scopes, userId = null } = {}) {
+    create({ householdId, name, scopes, userId = null } = {}) {
+      const hh = household(householdId);
       const clean = cleanName(name);
       const scopeList = normalizeScopes(scopes);
+      const serverSecret = hmacSecret();
       const key = KEY_PREFIX + randomBytes(32).toString('base64url');
       const id = 'key_' + randomBytes(6).toString('hex');
-      insert.run(id, clean, hashKey(key, serverSecret), JSON.stringify(scopeList), now().toISOString(), userId);
-      return { key, record: toRecord(byId.get(id)) };
+      insert.run(id, hh, clean, hashKey(key, serverSecret), JSON.stringify(scopeList), now().toISOString(), userId);
+      return { key, record: toRecord(byId.get(id, hh)) };
     },
 
-    list({ userId } = {}) {
-      return (userId === undefined ? all.all() : owned.all(userId)).map(toRecord);
+    list({ householdId, userId } = {}) {
+      const hh = household(householdId);
+      hmacSecret();
+      return (userId === undefined ? ofHousehold.all(hh) : owned.all(hh, userId)).map(toRecord);
     },
 
-    revoke(id, { userId } = {}) {
-      const row = typeof id === 'string' ? byId.get(id) : null;
+    revoke(id, { householdId, userId } = {}) {
+      const hh = household(householdId);
+      hmacSecret();
+      const row = typeof id === 'string' ? byId.get(id, hh) : null;
       if (!row) throw new KeyError('not_found', 'no such key');
       if (userId !== undefined && row.user_id !== userId) throw new KeyError('forbidden', 'cannot manage another user key');
-      revokeStmt.run(now().toISOString(), id);
-      return toRecord(byId.get(id));
+      revokeStmt.run(now().toISOString(), id, hh);
+      return toRecord(byId.get(id, hh));
     },
 
     // The live record for a presented key, or null. Every stored hash is compared in constant
-    // time, with no early exit, so timing does not reveal which row matched.
+    // time, with no early exit, so timing does not reveal which row matched. Throws
+    // KeyError('unavailable') when the secret is missing.
     verify(presented) {
+      const serverSecret = hmacSecret();
       if (typeof presented !== 'string' || presented.length !== KEY_LENGTH || !presented.startsWith(KEY_PREFIX)) return null;
       const want = Buffer.from(hashKey(presented, serverSecret), 'hex');
       let match = null;
@@ -134,7 +148,7 @@ export function createKeyService({ db, serverSecret, creatorActive, now = () => 
         if (same && match === null) match = row;
       }
       if (!match || match.revoked_at !== null) return null;
-      if (match.user_id !== null && !creatorActive(match.user_id)) return null;
+      if (match.user_id !== null && !creatorActive(match.user_id, match.household_id)) return null;
       return { ...toRecord(match), userId: match.user_id };
     },
 

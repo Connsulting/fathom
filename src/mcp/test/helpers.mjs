@@ -1,5 +1,5 @@
 // MCP test helpers on top of test/helpers/server.mjs: keys through the real POST /api/keys route,
-// raw JSON-RPC posts to /mcp with full header control, and store reads.
+// raw JSON-RPC posts to /mcp with full header control, and store and platform reads.
 
 import { request, postJson, openStore } from '../../../test/helpers/server.mjs';
 
@@ -59,14 +59,15 @@ export function callToolRpc(baseUrl, key, name, args = {}, headers = {}) {
   return mcpPost(baseUrl, { auth: bearer(key), method: 'tools/call', params: { name, arguments: args }, headers });
 }
 
-// Run fn(db) on the store file (opened without migrating) and close it.
+// Run fn(db) on a store or platform file (opened without migrating) and close it.
 export async function withStore(file, fn) {
   const db = await openStore(file);
   try { return await fn(db); } finally { db.close(); }
 }
 
-export function apiKeyRow(file, id) {
-  return withStore(file, db => {
+// The platform api_keys row of a key (MT-03: keys live in platform.sqlite, bound to a household).
+export function apiKeyRow(platformFile, id) {
+  return withStore(platformFile, db => {
     const row = db.prepare('SELECT * FROM api_keys WHERE id = ?').get(id);
     return row ? { ...row } : null;
   });

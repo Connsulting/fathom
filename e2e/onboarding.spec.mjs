@@ -12,21 +12,13 @@
 // Desktop and 390px. Real-mode URLs are absolute to its own server, so the configured baseURL is
 // ignored there.
 
-import { writeFileSync } from 'node:fs';
-import { randomBytes } from 'node:crypto';
-import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { test, expect, expectH1, gotoRoute, fetchScenario, REMOTE, resetDemo } from './helpers.mjs';
 import { openDb, setSetting } from '../src/store/db.mjs';
-import { createLocalData, removeLocalData, startEnrolledServer } from './local-store.mjs';
+import { createLocalData, householdStoreFile, localDataDir, removeLocalData, startEnrolledServer } from './local-store.mjs';
 import { upsertFact } from '../src/store/facts.mjs';
 import { ask, FACT_CHECK_OPTIONS } from '../src/ingest/confirm.mjs';
 
 const NOTE = 'We file jointly in Virginia, I run an S corporation and my spouse freelances. Two kids.';
-
-// The main demo server's store (playwright.config.mjs runs it on .e2e-data at the repo root).
-// The main demo server's store: the E2E_DATA directory playwright.config.mjs gives it.
-const DEMO_STORE = fileURLToPath(new URL(`../${process.env.E2E_DATA || '.e2e-data'}/fathom.sqlite`, import.meta.url));
 
 // The Goals step copy and its starter cards (pinned by the design).
 const GOALS_H1 = 'What is the money for?';
@@ -97,7 +89,7 @@ async function deleteAllGoals(request) {
 // Makes the demo store genuinely fresh: onboarding not done, on the sign-in step. The server reads
 // the setting on every scenario build; resetDemo reseeds it as done.
 function makeDemoFresh() {
-  const db = openDb(DEMO_STORE);
+  const db = openDb(householdStoreFile(localDataDir()));
   try {
     setSetting(db, 'onboarding', { done: false, step: 0 });
   } finally {
@@ -447,10 +439,8 @@ test.describe('real store past first run', () => {
   test.beforeAll(async () => {
     test.setTimeout(180_000); // a busy runner can take a while to start a server
     DATA_DIR = createLocalData('onboarding');
-    DB_FILE = join(DATA_DIR, 'fathom.sqlite');
-    const keyFile = join(DATA_DIR, 'data.key');
-    writeFileSync(keyFile, randomBytes(32), { mode: 0o600 });
-    app = await startEnrolledServer({ dataDir: DATA_DIR, dataKeyFile: keyFile });
+    app = await startEnrolledServer({ dataDir: DATA_DIR });
+    DB_FILE = app.storeFile;
     BASE = app.url;
     seedHousehold();
   });

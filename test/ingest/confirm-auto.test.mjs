@@ -273,7 +273,7 @@ describe('shared_mask', () => {
     const SF = await src('src/ingest/simplefin.mjs');
     // A positions account (no institution) ending in 4821, the mask of the fake bridge's checking.
     await P.ingestFiles(s.db, [positionsFile('positions-4821.csv', [{ symbol: 'FUNDA', quantity: '1', price: '10.00', value: '10.00', account: 'Z00004821', accountName: 'Synthetic brokerage' }])], s.opts(await offEngine()));
-    const o = { config: s.config, key: s.key, now: NOW, clock: NOW.slice(0, 10), fetch: SF.createFakeSimplefin({ today: () => NOW.slice(0, 10) }) };
+    const o = { config: s.config, household: s.household, now: NOW, clock: NOW.slice(0, 10), fetch: SF.createFakeSimplefin({ today: () => NOW.slice(0, 10) }) };
     await SF.connectSimplefin(s.db, SF.fakeToken(), o);
     await SF.syncSimplefin(s.db, o);
     A.autoResolve(s.db, { now: NOW });

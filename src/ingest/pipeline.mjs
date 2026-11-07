@@ -8,7 +8,7 @@ import { kindOf, accountMask, compatibleKind, sameInstitution } from './account-
 // reference to its encrypted file, and an input past the parse limits is recorded as too_large.
 
 import { createHash } from 'node:crypto';
-import { tx, getSetting, parseJson } from '../store/db.mjs';
+import { tx, parseJson } from '../store/db.mjs';
 import { refreshPackState } from '../packs/state.mjs';
 import { pickParser } from './registry.mjs';
 import { identifyAccountRows, dedupeKey } from './dedupe.mjs';
@@ -21,7 +21,7 @@ import {
   ask, recordFact, archive, normalizeName, OWNER_OPTIONS, KIND_OPTIONS, NEAR_DUPLICATE_OPTIONS, EMPLOYER_OPTIONS, taxYearOptions,
   withholdingRecipient, withRecipient, recipientPayer, summarizeSlot, conflictPayer, conflictAsked, askConflict, askSlotConflict,
 } from './confirm.mjs';
-import { storeFile, readStoredFile, loadDataKey } from './vault.mjs';
+import { storeFile, readStoredFile, openVault } from './vault.mjs';
 import { recordSource } from './freshness.mjs';
 import { autoResolve } from './auto.mjs';
 import { defaultAccountLabel } from '../shared/account-label.mjs';
@@ -61,15 +61,20 @@ export function accountIdentity(row) {
 }
 export const accountIdOf = (identity) => 'acct-' + sha256(identity).slice(0, 16);
 
-async function dataKey(db, opts) {
-  if (opts.key) return opts.key;
-  const config = opts.config ?? {};
-  return loadDataKey({ dataDir: config.dataDir, keyFile: config.dataKeyFile, mode: getSetting(db, 'mode', 'real') });
+// opts.household is the household context the request or job runs in: its db must be the one
+// being written, and its vault, root and in-flight set are the only ones used.
+function householdOf(db, opts) {
+  const household = opts?.household;
+  if (!household || typeof household.vault !== 'function' || !(household.inFlight instanceof Set) || typeof household.root !== 'string') {
+    throw new TypeError('ingest needs opts.household');
+  }
+  if (household.db !== db) throw new TypeError('ingest opts.household must own the db');
+  return household;
 }
-const dataDirOf = (opts) => opts.config?.dataDir ?? opts.dataDir;
 
 // Every file in turn, then one auto-resolution pass over the questions they left.
 export async function ingestFiles(db, files, opts = {}) {
+  householdOf(db, opts);
   const results = [];
   for (const file of files) results.push(await ingestFile(db, file, opts));
   resolveAfterImport(db, opts);
@@ -86,12 +91,12 @@ function resolveAfterImport(db, opts) {
   }
 }
 
-// File ids this process is storing or routing now. A 'pending' row whose id is not here was left by
-// an interrupted run and may be routed again. Checked and added synchronously, before any await.
-const inFlight = new Set();
-
 // file = {name, bytes, mime}. Returns {fileId, name, status, sourceKind, parser, counts, duplicateOf?}.
+// household.inFlight holds the file ids this household is storing or routing now. A 'pending' row
+// whose id is not there was left by an interrupted run and may be routed again. Checked and added
+// synchronously, before any await.
 export async function ingestFile(db, file, opts = {}) {
+  const { inFlight } = householdOf(db, opts);
   db.prepare("DELETE FROM settings WHERE key = 'synthetic_demo'").run();
   const now = opts.now || new Date().toISOString();
   const bytes = toBytes(file.bytes);
@@ -106,8 +111,8 @@ export async function ingestFile(db, file, opts = {}) {
   try {
     // An interrupted 'pending' file already has its encrypted bytes and row; the upload's bytes match by hash.
     if (!prior) {
-      const key = await dataKey(db, opts);
-      const storedPath = await storeFile({ dataDir: dataDirOf(opts), key, id: fileId, bytes });
+      const vault = await openVault(opts.household);
+      const storedPath = await storeFile({ vault, id: fileId, bytes, purpose: 'upload' });
       db.prepare(`INSERT INTO files (id, name, mime, size, sha256, uploaded_at, stored_path, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')`)
         .run(fileId, name, file.mime ?? null, bytes.length, hash, now, storedPath);
     }
@@ -120,13 +125,14 @@ export async function ingestFile(db, file, opts = {}) {
 // Re-run routing for a file waiting on a mapping or the engine, or left 'pending' by an
 // interrupted run, under the same file id.
 export async function retryFile(db, fileId, opts = {}) {
+  const { inFlight } = householdOf(db, opts);
   const row = db.prepare('SELECT * FROM files WHERE id = ?').get(String(fileId ?? ''));
   if (!row) throw new IngestError(404, 'not_found');
   if (inFlight.has(row.id) || !(WAITING.includes(row.status) || row.status === 'pending')) throw new IngestError(409, 'not_waiting');
   inFlight.add(row.id);
   try {
-    const key = await dataKey(db, opts);
-    const bytes = await readStoredFile({ dataDir: dataDirOf(opts), key, id: row.id, storedPath: row.stored_path });
+    const vault = await openVault(opts.household);
+    const bytes = await readStoredFile({ vault, id: row.id, storedPath: row.stored_path, purpose: 'upload' });
     const now = opts.now || new Date().toISOString();
     const out = await route(db, row.id, { name: row.name, bytes: toBytes(bytes), mime: row.mime }, { ...opts, now });
     resolveAfterImport(db, { ...opts, now });
@@ -151,7 +157,7 @@ async function route(db, fileId, file, opts) {
   // of the same bytes is a duplicate, so the wrong status would stick. The next fact change or
   // startup refreshes packs again.
   if (out.factsChanged) {
-    try { refreshPackState(db, { dataDir: dataDirOf(opts), now: opts.now }); } catch (error) { console.error('fathom: pack refresh failed', error?.name ?? 'error'); }
+    try { refreshPackState(db, { dataDir: opts.household.root, now: opts.now }); } catch (error) { console.error('fathom: pack refresh failed', error?.name ?? 'error'); }
   }
   return out.result;
 }

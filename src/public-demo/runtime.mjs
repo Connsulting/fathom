@@ -1,10 +1,13 @@
-import { existsSync, rmSync } from 'node:fs';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { createInstance } from '../platform/db.mjs';
-import { openServedStore } from '../platform/ready.mjs';
-import { DB_FILE, getSetting, schemaVersion } from '../store/db.mjs';
+import { openInstance } from '../platform/ready.mjs';
+import { createInstanceSecrets } from '../platform/secrets.mjs';
+import { createHouseholdContext, createRuntimeRegistry, openHouseholdDb } from '../platform/runtime.mjs';
+import { DB_FILE, getSetting, listMigrations, schemaVersion } from '../store/db.mjs';
 import { seedDemo } from '../../demo/seed.mjs';
 import { createHandler, findRoute, normalizePath } from '../api/router.mjs';
 import { createStatic } from '../api/static.mjs';
@@ -26,7 +29,13 @@ export function assertSyntheticStore(file) {
   finally { db?.close(); }
 }
 
-export function createPublicDemoHandler(config, baseDb) {
+const SHIPPED_SCHEMA = listMigrations().at(-1)?.id ?? 0;
+
+// One sandbox is its own synthetic demo instance (platform.sqlite plus one household root under
+// sandboxes/<id>), served through the household runtime registry with the public demo engine and
+// the visitor's turn limits. `platform` is the base instance's platform DB (health only).
+export function createPublicDemoHandler(config, { platform: basePlatform }) {
+  const requestAddress = new AsyncLocalStorage();
   const control = createDemoControl(config);
   const clientAddress = createClientAddressResolver(config.trustedProxies);
   const runtimes = new Map();
@@ -50,25 +59,52 @@ export function createPublicDemoHandler(config, baseDb) {
   const runtimeFor = id => {
     if (runtimes.has(id)) return runtimes.get(id);
     const sandboxConfig = { ...config, dataDir: sandboxDir(id) };
-    const file = join(sandboxConfig.dataDir, DB_FILE);
-    assertSyntheticStore(file);
-    const { db, platform } = existsSync(file) ? openServedStore(sandboxConfig)
-      : createInstance(sandboxConfig.dataDir, { mode: 'demo', init: seedDemo });
+    mkdirSync(sandboxConfig.dataDir, { recursive: true });
+    const secrets = createInstanceSecrets({ config: sandboxConfig, mode: 'demo' });
+    let platform = openInstance(sandboxConfig)?.platform ?? null;
+    if (!platform) {
+      const platformKey = secrets.platformKey();
+      try {
+        const made = createInstance(sandboxConfig.dataDir, { mode: 'demo', init: seedDemo, platformKey });
+        made.db.close();
+        platform = made.platform;
+      } finally {
+        platformKey.fill(0);
+      }
+    }
+    let registry = null;
     try {
-      const packs = createLivePacks(db, { dataDir: sandboxConfig.dataDir });
-      const engine = createPublicDemoEngine({ db, config: sandboxConfig, control, visitorId: id });
-      const answerer = createLiveAnswerer({ engine, packs });
-      const runtime = { active: 0, db, platform,
-        handler(req, res) {
-          const limited = limitDemoAnswerer(answerer, control, id, () => clientAddress(req));
-          return createHandler({ db, platform, config: sandboxConfig, engine, packs, answerer: limited,
-            auth: { sweep() {}, session: () => ({ demo: true, publicDemo: true, identity: null }) } })(req, res);
-        },
-        close() { db.close(); platform.close(); },
+      const build = ({ householdId, generation, mode, relativeRoot }) => {
+        assertSyntheticStore(join(sandboxConfig.dataDir, relativeRoot, DB_FILE));
+        const db = openHouseholdDb({ dataDir: sandboxConfig.dataDir, householdId, storageRoot: relativeRoot });
+        try {
+          const root = join(sandboxConfig.dataDir, relativeRoot);
+          const packs = createLivePacks(db, { dataDir: root });
+          const engine = createPublicDemoEngine({ db, config: sandboxConfig, control, visitorId: id });
+          const answerer = limitDemoAnswerer(createLiveAnswerer({ engine, packs, root }), control, id, () => requestAddress.getStore());
+          // No jobs run in a sandbox: its scheduler has no handlers and is never started.
+          return createHouseholdContext({ householdId, generation, mode, db, relativeRoot, config: sandboxConfig, platform, secrets,
+            engine, packs, answerer, handlers: {} });
+        } catch (err) {
+          db.close();
+          throw err;
+        }
+      };
+      registry = createRuntimeRegistry({ platform, config: sandboxConfig, secrets, build });
+      registry.demo();
+      const handler = createHandler({ platform, config: sandboxConfig, runtimes: registry,
+        auth: { demo: true, sweep() {}, session: () => ({ demo: true, publicDemo: true, identity: null }) } });
+      const runtime = { active: 0,
+        handler: (req, res) => requestAddress.run(clientAddress(req), () => handler(req, res)),
+        close() { registry.close().catch(() => {}).finally(() => platform.close()); },
       };
       runtimes.set(id, runtime);
       return runtime;
-    } catch (err) { db.close(); platform.close(); throw err; }
+    } catch (err) {
+      registry?.close().catch(() => {});
+      platform.close();
+      throw err;
+    }
   };
   return {
     async handle(req, res) {
@@ -79,7 +115,7 @@ export function createPublicDemoHandler(config, baseDb) {
         const { path, segments } = normalizePath(raw);
         if (path === '/mcp' || ['/signin', '/enroll', '/account', '/admin/users'].includes(path)) throw new HttpError(403, DEMO_OFF_MESSAGE);
         if (path === '/healthz' && ['GET', 'HEAD'].includes(req.method)) {
-          sendJson(res, 200, { ok: true, schema: schemaVersion(baseDb), publicDemo: true });
+          sendJson(res, 200, { ok: true, schema: SHIPPED_SCHEMA, platformSchema: schemaVersion(basePlatform), publicDemo: true });
           return;
         }
         if (segments[0] !== 'api') {

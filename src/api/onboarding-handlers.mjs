@@ -10,7 +10,7 @@ import { VaultError } from '../ingest/vault.mjs';
 import { understoodOf } from '../onboarding/heard.mjs';
 import { HttpError } from './http.mjs';
 import { scenarioOf } from './handlers.mjs';
-import { dataKey, ingestOpts, triggerPlan, triggerGuesses } from './ingest-handlers.mjs';
+import { householdVault, ingestOpts, triggerPlan, triggerGuesses } from './ingest-handlers.mjs';
 
 export const NOTE_MAX_BYTES = 30000;
 const CONTROL = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/;
@@ -24,8 +24,8 @@ export async function saveNotes(ctx) {
   const bytes = new TextEncoder().encode(text + '\n');
   if (bytes.length > NOTE_MAX_BYTES) throw new HttpError(413, `the note is over ${NOTE_MAX_BYTES} bytes; split it or attach it as a file`);
 
-  const key = await dataKey(ctx);
-  const opts = ingestOpts(ctx, key);
+  await householdVault(ctx);
+  const opts = ingestOpts(ctx);
   let file;
   try {
     file = await ingestFile(ctx.db, { name: `Setup notes ${opts.now.slice(0, 10)}.md`, bytes, mime: 'text/markdown' }, opts);

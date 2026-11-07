@@ -4,26 +4,26 @@
 // before the migration still reopens, and a re-import of the answered account asks nothing new.
 // The 014 store is built by applying migrations 001 to 014 the way db.mjs migrate does
 // (test/store-upgrade.test.mjs) and populated with the rows main's code writes, the undo log in
-// main's format ({table, op, rowid, before, after}, row images as json_object text). Every value
-// here is synthetic.
+// main's format ({table, op, rowid, before, after}, row images as json_object text). The 014 store
+// sits in the household root of a fresh synthetic instance (MT-03 layout), so a re-import runs in
+// that household's context. Every value here is synthetic.
 
 import test, { before } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync, rmSync } from 'node:fs';
-import { randomBytes } from 'node:crypto';
+import { readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { src, tempDir } from '../helpers/server.mjs';
+import { src, tempDir, secretsFor, instanceSecretsOf, householdContext } from '../helpers/server.mjs';
 import { aggregatorFile, offEngine, one, count, NOW } from '../helpers/ingest.mjs';
 
 let P;
 let C;
 let DB;
-let V;
+let PL;
 before(async () => {
   P = await src('src/ingest/pipeline.mjs');
   C = await src('src/ingest/confirm.mjs');
   DB = await src('src/store/db.mjs');
-  V = await src('src/ingest/vault.mjs');
+  PL = await src('src/platform/db.mjs');
 });
 
 const AT = '2032-03-01T09:00:00.000Z';
@@ -73,22 +73,34 @@ function applyThrough(db, target) {
 
 async function storeAt014() {
   const dataDir = await tempDir('fathom-confirm-migration-');
-  const keyDir = await tempDir('fathom-key-');
-  const db = DB.openDb(join(dataDir, 'fathom.sqlite'));
+  const keys = secretsFor(dataDir);
+  // A fresh real instance whose household store is replaced by one built only through 014.
+  const made = PL.createInstance(dataDir, { mode: 'real', platformKey: keys.platformKey });
+  made.db.close();
+  const file = join(made.root, 'fathom.sqlite');
+  for (const f of [file, `${file}-wal`, `${file}-shm`]) rmSync(f, { force: true });
+  const db = DB.openDb(file);
   db.exec('CREATE TABLE IF NOT EXISTS schema_migrations (id INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)');
   applyThrough(db, 14);
   DB.setSetting(db, 'mode', 'real');
-  const keyFile = join(keyDir, 'data.key');
-  writeFileSync(keyFile, randomBytes(32), { mode: 0o600 });
-  const config = { dataDir, dataKeyFile: keyFile, engine: 'off', clock: null, demo: false, port: 0, host: '127.0.0.1', claudeCredentialFile: null, emailTransport: 'dev' };
-  const key = await V.loadDataKey({ dataDir, keyFile, mode: 'real' });
+  const config = {
+    dataDir, platformKeyFile: keys.platformKeyFile, mcpSecretFile: keys.mcpSecretFile,
+    engine: 'off', clock: null, demo: false, port: 0, host: '127.0.0.1', claudeCredentialFile: null, emailTransport: 'dev',
+  };
+  // The household context is built on first use, after the test migrated the store.
+  let household = null;
   return {
     db,
-    opts: (engine) => ({ engine, config, now: NOW, key }),
+    async opts(engine) {
+      household ??= await householdContext({
+        db, platform: made.platform, householdId: made.householdId, mode: 'real', config, secrets: (await instanceSecretsOf(dataDir, 'real')).secrets,
+      });
+      return { engine, config, now: NOW, household };
+    },
     close() {
       try { db.close(); } catch { /* already closed */ }
+      try { made.platform.close(); } catch { /* already closed */ }
       rmSync(dataDir, { recursive: true, force: true });
-      rmSync(keyDir, { recursive: true, force: true });
     },
   };
 }
@@ -191,7 +203,7 @@ test('an answer recorded before the migration still reopens, and the pending que
 test('re-importing the answered account after the migration asks nothing new for it', () => withOldStore(async (s, ids) => {
   DB.migrate(s.db);
   const questions = count(s.db, 'confirm_items');
-  const { results } = await P.ingestFiles(s.db, [aggregatorFile('later-export.csv', [{ date: '2032-03-02', amount: '12.50', description: 'Synthetic later row' }])], s.opts(await offEngine()));
+  const { results } = await P.ingestFiles(s.db, [aggregatorFile('later-export.csv', [{ date: '2032-03-02', amount: '12.50', description: 'Synthetic later row' }])], await s.opts(await offEngine()));
   assert.equal(results[0].status, 'imported');
   assert.equal(count(s.db, 'accounts'), 2, 'the row lands in the existing account');
   assert.equal(count(s.db, 'transactions', 'account_id = ?', ids.answered), 1);

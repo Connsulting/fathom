@@ -1,7 +1,9 @@
 // Email and jobs API handlers: transport status, the brief preview and send history, a test send,
 // a brief send, the job list and manual job runs (POST /api/jobs/plan/run is the manual plan run:
-// planning runs only through the scheduler). Each takes the router ctx ({db, config, engine,
-// scheduler, transport, params, body}) and returns the JSON body or throws HttpError. Responses
+// planning runs only through the scheduler). Each takes the router ctx ({household, db, config,
+// engine, scheduler, transport, params, body}, all of one household) and returns the JSON body or
+// throws HttpError. A paused household's manual run is 409 and its sends are recorded failed with
+// the transport's code (paused, recipient_unverified). Responses
 // never carry an email body in history, the credential or a full address (the recipient is
 // masked by emailStatus). The router logs errors on these routes as a code only.
 
@@ -22,11 +24,12 @@ const TEST_SUBJECT = 'Fathom test email';
 const TEST_TEXT = 'This is a test email from Fathom. Email delivery is working.';
 const TEST_HTML = simpleDarkEmail({ title: TEST_SUBJECT, paragraphs: [TEST_TEXT] });
 
-const SCHEDULER_STATUS = { unknown_job: 404, running: 409, locked: 409 };
+const SCHEDULER_STATUS = { unknown_job: 404, running: 409, locked: 409, paused: 409 };
 const SCHEDULER_MESSAGE = {
   unknown_job: 'no such job',
   running: 'that job is already running',
   locked: 'another scheduler holds the job lock',
+  paused: 'outbound jobs are paused',
 };
 
 const brief = (ctx, engine = ctx.engine) => composeBrief(ctx.db, { clock: (ctx.config && ctx.config.clock) || null, publicUrl: (ctx.config && ctx.config.publicUrl) || null, engine });
