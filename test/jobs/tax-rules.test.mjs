@@ -778,8 +778,11 @@ describe('MG6 Roth catch-up', () => {
 // deducts the full amount contributed less amounts previously deducted). The default store has one
 // college account with a 1,000 March contribution; Virginia top rate 5.75% above 17,000.
 describe('MG9 Virginia529', () => {
-  const va529 = async entry => {
-    const db = await S.store();
+  // The owner of the college account is 70 or older when `older` is set (ages come from birth years).
+  const AGES = { 'household.birthYears': { owner: 1950, spouse: 1983 } };
+  const va529 = async (entry, { older = false } = {}) => {
+    const db = await S.store({ variant: { facts: AGES } });
+    if (older) db.prepare("UPDATE accounts SET owner = 'owner' WHERE kind = '529'").run();
     addFact(db, 'accounts.va529', { [accountIdByMask(db, MASKS.college)]: entry });
     await plan(db);
     return { db, info: computeFor(db).info };
@@ -789,8 +792,8 @@ describe('MG9 Virginia529', () => {
     // Uncapped: 1,000 + 5,000 = 6,000. Baseline (capped, carryforward 0): min(4,000, 1,000) = 1,000.
     // Both Virginia taxable incomes are above 17,000, so tax.va.proj falls by 5,000 x 5.75% = 287.50.
     // No capped account, so no deduction-left figure.
-    const base = await planned();
-    const old = await va529({ virginiaPlan: true, ownerAge70Plus: true, carryforward: 5000 });
+    const base = await planned({ facts: AGES });
+    const old = await va529({ virginiaPlan: true, carryforward: 5000 }, { older: true });
     assert.equal(fig(base.db, 'va529.deduction').v, 1000);
     const d = fig(old.db, 'va529.deduction');
     assert.equal(d.v, 6000);
@@ -806,7 +809,7 @@ describe('MG9 Virginia529', () => {
 
   test('MG9: a capped account with a carryforward that fills the cap has no room left', async () => {
     // min(4,000, 1,000 + 5,000) = 4,000; left 4,000 - 4,000 = 0; tax saved by full use 0.
-    const { db } = await va529({ virginiaPlan: true, ownerAge70Plus: false, carryforward: 5000 });
+    const { db } = await va529({ virginiaPlan: true, carryforward: 5000 });
     assert.equal(fig(db, 'va529.deduction').v, 4000);
     assert.equal(fig(db, 'va529.deductionLeft').v, 0);
     assert.equal(fig(db, 'va529.taxSaved').v, 0);
@@ -814,7 +817,7 @@ describe('MG9 Virginia529', () => {
 
   test('MG9: a missing carryforward blocks Virginia tax and its targets', async () => {
     // Without the carryforward the subtraction, and so Virginia taxable income, is unknown.
-    const { db, info } = await va529({ virginiaPlan: true, ownerAge70Plus: false });
+    const { db, info } = await va529({ virginiaPlan: true });
     assert.equal(info.vaBlocked, 'va529_answers_missing');
     assert.ok(info.va529.missing.includes('College 529'), `missing: ${info.va529.missing}`);
     for (const k of ['tax.va.proj', 'sh.va.required', 'sh.va.remaining', 'va529.deduction', 'va529.deductionLeft', 'va529.taxSaved']) absent(db, k);
@@ -823,7 +826,11 @@ describe('MG9 Virginia529', () => {
   });
 
   test('MG9: a college account with no Virginia answers at all blocks Virginia tax', async () => {
-    const { db, info } = await planned({ facts: { 'accounts.va529': undefined } });
+    // With no institution on file the plan is asked, not inferred.
+    const db = await S.store({ variant: { facts: { 'accounts.va529': undefined } } });
+    db.prepare("UPDATE accounts SET inst = '' WHERE kind = '529'").run();
+    await plan(db);
+    const info = computeFor(db).info;
     assert.equal(info.vaBlocked, 'va529_answers_missing');
     absent(db, 'tax.va.proj');
     assert.ok(figureRow(db, 'tax.fed.proj'));

@@ -2118,8 +2118,10 @@ and K-1 `entityKind` documents), `income.w2` (an outside employer, never the hou
 `retirement.backdoorRothCandidate` (AGI as the MAGI proxy above the Roth phase-out). Calculator
 confirmations come only from owner-set facts: `retirement.planTermsConfirmed`,
 `retirement.aggregationConfirmed`, `benefits.hsaEligible`, `benefits.hsaCoverage`,
-`business.salaryRange`, `business.cashBasis`, `household.ownerAge`, `household.spouseAge` and
-`accounts.va529`. A missing one produces no figure and turns the trigger that needs it into a
+`business.salaryRange`, `business.cashBasis`, `household.birthYears` (the one source of every
+age: owner, spouse and dependents; an age is the age by the end of the planning year) and
+`accounts.va529` (the Virginia plan answer is inferred from the institution unless undone through
+`accounts.va529Inference`; the account owner's age comes from `household.birthYears`). A missing one produces no figure and turns the trigger that needs it into a
 confirm form. Other owner inputs: `tax.itemizedEstimate`, `tax.vaItemizedEstimate`,
 `tax.withholding.federal`, `tax.withholding.virginia`, `tax.prior.*`, `retirement.contributions`,
 `income.partnershipEstimate`, `plan.nextYearBusinessIncome`, `business.lastPayrollDate`,

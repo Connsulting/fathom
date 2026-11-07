@@ -72,6 +72,10 @@ describe('review fixes', () => {
     ]), { answers: { hints: { [`${INST.college}|${grand}`]: { kind: '529', owner: null } } } });
     const college = accountIdByMask(db, MASKS.college);
     const other = accountIdByMask(db, grand);
+    // The grandparent account's owner is 70 or older; the college account's is not.
+    db.prepare("UPDATE accounts SET owner = 'owner' WHERE id = ?").run(other);
+    db.prepare("UPDATE accounts SET owner = 'spouse' WHERE id = ?").run(college);
+    addFact(db, 'household.birthYears', { owner: 1950, spouse: 1983 });
     addFact(db, 'accounts.va529', {
       [college]: { virginiaPlan: true, carryforward: 0 },
       [other]: { virginiaPlan: true, carryforward: 0 },
