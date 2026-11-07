@@ -23,6 +23,7 @@ import {
 import { storeFile, readStoredFile, loadDataKey } from './vault.mjs';
 import { recordSource } from './freshness.mjs';
 import { autoResolve } from './auto.mjs';
+import { defaultAccountLabel } from '../shared/account-label.mjs';
 
 export const STATUSES = Object.freeze(['imported', 'duplicate', 'needs_mapping', 'needs_extraction', 'unsupported', 'too_large', 'failed']);
 const WAITING = ['needs_mapping', 'needs_extraction'];
@@ -375,14 +376,15 @@ function upsertAccounts(ctx, accountRows) {
     }
     const account = row.account;
     const name = accountName(account);
+    const shown = defaultAccountLabel(account);
     const kind = kindOf(account.kind);
     const mask = /^\d{4}$/.test(account.mask ?? '') ? account.mask : null;
     db.prepare(`INSERT INTO accounts (id, inst, mask, name, owner, kind, mirror, file_id, parser, locator, identity, source_id)
                 VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)`)
       .run(row.accountId, institution(account.inst) || null, mask, name, kind, mirror, fileId, row.parser ?? parser, json(row.locator ?? null), identity, sourceId);
     if (recordHolder(ctx, row)) named.add(row.accountId);
-    tally(ctx, ask(db, { kind: 'account_owner', subject: row.accountId, question: `Whose account is ${name}?`, options: OWNER_OPTIONS, context: {}, fileId, now }));
-    if (!kind) tally(ctx, ask(db, { kind: 'account_kind', subject: row.accountId, question: `What kind of account is ${name}?`, options: KIND_OPTIONS, context: {}, fileId, now }));
+    tally(ctx, ask(db, { kind: 'account_owner', subject: row.accountId, question: `Whose account is ${shown}?`, options: OWNER_OPTIONS, context: {}, fileId, now }));
+    if (!kind) tally(ctx, ask(db, { kind: 'account_kind', subject: row.accountId, question: `What kind of account is ${shown}?`, options: KIND_OPTIONS, context: {}, fileId, now }));
   }
 }
 

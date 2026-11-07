@@ -12,6 +12,8 @@
 import { getSetting, tx, cents, parseJson as parse } from '../store/db.mjs';
 import { loadContent, loadPacks, tokenScope, resolveClock, todayUtc, loadGoals, loadCurve, loadFigures, loadLinkedRecs, loadLinkedRec, housekeepingCount } from '../scenario/build.mjs';
 import { horizonLabel } from '../shared/goals.mjs';
+import { accountLabel } from '../shared/account-label.mjs';
+import { accountNaming, relabelStoredFigure } from '../accounts/naming.mjs';
 import { OWNERS } from '../shared/rec-links.mjs';
 import { needsYou, verdictLevel, packStatus, STATUSES } from '../shared/rules.mjs';
 import { resolveTokens } from '../shared/tokens.mjs';
@@ -225,10 +227,13 @@ export const tools = [
     handler(args, ctx) {
       const scope = tokenScope(ctx.db);
       const latest = ctx.db.prepare('SELECT date, amount FROM balances WHERE account_id = ? ORDER BY date DESC LIMIT 1');
+      const naming = accountNaming(ctx.db);
       return ctx.db.prepare('SELECT * FROM accounts ORDER BY sort, id').all().map(a => {
         const b = latest.get(a.id);
         const out = {
-          id: a.id, inst: a.inst, mask: a.mask, name: a.name, owner: a.owner, kind: a.kind, mirror: a.mirror,
+          id: a.id, inst: a.inst, mask: a.mask,
+          name: accountLabel(naming.byId.get(a.id) || a),
+          importedName: a.name, owner: a.owner, kind: a.kind, mirror: a.mirror,
           note: a.note || '', balance: b ? b.amount : null, asOf: b ? b.date : null,
         };
         // Imported accounts carry text from uploaded files: verbatim, never token-resolved.
@@ -362,11 +367,13 @@ export const tools = [
     scope: 'read',
     handler(args, ctx) {
       const want = args.keys ? new Set(args.keys) : null;
+      const naming = accountNaming(ctx.db);
       return ctx.db.prepare(`SELECT f.key, f.v, f.kind, f.label, f.src, f.unavailable_reason, s.label AS src_label, s.as_of AS src_as_of
                              FROM figures f LEFT JOIN sources s ON s.id = f.src ORDER BY f.rowid`).all()
         .filter(f => !want || want.has(f.key))
         .map(f => {
-          const out = { key: f.key, v: f.v, kind: f.kind, label: f.label, source: { id: f.src, label: f.src_label || '', asOf: f.src_as_of || '' } };
+          const named = relabelStoredFigure(naming, f);
+          const out = { key: named.key, v: named.v, kind: named.kind, label: named.label, source: { id: named.src, label: named.src_label || '', asOf: named.src_as_of || '' } };
           if (f.unavailable_reason) out.unavailable = f.unavailable_reason;
           return out;
         });

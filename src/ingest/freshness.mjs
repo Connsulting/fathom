@@ -4,6 +4,7 @@
 
 import { getSetting, parseJson } from '../store/db.mjs';
 import { escapeUserText } from '../shared/tokens.mjs';
+import { accountLabel } from '../shared/account-label.mjs';
 import { howToFor, listHowTo } from './howto.mjs';
 import { monthEnd } from './format.mjs';
 import { pendingItems, finalReason } from './confirm.mjs';
@@ -141,7 +142,13 @@ function pendingWithGuesses(db) {
       option: g.option, label: g.label, reason: g.evidence, evidence: g.evidence, source: g.source,
       ...(g.source === 'engine' ? { model: r?.model ?? null, ts: r?.ts ?? null } : {}),
     } : null;
-    return { ...item, fileName: r?.file_name ?? null, detail, guess, rank: rankOf(item.kind), group: GROUPED.has(item.kind) ? item.kind : null };
+    const label = detail?.type === 'account' ? detail.account?.label : '';
+    const question = label && item.kind === 'account_owner' ? `Whose account is ${label}?`
+      : label && item.kind === 'account_kind' ? `What kind of account is ${label}?`
+        : label && detail.account?.name && detail.account.name !== label
+          ? String(item.question).split(detail.account.name).join(label)
+          : item.question;
+    return { ...item, question, fileName: r?.file_name ?? null, detail, guess, rank: rankOf(item.kind), group: GROUPED.has(item.kind) ? item.kind : null };
   });
   return items.sort((a, b) => a.rank - b.rank || (a.group && b.group ? balanceSize(b) - balanceSize(a) : 0) || a.id - b.id);
 }
@@ -222,7 +229,7 @@ export function ingestState(db, { clock } = {}) {
 
   const accounts = {};
   const accountNotes = [];
-  const rows = db.prepare(`SELECT a.id, a.name, a.source_id, (
+  const rows = db.prepare(`SELECT a.id, a.name, a.inst, a.mask, a.kind, a.owner, a.display_name, a.source_id, (
       SELECT max(d) FROM (
         SELECT max(date) AS d FROM transactions WHERE account_id = a.id
         UNION ALL SELECT max(date) FROM balances WHERE account_id = a.id
@@ -238,7 +245,7 @@ export function ingestState(db, { clock } = {}) {
     // fresh source needs its own.
     const source = sources.find((s) => s.id === row.source_id);
     if (f && f.state === 'stale' && DOMAIN_OF[kind] && source && source.state !== 'stale') {
-      accountNotes.push({ domain: DOMAIN_OF[kind], text: `${row.name || row.id} data is ${f.ageDays} days old. Export a fresh copy.` });
+      accountNotes.push({ domain: DOMAIN_OF[kind], text: `${accountLabel(row) || row.id} data is ${f.ageDays} days old. Export a fresh copy.` });
     }
   }
 
