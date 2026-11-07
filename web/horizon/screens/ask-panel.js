@@ -113,7 +113,7 @@ function pageChip() {
   const r = route();
   return routeContext(r, {
     accounts: api.s && api.s.accounts, recs: api.recs(), packs: api.packs ? api.packs() : [],
-    txt: (s) => api.txt(s), confirm: r.name === 'confirm' ? confirmCard() : null, pnl: r.name === 'pnl' ? pnlView() : null
+    txt: (s) => api.txt(s), confirm: r.name === 'confirm' ? confirmCard() : null, pnl: r.name === 'pnl' || r.name === 'pnlrows' ? pnlView() : null
   });
 }
 
