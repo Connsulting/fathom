@@ -21,7 +21,7 @@ async function seed(request) {
     return pair;
   } finally {db.close();}
 }
-const series = page => page.locator('[data-series="net"] .h-spark-h b');
+const series = page => page.locator('[data-trend-total]');
 
 test('Money offers Merge and Undo restores the duplicate and totals @sm-ac5 @mobile', async ({page,request}) => {
   const pair=await seed(request);
