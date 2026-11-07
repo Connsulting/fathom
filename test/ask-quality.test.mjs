@@ -164,9 +164,29 @@ test('a date in the answer that matches a same-turn row date is a literal with t
     expectRowSource(title, s, `${date} span`);
   }
   const { reply } = await ask(s, [[{ toolCalls: [QUERY] }, { text: `On October 9 you paid ${ROOF_TEXT} for the roof.` }]]);
-  assert.equal(reply.provenance.grounding.ok, true, 'an unmatched date is not a violation');
+  // Review r2 F5: an unmatched date is neutralized in place, like an unsourced amount, but it never
+  // counts toward a regeneration on its own.
+  assert.equal(reply.provenance.grounding.ok, false, 'an unmatched date is unchecked');
+  assert.deepEqual(reply.provenance.grounding.unverified, ['October 9']);
   assert.ok(!reply.provenance.literals.some(l => l.text === 'October 9'), JSON.stringify(reply.provenance.literals));
-  assert.ok(joined(reply).includes('On October 9 you paid <span'), joined(reply));
+  assert.ok(joined(reply).includes(`On ${UNCHECKED_OPEN}October 9</span> you paid <span`), joined(reply));
+  assert.equal(reply.provenance.grounding.retried, false);
+});
+
+test('unmatched dates never trigger a regeneration; a date in the household data is sourced to it', async t => {
+  const s = await cardStore(t);
+  const { reply, calls } = await ask(s, [[{ toolCalls: [QUERY] }, { text: `On October 9 and October 11 you paid ${ROOF_TEXT}.` }]]);
+  assert.equal(calls.length, 1, 'two unchecked dates alone do not regenerate');
+  assert.deepEqual(reply.provenance.grounding.unverified, ['October 9', 'October 11']);
+  const summary = await callTool('household_summary', {}, { db: s.db, now: CLOCK });
+  const [y, m, d] = String(summary.clock).split('-').map(Number);
+  const month = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][m - 1];
+  const today = `${month} ${d}, ${y}`;
+  const { reply: dated } = await ask(s, [[{ toolCalls: [QUERY] }, { text: `As of ${today} you paid ${ROOF_TEXT}.` }]]);
+  const lit = dated.provenance.literals.find(l => l.text === today);
+  assert.ok(lit, JSON.stringify(dated.provenance.literals));
+  assert.equal(lit.source, 'household summary');
+  assert.equal(dated.provenance.grounding.ok, true, JSON.stringify(dated.provenance.grounding));
 });
 
 /* ---------- (c) one invented amount: neutralized in place, no regeneration ---------- */
