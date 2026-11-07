@@ -1,3 +1,5 @@
+import { categoryEvidence } from './policy.mjs';
+
 export const BUCKETS = Object.freeze(['household', 'business', 'income', 'transfer', 'tax', 'saving', 'excluded']);
 
 const aggregator = Object.freeze({
@@ -117,7 +119,7 @@ export function historyDecision(t,input,index,examples=historyExamples(t,input,i
   if(examples.length<3 || examples.some(s=>s.merchant!==normalizeMerchant(t.description) || s.account_id!==t.account_id
     || Math.abs(amountBand(t.amount)-amountBand(s.amount))>1 || s.category!==examples[0].category || s.bucket!==examples[0].bucket)) return null;
   return {category:examples[0].category,bucket:examples[0].bucket,evidence:{
-    text:`Fathom's categorization: your last ${examples.length} from ${t.description} were ${examples[0].category}.`,
+    text:categoryEvidence(`Fathom's categorization: your last ${examples.length} from ${t.description} were ${examples[0].category}.`),
     transactionIds:examples.map(s=>s.id),stage:'history'}};
 }
 
