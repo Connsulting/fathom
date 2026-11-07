@@ -10,7 +10,9 @@ function where(conds) {
 export const tools = [
   {
     name: 'query_transactions',
-    description: 'Search transactions by account, date range (inclusive, YYYY-MM-DD), amount range, category or description text. Returns at most `limit` rows (default 50, max 200), newest first, with the total match count.',
+    description: 'Search transactions by account, date range (inclusive, YYYY-MM-DD), amount range, category or description text. ' +
+      'Without accountId it covers every account, credit cards included. Each row has accountId, date, a signed amount (money out is negative, money in positive), description and category; ' +
+      'credit card rows carry the budgeting app category, so group spending by it. Returns at most `limit` rows (default 50, max 200), newest first, with the total match count.',
     inputSchema: obj({
       accountId: { type: 'string' },
       from: { type: 'string', pattern: DATE },

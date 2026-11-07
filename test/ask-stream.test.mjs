@@ -169,17 +169,20 @@ async function demoAnswerer(t) {
   return { s, engine, packs };
 }
 
-test('a failed grounding check resets the streamed text before the retry streams', async t => {
+test('a regeneration streams its revision step, then a plain reset, before the new answer streams', async t => {
   const { s, engine, packs } = await demoAnswerer(t);
   let n = 0;
   const wrapped = { ...engine, mode: engine.mode, isOn: () => engine.isOn(), call: req => engine.call({ ...req,
-    fake: n++ === 0 ? [{ text: 'You owe $987,654 this year.' }] : [{ toolCalls: [{ name: 'household_summary', args: {} }] }, { text: 'Nothing to add.' }] }) };
+    fake: n++ === 0 ? [{ text: 'You owe $987,654 this year and $876,543 next year.' }] : [{ toolCalls: [{ name: 'household_summary', args: {} }] }, { text: 'Nothing to add.' }] }) };
   const seen = [];
   const reply = await createLiveAnswerer({ engine: wrapped, packs }).answer({ db: s.db, key: 'ask:0123456789ab', text: 'How much?', onEvent: e => seen.push(e) });
   assert.equal(reply.provenance.grounding.retried, true);
   const types = seen.map(e => e.type);
   const reset = types.indexOf('reset');
   assert.ok(reset > types.indexOf('text'), 'the first answer streamed, then was reset');
+  assert.deepEqual(seen.filter(e => e.type === 'reset'), [{ type: 'reset' }], 'one plain reset, no draft flag');
+  const revised = seen.findIndex(e => e.type === 'progress' && e.label === 'Revised to remove 2 unchecked figures');
+  assert.ok(revised > types.indexOf('text') && revised < reset, 'the revision step comes after the first answer and before the reset');
   assert.equal(seen.slice(reset + 1).filter(e => e.type === 'text').map(e => e.text).join(''), 'Nothing to add.');
   // The reply itself is the only grounded output; streamed text never carries spans.
   for (const e of seen.filter(x => x.type === 'text')) assert.doesNotMatch(e.text, /</);
@@ -333,5 +336,6 @@ test('renderAnswer escapes model markup and keeps list numbers out of grounding'
   // A number inside a list item is still checked.
   const bad = groundAnswer('1. Pay $987,654', { scenario: { fig: {} }, toolResults: [], data: [] });
   assert.deepEqual(bad.violations.map(v => v.text), ['$987,654']);
-  assert.match(renderAnswer('1. Pay $987,654', bad.violations, bad.literals)[0], /^<ol><li>Pay <span class="fx-unverified"/);
+  assert.match(renderAnswer('1. Pay $987,654', bad.violations, bad.literals)[0],
+    /^<ol><li>Pay <span class="fx-checking fx-unchecked" title="Not checked against your data">\$987,654<\/span>/);
 });
