@@ -1006,6 +1006,30 @@ Tickets: C1 for `create` and `edit`, C9 for the rest. The consolidated tool is d
 named `edit_goal`, so no live name keeps a new meaning. Writes move into `src/goals/write.mjs`
 and `setGoalSuggestion` (`src/suggest/write.mjs`).
 
+Goal model fields (feat/goal-model-v2, live in `create_goal`, `edit_goal` and `list_goals` before
+C1; C1 and C9 carry them into `update_goal` and `goals` under these exact names):
+
+1. `kind`: `balance` (the default), `range`, `floor` or `contribution`. A body field of another
+   kind is refused; a kind change drops the old kind's fields.
+2. `owner` (whose goal): `owner`, `spouse`, `joint`, a dependent key (`kid`, `kid2`, ...) or null.
+   Labels come from the household names. Distinct from the row's `origin`.
+3. `priority`: `high`, `medium`, `low` or null.
+4. `status`: `open`, `done` or `archived`. `done` sets the `done_at` column and `open` clears it;
+   every goal reads a canonical status, and a seed goal's display text is `statusLabel`.
+5. Range: `targetLow`, `targetHigh` (low not above high), `targetDate`, `track`.
+6. Floor: `floor`, `track` (required), no `targetDate`.
+7. Contribution: `target` is the amount, `taxYear` (integer), `targetDate` is the deadline (after
+   January 1 of the tax year), `accounts` (destination account ids, optional), `split`
+   (optional `[{ person: 'owner'|'spouse', amount }]`, adding up to `target`), `entered`
+   (optional `{ asOf, total }` or `{ asOf, people: [{ person, amount }] }`).
+
+Every amount and date among them needs the person's words or a stored value, as `target` and
+`targetDate` do; `owner`, `priority`, `kind` and `status` need none. `list_goals` adds `kind`,
+`owner`, `ownerLabel`, `priority`, `status`, `statusLabel` and `range`, `floor` or `contribution`
+objects with their sources; `get_pace` entries add `kind`, `owner`, `priority` and `range`, `floor`
+or `contribution`. A goal receipt's undo also compares `done_at` and `archived_at`, and the
+`goal_row` restore (C9) reinserts `done_at` with every other column.
+
 #### `update_preferences`
 
 Purpose: preferences, saved spending definitions, which packs are on and where the household sits

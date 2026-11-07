@@ -414,7 +414,7 @@ Money columns are dollars rounded to cents; JSON columns hold JSON text. The pro
 | `rec_events` | `id` PK, `rec_id`, `ts`, `action`, `arg`, `from_status`, `to_status`, `actor` (`ui`, `tool`, ...) |
 | `conversations` | `key` PK (an Ask thread `ask:<12 lowercase hex>` or `pack:<id>`), `created_at`, `last_at` (newest message time, else `created_at`), and for Ask threads `title` (NULL until named), `title_source` (NULL, `auto` or `manual`), `archived_at`, `trashed_at` (migration 008; app clock ISO times), `rec_id` (the rec a thread was asked from, a context reference, never a foreign key) and `rec_detached_at` (set by Start over) (migration 016) |
 | `messages` | `id` PK, `conversation_key`, `role` in me, fathom, advisor, claude, `text` (token-bearing HTML), `refs` JSON, `notice`, `ts`, `provenance` JSON or NULL (migration 006; see "Answer provenance") |
-| `goals` | `id` PK, `def` JSON, `sort` |
+| `goals` | `id` PK, `def` JSON, `sort`, `origin` (`seed` or `owner`), `archived_at`, `created_at`, `updated_at` (migration 012), `done_at` (migration 026: app clock ISO time a goal was marked done); see "Goals and the tradeoff curve" |
 | `deadlines` | `id` PK, `date`, `label`, `title`, `rec_id`, `hard` |
 | `events` | `id` PK, `date` (label as in the scenario), `kind`, `title`, `body`, `sort` |
 | `packs_state` | `id` PK, `def` JSON (the pack with its base status, plus an optional `manifest` tag naming the repo pack manifest the row stands for, and on demo rows a `label` keeping the demo name; migration 005 tags the demo rows with `manifest`, migration 006 adds `label`, real rows link by their own id), `active` (NULL means no override), `exploring`, `what_if_asked`, `what_if_done`, `unhid` JSON, `sort`, `updated_at` |
@@ -861,9 +861,9 @@ known path with the wrong method is 405; signed out, both are 401. Every action 
 | `POST /api/accounts/:id/kind` | `{kind}` (a confirm option id) or `{undo: before}` | `{scenario, account, before}`. Same as the owner route, for the `account_kind` answer.
 | `GET /api/accounts/:id/merge-candidates` | none | `{items: [{id, label, inst, kind, mask, lastDataDate, mirror, plan: {keepId, keepLabel, ownId, ownLabel, moves: {transactions, balances, positions, sources}}, refused?}]}`. Every other account with what a merge would keep and move: a connected account is merged into the other one; between two file accounts the open one survives; two connected accounts carry `refused`. 404 unknown. Read-only. |
 | `POST /api/accounts/:id/merge` | `{withId}` | `{scenario, survivorId, itemId}`. Merges through a manual `account_match` item answered `same`, the same path and undo log as a detected pair; the survivor takes a missing institution and a reliable last 4 from the SimpleFIN snapshot. Undo is `POST /api/confirm/:itemId/reopen`. 400 for a missing or same id, 404 unknown, 409 for two connected accounts. |
-| `POST /api/goals` | `{title, note?, horizon?, target?, targetDate?, track?}` | `{scenario, goal}`. Creates an owner goal (`origin` owner). `title` 1 to 120 characters, no line breaks; `note` at most 500; `horizon` now, 1-3y or 3-10y (default now); `target` a non-negative number or null; `targetDate` a valid YYYY-MM-DD or null; `track` null, `{accounts: [account ids]}` (at most 20, known ids) or `{figure: key}` (a known figure the store holds). Anything else 400. |
+| `POST /api/goals` | `{title, note?, horizon?, kind?, owner?, priority?, status?, ...kind fields}` | `{scenario, goal}`. Creates an owner goal (`origin` owner). `title` 1 to 120 characters, no line breaks; `note` at most 500; `horizon` now, 1-3y or 3-10y (default now); `kind` balance (default), range, floor or contribution; `owner` (whose goal) owner, spouse, joint, a dependent key such as kid, or null; `priority` high, medium, low or null; `status` open (default), done or archived. Kind fields (only the kind's own; another kind's field is 400 "`<field>` does not apply to a `<kind>` goal"): balance `target` (non-negative number or null), `targetDate` (YYYY-MM-DD or null), `track` (null, `{accounts: [account ids]}` at most 20 known ids, or `{figure: key}` a known figure the store holds); range `targetLow` and `targetHigh` (both required, low not above high), `targetDate`, `track`; floor `floor` and `track` (both required); contribution `target` (the amount, above zero), `taxYear` (2000 to 2100), `targetDate` (the deadline, after Jan 1 of the tax year), optional `accounts` (destination account ids), `split` (`[{person, amount}]`, owner and spouse once each, adding up to the amount to the cent) and `entered` (`{asOf, total}` or `{asOf, people: [{person, amount}]}`, people within the split when one is set). Anything else 400 with the validation message. |
 | `GET /api/pace` | none | Deterministic `clock`, `rollup`, `goals`, `series` and `meters`, identical to `scenario.pace`. Uses the same owner gate as the scenario. No writes or model calls. |
-| `POST /api/goals/:id` | any subset of the create fields | `{scenario, goal}`. Edits an owner goal; 409 for a seed (demo) goal, 404 unknown. |
+| `POST /api/goals/:id` | any subset of the create fields | `{scenario, goal}`. Edits an owner goal, validated against the stored def (a kind change drops the old kind's fields); `status` done marks it done (keeping the first done time), open reopens it, archived archives it. Per-kind 400s as for create; 409 for a seed (demo) goal, status included; 404 unknown. |
 | `GET /api/goals/suggestions` | none | `{clock, suggestions}`. The same records as `scenario.suggestions` (see "Suggested targets"). Same owner gate; no writes or model calls. |
 | `POST /api/goals/:id/suggestion` | `{action: 'dismiss' \| 'restore'}` or `{withdrawalRate}` | `{scenario}`. Stores a dismissal (the record's fingerprint) or the independence withdrawal rate in `settings` `goals.suggestions`. 404 unknown goal, 409 seed goal or a goal with no suggestion, 400 for an unknown action, both fields, a rate outside 0.02 to 0.06, or a rate on a non-independence goal. |
 | `POST /api/goals/:id/archive` | `{archived?: boolean}` (default true) | `{scenario, goal}`. Archives or restores a goal. |
@@ -2376,9 +2376,35 @@ engine, handed to it as `ctx.engine`) and "Facts helper and pack state".
 
 Goals live in the `goals` table: `def` JSON, `sort`, `origin` (`seed` for the demo seed, whose text
 carries scenario tokens; `owner` for goals the owner typed, stored as typed and always rendered
-escaped, never token-resolved), `archived_at`, `created_at` and `updated_at` (migration 012). An
-owner goal def is `{id, title, note, horizon, target, targetDate, track}`; `src/shared/goals.mjs`
-validates it and is shared with the browser.
+escaped, never token-resolved), `archived_at`, `created_at` and `updated_at` (migration 012), and
+`done_at` (migration 026). An owner goal def is `{id, title, note, horizon, kind, owner, priority,
+...kind fields, pace}`; `src/shared/goals.mjs` validates it (`validateGoal`, with the stored def as
+`previous` for a partial edit) and is shared with the browser. Migration 026 rewrites no row: every
+new field has a read-time default.
+
+`kind` is the goal model kind, distinct from the goal topics a rec names (`recs.goal_kinds`). A
+def without one is a balance goal. Each kind keeps only its own fields (`KIND_FIELDS`):
+
+| kind | label | fields |
+| --- | --- | --- |
+| `balance` | Reach a balance | `target`, `targetDate`, `track` |
+| `range` | Stay in a range | `targetLow`, `targetHigh`, `targetDate`, `track` |
+| `floor` | Keep a floor | `floor`, `track` (required) |
+| `contribution` | Make a contribution | `target` (the amount), `taxYear`, `targetDate` (the deadline), `accounts`, `split`, `entered` |
+
+`owner` is whose goal: `owner`, `spouse`, `joint` or a dependent key (`kid`, `kid2`, ...), the ids
+`OWNER_OPTIONS` and `accounts.owner` use; it is distinct from `origin: 'owner'` (a goal the owner
+typed). Labels come from the scenario `names` content (`me`, `spouse`, `kid`, ...) through
+`personLabel`, with the neutral fallbacks You, Your spouse, Joint and Your child; no name is in
+code. `priority` is `high`, `medium`, `low` or unset. Both read as null when unset.
+
+Status is never stored in the def. `loadGoals` gives every goal a canonical `status`: `archived`
+when `archived_at` is set, `done` when `done_at` is set (or, for a seed goal, when its display
+status is `done`), else `open`. A seed goal's display text (`on track`, `watch`, ...) stays in its
+def and reads as `statusLabel`. `doneAt` is the `done_at` time. Done goals stay listed on Goals
+and in `list_goals` but drop out of pace, rec links, suggestions and Home. A legacy def `kind` that
+names a topic (for example `education`) reads as kind balance with `topic` set, and keeps linking.
+A contribution's destination account labels read as `accountsLabel`.
 
 The scenario builder derives each owner goal's figures: `goal.<id>.target` is the typed target
 (source `goal-target`, labelled "You typed this", kind `t`, "A target you set"), and the current value is the tracked account's or
@@ -2386,6 +2412,15 @@ known figure's own stored figure, or for several accounts `goal.<id>.current`, t
 `goal-track`). A tracked account with no stored balance, or a figure kept only for reference
 (unavailable), gives no current value, never a partial or stale
 sum. `progress {cur, target}` is set only when both exist; the Goals screen draws a bar only then.
+The other kinds' typed amounts are owner goal figures too (source `goal-target`): `goal.<id>.low`
+and `goal.<id>.high` (Range low end, Range high end), `goal.<id>.floor` (Floor),
+`goal.<id>.split.<person>` (Share of the contribution), all kind `t`, and `goal.<id>.entered` and
+`goal.<id>.entered.<person>` (Contributed so far, as you entered, kind `a`; the total is the sum of
+the people when people are entered). A range's progress reads against `goal.<id>.low`.
+
+The demo seeds one goal of each newer kind after the scenario goals (`KIND_GOALS` in
+`demo/seed.mjs`, seed origin): a household checking range, a business cash floor and an IRA
+contribution with an entered amount. The seed goals with targets are the balance examples.
 
 Tradeoff curve positions are `settings` `curve.positions` (`{axisId: 0..1}`). The axes are the
 content `curve` (the demo) or the four default axes in `src/shared/goals.mjs` (a real store). The
@@ -2395,7 +2430,45 @@ onboarding Priorities step shows the same axes and saves to the same setting.
 
 `src/calc/pace.mjs` contains pure calculations. `src/pace/build.mjs` reads the store and builds
 `scenario.pace`; `GET /api/pace` and the read-only MCP tool `get_pace` expose the same result.
-Existing `list_goals` and `get_figures` keep their contracts. No migration is needed.
+`get_figures` keeps its contract. `list_goals` adds the goal model fields: `kind`, `owner` with
+`ownerLabel`, `priority`, the canonical `status` (open or done; `statusLabel` for a seed goal), and
+the kind's amounts as typed (`range: {low, high}`, `floor`, `contribution: {taxYear, deadline,
+accounts, split, entered}`), with source `you` for owner goals and `plan` for seed goals (an entered
+contribution is always `you`).
+
+Pace dispatches on the goal model kind; every entry carries `kind`, `owner` and `priority`, and
+done goals (`done_at` set, or a seed goal whose display status is done) are skipped.
+
+1. Balance: the path below, unchanged.
+2. Range: the balance path on `targetLow`, plus `range: {low, high, position}` with position
+   `below`, `in` or `above` from the tracked value. Above the high end is informational. Charted
+   with the low end as its target.
+3. Floor: holding at or above the floor, breached below. Status `on pace` (holding) or `behind`
+   (breached) when the data is current; stale or missing data keeps `unknown` but still reports
+   `floor.state` from the last reading. `timeGap` is Holding or Below floor. Not charted.
+4. Contribution: a straight line from 0 on Jan 1 of the tax year to the amount at the deadline,
+   on the same tolerance. At or above the amount is `ahead` (Reached); past the deadline below it
+   is `behind` (Deadline passed). Not charted. `contribution: {basis, taxYear, deadline, remaining,
+   people}`.
+
+Contribution progress has two bases. Transactions apply only when every destination account has
+at least one transaction dated from Jan 1 of the tax year to the earlier of Dec 31 and the clock;
+data runs through the earliest, across the accounts, of each account's latest such transaction,
+and freshness reads those transactions, never balances. A qualifying transaction has `amount > 0`,
+is into a destination account, is dated in the tax year on or before the clock, and is neither an
+internal move (an equal and opposite debit in another destination account within 5 days, matched
+one to one) nor investment income (an imported category or a description naming interest,
+dividends, a dividend reinvestment or capital gains). Transfers in from outside the destination
+set count. Per-person progress comes from the account holder only when every destination
+account's holder is the owner or the spouse; otherwise only the total shows. Without full coverage
+the entered amount applies (provenance `you`, dated by its `asOf`); with partial coverage and
+nothing entered the goal is `unknown` with `partial_contribution_coverage`, and with no coverage
+and nothing entered `missing_contributions`. Floors and contributions have no monthly series:
+`{series: null, reason: 'kind_not_charted', dataEnd: null}`.
+
+Known limits: a prior-year contribution made after Dec 31 (an IRA or HSA contribution before the
+April deadline) is not counted from transactions and must be entered; anything else credited to a
+destination account that the exclusions above do not catch counts as a contribution.
 
 Health is per open goal. The household headline is derived from those results. Archived and
 completed goals are excluded. Goals without both a target amount and a valid target date have
@@ -2549,7 +2622,10 @@ MCP tool for suggestions.
 
 ### Home layout
 
-Home is one `article.h-gcard` per live goal, in pace order, then goals without pace. Each card holds the
+Home is one `article.h-gcard` per live goal, in priority order (high, medium, low, unset), then pace
+order, then goals without pace. Owner and priority show as tags under the title when set, and a range,
+floor or contribution card adds its kind line (range ends and position, floor state, contribution
+progress by person). Each card holds the
 title and chip, then either the pace bar, the suggestion block, a question block, a "No target yet. Add one"
 line for a dismissed suggestion, or "Nothing tracks this goal yet.", then its next action. The suggestion
 block (shared with the Goals page) shows the amount with its provenance popover, the why, the basis line,

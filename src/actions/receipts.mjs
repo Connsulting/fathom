@@ -64,9 +64,13 @@ export async function undoAction(ctx, id, scope) {
     const before = parse(row.before_state, null), after = parse(row.after_state, null);
     const [table, pk] = TABLES[row.kind];
     const current = ctx.db.prepare(`SELECT * FROM ${table} WHERE ${pk} = ?`).get(row.entity_id);
-    const fields = Object.keys(after || before || {});
-    const value = current ? Object.fromEntries(fields.map(k => [k, current[k]])) : null;
-    if (!isDeepStrictEqual(value, after)) throw new ToolError('conflict', 'This item changed since that action. Ask for a new change instead.');
+    // A goal's lifecycle columns are always compared, so a goal archived or marked done after the
+    // receipt refuses Undo. A receipt written before migration 026 has no done_at: read as null.
+    const lifecycle = row.kind === 'goal' ? ['archived_at', 'done_at'] : [];
+    const fields = [...new Set([...Object.keys(after || before || {}), ...lifecycle])];
+    const value = current ? Object.fromEntries(fields.map(k => [k, current[k] ?? null])) : null;
+    const expected = after ? Object.fromEntries(fields.map(k => [k, after[k] ?? null])) : null;
+    if (!isDeepStrictEqual(value, expected)) throw new ToolError('conflict', 'This item changed since that action. Ask for a new change instead.');
     if (before === null) ctx.db.prepare(`DELETE FROM ${table} WHERE ${pk} = ?`).run(row.entity_id);
     else if (!current) {
       const keys = Object.keys(before);

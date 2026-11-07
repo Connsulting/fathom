@@ -5,15 +5,34 @@ import { writeRec } from '../store/recs.mjs';
 import { requireActor, saveReceipt, replanAction } from './receipts.mjs';
 import { requireEvidence } from './evidence.mjs';
 import { answerShape } from '../jobs/triggers/common.mjs';
+import { goalStatusOf } from '../shared/goals.mjs';
 
 const select = (row, keys) => row ? Object.fromEntries(keys.map(k => [k, row[k]])) : null;
 const FACT_FIELDS = ['key', 'value', 'src', 'as_of', 'confirmed', 'file_id', 'parser', 'locator'];
-const GOAL_FIELDS = ['id', 'def', 'sort', 'origin', 'created_at', 'archived_at'];
+const GOAL_FIELDS = ['id', 'def', 'sort', 'origin', 'created_at', 'archived_at', 'done_at'];
+// A goal as a receipt shows it: the def without its id and captured path, plus the derived status.
 const goalValue = row => {
   if (!row) return null;
-  const { title, note, horizon, target, targetDate, track } = parse(row.def, {});
-  return { title, note, horizon, target, targetDate, track };
+  const { id, pace, ...def } = parse(row.def, {});
+  return { ...def, status: goalStatusOf(row) };
 };
+
+// Every amount and date in a goal body that needs the owner's words or a stored value, as
+// [path, value, money]. owner, priority, kind and status need none.
+function goalEvidence(fields) {
+  const out = [];
+  for (const k of ['target', 'targetLow', 'targetHigh', 'floor']) if (Object.hasOwn(fields, k)) out.push([[k], fields[k], true]);
+  for (const k of ['targetDate', 'taxYear']) if (Object.hasOwn(fields, k)) out.push([[k], fields[k], false]);
+  if (Array.isArray(fields.split)) fields.split.forEach((p, i) => out.push([['split', i, 'amount'], p?.amount, true]));
+  const e = fields.entered;
+  if (e && typeof e === 'object') {
+    if (Object.hasOwn(e, 'asOf')) out.push([['entered', 'asOf'], e.asOf, false]);
+    if (Object.hasOwn(e, 'total')) out.push([['entered', 'total'], e.total, true]);
+    if (Array.isArray(e.people)) e.people.forEach((p, i) => out.push([['entered', 'people', i, 'amount'], p?.amount, true]));
+  }
+  return out.filter(([, v]) => v !== undefined);
+}
+const at = (obj, path) => path.reduce((o, k) => (o != null && typeof o === 'object' ? o[k] : undefined), obj);
 
 export async function recordFact(args, ctx) {
   const actorId = requireActor(ctx);
@@ -57,10 +76,15 @@ export function changeGoal(args, ctx, editing = false) {
   const { id, ...fields } = args;
   const current = editing ? ctx.db.prepare('SELECT * FROM goals WHERE id = ?').get(id) : null;
   const old = current ? parse(current.def, {}) : {};
-  for (const k of ['target', 'targetDate']) if (Object.hasOwn(fields, k)) {
-    const stored = Object.hasOwn(old, k) ? [old[k]] : [];
-    if (k === 'target') stored.push(...ctx.db.prepare('SELECT v FROM figures WHERE unavailable_reason IS NULL').all().map(r => r.v));
-    requireEvidence(ctx, fields[k], { stored });
+  let figureValues = null;
+  for (const [path, value, isMoney] of goalEvidence(fields)) {
+    const prior = at(old, path);
+    const stored = prior !== undefined ? [prior] : [];
+    if (isMoney) {
+      figureValues ??= ctx.db.prepare('SELECT v FROM figures WHERE unavailable_reason IS NULL').all().map(r => r.v);
+      stored.push(...figureValues);
+    }
+    requireEvidence(ctx, value, { stored });
   }
   let receipt = null;
   const opts = { now: new Date(ctx.now ?? Date.now()).toISOString(), onWrite(before, after) {
@@ -69,5 +93,5 @@ export function changeGoal(args, ctx, editing = false) {
   } };
   const row = editing ? updateGoal(ctx.db, id, fields, opts) : createGoal(ctx.db, fields, opts);
   ctx.onReceipt?.(receipt);
-  return { goal: parse(row.def, {}), receipt };
+  return { goal: { ...parse(row.def, {}), status: goalStatusOf(row) }, receipt };
 }
