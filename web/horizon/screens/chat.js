@@ -634,9 +634,10 @@ function sendAsk({ key, recId, text, questionId, draftKey, refocus, host = 'page
     if (!H.api) return;
     const ok = k ? meCount(k) > pend.n : !!res;
     if (!ok && draftKey && !hasQ && !H.ui.draft[draftKey]) H.ui.draft[draftKey] = text;
-    if (!k && res && res.thread && H.onThread) H.onThread(res.thread, host);
+    // pend.host, not the host it was sent from: Open in panel may have handed it over (handPending).
+    if (!k && res && res.thread && H.onThread) H.onThread(res.thread, pend.host);
     H.draw();
-    if (ok && refocus) { if (rid) focusRecInput(rid); else focusInput(host); }
+    if (ok && refocus) { if (rid) focusRecInput(rid); else focusInput(pend.host); }
   });
   return true;
 }
