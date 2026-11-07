@@ -996,7 +996,10 @@ a.h-dec-t:hover { color: var(--ac2); }
 .d-horizon .h-gacct input { accent-color: var(--ac); }
 .d-horizon .h-gacct small { color: var(--fa); font-size: 12px; }
 .d-horizon .h-gerr { color: #f0a59a; font-size: 13px; }
-.d-horizon .h-gform .h-ob-nav { margin-top: 2px; }
+.d-horizon .h-gform .h-ob-nav { margin-top: 2px; flex-wrap: wrap; }
+.d-horizon .h-gform-end { display: flex; gap: 10px; margin-left: auto; }
+.d-horizon .h-goal p.h-gkind { margin-top: 10px; font-size: 13px; color: var(--fa); }
+.d-horizon .h-goal .h-gpeople, .d-horizon .h-goal .h-gkind + .h-gpeople { margin-top: 6px; }
 .d-horizon .h-gnone { color: var(--fa); font-size: 13px; margin-top: 10px; }
 .d-horizon .h-goal .h-gnone { color: var(--fa); font-size: 13px; margin-top: 10px; }
 .d-horizon .h-link { all: unset; cursor: pointer; color: var(--ac); }
@@ -1015,6 +1018,10 @@ a.h-dec-t:hover { color: var(--ac2); }
 .d-horizon .h-serves a { color: var(--ac); text-decoration: none; }
 .d-horizon .h-serves a:hover { text-decoration: underline; }
 .d-horizon .h-serves.h-hk { color: var(--mu); }
+/* Served goals in a Plan row wrap as text, each with its whose-goal and priority tags and kind state. */
+.d-horizon .h-meta > span.h-serves { display: block; min-width: 0; }
+.d-horizon .h-serves .h-gtag { margin-left: 6px; padding: 0 7px; font-size: 10.5px; line-height: 16px; vertical-align: 1px; }
+.d-horizon .h-serve-k { margin-left: 6px; color: var(--fa); }
 .d-horizon .h-owner { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }
 .d-horizon .h-owner select { min-width: 0; max-width: 100%; background: var(--bg); color: var(--tx); border: 1px solid var(--line2); border-radius: 6px; font: inherit; font-size: 12.5px; padding: 2px 6px; color-scheme: dark; }
 .d-horizon .h-owner select:focus-visible { outline: none; border-color: var(--ac); }
