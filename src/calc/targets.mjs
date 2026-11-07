@@ -141,14 +141,18 @@ function accountRun(months) {
 // accounts [{id, kind, name}], transactions [{id, account_id, date, amount}] dated on or before the
 // clock. -> {window, months, monthlySpend, annualSpend, monthlySavings, spendIds, incomeIds,
 //   counted: [account], silent: [account], missing: [codes]}
+// A business account: kind business, or flagged by the store side (owner or stated entity).
+export const isBusinessAccount = a => !!a && (a.business === true || a.kind === 'business');
+
 export function spendingInputs({ accounts, transactions, clock, parameters = TARGET_PARAMETERS }) {
   const P = parameters;
   const byId = new Map(accounts.map(a => [a.id, a]));
-  const spending = accounts.filter(a => SPENDING_KINDS.includes(a.kind));
+  const isSpending = a => SPENDING_KINDS.includes(a.kind) && !isBusinessAccount(a);
+  const spending = accounts.filter(isSpending);
   const rows = transactions.filter(t => byId.has(t.account_id) && finite(t.amount) && typeof t.date === 'string' && t.date <= clock);
   const monthsOf = new Map();
   for (const t of rows) {
-    if (!SPENDING_KINDS.includes(byId.get(t.account_id).kind)) continue;
+    if (!isSpending(byId.get(t.account_id))) continue;
     const set = monthsOf.get(t.account_id) || new Set();
     set.add(monthIndex(t.date.slice(0, 7)));
     monthsOf.set(t.account_id, set);
@@ -167,13 +171,13 @@ export function spendingInputs({ accounts, transactions, clock, parameters = TAR
 
   const inWindow = t => { const m = monthIndex(t.date.slice(0, 7)); return m >= from && m <= to; };
   const ordered = rows.toSorted((a, b) => a.date.localeCompare(b.date) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-  const onSpending = ordered.filter(t => SPENDING_KINDS.includes(byId.get(t.account_id).kind) && inWindow(t));
+  const onSpending = ordered.filter(t => isSpending(byId.get(t.account_id)) && inWindow(t));
   const outflows = onSpending.filter(t => t.amount < 0);
   const inflows = onSpending.filter(t => t.amount > 0);
   // Spending leaves out an outflow matched to an inflow on any other household account.
   const notSpend = matchTransfers(outflows, ordered.filter(t => t.amount > 0), P.transferDays);
   // Income leaves out an inflow matched to an outflow on another account that is not a business account.
-  const notIncome = matchTransfers(inflows, ordered.filter(t => t.amount < 0 && byId.get(t.account_id).kind !== 'business'), P.transferDays);
+  const notIncome = matchTransfers(inflows, ordered.filter(t => t.amount < 0 && !isBusinessAccount(byId.get(t.account_id))), P.transferDays);
   const spend = outflows.filter(t => !notSpend.has(t.id));
   const income = inflows.filter(t => !notIncome.has(t.id));
   const spendTotal = -spend.reduce((s, t) => s + t.amount, 0);

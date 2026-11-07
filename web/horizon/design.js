@@ -581,8 +581,12 @@ function suggestHtml(s) {
   const f = s.figures || {};
   const amt = (k) => (k ? figHtml(k, { k: true }) : '');
   const nAccts = arr(s.track?.accounts).length;
+  const trackAccts = arr(s.track?.accounts).map((tid) => arr(api.s.accounts).find((a) => String(a.id) === String(tid)));
+  const trackNames = trackAccts.every(Boolean)
+    ? trackAccts.map((a) => (a.imported ? esc(a.name) : T(a.name))).join(', ')
+    : esc(s.trackLabel || '');
   const tracks = !s.track ? ', tracks nothing automatically: contributions are not measured yet'
-    : s.trackLabel && nAccts <= 3 ? `, tracks ${T(s.trackLabel)}`
+    : s.trackLabel && nAccts <= 3 ? `, tracks ${trackNames}`
       : `, tracks ${plural(nAccts, s.kind === 'independence' ? 'investment account' : s.kind === 'cushion' ? 'cash account' : 'account')}`;
   let head;
   if (s.covered) {
@@ -628,6 +632,7 @@ function openSuggForm(id) {
     if (Number.isFinite(a.target)) draft.target = String(a.target);
     if (a.targetDate) draft.targetDate = a.targetDate;
     if (a.track && Array.isArray(a.track.accounts)) { draft.trackKind = 'accounts'; draft.accounts = a.track.accounts.slice(); draft.figure = ''; }
+    else if (a.track === null) { draft.trackKind = 'none'; draft.accounts = []; draft.figure = ''; }
   }
   if (routeNow().name !== 'goals') api.go('goals', {});
   openGoalForm(g.id, draft);
