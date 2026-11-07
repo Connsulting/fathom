@@ -1,19 +1,23 @@
 import { freshnessOf } from '../ingest/freshness.mjs';
+import { roundForUnit, UNITS } from './figure.mjs';
+
+export { round } from './figure.mjs';
 
 const DAY = 86400000;
 const MONTH_DAYS = 365.2425 / 12;
 export const PACE_PARAMETERS = Object.freeze({ toleranceDays: 7, minimumToleranceUsd: 1, daysPerMonth: MONTH_DAYS });
 export const finite = v => typeof v === 'number' && Number.isFinite(v);
-export const round = v => Math.round((v + Number.EPSILON) * 100) / 100;
 const day = date => Date.parse(date + 'T00:00:00Z') / DAY;
 export const isoDate = date => typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date)
   && Number.isFinite(day(date)) && new Date(day(date) * DAY).toISOString().slice(0, 10) === date;
 
-export function paceFigure(v, label, { clock, calc, inputs, sources = [], parameters = PACE_PARAMETERS, kind = 'e', formula = calc } = {}) {
+export function paceFigure(v, label, { unit, dataThrough, clock, calc, inputs, sources = [], parameters = PACE_PARAMETERS, kind = 'e', formula = calc } = {}) {
+  if (!UNITS.includes(unit)) throw new TypeError(`Unknown pace figure unit ${unit}`);
   if (!finite(v)) return null;
-  return { v: round(v), src: 'calc:pace', kind, label,
-    locator: { calc, inputs: structuredClone(inputs), parameters: { ...parameters }, sources: structuredClone(sources),
-      steps: [{ label, formula, value: round(v) }], computedOn: clock } };
+  const value = roundForUnit(v, unit);
+  return { v: value, src: 'calc:pace', kind, label,
+    locator: { calc, unit, dataThrough, inputs: structuredClone(inputs), parameters: { ...parameters }, sources: structuredClone(sources),
+      steps: [{ label, formula, value }], computedOn: clock } };
 }
 
 export function dataState(actual, clock) {
@@ -51,7 +55,8 @@ export function goalPace({ goal, actual = null, clock }) {
     ...(goal.pace?.sources || []), ...actualSources(actual)];
   const inputs = { goal: { id: goal.id, target: goal.target ?? null, targetDate: goal.targetDate ?? null, pace: goal.pace ?? null }, clock,
     actual: actual ? { v: actual.v, dataThrough: actual.dataThrough, dependencies: actual.dependencies } : null };
-  const f = (v, label, kind = 'e') => paceFigure(v, label, { clock, calc: 'goalPace', inputs, sources, kind });
+  const dataThrough = actual?.dataThrough ?? null;
+  const f = (v, label, kind = 'e', unit = 'usd') => paceFigure(v, label, { unit, dataThrough, clock, calc: 'goalPace', inputs, sources, kind });
   const out = { id: goal.id, title: goal.title, targetDate: goal.targetDate ?? null, status: 'unknown', reason: null,
     dataThrough: actual?.dataThrough ?? null, stale: false, target: f(goal.target, 'Goal target', 't'),
     actual: actual ? f(actual.v, 'Latest tracked value', actual.kind) : null,
@@ -60,7 +65,7 @@ export function goalPace({ goal, actual = null, clock }) {
   const path = pathOf(goal);
   if (path.reason) return { ...out, reason: path.reason };
   if (path.reached) {
-    out.expected = paceFigure(goal.target, 'Expected today', { clock, calc: 'goalPace', inputs, sources, kind: 'p',
+    out.expected = paceFigure(goal.target, 'Expected today', { unit: 'usd', dataThrough, clock, calc: 'goalPace', inputs, sources, kind: 'p',
       formula: 'target already reached at plan start' });
     out.tolerance = f(PACE_PARAMETERS.minimumToleranceUsd, 'On pace tolerance');
     if (actual && finite(actual.v)) out.gap = f(actual.v - goal.target, 'Tracked value minus plan');
@@ -79,7 +84,7 @@ export function goalPace({ goal, actual = null, clock }) {
   if (actual && finite(actual.v)) {
     const gap = actual.v - expected;
     out.gap = f(gap, 'Tracked value minus plan');
-    out.gapDays = f(gap / path.slope, 'Time ahead or behind in days');
+    out.gapDays = f(gap / path.slope, 'Time ahead or behind in days', 'e', 'days');
     out.timeGap = Math.abs(gap) <= tolerance ? 'On pace' : timeLabel(gap / path.slope);
   }
   out.reason = dataState(actual, clock);
@@ -95,7 +100,7 @@ export function paceRollup(goals, clock) {
   for (const g of included) n[g.status === 'on pace' ? 'onPace' : g.status] += 1;
   const dataThrough = included.map(g => g.dataThrough).filter(isoDate).sort()[0] ?? null;
   const sources = included.map(g => ({ rows: { table: 'goals', ids: [g.id], count: 1 } }));
-  const f = (v, label) => paceFigure(v, label, { clock, calc: 'paceRollup', inputs: { goals: goals.map(g => ({ id: g.id, status: g.status, dataThrough: g.dataThrough })) }, sources });
+  const f = (v, label) => paceFigure(v, label, { unit: 'count', dataThrough, clock, calc: 'paceRollup', inputs: { goals: goals.map(g => ({ id: g.id, status: g.status, dataThrough: g.dataThrough })) }, sources });
   let headline;
   if (!included.length) headline = 'No goals with targets';
   else if (n.behind) headline = `${n.behind} goal${n.behind === 1 ? '' : 's'} behind`;
@@ -130,8 +135,9 @@ export function monthlyPace({ goal, observations, clock }) {
     const sources = [...(goal.planSources || [{ rows: { table: 'goals', ids: [goal.id], count: 1 } }]),
       ...(goal.pace?.sources || []), ...actualSources(projected ? last : observed)];
     const inputs = { goal, month, date, dataEnd, observed: projected ? last.v : observed?.v ?? null };
-    const f = (v, label, kind) => paceFigure(v, label, { clock, calc: 'monthlyPace', inputs, sources, kind });
-    return { month, date, dataThrough: projected ? dataEnd : observed?.dataThrough ?? null, projected,
+    const dataThrough = projected ? dataEnd : observed?.dataThrough ?? null;
+    const f = (v, label, kind) => paceFigure(v, label, { unit: 'usd', dataThrough, clock, calc: 'monthlyPace', inputs, sources, kind });
+    return { month, date, dataThrough, projected,
       actual: f(amount, projected ? 'Projected tracked value' : 'Monthly tracked value', projected ? 'p' : 'a'),
       plan: f(plan, 'Monthly plan', 'p'), gap: f(finite(amount) ? amount - plan : null, 'Monthly value minus plan', projected ? 'p' : 'e'),
       reason: !projected && !observed ? 'missing_month_actual' : null };
@@ -145,8 +151,8 @@ export function paceMeter({ used, limit, clock }) {
   const dataThrough = dates.every(isoDate) ? dates.toSorted()[0] : null;
   const sources = [...actualSources(used), ...actualSources(limit)];
   const inputs = { used: used.v, limit: limit.v, dataThrough };
-  const f = (v, label, kind) => paceFigure(v, label, { clock, calc: 'paceMeter', inputs, sources, kind });
+  const f = (v, label, kind, unit = 'usd') => paceFigure(v, label, { unit, dataThrough, clock, calc: 'paceMeter', inputs, sources, kind });
   return { meter: { used: f(used.v, 'Used or reserved', used.kind), limit: f(limit.v, 'Limit or plan', limit.kind),
-    ratio: f(used.v / limit.v, 'Share used or reserved', 'e') }, dataThrough,
+    ratio: f(used.v / limit.v, 'Share used or reserved', 'e', 'ratio') }, dataThrough,
     reason: dataState(used, clock), stale: dataState(used, clock) === 'stale_data' };
 }
