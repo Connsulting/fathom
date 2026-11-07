@@ -218,6 +218,7 @@ export async function dataKeyFor(db, config = {}) {
 }
 
 export async function connectSimplefin(db, token, { config = {}, hosts, fetch: fetchImpl, now, key } = {}) {
+  db.prepare("DELETE FROM settings WHERE key = 'synthetic_demo'").run();
   if (connection(db)?.status === 'ok') throw new SimplefinError('already_connected');
   const k = key ?? await dataKeyFor(db, config);
   const access = await claimToken(token, { hosts, fetch: fetchImpl });
