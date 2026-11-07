@@ -1,0 +1,56 @@
+/* Guided product tour (screens/tour.js): the spotlight, the callout (a popover beside the anchor,
+   a sheet at phone width) and the Settings row that starts it. Horizon is dark only, so the tour
+   uses its tokens and follows any theme they gain. The scrim around the spotlight is the only
+   shadow-based effect in the design. */
+
+.d-horizon .h-tour-spot {
+  position: fixed; z-index: 130; pointer-events: none; box-sizing: border-box;
+  border: 1.5px solid var(--acl); border-radius: 10px;
+  box-shadow: 0 0 0 200vmax rgba(4, 6, 7, 0.66);
+  transition: top 160ms ease, left 160ms ease, width 160ms ease, height 160ms ease;
+}
+
+.d-horizon .h-tour {
+  position: fixed; z-index: 131; box-sizing: border-box; width: 340px; max-width: 100vw;
+  max-height: 100vh; overflow-y: auto;
+  background: var(--s1); border: 1px solid var(--line2); border-radius: 12px; padding: 16px 18px 14px;
+  color: var(--tx); font-family: var(--sans);
+}
+/* While the next stop's page and anchor load, the old callout and spotlight stay hidden. */
+.d-horizon .h-tour-host[data-busy] > * { visibility: hidden; }
+
+.d-horizon .h-tour-k { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.d-horizon .h-tour-k [data-tour-count] { font: 11.5px var(--mono); color: var(--mu); }
+.d-horizon .h-tour-dots { display: inline-flex; gap: 5px; }
+.d-horizon .h-tour-dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--line2); }
+.d-horizon .h-tour-dots i.on { background: var(--ac); }
+.d-horizon .h-tour h2 { margin: 10px 0 0; font-size: 16px; font-weight: 500; line-height: 1.35; color: var(--tx); }
+.d-horizon .h-tour p { margin: 6px 0 0; font-size: 14px; line-height: 1.5; color: var(--tx2); }
+.d-horizon .h-tour-acts { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
+.d-horizon .h-tour-sp { flex: 1 1 auto; }
+.d-horizon .h-tour .h-btn[disabled] { color: var(--fa); border-color: var(--line); cursor: default; }
+.d-horizon .h-tour .h-btn:focus-visible { outline: 2px solid var(--ac2); outline-offset: 2px; }
+
+/* Phone: a sheet across the screen, at the bottom or under the header. */
+.d-horizon .h-tour[data-mode="sheet"] {
+  max-width: none; border-left: 0; border-right: 0; border-radius: 14px 14px 0 0; border-bottom: 0;
+  padding: 14px 16px max(14px, env(safe-area-inset-bottom));
+}
+.d-horizon .h-tour[data-mode="sheet"][data-side="top"] { border-radius: 0 0 14px 14px; border-top: 0; border-bottom: 1px solid var(--line2); padding-bottom: 14px; }
+.d-horizon .h-tour[data-mode="sheet"] .h-btn { height: 40px; padding: 0 16px; }
+
+/* The add-to-Ask button shows on row hover only; under the spotlight it always shows. */
+.d-horizon .h-add[data-tour-on] { opacity: 1; }
+
+/* Settings: the Take the tour row, styled like the link rows with the whole row as its hit area. */
+.d-horizon .h-set-r .h-set-tour {
+  appearance: none; background: none; border: 0; padding: 0; margin: 0; justify-self: start;
+  font: inherit; font-weight: 500; font-size: 14.5px; color: var(--tx); text-align: left; cursor: pointer;
+}
+.d-horizon .h-set-r .h-set-tour::after { content: ''; position: absolute; inset: 0; }
+.d-horizon .h-set-r .h-set-tour:focus-visible { outline: none; }
+.d-horizon .h-set-r:has(.h-set-tour:focus-visible) { outline: 2px solid var(--ac); outline-offset: -2px; border-radius: 10px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .d-horizon .h-tour-spot { transition: none; }
+}
