@@ -176,7 +176,7 @@ function spanTx(id, from, to, amount = -100) {
   const rows = [];
   for (let i = ymIndex(from); i <= ymIndex(to); i++) {
     const ym = `${Math.floor(i / 12)}-${String((i % 12) + 1).padStart(2, '0')}`;
-    rows.push({ id: `${id}-${ym}`, account_id: id, date: `${ym}-15`, amount });
+    rows.push({ id: `${id}-${ym}`, account_id: id, date: `${ym}-02`, amount });
   }
   return rows;
 }
