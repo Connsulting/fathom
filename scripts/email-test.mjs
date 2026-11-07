@@ -4,13 +4,14 @@
 
 import { loadConfig, ConfigError } from '../src/config.mjs';
 import { createTransport, EmailError } from '../src/email/transport.mjs';
+import { simpleDarkEmail } from '../src/email/palette.mjs';
 
 const TEXT = [
   'This is a test email from Fathom.',
   'It confirms the configured email transport can deliver to the configured recipients.',
   'No household data is included.',
 ].join('\n');
-const HTML = `<div style="font-family:sans-serif">${TEXT.split('\n').map((l) => `<p style="margin:0 0 8px">${l}</p>`).join('')}</div>`;
+const HTML = simpleDarkEmail({ title: 'Fathom test email', paragraphs: TEXT.split('\n') });
 
 async function main() {
   if (process.env.FATHOM_LIVE_EMAIL !== '1') {

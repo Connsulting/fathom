@@ -1,5 +1,5 @@
-// Monthly brief email: a model built from buildScenario and a quick visual skim in HTML (dark,
-// Horizon palette) plus a short plain-text alternative. Rules:
+// Monthly brief email: a model built from buildScenario and a quick visual skim in HTML (dark only,
+// Horizon palette from src/email/palette.mjs) plus a short plain-text alternative. Rules:
 // 1. Every printed amount is a brief figure: a scenario figure (scenario.fig) or a statutory amount
 //    (law.<key>), registered in figureRegistry with its label, kind word, source and as-of date.
 //    Tokens in stored narrative text resolve through the registry. The tax-paid tile percent is
@@ -13,15 +13,16 @@
 //    figures, it has no digit, $, %, "percent", number word or leftover brace, and then
 //    checkGrounding passes on figure values alone. Any engine error or rejection keeps the
 //    verdict sub-line.
-// 4. HTML is email safe: tables and inline styles, no script, SVG, external image or font. Every
-//    cell carries its dark background both as a bgcolor attribute and inline, so no text sits on
-//    a transparent surface when a client inverts colors. Links need a publicUrl; without one the
+// 4. HTML is email safe and dark only: tables and inline styles, no script, SVG, external image or
+//    font. Every cell carries its dark background both as a bgcolor attribute and inline, so no
+//    text sits on a transparent surface when a client inverts colors. Links need a publicUrl; without one the
 //    email has no links.
 
 import { buildScenario, addDays, daysBetween } from '../scenario/build.mjs';
 import { needsYou, verdictLevel } from '../shared/rules.mjs';
 import { KIND_WORDS, TOKEN, esc, money, pct } from '../shared/tokens.mjs';
 import { checkGrounding } from '../engine/grounding.mjs';
+import { C, FONT, darkDocument } from './palette.mjs';
 
 const DEADLINE_DAYS = 90;
 const URGENT_DAYS = 60;
@@ -282,21 +283,20 @@ export async function briefSummary(model, { engine } = {}) {
 
 // ---------------------------------------------------------------- render
 
+// Inline styles for the deadline alert's list markup (src/jobs/alerts.mjs), dark: every one names
+// its own text color, since an element inherits nothing a client is bound to honor.
 export const STYLE = Object.freeze({
-  body: 'margin:0;padding:0;background:#f4f5f7',
-  wrap: 'max-width:640px;margin:0 auto;padding:24px;background:#ffffff;color:#1d2329;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:1.5',
-  h1: 'margin:0 0 4px;font-size:20px;font-weight:600',
-  date: 'margin:0 0 16px;color:#5b6570;font-size:13px',
-  h2: 'margin:24px 0 8px;font-size:16px;font-weight:600',
-  p: 'margin:0 0 12px',
-  ol: 'margin:0 0 12px;padding-left:20px',
-  li: 'margin:0 0 6px',
-  muted: 'color:#5b6570',
-  fig: 'font-weight:600',
-  ref: 'color:#5b6570;font-size:12px',
-  foot: 'margin:0 0 8px;font-size:13px;color:#3a434c',
-  note: 'margin:2px 0 0 16px;font-size:12px;color:#5b6570',
-  link: 'color:#1a5fb4',
+  h1: `margin:0 0 4px;font-size:20px;font-weight:600;color:${C.text}`,
+  date: `margin:0 0 16px;color:${C.muted};font-size:13px`,
+  h2: `margin:24px 0 8px;font-size:16px;font-weight:600;color:${C.text}`,
+  ol: `margin:0 0 12px;padding-left:20px;color:${C.text}`,
+  li: `margin:0 0 6px;color:${C.text}`,
+  muted: `color:${C.muted}`,
+  fig: `font-weight:600;color:${C.text}`,
+  ref: `color:${C.muted};font-size:12px`,
+  foot: `margin:0 0 8px;font-size:13px;color:${C.sec}`,
+  note: `margin:2px 0 0 16px;font-size:12px;color:${C.muted}`,
+  link: `color:${C.accent}`,
 });
 
 // Text and HTML of parts against a figure list; also the footnote lines of that list.
@@ -325,13 +325,6 @@ export function footnoteHtml(f, style = STYLE) {
 
 // ---------------------------------------------------------------- render (dark, email safe)
 
-// Horizon palette (web/horizon/design.css) for mail clients.
-export const C = Object.freeze({
-  page: '#0a0c0d', card: '#101315', tile: '#15191b', line: '#1c2124', line2: '#283033',
-  text: '#e6eaeb', sec: '#c2c9cb', muted: '#8f999c', accent: '#3fcfae', ink: '#04120e',
-  soon: '#f08a5d', soonBg: '#2b1a12', later: '#e8c05a', laterBg: '#2a2410', info: '#8f999c', infoBg: '#1c2124',
-});
-const FONT = "-apple-system,'Segoe UI',Helvetica,Arial,sans-serif";
 const URGENCY = { soon: [C.soon, C.soonBg], later: [C.later, C.laterBg], info: [C.info, C.infoBg] };
 
 const shortDate = (iso) => `${MONTHS_SHORT[Number(iso.slice(5, 7)) - 1]} ${Number(iso.slice(8, 10))}`;
@@ -492,16 +485,7 @@ export function renderBrief(model, summary) {
 
   const head = `<tr>${td(C.page, `padding:4px 4px 12px;font-size:12px;color:${C.muted};letter-spacing:.04em`, `<b style="color:${C.accent}">${esc(model.product.toUpperCase())}</b> &nbsp;&middot;&nbsp; ${esc(monthName)} brief`)}</tr>`;
 
-  const html = [
-    '<!doctype html><html lang="en"><head><meta charset="utf-8">',
-    '<meta name="viewport" content="width=device-width,initial-scale=1">',
-    '<meta name="color-scheme" content="dark light"><meta name="supported-color-schemes" content="dark light">',
-    `<title>${esc(subject)}</title>`,
-    `<style>:root{color-scheme:dark light;supported-color-schemes:dark light}body{margin:0;padding:0;background-color:${C.page}}@media (max-width:480px){.gutter{padding:12px 8px !important}}</style>`,
-    `</head><body bgcolor="${C.page}" style="margin:0;padding:0;background-color:${C.page};color:${C.text}">`,
-    tbl(C.page, '', `<tr>${td(C.page, 'padding:16px', tbl(C.page, 'max-width:600px;margin:0 auto', head + hero + needsCard + stripHtml(model) + footRow), 'class="gutter" align="center"')}</tr>`),
-    '</body></html>',
-  ].join('\n');
+  const html = darkDocument({ title: subject, rows: head + hero + needsCard + stripHtml(model) + footRow });
 
   // Plain text: a short skim of the same content with the links.
   const T = [`${model.product.toUpperCase()} · ${monthName} brief`, '', partsText(model.verdict.headline)];
