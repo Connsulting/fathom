@@ -155,9 +155,7 @@ test('with the engine switched off an ask gets the notice message', async ({ pag
   await expect(page.locator('.h-thread .h-msg.fathom.notice')).toHaveCount(1);
 });
 
-// B2: chat never writes. An explicit command in a rec conversation comes back as a confirm card
-// inside the Fathom message; the rec changes only when the owner clicks Confirm, and the card then
-// shows Done in place of the button.
+// Ask actions show a durable receipt and Undo in the recommendation conversation.
 async function recStatusOf(request, id) {
   const res = await request.get('/api/scenario');
   expect(res.status()).toBe(200);
@@ -165,39 +163,15 @@ async function recStatusOf(request, id) {
   return sc.recs.find((x) => x.id === id).status;
 }
 
-test('B2: "dismiss this" in a rec conversation proposes; Confirm dismisses the rec and the card shows Done', async ({ page, request }) => {
+test('@mobile @ax-ac2 dismiss in a rec conversation updates the rec with receipt and Undo', async ({ page, request }) => {
   const id = 'dcfsa';
-  const r = rec(id);
-  expect(liveStatus(r), 'a proposed rec to dismiss').toBe('proposed');
-
   await gotoRoute(page, `rec/${id}`);
   const dlg = recDialog(page);
-  await expect(dlg.locator('#h-dlg-t')).toHaveText(plain(r.title));
   await askFree(dlg, `rec:${id}`, 'dismiss this');
-  await expect(answers(dlg)).toHaveCount(1);
-  const msg = answers(dlg).last();
-  await expect(msg).not.toHaveClass(/\bnotice\b/);
-
-  const confirm = msg.locator(`button.h-propose[data-propose-rec="${id}"][data-propose-action="dismiss"]`);
-  await expect(confirm).toHaveCount(1);
-  await expect(confirm).toHaveText('Confirm');
-  await expect(msg).toContainText('Not for us');
-  await expect(msg).toContainText(plain(r.title));
-
-  // Nothing is written until the owner confirms.
+  const receipt = dlg.locator('.h-action-receipt');
+  await expect(receipt).toContainText('Not for us');
+  expect(await recStatusOf(request, id)).toBe('dismissed');
+  await receipt.getByRole('button', { name: 'Undo' }).click();
+  await expect(receipt).toContainText('Undone');
   expect(await recStatusOf(request, id)).toBe('proposed');
-  await expect(dlg.locator('.h-rec-head .h-st')).not.toHaveText('Not for us');
-
-  await confirm.click();
-  await expect(dlg.locator('.h-rec-head .h-st')).toHaveText('Not for us');
-  await expect.poll(() => recStatusOf(request, id)).toBe('dismissed');
-  const done = answers(dlg).last();
-  await expect(done.locator('button.h-propose')).toHaveCount(0);
-  await expect(done).toContainText('Done');
-
-  // The card state follows the stored rec status, so it survives a reload.
-  await page.reload();
-  const again = answers(recDialog(page)).last();
-  await expect(again.locator('button.h-propose')).toHaveCount(0);
-  await expect(again).toContainText('Done');
 });

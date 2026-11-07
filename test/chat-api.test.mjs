@@ -46,7 +46,7 @@ test('an Ask chip stores a grounded answer with provenance in the message row an
   const conv = r.scenario.live.conversations[r.thread.key];
   assert.equal(conv.length, 2);
   assert.equal(conv[0].role, 'me');
-  assert.equal(conv[0].provenance, null, 'the owner message carries no provenance');
+  assert.equal(conv[0].provenance.ownerInput.actorId, 'demo');
   assert.deepEqual(conv[1], m);
   const stored = await readDb(s.dbFile, db => db.prepare("SELECT provenance FROM messages WHERE conversation_key = ? AND role = 'fathom'").get(r.thread.key));
   assert.deepEqual(JSON.parse(stored.provenance), m.provenance);
@@ -175,27 +175,15 @@ test('each answer records spend rows in the clock month that the scenario ledger
 const statuses = scenario => Object.fromEntries(scenario.recs.map(r => [r.id, r.status]));
 const toolRows = file => readDb(file, db => db.prepare("SELECT count(*) AS n FROM rec_events WHERE actor = 'tool'").get().n);
 
-test('B2: chat commands and a What if never change a rec status; an explicit command is a proposal', T, () => withServer({ env: FAKE }, async s => {
+test('Ask commands update recommendations with a receipt, while pack conversations remain read-only', T, () => withServer({ env: FAKE }, async s => {
+  const { thread } = await ok(postJson(s.baseUrl, '/api/threads', { recId: 'deferral', text: 'Synthetic opening question' }));
+  const changed = await ask(s, { key: thread.key, text: 'dismiss this' });
+  assert.equal(statuses(changed.scenario).deferral, 'dismissed');
+  assert.equal(changed.message.provenance.actions.length, 1);
+  const id = changed.message.provenance.actions[0].id;
+  await ok(postJson(s.baseUrl, `/api/actions/${id}/undo`, {}));
   const before = statuses(await getScenario(s.baseUrl));
-  const events = await toolRows(s.dbFile);
-  const { thread } = await ok(postJson(s.baseUrl, '/api/threads', {}));
-  const recThread = (await ok(postJson(s.baseUrl, '/api/threads', { recId: 'deferral', text: 'Synthetic opening question' }))).thread;
-  for (const key of [thread.key, recThread.key]) {
-    for (const text of ['Do not mark anything done', 'mark this done', 'Please mark this done', 'Snooze this until next month']) {
-      const r = await ask(s, { key, text });
-      assert.ok(!toolNames(r.message).includes('set_recommendation_status'), `${key}: ${text}`);
-    }
-  }
-  const proposed = await ask(s, { key: recThread.key, text: 'dismiss this' });
-  assert.deepEqual(proposed.message.provenance.proposal, { recId: 'deferral', action: 'dismiss' });
-  assert.equal(statuses(proposed.scenario).deferral, before.deferral, 'a proposal writes nothing');
-
   await ok(postJson(s.baseUrl, '/api/packs/giving/whatif', {}));
   await ask(s, { key: 'pack:giving', text: 'dismiss this' });
-  assert.deepEqual(statuses(await getScenario(s.baseUrl)), before, 'every rec status is unchanged');
-  assert.equal(await toolRows(s.dbFile), events, 'no tool-made status change in the rec history');
-
-  // The owner's confirmation goes through the ordinary rec action endpoint.
-  const confirmed = await ok(postJson(s.baseUrl, '/api/recs/deferral/action', { action: 'dismiss' }));
-  assert.equal(statuses(confirmed.scenario).deferral, 'dismissed');
+  assert.deepEqual(statuses(await getScenario(s.baseUrl)), before);
 }));

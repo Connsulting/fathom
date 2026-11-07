@@ -49,7 +49,7 @@ const rowFor = (page, name) => keyRows(page).filter({ hasText: name });
 // Fill the form and press Create. Returns the revealed key once the panel shows it.
 async function createKey(page, name, { write = false } = {}) {
   await page.locator('#key-name-input').fill(name);
-  if (write) await page.getByTestId('key-write-toggle').click();
+  if (write) await page.getByTestId('key-scope-write:recs').click();
   await page.getByTestId('create-key').click();
   const el = page.getByTestId('new-key');
   await expect(el).toBeVisible();
@@ -159,7 +159,7 @@ test.describe('connect', () => {
     await expect(readRow).toHaveCount(1);
     await expect(readRow.getByTestId('key-name')).toHaveText(readName);
     await expect(readRow).toContainText('Read only');
-    await expect(readRow).not.toContainText('Read and write recs');
+    await expect(readRow).not.toContainText('Read + Change recommendation status and owner');
     await expect(readRow).toContainText(/never/i);
     await expect(readRow.getByTestId('key-status')).toHaveText(/active/i);
 
@@ -169,10 +169,10 @@ test.describe('connect', () => {
       .replace(/Read only|never|active|Revoke/gi, '');
     expect(rest).toMatch(/\d|today|just now|ago/i);
 
-    // The write key reads "Read and write recs", also with last used "never" and active.
+    // The write key reads "Read + Change recommendation status and owner", also with last used "never" and active.
     const writeRow = rowFor(page, writeName);
     await expect(writeRow).toHaveCount(1);
-    await expect(writeRow).toContainText('Read and write recs');
+    await expect(writeRow).toContainText('Read + Change recommendation status and owner');
     await expect(writeRow).toContainText(/never/i);
     await expect(writeRow.getByTestId('key-status')).toHaveText(/active/i);
   });
@@ -222,7 +222,7 @@ test.describe('connect', () => {
     await page.getByTestId('key-done').click();
 
     const row = rowFor(page, name);
-    await expect(row).toContainText('Read and write recs');
+    await expect(row).toContainText('Read + Change recommendation status and owner');
     await expect(row.getByTestId('key-status')).toHaveText(/active/i);
 
     // The server agrees on the stored scopes.

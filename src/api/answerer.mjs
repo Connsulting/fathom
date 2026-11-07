@@ -1,3 +1,4 @@
+import { listPreferences } from '../actions/preferences.mjs';
 // The live answerer: every Ask thread (including one asked from a rec), pack follow-up and What if goes through the
 // runtime engine (live or fake), then through grounding and escaping before it is stored.
 //
@@ -60,23 +61,17 @@
 // bullet and numbered lists and bold, over the escaped text. List blocks come back complete
 // (<ul>/<ol>); every other block is paragraph inner HTML.
 //
-// Chat never writes. In Ask threads ('ask:<id>'), including a thread with a rec reference, the model is offered one local, non-writing
-// tool, propose_recommendation_action; the last successful call becomes provenance.proposal
-// ({recId, action, wake?}) and the owner confirms it through the ordinary rec action endpoint.
-// Ask threads also get propose_goal: the last successful call becomes provenance.goalProposal
-// ({title, note, horizon, target, targetDate}) and the owner saves it through POST /api/goals. A
-// proposed target survives only when the owner's own message states that amount.
+// Ask threads can write through scoped registry tools; receipts and Undo are durable product data.
 
 import { callTool, tools as REGISTRY } from '../tools/index.mjs';
 import { buildScenario, clockNow } from '../scenario/build.mjs';
 import { checkGrounding, numberPattern, EngineOffError, BudgetExceededError, ModelCallError, ModelAccountingError, RoundLimitError } from '../engine/index.mjs';
 import { packContext } from '../packs/index.mjs';
-import { packStatus, ACTION_STATUS } from '../shared/rules.mjs';
+import { packStatus } from '../shared/rules.mjs';
 import { escapeUserText, resolveTokens } from '../shared/tokens.mjs';
 import { parseJson } from '../store/db.mjs';
 import { findQuestion, matchQuestion, recForKey, isThreadKey } from './questions.mjs';
 import { fakeAnswerScript } from './fake-answers.mjs';
-import { HORIZON_IDS, LIMITS, validateGoal } from '../shared/goals.mjs';
 import { stripSources, listMarkerSpans, markdownBlocks } from '../shared/answer-text.mjs';
 import { resolveRefs } from './context-refs.mjs';
 
@@ -88,9 +83,14 @@ export const PRODUCT_RULES = [
   'Never write a Sources, References or Citations line and never cite sources in your prose: the app shows the sources it used under every answer.',
   'Call tools before you write the answer, and do not narrate tool use.',
   'Answer in short paragraphs separated by blank lines. You may use bullet lists (lines starting with "- "), numbered lists (lines starting with "1. ") and **bold**; use no other markdown (no headings, links or tables) and no HTML.',
-  'You never change a recommendation yourself. When the owner explicitly asks to change one, call propose_recommendation_action so the owner can confirm it; never propose on your own initiative.',
   'The conversation context may list references: items the owner pointed at on screen, as kind and id, each with the tools that read it. Read them with those tools; never guess what they hold and never state a number about them that a tool did not return.',
-  'You never add a goal yourself. When the owner explicitly asks to add one, call propose_goal with the goal in their own words so the owner can save it; include a target amount only when the owner stated it.',
+].join('\n');
+
+export const ASK_ACTION_RULES = [
+  '## Ask actions',
+  'In an Ask thread, act when the person explicitly asks you to record a fact, check a step, change a recommendation or create/edit a goal. Use the write tools. Confirm only when their request is ambiguous. Never change anything on your own initiative.',
+  'Use only the person\'s typed words or stored data for fact values and goal targets. Never invent a figure or infer a date. A tool receipt shows exactly what changed and offers Undo. Sending to the advisor and email require the product button; never claim you sent anything.',
+  'Remember a stated household preference or definition with remember_preference. Preferences guide wording and definitions, never override product boundaries, evidence requirements or tool permissions.',
 ].join('\n');
 
 export const NOTICES = Object.freeze({
@@ -126,7 +126,7 @@ function plainText(html) {
 }
 
 export function buildChatPrompt({ packContextText = '', summary = {}, context = null, history = [], question, today } = {}) {
-  const system = PRODUCT_RULES + '\n\n<knowledge_packs>\n' + packContextText + '\n</knowledge_packs>';
+  const system = PRODUCT_RULES + '\n\n' + ASK_ACTION_RULES + '\n\n<knowledge_packs>\n' + packContextText + '\n</knowledge_packs>';
   let systemDynamic = '<household_summary>\n' + JSON.stringify(summary ?? {}) + '\n</household_summary>';
   if (context) systemDynamic += '\n<conversation_context>\n' + JSON.stringify(context) + '\n</conversation_context>';
   if (today) systemDynamic += `\nToday is ${today}.`;
@@ -134,56 +134,6 @@ export function buildChatPrompt({ packContextText = '', summary = {}, context = 
     .map(m => ({ role: m.role === 'me' ? 'user' : 'assistant', content: plainText(m.text) }));
   return { system, systemDynamic, messages: [...turns, { role: 'user', content: String(question ?? '') }] };
 }
-
-// ---------------------------------------------------------------- the proposal tool
-
-export const PROPOSE_TOOL = Object.freeze({
-  name: 'propose_recommendation_action',
-  description: 'Propose a change to one recommendation (start = the owner is doing it, complete, dismiss = not for us, snooze = later, with an optional wake label, reopen) ' +
-    'for the owner to confirm. Nothing changes until the owner confirms. Use it only when the owner explicitly asks for that change.',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      id: { type: 'string', minLength: 1 },
-      action: { type: 'string', enum: Object.keys(ACTION_STATUS) },
-      wake: { type: 'string', maxLength: 200 },
-    },
-    required: ['id', 'action'],
-    additionalProperties: false,
-  },
-  scope: 'read',
-  handler(args, ctx) {
-    const row = ctx.db.prepare('SELECT status FROM recs WHERE id = ?').get(args.id);
-    if (!row || row.status === 'hidden') throw new Error('no such recommendation');
-    if (!Object.hasOwn(ACTION_STATUS, args.action)) throw new Error('unknown action');
-    return { proposed: true };
-  },
-});
-
-export const PROPOSE_GOAL_TOOL = Object.freeze({
-  name: 'propose_goal',
-  description: 'Propose a new household goal for the owner to save: the goal in the owner\'s own words, a horizon ' +
-    '(now = this year, 1-3y = next few years, 3-10y = long range), and a target amount or date only when the owner stated one. ' +
-    'Nothing is saved until the owner taps Save. Use it only when the owner explicitly asks to add a goal.',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      title: { type: 'string', minLength: 1, maxLength: LIMITS.title },
-      note: { type: 'string', maxLength: LIMITS.note },
-      horizon: { type: 'string', enum: HORIZON_IDS },
-      target: { type: 'number' },
-      targetDate: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
-    },
-    required: ['title'],
-    additionalProperties: false,
-  },
-  scope: 'read',
-  handler(args) {
-    const res = validateGoal({ title: args.title, note: args.note, horizon: args.horizon, target: args.target, targetDate: args.targetDate });
-    if (!res.ok) throw new Error(res.error);
-    return { proposed: true };
-  },
-});
 
 // Amounts the owner's text states: 50000, $50,000, 50k, 1.5 million.
 const OWNER_AMOUNT = /\$?(\d[\d,]*(?:\.\d+)?)\s*(k|m|thousand|million)?\b/gi;
@@ -196,19 +146,6 @@ export function ownerAmounts(text) {
     out.add(Math.round(base * mult * 100) / 100);
   }
   return out;
-}
-
-// The goal proposal from the last successful propose_goal call, validated, with a target the
-// owner did not state dropped.
-function goalProposalOf(toolResults, question) {
-  const hit = toolResults.filter(r => !r.isError && r.name === PROPOSE_GOAL_TOOL.name && r.args).at(-1);
-  if (!hit) return null;
-  const a = hit.args;
-  const res = validateGoal({ title: a.title, note: a.note, horizon: a.horizon, target: a.target, targetDate: a.targetDate });
-  if (!res.ok) return null;
-  const g = res.value;
-  if (g.target != null && !ownerAmounts(question).has(g.target)) g.target = null;
-  return { title: g.title, note: g.note || '', horizon: g.horizon, target: g.target, targetDate: g.targetDate };
 }
 
 // ---------------------------------------------------------------- grounding
@@ -485,7 +422,13 @@ export const PROGRESS_LABELS = Object.freeze({
   list_packs: 'Checking your knowledge packs',
   get_pack_entry: 'Reading a knowledge pack entry',
   search_pack_entries: 'Searching your knowledge packs',
-  propose_recommendation_action: 'Preparing a change for you to confirm',
+  remember_preference: 'Remembering your preference',
+  record_household_fact: 'Recording what you told Fathom',
+  set_recommendation_step: 'Updating a recommendation step',
+  set_recommendation_status: 'Updating a recommendation',
+  set_recommendation_owner: 'Updating who acts',
+  create_goal: 'Saving your goal',
+  edit_goal: 'Updating your goal',
 });
 export const PROGRESS_START = 'Reading your household summary';
 export const PROGRESS_GROUNDING = 'Checking every number against your data';
@@ -609,10 +552,7 @@ export function createLiveAnswerer({ engine, packs } = {}) {
   if (!engine || typeof engine.call !== 'function') throw new TypeError('createLiveAnswerer needs an engine');
 
   // One grounded model answer: call, ground, retry once with a corrective turn, render.
-  // proposeFor: null (no proposal tool), '*' (any visible rec, an Ask thread with no rec)
-  // or the rec id of an Ask thread asked from that rec (a bare rec id still resolves the same
-  // way). Proposals for any other rec are ignored.
-  async function run({ db, scenario, now, question, context, history, baseRefs, references = [], fakeArgs, proposeFor = null, onEvent }) {
+  async function run({ db, scenario, now, question, context, history, baseRefs, references = [], fakeArgs, actions = false, onEvent, actionContext = null }) {
     if (!engine.isOn()) return offNotice(engine);
     const t0 = performance.now();
     const stream = streamer(onEvent);
@@ -624,10 +564,11 @@ export function createLiveAnswerer({ engine, packs } = {}) {
     const packIds = active.map(a => a.pack.id).sort();
     const packContextText = packContext(active.map(({ pack }) => ({ pack, status: 'active' })));
     const prompt = buildChatPrompt({ packContextText, summary, context, history, question, today: scenario.meta && scenario.meta.clock });
-    const offered = [...REGISTRY.filter(t => t.scope === 'read'), ...(proposeFor ? [PROPOSE_TOOL] : []), ...(proposeFor === '*' ? [PROPOSE_GOAL_TOOL] : [])];
-    const fake = engine.mode === 'fake' ? fakeAnswerScript({ scenario, summary, propose: !!proposeFor, ...fakeArgs }) : undefined;
+    prompt.systemDynamic += '\n<household_preferences>\n' + JSON.stringify(listPreferences(db)) + '\n</household_preferences>';
+    const offered = REGISTRY.filter(t => !t.mcpOnly && (t.scope === 'read' || actionContext?.actorId));
+    const fake = engine.mode === 'fake' ? fakeAnswerScript({ scenario, summary, propose: actions, ...fakeArgs }) : undefined;
     const request = { purpose: 'chat', system: prompt.system, systemDynamic: prompt.systemDynamic, messages: prompt.messages,
-      tools: offered, toolContext: { db, now }, maxTokens: MAX_TOKENS, ...(fake ? { fake } : {}),
+      tools: offered, toolContext: { ...actionContext, db, now }, maxTokens: MAX_TOKENS, ...(fake ? { fake } : {}),
       ...(stream.engineEvent ? { onEvent: stream.engineEvent } : {}) };
 
     // groundAnswer sanitizes each datum (and context.entries bodies lose their metadata lines there).
@@ -640,8 +581,9 @@ export function createLiveAnswerer({ engine, packs } = {}) {
     const textOf = res => stripSources(res.text);
     const ground = (res, toolResults) => groundAnswer(textOf(res), { scenario, toolResults, data, dataLabels });
 
+    const actionReply = reply => actionContext?.turnId ? { ...reply, provenance: { ...reply.provenance, actionTurn: actionContext.turnId } } : reply;
     let first;
-    try { first = await engine.call(request); } catch (e) { return noticeFor(e, engine); }
+    try { first = await engine.call(request); } catch (e) { return actionReply(noticeFor(e, engine)); }
     stream.progress(PROGRESS_GROUNDING);
     work.rounds(first);
     work.step(PROGRESS_GROUNDING);
@@ -660,7 +602,7 @@ export function createLiveAnswerer({ engine, packs } = {}) {
       const earlier = resultsOf(first).map(r => ({ name: r.name, args: r.args ?? {}, result: r.result ?? null,
         ...(r.isError ? { isError: true } : {}) }));
       const evidence = earlier.length ? `\n\nTool results from your first attempt (still available as evidence):\n${JSON.stringify(earlier)}` : '';
-      const retry = { ...request, messages: [...request.messages, { role: 'assistant', content: first.text },
+      const retry = { ...request, tools: request.tools.filter(t => t.scope === 'read'), messages: [...request.messages, { role: 'assistant', content: first.text },
         { role: 'user', content: CORRECTIVE.replace('{list}', () => list) + evidence }] };
       try {
         const second = await engine.call(retry);
@@ -673,16 +615,10 @@ export function createLiveAnswerer({ engine, packs } = {}) {
         grounding = ground(second, toolResults);
       } catch (e) {
         // Never the first, ungrounded answer: the engine recorded each completed round's spend.
-        return noticeFor(e, engine);
+        return actionReply(noticeFor(e, engine));
       }
     }
 
-    const proposed = toolResults.filter(r => !r.isError && r.name === PROPOSE_TOOL.name && r.args
-      && (proposeFor === '*' || r.args.id === proposeFor)).at(-1);
-    const proposal = proposed
-      ? { recId: proposed.args.id, action: proposed.args.action, ...(proposed.args.wake ? { wake: proposed.args.wake } : {}) }
-      : null;
-    const goalProposal = proposeFor === '*' ? goalProposalOf(toolResults, question) : null;
     const recReads = toolResults.filter(r => !r.isError && r.name === 'get_recommendation').map(r => r.args && r.args.id);
     const text = textOf(chosen);
     const paragraphs = renderAnswer(text, grounding.violations, grounding.literals);
@@ -690,8 +626,9 @@ export function createLiveAnswerer({ engine, packs } = {}) {
     const lower = text.toLowerCase();
     return {
       paragraphs,
-      refs: unique([...baseRefs, ...recReads, proposal && proposal.recId]),
+      refs: unique([...baseRefs, ...recReads]),
       provenance: {
+        ...(actionContext?.turnId ? { actionTurn: actionContext.turnId } : {}),
         engine: engine.mode,
         model: chosen.model,
         tools: toolResults.map(r => ({ name: r.name, args: r.args ?? {} })),
@@ -703,8 +640,6 @@ export function createLiveAnswerer({ engine, packs } = {}) {
         literals: grounding.literals.map(l => ({ text: l.text, source: l.source })),
         grounding: { ok: grounding.ok, retried, unverified: grounding.violations.map(v => v.text) },
         costUsd: Number(costUsd.toFixed(6)),
-        ...(proposal ? { proposal } : {}),
-        ...(goalProposal ? { goalProposal } : {}),
         ...(references.length ? { references: references.map(({ kind, id }) => ({ kind, id })) } : {}),
         work: { ms: Math.max(0, Math.round(performance.now() - t0)), items: work.items },
       },
@@ -712,7 +647,7 @@ export function createLiveAnswerer({ engine, packs } = {}) {
   }
 
   return {
-    async answer({ db, key, questionId, text, clock, refs, onEvent } = {}) {
+    async answer({ db, key, questionId, text, clock, refs, onEvent, actorId, ownerText, turnId, replan, queuePlan } = {}) {
       if (typeof key !== 'string' || !key) throw new TypeError('answer needs a conversation key');
       const scenario = buildScenario(db, { clock, packs });
       const now = clockNow(db, clock);
@@ -740,7 +675,8 @@ export function createLiveAnswerer({ engine, packs } = {}) {
       const references = resolveRefs(db, scenario, refs);
       if (references.length) context = { ...(context || {}), references };
       return run({ db, scenario, now, question, context, history: scenario.live.conversations[key] || [], baseRefs, references,
-        proposeFor: rec ? rec.id : isThreadKey(key) ? '*' : null, onEvent,
+        actions: isThreadKey(key), onEvent,
+        actionContext: isThreadKey(key) && actorId ? { actorId, ownerText, turnId, replan, queuePlan, conversationKey: key, recId: rec?.id } : null,
         fakeArgs: { key, questionId: hasQ ? questionId : undefined, text: hasQ ? undefined : question } });
     },
 
