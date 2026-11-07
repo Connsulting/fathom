@@ -374,18 +374,20 @@ function workItems(list) {
 
 // The finished block above a Fathom answer (provenance.work { ms, items }), collapsed by default,
 // open state kept per message in ui.det. A message stored before the block existed has none.
-function receiptValue(value) {
+// A goal receipt's status is the goal's lifecycle (open, done, archived), listed with its fields;
+// any other receipt's status is a recommendation action.
+function receiptValue(value, scope) {
   if (value == null) return 'Not set';
   if (typeof value === 'boolean') return value ? 'Checked' : 'Unchecked';
   if (typeof value !== 'object') return String(value);
-  if (value.status) return `${ACTION_LABEL[{ doing: 'start', done: 'complete', dismissed: 'dismiss', snoozed: 'snooze', proposed: 'reopen' }[value.status]] || value.status}${value.wake ? ` (${value.wake})` : ''}`;
+  if (value.status && scope !== 'write:goals') return `${ACTION_LABEL[{ doing: 'start', done: 'complete', dismissed: 'dismiss', snoozed: 'snooze', proposed: 'reopen' }[value.status]] || value.status}${value.wake ? ` (${value.wake})` : ''}`;
   return Object.entries(value).filter(([, v]) => v != null && v !== '').map(([k, v]) => `${k === 'targetDate' ? 'date' : k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`).join(', ');
 }
 
 export function workHtml(m) {
   if (!H || !m || m.role !== 'fathom' || !isObj(m.provenance)) return '';
   const { esc } = H;
-  const actions = H.arr(m.provenance.actions).map(a => `<div class="h-action-receipt" data-receipt="${esc(a.id)}" role="status"><p><b>${esc(a.label)}</b>: ${esc(receiptValue(a.before))} → ${esc(receiptValue(a.after))}</p>`
+  const actions = H.arr(m.provenance.actions).map(a => `<div class="h-action-receipt" data-receipt="${esc(a.id)}" role="status"><p><b>${esc(a.label)}</b>: ${esc(receiptValue(a.before, a.scope))} → ${esc(receiptValue(a.after, a.scope))}</p>`
     + (a.planningPending ? '<p class="h-mute">Saved. Planning is pending.</p>' : '')
     + (a.undone ? '<span class="h-mute">Undone</span>' : `<button type="button" class="h-btn" data-undo-action="${esc(a.id)}">Undo</button>`) + '</div>').join('');
   if (m.notice || !isObj(m.provenance.work)) return actions;
