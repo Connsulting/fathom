@@ -434,6 +434,12 @@ async function populateLegacy(dataDir, legacyKey) {
     run("INSERT INTO confirm_auto (item_id, rule, evidence, created_at) VALUES (?, 'holder_match', '{\"text\":\"Synthetic evidence\",\"basis\":[],\"ancestors\":[]}', ?)", rawItem('synthetic.auto'), T0);
     run('INSERT INTO confirm_auto_declined (item_id, at) VALUES (?, ?)', rawItem('synthetic.declined'), T0);
 
+    // Ask actions (store migration 025): one receipt and one preference.
+    run(`INSERT INTO action_receipts (id, scope, kind, entity_id, actor_id, conversation_key, turn_id, label, before_state, after_state,
+      before_value, after_value, created_at) VALUES ('syn-receipt-1', 'rec', 'status', 'syn-rec-alpha', 'syn-actor', 'thread:syn', 'syn-turn',
+      'Synthetic receipt', 'open', 'doing', '{}', '{}', ?)`, T0);
+    run("INSERT INTO preferences (id, text, actor_id, created_at, updated_at) VALUES ('syn-pref-1', 'Synthetic preference', 'syn-actor', ?, ?)", T0, T0);
+
     // Rowid gaps.
     run("DELETE FROM files WHERE id = 'f-synthetic-gap-00000001'");
     run("DELETE FROM accounts WHERE id = 'acct-syn-gap'");
