@@ -78,7 +78,10 @@ export const operations = [
             (args.bucket === undefined || t.bucket === args.bucket) &&
             (args.class === undefined || t.class === args.class) &&
             (args.merchant === undefined || t.merchant === normalizeMerchant(args.merchant)) &&
-            (args.text === undefined || t.description.toLowerCase().includes(args.text.toLowerCase())),
+            (args.text === undefined ||
+              String(t.description ?? '')
+                .toLowerCase()
+                .includes(args.text.toLowerCase())),
         )
         .sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id);
       const remaining = all.filter(

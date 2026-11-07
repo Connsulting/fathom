@@ -87,7 +87,7 @@ test('tier 1 demo fixtures state unsigned, dropped-cent and word-count figures',
     const ctx = { db: store.db };
     const specs = [
       ['business-pnl-january', 'business', { operation: 'pnl', from: '2026-01', to: '2026-01' }, result =>
-        [...result.rows.map(row => row.amount), ...Object.values(result.totals)]],
+        [...result.entities.flatMap(e => [e.revenue.value, e.expenses.value, e.profit.value]), ...Object.values(result.totals).map(f => f.value)]],
       ['goals-pace', 'goals', { operation: 'pace' }, result => {
         const values = [];
         const walk = value => {

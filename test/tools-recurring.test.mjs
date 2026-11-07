@@ -40,3 +40,13 @@ test('recurring detects monthly quarterly annual stopped and changed series with
   assert.ok((await s.call('recurring', { cadence: 'annual' })).charges.every((c) => c.cadence === 'annual'));
   await assertRefsResolve(await s.call('recurring', { status: 'stopped', limit: 2 }), s.ctx);
 });
+
+test('recurring total provenance includes only the series accepted by its filters', async t => {
+  const s=await spendingStore(t);
+  const included=[];
+  for(const date of ['2025-10-15','2026-10-15'])included.push(s.tx('card',date,-71,'Shopping','Annual sample'));
+  s.tx('card','2026-10-16',-51,'Shopping','One time sample');
+  const r=await s.call('recurring',{cadence:'annual'});
+  assert.deepEqual(r.totalAnnual.provenance.sources[0].ids,included);
+  assert.equal(r.totalAnnual.provenance.sources[0].count,2);
+});

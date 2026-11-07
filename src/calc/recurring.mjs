@@ -42,6 +42,7 @@ export function recurring(input, args = {}) {
     grouped.get(key).push(t);
   }
   const charges = [];
+  const countedRows = [];
   for (const series of grouped.values()) {
     series.sort((a, b) => a.date.localeCompare(b.date) || a.id - b.id);
     if (series.length < 2) continue;
@@ -78,6 +79,7 @@ export function recurring(input, args = {}) {
       continue;
     const f = (v, label, rs, unit = 'usd') =>
       figureFor(v, label, rs, { unit, calc: 'recurring', formula: 'median charge and detected cadence' });
+    countedRows.push(...series);
     charges.push({
       merchant: normalizeMerchant(last.description),
       cadence,
@@ -112,13 +114,12 @@ export function recurring(input, args = {}) {
       a.merchant.localeCompare(b.merchant) ||
       a.account.id.localeCompare(b.account.id),
   );
-  const allRows = [...grouped.values()].flat();
   return {
     charges: charges.slice(0, args.limit ?? 50),
     totalAnnual: figureFor(
       sumRows(charges, (c) => c.annualCost.value),
       'Annual recurring total',
-      allRows,
+      countedRows,
       { unit: 'usd_per_year', calc: 'recurring', formula: 'sum of detected annual recurring costs' },
     ),
     gaps: [],

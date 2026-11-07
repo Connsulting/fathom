@@ -527,3 +527,24 @@ test('transaction text search skips null descriptions and keeps matching neighbo
   const r=await callTool('transactions',{operation:'search',text:'market'},s.ctx);
   assert.equal(r.total,10);assert.ok(r.rows.every(row=>row.description==='Market'));
 });
+
+test('C4 read metadata and copied refs never ground sentinel argument amounts', async t => {
+  const { spendingStore }=await import('./helpers/spending.mjs');
+  const {groundAnswer}=await import('../src/api/answerer.mjs');
+  const {buildScenario}=await import('../src/scenario/build.mjs');
+  const s=await spendingStore(t);s.fact('business.entities',[{name:'Example Studio'}]);s.tx('business','2026-04-01',137,'Income','Client');
+  const selector={merchants:['Synthetic $987,654.31']};
+  const cases=[
+    ['spending',{operation:'total',from:'2091-07',to:'2091-07',include:selector,exclude:selector}],
+    ['spending',{operation:'compare',a:{from:'2091-07',to:'2091-07'},b:{from:'2091-08',to:'2091-08'},include:selector}],
+    ['spending',{operation:'cash_flow',from:'2091-07',to:'2091-07'}],
+    ['spending',{operation:'recurring',since:'2091-07-23'}],
+    ['business',{operation:'pnl',from:'2091-07',to:'2091-07'}],
+    ['business',{operation:'rows',entity:'Example Studio',section:'income',category:'Synthetic $987,654.31',from:'2091-07',to:'2091-07'}],
+    ['transactions',{operation:'search',text:'Synthetic $987,654.31',from:'2091-07-23'}],
+  ];
+  for(const [name,args] of cases){
+    const result=await callTool(name,args,s.ctx);
+    for(const text of ['$987,654.31','$2,091'])assert.equal(groundAnswer(`The figure is ${text}.`,{scenario:buildScenario(s.db),data:[],toolResults:[{name,args,result}]}).ok,false,`${name}.${args.operation}: ${text}`);
+  }
+});
