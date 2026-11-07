@@ -1,7 +1,7 @@
 // Confirm context on the demo build: the household fixture (an aggregator export with holder names,
 // the checking account's bank export and a positions export) is uploaded through Accounts, then the
 // Confirm page shows the owner group card with account detail and same-named accounts, row
-// overrides and Use best guesses for all with propagation into Decided for you, Undo on a decided
+// overrides that save on click, Accept best guesses with propagation into Decided for you, Undo on a decided
 // answer that is never re-answered, the account type best guess with its evidence, the compare
 // table on the remaining possible duplicate, a single card's Use best guess, and the deck Undo of a
 // whole group apply.
@@ -131,7 +131,7 @@ test('the owner group card lists every pending owner question with account detai
   await expect(same.locator('td[data-differs="1"]').first()).toBeVisible();
 });
 
-test('override one row, use best guesses for all, see propagation in Decided for you, then undo the whole group', async ({ page, request }) => {
+test('override one row (saved on click), see propagation in Decided for you, undo it, then accept the best guesses', async ({ page, request }) => {
   await uploadHousehold(page);
   const ing = await ingestState(request);
   const owners = ing.items.filter((i) => i.kind === 'account_owner');
@@ -140,45 +140,31 @@ test('override one row, use best guesses for all, see propagation in Decided for
   await openConfirm(page);
   const card = await deckFind(page, '[data-group="account_owner"]');
 
-  // The current selections: each row's best guess is preselected, other rows have none.
-  const selected = {};
+  // Nothing is preselected: a stored best guess shows its tag but its option is not pressed.
+  await expect(card.locator('button[data-row-answer][aria-pressed="true"]')).toHaveCount(0);
   for (const it of owners) {
-    const pressed = card.locator(`button[data-row-answer="${it.id}"][aria-pressed="true"]`);
-    const n = await pressed.count();
-    expect(n, `at most one selection on row ${it.id}`).toBeLessThanOrEqual(1);
-    if (n) selected[it.id] = await pressed.getAttribute('data-option');
-    if (it.guess?.option != null) expect(selected[it.id], `row ${it.id} preselects its best guess`).toBe(String(it.guess.option));
+    if (it.guess?.option == null) continue;
+    const g = card.locator(`button[data-row-answer="${it.id}"][data-option="${it.guess.option}"]`);
+    await expect(g).toHaveAttribute('data-guess', '1');
+    await expect(g).toHaveAttribute('aria-pressed', 'false');
   }
 
-  // Override the Everyday Checking row with an option other than its preselection.
+  // Override the Everyday Checking row: the click saves it at once.
   const checking = itemForAccount(ing, 'account_owner', 'Everyday Checking');
-  const override = ['owner', 'spouse'].find((o) => o !== selected[checking.id]);
+  const override = ['owner', 'spouse'].find((o) => o !== String(checking.guess?.option));
   const pick = card.locator(`button[data-row-answer="${checking.id}"][data-option="${override}"]`);
+  const answered = page.waitForResponse((r) => isPost(r, `/api/confirm/${checking.id}/answer`));
   await pick.click();
+  expect((await answered).status()).toBe(200);
   await expect(pick).toHaveAttribute('aria-pressed', 'true');
   for (const o of checking.options.filter((x) => x.id !== override)) {
     await expect(card.locator(`button[data-row-answer="${checking.id}"][data-option="${o.id}"]`)).not.toHaveAttribute('aria-pressed', 'true');
   }
-  const applied = { ...selected, [checking.id]: override };
+  await expectAnswered(request, checking.id, override);
 
-  const apply = card.locator('button[data-group-apply]');
-  await expect(apply).toHaveText('Use best guesses for all');
-  const posted = page.waitForResponse((r) => isPost(r, '/api/confirm/answers'));
-  await apply.click();
-  const res = await posted;
-  expect(res.status()).toBe(200);
-  const sent = JSON.parse(res.request().postData() || '{}').answers || [];
-  expect(Object.fromEntries(sent.map((a) => [String(a.id), String(a.answer)])), 'every row with a selection is submitted').toEqual(applied);
-
-  // The overridden row holds the override and every selected row is answered with its selection.
+  // Rows answered by propagation (no click, answered now) show in Decided for you with evidence.
   const all = await allById(request);
-  for (const [id, opt] of Object.entries(applied)) {
-    expect(all.get(Number(id))?.status, `row ${id} status`).toBe('answered');
-    expect(all.get(Number(id))?.answer, `row ${id} answer`).toBe(opt);
-  }
-
-  // Rows answered by propagation (no selection, answered now) show in Decided for you with evidence.
-  const auto = owners.filter((i) => !(String(i.id) in applied) && all.get(i.id)?.status === 'answered').map((i) => i.id);
+  const auto = owners.filter((i) => i.id !== checking.id && all.get(i.id)?.status === 'answered').map((i) => i.id);
   expect(auto.length, 'the override propagates to at least one other row').toBeGreaterThanOrEqual(1);
   const decided = (await ingestState(request)).decided;
   const section = decidedSection(page);
@@ -192,15 +178,28 @@ test('override one row, use best guesses for all, see propagation in Decided for
     await expect(li).toContainText(d.answerLabel);
   }
 
-  // The deck Undo reopens every item of the group apply, and the answers resting on them.
+  // The deck Undo reopens the override and the answers resting on it.
   const undo = page.locator('button[data-deck="undo"]');
   await expect(undo).toBeEnabled();
   const reopened = page.waitForResponse((r) => isPost(r, '/api/confirm/reopen-many'));
   await undo.click();
   expect((await reopened).status()).toBe(200);
   const left = await pendingIds(request);
-  for (const id of [...Object.keys(applied).map(Number), ...auto]) expect(left, `item ${id} is pending again`).toContain(id);
+  for (const id of [checking.id, ...auto]) expect(left, `item ${id} is pending again`).toContain(id);
   for (const id of auto) await expect(section.locator(`li[data-decided="${id}"]`)).toHaveCount(0);
+
+  // Accept takes the best guess of every unanswered row that has one, and nothing else.
+  const guessed = (await ingestState(request)).items.filter((i) => i.kind === 'account_owner' && i.guess?.option != null);
+  expect(guessed.length, 'a stored best guess remains').toBeGreaterThanOrEqual(1);
+  const apply = card.locator('button[data-group-apply]');
+  await expect(apply).toHaveText(`Accept ${guessed.length} best guess${guessed.length === 1 ? '' : 'es'}`);
+  const posted = page.waitForResponse((r) => isPost(r, '/api/confirm/answers'));
+  await apply.click();
+  const res = await posted;
+  expect(res.status()).toBe(200);
+  const sent = JSON.parse(res.request().postData() || '{}').answers || [];
+  expect(Object.fromEntries(sent.map((a) => [String(a.id), String(a.answer)])), 'only the best guesses are submitted').toEqual(Object.fromEntries(guessed.map((i) => [String(i.id), String(i.guess.option)])));
+  for (const it of guessed) await expectAnswered(request, it.id, String(it.guess.option));
 });
 
 test('Decided for you lists the cross-format duplicates; Undo reopens one and it is never re-answered', async ({ page, request }) => {
@@ -254,7 +253,9 @@ test('the account type card shows the Rewards Card best guess with evidence nami
     const row = card.locator(`tr[data-row="${rewards.id}"]`);
     await expect(row).toBeVisible();
     await expect(row).toContainText('Best guess');
-    await expect(card.locator(`button[data-row-answer="${rewards.id}"][data-option="${rewards.guess.option}"]`)).toHaveAttribute('aria-pressed', 'true');
+    const guessBtn = card.locator(`button[data-row-answer="${rewards.id}"][data-option="${rewards.guess.option}"]`);
+    await expect(guessBtn).toHaveAttribute('data-guess', '1');
+    await expect(guessBtn).toHaveAttribute('aria-pressed', 'false');
     await expect(card).toContainText(evidence);
   } else {
     const card = await deckFind(page, `[data-item="${rewards.id}"]`);
