@@ -35,7 +35,8 @@ import { guessCategories } from '../categories/guess.mjs';
 // 10. allowed() (the household's outbound jobs flag) is checked in the single claim path, before
 //    the job_runs row is claimed, so ticks, triggers, debounced and pending reruns and runNow all
 //    pass it: while it is false nothing is claimed or run, ticks and triggers do nothing and runNow
-//    throws SchedulerError('paused'). Ticks also skip before taking the lease.
+//    throws SchedulerError('paused'). Ticks skip before any write (job rows, labels, the lease),
+//    and jobs() lists without refreshing job rows while paused.
 // 11. Handlers get ctx.household, the household context (household() at run time), beside db,
 //    config, engine and transport, all of that one household.
 
@@ -362,8 +363,9 @@ export function createScheduler({
   async function tickOnce() {
     if (stopping) return;
     const t = at();
+    if (allowed() !== true) return;
     ensureJobs(t);
-    if (allowed() !== true || !lease(t)) return;
+    if (!lease(t)) return;
     const zone = tz();
     for (const job of handled) {
       if (stopping) break;
@@ -467,7 +469,8 @@ export function createScheduler({
     jobs() {
       const t = at();
       const zone = tz();
-      try { ensureJobs(t); } catch { /* listing does not depend on the rows */ }
+      // A paused household's store is never written, not even job labels.
+      if (allowed() === true) { try { ensureJobs(t); } catch { /* listing does not depend on the rows */ } }
       return handled.map((j) => {
         const nextAt = nextRunAt(j.schedule, t, zone, fixed);
         return { id: j.id, name: j.name, cadence: j.cadence, does: j.does, lastRun: runOut(q.last.get(j.id)), next: timeLabel(nextAt, zone), nextAt: nextAt.toISOString() };

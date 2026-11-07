@@ -40,7 +40,8 @@ import {
   migrateExitingAt, migratedPlaintexts, endState, tableDigests, digestRules, withSqlite, startRuntime, startRefusal, stableHashes,
   writePrivate, mcp,
 } from './helpers/tenancy-runtime.mjs';
-import { fileHashes } from './helpers/tenancy.mjs';
+import { fileHashes, credentialFor, signIn } from './helpers/tenancy.mjs';
+import { createAuthenticator } from './helpers/webauthn.mjs';
 
 const T = { timeout: 600_000 };
 const PHASES_PINNED = ['preflight', 'snapshot', 'source-schema', 'stage', 'verify', 'root-published', 'before-manifest', 'manifest', 'retire', 'complete'];
@@ -296,6 +297,113 @@ test('the migration snapshot restores the exact pre-migration instance for a rol
 });
 
 // ============================================================================================
+// No passkey is lost (the owner's hard requirement)
+// ============================================================================================
+
+const PLATFORM = fx => join(fx.dataDir, 'platform.sqlite');
+const hexRow = r => Object.fromEntries(Object.entries(r).map(([k, v]) => [k, v instanceof Uint8Array ? Buffer.from(v).toString('hex') : v]));
+const passkeyRows = file => withSqlite(file, p => p.prepare('SELECT * FROM passkeys ORDER BY id').all().map(hexRow));
+const identityRows = file => withSqlite(file, p => ({
+  users: p.prepare('SELECT * FROM users ORDER BY id').all().map(hexRow),
+  memberships: p.prepare('SELECT user_id, household_id, role, status FROM household_memberships ORDER BY user_id').all().map(hexRow),
+}));
+
+// Several users and passkeys: the fixture's admin and member credentials plus a second real
+// credential for the admin, stored with its registration counter. Returns that device and id.
+async function addSecondAdminPasskey(fx) {
+  const device = createAuthenticator();
+  const credential = await credentialFor(device, fx.admin.handle);
+  withSqlite(PLATFORM(fx), p => p.prepare('INSERT INTO passkeys (id, user_id, public_key, counter, transports, name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(credential.id, fx.admin.id, credential.publicKey, credential.counter, '["internal"]', 'Synthetic second device', Date.now()));
+  return { device, credentialId: credential.id };
+}
+
+describe('no passkey is lost', T, () => {
+  test('every passkey row survives byte for byte, users and memberships are unchanged, and pre-migration credentials sign in; the rollback snapshot carries the same rows', async () => {
+    const fx = fresh();
+    const second = await addSecondAdminPasskey(fx);
+    const before = passkeyRows(PLATFORM(fx));
+    assert.equal(before.length, 3, 'fixture: three passkeys over two enrolled users');
+    const identityBefore = identityRows(PLATFORM(fx));
+
+    const r = await runMigration(fx);
+    assert.equal(r.status, 'complete');
+    assert.deepEqual(passkeyRows(PLATFORM(fx)), before, 'credential id, user link, public key, sign counter and every other column unchanged');
+    assert.deepEqual(identityRows(PLATFORM(fx)), identityBefore, 'users, enrolled users and memberships unchanged');
+
+    const server = await startRuntime({ dataDir: fx.dataDir, keys: fx.keys });
+    try {
+      for (const [who, device, credentialId] of [
+        [fx.admin, fx.admin.device, fx.admin.credentialId], [fx.admin, second.device, second.credentialId], [fx.member, fx.member.device, fx.member.credentialId],
+      ]) {
+        const signed = await signIn(server.baseUrl, device, credentialId);
+        assert.equal(signed.verify.status, 200, `a pre-migration credential signs in: ${signed.verify.text}`);
+        assert.equal(signed.verify.json.identity.email, who.email);
+        assert.equal((await signed.client.get('/api/scenario')).status, 200);
+      }
+    } finally {
+      await server.close();
+    }
+
+    // Rollback path: the migration snapshot restores the same passkey, user and membership rows.
+    const snapshot = join(fx.dataDir, 'snapshots', `tenancy-${operationOf(fx)[0]}.fsnap`);
+    const out = join(fx.root, 'rollback');
+    const restored = await runCommand(process.execPath, ['scripts/source-snapshot.mjs', 'restore', '--snapshot', snapshot, '--out', out],
+      { env: { FATHOM_BACKUP_KEY_FILE: fx.keys.backupKeyFile } });
+    assert.equal(restored.code, 0, restored.stderr);
+    assert.deepEqual(passkeyRows(join(out, 'platform.sqlite')), before, 'the rollback instance holds every passkey byte for byte');
+    assert.deepEqual(identityRows(join(out, 'platform.sqlite')), identityBefore);
+  });
+
+  // [label, change(platform) -> undo(platform)] applied while the run waits at before-manifest.
+  const CHANGES = [
+    ['a passkey deleted', p => {
+      const row = p.prepare('SELECT * FROM passkeys ORDER BY id LIMIT 1').get();
+      p.prepare('DELETE FROM passkeys WHERE id = ?').run(row.id);
+      return q => q.prepare(`INSERT INTO passkeys (${Object.keys(row).join(', ')}) VALUES (${Object.keys(row).map(() => '?').join(', ')})`).run(...Object.values(row));
+    }],
+    ['a credential id replaced (same count)', p => {
+      const id = p.prepare('SELECT id FROM passkeys ORDER BY id LIMIT 1').get().id;
+      p.prepare('UPDATE passkeys SET id = ? WHERE id = ?').run('synthetic-replaced-credential', id);
+      return q => q.prepare("UPDATE passkeys SET id = ? WHERE id = 'synthetic-replaced-credential'").run(id);
+    }],
+    ['a sign counter changed', p => {
+      const row = p.prepare('SELECT id, counter FROM passkeys ORDER BY id LIMIT 1').get();
+      p.prepare('UPDATE passkeys SET counter = counter + 1 WHERE id = ?').run(row.id);
+      return q => q.prepare('UPDATE passkeys SET counter = ? WHERE id = ?').run(row.counter, row.id);
+    }],
+  ];
+
+  for (const [label, change] of CHANGES) {
+    test(`${label} before publication refuses passkeys_changed, publishes nothing, and the restored rerun completes`, async () => {
+      const fx = fresh();
+      const before = passkeyRows(PLATFORM(fx));
+      let undo;
+      await refuses(runMigration(fx, { onPhase: async name => {
+        if (name === 'before-manifest') undo = withSqlite(PLATFORM(fx), change);
+      } }), 'passkeys_changed', label);
+      withSqlite(PLATFORM(fx), p => {
+        assert.equal(p.prepare('SELECT storage_root FROM households WHERE id = ?').get(fx.householdId).storage_root ?? null, null, 'nothing published');
+        assert.ok(p.prepare('SELECT count(*) AS n FROM auth_sessions').get().n > 0, 'the manifest transaction never ran');
+        assert.equal(p.prepare("SELECT count(*) AS n FROM platform_operations WHERE kind = 'tenancy-migration'").get().n, 0);
+      });
+      assert.ok(existsSync(join(fx.dataDir, 'fathom.sqlite')), 'the source is not retired');
+
+      // The CLI names the reason with its fixed code.
+      const cli = await migrateCli(fx);
+      assert.equal(cli.code, 1);
+      assert.equal(cli.stderr.trim(), 'migrate-tenancy: passkeys_changed');
+
+      withSqlite(PLATFORM(fx), undo);
+      assert.deepEqual(passkeyRows(PLATFORM(fx)), before);
+      const r = await runMigration(fx);
+      assert.equal(r.status, 'complete');
+      assert.deepEqual(passkeyRows(PLATFORM(fx)), before);
+    });
+  }
+});
+
+// ============================================================================================
 // 2. A failure at every phase resumes to the uninterrupted end state
 // ============================================================================================
 
@@ -337,6 +445,24 @@ describe('risk probe: the process dies mid-migration and restarts', T, () => {
     const refusedB = await startRefusal({ dataDir: fx.dataDir, keys: fx.keys });
     assert.ok(refusedB && startCodes.includes(refusedB.code), `server still refuses: ${refusedB?.code}`);
 
+    const r = await runMigration(fx);
+    assert.equal(r.status, 'complete');
+    assert.deepEqual(await endState(fx), await referenceState());
+  });
+
+  test('a source row changed between a crash before the manifest and the rerun refuses source_changed; restored, the rerun completes', async () => {
+    const fx = fresh();
+    const first = await migrateExitingAt(fx, 'before-manifest');
+    assert.equal(first.code, 9, first.stderr);
+    const store = join(fx.dataDir, 'fathom.sqlite');
+    const original = withSqlite(store, db => db.prepare("SELECT value FROM content WHERE key = 'synthetic.note'").get().value);
+    withSqlite(store, db => db.prepare("UPDATE content SET value = '\"Synthetic later edit\"' WHERE key = 'synthetic.note'").run());
+    await refuses(runMigration(fx), 'source_changed', 'a changed source');
+    withSqlite(join(fx.dataDir, 'platform.sqlite'), p => {
+      assert.equal(p.prepare('SELECT storage_root FROM households WHERE id = ?').get(fx.householdId).storage_root ?? null, null, 'nothing published');
+    });
+    assert.ok(existsSync(store), 'the source is not retired');
+    withSqlite(store, db => db.prepare("UPDATE content SET value = ? WHERE key = 'synthetic.note'").run(original));
     const r = await runMigration(fx);
     assert.equal(r.status, 'complete');
     assert.deepEqual(await endState(fx), await referenceState());
@@ -397,6 +523,10 @@ describe('source ambiguity and missing prerequisites refuse before any change', 
     ['a missing legacy data key', 'legacy_key_invalid', fx => ({ legacyKeyFile: missing(fx) })],
     ['the wrong legacy data key', 'legacy_key_invalid', fx => ({ legacyKeyFile: otherKey(fx) })],
     ['an MCP secret file with other bytes', 'mcp_secret_mismatch', fx => ({ mcpSecretFile: otherKey(fx) })],
+    ['the data directory\'s api-key-secret as the MCP secret file', 'secret_in_retired_entry', fx => ({ mcpSecretFile: join(fx.dataDir, 'api-key-secret') })],
+    ['a platform key inside the retired files/ directory', 'secret_in_retired_entry', fx => ({
+      platformKeyFile: writePrivate(join(fx.dataDir, 'files', 'platform.key'), readFileSync(fx.keys.platformKeyFile, 'utf8')),
+    })],
     ['a missing platform key', 'platform_key_invalid', fx => ({ platformKeyFile: missing(fx) })],
     ['too little free space', 'insufficient_space', () => ({ diskFree: () => 0 })],
     ['a missing backup key', 'backup_key_invalid', fx => ({ backupKeyFile: missing(fx) })],

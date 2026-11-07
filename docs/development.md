@@ -274,30 +274,52 @@ has signed in with a passkey on their own devices.
 
 ### Upgrading an existing real store
 
-A real store from before the platform database needs a one-time offline migration. A new release
-refuses to start on it with `platform_migration_required`.
+A real store from before the per-household layout needs two one-time offline migrations, in order.
+A new release refuses to start on a store that needs the first with `platform_migration_required`,
+and on one that needs the second with `tenancy_migration_required`. Stop the service before each,
+so nothing holds the store open; each refuses with `source_in_use` otherwise.
 
-1. Stop the service, so nothing holds the store open.
-2. Provide a private file holding a 32-byte backup key and point `FATHOM_BACKUP_KEY_FILE` at it.
-3. Run `node scripts/migrate-platform.mjs` with `FATHOM_DATA` set to the data directory. It refuses
-   with `source_in_use` while anything holds the store open, writes an encrypted snapshot under the
-   data directory's `snapshots` folder, and prints `migrate-platform: complete`. After an
-   interruption, run it again; it resumes or verifies. While it is unfinished the server refuses to
-   start with `platform_migration_in_progress`.
-4. Start the new release.
-5. Verify: sign in with an existing passkey, confirm existing sessions and MCP keys still work, and
-   check `/healthz`.
+Platform migration (only when the data directory has no `platform.sqlite` yet):
+
+1. Provide a private file holding a 32-byte backup key and point `FATHOM_BACKUP_KEY_FILE` at it.
+2. Run `node scripts/migrate-platform.mjs` with `FATHOM_DATA` set to the data directory. It writes an
+   encrypted snapshot under the data directory's `snapshots` folder and prints
+   `migrate-platform: complete`. After an interruption, run it again; it resumes or verifies. While
+   it is unfinished the server refuses to start with `platform_migration_in_progress`.
+
+Tenancy migration (moves the household into `households/<id>/`):
+
+1. Make four private files (mode 0600, outside the data directory's `files`, `packs` and `outbox`
+   and not the data directory's `api-key-secret` itself, which the migration retires):
+   1. `FATHOM_BACKUP_KEY_FILE`: the backup key above.
+   2. `FATHOM_DATA_KEY_FILE`: the current upload key, an input to this migration only.
+   3. `FATHOM_PLATFORM_KEY_FILE`: new, 32 random bytes as 64 hex characters. It wraps every
+      household data key; keep a copy apart from the data directory.
+   4. `FATHOM_MCP_SECRET_FILE`: a copy of the data directory's `api-key-secret`, so existing MCP
+      keys keep verifying.
+2. Run `node scripts/migrate-tenancy.mjs` with `FATHOM_DATA` and those four variables. It writes an
+   encrypted snapshot `snapshots/tenancy-<operation>.fsnap`, refuses with a fixed code if anything
+   would be lost (for example `passkeys_changed` when the passkeys differ from those it recorded),
+   and prints `migrate-tenancy: complete <householdId>`. After an interruption, run it again.
+3. Start the new release with `FATHOM_PLATFORM_KEY_FILE` and `FATHOM_MCP_SECRET_FILE`, without
+   `FATHOM_DATA_KEY_FILE`.
+4. Verify: `/healthz` answers; sign in again with an existing passkey (users, memberships and
+   passkeys carry over; sessions, sign-in challenges, one-time links and pending invitations are
+   revoked); an existing MCP key lists tools.
+5. Outbound work starts paused. An admin resumes it with `POST /api/household/outbound`, for example
+   `{"jobs":true,"email":true,"simplefin":true,"engine":true}`.
 6. Optional: `node scripts/operator.mjs grant <email>` for an enrolled user.
 
-Rollback: `node scripts/source-snapshot.mjs rollback --snapshot <file> --from <data dir> --out <new data dir>`
-(with `FATHOM_BACKUP_KEY_FILE` set) builds a data directory for the previous release from the
-snapshot, leaving the current one untouched. Start the previous release on the new directory. This
-is valid only until the new release has taken writes; later changes are not in the snapshot.
+Rollback after the tenancy migration: `node scripts/source-snapshot.mjs restore --snapshot <data dir>/snapshots/tenancy-<operation>.fsnap --out <new dir>`
+(with `FATHOM_BACKUP_KEY_FILE` set) writes the exact pre-migration instance into a new directory;
+start the previous release on it with its old environment. Rollback after only the platform
+migration: `node scripts/source-snapshot.mjs rollback --snapshot <file> --from <data dir> --out <new data dir>`.
+Either is valid only until the new release has taken writes; later changes are not in the snapshot.
 
 ## Email
 
 Fathom sends a monthly brief and short deadline alerts. The default `dev` transport writes each
-message to `outbox/` in the data directory and sends nothing. For real delivery set
+message to `outbox/` under the household's root (`households/<id>/`) and sends nothing. For real delivery set
 `FATHOM_EMAIL_TRANSPORT` (AgentMail is the production target), the sender and recipients
 (`FATHOM_EMAIL_FROM`, `FATHOM_EMAIL_TO` or their `_FILE` forms) and mount the API key as a file other
 users cannot read (mode 0400, 0440 with fsGroup, or 0600) named by `FATHOM_EMAIL_CREDENTIAL_FILE`. The Email screen shows the
