@@ -61,7 +61,8 @@ test('AC1 shipped source tables cover every stock name, and unknown names fall t
 });
 
 test('AC1 first answering layer wins and memory never learns from a guess', () => {
-  const transactions = [row(1, { category: 'Business', parser: 'aggregator' }), row(2, { date: '2032-06-12' })];
+  const transactions = [row(1, { category: 'Business', parser: 'aggregator' }),row(3,{category:'Business',parser:'aggregator',date:'2032-06-09'}),
+    row(4,{category:'Business',parser:'aggregator',date:'2032-06-08'}), row(2, { date: '2032-06-12' })];
   const all = { corrections: [{ transaction_id: 2, category: 'Groceries', bucket: 'household' }], merchantRules: [{ merchant: 'example shop', category: 'Taxes', bucket: 'tax' }], guesses: [{ transaction_id: 2, category: 'Investment' }] };
   assert.equal(resolve(transactions, all).get(2).category, 'Groceries');
   assert.equal(resolve(transactions, { ...all, corrections: [] }).get(2).bucket, 'tax');
@@ -72,15 +73,15 @@ test('AC1 first answering layer wins and memory never learns from a guess', () =
   assert.equal(resolve([row(1)], { corrections: [{ transaction_id: 1, category: 'Taxes', bucket:'tax', auto:{text:'Jev guess, 99% confident'} }] }).get(1).layer, 'guess');
 });
 
-test('AC1 normalizes feed merchant descriptions and picks most recently supplied category', () => {
+test('AC1 normalizes feed merchant descriptions and leaves conflicting history unresolved', () => {
   assert.equal(normalizeMerchant('POS DEBIT SQ *Example Shop #0042 06/10'), normalizeMerchant('Example Shop'));
   assert.notEqual(normalizeMerchant('Shop 7Eleven'), normalizeMerchant('Shop Eleven'));
   const a = row(1, { category: 'Groceries', parser: 'aggregator', date: '2032-03-01', category_at: '2032-08-01' });
   const b = row(2, { category: 'Business', parser: 'aggregator', date: '2032-04-01', category_at: '2032-07-01' });
-  assert.equal(resolve([a,b,row(3, { description: 'POS DEBIT Example Shop #0099' })]).get(3).category, 'Groceries');
+  assert.equal(resolve([a,b,row(3, { description: 'POS DEBIT Example Shop #0099' })]).get(3).category, 'Uncategorized');
 });
 
-test('AC1 structural layer recognizes both card-payment sides, preserves draws and loses to imports', () => {
+test('AC1 structural layer recognizes card payments, preserves business draws and loses to imports', () => {
   const r = resolve([row(1,{description:'AUTOPAY Example Card 5678'}),row(2,{account_id:'card',amount:250,description:'PAYMENT THANK YOU'}),
     row(3,{account_id:'biz',amount:-900}),row(4,{amount:900}),row(5,{category:'Groceries',parser:'aggregator',description:'AUTOPAY Example Card 5678'}),row(6,{description:'Payment Unknown Lender'})]);
   assert.equal(r.get(1).bucket,'transfer'); assert.equal(r.get(2).bucket,'transfer');
