@@ -3631,6 +3631,75 @@
           ]
         }
       ]
+    },
+    {
+      "id": "goals-confirm-stored-note",
+      "family": "goals",
+      "storedGoal": {
+        "title": "Education contributions",
+        "note": "Each parent contributes $4,000 in December, due 2026-12-31."
+      },
+      "turns": [
+        {
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [],
+          "maxWords": 90,
+          "question": "Use the stored education goal note to propose a contribution goal for a parent.",
+          "required": [
+            {
+              "name": "list_goals",
+              "predicates": []
+            }
+          ],
+          "scriptedReply": "Create a parent contribution goal for $4,000 by 2026-12-31?",
+          "rubric": "Read the stored goal note before proposing the exact target and date, with their source recorded by grounding."
+        },
+        {
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [],
+          "maxWords": 90,
+          "question": "yeah",
+          "required": [
+            {
+              "name": "create_goal",
+              "predicates": [
+                {
+                  "path": "title",
+                  "op": "eq",
+                  "value": "Parent contribution"
+                },
+                {
+                  "path": "horizon",
+                  "op": "eq",
+                  "value": "now"
+                },
+                {
+                  "path": "target",
+                  "op": "eq",
+                  "value": 4000
+                },
+                {
+                  "path": "targetDate",
+                  "op": "eq",
+                  "value": "2026-12-31"
+                },
+                {
+                  "path": "track",
+                  "op": "eq",
+                  "value": null
+                }
+              ]
+            }
+          ],
+          "rubric": "Treat the short confirmation as approval of the sourced preceding proposal. Save the exact target and date with a canonical horizon and no balance tracking, and return a receipt."
+        }
+      ]
     }
   ]
 }

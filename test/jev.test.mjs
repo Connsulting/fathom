@@ -82,25 +82,39 @@ test('a cost-derived token cap attempts every question that fits the run budget'
 
 test('outbound pause is rechecked before each batch and retry, then resume permits dispatch',async t=>{
   let enabled=true,calls=0;
-  const jev=await createJev({...setup(t),batchSize:1,canSend:()=>enabled,transport:async(_,o)=>{
+  const jev=await createJev({...setup(t),batchSize:1,admit:()=>enabled?null:'engine_paused',transport:async(_,o)=>{
     calls++;enabled=false;return Response.json(response(JSON.parse(o.body)));
   }});
-  await assert.rejects(jev.choose([...questions(),...questions()]),/outbound_paused/);
+  await assert.rejects(jev.choose([...questions(),...questions()]),/engine_paused/);
   assert.equal(calls,1);
   enabled=true;
   assert.equal((await jev.choose(questions())).length,1);
   enabled=false;
-  await assert.rejects(jev.choose(questions()),/outbound_paused/);
+  await assert.rejects(jev.choose(questions()),/engine_paused/);
   assert.equal(calls,2);
 });
 
 test('a pause during a failed attempt prevents its retry and resume remains live',async t=>{
   let enabled=true,calls=0;
-  const jev=await createJev({...setup(t),canSend:()=>enabled,sleep:async()=>{},transport:async(_,o)=>{
+  const jev=await createJev({...setup(t),admit:()=>enabled?null:'engine_paused',sleep:async()=>{},transport:async(_,o)=>{
     calls++;
     if(calls===1) {enabled=false;return new Response('',{status:503});}
     return Response.json(response(JSON.parse(o.body)));
   }});
-  await assert.rejects(jev.choose(questions()),/outbound_paused/);assert.equal(calls,1);
+  await assert.rejects(jev.choose(questions()),/engine_paused/);assert.equal(calls,1);
   enabled=true;assert.equal((await jev.choose(questions())).length,1);assert.equal(calls,2);
+});
+
+
+test('admission runs before every dispatch, retries included, and a refusal sends nothing',async t=>{
+  const {keyFile}=setup(t); let calls=0, refusal=null; const entries=[];
+  const jev=await createJev({keyFile,admit:()=>refusal,sleep:async()=>{},ledger:{record:e=>entries.push(e),monthSpendUsd:()=>0},
+    transport:async()=>{calls++; refusal='engine_paused'; return new Response('',{status:503});}});
+  await assert.rejects(jev.choose(questions()),e=>e.code==='engine_paused');
+  assert.equal(calls,1,'the retry after a pause is never sent'); assert.equal(entries.length,1);
+  refusal='funding_unavailable';
+  await assert.rejects(jev.choose(questions()),e=>e.code==='funding_unavailable'); assert.equal(calls,1);
+  refusal=null; const ok=await createJev({keyFile,admit:()=>null,transport:async(_,o)=>Response.json(response(JSON.parse(o.body)))});
+  assert.equal((await ok.choose(questions()))[0].choice,'Groceries');
+  await assert.rejects(createJev({keyFile,admit:'yes'}),/jev_bad_options/);
 });

@@ -19,17 +19,21 @@ import { threadCreate, demoReset } from '../src/api/handlers.mjs';
 import { HttpError } from '../src/api/http.mjs';
 import { validateGoal, servesGoals, CURVE_AXES } from '../src/shared/goals.mjs';
 import { sortOrder, curveLean } from '../src/jobs/planner/recs.mjs';
-import { tempDb } from './helpers/server.mjs';
+import { tempDb, tempInstance } from './helpers/server.mjs';
 
 const NOW = '2032-03-10T12:00:00.000Z';
 
+// A demo store is a demo instance (createInstance layout) so handlers that need the household
+// context (demo reset clears its vault and its platform keys) get one; a plain store is a temp
+// store whose directory stands in as the household root.
 async function store(t, { demo = false } = {}) {
-  const s = await tempDb();
+  const s = demo ? await tempInstance({ mode: 'demo', init: seedDemo }) : await tempDb();
   t.after(async () => { s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
-  if (demo) seedDemo(s.db);
   const config = { clock: '2032-03-10', dataDir: s.dataDir };
-  const ctx = (body = {}, params = {}) => ({ db: s.db, config, body, params });
-  return { ...s, config, ctx };
+  const household = demo ? await s.household(config) : null;
+  const root = household ? household.root : s.dataDir;
+  const ctx = (body = {}, params = {}) => ({ db: s.db, config, body, params, household, platform: s.platform ?? null });
+  return { ...s, root, config, ctx };
 }
 
 // Two mirrored accounts with stored balances and one without.
@@ -241,9 +245,9 @@ test('the household summary grounds on goals, typed targets and curve leans', as
 async function fakeAnswerer(s) {
   const config = loadConfig({ FATHOM_DATA: s.dataDir, FATHOM_ENGINE: 'fake' });
   const engine = createRuntimeEngine({ db: s.db, config });
-  const packs = createLivePacks(s.db, { dataDir: s.dataDir });
+  const packs = createLivePacks(s.db, { dataDir: s.root });
   packs.refresh();
-  return { engine, answerer: createLiveAnswerer({ engine, packs }) };
+  return { engine, answerer: createLiveAnswerer({ engine, packs, root: s.root }) };
 }
 
 test('"add a goal" in Ask saves a goal with a durable Undo receipt', async t => {

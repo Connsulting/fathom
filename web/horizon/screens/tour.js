@@ -31,7 +31,7 @@ export const TOUR_STOPS = Object.freeze([
   { id: 'ask', route: 'home', anchor: '#h-askp[data-mode="dock"], #h-askp .h-askp-bar, .h-askp-launch', panel: true, title: 'Ask anything',
     body: 'Ask opens in a side panel beside any page. Answers use your own data and show where every figure came from.' },
   { id: 'add-context', route: 'home', anchor: '.h-home .h-add', title: 'Add it to the question',
-    body: 'The + on a goal, action or account adds it to Ask, so the answer starts with the right context.' },
+    body: 'The chat icon on a goal, action or account adds it to Ask, so the answer starts with the right context.' },
   { id: 'packs', route: 'packs', anchor: '.h-pack', title: 'Knowledge packs',
     body: 'Curated rules, like tax deadlines and contribution limits, that ground every answer. A pack turns on when your facts say it applies.' }
 ].map((s) => Object.freeze(s)));

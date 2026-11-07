@@ -1,7 +1,9 @@
 // The auth store over the platform DB (platform.sqlite): global users, household memberships and
 // invitations, instance operators, passkeys, recovery and add-a-device tokens, sessions, ceremony
-// challenges, rate limits, platform settings and audit events. It never touches the financial
-// store. Outer writes run under BEGIN IMMEDIATE; nested ones use a savepoint.
+// challenges, rate limits, platform settings and audit events (and a removed member's MCP keys).
+// It never touches a financial store. Outer writes run under BEGIN IMMEDIATE; nested ones use a
+// savepoint. servedHousehold() (households.serves_store) only tells the instance mode; it never
+// selects a financial household.
 
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { HttpError } from '../api/http.mjs';
@@ -105,12 +107,11 @@ export function createAuthStore(platform, { now = () => Date.now() } = {}) {
     const user = userRow(userId);
     if (m?.status === 'active' && m.role === 'admin' && user?.enrolled_at != null && enrolledAdmins(householdId).length <= 1) throw lastAdmin();
   }
-  // The household a new session works in: the served household when the user is an active member
-  // of it, else the user's only active membership, else none.
+  // The household a new session works in: the user's only active membership (in a household that
+  // is not deleted), else none. The instance's original household gets no preference.
   function defaultHousehold(userId) {
-    const served = servedHousehold();
-    if (served && membershipRow(userId, served.id)?.status === 'active') return served.id;
-    const active = db.prepare("SELECT household_id FROM household_memberships WHERE user_id = ? AND status = 'active'").all(userId);
+    const active = db.prepare(`SELECT m.household_id FROM household_memberships m JOIN households h ON h.id = m.household_id
+      WHERE m.user_id = ? AND m.status = 'active' AND h.status != 'deleted'`).all(userId);
     return active.length === 1 ? active[0].household_id : null;
   }
   function token(raw) {
@@ -150,6 +151,13 @@ export function createAuthStore(platform, { now = () => Date.now() } = {}) {
         WHERE user_id = ? AND household_id = ?`).run(row.role, at, userId, row.household_id);
     }
     audit('membership.join', { actorId: userId, householdId: row.household_id, targetUserId: userId });
+    // A provisioned household becomes active when its first admin joins, and only once its storage
+    // exists (a household with no root is never served).
+    if (row.role === 'admin') {
+      const activated = db.prepare(`UPDATE households SET status = 'active', updated_at = ?
+        WHERE id = ? AND status = 'provisioning' AND storage_root IS NOT NULL`).run(at, row.household_id).changes > 0;
+      if (activated) audit('household.activate', { actorId: userId, householdId: row.household_id, targetUserId: userId });
+    }
     return { householdId: row.household_id, ...membership(userId, row.household_id) };
   }
   function invite(householdId, email, { role = 'member', inviterId = null } = {}) {
@@ -268,8 +276,8 @@ export function createAuthStore(platform, { now = () => Date.now() } = {}) {
     // they issued in this household, signs them out, then deletes the account when nothing holds it.
     // A pending invitee: revokes the invitation only; a never-enrolled account the invitation
     // created is then deleted when nothing holds it, an enrolled account is left untouched.
-    // The caller deletes the user's MCP keys from the household's store. False when the user is not
-    // in the household.
+    // An active member's MCP keys in this household are deleted with the membership. False when the
+    // user is not in the household.
     removeMember(householdId, userId, { actorId = null } = {}) {
       return transaction(() => {
         const row = userRow(userId);
@@ -289,6 +297,7 @@ export function createAuthStore(platform, { now = () => Date.now() } = {}) {
           db.prepare('UPDATE household_invitations SET revoked_at = ? WHERE household_id = ? AND inviter_user_id = ? AND consumed_at IS NULL AND revoked_at IS NULL')
             .run(at, householdId, userId);
           revokeUserSessions(userId);
+          db.prepare('DELETE FROM api_keys WHERE household_id = ? AND user_id = ?').run(householdId, userId);
         }
         audit('membership.remove', { actorId, householdId, targetUserId: userId });
         if (active || row.enrolled_at === null) deleteIfUnheld(userId);

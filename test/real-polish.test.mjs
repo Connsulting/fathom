@@ -40,7 +40,7 @@ describe('series from balances', () => {
     const series = buildSeries(db, NOW);
     const s = series['acct-chk1'];
     assert.ok(s, 'account series');
-    assert.equal(s.label, 'Everyday checking ending 1111');
+    assert.equal(s.label, 'Everyday checking (1111)');
     assert.equal(s.src, 'balances');
     assert.deepEqual(s.points.map(p => p.v), [1100, 1250.5, 1400]);
     assert.deepEqual(s.points.map(p => p.x), ['Aug 2026', 'Sep 2026', 'Oct 2026']);

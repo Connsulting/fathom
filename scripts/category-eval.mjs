@@ -1,8 +1,11 @@
 import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
-import { resolve,basename,dirname } from 'node:path';
-import { openServedStore } from '../src/platform/ready.mjs';
-import { DB_FILE, parseJson, getSetting } from '../src/store/db.mjs';
+import { resolve } from 'node:path';
+import { openReadOnlyHousehold } from '../src/platform/ready.mjs';
+import { householdArg } from '../src/platform/cli.mjs';
+import { parseJson } from '../src/store/db.mjs';
+import { readOutbound } from '../src/platform/outbound.mjs';
+import { instanceFunded } from '../src/platform/runtime.mjs';
 import { createJev, categoryQuestions } from '../src/categories/jev.mjs';
 import { sourceBucket, resolveCategories, createHistoryIndex, historyExamples, CATEGORY_TABLES } from '../src/categories/resolve.mjs';
 import { loadCategoryInputs } from '../src/categories/store.mjs';
@@ -57,7 +60,7 @@ export async function evaluateCategories(db,jev,{sampleSize=1000}={}) {
           top3:Object.entries(a.probabilities).sort((a,b)=>b[1]-a[1]).slice(0,3).some(([c])=>c===batch[j].row.truth)};
         scores.push(score);stages.model.push(score);
       }
-    } catch(error) {stopped=['jev_budget','jev_unavailable','jev_bad_response','outbound_paused'].includes(error.code)?error.code:'eval_failed';break;}
+    } catch(error) {stopped=['jev_budget','jev_unavailable','jev_bad_response','engine_paused','funding_unavailable'].includes(error.code)?error.code:'eval_failed';break;}
   }
   const calibrated=calibration(scores), accepted=scores.filter(s=>calibrated.thresholds.autoApply!=null && s.confidence>=calibrated.thresholds.autoApply);
   const summarize=rows=>({rows:rows.length,correct:rows.filter(s=>s.correct).length,
@@ -70,15 +73,23 @@ export async function evaluateCategories(db,jev,{sampleSize=1000}={}) {
     top3:scores.length?scores.filter(s=>s.top3).length/scores.length:null,...calibrated,costUsd:stats.costUsd,
     latencyMs:{p50:percentile(stats.latenciesMs,.5),p95:percentile(stats.latenciesMs,.95)},...(stopped?{stopped}:{})};
 }
+// The household's model admission: its outbound engine flag and instance funding, as for the engine.
+export function evalAdmission(platform,householdId) {
+  if(readOutbound(platform,householdId)?.engine!==true) return 'engine_paused';
+  return instanceFunded(platform)?null:'funding_unavailable';
+}
 export async function main(argv=process.argv.slice(2)) {
   let store;
   try {
-    const path=argv[0]??process.env.FATHOM_DATA;
-    const sampleSize=Number(argv[1]??1000), maxCostUsd=Number(argv[2]??.05);
+    const {householdId,rest}=householdArg(argv);
+    const path=rest[0]??process.env.FATHOM_DATA;
+    const sampleSize=Number(rest[1]??1000), maxCostUsd=Number(rest[2]??.05);
     if(!path || !Number.isInteger(sampleSize) || sampleSize<1 || sampleSize>10000 || !Number.isFinite(maxCostUsd) || maxCostUsd<0 || maxCostUsd>1) throw new Error();
-    const absolute=resolve(path);
-    store=openServedStore({dataDir:basename(absolute)===DB_FILE?dirname(absolute):absolute},{readOnly:true});
-    const jev=await createJev({maxCostUsd,canSend:()=>getSetting(store.db,'engine',{on:true})?.on!==false});
+    store=openReadOnlyHousehold({dataDir:resolve(path)},householdId);
+    const admit=()=>evalAdmission(store.platform,householdId);
+    const refused=admit();
+    if(refused) {console.error(`category_eval_failed: ${refused}`);return 1;}
+    const jev=await createJev({maxCostUsd,admit});
     if(!jev.isOn()) throw new Error();
     const result=await evaluateCategories(store.db,jev,{sampleSize});
     console.log(JSON.stringify(result)); return result.stopped?1:0;

@@ -100,7 +100,18 @@ test('scheduled Jev work uses the configured key independently of the general en
     }))});
   };
   const {defaultHandlers}=await import('../src/jobs/scheduler.mjs');
-  const result=await defaultHandlers({})['confirm-guess']({db,now:'2032-11-05T00:00:00Z',config:{engine:'live',typesafeKeyFile:keyFile},engine:{isOn:()=>false}});
+  // The household's outbound engine pause and missing instance funding each stop Jev before any
+  // request; with both admitted Jev runs.
+  const household=(engine,funded=true)=>({outbound:{enabled:kind=>kind==='engine'?engine:true},funded:()=>funded});
+  const calls=[];const answer=globalThis.fetch;globalThis.fetch=async(...a)=>{calls.push(a);return answer(...a);};
+  const job=ctx=>defaultHandlers({})['confirm-guess']({db,now:'2032-11-05T00:00:00Z',config:{engine:'live',typesafeKeyFile:keyFile},engine:{isOn:()=>false},...ctx});
+  await job({household:household(false)});
+  assert.equal(calls.length,0,'a paused household sends Jev nothing');
+  await job({household:household(true,false)});
+  assert.equal(calls.length,0,'an unfunded instance sends Jev nothing');
+  assert.equal(db.prepare('SELECT count(*) AS n FROM spend_ledger').get().n,0);
+  const result=await job({household:household(true)});
+  assert.ok(calls.length>0);
   assert.ok(result.note.guessed>=1);assert.equal(resolutions(db).get(id).layer,'guess');
   const spend=db.prepare('SELECT purpose,model,cost_usd FROM spend_ledger').all();
   assert.ok(spend.length);assert.ok(spend.every(r=>r.purpose==='categorize'&&r.model==='jev-1.14.0'&&r.cost_usd>0));
@@ -165,9 +176,12 @@ test('duplicate consolidation keeps a model correction from becoming owner memor
 
 
 test('export enrichment retires its Jev review card and preserves another unresolved review',async t=>{
-  const db=store(t);vocabulary(db);
+  // Ingest runs in a household context (MT-03), so this store comes from the ingest helper.
   const {ingestFile,accountIdOf}=await import('../src/ingest/pipeline.mjs');
-  const {aggregatorFile}=await import('./helpers/ingest.mjs');
+  const {aggregatorFile,realStore}=await import('./helpers/ingest.mjs');
+  const s=await realStore();t.after(()=>s.close());
+  const db=s.db;setSetting(db,'clock','2032-11-05');
+  db.exec("INSERT INTO accounts (id,kind,name,mask) VALUES ('a','checking','Everyday','3456')");vocabulary(db);
   const {answerItem}=await import('../src/ingest/confirm.mjs');
   const accountId=accountIdOf('examplebank|mask:1111');
   db.prepare("INSERT INTO accounts (id,kind,inst,mask,name,identity) VALUES (?,'checking','Example Bank','1111','Synthetic checking','examplebank|mask:1111')").run(accountId);
@@ -176,9 +190,8 @@ test('export enrichment retires its Jev review card and preserves another unreso
   const other=transaction(db,'Different unresolved review');
   await guessCategories(db,provider(.9),{policy});
   const card=pendingItems(db).find(q=>q.kind==='transaction_category'&&q.subject===String(target));assert.ok(card);
-  const dir=mkdtempSync(join(tmpdir(),'jev-export-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
   await ingestFile(db,aggregatorFile('synthetic-export.csv',[{date:'2032-06-10',amount:240,description:'Enrollment merchant',category:'Business'}]),
-    {dataDir:dir,key:Buffer.alloc(32,7),now:'2032-08-01T12:00:00Z'});
+    s.opts(null,{now:'2032-08-01T12:00:00Z'}));
   queueCategoryChecks(db,{policy});
   assert.equal(db.prepare('SELECT count(*) AS n FROM transactions WHERE account_id=?').get(accountId).n,1);
   assert.equal(resolutions(db).get(target).layer,'import');assert.equal(resolutions(db).get(target).category,'Business');

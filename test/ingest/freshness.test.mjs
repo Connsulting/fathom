@@ -386,7 +386,7 @@ describe('freshness after import, sync and merge', () => {
 
     const day = '2032-06-20';
     const fetch = SF.createFakeSimplefin({ today: () => day });
-    const opt = { config: s.config, key: s.key, now: `${day}T12:00:00.000Z`, clock: day, fetch };
+    const opt = { config: s.config, household: s.household, now: `${day}T12:00:00.000Z`, clock: day, fetch };
     await SF.connectSimplefin(s.db, SF.fakeToken(), opt);
     const sync = await SF.syncSimplefin(s.db, opt);
     assert.equal(sync.status, 'ok');

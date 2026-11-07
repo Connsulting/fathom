@@ -14,6 +14,7 @@ import { categoryDetail } from '../categories/store.mjs';
 
 import { parseJson } from '../store/db.mjs';
 import { accountLabel } from '../shared/account-label.mjs';
+import { accountNaming } from '../accounts/naming.mjs';
 import { cents } from './format.mjs';
 import { normalizeName } from './confirm.mjs';
 import { parsers } from './registry.mjs';
@@ -71,7 +72,7 @@ function accountView(db, id) {
     institution: a.inst || null,
     name: a.name ?? null,
     label: accountLabel({
-      ...a, holder,
+      ...a, holder, ...accountNaming(db).hint(a.id),
       householdNames: parseJson(db.prepare("SELECT value FROM facts WHERE key = 'household.names'").get()?.value, {}) || {},
     }),
     mask: a.mask ?? null,

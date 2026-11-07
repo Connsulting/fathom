@@ -113,7 +113,7 @@ export const dump = (file, options) => withDb(file, db => dumpOf(db, options));
 
 // A real credential for `userHandle` made by `device`, as the 018 passkeys row needs it: the id,
 // the COSE public key and the counter the real verifier extracts from the attestation.
-async function credentialFor(device, userHandle) {
+export async function credentialFor(device, userHandle) {
   const challenge = randomBytes(32).toString('base64url');
   const origin = `http://${RP_ID}`;
   const response = device.createCredential({ rp: { id: RP_ID }, user: { id: userHandle }, challenge }, { origin });

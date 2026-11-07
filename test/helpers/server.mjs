@@ -3,22 +3,28 @@
 
 import { spawn } from 'node:child_process';
 import { mkdtemp } from 'node:fs/promises';
-import { existsSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import net from 'node:net';
 import { randomBytes } from 'node:crypto';
 import http from 'node:http';
 
 export const ROOT = fileURLToPath(new URL('../../', import.meta.url));
+// Each household's store: <dataDir>/households/<householdId>/fathom.sqlite (MT-03 layout).
 export const DB_FILE = 'fathom.sqlite';
-// Account rows (users, households, memberships, passkeys, auth_*) live here, beside the store.
+// Account rows (users, households, memberships, passkeys, auth_*, MCP keys, outbound flags).
 export const PLATFORM_FILE = 'platform.sqlite';
 export const SERVER_TIMEOUT = 30000;
 
 const running = new Set();
-process.on('exit', () => { for (const c of running) killGroup(c, 'SIGKILL'); });
+const secretDirs = new Set();
+process.on('exit', () => {
+  for (const c of running) killGroup(c, 'SIGKILL');
+  for (const d of secretDirs) rmSync(d, { recursive: true, force: true });
+});
 
 export function src(rel) {
   return import(pathToFileURL(join(ROOT, rel)).href);
@@ -26,6 +32,76 @@ export function src(rel) {
 
 export async function tempDir(prefix = 'fathom-test-') {
   return mkdtemp(join(tmpdir(), prefix));
+}
+
+// ---------------------------------------------------------------- instance secrets
+
+// Synthetic instance secrets in `dir`: the platform key (wraps household data keys) and the MCP
+// HMAC secret, each 64 hex characters in a 0600 file inside a 0700 directory. `mcpSecretHex`
+// keeps an existing secret (a migrated instance's api-key-secret). Returns
+// { dir, platformKeyFile, mcpSecretFile, platformKey }.
+export function writeInstanceSecrets(dir, { mcpSecretHex = randomBytes(32).toString('hex') } = {}) {
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  chmodSync(dir, 0o700);
+  const platformKey = randomBytes(32);
+  const write = (name, text) => {
+    const file = join(dir, name);
+    writeFileSync(file, text, { mode: 0o600 });
+    chmodSync(file, 0o600);
+    return file;
+  };
+  return {
+    dir,
+    platformKeyFile: write('platform.key', platformKey.toString('hex') + '\n'),
+    mcpSecretFile: write('mcp.secret', mcpSecretHex + '\n'),
+    platformKey,
+  };
+}
+
+// The synthetic real-mode secrets of the instance in `dataDir`, created once per data directory in
+// a temp directory outside it (removed at exit), so every server, CLI and in-process runtime of one
+// instance in this test process reads the same keys. `mcpSecretHex` applies when they are created.
+const instanceSecrets = new Map();
+export function secretsFor(dataDir, { mcpSecretHex } = {}) {
+  const key = resolve(dataDir);
+  let keys = instanceSecrets.get(key);
+  if (!keys) {
+    const dir = mkdtempSync(join(tmpdir(), 'fathom-secrets-'));
+    secretDirs.add(dir);
+    keys = writeInstanceSecrets(join(dir, 'keys'), { mcpSecretHex });
+    instanceSecrets.set(key, keys);
+  }
+  return keys;
+}
+
+// The env naming those secrets for a child server or CLI.
+export const secretEnv = keys => ({ FATHOM_PLATFORM_KEY_FILE: keys.platformKeyFile, FATHOM_MCP_SECRET_FILE: keys.mcpSecretFile });
+
+// The instance secrets service (src/platform/secrets.mjs) for `dataDir` in `mode`: the synthetic
+// real-mode files from secretsFor, or the demo instance's own platform-secrets/. Returns
+// { secrets, keys } (keys: null in demo mode).
+export async function instanceSecretsOf(dataDir, mode) {
+  const { createInstanceSecrets } = await src('src/platform/secrets.mjs');
+  const keys = mode === 'demo' ? null : secretsFor(dataDir);
+  const config = { dataDir, platformKeyFile: keys?.platformKeyFile ?? null, mcpSecretFile: keys?.mcpSecretFile ?? null };
+  return { secrets: createInstanceSecrets({ config, mode }), keys };
+}
+
+// The original household of the instance in `dataDir` and its store file (read-only platform read):
+// { householdId, mode, root, file }, or null when there is no platform or no rooted household.
+export function servedStore(dataDir) {
+  const platformFile = join(dataDir, PLATFORM_FILE);
+  if (!existsSync(platformFile)) return null;
+  const db = new DatabaseSync(platformFile, { readOnly: true });
+  let row;
+  try {
+    row = db.prepare('SELECT id, mode, storage_root FROM households WHERE serves_store = 1').get();
+  } finally {
+    db.close();
+  }
+  if (!row || !row.storage_root) return null;
+  const root = join(dataDir, row.storage_root);
+  return { householdId: row.id, mode: row.mode, root, file: join(root, DB_FILE) };
 }
 
 export function freePort() {
@@ -105,12 +181,15 @@ function listeningOn(text, port) {
 
 // Start `node src/server.mjs` (or `npm start` with npm: true) and wait for the child's own
 // `fathom listening on` line naming its port, then GET /healthz. Fails if the child exits first.
-// Returns { baseUrl, port, dataDir, dbFile, platformFile, child, output(), stop() }.
+// Returns { baseUrl, port, dataDir, householdId, root, dbFile, platformFile, child, output(), stop() }
+// where dbFile is the original household's store (households/<id>/fathom.sqlite).
+// Real-mode secrets (FATHOM_PLATFORM_KEY_FILE, FATHOM_MCP_SECRET_FILE) come from secretsFor(dataDir)
+// unless `env` names them (an undefined value leaves one unset); a demo instance ignores them.
 export async function spawnServer({ dataDir, env = {}, npm = false, timeoutMs = 20000 } = {}) {
   dataDir = dataDir || await tempDir();
   const port = await freePort();
   const baseUrl = `http://localhost:${port}`;
-  const { child, output } = launch({ dataDir, port, env, npm });
+  const { child, output } = launch({ dataDir, port, env: { ...secretEnv(secretsFor(dataDir)), ...env }, npm });
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     if (exited(child)) {
@@ -131,7 +210,11 @@ export async function spawnServer({ dataDir, env = {}, npm = false, timeoutMs = 
       await waitExit(child, 5000);
     }
   };
-  return { baseUrl, port, dataDir, dbFile: join(dataDir, DB_FILE), platformFile: join(dataDir, PLATFORM_FILE), child, output, stop, ...sessionClient(baseUrl) };
+  const served = servedStore(dataDir);
+  return {
+    baseUrl, port, dataDir, householdId: served?.householdId ?? null, root: served?.root ?? null, dbFile: served?.file ?? null,
+    platformFile: join(dataDir, PLATFORM_FILE), child, output, stop, ...sessionClient(baseUrl),
+  };
 }
 
 // Run fn(server) against a fresh server and always stop it.
@@ -149,7 +232,7 @@ export async function withServer(opts, fn) {
 export async function expectServerExit({ dataDir, env = {}, timeoutMs = 15000 } = {}) {
   const port = await freePort();
   const baseUrl = `http://localhost:${port}`;
-  const { child, output } = launch({ dataDir, port, env, npm: false });
+  const { child, output } = launch({ dataDir, port, env: { ...(dataDir ? secretEnv(secretsFor(dataDir)) : {}), ...env }, npm: false });
   const deadline = Date.now() + timeoutMs;
   while (!exited(child)) {
     if ((listeningOn(output(), port) && await healthy(baseUrl)) || Date.now() > deadline) {
@@ -286,24 +369,65 @@ export async function withAuthenticatedServer(options, fn) {
   try { return await fn(server); } finally { await server.stop(); }
 }
 
-// In-process router over `db`. The handler gets a platform DB: `platform` when given, else the
-// platform.sqlite beside the store in config.dataDir, else a disposable synthetic instance whose
-// served household matches the store's mode (for stores built without createInstance).
-export async function serveAppFixture({ db, platform, config, authenticated = false, ...context }) {
+// A household context (src/platform/runtime.mjs createHouseholdContext) over the open store `db`
+// of household `householdId` on `platform`, with `config` (config.dataDir is the instance data
+// directory) and the instance `secrets`. `inject` may supply engine, packs, answerer, scheduler or
+// transport; anything else is built as the server builds it. The scheduler is never started.
+// close() on the context closes `db`.
+export async function householdContext({ db, platform, householdId, mode = 'real', config, secrets, generation = 1, ...inject }) {
+  const { createHouseholdContext } = await src('src/platform/runtime.mjs');
+  const given = Object.fromEntries(Object.entries(inject).filter(([, v]) => v != null));
+  return createHouseholdContext({ householdId, generation, mode, db, config, platform, secrets, ...given });
+}
+
+// In-process router over `db` (src/api/router.mjs createHandler), with the platform, runtime
+// registry, auth service and MCP key service the server builds. The platform is `platform` when
+// given, else the platform.sqlite in config.dataDir, else a disposable synthetic instance whose
+// original household matches the store's mode (for stores built without createInstance). The
+// registry serves `db` as that original household's runtime; `engine`, `packs`, `answerer`,
+// `scheduler` and `transport` (also the auth mail transport) are injected into it when given;
+// `scheduler` may be a function of the context getter (for createScheduler's `household` option).
+// close() stops the HTTP server only: `db` stays open for the test.
+export async function serveAppFixture({
+  db, platform, config, authenticated = false, engine, packs, answerer, scheduler, transport, secrets, webDir, sharedDir,
+}) {
   const port = await freePort();
   const baseUrl = `http://localhost:${port}`;
   const { createHandler } = await src('src/api/router.mjs');
   const { getSetting } = await src('src/store/db.mjs');
-  const fixtureConfig = { ...config, port, publicUrl: baseUrl };
+  const { createRuntimeRegistry, buildHouseholdContext } = await src('src/platform/runtime.mjs');
+  const { createAuthService } = await src('src/auth/service.mjs');
+  const { createKeyService } = await src('src/mcp/keys.mjs');
+  const { createTransport } = await src('src/email/transport.mjs');
   const owned = platform ? null : await fixturePlatform(db, config);
   const handle = platform ?? owned.platform;
+  const served = handle.prepare('SELECT id, mode FROM households WHERE serves_store = 1').get();
+  const dataDir = config?.dataDir ?? owned?.dir;
+  const fixtureConfig = { ...config, dataDir, port, publicUrl: baseUrl };
+  const instance = secrets ?? (await instanceSecretsOf(dataDir, served.mode)).secrets;
   let server;
   try {
+    // The registry builds contexts synchronously: the served one is built here and handed over.
+    let servedContext = null;
+    servedContext = await householdContext({
+      db, platform: handle, householdId: served.id, mode: served.mode, config: fixtureConfig, secrets: instance,
+      engine, packs, answerer, transport, scheduler: typeof scheduler === 'function' ? scheduler(() => servedContext) : scheduler,
+    });
+    const runtimes = createRuntimeRegistry({
+      platform: handle, config: fixtureConfig, secrets: instance,
+      build: args => (args.householdId === served.id ? servedContext : buildHouseholdContext(args)),
+    });
+    const authTransport = transport ?? createTransport(fixtureConfig, { outboxDir: join(dataDir, 'outbox') });
+    const auth = createAuthService({ platform: handle, config: fixtureConfig, transport: authTransport, secrets: instance });
+    const keys = createKeyService({ platform: handle, secret: () => instance.mcpSecret(), creatorActive: auth.creatorActive });
     const session = authenticated && getSetting(db, 'mode', null) !== 'demo' ? await createSessionFixture(handle) : null;
-    server = http.createServer(createHandler({ db, platform: handle, config: fixtureConfig, ...context }));
+    server = http.createServer(createHandler({
+      platform: handle, config: fixtureConfig, runtimes, auth, keys,
+      ...(webDir ? { webDir } : {}), ...(sharedDir ? { sharedDir } : {}),
+    }));
     await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); });
     return {
-      baseUrl, session, config: fixtureConfig, server, platform: handle,
+      baseUrl, session, config: fixtureConfig, server, platform: handle, household: servedContext, runtimes, auth, keys,
       ...sessionClient(baseUrl, session),
       close: () => new Promise(resolve => { server.close(resolve); server.closeAllConnections(); }).then(() => owned?.close()),
     };
@@ -318,7 +442,7 @@ async function fixturePlatform(db, config) {
   if (file && existsSync(file)) {
     const { openPlatform } = await src('src/platform/db.mjs');
     const platform = openPlatform(file);
-    return { platform, close: () => platform.close() };
+    return { platform, dir: config.dataDir, close: () => platform.close() };
   }
   const { getSetting } = await src('src/store/db.mjs');
   const { createInstance } = await src('src/platform/db.mjs');
@@ -327,6 +451,7 @@ async function fixturePlatform(db, config) {
   instance.db.close();
   return {
     platform: instance.platform,
+    dir,
     close() {
       try { instance.platform.close(); } catch { /* already closed */ }
       rmSync(dir, { recursive: true, force: true });
@@ -334,17 +459,35 @@ async function fixturePlatform(db, config) {
   };
 }
 
-// A fresh instance (platform.sqlite with one served household, and a migrated fathom.sqlite whose
-// store_identity names it) in a new temp dir, built by src/platform/db.mjs createInstance.
-// Returns { db, platform, householdId, dataDir, file, platformFile, close() }.
+// A fresh instance built by src/platform/db.mjs createInstance in a new temp dir: platform.sqlite
+// with one original household whose root households/<id> holds a migrated fathom.sqlite bound to
+// it, and its data key wrapped under the instance platform key (secretsFor(dataDir) in real mode,
+// the demo's own platform-secrets/ in demo mode).
+// Returns { db, platform, householdId, mode, dataDir, root, file, platformFile, secrets, keys,
+// household(config, inject) -> household context (memoized for the default call), close() }.
 export async function tempInstance({ mode = 'real', init = () => {} } = {}) {
   const { createInstance } = await src('src/platform/db.mjs');
   const dataDir = await tempDir();
-  const { db, platform, householdId } = createInstance(dataDir, { mode, init });
+  const { secrets, keys } = await instanceSecretsOf(dataDir, mode);
+  const platformKey = secrets.platformKey();
+  let made;
+  try {
+    made = createInstance(dataDir, { mode, init, platformKey });
+  } finally {
+    platformKey.fill(0);
+  }
+  const { db, platform, householdId, root } = made;
   let closed = false;
+  let context = null;
   return {
-    db, platform, householdId, dataDir,
-    file: join(dataDir, DB_FILE), platformFile: join(dataDir, PLATFORM_FILE),
+    db, platform, householdId, mode, dataDir, root, secrets, keys,
+    file: join(root, DB_FILE), platformFile: join(dataDir, PLATFORM_FILE),
+    async household(config = null, inject = {}) {
+      const make = () => householdContext({ db, platform, householdId, mode, config: { ...config, dataDir }, secrets, ...inject });
+      if (config || Object.keys(inject).length) return make();
+      context ??= await make();
+      return context;
+    },
     close() {
       if (closed) return;
       closed = true;
@@ -352,6 +495,33 @@ export async function tempInstance({ mode = 'real', init = () => {} } = {}) {
       try { platform.close(); } catch { /* already closed */ }
     },
   };
+}
+
+// Run the offline tenancy migration (src/platform/migrate-tenancy.mjs) on an MT-02-layout real
+// instance (platform.sqlite plus fathom.sqlite at the data root), with synthetic backup and legacy
+// keys kept outside the data dir and the instance secrets of secretsFor(dataDir). Its MCP secret
+// file is set to the source's api-key-secret when one exists, as the operator steps require, even
+// when an earlier refusal check already created the secrets. Every connection to the store must be
+// closed. Returns the result.
+export async function migrateTenancyStore(dataDir, { legacyKeyFile = null } = {}) {
+  const { migrateTenancy } = await src('src/platform/migrate-tenancy.mjs');
+  const secretFile = join(dataDir, 'api-key-secret');
+  const mcpSecretHex = existsSync(secretFile) ? readFileSync(secretFile, 'latin1').trim() : undefined;
+  const keys = secretsFor(dataDir, { mcpSecretHex });
+  if (mcpSecretHex) writeFileSync(keys.mcpSecretFile, mcpSecretHex + '\n', { mode: 0o600 });
+  const keyDir = await tempDir('fathom-tenancy-keys-');
+  const backupKeyFile = join(keyDir, 'backup.key');
+  writeFileSync(backupKeyFile, randomBytes(32).toString('hex') + '\n', { mode: 0o600 });
+  let legacy = legacyKeyFile;
+  if (!legacy) {
+    legacy = join(keyDir, 'data.key');
+    writeFileSync(legacy, randomBytes(32).toString('hex') + '\n', { mode: 0o600 });
+  }
+  try {
+    return await migrateTenancy({ dataDir, backupKeyFile, legacyKeyFile: legacy, platformKeyFile: keys.platformKeyFile, mcpSecretFile: keys.mcpSecretFile });
+  } finally {
+    rmSync(keyDir, { recursive: true, force: true });
+  }
 }
 
 // Run the offline platform migration (src/platform/migrate.mjs) on a real store that has no

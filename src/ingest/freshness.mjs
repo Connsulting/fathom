@@ -5,7 +5,7 @@ import { queueCategoryChecks } from '../categories/store.mjs';
 
 import { getSetting, parseJson } from '../store/db.mjs';
 import { escapeUserText } from '../shared/tokens.mjs';
-import { accountLabel } from '../shared/account-label.mjs';
+import { accountNaming } from '../accounts/naming.mjs';
 import { howToFor, listHowTo } from './howto.mjs';
 import { monthEnd } from './format.mjs';
 import { pendingItems, finalReason } from './confirm.mjs';
@@ -259,13 +259,14 @@ export function ingestState(db, { clock } = {}) {
 
   const accounts = {};
   const accountNotes = [];
+  const naming = accountNaming(db);
   for (const { row, asOf, kind, f } of accountFreshnessRows(db, at, kindOf)) {
     accounts[row.id] = { asOf, fresh: f ? f.state : 'unknown', sourceId: row.source_id };
     // A stale source already yields a note covering its accounts; only a stale account in a
     // fresh source needs its own.
     const source = sources.find((s) => s.id === row.source_id);
     if (f && f.state === 'stale' && DOMAIN_OF[kind] && source && source.state !== 'stale') {
-      accountNotes.push({ domain: DOMAIN_OF[kind], text: `${accountLabel(row) || row.id} data is ${f.ageDays} days old. Export a fresh copy.` });
+      accountNotes.push({ domain: DOMAIN_OF[kind], text: `${naming.label(row) || row.id} data is ${f.ageDays} days old. Export a fresh copy.` });
     }
   }
 
