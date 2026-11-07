@@ -898,6 +898,7 @@ test('PN1: declining the spending guess keeps classification unknown and does no
   await plan(db);
   assert.equal(factRow(db, 'pnl.ledgers'), null);
   assert.equal(figureRow(db, 'agi.est'), null);
+  assert.match(JSON.stringify(recRow(db, 'missing-data').def), /Tell us how Cedar is taxed/);
   assert.equal(db.prepare("SELECT count(*) n FROM confirm_items WHERE context LIKE '%pnl.ledgers%' AND status = 'pending'").get().n, 0);
 });
 
@@ -913,4 +914,6 @@ test('PN1: ledger answers validate and merge entries, and invalidate a pending g
   assert.throws(() => answerItem(db, q.id, 'yes'), /stale/);
   await answerFacts(db, [{ key: 'pnl.ledgers', value: { Elm: { kind: 'spending' } } }], { replan: async () => {} });
   assert.deepEqual(factRow(db, 'pnl.ledgers').value, { Cedar: { kind: 'business' }, Elm: { kind: 'spending' } });
+  await answerFacts(db, [{ key: 'pnl.ledgers', value: { CEDAR: { kind: 'spending' } } }], { replan: async () => {} });
+  assert.deepEqual(factRow(db, 'pnl.ledgers').value, { CEDAR: { kind: 'spending' }, Elm: { kind: 'spending' } });
 });

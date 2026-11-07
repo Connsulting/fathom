@@ -44,6 +44,7 @@ function stated(value, text, shape) {
   }
   if (typeof value === 'string') return /^\d{4}-\d{2}-\d{2}$/.test(value)
     ? dates(text).includes(value) : text.toLowerCase().includes(value.toLowerCase());
+  if (shape?.type === 'map' && value && typeof value === 'object') return Object.entries(value).every(([k, v]) => text.toLowerCase().includes(k.toLowerCase()) && stated(v, text, shape.values));
   if (value && typeof value === 'object') return Object.entries(value).every(([k, v]) => stated(v, text, shape?.fields?.[k]));
   return false;
 }

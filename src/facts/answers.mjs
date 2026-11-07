@@ -1,6 +1,7 @@
 import { tx, parseJson } from '../store/db.mjs';
 import { upsertFact } from '../store/facts.mjs';
 import { answerShape, acceptsAnswerAccount } from '../jobs/triggers/common.mjs';
+import { normalizeName } from '../ingest/confirm.mjs';
 import { isoDate } from '../ingest/format.mjs';
 
 export class FactAnswerError extends Error {}
@@ -9,7 +10,10 @@ const object = v => !!v && typeof v === 'object' && !Array.isArray(v);
 const fail = () => { throw new FactAnswerError('Check the answer type, required fields and units.'); };
 
 function validate(value, shape) {
-  if (shape.type === 'object') {
+  if (shape.type === 'map') {
+    if (!object(value) || !Object.keys(value).length || Object.keys(value).some(k => !normalizeName(k)) || new Set(Object.keys(value).map(normalizeName)).size !== Object.keys(value).length) fail();
+    for (const entry of Object.values(value)) validate(entry, shape.values);
+  } else if (shape.type === 'object') {
     if (!object(value) || Object.keys(value).some(k => !Object.hasOwn(shape.fields, k))) fail();
     for (const [key, field] of Object.entries(shape.fields)) {
       const needed = !field.when || Object.entries(field.when).every(([k, v]) => value[k] === v);
@@ -49,7 +53,15 @@ export async function answerFacts(db, answers, { now = new Date().toISOString(),
       }
       const prior = parseJson(db.prepare('SELECT value FROM facts WHERE key = ?').get(a.key)?.value, {});
       value = { ...(object(prior) ? prior : {}), ...value };
-    } else validate(value, shape);
+    } else {
+      validate(value, shape);
+      if (shape.type === 'map') {
+        const prior = parseJson(db.prepare('SELECT value FROM facts WHERE key = ?').get(a.key)?.value, {});
+        const changed = new Set(Object.keys(value).map(normalizeName));
+        const keep = Object.entries(object(prior) ? prior : {}).filter(([k]) => !changed.has(normalizeName(k)));
+        value = { ...Object.fromEntries(keep), ...value };
+      }
+    }
     if (a.key === 'business.salaryRange' && value.min > value.max) fail();
     return { key: a.key, value };
   });

@@ -6,6 +6,7 @@
 // businessPnl({db, entity, from, to, clock}) -> see docs/architecture.md "P&L and household spending"
 // businessPnlRows({db, entity, from, to, section, category, month, clock}) -> {items, total, figures, sources, note}
 
+import { ledgerDisplayName, ledgerKind } from './ledgers.mjs';
 import { normalizeName } from '../ingest/confirm.mjs';
 import { businessAccount } from '../categories/resolve.mjs';
 import {
@@ -52,11 +53,13 @@ function loadBusiness(db, clock) {
   const stated = statedFact && typeof statedFact === 'object' && !Array.isArray(statedFact) ? statedFact : {};
   for (const v of Object.values(stated)) addName(v);
 
-  const only = names.size === 1 ? [...names.keys()][0] : null;
+  const ledgerFacts = { 'pnl.ledgers': ownerFact(db, 'pnl.ledgers') };
+  const businessNames = [...names.keys()].filter(n => ledgerKind(ledgerFacts, names.get(n), lines.filter(l => canon(l.entity).norm === n)) !== 'spending');
+  const only = businessNames.length === 1 ? businessNames[0] : null;
   const owner = new Map();
   for (const a of base.accounts.filter(businessAccount)) {
     const named = typeof stated[a.id] === 'string' && stated[a.id].trim() ? canon(stated[a.id]).norm : null;
-    owner.set(a.id, named ?? only);
+    owner.set(a.id, named && !businessNames.includes(named) ? null : named ?? only);
   }
   const txnsOf = new Map();
   for (const t of base.transactions) {
@@ -87,7 +90,10 @@ function loadBusiness(db, clock) {
   const entities = [];
   for (const [norm, label] of names) {
     const ids = [...owner].filter(([, n]) => n === norm).map(([id]) => id);
-    const e = build(`entity:${norm}`, label, 'entity', ids, lines.filter((l) => canon(l.entity).norm === norm));
+    const entityLines = lines.filter(l => canon(l.entity).norm === norm);
+    const displayName = entityLines.length ? ledgerDisplayName(entityLines[0]) : label;
+    const kind = ledgerKind(ledgerFacts, label, entityLines) === 'spending' ? 'spending' : 'entity';
+    const e = build(`entity:${norm}`, displayName, kind, kind === 'spending' ? [] : ids, entityLines);
     if (e) entities.push(e);
   }
   entities.sort((a, b) => a.label.localeCompare(b.label) || a.key.localeCompare(b.key));
@@ -115,7 +121,7 @@ function findEntity(model, entity) {
   const byKey = model.entities.find((e) => e.key === entity);
   if (byKey) return byKey;
   const n = normalizeName(entity) && model.canon(entity).norm;
-  const hit = n && model.entities.find((e) => e.kind === 'entity' && e.key === `entity:${n}`);
+  const hit = n && model.entities.find((e) => e.kind !== 'account' && e.key === `entity:${n}`);
   if (!hit) throw new PnlError('unknown_entity', 'no P&L for that entity');
   return hit;
 }
