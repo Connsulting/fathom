@@ -155,7 +155,9 @@ test('card anatomy: kicker, question, numbered options, progress, Undo, peeks, P
   expect(kind, `a label for kind ${first.kind}`).toBeTruthy();
   await expect(kicker).toHaveText(new RegExp(`^${reEsc(kind)}`));
   if (live.fileName) await expect(kicker.locator('span')).toHaveText(live.fileName);
-  await expect(card.locator('.h-cf-q')).toHaveText(first.question);
+  // Category cards lead with the transaction (merchant heading); every other kind leads with its question.
+  if (first.txn) await expect(card.locator('.h-cf-merch')).toHaveText(first.txn.name || first.txn.raw);
+  else await expect(card.locator('.h-cf-q')).toHaveText(first.question);
 
   for (const [i, o] of first.options.entries()) {
     const b = option(page, first.id, o.id);
@@ -463,7 +465,7 @@ test.describe('confirm deck on a phone', { tag: ['@mobile', '@mobile-only'] }, (
   // With `follow`, it waits before lifting the finger until the card is visibly displaced.
   async function drag(page, cdp, dx, { follow = false, steps = 10 } = {}) {
     const cb = await deckCard(page).boundingBox();
-    const qb = await deckCard(page).locator('.h-cf-q').boundingBox();
+    const qb = await deckCard(page).locator('.h-cf-q, .h-cf-merch').first().boundingBox();
     const x = Math.round(cb.x + cb.width / 2);
     const y = Math.round(qb.y + qb.height / 2);
     await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y, id: 1 }] });
