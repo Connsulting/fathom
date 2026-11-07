@@ -1,3 +1,4 @@
+import { JEV_MODEL } from './jev.mjs';
 import { confidenceBand, jevEvidence } from './policy.mjs';
 import { spendingInputs } from '../calc/targets.mjs';
 import { getSetting, parseJson } from '../store/db.mjs';
@@ -9,6 +10,8 @@ export const CATEGORY_THRESHOLD = 100;
 export const CATEGORY_LIMIT = 10;
 const labels = { household:'Household spending',business:'Business',income:'Income',transfer:'Transfer',tax:'Tax',saving:'Saving or investing',excluded:'Excluded' };
 const nowOf = now => now ?? new Date().toISOString();
+export const isJevProposal = g => g?.model===JEV_MODEL && typeof g.category==='string'
+  && Number.isFinite(g.confidence) && g.confidence>=0 && g.confidence<=1;
 export function loadCategoryInputs(db) {
   const named = parseJson(db.prepare("SELECT value FROM facts WHERE key='accounts.businessEntity' AND (src IS NULL OR src!='planner')").get()?.value,{});
   const accounts = db.prepare('SELECT * FROM accounts ORDER BY sort,id').all().map(a=>({...a,business:typeof named?.[a.id]==='string' && !!named[a.id].trim()}));
@@ -20,7 +23,10 @@ export function loadCategoryInputs(db) {
       LEFT JOIN confirm_items i ON i.kind='transaction_category' AND i.subject=cast(c.transaction_id AS TEXT)
       LEFT JOIN confirm_auto a ON a.item_id=i.id AND a.rule='jev_category'`).all().map(r=>({...r,auto:parseJson(r.auto_evidence,null)})),
     merchantRules:db.prepare('SELECT * FROM category_merchant_rules').all(), sourceRules:db.prepare('SELECT * FROM category_source_rules').all(),
-    guesses:db.prepare('SELECT * FROM transaction_category_guesses').all().map(r=>({...r,...parseJson(r.category,{}),category:parseJson(r.category,{})?.category ?? null})) };
+    guesses:db.prepare('SELECT * FROM transaction_category_guesses').all().map(r=>{
+      const p=parseJson(r.category,null);
+      return {...r,category:p?.category??null,confidence:p?.confidence,probabilities:p?.probabilities};
+    }) };
 }
 function checks(db,{clock = getSetting(db,'clock',new Date().toISOString().slice(0,10)),threshold = CATEGORY_THRESHOLD,policy}={}) {
   const input=loadCategoryInputs(db);
@@ -28,6 +34,7 @@ function checks(db,{clock = getSetting(db,'clock',new Date().toISOString().slice
   const {windowTransactionIds}=spendingInputs({...input,clock});
   const resolutions=resolveCategories({...input,transferSourceIds:windowTransactionIds}), accounts=new Map(input.accounts.map(a=>[a.id,a]));
   const figureRows=new Set(windowTransactionIds);
+  const answered=new Set(db.prepare("SELECT subject FROM confirm_items WHERE kind='transaction_category' AND status='answered'").all().map(i=>i.subject));
   const mapped=new Set(input.sourceRules.map(r=>JSON.stringify([r.parser,r.category])));
   const unknown=new Map(), list=[], guesses=new Map(input.guesses.map(g=>[g.transaction_id,g]));
   for(const t of input.transactions) {
@@ -38,16 +45,19 @@ function checks(db,{clock = getSetting(db,'clock',new Date().toISOString().slice
       else unknown.set(key,{kind:'category_mapping',subject:key,parser:imported.parser,category:imported.category,count:1,amount:t.amount});
       continue;
     }
-    const proposal=guesses.get(t.id), band=confidenceBand(proposal?.confidence,policy);
-    if(proposal && band==='uncategorized') continue;
+    if(answered.has(String(t.id))) continue;
+    const stored=guesses.get(t.id);
+    const proposal=isJevProposal(stored) && confidenceBand(stored.confidence,policy)!=='uncategorized' ? stored : null;
     if(!proposal && (!figureRows.has(t.id) || !spendingAccount(accounts.get(t.account_id)) || !['guess','uncategorized'].includes(c.layer) || Math.abs(t.amount)<threshold || t.amount===0)) continue;
     if(proposal && !['guess','uncategorized'].includes(c.layer)) continue;
-    const guess=guesses.get(t.id)?.category ?? DEFAULT_CATEGORY[c.bucket];
+    const guess=proposal?.category ?? DEFAULT_CATEGORY[c.bucket];
     list.push({kind:'transaction_category',subject:String(t.id),transactionId:t.id,amount:t.amount,date:t.date,
       description:t.description,account:accountLabel(accounts.get(t.account_id)),category:c.category,bucket:c.bucket,layer:c.layer,
       merchant:normalizeMerchant(t.description),guess,...(proposal ? {jev:{category:proposal.category,confidence:proposal.confidence,probabilities:proposal.probabilities}} : {})});
   }
-  return [...list,...unknown.values()].sort((a,b)=>Math.abs(b.amount)-Math.abs(a.amount) || a.subject.localeCompare(b.subject)).slice(0,CATEGORY_LIMIT);
+  const order=(a,b)=>Math.abs(b.amount)-Math.abs(a.amount) || a.subject.localeCompare(b.subject);
+  const ranked=[...list,...unknown.values()].sort(order);
+  return [...ranked.filter(c=>c.jev),...ranked.filter(c=>!c.jev).slice(0,CATEGORY_LIMIT)].sort(order);
 }
 export function categoryOptions(context) {
   const names=[...new Set([context.guess,...Object.values(DEFAULT_CATEGORY)].filter(Boolean))];
@@ -113,6 +123,11 @@ export function moveCategoryRows(db,dropId,keepId) {
   for(const table of ['transaction_category_corrections','transaction_category_imports','transaction_category_guesses']) {
     const drop=db.prepare(`SELECT * FROM ${table} WHERE transaction_id=?`).get(dropId);
     if(!drop) continue;
+    if(table==='transaction_category_corrections' && db.prepare(`SELECT 1 FROM confirm_items i JOIN confirm_auto a ON a.item_id=i.id
+      WHERE i.kind='transaction_category' AND i.subject=? AND a.rule='jev_category'`).get(String(dropId))) {
+      db.prepare('DELETE FROM transaction_category_corrections WHERE transaction_id=?').run(dropId);
+      continue;
+    }
     const keep=db.prepare(`SELECT * FROM ${table} WHERE transaction_id=?`).get(keepId);
     if(keep && keep.updated_at<=drop.updated_at) db.prepare(`DELETE FROM ${table} WHERE transaction_id=?`).run(keepId);
     if(!keep || keep.updated_at<=drop.updated_at) {

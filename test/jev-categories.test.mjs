@@ -23,7 +23,7 @@ function store(t) {
 }
 function transaction(db,description='Synthetic Shop',patch={}) {
   return Number(db.prepare('INSERT INTO transactions (account_id,date,amount,description,category,parser) VALUES (?,?,?,?,?,?)')
-    .run('a',patch.date??'2032-10-03',-20,description,patch.category??null,patch.parser??'simplefin').lastInsertRowid);
+    .run('a',patch.date??'2032-10-03',patch.amount??-20,description,patch.category??null,patch.parser??'simplefin').lastInsertRowid);
 }
 const provider=(confidence)=>({isOn:()=>true,stats:()=>({costUsd:0}),choose:async qs=>qs.map(()=>({choice:'Groceries',confidence,probabilities:{Groceries:.9,Business:.1}}))});
 const resolutions=db=>resolveCategories(loadCategoryInputs(db));
@@ -104,4 +104,61 @@ test('scheduled Jev work uses the configured key independently of the general en
   assert.ok(result.note.guessed>=1);assert.equal(resolutions(db).get(id).layer,'guess');
   const spend=db.prepare('SELECT purpose,model,cost_usd FROM spend_ledger').all();
   assert.ok(spend.length);assert.ok(spend.every(r=>r.purpose==='categorize'&&r.model==='jev-1.14.0'&&r.cost_usd>0));
+});
+
+
+function spendingHistory(db) {
+  for(let m=1;m<=8;m++) for(const [amount,category] of [[-100,'Groceries'],[3000,'Income']])
+    transaction(db,category+' historical '+String.fromCharCode(64+m),{date:`2032-${String(m).padStart(2,'0')}-15`,amount,category,parser:'aggregator'});
+}
+
+test('retired uncalibrated attempts and low-confidence results retain deterministic spending checks',async t=>{
+  const db=store(t); vocabulary(db); spendingHistory(db);
+  const ids=[transaction(db,'Older uncalibrated merchant',{amount:-250,date:'2032-06-10'}),transaction(db,'Earlier declined merchant',{amount:-260,date:'2032-06-10'})];
+  for(const [i,id] of ids.entries()) db.prepare('INSERT INTO transaction_category_guesses VALUES (?,?,?,?)').run(id,i?'Business':null,'unmeasured','2032-10-01');
+  queueCategoryChecks(db);
+  for(const id of ids) assert.ok(pendingItems(db).find(q=>q.subject===String(id)));
+  let asked=0;const jev=provider(.3),choose=jev.choose;jev.choose=async qs=>{asked+=qs.length;return choose(qs);};
+  await guessCategories(db,jev,{policy});await guessCategories(db,jev,{policy});
+  assert.equal(asked,2);
+  for(const id of ids) {
+    const q=pendingItems(db).find(q=>q.subject===String(id));assert.ok(q);assert.equal(q.context.jev,undefined);
+    assert.equal(bestGuess(db,q,{}).source,'rule');assert.equal(resolutions(db).get(id).layer,'uncategorized');
+    assert.equal(db.prepare('SELECT model FROM transaction_category_guesses WHERE transaction_id=?').get(id).model,'jev-1.14.0');
+  }
+});
+
+test('Jev review cards and answered autos cannot crowd out source mappings or deterministic checks',async t=>{
+  const db=store(t);vocabulary(db);spendingHistory(db);
+  for(let i=0;i<12;i++)transaction(db,'Review merchant '+String.fromCharCode(65+i),{amount:-500-i});
+  await guessCategories(db,provider(.9),{policy});
+  const autos=[];for(let i=0;i<12;i++)autos.push(transaction(db,'Auto merchant '+String.fromCharCode(65+i),{amount:-900-i}));
+  await guessCategories(db,provider(1),{policy});
+  const deterministic=transaction(db,'Deterministic merchant',{amount:-150,date:'2032-06-10'});
+  transaction(db,'New source row',{category:'Future source category',parser:'new-budget',amount:-5});
+  const candidates=queueCategoryChecks(db,{policy});
+  assert.ok(pendingItems(db).find(q=>q.kind==='category_mapping'));
+  assert.ok(pendingItems(db).find(q=>q.kind==='transaction_category'&&q.subject===String(deterministic)));
+  assert.equal(pendingItems(db).filter(q=>q.context.jev).length,12);
+  assert.ok(candidates.every(c=>!autos.includes(c.transactionId)));
+});
+
+test('duplicate consolidation keeps a model correction from becoming owner memory and undo restores it',async t=>{
+  const db=store(t);vocabulary(db);
+  const keep=transaction(db,'Observed first'),drop=transaction(db,'Predicted duplicate');
+  db.prepare("UPDATE transactions SET dedupe_key='jev-keep' WHERE id=?").run(keep);
+  db.prepare("UPDATE transactions SET dedupe_key='jev-drop' WHERE id=?").run(drop);
+  db.prepare("INSERT INTO transaction_category_corrections VALUES (?,'Groceries','household','2032-01-01')").run(keep);
+  await guessCategories(db,provider(.99),{policy});
+  const auto=db.prepare("SELECT id FROM confirm_items WHERE kind='transaction_category' AND subject=?").get(String(drop));
+  assert.equal(resolutions(db).get(drop).layer,'guess');
+  db.prepare('DELETE FROM transaction_category_corrections WHERE transaction_id=?').run(keep);
+  const later=transaction(db,'Observed first');
+  const duplicate=ask(db,{kind:'near_duplicate',subject:'jev-keep|jev-drop',question:'Same posting?',options:[{id:'same',label:'Same'},{id:'different',label:'Different'}],context:{keys:['jev-keep','jev-drop']}});
+  const {answerItem}=await import('../src/ingest/confirm.mjs');answerItem(db,duplicate.id,'same');
+  assert.equal(resolutions(db).get(keep).layer,'uncategorized');
+  assert.equal(resolutions(db).get(later).layer,'uncategorized');
+  reopenItem(db,duplicate.id);assert.equal(resolutions(db).get(drop).layer,'guess');
+  reopenItem(db,auto.id);assert.equal(resolutions(db).get(drop).layer,'uncategorized');
+  assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(),[]);
 });
