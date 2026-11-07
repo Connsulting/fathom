@@ -101,12 +101,19 @@ function confirmCard() {
   return b ? { id: b.dataset.ctxId, label: b.dataset.ctxLabel || '' } : null;
 }
 
+// The P&L entity on screen, read from the chooser (household spending has no entity: null).
+function pnlView() {
+  const b = H.root && H.root.querySelector('.h-root button.pl-view.on[data-pl-view]');
+  const key = b ? b.dataset.plView : '';
+  return key && key !== 'household' ? { id: key, label: b.querySelector('span') ? b.querySelector('span').textContent : '' } : null;
+}
+
 function pageChip() {
   const { api } = H;
   const r = route();
   return routeContext(r, {
     accounts: api.s && api.s.accounts, recs: api.recs(), packs: api.packs ? api.packs() : [],
-    txt: (s) => api.txt(s), confirm: r.name === 'confirm' ? confirmCard() : null
+    txt: (s) => api.txt(s), confirm: r.name === 'confirm' ? confirmCard() : null, pnl: r.name === 'pnl' ? pnlView() : null
   });
 }
 

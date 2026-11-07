@@ -293,3 +293,10 @@ test('addButtonHtml works for every kind', () => {
     assert.ok(html.includes(`data-ctx-id="${kind}_1"`), kind);
   }
 });
+
+test('routeContext: the P&L route names the entity on screen, else the P&L page', () => {
+  assert.deepEqual(routeContext({ name: 'pnl', params: {} }, { pnl: { id: 'entity:fieldandfern', label: 'Field and Fern' } }),
+    { route: 'pnl', kind: 'pnl', id: 'entity:fieldandfern', title: 'Field and Fern', label: 'Money > Field and Fern' });
+  assert.deepEqual(routeContext({ name: 'pnl', params: {} }, { pnl: null }),
+    { route: 'pnl', kind: 'page', id: 'pnl', title: 'P&L', label: 'Money > P&L' });
+});

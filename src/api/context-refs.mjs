@@ -27,6 +27,7 @@
 
 import { HttpError } from './http.mjs';
 import { resolveTokens } from '../shared/tokens.mjs';
+import { pnlEntities } from '../pnl/business.mjs';
 
 export const REF_KINDS = Object.freeze(['account', 'transaction', 'rec', 'step', 'goal', 'figure', 'pnl', 'spending',
   'confirm', 'money', 'pack', 'page']);
@@ -36,7 +37,7 @@ const MAX_GROUP_QUESTIONS = 5;
 
 const MONEY_VIEWS = new Set(['overview', 'accounts']);
 const PAGES = new Set(['home', 'pace', 'brief', 'goals', 'confirm', 'plan', 'yearend', 'advisor', 'wargame', 'packs',
-  'add', 'settings', 'connect', 'engine', 'email', 'onboarding']);
+  'add', 'settings', 'connect', 'engine', 'email', 'onboarding', 'pnl']);
 
 const BAD = 'context must be a list of {kind, id}';
 
@@ -88,9 +89,17 @@ function resolveOne(db, scenario, { kind, id }) {
       if (!scenario.fig || !Object.hasOwn(scenario.fig, id)) return null;
       return { kind, id, use: `write it as the token {f:${id}}; get_figures with keys [${id}] for its source` };
     }
-    case 'pnl':
-      return db.prepare('SELECT 1 FROM pnl_lines WHERE entity = ? LIMIT 1').get(id)
-        ? { kind, id, use: `pnl_by_month with entity ${id}` } : null;
+    case 'pnl': {
+      // A P&L entity key as /api/pnl lists it (entity:<name> or account:<id>), optionally
+      // <key>|<category> for one category row.
+      const bar = id.indexOf('|');
+      const key = bar < 0 ? id : id.slice(0, bar);
+      const category = bar < 0 ? '' : id.slice(bar + 1);
+      let ent = null;
+      try { ent = pnlEntities({ db, clock: scenario.meta && scenario.meta.clock }).find(e => e.key === key) || null; } catch { ent = null; }
+      if (!ent) return null;
+      return { kind, id, use: `pnl_by_month with entity ${plain(ent.label)}${category ? `, the ${category} lines` : ''}` };
+    }
     case 'spending':
       return db.prepare('SELECT 1 FROM transactions WHERE category = ? LIMIT 1').get(id)
         ? { kind, id, use: `query_transactions with category ${id}, pnl_by_month` } : null;

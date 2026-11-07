@@ -322,7 +322,8 @@
 .d-horizon .h-add svg.h-i { min-width: 0; flex: none; margin: 0; }
 .d-horizon .h-add:hover { color: var(--ac); border-color: var(--acl); background: var(--acd); }
 .d-horizon .h-add:focus-visible { opacity: 1; outline: 2px solid var(--ac); outline-offset: 1px; }
-.d-horizon :is(.h-acc, .h-row, .h-goal, .h-gcard, .h-next, .h-ad-txn, .tr-part, .h-tasks li, .h-deck-card, .h-cf-group tr, .h-rec-head, .h-ad-head):hover .h-add { opacity: 1; }
+.d-horizon :is(.h-acc, .h-row, .h-goal, .h-gcard, .h-next, .h-ad-txn, .tr-part, .h-tasks li, .h-deck-card, .h-cf-group tr, .pl-table tr, .h-rec-head, .h-ad-head):hover .h-add { opacity: 1; }
+.d-horizon .pl-table th .h-add { margin-left: 6px; vertical-align: middle; }
 @media (hover: none) { .d-horizon .h-add { opacity: 1; } }
 .d-horizon .h-row-top .h-add, .d-horizon .h-goal-h .h-add { align-self: center; }
 .d-horizon .h-gcard-h .h-add { margin-top: -1px; }
