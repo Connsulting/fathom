@@ -127,7 +127,7 @@ function readout(v) {
 function partRow(v, id, label, figKey) {
   const { esc, figHtml } = H;
   const on = lines(v.t)[0].id === id;
-  return `<li class="tr-part" data-part="${esc(id)}"><button type="button" class="tr-tog${on ? ' on' : ''}" data-trend-part="${esc(id)}" aria-pressed="${on}"><i class="tr-sw tr-c-${esc(id)}"></i>${esc(label)}</button><b>${figKey ? figHtml(figKey, { k: true }) : ''}</b></li>`;
+  return `<li class="tr-part" data-part="${esc(id)}"><button type="button" class="tr-tog${on ? ' on' : ''}" data-trend-part="${esc(id)}" aria-pressed="${on}"><i class="tr-sw tr-c-${esc(id)}"></i>${esc(label)}</button><b>${figKey ? figHtml(figKey, { k: true }) : ''}</b>${H.addBtn('money', `trend:${id}`, `Trend > ${label}`)}</li>`;
 }
 
 // The Money trend: headline, range, chart, readout and the parts with their current values.

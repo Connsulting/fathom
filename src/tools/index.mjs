@@ -70,6 +70,7 @@ function check(schema, v, path) {
     if (schema.pattern && !new RegExp(schema.pattern).test(v)) throw new ToolError('bad_input', `${path} has the wrong format`);
   }
   if (Array.isArray(v)) {
+    if (schema.minItems != null && v.length < schema.minItems) throw new ToolError('bad_input', `${path} has too few items`);
     if (schema.maxItems != null && v.length > schema.maxItems) throw new ToolError('bad_input', `${path} has too many items`);
     if (schema.items) v.forEach((x, i) => check(schema.items, x, `${path}[${i}]`));
   }
@@ -107,10 +108,11 @@ function clockOf(ctx) {
   return resolveClock(ctx.db, ctx.clock || getSetting(ctx.db, 'clock', null) || todayUtc(nowOf(ctx)));
 }
 
-// ' WHERE a AND b' and its params from [sql, value] pairs, skipping undefined values.
+// ' WHERE a AND b' and its params from [sql, value] pairs, skipping undefined values. An array
+// value supplies one param per element (an IN list).
 function where(conds) {
   const used = conds.filter(c => c[1] !== undefined);
-  return { clause: used.length ? ' WHERE ' + used.map(c => c[0]).join(' AND ') : '', params: used.map(c => c[1]) };
+  return { clause: used.length ? ' WHERE ' + used.map(c => c[0]).join(' AND ') : '', params: used.flatMap(c => [].concat(c[1])) };
 }
 
 // Resolve tokens to plain text in every string of a value.
@@ -243,8 +245,9 @@ export const tools = [
   },
   {
     name: 'query_transactions',
-    description: 'Search transactions by account, date range (inclusive, YYYY-MM-DD), amount range, category or description text. Returns at most `limit` rows (default 50, max 200), newest first, with the total match count.',
+    description: 'Search transactions by exact ids, account, date range (inclusive, YYYY-MM-DD), amount range, category or description text. Returns at most `limit` rows (default 50, max 200; with ids every matching id is returned), newest first, with the total match count.',
     inputSchema: obj({
+      ids: { type: 'array', items: { type: 'string', minLength: 1 }, minItems: 1, maxItems: 50 },
       accountId: { type: 'string' },
       from: { type: 'string', pattern: DATE },
       to: { type: 'string', pattern: DATE },
@@ -257,6 +260,7 @@ export const tools = [
     scope: 'read',
     handler(args, ctx) {
       const { clause, params } = where([
+        ...(args.ids ? [[`id IN (${args.ids.map(() => '?').join(', ')})`, args.ids]] : []),
         ['account_id = ?', args.accountId],
         ['date >= ?', args.from],
         ['date <= ?', args.to],
@@ -266,7 +270,8 @@ export const tools = [
         ["lower(description) LIKE ? ESCAPE '\\'",
           args.text === undefined ? undefined : '%' + args.text.toLowerCase().replace(/[\\%_]/g, c => '\\' + c) + '%'],
       ]);
-      const limit = args.limit === undefined ? 50 : args.limit;
+      // Exact ids are never cut by the limit (at most 50 of them).
+      const limit = Math.max(args.limit === undefined ? 50 : args.limit, args.ids ? args.ids.length : 0);
       const total = ctx.db.prepare('SELECT count(*) AS n FROM transactions' + clause).get(...params).n;
       const rows = ctx.db.prepare('SELECT id, account_id, date, amount, description, category FROM transactions' + clause +
         ' ORDER BY date DESC, id DESC LIMIT ?').all(...params, limit)

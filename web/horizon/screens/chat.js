@@ -40,6 +40,7 @@ import { ACTION_STATUS } from '/shared/rules.mjs';
 import { escapeUserText, money } from '/shared/tokens.mjs';
 import { streamHtml } from '/shared/answer-text.mjs';
 import { horizonLabel } from '/shared/goals.mjs';
+import { chipHtml } from './ask-context.js';
 
 let H = null;
 
@@ -233,8 +234,7 @@ function ctxChip(t) {
   const { api, esc } = H;
   const r = t && typeof t.recId === 'string' && t.recId ? api.rec(t.recId) : null;
   if (!r || r.status === 'hidden') return '';
-  const id = esc(r.id);
-  return `<a class="h-askx-ctx" href="#/rec/${encodeURIComponent(r.id)}" data-go="rec" data-id="${id}">${esc(api.txt(r.title))}</a>`;
+  return chipHtml({ kind: 'rec', id: r.id, label: api.txt(r.title) }, { esc, href: `#/rec/${encodeURIComponent(r.id)}`, go: 'rec', id: r.id, cls: 'h-askx-ctx', bare: true });
 }
 
 /* ---------- sidebar ---------- */
@@ -283,6 +283,9 @@ function sideHtml(openId) {
   </aside>${A.side ? '<div class="h-askx-scrim" data-askx-scrim></div>' : ''}`;
 }
 
+// The conversation list alone, for the Ask panel.
+export function listHtml(openId) { return sideHtml(openId); }
+
 /* ---------- main pane ---------- */
 
 const menuBtn = () => `<button type="button" class="h-askx-menu" aria-label="Conversations" aria-expanded="${A.side}">${I.menu}</button>`;
@@ -291,6 +294,7 @@ function composeHtml(key, draftKey, docked, busy) {
   const { esc, ui, api } = H;
   const val = (ui.draft && ui.draft[draftKey]) || '';
   return `<form class="h-askx-compose${docked ? ' docked' : ''}" data-key="${esc(key)}"${busy ? ' aria-busy="true"' : ''}>
+    ${H.ctxChipsHtml ? H.ctxChipsHtml() : ''}
     <div class="h-askx-box">
       <textarea name="q" rows="1" placeholder="${PLACEHOLDER}" aria-label="Your question" autocomplete="off" data-draft="${esc(draftKey)}"${busy ? ' readonly' : ''}>${esc(val)}</textarea>
       <button type="submit" class="h-askx-send" aria-label="Send"${busy ? ' disabled' : ''}>${I.up}</button>
@@ -299,12 +303,16 @@ function composeHtml(key, draftKey, docked, busy) {
   </form>`;
 }
 
-function emptyHtml() {
+function emptyHtml(host) {
   const { esc, arr, api } = H;
   const starters = arr(api.askStarters ? api.askStarters() : []).slice(0, 4);
   const chips = starters.map((s) => `<button type="button" class="h-chip" data-starter="${esc(s.id)}">${esc(s.q)}</button>`).join('');
+  // In the panel: a smaller hello and the composer docked at the bottom.
+  if (host === 'panel') {
+    return `<section class="h-askx-main"><div class="h-askx-msgs"><div class="h-askx-empty"><h2 class="h-askx-hello">${HELLO}</h2>${chips ? `<div class="h-askx-chips">${chips}</div>` : ''}</div></div>${composeHtml('', NEW_DRAFT, true, !!A.pending)}</section>`;
+  }
   return `<section class="h-askx-main">
-    <div class="h-askx-bar">${menuBtn()}</div>
+    <div class="h-askx-bar">${menuBtn()}${H.askPanelBtn ? H.askPanelBtn() : ''}</div>
     <div class="h-askx-empty">
       <h1 class="h-askx-hello">${HELLO}</h1>
       ${composeHtml('', NEW_DRAFT, false, false)}
@@ -472,7 +480,7 @@ function streamEvent(p, name, data) {
 }
 
 // th null with a pending new thread: the question shows in place while the thread is created.
-function threadHtml(th) {
+function threadHtml(th, host) {
   const { esc, thread, icon } = H;
   const key = th ? keyOf(th) : '';
   const msgs = th ? H.arr(H.api.conversation(key)) : [];
@@ -489,11 +497,19 @@ function threadHtml(th) {
   const foot = trashed
     ? `<div class="h-askx-trashbar"><p class="h-askx-trashed">In Trash. Restore it to continue.</p><button type="button" class="h-btn" data-thread-act="restore" data-tid="${esc(th.id)}">${icon('back')}Restore</button></div>`
     : composeHtml(key, th ? key : NEW_DRAFT, true, !!A.pending);
+  // In the panel the title sits in the panel bar: no header, menu or rename here.
+  const head = host === 'panel' ? '' : `<header class="h-askx-head">${menuBtn()}${title}${tag}${th ? ctxChip(th) : ''}${rename}${H.askPanelBtn ? H.askPanelBtn() : ''}</header>`;
   return `<section class="h-askx-main">
-    <header class="h-askx-head">${menuBtn()}${title}${tag}${th ? ctxChip(th) : ''}${rename}</header>
+    ${head}
     <div class="h-askx-msgs">${thread(msgs)}${mine ? pendingHtml(mine) : ''}</div>
     ${foot}
   </section>`;
+}
+
+// The main pane alone (a thread, or the new-conversation state) for a host: 'page' or 'panel'.
+export function paneHtml(id, host = 'page') {
+  const th = threadById(id);
+  return th || newOnAsk(A.pending) ? threadHtml(th, host) : emptyHtml(host);
 }
 
 export function render(id) {
@@ -501,7 +517,7 @@ export function render(id) {
   const key = th ? keyOf(th) : '';
   const n = key ? H.arr(H.api.conversation(key)).length : 0;
   const shown = th ? th.id : '';
-  const here = !!(H.root && H.root.querySelector('.h-askx-main'));
+  const here = !!(H.root && H.root.querySelector('.h-root .h-askx-main'));
   if (!here || shown !== A.lastId) {
     A.side = false;
     if (A.renaming && A.renaming !== shown) A.renaming = null;
@@ -517,8 +533,7 @@ export function render(id) {
   } else {
     A.lastN = n;
   }
-  const main = th || newOnAsk(A.pending) ? threadHtml(th) : emptyHtml();
-  return H.shell(`<div class="h-askx">${sideHtml(shown)}${main}</div>`);
+  return H.shell(`<div class="h-askx">${sideHtml(shown)}${paneHtml(id)}</div>`);
 }
 
 /* ---------- scrolling and focus ---------- */
@@ -527,13 +542,23 @@ function scrollEnd() {
   try { window.scrollTo(0, document.documentElement.scrollHeight); } catch (e) { /* ignore */ }
 }
 
-// A new answer: put the question that asked it just under the sticky headers.
-function scrollToLastMine() {
-  if (!H.root) return;
-  const list = H.root.querySelectorAll('.h-askx-msgs .h-msg.me');
+// The element a host's pane lives in: the Ask panel, or the page. Null when the panel is closed.
+const scopeOf = (host) => (H.root ? H.root.querySelector(host === 'panel' ? '.h-askp' : '.h-root') : null);
+
+// A new answer: put the question that asked it just under the sticky headers (in the panel, at
+// the top of the panel's own scroller).
+function scrollToLastMine(host) {
+  const scope = scopeOf(host);
+  if (!scope) return;
+  const list = scope.querySelectorAll('.h-askx-msgs .h-msg.me');
   const el = list[list.length - 1];
+  if (host === 'panel') {
+    const box = scope.querySelector('.h-askp-body');
+    if (box && el) box.scrollTop += el.getBoundingClientRect().top - box.getBoundingClientRect().top - 12;
+    return;
+  }
   if (!el) { scrollEnd(); return; }
-  const head = H.root.querySelector('.h-askx-head');
+  const head = scope.querySelector('.h-askx-head');
   const under = head ? head.getBoundingClientRect().bottom : 0;
   try { window.scrollTo(0, Math.max(0, el.getBoundingClientRect().top + window.scrollY - under - 16)); } catch (e) { /* ignore */ }
 }
@@ -549,8 +574,9 @@ function focusRecInput(recId) {
   if (el) el.focus();
 }
 
-function focusInput() {
-  const el = H.root && H.root.querySelector('form.h-askx-compose textarea[name="q"]');
+function focusInput(host) {
+  const scope = scopeOf(host);
+  const el = scope && scope.querySelector('form.h-askx-compose textarea[name="q"]');
   if (!el) return false;
   el.focus();
   const n = el.value.length;
@@ -573,43 +599,50 @@ export function newConversation() {
 // the canned question instead of the text. key null starts a new thread, asked from recId when set.
 // On failure the core keeps the old state and shows its error line; typed text goes back in the
 // composer. Returns false when nothing was sent.
-function sendAsk({ key, recId, text, questionId, draftKey, refocus }) {
+function sendAsk({ key, recId, text, questionId, draftKey, refocus, host = 'page' }) {
   if (A.pending || !text) return false;
   const k = key || null;
   const rid = recId || null;
   const hasQ = questionId != null && questionId !== '';
   // items: the work block's steps and notes; stream: this round's tentative text; open: null
-  // follows the auto rule, true or false is the owner's choice for this answer.
-  const pend = { key: k, recId: rid, text, n: k ? meCount(k) : 0, items: [], stream: '', streamed: false, open: null, t0: Date.now() };
+  // follows the auto rule, true or false is the owner's choice for this answer. host: where it
+  // was asked ('page', 'panel' or 'dialog').
+  const pend = { key: k, recId: rid, text, n: k ? meCount(k) : 0, items: [], stream: '', streamed: false, open: null, t0: Date.now(), host };
   A.pending = pend;
   if (draftKey) H.ui.draft[draftKey] = '';
   H.draw();
   // The question goes to the top of the view (inside the dialog for a rec); the answer grows below.
-  if (rid) scrollDialogPend(); else scrollToLastMine();
+  if (rid) scrollDialogPend(); else scrollToLastMine(host);
   const api = H.api;
   const live = api.engineOn() && typeof api.askStream === 'function';
   const onEvent = (name, data) => streamEvent(pend, name, data);
   const q = hasQ ? { questionId } : { text };
+  // References (kind and id) the owner put in the composer, when there are any.
+  const context = H.askRefs ? H.askRefs(host) : [];
+  if (context.length) q.context = context;
   const req = live
     ? (k ? api.askStream(q, k, onEvent) : api.newThreadStream({ ...q, recId: rid }, onEvent))
-    : (k ? (hasQ ? api.ask(questionId, k) : api.askFree(text, k)) : api.newThread({ ...q, recId: rid }));
+    : (k ? (hasQ ? api.ask(questionId, k, { context: q.context }) : api.askFree(text, k, { context: q.context })) : api.newThread({ ...q, recId: rid }));
   Promise.resolve(req).then((res) => {
     if (A.pending === pend) A.pending = null;
     if (!H.api) return;
     const ok = k ? meCount(k) > pend.n : !!res;
     if (!ok && draftKey && !hasQ && !H.ui.draft[draftKey]) H.ui.draft[draftKey] = text;
+    if (!k && res && res.thread && H.onThread) H.onThread(res.thread, host);
     H.draw();
-    if (ok && refocus) { if (rid) focusRecInput(rid); else focusInput(); }
+    if (ok && refocus) { if (rid) focusRecInput(rid); else focusInput(host); }
   });
   return true;
 }
+
+const hostOf = (el) => (el && el.closest && el.closest('.h-askp') ? 'panel' : 'page');
 
 // A question from a rec dialog, asked into the rec's attached thread (none: a new thread asked
 // from the rec); text is the typed or chip text, questionId the rec.qa index for a chip. Returns
 // false when another question is still in flight.
 export function askFromRec({ recId, text, questionId, draftKey, refocus }) {
   if (!H || !H.api || !recId) return false;
-  return sendAsk({ key: recKey(recId), recId, text: String(text || '').trim(), questionId, draftKey, refocus });
+  return sendAsk({ key: recKey(recId), recId, text: String(text || '').trim(), questionId, draftKey, refocus, host: 'dialog' });
 }
 
 /* ---------- rename ---------- */
@@ -672,7 +705,7 @@ export function onClick(e) {
   if (d.starter != null) {
     e.preventDefault();
     const s = H.arr(H.api.askStarters()).find((x) => String(x.id) === d.starter);
-    if (s) sendAsk({ key: null, text: s.q, questionId: String(s.id), refocus: false });
+    if (s) sendAsk({ key: null, text: s.q, questionId: String(s.id), refocus: false, host: hostOf(t) });
     return true;
   }
   if (d.threadAct) {
@@ -711,7 +744,7 @@ export function onSubmit(e) {
   e.preventDefault();
   const ta = f.querySelector('textarea[name="q"]');
   if (!ta || A.pending) return true;
-  sendAsk({ key: f.dataset.key || null, text: ta.value.trim(), draftKey: ta.dataset.draft, refocus: document.activeElement === ta });
+  sendAsk({ key: f.dataset.key || null, text: ta.value.trim(), draftKey: ta.dataset.draft, refocus: document.activeElement === ta, host: hostOf(f) });
   return true;
 }
 

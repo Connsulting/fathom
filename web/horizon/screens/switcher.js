@@ -202,8 +202,9 @@ function buildItems() {
 
 /* ---------- overlays: shared ---------- */
 
+// The page, the dialog and the Ask panel with its launcher all sit under the switcher and the sheet.
 function lockInert() {
-  const els = [H.root.querySelector('.h-root'), H.root.querySelector('.h-dlg-host')].filter(Boolean);
+  const els = [H.root.querySelector('.h-root'), H.root.querySelector('.h-dlg-host'), H.root.querySelector('.h-askp-host')].filter(Boolean);
   if (!S.inert) S.inert = els.map((el) => [el, el.inert]);
   els.forEach((el) => { el.inert = true; });
 }
@@ -544,6 +545,7 @@ function onEscape() {
 
 const globalTable = () => [
   { keys: ['mod+k'], label: 'Open the quick switcher', group: 'Global', when: notOnboarding, action: () => toggle() },
+  { keys: ['mod+i'], label: 'Open or close the Ask panel', group: 'Global', action: () => H.askPanelToggle() },
   { keys: ['?'], label: 'Show keyboard shortcuts', group: 'Global', when: notOnboarding, action: () => openSheet() },
   { keys: ['escape'], label: 'Close or go back', group: 'Global', when: notOnboarding, action: () => onEscape() },
   ...GO.map(([k, route, label]) => ({ keys: [`g ${k}`], label, group: 'Go to', when: notOnboarding, action: () => go(route) }))
@@ -617,11 +619,12 @@ export function afterDraw(name) {
     applyRing(!anyOpen() && (!a || a === document.body));
   }
   if (S.inert) {
-    // draw() may have opened or closed the rec modal under the overlay: remember the page's new
-    // resting state, then keep both layers inert while the overlay is up.
+    // draw() may have opened or closed the rec modal or a modal Ask panel under the overlay:
+    // remember each layer's new resting state, then keep them all inert while the overlay is up.
     const page = H.root.querySelector('.h-root');
     const dlg = H.root.querySelector('.h-dlg-host');
-    S.inert = [[page, !!(dlg && !dlg.hidden)], [dlg, false]].filter((x) => x[0]);
+    const modal = !!(H.askModal && H.askModal());
+    S.inert = [[page, !!(dlg && !dlg.hidden) || modal], [dlg, modal], [H.root.querySelector('.h-askp-host'), false]].filter((x) => x[0]);
     S.inert.forEach(([el]) => { el.inert = true; });
   }
 }

@@ -285,9 +285,10 @@ test('the scripted model calls the hinted tools for an account and a transaction
   assert.ok(old.length > 0, 'the demo store has more than 200 transactions');
 
   // An old transaction whose amount nothing but the tool grounds: a baseline with the same
-  // references and no tool call marks it unverified.
+  // references and no tool call marks it unverified. Grounding is sign-strict, so the pick is a
+  // credit: its stated amount equals the amount the tool returns.
   let pick = null;
-  for (const cand of old) {
+  for (const cand of old.filter(c => c.amount > 0)) {
     const refs = [{ kind: 'account', id: cand.account_id }, { kind: 'transaction', id: String(cand.id) }];
     const said = `That transaction was ${asAmount(Math.abs(cand.amount))}.`;
     const base = await createLiveAnswerer({ engine: always(s.runtime, said).engine, packs: s.packs })

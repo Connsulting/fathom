@@ -123,7 +123,7 @@ function titleHtml(a) {
   if (S.edit) {
     return `<h1 id="h-dlg-t" class="h-dlg-title h-ad-title"><input class="h-acc-edit h-ad-edit" data-dlg-name="${esc(a.id)}" value="${esc(S.edit.value)}" maxlength="120" aria-label="Account name" autocomplete="off"></h1>`;
   }
-  return `<div class="h-ad-titlerow"><h1 id="h-dlg-t" class="h-dlg-title h-ad-title">${a.displayName ? esc(a.name) : lbl(a, a.name)}</h1><button type="button" class="h-acc-pen h-ad-pen" data-dlg-rename="${esc(a.id)}" aria-label="Rename account">${icon('pen')}</button></div>`;
+  return `<div class="h-ad-titlerow"><h1 id="h-dlg-t" class="h-dlg-title h-ad-title">${a.displayName ? esc(a.name) : lbl(a, a.name)}</h1><button type="button" class="h-acc-pen h-ad-pen" data-dlg-rename="${esc(a.id)}" aria-label="Rename account">${icon('pen')}</button>${H.addBtn('account', a.id, a.displayName ? a.name : (a.imported === false ? H.api.txt(String(a.name ?? '')) : String(a.name ?? '')))}</div>`;
 }
 
 function factsHtml(a, d) {
@@ -189,7 +189,7 @@ function txnRow(t) {
   const { esc, api } = H;
   const f = api.fig(t.fig);
   const money = api.money(t.amount, { cents: true, sign: true });
-  return `<li class="h-ad-txn"><time class="h-ad-txn-d" datetime="${esc(t.date)}">${esc(t.date)}</time><div class="h-ad-txn-t"><span>${esc(t.description || 'No description')}</span>${t.category ? `<em>${esc(t.category)}</em>` : ''}</div><b class="h-ad-txn-a"><span class="fx-fig" data-fig="${esc(t.fig)}" data-kind="${esc(f.kind || 'a')}" tabindex="0">${esc(money)}</span></b></li>`;
+  return `<li class="h-ad-txn"><time class="h-ad-txn-d" datetime="${esc(t.date)}">${esc(t.date)}</time><div class="h-ad-txn-t"><span>${esc(t.description || 'No description')}</span>${t.category ? `<em>${esc(t.category)}</em>` : ''}</div><b class="h-ad-txn-a"><span class="fx-fig" data-fig="${esc(t.fig)}" data-kind="${esc(f.kind || 'a')}" tabindex="0">${esc(money)}</span></b>${H.addBtn('transaction', t.id, `${t.date} ${t.description || 'No description'}`)}</li>`;
 }
 
 function filterHtml() {

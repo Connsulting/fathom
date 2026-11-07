@@ -28,9 +28,10 @@ export function isTypingTarget(el) {
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
 }
 
-// Typing in a field is never hijacked; only Escape and the switcher chord reach the registry.
+// Typing in a field is never hijacked; only Escape, the switcher chord and the Ask panel chord
+// reach the registry.
 export function passesGuard(key, target) {
-  return !isTypingTarget(target) || key === 'escape' || key === 'mod+k';
+  return !isTypingTarget(target) || key === 'escape' || key === 'mod+k' || key === 'mod+i';
 }
 
 /* ---------- fuzzy matching ---------- */

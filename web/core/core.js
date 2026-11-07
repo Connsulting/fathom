@@ -59,6 +59,12 @@ import { signInTarget } from '../auth/return-path.js';
 //    stream breaks before its final event, the answer is fetched instead: the scenario is reloaded
 //    until the conversation has the new turn (the server stores it once, after grounding). A new
 //    thread counts only once it has a turn (a rec thread's row exists before its answer is stored).
+//  - References: api.askStream and api.newThreadStream read q.context, api.newThread reads
+//    q.context, and api.ask(questionId, key, { context }) and api.askFree(text, key, { context })
+//    take it as an option. context is a list of { kind, id } strings (at most 8) the owner pointed
+//    at; it is sent only when it has at least one entry.
+//  - api.setFigAction(fn | null): while set, the figure popover shows Add to chat; a click calls
+//    fn(key, label) with the figure key and its plain label, then closes the popover.
 //  - api.accountDetail(id) GETs the account dialog's data and resolves it, or null. api.accountTransactions(id,
 //    { q, from, to, limit, cursor }) resolves one page { items, next, total } (newest first) or null; each item's
 //    fig and its source are registered, so api.fig(item.fig) and the figure popover work for it. Neither touches
@@ -542,9 +548,27 @@ const hasQid = o => o.questionId != null && o.questionId !== '';
 const qidOf = v => (typeof v === 'string' && /^\d+$/.test(v) ? Number(v) : v);
 function questionBody(q, numeric) {
   const o = q && typeof q === 'object' ? q : {};
-  if (hasQid(o)) return { questionId: numeric ? qidOf(o.questionId) : String(o.questionId) };
-  const text = String(o.text == null ? '' : o.text).trim();
-  return text ? { text } : null;
+  let body = null;
+  if (hasQid(o)) body = { questionId: numeric ? qidOf(o.questionId) : String(o.questionId) };
+  else {
+    const text = String(o.text == null ? '' : o.text).trim();
+    if (text) body = { text };
+  }
+  const context = body ? contextOf(o.context) : null;
+  if (context) body.context = context;
+  return body;
+}
+
+// The references a question carries (items the owner pointed at): { kind, id } string pairs, at
+// most 8, or null for none. The design shapes them; only kind and id go on the wire.
+function contextOf(raw) {
+  if (!Array.isArray(raw)) return null;
+  const out = [];
+  for (const r of raw) {
+    if (out.length >= 8) break;
+    if (r && typeof r === 'object' && typeof r.kind === 'string' && r.kind && typeof r.id === 'string' && r.id) out.push({ kind: r.kind, id: r.id });
+  }
+  return out.length ? out : null;
 }
 
 // The new-thread body: the question plus recId when the thread is asked from a rec.
@@ -689,20 +713,23 @@ function activeKey() {
   return null;
 }
 
-function ask(questionId, convKey) {
+// opts.context: references for the question (see contextOf), sent only when there are any.
+function ask(questionId, convKey, opts) {
   if (questionId == null || questionId === '') return done();
+  const context = contextOf(opts && opts.context);
   const key = convKey || activeKey();
-  if (!key) return newThread({ questionId: String(questionId), recId: routeRecId() });
-  return send('/api/ask', { key, questionId: qidOf(questionId) }, d => (d.message ? mapMsg(d.message) : null));
+  if (!key) return newThread({ questionId: String(questionId), recId: routeRecId(), context });
+  return send('/api/ask', { key, questionId: qidOf(questionId), ...(context ? { context } : {}) }, d => (d.message ? mapMsg(d.message) : null));
 }
 
-function askFree(text, convKey) {
+function askFree(text, convKey, opts) {
   const clean = String(text == null ? '' : text).trim();
   if (!clean) return done();
+  const context = contextOf(opts && opts.context);
   const key = convKey || activeKey();
-  if (!key) return newThread({ text: clean, recId: routeRecId() });
+  if (!key) return newThread({ text: clean, recId: routeRecId(), context });
   if (key.startsWith('pack:') && !rawPack(key.slice(5))) return done();
-  return send('/api/ask', { key, text: clean }, d => (d.message ? mapMsg(d.message) : null));
+  return send('/api/ask', { key, text: clean, ...(context ? { context } : {}) }, d => (d.message ? mapMsg(d.message) : null));
 }
 
 // ---------------------------------------------------------------- Ask threads
@@ -1234,17 +1261,20 @@ const api = {
   advisorPacket,
   lastError: () => lastError,
   figPopover: el => openPopover(el),
+  setFigAction: fn => { figAction = typeof fn === 'function' ? fn : null; },
 };
 
 // ---------------------------------------------------------------- figure popover
 
 let pop = null;   // { el, anchor }
+let figAction = null;   // the design's Add to chat handler, or null
 
 function closePopover() {
   if (pop) { pop.el.remove(); pop = null; }
 }
 
-function openPopover(anchor) {
+// fromKey: opened with Enter or Space on the figure, so focus moves into the popover.
+function openPopover(anchor, fromKey) {
   if (!anchor || !anchor.getBoundingClientRect) return;
   const same = pop && pop.anchor === anchor;
   closePopover();
@@ -1271,7 +1301,17 @@ function openPopover(anchor) {
       ? '<div class="fx-pop-sums" role="list" aria-label="Accounts added up">' + f.sums.map(a =>
         '<div class="fx-pop-row" role="listitem"><span class="fx-pop-v">' + esc(a.label) + (a.carried ? ' <em>(carried forward)</em>' : '') +
         '</span><span class="fx-pop-n">' + esc(moneyCents(a.v)) + ', ' + esc(a.asOf) + '</span></div>').join('') + '</div>'
-      : '');
+      : '') +
+    (figAction ? '<button type="button" class="fx-pop-add" data-fig-add>Add to chat</button>' : '');
+  const add = el.querySelector('[data-fig-add]');
+  if (add) {
+    add.addEventListener('click', e => {
+      e.preventDefault();
+      const fn = figAction;
+      closePopover();
+      if (fn) fn(key, txt(f.label || key));
+    });
+  }
   document.body.appendChild(el);
   const r = anchor.getBoundingClientRect();
   const w = el.offsetWidth;
@@ -1284,6 +1324,7 @@ function openPopover(anchor) {
   el.style.left = Math.round(left) + 'px';
   el.style.top = Math.round(Math.max(8, top)) + 'px';
   pop = { el, anchor };
+  if (fromKey && add) add.focus();
 }
 
 document.addEventListener('click', e => {
@@ -1291,8 +1332,14 @@ document.addEventListener('click', e => {
   if (pop.el.contains(e.target) || pop.anchor.contains(e.target)) return;
   closePopover();
 });
+// Escape with a popover open closes only the popover: focus goes back to its figure and the
+// design sees the key as handled (it closes nothing else).
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') closePopover();
+  if (e.key !== 'Escape' || !pop) return;
+  const anchor = pop.anchor;
+  closePopover();
+  e.preventDefault();
+  if (anchor && anchor.isConnected && typeof anchor.focus === 'function') anchor.focus({ preventScroll: true });
 });
 // A re-render replaces the anchor; a popover for a figure that is gone closes.
 coreSubs.push(() => { if (pop && !pop.anchor.isConnected) closePopover(); });
@@ -1425,7 +1472,7 @@ async function boot() {
   document.addEventListener('keydown', e => {
     if (e.defaultPrevented || (e.key !== 'Enter' && e.key !== ' ')) return;
     const el = e.target.closest && e.target.closest('.fx-fig');
-    if (el && root.contains(el)) { e.preventDefault(); openPopover(el); }
+    if (el && root.contains(el)) { e.preventDefault(); openPopover(el, true); }
   });
 }
 

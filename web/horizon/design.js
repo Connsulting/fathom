@@ -18,6 +18,8 @@ import * as switcher from './screens/switcher.js';
 import * as simplefin from './screens/simplefin.js';
 import * as recAnswers from './screens/rec-answers.js';
 import * as accountScreen from './screens/account.js';
+import * as askPanel from './screens/ask-panel.js';
+import { addButtonHtml } from './screens/ask-context.js';
 import { createKeys } from './keys.js';
 import { createSwipe } from './screens/swipe.js';
 import { homeModel, homeHeadline, healthChip, healthLine, paceReason, boardCharts, reasonText, servedGoalIds, shortDate, longDate, windowSpan } from './screens/home-model.js';
@@ -84,6 +86,10 @@ const T = (s) => (s == null || s === '' ? '' : api.t(String(s)));
 const X = (s) => (s == null || s === '' ? '' : esc(api.txt(String(s))));
 const arr = (a) => (Array.isArray(a) ? a : []);
 const plural = (n, one, many) => `${n} ${n === 1 ? one : (many || one + 's')}`;
+// The shared "+" (Add to chat) for any item; label is plain text (a name or title, never a figure).
+const addBtn = (kind, id, label) => addButtonHtml(kind, String(id ?? ''), String(label ?? ''), esc);
+// An account's name as plain text, the way the Accounts list shows it.
+const accName = (a) => (a.displayName ? String(a.name ?? '') : a.imported === false ? api.txt(String(a.name ?? '')) : String(a.name ?? ''));
 
 function parseISO(s) {
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(s || ''));
@@ -537,7 +543,7 @@ function goalCardHome(c, subject) {
   }
   const next = c.next ? gnextHtml(c.next) : `<p class="h-gnext-none">Nothing due for ${subject}</p>`;
   const more = c.actions.length > 1 ? `<a class="h-gmore" href="${href('plan')}" data-go="plan">${plural(c.actions.length - 1, 'more action')} on the plan</a>` : '';
-  return `<article class="h-gcard" data-goal-card="${esc(c.id)}"><div class="h-gcard-h"><a class="h-gcard-t" href="${href('goals')}" data-go="goals">${goalTitle(c.goal)}</a>${chipHtml(c.chip, 'h-pchip')}</div>${bar}${next}${more}</article>`;
+  return `<article class="h-gcard" data-goal-card="${esc(c.id)}"><div class="h-gcard-h"><a class="h-gcard-t" href="${href('goals')}" data-go="goals">${goalTitle(c.goal)}</a>${chipHtml(c.chip, 'h-pchip')}${addBtn('goal', c.goal.id, goalText(c.goal))}</div>${bar}${next}${more}</article>`;
 }
 
 function hkHtml(list) {
@@ -575,7 +581,7 @@ function nextHtml(m, subject) {
   const cd = countdown(r);
   const id = esc(r.id);
   return `<div class="h-next-deck${m.afterThat.length ? ' stack' : ''}"><article class="h-next" data-next-rec="${id}">
-    <div class="h-next-top"><span class="h-next-k">Next</span>${whoTag(r)}<span class="h-next-cd${cdTone(r)}"><b>${cd.n}</b><span>${cd.u}</span></span></div>
+    <div class="h-next-top"><span class="h-next-k">Next</span>${whoTag(r)}<span class="h-next-cd${cdTone(r)}"><b>${cd.n}</b><span>${cd.u}</span></span>${addBtn('rec', r.id, api.txt(r.title))}</div>
     <h2 class="h-next-t">${recLink(r)}</h2>
     ${why ? `<p class="h-next-why">${why}</p>` : ''}
     <p class="h-serves-l">${serves}</p>
@@ -846,7 +852,7 @@ function recRow(r, ny) {
   return `<article class="h-row ${r.status}${isNeeds(r, ny) ? ' needs' : ''}">
     ${fin ? `<div class="h-cd fin"><i>${r.status === 'done' ? icon('check') : icon('x')}</i></div>` : `<div class="h-cd${live && cd.n <= 30 ? ' soon' : ''}${live ? '' : ' dim'}"><b>${cd.n}</b><span>${cd.u}</span></div>`}
     <div class="h-row-b">
-      <div class="h-row-top"><a href="${href('rec', { id: r.id })}" data-go="rec" data-id="${esc(r.id)}">${T(r.title)}</a><span class="h-st ${r.status}">${statusText(r)}</span></div>
+      <div class="h-row-top"><a href="${href('rec', { id: r.id })}" data-go="rec" data-id="${esc(r.id)}">${T(r.title)}</a><span class="h-st ${r.status}">${statusText(r)}</span>${addBtn('rec', r.id, api.txt(r.title))}</div>
       <p>${T(r.summary)}</p>
       ${recAnswers.html(r, 'plan')}
       <div class="h-meta"><span>${T(r.triggerText || TRIGGER[r.trigger] || '')}</span>${r.status === 'done' || r.status === 'dismissed' ? '' : `<span>${T(r.window?.label || '')}</span>`}${r.effort ? `<span>${T(r.effort)}</span>` : ''}${values(r) ? `<span>${values(r)}</span>` : ''}${r.advisor ? `<span class="h-adv ${r.advisor.verdict}">${advisorText(r)}</span>` : ''}${servesHtml(r)}</div>
@@ -954,7 +960,7 @@ function dlgHtml(id) {
 
   const pct = tasks.length ? doneN / tasks.length : 0;
   const check = tasks.length ? `<div class="h-prog"><svg viewBox="0 0 100 4" preserveAspectRatio="none" aria-hidden="true"><rect class="bg" width="100" height="4" rx="2"/><rect class="fg" width="${pct * 100}" height="4" rx="2"/></svg><span>${doneN} of ${tasks.length}</span></div>
-    <ul class="h-tasks">${tasks.map((t, i) => `<li><button type="button" class="h-task${t.done ? ' done' : ''}" data-act="task" data-rec="${esc(r.id)}" data-arg="${i}" aria-pressed="${t.done}"><i>${t.done ? icon('check') : ''}</i><span>${T(t.t)}</span></button></li>`).join('')}</ul>` : '<p class="h-mute">No steps.</p>';
+    <ul class="h-tasks">${tasks.map((t, i) => `<li><button type="button" class="h-task${t.done ? ' done' : ''}" data-act="task" data-rec="${esc(r.id)}" data-arg="${i}" aria-pressed="${t.done}"><i>${t.done ? icon('check') : ''}</i><span>${T(t.t)}</span></button>${addBtn('step', `${r.id}:${i}`, api.txt(t.t))}</li>`).join('')}</ul>` : '<p class="h-mute">No steps.</p>';
 
   const adv = advisorScreen.recBox(r);
 
@@ -968,7 +974,7 @@ function dlgHtml(id) {
     ${thread(msgs, r.id)}${pend}${chips ? `<div class="h-chips">${chips}</div>` : ''}${composer('rec:' + r.id, 'Ask about this', busy)}</section>`;
 
   return frame(`${T(TRIGGER[r.trigger] || r.trigger || '')}<span>${T(r.triggerText)}</span>`, `<div class="h-rec-head">
-      <h1 id="h-dlg-t" class="h-dlg-title">${T(r.title)}</h1>
+      <div class="h-ad-titlerow"><h1 id="h-dlg-t" class="h-dlg-title">${T(r.title)}</h1>${addBtn('rec', r.id, api.txt(r.title))}</div>
       <p class="h-lede">${T(r.summary)}</p>
       <div class="h-meta"><span class="h-st ${r.status}">${statusText(r)}</span>${ownerHtml(r)}${isNeeds(r, ny) ? '<span class="h-acc">Needs you</span>' : ''}${r.effort ? `<span>${T(r.effort)}</span>` : ''}${values(r) ? `<span>${values(r)}</span>` : ''}${servesHtml(r, { dialog: true })}</div>
     </div>
@@ -1201,6 +1207,8 @@ function pWargame(name) {
 // goal is scenario text with tokens.
 const gText = (g, s) => (g && g.origin === 'owner' ? esc(s) : T(s));
 const goalTitle = (g) => gText(g, g.title);
+// The same title as plain text (the "+" label).
+const goalText = (g) => (g && g.origin === 'owner' ? String(g.title ?? '') : api.txt(String(g?.title ?? '')));
 
 // The goals a rec serves. In the dialog a rec that serves no open goal reads Housekeeping; plan
 // rows show nothing for it.
@@ -1322,7 +1330,7 @@ function goalCard(g) {
     ? `<span class="h-gdel">Delete for good?</span>${btn('Delete', `data-goal="delete-yes" data-id="${esc(g.id)}"`, 'danger')}${btn('Keep', 'data-goal="delete-no"', 'ghost')}`
     : `${owner && !g.archived ? btn('Edit', `data-goal="edit" data-id="${esc(g.id)}"`, 'ghost') : ''}${btn(g.archived ? 'Restore' : 'Archive', `data-goal="${g.archived ? 'restore' : 'archive'}" data-id="${esc(g.id)}"`, 'ghost')}${btn('Delete', `data-goal="delete" data-id="${esc(g.id)}"`, 'ghost')}`;
   const note = owner ? g.note : g.prose;
-  return `<article class="h-goal ${esc((g.status || '').replace(/\s+/g, '-'))}${g.archived ? ' archived' : ''}" data-goal-id="${esc(g.id)}"><div class="h-goal-h"><b>${goalTitle(g)}</b><span>${g.archived ? 'Archived' : owner ? '' : T(g.status)}</span></div>${note ? `<p>${gText(g, note)}</p>` : ''}${meta.length ? `<div class="h-meta">${meta.map((m) => `<span>${m}</span>`).join('')}</div>` : ''}${prog}<div class="h-gacts">${del}</div></article>`;
+  return `<article class="h-goal ${esc((g.status || '').replace(/\s+/g, '-'))}${g.archived ? ' archived' : ''}" data-goal-id="${esc(g.id)}"><div class="h-goal-h"><b>${goalTitle(g)}</b><span>${g.archived ? 'Archived' : owner ? '' : T(g.status)}</span>${addBtn('goal', g.id, goalText(g))}</div>${note ? `<p>${gText(g, note)}</p>` : ''}${meta.length ? `<div class="h-meta">${meta.map((m) => `<span>${m}</span>`).join('')}</div>` : ''}${prog}<div class="h-gacts">${del}</div></article>`;
 }
 
 function pGoals() {
@@ -1425,7 +1433,7 @@ function accountsBody({ groupTrends = false } = {}) {
     return sub ? lbl(a, sub) : '';
   };
   const list = keys.map((k) => section(k, `${groupTrends ? trendScreen.groupSpark(k) : ''}<div class="h-accs">${groups[k].map((a) => `<div class="h-acc ${a.mirror}" data-account="${esc(a.id)}" data-go="account" data-id="${esc(a.id)}">
-      <div class="h-acc-n"><b>${nameHtml(a)}</b><span>${subHtml(a)}</span></div>
+      <div class="h-acc-n"><b>${nameHtml(a)}${addBtn('account', a.id, accName(a))}</b><span>${subHtml(a)}</span></div>
       <div class="h-acc-v">${a.fig ? figHtml(a.fig) : '<span class="h-mute">No balance</span>'}</div>
       <div class="h-acc-m"><i></i>${mirror[a.mirror] || esc(a.mirror)}<a class="h-acc-open" href="${href('account', { id: a.id })}" data-go="account" data-id="${esc(a.id)}" aria-label="Open ${esc(a.imported === false ? api.txt(String(a.name ?? '')) : a.name)}">Details</a></div>
       ${ingest.accountMeta(a)}${a.note ? `<p>${lbl(a, a.note)}</p>` : ''}</div>`).join('')}</div>`)).join('');
@@ -1832,7 +1840,7 @@ function syncDialog(r, page) {
     let target = null;
     if (!wasOpen || !same) target = dlg;
     else if (sig) target = host.querySelector(sig) || host.querySelector('[data-draft]') || dlg;
-    else if (!host.contains(document.activeElement)) target = dlg;
+    else if (!host.contains(document.activeElement) && !askPanel.focusInside()) target = dlg;
     if (target) {
       target.focus({ preventScroll: true });
       if (caret != null && target.setSelectionRange && target.value != null) target.setSelectionRange(caret, caret);
@@ -1917,6 +1925,7 @@ function draw() {
     if (el) el.focus({ preventScroll: true });
     ui.ret = null;
   }
+  askPanel.sync();
   switcher.afterDraw(rr.name);
 }
 
@@ -2194,7 +2203,7 @@ const homeSwipe = createSwipe({
     if (dir > 0) api.act(id, 'complete'); else api.act(id, 'snooze', snoozeLabel());
   }
 });
-const onPointer = (e) => trendScreen.handlePointer(e) || ingest?.handlePointer(e) || homeSwipe(e);
+const onPointer = (e) => askPanel.handlePointer(e) || trendScreen.handlePointer(e) || ingest?.handlePointer(e) || homeSwipe(e);
 const POINTER = ['pointerdown', 'pointermove', 'pointerup', 'pointercancel'];
 
 // Root keys that are not shortcuts: Enter in the Ask composer and rename field first. Shortcuts go
@@ -2213,31 +2222,61 @@ function onKey(e) {
 }
 
 // One document listener: the key registry (Escape, Ctrl+K, G sequences, list and rec keys; the
-// tables live in screens/switcher.js), then the Tab trap for the rec modal.
+// tables live in screens/switcher.js), then the Tab trap for the rec modal and the Ask panel.
+// Escape order: the switcher (its own capture), a figure popover (core closes it and marks the key
+// handled), the Ask panel when focus is in it, a dialog, then an open panel.
 function onDocumentKey(e) {
   if (!root || !api || !keys) return;
   if (switcher.captures(e)) return;
+  if (e.key === 'Escape' && !e.defaultPrevented && !e.isComposing && askPanelEscape()) { e.preventDefault(); return; }
   if (!e.defaultPrevented && keys.handle(e, document.activeElement)) { e.preventDefault(); return; }
-  if (e.key === 'Tab' && isDlgRoute(api.route?.name)) {
+  if (e.key === 'Tab') trapTab(e);
+}
+
+function askPanelEscape() {
+  if (!askPanel.isOpen()) return false;
+  if (askPanel.focusInside()) { askPanel.close(); return true; }
+  if (isDlgRoute(api.route?.name)) return false;
+  askPanel.close();
+  return true;
+}
+
+const FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea,summary,[tabindex]:not([tabindex="-1"])';
+
+// A modal Ask panel (overlay or sheet) traps Tab inside itself; an open dialog traps it in the
+// dialog, a docked panel beside it and an open figure popover.
+function trapTab(e) {
+  const panel = askPanel.el();
+  let set;
+  if (askPanel.modalOpen() && panel) set = [panel];
+  else if (isDlgRoute(api.route?.name)) {
     const host = root.querySelector('.h-dlg-host');
     if (!host || host.hidden) return;
-    const f = [...host.querySelectorAll('a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea,summary,[tabindex]:not([tabindex="-1"])')].filter((el) => el.offsetParent !== null);
-    if (!f.length) return;
-    const first = f[0], last = f[f.length - 1], act = document.activeElement;
-    if (!host.contains(act) || act === host.querySelector('.h-dlg')) { e.preventDefault(); (e.shiftKey ? last : first).focus(); }
-    else if (e.shiftKey && act === first) { e.preventDefault(); last.focus(); }
-    else if (!e.shiftKey && act === last) { e.preventDefault(); first.focus(); }
-  }
+    set = [host, panel, document.querySelector('.fx-pop')].filter(Boolean);
+  } else return;
+  const f = set.flatMap((el) => [...el.querySelectorAll(FOCUSABLE)]).filter((el) => el.offsetParent !== null || el.getClientRects().length > 0);
+  if (!f.length) return;
+  const first = f[0], last = f[f.length - 1], act = document.activeElement;
+  const inside = set.some((el) => el.contains(act));
+  if (!inside || act === root.querySelector('.h-dlg-host .h-dlg')) { e.preventDefault(); (e.shiftKey ? last : first).focus(); }
+  else if (e.shiftKey && act === first) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && act === last) { e.preventDefault(); first.focus(); }
 }
 
 // Helpers the screen modules use. Getters, because api, root and ui change on mount.
-const SCREENS = [switcher, chatScreen, packsScreen, engineScreen, advisorScreen, yearendScreen, simplefin, recAnswers, accountScreen, trendScreen];
+const SCREENS = [askPanel, switcher, chatScreen, packsScreen, engineScreen, advisorScreen, yearendScreen, simplefin, recAnswers, accountScreen, trendScreen];
 const KIT = {
   get api() { return api; }, get root() { return root; }, get ui() { return ui; }, get keys() { return keys; }, get ingest() { return ingest; },
   draw: () => draw(),
   esc, T, X, arr, plural, icon, btn, goA, href, shell, section, pageHead, thread, composer, figHtml, recById, snoozeLabel,
   openRec, openAccount, closeRec, decisionList, statusText, routeNow, visibleRecs, spark, niceTicks,
   sfStatus: () => simplefin.status(),
+  // Ask everywhere: the shared "+", the composer chip row, a question's references, thread
+  // adoption by the panel, the Ask page's Open in panel button, and the panel itself.
+  addBtn, ctxChipsHtml: () => askPanel.chipsHtml(), askRefs: (host) => askPanel.refs(host),
+  onThread: (thread, host) => askPanel.onThread(thread, host), askPanelBtn: () => askPanel.collapseBtn(),
+  askPanelToggle: () => askPanel.toggle(), askModal: () => askPanel.modalOpen(),
+  pageRoute: () => { const r = routeNow(); return isDlgRoute(r.name) ? underRoute(r.name) : r; },
   newGoal: () => { if (routeNow().name !== 'goals') api.go('goals', {}); openGoalForm(null); }
 };
 SCREENS.forEach((s) => s.bind(KIT));
@@ -2245,11 +2284,12 @@ SCREENS.forEach((s) => s.bind(KIT));
 function mount(r, a) {
   api = a; root = r; ui = freshUi(); lastKey = ''; connectOn = false;
   SCREENS.forEach((s) => s.reset?.());
-  ingest = ingestScreens({ api, shell, section, pageHead, btn, icon, esc, T, X, draw, goA, getUi: () => ui });
+  ingest = ingestScreens({ api, shell, section, pageHead, btn, icon, esc, T, X, draw, goA, addBtn, getUi: () => ui });
   email = emailScreen({ shell, section, pageHead, btn, esc, draw });
-  root.innerHTML = '<div class="h-root"></div><div class="h-dlg-host" hidden></div>';
+  root.innerHTML = '<div class="h-root"></div><div class="h-dlg-host" hidden></div><div class="h-askp-host"></div>';
   keys = createKeys();
   switcher.mount();
+  askPanel.mount();
   ui.y = window.scrollY;
   root.addEventListener('click', onClick);
   root.addEventListener('submit', onSubmit);
@@ -2283,6 +2323,7 @@ function unmount() {
     root.removeEventListener('keydown', onKey);
     root.removeEventListener('toggle', onToggle, true);
     POINTER.forEach((t) => root.removeEventListener(t, onPointer));
+    askPanel.unmount();
     switcher.unmount();
     root.innerHTML = '';
   }
