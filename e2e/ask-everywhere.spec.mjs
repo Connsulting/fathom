@@ -1,6 +1,6 @@
 // Ask everywhere: the docked Ask panel (launcher, dock reflow, overlay and phone sheet, resize and
-// persistence), the page chip that names where the owner is, "+" Add to chat on accounts, recs,
-// goals and figures, references on the wire (kind and id only), and the panel sharing the Ask
+// persistence), the page chip that names where the owner is, the Ask about button on accounts,
+// recs, goals and figures, references on the wire (kind and id only), and the panel sharing the Ask
 // page's one pending and streaming implementation. Tags @ae-ac1 .. @ae-ac5 map to the plan's
 // acceptance criteria; titles with @mobile also run at 390px, @mobile-only only there. The demo
 // server runs the fake engine; nothing is mocked, requests are only observed.
@@ -37,6 +37,7 @@ const askMain = (page) => page.locator('.h-root .h-askx-main');
 
 const isDock = (page) => page.viewportSize().width >= DOCK_MIN;
 const isPhone = (page) => page.viewportSize().width <= 720;
+const reEsc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const stored = (page) => page.evaluate((k) => {
   try { return JSON.parse(window.localStorage.getItem(k) || 'null'); } catch { return null; }
@@ -342,14 +343,14 @@ test.describe('ask everywhere', () => {
 
   /* ---------- AC2: page chips ---------- */
 
-  test('@ae-ac2 @mobile the page chip reads Money > Overview, can be removed, and returns on the next route', async ({ page }) => {
+  test('@ae-ac2 @mobile the page chip reads Money > Overview with the trend range, can be removed, and returns on the next route', async ({ page }) => {
     await gotoRoute(page, 'money');
     await openPanel(page);
     await expect(panelChips(page).first()).toHaveAttribute('data-page', '1');
     await expect(pageChip(page)).toHaveAttribute('data-ref', 'money:overview');
-    await expect(pageChip(page).locator('.h-ctx-l')).toHaveText('On: Money > Overview');
+    await expect(pageChip(page).locator('.h-ctx-l')).toHaveText('On: Money > Overview, last year');
     const x = pageChip(page).locator('button.h-ctx-x');
-    await expect(x).toHaveAttribute('aria-label', 'Remove Money > Overview from context');
+    await expect(x).toHaveAttribute('aria-label', 'Remove Money > Overview, last year from context');
     await x.click();
     await expect(pageChip(page)).toHaveCount(0);
     await expect(panelInput(page)).toBeFocused();
@@ -369,7 +370,8 @@ test.describe('ask everywhere', () => {
     await page.keyboard.press('ControlOrMeta+i');
     await expect(panel(page)).toBeVisible();
     await expect(pageChip(page)).toHaveAttribute('data-ref', `account:${ACC}`);
-    await expect(pageChip(page).locator('.h-ctx-l')).toHaveText(`On: Money > ${name}`);
+    // The account name, plus any view detail the page under the dialog publishes.
+    await expect(pageChip(page).locator('.h-ctx-l')).toHaveText(new RegExp(`^On: Money > ${reEsc(name)}(, .+)?$`));
 
     await gotoRoute(page, `rec/${REC_ID}`);
     await expect(recDialog(page)).toBeVisible();
@@ -393,15 +395,15 @@ test.describe('ask everywhere', () => {
     await expect(page.locator('header.h-askx-head .h-ctx button.h-ctx-x')).toHaveCount(0);
   });
 
-  /* ---------- AC3: Add to chat ---------- */
+  /* ---------- AC3: Ask about ---------- */
 
   test('@ae-ac3 hovering an account row shows its +, and keyboard focus plus Enter adds the chip and opens the panel', async ({ page }) => {
     test.skip(!isDock(page), 'hover reveal is a pointer affordance');
     await gotoRoute(page, 'accounts');
     const btn = addBtn(page, 'account', ACC);
     await expect(btn).toHaveCount(1);
-    await expect(btn).toHaveAttribute('title', 'Add to chat');
-    await expect(btn).toHaveAttribute('aria-label', /^Add .+ to chat$/);
+    await expect(btn).toHaveAttribute('aria-label', /^Ask about .+$/);
+    await expect(btn).toHaveAttribute('title', await btn.getAttribute('aria-label'));
     const opacity = () => btn.evaluate((el) => Number(getComputedStyle(el).opacity));
     await page.mouse.move(0, 0);
     await expect.poll(opacity).toBeLessThan(0.5);
@@ -420,28 +422,37 @@ test.describe('ask everywhere', () => {
     await expect(page).toHaveURL(/#\/accounts$/);
   });
 
-  test('@ae-ac3 @mobile chips stack across pages (account, rec, goal) and one can be removed', async ({ page }) => {
+  test('@ae-ac3 @mobile chips stack on one page and one can be removed; a different page starts a new conversation', async ({ page }) => {
     await addFrom(page, 'accounts', 'account', ACC);
     await expect(recDialog(page)).toHaveCount(0);
-    await addFrom(page, 'plan', 'rec', REC_ID);
-    await expect(recDialog(page)).toHaveCount(0);
-    await gotoRoute(page, 'goals');
-    if (!isDock(page) && await panel(page).isVisible()) await closePanel(page);
-    const goalBtn = page.locator('.h-root button.h-add[data-ctx-add="goal"]').first();
-    await expect(goalBtn).toHaveCount(1);
-    const goalId = await goalBtn.getAttribute('data-ctx-id');
-    expect(goalId).toBeTruthy();
-    await addFrom(page, 'goals', 'goal', goalId);
-
+    // A second and a third account on the same page stack in the same conversation.
+    const others = page.locator(`.h-root button.h-add[data-ctx-add="account"]:not([data-ctx-id="${ACC}"])`);
+    expect(await others.count(), 'the demo has more than two accounts').toBeGreaterThan(1);
+    const ids = [ACC];
+    for (const i of [0, 1]) {
+      if (!isDock(page) && await panel(page).isVisible()) await closePanel(page);
+      const b = others.nth(i);
+      const id = await b.getAttribute('data-ctx-id');
+      await b.scrollIntoViewIfNeeded();
+      await b.click();
+      await expect(chip(page, `account:${id}`)).toBeVisible();
+      ids.push(id);
+    }
     await expect(addedChips(page)).toHaveCount(3);
     expect(await addedChips(page).evaluateAll((els) => els.map((e) => e.getAttribute('data-ref'))))
-      .toEqual([`account:${ACC}`, `rec:${REC_ID}`, `goal:${goalId}`]);
-    await chip(page, `rec:${REC_ID}`).locator('button.h-ctx-x').click();
+      .toEqual(ids.map((id) => `account:${id}`));
+    await chip(page, `account:${ids[1]}`).locator('button.h-ctx-x').click();
     await expect(addedChips(page)).toHaveCount(2);
-    await expect(chip(page, `rec:${REC_ID}`)).toHaveCount(0);
+    await expect(chip(page, `account:${ids[1]}`)).toHaveCount(0);
     await expect(panelInput(page)).toBeFocused();
-    const s = await stored(page);
-    expect(s.chips.map((c) => `${c.kind}:${c.id}`)).toEqual([`account:${ACC}`, `goal:${goalId}`]);
+    expect((await stored(page)).chips.map((c) => `${c.kind}:${c.id}`)).toEqual([`account:${ids[0]}`, `account:${ids[2]}`]);
+
+    // The rec on Plan starts a new conversation: the Plan page chip and the rec, no accounts.
+    await addFrom(page, 'plan', 'rec', REC_ID);
+    await expect(recDialog(page)).toHaveCount(0);
+    await expect(pageChip(page)).toHaveAttribute('data-ref', 'page:plan');
+    expect(await addedChips(page).evaluateAll((els) => els.map((e) => e.getAttribute('data-ref')))).toEqual([`rec:${REC_ID}`]);
+    expect((await stored(page)).chips.map((c) => `${c.kind}:${c.id}`)).toEqual([`rec:${REC_ID}`]);
   });
 
   test('@ae-ac3 @mobile the figure popover Add to chat adds a figure chip; Enter on a figure focuses it', async ({ page }) => {
@@ -482,15 +493,17 @@ test.describe('ask everywhere', () => {
 
   /* ---------- AC4: references on the wire ---------- */
 
-  test('@ae-ac4 @mobile a panel question carries the added account and rec as kind and id only, and the answer renders in the panel', async ({ page }) => {
+  test('@ae-ac4 @mobile a panel question carries the page chip and the rec added on that page as kind and id only, not the account added on another page, and the answer renders in the panel', async ({ page }) => {
     test.setTimeout(120_000);
     await addFrom(page, 'money', 'account', ACC);
+    // Plan is another page: the rec starts a new conversation and the Money account is left behind.
     await addFrom(page, 'plan', 'rec', REC_ID);
-    const page1 = await pageChip(page).count() ? refOf(await pageChip(page).getAttribute('data-ref')) : null;
-    const expected = [...(page1 ? [page1] : []), { kind: 'account', id: ACC }, { kind: 'rec', id: REC_ID }];
+    await expect(chip(page, `account:${ACC}`)).toHaveCount(0);
+    await expect(pageChip(page)).toHaveAttribute('data-ref', 'page:plan');
+    const expected = [refOf(await pageChip(page).getAttribute('data-ref')), { kind: 'rec', id: REC_ID }];
 
     const posted = page.waitForRequest(isAskPost);
-    await askInPanel(page, 'Synthetic question about these two items');
+    await askInPanel(page, 'Synthetic question about this item');
     const req = await posted;
     expect(new URL(req.url()).pathname).toBe('/api/threads');
     const body = req.postDataJSON();
