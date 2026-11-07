@@ -192,6 +192,16 @@ export function ingestScreens(h) {
     return warning + section('Same account?', `${cards}${undoButton}${dk.notice ? `<p role="status">${esc(dk.notice)}</p>` : ''}`, 'Merge keeps your imported account and its history.');
   }
 
+  // The "Same account?" question for one account, the same card and answers as on Accounts, for
+  // the account dialog. '' when no pending repair names this account.
+  function accountRepairsFor(accountId) {
+    syncDeck(false);
+    const mine = pendingNow().filter(i => i.context?.repair && (i.context.candidateId === accountId || i.context.ownId === accountId));
+    if (!mine.length) return '';
+    const cards = mine.map(i => cardHtml(st.deck, String(i.id), '')).join('');
+    return section('Same account?', `${cards}${st.deck.notice ? `<p role="status">${esc(st.deck.notice)}</p>` : ''}`, 'Merge keeps your imported account and its history.');
+  }
+
   function fileRow(f) {
     const s = String(f.status || '');
     const summary = s === 'imported' || s === 'duplicate' ? countsText(f.counts) : '';
@@ -922,5 +932,5 @@ export function ingestScreens(h) {
     return true;
   }
 
-  return { confirmPage, pendingBanner, accountRepairs, addFiles, accountMeta, sourcesSection, handleClick, handleChange, deckAction, handlePointer };
+  return { confirmPage, pendingBanner, accountRepairs, accountRepairsFor, addFiles, accountMeta, sourcesSection, handleClick, handleChange, deckAction, handlePointer };
 }

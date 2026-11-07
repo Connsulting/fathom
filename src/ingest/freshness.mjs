@@ -199,6 +199,33 @@ export function refreshFreshness(db, { clock } = {}) {
   return { ...state, dataThrough: householdDataThrough(db, clock) };
 }
 
+// Each account with an ingest source, its newest row date and its freshness at `at`. One rule for
+// the health line, the account list and the account dialog. `kindOf` maps an ingest source id to
+// its kind; `only` limits the rows to one account id.
+function accountFreshnessRows(db, at, kindOf, only = null) {
+  const rows = db.prepare(`SELECT a.id, a.name, a.inst, a.mask, a.kind, a.owner, a.display_name, a.source_id, (
+      SELECT max(d) FROM (
+        SELECT max(date) AS d FROM transactions WHERE account_id = a.id
+        UNION ALL SELECT max(date) FROM balances WHERE account_id = a.id
+        UNION ALL SELECT max(as_of) FROM positions WHERE account_id = a.id)
+    ) AS as_of
+    FROM accounts a WHERE a.source_id IS NOT NULL AND (? IS NULL OR a.id = ?) ORDER BY a.id`).all(only, only);
+  return rows.map((row) => {
+    const asOf = isoDay(row.as_of) ?? '';
+    const kind = kindOf.get(row.source_id);
+    return { row, asOf, kind, f: asOf && kind ? freshnessOf({ kind, asOf }, at) : null };
+  });
+}
+
+// One account's { asOf, fresh, sourceId } as ingestState reports it, without building the rest.
+export function accountFreshness(db, accountId, { clock } = {}) {
+  const at = clockOf(db, clock);
+  const kindOf = new Map(db.prepare("SELECT id, kind FROM sources WHERE substr(id, 1, 4) = 'ing:'").all().map((r) => [r.id, r.kind]));
+  const hit = accountFreshnessRows(db, at, kindOf, accountId)[0];
+  if (!hit) return { asOf: '', fresh: 'unknown', sourceId: null };
+  return { asOf: hit.asOf, fresh: hit.f ? hit.f.state : 'unknown', sourceId: hit.row.source_id };
+}
+
 export function ingestState(db, { clock } = {}) {
   const at = clockOf(db, clock);
   const items = pendingWithGuesses(db);
@@ -229,17 +256,7 @@ export function ingestState(db, { clock } = {}) {
 
   const accounts = {};
   const accountNotes = [];
-  const rows = db.prepare(`SELECT a.id, a.name, a.inst, a.mask, a.kind, a.owner, a.display_name, a.source_id, (
-      SELECT max(d) FROM (
-        SELECT max(date) AS d FROM transactions WHERE account_id = a.id
-        UNION ALL SELECT max(date) FROM balances WHERE account_id = a.id
-        UNION ALL SELECT max(as_of) FROM positions WHERE account_id = a.id)
-    ) AS as_of
-    FROM accounts a WHERE a.source_id IS NOT NULL ORDER BY a.id`).all();
-  for (const row of rows) {
-    const asOf = isoDay(row.as_of) ?? '';
-    const kind = kindOf.get(row.source_id);
-    const f = asOf && kind ? freshnessOf({ kind, asOf }, at) : null;
+  for (const { row, asOf, kind, f } of accountFreshnessRows(db, at, kindOf)) {
     accounts[row.id] = { asOf, fresh: f ? f.state : 'unknown', sourceId: row.source_id };
     // A stale source already yields a note covering its accounts; only a stale account in a
     // fresh source needs its own.
