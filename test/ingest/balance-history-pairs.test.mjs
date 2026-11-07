@@ -68,3 +68,35 @@ test('one unequal balance blocks the pair, two matches stay likely, and two file
   assert.equal(shared.length, 2);
   assert.deepEqual(shared.map(p => p.confidence), ['likely', 'likely']);
 }));
+
+// An earlier merge leaves the file row as the survivor: file identity, mapped feed, daily balances.
+function survivor(db) {
+  db.prepare('INSERT INTO accounts (id, identity, name, kind, mirror) VALUES (?,?,?,?,?)')
+    .run('survivor', 'file:survivor', 'operating', 'cash', 'connected');
+  db.prepare("INSERT INTO simplefin_accounts (sf_key, account_id, status, name, created_at, backfilled) VALUES (?,?,'mapped',?,?,1)")
+    .run('sf-survivor', 'survivor', 'operating', NOW);
+  balances(db, 'survivor', [
+    ['2032-06-15', 800], ['2032-06-30', 1000],
+    ['2032-07-15', 1050], ['2032-07-31', 1100.5],
+    ['2032-08-15', 950], ['2032-08-31', 900.25],
+    ['2032-09-15', 40],
+  ]);
+}
+
+test('a merged survivor pairs with a balance-only file account', () => withStore(async s => {
+  survivor(s.db);
+  fileAccount(s.db, { id: 'file-only', name: 'checking', kind: 'checking' });
+  balances(s.db, 'file-only', FILE_DATES);
+  const pairs = M.detectAccountPairs(s.db);
+  assert.equal(pairs.length, 1);
+  assert.equal(pairs[0].confidence, 'sure');
+  assert.deepEqual([pairs[0].candidateId, pairs[0].ownId], ['file-only', 'survivor']);
+  assert.equal(pairs[0].candidateId === pairs[0].ownId, false);
+}));
+
+test('two connected accounts never pair', () => withStore(async s => {
+  survivor(s.db);
+  connect(s.db, { id: 'sf-other', sfKey: 'sf-other', name: 'checking', kind: 'checking' });
+  balances(s.db, 'sf-other', FILE_DATES);
+  assert.deepEqual(M.detectAccountPairs(s.db), []);
+}));
