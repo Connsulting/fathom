@@ -247,25 +247,15 @@ async function fakeAnswerer(s) {
   return { engine, answerer: createLiveAnswerer({ engine, packs, root: s.root }) };
 }
 
-test('"add a goal" in Ask proposes a goal and writes nothing until it is saved through the API', async t => {
+test('"add a goal" in Ask saves a goal with a durable Undo receipt', async t => {
   const s = await store(t, { demo: true });
   const { engine, answerer } = await fakeAnswerer(s);
-  const ctx = { db: s.db, config: s.config, answerer, engine, body: { text: 'Add a goal: a boat fund of $40k, next few years' }, params: {} };
-  const count = () => s.db.prepare('SELECT count(*) AS n FROM goals').get().n;
-  const before = count();
-  const r = await threadCreate(ctx);
-  assert.equal(count(), before, 'chat never writes a goal');
-  const p = r.message.provenance.goalProposal;
-  assert.deepEqual(p, { title: 'a boat fund of $40k, next few years', note: '', horizon: '1-3y', target: 40000, targetDate: null });
-  assert.ok(r.message.text.includes('save this goal below'));
-  assert.ok(r.message.provenance.tools.some(x => x.name === 'propose_goal'));
-  const saved = goalCreate({ db: s.db, config: s.config, body: p, params: {} });
-  assert.equal(count(), before + 1);
-  assert.equal(saved.scenario.fig[`goal.${saved.goal.id}.target`].src, 'goal-target');
-
-  // Outside an Ask thread (a rec conversation) the goal tool is not offered.
-  const rec = await answerer.answer({ db: s.db, key: 'va529', text: 'Add a goal: something', clock: s.config.clock });
-  assert.equal(rec.provenance.goalProposal, undefined);
+  const before = s.db.prepare('SELECT count(*) n FROM goals').get().n;
+  const r = await threadCreate({ db: s.db, config: s.config, answerer, engine, body: { text: 'Add a goal: a boat fund of $40k, next few years' }, params: {} });
+  assert.equal(s.db.prepare('SELECT count(*) n FROM goals').get().n, before + 1);
+  assert.ok(r.message.provenance.tools.some(x => x.name === 'create_goal'));
+  assert.equal(r.message.provenance.actions[0].after.target, 40000);
+  assert.equal(r.message.provenance.actions[0].after.horizon, '1-3y');
 });
 
 test('a proposed target survives only when the owner stated that amount', () => {

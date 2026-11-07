@@ -38,11 +38,13 @@ import * as yh from './yearend-handlers.mjs';
 import * as gh from './goals.mjs';
 import * as accts from './accounts.mjs';
 import * as ad from './account-detail.mjs';
+import * as pl from './pnl-handlers.mjs';
 import * as oh from './onboarding-handlers.mjs';
 import * as ah from './advisor-handlers.mjs';
 import * as obh from './outbound-handlers.mjs';
 import { identityOf, sendUnauthorized } from './identity.mjs';
 import * as authHandlers from '../auth/handlers.mjs';
+import { demoRouteBehavior, DEMO_OFF_MESSAGE } from '../public-demo/control.mjs';
 
 const TABLE = [
   { method: 'GET', path: '/healthz', handler: h.healthz, public: true },
@@ -67,6 +69,10 @@ const TABLE = [
   { method: 'GET', path: '/api/pace', handler: gh.getPace },
   { method: 'GET', path: '/api/identity', handler: h.getIdentity, session: true },
   { method: 'POST', path: '/api/recs/:id/action', handler: h.recAction },
+  { method: 'POST', path: '/api/actions/:id/undo', handler: h.actionUndo },
+  { method: 'POST', path: '/api/preferences', handler: h.preferenceSave },
+  { method: 'POST', path: '/api/preferences/:id', handler: h.preferenceSave },
+  { method: 'POST', path: '/api/preferences/:id/delete', handler: h.preferenceDelete },
   { method: 'POST', path: '/api/recs/:id/answers', handler: recAnswers, quiet: true },
   { method: 'POST', path: '/api/recs/:id/start-over', handler: h.recStartOver },
   { method: 'POST', path: '/api/wargame/:name/pick', handler: h.wargamePick },
@@ -89,7 +95,16 @@ const TABLE = [
   { method: 'POST', path: '/api/threads/:id/delete', handler: h.threadDelete },
   { method: 'GET', path: '/api/accounts/:id', handler: ad.accountDetail },
   { method: 'GET', path: '/api/accounts/:id/transactions', handler: ad.accountTransactions },
+  { method: 'GET', path: '/api/pnl', handler: pl.getPnl },
+  { method: 'GET', path: '/api/pnl/rows', handler: pl.getPnlRows },
+  { method: 'GET', path: '/api/spending', handler: pl.getSpending },
+  { method: 'GET', path: '/api/spending/rows', handler: pl.getSpendingRows },
   { method: 'POST', path: '/api/accounts/:id/name', handler: accts.accountRename },
+  { method: 'POST', path: '/api/accounts/:id/mask', handler: accts.accountMask },
+  { method: 'POST', path: '/api/accounts/:id/owner', handler: accts.accountOwner },
+  { method: 'POST', path: '/api/accounts/:id/kind', handler: accts.accountKind },
+  { method: 'GET', path: '/api/accounts/:id/merge-candidates', handler: accts.accountMergeCandidates },
+  { method: 'POST', path: '/api/accounts/:id/merge', handler: accts.accountMerge },
   { method: 'GET', path: '/api/goals/suggestions', handler: gh.goalSuggestions },
   { method: 'POST', path: '/api/goals', handler: gh.goalCreate },
   { method: 'POST', path: '/api/goals/:id', handler: gh.goalUpdate },
@@ -154,7 +169,7 @@ function matchPath(parts, segments) {
   return params;
 }
 
-function findRoute(method, segments) {
+export function findRoute(method, segments) {
   const hits = compiled.map(r => ({ r, params: matchPath(r.parts, segments) })).filter(x => x.params);
   if (!hits.length) throw new HttpError(404, 'not found');
   const hit = hits.find(x => x.r.method === method || (method === 'HEAD' && x.r.method === 'GET'));
@@ -162,7 +177,7 @@ function findRoute(method, segments) {
   return hit;
 }
 
-function normalizePath(rawPath) {
+export function normalizePath(rawPath) {
   if (!rawPath.startsWith('/')) throw new HttpError(404, 'not found');
   let segments;
   try { segments = rawPath.split('/').slice(1).map(decodeURIComponent); }
@@ -197,10 +212,12 @@ const financial = r => !r.public && !r.auth && !r.session && !r.operator;
 // `platform` is the platform DB (accounts, memberships, sessions, keys); `runtimes` the household
 // runtime registry (src/platform/runtime.mjs); `auth` the auth service; `keys` the MCP key service.
 export function createHandler({ platform, config, runtimes, auth, keys, mcp = null, webDir = WEB_DIR, sharedDir = SHARED_DIR }) {
-  if (!platform || !runtimes || !auth || !keys) throw new TypeError('createHandler needs the platform, runtimes, auth and keys');
+  if (!platform || !runtimes || !auth || (!keys && !config.publicDemo)) throw new TypeError('createHandler needs the platform, runtimes, auth and keys');
   const gated = !auth.demo;
   const serveStatic = createStatic({ webDir, sharedDir });
-  const mcpHandler = mcp ?? createMcpHandler({ keys, runtimes, config });
+  // A public demo serves no MCP endpoint and no key routes.
+  const mcpHandler = config.publicDemo ? null : (mcp ?? createMcpHandler({ keys, runtimes, config }));
+  const demoOff = () => new HttpError(403, DEMO_OFF_MESSAGE);
   // Route access beyond a session (see the header).
   const checkAccess = (r, identity) => {
     if (r.admin && !auth.servedAdmin(identity)) throw adminRequired();
@@ -225,6 +242,7 @@ export function createHandler({ platform, config, runtimes, auth, keys, mcp = nu
     try {
       auth.sweep();
       if (rawPath === '/mcp') {
+        if (!mcpHandler) throw demoOff();
         await mcpHandler(req, res);
         return;
       }
@@ -245,6 +263,7 @@ export function createHandler({ platform, config, runtimes, auth, keys, mcp = nu
         if (isApi && !isAllowedHost(req.headers.host, config)) throw new HttpError(403, 'forbidden host');
         const { r, params } = findRoute(req.method, segments);
         route = r;
+        if (config.publicDemo && demoRouteBehavior(r.method, r.path) === 'off') throw new HttpError(403, DEMO_OFF_MESSAGE);
         if (gated && !r.public) checkAccess(r, identity);
         // The household is fixed before the body is read and kept for the whole request.
         let household = null;
@@ -259,7 +278,7 @@ export function createHandler({ platform, config, runtimes, auth, keys, mcp = nu
           guardUpload(req, { origin: gated ? new URL(config.publicUrl).origin : null });
           readUpload = () => readMultipart(req);
         } else if (r.method === 'POST') {
-          guardPost(req, { origin: gated ? new URL(config.publicUrl).origin : null });
+          guardPost(req, { origin: gated || config.publicDemo ? new URL(config.publicUrl).origin : null });
           body = await readJsonBody(req);
         }
         if (gated && !r.public) {
@@ -268,12 +287,16 @@ export function createHandler({ platform, config, runtimes, auth, keys, mcp = nu
           checkAccess(r, identity);
           if (household && identity.householdId !== household.householdId) throw membershipRequired();
         }
+        // A write to a seeded demo household drops its synthetic marker.
+        const seeded = household && !gated && !config.publicDemo && r.method === 'POST' && path !== '/api/demo/reset' ? household.db : null;
+        const changesBefore = seeded ? seeded.prepare('SELECT total_changes() AS n').get().n : 0;
         const events = r.stream && wantsEventStream(req) ? createEventStream(req, res) : null;
         let out;
         try {
           out = await r.handler({
             household, db: household?.db, engine: household?.engine, packs: household?.packs, answerer: household?.answerer,
-            scheduler: household?.scheduler, transport: household?.transport, platform, config, identity, auth, keys,
+            scheduler: household?.scheduler, transport: household?.transport, platform, config, identity, auth,
+            get keys() { if (config.publicDemo) throw demoOff(); return keys; },
             params, query: queryOf(url, q), body, readUpload, req, res, ...(events ? { onEvent: events.send } : {}),
           });
         } catch (err) {
@@ -282,6 +305,10 @@ export function createHandler({ platform, config, runtimes, auth, keys, mcp = nu
           if (!(err instanceof HttpError)) console.error(err);
           events.fail(err);
           return;
+        } finally {
+          if (seeded && seeded.prepare('SELECT total_changes() AS n').get().n !== changesBefore) {
+            seeded.prepare("DELETE FROM settings WHERE key = 'synthetic_demo'").run();
+          }
         }
         if (r.download) {
           res.writeHead(200, {

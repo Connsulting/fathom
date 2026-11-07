@@ -136,10 +136,13 @@ export function accountSubtitle(account) {
   return [inst, owner].filter(Boolean).join(', ');
 }
 
+// The shown name, custom or default, with "ending NNNN" when the last 4 is sure and the name does
+// not already carry those digits, so two accounts of one kind at one bank read apart.
 export function accountLabel(account) {
   const custom = String(account?.displayName ?? account?.display_name ?? '').trim();
-  if (custom) return custom;
-  return defaultAccountLabel(account);
+  const shown = custom || defaultAccountLabel(account);
+  const mask = sureMask(account);
+  return mask && !new RegExp(`\\b${mask}\\b`).test(shown) ? `${shown} ending ${mask}` : shown;
 }
 
 function sureMask(account) {
@@ -148,16 +151,12 @@ function sureMask(account) {
   return mask;
 }
 
-// Trend title: the shared label, with braces and markup stripped, and the mask once.
+// Trend title: the shared label (which already carries a sure mask once), braces and markup stripped.
 export function trendLabel(account) {
-  const plain = String(accountLabel(account)).replace(/[{}<>]/g, '').replace(/\s+/g, ' ').trim();
-  const mask = sureMask(account);
-  return mask && !plain.includes(mask) ? `${plain} ${mask}` : plain;
+  return String(accountLabel(account)).replace(/[{}<>]/g, '').replace(/\s+/g, ' ').trim();
 }
 
-// Planner source line for one account. The mask is not repeated.
+// Planner source line for one account: the shared label, so the mask is never repeated.
 export function sourceLabel(account) {
-  const shown = accountLabel(account);
-  const mask = sureMask(account);
-  return mask && !shown.includes(mask) ? `${shown} ...${mask}` : shown;
+  return accountLabel(account);
 }

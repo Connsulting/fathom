@@ -226,6 +226,7 @@ function householdOf(db, household) {
 export async function connectSimplefin(db, token, { household, hosts, fetch: fetchImpl, now } = {}) {
   householdOf(db, household);
   if (!household.outbound.enabled('simplefin')) throw new SimplefinError('paused');
+  db.prepare("DELETE FROM settings WHERE key = 'synthetic_demo'").run();
   if (connection(db)?.status === 'ok') throw new SimplefinError('already_connected');
   const vault = await openVault(household);
   const access = await claimToken(token, { hosts, fetch: fetchImpl });

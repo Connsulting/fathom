@@ -10,6 +10,7 @@
 import { createHash } from 'node:crypto';
 import { resolveCategories } from '../categories/resolve.mjs';
 import { finite, round } from './pace.mjs';
+import { figure, rowsSource, mergeSources } from './figure.mjs';
 import { HORIZON_IDS, horizonLabel } from '../shared/goals.mjs';
 import { accountLabel } from '../shared/account-label.mjs';
 
@@ -29,7 +30,6 @@ export const ROOM_PARTS = Object.freeze([
   Object.freeze({ part: 'dependentCare', key: 'room.dependentCare', label: 'Unused dependent care room this year', words: 'dependent care' }),
 ]);
 
-const SRC = 'calc:targets';
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const NUMBER_WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
 
@@ -78,23 +78,6 @@ export function goalKind(goal) {
 }
 
 // ---------------------------------------------------------------- figures
-
-const rowsSource = (table, ids) => ({ rows: { table, ids: ids.slice(0, 50), count: ids.length } });
-function mergeSources(list) {
-  const by = new Map();
-  for (const s of list) {
-    if (!s?.rows || !Array.isArray(s.rows.ids)) continue;
-    by.set(s.rows.table, [...(by.get(s.rows.table) || []), ...s.rows.ids]);
-  }
-  return [...by].map(([table, ids]) => rowsSource(table, [...new Set(ids)]));
-}
-
-function figure(v, { label, kind = 'e', calc, clock, inputs = {}, parameters = {}, window = null, sources, formula, notes }) {
-  const value = round(v);
-  return { v: value, src: SRC, kind, label, notes: notes.filter(n => typeof n === 'string' && n.trim()).slice(0, 5),
-    locator: { calc, inputs: structuredClone(inputs), parameters: { ...parameters }, window: window && { ...window },
-      sources: structuredClone(sources), steps: [{ label, formula, value }], computedOn: clock } };
-}
 
 // An account name fit for a note: scenario tokens are not plain text, so such a name becomes its kind.
 export const plainAccountName = a => typeof a?.name === 'string' && a.name.trim() && !/\{[a-z]+:/i.test(a.name)

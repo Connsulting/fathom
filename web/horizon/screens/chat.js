@@ -5,9 +5,11 @@
    #/ask/<id> shows that thread with the composer docked at the bottom. Titles and starters are
    plain text and always escaped; no figure is ever rendered in a title or chip.
    Message bodies arrive as stored HTML: figure tokens render through api.t as .fx-fig, numbers a
-   tool grounded are .fx-src spans, and numbers nothing supports are .fx-unverified spans. This
-   module only adds the provenance list and the card; it never re-renders the body.
-   Chat never writes: a proposal (provenance.proposal {recId, action, wake?}) changes the rec only
+   tool grounded are .fx-src spans, and numbers nothing supports are neutral .fx-checking
+   .fx-unchecked spans titled "Not checked against your data" (older stored answers carry
+   .fx-unverified). This module only adds the provenance list and the card; it never re-renders
+   the body.
+   Historical proposal messages: a proposal (provenance.proposal {recId, action, wake?}) changes the rec only
    when the owner clicks Confirm, through the ordinary rec action (api.act). The card wording comes
    from a fixed action map and the rec, never from model text; the wake label is escaped text.
    A goal proposal (provenance.goalProposal {title, note, horizon, target, targetDate}) saves a goal
@@ -16,12 +18,14 @@
    Streaming: with the engine on, a question goes out through api.askStream / api.newThreadStream.
    The pending block is a work block (a row button: spinner, "Working…", step count, chevron; its
    body lists steps and notes) above the text streaming in the current round. Progress labels are
-   steps; an interim event (text a tool round streamed) and a reset with draft (a first attempt the
-   number check replaced) move the streamed text into the block as a note, so nothing on screen
-   vanishes. The block is open while nothing streams and collapsed while text streams, until the
-   owner toggles it for that answer. Streamed text and notes are raw model output rendered by
-   streamHtml (escaped, minimal markdown, every number and token in a neutral .fx-checking span,
-   never .fx-src or .fx-fig). The final grounded message replaces the pending block and carries
+   steps; an interim event (text a tool round streamed) moves the streamed text into the block as a
+   note. A reset clears the streamed text: after superseded engine frames, or on a regeneration,
+   whose "Revised to remove N unchecked figures" step arrives first, so nothing leaves the screen
+   without a step saying why. Draft notes (stored before regenerations stopped keeping the first
+   attempt) still render with their tag. The block is open while nothing streams and collapsed
+   while text streams, until the owner toggles it for that answer. Streamed text and notes are raw
+   model output rendered by streamHtml (escaped, minimal markdown, every number and token in a
+   neutral .fx-checking span, never .fx-src or .fx-fig). The final grounded message replaces the pending block and carries
    the stored block (workHtml, provenance.work { ms, items }), collapsed by default, its open
    state in ui.det. Only the pending blocks are repainted per event (a focused live row keeps
    focus); the page redraws once at the start and once at the end.
@@ -362,13 +366,26 @@ function workItems(list) {
 
 // The finished block above a Fathom answer (provenance.work { ms, items }), collapsed by default,
 // open state kept per message in ui.det. A message stored before the block existed has none.
+function receiptValue(value) {
+  if (value == null) return 'Not set';
+  if (typeof value === 'boolean') return value ? 'Checked' : 'Unchecked';
+  if (typeof value !== 'object') return String(value);
+  if (value.status) return `${ACTION_LABEL[{ doing: 'start', done: 'complete', dismissed: 'dismiss', snoozed: 'snooze', proposed: 'reopen' }[value.status]] || value.status}${value.wake ? ` (${value.wake})` : ''}`;
+  return Object.entries(value).filter(([, v]) => v != null && v !== '').map(([k, v]) => `${k === 'targetDate' ? 'date' : k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`).join(', ');
+}
+
 export function workHtml(m) {
-  if (!H || !m || m.role !== 'fathom' || m.notice || !isObj(m.provenance) || !isObj(m.provenance.work)) return '';
+  if (!H || !m || m.role !== 'fathom' || !isObj(m.provenance)) return '';
+  const { esc } = H;
+  const actions = H.arr(m.provenance.actions).map(a => `<div class="h-action-receipt" data-receipt="${esc(a.id)}" role="status"><p><b>${esc(a.label)}</b>: ${esc(receiptValue(a.before))} → ${esc(receiptValue(a.after))}</p>`
+    + (a.planningPending ? '<p class="h-mute">Saved. Planning is pending.</p>' : '')
+    + (a.undone ? '<span class="h-mute">Undone</span>' : `<button type="button" class="h-btn" data-undo-action="${esc(a.id)}">Undo</button>`) + '</div>').join('');
+  if (m.notice || !isObj(m.provenance.work)) return actions;
   const w = m.provenance.work;
   const ms = Number(w.ms);
   const secs = Math.max(1, Math.round((Number.isFinite(ms) && ms > 0 ? ms : 0) / 1000));
   const open = !!H.ui.det[`work-${m.id}`];
-  return blockHtml({ key: String(m.id), live: false, open, label: `Worked for ${secs}s`, items: workItems(w.items), pulse: false });
+  return blockHtml({ key: String(m.id), live: false, open, label: `Worked for ${secs}s`, items: workItems(w.items), pulse: false }) + actions;
 }
 
 // Open while nothing streams, collapsed while text streams, unless the owner chose for this answer.
@@ -444,12 +461,12 @@ function pushStep(p, label) {
   if (!(last && last.k === 'step' && last.label === label)) p.items.push({ k: 'step', label });
 }
 
-function pushNote(p, text, draft) {
-  if (typeof text === 'string' && text.trim()) p.items.push(draft ? { k: 'note', text, draft: true } : { k: 'note', text });
+function pushNote(p, text) {
+  if (typeof text === 'string' && text.trim()) p.items.push({ k: 'note', text });
 }
 
-// Streamed text only ever moves into the block: an interim round's text becomes a note, and a
-// first attempt the number check replaced becomes a draft note. Nothing on screen just vanishes.
+// An interim round's text moves into the block as a note. A reset clears the stream; on a
+// regeneration the revision step has already arrived, so the cleared text has a stated reason.
 function streamEvent(p, name, data) {
   if (A.pending !== p) return;
   if (name === 'progress' && data && typeof data.label === 'string') {
@@ -459,10 +476,9 @@ function streamEvent(p, name, data) {
     p.streamed = true;
   } else if (name === 'interim') {
     const t = data && typeof data.text === 'string' && data.text.trim() ? data.text : p.stream;
-    pushNote(p, t, false);
+    pushNote(p, t);
     p.stream = '';
   } else if (name === 'reset') {
-    if (data && data.draft) pushNote(p, p.stream, true);
     p.stream = '';
   } else if (name === 'recovering') {
     p.stream = '';
@@ -656,6 +672,13 @@ const ASK_SEL = '[data-starter],[data-thread-act],a.h-askx-row,button.h-askx-new
 
 // Returns true when the click was handled here.
 export function onClick(e) {
+  const undo = e.target.closest('[data-undo-action]');
+  if (undo && H?.root?.contains(undo)) {
+    e.preventDefault();
+    undo.disabled = true;
+    Promise.resolve(H.api.actionUndo(undo.dataset.undoAction)).finally(() => { if (undo.isConnected) undo.disabled = false; });
+    return true;
+  }
   if (proposalClick(e)) return true;
   const root = H.root;
   if (!root || !H.api) return false;

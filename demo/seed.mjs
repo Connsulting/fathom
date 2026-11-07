@@ -65,7 +65,7 @@ const FACTS = {
 // Children before parents so foreign keys hold while clearing.
 const CLEAR_ORDER = [
   'auth_challenges', 'auth_tokens', 'auth_sessions', 'auth_rate_limits', 'passkeys', 'api_keys', 'users',
-  'advisor_reviews', 'advisor_checkin', 'advisor_packets', 'messages', 'conversations', 'rec_events', 'job_runs', 'jobs', 'superseded_rows', 'confirm_undo', 'confirm_guesses', 'confirm_items',
+  'preferences', 'action_receipts', 'advisor_reviews', 'advisor_checkin', 'advisor_packets', 'messages', 'conversations', 'rec_events', 'job_runs', 'jobs', 'superseded_rows', 'confirm_undo', 'confirm_guesses', 'confirm_items',
   'ingest_epoch', 'held_facts',
   'transaction_category_imports', 'transaction_category_corrections', 'transaction_category_guesses', 'category_merchant_rules', 'category_source_rules',
   'column_mappings', 'entity_aliases', 'transactions', 'balances', 'positions',
@@ -288,6 +288,7 @@ export function seedDemo(db) {
     if (chat > 0) spend.run(`${clock}T07:30:00.000Z`, month, 'chat', chat);
 
     setSetting(db, 'mode', 'demo');
+    setSetting(db, 'synthetic_demo', 'synthetic-v1');
     setSetting(db, 'clock', clock);
     setSetting(db, 'onboarding', { done: true, step: 6 });
     setSetting(db, 'engine', { on: true });

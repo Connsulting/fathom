@@ -1,3 +1,6 @@
+import { listPreferences } from '../actions/preferences.mjs';
+import { expectedChildWindow } from '../shared/child-window.mjs';
+import { receiptMessages } from '../actions/receipts.mjs';
 // Store to scenario: assembles the CONTRACT.md scenario object from the store, with live state
 // merged in, plus the `live` key (see docs/architecture.md). Pure reads; never writes.
 //
@@ -178,7 +181,7 @@ export function recFromRow(row, clock) {
   const done = parse(row.tasks_done, []);
   const rec = {
     ...def,
-    window: { label: row.window_label, days: row.window_close ? daysBetween(clock, row.window_close) : null },
+    window: { close: row.window_close, label: row.window_label, days: row.window_close ? daysBetween(clock, row.window_close) : null },
     status: row.status,
     tasks: arr(def.tasks).map((t, i) => ({ ...t, done: !!done[i] })),
   };
@@ -196,6 +199,11 @@ export function loadRecs(db, clock) {
   const facts = getFacts(db);
   const accounts = db.prepare('SELECT * FROM accounts').all();
   const recs = db.prepare('SELECT * FROM recs ORDER BY sort, id').all().map(r => recFromRow(r, clock));
+  if (getSetting(db, 'mode', null) === 'demo') {
+    const window = expectedChildWindow(facts);
+    const rec = recs.find(r => r.id === 'babyprep');
+    if (rec && window) rec.window = { ...window, days: daysBetween(clock, window.close) };
+  }
   for (const r of recs) if (r.question) {
     r.question = { ...questionFor(r.question.keys, { accounts, facts, names: facts['household.names'], people: r.question.people }), primary: r.question.primary };
     if (r.question.primary) {
@@ -256,6 +264,7 @@ export function loadConversations(db) {
   for (const m of db.prepare('SELECT * FROM messages ORDER BY id').all()) {
     (out[m.conversation_key] || (out[m.conversation_key] = [])).push(messageOut(m));
   }
+  for (const [key, messages] of Object.entries(out)) receiptMessages(db, key, messages);
   return out;
 }
 
@@ -586,7 +595,8 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
   const ingestAccounts = ingest.accounts || {};
   const accountRows = db.prepare('SELECT * FROM accounts ORDER BY sort, id').all();
   const householdNames = naming.householdNames;
-  const goals = loadGoals(db, { fig, accounts: accountRows });
+  // Goal labels read the naming rows, so an uncertain connected mask is not shown as an account number.
+  const goals = loadGoals(db, { fig, accounts: accountRows.map(a => naming.byId.get(a.id) ?? a) });
   const pace = buildPace(db, { clock: clk });
   // The rollup date is the newest stored row when that is later than the oldest goal input.
   // Home reads this field; Money reads meta.dataThrough. Both follow the same ISO day.
@@ -636,6 +646,7 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
     goals,
     pace,
     suggestions: suggested.suggestions,
+    preferences: listPreferences(db),
     curve,
     wargame,
     decisions,

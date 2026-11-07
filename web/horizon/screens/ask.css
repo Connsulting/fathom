@@ -154,6 +154,16 @@
 .d-horizon .h-askx-stream .h-msg-b { color: var(--tx); font-size: 15px; line-height: 1.65; }
 /* A number in streamed text is not checked yet: plain, muted, no source underline, no popover. */
 .d-horizon .fx-checking { color: var(--mu); }
+/* A stored figure grounding could not check, left in place: the same neutral tone, with a faint
+   dotted underline so its "Not checked against your data" title is discoverable. Older answers
+   keep .fx-unverified (screens.css). */
+.d-horizon .fx-unchecked {
+  color: var(--mu);
+  text-decoration: underline dotted var(--line2);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  cursor: help;
+}
 
 /* ---------- work block ----------
    Above a Fathom answer, live and finished: a quiet row in the Sources disclosure style (muted

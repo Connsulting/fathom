@@ -1,0 +1,95 @@
+{
+  "id": "spending-and-obligations",
+  "name": "Spending and obligations",
+  "version": "1.0.0",
+  "taxYear": 2026,
+  "reviewed": "2026-11-07",
+  "curator": "Public primary-source review",
+  "covers": [
+    "spending classes",
+    "mortgage and housing",
+    "healthcare outside the household ledger",
+    "childcare by age",
+    "education saving timeline",
+    "obligations and projections"
+  ],
+  "appliesWhen": { "all": [] },
+  "suggestWhen": { "all": [] },
+  "whatIf": {
+    "prompt": "What changes in household spending when a mortgage is paid off or childcare ends?"
+  },
+  "entries": [
+    {
+      "file": "spending-classes.md",
+      "title": "Classify household spending",
+      "cites": [
+        {
+          "label": "IRS Publication 936: home mortgage interest",
+          "url": "https://www.irs.gov/publications/p936"
+        },
+        {
+          "label": "IRS Publication 503: child and dependent care",
+          "url": "https://www.irs.gov/publications/p503"
+        }
+      ]
+    },
+    {
+      "file": "mortgage-and-housing.md",
+      "title": "Separate a mortgage payment from housing that continues",
+      "cites": [
+        {
+          "label": "IRS Publication 936: home mortgage interest",
+          "url": "https://www.irs.gov/publications/p936"
+        }
+      ]
+    },
+    {
+      "file": "healthcare-outside-the-ledger.md",
+      "title": "Keep payroll and business premiums outside household spending",
+      "cites": [
+        {
+          "label": "IRS Publication 502: medical and dental expenses",
+          "url": "https://www.irs.gov/publications/p502"
+        }
+      ]
+    },
+    {
+      "file": "childcare-by-age.md",
+      "title": "Change childcare cost at school entry and age 13",
+      "cites": [
+        {
+          "label": "IRS Publication 503: child and dependent care",
+          "url": "https://www.irs.gov/publications/p503"
+        }
+      ]
+    },
+    {
+      "file": "education-saving-timeline.md",
+      "title": "Stop 529 contributions at college start",
+      "cites": [
+        {
+          "label": "IRS Publication 970: tax benefits for education",
+          "url": "https://www.irs.gov/publications/p970"
+        }
+      ]
+    },
+    {
+      "file": "obligations-and-projections.md",
+      "title": "Project spending after obligations change",
+      "cites": [
+        {
+          "label": "IRS Publication 936: home mortgage interest",
+          "url": "https://www.irs.gov/publications/p936"
+        },
+        {
+          "label": "IRS Publication 503: child and dependent care",
+          "url": "https://www.irs.gov/publications/p503"
+        },
+        {
+          "label": "IRS Publication 970: tax benefits for education",
+          "url": "https://www.irs.gov/publications/p970"
+        }
+      ]
+    }
+  ]
+}

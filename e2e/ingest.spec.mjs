@@ -64,7 +64,7 @@ test('add files, confirm an owner, and see it on Accounts', async ({ page, reque
   await expect(dataHealth(page)).toContainText(questionsToConfirm(pending));
 
   // Its Confirm link opens the deck. The new owner questions and the seeded one share the owner
-  // group card: pick You on the aggregator account's row and apply the selections.
+  // group card: pick You on the aggregator account's row, which saves that row at once.
   await healthConfirm(page).click();
   await expect(page).toHaveURL(/#\/confirm$/);
   await expect(page.locator('.h-deck')).toBeVisible();
@@ -79,11 +79,10 @@ test('add files, confirm an owner, and see it on Accounts', async ({ page, reque
   const choice = group.locator(`button[data-row-answer="${item.id}"][data-option="owner"]`);
   await expect(choice).toBeVisible();
   await expect(choice).toContainText(option.label);
+  const answered = page.waitForResponse((r) => new URL(r.url()).pathname === `/api/confirm/${item.id}/answer` && r.request().method() === 'POST');
   await choice.click();
-  await expect(choice).toHaveAttribute('aria-pressed', 'true');
-  const answered = page.waitForResponse((r) => new URL(r.url()).pathname === '/api/confirm/answers' && r.request().method() === 'POST');
-  await group.locator('button[data-group-apply]').click();
   expect((await answered).status()).toBe(200);
+  await expect(choice).toHaveAttribute('aria-pressed', 'true');
   const left = await pendingIds(request);
   expect(left).not.toContain(item.id);
 
@@ -151,7 +150,7 @@ test('imported account labels render as plain escaped text with no token expansi
 
   const check = async () => {
     await expect(page.locator('header.h-top')).toBeVisible();
-    await expect(page.getByText(name, { exact: true }).first()).toBeVisible();
+    await expect(page.getByText(`${name} ending 4821`, { exact: true }).first()).toBeVisible();
     await expect(page.locator('.h-acc', { hasText: name }).first()).toContainText(name);
     await expect(page.locator('button[data-answer="1"]', { hasText: 'Continue' })).toHaveCount(0);
     await expect(page.locator('.h-acc i').filter({ hasText: /^x$/ })).toHaveCount(0);

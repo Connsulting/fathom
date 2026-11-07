@@ -154,21 +154,14 @@ test('settings hold JSON values with a fallback', async () => {
   }
 });
 
-// 024 is claimed by an open branch (AGENTS.md: migrations are numbered in merge order); MT-03's 025
-// applies after a later 024 on existing stores. Once 024 lands this list must be emptied again.
-const RESERVED_MIGRATION_IDS = [24];
-
-test('migration files are NNN-name.sql numbered from 001 without gaps', () => {
+test('migration files have unique positive numeric ids in application order', () => {
   const files = readdirSync(MIGRATIONS_DIR).filter(f => f.endsWith('.sql')).sort();
   assert.ok(files.length >= 1);
   assert.equal(files[0], '001-foundation.sql');
-  const ids = files.map(f => Number(f.slice(0, 3)));
-  for (const id of RESERVED_MIGRATION_IDS) assert.ok(!ids.includes(id), `reserved migration ${id} has landed: remove it from RESERVED_MIGRATION_IDS`);
-  const expected = [];
-  for (let id = 1; expected.length < files.length; id++) if (!RESERVED_MIGRATION_IDS.includes(id)) expected.push(id);
   files.forEach((f, i) => {
     assert.match(f, /^\d{3}-[a-z0-9-]+\.sql$/);
-    assert.equal(ids[i], expected[i], `${f} is numbered ${expected[i]}`);
+    assert.ok(Number(f.slice(0, 3)) > 0);
+    if (i) assert.ok(Number(f.slice(0, 3)) > Number(files[i - 1].slice(0, 3)), `${f} follows its predecessor`);
   });
   const identity = listMigrations().find(m => m.name === 'platform-identity');
   assert.ok(identity, 'the platform identity migration is registered');

@@ -3,7 +3,7 @@ import { accountNaming } from '../accounts/naming.mjs';
 import { accountLabel } from '../shared/account-label.mjs';
 import { createHash } from 'node:crypto';
 import { parseJson, getSetting } from '../store/db.mjs';
-import { ask, archive, normalizeName, ConfirmError } from './confirm.mjs';
+import { ask, answerItem, archive, normalizeName, ConfirmError } from './confirm.mjs';
 import { accountMask, accountKind, sameInstitution, compatibleInstitution, compatibleKind, lastFour, conflictingBalances } from './account-match.mjs';
 import { dedupeKey } from './dedupe.mjs';
 import { refreshFigures } from './pipeline.mjs';
@@ -123,7 +123,8 @@ export function queueAccountPairs(db, { now = new Date().toISOString() } = {}) {
 }
 
 export function assertCurrentPair(db, item) {
-  if (!item.context?.repair) return;
+  // A manual merge is the owner's own pairing, so the detector has no say in it.
+  if (!item.context?.repair || item.context.manual) return;
   const { candidateId, ownId } = item.context;
   if (!detectAccountPairs(db, { includeAnswered:true }).some(p => p.candidateId === candidateId && p.ownId === ownId)) throw new ConfirmError('stale');
 }
@@ -209,6 +210,7 @@ export function mergeAccounts(db, item, { now = new Date().toISOString() } = {})
     if (own.fig_key) value = replaceRef(value,own.fig_key,keep.fig_key ?? `acct.${keepId}.balance`);
     db.prepare(`UPDATE ${table} SET ${col}=? WHERE id=?`).run(JSON.stringify(value),r.id);
   }
+  for (const { snapshot } of mappedSnapshots(db, ownId)) fillIdentity(db, keepId, parseJson(snapshot, null));
   db.prepare('UPDATE simplefin_accounts SET account_id=? WHERE account_id=?').run(keepId,ownId);
   db.prepare('UPDATE simplefin_accounts SET candidate_id=? WHERE candidate_id=?').run(keepId,ownId);
   if (!db.prepare('SELECT 1 FROM account_holders WHERE account_id=?').get(keepId)) db.prepare('UPDATE account_holders SET account_id=? WHERE account_id=?').run(keepId,ownId);
@@ -216,7 +218,10 @@ export function mergeAccounts(db, item, { now = new Date().toISOString() } = {})
     const ctx = parseJson(q.context,{});
     if (q.subject === ownId || matchesRef(ctx,ownId) || (ctx.keys ?? []).some(k => removedKeys.has(k))) db.prepare('DELETE FROM confirm_items WHERE id=?').run(q.id);
   }
-  db.prepare("UPDATE accounts SET mirror='connected' WHERE id=?").run(keepId);
+  if (own.mirror === 'connected') db.prepare("UPDATE accounts SET mirror='connected' WHERE id=?").run(keepId);
+  // The survivor's figure key is set inside the logged merge, so undo clears it again.
+  const valued = db.prepare('SELECT 1 FROM balances WHERE account_id=?1 UNION ALL SELECT 1 FROM positions WHERE account_id=?1 LIMIT 1').get(keepId);
+  if (!keep.fig_key && (own.fig_key || valued)) db.prepare('UPDATE accounts SET fig_key=? WHERE id=?').run(`acct.${keepId}.balance`,keepId);
   db.prepare('DELETE FROM accounts WHERE id=?').run(ownId);
   for (const id of movedTransactions) {
     const a = db.prepare('SELECT * FROM transactions WHERE id=?').get(id);
@@ -232,8 +237,98 @@ export function mergeAccounts(db, item, { now = new Date().toISOString() } = {})
 
 }
 
+const mappedSnapshots = (db, accountId) => db.prepare(`SELECT m.sf_key, s.snapshot FROM simplefin_accounts m
+  JOIN simplefin_snapshots s ON s.sf_key=m.sf_key WHERE m.account_id=? AND m.status='mapped' ORDER BY m.sf_key`).all(accountId);
+
+// Fill a missing institution or last 4 from a SimpleFIN snapshot. A value already set (a person's
+// own last 4 included) is never replaced, and a last 4 is taken only when the bridge is sure of it
+// or the account name ends in it. Returns whether anything changed.
+function fillIdentity(db, accountId, snap) {
+  if (!snap || typeof snap !== 'object') return false;
+  const row = db.prepare('SELECT inst, mask FROM accounts WHERE id=?').get(accountId);
+  if (!row) return false;
+  const inst = !row.inst && typeof snap.inst === 'string' && snap.inst.trim() ? snap.inst : null;
+  const reliable = /^\d{4}$/.test(snap.mask ?? '') && (snap.maskSure === true || lastFour(snap.name) === snap.mask);
+  const mask = row.mask == null && reliable ? snap.mask : null;
+  if (!inst && !mask) return false;
+  db.prepare('UPDATE accounts SET inst=coalesce(?,inst), mask=coalesce(?,mask) WHERE id=?').run(inst, mask, accountId);
+  return true;
+}
+
+// Survivors of merges made before the carry-over existed: fill what fillIdentity would have.
+// Idempotent. Returns the number of accounts changed.
+export function backfillMergedIdentity(db) {
+  const rows = db.prepare(`SELECT DISTINCT a.id FROM accounts a JOIN simplefin_accounts m ON m.account_id=a.id AND m.status='mapped'
+    WHERE coalesce(a.identity,'') NOT LIKE 'simplefin:%' AND (coalesce(a.inst,'')='' OR a.mask IS NULL) ORDER BY a.id`).all();
+  let changed = 0;
+  for (const { id } of rows) {
+    let any = false;
+    for (const { snapshot } of mappedSnapshots(db, id)) if (fillIdentity(db, id, parseJson(snapshot, null))) any = true;
+    if (any) changed += 1;
+  }
+  return changed;
+}
+
+// A merge survivor keeps its imported identity and is mirrored as connected, so only the identity
+// says which account is the feed itself.
+const isConnected = a => String(a.identity ?? '').startsWith('simplefin:');
+
+// Which of two accounts a manual merge keeps. The connected one is removed so the other takes its
+// feed and rows, the way a detected merge does. Two connected accounts are two feeds, and two
+// imported accounts would come back with the next import of the removed one; both are refused.
+export function mergePlan(db, openId, otherId) {
+  const open = db.prepare('SELECT * FROM accounts WHERE id=?').get(openId);
+  const other = db.prepare('SELECT * FROM accounts WHERE id=?').get(otherId);
+  if (isConnected(open) && isConnected(other)) return { keepId: openId, ownId: otherId, refused: 'Both accounts are connected through SimpleFIN, so they cannot be merged.' };
+  // Two imported accounts cannot be merged: the removed one is recreated by the next import of its
+  // file, because imports find accounts by their own identity.
+  if (!isConnected(open) && !isConnected(other)) return { keepId: openId, ownId: otherId, refused: 'Two imported accounts cannot be merged yet, because the next import of the removed one would bring it back. Merge an imported account with its connected copy.' };
+  const [keep, own] = isConnected(open) ? [other, open] : [open, other];
+  const count = (sql) => db.prepare(sql).get(own.id).n;
+  const moves = {
+    transactions: count('SELECT count(*) n FROM transactions WHERE account_id=?'),
+    balances: count('SELECT count(*) n FROM balances WHERE account_id=?'),
+    positions: count('SELECT count(*) n FROM positions WHERE account_id=?'),
+    sources: count(`SELECT count(DISTINCT file_id) n FROM (SELECT file_id FROM transactions WHERE account_id=?1
+      UNION ALL SELECT file_id FROM balances WHERE account_id=?1 UNION ALL SELECT file_id FROM positions WHERE account_id=?1)`),
+  };
+  return { keepId: keep.id, ownId: own.id, moves };
+}
+
+// Merge two accounts the owner picked, through the same account_match answer and undo log as a
+// detected pair: reset or create the item for the pair, then answer it "same". Undo is reopening
+// the item. Returns answerItem's {item, factsChanged} and the survivor id.
+export function manualMerge(db, openId, otherId, { now = new Date().toISOString() } = {}) {
+  const plan = mergePlan(db, openId, otherId);
+  if (plan.refused) throw new ConfirmError('stale');
+  const { keepId, ownId } = plan;
+  const subject = subjectOf(keepId, ownId);
+  const sfKey = db.prepare("SELECT sf_key FROM simplefin_accounts WHERE account_id=? AND status='mapped' ORDER BY sf_key").get(ownId)?.sf_key;
+  const context = { candidateId: keepId, ownId, ...(sfKey ? { sfKey } : {}), confidence: 'manual', repair: true, manual: true };
+  const naming = accountNaming(db);
+  const question = `Merge ${accountLabel(naming.byId.get(ownId))} into ${accountLabel(naming.byId.get(keepId))}?`;
+  const prior = db.prepare("SELECT * FROM confirm_items WHERE kind='account_match' AND subject=?").get(subject);
+  let id;
+  if (prior) {
+    db.prepare("UPDATE confirm_items SET status='pending',answer=NULL,answered_at=NULL,question=?,context=?,created_at=? WHERE id=?")
+      .run(question, JSON.stringify(context), now, prior.id);
+    id = prior.id;
+  } else id = ask(db, { kind:'account_match', subject, question, options:OPTIONS, context, now }).id;
+  try {
+    return { ...answerItem(db, id, 'same', { now }), survivorId: keepId };
+  } catch (err) {
+    // The answer rolled back; put the item back the way it was so no stray question is left.
+    if (prior) db.prepare('UPDATE confirm_items SET status=?,answer=?,answered_at=?,question=?,context=?,created_at=? WHERE id=?')
+      .run(prior.status, prior.answer, prior.answered_at, prior.question, prior.context, prior.created_at, prior.id);
+    else db.prepare('DELETE FROM confirm_items WHERE id=?').run(id);
+    throw err;
+  }
+}
+
 export function refreshMergedAccounts(db, { now = new Date().toISOString() } = {}) {
-  const ids = db.prepare('SELECT id FROM accounts').all().map(a=>a.id);
+  // Only accounts that have a figure: refreshing one without would give it a key the merge undo
+  // cannot take back.
+  const ids = db.prepare('SELECT id FROM accounts WHERE fig_key IS NOT NULL').all().map(a=>a.id);
   refreshFigures({db,now,emptySnapshots:new Map()},ids);
   for (const r of db.prepare("SELECT key FROM figures WHERE key LIKE 'acct.%.balance'").all())
     if (!db.prepare('SELECT 1 FROM accounts WHERE fig_key=?').get(r.key)) db.prepare('DELETE FROM figures WHERE key=?').run(r.key);

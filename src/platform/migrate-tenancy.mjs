@@ -1,7 +1,7 @@
 // Offline tenancy migration (MT-03): moves the original household's financial data from the
 // MT-02 layout (fathom.sqlite, api-key-secret, files/, packs/, outbox/ at the data root) into its
 // own root `households/<householdId>/`, converts its FTHM1 vault to FTHM2 under a household data
-// key, moves its MCP keys into platform.sqlite (store migration 025 then drops the store table),
+// key, moves its MCP keys into platform.sqlite (store migration 026 then drops the store table),
 // and publishes the root with one platform transaction. Run by scripts/migrate-tenancy.mjs with
 // every Fathom process stopped.
 //
@@ -16,13 +16,13 @@
 //   preflight      read-only checks; nothing is written before they pass
 //   snapshot       snapshots/tenancy-<op>.fsnap: store, platform.sqlite, api-key-secret, files/,
 //                  packs/, outbox/ under the backup key (an existing one is authenticated and adopted)
-//   source-schema  store migrations up to 24 on the source (025 refuses while keys remain)
+//   source-schema  store migrations up to 25 on the source (026 refuses while keys remain)
 //   stage          households/staging-<op>: a page copy of the store, packs/ and outbox/ copies, the
 //                  vault converted under the household data key (an existing key row is reused),
 //                  the converted SimpleFIN secret written, the store's api_keys rows deleted after
-//                  their digest is journaled, then migrate() (025 drops the table)
+//                  their digest is journaled, then migrate() (026 drops the table)
 //   verify         integrity and foreign keys; rowid-aware row digests of every source table but
-//                  api_keys equal (schema_migrations on id < 25, simplefin_connection without its
+//                  api_keys equal (schema_migrations on id <= 25, simplefin_connection without its
 //                  blob); every vault object opens to its recorded plaintext hash; files equal
 //   root-published staging renamed to households/<householdId>
 //   before-manifest  fired immediately before the publication

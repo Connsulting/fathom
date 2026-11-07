@@ -33,6 +33,9 @@ import { createKeyService } from './mcp/keys.mjs';
 import { createMcpHandler } from './mcp/index.mjs';
 import { createTransport } from './email/transport.mjs';
 import { seedDemo } from '../demo/seed.mjs';
+import { backfillMergedIdentity } from './ingest/account-merge.mjs';
+import { assertSyntheticStore, createPublicDemoHandler } from './public-demo/runtime.mjs';
+import { DB_FILE } from './store/db.mjs';
 
 export { StartupError };
 
@@ -92,8 +95,75 @@ export function applyTimeouts(server) {
   return server;
 }
 
+// Log-safe code for a startup failure: never the message, which could carry a value.
+const codeOf = err => [err && err.code, err && err.name].find(v => typeof v === 'string' && /^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(v)) || 'unknown';
+
+// Survivors of merges made before the carry-over existed get their institution and last 4 from
+// their SimpleFIN snapshot, in every served household. A failure never stops startup.
+function backfillMerged(runtimes) {
+  for (const id of runtimes.list()) {
+    try {
+      const household = runtimes.get(id);
+      if (household) backfillMergedIdentity(household.db);
+    } catch (err) {
+      console.error('fathom: merged account backfill failed', codeOf(err));
+    }
+  }
+}
+
+// A public demo serves only synthetic sandboxes: the instance must be a demo whose household
+// store carries the seeder's marker.
+function assertPublicDemoInstance(config, platform, mode) {
+  const row = platform.prepare('SELECT storage_root FROM households WHERE serves_store = 1').get();
+  if (mode !== 'demo' || !row?.storage_root) throw new Error('public demo: refusing a store without the synthetic seeder marker');
+  assertSyntheticStore(join(config.dataDir, row.storage_root, DB_FILE));
+}
+
+async function listen(server, config) {
+  await new Promise((resolveListen, reject) => {
+    server.once('error', reject);
+    server.listen(config.port, config.host, () => {
+      server.off('error', reject);
+      resolveListen();
+    });
+  });
+}
+
+const urlOf = (server, config) => `http://${config.host.includes(':') ? `[${config.host}]` : config.host}:${server.address().port}`;
+
+async function startPublicDemo(config, platform, mode) {
+  let demo;
+  try {
+    assertPublicDemoInstance(config, platform, mode);
+    demo = createPublicDemoHandler(config, { platform });
+  } catch (err) {
+    try { platform.close(); } catch { /* already closed */ }
+    throw err;
+  }
+  const server = applyTimeouts(http.createServer(demo.handle));
+  try {
+    await listen(server, config);
+  } catch (err) {
+    demo.close();
+    platform.close();
+    throw err;
+  }
+  let closing = null;
+  return {
+    server, platform, runtimes: null, url: urlOf(server, config),
+    close() {
+      closing ??= new Promise(done => {
+        server.close(() => { demo.close(); platform.close(); done(); });
+        server.closeAllConnections();
+      });
+      return closing;
+    },
+  };
+}
+
 export async function startServer(config = loadConfig()) {
-  const { platform, secrets } = openOrCreateInstance(config);
+  const { platform, mode, secrets } = openOrCreateInstance(config);
+  if (config.publicDemo) return startPublicDemo(config, platform, mode);
   let runtimes = null;
   const closeAll = async () => {
     try { await runtimes?.close(); } catch { /* close anyway */ }
@@ -104,6 +174,7 @@ export async function startServer(config = loadConfig()) {
     const transport = createTransport(config, { outboxDir: join(config.dataDir, 'outbox') });
     const auth = createAuthService({ platform, config, transport, secrets });
     runtimes = createRuntimeRegistry({ platform, config, secrets });
+    backfillMerged(runtimes);
     const keys = createKeyService({ platform, secret: () => secrets.mcpSecret(), creatorActive: auth.creatorActive });
     const mcp = createMcpHandler({ keys, runtimes, config });
     server = http.createServer(createHandler({ platform, config, runtimes, auth, keys, mcp }));
@@ -113,13 +184,7 @@ export async function startServer(config = loadConfig()) {
   }
   applyTimeouts(server);
   try {
-    await new Promise((resolveListen, reject) => {
-      server.once('error', reject);
-      server.listen(config.port, config.host, () => {
-        server.off('error', reject);
-        resolveListen();
-      });
-    });
+    await listen(server, config);
   } catch (e) {
     await closeAll();
     if (e && e.code === 'EADDRINUSE') {
@@ -128,14 +193,12 @@ export async function startServer(config = loadConfig()) {
     throw e;
   }
   runtimes.startAll();
-  const { port } = server.address();
-  const host = config.host.includes(':') ? `[${config.host}]` : config.host;
   let closing = null;
   return {
     server,
     platform,
     runtimes,
-    url: `http://${host}:${port}`,
+    url: urlOf(server, config),
     close() {
       closing ??= new Promise(done => {
         server.close(() => done());
