@@ -5,7 +5,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createEngine, BudgetExceededError } from '../src/engine/index.mjs';
-import { estimateUnknownCost, DEFAULT_MODEL } from '../src/engine/pricing.mjs';
+import { estimateUnknownCost, DEFAULT_MODEL, TITLE_MODEL } from '../src/engine/pricing.mjs';
 import { createEvalStore, createEvalLedger, runCases } from '../evals/harness.mjs';
 import { loadCases } from '../evals/cases.mjs';
 import { gradeThreadTitle } from '../evals/graders.mjs';
@@ -77,18 +77,17 @@ test('budget ledger excludes demo spend and refuses a later round inside one eng
     assert.equal(ledger.costUsd, 0);
     const request = { purpose: 'chat', system: 'Use tools.', messages: [{ role: 'user', content: 'Read the value.' }], maxTokens: 1024,
       tools: [{ name: 'read', scope: 'read', description: 'Read a value.', inputSchema: { type: 'object', properties: {}, additionalProperties: false }, handler: () => ({ value: 10 }) }] };
-    const wrapped = ledger.begin(request);
-    const engine = createEngine({ mode: 'fake', ledger, capUsd: 1, responses: [
+    const wrapped = ledger.begin({ ...request, fake: [
+      { toolCalls: [{ name: 'read', args: {} }], costUsd: 0.99 }, { text: '10', costUsd: 0.02 },
+    ] });
+    const engine = createEngine({ admitRound: req => ledger.admitRound(req), mode: 'fake', ledger, capUsd: 1, responses: [
       { toolCalls: [{ name: 'read', args: {} }], costUsd: 0.99 }, { text: '10', costUsd: 0.02 },
     ] });
     await assert.rejects(engine.call(wrapped), BudgetExceededError);
     assert.equal(ledger.state.stopped, 'budget');
     assert.equal(ledger.costUsd, 0.99);
     assert.equal(ledger.reserves.length, 2);
-    const transcript = [...request.messages, { role: 'assistant', content: [{ type: 'tool_use', name: 'read', input: {} }] },
-      { role: 'tool', content: [{ name: 'read', args: {}, result: { value: 10 } }] }];
-    const estimate = estimateUnknownCost({ model: DEFAULT_MODEL, maxTokens: 1024, system: request.system, messages: transcript, tools: request.tools });
-    assert.ok(ledger.reserves[1] >= estimate.costUsd);
+    assert.equal(ledger.reserves[1], 0.02);
   } finally { await store.close(); }
 });
 
@@ -97,7 +96,7 @@ test('budget admits valid neighboring rounds and records existing engine account
   try {
     const ledger = createEvalLedger({ db: store.db, maxUsd: 1 });
     const req = ledger.begin({ purpose: 'chat', system: 'Read.', messages: [{ role: 'user', content: 'Hi.' }], maxTokens: 1024, tools: [] });
-    const engine = createEngine({ mode: 'fake', ledger, capUsd: 1, responses: [{ text: 'Hi.', costUsd: 0.01 }] });
+    const engine = createEngine({ admitRound: req => ledger.admitRound(req), mode: 'fake', ledger, capUsd: 1, responses: [{ text: 'Hi.', costUsd: 0.01 }] });
     await engine.call(req);
     assert.equal(ledger.state.stopped, null);
     assert.equal(ledger.costUsd, 0.01);
@@ -234,4 +233,44 @@ test('title grading rejects fallback, missing titles and amounts independently o
     '529 dollars education savings', 'two thousand education savings']) {
     assert.equal(gradeThreadTitle(row(title), 'Discuss my savings').ok, false, String(title));
   }
+});
+
+test('live reservation uses the actual transcript, output limit and purpose model without synthetic growth', async () => {
+  const store = await createEvalStore();
+  try {
+    const ledger = createEvalLedger({ db: store.db, maxUsd: 2 });
+    const request = { purpose: 'chat', system: 'Use tools.', systemDynamic: 'Current context.', tools: [],
+      maxTokens: 128, messages: [{ role: 'user', content: 'Discuss education savings.' }] };
+    ledger.begin(request);
+    ledger.admitRound(request);
+    const first = estimateUnknownCost({ model: DEFAULT_MODEL, maxTokens: 128,
+      system: 'Use tools.\nCurrent context.', messages: request.messages, tools: [] }).costUsd;
+    assert.equal(ledger.reserves[0], first);
+    ledger.record({ ts: new Date().toISOString(), purpose: 'chat', model: DEFAULT_MODEL, costUsd: 0.001, tokens: {} });
+    assert.equal(ledger.outstandingReservedUsd, 0);
+    const next = { ...request, messages: [...request.messages, { role: 'assistant', content: 'A short reply.' }] };
+    ledger.admitRound(next);
+    assert.equal(ledger.reserves[1], estimateUnknownCost({ model: DEFAULT_MODEL, maxTokens: 128,
+      system: 'Use tools.\nCurrent context.', messages: next.messages, tools: [] }).costUsd);
+    ledger.end();
+    ledger.begin({ ...request, purpose: 'title' });
+    ledger.admitRound({ ...request, purpose: 'title' });
+    assert.equal(ledger.reserves[2], estimateUnknownCost({ model: TITLE_MODEL, maxTokens: 128,
+      system: 'Use tools.\nCurrent context.', messages: request.messages, tools: [] }).costUsd);
+    assert.ok(ledger.reserves[2] < first);
+    ledger.end();
+    assert.equal(ledger.outstandingReservedUsd, 0);
+  } finally { await store.close(); }
+});
+
+test('title calls share the cap and an unaffordable title stops the catalog cleanly', async () => {
+  const c = (await loadCases()).find(c => c.id === 'goals-conversation-title-529');
+  const r = await runCases({ cases: [c, ...budgetCatalog(1)], maxUsd: 0.06, scripts: ({ purpose }) => [
+    { text: purpose === 'title' ? JSON.stringify({ title: '529 education savings' }) : 'Education savings can support the goal.', costUsd: 0.04 },
+  ] });
+  assert.equal(r.costUsd, 0.04);
+  assert.equal(r.cases[0].status, 'budget-stopped');
+  assert.match(r.cases[0].reason, /title/);
+  assert.equal(r.cases[1].status, 'unrun');
+  assert.equal(r.outstandingReservedUsd, 0);
 });

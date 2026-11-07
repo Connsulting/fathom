@@ -186,3 +186,12 @@ export function gradeExpected(text, values, { figures = {} } = {}) {
   const checks = values.map(value => ({ value, ok: actual.some(n => close(n.value, value, n.money)) }));
   return { ok: checks.every(c => c.ok), checks };
 }
+
+export function gradeThreadTitle(row, fallback) {
+  const title = row?.title ?? '';
+  const source = row?.title_source ?? null;
+  const model = source === 'auto' && title.trim().length > 0 && title !== fallback;
+  const amountFree = !/[\p{Sc}%]/u.test(title) && !/\p{N}/u.test(title.replace(/\b529\b/g, ''))
+    && numericFigures(title).length === 0 && !/\b(?:dollars?|cents?|usd|bucks?|grand)\b/i.test(title);
+  return { ok: model && amountFree, title, source, model, amountFree };
+}
