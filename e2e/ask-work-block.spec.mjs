@@ -28,7 +28,7 @@ const INVENTED = 'Is 4,321 or 5,432 the right amount for this?';
 const NOTE1 = 'Let me start with your household summary.';
 const NOTE2 = 'Now the details this rests on.';
 const STEP_GOALS = 'Looking at your goals';
-const STEP_REC = 'Reading the recommendation';
+const STEP_REC = 'Looking at your plan';
 const STEP_CHECK = 'Checking every number against your data';
 const STEP_REVISED = 'Revised to remove 2 unchecked figures';
 const REVISED = /^Revised to remove \d+ unchecked figures?$/;
@@ -322,7 +322,7 @@ function expectShowYourWork(got, secondStep) {
   expect(notes.indexOf(NOTE1), JSON.stringify(got)).toBeGreaterThanOrEqual(0);
   expect(notes.indexOf(NOTE2), JSON.stringify(got)).toBeGreaterThan(notes.indexOf(NOTE1));
   expect(got.notes.some((x) => x.draft)).toBe(false);
-  expect(got.steps).toEqual(['Reading your household summary', secondStep, STEP_CHECK]);
+  expect(got.steps).toEqual(['Looking at your household', secondStep, STEP_CHECK]);
 }
 
 // At phone width: no horizontal page scroll, the row's text on one line and not clipped, and an
@@ -509,13 +509,13 @@ test('@mobile @wb-ac2 @wb-ac4 a plain question shows a work block with steps onl
   expectAutoRule(snaps);
   expectNothingLost(snaps);
   expect(snaps.some((s) => s.notes.length), 'no note rows while it streamed').toBe(false);
-  expect(snaps.some((s) => s.steps.includes('Reading your household summary'))).toBe(true);
+  expect(snaps.some((s) => s.steps.includes('Looking at your household'))).toBe(true);
 
   const stored = await lastAnswer(request, id);
   const got = await expectFinished(answer, stored);
   expect(got.notes).toEqual([]);
   expect(got.steps.length).toBeGreaterThan(0);
-  expect(got.steps[0]).toBe('Reading your household summary');
+  expect(got.steps[0]).toBe('Looking at your household');
   expect(stored.provenance.work.items.every((x) => x.k === 'step')).toBe(true);
   await expectPhoneFit(page, answer.locator('.h-work'));
 });
