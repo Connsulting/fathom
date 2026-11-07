@@ -1761,7 +1761,7 @@ test('PN1: Ask records a spending ledger from the owner sentence using the adver
     { toolCalls: [{ name: 'record_household_fact', args: { key: 'pnl.ledgers', value: { "Aster's": { kind: 'spending' } }, evidence: text } }] },
     { text: 'Saved the spending ledger classification.' },
   ]]);
-  const reply = await createLiveAnswerer({ engine, packs: s.packs }).answer({ db: s.db, key: THREAD, text, ownerText: text, actorId: 'demo', turnId: 'synthetic-ledger' });
+  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).answer({ db: s.db, key: THREAD, text, ownerText: text, actorId: 'demo', turnId: 'synthetic-ledger' });
   assert.ok(!reply.notice);
   const shapes = await callTool('get_fact_answer_shapes', {}, { db: s.db });
   assert.ok(shapes['pnl.ledgers']);
