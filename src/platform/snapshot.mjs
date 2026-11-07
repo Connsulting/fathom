@@ -15,9 +15,9 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import {
   closeSync, copyFileSync, chmodSync, constants, existsSync, fchmodSync, fsyncSync, linkSync, lstatSync,
-  mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync,
+  mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, unlinkSync,
 } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { DB_FILE } from '../store/db.mjs';
 import { codeError } from './db.mjs';
@@ -233,11 +233,35 @@ export function restoreSourceSnapshot({ file, keyFile, key, out }) {
 // Top-level entries of a migrated data directory that a rollback leaves behind.
 const NOT_CARRIED = [/^platform\.sqlite/, /^platform-migration\./, /^snapshots$/, /^fathom\.sqlite(-wal|-shm|-journal|\.tmp-.*)?$/, /\.fsnap$/, /\.partial-/];
 
+// The real path of `p`; a missing tail is resolved against its nearest existing ancestor.
+function realPath(p) {
+  const abs = resolve(p);
+  try { return realpathSync(abs); } catch (e) {
+    if (e.code !== 'ENOENT' || dirname(abs) === abs) throw e;
+    return join(realPath(dirname(abs)), basename(abs));
+  }
+}
+const within = (child, parent) => {
+  const rel = relative(parent, child);
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+};
+
+// Refuse an output that is the source, lies inside it, or contains it, before anything is created.
+// An unresolvable `from` is left to the from_invalid check.
+function refuseNested(from, out) {
+  let src;
+  try { src = realpathSync(resolve(from)); } catch { return; }
+  const dst = join(realPath(dirname(resolve(out))), basename(resolve(out)));
+  if (within(dst, src)) throw codeError('out_inside_source');
+  if (within(src, dst)) throw codeError('source_inside_out');
+}
+
 // A new data directory for the previous release: every retained file of `from` copied byte for
 // byte (symlinks refused), without the platform database, migration journal and lock, snapshots
 // and the store's WAL files, then the store and secret from the authenticated snapshot.
 export function rollbackFromSnapshot({ snapshot, keyFile, key, from, out }) {
   const k = key ?? loadBackupKey(keyFile);
+  refuseNested(from, out);
   if (existsSync(out)) throw codeError('out_exists');
   let fromStat;
   try { fromStat = statSync(from); } catch { throw codeError('from_invalid'); }
