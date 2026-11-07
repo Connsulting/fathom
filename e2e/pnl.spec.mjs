@@ -16,6 +16,14 @@ const dlgRows = (page) => rowsDialog(page).locator('table[data-pl-dlg-rows] tr[d
 const catButton = (page, category, attrs) => page.locator(`[data-pl-table] tr[data-pl-row][data-pl-cat-row="${attr(category)}"]${attrs} th button.pl-cat[data-go="pnlrows"]`);
 const attr = (s) => String(s).replace(/["\\]/g, '\\$&');
 const r2 = (x) => Math.round(x * 100) / 100;
+const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const monthLabel = (m) => `${MON[Number(m.slice(5, 7)) - 1]} ${m.slice(0, 4)}`;
+// The page's range label: 'Jan 2032', 'Jan to Jun 2032' or 'Nov 2031 to Oct 2032'.
+function spanLabel(from, to) {
+  if (from === to) return monthLabel(from);
+  if (from.slice(0, 4) === to.slice(0, 4)) return `${MON[Number(from.slice(5, 7)) - 1]} to ${monthLabel(to)}`;
+  return `${monthLabel(from)} to ${monthLabel(to)}`;
+}
 
 async function getJson(request, path) {
   const res = await request.get(path);
@@ -231,13 +239,16 @@ test.describe('P&L view', () => {
 });
 
 // The rows dialog lists the rows behind the clicked category for the range (no month is selected
-// by default): its title is the category, its rows and their figures match the rows API, the count
-// line names the API's row count, and its total is the API's sum figure.
+// by default): its title is the category, its scope is the whole range (never one month), its rows
+// and their figures match the rows API for that range, the count line names the API's row count,
+// and its total is the API's sum figure.
 async function expectRows(page, request, path, query, category) {
   const dlg = rowsDialog(page);
+  expect(query.month, 'the whole range is asked for, not one month').toBeUndefined();
   await expect(dlg).toBeVisible();
   await expect(page).toHaveURL(/#\/pnlrows\//);
   await expect(dlg.locator('#h-dlg-t')).toHaveText(category);
+  await expect(dlg.locator('[data-pl-dlg-scope]')).toHaveText(spanLabel(query.from, query.to));
   await expect(dlgRows(page).first()).toBeVisible();
   const rows = await getJson(request, `${path}?${qs(query)}`);
   await expect(dlgRows(page)).toHaveCount(rows.items.length);
