@@ -1,6 +1,6 @@
 import { getSetting, parseJson as parse } from '../../store/db.mjs';
 import { loadContent, loadPacks, tokenScope, resolveClock, todayUtc, loadGoals, loadCurve, loadFigures, loadLinkedRecs, loadLinkedRec, housekeepingCount } from '../../scenario/build.mjs';
-import { horizonLabel } from '../../shared/goals.mjs';
+import { horizonLabel, personLabel } from '../../shared/goals.mjs';
 import { accountLabel } from '../../shared/account-label.mjs';
 import { accountNaming, relabelStoredFigure, withLabelHints } from '../../accounts/naming.mjs';
 import { OWNERS } from '../../shared/rec-links.mjs';
@@ -69,22 +69,45 @@ function recOutById(db, clock, id) {
   return recOut(tokenScope(db), loadLinkedRec(db, clock, recRow(db, id)));
 }
 
-// Goals as the model sees them: open goals only, owner text verbatim (seed text token-resolved),
-// the target the owner typed (provenance 'you') and the tracked current value when stored data
-// gives one. No number here is computed by the model.
+// Goals as the model sees them: every goal not archived (done goals say so in status), owner text
+// verbatim (seed text token-resolved), the kind, whose goal with its label, the priority, the
+// amounts as typed (provenance 'you' for owner goals, 'plan' for the demo's seed goals; an entered
+// contribution is always 'you') and the tracked current value when stored data gives one. status is
+// canonical (open or done); a seed goal's display text is statusLabel. No number here is computed by
+// the model; progress is get_pace's.
 function goalsForModel(db) {
   const scope = tokenScope(db);
   const fig = loadFigures(db);
   const accounts = withLabelHints(db, db.prepare('SELECT * FROM accounts').all());
   return loadGoals(db, { fig, accounts }).filter(g => !g.archived).map(g => {
     const owner = g.origin === 'owner';
+    const source = owner ? 'you' : 'plan';
     const text = v => (owner ? String(v ?? '') : resolveTokens(scope, String(v ?? ''), false));
+    const amount = v => (typeof v === 'number' && Number.isFinite(v) ? { amount: v, source } : null);
     const out = { id: g.id, title: text(g.title), horizon: horizonLabel(g.horizon) };
     const note = owner ? g.note : g.prose;
     if (note) out.note = text(note);
-    if (!owner && g.status) out.status = g.status;
+    if (g.status) out.status = g.status;
+    if (!owner && g.statusLabel) out.statusLabel = g.statusLabel;
+    out.kind = g.kind;
+    if (g.owner) { out.owner = g.owner; out.ownerLabel = personLabel(g.owner, scope.names); }
+    if (g.priority) out.priority = g.priority;
     if (owner && typeof g.target === 'number') out.target = { amount: g.target, source: 'you' };
     if (owner && g.targetDate) out.targetDate = g.targetDate;
+    if (g.kind === 'range' && amount(g.targetLow) && amount(g.targetHigh)) out.range = { low: amount(g.targetLow), high: amount(g.targetHigh) };
+    if (g.kind === 'floor' && amount(g.floor)) out.floor = amount(g.floor);
+    if (g.kind === 'contribution') {
+      if (!owner && amount(g.target)) out.target = amount(g.target);
+      const e = g.entered && typeof g.entered === 'object' ? g.entered : null;
+      out.contribution = {
+        taxYear: Number.isInteger(g.taxYear) ? g.taxYear : null,
+        deadline: g.targetDate || null,
+        accounts: g.accountsLabel ? text(g.accountsLabel) : null,
+        split: (Array.isArray(g.split) ? g.split : []).map(p => ({ person: p.person, label: personLabel(p.person, scope.names), amount: p.amount, source })),
+        entered: e ? { asOf: e.asOf, ...(typeof e.total === 'number' ? { total: e.total } : {}),
+          ...(Array.isArray(e.people) ? { people: e.people.map(p => ({ person: p.person, amount: p.amount })) } : {}), source: 'you' } : null,
+      };
+    }
     if (g.trackLabel) out.tracking = g.trackLabel;
     const cur = g.progress ? fig[g.progress.cur] : (g.current ? fig[g.current] : null);
     if (cur && typeof cur.v === 'number' && !cur.unavailable) out.current = { amount: cur.v, kind: cur.kind };
@@ -221,7 +244,7 @@ export const tools = [
   },
   {
     name: 'list_goals',
-    description: 'The open household goals in plain language: title, horizon, note, the target the owner typed and the tracked current value from stored data.',
+    description: 'The household goals not archived, in plain language: title, horizon, note, kind, whose goal, priority, status (open or done), the kind\'s amounts as typed (target, range ends, floor, contribution tax year, deadline, accounts, split and entered amount) and the tracked current value from stored data; use get_pace for progress.',
     inputSchema: obj(),
     scope: 'read',
     handler(args, ctx) {
