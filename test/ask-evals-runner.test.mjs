@@ -115,8 +115,8 @@ test('budget and unknown accounting stop on their originating case and start no 
 
 test('a corrective Ask retry receives fresh budget admission and stops before a second charge', async () => {
   const c = (await loadCases()).find(c => c.id === 'retirement-hsa-room');
-  const r = await runCases({ cases: [c], maxUsd: 1, scripts: () => [{ text: '$987654321', costUsd: 0.99 }] });
+  const r = await runCases({ cases: [c], maxUsd: 10, scripts: () => [{ text: '$987654321', costUsd: 9.99 }] });
   assert.equal(r.cases[0].status, 'budget-stopped');
-  assert.equal(r.costUsd, 0.99);
+  assert.equal(r.costUsd, 9.99);
   assert.equal(r.cases[0].turns[0].attempts.length, 2);
 });
