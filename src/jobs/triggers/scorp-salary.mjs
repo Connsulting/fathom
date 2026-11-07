@@ -1,9 +1,17 @@
 // S corp salary: the salary war game over the owner-approved range (S3, R6).
 
 import { isTrue, lastPayroll, mineOf, padTasks, confirmTasks, salaryProjKey, salaryKey } from './common.mjs';
+import { personOwner } from '../../shared/rec-links.mjs';
 
 export const id = 'scorp-salary';
 export const domain = 'business';
+// Goal kinds this rec serves (resolved to open goals at read time) and its default action owner.
+export const goalKinds = Object.freeze(['tax', 'retirement']);
+export const owner = 'you';
+// The person whose business the war game models; the confirm form (no model) keeps the static owner.
+export function ownerFor(ctx, hit) {
+  return hit && hit.person ? personOwner(hit.person) : owner;
+}
 export const trigger = 'income';
 export const packs = ['s-corp-owner'];
 export const gate = isTrue('income.sCorp');
@@ -19,7 +27,7 @@ export function evaluate(ctx) {
   if (ctx.info.blocked.length) return { blocked: ctx.info.blocked[0] };
   // The war game needs Virginia tax too; a Virginia gap is missing data, not a closed condition (S12).
   if (ctx.info.vaBlocked) return { blocked: ctx.info.vaBlocked };
-  if (ctx.model.salary) return { grounding: [salaryProjKey(ctx), 'scorp.profitProj', 'room.solo401k.employee', 'room.solo401k.employer'].filter(Boolean) };
+  if (ctx.model.salary) return { person: ctx.model.salary.person, grounding: [salaryProjKey(ctx), 'scorp.profitProj', 'room.solo401k.employee', 'room.solo401k.employer'].filter(Boolean) };
   if (ctx.info.confirm.salary) return { confirm: ctx.info.confirm.salary, grounding: [salaryKey(ctx)].filter(Boolean) };
   return null;
 }

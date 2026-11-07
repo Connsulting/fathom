@@ -148,7 +148,8 @@ function seedAdvisor(db, S, clock) {
     .run(DEMO_CHECKIN.date, DEMO_CHECKIN.time, DEMO_CHECKIN.lengthMin, `${clock}T08:00:00.000Z`);
 }
 
-const LIVE_REC_FIELDS = ['status', 'statusByDemo', 'window', 'waitingOn'];
+// Fields held in recs columns, not in the def (owner and goalKinds are recs.owner and recs.goal_kinds).
+const LIVE_REC_FIELDS = ['status', 'statusByDemo', 'window', 'waitingOn', 'owner', 'goalKinds'];
 
 function clearStore(db) {
   const tables = listTables(db).filter(t => t !== 'schema_migrations');
@@ -230,8 +231,9 @@ export function seedDemo(db) {
     const taxp = db.prepare('INSERT INTO tax_payments (jurisdiction, tax_year, date, amount, kind, file_id, parser, locator) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
     for (const p of ledger.taxPayments) taxp.run(p.jurisdiction, p.taxYear, p.date, p.amount, p.kind, ...prov(p.locator));
 
-    const rec = db.prepare(`INSERT INTO recs (id, def, status, waiting_on, wake, tasks_done, window_close, window_label, pack_id, sort, updated_at, file_id, parser, locator)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    const rec = db.prepare(`INSERT INTO recs (id, def, status, waiting_on, wake, tasks_done, window_close, window_label, pack_id, sort, updated_at, file_id, parser, locator,
+                              owner, goal_kinds)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
     S.recs.forEach((r, i) => {
       const def = { ...r, tasks: (r.tasks || []).map(({ done, ...t }) => t) };
       for (const k of LIVE_REC_FIELDS) delete def[k];
@@ -241,7 +243,7 @@ export function seedDemo(db) {
       const pack = S.packs.find(p => (p.recIds || []).includes(r.id));
       rec.run(r.id, JSON.stringify(def), status, r.waitingOn || null, r.wake || null,
         JSON.stringify((r.tasks || []).map(t => !!t.done)), days == null ? null : addDays(clock, days),
-        r.window ? r.window.label : null, pack ? pack.id : null, i, now, ...prov(`recs[${i}]`));
+        r.window ? r.window.label : null, pack ? pack.id : null, i, now, ...prov(`recs[${i}]`), r.owner, JSON.stringify(r.goalKinds));
     });
 
     const goal = db.prepare('INSERT INTO goals (id, def, sort) VALUES (?, ?, ?)');

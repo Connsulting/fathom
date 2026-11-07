@@ -14,6 +14,7 @@
 import { getSetting, setSetting, schemaVersion, tx, cents, parseJson as parse } from '../store/db.mjs';
 import { buildScenario, clockNow, loadContent, defaultPicks, wargameLists } from '../scenario/build.mjs';
 import { ACTION_STATUS, packStatus } from '../shared/rules.mjs';
+import { OWNERS, isOwner } from '../shared/rec-links.mjs';
 import { escapeUserText } from '../shared/tokens.mjs';
 import { wrapBlocks } from '../shared/answer-text.mjs';
 import { seedDemo } from '../../demo/seed.mjs';
@@ -128,6 +129,16 @@ export function recAction(ctx) {
     tx(db, () => {
       db.prepare('UPDATE recs SET tasks_done = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(next), nowIso(), id);
       recEvent(db, id, 'task', i, row.status, row.status);
+    });
+    return { scenario: scenarioOf(ctx) };
+  }
+
+  // The owner sets who acts on the rec; owner_override keeps the planner from changing it later.
+  if (action === 'owner') {
+    if (!isOwner(arg)) throw new HttpError(400, `owner must be one of ${OWNERS.join(', ')}`);
+    tx(db, () => {
+      db.prepare('UPDATE recs SET owner = ?, owner_override = 1, updated_at = ? WHERE id = ?').run(arg, nowIso(), id);
+      recEvent(db, id, 'owner', arg, row.status, row.status);
     });
     return { scenario: scenarioOf(ctx) };
   }

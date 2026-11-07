@@ -1,9 +1,17 @@
 // Invoice deferral: moving December invoices into January (S13, R16).
 
 import { isTrue, mineOf, padTasks, confirmTasks, keyMatching } from './common.mjs';
+import { personOwner } from '../../shared/rec-links.mjs';
 
 export const id = 'invoice-deferral';
 export const domain = 'business';
+// Goal kinds this rec serves (resolved to open goals at read time) and its default action owner.
+export const goalKinds = Object.freeze(['tax']);
+export const owner = 'you';
+// The person whose business the war game models; the confirm form (no model) keeps the static owner.
+export function ownerFor(ctx, hit) {
+  return hit && hit.person ? personOwner(hit.person) : owner;
+}
 export const trigger = 'calendar';
 export const packs = ['s-corp-owner', 'self-employed-partnership'];
 export const gate = { any: [isTrue('income.sCorp'), isTrue('income.selfEmployed')] };
@@ -20,7 +28,7 @@ export function evaluate(ctx) {
   // The war game needs Virginia tax too; a Virginia gap is missing data, not a closed condition (S12).
   if (ctx.info.vaBlocked) return { blocked: ctx.info.vaBlocked };
   if (ctx.model.deferral) {
-    return { grounding: ['wg.deferral.d100.tax2026', 'wg.deferral.d100.tax2027', 'wg.deferral.d100.decCash', 'wg.deferral.d100.need', 'cash.business'] };
+    return { person: ctx.model.deferral.person, grounding: ['wg.deferral.d100.tax2026', 'wg.deferral.d100.tax2027', 'wg.deferral.d100.decCash', 'wg.deferral.d100.need', 'cash.business'] };
   }
   if (ctx.info.confirm.deferral) return { confirm: ctx.info.confirm.deferral, grounding: [keyMatching(ctx, /^pnl\.[^.]+\.income$/)].filter(Boolean) };
   return null;

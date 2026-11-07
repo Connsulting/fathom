@@ -4,6 +4,9 @@ import { isTrue, mineOf, padTasks, yearOf, positive } from './common.mjs';
 
 export const id = 'charitable-bunching';
 export const domain = 'giving';
+// Goal kinds this rec serves (resolved to open goals at read time) and its default action owner.
+export const goalKinds = Object.freeze(['giving', 'tax']);
+export const owner = 'both';
 export const trigger = 'goal';
 export const packs = ['charitable-giving'];
 export const gate = isTrue('giving.charitable');

@@ -60,6 +60,7 @@
 
 import { money, resolveTokens, esc, KIND_WORDS } from '/shared/tokens.mjs';
 import { needsYou as needsYouOf, packStatus } from '/shared/rules.mjs';
+import { isOwner } from '/shared/rec-links.mjs';
 
 const ROUTES = new Set(['onboarding', 'brief', 'plan', 'rec', 'ask', 'wargame', 'goals', 'accounts',
   'advisor', 'yearend', 'connect', 'engine', 'email', 'packs', 'confirm', 'add']);
@@ -618,6 +619,10 @@ function act(recId, action, arg) {
     const i = Number(arg);
     if (!Number.isInteger(i) || i < 0 || i >= arr(r.tasks).length) return done();
     body.arg = i;
+  } else if (action === 'owner') {
+    // Who acts on the rec; the server records it as an owner override.
+    if (!isOwner(arg)) return done();
+    body.arg = arg;
   } else {
     if (!ACTIONS.has(action)) return done();
     if (action === 'snooze') body.arg = arg != null && arg !== '' ? String(arg) : 'Next month';

@@ -191,14 +191,15 @@ recommendation status.
 | `query_transactions` | read | `accountId?, from?, to?, minAmount?, maxAmount?, category?, text?, limit? (1..200, default 50)` | `{rows: [{id, accountId, date, amount, description, category}], truncated, total}` |
 | `list_positions` | read | `accountId?` | `[{accountId, symbol, name, quantity, price, value, costBasis, asOf}]` |
 | `pnl_by_month` | read | `entity?, from?: 'YYYY-MM', to?` | `{rows: [{period, category, amount}], totals: {period: n}}` |
-| `list_recommendations` | read | `status?: string or string[]` | live recs, never hidden |
-| `get_recommendation` | read | `id` | the live rec |
+| `list_recommendations` | read | `status?: string or string[]` | live recs, never hidden, each with `owner`, `ownerOverride`, `goalKinds`, `serves: [{id, title, origin}]` and `housekeeping` |
+| `get_recommendation` | read | `id` | the live rec, linked the same way |
 | `list_deadlines` | read | `from?, to?` | `[{date, label, title, recId, hard}]` sorted by date |
 | `list_goals` | read | none | goals |
 | `get_figures` | read | `keys?: string[]` | `[{key, v, kind, label, source: {id, label, asOf}}]` |
 | `packs_status` | read | none | `[{id, name, status, why}]` |
 | `advisor_status` | read | none | `{advisor, nextCheckin: {date, time, lengthMin, label} or null, waiting: [{recId, title, sentOn}], reviewed: [{recId, title, sentOn, verdict, note, reviewedOn, recordedOn}], history (closed reviews with closedOn, closedReason), packets: [{id, date, recIds}]}` (see "Advisor workflow") |
-| `set_recommendation_status` | write:recs | `id, status: doing, done, dismissed, snoozed or proposed, wake?` | the rec; writes `rec_events` with actor `tool` |
+| `set_recommendation_status` | write:recs | `id, status: doing, done, dismissed, snoozed or proposed, wake?` | the linked rec; writes `rec_events` with actor `tool` |
+| `set_recommendation_owner` | write:recs | `id, owner: you, spouse, both, advisor or automatic` | the linked rec; sets `owner` and `owner_override = 1`, writes `rec_events` action `set_owner`, actor `tool`, from and to the current status |
 | `list_packs` | read | none | `[{id, name, status, why, version, taxYear, reviewed, covers, entries: [{file, title}]}]` sorted by id |
 | `get_pack_entry` | read | `packId, file` (the manifest file or the entry id) | `{packId, packName, file, id, title, markdown, citations: [{label, url}], version, taxYear, reviewed}`; any loaded pack, active or not |
 | `search_pack_entries` | read | `query (2..200 chars), packId?, limit? (1..20, default 10)` | `{results: [{packId, file, id, title, score, snippet}], total, truncated}` over active packs only (the query is not echoed) |
@@ -323,7 +324,7 @@ Money columns are dollars rounded to cents; JSON columns hold JSON text. The pro
 | `tax_payments` | `id` PK, `jurisdiction`, `tax_year`, `date`, `amount`, `kind` (the row's payment kind), `dedupe_key` (unique when set), `source_slot`, `payer`, `date_precision`, `tax_year_basis`, `recipient` (withholding: `owner`, `spouse` or `unknown`, the last segment of its `wh:` slot; NULL for workbook rows), provenance |
 | `documents` | `id` PK, `doc_type`, `tax_year`, `fields` JSON (extracted values only; a `notes` document holds the reference `{ref, sha256, chars, lines}`, never the text), `dedupe_key` (unique when set), provenance |
 | `figures` | `key` PK, `v`, `src` (references `sources.id`), `kind` in a, p, e, m, `label`, provenance, `updated_at` |
-| `recs` | `id` PK, `def` JSON (the CONTRACT rec minus live fields), `status`, `waiting_on`, `wake`, `tasks_done` JSON, `window_close` ISO date, `window_label`, `pack_id`, `sort`, `updated_at`, provenance |
+| `recs` | `id` PK, `def` JSON (the CONTRACT rec minus live fields), `status`, `waiting_on`, `wake`, `tasks_done` JSON, `window_close` ISO date, `window_label`, `pack_id`, `sort`, `updated_at`, provenance, `owner` (`you`, `spouse`, `both`, `advisor` or `automatic`, default `you`), `owner_override` (0 or 1: 1 once the owner set it), `goal_kinds` JSON array of goal topics (default `[]`); see "Rec owner and goal links" |
 | `rec_events` | `id` PK, `rec_id`, `ts`, `action`, `arg`, `from_status`, `to_status`, `actor` (`ui`, `tool`, ...) |
 | `conversations` | `key` PK (an Ask thread `ask:<12 lowercase hex>` or `pack:<id>`), `created_at`, `last_at` (newest message time, else `created_at`), and for Ask threads `title` (NULL until named), `title_source` (NULL, `auto` or `manual`), `archived_at`, `trashed_at` (migration 008; app clock ISO times), `rec_id` (the rec a thread was asked from, a context reference, never a foreign key) and `rec_detached_at` (set by Start over) (migration 016) |
 | `messages` | `id` PK, `conversation_key`, `role` in me, fathom, advisor, claude, `text` (token-bearing HTML), `refs` JSON, `notice`, `ts`, `provenance` JSON or NULL (migration 006; see "Answer provenance") |
@@ -415,6 +416,17 @@ Migration 017 (`017-confirm-context.sql`) creates `account_holders`, `confirm_au
 new column on `accounts` or `confirm_items` would make every stored undo log, which holds
 whole-row images, fail its revert.
 
+Migration 019 (`019-rec-owner-goal-links.sql`) adds `recs.owner`, `recs.owner_override` and
+`recs.goal_kinds` with `ALTER TABLE ADD COLUMN` (constant defaults and CHECKs, no rebuild). 018 is
+reserved for the in-flight auth migration; a store at 017 applies 019 now and 018 when it lands.
+The backfill is deterministic: a planner rec (in `planner_recs`) takes its trigger's static
+`goalKinds` and `owner`, a demo seed rec (parser `demo-seed`, not planner) takes the demo
+scenario's, anything else keeps the defaults (housekeeping, owner `you`). SQL cannot run a
+trigger's `ownerFor`, so a contextual owner (for example the spouse's solo plan) settles at the next
+planning run, which applies it because `owner_override` stays 0. Statuses, defs, tasks, events,
+planner bookkeeping and advisor rows are untouched. `test/store-rec-owner-migration.test.mjs`
+checks the SQL against the trigger modules and the demo scenario.
+
 ### Adding a migration
 
 1. Add `src/store/migrations/NNN-name.sql` with the next number (three digits, no gaps, lowercase
@@ -499,6 +511,7 @@ live = {
   yourPlans: { sources: [ { fileId, name, docType } ], files: [ { id, name } ], built: settings.yourPlans | null },
   clock: 'YYYY-MM-DD',
   heard: { sections: [ { id, title, items: [ heard item ] } ], deadlines: int, pending: int, empty: boolean },  // see Onboarding below
+  housekeeping: int,                    // recs with housekeeping true that are not hidden, done or dismissed
   ingest: {
     pending: int,                       // pending confirm items
     items: [ confirm item ],            // pending items, shape below, plus fileName (string or null) and
@@ -658,7 +671,7 @@ response is `{scenario, ...}` with the fresh scenario.
 | `GET /api/scenario` | | the scenario with `live` |
 | `GET /api/identity` | | `{identity: {login, name} or null}`. The admitted owner: `login` is the trimmed `Tailscale-User-Login`, `name` the trimmed `Tailscale-User-Name` or else the login. Always `null` on a demo store. |
 | `POST /api/recs/:id/start-over` | `{}` | `{scenario}`. Detaches every thread asked from the rec that is still attached (sets `recDetachedAt` to the app clock time), so the rec dialog opens a fresh composer; an already detached thread keeps its time. Threads, messages, titles, archive and trash are untouched. 404 unknown or hidden rec. |
-| `POST /api/recs/:id/action` | `{action: start, snooze, dismiss, complete, reopen or task, arg?}` | `{scenario}`. `task` toggles task `arg`; `snooze` takes a wake label (default "Next month"). 400 bad action or task index, 404 unknown or hidden rec. Writes `rec_events` (actor `ui`). |
+| `POST /api/recs/:id/action` | `{action: start, snooze, dismiss, complete, reopen, task or owner, arg?}` | `{scenario}`. `task` toggles task `arg`; `snooze` takes a wake label (default "Next month"); `owner` sets the action owner to `arg` (one of `you`, `spouse`, `both`, `advisor`, `automatic`, case sensitive) with `owner_override = 1`, status unchanged. 400 bad action, task index or owner, 404 unknown or hidden rec. Writes `rec_events` (actor `ui`; for `owner` action `owner`, arg the owner, from and to the current status). |
 | `POST /api/wargame/:name/pick` | `{index}` (an index or an option id) | `{scenario}`. `name` is salary or deferral (404 otherwise); 400 out of range. |
 | `POST /api/decisions/:id/decide` | `{index?}` (a point index or id; default the stored pick) | `{scenario}`. Decide on the picked point of an open salary or deferral decision: status becomes decided and `decided_line` is built from the point's own label plus `{f:...}` tokens for the `wg.*` figures the registry holds (provenance stays on the figures). Records the pick in `wargame.picks`, writes the owner-stated assumption fact (`business.salaryDecided` = `{entity, salary}`, the S corp the game was built for and the point's `wg.salary.<id>.salary` value, or `business.deferralDecided` = `{option, amount}`; src `decide:salary` or `decide:deferral`, confirmed, locator names the decision and the figure), logs a `decide` rec event on the linked rec and schedules the plan job (trigger `decide`) on a real store. 404 unknown id, 400 no war game or bad index, 409 already decided, not open, upcoming or unavailable. |
 | `POST /api/decisions/:id/revisit` | `{}` | `{scenario}`. Reopens a decision decided that way: status open, `decided_line` cleared, the assumption fact deleted, a `revisit` rec event, plan job scheduled. 409 for a decision that is not decided with a stored choice. |
@@ -796,7 +809,7 @@ and JSON responses, closed when the response closes. Checks run in this order:
 5. The key's `last_used_at` is stamped, then the request runs with
    `ctx = {db, now, dataDir, clock}`.
 
-Scopes: `read` (every read tool) and `write:recs` (adds `set_recommendation_status`); every key
+Scopes: `read` (every read tool) and `write:recs` (adds `set_recommendation_status` and `set_recommendation_owner`); every key
 has `read`. `tools/list` returns only the key's tools, annotated `readOnlyHint` for read tools and
 `destructiveHint: false`, `openWorldHint: false`. Calling a registry tool outside the key's scopes
 returns an `isError` result `Permission denied: <name> needs the <scope> scope, which this key
@@ -1916,13 +1929,81 @@ onboarding Priorities step shows the same axes and saves to the same setting.
 
 Goals and positions feed the planner and chat. `servesGoals` matches a rec to open goals by topic
 (retirement, education, cash, tax, giving, health, home) from the goal's words, kind and tracked
-sources and the rec's domain, value classes and id; the scenario sets `rec.serves` and the rec
-shows "Serves: <goal>". The planner ranks recs that tie on window close by whether they serve a
+sources and the rec's `goalKinds` (see "Rec owner and goal links"); the scenario sets `rec.serves`
+and the rec shows "Serves: <goal>". The planner ranks recs that tie on window close by whether they serve a
 goal, then by the owner's curve lean. `household_summary` and `list_goals` give the model the open
 goals (title, horizon, typed target with source `you`, tracked current value) and each curve's lean.
 In an Ask thread with no rec context the answerer also offers `propose_goal`; its last successful call becomes
 `provenance.goalProposal`, a target survives only when the owner's own message states it, and the
 chat card saves it through `POST /api/goals` when the owner taps Save. Chat never writes.
+
+## Rec owner and goal links
+
+Every rec has an action owner and either serves at least one open goal or is housekeeping
+(`recLinkError` in `src/shared/rec-links.mjs` is the rule; `OWNERS` and `OWNER_LABEL` live there too).
+
+Links are stored as goal kinds (`recs.goal_kinds`, the goal topics) and resolved at read time:
+`linkRecs` in `src/scenario/build.mjs` sets `rec.serves` (always an array, from `servesGoals` over
+the current open goals, specific topics before tax, at most three) and `rec.housekeeping`
+(`serves` is empty) on every rec. Adding or archiving a goal relinks at once, with no planning
+run. A rec's topics are exactly its `goalKinds`; a done goal does not link. `recFromRow` adds
+`owner`, `ownerOverride` (boolean) and `goalKinds`. `live.housekeeping` and `household_summary`
+`housekeepingCount` count open housekeeping recs (not hidden, done or dismissed). MCP rec tools
+return linked recs; an owner goal's title in `serves` stays literal (seed titles are resolved),
+as in `list_goals`.
+
+Planner recs take `goalKinds` and `owner` from their trigger (`src/jobs/triggers/*.mjs` exports
+`goalKinds`, `owner` and, where the owner depends on the household, `ownerFor(ctx, hit)`; `recOf`
+applies them). `applyRecs` rewrites `goal_kinds` every run and `owner` only while
+`owner_override = 0`, so an owner-set owner survives every later run, including retire then
+revive and block then unblock.
+
+| Trigger | Goal kinds | Static owner | `ownerFor` |
+|---|---|---|---|
+| fed-q4-estimate | tax | you | none |
+| va-q4-estimate | tax | you | none |
+| year-end-retirement | retirement, tax | you | the solo plan person (`info.solo.person`); none: static |
+| solo401k-setup | retirement | you | the solo plan person (`info.solo.person`); none: static |
+| scorp-salary | tax, retirement | you | the S corp owner the salary war game models (`model.salary.person`); the confirm form: static |
+| invoice-deferral | tax | you | the business owner the deferral war game models (`model.deferral.person`); the confirm form: static |
+| hsa-room | health, retirement, tax | you | none |
+| va529 | education, tax | both | none |
+| charitable-bunching | giving, tax | both | none |
+| backdoor-roth | retirement | you | people with room or basis: both is `both`, only the spouse is `spouse`, else `you` |
+| dependent-care-fsa | tax, cash | both | none |
+| new-child | cash, health | both | none |
+| missing-data | none (always housekeeping) | you | none |
+
+A person maps to an owner with `personOwner`: `spouse` is `spouse`, anyone else `you`.
+
+Demo recs name `goalKinds` and `owner` in `demo/scenario.mjs` (and the mock scenario); the seed
+writes them to the columns, not the def.
+
+| Demo rec | Goal kinds | Owner |
+|---|---|---|
+| offcycle | retirement, tax | you |
+| deferral | tax, cash | you |
+| dcfsa | tax | both |
+| va529 | education, tax | both |
+| vaq4 | tax | you |
+| reserve | cash, tax | automatic |
+| spsep | retirement, tax | spouse |
+| hsa | health, retirement, tax | you |
+| backdoor | retirement | you |
+| spouseentity | tax | spouse |
+| babyprep | cash, health | both |
+| umbrella | none | both |
+| compmemo | tax | advisor |
+| filingplan | none | both |
+| mortgage | home | both |
+| q3 | tax | automatic |
+| megabackdoor | retirement | advisor |
+| daf | giving, tax | both |
+
+The owner changes it through `POST /api/recs/:id/action` `{action: 'owner', arg}` (the rec
+dialog's "Action owner" select in the meta row) or the MCP `set_recommendation_owner` tool. The
+dialog reads "Serves: <goals>" or, for a housekeeping rec, "Housekeeping"; plan rows show the
+serves line only.
 
 ## Bank connections
 

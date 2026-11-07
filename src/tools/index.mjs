@@ -2,19 +2,22 @@
 // Each tool: { name, description, inputSchema (JSON Schema subset), scope: 'read'|'write:recs',
 // handler(args, ctx) } with ctx = { db, now } (pack tools also read optional packDirs, dataDir;
 // see ./packs.mjs). callTool validates args against inputSchema and
-// throws ToolError ('bad_input' | 'not_found'). The only write is recommendation status.
+// throws ToolError ('bad_input' | 'not_found'). The only writes are a recommendation's status and
+// its action owner.
 //
 // Outputs resolve scenario tokens to plain text, carry masks only (never account numbers), and
-// never include hidden recs.
+// never include hidden recs. Recs carry their goal links (serves, housekeeping) and action owner;
+// an owner goal's title in serves is the owner's own text, kept literal as in goalsForModel.
 
 import { getSetting, tx, cents, parseJson as parse } from '../store/db.mjs';
-import { loadRecs, loadContent, loadPacks, tokenScope, recFromRow, resolveClock, todayUtc, loadGoals, loadCurve, loadFigures } from '../scenario/build.mjs';
+import { loadContent, loadPacks, tokenScope, resolveClock, todayUtc, loadGoals, loadCurve, loadFigures, loadLinkedRecs, housekeepingCount } from '../scenario/build.mjs';
 import { horizonLabel } from '../shared/goals.mjs';
+import { OWNERS } from '../shared/rec-links.mjs';
 import { needsYou, verdictLevel, packStatus, STATUSES } from '../shared/rules.mjs';
 import { resolveTokens } from '../shared/tokens.mjs';
 import { ToolError } from './errors.mjs';
 import { packTools } from './packs.mjs';
-import { withAdvisor, advisorStatus } from '../advisor/index.mjs';
+import { advisorStatus } from '../advisor/index.mjs';
 
 export { ToolError };
 export { packDirsFor } from './packs.mjs';
@@ -122,6 +125,21 @@ function recRow(db, id) {
   return row;
 }
 
+// A linked rec as the model sees it: rec text token-resolved, goal titles in serves resolved only
+// for seed goals (owner text stays literal).
+function recOut(scope, rec) {
+  const { serves, ...rest } = rec;
+  const out = plainDeep(scope, rest);
+  out.serves = serves.map(g => ({ id: g.id, title: g.origin === 'owner' ? String(g.title ?? '') : resolveTokens(scope, String(g.title ?? ''), false), origin: g.origin }));
+  return out;
+}
+
+// One visible rec, linked, for the model.
+function recOutById(db, clock, id) {
+  recRow(db, id);
+  return recOut(tokenScope(db), loadLinkedRecs(db, clock).find(r => r.id === id));
+}
+
 // Goals as the model sees them: open goals only, owner text verbatim (seed text token-resolved),
 // the target the owner typed (provenance 'you') and the tracked current value when stored data
 // gives one. No number here is computed by the model.
@@ -162,12 +180,12 @@ function curveForModel(db) {
 export const tools = [
   {
     name: 'household_summary',
-    description: 'Household overview: confirmed facts, the verdict (clear or attention), how many recommendations need the owner now, counts by status, the data-through date, today, the open goals (title, horizon, target the owner typed, tracked current value) and where the owner sits on each tradeoff curve.',
+    description: 'Household overview: confirmed facts, the verdict (clear or attention), how many recommendations need the owner now, counts by status, how many open recommendations are housekeeping (serve no goal), the data-through date, today, the open goals (title, horizon, target the owner typed, tracked current value) and where the owner sits on each tradeoff curve.',
     inputSchema: obj(),
     scope: 'read',
     handler(args, ctx) {
       const clock = clockOf(ctx);
-      const recs = visible(loadRecs(ctx.db, clock));
+      const recs = visible(loadLinkedRecs(ctx.db, clock));
       const statusCounts = {};
       for (const r of recs) statusCounts[r.status] = (statusCounts[r.status] || 0) + 1;
       const facts = {};
@@ -178,6 +196,7 @@ export const tools = [
         verdictLevel: verdictLevel(recs),
         needsYouCount: needsYou(recs).length,
         statusCounts,
+        housekeepingCount: housekeepingCount(recs),
         dataThrough: meta.dataThrough || '',
         clock,
         goals: goalsForModel(ctx.db),
@@ -279,7 +298,7 @@ export const tools = [
   },
   {
     name: 'list_recommendations',
-    description: 'Recommendations with live status, window and tasks. Optionally only the given status or statuses. Hidden recommendations are never listed.',
+    description: 'Recommendations with live status, window, tasks, action owner (you, spouse, both, advisor, automatic) and the open goals each serves (housekeeping when none). Optionally only the given status or statuses. Hidden recommendations are never listed.',
     inputSchema: obj({
       status: {
         anyOf: [
@@ -293,17 +312,16 @@ export const tools = [
       if (typeof args.status === 'string' && !STATUSES.includes(args.status)) throw new ToolError('bad_input', 'args.status is not a status');
       const want = args.status === undefined ? null : new Set([].concat(args.status));
       const scope = tokenScope(ctx.db);
-      return visible(loadRecs(ctx.db, clockOf(ctx))).filter(r => !want || want.has(r.status)).map(r => plainDeep(scope, r));
+      return visible(loadLinkedRecs(ctx.db, clockOf(ctx))).filter(r => !want || want.has(r.status)).map(r => recOut(scope, r));
     },
   },
   {
     name: 'get_recommendation',
-    description: 'One recommendation by id, with live status, window, tasks, why-now, figures and knowledge-pack excerpts.',
+    description: 'One recommendation by id, with live status, window, tasks, why-now, figures, knowledge-pack excerpts, action owner and the open goals it serves.',
     inputSchema: obj({ id: { type: 'string', minLength: 1 } }, ['id']),
     scope: 'read',
     handler(args, ctx) {
-      const row = recRow(ctx.db, args.id);
-      return plainDeep(tokenScope(ctx.db), withAdvisor(ctx.db, [recFromRow(row, clockOf(ctx))])[0]);
+      return recOutById(ctx.db, clockOf(ctx), args.id);
     },
   },
   {
@@ -376,7 +394,27 @@ export const tools = [
         db.prepare(`INSERT INTO rec_events (rec_id, ts, action, arg, from_status, to_status, actor)
                     VALUES (?, ?, 'set_status', ?, ?, ?, 'tool')`).run(args.id, ts, args.wake == null ? null : args.wake, row.status, args.status);
       });
-      return plainDeep(tokenScope(db), withAdvisor(db, [recFromRow(recRow(db, args.id), clockOf(ctx))])[0]);
+      return recOutById(db, clockOf(ctx), args.id);
+    },
+  },
+  {
+    name: 'set_recommendation_owner',
+    description: 'Set who acts on a recommendation: you, spouse, both, advisor or automatic. The planner keeps an owner set this way. Recorded in the rec history as a tool change.',
+    inputSchema: obj({
+      id: { type: 'string', minLength: 1 },
+      owner: { type: 'string', enum: [...OWNERS] },
+    }, ['id', 'owner']),
+    scope: 'write:recs',
+    handler(args, ctx) {
+      const db = ctx.db;
+      const row = recRow(db, args.id);
+      const ts = nowOf(ctx).toISOString();
+      tx(db, () => {
+        db.prepare('UPDATE recs SET owner = ?, owner_override = 1, updated_at = ? WHERE id = ?').run(args.owner, ts, args.id);
+        db.prepare(`INSERT INTO rec_events (rec_id, ts, action, arg, from_status, to_status, actor)
+                    VALUES (?, ?, 'set_owner', ?, ?, ?, 'tool')`).run(args.id, ts, args.owner, row.status, row.status);
+      });
+      return recOutById(db, clockOf(ctx), args.id);
     },
   },
   {

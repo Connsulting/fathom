@@ -961,6 +961,8 @@ window.FATHOM_SCENARIO = {
   "recs": [
     {
       "id": "offcycle",
+      "goalKinds": ["retirement", "tax"],
+      "owner": "you",
       "title": "Run the off-cycle payroll that carries your 401(k) deferral",
       "summary": "Your {l:deferral} Solo 401(k) deferral can only come out of W-2 wages paid by Dec 31, and none of it has been withheld yet.",
       "trigger": "calendar",
@@ -1072,6 +1074,8 @@ window.FATHOM_SCENARIO = {
     },
     {
       "id": "deferral",
+      "goalKinds": ["tax", "cash"],
+      "owner": "you",
       "title": "Decide how much fixed-fee work to invoice before January",
       "summary": "Billing {f:fixed_fee} in January instead of December saves about {f:defer_net} across two years and moves cash into the unpaid leave, but it squeezes December payroll cash.",
       "trigger": "life",
@@ -1173,6 +1177,8 @@ window.FATHOM_SCENARIO = {
     },
     {
       "id": "dcfsa",
+      "goalKinds": ["tax"],
+      "owner": "both",
       "title": "Elect a Dependent Care FSA at open enrollment",
       "summary": "You paid {f:childcare_yr} for childcare in the last year and we do not see a Dependent Care FSA. A full {l:dcfsa} election saves about {f:dcfsa_save}.",
       "trigger": "life",
@@ -1268,6 +1274,8 @@ window.FATHOM_SCENARIO = {
     },
     {
       "id": "va529",
+      "goalKinds": ["education", "tax"],
+      "owner": "both",
       "title": "Put {l:va529_deduction} into the 529 before Dec 31",
       "summary": "Virginia deducts up to {l:va529_deduction} per account per year. The account holds {f:plan529} today.",
       "trigger": "calendar",
@@ -1341,6 +1349,8 @@ window.FATHOM_SCENARIO = {
     },
     {
       "id": "vaq4",
+      "goalKinds": ["tax"],
+      "owner": "you",
       "title": "Pay the Virginia Q4 estimate in December, not January",
       "summary": "Paying the {f:vaq4_amt} Virginia estimate by Dec 31 lands it in 2026, when you still itemize. In 2027 you likely take the standard deduction and it is worth nothing.",
       "trigger": "calendar",
@@ -1399,6 +1409,8 @@ window.FATHOM_SCENARIO = {
     },
     {
       "id": "reserve",
+      "goalKinds": ["cash", "tax"],
+      "owner": "automatic",
       "title": "Keep the January and April tax money in personal checking",
       "summary": "Earmark {f:jan_est} for Jan 15 and {f:april_due} for the April balance. Safe harbor is met, so holding the cash costs nothing.",
       "trigger": "income",
@@ -1466,6 +1478,8 @@ window.FATHOM_SCENARIO = {
     },
     {
       "id": "spsep",
+      "goalKinds": ["retirement", "tax"],
+      "owner": "spouse",
       "title": "{n:spouse}’s SEP: fund the maximum in January",
       "summary": "Her SEP is about {f:sp_sep} once her K-1 net is known. Every dollar comes off income in the phase-in zone.",
       "trigger": "calendar",
@@ -1534,6 +1548,8 @@ window.FATHOM_SCENARIO = {
     },
     {
       "id": "hsa",
+      "goalKinds": ["health", "retirement", "tax"],
+      "owner": "you",
       "title": "Top up the HSA by April 15",
       "summary": "{f:hsa_left} of family HSA room left for 2026.",
       "trigger": "calendar",
@@ -1588,6 +1604,8 @@ window.FATHOM_SCENARIO = {
     },
     {
       "id": "backdoor",
+      "goalKinds": ["retirement"],
+      "owner": "you",
       "title": "Clear your pre-tax IRAs, then do a backdoor Roth",
       "summary": "Rolling {f:my_pretax} of pre-tax IRA money into the Solo 401(k) clears the pro-rata trap and opens {l:ira_limit} a year of Roth.",
       "trigger": "advisor",
@@ -1666,6 +1684,8 @@ window.FATHOM_SCENARIO = {
     },
     {
       "id": "spouseentity",
+      "goalKinds": ["tax"],
+      "owner": "spouse",
       "title": "Decide whether {n:spouse}’s new LLC should be an S corp",
       "summary": "At full-year income an S election saves about {f:scorp_save_full}. In a leave year it is closer to {f:scorp_save_leave}, and it adds payroll.",
       "trigger": "life",
@@ -1734,6 +1754,8 @@ window.FATHOM_SCENARIO = {
     },
     {
       "id": "babyprep",
+      "goalKinds": ["cash", "health"],
+      "owner": "both",
       "title": "Get ready for the second child",
       "summary": "Beneficiaries, life insurance, wills and guardianship, a second 529, and the dependent on the W-4s.",
       "trigger": "life",
@@ -1801,6 +1823,8 @@ window.FATHOM_SCENARIO = {
     },
     {
       "id": "umbrella",
+      "goalKinds": [],
+      "owner": "both",
       "title": "Add a 1 to 2 million umbrella policy",
       "summary": "About {f:umbrella_lo} to {f:umbrella_hi} a year against a net worth near {f:net_worth}.",
       "trigger": "life",
@@ -1851,6 +1875,8 @@ window.FATHOM_SCENARIO = {
     },
     {
       "id": "compmemo",
+      "goalKinds": ["tax"],
+      "owner": "advisor",
       "title": "Write the reasonable compensation memo",
       "summary": "Your {f:salary} salary is about {p:comp_ratio} of billings now. A one-page memo with comparable rates, hours and duties is your defense.",
       "trigger": "income",
@@ -1915,6 +1941,8 @@ window.FATHOM_SCENARIO = {
     },
     {
       "id": "filingplan",
+      "goalKinds": [],
+      "owner": "both",
       "title": "Decide who files the 2026 returns",
       "summary": "No CPA right now. Review-only hours cost {f:review_lo} to {f:review_hi}, not the {f:cpa_full} of a full relationship.",
       "trigger": "calendar",
@@ -1963,6 +1991,8 @@ window.FATHOM_SCENARIO = {
     },
     {
       "id": "mortgage",
+      "goalKinds": ["home"],
+      "owner": "both",
       "title": "Pay off the mortgage",
       "summary": "Done Aug 7, ten months early.",
       "trigger": "goal",
@@ -1997,6 +2027,8 @@ window.FATHOM_SCENARIO = {
     },
     {
       "id": "q3",
+      "goalKinds": ["tax"],
+      "owner": "automatic",
       "title": "Pay Q3 estimates",
       "summary": "Paid Aug 26 and Aug 28, matched in the mirror.",
       "trigger": "calendar",
@@ -2035,6 +2067,8 @@ window.FATHOM_SCENARIO = {
     },
     {
       "id": "megabackdoor",
+      "goalKinds": ["retirement"],
+      "owner": "advisor",
       "title": "Mega backdoor Roth",
       "summary": "Vetoed by your advisor.",
       "trigger": "advisor",
@@ -2062,6 +2096,8 @@ window.FATHOM_SCENARIO = {
     },
     {
       "id": "daf",
+      "goalKinds": ["giving", "tax"],
+      "owner": "both",
       "title": "Bunch giving into a donor-advised fund with appreciated stock",
       "summary": "Giving appreciated shares instead of cash avoids the gain and gets the deduction, in a year you still itemize.",
       "trigger": "goal",

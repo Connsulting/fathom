@@ -38,12 +38,15 @@ function excerpts(ctx, t) {
   return t.kb.filter(k => loaded.has(k.pack)).map(k => kbExcerpt(ctx.packs, k.pack, k.entry)).filter(Boolean);
 }
 
-// The CONTRACT rec without prose (summary, why, qa come from prose.mjs).
+// The CONTRACT rec without prose (summary, why, qa come from prose.mjs), plus the trigger's goal
+// kinds and default action owner (ownerFor when the owner depends on the household). Both are
+// stored in recs columns, not in the def.
 function recOf(ctx, t, hit, window) {
   const b = t.build(ctx, hit);
   const rec = {
     id: t.id, title: b.title, trigger: t.trigger, triggerText: b.triggerText || triggerText(t, window), domain: t.domain,
     effort: b.effort, advisor: null, value: b.value, mine: b.mine, kb: excerpts(ctx, t), cross: (b.cross || []).slice(0, 2), tasks: b.tasks,
+    goalKinds: [...t.goalKinds], owner: typeof t.ownerFor === 'function' ? t.ownerFor(ctx, hit) : t.owner,
   };
   if (b.scenario) rec.scenario = b.scenario;
   return rec;

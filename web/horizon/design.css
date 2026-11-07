@@ -918,6 +918,10 @@ a.h-dec-t:hover { color: var(--ac2); }
 .d-horizon .h-serves { color: var(--tx2); }
 .d-horizon .h-serves a { color: var(--ac); text-decoration: none; }
 .d-horizon .h-serves a:hover { text-decoration: underline; }
+.d-horizon .h-serves.h-hk { color: var(--mu); }
+.d-horizon .h-owner { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }
+.d-horizon .h-owner select { min-width: 0; max-width: 100%; background: var(--bg); color: var(--tx); border: 1px solid var(--line2); border-radius: 6px; font: inherit; font-size: 12.5px; padding: 2px 6px; color-scheme: dark; }
+.d-horizon .h-owner select:focus-visible { outline: none; border-color: var(--ac); }
 .d-horizon .h-goal-proposal .h-mute { font-size: 12.5px; }
 @media (max-width: 560px) {
   .d-horizon .h-gform { padding: 14px; }

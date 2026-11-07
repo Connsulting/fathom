@@ -4,6 +4,15 @@ import { isTrue, mineOf, padTasks } from './common.mjs';
 
 export const id = 'backdoor-roth';
 export const domain = 'retirement';
+// Goal kinds this rec serves (resolved to open goals at read time) and its default action owner.
+export const goalKinds = Object.freeze(['retirement']);
+export const owner = 'you';
+// Whoever acts (room or after-tax basis): both people is Both, only the spouse is Spouse, else You.
+export function ownerFor(ctx, hit) {
+  const acting = new Set((hit && Array.isArray(hit.people) ? hit.people : []).filter(p => p.room || p.basis).map(p => p.person));
+  if (acting.has('spouse')) return acting.has('owner') ? 'both' : 'spouse';
+  return 'you';
+}
 export const trigger = 'goal';
 export const packs = ['advanced-retirement'];
 export const gate = isTrue('retirement.backdoorRothCandidate');

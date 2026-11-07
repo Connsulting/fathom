@@ -155,6 +155,9 @@ export function recFromRow(row, clock) {
   };
   if (row.wake != null) rec.wake = row.wake; else delete rec.wake;
   if (row.waiting_on != null) rec.waitingOn = row.waiting_on; else delete rec.waitingOn;
+  rec.owner = row.owner;
+  rec.ownerOverride = row.owner_override === 1;
+  rec.goalKinds = arr(parse(row.goal_kinds, []));
   return rec;
 }
 
@@ -162,6 +165,27 @@ export function recFromRow(row, clock) {
 // Each rec's `advisor` field comes from the advisor tables (src/advisor), never from its def.
 export function loadRecs(db, clock) {
   return withAdvisor(db, db.prepare('SELECT * FROM recs ORDER BY sort, id').all().map(r => recFromRow(r, clock)));
+}
+
+// Goal links, resolved at read time against the current goals (stored goal kinds -> open goal
+// ids), so adding or archiving a goal relinks at once. Sets serves (always an array) and
+// housekeeping (serves nothing) on every rec, in place. -> recs
+export function linkRecs(recs, goals, accounts = []) {
+  for (const r of recs) {
+    r.serves = servesGoals(r, goals, accounts);
+    r.housekeeping = r.serves.length === 0;
+  }
+  return recs;
+}
+
+// Open housekeeping recs: serve no goal and are not hidden, done or dismissed.
+const CLOSED = new Set(['hidden', 'done', 'dismissed']);
+export const housekeepingCount = recs => recs.filter(r => r.housekeeping === true && !CLOSED.has(r.status)).length;
+
+// loadRecs with goal links, for readers outside a full build (the tools).
+export function loadLinkedRecs(db, clock) {
+  const accounts = db.prepare('SELECT * FROM accounts ORDER BY sort, id').all();
+  return linkRecs(loadRecs(db, clock), loadGoals(db, { fig: loadFigures(db), accounts }), accounts);
 }
 
 export function messageOut(row) {
@@ -514,10 +538,7 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
   const goals = loadGoals(db, { fig, accounts: accountRows });
   const curve = loadCurve(db, content);
   const positions = getSetting(db, 'curve.positions', null) || {};
-  for (const r of recs) {
-    const serves = servesGoals(r, goals, accountRows);
-    if (serves.length) r.serves = serves;
-  }
+  linkRecs(recs, goals, accountRows);
 
   return {
     meta: {
@@ -580,6 +601,7 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
       ingest,
       simplefin: loadSimplefin(db, mode),
       heard: deriveHeard(db, { clock: clk }),
+      housekeeping: housekeepingCount(recs),
     },
   };
 }
