@@ -2,7 +2,26 @@
 // preparing always shows a spinner then a result, and verdict and check-in failures are visible.
 // Desktop and phone (@mobile). Demo data only.
 
-import { test, expect, gotoRoute, resetDemo } from './helpers.mjs';
+import { test as base } from '@playwright/test';
+import { expect, gotoRoute, resetDemo } from './helpers.mjs';
+
+// The shared page fixture fails on any console error. These tests force 409 and 500 replies, and
+// the browser logs those loads, so only failed loads of the advisor writes are allowed.
+const test = base.extend({
+  page: async ({ page }, use) => {
+    const problems = [];
+    page.on('console', (msg) => {
+      if (msg.type() !== 'error') return;
+      const url = (msg.location() && msg.location().url) || '';
+      const path = url ? new URL(url).pathname : '';
+      if (/Failed to load resource/.test(msg.text()) && /^\/api\/advisor\/(packets|checkin|reviews\/[^/]+\/verdict)$/.test(path)) return;
+      problems.push(`console error: ${msg.text()}${url ? ` (${url})` : ''}`);
+    });
+    page.on('pageerror', (err) => problems.push(`page error: ${err.message}`));
+    await use(page);
+    expect(problems, 'console errors other than the forced advisor failures').toEqual([]);
+  },
+});
 
 const EMPTY = 'Send a recommendation to your advisor first; it lands here for review';
 
@@ -52,7 +71,7 @@ test.describe('advisor packet feedback', { tag: ['@mobile', '@ap-ac4'] }, () => 
     const downloadPromise = page.waitForEvent('download');
     await button.click();
     await expect(page.locator('.h-spin')).toBeVisible();
-    await expect(button).toHaveAttribute('aria-busy', 'true');
+    await expect(page.getByRole('button', { name: 'Preparing' })).toHaveAttribute('aria-busy', 'true');
     const download = await downloadPromise;
     expect(download.suggestedFilename()).toMatch(/^advisor-packet-\d{4}-\d{2}-\d{2}\.html$/);
     await expect(page.getByRole('status')).toContainText('Packet ready.');
@@ -69,7 +88,7 @@ test.describe('advisor packet feedback', { tag: ['@mobile', '@ap-ac4'] }, () => 
     });
     await gotoRoute(page, 'advisor');
     await page.getByRole('button', { name: 'Prepare packet' }).click();
-    await expect(page.getByRole('alert')).toContainText('nothing is waiting on review');
+    await expect(page.locator('.h-adv-status')).toContainText('nothing is waiting on review');
   });
 
   test('a 500 from the packet API is shown', { tag: '@ap-ac2' }, async ({ page }) => {
@@ -79,7 +98,7 @@ test.describe('advisor packet feedback', { tag: ['@mobile', '@ap-ac4'] }, () => 
     });
     await gotoRoute(page, 'advisor');
     await page.getByRole('button', { name: 'Prepare packet' }).click();
-    await expect(page.getByRole('alert')).toContainText('the packet could not be stored');
+    await expect(page.locator('.h-adv-status')).toContainText('the packet could not be stored');
   });
 
   test('a failed verdict is shown on the form', { tag: '@ap-ac3' }, async ({ page }) => {

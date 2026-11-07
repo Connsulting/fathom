@@ -7,9 +7,9 @@ let H = null;
 
 export function bind(kit) { H = kit; }
 
-const S = { open: null, checkin: false, busy: false };
+const S = { open: null, checkin: false, busy: false, packetOk: '', packetErr: '' };
 
-export function reset() { S.open = null; S.checkin = false; S.busy = false; }
+export function reset() { S.open = null; S.checkin = false; S.busy = false; S.packetOk = ''; S.packetErr = ''; }
 
 const MAX_NOTE = 1000;
 const today = () => H.api.s.meta?.clock || new Date().toISOString().slice(0, 10);
@@ -90,7 +90,10 @@ export function render() {
   const reviewed = arr(a.reviewed).map((v) => `<li class="h-rv ${v.verdict}"><div class="h-adv ${v.verdict}">${v.verdict === 'vetoed' ? icon('x') + 'Vetoed' : icon('check') + 'Confirmed'}</div><div><b>${recLink(v.recId, v.title)}</b>${v.note ? `<p>${T(v.note)}</p>` : ''}<p class="h-rv-d">${esc(v.date)}</p></div></li>`).join('');
   const conf = arr(a.reviewed).filter((v) => v.verdict === 'confirmed').length;
   const vet = arr(a.reviewed).filter((v) => v.verdict === 'vetoed').length;
-  const packets = arr(a.packets).map((p) => `<li><a href="/api/advisor/packets/${encodeURIComponent(p.id)}" download data-adv-dl>${icon('arrow')}<span>Packet, ${esc(p.date)}</span></a><span class="h-mute sm">${arr(p.recIds).length} for review</span></li>`).join('');
+  const packets = arr(a.packets).map((p) => {
+    const label = S.packetOk && p.id === S.packetOk ? 'Download again' : `Packet, ${p.date}`;
+    return `<li><a href="/api/advisor/packets/${encodeURIComponent(p.id)}" download data-adv-dl>${icon('arrow')}<span>${esc(label)}</span></a><span class="h-mute sm">${arr(p.recIds).length} for review</span></li>`;
+  }).join('');
   const notAsk = arr(a.notAsking).map((q) => `<li><b>${T(q.q)}</b><p>${T(q.why)}</p></li>`).join('');
   const shared = arr(a.shared).map((s) => `<li><span>${T(s.title)}</span><time>${T(s.when)}</time></li>`).join('');
   const experts = arr(a.experts).map((e) => `<li><b>${T(e.name)}</b><span>${T(e.role)}</span><p>${T(e.when)}</p></li>`).join('');
@@ -98,8 +101,16 @@ export function render() {
   const nextBox = S.checkin ? checkinForm(n)
     : `<div class="h-next"><div><span>Next check-in</span><b>${n.when ? esc(n.when) : 'Not set'}</b></div><div><span>Length</span><b>${n.length ? esc(n.length) : 'Not set'}</b></div><div><span>Reviewed</span><b>${conf} confirmed, ${vet} vetoed</b></div><div><span>Waiting on review</span><b>${nWait}</b></div></div>
       <div class="h-acts">${btn(n.when ? 'Change check-in' : 'Set check-in', 'data-adv-checkin-edit', 'ghost')}</div>`;
+  const canPrepare = nWait > 0 && !S.busy;
+  const prepLabel = S.busy ? '<span class="h-spin" aria-hidden="true"></span>Preparing' : 'Prepare packet';
+  const prepAttrs = `data-adv-packet${canPrepare ? '' : ' disabled'}${S.busy ? ' aria-busy="true"' : ''}`;
+  const emptyHint = nWait ? '' : `<p class="h-adv-hint" data-adv-empty>Send a recommendation to your advisor first; it lands here for review. <a href="${href('plan')}" data-go="plan">Plan</a></p>`;
+  const packetStatus = S.packetErr
+    ? `<p class="h-adv-status err" role="alert">${esc(S.packetErr)}</p>`
+    : (S.packetOk ? '<p class="h-adv-status" role="status">Packet ready.</p>' : '');
   const packetSec = section('Review packet', `<p class="h-mute">A printable summary of everything waiting on review, with each figure's source. Download it, then print to PDF from your browser.</p>
-      <div class="h-acts">${btn(S.busy ? 'Preparing' : 'Prepare packet', `data-adv-packet${nWait && !S.busy ? '' : ' disabled'}`, 'pri')}</div>
+      <div class="h-acts">${btn(prepLabel, prepAttrs, canPrepare ? 'pri' : '')}</div>
+      ${emptyHint}${packetStatus}
       ${packets ? `<ul class="h-advpk">${packets}</ul>` : ''}`);
   return shell(`${pageHead('Advisor', a.name ? T(a.name) : esc(api.s.names?.advisor || 'Your advisor'), T(a.role))}
     ${nextBox}
@@ -137,13 +148,21 @@ export function onClick(e) {
   if (d.advPacket != null) {
     if (S.busy || t.disabled) return true;
     S.busy = true; H.draw();
+    S.packetErr = '';
     H.api.advisorPacket().then((id) => {
-      S.busy = false; H.draw();
+      S.busy = false;
       if (id) {
+        S.packetOk = id;
+        S.packetErr = '';
+        H.draw();
         const a = document.createElement('a');
         a.href = `/api/advisor/packets/${encodeURIComponent(id)}`;
         a.setAttribute('download', '');
         document.body.appendChild(a); a.click(); a.remove();
+      } else {
+        S.packetOk = '';
+        S.packetErr = H.api.lastError() || 'The packet was not prepared.';
+        H.draw();
       }
     });
     return true;
@@ -162,7 +181,11 @@ export function onSubmit(e) {
     if (note.length > MAX_NOTE) { showErr(f, `Keep the note under ${MAX_NOTE} characters.`); return true; }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { showErr(f, 'Enter the date of the review.'); return true; }
     const id = f.dataset.advForm;
-    H.api.advisorVerdict(id, verdict, note, date).then((ok) => { if (ok) { S.open = null; H.draw(); } });
+    H.api.advisorVerdict(id, verdict, note, date).then((ok) => {
+      if (ok) { S.open = null; H.draw(); return; }
+      const live = H.root.querySelector(`[data-adv-form="${CSS.escape(id)}"]`);
+      if (live) showErr(live, H.api.lastError() || 'The verdict was not saved.');
+    });
     return true;
   }
   if (f.dataset.advCheckin != null) {
@@ -172,7 +195,11 @@ export function onSubmit(e) {
     const lengthMin = Number(f.lengthMin.value);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { showErr(f, 'Enter the date of the check-in.'); return true; }
     if (!Number.isInteger(lengthMin) || lengthMin < 5 || lengthMin > 480) { showErr(f, 'Length must be 5 to 480 minutes.'); return true; }
-    H.api.advisorCheckin(date, time || null, lengthMin).then((ok) => { if (ok) { S.checkin = false; H.draw(); } });
+    H.api.advisorCheckin(date, time || null, lengthMin).then((ok) => {
+      if (ok) { S.checkin = false; H.draw(); return; }
+      const live = H.root.querySelector('[data-adv-checkin]');
+      if (live) showErr(live, H.api.lastError() || 'The check-in was not saved.');
+    });
     return true;
   }
   return false;
