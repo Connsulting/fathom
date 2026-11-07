@@ -375,7 +375,8 @@ function windowStrip(r) {
   // when the months sit closer than that.
   const gapPct = firsts.length > 1 ? pct(firsts[1]) - pct(firsts[0]) : 100;
   const nth = Math.max(1, Math.ceil(34 / ((gapPct / 100) * STRIP_PX)));
-  const mons = firsts.filter((_, i) => i % nth === 0)
+  // A name also needs room to its right: drop one that would run past the plot's side padding.
+  const mons = firsts.filter((k, i) => i % nth === 0 && pct(k) <= 100 - (17 / STRIP_PX) * 100)
     .map((k) => `<span class="mon" style="left:${pct(k).toFixed(2)}%">${MON[k.getUTCMonth()]}</span>`);
   arr(api.s.deadlines).forEach((dl) => {
     const when = parseISO(dl.date);
