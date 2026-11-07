@@ -76,7 +76,9 @@ test('numeric grader distinguishes returned, unsourced and self-computed amounts
   assert.equal(gradeFigures('one hundred fifty dollars', [result(100), result(50)]).ok, false);
   assert.equal(gradeFigures('1. Available: $100.\n2. Available: $50.', [result(100), result(50)]).ok, true);
   assert.equal(gradeFigures('$100', [result(100, { isError: true })]).ok, false);
-  assert.equal(gradeFigures('Rate: four percent.', [result(4)]).ok, true);
+  const spelledRate = gradeFigures('Rate: four percent.', [result(4)]);
+  assert.equal(spelledRate.ok, false);
+  assert.equal(spelledRate.spelledOut.length, 1);
   assert.equal(gradeFigures('$150', [result('$150')]).ok, true);
 });
 
