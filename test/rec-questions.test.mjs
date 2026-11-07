@@ -234,3 +234,15 @@ test('a file source whose accounts SimpleFIN covers is not stale anywhere; a hal
   assert.deepEqual(state.sources.filter(x => x.state === 'stale' && ['bank_csv', 'card_csv', 'aggregator_csv', 'balances', 'brokerage_positions', 'statement'].includes(x.kind)), []);
   assert.deepEqual(cashStale(state), [], 'the Cash card and the invest note carry no stale file notes once SimpleFIN covers the accounts');
 });
+
+// ---------------------------------------------------------------- birth years from parsed notes
+
+test('parsed notes can supply birth years, and nothing else is read as one', async () => {
+  const { toRows } = await import('../src/ingest/extract.mjs');
+  const rows = value => toRows('notes', { facts: [{ key: 'household.birthYears', value, confidence: 0.9 }], goals: [] }, { entities: [] });
+  const fact = value => rows(value).find(r => r.kind === 'fact');
+  assert.deepEqual(fact('owner 1981, spouse 1983, dependents 2018 2021').value, { owner: 1981, spouse: 1983, dependents: [2018, 2021] });
+  assert.deepEqual(fact('{"owner": 1981}').value, { owner: 1981 });
+  assert.equal(fact('spouse 1983'), undefined, 'no owner year, no fact');
+  assert.equal(fact('owner 1650'), undefined, 'a year before 1900 is not a birth year');
+});
