@@ -2,10 +2,10 @@
 // (same loadConfig as scripts/user-invite.mjs). The raw key is written to stdout once.
 // Every other message goes to stderr. The key is never logged.
 
-import { join, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../src/config.mjs';
-import { DB_FILE, openMigrated } from '../src/store/db.mjs';
+import { openServedStore } from '../src/platform/ready.mjs';
 import { createAuthStore, normalizeEmail } from '../src/auth/store.mjs';
 import { createKeyService, loadServerSecret } from '../src/mcp/keys.mjs';
 
@@ -20,7 +20,7 @@ function flag(argv, name) {
 }
 
 export async function main(argv = process.argv.slice(2), env = process.env) {
-  let db;
+  let db, platform;
   try {
     if (argv[0] !== 'create') {
       usage();
@@ -41,9 +41,19 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
       return 1;
     }
     const config = loadConfig(env);
-    db = openMigrated(join(config.dataDir, DB_FILE));
-    const user = createAuthStore(db).findUser(email);
-    if (!user) {
+    let householdId;
+    try {
+      ({ db, platform, householdId } = openServedStore(config));
+    } catch (e) {
+      if (e.name !== 'StartupError') throw e;
+      console.error(`mcp-key: ${e.code}`);
+      return 1;
+    }
+    const auth = createAuthStore(platform);
+    // A key's creator must be an active member of the household this store serves.
+    const creatorActive = userId => auth.membership(userId, householdId)?.status === 'active';
+    const user = auth.findUser(email);
+    if (!user || !creatorActive(user.id)) {
       console.error('mcp-key: unknown owner');
       return 1;
     }
@@ -52,7 +62,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
       console.error('mcp-key: active key name already exists');
       return 1;
     }
-    const keys = createKeyService({ db, serverSecret: loadServerSecret(config.dataDir) });
+    const keys = createKeyService({ db, serverSecret: loadServerSecret(config.dataDir), creatorActive });
     const { key } = keys.create({ name, scopes: ['read'], userId: user.id });
     process.stdout.write(`${key}\n`);
     return 0;
@@ -61,6 +71,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     return 1;
   } finally {
     db?.close();
+    platform?.close();
   }
 }
 

@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { spawnServer, request, postJson, openStore, src, tempDb, SERVER_TIMEOUT, serveAppFixture } from '../helpers/server.mjs';
+import { spawnServer, request, postJson, openStore, src, tempInstance, SERVER_TIMEOUT, serveAppFixture } from '../helpers/server.mjs';
 import { seedDemo } from '../../demo/seed.mjs';
 import { fixturePath, textFile, realStore, offEngine } from '../helpers/ingest.mjs';
 
@@ -144,14 +144,13 @@ describe('email and jobs routes on a demo server', () => {
 
 describe('GET /api/email preview (in-process router, fake engine)', () => {
   test('never calls the engine for the preview and uses the template summary', T, async () => {
-    const t = await tempDb();
-    seedDemo(t.db);
+    const t = await tempInstance({ mode: 'demo', init: seedDemo });
     let calls = 0;
     const engine = { isOn: () => true, call: () => { calls++; throw new Error('should not be called'); } };
     const { createHandler } = await src('src/api/router.mjs');
     const config = { dataDir: t.dataDir, clock: '2026-11-05', demo: true, engine: 'fake', port: 0, host: '127.0.0.1', claudeCredentialFile: null, emailTransport: 'dev', publicUrl: null };
     const transport = { name: 'capture', async send() { return { id: 'unused' }; } };
-    const server = http.createServer(createHandler({ db: t.db, config, engine, transport }));
+    const server = http.createServer(createHandler({ db: t.db, platform: t.platform, config, engine, transport }));
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
     try {
       const r = await request(`http://localhost:${server.address().port}`, { path: '/api/email' });
@@ -160,7 +159,7 @@ describe('GET /api/email preview (in-process router, fake engine)', () => {
       assert.equal(r.json.preview.summarySrc, 'template');
     } finally {
       await new Promise((r) => { server.close(r); server.closeAllConnections(); });
-      try { t.db.close(); } catch { /* closed */ }
+      t.close();
       rmSync(t.dataDir, { recursive: true, force: true });
     }
   });

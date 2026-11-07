@@ -4,7 +4,7 @@
 import { readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { randomBytes, createHash } from 'node:crypto';
 import { join } from 'node:path';
-import { ROOT, src, tempDb, tempDir } from './server.mjs';
+import { ROOT, src, tempDir, tempInstance } from './server.mjs';
 import { writeXlsx } from './xlsx.mjs';
 
 export const NOW = '2032-03-10T12:00:00.000Z';
@@ -156,8 +156,8 @@ export function paystubText({ payDate = '2032-03-15', employer = 'Example Employ
 export async function realStore({ engine = 'off' } = {}) {
   const { setSetting } = await src('src/store/db.mjs');
   const { loadDataKey } = await src('src/ingest/vault.mjs');
-  const store = await tempDb();
-  setSetting(store.db, 'mode', 'real');
+  // A real instance: the store plus its synthetic platform.sqlite (no accounts yet).
+  const store = await tempInstance({ mode: 'real', init: db => setSetting(db, 'mode', 'real') });
   const keyDir = await tempDir('fathom-key-');
   const keyFile = join(keyDir, 'data.key');
   writeFileSync(keyFile, randomBytes(32), { mode: 0o600 });
@@ -170,7 +170,7 @@ export async function realStore({ engine = 'off' } = {}) {
     keyFile,
     opts: (eng, extra = {}) => ({ engine: eng, config, now: NOW, key, ...extra }),
     close() {
-      try { store.db.close(); } catch { /* already closed */ }
+      store.close();
       rmSync(store.dataDir, { recursive: true, force: true });
       rmSync(keyDir, { recursive: true, force: true });
     },

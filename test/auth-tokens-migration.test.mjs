@@ -1,6 +1,8 @@
 // Migration 020: auth_tokens is rebuilt so its purpose CHECK also takes 'add-passkey'. A
 // populated store keeps every auth row, the table keeps its keys, index and cascades, and
-// auth_challenges.token_hash still references auth_tokens(hash).
+// auth_challenges.token_hash still references auth_tokens(hash). Later migrations (022 moves the
+// auth tables to platform.sqlite) are held back with migrate(db, { through: 020 }), so 020 is
+// proven on its own; the last tests show where 022 takes over.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -9,6 +11,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { listMigrations, migrate, openDb } from '../src/store/db.mjs';
 
 const TARGET = listMigrations().find(m => m.name === 'auth-token-add-passkey');
+const THROUGH = { through: TARGET?.id };
 const AUTH_TABLES = ['households', 'users', 'passkeys', 'auth_tokens', 'auth_sessions', 'auth_challenges', 'auth_rate_limits'];
 const hex = c => c.repeat(64);
 
@@ -63,16 +66,16 @@ test('migration 020 keeps every auth row byte for byte', () => {
   const before = snapshot(db);
   assert.equal(before.auth_tokens.length, 4);
   assert.equal(before.auth_challenges.length, 4);
-  assert.deepEqual(migrate(db).applied, listMigrations().filter(m => m.id >= TARGET.id).map(m => m.id));
+  assert.deepEqual(migrate(db, THROUGH).applied, [TARGET.id]);
   assert.deepEqual(snapshot(db), before);
   assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), []);
   assert.equal(db.prepare('PRAGMA foreign_keys').get().foreign_keys, 1, 'foreign keys are back on');
-  assert.deepEqual(migrate(db).applied, [], 'repeatable');
+  assert.deepEqual(migrate(db, THROUGH).applied, [], 'repeatable');
 });
 
 test('migration 020 keeps the auth_tokens shape, keys, index and the challenge reference', () => {
   const db = storeBefore();
-  migrate(db);
+  migrate(db, THROUGH);
   const columns = db.prepare('PRAGMA table_info(auth_tokens)').all();
   assert.deepEqual(columns.map(c => ({ name: c.name, type: c.type, pk: c.pk })), [
     { name: 'hash', type: 'TEXT', pk: 1 },
@@ -102,7 +105,7 @@ test('migration 020 keeps the auth_tokens shape, keys, index and the challenge r
 
 test('after migration 020 auth_tokens takes add-passkey, refuses unknown purposes and still cascades', () => {
   const db = storeBefore();
-  migrate(db);
+  migrate(db, THROUGH);
   const insert = db.prepare('INSERT INTO auth_tokens (hash, user_id, purpose, expires_at) VALUES (?, ?, ?, ?)');
   assert.doesNotThrow(() => insert.run(hex('5'), 'user-owner', 'add-passkey', 1_900_000_005_000));
   assert.throws(() => insert.run(hex('6'), 'user-owner', 'add-passkey', 1_900_000_006_000), /UNIQUE/, 'one pending add-passkey token per user');
@@ -137,9 +140,27 @@ test('migration 020 applies to a fresh store and is a no-op the second time', ()
   assert.match(readFileSync(TARGET.file, 'utf8'), /^-- REBUILDS_TABLE\b/m, 'rebuilds through the foreign-key-safe path');
   const fresh = openDb(':memory:');
   try {
-    assert.ok(migrate(fresh).applied.includes(TARGET.id));
-    assert.deepEqual(migrate(fresh).applied, []);
+    assert.ok(migrate(fresh, THROUGH).applied.includes(TARGET.id));
+    assert.deepEqual(migrate(fresh, THROUGH).applied, []);
     assert.equal(fresh.prepare('SELECT count(*) AS n FROM auth_tokens').get().n, 0);
     assert.match(tableSql(fresh, 'auth_tokens'), /'add-passkey'/);
+    // A fresh store has no users, so the later migrations (022 platform identity) apply and the
+    // auth tables leave the financial store.
+    const later = listMigrations().filter(m => m.id > TARGET.id).map(m => m.id);
+    assert.deepEqual(migrate(fresh).applied, later);
+    assert.equal(tableSql(fresh, 'auth_tokens'), '');
+    assert.deepEqual(migrate(fresh).applied, []);
   } finally { fresh.close(); }
+});
+
+test('after 020, a populated store without store_identity refuses migration 022 and keeps every auth row', () => {
+  const db = storeBefore();
+  migrate(db, THROUGH);
+  const before = snapshot(db);
+  const identity = listMigrations().find(m => m.name === 'platform-identity');
+  assert.ok(identity && identity.id > TARGET.id, 'migration 022-platform-identity is registered after 020');
+  assert.throws(() => migrate(db), new RegExp(`migration ${identity.id}-platform-identity failed`));
+  assert.equal(db.prepare('SELECT max(id) AS id FROM schema_migrations').get().id, identity.id - 1, 'only the migrations between 020 and the platform migration are recorded');
+  assert.deepEqual(snapshot(db), before, 'the refused migration rolls back');
+  assert.equal(db.prepare('PRAGMA foreign_keys').get().foreign_keys, 1);
 });

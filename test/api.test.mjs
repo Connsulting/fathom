@@ -11,7 +11,7 @@ import { needsYou, verdictLevel } from '../src/shared/rules.mjs';
 import { setSetting } from '../src/store/db.mjs';
 import {
   ROOT, SERVER_TIMEOUT, spawnServer, withServer, expectServerExit,
-  tempDb, tempDir, openStore, dumpStore, runCommand, recOf, src, serveAppFixture, spawnAuthenticatedServer, withAuthenticatedServer,
+  tempDb, tempDir, tempInstance, openStore, dumpStore, runCommand, recOf, src, serveAppFixture, spawnAuthenticatedServer, withAuthenticatedServer,
 } from './helpers/server.mjs';
 
 const T = { timeout: SERVER_TIMEOUT };
@@ -476,7 +476,10 @@ describe('store modes', () => {
   });
 
   test('a store file with no mode setting is treated as real', T2, async () => {
-    const t = await tempDb();
+    // A migrated instance (store plus platform.sqlite) whose store carries no mode row.
+    const t = await tempInstance({ mode: 'real' });
+    t.db.prepare("DELETE FROM settings WHERE key = 'mode'").run();
+    assert.equal(t.db.prepare("SELECT count(*) AS n FROM settings WHERE key = 'mode'").get().n, 0);
     t.close();
     await withAuthenticatedServer({ dataDir: t.dataDir }, async s => {
       const sc = await s.getScenario();
