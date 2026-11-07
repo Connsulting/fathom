@@ -14,7 +14,7 @@ import { ingestState, applyFreshness, householdDataThrough } from '../ingest/fre
 import { MODEL_PURPOSES, modelFor } from '../engine/pricing.mjs';
 import { factEventTitle } from '../shared/event-labels.mjs';
 import { buildYearend } from '../yearend/expected.mjs';
-import { CURVE_AXES, KNOWN_FIGURES, curvePosition, servesGoals } from '../shared/goals.mjs';
+import { CURVE_AXES, KNOWN_FIGURES, curvePosition, servesGoals, GOAL_KINDS, PRIORITIES, kindOf, isGoalOwner, goalStatusOf } from '../shared/goals.mjs';
 import { accountLabel, accountSubtitle } from '../shared/account-label.mjs';
 import { applyNaming } from '../accounts/naming.mjs';
 import { deriveHeard } from '../onboarding/heard.mjs';
@@ -482,12 +482,21 @@ function plainEventTitle(e) {
 
 // ---------------------------------------------------------------- goals and the curve
 
-// Every goal row (archived included) as {...def, id, origin, archived, progress?}. Owner goals get
+// Every goal row (archived included) as {...def, id, origin, archived, kind, owner, priority,
+// status, doneAt, statusLabel?, topic?, accountsLabel?, progress?}. kind is the goal model kind
+// (balance when the def has none), owner whose goal (null when unset), priority null when unset.
+// status is canonical for every goal: archived when archived_at, done when done_at (or a def whose
+// stored status is 'done', as seed goals carry), else open; a seed goal's display text is statusLabel. A legacy
+// def kind that names a topic reads as `topic`. accountsLabel names a contribution's destination
+// accounts. Owner goals get
 // derived figures in `fig`: goal.<id>.target (the typed target, src 'goal-target', kind 't') and
 // goal.<id>.current (the tracked value: one account's or known figure's own figure, or the sum of
 // several tracked accounts, src 'goal-track'), and progress {cur, target} when both exist. A
 // tracked account with no stored balance, or a figure kept only for reference (unavailable), leaves
-// the goal with no current value, never a partial or stale sum.
+// the goal with no current value, never a partial or stale sum. The other kinds' typed amounts are
+// figures too (src 'goal-target'): goal.<id>.low and .high (a range), .floor, .split.<person> (a
+// contribution's shares) and .entered and .entered.<person> (contributed so far, as entered, kind
+// 'a'). A range's progress reads against its low end.
 const currentFig = f => !!f && typeof f.v === 'number' && !f.unavailable;
 export function loadGoals(db, { fig = {}, accounts = [] } = {}) {
   const rows = db.prepare('SELECT * FROM goals ORDER BY sort, created_at, id').all();
@@ -495,6 +504,17 @@ export function loadGoals(db, { fig = {}, accounts = [] } = {}) {
     const def = parse(r.def, {});
     const origin = r.origin === 'owner' ? 'owner' : 'seed';
     const g = { ...def, id: r.id, origin, archived: !!r.archived_at };
+    if (typeof def.kind === 'string' && !GOAL_KINDS.includes(def.kind)) g.topic = def.kind;
+    g.kind = kindOf(def);
+    g.owner = isGoalOwner(def.owner) ? def.owner : null;
+    g.priority = PRIORITIES.includes(def.priority) ? def.priority : null;
+    g.doneAt = r.done_at ?? null;
+    if (origin !== 'owner' && typeof def.status === 'string') g.statusLabel = def.status;
+    g.status = !r.archived_at && def.status === 'done' ? 'done' : goalStatusOf(r);
+    if (g.kind === 'contribution' && Array.isArray(def.accounts) && def.accounts.length) {
+      const dest = def.accounts.map(id => accounts.find(a => a.id === id)).filter(Boolean);
+      if (dest.length) g.accountsLabel = dest.map(a => accountLabel(a)).join(', ');
+    }
     if (origin !== 'owner') return g;
     delete g.progress;
     const tKey = `goal.${r.id}.target`;
@@ -524,7 +544,26 @@ export function loadGoals(db, { fig = {}, accounts = [] } = {}) {
       } else g.trackWaiting = true;
     }
     if (cur) g.current = cur;
-    if (cur && fig[tKey] && fig[tKey].v > 0) g.progress = { cur, target: tKey };
+    const typed = (key, v, label, kind = 't') => {
+      if (typeof v === 'number' && Number.isFinite(v)) fig[`goal.${r.id}.${key}`] = { v, src: 'goal-target', kind, label };
+    };
+    if (g.kind === 'range') {
+      typed('low', def.targetLow, 'Range low end');
+      typed('high', def.targetHigh, 'Range high end');
+    } else if (g.kind === 'floor') typed('floor', def.floor, 'Floor');
+    else if (g.kind === 'contribution') {
+      for (const p of Array.isArray(def.split) ? def.split : []) if (p && typeof p.person === 'string') typed(`split.${p.person}`, p.amount, 'Share of the contribution');
+      const e = def.entered;
+      const label = 'Contributed so far, as you entered';
+      if (e && typeof e.total === 'number') typed('entered', e.total, label, 'a');
+      else if (e && Array.isArray(e.people) && e.people.length) {
+        typed('entered', cents(e.people.reduce((sum, p) => sum + (Number.isFinite(p?.amount) ? p.amount : 0), 0)), label, 'a');
+        for (const p of e.people) if (p && typeof p.person === 'string') typed(`entered.${p.person}`, p.amount, label, 'a');
+      }
+    }
+    const lowKey = `goal.${r.id}.low`;
+    if (g.kind === 'range') { if (cur && fig[lowKey] && fig[lowKey].v > 0) g.progress = { cur, target: lowKey }; }
+    else if (cur && fig[tKey] && fig[tKey].v > 0) g.progress = { cur, target: tKey };
     return g;
   });
 }

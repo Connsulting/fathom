@@ -24,9 +24,9 @@ import * as pnlScreen from './screens/pnl.js';
 import * as tour from './screens/tour.js';
 import { createKeys } from './keys.js';
 import { createSwipe } from './screens/swipe.js';
-import { homeModel, homeHeadline, healthChip, healthLine, paceReason, boardCharts, reasonText, servedGoalIds, shortDate, longDate, windowSpan } from './screens/home-model.js';
+import { homeModel, homeHeadline, healthChip, healthLine, paceReason, boardCharts, reasonText, servedGoalIds, shortDate, longDate, windowSpan, kindLine, orderGoals, orderServes, planOrder, enteredDraft, enteredFields, enteredInputs } from './screens/home-model.js';
 import { STARTERS, existingStarterIds, otherGoals, goalsToCreate, inviteLine } from './screens/onboard-model.js';
-import { KNOWN_FIGURES } from '/shared/goals.mjs';
+import { KNOWN_FIGURES, GOAL_KINDS, KIND_LABEL, PRIORITIES, PRIORITY_LABEL, personLabel, goalOwnerOptions } from '/shared/goals.mjs';
 import { OWNERS, OWNER_LABEL } from '/shared/rec-links.mjs';
 
 const MS = 864e5;
@@ -528,6 +528,51 @@ function servedTitle(r, id) {
   return s && s.title ? (s.origin === 'owner' ? esc(s.title) : T(s.title)) : esc(id);
 }
 
+// Whose goal and priority as small tags (goal model v2), each only when set. attr names the data
+// attribute pair: goal-owner and goal-priority on cards, serve-owner and serve-priority in Serves.
+const hhNames = () => api.s.names || {};
+function goalTagsHtml(owner, priority, attr = 'goal') {
+  const who = owner ? personLabel(owner, hhNames()) : '';
+  const pri = priority && PRIORITY_LABEL[priority] ? PRIORITY_LABEL[priority] : '';
+  return `${who ? `<span class="h-gtag" data-${attr}-owner>${esc(who)}</span>` : ''}${pri ? `<span class="h-gtag" data-${attr}-priority>${esc(pri)}</span>` : ''}`;
+}
+
+// A range, floor or contribution line from kindLine: every amount is a pace figure through figHtml.
+function kindHtml(line) {
+  if (!line) return '';
+  const amt = (k) => (k ? figHtml(k, { k: true }) : '');
+  const asOf = line.asOf && shortDate(line.asOf) ? `, as of ${esc(shortDate(line.asOf))}` : '';
+  if (line.kind === 'range') {
+    if (!line.low || !line.high) return '';
+    return `<p class="h-gkind">Range ${amt(line.low)} to ${amt(line.high)}${line.positionLabel ? `, ${esc(line.positionLabel.toLowerCase())}` : ''}${asOf}</p>`;
+  }
+  if (line.kind === 'floor') {
+    if (!line.floor) return '';
+    return `<p class="h-gkind">Floor ${amt(line.floor)}${line.stateLabel ? `, ${esc(line.stateLabel.toLowerCase())}` : ''}${asOf}</p>`;
+  }
+  if (line.kind !== 'contribution') return '';
+  const when = [line.taxYear ? `For ${esc(line.taxYear)}` : '', line.deadline && longDate(line.deadline) ? `by ${esc(longDate(line.deadline))}` : ''].filter(Boolean).join(', ');
+  const head = `${when ? `${when}.` : ''}${line.basisLabel ? ` ${esc(line.basisLabel)}${asOf}.` : ''}`.trim();
+  const rows = arr(line.people).filter((x) => x.target || x.actual).map((x) => {
+    const val = x.actual && x.target ? `${amt(x.actual)} of ${amt(x.target)}` : amt(x.actual || x.target);
+    return `<span class="h-gperson"><span>${esc(personLabel(x.person, hhNames()))}</span>${val}</span>`;
+  }).join('');
+  return `${head ? `<p class="h-gkind">${head}</p>` : ''}${rows ? `<div class="h-gpeople">${rows}</div>` : ''}`;
+}
+
+// The kind state for a served goal in a Plan row: In range, Below floor, Holding, or x of y contributed.
+function serveStateHtml(id) {
+  const goals = arr(api.s.pace?.goals);
+  const i = goals.findIndex((p) => p && p.id === id);
+  const line = i >= 0 ? kindLine(goals[i], i) : null;
+  if (!line) return '';
+  let t = '';
+  if (line.kind === 'range') t = line.positionLabel ? esc(line.positionLabel) : '';
+  else if (line.kind === 'floor') t = line.stateLabel ? esc(line.stateLabel) : '';
+  else if (line.actual && line.target) t = `${figHtml(line.actual, { k: true })} of ${figHtml(line.target, { k: true })} contributed`;
+  return t ? `<span class="h-serve-k">${t}</span>` : '';
+}
+
 function goalCardHome(c, subject) {
   const p = c.pace;
   const fk = (k) => `pace.goals.${c.paceIndex}.${k}`;
@@ -538,7 +583,7 @@ function goalCardHome(c, subject) {
       + `<div class="h-pbar-l"><span>${figHtml(fk('actual'), { k: true })} of ${figHtml(fk('target'), { k: true })}</span><span>plan today ${figHtml(fk('expected'), { k: true })}${asOf}</span></div>`;
   } else if (c.suggestion) {
     bar = suggestHtml(c.suggestion);
-  } else if (c.goal.origin === 'owner' && Number.isFinite(c.goal.target) && !c.goal.track) {
+  } else if (c.kind === 'balance' && c.goal.origin === 'owner' && Number.isFinite(c.goal.target) && !c.goal.track) {
     // A target with nothing tracked: say so rather than the pace reason for a missing plan start.
     bar = `<p class="h-gwhy">${esc(reasonText('missing_actual'))}</p>`;
   } else if (p && p.reason) {
@@ -546,7 +591,8 @@ function goalCardHome(c, subject) {
   }
   const next = c.next ? gnextHtml(c.next) : `<p class="h-gnext-none">Nothing due for ${subject}</p>`;
   const more = c.actions.length > 1 ? `<a class="h-gmore" href="${href('plan')}" data-go="plan">${plural(c.actions.length - 1, 'more action')} on the plan</a>` : '';
-  return `<article class="h-gcard" data-goal-card="${esc(c.id)}"><div class="h-gcard-h"><a class="h-gcard-t" href="${href('goals')}" data-go="goals">${goalTitle(c.goal)}</a>${chipHtml(c.chip, 'h-pchip')}${addBtn('goal', c.goal.id, goalText(c.goal))}</div>${bar}${next}${more}</article>`;
+  const tags = goalTagsHtml(c.owner, c.priority);
+  return `<article class="h-gcard" data-goal-card="${esc(c.id)}"><div class="h-gcard-h"><a class="h-gcard-t" href="${href('goals')}" data-go="goals">${goalTitle(c.goal)}</a>${chipHtml(c.chip, 'h-pchip')}${addBtn('goal', c.goal.id, goalText(c.goal))}</div>${tags ? `<div class="h-gtags">${tags}</div>` : ''}${bar}${kindHtml(c.line)}${next}${more}</article>`;
 }
 
 function hkHtml(list) {
@@ -866,7 +912,7 @@ function recRow(r, ny) {
 
 function pPlan() {
   const ny = api.needsYou();
-  const recs = visibleRecs().slice().sort((a, b) => days(a) - days(b));
+  const recs = planOrder(visibleRecs(), arr(api.s.goals));
   const c = clock();
   const ye = daysBetween(c, new Date(Date.UTC(c.getUTCFullYear(), 11, 31)));
   const open = recs.filter((r) => OPEN.includes(r.status));
@@ -1215,10 +1261,17 @@ const goalText = (g) => (g && g.origin === 'owner' ? String(g.title ?? '') : api
 
 // The goals a rec serves. In the dialog a rec that serves no open goal reads Housekeeping; plan
 // rows show nothing for it.
+// Each served goal is its title link, then whose goal and priority tags and its kind state, by priority.
 function servesHtml(r, { dialog = false } = {}) {
-  const list = arr(r.serves);
+  const all = arr(api.s.goals);
+  const list = orderServes(arr(r.serves), all);
   if (!list.length) return dialog && r.housekeeping ? '<span class="h-serves h-hk">Housekeeping</span>' : '';
-  return `<span class="h-serves">Serves: ${list.map((g) => `<a href="${href('goals')}" data-go="goals">${g.origin === 'owner' ? esc(g.title) : T(g.title)}</a>`).join(', ')}</span>`;
+  const one = (s) => {
+    const g = all.find((x) => x && String(x.id) === String(s.id));
+    const extra = `${goalTagsHtml(g?.owner, g?.priority, 'serve')}${serveStateHtml(s.id)}`;
+    return `<span class="h-serve"><a href="${href('goals')}" data-go="goals">${s.origin === 'owner' ? esc(s.title) : T(s.title)}</a>${extra}</span>`;
+  };
+  return `<span class="h-serves">Serves: ${list.map(one).join(', ')}</span>`;
 }
 
 // Who acts on the rec: a select in the dialog's meta row; a change saves it as an owner override.
@@ -1227,15 +1280,31 @@ function ownerHtml(r) {
   return `<label class="h-owner"><span>Owner</span><select data-recowner="${esc(r.id)}" aria-label="Action owner">${opts}</select></label>`;
 }
 
-const emptyDraft = (horizon = 'now') => ({ title: '', note: '', horizon, target: '', targetDate: '', trackKind: 'none', accounts: [], figure: '' });
+// The goal form draft. Goal model v2 adds the kind, whose goal (owner, not origin 'owner'), the
+// priority and each kind's fields; a contribution reuses target (the amount) and targetDate (the deadline).
+const clockIso = () => (/^\d{4}-\d{2}-\d{2}/.test(String(api.s.meta?.clock || '')) ? String(api.s.meta.clock).slice(0, 10) : '');
+const emptyDraft = (horizon = 'now') => ({
+  title: '', note: '', horizon, target: '', targetDate: '', trackKind: 'none', accounts: [], figure: '',
+  kind: 'balance', owner: '', priority: '', targetLow: '', targetHigh: '', floor: '',
+  taxYear: String(clock().getUTCFullYear()), dest: [], shareOwner: '', shareSpouse: '',
+  enteredTotal: '', enteredOwner: '', enteredSpouse: '', enteredAsOf: ''
+});
 
 function draftOf(g) {
   const t = g.track || null;
+  const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? String(v) : '');
+  const amountOf = (list, person) => num(arr(list).find((x) => x && x.person === person)?.amount);
   return {
+    ...emptyDraft(g.horizon || 'now'),
     title: g.title || '', note: g.note || '', horizon: g.horizon || 'now',
     target: typeof g.target === 'number' ? String(g.target) : '', targetDate: g.targetDate || '',
     trackKind: t && Array.isArray(t.accounts) ? 'accounts' : t && t.figure ? 'figure' : 'none',
-    accounts: t && Array.isArray(t.accounts) ? t.accounts.slice() : [], figure: t && t.figure ? t.figure : ''
+    accounts: t && Array.isArray(t.accounts) ? t.accounts.slice() : [], figure: t && t.figure ? t.figure : '',
+    kind: GOAL_KINDS.includes(g.kind) ? g.kind : 'balance', owner: g.owner || '', priority: g.priority || '',
+    targetLow: num(g.targetLow), targetHigh: num(g.targetHigh), floor: num(g.floor),
+    ...(Number.isInteger(g.taxYear) ? { taxYear: String(g.taxYear) } : {}),
+    dest: arr(g.accounts).slice(), shareOwner: amountOf(g.split, 'owner'), shareSpouse: amountOf(g.split, 'spouse'),
+    ...enteredDraft(g.entered)
   };
 }
 
@@ -1258,38 +1327,130 @@ function goalFormHtml() {
   const figs = trackFigures();
   const chip = (h) => `<button type="button" class="h-chip${d.horizon === h[0] ? ' on' : ''}" data-goal-h="${h[0]}" aria-pressed="${d.horizon === h[0]}">${h[1]}</button>`;
   // One label line: the text, then a muted "optional" on the same line when the field is optional.
-  const gl = (text, optional = false) => `<span class="h-gl">${text}${optional ? '<span class="h-opt">optional</span>' : ''}</span>`;
+  const gl = (text, optional = false) => `<span class="h-gl">${esc(text)}${optional ? '<span class="h-opt">optional</span>' : ''}</span>`;
   const opt = (v, l) => `<option value="${esc(v)}"${(d.trackKind === 'figure' ? d.figure : d.trackKind) === v ? ' selected' : ''}>${esc(l)}</option>`;
+  const kind = GOAL_KINDS.includes(d.kind) ? d.kind : 'balance';
+  const nm = hhNames();
+  const sel = (key, value, options) => `<select data-gf="${key}">${options.map(([v, l]) => `<option value="${esc(v)}"${value === v ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>`;
+  const money = (key, label, optional = false) => `<label class="h-gf">${gl(label, optional)}<input type="number" data-gf="${key}" min="0" step="any" inputmode="decimal" value="${esc(d[key])}" placeholder="0"></label>`;
+  const date = (key, label, optional = false, value = d[key]) => `<label class="h-gf">${gl(label, optional)}<input type="date" data-gf="${key}" value="${esc(value)}"></label>`;
+  const common = `<div class="h-gf2">
+      <label class="h-gf">${gl('Whose goal', true)}${sel('owner', d.owner, [['', 'Not set'], ...goalOwnerOptions(nm).map((o) => [o.id, o.label])])}</label>
+      <label class="h-gf">${gl('Priority', true)}${sel('priority', d.priority, [['', 'Not set'], ...PRIORITIES.map((p) => [p, PRIORITY_LABEL[p]])])}</label>
+    </div>
+    <label class="h-gf">${gl('Kind of goal')}${sel('kind', kind, GOAL_KINDS.map((k) => [k, KIND_LABEL[k]]))}</label>`;
+  // A floor must track something, so it has no "Nothing yet"; until one is picked a placeholder shows.
+  const track = (optional) => `<label class="h-gf">${gl('Track with', optional)}<select data-gf="track">${optional ? opt('none', 'Nothing yet') : d.trackKind === 'none' ? '<option value="" selected disabled>Pick what it tracks</option>' : ''}${accts.length ? opt('accounts', 'One or more accounts') : ''}${figs.map((k) => opt(k.key, k.label)).join('')}</select></label>`;
   const acctList = d.trackKind === 'accounts' ? `<div class="h-gaccts">${accts.length ? accts.map((a) => `<label class="h-gacct"><input type="checkbox" data-gf="acct" value="${esc(a.id)}"${d.accounts.includes(a.id) ? ' checked' : ''}><span>${a.imported ? esc(a.name) : T(a.name)}</span><small>${a.imported ? esc(a.inst) : T(a.inst)}</small></label>`).join('') : '<p class="h-mute sm">No accounts with a balance yet.</p>'}</div>` : '';
+  const g = f.id ? arr(api.s.goals).find((x) => x.id === f.id) : null;
+  const markDone = g && g.origin === 'owner' && !g.archived && g.status !== 'done' ? btn('Mark done', `data-goal="done" data-id="${esc(g.id)}"`, 'ghost') : '';
+  const navEnd = `${btn('Cancel', 'data-goal="cancel"', 'ghost')}<button type="submit" class="h-btn pri">${f.id ? 'Save changes' : 'Save goal'}</button>`;
   return `<form class="h-gform" data-goalform="1" aria-label="${f.id ? 'Edit goal' : 'New goal'}" novalidate>
     <h2>${f.id ? 'Edit goal' : 'New goal'}</h2>
     <label class="h-gf">${gl('Your goal, in your own words')}<input type="text" data-gf="title" maxlength="120" value="${esc(d.title)}" placeholder="For example, a year of cash in the bank" autocomplete="off"></label>
     <label class="h-gf">${gl('A short note', true)}<textarea data-gf="note" maxlength="500" rows="2">${esc(d.note)}</textarea></label>
     <div class="h-gf">${gl('When')}<div class="h-chips" role="group" aria-label="Horizon">${GOAL_BANDS.map(chip).join('')}</div></div>
-    <div class="h-gf2">
+    ${common}
+    ${kindFieldsHtml()}
+    ${f.err ? `<p class="h-gerr" role="alert">${esc(f.err)}</p>` : ''}
+    <div class="h-ob-nav">${markDone ? `${markDone}<span class="h-gform-end">${navEnd}</span>` : navEnd}</div>
+  </form>`;
+
+  // The rows for the goal's kind. Balance keeps the rows it always had (labels stay unique).
+  function kindFieldsHtml() {
+    if (kind === 'range') {
+      return `<div class="h-gf2">${money('targetLow', 'Low end')}${money('targetHigh', 'High end')}</div>
+    ${date('targetDate', 'Target date', true)}
+    ${track(true)}
+    ${acctList}`;
+    }
+    if (kind === 'floor') return `${money('floor', 'Floor amount')}\n    ${track(false)}\n    ${acctList}`;
+    if (kind === 'contribution') {
+      const who = (id) => personLabel(id, nm);
+      const share = (id) => (who(id) === 'You' ? 'Your share' : `${who(id)}'s share`);
+      const by = (id) => `Contributed by ${who(id) === 'You' ? 'you' : who(id)}`;
+      const all = arr(api.s.accounts);
+      const dest = `<div class="h-gf">${gl('Into these accounts', true)}<div class="h-gaccts">${all.length ? all.map((a) => `<label class="h-gacct"><input type="checkbox" data-gf="dest" value="${esc(a.id)}"${arr(d.dest).includes(a.id) ? ' checked' : ''}><span>${a.imported ? esc(a.name) : T(a.name)}</span><small>${a.imported ? esc(a.inst) : T(a.inst)}</small></label>`).join('') : '<p class="h-mute sm">No accounts yet.</p>'}</div></div>`;
+      const shared = ['owner', 'spouse'].filter((id) => String(d[id === 'owner' ? 'shareOwner' : 'shareSpouse']).trim() !== '');
+      const splitDraft = shared.map((id) => ({ person: id, amount: 1 }));
+      const show = enteredInputs(d, splitDraft);
+      const entered = [
+        show.people ? `<div class="h-gf2">${['owner', 'spouse'].filter((id) => shared.includes(id) || String(d[id === 'owner' ? 'enteredOwner' : 'enteredSpouse']).trim() !== '').map((id) => money(id === 'owner' ? 'enteredOwner' : 'enteredSpouse', by(id), true)).join('')}</div>` : '',
+        show.total ? money('enteredTotal', 'Contributed so far', true) : ''
+      ].join('');
+      return `<div class="h-gf2">${money('target', 'Amount to contribute')}<label class="h-gf">${gl('Tax year')}<input type="number" data-gf="taxYear" min="2000" max="2100" step="1" inputmode="numeric" value="${esc(d.taxYear)}"></label></div>
+    ${date('targetDate', 'Deadline')}
+    ${dest}
+    <div class="h-gf2">${money('shareOwner', share('owner'), true)}${money('shareSpouse', share('spouse'), true)}</div>
+    ${entered}
+    ${date('enteredAsOf', 'As of', true, d.enteredAsOf || clockIso())}`;
+    }
+    return `<div class="h-gf2">
       <label class="h-gf">${gl('Target amount', true)}<input type="number" data-gf="target" min="0" step="any" inputmode="decimal" value="${esc(d.target)}" placeholder="0"></label>
       <label class="h-gf">${gl('Target date', true)}<input type="date" data-gf="targetDate" value="${esc(d.targetDate)}"></label>
     </div>
-    <label class="h-gf">${gl('Track with', true)}<select data-gf="track">${opt('none', 'Nothing yet')}${accts.length ? opt('accounts', 'One or more accounts') : ''}${figs.map((k) => opt(k.key, k.label)).join('')}</select></label>
-    ${acctList}
-    ${f.err ? `<p class="h-gerr" role="alert">${esc(f.err)}</p>` : ''}
-    <div class="h-ob-nav">${btn('Cancel', 'data-goal="cancel"', 'ghost')}<button type="submit" class="h-btn pri">${f.id ? 'Save changes' : 'Save goal'}</button></div>
-  </form>`;
+    ${track(true)}
+    ${acctList}`;
+  }
 }
 
 // Form draft -> API fields, or an error message.
+// Only the kind's own fields are sent (KIND_FIELDS in /shared/goals.mjs), never another kind's.
 function goalFields(d) {
   const title = d.title.trim();
   if (!title) return { err: 'Write the goal in your own words.' };
-  const out = { title, note: d.note.trim(), horizon: d.horizon, target: null, targetDate: d.targetDate || null, track: null };
+  const kind = GOAL_KINDS.includes(d.kind) ? d.kind : 'balance';
+  const out = { title, note: d.note.trim(), horizon: d.horizon, kind, owner: d.owner || null, priority: d.priority || null };
+  const blank = (k) => String(d[k] ?? '').trim() === '';
+  const amount = (k) => { const n = Number(String(d[k]).trim()); return Number.isFinite(n) && n >= 0 ? n : null; };
+  const trackOf = () => (d.trackKind === 'accounts' && d.accounts.length ? { accounts: d.accounts.slice() }
+    : d.trackKind === 'figure' && d.figure ? { figure: d.figure } : null);
+  if (kind === 'range') {
+    if (blank('targetLow') || blank('targetHigh')) return { err: 'Give both ends of the range.' };
+    const lo = amount('targetLow'), hi = amount('targetHigh');
+    if (lo == null || hi == null) return { err: 'The range ends must be zero or more.' };
+    if (lo > hi) return { err: 'The low end must not be above the high end.' };
+    return { fields: { ...out, targetLow: lo, targetHigh: hi, targetDate: d.targetDate || null, track: trackOf() } };
+  }
+  if (kind === 'floor') {
+    if (blank('floor')) return { err: 'Give the floor amount.' };
+    const fl = amount('floor');
+    if (fl == null) return { err: 'The floor amount must be zero or more.' };
+    const track = trackOf();
+    if (!track) return { err: 'Pick what this floor tracks.' };
+    return { fields: { ...out, floor: fl, track } };
+  }
+  if (kind === 'contribution') {
+    const amt = blank('target') ? null : amount('target');
+    if (!amt) return { err: 'Give the amount to contribute.' };
+    const year = Number(String(d.taxYear).trim());
+    if (blank('taxYear') || !Number.isInteger(year)) return { err: 'Give the tax year.' };
+    if (!d.targetDate) return { err: 'Give the deadline.' };
+    if (d.targetDate <= `${year}-01-01`) return { err: 'The deadline must be after January 1 of the tax year.' };
+    const persons = [['owner', 'shareOwner', 'enteredOwner'], ['spouse', 'shareSpouse', 'enteredSpouse']];
+    const split = [];
+    for (const [person, sk] of persons) {
+      if (blank(sk)) continue;
+      const v = amount(sk);
+      if (v == null || v <= 0) return { err: 'Each share must be above zero.' };
+      split.push({ person, amount: v });
+    }
+    if (split.length && split.reduce((sum, x) => sum + Math.round(x.amount * 100), 0) !== Math.round(amt * 100)) {
+      return { err: 'The shares must add up to the amount.' };
+    }
+    const en = enteredFields(d, split, d.enteredAsOf || clockIso());
+    if (en.err) return { err: en.err };
+    const entered = en.entered;
+    return { fields: { ...out, target: amt, taxYear: year, targetDate: d.targetDate, accounts: arr(d.dest).length ? arr(d.dest).slice() : null, split: split.length ? split : null, entered } };
+  }
+  const bal = { ...out, target: null, targetDate: d.targetDate || null, track: null };
   if (d.target !== '') {
     const n = Number(d.target);
     if (!Number.isFinite(n) || n < 0) return { err: 'The target amount must be zero or more.' };
-    out.target = n;
+    bal.target = n;
   }
-  if (d.trackKind === 'accounts' && d.accounts.length) out.track = { accounts: d.accounts.slice() };
-  if (d.trackKind === 'figure' && d.figure) out.track = { figure: d.figure };
-  return { fields: out };
+  bal.track = trackOf();
+  return { fields: bal };
 }
 
 function saveGoal() {
@@ -1308,32 +1469,67 @@ function saveGoal() {
 
 const GOAL_BANDS = [['now', 'This year'], ['1-3y', 'Next few years'], ['3-10y', 'Long range']];
 
+// A range, floor or contribution goal on the Goals screen: its pace kind line when it has a pace entry
+// (done goals have none), else the typed figures. Every amount is a stored figure through figHtml.
+function kindCardHtml(g) {
+  const kind = g.kind || 'balance';
+  const goals = arr(api.s.pace?.goals);
+  const i = goals.findIndex((p) => p && p.id === g.id);
+  const p = i >= 0 ? goals[i] : null;
+  const line = p ? kindLine(p, i) : null;
+  const has = (k) => Boolean(api.s.fig && api.s.fig[k]);
+  if (line) {
+    const total = line.kind === 'contribution' && line.actual && line.target
+      ? `<p class="h-gkind">${figHtml(line.actual, { k: true })} of ${figHtml(line.target, { k: true })} contributed</p>` : '';
+    const why = p.reason && !(line.kind === 'contribution' ? line.actual : line.kind === 'floor' ? line.stateLabel : line.positionLabel)
+      ? `<p class="h-gnone">${esc(reasonText(p.reason))}</p>` : '';
+    return `${total}${kindHtml(line)}${why}`;
+  }
+  const k = (f) => `goal.${g.id}.${f}`;
+  if (kind === 'range' && has(k('low')) && has(k('high'))) return `<p class="h-gkind">Range ${figHtml(k('low'), { k: true })} to ${figHtml(k('high'), { k: true })}</p>`;
+  if (kind === 'floor' && has(k('floor'))) return `<p class="h-gkind">Floor ${figHtml(k('floor'), { k: true })}</p>`;
+  if (kind === 'contribution' && has(k('target'))) {
+    const done = has(k('entered')) ? `${figHtml(k('entered'), { k: true })} of ` : '';
+    return `<p class="h-gkind">${done}${figHtml(k('target'), { k: true })}${Number.isInteger(g.taxYear) ? ` for ${esc(g.taxYear)}` : ''}</p>`;
+  }
+  return '';
+}
+
 function goalCard(g) {
   const owner = g.origin === 'owner';
+  const kind = g.kind || 'balance';
+  const doneOwner = owner && !g.archived && g.status === 'done';
   let prog = '';
-  if (g.progress) {
+  if (kind !== 'balance') prog = kindCardHtml(g);
+  else if (g.progress) {
     const cur = figVal(g.progress.cur), tgt = figVal(g.progress.target);
     if (cur != null && tgt) {
       const p = Math.max(0, Math.min(1, cur / tgt));
       prog = `<div class="h-prog"><svg viewBox="0 0 100 4" preserveAspectRatio="none" aria-hidden="true"><rect class="bg" width="100" height="4" rx="2"/><rect class="fg" width="${p * 100}" height="4" rx="2"/></svg><span>${figHtml(g.progress.cur, { k: true })} of ${figHtml(g.progress.target, { k: true })}</span></div>`;
     }
   }
-  const sugg = owner && !g.archived ? suggOf(g.id) : null;
+  const sugg = owner && !g.archived && kind === 'balance' ? suggOf(g.id) : null;
   if (!prog && sugg) prog = suggestHtml(sugg);
-  else if (!prog && owner) {
+  else if (!prog && owner && kind === 'balance') {
     const tKey = `goal.${g.id}.target`;
     if (!(api.s.fig && api.s.fig[tKey])) prog = `<p class="h-gnone">No target yet. <button type="button" class="h-link" data-goal="edit" data-id="${esc(g.id)}">Add one</button></p>`;
     else if (g.trackWaiting) prog = `<p class="h-gnone">Target ${figHtml(tKey, { k: true })}. Waiting on a balance for what it tracks.</p>`;
     else prog = `<p class="h-gnone">Target ${figHtml(tKey, { k: true })}. <button type="button" class="h-link" data-goal="edit" data-id="${esc(g.id)}">Pick what to track</button> to see progress.</p>`;
   }
   const meta = [];
+  if (g.owner && personLabel(g.owner, hhNames())) meta.push(esc(personLabel(g.owner, hhNames())));
+  if (g.priority && PRIORITY_LABEL[g.priority]) meta.push(`${PRIORITY_LABEL[g.priority]} priority`);
   if (owner && g.targetDate) { const d = parseISO(g.targetDate); if (d) meta.push(`By ${MON[d.getUTCMonth()]} ${d.getUTCFullYear()}`); }
   if (owner && g.trackLabel) meta.push(`Tracks ${esc(g.trackLabel)}`);
+  if (owner && kind === 'contribution' && g.accountsLabel) meta.push(`Into ${esc(g.accountsLabel)}`);
+  const life = owner && !g.archived
+    ? (doneOwner ? btn('Reopen', `data-goal="reopen" data-id="${esc(g.id)}"`, 'ghost') : btn('Mark done', `data-goal="done" data-id="${esc(g.id)}"`, 'ghost'))
+    : '';
   const del = ui.goalDel === g.id
     ? `<span class="h-gdel">Delete for good?</span>${btn('Delete', `data-goal="delete-yes" data-id="${esc(g.id)}"`, 'danger')}${btn('Keep', 'data-goal="delete-no"', 'ghost')}`
-    : `${owner && !g.archived ? btn('Edit', `data-goal="edit" data-id="${esc(g.id)}"`, 'ghost') : ''}${btn(g.archived ? 'Restore' : 'Archive', `data-goal="${g.archived ? 'restore' : 'archive'}" data-id="${esc(g.id)}"`, 'ghost')}${btn('Delete', `data-goal="delete" data-id="${esc(g.id)}"`, 'ghost')}`;
+    : `${owner && !g.archived ? btn('Edit', `data-goal="edit" data-id="${esc(g.id)}"`, 'ghost') : ''}${life}${btn(g.archived ? 'Restore' : 'Archive', `data-goal="${g.archived ? 'restore' : 'archive'}" data-id="${esc(g.id)}"`, 'ghost')}${btn('Delete', `data-goal="delete" data-id="${esc(g.id)}"`, 'ghost')}`;
   const note = owner ? g.note : g.prose;
-  return `<article class="h-goal ${esc((g.status || '').replace(/\s+/g, '-'))}${g.archived ? ' archived' : ''}" data-goal-id="${esc(g.id)}"><div class="h-goal-h"><b>${goalTitle(g)}</b><span>${g.archived ? 'Archived' : owner ? '' : T(g.status)}</span>${addBtn('goal', g.id, goalText(g))}</div>${note ? `<p>${gText(g, note)}</p>` : ''}${meta.length ? `<div class="h-meta">${meta.map((m) => `<span>${m}</span>`).join('')}</div>` : ''}${prog}<div class="h-gacts">${del}</div></article>`;
+  return `<article class="h-goal ${esc((g.statusLabel || g.status || '').replace(/\s+/g, '-'))}${g.archived ? ' archived' : ''}" data-goal-id="${esc(g.id)}"><div class="h-goal-h"><b>${goalTitle(g)}</b><span>${g.archived ? 'Archived' : doneOwner ? 'Done' : owner ? '' : T(g.statusLabel || g.status)}</span>${addBtn('goal', g.id, goalText(g))}</div>${note ? `<p>${gText(g, note)}</p>` : ''}${meta.length ? `<div class="h-meta">${meta.map((m) => `<span>${m}</span>`).join('')}</div>` : ''}${prog}<div class="h-gacts">${del}</div></article>`;
 }
 
 function pGoals() {
@@ -1344,7 +1540,7 @@ function pGoals() {
     ['3-10y', 'Long range', `${y + 3} to ${y + 10}`]
   ];
   const all = arr(api.s.goals);
-  const goals = all.filter((g) => !g.archived);
+  const goals = orderGoals(all.filter((g) => !g.archived));
   const archived = all.filter((g) => g.archived);
   const axis = `<div class="h-gaxis">${bands.map((b) => `<div><b>${b[1]}</b><span>${b[2]}</span></div>`).join('')}</div>`;
   const cols = `<div class="h-gcols">${bands.map((b) => `<div class="h-gcol"><div class="h-gcol-h"><b>${b[1]}</b><span>${b[2]}</span></div>${goals.filter((g) => (g.horizon || 'now') === b[0]).map(goalCard).join('') || '<p class="h-mute sm">Nothing here.</p>'}</div>`).join('')}</div>`;
@@ -1371,24 +1567,56 @@ function goalClick(t) {
   if (act === 'cancel') { ui.goalForm = null; draw(); return; }
   if (act === 'archive' || act === 'restore') { if (ui.goalForm?.id === d.id) ui.goalForm = null; api.goalArchive(d.id, act === 'archive'); return; }
   if (act === 'delete') { ui.goalDel = d.id; draw(); return; }
+  if (act === 'done' || act === 'reopen') {
+    if (act === 'done' && ui.goalForm?.id === d.id) ui.goalForm = null;
+    api.goalUpdate(d.id, { status: act === 'done' ? 'done' : 'open' });
+    return;
+  }
   if (act === 'delete-no') { ui.goalDel = null; draw(); return; }
   if (act === 'delete-yes') { ui.goalDel = null; if (ui.goalForm?.id === d.id) ui.goalForm = null; api.goalDelete(d.id); }
 }
 
-function goalInput(t) {
+// Goal form fields committed on change (selects and checkboxes), and the contribution fields whose
+// change redraws the form so the per-person fields show without reopening it (typing keeps focus,
+// since change fires on leaving the field).
+const GF_ON_CHANGE = ['track', 'acct', 'dest', 'kind', 'owner', 'priority'];
+const GF_REDRAW = ['shareOwner', 'shareSpouse', 'enteredTotal', 'enteredOwner', 'enteredSpouse'];
+
+// Redraw the open form; if the redraw dropped focus, move it to the field after the changed one.
+function redrawGoalForm(k) {
+  const keys = [...(root?.querySelectorAll('.h-gform [data-gf]') || [])].map((el) => el.dataset.gf);
+  draw();
+  setTimeout(() => {
+    const a = document.activeElement;
+    if (a && a !== document.body && root?.contains(a)) return;
+    const next = keys.slice(keys.indexOf(k) + 1).find((x) => x !== k && root?.querySelector(`.h-gform [data-gf="${x}"]`));
+    root?.querySelector(`.h-gform [data-gf="${next || k}"]`)?.focus();
+  }, 0);
+}
+
+function goalInput(t, { commit = false } = {}) {
   const f = ui.goalForm;
   if (!f) return false;
   const k = t.dataset.gf;
   if (!k) return false;
-  if (k === 'acct') {
-    const set = new Set(f.draft.accounts);
+  if (k === 'acct' || k === 'dest') {
+    const field = k === 'acct' ? 'accounts' : 'dest';
+    const set = new Set(arr(f.draft[field]));
     if (t.checked) set.add(t.value); else set.delete(t.value);
-    f.draft.accounts = [...set];
+    f.draft[field] = [...set];
   } else if (k === 'track') {
+    if (t.value === '') return true;
     if (t.value === 'none' || t.value === 'accounts') { f.draft.trackKind = t.value; f.draft.figure = ''; }
     else { f.draft.trackKind = 'figure'; f.draft.figure = t.value; }
     draw();
-  } else f.draft[k] = t.value;
+  } else if (k === 'kind') {
+    f.draft.kind = t.value;
+    f.err = '';
+    draw();
+  } else {
+    f.draft[k] = t.value;
+    if (commit && GF_REDRAW.includes(k)) redrawGoalForm(k);
+  }
   return true;
 }
 
@@ -2165,7 +2393,7 @@ function onInput(e) {
   if (ingest.handleChange(e)) return;
   const t = e.target;
   if (t.dataset.connInput) { connect.onInput(t); return; }
-  if (t.dataset.gf && t.dataset.gf !== 'track' && t.dataset.gf !== 'acct') { goalInput(t); return; }
+  if (t.dataset.gf && !GF_ON_CHANGE.includes(t.dataset.gf)) { goalInput(t); return; }
   if (t.dataset.draft) { ui.draft[t.dataset.draft] = t.value; return; }
   if (t.dataset.dump) {
     const was = String(ui.dumped ?? '').trim() !== '';
@@ -2195,7 +2423,8 @@ function onChange(e) {
   if (SCREENS.some((s) => s.onChange?.(e))) return;
   if (recAnswers.onChange(e)) return;
   const t = e.target;
-  if (t?.dataset?.gf === 'track' || t?.dataset?.gf === 'acct') { goalInput(t); return; }
+  if (GF_ON_CHANGE.includes(t?.dataset?.gf)) { goalInput(t); return; }
+  if (GF_REDRAW.includes(t?.dataset?.gf)) { goalInput(t, { commit: true }); return; }
   if (t?.dataset?.suggRate) { suggRate(t); return; }
   if (t?.dataset?.recowner) { api.act(t.dataset.recowner, 'owner', t.value); return; }
   if (t?.dataset?.curve) { api.setCurve(t.dataset.curve, Number(t.value) / 100); return; }

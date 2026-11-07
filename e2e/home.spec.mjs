@@ -74,6 +74,10 @@ function model(s, filter = 'both') {
   const goals = s.goals.filter((g) => !g.archived && g.status !== 'done');
   const inPace = s.pace.goals.map((p) => goals.find((g) => g.id === p.id)).filter(Boolean);
   const order = [...inPace, ...goals.filter((g) => !inPace.includes(g))];
+  // Then by priority (high, medium, low, unset), stable on the pace order (goal model v2).
+  const RANK = { high: 0, medium: 1, low: 2 };
+  const rank = (g) => RANK[g.priority] ?? 3;
+  order.sort((a, b) => rank(a) - rank(b));
   const cards = order.map((g) => {
     const paceIndex = s.pace.goals.findIndex((p) => p.id === g.id);
     const pace = paceIndex < 0 ? null : s.pace.goals[paceIndex];
@@ -182,17 +186,23 @@ test.describe('Home', () => {
     for (const c of m.cards) {
       const el = card(page, c.id);
       const p = c.pace;
-      const want = goalChip(p);
       await expect(el.locator('a[data-go="goals"]').first()).toHaveText(plain(c.goal.title));
-      const pchip = el.locator('span.h-pchip');
-      await expect(pchip).toHaveText(want.label);
-      await expect(pchip).toHaveClass(new RegExp(`\\b${want.tone}\\b`));
+      // Range, floor and contribution chips, lines and bars are covered by e2e/goal-kinds.spec.mjs.
+      const balance = !c.goal.kind || c.goal.kind === 'balance';
       // Seed goals never get a suggested target.
       await expect(el.locator('.h-sugg')).toHaveCount(0);
+      if (balance) {
+        const want = goalChip(p);
+        const pchip = el.locator('span.h-pchip');
+        await expect(pchip).toHaveText(want.label);
+        await expect(pchip).toHaveClass(new RegExp(`\\b${want.tone}\\b`));
+      }
 
       // The bar draws actual and plan today over the target, muted when pace is not current.
       const bar = el.locator('div.h-pbar');
-      if (!c.bar) {
+      if (!balance) {
+        // Covered by e2e/goal-kinds.spec.mjs.
+      } else if (!c.bar) {
         await expect(bar, `${c.id} has no target, so no bar`).toHaveCount(0);
       } else {
         await expect(bar).toHaveCount(1);
@@ -236,7 +246,8 @@ test.describe('Home', () => {
 
   test('stale goals say Data stale and never On pace', { tag: ['@ac6'] }, async ({ page, request }) => {
     const s = await fetchScenario(request);
-    const stale = model(s).cards.filter((c) => c.pace && c.pace.stale);
+    // A breached floor says Below floor even when stale (goal model v2).
+    const stale = model(s).cards.filter((c) => c.pace && c.pace.stale && c.pace.floor?.state !== 'breached');
     expect(stale.length, 'the demo has stale goals').toBeGreaterThan(0);
     await gotoRoute(page, 'home');
     for (const c of stale) {

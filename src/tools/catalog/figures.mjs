@@ -1,6 +1,6 @@
 import { getSetting } from '../../store/db.mjs';
 import { loadContent, tokenScope, resolveClock, todayUtc, loadGoals, loadCurve, loadFigures, loadLinkedRec } from '../../scenario/build.mjs';
-import { horizonLabel } from '../../shared/goals.mjs';
+import { horizonLabel, personLabel } from '../../shared/goals.mjs';
 import { accountNaming, relabelStoredFigure } from '../../accounts/naming.mjs';
 import { resolveTokens } from '../../shared/tokens.mjs';
 import { ToolError } from '../errors.mjs';
@@ -56,22 +56,45 @@ export function recOutById(db, clock, id) {
   return recOut(tokenScope(db), loadLinkedRec(db, clock, recRow(db, id)));
 }
 
-// Goals as the model sees them: open goals only, owner text verbatim (seed text token-resolved),
-// the target the owner typed (provenance 'you') and the tracked current value when stored data
-// gives one. No number here is computed by the model.
+// Goals as the model sees them: every goal not archived (done goals say so in status), owner text
+// verbatim (seed text token-resolved), the kind, whose goal with its label, the priority, the
+// amounts as typed (provenance 'you' for owner goals, 'plan' for the demo's seed goals; an entered
+// contribution is always 'you') and the tracked current value when stored data gives one. status is
+// canonical (open or done); a seed goal's display text is statusLabel. No number here is computed by
+// the model; progress is goals.pace's.
 export function goalsForModel(db) {
   const scope = tokenScope(db);
   const fig = loadFigures(db);
   const accounts = db.prepare('SELECT * FROM accounts').all();
   return loadGoals(db, { fig, accounts }).filter(g => !g.archived).map(g => {
     const owner = g.origin === 'owner';
+    const source = owner ? 'you' : 'plan';
     const text = v => (owner ? String(v ?? '') : resolveTokens(scope, String(v ?? ''), false));
+    const amount = v => (typeof v === 'number' && Number.isFinite(v) ? { amount: v, source } : null);
     const out = { id: g.id, title: text(g.title), horizon: horizonLabel(g.horizon) };
     const note = owner ? g.note : g.prose;
     if (note) out.note = text(note);
-    if (!owner && g.status) out.status = g.status;
+    if (g.status) out.status = g.status;
+    if (!owner && g.statusLabel) out.statusLabel = g.statusLabel;
+    out.kind = g.kind;
+    if (g.owner) { out.owner = g.owner; out.ownerLabel = personLabel(g.owner, scope.names); }
+    if (g.priority) out.priority = g.priority;
     if (owner && typeof g.target === 'number') out.target = { amount: g.target, source: 'you' };
     if (owner && g.targetDate) out.targetDate = g.targetDate;
+    if (g.kind === 'range' && amount(g.targetLow) && amount(g.targetHigh)) out.range = { low: amount(g.targetLow), high: amount(g.targetHigh) };
+    if (g.kind === 'floor' && amount(g.floor)) out.floor = amount(g.floor);
+    if (g.kind === 'contribution') {
+      if (!owner && amount(g.target)) out.target = amount(g.target);
+      const e = g.entered && typeof g.entered === 'object' ? g.entered : null;
+      out.contribution = {
+        taxYear: Number.isInteger(g.taxYear) ? g.taxYear : null,
+        deadline: g.targetDate || null,
+        accounts: g.accountsLabel ? text(g.accountsLabel) : null,
+        split: (Array.isArray(g.split) ? g.split : []).map(p => ({ person: p.person, label: personLabel(p.person, scope.names), amount: p.amount, source })),
+        entered: e ? { asOf: e.asOf, ...(typeof e.total === 'number' ? { total: e.total } : {}),
+          ...(Array.isArray(e.people) ? { people: e.people.map(p => ({ person: p.person, amount: p.amount })) } : {}), source: 'you' } : null,
+      };
+    }
     if (g.trackLabel) out.tracking = g.trackLabel;
     const cur = g.progress ? fig[g.progress.cur] : (g.current ? fig[g.current] : null);
     if (cur && typeof cur.v === 'number' && !cur.unavailable) out.current = { amount: cur.v, kind: cur.kind };
