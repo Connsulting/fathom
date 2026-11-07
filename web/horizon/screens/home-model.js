@@ -1,5 +1,5 @@
 /* Home view model: goals first, pace per goal, the next action per goal, one data-health line.
-   Pure functions over the scenario (pace, goals, recs, ingest, accounts); no DOM and no api, so
+   Pure functions over the scenario (pace, goals, recs, suggestions, ingest, accounts); no DOM and no api, so
    node can import it. Every number it returns is a count or a ratio of stored figures. */
 
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -140,7 +140,18 @@ export function reasonText(code) {
 
 /* ---------- the home model ---------- */
 
-export function homeModel({ goals, pace, recs, filter } = {}) {
+// Whole days from an ISO clock date to Dec 31 of its year, in UTC; Infinity when the clock does not
+// parse, so nothing is cut off by a year end nobody knows.
+function daysToYearEnd(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || ''));
+  if (!m) return Infinity;
+  return Math.round((Date.UTC(+m[1], 11, 31) - Date.UTC(+m[1], +m[2] - 1, +m[3])) / 864e5);
+}
+
+// Goal actions only: a rec that serves no goal stays in the housekeeping row.
+const isGoalAction = (r) => r?.housekeeping !== true;
+
+export function homeModel({ goals, pace, recs, filter, suggestions, clock } = {}) {
   const f = ['both', 'me', 'spouse'].includes(filter) ? filter : 'both';
   const open = arr(recs).filter(isOpen);
   const counts = {
@@ -151,6 +162,7 @@ export function homeModel({ goals, pace, recs, filter } = {}) {
   const queue = open.filter((r) => ownerMatches(r, f)).sort(byWindow);
   const live = arr(goals).filter((g) => g && !g.archived && g.status !== 'done');
   const paceGoals = arr(pace?.goals);
+  const records = arr(suggestions).filter((r) => r && r.goalId != null);
   const ordered = [];
   paceGoals.forEach((p) => { const g = live.find((x) => x.id === p?.id); if (g && !ordered.includes(g)) ordered.push(g); });
   live.forEach((g) => { if (!ordered.includes(g)) ordered.push(g); });
@@ -158,18 +170,67 @@ export function homeModel({ goals, pace, recs, filter } = {}) {
     const paceIndex = paceGoals.findIndex((p) => p?.id === g.id);
     const p = paceIndex >= 0 ? paceGoals[paceIndex] : null;
     const actions = queue.filter((r) => servedGoalIds(r).includes(String(g.id)));
-    const quiet = !p || p.status === 'no target' || ((p.status === 'on pace' || p.status === 'ahead') && actions.length === 0);
-    return { id: g.id, goal: g, pace: p, paceIndex, chip: goalChip(p), bar: paceBar(p), next: actions[0] || null, actions, collapsed: quiet };
+    const suggestion = records.find((r) => String(r.goalId) === String(g.id)) || null;
+    return { id: g.id, goal: g, pace: p, paceIndex, chip: goalChip(p), bar: paceBar(p), next: actions[0] || null, actions, suggestion };
   });
+  const yearEnd = daysToYearEnd(clock ?? pace?.clock);
+  const due = queue.filter((r) => isGoalAction(r) && recDays(r) <= yearEnd);
+  const nextThing = due[0] || queue.find(isGoalAction) || null;
+  const at = due.indexOf(nextThing);
   return {
-    filter: f, counts, cards,
-    expanded: cards.filter((c) => !c.collapsed),
-    collapsed: cards.filter((c) => c.collapsed),
+    filter: f, counts, cards, queue, due, nextThing,
+    afterThat: at >= 0 ? due.slice(at + 1, at + 4) : [],
     housekeeping: arr(recs).filter((r) => isHousekeepingItem(r) && ownerMatches(r, f)).sort(byWindow),
-    queue,
-    nextThing: queue[0] || null,
-    afterThat: queue.slice(1, 4)
+    pending: cards.filter((c) => c.suggestion?.state === 'suggested').map((c) => c.suggestion)
   };
+}
+
+// The Home headline. A goal with a target keeps the pace headline; with none, it counts the goals
+// that have a suggested target, else the goals that still need one. bulk: Accept all is offered.
+export function homeHeadline({ cards, pace, pending } = {}) {
+  const list = arr(cards);
+  const n = Array.isArray(pending) ? pending.length : Math.max(0, Number(pending) || 0);
+  const bulk = n >= 2;
+  if (list.some((c) => c?.pace && c.pace.status !== 'no target')) {
+    return { title: pace?.rollup?.headline || 'Pace for your goals', bulk };
+  }
+  if (n > 0) return { title: `Suggested targets for ${plural(n, 'goal')}`, bulk };
+  const need = list.filter((c) => !c?.pace || c.pace.status === 'no target').length;
+  return { title: `${plural(need, 'goal')} ${need === 1 ? 'needs' : 'need'} a target`, bulk };
+}
+
+/* ---------- suggested targets ---------- */
+
+// 'Jun 30, 2027' from an ISO date, in UTC; null when the date does not parse.
+export function longDate(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || ''));
+  if (!m) return null;
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+  return `${MON[d.getUTCMonth()]} ${d.getUTCDate()}, ${d.getUTCFullYear()}`;
+}
+
+// A suggestion's spending window: 'Feb to Jul 2026' within one year, else 'Nov 2025 to Jul 2026'.
+export function windowSpan(w) {
+  const a = /^(\d{4})-(\d{2})/.exec(String(w?.from || '')), b = /^(\d{4})-(\d{2})/.exec(String(w?.to || ''));
+  if (!a || !b) return '';
+  const mon = (x) => MON[Number(x[2]) - 1] || x[2];
+  return a[1] === b[1] ? `${mon(a)} to ${mon(b)} ${b[1]}` : `${mon(a)} ${a[1]} to ${mon(b)} ${b[1]}`;
+}
+
+// Why a goal gets a question instead of a number, one plain sentence per missing input code.
+export const ASK_TEXT = Object.freeze({
+  unsupported_goal: 'There is no calculator for this kind of goal yet.',
+  ambiguous_goal: 'The goal reads as more than one kind, so no single calculator fits it.',
+  no_spending_history: 'There are not yet three complete months of spending on file to size it from.',
+  no_cash_balance: 'No cash account has a balance on file yet.',
+  no_investment_balance: 'No investment account has a balance on file yet.',
+  no_tax_room: 'This year\'s unused contribution room is not computed yet.',
+  no_room_account: 'No account to contribute to is on file yet.'
+});
+
+export function askReason(record) {
+  const code = arr(record?.missing).find((c) => Object.prototype.hasOwnProperty.call(ASK_TEXT, c));
+  return code ? ASK_TEXT[code] : 'There is not enough on file to suggest an amount yet.';
 }
 
 export function healthLine({ pace, ingest, accounts, metaDataThrough } = {}) {

@@ -30,6 +30,8 @@ function pathOf(goal) {
   const start = goal.pace;
   if (!start || !finite(start.startValue) || !isoDate(start.startDate)) return { reason: 'missing_plan_start' };
   if (!isoDate(goal.targetDate) || goal.targetDate <= start.startDate) return { reason: 'invalid_plan_dates' };
+  // A plan that starts at or above its target is a flat reached path: the plan holds the target.
+  if (finite(goal.target) && start.startValue >= goal.target) return { slope: 0, reached: true, at: () => goal.target };
   const slope = (goal.target - start.startValue) / (day(goal.targetDate) - day(start.startDate));
   if (!finite(slope) || slope <= 0) return { reason: 'non_increasing_path' };
   return { slope, at: date => start.startValue + slope * Math.max(0, Math.min(day(date), day(goal.targetDate)) - day(start.startDate)) };
@@ -57,6 +59,19 @@ export function goalPace({ goal, actual = null, clock }) {
   if (!finite(goal.target) || !isoDate(goal.targetDate)) return { ...out, status: 'no target', reason: 'no_target' };
   const path = pathOf(goal);
   if (path.reason) return { ...out, reason: path.reason };
+  if (path.reached) {
+    out.expected = paceFigure(goal.target, 'Expected today', { clock, calc: 'goalPace', inputs, sources, kind: 'p',
+      formula: 'target already reached at plan start' });
+    out.tolerance = f(PACE_PARAMETERS.minimumToleranceUsd, 'On pace tolerance');
+    if (actual && finite(actual.v)) out.gap = f(actual.v - goal.target, 'Tracked value minus plan');
+    out.reason = dataState(actual, clock);
+    out.stale = out.reason === 'stale_data';
+    if (!out.reason) {
+      out.status = actual.v >= goal.target ? 'ahead' : 'behind';
+      out.timeGap = actual.v >= goal.target ? 'Reached' : null;
+    }
+    return out;
+  }
   const expected = path.at(clock);
   const tolerance = Math.max(PACE_PARAMETERS.minimumToleranceUsd, path.slope * PACE_PARAMETERS.toleranceDays);
   out.expected = f(expected, 'Expected today', 'p');
