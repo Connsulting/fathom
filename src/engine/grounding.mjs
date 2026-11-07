@@ -125,6 +125,40 @@ function matches(value, item) {
   return true;
 }
 
+// A spelled count that names a figure (money, percent, time, or a counted record) is always checked.
+const unitAfter = /^\s*(?:%|(?:dollars?|cents?|percent|seconds?|minutes?|hours?|days?|weeks?|months?|quarters?|years?|decades?|accounts?|transactions?|payments?|holdings?|positions?|dependents?|child|children|kids?)\b)/i;
+const listItem = /^ {0,3}(?:[-*•]|\d+[.)])(?:\s|$)/;
+const determiner = /\b(?:a|an|the|this|that|these|those|each|every|any|which|another|no|some|whichever)(?:\s+\p{L}+){0,2}\s+$/iu;
+
+// Top-level items in the list block right after the paragraph holding `from`; 0 when no list follows.
+function listLength(text, from) {
+  const lines = text.slice(from).split('\n').slice(1);
+  let index = 0;
+  while (index < lines.length && lines[index].trim() && !listItem.test(lines[index])) index++;
+  let count = 0;
+  let gap = false;
+  for (const line of lines.slice(index)) {
+    if (!line.trim()) gap = true;
+    else if (listItem.test(line)) { count++; gap = false; }
+    else if (!count || (gap && !/^\s/.test(line))) break;
+    else gap = false;
+  }
+  return count;
+}
+
+// Spelled words that are structure or grammar rather than a figure: a count matching the list that
+// follows its paragraph, or the pronoun "one" ("the one", "no one", "one of", "one more").
+function isStructural(text, phrase) {
+  const rest = text.slice(phrase.index + phrase.text.length);
+  if (unitAfter.test(rest)) return false;
+  const word = phrase.text.toLowerCase();
+  if (word === 'one') {
+    const lineStart = text.lastIndexOf('\n', phrase.index - 1) + 1;
+    if (determiner.test(text.slice(lineStart, phrase.index)) || /^\s+(?:of|more|another)\b/i.test(rest)) return true;
+  }
+  return phrase.value > 0 && !/hundred|thousand|million|billion/.test(word) && phrase.value === listLength(text, phrase.index);
+}
+
 export function checkGrounding(prose, { toolResults = [], data = [], figures = {} } = {}) {
   if (typeof prose !== 'string') throw new TypeError('Prose must be a string');
   const sources = { number: new Set(), percent: new Set() };
@@ -146,7 +180,7 @@ export function checkGrounding(prose, { toolResults = [], data = [], figures = {
   // Numeric expressions were judged whole above, so their magnitude words are not judged again.
   const wordsOnly = masked.replace(numberPattern, match => ' '.repeat(match.length));
   for (const phrase of wordQuantities(wordsOnly)) {
-    if (!sources[phrase.percent ? 'percent' : 'number'].has(phrase.value)) {
+    if (!sources[phrase.percent ? 'percent' : 'number'].has(phrase.value) && !isStructural(masked, phrase)) {
       violations.push({ text: phrase.text, index: phrase.index, reason: 'numeric word absent from sources' });
     }
   }
