@@ -12,6 +12,7 @@ import { MODEL_PURPOSES, modelFor } from '../engine/pricing.mjs';
 import { factEventTitle } from '../shared/event-labels.mjs';
 import { buildYearend } from '../yearend/expected.mjs';
 import { CURVE_AXES, KNOWN_FIGURES, curvePosition, servesGoals } from '../shared/goals.mjs';
+import { accountLabel, accountSubtitle } from '../shared/account-label.mjs';
 import { deriveHeard } from '../onboarding/heard.mjs';
 import { withAdvisor, advisorSection } from '../advisor/index.mjs';
 import { buildPace, indexPaceFigures } from '../pace/build.mjs';
@@ -463,7 +464,7 @@ export function loadGoals(db, { fig = {}, accounts = [] } = {}) {
       g.trackLabel = known ? known.label : tr.figure;
     } else if (tr && Array.isArray(tr.accounts) && tr.accounts.length) {
       const accts = tr.accounts.map(id => accounts.find(a => a.id === id)).filter(Boolean);
-      g.trackLabel = accts.map(a => a.name).join(', ');
+      g.trackLabel = accts.map(a => accountLabel(a)).join(', ');
       const figs = accts.map(a => (a.fig_key && currentFig(fig[a.fig_key]) ? fig[a.fig_key] : null));
       if (accts.length && accts.length === tr.accounts.length && figs.every(Boolean)) {
         if (accts.length === 1) cur = accts[0].fig_key;
@@ -545,6 +546,7 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
   const ingest = ingestState(db, { clock: clk });
   const ingestAccounts = ingest.accounts || {};
   const accountRows = db.prepare('SELECT * FROM accounts ORDER BY sort, id').all();
+  const householdNames = parse(db.prepare("SELECT value FROM facts WHERE key = 'household.names'").get()?.value, {}) || {};
   const goals = loadGoals(db, { fig, accounts: accountRows });
   const pace = buildPace(db, { clock: clk });
   Object.assign(fig, indexPaceFigures(pace));
@@ -586,8 +588,12 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
     ask: section(content, 'ask'),
     accounts: accountRows.map(a => {
       const f = Object.hasOwn(ingestAccounts, a.id) ? ingestAccounts[a.id] : {};
+      const named = { ...a, householdNames };
+      const label = accountLabel(named);
       return {
-        id: a.id, inst: a.inst, name: a.name, owner: a.owner, kind: a.kind, fig: a.fig_key, mirror: a.mirror, note: a.note || '', mask: a.mask,
+        id: a.id, inst: a.inst, name: label, sourceName: a.name, displayName: a.display_name || null,
+        subtitle: accountSubtitle(a),
+        owner: a.owner, kind: a.kind, fig: a.fig_key, mirror: a.mirror, note: a.note || '', mask: a.mask,
         asOf: f.asOf || '', fresh: f.fresh || 'unknown', sourceId: f.sourceId || null,
         // Text that came from an uploaded file: render as plain text, never as tokens or markup.
         imported: a.parser !== 'demo-seed',

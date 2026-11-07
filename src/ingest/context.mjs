@@ -12,6 +12,7 @@
 //   {type: 'values', file: {id, name} | null, values: [{label, value}]}     every other kind
 
 import { parseJson } from '../store/db.mjs';
+import { accountLabel } from '../shared/account-label.mjs';
 import { cents } from './format.mjs';
 import { normalizeName } from './confirm.mjs';
 import { parsers } from './registry.mjs';
@@ -50,7 +51,7 @@ const fileName = (db, id) => fileInfo(db, id)?.name ?? null;
 // ---------------------------------------------------------------- account view
 
 function accountView(db, id) {
-  const a = db.prepare('SELECT id, inst, mask, name, owner, kind, file_id FROM accounts WHERE id = ?').get(id) ?? { id };
+  const a = db.prepare('SELECT id, inst, mask, name, owner, kind, file_id, display_name FROM accounts WHERE id = ?').get(id) ?? { id };
   const holder = db.prepare('SELECT holder FROM account_holders WHERE account_id = ?').get(id)?.holder ?? null;
   const tx = db.prepare('SELECT count(*) AS n, min(date) AS f, max(date) AS t FROM transactions WHERE account_id = ?').get(id);
   const bal = db.prepare('SELECT count(*) AS n, min(date) AS f, max(date) AS t FROM balances WHERE account_id = ?').get(id);
@@ -68,6 +69,7 @@ function accountView(db, id) {
     id: a.id,
     institution: a.inst || null,
     name: a.name ?? null,
+    label: accountLabel({ ...a, holder }),
     mask: a.mask ?? null,
     kind: a.kind ?? null,
     owner: a.owner ?? null,

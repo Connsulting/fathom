@@ -393,7 +393,12 @@ export function ingestScreens(h) {
   function viewCell(v, f) {
     switch (f) {
       case 'institution': return v.institution ? esc(v.institution) : '';
-      case 'name': return v.name ? esc(v.name) : '';
+      case 'name': {
+        const text = v.label || v.name;
+        if (!text) return '';
+        if (!v.id) return esc(text);
+        return `<button type="button" class="h-acc-name" data-acc-rename="${esc(v.id)}">${esc(text)}</button>`;
+      }
       case 'mask': return v.mask ? esc(v.mask) : '';
       case 'holder': return v.holder ? esc(v.holder) : '';
       case 'owner': return v.owner ? esc(OWNER_LABEL[v.owner] || v.owner) : '';
@@ -559,7 +564,7 @@ export function ingestScreens(h) {
     const others = arr(d.sameName).length;
     const flag = others ? `<span class="h-cf-flag">Same name as ${plural(others, 'other account')}</span>` : '';
     const where = v ? [v.institution ? esc(v.institution) : '', v.mask ? `ending ${esc(v.mask)}` : ''].filter(Boolean).join(', ') : '';
-    const acct = `<td data-col="account"><b>${esc(v ? (v.name || 'Unnamed account') : it.question)}</b>${flag}${where ? `<span>${where}</span>` : ''}</td>`;
+    const acct = `<td data-col="account"><b>${esc(v ? (v.label || v.name || 'Unnamed account') : it.question)}</b>${flag}${where ? `<span>${where}</span>` : ''}</td>`;
     const holder = `<td data-col="holder" data-l="Holder">${v && v.holder ? esc(v.holder) : '<span class="h-cf-none">Not in the source</span>'}</td>`;
     const bal = `<td data-col="balance" data-l="Latest balance">${(v && balanceHtml(v.balance, true)) || '<span class="h-cf-none">No balance yet</span>'}</td>`;
     const range = `<td data-col="range" data-l="Dates">${(v && esc(rangeText(v.from, v.to))) || '<span class="h-cf-none">No dated rows</span>'}</td>`;
