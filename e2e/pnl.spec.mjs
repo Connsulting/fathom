@@ -248,13 +248,14 @@ async function expectRows(page, request, path, query, category) {
   await expect(dlg.locator('[data-pl-dlg-total] .fx-fig')).toHaveAttribute('data-fig', rows.sum);
 }
 
-// Close the rows dialog; a first Escape may only dismiss an open figure popover.
+// Close the rows dialog with Escape. An open figure popover takes the first Escape, so dismiss it
+// first; Escape on the dialog closes it through history.back(), which lands asynchronously.
 async function closeRows(page) {
-  await page.keyboard.press('Escape');
-  if (await rowsDialog(page).count()) {
+  if (await page.locator('.fx-pop').count()) {
+    await page.keyboard.press('Escape');
     await expect(page.locator('.fx-pop')).toBeHidden();
-    await rowsDialog(page).locator('[data-dlg="close"]').click();
   }
+  await page.keyboard.press('Escape');
   await expect(rowsDialog(page)).toHaveCount(0);
   await expect(page).not.toHaveURL(/#\/pnlrows\//);
 }
