@@ -34,7 +34,7 @@ import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameS
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { src, tempDir, request, createSessionFixture, sessionClient } from './helpers/server.mjs';
+import { src, tempDir, request, createSessionFixture, sessionClient, runCommand } from './helpers/server.mjs';
 import {
   CLOCK, SIMPLEFIN_URL, buildMigrationFixture, copyFixture, recordExpectations, runMigration, migrationEnv, migrateCli,
   migrateExitingAt, migratedPlaintexts, endState, tableDigests, digestRules, withSqlite, startRuntime, startRefusal, stableHashes,
@@ -259,6 +259,40 @@ test('with two admins the ownerless key is revoked with migration_no_creator and
     assert.equal(ownerless.household_id, fx.householdId);
     assert.equal(ownerless.key_hash, expected.apiKeys.find(k => k.id === fx.ownerlessKey.id).key_hash);
   });
+});
+
+// The operator rollback: `scripts/source-snapshot.mjs restore` on the migration's own snapshot,
+// with the backup key, rebuilds the exact pre-migration instance in a new directory.
+test('the migration snapshot restores the exact pre-migration instance for a rollback', T, async () => {
+  const fx = fresh();
+  const tree = dir => fileHashes(dir);
+  const before = {
+    store: tableDigests(join(fx.dataDir, 'fathom.sqlite')),
+    secret: readFileSync(join(fx.dataDir, 'api-key-secret'), 'utf8'),
+    trees: ['files', 'packs', 'outbox'].map(d => tree(join(fx.dataDir, d))),
+  };
+  const r = await runMigration(fx);
+  assert.equal(r.status, 'complete');
+  const snapshot = join(fx.dataDir, 'snapshots', readdirSync(join(fx.dataDir, 'snapshots')).find(n => n === `tenancy-${operationOf(fx)[0]}.fsnap`));
+  const out = join(fx.root, 'restored');
+  const restored = await runCommand(process.execPath, ['scripts/source-snapshot.mjs', 'restore', '--snapshot', snapshot, '--out', out],
+    { env: { FATHOM_BACKUP_KEY_FILE: fx.keys.backupKeyFile } });
+  assert.equal(restored.code, 0, restored.stderr);
+  noSecrets(restored.stdout + restored.stderr, fx.secrets, 'the restore output');
+  assert.deepEqual(readdirSync(out).sort(), ['api-key-secret', 'fathom.sqlite', 'files', 'outbox', 'packs', 'platform.sqlite']);
+  assert.deepEqual(tableDigests(join(out, 'fathom.sqlite')), before.store, 'every store row as before the migration');
+  assert.equal(readFileSync(join(out, 'api-key-secret'), 'utf8'), before.secret);
+  assert.deepEqual(['files', 'packs', 'outbox'].map(d => tree(join(out, d))), before.trees, 'vault objects, pack and outbox byte for byte');
+  withSqlite(join(out, 'platform.sqlite'), p => {
+    assert.equal(p.prepare('SELECT storage_root FROM households WHERE id = ?').get(fx.householdId).storage_root, null, 'the platform is the pre-migration one');
+  });
+
+  const wrongKey = writePrivate(join(fx.root, 'wrong-backup.key'), randomBytes(32).toString('hex') + '\n');
+  const refused = await runCommand(process.execPath, ['scripts/source-snapshot.mjs', 'restore', '--snapshot', snapshot, '--out', join(fx.root, 'refused')],
+    { env: { FATHOM_BACKUP_KEY_FILE: wrongKey } });
+  assert.equal(refused.code, 1);
+  assert.match(refused.stderr, /snapshot_invalid/);
+  assert.equal(existsSync(join(fx.root, 'refused')), false, 'a wrong key writes nothing');
 });
 
 // ============================================================================================
