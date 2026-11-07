@@ -84,12 +84,14 @@ export function expectedItems({ facts, accounts, year, active, deposits, employe
     if (!active(a.id)) continue;
     const same = accounts.filter((b) => b.inst === a.inst && b.name === a.name).length > 1;
     const label = accountLabel(a) + (same && a.owner ? ` (${a.owner})` : '');
+    // Which documents are required follows the imported name, not the owner's display name.
+    const imported = `${a.name || ''}`;
     const inst = normalizeName(a.inst);
     if (a.kind === 'taxable') {
       add({ key: `1099-composite:${a.id}`, form: '1099-b', forms: ['1099-b', '1099-div', '1099-int'], t: `Composite 1099 (B, DIV, INT) for ${label}`, src: `${a.inst || 'The brokerage'} tax center`, arrives: 'feb15', name: inst, why: 'Brokerage account with activity this year', account: a.id });
-    } else if (BANK.includes(a.kind) || (a.kind === 'business' && !/payroll/i.test(label))) {
+    } else if (BANK.includes(a.kind) || (a.kind === 'business' && !/payroll/i.test(imported))) {
       add({ key: `1099-int:${a.id}`, form: '1099-int', t: `1099-INT for ${label}`, src: `${a.inst || 'The bank'}; only issued above the IRS interest reporting threshold`, arrives: 'jan31', name: inst, why: 'Bank account with activity this year', account: a.id });
-    } else if (a.kind === 'loan' && /mortgage|home/i.test(label)) {
+    } else if (a.kind === 'loan' && /mortgage|home/i.test(imported)) {
       add({ key: `1098:${a.id}`, form: '1098', t: `1098 mortgage interest for ${label}`, src: `${a.inst || 'The mortgage servicer'}`, arrives: 'jan31', name: inst, why: 'Mortgage account', account: a.id });
     } else if (IRA(a) && deposits(a.id)) {
       add({ key: `5498:${a.id}`, form: '5498', t: `5498 for ${label}`, src: `${a.inst || 'The IRA custodian'}`, arrives: 'may31', name: inst, why: 'IRA contributions this year', account: a.id });
@@ -174,8 +176,11 @@ function pnlCoverage(db, year) {
 // `plain` resolves demo tokens in seeded account text to plain text (imported text is left as is).
 export function yearendChecklist(db, { year, clock, plain = (s) => s }) {
   const facts = getFacts(db);
+  const householdNames = facts['household.names'] && typeof facts['household.names'] === 'object' ? facts['household.names'] : {};
+  const holders = new Map(db.prepare('SELECT account_id, holder FROM account_holders').all().map((r) => [r.account_id, r.holder]));
   const accounts = db.prepare('SELECT * FROM accounts ORDER BY sort, id').all()
-    .map((a) => (a.parser === 'demo-seed' ? { ...a, inst: plain(a.inst || ''), name: plain(a.name || ''), owner: plain(a.owner || '') } : a));
+    .map((a) => (a.parser === 'demo-seed' ? { ...a, inst: plain(a.inst || ''), name: plain(a.name || ''), owner: plain(a.owner || '') } : a))
+    .map((a) => ({ ...a, householdNames, holder: holders.get(a.id) || null }));
   const { active, deposits } = activeAccounts(db, year);
   const all = yearDocuments(db, year);
   const docs = all.filter((d) => RECEIVABLE.includes(d.doc_type) && d.file_id);

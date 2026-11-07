@@ -12,7 +12,8 @@ import { MODEL_PURPOSES, modelFor } from '../engine/pricing.mjs';
 import { factEventTitle } from '../shared/event-labels.mjs';
 import { buildYearend } from '../yearend/expected.mjs';
 import { CURVE_AXES, KNOWN_FIGURES, curvePosition, servesGoals } from '../shared/goals.mjs';
-import { accountLabel, accountSubtitle, trendLabel, sourceLabel } from '../shared/account-label.mjs';
+import { accountLabel, accountSubtitle } from '../shared/account-label.mjs';
+import { applyNaming } from '../accounts/naming.mjs';
 import { deriveHeard } from '../onboarding/heard.mjs';
 import { withAdvisor, advisorSection } from '../advisor/index.mjs';
 import { buildPace, indexPaceFigures } from '../pace/build.mjs';
@@ -500,21 +501,6 @@ function onboardingWithPriorities(onboarding, curve, positions) {
   return ob;
 }
 
-// Stored trends, account sources and balance figures keep the label from the last plan. A rename
-// has to show on the next read, so those labels are taken from the account again here.
-function applyLiveAccountLabels(db, series, src, fig) {
-  const householdNames = parse(db.prepare("SELECT value FROM facts WHERE key = 'household.names'").get()?.value, {}) || {};
-  const holders = new Map(db.prepare('SELECT account_id, holder FROM account_holders').all().map((r) => [r.account_id, r.holder]));
-  for (const a of db.prepare('SELECT * FROM accounts').all()) {
-    const row = { ...a, householdNames, holder: holders.get(a.id) || null };
-    const safe = String(a.id).toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || 'account';
-    const key = safe.startsWith('acct-') ? safe : `acct-${safe}`;
-    if (series && series[key] && typeof series[key] === 'object') series[key].label = trendLabel(row);
-    if (src[`acct:${a.id}`]) src[`acct:${a.id}`].label = sourceLabel(row);
-    if (fig[`bal.${a.id}`]) fig[`bal.${a.id}`].label = `Balance, ${accountLabel(row)}`;
-  }
-}
-
 // ---------------------------------------------------------------- build
 
 export function buildScenario(db, { clock, engineMode = null, packs: livePacks = null } = {}) {
@@ -529,7 +515,7 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
 
   const src = loadSources(db, clk);
   const fig = loadFigures(db);
-  applyLiveAccountLabels(db, series, src, fig);
+  const naming = applyNaming(db, { series, src, fig });
 
   const recs = loadRecs(db, clk);
   const recsById = new Map(recs.map(r => [r.id, r]));
@@ -562,7 +548,7 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
   const ingest = ingestState(db, { clock: clk });
   const ingestAccounts = ingest.accounts || {};
   const accountRows = db.prepare('SELECT * FROM accounts ORDER BY sort, id').all();
-  const householdNames = parse(db.prepare("SELECT value FROM facts WHERE key = 'household.names'").get()?.value, {}) || {};
+  const householdNames = naming.householdNames;
   const goals = loadGoals(db, { fig, accounts: accountRows });
   const pace = buildPace(db, { clock: clk });
   Object.assign(fig, indexPaceFigures(pace));
@@ -604,7 +590,7 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
     ask: section(content, 'ask'),
     accounts: accountRows.map(a => {
       const f = Object.hasOwn(ingestAccounts, a.id) ? ingestAccounts[a.id] : {};
-      const named = { ...a, householdNames };
+      const named = naming.byId.get(a.id) || { ...a, householdNames };
       const label = accountLabel(named);
       return {
         id: a.id, inst: a.inst, name: label, sourceName: a.name, displayName: a.display_name || null,

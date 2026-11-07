@@ -80,10 +80,36 @@ test('a rename updates the trend, the source and the question, and list_accounts
     const scenario = buildScenario(s.db, {});
     assert.equal(scenario.series[key].label, 'Household reserve 3046');
     assert.equal(scenario.src[`acct:${acct.id}`].label, 'Household reserve ...3046');
+    s.db.prepare(`INSERT INTO figures (key, v, src, kind, label, updated_at) VALUES (?, 10, ?, 'a', ?, ?)`).run(
+      `bal.${acct.id}`, `acct:${acct.id}`, 'Balance, Individual 3046', NOW);
+    const figures = await callTool('get_figures', { keys: [`bal.${acct.id}`] }, { db: s.db, now: NOW });
+    assert.equal(figures[0].label, 'Balance, Household reserve');
+    assert.equal(figures[0].source.label, 'Household reserve ...3046');
     const question = scenario.live.ingest.items.find((i) => i.subject === acct.id);
     assert.ok(question, 'the import asked about the account');
     assert.equal(question.question.includes('Household reserve'), true);
     assert.equal(question.question.includes('Avery'), false);
+  } finally {
+    s.close();
+  }
+});
+
+test('renaming a mortgage does not drop its 1098, and year end hides a holder name', async () => {
+  const s = await realStore();
+  const { yearendChecklist } = await src('src/yearend/expected.mjs');
+  const { upsertFact } = await src('src/store/facts.mjs');
+  try {
+    upsertFact(s.db, { key: 'household.names', value: { me: 'Avery Example' }, src: 'you', asOf: '2032-02-01', confirmed: true, now: NOW });
+    s.db.prepare(`INSERT INTO accounts (id, inst, mask, name, kind, display_name) VALUES ('loan1', 'Harbor', '3046', 'Avery Example', 'taxable', NULL)`).run();
+    s.db.prepare('INSERT INTO account_holders (account_id, holder, created_at) VALUES (?, ?, ?)').run('loan1', 'Avery Example', NOW);
+    s.db.prepare(`INSERT INTO accounts (id, inst, name, kind, display_name) VALUES ('mtg', 'Harbor', 'Home mortgage', 'loan', 'Primary residence debt')`).run();
+    s.db.prepare(`INSERT INTO transactions (account_id, date, amount, description) VALUES ('loan1', '2032-02-01', 1, 'Synthetic'), ('mtg', '2032-02-01', -1, 'Synthetic')`).run();
+    const list = yearendChecklist(s.db, { year: 2032, clock: '2032-06-01' });
+    const brokerage = list.items.find((i) => i.key === '1099-composite:loan1');
+    assert.ok(brokerage, 'the brokerage is on the checklist');
+    assert.equal(brokerage.t.includes('Avery'), false);
+    assert.equal(brokerage.t.includes('Harbor'), true);
+    assert.ok(list.items.some((i) => i.key === '1098:mtg'), 'the renamed mortgage still needs a 1098');
   } finally {
     s.close();
   }
