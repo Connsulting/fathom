@@ -361,3 +361,13 @@ test('any unit word between the count and the end of its paragraph denies the st
   }
   assert.deepEqual(wordViolations(`There are three things to watch:\n\n${bullets(3)}`), []);
 });
+
+test('"one more" and "one another" are not exempt when a unit word follows in the same sentence', () => {
+  for (const text of ['Your reserve covers one more full year.', 'You have one more full month to file.', 'Plan for one another full quarter.']) {
+    assert.equal(checkGrounding(text).ok, false, `${text} is a quantity`);
+    assert.equal(checkGrounding(text, { data: [1] }).ok, true, `${text} grounds when 1 is in the sources`);
+  }
+  for (const text of ['Take one more step.', 'There is one more thing to watch.', 'One of the accounts is late.']) {
+    assert.equal(checkGrounding(text).ok, true, text);
+  }
+});
