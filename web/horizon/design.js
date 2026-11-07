@@ -1324,7 +1324,7 @@ function goalCard(g) {
     ? `<span class="h-gdel">Delete for good?</span>${btn('Delete', `data-goal="delete-yes" data-id="${esc(g.id)}"`, 'danger')}${btn('Keep', 'data-goal="delete-no"', 'ghost')}`
     : `${owner && !g.archived ? btn('Edit', `data-goal="edit" data-id="${esc(g.id)}"`, 'ghost') : ''}${btn(g.archived ? 'Restore' : 'Archive', `data-goal="${g.archived ? 'restore' : 'archive'}" data-id="${esc(g.id)}"`, 'ghost')}${btn('Delete', `data-goal="delete" data-id="${esc(g.id)}"`, 'ghost')}`;
   const note = owner ? g.note : g.prose;
-  return `<article class="h-goal ${esc((g.status || '').replace(/\s+/g, '-'))}${g.archived ? ' archived' : ''}" data-goal-id="${esc(g.id)}"><div class="h-goal-h"><b>${goalTitle(g)}</b><span>${g.archived ? 'Archived' : owner ? '' : T(g.status)}</span></div>${note ? `<p>${gText(g, note)}</p>` : ''}${meta.length ? `<div class="h-meta">${meta.map((m) => `<span>${m}</span>`).join('')}</div>` : ''}${prog}<div class="h-gacts">${del}</div></article>`;
+  return `<article class="h-goal ${esc((g.statusLabel || g.status || '').replace(/\s+/g, '-'))}${g.archived ? ' archived' : ''}" data-goal-id="${esc(g.id)}"><div class="h-goal-h"><b>${goalTitle(g)}</b><span>${g.archived ? 'Archived' : owner ? '' : T(g.statusLabel || g.status)}</span></div>${note ? `<p>${gText(g, note)}</p>` : ''}${meta.length ? `<div class="h-meta">${meta.map((m) => `<span>${m}</span>`).join('')}</div>` : ''}${prog}<div class="h-gacts">${del}</div></article>`;
 }
 
 function pGoals() {

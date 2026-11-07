@@ -394,6 +394,14 @@ MCP is stateless per request, so references are re-evaluable, not session handle
 `edit_goal`) stay as they are. The feat/ask-actions `undo_<kind>_action` tools change only by
 losing their `mcpOnly` flag (T17). `pnl_by_month` is removed by T8.
 
+feat/goal-model-v2 adds the goal model fields to `create_goal` and `edit_goal` (kind, owner,
+priority, status and the kind fields: `targetLow`, `targetHigh`, `floor`, `taxYear`, `accounts`,
+`split`, `entered`) and to the `list_goals` output; it adds no goal tool. Every amount and date in
+those fields needs the person's words or a stored value, as `target` and `targetDate` do; owner,
+priority, kind and status need none. Owner and person ids follow `OWNER_OPTIONS` (`owner`,
+`spouse`, `joint`) plus dependent keys (`kid`, `kid2`, ...). T23's `goal_row` restore includes
+`done_at`.
+
 ### Shared argument types
 
 | Type | Shape |
