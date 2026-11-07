@@ -514,6 +514,11 @@ test.describe('real store past first run', () => {
     await expect(page.locator('.h-ob-card h1')).toBeVisible();
     await page.getByRole('button', { name: /Back to my brief/ }).click({ timeout: 15_000 });
     await expect(page).toHaveURL(/#\/home$/);
+    // Completing onboarding on a signed-in instance starts the guided tour once; dismissing it
+    // clears the user's flag on the server.
+    await expect(page.locator('.h-tour[role="dialog"]')).toBeVisible({ timeout: 15_000 });
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.h-tour')).toHaveCount(0);
     await page.goto(`${BASE}/#/onboarding`);
     await expect(page).toHaveURL(/#\/onboarding\/1$/);
     await page.getByRole('link', { name: 'Back to the app' }).click();
