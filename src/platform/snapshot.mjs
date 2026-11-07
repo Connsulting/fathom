@@ -1,11 +1,14 @@
-// Offline encrypted source snapshots (FTHMSNAP1) of a stopped instance's financial store and MCP
-// key secret, under the backup key from FATHOM_BACKUP_KEY_FILE (src/platform/backup-key.mjs).
+// Offline encrypted source snapshots (FTHMSNAP1) of a stopped instance's financial store, MCP key
+// secret and (for the tenancy migration) platform database and household file trees, under the
+// backup key from FATHOM_BACKUP_KEY_FILE (src/platform/backup-key.mjs).
 //
 // Archive: 'FTHMSNAP1' (9 bytes) + 12 byte random nonce, then AES-256-GCM ciphertext and a 16 byte
 // tag, with the 21 byte header as additional authenticated data. Plaintext: a 4 byte big-endian
 // manifest length, the JSON manifest { format, operationId, createdAt, logicalDigest, files:
-// [{ path, size, sha256 }] }, then each file's bytes in manifest order. SQLite files are copied
-// with VACUUM INTO on the caller's (exclusively locked) connection; other files byte for byte.
+// [{ path, size, sha256 }] }, then each file's bytes in manifest order. SQLite databases (the store
+// on the caller's exclusively locked connection, and any extra open `databases`) are copied with
+// node:sqlite backup(), a page copy that keeps every rowid; other files byte for byte. A directory
+// named in `files` contributes every regular file below it (a symlink or special file refuses).
 //
 // A snapshot is written to `<final>.partial-<operationId>` (exclusive create, fsynced, mode 0400),
 // published with link() so an existing final name is never replaced, and the partial unlinked.
@@ -18,7 +21,7 @@ import {
   mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, unlinkSync,
 } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
+import { DatabaseSync, backup } from 'node:sqlite';
 import { DB_FILE } from '../store/db.mjs';
 import { codeError } from './db.mjs';
 import { loadBackupKey } from './backup-key.mjs';
@@ -32,7 +35,10 @@ export const DEFAULT_FILES = Object.freeze([DB_FILE, SECRET_FILE]);
 const NONCE_BYTES = 12;
 const TAG_BYTES = 16;
 const HEADER_BYTES = SNAPSHOT_MAGIC.length + NONCE_BYTES;
-const SAFE_PATH = /^[A-Za-z0-9_][A-Za-z0-9._-]*(\/[A-Za-z0-9_][A-Za-z0-9._-]*)*$/;
+// Relative archive paths: segments of letters, digits, '.', '_' and '-' (a leading dot allowed for
+// the temporary names pack builds leave), never '.' or '..'.
+const SAFE_SEGMENT = /^[A-Za-z0-9._][A-Za-z0-9._-]*$/;
+const safePath = rel => typeof rel === 'string' && rel.split('/').every(seg => SAFE_SEGMENT.test(seg) && seg !== '.' && seg !== '..');
 
 const sha256 = buf => createHash('sha256').update(buf).digest('hex');
 
@@ -56,16 +62,43 @@ export function openSourceExclusive(file) {
   return db;
 }
 
-function vacuumCopy(db, target) {
-  rmSync(target, { force: true });
-  // VACUUM INTO takes an existing empty file, so the copy is private from the start.
+const sideFiles = file => [file, `${file}-journal`, `${file}-wal`, `${file}-shm`];
+
+// Page copy of the open database `db` into the new file `target` (created 0600 before SQLite opens
+// it, so the copy is private from the start), rowids kept. The closed copy at `target` is the
+// caller's; on failure nothing is left there.
+export async function copyDatabase(db, target) {
+  for (const f of sideFiles(target)) rmSync(f, { force: true });
   closeSync(openSync(target, 'wx', 0o600));
   try {
-    db.prepare('VACUUM INTO ?').run(target);
+    await backup(db, target);
+  } catch {
+    for (const f of sideFiles(target)) rmSync(f, { force: true });
+    throw codeError('database_copy_failed');
+  }
+}
+
+async function databaseBytes(db, target) {
+  await copyDatabase(db, target);
+  try {
     return readFileSync(target);
   } finally {
-    rmSync(target, { force: true });
+    for (const f of sideFiles(target)) rmSync(f, { force: true });
   }
+}
+
+// Regular files under `dataDir/rel` as [{ path, data }] in path order; [] when it is absent. A
+// symlink, special file or unsafe name refuses snapshot_source_invalid.
+function treeEntries(dataDir, rel) {
+  const path = join(dataDir, rel);
+  let st;
+  try { st = lstatSync(path); } catch { return []; }
+  if (!safePath(rel)) throw codeError('snapshot_source_invalid');
+  if (st.isFile()) return [{ path: rel, data: readFileSync(path) }];
+  if (!st.isDirectory()) throw codeError('snapshot_source_invalid');
+  const out = [];
+  for (const name of readdirSync(path).sort()) out.push(...treeEntries(dataDir, `${rel}/${name}`));
+  return out;
 }
 
 // Plaintext archive body for `entries` [{ path, data }].
@@ -108,7 +141,7 @@ export function openSnapshot(bytes, key) {
     const files = new Map();
     if (manifest.format !== 1 || !Array.isArray(manifest.files)) throw bad();
     for (const f of manifest.files) {
-      if (typeof f.path !== 'string' || !SAFE_PATH.test(f.path) || f.path.split('/').includes('..') || files.has(f.path)) throw bad();
+      if (!safePath(f.path) || files.has(f.path)) throw bad();
       if (!Number.isInteger(f.size) || f.size < 0 || off + f.size > plain.length) throw bad();
       const data = plain.subarray(off, off + f.size);
       if (sha256(data) !== f.sha256) throw bad();
@@ -132,12 +165,13 @@ export const sha256File = file => sha256(readFileSync(file));
 export const partialName = (final, operationId) => `${final}.partial-${operationId}`;
 
 // Write an encrypted snapshot of the store (through `db`, or an exclusively locked connection of
-// its own) and the other `files` present under dataDir to the final path `out`. The awaited hooks
-// fire after the partial is durable (onPartial) and after it is published (onPublished). The
-// published file is read-only (0400) unless `mode` says otherwise (an ad hoc snapshot the
-// operator moves off the host). Returns { file, sha256, logicalDigest, manifest }.
+// its own), the extra open `databases` ({ relPath: DatabaseSync }) and the other `files` (regular
+// files or directory trees) present under dataDir to the final path `out`. The awaited hooks fire
+// after the partial is durable (onPartial) and after it is published (onPublished). The published
+// file is read-only (0400) unless `mode` says otherwise (an ad hoc snapshot the operator moves off
+// the host). Returns { file, sha256, logicalDigest (of the store), manifest }.
 export async function createSourceSnapshot({
-  db, dataDir, keyFile, key, out, files = DEFAULT_FILES, operationId, onPartial, onPublished, mode = 0o400,
+  db, dataDir, keyFile, key, out, files = DEFAULT_FILES, databases = {}, operationId, onPartial, onPublished, mode = 0o400,
 }) {
   const k = key ?? loadBackupKey(keyFile);
   if (typeof operationId !== 'string' || !/^[A-Za-z0-9_-]{1,80}$/.test(operationId)) throw codeError('operation_invalid');
@@ -149,17 +183,16 @@ export async function createSourceSnapshot({
   let manifest;
   try {
     const entries = [];
+    const copyTarget = `${out}.copy-${operationId}`;
     for (const rel of files) {
-      if (rel === DB_FILE) {
-        entries.push({ path: rel, data: vacuumCopy(source, `${out}.vacuum-${operationId}`) });
-        continue;
-      }
-      const path = join(dataDir, rel);
-      let st;
-      try { st = lstatSync(path); } catch { continue; }
-      if (!st.isFile()) throw codeError('snapshot_source_invalid');
-      entries.push({ path: rel, data: readFileSync(path) });
+      if (rel === DB_FILE) entries.push({ path: rel, data: await databaseBytes(source, copyTarget) });
+      else entries.push(...treeEntries(dataDir, rel));
     }
+    for (const [rel, handle] of Object.entries(databases)) {
+      if (!safePath(rel) || rel === DB_FILE) throw codeError('snapshot_source_invalid');
+      entries.push({ path: rel, data: await databaseBytes(handle, copyTarget) });
+    }
+    if (new Set(entries.map(e => e.path)).size !== entries.length) throw codeError('snapshot_source_invalid');
     digest = logicalDigest(source);
     const packed = pack({ operationId, createdAt: new Date().toISOString(), logicalDigest: digest }, entries);
     manifest = packed.manifest;
@@ -257,8 +290,9 @@ function refuseNested(from, out) {
 }
 
 // A new data directory for the previous release: every retained file of `from` copied byte for
-// byte (symlinks refused), without the platform database, migration journal and lock, snapshots
-// and the store's WAL files, then the store and secret from the authenticated snapshot.
+// byte (symlinks refused), without the platform database, migration journal and lock, snapshots,
+// the store's WAL files and any top-level entry the snapshot holds, then every file of the
+// authenticated snapshot.
 export function rollbackFromSnapshot({ snapshot, keyFile, key, from, out }) {
   const k = key ?? loadBackupKey(keyFile);
   refuseNested(from, out);
@@ -267,10 +301,12 @@ export function rollbackFromSnapshot({ snapshot, keyFile, key, from, out }) {
   try { fromStat = statSync(from); } catch { throw codeError('from_invalid'); }
   if (!fromStat.isDirectory()) throw codeError('from_invalid');
   const { files } = readSnapshotFile(snapshot, k);
+  // A top-level entry the snapshot holds (a file, or the first segment of a tree) comes from it.
+  const fromSnapshot = new Set([...files.keys()].map(rel => rel.split('/')[0]));
   buildDir(out, tmp => {
     const copy = (srcDir, dstDir, top) => {
       for (const ent of readdirSync(srcDir, { withFileTypes: true })) {
-        if (top && (NOT_CARRIED.some(re => re.test(ent.name)) || files.has(ent.name))) continue;
+        if (top && (NOT_CARRIED.some(re => re.test(ent.name)) || fromSnapshot.has(ent.name))) continue;
         const src = join(srcDir, ent.name);
         const dst = join(dstDir, ent.name);
         const st = lstatSync(src);

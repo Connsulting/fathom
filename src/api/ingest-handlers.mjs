@@ -1,12 +1,13 @@
 import { queueCategoryChecks } from '../categories/store.mjs';
 import { queueAccountPairs } from '../ingest/account-merge.mjs';
 // Ingest API handlers: file uploads, the file list, retries and the confirm queue. Each takes the
-// router ctx ({db, config, engine, scheduler, params, body, readUpload}) and returns the JSON body or
+// router ctx ({household, db, config, engine, scheduler, params, body, readUpload}, db and engine
+// taken from the household) and returns the JSON body or
 // throws HttpError. A request that imports a file triggers the plan and confirm-guess jobs through ctx.scheduler. Pipeline, vault and confirm errors map to statuses here with fixed messages, so no
 // file name contents or row values reach a response or a log.
 
 import { getSetting } from '../store/db.mjs';
-import { loadDataKey, VaultError } from '../ingest/vault.mjs';
+import { openVault, VaultError } from '../ingest/vault.mjs';
 import { ingestFiles, retryFile as retryIngest } from '../ingest/pipeline.mjs';
 import { answerItem, answerItems, reviseItem, reopenItem, reopenItems, finalReason, getItem, pendingItems, listItems, ConfirmError } from '../ingest/confirm.mjs';
 import { autoResolve } from '../ingest/auto.mjs';
@@ -35,11 +36,11 @@ const FINAL_MESSAGE = {
 const nowIso = () => new Date().toISOString();
 const storeMode = db => (getSetting(db, 'mode', null) === 'demo' ? 'demo' : 'real');
 
-// The data key for this store: demo stores use a generated key under $FATHOM_DATA/files, real
-// stores need FATHOM_DATA_KEY_FILE (409 with the vault's message, before anything is stored).
-export async function dataKey(ctx) {
+// The household vault, opened before anything is read or stored: a missing or invalid platform key
+// or a missing data key is 409 with the vault's message (naming FATHOM_PLATFORM_KEY_FILE).
+export async function householdVault(ctx) {
   try {
-    return await loadDataKey({ dataDir: ctx.config.dataDir, keyFile: ctx.config.dataKeyFile, mode: storeMode(ctx.db) });
+    return await openVault(ctx.household);
   } catch (err) {
     if (err instanceof VaultError) throw new HttpError(409, err.message);
     throw err;
@@ -64,16 +65,16 @@ export const triggerPlan = ctx => triggerJob(ctx, 'plan');
 export const triggerGuesses = ctx => triggerJob(ctx, 'confirm-guess');
 export const triggerFreshness = ctx => triggerJob(ctx, 'freshness');
 
-export const ingestOpts = (ctx, key) => ({ engine: ctx.engine, config: ctx.config, now: nowIso(), key });
+export const ingestOpts = ctx => ({ household: ctx.household, engine: ctx.engine, config: ctx.config, now: nowIso() });
 
 export async function uploadFiles(ctx) {
-  const key = await dataKey(ctx);
+  await householdVault(ctx);
   const parts = (await ctx.readUpload()).filter(p => p.field === UPLOAD_FIELD);
   if (!parts.length) throw new HttpError(400, `the upload has no files in the "${UPLOAD_FIELD}" field`);
   const files = parts.map(p => ({ name: p.name, bytes: p.bytes, mime: p.mime }));
   let results;
   try {
-    ({ results } = await ingestFiles(ctx.db, files, ingestOpts(ctx, key)));
+    ({ results } = await ingestFiles(ctx.db, files, ingestOpts(ctx)));
   } catch (err) {
     if (err instanceof VaultError) throw new HttpError(409, err.message);
     throw err;
@@ -91,10 +92,10 @@ export function listFiles(ctx) {
 
 export async function retryFile(ctx) {
   const { id } = ctx.params;
-  const key = await dataKey(ctx);
+  await householdVault(ctx);
   let file;
   try {
-    file = await retryIngest(ctx.db, id, ingestOpts(ctx, key));
+    file = await retryIngest(ctx.db, id, ingestOpts(ctx));
   } catch (err) {
     if (err && err.status === 404) throw new HttpError(404, `no file ${id}`);
     if (err && err.status === 409) throw new HttpError(409, 'that file is not waiting for a mapping or extraction');
@@ -150,7 +151,7 @@ function confirmAction(ctx, fn) {
   }
   resolveAfterAnswer(ctx);
   if (out.factsChanged) {
-    try { refreshPackState(ctx.db, { dataDir: ctx.config && ctx.config.dataDir }); } catch (err) { console.error('fathom: pack refresh failed', err && err.name); }
+    try { refreshPackState(ctx.db, { dataDir: ctx.household.root }); } catch (err) { console.error('fathom: pack refresh failed', err && err.name); }
   }
   const withFinal = item => {
     const now = getItem(ctx.db, item.id) || item;

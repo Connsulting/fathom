@@ -120,7 +120,8 @@ function explicitCredential(credential) {
 
 // request.fake (optional, fake mode): a per-call script list used instead of the constructor queue.
 // request.systemDynamic (optional): system text placed after the dynamic boundary (not cached).
-// request.toolContext (optional): { db, now } for this call's tools instead of the constructed one.
+// request.toolContext (optional): the tool context for this call's tools instead of the constructed
+// one, passed through whole ({ db, now, dataDir, ... }; now defaults to the round's timestamp).
 // request.onEvent (optional, purpose 'chat'): called with { type: 'tool', name } as each tool call
 // starts and { type: 'text', text } for each text delta, in every round. When a tool event arrives
 // after text streamed in the current round, { type: 'interim', text } (the round's text so far,
@@ -172,9 +173,20 @@ export function fakeChunks(text) {
 
 const pause = ms => (ms > 0 ? new Promise(resolve => setTimeout(resolve, ms)) : Promise.resolve());
 
+// Per-round admission, checked before every round (so a change between rounds stops the next one):
+// allowed() false (the household's outbound engine flag) throws EngineOffError; in live mode
+// funded() false (no instance funding) throws ModelCallError with code funding_unavailable; then the
+// monthly cap. A refused round dispatches nothing and records no spend.
+export function fundingUnavailable() {
+  const error = new ModelCallError('Model calls are not funded on this instance');
+  error.code = 'funding_unavailable';
+  return error;
+}
+
 export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger = createMemoryLedger(), capUsd = 200,
-  credential, responses = [], now = () => new Date(), toolContext = {}, streamDelayMs = 0 } = {}) {
+  credential, responses = [], now = () => new Date(), toolContext = {}, streamDelayMs = 0, allowed = () => true, funded = () => true } = {}) {
   if (!['live', 'fake', 'off'].includes(mode)) throw new TypeError('Invalid engine mode');
+  if (typeof allowed !== 'function' || typeof funded !== 'function') throw new TypeError('Invalid engine admission');
   if (!Number.isFinite(capUsd) || capUsd < 0) throw new TypeError('Invalid monthly cap');
   if (typeof ledger.monthSpendUsd !== 'function' || typeof ledger.record !== 'function') throw new TypeError('Invalid ledger adapter');
   const scripted = [...responses];
@@ -231,13 +243,15 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
       answer.beginRound();
       await serial(ledger, async () => {
         if (poisoned) throw new ModelAccountingError();
+        if (allowed() !== true) { const error = new EngineOffError(); error.toolResults = allResults; throw error; }
+        if (mode === 'live' && funded() !== true) { const error = fundingUnavailable(); error.toolResults = allResults; throw error; }
         const ts = new Date(now()).toISOString();
         const spend = await ledger.monthSpendUsd(monthKey(ts));
         if (!Number.isFinite(spend) || spend < 0) throw new ModelAccountingError();
         if (spend >= capUsd) { const error = new BudgetExceededError(); error.toolResults = allResults; throw error; }
         const auth = mode === 'live' ? explicitCredential(credential) : undefined;
         const context = callContext ?? toolContext;
-        const registry = createRegistryServer(tools, { purpose, ctx: { db: context.db, now: context.now ?? ts } });
+        const registry = createRegistryServer(tools, { purpose, ctx: { ...context, now: context.now ?? ts } });
         try {
           if (mode === 'fake') {
             if (!queue.length) throw new ModelCallError('Fake engine has no scripted response');

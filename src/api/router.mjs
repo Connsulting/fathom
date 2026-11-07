@@ -8,10 +8,17 @@
 // that ask a question) answer as Server-Sent Events when the request's Accept header asks for
 // text/event-stream (see createEventStream); the gate, Host allowlist and POST guards run first,
 // exactly as for JSON. `raw: true` routes write the response themselves (the packet zip).
-// Access on a real store: `public` routes need nothing; `auth` routes (sign-in, self-service) and
+// Access on a real instance: `public` routes need nothing; `auth` routes (sign-in, self-service) and
 // `session` routes need a session only; `operator` routes need a session and do their own operator
-// check; `admin` routes need an admin membership in the served household; every other /api route
-// needs an active membership in the served household (403 `household membership required`).
+// check; `admin` routes need the admin role in the identity's own household; every other /api route
+// is financial and needs an active membership in the identity's own active household (403
+// `household membership required`).
+// Household resolution: there is no process-wide financial store. A financial route resolves its
+// household before the body is read: the identity's household through the runtime registry (a
+// session with no household, or a household with no runtime, is 403), or on a demo instance the
+// demo household. The handler ctx then carries that one context and its db, engine, packs,
+// answerer, scheduler and transport; the context is held (acquire) until the response is done.
+// Public, auth, session and operator routes get no household; they use ctx.platform.
 
 import { fileURLToPath } from 'node:url';
 import { readFile } from 'node:fs/promises';
@@ -22,7 +29,6 @@ import { createStatic } from './static.mjs';
 import * as h from './handlers.mjs';
 import { recAnswers } from './fact-answers.mjs';
 import * as k from './keys.mjs';
-import { createKeyService, loadServerSecret } from '../mcp/keys.mjs';
 import { createMcpHandler } from '../mcp/index.mjs';
 import { isAllowedHost } from '../mcp/guard.mjs';
 import * as ih from './ingest-handlers.mjs';
@@ -34,10 +40,9 @@ import * as accts from './accounts.mjs';
 import * as ad from './account-detail.mjs';
 import * as oh from './onboarding-handlers.mjs';
 import * as ah from './advisor-handlers.mjs';
+import * as obh from './outbound-handlers.mjs';
 import { identityOf, sendUnauthorized } from './identity.mjs';
-import { createAuthService } from '../auth/service.mjs';
 import * as authHandlers from '../auth/handlers.mjs';
-import { getSetting } from '../store/db.mjs';
 
 const TABLE = [
   { method: 'GET', path: '/healthz', handler: h.healthz, public: true },
@@ -123,6 +128,8 @@ const TABLE = [
   { method: 'POST', path: '/api/simplefin/disconnect', handler: sf.disconnect, quiet: true },
   { method: 'POST', path: '/api/yearend/marks', handler: yh.markItem },
   { method: 'GET', path: '/api/yearend/packet', handler: yh.downloadPacket, raw: true, quiet: true },
+  { method: 'GET', path: '/api/household/outbound', handler: obh.getOutbound, quiet: true },
+  { method: 'POST', path: '/api/household/outbound', handler: obh.setOutboundFlags, quiet: true, admin: true },
 ];
 
 export const routes = TABLE.map(({ method, path }) => ({ method, path }));
@@ -185,20 +192,28 @@ const safeCode = err => [err && err.code, err && err.name].find(v => typeof v ==
 const membershipRequired = () => new HttpError(403, 'household membership required');
 const adminRequired = () => new HttpError(403, 'administrator required');
 
-// `platform` is the platform DB (accounts, memberships, sessions); `db` is the financial store.
-export function createHandler({ db, platform, config, answerer, engine = null, packs = null, scheduler = null, transport = null, keys, mcp, auth, webDir = WEB_DIR, sharedDir = SHARED_DIR }) {
-  const gated = getSetting(db, 'mode', null) !== 'demo';
-  const authService = auth ?? createAuthService({ platform, config, transport });
+const financial = r => !r.public && !r.auth && !r.session && !r.operator;
+
+// `platform` is the platform DB (accounts, memberships, sessions, keys); `runtimes` the household
+// runtime registry (src/platform/runtime.mjs); `auth` the auth service; `keys` the MCP key service.
+export function createHandler({ platform, config, runtimes, auth, keys, mcp = null, webDir = WEB_DIR, sharedDir = SHARED_DIR }) {
+  if (!platform || !runtimes || !auth || !keys) throw new TypeError('createHandler needs the platform, runtimes, auth and keys');
+  const gated = !auth.demo;
   const serveStatic = createStatic({ webDir, sharedDir });
-  let keyService = keys;
-  let mcpHandler = mcp;
-  const getKeys = () => (keyService ??= createKeyService({ db, serverSecret: loadServerSecret(config.dataDir), creatorActive: authService.creatorActive }));
+  const mcpHandler = mcp ?? createMcpHandler({ keys, runtimes, config });
   // Route access beyond a session (see the header).
   const checkAccess = (r, identity) => {
-    if (r.admin && !authService.servedAdmin(identity)) throw adminRequired();
-    if (!r.public && !r.auth && !r.session && !r.operator && !authService.servedMember(identity)) throw membershipRequired();
+    if (r.admin && !auth.servedAdmin(identity)) throw adminRequired();
+    if (financial(r) && !auth.servedMember(identity)) throw membershipRequired();
   };
-  const getMcp = () => (mcpHandler ??= createMcpHandler({ db, keys: getKeys(), config }));
+  function resolveHousehold(identity) {
+    if (gated) return runtimes.forIdentity(identity);
+    try {
+      return runtimes.demo();
+    } catch {
+      throw new HttpError(503, 'household unavailable');
+    }
+  }
   return async function handle(req, res) {
     setSecurityHeaders(res);
     const url = req.url || '/';
@@ -206,10 +221,11 @@ export function createHandler({ db, platform, config, answerer, engine = null, p
     const rawPath = q >= 0 ? url.slice(0, q) : url;
     let route = null;
     let authPath = false;
+    let held = null;
     try {
-      authService.sweep();
+      auth.sweep();
       if (rawPath === '/mcp') {
-        await getMcp()(req, res);
+        await mcpHandler(req, res);
         return;
       }
       const { segments, path } = normalizePath(rawPath);
@@ -219,7 +235,7 @@ export function createHandler({ db, platform, config, answerer, engine = null, p
       const candidate = compiled.find(r => (r.method === req.method || (req.method === 'HEAD' && r.method === 'GET')) && matchPath(r.parts, segments));
       route = candidate || null;
       const publicPage = read && ['/signin', '/enroll', '/auth/auth.js', '/auth/auth.css', '/auth/return-path.js', '/favicon.svg'].includes(path);
-      let identity = gated ? identityOf(req, authService) : null;
+      let identity = gated ? identityOf(req, auth) : null;
       if (gated && !candidate?.public && !publicPage && !identity) {
         sendUnauthorized(req, res, isApi);
         return;
@@ -230,6 +246,13 @@ export function createHandler({ db, platform, config, answerer, engine = null, p
         const { r, params } = findRoute(req.method, segments);
         route = r;
         if (gated && !r.public) checkAccess(r, identity);
+        // The household is fixed before the body is read and kept for the whole request.
+        let household = null;
+        if (financial(r)) {
+          household = resolveHousehold(identity);
+          if (!household) throw membershipRequired();
+          held = runtimes.acquire(household);
+        }
         let body = {};
         let readUpload = null;
         if (r.upload) {
@@ -240,15 +263,19 @@ export function createHandler({ db, platform, config, answerer, engine = null, p
           body = await readJsonBody(req);
         }
         if (gated && !r.public) {
-          identity = identityOf(req, authService);
+          identity = identityOf(req, auth);
           if (!identity) throw new HttpError(401, 'unauthorized');
           checkAccess(r, identity);
+          if (household && identity.householdId !== household.householdId) throw membershipRequired();
         }
         const events = r.stream && wantsEventStream(req) ? createEventStream(req, res) : null;
         let out;
         try {
-          out = await r.handler({ db, config, answerer, engine, packs, identity, scheduler, transport, auth: authService, params, query: queryOf(url, q), body, readUpload, req, res,
-            ...(events ? { onEvent: events.send } : {}), get keys() { return getKeys(); } });
+          out = await r.handler({
+            household, db: household?.db, engine: household?.engine, packs: household?.packs, answerer: household?.answerer,
+            scheduler: household?.scheduler, transport: household?.transport, platform, config, identity, auth, keys,
+            params, query: queryOf(url, q), body, readUpload, req, res, ...(events ? { onEvent: events.send } : {}),
+          });
         } catch (err) {
           // Once the event stream has started, an error is its last event.
           if (!events || !events.started) throw err;
@@ -273,7 +300,7 @@ export function createHandler({ db, platform, config, answerer, engine = null, p
       if (req.method !== 'GET' && req.method !== 'HEAD') {
         throw new HttpError(405, 'method not allowed', { Allow: 'GET, HEAD' });
       }
-      if (gated && path === '/admin/users' && !authService.servedAdmin(identity)) throw adminRequired();
+      if (gated && path === '/admin/users' && !auth.servedAdmin(identity)) throw adminRequired();
       if (['/signin', '/enroll'].includes(path) || (gated && ['/account', '/admin/users'].includes(path))) {
         let page;
         try { page = await readFile(join(webDir, 'auth', 'index.html')); }
@@ -292,6 +319,8 @@ export function createHandler({ db, platform, config, answerer, engine = null, p
       }
       if (req.readable) req.resume();
       sendError(res, err);
+    } finally {
+      if (held) runtimes.release(held);
     }
   };
 }
