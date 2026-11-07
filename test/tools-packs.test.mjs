@@ -53,6 +53,7 @@ const SEEDED_STATUS = {
   'kids-dependents': 'active',
   's-corp-owner': 'active',
   'self-employed-partnership': 'active',
+  'account-tax-treatment': 'active',
   'spending-and-obligations': 'active',
   'virginia-resident': 'active',
   'w2-benefits': 'active',
@@ -458,7 +459,7 @@ describe('owner overrides on the demo rows reach the pack tools', () => {
     assert.ok((await hits(ctx, 's-corp-owner')).length > 0, 'facts-derived active is searchable');
 
     const list = await callTool('list_packs', {}, ctx);
-    assert.equal(list.length, 8, 'every manifest pack is still listed');
+    assert.equal(list.length, 9, 'every manifest pack is still listed');
   });
 
   test('rows without a manifest (contractor, abroad, rental) add no pack and change nothing', async () => {
@@ -482,6 +483,7 @@ describe('owner overrides on the demo rows reach the pack tools', () => {
       'kids-dependents': 'active',
       's-corp-owner': 'available',
       'self-employed-partnership': 'active',
+      'account-tax-treatment': 'active',
       'spending-and-obligations': 'active',
       'virginia-resident': 'active',
       'w2-benefits': 'available',
