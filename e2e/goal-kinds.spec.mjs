@@ -202,7 +202,7 @@ test.describe('goal kinds', TAGS, () => {
     await expect(homeCard(page, id).locator('[data-goal-owner]')).toHaveCount(0);
 
     await gotoGoals(page);
-    await goalsCard(page, id).getByRole('button', { name: 'Edit' }).click();
+    await goalsCard(page, id).getByRole('button', { name: 'Edit', exact: true }).click();
     await expect(form(page)).toBeVisible();
     await attach(page, info, 'editor-edit');
     let post = posted(page, `/api/goals/${id}`);
