@@ -3700,6 +3700,37 @@
           "rubric": "Treat the short confirmation as approval of the sourced preceding proposal. Save the exact target and date with a canonical horizon and no balance tracking, and return a receipt."
         }
       ]
+    },
+    {
+      "id": "goals-conversation-title-529",
+      "family": "goals",
+      "checkTitle": true,
+      "turns": [
+        {
+          "question": "I am considering a $2,400 contribution to a 529 education savings plan. What should I think about?",
+          "required": [],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Discuss education savings qualitatively without invented amounts; the stored title must be model generated without an amount and may use 529.",
+          "scriptedReply": "Education savings can support the goal."
+        },
+        {
+          "question": "Keep the education savings conversation qualitative and help me organize the goal.",
+          "required": [],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Discuss education savings qualitatively without invented amounts; the stored title must be model generated without an amount and may use 529.",
+          "scriptedReply": "Education savings can support the goal."
+        }
+      ]
     }
   ]
 }

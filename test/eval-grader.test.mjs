@@ -127,8 +127,8 @@ test('violation kinds are the five adjudication kinds and the harness counts the
   assert.deepEqual(flat.map(grade => [...grade.unsourced, ...grade.selfComputed, ...grade.rounded, ...grade.spelledOut, ...grade.contextOnly].map(v => v.kind)[0]), kinds);
   const dir = await mkdtemp(join(tmpdir(), 'fathom-grader-score-'));
   try {
-    await writeScorecard(dir, { live: false, costUsd: 0, stopped: null, cases: [{
-      id: 'sample', status: 'fail', costUsd: 0, turns: [{
+    await writeScorecard(dir, { live: false, costUsd: 0, reservedUsd: 0, outstandingReservedUsd: 0, stopped: null, cases: [{
+      id: 'sample', status: 'fail', costUsd: 0, reservedUsd: 0, turns: [{
         tools: [], required: { checks: [] }, length: { words: 1, maxWords: 40 },
         figures: flat[0], attempts: flat.slice(1).map(figures => ({ figures })),
       }],
@@ -158,3 +158,21 @@ function fixtureAnswer(values, result) {
   });
   return ['Figures follow.', ...counts, ...money].join(' ');
 }
+
+test('summary reports cumulative reservations, actual costs and each unrun reason', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'fathom-eval-summary-'));
+  try {
+    await writeScorecard(dir, { live: false, costUsd: 0.05, reservedUsd: 0.08, outstandingReservedUsd: 0,
+      stopped: 'budget', cases: [
+        { id: 'completed-case', status: 'pass', turns: [], costUsd: 0.05, reservedUsd: 0.08 },
+        { id: 'unrun-case', status: 'unrun', turns: [], costUsd: 0, reservedUsd: 0,
+          reason: 'budget: next round cannot fit; run stopped before this case' },
+      ] });
+    const summary = await readFile(join(dir, 'summary.md'), 'utf8');
+    assert.match(summary, /Reserved .*\$0.080000.*Spent: \$0.050000.*Outstanding: \$0.000000/);
+    assert.match(summary, /completed-case.*\$0.050000.*\$0.080000/);
+    assert.match(summary, /unrun-case.*unrun.*budget: next round cannot fit/);
+    assert.deepEqual(JSON.parse(await readFile(join(dir, 'scorecard.json'), 'utf8')).cases.map(c => c.id),
+      ['completed-case', 'unrun-case']);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
