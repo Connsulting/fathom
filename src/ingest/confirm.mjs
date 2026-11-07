@@ -1,6 +1,8 @@
 // Confirm queue: short questions an import asks so its rows land in the right place, answered by
 // the owner and remembered by (kind, subject) so an equivalent re-import asks nothing new.
 // Every answer is applied by deterministic code in one transaction with the answer itself.
+// Fathom answers some questions itself (auto.mjs, through recordAutoAnswer): such an answer carries
+// a confirm_auto row with its rule and evidence, and undoing the answers it rests on undoes it too.
 
 import { tx, parseJson } from '../store/db.mjs';
 import { upsertFact, deleteFact } from '../store/facts.mjs';
@@ -121,6 +123,15 @@ export function answer(db, id, optionId, { now } = {}) {
 
 // answer() plus whether facts changed, for callers that refresh pack state.
 export function answerItem(db, id, optionId, { now } = {}) {
+  const item = answerable(db, id, optionId);
+  return tx(db, () => {
+    const { factsChanged } = recordAnswer(db, item, optionId, { now });
+    return { item: getItem(db, item.id), factsChanged: Boolean(factsChanged) };
+  });
+}
+
+// The pending item an answer acts on, or the refusal (not_found, answered, bad_option, stale).
+function answerable(db, id, optionId) {
   const n = Number(id);
   const item = Number.isInteger(n) && n > 0 ? getItem(db, n) : null;
   if (!item) throw new ConfirmError('not_found');
@@ -128,18 +139,60 @@ export function answerItem(db, id, optionId, { now } = {}) {
   if (!item.options.some((o) => o.id === optionId)) throw new ConfirmError('bad_option');
   if (item.kind === 'fact_check' && factIsStale(db, item)) throw new ConfirmError('stale');
   if (item.kind === 'withholding_conflict' && !conflictCurrent(db, item)) throw new ConfirmError('stale');
+  return item;
+}
+
+// Answer several pending items in one transaction, each with its own undo log (a group card).
+// Every refusal is checked before any write, and again as each row is answered, so any refusal
+// changes nothing. answers: [{id, option}]. Returns {items, factsChanged}.
+export function answerItems(db, answers, { now } = {}) {
+  const list = Array.isArray(answers) ? answers : [];
+  for (const a of list) answerable(db, a?.id, a?.option);
   return tx(db, () => {
-    const { factsChanged } = recordAnswer(db, item, optionId, { now });
-    return { item: getItem(db, item.id), factsChanged: Boolean(factsChanged) };
+    let factsChanged = false;
+    const items = list.map((a) => {
+      const item = answerable(db, a.id, a.option);
+      if (recordAnswer(db, item, a.option, { now }).factsChanged) factsChanged = true;
+      return getItem(db, item.id);
+    });
+    return { items, factsChanged };
   });
 }
 
+// An answer Fathom made itself: refused like answerItem; otherwise recorded through the same path
+// in its own transaction, with the confirm_auto row inside the captured log. evidence is
+// {text, basis: item ids, ancestors: item ids, refs?}. Returns the answered item.
+export function recordAutoAnswer(db, itemId, optionId, { rule, evidence, now } = {}) {
+  if (typeof rule !== 'string' || !rule) throw new TypeError('An auto answer needs its rule');
+  const ids = (v) => (Array.isArray(v) ? v.filter((n) => Number.isInteger(n)) : []);
+  if (!evidence || typeof evidence.text !== 'string' || !evidence.text) throw new TypeError('An auto answer needs its evidence text');
+  const stored = { text: evidence.text, basis: ids(evidence.basis), ancestors: ids(evidence.ancestors), ...(evidence.refs ? { refs: evidence.refs } : {}) };
+  const item = answerable(db, itemId, optionId);
+  return tx(db, () => {
+    recordAnswer(db, item, optionId, { now, auto: { rule, evidence: stored } });
+    return getItem(db, item.id);
+  });
+}
+
+// The auto answer record of an item: {rule, evidence, createdAt}, or null when the owner answered
+// it or it is pending.
+export function autoInfo(db, itemId) {
+  const row = db.prepare('SELECT rule, evidence, created_at FROM confirm_auto WHERE item_id = ?').get(Number(itemId));
+  return row ? { rule: row.rule, evidence: parseJson(row.evidence, { text: '', basis: [], ancestors: [] }), createdAt: row.created_at } : null;
+}
+
 // Apply and record an answer inside the caller's transaction, storing its change log with the
-// ingest epoch (D1, D2). Returns applyAnswer's result plus the log.
-function recordAnswer(db, item, optionId, { now }) {
+// ingest epoch (D1, D2). An auto answer ({rule, evidence}) writes its confirm_auto row inside the
+// log, so reverting the answer removes it. Returns applyAnswer's result plus the log.
+function recordAnswer(db, item, optionId, { now, auto = null }) {
   const { result, changes } = captureChanges(db, () => {
     const applied = applyAnswer(db, item, optionId, { now });
     db.prepare("UPDATE confirm_items SET status = 'answered', answer = ?, answered_at = ? WHERE id = ?").run(optionId, stamp(now), item.id);
+    if (auto) {
+      db.prepare(`INSERT INTO confirm_auto (item_id, rule, evidence, created_at) VALUES (?, ?, ?, ?)
+                  ON CONFLICT(item_id) DO UPDATE SET rule = excluded.rule, evidence = excluded.evidence, created_at = excluded.created_at`)
+        .run(item.id, auto.rule, JSON.stringify(auto.evidence), stamp(now));
+    }
     return applied;
   });
   db.prepare(`INSERT INTO confirm_undo (item_id, ingest_epoch, changes, created_at, used_at) VALUES (?, ?, ?, ?, NULL)
@@ -158,16 +211,21 @@ function markUsed(db, id, { now } = {}) {
 }
 
 // Why an answered item can no longer be revised or reopened, or null when it can (and for a
-// pending item). Cheap: a later change to a logged row (changed_since) shows only on revert.
+// pending item). Cheap: a later change to a logged row (changed_since) shows only on revert. An
+// auto answer to account_owner or account_kind is not final on a later import (imported_since):
+// its account columns revert one by one, so an ordinary import does not block it.
+const IMPORT_EXEMPT = ['account_owner', 'account_kind'];
 export function finalReason(db, item) {
   if (!item || item.status !== 'answered') return null;
   if (item.answer === 'superseded') return 'stale';
   const undo = db.prepare('SELECT ingest_epoch, used_at FROM confirm_undo WHERE item_id = ?').get(item.id);
   if (!undo) return 'no_undo';
   if (undo.used_at != null) return 'used_since';
-  if (undo.ingest_epoch !== ingestEpoch(db)) return 'imported_since';
+  if (undo.ingest_epoch !== ingestEpoch(db) && !(IMPORT_EXEMPT.includes(item.kind) && hasAuto(db, item.id))) return 'imported_since';
   return null;
 }
+
+const hasAuto = (db, id) => Boolean(db.prepare('SELECT 1 FROM confirm_auto WHERE item_id = ?').get(id));
 
 // The answered item a revise or reopen acts on, or the refusal.
 function answeredItem(db, id) {
@@ -191,30 +249,101 @@ function revertAnswer(db, item) {
   return changes;
 }
 
-// Change an answered item's answer: revert the stored answer, then answer again, in one
-// transaction (any refusal changes nothing). The same option returns the item unchanged.
-// Returns {item, factsChanged}: whether either log touched facts.
+// Auto answers that rest on an item: confirm_auto rows whose evidence.ancestors (the transitive
+// closure stored at answer time) include it, newest first.
+function dependentsOf(db, id) {
+  return db.prepare('SELECT item_id, evidence FROM confirm_auto ORDER BY created_at DESC, item_id DESC').all()
+    .filter((r) => (parseJson(r.evidence, {})?.ancestors ?? []).includes(id)).map((r) => r.item_id);
+}
+
+// Revert the auto answers resting on an item, each in its own savepoint: a final one, or one whose
+// revert fails, stays answered. Returns the reverted logs.
+function revertDependents(db, id) {
+  const logs = [];
+  for (const depId of dependentsOf(db, id)) {
+    const dep = getItem(db, depId);
+    if (!dep || dep.status !== 'answered' || finalReason(db, dep)) continue;
+    db.exec('SAVEPOINT confirm_dependent');
+    try {
+      logs.push(...revertAnswer(db, dep));
+      db.exec('RELEASE confirm_dependent');
+    } catch {
+      db.exec('ROLLBACK TO confirm_dependent');
+      db.exec('RELEASE confirm_dependent');
+    }
+  }
+  return logs;
+}
+
+// The owner undid an auto answer: Fathom never answers that item again.
+const decline = (db, id, { now }) => db.prepare('INSERT INTO confirm_auto_declined (item_id, at) VALUES (?, ?) ON CONFLICT(item_id) DO NOTHING').run(id, stamp(now));
+
+// Change an answered item's answer: revert the auto answers resting on it and the stored answer,
+// then answer again, in one transaction (any refusal changes nothing). The same option returns the
+// item unchanged. Changing an auto answer declines it. Returns {item, factsChanged}: whether any
+// log touched facts.
 export function reviseItem(db, id, optionId, { now } = {}) {
   const item = answeredItem(db, id);
   if (!item.options.some((o) => o.id === optionId)) throw new ConfirmError('bad_option');
   if (optionId === item.answer) return { item, factsChanged: false };
+  const reason = finalReason(db, item);
+  if (reason) throw new ConfirmError('final', reason);
   return tx(db, () => {
-    const reverted = revertAnswer(db, item);
+    const auto = hasAuto(db, item.id);
+    const dependents = revertDependents(db, item.id);
+    const reverted = revertAnswer(db, getItem(db, item.id));
     const fresh = getItem(db, item.id);
     if (fresh.kind === 'fact_check' && factIsStale(db, fresh)) throw new ConfirmError('stale');
     if (fresh.kind === 'withholding_conflict' && !conflictCurrent(db, fresh)) throw new ConfirmError('stale');
     const { changes } = recordAnswer(db, fresh, optionId, { now });
-    return { item: getItem(db, item.id), factsChanged: touches(reverted, 'facts') || touches(changes, 'facts') };
+    if (auto) decline(db, item.id, { now });
+    return { item: getItem(db, item.id), factsChanged: [dependents, reverted, changes].some((log) => touches(log, 'facts')) };
   });
 }
 
-// Put an answered item back to pending, restoring every row its answer touched.
-// Returns {item, factsChanged}.
+// Put an answered item back to pending, restoring every row its answer touched, after the auto
+// answers resting on it. An item the owner reopens (owner or auto answer) is always asked again,
+// never auto-answered: it is declined. Returns {item, factsChanged}.
 export function reopenItem(db, id, { now } = {}) {
   const item = answeredItem(db, id);
+  const reason = finalReason(db, item);
+  if (reason) throw new ConfirmError('final', reason);
   return tx(db, () => {
-    const reverted = revertAnswer(db, item);
+    const reverted = reopenOne(db, item, { now });
     return { item: getItem(db, item.id), factsChanged: touches(reverted, 'facts') };
+  });
+}
+
+// Reopen inside the caller's transaction and decline the item (dependents reverted with it are not
+// declined). Returns every reverted log.
+function reopenOne(db, item, { now }) {
+  const dependents = revertDependents(db, item.id);
+  const reverted = revertAnswer(db, getItem(db, item.id));
+  decline(db, item.id, { now });
+  return [...dependents, ...reverted];
+}
+
+// Reopen several answered items in one transaction (undo of a group card); any refusal changes
+// nothing. An item already reverted here as resting on another listed item counts as reopened.
+// Returns {items, factsChanged}.
+export function reopenItems(db, ids, { now } = {}) {
+  const list = Array.isArray(ids) ? ids : [];
+  const items = list.map((id) => answeredItem(db, id));
+  for (const item of items) {
+    const reason = finalReason(db, item);
+    if (reason) throw new ConfirmError('final', reason);
+  }
+  return tx(db, () => {
+    let factsChanged = false;
+    for (const item of items) {
+      const fresh = getItem(db, item.id);
+      if (fresh.status === 'pending') {
+        decline(db, item.id, { now });
+        continue;
+      }
+      if (touches(reopenOne(db, answeredItem(db, item.id), { now }), 'facts')) factsChanged = true;
+    }
+    return { items: items.map((i) => getItem(db, i.id)), factsChanged };
   });
 }
 

@@ -117,6 +117,107 @@
 .d-horizon .h-deck-notice { margin: 0 0 12px; font-size: 13px; color: var(--mu); }
 .d-horizon .h-cf-final { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); font-size: 13px; color: var(--tx2); }
 
+/* best guess: the tag inside the guessed option, the preselected ring, the evidence line */
+.d-horizon .h-cf-best {
+  display: inline-block; margin-left: 8px; padding: 0 7px; border-radius: 999px; vertical-align: 1px;
+  background: var(--acd); color: var(--ac); font: 500 10.5px/17px var(--mono); letter-spacing: 0.02em; white-space: nowrap;
+}
+.d-horizon .h-btn.pri .h-cf-best { background: rgba(4, 18, 14, 0.18); color: var(--ink); }
+.d-horizon .h-deck-card .h-btn.guess { border-color: var(--ac); box-shadow: 0 0 0 1px var(--ac); background: var(--acd); }
+.d-horizon .h-cf-gl { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin: 0 0 16px; }
+.d-horizon .h-cf-gl .h-cf-guess { flex: 1 1 260px; min-width: 0; margin: 0; }
+.d-horizon .h-cf-guess .h-cf-why { display: inline; margin: 0; color: var(--mu); }
+.d-horizon .h-deck-card .h-btn.h-cf-take { display: inline-flex; width: auto; flex: none; min-height: 34px; padding: 0 14px; white-space: nowrap; }
+
+/* card context: account view, same-named table, compare table, values list */
+.d-horizon .h-cf-detail { margin: -4px 0 18px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); min-width: 0; }
+.d-horizon .h-cf-acct dl, .d-horizon .h-cf-values { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 180px), 1fr)); gap: 10px 18px; }
+.d-horizon .h-cf-acct dl > div, .d-horizon .h-cf-values > div { min-width: 0; padding-left: 8px; border-left: 2px solid transparent; }
+.d-horizon .h-cf-acct dt, .d-horizon .h-cf-values dt { color: var(--fa); font-size: 11.5px; letter-spacing: 0.06em; text-transform: uppercase; }
+.d-horizon .h-cf-acct dd, .d-horizon .h-cf-values dd { margin: 2px 0 0; color: var(--tx); font-size: 13.5px; overflow-wrap: anywhere; }
+.d-horizon .h-cf-acct dd b { font-weight: 500; }
+.d-horizon .h-cf-acct [data-field="files"] { grid-column: 1 / -1; }
+.d-horizon .h-cf-file { display: block; color: var(--tx2); font-size: 13px; }
+.d-horizon .h-cf-acct [data-differs="1"] { border-left-color: var(--ac); }
+.d-horizon .h-cf-none { color: var(--fa); }
+.d-horizon .h-cf-sub { margin: 14px 0 6px; color: var(--mu); font-size: 12.5px; }
+.d-horizon .h-cf-recent li {
+  display: grid; grid-template-columns: 96px minmax(0, 1fr) auto; gap: 2px 12px; padding: 6px 0;
+  border-top: 1px solid var(--line); font-size: 13px; color: var(--tx2);
+}
+.d-horizon .h-cf-recent .d { color: var(--mu); font-variant-numeric: tabular-nums; }
+.d-horizon .h-cf-recent .t { min-width: 0; overflow-wrap: anywhere; color: var(--tx); }
+.d-horizon .h-cf-recent .a { text-align: right; font-variant-numeric: tabular-nums; }
+.d-horizon .h-cf-recent .f { grid-column: 2 / -1; color: var(--fa); font-size: 12px; overflow-wrap: anywhere; }
+
+.d-horizon .h-cf-scroll { max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.d-horizon .h-cf-same, .d-horizon .h-cf-compare { width: 100%; border-collapse: collapse; font-size: 13px; }
+.d-horizon .h-cf-same th, .d-horizon .h-cf-compare th {
+  text-align: left; font-weight: 400; color: var(--fa); font-size: 11.5px; letter-spacing: 0.06em; text-transform: uppercase;
+  padding: 6px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; vertical-align: top;
+}
+.d-horizon .h-cf-same td, .d-horizon .h-cf-compare td { padding: 7px 10px; color: var(--tx2); border-bottom: 1px solid var(--line); vertical-align: top; min-width: 96px; overflow-wrap: anywhere; }
+.d-horizon .h-cf-same tbody th, .d-horizon .h-cf-compare tbody th { padding-top: 8px; }
+.d-horizon .h-cf-same tr.me th { color: var(--ac); }
+.d-horizon .h-cf-same td b { font-weight: 500; }
+.d-horizon .h-cf-same td[data-differs="1"], .d-horizon .h-cf-compare tr[data-differs="1"] td {
+  color: var(--tx); background: var(--acd); box-shadow: inset 2px 0 0 var(--ac);
+}
+.d-horizon .h-cf-compare tr[data-differs="1"] th { color: var(--ac); }
+.d-horizon .h-cf-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* group card: one table, a row per account with its own options and detail */
+.d-horizon .h-cf-group { display: block; width: 100%; margin-top: -4px; }
+.d-horizon .h-cf-group thead, .d-horizon .h-cf-group tbody { display: block; }
+.d-horizon .h-cf-group tr {
+  display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1.1fr) minmax(0, 1fr); gap: 4px 16px;
+}
+.d-horizon .h-cf-group thead tr { padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+.d-horizon .h-cf-group thead th { text-align: left; font-weight: 400; color: var(--fa); font-size: 11.5px; letter-spacing: 0.06em; text-transform: uppercase; }
+.d-horizon .h-cf-group thead th:last-child { position: absolute; }
+.d-horizon .h-cf-group tbody tr { padding: 14px 0; border-bottom: 1px solid var(--line); }
+.d-horizon .h-cf-group td { display: block; min-width: 0; font-size: 13px; color: var(--tx2); overflow-wrap: anywhere; }
+.d-horizon .h-cf-group td > span { display: block; color: var(--fa); font-size: 12px; margin-top: 2px; }
+.d-horizon .h-cf-group td[data-col="account"] b { display: block; color: var(--tx); font-weight: 500; font-size: 14px; }
+.d-horizon .h-cf-group td[data-col="balance"] b { font-weight: 500; color: var(--tx); }
+.d-horizon .h-cf-group td > span.h-cf-none { display: inline; color: var(--fa); font-size: 13px; margin: 0; }
+.d-horizon .h-cf-group td > span.h-cf-flag {
+  display: inline-block; margin: 4px 0 0; padding: 0 7px; border: 1px dashed var(--acl); border-radius: 999px;
+  color: var(--ac); font-size: 11.5px; line-height: 18px;
+}
+.d-horizon .h-cf-group td.h-cf-ans, .d-horizon .h-cf-group td.h-cf-gx { grid-column: 1 / -1; }
+.d-horizon .h-cf-group td.h-cf-ans { margin-top: 8px; }
+.d-horizon .h-cf-ropts { display: flex; flex-wrap: wrap; gap: 6px; }
+.d-horizon .h-deck-card .h-cf-ropts .h-btn { display: inline-flex; width: auto; min-height: 32px; padding: 5px 11px; font-size: 13px; }
+.d-horizon .h-cf-rwhy, .d-horizon .h-cf-rstate { margin-top: 6px; font-size: 12.5px; color: var(--mu); }
+.d-horizon .h-cf-rwhy b { color: var(--ac); font-weight: 500; }
+.d-horizon .h-cf-group tr.done td[data-col] { opacity: 0.7; }
+.d-horizon .h-cf-gx details { margin-top: 4px; }
+.d-horizon .h-cf-gx summary {
+  display: inline-flex; gap: 6px; align-items: center; padding: 4px 0; cursor: pointer; list-style: none; color: var(--mu); font-size: 12.5px;
+}
+.d-horizon .h-cf-gx summary::-webkit-details-marker { display: none; }
+.d-horizon .h-cf-gx summary .h-i { color: var(--fa); transform: rotate(-90deg); transition: transform 0.12s ease; }
+.d-horizon .h-cf-gx details[open] summary .h-i { transform: none; }
+.d-horizon .h-cf-gx summary:hover { color: var(--tx); }
+.d-horizon .h-cf-gx .h-cf-acct { margin-top: 8px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); }
+.d-horizon .h-cf-gfoot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; margin-top: 16px; }
+.d-horizon .h-cf-gfoot p { flex: 1 1 220px; min-width: 0; font-size: 12.5px; color: var(--mu); }
+.d-horizon .h-deck-card .h-cf-gfoot .h-btn { display: inline-flex; width: auto; flex: none; min-height: 36px; padding: 0 16px; white-space: nowrap; }
+
+/* decided for you */
+.d-horizon .h-decided { margin-top: 36px; }
+.d-horizon .h-decided > p { margin-bottom: 6px; }
+.d-horizon .h-decided-l li { display: flex; gap: 14px; align-items: flex-start; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.d-horizon .h-decided-b { flex: 1; min-width: 0; }
+.d-horizon .h-decided-k { font-size: 11.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--fa); }
+.d-horizon .h-decided-q { margin-top: 2px; color: var(--tx); font-size: 14px; overflow-wrap: anywhere; }
+.d-horizon .h-decided-a { margin-top: 2px; color: var(--mu); font-size: 13px; }
+.d-horizon .h-decided-a b { color: var(--ac); font-weight: 500; }
+.d-horizon .h-decided-e { margin-top: 2px; color: var(--fa); font-size: 12.5px; overflow-wrap: anywhere; }
+.d-horizon .h-decided-l li > .h-btn { flex: none; height: 28px; }
+.d-horizon .h-decided-final { flex: 0 1 200px; font-size: 12px; color: var(--fa); text-align: right; }
+
 .d-horizon .h-deck-top + .h-empty { border: 1px solid var(--line2); border-radius: 12px; padding: 24px; }
 .d-horizon .h-deck-nav { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 18px; }
 .d-horizon .h-deck-nav .h-btn { flex: none; }
@@ -128,7 +229,7 @@
   .d-horizon .h-deck-hint .tch { display: inline; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .d-horizon .h-howto summary .h-i, .d-horizon .h-deck-card, .d-horizon .h-deck-bar i { transition: none; }
+  .d-horizon .h-howto summary .h-i, .d-horizon .h-deck-card, .d-horizon .h-deck-bar i, .d-horizon .h-cf-gx summary .h-i { transition: none; }
 }
 @media (max-width: 720px) {
   .d-horizon .h-ing-banner { padding: 12px 14px; gap: 12px; }
@@ -138,4 +239,17 @@
   .d-horizon .h-deck-opts.short { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .d-horizon .h-deck-nav { flex-wrap: wrap; }
   .d-horizon .h-deck-hint { order: 3; flex-basis: 100%; }
+  .d-horizon .h-cf-detail { padding: 12px; }
+  .d-horizon .h-cf-recent li { grid-template-columns: minmax(0, 1fr) auto; }
+  .d-horizon .h-cf-recent .d { grid-column: 1 / -1; }
+  .d-horizon .h-cf-group thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .d-horizon .h-cf-group tr { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 14px; }
+  .d-horizon .h-cf-group td[data-col="account"] { grid-column: 1 / -1; }
+  .d-horizon .h-cf-group td[data-col="range"] { grid-column: 1 / -1; }
+  .d-horizon .h-cf-group td[data-l]::before {
+    content: attr(data-l); display: block; color: var(--fa); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 2px;
+  }
+  .d-horizon .h-cf-group td.h-cf-ans { margin-top: 2px; }
+  .d-horizon .h-decided-l li { flex-wrap: wrap; }
+  .d-horizon .h-decided-final { flex-basis: 100%; text-align: left; }
 }
