@@ -745,6 +745,7 @@ describe('recs', () => {
 
   test('AC4: without the Virginia529 account answers the va529 rec is in confirm form (S8)', async () => {
     const db = await S.store({ variant: { facts: { 'accounts.va529': undefined } } });
+    db.prepare("UPDATE accounts SET inst = '' WHERE kind = '529'").run(); // no institution: the plan is asked
     await plan(db);
     assert.ok(activeRecIds(db).includes('va529'));
     assert.ok(recRow(db, 'va529').def.question.fields.some(f => f.key === 'accounts.va529'));
@@ -754,6 +755,8 @@ describe('recs', () => {
   test('AC4: a 529 account whose owner is 70 or older is excluded, leaving no va529 rec (T5)', async () => {
     const db = await S.store();
     const college = accountIdByMask(db, MASKS.college);
+    db.prepare("UPDATE accounts SET owner = 'owner' WHERE id = ?").run(college);
+    addFact(db, 'household.birthYears', { owner: 1950, spouse: 1983 }); // the account owner is seventy or older
     addFact(db, 'accounts.va529', { [college]: { virginiaPlan: true, carryforward: 0 } });
     await plan(db);
     assert.ok(!activeRecIds(db).includes('va529'));
