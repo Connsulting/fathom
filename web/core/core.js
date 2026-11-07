@@ -827,6 +827,18 @@ function accountRename(id, displayName) {
   return send('/api/accounts/' + encodeURIComponent(id) + '/name', { displayName: displayName ?? '' }, d => d.account || null, null, 'Could not rename that account. ');
 }
 
+function preferenceSave(id, text) {
+  return send('/api/preferences' + (id ? '/' + encodeURIComponent(id) : ''), { text });
+}
+
+function preferenceDelete(id) {
+  return send('/api/preferences/' + encodeURIComponent(id) + '/delete', {});
+}
+
+function actionUndo(id) {
+  return send('/api/actions/' + encodeURIComponent(id) + '/undo', {}, null, null, 'Could not undo that change. ');
+}
+
 function goalCreate(fields) {
   if (!fields || typeof fields !== 'object') return done();
   return send('/api/goals', fields, d => d.goal || null, null, 'Could not save that goal. ');
@@ -1290,6 +1302,9 @@ const api = {
   pnlRows,
   spending,
   spendingRows,
+  preferenceSave,
+  preferenceDelete,
+  actionUndo,
   accountMask,
   accountOwner,
   accountKind,
