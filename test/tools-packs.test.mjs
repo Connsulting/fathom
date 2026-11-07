@@ -171,7 +171,7 @@ describe('registry entries', () => {
     }
     assert.deepEqual(getTool('get_pack_entry').inputSchema.required.slice().sort(), ['file', 'packId']);
     assert.deepEqual(getTool('search_pack_entries').inputSchema.required, ['query']);
-    assert.deepEqual(tools.filter(x => x.scope === 'write:recs').map(x => x.name), ['set_recommendation_status', 'set_recommendation_owner', 'undo_recommendation_action']);
+    assert.deepEqual(tools.filter(x => x.scope === 'write:recs').map(x => x.name), ['set_recommendation_owner', 'set_recommendation_status', 'undo_recommendation_action']);
   });
 });
 

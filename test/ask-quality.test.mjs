@@ -315,5 +315,5 @@ test('query_transactions names credit cards and categories, pnl_by_month names b
   assert.match(byName.get('query_transactions').description, /credit cards?/i);
   assert.match(byName.get('query_transactions').description, /categor/i);
   assert.match(byName.get('pnl_by_month').description, /business/i);
-  assert.deepEqual(REGISTRY.map(x => x.name), TOOL_NAMES);
+  assert.deepEqual(REGISTRY.map(x => x.name), TOOL_NAMES.toSorted());
 });
