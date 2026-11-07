@@ -79,9 +79,9 @@ test('a stopped account carries its last balance forward, is counted as carried 
   fill(db, 'live', 100, 10);
   for (const id of ['old', 'old2']) { balance(db, id, '2026-07-31', 500); balance(db, id, '2026-08-31', 500); }
   const { trend } = buildTrend(db, NOW);
-  assert.deepEqual(trend.points.map(p => p.date), ['2026-08-31', '2026-09-30', '2026-10-31']);
-  assert.deepEqual(trend.points.map(p => p.total), [1100, 1110, 1120], 'both stopped balances keep counting');
-  assert.deepEqual(trend.points.map(p => p.carried.total), [0, 2, 2]);
+  assert.deepEqual(trend.points.map(p => p.date), ['2026-07-31', '2026-08-31', '2026-09-30', '2026-10-31']);
+  assert.deepEqual(trend.points.map(p => p.total), [1000, 1100, 1110, 1120], 'both stopped balances keep counting; the live account joins in August');
+  assert.deepEqual(trend.points.map(p => p.carried.total), [0, 0, 2, 2]);
   assert.deepEqual(trend.points.at(-1).carried.parts, { cash: 2 });
   assert.equal(trend.note, 'includes 2 accounts last updated Aug 31');
   const one = await emptyDb();
@@ -105,15 +105,14 @@ test('a month without a balance row is a gap, not stopped data: it is carried si
   assert.deepEqual(trend.points.map(p => p.carried.total), [0, 0, 0]);
 });
 
-test('the series starts once every counted account has begun; a one-month account waits and is reported', async () => {
+test('an account adds nothing before its first balance, and one month of data is not a trend', async () => {
   const db = await emptyDb();
   account(db, 'a', { sort: 1 }); account(db, 'b', { kind: 'taxable', sort: 2 }); account(db, 'new', { kind: 'taxable', sort: 3 });
   fill(db, 'a', 100, 10);
   fill(db, 'b', 1000, 100, 1);
   balance(db, 'new', '2026-10-31', 77);
   const { trend } = buildTrend(db, NOW);
-  assert.deepEqual(trend.points.map(p => [p.date, p.total]), [['2026-09-30', 1210], ['2026-10-31', 1320]]);
-  assert.equal(trend.pending, 1, 'one account has a single balance so far');
+  assert.deepEqual(trend.points.map(p => [p.date, p.total]), [['2026-08-31', 100], ['2026-09-30', 1210], ['2026-10-31', 1397]]);
   assert.equal(buildTrend(await emptyDb(), NOW), null, 'no balances, no trend');
   const single = await emptyDb();
   account(single, 'x'); balance(single, 'x', '2026-10-31', 5);

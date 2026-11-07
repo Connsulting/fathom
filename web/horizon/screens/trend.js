@@ -142,8 +142,7 @@ export function render() {
   const key = '<div class="tr-key"><span><i class="tr-k solid"></i>Reported balances</span><span><i class="tr-k dash"></i>Includes a carried-forward balance</span></div>';
   const notes = [
     t.note ? `<p class="tr-note" data-trend-note>${esc(t.note.charAt(0).toUpperCase() + t.note.slice(1))}. Its last balance is used until new data arrives.</p>` : '',
-    t.pending ? `<p class="tr-note">${t.pending} ${t.pending === 1 ? 'account has' : 'accounts have'} one balance so far and joins the trend with its next upload.</p>` : '',
-    '<p class="tr-note">Net worth adds every account, business cash included, with debt subtracted.</p>',
+    '<p class="tr-note">Net worth adds every account from its first balance, business cash included, with debt subtracted.</p>',
   ].join('');
   const body = `<div class="tr-card" data-trend>
     <div class="tr-top"><div class="tr-head"><span>Net worth</span><b data-trend-total>${figHtml(t.fig.total, { k: true })}</b><small>as of ${esc(dayLabel(cur.date))}</small></div>

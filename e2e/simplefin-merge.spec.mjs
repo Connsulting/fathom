@@ -21,7 +21,8 @@ async function seed(request) {
     return pair;
   } finally {db.close();}
 }
-const series = page => page.locator('[data-trend-total]');
+// The household total now, read from the scenario: merged duplicates count once.
+const total = async request => (await (await request.get('/api/scenario')).json()).trend.points.at(-1).total;
 
 test('Money offers Merge and Undo restores the duplicate and totals @sm-ac5 @mobile', async ({page,request}) => {
   const pair=await seed(request);
@@ -32,17 +33,18 @@ test('Money offers Merge and Undo restores the duplicate and totals @sm-ac5 @mob
   expect(q).toHaveLength(1);
   const card=page.locator(`[data-item="${q[0].id}"]`);
   await expect(card).toContainText('Same account?');
-  await expect(series(page)).toContainText('2.4');
+  const before = await total(request);
+  await expect(page.locator('[data-trend-total]')).toBeVisible();
   const answer = page.waitForResponse(r => r.url().endsWith(`/api/confirm/${q[0].id}/answer`));
   await card.getByRole('button',{name:/Merge/}).click();
   expect((await answer).status()).toBe(200);
   await expect(page.locator('[data-account-duplicates]')).toHaveCount(0);
-  await expect(series(page)).toContainText('1.2');
+  await expect.poll(() => total(request)).toBe(Math.round((before - 1200) * 100) / 100);
   let sc=await (await request.get('/api/scenario')).json();
   expect(sc.accounts.filter(a=>[pair.keep,pair.own].includes(a.id))).toHaveLength(1);
   await page.getByRole('button',{name:'Undo',exact:true}).click();
   await expect(page.locator('[data-account-duplicates]')).toBeVisible();
-  await expect(series(page)).toContainText('2.4');
+  await expect.poll(() => total(request)).toBe(before);
   sc=await (await request.get('/api/scenario')).json();
   expect(sc.accounts.filter(a=>[pair.keep,pair.own].includes(a.id))).toHaveLength(2);
   expect(await page.evaluate(()=>document.documentElement.scrollWidth-document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
@@ -51,6 +53,7 @@ test('Money offers Merge and Undo restores the duplicate and totals @sm-ac5 @mob
 
 test('Confirm shares the repair question and Keep both clears the Money warning @sm-ac2 @sm-ac4 @mobile', async ({page,request}) => {
   await seed(request);
+  const before = await total(request);
   const sc=await (await request.get('/api/scenario')).json();
   const q=sc.live.ingest.items.find(i=>i.context.repair);
   await gotoRoute(page,'confirm');
@@ -60,7 +63,7 @@ test('Confirm shares the repair question and Keep both clears the Money warning 
   await card.getByRole('button',{name:/Keep both/}).click();
   await gotoRoute(page,'accounts');
   await expect(page.locator('[data-account-duplicates]')).toHaveCount(0);
-  await expect(series(page)).toContainText('2.4');
+  expect(await total(request), 'Keep both leaves both accounts in the total').toBe(before);
 });
 
 test('Money retires a stale pair warning and offers review again when evidence returns @sm-ac4 @mobile', async ({page,request}) => {
