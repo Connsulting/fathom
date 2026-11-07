@@ -15,6 +15,12 @@ export const SCOPE_INFO = Object.freeze([
   { id: 'write:facts', label: 'Record household facts', access: 'Record or correct facts from your typed Ask statements or stored data, and undo your changes.' },
   { id: 'write:steps', label: 'Check recommendation steps', access: 'Check or uncheck recommendation steps, and undo your changes.' },
   { id: 'write:goals', label: 'Create and edit goals', access: 'Create or edit goals, target amounts and dates from your statements or stored data, and undo your changes.' },
+  { id: 'write:accounts', label: 'Change accounts', access: 'Rename accounts, set their last four, owner and kind, and merge duplicates with confirmation.' },
+  { id: 'write:categories', label: 'Correct categories', access: 'Correct transaction categories and set merchant rules.' },
+  { id: 'write:confirm', label: 'Answer Confirm questions', access: 'Answer and reopen Confirm questions and mark expected tax documents.' },
+  { id: 'write:imports', label: 'Import documents', access: 'Import files and retry or build from imported documents.' },
+  { id: 'write:jobs', label: 'Run jobs', access: 'Run planning, sync, freshness and guess jobs now.' },
+  { id: 'write:decisions', label: 'Change decisions', access: 'Pick and decide war-game options and reopen decisions.' },
 ]);
 export const SCOPES = Object.freeze(SCOPE_INFO.map(s => s.id));
 
