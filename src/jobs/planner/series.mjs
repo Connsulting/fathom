@@ -33,8 +33,8 @@ function monthsEnding(clock, limit) {
   return out;
 }
 
-// { 'YYYY-MM': value } for one account.
-export function monthlyValues(db, accountId, clock) {
+// { 'YYYY-MM': {date, v} } for one account: the reading each month's value comes from.
+export function monthlyReadings(db, accountId, clock) {
   const byMonth = new Map();
   const bal = db.prepare('SELECT date, amount FROM balances WHERE account_id = ? AND date <= ? ORDER BY date').all(accountId, clock);
   for (const r of bal) byMonth.set(monthKey(r.date), { date: r.date, v: r.amount });
@@ -48,7 +48,12 @@ export function monthlyValues(db, accountId, clock) {
   const lastAsOf = new Map();
   for (const asOf of [...byAsOf.keys()].sort()) lastAsOf.set(monthKey(asOf), asOf);
   for (const [month, asOf] of lastAsOf) if (!byMonth.has(month)) byMonth.set(month, { date: asOf, v: byAsOf.get(asOf) });
-  return new Map([...byMonth].map(([k, r]) => [k, cents(r.v)]));
+  return new Map([...byMonth].map(([k, r]) => [k, { date: String(r.date).slice(0, 10), v: cents(r.v) }]));
+}
+
+// { 'YYYY-MM': value } for one account.
+export function monthlyValues(db, accountId, clock) {
+  return new Map([...monthlyReadings(db, accountId, clock)].map(([k, r]) => [k, r.v]));
 }
 
 // Imported names are plain text; the label also carries the holder and last four.
