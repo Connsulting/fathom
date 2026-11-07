@@ -14,6 +14,7 @@ import { buildYearend } from '../yearend/expected.mjs';
 import { CURVE_AXES, KNOWN_FIGURES, curvePosition, servesGoals } from '../shared/goals.mjs';
 import { deriveHeard } from '../onboarding/heard.mjs';
 import { withAdvisor, advisorSection } from '../advisor/index.mjs';
+import { buildPace, indexPaceFigures } from '../pace/build.mjs';
 
 const DAY = 86400000;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -512,6 +513,9 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
   const ingestAccounts = ingest.accounts || {};
   const accountRows = db.prepare('SELECT * FROM accounts ORDER BY sort, id').all();
   const goals = loadGoals(db, { fig, accounts: accountRows });
+  const pace = buildPace(db, { clock: clk });
+  Object.assign(fig, indexPaceFigures(pace));
+  src['calc:pace'] = { label: 'Goal pace calculator', asOf: clk };
   const curve = loadCurve(db, content);
   const positions = getSetting(db, 'curve.positions', null) || {};
   for (const r of recs) {
@@ -545,6 +549,7 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
     }),
     recs,
     goals,
+    pace,
     curve,
     wargame,
     decisions,

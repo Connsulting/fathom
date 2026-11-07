@@ -158,7 +158,7 @@ test('figures carry v, src, kind and label, and every src is a known source', ()
   }
   for (const [key, f] of Object.entries(sc.fig)) {
     assert.equal(typeof f.v, 'number', `${key}.v`);
-    assert.ok(['a', 'p', 'e', 'm'].includes(f.kind), `${key}.kind`);
+    assert.ok(['a', 'p', 'e', 'm', 't'].includes(f.kind), `${key}.kind`);
     assert.equal(typeof f.label, 'string', `${key}.label`);
     assert.ok(sc.src[f.src] && sc.src[f.src].label, `${key}.src ${f.src} is a known source`);
   }

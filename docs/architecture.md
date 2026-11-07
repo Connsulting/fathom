@@ -678,6 +678,7 @@ response is `{scenario, ...}` with the fresh scenario.
 | `POST /api/threads/:id/delete` | `{}` | `{scenario}`. Deletes the thread and its messages forever; 409 unless it is in Trash. |
 | `POST /api/your-plans/build` | `{fileIds?: string[]}` (at most 50) | `{scenario, result: {written, entries, sources, warnings, dropped}}`. Builds the Your plans pack (`dropped` counts the extracted sections that did not match their document); 400 for a bad body; 409 while the engine is off, over the cap, or when the data directory is inside the repository. |
 | `POST /api/goals` | `{title, note?, horizon?, target?, targetDate?, track?}` | `{scenario, goal}`. Creates an owner goal (`origin` owner). `title` 1 to 120 characters, no line breaks; `note` at most 500; `horizon` now, 1-3y or 3-10y (default now); `target` a non-negative number or null; `targetDate` a valid YYYY-MM-DD or null; `track` null, `{accounts: [account ids]}` (at most 20, known ids) or `{figure: key}` (a known figure the store holds). Anything else 400. |
+| `GET /api/pace` | none | Deterministic `clock`, `rollup`, `goals`, `series` and `meters`, identical to `scenario.pace`. Uses the same owner gate as the scenario. No writes or model calls. |
 | `POST /api/goals/:id` | any subset of the create fields | `{scenario, goal}`. Edits an owner goal; 409 for a seed (demo) goal, 404 unknown. |
 | `POST /api/goals/:id/archive` | `{archived?: boolean}` (default true) | `{scenario, goal}`. Archives or restores a goal. |
 | `POST /api/goals/:id/delete` | `{}` | `{scenario}`. Deletes a goal for good. |
@@ -1913,6 +1914,85 @@ sum. `progress {cur, target}` is set only when both exist; the Goals screen draw
 Tradeoff curve positions are `settings` `curve.positions` (`{axisId: 0..1}`). The axes are the
 content `curve` (the demo) or the four default axes in `src/shared/goals.mjs` (a real store). The
 onboarding Priorities step shows the same axes and saves to the same setting.
+
+### Goal pace
+
+`src/calc/pace.mjs` contains pure calculations. `src/pace/build.mjs` reads the store and builds
+`scenario.pace`; `GET /api/pace` and the read-only MCP tool `get_pace` expose the same result.
+Existing `list_goals` and `get_figures` keep their contracts. No migration is needed.
+
+Health is per open goal. The household headline is derived from those results. Archived and
+completed goals are excluded. Goals without both a target amount and a valid target date have
+status `no target`: they stay listed but are excluded from household health counts.
+
+Each goal's plan of record is a linear accumulation path from `def.pace.startDate/startValue`
+to `targetDate/target`. Expected value is clamped to the start and target outside that interval.
+Creation captures the latest dated actual and its source rows in the goal JSON. A change to
+the cleaned target, target date or tracking captures a new baseline; an unchanged save, title
+edit or account-order change preserves it. Any edit initializes a legacy goal that has no
+baseline. A goal with no usable actual cannot establish a baseline and remains unknown.
+Flat or decreasing accumulation paths are unknown with `non_increasing_path`.
+
+Each result includes `expected`, `actual`, `target`, `gap` (actual minus expected), `gapDays`
+(gap divided by the original daily slope), `tolerance`, `timeGap`, `dataThrough`, `stale` and
+`reason`. Status is `ahead`, `on pace`, `behind`, `unknown` or `no target`. The on-pace tolerance
+is the larger of one dollar and seven days of planned progress, inclusive. After the target
+date expected stays at the target; the original slope still determines the time gap. The
+text uses rounded days, weeks, or average calendar months (365.2425 / 12 days), while `gapDays`
+retains signed days to two decimal places.
+
+Actuals require complete tracked inputs. Accounts use the newest stored balance or summed
+positions at or before the clock, preferring the balance on a tie. Missing any selected account
+leaves actual null. Actual figures use their stored value and resolve their locator's source
+rows, including nested figure references. Unavailable figures, projections, undated dependencies
+and incomplete locators cannot produce known health. Each dated dependency uses
+`freshnessOf` from `src/ingest/freshness.mjs`: balances and positions expire after 45 days,
+paystubs after 35 days and tax payments after 100 days. A newer transaction cannot refresh a
+balance. `dataThrough` is the oldest contributing date. Stale data gives `unknown`,
+`stale: true`, `reason: stale_data`, and preserves the dated last actual for inspection.
+
+Rollup `counts` has figures for `behind`, `ahead`, `onPace` and `unknown`, plus a `total` figure.
+Fixed headline templates prioritize behind goals, then unknown health, then on-pace counts,
+then ahead counts. With no targeted goals the headline is `No goals with targets`.
+
+`series.goals[id]` and `series.householdSavings` are `{series, reason, dataEnd}`. An available
+series has twelve slots for the clock year: `month`, `date`, `dataThrough`, `projected`,
+`actual`, `plan`, `gap` and `reason`. Observed points compare the stored actual with the plan
+at its observation date. Missing historical months have null actual and gap with a reason.
+Months after the data-end month project the latest observed dollar gap along the plan path;
+they carry kind `p`. These projections never establish current health. An actual figure whose
+complete account dependencies reconcile to its stored total also supplies those accounts'
+historical months. A figure with only one dated snapshot supplies only that observed month.
+With no path or observations the whole
+series is null with a reason.
+
+Household savings has its own plan, avoiding double counting overlapping goals. It requires
+the confirmed owner fact `pace.householdSavings.<year>` with
+`{startDate, startValue, targetDate, target, observations: [{date, value}]}`. Values are cumulative
+savings balances; dates and dollar amounts are explicit inputs, never inferred from the goals.
+Without that fact the series is null with `missing_household_savings_plan`.
+
+`meters` contains `{meter, reason, dataThrough, deadline}` for `retirement`, `tax` and `income`.
+`meter` is null when inputs are missing; otherwise it contains `used`, `limit` and `ratio`
+figures. The deadline is Dec 31 of the clock year. Ratios can exceed one. Owner-confirmed
+facts supply explicit, year-scoped inputs: `pace.retirement.<year>` is `{used, limit, asOf}`
+for household contributions and their confirmed aggregate plan limits;
+`pace.tax.<year>` is `{reserved, owed, asOf}` for earmarked cash and estimated liability;
+`pace.income.<year>` is `{annualPlan, asOf}` against the stored actual `inc.ytd.total`.
+Fact-row `as_of` is used when `asOf` is absent. These facts have no new UI writer in this item.
+Missing inputs are never replaced by remaining deductible room, projected income or zero.
+
+Every numeric result uses the existing `{v, src, kind, label}` figure shape with a `locator`
+containing `calc`, `inputs`, `parameters`, `sources` (source-row references), `steps` and
+`computedOn`. `scenario.fig` indexes those same figures under `pace.*`; `scenario.src`
+includes `calc:pace`. Reads do not persist derived results or call a model.
+
+The synthetic reserve goal tracks `reserve.actual`, a dated cash snapshot distinct from
+projected year-end `true_reserve`, toward its existing `reserve_target` by Dec 31, 2026.
+Elective work tracks `portfolio` toward `port_3m` by Dec 31, 2029; zero income required uses
+the same actual toward `port_4m` by Dec 31, 2036. Synthetic start dates and values are in both
+scenario fixtures. Explicit ISO dates and balance/position cadence in seed locators make the
+November demo unknown because its actuals are stale; an August clock exercises known health.
 
 Goals and positions feed the planner and chat. `servesGoals` matches a rec to open goals by topic
 (retirement, education, cash, tax, giving, health, home) from the goal's words, kind and tracked
