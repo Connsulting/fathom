@@ -20,7 +20,7 @@ import { randomBytes } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  expectServerExit, runCommand, spawnServer, tempDir,
+  expectServerExit, runCommand, spawnServer, tempDir, migrateTenancyStore, servedStore, secretEnv, secretsFor,
 } from './helpers/server.mjs';
 import { createAuthenticator } from './helpers/webauthn.mjs';
 import {
@@ -214,44 +214,37 @@ describe('offline migration of a schema 020 real store (AC1, AC3)', () => {
     assert.equal(readFileSync(join(out, 'api-key-secret'), 'utf8').trim(), fx.secretHex);
   });
 
-  test('after migration the old session, the unchanged passkeys, the pending invite link and both MCP keys work', T, async () => {
+  test('after both migrations the unchanged passkeys sign in and both MCP keys work; sessions and links are revoked', T, async () => {
+    // Since MT-03 a platform-migrated instance also needs the tenancy migration before it serves,
+    // and that migration's publication deletes every session, challenge and link token and revokes
+    // live invitations (src/platform/migrate-tenancy.mjs, manifest phase).
+    await migrateTenancyStore(fx.dataDir);
     server = await spawnServer({ dataDir: fx.dataDir, env: REAL });
     const base = server.baseUrl;
 
-    const old = sessionBrowser(base, fx.admin.session);
-    assert.equal((await old.get('/api/scenario')).status, 200, 'the pre-migration session cookie reads /api/scenario');
-    const who = await old.get('/api/identity');
-    assert.equal(who.status, 200);
-    const email = fx.admin.email;
-    assert.deepEqual(who.json.identity, { id: fx.admin.id, email, login: email, name: email, householdId, role: 'admin',
-      operator: false, memberships: [{ householdId, role: 'admin' }] });
+    assert.equal((await sessionBrowser(base, fx.admin.session).get('/api/scenario')).status, 401, 'the pre-migration session is revoked');
     assert.equal((await sessionBrowser(base, randomBytes(32).toString('base64url')).get('/api/scenario')).status, 401, 'an unknown session is refused');
 
     const admin = await signIn(base, fx.admin.device, fx.admin.credentialId);
     assert.equal(admin.verify.status, 200, admin.verify.text);
-    assert.equal(admin.verify.json.identity.email, fx.admin.email);
-    assert.equal(admin.verify.json.identity.role, 'admin');
+    const email = fx.admin.email;
+    assert.deepEqual(admin.verify.json.identity, { id: fx.admin.id, email, login: email, name: email, householdId, role: 'admin',
+      operator: false, memberships: [{ householdId, role: 'admin' }] });
     assert.ok(admin.client.session() && admin.client.session() !== fx.admin.session);
     assert.equal((await admin.client.get('/api/scenario')).status, 200);
     const member = await signIn(base, fx.member.device, fx.member.credentialId);
     assert.equal(member.verify.status, 200, member.verify.text);
     assert.deepEqual(pick(member.verify.json.identity, ['email', 'householdId', 'role']), { email: fx.member.email, householdId, role: 'member' });
 
-    const invitee = browser(base);
-    const enrolled = await register(base, invitee, fx.invitee.device, { token: fx.inviteToken });
-    assert.equal(enrolled.options.status, 200, enrolled.options.text);
-    assert.equal(enrolled.verify.status, 200, enrolled.verify.text);
-    assert.deepEqual(pick(enrolled.verify.json.identity, ['email', 'role']), { email: fx.invitee.email, role: 'member' });
-    assert.equal((await invitee.get('/api/scenario')).status, 200);
-    const platformFile = join(fx.dataDir, PLATFORM_FILE);
-    withDb(platformFile, db => {
-      assert.deepEqual(pick(db.prepare('SELECT * FROM household_memberships WHERE user_id = ?').get(fx.invitee.id), ['household_id', 'role', 'status']),
-        { household_id: householdId, role: 'member', status: 'active' });
-      assert.notEqual(db.prepare('SELECT consumed_at FROM household_invitations WHERE user_id = ?').get(fx.invitee.id).consumed_at, null);
+    for (const token of [fx.inviteToken, fx.recoveryToken, fx.addPasskeyToken]) {
+      const r = await browser(base).post('/api/auth/register/options', { token, name: 'Synthetic device' });
+      assert.equal(r.status, 410, 'a pre-migration link no longer redeems');
+      assert.deepEqual(r.json, EXPIRED);
+    }
+    withDb(join(fx.dataDir, PLATFORM_FILE), db => {
+      assert.equal(count(db, 'SELECT count(*) AS n FROM household_invitations WHERE consumed_at IS NULL AND revoked_at IS NULL'), 0, 'no live invitation');
+      assert.equal(count(db, 'SELECT count(*) AS n FROM household_memberships WHERE user_id = ?', fx.invitee.id), 0, 'the invitee did not join');
     });
-    const replay = await browser(base).post('/api/auth/register/options', { token: fx.inviteToken, name: 'Synthetic device' });
-    assert.equal(replay.status, 410);
-    assert.deepEqual(replay.json, EXPIRED);
 
     for (const key of [fx.ownedKey.key, fx.ownerlessKey.key]) {
       const r = await mcpList(base, key);
@@ -262,73 +255,32 @@ describe('offline migration of a schema 020 real store (AC1, AC3)', () => {
   });
 });
 
-describe('pre-migration links and challenges redeem after migration, each in its own fixture (AC1)', () => {
-  async function migratedServer(t) {
+describe('pre-migration challenges do not complete after both migrations (AC1)', () => {
+  test('a sign-in challenge and an invite-bound registration challenge created before migration are refused after it', T, async t => {
     const fx = await legacyFixture(t);
     const r = await migrateCli(fx.dataDir, fx.keyFile);
     assert.equal(r.code, 0, r.stderr);
     const { householdId } = assertMigrated(fx);
-    const server = await startServer(t, fx.dataDir);
-    return { fx, server, base: server.baseUrl, householdId, platformFile: join(fx.dataDir, PLATFORM_FILE) };
-  }
-
-  test('the recovery link replaces the passkeys, revokes the old session and signs in', T, async t => {
-    const { fx, base, platformFile } = await migratedServer(t);
-    const device = createAuthenticator();
-    const client = browser(base);
-    const { options, verify } = await register(base, client, device, { token: fx.recoveryToken }, 'Recovered synthetic device');
-    assert.equal(options.status, 200, options.text);
-    assert.equal(verify.status, 200, verify.text);
-    assert.equal(verify.json.identity.email, fx.member.email);
-    assert.equal((await client.get('/api/scenario')).status, 200, 'the recovered browser is signed in');
-    const ids = withDb(platformFile, db => db.prepare('SELECT id FROM passkeys WHERE user_id = ?').all(fx.member.id).map(r => r.id));
-    assert.deepEqual(ids, [device.credentials()[0].id], 'only the new passkey remains');
-    assert.equal((await sessionBrowser(base, fx.member.session).get('/api/scenario')).status, 401, 'the pre-migration session is revoked');
-    const stale = await signIn(base, fx.member.device, fx.member.credentialId);
-    assert.equal(stale.verify.status, 400, 'the replaced passkey no longer signs in');
-    const replay = await browser(base).post('/api/auth/register/options', { token: fx.recoveryToken, name: 'Again' });
-    assert.equal(replay.status, 410);
-    assert.deepEqual(replay.json, EXPIRED);
-  });
-
-  test('the add-passkey link adds a passkey and keeps the pre-migration session', T, async t => {
-    const { fx, base, platformFile } = await migratedServer(t);
-    const client = sessionBrowser(base, fx.admin.session);
-    const device = createAuthenticator();
-    const { options, verify } = await register(base, client, device, { token: fx.addPasskeyToken }, 'Second synthetic device');
-    assert.equal(options.status, 200, options.text);
-    assert.equal(verify.status, 200, verify.text);
-    assert.equal(verify.json.identity.email, fx.admin.email);
-    assert.equal(client.session(), fx.admin.session, 'the session cookie is kept');
-    assert.equal((await sessionBrowser(base, fx.admin.session).get('/api/scenario')).status, 200);
-    const ids = withDb(platformFile, db => db.prepare('SELECT id FROM passkeys WHERE user_id = ? ORDER BY id').all(fx.admin.id).map(r => r.id));
-    assert.deepEqual(ids, [fx.admin.credentialId, device.credentials()[0].id].sort());
-    const replay = await browser(base).post('/api/auth/register/options', { token: fx.addPasskeyToken, name: 'Again' });
-    assert.equal(replay.status, 410);
-  });
-
-  test('a sign-in challenge and an invite-bound registration challenge created before migration complete after it', T, async t => {
-    const { fx, base, householdId, platformFile } = await migratedServer(t);
-    const forged = browser(base, { [CEREMONY]: randomBytes(32).toString('base64url') });
-    const forgedResponse = fx.admin.device.getAssertion({ challenge: fx.signinChallenge.challenge, rpId: 'localhost' },
-      { origin: base, credentialId: fx.admin.credentialId });
-    assert.equal((await forged.post('/api/auth/signin/verify', { response: forgedResponse })).status, 400, 'an unknown ceremony cookie is refused');
+    await migrateTenancyStore(fx.dataDir);
+    const { baseUrl: base } = await startServer(t, fx.dataDir);
+    const platformFile = join(fx.dataDir, PLATFORM_FILE);
 
     const signin = browser(base, { [CEREMONY]: fx.signinChallenge.cookie });
     const response = fx.admin.device.getAssertion({ challenge: fx.signinChallenge.challenge, rpId: 'localhost' },
       { origin: base, credentialId: fx.admin.credentialId });
-    const verified = await signin.post('/api/auth/signin/verify', { response });
-    assert.equal(verified.status, 200, verified.text);
-    assert.equal(verified.json.identity.email, fx.admin.email);
-    assert.equal((await signin.get('/api/scenario')).status, 200);
+    assert.equal((await signin.post('/api/auth/signin/verify', { response })).status, 400, 'the deleted sign-in challenge is refused');
+    assert.equal((await signin.get('/api/scenario')).status, 401);
 
     const reg = browser(base, { [CEREMONY]: fx.registerChallenge.cookie });
     const credential = fx.invitee.device.createCredential(
       { rp: { id: 'localhost' }, user: { id: fx.invitee.handle }, challenge: fx.registerChallenge.challenge }, { origin: base });
     const enrolled = await reg.post('/api/auth/register/verify', { token: fx.inviteToken, name: 'Synthetic device', response: credential });
-    assert.equal(enrolled.status, 200, enrolled.text);
-    assert.deepEqual(pick(enrolled.json.identity, ['email', 'householdId', 'role']), { email: fx.invitee.email, householdId, role: 'member' });
-    assert.equal(withDb(platformFile, db => count(db, "SELECT count(*) AS n FROM household_memberships WHERE user_id = ? AND status = 'active'", fx.invitee.id)), 1);
+    assert.ok([400, 410].includes(enrolled.status), `the deleted registration challenge is refused: ${enrolled.status}`);
+    assert.equal(withDb(platformFile, db => count(db, "SELECT count(*) AS n FROM household_memberships WHERE household_id = ? AND user_id = ?", householdId, fx.invitee.id)), 0);
+
+    // Liveness: a fresh sign-in ceremony with the same passkey succeeds.
+    const fresh = await signIn(base, fx.admin.device, fx.admin.credentialId);
+    assert.equal(fresh.verify.status, 200, fresh.verify.text);
   });
 });
 
@@ -364,8 +316,10 @@ describe('every caller refuses an unmigrated real store (AC3)', () => {
     test(`plan-cli, guess-cli and build-your-plans refuse platform_migration_required on a store ${users ? 'with' : 'without'} users`, T, async t => {
       const fx = await legacyFixture(t, { users });
       const env = { FATHOM_DATA: fx.dataDir, FATHOM_ENGINE: 'off', FATHOM_CLOCK: CLOCK, FATHOM_DEMO: '0' };
+      // Since MT-03 every store-opening CLI names its household; before any migration no id exists,
+      // so a synthetic one shows the readiness refusal comes from the instance, not the argument.
       for (const script of CLIS) {
-        const r = await runCommand(process.execPath, [script], { env });
+        const r = await runCommand(process.execPath, [script, '--household', 'hh-synthetic-unknown'], { env });
         assert.notEqual(r.code, 0, `${script}: ${r.stdout}${r.stderr}`);
         assert.match(r.stderr, /platform_migration_required/, script);
         assert.deepEqual(stable(fx.dataDir), fx.preHashes, `${script} leaves the store unchanged`);
@@ -373,11 +327,18 @@ describe('every caller refuses an unmigrated real store (AC3)', () => {
       const migrated = await migrateCli(fx.dataDir, fx.keyFile);
       assert.equal(migrated.code, 0, migrated.stderr);
       assertMigrated(fx);
+      await migrateTenancyStore(fx.dataDir);
+      const household = ['--household', servedStore(fx.dataDir).householdId];
+      const keyed = { ...env, ...secretEnv(secretsFor(fx.dataDir)) };
+      // The migrated household starts with outbound jobs paused: both job CLIs get past every
+      // readiness check and stop at the pause, never running around it.
       for (const script of CLIS.slice(0, 2)) {
-        const r = await runCommand(process.execPath, [script], { env });
-        assert.equal(r.code, 0, `${script} runs on the migrated store: ${r.stderr}`);
+        const r = await runCommand(process.execPath, [script, ...household], { env: keyed });
+        assert.doesNotMatch(r.stderr, /migration_required/, script);
+        assert.equal(r.code, 3, `${script} stops at the outbound pause: ${r.stderr}`);
+        assert.match(r.stderr, /outbound jobs are paused/, script);
       }
-      const plans = await runCommand(process.execPath, [CLIS[2]], { env });
+      const plans = await runCommand(process.execPath, [CLIS[2], ...household], { env: keyed });
       assert.doesNotMatch(plans.stderr, /platform_migration/, 'build-your-plans gets past the readiness check');
     });
   }
@@ -516,8 +477,11 @@ describe('abrupt termination and phase faults resume to the same end state (migr
         assert.equal(again.code, 0, again.stderr);
         assertMigrated(fx);
         if (phase === 'complete') {
+          await migrateTenancyStore(fx.dataDir);
           const server = await startServer(t, fx.dataDir);
-          assert.equal((await sessionBrowser(server.baseUrl, fx.admin.session).get('/api/scenario')).status, 200);
+          const admin = await signIn(server.baseUrl, fx.admin.device, fx.admin.credentialId);
+          assert.equal(admin.verify.status, 200, admin.verify.text);
+          assert.equal((await admin.client.get('/api/scenario')).status, 200);
         }
       });
     }
@@ -541,7 +505,7 @@ describe('household membership on a real instance (AC1)', () => {
   let operator;
   const as = person => sessionBrowser(base, person.token);
   const membership = id => store.membership(id, hh);
-  const storeFile = () => join(dataDir, 'fathom.sqlite');
+  const storeFile = () => servedStore(dataDir).file;
 
   before(async () => {
     root = await tempDir('fathom-mt01-members-');
@@ -686,7 +650,7 @@ describe('household membership on a real instance (AC1)', () => {
       assert.equal(r.status, 403, path);
       assert.deepEqual(r.json, MEMBERSHIP_REQUIRED, path);
     }
-    const keysBefore = withDb(storeFile(), db => count(db, 'SELECT count(*) AS n FROM api_keys'));
+    const keysBefore = count(platform, 'SELECT count(*) AS n FROM api_keys');
     const key = await o.post('/api/keys', { name: 'Operator agent' });
     assert.equal(key.status, 403);
     assert.deepEqual(key.json, MEMBERSHIP_REQUIRED);
@@ -695,7 +659,7 @@ describe('household membership on a real instance (AC1)', () => {
       body: `--${boundary}\r\nContent-Disposition: form-data; name="files"; filename="synthetic.csv"\r\nContent-Type: text/csv\r\n\r\nDate,Amount\r\n2026-01-02,-1.00\r\n--${boundary}--\r\n` });
     assert.equal(upload.status, 403);
     assert.deepEqual(upload.json, MEMBERSHIP_REQUIRED);
-    assert.equal(withDb(storeFile(), db => count(db, 'SELECT count(*) AS n FROM api_keys')), keysBefore);
+    assert.equal(count(platform, 'SELECT count(*) AS n FROM api_keys'), keysBefore);
     assert.equal(withDb(storeFile(), db => count(db, 'SELECT count(*) AS n FROM files')), 0);
     for (const path of ['/api/scenario', '/api/keys', '/api/files']) assert.equal((await as(admin).get(path)).status, 200, `admin ${path}`);
   });
@@ -749,7 +713,7 @@ describe('household membership on a real instance (AC1)', () => {
     assert.equal((await as(leaver).get('/api/scenario')).status, 401, 'the session is revoked');
     assert.equal(count(platform, 'SELECT count(*) AS n FROM auth_sessions WHERE user_id = ?', leaver.id), 0);
     assert.equal((await mcpList(base, created.json.key)).status, 401, 'the MCP key no longer authenticates');
-    assert.equal(withDb(storeFile(), db => count(db, 'SELECT count(*) AS n FROM api_keys WHERE user_id = ?', leaver.id)), 0, 'the key row is deleted');
+    assert.equal(count(platform, 'SELECT count(*) AS n FROM api_keys WHERE user_id = ?', leaver.id), 0, 'the key row is deleted');
     assert.equal(store.getUser(leaver.id), null, 'no membership and no operator grant: the account is deleted');
     assert.equal((await mcpList(base, adminKey)).status, 200, 'other keys keep working');
   });
@@ -1132,7 +1096,7 @@ describe('startup with a platform database (AC3)', () => {
     const list = withDb(platformFile, db => rows(db, 'households'));
     assert.equal(list.length, 1);
     assert.deepEqual(pick(list[0], ['status', 'mode', 'serves_store']), { status: 'active', mode: 'real', serves_store: 1 });
-    const storeFile = join(dataDir, 'fathom.sqlite');
+    const storeFile = servedStore(dataDir).file;
     assert.equal(withDb(storeFile, db => rows(db, 'store_identity'))[0].household_id, list[0].id);
     for (const table of AUTH_TABLES) assert.ok(!tableNames(storeFile).includes(table), table);
   });
@@ -1146,14 +1110,15 @@ describe('startup with a platform database (AC3)', () => {
     assert.equal((await browser(server.baseUrl).get('/api/scenario')).status, 200);
   });
 
-  test('a store bound to another household refuses household_store_mismatch', T, async t => {
+  test('a store bound to another household is refused household_store_mismatch and never served', T, async t => {
+    // Since MT-03 one household's bad store makes only that household's runtime unavailable (logged
+    // by code); the instance itself still starts for the others.
     const dataDir = join(await scratch(t), 'data');
     await freshInstance(dataDir, 'real');
-    withDb(join(dataDir, 'fathom.sqlite'), db => { db.prepare("UPDATE store_identity SET household_id = 'hh-synthetic-other'").run(); });
+    withDb(servedStore(dataDir).file, db => { db.prepare("UPDATE store_identity SET household_id = 'hh-synthetic-other'").run(); });
     const r = await expectServerExit({ dataDir, env: REAL });
-    assert.equal(r.started, false, r.output);
-    assert.equal(r.code, 1);
-    assert.match(r.output, /household_store_mismatch/);
+    assert.equal(r.started, true, r.output);
+    assert.match(r.output, /household runtime unavailable household_store_mismatch/);
   });
 
   test('a migration lock file refuses platform_migration_in_progress; without it the instance starts', T, async t => {
