@@ -1,7 +1,7 @@
 // Confirm deck on the demo build: Confirm is not a nav tab and no badge, Home's data-health line with its Confirm link and
 // question count, the card anatomy,
 // the screen keys (pick, guess, next, prev, undo, leave), revisiting and changing an answer,
-// Fathom's stored guess, keys ignored in text inputs, the All caught up state and touch swipes.
+// Fathom's stored guess, keys ignored in text inputs, the All answered state and touch swipes.
 // The deck keys run through the product keyboard registry: the ? sheet lists them, G then C opens
 // the deck, and the quick switcher offers Start confirming while items are pending.
 // Ids, kinds, options and labels come from GET /api/confirm; answers are verified through
@@ -26,7 +26,7 @@ const confirmPost = (r, id, verb) => r.request().method() === 'POST' && new URL(
 const navConfirm = (page) => page.locator('nav.h-nav a[data-go="confirm"], nav.h-tabs a[data-go="confirm"]');
 const navBadge = (page) => page.locator('header.h-top .h-nav-n, nav.h-tabs .h-nav-n');
 const option = (page, id, optionId) => page.locator(`button[data-answer="${id}"][data-option="${optionId}"]`);
-const caughtUp = (page) => page.locator('.h-empty', { hasText: 'All caught up' });
+const caughtUp = (page) => page.locator('.h-empty', { hasText: 'All answered' });
 const sheet = (page) => page.getByRole('dialog', { name: 'Keyboard shortcuts' });
 const switcher = (page) => page.getByRole('dialog', { name: 'Quick switcher' });
 const qsInput = (page) => page.locator('.h-qs-host input.h-qs-in');
@@ -334,7 +334,7 @@ test('Escape leaves the deck for Home', async ({ page, request }) => {
   await expect(healthConfirm(page)).toBeVisible();
 });
 
-test('answering every card from the keyboard ends at All caught up and clears the badge', async ({ page, request }) => {
+test('answering every card from the keyboard ends at All answered and clears the badge', async ({ page, request }) => {
   const { n } = await openDeck(page, request);
   let last = null;
   for (let i = 0; i < n; i++) {
