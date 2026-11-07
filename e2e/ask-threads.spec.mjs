@@ -57,6 +57,26 @@ async function threads(request) {
 
 const ids = (list) => (list || []).map((t) => t.id);
 
+test('AC10 opening a fallback thread requests its one title repair and reload does not repeat it', async ({ page, request }) => {
+  test.skip(REMOTE, 'This check reads the local demo spend ledger.');
+  const thread = await newThread(request, 'Have I made 529 contributions in 2026?');
+  const titleCalls = () => {
+    const db = new DatabaseSync(STORE, { readOnly: true });
+    try { return db.prepare("SELECT count(*) AS n FROM spend_ledger WHERE purpose = 'title'").get().n; }
+    finally { db.close(); }
+  };
+  const before = titleCalls();
+  await gotoRoute(page, 'ask');
+  const opened = page.waitForResponse(r => r.request().method() === 'GET' && new URL(r.url()).pathname === `/api/threads/${thread.id}`);
+  await row(page, thread.id).click();
+  expect((await opened).status()).toBe(200);
+  expect(titleCalls()).toBe(before + 1);
+  const reopened = page.waitForResponse(r => r.request().method() === 'GET' && new URL(r.url()).pathname === `/api/threads/${thread.id}`);
+  await page.reload();
+  expect((await reopened).status()).toBe(200);
+  expect(titleCalls()).toBe(before + 1);
+});
+
 /* ---------- page ---------- */
 
 const side = (page) => page.locator('aside.h-askx-side');

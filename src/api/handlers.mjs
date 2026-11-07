@@ -533,7 +533,9 @@ export function threadList(ctx) {
 }
 
 // GET /api/threads/:id: the thread and its messages (as in scenario.live.conversations).
-export function threadGet(ctx) {
+export async function threadGet(ctx) {
+  const opened = threadOrThrow(ctx.db, ctx.params.id);
+  await maybeName(ctx, opened.key);
   const thread = threadOrThrow(ctx.db, ctx.params.id);
   const messages = receiptMessages(ctx.db, thread.key, ctx.db.prepare('SELECT * FROM messages WHERE conversation_key = ? ORDER BY id').all(thread.key).map(messageOut));
   return { thread, messages };
