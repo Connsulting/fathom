@@ -2,28 +2,28 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { spawnServer, runCommand } from './helpers/server.mjs';
+import { spawnServer, runCommand, createSessionFixture, withPlatform, dumpStore } from './helpers/server.mjs';
+import { buildLegacyStore } from './helpers/tenancy.mjs';
 import { openMigrated } from '../src/store/db.mjs';
-import { createAuthStore } from '../src/auth/store.mjs';
 
 const OWNER = 'owner@example.test';
 
-function invite(dbFile, email = OWNER) {
-  const db = openMigrated(dbFile);
-  try {
-    const store = createAuthStore(db);
-    if (!store.findUser(email)) store.inviteUser(email, { role: 'admin' });
-  } finally {
-    db.close();
-  }
-}
+// Data dir entries, ignoring the -wal/-shm sidecars a read-only SQLite open of a WAL store leaves.
+const listing = dir => readdirSync(dir).filter(f => !/-(wal|shm)$/.test(f)).sort();
 
+// The server's platform store gets OWNER as an enrolled admin of the served household
+// (invitation, consumption, enrollment). A failed seed stops the server so the run cannot hang.
 async function server() {
   const s = await spawnServer({ env: { FATHOM_ENGINE: 'off', FATHOM_DEMO: '1' } });
-  invite(s.dbFile);
+  try {
+    await createSessionFixture(s.dataDir, { email: OWNER, role: 'admin' });
+  } catch (err) {
+    await s.stop();
+    throw err;
+  }
   return s;
 }
 
@@ -43,7 +43,7 @@ test('mcp-key creates a read-only key and mcp-smoke passes against the server', 
     const db = openMigrated(s.dbFile);
     try {
       const row = db.prepare('SELECT scopes, user_id, revoked_at FROM api_keys WHERE name = ?').get('deploy-smoke');
-      const user = createAuthStore(db).findUser(OWNER);
+      const user = await withPlatform(s.platformFile, (_, auth) => auth.findUser(OWNER));
       assert.deepEqual(JSON.parse(row.scopes), ['read']);
       assert.equal(row.user_id, user.id);
       assert.equal(row.revoked_at, null);
@@ -76,6 +76,14 @@ test('mcp-key refuses an unknown owner and a duplicate active name', async () =>
     assert.notEqual(unknown.code, 0);
     assert.equal(unknown.stdout, '');
     assert.match(unknown.stderr, /unknown owner/);
+
+    await withPlatform(s.platformFile, (_, auth) => auth.invite(auth.servedHousehold().id, 'pending@example.test', { role: 'admin' }));
+    const pending = await runCommand(process.execPath, ['scripts/mcp-key.mjs', 'create', '--name', 'pending-owner', '--owner', 'pending@example.test'], {
+      env: { FATHOM_DATA: s.dataDir },
+    });
+    assert.notEqual(pending.code, 0);
+    assert.equal(pending.stdout, '');
+    assert.equal(pending.stderr, 'mcp-key: unknown owner\n');
 
     const first = await runCommand(process.execPath, ['scripts/mcp-key.mjs', 'create', '--name', 'once', '--owner', OWNER], {
       env: { FATHOM_DATA: s.dataDir },
@@ -122,5 +130,24 @@ test('mcp-smoke exits nonzero for a missing key file and a wrong key', async () 
   } finally {
     await s.stop();
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('mcp-key refuses an unmigrated real store and leaves it unchanged', async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'fathom-legacy-'));
+  try {
+    const legacy = await buildLegacyStore(dataDir);
+    const files = listing(dataDir);
+    const before = await dumpStore(legacy.file);
+    const refused = await runCommand(process.execPath, ['scripts/mcp-key.mjs', 'create', '--name', 'legacy', '--owner', legacy.admin.email], {
+      env: { FATHOM_DATA: dataDir },
+    });
+    assert.equal(refused.code, 1);
+    assert.equal(refused.stdout, '');
+    assert.equal(refused.stderr, 'mcp-key: platform_migration_required\n');
+    assert.deepEqual(listing(dataDir), files);
+    assert.deepEqual(await dumpStore(legacy.file), before);
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
   }
 });
