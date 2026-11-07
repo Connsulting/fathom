@@ -7,6 +7,7 @@
 //    name the platform's served household of the same mode, else household_store_mismatch.
 // Refusals are StartupError with a fixed `.code` that also leads the message; no path or value.
 
+import { DatabaseSync } from 'node:sqlite';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { openDb, migrate, readStoreMode, DB_FILE } from '../store/db.mjs';
@@ -52,7 +53,8 @@ function createDemoPlatform(storeFile, platformFile) {
 
 // Open an existing instance under config.dataDir. Returns { db, platform, householdId }; the
 // caller closes both handles.
-export function openServedStore(config) {
+export function openServedStore(config, { readOnly = false } = {}) {
+  if(readOnly) return openReadOnlyServedStore(config);
   const dataDir = config.dataDir;
   if (existsSync(join(dataDir, LOCK_FILE))) throw refuse('platform_migration_in_progress');
   const storeFile = join(dataDir, DB_FILE);
@@ -85,4 +87,27 @@ export function openServedStore(config) {
     try { platform.close(); } catch { /* already closed */ }
     throw e;
   }
+}
+
+
+function openReadOnlyServedStore({ dataDir }) {
+  if(existsSync(join(dataDir,LOCK_FILE))) throw refuse('platform_migration_in_progress');
+  if(!existsSync(join(dataDir,DB_FILE))) throw refuse('store_missing');
+  if(!existsSync(join(dataDir,PLATFORM_FILE))) throw refuse('platform_migration_required');
+  let db,platform;
+  try {
+    db=new DatabaseSync(join(dataDir,DB_FILE),{readOnly:true});
+    platform=new DatabaseSync(join(dataDir,PLATFORM_FILE),{readOnly:true});
+    db.exec('PRAGMA query_only=ON'); platform.exec('PRAGMA query_only=ON');
+    const mode=JSON.parse(db.prepare("SELECT value FROM settings WHERE key='mode'").get()?.value??'null');
+    const household=servedHousehold(platform), identity=storeIdentity(db);
+    if(!household || household.mode!==mode || !identity || identity.householdId!==household.id) throw refuse('household_store_mismatch');
+    const required={transactions:['id','account_id','date','amount','description','category','parser'],accounts:['id','kind','mask'],
+      facts:['key','value'],transaction_category_imports:['transaction_id','category','parser']};
+    for(const [table,columns] of Object.entries(required)) {
+      const have=new Set(db.prepare(`PRAGMA table_info(${table})`).all().map(c=>c.name));
+      if(columns.some(c=>!have.has(c))) throw refuse('store_schema_required');
+    }
+    return {db,platform,householdId:household.id};
+  } catch(error) { db?.close(); platform?.close(); throw error; }
 }

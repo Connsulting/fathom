@@ -1,3 +1,4 @@
+import { confidenceBand, jevEvidence } from './policy.mjs';
 import { spendingInputs } from '../calc/targets.mjs';
 import { getSetting, parseJson } from '../store/db.mjs';
 import { accountLabel } from '../shared/account-label.mjs';
@@ -15,11 +16,13 @@ export function loadCategoryInputs(db) {
     i.file_id AS category_file_id, i.locator AS category_locator, coalesce(i.updated_at,f.uploaded_at,t.date) AS category_at
     FROM transactions t LEFT JOIN transaction_category_imports i ON i.transaction_id=t.id
     LEFT JOIN files f ON f.id=t.file_id ORDER BY t.date,t.id`).all();
-  return { accounts,transactions,corrections:db.prepare('SELECT * FROM transaction_category_corrections').all(),
+  return { accounts,transactions,corrections:db.prepare(`SELECT c.*, a.evidence AS auto_evidence FROM transaction_category_corrections c
+      LEFT JOIN confirm_items i ON i.kind='transaction_category' AND i.subject=cast(c.transaction_id AS TEXT)
+      LEFT JOIN confirm_auto a ON a.item_id=i.id AND a.rule='jev_category'`).all().map(r=>({...r,auto:parseJson(r.auto_evidence,null)})),
     merchantRules:db.prepare('SELECT * FROM category_merchant_rules').all(), sourceRules:db.prepare('SELECT * FROM category_source_rules').all(),
-    guesses:db.prepare('SELECT * FROM transaction_category_guesses').all() };
+    guesses:db.prepare('SELECT * FROM transaction_category_guesses').all().map(r=>({...r,...parseJson(r.category,{}),category:parseJson(r.category,{})?.category ?? null})) };
 }
-function checks(db,{clock = getSetting(db,'clock',new Date().toISOString().slice(0,10)),threshold = CATEGORY_THRESHOLD}={}) {
+function checks(db,{clock = getSetting(db,'clock',new Date().toISOString().slice(0,10)),threshold = CATEGORY_THRESHOLD,policy}={}) {
   const input=loadCategoryInputs(db);
   input.transactions=input.transactions.filter(t=>t.date<=clock);
   const {windowTransactionIds}=spendingInputs({...input,clock});
@@ -35,11 +38,14 @@ function checks(db,{clock = getSetting(db,'clock',new Date().toISOString().slice
       else unknown.set(key,{kind:'category_mapping',subject:key,parser:imported.parser,category:imported.category,count:1,amount:t.amount});
       continue;
     }
-    if(!figureRows.has(t.id) || !spendingAccount(accounts.get(t.account_id)) || !['guess','uncategorized'].includes(c.layer) || Math.abs(t.amount)<threshold || t.amount===0) continue;
+    const proposal=guesses.get(t.id), band=confidenceBand(proposal?.confidence,policy);
+    if(proposal && band==='uncategorized') continue;
+    if(!proposal && (!figureRows.has(t.id) || !spendingAccount(accounts.get(t.account_id)) || !['guess','uncategorized'].includes(c.layer) || Math.abs(t.amount)<threshold || t.amount===0)) continue;
+    if(proposal && !['guess','uncategorized'].includes(c.layer)) continue;
     const guess=guesses.get(t.id)?.category ?? DEFAULT_CATEGORY[c.bucket];
     list.push({kind:'transaction_category',subject:String(t.id),transactionId:t.id,amount:t.amount,date:t.date,
       description:t.description,account:accountLabel(accounts.get(t.account_id)),category:c.category,bucket:c.bucket,layer:c.layer,
-      merchant:normalizeMerchant(t.description),guess});
+      merchant:normalizeMerchant(t.description),guess,...(proposal ? {jev:{category:proposal.category,confidence:proposal.confidence,probabilities:proposal.probabilities}} : {})});
   }
   return [...list,...unknown.values()].sort((a,b)=>Math.abs(b.amount)-Math.abs(a.amount) || a.subject.localeCompare(b.subject)).slice(0,CATEGORY_LIMIT);
 }
@@ -49,8 +55,8 @@ export function categoryOptions(context) {
 }
 export function queueCategoryChecks(db,options={}) {
   const candidates=checks(db,options), active=new Set(candidates.map(c=>JSON.stringify([c.kind,c.subject])));
-  for(const r of db.prepare("SELECT id,kind,subject FROM confirm_items WHERE status='pending' AND kind IN ('transaction_category','category_mapping')").all()) {
-    if(!active.has(JSON.stringify([r.kind,r.subject]))) db.prepare('DELETE FROM confirm_items WHERE id=?').run(r.id);
+  for(const r of db.prepare("SELECT i.id,i.kind,i.subject,i.context FROM confirm_items i WHERE i.status='pending' AND i.kind IN ('transaction_category','category_mapping') AND NOT EXISTS (SELECT 1 FROM confirm_auto_declined d WHERE d.item_id=i.id)").all()) {
+    if(!parseJson(r.context,{})?.jev && !active.has(JSON.stringify([r.kind,r.subject]))) db.prepare('DELETE FROM confirm_items WHERE id=?').run(r.id);
   }
   const now=nowOf(options.now);
   for(const c of candidates) {
@@ -72,7 +78,9 @@ export function applyCategoryAnswer(db,item,optionId,{now}={}) {
       ON CONFLICT(parser,category) DO UPDATE SET bucket=excluded.bucket,updated_at=excluded.updated_at`).run(c.parser,c.category,optionId,at);
     return {};
   }
-  const always=optionId.startsWith('always:'), category=always ? optionId.slice(7) : optionId, bucket=sourceBucket('aggregator',category);
+  const always=optionId.startsWith('always:'), category=always ? optionId.slice(7) : optionId;
+  const mapped=[...new Set(db.prepare('SELECT bucket FROM category_source_rules WHERE category=?').all(category).map(r=>r.bucket))];
+  const bucket=sourceBucket('aggregator',category) ?? (mapped.length===1?mapped[0]:null);
   if(!bucket) throw new ConfirmError('bad_option');
   const t=db.prepare('SELECT * FROM transactions WHERE id=?').get(c.transactionId);
   if(!t) throw new ConfirmError('stale');
@@ -95,6 +103,7 @@ export function categoryDetail(db,item) {
 export function categoryGuess(item) {
   if(item.kind!=='transaction_category' || item.status==='answered') return null;
   const id=item.context.guess, option=item.options.find(o=>o.id===id && !o.id.startsWith('always:'));
+  if(option && item.context.jev) return {option:option.id,label:option.label,source:'engine',confidence:item.context.jev.confidence,evidence:jevEvidence(item.context.jev.confidence)};
   return option ? {option:option.id,label:option.label,source:'rule',evidence:item.context.layer==='guess'
     ? 'Stored model suggestion; this category is a guess.' : 'Uncategorized transaction; this is a provisional spending category.'} : null;
 }

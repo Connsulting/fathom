@@ -1,3 +1,5 @@
+import { jevEvidence } from '../categories/policy.mjs';
+import { JEV_MODEL } from '../categories/jev.mjs';
 import { categoryGuess } from '../categories/store.mjs';
 // Best guess for a pending confirm question, with evidence that names a field or a document and
 // quotes stored values. Rule guesses come from stored rows (account kind from the account name,
@@ -81,7 +83,7 @@ function jointRule(db, item, detail) {
   };
 }
 
-function ruleGuess(db, item, detail) {
+export function deterministicGuess(db, item, detail) {
   switch (item.kind) {
     case 'account_kind': return kindRule(item, detail);
     case 'near_duplicate': return nearRule(item, detail);
@@ -159,9 +161,14 @@ function engineEvidence(db, item, detail, basis) {
 }
 
 function engineGuess(db, item, detail) {
-  const row = db.prepare('SELECT option_id, reason FROM confirm_guesses WHERE item_id = ?').get(item.id);
+  const row = db.prepare('SELECT option_id, reason, model FROM confirm_guesses WHERE item_id = ?').get(item.id);
   const option = row?.option_id != null ? optionOf(item, row.option_id) : null;
   if (!option) return null;
+  if(row.model===JEV_MODEL) {
+    const confidence=parseJson(row.reason,null)?.confidence;
+    if(!Number.isFinite(confidence)) return null;
+    return {option:option.id,label:option.label,source:'engine',confidence,evidence:jevEvidence(confidence)};
+  }
   const basis = BASIS_OF.get(row.reason) ?? 'question';
   const evidence = engineEvidence(db, item, detail, basis) ?? engineEvidence(db, item, detail, 'question') ?? `The question reads ${quote(item.question)}.`;
   return { option: option.id, label: option.label, evidence, source: 'engine' };
@@ -171,5 +178,5 @@ export function bestGuess(db, item, detail) {
   if (!item || item.status === 'answered') return null;
   if (item.kind === 'transaction_category') return categoryGuess(item);
   if (item.kind === 'category_mapping') return null;
-  return ruleGuess(db, item, detail) ?? engineGuess(db, item, detail);
+  return deterministicGuess(db, item, detail) ?? engineGuess(db, item, detail);
 }

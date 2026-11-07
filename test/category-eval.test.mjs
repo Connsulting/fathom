@@ -14,7 +14,7 @@ test('deterministic holdout and aggregate calibration never return per-row value
   for(let i=0;i<5;i++) s.db.prepare("INSERT INTO transactions (account_id,date,description,amount,category,parser) VALUES ('a','2032-01-01',?,-25,?,'aggregator')").run('Secret payee '+i,i%2?'Business':'Groceries');
   const before=readFileSync(join(dir,'fathom.sqlite')); const ro=openServedStore({dataDir:dir},{readOnly:true});
   t.after(()=>{ro.db.close();ro.platform.close();});
-  assert.throws(()=>ro.db.exec("INSERT INTO settings VALUES ('forbidden','true')"),/readonly/i);
+  assert.throws(()=>ro.db.exec("UPDATE settings SET value='true' WHERE key='mode'"),/readonly/i);
   const jev={stats:()=>({costUsd:.001,latenciesMs:[10,20]}),choose:async qs=>qs.map(q=>{
     assert.equal(q.state.category,undefined); assert.equal(q.state.mask,undefined);
     return {choice:'Groceries',confidence:.9,probabilities:{Groceries:.8,Business:.2}};
@@ -27,7 +27,7 @@ test('deterministic holdout and aggregate calibration never return per-row value
 });
 
 test('thresholds require precision over the entire accepted confidence tail',()=>{
-  const scores=[...Array.from({length:99},()=>({confidence:.99,correct:true,top3:true})),{confidence:.99,correct:false,top3:true},{confidence:.7,correct:false,top3:false}];
+  const scores=[...Array.from({length:99},()=>({confidence:.99,correct:true,top3:true})),{confidence:.99,correct:false,top3:true},...Array.from({length:10},()=>({confidence:.7,correct:false,top3:false}))];
   const c=calibration(scores); assert.equal(c.thresholds.autoApply,.99); assert.equal(c.thresholds.review,.7);
   assert.equal(calibration([{confidence:.9,correct:false,top3:false}]).thresholds.autoApply,null);
 });
