@@ -1,78 +1,82 @@
 // Fathom server: one process serving web/ (the Horizon UI), /shared/ (browser-safe shared
-// logic) and the JSON API, backed by SQLite at $FATHOM_DATA/fathom.sqlite. One runtime engine
-// (src/engine/runtime.mjs) and one live pack view (src/packs/live.mjs) are built at startup and
-// handed to the API as ctx.engine and ctx.packs. After them, the
-// email transport and the job scheduler are built and handed to the API as ctx.transport and
-// ctx.scheduler; the scheduler starts once the server listens and stops before the store closes.
+// logic), the JSON API and the MCP endpoint over the instance in $FATHOM_DATA: platform.sqlite
+// (accounts, memberships, sessions, MCP keys, outbound flags) and one root per household,
+// households/<id>/ (its fathom.sqlite, files, packs, outbox and work). There is no process-wide
+// financial store: the runtime registry (src/platform/runtime.mjs) builds one context per
+// household (store, vault, packs, engine, answerer, scheduler, transport) and every request, MCP
+// call and job resolves its own. Schedulers start once the server listens and stop before the
+// stores close.
 //
-// Store mode (settings.mode, set when the store is created, never inferred from contents):
-// no store file: create the instance (platform.sqlite with one served household, and the store
-// bound to it); demo unless FATHOM_DEMO=0 (then real and empty). Demo stores are seeded once and
-// keep their state across restarts. FATHOM_DEMO=1 refuses a real store and FATHOM_DEMO=0 refuses a
-// demo store, without changing it. A file with no mode is real. An existing store opens only
-// through openServedStore (src/platform/ready.mjs): a real store without platform.sqlite refuses
-// platform_migration_required, a migration lock refuses platform_migration_in_progress, and a
-// store bound to another household refuses household_store_mismatch.
-// Ask threads trashed 30 or more days ago (app clock) are purged once the store is open.
+// Instance mode (the original household's mode, set at creation, never inferred from contents):
+// no instance: create one (createInstance); demo unless FATHOM_DEMO=0 (then real and empty). Demo
+// instances are seeded once, keep their state across restarts and keep synthetic secrets under
+// platform-secrets/. FATHOM_DEMO=1 refuses a real instance and FATHOM_DEMO=0 refuses a demo
+// instance, without changing it. An existing instance opens only through openInstance
+// (src/platform/ready.mjs), which refuses unmigrated layouts with fixed codes. Real instances read
+// FATHOM_PLATFORM_KEY_FILE and FATHOM_MCP_SECRET_FILE lazily: a missing platform key refuses
+// vault operations (uploads 409) and a missing MCP secret refuses key routes (503) and /mcp (401),
+// but the server still starts.
+// Auth mail goes through the instance transport; its dev outbox is <dataDir>/outbox (platform-private).
 
 import http from 'node:http';
-import { existsSync, mkdirSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig, validatePublicUrl } from './config.mjs';
-import { readStoreMode, DB_FILE } from './store/db.mjs';
-import { createInstance, LOCK_FILE } from './platform/db.mjs';
-import { openServedStore, refuse } from './platform/ready.mjs';
+import { createInstance } from './platform/db.mjs';
+import { openInstance, StartupError } from './platform/ready.mjs';
+import { createInstanceSecrets } from './platform/secrets.mjs';
+import { createRuntimeRegistry } from './platform/runtime.mjs';
 import { createHandler } from './api/router.mjs';
 import { createAuthService } from './auth/service.mjs';
-import { createLiveAnswerer } from './api/answerer.mjs';
-import { createKeyService, loadServerSecret } from './mcp/keys.mjs';
+import { createKeyService } from './mcp/keys.mjs';
 import { createMcpHandler } from './mcp/index.mjs';
-import { createRuntimeEngine } from './engine/runtime.mjs';
-import { createLivePacks } from './packs/live.mjs';
-import { clockNow } from './scenario/build.mjs';
 import { createTransport } from './email/transport.mjs';
-import { createScheduler, defaultHandlers } from './jobs/scheduler.mjs';
 import { seedDemo } from '../demo/seed.mjs';
 
-export class StartupError extends Error {}
+export { StartupError };
 
-// Open (or create) the instance at config.dataDir following the store mode rules. Returns
-// { db, platform }: the financial store and the platform DB; the caller closes both.
-export function openStore(config) {
+const MODE_MISMATCH = {
+  real: 'FATHOM_DEMO=1 but the data directory holds a real instance. Refusing to start; it is unchanged. Point FATHOM_DATA at another directory for the demo.',
+  demo: 'FATHOM_DEMO=0 but the data directory holds a demo instance. Refusing to start; it is unchanged. Point FATHOM_DATA at the real data directory.',
+};
+
+// Open (or create) the instance at config.dataDir following the instance mode rules. Returns
+// { platform, mode, secrets }; the caller closes the platform.
+export function openOrCreateInstance(config) {
   mkdirSync(config.dataDir, { recursive: true });
-  const file = join(config.dataDir, DB_FILE);
-  const mode = readStoreMode(file);
-  if (mode === null) {
-    if (existsSync(join(config.dataDir, LOCK_FILE))) throw refuse('platform_migration_in_progress');
-    const real = config.demo === false;
-    if (real) validatePublicUrl(config.publicUrl, { required: true });
-    const { db, platform } = createInstance(config.dataDir, { mode: real ? 'real' : 'demo', init: real ? () => {} : seedDemo });
-    return { db, platform };
+  const opened = openInstance(config);
+  if (!opened) {
+    const mode = config.demo === false ? 'real' : 'demo';
+    if (mode === 'real') validatePublicUrl(config.publicUrl, { required: true });
+    const secrets = createInstanceSecrets({ config, mode });
+    // A demo always has its key; a real instance provisions its first data key now only when the
+    // platform key is already configured (otherwise the vault provisions it on first use).
+    let platformKey = null;
+    try {
+      platformKey = secrets.platformKey();
+    } catch (err) {
+      if (mode === 'demo') throw err;
+    }
+    try {
+      const made = createInstance(config.dataDir, { mode, init: mode === 'demo' ? seedDemo : () => {}, platformKey });
+      made.db.close();
+      return { platform: made.platform, mode, secrets };
+    } finally {
+      platformKey?.fill(0);
+    }
   }
-  if (config.demo === true && mode !== 'demo') {
-    throw new StartupError(`FATHOM_DEMO=1 but ${file} is a real store. Refusing to start; it is unchanged. Point FATHOM_DATA at another directory for the demo.`);
-  }
-  if (config.demo === false && mode === 'demo') {
-    throw new StartupError(`FATHOM_DEMO=0 but ${file} is a demo store. Refusing to start; it is unchanged. Point FATHOM_DATA at the real data directory.`);
-  }
-  if (mode === 'real') validatePublicUrl(config.publicUrl, { required: true });
-  const { db, platform } = openServedStore(config);
-  return { db, platform };
-}
-
-// Log-safe code for a startup failure: never the message, which could carry a value.
-const codeOf = err => [err && err.code, err && err.name].find(v => typeof v === 'string' && /^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(v)) || 'unknown';
-
-// Real stores rebuild pack definitions from the pack manifests and the stored facts at startup
-// (demo pack definitions are the seeded scenario; a demo store only gains a row for a Your plans
-// pack no row backs). A pack load failure never stops startup.
-function refreshPacks(packs) {
+  const { platform, mode } = opened;
   try {
-    packs.refresh();
-  } catch (err) {
-    console.error('fathom: pack state refresh failed', codeOf(err));
+    if ((config.demo === true && mode !== 'demo') || (config.demo === false && mode === 'demo')) {
+      throw new StartupError('instance_mode_mismatch', MODE_MISMATCH[mode]);
+    }
+    if (mode === 'real') validatePublicUrl(config.publicUrl, { required: true });
+  } catch (e) {
+    platform.close();
+    throw e;
   }
+  return { platform, mode, secrets: createInstanceSecrets({ config, mode }) };
 }
 
 // A reverse proxy keeps idle upstream connections open and reuses them; Node's default 5 s
@@ -89,50 +93,24 @@ export function applyTimeouts(server) {
 }
 
 export async function startServer(config = loadConfig()) {
-  const { db, platform } = openStore(config);
-  const closeStores = () => {
-    try { db.close(); } catch { /* already closed */ }
+  const { platform, secrets } = openOrCreateInstance(config);
+  let runtimes = null;
+  const closeAll = async () => {
+    try { await runtimes?.close(); } catch { /* close anyway */ }
     try { platform.close(); } catch { /* already closed */ }
   };
-  let transport;
-  let auth;
+  let server;
   try {
-    transport = createTransport(config);
-    auth = createAuthService({ platform, config, transport });
+    const transport = createTransport(config, { outboxDir: join(config.dataDir, 'outbox') });
+    const auth = createAuthService({ platform, config, transport, secrets });
+    runtimes = createRuntimeRegistry({ platform, config, secrets });
+    const keys = createKeyService({ platform, secret: () => secrets.mcpSecret(), creatorActive: auth.creatorActive });
+    const mcp = createMcpHandler({ keys, runtimes, config });
+    server = http.createServer(createHandler({ platform, config, runtimes, auth, keys, mcp }));
   } catch (e) {
-    closeStores();
+    await closeAll();
     throw e;
   }
-  // One runtime engine per process, on the scenario clock so spend lands in the month the Engine
-  // screen shows; packs load from the repository and the data volume.
-  let engine;
-  let packs;
-  try {
-    packs = createLivePacks(db, { dataDir: config.dataDir });
-    refreshPacks(packs);
-    engine = createRuntimeEngine({ db, config, now: () => new Date(clockNow(db, config.clock)) });
-    await engine.init();
-    if (engine.credentialState === 'failed') console.error('fathom: engine credential unavailable');
-  } catch (e) {
-    closeStores();
-    throw e;
-  }
-  let keys;
-  try {
-    keys = createKeyService({ db, serverSecret: loadServerSecret(config.dataDir), creatorActive: auth.creatorActive });
-  } catch (e) {
-    closeStores();
-    throw new StartupError(`API key secret: ${e.message}`);
-  }
-  const mcp = createMcpHandler({ db, keys, config });
-  let scheduler = null;
-  try {
-    scheduler = createScheduler({ db, config, engine, handlers: defaultHandlers({ publicUrl: config.publicUrl }), transport });
-  } catch (err) {
-    console.error('fathom: scheduler unavailable', codeOf(err));
-  }
-  const answerer = createLiveAnswerer({ engine, packs });
-  const server = http.createServer(createHandler({ db, platform, config, answerer, engine, packs, keys, mcp, auth, scheduler, transport }));
   applyTimeouts(server);
   try {
     await new Promise((resolveListen, reject) => {
@@ -143,39 +121,27 @@ export async function startServer(config = loadConfig()) {
       });
     });
   } catch (e) {
-    closeStores();
+    await closeAll();
     if (e && e.code === 'EADDRINUSE') {
-      throw new StartupError(`port ${config.port} on ${config.host} is already in use. Set FATHOM_PORT to a free port.`);
+      throw new StartupError('port_in_use', `port ${config.port} on ${config.host} is already in use. Set FATHOM_PORT to a free port.`);
     }
     throw e;
   }
-  if (scheduler) {
-    try {
-      const started = scheduler.start();
-      if (started && typeof started.then === 'function') started.then(null, err => console.error('fathom: scheduler start failed', codeOf(err)));
-    } catch (err) {
-      console.error('fathom: scheduler start failed', codeOf(err));
-    }
-  }
+  runtimes.startAll();
   const { port } = server.address();
   const host = config.host.includes(':') ? `[${config.host}]` : config.host;
-  let closed = false;
+  let closing = null;
   return {
     server,
-    db,
     platform,
+    runtimes,
     url: `http://${host}:${port}`,
     close() {
-      if (closed) return Promise.resolve();
-      closed = true;
-      let stopped = Promise.resolve();
-      try {
-        if (scheduler) stopped = Promise.resolve(scheduler.stop()).catch(() => {});
-      } catch { /* stop failed; close anyway */ }
-      return stopped.then(() => new Promise(done => {
-        server.close(() => { closeStores(); done(); });
+      closing ??= new Promise(done => {
+        server.close(() => done());
         server.closeAllConnections();
-      }));
+      }).then(closeAll);
+      return closing;
     },
   };
 }

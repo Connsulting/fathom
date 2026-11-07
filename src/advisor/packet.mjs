@@ -5,7 +5,7 @@
 // is reduced to plain text and escaped, so stored markup or owner text cannot inject anything.
 //
 // buildPacketHtml(scenario, { generatedOn }) -> string
-// storePacket / readPacket keep it encrypted in the data volume (src/ingest/vault.mjs).
+// storePacket / readPacket keep it sealed in the household vault (src/ingest/vault.mjs).
 
 import { createHash, randomBytes } from 'node:crypto';
 import { TOKEN, KIND_WORDS, money, pct, esc } from '../shared/tokens.mjs';
@@ -208,19 +208,20 @@ export function contentSources(db) {
 const PACKET_ID = /^advpkt-[a-f0-9]{16}$/;
 export const isPacketId = id => typeof id === 'string' && PACKET_ID.test(id);
 
-// Encrypts and stores the packet, then records it. Returns the packet id.
-export async function storePacket(db, { dataDir, key, html, clock, recIds, now }) {
+// Seals the packet in the household vault (purpose advisor-packet), then records it. Returns the
+// packet id. `vault` is the household's { root, handle }.
+export async function storePacket(db, { vault, html, clock, recIds, now }) {
   const id = `advpkt-${randomBytes(8).toString('hex')}`;
   const bytes = Buffer.from(html, 'utf8');
-  const storedPath = await storeFile({ dataDir, key, id, bytes });
+  const storedPath = await storeFile({ vault, id, bytes, purpose: 'advisor-packet' });
   db.prepare('INSERT INTO advisor_packets (id, created_at, clock, rec_ids, stored_path, bytes, sha256) VALUES (?, ?, ?, ?, ?, ?, ?)')
     .run(id, now, clock, JSON.stringify(recIds), storedPath, bytes.length, createHash('sha256').update(bytes).digest('hex'));
   return id;
 }
 
-export async function readPacket(db, { dataDir, key, id }) {
+export async function readPacket(db, { vault, id }) {
   const row = isPacketId(id) ? db.prepare('SELECT * FROM advisor_packets WHERE id = ?').get(id) : null;
   if (!row) return null;
-  const bytes = await readStoredFile({ dataDir, key, id: row.id, storedPath: row.stored_path });
+  const bytes = await readStoredFile({ vault, id: row.id, storedPath: row.stored_path, purpose: 'advisor-packet' });
   return { row, bytes };
 }

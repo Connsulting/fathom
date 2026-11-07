@@ -1,7 +1,8 @@
 // POST /mcp: stateless Streamable HTTP MCP endpoint. Per request, in order: Host allowlist (403),
-// Origin match (403), Bearer key (401, one generic body), method (405), body (413, 400), last-use
-// stamp, then a fresh tool server and transport scoped to the key. Keys, tool arguments and tool
-// results are never logged.
+// Origin match (403), Bearer key (401, one generic body; also when the MCP secret is unavailable or
+// the key's household has no runtime), method (405), body (413, 400), last-use stamp, then a fresh
+// tool server and transport scoped to the key and to the household the key is bound to. A session
+// cookie never selects the household. Keys, tool arguments and tool results are never logged.
 
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { HttpError, sendJson, sendError, readJsonBody } from '../api/http.mjs';
@@ -17,33 +18,50 @@ function refuse(req, res, status, body, headers) {
   sendJson(res, status, body, headers);
 }
 
-// The key record for the request's Authorization header, or null.
+// The key record for the request's Authorization header, or null (also when keys are unavailable).
 function authenticate(req, keys) {
   const header = req.headers.authorization;
   if (typeof header !== 'string') return null;
   const m = BEARER.exec(header.trim());
-  return m ? keys.verify(m[1]) : null;
+  if (!m) return null;
+  try {
+    return keys.verify(m[1]);
+  } catch {
+    return null;
+  }
 }
 
-export function createMcpHandler({ db, keys, config }) {
+// keys: the platform key service; runtimes: the household runtime registry.
+export function createMcpHandler({ keys, runtimes, config }) {
   return async function handleMcp(req, res) {
     const host = req.headers.host;
     if (!isAllowedHost(host, config)) return refuse(req, res, 403, { error: 'forbidden host' });
     if (!isAllowedOrigin(req.headers.origin, host)) return refuse(req, res, 403, { error: 'forbidden origin' });
     const record = authenticate(req, keys);
-    if (!record) return refuse(req, res, 401, { error: 'unauthorized' }, { 'WWW-Authenticate': 'Bearer' });
+    const household = record ? runtimes.get(record.householdId) : null;
+    if (!household) return refuse(req, res, 401, { error: 'unauthorized' }, { 'WWW-Authenticate': 'Bearer' });
     if (req.method !== 'POST') return refuse(req, res, 405, { error: 'method not allowed' }, { Allow: 'POST' });
+    runtimes.acquire(household);
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      runtimes.release(household);
+    };
+    res.on('close', release);
 
     let body;
     try {
       body = await readJsonBody(req, MCP_BODY_LIMIT);
     } catch (err) {
       if (req.readable) req.resume();
-      return sendError(res, err instanceof HttpError ? err : new HttpError(400, 'malformed JSON body'));
+      sendError(res, err instanceof HttpError ? err : new HttpError(400, 'malformed JSON body'));
+      release();
+      return undefined;
     }
 
     keys.touch(record.id);
-    const ctx = { db, now: new Date(), dataDir: config.dataDir, clock: config.clock };
+    const ctx = { db: household.db, now: new Date(), dataDir: household.root, clock: config.clock, household };
     const server = createToolServer({ scopes: record.scopes, ctx });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     res.on('close', () => {

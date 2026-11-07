@@ -1,13 +1,13 @@
 // The private "Your plans" knowledge pack, built from the owner's own plan and benefits documents
-// into <dataDir>/packs/your-plans/ (the data volume, never the repository).
+// into <household root>/packs/your-plans/ (the data volume, never the repository).
 //
-// buildYourPlans({ db, engine, dataDir, key, fileIds, clock }) -> { written, dir, entries, sources: [{fileId, name}], warnings, dropped }
+// buildYourPlans({ db, engine, household, fileIds, clock }) -> { written, dir, entries, sources: [{fileId, name}], warnings, dropped }
 // fakeExtractRows(text) -> [{ title, body, excerpt, page }]   (the fake engine's extraction)
 //
 // Sources are documents with doc_type plan or benefits (their file, or fields.text when a row has
 // no file) plus any extra files named by id. Files are read the way ingest reads its own uploads:
-// through the vault (readStoredFile) under the data key `key`, with the file id as associated
-// data, so a stored file that fails authentication is skipped with a warning and nothing from it
+// through the household vault (readStoredFile, purpose upload) of `household`, the context that
+// owns `db`, so a stored file that fails authentication is skipped with a warning and nothing from it
 // reaches the engine. A PDF is read through ingest's text layer (pdfText): its pages go to the
 // engine as one text document with a `Page N` line opening each page, and the page check uses the
 // PDF's own page boundaries; an image-only PDF (no text layer) or an unreadable one is skipped with
@@ -31,7 +31,7 @@ import { yourPlansDir } from './live.mjs';
 import { getSetting, setSetting, parseJson } from '../store/db.mjs';
 import { resolveClock } from '../scenario/build.mjs';
 import { checkGrounding } from '../engine/grounding.mjs';
-import { readStoredFile, VaultError } from '../ingest/vault.mjs';
+import { openVault, readStoredFile, VaultError } from '../ingest/vault.mjs';
 import { pdfText } from '../ingest/pdftext.mjs';
 
 const REPO_ROOT = fileURLToPath(new URL('../../', import.meta.url)).replace(/[\\/]$/, '');
@@ -165,7 +165,7 @@ function realTarget(target) {
   return join(realpathSync(existing), ...rest);
 }
 
-// The data directory, the write parent <dataDir>/packs (where the temporary pack is written and the
+// The household root, the write parent <root>/packs (where the temporary pack is written and the
 // final directory, or a symlink in its place, is replaced) and the final target must all resolve
 // outside the repository. Checking only the final target would follow a your-plans symlink out of
 // the repository while the write still lands in a parent inside it.
@@ -183,21 +183,20 @@ function guardTarget(dataDir) {
 
 const isText = (mime, name) => /^text\//i.test(mime || '') || ['.md', '.txt', '.markdown'].includes(extname(name || '').toLowerCase());
 const isPdf = (mime, bytes) => (mime || '').toLowerCase() === 'application/pdf' || bytes.subarray(0, 5).toString('latin1') === '%PDF-';
-const AUTH_FAILED = 'file failed authentication';
 
-// One stored upload, decrypted by the vault exactly as ingest reads its own files (the stored path
-// must be files/<id>.bin and the file id is the associated data). Text files are read as UTF-8 and
+// One stored upload, opened by the household vault exactly as ingest reads its own files (the
+// stored path must be files/<id>.bin and the file id is bound into the envelope). Text files are read as UTF-8 and
 // PDFs through their text layer; anything else, or any read, authentication or text layer failure,
 // warns (naming the file, never its text) and yields no source.
-async function readFileSource(file, dataDir, key, warnings) {
+async function readFileSource(file, vault, warnings) {
   const label = file.name || file.id;
   if (!file.stored_path) { warnings.push(`File ${label} has no stored copy and was skipped.`); return null; }
   let bytes;
   try {
-    bytes = await readStoredFile({ dataDir, key, id: file.id, storedPath: file.stored_path });
+    bytes = await readStoredFile({ vault, id: file.id, storedPath: file.stored_path, purpose: 'upload' });
   } catch (e) {
     if (!(e instanceof VaultError)) throw e;
-    warnings.push(e.message === AUTH_FAILED
+    warnings.push(e.code === 'vault_auth_failed'
       ? `File ${label} failed its integrity check (it was changed or is not this store's file) and was skipped.`
       : `File ${label} could not be read from the data directory and was skipped.`);
     return null;
@@ -212,7 +211,7 @@ async function readFileSource(file, dataDir, key, warnings) {
   return null;
 }
 
-async function gatherSources(db, dataDir, key, fileIds, warnings) {
+async function gatherSources(db, vault, fileIds, warnings) {
   const sources = [];
   const fileRow = db.prepare('SELECT id, name, mime, stored_path FROM files WHERE id = ?');
   const seen = new Set();
@@ -221,7 +220,7 @@ async function gatherSources(db, dataDir, key, fileIds, warnings) {
     seen.add(id);
     const file = fileRow.get(id);
     if (!file) { warnings.push(`No file with id ${id}; it was skipped.`); return; }
-    const source = await readFileSource(file, dataDir, key, warnings);
+    const source = await readFileSource(file, vault, warnings);
     if (source) sources.push(source);
   };
   const docs = db.prepare("SELECT id, fields, file_id FROM documents WHERE doc_type IN ('plan', 'benefits') ORDER BY id").all();
@@ -290,15 +289,19 @@ function writePack(dir, { entries, clock }) {
 
 // ---------------------------------------------------------------- build
 
-export async function buildYourPlans({ db, engine, dataDir, key, fileIds = [], clock } = {}) {
-  if (!db || !engine || typeof dataDir !== 'string' || !dataDir) throw new TypeError('buildYourPlans needs db, engine and dataDir');
-  if (!(key instanceof Uint8Array) || key.length !== 32) throw new TypeError('buildYourPlans needs the 32 byte data key as key');
+// `household` is the context that owns `db`: its root holds the pack and its vault reads the
+// uploads (a vault refusal propagates as VaultError before any model call).
+export async function buildYourPlans({ db, engine, household, fileIds = [], clock } = {}) {
+  if (!db || !engine || !household || typeof household.root !== 'string' || !household.root) throw new TypeError('buildYourPlans needs db, engine and household');
+  if (household.db !== db) throw new TypeError('buildYourPlans household must own the db');
   if (!Array.isArray(fileIds) || !fileIds.every(id => typeof id === 'string')) throw new TypeError('fileIds must be strings');
-  guardTarget(dataDir);
+  const root = household.root;
+  guardTarget(root);
+  const vault = await openVault(household);
   const day = resolveClock(db, clock);
-  const dir = yourPlansDir(resolve(dataDir));
+  const dir = yourPlansDir(resolve(root));
   const warnings = [];
-  const sources = await gatherSources(db, resolve(dataDir), key, fileIds, warnings);
+  const sources = await gatherSources(db, vault, fileIds, warnings);
   const entries = [];
   let dropped = 0;
   for (const source of sources) {

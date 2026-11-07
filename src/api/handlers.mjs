@@ -1,6 +1,8 @@
 import { queueAccountPairs } from '../ingest/account-merge.mjs';
-// API handlers. Each takes { db, config, engine, packs, answerer, params, body } and returns the
-// JSON response body (status 200) or throws HttpError. Every action writes the store and answers
+// API handlers. Each takes { household, db, config, engine, packs, answerer, params, body } and
+// returns the JSON response body (status 200) or throws HttpError. Financial routes run in one
+// household context: db, engine, packs and answerer come from ctx.household, and config is the
+// instance configuration. Every action writes the store and answers
 // with the fresh scenario, so the browser swaps it in. Model calls are awaited before any write
 // transaction opens; only the writes run inside tx(). ctx.packs is the live pack view
 // (src/packs/live.mjs).
@@ -12,14 +14,14 @@ import { queueAccountPairs } from '../ingest/account-merge.mjs';
 // is purged when the thread list, a thread or the scenario is read. Both asking routes stream as
 // Server-Sent Events on request (src/api/router.mjs); the stored turn and the final body are the same.
 
-import { getSetting, setSetting, schemaVersion, tx, cents, parseJson as parse } from '../store/db.mjs';
+import { getSetting, setSetting, schemaVersion, listMigrations, tx, cents, parseJson as parse } from '../store/db.mjs';
 import { buildScenario, clockNow, loadContent, defaultPicks, wargameLists } from '../scenario/build.mjs';
 import { ACTION_STATUS, packStatus } from '../shared/rules.mjs';
 import { OWNERS, isOwner } from '../shared/rec-links.mjs';
 import { escapeUserText } from '../shared/tokens.mjs';
 import { wrapBlocks } from '../shared/answer-text.mjs';
 import { seedDemo } from '../../demo/seed.mjs';
-import { clearStoredFiles, loadDataKey, VaultError } from '../ingest/vault.mjs';
+import { clearStoredFiles, openVault, VaultError } from '../ingest/vault.mjs';
 import { HttpError } from './http.mjs';
 import { upsertFact } from '../store/facts.mjs';
 import { setRecOwner } from '../store/recs.mjs';
@@ -101,8 +103,11 @@ function pushReply(ctx, key, reply) {
 
 // ---------------------------------------------------------------- handlers
 
+// Public: the highest store migration this binary ships and the platform schema version. No
+// household ids, counts or paths.
+const SHIPPED_SCHEMA = listMigrations().at(-1)?.id ?? 0;
 export function healthz(ctx) {
-  return { ok: true, schema: schemaVersion(ctx.db) };
+  return { ok: true, schema: SHIPPED_SCHEMA, platformSchema: schemaVersion(ctx.platform) };
 }
 
 export function getIdentity(ctx) {
@@ -387,9 +392,9 @@ export function setCap(ctx) {
 }
 
 // POST /api/your-plans/build: extract the owner's plan and benefits documents into the private
-// Your plans pack. Refused (409) while the engine is off, over the cap, when the data key is
-// unavailable (the vault's message), or when the data directory is inside the repository. The data
-// key is loaded the way the ingest handlers load it, so stored uploads are read through the vault.
+// Your plans pack under the household root. Refused (409) while the engine is off, over the cap,
+// when the household vault refuses (the vault's message, naming FATHOM_PLATFORM_KEY_FILE), or when
+// the household root is inside the repository. Stored uploads are read through the household vault.
 export async function yourPlansBuild(ctx) {
   const engine = need(ctx, 'engine');
   const { fileIds = [] } = ctx.body;
@@ -397,24 +402,18 @@ export async function yourPlansBuild(ctx) {
     throw new HttpError(400, `fileIds must be at most ${MAX_FILE_IDS} file id strings`);
   }
   if (!engine.isOn()) throw new HttpError(409, 'The engine is off, so Your plans cannot be built. Switch it on first.');
-  let key;
-  try {
-    key = await loadDataKey({ dataDir: ctx.config.dataDir, keyFile: ctx.config.dataKeyFile, mode: getSetting(ctx.db, 'mode', null) === 'demo' ? 'demo' : 'real' });
-  } catch (e) {
-    if (e instanceof VaultError) throw new HttpError(409, e.message);
-    throw e;
-  }
   let result;
   try {
-    result = await buildYourPlans({ db: ctx.db, engine, dataDir: ctx.config.dataDir, key, fileIds,
+    result = await buildYourPlans({ db: ctx.db, engine, household: ctx.household, fileIds,
       clock: (ctx.config && ctx.config.clock) || undefined });
   } catch (e) {
+    if (e instanceof VaultError) throw new HttpError(409, e.message);
     if (e instanceof YourPlansRefusal) throw new HttpError(409, e.message);
     if (e instanceof EngineOffError) throw new HttpError(409, 'The engine is off, so Your plans cannot be built. Switch it on first.');
     if (e instanceof BudgetExceededError) throw new HttpError(409, "This month's engine budget is used up, so Your plans cannot be built. Raise the cap first.");
     throw e;
   }
-  if (result.written) refreshLivePacks(ctx.db, { dataDir: ctx.config.dataDir });
+  if (result.written) refreshLivePacks(ctx.db, { dataDir: ctx.household.root });
   const { written, entries, sources, warnings, dropped } = result;
   return { scenario: scenarioOf(ctx), result: { written, entries, sources, warnings, dropped } };
 }
@@ -660,10 +659,19 @@ export function onboarding(ctx) {
   return { scenario: scenarioOf(ctx) };
 }
 
+// Reseeds the demo household's store and removes its stored objects; nothing outside its own root
+// is touched.
 export async function demoReset(ctx) {
   if (getSetting(ctx.db, 'mode', null) !== 'demo') throw new HttpError(404, 'not found');
+  let vault;
+  try {
+    vault = await openVault(ctx.household);
+  } catch (e) {
+    if (e instanceof VaultError) throw new HttpError(409, e.message);
+    throw e;
+  }
   seedDemo(ctx.db);
-  await clearStoredFiles(ctx.config.dataDir);
+  await clearStoredFiles(vault);
   if (ctx.packs) ctx.packs.refresh();
   return { scenario: scenarioOf(ctx) };
 }

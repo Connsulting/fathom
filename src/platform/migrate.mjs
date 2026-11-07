@@ -37,6 +37,9 @@ export const STAGING_FILE = `${PLATFORM_FILE}.staging`;
 export const SNAPSHOT_DIR = 'snapshots';
 const OPERATION_KIND = 'platform-migration';
 const LEGACY_SCHEMA = 21;
+// Store migration 025 moves api_keys to the platform and refuses while the store holds keys; only
+// the tenancy migration (src/platform/migrate-tenancy.mjs) applies it.
+export const PRE_TENANCY_SCHEMA = 24;
 const INVITE_TTL = 20 * 60 * 1000;
 const LEGACY_AUTH_TABLES = ['users', 'households', 'passkeys', 'auth_tokens', 'auth_sessions', 'auth_challenges', 'auth_rate_limits'];
 const SOURCE_TABLES = ['users', 'passkeys', 'auth_tokens', 'auth_sessions', 'auth_challenges', 'auth_rate_limits'];
@@ -55,12 +58,13 @@ const COLUMNS = Object.freeze({
 });
 
 const refuse = code => codeError(code);
-const hasTable = (db, name) => !!db.prepare("SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = ?").get(name);
+export const hasTable = (db, name) => !!db.prepare("SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = ?").get(name);
 const count = (db, sql) => db.prepare(sql).get().n;
 
 // --------------------------------------------------------------------------- journal and lock
 
-function readJson(file, code) {
+// A journal or lock file's JSON (it must name an operationId), null when absent, else `code`.
+export function readJson(file, code) {
   if (!existsSync(file)) return null;
   try {
     const value = JSON.parse(readFileSync(file, 'utf8'));
@@ -71,12 +75,13 @@ function readJson(file, code) {
   }
 }
 
-function writeJournal(file, journal) {
+export function writeJournal(file, journal) {
   journal.updatedAt = Date.now();
   writeFileAtomic(file, JSON.stringify(journal, null, 2) + '\n');
 }
 
-function writeLock(file, operationId) {
+// Create the advisory lock for `operationId`; an existing lock must name the same operation.
+export function writeLock(file, operationId) {
   let fd;
   try {
     fd = openSync(file, 'wx', 0o600);
@@ -96,7 +101,7 @@ function writeLock(file, operationId) {
   fsyncDir(file);
 }
 
-function removeLock(file, operationId) {
+export function removeLock(file, operationId) {
   if (!existsSync(file)) return;
   if (readJson(file, 'stale_lock_mismatch').operationId !== operationId) throw refuse('stale_lock_mismatch');
   rmSync(file, { force: true });
@@ -105,7 +110,7 @@ function removeLock(file, operationId) {
 
 // --------------------------------------------------------------------------- source checks
 
-function storeMode(db) {
+export function storeMode(db) {
   if (!hasTable(db, 'settings')) return 'real';
   const row = db.prepare("SELECT value FROM settings WHERE key = 'mode'").get();
   return parseJson(row && row.value, null) === 'demo' ? 'demo' : 'real';
@@ -236,7 +241,7 @@ function checkPublished(file, journal, kind = OPERATION_KIND) {
   }
 }
 
-function markOperationDone(file, operationId) {
+export function markOperationDone(file, operationId) {
   const db = new DatabaseSync(file);
   try {
     db.exec('PRAGMA busy_timeout = 5000');
@@ -278,7 +283,7 @@ async function takeSnapshot(ctx, n, hooks) {
 
 function clearSnapshotLeftovers(dir, operationId) {
   for (const name of readdirSync(dir)) {
-    if (name.includes(`.partial-${operationId}`) || name.includes(`.vacuum-${operationId}`)) rmSync(join(dir, name), { force: true });
+    if (name.includes(`.partial-${operationId}`) || name.includes(`.copy-${operationId}`)) rmSync(join(dir, name), { force: true });
   }
 }
 
@@ -430,8 +435,8 @@ export async function migratePlatform({ dataDir, backupKeyFile, onPhase = async 
     writeJournal(journalFile, journal);
     await onPhase('mark');
 
-    // ---- cleanup: 022 drops the account tables (and later migrations apply).
-    migrate(db);
+    // ---- cleanup: 022 drops the account tables (and later migrations up to the tenancy cutover apply).
+    migrate(db, { through: PRE_TENANCY_SCHEMA });
     if (LEGACY_AUTH_TABLES.some(t => hasTable(db, t))) throw refuse('store_identity_mismatch');
     journal.phase = 'cleanup';
     writeJournal(journalFile, journal);
