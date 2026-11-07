@@ -247,3 +247,17 @@ test('HTTP reads remove stale type questions and Chase bank-name variants share 
     assert.equal((await app.getScenario()).live.ingest.items.filter(i=>i.context.repair).length,0);
   } finally {await app.close();}
 }));
+
+test('repair questions use shared labels and preserve the imported display name through merge and undo', () => withStore(async s => {
+  const p=await seedDuplicate(s,{sure:true});
+  M.queueAccountPairs(s.db,{now:NOW});
+  s.db.prepare('UPDATE accounts SET display_name=? WHERE id=?').run('Household reserve',p.keep);
+  s.db.prepare('UPDATE accounts SET display_name=? WHERE id=?').run('Bridge reserve',p.own);
+  M.queueAccountPairs(s.db,{now:NOW});const q=pending(s.db)[0];
+  assert.match(q.question,/Household reserve/);assert.match(q.question,/Bridge reserve/);
+  C.answer(s.db,q.id,'same',{now:NOW});
+  assert.equal(s.db.prepare('SELECT display_name FROM accounts WHERE id=?').get(p.keep).display_name,'Household reserve');
+  C.reopenItem(s.db,q.id,{now:NOW});
+  assert.equal(s.db.prepare('SELECT display_name FROM accounts WHERE id=?').get(p.keep).display_name,'Household reserve');
+  assert.equal(s.db.prepare('SELECT display_name FROM accounts WHERE id=?').get(p.own).display_name,'Bridge reserve');
+}));

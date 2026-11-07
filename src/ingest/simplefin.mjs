@@ -1,3 +1,5 @@
+import { accountNaming } from '../accounts/naming.mjs';
+import { accountLabel } from '../shared/account-label.mjs';
 import { queueAccountPairs } from './account-merge.mjs';
 import { lastFour, accountMask, compatibleKind, compatibleInstitution, sameInstitution, accountKind } from './account-match.mjs';
 export { lastFour } from './account-match.mjs';
@@ -283,10 +285,10 @@ function resolveAccount(db, acct, { now, counts }) {
     if (match.candidate) {
       db.prepare("INSERT INTO simplefin_accounts (sf_key, account_id, candidate_id, status, name, created_at) VALUES (?, NULL, ?, 'pending_match', ?, ?)")
         .run(acct.key, match.candidate, acct.name, now);
-      const cand = db.prepare('SELECT name, inst FROM accounts WHERE id = ?').get(match.candidate);
+      const cand = accountNaming(db).byId.get(match.candidate);
       const out = ask(db, {
         kind: 'account_match', subject: `sf:${acct.key}`,
-        question: `Is ${acct.name} at ${acct.inst} from SimpleFIN the same account as ${cand?.name ?? 'an account'} you imported from a file?`,
+        question: `Is ${accountLabel(acct)} at ${acct.inst} from SimpleFIN the same account as ${accountLabel(cand)} you imported from a file?`,
         options: ACCOUNT_MATCH_OPTIONS, context: { sfKey: acct.key, candidateId: match.candidate, ownId: own }, now,
       });
       if (out.queued) counts.queued += 1;
