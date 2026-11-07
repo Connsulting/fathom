@@ -1342,7 +1342,7 @@ route's response shape is the screen's, not the tool's.
 
 ### Route map
 
-All 98 routes on main at this revision: 52 covered, 46 excluded. "Ticket" is the ticket that
+All 99 routes on main at this revision: 52 covered, 47 excluded. "Ticket" is the ticket that
 lands the covering operation.
 
 | Route | Covered by | Ticket | Note |
@@ -1367,6 +1367,7 @@ lands the covering operation.
 | `POST /api/operator/households` | excluded: administration | | |
 | `GET /api/scenario` | `household.summary` | C1 | the UI payload; its parts are also `recommendations.list`, `household.figures`, `household.deadlines` and `goals.list` |
 | `GET /api/pace` | `goals.pace` | C1 |  |
+| `POST /api/tour/seen` | excluded: onboarding wizard | | per-person guided-tour completion |
 | `GET /api/identity` | excluded: identity and sessions | | |
 | `POST /api/recs/:id/action` | `act_on_recommendation.status`, `act_on_recommendation.owner`, `act_on_recommendation.step` | C1 | snooze is status snoozed with wake |
 | `POST /api/actions/:id/undo` | `undo.undo` | C1 |  |
@@ -1468,7 +1469,7 @@ Eleven reasons, each a whole class of routes:
 8. Conversation chrome (`/api/ask`, threads, the pack what-if): an MCP client keeps its own
    conversations, Ask creating or renaming its own threads is a loop with no owner value, and the
    pack what-if is itself an Ask answer.
-9. Onboarding wizard step: first-run sequencing for the wizard. Facts said in chat go through
+9. Onboarding wizard step and per-person guided-tour completion: first-run sequencing. Facts said in chat go through
    `answer.fact`; setup notes through `refresh.import_file`.
 10. File downloads (the advisor packet and the year-end packet): binary attachments for a
     browser, not data for an agent; the data inside them is readable through
