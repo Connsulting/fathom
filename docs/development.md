@@ -26,10 +26,10 @@ from uploaded plan and benefits documents into `$FATHOM_DATA/packs/your-plans/`.
 write inside the repository, so set `FATHOM_DATA` to a directory outside the checkout to use it
 (the default `./data` is inside the checkout).
 
-Rebuild the demo store (refuses a real store):
+Rebuild an existing demo household (the server seeds a new demo instance automatically):
 
 ```bash
-npm run seed:demo
+npm run seed:demo -- --household <id>
 ```
 
 ## Configuration
@@ -263,7 +263,8 @@ unchanged. The app trusts no forwarded headers except `X-Forwarded-For` from pro
 socket address counts as the client, so everyone behind the proxy shares one rate-limit bucket. Set
 it to the ingress addresses verified on the live deployment, through the environment. Every mutation on a real store must carry
 `Origin` equal to that origin, so scripts need a session cookie and that header;
-[`scripts/dump.mjs`](../scripts/dump.mjs) has neither and does not work against a real store yet. Passkeys are bound to
+[`scripts/dump.mjs`](../scripts/dump.mjs) reads a private JSON session file from `FATHOM_SESSION_FILE`
+with `cookie`, `householdId` and `contextVersion`, and requires `--household <id>`. Passkeys are bound to
 the host name, so changing it means everyone re-enrolls through recovery links. A browser or
 passkey provider must report the `credProps` extension with `rk` true when it creates a passkey,
 or enrollment is refused; the tests prove this in Chromium, so check any other browser or provider

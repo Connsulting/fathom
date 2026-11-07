@@ -397,7 +397,7 @@ never inferred from what the store contains.
    created by another tool) is `real`. `FATHOM_DEMO=1` against a real store and `FATHOM_DEMO=0`
    against a demo store both refuse to start with a clear error and leave the file unchanged.
 3. A demo store is never reseeded on restart: its state persists.
-4. `npm run seed:demo` rebuilds a demo store or creates a missing one, and refuses a real store
+4. `npm run seed:demo -- --household <id>` rebuilds the selected existing demo household and refuses a real store
    (exit 1, data untouched). `POST /api/demo/reset` does the same rebuild in place and is a 404
    unless the store's mode is `demo`.
 5. Real household data lives only in the data volume, never in the repository.
@@ -1215,8 +1215,8 @@ Gate and origins.
    `Cache-Control: no-store`. Signed in, unknown `/api` paths keep 404 and wrong methods 405.
 4. Every POST on a real store needs `Origin` exactly equal to the `FATHOM_PUBLIC_URL` origin: JSON
    routes, uploads and the public auth routes. Browsers send it. Scripts must send a session cookie
-   and that header; `scripts/dump.mjs` sends neither and is unsupported against a real store (see
-   known limits).
+   and that header; `scripts/dump.mjs` reads its session from an operator-provided private file
+   and checks the selected household before every batch.
 5. Sensitive auth responses are `Cache-Control: no-store`.
 6. Demo stores: no accounts, `GET /api/auth/session` is `{identity: null, demo: true}`, every other
    auth and admin route is 404, and the UI shows no sign-in, account or household links. The
@@ -1502,7 +1502,7 @@ and `maskAddress`. `src/email/send.mjs` sends and records every attempt in `emai
 6. The Email screen (`web/horizon/screens/email.js`) shows the transport state and masked
    recipient, Send test email and Send brief now, the brief preview in an iframe with an empty
    `sandbox` attribute filled through `srcdoc`, the send history and the jobs with Run now.
-7. Live check: `FATHOM_LIVE_EMAIL=1 npm run email:test` sends one test email through the
+7. Live check: `FATHOM_LIVE_EMAIL=1 npm run email:test -- --household <id>` sends one test email through the
    configured transport and prints only the status and code; without `FATHOM_LIVE_EMAIL=1` it
    refuses (exit 2). Never run it in CI.
 
@@ -1998,11 +1998,13 @@ after facts change.
 
 ### Scripts
 
-`node scripts/dump.mjs <baseUrl> <files or dirs...>` uploads files to `POST /api/files` in batches
+`node scripts/dump.mjs --household <id> <baseUrl> <files or dirs...>` uploads files to `POST /api/files` in batches
 under 200 MB, skipping dotfiles and reporting files over 50 MB, and prints one line per file
 (status, rows by kind, `dup=`, `warn=` and the base name, no values); it exits 1 when a request
-fails. It sends no session cookie and no `Origin`, so it works against a demo store only; a real
-store refuses it until it gains an operator-provided session in a separate change (known limit).
+fails. `FATHOM_SESSION_FILE` names a private JSON file containing `cookie`, `householdId` and
+`contextVersion`. The cookie is an existing authenticated session cookie. Before every batch the
+script checks that session's active household and sends `Origin`, `X-Fathom-Household` and
+`X-Fathom-Context-Version`. It cannot select a household outside that session's membership.
 `node scripts/user-invite.mjs` is the bootstrap CLI (see Accounts and sessions).
 `node scripts/ingest-check.mjs <dir>` imports a directory twice into a throwaway real store
 in the OS temp dir (engine off unless `FATHOM_ENGINE=fake`; `.key`, `.json` and dotfiles
@@ -2791,7 +2793,7 @@ pointer readout, so the phone pass does not add touch drag on the curve.
 `main` runs end to end on synthetic data with no secrets. A new store with `FATHOM_DEMO` unset is
 a demo and is seeded once. `FATHOM_ENGINE` defaults to `fake` on a demo and `off` on a real store.
 The fake engine answers from `src/api/fake-answers.mjs` through the same grounding path as live.
-`POST /api/demo/reset` rebuilds a demo store only. `npm run seed:demo` refuses a real store.
+`POST /api/demo/reset` rebuilds a demo store only. `npm run seed:demo -- --household <id>` refuses a real household.
 `FATHOM_CLOCK` overrides today for demos and tests and is never written to the store. A demo has
 no accounts: no session is needed, `api.identity()` is null, the auth and admin APIs are 404, and
 no sign-in, account or household page or link appears. It needs no secrets, no

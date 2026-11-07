@@ -44,6 +44,7 @@ import { createLivePacks } from '../packs/live.mjs';
 import { createRuntimeEngine } from '../engine/runtime.mjs';
 import { createLiveAnswerer } from '../api/answerer.mjs';
 import { createScheduler, defaultHandlers } from '../jobs/scheduler.mjs';
+import { createJobDispatcher } from '../jobs/dispatch.mjs';
 import { createHouseholdTransport } from '../email/transport.mjs';
 
 const SEGMENT = /^[A-Za-z0-9_-]{1,128}$/;
@@ -173,12 +174,17 @@ function refreshPacks(packs) {
 
 export function createHouseholdContext({
   householdId, generation = 1, mode, db, relativeRoot = householdRootRel(householdId), config, platform, secrets,
-  transport = null, transportOptions = {}, engine = null, packs = null, answerer = null, scheduler = null, handlers = null, now = null,
+  transport = null, transportOptions = {}, engine = null, packs = null, answerer = null, scheduler = null, handlers = null, now = null, dispatcher = createJobDispatcher(),
 } = {}) {
   if (typeof householdId !== 'string' || !db || !platform || !config || !secrets) throw new TypeError('createHouseholdContext needs a household, store, platform, config and secrets');
   if (mode !== 'real' && mode !== 'demo') throw new TypeError('createHouseholdContext mode must be real or demo');
   const root = join(config.dataDir, relativeRoot);
   const outbound = outboundGuard(platform, householdId);
+  const current = () => platform.prepare('SELECT status, generation FROM households WHERE id = ?').get(householdId);
+  const jobsAllowed = () => {
+    const row = current();
+    return row?.status === 'active' && Number(row.generation) === generation && outbound.enabled('jobs');
+  };
   const vault = createVaultAccessor({ platform, secrets, db, config, householdId, relativeRoot });
   const householdTransport = transport ?? createHouseholdTransport(config, {
     ...transportOptions, outboxDir: join(root, 'outbox'), outbound,
@@ -200,9 +206,9 @@ export function createHouseholdContext({
   const householdAnswerer = answerer ?? createLiveAnswerer({ engine: householdEngine, packs: livePacks, root });
   let context = null;
   const householdScheduler = scheduler ?? createScheduler({
-    db, config, engine: householdEngine, transport: householdTransport,
+    db, config, engine: householdEngine, transport: householdTransport, dispatcher, ...(now ? { now } : {}),
     handlers: handlers ?? defaultHandlers({ publicUrl: config.publicUrl }),
-    allowed: () => outbound.enabled('jobs'), household: () => context,
+    allowed: jobsAllowed, household: () => context,
   });
   let closing = null;
   context = Object.freeze({
@@ -221,10 +227,10 @@ export function createHouseholdContext({
 }
 
 // The production builder: open the household's store, then its context (store closed on failure).
-export function buildHouseholdContext({ householdId, generation, mode, relativeRoot, platform, config, secrets, transportOptions }) {
+export function buildHouseholdContext({ householdId, generation, mode, relativeRoot, platform, config, secrets, transportOptions, dispatcher }) {
   const db = openHouseholdDb({ dataDir: config.dataDir, householdId, storageRoot: relativeRoot });
   try {
-    return createHouseholdContext({ householdId, generation, mode, db, relativeRoot, config, platform, secrets, transportOptions });
+    return createHouseholdContext({ householdId, generation, mode, db, relativeRoot, config, platform, secrets, transportOptions, dispatcher });
   } catch (e) {
     try { db.close(); } catch { /* already closed */ }
     throw e;
@@ -235,6 +241,7 @@ export function createRuntimeRegistry({ platform, config, secrets, transportOpti
   if (!platform || !config || !secrets) throw new TypeError('createRuntimeRegistry needs the platform, config and secrets');
   const rowOf = platform.prepare('SELECT id, status, mode, storage_root, generation FROM households WHERE id = ?');
   const servable = platform.prepare("SELECT id FROM households WHERE status = 'active' AND storage_root IS NOT NULL ORDER BY created_at, id");
+  const dispatcher = createJobDispatcher();
   const entries = new Map(); // householdId -> { context, generation }
   const refs = new Map(); // context -> active acquires
   const stale = new Set(); // contexts replaced by a newer generation, closed once released
@@ -274,7 +281,7 @@ export function createRuntimeRegistry({ platform, config, secrets, transportOpti
     }
     let context;
     try {
-      context = build({ householdId, generation, mode: row.mode, relativeRoot: row.storage_root, platform, config, secrets, transportOptions });
+      context = build({ householdId, generation, mode: row.mode, relativeRoot: row.storage_root, platform, config, secrets, transportOptions, dispatcher });
     } catch (err) {
       console.error('fathom: household runtime unavailable', codeOf(err));
       return null;
@@ -313,11 +320,12 @@ export function createRuntimeRegistry({ platform, config, secrets, transportOpti
       return servable.all().map(r => r.id);
     },
     startAll() {
-      started = true;
+      if (started) return;
       for (const id of servable.all().map(r => r.id)) {
         const context = get(id);
         if (context) startHousehold(context);
       }
+      started = true;
     },
     async close() {
       closed = true;
