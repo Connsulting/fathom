@@ -59,8 +59,8 @@ function loadAccounts(db) {
   const row = db.prepare("SELECT value FROM facts WHERE key = 'accounts.businessEntity' AND (src IS NULL OR src != 'planner')").get();
   const named = row ? parse(row.value, undefined) : undefined;
   const byAccount = named && typeof named === 'object' && !Array.isArray(named) ? named : {};
-  return db.prepare('SELECT id, name, kind, owner FROM accounts ORDER BY sort, id').all().map(a => ({
-    id: a.id, name: a.name, kind: a.kind,
+  return db.prepare('SELECT id, name, kind, owner, inst, mask, display_name FROM accounts ORDER BY sort, id').all().map(a => ({
+    id: a.id, name: a.name, kind: a.kind, inst: a.inst, mask: a.mask, display_name: a.display_name,
     business: String(a.kind || '').toLowerCase() === 'business' || ownerOf(a.owner) === 'business'
       || (typeof byAccount[a.id] === 'string' && byAccount[a.id].trim() !== ''),
   }));

@@ -14,7 +14,42 @@ import { computeFigures } from '../jobs/planner/figures.mjs';
 const OPTIONS = [{ id: 'same', label: 'Merge' }, { id: 'different', label: 'Keep both' }];
 const subjectOf = (a, b) => `merge:${a}:${b}`;
 const differentPairs = db => db.prepare("SELECT context FROM confirm_items WHERE kind='account_match' AND status='answered' AND answer='different'").all().map(r => parseJson(r.context, {}));
-const latest = (db, id) => db.prepare('SELECT amount FROM balances WHERE account_id=? ORDER BY date DESC LIMIT 1').get(id)?.amount;
+const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const utcDay = date => Date.parse(`${date}T00:00:00Z`) / 86400000;
+const balanceRows = (db, id) => db.prepare('SELECT date, amount FROM balances WHERE account_id=? ORDER BY date').all(id);
+
+// Each file balance against the connected account's latest balance on or before that date, within 5 days.
+function alignedComparisons(fileRows, connectedRows) {
+  const out = [];
+  for (const file of fileRows) {
+    const fileDay = utcDay(file.date);
+    let match = null;
+    for (const row of connectedRows) {
+      const gap = fileDay - utcDay(row.date);
+      if (gap < 0) break;
+      if (gap <= 5) match = row;
+    }
+    if (match) out.push({
+      date: file.date,
+      equal: Math.round(file.amount * 100) === Math.round(match.amount * 100),
+      fileAmount: file.amount,
+      connectedAmount: match.amount,
+    });
+  }
+  return out;
+}
+
+export function formatMatchedDates(dates) {
+  const parts = dates.map(date => {
+    const [y, m, d] = date.split('-').map(Number);
+    return { y, text: `${MONTHS[m - 1]} ${d}` };
+  });
+  const sameYear = parts.every(p => p.y === parts[0]?.y);
+  const labels = parts.map(p => sameYear ? p.text : `${p.text}, ${p.y}`);
+  if (labels.length <= 1) return labels[0] ?? '';
+  if (labels.length === 2) return `${labels[0]} and ${labels[1]}`;
+  return `${labels.slice(0, -1).join(', ')} and ${labels.at(-1)}`;
+}
 
 export function detectAccountPairs(db, { includeAnswered = false } = {}) {
   const connected = db.prepare(`SELECT a.*, m.sf_key, s.snapshot FROM simplefin_accounts m JOIN accounts a ON a.id=m.account_id
@@ -29,15 +64,27 @@ export function detectAccountPairs(db, { includeAnswered = false } = {}) {
     const sameMask = a && a === b;
     const knownInst = sameInstitution(own.inst, keep.inst);
     const named = normalizeName(own.name) && normalizeName(own.name) === normalizeName(keep.name);
-    const x = latest(db, own.id), y = latest(db, keep.id);
-    const near = x != null && y != null && Math.abs(x-y) <= Math.max(1, Math.abs(x)*0.05);
-    if (!sameMask && !(knownInst && (named || near))) continue;
+    const fileRows = balanceRows(db, keep.id);
+    const connectedRows = balanceRows(db, own.id);
+    const comparisons = alignedComparisons(fileRows, connectedRows);
+    const equals = comparisons.filter(c => c.equal);
+    const unequals = comparisons.filter(c => !c.equal);
+    const history = unequals.length === 0 && equals.length >= 2;
+    const historySure = unequals.length === 0 && equals.length >= 3;
+    const latestFile = fileRows.at(-1);
+    const latestAligned = latestFile && comparisons.find(c => c.date === latestFile.date);
+    const near = Boolean(latestAligned) && Math.abs(latestAligned.fileAmount - latestAligned.connectedAmount) <= Math.max(1, Math.abs(latestAligned.connectedAmount) * 0.05);
+    if (!sameMask && !(knownInst && (named || near)) && !history) continue;
     if (different.some(p => p.candidateId === keep.id && p.ownId === own.id)) continue;
     const snap = parseJson(own.snapshot, {});
     const reliable = (snap.maskSure === true && snap.mask === a) || lastFour(own.name) === a;
-    const sure = sameMask && reliable && /^\d{4}$/.test(keep.mask ?? '') && knownInst
-      && accountKind(own) && accountKind(keep) && !conflictingBalances(db, own.id, keep.id);
-    pairs.push({ candidateId: keep.id, ownId: own.id, sfKey: own.sf_key, confidence: sure ? 'sure' : 'likely' });
+    const sure = (sameMask && reliable && /^\d{4}$/.test(keep.mask ?? '') && knownInst
+      && accountKind(own) && accountKind(keep) && !conflictingBalances(db, own.id, keep.id)) || historySure;
+    pairs.push({
+      candidateId: keep.id, ownId: own.id, sfKey: own.sf_key,
+      matchedDates: equals.map(c => c.date),
+      confidence: sure ? 'sure' : 'likely',
+    });
   }
   return pairs.map(p => ({ ...p, confidence: p.confidence === 'sure'
     && pairs.filter(x => x.ownId === p.ownId).length === 1 && pairs.filter(x => x.candidateId === p.candidateId).length === 1 ? 'sure' : 'likely' }));
@@ -58,7 +105,8 @@ export function queueAccountPairs(db, { now = new Date().toISOString() } = {}) {
     if (prior?.status === 'answered' && prior.answer !== 'superseded') continue;
     const keep = naming.byId.get(pair.candidateId);
     const own = naming.byId.get(pair.ownId);
-    const question = `Same account? ${accountLabel(own)} from SimpleFIN and ${accountLabel(keep)} from a file.`;
+    const evidence = pair.matchedDates?.length ? ` Balances matched on ${formatMatchedDates(pair.matchedDates)}.` : '';
+    const question = `Same account? ${accountLabel(own)} from SimpleFIN and ${accountLabel(keep)} from a file.${evidence}`;
     const context = { ...pair, repair:true };
     if (prior?.status === 'pending') {
       db.prepare('UPDATE confirm_items SET question=? WHERE id=? AND question IS NOT ?').run(question,prior.id,question);

@@ -2448,12 +2448,17 @@ and more than one is `ambiguous_goal`; both become a question.
 Computations (`TARGET_PARAMETERS`).
 1. Spending window. Participating accounts are checking, savings, cash and card accounts with at least one
    transaction up to the clock. Each has a complete-month run: the month after its first transaction to the
-   month before its last, split at a month with no transaction, latest run kept. The window is the
-   intersection of the runs, ends before the clock month and covers at most 12 months. Under 3 months is
-   `no_spending_history`. An outflow matched to an inflow on another household account (same cents, within
-   5 days, nearest date) is a transfer, not spending. An inflow is income unless matched to an outflow on
-   another non-business account, so business transfers in count. Spending accounts with no transactions are
-   named in the figure notes and not counted.
+   month before its last, split at a month with no transaction, latest run kept. An account with no complete
+   month is left out and named. An account whose last transaction is at least `closedAfterMonths` (6) before
+   the newest complete month on file is closed: it does not set the window, and its spending counts only
+   inside its own run. A gap keeps the latest run, and that run still sets the start. The window ends at
+   the earliest open run, and before the clock month, and covers at most 12 months. An account whose only
+   run opens inside that window counts as zero before its first complete month instead of moving the start
+   later. Under 3 months is `no_spending_history`. The spending-figure note names the ending month and the
+   accounts that limited it, using each account's stored label, including a display name. An outflow matched to an inflow on another household
+   account (same cents, within 5 days, nearest date) is a transfer, not spending. An inflow is income unless
+   matched to an outflow on another non-business account, so business transfers in count. Spending accounts
+   with no transactions are named in the figure notes and not counted.
 2. Cushion: 6 months of monthly spending, rounded up to the next $100, held in checking, savings and cash.
 3. Independence: yearly spending (monthly times 12) over the withdrawal rate, rounded up to the next
    $1,000, held in taxable, brokerage, retirement, Roth and IRA accounts. Rate default 4%, owner range 2% to
