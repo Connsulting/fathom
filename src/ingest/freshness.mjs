@@ -141,6 +141,7 @@ function pendingWithGuesses(db) {
     const g = bestGuess(db, item, detail);
     const guess = g ? {
       option: g.option, label: g.label, reason: g.evidence, evidence: g.evidence, source: g.source,
+      ...(g.confidence==null?{}:{confidence:g.confidence}),
       ...(g.source === 'engine' ? { model: r?.model ?? null, ts: r?.ts ?? null } : {}),
     } : null;
     const label = detail?.type === 'account' ? detail.account?.label : '';
