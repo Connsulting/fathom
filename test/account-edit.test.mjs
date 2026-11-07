@@ -761,6 +761,13 @@ test('the label is owner prefix, name and last 4 on every surface, and the dialo
   assert.equal(m.D.accountDetail(ctx(s, unsure)).account.labelMask, '', 'an unsure mask is not in the label');
   assert.equal(m.D.accountDetail(ctx(s, unsure)).account.mask, '5555', 'but the field still shows it');
 
+  // The model's goal tracking text names the accounts the way the screens do.
+  const { callTool } = await src('src/tools/index.mjs');
+  s.db.prepare("INSERT INTO goals (id, def, origin, created_at, updated_at) VALUES ('label-goal', ?, 'owner', ?, ?)")
+    .run(JSON.stringify({ id: 'label-goal', title: 'Reserve', target: 5000, targetDate: '2033-01-01', track: { accounts: [mine, unsure] } }), NOW, NOW);
+  const goals = await callTool('list_goals', {}, { db: s.db, now: NOW });
+  assert.equal(goals.find((g) => g.id === 'label-goal').tracking, "Avery's Venture One (0323), Avery's Bridge checking");
+
   // A custom name that already starts with the owner prefix is not doubled; a bare custom name is prefixed.
   const typed = await m.A.accountRename(ctx(s, mine, { displayName: "Avery's Venture One" }));
   assert.equal(typed.account.name, "Avery's Venture One (0323)");
