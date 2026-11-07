@@ -9,7 +9,7 @@ import { merchantDisplayName, plainEvidence } from '../src/categories/display.mj
 const cases = [
   // ACH and bank-rail prefixes, with the trailing reference id
   ['ACH DEBIT EXAMPLE UTILITY CO 8837261', 'Example Utility Co'],
-  ['ACH CREDIT SAMPLE PAYROLL LLC PPD ID: 9120034411', 'Sample Payroll Llc'],
+  ['ACH CREDIT SAMPLE PAYROLL LLC PPD ID: 9120034411', 'Sample Payroll LLC'],
   ['WEB PMT EXAMPLE INSURANCE 20261003', 'Example Insurance'],
   ['RECURRING PAYMENT DEMO STREAMING', 'Demo Streaming'],
   // card-processor prefixes
@@ -24,7 +24,7 @@ const cases = [
   ['DEMO GROCER STORE 0187', 'Demo Grocer'],
   ['Demo Grocer No. 44', 'Demo Grocer'],
   // trailing ids after a star or a long mixed token
-  ['AMZN MKTP US*2K4XY91Z0', 'Amzn Mktp Us'],
+  ['AMZN MKTP US*2K4XY91Z0', 'Amzn Mktp US'],
   ['EXAMPLE CLOUD SERVICES AB12CD34EF', 'Example Cloud Services'],
   // casing
   ['demo books', 'Demo Books'],

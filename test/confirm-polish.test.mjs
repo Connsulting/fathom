@@ -205,7 +205,7 @@ test('real server state renders without a vendor name or a percentage', async (t
   assert.ok(review && applied);
   const jev = {
     isOn: () => true, stats: () => ({ costUsd: 0 }),
-    choose: async (qs) => qs.map((q) => ({ choice: 'Groceries', confidence: q.state.amount === -25 ? .8 : .99, probabilities: { Groceries: .9, Business: .1 } })),
+    choose: async (qs) => qs.map((q) => ({ choice: 'Groceries', confidence: q.state.amount === -25 ? .9 : .99, probabilities: { Groceries: .9, Business: .1 } })),
   };
   await guessCategories(db, jev, { policy: { autoApply: .95, review: .7 } });
   const state = ingestState(db, { clock: '2032-11-05' });
