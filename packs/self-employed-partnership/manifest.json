@@ -1,7 +1,7 @@
 {
   "id": "self-employed-partnership",
   "name": "Self-employed and partnership income",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "taxYear": 2026,
   "reviewed": "2026-11-05",
   "curator": "Public primary-source review",
@@ -14,7 +14,8 @@
     "retirement compensation",
     "qualified business income",
     "spouse ownership",
-    "single-member LLC transition"
+    "single-member LLC transition",
+    "premiums paid by the business"
   ],
   "appliesWhen": {
     "any": [
@@ -196,6 +197,16 @@
         {
           "label": "IRS Publication 334, self-employed health insurance rules",
           "url": "https://www.irs.gov/publications/p334"
+        }
+      ]
+    },
+    {
+      "file": "premiums-paid-by-business.md",
+      "title": "Premiums paid by the business",
+      "cites": [
+        {
+          "label": "IRS Form 7206 instructions, self-employed health insurance",
+          "url": "https://www.irs.gov/instructions/i7206"
         }
       ]
     }

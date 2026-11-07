@@ -1,7 +1,7 @@
 {
   "id": "w2-benefits",
   "name": "W-2 benefits",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "taxYear": 2026,
   "reviewed": "2026-11-05",
   "curator": "Public primary-source review",
@@ -11,7 +11,8 @@
     "health FSA",
     "dependent care FSA",
     "retirement deferrals",
-    "payroll withholding"
+    "payroll withholding",
+    "premiums through payroll"
   ],
   "appliesWhen": {
     "fact": "income.w2",
@@ -181,6 +182,16 @@
         {
           "label": "IRS Publication 969: enduring HSA and FSA rules",
           "url": "https://www.irs.gov/publications/p969"
+        }
+      ]
+    },
+    {
+      "file": "premiums-through-payroll.md",
+      "title": "Premiums through payroll",
+      "cites": [
+        {
+          "label": "IRS Publication 15-B (2026)",
+          "url": "https://www.irs.gov/publications/p15b"
         }
       ]
     }

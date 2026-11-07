@@ -64,7 +64,7 @@ export function hashKey(secret, serverSecret) {
 
 // Registry entries a key with `scopes` may see and call.
 export function toolsForScopes(scopes, registry = tools) {
-  return registry.filter(t => scopes.includes(t.scope));
+  return registry.filter(t => scopes.includes(t.scope)).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
 }
 
 const toRecord = r => ({
