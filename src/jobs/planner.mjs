@@ -57,6 +57,8 @@ function storedFacts(db) {
 
 async function run(db, engine, { now, packDirs, runId }) {
   if (getSetting(db, 'mode', null) === 'demo') throw new PlannerError('demo_store', 'planning runs on real stores only');
+  const claim = db.prepare('SELECT job_id, status FROM job_runs WHERE id = ?').get(runId);
+  if (claim?.job_id !== PLAN_JOB_ID || claim.status !== 'running') throw new PlannerError('invalid_run', 'runId must identify a running local plan claim');
   const clock = resolveClock(db, isoDateOf(now));
   return plan(db, engine, { clock, runId, packDirs: packDirs ?? defaultPackDirs() });
 }

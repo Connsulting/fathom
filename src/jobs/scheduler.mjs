@@ -41,6 +41,7 @@ import { guessCategories } from '../categories/guess.mjs';
 //    config, engine and transport, all of that one household.
 
 import { getSetting } from '../store/db.mjs';
+import { createJobDispatcher } from './dispatch.mjs';
 import { isIsoDate } from '../scenario/build.mjs';
 import { refreshFreshness } from '../ingest/freshness.mjs';
 import { composeBrief } from '../email/brief.mjs';
@@ -231,7 +232,7 @@ const isUniqueViolation = (e) => e && (e.errcode === 2067 || e.errcode === 1555 
 // ---------------------------------------------------------------- scheduler
 
 export function createScheduler({
-  db, config = {}, engine = null, handlers = {}, transport = null, now = () => new Date(), allowed = () => true, household = () => null,
+  db, config = {}, engine = null, handlers = {}, transport = null, dispatcher = createJobDispatcher(), now = () => new Date(), allowed = () => true, household = () => null,
   tickMs = 60000, leaseMs = 300000, drainMs = 30000, debounceMs = 30000, holder = `fathom-${process.pid}`, log = console,
 } = {}) {
   if (!db) throw new TypeError('A store is required');
@@ -307,14 +308,27 @@ export function createScheduler({
   }
 
   function execute(job, opts) {
-    const p = executeOnce(job, opts);
+    const captured = household();
+    running.add(job.id);
+    const p = dispatcher.run(captured?.householdId ?? holder, () => {
+      if (stopping) throw new SchedulerError('locked');
+      if (allowed() !== true) throw new SchedulerError('paused');
+      if (!lease(at())) throw new SchedulerError('locked');
+      return executeOnce(job, { ...opts, household: captured });
+    }).finally(() => {
+      running.delete(job.id);
+      if (!running.size) stopRenewing();
+      const again = pending.get(job.id);
+      pending.delete(job.id);
+      if (again && !stopping) trigger(job.id, again).catch(() => {});
+    });
     active.add(p);
     p.then(() => active.delete(p), () => active.delete(p));
     return p;
   }
 
   // Claims (jobId, key) and runs the handler. Returns the finished run, or null when already claimed.
-  async function executeOnce(job, { key, trigger, t, zone }) {
+  async function executeOnce(job, { key, trigger, t, zone, household: captured }) {
     if (allowed() !== true) throw new SchedulerError('paused');
     let id;
     try {
@@ -323,7 +337,6 @@ export function createScheduler({
       if (isUniqueViolation(e)) return null;
       throw e;
     }
-    running.add(job.id);
     if (!renewer && !stopping) {
       renewer = setInterval(renew, Math.max(1, Math.floor(leaseMs / 3)));
       renewer.unref?.();
@@ -334,7 +347,7 @@ export function createScheduler({
     let cost = null;
     let note = null;
     try {
-      const ctx = { db, config, engine, transport, household: household(), now: t.toISOString(), clock: clockFor(t, zone), periodKey: key, trigger, jobRunId: id, triggerJob: (jobId) => triggerJob(jobId, 'ingest') };
+      const ctx = { db, config, engine, transport, household: captured, now: t.toISOString(), clock: clockFor(t, zone), periodKey: key, trigger, jobRunId: id, triggerJob: (jobId) => triggerJob(jobId, 'ingest') };
       const out = (await handlers[job.id](ctx)) || {};
       if (out.status === 'skipped') status = 'skipped';
       if (Number.isFinite(out.costUsd) && out.costUsd >= 0) cost = out.costUsd;
@@ -343,20 +356,11 @@ export function createScheduler({
       status = 'error';
       errorClass = errorClassOf(e);
       if (Number.isFinite(e && e.costUsd) && e.costUsd >= 0) cost = e.costUsd;
-    } finally {
-      running.delete(job.id);
-      if (!running.size) stopRenewing();
     }
     q.finish.run(status, at().toISOString(), Math.max(0, Math.round(performance.now() - started)), errorClass, cost, note, id);
     log.log(`fathom: job ${job.id} ${status}${errorClass ? ` ${errorClass}` : ''}`);
     try { ensureJobs(); } catch { /* labels refresh on the next tick */ }
     const result = runOut(q.run.get(id));
-    const again = pending.get(job.id);
-    if (again && !stopping) {
-      pending.delete(job.id);
-      // Not awaited: the finished run's caller must not wait on the rerun.
-      runOff(job.id, again).catch((e) => { if (!(e instanceof SchedulerError)) log.log(`fathom: job ${job.id} error store`); });
-    }
     return result;
   }
 
@@ -509,7 +513,7 @@ export function defaultHandlers({ publicUrl = null, simplefinFetch = null } = {}
       if (out.status === 'skipped') return { status: 'skipped', note: { connected: false } };
       if (out.status !== 'ok') throw new JobFailure(`simplefin_${out.code || 'error'}`);
       if (out.changed) ctx.triggerJob?.('plan');
-      await ctx.triggerJob?.('freshness');
+      ctx.triggerJob?.('freshness');
       return { costUsd: 0, note: { ...out.counts, changed: out.changed } };
     },
     async plan(ctx) {

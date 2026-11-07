@@ -2,12 +2,11 @@
 // plus a deterministic synthetic ledger (demo/ledger.mjs). Every row it writes carries
 // file_id 'demo-seed', parser 'demo-seed' and a locator into the scenario or the ledger.
 //
-// CLI: `npm run seed:demo` creates a demo instance in $FATHOM_DATA, or rebuilds the demo household
-// of an existing demo instance (resolved through the runtime registry's demo(), its stored objects
+// CLI: `npm run seed:demo -- --household <id>` rebuilds an existing demo household
+// resolved by the platform registry, with only that household's stored objects
 // cleared). It refuses a real instance or an outdated layout and exits 1 without changing it.
 
 import { createHash } from 'node:crypto';
-import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import scenario from './scenario.mjs';
@@ -320,46 +319,21 @@ export function seedDemo(db) {
 }
 
 async function main() {
-  // Imported here: the runtime modules import this module (the server seeds new demo instances).
-  const { createInstance } = await import('../src/platform/db.mjs');
-  const { openInstance } = await import('../src/platform/ready.mjs');
-  const { createInstanceSecrets } = await import('../src/platform/secrets.mjs');
-  const { createRuntimeRegistry } = await import('../src/platform/runtime.mjs');
+  const { openCliHousehold } = await import('../src/platform/cli.mjs');
   const { clearStoredFiles } = await import('../src/ingest/vault.mjs');
-  let config;
+  let cli;
   try {
-    config = loadConfig();
-  } catch (e) {
-    console.error(`seed:demo: ${e.message}`);
-    return 1;
-  }
-  let opened;
-  try {
-    mkdirSync(config.dataDir, { recursive: true });
-    opened = openInstance(config);
-  } catch (e) {
-    console.error(`seed:demo: ${typeof e?.code === 'string' ? e.code : 'instance_unavailable'}`);
-    return 1;
-  }
-  if (!opened) {
-    const secrets = createInstanceSecrets({ config, mode: 'demo' });
-    const made = createInstance(config.dataDir, { mode: 'demo', init: seedDemo, platformKey: secrets.platformKey() });
-    made.db.close();
-    made.platform.close();
-    console.log('seed:demo: demo instance created');
-    return 0;
-  }
-  const { platform, mode } = opened;
-  if (mode !== 'demo') {
-    platform.close();
-    console.error('seed:demo: refusing to touch a real instance. Point FATHOM_DATA at another directory for the demo.');
-    return 1;
-  }
-  const runtimes = createRuntimeRegistry({ platform, config, secrets: createInstanceSecrets({ config, mode }) });
-  try {
-    const household = runtimes.demo();
+    const config = loadConfig();
+    cli = await openCliHousehold(config, process.argv.slice(2));
+    if (cli.argv.length) throw Object.assign(new Error(), { code: 'invalid_arguments' });
+    const { household } = cli;
+    if (household.mode !== 'demo') {
+      console.error('seed:demo: refusing to touch a real household.');
+      return 1;
+    }
+    const vault = await household.vault();
     seedDemo(household.db);
-    await clearStoredFiles(await household.vault());
+    await clearStoredFiles(vault);
     household.packs.refresh();
     console.log('seed:demo: demo household rebuilt');
     return 0;
@@ -367,8 +341,7 @@ async function main() {
     console.error(`seed:demo: ${typeof e?.code === 'string' ? e.code : 'seed_failed'}`);
     return 1;
   } finally {
-    await runtimes.close();
-    platform.close();
+    await cli?.close();
   }
 }
 

@@ -282,7 +282,10 @@ describe('POST /api/files on a demo server', () => {
       writeFileSync(join(dir, 'first-dump.csv'), aggregatorCsv([{ date: '2032-03-14', amount: '6420.13', description: 'DUMP-CANARY-ONE', number: '7070707070' }]));
       writeFileSync(join(dir, 'nested', 'second-dump.csv'), aggregatorCsv([{ date: '2032-03-15', amount: '5310.24', description: 'DUMP-CANARY-TWO', number: '6060606060' }]));
       writeFileSync(join(dir, '.hidden-dump.csv'), aggregatorCsv([{ date: '2032-03-16', amount: '4200.35', description: 'DUMP-CANARY-HIDDEN', number: '5050505050' }]));
-      const out = await runCommand(process.execPath, ['scripts/dump.mjs', s.baseUrl, dir]);
+      const sessionFile = join(dir, '.session.json');
+      writeFileSync(sessionFile, JSON.stringify({ cookie: s.session.cookie, householdId: s.session.householdId, contextVersion: 1 }), { mode: 0o600 });
+      const dumpEnv = { FATHOM_SESSION_FILE: sessionFile };
+      const out = await runCommand(process.execPath, ['scripts/dump.mjs', '--household', s.session.householdId, s.baseUrl, dir], { env: dumpEnv });
       assert.equal(out.code, 0, out.stderr);
       const lines = out.stdout.split('\n').filter(Boolean);
       for (const name of ['first-dump.csv', 'second-dump.csv']) {
@@ -301,7 +304,7 @@ describe('POST /api/files on a demo server', () => {
       assert.ok(!names.includes('.hidden-dump.csv'));
 
       const closed = await freePort();
-      const fail = await runCommand(process.execPath, ['scripts/dump.mjs', `http://127.0.0.1:${closed}`, dir]);
+      const fail = await runCommand(process.execPath, ['scripts/dump.mjs', '--household', s.session.householdId, `http://127.0.0.1:${closed}`, dir], { env: dumpEnv });
       assert.equal(fail.code, 1, 'a failed request exits 1');
     } finally {
       rmSync(dir, { recursive: true, force: true });
