@@ -33,7 +33,7 @@ export async function guessCategories(db, jev, { now, batchSize = 10, maxBatches
     const initial=loadCategoryInputs(db), deterministic=resolveCategories(initial);
     for(const t of initial.transactions) {
       const c=deterministic.get(t.id);
-      if(!['merchant','structural'].includes(c.layer)) continue;
+      if(!['merchant','structural'].includes(c.layer) || c.evidence.imported) continue;
       const item=categoryItem(db,t,c,at);
       if(!item || db.prepare('SELECT 1 FROM confirm_auto_declined WHERE item_id=?').get(item.id)) continue;
       // The category auto rule keeps the existing cross-import undo and duplicate-move contract.

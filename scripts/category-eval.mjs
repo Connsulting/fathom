@@ -31,11 +31,11 @@ export async function evaluateCategories(db,jev,{sampleSize=1000}={}) {
   const householdNames=parseJson(db.prepare("SELECT value FROM facts WHERE key='household.names'").get()?.value,{});
   const pending=[];
   for(const row of sample) {
-    const target={...row,category:null,imported_category:null,truth:undefined,truthParser:undefined};
+    const target={...row,category:null,imported_category:null,category_declined:0,truth:undefined,truthParser:undefined};
     const historical={...input,transactions:[...input.transactions.filter(t=>t.date<row.date),target],
       corrections:input.corrections.filter(c=>c.transaction_id!==row.id && c.updated_at<row.date),
       merchantRules:input.merchantRules.filter(r=>r.updated_at<row.date),sourceRules:input.sourceRules.filter(r=>r.updated_at<row.date),
-      declinedTransactionIds:[],guesses:[]};
+      guesses:[]};
     const resolved=resolveCategories(historical).get(row.id);
     if(['merchant','structural'].includes(resolved.layer)) {
       const stage=resolved.layer==='merchant'?'history':'rules';
