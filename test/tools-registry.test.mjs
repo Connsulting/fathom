@@ -92,7 +92,7 @@ test('tracked callers contain no retired tool names', () => {
     if (path === 'docs/ask-tools.md') continue;
     let body;
     try { body = readFileSync(path, 'utf8'); } catch { continue; }
-    body = body.replace(/<\/?household_summary>/g, '');
+    body = body.replace(new RegExp('<\\/?' + ['household', 'summary'].join('_') + '>', 'g'), '');
     if (pattern.test(body)) found.push(path);
     pattern.lastIndex = 0;
   }

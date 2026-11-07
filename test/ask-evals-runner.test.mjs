@@ -47,7 +47,7 @@ test('arithmetic transcript fails through real Ask and corrected retries cannot 
     if (attempt) return [{ text: '{f:hsa_left}', costUsd: 0 }];
     const values = db.prepare("SELECT v FROM figures WHERE key IN ('hsa_left','hsa_paid')").all();
     return [
-      { toolCalls: [{ name: 'get_figures', args: { keys: ['hsa_left', 'hsa_paid'] } }], costUsd: 0 },
+      { toolCalls: [{ name: 'household', args: { operation: 'figures',  keys: ['hsa_left', 'hsa_paid'] } }], costUsd: 0 },
       // Two self-computed figures: since AQ1 a lone unchecked figure is neutralized in place, and only
       // an answer whose figures are mostly unchecked (two or more) is regenerated.
       { text: `${values[0].v + values[1].v}, or ${2 * (values[0].v + values[1].v)} over two years`, costUsd: 0 },
@@ -74,7 +74,7 @@ test('budget ledger excludes demo spend and refuses a later round inside one eng
     const ledger = createEvalLedger({ db: store.db, maxUsd: 1 });
     assert.equal(ledger.costUsd, 0);
     const request = { purpose: 'chat', system: 'Use tools.', messages: [{ role: 'user', content: 'Read the value.' }], maxTokens: 1024,
-      tools: [{ name: 'read', scope: 'read', description: 'Read a value.', inputSchema: { type: 'object', properties: {}, additionalProperties: false }, handler: () => ({ value: 10 }) }] };
+      tools: [{ name: 'read', kind: 'read', operations: [{ name: 'read', scope: 'read' }], description: 'Read a value.', inputSchema: { type: 'object', properties: {}, additionalProperties: false }, handler: () => ({ value: 10 }) }] };
     const wrapped = ledger.begin(request);
     const engine = createEngine({ mode: 'fake', ledger, capUsd: 1, responses: [
       { toolCalls: [{ name: 'read', args: {} }], costUsd: 0.99 }, { text: '10', costUsd: 0.02 },
@@ -130,7 +130,7 @@ test('CLI entrypoint exits nonzero and writes evidence for a self-computed answe
     const program = `import {main} from './evals/run.mjs';
       process.exitCode=await main(['--cases','retirement-hsa-room','--out',process.env.EVAL_TEST_OUTPUT],{
         scripts:({db})=>[
-          {toolCalls:[{name:'get_figures',args:{keys:['hsa_left','hsa_paid']}}],costUsd:0},
+          {toolCalls:[{name:'household',args:{ operation: 'figures', keys:['hsa_left','hsa_paid']}}],costUsd:0},
           {text:String(db.prepare("SELECT sum(v) AS v FROM figures WHERE key IN ('hsa_left','hsa_paid')").get().v),costUsd:0}
         ]});`;
     const r = spawnSync(process.execPath, ['--input-type=module', '-e', program], {
@@ -147,16 +147,16 @@ test('missing tool markers never mask an unrelated failed follow-up', async () =
   const cases = await loadCases();
   const c = structuredClone(cases.find(c => c.id === 'spending-annual-exclusions'));
   c.turns.push(structuredClone(cases.find(c => c.id === 'retirement-hsa-room').turns[0]));
-  const r = await runCases({ cases: [c], scripts: ({ turn }) => turn.required[0].name === 'aggregate_transactions'
+  const r = await runCases({ cases: [c], scripts: ({ turn }) => turn.required[0].name === 'spending'
     ? [{ text: "Fathom doesn't have that.", costUsd: 0 }]
-    : [{ toolCalls: [{ name: 'get_figures', args: { keys: ['hsa_left'] } }], costUsd: 0 }, { text: 'No figure provided.', costUsd: 0 }] });
+    : [{ toolCalls: [{ name: 'household', args: { operation: 'figures',  keys: ['hsa_left'] } }], costUsd: 0 }, { text: 'No figure provided.', costUsd: 0 }] });
   assert.equal(r.cases[0].status, 'fail');
 });
 
 test('unavailable cases accept a clear refusal in ordinary wording', async () => {
   const c = (await loadCases()).find(c => c.id === 'unavailable-credit-score');
   const r = await runCases({ cases: [c], scripts: () => [
-    { toolCalls: [{ name: 'get_facts', args: {} }], costUsd: 0 }, { text: "Fathom doesn't track your credit score.", costUsd: 0 },
+    { toolCalls: [{ name: 'household', args: { operation: 'facts', } }], costUsd: 0 }, { text: "Fathom doesn't track your credit score.", costUsd: 0 },
   ] });
   assert.equal(r.cases[0].status, 'pass');
 });

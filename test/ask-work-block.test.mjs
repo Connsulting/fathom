@@ -17,7 +17,7 @@ import { createRuntimeEngine } from '../src/engine/runtime.mjs';
 import { createLivePacks } from '../src/packs/live.mjs';
 import { createEngine, fakeChunks } from '../src/engine/index.mjs';
 import * as engineModule from '../src/engine/index.mjs';
-import { createLiveAnswerer, groundAnswer, PROGRESS_LABELS, PROGRESS_START, PROGRESS_GROUNDING } from '../src/api/answerer.mjs';
+import { createLiveAnswerer, groundAnswer, progressLabel, PROGRESS_START, PROGRESS_GROUNDING } from '../src/api/answerer.mjs';
 import { fakeAnswerScript } from '../src/api/fake-answers.mjs';
 import { SERVER_TIMEOUT, withServer, request, postJson, tempDb } from './helpers/server.mjs';
 
@@ -36,7 +36,7 @@ const note = text => ({ k: 'note', text });
 
 const chat = { purpose: 'chat', system: 'Use stored figures.', messages: [{ role: 'user', content: 'What is the balance?' }], maxTokens: 128 };
 const schema = { type: 'object', properties: { account: { type: 'string', enum: ['demo'] } }, required: ['account'], additionalProperties: false };
-const balance = { name: 'balance', description: 'Read a synthetic balance.', scope: 'read', inputSchema: schema, handler: async () => ({ value: 125 }) };
+const balance = { name: 'balance', description: 'Read a synthetic balance.', kind: 'read', operations: [{ name: 'read', scope: 'read' }], inputSchema: schema, handler: async () => ({ value: 125 }) };
 const alpha = { ...balance, name: 'alpha', description: 'Read a synthetic alpha value.', handler: async () => ({ value: 2 }) };
 const call = name => ({ name, args: { account: 'demo' } });
 
@@ -167,8 +167,8 @@ async function askScripted(s, scripts, { onEvent, text = 'What should I keep?' }
 }
 
 const INTERIM_SCRIPT = () => [[
-  { text: 'Let me start with your accounts. You have $987,654 somewhere.', toolCalls: [{ name: 'list_accounts', args: {} }] },
-  { text: 'Now your goals.', toolCalls: [{ name: 'list_goals', args: {} }, { name: 'list_goals', args: {} }] },
+  { text: 'Let me start with your accounts. You have $987,654 somewhere.', toolCalls: [{ name: 'accounts', args: { operation: 'list', } }] },
+  { text: 'Now your goals.', toolCalls: [{ name: 'goals', args: { operation: 'list', } }, { name: 'goals', args: { operation: 'list', } }] },
   { text: 'Keep a reserve.' },
 ]];
 
@@ -190,13 +190,13 @@ test('provenance.work lists the start step, each round note before its tool step
   assert.deepEqual(work.items, [
     step(PROGRESS_START),
     note('Let me start with your accounts. You have $987,654 somewhere.'),
-    step(PROGRESS_LABELS.list_accounts),
+    step(progressLabel('accounts')),
     note('Now your goals.'),
-    step(PROGRESS_LABELS.list_goals),
+    step(progressLabel('goals')),
     step(PROGRESS_GROUNDING),
   ]);
-  // Consecutive identical steps collapse: household_summary right after the start step is one step.
-  const plain = await askScripted(s, [[{ toolCalls: [{ name: 'household_summary', args: {} }] }, { text: 'Keep a reserve.' }]]);
+  // Consecutive identical steps collapse: household.summary right after the start step is one step.
+  const plain = await askScripted(s, [[{ toolCalls: [{ name: 'household', args: { operation: 'summary', } }] }, { text: 'Keep a reserve.' }]]);
   assert.deepEqual(plain.reply.provenance.work.items, [step(PROGRESS_START), step(PROGRESS_GROUNDING)]);
 });
 
@@ -219,7 +219,7 @@ test('a regeneration stores one revision step and no draft note, and streams the
   const seen = [];
   const first = 'You owe $987,654 this year and $876,543 next year.';
   const { reply, requests } = await askScripted(s, [
-    [{ text: 'Let me look.', toolCalls: [{ name: 'list_accounts', args: {} }] }, { text: first }],
+    [{ text: 'Let me look.', toolCalls: [{ name: 'accounts', args: { operation: 'list', } }] }, { text: first }],
     [{ text: 'Nothing to add.' }],
   ], { onEvent: e => seen.push(e) });
   assert.equal(reply.provenance.grounding.retried, true);
@@ -228,7 +228,7 @@ test('a regeneration stores one revision step and no draft note, and streams the
   assert.deepEqual(reply.provenance.work.items, [
     step(PROGRESS_START),
     note('Let me look.'),
-    step(PROGRESS_LABELS.list_accounts),
+    step(progressLabel('accounts')),
     step(PROGRESS_GROUNDING),
     step(REVISED_2),
     step(PROGRESS_GROUNDING),
@@ -251,7 +251,7 @@ test('a single unchecked amount streams no reset and stores no revision step', a
   const s = await demoStore(t);
   const seen = [];
   const { reply, requests } = await askScripted(s, [
-    [{ text: 'Let me look.', toolCalls: [{ name: 'list_accounts', args: {} }] }, { text: 'You owe $987,654 this year.' }],
+    [{ text: 'Let me look.', toolCalls: [{ name: 'accounts', args: { operation: 'list', } }] }, { text: 'You owe $987,654 this year.' }],
     [{ text: 'must not run' }],
   ], { onEvent: e => seen.push(e) });
   assert.equal(requests.length, 1);
@@ -260,7 +260,7 @@ test('a single unchecked amount streams no reset and stores no revision step', a
   assert.deepEqual(reply.provenance.work.items, [
     step(PROGRESS_START),
     note('Let me look.'),
-    step(PROGRESS_LABELS.list_accounts),
+    step(progressLabel('accounts')),
     step(PROGRESS_GROUNDING),
   ]);
 });
@@ -293,14 +293,14 @@ test('stored work is never capped: a 5000 character note and 60 tool steps stay 
   assert.equal(long.length, 5000);
   assert.equal(long, long.trim());
   // Alternating labels never repeat in a row, so none of the 60 steps collapse.
-  const many = Array.from({ length: 60 }, (_, i) => ({ name: i % 2 ? 'list_goals' : 'list_accounts', args: {} }));
+  const many = Array.from({ length: 60 }, (_, i) => ({ name: i % 2 ? 'goals' : 'accounts', args: {} }));
   const seen = [];
   const { reply } = await askScripted(s, [[{ text: long, toolCalls: many }, { text: 'Keep a reserve.' }]], { onEvent: e => seen.push(e) });
   const { items } = reply.provenance.work;
   assert.deepEqual(items, [
     step(PROGRESS_START),
     note(long),
-    ...many.map(c => step(PROGRESS_LABELS[c.name])),
+    ...many.map(c => step(progressLabel(c.name))),
     step(PROGRESS_GROUNDING),
   ]);
   assert.equal(items.find(x => x.k === 'note').text, long, 'the note is kept byte for byte');
@@ -338,17 +338,17 @@ test('fakeAnswerScript scripts three rounds for "show your work", reading goals 
 
   const ask = script('ask:bbbbbbbbbbbb', SHOW);
   assert.equal(ask.length, 3);
-  assert.deepEqual(ask[0], { text: NOTE_1, toolCalls: [{ name: 'household_summary', args: {} }] });
+  assert.deepEqual(ask[0], { text: NOTE_1, toolCalls: [{ name: 'household', args: { operation: 'summary', } }] });
   assert.equal(ask[1].text, NOTE_2);
-  assert.deepEqual(ask[1].toolCalls.map(c => c.name), ['list_goals']);
+  assert.deepEqual(ask[1].toolCalls.map(c => c.name), ['goals']);
   assert.ok(!ask[2].toolCalls || ask[2].toolCalls.length === 0);
   assert.equal(ask[2].text, 'From your household summary, 3 items need you right now.');
 
   const rec = script('ask:aaaaaaaaaaaa', SHOW);
   assert.equal(rec.length, 3);
-  assert.deepEqual(rec[0], { text: NOTE_1, toolCalls: [{ name: 'household_summary', args: {} }] });
+  assert.deepEqual(rec[0], { text: NOTE_1, toolCalls: [{ name: 'household', args: { operation: 'summary', } }] });
   assert.equal(rec[1].text, NOTE_2);
-  assert.deepEqual(rec[1].toolCalls, [{ name: 'get_recommendation', args: { id: 'deferral' } }]);
+  assert.deepEqual(rec[1].toolCalls, [{ name: 'recommendations', args: { operation: 'detail',  id: 'deferral' } }]);
   assert.equal(typeof rec[2].text, 'string');
   assert.ok(rec[2].text.length > 0);
 
@@ -360,7 +360,7 @@ test('fakeAnswerScript scripts three rounds for "show your work", reading goals 
     const other = script('ask:bbbbbbbbbbbb', text);
     assert.equal(other.length, 2, text);
     assert.equal(other[0].text, undefined, text);
-    assert.equal(other[0].toolCalls[0].name, 'household_summary');
+    assert.equal(other[0].toolCalls[0].name, 'household');
   }
 });
 
@@ -425,12 +425,12 @@ async function showYourWork(s, body, recStep) {
 }
 
 test('POST /api/threads streams interim events for "show your work" and stores the work with the message', T, () => withServer({ env: FAKE }, async s => {
-  await showYourWork(s, { text: SHOW }, PROGRESS_LABELS.list_goals);
+  await showYourWork(s, { text: SHOW }, progressLabel('goals'));
 }));
 
 test('a thread asked from a rec streams and stores the same work, reading the recommendation', T, () => withServer({ env: FAKE }, async s => {
-  const { stored } = await showYourWork(s, { recId: 'deferral', text: SHOW }, PROGRESS_LABELS.get_recommendation);
-  assert.ok(!stored.provenance.work.items.some(x => x.k === 'step' && x.label === PROGRESS_LABELS.list_goals));
+  const { stored } = await showYourWork(s, { recId: 'deferral', text: SHOW }, progressLabel('recommendations'));
+  assert.ok(!stored.provenance.work.items.some(x => x.k === 'step' && x.label === progressLabel('goals')));
 }));
 
 /* ---------- F. order inside one tool round: text, tool, text, tool ---------- */
@@ -480,18 +480,18 @@ function liveItems(seen) {
 test('stored work keeps notes and steps in content order inside one round, identical to the live items', async t => {
   const s = await demoStore(t);
   const seen = [];
-  const { reply } = await askScripted(s, [[interleaved('list_accounts', 'list_goals'), { text: 'Keep a reserve.' }]],
+  const { reply } = await askScripted(s, [[interleaved('accounts', 'goals'), { text: 'Keep a reserve.' }]],
     { onEvent: e => seen.push(e) });
   const expected = [
     step(PROGRESS_START),
     note('First note.'),
-    step(PROGRESS_LABELS.list_accounts),
+    step(progressLabel('accounts')),
     note('Second note.'),
-    step(PROGRESS_LABELS.list_goals),
+    step(progressLabel('goals')),
     step(PROGRESS_GROUNDING),
   ];
   const order = seen.filter(e => e.type === 'interim' || e.type === 'progress').map(e => (e.type === 'interim' ? e.text : e.label));
-  assert.deepEqual(order, [PROGRESS_START, 'First note.', PROGRESS_LABELS.list_accounts, 'Second note.', PROGRESS_LABELS.list_goals, PROGRESS_GROUNDING]);
+  assert.deepEqual(order, [PROGRESS_START, 'First note.', progressLabel('accounts'), 'Second note.', progressLabel('goals'), PROGRESS_GROUNDING]);
   assert.deepEqual(reply.provenance.work.items, expected);
   assert.deepEqual(liveItems(seen), reply.provenance.work.items);
   assert.deepEqual(reply.paragraphs, ['Keep a reserve.']);

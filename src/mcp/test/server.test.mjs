@@ -1,3 +1,4 @@
+import { instructions } from '../../tools/index.mjs';
 // AC1 (raw HTTP): POST /mcp on the real server child. Auth, Host and Origin guards, methods,
 // scope-filtered tools, the permission refusal, last-use tracking and log hygiene.
 
@@ -13,7 +14,7 @@ import {
 const T = { timeout: SERVER_TIMEOUT };
 const PUBLIC_HOST = 'fathom.example.test';
 const EXTRA_HOST = 'agent.example.test';
-const PACK_TOOLS = ['list_packs', 'get_pack_entry', 'search_pack_entries'];
+const PACK_TOOLS = ['knowledge', 'knowledge', 'knowledge'];
 
 let s;
 let readKey;
@@ -174,27 +175,28 @@ describe('protocol', () => {
     assert.ok(result.serverInfo && typeof result.serverInfo.name === 'string');
     assert.ok(result.capabilities && result.capabilities.tools);
     assert.equal(typeof result.protocolVersion, 'string');
+    assert.equal(result.instructions, instructions);
   });
 
   test('tools/list is filtered by scope with read-only annotations', async () => {
     const readTools = rpcResult(await mcpPost(s.baseUrl, { auth: bearer(readKey.key), method: 'tools/list' })).tools;
     const names = readTools.map(x => x.name);
-    assert.ok(!names.includes('set_recommendation_status'));
-    for (const n of ['household_summary', 'get_recommendation', ...PACK_TOOLS]) assert.ok(names.includes(n), `read key lists ${n}`);
+    assert.ok(!names.includes('act_on_recommendation'));
+    for (const n of ['household', 'recommendations', ...PACK_TOOLS]) assert.ok(names.includes(n), `read key lists ${n}`);
     for (const x of readTools) {
       assert.equal(typeof x.description, 'string');
       assert.equal(x.inputSchema.type, 'object');
       assert.deepEqual(x.annotations, { readOnlyHint: true, destructiveHint: false, openWorldHint: false });
     }
     const writeTools = rpcResult(await mcpPost(s.baseUrl, { auth: bearer(writeKey.key), method: 'tools/list' })).tools;
-    const w = writeTools.find(x => x.name === 'set_recommendation_status');
+    const w = writeTools.find(x => x.name === 'act_on_recommendation');
     assert.ok(w, 'write key lists the write tool');
     assert.deepEqual(w.annotations, { readOnlyHint: false, destructiveHint: false, openWorldHint: false });
-    assert.equal(writeTools.length, readTools.length + 3);
+    assert.equal(writeTools.length, readTools.length + 2);
   });
 
   test('a read tool call returns its result as JSON text', async () => {
-    const result = rpcResult(await callToolRpc(s.baseUrl, readKey.key, 'household_summary'));
+    const result = rpcResult(await callToolRpc(s.baseUrl, readKey.key, 'household', { operation: 'summary' }));
     assert.ok(!result.isError);
     assert.equal(result.content[0].type, 'text');
     const body = JSON.parse(result.content[0].text);
@@ -204,10 +206,10 @@ describe('protocol', () => {
   });
 
   test('the write tool with a read key is a permission error and writes nothing', async () => {
-    const recs = JSON.parse(rpcResult(await callToolRpc(s.baseUrl, readKey.key, 'list_recommendations')).content[0].text);
+    const recs = JSON.parse(rpcResult(await callToolRpc(s.baseUrl, readKey.key, 'recommendations', { operation: 'list' })).content[0].text);
     const target = recs.find(r => r.status !== 'dismissed') || recs[0];
     const before = await withStore(s.dbFile, db => db.prepare("SELECT count(*) AS n FROM rec_events WHERE actor = 'tool'").get().n);
-    const result = rpcResult(await callToolRpc(s.baseUrl, readKey.key, 'set_recommendation_status', { id: target.id, status: 'dismissed' }));
+    const result = rpcResult(await callToolRpc(s.baseUrl, readKey.key, 'act_on_recommendation', { operation: 'status',  id: target.id, status: 'dismissed' }));
     assert.equal(result.isError, true);
     assert.equal(result.content[0].text, PERMISSION_TEXT);
     const after = await withStore(s.dbFile, db => ({
@@ -219,9 +221,9 @@ describe('protocol', () => {
   });
 
   test('liveness: the write tool with a write key succeeds', async () => {
-    const recs = JSON.parse(rpcResult(await callToolRpc(s.baseUrl, writeKey.key, 'list_recommendations')).content[0].text);
+    const recs = JSON.parse(rpcResult(await callToolRpc(s.baseUrl, writeKey.key, 'recommendations', { operation: 'list' })).content[0].text);
     const target = recs.find(r => r.status !== 'doing') || recs[0];
-    const result = rpcResult(await callToolRpc(s.baseUrl, writeKey.key, 'set_recommendation_status', { id: target.id, status: 'doing' }));
+    const result = rpcResult(await callToolRpc(s.baseUrl, writeKey.key, 'act_on_recommendation', { operation: 'status',  id: target.id, status: 'doing' }));
     assert.ok(!result.isError, result.content && result.content[0] && result.content[0].text);
     assert.equal(JSON.parse(result.content[0].text).status, 'doing');
     seenResults.push(result.content[0].text);
@@ -231,10 +233,10 @@ describe('protocol', () => {
     const unknown = rpcResult(await callToolRpc(s.baseUrl, readKey.key, 'no_such_tool'));
     assert.equal(unknown.isError, true);
     assert.equal(unknown.content[0].text, 'no tool no_such_tool');
-    const bad = rpcResult(await callToolRpc(s.baseUrl, readKey.key, 'get_recommendation', {}));
+    const bad = rpcResult(await callToolRpc(s.baseUrl, readKey.key, 'recommendations', { operation: 'detail', }));
     assert.equal(bad.isError, true);
     assert.match(bad.content[0].text, /id/);
-    const missing = rpcResult(await callToolRpc(s.baseUrl, readKey.key, 'get_recommendation', { id: 'no-such-rec' }));
+    const missing = rpcResult(await callToolRpc(s.baseUrl, readKey.key, 'recommendations', { operation: 'detail',  id: 'no-such-rec' }));
     assert.equal(missing.isError, true);
   });
 
@@ -257,7 +259,7 @@ describe('protocol', () => {
 
 describe('log hygiene', () => {
   test('server output holds no key and no tool result', async () => {
-    const pack = rpcResult(await callToolRpc(s.baseUrl, readKey.key, 'list_packs'));
+    const pack = rpcResult(await callToolRpc(s.baseUrl, readKey.key, 'knowledge', { operation: 'packs' }));
     seenResults.push(pack.content[0].text);
     await new Promise(r => setTimeout(r, 200));
     const out = s.output();
@@ -280,10 +282,21 @@ describe('FATHOM_CLOCK', () => {
     const c = await spawnServer({ env: { FATHOM_ENGINE: 'fake', FATHOM_CLOCK: '2027-01-05' } });
     try {
       const k = await createKey(c.baseUrl, 'Clock agent');
-      const summary = JSON.parse(rpcResult(await callToolRpc(c.baseUrl, k.key, 'household_summary')).content[0].text);
+      const summary = JSON.parse(rpcResult(await callToolRpc(c.baseUrl, k.key, 'household', { operation: 'summary' })).content[0].text);
       assert.equal(summary.clock, '2027-01-05');
     } finally {
       await c.stop();
     }
   });
+});
+
+test('operation scopes narrow listed enums and reject step before invalid arguments', async () => {
+  const readTools = rpcResult(await mcpPost(s.baseUrl, { auth: bearer(readKey.key), method: 'tools/list' })).tools;
+  assert.ok(!readTools.some(t => t.annotations.readOnlyHint === false));
+  const mixed = rpcResult(await mcpPost(s.baseUrl, { auth: bearer(writeKey.key), method: 'tools/list' })).tools;
+  const rec = mixed.find(t => t.name === 'act_on_recommendation');
+  assert.deepEqual(rec.inputSchema.properties.operation.enum, ['owner', 'status']);
+  const denied = rpcResult(await callToolRpc(s.baseUrl, writeKey.key, 'act_on_recommendation', { operation: 'step', index: 'invalid', extra: true }));
+  assert.equal(denied.isError, true);
+  assert.ok(denied.content[0].text.startsWith('Permission denied: act_on_recommendation.step needs the write:steps scope'));
 });

@@ -18,9 +18,9 @@ import { join } from 'node:path';
 import { createRealStore, CLOCK } from './helpers/real-store.mjs';
 import { createEngine } from '../src/engine/index.mjs';
 import { createLivePacks } from '../src/packs/live.mjs';
-import { callTool, tools as REGISTRY } from '../src/tools/index.mjs';
+import { callTool, tools as REGISTRY, instructions } from '../src/tools/index.mjs';
 import {
-  createLiveAnswerer, groundAnswer, buildChatPrompt, PRODUCT_RULES, ANSWER_STYLE, SPENDING_GUIDE,
+  createLiveAnswerer, groundAnswer, buildChatPrompt, PRODUCT_RULES, ANSWER_STYLE,
 } from '../src/api/answerer.mjs';
 
 const THREAD = 'ask:0a1b2c3d4e5f';
@@ -33,7 +33,7 @@ const GROCER_TEXT = '$64.12';
 const INVENTED = '$987,654';
 const INVENTED_2 = '$876,543';
 const UNCHECKED_OPEN = '<span class="fx-checking fx-unchecked" title="Not checked against your data">';
-const QUERY = { name: 'query_transactions', args: { accountId: CARD } };
+const QUERY = { name: 'transactions', args: { operation: 'search',  accountId: CARD } };
 const revised = n => `Revised to remove ${n} unchecked figure${n === 1 ? '' : 's'}`;
 
 const reEsc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -55,8 +55,8 @@ async function cardStore(t) {
   for (const r of [ROOF, GROCER]) tx.run(CARD, r.date, r.amount, r.description, r.category);
   const packs = createLivePacks(db, { dataDir });
   packs.refresh();
-  // The account label every surface shows, read the way list_accounts reads it.
-  const label = (await callTool('list_accounts', {}, { db, now: CLOCK })).find(a => a.id === CARD).name;
+  // The account label every surface shows, read the way accounts.list reads it.
+  const label = (await callTool('accounts', { operation: 'list', }, { db, now: CLOCK })).find(a => a.id === CARD).name;
   return { db, dataDir, packs, label };
 }
 
@@ -102,7 +102,7 @@ function expectRowSource(source, s, what) {
 // Review r1 F2: only a transaction row's amount is read unsigned. A business loss never grounds
 // the same amount stated as a profit, and no other tool's negative value is mirrored.
 test('a negative value outside transaction amounts does not ground its unsigned form', () => {
-  const toolResults = [{ name: 'pnl_by_month', args: {}, result: {
+  const toolResults = [{ name: 'business', args: { operation: 'pnl', }, result: {
     rows: [{ period: '2026-09', category: 'Net', amount: -2400 }], totals: { '2026-09': -2400 },
   } }];
   const r = groundAnswer('Your profit was $2,400 in September.', { scenario: { fig: {} }, toolResults, data: [] });
@@ -112,7 +112,7 @@ test('a negative value outside transaction amounts does not ground its unsigned 
 
 // Review r1 F3: a date under any data key (asOf here), not only "date", is sourced to its row.
 test('a prose date matching an asOf date in a same-turn tool result is sourced to that tool', () => {
-  const toolResults = [{ name: 'list_accounts', args: {}, result: [
+  const toolResults = [{ name: 'accounts', args: { operation: 'list', }, result: [
     { id: 'acct-synthetic-checking', name: 'Synthetic checking', kind: 'checking', balance: 1500, asOf: '2026-10-07' },
   ] }];
   const r = groundAnswer('Your checking balance is as of October 7.', { scenario: { fig: {} }, toolResults, data: [] });
@@ -123,7 +123,7 @@ test('a prose date matching an asOf date in a same-turn tool result is sourced t
 
 
 test('groundAnswer grounds an unsigned prose amount on an outflow transaction row', () => {
-  const toolResults = [{ name: 'query_transactions', args: {}, result: {
+  const toolResults = [{ name: 'transactions', args: { operation: 'search', }, result: {
     rows: [{ id: 7, accountId: CARD, date: '2026-10-03', amount: -2400, description: 'Synthetic Roofing Co', category: 'Home improvement' }],
     truncated: false, total: 1,
   } }];
@@ -143,7 +143,7 @@ test('a transaction amount in the answer is sourced to its row: account label, d
   const literal = reply.provenance.literals.find(l => l.text === ROOF_TEXT);
   assert.ok(literal, JSON.stringify(reply.provenance.literals));
   expectRowSource(literal.source, s, 'literal');
-  assert.notEqual(literal.source, 'query_transactions', 'never the raw tool name');
+  assert.notEqual(literal.source, 'transactions', 'never the raw tool name');
   const title = sourceTitle(joined(reply), ROOF_TEXT);
   assert.ok(title, joined(reply));
   expectRowSource(title, s, 'span title');
@@ -190,7 +190,7 @@ test('unmatched dates never trigger a regeneration; a date in the household data
   const { reply, calls } = await ask(s, [[{ toolCalls: [QUERY] }, { text: `On October 9 and October 11 you paid ${ROOF_TEXT}.` }]]);
   assert.equal(calls.length, 1, 'two unchecked dates alone do not regenerate');
   assert.deepEqual(reply.provenance.grounding.unverified, ['October 9', 'October 11']);
-  const summary = await callTool('household_summary', {}, { db: s.db, now: CLOCK });
+  const summary = await callTool('household', { operation: 'summary', }, { db: s.db, now: CLOCK });
   const [y, m, d] = String(summary.clock).split('-').map(Number);
   const month = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][m - 1];
   const today = `${month} ${d}, ${y}`;
@@ -278,10 +278,10 @@ test('one invented amount among two sourced ones, or two among four, does not re
 test('the static system prompt carries PRODUCT_RULES, then the answer style and the spending guide', () => {
   const { system } = buildChatPrompt({ packContextText: '{}', summary: { needsYouCount: 3 }, question: 'Synthetic question?' });
   assert.equal(typeof ANSWER_STYLE, 'string');
-  assert.equal(typeof SPENDING_GUIDE, 'string');
+  assert.equal(typeof 'string');
   assert.ok(system.includes(PRODUCT_RULES), 'the product rules stay');
   assert.ok(system.includes(ANSWER_STYLE), 'the answer style is in the system prompt');
-  assert.ok(system.includes(SPENDING_GUIDE), 'the spending guide is in the system prompt');
+  assert.ok(system.includes(instructions), 'registry instructions are in the system prompt');
   assert.ok(system.indexOf(ANSWER_STYLE) > system.indexOf(PRODUCT_RULES), 'the style section follows the product rules');
   assert.ok(!PRODUCT_RULES.includes(ANSWER_STYLE), 'a separate section, not folded into PRODUCT_RULES');
 
@@ -294,26 +294,20 @@ test('the static system prompt carries PRODUCT_RULES, then the answer style and 
   assert.match(ANSWER_STYLE, /offer/i);
   assert.match(ANSWER_STYLE, /next (?:useful )?step/i);
 
-  assert.match(SPENDING_GUIDE, /card/i);
-  assert.match(SPENDING_GUIDE, /categor/i);
-  assert.match(SPENDING_GUIDE, /pnl_by_month/);
+  assert.match(/card/i);
+  assert.match(/categor/i);
+  assert.match(/business.pnl/);
 });
 
 /* ---------- (f) tool descriptions ---------- */
 
 // The registry as of this change: descriptions changed, no tool added or removed.
-const TOOL_NAMES = ['household_summary', 'get_facts', 'list_accounts', 'query_transactions', 'list_positions', 'pnl_by_month',
-  'list_recommendations', 'get_recommendation', 'list_deadlines', 'list_goals', 'get_pace', 'get_figures', 'packs_status',
-  'set_recommendation_status', 'set_recommendation_owner', 'advisor_status',
-  // The Ask action tools merged from main (feat/ask-actions); this branch adds none.
-  'get_fact_answer_shapes', 'remember_preference', 'record_household_fact', 'set_recommendation_step', 'create_goal', 'edit_goal',
-  'undo_preference_action', 'undo_fact_action', 'undo_step_action', 'undo_goal_action', 'undo_recommendation_action',
-  'list_packs', 'get_pack_entry', 'search_pack_entries'];
+const TOOL_NAMES = ['accounts', 'act_on_recommendation', 'answer', 'business', 'goals', 'household', 'knowledge', 'recommendations', 'transactions', 'undo', 'update_goal', 'update_preferences'];
 
-test('query_transactions names credit cards and categories, pnl_by_month names business, and no tool is added', () => {
+test('transactions.search names credit cards and categories, business.pnl names business, and no tool is added', () => {
   const byName = new Map(REGISTRY.map(x => [x.name, x]));
-  assert.match(byName.get('query_transactions').description, /credit cards?/i);
-  assert.match(byName.get('query_transactions').description, /categor/i);
-  assert.match(byName.get('pnl_by_month').description, /business/i);
+  assert.match(byName.get('transactions').description, /credit cards?/i);
+  assert.match(byName.get('transactions').description, /categor/i);
+  assert.match(byName.get('business').description, /business/i);
   assert.deepEqual(REGISTRY.map(x => x.name), TOOL_NAMES.toSorted());
 });

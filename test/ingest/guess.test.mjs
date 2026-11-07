@@ -121,7 +121,7 @@ describe("engine purpose 'confirm'", () => {
   test('a confirm call offers no tools and runs no tool loop', async () => {
     let ran = 0;
     const probe = {
-      name: 'probe', scope: 'read', description: 'Synthetic probe tool',
+      name: 'probe', kind: 'read', operations: [{ name: 'read', scope: 'read' }], description: 'Synthetic probe tool',
       inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       handler: () => { ran += 1; return { ok: true }; },
     };

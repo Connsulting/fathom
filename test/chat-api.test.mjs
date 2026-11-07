@@ -43,7 +43,7 @@ test('an Ask chip stores a grounded answer with provenance in the message row an
   assert.ok(m.refs.includes('reserve'));
   assert.equal(m.provenance.engine, 'fake');
   assert.equal(m.provenance.grounding.ok, true);
-  assert.ok(toolNames(m).includes('household_summary'));
+  assert.ok(toolNames(m).includes('household'));
   assert.ok(m.provenance.figures.includes('yearend_cash'));
   const conv = r.scenario.live.conversations[r.thread.key];
   assert.equal(conv.length, 2);
@@ -52,7 +52,7 @@ test('an Ask chip stores a grounded answer with provenance in the message row an
   assert.deepEqual(conv[1], m);
   const stored = await readDb(s.dbFile, db => db.prepare("SELECT provenance FROM messages WHERE conversation_key = ? AND role = 'fathom'").get(r.thread.key));
   assert.deepEqual(JSON.parse(stored.provenance), m.provenance);
-  assert.ok(!stored.provenance.includes('<household_summary>'), 'no prompt text is stored');
+  assert.ok(!stored.provenance.includes('<household.summary>'), 'no prompt text is stored');
 }));
 
 test('unmatched free text gets a grounded answer from the household summary with a bound literal', T, () => withServer({ env: FAKE }, async s => {
@@ -60,7 +60,7 @@ test('unmatched free text gets a grounded answer from the household summary with
   const m = r.message;
   assert.equal(m.notice, false);
   assert.equal(m.provenance.grounding.ok, true);
-  assert.ok(toolNames(m).includes('household_summary'));
+  assert.ok(toolNames(m).includes('household'));
   assert.ok(m.text.includes('class="fx-src"'), m.text);
   assert.ok(Array.isArray(m.provenance.literals) && m.provenance.literals.length > 0);
   assert.deepEqual(m.refs, []);
@@ -101,7 +101,7 @@ test('a rec thread question answers with the rec as its ref and provenance', T, 
   assert.equal(r.thread.recId, 'deferral');
   assert.equal(r.message.notice, false);
   assert.ok(r.message.refs.includes('deferral'));
-  assert.ok(toolNames(r.message).includes('get_recommendation'));
+  assert.ok(toolNames(r.message).includes('recommendations'));
   const conv = r.scenario.live.conversations[r.thread.key];
   assert.equal(conv.length, 2, 'question, answer');
   assert.equal(conv[0].role, 'me');

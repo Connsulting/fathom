@@ -213,12 +213,12 @@ describe('GET /api/mcp', () => {
     assert.equal(r.json.publicUrlSet, false);
     assert.ok(Array.isArray(r.json.tools) && r.json.tools.length > 0);
     for (const x of r.json.tools) {
-      assert.deepEqual(Object.keys(x).sort(), ['description', 'name', 'scope']);
-      assert.ok(['read', 'write:recs', 'write:facts', 'write:steps', 'write:goals', 'write:preferences'].includes(x.scope));
+      assert.deepEqual(Object.keys(x).sort(), ['description', 'kind', 'name']);
+      assert.ok(['read', 'write'].includes(x.kind));
     }
-    const byName = Object.fromEntries(r.json.tools.map(x => [x.name, x.scope]));
-    assert.equal(byName.set_recommendation_status, 'write:recs');
-    for (const n of ['household_summary', 'list_packs', 'get_pack_entry', 'search_pack_entries']) assert.equal(byName[n], 'read', n);
+    const byName = Object.fromEntries(r.json.tools.map(x => [x.name, x.kind]));
+    assert.equal(byName.act_on_recommendation, 'write');
+    for (const n of ['household', 'knowledge', 'knowledge', 'knowledge']) assert.equal(byName[n], 'read', n);
     assert.deepEqual(r.json.scopes.map(x => x.id), ['read', 'write:recs', 'write:preferences', 'write:facts', 'write:steps', 'write:goals']);
     for (const sc of r.json.scopes) {
       assert.ok(typeof sc.label === 'string' && sc.label.length > 0);

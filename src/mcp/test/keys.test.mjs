@@ -58,12 +58,12 @@ describe('constants and scopes', () => {
   test('toolsForScopes filters the registry by scope', () => {
     const readOnly = toolsForScopes(['read']).map(x => x.name);
     assert.ok(readOnly.length > 0);
-    assert.ok(!readOnly.includes('set_recommendation_status'));
-    assert.deepEqual(readOnly, tools.filter(x => x.scope === 'read').map(x => x.name));
+    assert.ok(!readOnly.includes('act_on_recommendation'));
+    assert.deepEqual(readOnly, tools.filter(x => x.kind === 'read').map(x => x.name));
     const both = toolsForScopes(['read', 'write:recs']).map(x => x.name);
-    assert.deepEqual(both, tools.filter(x => ['read', 'write:recs'].includes(x.scope)).map(x => x.name));
+    assert.deepEqual(both, tools.filter(x => x.operations.some(o => (o.scopes || [o.scope]).some(s => ['read', 'write:recs'].includes(s)))).map(x => x.name));
     assert.deepEqual(toolsForScopes([]), []);
-    const registry = [{ name: 'a', scope: 'read' }, { name: 'b', scope: 'write:recs' }, { name: 'c', scope: 'read' }];
+    const registry = [{ name: 'a', operations: [{ name: 'list', scope: 'read' }], inputSchema: { properties: { operation: {} } } }, { name: 'b', operations: [{ name: 'status', scope: 'write:recs' }], inputSchema: { properties: { operation: {} } } }, { name: 'c', operations: [{ name: 'list', scope: 'read' }], inputSchema: { properties: { operation: {} } } }];
     assert.deepEqual(toolsForScopes(['read'], registry).map(x => x.name), ['a', 'c']);
     assert.deepEqual(toolsForScopes(['write:recs'], registry).map(x => x.name), ['b']);
   });

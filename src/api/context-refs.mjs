@@ -57,8 +57,8 @@ export function parseRefs(raw) {
 
 const arr = v => (Array.isArray(v) ? v : []);
 const visibleRec = (scenario, id) => arr(scenario.recs).find(r => r && r.id === id && r.status !== 'hidden') || null;
-const txnHint = id => `query_transactions with ids [${id}]`;
-const recHint = id => `get_recommendation with id ${id}`;
+const txnHint = id => `transactions.search with ids [${id}]`;
+const recHint = id => `recommendations.detail with id ${id}`;
 
 function transactionRef(db, id) {
   const row = /^\d+$/.test(id) ? db.prepare('SELECT id FROM transactions WHERE id = ?').get(Number(id)) : null;
@@ -90,7 +90,7 @@ function resolveOne(db, scenario, { kind, id }) {
   switch (kind) {
     case 'account':
       return db.prepare('SELECT 1 FROM accounts WHERE id = ?').get(id)
-        ? { kind, id, use: `query_transactions with accountId ${id}, list_accounts, list_positions with accountId ${id}` } : null;
+        ? { kind, id, use: `transactions.search with accountId ${id}, accounts.list, accounts.holdings with id ${id}` } : null;
     case 'transaction':
       return transactionRef(db, id);
     case 'rec':
@@ -102,11 +102,11 @@ function resolveOne(db, scenario, { kind, id }) {
       return { kind, id, use: `${recHint(rec.id)}; the step is tasks[${Number(m[2])}]` };
     }
     case 'goal':
-      return arr(scenario.goals).some(g => g && g.id === id && !g.archived) ? { kind, id, use: 'list_goals, get_pace' } : null;
+      return arr(scenario.goals).some(g => g && g.id === id && !g.archived) ? { kind, id, use: 'goals.list, goals.pace' } : null;
     case 'figure': {
       if (id.startsWith('txn.')) return transactionRef(db, id.slice(4));
       if (!scenario.fig || !Object.hasOwn(scenario.fig, id)) return null;
-      return { kind, id, use: `write it as the token {f:${id}}; get_figures with keys [${id}] for its source` };
+      return { kind, id, use: `write it as the token {f:${id}}; household.figures with keys [${id}] for its source` };
     }
     case 'pnl': {
       // A P&L entity key as /api/pnl lists it (entity:<name> or account:<id>), optionally
@@ -121,11 +121,11 @@ function resolveOne(db, scenario, { kind, id }) {
       // A category row must be one of this entity's real P&L categories before its name reaches
       // the prompt: an invented or misspelled category drops the reference.
       if (category && !pnlCategories(db, key, clock).has(category)) return null;
-      return { kind, id, use: `pnl_by_month with entity ${plain(ent.label)}${category ? `, the ${category} lines` : ''}` };
+      return { kind, id, use: `business.pnl with entity ${plain(ent.label)}${category ? `, the ${category} lines` : ''}` };
     }
     case 'spending':
       return db.prepare('SELECT 1 FROM transactions WHERE category = ? LIMIT 1').get(id)
-        ? { kind, id, use: `query_transactions with category ${id}, pnl_by_month` } : null;
+        ? { kind, id, use: `transactions.search with category ${id}, business.pnl` } : null;
     case 'confirm': {
       const rows = id.startsWith('group:')
         ? db.prepare("SELECT question FROM confirm_items WHERE status = 'pending' AND kind = ? ORDER BY id").all(id.slice(6))
@@ -135,12 +135,12 @@ function resolveOne(db, scenario, { kind, id }) {
       return { kind, id, use: `Confirm card question, no tool reads it: ${questions.join(' / ') || 'none'}` };
     }
     case 'money':
-      return MONEY_VIEWS.has(id) ? { kind, id, use: 'list_accounts, get_figures' } : null;
+      return MONEY_VIEWS.has(id) ? { kind, id, use: 'accounts.list, household.figures' } : null;
     case 'pack':
       return arr(scenario.packs).some(p => p && p.id === id)
-        ? { kind, id, use: `list_packs, then search_pack_entries or get_pack_entry with packId ${id}` } : null;
+        ? { kind, id, use: `knowledge.packs, then knowledge.search or knowledge.entry with packId ${id}` } : null;
     case 'page':
-      return PAGES.has(id) ? { kind, id, use: 'the screen the owner has open; household_summary for an overview' } : null;
+      return PAGES.has(id) ? { kind, id, use: 'the screen the owner has open; household.summary for an overview' } : null;
     default:
       return null;
   }
