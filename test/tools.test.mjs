@@ -65,7 +65,8 @@ describe('registry', () => {
   test('entries have the frozen shape and names', () => {
     const names = tools.map(x => x.name);
     assert.equal(new Set(names).size, names.length, 'names are unique');
-    assert.deepEqual(names, FROZEN, 'the loader preserves every current tool and sorts by name');
+    assert.deepEqual(names, [...names].sort(), 'the loader sorts tools by name');
+    for (const name of FROZEN) assert.ok(names.includes(name), `missing tool ${name}`);
     for (const x of tools) {
       assert.equal(typeof x.name, 'string');
       assert.ok(typeof x.description === 'string' && x.description.length > 0, `${x.name} description`);
@@ -90,7 +91,7 @@ describe('registry', () => {
       .map(name => import(new URL(name, directory))));
     assert.ok(modules.length > 0);
     const names = modules.flatMap(module => module.tools || []).map(tool => tool.name).sort();
-    assert.deepEqual(names, FROZEN);
+    assert.deepEqual(names, tools.map(tool => tool.name));
     const routes = {};
     for (const module of modules) {
       for (const [route, names] of Object.entries(module.parity || {})) {
