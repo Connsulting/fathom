@@ -565,6 +565,19 @@ export function render() {
   } else {
     body = `${chooser()}${P.view === PL_HOUSEHOLD ? householdView() : businessView()}`;
   }
+  // What is on screen, for the Ask page chip: the entity, the selected month and, for household
+  // spending, the toggles that differ from their defaults (housing on, tax off).
+  if (H.pageContext && P.view) {
+    const hh = P.view === PL_HOUSEHOLD;
+    const e = hh ? null : H.arr(P.entities).find((x) => x && x.key === P.view);
+    const d = hh ? P.home.get(P.homeShown || homeKey())?.data?.spending : bizEntry(P.view)?.data?.pnl;
+    H.pageContext({
+      pnl: e ? { id: String(e.key), label: String(e.label ?? '') } : null,
+      month: d && Array.isArray(d.months) && d.months.length ? selMonth(d) : undefined,
+      filters: hh ? [...(P.housing ? [] : [{ key: 'housing', value: 'off' }]), ...(P.tax ? [{ key: 'tax', value: 'on' }] : [])]
+        : P.t !== 'all' ? [{ key: 'type', value: P.t }] : []
+    });
+  }
   afterDraw();
   return shell(`<section class="pl">${pageHead('Money', 'P&amp;L', 'Profit and loss for each business, and what the household spends. Every amount opens to where it came from.')}${body}</section>`);
 }

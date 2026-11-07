@@ -1,7 +1,7 @@
 import { getSetting } from '../../store/db.mjs';
 import { loadContent, tokenScope, resolveClock, todayUtc, loadGoals, loadCurve, loadFigures, loadLinkedRec } from '../../scenario/build.mjs';
 import { horizonLabel, personLabel } from '../../shared/goals.mjs';
-import { accountNaming, relabelStoredFigure } from '../../accounts/naming.mjs';
+import { accountNaming, relabelStoredFigure, withLabelHints } from '../../accounts/naming.mjs';
 import { resolveTokens } from '../../shared/tokens.mjs';
 import { ToolError } from '../errors.mjs';
 import { fromStored, fromPace } from '../../calc/figure.mjs';
@@ -65,7 +65,7 @@ export function recOutById(db, clock, id) {
 export function goalsForModel(db) {
   const scope = tokenScope(db);
   const fig = loadFigures(db);
-  const accounts = db.prepare('SELECT * FROM accounts').all();
+  const accounts = withLabelHints(db, db.prepare('SELECT * FROM accounts').all());
   return loadGoals(db, { fig, accounts }).filter(g => !g.archived).map(g => {
     const owner = g.origin === 'owner';
     const source = owner ? 'you' : 'plan';

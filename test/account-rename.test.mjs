@@ -14,7 +14,7 @@ test('a display name survives a re-import and a SimpleFIN refresh, and clearing 
     assert.equal(first.status, 'imported');
     const acct = s.db.prepare('SELECT * FROM accounts').get();
     const renamed = accountRename({ db: s.db, config: s.config, params: { id: acct.id }, body: { displayName: 'Household cash' } });
-    assert.equal(renamed.account.name, 'Household cash ending 2738');
+    assert.equal(renamed.account.name, 'Household cash (2738)');
     assert.equal(renamed.account.displayName, 'Household cash');
 
     const again = await P.ingestFile(s.db, aggregatorFile('second.csv', [{ ...row, date: '2032-02-02', description: 'Later' }]), s.opts(null));
@@ -43,7 +43,7 @@ test('a display name survives a re-import and a SimpleFIN refresh, and clearing 
 
     const cleared = accountRename({ db: s.db, config: s.config, params: { id: acct.id }, body: { displayName: '  ' } });
     assert.equal(cleared.account.displayName, null);
-    assert.equal(cleared.account.name, 'Chase savings ending 2738');
+    assert.equal(cleared.account.name, 'Chase savings (2738)');
     assert.equal(cleared.account.name.includes('2738 2738'), false);
     assert.equal(s.db.prepare('SELECT display_name FROM accounts WHERE id = ?').get(acct.id).display_name, null);
   } finally {
@@ -68,7 +68,7 @@ test('a rename updates the trend, the source and the question, and accounts.list
     s.db.prepare('INSERT INTO account_holders (account_id, holder, created_at) VALUES (?, ?, ?)').run(acct.id, 'Avery Example', NOW);
     const listed = await callTool('accounts', { operation: 'list', }, { db: s.db, now: NOW });
     const got = listed.find((a) => a.id === acct.id);
-    assert.equal(got.name, 'Harbor brokerage ending 3046');
+    assert.equal(got.name, 'Harbor brokerage (3046)');
     assert.equal(got.name.includes('Avery'), false);
 
     const key = seriesKey(acct.id);
@@ -78,13 +78,13 @@ test('a rename updates the trend, the source and the question, and accounts.list
 
     accountRename({ db: s.db, config: s.config, params: { id: acct.id }, body: { displayName: 'Household reserve' } });
     const scenario = buildScenario(s.db, {});
-    assert.equal(scenario.series[key].label, 'Household reserve ending 3046');
-    assert.equal(scenario.src[`acct:${acct.id}`].label, 'Household reserve ending 3046');
+    assert.equal(scenario.series[key].label, 'Household reserve (3046)');
+    assert.equal(scenario.src[`acct:${acct.id}`].label, 'Household reserve (3046)');
     s.db.prepare(`INSERT INTO figures (key, v, src, kind, label, updated_at) VALUES (?, 10, ?, 'a', ?, ?)`).run(
       `bal.${acct.id}`, `acct:${acct.id}`, 'Balance, Individual 3046', NOW);
-    const figures = await callTool('household', { operation: 'figures',  keys: [`bal.${acct.id}`] }, { db: s.db, now: NOW });
-    assert.equal(figures[0].label, 'Balance, Household reserve ending 3046');
-    assert.equal(figures[0].source.label, 'Household reserve ending 3046');
+    const figures = await callTool('household', { operation: 'figures', keys: [`bal.${acct.id}`] }, { db: s.db, now: NOW });
+    assert.equal(figures[0].label, 'Balance, Household reserve (3046)');
+    assert.equal(figures[0].source.label, 'Household reserve (3046)');
     const question = scenario.live.ingest.items.find((i) => i.subject === acct.id);
     assert.ok(question, 'the import asked about the account');
     assert.equal(question.question.includes('Household reserve'), true);

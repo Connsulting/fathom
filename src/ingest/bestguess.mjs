@@ -95,7 +95,7 @@ export function deterministicGuess(db, item, detail) {
 // ---------------------------------------------------------------- engine evidence
 
 const accountOf = (detail) => (detail?.type === 'account' ? detail.account : null);
-const ending = (inst, mask) => (inst && mask ? `${inst}, account ending ${mask}` : inst || (mask ? `Account ending ${mask}` : ''));
+const ending = (inst, mask) => (inst && mask ? `${inst}, last 4 ${mask}` : inst || (mask ? `Last 4 ${mask}` : ''));
 const entryText = (detail, e) => detail.fields.filter((f) => e[f] != null && e[f] !== '')
   .map((f) => (f === 'amount' || f === 'balance' ? money(e[f]) : f === 'description' ? quote(e[f]) : String(e[f]))).join(' ');
 const plain = (value) => (value !== null && typeof value === 'object' ? JSON.stringify(value) : String(value));
