@@ -17,6 +17,7 @@ import { applyNaming } from '../accounts/naming.mjs';
 import { deriveHeard } from '../onboarding/heard.mjs';
 import { withAdvisor, advisorSection } from '../advisor/index.mjs';
 import { buildPace, indexPaceFigures } from '../pace/build.mjs';
+import { buildSuggestions } from '../suggest/build.mjs';
 
 const DAY = 86400000;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -581,6 +582,9 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
   }
   Object.assign(fig, indexPaceFigures(pace));
   src['calc:pace'] = { label: 'Goal pace calculator', asOf: clk };
+  const suggested = buildSuggestions(db, { clock: clk, goals });
+  Object.assign(fig, suggested.figures);
+  src['calc:targets'] = { label: 'Suggested target calculator', asOf: clk };
   const curve = loadCurve(db, content);
   const positions = getSetting(db, 'curve.positions', null) || {};
   linkRecs(recs, goals, accountRows);
@@ -612,6 +616,7 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
     recs,
     goals,
     pace,
+    suggestions: suggested.suggestions,
     curve,
     wargame,
     decisions,

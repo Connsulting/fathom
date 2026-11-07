@@ -17,7 +17,7 @@ import * as switcher from './screens/switcher.js';
 import * as simplefin from './screens/simplefin.js';
 import { createKeys } from './keys.js';
 import { createSwipe } from './screens/swipe.js';
-import { homeModel, healthChip, healthLine, paceReason, boardCharts, reasonText, servedGoalIds, shortDate } from './screens/home-model.js';
+import { homeModel, homeHeadline, healthChip, healthLine, paceReason, boardCharts, reasonText, servedGoalIds, shortDate, longDate, windowSpan } from './screens/home-model.js';
 import { STARTERS, existingStarterIds, otherGoals, goalsToCreate, inviteLine } from './screens/onboard-model.js';
 import { KNOWN_FIGURES } from '/shared/goals.mjs';
 import { OWNERS, OWNER_LABEL } from '/shared/rec-links.mjs';
@@ -525,25 +525,17 @@ function goalCardHome(c, subject) {
     const asOf = c.bar.muted && p.dataThrough ? `<em>as of ${esc(shortDate(p.dataThrough))}</em>` : '';
     bar = `<div class="h-pbar ${c.chip.tone}${c.bar.muted ? ' muted' : ''}" aria-hidden="true"><i class="fill" style="width:${pct(c.bar.fill)}%"></i><i class="tick" style="left:${pct(c.bar.tick)}%"></i></div>`
       + `<div class="h-pbar-l"><span>${figHtml(fk('actual'), { k: true })} of ${figHtml(fk('target'), { k: true })}</span><span>plan today ${figHtml(fk('expected'), { k: true })}${asOf}</span></div>`;
+  } else if (c.suggestion) {
+    bar = suggestHtml(c.suggestion);
+  } else if (c.goal.origin === 'owner' && Number.isFinite(c.goal.target) && !c.goal.track) {
+    // A target with nothing tracked: say so rather than the pace reason for a missing plan start.
+    bar = `<p class="h-gwhy">${esc(reasonText('missing_actual'))}</p>`;
   } else if (p && p.reason) {
     bar = `<p class="h-gwhy">${esc(reasonText(p.reason))}</p>`;
   }
   const next = c.next ? gnextHtml(c.next) : `<p class="h-gnext-none">Nothing due for ${subject}</p>`;
   const more = c.actions.length > 1 ? `<a class="h-gmore" href="${href('plan')}" data-go="plan">${plural(c.actions.length - 1, 'more action')} on the plan</a>` : '';
   return `<article class="h-gcard" data-goal-card="${esc(c.id)}"><div class="h-gcard-h"><a class="h-gcard-t" href="${href('goals')}" data-go="goals">${goalTitle(c.goal)}</a>${chipHtml(c.chip, 'h-pchip')}</div>${bar}${next}${more}</article>`;
-}
-
-function quietHtml(list) {
-  if (!list.length) return '';
-  // One chip per distinct status: "A, B, C [No target]" rather than a chip after every title.
-  const groups = [];
-  list.forEach((c) => {
-    const g = groups.find((x) => x.chip.label === c.chip.label && x.chip.tone === c.chip.tone);
-    if (g) g.titles.push(goalTitle(c.goal)); else groups.push({ chip: c.chip, titles: [goalTitle(c.goal)] });
-  });
-  const sum = groups.map((g) => `<span class="h-qi">${g.titles.join(', ')} ${chipHtml(g.chip, 'h-pchip')}</span>`).join('');
-  const body = list.map((c) => `<li data-quiet-goal="${esc(c.id)}"><a class="h-gcard-t" href="${href('goals')}" data-go="goals">${goalTitle(c.goal)}</a>${c.next ? gnextHtml(c.next) : '<p class="h-gnext-none">Nothing due</p>'}</li>`).join('');
-  return `<details class="h-quiet" data-det="home-quiet"${ui.det['home-quiet'] ? ' open' : ''}><summary><span class="h-quiet-l">${sum}</span>${icon('chev')}</summary><ul class="h-quiet-b">${body}</ul></details>`;
 }
 
 function hkHtml(list) {
@@ -596,29 +588,151 @@ function afterHtml(m) {
   return `<div class="h-after"><div class="h-after-l">After that</div>${m.afterThat.map((r) => `<div class="h-after-r" data-rec="${esc(r.id)}"><span class="h-after-d">${fmt(recDate(r))}</span>${recLink(r)}${whoTag(r)}</div>`).join('')}</div>`;
 }
 
+/* ---------- suggested targets (Home cards and Goals) ---------- */
+
+// The suggestion record for a goal, from scenario.suggestions; null when it has none.
+const suggOf = (id) => arr(api.s.suggestions).find((r) => r && String(r.goalId) === String(id)) || null;
+
+// The end-of-horizon note on a date that is not a projection.
+const horizonNote = (label) => (label === 'This year' ? ' (the end of the year you picked)' : ` (the end of the ${esc(label)} you picked)`);
+
+// One goal's suggested target: the line, why, what it comes from, the withdrawal rate when it can
+// be changed, and Accept, Edit, Dismiss. A question asks for an amount; a dismissed one offers Add one.
+// Every amount is a calc:targets figure; the rate is a parameter in percent.
+function suggestHtml(s) {
+  const id = esc(s.goalId);
+  const edit = (label, cls) => btn(label, `data-sugg-act="edit" data-id="${id}"`, cls);
+  if (s.state === 'dismissed') {
+    return `<p class="h-gnone">No target yet. <button type="button" class="h-link" data-sugg-act="edit" data-id="${id}">Add one</button></p>`;
+  }
+  if (s.state !== 'suggested') {
+    return `<div class="h-sugg ask" data-sugg="${id}"><p class="h-sugg-q">${esc(s.ask)}</p>`
+      + `<p class="h-sugg-why">${esc(s.why)}</p><div class="h-sugg-acts">${edit('Edit goal', '')}</div></div>`;
+  }
+  const f = s.figures || {};
+  const amt = (k) => (k ? figHtml(k, { k: true }) : '');
+  const nAccts = arr(s.track?.accounts).length;
+  const trackAccts = arr(s.track?.accounts).map((tid) => arr(api.s.accounts).find((a) => String(a.id) === String(tid)));
+  const trackNames = trackAccts.every(Boolean)
+    ? trackAccts.map((a) => (a.imported ? esc(a.name) : T(a.name))).join(', ')
+    : esc(s.trackLabel || '');
+  const tracks = !s.track ? ', tracks nothing automatically: contributions are not measured yet'
+    : s.trackLabel && nAccts <= 3 ? `, tracks ${trackNames}`
+      : `, tracks ${plural(nAccts, s.kind === 'independence' ? 'investment account' : s.kind === 'cushion' ? 'cash account' : 'account')}`;
+  let head;
+  if (s.covered) {
+    head = `Already covered: ${f.current ? `${amt(f.current)} against ${amt(f.target)}` : amt(f.target)}`;
+  } else {
+    const when = longDate(s.targetDate);
+    head = `Suggested: ${amt(f.target)}${when ? ` by ${when}` : ''}${when && s.dateSource === 'horizon' && s.horizonLabel ? horizonNote(s.horizonLabel) : ''}`;
+  }
+  const win = windowSpan(s.window);
+  const src = [];
+  if (s.kind === 'cushion' && f.monthlySpend) {
+    const n = Number(s.params?.cushionMonths);
+    src.push(`From ${amt(f.monthlySpend)} a month of spending${win ? `, ${win}` : ''}${Number.isFinite(n) && n > 0 ? `, times ${plural(n, 'month')}` : ''}`);
+  } else if (s.kind === 'independence' && f.annualSpend) {
+    src.push(`From ${amt(f.annualSpend)} a year of spending${win ? `, ${win}` : ''}, over the withdrawal rate`);
+  } else if (s.kind === 'tax' && arr(f.rooms).length) {
+    src.push(`From this year's unused room: ${arr(f.rooms).map((k) => `${esc(api.fig(k)?.label || 'Room')} ${amt(k)}`).join(', ')}`);
+  } else if (win) {
+    src.push(`Spending ${win}`);
+  }
+  if (f.monthlySavings && s.dateSource === 'projected') src.push(`Saving ${amt(f.monthlySavings)} a month`);
+  let rate = '';
+  if (arr(s.editable).includes('withdrawalRate')) {
+    const r = Number(s.params?.withdrawalRate);
+    const pv = Math.round((Number.isFinite(r) ? r : 0.04) * 10000) / 100;
+    rate = `<label class="h-sugg-rate">Withdrawal rate <input type="number" data-sugg-rate="${id}" min="2" max="6" step="0.25" inputmode="decimal" value="${pv}"><span>%</span></label>`;
+  }
+  return `<div class="h-sugg" data-sugg="${id}"><p class="h-sugg-l">${head}${tracks}</p>`
+    + `${s.why ? `<p class="h-sugg-why">${T(s.why)}</p>` : ''}`
+    + `${src.length ? `<p class="h-sugg-src">${src.join('. ')}.</p>` : ''}${rate}`
+    + `<div class="h-sugg-acts">${btn('Accept', `data-sugg-act="accept" data-id="${id}"`, 'pri')}${edit('Edit', '')}${btn('Dismiss', `data-sugg-act="dismiss" data-id="${id}"`, 'ghost')}</div></div>`;
+}
+
+// Edit from Home or Goals: the goal form on #/goals, prefilled from the suggestion's accept body;
+// a question or a dismissed suggestion opens it with the goal's own values. Nothing is saved.
+function openSuggForm(id) {
+  const g = arr(api.s.goals).find((x) => String(x.id) === String(id));
+  if (!g) return;
+  const s = suggOf(id);
+  const draft = draftOf(g);
+  const a = s && s.state === 'suggested' ? s.accept : null;
+  if (a) {
+    if (Number.isFinite(a.target)) draft.target = String(a.target);
+    if (a.targetDate) draft.targetDate = a.targetDate;
+    if (a.track && Array.isArray(a.track.accounts)) { draft.trackKind = 'accounts'; draft.accounts = a.track.accounts.slice(); draft.figure = ''; }
+    else if (a.track === null) { draft.trackKind = 'none'; draft.accounts = []; draft.figure = ''; }
+  }
+  if (routeNow().name !== 'goals') api.go('goals', {});
+  openGoalForm(g.id, draft);
+}
+
+// Accept, Edit, Dismiss and Accept all. Accept posts the record's accept body as the goal update;
+// Accept all posts each pending one in card order and redraws once.
+function suggClick(e) {
+  const t = e.target.closest('[data-sugg-act],[data-sugg-all]');
+  if (!t || !root.contains(t)) return false;
+  e.preventDefault();
+  if (t.dataset.suggAll != null) {
+    const list = homeModelNow().pending.filter((s) => s.accept).map((s) => ({ id: s.goalId, fields: s.accept }));
+    if (list.length) api.goalsAccept(list);
+    return true;
+  }
+  const id = t.dataset.id;
+  const act = t.dataset.suggAct;
+  const s = suggOf(id);
+  if (act === 'edit') openSuggForm(id);
+  else if (act === 'accept' && s?.accept) api.goalUpdate(id, s.accept);
+  else if (act === 'dismiss' && s) api.goalSuggestion(id, { action: 'dismiss' });
+  return true;
+}
+
+// The withdrawal rate input commits on change, as a fraction, clamped to the calculator's range.
+function suggRate(t) {
+  const v = Number(t.value);
+  if (t.value === '' || !Number.isFinite(v)) { draw(); return; }
+  const pv = Math.max(2, Math.min(6, v));
+  api.goalSuggestion(t.dataset.suggRate, { withdrawalRate: Math.round(pv * 100) / 10000 });
+}
+
+// Desktop: the next goal actions due before Dec 31, up to five, each with date, title and owner.
+function dueHtml(m) {
+  const list = m.due.slice(0, 5);
+  if (!list.length) return '';
+  const row = (r) => `<div class="h-due-r" data-rec="${esc(r.id)}"><span class="h-due-d${days(r) < 0 ? ' late' : ''}">${fmt(recDate(r))}</span>${recLink(r)}${whoTag(r)}</div>`;
+  return `<div class="h-due"><div class="h-due-l">Due before Dec 31</div>${list.map(row).join('')}</div>`;
+}
+
+const homeModelNow = () => homeModel({
+  goals: api.s.goals, pace: api.s.pace || null, recs: api.recs(), filter: ui.owner,
+  suggestions: api.s.suggestions, clock: api.s.meta?.clock
+});
+
 function pHome() {
   const pace = api.s.pace || null;
-  const m = homeModel({ goals: api.s.goals, pace, recs: api.recs(), filter: ui.owner });
+  const m = homeModelNow();
   // No open goals: Home is the Goals step (kept while its save runs), with the data-health line.
   if (!m.cards.length || ui.goalsBusy === 'home') {
     return shell(`<section class="h-home h-home-gs">${goalsStartHtml('home')}${dhealthHtml(homeHealth())}</section>`);
   }
   const subject = SUBJECT[m.filter];
-  const c = clock();
-  const ye = daysBetween(c, new Date(Date.UTC(c.getUTCFullYear(), 11, 31)));
-  const before = m.queue.filter((r) => days(r) <= ye).length;
+  const hd = homeHeadline({ cards: m.cards, pace, pending: m.pending });
   const hc = healthChip(pace);
+  const due = m.due.length;
+  const bulk = hd.bulk ? `<div class="h-home-bulk">${btn('Accept all', 'data-sugg-all="1"', 'pri')}${goA('goals', 'Review targets', {}, 'h-home-rev')}</div>` : '';
   const head = `<div class="h-home-head"><div class="h-home-k">${T(api.s.meta.clockLabel)}</div>`
     + `<a class="h-hchip ${hc.tone}" href="${href('pace')}" data-go="pace">${esc(hc.label)}${icon('arrow')}</a>`
-    + `<h1 class="h-home-h">${esc(pace?.rollup?.headline || 'No goals with targets')}</h1>`
-    + `<p class="h-home-sub">${plural(before, 'thing')} before Dec 31</p></div>`;
+    + `<h1 class="h-home-h">${esc(hd.title)}</h1>`
+    + `<p class="h-home-sub">${due ? `${plural(due, 'thing')} before Dec 31` : 'Nothing due before Dec 31'}</p>${bulk}</div>`;
   const health = dhealthHtml(homeHealth());
-  const cards = m.expanded.length ? `<div class="h-gcards">${m.expanded.map((x) => goalCardHome(x, subject)).join('')}</div>` : '';
+  const cards = `<div class="h-gcards">${m.cards.map((x) => goalCardHome(x, subject)).join('')}</div>`;
   const goalsH = `<div class="h-home-sec"><h2>Goals</h2>${goA('goals', 'All goals')}</div>`;
-  const rest = `${goalsH}${cards}${quietHtml(m.collapsed)}${hkHtml(m.housekeeping)}`;
+  const rest = `${goalsH}${cards}${hkHtml(m.housekeeping)}`;
   const inner = isPhone()
     ? `${ownerFilterHtml(m)}${head}${nextHtml(m, subject)}${afterHtml(m)}${health}${rest}`
-    : `<header class="h-home-top">${head}${ownerFilterHtml(m)}</header>${health}${rest}`;
+    : `<header class="h-home-top">${head}${ownerFilterHtml(m)}</header>${dueHtml(m)}${health}${rest}`;
   return shell(`<section class="h-home">${inner}</section>`);
 }
 
@@ -1110,9 +1224,9 @@ function draftOf(g) {
   };
 }
 
-function openGoalForm(id) {
+function openGoalForm(id, draft) {
   const g = id ? arr(api.s.goals).find((x) => x.id === id) : null;
-  ui.goalForm = { id: g ? g.id : null, draft: g ? draftOf(g) : emptyDraft(), err: '' };
+  ui.goalForm = { id: g ? g.id : null, draft: g ? (draft || draftOf(g)) : emptyDraft(), err: '' };
   ui.goalDel = null;
   draw();
   const el = root?.querySelector('.h-gform [data-gf="title"]');
@@ -1189,7 +1303,9 @@ function goalCard(g) {
       prog = `<div class="h-prog"><svg viewBox="0 0 100 4" preserveAspectRatio="none" aria-hidden="true"><rect class="bg" width="100" height="4" rx="2"/><rect class="fg" width="${p * 100}" height="4" rx="2"/></svg><span>${figHtml(g.progress.cur, { k: true })} of ${figHtml(g.progress.target, { k: true })}</span></div>`;
     }
   }
-  if (!prog && owner) {
+  const sugg = owner && !g.archived ? suggOf(g.id) : null;
+  if (!prog && sugg) prog = suggestHtml(sugg);
+  else if (!prog && owner) {
     const tKey = `goal.${g.id}.target`;
     if (!(api.s.fig && api.s.fig[tKey])) prog = `<p class="h-gnone">No target yet. <button type="button" class="h-link" data-goal="edit" data-id="${esc(g.id)}">Add one</button></p>`;
     else if (g.trackWaiting) prog = `<p class="h-gnone">Target ${figHtml(tKey, { k: true })}. Waiting on a balance for what it tracks.</p>`;
@@ -1848,6 +1964,7 @@ function onClick(e) {
   if (ingest.handleClick(e)) return;
   if (email.handleClick(e)) return;
   if (goalsStartClick(e)) return;
+  if (suggClick(e)) return;
   const gt = e.target.closest('[data-goal],[data-goal-h]');
   if (gt && root.contains(gt)) {
     e.preventDefault();
@@ -2025,6 +2142,7 @@ function onInput(e) {
 function onChange(e) {
   const t = e.target;
   if (t?.dataset?.gf === 'track' || t?.dataset?.gf === 'acct') { goalInput(t); return; }
+  if (t?.dataset?.suggRate) { suggRate(t); return; }
   if (t?.dataset?.recowner) { api.act(t.dataset.recowner, 'owner', t.value); return; }
   if (t?.dataset?.curve) { api.setCurve(t.dataset.curve, Number(t.value) / 100); return; }
   if (t?.dataset?.prio) { api.setCurve(t.dataset.prio, Number(t.value) / 100); return; }
