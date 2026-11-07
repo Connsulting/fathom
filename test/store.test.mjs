@@ -213,3 +213,35 @@ test('a store migrated to exactly 005 upgrades to 006-chat on startup and keeps 
     db.close();
   }
 });
+
+// openDb waits for another process's lock instead of failing at once: busy_timeout must be set
+// before the first statement that needs a lock (journal_mode). A server that is still closing
+// (checkpointing its WAL) holds such a lock for a moment after it exits.
+test('openDb waits out a short exclusive lock held by another process', async () => {
+  const { spawn } = await import('node:child_process');
+  const dir = await tempDir();
+  const file = join(dir, DB_FILE);
+  openDb(file).close();
+  const holder = spawn(process.execPath, ['-e', `
+    const { DatabaseSync } = require('node:sqlite');
+    const db = new DatabaseSync(${JSON.stringify(file)});
+    db.exec('PRAGMA locking_mode = EXCLUSIVE');
+    db.exec('BEGIN EXCLUSIVE');
+    db.exec('CREATE TABLE IF NOT EXISTS held (x)');
+    process.stdout.write('locked\\n');
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 700);
+    db.exec('COMMIT');
+    db.close();
+  `], { stdio: ['ignore', 'pipe', 'inherit'] });
+  await new Promise((resolve, reject) => {
+    holder.stdout.on('data', d => { if (String(d).includes('locked')) resolve(); });
+    holder.on('exit', code => reject(new Error(`lock holder exited early with ${code}`)));
+  });
+  const db = openDb(file);
+  try {
+    assert.equal(db.prepare('PRAGMA journal_mode').get().journal_mode, 'wal');
+  } finally {
+    db.close();
+    await new Promise(resolve => (holder.exitCode !== null ? resolve() : holder.on('exit', resolve)));
+  }
+});
