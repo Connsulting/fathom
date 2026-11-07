@@ -6,6 +6,7 @@
 import { getFacts } from '../store/facts.mjs';
 import { parseJson } from '../store/db.mjs';
 import { normalizeName } from '../ingest/confirm.mjs';
+import { accountLabel } from '../shared/account-label.mjs';
 
 // Document types that are tax forms a preparer needs. Paystubs, statements, notes, plan summaries
 // and account metadata feed the ledger and are not packet documents.
@@ -82,7 +83,7 @@ export function expectedItems({ facts, accounts, year, active, deposits, employe
   for (const a of accounts) {
     if (!active(a.id)) continue;
     const same = accounts.filter((b) => b.inst === a.inst && b.name === a.name).length > 1;
-    const label = [a.inst, a.name].filter(Boolean).join(' ') + (same && a.owner ? ` (${a.owner})` : '');
+    const label = accountLabel(a) + (same && a.owner ? ` (${a.owner})` : '');
     const inst = normalizeName(a.inst);
     if (a.kind === 'taxable') {
       add({ key: `1099-composite:${a.id}`, form: '1099-b', forms: ['1099-b', '1099-div', '1099-int'], t: `Composite 1099 (B, DIV, INT) for ${label}`, src: `${a.inst || 'The brokerage'} tax center`, arrives: 'feb15', name: inst, why: 'Brokerage account with activity this year', account: a.id });

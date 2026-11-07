@@ -12,6 +12,7 @@
 import { getSetting, tx, cents, parseJson as parse } from '../store/db.mjs';
 import { loadContent, loadPacks, tokenScope, resolveClock, todayUtc, loadGoals, loadCurve, loadFigures, loadLinkedRecs, loadLinkedRec, housekeepingCount } from '../scenario/build.mjs';
 import { horizonLabel } from '../shared/goals.mjs';
+import { accountLabel } from '../shared/account-label.mjs';
 import { OWNERS } from '../shared/rec-links.mjs';
 import { needsYou, verdictLevel, packStatus, STATUSES } from '../shared/rules.mjs';
 import { resolveTokens } from '../shared/tokens.mjs';
@@ -228,7 +229,7 @@ export const tools = [
       return ctx.db.prepare('SELECT * FROM accounts ORDER BY sort, id').all().map(a => {
         const b = latest.get(a.id);
         const out = {
-          id: a.id, inst: a.inst, mask: a.mask, name: a.name, owner: a.owner, kind: a.kind, mirror: a.mirror,
+          id: a.id, inst: a.inst, mask: a.mask, name: accountLabel(a), importedName: a.name, owner: a.owner, kind: a.kind, mirror: a.mirror,
           note: a.note || '', balance: b ? b.amount : null, asOf: b ? b.date : null,
         };
         // Imported accounts carry text from uploaded files: verbatim, never token-resolved.

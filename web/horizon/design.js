@@ -73,7 +73,7 @@ const freshUi = () => ({
   under: null, inApp: false, closing: false, ret: null, y: 0, msgN: {}, det: {}, owner: 'both',
   // The Goals step (onboarding step 1 and an empty Home): selected starter ids, own titles, whether
   // the own-goal field is open, and where a save is running ('onboarding' or 'home', else '').
-  starterSel: [], ownGoals: [], ownOpen: false, goalsBusy: ''
+  starterSel: [], ownGoals: [], ownOpen: false, goalsBusy: '', accEdit: null
 });
 
 /* ---------- small helpers ---------- */
@@ -168,6 +168,7 @@ function icon(name) {
     lock: '<rect x="3.5" y="7" width="9" height="6.5" rx="1"/><path d="M5.5 7V5a2.5 2.5 0 015 0v2"/>',
     send: '<path d="M3 8h9M8.5 4.5L12 8l-3.5 3.5"/>',
     plus: '<path d="M8 3.5v9M3.5 8h9"/>',
+    pen: '<path d="M9.2 3.2l3.6 3.6M2.8 13.2l.6-2.8 7.2-7.2 2.2 2.2-7.2 7.2z"/>',
     doc: '<path d="M4.5 2.5h5l2.5 2.5v8.5h-7.5z"/><path d="M9.5 2.5V5H12"/>',
     search: '<circle cx="7" cy="7" r="4.25"/><path d="M10.2 10.2L13.5 13.5"/>',
     cal: '<rect x="2.5" y="3.5" width="11" height="10" rx="1.5"/><path d="M2.5 6.5h11M5.5 2v3M10.5 2v3"/>',
@@ -1260,8 +1261,19 @@ function accountsBody() {
   const mirror = { connected: 'Mirrored', manual: 'Manual', missing: 'Not connected' };
   // Imported accounts carry text from uploaded files: plain text, no tokens or markup.
   const lbl = (a, s) => (a.imported === false ? T(s) : esc(s));
+  const nameHtml = (a) => {
+    if (ui.accEdit && ui.accEdit.id === a.id) {
+      return `<input class="h-acc-edit" data-acc-name="${esc(a.id)}" value="${esc(ui.accEdit.value)}" maxlength="120" aria-label="Account name" autocomplete="off">`;
+    }
+    const text = a.displayName ? esc(a.name) : lbl(a, a.name);
+    return `<button type="button" class="h-acc-name" data-acc-rename="${esc(a.id)}">${text}</button><button type="button" class="h-acc-pen" data-acc-rename="${esc(a.id)}" aria-label="Rename account">${icon('pen')}</button>`;
+  };
+  const subHtml = (a) => {
+    const sub = a.subtitle != null ? a.subtitle : [a.inst, a.owner].filter(Boolean).join(', ');
+    return sub ? lbl(a, sub) : '';
+  };
   const list = keys.map((k) => section(k, `<div class="h-accs">${groups[k].map((a) => `<div class="h-acc ${a.mirror}">
-      <div class="h-acc-n"><b>${lbl(a, a.name)}</b><span>${lbl(a, a.inst)}${a.owner ? `, ${lbl(a, a.owner)}` : ''}</span></div>
+      <div class="h-acc-n"><b>${nameHtml(a)}</b><span>${subHtml(a)}</span></div>
       <div class="h-acc-v">${a.fig ? figHtml(a.fig) : '<span class="h-mute">No balance</span>'}</div>
       <div class="h-acc-m"><i></i>${mirror[a.mirror] || esc(a.mirror)}</div>
       ${ingest.accountMeta(a)}${a.note ? `<p>${lbl(a, a.note)}</p>` : ''}</div>`).join('')}</div>`)).join('');
@@ -1775,7 +1787,29 @@ function closeRec() {
   api.go(u.name, u.params, { replace: true });
 }
 
+function beginAccountRename(id) {
+  const a = arr(api.s.accounts).find((x) => x.id === id);
+  if (!a) return;
+  ui.accEdit = { id, value: a.displayName ? a.name : (a.imported === false ? api.txt(String(a.name ?? '')) : String(a.name ?? '')) };
+  draw();
+  const el = root?.querySelector(`[data-acc-name="${CSS.escape(id)}"]`);
+  if (el) { el.focus(); el.select(); }
+}
+
+function saveAccountRename(id, raw) {
+  const value = String(raw ?? '').trim();
+  ui.accEdit = null;
+  draw();
+  api.accountRename(id, value);
+}
+
 function onClick(e) {
+  const ren = e.target.closest?.('[data-acc-rename]');
+  if (ren && root.contains(ren)) {
+    e.preventDefault();
+    beginAccountRename(ren.dataset.accRename);
+    return;
+  }
   if (SCREENS.some((s) => s.onClick?.(e))) return;
   const cn = e.target.closest('[data-conn]');
   if (cn && root.contains(cn)) { e.preventDefault(); connect.onClick(cn, connectH); return; }
@@ -1991,6 +2025,10 @@ const POINTER = ['pointerdown', 'pointermove', 'pointerup', 'pointercancel'];
 function onKey(e) {
   // Enter in the own-goal field adds it and submits nothing else.
   if (e.key === 'Enter' && !e.isComposing && e.target.matches?.('[data-goal-own-input]')) { e.preventDefault(); addOwnGoal(); return; }
+  if (e.target.matches?.('[data-acc-name]')) {
+    if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); saveAccountRename(e.target.dataset.accName, e.target.value); return; }
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); ui.accEdit = null; draw(); return; }
+  }
   if (chatScreen.onFieldKey(e)) return;
   if ((e.key === 'Enter' || e.key === ' ') && e.target.matches?.('[data-wg][tabindex]')) { e.preventDefault(); onClick(e); }
   if (e.key === 'Escape' && ui.modal != null) { ui.modal = null; draw(); }

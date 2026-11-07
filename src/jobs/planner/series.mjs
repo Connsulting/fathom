@@ -7,6 +7,7 @@
 // buildSeries(db, clock) -> {key: {label, unit, src, imported, points: [{x, v, kind}]}}
 
 import { cents } from '../../store/db.mjs';
+import { accountLabel } from '../../shared/account-label.mjs';
 import { monthLabel } from './data.mjs';
 
 export const SERIES_SRC = 'balances';
@@ -22,7 +23,6 @@ export const seriesKey = id => {
   return safe.startsWith('acct-') ? safe : `acct-${safe}`;
 };
 // Imported names are plain text: braces would read as figure tokens.
-const plainName = s => String(s ?? '').replace(/[{}<>]/g, '').replace(/\s+/g, ' ').trim();
 
 // Last `limit` months ending at the clock month, as 'YYYY-MM'.
 function monthsEnding(clock, limit) {
@@ -56,7 +56,7 @@ function monthlyValues(db, accountId, clock) {
 }
 
 export function buildSeries(db, clock) {
-  const accounts = db.prepare('SELECT id, name, inst, mask, kind FROM accounts ORDER BY sort, id').all();
+  const accounts = db.prepare('SELECT id, name, inst, mask, kind, display_name FROM accounts ORDER BY sort, id').all();
   const stored = accounts.map(a => ({ a, values: monthlyValues(db, a.id, clock) })).filter(x => x.values.size);
   if (!stored.length) return {};
   // The window ends at the newest month any account has data for, so no month is shown that no
@@ -67,7 +67,7 @@ export function buildSeries(db, clock) {
   const out = {};
   const perAccount = [];
   for (const { a, values } of stored) {
-    const label = plainName(a.name || a.inst || 'Account') + (a.mask ? ` ${a.mask}` : '');
+    const label = accountLabel(a);
     const inWindow = months.filter(m => values.has(m));
     if (inWindow.length >= 2) {
       out[seriesKey(a.id)] = {

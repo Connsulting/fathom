@@ -104,7 +104,7 @@ export function loadPlanningData(db, clock) {
     const kind = String(a.kind || '').toLowerCase();
     const stated = typeof byAccount[a.id] === 'string' && byAccount[a.id].trim() ? byAccount[a.id].trim() : null;
     return {
-      id: a.id, inst: a.inst, mask: a.mask, name: a.name || '', owner: ownerOf(a.owner), kind,
+      id: a.id, inst: a.inst, mask: a.mask, name: a.name || '', display_name: a.display_name || null, owner: ownerOf(a.owner), kind,
       fileId: a.file_id, entity: stated ?? (kind === 'business' && businessNames.length === 1 ? businessNames[0] : null),
       latest: latestBalance(db, a.id, clock),
     };
