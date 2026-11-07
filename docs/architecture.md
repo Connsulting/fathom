@@ -299,11 +299,12 @@ occurrence plus 1 per body occurrence; order is score descending, then pack id, 
 
 Tool outputs resolve scenario tokens to plain text and expose masks only.
 
-The planned deterministic tool layer is specified in [ask-tools.md](ask-tools.md): the figure
-envelope and references, `calculate`, the spending, cash flow, net worth, tax, room, obligation and
-access tools, the write tools that give the agent parity with every mutating route, the model's
-routing rules, and the ordered tickets that build them. Until a ticket there merges, this table is
-the tool interface.
+The planned deterministic tool layer is specified in [ask-tools.md](ask-tools.md): twenty
+intent-level tools, each with a closed enum of operations and typed parameters (for example
+`spending.total`, `retirement.target`, `update_account.owner`), the figure envelope and
+references, `calculate`, API parity as (tool, operation) coverage of every household route, the
+model's routing rules, the migration from the names below, and the tickets that build it. Until
+its first ticket (C1) merges, this table is the tool interface.
 
 `src/engine/tools.mjs` `createRegistryServer` consumes this registry. Input schemas must compile
 under strict Ajv, so no union types (`type` arrays); use `anyOf`. `ctx.now` may be a Date, an ISO
