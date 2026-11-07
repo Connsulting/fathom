@@ -14,7 +14,7 @@ test('a display name survives a re-import and a SimpleFIN refresh, and clearing 
     assert.equal(first.status, 'imported');
     const acct = s.db.prepare('SELECT * FROM accounts').get();
     const renamed = accountRename({ db: s.db, config: s.config, params: { id: acct.id }, body: { displayName: 'Household cash' } });
-    assert.equal(renamed.account.name, 'Household cash');
+    assert.equal(renamed.account.name, 'Household cash ending 2738');
     assert.equal(renamed.account.displayName, 'Household cash');
 
     const again = await P.ingestFile(s.db, aggregatorFile('second.csv', [{ ...row, date: '2032-02-02', description: 'Later' }]), s.opts(null));
@@ -78,13 +78,13 @@ test('a rename updates the trend, the source and the question, and list_accounts
 
     accountRename({ db: s.db, config: s.config, params: { id: acct.id }, body: { displayName: 'Household reserve' } });
     const scenario = buildScenario(s.db, {});
-    assert.equal(scenario.series[key].label, 'Household reserve 3046');
-    assert.equal(scenario.src[`acct:${acct.id}`].label, 'Household reserve ...3046');
+    assert.equal(scenario.series[key].label, 'Household reserve ending 3046');
+    assert.equal(scenario.src[`acct:${acct.id}`].label, 'Household reserve ending 3046');
     s.db.prepare(`INSERT INTO figures (key, v, src, kind, label, updated_at) VALUES (?, 10, ?, 'a', ?, ?)`).run(
       `bal.${acct.id}`, `acct:${acct.id}`, 'Balance, Individual 3046', NOW);
     const figures = await callTool('get_figures', { keys: [`bal.${acct.id}`] }, { db: s.db, now: NOW });
-    assert.equal(figures[0].label, 'Balance, Household reserve');
-    assert.equal(figures[0].source.label, 'Household reserve ...3046');
+    assert.equal(figures[0].label, 'Balance, Household reserve ending 3046');
+    assert.equal(figures[0].source.label, 'Household reserve ending 3046');
     const question = scenario.live.ingest.items.find((i) => i.subject === acct.id);
     assert.ok(question, 'the import asked about the account');
     assert.equal(question.question.includes('Household reserve'), true);

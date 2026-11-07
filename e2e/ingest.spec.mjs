@@ -150,7 +150,7 @@ test('imported account labels render as plain escaped text with no token expansi
 
   const check = async () => {
     await expect(page.locator('header.h-top')).toBeVisible();
-    await expect(page.getByText(name, { exact: true }).first()).toBeVisible();
+    await expect(page.getByText(`${name} ending 4821`, { exact: true }).first()).toBeVisible();
     await expect(page.locator('.h-acc', { hasText: name }).first()).toContainText(name);
     await expect(page.locator('button[data-answer="1"]', { hasText: 'Continue' })).toHaveCount(0);
     await expect(page.locator('.h-acc i').filter({ hasText: /^x$/ })).toHaveCount(0);
