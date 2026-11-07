@@ -60,7 +60,7 @@ function householdValues(db) {
   values.push(...db.prepare('SELECT v FROM figures WHERE unavailable_reason IS NULL').all().map(r => r.v));
   for (const row of db.prepare('SELECT def FROM goals').all()) {
     const def = parse(row.def, {});
-    values.push(...['title', 'note', 'target', 'targetDate'].map(k => def[k]).filter(v => v != null));
+    for (const k of ['title', 'note', 'target', 'targetLow', 'targetHigh', 'floor', 'taxYear', 'targetDate', 'split', 'entered']) add(def[k]);
   }
   return values;
 }

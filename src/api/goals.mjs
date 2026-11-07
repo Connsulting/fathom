@@ -1,8 +1,10 @@
 // Goals and the tradeoff curve: owner-editable household data. Every route sits behind the owner
 // gate (the router gates all of /api on a real store) and answers with the fresh scenario.
 //
-// POST /api/goals              {title, note?, horizon?, target?, targetDate?, track?} -> {scenario, goal}
-// POST /api/goals/:id          the same fields, any subset                          -> {scenario, goal}
+// POST /api/goals              {title, note?, horizon?, kind?, owner?, priority?, status?,
+//                               ...the kind fields (src/shared/goals.mjs KIND_FIELDS)}  -> {scenario, goal}
+// POST /api/goals/:id          the same fields, any subset; status done marks a goal done,
+//                               open reopens it, archived archives it                -> {scenario, goal}
 // POST /api/goals/:id/archive  {archived?: boolean, default true}                   -> {scenario, goal}
 // POST /api/goals/:id/delete   {}                                                   -> {scenario}
 // POST /api/curve              {id, value} or {positions: {id: value}}              -> {scenario}
