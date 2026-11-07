@@ -79,6 +79,7 @@ import { parseJson } from '../store/db.mjs';
 import { findQuestion, matchQuestion, recForKey, isThreadKey } from './questions.mjs';
 import { fakeAnswerScript } from './fake-answers.mjs';
 import { stripSources, listMarkerSpans, markdownBlocks } from '../shared/answer-text.mjs';
+import { DEMO_LIMIT_MESSAGE } from '../public-demo/control.mjs';
 
 export const PRODUCT_RULES = [
   'You are Fathom, a year-round financial co-pilot for one household of independent professionals.',
@@ -652,7 +653,7 @@ const offNotice = engine => noticeReply(engine.mode === 'off' ? NOTICES.configOf
 
 function noticeFor(error, engine) {
   if (error instanceof EngineOffError) return offNotice(engine);
-  if (error instanceof BudgetExceededError) return noticeReply(NOTICES.overCap);
+  if (error instanceof BudgetExceededError) return noticeReply(error.demoLimit ? DEMO_LIMIT_MESSAGE : NOTICES.overCap);
   if (!(error instanceof ModelCallError || error instanceof ModelAccountingError || error instanceof RoundLimitError)) {
     console.error(`fathom: answer failed (${error && error.name ? error.name : 'error'})`);
   }
