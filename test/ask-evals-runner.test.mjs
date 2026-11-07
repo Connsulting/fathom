@@ -120,3 +120,41 @@ test('a corrective Ask retry receives fresh budget admission and stops before a 
   assert.equal(r.costUsd, 9.99);
   assert.equal(r.cases[0].turns[0].attempts.length, 2);
 });
+
+
+test('CLI entrypoint exits nonzero and writes evidence for a self-computed answer', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'fathom-eval-negative-'));
+  try {
+    const program = `import {main} from './evals/run.mjs';
+      process.exitCode=await main(['--cases','retirement-hsa-room','--out',process.env.EVAL_TEST_OUTPUT],{
+        scripts:({db})=>[
+          {toolCalls:[{name:'get_figures',args:{keys:['hsa_left','hsa_paid']}}],costUsd:0},
+          {text:String(db.prepare("SELECT sum(v) AS v FROM figures WHERE key IN ('hsa_left','hsa_paid')").get().v),costUsd:0}
+        ]});`;
+    const r = spawnSync(process.execPath, ['--input-type=module', '-e', program], {
+      cwd: new URL('../', import.meta.url), env: { ...process.env, EVAL_TEST_OUTPUT: dir }, encoding: 'utf8', timeout: 60000,
+    });
+    assert.equal(r.status, 1, r.stderr);
+    const report = JSON.parse(await readFile(join(dir, 'scorecard.json'), 'utf8'));
+    assert.equal(report.cases[0].status, 'fail');
+    assert.ok(report.cases[0].turns[0].attempts[0].figures.selfComputed.length);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('missing tool markers never mask an unrelated failed follow-up', async () => {
+  const cases = await loadCases();
+  const c = structuredClone(cases.find(c => c.id === 'spending-annual-exclusions'));
+  c.turns.push(structuredClone(cases.find(c => c.id === 'retirement-hsa-room').turns[0]));
+  const r = await runCases({ cases: [c], scripts: ({ turn }) => turn.required[0].name === 'spending_summary'
+    ? [{ text: "Fathom doesn't have that.", costUsd: 0 }]
+    : [{ toolCalls: [{ name: 'get_figures', args: { keys: ['hsa_left'] } }], costUsd: 0 }, { text: 'No figure provided.', costUsd: 0 }] });
+  assert.equal(r.cases[0].status, 'fail');
+});
+
+test('unavailable cases accept a clear refusal in ordinary wording', async () => {
+  const c = (await loadCases()).find(c => c.id === 'unavailable-credit-score');
+  const r = await runCases({ cases: [c], scripts: () => [
+    { toolCalls: [{ name: 'get_facts', args: {} }], costUsd: 0 }, { text: "Fathom doesn't track your credit score.", costUsd: 0 },
+  ] });
+  assert.equal(r.cases[0].status, 'pass');
+});
