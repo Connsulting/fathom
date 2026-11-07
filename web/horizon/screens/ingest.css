@@ -1,4 +1,4 @@
-/* Horizon ingest screens: Add files, file results, the Confirm deck, pending banner, nav badge,
+/* Horizon ingest screens: Add files, file results, the Confirm deck, pending banner,
    freshness, Sources.
    Uses the Horizon tokens from design.css. Every selector is scoped. */
 
@@ -63,12 +63,6 @@
 .d-horizon .h-howto ol { list-style: decimal; padding: 0 0 6px 38px; color: var(--mu); font-size: 13px; }
 .d-horizon .h-howto ol li { padding: 2px 0; }
 .d-horizon .h-howto details > p { padding: 0 0 12px 22px; }
-
-/* nav badge: pending confirm count */
-.d-horizon .h-nav-n {
-  display: inline-block; margin-left: 6px; min-width: 18px; padding: 0 5px; border-radius: 999px;
-  background: var(--acd); color: var(--ac); font: 500 11px/17px var(--mono); text-align: center; vertical-align: 1px;
-}
 
 /* confirm deck */
 .d-horizon .h-deck { max-width: 680px; }

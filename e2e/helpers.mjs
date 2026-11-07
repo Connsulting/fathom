@@ -256,7 +256,8 @@ export async function expectH1(page, text) {
 }
 
 // Open a rec from a page link (in-app entry, pushes one history entry). `scope` is the list the
-// link lives in: '.h-rows' on Plan, '.h-ny-list' on the brief.
+// link lives in: '.h-rows' on Plan, '.h-gnext' (a goal card's next action, a quiet row or a
+// housekeeping row) on Home.
 export async function openRecFromPage(page, id, scope = '.h-rows') {
   await page.locator(`${scope} a[data-go="rec"][data-id="${id}"]`).first().click();
   await expect(recDialog(page)).toBeVisible();
@@ -326,10 +327,29 @@ export async function askOnAsk(page, text) {
   return ASK_THREAD_URL.exec(page.url())[1];
 }
 
+// GET /api/scenario as JSON.
+export async function fetchScenario(request) {
+  const res = await request.get('/api/scenario');
+  expect(res.status(), 'GET /api/scenario').toBe(200);
+  return res.json();
+}
+
+// Home and the pace board are headed by the pace rollup headline, which the server computes.
+export async function paceHeadline(request) {
+  return (await fetchScenario(request)).pace.rollup.headline;
+}
+
+// A mainRoutes heading is a string, or an async function of the request fixture for headings
+// that come from the API.
+export async function headingFor(heading, request) {
+  return typeof heading === 'function' ? heading(request) : heading;
+}
+
 // Main routes with their h1 text (rec and per-pack routes are handled by the specs).
 export function mainRoutes() {
   return [
-    ['brief', attentionHeadline()],
+    ['home', paceHeadline],
+    ['pace', paceHeadline],
     ['plan', 'Everything on the calendar'],
     ['ask', ASK_HELLO],
     ['wargame', 'What is open, and what is coming'],
@@ -348,17 +368,11 @@ export function mainRoutes() {
 
 /* ---------- Confirm deck ---------- */
 
-// Oracles for the Year banner copy (pinned in the confirm deck plan, D10).
-export const quickChecks = (n) => `${n} quick check${n === 1 ? '' : 's'}`;
-export function aboutMinutes(n) {
-  const k = Math.max(1, Math.ceil((n * 5) / 60));
-  return `About ${k} minute${k === 1 ? '' : 's'}`;
-}
-
-// The Year banner and its Start control (the control may be the banner itself or inside it).
-export const yearBanner = (page) => page.locator('.h-ing-banner');
-export const bannerStart = (page) =>
-  page.locator('.h-ing-banner[data-go="confirm"], .h-ing-banner [data-go="confirm"]').filter({ hasText: 'Start' }).last();
+// Home's data-health line (it replaced the Year banner and the Confirm nav badge) and its
+// Confirm link, shown while questions are pending.
+export const questionsToConfirm = (n) => `${n} question${n === 1 ? '' : 's'} to confirm`;
+export const dataHealth = (page) => page.locator('section.h-home div.h-dhealth');
+export const healthConfirm = (page) => dataHealth(page).locator('a[data-go="confirm"]');
 
 export const deckCard = (page) => page.locator('article.h-deck-card.cur');
 export const deckProgress = (page) => page.locator('[data-deck-progress]');

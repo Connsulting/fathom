@@ -16,6 +16,8 @@ import { emailScreen } from './screens/email.js';
 import * as switcher from './screens/switcher.js';
 import * as simplefin from './screens/simplefin.js';
 import { createKeys } from './keys.js';
+import { createSwipe } from './screens/swipe.js';
+import { homeModel, healthChip, healthLine, paceReason, boardCharts, reasonText, servedGoalIds, shortDate } from './screens/home-model.js';
 import { KNOWN_FIGURES } from '/shared/goals.mjs';
 import { OWNERS, OWNER_LABEL } from '/shared/rec-links.mjs';
 
@@ -32,14 +34,14 @@ const VALUE = { tax: 'Tax', timing: 'Timing', retire: 'Retirement', risk: 'Risk'
 const TRIGGER = { calendar: 'Calendar', income: 'Income change', life: 'Life event', goal: 'Goal', advisor: 'Advisor' };
 const KIND = { business: 'Business', checking: 'Cash', cash: 'Cash', taxable: 'Investing', retirement: 'Retirement', roth: 'Retirement', hsa: 'Health', '529': 'Education' };
 
-const NAV = [['brief', 'Year'], ['confirm', 'Confirm'], ['plan', 'Plan'], ['wargame', 'Decide'], ['ask', 'Ask'], ['packs', 'Packs']];
+const NAV = [['home', 'Home'], ['confirm', 'Confirm'], ['plan', 'Plan'], ['wargame', 'Decide'], ['ask', 'Ask'], ['packs', 'Packs']];
 const MORE = [
   ['Household', [['goals', 'Goals'], ['accounts', 'Accounts'], ['add', 'Files'], ['advisor', 'Advisor'], ['yearend', 'Year end']]],
   ['System', [['connect', 'Connect'], ['engine', 'Engine'], ['email', 'Email']]]
 ];
 // Phone width: these NAV entries move to the bottom tab bar, in NAV order, with these icons. NAV
 // entries not listed here go to the More menu instead.
-const TAB_ICON = { brief: 'year', plan: 'cal', wargame: 'fork', ask: 'chat', confirm: 'check' };
+const TAB_ICON = { home: 'year', plan: 'cal', wargame: 'fork', ask: 'chat', confirm: 'check' };
 
 let api = null;
 let root = null;
@@ -60,7 +62,7 @@ const freshUi = () => ({
   curve: {}, prio: {}, modal: null, goalForm: null, goalDel: null,
   pick: { salary: null, deferral: null }, build: 0,
   buildTimer: 0, draft: {}, recReset: {}, dumped: null, noteBusy: false, understood: null,
-  more: false, under: null, inApp: false, closing: false, ret: null, y: 0, msgN: {}, det: {}
+  more: false, under: null, inApp: false, closing: false, ret: null, y: 0, msgN: {}, det: {}, owner: 'both'
 });
 
 /* ---------- small helpers ---------- */
@@ -230,7 +232,7 @@ function stack(items, W, gap = 10) {
 const labelW = (s, max = 190) => Math.min(max, 22 + String(s).length * 6.3);
 
 function timeline(mode) {
-  // mode: 'brief' (year, open and done recs, events in the past) | 'plan' (all but dismissed)
+  // mode: 'plan' (all but dismissed, with past What changed events)
   const c = clock();
   const ny = api.needsYou();
   const year = c.getUTCFullYear();
@@ -263,10 +265,9 @@ function timeline(mode) {
   const low = [];
   dls.forEach((d) => {
     if (d.recId && recById(d.recId)) return;
-    if (d.at < c && mode === 'brief') return;
     low.push({ kind: 'dl', d, x: x(d.at > end ? end : d.at), w: labelW(api.txt(d.title) + ' ' + api.txt(d.label || ''), 210), pri: 0 });
   });
-  const evs = mode === 'brief' ? arr(api.s.events).map((e) => ({ e, at: parseShort(e.date) })).filter((v) => v.at && v.at <= c) : [];
+  const evs = arr(api.s.events).map((e) => ({ e, at: parseShort(e.date) })).filter((v) => v.at && v.at <= c);
   const lowL = low.length ? stack(low, W) : 0;
 
   const laneH = 30, top = 30, lowH = 24;
@@ -335,7 +336,7 @@ function timeline(mode) {
 
   return `<div class="h-tl" data-tl="${mode}"><div class="h-tl-scroll" data-now="${nowX}">`
     + `<div class="h-tl-track" style="width:${W}px;height:${H}px">${svg}${html}</div></div>`
-    + `<div class="h-tl-key"><span><i class="k needs"></i>Needs you</span><span><i class="k open"></i>In motion</span><span><i class="k idle"></i>Waiting or snoozed</span><span><i class="k done"></i>Done</span><span><i class="k dia"></i>Deadline</span>${mode === 'brief' ? '<span><i class="k ev"></i>What changed</span>' : ''}</div></div>`;
+    + `<div class="h-tl-key"><span><i class="k needs"></i>Needs you</span><span><i class="k open"></i>In motion</span><span><i class="k idle"></i>Waiting or snoozed</span><span><i class="k done"></i>Done</span><span><i class="k dia"></i>Deadline</span>${evs.length ? '<span><i class="k ev"></i>What changed</span>' : ''}</div></div>`;
 }
 
 function windowStrip(r) {
@@ -391,23 +392,17 @@ function accountLinks() {
   return `<div class="h-more-acct" style="margin-bottom:6px;padding-bottom:6px;border-bottom:1px solid var(--line2)"><a href="/account" title="Passkeys and sign out">Account</a>${admin}</div>`;
 }
 
-// The label a NAV entry shows, in the top nav and the tab bar alike.
-function navLabel(k, l) {
-  const pending = k === 'confirm' ? Number(api.ingest().pending) || 0 : 0;
-  return pending > 0 ? `${l}<span class="h-nav-n">${pending}</span>` : l;
-}
-
 // Phone-width bottom tab bar: the NAV entries in TAB_ICON, hidden above 720px by CSS.
 function tabBar(active) {
   const tabs = NAV.filter(([k]) => TAB_ICON[k]).map(([k, l]) =>
-    `<a href="${href(k)}" data-go="${k}" class="${active === k ? 'on' : ''}"${active === k ? ' aria-current="page"' : ''}>${icon(TAB_ICON[k])}<span>${navLabel(k, l)}</span></a>`).join('');
+    `<a href="${href(k)}" data-go="${k}" class="${active === k ? 'on' : ''}"${active === k ? ' aria-current="page"' : ''}>${icon(TAB_ICON[k])}<span>${l}</span></a>`).join('');
   return `<nav class="h-tabs" aria-label="Tabs">${tabs}</nav>`;
 }
 
 function shell(inner, active) {
   const link = (k, l) => {
     const hint = switcher.goHint(k);
-    return `<a href="${href(k)}" data-go="${k}" class="${active === k ? 'on' : ''}"${active === k ? ' aria-current="page"' : ''}${hint ? ` title="${esc(`${l} (${hint})`)}"` : ''}>${navLabel(k, l)}</a>`;
+    return `<a href="${href(k)}" data-go="${k}" class="${active === k ? 'on' : ''}"${active === k ? ' aria-current="page"' : ''}${hint ? ` title="${esc(`${l} (${hint})`)}"` : ''}>${l}</a>`;
   };
   const nav = NAV.map(([k, l]) => link(k, l)).join('');
   const rest = NAV.filter(([k]) => !TAB_ICON[k]);
@@ -420,7 +415,7 @@ function shell(inner, active) {
     <div class="h-more-p" id="h-more-p" aria-label="More"${ui.more ? '' : ' hidden'}>${whoLine()}${accountLinks()}${groups}</div></div>`;
   const off = api.engineOn() ? '' : `<div class="h-engine-off">${icon('clock')}Engine off. Proactive jobs are paused. ${goA('engine', 'Engine settings')}</div>`;
   return `<header class="h-top"><div class="h-top-in">
-    <a class="h-mark" href="${href('brief')}" data-go="brief" aria-label="${esc(api.s.meta.product || 'Fathom')}">${MARK}<span>${esc(api.s.meta.product || 'Fathom')}</span></a>
+    <a class="h-mark" href="${href('home')}" data-go="home" aria-label="${esc(api.s.meta.product || 'Fathom')}">${MARK}<span>${esc(api.s.meta.product || 'Fathom')}</span></a>
     <div class="h-navbar"><nav class="h-nav" aria-label="Main">${nav}</nav><span class="h-nav-sep"></span>${more}</div>
     <button type="button" class="h-search-btn" data-keys="switcher" aria-label="Search" title="Search (Ctrl+K)">${icon('search')}</button>
   </div></header>${off}<main class="h-main">${inner}</main>${tabBar(active)}`;
@@ -434,7 +429,16 @@ function pageHead(kicker, title, sub = '') {
   return `<div class="h-ph"><div class="h-kicker">${kicker}</div><h1>${title}</h1>${sub ? `<p class="h-lede">${sub}</p>` : ''}</div>`;
 }
 
-/* ---------- brief ---------- */
+/* ---------- home ---------- */
+
+// Phone width, the same breakpoint as the bottom tab bar. Home redraws on resize.
+const isPhone = () => typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 720px)').matches;
+const WHO = { you: 'You', spouse: 'Spouse', both: 'Both', advisor: 'Advisor', automatic: 'Auto' };
+const SUBJECT = { both: 'either of you', me: 'you', spouse: 'your spouse' };
+const chipHtml = (c, cls) => `<span class="${cls} ${c.tone}">${esc(c.label)}</span>`;
+const whoTag = (r) => `<span class="h-who">${WHO[r.owner] || ''}</span>`;
+const recLink = (r, cls = '') => `<a${cls ? ` class="${cls}"` : ''} href="${href('rec', { id: r.id })}" data-go="rec" data-id="${esc(r.id)}">${T(r.title)}</a>`;
+const pct = (v) => Math.round(v * 1000) / 10;
 
 function liveDomainStatus(dm, ny) {
   if (ny.some((r) => r.domain === dm.id)) return 'needs';
@@ -442,59 +446,222 @@ function liveDomainStatus(dm, ny) {
   return dm.status;
 }
 
-function pBrief() {
-  const c = clock();
-  const v = api.verdict();
-  const ny = api.needsYou();
-  const recs = visibleRecs();
-  const clear = v.level === 'clear';
-  const motion = recs.filter((r) => ['doing', 'waiting'].includes(r.status) && !isNeeds(r, ny));
-  const done = recs.filter((r) => r.status === 'done').length;
+const cdTone = (r) => { const d = days(r); return d < 0 ? ' late' : d <= 30 ? ' soon' : ''; };
 
-  const hero = `<section class="h-hero${clear ? ' clear' : ''}">
-    <div class="h-kicker">${MONTH_FULL[c.getUTCMonth()]} brief<span>${T(api.s.meta.clockLabel)}</span><span>Data through ${T(api.s.meta.dataThrough)}</span></div>
-    <h1 class="h-verdict">${clear ? `<i class="h-ok">${icon('check')}</i>` : ''}<span>${T(v.headline)}</span></h1>
-    <p class="h-lede">${T(v.sub)}</p>${ingest.pendingBanner()}
-    <p class="h-lede">${goA('add', 'Add more files')}</p>
-  </section>`;
+function cdHtml(r, cls) {
+  const cd = countdown(r);
+  return `<div class="${cls}${cdTone(r)}"><b>${cd.n}</b><span>${cd.u}</span></div>`;
+}
 
-  const tl = section('Your year', timeline('brief'), `${plural(ny.length, 'item')} need you<span class="h-dotsep"></span>${motion.length} in motion<span class="h-dotsep"></span>${done} done`);
+function gnextHtml(r) {
+  return `<div class="h-gnext" data-rec="${esc(r.id)}">${cdHtml(r, 'h-gcd')}${recLink(r, 'h-gnext-t')}${whoTag(r)}</div>`;
+}
 
-  let needs;
-  if (!ny.length) {
-    const job = arr(api.s.engine?.jobs).find((j) => /month/i.test(api.txt(j.cadence || '') + api.txt(j.name || '')));
-    needs = `<div class="h-empty"><i class="h-ok sm">${icon('check')}</i><div><b>Nothing needs you right now.</b><p>${job?.next ? `Next brief ${T(job.next)}. ` : ''}${motion.length ? `${plural(motion.length, 'item')} still in motion. ` : ''}${goA('plan', 'See the plan')}</p></div></div>`;
-  } else {
-    needs = `<div class="h-ny-list">${ny.map((r) => {
-      const cd = countdown(r);
-      return `<article class="h-ny">
-        <div class="h-cd${cd.n <= 30 ? ' soon' : ''}"><b>${cd.n}</b><span>${cd.u}</span></div>
-        <div class="h-ny-b">
-          <a class="h-ny-t" href="${href('rec', { id: r.id })}" data-go="rec" data-id="${esc(r.id)}">${T(r.title)}</a>
-          <p>${T(r.summary)}</p>
-          <div class="h-meta"><span>${windowText(r)}</span>${r.effort ? `<span>${T(r.effort)}</span>` : ''}${values(r) ? `<span>${values(r)}</span>` : ''}<span>${statusText(r)}</span></div>
-        </div>
-        <div class="h-acts">${actionsFor(r, true).join('')}</div>
-      </article>`;
-    }).join('')}</div>`;
+// A goal title by id: the stored goal, else the title the rec's serves entry carries.
+function servedTitle(r, id) {
+  const g = arr(api.s.goals).find((x) => x.id === id);
+  if (g) return goalTitle(g);
+  const s = arr(r.serves).find((x) => x && x.id === id);
+  return s && s.title ? (s.origin === 'owner' ? esc(s.title) : T(s.title)) : esc(id);
+}
+
+function goalCardHome(c, subject) {
+  const p = c.pace;
+  const fk = (k) => `pace.goals.${c.paceIndex}.${k}`;
+  let bar = '';
+  if (c.bar) {
+    const asOf = c.bar.muted && p.dataThrough ? `<em>as of ${esc(shortDate(p.dataThrough))}</em>` : '';
+    bar = `<div class="h-pbar ${c.chip.tone}${c.bar.muted ? ' muted' : ''}" aria-hidden="true"><i class="fill" style="width:${pct(c.bar.fill)}%"></i><i class="tick" style="left:${pct(c.bar.tick)}%"></i></div>`
+      + `<div class="h-pbar-l"><span>${figHtml(fk('actual'), { k: true })} of ${figHtml(fk('target'), { k: true })}</span><span>plan today ${figHtml(fk('expected'), { k: true })}${asOf}</span></div>`;
+  } else if (p && p.reason) {
+    bar = `<p class="h-gwhy">${esc(reasonText(p.reason))}</p>`;
   }
+  const next = c.next ? gnextHtml(c.next) : `<p class="h-gnext-none">Nothing due for ${subject}</p>`;
+  const more = c.actions.length > 1 ? `<a class="h-gmore" href="${href('plan')}" data-go="plan">${plural(c.actions.length - 1, 'more action')} on the plan</a>` : '';
+  return `<article class="h-gcard" data-goal-card="${esc(c.id)}"><div class="h-gcard-h"><a class="h-gcard-t" href="${href('goals')}" data-go="goals">${goalTitle(c.goal)}</a>${chipHtml(c.chip, 'h-pchip')}</div>${bar}${next}${more}</article>`;
+}
 
-  const evs = arr(api.s.events);
-  const changed = evs.length ? `<ol class="h-evs">${evs.map((e) => `<li><time>${T(e.date)}</time><div><b>${T(e.title)}</b><p>${T(e.body)}</p></div></li>`).join('')}</ol>` : '<p class="h-mute">Nothing new since the last brief.</p>';
+function quietHtml(list) {
+  if (!list.length) return '';
+  // One chip per distinct status: "A, B, C [No target]" rather than a chip after every title.
+  const groups = [];
+  list.forEach((c) => {
+    const g = groups.find((x) => x.chip.label === c.chip.label && x.chip.tone === c.chip.tone);
+    if (g) g.titles.push(goalTitle(c.goal)); else groups.push({ chip: c.chip, titles: [goalTitle(c.goal)] });
+  });
+  const sum = groups.map((g) => `<span class="h-qi">${g.titles.join(', ')} ${chipHtml(g.chip, 'h-pchip')}</span>`).join('');
+  const body = list.map((c) => `<li data-quiet-goal="${esc(c.id)}"><a class="h-gcard-t" href="${href('goals')}" data-go="goals">${goalTitle(c.goal)}</a>${c.next ? gnextHtml(c.next) : '<p class="h-gnext-none">Nothing due</p>'}</li>`).join('');
+  return `<details class="h-quiet" data-det="home-quiet"${ui.det['home-quiet'] ? ' open' : ''}><summary><span class="h-quiet-l">${sum}</span>${icon('chev')}</summary><ul class="h-quiet-b">${body}</ul></details>`;
+}
 
-  const doms = arr(api.s.domains).map((dm) => {
-    const st = liveDomainStatus(dm, ny);
-    const lab = { covered: 'Covered', changed: 'Changed', needs: 'Needs you', waiting: 'Waiting' }[st] || st;
-    return `<div class="h-dom ${st}"><div class="h-dom-h"><i></i><b>${T(dm.name)}</b><span>${lab}</span></div><p>${T(dm.note)}</p><p class="h-mute sm">${T(dm.watching)}</p></div>`;
-  }).join('');
+function hkHtml(list) {
+  if (!list.length) return '';
+  return `<details class="h-hk" data-det="home-hk"${ui.det['home-hk'] ? ' open' : ''}><summary><span>Housekeeping, serves no goal: <b>${list.length}</b></span>${icon('chev')}</summary><div class="h-hk-b">${list.map(gnextHtml).join('')}</div></details>`;
+}
 
-  return shell(`${hero}${tl}
-    <div class="h-cols">
-      <div class="h-col-main">${section(clear ? 'Needs you' : `Needs you <em>${ny.length}</em>`, needs)}
-        ${section('Covered', `<div class="h-doms">${doms}</div>`, `${arr(api.s.domains).filter((d) => liveDomainStatus(d, ny) === 'covered').length} of ${arr(api.s.domains).length} quiet`)}</div>
-      <div class="h-col-side">${section('What changed', changed)}
-        <div class="h-mailnote">${icon('doc')}<div>This brief also went out as your monthly email. ${goA('email', 'Read the email')}</div></div></div>
-    </div>`, 'brief');
+function ownerFilterHtml(m) {
+  const b = (k, l) => `<button type="button" data-owner="${k}" aria-pressed="${m.filter === k}">${l} <span>${m.counts[k]}</span></button>`;
+  return `<div class="h-ownerf" role="group" aria-label="Whose actions">${b('both', 'Both')}${b('me', 'Me')}${b('spouse', 'Spouse')}</div>`;
+}
+
+function dhealthHtml(h) {
+  const links = `${h.pending > 0 ? goA('confirm', 'Confirm') : ''}${goA('add', 'Files')}${goA('accounts', 'Accounts')}`;
+  return `<div class="h-dhealth${h.stale ? ' stale' : ''}"><i class="h-dh-dot" aria-hidden="true"></i><span class="h-dhealth-t">${esc(h.parts.join(', '))}</span><span class="h-dhealth-a">${links}</span></div>`;
+}
+
+const homeHealth = () => healthLine({
+  pace: api.s.pace || null, ingest: api.ingest(), accounts: api.s.accounts,
+  metaDataThrough: api.s.meta?.dataThrough ? api.txt(api.s.meta.dataThrough) : null
+});
+
+// Phone: the one next thing for the filtered owner, with Done, Later and Ask.
+function nextHtml(m, subject) {
+  const r = m.nextThing;
+  if (!r) return `<div class="h-next-empty">Nothing open for ${subject}</div>`;
+  const first = arr(r.why)[0];
+  const why = first ? T(first) : T(r.summary);
+  const ids = servedGoalIds(r);
+  const serves = ids.length && !r.housekeeping
+    ? `Serves ${ids.map((id) => `<a href="${href('goals')}" data-go="goals">${servedTitle(r, id)}</a>`).join(', ')}`
+    : 'Housekeeping, serves no goal';
+  const cd = countdown(r);
+  const id = esc(r.id);
+  return `<div class="h-next-deck${m.afterThat.length ? ' stack' : ''}"><article class="h-next" data-next-rec="${id}">
+    <div class="h-next-top"><span class="h-next-k">Next</span>${whoTag(r)}<span class="h-next-cd${cdTone(r)}"><b>${cd.n}</b><span>${cd.u}</span></span></div>
+    <h2 class="h-next-t">${recLink(r)}</h2>
+    ${why ? `<p class="h-next-why">${why}</p>` : ''}
+    <p class="h-serves-l">${serves}</p>
+    <p class="h-next-win">${windowText(r)}</p>
+    <div class="h-next-acts"><button type="button" class="h-btn pri" data-act="complete" data-rec="${id}">Done</button><button type="button" class="h-btn" data-act="snooze" data-rec="${id}" data-arg="${esc(snoozeLabel())}">Later</button><button type="button" class="h-btn" data-ask-next="${id}">Ask</button></div>
+  </article></div>
+  <p class="h-next-hint"><span>Swipe left for later, right for done</span></p>`;
+}
+
+function afterHtml(m) {
+  if (!m.afterThat.length) return '';
+  return `<div class="h-after"><div class="h-after-l">After that</div>${m.afterThat.map((r) => `<div class="h-after-r" data-rec="${esc(r.id)}"><span class="h-after-d">${fmt(recDate(r))}</span>${recLink(r)}${whoTag(r)}</div>`).join('')}</div>`;
+}
+
+function pHome() {
+  const pace = api.s.pace || null;
+  const m = homeModel({ goals: api.s.goals, pace, recs: api.recs(), filter: ui.owner });
+  const subject = SUBJECT[m.filter];
+  const c = clock();
+  const ye = daysBetween(c, new Date(Date.UTC(c.getUTCFullYear(), 11, 31)));
+  const before = m.queue.filter((r) => days(r) <= ye).length;
+  const hc = healthChip(pace);
+  const head = `<div class="h-home-head"><div class="h-home-k">${T(api.s.meta.clockLabel)}</div>`
+    + `<a class="h-hchip ${hc.tone}" href="${href('pace')}" data-go="pace">${esc(hc.label)}${icon('arrow')}</a>`
+    + `<h1 class="h-home-h">${esc(pace?.rollup?.headline || 'No goals with targets')}</h1>`
+    + `<p class="h-home-sub">${plural(before, 'thing')} before Dec 31</p></div>`;
+  const health = dhealthHtml(homeHealth());
+  const cards = m.expanded.length ? `<div class="h-gcards">${m.expanded.map((x) => goalCardHome(x, subject)).join('')}</div>` : '';
+  const empty = m.cards.length ? '' : `<div class="h-home-empty"><b>No goals yet.</b><p>Pace and next actions hang off your goals. ${goA('goals', 'Add a goal')}</p></div>`;
+  const goalsH = `<div class="h-home-sec"><h2>Goals</h2>${goA('goals', 'All goals')}</div>`;
+  const rest = `${goalsH}${cards}${empty}${quietHtml(m.collapsed)}${hkHtml(m.housekeeping)}`;
+  const inner = isPhone()
+    ? `${ownerFilterHtml(m)}${head}${nextHtml(m, subject)}${afterHtml(m)}${health}${rest}`
+    : `<header class="h-home-top">${head}${ownerFilterHtml(m)}</header>${health}${rest}`;
+  return shell(`<section class="h-home">${inner}</section>`, 'home');
+}
+
+/* ---------- pace board ---------- */
+
+// 'YYYY-MM' of the scenario clock, the form pace series months use.
+const clockMonth = () => { const c = clock(); return `${c.getUTCFullYear()}-${String(c.getUTCMonth() + 1).padStart(2, '0')}`; };
+const monthIdx = (m) => Number(String(m?.month || '').slice(5, 7)) - 1;
+
+const METERS = [['retirement', 'Retirement room used, closes Dec 31'], ['tax', 'Tax reserved vs owed'], ['income', 'Income vs plan']];
+
+function meterHtml([k, label]) {
+  const mt = api.s.pace?.meters?.[k];
+  const base = `pace.meters.${k}.meter`;
+  const ratio = mt?.meter ? (figVal(`${base}.ratio`) ?? (Number.isFinite(mt.meter.ratio?.v) ? mt.meter.ratio.v : null)) : null;
+  if (ratio == null) {
+    return `<div class="h-meter" data-meter="${k}"><div class="h-meter-top"><span>${label}</span></div><p class="h-meter-none">${esc(reasonText(mt?.reason))}</p></div>`;
+  }
+  const r = Math.max(0, Math.min(1, ratio));
+  const asOf = mt.stale && mt.dataThrough ? `<p class="h-meter-note">Data stale, as of ${esc(shortDate(mt.dataThrough))}</p>` : '';
+  return `<div class="h-meter" data-meter="${k}"><div class="h-meter-top"><span>${label}</span><span>${figHtml(`${base}.used`, { k: true })} of ${figHtml(`${base}.limit`, { k: true })}</span></div>`
+    + `<div class="h-mbar${mt.stale ? ' muted' : ''}" aria-hidden="true"><i style="width:${pct(r)}%"></i></div>${asOf}</div>`;
+}
+
+// Diverging monthly bars of actual minus plan. One axis with a zero baseline; observed months are
+// filled (accent ahead, warn behind), projected months are a dashed outline. Bars are clipped at
+// the baseline so only the data end is rounded.
+function paceChart(ch, ci) {
+  const W = 360, H = 196, L = 46, R = 6, Tp = 24, B = 24;
+  const ser = arr(ch.series);
+  const n = ser.length || 12;
+  const vals = ser.map((m) => (m && m.gap && Number.isFinite(m.gap.v) ? m.gap.v : null));
+  const fin = vals.filter((v) => v != null);
+  const yt = niceTicks(Math.min(0, ...fin), Math.max(0, ...fin), 4);
+  const y0 = yt[0], y1 = yt[yt.length - 1];
+  const sy = (v) => Tp + (1 - (v - y0) / ((y1 - y0) || 1)) * (H - Tp - B);
+  const slot = (W - L - R) / n;
+  const bw = slot - 2;
+  const zy = sy(0);
+  const cid = `h-pc-${ci}`;
+  const curM = clockMonth();
+  const g0 = arr(api.s.goals).find((x) => x.id === ch.id);
+  const title = g0 ? goalTitle(g0) : esc(ch.title);
+  let g = `<svg class="h-pc" viewBox="0 0 ${W} ${H}" role="group" aria-label="${esc(api.txt(ch.title || ''))}: ahead or behind plan, by month">`;
+  g += `<defs><clipPath id="${cid}-p"><rect x="0" y="0" width="${W}" height="${zy}"/></clipPath><clipPath id="${cid}-n"><rect x="0" y="${zy}" width="${W}" height="${H - zy}"/></clipPath></defs>`;
+  yt.forEach((v) => {
+    if (v !== 0) g += `<line class="h-pc-grid" x1="${L}" x2="${W - R}" y1="${sy(v)}" y2="${sy(v)}"/>`;
+    g += `<text class="h-pc-t h-sc-t" x="${L - 7}" y="${sy(v) + 3.5}" text-anchor="end">${esc(api.money(v, { k: true, sign: v !== 0 }))}</text>`;
+  });
+  let pos = '', neg = '';
+  ser.forEach((m, i) => {
+    const v = vals[i];
+    const mi = monthIdx(m);
+    const x = L + i * slot + 1;
+    g += `<text class="h-pc-m${m?.month === curM ? ' cur' : ''}" x="${x + bw / 2}" y="${H - 7}" text-anchor="middle">${MON[mi] ? MON[mi][0] : ''}</text>`;
+    if (v == null) return;
+    const h = Math.max(1.5, Math.abs(sy(v) - zy));
+    const rr = Math.min(4, bw / 2);
+    const up = v >= 0;
+    const y = up ? zy - h : zy - rr;
+    const tip = `${MONTH_FULL[mi] || m.month}: ${api.money(Math.abs(v), { k: true })} ${up ? 'ahead of' : 'behind'} plan${m.projected ? ', projected' : ''}`;
+    const rect = `<rect class="h-pbar-m fx-fig ${up ? 'pos' : 'neg'}${m.projected ? ' proj' : ''}" data-month="${esc(m.month)}" data-fig="${esc(`${ch.figBase}.${i}.gap`)}" data-kind="${esc(m.gap.kind || '')}" tabindex="0" x="${x}" y="${y}" width="${bw}" height="${h + rr}" rx="${rr}"><title>${esc(tip)}</title></rect>`;
+    if (up) pos += rect; else neg += rect;
+  });
+  g += `<g clip-path="url(#${cid}-p)">${pos}</g><g clip-path="url(#${cid}-n)">${neg}</g>`;
+  g += `<line class="h-pc-zero" x1="${L}" x2="${W - R}" y1="${zy}" y2="${zy}"/>`;
+  const endIdx = ch.dataEnd ? ser.findIndex((m) => m?.month === ch.dataEnd.slice(0, 7)) : -1;
+  if (endIdx >= 0) {
+    const ex = L + (endIdx + 1) * slot;
+    const right = ex > W - 96;
+    g += `<line class="h-pc-end" x1="${ex}" x2="${ex}" y1="${Tp - 14}" y2="${H - B}"/>`;
+    g += `<text class="h-pc-endl" x="${right ? ex - 5 : ex + 5}" y="${Tp - 6}" text-anchor="${right ? 'end' : 'start'}">data ends ${esc(shortDate(ch.dataEnd))}</text>`;
+  }
+  g += '</svg>';
+  // Headline: the gap at the data end, from the stored figure.
+  const li = endIdx >= 0 && vals[endIdx] != null ? endIdx : vals.map((v, i) => (v != null && !ser[i].projected ? i : -1)).filter((i) => i >= 0).pop();
+  const last = li != null && li >= 0 ? `<span class="h-pc-last ${vals[li] >= 0 ? 'pos' : 'neg'}">${figHtml(`${ch.figBase}.${li}.gap`, { k: true, abs: true })} ${vals[li] >= 0 ? 'ahead' : 'behind'} in ${MON[monthIdx(ser[li])]}</span>` : '';
+  const cell = (i, k, o = {}) => (ser[i]?.[k] && api.fig(`${ch.figBase}.${i}.${k}`) ? figHtml(`${ch.figBase}.${i}.${k}`, o) : '<span class="h-mute">No reading</span>');
+  const rows = ser.map((m, i) => `<tr${m.projected ? ' class="proj"' : ''}><th scope="row">${MON[monthIdx(m)] || esc(m.month)}${m.projected ? '<em>projected</em>' : ''}</th><td>${cell(i, 'plan')}</td><td>${cell(i, 'actual')}</td><td>${cell(i, 'gap', { sign: true })}</td></tr>`).join('');
+  const det = `pace-table-${ch.id}`;
+  return `<figure class="h-pchart" data-chart="${esc(ch.id)}"><figcaption><div><b>${title}</b><span>Ahead or behind plan, by month</span></div>${last}</figcaption>${g}`
+    + '<div class="h-pc-key"><span><i class="k pos"></i>Ahead of plan</span><span><i class="k neg"></i>Behind plan</span><span><i class="k proj"></i>Projected</span></div>'
+    + `<details class="h-ptable" data-det="${esc(det)}"${ui.det[det] ? ' open' : ''}><summary>As a table</summary><div class="h-ptable-s"><table><thead><tr><th scope="col">Month</th><th scope="col">Plan</th><th scope="col">Actual</th><th scope="col">Gap</th></tr></thead><tbody>${rows}</tbody></table></div></details></figure>`;
+}
+
+function pPace() {
+  const pace = api.s.pace || null;
+  const hc = healthChip(pace);
+  const charts = boardCharts(pace);
+  const curM = clockMonth();
+  const projected = charts.some((ch) => ch.dataEnd && ch.dataEnd.slice(0, 7) < curM);
+  const body = charts.length
+    ? `<div class="h-pcharts">${charts.map(paceChart).join('')}</div>`
+    : `<p class="h-pchart-none">${esc(reasonText(pace?.series?.householdSavings?.reason))}</p>`;
+  const h = homeHealth();
+  return shell(`<section class="h-pace"><a class="h-back" href="${href('home')}" data-go="home">${icon('back')}Home</a>
+    <div class="h-pace-head"><span class="h-hchip ${hc.tone}">${esc(hc.label)}</span><h1>${esc(pace?.rollup?.headline || 'No goals with targets')}</h1><p class="h-pace-why">${esc(paceReason(pace))}</p></div>
+    ${section(charts.length && charts[0].id === 'householdSavings' ? 'Household savings' : 'By goal', body, charts.length ? 'Solid is observed, dashed is projected' : '')}
+    ${section('This year', `<div class="h-meters">${METERS.map(meterHtml).join('')}</div>`)}
+    <p class="h-pace-fresh">${icon('clock')}<span>${esc(h.dataLabel)}.${projected ? ' Later months are projected.' : ''} ${goA('add', 'Files')} ${goA('accounts', 'Accounts')}</span></p></section>`, 'home');
 }
 
 /* ---------- plan ---------- */
@@ -536,8 +703,22 @@ function pPlan() {
   const stats = `<div class="h-stats">${counts.map(([n, l]) => `<div><b>${n}</b><span>${l}</span></div>`).join('')}</div>`;
   const body = groups.filter((g) => g[1].length).map(([t, list]) => section(`${t} <em>${list.length}</em>`, `<div class="h-rows">${list.map((r) => recRow(r, ny)).join('')}</div>`)).join('')
     + (dismissed.length ? `<details class="h-details" data-det="dismissed"${ui.det.dismissed ? ' open' : ''}><summary>Not for us <em>${dismissed.length}</em></summary><div class="h-rows">${dismissed.map((r) => recRow(r, ny)).join('')}</div></details>` : '');
+  // Covered domains, What changed and the email note moved here from the old Year page.
+  const evs = arr(api.s.events);
+  const changed = evs.length ? `<ol class="h-evs">${evs.map((e) => `<li><time>${T(e.date)}</time><div><b>${T(e.title)}</b><p>${T(e.body)}</p></div></li>`).join('')}</ol>` : '<p class="h-mute">Nothing new since the last brief.</p>';
+  const doms = arr(api.s.domains).map((dm) => {
+    const st = liveDomainStatus(dm, ny);
+    const lab = { covered: 'Covered', changed: 'Changed', needs: 'Needs you', waiting: 'Waiting' }[st] || st;
+    return `<div class="h-dom ${st}"><div class="h-dom-h"><i></i><b>${T(dm.name)}</b><span>${lab}</span></div><p>${T(dm.note)}</p><p class="h-mute sm">${T(dm.watching)}</p></div>`;
+  }).join('');
+  const quiet = arr(api.s.domains).filter((d) => liveDomainStatus(d, ny) === 'covered').length;
+  const more = `<div class="h-cols">
+      <div class="h-col-main">${section('Covered', `<div class="h-doms">${doms}</div>`, `${quiet} of ${arr(api.s.domains).length} quiet`)}</div>
+      <div class="h-col-side">${section('What changed', changed)}
+        <div class="h-mailnote">${icon('doc')}<div>This brief also went out as your monthly email. ${goA('email', 'Read the email')}</div></div></div>
+    </div>`;
   return shell(`${pageHead('Plan', 'Everything on the calendar', 'Each item sits at the date its window closes. Decide, do it, or set it aside.')}${stats}
-    ${section('Timeline', timeline('plan'))}${body || '<p class="h-mute">No recommendations yet.</p>'}`, 'plan');
+    ${section('Timeline', timeline('plan'))}${body || '<p class="h-mute">No recommendations yet.</p>'}${more}`, 'plan');
 }
 
 /* ---------- rec detail ---------- */
@@ -1181,7 +1362,7 @@ function pOnboarding(step) {
     }
   }
   const who = api.identity?.();
-  const exit = api.demo() !== 'fresh' ? goA('brief', 'Back to the app', {}, 'h-ob-x') : (who ? `<span class="h-ob-id">Signed in as ${esc(who.name || who.login)}</span>` : '');
+  const exit = api.demo() !== 'fresh' ? goA('home', 'Back to the app', {}, 'h-ob-x') : (who ? `<span class="h-ob-id">Signed in as ${esc(who.name || who.login)}</span>` : '');
   return `<div class="h-ob"><div class="h-ob-top"><span class="h-mark">${MARK}<span>${esc(api.s.meta.product || 'Fathom')}</span></span>${exit}</div>${rail}<div class="h-ob-card">${body}</div></div>`;
 }
 
@@ -1233,7 +1414,7 @@ function heardHtml(back, next) {
 /* ---------- draw and events ---------- */
 
 function routeNow() {
-  const r = api.route || { name: 'brief', params: {} };
+  const r = api.route || { name: 'home', params: {} };
   if (api.demo() === 'fresh' && r.name !== 'onboarding') return { name: 'onboarding', params: { step: onboardStep() } };
   return r;
 }
@@ -1357,6 +1538,7 @@ function draw() {
   let html;
   switch (r.name) {
     case 'onboarding': html = pOnboarding(Number(r.params?.step ?? onboardStep())); break;
+    case 'pace': html = pPace(); break;
     case 'plan': html = pPlan(); break;
     case 'ask': html = chatScreen.render(r.params?.id); break;
     case 'wargame': html = pWargame(r.params?.name); break;
@@ -1370,7 +1552,7 @@ function draw() {
     case 'connect': html = connect.render(connectH); break;
     case 'engine': html = engineScreen.render(); break;
     case 'email': html = pEmail(routeChanged); break;
-    default: html = pBrief();
+    default: html = pHome();
   }
   page.innerHTML = html;
   // On a narrow screen the main nav scrolls inside itself; keep the active link in view.
@@ -1455,6 +1637,10 @@ function onClick(e) {
     goalClick(gt);
     return;
   }
+  const ow = e.target.closest('[data-owner]');
+  if (ow && root.contains(ow)) { e.preventDefault(); ui.owner = ow.dataset.owner; draw(); return; }
+  const an = e.target.closest('[data-ask-next]');
+  if (an && root.contains(an)) { e.preventDefault(); askNext(an.dataset.askNext, an); return; }
   const sel = '[data-go],[data-act],[data-askrec],[data-recstart],[data-wg],[data-onboard],[data-savenote],[data-modal],[data-whatif],[data-packtoggle],[data-decide],[data-revisit],[data-more],[data-dlg]';
   let t = e.target.closest(`${sel},.fx-fig`);
   if (!t || !root.contains(t)) return;
@@ -1485,7 +1671,7 @@ function onClick(e) {
   if (d.onboard != null && d.onboard !== '') {
     e.preventDefault(); ui.modal = null; ui.build = 0;
     // Finishing Setup for a returning owner has no first-run flip to the brief, so go there.
-    if (Number(d.onboard) === 6 && api.demo() !== 'fresh') { api.onboard(6).then(() => api.go('brief')); return; }
+    if (Number(d.onboard) === 6 && api.demo() !== 'fresh') { api.onboard(6).then(() => api.go('home')); return; }
     api.onboard(Number(d.onboard));
     return;
   }
@@ -1499,6 +1685,16 @@ function onClick(e) {
     if (d.name) params.name = d.name;
     api.go(d.go, params);
   }
+}
+
+// Ask on the Home next-thing card: the rec's Ask thread when it has one, else the rec dialog with
+// its composer focused.
+function askNext(id, trigger) {
+  const th = api.recThread(id);
+  if (th) { api.go('ask', { id: th.id }); return; }
+  openRec(id, trigger);
+  const focus = () => { const el = root?.querySelector(`.h-dlg-host [data-draft="rec:${CSS.escape(id)}"]`); if (el) el.focus(); return !!el; };
+  if (!focus()) setTimeout(focus, 0);
 }
 
 // Save the Tell us note through the server's ingest path and show what it understood. The draft
@@ -1603,7 +1799,20 @@ function onToggle(e) {
   if (k && ui) ui.det[k] = e.target.open;
 }
 
-const onPointer = (e) => ingest?.handlePointer(e);
+// Home next-thing card swipe (phone): right is Done, left is Later. The card flies off while the
+// action saves; the redraw replaces it, and a failed save brings it back.
+const homeSwipe = createSwipe({
+  when: () => routeNow().name === 'home' && isPhone(),
+  card: 'article.h-next',
+  onSwipe: (dir, el) => {
+    const id = el.dataset.nextRec;
+    if (!id) return;
+    el.classList.add(dir > 0 ? 'out-r' : 'out-l');
+    setTimeout(() => { if (el.isConnected) el.classList.remove('out-r', 'out-l'); }, 1500);
+    if (dir > 0) api.act(id, 'complete'); else api.act(id, 'snooze', snoozeLabel());
+  }
+});
+const onPointer = (e) => ingest?.handlePointer(e) || homeSwipe(e);
 const POINTER = ['pointerdown', 'pointermove', 'pointerup', 'pointercancel'];
 
 // Root keys that are not shortcuts: Enter in the Ask composer and rename field first. Shortcuts go
@@ -1710,9 +1919,9 @@ if (window.Fathom?.registerDesign) register();
 else window.addEventListener('DOMContentLoaded', () => window.Fathom?.registerDesign && register(), { once: true });
 
 /* Reading notes:
-   1. The brief timeline uses a split scale: Jan 1 to today takes the left share, today to the last
+   1. The plan timeline uses a split scale: Jan 1 to today takes the left share, today to the last
       window takes the rest, so the months that still matter get the room. Month labels stay true.
    2. Event dates carry no year; they are read as the most recent such date on or before the clock.
-   3. Domain status on the brief turns to "needs you" when a needs-you rec sits in that domain, and a
+   3. Domain status on Plan turns to "needs you" when a needs-you rec sits in that domain, and a
       scenario "needs" domain reads as covered once none of its recs need the person.
    4. Year-end decisions linked to a rec read as done when that rec is done. */

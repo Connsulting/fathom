@@ -100,6 +100,31 @@ minimally. Data comes from `GET /api/scenario` (the CONTRACT.md scenario shape p
 actions POST to the API; each action response carries the fresh scenario. There is no review
 harness bar in the product. The demo build is a synthetic store seeded to the November state.
 
+Home (`#/home`, the default route; `#/brief` is an alias that core normalizes to `home`, so
+older email links keep working) is goals first. Its headline and health chip come from
+`scenario.pace.rollup`; each goal with a target gets a card with its pace chip, a bar of actual
+against target with a plan-today tick, and its next open action. Stale or otherwise unknown
+pace is never shown as on pace: the chip says "Data stale" or "Pace unknown". Goals with no
+target, and on-pace or ahead goals with nothing due, collapse into one quiet row; actions that
+serve no goal sit in a housekeeping row. An owner filter (Both, Me, Spouse) narrows every
+action list, and one data-health line (data through date, stale accounts or goals, Confirm
+questions, failed files) replaces the Confirm banner and nav badge. On a phone the first card
+is the single next thing, with Done, Later and Ask and a swipe (right is Done, left is Later)
+shared with the Confirm deck through `web/horizon/screens/swipe.js`, then the next three. The
+health chip opens the pace board at `#/pace`: monthly ahead-or-behind bars per series (observed
+months filled, projected months dashed, a "data ends" marker), the retirement, tax and income
+meters or the reason each is missing, and a freshness note. Every dollar figure on both pages
+is a `pace.*` figure with its provenance popover. The view model is the pure module
+`web/horizon/screens/home-model.js`. Domain cards (Covered), What changed and the monthly email
+note moved to Plan, whose timeline also draws past What-changed events.
+
+Owners and goal links come from the recs themselves (`loadLinkedRecs`): every rec has an
+`owner`, `serves` (its open goals) and `housekeeping`. The housekeeping row lists housekeeping
+recs that are not done, dismissed or hidden, so under Both its count equals
+`live.housekeeping`. The spouse is a filter, not yet the signed-in member: Me shows owners you
+and both, Spouse shows spouse and both, Both shows every action. Health is per goal and the
+household headline is derived from it; goals without targets are not counted.
+
 ### 5. Facts
 
 A store table of `{key, value JSON, src, asOf, confirmed}` (table `facts`, with provenance

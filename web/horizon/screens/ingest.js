@@ -4,6 +4,8 @@
    holders, descriptions, source labels) is plain text and always goes through esc(), never token
    resolution. */
 
+import { createSwipe } from './swipe.js';
+
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 const STATUS = {
@@ -50,14 +52,14 @@ export const DECK_KEYS = [
   { key: 'ArrowLeft', label: 'Previous card', action: 'prev' },
   { key: 'z', label: 'Undo the last answer', action: 'undo' },
   { key: 'u', label: 'Undo the last answer', action: 'undo' },
-  { key: 'Escape', label: 'Back to Year', action: 'leave' }
+  { key: 'Escape', label: 'Back to Home', action: 'leave' }
 ];
 
 // The deck keys as keyboard registry rows (web/horizon/keys.js), one row per action in DECK_KEYS
 // order, keys in normalizeKey form. run(actionName, event) does the work.
 const DECK_LABEL = {
   pick: 'Answer with that option', guess: "Take Fathom's guess", next: 'Next card',
-  prev: 'Previous card', undo: 'Undo the last answer', leave: 'Back to Year'
+  prev: 'Previous card', undo: 'Undo the last answer', leave: 'Back to Home'
 };
 const active = () => (typeof document === 'undefined' ? null : document.activeElement);
 const typing = (el) => !!el && (el.isContentEditable === true || /^(INPUT|TEXTAREA|SELECT)$/.test(String(el.tagName || '').toUpperCase()));
@@ -806,7 +808,7 @@ export function ingestScreens(h) {
       case 'next': return move(1) || true;
       case 'prev': return move(-1) || true;
       case 'undo': return undo() || true;
-      case 'leave': api.go('brief'); return true;
+      case 'leave': api.go('home'); return true;
       default: return false;
     }
   }
@@ -814,38 +816,12 @@ export function ingestScreens(h) {
   // Touch and pen swipes on the current card: it follows the finger, swipe right goes to the next
   // card, left to the previous one, and a short drag springs back. A swipe never answers, and a drag
   // that starts on a control, a detail toggle or a scrolling table is left to it.
-  let drag = null;
-  function handlePointer(e) {
-    if (e.type === 'pointerdown') {
-      drag = null;
-      if (api.route?.name !== 'confirm' || (e.pointerType !== 'touch' && e.pointerType !== 'pen')) return false;
-      const el = e.target.closest?.('article.h-deck-card.cur');
-      if (!el || e.target.closest('button,a,input,textarea,select,summary,.h-cf-scroll')) return false;
-      drag = { id: e.pointerId, x: e.clientX, y: e.clientY, dx: 0, on: false, el };
-      return true;
-    }
-    if (!drag || e.pointerId !== drag.id) return false;
-    // A redraw during the drag (resize, a scenario change) replaces the card element.
-    if (!drag.el.isConnected) drag.el = document.querySelector('article.h-deck-card.cur') || drag.el;
-    if (e.type === 'pointermove') {
-      const dx = e.clientX - drag.x;
-      if (!drag.on) {
-        if (Math.abs(dx) < 6 || Math.abs(dx) < Math.abs(e.clientY - drag.y)) return true;
-        drag.on = true;
-        drag.el.classList.add('drag');
-      }
-      drag.dx = dx;
-      drag.el.style.transform = `translateX(${dx}px) rotate(${(dx / 30).toFixed(2)}deg)`;
-      return true;
-    }
-    const d = drag;
-    drag = null;
-    const far = e.type === 'pointerup' && d.on && Math.abs(d.dx) >= Math.min(80, (d.el.offsetWidth || 320) * 0.25);
-    d.el.classList.remove('drag');
-    d.el.style.transform = '';
-    if (far) move(d.dx > 0 ? 1 : -1);
-    return true;
-  }
+  const handlePointer = createSwipe({
+    when: () => api.route?.name === 'confirm',
+    card: 'article.h-deck-card.cur',
+    ignore: 'button,a,input,textarea,select,summary,.h-cf-scroll',
+    onSwipe: (dir) => move(dir)
+  });
 
   function upload(input) {
     const files = Array.from(input.files || []);

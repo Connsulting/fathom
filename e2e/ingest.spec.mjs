@@ -1,11 +1,11 @@
 // Ingest: add files from Accounts, see per-file results and the new manual accounts with their
-// last data date and freshness, follow the Year banner's Start to the Confirm deck, answer an owner
+// last data date and freshness, follow Home's data-health Confirm link to the deck, answer an owner
 // question, and see the owner on Accounts. Expected values come from the upload response and the
 // confirm API, never literals. The demo seeds pending questions, so counts start from the API.
 
 import { writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { test, expect, S, resetDemo, gotoRoute, quickChecks, aboutMinutes, yearBanner, bannerStart, deckCard, deckEach, deckFind } from './helpers.mjs';
+import { test, expect, S, resetDemo, gotoRoute, questionsToConfirm, dataHealth, healthConfirm, deckCard, deckEach, deckFind } from './helpers.mjs';
 
 const fixture = (name) => fileURLToPath(new URL(`../test/fixtures/ingest/${name}`, import.meta.url));
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -56,17 +56,16 @@ test('add files, confirm an owner, and see it on Accounts', async ({ page, reque
     await expect(card.getByText(a.fresh === 'fresh' ? 'Fresh' : 'Stale', { exact: true })).toBeVisible();
   }
 
-  // The Year banner counts the new questions on top of the seeded ones.
+  // Home's data-health line counts the new questions on top of the seeded ones.
   const pending = body.pending;
   expect(pending).toBeGreaterThan(before);
-  await gotoRoute(page, 'brief');
-  await expect(yearBanner(page)).toBeVisible();
-  await expect(yearBanner(page)).toContainText(quickChecks(pending));
-  await expect(yearBanner(page)).toContainText(aboutMinutes(pending));
+  await gotoRoute(page, 'home');
+  await expect(dataHealth(page)).toBeVisible();
+  await expect(dataHealth(page)).toContainText(questionsToConfirm(pending));
 
-  // Start opens the Confirm deck. The new owner questions and the seeded one share the owner
+  // Its Confirm link opens the deck. The new owner questions and the seeded one share the owner
   // group card: pick You on the aggregator account's row and apply the selections.
-  await bannerStart(page).click();
+  await healthConfirm(page).click();
   await expect(page).toHaveURL(/#\/confirm$/);
   await expect(page.locator('.h-deck')).toBeVisible();
   const account = added.find((a) => body.scenario.live.ingest.items.some((i) => i.kind === 'account_owner' && i.subject === a.id && a.inst));
@@ -88,13 +87,13 @@ test('add files, confirm an owner, and see it on Accounts', async ({ page, reque
   const left = await pendingIds(request);
   expect(left).not.toContain(item.id);
 
-  // The owner label shows on Accounts; one fewer quick check is pending on the brief.
+  // The owner label shows on Accounts; one fewer question is pending on Home.
   await gotoRoute(page, 'accounts');
   const card = page.locator('.h-acc').filter({ hasText: account.name });
   await expect(card).toContainText(`${account.inst}, ${option.label}`);
-  await gotoRoute(page, 'brief');
-  if (left.length) await expect(yearBanner(page)).toContainText(quickChecks(left.length));
-  else await expect(yearBanner(page)).toHaveCount(0);
+  await gotoRoute(page, 'home');
+  if (left.length) await expect(dataHealth(page)).toContainText(questionsToConfirm(left.length));
+  else await expect(healthConfirm(page)).toHaveCount(0);
 });
 
 // Review finding F3: a file that is only waiting (no confirm question) is recoverable from Accounts.
