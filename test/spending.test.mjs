@@ -1,6 +1,7 @@
 // Household spending (src/pnl): trailing twelve months of categorized spending on household
 // accounts, with housing and taxes toggles, left-out buckets, data gaps, figure provenance and the
-// rows behind a cell. Tags: pl-ac2 household behavior, pl-ac3 provenance and rows, pl-ac4 HTTP.
+// rows behind a cell. Tags: pl-ac2 household behavior, pl-ac3 provenance and rows, pl-ac4 HTTP,
+// pnl2-ac2 the rows sum equals the cell it opens from, pnl2-ac3 a month bounds the rows.
 //
 // Synthetic store, clock 2032-11-05. Everyday checking pays a mortgage (1,500), groceries (200) and
 // receives pay on the 1st, 5th and 10th of every month Dec 2031..Oct 2032, plus one Nov 2032 row in
@@ -21,6 +22,7 @@ import { loadCategoryInputs } from '../src/categories/store.mjs';
 import { serveAppFixture, tempDb } from './helpers/server.mjs';
 import { seedDemo } from '../demo/seed.mjs';
 import { householdSpending, householdSpendingRows, PnlError } from '../src/pnl/index.mjs';
+import { ITEM_LIMIT } from '../src/pnl/shared.mjs';
 
 const CLOCK = '2032-11-05';
 const r2 = (x) => Math.round(x * 100) / 100;
@@ -365,11 +367,13 @@ test('pl-ac3 householdSpendingRows lists exactly the rows behind a cell, and the
     assert.equal(r.items.length, count);
     assert.ok(r.items.every((i) => i.kind === 'transaction'));
     assert.equal(r2(-r.items.reduce((a, i) => a + i.amount, 0)), val(p, cell), `rows sum to the cell ${JSON.stringify(opts)}`);
+    assert.equal(val(r, r.sum), val(p, cell), `the sum figure is the cell ${JSON.stringify(opts)}`);
     const dates = r.items.map((i) => i.date);
     assert.deepEqual(dates, dates.toSorted().reverse(), 'newest first');
     for (const i of r.items) {
       assert.ok(r.figures[i.fig], `item figure ${i.fig}`);
-      assert.equal(r2(r.figures[i.fig].v), r2(i.amount));
+      assert.equal(r2(i.value), r2(-i.amount), 'the counted value is the amount negated');
+      assert.equal(r2(r.figures[i.fig].v), r2(i.value), 'the item figure is the counted value');
       assert.ok(r.sources[r.figures[i.fig].src]);
       assert.equal(typeof i.account, 'string');
     }
@@ -385,6 +389,99 @@ test('pl-ac3 householdSpendingRows lists exactly the rows behind a cell, and the
   assert.deepEqual(shop.items.map((i) => i.id), [ids.guess], 'the business account purchase is not behind the cell');
   check({ bucket: 'household', category: 'Uncategorized' }, catOf(p, 'household', 'Uncategorized').total, 1);
   check({ bucket: 'household', category: 'Dining & Drinks' }, catOf(p, 'household', 'Dining & Drinks').total, 2);
+});
+
+/* ---------------------------------------------------------------- pnl2-ac2, pnl2-ac3 */
+
+// For every category of every bucket of one spending read: the rows for each month with a cell sum
+// (the response's `sum` figure) to that cell and list only that month; the rows for the range sum to
+// the category total; uncapped items add up to the sum; each item's figure is its counted value, the
+// amount negated. Returns how many cells it checked.
+function checkRowsMatchCells(db, p) {
+  let cells = 0;
+  const base = { db, from: p.from, to: p.to, include: p.include, exclude: p.exclude };
+  const items = (r, where) => {
+    for (const i of r.items) {
+      const f = r.figures[i.fig];
+      assert.ok(f, `${where}: item figure ${i.fig}`);
+      assert.equal(typeof i.value, 'number', `${where}: item ${i.id} has a value`);
+      assert.equal(r2(i.value), r2(-i.amount), `${where}: item ${i.id} counted value is the amount negated`);
+      assert.equal(r2(f.v), r2(i.value), `${where}: item ${i.id} figure is its counted value`);
+    }
+    if (r.total <= ITEM_LIMIT) {
+      assert.equal(r.items.length, r.total, `${where}: uncapped`);
+      assert.equal(r2(r.items.reduce((a, i) => a + i.value, 0)), val(r, r.sum), `${where}: the items add up to the sum`);
+    }
+  };
+  for (const b of p.buckets) {
+    for (const c of b.categories) {
+      for (const m of monthList(p)) {
+        if (!c.months[m]) continue;
+        const where = `${b.bucket} ${c.category} ${m}`;
+        const r = householdSpendingRows({ ...base, bucket: b.bucket, category: c.category, month: m });
+        assert.ok(r.sum, `${where}: the response has a sum figure`);
+        assert.equal(val(r, r.sum), val(p, c.months[m]), `${where}: sum equals the cell`);
+        assert.ok(r.items.length > 0, `${where}: a cell has rows`);
+        for (const i of r.items) assert.equal(String(i.date).slice(0, 7), m, `${where}: item ${i.id} date ${i.date} is in the month`);
+        items(r, where);
+        cells++;
+      }
+      const where = `${b.bucket} ${c.category} range`;
+      const r = householdSpendingRows({ ...base, bucket: b.bucket, category: c.category });
+      assert.ok(r.sum, `${where}: the response has a sum figure`);
+      assert.equal(val(r, r.sum), val(p, c.total), `${where}: sum equals the category total`);
+      for (const i of r.items) assert.ok(String(i.date).slice(0, 7) >= p.from && String(i.date).slice(0, 7) <= p.to, `${where}: item ${i.id} is in the range`);
+      items(r, where);
+    }
+  }
+  return cells;
+}
+
+test('pnl2-ac2 pnl2-ac3 household rows: for every category and every month cell the rows sum to the cell, only that month, items carry their counted value', (t) => {
+  const { db } = store(t);
+  const ids = household(db);
+  let cells = 0;
+  for (const opts of [{}, { include: ['tax'] }, { exclude: ['housing'] }, { include: ['tax'], exclude: ['housing'], from: '2032-02', to: '2032-07' }]) {
+    cells += checkRowsMatchCells(db, householdSpending({ db, ...opts }));
+  }
+  assert.ok(cells > 40, `checked ${cells} cells`);
+
+  // A refund is a negative spending value and lowers the month's sum.
+  const mar = householdSpendingRows({ db, bucket: 'household', category: 'Groceries', month: '2032-03' });
+  const refund = mar.items.find((i) => i.id === ids.refund);
+  assert.equal(refund.amount, 40);
+  assert.equal(refund.value, -40);
+  assert.equal(val(mar, mar.sum), 160);
+
+  // A month inside the range with no rows for a real category: no items and a zero sum.
+  const none = householdSpendingRows({ db, bucket: 'household', category: 'Dining & Drinks', month: '2032-03' });
+  assert.deepEqual(none.items, []);
+  assert.equal(none.total, 0);
+  assert.equal(val(none, none.sum), 0);
+});
+
+test('pnl2-ac2 household rows on the demo store: every month cell and every total matches its rows sum', async (t) => {
+  const s = await tempDb();
+  t.after(() => s.close());
+  seedDemo(s.db);
+  const cells = checkRowsMatchCells(s.db, householdSpending({ db: s.db }));
+  assert.ok(cells > 0, 'the demo has month cells');
+});
+
+test('pnl2-ac2 a capped household rows read still sums every matching row, not just the listed items', (t) => {
+  const { db } = store(t);
+  account(db, 'chk', 'checking', 'Everyday checking', { sort: 1 });
+  const n = ITEM_LIMIT + 25;
+  for (let i = 0; i < n; i++) txn(db, 'chk', `2032-05-${pad((i % 28) + 1)}`, -(1 + (i % 7)), `Synthetic market ${i}`, 'Groceries');
+  const p = householdSpending({ db });
+  const c = catOf(p, 'household', 'Groceries');
+  const r = householdSpendingRows({ db, bucket: 'household', category: 'Groceries', month: '2032-05' });
+  assert.equal(r.total, n);
+  assert.equal(r.items.length, ITEM_LIMIT, 'items are capped');
+  assert.equal(val(r, r.sum), val(p, c.months['2032-05']), 'the sum counts every row');
+  assert.notEqual(r2(r.items.reduce((a, i) => a + i.value, 0)), val(r, r.sum), 'the listed items alone fall short');
+  const all = householdSpendingRows({ db, bucket: 'household', category: 'Groceries' });
+  assert.equal(val(all, all.sum), val(p, c.total));
 });
 
 /* ---------------------------------------------------------------- pl-ac4 */
