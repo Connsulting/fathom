@@ -111,11 +111,11 @@ const exactHit = (n, v) => (close(v, n.value, n.money || n.abbrev)
   && (n.percent || Math.abs(v - n.value) <= 0.0050001)) || (n.percent && close(v, n.value / 100));
 function droppedCents(n, v) {
   if (n.words || n.abbrev || n.percent || !n.money) return false;
-  if (/\.\d*[1-9]/.test(n.text)) return false;
+  if (/\.\d/.test(n.text)) return false;
   return magnitudes(v).some(t => Math.trunc(t) === n.value && Math.abs(t - n.value) > 0.0050001);
 }
 function listCount(n, calls) {
-  if (!n.words || n.money || n.percent || n.value < 1 || n.value > 20 || !Number.isInteger(n.value)) return false;
+  if (!n.words || n.money || n.percent || n.value < 0 || n.value > 20 || !Number.isInteger(n.value)) return false;
   return calls.some(c => !c.isError && arrayLengths(c.result).includes(n.value));
 }
 function abbrevRounded(n, numbers) {
@@ -159,8 +159,8 @@ export function gradeFigures(text, calls, { figures = {}, contextNumbers = [] } 
     let kind = 'unsourced';
     let arithmetic = null;
     if (n.words) kind = 'spelled_out';
-    else if (abbrevRounded(n, numbers) || coarseRounded(n, numbers)) kind = 'rounded';
     else if (inContext(n, contextNumbers)) kind = 'context-only';
+    else if (abbrevRounded(n, numbers) || coarseRounded(n, numbers)) kind = 'rounded';
     else {
       arithmetic = derivation(n.value, numbers, n.money);
       if (arithmetic) kind = 'self-computed';
