@@ -92,7 +92,7 @@ import { needsYou as needsYouOf, packStatus } from '/shared/rules.mjs';
 import { isOwner } from '/shared/rec-links.mjs';
 
 const ROUTES = new Set(['onboarding', 'home', 'pace', 'brief', 'plan', 'rec', 'ask', 'wargame', 'goals', 'accounts',
-  'advisor', 'yearend', 'connect', 'engine', 'email', 'packs', 'confirm', 'add', 'money', 'settings', 'account', 'pnl', 'pnlrows']);
+  'advisor', 'yearend', 'connect', 'engine', 'email', 'packs', 'confirm', 'add', 'money', 'settings', 'memories', 'account', 'pnl', 'pnlrows']);
 const PARAM_KEY = { rec: 'id', onboarding: 'step', wargame: 'name', packs: 'id', ask: 'id', account: 'id', pnl: 'state', pnlrows: 'id' };
 // Routes whose param is a URLSearchParams string: kept as written in the hash ('=', '&' and the
 // string's own percent escapes literal), never decoded as one value.

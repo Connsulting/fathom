@@ -31,7 +31,9 @@ export async function main(argv = process.argv.slice(2), { scripts } = {}) {
   const scorecard = await runCases({ cases, live, maxUsd: budget ?? 100, outDir: dir, scripts });
   const counts = {};
   for (const c of scorecard.cases) counts[c.status] = (counts[c.status] ?? 0) + 1;
-  console.log(JSON.stringify({ cases: scorecard.completed, results: counts, costUsd: scorecard.costUsd, stopped: scorecard.stopped }));
+  console.log(JSON.stringify({ cases: scorecard.completed, selected: scorecard.selected, attempted: scorecard.attempted, results: counts,
+    reservedUsd: scorecard.reservedUsd, costUsd: scorecard.costUsd, stopped: scorecard.stopped,
+    unrun: scorecard.cases.filter(c => c.status === 'unrun').map(({ id, reason }) => ({ id, reason })) }));
   return scorecard.stopped || scorecard.cases.some(c => ['fail', 'xpass'].includes(c.status)) ? 1 : 0;
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

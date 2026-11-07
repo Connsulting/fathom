@@ -5,9 +5,10 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createEngine, BudgetExceededError } from '../src/engine/index.mjs';
-import { estimateUnknownCost, DEFAULT_MODEL } from '../src/engine/pricing.mjs';
+import { estimateUnknownCost, DEFAULT_MODEL, TITLE_MODEL } from '../src/engine/pricing.mjs';
 import { createEvalStore, createEvalLedger, runCases } from '../evals/harness.mjs';
 import { loadCases } from '../evals/cases.mjs';
+import { gradeThreadTitle } from '../evals/graders.mjs';
 
 async function cli(args = [], env = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'fathom-eval-test-'));
@@ -76,18 +77,17 @@ test('budget ledger excludes demo spend and refuses a later round inside one eng
     assert.equal(ledger.costUsd, 0);
     const request = { purpose: 'chat', system: 'Use tools.', messages: [{ role: 'user', content: 'Read the value.' }], maxTokens: 1024,
       tools: [{ name: 'read', kind: 'read', operations: [{ name: 'read', scope: 'read' }], description: 'Read a value.', inputSchema: { type: 'object', properties: {}, additionalProperties: false }, handler: () => ({ value: 10 }) }] };
-    const wrapped = ledger.begin(request);
-    const engine = createEngine({ mode: 'fake', ledger, capUsd: 1, responses: [
+    const wrapped = ledger.begin({ ...request, fake: [
+      { toolCalls: [{ name: 'read', args: {} }], costUsd: 0.99 }, { text: '10', costUsd: 0.02 },
+    ] });
+    const engine = createEngine({ admitRound: req => ledger.admitRound(req), mode: 'fake', ledger, capUsd: 1, responses: [
       { toolCalls: [{ name: 'read', args: {} }], costUsd: 0.99 }, { text: '10', costUsd: 0.02 },
     ] });
     await assert.rejects(engine.call(wrapped), BudgetExceededError);
     assert.equal(ledger.state.stopped, 'budget');
     assert.equal(ledger.costUsd, 0.99);
     assert.equal(ledger.reserves.length, 2);
-    const transcript = [...request.messages, { role: 'assistant', content: [{ type: 'tool_use', name: 'read', input: {} }] },
-      { role: 'tool', content: [{ name: 'read', args: {}, result: { value: 10 } }] }];
-    const estimate = estimateUnknownCost({ model: DEFAULT_MODEL, maxTokens: 1024, system: request.system, messages: transcript, tools: request.tools });
-    assert.ok(ledger.reserves[1] >= estimate.costUsd);
+    assert.equal(ledger.reserves[1], 0.02);
   } finally { await store.close(); }
 });
 
@@ -96,7 +96,7 @@ test('budget admits valid neighboring rounds and records existing engine account
   try {
     const ledger = createEvalLedger({ db: store.db, maxUsd: 1 });
     const req = ledger.begin({ purpose: 'chat', system: 'Read.', messages: [{ role: 'user', content: 'Hi.' }], maxTokens: 1024, tools: [] });
-    const engine = createEngine({ mode: 'fake', ledger, capUsd: 1, responses: [{ text: 'Hi.', costUsd: 0.01 }] });
+    const engine = createEngine({ admitRound: req => ledger.admitRound(req), mode: 'fake', ledger, capUsd: 1, responses: [{ text: 'Hi.', costUsd: 0.01 }] });
     await engine.call(req);
     assert.equal(ledger.state.stopped, null);
     assert.equal(ledger.costUsd, 0.01);
@@ -107,10 +107,14 @@ test('budget admits valid neighboring rounds and records existing engine account
 test('budget and unknown accounting stop on their originating case and start no later cases', async () => {
   const cases = (await loadCases()).filter(c => !c.expectedFail).slice(0, 2);
   const stopped = await runCases({ cases, maxUsd: 0 });
-  assert.equal(stopped.cases.length, 1);
+  assert.equal(stopped.cases.length, cases.length);
+  assert.equal(stopped.cases[1].status, 'unrun');
+  assert.match(stopped.cases[1].reason, /budget/);
   assert.equal(stopped.cases[0].status, 'budget-stopped');
   const unknown = await runCases({ cases, scripts: () => [{ text: 'Not available.', costUsd: null }] });
-  assert.equal(unknown.cases.length, 1);
+  assert.equal(unknown.cases.length, cases.length);
+  assert.equal(unknown.cases[1].status, 'unrun');
+  assert.match(unknown.cases[1].reason, /accounting/);
   assert.equal(unknown.cases[0].status, 'accounting-stopped');
   assert.ok(unknown.costUsd > 0);
 });
@@ -160,4 +164,113 @@ test('unavailable cases accept a clear refusal in ordinary wording', async () =>
     { toolCalls: [{ name: 'household', args: { operation: 'facts', } }], costUsd: 0 }, { text: "Fathom doesn't track your credit score.", costUsd: 0 },
   ] });
   assert.equal(r.cases[0].status, 'pass');
+});
+
+const budgetCatalog = n => Array.from({ length: n }, (_, i) => ({
+  id: `budget-case-${i}`, family: 'goals', turns: [{ question: 'Discuss education savings.', required: [],
+    forbidden: ['unsourced-figure', 'self-computed-figure'], expected: [], maxWords: 100,
+    rubric: 'Stay qualitative.', scriptedReply: 'Education savings can support the goal.' }],
+}));
+const paidReply = () => [{ text: 'Education savings can support the goal.', costUsd: 0.05 }];
+
+test('a catalog whose actual spend fits the cap attempts every case and releases reservations', async () => {
+  const cases = budgetCatalog(20);
+  const r = await runCases({ cases, maxUsd: 1, scripts: paidReply });
+  assert.equal(r.completed, cases.length);
+  assert.equal(r.attempted, cases.length);
+  assert.equal(r.stopped, null);
+  assert.ok(r.cases.every(c => c.status === 'pass' && c.costUsd === 0.05));
+  assert.equal(r.costUsd, 1);
+  assert.equal(r.reservedUsd, 1);
+  assert.equal(r.outstandingReservedUsd, 0);
+});
+
+test('an unaffordable round dispatches nothing and reports every remaining case with its reason', async () => {
+  let dispatched = 0;
+  const r = await runCases({ cases: budgetCatalog(5), maxUsd: 0.12, scripts: () => {
+    dispatched++;
+    return paidReply();
+  } });
+  assert.equal(r.costUsd, 0.1);
+  assert.ok(r.costUsd <= r.maxUsd);
+  assert.deepEqual(r.cases.map(c => c.status), ['pass', 'pass', 'budget-stopped', 'unrun', 'unrun']);
+  assert.equal(r.completed, 2);
+  assert.equal(r.attempted, 3);
+  assert.equal(dispatched, 3);
+  assert.ok(r.cases.slice(2).every(c => /budget/.test(c.reason)));
+  assert.equal(r.outstandingReservedUsd, 0);
+});
+
+test('budget admission bounds a cost spike before spend can exceed the cap', async () => {
+  let i = 0;
+  const r = await runCases({ cases: budgetCatalog(4), maxUsd: 0.12, scripts: () => [
+    { text: 'Education savings can support the goal.', costUsd: ++i === 2 ? 0.2 : 0.05 },
+  ] });
+  assert.equal(r.costUsd, 0.05);
+  assert.equal(r.cases[1].status, 'budget-stopped');
+  assert.ok(r.cases.slice(2).every(c => c.status === 'unrun'));
+});
+
+test('stored conversation title uses a model title without amounts and permits 529', async () => {
+  const c = (await loadCases()).find(c => c.id === 'goals-conversation-title-529');
+  assert.ok(c);
+  const r = await runCases({ cases: [c] });
+  assert.equal(r.cases[0].status, 'pass');
+  assert.equal(r.cases[0].title.title, '529 education savings');
+  assert.equal(r.cases[0].title.ok, true);
+  assert.equal(r.cases[0].title.source, 'auto');
+  const fallback = await runCases({ cases: [c], scripts: ({ purpose }) => [
+    { text: purpose === 'title' ? 'invalid JSON' : 'Education savings can support the goal.', costUsd: 0 },
+  ] });
+  assert.equal(fallback.cases[0].status, 'fail');
+  assert.equal(fallback.cases[0].title.ok, false);
+});
+
+test('title grading rejects fallback, missing titles and amounts independently of title validation', () => {
+  const row = title => ({ title, title_source: 'auto' });
+  assert.equal(gradeThreadTitle(row('529 education savings'), 'Discuss my savings').ok, true);
+  for (const title of [null, '', 'Discuss my savings', '$2,400 education savings', '2400 education savings',
+    '529 dollars education savings', 'two thousand education savings']) {
+    assert.equal(gradeThreadTitle(row(title), 'Discuss my savings').ok, false, String(title));
+  }
+});
+
+test('live reservation uses the actual transcript, output limit and purpose model without synthetic growth', async () => {
+  const store = await createEvalStore();
+  try {
+    const ledger = createEvalLedger({ db: store.db, maxUsd: 2 });
+    const request = { purpose: 'chat', system: 'Use tools.', systemDynamic: 'Current context.', tools: [],
+      maxTokens: 128, messages: [{ role: 'user', content: 'Discuss education savings.' }] };
+    ledger.begin(request);
+    ledger.admitRound(request);
+    const first = estimateUnknownCost({ model: DEFAULT_MODEL, maxTokens: 128,
+      system: 'Use tools.\nCurrent context.', messages: request.messages, tools: [] }).costUsd;
+    assert.equal(ledger.reserves[0], first);
+    ledger.record({ ts: new Date().toISOString(), purpose: 'chat', model: DEFAULT_MODEL, costUsd: 0.001, tokens: {} });
+    assert.equal(ledger.outstandingReservedUsd, 0);
+    const next = { ...request, messages: [...request.messages, { role: 'assistant', content: 'A short reply.' }] };
+    ledger.admitRound(next);
+    assert.equal(ledger.reserves[1], estimateUnknownCost({ model: DEFAULT_MODEL, maxTokens: 128,
+      system: 'Use tools.\nCurrent context.', messages: next.messages, tools: [] }).costUsd);
+    ledger.end();
+    ledger.begin({ ...request, purpose: 'title' });
+    ledger.admitRound({ ...request, purpose: 'title' });
+    assert.equal(ledger.reserves[2], estimateUnknownCost({ model: TITLE_MODEL, maxTokens: 128,
+      system: 'Use tools.\nCurrent context.', messages: request.messages, tools: [] }).costUsd);
+    assert.ok(ledger.reserves[2] < first);
+    ledger.end();
+    assert.equal(ledger.outstandingReservedUsd, 0);
+  } finally { await store.close(); }
+});
+
+test('title calls share the cap and an unaffordable title stops the catalog cleanly', async () => {
+  const c = (await loadCases()).find(c => c.id === 'goals-conversation-title-529');
+  const r = await runCases({ cases: [c, ...budgetCatalog(1)], maxUsd: 0.06, scripts: ({ purpose }) => [
+    { text: purpose === 'title' ? JSON.stringify({ title: '529 education savings' }) : 'Education savings can support the goal.', costUsd: 0.04 },
+  ] });
+  assert.equal(r.costUsd, 0.04);
+  assert.equal(r.cases[0].status, 'budget-stopped');
+  assert.match(r.cases[0].reason, /title/);
+  assert.equal(r.cases[1].status, 'unrun');
+  assert.equal(r.outstandingReservedUsd, 0);
 });

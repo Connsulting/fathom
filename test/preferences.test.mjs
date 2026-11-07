@@ -40,3 +40,60 @@ test('Settings validates, edits and deletes preferences through the same writer,
   const undone = await actionUndo({ ...ctx, params: { id: removed.receipt.id } });
   assert.equal(undone.scenario.preferences[0].text, 'Use plain language');
 });
+
+test('memories carry their source: REST rows are yours, Ask rows keep their conversation through edits', async () => {
+  const db = await s.store();
+  const rest = { db, config: {}, identity: { id: 'person-a' }, params: {}, body: { text: 'Call the budget the plan' } };
+  const mine = preferenceSave(rest);
+  const listed = mine.scenario.preferences.find(p => p.id === mine.preference.id);
+  assert.equal(listed.origin, 'you');
+  assert.equal(listed.conversationKey, null);
+  assert.ok(listed.createdAt && listed.updatedAt);
+  assert.equal(listed.actorId, 'person-a');
+
+  const ctx = { db, now: '2026-11-06T12:00:00.000Z', actorId: 'person-a', conversationKey: 'ask:0123456789ab',
+    turnId: 'memory-turn', ownerText: 'Please remember: keep answers short' };
+  const saved = await callTool('update_preferences', { operation: 'remember', text: 'keep answers short', evidence: 'keep answers short' }, ctx);
+  let row = buildScenario(db).preferences.find(p => p.id === saved.preference.id);
+  assert.equal(row.origin, 'ask');
+  assert.equal(row.conversationKey, 'ask:0123456789ab');
+  assert.equal(row.createdAt, '2026-11-06T12:00:00.000Z');
+
+  const edited = preferenceSave({ ...rest, now: undefined, params: { id: saved.preference.id }, body: { text: 'keep answers brief' } });
+  row = edited.scenario.preferences.find(p => p.id === saved.preference.id);
+  assert.equal(row.text, 'keep answers brief');
+  assert.equal(row.origin, 'ask', 'an edit keeps the first origin');
+  assert.equal(row.conversationKey, 'ask:0123456789ab');
+  assert.equal(row.createdAt, '2026-11-06T12:00:00.000Z');
+  assert.notEqual(row.updatedAt, row.createdAt);
+
+  const removed = preferenceDelete({ ...rest, params: { id: saved.preference.id }, body: {} });
+  assert.ok(!removed.scenario.preferences.some(p => p.id === saved.preference.id));
+  const undone = await actionUndo({ ...rest, params: { id: removed.receipt.id } });
+  row = undone.scenario.preferences.find(p => p.id === saved.preference.id);
+  assert.equal(row.text, 'keep answers brief');
+  assert.equal(row.origin, 'ask');
+  assert.equal(row.conversationKey, 'ask:0123456789ab');
+});
+
+test('an Ask conversation key that is not a thread key is not stored', async () => {
+  const db = await s.store();
+  const ctx = { db, now: '2026-11-06T12:00:00.000Z', actorId: 'person-a', conversationKey: 'scheduled:digest',
+    turnId: 'memory-turn', ownerText: 'remember: use plain words' };
+  const saved = await callTool('update_preferences', { operation: 'remember', text: 'use plain words', evidence: 'use plain words' }, ctx);
+  const row = buildScenario(db).preferences.find(p => p.id === saved.preference.id);
+  assert.equal(row.origin, 'ask');
+  assert.equal(row.conversationKey, null);
+});
+
+test('legacy rows list with a null origin, and memories list newest first', async () => {
+  const db = await s.store();
+  const insert = db.prepare('INSERT INTO preferences (id, text, actor_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)');
+  insert.run('legacy-1', 'Older memory', 'person-a', '2026-10-01T00:00:00.000Z', '2026-10-01T00:00:00.000Z');
+  insert.run('legacy-2', 'Newer memory', 'person-a', '2026-10-05T00:00:00.000Z', '2026-10-05T00:00:00.000Z');
+  insert.run('legacy-0', 'Same time, lower id', 'person-a', '2026-10-05T00:00:00.000Z', '2026-10-05T00:00:00.000Z');
+  const list = buildScenario(db).preferences;
+  assert.deepEqual(list.map(p => p.id), ['legacy-0', 'legacy-2', 'legacy-1']);
+  assert.equal(list[2].origin, null);
+  assert.equal(list[2].conversationKey, null);
+});

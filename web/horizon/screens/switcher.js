@@ -19,7 +19,7 @@ export const GO = [
   ['c', 'confirm', 'Confirm'], ['k', 'packs', 'Packs'], ['f', 'add', 'Files'], ['e', 'engine', 'Engine'],
   ['m', 'email', 'Email'], ['n', 'connect', 'Connect'], ['o', 'money', 'Money'], ['s', 'settings', 'Settings']
 ];
-const GO_MORE = [['goals', 'Goals'], ['accounts', 'Accounts'], ['pnl', 'P&L'], ['advisor', 'Advisor'], ['yearend', 'Year end']];
+const GO_MORE = [['goals', 'Goals'], ['accounts', 'Accounts'], ['pnl', 'P&L'], ['advisor', 'Advisor'], ['yearend', 'Year end'], ['memories', 'Memories']];
 
 export function goHint(route) {
   const g = GO.find((x) => x[1] === route);
