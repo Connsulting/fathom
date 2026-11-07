@@ -192,6 +192,55 @@ test.describe('goal kinds', TAGS, () => {
     expect(after.pace.goals.some((p) => p.id === contrib.id)).toBe(false);
   });
 
+  test('household names with markup show as text in the contribution share labels', async ({ page, request }) => {
+    const NAMES = { me: '<img src=x onerror=1>', spouse: '<b class="injected">Sam</b>' };
+    // There is no fact or answer route that sets household.names directly (answers go through a
+    // recommendation's open questions), so the scenario the app loads is rewritten in the browser.
+    await page.route('**/api/scenario', async (route) => {
+      const res = await route.fetch();
+      const s = await res.json();
+      s.names = { ...(s.names || {}), ...NAMES };
+      await route.fulfill({ response: res, json: s });
+    });
+    await gotoGoals(page);
+    await openNewGoal(page);
+    await gf(page, 'kind').selectOption('contribution');
+    await expect(form(page).getByLabel(/Amount to contribute/)).toBeVisible();
+    await expect(form(page)).toContainText(`${NAMES.me}'s share`);
+    await expect(form(page)).toContainText(`${NAMES.spouse}'s share`);
+    await enter(page, 'shareOwner', '100');
+    await enter(page, 'shareSpouse', '100');
+    await expect(gf(page, 'enteredOwner')).toBeVisible();
+    await expect(form(page)).toContainText(`Contributed by ${NAMES.me}`);
+    await expect(form(page)).toContainText(`Contributed by ${NAMES.spouse}`);
+    await expect(page.locator('.h-gform img, .h-gform b.injected')).toHaveCount(0);
+  });
+
+  test('saving an unrelated edit keeps entered progress whatever its shape', async ({ page, request }) => {
+    const dest = (await fetchScenario(request)).accounts[0];
+    const base = { kind: 'contribution', owner: 'joint', priority: 'low', target: 6000, taxYear: 2026, targetDate: '2027-04-15', accounts: [dest.id] };
+    const cases = [
+      { title: 'Synthetic people no split', entered: { asOf: '2026-11-01', people: [{ person: 'owner', amount: 1500 }, { person: 'spouse', amount: 1000 }] } },
+      { title: 'Synthetic total with split', split: [{ person: 'owner', amount: 3000 }, { person: 'spouse', amount: 3000 }], entered: { asOf: '2026-11-01', total: 2500 } },
+    ];
+    for (const c of cases) {
+      const res = await request.post('/api/goals', { headers: { 'content-type': 'application/json' }, data: { ...base, ...c } });
+      expect(res.status()).toBe(200);
+      const id = (await res.json()).goal.id;
+      await gotoGoals(page);
+      await goalsCard(page, id).getByRole('button', { name: 'Edit', exact: true }).click();
+      await expect(form(page)).toBeVisible();
+      await gf(page, 'priority').selectOption('high');
+      const post = posted(page, `/api/goals/${id}`);
+      await form(page).getByRole('button', { name: 'Save goal' }).click();
+      await post;
+      await expect(form(page)).toHaveCount(0);
+      const saved = (await fetchScenario(request)).goals.find((g) => g.id === id);
+      expect(saved.priority, c.title).toBe('high');
+      expect(saved.entered, c.title).toEqual(c.entered);
+    }
+  });
+
   test('mark done from the editor takes a goal off Home; Reopen on Goals brings it back', async ({ page, request }, info) => {
     const res = await request.post('/api/goals', { headers: { 'content-type': 'application/json' }, data: { title: 'Synthetic boat fund', priority: 'low' } });
     expect(res.status()).toBe(200);
