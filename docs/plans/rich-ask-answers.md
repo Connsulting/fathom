@@ -58,8 +58,8 @@ slip with it; everything else in this plan finishes without C9.
    pages messages; if threads get slow, paging messages is a separate ticket.
 7. Decide list relocation. The `#/wargame` route also hosts the Decide list (every open, upcoming,
    decided and not-built decision, including decisions with no war game). Removing the page needs
-   a new home for that list; this plan pins it as a section on the Plan screen (section 7). This is
-   an assumption the coordinator should confirm with the owner before B7 dispatches.
+   a new home for that list; it moves to a Decisions section on the Plan screen (section 7).
+   Resolved 2026-11-08: the coordinator confirmed this under the owner's standing direction.
 
 ## Pinned decisions
 
@@ -649,7 +649,7 @@ Test command: `node --test test/tools-wargame.test.mjs test/tools-registry.test.
 
 Problem: the Decide list lives on the page the owner is retiring.
 
-Blocked by: none (the coordinator confirms risk 7 with the owner first). Decisions: section 7
+Blocked by: none (risk 7 resolved). Decisions: section 7
 "What is removed", item 5, except that war-game rows keep linking to the war-game page until B9.
 
 Files: `web/horizon/design.js` (`pPlan` gains the Decisions section built from `decisionList` and
@@ -821,7 +821,7 @@ Test command: `node --test test/api.test.mjs test/ask-context.test.mjs test/tour
 
 Probed 2026-11-07 on `main` at `6306899`:
 
-1. Can start now: B1, B3, B5 and B7 (no blockers; B7 after the coordinator confirms risk 7). Base
+1. Can start now: B1, B3, B5 and B7 (no blockers; risk 7 resolved). Base
    health at `6306899`: actionlint, gitleaks, hadolint, npm-audit, publish and unit succeeded; e2e
    was in progress; build skipped. The coordinator reruns the check before each dispatch.
 2. Waiting: B2 on C2 (PR #105, open), B6 on C9 (not opened). PR #105 edits `src/api/answerer.mjs`,
