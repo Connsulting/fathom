@@ -306,7 +306,7 @@ test('the prompt tells the model not to cite sources and allows the markdown sub
   assert.match(PRODUCT_RULES, /Never write a Sources/);
   assert.match(PRODUCT_RULES, /Call tools before you write/);
   assert.doesNotMatch(PRODUCT_RULES, /Cite a knowledge pack entry/);
-  assert.match(PRODUCT_RULES, /numbered lists/);
+  assert.match(PRODUCT_RULES, /bullet lists/);
 });
 
 /* ---------- markdown subset over escaped text ---------- */
