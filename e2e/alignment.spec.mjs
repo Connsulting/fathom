@@ -160,12 +160,16 @@ test.describe('no horizontal overflow at 375px', { tag: '@al-ac2' }, () => {
       const over = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
       expect(over, `${route} overflows by ${over}px`).toBeLessThanOrEqual(0);
       // The document width alone can be hidden by a clipping ancestor, so also look at elements:
-      // none may stick out past the viewport unless a scrolling box around it contains them.
+      // none may stick out past the viewport unless a narrower box (a scroller or an inner clip)
+      // around it contains them. A page-wide clip does not count.
       const stray = await page.evaluate(() => [...document.querySelectorAll('body *')].filter((el) => {
         const r = el.getBoundingClientRect();
         if (r.width === 0 || r.right <= innerWidth + 1) return false;
         for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
-          if (getComputedStyle(p).overflowX !== 'visible') return false;
+          if (getComputedStyle(p).overflowX === 'visible') continue;
+          // A box that clips the whole page (the app root) hides overflow; it is not a scroller.
+          const pr = p.getBoundingClientRect();
+          if (pr.left > 1 || pr.right < innerWidth - 1) return false;
         }
         return getComputedStyle(el).position !== 'fixed';
       }).map((el) => `${el.tagName.toLowerCase()}.${el.className} right ${Math.round(el.getBoundingClientRect().right)}`).slice(0, 5));
@@ -242,7 +246,7 @@ test.describe('timeline labels never collide', { tag: '@al-ac3' }, () => {
   // Items due today, soon, in two months, late and far out; with a short date label and with a
   // long text label, which is what the demo rec windows carry.
   for (const vp of [DESKTOP, PHONE]) {
-    for (const days of [0, 3, 9, 60, -2, 520]) {
+    for (const days of [0, 3, 9, 36, 60, -2, 520]) {
       for (const long of [false, true]) {
         if (days === 0 && long) continue;
         test(`rec dialog strip, due in ${days} days, ${long ? 'long' : 'short'} label, at ${vp.width}px`, async ({ page }) => {
