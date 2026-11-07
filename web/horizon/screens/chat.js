@@ -16,7 +16,7 @@
    only when the owner taps Save, through the goals API (api.goalCreate). Its text is escaped; the
    card reads Saved once an owner goal with that title exists.
    A stored proposal (provenance.pendingAction {tool, operation, args, resolved?}) shows a card
-   with its operation label and escaped arguments, plus Confirm and Not now while it is unresolved
+   with its operation label and its digit-free text arguments (amounts and dates stay in the grounded answer), plus Confirm and Not now while it is unresolved
    and the latest message of its thread (api.proposalDecide); else its state (Confirmed, Not now,
    Out of date). Nothing is written until the owner confirms.
    Streaming: with the engine on, a question goes out through api.askStream / api.newThreadStream.
@@ -158,7 +158,10 @@ const PENDING_LABEL = { 'update_goal.create': 'Create goal', 'update_goal.edit':
 const RESOLVED_LABEL = { confirmed: 'Confirmed', declined: 'Not now', stale: 'Out of date' };
 const pendingLabel = (p) => PENDING_LABEL[`${p.tool}.${p.operation}`]
   || `${String(p.tool || '').replace(/_/g, ' ')}: ${String(p.operation || '').replace(/_/g, ' ')}`.replace(/^./, (c) => c.toUpperCase());
-const argValue = (v) => (v == null ? 'none' : typeof v === 'object' ? JSON.stringify(v) : String(v));
+// Only digit-free text arguments (a title, a horizon) are shown: a model-supplied amount or date
+// has no provenance until the evidence guard accepts it, so figures stay in the grounded answer
+// text above the card and in the receipt after confirming.
+const shownArg = ([, v]) => typeof v === 'string' && v.trim() !== '' && !/\d/.test(v);
 
 // The card for a Fathom message that carries a stored proposal. opts.latest: the message is the
 // latest in its thread (default true); an older unresolved proposal reads Out of date.
@@ -166,11 +169,11 @@ export function pendingActionHtml(m, { latest = true } = {}) {
   if (!H || !m || m.role !== 'fathom' || m.notice || !isObj(m.provenance) || !isObj(m.provenance.pendingAction)) return '';
   const { esc } = H;
   const p = m.provenance.pendingAction;
-  const args = isObj(p.args) ? Object.entries(p.args) : [];
+  const args = isObj(p.args) ? Object.entries(p.args).filter(shownArg) : [];
   const status = isObj(p.resolved) ? p.resolved.status : latest ? null : 'stale';
   const id = esc(m.id);
   return `<div class="h-proposal h-pending-action"><p><span class="h-proposal-k">Proposed:</span> <b>${esc(pendingLabel(p))}</b></p>`
-    + (args.length ? `<ul class="h-pending-args">${args.map(([k, v]) => `<li>${esc(k)}: ${esc(argValue(v))}</li>`).join('')}</ul>` : '')
+    + (args.length ? `<ul class="h-pending-args">${args.map(([k, v]) => `<li>${esc(k)}: ${esc(v)}</li>`).join('')}</ul>` : '')
     + (status
       ? `<span class="h-proposal-done">${esc(RESOLVED_LABEL[status] || 'Out of date')}</span>`
       : `<div class="h-pending-btns"><button type="button" class="h-btn pri" data-proposal-decide="confirm" data-proposal-message="${id}">Confirm</button>`

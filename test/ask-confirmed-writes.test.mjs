@@ -364,3 +364,62 @@ test('AC5 goals-confirm-stored-note proposes on turn one and executes the stored
   assert.equal(write.result.goal.targetDate, '2026-12-31');
   assert.ok(write.result.receipt.id);
 });
+
+/* ---------- review round 1 regressions ---------- */
+
+test('AC2 "yeah, make it $5,000" goes to the engine and never runs the stored $4,000 operation', async t => {
+  const { isPlainConfirmation } = await import('../src/actions/proposals.mjs');
+  for (const yes of ['yeah', 'Yes, please create it.', 'sure, go ahead', 'ok thanks']) assert.equal(isPlainConfirmation(yes), true, yes);
+  for (const no of ['yeah, make it $5,000', 'yes for March', 'yes and also the date', 'yeah, make it five thousand']) assert.equal(isPlainConfirmation(no), false, no);
+  const { db, fake, ctx, first, goals, key } = await proposed(t);
+  const before = fake.calls.length;
+  fake.push([{ text: 'Tell me the date for the changed goal.' }]);
+  const reply = await ask({ ...ctx, body: { key, text: 'yeah, make it $5,000' } });
+  assert.equal(fake.calls.length, before + 1, 'the engine answered');
+  assert.equal(goalCount(db), goals, 'no goal written');
+  assert.equal(receiptCount(db), 0);
+  assert.equal(reply.message.provenance.confirmedProposal, undefined);
+  assert.equal(storedProvenance(db, first.message.id).pendingAction.resolved, undefined);
+});
+
+test('AC4 a proposal never sources its own date: an invented targetDate is refused on confirm', async t => {
+  const s = await setup(t);
+  const { db } = s;
+  storedGoal(db);
+  const invented = { title: 'Synthetic dated goal', horizon: 'now', target: 4000, targetDate: '2028-03-17', track: null };
+  const fake = scriptedEngine([proposeTurn(invented, 'Create a goal for $4,000 by 2028-03-17? Confirm below, or reply yes.')]);
+  const ctx = context(s, fake.engine);
+  const goals = goalCount(db);
+  const first = await threadCreate({ ...ctx, body: { text: 'Propose a dated goal from the note.' } });
+  const call = first.message.provenance.tools.find(r => r.name === 'update_goal');
+  assert.ok(call && !call.isError);
+  assert.ok(!(first.message.provenance.literals ?? []).some(l => l.text.includes('2028')), 'the proposal does not ground its own date');
+  fake.push([{ text: 'I could not save that date.' }]);
+  await ask({ ...ctx, body: { key: first.thread.key, text: 'yeah' } });
+  assert.equal(goalCount(db), goals, 'no goal written');
+  assert.equal(goalsTitled(db, invented.title).length, 0);
+  assert.equal(receiptCount(db), 0);
+});
+
+test('AC3 a proposal is stale when the goal note it took a value from changes', async t => {
+  const { db, fake, ctx, first, key } = await proposed(t, { input: { ...args, title: 'Second synthetic goal' } });
+  assert.ok(first.message.provenance.pendingAction);
+  db.prepare("UPDATE goals SET def = json_set(def, '$.note', 'Each parent contributes $5,000 in December, due 2026-12-31.') WHERE id = 'education-note'").run();
+  const goals = goalCount(db);
+  fake.push([{ text: 'The note changed, so I will check it again.' }]);
+  const out = await ask({ ...ctx, body: { key, text: 'yeah' } });
+  assert.equal(goalCount(db), goals, 'nothing written');
+  assert.equal(receiptCount(db), 0);
+  assert.match(firstParagraph(out.message.text), /out of date/i);
+  assert.equal(storedProvenance(db, first.message.id).pendingAction.resolved.status, 'stale');
+});
+
+test('AC1 the card shows no model-supplied amount or date', async () => {
+  const chat = await loadChat();
+  const pendingAction = { tool: 'update_goal', operation: 'create', args: { title: 'Synthetic fund', horizon: 'now', target: 97361, targetDate: '2028-03-17' },
+    scopes: ['write:goals'], basis: 'ab12cd' };
+  const html = chat.pendingActionHtml({ id: 'm7', role: 'fathom', text: '<p>x</p>', refs: [], notice: false, provenance: { pendingAction } });
+  assert.ok(html.includes('Synthetic fund'));
+  assert.ok(!/97361|97,361|2028/.test(html), 'no unsourced figure in the card');
+  assert.match(html, /data-proposal-decide="confirm"/);
+});
