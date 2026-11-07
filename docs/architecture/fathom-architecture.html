@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1440">
+<title>Fathom architecture</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  /* Horizon tokens, written as literal hex so the page stands alone. */
+  html, body { margin: 0; padding: 0; background: #0a0c0d; }
+  body {
+    color: #e6eaeb;
+    font-family: 'Instrument Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+    font-size: 14.5px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  * { box-sizing: border-box; }
+  .mono { font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace; font-variant-numeric: tabular-nums; }
+
+  .canvas { position: relative; width: 1440px; height: 1960px; background: #0a0c0d; overflow: hidden; }
+
+  /* header */
+  .mark { position: absolute; left: 80px; top: 48px; display: flex; align-items: center; gap: 9px; font-weight: 600; font-size: 15px; letter-spacing: 0.01em; }
+  .mark svg { width: 22px; height: 22px; fill: none; stroke: #3fcfae; stroke-width: 1.7; stroke-linecap: round; }
+  .kicker { position: absolute; left: 80px; top: 100px; font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: #3fcfae; font-weight: 500; }
+  .kicker span { color: #5f696c; letter-spacing: 0.02em; text-transform: none; font-weight: 400; font-size: 12.5px; margin-left: 12px; }
+  h1 { position: absolute; left: 80px; top: 122px; margin: 0; font-size: 34px; line-height: 1.15; font-weight: 500; letter-spacing: -0.01em; }
+  .lede { position: absolute; left: 80px; top: 170px; width: 900px; margin: 0; color: #8f999c; font-size: 15.5px; }
+
+  .legend { position: absolute; left: 1080px; top: 48px; width: 312px; padding: 14px 18px 12px; border: 1px solid #283033; border-radius: 12px; background: #101315; }
+  .legend h2 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: #8f999c; font-weight: 500; }
+  .legend ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 5px; }
+  .legend li { display: flex; align-items: center; gap: 12px; font-size: 12.5px; color: #c2c9cb; }
+  .legend svg { width: 34px; height: 12px; flex: none; }
+  .sw { width: 34px; height: 14px; flex: none; border-radius: 4px; border: 1px solid #283033; }
+  .sw.in { background: #15191b; }
+  .sw.out { background: #0a0c0d; }
+
+  /* groups */
+  .group { position: absolute; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: #5f696c; font-weight: 500; white-space: nowrap; }
+  .frame { position: absolute; background: #101315; border: 1px solid #283033; border-radius: 16px; }
+  .frame-h { position: absolute; display: flex; align-items: baseline; gap: 12px; white-space: nowrap; }
+  .frame-h b { font-size: 15px; font-weight: 500; color: #e6eaeb; }
+  .frame-h .mono { font-size: 11.5px; color: #5f696c; }
+  .frame-meta { position: absolute; font-size: 11.5px; color: #8f999c; white-space: nowrap; text-align: right; }
+  .volume { position: absolute; background: #0a0c0d; border: 1px solid #1c2124; border-radius: 12px; }
+
+  /* boxes */
+  .box { position: absolute; padding: 14px 16px; background: #15191b; border: 1px solid #283033; border-radius: 10px; z-index: 2; }
+  .box.out { background: #0a0c0d; }
+  .box.wide { display: flex; align-items: center; gap: 40px; padding: 14px 20px; }
+  .t { font-size: 15px; font-weight: 500; line-height: 20px; color: #e6eaeb; letter-spacing: 0.005em; }
+  .p { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11px; line-height: 17px; color: #5f696c; white-space: nowrap; }
+  .d { margin-top: 6px; font-size: 12.5px; line-height: 18px; color: #8f999c; }
+  .d code, .lede code { white-space: nowrap; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 0.88em; color: #c2c9cb; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .chip { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11px; line-height: 16px; padding: 3px 7px; border: 1px solid #283033; border-radius: 6px; color: #c2c9cb; background: #101315; white-space: nowrap; }
+  .chip.on { border-color: rgba(63, 207, 174, 0.35); background: rgba(63, 207, 174, 0.12); color: #e6eaeb; }
+  .box.key { border-color: rgba(63, 207, 174, 0.35); }
+
+  /* wires */
+  svg.wires { position: absolute; left: 0; top: 0; z-index: 1; pointer-events: none; }
+  .w { fill: none; stroke: #5f696c; stroke-width: 1; }
+  .w.ac { stroke: #3fcfae; stroke-width: 1.25; }
+  .w.op { stroke-dasharray: 4 4; }
+  .lb { position: absolute; z-index: 3; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 10.5px; line-height: 14px; color: #8f999c; white-space: nowrap; }
+  .lb.ac { color: #8be6d1; }
+  .foot { position: absolute; font-size: 12.5px; line-height: 18px; color: #5f696c; }
+  .foot code { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 0.9em; color: #8f999c; }
+</style>
+</head>
+<body>
+<main class="canvas" id="diagram">
+
+  <!-- header -->
+  <div class="mark"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 15a7 7 0 0114 0"/><path d="M2 15h20"/><path d="M7 19h10"/></svg>Fathom</div>
+  <div class="kicker">Architecture<span>one container, one store</span></div>
+  <h1>How Fathom fits together</h1>
+  <p class="lede">One Node process serves the Horizon app, the JSON API and MCP, runs its own jobs, and keeps all state on the <code>/data</code> volume.</p>
+
+  <div class="legend">
+    <h2>Legend</h2>
+    <ul>
+      <li><svg viewBox="0 0 34 12"><path d="M1 6H31" stroke="#3fcfae" stroke-width="1.25" fill="none"/><path d="M27 3L32 6L27 9" stroke="#3fcfae" stroke-width="1.25" fill="none"/></svg>Ask, browser to model</li>
+      <li><svg viewBox="0 0 34 12"><path d="M1 6H31" stroke="#5f696c" fill="none"/><path d="M27 3L32 6L27 9" stroke="#5f696c" fill="none"/></svg>Request or call, toward the callee</li>
+      <li><svg viewBox="0 0 34 12"><path d="M1 6H31" stroke="#5f696c" stroke-dasharray="4 4" fill="none"/></svg>Operator action, outside the app</li>
+      <li><span class="sw in"></span>Runs inside the container</li>
+      <li><span class="sw out"></span>Outside the container</li>
+    </ul>
+  </div>
+
+  <!-- edge -->
+  <div class="group" style="left:80px; top:240px;">Edge</div>
+
+  <div class="box out" style="left:80px; top:264px; width:300px; height:96px;">
+    <div class="t">Browser</div>
+    <div class="d">Household members, signed in with passkeys, using the Horizon app.</div>
+  </div>
+  <div class="box out" style="left:440px; top:264px; width:300px; height:96px;">
+    <div class="t">MCP clients</div>
+    <div class="d">Your own AI assistant, holding a scoped bearer key.</div>
+  </div>
+  <div class="box out" style="left:80px; top:408px; width:660px; height:64px; display:flex; align-items:center; gap:18px;">
+    <div><div class="t">Reverse proxy</div><div class="p">FATHOM_PUBLIC_URL</div></div>
+    <div class="d" style="margin:0;">Terminates HTTPS on the private network, passes Cookie and Origin unchanged, forwards to port 8080.</div>
+  </div>
+
+  <!-- container -->
+  <div class="frame" style="left:48px; top:536px; width:1084px; height:1228px;"></div>
+  <div class="frame-h" style="left:80px; top:556px;"><b>Fathom container</b><span class="mono">Dockerfile</span></div>
+  <div class="frame-meta mono" style="right:340px; top:559px;">node:24-slim · USER 1000:1000 · port 8080 · VOLUME /data · /healthz</div>
+
+  <div class="box wide" style="left:80px; top:600px; width:1020px; height:80px;">
+    <div style="flex:none; width:300px;"><div class="t">HTTP server and router</div><div class="p">src/server.mjs · src/api/router.mjs</div></div>
+    <div class="d" style="margin:0;">Opens the store by mode, then builds the engine, packs, mail transport and scheduler. One route table, one Host allowlist for <code>/api</code> and <code>/mcp</code>, security headers on every response.</div>
+  </div>
+
+  <!-- row 1 -->
+  <div class="box" style="left:80px; top:744px; width:300px; height:128px;">
+    <div class="t">MCP endpoint</div>
+    <div class="p">POST /mcp · src/mcp/</div>
+    <div class="d">Stateless Streamable HTTP. Keys are kept as HMACs; scopes are <code>read</code> and <code>write:recs</code>.</div>
+  </div>
+  <div class="box key" style="left:440px; top:744px; width:300px; height:128px;">
+    <div class="t">Session gate and accounts</div>
+    <div class="p">src/auth/</div>
+    <div class="d">Passkeys over WebAuthn, the <code>__Host-fathom-session</code> cookie, exact Origin on every mutation.</div>
+  </div>
+  <div class="box" style="left:800px; top:744px; width:300px; height:128px;">
+    <div class="t">Horizon web app</div>
+    <div class="p">web/horizon/ · static</div>
+    <div class="d">No build step: <code>design.js</code> and <code>design.css</code>, plus the account pages in <code>web/auth/</code>.</div>
+  </div>
+
+  <!-- row 2 -->
+  <div class="box" style="left:80px; top:936px; width:300px; height:128px;">
+    <div class="t">Tool registry</div>
+    <div class="p">src/tools/</div>
+    <div class="d">19 tools over stored data, shared by the engine and MCP: 17 read, 2 <code>write:recs</code>.</div>
+  </div>
+  <div class="box key" style="left:440px; top:936px; width:300px; height:128px;">
+    <div class="t">JSON API</div>
+    <div class="p">/api · src/api/</div>
+    <div class="d">Plan, confirm, goals, Ask threads, keys, email and jobs. Ask answers stream as Server-Sent Events.</div>
+  </div>
+  <div class="box" style="left:800px; top:936px; width:300px; height:128px;">
+    <div class="t">Ingest</div>
+    <div class="p">src/ingest/ · parsers/ · simplefin.mjs</div>
+    <div class="d">Uploads run through one parser per source format into ledger rows. SimpleFIN sync lands here too.</div>
+  </div>
+
+  <!-- row 3 -->
+  <div class="box" style="left:80px; top:1128px; width:300px; height:128px;">
+    <div class="t">Knowledge packs</div>
+    <div class="p">packs/&lt;id&gt;/ · src/packs/</div>
+    <div class="d">Seven curated packs, plus Your plans, built on the volume from the household's own plan documents.</div>
+  </div>
+  <div class="box key" style="left:440px; top:1128px; width:300px; height:128px;">
+    <div class="t">Runtime engine</div>
+    <div class="p">src/engine/</div>
+    <div class="d">Modes <code>live</code>, <code>fake</code>, <code>off</code>. Purposes chat, job, extract, confirm and title, under a monthly spend cap.</div>
+  </div>
+
+  <!-- row 4 -->
+  <div class="box" style="left:80px; top:1320px; width:300px; height:184px;">
+    <div class="t">Calculators</div>
+    <div class="p">src/calc/</div>
+    <div class="d">Deterministic tax, payroll, retirement room and pace. The planner and pace call them, and every figure they produce carries its provenance.</div>
+  </div>
+  <div class="box" style="left:440px; top:1320px; width:300px; height:184px;">
+    <div class="t">Scheduler</div>
+    <div class="p">src/jobs/scheduler.mjs · in process</div>
+    <div class="chips">
+      <span class="chip">plan</span><span class="chip">brief-email</span><span class="chip">deadline-alerts</span>
+      <span class="chip">freshness</span><span class="chip">trash-purge</span>
+      <span class="chip">confirm-guess</span><span class="chip">simplefin-sync</span>
+    </div>
+  </div>
+  <div class="box" style="left:800px; top:1320px; width:300px; height:184px;">
+    <div class="t">Email</div>
+    <div class="p">src/email/</div>
+    <div class="d">The monthly brief, deadline alerts and account mail, with send history.</div>
+    <div class="chips">
+      <span class="chip">dev</span><span class="chip">smtp</span><span class="chip">resend</span><span class="chip">postmark</span><span class="chip">agentmail</span>
+    </div>
+  </div>
+
+  <!-- data volume -->
+  <div class="volume" style="left:80px; top:1568px; width:1020px; height:164px;"></div>
+  <div class="frame-h" style="left:100px; top:1580px;"><b>/data volume</b><span class="mono">FATHOM_DATA</span></div>
+
+  <div class="box" style="left:100px; top:1612px; width:312px; height:100px;">
+    <div class="t">Encrypted file vault</div>
+    <div class="p">files/ · src/ingest/vault.mjs</div>
+    <div class="d">Uploaded originals, AES-256-GCM, key from <code>FATHOM_DATA_KEY_FILE</code>.</div>
+  </div>
+  <div class="box key" style="left:434px; top:1612px; width:312px; height:100px;">
+    <div class="t">Store</div>
+    <div class="p">fathom.sqlite · src/store/</div>
+    <div class="d">node:sqlite with numbered migrations: ledger, facts, plan, figures, threads, keys, job runs.</div>
+  </div>
+  <div class="box" style="left:768px; top:1612px; width:312px; height:100px;">
+    <div class="t">Other files</div>
+    <div class="p">packs/your-plans/ · outbox/</div>
+    <div class="d">The Your plans pack, the dev mail outbox and <code>api-key-secret</code>.</div>
+  </div>
+
+  <!-- outbound -->
+  <div class="group" style="left:1196px; top:912px;">Outbound</div>
+  <div class="box out" style="left:1196px; top:936px; width:196px; height:128px;">
+    <div class="t">SimpleFIN Bridge</div>
+    <div class="p">allowlisted hosts</div>
+    <div class="d">Bank and brokerage balances and transactions, read-only.</div>
+  </div>
+  <div class="box out" style="left:1196px; top:1128px; width:196px; height:128px;">
+    <div class="t">Model API</div>
+    <div class="p">api.anthropic.com</div>
+    <div class="d">Claude. Called only when the engine is live.</div>
+  </div>
+  <div class="box out" style="left:1196px; top:1320px; width:196px; height:112px;">
+    <div class="t">Mail provider</div>
+    <div class="d">SMTP, Resend, Postmark or AgentMail.</div>
+  </div>
+
+  <!-- operator -->
+  <div class="box out" style="left:80px; top:1828px; width:380px; height:76px;">
+    <div class="t">Volume backups</div>
+    <div class="d" style="margin-top:4px;">By the operator, by copying <code>/data</code>. The app has no built-in backup job.</div>
+  </div>
+  <div class="foot" style="left:520px; top:1834px; width:872px;">
+    Not drawn as boxes: onboarding, goals and pace, the advisor workflow, year end and the scenario builder. Each is a set of API handlers over the same store. Source: <code>docs/architecture/fathom-architecture.html</code>, described in <code>docs/architecture.md</code>.
+  </div>
+
+  <!-- wires -->
+  <svg class="wires" width="1440" height="1960" viewBox="0 0 1440 1960" aria-hidden="true">
+    <defs>
+      <marker id="a" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M1 1L7 4L1 7" fill="none" stroke="#5f696c" stroke-width="1"/></marker>
+      <marker id="t" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M1 1L7 4L1 7" fill="none" stroke="#3fcfae" stroke-width="1.25"/></marker>
+    </defs>
+    <!-- edge to proxy to server -->
+    <path class="w ac" d="M230 360V407" marker-end="url(#t)"/>
+    <path class="w" d="M590 360V407" marker-end="url(#a)"/>
+    <path class="w ac" d="M410 472V599" marker-end="url(#t)"/>
+    <!-- router fan-out -->
+    <path class="w" d="M230 680V743" marker-end="url(#a)"/>
+    <path class="w ac" d="M590 680V743" marker-end="url(#t)"/>
+    <path class="w" d="M740 808H799" marker-end="url(#a)"/>
+    <!-- surfaces to logic -->
+    <path class="w" d="M230 872V935" marker-end="url(#a)"/>
+    <path class="w ac" d="M590 872V935" marker-end="url(#t)"/>
+    <path class="w" d="M740 1000H799" marker-end="url(#a)"/>
+    <path class="w" d="M1100 1000H1195" marker-end="url(#a)"/>
+    <path class="w ac" d="M590 1064V1127" marker-end="url(#t)"/>
+    <path class="w" d="M480 1128V1104Q480 1096 472 1096H338Q330 1096 330 1088V1065" marker-end="url(#a)"/>
+    <path class="w" d="M150 1064V1127" marker-end="url(#a)"/>
+    <path class="w ac" d="M740 1192H1195" marker-end="url(#t)"/>
+    <!-- jobs -->
+    <path class="w" d="M590 1320V1257" marker-end="url(#a)"/>
+    <path class="w" d="M440 1376H381" marker-end="url(#a)"/>
+    <path class="w" d="M740 1376H799" marker-end="url(#a)"/>
+    <path class="w" d="M1100 1376H1195" marker-end="url(#a)"/>
+    <!-- to the volume -->
+    <path class="w" d="M590 1504V1611" marker-end="url(#a)"/>
+    <path class="w" d="M950 1504V1611" marker-end="url(#a)"/>
+    <!-- operator -->
+    <path class="w op" d="M230 1732V1827" marker-end="url(#a)"/>
+  </svg>
+
+  <!-- wire labels -->
+  <div class="lb ac" style="left:242px; top:377px;">HTTPS · pages, /api, Ask SSE</div>
+  <div class="lb" style="left:602px; top:377px;">HTTPS · POST /mcp</div>
+  <div class="lb ac" style="left:422px; top:497px;">HTTP · port 8080</div>
+  <div class="lb" style="left:242px; top:705px;">/mcp</div>
+  <div class="lb ac" style="left:602px; top:705px;">pages, /api/*</div>
+  <div class="lb" style="left:753px; top:790px;">pages</div>
+  <div class="lb" style="left:242px; top:897px;">tools/call</div>
+  <div class="lb ac" style="left:602px; top:897px;">signed-in session</div>
+  <div class="lb" style="left:747px; top:982px;">uploads</div>
+  <div class="lb" style="left:1142px; top:982px;">HTTPS</div>
+  <div class="lb ac" style="left:602px; top:1089px;">Ask · SSE</div>
+  <div class="lb" style="left:344px; top:1076px;">tool calls</div>
+  <div class="lb" style="left:162px; top:1089px;">pack entries</div>
+  <div class="lb ac" style="left:816px; top:1174px;">HTTPS · live engine only</div>
+  <div class="lb" style="left:602px; top:1281px;">plan, confirm-guess</div>
+  <div class="lb" style="left:396px; top:1358px;">plan</div>
+  <div class="lb" style="left:756px; top:1358px;">mail</div>
+  <div class="lb" style="left:1142px; top:1358px;">SMTP</div>
+  <div class="lb" style="left:1142px; top:1381px;">HTTPS</div>
+  <div class="lb" style="left:602px; top:1529px;">reads and writes</div>
+  <div class="lb" style="left:962px; top:1529px;">dev outbox</div>
+  <div class="lb" style="left:242px; top:1773px;">volume backups, by the operator</div>
+</main>
+</body>
+</html>

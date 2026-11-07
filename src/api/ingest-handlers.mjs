@@ -60,6 +60,7 @@ function triggerJob(ctx, jobId) {
 }
 export const triggerPlan = ctx => triggerJob(ctx, 'plan');
 export const triggerGuesses = ctx => triggerJob(ctx, 'confirm-guess');
+export const triggerFreshness = ctx => triggerJob(ctx, 'freshness');
 
 export const ingestOpts = (ctx, key) => ({ engine: ctx.engine, config: ctx.config, now: nowIso(), key });
 
@@ -75,7 +76,7 @@ export async function uploadFiles(ctx) {
     if (err instanceof VaultError) throw new HttpError(409, err.message);
     throw err;
   }
-  if (results.some(r => r && r.status === 'imported')) triggerPlan(ctx);
+  if (results.some(r => r && r.status === 'imported')) { triggerPlan(ctx); triggerFreshness(ctx); }
   if (results.some(r => r && r.status === 'imported')) triggerGuesses(ctx);
   const scenario = scenarioOf(ctx);
   return { scenario, files: results, pending: scenario.live.ingest.pending };
@@ -98,7 +99,7 @@ export async function retryFile(ctx) {
     if (err instanceof VaultError) throw new HttpError(409, err.message);
     throw err;
   }
-  if (file && file.status === 'imported') triggerPlan(ctx);
+  if (file && file.status === 'imported') { triggerPlan(ctx); triggerFreshness(ctx); }
   if (file && file.status === 'imported') triggerGuesses(ctx);
   return { scenario: scenarioOf(ctx), file };
 }
@@ -180,6 +181,8 @@ function afterAnswer(ctx, fn) {
   try {
     const out = confirmAction(ctx, fn);
     schedulePlan(ctx);
+    const items = out.item ? [out.item] : (out.items || []);
+    if (items.some(i => i && /account_/.test(String(i.kind || '')))) triggerFreshness(ctx);
     return out;
   } catch (err) {
     if (err instanceof HttpError && err.code === 'stale') schedulePlan(ctx);

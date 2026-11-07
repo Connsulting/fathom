@@ -101,7 +101,7 @@ const valuesText = (detail) => detail.values.filter((v) => v.value != null && v.
 // The subject of the card in stored values: the account, the entries or the listed values.
 function subjectText(detail) {
   const a = accountOf(detail);
-  if (a) return [a.name ? quote(a.name) : '', a.institution ? `at ${a.institution}` : '', a.mask ? `ending ${a.mask}` : ''].filter(Boolean).join(' ');
+  if (a) return quote(a.label || a.name || 'this account');
   if (detail?.type === 'compare') return detail.entries.map((e) => entryText(detail, e)).filter(Boolean).join('; ');
   if (detail?.type === 'values') return valuesText(detail);
   return '';

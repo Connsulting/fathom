@@ -8,6 +8,9 @@ html { color-scheme: dark; }
 body { margin: 0; background: #0a0c0d; color: #e6eaeb; }
 
 .au {
+  /* The account and household column (760px of content plus 48px of padding a side). The top bar
+     and the page body share it, so the brand mark, title and sections start on one edge. */
+  --au-col: 856px;
   --bg: #0a0c0d;
   --s1: #101315;
   --s2: #15191b;
@@ -114,13 +117,13 @@ body { margin: 0; background: #0a0c0d; color: #e6eaeb; }
 
 /* ---------- account and household: top bar and page ---------- */
 .au .au-top { border-bottom: 1px solid var(--line); background: var(--bg); position: sticky; top: 0; z-index: 20; padding-top: env(safe-area-inset-top); }
-.au .au-top-in { max-width: 960px; margin: 0 auto; padding: 0 48px; display: flex; align-items: center; gap: 28px; height: 56px; }
+.au .au-top-in { max-width: var(--au-col); margin: 0 auto; padding: 0 48px; display: flex; align-items: center; gap: 28px; height: 56px; }
 .au .au-nav { display: flex; align-items: center; gap: 2px; min-width: 0; margin-left: auto; overflow-x: auto; scrollbar-width: none; }
 .au .au-nav::-webkit-scrollbar { display: none; }
 .au .au-nav a { padding: 6px 10px; border-radius: 6px; color: var(--mu); font-size: 13.5px; white-space: nowrap; }
 .au .au-nav a:hover { color: var(--tx); }
 .au .au-nav a[aria-current="page"] { color: var(--tx); background: var(--s2); }
-.au .au-main { max-width: 960px; margin: 0 auto; padding: 44px 48px 96px; }
+.au .au-main { max-width: var(--au-col); margin: 0 auto; padding: 44px 48px 96px; }
 .au .au-ph h1 { font-size: 34px; line-height: 1.15; }
 .au .au-kicker { font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ac); font-weight: 500; margin-bottom: 10px; }
 .au .au-ph .au-lede { max-width: 64ch; margin-top: 10px; }
@@ -166,7 +169,8 @@ body { margin: 0; background: #0a0c0d; color: #e6eaeb; }
   .au .au-row-a { justify-content: flex-start; }
   .au .au-row-in .au-field.role { flex: 1 1 100%; }
   .au .au-row-in .au-btn { width: 100%; }
-  .au .au-btn { min-height: 40px; }
+  .au .au-btn { min-height: 40px; max-width: 100%; white-space: normal; text-align: center; line-height: 1.3; }
+  .au .au-btn:not(.wide):not(.tall):not(.sm) { height: auto; padding-block: 8px; }
   .au .au-btn.sm { min-height: 32px; }
   .au .au-key .au-btn.sm { min-height: 28px; }
 }
