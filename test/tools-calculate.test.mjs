@@ -255,3 +255,30 @@ test('groundAnswer grounds the owner\'s "4 percent" and the calculate result\'s 
   assert.ok(grounded.literals.every(l => l.source === getTool('calculate').source));
 });
 
+
+// Review round 1 regressions.
+test('a chained ref feeds the referenced calculation unrounded', async () => {
+  const mcp = { db: t.db, dataDir: t.dataDir, now: ctx.now, channel: 'mcp' };
+  const dollar = owner('fee', 1, 'usd_per_year', '$1 a year');
+  const monthly = await calc('monthly', [dollar], {}, mcp);
+  assert.equal(monthly.figure.value, round(1 / 12));
+  const back = await calc('annualize', [{ ref: monthly.figure.ref }], {}, mcp);
+  const nested = await calc('annualize', [{ expr: { operation: 'monthly', operands: [dollar] } }], {}, mcp);
+  assert.equal(nested.figure.value, 1);
+  assert.equal(back.figure.value, 1, 'the ref matches the nested expression, not 0.08 times 12');
+});
+
+test('a result over 256 KB truncates its longest list and says so', async () => {
+  const keys = Object.values(value).filter(f => f.unit === 'usd' && f.value !== null).map(f => f.key);
+  assert.ok(keys.length >= 50);
+  const list = { ref: { tool: 'household', args: { operation: 'figures', keys }, path: '' } };
+  const operands = Array.from({ length: 20 }, () => list);
+  const result = await calc('sum', operands);
+  assert.equal(result.truncated, true);
+  assert.ok(JSON.stringify(result).length <= 256 * 1024);
+  const total = keys.reduce((s, k) => s + value[k].value, 0) * 20;
+  assert.equal(result.figure.value, round(total), 'truncation never changes the figure');
+  assert.ok(result.figure.provenance.inputs.length < keys.length * 20);
+  const small = await calc('add', [F('biz_cash'), F('sp_cash')]);
+  assert.equal(small.truncated, undefined);
+});
