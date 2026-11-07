@@ -88,6 +88,13 @@ test('mcp-key refuses an unknown owner and a duplicate active name', async () =>
     assert.equal(again.stdout, '');
     assert.match(again.stderr, /already exists/);
     assert.equal(again.stderr.includes(first.stdout.trim()), false);
+
+    const padded = await runCommand(process.execPath, ['scripts/mcp-key.mjs', 'create', '--name', ' once ', '--owner', OWNER], {
+      env: { FATHOM_DATA: s.dataDir },
+    });
+    assert.notEqual(padded.code, 0);
+    assert.equal(padded.stdout, '');
+    assert.match(padded.stderr, /already exists/);
   } finally {
     await s.stop();
   }

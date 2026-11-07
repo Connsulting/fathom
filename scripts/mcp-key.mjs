@@ -47,7 +47,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
       console.error('mcp-key: unknown owner');
       return 1;
     }
-    const dup = db.prepare('SELECT id FROM api_keys WHERE name = ? AND revoked_at IS NULL').get(name);
+    const dup = db.prepare('SELECT id FROM api_keys WHERE name = ? AND revoked_at IS NULL').get(name.trim());
     if (dup) {
       console.error('mcp-key: active key name already exists');
       return 1;
