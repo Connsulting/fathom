@@ -22,6 +22,9 @@ import { packTools } from './packs.mjs';
 import { setRecOwner } from '../store/recs.mjs';
 import { advisorStatus } from '../advisor/index.mjs';
 import { buildPace } from '../pace/build.mjs';
+import { actionTools } from './actions.mjs';
+import { changeRec } from '../actions/index.mjs';
+import { ANSWER_SHAPES, answerShape } from '../jobs/triggers/common.mjs';
 
 export { ToolError };
 export { packDirsFor } from './packs.mjs';
@@ -401,18 +404,8 @@ export const tools = [
     }, ['id', 'status']),
     scope: 'write:recs',
     handler(args, ctx) {
-      const db = ctx.db;
-      const row = recRow(db, args.id);
-      const def = parse(row.def, {});
-      if (def.question?.primary && args.status === 'done') throw new ToolError('bad_input', 'Save the answers before completing this recommendation.');
-      const wake = args.status === 'snoozed' ? (args.wake ? args.wake : 'Next month') : (def.wake != null ? def.wake : null);
-      const ts = nowOf(ctx).toISOString();
-      tx(db, () => {
-        db.prepare('UPDATE recs SET status = ?, wake = ?, updated_at = ? WHERE id = ?').run(args.status, wake, ts, args.id);
-        db.prepare(`INSERT INTO rec_events (rec_id, ts, action, arg, from_status, to_status, actor)
-                    VALUES (?, ?, 'set_status', ?, ?, ?, 'tool')`).run(args.id, ts, args.wake == null ? null : args.wake, row.status, args.status);
-      });
-      return recOutById(db, clockOf(ctx), args.id);
+      const { receipt } = changeRec(args, ctx, 'status');
+      return { ...recOutById(ctx.db, clockOf(ctx), args.id), receipt };
     },
   },
   {
@@ -424,11 +417,8 @@ export const tools = [
     }, ['id', 'owner']),
     scope: 'write:recs',
     handler(args, ctx) {
-      const db = ctx.db;
-      const row = recRow(db, args.id);
-      const ts = nowOf(ctx).toISOString();
-      tx(db, () => setRecOwner(db, row, args.owner, { ts, action: 'set_owner', actor: 'tool' }));
-      return recOutById(db, clockOf(ctx), args.id);
+      const { receipt } = changeRec(args, ctx, 'owner');
+      return { ...recOutById(ctx.db, clockOf(ctx), args.id), receipt };
     },
   },
   {
@@ -442,6 +432,9 @@ export const tools = [
       return plainDeep(scope, { advisor: names.advisor || 'Your advisor', ...advisorStatus(ctx.db) });
     },
   },
+  { name: 'get_fact_answer_shapes', scope: 'read', description: 'Accepted household fact keys and their typed answer shapes, units and choices for record_household_fact.',
+    inputSchema: obj(), handler() { return Object.fromEntries(Object.keys(ANSWER_SHAPES).map(key => [key, answerShape(key)])); } },
+  ...actionTools,
   ...packTools,
 ];
 

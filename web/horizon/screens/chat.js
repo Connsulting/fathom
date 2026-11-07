@@ -362,13 +362,26 @@ function workItems(list) {
 
 // The finished block above a Fathom answer (provenance.work { ms, items }), collapsed by default,
 // open state kept per message in ui.det. A message stored before the block existed has none.
+function receiptValue(value) {
+  if (value == null) return 'Not set';
+  if (typeof value === 'boolean') return value ? 'Checked' : 'Unchecked';
+  if (typeof value !== 'object') return String(value);
+  if (value.status) return `${ACTION_LABEL[{ doing: 'start', done: 'complete', dismissed: 'dismiss', snoozed: 'snooze', proposed: 'reopen' }[value.status]] || value.status}${value.wake ? ` (${value.wake})` : ''}`;
+  return Object.entries(value).filter(([, v]) => v != null && v !== '').map(([k, v]) => `${k === 'targetDate' ? 'date' : k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`).join(', ');
+}
+
 export function workHtml(m) {
-  if (!H || !m || m.role !== 'fathom' || m.notice || !isObj(m.provenance) || !isObj(m.provenance.work)) return '';
+  if (!H || !m || m.role !== 'fathom' || !isObj(m.provenance)) return '';
+  const { esc } = H;
+  const actions = H.arr(m.provenance.actions).map(a => `<div class="h-action-receipt" data-receipt="${esc(a.id)}" role="status"><p><b>${esc(a.label)}</b>: ${esc(receiptValue(a.before))} → ${esc(receiptValue(a.after))}</p>`
+    + (a.planningPending ? '<p class="h-mute">Saved. Planning is pending.</p>' : '')
+    + (a.undone ? '<span class="h-mute">Undone</span>' : `<button type="button" class="h-btn" data-undo-action="${esc(a.id)}">Undo</button>`) + '</div>').join('');
+  if (m.notice || !isObj(m.provenance.work)) return actions;
   const w = m.provenance.work;
   const ms = Number(w.ms);
   const secs = Math.max(1, Math.round((Number.isFinite(ms) && ms > 0 ? ms : 0) / 1000));
   const open = !!H.ui.det[`work-${m.id}`];
-  return blockHtml({ key: String(m.id), live: false, open, label: `Worked for ${secs}s`, items: workItems(w.items), pulse: false });
+  return blockHtml({ key: String(m.id), live: false, open, label: `Worked for ${secs}s`, items: workItems(w.items), pulse: false }) + actions;
 }
 
 // Open while nothing streams, collapsed while text streams, unless the owner chose for this answer.
@@ -656,6 +669,13 @@ const ASK_SEL = '[data-starter],[data-thread-act],a.h-askx-row,button.h-askx-new
 
 // Returns true when the click was handled here.
 export function onClick(e) {
+  const undo = e.target.closest('[data-undo-action]');
+  if (undo && H?.root?.contains(undo)) {
+    e.preventDefault();
+    undo.disabled = true;
+    Promise.resolve(H.api.actionUndo(undo.dataset.undoAction)).finally(() => { if (undo.isConnected) undo.disabled = false; });
+    return true;
+  }
   if (proposalClick(e)) return true;
   const root = H.root;
   if (!root || !H.api) return false;

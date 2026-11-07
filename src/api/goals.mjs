@@ -12,17 +12,14 @@
 // Owner goal text is stored as typed (trimmed) and rendered escaped, never token-resolved. A seed
 // goal (the demo's) can be archived or deleted, not edited: its text carries scenario tokens.
 
-import { randomBytes } from 'node:crypto';
+import { createGoal, updateGoal } from '../goals/write.mjs';
+import { ToolError } from '../tools/errors.mjs';
 import { getSetting, setSetting, tx, parseJson as parse } from '../store/db.mjs';
-import { validateGoal } from '../shared/goals.mjs';
 import { HttpError } from './http.mjs';
 import { scenarioOf } from './handlers.mjs';
 import { clockNow, loadContent, loadCurve, loadFigures } from '../scenario/build.mjs';
-import { captureGoalPath, goalPathChanged } from '../pace/build.mjs';
 import { buildSuggestions, SUGGEST_SETTING } from '../suggest/build.mjs';
 import { TARGET_PARAMETERS } from '../calc/targets.mjs';
-
-const MAX_GOALS = 200;
 
 const stamp = ctx => clockNow(ctx.db, ctx.config && ctx.config.clock);
 
@@ -32,51 +29,22 @@ function goalRow(db, id) {
   return row;
 }
 
-// The validation context: the store's accounts and stored figures.
-function storeRefs(db) {
-  return { accounts: db.prepare('SELECT id, kind FROM accounts').all(), figures: loadFigures(db) };
-}
-
-function valid(db, body, partial) {
-  const res = validateGoal(body, { ...storeRefs(db), partial });
-  if (!res.ok) throw new HttpError(400, res.error);
-  return res.value;
-}
-
 const goalOut = (scenario, id) => scenario.goals.find(g => g.id === id) || null;
 
-// Creates an owner goal; used by the route and by a saved Ask proposal (the same body).
 export function goalCreate(ctx) {
-  const { db } = ctx;
-  const value = valid(db, ctx.body, false);
-  const n = db.prepare('SELECT count(*) AS n FROM goals').get().n;
-  if (n >= MAX_GOALS) throw new HttpError(409, `at most ${MAX_GOALS} goals`);
-  let id;
-  do id = 'g' + randomBytes(6).toString('hex'); while (db.prepare('SELECT 1 FROM goals WHERE id = ?').get(id));
-  const now = stamp(ctx);
-  const def = { id, title: value.title, note: value.note || '', horizon: value.horizon, target: value.target,
-    targetDate: value.targetDate, track: value.track };
-  def.pace = captureGoalPath(db, def, now.slice(0, 10));
-  tx(db, () => {
-    const sort = db.prepare('SELECT coalesce(max(sort), -1) + 1 AS s FROM goals').get().s;
-    db.prepare("INSERT INTO goals (id, def, sort, origin, created_at, updated_at) VALUES (?, ?, ?, 'owner', ?, ?)")
-      .run(id, JSON.stringify(def), sort, now, now);
-  });
-  const scenario = scenarioOf(ctx);
-  return { scenario, goal: goalOut(scenario, id) };
+  try {
+    const row = createGoal(ctx.db, ctx.body, { now: stamp(ctx) });
+    const scenario = scenarioOf(ctx);
+    return { scenario, goal: goalOut(scenario, row.id) };
+  } catch (e) { if (e instanceof ToolError) throw new HttpError(e.code === 'not_found' ? 404 : 400, e.message); throw e; }
 }
 
 export function goalUpdate(ctx) {
-  const { db } = ctx;
-  const row = goalRow(db, ctx.params.id);
-  if (row.origin !== 'owner') throw new HttpError(409, 'this goal came with the demo and cannot be edited; archive it or add your own');
-  const value = valid(db, ctx.body, true);
-  const previous = parse(row.def, {});
-  const def = { ...previous, ...value, id: row.id };
-  if (!previous.pace || goalPathChanged(previous, def)) def.pace = captureGoalPath(db, def, stamp(ctx).slice(0, 10));
-  db.prepare('UPDATE goals SET def = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(def), stamp(ctx), row.id);
-  const scenario = scenarioOf(ctx);
-  return { scenario, goal: goalOut(scenario, row.id) };
+  try {
+    const row = updateGoal(ctx.db, ctx.params.id, ctx.body, { now: stamp(ctx) });
+    const scenario = scenarioOf(ctx);
+    return { scenario, goal: goalOut(scenario, row.id) };
+  } catch (e) { if (e instanceof ToolError) throw new HttpError(e.code === 'not_found' ? 404 : e.code === 'conflict' ? 409 : 400, e.message); throw e; }
 }
 
 export function goalArchive(ctx) {

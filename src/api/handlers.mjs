@@ -1,3 +1,8 @@
+import { writePreference } from '../actions/preferences.mjs';
+import { randomUUID } from 'node:crypto';
+import { requireActor, undoAction, ensureActionConversation, receiptsFor, receiptMessages } from '../actions/receipts.mjs';
+import { writeRec } from '../store/recs.mjs';
+import { ToolError } from '../tools/errors.mjs';
 import { queueAccountPairs } from '../ingest/account-merge.mjs';
 // API handlers. Each takes { db, config, engine, packs, answerer, params, body } and returns the
 // JSON response body (status 200) or throws HttpError. Every action writes the store and answers
@@ -95,7 +100,7 @@ function need(ctx, name) {
 // An answerer reply as a stored fathom message.
 function pushReply(ctx, key, reply) {
   return pushMessage(ctx, key, 'fathom', paragraphs(reply.paragraphs), {
-    refs: reply.refs || [], notice: !!reply.notice, provenance: reply.notice ? null : reply.provenance || null,
+    refs: reply.refs || [], notice: !!reply.notice, provenance: reply.provenance || null,
   });
 }
 
@@ -128,12 +133,8 @@ export function recAction(ctx) {
     if (!isIndex(arg) || Number(arg) >= tasks.length) throw new HttpError(400, `task index must be 0 to ${tasks.length - 1}`);
     const i = Number(arg);
     const done = parse(row.tasks_done, []);
-    const next = tasks.map((_, k) => !!done[k]);
-    next[i] = !next[i];
-    tx(db, () => {
-      db.prepare('UPDATE recs SET tasks_done = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(next), nowIso(), id);
-      recEvent(db, id, 'task', i, row.status, row.status);
-    });
+    try { writeRec(db, id, 'step', { index: i, checked: !done[i] }, { now: nowIso(), actor: 'ui' }); }
+    catch (e) { if (e instanceof ToolError) throw new HttpError(400, e.message); throw e; }
     return { scenario: scenarioOf(ctx) };
   }
 
@@ -458,13 +459,24 @@ async function maybeName(ctx, key) {
 function streamStart(ctx, key) {
   if (typeof ctx.onEvent === 'function') ctx.onEvent({ type: 'start', key });
 }
-const streaming = ctx => (typeof ctx.onEvent === 'function' ? { onEvent: ctx.onEvent } : {});
+const streaming = ctx => ({
+  ...(typeof ctx.onEvent === 'function' ? { onEvent: ctx.onEvent } : {}),
+  actorId: ctx.identity?.id || (getSetting(ctx.db, 'mode', null) === 'demo' ? 'demo' : null),
+  ownerText: typeof ctx.body.text === 'string' && ctx.body.questionId == null ? ctx.body.text.trim() : null,
+  turnId: randomUUID(),
+  replan: ctx.scheduler ? () => ctx.scheduler.runNow('plan') : null,
+  queuePlan: ctx.scheduler ? () => ctx.scheduler.soon?.('plan', 'ingest') : null,
+});
 
 // Stores the owner message and the reply in `key`; `before` runs first inside the transaction.
 function storeTurn(ctx, key, mine, reply, before) {
   return tx(ctx.db, () => {
+    if (receiptsFor(ctx.db, key).length) ensureActionConversation(ctx.db, key, stamp(ctx), ctx.body.recId);
     if (before) before();
-    pushMessage(ctx, key, 'me', mine);
+    const actorId = ctx.identity?.id || (getSetting(ctx.db, 'mode', null) === 'demo' ? 'demo' : null);
+    const ownerInput = typeof ctx.body.text === 'string' && ctx.body.questionId == null && actorId
+      ? { ownerInput: { actorId, text: ctx.body.text.trim() } } : null;
+    pushMessage(ctx, key, 'me', mine, { provenance: ownerInput });
     return pushReply(ctx, key, reply);
   });
 }
@@ -523,7 +535,7 @@ export function threadList(ctx) {
 // GET /api/threads/:id: the thread and its messages (as in scenario.live.conversations).
 export function threadGet(ctx) {
   const thread = threadOrThrow(ctx.db, ctx.params.id);
-  const messages = ctx.db.prepare('SELECT * FROM messages WHERE conversation_key = ? ORDER BY id').all(thread.key).map(messageOut);
+  const messages = receiptMessages(ctx.db, thread.key, ctx.db.prepare('SELECT * FROM messages WHERE conversation_key = ? ORDER BY id').all(thread.key).map(messageOut));
   return { thread, messages };
 }
 
@@ -556,7 +568,7 @@ export async function threadCreate(ctx) {
   streamStart(ctx, key);
   const reply = await need(ctx, 'answerer').answer({ db, key, text: question, clock: ctx.config && ctx.config.clock, ...streaming(ctx) });
   if (!reply) throw new HttpError(404, 'no answer');
-  const id = storeTurn(ctx, key, mine, reply, () => insertThread(db, key, stamp(ctx)));
+  const id = storeTurn(ctx, key, mine, reply, () => { if (!db.prepare('SELECT 1 FROM conversations WHERE key = ?').get(key)) insertThread(db, key, stamp(ctx)); });
   await maybeName(ctx, key);
   const fresh = scenarioOf(ctx);
   return { scenario: fresh, thread: threadOrThrow(db, key.slice(4)), message: replyIn(fresh, key, id) };
@@ -602,7 +614,7 @@ async function threadCreateFromRec(ctx, empty) {
 
 // Deletes a thread row that holds no message (a rec thread whose first answer failed).
 function dropIfEmpty(db, key) {
-  db.prepare('DELETE FROM conversations WHERE key = ? AND NOT EXISTS (SELECT 1 FROM messages WHERE conversation_key = ?)').run(key, key);
+  db.prepare('DELETE FROM conversations WHERE key = ? AND NOT EXISTS (SELECT 1 FROM messages WHERE conversation_key = ?) AND NOT EXISTS (SELECT 1 FROM action_receipts WHERE conversation_key = ?)').run(key, key, key);
 }
 
 // POST /api/recs/:id/start-over: detaches every thread asked from a visible rec that its dialog
@@ -667,3 +679,25 @@ export async function demoReset(ctx) {
   if (ctx.packs) ctx.packs.refresh();
   return { scenario: scenarioOf(ctx) };
 }
+
+export async function actionUndo(ctx) {
+  const actorId = ctx.identity?.id || (getSetting(ctx.db, 'mode', null) === 'demo' ? 'demo' : null);
+  const row = ctx.db.prepare('SELECT scope FROM action_receipts WHERE id = ?').get(ctx.params.id);
+  if (!row) throw new HttpError(404, 'no such action');
+  try {
+    const out = await undoAction({ db: ctx.db, now: stamp(ctx), actorId,
+      replan: ctx.scheduler ? () => ctx.scheduler.runNow('plan') : null,
+      queuePlan: () => ctx.scheduler?.soon?.('plan', 'ingest') }, ctx.params.id, row.scope);
+    return { ...out, scenario: scenarioOf(ctx) };
+  } catch (e) { if (e instanceof ToolError) throw new HttpError(409, e.message); throw e; }
+}
+
+export function preferenceSave(ctx) {
+  try {
+    const out = writePreference({ db: ctx.db, now: stamp(ctx), actorId: ctx.identity?.id },
+      { ...ctx.body, id: ctx.params.id }, { remove: ctx.removePreference === true });
+    return { ...out, scenario: scenarioOf(ctx) };
+  } catch (e) { if (e instanceof ToolError) throw new HttpError(400, e.message); throw e; }
+}
+
+export const preferenceDelete = ctx => preferenceSave({ ...ctx, removePreference: true });

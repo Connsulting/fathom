@@ -130,3 +130,30 @@ test('registry assigns the action scopes and marks undo tools MCP-only', () => {
   }
   assert.equal(tools.find(t => t.name === 'undo_fact_action')?.mcpOnly, true);
 });
+
+test('only typed statements by this actor in this thread are evidence', async () => {
+  const db = await s.store();
+  const ctx = { ...context(db), ownerText: null };
+  db.prepare('INSERT INTO conversations (key, created_at) VALUES (?, ?)').run(key, now);
+  const insert = (provenance, thread = key) => db.prepare("INSERT INTO messages (conversation_key, role, text, ts, provenance) VALUES (?, 'me', ?, ?, ?)")
+    .run(thread, words, now, provenance ? JSON.stringify(provenance) : null);
+  insert(null);
+  insert({ ownerInput: { actorId: 'person-b', text: words } });
+  await assert.rejects(callTool('record_household_fact', factArgs, ctx), /stated/);
+  insert({ ownerInput: { actorId: 'person-a', text: words } });
+  const out = await callTool('record_household_fact', factArgs, ctx);
+  assert.ok(out.receipt);
+  const messages = buildScenario(db).live.conversations[key];
+  assert.equal(messages.at(-1).provenance.actions[0].id, out.receipt.id);
+});
+
+test('a saved fact with busy planning retains its receipt and queues planning', async () => {
+  const db = await s.store();
+  let queued = 0;
+  const ctx = { ...context(db), replan: async () => { throw new Error('busy'); }, queuePlan: () => queued++ };
+  const out = await callTool('record_household_fact', factArgs, ctx);
+  assert.equal(out.planningPending, true);
+  assert.equal(queued, 1);
+  assert.equal(getFacts(db)[factArgs.key], factArgs.value);
+  assert.equal(buildScenario(db).live.conversations[key].at(-1).provenance.actions[0].planningPending, true);
+});
