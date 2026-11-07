@@ -10,7 +10,7 @@ import { resolveCategories, CATEGORY_TABLES, normalizeMerchant } from '../src/ca
 import { loadCategoryInputs, queueCategoryChecks, categoryCoverage, moveCategoryRows } from '../src/categories/store.mjs';
 import { guessCategories } from '../src/categories/guess.mjs';
 import { answerItem, reopenItem, pendingItems, ask } from '../src/ingest/confirm.mjs';
-import { ingestFile } from '../src/ingest/pipeline.mjs';
+import { ingestFile, accountIdOf } from '../src/ingest/pipeline.mjs';
 import { bestGuess } from '../src/ingest/bestguess.mjs';
 import { validateGuesses } from '../src/ingest/guess.mjs';
 import { aggregatorFile } from './helpers/ingest.mjs';
@@ -134,9 +134,9 @@ test('AC3 amount threshold/top ten, one source-name mapping, rules past/future a
 });
 
 test('AC2 live-row enrichment keeps one posting, parser provenance, replay and ambiguous rows', async t => {
-  const {db,dir}=store(t); account(db);
-  db.prepare("UPDATE accounts SET identity='examplebank|mask:1111' WHERE id='checking'").run();
-  const id=txn(db,{date:'2032-06-10',amount:-250,description:'POS DEBIT Example Shop',dedupe_key:'live:one',external_id:'live-one'});
+  const {db,dir}=store(t); const accountId=accountIdOf('examplebank|mask:1111'); account(db,accountId);
+  db.prepare("UPDATE accounts SET identity='examplebank|mask:1111' WHERE id=?").run(accountId);
+  const id=txn(db,{account_id:accountId,date:'2032-06-10',amount:-250,description:'POS DEBIT Example Shop',dedupe_key:'live:one',external_id:'live-one'});
   const file=aggregatorFile('export.csv',[{date:'2032-06-12',amount:250,description:'Example Shop',category:'Business'}]);
   const opts={dataDir:dir,key:Buffer.alloc(32,7),now:'2032-08-01T12:00:00Z'};
   assert.equal((await ingestFile(db,file,opts)).status,'imported');
@@ -146,8 +146,8 @@ test('AC2 live-row enrichment keeps one posting, parser provenance, replay and a
   const overlap=aggregatorFile('overlap.csv',[{date:'2032-06-12',amount:250,description:'Example Shop',category:'Business'}, {date:'2032-06-13',amount:12,description:'Other Merchant',category:'Groceries'}]);
   await ingestFile(db,overlap,opts);
   assert.equal(db.prepare('SELECT count(*) AS n FROM transactions WHERE amount=-250').get().n,1);
-  txn(db,{date:'2032-07-10',amount:-400,description:'POS Example Shop',dedupe_key:'live:two'});
-  txn(db,{date:'2032-07-10',amount:-400,description:'POS Example Shop',dedupe_key:'live:three'});
+  txn(db,{account_id:accountId,date:'2032-07-10',amount:-400,description:'POS Example Shop',dedupe_key:'live:two'});
+  txn(db,{account_id:accountId,date:'2032-07-10',amount:-400,description:'POS Example Shop',dedupe_key:'live:three'});
   await ingestFile(db,aggregatorFile('ambiguous.csv',[{date:'2032-07-11',amount:400,description:'Example Shop',category:'Business'}]),opts);
   assert.equal(db.prepare('SELECT count(*) AS n FROM transactions WHERE amount=-400').get().n,3);
   assert.ok(pendingItems(db).some(i=>i.kind==='near_duplicate'));
@@ -155,7 +155,7 @@ test('AC2 live-row enrichment keeps one posting, parser provenance, replay and a
 
 test('AC2 corrections survive duplicate consolidation and its undo without cascades', t => {
   const {db}=store(t); account(db);
-  const a=txn(db,{dedupe_key:'a'}), b=txn(db,{dedupe_key:'b'});
+  const a=txn(db,{dedupe_key:'a',description:'Original description'}), b=txn(db,{dedupe_key:'b'});
   db.prepare("INSERT INTO transaction_category_corrections VALUES (?,'Business','business',?)").run(b,'2032-08-01');
   const q=ask(db,{kind:'near_duplicate',subject:'a|b',question:'Same?',options:[{id:'same',label:'Same'},{id:'different',label:'Different'}],context:{keys:['a','b']}});
   answerItem(db,q.id,'same');

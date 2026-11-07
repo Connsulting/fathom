@@ -1,3 +1,4 @@
+import { CATEGORY_TABLES } from '../categories/resolve.mjs';
 import { kindOf, accountMask, compatibleKind, sameInstitution } from './account-match.mjs';
 // Ingest pipeline: store each upload encrypted, route it to a parser, a learned column mapping or
 // model extraction, and persist its rows with provenance in one transaction per file: accounts by
@@ -271,6 +272,7 @@ function persist(db, fileId, file, plan, opts) {
   const rows = pnlRows ? [...parsed.rows.filter((r) => r.kind !== 'pnl_line'), ...pnlRows] : parsed.rows;
   const balances = closingBalances(rows);
   const holds = new Map();
+  ctx.categoryRows = rows.filter(r => r.kind === 'transaction');
   for (const row of rows) {
     const parser = row.parser ?? ctx.parser;
     const locator = json(row.locator ?? null);
@@ -396,10 +398,10 @@ function observations(db, key) {
   const list = [];
   const stored = db.prepare('SELECT description, parser, file_id FROM transactions WHERE dedupe_key = ?').get(key);
   if (stored) list.push({ ...stored, stored: true });
-  const archived = db.prepare(`SELECT row FROM superseded_rows WHERE table_name = 'transactions' AND dedupe_key = ? AND reason IN (${OBSERVED.map(() => '?').join(', ')}) ORDER BY id`);
+  const archived = db.prepare(`SELECT row, survivor_key FROM superseded_rows WHERE table_name = 'transactions' AND dedupe_key = ? AND reason IN (${OBSERVED.map(() => '?').join(', ')}) ORDER BY id`);
   for (const a of archived.all(key, ...OBSERVED)) {
     const r = parseJson(a.row, null);
-    if (r) list.push({ description: r.description ?? null, parser: r.parser ?? null, file_id: r.file_id ?? null });
+    if (r) list.push({ description: r.description ?? null, parser: r.parser ?? null, file_id: r.file_id ?? null, survivor_key: a.survivor_key });
   }
   return list;
 }
@@ -432,7 +434,7 @@ const activeKey = (db, key) => (db.prepare('SELECT 1 FROM transactions WHERE ded
 // links and missing survivors with null.
 const SURVIVOR_HOPS = 16;
 function activeCounterpart(db, key) {
-  const survivorsOf = db.prepare(`SELECT survivor_key FROM superseded_rows WHERE table_name = 'transactions' AND dedupe_key = ? AND reason = 'duplicate_confirmed'
+  const survivorsOf = db.prepare(`SELECT survivor_key FROM superseded_rows WHERE table_name = 'transactions' AND dedupe_key = ? AND reason IN ('duplicate_confirmed','duplicate_cross_format')
                                   AND survivor_key IS NOT NULL ORDER BY id DESC`);
   const seen = new Set([key]);
   let frontier = [key];
@@ -450,6 +452,31 @@ function activeCounterpart(db, key) {
 const NEAR_DATES = 'Two imports show the same amount on this account within three days. Are they the same transaction?';
 const NEAR_KEY = 'Two imports show the same amount and date or reference number on this account with different descriptions. Are they the same transaction?';
 
+function recordCategoryImport(ctx, transactionId, values, key) {
+  if (!values.category || !Object.hasOwn(CATEGORY_TABLES,values.parser)) return;
+  ctx.db.prepare(`INSERT INTO transaction_category_imports
+    (transaction_id,dedupe_key,category,parser,file_id,locator,date,description,updated_at) VALUES (?,?,?,?,?,?,?,?,?)
+    ON CONFLICT(transaction_id) DO UPDATE SET category=excluded.category,parser=excluded.parser,file_id=excluded.file_id,
+      locator=excluded.locator,updated_at=excluded.updated_at WHERE transaction_category_imports.dedupe_key=excluded.dedupe_key`)
+    .run(transactionId,key,values.category,values.parser,ctx.fileId,values.locator,values.date,values.description,ctx.now);
+}
+function categoryCounterpart(ctx,row,parser) {
+  if (!row.category || !Object.hasOwn(CATEGORY_TABLES,parser)) return null;
+  const candidates=ctx.db.prepare(`SELECT t.* FROM transactions t WHERE t.account_id=? AND t.parser='simplefin'
+    AND round(t.amount*100)=? AND t.date BETWEEN ? AND ?
+    AND NOT EXISTS (SELECT 1 FROM transaction_category_imports i WHERE i.transaction_id=t.id) ORDER BY t.date,t.id`)
+    .all(row.accountId,Math.round(row.amount*100),addDays(row.date,-2),addDays(row.date,2));
+  const matches=candidates.filter(c=>samePosting([c],row.description,parser));
+  const overlapping=ctx.categoryRows.filter(r=>r.accountId===row.accountId && moneyEq(r.amount,row.amount)
+    && Math.abs(Date.parse(r.date)-Date.parse(row.date))<=4*86400000);
+  if (matches.length===1) {
+    const hit=matches[0];
+    const competitors=overlapping.filter(r=>samePosting([hit],r.description,parser));
+    return competitors.length===1 ? hit : null;
+  }
+  return !matches.length && candidates.length===1 && overlapping.length===1 ? candidates[0] : null;
+}
+
 function putTransaction(ctx, row, parser, locator) {
   const { db, fileId, counts, now } = ctx;
   const values = {
@@ -460,10 +487,13 @@ function putTransaction(ctx, row, parser, locator) {
   // later row of its own format is compared with it under the same-format rule (C2).
   const duplicate = (found, key) => {
     counts.duplicates += 1;
+    const survivorKey=activeCounterpart(db,found.observation.survivor_key ?? key);
+    const survivor=survivorKey && db.prepare('SELECT id FROM transactions WHERE dedupe_key=?').get(survivorKey);
+    if (survivor) recordCategoryImport(ctx,survivor.id,values,key);
     if (found.match === 'cross_words') counts.crossFormat += 1;
     if (found.match !== 'same') {
       archive(db, 'transactions', { ...values, dedupe_key: key, normalized_description: normalizeName(row.description) },
-        { by: found.observation.file_id ?? null, reason: 'duplicate_cross_format', now });
+        { by: found.observation.file_id ?? null, reason: 'duplicate_cross_format', now, survivorKey });
     }
   };
   let key = dedupeKey(row);
@@ -479,6 +509,14 @@ function putTransaction(ctx, row, parser, locator) {
     key = `${key}:d:${sha256(normalizeName(row.description)).slice(0, 16)}`;
     seen = observations(db, key);
     if (seen.length) return duplicate(samePosting(seen, row.description, parser) ?? { match: 'same', observation: seen[0] }, key);
+  }
+  const categoryTwin=categoryCounterpart(ctx,row,parser);
+  if (categoryTwin) {
+    recordCategoryImport(ctx,categoryTwin.id,values,key);
+    archive(db,'transactions',{...values,dedupe_key:key,normalized_description:normalizeName(row.description)},
+      {by:fileId,reason:'duplicate_cross_format',survivorKey:categoryTwin.dedupe_key,now});
+    counts.duplicates++; counts.crossFormat++;
+    return;
   }
   db.prepare(`INSERT INTO transactions (account_id, date, amount, description, category, external_id, dedupe_key, file_id, parser, locator, occurrence)
               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)

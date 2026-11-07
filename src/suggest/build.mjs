@@ -1,3 +1,4 @@
+import { loadCategoryInputs } from '../categories/store.mjs';
 // Suggested goal targets, store side: reads accounts, transactions, stored account values and the
 // planner's room figures, runs the pure calculator (src/calc/targets.mjs) and returns one record per
 // owner goal that is live and has no target. Pure reads; never writes.
@@ -75,8 +76,8 @@ export function buildSuggestions(db, { clock: override, goals } = {}) {
   // Each input is read once, and only when some goal needs it.
   const lazy = fn => { let memo; return () => (memo ??= { v: fn() }).v; };
   const spending = lazy(() => spendingInputs({
+    ...loadCategoryInputs(db),
     accounts,
-    transactions: db.prepare('SELECT id, account_id, date, amount FROM transactions WHERE date <= ? ORDER BY date, id').all(clock),
     clock,
   }));
   const cash = lazy(() => holdingsTotal(holdings(db, accounts, CASH_KINDS, clock)));
