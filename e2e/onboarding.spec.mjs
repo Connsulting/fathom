@@ -298,9 +298,14 @@ test.describe('demo build', () => {
       expect(g).toMatchObject({ origin: 'owner', archived: false, note: e.note, horizon: e.horizon, target: null, targetDate: null });
     }
 
-    // Home redraws with them (goals with no target sit with the quiet goals).
-    const homeGoal = (title) => page.locator('section.h-home').locator('[data-goal-card], [data-quiet-goal]').filter({ hasText: title });
-    for (const e of expected) await expect(homeGoal(e.title)).toHaveCount(1);
+    // Home redraws with them: each goal with no target is its own card, with no quiet row.
+    const homeGoal = (title) => page.locator('section.h-home article.h-gcard[data-goal-card]').filter({ hasText: title });
+    for (const e of expected) {
+      const g = sc.goals.find((x) => x.title === e.title);
+      await expect(homeGoal(e.title)).toHaveCount(1);
+      await expect(homeGoal(e.title)).toHaveAttribute('data-goal-card', g.id);
+    }
+    await expect(page.locator('section.h-home details.h-quiet, section.h-home [data-quiet-goal]')).toHaveCount(0);
 
     // And they are on Goals.
     await gotoRoute(page, 'goals');
