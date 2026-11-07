@@ -9,4 +9,4 @@ export function confidenceBand(confidence, policy = CONFIDENCE_POLICY) {
 }
 export const jevEvidence = () => "Fathom's categorization";
 export const categoryEvidence = text => String(text).replace(/\b(?:jev(?:-[\d.]+)?|typesafe(?:\.ai)?|anthropic|openai|claude|gpt(?:-[\w.]+)?|gemini)\b/gi,'service')
-  .replace(/\d+(?:\.\d+)?\s*%/g,'').replace(/[\r\n]+/g,' ');
+  .replace(/\d+(?:\.\d+)?\s*%/g,'').replace(/\bpercent\b/gi,'rate').replace(/[\r\n]+/g,' ');
