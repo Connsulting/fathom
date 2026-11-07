@@ -60,7 +60,12 @@ function cardPayment(t, byId, accounts) {
   const text = String(t.description).toLowerCase();
   return accounts.some(a => a.kind === 'card' && !businessAccount(a) && (
     (a.mask && new RegExp(`\\b${a.mask}\\b`).test(text))
-    || [a.inst,a.name].some(name => typeof name === 'string' && name.trim().length >= 4 && text.includes(name.trim().toLowerCase()))));
+    || [a.inst,a.name].some(name => {
+      if (typeof name !== 'string' || name.trim().length < 4 || !text.includes(name.trim().toLowerCase())) return false;
+      const identity = normalizeMerchant(name);
+      return identity && !accounts.some(other => other.kind !== 'card'
+        && [other.inst,other.name].some(value => value && normalizeMerchant(value) === identity));
+    })));
 }
 
 // Source-name identity always uses the parser which supplied that category, including enrichment.

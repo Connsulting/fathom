@@ -22,8 +22,9 @@ export function loadCategoryInputs(db) {
 function checks(db,{clock = getSetting(db,'clock',new Date().toISOString().slice(0,10)),threshold = CATEGORY_THRESHOLD}={}) {
   const input=loadCategoryInputs(db);
   input.transactions=input.transactions.filter(t=>t.date<=clock);
-  const resolutions=resolveCategories(input), accounts=new Map(input.accounts.map(a=>[a.id,a]));
-  const figureRows=new Set(spendingInputs({...input,clock}).windowTransactionIds);
+  const {windowTransactionIds}=spendingInputs({...input,clock});
+  const resolutions=resolveCategories({...input,transferSourceIds:windowTransactionIds}), accounts=new Map(input.accounts.map(a=>[a.id,a]));
+  const figureRows=new Set(windowTransactionIds);
   const mapped=new Set(input.sourceRules.map(r=>JSON.stringify([r.parser,r.category])));
   const unknown=new Map(), list=[], guesses=new Map(input.guesses.map(g=>[g.transaction_id,g]));
   for(const t of input.transactions) {

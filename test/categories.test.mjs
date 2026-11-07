@@ -256,3 +256,25 @@ test('AC7 source-name mapping is parser-specific, retains unknown names, and cov
   assert.equal(c.get(1).layer,'correction'); assert.equal(c.get(3).layer,'uncategorized');
   assert.match(readFileSync('docs/architecture.md','utf8'),/CATEGORY_TABLES/);
 });
+
+
+test('AC1 a shared bank name never makes mortgage payments card transfers', () => {
+  const shared=[{id:'checking',kind:'checking',inst:'Example Bank',name:'Daily checking'},
+    {id:'card',kind:'card',inst:'Example Bank',name:'Rewards',mask:'5678'},
+    {id:'loan',kind:'loan',inst:'Example Bank',name:'Mortgage'}];
+  const transactions=[row(1,{description:'ONLINE PAYMENT Example Bank MORTGAGE'}),
+    row(2,{description:'ONLINE PAYMENT Example Bank 5678'}),row(3,{description:'ONLINE PAYMENT Rewards'})];
+  const c=resolveCategories({accounts:shared,transactions});
+  assert.equal(c.get(1).layer,'uncategorized'); assert.equal(c.get(1).bucket,'household');
+  assert.equal(c.get(2).bucket,'transfer'); assert.equal(c.get(3).bucket,'transfer');
+});
+
+test('AC3 queue uses the same in-window transfer priority as the spending figure', t => {
+  const {db}=store(t); account(db); account(db,'broker','taxable'); history(db);
+  txn(db,{date:'2032-01-31',amount:-1000,description:'Partial-month posting'});
+  const transfer=txn(db,{date:'2032-02-02',amount:-1000,description:'Current-window transfer'});
+  txn(db,{date:'2032-02-02',amount:1000,account_id:'broker',description:'Transfer received'});
+  assert.ok(!spend(db).spendIds.includes(transfer));
+  queueCategoryChecks(db,{clock});
+  assert.ok(!pendingItems(db).some(i=>i.kind==='transaction_category' && i.context.transactionId===transfer));
+});
