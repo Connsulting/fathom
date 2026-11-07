@@ -124,7 +124,13 @@ export function countsText(counts) {
   return parts.join(', ');
 }
 
-const freshDeck = () => ({ units: [], members: {}, data: {}, answers: {}, sel: {}, hist: [], final: {}, cur: null, busy: null, busyIds: [], busyOpt: null, demo: null, notice: '' });
+const freshDeck = () => ({ units: [], members: {}, data: {}, answers: {}, hist: [], final: {}, cur: null, busy: null, busyIds: [], busyOpt: null, rowBusy: {}, demo: null, notice: '' });
+
+// The group footer button that takes the best guesses of the rows still unanswered.
+export const acceptLabel = (n) => `Accept ${n} best guess${n === 1 ? '' : 'es'}`;
+
+// Screens Confirm can be opened from, as the Back button names them. Any other screen reads "Back".
+const ORIGIN_LABEL = { home: 'Home', money: 'Money', accounts: 'Accounts', add: 'Files', plan: 'Plan', pace: 'Pace', goals: 'Goals' };
 
 // Labels for stored account owner and type values (the confirm options' ids).
 const OWNER_LABEL = { owner: 'You', spouse: 'Your spouse', joint: 'Joint', business: 'Business' };
@@ -174,7 +180,7 @@ const cadenceText = (c) => (c && typeof c === 'object' ? String(c.label || '') :
 export function ingestScreens(h) {
   const { api, shell, section, pageHead, btn, icon, esc, draw, getUi } = h;
   // Module state survives scenario re-renders (the design redraws the whole page on every change).
-  const st = { busy: 0, results: null, retrying: {}, open: {}, rowOpen: {}, undoing: {}, decidedFinal: {}, deck: freshDeck() };
+  const st = { busy: 0, results: null, retrying: {}, open: {}, rowOpen: {}, undoing: {}, decidedFinal: {}, deck: freshDeck(), origin: null };
   const ing = () => api.ingest();
 
   function chip(state) {
@@ -276,17 +282,16 @@ export function ingestScreens(h) {
      The deck walks units in server order (impact rank, then id). A unit is one item, keyed by its
      id, or a group card keyed 'g:<group>' when two or more pending items share a group. Session
      state lives in st.deck: units in session order, the item ids of each group card, item data
-     cached so answered cards can be revisited, answers {id: optionId}, local row selections
-     {id: optionId}, the undo history (each entry an array of item ids, so a group apply undoes as
-     one) and final notices {id: message}. cur is the current unit key, or null for the All caught
-     up end state. busy is the unit key in flight and busyIds the item ids it carries. */
+     cached so answered cards can be revisited, answers {id: optionId}, the undo history (each entry an array of item ids, so a group apply undoes as
+     one) and final notices {id: message}. cur is the current unit key, or null for the All answered
+     end state. busy is the unit key in flight and busyIds the item ids it carries. */
 
   const STALE_LINE = 'This one changed while you were answering; refreshed.';
   const pendingNow = () => ing().items.filter((i) => !i.status || i.status === 'pending');
   const pendingIds = () => new Set(pendingNow().map((i) => String(i.id)));
   const isGroup = (key) => String(key).startsWith('g:');
   const itemsOf = (dk, key) => (isGroup(key) ? (dk.members[key] || []) : [key]);
-  const inFlight = (dk, id) => dk.busyIds.includes(id);
+  const inFlight = (dk, id) => dk.busyIds.includes(id) || id in dk.rowBusy;
   const unanswered = (dk, id) => dk.answers[id] == null && dk.busy !== id;
   const unitOpen = (dk, key) => (isGroup(key) ? dk.busy !== key && itemsOf(dk, key).some((id) => dk.answers[id] == null) : unanswered(dk, key));
   const unitDone = (dk, key) => itemsOf(dk, key).every((id) => dk.answers[id] != null);
@@ -380,12 +385,6 @@ export function ingestScreens(h) {
     if (!g || g.option == null) return null;
     const o = visibleOptions(it).find((x) => String(x.id) === String(g.option));
     return o ? { option: String(o.id), label: o.label, evidence: String(g.evidence ?? g.reason ?? '') } : null;
-  }
-
-  // A group row's current selection: the owner's pick on the row, else the best guess.
-  function selection(dk, id) {
-    if (dk.sel[id] != null) return dk.sel[id];
-    return guessOf(dk.data[id])?.option ?? null;
   }
 
   /* ---------- card context: account view, compare table, values list ---------- */
@@ -588,15 +587,17 @@ export function ingestScreens(h) {
     const d = (it && it.detail) || {};
     const v = d.type === 'account' && d.account ? d.account : null;
     const busy = dk.busy === key;
+    const saving = id in dk.rowBusy;
+    const mine = saving || (busy && dk.busyIds.includes(id));
     const answered = dk.answers[id] != null;
     const fin = dk.final[id];
-    const pick = answered ? dk.answers[id] : selection(dk, id);
+    const chosen = saving ? dk.rowBusy[id] : (mine && dk.busyOpt != null ? dk.busyOpt : dk.answers[id]);
     const g = guessOf(it);
     const opts = visibleOptions(it).map((o) => {
-      const on = pick != null && String(pick) === String(o.id);
+      const on = chosen != null && String(chosen) === String(o.id);
       const isG = !!g && g.option === String(o.id);
-      const attrs = `data-row-answer="${esc(id)}" data-option="${esc(o.id)}" aria-pressed="${on}"${isG ? ' data-guess="1"' : ''}${busy || answered || fin ? ' disabled' : ''}`;
-      return btn(`${esc(o.label)}${isG ? guessTag : ''}`, attrs, on ? 'pri' : '');
+      const attrs = `data-row-answer="${esc(id)}" data-option="${esc(o.id)}" aria-pressed="${on}"${isG ? ' data-guess="1"' : ''}${busy || saving || fin ? ' disabled' : ''}`;
+      return btn(`${esc(o.label)}${isG ? guessTag : ''}`, attrs, on ? 'pri' : (isG && chosen == null ? 'guess' : ''));
     }).join('');
     const others = arr(d.sameName).length;
     const flag = others ? `<span class="h-cf-flag">Same name as ${plural(others, 'other account')}</span>` : '';
@@ -606,7 +607,9 @@ export function ingestScreens(h) {
     const bal = `<td data-col="balance" data-l="Latest balance">${(v && balanceHtml(v.balance, true)) || '<span class="h-cf-none">No balance yet</span>'}</td>`;
     const range = `<td data-col="range" data-l="Dates">${(v && esc(rangeText(v.from, v.to))) || '<span class="h-cf-none">No dated rows</span>'}</td>`;
     const why = g && !answered ? `<p class="h-cf-rwhy">${guessLine(g)}</p>` : '';
-    const state = fin ? `<p class="h-cf-rstate">${esc(fin)}</p>` : (answered ? '<p class="h-cf-rstate">Answered. Undo to change it.</p>' : '');
+    const state = fin
+      ? `<p class="h-cf-rstate">${esc(fin)}</p>`
+      : (answered && !mine ? `<p class="h-cf-rstate">Saved ${btn('Undo', `data-row-undo="${esc(id)}"${busy ? ' disabled' : ''}`, 'ghost')}</p>` : '');
     const ans = `<td class="h-cf-ans"><div class="h-cf-ropts" role="group" aria-label="${esc(v ? v.name || 'Account' : 'Answer')}">${opts}</div>${why}${state}</td>`;
     const det = v
       ? `<td class="h-cf-gx"><details data-row-detail="${esc(id)}"${st.rowOpen[id] ? ' open' : ''}><summary>${icon('chev')}<span>Account detail</span></summary>${acctPanel(v, d)}${sameTable(v, d)}</details></td>`
@@ -618,21 +621,27 @@ export function ingestScreens(h) {
     const kind = key.slice(2);
     const ids = itemsOf(dk, key);
     const busy = dk.busy === key;
-    const pend = pendingIds();
-    const open = ids.filter((id) => dk.answers[id] == null && !dk.final[id]);
-    const ready = open.filter((id) => pend.has(id) && selection(dk, id) != null);
+    const take = guessRows(dk, key);
     const head = '<thead><tr><th scope="col">Account</th><th scope="col">Holder</th><th scope="col">Latest balance</th><th scope="col">Dates</th><th scope="col"><span class="h-cf-sr">Answer</span></th></tr></thead>';
     const rows = ids.map((id) => rowHtml(dk, key, id)).join('');
     const finals = [...new Set(ids.map((id) => dk.final[id]).filter(Boolean))];
-    const note = open.length
-      ? `${ready.length} of ${plural(open.length, 'account')} selected.${ready.length < open.length ? ' Rows with no selection stay for later.' : ''}`
-      : 'Every row here is answered. Undo puts them back.';
-    const foot = `<div class="h-cf-gfoot"><p>${note}</p>${btn('Use best guesses for all', `data-group-apply="${esc(key)}"${busy || !ready.length ? ' disabled' : ''}`, 'pri')}</div>`;
+    const note = `${ids.filter((id) => dk.answers[id] != null).length} of ${ids.length} answered.`;
+    const accept = take.length ? btn(acceptLabel(take.length), `data-group-apply="${esc(key)}"${busy ? ' disabled' : ''}`, 'pri') : '';
+    const foot = `<div class="h-cf-gfoot"><p>${note}</p>${accept}</div>`;
     const state = finals.map((f) => `<p class="h-cf-final" role="status">${esc(f)}</p>`).join('');
     return `<article class="h-deck-card cur group" data-group="${esc(kind)}">
       <div class="h-cf-k">${esc(KIND[kind] || 'Questions')}<span>${plural(ids.length, 'account')}</span></div>
       <p class="h-cf-q">${esc(GROUP_Q[kind] || 'Answer each row.')}</p>
       <table class="h-cf-group">${head}<tbody>${rows}</tbody></table>${foot}${state}</article>`;
+  }
+
+  // The unanswered rows of group card `key` that have a best guess: [{id, answer}].
+  function guessRows(dk, key) {
+    const pend = pendingIds();
+    return itemsOf(dk, key)
+      .filter((id) => dk.answers[id] == null && !dk.final[id] && pend.has(id) && !(id in dk.rowBusy))
+      .map((id) => ({ id, answer: guessOf(dk.data[id])?.option ?? null }))
+      .filter((x) => x.answer != null);
   }
 
   function decidedSection() {
@@ -652,32 +661,53 @@ export function ingestScreens(h) {
     return section('Decided for you', `${lede}<ul class="h-decided-l">${items}</ul>`, plural(list.length, 'answer'), 'h-decided');
   }
 
+  // Items answered and items in all, across the deck's cards.
+  function tally(dk) {
+    const ids = dk.units.flatMap((k) => itemsOf(dk, k));
+    return { done: ids.filter((id) => dk.answers[id] != null).length, total: ids.length };
+  }
+
+  const backText = () => {
+    const l = st.origin && ORIGIN_LABEL[st.origin.name];
+    if (!st.origin) return 'Back to Home';
+    return l ? `Back to ${l}` : 'Back';
+  };
+
   function confirmPage(entering) {
     const dk = syncDeck(entering);
     const files = new Map(ing().files.map((f) => [String(f.id), f.name]));
     const n = dk.units.length;
-    const caught = (line) => `<div class="h-empty"><i class="h-ok sm">${icon('check')}</i><div><b>All caught up</b><p>${line}</p></div></div>`;
+    const caught = (title, line) => `<div class="h-empty"><i class="h-ok sm">${icon('check')}</i><div><b>${title}</b><p>${line}</p><p>${btn(backText(), 'data-deck-home="1"', 'pri')}</p></div></div>`;
     let deck;
-    if (!n) deck = `<div class="h-deck">${caught('New questions show up here when an import needs one.')}</div>`;
+    if (!n) deck = `<div class="h-deck">${caught('All caught up', 'New questions show up here when an import needs one.')}</div>`;
     else {
       const at = dk.cur == null ? n : dk.units.indexOf(dk.cur);
-      const done = dk.units.filter((k) => unitDone(dk, k)).length;
+      const { done, total } = tally(dk);
       const canUndo = dk.busy == null && undoTarget(dk) != null;
       const note = dk.notice ? `<p class="h-deck-notice" role="status">${esc(dk.notice)}</p>` : '';
       const top = `<div class="h-deck-top"><span class="h-deck-pos" data-deck-progress>${Math.min(at + 1, n)} of ${n}</span>
-        <div class="h-deck-bar" role="progressbar" aria-label="Answered" aria-valuemin="0" aria-valuemax="${n}" aria-valuenow="${done}"><i style="width:${Math.round((done / n) * 100)}%"></i></div>
+        <span class="h-deck-ans" data-deck-answered>${done} of ${total} answered</span>
+        <div class="h-deck-bar" role="progressbar" aria-label="Answered" aria-valuemin="0" aria-valuemax="${total}" aria-valuenow="${done}"><i style="width:${total ? Math.round((done / total) * 100) : 0}%"></i></div>
         ${btn('Undo', `data-deck="undo"${canUndo ? '' : ' disabled'}`, 'ghost')}</div>`;
       let stack;
-      if (dk.cur == null) stack = caught('Every question here is answered. Prev goes back to the last card.');
+      if (dk.cur == null) {
+        const left = dk.units.flatMap((k) => itemsOf(dk, k)).filter((id) => dk.answers[id] == null).length;
+        stack = left
+          ? caught(`${plural(left, 'question')} still open.`, 'Prev goes back to them.')
+          : caught('All answered', 'Every question here is answered. Prev goes back to the last card.');
+      }
       else {
         const peeks = dk.units.slice(at + 1, at + 3).map((_, i) => `<div class="h-deck-peek p${i + 1}" aria-hidden="true"></div>`).reverse().join('');
         const card = isGroup(dk.cur) ? groupHtml(dk, dk.cur) : cardHtml(dk, dk.cur, files.get(String(dk.data[dk.cur].fileId)));
         stack = `<div class="h-deck-stack${peeks ? ` n${Math.min(2, n - at - 1)}` : ''}">${peeks}${card}</div>`;
       }
-      const allDone = !dk.units.some((k) => unitOpen(dk, k));
-      const canNext = dk.cur != null && (at < n - 1 || allDone);
+      const mode = forwardMode(dk);
+      let fwd = '<span></span>';
+      if (mode === 'done') fwd = btn('Done', 'data-deck="done"', 'pri');
+      else if (mode === 'open') fwd = btn('Next open →', 'data-deck="next"', 'ghost');
+      else if (mode === 'next') fwd = btn('Next →', 'data-deck="next"', 'ghost');
       const hint = '<p class="h-deck-hint"><span class="kb">1 to 9 answer, Enter takes the best guess, J and K move, Z undoes, Esc goes to Year, ? for all shortcuts</span><span class="tch">Swipe right for the next card, left for the previous one</span></p>';
-      const nav = `<div class="h-deck-nav">${btn('← Prev', `data-deck="prev"${at > 0 ? '' : ' disabled'}`, 'ghost')}${hint}${btn('Next →', `data-deck="next"${canNext ? '' : ' disabled'}`, 'ghost')}</div>`;
+      const nav = `<div class="h-deck-nav">${btn('← Prev', `data-deck="prev"${at > 0 ? '' : ' disabled'}`, 'ghost')}${hint}${fwd}</div>`;
       deck = `<div class="h-deck">${top}${note}${stack}${nav}</div>`;
     }
     const wait = waitingList() || '<p class="h-mute">No files are waiting.</p>';
@@ -686,49 +716,74 @@ export function ingestScreens(h) {
       <div class="h-col-side">${section('Waiting files', wait)}</div></div>`);
   }
 
-  // Move by d units. Next past the last unit reaches All caught up only when nothing is left open.
-  function move(d) {
+  // What forward does from the current card, which is also what the button says:
+  // 'done' ends on the finished block (nothing open anywhere, or this last card is the only open
+  // one), 'open' wraps from the last card to the first open one, 'next' goes to the next card.
+  function forwardMode(dk) {
+    if (dk.cur == null || !dk.units.length) return null;
+    if (!dk.units.some((k) => unitOpen(dk, k))) return 'done';
+    if (dk.units.indexOf(dk.cur) < dk.units.length - 1) return 'next';
+    return nextOpen(dk, dk.cur) != null ? 'open' : 'done';
+  }
+
+  // Go forward per forwardMode().
+  function forward() {
     const dk = st.deck;
-    const n = dk.units.length;
-    if (!n) return false;
-    const at = dk.cur == null ? n : dk.units.indexOf(dk.cur);
-    const to = at + d;
-    if (to < 0 || to > n) return false;
-    if (to === n) {
-      if (dk.cur == null || dk.units.some((k) => unitOpen(dk, k))) return false;
-      dk.cur = null;
-    } else dk.cur = dk.units[to];
+    const mode = forwardMode(dk);
+    if (mode == null) return false;
+    dk.cur = mode === 'done' ? null : (mode === 'open' ? nextOpen(dk, dk.cur) : dk.units[dk.units.indexOf(dk.cur) + 1]);
     draw();
     return true;
   }
 
-  // Answer (or revise) single card `id` with `opt`, then move to the next open unit.
-  function pick(id, opt) {
+  // Move by d units: forward per forward(), back one card at a time (from All answered to the last).
+  function move(d) {
+    if (d > 0) return forward();
+    const dk = st.deck;
+    const n = dk.units.length;
+    if (!n) return false;
+    const at = dk.cur == null ? n : dk.units.indexOf(dk.cur);
+    if (at + d < 0) return false;
+    dk.cur = dk.units[at + d];
+    draw();
+    return true;
+  }
+
+  // Answer (or revise) item `id` with `opt`. A single card moves on to the next open unit; with
+  // `stay` (a group row) the card stays and only that row is in flight, tracked in dk.rowBusy so
+  // other rows can be saved while it is.
+  function pick(id, opt, stay = false) {
     const dk = st.deck;
     const it = dk.data[id];
-    if (dk.busy != null || isGroup(id) || dk.final[id] || !it || !visibleOptions(it).some((o) => String(o.id) === String(opt))) return false;
+    if (dk.busy != null || (stay && id in dk.rowBusy) || isGroup(id) || dk.final[id] || !it || !visibleOptions(it).some((o) => String(o.id) === String(opt))) return false;
     if (dk.answers[id] != null && String(dk.answers[id]) === String(opt)) {
-      if (dk.cur === id) { dk.cur = nextOpen(dk, id); draw(); }
+      if (!stay && dk.cur === id) { dk.cur = nextOpen(dk, id); draw(); }
       return true;
     }
     opt = categoryAnswerOption(it,opt,dk.categoryAlways?.[id] === true);
     if (opt == null) return false;
     const revise = !pendingNow().some((i) => String(i.id) === id);
-    dk.busy = id;
-    dk.busyIds = [id];
-    dk.busyOpt = String(opt);
+    if (stay) dk.rowBusy[id] = String(opt);
+    else {
+      dk.busy = id;
+      dk.busyIds = [id];
+      dk.busyOpt = String(opt);
+    }
     draw();
     dk.notice = '';
     const req = revise ? api.reviseAnswer(id, opt) : api.answer(id, opt);
     req.then((r) => {
-      dk.busy = null;
-      dk.busyIds = [];
-      dk.busyOpt = null;
+      if (stay) delete dk.rowBusy[id];
+      else {
+        dk.busy = null;
+        dk.busyIds = [];
+        dk.busyOpt = null;
+      }
       if (st.deck === dk && r) {
         if (r.stale) {
           // The question changed while it was being answered: the scenario was refetched, so move on.
           dk.notice = STALE_LINE;
-          if (dk.cur === id) dk.cur = nextOpen(dk, id);
+          if (!stay && dk.cur === id) dk.cur = nextOpen(dk, id);
           syncDeck(false);
         } else if (r.final) {
           dk.final[id] = r.final;
@@ -736,7 +791,7 @@ export function ingestScreens(h) {
         } else {
           dk.answers[id] = String(opt);
           dk.hist = [...histWithout(dk, [id]), [id]];
-          if (dk.cur === id) dk.cur = nextOpen(dk, id);
+          if (!stay && dk.cur === id) dk.cur = nextOpen(dk, id);
         }
       }
       draw();
@@ -744,26 +799,12 @@ export function ingestScreens(h) {
     return true;
   }
 
-  // Select an option on a group row. Local only: nothing is sent until the group is applied.
-  function select(id, opt) {
-    const dk = st.deck;
-    const it = dk.data[id];
-    if (dk.busy != null || dk.answers[id] != null || dk.final[id] || !it || !visibleOptions(it).some((o) => String(o.id) === String(opt))) return false;
-    dk.sel[id] = String(opt);
-    draw();
-    return true;
-  }
-
-  // Answer every open row of group card `key` that has a selection (the owner's pick or the best
-  // guess) in one request. Rows with no selection stay open.
+  // Take the best guess of every unanswered row of group card `key` that has one, in one request.
+  // The card stays; rows without a guess are left for the person.
   function apply(key) {
     const dk = st.deck;
     if (dk.busy != null || !isGroup(key) || !dk.units.includes(key)) return false;
-    const pend = pendingIds();
-    const list = itemsOf(dk, key)
-      .filter((id) => dk.answers[id] == null && !dk.final[id] && pend.has(id))
-      .map((id) => ({ id, answer: selection(dk, id) }))
-      .filter((x) => x.answer != null);
+    const list = guessRows(dk, key);
     if (!list.length) return false;
     const ids = list.map((x) => x.id);
     dk.busy = key;
@@ -780,10 +821,9 @@ export function ingestScreens(h) {
         } else if (r.final) {
           dk.notice = r.final;
         } else {
-          list.forEach((x) => { dk.answers[x.id] = String(x.answer); delete dk.sel[x.id]; });
+          list.forEach((x) => { dk.answers[x.id] = String(x.answer); });
           dk.hist = [...histWithout(dk, ids), ids];
           syncDeck(false);
-          if (dk.cur === key && !unitOpen(dk, key)) dk.cur = nextOpen(dk, key);
         }
       }
       draw();
@@ -820,6 +860,30 @@ export function ingestScreens(h) {
     return true;
   }
 
+  // Put one saved group row back, leaving the rest of the card as it is.
+  function undoRow(id) {
+    const dk = st.deck;
+    if (dk.busy != null || id in dk.rowBusy || dk.answers[id] == null || !known(dk, id)) return false;
+    dk.busy = unitOf(dk, id);
+    dk.busyIds = [id];
+    draw();
+    api.reopenAnswer(id).then((r) => {
+      dk.busy = null;
+      dk.busyIds = [];
+      if (st.deck === dk && r) {
+        if (r.final) {
+          dk.final[id] = r.final;
+          dk.hist = histWithout(dk, [id]);
+        } else if (r.stale) {
+          dk.notice = STALE_LINE;
+        } else dropAnswer(dk, id);
+        syncDeck(false);
+      }
+      draw();
+    });
+    return true;
+  }
+
   // Undo an answer Fathom recorded itself (the Decided for you list).
   function undoDecided(id) {
     if (st.undoing[id]) return;
@@ -849,7 +913,7 @@ export function ingestScreens(h) {
         const g = guessOf(cur);
         return g ? pick(dk.cur, g.option) : false;
       }
-      case 'next': return move(1) || true;
+      case 'next': return forward() || true;
       case 'prev': return move(-1) || true;
       case 'undo': return undo() || true;
       case 'leave': api.go('home'); return true;
@@ -881,7 +945,7 @@ export function ingestScreens(h) {
   }
 
   function handleClick(e) {
-    const t = e.target.closest?.('[data-upload-open],[data-answer],[data-row-answer],[data-group-apply],[data-take-guess],[data-decided-undo],[data-deck],[data-retry],details[data-howto] > summary,details[data-row-detail] > summary');
+    const t = e.target.closest?.('[data-upload-open],[data-answer],[data-row-answer],[data-row-undo],[data-group-apply],[data-take-guess],[data-decided-undo],[data-deck],[data-deck-home],[data-retry],details[data-howto] > summary,details[data-row-detail] > summary');
     if (!t) return false;
     if (t.tagName === 'SUMMARY') {
       // The native toggle runs; the open state is kept so a redraw does not close it.
@@ -901,9 +965,13 @@ export function ingestScreens(h) {
       return true;
     }
     if (d.rowAnswer) {
-      if (select(d.rowAnswer, d.option)) {
+      if (pick(d.rowAnswer, d.option, true)) {
         t.ownerDocument.querySelector(`[data-row-answer="${CSS.escape(d.rowAnswer)}"][data-option="${CSS.escape(d.option)}"]`)?.focus();
       }
+      return true;
+    }
+    if (d.rowUndo) {
+      undoRow(d.rowUndo);
       return true;
     }
     if (d.groupApply) {
@@ -919,8 +987,15 @@ export function ingestScreens(h) {
       undoDecided(d.decidedUndo);
       return true;
     }
+    if (d.deckHome) {
+      const o = st.origin;
+      if (o) api.go(o.name, o.params);
+      else api.go('home');
+      return true;
+    }
     if (d.deck) {
       if (d.deck === 'undo') undo();
+      else if (d.deck === 'done') forward();
       else move(d.deck === 'next' ? 1 : -1);
       t.ownerDocument.querySelector(`[data-deck="${d.deck}"]:not([disabled])`)?.focus();
       return true;
@@ -951,5 +1026,10 @@ export function ingestScreens(h) {
     return true;
   }
 
-  return { confirmPage, pendingBanner, accountRepairs, accountRepairsFor, addFiles, accountMeta, sourcesSection, handleClick, handleChange, deckAction, handlePointer };
+  // Where Confirm was opened from ({name, params}), or null for a direct load.
+  function setOrigin(o) {
+    st.origin = o && o.name ? { name: o.name, params: o.params } : null;
+  }
+
+  return { setOrigin, confirmPage, pendingBanner, accountRepairs, accountRepairsFor, addFiles, accountMeta, sourcesSection, handleClick, handleChange, deckAction, handlePointer };
 }

@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../src/config.mjs';
 import { openCliHousehold } from '../src/platform/cli.mjs';
-import { detectAccountPairs, queueAccountPairs } from '../src/ingest/account-merge.mjs';
+import { detectAccountPairs, queueAccountPairs, backfillMergedIdentity } from '../src/ingest/account-merge.mjs';
 import { answerItem } from '../src/ingest/confirm.mjs';
 import { createScheduler, defaultHandlers } from '../src/jobs/scheduler.mjs';
 
@@ -39,6 +39,8 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
         answerItem(db,q.id,'same');
         counts.merged += 1;
       }
+      // Older merges left survivors without the institution or last 4 a merge now carries over.
+      backfillMergedIdentity(db);
       if (counts.merged) {
         scheduler = createScheduler({db,config,engine:null,handlers:defaultHandlers(),log:{log(){}},
           allowed:()=>household.outbound.enabled('jobs'),household:()=>household});

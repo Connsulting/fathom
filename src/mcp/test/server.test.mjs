@@ -190,7 +190,7 @@ describe('protocol', () => {
     const w = writeTools.find(x => x.name === 'set_recommendation_status');
     assert.ok(w, 'write key lists the write tool');
     assert.deepEqual(w.annotations, { readOnlyHint: false, destructiveHint: false, openWorldHint: false });
-    assert.equal(writeTools.length, readTools.length + 2);
+    assert.equal(writeTools.length, readTools.length + 3);
   });
 
   test('a read tool call returns its result as JSON text', async () => {

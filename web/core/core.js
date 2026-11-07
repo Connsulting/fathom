@@ -63,6 +63,17 @@ import { signInTarget } from '../auth/return-path.js';
 //    { q, from, to, limit, cursor }) resolves one page { items, next, total } (newest first) or null; each item's
 //    fig and its source are registered, so api.fig(item.fig) and the figure popover work for it. Neither touches
 //    the scenario or the error line.
+//  - api.pnl({ entity, from, to }) GETs /api/pnl and resolves { entities, pnl, figures, sources } or null.
+//    api.pnlRows({ entity, from, to, section, category, month }) GETs /api/pnl/rows and resolves
+//    { items, total, figures, sources, note } or null. api.spending({ from, to, include, exclude }) GETs
+//    /api/spending and resolves { spending, figures, sources } or null; include and exclude are arrays
+//    (or comma separated strings). api.spendingRows({ from, to, include, exclude, bucket, category, month })
+//    GETs /api/spending/rows. All four register the response's figures and sources like
+//    api.accountTransactions and never touch the scenario or the error line. A figure's optional
+//    detail list ({ k, v } plain text) is shown as rows in the figure popover.
+//  - api.accountMask(id, mask), api.accountOwner(id, { owner } | { undo }), api.accountKind(id, { kind } |
+//    { undo }) and api.accountMerge(id, withId) resolve { data } (the reply, scenario applied) or
+//    { error, status } without the error line. api.accountMergeCandidates(id) resolves { items } or null.
 //  - api.packEntry(packId, entryId) GETs one pack entry and resolves { id, title, body, cites } or
 //    null; it never touches the scenario or the error line.
 //  - api.reviseAnswer(id, optionId) and api.reopenAnswer(id) resolve { item }, or { final: message }
@@ -73,7 +84,7 @@ import { needsYou as needsYouOf, packStatus } from '/shared/rules.mjs';
 import { isOwner } from '/shared/rec-links.mjs';
 
 const ROUTES = new Set(['onboarding', 'home', 'pace', 'brief', 'plan', 'rec', 'ask', 'wargame', 'goals', 'accounts',
-  'advisor', 'yearend', 'connect', 'engine', 'email', 'packs', 'confirm', 'add', 'money', 'settings', 'account']);
+  'advisor', 'yearend', 'connect', 'engine', 'email', 'packs', 'confirm', 'add', 'money', 'settings', 'account', 'pnl']);
 const PARAM_KEY = { rec: 'id', onboarding: 'step', wargame: 'name', packs: 'id', ask: 'id', account: 'id' };
 const LAST_STEP = 5;
 
@@ -816,6 +827,18 @@ function accountRename(id, displayName) {
   return send('/api/accounts/' + encodeURIComponent(id) + '/name', { displayName: displayName ?? '' }, d => d.account || null, null, 'Could not rename that account. ');
 }
 
+function preferenceSave(id, text) {
+  return send('/api/preferences' + (id ? '/' + encodeURIComponent(id) : ''), { text });
+}
+
+function preferenceDelete(id) {
+  return send('/api/preferences/' + encodeURIComponent(id) + '/delete', {});
+}
+
+function actionUndo(id) {
+  return send('/api/actions/' + encodeURIComponent(id) + '/undo', {}, null, null, 'Could not undo that change. ');
+}
+
 function goalCreate(fields) {
   if (!fields || typeof fields !== 'object') return done();
   return send('/api/goals', fields, d => d.goal || null, null, 'Could not save that goal. ');
@@ -944,9 +967,90 @@ async function accountTransactions(id, opts) {
   }
   const page = await getRead('/api/accounts/' + encodeURIComponent(id) + '/transactions' + (qs.size ? '?' + qs : ''));
   if (!page || !Array.isArray(page.items)) return null;
+  registerExtra(page);
+  return page;
+}
+
+// Keep a fetched response's figures and sources for api.fig and the provenance popover.
+function registerExtra(page) {
   for (const [k, f] of Object.entries(page.figures || {})) if (f && typeof f === 'object') extraFig.set(k, f);
   for (const [k, s] of Object.entries(page.sources || {})) if (s && typeof s === 'object') extraSrc.set(k, s);
-  return page;
+}
+
+// A query string from opts: the named keys that are set; arrays are joined with commas.
+function readQuery(opts, keys) {
+  const qs = new URLSearchParams();
+  for (const k of keys) {
+    let v = opts && opts[k];
+    if (Array.isArray(v)) v = v.filter(x => x != null && x !== '').join(',');
+    if (v != null && v !== '') qs.set(k, String(v));
+  }
+  return qs.size ? '?' + qs : '';
+}
+
+// A P&L or spending read with its figures registered, or null. ok(body) says the body has the
+// expected shape.
+async function figRead(path, opts, keys, ok) {
+  const body = await getRead(path + readQuery(opts, keys));
+  if (!body || !ok(body)) return null;
+  registerExtra(body);
+  return body;
+}
+
+const pnl = opts => figRead('/api/pnl', opts, ['entity', 'from', 'to'], b => Array.isArray(b.entities));
+const pnlRows = opts => figRead('/api/pnl/rows', opts, ['entity', 'from', 'to', 'section', 'category', 'month'], b => Array.isArray(b.items));
+const spending = opts => figRead('/api/spending', opts, ['from', 'to', 'include', 'exclude'], b => !!b.spending && typeof b.spending === 'object');
+const spendingRows = opts => figRead('/api/spending/rows', opts, ['from', 'to', 'include', 'exclude', 'bucket', 'category', 'month'], b => Array.isArray(b.items));
+
+// An account dialog edit: resolves { data } with the whole reply (its scenario applied) or
+// { error: message, status } on a refusal or failure. The dialog shows the error inline, so the
+// page's error line stays hidden.
+function sendAccountEdit(path, body) {
+  const run = () => postJson(path, body).then(
+    data => {
+      applyScenario(data.scenario);
+      hideError();
+      notify();
+      return { data };
+    },
+    err => ({ error: (err && err.message) || 'The server could not complete that.', status: (err && err.status) || 0 })
+  );
+  const p = queue.then(run);
+  queue = p;
+  return p;
+}
+
+const accountPath = (id, tail) => '/api/accounts/' + encodeURIComponent(id) + '/' + tail;
+const noAccount = () => done({ error: 'No account was given.', status: 0 });
+
+// The account's last 4 digits (exactly four, checked again on the server).
+function accountMask(id, mask) {
+  if (id == null || id === '') return noAccount();
+  return sendAccountEdit(accountPath(id, 'mask'), { mask: String(mask ?? '') });
+}
+
+// Owner or kind: body is { owner } or { kind }, or { undo: before } from an earlier reply.
+function accountOwner(id, body) {
+  if (id == null || id === '' || !body || typeof body !== 'object') return noAccount();
+  return sendAccountEdit(accountPath(id, 'owner'), body);
+}
+
+function accountKind(id, body) {
+  if (id == null || id === '' || !body || typeof body !== 'object') return noAccount();
+  return sendAccountEdit(accountPath(id, 'kind'), body);
+}
+
+// The accounts this one could merge with, each with what a merge would keep and move, or null.
+function accountMergeCandidates(id) {
+  if (id == null || id === '') return Promise.resolve(null);
+  return getRead(accountPath(id, 'merge-candidates'));
+}
+
+// Merge another account into this pair; the reply names the survivor and the confirm item whose
+// reopen undoes it.
+function accountMerge(id, withId) {
+  if (id == null || id === '' || withId == null || withId === '') return noAccount();
+  return sendAccountEdit(accountPath(id, 'merge'), { withId: String(withId) });
 }
 
 async function packEntry(packId, entryId) {
@@ -1194,6 +1298,18 @@ const api = {
   accountRename,
   accountDetail,
   accountTransactions,
+  pnl,
+  pnlRows,
+  spending,
+  spendingRows,
+  preferenceSave,
+  preferenceDelete,
+  actionUndo,
+  accountMask,
+  accountOwner,
+  accountKind,
+  accountMergeCandidates,
+  accountMerge,
   goalCreate,
   goalUpdate,
   goalSuggestion,
@@ -1266,6 +1382,9 @@ function openPopover(anchor) {
     // Kept only for reference (R2-9), then readable assumptions (MGN1); both are stored plain text.
     (typeof f.unavailable === 'string' && f.unavailable ? '<div class="fx-pop-row"><span class="fx-pop-k">Not current</span><span class="fx-pop-v">' + esc(f.unavailable) + '</span></div>' : '') +
     (Array.isArray(f.notes) ? f.notes.filter(n => typeof n === 'string').map(n => '<div class="fx-pop-row"><span class="fx-pop-k">Assumes</span><span class="fx-pop-v">' + esc(n) + '</span></div>').join('') : '') +
+    // What an aggregate counts (accounts, months, rows), as plain text pairs.
+    (Array.isArray(f.detail) ? f.detail.filter(d => d && typeof d === 'object' && d.k != null).map(d =>
+      '<div class="fx-pop-row"><span class="fx-pop-k">' + esc(String(d.k)) + '</span><span class="fx-pop-v">' + esc(String(d.v ?? '')) + '</span></div>').join('') : '') +
     // An aggregate lists what it adds up: each account, its balance and the date of that balance.
     (Array.isArray(f.sums) && f.sums.length
       ? '<div class="fx-pop-sums" role="list" aria-label="Accounts added up">' + f.sums.map(a =>

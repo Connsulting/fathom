@@ -37,9 +37,9 @@ export const STAGING_FILE = `${PLATFORM_FILE}.staging`;
 export const SNAPSHOT_DIR = 'snapshots';
 const OPERATION_KIND = 'platform-migration';
 const LEGACY_SCHEMA = 21;
-// Store migration 025 moves api_keys to the platform and refuses while the store holds keys; only
+// Store migration 026 moves api_keys to the platform and refuses while the store holds keys; only
 // the tenancy migration (src/platform/migrate-tenancy.mjs) applies it.
-export const PRE_TENANCY_SCHEMA = 24;
+export const PRE_TENANCY_SCHEMA = 25;
 const INVITE_TTL = 20 * 60 * 1000;
 const LEGACY_AUTH_TABLES = ['users', 'households', 'passkeys', 'auth_tokens', 'auth_sessions', 'auth_challenges', 'auth_rate_limits'];
 const SOURCE_TABLES = ['users', 'passkeys', 'auth_tokens', 'auth_sessions', 'auth_challenges', 'auth_rate_limits'];

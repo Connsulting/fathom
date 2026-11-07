@@ -10,6 +10,8 @@ import { seedDuplicate as seedDuplicateRows } from '../test/helpers/account-merg
 import { refreshMergedAccounts } from '../src/ingest/account-merge.mjs';
 
 const ID = 'a_biz';
+// The demo's business checking account is connected with a synthetic four digit mask.
+const BIZ_LABEL = /^Business checking ending \d{4}$/;
 
 // Every transaction of the account, newest first, read through the paged API.
 async function firstTransactions(request) {
@@ -44,7 +46,7 @@ test.describe('account dialog', { tag: '@ad-acN' }, () => {
     await openFromAccounts(page);
     const dlg = recDialog(page);
     await expect(dlg).toHaveAttribute('aria-modal', 'true');
-    await expect(dlg.locator('#h-dlg-t')).toHaveText('Business checking');
+    await expect(dlg.locator('#h-dlg-t')).toHaveText(BIZ_LABEL);
     await expect(dlg.locator('.h-ad-facts')).toContainText('Mirrored');
     await expect(dlg.locator('.h-ad-sources')).toBeVisible();
     await expect(dlg.locator('.h-ad-sources li').first()).toBeVisible();
@@ -54,7 +56,7 @@ test.describe('account dialog', { tag: '@ad-acN' }, () => {
 
     await gotoRoute(page, 'money');
     await page.locator(`[data-account="${ID}"] .h-acc-m`).click();
-    await expect(recDialog(page).locator('#h-dlg-t')).toHaveText('Business checking');
+    await expect(recDialog(page).locator('#h-dlg-t')).toHaveText(BIZ_LABEL);
     await expect(page).toHaveURL(new RegExp(`#/account/${ID}$`));
     await closeDialogWithX(page);
     await expect(page).toHaveURL(/#\/money$/);
@@ -69,13 +71,13 @@ test.describe('account dialog', { tag: '@ad-acN' }, () => {
     await input.fill('Studio operating');
     await page.keyboard.press('Escape');
     await expect(dlg).toBeVisible();
-    await expect(dlg.locator('#h-dlg-t')).toHaveText('Business checking');
+    await expect(dlg.locator('#h-dlg-t')).toHaveText(BIZ_LABEL);
     await dlg.locator('[data-dlg-rename]').first().click();
     await dlg.locator('[data-dlg-name]').fill('Studio operating');
     await page.keyboard.press('Enter');
-    await expect(dlg.locator('#h-dlg-t')).toHaveText('Studio operating');
+    await expect(dlg.locator('#h-dlg-t')).toHaveText(/^Studio operating ending \d{4}$/);
     await closeDialogWithX(page);
-    await expect(page.locator(`[data-account="${ID}"] .h-acc-name`)).toHaveText('Studio operating');
+    await expect(page.locator(`[data-account="${ID}"] .h-acc-name`)).toHaveText(/^Studio operating ending \d{4}$/);
   });
 
   test('transactions: newest first, filter by text and by date range, amounts carry a source', async ({ page, request }) => {
@@ -126,7 +128,7 @@ test.describe('account dialog', { tag: '@ad-acN' }, () => {
     await page.reload();
     const dlg = recDialog(page);
     await expect(dlg).toBeVisible();
-    await expect(dlg.locator('#h-dlg-t')).toHaveText('Business checking');
+    await expect(dlg.locator('#h-dlg-t')).toHaveText(BIZ_LABEL);
     await page.keyboard.press('Escape');
     await expect(recDialog(page)).toHaveCount(0);
     await expect(page).not.toHaveURL(/#\/account\//);
@@ -150,7 +152,7 @@ test.describe('account dialog', { tag: '@ad-acN' }, () => {
     await page.keyboard.press('Control+k');
     await page.locator('.h-qs input, input.h-qs-in').first().fill('Business checking');
     await page.locator('.h-qs-t', { hasText: 'Business checking' }).first().click();
-    await expect(recDialog(page).locator('#h-dlg-t')).toHaveText('Business checking');
+    await expect(recDialog(page).locator('#h-dlg-t')).toHaveText(BIZ_LABEL);
     await expect(page).toHaveURL(new RegExp(`#/account/${ID}$`));
   });
 
@@ -212,7 +214,7 @@ test.describe('account dialog and duplicates', { tag: '@ad-acN' }, () => {
     const dlg = recDialog(page);
     await expect(dlg).toBeVisible();
     await expect(dlg.getByText('Same account?').first()).toBeVisible();
-    await expect(dlg.getByRole('button', { name: /Merge/ })).toBeVisible();
+    await expect(dlg.getByRole('button', { name: /Merge$/ })).toBeVisible();
     await dlg.getByRole('button', { name: /Keep both/ }).click();
     await expect(dlg.getByRole('button', { name: /Keep both/ })).toHaveCount(0);
     await expect(dlg.locator('#h-dlg-t')).toBeVisible();
@@ -225,7 +227,7 @@ test.describe('account dialog and duplicates', { tag: '@ad-acN' }, () => {
     const dlg = recDialog(page);
     const item = (await (await request.get('/api/scenario')).json()).live.ingest.items.find((i) => i.context?.repair);
     const answered = page.waitForResponse((r) => r.url().endsWith(`/api/confirm/${item.id}/answer`));
-    await dlg.getByRole('button', { name: /Merge/ }).click();
+    await dlg.getByRole('button', { name: /Merge$/ }).click();
     expect((await answered).status()).toBe(200);
     const sc = await (await request.get('/api/scenario')).json();
     expect(sc.accounts.filter((a) => [pair.keep, pair.own].includes(a.id))).toHaveLength(1);

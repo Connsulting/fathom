@@ -184,7 +184,8 @@ export function fundingUnavailable() {
 }
 
 export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger = createMemoryLedger(), capUsd = 200,
-  credential, responses = [], now = () => new Date(), toolContext = {}, streamDelayMs = 0, allowed = () => true, funded = () => true } = {}) {
+  credential, responses = [], now = () => new Date(), toolContext = {}, streamDelayMs = 0,
+  modelOverride, maxRounds = 8, admitRound = null, roundRunner = sdkRound, allowed = () => true, funded = () => true } = {}) {
   if (!['live', 'fake', 'off'].includes(mode)) throw new TypeError('Invalid engine mode');
   if (typeof allowed !== 'function' || typeof funded !== 'function') throw new TypeError('Invalid engine admission');
   if (!Number.isFinite(capUsd) || capUsd < 0) throw new TypeError('Invalid monthly cap');
@@ -227,7 +228,7 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
       roundStream = '';
     };
     if (!PURPOSES.includes(purpose)) throw new TypeError('Invalid call purpose');
-    const model = modelFor(purpose);
+    const model = modelOverride ?? modelFor(purpose);
     if (typeof system !== 'string' || typeof systemDynamic !== 'string' || !Array.isArray(messages) || messages.length === 0 || !Number.isInteger(maxTokens) || maxTokens <= 0 || maxTokens > 128000) {
       throw new TypeError('Invalid model request');
     }
@@ -238,8 +239,9 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
     const rounds = [];
     const toolRounds = [];
     let cost = 0;
-    for (let roundIndex = 0; roundIndex < 8; roundIndex++) {
+    for (let roundIndex = 0; roundIndex < maxRounds; roundIndex++) {
       let round;
+      const afterTools = [];
       answer.beginRound();
       await serial(ledger, async () => {
         if (poisoned) throw new ModelAccountingError();
@@ -249,9 +251,11 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
         const spend = await ledger.monthSpendUsd(monthKey(ts));
         if (!Number.isFinite(spend) || spend < 0) throw new ModelAccountingError();
         if (spend >= capUsd) { const error = new BudgetExceededError(); error.toolResults = allResults; throw error; }
+        if (admitRound) await admitRound({ purpose, system, systemDynamic, messages: transcript, tools, maxTokens });
         const auth = mode === 'live' ? explicitCredential(credential) : undefined;
         const context = callContext ?? toolContext;
-        const registry = createRegistryServer(tools, { purpose, ctx: { ...context, now: context.now ?? ts } });
+        const registry = createRegistryServer(tools, { purpose, ctx: { ...context, now: context.now ?? ts,
+          ...(purpose === 'chat' && typeof context.replan === 'function' ? { queueAfterTools: task => afterTools.push(task) } : {}) } });
         try {
           if (mode === 'fake') {
             if (!queue.length) throw new ModelCallError('Fake engine has no scripted response');
@@ -275,7 +279,7 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
                 for (const item of script.toolCalls ?? []) { emit({ type: 'tool', name: item.name }); await pause(streamDelayMs); }
               }
             }
-            await Promise.all((script.toolCalls ?? []).map(item => registry.invoke(item.name, item.args ?? {})));
+            for (const item of script.toolCalls ?? []) await registry.invoke(item.name, item.args ?? {});
             round = { text, costUsd: Object.hasOwn(script, 'costUsd') ? script.costUsd : 0.001, model: 'fake', tokens: script.tokens ?? {},
               status: script.status ?? (script.toolCalls?.length ? 'error_max_turns' : 'success'),
               is_error: script.is_error === true, api_error_status: script.api_error_status ?? null,
@@ -283,8 +287,8 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
               content: Array.isArray(script.content) ? script.content : [{ type: 'text', text }], details: { maxBudgetUsd: capUsd - spend } };
           } else {
             try {
-              round = await (SINGLE_ROUND.includes(purpose) ? messagesRound : sdkRound)({ credential: auth, system, systemDynamic,
-                messages: transcript, maxTokens, maxBudgetUsd: capUsd - spend, model, registry, schema, ...(emit ? { onEvent: emit } : {}) });
+              round = await (SINGLE_ROUND.includes(purpose) ? messagesRound : roundRunner)({ credential: auth, system, systemDynamic,
+                messages: transcript, tools, maxTokens, maxBudgetUsd: capUsd - spend, model, registry, schema, ...(emit ? { onEvent: emit } : {}) });
             } catch {
               round = { text: '', content: [], status: 'transport_error', is_error: true,
                 accountingUnknown: true, model, tokens: {}, toolResults: registry.results, details: {} };
@@ -309,7 +313,7 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
             throw new ModelAccountingError();
           }
         } finally { await registry.instance.close(); }
-      });
+      }).finally(async () => { for (const task of afterTools) await task(); });
       cost += round.costUsd;
       rounds.push(round.details);
       allResults.push(...round.toolResults);

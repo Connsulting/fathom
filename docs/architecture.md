@@ -166,7 +166,7 @@ menu. Every route maps to one tab or to the gear (`TAB_OF` in `web/horizon/desig
 lit tab comes from the current route, or for `#/rec/<id>` from the page under the dialog. Home
 holds Home, the pace board, Goals and Confirm (reached from goal cards and the data-health line).
 Plan holds Plan, Year end and Advisor. Ask holds conversations, Decide (the What-if view,
-`#/wargame`) and Packs. Money (`#/money`) holds an overview, Accounts and Files (`#/add`). The
+`#/wargame`) and Packs. Money (`#/money`) holds an overview, Accounts, P&L (`#/pnl`, each business and household spending) and Files (`#/add`). The
 gear opens `#/settings`, which lists Connect, Engine, Email, Setup (real stores only), and on a
 real store the signed-in line, Account and, for admins, Household. Plan, Ask and Money show a
 sub-nav of their views at the top of each of those pages. The Money overview spells out the
@@ -257,7 +257,7 @@ constraint on `accounts.mask` enforces exactly four digits or NULL).
 Shared by the chat engine and the MCP server. `src/tools/index.mjs` exports `tools`, a registry
 of `{name, description, inputSchema (JSON Schema), scope: 'read'|'write:recs', handler(args, ctx)}`
 with `ctx = {db, now}`, plus `getTool(name)`, `callTool(name, args, ctx)` (validates args against
-`inputSchema`) and `ToolError` with `code` `'bad_input'` or `'not_found'`. The only write scope,
+`inputSchema`) and `ToolError` with `code` `'bad_input'` or `'not_found'`. The recommendation write scope,
 `write:recs`, covers recommendation status (`set_recommendation_status`) and action owner
 (`set_recommendation_owner`).
 
@@ -276,7 +276,7 @@ with `ctx = {db, now}`, plus `getTool(name)`, `callTool(name, args, ctx)` (valid
 | `get_figures` | read | `keys?: string[]` | `[{key, v, kind, label, source: {id, label, asOf}}]` |
 | `packs_status` | read | none | `[{id, name, status, why}]` |
 | `advisor_status` | read | none | `{advisor, nextCheckin: {date, time, lengthMin, label} or null, waiting: [{recId, title, sentOn}], reviewed: [{recId, title, sentOn, verdict, note, reviewedOn, recordedOn}], history (closed reviews with closedOn, closedReason), packets: [{id, date, recIds}]}` (see "Advisor workflow") |
-| `set_recommendation_status` | write:recs | `id, status: doing, done, dismissed, snoozed or proposed, wake?` | the linked rec; writes `rec_events` with actor `tool` |
+| `set_recommendation_status` | write:recs | `id, status: doing, done, dismissed, snoozed or proposed, wake?` | the linked rec; writes `rec_events` attributed to the signed-in person or key creator |
 | `set_recommendation_owner` | write:recs | `id, owner: you, spouse, both, advisor or automatic` | the linked rec; sets `owner` and `owner_override = 1`, writes `rec_events` action `set_owner`, actor `tool`, from and to the current status |
 | `list_packs` | read | none | `[{id, name, status, why, version, taxYear, reviewed, covers, entries: [{file, title}]}]` sorted by id |
 | `get_pack_entry` | read | `packId, file` (the manifest file or the entry id) | `{packId, packName, file, id, title, markdown, citations: [{label, url}], version, taxYear, reviewed}`; any loaded pack, active or not |
@@ -298,6 +298,12 @@ query; an entry matches when every term appears in its title or body; score is 5
 occurrence plus 1 per body occurrence; order is score descending, then pack id, then entry id.
 
 Tool outputs resolve scenario tokens to plain text and expose masks only.
+
+The planned deterministic tool layer is specified in [ask-tools.md](ask-tools.md): the figure
+envelope and references, `calculate`, the spending, cash flow, net worth, tax, room, obligation and
+access tools, the write tools that give the agent parity with every mutating route, the model's
+routing rules, and the ordered tickets that build them. Until a ticket there merges, this table is
+the tool interface.
 
 `src/engine/tools.mjs` `createRegistryServer` consumes this registry. Input schemas must compile
 under strict Ajv, so no union types (`type` arrays); use `anyOf`. `ctx.now` may be a Date, an ISO
@@ -677,7 +683,7 @@ context lookup: a rec id resolves to that rec, an Ask thread to the rec its `rec
 `live.threads`, anything else (no rec, a rec no longer in the scenario, `pack:<id>`) to null. The
 answerer, `findQuestion`, `matchQuestion` and the fake answer source read it, so a rec thread gets
 the rec as conversation context (`get_recommendation`), the rec in its refs, the rec's own `qa`
-questions and a proposal scope of that rec only, and no `propose_goal`. A hidden rec still
+questions and the same scoped action tools as other Ask threads. A hidden rec still
 resolves. `POST /api/ask` refuses a key that is neither an Ask thread nor `pack:<id>` (400). Start
 over (`POST /api/recs/:id/start-over`) sets `recDetachedAt` on every attached thread of the rec;
 the thread keeps its messages, title, `recId` and list place in Ask.
@@ -705,14 +711,18 @@ after its first answer. The engine gets one
 thread's non-notice messages as plain text, newest last, at most 12 messages and 6000 characters.
 The model title is trimmed, loses one pair of quotes and a trailing period, and is refused when
 empty, over 60 characters or 8 words, with a line break, control character, `< > { }` or backtick,
-or any digit, currency or percent sign, or spelled-out number or money word, or any word
-(lowercased, with a plural `s`/`es` and a possessive `'s` folded) that is not a function word and
-was not used in this thread's owner messages. Engine off, over the cap, any error or a
-refused title uses the fallback: the first owner message as plain text (figure tokens removed,
-other tokens resolved, tags stripped, entities decoded) cut to 48 characters at a word boundary.
-The fake engine returns the fallback as its title. Writes only land while `title_source` is NULL,
-so an owner rename (`manual`, 1 to 60 characters, digits allowed) always wins. Titles render
-escaped.
+or any digit, currency or percent sign, or spelled-out number or money word, or when none of its
+non-function words (lowercased, with a plural `s`/`es` and a possessive `'s` folded) appears in
+the thread's messages, owner or reply. Each refusal adds one to its reason code (`not_text`,
+`empty`, `too_long`, `markup`, `too_many_words`, `number`, `money_word`, `off_topic`,
+`unparsable`, `call_failed`) in the `ask.titleRejects` setting and logs the code, never the
+title. Engine off, over the cap, any error or a refused title uses the fallback: the first owner
+message as plain text (figure tokens removed, other tokens resolved, tags stripped, entities
+decoded) cut to 48 characters at a word boundary. A thread still carrying that fallback gets one
+more title call after its second completed turn. The fake engine returns the fallback as its
+title. The first write only lands while `title_source` is NULL and the retry only while the
+fallback is unchanged, so an owner rename (`manual`, 1 to 60 characters, digits allowed) always
+wins. Titles render escaped.
 
 `live.askStarters` lists, in this order and only when its condition holds: `attention` "What needs
 my attention right now?" (a visible rec proposed or doing), `taxes` "How are our tax
@@ -859,9 +869,18 @@ known path with the wrong method is 405; signed out, both are 401. Every action 
 | `POST /api/threads/:id/restore` | `{}` | `{scenario, thread}`. Clears `trashedAt` when trashed, else `archivedAt`. |
 | `POST /api/threads/:id/delete` | `{}` | `{scenario}`. Deletes the thread and its messages forever; 409 unless it is in Trash. |
 | `POST /api/your-plans/build` | `{fileIds?: string[]}` (at most 50) | `{scenario, result: {written, entries, sources, warnings, dropped}}`. Builds the Your plans pack (`dropped` counts the extracted sections that did not match their document); 400 for a bad body; 409 while the engine is off, over the cap, or when the data directory is inside the repository. |
-| `GET /api/accounts/:id` | none | `{account, fresh, asOf, balance: {asOf}, trendKey, txn: {count, from, to}, feeds, syncable}` for the account dialog. `balance.asOf` is the newest balance or positions date, which can be older than `asOf` (the newest row of any kind). `fresh` and `asOf` are the account's entry in `live.ingest.accounts` (the rule the Home health line counts). Each feed is a file source or SimpleFIN with its last data date, freshness state, cadence and how to refresh it; a SimpleFIN feed adds `lastSyncAt` and `balanceDate`. `syncable` is true when SimpleFIN is connected, maps this account and does not need a reconnect. 400 for a missing id, 404 unknown. Read-only. |
+| `GET /api/accounts/:id` | none | `{account, fresh, asOf, balance: {asOf}, trendKey, txn: {count, from, to}, feeds, syncable}` for the account dialog. `balance.asOf` is the newest balance or positions date, which can be older than `asOf` (the newest row of any kind). `fresh` and `asOf` are the account's entry in `live.ingest.accounts` (the rule the Home health line counts). Each feed is a file source or SimpleFIN with its last data date, freshness state, cadence and how to refresh it; a SimpleFIN feed adds `lastSyncAt` and `balanceDate`. `syncable` is true when SimpleFIN is connected, maps this account and does not need a reconnect. `account` also carries the edit controls: `maskEditable`, `ownerKey` and `kindKey` (confirm option ids or null) and `ownerOptions` and `kindOptions`. 400 for a missing id, 404 unknown. Read-only. |
 | `GET /api/accounts/:id/transactions` | query `q` (at most 100 characters, matched against description and category), `from` and `to` (YYYY-MM-DD, `from` not after `to`), `limit` (1 to 200, default 50), `cursor` (the previous page's `next`) | `{items, next, total, figures, sources}`. Newest first, only this account's rows. `next` is null on the last page; `total` counts every row the filters match. Each item names a figure in `figures` whose source is in `sources`. 400 for any bad parameter, 404 unknown. Read-only. |
+| `GET /api/pnl` | query `entity` (a key from `entities` or a plain entity name; default the first entry), `from` and `to` (YYYY-MM, `from` not after `to`, at most 36 months; default January to the entity's latest month with data) | `{entities, pnl, figures, sources}`. `entities` is `pnlEntities`; `pnl` is `businessPnl` without its `figures` and `sources` (those are top level), or null when there are no entities. 400 for a bad range, 404 unknown entity. Read-only, no model calls. |
+| `GET /api/pnl/rows` | query `entity`, `from`, `to` as above, `section` (`income` or `expenses`), `category`, optional `month` (inside the range) | `businessPnlRows`: `{items, total, figures, sources, note}`, exactly the workbook lines or transactions behind that cell, newest first, at most 500 items (`total` counts all). 400 for any bad parameter, 404 unknown entity. Read-only. |
+| `GET /api/spending` | query `from` and `to` (YYYY-MM; default the trailing twelve months ending at the latest complete month), `include` (comma separated, only `tax`), `exclude` (comma separated, only `housing`) | `{spending, figures, sources}`. `spending` is `householdSpending` without its `figures` and `sources`. 400 for a bad range or option. Read-only, no model calls. |
+| `GET /api/spending/rows` | query `from`, `to`, `include`, `exclude` as above, `bucket` (`household` or `tax`), `category`, optional `month` (inside the range) | `householdSpendingRows`: `{items, total, figures, sources, note}`, exactly the transactions behind that cell, newest first, at most 500 items. 400 for any bad parameter. Read-only. |
 | `POST /api/accounts/:id/name` | `{displayName}` | `{scenario, account}`. Sets the owner's display name for that account (trimmed, at most 120 characters, no line breaks or control characters). Empty or null clears it and the screens use the default label. 400 for a bad name, 404 unknown. Imports and SimpleFIN refreshes do not write this column. |
+| `POST /api/accounts/:id/mask` | `{mask}` (exactly four digits) | `{scenario, account}`. Stores the last 4 on an account with none and no SimpleFIN identity, then asks any "Same account?" question the new mask makes detectable. 400 for a bad mask, 404 unknown, 409 when the account already has a mask or is connected. |
+| `POST /api/accounts/:id/owner` | `{owner}` (a confirm option id) or `{undo: before}` | `{scenario, account, before}`. Records the value as the account's `account_owner` confirm answer (asked, answered, revised, or restated when final), so a later import keeps it; schedules a replan like a Confirm answer. `{undo: before}` sets the prior answer back, reopens a question that was pending, or removes one the edit created. 400 for a bad value, 404 unknown, 409 when the answer can no longer be undone. |
+| `POST /api/accounts/:id/kind` | `{kind}` (a confirm option id) or `{undo: before}` | `{scenario, account, before}`. Same as the owner route, for the `account_kind` answer.
+| `GET /api/accounts/:id/merge-candidates` | none | `{items: [{id, label, inst, kind, mask, lastDataDate, mirror, plan: {keepId, keepLabel, ownId, ownLabel, moves: {transactions, balances, positions, sources}}, refused?}]}`. Every other account with what a merge would keep and move: a connected account is merged into the other one; between two file accounts the open one survives; two connected accounts carry `refused`. 404 unknown. Read-only. |
+| `POST /api/accounts/:id/merge` | `{withId}` | `{scenario, survivorId, itemId}`. Merges through a manual `account_match` item answered `same`, the same path and undo log as a detected pair; the survivor takes a missing institution and a reliable last 4 from the SimpleFIN snapshot. Undo is `POST /api/confirm/:itemId/reopen`. 400 for a missing or same id, 404 unknown, 409 for two connected accounts. |
 | `POST /api/goals` | `{title, note?, horizon?, target?, targetDate?, track?}` | `{scenario, goal}`. Creates an owner goal (`origin` owner). `title` 1 to 120 characters, no line breaks; `note` at most 500; `horizon` now, 1-3y or 3-10y (default now); `target` a non-negative number or null; `targetDate` a valid YYYY-MM-DD or null; `track` null, `{accounts: [account ids]}` (at most 20, known ids) or `{figure: key}` (a known figure the store holds). Anything else 400. |
 | `GET /api/pace` | none | Deterministic `clock`, `rollup`, `goals`, `series` and `meters`, identical to `scenario.pace`. Uses the same owner gate as the scenario. No writes or model calls. |
 | `POST /api/goals/:id` | any subset of the create fields | `{scenario, goal}`. Edits an owner goal; 409 for a seed (demo) goal, 404 unknown. |
@@ -1514,24 +1533,14 @@ process, so accounting poison lasts for the process, and awaits `init()` once at
    `PRODUCT_RULES` states: advisory only, no tax filing, no money movement or account changes, no
    securities selection, no number not taken from a tool result or the provided data, stored
    figures as `{f:key}` tokens from `get_figures`, cite pack entries by title, plain text paragraphs,
-   and never changing a recommendation itself: on the owner's explicit request it calls
-   `propose_recommendation_action` so the owner can confirm.
+   and explicit in-product actions through the scoped write tools described below.
    A What if question is the pack prompt: a manifest-backed prompt is sent as the raw literal text
    (no token resolution), an illustrative demo prompt with its tokens resolved to plain text. The
    history filter drops an earlier copy of the prompt in its stored form.
-3. Tools: every read tool of the registry, never `set_recommendation_status` (the registry keeps it
-   for other surfaces; chat never writes). In Ask threads the answerer adds one
-   local, non-writing tool, `propose_recommendation_action` (scope `read`, input `{id, action:
-   start|complete|dismiss|snooze|reopen, wake?: string up to 200}`, no other keys). Its
-   handler checks that the rec exists and is not hidden and that the action is in `ACTION_STATUS`,
-   returns only `{proposed: true}` and never touches the store. It is never offered in `pack:<id>`
-   conversations or a What if. The last successful call becomes `provenance.proposal` `{recId,
-   action, wake?}` (one per answer); in a thread asked from a rec a proposal for any other rec is ignored.
-   The UI shows a confirm card in that Fathom message ("Proposed: <action label> <rec title>", the
-   label from a fixed map, the wake label escaped) with a Confirm button
-   (`button.h-propose[data-propose-rec][data-propose-action]`) that calls the ordinary rec action
-   (`api.act`, `POST /api/recs/:id/action`). The card reads Done, with no button, once the rec's
-   status equals `ACTION_STATUS[action]`.
+3. Tools: every read tool plus the scoped action tools in an authenticated Ask thread, including
+   threads asked from a recommendation. Pack conversations and What if remain read-only.
+   Historical proposal messages retain their confirm-card renderer; new requests act directly
+   and show receipts with Undo.
 4. Grounding (`groundAnswer`): every `{f|fk|l|p|n:key}` token is validated against `fig`, `law`,
    `pct` and `names` (key characters `[A-Za-z0-9_.-]`), recorded once as a violation when invalid,
    and masked; then `checkGrounding` checks the remaining numbers and number words against tool
@@ -1606,11 +1615,19 @@ process, so accounting poison lasts for the process, and awaits `init()` once at
    both sides, so it needs percent evidence, not number evidence. Number-word phrases (`two million`)
    are still read word by word, and one followed by a percent sign (with or without a space) or the
    word `percent` (`one thousand %`) is likewise a percent quantity that needs percent evidence.
-5. One corrective retry (same `system`, the first answer plus a corrective user turn). An answer
-   still ungrounded is stored with each violation in `<span class="fx-unverified" title="Not found
-   in your data or tool results">`. If the retry call itself fails, the answer is the matching
+5. Same-turn sourcing and in-place neutralization. A query_transactions row's negative amount also
+   grounds its unsigned form, and the literal names that row ("your transactions: account label,
+   date, description"); other tool literals carry a plain label, never the tool name. A date that
+   matches a date in a same-turn tool row or in the context data is sourced to it (a stated year
+   must match). Every remaining violation, dates included, is stored in place as
+   `<span class="fx-checking fx-unchecked" title="Not checked against your data">`. Only when two
+   or more figures and more than half of the answer's figures (dates excluded) are unchecked is
+   the answer regenerated once, with a corrective user turn; the stream and the work block then
+   show one step "Revised to remove N unchecked figures" before the reset, never the earlier
+   draft, and `provenance.grounding.revised` is N. If that call fails, the answer is the matching
    notice (engine off, over the cap, model error), never the first ungrounded text; the spend the
-   engine recorded for each completed round stays in the ledger.
+   engine recorded for each completed round stays in the ledger. Answers stored before this rule
+   keep their `.fx-unverified` spans and draft notes.
 6. Rendering (`renderAnswer`): model text is untrusted. Everything is HTML-escaped (quotes and
    apostrophes included) with `{` and `}` as `&#123;` and `&#125;`, except valid tokens; bound
    literals are wrapped in `<span class="fx-src" data-src="<literal index>" title="From <source>">`;
@@ -1631,8 +1648,7 @@ process, so accounting poison lasts for the process, and awaits `init()` once at
    invented amount is marked unverified after the retry. In Ask threads, free text
    that is an explicit command (`^(please\s+)?(start|complete|dismiss|snooze|reopen)\b`)
    naming a rec (a rec thread's own rec, else a visible rec's id or exact title)
-   adds a `propose_recommendation_action` call to the tool round, and the text round says the owner
-   can confirm it below. Negations and questions ("Do not mark anything done", "Should I dismiss
+   adds a `set_recommendation_status` call to the tool round, and the result carries a receipt with Undo. Negations and questions ("Do not mark anything done", "Should I dismiss
    this?") never match.
 
 ### Answer provenance
@@ -1640,7 +1656,7 @@ process, so accounting poison lasts for the process, and awaits `init()` once at
 Stored in `messages.provenance` and returned on the message: `{engine: mode, model, tools: [{name,
 args}], figures: [figure keys], packIds: [active manifest ids in the prompt], packEntries: [entry
 titles named in the answer], literals: [{text, source}], grounding: {ok, retried, unverified:
-[texts]}, costUsd, proposal?: {recId, action, wake?}}`. No prompt text is ever stored.
+[texts]}, costUsd, actionTurn?}`. Typed owner messages carry `ownerInput` with actor id for action evidence from the escaped message text; generated questions do not.
 
 ## Live pack state
 
@@ -2478,9 +2494,9 @@ sources and the rec's `goalKinds` (see "Rec owner and goal links"); the scenario
 and the rec shows "Serves: <goal>". The planner ranks recs that tie on window close by whether they serve a
 goal, then by the owner's curve lean. `household_summary` and `list_goals` give the model the open
 goals (title, horizon, typed target with source `you`, tracked current value) and each curve's lean.
-In an Ask thread with no rec context the answerer also offers `propose_goal`; its last successful call becomes
-`provenance.goalProposal`, a target survives only when the owner's own message states it, and the
-chat card saves it through `POST /api/goals` when the owner taps Save. Chat never writes.
+Ask threads offer `create_goal` and `edit_goal`, sharing the screen's goal writer and validation.
+Targets and dates require the person's words or stored data. Every change carries a receipt and Undo.
+
 
 ## Suggested targets
 
@@ -2722,6 +2738,41 @@ Changes run focused tests locally; CI runs the full unit and Playwright suites a
 and `FATHOM_CLAUDE_CREDENTIAL_FILE` is set. `scripts/e2e-all.sh` runs the full Playwright suite and
 then smoke against a server. `scripts/docker-smoke.sh` builds the image and smokes a container.
 
+## Ask actions
+
+Ask threads, including recommendation conversations, can act on explicit requests. `ASK_ACTION_RULES`
+is a separate prompt section. Ambiguous requests need clarification. Advisor sends and email remain
+product buttons; there are no outbound action tools.
+
+| Tool | Scope | Shared write path |
+| --- | --- | --- |
+| `record_household_fact` | `write:facts` | `answerFacts`, typed answer shapes and replanning |
+| `set_recommendation_step` | `write:steps` | `writeRec`, also used by dialog checkboxes |
+| `set_recommendation_status`, `set_recommendation_owner` | `write:recs` | shared recommendation writers |
+| `create_goal`, `edit_goal` | `write:goals` | `createGoal` / `updateGoal`, also used by the goals API |
+| `remember_preference` | `write:preferences` | `writePreference`, also used by Settings |
+
+Fact values, goal targets and dates require typed owner evidence in the same conversation, with
+matching actor id, or stored data. Unknown fact keys are refused. Generated starters, question chips,
+assistant messages, imported prose and account masks cannot supply evidence. Facts record
+"you told Fathom in Ask on <date>" with the signed-in actor id. MCP provenance says "through MCP".
+MCP new fact values require existing typed Fathom conversation evidence or stored data; an invented
+caller quote is insufficient. Read-only keys receive `Permission denied:` before argument validation.
+New scopes appear in key creation with plain descriptions. Ownerless keys use a stable key actor.
+
+Migration 025 adds durable `action_receipts` and `preferences`. Each receipt commits in the same
+transaction as its write and records actor, conversation, changed fields and prior values. Receipts
+hydrate beside the answer's work block, including notice or missing replies, and keep their conversation
+reachable. Undo restores the prior value and provenance, refuses another actor or a later conflicting
+edit, and replans facts. MCP-only undo tools use the matching scope. Ask gets the Undo button through
+`POST /api/actions/:id/undo`. A busy planner preserves the fact and receipt, reports planning pending,
+and queues planning again. Ask queues replanning until the paid model round releases its engine lock, then drains that work before continuing; planner prose may safely call the same engine. Demo baby dates use the same deterministic new-child window calculation.
+
+`remember_preference` stores a short verbatim preference or definition. Settings shows it and allows
+editing or deletion through the same validation. Preferences enter the dynamic Ask prompt as household
+data; they never override product boundaries, evidence requirements or permissions.
+
+
 ## Transaction categories
 
 `src/categories/resolve.mjs` exports `resolveCategories({transactions, accounts, corrections, merchantRules, sourceRules, guesses, transferSourceIds})`, returning a map by stable transaction id with category, coarse bucket, first answering layer and evidence. The order is personal corrections and explicit rules, imported category, structural transfer, merchant memory, stored model guess, then Uncategorized. Merchant rules precede source-name rules; a transaction correction precedes both. Guesses never teach merchant memory. Personal spending outflows in the calculator window get first claim on opposite-amount transfer matches; business draws into personal accounts remain income.
@@ -2735,3 +2786,21 @@ Check these reuses Confirm cards and undo. Uncategorized and guessed transaction
 `node scripts/category-coverage.mjs <store-directory-or-file>` opens an existing instance through `openServedStore`, including its platform readiness gate and migrations, and prints counts only: rows per layer and bucket, Uncategorized rows and current queue size. It never prints transaction, account or merchant values.
 
 Category persistence uses `transaction_category_corrections` for personal transaction answers, `category_merchant_rules` for explicit merchant choices, `category_source_rules` for source-name bucket mappings, `transaction_category_guesses` for model attempts and `transaction_category_imports` for export enrichment evidence. These are additive tables; migration 023 does not rewrite transaction rows or existing undo logs.
+
+| Preference API | Input | Result |
+| --- | --- | --- |
+| `POST /api/preferences` | `{text}` | save a preference and return the scenario |
+| `POST /api/preferences/:id` | `{text}` | edit a preference and return the scenario |
+| `POST /api/preferences/:id/delete` | `{}` | delete a preference and return the scenario |
+
+### P&L and household spending
+
+`src/pnl/` (`index.mjs` re-exports `shared.mjs`, `business.mjs` and `spending.mjs`) holds two deterministic, read-only aggregations over the categorized store. Every function is synchronous, takes one object, never writes, and takes an optional `clock` (YYYY-MM-DD, default `resolveClock(db)`); rows after the clock never count. Errors are `PnlError` with `code` `unknown_entity`, `bad_range`, `bad_option` or `bad_input`.
+
+`pnlEntities({db, clock})` lists the business P&Ls: every business name (the owner's `business.entities`, `pnl_lines.entity`, `accounts.businessEntity` values, merged by normalized name and `entity_aliases`) with data, keyed `entity:<normalized name>`, then each business account tied to no entity as `account:<id>`. A business account belongs to its stated entity, else to the only business name when there is exactly one.
+
+`businessPnl({db, entity, from, to, clock})` returns `{entity, from, to, months, monthSources, income, expenses, net, prior, leftOut, uncategorized, notes, figures, sources}`. Per month, at least one workbook line means the month uses the workbook; otherwise it uses the entity's business-account transactions by resolved bucket (`income` to income, `business` to expenses, layer `uncategorized` to `Uncategorized`, every other bucket left out). The two are never added for one month; transactions in a workbook month are reported in `monthSources[i].covered`. `businessPnlRows({db, entity, from, to, section, category, month, clock})` lists the rows behind one cell.
+
+`householdSpending({db, from, to, include, exclude, clock})` returns `{from, to, months, include, exclude, total, monthlyAverage, monthTotals, buckets, leftOut, gaps, notes, figures, sources}`: household-bucket outflows on spending accounts (never business accounts), housing toggled by `exclude: ['housing']` and tax payments by `include: ['tax']`. `householdSpendingRows({db, from, to, include, exclude, bucket, category, month, clock})` lists the rows behind one cell.
+
+Every number is a figure key into `figures`: `{v, src, kind: 'a', label, notes, detail, sums?, provenance: {source, accounts, months, rows, files}}`, with `src` one of `pnl:workbook`, `pnl:transactions`, `pnl:mixed` or `spend:transactions` in `sources` (`{label, asOf}`, the newest counted row). The routes are `GET /api/pnl`, `GET /api/pnl/rows`, `GET /api/spending` and `GET /api/spending/rows` (`src/api/pnl-handlers.mjs`).

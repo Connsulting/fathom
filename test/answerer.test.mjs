@@ -1,7 +1,8 @@
 // AC2 and AC3: the live answerer. Prompt assembly keeps the cacheable system prompt free of
 // household data (D1), groundAnswer validates every token and refuses stored figures written as
-// literals (R9, R14, R15), renderAnswer escapes untrusted model text (D6), one corrective retry
-// (D5), notices instead of fabricated text (D13, R7), write-tool gating (D12) and provenance.
+// literals (R9, R14, R15), renderAnswer escapes untrusted model text (D6) and neutralizes an
+// unchecked figure in place, one regeneration only when most figures are unchecked (D5, AQ1 C.5),
+// notices instead of fabricated text (D13, R7), write-tool gating (D12) and provenance.
 //
 // The answerer runs over a real runtime engine in fake mode on a temp demo store. Where a test
 // needs specific model output it wraps the runtime so the next call carries a scripted
@@ -22,15 +23,20 @@ import { callTool, tools as REGISTRY } from '../src/tools/index.mjs';
 import { sdkOptions } from '../src/engine/live.mjs';
 import { createRuntimeEngine, createSpendLedger } from '../src/engine/runtime.mjs';
 import { createLivePacks } from '../src/packs/live.mjs';
-import { PRODUCT_RULES, NOTICES, buildChatPrompt, groundAnswer, renderAnswer, createLiveAnswerer } from '../src/api/answerer.mjs';
+import { PRODUCT_RULES, ASK_ACTION_RULES, NOTICES, buildChatPrompt, groundAnswer, renderAnswer, createLiveAnswerer } from '../src/api/answerer.mjs';
 import { ACTION_STATUS } from '../src/shared/rules.mjs';
 import { stripSources, markdownBlocks } from '../src/shared/answer-text.mjs';
 import { ROOT, tempDb } from './helpers/server.mjs';
 import { writeSyntheticPack, ALWAYS } from './helpers/packs.mjs';
 
-const ACTIVE_DEMO_PACKS = ['advanced-retirement', 'kids-dependents', 's-corp-owner', 'self-employed-partnership', 'virginia-resident', 'w2-benefits'];
-const UNVERIFIED = '<span class="fx-unverified" title="Not found in your data or tool results">';
+const ACTIVE_DEMO_PACKS = ['advanced-retirement', 'kids-dependents', 's-corp-owner', 'self-employed-partnership', 'spending-and-obligations', 'virginia-resident', 'w2-benefits'];
+const UNCHECKED = '<span class="fx-checking fx-unchecked" title="Not checked against your data">';
 const INVENTED = '$987,654';
+// A second invented amount: a regeneration needs two or more unchecked figures that are more than
+// half of the answer's figures (AQ1 C.5).
+const INVENTED_2 = '$876,543';
+const TWO_INVENTED = `You could save ${INVENTED} this year and ${INVENTED_2} next year.`;
+const REVISED_2 = 'Revised to remove 2 unchecked figures';
 // An Ask thread key: the answerer needs no stored row, and a new key has no history.
 const THREAD = 'ask:0123456789ab';
 // The suggested question 'leave', sent as free text (suggested ids resolve only through matchQuestion).
@@ -240,7 +246,7 @@ test('PRODUCT_RULES states the advisory boundaries, the figure token rule and th
   assert.ok(PRODUCT_RULES.includes('{f:'), 'figure tokens are explained');
   assert.ok(PRODUCT_RULES.includes('get_figures'));
   // B2: chat never writes; the rule names the proposal tool instead of the write tool.
-  assert.ok(PRODUCT_RULES.includes('propose_recommendation_action'));
+  assert.ok(ASK_ACTION_RULES.includes('Confirm only when their request is ambiguous'));
   assert.ok(!PRODUCT_RULES.includes('set_recommendation_status'));
 });
 
@@ -255,7 +261,8 @@ test('buildChatPrompt keeps the static system identical across summaries and que
     context: { rec: { id: 'synthetic-rec', title: 'CONTEXT-MARKER' } }, history: [], question: 'Second synthetic question?',
   });
   assert.equal(one.system, two.system);
-  assert.equal(one.system, PRODUCT_RULES + '\n\n<knowledge_packs>\n' + packContextText + '\n</knowledge_packs>');
+  assert.ok(one.system.startsWith(PRODUCT_RULES + '\n\n' + ASK_ACTION_RULES), 'the product and action rules open the static system');
+  assert.ok(one.system.includes('\n<knowledge_packs>\n' + packContextText + '\n</knowledge_packs>'), 'the pack context is in the static system');
   for (const value of ['SUMMARY-MARKER-ONE', 'SUMMARY-MARKER-TWO', '7351', '8462', 'CONTEXT-MARKER', 'First synthetic', 'Second synthetic']) {
     assert.ok(!one.system.includes(value), `static system has no ${value}`);
   }
@@ -367,6 +374,16 @@ test('groundAnswer grounds literals in tool results and context data, and flags 
 const LAUNDERED = 'The synthetic amount is 4821.';
 const laundered = r => r.violations.map(v => v.text);
 
+// A literal grounded by a tool result names a plain source, never the raw tool name (AQ1 C.2); a
+// query_transactions source starts with "your transactions".
+function expectToolSource(literal, name, context = '') {
+  assert.ok(literal, context);
+  assert.equal(typeof literal.source, 'string', context);
+  assert.notEqual(literal.source, name, `not the raw tool name: ${context}`);
+  assert.doesNotMatch(literal.source, /_/, `not a tool name: ${literal.source}`);
+  if (name === 'query_transactions') assert.match(literal.source, /^your transactions/, context);
+}
+
 test('B3: a tool result value that echoes a call argument does not ground the number', async t => {
   const s = await demoStore(t);
   const scenario = buildScenario(s.db);
@@ -412,7 +429,7 @@ test('B3: a real value field still grounds, also next to an unrelated argument a
   const r = groundAnswer(LAUNDERED, { scenario, data: [],
     toolResults: [{ name: 'get_figures', args: { keys: ['synthetic'] }, result }] });
   assert.equal(r.ok, true, JSON.stringify(r.violations));
-  assert.equal(r.literals.find(l => l.text === '4821').source, 'get_figures');
+  expectToolSource(r.literals.find(l => l.text === '4821'), 'get_figures', JSON.stringify(r.literals));
   const other = groundAnswer('It is page 77 of plan 9517.', { scenario, data: [],
     toolResults: [{ name: 'get_figures', args: { keys: ['synthetic'] }, result }] });
   assert.deepEqual(laundered(other), ['77', '9517'], 'the page and the source label are metadata');
@@ -581,8 +598,7 @@ test('B3: an account mask from the real list_accounts result never grounds a num
   const { unverified } = reply.provenance.grounding;
   assert.ok(unverified.includes(mask), `the account mask ${account.mask} grounds ${mask}: ${JSON.stringify(reply.provenance.grounding)}`);
   assert.ok(!unverified.includes(balance), `the balance ${balance} still grounds`);
-  const literal = reply.provenance.literals.find(l => l.text === balance);
-  assert.equal(literal && literal.source, 'list_accounts', JSON.stringify(reply.provenance.literals));
+  expectToolSource(reply.provenance.literals.find(l => l.text === balance), 'list_accounts', JSON.stringify(reply.provenance.literals));
 });
 
 test('B3 r2: a figure reference (mine[].fig = plan529) in the va529 rec context never grounds $529; a real amount does', async t => {
@@ -610,8 +626,7 @@ test('B3 r2: a figure reference in a scripted get_recommendation result never gr
   const { unverified } = reply.provenance.grounding;
   assert.ok(unverified.includes('$529'), `the fig reference must not ground $529: ${JSON.stringify(reply.provenance.grounding)}`);
   assert.ok(!unverified.includes('$4,000'), 'a real amount still grounds');
-  const literal = reply.provenance.literals.find(l => l.text === '$4,000');
-  assert.equal(literal && literal.source, 'get_recommendation', JSON.stringify(reply.provenance.literals));
+  expectToolSource(reply.provenance.literals.find(l => l.text === '$4,000'), 'get_recommendation', JSON.stringify(reply.provenance.literals));
 });
 
 test('B3 r2: an identifier-like string under an unremarkable key never grounds its digits', async t => {
@@ -654,7 +669,10 @@ test('B3 r2: an exact amount query keeps the stored row amounts as grounding, at
   const { unverified } = reply.provenance.grounding;
   assert.ok(!unverified.includes(text), `the row amount grounds ${text}: ${JSON.stringify(reply.provenance.grounding)}`);
   const literal = reply.provenance.literals.find(l => l.text === text);
-  assert.equal(literal && literal.source, 'query_transactions', JSON.stringify(reply.provenance.literals));
+  expectToolSource(literal, 'query_transactions', JSON.stringify(reply.provenance.literals));
+  // The row it came from: its date and description (AQ1 C.2).
+  assert.ok(literal.source.includes(pick.date), literal.source);
+  assert.ok(literal.source.includes(pick.description), literal.source);
 });
 
 test('B3 r2: argument echoes under the same key still do not ground, while other keys with the same value do', async t => {
@@ -669,7 +687,7 @@ test('B3 r2: argument echoes under the same key still do not ground, while other
   const real = groundAnswer(LAUNDERED, { scenario, data: [],
     toolResults: [{ name: 'query_transactions', args: { minAmount: 4821, maxAmount: 4821 }, result: { rows: [{ id: 1, amount: 4821 }], total: 1 } }] });
   assert.equal(real.ok, true, JSON.stringify(real.violations));
-  assert.equal(real.literals.find(l => l.text === '4821').source, 'query_transactions');
+  expectToolSource(real.literals.find(l => l.text === '4821'), 'query_transactions', JSON.stringify(real.literals));
 });
 
 // ---------------------------------------------------------------- rendering
@@ -689,16 +707,18 @@ test('renderAnswer escapes markup, quotes and stray braces, keeps valid tokens, 
   assert.ok(out[1].includes('{f:true_reserve}'), 'a valid token stays raw for the UI to resolve');
 });
 
-test('renderAnswer wraps each violation in an fx-unverified span and neutralizes an invalid token', () => {
+test('renderAnswer wraps each violation in a neutral fx-unchecked span and neutralizes an invalid token', () => {
   const text = `You could save ${INVENTED} next year, see {f:nope}.`;
   const violations = [
     { text: INVENTED, index: text.indexOf(INVENTED), reason: 'number or unit absent from sources' },
     { text: '{f:nope}', index: text.indexOf('{f:nope}'), reason: 'unknown figure token' },
   ];
   const html = renderAnswer(text, violations).join('');
-  assert.ok(html.includes(`${UNVERIFIED}${INVENTED}</span>`), html);
+  assert.ok(html.includes(`${UNCHECKED}${INVENTED}</span>`), html);
   assert.ok(!html.includes('{f:nope}'), 'an invalid token is never left resolvable');
-  assert.equal(html.split('class="fx-unverified"').length - 1, 2, html);
+  assert.ok(html.includes(`${UNCHECKED}&#123;f:nope&#125;</span>`), html);
+  assert.equal(html.split('class="fx-checking fx-unchecked"').length - 1, 2, html);
+  assert.ok(!html.includes('fx-unverified'), 'new answers never use the legacy class');
 });
 
 // ---------------------------------------------------------------- the live answerer
@@ -731,16 +751,31 @@ test('a suggested question answers through the fake engine with tools, figures, 
   assert.ok(spendCount(s.db) > before, 'spend was recorded');
 });
 
-test('an answer that fails grounding is retried once and the grounded retry is stored', async t => {
+test('a single unchecked amount is neutralized in place, with no regeneration', async t => {
   const s = await demoStore(t);
   const { engine, requests } = scripted(s.runtime, [
     [{ text: `You could save ${INVENTED} this year.` }],
+    [{ text: 'must not run' }],
+  ]);
+  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).answer({ db: s.db, key: THREAD, text: 'Synthetic retry question' });
+  assert.equal(requests.length, 1, 'one model call');
+  assert.ok(!reply.notice);
+  assert.deepEqual(reply.provenance.grounding, { ok: false, retried: false, unverified: [INVENTED] });
+  assert.ok(joined(reply).includes(`${UNCHECKED}${INVENTED}</span>`), joined(reply));
+  assert.ok(!joined(reply).includes('must not run'));
+});
+
+test('an answer whose figures are mostly unchecked is regenerated once and the grounded regeneration is stored', async t => {
+  const s = await demoStore(t);
+  const { engine, requests } = scripted(s.runtime, [
+    [{ text: TWO_INVENTED }],
     [{ text: 'Your plan already covers the leave months.' }],
   ]);
   const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).answer({ db: s.db, key: THREAD, text: 'Synthetic retry question' });
   assert.equal(requests.length, 2, 'two model calls');
   assert.ok(!reply.notice);
-  assert.deepEqual(reply.provenance.grounding, { ok: true, retried: true, unverified: [] });
+  assert.deepEqual(reply.provenance.grounding, { ok: true, retried: true, unverified: [], revised: 2 });
+  assert.ok(!joined(reply).includes('876,543'), joined(reply));
   assert.ok(!joined(reply).includes('987,654'), joined(reply));
   assert.ok(joined(reply).includes('leave months'));
   assert.equal(requests[1].system, requests[0].system, 'the corrective turn keeps the cached system');
@@ -748,23 +783,29 @@ test('an answer that fails grounding is retried once and the grounded retry is s
   assert.equal(requests[1].messages.at(-1).role, 'user');
 });
 
-test('an answer still ungrounded after the retry is stored with the number marked unverified', async t => {
+test('an answer still ungrounded after the regeneration is stored with its numbers neutralized, never regenerated twice', async t => {
   const s = await demoStore(t);
   const { engine, requests } = scripted(s.runtime, [
-    [{ text: `You could save ${INVENTED} this year.` }],
-    [{ text: `You could still save ${INVENTED} this year.` }],
+    [{ text: TWO_INVENTED }],
+    [{ text: `You could still save ${INVENTED} this year and ${INVENTED_2} next year.` }],
+    [{ text: 'must not run' }],
   ]);
   const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).answer({ db: s.db, key: THREAD, text: 'Synthetic retry question' });
   assert.equal(requests.length, 2);
   assert.ok(!reply.notice);
-  assert.ok(joined(reply).includes(`${UNVERIFIED}${INVENTED}</span>`), joined(reply));
+  assert.ok(joined(reply).includes(`${UNCHECKED}${INVENTED}</span>`), joined(reply));
+  assert.ok(joined(reply).includes(`${UNCHECKED}${INVENTED_2}</span>`), joined(reply));
   assert.equal(reply.provenance.grounding.ok, false);
   assert.equal(reply.provenance.grounding.retried, true);
-  assert.ok(reply.provenance.grounding.unverified.includes(INVENTED));
+  assert.equal(reply.provenance.grounding.revised, 2);
+  assert.deepEqual(reply.provenance.grounding.unverified, [INVENTED, INVENTED_2]);
+  const steps = reply.provenance.work.items.filter(x => x.k === 'step' && /^Revised/.test(x.label));
+  assert.deepEqual(steps, [{ k: 'step', label: REVISED_2 }]);
 });
 
 // B1: a corrective retry that fails answers with the matching notice, never the first ungrounded
-// text, and the spend the engine recorded before it threw stays in the ledger.
+// text, and the spend the engine recorded before it threw stays in the ledger. The first answer has
+// two invented amounts and no other figure, so it is regenerated (AQ1 C.5).
 
 const chatRows = db => db.prepare("SELECT id, purpose, model, cost_usd FROM spend_ledger WHERE purpose = 'chat' ORDER BY id").all().map(r => ({ ...r }));
 // The runtime records spend at the current time (no clock-based now in this fixture).
@@ -773,7 +814,7 @@ const thisMonth = () => new Date().toISOString().slice(0, 7);
 test('B1: a corrective retry refused by the engine switch answers with the engine-off notice and keeps the first spend row', async t => {
   const s = await demoStore(t);
   const { engine, requests } = scripted(s.runtime, [
-    [{ text: `You could save ${INVENTED} this year.` }],
+    [{ text: TWO_INVENTED }],
     [{ text: 'must not run' }],
   ], { before: n => { if (n === 1) setSetting(s.db, 'engine', { on: false }); } });
   const before = chatRows(s.db).length;
@@ -794,7 +835,7 @@ test('B1: a corrective retry refused over the cap the first call exhausted answe
   // The cap sits half a dollar above this month's spend; the first call spends a whole dollar.
   setSetting(s.db, 'cap', { usd: createSpendLedger(s.db).monthSpendUsd(thisMonth()) + 0.5 });
   const { engine, requests } = scripted(s.runtime, [
-    [{ text: `You could save ${INVENTED} this year.`, costUsd: 1 }],
+    [{ text: TWO_INVENTED, costUsd: 1 }],
     [{ text: 'must not run' }],
   ]);
   const before = chatRows(s.db).length;
@@ -812,7 +853,7 @@ test('B1: a corrective retry refused over the cap the first call exhausted answe
 test('B1: a corrective retry that fails in the model answers with the model-error notice and keeps both spend rows', async t => {
   const s = await demoStore(t);
   const { engine, requests } = scripted(s.runtime, [
-    [{ text: `You could save ${INVENTED} this year.` }],
+    [{ text: TWO_INVENTED }],
     [{ text: 'Fabricated $123,456 figure', is_error: true, status: 'error_during_execution' }],
   ]);
   const before = chatRows(s.db).length;
@@ -850,7 +891,7 @@ test('a retry that drops the tool call stays grounded by the first attempt tool 
   const { engine, requests } = scripted(s.runtime, [
     [
       { toolCalls: [{ name: 'get_figures', args: { keys: ['fixed_fee'] } }] },
-      { text: `About ${amount} of delivered work is not invoiced, and you could save ${INVENTED}.` },
+      { text: `About ${amount} of delivered work is not invoiced, and you could save ${INVENTED} or ${INVENTED_2}.` },
     ],
     [{ text: `About ${amount} of delivered work is not invoiced.` }],
   ]);
@@ -858,10 +899,10 @@ test('a retry that drops the tool call stays grounded by the first attempt tool 
   assert.equal(requests.length, 2);
   assert.ok(!reply.notice);
   const html = joined(reply);
-  assert.ok(!html.includes('fx-unverified'), html);
-  assert.ok(!html.includes('987,654'), html);
+  assert.ok(!html.includes('fx-unverified') && !html.includes('fx-unchecked'), html);
+  assert.ok(!html.includes('987,654') && !html.includes('876,543'), html);
   assert.ok(new RegExp(`<span class="fx-src"[^>]*>${amount.replace('$', '\\$')}</span>`).test(html), html);
-  assert.deepEqual(reply.provenance.grounding, { ok: true, retried: true, unverified: [] });
+  assert.deepEqual(reply.provenance.grounding, { ok: true, retried: true, unverified: [], revised: 2 });
   const call = reply.provenance.tools.find(x => x.name === 'get_figures');
   assert.ok(call, JSON.stringify(reply.provenance.tools));
   assert.deepEqual(call.args, { keys: ['fixed_fee'] });
@@ -919,190 +960,30 @@ test('a model error answers with the model-error notice and never stores the fai
 
 // ---------------------------------------------------------------- B2: chat proposes, never writes
 
-const PROPOSE = 'propose_recommendation_action';
-const WRITE = 'set_recommendation_status';
-const recStatus = (db, id) => db.prepare('SELECT status FROM recs WHERE id = ?').get(id).status;
-const recEvents = db => db.prepare('SELECT count(*) AS n FROM rec_events').get().n;
-const allStatuses = db => Object.fromEntries(db.prepare('SELECT id, status FROM recs ORDER BY id').all().map(r => [r.id, r.status]));
-const proposeResults = responses => responses.flatMap(r => r.toolResults || []).filter(r => r.name === PROPOSE);
-const STATUS_TEXTS = ['Please mark this done', 'mark this done', 'Do not mark anything done', 'Snooze this until next month',
-  'Should I mark this done?', 'Tell me about the payroll cash', 'dismiss this'];
-
-test('B2: ask and rec conversations offer propose_recommendation_action and never set_recommendation_status for any text', async t => {
+test('Ask offers write tools only with trusted identity, while pack and bare rec contexts remain read-only', async t => {
   const s = await demoStore(t);
   const { engine, requests } = scripted(s.runtime);
   const answerer = createLiveAnswerer({ engine, packs: s.packs, root: s.root });
-  for (const key of ['deferral', THREAD]) {
-    for (const text of STATUS_TEXTS) await answerer.answer({ db: s.db, key, text });
-  }
-  await answerer.answer({ db: s.db, key: 'deferral', questionId: 0 });
-  await answerer.answer({ db: s.db, key: THREAD, text: LEAVE });
-  assert.equal(requests.length, STATUS_TEXTS.length * 2 + 2);
-  for (const r of requests) {
-    const names = toolNames(r);
-    assert.ok(names.includes(PROPOSE), `${PROPOSE} is offered: ${r.messages.at(-1).content}`);
-    assert.ok(!names.includes(WRITE), `${WRITE} is never offered: ${r.messages.at(-1).content}`);
-    assert.ok(names.includes('household_summary'), 'read tools are always offered');
-  }
+  await answerer.answer({ db: s.db, key: THREAD, text: 'Update my goal', actorId: 'demo', ownerText: 'Update my goal' });
+  await answerer.answer({ db: s.db, key: THREAD, text: 'Update my goal' });
+  await answerer.answer({ db: s.db, key: 'pack:giving', text: 'Update my goal', actorId: 'demo' });
+  await answerer.answer({ db: s.db, key: 'deferral', text: 'Update my goal', actorId: 'demo' });
+  assert.ok(toolNames(requests[0]).includes('set_recommendation_status'));
+  assert.ok(toolNames(requests[0]).includes('record_household_fact'));
+  assert.ok(toolNames(requests[0]).includes('create_goal'));
+  assert.ok(!toolNames(requests[0]).includes('undo_fact_action'));
+  for (const r of requests.slice(1)) assert.ok(r.tools.every(t2 => t2.scope === 'read'));
 });
 
-test('B2: pack conversations and What if offer neither the proposal tool nor the write tool', async t => {
+ test('fake actions execute explicit recommendation commands and refuse negations', async t => {
   const s = await demoStore(t);
-  const { engine, requests } = scripted(s.runtime);
-  const answerer = createLiveAnswerer({ engine, packs: s.packs, root: s.root });
-  await answerer.answer({ db: s.db, key: 'pack:giving', text: 'Please mark this done' });
-  await answerer.answer({ db: s.db, key: 'pack:giving', text: 'dismiss this' });
-  await answerer.whatIf({ db: s.db, packId: 'giving' });
-  assert.equal(requests.length, 3);
-  for (const r of requests) {
-    assert.ok(!toolNames(r).includes(PROPOSE), 'no proposal tool');
-    assert.ok(!toolNames(r).includes(WRITE), 'no write tool');
-    assert.ok(toolNames(r).includes('household_summary'));
-  }
-});
-
-test('B2: the proposal tool is a read-scoped tool with a closed schema over the rec actions', async t => {
-  const s = await demoStore(t);
-  const { engine, requests } = scripted(s.runtime);
-  await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).answer({ db: s.db, key: THREAD, text: 'Synthetic question' });
-  const tool = requests[0].tools.find(x => x.name === PROPOSE);
-  assert.ok(tool, 'offered');
-  assert.equal(tool.scope, 'read');
-  assert.equal(typeof tool.description, 'string');
-  assert.equal(typeof tool.handler, 'function');
-  const schema = tool.inputSchema;
-  assert.equal(schema.type, 'object');
-  assert.equal(schema.additionalProperties, false);
-  assert.deepEqual(sorted(schema.required), ['action', 'id']);
-  assert.deepEqual(sorted(Object.keys(schema.properties)), ['action', 'id', 'wake']);
-  assert.equal(schema.properties.id.type, 'string');
-  assert.equal(schema.properties.action.type, 'string');
-  assert.deepEqual(sorted(schema.properties.action.enum), sorted(Object.keys(ACTION_STATUS)));
-  assert.ok(!schema.properties.action.enum.includes('none'));
-  assert.equal(schema.properties.wake.type, 'string');
-  assert.equal(schema.properties.wake.maxLength, 200);
-});
-
-test('B2: a scripted proposal yields provenance.proposal and leaves the rec and its history unchanged', async t => {
-  const s = await demoStore(t);
-  const status = recStatus(s.db, 'deferral');
-  const events = recEvents(s.db);
-  const { engine, responses } = scripted(s.runtime, [[
-    { toolCalls: [{ name: PROPOSE, args: { id: 'deferral', action: 'dismiss' } }] },
-    { text: 'You can confirm setting this aside below.' },
-  ]]);
-  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).answer({ db: s.db, key: 'deferral', text: 'dismiss this' });
-  assert.ok(!reply.notice);
-  assert.deepEqual(reply.provenance.proposal, { recId: 'deferral', action: 'dismiss' });
-  const [result] = proposeResults(responses);
-  assert.ok(result && !result.isError, JSON.stringify(result));
-  assert.deepEqual(result.result, { proposed: true }, 'the handler returns only { proposed: true }, no echo of its arguments');
-  assert.equal(recStatus(s.db, 'deferral'), status, 'the store is not touched');
-  assert.equal(recEvents(s.db), events, 'no rec history row');
-  const call = reply.provenance.tools.find(x => x.name === PROPOSE);
-  assert.deepEqual(call.args, { id: 'deferral', action: 'dismiss' }, 'tool provenance keeps the call');
-});
-
-test('B2: a snooze proposal in ask carries its wake label, and the last successful proposal wins', async t => {
-  const s = await demoStore(t);
-  const before = allStatuses(s.db);
-  const { engine } = scripted(s.runtime, [[
-    { toolCalls: [{ name: PROPOSE, args: { id: 'dcfsa', action: 'start' } }] },
-    { toolCalls: [{ name: PROPOSE, args: { id: 'dcfsa', action: 'snooze', wake: 'Next month' } }] },
-    { toolCalls: [{ name: PROPOSE, args: { id: 'daf', action: 'dismiss' } }] },
-    { text: 'You can confirm the snooze below.' },
-  ]]);
-  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).answer({ db: s.db, key: THREAD, text: 'Snooze the dependent care one' });
-  assert.ok(!reply.notice);
-  assert.deepEqual(reply.provenance.proposal, { recId: 'dcfsa', action: 'snooze', wake: 'Next month' },
-    'one proposal: the last successful call (the later hidden-rec call fails)');
-  assert.deepEqual(allStatuses(s.db), before);
-});
-
-test('B2: in a rec conversation a proposal for a different rec is dropped', async t => {
-  const s = await demoStore(t);
-  const before = allStatuses(s.db);
-  const { engine, requests, responses } = scripted(s.runtime, [[
-    { toolCalls: [{ name: PROPOSE, args: { id: 'dcfsa', action: 'dismiss' } }] },
-    { text: 'You can confirm it below.' },
-  ]]);
-  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).answer({ db: s.db, key: 'deferral', text: 'dismiss the other one' });
-  assert.ok(!reply.notice);
-  assert.ok(toolNames(requests[0]).includes(PROPOSE), 'the proposal tool is offered in a rec conversation');
-  const [result] = proposeResults(responses);
-  assert.ok(result, 'the call ran');
-  assert.ok(reply.provenance.proposal == null, 'no proposal for a rec other than the conversation rec');
-  assert.deepEqual(allStatuses(s.db), before);
-});
-
-test('B2: a proposal for a hidden or unknown rec, an unknown action or an extra argument is an error with no proposal', async t => {
-  const s = await demoStore(t);
-  assert.equal(recStatus(s.db, 'daf'), 'hidden', 'daf is behind an inactive pack');
-  const before = allStatuses(s.db);
-  const bad = [
-    { id: 'daf', action: 'dismiss' },
-    { id: 'no-such-rec', action: 'start' },
-    { id: 'dcfsa', action: 'accept' }, // retired: Doing it is the start action
-    { id: 'dcfsa', action: 'delete' },
-    { id: 'dcfsa', action: 'none' },
-    { id: 'dcfsa', action: 'complete', status: 'done' },
-    { id: 'dcfsa', action: 'snooze', wake: 'w'.repeat(201) },
-  ];
-  for (const args of bad) {
-    const { engine, requests, responses } = scripted(s.runtime, [[
-      { toolCalls: [{ name: PROPOSE, args }] },
-      { text: 'Nothing to confirm here.' },
-    ]]);
-    const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).answer({ db: s.db, key: THREAD, text: 'Synthetic proposal question' });
-    assert.ok(!reply.notice, JSON.stringify(args));
-    assert.ok(toolNames(requests[0]).includes(PROPOSE), 'the proposal tool is offered in ask');
-    const results = proposeResults(responses);
-    assert.equal(results.length, 1, JSON.stringify(args));
-    assert.equal(results[0].isError, true, `an error result for ${JSON.stringify(args)}`);
-    assert.ok(reply.provenance.proposal == null, `no proposal for ${JSON.stringify(args)}`);
-  }
-  assert.deepEqual(allStatuses(s.db), before);
-});
-
-test('B2: the fake engine proposes an explicit command that names the rec, and never a negation', async t => {
-  const s = await demoStore(t);
-  const before = allStatuses(s.db);
-  const dcfsaTitle = buildScenario(s.db).recs.find(r => r.id === 'dcfsa').title;
-  assert.ok(!dcfsaTitle.includes('{'), 'a title with no tokens to name in the text');
   const answerer = createLiveAnswerer({ engine: s.runtime, packs: s.packs, root: s.root });
-  const cases = [
-    ['deferral', 'dismiss this', { recId: 'deferral', action: 'dismiss' }],
-    ['deferral', 'Please complete this', { recId: 'deferral', action: 'complete' }],
-    ['deferral', 'start this one', { recId: 'deferral', action: 'start' }],
-    [THREAD, 'Please start dcfsa', { recId: 'dcfsa', action: 'start' }],
-    [THREAD, `Dismiss ${dcfsaTitle}`, { recId: 'dcfsa', action: 'dismiss' }],
-  ];
-  for (const [key, text, want] of cases) {
-    const reply = await answerer.answer({ db: s.db, key, text });
-    assert.ok(!reply.notice, text);
-    const got = reply.provenance.proposal;
-    assert.ok(got, `a proposal for "${text}"`);
-    assert.deepEqual({ recId: got.recId, action: got.action }, want, text);
-    const call = reply.provenance.tools.find(x => x.name === PROPOSE);
-    assert.ok(call, `the scripted tool round calls ${PROPOSE} for "${text}"`);
-    assert.equal(call.args.id, want.recId);
-    assert.equal(call.args.action, want.action);
-    assert.match(joined(reply), /confirm/i, 'the text says the owner can confirm it below');
-  }
-  const none = [
-    ['deferral', 'Do not mark anything done'],
-    ['deferral', 'Should I dismiss this?'],
-    ['deferral', 'Tell me why I should not dismiss this'],
-    [THREAD, 'dismiss something'],
-    [THREAD, 'Do not dismiss dcfsa'],
-    ['pack:giving', 'dismiss this'],
-  ];
-  for (const [key, text] of none) {
-    const reply = await answerer.answer({ db: s.db, key, text });
-    assert.ok(!reply.provenance || reply.provenance.proposal == null, `no proposal for "${text}" in ${key}`);
-    assert.ok(!(reply.provenance ? reply.provenance.tools : []).some(x => x.name === PROPOSE), `no proposal call for "${text}"`);
-  }
-  assert.deepEqual(allStatuses(s.db), before, 'no rec status changed');
+  const text = 'Dismiss dcfsa';
+  await answerer.answer({ db: s.db, key: THREAD, text, actorId: 'demo', ownerText: text, turnId: 'synthetic-action' });
+  assert.equal(s.db.prepare('SELECT status FROM recs WHERE id = ?').get('dcfsa').status, 'dismissed');
+  const count = s.db.prepare('SELECT count(*) n FROM action_receipts').get().n;
+  await answerer.answer({ db: s.db, key: THREAD, text: 'Do not dismiss deferral', actorId: 'demo', ownerText: 'Do not dismiss deferral' });
+  assert.equal(s.db.prepare('SELECT count(*) n FROM action_receipts').get().n, count);
 });
 
 test('a rec conversation answer refs the rec and reads it through get_recommendation', async t => {
@@ -1239,8 +1120,8 @@ test('R3 A contract: no tool the answerer offers returns a sentinel argument out
   const s = await demoStore(t);
   const offered = await offeredTools(s);
   const names = offered.map(tool => tool.name);
-  assert.deepEqual(sorted(names), sorted([...REGISTRY.filter(x => x.scope === 'read').map(x => x.name), PROPOSE, 'propose_goal']),
-    'every read tool and the local proposal tools, nothing else');
+  assert.deepEqual(sorted(names), sorted(REGISTRY.filter(x => x.scope === 'read').map(x => x.name)),
+    'a context without trusted identity offers read tools only');
   const recId = s.db.prepare("SELECT id FROM recs WHERE status != 'hidden' ORDER BY id LIMIT 1").get().id;
   const realPack = s.packs.loaded().find(p => p.id === 's-corp-owner');
   // The tool context the answerer hands every call: its household's db and root.
@@ -1352,14 +1233,13 @@ test('R3 A (F2): query_transactions total equal to the limit argument grounds, a
   assert.equal(got.result.truncated, false);
   const { unverified } = reply.provenance.grounding;
   assert.ok(!unverified.includes(String(n)), `the computed total ${n} grounds: ${JSON.stringify(reply.provenance.grounding)}`);
-  const literal = reply.provenance.literals.find(l => l.text === String(n));
-  assert.equal(literal && literal.source, 'query_transactions', JSON.stringify(reply.provenance.literals));
+  expectToolSource(reply.provenance.literals.find(l => l.text === String(n)), 'query_transactions', JSON.stringify(reply.provenance.literals));
 
   // A top-level number under a different key than the equal argument is a value, not an echo.
   const other = groundAnswer(LAUNDERED, { scenario, data: [],
     toolResults: [{ name: 'query_transactions', args: { minAmount: 4821 }, result: { rows: [], floor: 4821, total: 0 } }] });
   assert.equal(other.ok, true, JSON.stringify(other.violations));
-  assert.equal(other.literals.find(l => l.text === '4821').source, 'query_transactions');
+  expectToolSource(other.literals.find(l => l.text === '4821'), 'query_transactions', JSON.stringify(other.literals));
 });
 
 // B: prose sentences that carry bare numbers only, and ones that carry one marked quantity each.
@@ -1525,7 +1405,9 @@ test('R3 D: K-12 and 2026-01 never read as negatives in evidence or in the answe
 });
 
 // Canned demo answers that were unverified before round 3, independent of it.
-const KNOWN_UNVERIFIED = new Set(['ask:salary', 'rec:offcycle:1', 'whatif:scorp']);
+// ask:backdoor names the advisor's Dec 10 check-in, which its fake script never reads: since review
+// r2 F5 an unsourced date is unchecked in place, so that answer is unverified by design.
+const KNOWN_UNVERIFIED = new Set(['ask:salary', 'rec:offcycle:1', 'whatif:scorp', 'ask:backdoor']);
 
 test('R3 demo regression: every canned demo answer stays grounded except the known pre-existing ones; What if kids is grounded', async t => {
   const s = await demoStore(t);
@@ -1644,7 +1526,7 @@ test('R4 F2: the real pnl_by_month result over the demo store never grounds its 
   const amount = `$${row.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   const kept = ground(result, amount);
   assert.equal(kept.ok, true, `${amount}: ${JSON.stringify(kept.violations)}`);
-  assert.equal(kept.literals.find(l => l.text === amount).source, 'pnl_by_month');
+  expectToolSource(kept.literals.find(l => l.text === amount), 'pnl_by_month', JSON.stringify(kept.literals));
 });
 
 test('R4 F2: a synthetic period next to an unrelated amount grounds the amount and not $11 or 11', async t => {

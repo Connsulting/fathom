@@ -18,6 +18,7 @@ import * as switcher from './screens/switcher.js';
 import * as simplefin from './screens/simplefin.js';
 import * as recAnswers from './screens/rec-answers.js';
 import * as accountScreen from './screens/account.js';
+import * as pnlScreen from './screens/pnl.js';
 import { createKeys } from './keys.js';
 import { createSwipe } from './screens/swipe.js';
 import { homeModel, homeHeadline, healthChip, healthLine, paceReason, boardCharts, reasonText, servedGoalIds, shortDate, longDate, windowSpan } from './screens/home-model.js';
@@ -43,7 +44,7 @@ const TABS = [['home', 'Home', 'year'], ['plan', 'Plan', 'cal'], ['ask', 'Ask', 
 const SUBNAV = {
   plan: [['plan', 'Plan'], ['yearend', 'Year end'], ['advisor', 'Advisor']],
   ask: [['ask', 'Conversations'], ['wargame', 'What-if'], ['packs', 'Packs']],
-  money: [['money', 'Overview'], ['accounts', 'Accounts'], ['add', 'Files']]
+  money: [['money', 'Overview'], ['accounts', 'Accounts'], ['pnl', 'P&L'], ['add', 'Files']]
 };
 // Routes with no sub-nav are listed by hand; every sub-nav view maps to its tab.
 const TAB_OF = {
@@ -59,6 +60,7 @@ let ui = null;
 let ingest = null;
 let email = null;
 let lastKey = '';
+let lastRoute = null;
 let resizeTimer = 0;
 let onResize = null;
 let onDocKey = null;
@@ -461,7 +463,7 @@ function subNav(tab, route) {
   const views = SUBNAV[tab];
   if (!views) return '';
   const label = TABS.find(([k]) => k === tab)[1];
-  return `<nav class="h-subnav" aria-label="${label} views">${views.map(([k, l]) => `<a href="${href(k)}" data-go="${k}"${onAttr(route === k)}>${l}</a>`).join('')}</nav>`;
+  return `<nav class="h-subnav" aria-label="${label} views">${views.map(([k, l]) => `<a href="${href(k)}" data-go="${k}"${onAttr(route === k)}>${esc(l)}</a>`).join('')}</nav>`;
 }
 
 function shell(inner) {
@@ -472,7 +474,7 @@ function shell(inner) {
     <a class="h-mark" href="${href('home')}" data-go="home" aria-label="${esc(api.s.meta.product || 'Fathom')}">${MARK}<span>${esc(api.s.meta.product || 'Fathom')}</span></a>
     <div class="h-navbar"><nav class="h-nav" aria-label="Main">${tabLinks(tab)}</nav></div>
     <div class="h-top-act"><button type="button" class="h-search-btn" data-keys="switcher" aria-label="Search" title="Search (Ctrl+K)">${icon('search')}</button>${gearLink(tab)}</div>
-  </div></header>${off}<main class="h-main">${subNav(tab, r.name)}${inner}</main>${tabBar(tab)}`;
+  </div></header>${api.s.live.publicDemo ? '<div class="h-demo-marker" role="note">Demo with sample data</div>' : ''}${off}<main class="h-main">${subNav(tab, r.name)}${inner}</main>${tabBar(tab)}`;
 }
 
 function section(title, body, aside = '', cls = '') {
@@ -1476,7 +1478,7 @@ function pSettings() {
   let list = rows.map(([k, l, d]) => row(goA(k, l), d)).join('');
   if (id) list += row('<a href="/account">Account</a>', 'Passkeys and sign out.');
   if (id?.role === 'admin') list += row('<a href="/admin/users">Household</a>', 'People, roles and invitations.');
-  return shell(`<section class="h-settings h-narrow">${pageHead('System', 'Settings')}${whoLine()}<ul class="h-set">${list}</ul></section>`);
+  return shell(`<section class="h-settings h-narrow">${pageHead('System', 'Settings')}${whoLine()}<ul class="h-set">${list}</ul><section class="h-sec" aria-label="Remembered preferences"><h2>Remembered preferences</h2><p class="h-mute">How you want Fathom to answer, and what your household means by a term.</p>${arr(api.s.preferences).map(p => `<form data-preference-form="${esc(p.id)}" class="h-pref-form"><label>Preference<input name="text" aria-label="Household preference" maxlength="300" required value="${esc(p.text)}"></label><button type="submit" class="h-btn">Save</button><button type="button" class="h-btn" data-preference-delete="${esc(p.id)}">Delete</button></form>`).join('')}<form data-preference-form="" class="h-pref-form"><label>Add a preference<input name="text" aria-label="New household preference" maxlength="300" required></label><button type="submit" class="h-btn">Remember</button></form></section></section>`);
 }
 
 /* ---------- advisor ---------- */
@@ -1782,6 +1784,8 @@ function focusSig(el) {
   if (a('data-recowner') != null) return `[data-recowner="${CSS.escape(a('data-recowner'))}"]`;
   if (a('data-ad')) return `[data-ad="${CSS.escape(a('data-ad'))}"]`;
   if (a('data-dlg-name') != null) return '[data-dlg-name]';
+  for (const k of ['data-ad-owner', 'data-ad-kind', 'data-ad-mask']) if (a(k) != null) return `[${k}]`;
+  if (a('data-merge-with') != null) return `[data-merge-with="${CSS.escape(a('data-merge-with'))}"]`;
   if (a('data-askrec') != null) return '[data-draft]';
   if (a('data-draft')) return `[data-draft="${CSS.escape(a('data-draft'))}"]`;
   return null;
@@ -1859,6 +1863,11 @@ function draw() {
   const r = isDlgRoute(rr.name) ? underRoute(rr.name) : rr;
   const key = `${r.name}/${r.params?.id ?? r.params?.name ?? r.params?.step ?? ''}`;
   const routeChanged = key !== lastKey;
+  // Confirm remembers the screen it was opened from so Done and Back return there.
+  if (routeChanged && r.name === 'confirm') {
+    const from = lastRoute;
+    ingest.setOrigin(from && from.name !== 'confirm' && from.name !== 'onboarding' ? { name: from.name, params: from.params } : null);
+  }
   if (r.name !== 'onboarding' || (r.name === 'onboarding' && routeChanged && Number(r.params?.step ?? onboardStep()) !== 5)) {
     if (ui.buildTimer) { clearTimeout(ui.buildTimer); ui.buildTimer = 0; }
     if (routeChanged) ui.build = 0;
@@ -1881,6 +1890,7 @@ function draw() {
     case 'goals': html = pGoals(); break;
     case 'money': html = pMoney(); break;
     case 'accounts': html = pAccounts(); break;
+    case 'pnl': html = pnlScreen.render(); break;
     case 'add': html = pAdd(); break;
     case 'confirm': html = ingest.confirmPage(routeChanged); break;
     case 'advisor': html = advisorScreen.render(); break;
@@ -1908,7 +1918,7 @@ function draw() {
     const el = page.querySelector(`[data-draft="${CSS.escape(focusDraft)}"]`);
     if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
   }
-  if (routeChanged) { lastKey = key; ui.y = 0; window.scrollTo(0, 0); }
+  if (routeChanged) { lastKey = key; lastRoute = r; ui.y = 0; window.scrollTo(0, 0); }
   else if (Math.abs(window.scrollY - ui.y) > 1) window.scrollTo(0, ui.y);
   const { wasOpen, isRec } = syncDialog(rr, page);
   if (wasOpen && !isRec && ui.ret) {
@@ -1955,7 +1965,7 @@ function closeRec() {
 function beginAccountRename(id) {
   const a = arr(api.s.accounts).find((x) => x.id === id);
   if (!a) return;
-  ui.accEdit = { id, value: a.displayName ? a.name : (a.imported === false ? api.txt(String(a.name ?? '')) : String(a.name ?? '')) };
+  ui.accEdit = { id, value: a.displayName ? a.displayName : (a.imported === false ? api.txt(String(a.name ?? '')) : String(a.name ?? '')) };
   draw();
   const el = root?.querySelector(`[data-acc-name="${CSS.escape(id)}"]`);
   if (el) { el.focus(); el.select(); }
@@ -1969,6 +1979,8 @@ function saveAccountRename(id, raw) {
 }
 
 function onClick(e) {
+  const preferenceDelete = e.target.closest('[data-preference-delete]');
+  if (preferenceDelete) { e.preventDefault(); api.preferenceDelete(preferenceDelete.dataset.preferenceDelete); return; }
   const ren = e.target.closest?.('[data-acc-rename]');
   if (ren && root.contains(ren)) {
     e.preventDefault();
@@ -2111,6 +2123,8 @@ function startOver(recId) {
 }
 
 function onSubmit(e) {
+  const preference = e.target.closest('[data-preference-form]');
+  if (preference) { e.preventDefault(); api.preferenceSave(preference.dataset.preferenceForm, new FormData(preference).get('text')); return; }
   if (recAnswers.onSubmit(e)) return;
   if (SCREENS.some((s) => s.onSubmit?.(e))) return;
   const f = e.target;
@@ -2166,6 +2180,7 @@ function onInput(e) {
 // Committed changes: a goal form select or checkbox, and a released curve or priority slider
 // (saved to the store, so both feed the planner and chat).
 function onChange(e) {
+  if (SCREENS.some((s) => s.onChange?.(e))) return;
   if (recAnswers.onChange(e)) return;
   const t = e.target;
   if (t?.dataset?.gf === 'track' || t?.dataset?.gf === 'acct') { goalInput(t); return; }
@@ -2231,7 +2246,7 @@ function onDocumentKey(e) {
 }
 
 // Helpers the screen modules use. Getters, because api, root and ui change on mount.
-const SCREENS = [switcher, chatScreen, packsScreen, engineScreen, advisorScreen, yearendScreen, simplefin, recAnswers, accountScreen, trendScreen];
+const SCREENS = [switcher, chatScreen, packsScreen, engineScreen, advisorScreen, yearendScreen, simplefin, recAnswers, accountScreen, trendScreen, pnlScreen];
 const KIT = {
   get api() { return api; }, get root() { return root; }, get ui() { return ui; }, get keys() { return keys; }, get ingest() { return ingest; },
   draw: () => draw(),
@@ -2243,7 +2258,7 @@ const KIT = {
 SCREENS.forEach((s) => s.bind(KIT));
 
 function mount(r, a) {
-  api = a; root = r; ui = freshUi(); lastKey = ''; connectOn = false;
+  api = a; root = r; ui = freshUi(); lastKey = ''; lastRoute = null; connectOn = false;
   SCREENS.forEach((s) => s.reset?.());
   ingest = ingestScreens({ api, shell, section, pageHead, btn, icon, esc, T, X, draw, goA, getUi: () => ui });
   email = emailScreen({ shell, section, pageHead, btn, esc, draw });

@@ -9,6 +9,7 @@ coverage/
 
 # Real financial data must never be committed.
 data/
+/demo-data/
 imports/
 exports/
 fixtures/private/
@@ -23,3 +24,5 @@ packs/your-plans/
 .e2e-data*/
 test-results/
 playwright-report/
+
+/evals/out/

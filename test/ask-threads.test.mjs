@@ -431,7 +431,7 @@ test('AC5 the answer request carries this thread history and nothing from anothe
     const sent = JSON.stringify({ system: r.system, systemDynamic: r.systemDynamic, messages: r.messages });
     assert.ok(!sent.includes('Synthetic other thread'), 'nothing from the other thread reaches the model');
   }
-  assert.ok(toolNamesOf(req).includes('propose_recommendation_action'), 'the proposal tool is offered in a thread');
+  assert.ok(!toolNamesOf(req).includes('set_recommendation_status'), 'a direct answerer call without trusted identity is read-only');
 });
 
 test('AC5 asking in an archived thread unarchives it; asking in a trashed thread is 409', T, () => withServer({ env: FAKE }, async s => {
@@ -695,7 +695,7 @@ test('AC4 purgeTrash deletes threads trashed 30 or more days ago and their messa
 const QUARTERLY = 'How should we think about the quarterly estimates';
 const QUARTERLY_FALLBACK = 'How should we think about the quarterly';
 
-test('AC3 the fake engine names a thread once after the first turn', T, () => withServer({ env: FAKE }, async s => {
+test('AC3 the fake engine names a thread after the first turn and retries once after the second', T, () => withServer({ env: FAKE }, async s => {
   const first = await newThread(s, { text: QUARTERLY });
   assert.equal(first.thread.title, QUARTERLY_FALLBACK, 'the response of the first answer already carries the title');
   assert.equal(first.thread.titleSource, 'auto');
@@ -705,12 +705,12 @@ test('AC3 the fake engine names a thread once after the first turn', T, () => wi
   const named = (await openThread(s, first.thread.id)).thread;
   assert.equal(named.title, QUARTERLY_FALLBACK, 'the fake title is the fallback of the first question');
   assert.equal(named.titleSource, 'auto');
-  assert.equal(await titleSpend(s.dbFile), 1, 'the title call is recorded with purpose title');
+  assert.equal(await titleSpend(s.dbFile), 2, 'the title calls are recorded with purpose title: the first and the one retry (the fake title is the fallback)');
   const sc = await s.getScenario();
   assert.equal(sc.live.threads.find(x => x.id === first.thread.id).title, QUARTERLY_FALLBACK);
 
   await ask(s, first.thread.key, 'Synthetic third question');
-  assert.equal(await titleSpend(s.dbFile), 1, 'named once');
+  assert.equal(await titleSpend(s.dbFile), 2, 'no title call after the third turn');
   assert.equal((await openThread(s, first.thread.id)).thread.title, QUARTERLY_FALLBACK);
 }));
 

@@ -56,7 +56,7 @@ const rows = () => t.platform.prepare('SELECT * FROM api_keys ORDER BY created_a
 describe('constants and scopes', () => {
   test('prefix and scope list', () => {
     assert.equal(KEY_PREFIX, 'fathom_');
-    assert.deepEqual([...SCOPES], ['read', 'write:recs']);
+    assert.deepEqual([...SCOPES], ['read', 'write:recs', 'write:preferences', 'write:facts', 'write:steps', 'write:goals']);
   });
 
   test('normalizeScopes: empty means read, read always included, ordered and deduplicated', () => {
@@ -79,7 +79,7 @@ describe('constants and scopes', () => {
     assert.ok(!readOnly.includes('set_recommendation_status'));
     assert.deepEqual(readOnly, tools.filter(x => x.scope === 'read').map(x => x.name));
     const both = toolsForScopes(['read', 'write:recs']).map(x => x.name);
-    assert.deepEqual(both, tools.map(x => x.name));
+    assert.deepEqual(both, tools.filter(x => ['read', 'write:recs'].includes(x.scope)).map(x => x.name));
     assert.deepEqual(toolsForScopes([]), []);
     const registry = [{ name: 'a', scope: 'read' }, { name: 'b', scope: 'write:recs' }, { name: 'c', scope: 'read' }];
     assert.deepEqual(toolsForScopes(['read'], registry).map(x => x.name), ['a', 'c']);

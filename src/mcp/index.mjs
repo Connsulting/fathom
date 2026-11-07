@@ -31,7 +31,8 @@ function authenticate(req, keys) {
   }
 }
 
-// keys: the platform key service; runtimes: the household runtime registry.
+// keys: the platform key service; runtimes: the household runtime registry. Each request runs in
+// the key's household: its db, root and scheduler.
 export function createMcpHandler({ keys, runtimes, config }) {
   return async function handleMcp(req, res) {
     const host = req.headers.host;
@@ -61,7 +62,10 @@ export function createMcpHandler({ keys, runtimes, config }) {
     }
 
     keys.touch(record.id);
-    const ctx = { db: household.db, now: new Date(), dataDir: household.root, clock: config.clock, household };
+    const scheduler = household.scheduler;
+    const ctx = { db: household.db, now: new Date(), dataDir: household.root, clock: config.clock, household,
+      channel: 'mcp', actorId: record.userId || `key:${record.id}`, scopes: record.scopes,
+      replan: scheduler ? () => scheduler.runNow('plan') : null, queuePlan: () => scheduler?.soon?.('plan', 'ingest') };
     const server = createToolServer({ scopes: record.scopes, ctx });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     res.on('close', () => {

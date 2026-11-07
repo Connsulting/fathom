@@ -97,6 +97,7 @@ function resolveAfterImport(db, opts) {
 // synchronously, before any await.
 export async function ingestFile(db, file, opts = {}) {
   const { inFlight } = householdOf(db, opts);
+  db.prepare("DELETE FROM settings WHERE key = 'synthetic_demo'").run();
   const now = opts.now || new Date().toISOString();
   const bytes = toBytes(file.bytes);
   const name = baseName(file.name);
