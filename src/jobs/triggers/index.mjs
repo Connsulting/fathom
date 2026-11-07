@@ -22,7 +22,7 @@ import * as backdoorRoth from './backdoor-roth.mjs';
 import * as dependentCareFsa from './dependent-care-fsa.mjs';
 import * as newChild from './new-child.mjs';
 import * as missingData from './missing-data.mjs';
-import { questionFor, dataText } from './common.mjs';
+import { questionFor, dataText, LISTED_RECS } from './common.mjs';
 
 export const triggers = Object.freeze([
   fedQ4, vaQ4, yearEndRetirement, solo401kSetup, scorpSalary, invoiceDeferral, hsaRoom, va529,
@@ -56,7 +56,7 @@ function recOf(ctx, t, hit, window) {
     const people = ['year-end-retirement', 'scorp-salary'].includes(t.id) && ctx.info.solo?.person ? [ctx.info.solo.person] : undefined;
     rec.question = { ...questionFor(questions, { accounts: ctx.data?.accounts || [], facts: ctx.facts, names: ctx.names, people }), primary };
     if (primary) {
-      rec.title = dataText(rec.question.title);
+      if (!LISTED_RECS.has(t.id)) rec.title = dataText(rec.question.title);
       rec.tasks = [];
     }
   }

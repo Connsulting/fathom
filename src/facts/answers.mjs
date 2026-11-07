@@ -53,12 +53,12 @@ export async function answerFacts(db, answers, { now = new Date().toISOString(),
       const prior = parseJson(db.prepare('SELECT value FROM facts WHERE key = ?').get(a.key)?.value, {});
       value = { ...(object(prior) ? prior : {}), ...value };
     } else {
-      validate(value, shape);
       // Birth years are told a person at a time: a later answer keeps the years it does not name.
-      if (a.key === 'household.birthYears') {
+      if (a.key === 'household.birthYears' && object(value)) {
         const prior = parseJson(db.prepare('SELECT value FROM facts WHERE key = ?').get(a.key)?.value, {});
         value = { ...(object(prior) ? prior : {}), ...value };
       }
+      validate(value, shape);
     }
     if (a.key === 'business.salaryRange' && value.min > value.max) fail();
     // A birth year in the future is a typo, not an answer.

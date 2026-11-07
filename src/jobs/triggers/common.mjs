@@ -14,6 +14,9 @@ import { VIRGINIA_PLAN_QUESTION, activeInference } from '../../shared/va529-plan
 // can never carry markup or a scenario token.
 export const dataText = v => esc(v).replace(/\{/g, '&#123;').replace(/\}/g, '&#125;');
 
+// Recs whose title and summary list their items even when every item is a question on the card.
+export const LISTED_RECS = Object.freeze(new Set(['missing-data']));
+
 export const isTrue = fact => ({ fact, op: 'eq', value: true });
 export const absentOrFalse = fact => ({ any: [{ not: { fact, op: 'exists' } }, { fact, op: 'eq', value: false }] });
 export const BUSINESS = { any: [isTrue('income.sCorp'), isTrue('income.selfEmployed'), isTrue('income.partnership')] };

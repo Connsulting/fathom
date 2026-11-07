@@ -16,9 +16,11 @@ import * as recAnswers from '../web/horizon/screens/rec-answers.js';
 import * as recBlocker from '../web/horizon/screens/rec-blocker.js';
 import { planRun } from './helpers/plan.mjs';
 import { buildScenario } from '../src/scenario/build.mjs';
+import { loadPlanningData } from '../src/jobs/planner/data.mjs';
 import { scratch, addFact, accountIdByMask, recRow, MASKS } from './helpers/real-store.mjs';
 
 const NOW = '2026-11-05';
+const planFresh = (db, clock) => loadPlanningData(db, clock).freshness;
 const S = scratch('fathom-rec-questions-');
 after(() => S.cleanup());
 
@@ -107,7 +109,9 @@ test('birth years give every age from one fact', () => {
   assert.equal(ageAtYearEnd({}, 'owner', 2026), null);
   assert.equal(ageAtYearEnd(null, 'owner', 2026), null);
   assert.equal(accountOwnerAge(years, 'owner', 2026), 76);
-  assert.equal(accountOwnerAge(years, null, 2026), 43, 'an account with no known person uses the youngest adult');
+  assert.equal(accountOwnerAge(years, null, 2026, { married: true }), 43, 'an account with no known person uses the youngest adult');
+  assert.equal(accountOwnerAge({ owner: 1950 }, null, 2026, { married: true }), null, 'an unknown spouse year leaves the age unknown, never the older owner age');
+  assert.equal(accountOwnerAge({ owner: 1950 }, null, 2026), 76, 'a household with no spouse has one adult');
   assert.equal(accountOwnerAge({ spouse: 1950 }, 'owner', 2026), null);
 });
 
@@ -118,7 +122,11 @@ test('birth years are asked once as owner and spouse, and the answerer validates
   const db = await S.store();
   const replan = async () => {};
   await answerFacts(db, [{ key: 'household.birthYears', value: { owner: 1981, spouse: 1983, dependents: [2018, 2021] } }], { now: '2026-11-05T00:00:00.000Z', replan });
-  for (const bad of [{ owner: 1850 }, { owner: 3000 }, { owner: 1981.5 }, { spouse: 1983 }, { owner: 1981, typo: 1 }, { owner: 1981, dependents: [1] }]) {
+  await answerFacts(db, [{ key: 'household.birthYears', value: { spouse: 1985 } }], { now: '2026-11-05T00:00:00.000Z', replan });
+  assert.deepEqual(JSON.parse(db.prepare("SELECT value FROM facts WHERE key = 'household.birthYears'").get().value), { owner: 1981, spouse: 1985, dependents: [2018, 2021] }, 'a later answer keeps the years it does not name');
+  db.prepare("DELETE FROM facts WHERE key = 'household.birthYears'").run();
+  await assert.rejects(answerFacts(db, [{ key: 'household.birthYears', value: { spouse: 1983 } }], { now: '2026-11-05T00:00:00.000Z', replan }), /answer type/i);
+  for (const bad of [{ owner: 1850 }, { owner: 3000 }, { owner: 1981.5 }, { owner: 1981, typo: 1 }, { owner: 1981, dependents: [1] }]) {
     await assert.rejects(answerFacts(db, [{ key: 'household.birthYears', value: bad }], { now: '2026-11-05T00:00:00.000Z', replan }), /answer type/i);
   }
 });
@@ -212,6 +220,8 @@ test('a file source whose accounts SimpleFIN covers is not stale anywhere; a hal
   assert.equal(coveredFileSources(db).size, 0, 'nothing is covered before a mapping');
 
   const sync = db.prepare("INSERT INTO balances (account_id, date, amount, parser) VALUES (?, '2027-05-30', 100, 'simplefin')");
+  assert.equal(connectedAccountIds(db).size, 0);
+  const connection = db.prepare("INSERT INTO simplefin_connection (id, access_blob, connected_at) VALUES (1, 'synthetic', ?)");
   const map = db.prepare("INSERT INTO simplefin_accounts (sf_key, account_id, status, name, created_at) VALUES (?, ?, 'mapped', 'Synthetic', ?)");
   const connect = id => { map.run(`sf-${id}`, id, NOW); sync.run(id); };
 
@@ -222,6 +232,7 @@ test('a file source whose accounts SimpleFIN covers is not stale anywhere; a hal
   for (const { source, account } of owned) bySource.set(source, [...(bySource.get(source) || []), account]);
   const multi = [...bySource].find(([, ids]) => ids.length > 1);
   assert.ok(multi, 'a synthetic file source holds more than one account');
+  connection.run(NOW);
   connect(multi[1][0]);
   assert.equal(coveredFileSources(db).has(multi[0]), false);
   assert.equal(ingestState(db, { clock }).sources.find(x => x.id === multi[0]).state, 'stale', 'a half covered source is still stale');
@@ -231,6 +242,14 @@ test('a file source whose accounts SimpleFIN covers is not stale anywhere; a hal
   assert.ok(covered.has(multi[0]));
   const state = ingestState(db, { clock });
   for (const s of state.sources.filter(x => covered.has(x.id))) assert.equal(s.state, 'covered');
+  // Planner freshness (missing-data) agrees: the household transaction log is current through the sync.
+  assert.equal(planFresh(db, clock).find(f => f.id === 'transactions').state, 'current');
+  // A disconnected bridge covers nothing, though its mappings stay.
+  db.prepare('DELETE FROM simplefin_connection').run();
+  assert.equal(coveredFileSources(db).size, 0);
+  assert.equal(ingestState(db, { clock }).sources.filter(x => x.state === 'covered').length, 0);
+  assert.equal(planFresh(db, clock).find(f => f.id === 'transactions').state, 'stale');
+  connection.run(NOW);
   assert.deepEqual(state.sources.filter(x => x.state === 'stale' && ['bank_csv', 'card_csv', 'aggregator_csv', 'balances', 'brokerage_positions', 'statement'].includes(x.kind)), []);
   assert.deepEqual(cashStale(state), [], 'the Cash card and the invest note carry no stale file notes once SimpleFIN covers the accounts');
 });
@@ -245,4 +264,22 @@ test('parsed notes can supply birth years, and nothing else is read as one', asy
   assert.deepEqual(fact('{"owner": 1981}').value, { owner: 1981 });
   assert.equal(fact('spouse 1983'), undefined, 'no owner year, no fact');
   assert.equal(fact('owner 1650'), undefined, 'a year before 1900 is not a birth year');
+});
+
+test('missing data that is only questions keeps its listed title and summary', async () => {
+  const ctx = baseCtx({ warnings: ['filing_status_assumed'] });
+  const hit = evaluateTriggers(ctx).find(h => h.rec.id === 'missing-data');
+  assert.equal(hit.rec.question.primary, true);
+  assert.equal(hit.rec.title, 'Answer a tax question');
+  assert.match((await writeProse(hit, ctx)).fields.summary, /^Answer a tax question/);
+});
+
+test('saved dependent birth years set the child count, and the planner reads one source for ages', async () => {
+  const db = await S.store();
+  await planRun(db, { now: NOW });
+  const before = JSON.stringify(db.prepare("SELECT key, v FROM figures WHERE key LIKE 'tax.fed.%' ORDER BY key").all());
+  addFact(db, 'household.birthYears', { owner: 1981, spouse: 1983, dependents: [2010, 2012, 2020] });
+  await planRun(db, { now: NOW });
+  const after = JSON.stringify(db.prepare("SELECT key, v FROM figures WHERE key LIKE 'tax.fed.%' ORDER BY key").all());
+  assert.notEqual(after, before, 'three children under 17 change the federal projection');
 });
