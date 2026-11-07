@@ -269,12 +269,15 @@ export function backfillMergedIdentity(db) {
 const isConnected = a => a.mirror === 'connected' || String(a.identity ?? '').startsWith('simplefin:');
 
 // Which of two accounts a manual merge keeps. The connected one is removed so the other takes its
-// feed and rows, the way a detected merge does; between two file accounts the open one stays.
-// Two connected accounts are two feeds and are refused.
+// feed and rows, the way a detected merge does. Two connected accounts are two feeds, and two
+// imported accounts would come back with the next import of the removed one; both are refused.
 export function mergePlan(db, openId, otherId) {
   const open = db.prepare('SELECT * FROM accounts WHERE id=?').get(openId);
   const other = db.prepare('SELECT * FROM accounts WHERE id=?').get(otherId);
   if (isConnected(open) && isConnected(other)) return { keepId: openId, ownId: otherId, refused: 'Both accounts are connected through SimpleFIN, so they cannot be merged.' };
+  // Two imported accounts cannot be merged: the removed one is recreated by the next import of its
+  // file, because imports find accounts by their own identity.
+  if (!isConnected(open) && !isConnected(other)) return { keepId: openId, ownId: otherId, refused: 'Two imported accounts cannot be merged yet, because the next import of the removed one would bring it back. Merge an imported account with its connected copy.' };
   const [keep, own] = isConnected(open) ? [other, open] : [open, other];
   const count = (sql) => db.prepare(sql).get(own.id).n;
   const moves = {

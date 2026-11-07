@@ -229,6 +229,34 @@ test('AC2: a later import asking the same question keeps the edited owner and ki
   assert.equal(row(s.db, fresh).kind, 'business');
 }));
 
+test('AC2: restating a final owner reverts the auto answers that rested on it', () => withStore(async (s, { A, C }) => {
+  const a = plainAccount(s, 'acct-dep-a', { owner: null });
+  const b = plainAccount(s, 'acct-dep-b', { owner: null });
+  const aId = askOwner(C, s.db, a).id;
+  C.answer(s.db, aId, 'owner', { now: NOW });
+  askOwner(C, s.db, a);
+  assert.equal(C.finalReason(s.db, C.getItem(s.db, aId)), 'used_since', 'precondition: the answer is final');
+  const bId = askOwner(C, s.db, b).id;
+  C.recordAutoAnswer(s.db, bId, 'owner', { rule: 'shared_holder', evidence: { text: 'same holder as the first account', basis: [aId], ancestors: [aId] }, now: NOW });
+  assert.equal(row(s.db, b).owner, 'You', 'precondition: the second account took the inferred owner');
+  await A.accountOwner(ctx(s, a, { owner: 'spouse' }));
+  assert.equal(row(s.db, a).owner, 'Your spouse');
+  assert.equal(C.getItem(s.db, bId).status, 'pending', 'the inference that rested on the old answer is undone');
+  assert.equal(row(s.db, b).owner, null);
+}));
+
+test('AC1: a connected account shows its last 4 only when the bridge is sure of it', () => withStore(async (s, m) => {
+  const own = await connectedAccount(s, m, { sfKey: 'synthetic-unsure', mask: '5432', name: 'Checking' });
+  const { accountNaming } = await src('src/accounts/naming.mjs');
+  const { accountLabel } = await src('src/shared/account-label.mjs');
+  const snap = (patch) => s.db.prepare('UPDATE simplefin_snapshots SET snapshot = ? WHERE sf_key = ?')
+    .run(JSON.stringify({ inst: INST, name: 'Checking', mask: '5432', ...patch }), 'synthetic-unsure');
+  snap({ maskSure: false });
+  assert.doesNotMatch(accountLabel(accountNaming(s.db).byId.get(own)), /ending/);
+  snap({ maskSure: true });
+  assert.match(accountLabel(accountNaming(s.db).byId.get(own)), /ending 5432$/);
+}));
+
 test('AC2: undo restores an answered owner, including one that was final', () => withStore(async (s, { A, C }) => {
   const id = plainAccount(s, 'acct-undo-a', { owner: null });
   const itemId = askOwner(C, s.db, id).id;
@@ -348,9 +376,13 @@ test('AC3: merge candidates list every other account with what a merge would kee
   for (const c of out.items) {
     for (const k of ['id', 'label', 'inst', 'kind', 'mask', 'lastDataDate', 'mirror', 'plan']) assert.ok(Object.hasOwn(c, k), `candidate has ${k}`);
     assert.equal(typeof c.label, 'string');
+    if (c.refused != null) {
+      assert.equal(typeof c.refused, 'string');
+      assert.equal(c.mirror === 'connected', row(s.db, file).mirror === 'connected', 'only a pair of two connected or two imported accounts is refused');
+      continue;
+    }
     for (const k of ['keepId', 'keepLabel', 'ownId', 'ownLabel', 'moves']) assert.ok(Object.hasOwn(c.plan, k), `plan has ${k}`);
     for (const k of ['transactions', 'balances', 'positions', 'sources']) assert.equal(typeof c.plan.moves[k], 'number', `moves.${k} is a count`);
-    assert.equal(c.refused == null, true, 'only two connected accounts are refused');
   }
   const c = out.items.find((x) => x.id === own);
   assert.equal(c.mirror, 'connected');
@@ -364,8 +396,7 @@ test('AC3: merge candidates list every other account with what a merge would kee
   assert.equal(c.plan.moves.balances, s.db.prepare('SELECT count(*) AS n FROM balances WHERE account_id = ?').get(own).n);
   assert.equal(c.plan.moves.positions, 0);
   const f = out.items.find((x) => x.id === other);
-  assert.equal(f.plan.keepId, file, 'two file accounts: the open account survives');
-  assert.equal(f.plan.ownId, other);
+  assert.equal(typeof f.refused, 'string', 'two imported accounts are listed as refused');
 
   const fromConnected = await m.A.accountMergeCandidates(ctx(s, own));
   const back = fromConnected.items.find((x) => x.id === file);
@@ -430,22 +461,15 @@ for (const from of ['file', 'connected']) {
   }));
 }
 
-test('AC3: two file accounts merge into the open account and it stays manual', () => withStore(async (s, m) => {
-  for (const pick of [0, 1]) {
-    const a = await fileAccount(s, m.P, `Spending ${pick} alpha`);
-    const b = await fileAccount(s, m.P, `Spending ${pick} beta`, { amount: '40.00' });
-    const [open, other] = pick === 0 ? [a, b] : [b, a];
-    const otherTx = s.db.prepare('SELECT count(*) AS n FROM transactions WHERE account_id = ?').get(other).n;
-    const keptTx = s.db.prepare('SELECT count(*) AS n FROM transactions WHERE account_id = ?').get(open).n;
-    const before = snapshot(s.db);
-    const res = await m.A.accountMerge(ctx(s, open, { withId: other }));
-    assert.equal(res.survivorId, open, 'the account whose dialog is open survives');
-    assert.equal(row(s.db, other), undefined);
-    assert.equal(row(s.db, open).mirror, 'manual', 'no connected account was merged in');
-    assert.equal(s.db.prepare('SELECT count(*) AS n FROM transactions WHERE account_id = ?').get(open).n, keptTx + otherTx);
-    m.C.reopenItem(s.db, res.itemId, { now: NOW });
-    assert.deepEqual(snapshot(s.db), before);
-  }
+// Imports find an account by its own identity, so a removed imported account would come back with
+// its next file; two imported accounts are refused instead of merged.
+test('AC3: two imported accounts are refused and nothing changes', () => withStore(async (s, m) => {
+  const a = await fileAccount(s, m.P, 'Spending alpha');
+  const b = await fileAccount(s, m.P, 'Spending beta', { amount: '40.00' });
+  const before = snapshot(s.db);
+  assert.equal(await status(() => m.A.accountMerge(ctx(s, a, { withId: b }))), 409);
+  assert.equal(await status(() => m.A.accountMerge(ctx(s, b, { withId: a }))), 409);
+  assert.deepEqual(snapshot(s.db), before);
 }));
 
 /* ---------- AC3: identity carried over a merge, and the backfill for older merges ---------- */
