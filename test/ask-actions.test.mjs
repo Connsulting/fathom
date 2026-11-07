@@ -173,3 +173,48 @@ test('a thrown answer after a committed write keeps a receipt-only recommendatio
   assert.equal(scenario.live.threads[0].recId, 'new-child');
   assert.equal(scenario.live.conversations[scenario.live.threads[0].key][0].provenance.actions[0].after, factArgs.value);
 });
+
+test('fact evidence accepts explicit yes/no and the shared choice labels', async () => {
+  const db = await s.store();
+  for (const [key, value, evidence] of [
+    ['retirement.planOffersRoth', true, 'Yes, our plan offers Roth deferrals'],
+    ['retirement.planOffersRoth', false, 'No, our plan does not offer Roth deferrals'],
+    ['household.filingStatus', 'mfj', 'We file married filing jointly'],
+    ['benefits.hsaCoverage', 'family', 'Family coverage'],
+  ]) {
+    db.prepare('DELETE FROM facts WHERE key = ?').run(key);
+    const ctx = { ...context(db), ownerText: evidence };
+    const out = await callTool('record_household_fact', { key, value, evidence }, ctx);
+    assert.ok(out.receipt);
+    assert.equal(getFacts(db)[key], value);
+  }
+  db.prepare('DELETE FROM facts WHERE key = ?').run('retirement.planOffersRoth');
+  await assert.rejects(callTool('record_household_fact', { key: 'retirement.planOffersRoth', value: true, evidence: 'No, our plan does not offer Roth deferrals' },
+    { ...context(db), ownerText: 'No, our plan does not offer Roth deferrals' }), /stated/);
+});
+
+test('a fact action replans with the same locked engine after the model round releases it', { timeout: 30000 }, async () => {
+  const db = await s.store();
+  addFact(db, 'household.expectingChild', true);
+  await planRun(db);
+  let proseCalls = 0;
+  const core = createEngine({ mode: 'fake' });
+  const engine = { mode: 'live', isOn: () => true, call(request) {
+    let fake;
+    if (request.purpose === 'job') {
+      if (request.system.includes('rewrite one recommendation')) proseCalls++;
+      let input = {};
+      try { input = JSON.parse(request.messages[0].content); } catch { /* non-JSON job prompt */ }
+      fake = [{ text: JSON.stringify(input.draft || {}) }];
+    } else if (request.purpose === 'title') fake = [{ text: 'Expected date' }];
+    else fake = [{ toolCalls: [{ name: 'record_household_fact', args: factArgs }] }, { text: 'The expected date is saved.' }];
+    return core.call({ ...request, fake });
+  } };
+  const out = await threadCreate({ db, config: {}, identity: { id: 'person-a' },
+    body: { recId: 'new-child', text: words }, answerer: createLiveAnswerer({ engine }),
+    scheduler: { runNow: () => planRun(db, { engine }) } });
+  assert.ok(proseCalls > 0, 'planning rewrote prose through the very same engine lock');
+  assert.equal(getFacts(db)[factArgs.key], factArgs.value);
+  assert.equal(out.scenario.recs.find(r => r.id === 'new-child').window.close, factArgs.value);
+  assert.equal(out.message.provenance.actions[0].planningPending, false);
+});
