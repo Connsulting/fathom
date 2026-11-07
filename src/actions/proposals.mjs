@@ -3,9 +3,10 @@
 // on the reply as provenance.pendingAction { tool, operation, args, scopes, basis }; a typed
 // explicit yes or the Confirm control runs it through the registry with no model call.
 //
-// basis is a sha256 hex digest of the rows the operation depends on: its target row (the `id` or
-// `key` argument) or, without one, the whole target table, plus the facts table. A changed basis
-// makes the proposal stale.
+// basis is a sha256 hex digest of the rows the operation and its sources depend on: its target row
+// (the `id` or `key` argument) or, without one, the whole target table; for goals always the whole
+// goals table (a value may come from another goal's note); plus every goal, every fact and every
+// figure value. A changed basis makes the proposal stale.
 
 import { createHash } from 'node:crypto';
 import { parseJson as parse, tx } from '../store/db.mjs';
@@ -17,7 +18,19 @@ import { requireActor } from './receipts.mjs';
 
 // The reply rule lives in evidence.mjs (confirmedProposal uses it); the tool catalog imports
 // evidence.mjs, so it cannot import this module without a cycle through the registry.
-export { isExplicitYes } from './evidence.mjs';
+import { isExplicitYes } from './evidence.mjs';
+export { isExplicitYes };
+
+// A typed reply that only confirms: an explicit yes followed by nothing but courtesy words. Any
+// other content ("yeah, make it $5,000", "yes, for March") goes to the model instead.
+const COURTESY = /^(?:please|thanks|thank you|do it|go ahead|go for it|sounds good|that works|works for me|perfect|great|good|save it|create it|add it|confirm(?:ed)?|that'?s right|right|and)\b\s*/i;
+export function isPlainConfirmation(text) {
+  const t = String(text ?? '').trim();
+  if (!isExplicitYes(t) || /\d/.test(t)) return false;
+  let rest = t.replace(/^(?:yes|yeah|yep|yup|sure|ok(?:ay)?|do it|go ahead|absolutely|correct|confirmed)\b/i, '').replace(/[,.!;]+/g, ' ').trim();
+  for (let m = COURTESY.exec(rest); rest && m && m[0]; m = COURTESY.exec(rest)) rest = rest.slice(m[0].length);
+  return !rest;
+}
 
 // The write scopes a proposal may use: ctx.scopes filtered to write scopes, else all of them.
 export const allowedScopes = scopes => (Array.isArray(scopes) ? WRITE_SCOPES.filter(s => scopes.includes(s)) : [...WRITE_SCOPES]);
@@ -29,12 +42,16 @@ export function proposalBasis(db, scopes, args = {}) {
   const parts = [];
   for (const scope of scopes) {
     const [table, pk] = TABLES[scope];
+    if (table === 'goals') continue;
     const target = args[pk] ?? args.id ?? args.key;
     parts.push([table, target !== undefined
       ? db.prepare(`SELECT * FROM ${table} WHERE ${pk} = ?`).all(target)
       : db.prepare(`SELECT * FROM ${table} ORDER BY ${pk}`).all()]);
   }
+  // Sources a proposed value may come from: goal notes and targets, facts and stored figures.
+  parts.push(['goals', db.prepare('SELECT id, def, origin, archived_at, done_at FROM goals ORDER BY id').all()]);
   parts.push(['facts', db.prepare('SELECT * FROM facts ORDER BY key').all()]);
+  parts.push(['figures', db.prepare('SELECT key, v, unavailable_reason FROM figures ORDER BY key').all()]);
   return createHash('sha256').update(JSON.stringify(parts)).digest('hex');
 }
 
@@ -60,7 +77,9 @@ async function propose(tool, args, ctx) {
   const { operation, ...params } = input;
   await op.preflight?.(params, ctx);
   ctx.onProposal({ tool: tool.name, operation, args: params, scopes, basis: proposalBasis(ctx.db, scopes, params) });
-  return { proposed: true, pending: { tool: tool.name, operation, args: params } };
+  // No argument values in the result: a tool result is grounding evidence, and a proposal must
+  // never source its own amounts or dates.
+  return { proposed: true, pending: { tool: tool.name, operation }, note: 'Stored for the owner to confirm. Nothing is saved yet.' };
 }
 
 // Registry tools for Ask: each write tool (not MCP only) takes `propose`. Copies; the registry

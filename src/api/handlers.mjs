@@ -2,7 +2,7 @@ import { writePreference } from '../actions/preferences.mjs';
 import { randomUUID } from 'node:crypto';
 import { requireActor, undoAction, ensureActionConversation, receiptsFor, receiptMessages } from '../actions/receipts.mjs';
 import { writeRec } from '../store/recs.mjs';
-import { latestProposal, claimProposal, markProposal, executeProposal, isExplicitYes } from '../actions/proposals.mjs';
+import { latestProposal, claimProposal, markProposal, executeProposal, isPlainConfirmation } from '../actions/proposals.mjs';
 import { ToolError } from '../tools/errors.mjs';
 import { queueAccountPairs } from '../ingest/account-merge.mjs';
 // API handlers. Each takes { household, db, config, engine, packs, answerer, params, body } and
@@ -503,8 +503,9 @@ export async function ask(ctx) {
   if (thread) openThreadRow(db, key);
   else packRow(db, key.slice(5));
 
-  // A typed explicit yes to the thread's latest, unresolved proposal runs it (no await before the claim).
-  if (thread && !hasQ && isExplicitYes(clean)) {
+  // A typed plain yes (no other content) to the thread's latest, unresolved proposal runs it (no
+  // await before the claim); a yes that changes anything goes to the model.
+  if (thread && !hasQ && isPlainConfirmation(clean)) {
     const proposal = latestProposal(db, key);
     if (proposal) return decideProposal(ctx, key, proposal.id, 'confirm', clean);
   }
