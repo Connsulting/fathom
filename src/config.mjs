@@ -139,6 +139,7 @@ export function loadConfig(env = process.env) {
     platformKeyFile: opt(env.FATHOM_PLATFORM_KEY_FILE),
     mcpSecretFile: opt(env.FATHOM_MCP_SECRET_FILE),
     backupKeyFile: opt(env.FATHOM_BACKUP_KEY_FILE),
+    typesafeKeyFile: opt(env.FATHOM_TYPESAFE_KEY_FILE),
     emailTransport,
     emailFrom,
     emailFromFile,

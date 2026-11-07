@@ -178,7 +178,7 @@ const evidenceText = (e) => (typeof e === 'string' ? e : String((e && e.text) ??
 const cadenceText = (c) => (c && typeof c === 'object' ? String(c.label || '') : String(c || ''));
 
 export function ingestScreens(h) {
-  const { api, shell, section, pageHead, btn, icon, esc, draw, getUi } = h;
+  const { api, shell, section, pageHead, btn, icon, esc, draw, getUi, addBtn } = h;
   // Module state survives scenario re-renders (the design redraws the whole page on every change).
   const st = { busy: 0, results: null, retrying: {}, open: {}, rowOpen: {}, undoing: {}, decidedFinal: {}, deck: freshDeck(), origin: null };
   const ing = () => api.ingest();
@@ -578,7 +578,7 @@ export function ingestScreens(h) {
       ? `<p class="h-cf-final" role="status">${esc(fin)}</p>`
       : (dk.answers[id] != null && !busy ? '<p class="h-deck-state">Answered. Pick another option to change it.</p>' : '');
     return `<article class="h-deck-card cur${fin ? ' final' : ''}" data-item="${esc(id)}">
-      <div class="h-cf-k">${esc(KIND[it.kind] || 'Question')}${name ? `<span>${esc(name)}</span>` : ''}</div>
+      <div class="h-cf-k">${esc(KIND[it.kind] || 'Question')}${name ? `<span>${esc(name)}</span>` : ''}${addBtn('confirm', id, KIND[it.kind] || 'Question')}</div>
       <p class="h-cf-q">${esc(it.question)}</p>${detailHtml(it)}${guess}${it.kind === 'transaction_category' && it.context?.merchant ? `<label class="h-cf-sub"><input type="checkbox" data-category-always="${esc(id)}"${dk.categoryAlways?.[id] ? ' checked' : ''}${busy || fin ? ' disabled' : ''}> Always for this merchant</label>` : ''}<div class="h-deck-opts${short ? ' short' : ''}">${opts}</div>${state}</article>`;
   }
 
@@ -602,7 +602,7 @@ export function ingestScreens(h) {
     const others = arr(d.sameName).length;
     const flag = others ? `<span class="h-cf-flag">Same name as ${plural(others, 'other account')}</span>` : '';
     const where = v ? [v.institution ? esc(v.institution) : '', v.mask ? `ending ${esc(v.mask)}` : ''].filter(Boolean).join(', ') : '';
-    const acct = `<td data-col="account"><b>${esc(v ? (v.label || v.name || 'Unnamed account') : it.question)}</b>${flag}${where ? `<span>${where}</span>` : ''}</td>`;
+    const acct = `<td data-col="account"><b>${esc(v ? (v.label || v.name || 'Unnamed account') : it.question)}</b>${addBtn('confirm', id, v ? (v.label || v.name || 'Unnamed account') : (KIND[it.kind] || 'Question'))}${flag}${where ? `<span>${where}</span>` : ''}</td>`;
     const holder = `<td data-col="holder" data-l="Holder">${v && v.holder ? esc(v.holder) : '<span class="h-cf-none">Not in the source</span>'}</td>`;
     const bal = `<td data-col="balance" data-l="Latest balance">${(v && balanceHtml(v.balance, true)) || '<span class="h-cf-none">No balance yet</span>'}</td>`;
     const range = `<td data-col="range" data-l="Dates">${(v && esc(rangeText(v.from, v.to))) || '<span class="h-cf-none">No dated rows</span>'}</td>`;
@@ -630,7 +630,7 @@ export function ingestScreens(h) {
     const foot = `<div class="h-cf-gfoot"><p>${note}</p>${accept}</div>`;
     const state = finals.map((f) => `<p class="h-cf-final" role="status">${esc(f)}</p>`).join('');
     return `<article class="h-deck-card cur group" data-group="${esc(kind)}">
-      <div class="h-cf-k">${esc(KIND[kind] || 'Questions')}<span>${plural(ids.length, 'account')}</span></div>
+      <div class="h-cf-k">${esc(KIND[kind] || 'Questions')}<span>${plural(ids.length, 'account')}</span>${addBtn('confirm', `group:${kind}`, KIND[kind] || 'Questions')}</div>
       <p class="h-cf-q">${esc(GROUP_Q[kind] || 'Answer each row.')}</p>
       <table class="h-cf-group">${head}<tbody>${rows}</tbody></table>${foot}${state}</article>`;
   }

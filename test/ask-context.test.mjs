@@ -1,0 +1,302 @@
+// Ask everywhere, the pure context module (web/horizon/screens/ask-context.js): the page chip
+// descriptor for every route, the wire payload (kind and id only), the one chip markup and the
+// shared "+" button. Synthetic data only; no DOM.
+
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { KINDS, MAX_REFS, routeContext, refKey, chipPayload, chipHtml, addButtonHtml } from '../web/horizon/screens/ask-context.js';
+
+const ALL_KINDS = ['account', 'transaction', 'rec', 'step', 'goal', 'figure', 'pnl', 'spending', 'confirm', 'money', 'pack', 'page'];
+
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+
+// Synthetic token resolver: names only. A figure token would never reach a label.
+const txt = (s) => String(s ?? '').replace(/\{n:spouse\}/g, 'Partner').replace(/\{n:biz\}/g, 'Studio LLC');
+
+// Figure values that sit beside the names and titles in the synthetic data; no label may carry them.
+const FIG_VALUES = ['48213', '48,213', '7391', '7,391', '615.27'];
+
+const ctx = {
+  txt,
+  accounts: [
+    { id: 'acc_plain', name: 'Studio checking', displayName: null, imported: true, balance: 48213.55 },
+    { id: 'acc_token', name: '{n:spouse} savings', displayName: null, imported: false, balance: 7391 },
+    { id: 'acc_renamed', name: 'Renamed {n:spouse} fund', displayName: 'Renamed {n:spouse} fund', imported: false, balance: 615.27 },
+    { id: 'acc_import', name: 'Upload {n:biz} card', displayName: null, imported: true, balance: 48213 },
+  ],
+  recs: [
+    { id: 'rec_open', title: 'Elect {n:spouse} benefits', status: 'proposed', value: [{ text: 'About 7,391 saved' }] },
+    { id: 'rec_hidden', title: 'Hidden synthetic item', status: 'hidden' },
+  ],
+  packs: [{ id: 'pk_one', name: '{n:spouse} pack', size: 48213 }],
+  confirm: null,
+};
+
+const route = (name, params) => (params ? { name, params } : { name });
+const desc = (name, kind, id, label) => ({ route: name, kind, id, title: label.split(' > ').at(-1), label });
+
+/* ---------- constants ---------- */
+
+test('KINDS is the frozen list of reference kinds, pnl and spending included', () => {
+  assert.deepEqual([...KINDS], ALL_KINDS);
+  assert.ok(Object.isFrozen(KINDS));
+  assert.ok(KINDS.includes('pnl') && KINDS.includes('spending'));
+  assert.equal(MAX_REFS, 8);
+});
+
+test('refKey joins kind and id with a colon', () => {
+  assert.equal(refKey({ kind: 'rec', id: 'rec_open' }), 'rec:rec_open');
+  assert.equal(refKey({ kind: 'confirm', id: 'group:account_owner' }), 'confirm:group:account_owner');
+  assert.equal(refKey({ kind: 'step', id: 'rec_open:2' }), 'step:rec_open:2');
+});
+
+/* ---------- routeContext: the table ---------- */
+
+test('routeContext: page routes under Home, Plan, Ask, Money and Settings', () => {
+  const rows = [
+    [route('home'), desc('home', 'page', 'home', 'Home')],
+    [route('pace'), desc('pace', 'page', 'pace', 'Home > Pace')],
+    [route('brief'), desc('brief', 'page', 'brief', 'Home > Brief')],
+    [route('goals'), desc('goals', 'page', 'goals', 'Home > Goals')],
+    [route('plan'), desc('plan', 'page', 'plan', 'Plan')],
+    [route('yearend'), desc('yearend', 'page', 'yearend', 'Plan > Year end')],
+    [route('advisor'), desc('advisor', 'page', 'advisor', 'Plan > Advisor')],
+    [route('wargame'), desc('wargame', 'page', 'wargame', 'Ask > What-if')],
+    [route('wargame', { id: 'salary' }), desc('wargame', 'page', 'wargame', 'Ask > What-if')],
+    [route('money'), desc('money', 'money', 'overview', 'Money > Overview')],
+    [route('accounts'), desc('accounts', 'money', 'accounts', 'Money > Accounts')],
+    [route('add'), desc('add', 'page', 'add', 'Money > Files')],
+    [route('settings'), desc('settings', 'page', 'settings', 'Settings')],
+    [route('connect'), desc('connect', 'page', 'connect', 'Settings > Connect')],
+    [route('engine'), desc('engine', 'page', 'engine', 'Settings > Engine')],
+    [route('email'), desc('email', 'page', 'email', 'Settings > Email')],
+    [route('onboarding'), desc('onboarding', 'page', 'onboarding', 'Setup')],
+  ];
+  for (const [r, want] of rows) {
+    assert.deepEqual(routeContext(r, ctx), want, `${r.name} ${JSON.stringify(r.params || {})}`);
+  }
+});
+
+test('routeContext: the Ask page has no page chip', () => {
+  assert.equal(routeContext(route('ask'), ctx), null);
+  assert.equal(routeContext(route('ask', { id: '0123456789ab' }), ctx), null);
+});
+
+test('routeContext: an unknown route falls back to Home', () => {
+  assert.deepEqual(routeContext(route('nowhere'), ctx), desc('nowhere', 'page', 'home', 'Home'));
+});
+
+test('routeContext: an account dialog names the account by the account.js display rule', () => {
+  // Not imported and no display name: tokens resolve through txt.
+  assert.deepEqual(routeContext(route('account', { id: 'acc_token' }), ctx), desc('account', 'account', 'acc_token', 'Money > Partner savings'));
+  // A display name is shown as is, never token-resolved.
+  assert.deepEqual(routeContext(route('account', { id: 'acc_renamed' }), ctx),
+    desc('account', 'account', 'acc_renamed', 'Money > Renamed {n:spouse} fund'));
+  // Imported text is verbatim.
+  assert.deepEqual(routeContext(route('account', { id: 'acc_import' }), ctx), desc('account', 'account', 'acc_import', 'Money > Upload {n:biz} card'));
+  assert.deepEqual(routeContext(route('account', { id: 'acc_plain' }), ctx), desc('account', 'account', 'acc_plain', 'Money > Studio checking'));
+});
+
+test('routeContext: an unknown account falls back to Money > Accounts', () => {
+  assert.deepEqual(routeContext(route('account', { id: 'acc_missing' }), ctx), desc('account', 'money', 'accounts', 'Money > Accounts'));
+  assert.deepEqual(routeContext(route('account'), ctx), desc('account', 'money', 'accounts', 'Money > Accounts'));
+});
+
+test('routeContext: a visible rec names its title as plain text; hidden or missing falls back to Plan', () => {
+  assert.deepEqual(routeContext(route('rec', { id: 'rec_open' }), ctx), desc('rec', 'rec', 'rec_open', 'Plan > Elect Partner benefits'));
+  assert.deepEqual(routeContext(route('rec', { id: 'rec_hidden' }), ctx), desc('rec', 'page', 'plan', 'Plan'));
+  assert.deepEqual(routeContext(route('rec', { id: 'rec_missing' }), ctx), desc('rec', 'page', 'plan', 'Plan'));
+});
+
+test('routeContext: Confirm with and without a current card, single and grouped', () => {
+  assert.deepEqual(routeContext(route('confirm'), ctx), desc('confirm', 'page', 'confirm', 'Home > Confirm'));
+  assert.deepEqual(routeContext(route('confirm'), { ...ctx, confirm: { id: '17', label: 'Account owner' } }),
+    desc('confirm', 'confirm', '17', 'Confirm > Account owner'));
+  assert.deepEqual(routeContext(route('confirm'), { ...ctx, confirm: { id: 'group:account_owner', label: 'Account owners' } }),
+    desc('confirm', 'confirm', 'group:account_owner', 'Confirm > Account owners'));
+});
+
+test('routeContext: packs with a known id name the pack; no id or an unknown id is the Packs page', () => {
+  assert.deepEqual(routeContext(route('packs', { id: 'pk_one' }), ctx), desc('packs', 'pack', 'pk_one', 'Ask > Partner pack'));
+  assert.deepEqual(routeContext(route('packs'), ctx), desc('packs', 'page', 'packs', 'Ask > Packs'));
+  assert.deepEqual(routeContext(route('packs', { id: 'pk_missing' }), ctx), desc('packs', 'page', 'packs', 'Ask > Packs'));
+});
+
+test('routeContext: missing lists and txt default to empty lists and identity', () => {
+  assert.deepEqual(routeContext(route('account', { id: 'acc_token' }), {}), desc('account', 'money', 'accounts', 'Money > Accounts'));
+  assert.deepEqual(routeContext(route('rec', { id: 'rec_open' }), {}), desc('rec', 'page', 'plan', 'Plan'));
+  assert.deepEqual(routeContext(route('packs', { id: 'pk_one' }), {}), desc('packs', 'page', 'packs', 'Ask > Packs'));
+  const noTxt = { ...ctx, txt: undefined };
+  assert.deepEqual(routeContext(route('account', { id: 'acc_token' }), noTxt), desc('account', 'account', 'acc_token', 'Money > {n:spouse} savings'));
+});
+
+test('routeContext: labels never carry a figure value and title is the last label segment', () => {
+  const routes = [
+    route('home'), route('pace'), route('brief'), route('goals'), route('confirm'), route('plan'), route('yearend'),
+    route('advisor'), route('wargame'), route('packs'), route('packs', { id: 'pk_one' }), route('money'), route('accounts'),
+    route('add'), route('settings'), route('connect'), route('engine'), route('email'), route('onboarding'),
+    route('rec', { id: 'rec_open' }), route('rec', { id: 'rec_hidden' }),
+    ...ctx.accounts.map((a) => route('account', { id: a.id })),
+  ];
+  for (const r of routes) {
+    const d = routeContext(r, ctx);
+    assert.ok(d, `${r.name} has a descriptor`);
+    assert.equal(typeof d.label, 'string');
+    assert.ok(!d.label.startsWith('On:'), 'label is the chip text after "On: "');
+    for (const v of FIG_VALUES) assert.ok(!d.label.includes(v), `${r.name}: label ${d.label} carries ${v}`);
+    assert.equal(d.title, d.label.split(' > ').at(-1));
+    assert.ok(KINDS.includes(d.kind));
+  }
+});
+
+/* ---------- chipPayload: the only thing on the wire ---------- */
+
+test('chipPayload keeps kind and id only and drops every other field', () => {
+  const out = chipPayload([{ kind: 'rec', id: 'rec_open', label: 'Plan > Elect Partner benefits', route: 'rec', title: 'x', v: 7391 }]);
+  assert.deepEqual(out, [{ kind: 'rec', id: 'rec_open' }]);
+  assert.deepEqual(Object.keys(out[0]).sort(), ['id', 'kind']);
+});
+
+test('chipPayload dedupes by refKey keeping the first', () => {
+  const out = chipPayload([
+    { kind: 'account', id: 'acc_plain', label: 'First' },
+    { kind: 'rec', id: 'acc_plain', label: 'Same id, other kind' },
+    { kind: 'account', id: 'acc_plain', label: 'Second' },
+  ]);
+  assert.deepEqual(out, [{ kind: 'account', id: 'acc_plain' }, { kind: 'rec', id: 'acc_plain' }]);
+});
+
+test('chipPayload drops bad kinds, empty or long or non-string ids, and non-objects', () => {
+  const long = 'x'.repeat(201);
+  const edge = 'y'.repeat(200);
+  const out = chipPayload([
+    null, undefined, 'account:acc_plain', 42, [], true,
+    { kind: 'bogus', id: 'a' },
+    { kind: 'Account', id: 'a' },
+    { kind: '', id: 'a' },
+    { id: 'a' },
+    { kind: 'account' },
+    { kind: 'account', id: '' },
+    { kind: 'account', id: long },
+    { kind: 'account', id: 5 },
+    { kind: 'account', id: null },
+    { kind: 'account', id: edge },
+    { kind: 'pnl', id: 'entity:studio' },
+    { kind: 'spending', id: 'category:travel' },
+  ]);
+  assert.deepEqual(out, [{ kind: 'account', id: edge }, { kind: 'pnl', id: 'entity:studio' }, { kind: 'spending', id: 'category:travel' }]);
+});
+
+test('chipPayload caps at MAX_REFS, counting only kept unique entries', () => {
+  const many = Array.from({ length: 12 }, (_, i) => ({ kind: 'transaction', id: `t${i}`, label: `Row ${i}` }));
+  const out = chipPayload(many);
+  assert.equal(out.length, MAX_REFS);
+  assert.deepEqual(out, many.slice(0, 8).map(({ kind, id }) => ({ kind, id })));
+  const mixed = [many[0], { kind: 'bogus', id: 'z' }, many[0], null, ...many.slice(1)];
+  assert.deepEqual(chipPayload(mixed), many.slice(0, 8).map(({ kind, id }) => ({ kind, id })));
+});
+
+test('chipPayload of a non-array is empty', () => {
+  for (const v of [undefined, null, {}, 'account:acc_plain', 3, { kind: 'account', id: 'a' }]) {
+    assert.deepEqual(chipPayload(v), [], JSON.stringify(v));
+  }
+  assert.deepEqual(chipPayload([]), []);
+});
+
+test('every kind survives chipPayload, pnl and spending included', () => {
+  const list = ALL_KINDS.slice(0, 8).map((kind) => ({ kind, id: `${kind}_1` }));
+  assert.deepEqual(chipPayload(list), list);
+  const rest = ALL_KINDS.slice(8).map((kind) => ({ kind, id: `${kind}_1` }));
+  assert.deepEqual(chipPayload(rest), rest);
+});
+
+/* ---------- chipHtml ---------- */
+
+const NASTY = 'Tom & "Jerry" <b>bold</b> \'q\'';
+const NASTY_ESC = esc(NASTY);
+
+test('chipHtml renders one span chip with an escaped label and refKey', () => {
+  const html = chipHtml({ kind: 'account', id: 'a"<1', label: NASTY }, { esc, removable: false });
+  assert.match(html, /^<span class="h-ctx"/);
+  assert.ok(html.endsWith('</span>'), html);
+  assert.ok(html.includes(`data-ref="${esc('account:a"<1')}"`), html);
+  assert.match(html, /<span class="h-ctx-l">/);
+  assert.ok(html.includes(`On: ${NASTY_ESC}`), html);
+  assert.ok(!html.includes('<b>'), 'label markup is escaped');
+  assert.ok(!html.includes('a"<1'), 'raw id never appears');
+  assert.ok(!html.includes('h-ctx-x'), 'no remove button when not removable');
+  assert.ok(!html.includes('data-ctx-remove'), html);
+  assert.ok(!html.includes('data-page'), html);
+  assert.ok(!/<a\b/.test(html), 'no link without href');
+});
+
+test('chipHtml adds the remove button only when removable, with its aria-label', () => {
+  const html = chipHtml({ kind: 'rec', id: 'r"1', label: NASTY }, { esc, removable: true });
+  const btn = /<button\b[^>]*>/.exec(html);
+  assert.ok(btn, html);
+  assert.ok(btn[0].includes('type="button"'), btn[0]);
+  assert.match(btn[0], /class="h-ctx-x"/);
+  assert.ok(btn[0].includes(`data-ctx-remove="${esc('rec:r"1')}"`), btn[0]);
+  assert.ok(btn[0].includes(`aria-label="Remove ${NASTY_ESC} from context"`), btn[0]);
+  assert.equal((html.match(/<button\b/g) || []).length, 1);
+  assert.ok(!html.includes('<b>'));
+});
+
+test('chipHtml marks the page chip with data-page', () => {
+  const html = chipHtml({ kind: 'money', id: 'overview', label: 'Money > Overview' }, { esc, removable: true, page: true });
+  const open = /^<span\b[^>]*>/.exec(html)[0];
+  assert.ok(open.includes('data-page="1"'), open);
+  assert.ok(open.includes('data-ref="money:overview"'), open);
+  assert.ok(html.includes('On: Money &gt; Overview'), html);
+});
+
+test('chipHtml renders the label as a link when href is given, passing data-go, data-id and the caller class', () => {
+  const html = chipHtml({ kind: 'rec', id: 'rec_open', label: 'Elect & enroll' },
+    { esc, removable: false, href: '#/rec/rec_open', go: 'rec', id: 'rec_open', cls: 'h-askx-ctx' });
+  const a = /<a\b[^>]*>/.exec(html);
+  assert.ok(a, html);
+  assert.match(a[0], /class="[^"]*\bh-ctx-l\b[^"]*"/);
+  assert.match(a[0], /class="[^"]*\bh-askx-ctx\b[^"]*"/);
+  assert.ok(a[0].includes('href="#/rec/rec_open"'), a[0]);
+  assert.ok(a[0].includes('data-go="rec"'), a[0]);
+  assert.ok(a[0].includes('data-id="rec_open"'), a[0]);
+  assert.ok(html.includes('Elect &amp; enroll'), html);
+  assert.ok(html.includes('</a>'), html);
+  assert.ok(!html.includes('<span class="h-ctx-l">'), 'the label is the link, not a span');
+  assert.ok(!html.includes('h-ctx-x'), html);
+});
+
+/* ---------- addButtonHtml ---------- */
+
+test('addButtonHtml is one escaped button carrying kind, id and label', () => {
+  const html = addButtonHtml('account', 'a"<1', NASTY, esc);
+  const open = /^<button\b[^>]*>/.exec(html);
+  assert.ok(open, html);
+  const tag = open[0];
+  assert.ok(tag.includes('type="button"'), tag);
+  assert.match(tag, /class="h-add"/);
+  assert.ok(tag.includes('data-ctx-add="account"'), tag);
+  assert.ok(tag.includes(`data-ctx-id="${esc('a"<1')}"`), tag);
+  assert.ok(tag.includes(`data-ctx-label="${NASTY_ESC}"`), tag);
+  assert.ok(tag.includes(`aria-label="Add ${NASTY_ESC} to chat"`), tag);
+  assert.ok(tag.includes('title="Add to chat"'), tag);
+  assert.match(html, /<svg\b[\s\S]*<\/svg>/);
+  assert.ok(html.endsWith('</button>'), html);
+  assert.ok(!html.includes('<b>'), 'label markup is escaped');
+  assert.equal((html.match(/<button\b/g) || []).length, 1);
+});
+
+test('addButtonHtml works for every kind', () => {
+  for (const kind of ALL_KINDS) {
+    const html = addButtonHtml(kind, `${kind}_1`, 'Synthetic item', esc);
+    assert.ok(html.includes(`data-ctx-add="${kind}"`), kind);
+    assert.ok(html.includes(`data-ctx-id="${kind}_1"`), kind);
+  }
+});
+
+test('routeContext: the P&L route names the entity on screen, else the P&L page', () => {
+  assert.deepEqual(routeContext({ name: 'pnl', params: {} }, { pnl: { id: 'entity:fieldandfern', label: 'Field and Fern' } }),
+    { route: 'pnl', kind: 'pnl', id: 'entity:fieldandfern', title: 'Field and Fern', label: 'Money > Field and Fern' });
+  assert.deepEqual(routeContext({ name: 'pnl', params: {} }, { pnl: null }),
+    { route: 'pnl', kind: 'page', id: 'pnl', title: 'P&L', label: 'Money > P&L' });
+});

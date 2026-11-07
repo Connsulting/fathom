@@ -69,7 +69,7 @@ test('AC1 first answering layer wins and memory never learns from a guess', () =
   assert.equal(resolve(transactions).get(2).layer, 'merchant');
   assert.equal(resolve(transactions).get(2).bucket, 'business');
   assert.equal(resolve([row(1),row(2)], { guesses: [{ transaction_id: 1, category: 'Taxes' }] }).get(2).layer, 'uncategorized');
-  assert.equal(resolve([row(1)], { guesses: [{ transaction_id: 1, category: 'Taxes' }] }).get(1).layer, 'guess');
+  assert.equal(resolve([row(1)], { corrections: [{ transaction_id: 1, category: 'Taxes', bucket:'tax', auto:{text:'Jev guess, 99% confident'} }] }).get(1).layer, 'guess');
 });
 
 test('AC1 normalizes feed merchant descriptions and picks most recently supplied category', () => {
@@ -180,15 +180,11 @@ test('AC2 corrections survive duplicate consolidation and its undo without casca
   assert.equal(resolveCategories(loadCategoryInputs(db)).get(a).bucket,'business');
 });
 
-test('AC1 engine off does nothing; valid category guesses are stored but invalid ids/names are rejected', async t => {
+test('AC1 missing category provider does nothing and old uncalibrated proposals are not applied', async t => {
   const {db}=store(t); account(db); const id=txn(db);
-  assert.equal((await guessCategories(db,{isOn:()=>false})).skipped,'engine_off');
-  let request;
-  const engine={isOn:()=>true,mode:'live',call:async q=>{request=q;return {text:JSON.stringify({categories:[{id,category:'Business'},{id:99999,category:'Taxes'},{id,category:'invented'}]}),model:'synthetic',costUsd:0};}};
-  await guessCategories(db,engine);
-  assert.equal(resolveCategories(loadCategoryInputs(db)).get(id).layer,'guess');
-  assert.equal(resolveCategories(loadCategoryInputs(db)).get(id).bucket,'business');
-  assert.ok(!JSON.stringify(request).includes('always:'));
+  assert.equal((await guessCategories(db,{isOn:()=>false})).skipped,'provider_off');
+  db.prepare("INSERT INTO transaction_category_guesses VALUES (?,'Business','unmeasured',?)").run(id,'2032-01-01');
+  assert.equal(resolveCategories(loadCategoryInputs(db)).get(id).layer,'uncategorized');
 });
 
 test('AC3 only explicit checkbox can produce an always option; engine and best guess reject hidden options', t => {

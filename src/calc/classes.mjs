@@ -40,6 +40,7 @@ export const CATEGORY_CLASSES = Object.freeze({
   HSA: row('savings'),
   'Income Tax': row('taxes'),
   Taxes: row('taxes'),
+  taxes: row('taxes'),
   Business: row('business'),
   payroll: row('business'),
   software: row('business'),

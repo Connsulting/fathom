@@ -273,7 +273,7 @@ function bizTable(p, sel, rangeName) {
     const rows = cats.length
       ? cats.map((c) => {
         const on = open && open.section === section && open.category === c.category;
-        return `<tr><th scope="row"><button type="button" class="pl-cat${on ? ' on' : ''}" data-pl-cat="${esc(c.category)}" data-pl-section="${section}"${on ? ' aria-expanded="true"' : ''}>${esc(c.category)}</button></th><td class="num">${cell(c.months?.[sel])}</td><td class="num">${cell(c.total)}</td>${ly(`<td class="num pl-ly">${cell(pc[c.category])}</td>`)}</tr>`;
+        return `<tr><th scope="row"><button type="button" class="pl-cat${on ? ' on' : ''}" data-pl-cat="${esc(c.category)}" data-pl-section="${section}"${on ? ' aria-expanded="true"' : ''}>${esc(c.category)}</button>${H.addBtn('pnl', `${P.view}|${c.category}`, `P&L > ${c.category}`)}</th><td class="num">${cell(c.months?.[sel])}</td><td class="num">${cell(c.total)}</td>${ly(`<td class="num pl-ly">${cell(pc[c.category])}</td>`)}</tr>`;
       }).join('')
       : `<tr class="pl-empty"><td colspan="${cols}">No ${section} in these months.</td></tr>`;
     const total = `<tr class="pl-t"><th scope="row">Total ${section}</th><td class="num">${cell(g.months?.[sel])}</td><td class="num">${cell(g.total)}</td>${ly(`<td class="num pl-ly">${cell(prior?.[section])}</td>`)}</tr>`;
@@ -350,7 +350,7 @@ function homeTable(s, sel, rangeName) {
   const groups = H.arr(s.buckets).map((b) => {
     const rows = H.arr(b.categories).map((c) => {
       const on = open && open.bucket === b.bucket && open.category === c.category;
-      return `<tr><th scope="row"><button type="button" class="pl-cat${on ? ' on' : ''}" data-pl-cat="${esc(c.category)}" data-pl-bucket="${esc(b.bucket)}"${on ? ' aria-expanded="true"' : ''}>${esc(c.category)}</button>${c.housing ? '<span class="pl-tag">Housing</span>' : ''}</th><td class="num">${cell(c.months?.[sel])}</td><td class="num">${cell(c.total)}</td><td class="num pl-avg">${cell(c.average)}</td></tr>`;
+      return `<tr><th scope="row"><button type="button" class="pl-cat${on ? ' on' : ''}" data-pl-cat="${esc(c.category)}" data-pl-bucket="${esc(b.bucket)}"${on ? ' aria-expanded="true"' : ''}>${esc(c.category)}</button>${c.housing ? '<span class="pl-tag">Housing</span>' : ''}${H.addBtn('spending', c.category, `Spending > ${c.category}`)}</th><td class="num">${cell(c.months?.[sel])}</td><td class="num">${cell(c.total)}</td><td class="num pl-avg">${cell(c.average)}</td></tr>`;
     }).join('');
     return `<tbody><tr class="pl-h"><th scope="rowgroup" colspan="2">${esc(b.label)}</th><td class="num">${cell(b.total)}</td><td class="num pl-avg"></td></tr>${rows}</tbody>`;
   }).join('');
