@@ -609,6 +609,7 @@ function focusInput(host) {
 }
 
 export function newConversation() {
+  if (H.askClear) H.askClear();
   A.side = false;
   A.renaming = null;
   if (onAsk() && !(H.api.route.params && H.api.route.params.id)) H.draw();
@@ -625,7 +626,8 @@ export function newConversation() {
 // composer. Returns false when nothing was sent.
 function sendAsk({ key, recId, text, questionId, draftKey, refocus, host = 'page' }) {
   if (A.pending || !text) return false;
-  const k = key || null;
+  // A panel question after the owner moved to another page starts a new conversation (askBegin).
+  const k = host === 'panel' && H.askBegin && H.askBegin() ? null : (key || null);
   const rid = recId || null;
   const hasQ = questionId != null && questionId !== '';
   // items: the work block's steps and notes; stream: this round's tentative text; open: null

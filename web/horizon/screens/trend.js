@@ -135,6 +135,8 @@ export function render() {
   const { esc, section, figHtml } = H;
   const v = view();
   if (!v) return '';
+  // The range on screen, for the Ask page chip.
+  if (H.pageContext) H.pageContext({ range: S.range });
   const { t } = v;
   const cur = t.points.at(-1);
   const range = RANGES.map(([r]) => `<button type="button" class="tr-rng${r === S.range ? ' on' : ''}" data-trend-range="${r}" aria-pressed="${r === S.range}">${r}</button>`).join('');
