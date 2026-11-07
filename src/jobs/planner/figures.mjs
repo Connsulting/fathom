@@ -6,6 +6,7 @@
 //   model: {salary?, deferral?}, warnings: [codes], info}
 // householdTax(parts, ctx) -> re-exported from household.mjs
 
+import { isCollegeAccount } from '../../shared/account-kinds.mjs';
 import { estimatedPaymentSafeHarbor, solo401kRoom, sepRoom, hsaLimit, payrollTax, TAX_2026 } from '../../calc/index.mjs';
 import { cents } from '../../store/db.mjs';
 import { accountLabel, sourceLabel } from '../../shared/account-label.mjs';
@@ -219,7 +220,7 @@ export function computeFigures(data, facts, ctx) {
     txnSource();
     out.put('hsa.contrib.ytd', hsaPersonal, 'a', 'Your HSA contributions this year', 'transactions', rowsLoc('transactions', hsaPersonalRows.map(t => t.id)));
   }
-  const collegeAccts = accounts.filter(a => a.kind === '529' || /529/.test(a.name));
+  const collegeAccts = accounts.filter(isCollegeAccount);
   const collegeRows = inflows(collegeAccts);
   if (collegeAccts.length) {
     // Zero when nothing went in this year, so every rec that names it resolves (F10).
