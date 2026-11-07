@@ -2842,7 +2842,7 @@ product buttons; there are no outbound action tools.
 | `act_on_recommendation.step` | `write:steps` | `writeRec`, also used by dialog checkboxes |
 | `act_on_recommendation.status`, `act_on_recommendation.owner` | `write:recs` | shared recommendation writers |
 | `update_goal.create`, `update_goal.edit` | `write:goals` | `createGoal` / `updateGoal`, also used by the goals API |
-| `update_preferences.remember` | `write:preferences` | `writePreference`, also used by Settings |
+| `update_preferences.remember` | `write:preferences` | `writePreference`, also used by the Memories page |
 
 Fact values, goal targets and dates require typed owner evidence in the same conversation, with
 matching actor id, or stored data. Unknown fact keys are refused. Generated starters, question chips,
@@ -2860,8 +2860,7 @@ edit, and replans facts. The MCP-only undo operation checks the loaded receipt s
 `POST /api/actions/:id/undo`. A busy planner preserves the fact and receipt, reports planning pending,
 and queues planning again. Ask queues replanning until the paid model round releases its engine lock, then drains that work before continuing; planner prose may safely call the same engine. Demo baby dates use the same deterministic new-child window calculation.
 
-`update_preferences.remember` stores a short verbatim preference or definition. Settings shows it and allows
-editing or deletion through the same validation. Preferences enter the dynamic Ask prompt as household
+`update_preferences.remember` stores a short verbatim preference or definition. The Memories page (`#/memories`, linked from Settings) lists it with its source (`origin` and `conversation_key`, migration 028) and allows adding, editing or deletion through the same validation. Preferences enter the dynamic Ask prompt as household
 data; they never override product boundaries, evidence requirements or permissions.
 
 
