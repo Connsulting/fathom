@@ -44,6 +44,19 @@ function one(query, key) {
   return v;
 }
 
+// The date of the balance the account's figure shows, choosing as refreshFigures does: the newest
+// balance row; else the newest positions date, unless an empty holdings snapshot (a stored 0 figure
+// located at the holdings list) is dated later, which is then the balance of 0.
+function balanceDate(db, id) {
+  const row = db.prepare('SELECT max(date) AS d FROM balances WHERE account_id = ?').get(id);
+  if (row.d) return row.d;
+  const positions = db.prepare('SELECT max(as_of) AS d FROM positions WHERE account_id = ?').get(id).d || null;
+  const fig = db.prepare(`SELECT g.v, g.locator, f.period_to AS asOf FROM accounts a JOIN figures g ON g.key = a.fig_key
+                          LEFT JOIN files f ON f.id = g.file_id WHERE a.id = ?`).get(id);
+  const empty = fig && fig.v === 0 && fig.asOf && parseJson(fig.locator, null)?.field === 'holdings' ? fig.asOf : null;
+  return empty && (!positions || empty > positions) ? empty : positions;
+}
+
 export function accountDetail(ctx) {
   const id = accountRow(ctx);
   const { db } = ctx;
@@ -54,9 +67,7 @@ export function accountDetail(ctx) {
 
   // The date of the balance actually shown: the newest balance row when there is one, else the
   // newest positions date (the same choice refreshFigures makes), never the newest transaction.
-  const bal = db.prepare(`SELECT coalesce(
-      (SELECT max(date) FROM balances WHERE account_id = ?1),
-      (SELECT max(as_of) FROM positions WHERE account_id = ?1)) AS d`).get(id);
+  const bal = { d: balanceDate(db, id) };
 
   const txn = db.prepare('SELECT count(*) AS n, min(date) AS a, max(date) AS b FROM transactions WHERE account_id = ?').get(id);
 
