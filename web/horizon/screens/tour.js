@@ -1,6 +1,8 @@
 /* Horizon guided product tour: a short walk through the main screens, one callout per stop.
    TOUR_STOPS is the only place stops are declared. A stop's anchor is a selector list tried left
-   to right: the first rendered match of the earliest part that has one wins. The pure part (the table, tourCount and
+   to right: the first rendered match of the earliest part that has one wins. The optional boolean
+   panel opens the Ask panel while the stop shows; the tour closes it again only if it opened it.
+   The pure part (the table, tourCount and
    placeCallout) does no DOM work at import, so node:test imports this module directly.
    The runtime opens from Settings, the quick switcher, or once on its own on a public demo. While
    it is open the page, the dialog host and the Ask panel are inert, every key is captured on the
@@ -25,7 +27,8 @@ export const TOUR_STOPS = Object.freeze([
     body: 'Every account in one place. Fathom can see balances and transactions but can never move money.' },
   { id: 'confirm', route: 'confirm', anchor: '.h-deck-card.cur .h-cf-q', title: 'Quick questions',
     body: 'When an import is unsure, Fathom asks instead of guessing. One answer fixes every matching item.' },
-  { id: 'ask', route: 'home', anchor: '.h-askp-launch', title: 'Ask anything',
+  // The whole docked panel at desktop width; its bar on a sheet or overlay; the launcher if it never opens.
+  { id: 'ask', route: 'home', anchor: '#h-askp[data-mode="dock"], #h-askp .h-askp-bar, .h-askp-launch', panel: true, title: 'Ask anything',
     body: 'Ask opens in a side panel beside any page. Answers use your own data and show where every figure came from.' },
   { id: 'add-context', route: 'home', anchor: '.h-home .h-add', title: 'Add it to the question',
     body: 'The + on a goal, action or account adds it to Ask, so the answer starts with the right context.' },
@@ -89,7 +92,8 @@ const LAYERS = ['.h-root', '.h-dlg-host', '.h-askp-host'];
 
 const fresh = () => ({
   host: null, open: false, idx: -1, shown: -1, dir: 1, busy: false, nav: false, seq: 0, poll: null,
-  skipped: new Set(), opener: null, start: null, inert: null, mo: null, raf: 0, waitRaf: 0, waitTimer: 0
+  skipped: new Set(), opener: null, openerSig: null, start: null, inert: null, mo: null, raf: 0, waitRaf: 0, waitTimer: 0,
+  reshow: false, askOpened: false
 });
 let S = fresh();
 let autoTried = false; // once per page load, across remounts
@@ -156,6 +160,23 @@ function step(i, dir) {
   return -1;
 }
 
+// A selector that finds the opener again after a redraw (the header is redrawn on every route
+// change), from its most stable attributes; null when it has none.
+function sigOf(el) {
+  if (!el || el === document.body || !el.getAttribute) return null;
+  const a = (n) => el.getAttribute(n);
+  const attr = (n) => `[${n}="${CSS.escape(a(n))}"]`;
+  if (el.hasAttribute('data-tour-start')) return '[data-tour-start]';
+  if (a('data-keys') != null) return attr('data-keys');
+  if (a('data-go') != null) return attr('data-go') + (a('data-id') != null ? attr('data-id') : '');
+  if (el.id) return `#${CSS.escape(el.id)}`;
+  const tag = el.tagName.toLowerCase();
+  if ((tag === 'button' || tag === 'a') && el.classList.length) {
+    return `${tag}.${CSS.escape(el.classList[0])}${a('aria-label') != null ? attr('aria-label') : ''}`;
+  }
+  return null;
+}
+
 const sameRoute = (a, b) => a.name === b.name && JSON.stringify(a.params || {}) === JSON.stringify(b.params || {});
 
 /* ---------- inert layers ---------- */
@@ -170,7 +191,8 @@ function lockInert() {
 function holdInert() {
   const page = q('.h-root');
   const dlg = q('.h-dlg-host');
-  const modal = !!(H.askModal && H.askModal());
+  // A modal panel the tour opened closes when it ends, so it does not count toward the resting state.
+  const modal = !S.askOpened && !!(H.askModal && H.askModal());
   S.inert = [[page, !!(dlg && !dlg.hidden) || modal], [dlg, modal], [q('.h-askp-host'), false]].filter((x) => x[0]);
   S.inert.forEach(([el]) => { el.inert = true; });
 }
@@ -285,6 +307,19 @@ function schedule() {
 
 /* ---------- walking ---------- */
 
+// Runs fn as the tour's own redraw: afterDraw does not read it as the owner leaving the tour's route.
+function quiet(fn) {
+  S.nav = true;
+  try { fn(); } finally { S.nav = false; }
+}
+
+// Opens the Ask panel for a panel stop (remembering when the tour opened it) and closes the one
+// the tour opened on any other stop.
+function syncAskPanel(stop) {
+  if (stop.panel && !H.askPanelIsOpen()) { S.askOpened = true; quiet(() => H.askPanelOpen()); }
+  else if (!stop.panel && S.askOpened) { S.askOpened = false; if (H.askPanelIsOpen()) quiet(() => H.askPanelClose()); }
+}
+
 function stopWaiting() {
   if (S.waitRaf) cancelAnimationFrame(S.waitRaf);
   if (S.waitTimer) clearTimeout(S.waitTimer);
@@ -299,11 +334,12 @@ function show(i, dir) {
   S.idx = i; S.dir = dir; S.busy = true;
   S.host.dataset.busy = '';
   mark();
-  const cur = H.pageRoute();
-  if (cur.name !== stop.route || Object.keys(cur.params || {}).length) {
-    S.nav = true;
-    try { H.api.go(stop.route, {}, { replace: true }); } finally { S.nav = false; }
-  }
+  // The actual route: a dialog route ('rec', 'account') always navigates, which closes the dialog.
+  const cur = H.routeNow();
+  // The panel closes on the old route before leaving it, and opens on the stop's route after.
+  if (!stop.panel) syncAskPanel(stop);
+  if (cur.name !== stop.route || Object.keys(cur.params || {}).length) quiet(() => H.api.go(stop.route, {}, { replace: true }));
+  if (stop.panel) syncAskPanel(stop);
   if (!S.open) return;
   const seq = ++S.seq;
   const t0 = Date.now();
@@ -325,6 +361,7 @@ function show(i, dir) {
 
 function found(stop, el) {
   S.busy = false;
+  S.reshow = false;
   S.shown = S.idx;
   S.poll = null;
   delete S.host.dataset.busy;
@@ -335,13 +372,14 @@ function found(stop, el) {
   S.host.querySelector('[data-tour="next"],[data-tour="done"]')?.focus({ preventScroll: true });
 }
 
-// The anchor never rendered: drop the stop from the count and keep walking the same way. Going
-// back past the first shown stop returns to it; going forward past the last ends the tour.
+// The anchor never rendered: drop the stop from the count and keep walking the same way. Running
+// out either way returns to the last shown stop, which now renders as the first or last; with no
+// stop shown, or when that re-shown stop is missing too, the tour ends.
 function missing() {
   S.skipped.add(S.idx);
   const j = step(S.idx, S.dir);
-  if (j >= 0) show(j, S.dir);
-  else if (S.dir < 0 && S.shown >= 0) show(S.shown, 1);
+  if (j >= 0 && !S.reshow) show(j, S.dir);
+  else if (S.shown >= 0 && !S.reshow && !S.skipped.has(S.shown)) { S.reshow = true; show(S.shown, S.dir); }
   else end();
 }
 
@@ -426,12 +464,17 @@ function listen(on) {
 export function start(opener) {
   if (!H || !S.host || S.open || H.routeNow().name === 'onboarding') return;
   S.opener = opener || document.activeElement;
-  const r = H.pageRoute();
-  S.start = { name: r.name, params: { ...(r.params || {}) } };
+  S.openerSig = sigOf(S.opener);
+  // The actual route, so a tour started over a dialog reopens it on the same page under it.
+  const r = H.routeNow();
+  // Over a dialog the page route differs: keep the page under it and its history rule as well.
+  const u = H.ui;
+  const dlg = !sameRoute(r, H.pageRoute()) && u ? { under: u.under, inApp: u.inApp } : null;
+  S.start = { name: r.name, params: { ...(r.params || {}) }, dlg };
   if (H.askModal && H.askModal()) H.askPanelToggle();
   S.open = true;
   S.skipped = new Set();
-  S.idx = -1; S.shown = -1;
+  S.idx = -1; S.shown = -1; S.reshow = false; S.askOpened = false;
   lockInert();
   listen(true);
   S.mo = new MutationObserver(onMutate);
@@ -455,19 +498,25 @@ function teardown() {
   H.root?.querySelectorAll('[data-tour-on]').forEach((x) => x.removeAttribute('data-tour-on'));
   if (S.host) { S.host.innerHTML = ''; delete S.host.dataset.busy; }
   unlockInert();
+  // After the unlock: the panel's redraw sets the page and dialog layers for a closed panel.
+  if (S.askOpened) { S.askOpened = false; if (H.askPanelIsOpen()) H.askPanelClose(); }
 }
 
 // Done, Skip, Escape or leaving the tour's route: the tour counts as seen, the start route comes
-// back, then focus returns to the opener (or the redrawn Take the tour button).
+// back, then focus returns to the opener, or to its redrawn match, or stays where the redraw put it.
 function end() {
   if (!S.open) return;
-  const { start: from, opener } = S;
+  const { start: from, opener, openerSig } = S;
   teardown();
   try { window.localStorage.setItem(DONE_KEY, '1'); } catch (e) { /* storage unavailable: the tour may show again */ }
-  if (from && !sameRoute(H.pageRoute(), from)) H.api.go(from.name, from.params, { replace: true });
+  if (from && !sameRoute(H.routeNow(), from)) {
+    // A dialog comes back over the page it was opened from, with its history rule.
+    if (from.dlg && H.ui) { H.ui.under = from.dlg.under; H.ui.inApp = from.dlg.inApp; }
+    H.api.go(from.name, from.params, { replace: true });
+  }
   let target = null;
   if (opener && opener.isConnected && opener !== document.body) target = opener;
-  else if (opener && opener.matches?.('[data-tour-start]')) target = q('[data-tour-start]');
+  else if (openerSig) target = q(openerSig);
   if (target && typeof target.focus === 'function') target.focus({ preventScroll: true });
 }
 
@@ -502,7 +551,7 @@ export function reset() {
   S = fresh();
 }
 
-// After every draw (name is the route, 'rec' under the rec dialog). A route the tour did not
+// After every draw (name is the actual route, 'rec' or 'account' under a dialog). A route the tour did not
 // navigate to (Back, a hash link) ends it; otherwise the layers stay inert and the anchor is
 // marked again on the new markup.
 export function afterDraw(name) {
