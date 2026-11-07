@@ -308,6 +308,8 @@
   border: 1px solid var(--line2); color: var(--mu); opacity: 0; transition: opacity 0.12s, color 0.12s, border-color 0.12s;
 }
 .d-horizon .h-add .h-i { width: 13px; height: 13px; stroke-width: 1.8; vertical-align: 0; }
+/* Card rules style any svg inside them (.h-next progress bars: min-width 160px, flex 1); the icon keeps its size. */
+.d-horizon .h-add svg.h-i { min-width: 0; flex: none; margin: 0; }
 .d-horizon .h-add:hover { color: var(--ac); border-color: var(--acl); background: var(--acd); }
 .d-horizon .h-add:focus-visible { opacity: 1; outline: 2px solid var(--ac); outline-offset: 1px; }
 .d-horizon :is(.h-acc, .h-row, .h-goal, .h-gcard, .h-next, .h-ad-txn, .tr-part, .h-tasks li, .h-deck-card, .h-cf-group tr, .h-rec-head, .h-ad-head):hover .h-add { opacity: 1; }

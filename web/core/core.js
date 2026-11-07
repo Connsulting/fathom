@@ -1396,7 +1396,9 @@ function openPopover(anchor, fromKey) {
   let top = r.bottom + 8;
   if (top + h > vh - 8 && r.top - h - 8 >= 8) top = r.top - h - 8;
   el.style.left = Math.round(left) + 'px';
-  el.style.top = Math.round(Math.max(8, top)) + 'px';
+  // Never below the viewport: a popover taller than the room under the figure and above it is
+  // pulled up so its Add to chat button stays reachable.
+  el.style.top = Math.round(Math.max(8, Math.min(top, vh - h - 8))) + 'px';
   pop = { el, anchor };
   if (fromKey && add) add.focus();
 }
