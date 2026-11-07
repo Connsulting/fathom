@@ -38,6 +38,11 @@ test('strict parity refuses absent pairs even when another operation covers the 
   assert.match(check(router, sibling, { pending, strict: true })[0], /not registered/);
   assert.deepEqual(check(router, registry([route]), { pending, strict: true }), []);
 });
+test('read operations without an API equivalent do not invent route coverage', () => {
+  const calculations = [{ name: 'calculate', operations: [{ name: 'add', scope: 'read', routes: [] }] }];
+  assert.deepEqual(check([], calculations), []);
+  assert.match(check(router, calculations)[0], /uncovered/);
+});
 test('real API router and registry meet parity with explicit exclusions and pending work', () => {
   assert.ok(Object.keys(PARITY_EXCLUDED).length > 0);
   assert.ok(Object.keys(PARITY_PENDING).length > 0);
