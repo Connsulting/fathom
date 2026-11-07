@@ -1,3 +1,4 @@
+import { guessCategories } from '../categories/guess.mjs';
 // Job scheduler. Rules:
 // 1. Period keys come from the owner's local time (settings.timezone, default America/New_York; an
 //    invalid zone falls back). A period starts at its due time (plan daily 02:00, brief-email the
@@ -529,15 +530,17 @@ export function defaultHandlers({ publicUrl = null, simplefinFetch = null } = {}
       };
     },
     async 'confirm-guess'(ctx) {
+      const categories = await guessCategories(ctx.db, ctx.engine, { now: ctx.now });
       const out = await guessPending(ctx.db, ctx.engine, { now: ctx.now });
-      if (out.skipped) {
+      if (categories.costUsd) out.costUsd = (out.costUsd ?? 0) + categories.costUsd;
+      if (out.skipped && !categories.guessed && !categories.costUsd && !categories.stopped) {
         const pending = ctx.db.prepare("SELECT count(*) AS n FROM confirm_items WHERE status = 'pending'").get().n;
         return { status: 'skipped', note: { pending } };
       }
-      const sum = (key) => out.batches.reduce((n, b) => n + (Number(b[key]) || 0), 0);
+      const sum = (key) => (out.batches ?? []).reduce((n, b) => n + (Number(b[key]) || 0), 0);
       return {
         costUsd: out.costUsd,
-        note: { batches: out.batches.length, items: sum('items'), guessed: sum('guessed'), stopped: Boolean(out.stopped) },
+        note: { batches: (out.batches ?? []).length, items: sum('items'), guessed: sum('guessed') + (categories.guessed ?? 0), stopped: Boolean(out.stopped || categories.stopped) },
       };
     },
   };

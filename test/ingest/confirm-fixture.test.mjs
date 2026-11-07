@@ -40,15 +40,16 @@ const acct = (db, mask, inst) => one(db, "SELECT id FROM accounts WHERE mask = ?
 const byKind = (items) => items.reduce((out, i) => ({ ...out, [i.kind]: (out[i.kind] ?? 0) + 1 }), {});
 const textOf = (evidence) => (typeof evidence === 'string' ? evidence : evidence?.text);
 
-test('no names known: 10 pending (owner 7, kind 2, near_duplicate 1) and 4 decided for the owner', () => withHousehold((s) => {
+test('no names known: 13 pending including three source categories and 4 decided for the owner', () => withHousehold((s) => {
+  const state = FR.ingestState(s.db);
   const pending = C.pendingItems(s.db);
-  assert.equal(pending.length, 10);
-  assert.deepEqual(byKind(pending), { account_owner: 7, account_kind: 2, near_duplicate: 1 });
+  assert.equal(pending.length, 13);
+  assert.deepEqual(byKind(pending), { account_owner: 7, account_kind: 2, near_duplicate: 1, category_mapping: 3 });
   const kindSubjects = pending.filter((i) => i.kind === 'account_kind').map((i) => i.subject).sort();
   assert.deepEqual(kindSubjects, [acct(s.db, '3344', 'Example Card'), acct(s.db, '5566', 'Example Credit Union')].sort(), 'Rewards Card and Rainy Day');
 
-  const state = FR.ingestState(s.db);
-  assert.equal(state.pending, 10);
+  assert.equal(state.pending, 13);
+  assert.deepEqual(state.items.filter(i=>i.kind==='category_mapping').map(i=>i.context.category).sort(), ['Auto','Dining','Utilities']);
   assert.equal(state.decided.length, 4);
   const rules = state.decided.map((d) => d.rule).sort();
   assert.deepEqual(rules, ['cross_format_duplicate', 'cross_format_duplicate', 'shared_mask', 'shared_mask']);
@@ -70,11 +71,12 @@ test('no names known: 10 pending (owner 7, kind 2, near_duplicate 1) and 4 decid
   }
 }));
 
-test('names known before the import: 4 pending, the only owner question is Rainy Day', () => withHousehold((s) => {
+test('names known before the import: 7 pending including three source categories, the only owner question is Rainy Day', () => withHousehold((s) => {
+  const state = FR.ingestState(s.db);
   const pending = C.pendingItems(s.db);
-  assert.equal(pending.length, 4);
-  assert.deepEqual(byKind(pending), { account_owner: 1, account_kind: 2, near_duplicate: 1 });
+  assert.equal(pending.length, 7);
+  assert.deepEqual(byKind(pending), { account_owner: 1, account_kind: 2, near_duplicate: 1, category_mapping: 3 });
   const owner = pending.find((i) => i.kind === 'account_owner');
   assert.equal(owner.subject, acct(s.db, '5566', 'Example Credit Union'), 'Rainy Day, held by both, stays a question');
-  assert.equal(FR.ingestState(s.db).pending, 4);
+  assert.equal(state.pending, 7);
 }, { names: true }));
