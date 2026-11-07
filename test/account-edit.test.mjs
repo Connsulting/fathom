@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { src } from './helpers/server.mjs';
 import { realStore, aggregatorFile, textFile, NOW } from './helpers/ingest.mjs';
 import { seedDuplicate } from './helpers/account-merge.mjs';
+import { setSetting } from '../src/store/db.mjs';
 
 const INST = 'Example Bank';
 
@@ -445,6 +446,179 @@ test('AC3: two file accounts merge into the open account and it stays manual', (
     m.C.reopenItem(s.db, res.itemId, { now: NOW });
     assert.deepEqual(snapshot(s.db), before);
   }
+}));
+
+/* ---------- AC3: identity carried over a merge, and the backfill for older merges ---------- */
+
+// A file account with no institution and no last 4 (unless given) and a connected account whose
+// SimpleFIN snapshot carries them. Three equal month-end balances make the pair detectable.
+function bareDuplicate(s, { sfKey = 'synthetic-carry', fileInst = null, fileMask = null, snap = {} } = {}) {
+  setSetting(s.db, 'clock', '2032-09-15');
+  const file = 'file-checking';
+  const own = `sf-${sfKey}`;
+  const snapshotDoc = { inst: INST, name: 'Everyday x1234', mask: '1234', maskSure: true, kind: 'checking', ...snap };
+  s.db.prepare('INSERT INTO accounts (id, identity, name, kind, mirror, inst, mask) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(file, `file:${file}`, 'checking', 'checking', 'manual', fileInst, fileMask);
+  s.db.prepare('INSERT INTO accounts (id, identity, name, kind, mirror, inst, mask) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(own, `simplefin:${sfKey}`, snapshotDoc.name, 'cash', 'connected', INST, snapshotDoc.mask);
+  s.db.prepare("INSERT INTO simplefin_accounts (sf_key, account_id, status, name, created_at, backfilled) VALUES (?, ?, 'mapped', ?, ?, 1)").run(sfKey, own, snapshotDoc.name, NOW);
+  s.db.prepare('INSERT INTO simplefin_snapshots (sf_key, snapshot, at) VALUES (?, ?, ?)').run(sfKey, JSON.stringify(snapshotDoc), NOW);
+  const put = s.db.prepare('INSERT INTO balances (account_id, date, amount) VALUES (?, ?, ?)');
+  for (const id of [file, own]) for (const [date, amount] of [['2032-06-30', 1000], ['2032-07-31', 1100.5], ['2032-08-31', 900.25]]) put.run(id, date, amount);
+  return { file, own, sfKey };
+}
+
+// Answer the detected "Same account?" question for a pair, the way the Confirm screen does.
+function mergeDetected(s, m, { file, own }) {
+  m.M.queueAccountPairs(s.db, { now: NOW });
+  const q = m.C.pendingItems(s.db).find((i) => i.context.repair && i.subject === `merge:${file}:${own}`);
+  assert.ok(q, 'the detector asked about the pair');
+  m.C.answer(s.db, q.id, 'same', { now: NOW });
+  assert.equal(row(s.db, own), undefined, 'the connected account row is gone');
+  return q.id;
+}
+
+const setSnapshot = (db, sfKey, patch) => {
+  const cur = JSON.parse(db.prepare('SELECT snapshot FROM simplefin_snapshots WHERE sf_key = ?').get(sfKey).snapshot);
+  db.prepare('UPDATE simplefin_snapshots SET snapshot = ? WHERE sf_key = ?').run(JSON.stringify({ ...cur, ...patch }), sfKey);
+};
+
+test('AC3: a manual merge fills a survivor with no institution or last 4 from the connected account', () => withStore(async (s, m) => {
+  const pair = bareDuplicate(s);
+  const before = row(s.db, pair.file);
+  assert.equal(before.inst, null);
+  assert.equal(before.mask, null);
+  const res = await m.A.accountMerge(ctx(s, pair.file, { withId: pair.own }));
+  assert.equal(res.survivorId, pair.file);
+  const after = row(s.db, pair.file);
+  assert.equal(after.inst, INST);
+  assert.equal(after.mask, '1234');
+  assert.equal(after.name, before.name, 'nothing else on the survivor changed');
+  assert.equal(after.kind, before.kind);
+  assert.match(m.D.accountDetail(ctx(s, pair.file)).account.label, /ending 1234$/);
+}));
+
+test('AC3: a detected merge carries the institution and last 4 over the same way', () => withStore(async (s, m) => {
+  const pair = bareDuplicate(s);
+  mergeDetected(s, m, pair);
+  const after = row(s.db, pair.file);
+  assert.equal(after.inst, INST);
+  assert.equal(after.mask, '1234');
+  assert.match(m.D.accountDetail(ctx(s, pair.file)).account.label, /ending 1234$/);
+}));
+
+test('AC3: an unreliable last 4 is not carried, but the institution still is', async () => {
+  const cases = [
+    { why: 'maskSure false and a name with no digits', snap: { maskSure: false, name: 'Everyday checking' }, mask: null },
+    { why: 'maskSure absent and a name with no digits', snap: { maskSure: undefined, name: 'Everyday checking' }, mask: null },
+    { why: 'maskSure false and trailing digits that differ from the mask', snap: { maskSure: false, name: 'Everyday x9876' }, mask: null },
+    { why: 'maskSure false but the name ends in the same four digits', snap: { maskSure: false, name: 'Everyday x1234' }, mask: '1234' },
+  ];
+  for (const c of cases) {
+    for (const path of ['manual', 'detected']) {
+      await withStore(async (s, m) => {
+        const pair = bareDuplicate(s, { snap: c.snap });
+        if (path === 'manual') await m.A.accountMerge(ctx(s, pair.file, { withId: pair.own }));
+        else mergeDetected(s, m, pair);
+        const after = row(s.db, pair.file);
+        assert.equal(after.inst, INST, `${c.why} (${path}): institution carried`);
+        assert.equal(after.mask, c.mask, `${c.why} (${path}): mask ${c.mask === null ? 'not ' : ''}carried`);
+      });
+    }
+  }
+});
+
+test('AC3: a last 4 or institution the survivor already has is never replaced', async () => {
+  const cases = [
+    { fileInst: null, fileMask: '9999', inst: INST, mask: '9999' },
+    { fileInst: 'Other Bank', fileMask: null, inst: 'Other Bank', mask: '1234' },
+    { fileInst: 'Other Bank', fileMask: '9999', inst: 'Other Bank', mask: '9999' },
+  ];
+  for (const c of cases) {
+    await withStore(async (s, m) => {
+      const pair = bareDuplicate(s, { fileInst: c.fileInst, fileMask: c.fileMask });
+      await m.A.accountMerge(ctx(s, pair.file, { withId: pair.own }));
+      const after = row(s.db, pair.file);
+      assert.equal(after.inst, c.inst, `inst ${c.fileInst} stays or fills`);
+      assert.equal(after.mask, c.mask, `mask ${c.fileMask} stays or fills`);
+    });
+  }
+});
+
+test('AC3: undo of a merge restores the survivor row exactly as before, on both paths', async () => {
+  for (const path of ['manual', 'detected']) {
+    await withStore(async (s, m) => {
+      const pair = bareDuplicate(s);
+      const beforeRow = row(s.db, pair.file);
+      const beforeAll = snapshot(s.db);
+      let itemId;
+      if (path === 'manual') itemId = (await m.A.accountMerge(ctx(s, pair.file, { withId: pair.own }))).itemId;
+      else itemId = mergeDetected(s, m, pair);
+      assert.notDeepEqual(row(s.db, pair.file), beforeRow, `${path}: precondition, the merge changed the survivor`);
+      m.C.reopenItem(s.db, itemId, { now: NOW });
+      assert.deepEqual(row(s.db, pair.file), beforeRow, `${path}: survivor row restored`);
+      assert.deepEqual(snapshot(s.db), beforeAll, `${path}: everything restored`);
+    });
+  }
+});
+
+// A survivor of a merge made before the carry-over existed: merge a pair, then blank what the
+// merge would now have filled.
+async function olderMergeSurvivor(s, m, opts = {}) {
+  const pair = await seedDuplicate(s, { sure: true, ...opts });
+  mergeDetected(s, m, { file: pair.keep, own: pair.own });
+  s.db.prepare('UPDATE accounts SET inst = NULL, mask = NULL WHERE id = ?').run(pair.keep);
+  return { id: pair.keep, sfKey: pair.sfKey };
+}
+
+test('AC3: backfill fills an older merge survivor from its snapshot and is idempotent', () => withStore(async (s, m) => {
+  assert.equal(typeof m.M.backfillMergedIdentity, 'function');
+  const survivor = await olderMergeSurvivor(s, m);
+  assert.equal(row(s.db, survivor.id).inst, null);
+  assert.equal(m.M.backfillMergedIdentity(s.db), 1);
+  const after = row(s.db, survivor.id);
+  assert.equal(after.inst, 'Example Bank');
+  assert.equal(after.mask, '6294');
+  assert.equal(m.M.backfillMergedIdentity(s.db), 0, 'a second call changes nothing');
+  assert.deepEqual(row(s.db, survivor.id), after);
+}));
+
+test('AC3: backfill never overwrites an institution or last 4 that is already set', () => withStore(async (s, m) => {
+  const survivor = await olderMergeSurvivor(s, m);
+  s.db.prepare("UPDATE accounts SET inst = 'Kept Bank' WHERE id = ?").run(survivor.id);
+  assert.equal(m.M.backfillMergedIdentity(s.db), 1);
+  assert.equal(row(s.db, survivor.id).inst, 'Kept Bank');
+  assert.equal(row(s.db, survivor.id).mask, '6294');
+
+  s.db.prepare("UPDATE accounts SET inst = NULL, mask = '9999' WHERE id = ?").run(survivor.id);
+  assert.equal(m.M.backfillMergedIdentity(s.db), 1);
+  assert.equal(row(s.db, survivor.id).inst, 'Example Bank');
+  assert.equal(row(s.db, survivor.id).mask, '9999');
+
+  assert.equal(m.M.backfillMergedIdentity(s.db), 0);
+}));
+
+test('AC3: backfill applies the same reliability rule to the last 4', () => withStore(async (s, m) => {
+  const survivor = await olderMergeSurvivor(s, m);
+  setSnapshot(s.db, survivor.sfKey, { maskSure: false, name: 'Synthetic checking' });
+  assert.equal(m.M.backfillMergedIdentity(s.db), 1, 'only the institution changed');
+  assert.equal(row(s.db, survivor.id).inst, 'Example Bank');
+  assert.equal(row(s.db, survivor.id).mask, null);
+  assert.equal(m.M.backfillMergedIdentity(s.db), 0);
+
+  setSnapshot(s.db, survivor.sfKey, { maskSure: false, name: 'Synthetic checking x6294' });
+  assert.equal(m.M.backfillMergedIdentity(s.db), 1, 'a name ending in the same four digits is reliable');
+  assert.equal(row(s.db, survivor.id).mask, '6294');
+}));
+
+test('AC3: backfill ignores a survivor with no snapshot and accounts that were never merged', () => withStore(async (s, m) => {
+  const survivor = await olderMergeSurvivor(s, m);
+  s.db.prepare('DELETE FROM simplefin_snapshots WHERE sf_key = ?').run(survivor.sfKey);
+  const loose = await seedDuplicate(s, { sure: true, mask: '7310', sfKey: 'synthetic-unmerged' });
+  s.db.prepare('UPDATE accounts SET inst = NULL, mask = NULL WHERE id IN (?, ?)').run(loose.keep, loose.own);
+  const before = s.db.prepare('SELECT * FROM accounts ORDER BY id').all();
+  assert.equal(m.M.backfillMergedIdentity(s.db), 0);
+  assert.deepEqual(s.db.prepare('SELECT * FROM accounts ORDER BY id').all(), before, 'no account changed');
 }));
 
 /* ---------- AC4: meta line ---------- */
