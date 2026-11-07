@@ -6,6 +6,16 @@
 
 import { createSwipe } from './swipe.js';
 
+export function visibleOptions(item) {
+  const options = Array.isArray(item?.options) ? item.options : [];
+  return item?.kind === 'transaction_category' ? options.filter(o => !String(o.id).startsWith('always:')) : options;
+}
+export function categoryAnswerOption(item, option, always) {
+  if (!visibleOptions(item).some(o => o.id === option)) return null;
+  const id = item.kind === 'transaction_category' && always ? 'always:' + option : option;
+  return item.options.some(o => o.id === id) ? id : null;
+}
+
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 const STATUS = {
@@ -39,7 +49,7 @@ const KIND = {
   employer_relation: 'Employer',
   employer_recipient: 'Who is paid',
   document_recipient: 'Whose document',
-  withholding_conflict: 'Withholding'
+  withholding_conflict: 'Withholding', transaction_category: 'Check these', category_mapping: 'Check these'
 };
 
 // Confirm deck keys. One plain table; the handler in ingestScreens reads it.
@@ -373,7 +383,7 @@ export function ingestScreens(h) {
   function guessOf(it) {
     const g = it && it.guess;
     if (!g || g.option == null) return null;
-    const o = arr(it.options).find((x) => String(x.id) === String(g.option));
+    const o = visibleOptions(it).find((x) => String(x.id) === String(g.option));
     return o ? { option: String(o.id), label: o.label, evidence: String(g.evidence ?? g.reason ?? '') } : null;
   }
 
@@ -552,13 +562,13 @@ export function ingestScreens(h) {
     const busy = dk.busy === id;
     const chosen = busy && dk.busyOpt != null ? dk.busyOpt : dk.answers[id];
     const g = guessOf(it);
-    const opts = arr(it.options).map((o, n) => {
-      const on = chosen != null && String(chosen) === String(o.id);
+    const opts = visibleOptions(it).map((o, n) => {
+      const on = chosen != null && String(chosen).replace(/^always:/,'') === String(o.id);
       const isG = !!g && g.option === String(o.id);
       const attrs = `data-answer="${esc(id)}" data-option="${esc(o.id)}" aria-pressed="${on}"${isG ? ' data-guess="1"' : ''}${busy || fin ? ' disabled' : ''}`;
       return btn(`<span class="h-deck-n">${n + 1}</span> · ${esc(o.label)}${isG ? guessTag : ''}`, attrs, on ? 'pri' : (isG && chosen == null ? 'guess' : ''));
     }).join('');
-    const short = arr(it.options).every((o) => String(o.label ?? '').length <= 24);
+    const short = visibleOptions(it).every((o) => String(o.label ?? '').length <= 24);
     const name = it.fileName || fileName || '';
     const take = g && !fin && String(chosen ?? '') !== g.option
       ? btn('Use best guess', `data-take-guess="${esc(id)}"${busy ? ' disabled' : ''}`, 'pri h-cf-take')
@@ -569,7 +579,7 @@ export function ingestScreens(h) {
       : (dk.answers[id] != null && !busy ? '<p class="h-deck-state">Answered. Pick another option to change it.</p>' : '');
     return `<article class="h-deck-card cur${fin ? ' final' : ''}" data-item="${esc(id)}">
       <div class="h-cf-k">${esc(KIND[it.kind] || 'Question')}${name ? `<span>${esc(name)}</span>` : ''}</div>
-      <p class="h-cf-q">${esc(it.question)}</p>${detailHtml(it)}${guess}<div class="h-deck-opts${short ? ' short' : ''}">${opts}</div>${state}</article>`;
+      <p class="h-cf-q">${esc(it.question)}</p>${detailHtml(it)}${guess}${it.kind === 'transaction_category' && it.context?.merchant ? `<label class="h-cf-sub"><input type="checkbox" data-category-always="${esc(id)}"${dk.categoryAlways?.[id] ? ' checked' : ''}${busy || fin ? ' disabled' : ''}> Always for this merchant</label>` : ''}<div class="h-deck-opts${short ? ' short' : ''}">${opts}</div>${state}</article>`;
   }
 
   function rowHtml(dk, key, id) {
@@ -583,7 +593,7 @@ export function ingestScreens(h) {
     const fin = dk.final[id];
     const chosen = saving ? dk.rowBusy[id] : (mine && dk.busyOpt != null ? dk.busyOpt : dk.answers[id]);
     const g = guessOf(it);
-    const opts = arr(it.options).map((o) => {
+    const opts = visibleOptions(it).map((o) => {
       const on = chosen != null && String(chosen) === String(o.id);
       const isG = !!g && g.option === String(o.id);
       const attrs = `data-row-answer="${esc(id)}" data-option="${esc(o.id)}" aria-pressed="${on}"${isG ? ' data-guess="1"' : ''}${busy || saving || fin ? ' disabled' : ''}`;
@@ -745,11 +755,13 @@ export function ingestScreens(h) {
   function pick(id, opt, stay = false) {
     const dk = st.deck;
     const it = dk.data[id];
-    if (dk.busy != null || (stay && id in dk.rowBusy) || isGroup(id) || dk.final[id] || !it || !arr(it.options).some((o) => String(o.id) === String(opt))) return false;
+    if (dk.busy != null || (stay && id in dk.rowBusy) || isGroup(id) || dk.final[id] || !it || !visibleOptions(it).some((o) => String(o.id) === String(opt))) return false;
     if (dk.answers[id] != null && String(dk.answers[id]) === String(opt)) {
       if (!stay && dk.cur === id) { dk.cur = nextOpen(dk, id); draw(); }
       return true;
     }
+    opt = categoryAnswerOption(it,opt,dk.categoryAlways?.[id] === true);
+    if (opt == null) return false;
     const revise = !pendingNow().some((i) => String(i.id) === id);
     if (stay) dk.rowBusy[id] = String(opt);
     else {
@@ -893,7 +905,7 @@ export function ingestScreens(h) {
     if (e?.repeat && ['pick', 'guess', 'undo'].includes(action)) return true;
     switch (action) {
       case 'pick': {
-        const o = cur && arr(cur.options)[Number(e?.key) - 1];
+        const o = cur && visibleOptions(cur)[Number(e?.key) - 1];
         return o ? pick(dk.cur, o.id) : false;
       }
       case 'guess': {
@@ -1002,6 +1014,13 @@ export function ingestScreens(h) {
   // The file input fires both input and change; only change uploads, input is swallowed.
   function handleChange(e) {
     const t = e.target;
+    if (t?.matches?.('input[data-category-always]')) {
+      if (e.type === 'change') {
+        st.deck.categoryAlways ??= {};
+        st.deck.categoryAlways[t.dataset.categoryAlways] = t.checked;
+      }
+      return true;
+    }
     if (!t?.matches?.('input[type=file][data-upload]')) return false;
     if (e.type === 'change') upload(t);
     return true;

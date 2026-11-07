@@ -121,7 +121,29 @@ const answerFixture = (db, id, option) => C.answerItem(db, id, option, { now: SE
 // Each kind: setup(s) builds the store through real imports and returns the item id under test.
 // pairs are [A, B] revisions; reopen lists the answers reopened. Every pair has a real effect in at
 // least one direction (asserted below).
+const categoryHistory = () => aggregatorFile('category-history.csv',Array.from({length:8},(_,i)=>['Groceries','Income'].map(category=>({date:`2032-${String(i+1).padStart(2,'0')}-15`,amount:category==='Income' ? -3000 : 100,description:'Covered '+category,category}))).flat());
 const CASES = {
+  transaction_category: {
+    setup: async s => {
+      await imported(s,categoryHistory());
+      await imported(s,aggregatorFile('uncategorized.csv',[{date:'2032-03-01',amount:250,category:'Uncategorized',description:'Example Service'}]));
+      const {queueCategoryChecks}=await src('src/categories/store.mjs');
+      queueCategoryChecks(s.db,{clock:'2032-11-05',now:SETUP_AT});
+      return firstPending(s.db,'transaction_category');
+    },
+    pairs: [['always:Business','Shopping'],['Shopping','always:Business']],
+    reopen: ['always:Business','Shopping'],
+  },
+  category_mapping: {
+    setup: async s => {
+      await imported(s,aggregatorFile('unknown-category.csv',[{date:'2032-03-01',amount:250,category:'A new category'}]));
+      const {queueCategoryChecks}=await src('src/categories/store.mjs');
+      queueCategoryChecks(s.db,{clock:'2032-11-05',now:SETUP_AT});
+      return firstPending(s.db,'category_mapping');
+    },
+    pairs: [['household','business'],['business','tax']],
+    reopen: ['household','business'],
+  },
   account_owner: {
     setup: async (s) => { await imported(s, fixture('aggregator.csv', 'text/csv')); return firstPending(s.db, 'account_owner'); },
     pairs: [['owner', 'spouse'], ['spouse', 'business']],
