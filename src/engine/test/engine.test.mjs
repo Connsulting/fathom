@@ -8,7 +8,7 @@ import { federalIncomeTax } from '../../calc/index.mjs';
 
 const request = { purpose: 'chat', system: 'Use stored figures.', messages: [{ role: 'user', content: 'What is the balance?' }], maxTokens: 128 };
 const now = () => new Date('2026-06-15T12:00:00Z');
-const read = { name: 'balance', description: 'Read a synthetic balance.', scope: 'read',
+const read = { name: 'balance', description: 'Read a synthetic balance.', kind: 'read', operations: [{ name: 'read', scope: 'read' }],
   inputSchema: { type: 'object', properties: { account: { type: 'string', enum: ['demo'] } }, required: ['account'], additionalProperties: false },
   handler: async (args, ctx) => ({ value: 125, account: args.account, clock: ctx.now }) };
 
@@ -61,7 +61,7 @@ test('multi-round fake executes the registry, records each round, and returns a 
 
 test('registry exposes exact JSON Schema, validates before execution, and removes writes from jobs', async () => {
   let writes = 0;
-  const write = { ...read, name: 'set_status', scope: 'write:recs', handler: async () => { writes++; return 'ok'; } };
+  const write = { ...read, name: 'set_status', kind: 'write', operations: [{ name: 'write', scope: 'write:recs' }], handler: async () => { writes++; return 'ok'; } };
   const server = createRegistryServer([read, write], { purpose: 'job', ctx: { db: {}, now: 'demo' } });
   const [a, b] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'test', version: '1' });
@@ -91,7 +91,7 @@ test('parallel tools all finish in the paid round and chat handlers receive only
 
 test('chat can invoke a recommendation-status write, while invalid scopes fail before a paid round', async () => {
   let writes = 0;
-  const write = { ...read, scope: 'write:recs', handler: async () => { writes++; return { status: 'ok' }; } };
+  const write = { ...read, kind: 'write', operations: [{ name: 'write', scope: 'write:recs' }], handler: async () => { writes++; return { status: 'ok' }; } };
   const engine = createEngine({ mode: 'fake', responses: [
     { toolCalls: [{ name: 'balance', args: { account: 'demo' } }], costUsd: 0.01 }, { text: 'Accepted', costUsd: 0.01 },
   ] });
@@ -99,7 +99,7 @@ test('chat can invoke a recommendation-status write, while invalid scopes fail b
   assert.equal(writes, 1);
   const ledger = createMemoryLedger();
   const invalid = createEngine({ mode: 'fake', ledger, responses: [{ text: 'unused' }] });
-  await assert.rejects(invalid.call({ ...request, tools: [{ ...read, scope: 'write:money' }] }), /registry/);
+  await assert.rejects(invalid.call({ ...request, tools: [{ ...read, kind: 'write', operations: [{ name: 'write', scope: 'write:money' }] }] }), /registry/);
   assert.equal(ledger.entries.length, 0);
 });
 
@@ -141,7 +141,7 @@ test('public gateway drives a real deterministic calculator through registry, le
     { toolCalls: [{ name: 'tax', args: { taxableIncome: 50400, filingStatus: 'single' } }], costUsd: 0.01 },
     { text: 'The federal income tax is $5,800.', costUsd: 0.01 },
   ] });
-  const tool = { name: 'tax', description: 'Calculate ordinary federal tax on synthetic taxable income.', scope: 'read',
+  const tool = { name: 'tax', description: 'Calculate ordinary federal tax on synthetic taxable income.', kind: 'read', operations: [{ name: 'read', scope: 'read' }],
     inputSchema: { type: 'object', properties: { taxableIncome: { type: 'number', minimum: 0 }, filingStatus: { const: 'single' } },
       required: ['taxableIncome', 'filingStatus'], additionalProperties: false }, handler: args => federalIncomeTax(args) };
   const result = await engine.call({ ...request, tools: [tool] });

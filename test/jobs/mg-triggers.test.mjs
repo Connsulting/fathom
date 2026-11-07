@@ -761,7 +761,7 @@ test('MG12: a Virginia target turns unavailable when the 529 answers go missing'
   assert.equal(recRow(db, 'va-q4-estimate').status, 'waiting');
   assert.ok(resolveTokens(scenario, '{f:sh.va.remaining}', false).endsWith(' (not current)'));
   assert.match(resolveTokens(scenario, '{f:sh.va.remaining}', true), /data-unavailable="1"/);
-  const tool = await callTool('get_figures', { keys: ['sh.va.remaining'] }, { db });
+  const tool = await callTool('household', { operation: 'figures',  keys: ['sh.va.remaining'] }, { db });
   assert.equal(tool.length, 1);
   assert.equal(tool[0].unavailable, f.unavailable);
   // Triggers read only this run's figures: no rec the run rewrote cites the retained key.

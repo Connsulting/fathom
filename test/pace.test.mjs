@@ -161,7 +161,7 @@ test('GET pace, scenario and MCP share the deterministic read-only result, inclu
   const before = db.prepare('SELECT total_changes() AS n').get().n;
   const direct = buildPace(db, { clock });
   assert.deepEqual(buildScenario(db).pace, direct);
-  const toolResult = await callTool('get_pace', {}, { db, clock });
+  const toolResult = await callTool('goals', { operation: 'pace', }, { db, clock });
   assert.deepEqual(withoutEnvelopes(toolResult), direct);
   await assertRefsResolve(toolResult, { db, clock });
   assert.equal(db.prepare('SELECT total_changes() AS n').get().n, before);
@@ -189,7 +189,7 @@ test('demo pace envelopes preserve every figure, its unit, data date and replaya
     src: 'you', asOf: demoClock, confirmed: true });
   const context = { db: s.db, clock: demoClock };
   const direct = buildPace(s.db, { clock: demoClock });
-  const result = await callTool('get_pace', {}, context);
+  const result = await callTool('goals', { operation: 'pace', }, context);
   assert.deepEqual(withoutEnvelopes(result), direct);
   const seen = { days: 0, count: 0, ratio: 0, usd: 0, series: 0 };
   function visit(value, path = '', through = null) {
@@ -205,7 +205,7 @@ test('demo pace envelopes preserve every figure, its unit, data date and replaya
       assert.equal(value.envelope.unit, unit, `${path} envelope unit`);
       assert.equal(value.envelope.asOf, through, `${path} envelope data date`);
       assert.equal(value.envelope.value, value.v, `${path} preserves the produced value`);
-      assert.deepEqual(value.envelope.ref, { tool: 'get_pace', args: {}, path: `${path}.envelope` });
+      assert.deepEqual(value.envelope.ref, { tool: 'goals', args: { operation: 'pace', }, path: `${path}.envelope` });
       if (unit === 'count') assert.ok(Number.isInteger(value.v), `${path} is an integer`);
       if (unit === 'usd' || unit === 'days') assert.equal(value.v, Math.round(value.v * 100) / 100, `${path} rounds to cents`);
       return;
