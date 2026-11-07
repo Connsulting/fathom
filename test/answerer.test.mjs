@@ -1562,7 +1562,9 @@ test('R3 D: K-12 and 2026-01 never read as negatives in evidence or in the answe
 });
 
 // Canned demo answers that were unverified before round 3, independent of it.
-const KNOWN_UNVERIFIED = new Set(['ask:salary', 'rec:offcycle:1', 'whatif:scorp']);
+// ask:backdoor names the advisor's Dec 10 check-in, which its fake script never reads: since review
+// r2 F5 an unsourced date is unchecked in place, so that answer is unverified by design.
+const KNOWN_UNVERIFIED = new Set(['ask:salary', 'rec:offcycle:1', 'whatif:scorp', 'ask:backdoor']);
 
 test('R3 demo regression: every canned demo answer stays grounded except the known pre-existing ones; What if kids is grounded', async t => {
   const s = await demoStore(t);
