@@ -1,10 +1,18 @@
+// The auth store over the platform DB (platform.sqlite): global users, household memberships and
+// invitations, instance operators, passkeys, recovery and add-a-device tokens, sessions, ceremony
+// challenges, rate limits, platform settings and audit events. It never touches the financial
+// store. Outer writes run under BEGIN IMMEDIATE; nested ones use a savepoint.
+
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { HttpError } from '../api/http.mjs';
+import { newHouseholdId } from '../platform/db.mjs';
 
 export const TOKEN_TTL = 20 * 60 * 1000;
-export const TOKEN_PURPOSES = Object.freeze(['invite', 'recovery', 'add-passkey']);
+export const TOKEN_PURPOSES = Object.freeze(['recovery', 'add-passkey']);
 export const CHALLENGE_TTL = 5 * 60 * 1000;
 export const SESSION_TTL = 7 * 24 * 60 * 60 * 1000;
+export const INVITATIONS_PER_HOUR = 20;
+const HOUR = 60 * 60 * 1000;
 export const validHandle = value => typeof value === 'string' && /^[A-Za-z0-9_-]{43}$/.test(value);
 export const digest = value => createHash('sha256').update(value).digest('hex');
 const randomHandle = () => randomBytes(32).toString('base64url');
@@ -27,12 +35,22 @@ const checkRole = role => {
   if (role !== 'admin' && role !== 'member') throw new HttpError(400, 'invalid role');
 };
 
+function displayName(value) {
+  if (typeof value !== 'string' || !value.trim() || value.trim().length > 120 || /[\u0000-\u001f\u007f-\u009f]/.test(value)) {
+    throw new HttpError(400, 'invalid household name');
+  }
+  return value.trim();
+}
+
+const expiredLink = () => new HttpError(410, 'link expired or already used');
+const lastAdmin = () => new HttpError(409, 'cannot remove or demote the last enrolled administrator');
+
 const projectUser = row => row ? {
-  id: row.id, email: row.email, login: row.email, name: row.email,
-  householdId: row.household_id, role: row.role, enrolledAt: row.enrolled_at,
+  id: row.id, email: row.email, login: row.email, name: row.email, enrolledAt: row.enrolled_at,
 } : null;
 
-export function createAuthStore(db, { now = () => Date.now() } = {}) {
+export function createAuthStore(platform, { now = () => Date.now() } = {}) {
+  const db = platform;
   function transaction(fn) {
     const nested = db.isTransaction;
     db.exec(nested ? 'SAVEPOINT auth_write' : 'BEGIN IMMEDIATE');
@@ -51,15 +69,49 @@ export function createAuthStore(db, { now = () => Date.now() } = {}) {
 
   const userRow = id => typeof id === 'string' ? db.prepare('SELECT * FROM users WHERE id = ?').get(id) || null : null;
   const getUser = id => projectUser(userRow(id));
-  function ensureHousehold() {
-    db.prepare('INSERT OR IGNORE INTO households (id) VALUES (1)').run();
-    return { id: 1 };
+  const householdRow = id => typeof id === 'string' ? db.prepare('SELECT * FROM households WHERE id = ?').get(id) || null : null;
+  function servedHousehold() {
+    const row = db.prepare('SELECT id, mode, status FROM households WHERE serves_store = 1').get();
+    return row ? { id: row.id, mode: row.mode, status: row.status } : null;
   }
-  function guardLastAdmin(user) {
-    if (user.role === 'admin' && user.enrolled_at !== null
-      && db.prepare("SELECT count(*) AS n FROM users WHERE role = 'admin' AND enrolled_at IS NOT NULL").get().n <= 1) {
-      throw new HttpError(409, 'cannot remove or demote the last enrolled administrator');
-    }
+  const membershipRow = (userId, householdId) => db.prepare('SELECT * FROM household_memberships WHERE user_id = ? AND household_id = ?')
+    .get(userId, householdId) || null;
+  function membership(userId, householdId) {
+    const row = membershipRow(userId, householdId);
+    return row ? { role: row.role, status: row.status, version: row.version } : null;
+  }
+  const isOperator = userId => Boolean(db.prepare('SELECT 1 AS x FROM instance_operators WHERE user_id = ?').get(userId));
+  // Live: not consumed, not revoked, not expired, in a household that is not deleted.
+  function liveInvitationRow(raw) {
+    if (!validHandle(raw)) return null;
+    return db.prepare(`SELECT i.* FROM household_invitations i JOIN households h ON h.id = i.household_id
+      WHERE i.hash = ? AND i.consumed_at IS NULL AND i.revoked_at IS NULL AND i.expires_at > ? AND h.status != 'deleted'`)
+      .get(digest(raw), now()) || null;
+  }
+  // The open (unconsumed, unrevoked) invitation of a user in a household, expired or not.
+  const pendingInvitationRow = (householdId, userId) => db.prepare(`SELECT * FROM household_invitations
+    WHERE household_id = ? AND user_id = ? AND consumed_at IS NULL AND revoked_at IS NULL ORDER BY created_at DESC LIMIT 1`)
+    .get(householdId, userId) || null;
+  function audit(action, { actorId = null, householdId = null, targetUserId = null, outcome = 'ok' } = {}) {
+    db.prepare('INSERT INTO audit_events (at, actor_user_id, household_id, target_user_id, action, outcome) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(now(), actorId, householdId, targetUserId, action, outcome);
+  }
+  const enrolledAdmins = householdId => db.prepare(`SELECT u.* FROM household_memberships m JOIN users u ON u.id = m.user_id
+    WHERE m.household_id = ? AND m.status = 'active' AND m.role = 'admin' AND u.enrolled_at IS NOT NULL ORDER BY u.created_at, u.id`)
+    .all(householdId);
+  // Per household: an enrolled admin with an active membership may not leave the household without one.
+  function guardLastAdmin(householdId, userId) {
+    const m = membershipRow(userId, householdId);
+    const user = userRow(userId);
+    if (m?.status === 'active' && m.role === 'admin' && user?.enrolled_at != null && enrolledAdmins(householdId).length <= 1) throw lastAdmin();
+  }
+  // The household a new session works in: the served household when the user is an active member
+  // of it, else the user's only active membership, else none.
+  function defaultHousehold(userId) {
+    const served = servedHousehold();
+    if (served && membershipRow(userId, served.id)?.status === 'active') return served.id;
+    const active = db.prepare("SELECT household_id FROM household_memberships WHERE user_id = ? AND status = 'active'").all(userId);
+    return active.length === 1 ? active[0].household_id : null;
   }
   function token(raw) {
     if (!validHandle(raw)) return null;
@@ -70,49 +122,215 @@ export function createAuthStore(db, { now = () => Date.now() } = {}) {
     if (validHandle(raw)) db.prepare('DELETE FROM auth_sessions WHERE hash = ?').run(digest(raw));
   }
   const revokeUserSessions = id => { db.prepare('DELETE FROM auth_sessions WHERE user_id = ?').run(id); };
+  // Delete the account once no active membership and no operator grant holds it (cascades
+  // passkeys, tokens, sessions, challenges and its invitations).
+  function deleteIfUnheld(userId) {
+    const held = db.prepare("SELECT 1 AS x FROM household_memberships WHERE user_id = ? AND status = 'active'").get(userId) || isOperator(userId);
+    if (!held) db.prepare('DELETE FROM users WHERE id = ?').run(userId);
+    return !held;
+  }
+  function personOf(householdId, row) {
+    const m = membershipRow(row.id, householdId);
+    const role = m?.status === 'active' ? m.role : pendingInvitationRow(householdId, row.id)?.role ?? null;
+    return { ...projectUser(row), role };
+  }
+  function consume(raw, userId) {
+    const row = liveInvitationRow(raw);
+    if (!row || row.user_id !== userId) throw expiredLink();
+    const at = now();
+    db.prepare('UPDATE household_invitations SET consumed_at = ? WHERE hash = ?').run(at, row.hash);
+    const existing = membershipRow(userId, row.household_id);
+    if (!existing) {
+      db.prepare(`INSERT INTO household_memberships (user_id, household_id, role, status, version, created_at, updated_at)
+        VALUES (?, ?, ?, 'active', 1, ?, ?)`).run(userId, row.household_id, row.role, at, at);
+    } else if (existing.status !== 'active') {
+      db.prepare(`UPDATE household_memberships SET role = ?, status = 'active', version = version + 1, updated_at = ?
+        WHERE user_id = ? AND household_id = ?`).run(row.role, at, userId, row.household_id);
+    }
+    audit('membership.join', { actorId: userId, householdId: row.household_id, targetUserId: userId });
+    return { householdId: row.household_id, ...membership(userId, row.household_id) };
+  }
+  function invite(householdId, email, { role = 'member', inviterId = null } = {}) {
+    const canonical = normalizeEmail(email);
+    checkRole(role);
+    return transaction(() => {
+      const household = householdRow(householdId);
+      if (!household || household.status === 'deleted') throw new HttpError(404, 'no such household');
+      const existing = db.prepare('SELECT * FROM users WHERE email = ?').get(canonical);
+      if (existing && membershipRow(existing.id, householdId)?.status === 'active') {
+        throw new HttpError(409, 'this person is already a member; use the role change action instead');
+      }
+      // Every invitation sent in the last hour counts, reissues and revoked links included.
+      const at = now();
+      const recent = db.prepare('SELECT count(*) AS n, min(created_at) AS first FROM household_invitations WHERE household_id = ? AND created_at > ?')
+        .get(householdId, at - HOUR);
+      if (recent.n >= INVITATIONS_PER_HOUR) {
+        const wait = Math.max(1, Math.ceil((recent.first + HOUR - at) / 1000));
+        throw new HttpError(429, 'too many requests', { 'Retry-After': String(wait) });
+      }
+      let userId = existing?.id;
+      if (!userId) {
+        userId = randomUUID();
+        db.prepare('INSERT INTO users (id, email, user_handle, created_at) VALUES (?, ?, ?, ?)').run(userId, canonical, randomHandle(), at);
+      }
+      db.prepare(`UPDATE household_invitations SET revoked_at = ?
+        WHERE household_id = ? AND email = ? AND consumed_at IS NULL AND revoked_at IS NULL`).run(at, householdId, canonical);
+      const raw = randomHandle();
+      const expiresAt = at + TOKEN_TTL;
+      db.prepare(`INSERT INTO household_invitations (hash, household_id, email, role, user_id, inviter_user_id, created_at, expires_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(digest(raw), householdId, canonical, role, userId, inviterId, at, expiresAt);
+      audit('invitation.issue', { actorId: inviterId, householdId, targetUserId: userId });
+      return { user: getUser(userId), token: raw, expiresAt };
+    });
+  }
+
   const store = {
-    transaction, userRow, ensureHousehold, getUser,
+    transaction, userRow, getUser, servedHousehold, membership, isOperator, audit, defaultHousehold,
     findUser(email) {
       let canonical;
       try { canonical = normalizeEmail(email); } catch { return null; }
       return projectUser(db.prepare('SELECT * FROM users WHERE email = ?').get(canonical));
     },
-    inviteUser(email, { role = 'member' } = {}) {
-      const canonical = normalizeEmail(email);
+    activeMemberships(userId) {
+      return db.prepare(`SELECT m.household_id, m.role FROM household_memberships m JOIN households h ON h.id = m.household_id
+        WHERE m.user_id = ? AND m.status = 'active' AND h.status != 'deleted' ORDER BY m.created_at, m.household_id`)
+        .all(userId).map(row => ({ householdId: row.household_id, role: row.role }));
+    },
+    // Enrolled admins with an active membership in the household (for security notices).
+    householdAdmins(householdId) { return enrolledAdmins(householdId).map(projectUser); },
+    invite,
+    invitation(raw) {
+      const row = liveInvitationRow(raw);
+      return row ? { householdId: row.household_id, email: row.email, role: row.role, userId: row.user_id, expiresAt: row.expires_at } : null;
+    },
+    revokeInvitation(raw) {
+      if (validHandle(raw)) {
+        db.prepare('UPDATE household_invitations SET revoked_at = ? WHERE hash = ? AND consumed_at IS NULL AND revoked_at IS NULL').run(now(), digest(raw));
+      }
+    },
+    consumeInvitation(raw, userId) { return transaction(() => consume(raw, userId)); },
+    // A signed-in user redeems an invitation addressed to their own account. The role comes from
+    // the invitation only. 410 for a dead link, 403 for another account's link (nothing changes).
+    acceptInvitation(raw, sessionUserId) {
+      return transaction(() => {
+        const row = liveInvitationRow(raw);
+        if (!row) throw expiredLink();
+        const user = userRow(sessionUserId);
+        if (!user || user.enrolled_at === null || user.email !== row.email) throw new HttpError(403, 'this invitation is for another account');
+        return consume(raw, user.id);
+      });
+    },
+    markEnrolled(userId) {
+      db.prepare('UPDATE users SET enrolled_at = coalesce(enrolled_at, ?) WHERE id = ?').run(now(), userId);
+    },
+    // People of a household: active members and pending invitees (an open invitation, expired or
+    // not), each with the membership or invitation role.
+    listPeople(householdId) {
+      return db.prepare(`SELECT u.* FROM users u WHERE u.id IN (
+          SELECT user_id FROM household_memberships WHERE household_id = ? AND status = 'active'
+          UNION SELECT user_id FROM household_invitations WHERE household_id = ? AND consumed_at IS NULL AND revoked_at IS NULL)
+        ORDER BY u.created_at, u.id`).all(householdId, householdId).map(row => personOf(householdId, row));
+    },
+    // The person in this household (active member or pending invitee), or null.
+    person(householdId, userId) {
+      const row = userRow(userId);
+      if (!row) return null;
+      const active = membershipRow(userId, householdId)?.status === 'active';
+      return active || pendingInvitationRow(householdId, userId) ? personOf(householdId, row) : null;
+    },
+    setRole(householdId, userId, role) {
       checkRole(role);
       return transaction(() => {
-        ensureHousehold();
-        const existing = db.prepare('SELECT * FROM users WHERE email = ?').get(canonical);
-        if (existing) {
-          if (existing.enrolled_at !== null) throw new HttpError(409, 'user is already enrolled; use the role change action');
-          db.prepare('UPDATE users SET role = ? WHERE id = ?').run(role, existing.id);
-          return getUser(existing.id);
+        const row = userRow(userId);
+        const m = row ? membershipRow(userId, householdId) : null;
+        if (m?.status === 'active') {
+          if (role !== 'admin') guardLastAdmin(householdId, userId);
+          db.prepare('UPDATE household_memberships SET role = ?, version = version + 1, updated_at = ? WHERE user_id = ? AND household_id = ?')
+            .run(role, now(), userId, householdId);
+        } else {
+          const pending = row ? pendingInvitationRow(householdId, userId) : null;
+          if (!pending) throw new HttpError(404, 'no such user');
+          db.prepare('UPDATE household_invitations SET role = ? WHERE hash = ?').run(role, pending.hash);
         }
-        db.prepare(`INSERT INTO users (id, household_id, email, role, user_handle, created_at)
-          VALUES (?, 1, ?, ?, ?, ?)`)
-          .run(randomUUID(), canonical, role, randomHandle(), now());
-        return store.findUser(canonical);
+        audit('membership.role', { householdId, targetUserId: userId });
+        return personOf(householdId, row);
       });
     },
-    listUsers() { return db.prepare('SELECT * FROM users ORDER BY created_at, id').all().map(projectUser); },
-    setRole(id, role) {
-      checkRole(role);
+    // Removes the membership (or the pending invitation) and signs the user out, revokes the
+    // invitations they issued in this household, then deletes the account when nothing holds it.
+    // The caller deletes the user's MCP keys from the household's store. False when the user is not
+    // in the household.
+    removeMember(householdId, userId) {
       return transaction(() => {
-        const user = userRow(id);
-        if (!user) throw new HttpError(404, 'no such user');
-        if (role !== 'admin') guardLastAdmin(user);
-        db.prepare('UPDATE users SET role = ? WHERE id = ?').run(role, id);
-        return getUser(id);
-      });
-    },
-    removeUser(id) {
-      return transaction(() => {
-        const user = userRow(id);
-        if (!user) return false;
-        guardLastAdmin(user);
-        db.prepare('DELETE FROM users WHERE id = ?').run(id);
+        const row = userRow(userId);
+        if (!row) return false;
+        const m = membershipRow(userId, householdId);
+        const at = now();
+        if (m?.status === 'active') {
+          guardLastAdmin(householdId, userId);
+          db.prepare("UPDATE household_memberships SET status = 'removed', version = version + 1, updated_at = ? WHERE user_id = ? AND household_id = ?")
+            .run(at, userId, householdId);
+        } else if (!pendingInvitationRow(householdId, userId)) {
+          return false;
+        }
+        db.prepare('UPDATE household_invitations SET revoked_at = ? WHERE household_id = ? AND user_id = ? AND consumed_at IS NULL AND revoked_at IS NULL')
+          .run(at, householdId, userId);
+        db.prepare('UPDATE household_invitations SET revoked_at = ? WHERE household_id = ? AND inviter_user_id = ? AND consumed_at IS NULL AND revoked_at IS NULL')
+          .run(at, householdId, userId);
+        revokeUserSessions(userId);
+        audit('membership.remove', { householdId, targetUserId: userId });
+        deleteIfUnheld(userId);
         return true;
       });
+    },
+    grantOperator(userId, { actorId = null } = {}) {
+      return transaction(() => {
+        const row = userRow(userId);
+        if (!row || row.enrolled_at === null) throw new HttpError(409, 'only an enrolled user can be an operator');
+        db.prepare('INSERT OR IGNORE INTO instance_operators (user_id, granted_at, granted_by) VALUES (?, ?, ?)').run(userId, now(), actorId);
+        audit('operator.grant', { actorId, targetUserId: userId });
+        return true;
+      });
+    },
+    revokeOperator(userId, { actorId = null } = {}) {
+      return transaction(() => {
+        if (!isOperator(userId)) throw new HttpError(404, 'no such operator');
+        if (db.prepare('SELECT count(*) AS n FROM instance_operators').get().n <= 1) throw new HttpError(409, 'cannot revoke the last operator');
+        db.prepare('DELETE FROM instance_operators WHERE user_id = ?').run(userId);
+        audit('operator.revoke', { actorId, targetUserId: userId });
+        return true;
+      });
+    },
+    // A new household in status provisioning with an admin invitation. Real instances allow one
+    // non-deleted real household (provisioning included) until multi_household_enabled is set;
+    // demo instances are exempt.
+    provisionHousehold({ displayName: name, adminEmail } = {}, { actorId = null } = {}) {
+      const label = displayName(name);
+      const email = normalizeEmail(adminEmail);
+      return transaction(() => {
+        if (!actorId || !isOperator(actorId)) throw new HttpError(403, 'operator required');
+        const mode = servedHousehold()?.mode === 'demo' ? 'demo' : 'real';
+        if (mode === 'real' && store.getPlatformSetting('multi_household_enabled', false) !== true) {
+          const n = db.prepare("SELECT count(*) AS n FROM households WHERE status != 'deleted' AND mode = 'real'").get().n;
+          if (n >= 1) throw new HttpError(409, 'additional households are not enabled on this instance', undefined, 'multi_household_gated');
+        }
+        const id = newHouseholdId();
+        const at = now();
+        db.prepare(`INSERT INTO households (id, status, mode, display_name, serves_store, created_at, updated_at)
+          VALUES (?, 'provisioning', ?, ?, 0, ?, ?)`).run(id, mode, label, at, at);
+        audit('household.provision', { actorId, householdId: id });
+        const issued = invite(id, email, { role: 'admin', inviterId: actorId });
+        return { household: { id, status: 'provisioning' }, token: issued.token, user: issued.user, expiresAt: issued.expiresAt };
+      });
+    },
+    getPlatformSetting(key, fallback) {
+      const row = db.prepare('SELECT value FROM platform_settings WHERE key = ?').get(key);
+      if (!row) return fallback;
+      try { return JSON.parse(row.value); } catch { return fallback; }
+    },
+    setPlatformSetting(key, value) {
+      db.prepare(`INSERT INTO platform_settings (key, value, updated_at) VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`).run(key, JSON.stringify(value), now());
     },
     listPasskeys(userId) {
       return db.prepare('SELECT id, name, created_at, transports FROM passkeys WHERE user_id = ? ORDER BY created_at, id').all(userId)
@@ -153,15 +371,18 @@ export function createAuthStore(db, { now = () => Date.now() } = {}) {
         const raw = randomHandle();
         const signedInAt = now();
         const expiresAt = signedInAt + SESSION_TTL;
-        db.prepare('INSERT INTO auth_sessions (hash, user_id, signed_in_at, expires_at) VALUES (?, ?, ?, ?)')
-          .run(digest(raw), userId, signedInAt, expiresAt);
+        db.prepare('INSERT INTO auth_sessions (hash, user_id, signed_in_at, expires_at, household_id) VALUES (?, ?, ?, ?, ?)')
+          .run(digest(raw), userId, signedInAt, expiresAt, defaultHousehold(userId));
         return { token: raw, expiresAt };
       });
     },
+    // The session's user, plus the household the session works in (sessionHouseholdId, null when
+    // none was bound), or null.
     session(raw) {
       if (!validHandle(raw)) return null;
-      return projectUser(db.prepare(`SELECT u.* FROM auth_sessions s JOIN users u ON u.id = s.user_id
-        WHERE s.hash = ? AND s.expires_at > ? AND u.enrolled_at IS NOT NULL`).get(digest(raw), now()));
+      const row = db.prepare(`SELECT u.*, s.household_id AS session_household_id FROM auth_sessions s JOIN users u ON u.id = s.user_id
+        WHERE s.hash = ? AND s.expires_at > ? AND u.enrolled_at IS NOT NULL`).get(digest(raw), now());
+      return row ? { ...projectUser(row), sessionHouseholdId: row.session_household_id } : null;
     },
     sessionSignedInAt(raw) {
       if (!validHandle(raw)) return null;
@@ -169,12 +390,15 @@ export function createAuthStore(db, { now = () => Date.now() } = {}) {
         WHERE s.hash = ? AND s.expires_at > ? AND u.enrolled_at IS NOT NULL`).get(digest(raw), now())?.signed_in_at ?? null;
     },
     revokeSession, revokeUserSessions,
-    createChallenge({ ceremony, userId = null, token: linkToken = null, session: sessionToken = null, challenge }) {
+    // A ceremony challenge. A registration bound to an emailed link names it as `token` (recovery or
+    // add-passkey) or `invitation` (an invitation link).
+    createChallenge({ ceremony, userId = null, token: linkToken = null, invitation = null, session: sessionToken = null, challenge }) {
       const raw = randomHandle();
       const expiresAt = now() + CHALLENGE_TTL;
-      db.prepare(`INSERT INTO auth_challenges (hash, ceremony, user_id, token_hash, session_hash, challenge, expires_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)`)
-        .run(digest(raw), ceremony, userId, linkToken ? digest(linkToken) : null, sessionToken ? digest(sessionToken) : null, challenge, expiresAt);
+      db.prepare(`INSERT INTO auth_challenges (hash, ceremony, user_id, token_hash, invitation_hash, session_hash, challenge, expires_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(digest(raw), ceremony, userId, linkToken ? digest(linkToken) : null, invitation ? digest(invitation) : null,
+          sessionToken ? digest(sessionToken) : null, challenge, expiresAt);
       return { token: raw, expiresAt };
     },
     consumeChallenge(raw) {
@@ -195,6 +419,7 @@ export function createAuthStore(db, { now = () => Date.now() } = {}) {
         RETURNING attempts`).get(digest(key), at, at + windowMs, at, limit + 1, at, at);
       if (row.attempts > limit) throw new HttpError(429, 'too many requests', { 'Retry-After': String(Math.ceil(windowMs / 1000)) });
     },
+    // Invitations are kept after expiry: an open one keeps a pending invitee listed.
     sweep() {
       const at = now();
       for (const table of ['auth_challenges', 'auth_tokens', 'auth_sessions', 'auth_rate_limits']) {

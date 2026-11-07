@@ -3,11 +3,13 @@
 // job lease and gets its job_runs row like any other). Prints the run counts as JSON and the
 // warning codes, never amounts. Exit 2 when there is no store or it is a demo store (nothing is
 // created or changed), 3 when another process (the server) holds the job lease, 1 when the run
-// fails.
+// fails. A real store opens only through openServedStore (refusing, for example,
+// platform_migration_required before the store is touched).
 
 import { join } from 'node:path';
 import { loadConfig } from '../config.mjs';
-import { openMigrated, readStoreMode, DB_FILE } from '../store/db.mjs';
+import { readStoreMode, DB_FILE } from '../store/db.mjs';
+import { openServedStore } from '../platform/ready.mjs';
 import { createRuntimeEngine } from '../engine/runtime.mjs';
 import { createScheduler, defaultHandlers, SchedulerError } from './scheduler.mjs';
 
@@ -31,7 +33,15 @@ async function main() {
     console.error('plan: FATHOM_DATA holds a demo store; planning runs on real stores only.');
     return 2;
   }
-  const db = openMigrated(file);
+  let db;
+  try {
+    const served = openServedStore(config);
+    served.platform.close();
+    db = served.db;
+  } catch (e) {
+    console.error(`plan: ${e.name === 'StartupError' ? e.message : 'store_unavailable'}`);
+    return 1;
+  }
   let scheduler = null;
   try {
     const engine = createRuntimeEngine({ db, config });
