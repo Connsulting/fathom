@@ -13,7 +13,7 @@ export const id = 'mapped';
 export const label = 'Mapped export';
 export const SAMPLE_ROWS = 5;
 
-const COLUMNS = ['date', 'amount', 'description', 'category', 'accountName', 'accountNumber', 'institution', 'symbol', 'quantity', 'price', 'value', 'debit', 'credit', 'externalId'];
+const COLUMNS = ['date', 'amount', 'description', 'category', 'accountName', 'accountNumber', 'institution', 'symbol', 'quantity', 'price', 'value', 'debit', 'credit', 'externalId', 'accountHolder'];
 const TARGETS = ['transaction', 'balance', 'position'];
 const SIGNS = ['as_is', 'negate'];
 const ORDERS = ['ymd', 'mdy', 'dmy'];
@@ -151,7 +151,8 @@ export function applyMapping(mapping, table, file) {
   const warnings = [];
   for (const { values, locator } of table.rows) {
     const date = parseDate(cell(values, 'date'), mapping.dateOrder, date1904);
-    const account = { inst: institution(text(values, 'institution')), mask: mask(text(values, 'accountNumber')) || fileMask, name: text(values, 'accountName') };
+    const holder = text(values, 'accountHolder');
+    const account = { inst: institution(text(values, 'institution')), mask: mask(text(values, 'accountNumber')) || fileMask, name: text(values, 'accountName'), ...(holder ? { holder } : {}) };
     if (mapping.target === 'position') {
       const symbol = text(values, 'symbol');
       const quantity = number(cell(values, 'quantity'));

@@ -1,0 +1,7 @@
+Account number,Account name,Symbol,Description,Quantity,Last price,Last price change,Current value,Today's gain/loss dollar,Today's gain/loss percent,Total gain/loss dollar,Total gain/loss percent,Percent of account,Cost basis total,Average cost basis,Type
+Z00001111,Individual TOD,FUNDA,Example Total Market Fund,10,$100.00,+0.10,$1000.00,0,0,0,0,80%,$900.00,$90.00,Cash
+Z00001111,Individual TOD,CASH**,HELD IN MONEY MARKET,,,,$250.00,,,,,20%,,,Cash
+Z00002222,Individual TOD,FUNDB,Example Bond Fund,5,$200.00,-0.05,$1000.00,0,0,0,0,100%,$950.00,$190.00,Cash
+
+Informational footer only
+Date downloaded Oct-31-2026 10:00 a.m ET

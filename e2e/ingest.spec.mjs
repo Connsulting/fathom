@@ -5,7 +5,7 @@
 
 import { writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { test, expect, S, resetDemo, gotoRoute, quickChecks, aboutMinutes, yearBanner, bannerStart, deckCard, deckTo } from './helpers.mjs';
+import { test, expect, S, resetDemo, gotoRoute, quickChecks, aboutMinutes, yearBanner, bannerStart, deckCard, deckEach, deckFind } from './helpers.mjs';
 
 const fixture = (name) => fileURLToPath(new URL(`../test/fixtures/ingest/${name}`, import.meta.url));
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -64,33 +64,36 @@ test('add files, confirm an owner, and see it on Accounts', async ({ page, reque
   await expect(yearBanner(page)).toContainText(quickChecks(pending));
   await expect(yearBanner(page)).toContainText(aboutMinutes(pending));
 
-  // Start opens the Confirm deck; move to the owner question for the aggregator account and answer it.
+  // Start opens the Confirm deck. The new owner questions and the seeded one share the owner
+  // group card: pick You on the aggregator account's row and apply the selections.
   await bannerStart(page).click();
   await expect(page).toHaveURL(/#\/confirm$/);
   await expect(page.locator('.h-deck')).toBeVisible();
   const account = added.find((a) => body.scenario.live.ingest.items.some((i) => i.kind === 'account_owner' && i.subject === a.id && a.inst));
   expect(account).toBeTruthy();
   const item = body.scenario.live.ingest.items.find((i) => i.kind === 'account_owner' && i.subject === account.id);
-  const index = item.options.findIndex((o) => o.id === 'owner');
-  const option = item.options[index];
+  const option = item.options.find((o) => o.id === 'owner');
   const order = await pendingIds(request);
   expect(order).toHaveLength(pending);
-  await deckTo(page, order, item.id);
-  const choice = deckCard(page).locator(`[data-answer="${item.id}"][data-option="owner"]`);
+  expect(body.scenario.live.ingest.items.filter((i) => i.kind === 'account_owner').length, 'owner questions form a group').toBeGreaterThanOrEqual(2);
+  const group = await deckFind(page, '[data-group="account_owner"]');
+  const choice = group.locator(`button[data-row-answer="${item.id}"][data-option="owner"]`);
   await expect(choice).toBeVisible();
-  await expect(choice).toHaveText(`${index + 1} · ${option.label}`);
-  const answered = page.waitForResponse((r) => new URL(r.url()).pathname === `/api/confirm/${item.id}/answer`);
+  await expect(choice).toContainText(option.label);
   await choice.click();
+  await expect(choice).toHaveAttribute('aria-pressed', 'true');
+  const answered = page.waitForResponse((r) => new URL(r.url()).pathname === '/api/confirm/answers' && r.request().method() === 'POST');
+  await group.locator('button[data-group-apply]').click();
   expect((await answered).status()).toBe(200);
-  await expect(page.locator(`article.h-deck-card.cur[data-item="${item.id}"]`)).toHaveCount(0);
-  expect(await pendingIds(request)).not.toContain(item.id);
+  const left = await pendingIds(request);
+  expect(left).not.toContain(item.id);
 
   // The owner label shows on Accounts; one fewer quick check is pending on the brief.
   await gotoRoute(page, 'accounts');
   const card = page.locator('.h-acc').filter({ hasText: account.name });
   await expect(card).toContainText(`${account.inst}, ${option.label}`);
   await gotoRoute(page, 'brief');
-  if (pending > 1) await expect(yearBanner(page)).toContainText(quickChecks(pending - 1));
+  if (left.length) await expect(yearBanner(page)).toContainText(quickChecks(left.length));
   else await expect(yearBanner(page)).toHaveCount(0);
 });
 
@@ -215,16 +218,17 @@ test('upload file names render literally on onboarding, Accounts and Confirm', a
   await expectLiteral(page.locator('.h-ing-files').first(), accountNames);
   await expect(page.locator('.h-ing-files b')).toHaveCount(0);
 
-  // The deck shows one card at a time: walk every card and collect the file names in the kickers.
-  const order = await pendingIds(request);
+  // The deck shows one card at a time: walk every card (single and group) and collect the file
+  // names from the kickers and the account panels' file cells.
   await gotoRoute(page, 'confirm');
-  const seen = new Set();
-  for (const id of order) {
-    await deckTo(page, order, id);
-    await expect(page.locator('.h-deck-card .h-cf-k b, .h-ing-files b')).toHaveCount(0);
-    for (const t of await deckCard(page).locator('.h-cf-k span').allTextContents()) seen.add(t.trim());
-  }
-  for (const n of new Set([...onboardingNames, ...accountNames])) expect([...seen], `file name ${n} on a Confirm card`).toContain(n);
+  await expect(page.locator('.h-deck')).toBeVisible();
+  const seen = [];
+  await deckEach(page, async () => {
+    await expect(page.locator('.h-deck-card .h-cf-k b, .h-ing-files b, .h-deck-card [data-field="files"] b')).toHaveCount(0);
+    for (const t of await deckCard(page).locator('.h-cf-k span, [data-field="files"]').allTextContents()) seen.push(t.trim());
+  });
+  const text = seen.join('\n');
+  for (const n of new Set([...onboardingNames, ...accountNames])) expect(text, `file name ${n} on a Confirm card`).toContain(n);
 });
 
 // D1: a file past the parse limits shows as "Too large to read" in the Accounts results.

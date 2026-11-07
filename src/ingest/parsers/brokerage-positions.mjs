@@ -1,4 +1,5 @@
 import { csv, csvScore, text, isoDate, money, number, mask, warning, result, empty, LimitError } from '../format.mjs';
+import { holderOf } from './aggregator.mjs';
 
 export const id = 'brokerage-positions';
 export const label = 'Brokerage positions';
@@ -43,7 +44,7 @@ export function parse(file) {
       const value = money(record['current value']);
       const quantity = cash && !record.quantity ? value : number(record.quantity);
       const price = cash && !record['last price'] ? 1 : money(record['last price']);
-      const account = { inst: '', mask: mask(record['account number']), name: record['account name'] };
+      const account = { inst: '', mask: mask(record['account number']), name: record['account name'], ...holderOf(record) };
       if (!account.mask || value === null || quantity === null || price === null || !record.symbol || values.length !== headers.length) {
         warnings.push({ code: 'invalid_position', locator, ...(account.mask ? { account: { inst: '', mask: account.mask } } : {}) });
         continue;

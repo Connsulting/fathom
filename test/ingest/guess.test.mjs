@@ -65,6 +65,21 @@ function runtimeEngine(db, mode = 'fake') {
   const calls = [];
   return { mode: rt.mode, isOn: () => rt.isOn(), calls, call: (req) => { calls.push(structuredClone(req)); return rt.call(req); } };
 }
+const FIXED_TEXTS = () => Object.values(G.REASON_TEXT);
+// The scenario guess: the stored option, label, model and ts; evidence is concrete stored values
+// (never a fixed sentence) and reason equals evidence.
+function assertScenarioGuess(guess, { option, label, source = 'engine', model = 'fake', ts = NOW }) {
+  assert.ok(guess, 'the item carries a guess');
+  assert.equal(guess.option, option);
+  assert.equal(guess.label, label);
+  assert.equal(guess.source, source);
+  assert.equal(guess.model, model);
+  assert.equal(guess.ts, ts);
+  assert.equal(typeof guess.evidence, 'string');
+  assert.ok(guess.evidence.length > 0, 'the evidence has text');
+  assert.equal(guess.reason, guess.evidence, 'reason equals evidence');
+  assert.ok(!FIXED_TEXTS().includes(guess.evidence), 'the evidence is not a fixed reason sentence');
+}
 const script = (guesses) => [{ text: JSON.stringify({ guesses }) }];
 const guessRows = (db) => all(db, 'SELECT item_id, option_id, reason, model, ts FROM confirm_guesses ORDER BY item_id');
 const rowOf = (db, id) => one(db, 'SELECT item_id, option_id, reason, model, ts FROM confirm_guesses WHERE item_id = ?', id);
@@ -163,8 +178,8 @@ describe('guessPending', () => {
 
     const items = FR.ingestState(s.db).items;
     const byId = (id) => items.find((i) => i.id === id);
-    assert.deepEqual(byId(owner.id).guess, { option: 'owner', label: 'You', reason: G.REASON_TEXT.account_name, model: 'fake', ts: NOW });
-    assert.deepEqual(byId(kind.id).guess, { option: 'checking', label: 'Checking', reason: G.REASON_TEXT.source_file, model: 'fake', ts: NOW });
+    assertScenarioGuess(byId(owner.id).guess, { option: 'owner', label: 'You' });
+    assertScenarioGuess(byId(kind.id).guess, { option: 'checking', label: 'Checking' });
     for (const i of items) assert.equal(i.fileName, 'Chase7766_Activity_20320305.csv');
   }));
 
@@ -178,7 +193,8 @@ describe('guessPending', () => {
     const byId = (id) => items.find((i) => i.id === id);
     assert.equal(byId(a).guess, null);
     assert.equal(byId(b).guess, null);
-    assert.deepEqual(byId(c).guess, { option: 'cash', label: 'Savings or cash', reason: 'Synthetic reason', model: 'fake', ts: NOW });
+    assertScenarioGuess(byId(c).guess, { option: 'cash', label: 'Savings or cash' });
+    assert.notEqual(byId(c).guess.evidence, 'Synthetic reason', 'the stored reason text is not the evidence');
     for (const i of items) assert.equal(i.fileName, null, 'an item with no file has no file name');
   }));
 
@@ -315,8 +331,9 @@ describe('guessPending', () => {
       for (const r of guessRows(s.db)) if (r.reason !== null) assert.equal(/\p{N}/u.test(r.reason), false);
       const items = FR.ingestState(s.db).items;
       const byId = (id) => items.find((i) => i.id === id);
-      assert.deepEqual(byId(good).guess, { option: 'checking', label: 'Checking', reason: EXPECTED.account_name, model: 'fake', ts: NOW });
-      assert.deepEqual(byId(noisy).guess, { option: 'cash', label: 'Savings or cash', reason: EXPECTED.source_file, model: 'fake', ts: NOW });
+      assertScenarioGuess(byId(good).guess, { option: 'checking', label: 'Checking' });
+      assertScenarioGuess(byId(noisy).guess, { option: 'cash', label: 'Savings or cash' });
+      assert.ok(!/100k|thousand/.test(byId(noisy).guess.evidence), 'model-written text never reaches the scenario');
       assert.equal(byId(bad).guess, null);
     }));
   });

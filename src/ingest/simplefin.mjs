@@ -6,7 +6,9 @@
 // and never put in an error. A sync GETs <access>/accounts over a start-date window, maps accounts,
 // balances and transactions into one synthetic ingest file (no credentials in it) and runs it
 // through the ingest pipeline with the simplefin parser, so dedupe, provenance, sources and
-// figures work as for uploads. Accounts it writes are mirror 'connected'.
+// figures work as for uploads. Accounts it writes are mirror 'connected'. Every account a sync sees
+// gets a snapshot (no account or connection ids) for the account_match card, and the sync ends with
+// one auto-resolution pass.
 
 import { createHash } from 'node:crypto';
 import { getSetting } from '../store/db.mjs';
@@ -14,6 +16,7 @@ import { encrypt, decrypt, loadDataKey } from './vault.mjs';
 import { ingestFile, accountIdOf } from './pipeline.mjs';
 import { identifyAccountRows } from './dedupe.mjs';
 import { ask, normalizeName, ACCOUNT_MATCH_OPTIONS } from './confirm.mjs';
+import { autoResolve } from './auto.mjs';
 import { institution, cents } from './format.mjs';
 import { DEFAULT_HOSTS, parseAllowedHosts } from './simplefin-hosts.mjs';
 
@@ -313,6 +316,20 @@ function targetOf(db, accountId, acct) {
   return { accountId, identity: ownIdentity(acct.key), account: { inst: acct.inst, mask: acct.mask, name: acct.name, kind: acct.name } };
 }
 
+// What this sync saw of a bridge account: institution, name, mask, balance, the span and count of
+// its postings and the three newest. Never its bridge or connection id.
+function writeSnapshot(db, acct, now) {
+  const dates = acct.transactions.map((t) => t.date).sort();
+  const recent = [...acct.transactions].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0)).slice(0, 3)
+    .map((t) => ({ date: t.date, amount: t.amount, description: t.description }));
+  const snapshot = {
+    inst: acct.inst, name: acct.name, mask: acct.mask ?? null, maskSure: Boolean(acct.maskSure), balance: acct.balance ?? null, balanceDate: acct.balanceDate ?? null,
+    from: dates[0] ?? null, to: dates.at(-1) ?? null, count: dates.length, recent,
+  };
+  db.prepare(`INSERT INTO simplefin_snapshots (sf_key, snapshot, at) VALUES (?, ?, ?)
+              ON CONFLICT(sf_key) DO UPDATE SET snapshot = excluded.snapshot, at = excluded.at`).run(acct.key, JSON.stringify(snapshot), now);
+}
+
 // The full first window until every known bridge account has imported once under it, so an
 // account held by a match question or first seen on a short window still gets its history.
 function startDate(db, row, clock) {
@@ -353,6 +370,7 @@ export async function syncSimplefin(db, { config = {}, hosts, fetch: fetchImpl, 
   const docAccounts = [];
   for (const acct of set.accounts) {
     const accountId = resolveAccount(db, acct, { now: stamp, counts });
+    writeSnapshot(db, acct, stamp);
     if (!accountId) continue;
     const target = targetOf(db, accountId, acct);
     // A bridge transaction with the same date and amount as a file-imported one on this account is
@@ -397,6 +415,11 @@ export async function syncSimplefin(db, { config = {}, hosts, fetch: fetchImpl, 
   const authError = set.errors.find((e) => /^(gen|con)\.auth/.test(e.code));
   db.prepare('UPDATE simplefin_connection SET last_sync_at = ?, accounts = ? WHERE id = 1').run(stamp, set.accounts.length);
   setStatus(db, authError ? 'reconnect' : 'ok', authError ? 'auth' : null, set.errors.map((e) => e.msg).filter(Boolean).slice(0, 5));
+  try {
+    autoResolve(db, { now: stamp });
+  } catch (e) {
+    console.error('fathom: auto-resolve failed', e?.code ?? e?.name ?? 'error');
+  }
   return { status: authError ? 'reconnect' : 'ok', code: authError ? 'auth' : undefined, changed, counts };
 }
 

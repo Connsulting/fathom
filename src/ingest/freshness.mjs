@@ -5,7 +5,9 @@
 import { getSetting, parseJson } from '../store/db.mjs';
 import { escapeUserText } from '../shared/tokens.mjs';
 import { howToFor, listHowTo } from './howto.mjs';
-import { pendingItems } from './confirm.mjs';
+import { pendingItems, finalReason } from './confirm.mjs';
+import { cardDetail } from './context.mjs';
+import { bestGuess } from './bestguess.mjs';
 
 const MONTHLY = Object.freeze({ label: 'monthly', staleAfterDays: 45 });
 
@@ -106,20 +108,56 @@ function clockOf(db, clock) {
   return typeof stored === 'string' && dayMs(stored) != null ? stored : today();
 }
 
-// Pending items with fileName (the item's file name or null) and guess (the stored engine guess
-// as {option, label, reason, model, ts}, or null when it has no option or the option is gone).
+// Rank by impact (plan, Ingest state 2): tax questions first, then fact checks, account questions,
+// matches and aliases, near duplicates last. Account questions carry a group the deck folds into
+// one card.
+const RANK = Object.freeze({
+  tax_year: 0, employer_relation: 0, employer_recipient: 0, document_recipient: 0, withholding_conflict: 0,
+  fact_check: 1, account_kind: 2, account_owner: 2, account_match: 3, entity_alias: 3, near_duplicate: 4,
+});
+const GROUPED = new Set(['account_owner', 'account_kind']);
+const rankOf = (kind) => RANK[kind] ?? 5;
+const balanceSize = (item) => Math.abs(item.detail?.account?.balance?.amount ?? 0);
+
+// Pending items with fileName (the item's file name or null), detail (cardDetail), guess (the best
+// guess as {option, label, reason, evidence, source, model?, ts?}, reason being the evidence text;
+// model and ts for an engine guess), rank and group. Sorted by rank, then (account questions) the
+// larger absolute latest balance, then id.
 function pendingWithGuesses(db) {
-  const extra = new Map(db.prepare(`SELECT ci.id, f.name AS file_name, g.option_id, g.reason, g.model, g.ts
+  const extra = new Map(db.prepare(`SELECT ci.id, f.name AS file_name, g.model, g.ts
                                     FROM confirm_items ci LEFT JOIN files f ON f.id = ci.file_id
                                     LEFT JOIN confirm_guesses g ON g.item_id = ci.id
                                     WHERE ci.status = 'pending'`).all().map((r) => [r.id, r]));
-  return pendingItems(db).map((item) => {
+  const items = pendingItems(db).map((item) => {
     const r = extra.get(item.id);
-    const option = r && r.option_id != null ? item.options.find((o) => o.id === r.option_id) : null;
+    const detail = cardDetail(db, item);
+    const g = bestGuess(db, item, detail);
+    const guess = g ? {
+      option: g.option, label: g.label, reason: g.evidence, evidence: g.evidence, source: g.source,
+      ...(g.source === 'engine' ? { model: r?.model ?? null, ts: r?.ts ?? null } : {}),
+    } : null;
+    return { ...item, fileName: r?.file_name ?? null, detail, guess, rank: rankOf(item.kind), group: GROUPED.has(item.kind) ? item.kind : null };
+  });
+  return items.sort((a, b) => a.rank - b.rank || (a.group && b.group ? balanceSize(b) - balanceSize(a) : 0) || a.id - b.id);
+}
+
+// Answers Fathom recorded itself, newest first: {id, kind, question, answer, answerLabel, rule,
+// evidence (the evidence text), final (finalReason or null)}.
+function decidedItems(db) {
+  return db.prepare(`SELECT ci.id, ci.kind, ci.question, ci.options, ci.status, ci.answer, a.rule, a.evidence
+                     FROM confirm_auto a JOIN confirm_items ci ON ci.id = a.item_id
+                     WHERE ci.status = 'answered' ORDER BY a.created_at DESC, ci.id DESC`).all().map((r) => {
+    const option = parseJson(r.options, []).find((o) => o.id === r.answer);
+    const evidence = parseJson(r.evidence, null);
     return {
-      ...item,
-      fileName: r?.file_name ?? null,
-      guess: option ? { option: option.id, label: option.label, reason: r.reason, model: r.model, ts: r.ts } : null,
+      id: r.id,
+      kind: r.kind,
+      question: r.question,
+      answer: r.answer,
+      answerLabel: option ? option.label : r.answer,
+      rule: r.rule,
+      evidence: typeof evidence?.text === 'string' ? evidence.text : '',
+      final: finalReason(db, { id: r.id, kind: r.kind, status: r.status, answer: r.answer }),
     };
   });
 }
@@ -181,7 +219,7 @@ export function ingestState(db, { clock } = {}) {
     ...accountNotes,
   ];
 
-  return { pending: items.length, items, files, waiting, sources, accounts, staleNotes, formats: listHowTo() };
+  return { pending: items.length, items, decided: decidedItems(db), files, waiting, sources, accounts, staleNotes, formats: listHowTo() };
 }
 
 // Returns a new domains array: each stale note is appended (escaped) to its domain's note, a
