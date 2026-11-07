@@ -133,13 +133,9 @@ Invalid or nonpositive values refuse startup. An IP request limit returns HTTP 4
 | POST | `/api/simplefin/disconnect` | Off, HTTP 403 |
 | POST | `/api/yearend/marks` | Visitor sandbox |
 | GET | `/api/yearend/packet` | Off, HTTP 403 |
-
 | POST | `/api/actions/:id/undo` | Off, HTTP 403 |
-
 | POST | `/api/preferences` | Off, HTTP 403 |
-
 | POST | `/api/preferences/:id` | Off, HTTP 403 |
-
 | POST | `/api/preferences/:id/delete` | Off, HTTP 403 |
 
 ## Verification
