@@ -16,6 +16,7 @@ import { validateGoal } from '../shared/goals.mjs';
 import { HttpError } from './http.mjs';
 import { scenarioOf } from './handlers.mjs';
 import { clockNow, loadContent, loadCurve, loadFigures } from '../scenario/build.mjs';
+import { captureGoalPath, goalPathChanged } from '../pace/build.mjs';
 
 const MAX_GOALS = 200;
 
@@ -51,6 +52,7 @@ export function goalCreate(ctx) {
   const now = stamp(ctx);
   const def = { id, title: value.title, note: value.note || '', horizon: value.horizon, target: value.target,
     targetDate: value.targetDate, track: value.track };
+  def.pace = captureGoalPath(db, def, now.slice(0, 10));
   tx(db, () => {
     const sort = db.prepare('SELECT coalesce(max(sort), -1) + 1 AS s FROM goals').get().s;
     db.prepare("INSERT INTO goals (id, def, sort, origin, created_at, updated_at) VALUES (?, ?, ?, 'owner', ?, ?)")
@@ -65,7 +67,9 @@ export function goalUpdate(ctx) {
   const row = goalRow(db, ctx.params.id);
   if (row.origin !== 'owner') throw new HttpError(409, 'this goal came with the demo and cannot be edited; archive it or add your own');
   const value = valid(db, ctx.body, true);
-  const def = { ...parse(row.def, {}), ...value, id: row.id };
+  const previous = parse(row.def, {});
+  const def = { ...previous, ...value, id: row.id };
+  if (!previous.pace || goalPathChanged(previous, def)) def.pace = captureGoalPath(db, def, stamp(ctx).slice(0, 10));
   db.prepare('UPDATE goals SET def = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(def), stamp(ctx), row.id);
   const scenario = scenarioOf(ctx);
   return { scenario, goal: goalOut(scenario, row.id) };
@@ -87,6 +91,8 @@ export function goalDelete(ctx) {
   ctx.db.prepare('DELETE FROM goals WHERE id = ?').run(row.id);
   return { scenario: scenarioOf(ctx) };
 }
+
+export const getPace = ctx => scenarioOf(ctx).pace;
 
 // A position is a number from 0 to 1 for a known axis (the curve's axes, which the onboarding
 // priorities share by id).

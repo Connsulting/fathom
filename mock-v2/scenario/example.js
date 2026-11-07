@@ -100,7 +100,17 @@ window.FATHOM_SCENARIO = {
       "kind": "e",
       "label": "Sam checking, unverified"
     },
+    "reserve.actual": {
+      "v": 117900,
+      "src": "personal",
+      "kind": "a",
+      "label": "Synthetic cash reserve snapshot",
+      "asOf": "2026-08-30",
+      "cadenceKind": "balances"
+    },
     "portfolio": {
+      "asOf": "2026-08-07",
+      "cadenceKind": "brokerage_positions",
       "v": 1978000,
       "src": "broker",
       "kind": "a",
@@ -2130,6 +2140,10 @@ window.FATHOM_SCENARIO = {
     },
     {
       "id": "reserve",
+      "target": 166000,
+      "targetDate": "2026-12-31",
+      "track": { "figure": "reserve.actual" },
+      "pace": { "startDate": "2026-01-01", "startValue": 80000 },
       "title": "Twelve months of cash",
       "horizon": "now",
       "status": "on track",
@@ -2141,6 +2155,10 @@ window.FATHOM_SCENARIO = {
     },
     {
       "id": "port3",
+      "target": 2490000,
+      "targetDate": "2029-12-31",
+      "track": { "figure": "portfolio" },
+      "pace": { "startDate": "2026-01-01", "startValue": 1800000 },
       "title": "Elective work",
       "horizon": "1-3y",
       "status": "on track",
@@ -2152,6 +2170,10 @@ window.FATHOM_SCENARIO = {
     },
     {
       "id": "port4",
+      "target": 3320000,
+      "targetDate": "2036-12-31",
+      "track": { "figure": "portfolio" },
+      "pace": { "startDate": "2026-01-01", "startValue": 1800000 },
       "title": "Zero income required",
       "horizon": "3-10y",
       "status": "on track",

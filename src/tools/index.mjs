@@ -15,6 +15,7 @@ import { resolveTokens } from '../shared/tokens.mjs';
 import { ToolError } from './errors.mjs';
 import { packTools } from './packs.mjs';
 import { withAdvisor, advisorStatus } from '../advisor/index.mjs';
+import { buildPace } from '../pace/build.mjs';
 
 export { ToolError };
 export { packDirsFor } from './packs.mjs';
@@ -325,6 +326,15 @@ export const tools = [
     scope: 'read',
     handler(args, ctx) {
       return goalsForModel(ctx.db);
+    },
+  },
+  {
+    name: 'get_pace',
+    description: 'Deterministic goal pace, household health, monthly deltas and available meters, with provenance and data-through dates. Unknown health requires fresh data or a plan baseline.',
+    inputSchema: obj(),
+    scope: 'read',
+    handler(args, ctx) {
+      return buildPace(ctx.db, { clock: clockOf(ctx) });
     },
   },
   {
