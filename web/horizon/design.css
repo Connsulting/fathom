@@ -1049,6 +1049,6 @@ a.h-dec-t:hover { color: var(--ac2); }
 .d-horizon .h-answer-acts .h-btn { min-height: 44px; }
 .d-horizon .h-answers .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .d-horizon article.h-next .h-answers { margin: 0; gap: 16px; }
-.d-horizon article.h-next .h-answer-toggle { gap: 8px; }
-.d-horizon article.h-next .h-answer-value { gap: 10px; }
+.d-horizon article.h-next .h-answer-toggle { flex-direction: row; gap: 8px; }
+.d-horizon article.h-next .h-answer-value { flex-direction: row; justify-content: flex-start; gap: 10px; }
 .d-horizon article.h-next .h-answer-acts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }

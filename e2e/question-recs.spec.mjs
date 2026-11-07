@@ -73,6 +73,12 @@ test.describe('answerable questions on the synthetic planning household', () => 
       await expect(form).toContainText('USD');
       if (process.env.QRECS_RENDER_DIR) {
         mkdirSync(process.env.QRECS_RENDER_DIR, { recursive: true });
+        await page.evaluate(() => {
+          document.activeElement?.blur();
+          window.scrollTo(0, 0);
+          document.querySelector('.h-dlg')?.scrollTo(0, 0);
+          document.querySelector('.h-dlg-body')?.scrollTo(0, 0);
+        });
         await page.screenshot({ path: resolve(process.env.QRECS_RENDER_DIR, `${test.info().project.name}-${surface}.png`), fullPage: true });
       }
       const saved = page.waitForResponse(r => r.url().endsWith('/api/recs/va529/answers') && r.request().method() === 'POST');
