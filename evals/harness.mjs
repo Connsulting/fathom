@@ -7,12 +7,14 @@ import { createInstanceSecrets } from '../src/platform/secrets.mjs';
 import { seedDemo } from '../demo/seed.mjs';
 import { createEngine, loadCredential, BudgetExceededError, ModelAccountingError } from '../src/engine/index.mjs';
 import { createSpendLedger } from '../src/engine/runtime.mjs';
-import { estimateUnknownCost, DEFAULT_MODEL } from '../src/engine/pricing.mjs';
+import { estimateUnknownCost, modelFor } from '../src/engine/pricing.mjs';
 import { threadCreate, ask } from '../src/api/handlers.mjs';
+import { fallbackTitle } from '../src/api/threads.mjs';
+import { tokenScope } from '../src/scenario/build.mjs';
 import { createLivePacks } from '../src/packs/live.mjs';
 import { tools, CAPABILITIES } from '../src/tools/index.mjs';
 import { expectedFigures, validateCases } from './cases.mjs';
-import { gradeRequiredTools, gradeFigures, gradeLength, gradeExpected, gradeProhibited, evidenceNumbers } from './graders.mjs';
+import { gradeRequiredTools, gradeFigures, gradeLength, gradeExpected, gradeProhibited, evidenceNumbers, gradeThreadTitle } from './graders.mjs';
 
 export async function createEvalStore() {
   const dir = await mkdtemp(join(tmpdir(), 'fathom-ask-eval-'));
@@ -23,44 +25,47 @@ export async function createEvalStore() {
     instance.db.close(); instance.platform.close(); await rm(dir, { recursive: true, force: true });
   } };
 }
-const byteLength = v => Buffer.byteLength(JSON.stringify(v));
+const rounded = value => Number(value.toFixed(12));
 export function createEvalLedger({ db, maxUsd }) {
   if (!Number.isFinite(maxUsd) || maxUsd < 0) throw new TypeError('Invalid eval budget');
   const start = db.prepare('SELECT coalesce(max(id),0) AS id FROM spend_ledger').get().id;
   const base = createSpendLedger(db);
-  const state = { stopped: null };
+  const state = { stopped: null, reason: null };
   const reserves = [];
-  let current = null;
-  let growthBytes = 0;
-  const cost = () => Number(db.prepare('SELECT coalesce(sum(cost_usd),0) AS v FROM spend_ledger WHERE id>?').get(start).v.toFixed(12));
+  let current = null, roundIndex = 0, outstanding = 0, reserved = 0;
+  const cost = () => rounded(db.prepare('SELECT coalesce(sum(cost_usd),0) AS v FROM spend_ledger WHERE id>?').get(start).v);
   return {
     state, reserves,
     get costUsd() { return cost(); },
-    begin(request) {
-      growthBytes = 0;
-      current = request;
-      const wrappedTools = request.tools.map(tool => ({ ...tool, async handler(args, ctx) {
-        const result = await tool.handler(args, ctx);
-        growthBytes += byteLength({ name: tool.name, args, result }) * 6 + 1024;
-        return result;
-      } }));
-      return { ...request, tools: wrappedTools };
-    },
-    monthSpendUsd() {
-      const spent = cost();
-      if (!current || state.stopped) return maxUsd;
-      const messages = [...current.messages, { role: 'assistant', content: ' '.repeat(growthBytes) }];
-      const reserve = estimateUnknownCost({ model: DEFAULT_MODEL, maxTokens: 1024,
-        system: [current.system, current.systemDynamic].filter(Boolean).join('\n'), messages, tools: current.tools }).costUsd;
+    get reservedUsd() { return rounded(reserved); },
+    get outstandingReservedUsd() { return outstanding; },
+    begin(request) { current = request; roundIndex = 0; return request; },
+    end() { outstanding = 0; current = null; },
+    monthSpendUsd() { return state.stopped ? maxUsd : cost(); },
+    admitRound(request) {
+      const estimate = estimateUnknownCost({ model: modelFor(request.purpose), maxTokens: request.maxTokens,
+        system: [request.system, request.systemDynamic].filter(Boolean).join('\n'),
+        messages: request.messages, tools: request.tools });
+      const scripted = current?.fake?.[roundIndex++];
+      const known = scripted && Object.hasOwn(scripted, 'costUsd') ? scripted.costUsd : undefined;
+      const reserve = scripted && !scripted.accountingUnknown && Number.isFinite(known) && known >= 0 ? known
+        : Math.max(Number.isFinite(known) && known >= 0 ? known : 0, estimate.costUsd);
       reserves.push(reserve);
-      if (spent + reserve > maxUsd) { state.stopped = 'budget'; return maxUsd; }
-      return spent;
+      if (rounded(cost() + reserve) > maxUsd) {
+        state.stopped = 'budget';
+        state.reason = `budget: next ${request.purpose} round needs $${reserve.toFixed(6)}; $${rounded(maxUsd - cost()).toFixed(6)} remains`;
+        throw new BudgetExceededError();
+      }
+      outstanding = reserve;
+      reserved = rounded(reserved + reserve);
     },
     record(entry) {
       base.record(entry);
-      // Include JSON escaping, long token spellings and tool-use envelopes before a continuation.
-      growthBytes += 1024 * 16 * 6 + 4096;
-      if (entry.tokens?.estimated) state.stopped = 'accounting';
+      outstanding = 0;
+      if (entry.tokens?.estimated) {
+        state.stopped = 'accounting';
+        state.reason = 'accounting: model usage was unavailable; conservative cost recorded';
+      }
     },
   };
 }
@@ -96,7 +101,7 @@ export async function runCases({ cases, live = false, maxUsd = 100, outDir, scri
   try {
     const ledger = createEvalLedger({ db, maxUsd });
     const mode = live ? 'live' : 'fake';
-    const inner = createEngine({ mode, ledger, capUsd: maxUsd, credential });
+    const inner = createEngine({ mode, ledger, capUsd: maxUsd, credential, admitRound: request => ledger.admitRound(request) });
     const packs = createLivePacks(db, { dataDir: store.root }); packs.refresh();
     const clock = JSON.parse(db.prepare("SELECT value FROM settings WHERE key='clock'").get().value);
     const figures = Object.fromEntries(db.prepare('SELECT key,v FROM figures').all().map(r => [r.key, r.v]));
@@ -104,29 +109,35 @@ export async function runCases({ cases, live = false, maxUsd = 100, outDir, scri
     let attempts = [], turn, missing = [], expected = [], requestLengths = [], caseScript = null, scriptMissing = false, capabilitiesMissing = false;
     const engine = { mode, isOn: () => true, async call(request) {
       const calls = scriptMissing || capabilitiesMissing ? [] : turn.required.filter(r => tools.some(t => t.name === r.name && t.operations.some(o => o.name === r.operation))).map(r => ({ name: r.name, args: { operation: r.operation, ...scriptArgs(r.predicates) } }));
-      const supplied = scripts ? await scripts({ turn, expected, db, attempt: attempts.length }) : caseScript ? await caseScript({ turn, expected, db, attempt: attempts.length, clock, tools }) : [
+      const supplied = scripts ? await scripts({ turn, expected, db, purpose: request.purpose, attempt: attempts.length }) : caseScript ? await caseScript({ turn, expected, db, purpose: request.purpose, attempt: attempts.length, clock, tools }) : [
         ...(calls.length ? [{ toolCalls: calls, costUsd: 0 }] : []),
         { text: scriptedAnswer(turn, expected, missing), costUsd: 0 },
       ];
-      const scripted = !live ? { fake: supplied } : {};
+      const scripted = !live ? { fake: request.purpose === 'title' && !scripts
+        ? [{ text: JSON.stringify({ title: '529 education savings' }), costUsd: 0 }] : supplied } : {};
       const req = ledger.begin({ ...request, ...scripted });
       requestLengths.push(request.messages.length);
       try {
         const result = await inner.call(req);
-        attempts.push(result);
+        if (request.purpose !== 'title') attempts.push(result);
         return result;
       } catch (error) {
         if (error instanceof BudgetExceededError) ledger.state.stopped ??= 'budget';
         if (error instanceof ModelAccountingError) ledger.state.stopped = 'accounting';
-        attempts.push({ text: '', toolResults: error.toolResults ?? [], error: error.name });
+        if (request.purpose !== 'title') attempts.push({ text: '', toolResults: error.toolResults ?? [], error: error.name });
         throw error;
-      }
+      } finally { ledger.end(); }
     } };
     const config = { dataDir: store.dataDir, clock };
     const household = createHouseholdContext({ householdId: store.householdId, mode: 'demo', db, platform: store.platform,
       config, secrets: createInstanceSecrets({ config, mode: 'demo' }), engine, packs });
     const answerer = household.answerer;
     for (const c of cases) {
+      if (ledger.state.stopped) {
+        rows.push({ id: c.id, family: c.family, status: 'unrun', turns: [], costUsd: 0, reservedUsd: 0,
+          reason: `${ledger.state.reason ?? ledger.state.stopped}; run stopped before this case` });
+        continue;
+      }
       const goalId = `eval-${c.id}`;
       if (c.storedGoal) db.prepare("INSERT INTO goals (id, def, sort, origin, created_at) VALUES (?, ?, 100, 'owner', ?)")
         .run(goalId, JSON.stringify({ ...c.storedGoal, id: goalId, horizon: 'now', target: null, targetDate: null, track: null }), clock + 'T00:00:00.000Z');
@@ -137,12 +148,13 @@ export async function runCases({ cases, live = false, maxUsd = 100, outDir, scri
       const missingCapabilities = (c.expectedFail?.missingCapabilities ?? []).filter(name => !CAPABILITIES.includes(name));
       capabilitiesMissing = missingCapabilities.length > 0;
       const beforeCost = ledger.costUsd;
+      const beforeReserved = ledger.reservedUsd;
       const result = { id: c.id, family: c.family, status: 'pass', missingOperations: missing, missingCapabilities, ...(scriptMissing ? { missingScript: c.expectedFail.missingScript } : {}), turns: [] };
       let key;
       for (turn of c.turns) {
         attempts = []; requestLengths = [];
         expected = expectedFigures(db, turn.expected);
-        const ctx = { db, packs, answerer, config: { clock, engine: mode }, body: key ? { key, text: turn.question } : { text: turn.question } };
+        const ctx = { db, packs, answerer, ...(c.checkTitle ? { engine } : {}), config: { clock, engine: mode }, body: key ? { key, text: turn.question } : { text: turn.question } };
         const response = key ? await ask(ctx) : await threadCreate(ctx);
         key ??= response.thread.key;
         const delivered = plain(response.message?.text);
@@ -172,22 +184,33 @@ export async function runCases({ cases, live = false, maxUsd = 100, outDir, scri
         else if (result.status !== 'fail' && gapOnly) result.status = 'xfail';
         else if (result.status !== 'fail' && c.expectedFail && !missing.length && ok) result.status = 'xpass';
       }
-      result.costUsd = Number((ledger.costUsd - beforeCost).toFixed(12));
+      if (c.checkTitle && !ledger.state.stopped) {
+        const row = db.prepare('SELECT title, title_source FROM conversations WHERE key=?').get(key);
+        const first = db.prepare("SELECT text FROM messages WHERE conversation_key=? AND role='me' ORDER BY id LIMIT 1").get(key);
+        result.title = gradeThreadTitle(row, fallbackTitle(tokenScope(db), first?.text));
+        if (!result.title.ok) result.status = 'fail';
+      }
+      result.costUsd = rounded(ledger.costUsd - beforeCost);
+      result.reservedUsd = rounded(ledger.reservedUsd - beforeReserved);
+      if (ledger.state.stopped) result.reason = ledger.state.reason ?? `${ledger.state.stopped}: no remaining budget for another round`;
       rows.push(result);
       if (c.storedGoal) db.prepare('DELETE FROM goals WHERE id = ?').run(goalId);
-      if (ledger.state.stopped) break;
     }
-    const scorecard = { version: 1, live, generatedAt: new Date().toISOString(), maxUsd, costUsd: ledger.costUsd,
-      stopped: ledger.state.stopped, selected: cases.length, completed: rows.length, cases: rows };
+    const scorecard = { version: 2, live, generatedAt: new Date().toISOString(), maxUsd, costUsd: ledger.costUsd,
+      reservedUsd: ledger.reservedUsd, outstandingReservedUsd: ledger.outstandingReservedUsd,
+      releasedUsd: rounded(ledger.reservedUsd - ledger.costUsd),
+      stopped: ledger.state.stopped, selected: cases.length,
+      attempted: rows.filter(r => r.status !== 'unrun').length,
+      completed: rows.filter(r => !['unrun', 'budget-stopped', 'accounting-stopped'].includes(r.status)).length, cases: rows };
     if (outDir) await writeScorecard(outDir, scorecard);
     return scorecard;
   } finally { await store.close(); }
 }
 export async function writeScorecard(dir, scorecard) {
   await mkdir(dir, { recursive: true });
-  const lines = ['# Ask evals', '', `Tier: ${scorecard.live ? 'live' : 'scripted'}. Cost: $${scorecard.costUsd.toFixed(6)}. Stop: ${scorecard.stopped ?? 'none'}.`, '',
-    '| Case | Result | Tools called / required | unsourced / self-computed / rounded / spelled_out / context-only | Words / budget | Cost |',
-    '| --- | --- | --- | --- | --- | --- |'];
+  const lines = ['# Ask evals', '', `Tier: ${scorecard.live ? 'live' : 'scripted'}. Cost: $${scorecard.costUsd.toFixed(6)}. Stop: ${scorecard.stopped ?? 'none'}.`, '', `Reserved (cumulative, reused after each round): $${scorecard.reservedUsd.toFixed(6)}. Spent: $${scorecard.costUsd.toFixed(6)}. Outstanding: $${scorecard.outstandingReservedUsd.toFixed(6)}.`, '',
+    '| Case | Result | Tools called / required | unsourced / self-computed / rounded / spelled_out / context-only | Words / budget | Actual cost | Reserved | Reason |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- |'];
   const kindCount = (grade, kind) => (grade?.[kind === 'self-computed' ? 'selfComputed' : kind === 'spelled_out' ? 'spelledOut' : kind === 'context-only' ? 'contextOnly' : kind] ?? []).length;
   for (const c of scorecard.cases) {
     const names = c.turns.flatMap(t => t.tools.map(r => r.name)).join(', ');
@@ -195,7 +218,7 @@ export async function writeScorecard(dir, scorecard) {
     const grades = c.turns.flatMap(t => [t.figures, ...t.attempts.map(a => a.figures)]);
     const counts = ['unsourced', 'self-computed', 'rounded', 'spelled_out', 'context-only']
       .map(kind => grades.reduce((s, grade) => s + kindCount(grade, kind), 0));
-    lines.push(`| ${c.id} | ${c.status} | ${names || 'none'} / ${required} | ${counts.join(' / ')} | ${c.turns.map(t => `${t.length.words}/${t.length.maxWords}`).join(', ')} | $${c.costUsd.toFixed(6)} |`);
+    lines.push(`| ${c.id} | ${c.status} | ${names || 'none'} / ${required} | ${counts.join(' / ')} | ${c.turns.map(t => `${t.length.words}/${t.length.maxWords}`).join(', ')} | $${c.costUsd.toFixed(6)} | $${c.reservedUsd.toFixed(6)} | ${(c.reason ?? '').replaceAll('|', '/')} |`);
   }
   await writeFile(join(dir, 'scorecard.json'), JSON.stringify(scorecard, null, 2) + '\n');
   await writeFile(join(dir, 'summary.md'), lines.join('\n') + '\n');
