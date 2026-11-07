@@ -93,8 +93,8 @@ async function installPacer(page) {
 // that snapshot) so the test can act on the live block at that point.
 async function record(page, scope, holdWhen = null) {
   await page.evaluate(({ scope, holdWhen }) => {
-    const hold = holdWhen ? new Function('s', `return (${holdWhen})(s);`) : null;
-    const log = { snaps: [], held: null };
+    const hold = holdWhen ? new Function('s', 'seen', `return (${holdWhen})(s, seen);`) : null;
+    const log = { snaps: [], held: null, seen: [] };
     window.__wbLog = log;
     window.__wbHeld = null;
     const txt = (el) => (el ? el.textContent.replace(/\s+/g, ' ').trim() : '');
@@ -103,7 +103,7 @@ async function record(page, scope, holdWhen = null) {
       const pend = root && root.querySelector('.h-askx-pend');
       if (!pend) {
         const last = log.snaps[log.snaps.length - 1];
-        if (last && last.pend) log.snaps.push({ pend: false });
+        if (last && last.pend) log.snaps.push({ pend: false, steps: [], notes: [], stream: '', open: null, body: false });
         return;
       }
       const work = pend.querySelector('.h-work');
@@ -133,7 +133,8 @@ async function record(page, scope, holdWhen = null) {
       if (log.lastKey === key) return;
       log.lastKey = key;
       log.snaps.push(s);
-      if (hold && !log.held && hold(s)) {
+      for (const n of s.notes) if (!log.seen.includes(n.t)) log.seen.push(n.t);
+      if (hold && log.held == null && hold(s, log.seen)) {
         log.held = log.snaps.length - 1;
         window.__wbHold = true;
         window.__wbHeld = s;
@@ -295,8 +296,7 @@ function expectShowYourWork(got, secondStep) {
   expect(notes.indexOf(NOTE1), JSON.stringify(got)).toBeGreaterThanOrEqual(0);
   expect(notes.indexOf(NOTE2), JSON.stringify(got)).toBeGreaterThan(notes.indexOf(NOTE1));
   expect(got.notes.some((x) => x.draft)).toBe(false);
-  expect(got.steps).toContain(secondStep);
-  expect(got.steps).toContain(STEP_CHECK);
+  expect(got.steps).toEqual(['Reading your household summary', secondStep, STEP_CHECK]);
 }
 
 // At phone width: no horizontal page scroll, the row's text on one line and not clipped, and an
@@ -373,7 +373,8 @@ async function actOnHeldLive(page, scope) {
   await expect(row).toHaveAttribute('aria-expanded', 'true');
 }
 
-const finalRound = (s) => s.pend && s.notes.length >= 2 && !!s.stream;
+// Notes show only while the block is open, so count the distinct notes seen in earlier snapshots.
+const finalRound = (s, seen) => s.pend && seen.length >= 2 && !!s.stream;
 
 /* ---------- 1: Ask page, new conversation ---------- */
 
