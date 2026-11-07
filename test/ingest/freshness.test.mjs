@@ -399,4 +399,19 @@ describe('freshness after import, sync and merge', () => {
     assert.equal(sc.meta.dataThrough, 'Jun 20, 2032');
     assert.equal(sc.pace.rollup.dataThrough, day);
   }));
+
+  test('a later tax payment or P&L month moves Home and Money together', () => withStore(async (s) => {
+    const { cash } = await seeded(s);
+    s.db.prepare('INSERT INTO balances (account_id, date, amount) VALUES (?, ?, ?)').run(cash.id, '2032-06-01', 10);
+    s.db.prepare(`INSERT INTO content (key, value, src, updated_at) VALUES ('meta', ?, 'test', ?)`)
+      .run(JSON.stringify({ product: 'Fathom', household: '', dataThrough: 'Jun 20, 2032' }), NOW);
+    s.db.prepare(`INSERT INTO tax_payments (jurisdiction, tax_year, date, amount, kind) VALUES ('US', 2032, '2032-06-20', 100, 'estimated')`).run();
+    const tax = B.buildScenario(s.db, { clock: '2032-06-30' });
+    assert.equal(tax.meta.dataThrough, 'Jun 20, 2032');
+    assert.equal(tax.pace.rollup.dataThrough, '2032-06-20');
+    s.db.prepare(`INSERT INTO pnl_lines (entity, period, category, amount) VALUES ('Synthetic Co', '2032-06', 'revenue', 50)`).run();
+    const pnl = B.buildScenario(s.db, { clock: '2032-06-30' });
+    assert.equal(pnl.meta.dataThrough, 'Jun 30, 2032');
+    assert.equal(pnl.pace.rollup.dataThrough, '2032-06-30');
+  }));
 });

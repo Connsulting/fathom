@@ -59,8 +59,12 @@ export function block() {
     </div>`;
 }
 
-function syncedLine(res) {
-  const sc = res && res.scenario;
+// A failed or skipped run still returns HTTP 200 with run.status set. Only an ok run gets the
+// success line. Connect and Sync now both put that run on the response.
+export function syncNotice(res) {
+  const run = res && res.run;
+  if (!run || run.status !== 'ok') return '';
+  const sc = res.scenario;
   const through = sc && sc.meta && sc.meta.dataThrough;
   if (!through) return '';
   const n = Number(sc.live && sc.live.simplefin && sc.live.simplefin.accounts) || 0;
@@ -73,7 +77,7 @@ function run(kind, p) {
     S.busy = '';
     if (res && (kind === 'connect' || kind === 'sync')) {
       S.token = '';
-      const line = syncedLine(res);
+      const line = syncNotice(res);
       if (line) S.notice = line;
     }
     H.draw();

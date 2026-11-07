@@ -5,6 +5,7 @@
 import { getSetting, parseJson } from '../store/db.mjs';
 import { escapeUserText } from '../shared/tokens.mjs';
 import { howToFor, listHowTo } from './howto.mjs';
+import { monthEnd } from './format.mjs';
 import { pendingItems, finalReason } from './confirm.mjs';
 import { cardDetail } from './context.mjs';
 import { bestGuess } from './bestguess.mjs';
@@ -166,10 +167,10 @@ function decidedItems(db) {
   });
 }
 
-// Newest ISO date of stored rows on or before the clock, across transactions, balances and
-// positions. This is the household "data through" date. An account's own as-of is the same max
-// over that account, so a connected sync dated yesterday is fresh even when its file source as_of
-// is older.
+// Newest ISO date on or before the clock. Same sources the planner uses for its data-through
+// label: transactions, balances, positions, tax payments, and the month-end of the newest P&L
+// period. An account's own as-of is still the max of that account's rows, so a connected sync
+// dated yesterday is fresh even when its file source as_of is older.
 export function householdDataThrough(db, clock) {
   const at = isoDay(clockOf(db, clock));
   if (!at) return null;
@@ -177,8 +178,11 @@ export function householdDataThrough(db, clock) {
       SELECT max(date) AS d FROM transactions WHERE date <= ?
       UNION ALL SELECT max(date) FROM balances WHERE date <= ?
       UNION ALL SELECT max(as_of) FROM positions WHERE as_of <= ?
-    )`).get(at, at, at);
-  return isoDay(row && row.d);
+      UNION ALL SELECT max(date) FROM tax_payments WHERE date <= ?
+    )`).get(at, at, at, at);
+  const period = db.prepare('SELECT max(period) AS d FROM pnl_lines WHERE period <= substr(?, 1, 7)').get(at);
+  const dates = [isoDay(row && row.d), monthEnd(period && period.d)].filter(Boolean);
+  return dates.sort().at(-1) ?? null;
 }
 
 // On-read freshness for every path that changes data (sync, import, confirm, merge, undo).
