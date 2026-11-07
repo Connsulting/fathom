@@ -305,8 +305,9 @@ release steps.
 
 Deciding and trends. On a real store the Decide screen's war games end in a choice: pick a point,
 press "Decide on this", and the decision is saved with its figures. A decided salary becomes the
-payroll assumption on the next planning run until you press "Revisit". Accounts shows monthly trend
-lines built from the balances you uploaded. The Engine screen lists the model each purpose runs on,
+payroll assumption on the next planning run until you press "Revisit". Money opens with one net worth
+trend (and its parts) summed from the balances you uploaded, Accounts has a line per group, and
+each account's own trend is in its dialog. The Engine screen lists the model each purpose runs on,
 and Files is in the quick switcher (Ctrl or Cmd K) and the Money tab's sub-nav.
 
 Year end. The Year end screen (`#/yearend`) lists the tax documents the household should expect for
