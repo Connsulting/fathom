@@ -179,6 +179,19 @@ export function ingestScreens(h) {
     return `<div class="h-ing-banner">${icon('clock')}<span class="h-ing-banner-t"><b>${quickChecksText(n)}</b><span>${minutesText(n)}, so imported files land in the right place.</span></span><a class="h-btn pri h-ing-start" href="#/confirm" data-go="confirm">Start</a></div>`;
   }
 
+  function accountRepairs() {
+    syncDeck(false);
+    const dk = st.deck;
+    const repairs = pendingNow().filter(i => i.context?.repair);
+    const recent = dk.hist.flat().filter(id => dk.data[id]?.context?.repair);
+    if (!repairs.length && !recent.length) return '';
+    const warning = repairs.length ? `<div class="h-ing-banner" role="status" data-account-duplicates><span>Some accounts may be counted twice.</span><a class="h-btn ghost" href="#/confirm" data-go="confirm">Review accounts</a></div>` : '';
+    const cards = repairs.map(i => cardHtml(dk, String(i.id), '')).join('');
+    const canUndo = dk.busy == null && recent.some(id => !dk.final[id]);
+    const undoButton = recent.length ? btn('Undo', `data-deck="undo"${canUndo ? '' : ' disabled'}`, 'ghost') : '';
+    return warning + section('Same account?', `${cards}${undoButton}${dk.notice ? `<p role="status">${esc(dk.notice)}</p>` : ''}`, 'Merge keeps your imported account and its history.');
+  }
+
   function fileRow(f) {
     const s = String(f.status || '');
     const summary = s === 'imported' || s === 'duplicate' ? countsText(f.counts) : '';
@@ -900,5 +913,5 @@ export function ingestScreens(h) {
     return true;
   }
 
-  return { confirmPage, pendingBanner, addFiles, accountMeta, sourcesSection, handleClick, handleChange, deckAction, handlePointer };
+  return { confirmPage, pendingBanner, accountRepairs, addFiles, accountMeta, sourcesSection, handleClick, handleChange, deckAction, handlePointer };
 }

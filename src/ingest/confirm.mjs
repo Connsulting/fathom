@@ -1,3 +1,4 @@
+import { assertCurrentPair, mergeAccounts, refreshMergedAccounts } from './account-merge.mjs';
 // Confirm queue: short questions an import asks so its rows land in the right place, answered by
 // the owner and remembered by (kind, subject) so an equivalent re-import asks nothing new.
 // Every answer is applied by deterministic code in one transaction with the answer itself.
@@ -137,6 +138,7 @@ function answerable(db, id, optionId) {
   if (!item) throw new ConfirmError('not_found');
   if (item.status === 'answered') throw new ConfirmError(item.answer === 'superseded' ? 'stale' : 'answered');
   if (!item.options.some((o) => o.id === optionId)) throw new ConfirmError('bad_option');
+  assertCurrentPair(db, item);
   if (item.kind === 'fact_check' && factIsStale(db, item)) throw new ConfirmError('stale');
   if (item.kind === 'withholding_conflict' && !conflictCurrent(db, item)) throw new ConfirmError('stale');
   return item;
@@ -199,6 +201,7 @@ function recordAnswer(db, item, optionId, { now, auto = null }) {
               ON CONFLICT(item_id) DO UPDATE SET ingest_epoch = excluded.ingest_epoch, changes = excluded.changes,
                 created_at = excluded.created_at, used_at = NULL`)
     .run(item.id, ingestEpoch(db), JSON.stringify(changes), stamp(now));
+  if (item.context?.repair) refreshMergedAccounts(db, { now: stamp(now) });
   return { ...result, changes };
 }
 
@@ -246,6 +249,7 @@ function revertAnswer(db, item) {
   if (!Array.isArray(changes)) throw new ConfirmError('final', 'no_undo');
   revertChanges(db, changes);
   db.prepare('DELETE FROM confirm_undo WHERE item_id = ?').run(item.id);
+  if (item.context?.repair) refreshMergedAccounts(db);
   return changes;
 }
 
@@ -293,6 +297,7 @@ export function reviseItem(db, id, optionId, { now } = {}) {
     const dependents = revertDependents(db, item.id);
     const reverted = revertAnswer(db, getItem(db, item.id));
     const fresh = getItem(db, item.id);
+    assertCurrentPair(db, fresh);
     if (fresh.kind === 'fact_check' && factIsStale(db, fresh)) throw new ConfirmError('stale');
     if (fresh.kind === 'withholding_conflict' && !conflictCurrent(db, fresh)) throw new ConfirmError('stale');
     const { changes } = recordAnswer(db, fresh, optionId, { now });
@@ -401,6 +406,11 @@ export function applyAnswer(db, item, optionId, { now } = {}) {
       applyConflict(db, item, optionId, { now });
       return {};
     case 'account_match': {
+      if (item.context?.repair) {
+        assertCurrentPair(db, item);
+        if (optionId === 'same') mergeAccounts(db, item, { now: stamp(now) });
+        return {};
+      }
       // A SimpleFIN account waiting on this question writes into the imported account (same) or
       // its own new account (different) from the next sync on.
       const { sfKey, candidateId, ownId } = item.context ?? {};

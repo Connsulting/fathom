@@ -87,6 +87,18 @@ and syncs daily with the `simplefin-sync` job or on Sync now. The deployment nee
 to the hosts in `FATHOM_SIMPLEFIN_ALLOWED_HOSTS`. The demo uses a synthetic bridge and needs no
 network.
 
+If file imports and a connection appear to describe the same account, Money and Confirm offer
+“Same account?” with Merge and Keep both. Merge preserves the imported account id, ownership,
+history and goal links. Undo restores the pair until a later import uses the merged data.
+Money warns while a duplicate pair is waiting for an answer.
+
+Operators can run `node scripts/merge-accounts.mjs` with the server's environment to inspect only
+counts by confidence class. This default opens the store read-only and does not migrate it.
+After deployment, `node scripts/merge-accounts.mjs --apply-sure` merges only unambiguous pairs
+with reliable last four digits, matching known institutions, compatible kinds and no conflicting
+same-day balance. It records normal Confirm answers with undo and replans; every uncertain pair
+stays a question for the owner. The command prints counts only and never starts a bridge sync.
+
 ## Email
 
 Fathom sends a monthly brief and short deadline alerts. The default `dev` transport writes each
