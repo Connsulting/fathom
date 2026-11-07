@@ -2,7 +2,7 @@
 // household spending with housing and taxes toggles, reached from the Money sub-nav and the quick
 // switcher. Every expected value is read from the API inside the test; nothing is hard-coded from
 // the demo, because other specs mutate the shared demo store.
-// Tags: @pl-ac3 rows and provenance, @pl-ac5 phone layout, @pl-ac6 navigation and values;
+// Tags: @pl-ac3 rows (in the rows dialog) and provenance, @pl-ac5 phone layout, @pl-ac6 navigation and values;
 // @mobile runs the test at 390px too.
 
 import { scratch, buildRealStore } from '../test/helpers/real-store.mjs';
@@ -10,11 +10,15 @@ import { serveAppFixture } from '../test/helpers/server.mjs';
 import { planRun } from '../test/helpers/plan.mjs';
 import { answerItem } from '../src/ingest/confirm.mjs';
 import { loadConfig } from '../src/config.mjs';
-import { test, expect, resetDemo, gotoRoute, expectH1, expectPopoverSource, bareDollarNodes } from './helpers.mjs';
+import { test, expect, resetDemo, gotoRoute, expectH1, expectPopoverSource, bareDollarNodes, recDialog } from './helpers.mjs';
 
 const view = (page, key) => page.locator(`[data-pl-views] [data-pl-view="${key}"]`);
 const tile = (page, k) => page.locator(`[data-pl-total="${k}"] .fx-fig`).first();
-const rowsPanel = (page) => page.locator('[data-pl-rows]');
+// The rows dialog a category name opens (#/pnlrows/<spec>).
+const rowsDialog = (page) => recDialog(page);
+const dlgRows = (page) => rowsDialog(page).locator('table[data-pl-dlg-rows] tr[data-pl-dlg-row]');
+// A category name button in the table: business by section, household by bucket.
+const catButton = (page, category, attrs) => page.locator(`[data-pl-table] tr[data-pl-row][data-pl-cat-row="${attr(category)}"]${attrs} th button.pl-cat[data-go="pnlrows"]`);
 const attr = (s) => String(s).replace(/["\\]/g, '\\$&');
 const r2 = (x) => Math.round(x * 100) / 100;
 
@@ -81,9 +85,12 @@ test.describe('P&L view', () => {
     await expect(page.locator('[data-pl-sources]')).toBeVisible();
     await expect(page.locator('[data-pl-gaps]')).toBeVisible();
     await expect(page.locator('[data-pl-table]')).toBeVisible();
-    // The month strip has one button per month, through the latest.
+    // The month strip leads with All months (selected by default), then one button per month,
+    // through the latest.
     const strip = page.locator('[data-pl-months] button[data-pl-month]');
-    await expect(strip).toHaveCount(api.pnl.months.length);
+    await expect(strip).toHaveCount(api.pnl.months.length + 1);
+    await expect(strip.first()).toHaveAttribute('data-pl-month', '');
+    await expect(strip.first()).toHaveAttribute('aria-pressed', 'true');
     await expect(strip.last()).toHaveAttribute('data-pl-month', api.pnl.to);
   });
 
@@ -138,10 +145,10 @@ test.describe('P&L view', () => {
     const elective = await getJson(request, `/api/spending?${qs({ include: 'tax', exclude: 'housing' })}`);
     await expectTileValue(page, 'total', elective, elective.spending.total);
     expect(r2(elective.figures[elective.spending.total].v)).not.toBe(r2(noHousing.figures[noHousing.spending.total].v));
-    await expect(page.locator('[data-pl-table] button[data-pl-cat][data-pl-bucket="tax"]').first()).toBeVisible();
+    await expect(page.locator('[data-pl-table] tr[data-pl-row][data-pl-bucket="tax"] button.pl-cat').first()).toBeVisible();
   });
 
-  test('@pl-ac3 @mobile a category opens the rows behind it; figures show their source and detail; no bare dollars', async ({ page, request }) => {
+  test('@pl-ac3 @mobile a category opens the rows behind it in a dialog; figures show their source and detail; no bare dollars', async ({ page, request }) => {
     const api = await getJson(request, '/api/pnl');
     const p = api.pnl;
     await openPnl(page);
@@ -164,14 +171,12 @@ test.describe('P&L view', () => {
     // Business category rows.
     const section = p.expenses.categories.length ? 'expenses' : 'income';
     const category = p[section].categories[0].category;
-    await page.locator(`[data-pl-table] button[data-pl-cat="${attr(category)}"][data-pl-section="${section}"]`).click();
-    await expectRows(page, request, '/api/pnl/rows', { entity: p.entity.key, from: p.from, to: p.to, section, category }, p.to, category);
-    await rowsPanel(page).locator('li.h-ad-txn .fx-fig').first().click();
-    await expect(page.locator('.fx-pop .fx-pop-row', { hasText: 'Source' })).toBeVisible();
-    await page.keyboard.press('Escape');
+    await catButton(page, category, `[data-pl-section="${section}"]`).click();
+    await expectRows(page, request, '/api/pnl/rows', { entity: p.entity.key, from: p.from, to: p.to, section, category }, category);
     expect(await bareDollarNodes(page), 'business rows open').toEqual([]);
-    await page.locator('[data-pl-rows-close]').click();
-    await expect(rowsPanel(page)).toBeHidden();
+    await dlgRows(page).first().locator('td.pl-d-amt .fx-fig').click();
+    await expect(page.locator('.fx-pop .fx-pop-row', { hasText: 'Source' })).toBeVisible();
+    await closeRows(page);
 
     // Household category rows.
     await view(page, 'household').click();
@@ -179,8 +184,10 @@ test.describe('P&L view', () => {
     const sp = (await getJson(request, '/api/spending')).spending;
     const bucket = sp.buckets.find((b) => b.categories.length);
     const hcat = bucket.categories[0].category;
-    await page.locator(`[data-pl-table] button[data-pl-cat="${attr(hcat)}"][data-pl-bucket="${bucket.bucket}"]`).click();
-    await expectRows(page, request, '/api/spending/rows', { from: sp.from, to: sp.to, bucket: bucket.bucket, category: hcat }, sp.to, hcat);
+    await catButton(page, hcat, `[data-pl-bucket="${attr(bucket.bucket)}"]`).click();
+    await expectRows(page, request, '/api/spending/rows', { from: sp.from, to: sp.to, bucket: bucket.bucket, category: hcat }, hcat);
+    expect(await bareDollarNodes(page), 'household rows open').toEqual([]);
+    await closeRows(page);
     expect(await bareDollarNodes(page), 'household view').toEqual([]);
   });
 
@@ -209,36 +216,53 @@ test.describe('P&L view', () => {
 
     const p = api.pnl;
     const section = p.expenses.categories.length ? 'expenses' : 'income';
-    await page.locator(`[data-pl-table] button[data-pl-cat="${attr(p[section].categories[0].category)}"][data-pl-section="${section}"]`).click();
-    await expect(rowsPanel(page)).toBeVisible();
+    await catButton(page, p[section].categories[0].category, `[data-pl-section="${section}"]`).click();
+    await expect(rowsDialog(page)).toBeVisible();
+    await expect(dlgRows(page).first()).toBeVisible();
     await noOverflow(page, 'business rows open');
+    await closeRows(page);
 
     await view(page, 'household').click();
     await expect(page.locator('[data-pl-household]')).toBeVisible();
     await expect(page.locator('[data-pl-table]')).toBeVisible();
     await noOverflow(page, 'household view');
     await page.screenshot({ path: test.info().outputPath(`pnl-household-${width}.png`), fullPage: true });
-    await page.locator('[data-pl-table] button[data-pl-cat]').first().click();
-    await expect(rowsPanel(page)).toBeVisible();
+    await page.locator('[data-pl-table] tr[data-pl-row] th button.pl-cat[data-go="pnlrows"]').first().click();
+    await expect(rowsDialog(page)).toBeVisible();
+    await expect(dlgRows(page).first()).toBeVisible();
     await noOverflow(page, 'household rows open');
     await page.screenshot({ path: test.info().outputPath(`pnl-household-rows-${width}.png`), fullPage: true });
   });
 });
 
-// The rows panel lists the rows behind the clicked category: for the range or for the selected
-// month (the latest by default). The count line and the list match the rows API for one of them.
-async function expectRows(page, request, path, query, month, category) {
-  const panel = rowsPanel(page);
-  await expect(panel).toBeVisible();
-  await expect(panel).toContainText(category);
-  await expect(panel.locator('li.h-ad-txn').first()).toBeVisible();
-  const range = await getJson(request, `${path}?${qs(query)}`);
-  const single = await getJson(request, `${path}?${qs({ ...query, month })}`);
-  const count = (await panel.locator('[data-pl-rows-count]').innerText()).replace(/,/g, '');
-  const hit = [range, single].find((r) => new RegExp(`\\b${r.total}\\b`).test(count));
-  expect(hit, `count "${count}" is the range total ${range.total} or the month total ${single.total}`).toBeTruthy();
-  await expect(panel.locator('li.h-ad-txn')).toHaveCount(hit.items.length);
-  await expect(panel.locator('li.h-ad-txn .fx-fig')).toHaveCount(hit.items.length);
+// The rows dialog lists the rows behind the clicked category for the range (no month is selected
+// by default): its title is the category, its rows and their figures match the rows API, the count
+// line names the API's row count, and its total is the API's sum figure.
+async function expectRows(page, request, path, query, category) {
+  const dlg = rowsDialog(page);
+  await expect(dlg).toBeVisible();
+  await expect(page).toHaveURL(/#\/pnlrows\//);
+  await expect(dlg.locator('#h-dlg-t')).toHaveText(category);
+  await expect(dlgRows(page).first()).toBeVisible();
+  const rows = await getJson(request, `${path}?${qs(query)}`);
+  await expect(dlgRows(page)).toHaveCount(rows.items.length);
+  await expect(dlgRows(page).locator('td.pl-d-amt .fx-fig')).toHaveCount(rows.items.length);
+  const figs = await dlgRows(page).locator('td.pl-d-amt .fx-fig').evaluateAll((els) => els.map((e) => e.getAttribute('data-fig')));
+  expect(figs, 'the rows behind the category, newest first').toEqual(rows.items.map((i) => i.fig));
+  await expect(dlg.locator('[data-pl-dlg-count]')).toContainText(String(rows.total));
+  await expect(dlg.locator('[data-pl-dlg-total] .fx-fig')).toHaveAttribute('data-fig', rows.sum);
+}
+
+// Close the rows dialog with Escape. An open figure popover takes the first Escape, so dismiss it
+// first; Escape on the dialog closes it through history.back(), which lands asynchronously.
+async function closeRows(page) {
+  if (await page.locator('.fx-pop').count()) {
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.fx-pop')).toBeHidden();
+  }
+  await page.keyboard.press('Escape');
+  await expect(rowsDialog(page)).toHaveCount(0);
+  await expect(page).not.toHaveURL(/#\/pnlrows\//);
 }
 
 

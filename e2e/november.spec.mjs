@@ -2,7 +2,8 @@
 // flips the brief verdict (now carried by the monthly email preview, since Home leads with goals)
 // to clear, and the result persists through the API across a reload.
 
-import { test, expect, resetDemo, needsYouIds, rec, attentionHeadline, clearHeadline, gotoRoute, openRecFromPage, closeDialogWithX, recDialog } from './helpers.mjs';
+import { test, expect, resetDemo, needsYouIds, rec, attentionHeadline, clearHeadline, gotoRoute, openRecFromPage, closeDialogWithX, recDialog, fetchScenario } from './helpers.mjs';
+import { planOrder } from '../web/horizon/screens/home-model.js';
 
 test.beforeEach(async ({ request }) => {
   await resetDemo(request);
@@ -17,8 +18,11 @@ async function emailVerdict(page) {
   return page.frameLocator('iframe[title="Brief preview"]').locator('body');
 }
 
-test('the November plan starts at attention with every needs-you item listed', async ({ page }) => {
-  const expected = needsYouIds();
+test('the November plan starts at attention with every needs-you item listed', async ({ page, request }) => {
+  // Plan breaks deadline ties by the priority of the goals a rec serves (links resolve at read time).
+  const live = await fetchScenario(request);
+  const byId = new Map(live.recs.map((r) => [r.id, r]));
+  const expected = planOrder(needsYouIds().map((id) => byId.get(id)), live.goals).map((r) => r.id);
   await gotoRoute(page, 'plan');
   await expect(needsCount(page)).toHaveText(String(expected.length));
   const ids = await needsLinks(page).evaluateAll((els) => els.map((e) => e.getAttribute('data-id')));

@@ -1,5 +1,8 @@
 import { getSetting, parseJson as parse } from '../store/db.mjs';
-import { goalPace, paceRollup, monthlyPace, paceMeter, finite, isoDate } from '../calc/pace.mjs';
+import { goalPace, paceRollup, monthlyPace, paceMeter, finite, isoDate, rangePace, rangeGoal, floorPace, contributionPace,
+  qualifyingContributions, MOVE_DAYS } from '../calc/pace.mjs';
+import { kindOf, isGoalOwner, PRIORITIES, PERSONS } from '../shared/goals.mjs';
+import { ownerOf } from '../jobs/planner/data.mjs';
 
 const sum = values => Math.round(values.reduce((s, v) => s + v, 0) * 100) / 100;
 const endOfMonth = period => /^\d{4}-\d{2}$/.test(period ?? '')
@@ -135,7 +138,61 @@ function makeReader(db, clock) {
       return value ? [value] : [];
     });
   }
-  return { tracked, observations, figure };
+  // Progress toward a contribution goal: {actual, basis, people: [{person, actual}], reason}.
+  // Transactions are the basis only when every destination account has a transaction in the tax
+  // year up to the clock; otherwise the entered amount; otherwise no progress source, with
+  // partial_contribution_coverage when some but not all accounts are covered.
+  function contributions(goal) {
+    const year = goal.taxYear;
+    const ids = Number.isInteger(year) && Array.isArray(goal.accounts)
+      ? [...new Set(goal.accounts)].filter(id => typeof id === 'string' && db.prepare('SELECT 1 FROM accounts WHERE id = ?').get(id)) : [];
+    const start = `${year}-01-01`;
+    const end = [`${year}-12-31`, clock].toSorted()[0];
+    const latest = db.prepare('SELECT id, date FROM transactions WHERE account_id = ? AND date >= ? AND date <= ? ORDER BY date DESC, id DESC LIMIT 1');
+    const coverage = new Map(ids.flatMap(id => {
+      const row = latest.get(id, start, end);
+      return row ? [[id, row]] : [];
+    }));
+    if (ids.length && coverage.size === ids.length) {
+      // Debits a few days either side of the year are read so a move across the year end still pairs.
+      const shift = (date, days) => new Date(Date.parse(date + 'T00:00:00Z') + days * 86400000).toISOString().slice(0, 10);
+      const rows = db.prepare(`SELECT t.id, t.account_id, t.date, t.amount, t.description, coalesce(i.category, t.category) AS category
+        FROM transactions t LEFT JOIN transaction_category_imports i ON i.transaction_id = t.id
+        WHERE t.account_id IN (${ids.map(() => '?').join(', ')}) AND t.date >= ? AND t.date <= ? ORDER BY t.date, t.id`)
+        .all(...ids, shift(start, -MOVE_DAYS), [shift(end, MOVE_DAYS), clock].toSorted()[0]);
+      const qualifying = qualifyingContributions(rows, ids, { taxYear: year, clock });
+      const valueOf = accountIds => {
+        const mine = qualifying.filter(r => accountIds.includes(r.account_id));
+        const qualifyingIds = mine.map(r => r.id);
+        const coverageIds = accountIds.map(id => coverage.get(id).id).filter(id => !qualifyingIds.includes(id));
+        const sources = [qualifyingIds.length ? sourceRows('transactions', qualifyingIds) : null,
+          coverageIds.length ? { ...sourceRows('transactions', coverageIds), field: 'coverage' } : null,
+          sourceRows('accounts', accountIds)].filter(Boolean);
+        return actualValue(sum(mine.map(r => r.amount)), accountIds.map(id => ({ kind: 'bank_csv', asOf: coverage.get(id).date })), sources,
+          'Contributions recorded in the tax year');
+      };
+      const holders = new Map(ids.map(id => [id, ownerOf(db.prepare('SELECT owner FROM accounts WHERE id = ?').get(id).owner)]));
+      const attributed = [...holders.values()].every(h => PERSONS.includes(h));
+      const people = attributed ? PERSONS.flatMap(person => {
+        const held = ids.filter(id => holders.get(id) === person);
+        return held.length ? [{ person, actual: valueOf(held) }] : [];
+      }) : [];
+      return { actual: valueOf(ids), basis: 'transactions', people, reason: null };
+    }
+    const entered = goal.entered;
+    const listed = Array.isArray(entered?.people) ? entered.people.filter(p => PERSONS.includes(p?.person) && finite(p.amount)) : [];
+    const total = finite(entered?.total) ? entered.total : listed.length ? sum(listed.map(p => p.amount)) : null;
+    if (isoDate(entered?.asOf) && finite(total)) {
+      const dependencies = [{ kind: 'balances', asOf: entered.asOf }];
+      const sources = [{ rows: rows('goals', [goal.id]), field: 'entered', src: 'you' }];
+      const label = 'Contributed so far, as entered';
+      return { actual: actualValue(total, dependencies, sources, label), basis: 'entered',
+        people: listed.map(p => ({ person: p.person, actual: actualValue(p.amount, dependencies, sources, label) })), reason: null };
+    }
+    const partial = coverage.size > 0 && coverage.size < ids.length;
+    return { actual: null, basis: null, people: [], reason: partial ? 'partial_contribution_coverage' : null };
+  }
+  return { tracked, observations, figure, contributions };
 }
 
 export function captureGoalPath(db, goal, clock) {
@@ -146,7 +203,8 @@ export function captureGoalPath(db, goal, clock) {
 
 export function goalPathChanged(previous, next) {
   const tracking = tr => tr?.accounts ? { accounts: [...new Set(tr.accounts)].toSorted() } : tr ?? null;
-  return previous.target !== next.target || previous.targetDate !== next.targetDate
+  return kindOf(previous) !== kindOf(next) || previous.target !== next.target || previous.targetLow !== next.targetLow
+    || previous.targetDate !== next.targetDate
     || JSON.stringify(tracking(previous.track)) !== JSON.stringify(tracking(next.track));
 }
 
@@ -193,11 +251,26 @@ function savingsSeries(db, clock) {
 export function buildPace(db, { clock: override } = {}) {
   const clock = paceClock(db, override);
   const reader = makeReader(db, clock);
-  const defs = db.prepare('SELECT id, def FROM goals WHERE archived_at IS NULL ORDER BY sort, created_at, id').all()
+  // Done goals (done_at set, or a seed def whose status is done) are not paced.
+  const defs = db.prepare('SELECT id, def FROM goals WHERE archived_at IS NULL AND done_at IS NULL ORDER BY sort, created_at, id').all()
     .map(r => ({ ...parse(r.def, {}), id: r.id })).filter(g => g.status !== 'done');
-  const goals = defs.map(goal => goalPace({ goal, actual: reader.tracked(goal), clock }));
+  const paceOf = goal => {
+    const kind = kindOf(goal);
+    const result = kind === 'range' ? rangePace({ goal, actual: reader.tracked(goal), clock })
+      : kind === 'floor' ? floorPace({ goal, actual: reader.tracked(goal), clock })
+        : kind === 'contribution' ? contributionPace({ goal, ...reader.contributions(goal), clock })
+          : goalPace({ goal, actual: reader.tracked(goal), clock });
+    // owner here is whose goal, not origin 'owner' (typed by the owner).
+    return { ...result, kind, owner: isGoalOwner(goal.owner) ? goal.owner : null, priority: PRIORITIES.includes(goal.priority) ? goal.priority : null };
+  };
+  const seriesOf = goal => {
+    const kind = kindOf(goal);
+    if (kind === 'floor' || kind === 'contribution') return { series: null, reason: 'kind_not_charted', dataEnd: null };
+    return monthlyPace({ goal: kind === 'range' ? rangeGoal(goal) : goal, observations: reader.observations(goal), clock });
+  };
+  const goals = defs.map(paceOf);
   return { clock, rollup: paceRollup(goals, clock), goals,
-    series: { goals: Object.fromEntries(defs.map(goal => [goal.id, monthlyPace({ goal, observations: reader.observations(goal), clock })])),
+    series: { goals: Object.fromEntries(defs.map(goal => [goal.id, seriesOf(goal)])),
       householdSavings: savingsSeries(db, clock) }, meters: metersOf(db, clock, reader) };
 }
 
