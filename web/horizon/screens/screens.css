@@ -187,16 +187,16 @@
 .d-horizon .h-qs-list[hidden] { display: none; }
 .d-horizon .h-qs-g { padding: 10px 10px 4px; font-size: 11.5px; letter-spacing: 0.07em; text-transform: uppercase; color: var(--fa); }
 .d-horizon .h-qs-o {
-  display: flex; align-items: center; gap: 12px; padding: 8px 10px; border-radius: 8px; cursor: pointer; min-width: 0;
+  display: flex; align-items: center; gap: 12px; min-height: 40px; padding: 9px 10px; border-radius: 8px; cursor: pointer; min-width: 0;
   scroll-margin: 6px;
 }
 .d-horizon .h-qs-o[aria-selected="true"] { background: var(--s2); }
 .d-horizon .h-qs-o[aria-selected="true"] .h-qs-ic { color: var(--ac); }
 .d-horizon .h-qs-ic { flex: none; width: 16px; display: grid; place-items: center; color: var(--fa); }
-.d-horizon .h-qs-x { flex: 1 1 auto; min-width: 0; display: flex; align-items: baseline; gap: 10px; }
-.d-horizon .h-qs-t { min-width: 0; color: var(--tx); font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.d-horizon .h-qs-x { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 10px; }
+.d-horizon .h-qs-t { min-width: 0; color: var(--tx); font-size: 14px; line-height: 20px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .d-horizon .h-qs-t mark { background: transparent; color: var(--ac2); }
-.d-horizon .h-qs-s { flex: 0 1 auto; min-width: 0; color: var(--fa); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.d-horizon .h-qs-s { flex: 0 1 auto; min-width: 0; color: var(--fa); font-size: 12.5px; line-height: 20px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .d-horizon .h-qs-k { flex: none; }
 .d-horizon .h-qs-empty { padding: 18px 16px; color: var(--mu); font-size: 13.5px; overflow-wrap: anywhere; }
 .d-horizon .h-qs-empty[hidden] { display: none; }

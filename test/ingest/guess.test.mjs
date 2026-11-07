@@ -529,7 +529,7 @@ describe('imports trigger the confirm-guess job through the scheduler', () => {
       assert.equal(r.status, 200, r.text.slice(0, 300));
       assert.equal(r.json.files[0].status, 'imported');
       assert.ok(C.pendingItems(s.db).length > 0, 'the upload asked questions');
-      assert.deepEqual(sorted(scheduler.calls), [['confirm-guess', 'ingest'], ['plan', 'ingest']], 'one trigger each');
+      assert.deepEqual(sorted(scheduler.calls), [['confirm-guess', 'ingest'], ['freshness', 'ingest'], ['plan', 'ingest']], 'one trigger each');
       await pause(100);
       assert.equal(count(s.db, 'confirm_guesses'), 0, 'no guess outside the scheduler job');
       assert.ok(engine.calls.every((req) => req.purpose !== 'confirm'), 'no confirm call outside the scheduler job');
@@ -559,7 +559,7 @@ describe('imports trigger the confirm-guess job through the scheduler', () => {
       const done = await app.postJson(`/api/files/${file.fileId}/retry`, {});
       assert.equal(done.status, 200, done.text.slice(0, 300));
       assert.equal(done.json.file.status, 'imported');
-      assert.deepEqual(sorted(scheduler.calls), [['confirm-guess', 'ingest'], ['plan', 'ingest']], 'a successful retry triggers each once');
+      assert.deepEqual(sorted(scheduler.calls), [['confirm-guess', 'ingest'], ['freshness', 'ingest'], ['plan', 'ingest']], 'a successful retry triggers each once');
     } finally {
       await app.close();
     }
@@ -576,7 +576,7 @@ describe('imports trigger the confirm-guess job through the scheduler', () => {
       const r = await app.request(multipart('Chase7766_Activity_20320305.csv', readFileSync(fixturePath('Chase7766_Activity_20320305.csv'))));
       assert.equal(r.status, 200, r.text.slice(0, 300));
       assert.equal(r.json.files[0].status, 'imported');
-      assert.deepEqual([...calls].sort(), ['confirm-guess', 'plan']);
+      assert.deepEqual([...calls].sort(), ['confirm-guess', 'freshness', 'plan']);
     } finally {
       await app.close();
     }

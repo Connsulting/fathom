@@ -1,5 +1,40 @@
 # Fathom architecture
 
+![Fathom architecture: one container serving the Horizon app, the API and MCP over one store](architecture/fathom-architecture.png)
+
+Diagram source: [architecture/fathom-architecture.html](architecture/fathom-architecture.html).
+Regenerate the image with `node scripts/screenshots.mjs --port <n>` (see [development.md](development.md)).
+
+## Overview
+
+Fathom is one Node process in one container. It serves the Horizon app, the JSON API and MCP, runs
+its own jobs, and keeps every piece of state on the `/data` volume.
+
+1. A reverse proxy in front terminates HTTPS for the `FATHOM_PUBLIC_URL` host and forwards plain
+   HTTP to port 8080. Browsers and MCP clients both arrive this way.
+2. `src/server.mjs` opens the store by its mode, builds the runtime engine, the live pack view, the
+   mail transport and the scheduler, then hands every request to the router in `src/api/router.mjs`.
+3. The router applies the session gate in `src/auth/` first: passkeys over WebAuthn, the
+   `__Host-fathom-session` cookie, and an exact Origin on every mutation. On a real store
+   everything sits behind that gate except `/healthz`, the sign-in and enrollment pages, and the
+   public `/api/auth` routes for the session check, sign-in, enrollment and recovery. `/api`
+   requests then pass the Host allowlist.
+4. `POST /mcp` skips the session gate and takes a bearer key instead. Its tools come from the same
+   registry in `src/tools/` that the engine uses, limited by the key's scopes.
+5. The API reads and writes the store. Ask streams its answer as Server-Sent Events from the engine
+   (`src/engine/`), which runs `live`, `fake` or `off` and grounds its answers in tools over the
+   stored data and the knowledge packs.
+6. Calculators in `src/calc/` produce every figure deterministically, called by the planner and
+   pace, and each figure keeps its provenance. The model never states a number it did not get from
+   a calculator or the store.
+7. Ingest (`src/ingest/`) turns uploads into ledger rows through one parser per format, keeps the
+   originals in the encrypted vault, and runs the read-only SimpleFIN sync.
+8. The in-process scheduler (`src/jobs/scheduler.mjs`) runs `plan`, `brief-email`,
+   `deadline-alerts`, `freshness`, `trash-purge`, `confirm-guess` and `simplefin-sync`. Mail leaves
+   through `src/email/` on the configured transport.
+9. `/data` holds `fathom.sqlite`, the vault's `files/`, the Your plans pack and the key secret.
+   Backing it up is the operator's job; the app has no backup job of its own.
+
 This is the architecture every build item works against. The first part is frozen: change it only
 by agreement across items. The rest describes the running app and is updated as items land.
 Known limits from merged pull requests are in [`known-limits.md`](known-limits.md).
@@ -755,7 +790,7 @@ known path with the wrong method is 405; signed out, both are 401. Every action 
 | `GET /healthz` | | `{ok: true, schema: <latest migration id>}` |
 | `GET /api/scenario` | | the scenario with `live` |
 | `GET /api/identity` | | `{identity: {id, email, name, login, householdId, role} or null}`. The signed-in user (`name` and `login` are the email). Always `null` on a demo store. |
-| `GET /signin` | | Public page: `web/auth/index.html` (sign in with a passkey, email recovery link). Loads only `/auth/auth.js`, `/auth/auth.css` and `/favicon.svg`; never the scenario. |
+| `GET /signin` | | Public page: `web/auth/index.html` (sign in with a passkey, email recovery link). Loads only `/auth/auth.js`, `/auth/return-path.js`, `/auth/auth.css` and `/favicon.svg`; never the scenario. |
 | `GET /enroll` | | Public page: the same file. Reads the token from the `#` fragment of an emailed link, removes it from history at once, and creates a passkey. |
 | `GET /account` | | Signed-in page: the same file. Passkeys (add, revoke), emailing an add-a-device link, and sign out. |
 | `GET /admin/users` | | Admin page: the same file. People, roles, invitations, removal and passkey revocation. A member gets a 403 page. |
@@ -794,6 +829,7 @@ known path with the wrong method is 405; signed out, both are 401. Every action 
 | `POST /api/threads/:id/restore` | `{}` | `{scenario, thread}`. Clears `trashedAt` when trashed, else `archivedAt`. |
 | `POST /api/threads/:id/delete` | `{}` | `{scenario}`. Deletes the thread and its messages forever; 409 unless it is in Trash. |
 | `POST /api/your-plans/build` | `{fileIds?: string[]}` (at most 50) | `{scenario, result: {written, entries, sources, warnings, dropped}}`. Builds the Your plans pack (`dropped` counts the extracted sections that did not match their document); 400 for a bad body; 409 while the engine is off, over the cap, or when the data directory is inside the repository. |
+| `POST /api/accounts/:id/name` | `{displayName}` | `{scenario, account}`. Sets the owner's display name for that account (trimmed, at most 120 characters, no line breaks or control characters). Empty or null clears it and the screens use the default label. 400 for a bad name, 404 unknown. Imports and SimpleFIN refreshes do not write this column. |
 | `POST /api/goals` | `{title, note?, horizon?, target?, targetDate?, track?}` | `{scenario, goal}`. Creates an owner goal (`origin` owner). `title` 1 to 120 characters, no line breaks; `note` at most 500; `horizon` now, 1-3y or 3-10y (default now); `target` a non-negative number or null; `targetDate` a valid YYYY-MM-DD or null; `track` null, `{accounts: [account ids]}` (at most 20, known ids) or `{figure: key}` (a known figure the store holds). Anything else 400. |
 | `GET /api/pace` | none | Deterministic `clock`, `rollup`, `goals`, `series` and `meters`, identical to `scenario.pace`. Uses the same owner gate as the scenario. No writes or model calls. |
 | `POST /api/goals/:id` | any subset of the create fields | `{scenario, goal}`. Edits an owner goal; 409 for a seed (demo) goal, 404 unknown. |
@@ -860,7 +896,7 @@ only: any `.` or `..` segment (raw or percent-encoded), dotfile, backslash or sy
 404. Unknown extensionless paths fall back to `web/index.html`, except the account pages
 (`/signin`, `/enroll`, `/account`, `/admin/users`), which serve `web/auth/index.html`; the main
 app shell is never served as a sign-in page. Signed out on a real store, the only static files
-served are `/auth/auth.js`, `/auth/auth.css` and `/favicon.svg`. Every response sets
+served are `/auth/auth.js`, `/auth/return-path.js`, `/auth/auth.css` and `/favicon.svg`. Every response sets
 `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY` and this
 CSP: `default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com;
 style-src-attr 'unsafe-inline'; font-src https://fonts.gstatic.com; img-src 'self' data:;
@@ -1037,7 +1073,7 @@ Gate and origins.
 
 1. `/mcp` (exactly that path) is handled first and only with bearer keys; it never reads cookies.
 2. Public without a session: `GET` and `HEAD /healthz`; `GET /signin` and `GET /enroll`;
-   `/auth/auth.js`, `/auth/auth.css` and `/favicon.svg`; `GET /api/auth/session` (no household
+   `/auth/auth.js`, `/auth/return-path.js`, `/auth/auth.css` and `/favicon.svg`; `GET /api/auth/session` (no household
    data); and the sign-in, link registration and recovery POSTs.
 3. Everything else needs a session. Signed out, an `/api` path, unknown paths included, is 401
    `{error: 'unauthorized'}` and any other path is a 401 page with a Sign in link and

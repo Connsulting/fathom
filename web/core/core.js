@@ -1,3 +1,5 @@
+import { signInTarget } from '../auth/return-path.js';
+
 // Fathom client core: window.Fathom, hash router, API-backed store, figure popover.
 // Port of mock-v2/core/core.js. Keeps every `api` member of mock-v2/CONTRACT.md (Core API) with the
 // same semantics, plus api.src and api.figPopover. Designs only touch window.Fathom.api.
@@ -307,6 +309,7 @@ function onHashChange() {
 
 let queue = Promise.resolve();
 let errEl = null;
+let lastError = '';
 
 function hideError() {
   if (errEl) { errEl.remove(); errEl = null; }
@@ -346,7 +349,7 @@ function signedOut(notice) {
   version += 1;
   if (root) { root.className = ''; root.innerHTML = ''; }
   if (notice) { try { window.sessionStorage.setItem(NOTICE_KEY, notice); } catch (e) { /* the page still works */ } }
-  try { window.location.replace('/signin'); } catch (e) { /* ignore */ }
+  try { window.location.replace(signInTarget(window.location.pathname, window.location.hash)); } catch (e) { /* ignore */ }
 }
 
 // A FormData body goes out as multipart with no content-type header (the browser sets the boundary).
@@ -589,6 +592,7 @@ function send(path, body, onOk, onDone, failText) {
       if (onDone) onDone();
       applyScenario(data.scenario);
       hideError();
+      lastError = '';
       let out = data;
       try { out = onOk ? onOk(data) : data; } catch (e) { out = null; }
       notify();
@@ -596,7 +600,8 @@ function send(path, body, onOk, onDone, failText) {
     },
     err => {
       if (onDone) { onDone(); notify(); }
-      showError((failText || 'Could not save that change. ') + (err && err.message ? err.message : ''));
+      lastError = (err && err.message) ? err.message : 'The server could not complete that.';
+      showError((failText || 'Could not save that change. ') + lastError);
       return null;
     }
   );
@@ -791,6 +796,11 @@ function onboard(step) {
 // ---------------------------------------------------------------- goals and the curve
 
 // Resolve with the saved goal (or true for a delete), or null on failure (error line shown).
+function accountRename(id, displayName) {
+  if (id == null || id === '') return done();
+  return send('/api/accounts/' + encodeURIComponent(id) + '/name', { displayName: displayName ?? '' }, d => d.account || null, null, 'Could not rename that account. ');
+}
+
 function goalCreate(fields) {
   if (!fields || typeof fields !== 'object') return done();
   return send('/api/goals', fields, d => d.goal || null, null, 'Could not save that goal. ');
@@ -1129,6 +1139,7 @@ const api = {
   decide,
   revisit,
   onboard,
+  accountRename,
   goalCreate,
   goalUpdate,
   goalSuggestion,
@@ -1167,6 +1178,7 @@ const api = {
   advisorVerdict,
   advisorCheckin,
   advisorPacket,
+  lastError: () => lastError,
   figPopover: el => openPopover(el),
 };
 
