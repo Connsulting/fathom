@@ -23,7 +23,8 @@ const ALIASES = {
   kids: 'kids-dependents', retire: 'advanced-retirement', giving: 'charitable-giving',
 };
 const ILLUSTRATIVE = ['contractor', 'abroad', 'rental'];
-const PUBLIC_IDS = [...Object.values(ALIASES), 'spending-and-obligations'].sort();
+const ALWAYS_ACTIVE = ['account-tax-treatment', 'spending-and-obligations'];
+const PUBLIC_IDS = [...Object.values(ALIASES), ...ALWAYS_ACTIVE].sort();
 const DEMO_IDS = demo.packs.map(p => p.id).sort();
 const manifestOf = id => JSON.parse(readFileSync(join(REPO_PACKS, id, 'manifest.json'), 'utf8'));
 
@@ -164,8 +165,8 @@ test('a demo store keeps its seeded rows; the view adds the backing manifest fie
   packs.refresh();
   const after = rows(db);
   const added = after.filter(r => !before.some(b => b.id === r.id));
-  assert.deepEqual(added.map(r => r.id), ['spending-and-obligations'], 'only the unseeded always-active pack is added');
-  assert.equal(added[0].def.status, 'active');
+  assert.deepEqual(added.map(r => r.id).sort(), ALWAYS_ACTIVE, 'only the unseeded always-active packs are added');
+  for (const row of added) assert.equal(row.def.status, 'active', row.id);
   for (const prior of before) assert.deepEqual(after.find(r => r.id === prior.id), prior, 'seeded rows stay untouched');
   for (const [id, manifestId] of Object.entries(ALIASES)) {
     const prior = before.find(r => r.id === id).def;
@@ -217,8 +218,8 @@ test('a your-plans pack from the data dir becomes an active row in a real store 
   }
   const { db, dataDir } = store(t);
   refreshLivePacks(db, { dataDir });
-  assert.deepEqual(rows(db).map(r => r.id).sort(), [...DEMO_IDS, 'spending-and-obligations'].sort(),
-    'a demo store gains the unseeded always-active pack and no other repository row');
+  assert.deepEqual(rows(db).map(r => r.id).sort(), [...DEMO_IDS, ...ALWAYS_ACTIVE].sort(),
+    'a demo store gains the unseeded always-active packs and no other repository row');
 });
 
 // ---------------------------------------------------------------- demo upgrade (R2)
@@ -254,7 +255,7 @@ test('an existing demo store upgrades through the migration: ids, names and over
   }
   const packs = createLivePacks(db, { dataDir });
   packs.refresh();
-  assert.deepEqual(rows(db).map(r => r.id).sort(), [...DEMO_IDS, 'spending-and-obligations'].sort(), 'no duplicate manifest rows');
+  assert.deepEqual(rows(db).map(r => r.id).sort(), [...DEMO_IDS, ...ALWAYS_ACTIVE].sort(), 'no duplicate manifest rows');
   assert.equal(row(db, 'giving').active, 1);
   assert.equal(packs.view('giving', row(db, 'giving').def).version, manifestOf('charitable-giving').version);
   assert.equal(row(db, 'scorp').exploring, 1);
