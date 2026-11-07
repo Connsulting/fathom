@@ -22,7 +22,8 @@ import assert from 'node:assert/strict';
 import { rm } from 'node:fs/promises';
 import { tempDb } from './helpers/server.mjs';
 import { setSetting } from '../src/store/db.mjs';
-import { goalKind, TARGET_PARAMETERS } from '../src/calc/targets.mjs';
+import { goalKind, spendingFigures, spendingInputs, TARGET_PARAMETERS } from '../src/calc/targets.mjs';
+import { accountLabel } from '../src/shared/account-label.mjs';
 import { buildSuggestions, SUGGEST_SETTING } from '../src/suggest/build.mjs';
 
 const CLOCK = '2026-11-05';
@@ -156,15 +157,133 @@ test('a month with no transaction on a participating account splits the window; 
   assert.deepEqual(rec.window, { from: '2026-04', to: '2026-09', months: 6 });
 });
 
-test('the window is the intersection of every participating account: a card from June leaves too few months', async t => {
+test('a card that opens inside the window does not shorten it', async t => {
   const db = await store(t);
   household(db);
   account(db, 'crd', 'card', 'Rewards card');
   for (const m of [6, 7, 8]) txn(db, 'crd', `2026-0${m}-15`, -100, 'Groceries');
   putGoal(db, 'cushion', { title: 'A cash cushion', horizon: '1-3y' });
-  const rec = recOf(build(db), 'cushion');
-  assert.equal(rec.state, 'question');
-  assert.ok(rec.missing.includes('no_spending_history'), `missing ${rec.missing}`);
+  const r = build(db);
+  const rec = recOf(r, 'cushion');
+  // Checking still sets Feb to Jul. The card's only complete month is July, so its 100 counts there.
+  assert.equal(rec.state, 'suggested');
+  assert.deepEqual(rec.window, { from: '2026-02', to: '2026-07', months: 6 });
+  assert.equal(figOf(r, rec, 'monthlySpend').v, 3021.67);
+});
+
+const ymIndex = ym => Number(ym.slice(0, 4)) * 12 + Number(ym.slice(5, 7)) - 1;
+function spanTx(id, from, to, amount = -100) {
+  const rows = [];
+  for (let i = ymIndex(from); i <= ymIndex(to); i++) {
+    const ym = `${Math.floor(i / 12)}-${String((i % 12) + 1).padStart(2, '0')}`;
+    rows.push({ id: `${id}-${ym}`, account_id: id, date: `${ym}-15`, amount });
+  }
+  return rows;
+}
+const labeled = (id, display_name, kind = 'card') => ({ id, kind, name: display_name, inst: 'Example Bank', display_name });
+
+test('closed cards, a mid-window card, stale feeds, live feeds and a partial month', () => {
+  assert.equal(TARGET_PARAMETERS.closedAfterMonths, 6);
+  const accounts = [
+    labeled('c1', 'Closed card one'),
+    labeled('c2', 'Closed card two'),
+    labeled('new', 'New card'),
+    labeled('s1', 'Stale one', 'checking'),
+    labeled('s2', 'Stale two', 'checking'),
+    labeled('s3', 'Stale three', 'savings'),
+    labeled('l1', 'Live one', 'checking'),
+    labeled('l2', 'Live two', 'cash'),
+    labeled('part', 'Partial card'),
+  ];
+  const transactions = [
+    ...spanTx('c1', '2023-01', '2024-06'),
+    ...spanTx('c2', '2023-06', '2024-11'),
+    ...spanTx('new', '2026-03', '2026-11'),
+    ...spanTx('s1', '2024-06', '2026-08'),
+    ...spanTx('s2', '2024-06', '2026-08'),
+    ...spanTx('s3', '2024-06', '2026-08'),
+    ...spanTx('l1', '2024-06', '2026-11'),
+    ...spanTx('l2', '2024-06', '2026-11'),
+    { id: 'part-1', account_id: 'part', date: '2026-11-02', amount: -400 },
+  ];
+  const sp = spendingInputs({ accounts, transactions, clock: '2026-11-05' });
+  assert.deepEqual(sp.missing, []);
+  assert.deepEqual(sp.window, { from: '2025-08', to: '2026-07', months: 12 });
+  // Three stale and two live for 12 months, plus the new card for Apr-Jul: 3*12+2*12+4 = 64 hundreds.
+  assert.equal(sp.monthlySpend, 533.33);
+  assert.deepEqual(sp.incomplete.map(a => a.id), ['part']);
+  assert.deepEqual(sp.closed.map(a => a.id), ['c1', 'c2']);
+  assert.deepEqual(sp.limitedBy.map(a => a.id), ['s1', 's2', 's3']);
+  const note = spendingFigures(sp, { clock: '2026-11-05' }).monthlySpend.notes.join(' ');
+  assert.match(note, /ends in Jul 2026/);
+  for (const a of sp.limitedBy) assert.ok(note.includes(accountLabel(a)), accountLabel(a));
+  assert.ok(note.includes(accountLabel(accounts[8])), 'partial account is named');
+});
+
+test('a closed account does not cap the window and counts only inside its own range', () => {
+  const accounts = [labeled('old', 'Old card'), labeled('live', 'Live checking', 'checking')];
+  const transactions = [
+    ...spanTx('old', '2024-01', '2025-12', -50),
+    ...spanTx('live', '2024-06', '2026-11', -100),
+  ];
+  const sp = spendingInputs({ accounts, transactions, clock: '2026-11-05' });
+  assert.deepEqual(sp.window, { from: '2025-11', to: '2026-10', months: 12 });
+  assert.deepEqual(sp.closed.map(a => a.id), ['old']);
+  // Old card's complete months run through Nov 2025, so only Nov 2025 overlaps the window.
+  assert.equal(sp.monthlySpend, 104.17);
+});
+
+test('an account that opens inside the window is zero before its first complete month', () => {
+  const accounts = [labeled('chk', 'Checking', 'checking'), labeled('new', 'New card')];
+  const transactions = [
+    ...spanTx('chk', '2024-06', '2026-11', -100),
+    ...spanTx('new', '2026-03', '2026-11', -80),
+  ];
+  const sp = spendingInputs({ accounts, transactions, clock: '2026-11-05' });
+  assert.deepEqual(sp.window, { from: '2025-11', to: '2026-10', months: 12 });
+  // New card complete months start Apr 2026: seven months inside Nov 2025-Oct 2026.
+  assert.equal(sp.monthlySpend, 146.67);
+});
+
+test('an account with no complete month is named and does not block the household', () => {
+  const accounts = [labeled('chk', 'Checking', 'checking'), labeled('part', 'Partial card')];
+  const transactions = [
+    ...spanTx('chk', '2025-01', '2026-11', -100),
+    { id: 'part-1', account_id: 'part', date: '2026-11-02', amount: -400 },
+  ];
+  const sp = spendingInputs({ accounts, transactions, clock: '2026-11-05' });
+  assert.deepEqual(sp.missing, []);
+  assert.deepEqual(sp.window, { from: '2025-11', to: '2026-10', months: 12 });
+  assert.deepEqual(sp.incomplete.map(a => a.id), ['part']);
+  assert.equal(sp.monthlySpend, 100);
+  const note = spendingFigures(sp, { clock: '2026-11-05' }).monthlySpend.notes.join(' ');
+  assert.ok(note.includes(accountLabel(accounts[1])));
+});
+
+test('a stale feed still caps the window end', () => {
+  const accounts = [labeled('live', 'Live checking', 'checking'), labeled('stale', 'Stale checking', 'checking')];
+  const transactions = [
+    ...spanTx('live', '2024-06', '2026-11', -100),
+    ...spanTx('stale', '2024-06', '2026-08', -100),
+  ];
+  const sp = spendingInputs({ accounts, transactions, clock: '2026-11-05' });
+  assert.deepEqual(sp.window, { from: '2025-08', to: '2026-07', months: 12 });
+  assert.deepEqual(sp.limitedBy.map(a => a.id), ['stale']);
+  assert.equal(sp.monthlySpend, 200);
+  const note = spendingFigures(sp, { clock: '2026-11-05' }).monthlySpend.notes.join(' ');
+  assert.match(note, /ends in Jul 2026/);
+  assert.ok(note.includes(accountLabel(accounts[1])));
+});
+
+test('no_spending_history remains when fewer than three complete months survive', () => {
+  const accounts = [labeled('chk', 'Checking', 'checking'), labeled('old', 'Old card')];
+  const transactions = [
+    ...spanTx('chk', '2026-08', '2026-11', -100),
+    ...spanTx('old', '2023-01', '2024-06', -100),
+  ];
+  const sp = spendingInputs({ accounts, transactions, clock: '2026-11-05' });
+  assert.equal(sp.window, null);
+  assert.ok(sp.missing.includes('no_spending_history'));
 });
 
 test('fewer than three complete months is a question, not a number', async t => {
