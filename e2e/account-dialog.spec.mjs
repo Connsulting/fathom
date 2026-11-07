@@ -6,10 +6,21 @@ import { test, expect, resetDemo, gotoRoute, recDialog, closeDialogWithX } from 
 
 const ID = 'a_biz';
 
+// Every transaction of the account, newest first, read through the paged API.
 async function firstTransactions(request) {
-  const res = await request.get(`/api/accounts/${ID}/transactions?limit=200`);
-  expect(res.ok()).toBeTruthy();
-  return res.json();
+  const items = [];
+  let cursor = '';
+  let total = 0;
+  for (let i = 0; i < 100; i++) {
+    const res = await request.get(`/api/accounts/${ID}/transactions?limit=200${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`);
+    expect(res.ok()).toBeTruthy();
+    const page = await res.json();
+    items.push(...page.items);
+    total = page.total;
+    cursor = page.next;
+    if (!cursor) break;
+  }
+  return { items, total };
 }
 
 async function openFromAccounts(page) {
@@ -156,7 +167,9 @@ test.describe('account dialog on a phone', { tag: ['@mobile', '@mobile-only', '@
     const dlg = recDialog(page);
     const main = await dlg.locator('.h-dmain').boundingBox();
     const side = await dlg.locator('.h-dside').boundingBox();
-    expect(side.y).toBeGreaterThanOrEqual(main.y + main.height - 2);
+    // One column: the two blocks share a left edge and never sit side by side.
+    expect(Math.abs(side.x - main.x)).toBeLessThan(2);
+    expect(side.y + side.height <= main.y + 2 || main.y + main.height <= side.y + 2).toBe(true);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await dlg.locator('[data-ad="q"]').fill('zzzz-no-such-text');
     await expect(dlg.locator('.h-ad-count')).toContainText('0');
