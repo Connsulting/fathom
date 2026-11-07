@@ -63,6 +63,10 @@ const TABLE = [
   { method: 'GET', path: '/api/pace', handler: gh.getPace },
   { method: 'GET', path: '/api/identity', handler: h.getIdentity, session: true },
   { method: 'POST', path: '/api/recs/:id/action', handler: h.recAction },
+  { method: 'POST', path: '/api/actions/:id/undo', handler: h.actionUndo },
+  { method: 'POST', path: '/api/preferences', handler: h.preferenceSave },
+  { method: 'POST', path: '/api/preferences/:id', handler: h.preferenceSave },
+  { method: 'POST', path: '/api/preferences/:id/delete', handler: h.preferenceDelete },
   { method: 'POST', path: '/api/recs/:id/answers', handler: recAnswers, quiet: true },
   { method: 'POST', path: '/api/recs/:id/start-over', handler: h.recStartOver },
   { method: 'POST', path: '/api/wargame/:name/pick', handler: h.wargamePick },
@@ -209,7 +213,7 @@ export function createHandler({ db, platform, config, answerer, engine = null, p
   };
   const getMcp = () => {
     if (config.publicDemo) throw new HttpError(403, DEMO_OFF_MESSAGE);
-    return (mcpHandler ??= createMcpHandler({ db, keys: getKeys(), config }));
+    return (mcpHandler ??= createMcpHandler({ db, keys: getKeys(), config, scheduler }));
   };
   return async function handle(req, res) {
     setSecurityHeaders(res);

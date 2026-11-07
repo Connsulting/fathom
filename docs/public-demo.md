@@ -37,7 +37,7 @@ All limits come from environment variables and are enforced on the server. Ask a
 | `SANDBOXES` | 50 | Maximum resident sandboxes, at most 200 |
 | `TTL_SECONDS` | 86400 | Absolute sandbox lifetime, at most 604800 seconds |
 
-Invalid or nonpositive values refuse startup. An IP request limit returns HTTP 429 with Retry-After. Model and token limits cannot be raised through the UI. Live demo calls go directly to the model Messages API, with no automatic retry, built-in tools, network tools, shell, filesystem or write tools. Offered tools are local read tools and nonwriting proposals, with only that sandbox's DB in their context. The normal Ask grounding checks still apply. The globally capped engine covers Ask and Jev/what-if; scheduled/admin model work is off.
+Invalid or nonpositive values refuse startup. An IP request limit returns HTTP 429 with Retry-After. Model and token limits cannot be raised through the UI. Live demo calls go directly to the model Messages API, with no automatic retry, built-in tools, network tools, shell, filesystem or write tools. Offered tools are local read tools, with only that sandbox's DB in their context. The normal Ask grounding checks still apply. The globally capped engine covers Ask and Jev/what-if; scheduled/admin model work is off.
 
 ## Route behavior
 
@@ -133,6 +133,14 @@ Invalid or nonpositive values refuse startup. An IP request limit returns HTTP 4
 | POST | `/api/simplefin/disconnect` | Off, HTTP 403 |
 | POST | `/api/yearend/marks` | Visitor sandbox |
 | GET | `/api/yearend/packet` | Off, HTTP 403 |
+
+| POST | `/api/actions/:id/undo` | Off, HTTP 403 |
+
+| POST | `/api/preferences` | Off, HTTP 403 |
+
+| POST | `/api/preferences/:id` | Off, HTTP 403 |
+
+| POST | `/api/preferences/:id/delete` | Off, HTTP 403 |
 
 ## Verification
 
