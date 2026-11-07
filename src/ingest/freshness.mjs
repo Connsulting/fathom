@@ -1,3 +1,4 @@
+import { queueCategoryChecks } from '../categories/store.mjs';
 // Freshness of ingest sources: cadence per source kind, state at the scenario clock, the ingest
 // summary the scenario carries as live.ingest, and stale notes on plan domains.
 // Only sources whose id starts with 'ing:' are ingest sources; demo seeded sources are untouched.
@@ -119,7 +120,7 @@ function clockOf(db, clock) {
 // one card.
 const RANK = Object.freeze({
   tax_year: 0, employer_relation: 0, employer_recipient: 0, document_recipient: 0, withholding_conflict: 0,
-  fact_check: 1, account_kind: 2, account_owner: 2, account_match: 3, entity_alias: 3, near_duplicate: 4,
+  transaction_category: 1, category_mapping: 1, fact_check: 1, account_kind: 2, account_owner: 2, account_match: 3, entity_alias: 3, near_duplicate: 4,
 });
 const GROUPED = new Set(['account_owner', 'account_kind']);
 const rankOf = (kind) => RANK[kind] ?? 5;
@@ -150,7 +151,7 @@ function pendingWithGuesses(db) {
           : item.question;
     return { ...item, question, fileName: r?.file_name ?? null, detail, guess, rank: rankOf(item.kind), group: GROUPED.has(item.kind) ? item.kind : null };
   });
-  return items.sort((a, b) => a.rank - b.rank || (a.group && b.group ? balanceSize(b) - balanceSize(a) : 0) || a.id - b.id);
+  return items.sort((a, b) => a.rank - b.rank || (['transaction_category','category_mapping'].includes(a.kind) && ['transaction_category','category_mapping'].includes(b.kind) ? Math.abs(b.context.amount)-Math.abs(a.context.amount) : 0) || (a.group && b.group ? balanceSize(b) - balanceSize(a) : 0) || a.id - b.id);
 }
 
 // Answers Fathom recorded itself, newest first: {id, kind, question, answer, answerLabel, rule,
@@ -228,6 +229,7 @@ export function accountFreshness(db, accountId, { clock } = {}) {
 
 export function ingestState(db, { clock } = {}) {
   const at = clockOf(db, clock);
+  queueCategoryChecks(db,{clock:at});
   const items = pendingWithGuesses(db);
   // Uploaded files always have stored bytes; the demo seed's provenance row does not.
   const files = db.prepare(`SELECT id, name, status, source_kind, parser, counts, uploaded_at FROM files

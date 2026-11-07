@@ -1,3 +1,4 @@
+import { categoryDetail } from '../categories/store.mjs';
 // Card context for confirm questions: what the owner needs on the card to answer it, read from
 // stored rows only. Every figure carries its file (or SimpleFIN) and date. Account numbers never
 // appear beyond the stored 4-digit mask, and SimpleFIN account ids never appear at all.
@@ -297,6 +298,8 @@ function valuesDetail(db, item) {
 
 export function cardDetail(db, item) {
   switch (item?.kind) {
+    case 'transaction_category':
+    case 'category_mapping': return categoryDetail(db,item);
     case 'account_owner':
     case 'account_kind': return accountDetail(db, item.subject);
     case 'near_duplicate': return nearDuplicateDetail(db, item);
