@@ -15,6 +15,9 @@ export const caseSchema = {
   type: 'array', minItems: 1, items: { type: 'object', additionalProperties: false, required: ['id', 'family', 'turns'], properties: {
     id: { type: 'string', pattern: '^[a-z][a-z0-9-]+$' },
     family: { enum: ['spending', 'cash-flow', 'business', 'net-worth', 'retirement', 'taxes', 'goals', 'freshness', 'unavailable'] },
+    storedGoal: { type: 'object', additionalProperties: false, required: ['title', 'note'], properties: {
+      title: { type: 'string' }, note: { type: 'string' },
+    } },
     expectedFail: { type: 'object', additionalProperties: false, required: ['missingTools'], properties: {
       missingTools: { type: 'array', minItems: 1, uniqueItems: true, items: { type: 'string', pattern: '^[a-z][a-z0-9_]+$' } },
     } },
@@ -27,6 +30,7 @@ export const caseSchema = {
         forbidden: { const: ['unsourced-figure', 'self-computed-figure'] },
         expected: { type: 'array', items: expected }, maxWords: { type: 'integer', minimum: 1, maximum: 1000 },
         rubric: { type: 'string', minLength: 1 }, refusal: { type: 'boolean' },
+        scriptedReply: { type: 'string', minLength: 1 },
       } } },
   } },
 };

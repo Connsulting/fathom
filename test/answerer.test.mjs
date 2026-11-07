@@ -10,6 +10,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { compileSchema } from '../src/engine/schema.mjs';
 import { rm } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -1171,7 +1172,7 @@ test('R3 A contract: no tool the answerer offers returns a sentinel argument out
   const results = responses[0].toolResults;
   assert.equal(results.length, calls.length, 'every scripted call ran');
   for (const r of results) {
-    assert.ok(!(r.isError && r.result && r.result.error), `schema-valid arguments: ${r.name} ${JSON.stringify(r.args)}`);
+    assert.ok(compileSchema(offered.find(t => t.name === r.name).inputSchema)(r.args), `schema-valid arguments: ${r.name} ${JSON.stringify(r.args)}`);
   }
   for (const name of names) {
     assert.ok(results.some(r => r.name === name && !r.isError), `${name} answers some sentinel call`);

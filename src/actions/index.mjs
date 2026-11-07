@@ -59,8 +59,7 @@ export function changeGoal(args, ctx, editing = false) {
   const old = current ? parse(current.def, {}) : {};
   for (const k of ['target', 'targetDate']) if (Object.hasOwn(fields, k)) {
     const stored = Object.hasOwn(old, k) ? [old[k]] : [];
-    if (k === 'target') stored.push(...ctx.db.prepare('SELECT v FROM figures WHERE unavailable_reason IS NULL').all().map(r => r.v));
-    requireEvidence(ctx, fields[k], { stored });
+    requireEvidence(ctx, fields[k], { stored, argument: k });
   }
   let receipt = null;
   const opts = { now: new Date(ctx.now ?? Date.now()).toISOString(), onWrite(before, after) {

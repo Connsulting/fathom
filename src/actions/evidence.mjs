@@ -48,10 +48,49 @@ function stated(value, text, shape) {
   return false;
 }
 
-export function requireEvidence(ctx, value, { evidence, stored = [], shape } = {}) {
+function householdValues(db) {
+  const values = [];
+  const add = value => {
+    if (value == null) return;
+    values.push(value);
+    if (typeof value === 'object') Object.values(value).forEach(add);
+  };
+  db.prepare('SELECT value FROM facts').all().forEach(r => add(parse(r.value, null)));
+  values.push(...db.prepare('SELECT v FROM figures WHERE unavailable_reason IS NULL').all().map(r => r.v));
+  for (const row of db.prepare('SELECT def FROM goals').all()) {
+    const def = parse(row.def, {});
+    values.push(...['title', 'note', 'target', 'targetDate'].map(k => def[k]).filter(v => v != null));
+  }
+  return values;
+}
+
+function confirmedProposal(ctx, value, shape) {
+  if (!ctx.conversationKey || !ctx.actorId) return false;
+  const rows = ctx.db.prepare(`SELECT role, text, provenance FROM messages WHERE conversation_key = ? AND id <= ? ORDER BY id DESC LIMIT 2`)
+    .all(ctx.conversationKey, ctx.evidenceMessageId ?? Number.MAX_SAFE_INTEGER);
+  let reply = ctx.ownerText;
+  let previous = rows[0];
+  if (reply == null) {
+    if (previous?.role !== 'me' || parse(previous.provenance, null)?.ownerInput?.actorId !== ctx.actorId) return false;
+    reply = previous.text;
+    previous = rows[1];
+  }
+  const text = String(reply).trim();
+  if (text.length > 160 || !/^(?:yes|yeah|yep|yup|sure|ok(?:ay)?|do it|go ahead|absolutely|correct|confirmed)\b/i.test(text)
+    || /\b(?:no|not|don't|wait|hold|later|maybe|except|but|however|unless|instead|change)\b/i.test(text)) return false;
+  if (previous?.role !== 'fathom') return false;
+  const provenance = parse(previous.provenance, null);
+  return (provenance?.literals ?? []).some(l => typeof l.source === 'string' && l.source.trim()
+    && typeof l.text === 'string' && previous.text.includes(l.text) && stated(value, l.text, shape));
+}
+
+export function requireEvidence(ctx, value, { evidence, stored = [], shape, argument = 'value' } = {}) {
   const statements = ownerStatements(ctx);
   const words = evidence ? statements.filter(s => s.includes(evidence)).map(() => evidence) : statements;
   const same = v => JSON.stringify(v) === JSON.stringify(value);
   if (stored.some(same) || words.some(text => stated(value, text, shape))) return;
-  throw new ToolError('bad_input', 'Use a value you stated in this conversation or a stored value. Include the exact words as evidence.');
+  const quantity = typeof value === 'number' || (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value));
+  if (quantity && (householdValues(ctx.db).some(v => same(v) || (typeof v === 'string' && stated(value, v, shape)))
+    || confirmedProposal(ctx, value, shape))) return;
+  throw new ToolError('bad_input', `${argument}: Use a value you stated in this conversation or a stored value. Include the exact words as evidence, or confirm a sourced proposal.`);
 }

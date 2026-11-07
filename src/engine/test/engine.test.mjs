@@ -162,7 +162,7 @@ test('invalid tool arguments are recorded and the next model round can correct t
   const result = await engine.call({ ...request, tools: [{ ...read, handler: async () => { handlerCalls++; return { value: 125 }; } }] });
   assert.equal(handlerCalls, 1);
   assert.equal(result.toolResults[0].isError, true);
-  assert.match(result.toolResults[0].result.error, /arguments/);
+  assert.match(result.toolResults[0].result.error, /args\.account must be one of demo/);
   assert.equal(result.toolResults[1].result.value, 125);
   assert.equal(result.grounding.ok, true);
   assert.equal(ledger.entries.length, 3);

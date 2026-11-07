@@ -1,10 +1,12 @@
 import { writePreference } from '../actions/preferences.mjs';
 import { recordFact, changeGoal, changeRec } from '../actions/index.mjs';
 import { undoAction } from '../actions/receipts.mjs';
+import { HORIZONS, HORIZON_IDS } from '../shared/goals.mjs';
 
 const obj = (properties, required = []) => ({ type: 'object', properties, required, additionalProperties: false });
 const id = { type: 'string', minLength: 1 };
-const goalFields = { title: { type: 'string' }, note: { type: 'string' }, horizon: { type: 'string' },
+const goalFields = { title: { type: 'string' }, note: { type: 'string' }, horizon: { type: 'string', enum: HORIZON_IDS,
+  description: HORIZONS.map(h => `${h.id}: ${h.label}`).join('; ') },
   target: { anyOf: [{ type: 'number' }, { type: 'null' }] }, targetDate: { anyOf: [{ type: 'string' }, { type: 'null' }] },
   track: { anyOf: [{ type: 'null' }, obj({ accounts: { type: 'array', items: { type: 'string' } } }, ['accounts']), obj({ figure: id }, ['figure'])] } };
 
