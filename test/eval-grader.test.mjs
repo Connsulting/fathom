@@ -30,13 +30,38 @@ test('sourced-number table: sign, cents, abbreviations, rounding, words and cont
   assert.equal(gradeFigures('$123', read({ amount: 123 }), { contextNumbers: [123] }).ok, true);
 });
 
+test('sourced-number table grades answers over real demo tool results', async () => {
+  const store = await createEvalStore();
+  try {
+    const call = async (name, args) => ({ name, args,
+      result: await tools.find(tool => tool.name === name).handler(args, { db: store.db }) });
+    const health = await call('query_transactions', { category: 'health', limit: 1 });
+    const pace = await call('get_pace', {});
+    const expense = Math.abs(health.result.rows[0].amount);
+    assert.ok(health.result.rows[0].amount < 0);
+    const target = pace.result.goals.find(goal => Number.isInteger(goal.target?.v)).target.v;
+    for (const text of [
+      `$${expense.toFixed(2)}`, expense.toFixed(2),
+      `$${target.toLocaleString('en-US')}.00`, `${target}.00`,
+      `$${target / 1000}k`, `${target / 1e6}m`,
+      `$${Math.trunc(expense)}`, 'one transaction',
+    ]) assert.equal(gradeFigures(text, [health, pace]).ok, true, text);
+    const rounded = `$${Math.round(expense / 10) * 10}`;
+    assert.equal(gradeFigures(rounded, [health]).rounded.length, 1);
+    assert.equal(gradeFigures(`${Math.round(target / 1e6 * 10) / 10}m`, [pace]).rounded.length, 1);
+    assert.equal(gradeFigures('seventeen dollars', [health]).spelledOut.length, 1);
+    const context = store.db.prepare('SELECT v FROM figures WHERE v > 0 LIMIT 1').get().v;
+    assert.equal(gradeFigures(`$${context}`, [], { contextNumbers: [context] }).contextOnly.length, 1);
+  } finally { await store.close(); }
+});
+
 test('formatting preserves units, cent precision and dropped-cent direction', () => {
   assert.equal(gradeFigures('1.5m', read({ amount: 1500000.50 })).ok, false);
-  assert.equal(gradeFigures('$1,188', read({ amount: 1187.40 })).ok, false);
+  assert.equal(gradeFigures('$1,188', read({ amount: 1187.40 })).rounded.length, 1);
   assert.equal(gradeFigures('$1,187', read({ amount: -1187.40 })).ok, true);
   assert.equal(gradeFigures('$1.5 million', read({ amount: 1500000 })).ok, true);
-  assert.equal(gradeFigures('$1,000,000', read({ amount: 1000000.01 })).ok, false);
-  assert.equal(gradeFigures('1,000,000', read({ amount: 1000000.01 })).ok, false);
+  assert.equal(gradeFigures('$1,000,000.01', read({ amount: 1000000.02 })).ok, false);
+  assert.equal(gradeFigures('1,000,000.01', read({ amount: 1000000.02 })).ok, false);
 });
 
 test('tier 1 demo fixtures state unsigned, dropped-cent and word-count figures', async () => {

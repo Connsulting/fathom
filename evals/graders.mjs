@@ -46,7 +46,7 @@ export function numericFigures(text) {
       abbrev: /(?:^|[^a-z])[kmb](?![a-z])/i.test(m[0]) && !/(?:thousand|million|billion)/i.test(m[0]),
       scale: scaleOf(m[0]), words: false });
   }
-  for (const m of clean.matchAll(wordPattern)) {
+  for (const m of clean.replace(quantity, blank).matchAll(wordPattern)) {
     const after = clean.slice(m.index + m[0].length);
     const before = clean.slice(0, m.index);
     if (/^one$/i.test(m[0]) && !/^\s*(?:%|percent|dollars?)\b/i.test(after)
@@ -107,11 +107,12 @@ function arrayLengths(value, out = []) {
   return out;
 }
 const magnitudes = v => [v, Math.abs(v)];
-const exactHit = (n, v) => close(v, n.value, n.money) || (n.percent && close(v, n.value / 100));
+const exactHit = (n, v) => (close(v, n.value, n.money || n.abbrev)
+  && (n.percent || Math.abs(v - n.value) <= 0.0050001)) || (n.percent && close(v, n.value / 100));
 function droppedCents(n, v) {
   if (n.words || n.abbrev || n.percent || !n.money) return false;
   if (/\.\d*[1-9]/.test(n.text)) return false;
-  return magnitudes(v).some(t => Math.abs(t - n.value) < 1 && Math.abs(t - n.value) > 0.005);
+  return magnitudes(v).some(t => Math.trunc(t) === n.value && Math.abs(t - n.value) > 0.0050001);
 }
 function listCount(n, calls) {
   if (!n.words || n.money || n.percent || n.value < 1 || n.value > 20 || !Number.isInteger(n.value)) return false;
@@ -130,8 +131,8 @@ function abbrevRounded(n, numbers) {
 function coarseRounded(n, numbers) {
   if (n.words || n.percent || n.abbrev) return false;
   return numbers.some(v => magnitudes(v).some(t => {
-    if (Math.abs(t - n.value) <= 1) return false;
-    for (const unit of [10, 100, 1000, 10000, 100000, 1e6, 1e9]) {
+    if (Math.abs(t - n.value) <= 0.0050001) return false;
+    for (const unit of [1, 10, 100, 1000, 10000, 100000, 1e6, 1e9]) {
       const rounded = Math.round(t / unit) * unit;
       if (close(rounded, n.value, true) && Math.abs(t - rounded) <= unit / 2 + 1e-6) return true;
     }
@@ -139,7 +140,7 @@ function coarseRounded(n, numbers) {
   }));
 }
 function inContext(n, contextNumbers) {
-  return contextNumbers.some(v => exactHit(n, v) || (!n.percent && close(Math.abs(v), n.value, n.money)));
+  return contextNumbers.some(v => exactHit(n, v) || (!n.percent && exactHit(n, Math.abs(v))));
 }
 export function gradeFigures(text, calls, { figures = {}, contextNumbers = [] } = {}) {
   const numbers = evidenceNumbers(calls);
@@ -153,9 +154,8 @@ export function gradeFigures(text, calls, { figures = {}, contextNumbers = [] } 
     return ' ';
   });
   for (const n of numericFigures(cleaned)) {
-    const exact = numbers.some(v => exactHit(n, v) || (!n.percent && magnitudes(v).some(t => close(t, n.value, n.money))));
-    if (exact && !(n.words && !listCount(n, calls))) continue;
-    if (!exact && (droppedCents(n, numbers.find(v => droppedCents(n, v)) ?? NaN) || listCount(n, calls))) continue;
+    const exact = numbers.some(v => exactHit(n, v) || (!n.percent && exactHit(n, Math.abs(v))));
+    if (n.words ? listCount(n, calls) : exact || numbers.some(v => droppedCents(n, v))) continue;
     let kind = 'unsourced';
     let arithmetic = null;
     if (n.words) kind = 'spelled_out';
