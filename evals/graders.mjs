@@ -21,23 +21,36 @@ const scales = { hundred: 100, thousand: 1000, million: 1e6, billion: 1e9 };
 const wordPattern = new RegExp(`\\b(?:${Object.keys(small).join('|')}|${Object.keys(scales).join('|')})(?:(?:[ -]+and)?[ -]+(?:${Object.keys(small).join('|')}|${Object.keys(scales).join('|')}))*\\b`, 'gi');
 const quantity = /[+-]?(?:\$\s*)?\d[\d,]*(?:\.\d+)?\s*(?:billion|million|thousand|percent|[kmb](?![a-z])|%)?/gi;
 const scaleOf = s => /billion|b\b/i.test(s) ? 1e9 : /million|m\b/i.test(s) ? 1e6 : /thousand|k\b/i.test(s) ? 1000 : 1;
-const close = (a, b) => Math.abs(a - b) <= Math.max(0.0050001, Math.max(Math.abs(a), Math.abs(b)) * 1e-9);
+const close = (a, b, money = false) => Math.abs(a - b) <= (money ? 0.0050001 : Math.max(1e-9, Math.max(Math.abs(a), Math.abs(b)) * 1e-6));
+const monthName = '(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)';
+const dates = new RegExp(`\\b(?:${monthName}\\.?\\s+\\d{1,2}(?:st|nd|rd|th)?(?:,?\\s+\\d{4})?|\\d{1,2}\\s+${monthName}\\.?(?:\\s+\\d{4})?)\\b`, 'gi');
+const blank = m => ' '.repeat(m.length);
 export function numericFigures(text) {
-  const clean = String(text).replace(/^\s*\d+[.)]\s/gm, m => ' '.repeat(m.length))
-    .replace(/\b\d{4}-\d{2}(?:-\d{2})?\b/g, m => ' '.repeat(m.length));
+  const clean = String(text).replace(/^\s*\d+[.)]\s/gm, blank)
+    .replace(/\b\d{4}-\d{2}(?:-\d{2})?\b/g, blank)
+    .replace(dates, blank)
+    .replace(/\b(?:401|403|457)\s*(?:\([abk]\)|[abk])|\b529(?=\s+(?:plan|account))|\b(?:W-2|K-1)\b/gi, blank)
+    .replace(/(?<![$\d.,])\b(?:1099(?:-[A-Z]+)?|1040|529)\b(?!\s*(?:%|dollars?))/gi, blank)
+    .replace(/(?<![$\d.,])\b(?:19|20)\d{2}\b(?!\d|[.,]\d|\s*(?:%|percent|dollars?|thousand|million|billion))/g, blank);
   const values = [];
   for (const m of clean.matchAll(quantity)) {
     const n = Number(m[0].replace(/[^\d.+-]/g, '')) * scaleOf(m[0]);
-    if (Number.isFinite(n)) values.push({ text: m[0].trim(), value: n });
+    if (Number.isFinite(n)) values.push({ text: m[0].trim(), value: n,
+      money: /\$/.test(m[0]) || /^\s*dollars?\b/i.test(clean.slice(m.index + m[0].length)),
+      percent: /%|percent/i.test(m[0]) });
   }
   for (const m of clean.matchAll(wordPattern)) {
+    const after = clean.slice(m.index + m[0].length);
+    const before = clean.slice(0, m.index);
+    if (/^one$/i.test(m[0]) && !/^\s*(?:%|percent|dollars?)\b/i.test(after)
+      && (/^\s+(?:of|more|another)\b/i.test(after) || /\b(?:the|a|no|any|another)(?:\s+\w+)?\s+$/i.test(before))) continue;
     let sum = 0, part = 0;
     for (const word of m[0].toLowerCase().split(/[ -]+/)) {
       if (Object.hasOwn(small, word)) part += small[word];
       else if (word === 'hundred') part = (part || 1) * 100;
       else if (scales[word]) { sum += (part || 1) * scales[word]; part = 0; }
     }
-    values.push({ text: m[0], value: sum + part });
+    values.push({ text: m[0], value: sum + part, money: /^\s*dollars?\b/i.test(after), percent: /^\s*(?:%|percent)\b/i.test(after) });
   }
   return values;
 }
@@ -70,11 +83,14 @@ export function evidenceNumbers(calls) {
   }
   return [...new Set(out)];
 }
-function derivation(value, numbers) {
+function derivation(value, numbers, money) {
   for (const a of numbers) for (const b of numbers) {
-    const candidates = [[a + b, '+'], [a - b, '-'], [a * b, '*']];
-    if (b) candidates.push([a / b, '/'], [a / b * 100, '/ percent']);
-    for (const [n, op] of candidates) if (Number.isFinite(n) && close(value, n)) return { a, b, op };
+    const candidates = [[a + b, '+'], [a * b, '*']];
+    if (a !== b) {
+      candidates.push([a - b, '-']);
+      if (b) candidates.push([a / b, '/'], [a / b * 100, '/ percent']);
+    }
+    for (const [n, op] of candidates) if (Number.isFinite(n) && close(value, n, money)) return { a, b, op };
   }
   return null;
 }
@@ -89,8 +105,8 @@ export function gradeFigures(text, calls, { figures = {}, contextNumbers = [] } 
     else tokenFigures.push({ text: token, value: figures[key] });
     return ' ';
   });
-  for (const n of numericFigures(cleaned)) if (!numbers.some(v => close(v, n.value))) {
-    const arithmetic = derivation(n.value, numbers);
+  for (const n of numericFigures(cleaned)) if (!numbers.some(v => close(v, n.value, n.money) || (n.percent && close(v, n.value / 100)))) {
+    const arithmetic = derivation(n.value, numbers, n.money);
     violations.push({ ...n, kind: arithmetic ? 'self-computed' : contextNumbers.some(v => close(v, n.value)) ? 'context-only' : 'unsourced', ...(arithmetic ? { arithmetic } : {}) });
   }
   return { ok: violations.length === 0, unsourced: violations, selfComputed: violations.filter(v => v.kind === 'self-computed'),
@@ -101,8 +117,12 @@ export function gradeLength(text, maxWords) {
   return { ok: words <= maxWords, words, maxWords };
 }
 export function gradeExpected(text, values, { figures = {} } = {}) {
-  const expanded = String(text).replace(/\{(?:fk|f):([^{}]+)\}/g, (_, key) => String(figures[key] ?? ''));
-  const actual = numericFigures(expanded);
-  const checks = values.map(value => ({ value, ok: actual.some(n => close(n.value, value)) }));
+  const tokens = [];
+  const expanded = String(text).replace(/\{(?:fk|f):([^{}]+)\}/g, (_, key) => {
+    if (Number.isFinite(figures[key])) tokens.push({ value: figures[key], money: true });
+    return ' ';
+  });
+  const actual = [...numericFigures(expanded), ...tokens];
+  const checks = values.map(value => ({ value, ok: actual.some(n => close(n.value, value, n.money)) }));
   return { ok: checks.every(c => c.ok), checks };
 }

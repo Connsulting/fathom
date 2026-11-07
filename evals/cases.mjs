@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import Ajv from 'ajv';
+import { isoFromLabel } from '../demo/ledger.mjs';
 
 const predicate = { type: 'object', additionalProperties: false, required: ['path', 'op'], properties: {
   path: { type: 'string', pattern: '^[A-Za-z][A-Za-z0-9_.]*$' },
@@ -63,9 +64,16 @@ const round = n => Math.round(n * 100) / 100;
 function annualSpending(db) {
   const rows = db.prepare(`SELECT t.date,t.amount,t.category,t.description FROM transactions t
     JOIN accounts a ON a.id=t.account_id WHERE a.kind='checking' ORDER BY t.date`).all();
-  const months = new Set(rows.map(r => r.date.slice(0, 7))).size;
+  const meta = JSON.parse(db.prepare("SELECT value FROM content WHERE key='meta'").get().value);
+  const through = isoFromLabel(meta.dataThrough);
+  if (!through) throw new TypeError('No spending coverage date');
+  const date = new Date(through + 'T00:00:00Z');
+  const days = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)).getUTCDate();
+  const end = date.getUTCDate() === days ? through : through.slice(0, 7) + '-01';
+  const covered = rows.filter(r => date.getUTCDate() === days ? r.date <= end : r.date < end);
+  const months = new Set(covered.map(r => r.date.slice(0, 7))).size;
   if (!months) throw new TypeError('No spending coverage');
-  const spend = rows.filter(r => r.amount < 0 && !['transfer', 'income', 'income_tax'].includes(r.category)
+  const spend = covered.filter(r => r.amount < 0 && !['transfer', 'income', 'income_tax'].includes(r.category)
     && !/mortgage|income tax/i.test(r.description)).reduce((s, r) => s - r.amount, 0);
   return round(spend * 12 / months);
 }

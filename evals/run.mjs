@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { loadCases } from './cases.mjs';
 import { runCases } from './harness.mjs';
 
-export async function main(argv = process.argv.slice(2)) {
+export async function main(argv = process.argv.slice(2), { scripts } = {}) {
   if (argv.includes('--help')) {
     console.log('Ask evals: node evals/run.mjs [--live --max-usd <budget>] [--cases <id-or-family,...>] [--out <directory>]');
     return 0;
@@ -28,7 +28,7 @@ export async function main(argv = process.argv.slice(2)) {
   }
   const timestamp = new Date().toISOString().replaceAll(':', '-');
   const dir = out ?? fileURLToPath(new URL(`./out/${timestamp}/`, import.meta.url));
-  const scorecard = await runCases({ cases, live, maxUsd: budget ?? 100, outDir: dir });
+  const scorecard = await runCases({ cases, live, maxUsd: budget ?? 100, outDir: dir, scripts });
   const counts = {};
   for (const c of scorecard.cases) counts[c.status] = (counts[c.status] ?? 0) + 1;
   console.log(JSON.stringify({ cases: scorecard.completed, results: counts, costUsd: scorecard.costUsd, stopped: scorecard.stopped }));

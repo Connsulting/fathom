@@ -6,7 +6,7 @@
       "family": "spending",
       "turns": [
         {
-          "question": "What is our annual spending excluding mortgage and income tax, including healthcare? Annualize the months present in the ledger.",
+          "question": "What is our annual spending excluding mortgage and income tax, including healthcare? Annualize the complete covered months in the ledger.",
           "required": [
             {
               "name": "spending_summary",
@@ -39,7 +39,7 @@
             }
           ],
           "maxWords": 90,
-          "rubric": "Exclude mortgage, income tax, transfers and business activity; include health; annualize covered months and state coverage."
+          "rubric": "Exclude mortgage, income tax, transfers and business activity; include health; annualize complete covered months and state coverage."
         }
       ],
       "expectedFail": {

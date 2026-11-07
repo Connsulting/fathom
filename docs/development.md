@@ -139,7 +139,9 @@ this turn count as evidence, excluding argument echoes and metadata such as iden
 and dates. A figure token must have been read through `get_figures` this turn. A bad numeric
 attempt fails even if Ask corrects it. The grader detects digit amounts, magnitudes and numeric
 words; arithmetic classification checks pairwise addition, subtraction, multiplication, division
-and ratios. Comparisons allow rounded cents; this is a bounded arithmetic detector, not a proof
+and ratios. Dates, bare years, tax-form and plan identifiers, and idiomatic uses of "one" are not figures.
+Percentages can use a returned fraction. Comparisons allow rounded cents for money and a relative
+tolerance of one part per million for other quantities; this is a bounded arithmetic detector, not a proof
 about all possible expressions.
 
 Live cost comes from new spend-ledger rows, excluding demo spend. A conservative reserve is

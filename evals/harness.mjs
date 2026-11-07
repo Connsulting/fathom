@@ -142,11 +142,12 @@ export async function runCases({ cases, live = false, maxUsd = 100, outDir, scri
         const numeric = gradeFigures(delivered, calls, { figures, contextNumbers });
         const length = gradeLength(delivered, turn.maxWords);
         const expectedGrade = gradeExpected(delivered, expected, { figures });
-        const refusal = !turn.refusal || /Fathom (?:doesn't|does not) have that/i.test(delivered);
+        const refusal = !turn.refusal || /\b(?:don't|doesn't|do not|does not|cannot|can't|not available|not stored|not tracked|no access)\b/i.test(delivered);
         const existingToolsOk = required.checks.filter(r => !missing.includes(r.name)).every(r => r.ok);
         const safe = numeric.ok && length.ok && refusal && gradedAttempts.every(a => a.figures.ok && a.length.ok && !a.error);
         const ok = safe && required.ok && expectedGrade.ok && !response.message?.notice;
-        const gapOnly = missing.length > 0 && safe && existingToolsOk;
+        const turnMissing = turn.required.some(r => missing.includes(r.name));
+        const gapOnly = turnMissing && safe && existingToolsOk && !response.message?.notice;
         result.turns.push({ question: turn.question, rubric: turn.rubric, delivered, tools: calls, required,
           figures: numeric, expected: expectedGrade, length, refusal, attempts: gradedAttempts,
           grounding: response.message?.provenance?.grounding ?? null, historyMessages: Math.max(0, ...requestLengths), ok });
