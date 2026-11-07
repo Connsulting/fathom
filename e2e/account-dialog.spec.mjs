@@ -2,7 +2,12 @@
 // same dialog style as a recommendation. Rename in place, sources and freshness, balance, and a
 // read-only transaction list with a text filter and a date range. #/account/<id> survives reload.
 
-import { test, expect, resetDemo, gotoRoute, recDialog, closeDialogWithX } from './helpers.mjs';
+import { resolve } from 'node:path';
+import { test, expect, resetDemo, gotoRoute, recDialog, closeDialogWithX, REMOTE } from './helpers.mjs';
+import { openDb, setSetting, DB_FILE } from '../src/store/db.mjs';
+import { dataKeyFor } from '../src/ingest/simplefin.mjs';
+import { seedDuplicate as seedDuplicateRows } from '../test/helpers/account-merge.mjs';
+import { refreshMergedAccounts } from '../src/ingest/account-merge.mjs';
 
 const ID = 'a_biz';
 
@@ -154,6 +159,77 @@ test.describe('account dialog', { tag: '@ad-acN' }, () => {
     const main = await recDialog(page).locator('.h-dmain').boundingBox();
     const side = await recDialog(page).locator('.h-dside').boundingBox();
     expect(side.x).toBeGreaterThan(main.x + main.width - 2);
+  });
+});
+
+// A connected account that looks like one already imported from a file, as the merge change seeds it.
+async function seedDuplicate(request) {
+  await resetDemo(request);
+  const dataDir = resolve(process.env.E2E_DATA || '.e2e-data');
+  const db = openDb(resolve(dataDir, DB_FILE));
+  try {
+    setSetting(db, 'clock', '2032-03-10');
+    const key = await dataKeyFor(db, { dataDir });
+    const s = { db, config: { dataDir }, key, opts: (engine, extra = {}) => ({ config: { dataDir }, key, engine, now: '2032-03-10T12:00:00.000Z', ...extra }) };
+    const pair = await seedDuplicateRows(s, { sure: true });
+    refreshMergedAccounts(db, { now: '2032-03-10T12:00:00.000Z' });
+    return pair;
+  } finally { db.close(); }
+}
+
+test.describe('account dialog and duplicates', { tag: '@ad-acN' }, () => {
+  test.skip(REMOTE, 'requires a local synthetic store');
+
+  test('a connected account lists SimpleFIN with its sync time and Sync now works from the dialog', async ({ page, request }) => {
+    await resetDemo(request);
+    const before = await (await request.get('/api/scenario')).json();
+    const connect = await request.post('/api/simplefin/connect', { data: { token: before.live.simplefin.demoToken } });
+    expect(connect.ok()).toBeTruthy();
+    const after = await (await request.get('/api/scenario')).json();
+    let mapped = null;
+    for (const a of after.accounts) {
+      const d = await (await request.get(`/api/accounts/${encodeURIComponent(a.id)}`)).json();
+      if (d.feeds.some((f) => f.kind === 'simplefin')) { mapped = a; break; }
+    }
+    expect(mapped, 'the demo bridge maps at least one account').toBeTruthy();
+    await page.goto(`/#/account/${mapped.id}`);
+    await page.reload();
+    const dlg = recDialog(page);
+    const feed = dlg.locator('.h-ad-sources li[data-feed="simplefin"]');
+    await expect(feed).toContainText('SimpleFIN Bridge');
+    await expect(feed).toContainText(/Last sync \w{3} \d+, \d+:\d{2} (AM|PM)/);
+    const done = page.waitForResponse((r) => new URL(r.url()).pathname === '/api/jobs/simplefin-sync/run');
+    await feed.getByRole('button', { name: 'Sync now' }).click();
+    expect((await done).status()).toBe(200);
+    await expect(feed.getByRole('button', { name: 'Sync now' })).toBeEnabled();
+    await expect(feed).toContainText('Last sync');
+  });
+
+  test('a likely duplicate asks Same account? in the dialog and Keep both answers it', async ({ page, request }) => {
+    const pair = await seedDuplicate(request);
+    await page.goto(`/#/account/${pair.keep}`);
+    await page.reload();
+    const dlg = recDialog(page);
+    await expect(dlg).toBeVisible();
+    await expect(dlg.getByText('Same account?').first()).toBeVisible();
+    await expect(dlg.getByRole('button', { name: /Merge/ })).toBeVisible();
+    await dlg.getByRole('button', { name: /Keep both/ }).click();
+    await expect(dlg.getByRole('button', { name: /Keep both/ })).toHaveCount(0);
+    await expect(dlg.locator('#h-dlg-t')).toBeVisible();
+  });
+
+  test('Merge from the dialog goes through the merge path and leaves one account', async ({ page, request }) => {
+    const pair = await seedDuplicate(request);
+    await page.goto(`/#/account/${pair.keep}`);
+    await page.reload();
+    const dlg = recDialog(page);
+    const item = (await (await request.get('/api/scenario')).json()).live.ingest.items.find((i) => i.context?.repair);
+    const answered = page.waitForResponse((r) => r.url().endsWith(`/api/confirm/${item.id}/answer`));
+    await dlg.getByRole('button', { name: /Merge/ }).click();
+    expect((await answered).status()).toBe(200);
+    const sc = await (await request.get('/api/scenario')).json();
+    expect(sc.accounts.filter((a) => [pair.keep, pair.own].includes(a.id))).toHaveLength(1);
+    await expect(dlg.getByText('Same account?')).toHaveCount(0);
   });
 });
 
