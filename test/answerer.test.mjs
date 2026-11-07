@@ -1759,11 +1759,12 @@ test('R5 F2: a marked amount in the link text of a parenthesized destination sti
 
 test('PN1: Ask records a spending ledger from the owner sentence using the advertised answer shape', async t => {
   const s = await demoStore(t);
-  const text = "Aster's is a spending ledger for my personal cards.";
+  const text = "Aster's is my card spending, not a business.";
   const { engine } = scripted(s.runtime, [[
     { toolCalls: [{ name: 'household', args: { operation: 'fact_shapes' } }] },
     { toolCalls: [{ name: 'answer', args: { operation: 'fact', key: 'pnl.ledgers', value: { "Aster's": { kind: 'spending' } }, evidence: text } }] },
-    { text: 'Saved the spending ledger classification.' },
+    { toolCalls: [{ name: 'answer', args: { operation: 'fact', key: 'pnl.ledgers', value: { "Birch's": { kind: 'spending' } }, evidence: text } }] },
+    { text: 'Saved the named spending ledger classification.' },
   ]]);
   const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).answer({ db: s.db, key: THREAD, text, ownerText: text, actorId: 'demo', turnId: 'synthetic-ledger' });
   assert.ok(!reply.notice);
@@ -1774,4 +1775,6 @@ test('PN1: Ask records a spending ledger from the owner sentence using the adver
   assert.deepEqual(JSON.parse(fact.value), { "Aster's": { kind: 'spending' } });
   assert.equal(fact.confirmed, 1);
   assert.ok(reply.provenance.tools.some(x => x.name === 'answer' && x.args.operation === 'fact'));
+  const refused = reply.provenance.tools.find(x => x.name === 'answer' && Object.hasOwn(x.args.value, "Birch's"));
+  assert.match(refused.result.error, /stated|stored|evidence/i);
 });
