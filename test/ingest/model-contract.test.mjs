@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { SCHEMAS } from '../../src/ingest/extract.mjs';
 import { validateProposal, validateSourceRef, TARGET_SCHEMAS } from '../../src/ingest/model-contract.mjs';
 
 const hash = 'a'.repeat(64);
@@ -9,6 +10,7 @@ const source = () => ({ fileId: 'f-synthetic', sha256: hash, refs: {
     rawHash, valueType: 'number', precision: 'cent', formula: false, cached: false },
   t1: { fileId: 'f-synthetic', sha256: hash, page: 1, line: 2, byteStart: 5, byteEnd: 12,
     rawHash, valueType: 'text', precision: 'exact' },
+  c1: { fileId: 'f-synthetic', sha256: hash, row: 2, column: 1, headerRef: 'header-0', rawHash, valueType: 'text', precision: 'exact' },
 }, regions: ['region-0'] });
 const field = (refs = ['r1'], transform = { op: 'identity' }) => ({ refs, transform });
 const fieldsByTarget = {
@@ -109,5 +111,27 @@ test('registered fact keys, document box fields and target enum rules are closed
     ['balance', r => r.basis = 'month_end'], ['pnl', r => r.purpose = 'tax_wages'],
     ['tax_payment', r => r.datePrecision = 'guessed'], ['expected_transaction', r => r.status = 'paid']]) {
     const p = proposal(target); change(p.rows[0]); assert.equal(validateProposal(p, source()).valid, false, target);
+  }
+});
+
+
+test('CSV ordinal references remain distinct under duplicate headers', () => {
+  const s = source(); s.refs.c2 = { ...s.refs.c1, column: 2, headerRef: 'header-1' };
+  assert.equal(validateSourceRef(s.refs.c2, s).valid, true);
+  assert.equal(validateSourceRef({ ...s.refs.c2, column: 3 }, s).valid, false);
+  const p = proposal(); p.rows[0].fields.description = field(['c2']);
+  assert.equal(validateProposal(p, s).valid, true);
+});
+
+
+test('every existing document shape supports cited tax boxes and plan terms without numeric literals', () => {
+  const cite = schema => schema.type === 'object' ? Object.fromEntries(Object.entries(schema.properties)
+    .filter(([key]) => key !== 'confidence').map(([key, child]) => [key, cite(child)]))
+    : schema.type === 'array' ? [cite(schema.items)] : field();
+  for (const [docType, schema] of Object.entries(SCHEMAS).filter(([key]) => !['notes', 'other'].includes(key))) {
+    const p = proposal('document'); p.rows[0] = { target: 'document', docType, fields: cite(schema) };
+    assert.equal(validateProposal(p, source()).valid, true, docType);
+    const key = Object.keys(p.rows[0].fields)[0]; p.rows[0].fields[key] = 2032;
+    assert.equal(validateProposal(p, source()).valid, false, docType);
   }
 });
