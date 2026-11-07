@@ -111,6 +111,8 @@ test('AC3 amount threshold/top ten, one source-name mapping, rules past/future a
   const {db} = store(t); account(db); history(db);
   for(let i=0;i<12;i++) txn(db,{amount:-(100+i),description:'Merchant '+String.fromCharCode(65+i)});
   txn(db,{amount:-99,description:'Below threshold'});
+  txn(db,{amount:-5000,description:'Outside the spending window',date:'2031-01-15'});
+  txn(db,{amount:-6000,description:'Future posting',date:'2033-01-15'});
   queueCategoryChecks(db,{clock});
   let pending=pendingItems(db).filter(i=>i.kind==='transaction_category');
   assert.equal(pending.length,10);
@@ -181,7 +183,7 @@ test('AC1 engine off does nothing; valid category guesses are stored but invalid
 });
 
 test('AC3 only explicit checkbox can produce an always option; engine and best guess reject hidden options', t => {
-  const {db}=store(t); account(db); txn(db); queueCategoryChecks(db,{clock});
+  const {db}=store(t); account(db); history(db); txn(db); queueCategoryChecks(db,{clock});
   const item=pendingItems(db).find(i=>i.kind==='transaction_category');
   const options=visibleOptions(item);
   assert.ok(options.every(o=>!o.id.startsWith('always:')));
@@ -203,4 +205,39 @@ test('AC5 coverage CLI uses platform readiness and emits only counts; architectu
   assert.ok(!out.stdout.includes('Example'));
   assert.ok(Object.values(counts.layers).every(Number.isInteger));
   assert.match(readFileSync('docs/architecture.md','utf8'),/CATEGORY_TABLES/);
+});
+
+test('AC1 migration preserves a populated store and existing Confirm undo history', async t => {
+  const {db}=store(t); account(db); history(db);
+  const q=ask(db,{kind:'account_owner',subject:'checking',question:'Whose account?',options:[{id:'owner',label:'You'},{id:'spouse',label:'Spouse'}]});
+  answerItem(db,q.id,'owner');
+  const before=db.prepare('SELECT changes FROM confirm_undo WHERE item_id=?').get(q.id).changes;
+  const count=db.prepare('SELECT count(*) AS n FROM transactions').get().n;
+  for(const table of ['transaction_category_imports','transaction_category_corrections','transaction_category_guesses','category_merchant_rules','category_source_rules']) db.exec(`DROP TABLE ${table}`);
+  db.prepare('DELETE FROM schema_migrations WHERE id=23').run();
+  const {migrate}=await import('../src/store/db.mjs');
+  assert.deepEqual(migrate(db).applied,[23]);
+  assert.equal(db.prepare('SELECT changes FROM confirm_undo WHERE item_id=?').get(q.id).changes,before);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM transactions').get().n,count);
+  reopenItem(db,q.id);
+  assert.equal(db.prepare('SELECT owner FROM accounts WHERE id=?').get('checking').owner,null);
+});
+
+test('AC2 a corrected connected row survives the actual account merge and Undo', async t => {
+  const {realStore}=await import('./helpers/ingest.mjs');
+  const {seedDuplicate}=await import('./helpers/account-merge.mjs');
+  const {queueAccountPairs}=await import('../src/ingest/account-merge.mjs');
+  const s=await realStore(); t.after(()=>s.close());
+  const {own,keep}=await seedDuplicate(s,{sure:true});
+  const r=s.db.prepare('SELECT id FROM transactions WHERE account_id=?').get(own);
+  s.db.prepare("INSERT INTO transaction_category_corrections VALUES (?,'Business','business',?)").run(r.id,'2032-03-10');
+  queueAccountPairs(s.db);
+  const q=pendingItems(s.db).find(i=>i.kind==='account_match' && i.context?.repair);
+  assert.ok(q);
+  answerItem(s.db,q.id,'same');
+  const survivor=s.db.prepare('SELECT id FROM transactions WHERE account_id=? AND amount=-10').get(keep);
+  assert.equal(resolveCategories(loadCategoryInputs(s.db)).get(survivor.id).bucket,'business');
+  reopenItem(s.db,q.id);
+  assert.equal(resolveCategories(loadCategoryInputs(s.db)).get(r.id).bucket,'business');
+  assert.deepEqual(s.db.prepare('PRAGMA foreign_key_check').all(),[]);
 });

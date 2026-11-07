@@ -1,11 +1,11 @@
+import { spendingInputs } from '../calc/targets.mjs';
 import { getSetting, parseJson } from '../store/db.mjs';
 import { accountLabel } from '../shared/account-label.mjs';
 import { ask, ConfirmError } from '../ingest/confirm.mjs';
-import { resolveCategories, CATEGORY_TABLES, BUCKETS, DEFAULT_CATEGORY, importedCategory, knownCategory, normalizeMerchant, sourceBucket, spendingAccount } from './resolve.mjs';
+import { resolveCategories, BUCKETS, DEFAULT_CATEGORY, importedCategory, knownCategory, normalizeMerchant, sourceBucket, spendingAccount } from './resolve.mjs';
 
 export const CATEGORY_THRESHOLD = 100;
 export const CATEGORY_LIMIT = 10;
-const CATEGORY_KINDS = ['transaction_category','category_mapping'];
 const labels = { household:'Household spending',business:'Business',income:'Income',transfer:'Transfer',tax:'Tax',saving:'Saving or investing',excluded:'Excluded' };
 const nowOf = now => now ?? new Date().toISOString();
 export function loadCategoryInputs(db) {
@@ -23,8 +23,9 @@ function checks(db,{clock = getSetting(db,'clock',new Date().toISOString().slice
   const input=loadCategoryInputs(db);
   input.transactions=input.transactions.filter(t=>t.date<=clock);
   const resolutions=resolveCategories(input), accounts=new Map(input.accounts.map(a=>[a.id,a]));
+  const figureRows=new Set(spendingInputs({...input,clock}).windowTransactionIds);
   const mapped=new Set(input.sourceRules.map(r=>JSON.stringify([r.parser,r.category])));
-  const unknown=new Map(), list=[];
+  const unknown=new Map(), list=[], guesses=new Map(input.guesses.map(g=>[g.transaction_id,g]));
   for(const t of input.transactions) {
     const c=resolutions.get(t.id), imported=importedCategory(t), key=JSON.stringify([imported.parser,imported.category]);
     if(imported.category && !knownCategory(imported.parser,imported.category) && !mapped.has(key)) {
@@ -33,8 +34,8 @@ function checks(db,{clock = getSetting(db,'clock',new Date().toISOString().slice
       else unknown.set(key,{kind:'category_mapping',subject:key,parser:imported.parser,category:imported.category,count:1,amount:t.amount});
       continue;
     }
-    if(!spendingAccount(accounts.get(t.account_id)) || !['guess','uncategorized'].includes(c.layer) || Math.abs(t.amount)<threshold || t.amount===0) continue;
-    const guess=input.guesses.find(g=>g.transaction_id===t.id)?.category ?? DEFAULT_CATEGORY[c.bucket];
+    if(!figureRows.has(t.id) || !spendingAccount(accounts.get(t.account_id)) || !['guess','uncategorized'].includes(c.layer) || Math.abs(t.amount)<threshold || t.amount===0) continue;
+    const guess=guesses.get(t.id)?.category ?? DEFAULT_CATEGORY[c.bucket];
     list.push({kind:'transaction_category',subject:String(t.id),transactionId:t.id,amount:t.amount,date:t.date,
       description:t.description,account:accountLabel(accounts.get(t.account_id)),category:c.category,bucket:c.bucket,layer:c.layer,
       merchant:normalizeMerchant(t.description),guess});
@@ -83,7 +84,7 @@ export function applyCategoryAnswer(db,item,optionId,{now}={}) {
 }
 export function categoryDetail(db,item) {
   const c=item.context;
-  if(item.kind==='category_mapping') return {type:'values',values:[{label:'Import format',value:c.parser},{label:'Category',value:c.category},{label:'Transactions',value:c.count}]};
+  if(item.kind==='category_mapping') return {type:'values',values:[{label:'Source',value:c.parser==='demo-seed' ? 'Demo ledger' : 'Budgeting export'},{label:'Category',value:c.category},{label:'Transactions',value:c.count}]};
   const t=db.prepare('SELECT * FROM transactions WHERE id=?').get(c.transactionId);
   const a=t && db.prepare('SELECT * FROM accounts WHERE id=?').get(t.account_id);
   return {type:'values',values:[{label:'Account',value:a ? accountLabel(a) : c.account},{label:'Date',value:t?.date ?? c.date},
