@@ -202,10 +202,12 @@ export function monthSums(rowsByMonth, months, asOfOf) {
   return out.length > 1 ? out : null;
 }
 
-// A row item for the rows reads (newest first): the signed amount and a figure of its own.
+// A row item for the rows reads (newest first): the raw signed amount, the counted value (the sign
+// the cell uses) and a figure of its own at that value.
 export function rowItem(reg, key, r, { account, category, label }) {
-  const fig = reg.add(key, { v: r.amount, label, rows: [r], counted: true });
+  const value = money(r.value);
+  const fig = reg.add(key, { v: value, label, rows: [r], counted: true });
   return r.table === 'pnl_lines'
-    ? { id: r.id, kind: 'workbook', date: r.month, description: 'Workbook line', account, category, amount: r.amount, fig }
-    : { id: r.id, kind: 'transaction', date: r.date, description: r.description, account, category, amount: r.amount, fig };
+    ? { id: r.id, kind: 'workbook', date: r.month, description: 'Workbook line', account, category, amount: r.amount, value, fig }
+    : { id: r.id, kind: 'transaction', date: r.date, description: r.description, account, category, amount: r.amount, value, fig };
 }
