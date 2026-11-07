@@ -29,6 +29,7 @@ test('tier one CLI executes all cases without credentials and writes scorecards 
   assert.equal(r.scorecard.costUsd, 0);
   assert.equal(r.scorecard.live, false);
   assert.match(r.summary, /Required|Tools/);
+  assert.match(r.summary, /unsourced \/ self-computed \/ rounded \/ spelled_out \/ context-only/);
 });
 
 test('filters select exact cases and reject unknown filters or invalid budget', async () => {
@@ -147,7 +148,7 @@ test('missing tool markers never mask an unrelated failed follow-up', async () =
   const cases = await loadCases();
   const c = structuredClone(cases.find(c => c.id === 'spending-annual-exclusions'));
   c.turns.push(structuredClone(cases.find(c => c.id === 'retirement-hsa-room').turns[0]));
-  const r = await runCases({ cases: [c], scripts: ({ turn }) => turn.required[0].name === 'spending_summary'
+  const r = await runCases({ cases: [c], scripts: ({ turn }) => turn.required[0].name === 'aggregate_transactions'
     ? [{ text: "Fathom doesn't have that.", costUsd: 0 }]
     : [{ toolCalls: [{ name: 'get_figures', args: { keys: ['hsa_left'] } }], costUsd: 0 }, { text: 'No figure provided.', costUsd: 0 }] });
   assert.equal(r.cases[0].status, 'fail');

@@ -94,6 +94,120 @@ export function goalPace({ goal, actual = null, clock }) {
   return out;
 }
 
+const goalRow = goal => goal.planSources || [{ rows: { table: 'goals', ids: [goal.id], count: 1 } }];
+const actualInputs = actual => actual ? { v: actual.v, dataThrough: actual.dataThrough, dependencies: actual.dependencies } : null;
+// The same figure under another label (goalPace names every actual 'Latest tracked value').
+function relabel(fig, label) {
+  if (!fig) return fig;
+  return { ...fig, label, locator: { ...fig.locator, steps: fig.locator.steps.map(s => ({ ...s, label })) } };
+}
+
+// A range is measured on the balance path to its low end; it needs both ends to have a target.
+export const rangeGoal = goal => ({ ...goal, target: finite(goal.targetLow) && finite(goal.targetHigh) ? goal.targetLow : null });
+
+export function rangePace({ goal, actual = null, clock }) {
+  const base = goalPace({ goal: rangeGoal(goal), actual, clock });
+  const sources = [...goalRow(goal), ...(goal.pace?.sources || []), ...actualSources(actual)];
+  const inputs = { goal: { id: goal.id, targetLow: goal.targetLow ?? null, targetHigh: goal.targetHigh ?? null }, clock, actual: actual?.v ?? null };
+  const both = finite(goal.targetLow) && finite(goal.targetHigh);
+  const f = (v, label) => both ? paceFigure(v, label, { unit: 'usd', dataThrough: actual?.dataThrough ?? null, clock, calc: 'rangePace', inputs, sources, kind: 't' }) : null;
+  const v = actual?.v;
+  const position = !both || !finite(v) ? null : v < goal.targetLow ? 'below' : v > goal.targetHigh ? 'above' : 'in';
+  return { ...base, range: { low: f(goal.targetLow, 'Range low end'), high: f(goal.targetHigh, 'Range high end'), position } };
+}
+
+// A floor holds at or above its amount and is breached below it. The state comes from the last
+// reading even when it is stale; the status is known only when the reading is current.
+export function floorPace({ goal, actual = null, clock }) {
+  if (!isoDate(clock)) throw new TypeError('Pace requires an ISO clock date');
+  const sources = [...goalRow(goal), ...actualSources(actual)];
+  const inputs = { goal: { id: goal.id, floor: goal.floor ?? null }, clock, actual: actualInputs(actual) };
+  const dataThrough = actual?.dataThrough ?? null;
+  const f = (v, label, kind = 'e') => paceFigure(v, label, { unit: 'usd', dataThrough, clock, calc: 'floorPace', inputs, sources, kind });
+  const out = { id: goal.id, title: goal.title, targetDate: null, status: 'unknown', reason: null, dataThrough, stale: false,
+    target: f(goal.floor, 'Floor', 't'), actual: actual ? f(actual.v, 'Latest tracked value', actual.kind) : null,
+    expected: null, gap: null, gapDays: null, tolerance: null, timeGap: null, floor: { state: null } };
+  if (!finite(goal.floor)) return { ...out, status: 'no target', reason: 'no_target' };
+  const holding = actual && finite(actual.v) ? actual.v >= goal.floor : null;
+  if (holding !== null) {
+    out.floor.state = holding ? 'holding' : 'breached';
+    out.gap = f(actual.v - goal.floor, 'Tracked value minus floor');
+  }
+  out.reason = dataState(actual, clock);
+  out.stale = out.reason === 'stale_data';
+  if (!out.reason) {
+    out.status = holding ? 'on pace' : 'behind';
+    out.timeGap = holding ? 'Holding' : 'Below floor';
+  }
+  return out;
+}
+
+// Contribution pace: a straight line from 0 on Jan 1 of the tax year to the amount at the deadline.
+// `actual` is the progress figure the store reader built (transactions or the entered amount),
+// `people` its per-person actuals [{person, actual}], `reason` the reader's code when it found no
+// progress source (partial_contribution_coverage); otherwise a missing actual is missing_contributions.
+const CONTRIBUTORS = ['owner', 'spouse'];
+export function contributionPace({ goal, actual = null, basis = null, people = [], reason = null, clock }) {
+  const valid = finite(goal.target) && Number.isInteger(goal.taxYear) && isoDate(goal.targetDate);
+  const planned = { ...goal, pace: valid ? { startDate: `${goal.taxYear}-01-01`, startValue: 0, sources: [] } : null };
+  const base = goalPace({ goal: planned, actual, clock });
+  base.actual = relabel(base.actual, 'Contributed so far');
+  const contribution = { basis, taxYear: Number.isInteger(goal.taxYear) ? goal.taxYear : null, deadline: isoDate(goal.targetDate) ? goal.targetDate : null,
+    remaining: null, people: [] };
+  if (!valid) {
+    return { ...base, status: 'no target', reason: 'no_target', expected: null, gap: null, gapDays: null, tolerance: null, timeGap: null, stale: false, contribution };
+  }
+  if (!actual) {
+    base.reason = reason || 'missing_contributions';
+  } else if (!base.reason) {
+    if (actual.v >= goal.target) { base.status = 'ahead'; base.timeGap = 'Reached'; }
+    else if (clock > goal.targetDate) { base.status = 'behind'; base.timeGap = 'Deadline passed'; }
+  }
+  const inputs = { goal: { id: goal.id, target: goal.target, taxYear: goal.taxYear, targetDate: goal.targetDate, split: goal.split ?? null },
+    clock, basis, actual: actualInputs(actual) };
+  // Every contribution figure dates from the entry's data date, the date its envelope reports.
+  const f = (v, label, kind, of = actual) => paceFigure(v, label, { unit: 'usd', dataThrough: actual?.dataThrough ?? null, clock, calc: 'contributionPace',
+    inputs, sources: [...goalRow(goal), ...actualSources(of)], kind });
+  if (actual && finite(actual.v)) contribution.remaining = f(Math.max(0, goal.target - actual.v), 'Left to contribute', 'e');
+  const split = (Array.isArray(goal.split) ? goal.split : []).filter(s => CONTRIBUTORS.includes(s?.person));
+  const given = (Array.isArray(people) ? people : []).filter(p => CONTRIBUTORS.includes(p?.person));
+  const order = list => CONTRIBUTORS.filter(p => list.includes(p));
+  const splitPersons = order(split.map(s => s.person));
+  const persons = [...splitPersons, ...order(given.map(p => p.person).filter(p => !splitPersons.includes(p)))];
+  contribution.people = persons.map(person => {
+    const share = split.find(s => s.person === person);
+    const own = given.find(p => p.person === person)?.actual ?? null;
+    return { person, target: share ? f(share.amount, 'Share of the contribution', 't', null) : null,
+      actual: own ? f(own.v, 'Contributed so far', own.kind, own) : null };
+  });
+  return { ...base, contribution };
+}
+
+// Contributions into a goal's destination accounts: credits dated in the tax year and on or before
+// the clock, less (a) internal moves, a credit matched one to one (date then id order) with an equal
+// and opposite debit in another destination account within five days, and (b) investment income by
+// imported category or description. Anything else credited to a destination account counts, which
+// is how outside transfers arrive. Rows are {id, account_id, date, amount, description, category}.
+const INVESTMENT_INCOME = /\b(interest|dividends?|div(idend)? reinv\w*|capital gains?|cap gain)\b/i;
+export const MOVE_DAYS = 5;
+export function qualifyingContributions(rows, accountIds, { taxYear, clock } = {}) {
+  if (!Number.isInteger(taxYear) || !isoDate(clock)) return [];
+  const dest = new Set(accountIds || []);
+  const cents = v => Math.round(Math.abs(v) * 100);
+  const byDateId = (a, b) => a.date.localeCompare(b.date) || (a.id > b.id) - (a.id < b.id);
+  const ordered = (rows || []).filter(r => r && dest.has(r.account_id) && finite(r.amount) && isoDate(r.date) && r.date <= clock).toSorted(byDateId);
+  const moved = new Set();
+  for (const debit of ordered.filter(r => r.amount < 0)) {
+    const credit = ordered.find(r => r.amount > 0 && !moved.has(r) && r.account_id !== debit.account_id
+      && cents(r.amount) === cents(debit.amount) && Math.abs(day(r.date) - day(debit.date)) <= MOVE_DAYS);
+    if (credit) moved.add(credit);
+  }
+  const start = `${taxYear}-01-01`;
+  const end = `${taxYear}-12-31`;
+  return ordered.filter(r => r.amount > 0 && r.date >= start && r.date <= end && !moved.has(r)
+    && !INVESTMENT_INCOME.test(r.category || '') && !INVESTMENT_INCOME.test(r.description || ''));
+}
+
 export function paceRollup(goals, clock) {
   const included = goals.filter(g => g.status !== 'no target');
   const n = { behind: 0, ahead: 0, onPace: 0, unknown: 0 };
