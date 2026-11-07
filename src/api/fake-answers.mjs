@@ -4,6 +4,7 @@
 // then one text round.
 //
 // fakeAnswerScript({ scenario, key, questionId, text, whatIfPack, summary, propose }) -> [round1, round2]
+//   (three rounds for "show your work", below)
 // The text round is the canned demo answer for a suggested or rec question (by id or by exact
 // free text), the pack's canned what-if answer, or a summary sentence whose number comes from the
 // household_summary result. Numbers in the owner's free text are echoed back, so an invented
@@ -15,6 +16,10 @@
 // In an Ask thread with no rec context, free text "add a goal: <words>" adds a propose_goal call with those words as
 // the title (a horizon phrase sets the horizon; the first amount the owner wrote is the target),
 // and the text round says the owner can save it below. Its amounts are not echoed.
+// Free text matching "show your work" (word bounded, any case) scripts three rounds instead, the
+// way a live model narrates between tool calls: "Let me start with your household summary." with
+// the household_summary call, "Now the details this rests on." with the remaining calls (list_goals
+// when there are none), then the text round. That interim text exercises the work block.
 
 import { findQuestion, matchQuestion, recForKey, isThreadKey } from './questions.mjs';
 import { resolveTokens } from '../shared/tokens.mjs';
@@ -28,6 +33,9 @@ const GOAL_COMMAND = /^(?:please\s+)?add (?:a |another |new |a new )?goal\s*[:,-
 const GOAL_CONFIRM = 'Nothing is saved yet. You can save this goal below.';
 const HORIZON_WORDS = [['1-3y', /next few years/i], ['3-10y', /long range|long term/i], ['now', /this year/i]];
 const GOAL_AMOUNT = /\$(\d[\d,]*(?:\.\d+)?)\s*(k|m)?\b/i;
+const SHOW_WORK = /\bshow your work\b/i;
+const SHOW_NOTE_1 = 'Let me start with your household summary.';
+const SHOW_NOTE_2 = 'Now the details this rests on.';
 
 // propose_goal args for an "add a goal" command in an Ask thread, else null. A thread asked from a
 // rec gets none: the live answerer offers no goal tool in rec context.
@@ -108,5 +116,13 @@ export function fakeAnswerScript({ scenario, key, questionId, text, whatIfPack, 
   if (rec) toolCalls.push({ name: 'get_recommendation', args: { id: rec.id } });
   if (command) toolCalls.push({ name: 'propose_recommendation_action', args: command });
   if (goal) toolCalls.push({ name: 'propose_goal', args: goal });
+  if (typeof text === 'string' && SHOW_WORK.test(text)) {
+    const rest = toolCalls.slice(1);
+    return [
+      { text: SHOW_NOTE_1, toolCalls: [toolCalls[0]] },
+      { text: SHOW_NOTE_2, toolCalls: rest.length ? rest : [{ name: 'list_goals', args: {} }] },
+      { text: body },
+    ];
+  }
   return [{ toolCalls }, { text: body }];
 }

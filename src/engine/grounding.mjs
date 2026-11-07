@@ -125,6 +125,57 @@ function matches(value, item) {
   return true;
 }
 
+// A spelled count that names a figure (money, percent, time, or a counted record) is always checked.
+const unit = '(?:dollars?|cents?|percent|seconds?|minutes?|hours?|days?|weeks?|months?|quarters?|years?|decades?|accounts?|transactions?|payments?|holdings?|positions?|dependents?|child|children|kids?)\\b';
+const unitWord = new RegExp(`%|\\b${unit}`, 'i');
+const unitAfter = new RegExp(`^\\s*(?:%|(?:\\p{L}+\\s+)?${unit})`, 'iu');
+const listItem = /^ {0,3}(?:[-*•]|\d+[.)])(?:\s|$)/;
+const determiners = 'a|an|the|this|that|these|those|each|every|any|which|another|no|some|whichever';
+const adjectives = new Set(['next', 'same', 'other', 'first', 'last', 'second', 'third', 'only', 'new', 'old', 'different', 'specific',
+  'particular', 'similar', 'better', 'best', 'right', 'wrong', 'larger', 'smaller', 'earlier', 'later']);
+
+// "one" right after a determiner, or after one allowlisted adjective or capitalized word.
+function afterDeterminer(before) {
+  if (new RegExp(`\\b(?:${determiners})\\s+$`, 'i').test(before)) return true;
+  const between = new RegExp(`\\b(?:${determiners})\\s+(\\p{L}+)\\s+$`, 'iu').exec(before)?.[1];
+  return between !== undefined && (adjectives.has(between.toLowerCase()) || /^\p{Lu}/u.test(between));
+}
+
+// Top-level items in the list block right after the paragraph holding `from` (the end of a count
+// phrase); 0 when no list follows, the phrase is not in the paragraph's last sentence, or the
+// paragraph does not end with a colon, or a unit word follows the phrase within the paragraph.
+function listLength(text, from) {
+  const lines = text.slice(from).split('\n');
+  let index = 1;
+  while (index < lines.length && lines[index].trim() && !listItem.test(lines[index])) index++;
+  const tail = lines.slice(0, index).join('\n').trimEnd();
+  if (!tail.endsWith(':') || /[.!?]\s/.test(tail) || unitWord.test(tail)) return 0;
+  let count = 0;
+  let gap = false;
+  for (const line of lines.slice(index)) {
+    if (!line.trim()) gap = true;
+    else if (listItem.test(line)) { count++; gap = false; }
+    else if (!count || (gap && !/^\s/.test(line))) break;
+    else gap = false;
+  }
+  return count;
+}
+
+// Spelled words that are structure or grammar rather than a figure: a count matching the list that
+// follows its paragraph, or the pronoun "one" ("the one", "no one", "one of", "one more").
+function isStructural(text, phrase) {
+  const rest = text.slice(phrase.index + phrase.text.length);
+  if (unitAfter.test(rest)) return false;
+  const word = phrase.text.toLowerCase();
+  if (word === 'one') {
+    const lineStart = text.lastIndexOf('\n', phrase.index - 1) + 1;
+    const sentence = rest.split(/[.!?]|\n\s*\n/)[0];
+    if (afterDeterminer(text.slice(lineStart, phrase.index)) || /^\s+of\b/i.test(rest)
+      || (/^\s+(?:more|another)\b/i.test(rest) && !unitWord.test(sentence))) return true;
+  }
+  return phrase.value > 0 && !/hundred|thousand|million|billion/.test(word) && phrase.value === listLength(text, phrase.index + phrase.text.length);
+}
+
 export function checkGrounding(prose, { toolResults = [], data = [], figures = {} } = {}) {
   if (typeof prose !== 'string') throw new TypeError('Prose must be a string');
   const sources = { number: new Set(), percent: new Set() };
@@ -146,7 +197,7 @@ export function checkGrounding(prose, { toolResults = [], data = [], figures = {
   // Numeric expressions were judged whole above, so their magnitude words are not judged again.
   const wordsOnly = masked.replace(numberPattern, match => ' '.repeat(match.length));
   for (const phrase of wordQuantities(wordsOnly)) {
-    if (!sources[phrase.percent ? 'percent' : 'number'].has(phrase.value)) {
+    if (!sources[phrase.percent ? 'percent' : 'number'].has(phrase.value) && !isStructural(masked, phrase)) {
       violations.push({ text: phrase.text, index: phrase.index, reason: 'numeric word absent from sources' });
     }
   }
