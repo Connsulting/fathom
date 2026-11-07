@@ -23,6 +23,7 @@ const ALIASES = {
   kids: 'kids-dependents', retire: 'advanced-retirement', giving: 'charitable-giving',
 };
 const ILLUSTRATIVE = ['contractor', 'abroad', 'rental'];
+const PUBLIC_IDS = [...Object.values(ALIASES), 'spending-and-obligations'].sort();
 const DEMO_IDS = demo.packs.map(p => p.id).sort();
 const manifestOf = id => JSON.parse(readFileSync(join(REPO_PACKS, id, 'manifest.json'), 'utf8'));
 
@@ -139,7 +140,7 @@ test('a broken your-plans pack is skipped with a warning that carries none of it
 test('in a real store the refresh writes manifest rows, keeps overrides, and a fact change flips the base status', t => {
   const { db, dataDir } = store(t, { seed: false });
   refreshLivePacks(db, { dataDir });
-  assert.deepEqual(rows(db).map(r => r.id).sort(), Object.values(ALIASES).sort());
+  assert.deepEqual(rows(db).map(r => r.id).sort(), PUBLIC_IDS);
   assert.equal(row(db, 'charitable-giving').def.status, 'suggested');
   assert.equal(row(db, 's-corp-owner').def.status, 'active');
   db.prepare("UPDATE packs_state SET exploring = 1, what_if_asked = 1, unhid = '[\"daf\"]' WHERE id = 'charitable-giving'").run();
@@ -297,7 +298,7 @@ test('the upgrade inserts no fact into a real store', t => {
 test('loaded() follows packs.generation and the your-plans dir, and entry() serves backed rows only', t => {
   const { db, dataDir } = store(t);
   const packs = createLivePacks(db, { dataDir });
-  assert.deepEqual(packs.loaded().map(p => p.id).sort(), Object.values(ALIASES).sort());
+  assert.deepEqual(packs.loaded().map(p => p.id).sort(), PUBLIC_IDS);
   assert.equal(packs.loaded(), packs.loaded(), 'nothing changed, nothing reloads');
 
   const entry = packs.entry('giving', 'bunching');
