@@ -335,3 +335,29 @@ test('a unit word one word after the count still makes it a figure claim', () =>
     assert.equal(checkGrounding(prose, { data: [items] }).ok, true, `${word} ${rest} grounds when the value is in the sources`);
   }
 });
+
+test('"one" is a pronoun only right after a determiner, or after one allowlisted adjective or capitalized word', () => {
+  for (const text of ['That totals one.', 'The total is one.', 'This equals one.', 'The balance stays one.']) {
+    assert.equal(checkGrounding(text).ok, false, `${text} is a quantity`);
+    assert.equal(checkGrounding(text, { data: [1] }).ok, true, `${text} grounds when 1 is in the sources`);
+  }
+  for (const text of ['Take the one that fits.', 'A late-December birth gets the same credit as a January one.', 'Which one is better?', 'No one knows yet.', 'Pick another one.',
+    'Pick the next one.', 'Use the same one.', 'Choose a different one.', 'Take the other one.', 'Pick the best one.', 'One of the accounts is closed.', 'Add one more.']) {
+    assert.equal(checkGrounding(text).ok, true, text);
+  }
+});
+
+test('any unit word between the count and the end of its paragraph denies the structural exemption', () => {
+  for (const intro of [
+    'Your reserve lasts three full calendar years:',
+    'Your plan covers three of your accounts:',
+    'There are three things to watch over the next month:',
+  ]) {
+    const prose = `${intro}\n\n${bullets(3)}`;
+    const result = checkGrounding(prose);
+    assert.equal(result.ok, false, intro);
+    assert.deepEqual(result.violations.map(v => v.text), ['three'], intro);
+    assert.equal(checkGrounding(prose, { data: [3] }).ok, true, `${intro} grounds when 3 is in the sources`);
+  }
+  assert.deepEqual(wordViolations(`There are three things to watch:\n\n${bullets(3)}`), []);
+});
