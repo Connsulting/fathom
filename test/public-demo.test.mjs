@@ -195,6 +195,16 @@ test('public startup refuses a demo after an import attempt', async t => {
   } finally { db.close(); platform.close(); }
   assert.throws(() => openStore(config(dir)), /synthetic seeder marker/);
 });
+test('a refused private-demo request preserves the marker and a successful write invalidates it', async t => {
+  const dir = directory(t);
+  const s = await startServer({ ...loadConfig({ FATHOM_DATA: dir, FATHOM_DEMO: '1', FATHOM_ENGINE: 'fake' }), port: 0 });
+  t.after(() => s.close());
+  const post = (path, body) => fetch(s.url + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  assert.equal((await post('/api/jobs/plan/run', {})).status, 409);
+  assert.equal(getSetting(s.db, 'synthetic_demo'), 'synthetic-v1');
+  assert.equal((await post('/api/goals', { title: 'Private demo goal', horizon: 'now' })).status, 200);
+  assert.equal(getSetting(s.db, 'synthetic_demo', null), null);
+});
 test('live demo boundary applies model/output caps and offers only local read tools', async t => {
   const dir = directory(t);
   const credentialFile = join(dir, 'model-key');
