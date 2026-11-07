@@ -15,7 +15,7 @@ import test, { describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { readdir } from 'node:fs/promises';
 import demo from '../demo/scenario.mjs';
-import { seedDemo } from '../demo/seed.mjs';
+import { seedDemo, KIND_GOALS } from '../demo/seed.mjs';
 import { tools, getTool, callTool, ToolError, parity, CAPABILITIES } from '../src/tools/index.mjs';
 import { toolsForScopes } from '../src/mcp/keys.mjs';
 import { needsRule } from '../src/shared/rules.mjs';
@@ -239,7 +239,7 @@ describe('read tools', () => {
 
   test('list_goals', async () => {
     const goals = await call('list_goals');
-    assert.deepEqual(goals.map(g => g.id), demo.goals.map(g => g.id));
+    assert.deepEqual(goals.map(g => g.id), [...demo.goals, ...KIND_GOALS].map(g => g.id));
   });
 
   test('get_figures includes the source label and asOf', async () => {

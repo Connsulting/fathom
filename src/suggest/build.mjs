@@ -31,7 +31,8 @@ export function withdrawalRateOf(entry) {
 }
 
 // Goals that get a record: owner goals, not archived, not done, with no finite target.
-export const wantsSuggestion = g => g && g.origin === 'owner' && !g.archived && g.status !== 'done' && !finite(g.target);
+// Only a balance goal (goal model kind) gets a suggested target; the other kinds carry their own amounts.
+export const wantsSuggestion = g => g && g.origin === 'owner' && !g.archived && g.status !== 'done' && !finite(g.target) && (g.kind ?? 'balance') === 'balance';
 
 // This tax year's usable room figures: kind 'm' or 'e', available, positive, and computed by a
 // planner run whose planning year is the clock year. room.sep counts only without solo 401(k) room.
