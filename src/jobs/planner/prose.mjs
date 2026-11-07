@@ -117,6 +117,12 @@ const storedFields = def => ({
 
 export async function writeProse(hit, ctx, { engine = null, stored = null } = {}) {
   const hash = groundingHash(hit, ctx);
+  if (hit.rec.question?.primary) {
+    const draft = hit.trigger.template(ctx, hit.vars);
+    const fields = { ...draft, summary: hit.rec.question.summary };
+    const kept = stored?.hash === hash && stored.src === 'template' && stable(pickFields(stored.def)) === stable(fields);
+    return { fields, src: 'template', kept, hash, costUsd: 0 };
+  }
   // R2-7: stored prose is reused only while it still passes today's checks, whatever its source.
   if (stored && stored.hash === hash && stored.def && typeof stored.def.summary === 'string'
     && checkProse(storedFields(stored.def), allowedFor(hit, ctx)).ok) {

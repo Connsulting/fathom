@@ -22,6 +22,7 @@ import * as backdoorRoth from './backdoor-roth.mjs';
 import * as dependentCareFsa from './dependent-care-fsa.mjs';
 import * as newChild from './new-child.mjs';
 import * as missingData from './missing-data.mjs';
+import { questionFor, dataText } from './common.mjs';
 
 export const triggers = Object.freeze([
   fedQ4, vaQ4, yearEndRetirement, solo401kSetup, scorpSalary, invoiceDeferral, hsaRoom, va529,
@@ -49,11 +50,22 @@ function recOf(ctx, t, hit, window) {
     goalKinds: [...t.goalKinds], owner: typeof t.ownerFor === 'function' ? t.ownerFor(ctx, hit) : t.owner,
   };
   if (b.scenario) rec.scenario = b.scenario;
+  const questions = hit.confirm || hit.questions || (hit.catchUpPending ? [hit.catchUpPending] : []);
+  if (questions.length) {
+    const primary = !!hit.confirm?.length;
+    const people = ['year-end-retirement', 'scorp-salary'].includes(t.id) && ctx.info.solo?.person ? [ctx.info.solo.person] : undefined;
+    rec.question = { ...questionFor(questions, { accounts: ctx.data?.accounts || [], facts: ctx.facts, names: ctx.names, people }), primary };
+    if (primary) {
+      rec.title = dataText(rec.question.title);
+      rec.tasks = [];
+    }
+  }
   return rec;
 }
 
 export function evaluateCatalog(ctx) {
   ctx.blockedReasons = [];
+  ctx.questionKeys = new Set();
   const failed = new Set((ctx.info && ctx.info.calcFailed) || []);
   const results = [];
   for (const t of triggers) {
@@ -78,6 +90,7 @@ export function evaluateCatalog(ctx) {
     const { grounding = [], ...vars } = out;
     const hit = { grounding: grounding.filter(k => k && ctx.fig[k]), ...vars };
     const rec = recOf(ctx, t, hit, window);
+    for (const key of rec.question?.keys || []) ctx.questionKeys.add(key);
     const packId = t.packs.find(p => ctx.packStatus[p] === 'active') || null;
     results.push({ trigger: t, state: 'hit', hit: { trigger: t, rec, window, grounding: hit.grounding, packId, vars: hit } });
   }

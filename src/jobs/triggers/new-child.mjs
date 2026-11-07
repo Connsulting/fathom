@@ -19,8 +19,8 @@ export function window(ctx) {
   return due ? { close: due, label: dayLabel(due), hard: false } : null;
 }
 
-export function evaluate() {
-  return { grounding: ['cash.personal', 'cash.monthlyOut'] };
+export function evaluate(ctx) {
+  return { grounding: ['cash.personal', 'cash.monthlyOut'], ...(!factDate(ctx, 'household.expectedDate') ? { questions: ['household.expectedDate'] } : {}) };
 }
 
 export function build(ctx, hit) {
@@ -34,7 +34,6 @@ export function build(ctx, hit) {
       'Apply for a Social Security number at the hospital',
       'Add the baby to health coverage within the enrollment window',
       'Update beneficiaries and your will',
-      'Tell us the expected date so we can plan around it',
     ]),
   };
 }
