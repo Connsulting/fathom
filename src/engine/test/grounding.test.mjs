@@ -158,3 +158,216 @@ test('a spelled number followed by a percent sign is one percent quantity and ne
   assert.equal(checkGrounding('twenty percent', { data: [{ value: 20, unit: 'percent' }] }).ok, true);
   assert.equal(checkGrounding('one thousand', { data: [1000] }).ok, true);
 });
+
+const WORD_REASON = 'numeric word absent from sources';
+const wordViolations = (prose, sources) => checkGrounding(prose, sources).violations.filter(v => v.reason === WORD_REASON);
+const bullets = (count, marker = '-') => Array.from({ length: count }, (_, i) => `${marker} Item ${String.fromCharCode(97 + (i % 26))}${i >= 26 ? 'x' : ''}`).join('\n');
+const numbered = (count, style = '.') => Array.from({ length: count }, (_, i) => `${i + 1}${style} Entry ${String.fromCharCode(97 + (i % 26))}`).join('\n');
+
+test('a lone spelled count with no list after it is not structural and is still flagged, numerals included', () => {
+  assert.equal(checkGrounding('three', { toolResults: [{ value: 50 }] }).ok, false);
+  assert.deepEqual(wordViolations('There are three things to watch.', { toolResults: [{ value: 50 }] }).map(v => v.text), ['three']);
+  assert.equal(checkGrounding('three', { toolResults: [{ count: 3 }] }).ok, true, 'a sourced count still grounds');
+  for (const text of ['$12,345.67', '15.3%', '-$25']) assert.equal(checkGrounding(text).ok, false, `${text} is checked without sources`);
+});
+
+test('a spelled count equal to the bullet list that follows its paragraph is structural', () => {
+  for (const marker of ['-', '*']) {
+    assert.equal(checkGrounding(`There are three things to watch:\n\n${bullets(3, marker)}`).ok, true, `blank line, ${marker}`);
+    assert.equal(checkGrounding(`There are three things to watch:\n${bullets(3, marker)}`).ok, true, `next line, ${marker}`);
+  }
+  assert.equal(checkGrounding(`There are three things to watch:\n\n${bullets(3)}\n\nThat is all.`).ok, true, 'text after the list');
+});
+
+test('a spelled count equal to a numbered list that follows its paragraph is structural', () => {
+  for (const style of ['.', ')']) {
+    assert.deepEqual(wordViolations(`There are three things to watch:\n\n${numbered(3, style)}`), [], `blank line, 1${style}`);
+    assert.deepEqual(wordViolations(`There are three things to watch:\n${numbered(3, style)}`), [], `next line, 1${style}`);
+  }
+});
+
+test('a spelled "one" before a one-item list is structural', () => {
+  assert.equal(checkGrounding(`There is one thing to watch:\n\n${bullets(1)}`).ok, true);
+  assert.equal(checkGrounding(`There is one thing to watch:\n${bullets(1)}`).ok, true);
+  assert.equal(checkGrounding(`There is one thing to watch:\n\n${bullets(2)}`).ok, false, 'two items do not match one');
+});
+
+test('a spelled count that does not equal the list length is flagged', () => {
+  for (const items of [2, 4]) {
+    const result = checkGrounding(`There are three things to watch:\n\n${bullets(items)}`);
+    assert.equal(result.ok, false, `${items} items`);
+    assert.deepEqual(result.violations.map(v => [v.text, v.reason]), [['three', WORD_REASON]], `${items} items`);
+  }
+  assert.equal(checkGrounding(`There are three things to watch:\n\n${bullets(2)}`, { data: [3] }).ok, true, 'a sourced count still grounds');
+});
+
+test('a spelled count is flagged when another paragraph sits between it and the list', () => {
+  const result = checkGrounding(`There are three things to watch.\n\nThe first matters most.\n\n${bullets(3)}`);
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.violations.map(v => v.text), ['three']);
+});
+
+test('indented continuation lines inside a list item are not extra items', () => {
+  const list = '- First item\n  continues on a second line\n  and a third line\n- Second item\n  more detail\n- Third item';
+  assert.equal(checkGrounding(`There are three things to watch:\n\n${list}`).ok, true, 'three top-level items');
+  assert.equal(checkGrounding(`There are five things to watch:\n\n${list}`).ok, false, 'continuations do not count toward five');
+  const numberedList = '1. First entry\n   continues here\n2. Second entry\n   more here\n3. Third entry';
+  assert.deepEqual(wordViolations(`There are three things to watch:\n\n${numberedList}`), []);
+  assert.deepEqual(wordViolations(`There are five things to watch:\n\n${numberedList}`).map(v => v.text), ['five']);
+});
+
+test('scale and hundred words are never structural even when the count matches the list', () => {
+  const cases = [['two hundred', 2], ['one hundred', 1], ['three thousand', 3], ['two million', 2]];
+  for (const [phrase, items] of cases) {
+    const prose = `There are ${phrase} things to watch:\n\n${bullets(items)}`;
+    assert.equal(checkGrounding(prose).ok, false, `${phrase} before ${items} items`);
+  }
+  assert.equal(checkGrounding(`There are two hundred things to watch:\n\n${bullets(2)}`, { data: [200] }).ok, true);
+  assert.equal(checkGrounding(`There are three thousand things to watch:\n\n${bullets(3)}`, { data: [3000] }).ok, true);
+});
+
+test('a spelled count followed by a money, percent, time or data-count unit is a figure claim, not structural', () => {
+  const cases = [
+    ['three', 'dollars', 3], ['three', 'percent', 3], ['three', 'years', 3], ['twelve', 'months', 12],
+    ['two', 'accounts', 2], ['two', 'children', 2], ['three', 'transactions', 3], ['three', 'weeks', 3],
+    ['three', 'hours', 3], ['three', 'payments', 3],
+  ];
+  for (const [word, unit, items] of cases) {
+    const prose = `You have ${word} ${unit}:\n\n${bullets(items)}`;
+    const value = items;
+    const sourced = unit === 'percent' ? [{ value, unit: 'percent' }] : [value];
+    const result = checkGrounding(prose);
+    assert.equal(result.ok, false, `${word} ${unit} before ${items} items is flagged`);
+    assert.deepEqual(result.violations.map(v => v.text), [word], `${word} ${unit}`);
+    assert.equal(checkGrounding(prose, { data: sourced }).ok, true, `${word} ${unit} grounds when the value is in the sources`);
+  }
+});
+
+test('the pronoun "one" and fixed phrases with "one" are not quantities', () => {
+  const prose = [
+    'A late-December birth gets the same credit as a January one.',
+    'Take the one that fits.',
+    'Use this one.',
+    'Which one is better?',
+    'Review each one.',
+    'Pick any one.',
+    'No one knows yet.',
+    'One of the accounts is closed.',
+    'Add one more.',
+    'They help one another.',
+    'Pick another one.',
+  ];
+  for (const text of prose) assert.equal(checkGrounding(text).ok, true, text);
+});
+
+test('"one" as a quantity is still checked: units, scales, compounds and the bare quantity', () => {
+  const cases = [
+    ['It takes one year.', 1],
+    ['It costs one million.', 1e6],
+    ['It costs one hundred.', 100],
+    ['It costs twenty one.', 21],
+    ['It costs one account.', 1],
+    ['Take one.', 1],
+  ];
+  for (const [text, value] of cases) {
+    assert.equal(checkGrounding(text).ok, false, `${text} is flagged without sources`);
+    assert.equal(checkGrounding(text, { data: [value] }).ok, true, `${text} grounds when ${value} is in the sources`);
+  }
+  assert.equal(checkGrounding('The rate rose one percent.').ok, false);
+  assert.equal(checkGrounding('The rate rose one percent.', { data: [{ value: 1, unit: 'percent' }] }).ok, true);
+});
+
+test('the structural-count rule is for spelled words only: a numeral count is still checked', () => {
+  const prose = `There are 3 things to watch:\n\n${bullets(3)}`;
+  const result = checkGrounding(prose);
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.violations.map(v => v.text), ['3']);
+  assert.equal(checkGrounding(prose, { data: [3] }).ok, true);
+});
+
+test('a structural count does not hide an unsourced spelled figure elsewhere in the response', () => {
+  const prose = `There are three things to watch:\n\n${bullets(3)}\n\nThe plan pays off in five months.`;
+  const result = checkGrounding(prose);
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.violations.map(v => v.text), ['five']);
+});
+
+test('"one" after a determiner is a pronoun only with at most one non-verb word between', () => {
+  for (const text of ['The total is one.', 'The answer is one.', 'The count equals one.', 'This is one.', 'That was one.', 'Each has one.', 'The result becomes one.']) {
+    assert.equal(checkGrounding(text).ok, false, `${text} is a quantity`);
+    assert.equal(checkGrounding(text, { data: [1] }).ok, true, `${text} grounds when 1 is in the sources`);
+  }
+  for (const text of ['Take the one that fits.', 'Pick the next one.', 'A late-December birth gets the same credit as a January one.', 'Which one is better?', 'No one knows yet.', 'Pick another one.', 'One of the accounts is closed.', 'Add one more.']) {
+    assert.equal(checkGrounding(text).ok, true, text);
+  }
+});
+
+test('a structural count must sit in the last sentence of a paragraph that ends with a colon', () => {
+  for (const prose of [
+    `Your reserve lasts three full years.\n\n${bullets(3)}`,
+    `Your reserve lasts three years. Watch these:\n\n${bullets(3)}`,
+    `There are three things. Watch these:\n\n${bullets(3)}`,
+    `Here are three things\n\n${bullets(3)}`,
+    `Here are three things\n${bullets(3)}`,
+    `Here are three things.\n\n${bullets(3)}`,
+  ]) {
+    const result = checkGrounding(prose);
+    assert.equal(result.ok, false, prose);
+    assert.deepEqual(result.violations.map(v => v.text), ['three'], prose);
+  }
+  assert.equal(checkGrounding(`There are three things. Watch these:\n\n${bullets(3)}`, { data: [3] }).ok, true, 'a sourced count still grounds');
+  for (const prose of [
+    `There are three things to watch:\n\n${bullets(3)}`,
+    `There are three things to watch:\n\n${numbered(3)}`,
+    `There is one thing to watch:\n\n${bullets(1)}`,
+    `There is one thing to watch:\n\n${numbered(1)}`,
+    `The review is quick. There are three things to watch:\n\n${bullets(3)}`,
+  ]) assert.deepEqual(wordViolations(prose), [], prose);
+});
+
+test('a unit word one word after the count still makes it a figure claim', () => {
+  const cases = [['three', 'full years', 3], ['three', 'more accounts', 3], ['two', 'recent payments', 2]];
+  for (const [word, rest, items] of cases) {
+    const prose = `You have ${word} ${rest}:\n\n${bullets(items)}`;
+    const result = checkGrounding(prose);
+    assert.equal(result.ok, false, `${word} ${rest}`);
+    assert.deepEqual(result.violations.map(v => v.text), [word], `${word} ${rest}`);
+    assert.equal(checkGrounding(prose, { data: [items] }).ok, true, `${word} ${rest} grounds when the value is in the sources`);
+  }
+});
+
+test('"one" is a pronoun only right after a determiner, or after one allowlisted adjective or capitalized word', () => {
+  for (const text of ['That totals one.', 'The total is one.', 'This equals one.', 'The balance stays one.']) {
+    assert.equal(checkGrounding(text).ok, false, `${text} is a quantity`);
+    assert.equal(checkGrounding(text, { data: [1] }).ok, true, `${text} grounds when 1 is in the sources`);
+  }
+  for (const text of ['Take the one that fits.', 'A late-December birth gets the same credit as a January one.', 'Which one is better?', 'No one knows yet.', 'Pick another one.',
+    'Pick the next one.', 'Use the same one.', 'Choose a different one.', 'Take the other one.', 'Pick the best one.', 'One of the accounts is closed.', 'Add one more.']) {
+    assert.equal(checkGrounding(text).ok, true, text);
+  }
+});
+
+test('any unit word between the count and the end of its paragraph denies the structural exemption', () => {
+  for (const intro of [
+    'Your reserve lasts three full calendar years:',
+    'Your plan covers three of your accounts:',
+    'There are three things to watch over the next month:',
+  ]) {
+    const prose = `${intro}\n\n${bullets(3)}`;
+    const result = checkGrounding(prose);
+    assert.equal(result.ok, false, intro);
+    assert.deepEqual(result.violations.map(v => v.text), ['three'], intro);
+    assert.equal(checkGrounding(prose, { data: [3] }).ok, true, `${intro} grounds when 3 is in the sources`);
+  }
+  assert.deepEqual(wordViolations(`There are three things to watch:\n\n${bullets(3)}`), []);
+});
+
+test('"one more" and "one another" are not exempt when a unit word follows in the same sentence', () => {
+  for (const text of ['Your reserve covers one more full year.', 'You have one more full month to file.', 'Plan for one another full quarter.']) {
+    assert.equal(checkGrounding(text).ok, false, `${text} is a quantity`);
+    assert.equal(checkGrounding(text, { data: [1] }).ok, true, `${text} grounds when 1 is in the sources`);
+  }
+  for (const text of ['Take one more step.', 'There is one more thing to watch.', 'One of the accounts is late.']) {
+    assert.equal(checkGrounding(text).ok, true, text);
+  }
+});
