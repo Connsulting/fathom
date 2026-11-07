@@ -113,7 +113,7 @@ The header-based owner gate (#11) and its limits are gone; these replace them.
 1. Holdings and positions from SimpleFIN are not mapped; brokerage accounts get balances and transactions only (#27).
 2. A later bridge description change keeps the first description (#27).
 3. A file uploaded after connecting whose rows overlap bridge rows on nearby dates can raise near-duplicate Confirm cards (#27).
-4. The `simplefin` source kind has no freshness cadence, and the fake bridge ignores `start-date` (#27).
+4. The fake bridge ignores `start-date` (#27). A `simplefin` source uses the monthly freshness window.
 
 ## Accounts, events and decisions
 

@@ -31,7 +31,7 @@
 
 import { getSetting } from '../store/db.mjs';
 import { isIsoDate } from '../scenario/build.mjs';
-import { ingestState } from '../ingest/freshness.mjs';
+import { refreshFreshness } from '../ingest/freshness.mjs';
 import { composeBrief } from '../email/brief.mjs';
 import { sendEmail } from '../email/send.mjs';
 import { runDeadlineAlerts } from './alerts.mjs';
@@ -489,6 +489,7 @@ export function defaultHandlers({ publicUrl = null, simplefinFetch = null } = {}
       if (out.status === 'skipped') return { status: 'skipped', note: { connected: false } };
       if (out.status !== 'ok') throw new JobFailure(`simplefin_${out.code || 'error'}`);
       if (out.changed) ctx.triggerJob?.('plan');
+      await ctx.triggerJob?.('freshness');
       return { costUsd: 0, note: { ...out.counts, changed: out.changed } };
     },
     async plan(ctx) {
@@ -520,7 +521,7 @@ export function defaultHandlers({ publicUrl = null, simplefinFetch = null } = {}
       return { costUsd: 0, note: { purged } };
     },
     async freshness(ctx) {
-      const s = ingestState(ctx.db, { clock: ctx.clock });
+      const s = refreshFreshness(ctx.db, { clock: ctx.clock });
       return {
         costUsd: 0,
         note: { sources: s.sources.length, stale: s.sources.filter((x) => x.state === 'stale').length, pending: s.pending, waiting: s.waiting.length },
