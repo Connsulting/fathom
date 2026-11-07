@@ -11,10 +11,10 @@
 // with length-prefixed 'fathom-dek/1', household id, key version and the header as additional data.
 
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
-import { closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { codeError } from './db.mjs';
-import { writeAll, writeFileAtomic } from './fsutil.mjs';
+import { fsyncDir, writeAll } from './fsutil.mjs';
 
 const MAGIC = Buffer.from('FTHM2', 'latin1');
 const KEY_MAGIC = Buffer.from('FTHMK1', 'latin1');
@@ -313,9 +313,14 @@ export async function storeObject({ root, handle, purpose, objectId, bytes } = {
   assertSameHousehold(root, handle);
   const blob = sealObject(handle, { purpose, objectId, bytes });
   const dir = containedDir(root, 'files', { create: true });
+  const final = join(dir, `${objectId}.bin`);
+  const tmp = join(dir, `.${objectId}.${randomBytes(6).toString('hex')}.tmp`);
+  writePrivateFile(tmp, blob); // removes tmp itself when the write or fsync fails
   try {
-    writeFileAtomic(join(dir, `${objectId}.bin`), blob);
+    renameSync(tmp, final);
+    fsyncDir(final);
   } catch {
+    rmSync(tmp, { force: true });
     throw codeError('vault_write_failed');
   }
   return `files/${objectId}.bin`;
