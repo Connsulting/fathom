@@ -804,7 +804,6 @@ a.h-dec-t:hover { color: var(--ac2); }
   .d-horizon .h-tabs a.on { color: var(--ac); }
   .d-horizon .h-tabs a:focus-visible { outline: 2px solid var(--ac); outline-offset: -4px; border-radius: 8px; }
   .d-horizon .h-tabs a > span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .d-horizon .h-tabs .h-nav-n { position: absolute; top: 5px; left: calc(50% + 7px); margin: 0; }
   .d-horizon .h-top-in { padding: 0 16px; gap: 12px; height: 52px; }
   .d-horizon .h-more-btn { padding: 6px 8px; font-size: 14px; }
   .d-horizon .h-main { padding: 28px 16px calc(72px + 64px + env(safe-area-inset-bottom)); }

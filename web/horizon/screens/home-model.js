@@ -95,9 +95,19 @@ export function paceReason(pace) {
     s = behind === 1 ? `${title} is ${gap} plan.` : `${behind} goals are behind plan; ${title} is furthest, ${gap}.`;
   } else if (unknown > 0) {
     const d = shortDate(pace?.rollup?.dataThrough);
-    s = d
-      ? `Data through ${d} is past its update cadence, so pace is unknown for ${plural(unknown, 'goal')}; later months are projected.`
-      : `Data is missing, so pace is unknown for ${plural(unknown, 'goal')}.`;
+    const n = plural(unknown, 'goal');
+    // The cadence wording is only true when every unknown goal is unknown because its data is stale.
+    const unk = included(pace).filter((g) => g.status === 'unknown');
+    const stale = unk.length > 0 && unk.every((g) => g.reason === 'stale_data');
+    if (stale) {
+      s = d
+        ? `Data through ${d} is past its update cadence, so pace is unknown for ${n}; later months are projected.`
+        : `Data is missing, so pace is unknown for ${n}.`;
+    } else {
+      s = d
+        ? `Data runs through ${d}, but pace is unknown for ${n} because the data or plan is incomplete; later months are projected.`
+        : `Pace is unknown for ${n} because the data or plan is incomplete.`;
+    }
   } else if (total > 0) {
     s = `All ${plural(total, 'goal')} with targets ${total === 1 ? 'is' : 'are'} within plan.`;
   } else {

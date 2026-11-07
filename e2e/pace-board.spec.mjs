@@ -113,9 +113,9 @@ test.describe('pace board', () => {
     expect(keys.length).toBeGreaterThan(0);
     for (const k of keys) expect(k, 'figure key').toMatch(/^pace\./);
 
-    // The bar sits under the data-ends marker, so the click goes to the bar element itself.
+    // The data-ends marker ignores pointer events, so a real click on the bar reaches the bar.
     const fig = page.locator(`figure.h-pchart[data-chart="${c.id}"]`);
-    await fig.locator(`rect.h-pbar-m[data-month="${observed.month}"]`).dispatchEvent('click');
+    await fig.locator(`rect.h-pbar-m[data-month="${observed.month}"]`).click();
     await expectPopoverSource(page, s.src['calc:pace'].label);
     await page.keyboard.press('Escape');
     await expect(page.locator('.fx-pop')).toHaveCount(0);

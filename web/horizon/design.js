@@ -380,21 +380,17 @@ function whoLine() {
   return `<div class="h-who">Signed in as ${esc(name)}${id.login && id.login !== name ? `<span>${esc(id.login)}</span>` : ''}</div>`;
 }
 
-// The label a NAV entry shows, in the top nav and the tab bar alike.
-// The Confirm count lives on Home's data-health line, not on a badge.
-function navLabel(k, l) { return l; }
-
 // Phone-width bottom tab bar: the NAV entries in TAB_ICON, hidden above 720px by CSS.
 function tabBar(active) {
   const tabs = NAV.filter(([k]) => TAB_ICON[k]).map(([k, l]) =>
-    `<a href="${href(k)}" data-go="${k}" class="${active === k ? 'on' : ''}"${active === k ? ' aria-current="page"' : ''}>${icon(TAB_ICON[k])}<span>${navLabel(k, l)}</span></a>`).join('');
+    `<a href="${href(k)}" data-go="${k}" class="${active === k ? 'on' : ''}"${active === k ? ' aria-current="page"' : ''}>${icon(TAB_ICON[k])}<span>${l}</span></a>`).join('');
   return `<nav class="h-tabs" aria-label="Tabs">${tabs}</nav>`;
 }
 
 function shell(inner, active) {
   const link = (k, l) => {
     const hint = switcher.goHint(k);
-    return `<a href="${href(k)}" data-go="${k}" class="${active === k ? 'on' : ''}"${active === k ? ' aria-current="page"' : ''}${hint ? ` title="${esc(`${l} (${hint})`)}"` : ''}>${navLabel(k, l)}</a>`;
+    return `<a href="${href(k)}" data-go="${k}" class="${active === k ? 'on' : ''}"${active === k ? ' aria-current="page"' : ''}${hint ? ` title="${esc(`${l} (${hint})`)}"` : ''}>${l}</a>`;
   };
   const nav = NAV.map(([k, l]) => link(k, l)).join('');
   const rest = NAV.filter(([k]) => !TAB_ICON[k]);
@@ -438,10 +434,11 @@ function liveDomainStatus(dm, ny) {
   return dm.status;
 }
 
+const cdTone = (r) => { const d = days(r); return d < 0 ? ' late' : d <= 30 ? ' soon' : ''; };
+
 function cdHtml(r, cls) {
   const cd = countdown(r);
-  const d = days(r);
-  return `<div class="${cls}${d < 0 ? ' late' : d <= 30 ? ' soon' : ''}"><b>${cd.n}</b><span>${cd.u}</span></div>`;
+  return `<div class="${cls}${cdTone(r)}"><b>${cd.n}</b><span>${cd.u}</span></div>`;
 }
 
 function gnextHtml(r) {
@@ -516,10 +513,9 @@ function nextHtml(m, subject) {
     ? `Serves ${ids.map((id) => `<a href="${href('goals')}" data-go="goals">${servedTitle(r, id)}</a>`).join(', ')}`
     : 'Housekeeping, serves no goal';
   const cd = countdown(r);
-  const d = days(r);
   const id = esc(r.id);
   return `<div class="h-next-deck${m.afterThat.length ? ' stack' : ''}"><article class="h-next" data-next-rec="${id}">
-    <div class="h-next-top"><span class="h-next-k">Next</span>${whoTag(r)}<span class="h-next-cd${d < 0 ? ' late' : d <= 30 ? ' soon' : ''}"><b>${cd.n}</b><span>${cd.u}</span></span></div>
+    <div class="h-next-top"><span class="h-next-k">Next</span>${whoTag(r)}<span class="h-next-cd${cdTone(r)}"><b>${cd.n}</b><span>${cd.u}</span></span></div>
     <h2 class="h-next-t">${recLink(r)}</h2>
     ${why ? `<p class="h-next-why">${why}</p>` : ''}
     <p class="h-serves-l">${serves}</p>
@@ -559,6 +555,10 @@ function pHome() {
 
 /* ---------- pace board ---------- */
 
+// 'YYYY-MM' of the scenario clock, the form pace series months use.
+const clockMonth = () => { const c = clock(); return `${c.getUTCFullYear()}-${String(c.getUTCMonth() + 1).padStart(2, '0')}`; };
+const monthIdx = (m) => Number(String(m?.month || '').slice(5, 7)) - 1;
+
 const METERS = [['retirement', 'Retirement room used, closes Dec 31'], ['tax', 'Tax reserved vs owed'], ['income', 'Income vs plan']];
 
 function meterHtml([k, label]) {
@@ -590,8 +590,7 @@ function paceChart(ch, ci) {
   const bw = slot - 2;
   const zy = sy(0);
   const cid = `h-pc-${ci}`;
-  const c = clock();
-  const curM = `${c.getUTCFullYear()}-${String(c.getUTCMonth() + 1).padStart(2, '0')}`;
+  const curM = clockMonth();
   const g0 = arr(api.s.goals).find((x) => x.id === ch.id);
   const title = g0 ? goalTitle(g0) : esc(ch.title);
   let g = `<svg class="h-pc" viewBox="0 0 ${W} ${H}" role="group" aria-label="${esc(api.txt(ch.title || ''))}: ahead or behind plan, by month">`;
@@ -603,7 +602,7 @@ function paceChart(ch, ci) {
   let pos = '', neg = '';
   ser.forEach((m, i) => {
     const v = vals[i];
-    const mi = Number(String(m?.month || '').slice(5, 7)) - 1;
+    const mi = monthIdx(m);
     const x = L + i * slot + 1;
     g += `<text class="h-pc-m${m?.month === curM ? ' cur' : ''}" x="${x + bw / 2}" y="${H - 7}" text-anchor="middle">${MON[mi] ? MON[mi][0] : ''}</text>`;
     if (v == null) return;
@@ -627,9 +626,9 @@ function paceChart(ch, ci) {
   g += '</svg>';
   // Headline: the gap at the data end, from the stored figure.
   const li = endIdx >= 0 && vals[endIdx] != null ? endIdx : vals.map((v, i) => (v != null && !ser[i].projected ? i : -1)).filter((i) => i >= 0).pop();
-  const last = li != null && li >= 0 ? `<span class="h-pc-last ${vals[li] >= 0 ? 'pos' : 'neg'}">${figHtml(`${ch.figBase}.${li}.gap`, { k: true, abs: true })} ${vals[li] >= 0 ? 'ahead' : 'behind'} in ${MON[Number(ser[li].month.slice(5, 7)) - 1]}</span>` : '';
+  const last = li != null && li >= 0 ? `<span class="h-pc-last ${vals[li] >= 0 ? 'pos' : 'neg'}">${figHtml(`${ch.figBase}.${li}.gap`, { k: true, abs: true })} ${vals[li] >= 0 ? 'ahead' : 'behind'} in ${MON[monthIdx(ser[li])]}</span>` : '';
   const cell = (i, k, o = {}) => (ser[i]?.[k] && api.fig(`${ch.figBase}.${i}.${k}`) ? figHtml(`${ch.figBase}.${i}.${k}`, o) : '<span class="h-mute">No reading</span>');
-  const rows = ser.map((m, i) => `<tr${m.projected ? ' class="proj"' : ''}><th scope="row">${MON[Number(m.month.slice(5, 7)) - 1] || esc(m.month)}${m.projected ? '<em>projected</em>' : ''}</th><td>${cell(i, 'plan')}</td><td>${cell(i, 'actual')}</td><td>${cell(i, 'gap', { sign: true })}</td></tr>`).join('');
+  const rows = ser.map((m, i) => `<tr${m.projected ? ' class="proj"' : ''}><th scope="row">${MON[monthIdx(m)] || esc(m.month)}${m.projected ? '<em>projected</em>' : ''}</th><td>${cell(i, 'plan')}</td><td>${cell(i, 'actual')}</td><td>${cell(i, 'gap', { sign: true })}</td></tr>`).join('');
   const det = `pace-table-${ch.id}`;
   return `<figure class="h-pchart" data-chart="${esc(ch.id)}"><figcaption><div><b>${title}</b><span>Ahead or behind plan, by month</span></div>${last}</figcaption>${g}`
     + '<div class="h-pc-key"><span><i class="k pos"></i>Ahead of plan</span><span><i class="k neg"></i>Behind plan</span><span><i class="k proj"></i>Projected</span></div>'
@@ -640,8 +639,7 @@ function pPace() {
   const pace = api.s.pace || null;
   const hc = healthChip(pace);
   const charts = boardCharts(pace);
-  const c = clock();
-  const curM = `${c.getUTCFullYear()}-${String(c.getUTCMonth() + 1).padStart(2, '0')}`;
+  const curM = clockMonth();
   const projected = charts.some((ch) => ch.dataEnd && ch.dataEnd.slice(0, 7) < curM);
   const body = charts.length
     ? `<div class="h-pcharts">${charts.map(paceChart).join('')}</div>`

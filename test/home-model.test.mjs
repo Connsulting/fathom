@@ -216,6 +216,13 @@ test('paceReason explains unknown pace from the data date and the unknown count'
   assert.equal(paceReason(one), 'Data through Aug 7 is past its update cadence, so pace is unknown for 1 goal; later months are projected.');
 });
 
+test('paceReason does not blame the update cadence when no unknown goal is stale', () => {
+  const pace = paceOf([pg('a', 'unknown', { reason: 'missing_plan_start', stale: false, dataThrough: '2026-08-07' }), pg('b', 'on pace', { dataThrough: '2026-08-07' })], { dataThrough: '2026-08-07' });
+  const s = paceReason(pace);
+  assert.ok(!s.includes('cadence'), s);
+  assert.equal(s, 'Data runs through Aug 7, but pace is unknown for 1 goal because the data or plan is incomplete; later months are projected.');
+});
+
 test('paceReason says every goal is within plan, and counts goals without a target', () => {
   const all = paceOf([pg('a', 'on pace'), pg('b', 'ahead', { timeGap: '2 weeks ahead' }), pg('c', 'on pace')]);
   assert.equal(paceReason(all), 'All 3 goals with targets are within plan.');
