@@ -124,13 +124,15 @@ async function clickRow(page, it, opt, revise = false) {
 
 // Click the first option of every row on the current group card that is not answered yet.
 async function answerRows(card) {
-  const rows = card.locator('tr[data-row]');
-  const n = await rows.count();
-  for (let i = 0; i < n; i++) {
-    const row = rows.nth(i);
-    if (await row.locator('button[data-row-answer][aria-pressed="true"]').count()) continue;
+  // Rows answered by propagation leave the table, so look for the next unanswered row each time.
+  const open = card.locator('tr[data-row]:not(:has(button[data-row-answer][aria-pressed="true"]))');
+  for (let guard = 0; guard < 20 && await open.count(); guard++) {
+    const row = open.first();
+    const id = await row.getAttribute('data-row');
     await row.locator('button[data-row-answer]').first().click();
-    await expect(row.locator('button[data-row-answer][aria-pressed="true"]')).toHaveCount(1);
+    // Wait for the saved state (not the optimistic press) so the next click never races a
+    // propagation that is about to remove a row (that would be a 409 from the server).
+    await expect(card.page().locator(`tr[data-row="${id}"] p.h-cf-rstate`)).toContainText('Saved');
   }
 }
 
@@ -185,8 +187,13 @@ for (const [label, size] of SIZES) {
       await clickRow(page, a, aOpt);
       await expect(card).toBeVisible();
       await expectState(request, a.id, 'answered', aOpt);
-      for (const it of owners.filter((o) => o.id !== a.id)) await expect(pressedIn(page, it.id)).toHaveCount((await allById(request)).get(it.id).status === 'answered' ? 1 : 0);
-      await expect(counter(page)).toHaveText(new RegExp(`^[1-9]\\d* of ${total} answered$`));
+      // Rows the server answered by propagation leave the table (they show under Decided for you);
+      // every other row stays unanswered and unpressed.
+      for (const it of owners.filter((o) => o.id !== a.id)) {
+        if ((await allById(request)).get(it.id).status === 'answered') await expect(rowOf(page, it.id)).toHaveCount(0);
+        else await expect(pressedIn(page, it.id)).toHaveCount(0);
+      }
+      await expect(counter(page)).toHaveText(/^[1-9]\d* of \d+ answered$/);
       await expect(bar(page)).toHaveAttribute('aria-valuenow', /^[1-9]\d*$/);
       const afterOne = await counter(page).textContent();
 
