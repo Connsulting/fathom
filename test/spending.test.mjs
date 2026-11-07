@@ -420,9 +420,23 @@ test('pl-ac4 household reads never write, and the HTTP routes return the same va
   await get('/api/spending/rows?include=rent&bucket=household&category=Groceries', 400);
   await get('/api/spending/rows?bucket=household&category=Groceries&month=2032-13', 400);
 
-  // No business data: no entities and a null P&L, not an error.
-  const none = await get('/api/pnl');
-  assert.deepEqual(none.entities, []);
-  assert.equal(none.pnl, null);
+  // The household's business account is tied to no business name, so it is its own P&L.
+  const own = await get('/api/pnl');
+  assert.deepEqual(own.entities.map((e) => [e.key, e.kind]), [['account:biz', 'account']]);
+  assert.equal(own.pnl.entity.key, 'account:biz');
   assert.equal(changes(), before, 'the HTTP reads never write the store');
+});
+
+test('pl-ac4 a household with no business account or workbook gets no entities and a null P&L, not an error', async (t) => {
+  const { db, dir } = store(t);
+  account(db, 'chk', 'checking', 'Everyday checking', { sort: 1 });
+  txn(db, 'chk', '2032-06-10', -200, 'Grocery store', 'Groceries');
+  const srv = await serveAppFixture({ authenticated: true, db, config: { clock: CLOCK, dataDir: dir }, answerer: null });
+  t.after(() => srv.close());
+  const r = await srv.request({ path: '/api/pnl' });
+  assert.equal(r.status, 200, r.text.slice(0, 300));
+  assert.deepEqual(r.json.entities, []);
+  assert.equal(r.json.pnl, null);
+  const s = await srv.request({ path: '/api/spending' });
+  assert.equal(s.status, 200, s.text.slice(0, 300));
 });
