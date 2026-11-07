@@ -95,6 +95,10 @@ export function householdSpending(opts = {}) {
   const span = spanLabel(a.from, a.to);
   const sums = (byMonth) => monthSums(byMonth, a.months, () => 'transactions');
 
+  // Months with any household account transaction: the divisor for every monthly average.
+  const active = a.months.filter((m) => a.activeMonths.has(m)).length;
+  const AVG_NOTE = ['The average divides the total by the months that have any household account transaction.'];
+  const AVG_DETAIL = [{ k: 'Uses', v: `${active} ${active === 1 ? 'month' : 'months'} with household account transactions` }];
   const buckets = [];
   const totalByMonth = new Map();
   for (const bucket of BUCKETS) {
@@ -116,6 +120,9 @@ export function householdSpending(opts = {}) {
       categories.push({
         category, housing: bucket === 'household' && HOUSING.test(category), value: sumOf(rows), months: cellMonths,
         total: reg.add(`${ck}.total`, { v: sumOf(rows), label: `${category}, ${span}`, rows, counted: true, notes: SPEND_NOTE, sums: sums(byMonth) }),
+        average: active
+          ? reg.add(`${ck}.average`, { v: sumOf(rows) / active, label: `${category}, monthly average, ${span}`, rows, counted: true, notes: AVG_NOTE, detail: AVG_DETAIL })
+          : null,
       });
     }
     sortCategories(categories);
@@ -137,12 +144,9 @@ export function householdSpending(opts = {}) {
   const total = totalRows.length
     ? reg.add(`${base}.total`, { v: totalValue, label: `Household spending, ${span}`, rows: totalRows, counted: true, notes: SPEND_NOTE, sums: sums(totalByMonth) })
     : null;
-  const active = a.months.filter((m) => a.activeMonths.has(m)).length;
   const monthlyAverage = totalRows.length && active
     ? reg.add(`${base}.average`, {
-      v: totalValue / active, label: `Monthly average, ${span}`, rows: totalRows, counted: true,
-      notes: ['The average divides the total by the months that have any household account transaction.'],
-      detail: [{ k: 'Uses', v: `${active} ${active === 1 ? 'month' : 'months'} with household account transactions` }],
+      v: totalValue / active, label: `Monthly average, ${span}`, rows: totalRows, counted: true, notes: AVG_NOTE, detail: AVG_DETAIL,
     })
     : null;
 

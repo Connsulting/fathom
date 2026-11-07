@@ -346,15 +346,15 @@ function homeGaps(s) {
 function homeTable(s, sel, rangeName) {
   const { esc } = H;
   const open = P.rows && P.rows.view === P.view ? P.rows : null;
-  const head = `<thead><tr><th scope="col">Category</th><th scope="col" class="num">${plMonth(sel)}</th><th scope="col" class="num">${rangeName}</th></tr></thead>`;
+  const head = `<thead><tr><th scope="col">Category</th><th scope="col" class="num">${plMonth(sel)}</th><th scope="col" class="num">${rangeName}</th><th scope="col" class="num pl-avg">Monthly average</th></tr></thead>`;
   const groups = H.arr(s.buckets).map((b) => {
     const rows = H.arr(b.categories).map((c) => {
       const on = open && open.bucket === b.bucket && open.category === c.category;
-      return `<tr><th scope="row"><button type="button" class="pl-cat${on ? ' on' : ''}" data-pl-cat="${esc(c.category)}" data-pl-bucket="${esc(b.bucket)}"${on ? ' aria-expanded="true"' : ''}>${esc(c.category)}</button>${c.housing ? '<span class="pl-tag">Housing</span>' : ''}</th><td class="num">${cell(c.months?.[sel])}</td><td class="num">${cell(c.total)}</td></tr>`;
+      return `<tr><th scope="row"><button type="button" class="pl-cat${on ? ' on' : ''}" data-pl-cat="${esc(c.category)}" data-pl-bucket="${esc(b.bucket)}"${on ? ' aria-expanded="true"' : ''}>${esc(c.category)}</button>${c.housing ? '<span class="pl-tag">Housing</span>' : ''}</th><td class="num">${cell(c.months?.[sel])}</td><td class="num">${cell(c.total)}</td><td class="num pl-avg">${cell(c.average)}</td></tr>`;
     }).join('');
-    return `<tbody><tr class="pl-h"><th scope="rowgroup" colspan="2">${esc(b.label)}</th><td class="num">${cell(b.total)}</td></tr>${rows}</tbody>`;
+    return `<tbody><tr class="pl-h"><th scope="rowgroup" colspan="2">${esc(b.label)}</th><td class="num">${cell(b.total)}</td><td class="num pl-avg"></td></tr>${rows}</tbody>`;
   }).join('');
-  const total = `<tbody class="pl-net"><tr><th scope="row">Total spending</th><td class="num">${cell(s.monthTotals?.[sel])}</td><td class="num">${cell(s.total)}</td></tr></tbody>`;
+  const total = `<tbody class="pl-net"><tr><th scope="row">Total spending</th><td class="num">${cell(s.monthTotals?.[sel])}</td><td class="num">${cell(s.total)}</td><td class="num pl-avg">${cell(s.monthlyAverage)}</td></tr></tbody>`;
   return `<div class="pl-tablewrap"><table class="pl-table home" data-pl-table>${head}${groups}${total}</table></div>`;
 }
 

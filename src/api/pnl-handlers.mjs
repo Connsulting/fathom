@@ -8,6 +8,7 @@
 
 import { HttpError } from './http.mjs';
 import { resolveClock } from '../scenario/build.mjs';
+import { checkMonth, checkRange } from '../pnl/shared.mjs';
 import { PnlError, pnlEntities, businessPnl, businessPnlRows, householdSpending, householdSpendingRows } from '../pnl/index.mjs';
 
 // A query value is one plain string (empty means absent); a repeated key is refused.
@@ -36,7 +37,12 @@ export function getPnl(ctx) {
   return read(ctx, (q, clock) => {
     const entities = pnlEntities({ db: ctx.db, clock });
     const entity = one(q, 'entity') ?? entities[0]?.key;
-    if (entity === undefined) return { entities, pnl: null, figures: {}, sources: {} };
+    if (entity === undefined) {
+      // No business data: still refuse a malformed or inverted range, as a store with data would.
+      const from = checkMonth(one(q, 'from'), 'from'), to = checkMonth(one(q, 'to'), 'to');
+      if (from && to) checkRange(from, to);
+      return { entities, pnl: null, figures: {}, sources: {} };
+    }
     const { figures, sources, ...pnl } = businessPnl({ db: ctx.db, entity, from: one(q, 'from'), to: one(q, 'to'), clock });
     return { entities, pnl, figures, sources };
   });

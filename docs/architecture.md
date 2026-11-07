@@ -166,7 +166,7 @@ menu. Every route maps to one tab or to the gear (`TAB_OF` in `web/horizon/desig
 lit tab comes from the current route, or for `#/rec/<id>` from the page under the dialog. Home
 holds Home, the pace board, Goals and Confirm (reached from goal cards and the data-health line).
 Plan holds Plan, Year end and Advisor. Ask holds conversations, Decide (the What-if view,
-`#/wargame`) and Packs. Money (`#/money`) holds an overview, Accounts and Files (`#/add`). The
+`#/wargame`) and Packs. Money (`#/money`) holds an overview, Accounts, P&L (`#/pnl`, each business and household spending) and Files (`#/add`). The
 gear opens `#/settings`, which lists Connect, Engine, Email, Setup (real stores only), and on a
 real store the signed-in line, Account and, for admins, Household. Plan, Ask and Money show a
 sub-nav of their views at the top of each of those pages. The Money overview spells out the

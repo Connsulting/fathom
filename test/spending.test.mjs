@@ -239,6 +239,13 @@ test('pl-ac2 default range is the trailing twelve months ending at the latest co
   assert.deepEqual(monthList(q), ['2032-01', '2032-02', '2032-03']);
   assert.equal(val(q, q.total), r2(3 * 1700 + 3 * 90 - 40));
   assert.equal(val(q, q.monthlyAverage), r2((3 * 1790 - 40) / 3));
+  // Each category has its own monthly average over the same months as the total's.
+  for (const b of q.buckets) for (const c of b.categories) {
+    assert.equal(val(q, c.average), r2(val(q, c.total) / 3), `${c.category} average`);
+    assert.equal(q.figures[c.average].provenance.rows[0].count, q.figures[c.total].provenance.rows[0].count, `${c.category} average counts the same rows`);
+  }
+  const groceries = p.buckets.flatMap((b) => b.categories).find((c) => c.category === 'Groceries');
+  assert.equal(val(p, groceries.average), r2(val(p, groceries.total) / 11), 'the default range averages over its 11 active months');
 
   // An explicit clock: its own month is never the end of the default range.
   const early = householdSpending({ db, clock: '2032-10-20' });
@@ -439,4 +446,12 @@ test('pl-ac4 a household with no business account or workbook gets no entities a
   assert.equal(r.json.pnl, null);
   const s = await srv.request({ path: '/api/spending' });
   assert.equal(s.status, 200, s.text.slice(0, 300));
+  // The range is still checked with no business data, and a valid one is still accepted.
+  for (const q of ['from=2032-13', 'to=2032-1', 'from=2032-06&to=2032-05', 'from=2029-01&to=2032-01']) {
+    const bad = await srv.request({ path: `/api/pnl?${q}` });
+    assert.equal(bad.status, 400, `${q}: ${bad.text.slice(0, 200)}`);
+  }
+  const ok = await srv.request({ path: '/api/pnl?from=2032-01&to=2032-06' });
+  assert.equal(ok.status, 200, ok.text.slice(0, 300));
+  assert.equal(ok.json.pnl, null);
 });
