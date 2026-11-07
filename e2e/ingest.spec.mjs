@@ -172,14 +172,14 @@ const hostileCsv = (number) => {
 };
 const hostileFiles = (seed) => HOSTILE.map((name, i) => ({ name, mimeType: 'text/csv', buffer: hostileCsv(`555000${seed}${i}${seed}${i}`) }));
 
-// The demo store has finished onboarding; serve every scenario as a fresh one on step 1.
+// The demo store has finished onboarding; serve every scenario as a fresh one on step 3 (Tell us).
 async function forceOnboarding(page) {
   await page.route('**/api/**', async (route) => {
     const res = await route.fetch();
     if (!String(res.headers()['content-type'] || '').includes('application/json')) return route.fulfill({ response: res });
     const body = await res.json();
     const sc = body && body.meta ? body : body && body.scenario;
-    if (sc && sc.live) Object.assign(sc.live, { demo: 'fresh', onboardStep: 1 });
+    if (sc && sc.live) Object.assign(sc.live, { demo: 'fresh', onboardStep: 3 });
     return route.fulfill({ response: res, json: body });
   });
 }
@@ -202,7 +202,7 @@ async function expectLiteral(scope, names) {
 
 test('upload file names render literally on onboarding, Accounts and Confirm', async ({ page, request }) => {
   await forceOnboarding(page);
-  await page.goto('/#/onboarding/1');
+  await page.goto('/#/onboarding/3');
   await expect(page.getByRole('heading', { level: 1, name: 'Dump everything in' })).toBeVisible();
   const onboardingNames = await uploadHostile(page, 1);
   const onboardingList = page.locator('.h-ing-files');

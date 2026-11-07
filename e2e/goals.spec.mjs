@@ -16,14 +16,14 @@ async function gotoGoals(page) {
 
 const saved = (page, path) => page.waitForResponse((r) => new URL(r.url()).pathname === path && r.request().method() === 'POST' && r.status() === 200);
 
-// The demo store has finished onboarding; serve every scenario as a fresh one on step 4.
+// The demo store has finished onboarding; serve every scenario as a fresh one on step 2 (the curve).
 async function forceOnboarding(page) {
   await page.route('**/api/**', async (route) => {
     const res = await route.fetch();
     if (!String(res.headers()['content-type'] || '').includes('application/json')) return route.fulfill({ response: res });
     const body = await res.json();
     const sc = body && body.meta ? body : body && body.scenario;
-    if (sc && sc.live) Object.assign(sc.live, { demo: 'fresh', onboardStep: 4 });
+    if (sc && sc.live) Object.assign(sc.live, { demo: 'fresh', onboardStep: 2 });
     return route.fulfill({ response: res, json: body });
   });
 }
@@ -131,7 +131,7 @@ test.describe('goals', TAGS, () => {
 
   test('onboarding Priorities save the owner positions', async ({ page }) => {
     await forceOnboarding(page);
-    await page.goto('/#/onboarding/4');
+    await page.goto('/#/onboarding/2');
     await expectH1(page, 'Where on the curve');
     const slider = page.locator('input[data-prio="tax_cash"]');
     const post = saved(page, '/api/curve');

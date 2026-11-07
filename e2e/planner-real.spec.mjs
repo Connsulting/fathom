@@ -72,9 +72,14 @@ test.describe('AC7: planner on a real store', () => {
   test('AC7: Home leads with the pace headline and Plan marks the planner needs-you recs', async ({ page }) => {
     expect(scenario.live.mode).toBe('real');
     expect(needs.length).toBeGreaterThan(0);
-    // Home's heading is the pace rollup; the brief verdict no longer heads the app.
+    // This store has no goals, so Home leads with the Goals block (goals-first onboarding) and the
+    // pace rollup heads the pace board; the brief verdict no longer heads the app.
+    expect(scenario.goals.filter((g) => !g.archived)).toEqual([]);
     await go(page, 'home');
-    await expect(page.locator('h1.h-home-h')).toHaveText(scenario.pace.rollup.headline);
+    await expect(page.locator('section.h-home [data-goals-start]')).toBeVisible();
+    await expect(page.getByRole('heading', { level: 1, name: 'What is the money for?', exact: true })).toBeVisible();
+    await go(page, 'pace');
+    await expect(page.locator('.h-pace-head h1')).toHaveText(scenario.pace.rollup.headline);
     await go(page, 'plan');
     await expect(page.locator('.h-stats > div', { hasText: 'need you' }).locator('b')).toHaveText(String(needs.length));
     for (const r of needs) {
