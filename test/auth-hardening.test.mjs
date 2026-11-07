@@ -299,6 +299,16 @@ test('trusted proxy configuration defaults empty and accepts only comma-separate
   assert.equal(messages.size, 1, 'invalid configuration has one fixed safe error');
 });
 
+// The spec caps invitation emails at 20 per household per hour (every send counts, reissues
+// included), so the merged invite buckets (60 per socket, 120 global, per 10 minutes) are proven by
+// priming their auth_rate_limits rows just below the limit instead of sending 60 or 120 invites.
+const HOUR = 60 * 60 * 1000;
+const bucket = (app, key) => app.platform.prepare('SELECT window_start, expires_at, attempts FROM auth_rate_limits WHERE key_hash = ?').get(digest(key));
+function prime(app, key, attempts) {
+  app.platform.prepare(`INSERT INTO auth_rate_limits (key_hash, window_start, expires_at, attempts) VALUES (?, ?, ?, ?)
+    ON CONFLICT(key_hash) DO UPDATE SET attempts = excluded.attempts`).run(digest(key), app.now(), app.now() + RECENT, attempts);
+}
+
 test('forged forwarded clients share the default recovery quota while invitations have an independent ten-minute quota', async t => {
   const app = await fixture(t);
   const admin = await app.client('admin@example.test', 'admin');
@@ -308,14 +318,16 @@ test('forged forwarded clients share the default recovery quota while invitation
     assert.deepEqual(response.json, { sent: true });
   }
   limited(await app.post('/api/auth/recover', { email: 'overflow@example.test' }, { 'x-forwarded-for': '203.0.113.7' }));
-  for (let i = 0; i < 60; i++) {
-    const response = await admin.postJson('/api/admin/users/invite', { email: 'pending@example.test', role: 'member' }, { 'x-forwarded-for': `203.0.113.${i + 1}` });
-    assert.equal(response.status, 200, 'exhausting recovery must not consume an invitation attempt');
-  }
+  for (const suffix of ['global', 'socket:127.0.0.1']) assert.equal(bucket(app, `invite:${suffix}`), undefined, 'exhausting recovery touches no invitation bucket');
+  // 59 earlier invitation attempts in both invite buckets: the 60th passes, the 61st is refused.
+  prime(app, 'invite:global', 59);
+  prime(app, 'invite:socket:127.0.0.1', 59);
+  const accepted = await admin.postJson('/api/admin/users/invite', { email: 'pending@example.test', role: 'member' }, { 'x-forwarded-for': '203.0.113.1' });
+  assert.equal(accepted.status, 200, 'exhausting recovery must not consume an invitation attempt');
   limited(await admin.postJson('/api/admin/users/invite', { email: 'pending@example.test', role: 'member' }, { 'x-forwarded-for': '198.51.100.200' }));
   for (const kind of ['recover', 'invite']) {
     for (const suffix of ['global', 'socket:127.0.0.1']) {
-      const row = app.platform.prepare('SELECT window_start, expires_at, attempts FROM auth_rate_limits WHERE key_hash = ?').get(digest(`${kind}:${suffix}`));
+      const row = bucket(app, `${kind}:${suffix}`);
       assert.ok(row, `${kind}:${suffix} has an independent bucket`);
       assert.equal(row.window_start, START);
       assert.equal(row.expires_at, START + RECENT);
@@ -335,17 +347,48 @@ test('forged forwarded clients share the default recovery quota while invitation
 test('trusted loopback honors forwarded clients while recovery and invitation global limits stay at 120', async t => {
   const app = await fixture(t, { trustedProxies: '127.0.0.0/8,::1/128' });
   const admin = await app.client('admin@example.test', 'admin');
-  for (const kind of ['recover', 'invite']) {
-    const send = (i, client) => kind === 'recover'
-      ? app.post('/api/auth/recover', { email: `absent-${i}@example.test` }, { 'x-forwarded-for': `198.51.100.99, ${client}` })
-      : admin.postJson('/api/admin/users/invite', { email: 'pending@example.test', role: 'member' }, { 'x-forwarded-for': `198.51.100.99, ${client}` });
-    for (let i = 0; i < 60; i++) assert.equal((await send(i, '203.0.113.1')).status, 200);
-    limited(await send(60, '203.0.113.1'));
-    for (let i = 61; i < 120; i++) assert.equal((await send(i, '203.0.113.2')).status, 200, 'a second forwarded client gets its own bucket');
-    limited(await send(120, '203.0.113.3'));
-    const global = app.platform.prepare('SELECT attempts FROM auth_rate_limits WHERE key_hash = ?').get(digest(`${kind}:global`));
-    assert.equal(global.attempts, 121);
-  }
+  const recover = (i, client) => app.post('/api/auth/recover', { email: `absent-${i}@example.test` }, { 'x-forwarded-for': `198.51.100.99, ${client}` });
+  for (let i = 0; i < 60; i++) assert.equal((await recover(i, '203.0.113.1')).status, 200);
+  limited(await recover(60, '203.0.113.1'));
+  for (let i = 61; i < 120; i++) assert.equal((await recover(i, '203.0.113.2')).status, 200, 'a second forwarded client gets its own bucket');
+  limited(await recover(120, '203.0.113.3'));
+  assert.equal(bucket(app, 'recover:global').attempts, 121);
+
+  const invite = client => admin.postJson('/api/admin/users/invite', { email: 'pending@example.test', role: 'member' }, { 'x-forwarded-for': `198.51.100.99, ${client}` });
+  prime(app, 'invite:global', 59);
+  prime(app, 'invite:socket:203.0.113.1', 59);
+  assert.equal((await invite('203.0.113.1')).status, 200, 'the 60th attempt from one forwarded client passes');
+  limited(await invite('203.0.113.1'));
+  assert.equal(bucket(app, 'invite:socket:203.0.113.1').attempts, 61);
+  assert.equal((await invite('203.0.113.2')).status, 200, 'a second forwarded client gets its own bucket');
+  assert.equal(bucket(app, 'invite:socket:203.0.113.2').attempts, 1);
+  assert.equal(bucket(app, 'invite:socket:127.0.0.1'), undefined, 'the trusted proxy socket is not the client');
+  prime(app, 'invite:global', 119);
+  assert.equal((await invite('203.0.113.3')).status, 200, 'the 120th attempt overall passes');
+  limited(await invite('203.0.113.4'));
+  assert.equal(bucket(app, 'invite:global').attempts, 121);
+});
+
+// Spec cap: 20 invitation emails per household per hour; every send counts, reissues included.
+test('a household gets 20 invitation emails per hour and the 21st is refused with Retry-After', async t => {
+  const app = await fixture(t);
+  const admin = await app.client('admin@example.test', 'admin');
+  app.advance(HOUR + 1); // the admin fixture's own invitation falls outside the hour
+  const invite = email => admin.postJson('/api/admin/users/invite', { email, role: 'member' });
+  for (let i = 1; i <= 19; i++) assert.equal((await invite(`cap-${i}@example.test`)).status, 200, `invitation ${i} is accepted`);
+  const twentieth = await invite('cap-1@example.test');
+  assert.equal(twentieth.status, 200, 'the 20th send, a reissue, is accepted');
+  assert.equal(app.sent.length, 20);
+  const refused = await invite('cap-21@example.test');
+  assert.equal(refused.status, 429);
+  assert.equal(typeof refused.json.error, 'string');
+  assert.ok(Number(refused.headers['retry-after']) > 0);
+  assert.match(refused.headers['cache-control'], /no-store/);
+  assert.equal(app.sent.length, 20, 'no email for the refused invitation');
+  assert.equal(app.store.findUser('cap-21@example.test'), null, 'the refused invitation creates nothing');
+  assert.equal((await invite('cap-2@example.test')).status, 429, 'a reissue is refused too');
+  app.advance(HOUR + 1);
+  assert.equal((await invite('cap-21@example.test')).status, 200, 'the cap resets after an hour');
 });
 
 test('trusted clients cannot split the per-email recovery limit or shorten its twenty-minute window', async t => {
