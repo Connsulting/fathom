@@ -18,6 +18,7 @@ import * as switcher from './screens/switcher.js';
 import * as simplefin from './screens/simplefin.js';
 import * as recAnswers from './screens/rec-answers.js';
 import * as accountScreen from './screens/account.js';
+import { composeLabel } from '/shared/account-label.mjs';
 import * as askPanel from './screens/ask-panel.js';
 import { addButtonHtml } from './screens/ask-context.js';
 import * as pnlScreen from './screens/pnl.js';
@@ -1810,7 +1811,7 @@ function pOnboarding(step) {
       ${ingest.addFiles('onboarding')}
       <div class="h-ob-conn"><div class="h-sub-h">Mirror your accounts</div><p class="h-mute sm">Read-only. ${esc(api.s.meta.product || 'Fathom')} sees balances and transactions so the brief stays current. It cannot move money, place trades or change anything.</p>
       ${simplefin.block()}
-      ${imported.length ? `<div class="h-sub-h">Already in Fathom, not mirrored</div><ul class="h-insts">${imported.map((a) => `<li><div><b>${lbl(a, a.name)}</b><span>${lbl(a, a.inst || '')}${a.mask ? `, ending ${esc(a.mask)}` : ''}</span></div></li>`).join('')}</ul>` : ''}</div>
+      ${imported.length ? `<div class="h-sub-h">Already in Fathom, not mirrored</div><ul class="h-insts">${imported.map((a) => `<li><div><b>${lbl(a, a.name)}</b><span>${lbl(a, a.inst || '')}</span></div></li>`).join('')}</ul>` : ''}</div>
       <div class="h-ob-nav">${back}${go}</div>`;
   } else if (s === 4) {
     body = heardHtml(back, next);
@@ -2215,7 +2216,7 @@ function closeRec() {
 function beginAccountRename(id) {
   const a = arr(api.s.accounts).find((x) => x.id === id);
   if (!a) return;
-  ui.accEdit = { id, value: a.displayName ? a.displayName : (a.imported === false ? api.txt(String(a.name ?? '')) : String(a.name ?? '')) };
+  ui.accEdit = { id, value: a.displayName ? a.displayName : (a.imported === false ? api.txt(String(a.baseName ?? a.name ?? '')) : String(a.baseName ?? a.name ?? '')) };
   draw();
   const el = root?.querySelector(`[data-acc-name="${CSS.escape(id)}"]`);
   if (el) { el.focus(); el.select(); }
@@ -2529,7 +2530,7 @@ function trapTab(e) {
 const SCREENS = [askPanel, switcher, chatScreen, packsScreen, engineScreen, advisorScreen, yearendScreen, simplefin, recAnswers, accountScreen, trendScreen, pnlScreen, tour];
 const KIT = {
   get api() { return api; }, get root() { return root; }, get ui() { return ui; }, get keys() { return keys; }, get ingest() { return ingest; },
-  draw: () => draw(),
+  draw: () => draw(), composeLabel,
   esc, T, X, arr, plural, icon, btn, goA, href, shell, section, pageHead, thread, composer, figHtml, recById, snoozeLabel,
   openRec, openAccount, closeRec, decisionList, statusText, routeNow, visibleRecs, spark, niceTicks,
   sfStatus: () => simplefin.status(),

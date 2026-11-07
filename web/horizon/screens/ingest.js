@@ -6,15 +6,27 @@
 
 import { createSwipe } from './swipe.js';
 
+// The household's fixed category order for a category card. Number key N names the same category
+// on every card; the best guess is highlighted where it already sits, never moved up. A category
+// outside this list (a guess the household has not used yet) goes after it.
+export const CATEGORY_ORDER = ['Shopping', 'Business', 'Income', 'Internal Transfers', 'Taxes', 'Investment', 'Ignore'];
+const categoryRank = (id) => {
+  const at = CATEGORY_ORDER.indexOf(String(id));
+  return at < 0 ? CATEGORY_ORDER.length : at;
+};
 export function visibleOptions(item) {
   const options = Array.isArray(item?.options) ? item.options : [];
-  return item?.kind === 'transaction_category' ? options.filter(o => !String(o.id).startsWith('always:')) : options;
+  if (item?.kind !== 'transaction_category') return options;
+  return options.filter(o => !String(o.id).startsWith('always:')).sort((a, b) => categoryRank(a.id) - categoryRank(b.id));
 }
 export function categoryAnswerOption(item, option, always) {
   if (!visibleOptions(item).some(o => o.id === option)) return null;
   const id = item.kind === 'transaction_category' && always ? 'always:' + option : option;
   return item.options.some(o => o.id === id) ? id : null;
 }
+
+// Decided for you shows this many rows until the person asks for all of them.
+export const DECIDED_VISIBLE = 5;
 
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -180,7 +192,7 @@ const cadenceText = (c) => (c && typeof c === 'object' ? String(c.label || '') :
 export function ingestScreens(h) {
   const { api, shell, section, pageHead, btn, icon, esc, draw, getUi, addBtn } = h;
   // Module state survives scenario re-renders (the design redraws the whole page on every change).
-  const st = { busy: 0, results: null, retrying: {}, open: {}, rowOpen: {}, undoing: {}, decidedFinal: {}, deck: freshDeck(), origin: null };
+  const st = { busy: 0, results: null, retrying: {}, open: {}, rowOpen: {}, undoing: {}, decidedFinal: {}, deck: freshDeck(), origin: null, decidedAll: false, bankOpen: {} };
   const ing = () => api.ingest();
 
   function chip(state) {
@@ -392,6 +404,22 @@ export function ingestScreens(h) {
   const none = '<span class="h-cf-none">Not given</span>';
   const guessTag = '<span class="h-cf-best">Best guess</span>';
   const guessLine = (g) => `Best guess: <b>${esc(g.label)}</b>.${g.evidence ? ` <span class="h-cf-why">${esc(g.evidence)}</span>` : ''}`;
+  const CAT_LABEL = "Fathom's categorization";
+  const categorizationLine = (g) => `<span class="h-cf-lab">${CAT_LABEL}</span> <b>${esc(g.label)}</b>${g.evidence ? ` <span class="h-cf-why">${esc(g.evidence)}</span>` : ''}`;
+
+  // The transaction a category card asks about: the clean merchant name, signed amount, short date,
+  // account and current category, with the bank's own text behind a toggle.
+  function txnHead(it, id) {
+    const t = it.txn;
+    if (!t) return '';
+    const amount = cash(t.amount);
+    const now = it.context?.category ? `Currently ${it.context.category}` : '';
+    const meta = [dateText(t.date), t.account, now].filter(Boolean).map(esc).join('<span class="h-dotsep"></span>');
+    const bank = t.raw
+      ? `<details class="h-cf-bank" data-bank-details="${esc(id)}"${st.bankOpen[id] ? ' open' : ''}><summary>${icon('chev')}<span>Bank details</span></summary><p>${esc(t.raw)}</p></details>`
+      : '';
+    return `<div class="h-cf-txn"><div class="h-cf-txn-h"><h3 class="h-cf-merch">${esc(t.name || t.raw)}</h3>${amount ? `<span class="h-cf-amt">${esc(amount)}</span>` : ''}</div>${meta ? `<p class="h-cf-txn-m">${meta}</p>` : ''}${bank}</div>`;
+  }
 
   function rangeText(from, to) {
     const a = dateText(from) || (from ? String(from) : '');
@@ -573,13 +601,14 @@ export function ingestScreens(h) {
     const take = g && !fin && String(chosen ?? '') !== g.option
       ? btn('Use best guess', `data-take-guess="${esc(id)}"${busy ? ' disabled' : ''}`, 'pri h-cf-take')
       : '';
-    const guess = g ? `<div class="h-cf-gl"><p class="h-cf-guess">${guessLine(g)}</p>${take}</div>` : '';
+    const cat = !!it.txn;
+    const guess = g ? `<div class="h-cf-gl"><p class="h-cf-guess">${cat ? categorizationLine(g) : guessLine(g)}</p>${take}</div>` : '';
     const state = fin
       ? `<p class="h-cf-final" role="status">${esc(fin)}</p>`
       : (dk.answers[id] != null && !busy ? '<p class="h-deck-state">Answered. Pick another option to change it.</p>' : '');
     return `<article class="h-deck-card cur${fin ? ' final' : ''}" data-item="${esc(id)}">
       <div class="h-cf-k">${esc(KIND[it.kind] || 'Question')}${name ? `<span>${esc(name)}</span>` : ''}${addBtn('confirm', id, KIND[it.kind] || 'Question')}</div>
-      <p class="h-cf-q">${esc(it.question)}</p>${detailHtml(it)}${guess}${it.kind === 'transaction_category' && it.context?.merchant ? `<label class="h-cf-sub"><input type="checkbox" data-category-always="${esc(id)}"${dk.categoryAlways?.[id] ? ' checked' : ''}${busy || fin ? ' disabled' : ''}> Always for this merchant</label>` : ''}<div class="h-deck-opts${short ? ' short' : ''}">${opts}</div>${state}</article>`;
+      ${cat ? txnHead(it, id) : `<p class="h-cf-q">${esc(it.question)}</p>${detailHtml(it)}`}${guess}${it.kind === 'transaction_category' && it.context?.merchant ? `<label class="h-cf-sub"><input type="checkbox" data-category-always="${esc(id)}"${dk.categoryAlways?.[id] ? ' checked' : ''}${busy || fin ? ' disabled' : ''}> Always for this merchant</label>` : ''}<div class="h-deck-opts${short ? ' short' : ''}">${opts}</div>${state}</article>`;
   }
 
   function rowHtml(dk, key, id) {
@@ -601,7 +630,7 @@ export function ingestScreens(h) {
     }).join('');
     const others = arr(d.sameName).length;
     const flag = others ? `<span class="h-cf-flag">Same name as ${plural(others, 'other account')}</span>` : '';
-    const where = v ? [v.institution ? esc(v.institution) : '', v.mask ? `ending ${esc(v.mask)}` : ''].filter(Boolean).join(', ') : '';
+    const where = v && v.institution ? esc(v.institution) : '';
     const acct = `<td data-col="account"><b>${esc(v ? (v.label || v.name || 'Unnamed account') : it.question)}</b>${addBtn('confirm', id, v ? (v.label || v.name || 'Unnamed account') : (KIND[it.kind] || 'Question'))}${flag}${where ? `<span>${where}</span>` : ''}</td>`;
     const holder = `<td data-col="holder" data-l="Holder">${v && v.holder ? esc(v.holder) : '<span class="h-cf-none">Not in the source</span>'}</td>`;
     const bal = `<td data-col="balance" data-l="Latest balance">${(v && balanceHtml(v.balance, true)) || '<span class="h-cf-none">No balance yet</span>'}</td>`;
@@ -644,21 +673,29 @@ export function ingestScreens(h) {
       .filter((x) => x.answer != null);
   }
 
+  function decidedRow(d) {
+    const id = String(d.id);
+    const t = d.txn;
+    const fin = d.final ? (FINAL_TEXT[d.final] || String(d.final)) : st.decidedFinal[id];
+    const ctl = fin
+      ? `<p class="h-decided-final">${esc(fin)}</p>`
+      : btn('Undo', `data-decided-undo="${esc(id)}"${st.undoing[id] ? ' disabled' : ''}`, 'ghost');
+    const ev = evidenceText(d.evidence);
+    const why = t ? `Fathom's categorization.${ev ? ` ${ev}` : ''}` : ev;
+    const amount = t ? cash(t.amount) : '';
+    const when = t ? dateText(t.date) : '';
+    const side = amount || when ? `<div class="h-decided-s">${amount ? `<span class="h-decided-amt">${esc(amount)}</span>` : ''}${when ? `<span>${esc(when)}</span>` : ''}</div>` : '';
+    return `<li data-decided="${esc(id)}"><div class="h-decided-b"><div class="h-decided-t"><span class="h-decided-n">${esc(t ? (t.name || t.raw) : (d.question || KIND[d.kind] || 'Question'))}</span><span class="h-decided-cat">${esc(d.answerLabel || d.answer || '')}</span></div>${why ? `<p class="h-decided-e">${esc(why)}</p>` : ''}</div>${side}${ctl}</li>`;
+  }
+
   function decidedSection() {
     const list = ing().decided;
     if (!list.length) return '';
-    const items = list.map((d) => {
-      const id = String(d.id);
-      const fin = d.final ? (FINAL_TEXT[d.final] || String(d.final)) : st.decidedFinal[id];
-      const ctl = fin
-        ? `<p class="h-decided-final">${esc(fin)}</p>`
-        : btn('Undo', `data-decided-undo="${esc(id)}"${st.undoing[id] ? ' disabled' : ''}`, 'ghost');
-      const ev = evidenceText(d.evidence);
-      return `<li data-decided="${esc(id)}"><div class="h-decided-b"><span class="h-decided-k">${esc(KIND[d.kind] || 'Question')}</span>
-        <p class="h-decided-q">${esc(d.question)}</p><p class="h-decided-a">Answer: <b>${esc(d.answerLabel || d.answer || '')}</b></p>${ev ? `<p class="h-decided-e">${esc(ev)}</p>` : ''}</div>${ctl}</li>`;
-    }).join('');
+    const more = list.length > DECIDED_VISIBLE;
+    const rows = (more && !st.decidedAll ? list.slice(0, DECIDED_VISIBLE) : list).map(decidedRow).join('');
+    const toggle = more ? `<p class="h-decided-more">${btn(st.decidedAll ? 'Show fewer' : `Show all ${list.length}`, 'data-decided-more="1"', 'ghost')}</p>` : '';
     const lede = '<p class="h-mute sm">Fathom answered these from your files and your own answers. Undo puts one back in the deck, and Fathom will not answer it again.</p>';
-    return section('Decided for you', `${lede}<ul class="h-decided-l">${items}</ul>`, plural(list.length, 'answer'), 'h-decided');
+    return section('Decided for you', `${lede}<ul class="h-decided-l">${rows}</ul>${toggle}`, plural(list.length, 'answer'), 'h-cf-decided');
   }
 
   // Items answered and items in all, across the deck's cards.
@@ -945,12 +982,13 @@ export function ingestScreens(h) {
   }
 
   function handleClick(e) {
-    const t = e.target.closest?.('[data-upload-open],[data-answer],[data-row-answer],[data-row-undo],[data-group-apply],[data-take-guess],[data-decided-undo],[data-deck],[data-deck-home],[data-retry],details[data-howto] > summary,details[data-row-detail] > summary');
+    const t = e.target.closest?.('[data-upload-open],[data-answer],[data-row-answer],[data-row-undo],[data-group-apply],[data-take-guess],[data-decided-undo],[data-decided-more],[data-deck],[data-deck-home],[data-retry],details[data-howto] > summary,details[data-row-detail] > summary,details[data-bank-details] > summary');
     if (!t) return false;
     if (t.tagName === 'SUMMARY') {
       // The native toggle runs; the open state is kept so a redraw does not close it.
       const d = t.parentElement;
       if (d.dataset.rowDetail) st.rowOpen[d.dataset.rowDetail] = !d.open;
+      else if (d.dataset.bankDetails) st.bankOpen[d.dataset.bankDetails] = !d.open;
       else st.open[d.dataset.howto] = !d.open;
       return true;
     }
@@ -985,6 +1023,11 @@ export function ingestScreens(h) {
     }
     if (d.decidedUndo) {
       undoDecided(d.decidedUndo);
+      return true;
+    }
+    if (d.decidedMore) {
+      st.decidedAll = !st.decidedAll;
+      draw();
       return true;
     }
     if (d.deckHome) {

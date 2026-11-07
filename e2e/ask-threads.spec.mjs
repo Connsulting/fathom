@@ -65,7 +65,7 @@ test('AC10 opening a fallback thread requests its one title repair and reload do
   try { store.prepare("UPDATE conversations SET title = '529 contributions.', title_source = 'auto' WHERE key = ?").run(thread.key); }
   finally { store.close(); }
   const titleCalls = () => {
-    const db = new DatabaseSync(STORE, { readOnly: true });
+    const db = new DatabaseSync(STORE(), { readOnly: true });
     try { return db.prepare("SELECT count(*) AS n FROM spend_ledger WHERE purpose = 'title'").get().n; }
     finally { db.close(); }
   };
@@ -89,7 +89,7 @@ test('AC10 creating a thread preserves its repair attempt for a later opening', 
   const reads = [];
   page.on('request', r => { if (r.method() === 'GET' && /\/api\/threads\/[a-f0-9]{12}$/.test(new URL(r.url()).pathname)) reads.push(r.url()); });
   const id = await askOnAsk(page, '529 contributions');
-  const db = new DatabaseSync(STORE, { readOnly: true });
+  const db = new DatabaseSync(STORE(), { readOnly: true });
   try {
     expect(db.prepare('SELECT value FROM settings WHERE key = ?').get(`ask.titleRetried.ask:${id}`)).toBeUndefined();
     expect(reads).toEqual([]);

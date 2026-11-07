@@ -2,7 +2,7 @@
 // dismisses through the rec action path), the check-in, the planner keeping vetoed and confirmed
 // recs across a rerun (and lifting a veto when the rec's inputs changed), the review packet
 // (every figure with provenance, all text escaped, stored encrypted and downloadable), the demo
-// seed writing the same tables, and the read-only advisor_status tool.
+// seed writing the same tables, and the read-only recommendations.advisor tool.
 
 import test, { after, describe } from 'node:test';
 import assert from 'node:assert/strict';
@@ -281,7 +281,7 @@ describe('upgrade from migration 010 (review fix)', () => {
   });
 });
 
-describe('demo seed and advisor_status', () => {
+describe('demo seed and recommendations.advisor', () => {
   test('the demo seeds the advisor tables and the scenario reads them', () => {
     const db = openMigrated(':memory:');
     seedDemo(db);
@@ -297,12 +297,12 @@ describe('demo seed and advisor_status', () => {
     db.close();
   });
 
-  test('advisor_status is a read tool that reports who reviewed what, when', async () => {
+  test('recommendations.advisor is a read tool that reports who reviewed what, when', async () => {
     const db = openMigrated(':memory:');
     seedDemo(db);
-    const tool = getTool('advisor_status');
-    assert.equal(tool.scope, 'read');
-    const out = await callTool('advisor_status', {}, { db, now: new Date('2026-11-05T12:00:00Z') });
+    const tool = getTool('recommendations');
+    assert.equal(tool.kind, 'read');
+    const out = await callTool('recommendations', { operation: 'advisor', }, { db, now: new Date('2026-11-05T12:00:00Z') });
     assert.equal(typeof out.advisor, 'string');
     assert.ok(!out.advisor.includes('{n:'), 'names resolved');
     assert.deepEqual(out.waiting.map(w => w.recId), ['deferral', 'dcfsa', 'backdoor', 'spouseentity', 'filingplan']);
@@ -311,9 +311,9 @@ describe('demo seed and advisor_status', () => {
     assert.match(veto.reviewedOn, /^\d{4}-\d{2}-\d{2}$/);
     assert.match(veto.sentOn, /^\d{4}-\d{2}-\d{2}$/);
     assert.deepEqual(out.nextCheckin, { date: '2026-12-10', time: '14:00', lengthMin: 30, label: 'Thu, Dec 10, 2026, 2:00 PM' });
-    const rec = await callTool('get_recommendation', { id: 'megabackdoor' }, { db, now: new Date('2026-11-05T12:00:00Z') });
+    const rec = await callTool('recommendations', { operation: 'detail',  id: 'megabackdoor' }, { db, now: new Date('2026-11-05T12:00:00Z') });
     assert.equal(rec.advisor.verdict, 'vetoed');
-    await assert.rejects(callTool('advisor_status', { extra: 1 }, { db }), /not a known argument/);
+    await assert.rejects(callTool('recommendations', { operation: 'advisor',  extra: 1 }, { db }), /not a known argument/);
     db.close();
   });
 });
