@@ -452,7 +452,7 @@ test.describe('passkey accounts through the browser', () => {
       await signin(returning, 200, '#/plan');
       await expect(returning.page).toHaveURL(/#\/plan$/);
       const raw = (await returning.context.cookies(base)).find((item) => item.name === '__Host-fathom-session').value;
-      const db = openDb(join(dataDir, 'fathom.sqlite'));
+      const db = openDb(join(dataDir, 'platform.sqlite'));
       try { db.prepare('DELETE FROM auth_sessions WHERE hash = ?').run(digest(raw)); }
       finally { db.close(); }
       await returning.page.evaluate(() => window.Fathom.api.goalCreate({ name: 'Synthetic' })).catch(() => {});
