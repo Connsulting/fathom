@@ -1,5 +1,5 @@
-/* Horizon household trend: the one chart Money opens with (net worth over time, its parts toggled
-   on and off, range 3M / 1Y / All, hover or tap for the date and each part's value) and the
+/* Horizon household trend: the one chart Money opens with (net worth over time or one of its parts,
+   each on its own scale, range 3M / 1Y / All, hover or tap for the date and every part's value) and the
    compact per-group line on Accounts. Every number comes from the server's scenario.trend and its
    trend.* figures; this file only draws them. A span where any account's balance is carried
    forward (its data stopped) is dashed and shaded, and named under the chart. */
@@ -9,11 +9,11 @@ let H = null;
 export function bind(kit) { H = kit; }
 
 const RANGES = [['3M', 3], ['1Y', 12], ['All', null]];
-const S = { range: '1Y', on: new Set(['total']), idx: null };
+const S = { range: '1Y', sel: 'total', idx: null };
 // Geometry of the chart last drawn, for the pointer handler.
 let G = null;
 
-export function reset() { S.range = '1Y'; S.on = new Set(['total']); S.idx = null; G = null; }
+export function reset() { S.range = '1Y'; S.sel = 'total'; S.idx = null; G = null; }
 
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const dayLabel = (iso) => `${MON[Number(iso.slice(5, 7)) - 1]} ${Number(iso.slice(8, 10))}, ${iso.slice(0, 4)}`;
@@ -40,7 +40,9 @@ function view() {
   return { t, pts: t.points.slice(from) };
 }
 
-const lines = (t) => [{ id: 'total', label: 'Net worth' }, ...t.parts].filter((l) => S.on.has(l.id));
+const everyLine = (t) => [{ id: 'total', label: 'Net worth' }, ...t.parts];
+// The charted line: the chosen part, or net worth when that part is not in this store.
+const lines = (t) => { const all = everyLine(t); return [all.find((l) => l.id === S.sel) || all[0]]; };
 
 // Consecutive segments of one style become one polyline. A segment is dashed when its end point
 // has a carried balance in it.
@@ -58,10 +60,23 @@ function runs(pts, id, sx, sy, cls) {
   return out.map((r) => `<polyline class="${cls}${r.dashed ? ' carried' : ''}" points="${r.xy.join(' ')}"/>`).join('');
 }
 
+// Tick labels in thousands or millions with the fewest decimals that keep every tick distinct, so a
+// narrow range never reads $25K, $25K, $24K.
+function tickNames(ticks) {
+  const abs = Math.max(...ticks.map(Math.abs));
+  const [div, unit] = abs >= 1e6 ? [1e6, 'M'] : abs >= 1e3 ? [1e3, 'K'] : [1, ''];
+  let out = [];
+  for (let d = 0; d <= 3; d++) {
+    out = ticks.map((t) => `${t < 0 ? '-' : ''}$${(Math.abs(t) / div).toFixed(d).replace(/\.0+$/, '')}${unit}`);
+    if (new Set(out).size === out.length) break;
+  }
+  return out;
+}
+
 function chart(v) {
-  const { esc, api, niceTicks } = H;
+  const { esc, niceTicks } = H;
   const narrow = window.innerWidth < 700;
-  const W = narrow ? 360 : 760, Ht = narrow ? 230 : 300, L = narrow ? 44 : 58, R = 12, Tp = 12, B = 26;
+  const W = narrow ? 360 : 1000, Ht = narrow ? 230 : 320, L = narrow ? 44 : 62, R = 12, Tp = 12, B = 26;
   const ls = lines(v.t);
   const all = ls.flatMap((l) => v.pts.map((p) => valueOf(p, l.id))).filter(Number.isFinite);
   const yt = niceTicks(Math.min(...all), Math.max(...all), 4);
@@ -71,9 +86,10 @@ function chart(v) {
   const sy = (val) => Math.round((Tp + (1 - (val - y0) / ((y1 - y0) || 1)) * (Ht - Tp - B)) * 10) / 10;
   G = { W, L, R, n, sx, sy, ids: ls.map((l) => l.id) };
   let g = `<svg class="tr-svg" viewBox="0 0 ${W} ${Ht}" role="img" aria-label="${esc(`Net worth and parts, ${monthLabel(v.pts[0].date)} to ${monthLabel(v.pts.at(-1).date)}`)}">`;
-  yt.forEach((val) => {
+  const names = tickNames(yt);
+  yt.forEach((val, k) => {
     g += `<line class="tr-grid${val === 0 ? ' zero' : ''}" x1="${L}" x2="${W - R}" y1="${sy(val)}" y2="${sy(val)}"/>`;
-    g += `<text class="tr-t" x="${L - 7}" y="${sy(val) + 3.5}" text-anchor="end">${esc(api.money(val, { k: true }))}</text>`;
+    g += `<text class="tr-t" x="${L - 7}" y="${sy(val) + 3.5}" text-anchor="end">${esc(names[k])}</text>`;
   });
   const carriedFrom = v.pts.findIndex((p) => ls.some((l) => carriedOf(p, l.id) > 0));
   if (carriedFrom >= 0) {
@@ -101,16 +117,16 @@ function readout(v) {
   const { esc, api } = H;
   const i = clamp(S.idx ?? v.pts.length - 1, 0, v.pts.length - 1);
   const p = v.pts[i];
-  const ls = lines(v.t);
-  const rows = ls.map((l) => `<div class="tr-r"><i class="tr-sw tr-c-${esc(l.id)}"></i><span>${esc(l.label)}</span><b>${esc(api.money(valueOf(p, l.id), { sign: false }))}</b></div>`).join('');
-  const carried = Math.max(...ls.map((l) => carriedOf(p, l.id)));
+  const sel = lines(v.t)[0].id;
+  const rows = everyLine(v.t).map((l) => `<div class="tr-r${l.id === sel ? ' sel' : ''}"><i class="tr-sw tr-c-${esc(l.id)}"></i><span>${esc(l.label)}</span><b>${esc(api.money(valueOf(p, l.id), { sign: false }))}</b></div>`).join('');
+  const carried = p.carried.total;
   const note = carried > 0 ? `<p class="tr-rn">${carried} ${carried === 1 ? 'account is' : 'accounts are'} carried forward here</p>` : '';
   return `<time datetime="${esc(p.date)}">${esc(dayLabel(p.date))}</time>${rows}${note}`;
 }
 
 function partRow(v, id, label, figKey) {
   const { esc, figHtml } = H;
-  const on = S.on.has(id);
+  const on = lines(v.t)[0].id === id;
   return `<li class="tr-part" data-part="${esc(id)}"><button type="button" class="tr-tog${on ? ' on' : ''}" data-trend-part="${esc(id)}" aria-pressed="${on}"><i class="tr-sw tr-c-${esc(id)}"></i>${esc(label)}</button><b>${figKey ? figHtml(figKey, { k: true }) : ''}</b></li>`;
 }
 
@@ -134,7 +150,7 @@ export function render() {
     <div class="tr-rngs" role="group" aria-label="Range">${range}</div></div>
     <div class="tr-plot">${chart(v)}</div>${key}
     <div class="tr-read" data-trend-read aria-live="polite">${readout(v)}</div>
-    <ul class="tr-parts" aria-label="Parts of net worth">${parts}</ul>${notes}</div>`;
+    <ul class="tr-parts" aria-label="Show a part of net worth">${parts}</ul>${notes}</div>`;
   return section('Trend', body, 'Month-end balances, summed from your accounts', 'h-trend');
 }
 
@@ -206,9 +222,7 @@ export function onClick(e) {
   if (rng) { S.range = rng.getAttribute('data-trend-range'); S.idx = null; H.draw(); return true; }
   const part = e.target.closest?.('[data-trend-part]');
   if (part) {
-    const id = part.getAttribute('data-trend-part');
-    if (!S.on.has(id)) S.on.add(id);
-    else if (S.on.size > 1) S.on.delete(id);
+    S.sel = part.getAttribute('data-trend-part');
     H.draw();
     return true;
   }
