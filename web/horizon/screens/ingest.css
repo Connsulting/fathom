@@ -217,8 +217,8 @@
 .d-horizon .h-cf-lab { color: var(--tx2); }
 
 /* decided for you: one quiet row per decision */
-.d-horizon .h-decided { margin-top: 36px; }
-.d-horizon .h-decided > p { margin-bottom: 6px; }
+.d-horizon .h-cf-decided { margin-top: 36px; }
+.d-horizon .h-cf-decided > p { margin-bottom: 6px; }
 .d-horizon .h-decided-l li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 4px 18px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--line); }
 .d-horizon .h-decided-b { min-width: 0; }
 .d-horizon .h-decided-t { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; }

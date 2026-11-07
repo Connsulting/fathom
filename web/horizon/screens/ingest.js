@@ -695,7 +695,7 @@ export function ingestScreens(h) {
     const rows = (more && !st.decidedAll ? list.slice(0, DECIDED_VISIBLE) : list).map(decidedRow).join('');
     const toggle = more ? `<p class="h-decided-more">${btn(st.decidedAll ? 'Show fewer' : `Show all ${list.length}`, 'data-decided-more="1"', 'ghost')}</p>` : '';
     const lede = '<p class="h-mute sm">Fathom answered these from your files and your own answers. Undo puts one back in the deck, and Fathom will not answer it again.</p>';
-    return section('Decided for you', `${lede}<ul class="h-decided-l">${rows}</ul>${toggle}`, plural(list.length, 'answer'), 'h-decided');
+    return section('Decided for you', `${lede}<ul class="h-decided-l">${rows}</ul>${toggle}`, plural(list.length, 'answer'), 'h-cf-decided');
   }
 
   // Items answered and items in all, across the deck's cards.
