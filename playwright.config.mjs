@@ -31,6 +31,7 @@ function smokeStorageState(raw, baseURL) {
 }
 
 const CI = !!process.env.CI;
+const SINGLE_SERVER = process.env.E2E_SINGLE_SERVER === '1';
 const SMOKE_TARGET = process.env.FATHOM_SMOKE_TARGET === 'real' ? 'real' : 'demo';
 const BASE_URL = process.env.FATHOM_SMOKE_BASE_URL || process.env.BASE_URL || '';
 const STORAGE_STATE = smokeStorageState(process.env.FATHOM_SMOKE_STORAGE_STATE, BASE_URL);
@@ -76,6 +77,7 @@ export default defineConfig({
   metadata: { janBaseURL, ypBaseURL, ypDataDir, smokeTarget: SMOKE_TARGET },
   use: {
     baseURL,
+    launchOptions: { args: [`--explicitly-allowed-ports=${PORT}`] },
     ...(STORAGE_STATE ? { storageState: STORAGE_STATE } : {}),
     browserName: 'chromium',
     trace: 'retain-on-failure',
@@ -95,7 +97,7 @@ export default defineConfig({
   ],
   webServer: BASE_URL
     ? undefined
-    : [
+    : SINGLE_SERVER ? [demoServer(PORT, process.env.E2E_DATA || '.e2e-data')] : [
         demoServer(PORT, process.env.E2E_DATA || '.e2e-data'),
         demoServer(JAN_PORT, '.e2e-data-jan', { FATHOM_CLOCK: '2027-01-05' }),
         demoServer(YP_PORT, ypDataDirLocal, { E2E_EXTERNAL: '1' })
