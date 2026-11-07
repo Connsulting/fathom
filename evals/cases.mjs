@@ -15,8 +15,13 @@ export const caseSchema = {
   type: 'array', minItems: 1, items: { type: 'object', additionalProperties: false, required: ['id', 'family', 'turns'], properties: {
     id: { type: 'string', pattern: '^[a-z][a-z0-9-]+$' },
     family: { enum: ['spending', 'cash-flow', 'business', 'net-worth', 'retirement', 'taxes', 'goals', 'freshness', 'unavailable'] },
+    requires: { type: 'object', additionalProperties: false, properties: {
+      tools: { type: 'array', uniqueItems: true, items: { type: 'string', pattern: '^[a-z][a-z0-9_]+$' } },
+      capabilities: { type: 'array', uniqueItems: true, items: { enum: ['ownerStatements', 'definitions'] } },
+    } },
     expectedFail: { type: 'object', additionalProperties: false, required: ['missingTools'], properties: {
-      missingTools: { type: 'array', minItems: 1, uniqueItems: true, items: { type: 'string', pattern: '^[a-z][a-z0-9_]+$' } },
+      missingTools: { type: 'array', uniqueItems: true, items: { type: 'string', pattern: '^[a-z][a-z0-9_]+$' } },
+      missingCapabilities: { type: 'array', uniqueItems: true, items: { type: 'string', minLength: 1 } },
     } },
     turns: { type: 'array', minItems: 1, items: { type: 'object', additionalProperties: false,
       required: ['question', 'required', 'forbidden', 'expected', 'maxWords', 'rubric'], properties: {
@@ -24,7 +29,7 @@ export const caseSchema = {
         required: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['name', 'predicates'], properties: {
           name: { type: 'string', pattern: '^[a-z][a-z0-9_]+$' }, predicates: { type: 'array', items: predicate },
         } } },
-        forbidden: { const: ['unsourced-figure', 'self-computed-figure'] },
+        forbidden: { type: 'array', minItems: 2, maxItems: 3, uniqueItems: true, items: { enum: ['unsourced-figure', 'self-computed-figure', 'owner-assumption-not-in-messages'] } },
         expected: { type: 'array', items: expected }, maxWords: { type: 'integer', minimum: 1, maximum: 1000 },
         rubric: { type: 'string', minLength: 1 }, refusal: { type: 'boolean' },
       } } },
@@ -40,6 +45,8 @@ export function validateCases(cases) {
         if (p.op !== 'exists' && !Object.hasOwn(p, 'value')) throw new TypeError('Predicate needs a value');
         if (['gte', 'lte'].includes(p.op) && !Number.isFinite(p.value)) throw new TypeError('Numeric predicate needs a number');
       }
+      const forbidden = new Set(turn.forbidden);
+      if (!forbidden.has('unsourced-figure') || !forbidden.has('self-computed-figure')) throw new TypeError('Forbidden behavior is incomplete');
       for (const e of turn.expected) {
         if (e.kind === 'figure' && !e.key) throw new TypeError('Figure expectation needs a key');
         if (e.kind === 'transaction' && !e.category) throw new TypeError('Transaction expectation needs a category');
@@ -47,23 +54,48 @@ export function validateCases(cases) {
         if (e.kind === 'portfolio' && !e.rate) throw new TypeError('Portfolio expectation needs a rate');
       }
     }
-    for (const name of c.expectedFail?.missingTools ?? []) {
+    const req = caseRequirements(c);
+    for (const name of req.tools) {
+      if (name && !c.turns.some(t => t.required.some(r => r.name === name))) throw new TypeError('Required tool must be a required call');
+    }
+    const missingTools = c.expectedFail?.missingTools ?? [];
+    const missingCapabilities = c.expectedFail?.missingCapabilities ?? [];
+    if (c.expectedFail && !missingTools.length && !missingCapabilities.length) throw new TypeError('Expected fail needs a missing requirement');
+    for (const name of missingTools) {
       if (!c.turns.some(t => t.required.some(r => r.name === name))) throw new TypeError('Missing tool must be a required call');
     }
   }
   return true;
 }
-export async function loadCases(file = new URL('./catalog.json', import.meta.url)) {
+export function caseRequirements(c) {
+  const fromTurns = [...new Set(c.turns.flatMap(t => t.required.map(r => r.name)))];
+  return { tools: c.requires?.tools?.length ? c.requires.tools : fromTurns, capabilities: c.requires?.capabilities ?? [] };
+}
+export function applyAvailability(c, { hasTool, capabilities }) {
+  const req = caseRequirements(c);
+  const missingTools = req.tools.filter(name => !hasTool(name));
+  const missingCapabilities = req.capabilities.filter(name => !capabilities.includes(name));
+  const next = { ...c };
+  delete next.expectedFail;
+  if (missingTools.length || missingCapabilities.length) next.expectedFail = {
+    missingTools, ...(missingCapabilities.length ? { missingCapabilities } : {}),
+  };
+  return next;
+}
+export async function loadCases(file = new URL('./catalog.json', import.meta.url), availability = null) {
   const data = JSON.parse(await readFile(file, 'utf8'));
   if (data.version !== 1) throw new TypeError('Unsupported eval case version');
-  validateCases(data.cases);
-  return data.cases;
+  const { getTool, CAPABILITIES } = availability ? { getTool: null, CAPABILITIES: null } : await import('../src/tools/index.mjs');
+  const probe = availability ?? { hasTool: name => Boolean(getTool(name)), capabilities: CAPABILITIES };
+  const cases = data.cases.map(c => applyAvailability(c, probe));
+  validateCases(cases);
+  return cases;
 }
 
 const round = n => Math.round(n * 100) / 100;
 function annualSpending(db) {
   const rows = db.prepare(`SELECT t.date,t.amount,t.category,t.description FROM transactions t
-    JOIN accounts a ON a.id=t.account_id WHERE a.kind='checking' ORDER BY t.date`).all();
+    JOIN accounts a ON a.id=t.account_id WHERE a.kind IN ('checking','credit','card') ORDER BY t.date`).all();
   const meta = JSON.parse(db.prepare("SELECT value FROM content WHERE key='meta'").get().value);
   const through = isoFromLabel(meta.dataThrough);
   if (!through) throw new TypeError('No spending coverage date');

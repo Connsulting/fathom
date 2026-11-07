@@ -9,7 +9,7 @@ import { estimateUnknownCost, DEFAULT_MODEL } from '../src/engine/pricing.mjs';
 import { createLiveAnswerer } from '../src/api/answerer.mjs';
 import { threadCreate, ask } from '../src/api/handlers.mjs';
 import { createLivePacks } from '../src/packs/live.mjs';
-import { tools } from '../src/tools/index.mjs';
+import { tools, CAPABILITIES } from '../src/tools/index.mjs';
 import { expectedFigures, validateCases } from './cases.mjs';
 import { gradeRequiredTools, gradeFigures, gradeLength, gradeExpected, evidenceNumbers } from './graders.mjs';
 
@@ -123,8 +123,9 @@ export async function runCases({ cases, live = false, maxUsd = 100, outDir, scri
     const answerer = createLiveAnswerer({ engine, packs });
     for (const c of cases) {
       missing = (c.expectedFail?.missingTools ?? []).filter(name => !tools.some(t => t.name === name));
+      const missingCapabilities = (c.expectedFail?.missingCapabilities ?? []).filter(name => !CAPABILITIES.includes(name));
       const beforeCost = ledger.costUsd;
-      const result = { id: c.id, family: c.family, status: 'pass', missingTools: missing, turns: [] };
+      const result = { id: c.id, family: c.family, status: 'pass', missingTools: missing, missingCapabilities, turns: [] };
       let key;
       for (turn of c.turns) {
         attempts = []; requestLengths = [];
@@ -146,7 +147,7 @@ export async function runCases({ cases, live = false, maxUsd = 100, outDir, scri
         const existingToolsOk = required.checks.filter(r => !missing.includes(r.name)).every(r => r.ok);
         const safe = numeric.ok && length.ok && refusal && gradedAttempts.every(a => a.figures.ok && a.length.ok && !a.error);
         const ok = safe && required.ok && expectedGrade.ok && !response.message?.notice;
-        const turnMissing = turn.required.some(r => missing.includes(r.name));
+        const turnMissing = missingCapabilities.length > 0 || turn.required.some(r => missing.includes(r.name));
         const gapOnly = turnMissing && safe && existingToolsOk && !response.message?.notice;
         result.turns.push({ question: turn.question, rubric: turn.rubric, delivered, tools: calls, required,
           figures: numeric, expected: expectedGrade, length, refusal, attempts: gradedAttempts,
