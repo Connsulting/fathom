@@ -4,9 +4,8 @@
 
 import { HttpError } from './http.mjs';
 import { scenarioOf } from './handlers.mjs';
-import { getSetting } from '../store/db.mjs';
 import { resolveClock } from '../scenario/build.mjs';
-import { loadDataKey, VaultError } from '../ingest/vault.mjs';
+import { openVault, VaultError } from '../ingest/vault.mjs';
 import { taxYearFor, yearendChecklist, setMark } from '../yearend/expected.mjs';
 import { buildPacket, streamPacket } from '../yearend/packet.mjs';
 
@@ -34,18 +33,20 @@ export function markItem(ctx) {
   return { scenario: scenarioOf(ctx) };
 }
 
-// GET /api/yearend/packet?year=YYYY: build and stream the accountant packet zip.
+// GET /api/yearend/packet?year=YYYY: build and stream the accountant packet zip. The household
+// vault reads the uploads; its intermediates live under <root>/work and are removed when the
+// response ends, fails or the client goes away. A vault refusal is 409 naming
+// FATHOM_PLATFORM_KEY_FILE.
 export async function downloadPacket(ctx) {
   if (ctx.req.method !== 'GET') throw new HttpError(405, 'method not allowed', { Allow: 'GET' });
   const q = new URL(ctx.req.url || '/', 'http://x').searchParams;
   const { year, clock } = yearOf(ctx, q.get('year'));
-  let key;
+  let packet;
   try {
-    key = await loadDataKey({ dataDir: ctx.config.dataDir, keyFile: ctx.config.dataKeyFile, mode: getSetting(ctx.db, 'mode', null) === 'demo' ? 'demo' : 'real' });
+    packet = await buildPacket(ctx.db, { year, clock, vault: await openVault(ctx.household) });
   } catch (e) {
     if (e instanceof VaultError) throw new HttpError(409, e.message);
     throw e;
   }
-  const packet = await buildPacket(ctx.db, { year, clock, dataDir: ctx.config.dataDir, key });
   await streamPacket(ctx.res, packet);
 }

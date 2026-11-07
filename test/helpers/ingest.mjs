@@ -1,10 +1,10 @@
 // Shared helpers for the ingest tests: synthetic files, temp real stores, and scripted engines.
 // Every value here is synthetic. Source modules are imported lazily through src().
 
-import { readFileSync, writeFileSync, rmSync } from 'node:fs';
-import { randomBytes, createHash } from 'node:crypto';
+import { readFileSync, rmSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
-import { ROOT, src, tempDir, tempInstance } from './server.mjs';
+import { ROOT, src, tempInstance } from './server.mjs';
 import { writeXlsx } from './xlsx.mjs';
 
 export const NOW = '2032-03-10T12:00:00.000Z';
@@ -151,28 +151,26 @@ export function paystubText({ payDate = '2032-03-15', employer = 'Example Employ
   ].join('\n');
 }
 
-// A temp migrated store in real mode, with a data key from vault.loadDataKey and a config shaped
-// like loadConfig() output. Returns { db, dataDir, config, key, keyFile, opts(engine), close() }.
+// A temp real instance (createInstance layout: the store under households/<id>/, its data key
+// wrapped under the synthetic platform key of secretsFor(dataDir)), a config shaped like
+// loadConfig() output and the household context ingest and the vault run in.
+// Returns { db, platform, householdId, dataDir, root, file, config, household, opts(engine), close() }.
 export async function realStore({ engine = 'off' } = {}) {
   const { setSetting } = await src('src/store/db.mjs');
-  const { loadDataKey } = await src('src/ingest/vault.mjs');
-  // A real instance: the store plus its synthetic platform.sqlite (no accounts yet).
   const store = await tempInstance({ mode: 'real', init: db => setSetting(db, 'mode', 'real') });
-  const keyDir = await tempDir('fathom-key-');
-  const keyFile = join(keyDir, 'data.key');
-  writeFileSync(keyFile, randomBytes(32), { mode: 0o600 });
-  const config = { dataDir: store.dataDir, dataKeyFile: keyFile, engine, clock: null, demo: false, port: 0, host: '127.0.0.1', claudeCredentialFile: null, emailTransport: 'dev' };
-  const key = await loadDataKey({ dataDir: store.dataDir, keyFile, mode: 'real' });
+  const config = {
+    dataDir: store.dataDir, platformKeyFile: store.keys.platformKeyFile, mcpSecretFile: store.keys.mcpSecretFile,
+    engine, clock: null, demo: false, port: 0, host: '127.0.0.1', claudeCredentialFile: null, emailTransport: 'dev',
+  };
+  const household = await store.household(config);
   return {
     ...store,
     config,
-    key,
-    keyFile,
-    opts: (eng, extra = {}) => ({ engine: eng, config, now: NOW, key, ...extra }),
+    household,
+    opts: (eng, extra = {}) => ({ engine: eng, config, now: NOW, household, ...extra }),
     close() {
       store.close();
       rmSync(store.dataDir, { recursive: true, force: true });
-      rmSync(keyDir, { recursive: true, force: true });
     },
   };
 }

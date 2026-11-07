@@ -2,7 +2,8 @@ import { listPreferences } from '../actions/preferences.mjs';
 // The live answerer: every Ask thread (including one asked from a rec), pack follow-up and What if goes through the
 // runtime engine (live or fake), then through grounding and escaping before it is stored.
 //
-// createLiveAnswerer({ engine, packs }) (packs: the live pack view, src/packs/live.mjs) ->
+// createLiveAnswerer({ engine, packs, root }) (one per household: packs is its live pack view,
+// src/packs/live.mjs, and root its household root, which every tool call gets as ctx.dataDir) ->
 //   answer({ db, key, questionId?, text?, clock?, refs? }) -> { paragraphs, refs, notice?, provenance? } | null
 //   whatIf({ db, packId, clock? })                  -> { paragraphs, refs, notice?, provenance? }
 // paragraphs are paragraph inner HTML (the handler wraps each in <p>); null means questionId
@@ -700,8 +701,11 @@ export function whatIfOwnerText(def) {
   return typeof def.manifest === 'string' ? escapeUserText(prompt) : prompt;
 }
 
-export function createLiveAnswerer({ engine, packs } = {}) {
+export function createLiveAnswerer({ engine, packs, root } = {}) {
   if (!engine || typeof engine.call !== 'function') throw new TypeError('createLiveAnswerer needs an engine');
+  if (typeof root !== 'string' || !root) throw new TypeError('createLiveAnswerer needs the household root');
+  // The tool context of every call this answerer makes: its household's db and root.
+  const toolCtx = (db, now) => ({ db, now, dataDir: root });
 
   // One grounded model answer: call, ground, regenerate once with a corrective turn when most
   // figures are unchecked (needsRevision), render.
@@ -712,7 +716,7 @@ export function createLiveAnswerer({ engine, packs } = {}) {
     const work = workList();
     stream.progress(PROGRESS_START);
     work.step(PROGRESS_START);
-    const summary = await callTool('household_summary', {}, { db, now });
+    const summary = await callTool('household_summary', {}, toolCtx(db, now));
     const active = activeManifestPacks(db, packs);
     const packIds = active.map(a => a.pack.id).sort();
     const packContextText = packContext(active.map(({ pack }) => ({ pack, status: 'active' })));
@@ -721,7 +725,7 @@ export function createLiveAnswerer({ engine, packs } = {}) {
     const offered = REGISTRY.filter(t => !t.mcpOnly && (t.scope === 'read' || actionContext?.actorId));
     const fake = engine.mode === 'fake' ? fakeAnswerScript({ scenario, summary, propose: actions, ...fakeArgs }) : undefined;
     const request = { purpose: 'chat', system: prompt.system, systemDynamic: prompt.systemDynamic, messages: prompt.messages,
-      tools: offered, toolContext: { ...actionContext, db, now }, maxTokens: MAX_TOKENS, ...(fake ? { fake } : {}),
+      tools: offered, toolContext: { ...actionContext, ...toolCtx(db, now) }, maxTokens: MAX_TOKENS, ...(fake ? { fake } : {}),
       ...(stream.engineEvent ? { onEvent: stream.engineEvent } : {}) };
 
     // groundAnswer sanitizes each datum (and context.entries bodies lose their metadata lines there).
@@ -737,7 +741,7 @@ export function createLiveAnswerer({ engine, packs } = {}) {
     const labelsFor = async toolResults => {
       if (accountLabels || !toolResults.some(r => r && !r.isError && r.name === 'query_transactions')) return accountLabels;
       try {
-        accountLabels = new Map((await callTool('list_accounts', {}, { db, now })).map(a => [a.id, a.name]));
+        accountLabels = new Map((await callTool('list_accounts', {}, toolCtx(db, now))).map(a => [a.id, a.name]));
       } catch { accountLabels = new Map(); }
       return accountLabels;
     };
@@ -839,7 +843,7 @@ export function createLiveAnswerer({ engine, packs } = {}) {
       const rec = recForKey(scenario, key);
       let context = null;
       if (rec) {
-        context = { recommendation: await callTool('get_recommendation', { id: rec.id }, { db, now }) };
+        context = { recommendation: await callTool('get_recommendation', { id: rec.id }, toolCtx(db, now)) };
         baseRefs = [...baseRefs, rec.id];
       } else if (key.startsWith('pack:')) {
         context = packConversationContext(db, packs, key.slice(5)).context;

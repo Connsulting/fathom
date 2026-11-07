@@ -425,7 +425,8 @@ describe('through ingestFile', () => {
 
   test('R6: an employer named like a stored P&L entity is the household business, with no question', () => withStore(async (s) => {
     await P.ingestFile(s.db, northwindFile(), s.opts(await offEngine()));
-    const before = count(s.db, 'packs_state');
+    const packState = () => all(s.db, 'SELECT id, def, updated_at FROM packs_state ORDER BY id');
+    const before = packState();
     const r = await P.ingestFile(s.db, paystubFile({ employer: 'Northwind Design' }), s.opts(await fakeEngine(paystubResponses({ ...PAYSTUB, employerName: 'Northwind Design' }))));
     assert.equal(r.status, 'imported');
     assert.equal(items(s.db, 'employer_relation').length, 0);
@@ -433,7 +434,7 @@ describe('through ingestFile', () => {
     assert.equal(f['income.sCorp'], true);
     assert.ok(!('income.w2' in f));
     assert.equal(one(s.db, "SELECT confirmed FROM facts WHERE key = 'income.sCorp'").confirmed, 0);
-    assert.ok(count(s.db, 'packs_state') > before, 'pack state refreshed after facts changed');
+    assert.notDeepEqual(packState(), before, 'pack state refreshed after facts changed');
   }));
 
   test('R8: a PDF statement imports a balance and positions and a statement source dated periodEnd', () => withStore(async (s) => {

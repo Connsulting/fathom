@@ -58,9 +58,17 @@ async function withStore(fn) {
   const s = await realStore();
   try { return await fn(s); } finally { s.close(); }
 }
+// Building a store's household context refreshes its pack state stamped with the wall clock (as a
+// server start does); two stores built moments apart are normalized to one setup time before the
+// test acts, so the comparisons see only what the test's answers wrote.
+async function pairedStore() {
+  const s = await realStore();
+  s.db.prepare('UPDATE packs_state SET updated_at = ?').run(SETUP_AT);
+  return s;
+}
 async function withTwoStores(fn) {
-  const x = await realStore();
-  const y = await realStore();
+  const x = await pairedStore();
+  const y = await pairedStore();
   try { return await fn(x, y); } finally { x.close(); y.close(); }
 }
 
@@ -187,7 +195,7 @@ const CASES = {
     setup: async (s) => {
       const SF = await src('src/ingest/simplefin.mjs');
       await imported(s, aggregatorFile('other.csv', [{ date: '2032-01-05', amount: '5.00', inst: 'Other bank', account: 'Joint checking', number: '', description: 'Old' }]));
-      const o = { config: s.config, key: s.key, now: SETUP_AT, clock: SETUP_AT.slice(0, 10), fetch: SF.createFakeSimplefin({ today: () => SETUP_AT.slice(0, 10) }) };
+      const o = { config: s.config, household: s.household, now: SETUP_AT, clock: SETUP_AT.slice(0, 10), fetch: SF.createFakeSimplefin({ today: () => SETUP_AT.slice(0, 10) }) };
       await SF.connectSimplefin(s.db, SF.fakeToken(), o);
       await SF.syncSimplefin(s.db, o);
       return firstPending(s.db, 'account_match');

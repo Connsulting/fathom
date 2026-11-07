@@ -1,6 +1,6 @@
-// Migration-only conversion of one household's legacy vault into an FTHM2 bundle (MT-02). Offline
-// tooling for the MT-03 cutover; nothing imports it yet. This is the only reader of the legacy
-// FTHM1 blobs and the fixed-AAD SimpleFIN secret outside the running server.
+// Migration-only conversion of one household's legacy vault into an FTHM2 bundle (MT-02), used by
+// the MT-03 tenancy migration (src/platform/migrate-tenancy.mjs). With that migration it is the only
+// reader of the legacy FTHM1 blobs and the fixed-AAD SimpleFIN secret (src/platform/legacy-vault.mjs).
 //
 // The legacy store is only SELECTed from and legacy files are only read. Every vault object
 // (uploads in `files`, `advisor_packets`, the `simplefin_connection` secret) is decrypted, checked
@@ -13,21 +13,20 @@
 import { createHash } from 'node:crypto';
 import { lstatSync, mkdirSync, readdirSync, renameSync, rmdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { decrypt } from '../ingest/vault.mjs';
+import { LEGACY_SIMPLEFIN_AAD, decrypt } from './legacy-vault.mjs';
 import { codeError } from './db.mjs';
 import { fsyncFile } from './fsutil.mjs';
 import {
   PURPOSES, SIMPLEFIN_OBJECT_ID, assertSameHousehold, containedDir, isId, openObject, readRegularFile, sealObject, writePrivateFile,
 } from './household-vault.mjs';
 
-const LEGACY_SIMPLEFIN_AAD = 'simplefin:access';
-const SIMPLEFIN_FILE = 'simplefin-access.fthm2';
+export const SIMPLEFIN_FILE = 'simplefin-access.fthm2';
 const FORMAT = 'fathom-vault-bundle/1';
 
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 // Where and in what form each staged object is kept: the SimpleFIN secret as the base64 text its
 // column stores, every other object as raw FTHM2 bytes at files/<id>.bin.
-const storedForm = o => (o.purpose === PURPOSES.simplefinAccess
+export const storedForm = o => (o.purpose === PURPOSES.simplefinAccess
   ? { file: SIMPLEFIN_FILE, encode: blob => Buffer.from(blob.toString('base64')), decode: bytes => Buffer.from(bytes.toString('latin1'), 'base64') }
   : { file: `files/${o.objectId}.bin`, encode: blob => blob, decode: bytes => bytes });
 

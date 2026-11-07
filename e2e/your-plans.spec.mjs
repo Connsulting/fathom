@@ -6,10 +6,10 @@
 // scenario token resolved into a figure.
 
 import { createHash } from 'node:crypto';
-import { join } from 'node:path';
 import { test, expect, S, resetDemo } from './helpers.mjs';
-import { openDb, DB_FILE } from '../src/store/db.mjs';
-import { loadDataKey, storeFile } from '../src/ingest/vault.mjs';
+import { openDb } from '../src/store/db.mjs';
+import { openVault, storeFile } from '../src/ingest/vault.mjs';
+import { householdStoreFile, withLocalHousehold } from './local-store.mjs';
 
 const FILE_ID = 'e2e-yp-plan';
 const FILE_NAME = 'benefits-plan-notes.txt';
@@ -36,14 +36,13 @@ function yp(testInfo) {
   return { base: md.ypBaseURL || '', dataDir: md.ypDataDir || '' };
 }
 
-// Puts the synthetic plan on file the way an upload stores it: encrypted by the vault under the
-// demo store's key at <dataDir>/files/<id>.bin, its files row, and (unless `document` is false) a
-// documents row with doc_type plan.
+// Puts the synthetic plan on file the way an upload stores it: sealed by the household vault at
+// <household root>/files/<id>.bin, its files row, and (unless `document` is false) a documents row
+// with doc_type plan.
 async function addPlanDocument(dataDir, name = FILE_NAME, text = PLAN_TEXT, { document = true } = {}) {
-  const key = await loadDataKey({ dataDir, mode: 'demo' });
-  const storedPath = await storeFile({ dataDir, key, id: FILE_ID, bytes: Buffer.from(text, 'utf8') });
-  const db = openDb(join(dataDir, DB_FILE));
-  try {
+  await withLocalHousehold(new Date().toISOString(), async ({ db, household }) => {
+    const vault = await openVault(household);
+    const storedPath = await storeFile({ vault, id: FILE_ID, bytes: Buffer.from(text, 'utf8'), purpose: 'upload' });
     db.prepare(`INSERT INTO files (id, name, mime, size, sha256, source_kind, uploaded_at, stored_path, status, note)
                 VALUES (?, ?, 'text/plain', ?, ?, 'upload', ?, ?, 'parsed', 'Synthetic e2e plan document')`)
       .run(FILE_ID, name, Buffer.byteLength(text), createHash('sha256').update(text).digest('hex'), new Date().toISOString(), storedPath);
@@ -51,9 +50,7 @@ async function addPlanDocument(dataDir, name = FILE_NAME, text = PLAN_TEXT, { do
       db.prepare(`INSERT INTO documents (doc_type, tax_year, fields, file_id, parser, locator) VALUES ('plan', ?, '{}', ?, NULL, NULL)`)
         .run(Number(S.meta.clock.slice(0, 4)), FILE_ID);
     }
-  } finally {
-    db.close();
-  }
+  }, { dataDir });
 }
 
 async function gotoYp(page, base, route) {
@@ -173,7 +170,7 @@ const TEXT_ONLY = [
 
 test('a text-only plan document is enough to build the Your plans pack', async ({ page }, testInfo) => {
   const { base, dataDir } = yp(testInfo);
-  const db = openDb(join(dataDir, DB_FILE));
+  const db = openDb(householdStoreFile(dataDir));
   try {
     db.prepare(`INSERT INTO documents (doc_type, tax_year, fields, file_id, parser, locator) VALUES ('plan', ?, ?, NULL, NULL, NULL)`)
       .run(Number(S.meta.clock.slice(0, 4)), JSON.stringify({ text: TEXT_ONLY }));

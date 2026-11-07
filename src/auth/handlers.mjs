@@ -11,13 +11,9 @@ export const users = ctx => ctx.auth.users(ctx);
 export const invite = ctx => ctx.auth.invite(ctx);
 export const requestDeviceLink = ctx => ctx.auth.requestDeviceLink(ctx);
 export const setRole = ctx => ctx.auth.setRole(ctx);
-// Removing a member also deletes the MCP keys they created in the served household's store
-// (their verification already fails closed once the membership is gone).
-export function removeUser(ctx) {
-  const out = ctx.auth.removeUser(ctx);
-  ctx.db.prepare('DELETE FROM api_keys WHERE user_id = ?').run(ctx.params.id);
-  return out;
-}
+// Removing a member also deletes the MCP keys they created in that household (the auth store does
+// it in the same transaction; their verification already fails closed once the membership is gone).
+export const removeUser = ctx => ctx.auth.removeUser(ctx);
 export const adminRevokePasskey = ctx => ctx.auth.adminRevokePasskey(ctx);
 export const acceptInvitation = ctx => ctx.auth.acceptInvitation(ctx);
 export const provisionHousehold = ctx => ctx.auth.provisionHousehold(ctx);
