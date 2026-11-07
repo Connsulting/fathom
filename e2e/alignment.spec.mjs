@@ -7,6 +7,7 @@
 // @al-ac2  nothing overflows horizontally at 375px
 // @al-ac3  no two timeline text labels intersect
 // @al-ac4  switcher rows center their contents and share one height
+// @al-ac5  an optional marker sits on its label's line, to the right of the label text
 
 import { test, expect, gotoRoute, resetDemo, REMOTE } from './helpers.mjs';
 import { createLocalData, removeLocalData, startEnrolledServer } from './local-store.mjs';
@@ -239,7 +240,8 @@ test.describe('timeline labels never collide', { tag: '@al-ac3' }, () => {
         await expect(page.locator('.h-strip-wrap')).toBeVisible();
         const boxes = await textBoxes(page, '.h-strip-wrap');
         expect(boxes.length).toBeGreaterThanOrEqual(3);
-        expect(collisions(boxes, 3), 'strip labels are 3px apart at least').toEqual([]);
+        expect(collisions(boxes), 'strip text boxes').toEqual([]);
+        expect(collisions(await textBoxes(page, '.h-strip-plot'), 3), 'plot labels are 3px apart at least').toEqual([]);
         const labels = (await page.locator('.h-strip-labs span:not(.mon)').allTextContents()).map((t) => t.trim());
         if (days === 0) {
           expect(labels, 'one merged label when the dates coincide').toHaveLength(1);
@@ -259,7 +261,7 @@ test.describe('timeline labels never collide', { tag: '@al-ac3' }, () => {
     });
     await gotoRoute(page, 'rec/offcycle');
     await expect(page.locator('.h-strip-wrap')).toBeVisible();
-    expect(collisions(await textBoxes(page, '.h-strip-wrap'), 3)).toEqual([]);
+    expect(collisions(await textBoxes(page, '.h-strip-plot'), 3)).toEqual([]);
   });
 
   for (const vp of [DESKTOP, PHONE]) {
@@ -320,6 +322,48 @@ test.describe('switcher rows are vertically centered', { tag: '@al-ac4' }, () =>
         for (const [name, y] of Object.entries(r.parts)) {
           expect(Math.abs(y - r.center), `${name} of "${r.title}" (${r.group}) is ${y - r.center}px off center`).toBeLessThanOrEqual(1.5);
         }
+      }
+    });
+  }
+});
+
+/* ---------- AC5: optional markers share the label line ---------- */
+
+test.describe('optional markers sit on the label line', { tag: '@al-ac5' }, () => {
+  for (const vp of [DESKTOP, PHONE]) {
+    test(`New goal form at ${vp.width}px`, async ({ page }) => {
+      await page.setViewportSize(vp);
+      await gotoRoute(page, 'goals');
+      await page.getByRole('button', { name: 'Goal', exact: true }).click();
+      const form = page.locator('form.h-gform');
+      await expect(form).toBeVisible();
+      const marks = await form.locator('.h-opt').count();
+      expect(marks, 'the form has optional fields').toBeGreaterThanOrEqual(4);
+      const rows = await page.evaluate(() => [...document.querySelectorAll('form.h-gform .h-opt')].map((m) => {
+        const label = m.closest('.h-gl');
+        const text = label.firstChild;
+        const range = document.createRange();
+        range.selectNodeContents(text);
+        const t = range.getBoundingClientRect();
+        const o = m.getBoundingClientRect();
+        const l = label.getBoundingClientRect();
+        const field = label.nextElementSibling.getBoundingClientRect();
+        return {
+          name: text.textContent,
+          sameLine: Math.abs((t.top + t.bottom) / 2 - (o.top + o.bottom) / 2) <= 4,
+          rightOf: o.left >= t.right,
+          lineHeight: l.height,
+          gapToField: field.top - l.bottom,
+          fontText: parseFloat(getComputedStyle(text.parentElement).fontSize),
+          fontMark: parseFloat(getComputedStyle(m).fontSize),
+        };
+      }));
+      for (const r of rows) {
+        expect(r.sameLine, `"${r.name}" marker is on the label line`).toBe(true);
+        expect(r.rightOf, `"${r.name}" marker is right of the label text`).toBe(true);
+        expect(r.lineHeight, `"${r.name}" label is one line`).toBeLessThan(26);
+        expect(r.fontMark, `"${r.name}" marker is smaller`).toBeLessThan(r.fontText);
+        expect(r.gapToField, `"${r.name}" no extra gap before its field`).toBeLessThanOrEqual(8);
       }
     });
   }
