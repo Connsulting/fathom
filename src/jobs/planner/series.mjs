@@ -67,7 +67,8 @@ export function buildSeries(db, clock) {
   const out = {};
   const perAccount = [];
   for (const { a, values } of stored) {
-    const label = accountLabel(a);
+    const plain = String(accountLabel(a)).replace(/[{}<>]/g, '').replace(/\s+/g, ' ').trim();
+    const label = a.mask && !plain.includes(a.mask) ? `${plain} ${a.mask}` : plain;
     const inWindow = months.filter(m => values.has(m));
     if (inWindow.length >= 2) {
       out[seriesKey(a.id)] = {
