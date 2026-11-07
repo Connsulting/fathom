@@ -203,20 +203,34 @@ test('missing data that is only uploads is titled as uploads', () => {
 
 // ---------------------------------------------------------------- SimpleFIN coverage
 
-test('a file source whose accounts SimpleFIN covers is not stale anywhere', async () => {
+test('a file source whose accounts SimpleFIN covers is not stale anywhere; a half covered one still is', async () => {
   const db = await S.store();
-  const file = db.prepare("SELECT source_id FROM files WHERE source_id IS NOT NULL LIMIT 1").get();
-  assert.ok(file, 'the synthetic store has a file source');
-  const before = ingestState(db, { clock: '2027-06-01' });
-  const staleBefore = before.sources.filter(s => s.state === 'stale').map(s => s.id);
-  assert.ok(staleBefore.length, 'file sources are stale by mid 2027');
-  assert.deepEqual(before.staleNotes.map(n => n.text.split(' data is')[0]).length > 0, true);
-  const mapped = db.prepare('INSERT INTO simplefin_accounts (sf_key, account_id, status, name, created_at) VALUES (?, ?, ?, ?, ?)');
-  for (const a of db.prepare('SELECT id FROM accounts').all()) mapped.run(`sf-${a.id}`, a.id, 'mapped', 'Synthetic', NOW);
-  assert.ok(connectedAccountIds(db).size > 0);
-  assert.ok(coveredFileSources(db).size > 0);
-  const state = ingestState(db, { clock: '2027-06-01' });
-  assert.deepEqual(state.sources.filter(s => s.state === 'stale' && !s.kind.startsWith('tax')).filter(s => coveredFileSources(db).has(s.id)), []);
-  for (const s of state.sources.filter(x => coveredFileSources(db).has(x.id))) assert.equal(s.state, 'covered');
-  assert.ok(state.staleNotes.length < before.staleNotes.length, 'the covered sources drop out of the Cash card notes');
+  const clock = '2027-06-01';
+  const before = ingestState(db, { clock });
+  const cashStale = state => state.staleNotes.filter(n => ['cash', 'invest'].includes(n.domain));
+  assert.ok(cashStale(before).length >= 4, 'file sources are stale by mid 2027');
+  assert.equal(coveredFileSources(db).size, 0, 'nothing is covered before a mapping');
+
+  const sync = db.prepare("INSERT INTO balances (account_id, date, amount, parser) VALUES (?, '2027-05-30', 100, 'simplefin')");
+  const map = db.prepare("INSERT INTO simplefin_accounts (sf_key, account_id, status, name, created_at) VALUES (?, ?, 'mapped', 'Synthetic', ?)");
+  const connect = id => { map.run(`sf-${id}`, id, NOW); sync.run(id); };
+
+  // One account of the two account aggregator export: that source is not covered.
+  const owned = db.prepare(`SELECT DISTINCT f.source_id AS source, r.account_id AS account FROM files f JOIN
+    (SELECT file_id, account_id FROM transactions UNION SELECT file_id, account_id FROM balances) r ON r.file_id = f.id WHERE f.source_id IS NOT NULL`).all();
+  const bySource = new Map();
+  for (const { source, account } of owned) bySource.set(source, [...(bySource.get(source) || []), account]);
+  const multi = [...bySource].find(([, ids]) => ids.length > 1);
+  assert.ok(multi, 'a synthetic file source holds more than one account');
+  connect(multi[1][0]);
+  assert.equal(coveredFileSources(db).has(multi[0]), false);
+  assert.equal(ingestState(db, { clock }).sources.find(x => x.id === multi[0]).state, 'stale', 'a half covered source is still stale');
+
+  for (const id of db.prepare('SELECT id FROM accounts').all().map(a => a.id)) if (!connectedAccountIds(db).has(id)) connect(id);
+  const covered = coveredFileSources(db);
+  assert.ok(covered.has(multi[0]));
+  const state = ingestState(db, { clock });
+  for (const s of state.sources.filter(x => covered.has(x.id))) assert.equal(s.state, 'covered');
+  assert.deepEqual(state.sources.filter(x => x.state === 'stale' && ['bank_csv', 'card_csv', 'aggregator_csv', 'balances', 'brokerage_positions', 'statement'].includes(x.kind)), []);
+  assert.deepEqual(cashStale(state), [], 'the Cash card and the invest note carry no stale file notes once SimpleFIN covers the accounts');
 });

@@ -13,6 +13,8 @@ const now = '2026-11-05T12:00:00.000Z';
 
 test('answers validate atomically, preserve confirmed data and replan to a figured action', async () => {
   const db = await s.store({ variant: { facts: { 'accounts.va529': undefined } } });
+  // With no institution on file the plan is asked, not inferred.
+  db.prepare("UPDATE accounts SET inst = '' WHERE kind = '529'").run();
   await planRun(db);
   const account = db.prepare("SELECT id FROM accounts WHERE kind = '529'").get();
   const before = db.prepare("SELECT def FROM recs WHERE id = 'va529'").get();
