@@ -12,7 +12,7 @@
 
 import { cents } from '../store/db.mjs';
 import { accountFreshness } from '../ingest/freshness.mjs';
-import { monthlyValues, trendLabels } from '../jobs/planner/series.mjs';
+import { monthlyReadings, trendLabels } from '../jobs/planner/series.mjs';
 
 export const TREND_SRC = 'trend';
 export const MAX_MONTHS = 120;
@@ -61,13 +61,6 @@ function monthsBetween(first, last) {
   return out;
 }
 
-// The newest balance or position date on or before the clock.
-function lastDate(db, id, clock) {
-  const b = db.prepare('SELECT max(date) AS d FROM balances WHERE account_id = ? AND date <= ?').get(id, clock).d;
-  const p = db.prepare('SELECT max(as_of) AS d FROM positions WHERE account_id = ? AND as_of <= ?').get(id, clock).d;
-  return [b, p].filter(Boolean).map(d => String(d).slice(0, 10)).sort().at(-1) ?? null;
-}
-
 function carriedNote(carried) {
   if (!carried.length) return null;
   const dates = carried.map(c => c.lastDate).sort();
@@ -80,9 +73,9 @@ export function buildTrend(db, clock) {
   const labels = trendLabels(db);
   const rows = db.prepare('SELECT id, kind FROM accounts ORDER BY sort, id').all();
   const stored = rows.map(a => {
-    const values = monthlyValues(db, a.id, clock);
-    const months = [...values.keys()].sort();
-    return { id: a.id, label: labels.get(a.id), group: groupOfKind(a.kind), values, months, last: lastDate(db, a.id, clock) };
+    const readings = monthlyReadings(db, a.id, clock);
+    const months = [...readings.keys()].sort();
+    return { id: a.id, label: labels.get(a.id), group: groupOfKind(a.kind), readings, months, last: readings.get(months.at(-1))?.date };
   }).filter(x => x.months.length);
   // An account counts from its first balance on and adds nothing before it.
   const counted = stored;
@@ -98,24 +91,26 @@ export function buildTrend(db, clock) {
   // row in the final month.
   const freshOf = new Map(counted.map(x => [x.id, accountFreshness(db, x.id, { clock }).fresh]));
   const carriedAt = (x, m) => (m === endMonth ? x.months.at(-1) < endMonth || freshOf.get(x.id) === 'stale' : m > x.months.at(-1));
+  // The reading an account contributes at month m: its newest one on or before it.
+  const readingAt = (x, m) => x.readings.get(x.months.filter(k => k <= m).at(-1));
   const valueAt = (x, m) => {
-    const upto = x.months.filter(k => k <= m).at(-1);
-    const v = x.values.get(upto);
+    const v = readingAt(x, m).v;
     return x.group === 'Debt' ? -Math.abs(v) : v;
   };
 
   const groupIds = GROUPS.map(g => g[0]).filter(g => counted.some(x => x.group === g));
   const partIds = PARTS.map(p => p[0]).filter(p => groupIds.some(g => PART_OF.get(g) === p));
   const points = months.map(m => {
-    const sum = { total: 0, parts: {}, groups: {} };
+    // A part or group with no account yet at this month is zero, not missing.
+    const sum = { total: 0, parts: Object.fromEntries(partIds.map(p => [p, 0])), groups: Object.fromEntries(groupIds.map(g => [g, 0])) };
     const car = { total: 0, parts: {}, groups: {} };
     for (const x of counted) {
       if (x.months[0] > m) continue;
       const part = PART_OF.get(x.group);
       const v = valueAt(x, m);
       sum.total += v;
-      sum.parts[part] = (sum.parts[part] ?? 0) + v;
-      sum.groups[x.group] = (sum.groups[x.group] ?? 0) + v;
+      sum.parts[part] += v;
+      sum.groups[x.group] += v;
       if (carriedAt(x, m)) {
         car.total += 1;
         car.parts[part] = (car.parts[part] ?? 0) + 1;
@@ -129,7 +124,7 @@ export function buildTrend(db, clock) {
     };
   });
 
-  const sums = x => ({ id: x.id, label: x.label, v: cents(valueAt(x, endMonth)), asOf: x.last, fresh: freshOf.get(x.id), carried: carriedAt(x, endMonth), group: x.group });
+  const sums = x => ({ id: x.id, label: x.label, v: cents(valueAt(x, endMonth)), asOf: readingAt(x, endMonth).date, fresh: freshOf.get(x.id), carried: carriedAt(x, endMonth), group: x.group });
   const all = counted.map(sums);
   const last = points.at(-1);
   const fig = { total: 'trend.total', parts: {}, groups: {} };

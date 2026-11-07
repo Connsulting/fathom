@@ -113,6 +113,10 @@ test('an account adds nothing before its first balance, and one month of data is
   balance(db, 'new', '2026-10-31', 77);
   const { trend } = buildTrend(db, NOW);
   assert.deepEqual(trend.points.map(p => [p.date, p.total]), [['2026-08-31', 100], ['2026-09-30', 1210], ['2026-10-31', 1397]]);
+  // A part whose accounts have not begun is zero at that point, never missing.
+  assert.deepEqual(trend.points[0].parts, { cash: 100, investments: 0 });
+  assert.deepEqual(trend.points[0].groups, { Cash: 100, Investing: 0 });
+  for (const p of trend.points) for (const part of trend.parts) assert.ok(Number.isFinite(p.parts[part.id]), `${part.id} at ${p.date}`);
   assert.equal(buildTrend(await emptyDb(), NOW), null, 'no balances, no trend');
   const single = await emptyDb();
   account(single, 'x'); balance(single, 'x', '2026-10-31', 5);
@@ -175,4 +179,16 @@ test('the scenario carries the trend, its figures and a group on every account',
   assert.equal(sc.series.net, undefined, 'the per-account wall and its combined line are gone from the scenario');
   const bare = buildScenario(await emptyDb(), { clock: NOW });
   assert.equal(bare.trend, null);
+});
+
+test('provenance dates the reading actually used: a balance beats later positions in its month', async () => {
+  const db = await emptyDb();
+  account(db, 'brk', { kind: 'taxable', name: 'Brokerage' });
+  balance(db, 'brk', '2026-09-30', 90);
+  balance(db, 'brk', '2026-10-15', 100);
+  position(db, 'brk', '2026-10-31', 120);
+  const { trend, figures } = buildTrend(db, NOW);
+  assert.equal(figures['trend.total'].v, 100);
+  assert.deepEqual(figures['trend.total'].sums.map(s => [s.v, s.asOf]), [[100, '2026-10-15']]);
+  assert.equal(trend.points.at(-1).date, '2026-10-15', 'the point is dated by the reading too');
 });
