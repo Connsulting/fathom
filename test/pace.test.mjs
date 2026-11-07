@@ -72,6 +72,8 @@ test('actual figures resolve nested row dependencies and unavailable figures sta
   fig.run('cash.total', JSON.stringify({ rows: { table: 'figures', ids: ['part'], count: 1 } }), clock);
   putGoal(db, { track: { figure: 'cash.total' } });
   assert.equal(buildPace(db, { clock }).goals[0].status, 'on pace');
+  db.prepare("INSERT INTO balances (account_id,date,amount) VALUES ('a','2032-03-01',5000)").run();
+  assert.equal(buildPace(db, { clock }).series.goals.goal.series[2].actual.v, 5000);
   db.prepare("UPDATE figures SET unavailable_reason = 'waiting' WHERE key = 'part'").run();
   assert.equal(buildPace(db, { clock }).goals[0].status, 'unknown');
 });

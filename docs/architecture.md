@@ -1960,8 +1960,10 @@ series has twelve slots for the clock year: `month`, `date`, `dataThrough`, `pro
 `actual`, `plan`, `gap` and `reason`. Observed points compare the stored actual with the plan
 at its observation date. Missing historical months have null actual and gap with a reason.
 Months after the data-end month project the latest observed dollar gap along the plan path;
-they carry kind `p`. These projections never establish current health. A figure with only
-one dated snapshot supplies only that observed month. With no path or observations the whole
+they carry kind `p`. These projections never establish current health. An actual figure whose
+complete account dependencies reconcile to its stored total also supplies those accounts'
+historical months. A figure with only one dated snapshot supplies only that observed month.
+With no path or observations the whole
 series is null with a reason.
 
 Household savings has its own plan, avoiding double counting overlapping goals. It requires

@@ -104,13 +104,32 @@ function makeReader(db, clock) {
   function observations(goal) {
     if (goal.track?.figure) {
       const value = figure(goal.track.figure);
-      return value ? [value] : [];
+      if (!value) return [];
+      const accountIds = new Set();
+      let complete = true;
+      for (const s of value.locator.sources.filter(s => s.rows?.table !== 'figures')) {
+        if (!['balances', 'positions'].includes(s.rows?.table)) { complete = false; break; }
+        for (const id of s.rows.ids) {
+          const row = db.prepare(`SELECT account_id FROM ${s.rows.table} WHERE id = ?`).get(id);
+          if (row) accountIds.add(row.account_id); else complete = false;
+        }
+      }
+      if (complete && accountIds.size) {
+        const ids = [...accountIds];
+        const latest = combine(ids.map(id => history(id).filter(s => s.date <= value.dataThrough).at(-1)?.value));
+        if (latest && latest.v === value.v) return [...accountMonths(ids, value.dataThrough), value];
+      }
+      return [value];
     }
     const ids = [...new Set(goal.track?.accounts || [])];
+    return accountMonths(ids, clock);
+  }
+  function accountMonths(ids, through) {
     if (!ids.length) return [];
-    const months = new Set(ids.flatMap(id => history(id).map(s => s.date.slice(0, 7))));
+    const before = id => history(id).filter(s => s.date <= through);
+    const months = new Set(ids.flatMap(id => before(id).map(s => s.date.slice(0, 7))));
     return [...months].toSorted().flatMap(month => {
-      const value = combine(ids.map(id => history(id).filter(s => s.date.slice(0, 7) === month).at(-1)?.value));
+      const value = combine(ids.map(id => before(id).filter(s => s.date.slice(0, 7) === month).at(-1)?.value));
       return value ? [value] : [];
     });
   }
