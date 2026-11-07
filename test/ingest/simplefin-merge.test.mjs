@@ -7,7 +7,7 @@ import * as P from '../../src/ingest/pipeline.mjs';
 import * as C from '../../src/ingest/confirm.mjs';
 import * as M from '../../src/ingest/account-merge.mjs';
 import { autoResolve } from '../../src/ingest/auto.mjs';
-import { buildSeries } from '../../src/jobs/planner/series.mjs';
+import { buildTrend } from '../../src/accounts/trend.mjs';
 import { planRun } from '../helpers/plan.mjs';
 
 const withStore = async fn => { const s = await realStore(); try { await fn(s); } finally { s.close(); } };
@@ -51,13 +51,13 @@ test('repair is idempotent and Keep both survives repeated reads and remains und
   assert.equal(pending(s.db).length, 1);
 }));
 
-test('merge keeps stable references, history and metadata, corrects net worth, and Undo restores after planning', () => withStore(async s => {
+test('merge keeps stable references, history and metadata, counts the merged account once in the household trend, and Undo restores after planning', () => withStore(async s => {
   const pair = await seedDuplicate(s, { sure: true });
   s.db.prepare("INSERT INTO goals (id,def,origin) VALUES ('synthetic-goal',?,'owner')").run(JSON.stringify({ title: 'Reserve', track: { accounts: [pair.keep] } }));
   const beforeAccounts = s.db.prepare('SELECT * FROM accounts ORDER BY id').all();
   const beforeTx = s.db.prepare('SELECT * FROM transactions ORDER BY id').all();
   const beforeBal = s.db.prepare('SELECT * FROM balances ORDER BY id').all();
-  assert.equal(buildSeries(s.db, '2032-03-10').net.points.at(-1).v, 2400);
+  assert.equal(buildTrend(s.db, '2032-03-10').trend.points.at(-1).total, 2400);
   M.queueAccountPairs(s.db, { now: NOW });
   const q = pending(s.db)[0]; C.answer(s.db, q.id, 'same', { now: NOW });
   assert.equal(s.db.prepare('SELECT count(*) n FROM accounts').get().n, 1);
@@ -67,12 +67,11 @@ test('merge keeps stable references, history and metadata, corrects net worth, a
   assert.equal(s.db.prepare('SELECT account_id FROM simplefin_accounts').get().account_id, pair.keep);
   assert.equal(s.db.prepare('SELECT count(*) n FROM transactions').get().n, 1);
   assert.equal(s.db.prepare('SELECT count(*) n FROM balances').get().n, 2);
-  assert.equal(buildSeries(s.db, '2032-03-10').net.points.at(-1).v, 1200);
-  assert.equal(JSON.parse(s.db.prepare("SELECT value FROM content WHERE key='series'").get().value).net.points.at(-1).v, 1200);
+  assert.equal(buildTrend(s.db, '2032-03-10').trend.points.at(-1).total, 1200);
   assert.equal(C.pendingItems(s.db).filter(i => i.subject === pair.own).length, 0);
   await planRun(s.db, { now: '2032-03-10', dataDir: s.dataDir });
   C.reopenItem(s.db, q.id, { now: NOW });
-  assert.equal(buildSeries(s.db, '2032-03-10').net.points.at(-1).v, 2400);
+  assert.equal(buildTrend(s.db, '2032-03-10').trend.points.at(-1).total, 2400);
   const restored = s.db.prepare('SELECT * FROM accounts ORDER BY id').all();
   assert.deepEqual(restored.map(a => [a.id,a.name,a.owner,a.kind,a.mirror]), beforeAccounts.map(a => [a.id,a.name,a.owner,a.kind,a.mirror]));
   assert.deepEqual(s.db.prepare('SELECT * FROM transactions ORDER BY id').all(), beforeTx);
@@ -117,9 +116,9 @@ test('repair HTTP answers do not sync; repeated scenario reads leave Keep both a
     const merge=await app.postJson(`/api/confirm/${q.id}/answer`,{answer:'same'});
     assert.equal(merge.status,200); assert.equal(merge.json.item.final,null);
     assert.equal(jobs.includes('simplefin-sync'),false);
-    assert.equal(merge.json.scenario.series.net.points.at(-1).v,1200);
+    assert.equal(merge.json.scenario.trend.points.at(-1).total,1200);
     const undo=await app.postJson(`/api/confirm/${q.id}/reopen`);
-    assert.equal(undo.status,200); assert.equal(undo.json.scenario.series.net.points.at(-1).v,2400);
+    assert.equal(undo.status,200); assert.equal(undo.json.scenario.trend.points.at(-1).total,2400);
     assert.ok(s.db.prepare('SELECT 1 FROM accounts WHERE id=?').get(p.own));
   } finally {await app.close();}
 }));
