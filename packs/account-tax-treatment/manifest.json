@@ -44,6 +44,10 @@
         {
           "label": "IRS Publication 575: pension and annuity income",
           "url": "https://www.irs.gov/publications/p575"
+        },
+        {
+          "label": "IRC 457(b) deferred compensation plans",
+          "url": "https://www.irs.gov/retirement-plans/irc-457b-deferred-compensation-plans"
         }
       ]
     },
