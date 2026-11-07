@@ -10,10 +10,11 @@
 import { createHash } from 'node:crypto';
 import { finite, round } from './pace.mjs';
 import { HORIZON_IDS, horizonLabel } from '../shared/goals.mjs';
+import { accountLabel } from '../shared/account-label.mjs';
 
 export const TARGET_PARAMETERS = Object.freeze({
   cushionMonths: 6, withdrawalRate: 0.04, withdrawalRateMin: 0.02, withdrawalRateMax: 0.06, realReturn: 0.04,
-  maxProjectionMonths: 600, transferDays: 5, maxWindowMonths: 12, minWindowMonths: 3,
+  maxProjectionMonths: 600, transferDays: 5, maxWindowMonths: 12, minWindowMonths: 3, closedAfterMonths: 6,
 });
 
 export const SPENDING_KINDS = Object.freeze(['checking', 'savings', 'cash', 'card']);
@@ -131,6 +132,55 @@ function matchTransfers(sources, candidates, days) {
 
 // The complete-month run of one account: the month after its first transaction to the month before
 // its last, split at months without a transaction, the latest run kept. -> {from, to} indexes or null.
+// Window selection lives here, separate from which transactions count as spending.
+export function resolveSpendingWindow({ accounts, monthsOf, clock, parameters = TARGET_PARAMETERS }) {
+  const closedAfter = parameters.closedAfterMonths ?? TARGET_PARAMETERS.closedAfterMonths;
+  const silent = [];
+  const incomplete = [];
+  const runs = [];
+  for (const a of accounts) {
+    const months = monthsOf.get(a.id);
+    if (!months || !months.size) { silent.push(a); continue; }
+    const run = accountRun(months);
+    if (!run) { incomplete.push(a); continue; }
+    let lastTx = -Infinity;
+    for (const m of months) if (m > lastTx) lastTx = m;
+    runs.push({ account: a, run, lastTx, months });
+  }
+  const out = {
+    window: null, months: 0, counted: [], silent, incomplete, closed: [], limitedBy: [],
+    ranges: new Map(), missing: [],
+  };
+  if (!runs.length) { out.missing.push('no_spending_history'); return out; }
+  const newest = Math.max(...runs.map(r => r.run.to));
+  const closedRuns = [];
+  const openRuns = [];
+  for (const r of runs) (r.lastTx <= newest - closedAfter ? closedRuns : openRuns).push(r);
+  out.closed = closedRuns.map(r => r.account);
+  if (!openRuns.length) { out.missing.push('no_spending_history'); return out; }
+  const to = Math.min(...openRuns.map(r => r.run.to), monthIndex(clock.slice(0, 7)) - 1);
+  // A gap means months exist before the latest run. That run still sets the start.
+  // An account with no earlier months opened then, and does not push the start later.
+  const openedThen = r => [...r.months].some(m => m < r.run.from - 1);
+  const gapFroms = openRuns.filter(openedThen).map(r => r.run.from);
+  const wholeFroms = openRuns.filter(r => !openedThen(r)).map(r => r.run.from);
+  let from = to - parameters.maxWindowMonths + 1;
+  if (gapFroms.length) from = Math.max(from, ...gapFroms);
+  if (wholeFroms.length) from = Math.max(from, Math.min(...wholeFroms));
+  const span = to - from + 1;
+  if (span < parameters.minWindowMonths) { out.missing.push('no_spending_history'); return out; }
+  out.window = { from: monthOf(from), to: monthOf(to), months: span };
+  out.months = span;
+  const overlaps = r => r.run.to >= from && r.run.from <= to;
+  const activeClosed = closedRuns.filter(overlaps);
+  out.counted = [...openRuns.map(r => r.account), ...activeClosed.map(r => r.account)];
+  out.limitedBy = openRuns.filter(r => r.run.to === to).map(r => r.account);
+  for (const r of [...openRuns, ...activeClosed]) {
+    out.ranges.set(r.account.id, { from: Math.max(r.run.from, from), to: Math.min(r.run.to, to) });
+  }
+  return out;
+}
+
 function accountRun(months) {
   const sorted = [...months].sort((a, b) => a - b);
   const first = sorted[0] + 1;
@@ -163,19 +213,20 @@ export function spendingInputs({ accounts, transactions, clock, parameters = TAR
     set.add(monthIndex(t.date.slice(0, 7)));
     monthsOf.set(t.account_id, set);
   }
-  const counted = spending.filter(a => monthsOf.has(a.id));
-  const silent = spending.filter(a => !monthsOf.has(a.id));
-  const out = { window: null, months: 0, counted, silent, spendIds: [], incomeIds: [], missing: [] };
-  const runs = counted.map(a => accountRun(monthsOf.get(a.id)));
-  if (!counted.length || runs.some(r => !r)) { out.missing.push('no_spending_history'); return out; }
-  const to = Math.min(...runs.map(r => r.to), monthIndex(clock.slice(0, 7)) - 1);
-  const from = Math.max(...runs.map(r => r.from), to - P.maxWindowMonths + 1);
-  const months = to - from + 1;
-  if (months < P.minWindowMonths) { out.missing.push('no_spending_history'); return out; }
-  out.window = { from: monthOf(from), to: monthOf(to), months };
-  out.months = months;
+  const resolved = resolveSpendingWindow({ accounts: spending, monthsOf, clock, parameters: P });
+  const out = {
+    window: resolved.window, months: resolved.months, counted: resolved.counted, silent: resolved.silent,
+    incomplete: resolved.incomplete, closed: resolved.closed, limitedBy: resolved.limitedBy,
+    spendIds: [], incomeIds: [], missing: [...resolved.missing],
+  };
+  if (!resolved.window) return out;
 
-  const inWindow = t => { const m = monthIndex(t.date.slice(0, 7)); return m >= from && m <= to; };
+  const inWindow = t => {
+    const range = resolved.ranges.get(t.account_id);
+    if (!range) return false;
+    const m = monthIndex(t.date.slice(0, 7));
+    return m >= range.from && m <= range.to;
+  };
   const ordered = rows.toSorted((a, b) => a.date.localeCompare(b.date) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   const onSpending = ordered.filter(t => isSpending(byId.get(t.account_id)) && inWindow(t));
   const outflows = onSpending.filter(t => t.amount < 0);
@@ -192,19 +243,30 @@ export function spendingInputs({ accounts, transactions, clock, parameters = TAR
   out.incomeIds = income.map(t => t.id);
   out.spendTotal = round(spendTotal);
   out.incomeTotal = round(incomeTotal);
-  out.monthlySpend = round(spendTotal / months);
-  out.annualSpend = round(spendTotal / months * 12);
-  out.monthlySavings = round((incomeTotal - spendTotal) / months);
+  out.monthlySpend = round(spendTotal / out.months);
+  out.annualSpend = round(spendTotal / out.months * 12);
+  out.monthlySavings = round((incomeTotal - spendTotal) / out.months);
   return out;
 }
 
 // The spending figures, keyed by name (monthlySpend, annualSpend, monthlySavings).
 export function spendingFigures(sp, { clock, parameters = TARGET_PARAMETERS }) {
-  const windowNote = `Spending window: ${windowText(sp.window)}.`;
-  const countedNote = `Spending accounts counted: ${listText(sp.counted.map(plainAccountName))}.`;
-  const silentNote = sp.silent.length
-    ? `No transactions on file for ${listText(sp.silent.map(plainAccountName))}; ${sp.silent.length === 1 ? 'its' : 'their'} spending is not counted.` : null;
-  const P = { transferDays: parameters.transferDays, maxWindowMonths: parameters.maxWindowMonths, minWindowMonths: parameters.minWindowMonths };
+  const endName = monthName(sp.window.to);
+  const limitNote = sp.limitedBy?.length
+    ? `The window ends in ${endName} because ${listText(sp.limitedBy.map(accountLabel))} ${sp.limitedBy.length === 1 ? 'has' : 'have'} no later complete month.`
+    : `The window ends in ${endName}, the latest complete month on file.`;
+  const windowNote = `Spending window: ${windowText(sp.window)}. ${limitNote}`;
+  const countedNote = `Spending accounts counted: ${listText(sp.counted.map(accountLabel))}.`;
+  const leftOut = [];
+  if (sp.silent.length) leftOut.push(`No transactions on file for ${listText(sp.silent.map(accountLabel))}`);
+  if (sp.incomplete?.length) leftOut.push(`No complete month on file for ${listText(sp.incomplete.map(accountLabel))}`);
+  const leftCount = sp.silent.length + (sp.incomplete?.length || 0);
+  const silentNote = leftOut.length
+    ? `${leftOut.join('. ')}. ${leftCount === 1 ? 'Its' : 'Their'} spending is not counted.` : null;
+  const P = {
+    transferDays: parameters.transferDays, maxWindowMonths: parameters.maxWindowMonths,
+    minWindowMonths: parameters.minWindowMonths, closedAfterMonths: parameters.closedAfterMonths,
+  };
   const inputs = { months: sp.months, spendTotal: sp.spendTotal, incomeTotal: sp.incomeTotal };
   const base = { clock, inputs, parameters: P, window: sp.window };
   const spendSources = [rowsSource('transactions', sp.spendIds)];

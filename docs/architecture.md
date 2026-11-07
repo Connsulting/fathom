@@ -818,6 +818,7 @@ known path with the wrong method is 405; signed out, both are 401. Every action 
 | `POST /api/operator/households` | `{displayName, adminEmail}` | `{household: {id, status: 'provisioning'}}` and an admin invitation emailed to `adminEmail`. Instance operators only (403 otherwise); no membership needed. 409 `{error, code: 'multi_household_gated'}` while the platform setting `multi_household_enabled` is off and a non-deleted real household exists (provisioning included); demo instances are exempt. |
 | `POST /api/recs/:id/start-over` | `{}` | `{scenario}`. Detaches every thread asked from the rec that is still attached (sets `recDetachedAt` to the app clock time), so the rec dialog opens a fresh composer; an already detached thread keeps its time. Threads, messages, titles, archive and trash are untouched. 404 unknown or hidden rec. |
 | `POST /api/recs/:id/action` | `{action: start, snooze, dismiss, complete, reopen, task or owner, arg?}` | `{scenario}`. `task` toggles task `arg`; `snooze` takes a wake label (default "Next month"); `owner` sets the action owner to `arg` (one of `you`, `spouse`, `both`, `advisor`, `automatic`, case sensitive) with `owner_override = 1`, status unchanged. 400 bad action, task index or owner, 404 unknown or hidden rec. Writes `rec_events` (actor `ui`; for `owner` action `owner`, arg the owner, from and to the current status). |
+| `POST /api/recs/:id/answers` | `{answers: [{key, value}]}` | `{scenario}` after validation, confirmed fact writes with dated owner provenance and an automatic planning run. Only keys requested by the visible recommendation are accepted. Question recommendations require answers rather than completion. |
 | `POST /api/wargame/:name/pick` | `{index}` (an index or an option id) | `{scenario}`. `name` is salary or deferral (404 otherwise); 400 out of range. |
 | `POST /api/decisions/:id/decide` | `{index?}` (a point index or id; default the stored pick) | `{scenario}`. Decide on the picked point of an open salary or deferral decision: status becomes decided and `decided_line` is built from the point's own label plus `{f:...}` tokens for the `wg.*` figures the registry holds (provenance stays on the figures). Records the pick in `wargame.picks`, writes the owner-stated assumption fact (`business.salaryDecided` = `{entity, salary}`, the S corp the game was built for and the point's `wg.salary.<id>.salary` value, or `business.deferralDecided` = `{option, amount}`; src `decide:salary` or `decide:deferral`, confirmed, locator names the decision and the figure), logs a `decide` rec event on the linked rec and schedules the plan job (trigger `decide`) on a real store. 404 unknown id, 400 no war game or bad index, 409 already decided, not open, upcoming or unavailable. |
 | `POST /api/decisions/:id/revisit` | `{}` | `{scenario}`. Reopens a decision decided that way: status open, `decided_line` cleared, the assumption fact deleted, a `revisit` rec event, plan job scheduled. 409 for a decision that is not decided with a stored choice. |
@@ -2448,12 +2449,17 @@ and more than one is `ambiguous_goal`; both become a question.
 Computations (`TARGET_PARAMETERS`).
 1. Spending window. Participating accounts are checking, savings, cash and card accounts with at least one
    transaction up to the clock. Each has a complete-month run: the month after its first transaction to the
-   month before its last, split at a month with no transaction, latest run kept. The window is the
-   intersection of the runs, ends before the clock month and covers at most 12 months. Under 3 months is
-   `no_spending_history`. An outflow matched to an inflow on another household account (same cents, within
-   5 days, nearest date) is a transfer, not spending. An inflow is income unless matched to an outflow on
-   another non-business account, so business transfers in count. Spending accounts with no transactions are
-   named in the figure notes and not counted.
+   month before its last, split at a month with no transaction, latest run kept. An account with no complete
+   month is left out and named. An account whose last transaction is at least `closedAfterMonths` (6) before
+   the newest complete month on file is closed: it does not set the window, and its spending counts only
+   inside its own run. A gap keeps the latest run, and that run still sets the start. The window ends at
+   the earliest open run, and before the clock month, and covers at most 12 months. An account whose only
+   run opens inside that window counts as zero before its first complete month instead of moving the start
+   later. Under 3 months is `no_spending_history`. The spending-figure note names the ending month and the
+   accounts that limited it, using each account's stored label, including a display name. An outflow matched to an inflow on another household
+   account (same cents, within 5 days, nearest date) is a transfer, not spending. An inflow is income unless
+   matched to an outflow on another non-business account, so business transfers in count. Spending accounts
+   with no transactions are named in the figure notes and not counted.
 2. Cushion: 6 months of monthly spending, rounded up to the next $100, held in checking, savings and cash.
 3. Independence: yearly spending (monthly times 12) over the withdrawal rate, rounded up to the next
    $1,000, held in taxable, brokerage, retirement, Roth and IRA accounts. Rate default 4%, owner range 2% to

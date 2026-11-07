@@ -8,6 +8,7 @@
 // mergeFacts(stored, derived)            -> {values, writes, deletes, checks}
 
 import { cents } from '../../store/db.mjs';
+import { isCollegeAccount } from '../../shared/account-kinds.mjs';
 import { isCharitable, addDays } from './data.mjs';
 import { sameEmployer } from './payroll.mjs';
 import { canonicalJson } from '../../ingest/confirm.mjs';
@@ -71,7 +72,7 @@ export function deriveFacts(data, { entities }) {
     const hits = data.accounts.filter(test);
     if (hits.length) out[key] = fact(true, rule, hits.map(a => ev('accounts', a.id, a.fileId)));
   };
-  accountFact('accounts.has529', 'an account of kind 529 or named 529', a => a.kind === '529' || /529/.test(a.name));
+  accountFact('accounts.has529', 'an account of kind 529 or named 529', isCollegeAccount);
   accountFact('benefits.hsa', 'an account of kind hsa or named HSA', a => a.kind === 'hsa' || /\bHSA\b/i.test(a.name));
   accountFact('retirement.ira', 'an account named IRA', a => /\bIRA\b/i.test(a.name));
   accountFact('retirement.solo401k', 'an account named solo or individual 401(k)', a => /solo\s*401|individual\s*401|one.participant/i.test(a.name));

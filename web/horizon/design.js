@@ -16,6 +16,7 @@ import { ingestScreens } from './screens/ingest.js';
 import { emailScreen } from './screens/email.js';
 import * as switcher from './screens/switcher.js';
 import * as simplefin from './screens/simplefin.js';
+import * as recAnswers from './screens/rec-answers.js';
 import * as accountScreen from './screens/account.js';
 import { createKeys } from './keys.js';
 import { createSwipe } from './screens/swipe.js';
@@ -199,6 +200,7 @@ function snoozeLabel() { return fmt(addDays(clock(), 14)); }
 const ACT_KEY = { start: 'D', snooze: 'L', complete: 'E', dismiss: 'Shift+X' };
 
 function actionsFor(r, compact) {
+  if (r.question?.primary) return [];
   const a = (act, label, cls = '', arg) => {
     const hint = ACT_KEY[act] ? ` title="${esc(`${label} (${ACT_KEY[act]})`)}"` : '';
     return btn(label, `data-act="${act}" data-rec="${esc(r.id)}"${arg != null ? ` data-arg="${esc(arg)}"` : ''}${hint}`, cls);
@@ -578,9 +580,9 @@ function nextHtml(m, subject) {
     ${why ? `<p class="h-next-why">${why}</p>` : ''}
     <p class="h-serves-l">${serves}</p>
     <p class="h-next-win">${windowText(r)}</p>
-    <div class="h-next-acts"><button type="button" class="h-btn pri" data-act="complete" data-rec="${id}">Done</button><button type="button" class="h-btn" data-act="snooze" data-rec="${id}" data-arg="${esc(snoozeLabel())}">Later</button><button type="button" class="h-btn" data-ask-next="${id}">Ask</button></div>
+    ${recAnswers.html(r, 'home')}${r.question?.primary ? '' : `<div class="h-next-acts"><button type="button" class="h-btn pri" data-act="complete" data-rec="${id}">Done</button><button type="button" class="h-btn" data-act="snooze" data-rec="${id}" data-arg="${esc(snoozeLabel())}">Later</button><button type="button" class="h-btn" data-ask-next="${id}">Ask</button></div>`}
   </article></div>
-  <p class="h-next-hint"><span>Swipe left for later, right for done</span></p>`;
+  ${r.question ? '' : '<p class="h-next-hint"><span>Swipe left for later, right for done</span></p>'}`;
 }
 
 function afterHtml(m) {
@@ -732,7 +734,7 @@ function pHome() {
   const rest = `${goalsH}${cards}${hkHtml(m.housekeeping)}`;
   const inner = isPhone()
     ? `${ownerFilterHtml(m)}${head}${nextHtml(m, subject)}${afterHtml(m)}${health}${rest}`
-    : `<header class="h-home-top">${head}${ownerFilterHtml(m)}</header>${dueHtml(m)}${health}${rest}`;
+    : `<header class="h-home-top">${head}${ownerFilterHtml(m)}</header>${m.nextThing?.question?.primary ? nextHtml(m, subject) : ''}${dueHtml(m)}${health}${rest}`;
   return shell(`<section class="h-home">${inner}</section>`);
 }
 
@@ -846,6 +848,7 @@ function recRow(r, ny) {
     <div class="h-row-b">
       <div class="h-row-top"><a href="${href('rec', { id: r.id })}" data-go="rec" data-id="${esc(r.id)}">${T(r.title)}</a><span class="h-st ${r.status}">${statusText(r)}</span></div>
       <p>${T(r.summary)}</p>
+      ${recAnswers.html(r, 'plan')}
       <div class="h-meta"><span>${T(r.triggerText || TRIGGER[r.trigger] || '')}</span>${r.status === 'done' || r.status === 'dismissed' ? '' : `<span>${T(r.window?.label || '')}</span>`}${r.effort ? `<span>${T(r.effort)}</span>` : ''}${values(r) ? `<span>${values(r)}</span>` : ''}${r.advisor ? `<span class="h-adv ${r.advisor.verdict}">${advisorText(r)}</span>` : ''}${servesHtml(r)}</div>
     </div>
     <div class="h-acts">${actionsFor(r, true).join('')}${advisorScreen.rowAction(r)}</div>
@@ -970,6 +973,7 @@ function dlgHtml(id) {
       <div class="h-meta"><span class="h-st ${r.status}">${statusText(r)}</span>${ownerHtml(r)}${isNeeds(r, ny) ? '<span class="h-acc">Needs you</span>' : ''}${r.effort ? `<span>${T(r.effort)}</span>` : ''}${values(r) ? `<span>${values(r)}</span>` : ''}${servesHtml(r, { dialog: true })}</div>
     </div>
     ${windowStrip(r)}
+    ${recAnswers.html(r, 'dialog')}
     <div class="h-acts big">${actionsFor(r, false).join('')}</div>
     <div class="h-dcols">
       <div class="h-dmain">
@@ -980,7 +984,7 @@ function dlgHtml(id) {
         ${cross ? section('Touches', cross) : ''}
       </div>
       <div class="h-dside">
-        ${section('Steps', check)}
+        ${r.question?.primary ? '' : section('Steps', check)}
         ${section('Advisor', adv)}
         ${wg}
       </div>
@@ -2107,6 +2111,7 @@ function startOver(recId) {
 }
 
 function onSubmit(e) {
+  if (recAnswers.onSubmit(e)) return;
   if (SCREENS.some((s) => s.onSubmit?.(e))) return;
   const f = e.target;
   if (f.dataset.connForm) { e.preventDefault(); connect.onSubmit(f, connectH); return; }
@@ -2129,6 +2134,7 @@ function onSubmit(e) {
 }
 
 function onInput(e) {
+  if (recAnswers.onChange(e)) return;
   if (SCREENS.some((s) => s.onInput?.(e))) return;
   if (ingest.handleChange(e)) return;
   const t = e.target;
@@ -2160,6 +2166,7 @@ function onInput(e) {
 // Committed changes: a goal form select or checkbox, and a released curve or priority slider
 // (saved to the store, so both feed the planner and chat).
 function onChange(e) {
+  if (recAnswers.onChange(e)) return;
   const t = e.target;
   if (t?.dataset?.gf === 'track' || t?.dataset?.gf === 'acct') { goalInput(t); return; }
   if (t?.dataset?.suggRate) { suggRate(t); return; }
@@ -2178,7 +2185,7 @@ function onToggle(e) {
 // action saves; the redraw replaces it, and a failed save brings it back.
 const homeSwipe = createSwipe({
   when: () => routeNow().name === 'home' && isPhone(),
-  card: 'article.h-next',
+  card: 'article.h-next:not(:has([data-rec-answers]))',
   onSwipe: (dir, el) => {
     const id = el.dataset.nextRec;
     if (!id) return;
@@ -2224,11 +2231,11 @@ function onDocumentKey(e) {
 }
 
 // Helpers the screen modules use. Getters, because api, root and ui change on mount.
-const SCREENS = [switcher, chatScreen, packsScreen, engineScreen, advisorScreen, yearendScreen, simplefin, accountScreen, trendScreen];
+const SCREENS = [switcher, chatScreen, packsScreen, engineScreen, advisorScreen, yearendScreen, simplefin, recAnswers, accountScreen, trendScreen];
 const KIT = {
   get api() { return api; }, get root() { return root; }, get ui() { return ui; }, get keys() { return keys; }, get ingest() { return ingest; },
   draw: () => draw(),
-  esc, T, X, arr, plural, icon, btn, goA, href, shell, section, pageHead, thread, composer, figHtml, recById,
+  esc, T, X, arr, plural, icon, btn, goA, href, shell, section, pageHead, thread, composer, figHtml, recById, snoozeLabel,
   openRec, openAccount, closeRec, decisionList, statusText, routeNow, visibleRecs, spark, niceTicks,
   sfStatus: () => simplefin.status(),
   newGoal: () => { if (routeNow().name !== 'goals') api.go('goals', {}); openGoalForm(null); }
