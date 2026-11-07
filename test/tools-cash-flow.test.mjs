@@ -31,3 +31,14 @@ test('cash flow keeps matched transfers out of inflow and outflow on both sides'
   const hh = await s.call('cash_flow', { ...custom, scope: 'household' });
   assert.equal(hh.totals.business.inflow.value, 0);
 });
+
+test('cash flow attaches partial and missing-month gaps to monthly figures and totals', async t => {
+  const s=await spendingStore(t);s.tx('checking','2026-11-01',-7,'Shopping','Partial month');
+  const r=await s.call('cash_flow',{scope:'household'});
+  assert.ok(r.gaps.some(g=>g.code==='incomplete_month'));
+  assert.ok(r.months.find(m=>m.month==='2026-11').household.net.gaps.some(g=>g.code==='incomplete_month'));
+  assert.ok(r.totals.household.net.gaps.some(g=>g.code==='incomplete_month'));
+  assert.equal(r.months.find(m=>m.month==='2026-04').household.net.gaps.some(g=>g.code==='incomplete_month'),false);
+  const old=await s.call('cash_flow',{from:'2025-01',to:'2025-02',scope:'household'});
+  assert.equal(old.gaps.find(g=>g.code==='incomplete_month').count,2);
+});
