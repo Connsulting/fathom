@@ -5,6 +5,11 @@
 // Tags: @pl-ac3 rows and provenance, @pl-ac5 phone layout, @pl-ac6 navigation and values;
 // @mobile runs the test at 390px too.
 
+import { scratch, buildRealStore } from '../test/helpers/real-store.mjs';
+import { serveAppFixture } from '../test/helpers/server.mjs';
+import { planRun } from '../test/helpers/plan.mjs';
+import { answerItem } from '../src/ingest/confirm.mjs';
+import { loadConfig } from '../src/config.mjs';
 import { test, expect, resetDemo, gotoRoute, expectH1, expectPopoverSource, bareDollarNodes } from './helpers.mjs';
 
 const view = (page, key) => page.locator(`[data-pl-views] [data-pl-view="${key}"]`);
@@ -235,3 +240,37 @@ async function expectRows(page, request, path, query, month, category) {
   await expect(panel.locator('li.h-ad-txn')).toHaveCount(hit.items.length);
   await expect(panel.locator('li.h-ad-txn .fx-fig')).toHaveCount(hit.items.length);
 }
+
+
+test('PN1 @mobile confirmed spending ledgers appear apart from businesses with their original display names', async ({ page }) => {
+  const state = scratch('fathom-ledger-view-');
+  let app;
+  try {
+    const dir = state.dir();
+    const db = state.track(await buildRealStore(dir));
+    db.prepare("INSERT INTO pnl_lines (entity, period, category, amount, locator) VALUES ('Asters', '2026-10', 'Groceries', -120, ?)")
+      .run(JSON.stringify({ sheet: "Aster's Expenses", cells: ['D2'] }));
+    await planRun(db);
+    const q = db.prepare("SELECT id FROM confirm_items WHERE context LIKE '%pnl.ledgers%' AND status = 'pending'").get();
+    answerItem(db, q.id, 'yes');
+    await planRun(db);
+    app = await serveAppFixture({ db, authenticated: true, config: loadConfig({ FATHOM_DATA: dir, FATHOM_DEMO: '0', FATHOM_ENGINE: 'off', FATHOM_CLOCK: '2026-11-05' }) });
+    await page.context().setExtraHTTPHeaders({ cookie: app.session.cookie });
+    await page.goto(`${app.baseUrl}/#/pnl`);
+    await expectH1(page, 'P&L');
+    const ledgers = page.getByRole('group', { name: 'Spending ledgers', exact: true });
+    const businesses = page.getByRole('group', { name: 'Businesses', exact: true });
+    await expect(ledgers).toBeVisible();
+    await expect(businesses).toBeVisible();
+    await expect(ledgers.getByRole('button')).toContainText("Aster's");
+    await expect(businesses).not.toContainText("Aster's");
+    await ledgers.getByRole('button').click();
+    await expect(page.locator('[data-pl-business]')).toBeVisible();
+    const payload = (await app.request({ path: '/api/pnl?entity=entity:asters' })).json;
+    await expectTileValue(page, 'expenses', payload, payload.pnl.expenses.total);
+    await noOverflow(page, 'spending ledger');
+  } finally {
+    if (app) await app.close();
+    state.cleanup();
+  }
+});

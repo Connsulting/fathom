@@ -14,6 +14,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInstance } from '../src/platform/db.mjs';
+import { callTool } from '../src/tools/index.mjs';
 import { setSetting } from '../src/store/db.mjs';
 import { accountLabel } from '../src/shared/account-label.mjs';
 import { serveAppFixture, tempDb } from './helpers/server.mjs';
@@ -599,7 +600,7 @@ test('pl-ac4 the module exports the contract, takes one object, never writes, an
 });
 
 
-test('PN1: P&L lists spending ledgers separately and restores original tab names from locators', t => {
+test('PN1: P&L lists spending ledgers separately and restores original tab names from locators', async t => {
   const { db } = store(t);
   file(db);
   const id = line(db, 'Asters', '2032-03', 'Medical', -120);
@@ -614,4 +615,6 @@ test('PN1: P&L lists spending ledgers separately and restores original tab names
   assert.equal(p.entity.kind, 'spending');
   assert.equal(p.entity.label, "Aster's");
   assert.equal(p.figures[p.expenses.total].v, 120);
+  const tool = await callTool('pnl_by_month', { entity: p.entity.label }, { db });
+  assert.deepEqual(tool.rows, [{ period: '2032-03', category: 'Medical', amount: -120 }]);
 });

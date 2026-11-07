@@ -256,3 +256,37 @@ describe('npm run plan (src/jobs/plan-cli.mjs)', () => {
     assert.equal(db.prepare("SELECT count(*) AS n FROM job_runs WHERE job_id = 'plan' AND status = 'ok'").get().n, 1);
   });
 });
+
+
+test('PN1: HTTP planning, ledger confirmation and P&L reads resume tax projections', async () => {
+  const dir = S.dir();
+  const db = S.track(await buildRealStore(dir));
+  for (const category of ['Medical', 'Groceries', 'Dining & Drinks']) {
+    db.prepare("INSERT INTO pnl_lines (entity, period, category, amount, locator) VALUES ('Asters', '2026-10', ?, -120, ?)")
+      .run(category, JSON.stringify({ sheet: "Aster's Expenses", cells: ['D2'] }));
+  }
+  const app = await serve(db, realConfig(dir));
+  try {
+    const before = await app.postJson('/api/jobs/plan/run');
+    assert.equal(before.status, 200);
+    assert.equal(before.json.scenario.fig['agi.est'], undefined);
+    const pending = await app.request({ path: '/api/confirm' });
+    assert.equal(pending.status, 200);
+    const check = pending.json.items.find(i => i.context.key === 'pnl.ledgers');
+    assert.ok(check, JSON.stringify(pending.json));
+    assert.match(check.question, /Aster's looks like card spending/);
+    assert.equal(db.prepare("SELECT value FROM facts WHERE key = 'pnl.ledgers'").get(), undefined);
+    const answered = await app.postJson(`/api/confirm/${check.id}/answer`, { answer: 'yes' });
+    assert.equal(answered.status, 200, answered.text);
+    const replanned = await app.postJson('/api/jobs/plan/run');
+    assert.equal(replanned.status, 200, replanned.text);
+    const after = await app.getScenario();
+    assert.ok(after.fig['agi.est'], 'tax projections resume without a business classification form');
+    const pnl = await app.request({ path: '/api/pnl?entity=entity:asters' });
+    assert.equal(pnl.status, 200, pnl.text);
+    assert.equal(pnl.json.pnl.entity.kind, 'spending');
+    assert.equal(pnl.json.pnl.entity.label, "Aster's");
+    assert.equal(pnl.json.figures[pnl.json.pnl.expenses.total].v, 360);
+    assert.ok(pnl.json.figures[pnl.json.pnl.expenses.total].src);
+  } finally { await app.close(); }
+});
