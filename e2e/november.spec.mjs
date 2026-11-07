@@ -1,5 +1,6 @@
-// November demo: completing every needs-you item through the UI flips the brief to the clear
-// verdict, and the result persists through the API across a reload.
+// November demo: completing every needs-you item through the UI empties Plan's needs-you rows and
+// flips the brief verdict (now carried by the monthly email preview, since Home leads with goals)
+// to clear, and the result persists through the API across a reload.
 
 import { test, expect, resetDemo, needsYouIds, rec, attentionHeadline, clearHeadline, gotoRoute, openRecFromPage, closeDialogWithX, recDialog } from './helpers.mjs';
 
@@ -7,26 +8,36 @@ test.beforeEach(async ({ request }) => {
   await resetDemo(request);
 });
 
-test('the November brief starts at attention with every needs-you item listed', async ({ page }) => {
-  await gotoRoute(page, 'brief');
-  await expect(page.locator('h1.h-verdict')).toHaveText(attentionHeadline());
-  await expect(page.locator('.h-hero')).not.toHaveClass(/\bclear\b/);
-  const ids = await page.locator('.h-ny a.h-ny-t').evaluateAll((els) => els.map((e) => e.getAttribute('data-id')));
-  expect(ids).toEqual(needsYouIds());
+// Plan's needs-you rows, as rec ids in page order.
+const needsLinks = (page) => page.locator('.h-rows article.h-row.needs .h-row-top a[data-go="rec"]');
+const needsCount = (page) => page.locator('.h-stats > div', { hasText: 'need you' }).locator('b');
+
+async function emailVerdict(page) {
+  await gotoRoute(page, 'email');
+  return page.frameLocator('iframe[title="Brief preview"]').locator('body');
+}
+
+test('the November plan starts at attention with every needs-you item listed', async ({ page }) => {
+  const expected = needsYouIds();
+  await gotoRoute(page, 'plan');
+  await expect(needsCount(page)).toHaveText(String(expected.length));
+  const ids = await needsLinks(page).evaluateAll((els) => els.map((e) => e.getAttribute('data-id')));
+  expect(ids).toEqual(expected);
+  await expect(await emailVerdict(page)).toContainText(attentionHeadline());
 });
 
-test('completing every needs-you item, steps included, turns the brief clear and it survives a reload', async ({ page }) => {
+test('completing every needs-you item, steps included, turns the verdict clear and it survives a reload', async ({ page }) => {
   const expected = needsYouIds();
   expect(expected.length).toBeGreaterThan(0);
-  await gotoRoute(page, 'brief');
-  await expect(page.locator('h1.h-verdict')).toHaveText(attentionHeadline());
+  await gotoRoute(page, 'plan');
+  await expect(needsLinks(page)).toHaveCount(expected.length);
 
   const completed = [];
   for (let guard = 0; guard <= expected.length; guard++) {
-    const links = page.locator('.h-ny a.h-ny-t');
+    const links = needsLinks(page);
     if ((await links.count()) === 0) break;
     const id = await links.first().getAttribute('data-id');
-    await openRecFromPage(page, id, '.h-ny-list');
+    await openRecFromPage(page, id);
     const dlg = recDialog(page);
 
     const tasks = rec(id).tasks || [];
@@ -42,17 +53,17 @@ test('completing every needs-you item, steps included, turns the brief clear and
     await dlg.locator('.h-acts.big [data-act="complete"]').click();
     await expect(dlg.locator('.h-rec-head .h-st')).toHaveText('Done');
     await closeDialogWithX(page);
-    await expect(page).toHaveURL(/#\/brief$/);
-    await expect(page.locator(`.h-ny a.h-ny-t[data-id="${id}"]`)).toHaveCount(0);
+    await expect(page).toHaveURL(/#\/plan$/);
+    await expect(page.locator(`.h-rows article.h-row.needs a[data-go="rec"][data-id="${id}"]`)).toHaveCount(0);
     completed.push(id);
   }
   expect([...completed].sort()).toEqual([...expected].sort());
 
   const assertClear = async () => {
-    await expect(page.locator('h1.h-verdict')).toHaveText(clearHeadline());
-    await expect(page.locator('.h-hero')).toHaveClass(/\bclear\b/);
-    await expect(page.locator('.h-ny')).toHaveCount(0);
-    await expect(page.locator('.h-empty')).toContainText('Nothing needs you right now.');
+    await gotoRoute(page, 'plan');
+    await expect(needsCount(page)).toHaveText('0');
+    await expect(needsLinks(page)).toHaveCount(0);
+    await expect(await emailVerdict(page)).toContainText(clearHeadline());
   };
   await assertClear();
   await page.reload();

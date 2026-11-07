@@ -77,16 +77,16 @@ test.describe('AC7: planner on a real store', () => {
     rmSync(DIR, { recursive: true, force: true });
   });
 
-  test('AC7: the brief shows the planner verdict and the needs-you recs', async ({ page }) => {
+  test('AC7: Home leads with the pace headline and Plan marks the planner needs-you recs', async ({ page }) => {
     expect(scenario.live.mode).toBe('real');
     expect(needs.length).toBeGreaterThan(0);
-    await go(page, 'brief');
-    const headline = plain(scenario.verdict.attention.headline).replace(/\{count\}/g, String(needs.length));
-    await expect(page.locator('h1.h-verdict')).toHaveText(headline);
-    // Main's brief adds a second hero lede linking to Add more files; the verdict sub is the other one.
-    await expect(page.locator('.h-hero .h-lede').filter({ hasNotText: 'Add more files' })).toHaveText(plain(scenario.verdict.attention.sub));
+    // Home's heading is the pace rollup; the brief verdict no longer heads the app.
+    await go(page, 'home');
+    await expect(page.locator('h1.h-home-h')).toHaveText(scenario.pace.rollup.headline);
+    await go(page, 'plan');
+    await expect(page.locator('.h-stats > div', { hasText: 'need you' }).locator('b')).toHaveText(String(needs.length));
     for (const r of needs) {
-      const link = page.locator(`.h-ny-list a[data-go="rec"][data-id="${r.id}"]`);
+      const link = page.locator(`.h-rows article.h-row.needs .h-row-top a[data-go="rec"][data-id="${r.id}"]`);
       await expect(link).toBeVisible();
       await expect(link).toHaveText(plain(r.title));
     }
@@ -162,7 +162,7 @@ test.describe('AC7: planner on a real store', () => {
 
   test('AC7: no page shows a name from the demo scenario', async ({ page }) => {
     const found = [];
-    for (const route of ['brief', 'plan', 'wargame', 'wargame/salary', 'wargame/deferral', 'rec/fed-q4-estimate', 'accounts', 'packs']) {
+    for (const route of ['home', 'pace', 'plan', 'wargame', 'wargame/salary', 'wargame/deferral', 'rec/fed-q4-estimate', 'accounts', 'packs']) {
       await go(page, route);
       await page.waitForLoadState('networkidle');
       const text = await page.locator('body').innerText();

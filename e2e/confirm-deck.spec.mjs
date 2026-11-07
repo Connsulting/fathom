@@ -1,4 +1,5 @@
-// Confirm deck on the demo build: the nav badge, the Year banner with Start, the card anatomy,
+// Confirm deck on the demo build: no nav badge, Home's data-health line with its Confirm link and
+// question count, the card anatomy,
 // the screen keys (pick, guess, next, prev, undo, leave), revisiting and changing an answer,
 // Fathom's stored guess, keys ignored in text inputs, the All caught up state and touch swipes.
 // The deck keys run through the product keyboard registry: the ? sheet lists them, G then C opens
@@ -6,7 +7,7 @@
 // Ids, kinds, options and labels come from GET /api/confirm; answers are verified through
 // POST /api/confirm/list. Nothing is hard-coded beyond the pinned copy.
 
-import { test, expect, resetDemo, gotoRoute, quickChecks, aboutMinutes, yearBanner, bannerStart, deckCard, deckProgress, deckCurrentId, deckTo, deckOrder } from './helpers.mjs';
+import { test, expect, resetDemo, gotoRoute, questionsToConfirm, dataHealth, healthConfirm, deckCard, deckProgress, deckCurrentId, deckTo, deckOrder } from './helpers.mjs';
 
 // Kind labels shown in the card kicker (Horizon's labels for the confirm kinds).
 const KIND = {
@@ -104,31 +105,35 @@ test.beforeEach(async ({ request }) => {
   await resetDemo(request);
 });
 
-test('the Confirm nav link shows the pending count and drops the badge at zero', async ({ page, request }) => {
+test('the Confirm nav link carries no count; Home counts the questions and drops the link at zero', async ({ page, request }) => {
   const items = await pending(request);
   expect(items.length).toBeGreaterThanOrEqual(4);
-  await gotoRoute(page, 'brief');
+  await gotoRoute(page, 'home');
   await expect(navConfirm(page)).toHaveCount(1);
-  await expect(navConfirm(page)).toContainText('Confirm');
-  await expect(navConfirm(page).locator('.h-nav-n')).toHaveText(String(items.length));
+  await expect(navConfirm(page)).toHaveText('Confirm');
+  await expect(navConfirm(page).locator('.h-nav-n')).toHaveCount(0);
+  await expect(dataHealth(page)).toContainText(questionsToConfirm(items.length));
+  await expect(healthConfirm(page)).toHaveCount(1);
 
   await answerAllViaApi(request);
   await page.reload();
   await expect(page.locator('header.h-top')).toBeVisible();
   await expect(navConfirm(page)).toHaveCount(1);
   await expect(navConfirm(page).locator('.h-nav-n')).toHaveCount(0);
+  await expect(dataHealth(page)).toBeVisible();
+  await expect(dataHealth(page)).not.toContainText('to confirm');
+  await expect(healthConfirm(page)).toHaveCount(0);
 });
 
-test('the Year banner shows quick checks and minutes, and Start opens the deck', async ({ page, request }) => {
+test('Home\'s data-health line counts the questions, and its Confirm link opens the deck', async ({ page, request }) => {
   const items = await pending(request);
   const n = items.length;
-  await gotoRoute(page, 'brief');
-  const banner = yearBanner(page);
-  await expect(banner).toHaveCount(1);
-  await expect(banner.locator('b').first()).toContainText(quickChecks(n));
-  await expect(banner).toContainText(aboutMinutes(n));
-  await expect(bannerStart(page)).toBeVisible();
-  await bannerStart(page).click();
+  await gotoRoute(page, 'home');
+  await expect(dataHealth(page)).toHaveCount(1);
+  await expect(dataHealth(page)).toContainText(questionsToConfirm(n));
+  await expect(page.locator('.h-ing-banner')).toHaveCount(0);
+  await expect(healthConfirm(page)).toHaveText('Confirm');
+  await healthConfirm(page).click();
   await expect(page).toHaveURL(/#\/confirm$/);
   await expect(page.locator('.h-deck')).toBeVisible();
   await expect(deckCard(page)).toHaveAttribute('data-item', String(items[0].id));
@@ -320,11 +325,12 @@ test('deck keys are ignored while focus is in a text input', async ({ page, requ
   expect((await pending(request)).map((i) => i.id)).toEqual(order);
 });
 
-test('Escape leaves the deck for the Year page', async ({ page, request }) => {
+test('Escape leaves the deck for Home', async ({ page, request }) => {
   await openDeck(page, request);
   await page.keyboard.press('Escape');
-  await expect(page).toHaveURL(/#\/brief$/);
-  await expect(yearBanner(page)).toBeVisible();
+  await expect(page).toHaveURL(/#\/home$/);
+  await expect(dataHealth(page)).toBeVisible();
+  await expect(healthConfirm(page)).toBeVisible();
 });
 
 test('answering every card from the keyboard ends at All caught up and clears the badge', async ({ page, request }) => {
@@ -383,9 +389,9 @@ test('? on Confirm lists the deck keys in a Confirm group beside the global keys
   await expect(page).toHaveURL(/#\/confirm$/);
 });
 
-test('G then C from Year opens the deck', async ({ page, request }) => {
+test('G then C from Home opens the deck', async ({ page, request }) => {
   const items = await pending(request);
-  await gotoRoute(page, 'brief');
+  await gotoRoute(page, 'home');
   await blur(page);
   await page.keyboard.press('g');
   await page.keyboard.press('c');
@@ -397,7 +403,7 @@ test('G then C from Year opens the deck', async ({ page, request }) => {
 test('the quick switcher offers Start confirming with the pending count and opens the deck', async ({ page, request }) => {
   const items = await pending(request);
   expect(items.length).toBeGreaterThanOrEqual(1);
-  await gotoRoute(page, 'brief');
+  await gotoRoute(page, 'home');
   await blur(page);
   await page.keyboard.press('Control+k');
   await expect(switcher(page)).toBeVisible();
@@ -417,7 +423,7 @@ test('the quick switcher offers Start confirming with the pending count and open
 test('Start confirming is absent from the quick switcher when nothing is pending', async ({ page, request }) => {
   await answerAllViaApi(request);
   expect(await pending(request)).toEqual([]);
-  await gotoRoute(page, 'brief');
+  await gotoRoute(page, 'home');
   await page.reload();
   await expect(page.locator('header.h-top')).toBeVisible();
   await blur(page);

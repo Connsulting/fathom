@@ -1,7 +1,7 @@
 // Phone width (390px, mobile project only): no horizontal page scroll on any main route, and the
 // rec modal opens and closes.
 
-import { test, expect, S, resetDemo, mainRoutes, needsYouIds, gotoRoute, expectH1, openRecFromPage, closeDialogWithX, askOnAsk, plain } from './helpers.mjs';
+import { test, expect, S, resetDemo, mainRoutes, headingFor, needsYouIds, gotoRoute, expectH1, openRecFromPage, closeDialogWithX, askOnAsk, plain, dataHealth, questionsToConfirm } from './helpers.mjs';
 
 const TAGS = { tag: ['@mobile', '@mobile-only'] };
 
@@ -12,9 +12,9 @@ test.describe('mobile', TAGS, () => {
   });
 
   for (const [route, heading] of mainRoutes()) {
-    test(`#/${route} has no horizontal page scroll at 390px`, async ({ page }) => {
+    test(`#/${route} has no horizontal page scroll at 390px`, async ({ page, request }) => {
       await gotoRoute(page, route);
-      await expectH1(page, heading);
+      await expectH1(page, await headingFor(heading, request));
       const widths = await page.evaluate(() => ({ doc: document.documentElement.scrollWidth, body: document.body.scrollWidth, inner: window.innerWidth }));
       expect(widths.inner).toBe(390);
       expect(widths.doc, `documentElement.scrollWidth on #/${route}`).toBeLessThanOrEqual(390);
@@ -34,7 +34,7 @@ test.describe('mobile', TAGS, () => {
 });
 
 // Phone tab bar, overflow menu, tap popovers and the home screen manifest.
-const TABS = [['brief', 'Year'], ['confirm', 'Confirm'], ['plan', 'Plan'], ['wargame', 'Decide'], ['ask', 'Ask']];
+const TABS = [['home', 'Home'], ['confirm', 'Confirm'], ['plan', 'Plan'], ['wargame', 'Decide'], ['ask', 'Ask']];
 const OVERFLOW = ['packs', 'goals', 'accounts', 'advisor', 'yearend', 'connect', 'engine', 'email'];
 
 test.describe('phone shell', TAGS, () => {
@@ -44,7 +44,7 @@ test.describe('phone shell', TAGS, () => {
   });
 
   test('the tab bar lists the main screens and the top nav is folded', async ({ page }) => {
-    await gotoRoute(page, 'brief');
+    await gotoRoute(page, 'home');
     const tabs = page.locator('nav.h-tabs a');
     await expect(tabs).toHaveCount(TABS.length);
     for (const [i, [k, l]] of TABS.entries()) {
@@ -64,7 +64,7 @@ test.describe('phone shell', TAGS, () => {
 
   for (const [route, label] of TABS) {
     test(`the ${label} tab navigates and nothing hides under the bar`, async ({ page }) => {
-      await gotoRoute(page, route === 'brief' ? 'plan' : 'brief');
+      await gotoRoute(page, route === 'home' ? 'plan' : 'home');
       await page.locator(`nav.h-tabs a[data-go="${route}"]`).click();
       await expect(page).toHaveURL(new RegExp(`#/${route}$`));
       const tab = page.locator(`nav.h-tabs a[data-go="${route}"]`);
@@ -85,15 +85,19 @@ test.describe('phone shell', TAGS, () => {
     });
   }
 
-  test('the Confirm tab carries the same pending badge as the top nav', async ({ page }) => {
-    await gotoRoute(page, 'brief');
-    const top = await page.locator('.h-nav a[data-go="confirm"] .h-nav-n').textContent();
-    await expect(page.locator('nav.h-tabs a[data-go="confirm"] .h-nav-n')).toHaveText(top);
+  test('the Confirm tab and the top nav carry no pending badge; Home says it instead', { tag: ['@ac4'] }, async ({ page, request }) => {
+    const pending = (await (await request.get('/api/confirm')).json()).items.length;
+    expect(pending, 'the demo seeds pending questions').toBeGreaterThan(0);
+    await gotoRoute(page, 'home');
+    await expect(page.locator('nav.h-tabs a[data-go="confirm"]')).toHaveCount(1);
+    await expect(page.locator('nav.h-tabs a[data-go="confirm"] > span')).toHaveText('Confirm');
+    await expect(page.locator('.h-nav-n')).toHaveCount(0);
+    await expect(dataHealth(page)).toContainText(questionsToConfirm(pending));
   });
 
   test('the overflow menu reaches the other screens', async ({ page }) => {
     for (const k of OVERFLOW) {
-      await gotoRoute(page, 'brief');
+      await gotoRoute(page, 'home');
       await page.locator('.h-more-btn').click();
       const link = page.locator(`#h-more-p a[data-go="${k}"]`);
       await expect(link).toBeVisible();
@@ -122,7 +126,7 @@ test.describe('phone shell', TAGS, () => {
   });
 
   test('the home screen manifest and icons are served', async ({ page, request }) => {
-    await gotoRoute(page, 'brief');
+    await gotoRoute(page, 'home');
     const href = await page.locator('link[rel="manifest"]').getAttribute('href');
     const res = await request.get(href);
     expect(res.status()).toBe(200);

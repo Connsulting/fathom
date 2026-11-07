@@ -1,5 +1,5 @@
 // Real-mode polish, end to end through the UI on a real-mode server built in process: Accounts
-// trend lines from uploaded balances, plain "what changed" titles, the Engine screen's model per
+// trend lines from uploaded balances, plain "what changed" titles on Plan, the Engine screen's model per
 // purpose, Decide on this and Revisit on the salary war game, and Files in the switcher and the
 // More menu. Runs at desktop and at 390px (every test carries @mobile). Skipped against a remote
 // server.
@@ -90,7 +90,12 @@ test.describe('real-mode polish', () => {
     const sc = await fetchScenario();
     expect(sc.events.length).toBeGreaterThan(0);
     for (const e of sc.events) expect(e.title, e.title).not.toMatch(/^[a-z]+\.[A-Za-z0-9.]+ changed$/);
-    await go(page, 'brief');
+    // What changed moved from Home to Plan.
+    await go(page, 'home');
+    await expect(page.locator('section.h-home')).toBeVisible();
+    await expect(page.locator('.h-evs')).toHaveCount(0);
+    await go(page, 'plan');
+    await expect(page.locator('.h-evs')).toBeVisible();
     const titles = await page.locator('.h-evs li b').allTextContents();
     expect(titles.length).toBeGreaterThan(0);
     for (const t of titles) expect(t).not.toMatch(/\b[a-z]+\.[A-Za-z0-9]+ changed\b/);
@@ -144,7 +149,7 @@ test.describe('real-mode polish', () => {
   });
 
   test('@mobile Files is in the quick switcher and in the More menu', async ({ page }) => {
-    await go(page, 'brief');
+    await go(page, 'home');
     await page.keyboard.press('Control+k');
     const input = page.locator('.h-qs-host input.h-qs-in');
     await expect(input).toBeVisible();
@@ -154,7 +159,7 @@ test.describe('real-mode polish', () => {
     await page.keyboard.press('Enter');
     await expect(page).toHaveURL(/#\/add$/);
 
-    await go(page, 'brief');
+    await go(page, 'home');
     await page.locator('.h-more-btn').click();
     const link = page.locator('.h-more-p a[data-go="add"]');
     await expect(link).toBeVisible();
