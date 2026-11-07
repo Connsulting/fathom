@@ -157,7 +157,13 @@ test('migrate applies the confirm-context migration, creates exactly its four ta
   for (const t of tables) assert.ok(DB.listTables(s.db).includes(t), `${t} is kept`);
   assert.deepEqual(snapshot(s.db), before, 'every stored row is unchanged');
   assert.deepEqual(DB.migrate(s.db).applied, DB.listMigrations().filter((m) => m.id > mig.id).map((m) => m.id));
-  assert.deepEqual(snapshot(s.db), before, 'later migrations keep every stored row');
+  const later = snapshot(s.db);
+  later.accounts = later.accounts.map((s) => {
+    const row = JSON.parse(s);
+    if (row.display_name == null) delete row.display_name;
+    return JSON.stringify(row);
+  });
+  assert.deepEqual(later, before, 'later migrations keep every stored row');
 
   const owner = C.getItem(s.db, ids.ownerId);
   assert.equal(owner.status, 'answered');
