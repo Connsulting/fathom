@@ -5,7 +5,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { rm } from 'node:fs/promises';
-import { validateTitle, fallbackTitle, nameThread, createThread, titleWords } from '../src/api/threads.mjs';
+import { validateTitle, checkTitle, fallbackTitle, nameThread, createThread, titleWords } from '../src/api/threads.mjs';
+import { getSetting } from '../src/store/db.mjs';
 import { createEngine, createMemoryLedger, EngineOffError, BudgetExceededError } from '../src/engine/index.mjs';
 import { DEFAULT_MODEL, TITLE_MODEL, usageCostUsd } from '../src/engine/pricing.mjs';
 import { buildScenario } from '../src/scenario/build.mjs';
@@ -14,8 +15,9 @@ import { tempDb } from './helpers/server.mjs';
 const SC = { fig: {}, names: {} };
 const CLOCK = '2026-11-05';
 const close = (a, b) => Math.abs(a - b) < 1e-9;
-// A model-title check whose owner said every word of the title, so only the other rules can reject it.
-const owned = raw => validateTitle(raw, { fromModel: true, ownerWords: new Set(titleWords(String(raw))) });
+// A model-title check whose conversation holds every word of the title, so only the other rules can reject it.
+const owned = raw => validateTitle(raw, { fromModel: true, conversationWords: new Set(titleWords(String(raw))) });
+const words = text => new Set(titleWords(text));
 
 // ---------------------------------------------------------------- validateTitle
 
@@ -366,41 +368,47 @@ test('AC3 a manual rename made while the title call runs survives', async t => {
   assert.deepEqual(rowOf(db, thread.key), { title: 'Synthetic manual name', title_source: 'manual' });
 });
 
-test('AC3 a model title with a word the owner never used falls back', async t => {
-  const said = 'How should we plan the estimates';
-  const ownerWords = new Set(titleWords(said));
-  assert.equal(validateTitle('Save a quarter of income', { fromModel: true, ownerWords }), null);
+test('AC3 a model title with words the owner never typed is accepted when the conversation has a topic word', async t => {
+  const said = 'How should we plan our spending';
+  const conversationWords = words(`${said} Synthetic spending answer`);
+  assert.equal(validateTitle('Retirement portfolio target from spending', { fromModel: true, conversationWords }),
+    'Retirement portfolio target from spending');
   const { db, thread, add } = await namingStore(t);
   add(thread.key, 'me', said);
-  add(thread.key, 'fathom', '<p>Synthetic estimate answer one</p>');
-  add(thread.key, 'me', 'Synthetic estimate question two');
-  add(thread.key, 'fathom', '<p>Synthetic estimate answer two</p>');
-  const { engine, calls } = stubEngine({ title: 'Save a quarter of income' });
-  await nameThread({ db, engine, key: thread.key, clock: CLOCK });
+  add(thread.key, 'fathom', '<p>Synthetic spending answer</p>');
+  const { engine, calls } = stubEngine({ title: 'Retirement portfolio target from spending' });
+  const out = await nameThread({ db, engine, key: thread.key, clock: CLOCK });
+  assert.deepEqual(out, { title: 'Retirement portfolio target from spending', titleSource: 'auto', from: 'model' });
   assert.equal(calls.length, 1);
-  assert.deepEqual(rowOf(db, thread.key), { title: fallbackTitle(SC, said), title_source: 'auto' });
-  assert.equal(fallbackTitle(SC, said), said);
+  assert.deepEqual(rowOf(db, thread.key), { title: 'Retirement portfolio target from spending', title_source: 'auto' });
 });
 
-test('AC3 quarterly in owner text does not admit quarter in a model title', () => {
-  const ownerWords = new Set(titleWords('Our quarterly estimates'));
-  assert.equal(validateTitle('Quarter estimates', { fromModel: true, ownerWords }), null);
-  assert.equal(validateTitle('Quarterly estimates', { fromModel: true, ownerWords }), 'Quarterly estimates');
+test('AC3 conversation words come from reply text as well as owner text', async t => {
+  const { db, thread, add } = await namingStore(t);
+  add(thread.key, 'me', 'Synthetic opening question');
+  add(thread.key, 'fathom', '<p>Synthetic mortgage payoff answer</p>');
+  const { engine } = stubEngine({ title: 'Mortgage payoff' });
+  const out = await nameThread({ db, engine, key: thread.key, clock: CLOCK });
+  assert.deepEqual(out, { title: 'Mortgage payoff', titleSource: 'auto', from: 'model' });
 });
 
-test('AC3 fraction and multiplier words never pass in a model title, even in the owner\'s words', async t => {
-  const ownerWords = new Set(titleWords('How much income should I save this quarter? What about taxes?'));
-  assert.equal(validateTitle('Save a quarter of income', { fromModel: true, ownerWords }), null);
-  const maj = new Set(titleWords('Save the majority of income'));
-  assert.equal(validateTitle('Save the majority of income', { fromModel: true, ownerWords: maj }), null);
-  const dbl = new Set(titleWords('Double the savings'));
-  assert.equal(validateTitle('Double the savings', { fromModel: true, ownerWords: dbl }), null);
+test('AC3 quarterly in the conversation does not admit quarter in a model title', () => {
+  const conversationWords = words('Our quarterly estimates');
+  assert.equal(validateTitle('Quarter estimates', { fromModel: true, conversationWords }), null, 'quarter is a money word');
+  assert.equal(validateTitle('Quarterly estimates', { fromModel: true, conversationWords }), 'Quarterly estimates');
+});
+
+test('AC3 fraction and multiplier words never pass in a model title, even in the conversation', async t => {
+  const conversationWords = words('How much income should I save this quarter? What about taxes?');
+  assert.equal(validateTitle('Save a quarter of income', { fromModel: true, conversationWords }), null);
+  assert.equal(validateTitle('Save the majority of income', { fromModel: true, conversationWords: words('Save the majority of income') }), null);
+  assert.equal(validateTitle('Double the savings', { fromModel: true, conversationWords: words('Double the savings') }), null);
   for (const w of ['quarter', 'quarters', 'third', 'thirds', 'fourth', 'fourths', 'fifth', 'fifths', 'sixth', 'seventh', 'eighth', 'ninth',
     'tenth', 'tenths', 'halves', 'double', 'triple', 'quadruple', 'twice', 'thrice', 'fraction', 'majority', 'minority', 'most', 'bulk']) {
-    assert.equal(validateTitle(`Save ${w} income`, { fromModel: true, ownerWords: new Set(titleWords(`Save ${w} income`)) }), null, w);
+    assert.equal(validateTitle(`Save ${w} income`, { fromModel: true, conversationWords: words(`Save ${w} income`) }), null, w);
   }
-  const live = new Set(titleWords('Our quarterly estimates'));
-  assert.equal(validateTitle('Quarterly estimates', { fromModel: true, ownerWords: live }), 'Quarterly estimates');
+  const live = words('Our quarterly estimates');
+  assert.equal(validateTitle('Quarterly estimates', { fromModel: true, conversationWords: live }), 'Quarterly estimates');
   const { db, thread, add } = await namingStore(t);
   const first = 'How much income should I save this quarter?';
   add(thread.key, 'me', first);
@@ -417,11 +425,249 @@ test('AC3 titleWords normalizes case, plurals, possessives and hyphens', () => {
   assert.deepEqual(titleWords("Owner's S-corp Taxes, estimates!"), ['owner', 's', 'corp', 'tax', 'estimate']);
 });
 
-test('AC3 stopwords in a model title are ignored but content words still must be owner words', () => {
-  const ownerWords = new Set(titleWords('estimates'));
-  assert.equal(validateTitle('The estimates', { fromModel: true, ownerWords }), 'The estimates');
-  assert.equal(validateTitle('The estimates for our plan', { fromModel: true, ownerWords }), null);
-  assert.equal(validateTitle('The estimates', { fromModel: true }), null, 'no ownerWords means no content word passes');
+test('AC3 stopwords in a model title are ignored and one shared content word keeps it on topic', () => {
+  const conversationWords = words('estimates');
+  assert.equal(validateTitle('The estimates', { fromModel: true, conversationWords }), 'The estimates');
+  assert.equal(validateTitle('The estimates for our plan', { fromModel: true, conversationWords }), 'The estimates for our plan',
+    'words outside the conversation are fine while one content word is shared');
+  assert.equal(validateTitle('The plan for our garden', { fromModel: true, conversationWords }), null, 'no shared content word');
+  assert.equal(validateTitle('The estimates', { fromModel: true }), null, 'no conversationWords means nothing is on topic');
+});
+
+// ---------------------------------------------------------------- checkTitle reasons
+
+test('AC3 checkTitle returns the clean title or a reason code', () => {
+  const cw = words('Synthetic budget spending estimates alpha bravo charlie delta echo foxtrot golf hotel india tax plan');
+  const check = raw => checkTitle(raw, { fromModel: true, conversationWords: cw });
+  assert.deepEqual(check('"Budget spending."'), { title: 'Budget spending' });
+  assert.deepEqual(check('Retirement tax plan'), { title: 'Retirement tax plan' });
+  const reasons = [
+    ['Planning the 2026 estimates', 'number'],
+    ['Save $ on taxes', 'number'],
+    ['Paying € on the plan', 'number'],
+    ['Fees at % of plan', 'number'],
+    ['Half the budget', 'money_word'],
+    ['Dollars saved', 'money_word'],
+    ['Budget spending a quarter', 'money_word'],
+    ['alpha bravo charlie delta echo foxtrot golf hotel india', 'too_many_words'],
+    ['x'.repeat(61), 'too_long'],
+    ['<b>Budget</b> spending', 'markup'],
+    ['Budget {spending}', 'markup'],
+    ['Budget `spending`', 'markup'],
+    ['Garden hose watering', 'off_topic'],
+    ['', 'empty'],
+    ['   ', 'empty'],
+    [42, 'not_text'],
+    [null, 'not_text'],
+    [undefined, 'not_text'],
+    [{}, 'not_text'],
+  ];
+  for (const [raw, reason] of reasons) assert.deepEqual(check(raw), { reason }, JSON.stringify(raw));
+});
+
+test('AC3 checkTitle without fromModel is the rename path and applies no model rules', () => {
+  assert.deepEqual(checkTitle('Plan for 2027 and the 401k'), { title: 'Plan for 2027 and the 401k' });
+  assert.deepEqual(checkTitle('Garden hose watering'), { title: 'Garden hose watering' }, 'no topic rule for renames');
+  assert.deepEqual(checkTitle('x'.repeat(61)), { reason: 'too_long' });
+  assert.deepEqual(checkTitle('<b>Tax</b>'), { reason: 'markup' });
+  assert.deepEqual(checkTitle('Tax\nplan'), { reason: 'not_text' });
+});
+
+// ---------------------------------------------------------------- rejection record
+
+function seqEngine(replies, { on = true } = {}) {
+  const calls = [];
+  const state = { on };
+  return {
+    calls,
+    state,
+    engine: {
+      mode: 'live',
+      isOn: () => state.on,
+      call: async req => {
+        calls.push(req);
+        const reply = replies[Math.min(calls.length - 1, replies.length - 1)];
+        if (reply instanceof Error) throw reply;
+        return { text: typeof reply === 'string' ? reply : JSON.stringify(reply), costUsd: 0, model: TITLE_MODEL, toolResults: [] };
+      },
+    },
+  };
+}
+
+const titleCalls = calls => calls.filter(c => c.purpose === 'title').length;
+const rejects = db => getSetting(db, 'ask.titleRejects', null);
+
+test('AC3 a rejected model title records only its reason in ask.titleRejects', async t => {
+  const cases = [
+    [{ title: 'Zebra 4000 plan' }, 'number', 'Zebra'],
+    [{ title: 'Zebra half plan' }, 'money_word', 'Zebra'],
+    [{ title: 'zebra giraffe lion tiger bear wolf fox deer moose' }, 'too_many_words', 'giraffe'],
+    [{ title: 'Zebra <b>plan</b>' }, 'markup', 'Zebra'],
+    [{ title: 'Zebra giraffe watering' }, 'off_topic', 'Zebra'],
+    [{ title: '' }, 'empty', null],
+    [{ title: 42 }, 'not_text', null],
+    [{ title: 'z'.repeat(61) }, 'too_long', 'zzzzzz'],
+  ];
+  for (const [reply, reason, leak] of cases) {
+    const { db, thread, add } = await namingStore(t);
+    twoTurns(add, thread.key);
+    const { engine } = seqEngine([reply]);
+    await nameThread({ db, engine, key: thread.key, clock: CLOCK });
+    assert.deepEqual(rowOf(db, thread.key), { title: FIRST_Q, title_source: 'auto' }, 'falls back');
+    assert.deepEqual(rejects(db), { [reason]: 1 }, reason);
+    if (leak) assert.ok(!JSON.stringify(rejects(db)).includes(leak), `no title text stored for ${reason}`);
+  }
+});
+
+test('AC3 unparseable title JSON records unparsable and a thrown call records call_failed', async t => {
+  for (const reply of ['not json at all', { name: 'Quarterly estimate planning' }, '[1,2]', 'null']) {
+    const { db, thread, add } = await namingStore(t);
+    twoTurns(add, thread.key);
+    await nameThread({ db, engine: seqEngine([reply]).engine, key: thread.key, clock: CLOCK });
+    assert.deepEqual(rejects(db), { unparsable: 1 }, JSON.stringify(reply));
+    assert.deepEqual(rowOf(db, thread.key), { title: FIRST_Q, title_source: 'auto' });
+  }
+  const { db, thread, add } = await namingStore(t);
+  twoTurns(add, thread.key);
+  await nameThread({ db, engine: seqEngine([new Error('synthetic transport failure')]).engine, key: thread.key, clock: CLOCK });
+  assert.deepEqual(rejects(db), { call_failed: 1 });
+  assert.ok(!JSON.stringify(rejects(db)).includes('synthetic transport failure'), 'no error text stored');
+  assert.deepEqual(rowOf(db, thread.key), { title: FIRST_Q, title_source: 'auto' });
+});
+
+test('AC3 ask.titleRejects counts repeats per reason and an accepted title or a disabled engine records nothing', async t => {
+  const { db, thread, add } = await namingStore(t);
+  assert.equal(rejects(db), null, 'nothing recorded yet');
+  twoTurns(add, thread.key);
+  await nameThread({ db, engine: seqEngine([{ title: 'Spend 4000 on the estimates' }]).engine, key: thread.key, clock: CLOCK });
+  assert.deepEqual(rejects(db), { number: 1 });
+  const second = createThread(db, '2026-11-05T09:00:00.000Z');
+  twoTurns(add, second.key);
+  await nameThread({ db, engine: seqEngine([{ title: 'Spend 5000 on the estimates' }]).engine, key: second.key, clock: CLOCK });
+  assert.deepEqual(rejects(db), { number: 2 }, 'incremented');
+  const third = createThread(db, '2026-11-05T09:00:00.000Z');
+  twoTurns(add, third.key);
+  await nameThread({ db, engine: seqEngine([{ title: 'Half the estimates' }]).engine, key: third.key, clock: CLOCK });
+  assert.deepEqual(rejects(db), { number: 2, money_word: 1 });
+  const fourth = createThread(db, '2026-11-05T09:00:00.000Z');
+  twoTurns(add, fourth.key);
+  await nameThread({ db, engine: seqEngine([{ title: 'Quarterly estimate planning' }]).engine, key: fourth.key, clock: CLOCK });
+  const fifth = createThread(db, '2026-11-05T09:00:00.000Z');
+  twoTurns(add, fifth.key);
+  await nameThread({ db, engine: seqEngine([{ title: 'Spend 4000' }], { on: false }).engine, key: fifth.key, clock: CLOCK });
+  assert.deepEqual(rejects(db), { number: 2, money_word: 1 }, 'accepted and engine-off threads add nothing');
+});
+
+// ---------------------------------------------------------------- one retry after the second turn
+
+test('AC3 a fallback-titled thread is retried once after its second completed turn and an accepted title replaces it', async t => {
+  const { db, thread, add } = await namingStore(t);
+  add(thread.key, 'me', FIRST_Q);
+  add(thread.key, 'fathom', '<p>Synthetic estimate answer one</p>');
+  const { engine, calls } = seqEngine([{ title: 'Spend 4000 on the estimates' }, { title: 'Quarterly estimate planning' }]);
+  assert.deepEqual(await nameThread({ db, engine, key: thread.key, clock: CLOCK }), { title: FIRST_Q, titleSource: 'auto', from: 'fallback' });
+  assert.equal(titleCalls(calls), 1);
+  add(thread.key, 'me', 'Synthetic estimate question two');
+  add(thread.key, 'fathom', '<p>Synthetic estimate answer two</p>');
+  const out = await nameThread({ db, engine, key: thread.key, clock: CLOCK });
+  assert.deepEqual(out, { title: 'Quarterly estimate planning', titleSource: 'auto', from: 'model' });
+  assert.equal(titleCalls(calls), 2, 'exactly one retry call');
+  assert.deepEqual(rowOf(db, thread.key), { title: 'Quarterly estimate planning', title_source: 'auto' });
+  add(thread.key, 'me', 'Synthetic estimate question three');
+  add(thread.key, 'fathom', '<p>Synthetic estimate answer three</p>');
+  assert.equal(await nameThread({ db, engine, key: thread.key, clock: CLOCK }), null);
+  assert.equal(titleCalls(calls), 2, 'no further title call after the third turn');
+});
+
+test('AC3 a rejected retry keeps the fallback, records the reason and is not tried again', async t => {
+  const { db, thread, add } = await namingStore(t);
+  add(thread.key, 'me', FIRST_Q);
+  add(thread.key, 'fathom', '<p>Synthetic estimate answer one</p>');
+  const { engine, calls } = seqEngine([{ title: 'Spend 4000 on the estimates' }, { title: 'Half the estimates' }, { title: 'Quarterly estimate planning' }]);
+  await nameThread({ db, engine, key: thread.key, clock: CLOCK });
+  add(thread.key, 'me', 'Synthetic estimate question two');
+  add(thread.key, 'fathom', '<p>Synthetic estimate answer two</p>');
+  assert.equal(await nameThread({ db, engine, key: thread.key, clock: CLOCK }), null);
+  assert.equal(titleCalls(calls), 2);
+  assert.deepEqual(rowOf(db, thread.key), { title: FIRST_Q, title_source: 'auto' });
+  assert.deepEqual(rejects(db), { number: 1, money_word: 1 });
+  add(thread.key, 'me', 'Synthetic estimate question three');
+  add(thread.key, 'fathom', '<p>Synthetic estimate answer three</p>');
+  assert.equal(await nameThread({ db, engine, key: thread.key, clock: CLOCK }), null);
+  assert.equal(titleCalls(calls), 2, 'the retry happens once');
+  assert.deepEqual(rowOf(db, thread.key), { title: FIRST_Q, title_source: 'auto' });
+});
+
+test('AC3 a thread whose first title came from the model gets no retry at turn 2', async t => {
+  const { db, thread, add } = await namingStore(t);
+  add(thread.key, 'me', FIRST_Q);
+  add(thread.key, 'fathom', '<p>Synthetic estimate answer one</p>');
+  const { engine, calls } = seqEngine([{ title: 'Quarterly estimate planning' }, { title: 'Estimate planning question' }]);
+  assert.equal((await nameThread({ db, engine, key: thread.key, clock: CLOCK })).from, 'model');
+  add(thread.key, 'me', 'Synthetic estimate question two');
+  add(thread.key, 'fathom', '<p>Synthetic estimate answer two</p>');
+  assert.equal(await nameThread({ db, engine, key: thread.key, clock: CLOCK }), null);
+  assert.equal(titleCalls(calls), 1);
+  assert.deepEqual(rowOf(db, thread.key), { title: 'Quarterly estimate planning', title_source: 'auto' });
+});
+
+test('AC3 a manual rename before turn 2 prevents the retry', async t => {
+  const { db, thread, add } = await namingStore(t);
+  add(thread.key, 'me', FIRST_Q);
+  add(thread.key, 'fathom', '<p>Synthetic estimate answer one</p>');
+  const { engine, calls } = seqEngine([{ title: 'Spend 4000 on the estimates' }, { title: 'Quarterly estimate planning' }]);
+  await nameThread({ db, engine, key: thread.key, clock: CLOCK });
+  db.prepare("UPDATE conversations SET title = 'Synthetic manual name', title_source = 'manual' WHERE key = ?").run(thread.key);
+  add(thread.key, 'me', 'Synthetic estimate question two');
+  add(thread.key, 'fathom', '<p>Synthetic estimate answer two</p>');
+  assert.equal(await nameThread({ db, engine, key: thread.key, clock: CLOCK }), null);
+  assert.equal(titleCalls(calls), 1);
+  assert.deepEqual(rowOf(db, thread.key), { title: 'Synthetic manual name', title_source: 'manual' });
+});
+
+test('AC3 a manual rename made while the retry call runs survives', async t => {
+  const { db, thread, add } = await namingStore(t);
+  add(thread.key, 'me', FIRST_Q);
+  add(thread.key, 'fathom', '<p>Synthetic estimate answer one</p>');
+  const seq = seqEngine([{ title: 'Spend 4000 on the estimates' }, { title: 'Quarterly estimate planning' }]);
+  await nameThread({ db, engine: seq.engine, key: thread.key, clock: CLOCK });
+  add(thread.key, 'me', 'Synthetic estimate question two');
+  add(thread.key, 'fathom', '<p>Synthetic estimate answer two</p>');
+  const racing = { ...seq.engine, call: async req => {
+    const res = await seq.engine.call(req);
+    db.prepare("UPDATE conversations SET title = 'Synthetic manual name', title_source = 'manual' WHERE key = ?").run(thread.key);
+    return res;
+  } };
+  await nameThread({ db, engine: racing, key: thread.key, clock: CLOCK });
+  assert.deepEqual(rowOf(db, thread.key), { title: 'Synthetic manual name', title_source: 'manual' });
+});
+
+test('AC3 no retry call when the engine is off at turn 2 or the first title was null', async t => {
+  {
+    const { db, thread, add } = await namingStore(t);
+    add(thread.key, 'me', FIRST_Q);
+    add(thread.key, 'fathom', '<p>Synthetic estimate answer one</p>');
+    const { engine, calls, state } = seqEngine([{ title: 'Spend 4000 on the estimates' }, { title: 'Quarterly estimate planning' }]);
+    await nameThread({ db, engine, key: thread.key, clock: CLOCK });
+    state.on = false;
+    add(thread.key, 'me', 'Synthetic estimate question two');
+    add(thread.key, 'fathom', '<p>Synthetic estimate answer two</p>');
+    assert.equal(await nameThread({ db, engine, key: thread.key, clock: CLOCK }), null);
+    assert.equal(titleCalls(calls), 1);
+    assert.deepEqual(rowOf(db, thread.key), { title: FIRST_Q, title_source: 'auto' });
+  }
+  {
+    const { db, thread, add } = await namingStore(t);
+    add(thread.key, 'me', '{f:yearend_cash}');
+    add(thread.key, 'fathom', '<p>Synthetic estimate answer one</p>');
+    const { engine, calls } = seqEngine([{ title: '<b>Quarterly</b> estimates' }, { title: 'Quarterly estimate planning' }]);
+    await nameThread({ db, engine, key: thread.key, clock: CLOCK });
+    add(thread.key, 'me', 'Synthetic estimate question two');
+    add(thread.key, 'fathom', '<p>Synthetic estimate answer two</p>');
+    assert.equal(await nameThread({ db, engine, key: thread.key, clock: CLOCK }), null);
+    assert.equal(titleCalls(calls), 1, 'a NULL title is never retried');
+    assert.deepEqual(rowOf(db, thread.key), { title: null, title_source: 'auto' });
+  }
 });
 
 // ---------------------------------------------------------------- engine and pricing
