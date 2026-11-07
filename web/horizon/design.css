@@ -19,6 +19,8 @@
   --ink: #04120e;
   --sans: 'Instrument Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --top-h: 57px;
+  --subnav-h: 41px;
   background: var(--bg);
   color: var(--tx);
   font-family: var(--sans);
@@ -57,23 +59,50 @@
 .d-horizon .h-nav a { padding: 6px 10px; border-radius: 6px; color: var(--mu); font-size: 13.5px; white-space: nowrap; }
 .d-horizon .h-nav a:hover { color: var(--tx); }
 .d-horizon .h-nav a.on { color: var(--tx); background: var(--s2); }
-.d-horizon .h-nav-sep { width: 1px; height: 16px; background: var(--line2); margin: 0 8px; flex: none; }
-.d-horizon .h-more-wrap { position: relative; flex: none; }
-.d-horizon .h-more-btn { all: unset; box-sizing: border-box; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; padding: 6px 8px 6px 10px; border-radius: 6px; color: var(--mu); font-size: 13.5px; white-space: nowrap; }
-.d-horizon .h-more-btn:hover, .d-horizon .h-more-btn[aria-expanded="true"] { color: var(--tx); }
-.d-horizon .h-more-btn.on { color: var(--tx); background: var(--s2); }
-.d-horizon .h-more-btn .h-i { width: 12px; height: 12px; transition: transform 0.15s; }
-.d-horizon .h-more-btn[aria-expanded="true"] .h-i { transform: rotate(180deg); }
-.d-horizon .h-more-btn:focus-visible { outline: 2px solid var(--ac); outline-offset: 2px; }
-.d-horizon .h-more-p { position: absolute; z-index: 30; top: calc(100% + 10px); right: 0; width: min(256px, calc(100vw - 32px)); padding: 6px; background: var(--s2); border: 1px solid var(--line2); border-radius: 12px; }
-.d-horizon .h-more-p[hidden] { display: none; }
-.d-horizon .h-who { margin-bottom: 6px; padding: 8px 10px 10px; border-bottom: 1px solid var(--line2); color: var(--tx); font-size: 14px; overflow-wrap: anywhere; }
-.d-horizon .h-who span { display: block; margin-top: 2px; color: var(--fa); font-size: 12.5px; }
-.d-horizon .h-more-g + .h-more-g { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--line2); }
-.d-horizon .h-more-h { padding: 8px 10px 4px; font-size: 11.5px; letter-spacing: 0.07em; text-transform: uppercase; color: var(--fa); }
-.d-horizon .h-more-p a { display: block; padding: 8px 10px; border-radius: 7px; color: var(--tx2); font-size: 14px; }
-.d-horizon .h-more-p a:hover { background: var(--s1); color: var(--tx); }
-.d-horizon .h-more-p a.on { color: var(--ac2); }
+.d-horizon .h-top-act { display: flex; align-items: center; gap: 6px; flex: none; }
+.d-horizon .h-gear { flex: none; width: 32px; height: 32px; display: grid; place-items: center; border-radius: 7px; color: var(--mu); }
+.d-horizon .h-gear:hover,
+.d-horizon .h-gear.on { color: var(--tx); background: var(--s2); }
+.d-horizon .h-gear .h-i { width: 16px; height: 16px; vertical-align: 0; }
+
+/* Sub-nav: the views of the current tab, an underlined row at the top of the page. */
+.d-horizon .h-subnav { display: flex; align-items: stretch; gap: 26px; height: var(--subnav-h); margin: -20px 0 32px; border-bottom: 1px solid var(--line); overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+.d-horizon .h-subnav::-webkit-scrollbar { display: none; }
+.d-horizon .h-subnav a { display: inline-flex; align-items: center; flex: none; margin-bottom: -1px; border-bottom: 1.5px solid transparent; color: var(--mu); font-size: 13.5px; white-space: nowrap; }
+.d-horizon .h-subnav a:hover { color: var(--tx); }
+.d-horizon .h-subnav a.on { color: var(--tx); border-bottom-color: var(--ac); }
+.d-horizon .h-subnav a:focus-visible { outline-offset: -2px; }
+/* Ask is one screen tall with a sticky thread list: the sub-nav sticks under the top bar and the
+   panes start below it. */
+.d-horizon .h-main:has(> .h-askx) > .h-subnav { position: sticky; top: var(--top-h); z-index: 19; margin: 0; padding: 0 20px; background: var(--bg); }
+.d-horizon .h-subnav + .h-askx { --askx-top: calc(var(--top-h) + var(--subnav-h)); }
+
+/* Settings: the signed-in line, then one row per screen or account page. */
+.d-horizon .h-settings { max-width: 720px; }
+.d-horizon .h-settings .h-ph { margin-bottom: 24px; }
+.d-horizon .h-settings .h-who { margin-bottom: 18px; padding: 12px 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--s1); color: var(--tx); font-size: 14px; overflow-wrap: anywhere; }
+.d-horizon .h-settings .h-who span { display: block; margin-top: 2px; color: var(--fa); font-size: 12.5px; }
+.d-horizon .h-set { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.d-horizon .h-set-r { position: relative; display: grid; grid-template-columns: 120px minmax(0, 1fr) auto; align-items: center; gap: 4px 18px; min-height: 56px; padding: 10px 16px; color: var(--mu); font-size: 13.5px; }
+.d-horizon .h-set-r + .h-set-r { border-top: 1px solid var(--line); }
+.d-horizon .h-set-r:hover { background: var(--s1); }
+.d-horizon .h-set-r a { color: var(--tx); font-weight: 500; font-size: 14.5px; }
+.d-horizon .h-set-r a::after { content: ''; position: absolute; inset: 0; }
+.d-horizon .h-set-r a:focus-visible { outline: none; }
+.d-horizon .h-set-r:has(a:focus-visible) { outline: 2px solid var(--ac); outline-offset: -2px; border-radius: 10px; }
+.d-horizon .h-set-r > .h-i { color: var(--fa); }
+.d-horizon .h-set-r:hover > .h-i { color: var(--ac); }
+
+/* Money: the data-health line spelled out, one row per part. */
+.d-horizon .h-money-health { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px 20px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--s1); }
+.d-horizon .h-money-health.stale { border-color: rgba(229, 115, 95, 0.28); }
+.d-horizon .h-mh-h { grid-column: 1 / -1; font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--mu); }
+.d-horizon .h-mh-rows { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.d-horizon .h-mh-r { display: flex; align-items: center; gap: 10px; color: var(--tx2); font-size: 13.5px; }
+.d-horizon .h-mh-r .h-dh-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ac); flex: none; }
+.d-horizon .h-mh-r.ask .h-dh-dot { background: var(--ac2); }
+.d-horizon .h-mh-r.bad .h-dh-dot { background: var(--bad); }
+.d-horizon .h-money .h-ro { margin-top: 28px; }
 .d-horizon .h-engine-off { max-width: 1336px; margin: 0 auto; padding: 10px 48px; color: var(--mu); font-size: 13px; display: flex; gap: 8px; align-items: center; border-bottom: 1px solid var(--line); }
 .d-horizon .h-engine-off a { color: var(--ac); }
 
@@ -776,7 +805,7 @@ a.h-dec-t:hover { color: var(--ac2); }
 }
 
 /* ---------- responsive ---------- */
-.d-horizon .h-tabs, .d-horizon .h-more-phone { display: none; }
+.d-horizon .h-tabs { display: none; }
 @media (max-width: 1100px) {
   .d-horizon .h-cols, .d-horizon .h-cols.rec { grid-template-columns: minmax(0, 1fr); gap: 0; }
   .d-horizon .h-wg-split { grid-template-columns: minmax(0, 1fr); }
@@ -792,12 +821,22 @@ a.h-dec-t:hover { color: var(--ac2); }
 @media (max-width: 720px) {
   .d-horizon { font-size: 14px; }
   .d-horizon .h-top { padding-top: env(safe-area-inset-top); }
-  .d-horizon .h-nav, .d-horizon .h-nav-sep { display: none; }
+  .d-horizon .h-nav { display: none; }
   .d-horizon .h-navbar { justify-content: flex-end; flex: 1 1 auto; }
-  .d-horizon .h-more-btn, .d-horizon .h-search-btn { min-height: 44px; min-width: 44px; justify-content: center; }
-  .d-horizon .h-more-p { position: fixed; top: calc(52px + env(safe-area-inset-top)); right: 16px; max-height: calc(100vh - 140px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); overflow-y: auto; }
-  .d-horizon .h-more-p a { padding: 12px 10px; }
-  .d-horizon .h-more-phone { display: block; }
+  .d-horizon .h-top-act { gap: 2px; margin-right: -6px; }
+  .d-horizon .h-top-act .h-search-btn { width: 44px; height: 44px; border-color: transparent; }
+  .d-horizon .h-top-act .h-gear { width: 44px; height: 44px; }
+  .d-horizon .h-top-act .h-i { width: 18px; height: 18px; }
+  .d-horizon { --subnav-h: 45px; --top-h: calc(53px + env(safe-area-inset-top)); }
+  .d-horizon .h-subnav { gap: 22px; margin: -16px -16px 24px; padding: 0 16px; }
+  .d-horizon .h-subnav a { min-height: 44px; font-size: 14px; }
+  .d-horizon .h-main:has(> .h-askx) > .h-subnav { margin: 0; padding: 0 16px; }
+  .d-horizon .h-set-r { grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; padding: 12px 16px; }
+  .d-horizon .h-set-r a { display: inline-flex; align-items: center; min-height: 28px; }
+  .d-horizon .h-set-r p { grid-column: 1; grid-row: 2; }
+  .d-horizon .h-set-r > .h-i { grid-column: 2; grid-row: 1 / span 2; }
+  .d-horizon .h-money-health { grid-template-columns: minmax(0, 1fr); padding: 12px; }
+  .d-horizon .h-money-health .h-dhealth-a a { min-height: 44px; padding: 0 14px; }
   .d-horizon .h-tabs { display: flex; position: fixed; z-index: 40; left: 0; right: 0; bottom: 0; margin: 0; padding: 0 4px env(safe-area-inset-bottom); background: var(--bg); border-top: 1px solid var(--line); }
   .d-horizon .h-tabs a { position: relative; flex: 1 1 0; min-width: 0; min-height: 56px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; color: var(--mu); font-size: 11.5px; letter-spacing: 0.01em; text-decoration: none; -webkit-tap-highlight-color: transparent; }
   .d-horizon .h-tabs a .h-i { width: 22px; height: 22px; }
@@ -805,7 +844,6 @@ a.h-dec-t:hover { color: var(--ac2); }
   .d-horizon .h-tabs a:focus-visible { outline: 2px solid var(--ac); outline-offset: -4px; border-radius: 8px; }
   .d-horizon .h-tabs a > span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .d-horizon .h-top-in { padding: 0 16px; gap: 12px; height: 52px; }
-  .d-horizon .h-more-btn { padding: 6px 8px; font-size: 14px; }
   .d-horizon .h-main { padding: 28px 16px calc(72px + 64px + env(safe-area-inset-bottom)); }
   .d-horizon .h-engine-off { padding: 10px 16px; }
   .d-horizon .h-verdict { font-size: 28px; gap: 12px; }

@@ -23,9 +23,12 @@ async function openDecided(page) {
   await expect(det).toHaveAttribute('open', '');
 }
 
+// Decide (#/wargame) is the What-if view under the Ask tab.
 async function gotoDecide(page) {
   await gotoRoute(page, 'home');
-  await mainNav(page).getByRole('link', { name: 'Decide', exact: true }).click();
+  await mainNav(page).getByRole('link', { name: 'Ask', exact: true }).click();
+  await expect(page).toHaveURL(/#\/ask$/);
+  await page.getByRole('navigation', { name: 'Ask views' }).getByRole('link', { name: 'What-if', exact: true }).click();
   await expect(page).toHaveURL(/#\/wargame$/);
   await expectH1(page, 'What is open, and what is coming');
 }

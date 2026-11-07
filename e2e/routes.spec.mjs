@@ -14,7 +14,7 @@ const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct
 // Routes whose heading is product chrome, not a row from the demo scenario.
 const REAL_ROUTES = [
   'home', 'pace', 'plan', 'ask', 'wargame', 'wargame/salary', 'wargame/deferral',
-  'goals', 'accounts', 'advisor', 'yearend', 'connect', 'engine', 'email', 'packs'
+  'goals', 'accounts', 'advisor', 'yearend', 'connect', 'engine', 'email', 'packs', 'money', 'settings'
 ];
 
 test.describe('routes', { tag: '@smoke' }, () => {
@@ -108,26 +108,25 @@ test.describe('routes', { tag: '@smoke' }, () => {
     });
   }
 
-  test('shell: no harness bar, top menu, More menu groups, logo mark', async ({ page, request }) => {
+  test('shell: no harness bar, four tabs, the gear opens the Settings page, logo mark', async ({ page, request }) => {
     await gotoRoute(page, 'home');
     await expect(page.locator('.fx-harness')).toHaveCount(0);
 
-    // Home is the first tab; Confirm carries no count badge (Home's data-health line does).
-    await expect(mainNav(page).getByRole('link')).toHaveText(['Home', 'Confirm', 'Plan', 'Decide', 'Ask', 'Packs']);
+    // Four tabs, Home first; no count badge anywhere in the nav (Home's data-health line counts).
+    await expect(mainNav(page).getByRole('link')).toHaveText(['Home', 'Plan', 'Ask', 'Money']);
     await expect(page.locator('.h-nav-n')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'More', exact: true })).toHaveCount(0);
+    await expect(page.locator('.h-more-btn, #h-more-p')).toHaveCount(0);
 
-    const more = page.getByRole('button', { name: 'More', exact: true });
-    await expect(more).toHaveAttribute('aria-expanded', 'false');
-    await expect(page.locator('#h-more-p')).toBeHidden();
-    await more.click();
-    await expect(more).toHaveAttribute('aria-expanded', 'true');
-    const panel = page.locator('#h-more-p');
+    const gear = page.locator('header.h-top a.h-gear');
+    await expect(gear).toBeVisible();
+    await expect(gear).toHaveAccessibleName('Settings');
+    await gear.click();
+    await expect(page).toHaveURL(/#\/settings$/);
+    await expectH1(page, 'Settings');
+    await expect(gear).toHaveAttribute('aria-current', 'page');
+    const panel = page.locator('section.h-settings');
     await expect(panel).toBeVisible();
-    const groups = panel.locator('.h-more-g:not(.h-more-phone)');
-    await expect(groups).toHaveCount(2);
-    await expect(groups.nth(0).locator('.h-more-h')).toHaveText('Household');
-    await expect(groups.nth(0).getByRole('link')).toHaveText(['Goals', 'Accounts', 'Files', 'Advisor', 'Year end']);
-    await expect(groups.nth(1).locator('.h-more-h')).toHaveText('System');
     if (SMOKE_REAL) {
       for (const name of ['Connect', 'Engine', 'Email', 'Setup', 'Account']) {
         await expect(panel.getByRole('link', { name, exact: true })).toBeVisible();
@@ -135,12 +134,16 @@ test.describe('routes', { tag: '@smoke' }, () => {
       const { identity } = await (await request.get('/api/identity')).json();
       await expect(panel.getByRole('link', { name: 'Household', exact: true })).toHaveCount(identity.role === 'admin' ? 1 : 0);
     } else {
-      await expect(groups.nth(1).getByRole('link')).toHaveText(['Connect', 'Engine', 'Email']);
+      for (const name of ['Connect', 'Engine', 'Email']) {
+        await expect(panel.getByRole('link', { name, exact: true })).toBeVisible();
+      }
+      for (const name of ['Setup', 'Account', 'Household']) {
+        await expect(panel.getByRole('link', { name, exact: true })).toHaveCount(0);
+      }
     }
 
-    await groups.nth(1).getByRole('link', { name: 'Engine', exact: true }).click();
+    await panel.getByRole('link', { name: 'Engine', exact: true }).click();
     await expect(page).toHaveURL(/#\/engine$/);
-    await expect(page.locator('#h-more-p')).toBeHidden();
 
     const mark = SMOKE_REAL
       ? page.locator('a.h-mark')

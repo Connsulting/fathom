@@ -427,7 +427,7 @@ export function render(id) {
     A.lastN = n;
   }
   const main = th || newOnAsk(A.pending) ? threadHtml(th) : emptyHtml();
-  return H.shell(`<div class="h-askx">${sideHtml(shown)}${main}</div>`, 'ask');
+  return H.shell(`<div class="h-askx">${sideHtml(shown)}${main}</div>`);
 }
 
 /* ---------- scrolling and focus ---------- */

@@ -218,7 +218,7 @@ export function render(h) {
       ${h.section('Keys', keyList_(h), `${active} active`)}
     </div><div class="h-col-side">
       ${h.section('Tools', tools(h), 'Read tools work with any key')}
-    </div></div>`, 'connect');
+    </div></div>`);
 }
 
 /* ---------- events ---------- */

@@ -125,6 +125,20 @@ recs that are not done, dismissed or hidden, so under Both its count equals
 and both, Spouse shows spouse and both, Both shows every action. Health is per goal and the
 household headline is derived from it; goals without targets are not counted.
 
+Navigation is four tabs, Home, Plan, Ask and Money, plus a gear for Settings; there is no More
+menu. Every route maps to one tab or to the gear (`TAB_OF` in `web/horizon/design.js`), and the
+lit tab comes from the current route, or for `#/rec/<id>` from the page under the dialog. Home
+holds Home, the pace board, Goals and Confirm (reached from goal cards and the data-health line).
+Plan holds Plan, Year end and Advisor. Ask holds conversations, Decide (the What-if view,
+`#/wargame`) and Packs. Money (`#/money`) holds an overview, Accounts and Files (`#/add`). The
+gear opens `#/settings`, which lists Connect, Engine, Email, Setup (real stores only), and on a
+real store the signed-in line, Account and, for admins, Household. Plan, Ask and Money show a
+sub-nav of their views at the top of each of those pages. The Money overview spells out the
+data-health line one part per row and then renders the same account mirror as `#/accounts`
+(`accountsBody()`). Desktop shows the four tabs in the header with search and the gear at the
+right; at 720px and below they move to a fixed bottom bar while search and the gear stay in the
+top bar. `g o` opens Money and `g s` opens Settings.
+
 ### 5. Facts
 
 A store table of `{key, value JSON, src, asOf, confirmed}` (table `facts`, with provenance
@@ -658,7 +672,7 @@ other items own.
 
 Sign in. A real store signs people in before the app loads, on the account pages (see Accounts and
 sessions), so it skips step 0 (the first step is 1) and shows the signed-in email in the page
-header; More shows it too, with Account and, for admins, Household. The demo build has no accounts
+header; Settings shows it too, with Account and, for admins, Household. The demo build has no accounts
 and shows step 0 as a line, "Reached through your private network", with a note that the demo
 signs no one in.
 
@@ -675,7 +689,7 @@ successful import triggers the plan and confirm-guess jobs, like an upload. The 
 `understood` from `understoodOf` (`src/onboarding/heard.mjs`):
 `{fileId, status, engineOn, waiting, facts: [{key, label, value, confirmed}], goals: [{title, when}], asked}`,
 the stored rows that file wrote and the open questions it raised; the page shows it after the
-save. A returning owner reaches the same step again as Setup in More (real stores only): the route
+save. A returning owner reaches the same step again as Setup in Settings (real stores only): the route
 `#/onboarding` is allowed on a real store after first run, lands on step 1, shows Back to the app,
 and finishing returns to the brief.
 
@@ -1029,7 +1043,7 @@ UI.
    identity goes to `/signin` without requesting the scenario. `api.identity()` returns
    `{id, email, role, login, name}`, or null on a demo. A later 401 from any core request clears
    the scenario from memory and the page and goes to `/signin`.
-4. More shows the email and role, an Account link and, for admins, Household.
+4. Settings (`#/settings`) shows the email and role, an Account link and, for admins, Household.
 
 MCP keys.
 
@@ -2379,7 +2393,7 @@ is typing except Escape and the switcher chord. `register(scope, bindings)` inst
 
 Ctrl+K or Cmd+K opens the switcher. It lists Go to (screens), Actions (shortcuts, Ask, Add files,
 New goal, Start confirming when something is pending), and rows for recommendations, decisions,
-conversations, accounts, deadlines, packs and files. Files is also in More (`#/add`). `?` opens
+conversations, accounts, deadlines, packs and files. Files is also in the Money sub-nav (`#/add`). `?` opens
 the shortcut sheet. Two-key sequences such as `g` then `c` jump to Confirm. The Engine screen
 shows the model for each purpose from `modelFor` in `src/engine/pricing.mjs`. Account trend
 series come from stored balances. What changed uses plain event labels. Decide records a salary
@@ -2388,8 +2402,8 @@ payroll assumption for the next plan.
 
 ## Phone layout
 
-At 720px and below, a fixed bottom tab bar shows Year, Confirm, Plan, Decide and Ask. The top nav
-folds into a More sheet that lists the other screens. Add to Home Screen uses the web app manifest.
+At 720px and below, a fixed bottom tab bar shows the four tabs (Home, Plan, Ask, Money); search
+and the Settings gear stay in the top bar, and each tab's sub-nav scrolls inside itself. Add to Home Screen uses the web app manifest.
 There is no service worker, so the installed icon still needs the network. War-game charts have no
 pointer readout, so the phone pass does not add touch drag on the curve.
 

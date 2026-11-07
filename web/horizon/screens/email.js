@@ -165,7 +165,7 @@ export function emailScreen(h) {
       <div class="h-cols"><div class="h-col-main">${preview()}</div><div class="h-col-side">${historyTable()}</div></div>${jobsTable()}`;
     else if (st.error) inner = `<p class="h-em-err" role="alert">${esc(st.error)}</p>${btn('Try again', 'data-email-reload="1"')}`;
     else inner = '<p class="h-mute">Loading.</p>';
-    return shell(`${pageHead('Email', 'Monthly digest', 'What lands in your inbox on brief day. One email a month, nothing in between unless a window is about to close.')}${inner}`, 'email');
+    return shell(`${pageHead('Email', 'Monthly digest', 'What lands in your inbox on brief day. One email a month, nothing in between unless a window is about to close.')}${inner}`);
   }
 
   function act(kind) {

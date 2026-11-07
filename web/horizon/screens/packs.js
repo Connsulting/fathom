@@ -225,7 +225,7 @@ function packPage(p) {
       ${entriesHtml(p)}
     </div><div class="h-col-side">
       ${section('Covers', arr(p.covers).length ? `<ul class="h-cross">${arr(p.covers).map((c) => `<li>${mt(p, c)}</li>`).join('')}</ul>` : '<p class="h-mute">Not listed.</p>')}
-    </div></div></div>`, 'packs');
+    </div></div></div>`);
 }
 
 /* ---------- packs list ---------- */
@@ -320,7 +320,7 @@ function packsList() {
     ${sug.length ? section(`Might apply <em>${sug.length}</em>`, `<div class="h-packs">${sug.map(packCard).join('')}</div>`) : ''}
     ${av.length ? section(`Available <em>${av.length}</em>`, `<div class="h-packs">${av.map(packCard).join('')}</div>`) : ''}
     ${packs.length ? '' : '<p class="h-mute">No packs.</p>'}
-    ${yourPlansCard(packs)}`, 'packs');
+    ${yourPlansCard(packs)}`);
 }
 
 export function render(id) {

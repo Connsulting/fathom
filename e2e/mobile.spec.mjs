@@ -1,7 +1,7 @@
 // Phone width (390px, mobile project only): no horizontal page scroll on any main route, and the
 // rec modal opens and closes.
 
-import { test, expect, S, resetDemo, mainRoutes, headingFor, needsYouIds, gotoRoute, expectH1, openRecFromPage, closeDialogWithX, askOnAsk, plain, dataHealth, questionsToConfirm } from './helpers.mjs';
+import { test, expect, S, resetDemo, mainRoutes, headingFor, needsYouIds, gotoRoute, expectH1, openRecFromPage, closeDialogWithX, askOnAsk, plain, dataHealth, healthConfirm, questionsToConfirm } from './helpers.mjs';
 
 const TAGS = { tag: ['@mobile', '@mobile-only'] };
 
@@ -33,9 +33,22 @@ test.describe('mobile', TAGS, () => {
   });
 });
 
-// Phone tab bar, overflow menu, tap popovers and the home screen manifest.
-const TABS = [['home', 'Home'], ['confirm', 'Confirm'], ['plan', 'Plan'], ['wargame', 'Decide'], ['ask', 'Ask']];
-const OVERFLOW = ['packs', 'goals', 'accounts', 'advisor', 'yearend', 'connect', 'engine', 'email'];
+// Phone tab bar, the gear and sub-nav paths to the other screens, tap popovers and the home
+// screen manifest.
+const TABS = [['home', 'Home'], ['plan', 'Plan'], ['ask', 'Ask'], ['money', 'Money']];
+// Screens that are not tabs: [route, the tab or gear that lights, how to reach it].
+// A sub-nav entry is [tab, sub-nav aria-label, link name]; a gear entry is ['settings', link name].
+const OTHER = [
+  ['yearend', 'plan', ['plan', 'Plan views', 'Year end']],
+  ['advisor', 'plan', ['plan', 'Plan views', 'Advisor']],
+  ['wargame', 'ask', ['ask', 'Ask views', 'What-if']],
+  ['packs', 'ask', ['ask', 'Ask views', 'Packs']],
+  ['accounts', 'money', ['money', 'Money views', 'Accounts']],
+  ['add', 'money', ['money', 'Money views', 'Files']],
+  ['connect', 'settings', ['settings', 'Connect']],
+  ['engine', 'settings', ['settings', 'Engine']],
+  ['email', 'settings', ['settings', 'Email']]
+];
 
 test.describe('phone shell', TAGS, () => {
   test.beforeEach(async ({ request, page }) => {
@@ -53,7 +66,8 @@ test.describe('phone shell', TAGS, () => {
     }
     await expect(page.locator('.h-nav')).toBeHidden();
     await expect(page.locator('.h-search-btn')).toBeVisible();
-    await expect(page.locator('.h-more-btn')).toBeVisible();
+    await expect(page.locator('header.h-top a.h-gear')).toBeVisible();
+    await expect(page.locator('.h-more-btn')).toHaveCount(0);
     const bar = await page.locator('nav.h-tabs').boundingBox();
     expect(Math.round(bar.y + bar.height)).toBe(844);
     for (const box of await tabs.evaluateAll((els) => els.map((e) => e.getBoundingClientRect().toJSON()))) {
@@ -85,27 +99,45 @@ test.describe('phone shell', TAGS, () => {
     });
   }
 
-  test('the Confirm tab and the top nav carry no pending badge; Home says it instead', { tag: ['@ac4'] }, async ({ page, request }) => {
+  test('Confirm is not a tab and nothing carries a pending badge; Home says it and links to the deck', { tag: ['@ac4'] }, async ({ page, request }) => {
     const pending = (await (await request.get('/api/confirm')).json()).items.length;
     expect(pending, 'the demo seeds pending questions').toBeGreaterThan(0);
     await gotoRoute(page, 'home');
-    await expect(page.locator('nav.h-tabs a[data-go="confirm"]')).toHaveCount(1);
-    await expect(page.locator('nav.h-tabs a[data-go="confirm"] > span')).toHaveText('Confirm');
+    await expect(page.locator('nav.h-tabs a[data-go="confirm"]')).toHaveCount(0);
     await expect(page.locator('.h-nav-n')).toHaveCount(0);
     await expect(dataHealth(page)).toContainText(questionsToConfirm(pending));
+    await healthConfirm(page).click();
+    await expect(page).toHaveURL(/#\/confirm$/);
+    await expectH1(page, 'Confirm');
+    await expect(page.locator('nav.h-tabs a[data-go="home"]')).toHaveAttribute('aria-current', 'page');
   });
 
-  test('the overflow menu reaches the other screens', async ({ page }) => {
-    for (const k of OVERFLOW) {
+  test('the gear and the sub-navs reach the other screens', async ({ page }) => {
+    const gear = page.locator('header.h-top a.h-gear');
+    for (const [k, lit, path] of OTHER) {
       await gotoRoute(page, 'home');
-      await page.locator('.h-more-btn').click();
-      const link = page.locator(`#h-more-p a[data-go="${k}"]`);
-      await expect(link).toBeVisible();
-      await link.click();
+      if (path[0] === 'settings') {
+        await gear.click();
+        await expect(page).toHaveURL(/#\/settings$/);
+        await page.locator('section.h-settings').getByRole('link', { name: path[1], exact: true }).click();
+      } else {
+        await page.locator(`nav.h-tabs a[data-go="${path[0]}"]`).click();
+        await expect(page).toHaveURL(new RegExp(`#/${path[0]}$`));
+        await page.getByRole('navigation', { name: path[1] }).getByRole('link', { name: path[2], exact: true }).click();
+      }
       await expect(page).toHaveURL(new RegExp(`#/${k}$`));
-      await expect(page.locator('#h-more-p')).toBeHidden();
-      await expect(page.locator('.h-more-btn')).toHaveClass(/\bon\b/);
+      await expect(page.locator('main h1').first()).toBeVisible();
+      if (lit === 'settings') {
+        await expect(gear).toHaveAttribute('aria-current', 'page');
+        await expect(page.locator('nav.h-tabs a[aria-current="page"]')).toHaveCount(0);
+      } else {
+        await expect(page.locator(`nav.h-tabs a[data-go="${lit}"]`)).toHaveAttribute('aria-current', 'page');
+      }
     }
+    await gotoRoute(page, 'home');
+    await page.locator('section.h-home').getByRole('link', { name: 'All goals', exact: true }).click();
+    await expect(page).toHaveURL(/#\/goals$/);
+    await expect(page.locator('nav.h-tabs a[data-go="home"]')).toHaveAttribute('aria-current', 'page');
   });
 
   test('a tap opens a figure popover, a tap outside and Escape close it', async ({ page }) => {

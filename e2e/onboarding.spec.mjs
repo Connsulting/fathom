@@ -3,7 +3,7 @@
 //
 // 1. The demo build (the shared demo server), served as a fresh store on each step.
 // 2. A real-mode store past first run, on its own server (FATHOM_DEMO=0, engine off, synthetic enrolled
-//    user session), where Setup in More lands on Tell us and the heard step lists the stored household
+//    user session), where Setup on the Settings page lands on Tell us and the heard step lists the stored household
 //    with provenance and edit links.
 //
 // Desktop and 390px. Real-mode URLs are absolute to its own server, so the configured baseURL is
@@ -150,11 +150,12 @@ test.describe('real store past first run', () => {
     }));
   });
 
-  test('Setup in More opens Tell us; the note is saved while the engine is off; the heard step lists the household @mobile', async ({ page, context }) => {
+  test('Setup on the Settings page opens Tell us; the note is saved while the engine is off; the heard step lists the household @mobile', async ({ page, context }) => {
     await page.goto(`${BASE}/`);
     await expect(page).toHaveURL(/#\/home$/);
-    await page.locator('.h-more-btn').click();
-    const setup = page.locator('.h-more-p a[data-go="onboarding"]', { hasText: 'Setup' });
+    await page.locator('header.h-top a.h-gear').click();
+    await expect(page).toHaveURL(/#\/settings$/);
+    const setup = page.locator('section.h-settings a[data-go="onboarding"]', { hasText: 'Setup' });
     await expect(setup).toBeVisible();
     await setup.click();
     await expect(page).toHaveURL(/#\/onboarding\/1$/);

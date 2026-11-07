@@ -179,12 +179,12 @@ export function healthLine({ pace, ingest, accounts, metaDataThrough } = {}) {
   const staleGoals = included(pace).filter((g) => g.stale).length;
   const pending = Math.max(0, Number(ingest?.pending) || 0);
   const failed = arr(ingest?.files).filter((x) => x?.status === 'failed').length;
-  const parts = [dataLabel];
-  if (staleAccounts > 0) parts.push(`${plural(staleAccounts, 'account')} stale`);
-  else if (staleGoals > 0) parts.push(`pace data stale for ${plural(staleGoals, 'goal')}`);
-  if (pending > 0) parts.push(`${plural(pending, 'question')} to confirm`);
-  if (failed > 0) parts.push(`${plural(failed, 'file')} failed`);
-  return { dataThrough, dataLabel, staleAccounts, staleGoals, pending, failed, stale: staleAccounts + staleGoals > 0, parts };
+  const rows = [{ text: dataLabel, tone: 'ok' }];
+  if (staleAccounts > 0) rows.push({ text: `${plural(staleAccounts, 'account')} stale`, tone: 'bad' });
+  else if (staleGoals > 0) rows.push({ text: `pace data stale for ${plural(staleGoals, 'goal')}`, tone: 'bad' });
+  if (pending > 0) rows.push({ text: `${plural(pending, 'question')} to confirm`, tone: 'ask' });
+  if (failed > 0) rows.push({ text: `${plural(failed, 'file')} failed`, tone: 'bad' });
+  return { dataThrough, dataLabel, staleAccounts, staleGoals, pending, failed, stale: staleAccounts + staleGoals > 0, parts: rows.map((r) => r.text), rows };
 }
 
 export function boardCharts(pace) {

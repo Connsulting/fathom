@@ -1,7 +1,7 @@
 // Real-mode polish, end to end through the UI on a real-mode server built in process: Accounts
 // trend lines from uploaded balances, plain "what changed" titles on Plan, the Engine screen's model per
 // purpose, Decide on this and Revisit on the salary war game, and Files in the switcher and the
-// More menu. Runs at desktop and at 390px (every test carries @mobile). Skipped against a remote
+// Money sub-nav. Runs at desktop and at 390px (every test carries @mobile). Skipped against a remote
 // server.
 
 import { test, expect, expectPopoverSource } from './helpers.mjs';
@@ -143,7 +143,7 @@ test.describe('real-mode polish', () => {
     expect(reopened.decisions.find((x) => x.id === 'salary-2026').status).toBe('open');
   });
 
-  test('@mobile Files is in the quick switcher and in the More menu', async ({ page }) => {
+  test('@mobile Files is in the quick switcher and in the Money sub-nav', async ({ page }) => {
     await go(page, 'home');
     await page.keyboard.press('Control+k');
     const input = page.locator('.h-qs-host input.h-qs-in');
@@ -154,9 +154,8 @@ test.describe('real-mode polish', () => {
     await page.keyboard.press('Enter');
     await expect(page).toHaveURL(/#\/add$/);
 
-    await go(page, 'home');
-    await page.locator('.h-more-btn').click();
-    const link = page.locator('.h-more-p a[data-go="add"]');
+    await go(page, 'money');
+    const link = page.getByRole('navigation', { name: 'Money views' }).locator('a[data-go="add"]');
     await expect(link).toBeVisible();
     await expect(link).toHaveText('Files');
     await link.click();

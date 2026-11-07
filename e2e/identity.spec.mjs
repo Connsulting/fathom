@@ -169,7 +169,7 @@ test.describe('passkey accounts through the browser', () => {
       expect((await admin.context.request.get('/api/scenario')).status()).toBe(200);
     });
 
-    await test.step('authenticated boot precedes scenario fetch and the More menu links to real auth pages', async () => {
+    await test.step('authenticated boot precedes scenario fetch and the Settings page links to real auth pages', async () => {
       seedReturningHousehold();
       await admin.page.goto(`${base}/`);
       await expect(admin.page).toHaveURL(/#\/home$/);
@@ -184,11 +184,14 @@ test.describe('passkey accounts through the browser', () => {
       await expect(admin.page).toHaveURL(/#\/home$/);
       await expect(admin.page.locator('div.h-dhealth')).not.toContainText('to confirm');
       await expect(admin.page.locator('div.h-dhealth a[data-go="confirm"]')).toHaveCount(0);
-      await admin.page.getByRole('button', { name: 'More', exact: true }).click();
-      await expect(admin.page.getByRole('link', { name: 'Account', exact: true })).toHaveAttribute('href', '/account');
-      await expect(admin.page.getByRole('link', { name: 'Household', exact: true })).toHaveAttribute('href', '/admin/users');
-      await expect(admin.page.locator('.h-more-p')).toContainText(OWNER);
-      await admin.page.getByRole('link', { name: 'Account', exact: true }).click();
+      await admin.page.locator('header.h-top a.h-gear').click();
+      await expect(admin.page).toHaveURL(/#\/settings$/);
+      const settings = admin.page.locator('section.h-settings');
+      await expect(settings.getByRole('link', { name: 'Account', exact: true })).toHaveAttribute('href', '/account');
+      await expect(settings.getByRole('link', { name: 'Household', exact: true })).toHaveAttribute('href', '/admin/users');
+      await expect(settings.getByRole('link', { name: 'Setup', exact: true })).toBeVisible();
+      await expect(settings).toContainText(OWNER);
+      await settings.getByRole('link', { name: 'Account', exact: true }).click();
       await expect(admin.page).toHaveURL(`${base}/account`);
       await expect(admin.page.getByRole('button', { name: 'Add passkey', exact: true })).toBeVisible();
       await assertAuthenticatedBoot(admin);
@@ -328,9 +331,10 @@ test.describe('passkey accounts through the browser', () => {
       expect(registration.identity).toMatchObject({ email: MEMBER, role: 'member', householdId: 1 });
       await member.page.goto(`${base}/`);
       await expect(member.page).toHaveURL(/#\/home$/);
-      await member.page.getByRole('button', { name: 'More', exact: true }).click();
-      await expect(member.page.getByRole('link', { name: 'Account', exact: true })).toBeVisible();
-      await expect(member.page.getByRole('link', { name: 'Household', exact: true })).toHaveCount(0);
+      await member.page.locator('header.h-top a.h-gear').click();
+      await expect(member.page).toHaveURL(/#\/settings$/);
+      await expect(member.page.locator('section.h-settings').getByRole('link', { name: 'Account', exact: true })).toBeVisible();
+      await expect(member.page.locator('section.h-settings').getByRole('link', { name: 'Household', exact: true })).toHaveCount(0);
       const denied = await member.page.goto(`${base}/admin/users`);
       expect(denied.status()).toBe(403);
       expect((await member.context.request.get('/api/admin/users')).status()).toBe(403);
