@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { loadCases, validateCases, expectedFigures, applyAvailability } from '../evals/cases.mjs';
-import { gradeRequiredTools, gradeFigures, gradeLength, gradeExpected } from '../evals/graders.mjs';
+import { gradeRequiredTools, gradeFigures, gradeLength, gradeExpected, gradeProhibited } from '../evals/graders.mjs';
+import { classOf } from '../src/calc/classes.mjs';
 import { createEvalStore } from '../evals/harness.mjs';
 import { groundAnswer } from '../src/api/answerer.mjs';
 import { buildScenario } from '../src/scenario/build.mjs';
@@ -150,16 +151,26 @@ test('a case is required only when its tool and capability are both present', ()
   assert.equal(ready.expectedFail, undefined);
 });
 
+test('security picks and claimed payments fail even when the answer also refuses', async () => {
+  const cases = await loadCases();
+  const security = cases.find(c => c.id === 'q66-security-pick-refused').turns[0].prohibit;
+  const payment = cases.find(c => c.id === 'q68-money-movement-refused').turns[0].prohibit;
+  assert.equal(gradeProhibited(security, { text: 'I cannot promise returns. Buy TMKT.', writeCalls: 0 }).ok, false);
+  assert.equal(gradeProhibited(payment, { text: 'I cannot do that. The payment was sent from checking.', writeCalls: 0 }).ok, false);
+  assert.equal(gradeProhibited(payment, { text: "Fathom doesn't have that.", writeCalls: 1 }).ok, false);
+  assert.equal(gradeProhibited(security, { text: "Fathom doesn't have that.", writeCalls: 0 }).ok, true);
+});
+
 test('annual expectations use complete covered months rather than a partial last month', async () => {
   const store = await createEvalStore();
   try {
     const meta = JSON.parse(store.db.prepare("SELECT value FROM content WHERE key='meta'").get().value);
     meta.dataThrough = 'Mar 10, 2026';
     store.db.prepare("UPDATE content SET value=? WHERE key='meta'").run(JSON.stringify(meta));
-    const covered = store.db.prepare(`SELECT sum(-t.amount) AS v FROM transactions t JOIN accounts a ON a.id=t.account_id
-      WHERE a.kind IN ('checking','credit','card') AND t.date<'2026-03-01' AND t.amount<0
-      AND t.category NOT IN ('transfer','income','income_tax') AND lower(t.description) NOT LIKE '%mortgage%'
-      AND lower(t.description) NOT LIKE '%income tax%'`).get().v;
+    const covered = store.db.prepare(`SELECT t.amount AS v, t.category, t.description FROM transactions t JOIN accounts a ON a.id=t.account_id
+      WHERE a.kind IN ('checking','credit','card') AND t.date<'2026-03-01' AND t.amount<0`).all()
+      .filter(r => !['transfer', 'income'].includes(r.category) && classOf(r.category) !== 'taxes' && classOf(r.category) !== 'debt_service'
+        && !/mortgage|income tax/i.test(r.description)).reduce((s, r) => s - r.v, 0);
     assert.equal(expectedFigures(store.db, [{ kind: 'annual-spending' }])[0], Math.round(covered * 6 * 100) / 100);
   } finally { await store.close(); }
 });

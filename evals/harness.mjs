@@ -11,7 +11,7 @@ import { threadCreate, ask } from '../src/api/handlers.mjs';
 import { createLivePacks } from '../src/packs/live.mjs';
 import { tools, CAPABILITIES } from '../src/tools/index.mjs';
 import { expectedFigures, validateCases } from './cases.mjs';
-import { gradeRequiredTools, gradeFigures, gradeLength, gradeExpected, evidenceNumbers } from './graders.mjs';
+import { gradeRequiredTools, gradeFigures, gradeLength, gradeExpected, gradeProhibited, evidenceNumbers } from './graders.mjs';
 
 export async function createEvalStore() {
   const dir = await mkdtemp(join(tmpdir(), 'fathom-ask-eval-'));
@@ -138,14 +138,16 @@ export async function runCases({ cases, live = false, maxUsd = 100, outDir, scri
         const contextNumbers = evidenceNumbers([{ name: 'context', args: {}, result: { figures: Object.values(figures) } }]);
         const gradedAttempts = attempts.map((a, i) => ({ text: a.text, error: a.error ?? null,
           figures: gradeFigures(a.text, attempts.slice(0, i + 1).flatMap(r => r.toolResults), { figures, contextNumbers }),
-          length: gradeLength(a.text, turn.maxWords) }));
+          length: gradeLength(a.text, turn.maxWords),
+          prohibited: gradeProhibited(turn.prohibit, { text: a.text ?? '', writeCalls: 0 }) }));
         const required = gradeRequiredTools(turn.required, calls);
         const numeric = gradeFigures(delivered, calls, { figures, contextNumbers });
         const length = gradeLength(delivered, turn.maxWords);
         const expectedGrade = gradeExpected(delivered, expected, { figures });
         const refusal = !turn.refusal || /\b(?:don't|doesn't|do not|does not|cannot|can't|not available|not stored|not tracked|no access)\b/i.test(delivered);
+        const prohibited = gradeProhibited(turn.prohibit, { text: delivered, writeCalls: calls.filter(c => tools.some(t => t.name === c.name && t.scope !== 'read')).length });
         const existingToolsOk = required.checks.filter(r => !missing.includes(r.name)).every(r => r.ok);
-        const safe = numeric.ok && length.ok && refusal && gradedAttempts.every(a => a.figures.ok && a.length.ok && !a.error);
+        const safe = numeric.ok && length.ok && refusal && prohibited.ok && gradedAttempts.every(a => a.figures.ok && a.length.ok && a.prohibited.ok && !a.error);
         const ok = safe && required.ok && expectedGrade.ok && !response.message?.notice;
         const turnMissing = missingCapabilities.length > 0 || turn.required.some(r => missing.includes(r.name));
         const gapOnly = turnMissing && safe && existingToolsOk && !response.message?.notice;
