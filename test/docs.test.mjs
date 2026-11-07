@@ -37,7 +37,7 @@ const ENV_KEYS = [
   'FATHOM_PUBLIC_URL', 'FATHOM_ALLOWED_HOSTS', 'FATHOM_TRUSTED_PROXIES',
 ];
 
-const readme = readFileSync(join(ROOT, 'README.md'), 'utf8');
+const development = readFileSync(join(ROOT, 'docs/development.md'), 'utf8');
 
 test('architecture.md has every frozen section as a heading', () => {
   for (const [name, re] of Object.entries(SECTIONS)) assert.match(headings, re, `missing section: ${name}`);
@@ -74,8 +74,8 @@ test('architecture.md lists every API route with its method', () => {
   }
 });
 
-test('architecture.md and README.md describe passkey accounts and separate MCP bearer access', () => {
-  for (const [name, text] of [['architecture.md', doc], ['README.md', readme]]) {
+test('architecture.md and development.md describe passkey accounts and separate MCP bearer access', () => {
+  for (const [name, text] of [['architecture.md', doc], ['development.md', development]]) {
     assert.match(text, /passkey/i, name);
     assert.match(text, /session/i, name);
     assert.match(text, /FATHOM_PUBLIC_URL/, name);
@@ -93,7 +93,7 @@ test('architecture.md and README.md describe passkey accounts and separate MCP b
 });
 
 test('account docs explain explicit proxy trust, recent sign-in and security notices', () => {
-  for (const [name, text] of [['architecture.md', doc], ['README.md', readme]]) {
+  for (const [name, text] of [['architecture.md', doc], ['development.md', development]]) {
     const proxy = text.split('\n').find(line => line.includes('FATHOM_TRUSTED_PROXIES') && line.includes('|'));
     assert.ok(proxy, `${name} lists the trusted proxy setting`);
     assert.match(proxy, /CIDR/, name);
@@ -118,7 +118,7 @@ test('account docs explain explicit proxy trust, recent sign-in and security not
 });
 
 test('account docs distinguish passkey revocation from user removal and say bootstrap sends before printing', () => {
-  for (const [name, text] of [['architecture.md', doc], ['README.md', readme]]) {
+  for (const [name, text] of [['architecture.md', doc], ['development.md', development]]) {
     const blocks = text.split(/\n\s*\n/).map(block => block.replace(/\s+/g, ' '));
     assert.ok(blocks.some(block => /passkey/i.test(block) && /revok|revoc/i.test(block) && /MCP/i.test(block)
       && /remain|stay|leav|keep|unaffected|does not revoke|not revoked|do not revoke/i.test(block)),
@@ -134,7 +134,7 @@ test('account docs describe add-a-device passkey links', () => {
   assert.match(doc, /add-passkey/, 'architecture names the add-passkey token purpose');
   assert.ok(doc.split('\n').some(line => line.includes('/api/auth/passkeys/link') && line.includes('POST')),
     'architecture lists POST /api/auth/passkeys/link');
-  const blocks = readme.split(/\n\s*\n/).map(block => block.replace(/\s+/g, ' '));
+  const blocks = development.split(/\n\s*\n/).map(block => block.replace(/\s+/g, ' '));
   assert.ok(blocks.some(block => /another device/i.test(block) && /passkey/i.test(block)),
-    'README explains adding a passkey on another device');
+    'development.md explains adding a passkey on another device');
 });

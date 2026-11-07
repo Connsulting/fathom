@@ -120,7 +120,7 @@ export function render() {
       ${section('Reviewed', reviewed ? `<ul class="h-rvs">${reviewed}</ul>` : '<p class="h-mute">No verdicts recorded yet.</p>')}
     </div><div class="h-col-side">
       ${packetSec}
-      ${notAsk ? section('Not asking you', `<ul class="h-qs">${notAsk}</ul>`) : ''}
+      ${notAsk ? section('Not asking you', `<ul class="h-advq">${notAsk}</ul>`) : ''}
       ${shared ? section('Shared with the advisor', `<ul class="h-kv">${shared}</ul>`) : ''}
       ${experts ? section('Specialists', `<ul class="h-experts">${experts}</ul>`) : ''}
     </div></div>`);
