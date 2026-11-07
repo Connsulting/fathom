@@ -438,6 +438,7 @@ test.describe('passkey accounts through the browser', () => {
 
     await test.step('a signed-out deep link returns through sign-in, and an expired session keeps the route', async () => {
       const returning = await browserClient(browser, { authenticator: true, credentials: await otherOwner.auth.credentials() });
+      await returning.auth.presence(false);
       await returning.page.goto(`${base}/#/plan`);
       await expect(returning.page).toHaveURL(`${base}/signin#/plan`);
       await signin(returning, 200, '#/plan');
