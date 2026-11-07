@@ -52,7 +52,7 @@ function check(schema, v, path) {
   if (typeOk('object', v) && (schema.properties || schema.required)) {
     for (const k of schema.required || []) if (v[k] === undefined) throw new ToolError('bad_input', `${path}.${k} is required`);
     for (const [k, x] of Object.entries(v)) {
-      const sub = schema.properties && schema.properties[k];
+      const sub = schema.properties && Object.hasOwn(schema.properties, k) ? schema.properties[k] : null;
       if (!sub) {
         if (schema.additionalProperties === false) throw new ToolError('bad_input', `${path}.${k} is not a known argument`);
         continue;
