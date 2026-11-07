@@ -256,7 +256,7 @@ export async function expectH1(page, text) {
 }
 
 // Open a rec from a page link (in-app entry, pushes one history entry). `scope` is the list the
-// link lives in: '.h-rows' on Plan, '.h-gnext' (a goal card's next action, a quiet row or a
+// link lives in: '.h-rows' on Plan, '.h-gnext' (a goal card's next action or a
 // housekeeping row) on Home.
 export async function openRecFromPage(page, id, scope = '.h-rows') {
   await page.locator(`${scope} a[data-go="rec"][data-id="${id}"]`).first().click();
