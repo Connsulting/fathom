@@ -1783,6 +1783,8 @@ function focusSig(el) {
   if (a('data-recowner') != null) return `[data-recowner="${CSS.escape(a('data-recowner'))}"]`;
   if (a('data-ad')) return `[data-ad="${CSS.escape(a('data-ad'))}"]`;
   if (a('data-dlg-name') != null) return '[data-dlg-name]';
+  for (const k of ['data-ad-owner', 'data-ad-kind', 'data-ad-mask']) if (a(k) != null) return `[${k}]`;
+  if (a('data-merge-with') != null) return `[data-merge-with="${CSS.escape(a('data-merge-with'))}"]`;
   if (a('data-askrec') != null) return '[data-draft]';
   if (a('data-draft')) return `[data-draft="${CSS.escape(a('data-draft'))}"]`;
   return null;
@@ -1957,7 +1959,7 @@ function closeRec() {
 function beginAccountRename(id) {
   const a = arr(api.s.accounts).find((x) => x.id === id);
   if (!a) return;
-  ui.accEdit = { id, value: a.displayName ? a.name : (a.imported === false ? api.txt(String(a.name ?? '')) : String(a.name ?? '')) };
+  ui.accEdit = { id, value: a.displayName ? a.displayName : (a.imported === false ? api.txt(String(a.name ?? '')) : String(a.name ?? '')) };
   draw();
   const el = root?.querySelector(`[data-acc-name="${CSS.escape(id)}"]`);
   if (el) { el.focus(); el.select(); }
@@ -2168,6 +2170,7 @@ function onInput(e) {
 // Committed changes: a goal form select or checkbox, and a released curve or priority slider
 // (saved to the store, so both feed the planner and chat).
 function onChange(e) {
+  if (SCREENS.some((s) => s.onChange?.(e))) return;
   if (recAnswers.onChange(e)) return;
   const t = e.target;
   if (t?.dataset?.gf === 'track' || t?.dataset?.gf === 'acct') { goalInput(t); return; }
