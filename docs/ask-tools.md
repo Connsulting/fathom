@@ -46,12 +46,13 @@ from that, and when would I get there at my current savings rate?" (Q02 and Q03 
 Calendar estimate: about four to six calendar days end to end at up to five parallel workers. Each
 ticket is one agent run plus CI and one cross-provider review. The date is set by the owner's
 merge gate (two open PRs first, then every ticket), by C1, which is one large ticket every other
-ticket waits on, and by the four-deep chain C1, C3, C6, C7. Section 7 gives the waves.
+ticket waits on, and by the four-deep chain C1, C3, C6, C7. C0, the grader adjudication, runs
+beside C1 and merges before any live run is used to judge a tool ticket. Section 7 gives the waves.
 
 1. C1 is the critical path. It changes the registry shape and renames all 30 live tools in one
    ticket, with every caller, because the repository forbids aliases and compatibility paths: a
    loader that served old-shape and new-shape tools side by side would be one. Nothing else can
-   start until it merges, so wave 1 has one worker. It is mostly mechanical (call sites in about
+   start until it merges, so wave 1 has only C1 and the small grader ticket C0. It is mostly mechanical (call sites in about
    30 test files and the eval catalog), but its review and CI time are the first day.
 2. Owner merges first. PR #84 (T16, eval cases; green) must merge before C1 starts so that C1
    re-points the whole eval catalog once (section 8). PR #83 (T3, account tax treatment
@@ -86,8 +87,12 @@ ticket waits on, and by the four-deep chain C1, C3, C6, C7. Section 7 gives the 
    that a live model picks them. The tier 2 run (`npm run eval:ask:live`, never in CI, spends
    against the engine cap) is the check, run by the coordinator after C4 merges and again at the
    end. It is not a ticket gate.
-9. Migration numbering. C10 adds one table. Its number is set at merge time per AGENTS.md rule 7.
-10. Cost of re-evaluating references. A reference re-runs its read call server-side. Depth is
+9. A noisy grader. In the full live run at `2393850`, nine cases called the required tool, or no
+   tool, with zero self-computed figures and still failed on "unsourced" numbers (section 8, group
+   3). Until C0 settles what the grader counts as a sourced number, a live pass count measures the
+   grader as much as the tools, so no tool ticket is judged on a live run taken before C0 merges.
+10. Migration numbering. C10 adds one table. Its number is set at merge time per AGENTS.md rule 7.
+11. Cost of re-evaluating references. A reference re-runs its read call server-side. Depth is
     capped at 3 and every read is bounded by the household store size, so a chained answer costs
     a few extra milliseconds at household scale.
 
@@ -1492,11 +1497,11 @@ spending-and-obligations pack) have merged and stay as they are. T3 is PR #83: i
 it stands, as the treatment constants and pack; it adds no tool, so no tool name in it changes, and
 the retirement tickets C6 and C7 import from it rather than absorbing it. T16 is PR #84: it merges
 first, as it stands, and C1 re-points every case (section 8). The old T4 to T15 and T17 to T28 are
-replaced by C1 to C10 below.
+replaced by C0 to C10 below.
 
 Calendar estimate: about four to six calendar days end to end at up to five parallel workers, each
 ticket one agent run plus CI and one cross-provider review. Set by the owner's merge gate (PRs #83
-and #84 before wave 1, then each ticket), by C1 alone in wave 1, and by the chain C1, C3, C6,
+and #84 before wave 1, then each ticket), by C1 in wave 1 (C0 beside it), and by the chain C1, C3, C6,
 C7.
 It stretches if C1 needs a second review round, if PR #76 merges mid-C1 and forces a rebase, or if
 CI reruns pile up on a loaded host.
@@ -1506,7 +1511,7 @@ Waves (dependency graph). A ticket starts when everything in its Depends on line
 | Wave | Starts when | Tickets | Workers |
 |---|---|---|---|
 | 0 | now | owner merges PR #83 and PR #84 (both green) | none |
-| 1 | PR #84 merged | C1 | 1 |
+| 1 | PR #84 merged | C0, C1 | 2 |
 | 2 | C1 merged | C2, C3, C4 | 3 |
 | 3 | its inputs merge | C5 (C3, PR #83), C6 (C3, C4, PR #83), C8 (C2), C9 (C2, C3), C10 (C2, C4) | 5 |
 | 4 | C6 merged | C7 (C4, C6) | 1 |
@@ -1515,7 +1520,10 @@ Serialized files: `src/api/answerer.mjs` and `test/answerer.test.mjs` (C1, then 
 ticket edits them); `src/mcp/keys.mjs` (C1, then C2); `src/calc/figure.mjs` (C3 only);
 `src/spending/definitions.mjs` (C4, then C10); `src/tools/catalog/business.mjs` and
 `src/tools/catalog/transactions.mjs` (C1, then C4); `docs/architecture.md` (C1, then C10);
-`evals/` (C1 only). `src/api/handlers.mjs` is edited by C9 and C10 in different functions
+`evals/graders.mjs` (C0 and C1 in different functions: C0 the number matching in
+`evidenceNumbers` and `gradeFigures`, C1 `gradeRequiredTools` and the stored-figure token check;
+the second to merge rebases); the rest of `evals/` (C1 only, then per-case scripts by their
+tickets). `src/api/handlers.mjs` is edited by C9 and C10 in different functions
 (rec, decision and war-game handlers in C9; pack toggle, preference delete and Your plans build in
 C10), and `src/api/ingest-handlers.mjs` by C8 (Confirm) and C10 (files); in each pair the second
 to merge rebases. Every other file has one owning ticket.
@@ -1543,6 +1551,40 @@ Standing acceptance, part of every ticket below:
 Each ticket below is written to the implementable-ticket contract: its Depends on lines name
 merges only, its decisions are made here, and every Done when item names the test that proves it,
 run by the worker or by PR CI. No item needs a person at run time.
+
+### C0 Eval grader adjudication
+
+Size: about 120 production lines, 220 test lines.
+
+Depends on: PR #84 merged.
+
+Files: `evals/graders.mjs` (`evidenceNumbers`, `gradeFigures`, `numericFigures`), `evals/harness.mjs`
+(passes the answer's dynamic context numbers as `contextNumbers`), `test/eval-grader.test.mjs` (new).
+
+Decisions (section 8, "Sourced number"): the grader's sourced-number test follows the six rules
+in that table, so a live run measures tool use and the model's quoting, not formatting noise.
+
+Done when:
+
+1. For each number form in the "Sourced number" table, a fixture answer over real tool results
+   from the demo store gets the verdict the table gives: an unsigned amount of a negative result
+   value is sourced; the same cent value with or without commas or trailing `.00` is sourced; a
+   `k` or `m` abbreviation is sourced only when exact to the cent; a rounded restatement is a
+   `rounded` violation; a spelled-out number is a `spelled_out` violation, except a count up to
+   twenty that equals the length of a list in a tool result of the turn, which is sourced; a
+   number found only in the answer's dynamic context (the household summary block) is
+   `context-only`. Verified by `test/eval-grader.test.mjs`.
+2. Fixtures built from tier 1 scripted answers for `business-pnl-january`, `goals-pace` and
+   `spending-latest-health`, each stating every figure in the forms the live run used (unsigned
+   expenses, dropped cents, counts in words), grade as sourced; the same answers with one
+   invented amount still fail as `unsourced`. Verified by `test/eval-grader.test.mjs`.
+3. A violation's `kind` is one of `unsourced`, `self-computed`, `rounded`, `spelled_out`,
+   `context-only`, and the harness report counts each kind per case. Verified by
+   `test/eval-grader.test.mjs` and `test/ask-evals-runner.test.mjs`.
+4. `npm run eval:ask` passes with the same required passes as its base. Verified by
+   `npm run eval:ask`.
+
+Test command: `node --test test/eval-grader.test.mjs test/ask-evals.test.mjs test/ask-evals-runner.test.mjs && npm run eval:ask`
 
 ### C1 Operation registry, context budget and the live-tool migration
 
@@ -1624,7 +1666,10 @@ Done when:
    only when a stub operation with its pair registers and, for a scripted case, its script file
    exists; `npm run eval:ask` passes, every case whose "Tier 1 required after" column says C1 is a
    required pass, no case that was a required pass on the base fails, and every expected failure
-   names its missing pairs, capabilities or script. Verified by `test/ask-evals.test.mjs`,
+   names its missing pairs, capabilities or script; `gradeRequiredTools` reports each required
+   call as `ok`, `missing` (pair not called) or `predicate_failed` (pair called; names the
+   failing predicates); predicate op `includes_or_absent` passes when the array includes the value
+   or the argument is omitted. Verified by `test/ask-evals.test.mjs`,
    `test/ask-evals-runner.test.mjs` and `npm run eval:ask`.
 10. The MCP smoke calls each read tool's first operation and gets the permission denial for
     `act_on_recommendation.status` on a read key. Verified by `test/mcp-deploy-smoke.test.mjs`.
@@ -1995,27 +2040,62 @@ same ticket that renames the live tools. Re-pointing on the PR #84 branch before
 loader to accept old names and pairs at once, which is a compatibility path. If the owner prefers
 to hold PR #84, it rebases onto C1 and applies the same table; nothing else changes.
 
-Live baseline, the bar later tier 2 runs must beat. Production at `bb2c2f6` (T1 and T2 merged, the
-33 cases on main): 2 pass, 22 fail, 1 stopped by budget, 8 unrun, at $5.19. The failures fall into
-two groups:
+Live baseline, the bar later tier 2 runs must beat. The full live run at `2393850` ran all 33
+cases on main: 2 pass (`spending-latest-groceries`, `spending-latest-dining`), 31 fail, $5.37.
+An earlier partial run on `bb2c2f6` (2 pass, 22 fail, 1 stopped by budget, 8 unrun, $5.19)
+showed the same pattern. The failures fall into three groups:
 
 1. Required tools that do not exist yet (`spending_summary`, `portfolio_requirement`, `cash_flow`,
-   `net_worth_history`); the model used `query_transactions`, `list_accounts` or `get_pace`
-   instead. These are the five rewritten cases marked below (`spending-annual-exclusions`,
-   `spending-portfolio-withdrawal`, `cash-flow-month`, `net-worth-history`,
-   `net-worth-change`); they turn green when C4, C5 and C6 land the operations they now require.
-2. Stored-figure cases (cash, taxes, net worth, retirement room) where the model called
-   `get_figures` but restated or computed figures, which the grader flags as unsourced or computed;
-   the grader also flags expense signs and spelled-out numbers. C3 closes this group with a tool
-   change and a rule: every envelope carries a ready-to-quote `quote` (the `{f:key}` token for a
-   stored figure, digits only, money unsigned with `direction: 'out'`), and section 4 rule 3 says
-   to write `quote` exactly and never derive a second number. The `household.figures` cases are
-   expected green from the first live run after C3.
+   `net_worth_history`); the model used `query_transactions`, `list_accounts`, `get_figures` or
+   `get_pace` instead. These are the five rewritten cases marked below (`spending-annual-exclusions`,
+   `spending-portfolio-withdrawal`, `cash-flow-month`, `net-worth-history`, `net-worth-change`);
+   they turn green when C4, C5 and C6 land the operations they now require.
+2. Stored-figure cases where the model called `get_figures` but restated or computed figures,
+   flagged as self-computed (`cash-personal`, `cash-true-reserve`, `net-worth-current`,
+   `retirement-hsa-room`, `retirement-current-room`, `retirement-pretax`, `taxes-safe-harbor`,
+   `taxes-federal-paid`, `taxes-state-paid`, `taxes-liability`, `taxes-april-due`). C3 closes this
+   group with a tool change and a rule: every envelope carries a ready-to-quote `quote` (the
+   `{f:key}` token for a stored figure, digits only, money unsigned with `direction: 'out'`), and
+   section 4 rule 3 says to write `quote` exactly and never derive a second number.
+3. Cases with zero self-computed figures that still failed on unsourced numbers. With the
+   required call satisfied: `business-pnl-january` (10), `business-pnl-february` (10),
+   `business-pnl-march` (8), `goals-pace` (14), `spending-latest-health` (2), `freshness-facts`
+   (2). With the required tool not called, numbers apparently read from the household summary
+   the prompt carries: `goals-open` (22), `freshness-household` (4), `unavailable-routing-number`
+   (5). This is either the grader failing to match tool output the model formatted (an expense
+   written unsigned while the tool returns it negative, dropped cents, counts in words) or the
+   model restating numbers without provenance. C0 adjudicates it before any tool ticket is
+   measured: it fixes the grader to the table below and proves each form with fixtures, so the
+   remaining violations are the model's.
 
-Each later tier 2 run reports against this baseline: more passes than 2, no case that passed
-regressing, and cost per run stated. The runs after C1, C3, C4 and the last ticket are the
-checkpoints. "Live expected after" below is the ticket after which a case should pass live; it is
-the later of the ticket that makes it a tier 1 required pass and C3, except for the refusal cases.
+Sourced number, as C0 pins it (the grader's rules; the answerer's own grounding is unchanged):
+
+| Number in the answer | Verdict |
+|---|---|
+| Equal to a tool result value in the turn, to the cent for money, or its absolute value (expenses are returned negative and written unsigned) | sourced |
+| The same cent value with or without commas, `$`, or trailing `.00`; a ratio written as a percent | sourced |
+| A `k` or `m` abbreviation equal to a result value to the cent | sourced; otherwise `rounded` |
+| A rounded restatement of a result value (`about $1,200` for 1,187.40) | `rounded` violation (section 4 rule 3) |
+| A spelled-out number | `spelled_out` violation, except a count up to twenty equal to the length of a list in a result of the turn, which is sourced |
+| Found only in the prompt's dynamic context (the household summary block), not in any tool result | `context-only` violation, reported apart from `unsourced` |
+
+Argument predicates. The live run reported `get_figures` as missing in a case where it was called
+(`retirement-hsa-follow-up`): the call failed the case's argument predicate (`keys` includes
+`hsa_left`), and the grader reported that as a missing tool. With typed operations the predicate
+is explicit and checkable on its own: the case requires the pair `household.figures` and states
+its predicate on that operation's typed `keys` parameter, and C1's `gradeRequiredTools` reports
+`missing` (the pair was not called) apart from `predicate_failed` (the pair was called; the report
+names the failing predicate). Because the `figures` operation defines an omitted `keys` as every
+stored figure, a call without `keys` returns the figure the case needs, so C1 rewrites the
+stored-figure predicates as `includes_or_absent` on `keys`; a call naming other keys still fails
+the predicate, and says so.
+
+Each later tier 2 run reports against this baseline: more than 2 passes, no case that passed
+regressing, the count of each violation kind per case (C0), and the cost of the run. The
+checkpoints are a run right after C0 (the adjudicated baseline that replaces the numbers above
+as the bar), then runs after C1, C3, C4 and the last ticket. "Live expected after" below is the
+ticket after which a case should pass live: the later of the ticket that makes it a tier 1
+required pass and C3, except for the refusal cases; every live column assumes C0 has merged.
 
 Every case in `evals/catalog.json` with PR #84 merged (102). Every case changes its call names;
 the "Change beyond the name" column lists the cases whose predicates or requirements change too.
@@ -2027,20 +2107,20 @@ the "Change beyond the name" column lists the cases whose predicates or requirem
 | spending-latest-groceries | `transactions.search` (category groceries, limit 1) | name | C1 | C3 |
 | spending-latest-dining | `transactions.search` (category dining, limit 1) | name | C1 | C3 |
 | spending-latest-health | `transactions.search` (category health, limit 1) | name | C1 | C3 |
-| cash-personal | `household.figures` (keys has personal_cash) | name | C1 | C3 |
-| cash-business | `household.figures` (keys has biz_cash) | name | C1 | C3 |
-| cash-true-reserve | `household.figures` (keys has true_reserve) | name | C1 | C3 |
-| business-stored-revenue | `household.figures` (keys has revenue_ytd) | name | C1 | C3 |
-| net-worth-current | `household.figures` (keys has net_worth) | name | C1 | C3 |
-| retirement-hsa-room | `household.figures` (keys has hsa_left) | name | C1 | C3 |
-| retirement-current-room | `household.figures` (keys has ret_room_now) | name | C1 | C3 |
-| retirement-hsa-paid | `household.figures` (keys has hsa_paid) | name | C1 | C3 |
-| retirement-pretax | `household.figures` (keys has my_pretax) | name | C1 | C3 |
-| taxes-safe-harbor | `household.figures` (keys has safe_harbor) | name | C1 | C3 |
-| taxes-federal-paid | `household.figures` (keys has fed_paid) | name | C1 | C3 |
-| taxes-state-paid | `household.figures` (keys has va_paid) | name | C1 | C3 |
-| taxes-liability | `household.figures` (keys has liability) | name | C1 | C3 |
-| taxes-april-due | `household.figures` (keys has april_due) | name | C1 | C3 |
+| cash-personal | `household.figures` (keys has personal_cash or absent) | predicate becomes `includes_or_absent` on `keys` | C1 | C3 |
+| cash-business | `household.figures` (keys has biz_cash or absent) | predicate becomes `includes_or_absent` on `keys` | C1 | C3 |
+| cash-true-reserve | `household.figures` (keys has true_reserve or absent) | predicate becomes `includes_or_absent` on `keys` | C1 | C3 |
+| business-stored-revenue | `household.figures` (keys has revenue_ytd or absent) | predicate becomes `includes_or_absent` on `keys` | C1 | C3 |
+| net-worth-current | `household.figures` (keys has net_worth or absent) | predicate becomes `includes_or_absent` on `keys` | C1 | C3 |
+| retirement-hsa-room | `household.figures` (keys has hsa_left or absent) | predicate becomes `includes_or_absent` on `keys` | C1 | C3 |
+| retirement-current-room | `household.figures` (keys has ret_room_now or absent) | predicate becomes `includes_or_absent` on `keys` | C1 | C3 |
+| retirement-hsa-paid | `household.figures` (keys has hsa_paid or absent) | predicate becomes `includes_or_absent` on `keys` | C1 | C3 |
+| retirement-pretax | `household.figures` (keys has my_pretax or absent) | predicate becomes `includes_or_absent` on `keys` | C1 | C3 |
+| taxes-safe-harbor | `household.figures` (keys has safe_harbor or absent) | predicate becomes `includes_or_absent` on `keys` | C1 | C3 |
+| taxes-federal-paid | `household.figures` (keys has fed_paid or absent) | predicate becomes `includes_or_absent` on `keys` | C1 | C3 |
+| taxes-state-paid | `household.figures` (keys has va_paid or absent) | predicate becomes `includes_or_absent` on `keys` | C1 | C3 |
+| taxes-liability | `household.figures` (keys has liability or absent) | predicate becomes `includes_or_absent` on `keys` | C1 | C3 |
+| taxes-april-due | `household.figures` (keys has april_due or absent) | predicate becomes `includes_or_absent` on `keys` | C1 | C3 |
 | cash-flow-month | `spending.cash_flow` (window custom, from 2026-01, to 2026-01) | predicates rewritten: from and to are months, not days | C4 | C4 |
 | business-pnl-january | `business.pnl` (from 2026-01, to 2026-01) | name | C1 | C3 |
 | business-pnl-february | `business.pnl` (from 2026-02, to 2026-02) | name | C1 | C3 |
@@ -2054,7 +2134,7 @@ the "Change beyond the name" column lists the cases whose predicates or requirem
 | unavailable-credit-score | `household.facts` | name | C1 | C3 |
 | unavailable-routing-number | `accounts.list` | name | C1 | C3 |
 | unavailable-market-forecast | `accounts.holdings` | name | C1 | C3 |
-| retirement-hsa-follow-up | `household.figures` (keys has hsa_left); `household.figures` (keys has hsa_paid) | name | C1 | C3 |
+| retirement-hsa-follow-up | `household.figures` (keys has hsa_left or absent); `household.figures` (keys has hsa_paid or absent) | predicate becomes `includes_or_absent` on `keys` | C1 | C3 |
 | q01-spend-excl-mortgage-tax | `spending.total` (measure spending, annualize true, exclude.classes has debt_service, exclude.categories has Mortgage, exclude.buckets has tax) | name | C4 | C4 |
 | q02-independence-target-4pct | `retirement.target` (withdrawalRate.value 0.04, withdrawalRate.source owner); capability ownerStatements | name | C6 | C6 |
 | q03-gap-and-date | `retirement.target` (withdrawalRate.value 0.04, withdrawalRate.source owner); capability ownerStatements | name | C6 | C6 |
