@@ -59,7 +59,7 @@ export function changeGoal(args, ctx, editing = false) {
   const old = current ? parse(current.def, {}) : {};
   for (const k of ['target', 'targetDate']) if (Object.hasOwn(fields, k)) {
     const stored = Object.hasOwn(old, k) ? [old[k]] : [];
-    requireEvidence(ctx, fields[k], { stored, argument: k });
+    requireEvidence(ctx, fields[k], { stored, argument: k, household: true });
   }
   let receipt = null;
   const opts = { now: new Date(ctx.now ?? Date.now()).toISOString(), onWrite(before, after) {
