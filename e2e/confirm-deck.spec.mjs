@@ -266,8 +266,10 @@ test("Fathom's guess shows with its reason, never answers by itself, and Enter a
     if (await deckCard(page).locator('[data-guess="1"]').count()) guessed.push(order[i]);
     if (i < n - 1) await page.keyboard.press('j');
   }
-  expect(guessed, 'exactly one card shows a guess').toHaveLength(1);
-  const g = items.find((i) => i.id === guessed[0]);
+  const expectedGuesses = (await (await request.get('/api/scenario')).json()).live.ingest.items.filter(i => i.guess).map(i => i.id);
+  expect(guessed, 'stored and category guesses are visible').toEqual(expectedGuesses);
+  const g = items.find((i) => i.kind === 'account_owner' && guessed.includes(i.id));
+  expect(g, 'the seeded account-owner guess remains available').toBeTruthy();
 
   await deckTo(page, order, g.id);
   const guessBtn = deckCard(page).locator('[data-guess="1"]');
@@ -337,7 +339,7 @@ test('Escape leaves the deck for Home', async ({ page, request }) => {
 test('answering every card from the keyboard ends at All caught up and clears the badge', async ({ page, request }) => {
   const { n } = await openDeck(page, request);
   let last = null;
-  for (let i = 0; i < n; i++) {
+  for (let i = 0; i < n && (await pending(request)).length; i++) {
     last = await deckCurrentId(page);
     await pressToAnswer(page, '1', last);
   }
