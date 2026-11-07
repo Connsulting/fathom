@@ -1,3 +1,4 @@
+import { setSetting } from '../../src/store/db.mjs';
 import { ingestFile, accountIdOf } from '../../src/ingest/pipeline.mjs';
 import { parser } from '../../src/ingest/simplefin.mjs';
 import { aggregatorFile, textFile, NOW } from './ingest.mjs';
@@ -6,6 +7,7 @@ export const positionsFile = (mask = '6294') => textFile('positions-2032-02-29.c
   `Account Number,Account Name,Symbol,Description,Quantity,Last Price,Current Value\n000${mask},Individual Brokerage,SYN,Synthetic fund,10,120,1200\n`);
 
 export async function seedDuplicate(s, { sure = false, mask = '6294', sfKey = 'synthetic-bridge', conflict = false } = {}) {
+  setSetting(s.db, 'clock', '2032-03-10');
   const name = sure ? 'Synthetic checking' : 'Individual Brokerage';
   await ingestFile(s.db, sure ? aggregatorFile(`checking-${mask}.csv`, [
     { date: '2032-02-29', inst: 'Example Bank', account: name, number: `000${mask}`, amount: '10', description: 'File posting' },

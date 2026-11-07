@@ -1,3 +1,4 @@
+import { queueAccountPairs } from '../ingest/account-merge.mjs';
 // Ingest API handlers: file uploads, the file list, retries and the confirm queue. Each takes the
 // router ctx ({db, config, engine, scheduler, params, body, readUpload}) and returns the JSON body or
 // throws HttpError. A request that imports a file triggers the plan and confirm-guess jobs through ctx.scheduler. Pipeline, vault and confirm errors map to statuses here with fixed messages, so no
@@ -111,10 +112,12 @@ export function getConfirm(ctx) {
 }
 
 export function listPendingConfirm(ctx) {
+  queueAccountPairs(ctx.db);
   return { items: pendingItems(ctx.db) };
 }
 
 export function listConfirm(ctx) {
+  queueAccountPairs(ctx.db);
   const { status = 'pending' } = ctx.body;
   if (!LIST_STATUSES.includes(status)) throw new HttpError(400, `status must be one of ${LIST_STATUSES.join(', ')}`);
   return { items: listItems(ctx.db, { status }) };
@@ -195,7 +198,7 @@ export function answerConfirm(ctx) {
   const revise = ctx.body.revise === true;
   const out = afterAnswer(ctx, () => (revise ? reviseItem : answerItem)(ctx.db, id, optionId, { now: nowIso() }));
   // A SimpleFIN account waits on its match question: the answer lets the next sync import it.
-  if (out.item && out.item.kind === 'account_match') triggerJob(ctx, 'simplefin-sync');
+  if (out.item && out.item.kind === 'account_match' && !out.item.context?.repair) triggerJob(ctx, 'simplefin-sync');
   return out;
 }
 
@@ -223,7 +226,7 @@ export function answerConfirmBatch(ctx) {
     return { id, option };
   });
   const out = afterAnswer(ctx, () => answerItems(ctx.db, answers, { now: nowIso() }));
-  if (out.items.some(i => i.kind === 'account_match')) triggerJob(ctx, 'simplefin-sync');
+  if (out.items.some(i => i.kind === 'account_match' && !i.context?.repair)) triggerJob(ctx, 'simplefin-sync');
   return out;
 }
 

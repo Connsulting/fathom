@@ -100,3 +100,68 @@ test('merge reimports positions into the surviving account and keeps distinct hi
   assert.equal(s.db.prepare('SELECT count(*) n FROM accounts').get().n, 1);
   assert.equal(s.db.prepare('SELECT account_id FROM positions').get().account_id, p.keep);
 }));
+
+test('repair HTTP answers do not sync; repeated scenario reads leave Keep both and Merge undoable', () => withStore(async s => {
+  const {serveAppFixture}=await import('../helpers/server.mjs');
+  const p=await seedDuplicate(s,{sure:true});
+  const jobs=[];
+  const app=await serveAppFixture({db:s.db,config:s.config,authenticated:true,scheduler:{trigger:(id)=>{jobs.push(id);},soon:()=>true}});
+  try {
+    const first=await app.request({path:'/api/confirm'});
+    const q=first.json.items.find(i=>i.context.repair);
+    assert.ok(q);
+    const keep=await app.postJson(`/api/confirm/${q.id}/answer`,{answer:'different'});
+    assert.equal(keep.status,200); assert.equal(keep.json.item.final,null);
+    await app.getScenario(); await app.getScenario();
+    assert.equal((await app.postJson(`/api/confirm/${q.id}/reopen`)).status,200);
+    const merge=await app.postJson(`/api/confirm/${q.id}/answer`,{answer:'same'});
+    assert.equal(merge.status,200); assert.equal(merge.json.item.final,null);
+    assert.equal(jobs.includes('simplefin-sync'),false);
+    assert.equal(merge.json.scenario.series.net.points.at(-1).v,1200);
+    const undo=await app.postJson(`/api/confirm/${q.id}/reopen`);
+    assert.equal(undo.status,200); assert.equal(undo.json.scenario.series.net.points.at(-1).v,2400);
+    assert.ok(s.db.prepare('SELECT 1 FROM accounts WHERE id=?').get(p.own));
+  } finally {await app.close();}
+}));
+
+test('reverse-order resync remembers removed external ids and keeps history', () => withStore(async s => {
+  const opts={config:s.config,key:s.key,now:NOW,clock:'2032-03-10'};
+  const bridge={id:'opaque',conn_id:'synthetic',name:'Synthetic checking x6294',balance:'1200','balance-date':Date.parse('2032-02-29T12:00:00Z')/1000,currency:'USD',transactions:[
+    {id:'bridge-posting',posted:Date.parse('2032-02-29T12:00:00Z')/1000,amount:'-10',description:'Bridge posting'},
+    {id:'bridge-posting-2',posted:Date.parse('2032-02-29T12:00:00Z')/1000,amount:'-10',description:'Other posting'},
+    {id:'old-bridge',posted:Date.parse('2032-01-15T12:00:00Z')/1000,amount:'-7',description:'Historical posting'},
+  ]};
+  const body={connections:[{conn_id:'synthetic',name:'Example Bank'}],accounts:[bridge]};
+  const key=S.normalizeAccountSet(body).accounts[0].key;
+  const p=await seedDuplicate(s,{sure:true,sfKey:key});
+  await S.connectSimplefin(s.db,S.fakeToken(),{...opts,fetch:S.createFakeSimplefin()});
+  await S.syncSimplefin(s.db,{...opts,fetch:async()=>new Response(JSON.stringify(body))});
+  const q=pending(s.db)[0]; assert.ok(q);
+  C.answer(s.db,q.id,'same',{now:NOW});
+  assert.equal(s.db.prepare('SELECT count(*) n FROM transactions').get().n,3);
+  bridge.transactions.reverse();
+  await S.syncSimplefin(s.db,{...opts,fetch:async()=>new Response(JSON.stringify(body))});
+  assert.equal(s.db.prepare('SELECT count(*) n FROM transactions').get().n,3);
+  assert.equal(s.db.prepare('SELECT account_id FROM transactions WHERE description=?').get('Historical posting').account_id,p.keep);
+}));
+
+test('connect, sync and later positions upload expose repair through the real HTTP boundary', () => withStore(async s => {
+  const {serveAppFixture}=await import('../helpers/server.mjs');
+  const {offEngine}=await import('../helpers/ingest.mjs');
+  const opts={config:s.config,key:s.key,now:NOW,clock:'2032-03-10'};
+  await S.connectSimplefin(s.db,S.fakeToken(),{...opts,fetch:S.createFakeSimplefin()});
+  const body={accounts:[{id:'synthetic-brokerage',name:acct.name,org:{name:acct.inst},balance:'1200','balance-date':Date.parse('2032-02-29T12:00:00Z')/1000,currency:'USD',transactions:[]}]};
+  await S.syncSimplefin(s.db,{...opts,fetch:async()=>new Response(JSON.stringify(body))});
+  assert.equal(s.db.prepare('SELECT count(*) n FROM accounts').get().n,1);
+  const app=await serveAppFixture({db:s.db,config:s.config,authenticated:true,engine:await offEngine()});
+  try {
+    const f=positionsFile(),form=new FormData();form.append('files',new Blob([f.bytes],{type:'text/csv'}),f.name);
+    const res=await fetch(`${app.baseUrl}/api/files`,{method:'POST',headers:app.headers,body:form});
+    assert.equal(res.status,200);
+    const list=await app.request({path:'/api/confirm'});
+    assert.equal(list.json.items.filter(i=>i.kind==='account_match'&&i.context.repair).length,1);
+    const scenario=await app.getScenario();
+    assert.equal(scenario.accounts.length,2);
+    assert.equal(scenario.live.ingest.items.filter(i=>i.context.repair).length,1);
+  } finally {await app.close();}
+}));

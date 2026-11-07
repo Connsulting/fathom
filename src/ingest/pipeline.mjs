@@ -1,3 +1,4 @@
+import { kindOf, accountMask, compatibleKind, sameInstitution } from './account-match.mjs';
 // Ingest pipeline: store each upload encrypted, route it to a parser, a learned column mapping or
 // model extraction, and persist its rows with provenance in one transaction per file: accounts by
 // identity, deduplication, revisions and supersede by coverage, confirm questions, sources and
@@ -44,21 +45,7 @@ const moneyEq = (a, b) => (a == null && b == null) || (a != null && b != null &&
 const numEq = (a, b) => (a == null && b == null) || (a != null && b != null && Math.abs(a - b) < 1e-9);
 const addDays = (iso, n) => new Date(Date.parse(`${iso}T00:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
 
-// Account kind from an export's account type; unknown is null (and asked about).
-export function kindOf(kind) {
-  const k = String(kind ?? '').trim().toLowerCase();
-  if (!k) return null;
-  if (/roth/.test(k)) return 'roth';
-  if (/\bhsa\b|health savings/.test(k)) return 'hsa';
-  if (/529/.test(k)) return '529';
-  if (/401|403|457|\bira\b|\bsep\b|retirement|pension/.test(k)) return 'retirement';
-  if (/credit|\bcard\b/.test(k)) return 'card';
-  if (/business/.test(k)) return 'business';
-  if (/checking|savings|\bcash\b|money market/.test(k)) return 'cash';
-  if (/brokerage|individual|joint|taxable|investment/.test(k)) return 'taxable';
-  if (/loan|mortgage|line of credit/.test(k)) return 'loan';
-  return null;
-}
+export { kindOf } from './account-match.mjs';
 
 // Normalized account identity: inst|mask:<mask>, inst|name:<name>, else source:<hash>.
 export function accountIdentity(row) {
@@ -324,19 +311,18 @@ function persist(db, fileId, file, plan, opts) {
 // mask, the row belongs to it. Otherwise null (the row's own identity decides).
 function connectedAccountFor(db) {
   const cache = new Map();
-  const byMask = db.prepare("SELECT id, inst FROM accounts WHERE identity LIKE 'simplefin:%' AND mask = ?");
-  const exists = db.prepare('SELECT 1 FROM accounts WHERE id = ?');
-  return (row) => {
-    if (row.identity || !/^\d{4}$/.test(row.account?.mask ?? '')) return null;
+  return row => {
+    if (row.identity || !accountMask(row.account ?? {})) return null;
     const own = accountIdOf(accountIdentity(row));
     if (cache.has(own)) return cache.get(own);
     let out = null;
-    if (!exists.get(own)) {
-      const inst = normalizeName(institution(row.account.inst));
-      const hits = byMask.all(row.account.mask).filter((a) => normalizeName(institution(a.inst)) === inst);
+    if (!db.prepare('SELECT 1 FROM accounts WHERE id=?').get(own)) {
+      const hits = db.prepare(`SELECT DISTINCT a.* FROM simplefin_accounts m JOIN accounts a ON a.id=m.account_id WHERE m.status='mapped'`).all()
+        .filter(a => accountMask(a) === accountMask(row.account) && compatibleKind(a,row.account)
+          && (sameInstitution(a.inst,row.account.inst) || (a.identity && !a.identity.startsWith('simplefin:') && !row.account.inst)));
       if (hits.length === 1) out = hits[0].id;
     }
-    cache.set(own, out);
+    cache.set(own,out);
     return out;
   };
 }
@@ -913,7 +899,7 @@ function emptyHoldings(ctx, id, key) {
 
 // Account figures: the latest balance, else the holdings total at the latest as-of date, or 0 when
 // an authoritative empty snapshot is dated after every stored position.
-function refreshFigures(ctx, accountIds) {
+export function refreshFigures(ctx, accountIds) {
   const { db, now } = ctx;
   const accountOf = db.prepare('SELECT id, name, source_id FROM accounts WHERE id = ?');
   for (const id of accountIds) {
