@@ -200,7 +200,10 @@ export function seedDemo(db) {
 
     const figure = db.prepare(`INSERT INTO figures (key, v, src, kind, label, file_id, parser, locator, updated_at)
                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-    for (const [key, f] of Object.entries(S.fig)) figure.run(key, cents(f.v), f.src, f.kind, f.label || '', ...prov(`fig.${key}`), now);
+    for (const [key, f] of Object.entries(S.fig)) {
+      const locator = f.asOf ? JSON.stringify({ path: `fig.${key}`, asOf: f.asOf, cadenceKind: f.cadenceKind }) : `fig.${key}`;
+      figure.run(key, cents(f.v), f.src, f.kind, f.label || '', ...prov(locator), now);
+    }
 
     const fact = db.prepare(`INSERT INTO facts (key, value, src, as_of, confirmed, file_id, parser, locator, updated_at)
                              VALUES (?, ?, 'you', ?, 1, ?, ?, ?, ?)`);

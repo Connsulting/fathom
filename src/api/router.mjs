@@ -31,6 +31,7 @@ import { getSetting } from '../store/db.mjs';
 const TABLE = [
   { method: 'GET', path: '/healthz', handler: h.healthz },
   { method: 'GET', path: '/api/scenario', handler: h.getScenario },
+  { method: 'GET', path: '/api/pace', handler: gh.getPace },
   { method: 'GET', path: '/api/identity', handler: h.getIdentity },
   { method: 'POST', path: '/api/recs/:id/action', handler: h.recAction },
   { method: 'POST', path: '/api/recs/:id/start-over', handler: h.recStartOver },
