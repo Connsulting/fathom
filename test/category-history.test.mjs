@@ -12,7 +12,7 @@ import { categoryQuestions, createJev, JEV_MODEL } from '../src/categories/jev.m
 import { jevEvidence } from '../src/categories/policy.mjs';
 import { answerItem, pendingItems, autoInfo, reopenItem } from '../src/ingest/confirm.mjs';
 
-const accounts = [{id:'a',kind:'checking'}, {id:'b',kind:'business'}, {id:'c',kind:'card'}];
+const accounts = [{id:'a',kind:'checking'}, {id:'b',kind:'business'}, {id:'c',kind:'card'}, {id:'d',kind:'savings'}];
 const row = (id, patch={}) => ({id,account_id:'a',date:`2032-01-${String(id).padStart(2,'0')}`,description:'Cobalt Market',amount:-36,...patch});
 const history = () => [1,2,3].map(id=>row(id,{category:'Groceries',parser:'aggregator'}));
 function store(t) {
@@ -83,8 +83,8 @@ test('processor business deposits, card payments and own-account transfers are u
   const personal=insert(db,row(2,{amount:83,description:'Stripe payout'}));
   const fee=insert(db,row(3,{account_id:'b',amount:-12,description:'Stripe fee'}));
   const card=insert(db,row(4,{account_id:'c',amount:48,description:'Payment received'}));
-  const out=insert(db,row(5,{account_id:'b',amount:-321,description:'Own account transfer'}));
-  const incoming=insert(db,row(6,{amount:321,description:'Own account transfer'}));
+  const out=insert(db,row(5,{amount:-321,description:'Own account transfer'}));
+  const incoming=insert(db,row(6,{account_id:'d',amount:321,description:'Own account transfer'}));
   await guessCategories(db,off);
   const resolved=resolveCategories(loadCategoryInputs(db));
   assert.equal(resolved.get(payout).bucket,'income');
@@ -134,4 +134,41 @@ test('enrichment categories and Confirm source mappings are immediately usable t
   assert.equal(historyExamples(target,input).length,3);
   assert.equal(historyDecision(target,input).category,'Synthetic supplies');
   assert.equal(historyDecision(target,input).bucket,'business');
+});
+
+test('unmapped source categories leave one mapping card and never stop later local or model decisions',async t=>{
+  const db=store(t);
+  const unknown=insert(db,row(1,{account_id:'b',amount:115,description:'Stripe payout',category:'Synthetic receipts',parser:'aggregator'}));
+  const card=insert(db,row(2,{account_id:'c',amount:44,description:'Payment received',category:'Synthetic card activity',parser:'aggregator'}));
+  const debit=insert(db,row(3,{amount:-122,description:'Synthetic move',category:'Synthetic movement',parser:'aggregator'}));
+  insert(db,row(4,{account_id:'d',amount:122,description:'Synthetic move'}));
+  const payout=insert(db,row(5,{account_id:'b',amount:631,description:'Square payout'}));
+  insert(db,row(6,{description:'Historical food',category:'Groceries',parser:'aggregator'}));
+  insert(db,row(7,{description:'Historical work',category:'Business',parser:'aggregator'}));
+  const unresolved=insert(db,row(8,{description:'New merchant'}));
+  let attempted=0;
+  const provider={isOn:()=>true,stats:()=>({costUsd:0}),choose:async qs=>{attempted+=qs.length;return qs.map(()=>({choice:'Groceries',confidence:.85,probabilities:{Groceries:.85,Business:.15}}));}};
+  for(let run=0;run<2;run++) {
+    const result=await guessCategories(db,provider);
+    assert.equal(result.stopped,undefined);
+    assert.equal(resolveCategories(loadCategoryInputs(db)).get(payout).category,'Income');
+    for(const id of [unknown,card,debit]) assert.equal(db.prepare("SELECT count(*) AS n FROM confirm_items WHERE kind='transaction_category' AND subject=?").get(String(id)).n,0);
+    assert.equal(pendingItems(db).filter(q=>q.kind==='category_mapping').length,3);
+  }
+  assert.equal(attempted,1);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM transaction_category_guesses WHERE transaction_id=?').get(unresolved).n,1);
+});
+
+test('business draws keep personal income while business-card payments stay transfers',async t=>{
+  const db=store(t);
+  insert(db,row(1,{account_id:'b',amount:-907,description:'Synthetic owner draw'}));
+  const draw=insert(db,row(2,{amount:907,description:'Synthetic owner draw'}));
+  db.prepare('INSERT INTO facts (key,value,updated_at) VALUES (?,?,?)').run('accounts.businessEntity',JSON.stringify({c:'Synthetic entity'}),'2032-01-01');
+  const card=insert(db,row(3,{account_id:'c',amount:51,description:'Payment received'}));
+  await guessCategories(db,off);
+  const resolved=resolveCategories(loadCategoryInputs(db));
+  assert.equal(resolved.get(draw).bucket,'income');
+  assert.equal(resolved.get(draw).layer,'uncategorized');
+  assert.equal(db.prepare('SELECT count(*) AS n FROM transaction_category_corrections WHERE transaction_id=?').get(draw).n,0);
+  assert.equal(resolved.get(card).bucket,'transfer');
 });
