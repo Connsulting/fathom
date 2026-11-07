@@ -275,6 +275,17 @@ test('a stale feed still caps the window end', () => {
   assert.ok(note.includes(accountLabel(accounts[1])));
 });
 
+test('a gap keeps the latest run instead of reading the account as newly opened', () => {
+  const accounts = [labeled('a', 'Checking', 'checking'), labeled('b', 'Card')];
+  const transactions = [
+    ...spanTx('a', '2025-01', '2026-11', -100),
+    ...spanTx('b', '2025-01', '2026-11', -100).filter(t => !t.date.startsWith('2026-06')),
+  ];
+  const sp = spendingInputs({ accounts, transactions, clock: '2026-11-05' });
+  assert.deepEqual(sp.window, { from: '2026-07', to: '2026-10', months: 4 });
+  assert.equal(sp.monthlySpend, 200);
+});
+
 test('no_spending_history remains when fewer than three complete months survive', () => {
   const accounts = [labeled('chk', 'Checking', 'checking'), labeled('old', 'Old card')];
   const transactions = [
@@ -284,6 +295,22 @@ test('no_spending_history remains when fewer than three complete months survive'
   const sp = spendingInputs({ accounts, transactions, clock: '2026-11-05' });
   assert.equal(sp.window, null);
   assert.ok(sp.missing.includes('no_spending_history'));
+});
+
+test('the spending note uses stored display names, not the kind word', async t => {
+  const db = await store(t);
+  household(db, { months: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11] });
+  db.prepare('UPDATE accounts SET name = ?, display_name = ? WHERE id = ?').run('chase_total_checking', 'Bills account', 'chk');
+  account(db, 'part', 'card', 'travel_rewards_card');
+  db.prepare('UPDATE accounts SET display_name = ? WHERE id = ?').run('Travel card', 'part');
+  txn(db, 'part', '2026-11-02', -50, 'One charge');
+  putGoal(db, 'cushion', { title: 'A cash cushion', horizon: '1-3y' });
+  const r = build(db);
+  const rec = recOf(r, 'cushion');
+  const note = figOf(r, rec, 'monthlySpend').notes.join(' ');
+  assert.ok(note.includes('Bills account'), note);
+  assert.ok(note.includes('Travel card'), note);
+  assert.equal(note.includes('chase_total_checking'), false);
 });
 
 test('fewer than three complete months is a question, not a number', async t => {
