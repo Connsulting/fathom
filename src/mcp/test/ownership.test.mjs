@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  SERVER_TIMEOUT, spawnAuthenticatedServer, createSessionFixture, sessionClient, openStore, request, postJson,
+  SERVER_TIMEOUT, spawnAuthenticatedServer, createSessionFixture, sessionClient, openStore, openPlatformStore, request, postJson,
 } from '../../../test/helpers/server.mjs';
 import { mcpPost, bearer, rpcResult, UNAUTHORIZED } from './helpers.mjs';
 
@@ -13,8 +13,13 @@ async function store(server, fn) {
   const db = await openStore(server.dbFile);
   try { return await fn(db); } finally { db.close(); }
 }
+// Accounts live in platform.sqlite; api_keys stay in the financial store.
+async function platformOf(server, fn) {
+  const platform = await openPlatformStore(server.platformFile);
+  try { return await fn(platform); } finally { platform.close(); }
+}
 async function userClient(server, email, role = 'member') {
-  const fixture = await store(server, db => createSessionFixture(db, { email, role }));
+  const fixture = await platformOf(server, platform => createSessionFixture(platform, { email, role }));
   return { ...sessionClient(server.baseUrl, fixture), fixture };
 }
 async function create(client, name, extra = {}) {
@@ -121,5 +126,28 @@ test('demotion keeps financial MCP permissions while revoking administrative ses
     assert.ok(tools.some(tool => tool.name === 'set_recommendation_status'));
     await working(server, key.key);
     assert.equal((await promoted.request({ path: '/api/scenario' })).status, 200);
+  } finally { await server.stop(); }
+});
+
+// Contradiction 1: api_keys lost the users foreign key, so verification itself refuses a key whose
+// creator is no longer an active member of the served household, even when no delete removed it.
+test('a creator-owned key stops verifying once its creator has no active membership, while ownerless keys stay admin-manageable', T, async () => {
+  const server = await spawnAuthenticatedServer({ env: REAL });
+  try {
+    const member = await userClient(server, 'lapsed@example.test');
+    const own = await create(member, 'Lapsed member key');
+    const legacy = await create(server, 'Existing ownerless key');
+    await store(server, db => db.prepare('UPDATE api_keys SET user_id = NULL WHERE id = ?').run(legacy.record.id));
+    await working(server, own.key);
+    await working(server, legacy.key);
+    await platformOf(server, platform => platform.prepare("UPDATE household_memberships SET status = 'removed' WHERE user_id = ?").run(member.fixture.user.id));
+    await denied(server, own.key);
+    assert.equal(await store(server, db => db.prepare('SELECT count(*) AS n FROM api_keys WHERE id = ?').get(own.record.id).n), 1, 'the row is still there; verification fails closed');
+    await working(server, legacy.key);
+    const all = await server.request({ path: '/api/keys' });
+    assert.equal(all.status, 200);
+    assert.ok(all.json.keys.some(record => record.id === legacy.record.id), 'admins still list the ownerless key');
+    assert.equal((await server.postJson(`/api/keys/${legacy.record.id}/revoke`)).status, 200);
+    await denied(server, legacy.key);
   } finally { await server.stop(); }
 });

@@ -10,7 +10,7 @@ import test, { describe, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { src, tempDb, tempDir, runCommand, DB_FILE, serveAppFixture } from '../helpers/server.mjs';
+import { src, tempInstance, tempDir, runCommand, DB_FILE, serveAppFixture } from '../helpers/server.mjs';
 import { fixture, fixturePath, realStore, offEngine, all, one, count, NOW } from '../helpers/ingest.mjs';
 
 let G;
@@ -585,9 +585,9 @@ describe('imports trigger the confirm-guess job through the scheduler', () => {
 
 describe('guess CLI (npm run confirm:guess runs the confirm-guess job once through the scheduler)', () => {
   test('on a migrated real store with the engine off it exits 0, prints one JSON line with a skipped status, and records the run', async () => {
-    const store = await tempDb();
+    // A real instance: the store plus its synthetic platform.sqlite, as the CLI requires since MT-01.
+    const store = await tempInstance({ mode: 'real', init: (db) => DB.setSetting(db, 'mode', 'real') });
     try {
-      DB.setSetting(store.db, 'mode', 'real');
       queue(store.db, 1);
       store.close();
       const r = await runCommand(process.execPath, ['src/jobs/guess-cli.mjs'], { env: { FATHOM_DATA: store.dataDir, FATHOM_ENGINE: 'off', FATHOM_DEMO: '0' } });

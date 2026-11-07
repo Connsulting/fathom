@@ -770,7 +770,7 @@ async function signOut(btn) {
 
 let users = [];
 
-const enrolled = (u) => (Object.prototype.hasOwnProperty.call(u, 'enrolledAt') ? !!u.enrolledAt : true);
+const enrolled = (u) => u.status !== 'pending' && (Object.prototype.hasOwnProperty.call(u, 'enrolledAt') ? !!u.enrolledAt : true);
 const lastAdmin = (u) => u.role === 'admin' && enrolled(u) && users.filter((x) => x.role === 'admin' && enrolled(x)).length <= 1;
 
 function userHtml(u, i) {

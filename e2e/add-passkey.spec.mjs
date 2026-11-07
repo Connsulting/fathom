@@ -93,7 +93,10 @@ test.describe('adding a passkey on another device', () => {
       const registration = await register(first, 'Primary device');
       ownerIdentity = registration.identity;
       primaryId = registration.credentialId;
-      expect(ownerIdentity).toMatchObject({ email: OWNER, role: 'admin', householdId: 1 });
+      // householdId is the opaque platform household id (MT-01 contradiction 8), no longer the integer 1.
+      expect(ownerIdentity).toMatchObject({ email: OWNER, role: 'admin', householdId: expect.any(String), operator: false });
+      expect(ownerIdentity.householdId.length).toBeGreaterThan(0);
+      expect(ownerIdentity.memberships).toEqual([{ householdId: ownerIdentity.householdId, role: 'admin' }]);
       firstCredentials = await first.auth.credentials();
       expect(firstCredentials.length).toBe(1);
       firstSession = await sessionCookie(first);

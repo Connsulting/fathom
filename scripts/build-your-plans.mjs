@@ -5,12 +5,13 @@
 // generated key). Refuses when there is no store or no data key. Prints counts only (entries, sources, sections dropped because
 // they did not match the document, warnings), never document text. A written pack refreshes the
 // store's pack rows here; a running server loads its manifest on its next request (settings
-// packs.generation changes).
+// packs.generation changes). A real store opens only through openServedStore.
 
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadConfig } from '../src/config.mjs';
-import { openMigrated, getSetting, DB_FILE } from '../src/store/db.mjs';
+import { openMigrated, getSetting, readStoreMode, DB_FILE } from '../src/store/db.mjs';
+import { openServedStore } from '../src/platform/ready.mjs';
 import { createRuntimeEngine } from '../src/engine/runtime.mjs';
 import { clockNow } from '../src/scenario/build.mjs';
 import { buildYourPlans, YourPlansRefusal } from '../src/packs/your-plans.mjs';
@@ -40,7 +41,17 @@ async function main() {
   try { config = loadConfig(); } catch (e) { fail(e.message); }
   const file = join(config.dataDir, DB_FILE);
   if (!existsSync(file)) fail('there is no store in FATHOM_DATA; start the server once (or run seed:demo) first.');
-  const db = openMigrated(file);
+  let db;
+  try {
+    if (readStoreMode(file) === 'demo') db = openMigrated(file);
+    else {
+      const served = openServedStore(config);
+      served.platform.close();
+      db = served.db;
+    }
+  } catch (e) {
+    fail(e.name === 'StartupError' ? e.message : 'the store could not be opened');
+  }
   try {
     const engine = createRuntimeEngine({ db, config, now: () => new Date(clockNow(db, config.clock)) });
     const key = await loadDataKey({ dataDir: config.dataDir, keyFile: config.dataKeyFile, mode: getSetting(db, 'mode', null) === 'demo' ? 'demo' : 'real' });
