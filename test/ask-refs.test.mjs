@@ -443,3 +443,58 @@ test('resolveRefs keeps a P&L entity and a real category row as /api/pnl keys th
   assert.ok(out[1].use.includes(real), 'the hint names the real category');
   assert.ok(!JSON.stringify(out).includes('Synthetic invented category'), 'an invented category never reaches the prompt');
 });
+
+// pnl2-ac3: a P&L or spending ref from a page with a month selected carries a |YYYY-MM suffix.
+const MONTH_LABEL = m => `${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][Number(m.slice(5, 7)) - 1]} ${m.slice(0, 4)}`;
+
+test('pnl2-ac3 resolveRefs keeps a P&L category row with a month suffix, names the month in the hint, and drops an invalid suffix as an unknown category', async t => {
+  const s = await demoStore(t);
+  const scenario = buildScenario(s.db, { packs: s.packs });
+  const { pnlEntities, businessPnl } = await import('../src/pnl/business.mjs');
+  const ent = pnlEntities({ db: s.db, clock: scenario.meta.clock }).find(e => e.kind === 'entity');
+  assert.ok(ent, 'the demo store has a business entity');
+  const p = businessPnl({ db: s.db, entity: ent.key, clock: scenario.meta.clock });
+  const real = p.expenses.categories[0].category;
+  const month = p.months[Math.min(2, p.months.length - 1)];
+  const label = MONTH_LABEL(month);
+  const out = resolveRefs(s.db, scenario, [
+    { kind: 'pnl', id: `${ent.key}|${real}|${month}` },
+    { kind: 'pnl', id: `${ent.key}|${real}` },
+    { kind: 'pnl', id: `${ent.key}|${real}|${month.slice(0, 4)}-13` },
+    { kind: 'pnl', id: `${ent.key}|${real}|${month.slice(0, 4)}-00` },
+    { kind: 'pnl', id: `${ent.key}|Synthetic invented category|${month}` },
+    { kind: 'pnl', id: `entity:nosuchbusiness|${real}|${month}` },
+  ]);
+  assert.deepEqual(out.map(r => `${r.kind}:${r.id}`), [`pnl:${ent.key}|${real}|${month}`, `pnl:${ent.key}|${real}`]);
+  const [withMonth, plain] = out;
+  assert.match(withMonth.use, /pnl_by_month/);
+  assert.ok(withMonth.use.includes(real), `the hint names the category: ${withMonth.use}`);
+  assert.ok(!withMonth.use.includes(`${real}|`), `the hint names the category without the suffix: ${withMonth.use}`);
+  assert.ok(withMonth.use.includes(label), `the hint names ${label}: ${withMonth.use}`);
+  assert.ok(!plain.use.includes(label), `the month-less hint names no month: ${plain.use}`);
+  assert.ok(!JSON.stringify(out).includes('-13'), 'an invalid month suffix never reaches the prompt');
+  assert.ok(!JSON.stringify(out).includes('Synthetic invented category'), 'an invented category with a month never reaches the prompt');
+});
+
+test('pnl2-ac3 resolveRefs keeps a spending category with a month suffix, names the month in the hint, and drops an invalid suffix as an unknown category', async t => {
+  const s = await demoStore(t);
+  const scenario = buildScenario(s.db, { packs: s.packs });
+  const row = s.db.prepare("SELECT category, substr(date, 1, 7) AS month FROM transactions WHERE category IS NOT NULL AND category != '' ORDER BY date DESC LIMIT 1").get();
+  assert.ok(row, 'the demo store has a categorized transaction');
+  const { category, month } = row;
+  const label = MONTH_LABEL(month);
+  const out = resolveRefs(s.db, scenario, [
+    { kind: 'spending', id: `${category}|${month}` },
+    { kind: 'spending', id: category },
+    { kind: 'spending', id: `${category}|${month.slice(0, 4)}-13` },
+    { kind: 'spending', id: `${category}|${month.slice(0, 4)}-1` },
+    { kind: 'spending', id: `Synthetic invented category|${month}` },
+  ]);
+  assert.deepEqual(out.map(r => `${r.kind}:${r.id}`), [`spending:${category}|${month}`, `spending:${category}`]);
+  const [withMonth, plain] = out;
+  assert.ok(withMonth.use.includes(category), `the hint names the category: ${withMonth.use}`);
+  assert.ok(!withMonth.use.includes(`${category}|`), `the hint names the category without the suffix: ${withMonth.use}`);
+  assert.ok(withMonth.use.includes(label), `the hint names ${label}: ${withMonth.use}`);
+  assert.ok(!plain.use.includes(label), `the month-less hint names no month: ${plain.use}`);
+  assert.ok(!JSON.stringify(out).includes('-13'), 'an invalid month suffix never reaches the prompt');
+});
