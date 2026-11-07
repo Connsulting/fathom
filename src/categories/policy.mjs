@@ -1,4 +1,4 @@
-export const CONFIDENCE_POLICY = Object.freeze({ autoApply: .97, review: .85 });
+export const CONFIDENCE_POLICY = Object.freeze({ autoApply: 0.99, review: 0.84 });
 
 export function confidenceBand(confidence, policy = CONFIDENCE_POLICY) {
   if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) return 'uncategorized';
