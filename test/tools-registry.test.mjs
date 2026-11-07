@@ -51,7 +51,7 @@ test('loader rejects duplicate operations, conflicting schemas and invalid scope
 
 test('operation-local validation names the operation through direct and Ask boundaries', async () => {
   const server = createRegistryServer(tools, { purpose: 'chat' });
-  for (const args of [{ operation: 'missing' }, { operation: 'summary', keys: [] }]) {
+  for (const args of [{ operation: 'missing' }, { operation: 'summary', keys: [] }, { operation: 'summary', constructor: {} }]) {
     await assert.rejects(callTool('household', args, {}), e => e.code === 'bad_input' && e.message.includes(`household.${args.operation}`));
     const result = await server.invoke('household', args);
     assert.equal(result.isError, true);
