@@ -51,7 +51,27 @@ export function receiptMessages(db, key, messages) {
   return messages;
 }
 
-const TABLES = { preference: ['preferences', 'id'], fact: ['facts', 'key'], goal: ['goals', 'id'], step: ['recs', 'id'], status: ['recs', 'id'], owner: ['recs', 'id'] };
+const KINDS = new Map();
+const IDENTIFIER = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+
+// restore(ctx, { id, before, after, receipt }) is synchronous and runs in the undo transaction.
+// It must refuse a changed item before applying its domain inverse; throwing rolls back both.
+export function registerReceiptKind(kind, definition) {
+  if (typeof kind !== 'string' || !IDENTIFIER.test(kind) || !definition || typeof definition !== 'object') {
+    throw new TypeError('Invalid receipt kind definition');
+  }
+  if (KINDS.has(kind)) throw new TypeError(`Receipt kind ${kind} is already registered`);
+  const keys = Object.keys(definition).sort().join(',');
+  const table = keys === 'pk,table' && typeof definition.table === 'string' && typeof definition.pk === 'string' && IDENTIFIER.test(definition.table) && IDENTIFIER.test(definition.pk);
+  const hook = keys === 'restore' && typeof definition.restore === 'function' && definition.restore.constructor.name !== 'AsyncFunction';
+  if (!table && !hook) throw new TypeError('Invalid receipt kind definition');
+  KINDS.set(kind, Object.freeze({ ...definition }));
+}
+
+for (const [kind, table, pk] of [
+  ['preference', 'preferences', 'id'], ['fact', 'facts', 'key'], ['goal', 'goals', 'id'],
+  ['step', 'recs', 'id'], ['status', 'recs', 'id'], ['owner', 'recs', 'id'], ['setting', 'settings', 'key'],
+]) registerReceiptKind(kind, { table, pk });
 
 export async function undoAction(ctx, id, scope) {
   const actor = requireActor(ctx);
@@ -62,22 +82,31 @@ export async function undoAction(ctx, id, scope) {
     if (!row || row.actor_id !== actor || row.scope !== scope) throw new ToolError('forbidden', 'This change is not available to you.');
     if (row.undone_at) throw new ToolError('bad_input', 'This change was already undone.');
     const before = parse(row.before_state, null), after = parse(row.after_state, null);
-    const [table, pk] = TABLES[row.kind];
-    const current = ctx.db.prepare(`SELECT * FROM ${table} WHERE ${pk} = ?`).get(row.entity_id);
-    // A goal's lifecycle columns are always compared, so a goal archived or marked done after the
-    // receipt refuses Undo. A receipt written before migration 026 has no done_at: read as null.
-    const lifecycle = row.kind === 'goal' ? ['archived_at', 'done_at'] : [];
-    const fields = [...new Set([...Object.keys(after || before || {}), ...lifecycle])];
-    const value = current ? Object.fromEntries(fields.map(k => [k, current[k] ?? null])) : null;
-    const expected = after ? Object.fromEntries(fields.map(k => [k, after[k] ?? null])) : null;
-    if (!isDeepStrictEqual(value, expected)) throw new ToolError('conflict', 'This item changed since that action. Ask for a new change instead.');
-    if (before === null) ctx.db.prepare(`DELETE FROM ${table} WHERE ${pk} = ?`).run(row.entity_id);
-    else if (!current) {
-      const keys = Object.keys(before);
-      ctx.db.prepare(`INSERT INTO ${table} (${keys.join(', ')}) VALUES (${keys.map(() => '?').join(', ')})`).run(...keys.map(k => before[k]));
+    const definition = KINDS.get(row.kind);
+    if (!definition) throw new ToolError('bad_input', 'This receipt kind does not support Undo.');
+    let current;
+    if (definition.restore) {
+      const restored = definition.restore(ctx, { id: row.entity_id, before, after, receipt: receiptOut(row) });
+      if (restored && typeof restored.then === 'function') throw new TypeError('Receipt kind restore must be synchronous');
     } else {
-      const keys = Object.keys(before);
-      ctx.db.prepare(`UPDATE ${table} SET ${keys.map(k => `${k} = ?`).join(', ')} WHERE ${pk} = ?`).run(...keys.map(k => before[k]), row.entity_id);
+      const { table, pk } = definition;
+      current = ctx.db.prepare(`SELECT * FROM ${table} WHERE ${pk} = ?`).get(row.entity_id);
+      // A goal's lifecycle columns are always compared, so a goal archived or marked done after the
+      // receipt refuses Undo. A receipt written before migration 026 has no done_at: read as null.
+      const lifecycle = row.kind === 'goal' ? ['archived_at', 'done_at'] : [];
+      const fields = [...new Set([...Object.keys(after || before || {}), ...lifecycle])];
+      if (![...fields, ...Object.keys(before || {})].every(k => IDENTIFIER.test(k))) throw new ToolError('bad_input', 'Invalid receipt state.');
+      const value = current ? Object.fromEntries(fields.map(k => [k, current[k] ?? null])) : null;
+      const expected = after ? Object.fromEntries(fields.map(k => [k, after[k] ?? null])) : null;
+      if (!isDeepStrictEqual(value, expected)) throw new ToolError('conflict', 'This item changed since that action. Ask for a new change instead.');
+      if (before === null) ctx.db.prepare(`DELETE FROM ${table} WHERE ${pk} = ?`).run(row.entity_id);
+      else if (!current) {
+        const keys = Object.keys(before);
+        ctx.db.prepare(`INSERT INTO ${table} (${keys.join(', ')}) VALUES (${keys.map(() => '?').join(', ')})`).run(...keys.map(k => before[k]));
+      } else {
+        const keys = Object.keys(before);
+        ctx.db.prepare(`UPDATE ${table} SET ${keys.map(k => `${k} = ?`).join(', ')} WHERE ${pk} = ?`).run(...keys.map(k => before[k]), row.entity_id);
+      }
     }
     const stamp = new Date(ctx.now ?? Date.now()).toISOString();
     ctx.db.prepare('UPDATE action_receipts SET undone_at = ?, planning_pending = 0 WHERE id = ?').run(stamp, id);

@@ -1,8 +1,9 @@
+import { ownerStatements } from '../actions/evidence.mjs';
 import { listPreferences } from '../actions/preferences.mjs';
 // The live answerer: every Ask thread (including one asked from a rec), pack follow-up and What if goes through the
 // runtime engine (live or fake), then through grounding and escaping before it is stored.
 //
-// createLiveAnswerer({ engine, packs, root }) (one per household: packs is its live pack view,
+// createLiveAnswerer({ engine, packs, root, services }) (one per household: packs is its live pack view,
 // src/packs/live.mjs, and root its household root, which every tool call gets as ctx.dataDir) ->
 //   answer({ db, key, questionId?, text?, clock?, refs? }) -> { paragraphs, refs, notice?, provenance? } | null
 //   whatIf({ db, packId, clock? })                  -> { paragraphs, refs, notice?, provenance? }
@@ -645,11 +646,11 @@ export function whatIfOwnerText(def) {
   return typeof def.manifest === 'string' ? escapeUserText(prompt) : prompt;
 }
 
-export function createLiveAnswerer({ engine, packs, root } = {}) {
+export function createLiveAnswerer({ engine, packs, root, services } = {}) {
   if (!engine || typeof engine.call !== 'function') throw new TypeError('createLiveAnswerer needs an engine');
   if (typeof root !== 'string' || !root) throw new TypeError('createLiveAnswerer needs the household root');
   // The tool context of every call this answerer makes: its household's db and root.
-  const toolCtx = (db, now) => ({ db, now, dataDir: root });
+  const toolCtx = (db, now) => ({ db, now, dataDir: root, services, household: services?.household });
 
   // One grounded model answer: call, ground, regenerate once with a corrective turn when most
   // figures are unchecked (needsRevision), render.
@@ -668,8 +669,10 @@ export function createLiveAnswerer({ engine, packs, root } = {}) {
     prompt.systemDynamic += '\n<household_preferences>\n' + JSON.stringify(listPreferences(db)) + '\n</household_preferences>';
     const offered = REGISTRY.filter(t => !t.mcpOnly && (t.kind === 'read' || actionContext?.actorId));
     const fake = engine.mode === 'fake' ? fakeAnswerScript({ scenario, summary, propose: actions, ...fakeArgs }) : undefined;
+    const toolContext = { ...actionContext, ...toolCtx(db, now), channel: 'ask' };
+    toolContext.ownerStatements = () => ownerStatements(toolContext);
     const request = { purpose: 'chat', system: prompt.system, systemDynamic: prompt.systemDynamic, messages: prompt.messages,
-      tools: offered, toolContext: { ...actionContext, ...toolCtx(db, now) }, maxTokens: MAX_TOKENS, ...(fake ? { fake } : {}),
+      tools: offered, toolContext, maxTokens: MAX_TOKENS, ...(fake ? { fake } : {}),
       ...(stream.engineEvent ? { onEvent: stream.engineEvent } : {}) };
 
     // groundAnswer sanitizes each datum (and context.entries bodies lose their metadata lines there).

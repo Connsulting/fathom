@@ -5,6 +5,8 @@ import { WRITE_SCOPES } from '../src/shared/action-scopes.mjs';
 import { SCOPE_INFO, toolsForScopes } from '../src/mcp/keys.mjs';
 import { buildRegistry, tools } from '../src/tools/index.mjs';
 import { createRegistryServer } from '../src/engine/tools.mjs';
+import { createEngine } from '../src/engine/index.mjs';
+import { createLiveAnswerer } from '../src/api/answerer.mjs';
 import { tempDb, tempInstance, serveAppFixture } from './helpers/server.mjs';
 import { rpcResult, callToolRpc, listToolNames } from '../src/mcp/test/helpers.mjs';
 
@@ -54,7 +56,7 @@ test('restore hooks run in the receipt transaction and refusals preserve the act
   receipts.registerReceiptKind('c2_inverse', { restore(ctx, { id, before, after }) {
     calls++;
     assert.equal(id, 'inverse'); assert.equal(before, null); assert.equal(after, 'after');
-    ctx.db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('inverse', 'true');
+    ctx.db.prepare('INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)').run('inverse', 'true', now);
     if (refuse) throw new Error('changed since');
   } });
   const ctx = { db: s.db, actorId: 'person-a', now };
@@ -84,7 +86,7 @@ test('unknown kinds fail closed and registrations reject duplicate or unsafe def
 test('setting undo rejects later edits, another actor and a missing scope before restoring', async t => {
   const s = await tempDb(); t.after(() => s.close());
   const ctx = { db: s.db, actorId: 'person-a', now };
-  s.db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('pick', '2');
+  s.db.prepare('INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)').run('pick', '2', now);
   const r = receipts.saveReceipt(ctx, { scope: 'write:decisions', kind: 'setting', id: 'pick', label: 'Pick', before: { key: 'pick', value: '1' }, after: { key: 'pick', value: '2' } });
   await assert.rejects(receipts.undoAction({ ...ctx, actorId: 'person-b' }, r.id, r.scope), /available to you/);
   await assert.rejects(receipts.undoAction({ ...ctx, scopes: ['write:recs'] }, r.id, r.scope), /Permission denied:/);
@@ -104,16 +106,25 @@ test('every write scope lists undo and restores a receipt through MCP and Ask', 
     assert.ok((await listToolNames(app.baseUrl, key)).includes('undo'), scope);
     assert.ok(!toolsForScopes(['read']).some(t => t.name === 'undo'));
     for (const channel of ['mcp', 'ask']) {
-      s.db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('surface', '2');
+      s.db.prepare('INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, ?)').run('surface', '2', now);
       const ctx = { db: s.db, actorId: `key:${app.keys.verify(key).id}`, scopes: [scope], now, replan: () => ({ status: 'ok' }) };
       const r = receipts.saveReceipt(ctx, { scope, kind: 'setting', id: 'surface', label: 'Surface', before: { key: 'surface', value: '1' }, after: { key: 'surface', value: '2' } });
       let out;
       if (channel === 'mcp') out = rpcResult(await callToolRpc(app.baseUrl, key, 'undo', { operation: 'undo', id: r.id }));
       else {
-        const server = createRegistryServer(tools, { purpose: 'chat', ctx });
-        assert.ok(server.names.includes('undo'));
-        out = await server.invoke('undo', { operation: 'undo', id: r.id });
-        await server.instance.close();
+        const transport = createEngine({ mode: 'fake' });
+        const engine = { mode: 'live', isOn: () => true, async call(request) {
+          const response = await transport.call({ ...request, fake: [
+            { toolCalls: [{ name: 'undo', args: { operation: 'undo', id: r.id } }] }, { text: 'Your change was undone.' },
+          ] });
+          const result = response.toolResults.find(r => r.name === 'undo');
+          out = { isError: result.isError, content: [{ type: 'text', text: JSON.stringify(result.result) }] };
+          return response;
+        } };
+        const reply = await createLiveAnswerer({ engine, root: s.root, services: app.household.services }).answer({
+          db: s.db, key: 'ask:012345abcdef', text: 'Undo my change.', actorId: ctx.actorId, replan: ctx.replan,
+        });
+        assert.ok(!reply.notice);
       }
       assert.ok(!out.isError, out.content[0].text);
       assert.equal(JSON.parse(out.content[0].text).receipt.undone, true);

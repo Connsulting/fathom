@@ -197,17 +197,22 @@ export function createHouseholdContext({
       if (householdEngine.credentialState === 'failed') console.error('fathom: engine credential unavailable');
     }, () => {});
   }
-  const householdAnswerer = answerer ?? createLiveAnswerer({ engine: householdEngine, packs: livePacks, root });
   let context = null;
   const householdScheduler = scheduler ?? createScheduler({
     db, config, engine: householdEngine, transport: householdTransport,
     handlers: handlers ?? defaultHandlers({ publicUrl: config.publicUrl }),
     allowed: () => outbound.enabled('jobs'), household: () => context,
   });
+  const services = Object.freeze({
+    scheduler: householdScheduler, engine: householdEngine,
+    config: Object.freeze({ dataDir: root, clock: config.clock }), vault,
+    get household() { return context; },
+  });
+  const householdAnswerer = answerer ?? createLiveAnswerer({ engine: householdEngine, packs: livePacks, root, services });
   let closing = null;
   context = Object.freeze({
     householdId, generation, mode, db, root, config, inFlight: new Set(), vault, packs: livePacks, engine: householdEngine,
-    answerer: householdAnswerer, scheduler: householdScheduler, transport: householdTransport, outbound,
+    answerer: householdAnswerer, scheduler: householdScheduler, transport: householdTransport, outbound, services,
     funded: () => instanceFunded(platform),
     close() {
       closing ??= (async () => {
