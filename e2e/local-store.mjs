@@ -107,3 +107,25 @@ export async function startEnrolledServer({ dataDir, clock } = {}) {
     throw err;
   }
 }
+
+// The local demo instance's data directory (E2E_DATA), resolved.
+export const localDataDir = () => resolve(process.env.E2E_DATA || '.e2e-data');
+
+// Seed synthetic rows beside a running local demo server (dataDir, default E2E_DATA) through its
+// original household's runtime context, built the way a store-opening CLI builds it (scheduler not
+// started), so ingest and stored files go through the household vault. `now` stamps the ingest.
+// Returns fn's result and always closes the context.
+export async function withLocalHousehold(now, fn, { dataDir = localDataDir() } = {}) {
+  refuseSuppliedTarget();
+  const [{ loadConfig }, { openCliHousehold }] = await Promise.all([import('../src/config.mjs'), import('../src/platform/cli.mjs')]);
+  const served = servedStore(dataDir);
+  if (!served) throw new Error('No household store in the data directory yet');
+  const config = loadConfig({ FATHOM_DATA: dataDir, FATHOM_DEMO: '1', FATHOM_ENGINE: 'off' });
+  const cli = await openCliHousehold(config, ['--household', served.householdId]);
+  try {
+    const { household } = cli;
+    return await fn({ db: household.db, config, household, opts: (engine, extra = {}) => ({ config, household, engine, now, ...extra }) });
+  } finally {
+    await cli.close();
+  }
+}
