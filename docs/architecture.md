@@ -1,5 +1,39 @@
 # Fathom architecture
 
+![Fathom architecture: one container serving the Horizon app, the API and MCP over one store](architecture/fathom-architecture.png)
+
+Diagram source: [architecture/fathom-architecture.html](architecture/fathom-architecture.html).
+Regenerate the image with `node scripts/screenshots.mjs` (see [development.md](development.md)).
+
+## Overview
+
+Fathom is one Node process in one container. It serves the Horizon app, the JSON API and MCP, runs
+its own jobs, and keeps every piece of state on the `/data` volume.
+
+1. A reverse proxy in front terminates HTTPS for the `FATHOM_PUBLIC_URL` host and forwards plain
+   HTTP to port 8080. Browsers and MCP clients both arrive this way.
+2. `src/server.mjs` opens the store by its mode, builds the runtime engine, the live pack view, the
+   mail transport and the scheduler, then hands every request to the router in `src/api/router.mjs`.
+3. The router applies the Host allowlist, then the session gate in `src/auth/`: passkeys over
+   WebAuthn, the `__Host-fathom-session` cookie, and an exact Origin on every mutation. On a real
+   store, every page from `web/` other than sign-in and enrollment, and every `/api`
+   route, sits behind that gate.
+4. `POST /mcp` skips the session gate and takes a bearer key instead. Its tools come from the same
+   registry in `src/tools/` that the engine uses, limited by the key's scopes.
+5. The API reads and writes the store. Ask streams its answer as Server-Sent Events from the engine
+   (`src/engine/`), which runs `live`, `fake` or `off` and grounds its answers in tools over the
+   stored data and the knowledge packs.
+6. Calculators in `src/calc/` produce every figure deterministically, called by the planner and
+   pace, and each figure keeps its provenance. The model never states a number it did not get from
+   a calculator or the store.
+7. Ingest (`src/ingest/`) turns uploads into ledger rows through one parser per format, keeps the
+   originals in the encrypted vault, and runs the read-only SimpleFIN sync.
+8. The in-process scheduler (`src/jobs/scheduler.mjs`) runs `plan`, `brief-email`,
+   `deadline-alerts`, `freshness`, `trash-purge`, `confirm-guess` and `simplefin-sync`. Mail leaves
+   through `src/email/` on the configured transport.
+9. `/data` holds `fathom.sqlite`, the vault's `files/`, the Your plans pack and the key secret.
+   Backing it up is the operator's job; the app has no backup job of its own.
+
 This is the architecture every build item works against. The first part is frozen: change it only
 by agreement across items. The rest describes the running app and is updated as items land.
 Known limits from merged pull requests are in [`known-limits.md`](known-limits.md).
