@@ -155,6 +155,8 @@ test('AC4: goal evidence never loosens household fact attribution', async t => {
   const out = await registry().invoke('record_household_fact', { key: 'household.ownerAge', value: 52, evidence: 'yeah' });
   assert.equal(out.isError, true);
   assert.equal(db.prepare("SELECT value FROM facts WHERE key = 'household.ownerAge'").get(), undefined);
+  proposal(db, { target: 57 });
+  assert.equal((await registry().invoke('record_household_fact', { key: 'household.ownerAge', value: 57, evidence: 'yeah' })).isError, true);
   ctx.ownerText = 'I am 52 years old';
   const good = await registry().invoke('record_household_fact', { key: 'household.ownerAge', value: 52, evidence: ctx.ownerText });
   assert.ok(!good.isError, good.content[0].text);
@@ -172,6 +174,14 @@ test('AC4: date components from a goal note are not target amounts', async t => 
     assert.match(out.content[0].text, /^target:/);
   }
   assert.ok(!(await registry().invoke('create_goal', { ...args, target: 8000 })).isError);
+});
+
+test('AC4: a stored amount must match exactly rather than round to a proposed target', async t => {
+  const { db, registry } = await setup(t);
+  storedGoal(db, 'Planned $97,361.49 by 2026-12-31.');
+  const rounded = await registry().invoke('create_goal', { ...args, target: 97361 });
+  assert.equal(rounded.isError, true);
+  assert.ok(!(await registry().invoke('create_goal', { ...args, target: 97361.49 })).isError);
 });
 
 test('AC4: current engine text and invented source claims cannot supply proposal evidence', async t => {
