@@ -19,6 +19,7 @@
   --ink: #04120e;
   --sans: 'Instrument Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --top-h: 57px;
   --subnav-h: 41px;
   background: var(--bg);
   color: var(--tx);
@@ -60,7 +61,7 @@
 .d-horizon .h-nav a.on { color: var(--tx); background: var(--s2); }
 .d-horizon .h-top-act { display: flex; align-items: center; gap: 6px; flex: none; }
 .d-horizon .h-gear { flex: none; width: 32px; height: 32px; display: grid; place-items: center; border-radius: 7px; color: var(--mu); }
-.d-horizon .h-gear:hover { color: var(--tx); background: var(--s2); }
+.d-horizon .h-gear:hover,
 .d-horizon .h-gear.on { color: var(--tx); background: var(--s2); }
 .d-horizon .h-gear .h-i { width: 16px; height: 16px; vertical-align: 0; }
 
@@ -73,8 +74,8 @@
 .d-horizon .h-subnav a:focus-visible { outline-offset: -2px; }
 /* Ask is one screen tall with a sticky thread list: the sub-nav sticks under the top bar and the
    panes start below it. */
-.d-horizon .h-main:has(> .h-askx) > .h-subnav { position: sticky; top: 57px; z-index: 19; margin: 0; padding: 0 20px; background: var(--bg); }
-.d-horizon .h-subnav + .h-askx { --askx-top: calc(57px + var(--subnav-h)); }
+.d-horizon .h-main:has(> .h-askx) > .h-subnav { position: sticky; top: var(--top-h); z-index: 19; margin: 0; padding: 0 20px; background: var(--bg); }
+.d-horizon .h-subnav + .h-askx { --askx-top: calc(var(--top-h) + var(--subnav-h)); }
 
 /* Settings: the signed-in line, then one row per screen or account page. */
 .d-horizon .h-settings { max-width: 720px; }
@@ -826,11 +827,10 @@ a.h-dec-t:hover { color: var(--ac2); }
   .d-horizon .h-top-act .h-search-btn { width: 44px; height: 44px; border-color: transparent; }
   .d-horizon .h-top-act .h-gear { width: 44px; height: 44px; }
   .d-horizon .h-top-act .h-i { width: 18px; height: 18px; }
-  .d-horizon { --subnav-h: 45px; }
+  .d-horizon { --subnav-h: 45px; --top-h: calc(53px + env(safe-area-inset-top)); }
   .d-horizon .h-subnav { gap: 22px; margin: -16px -16px 24px; padding: 0 16px; }
   .d-horizon .h-subnav a { min-height: 44px; font-size: 14px; }
-  .d-horizon .h-main:has(> .h-askx) > .h-subnav { top: calc(53px + env(safe-area-inset-top)); margin: 0; padding: 0 16px; }
-  .d-horizon .h-subnav + .h-askx { --askx-top: calc(53px + env(safe-area-inset-top) + var(--subnav-h)); }
+  .d-horizon .h-main:has(> .h-askx) > .h-subnav { margin: 0; padding: 0 16px; }
   .d-horizon .h-set-r { grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; padding: 12px 16px; }
   .d-horizon .h-set-r a { display: inline-flex; align-items: center; min-height: 28px; }
   .d-horizon .h-set-r p { grid-column: 1; grid-row: 2; }

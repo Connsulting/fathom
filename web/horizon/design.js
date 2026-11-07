@@ -37,18 +37,17 @@ const KIND = { business: 'Business', checking: 'Cash', cash: 'Cash', taxable: 'I
 // Four tabs, in order: route, label, phone bar icon. Every route belongs to one tab or to the gear
 // (settings); the active one comes from the current route, never from the screen.
 const TABS = [['home', 'Home', 'year'], ['plan', 'Plan', 'cal'], ['ask', 'Ask', 'chat'], ['money', 'Money', 'money']];
-const TAB_OF = {
-  home: 'home', pace: 'home', brief: 'home', goals: 'home', confirm: 'home',
-  plan: 'plan', yearend: 'plan', advisor: 'plan',
-  ask: 'ask', wargame: 'ask', packs: 'ask',
-  money: 'money', accounts: 'money', add: 'money',
-  settings: 'settings', connect: 'settings', engine: 'settings', email: 'settings', onboarding: 'settings'
-};
 // The views inside a tab, shown as a sub-nav on each of them. Home and the gear have none.
 const SUBNAV = {
   plan: [['plan', 'Plan'], ['yearend', 'Year end'], ['advisor', 'Advisor']],
   ask: [['ask', 'Conversations'], ['wargame', 'What-if'], ['packs', 'Packs']],
   money: [['money', 'Overview'], ['accounts', 'Accounts'], ['add', 'Files']]
+};
+// Routes with no sub-nav are listed by hand; every sub-nav view maps to its tab.
+const TAB_OF = {
+  home: 'home', pace: 'home', brief: 'home', goals: 'home', confirm: 'home',
+  settings: 'settings', connect: 'settings', engine: 'settings', email: 'settings', onboarding: 'settings',
+  ...Object.fromEntries(Object.entries(SUBNAV).flatMap(([tab, views]) => views.map(([k]) => [k, tab])))
 };
 
 let api = null;
@@ -522,8 +521,10 @@ function ownerFilterHtml(m) {
   return `<div class="h-ownerf" role="group" aria-label="Whose actions">${b('both', 'Both')}${b('me', 'Me')}${b('spouse', 'Spouse')}</div>`;
 }
 
+const healthLinks = (h) => `${h.pending > 0 ? goA('confirm', 'Confirm') : ''}${goA('add', 'Files')}${goA('accounts', 'Accounts')}`;
+
 function dhealthHtml(h) {
-  const links = `${h.pending > 0 ? goA('confirm', 'Confirm') : ''}${goA('add', 'Files')}${goA('accounts', 'Accounts')}`;
+  const links = healthLinks(h);
   return `<div class="h-dhealth${h.stale ? ' stale' : ''}"><i class="h-dh-dot" aria-hidden="true"></i><span class="h-dhealth-t">${esc(h.parts.join(', '))}</span><span class="h-dhealth-a">${links}</span></div>`;
 }
 
@@ -1277,9 +1278,9 @@ function pAccounts() {
 // The Home data-health line, spelled out: one row per part of the same healthLine() model, then
 // the places that fix it.
 function moneyHealthHtml(h) {
-  const tone = (t) => (t === h.dataLabel ? '' : t.endsWith(' to confirm') ? ' ask' : ' bad');
-  const rows = h.parts.map((t) => `<li class="h-mh-r${tone(t)}"><i class="h-dh-dot" aria-hidden="true"></i><span>${esc(t.charAt(0).toUpperCase() + t.slice(1))}</span></li>`).join('');
-  const links = `${h.pending > 0 ? goA('confirm', 'Confirm') : ''}${goA('add', 'Files')}${goA('accounts', 'Accounts')}`;
+  const suffix = { ok: '', ask: ' ask', bad: ' bad' };
+  const rows = h.rows.map(({ text, tone }) => `<li class="h-mh-r${suffix[tone]}"><i class="h-dh-dot" aria-hidden="true"></i><span>${esc(text.charAt(0).toUpperCase() + text.slice(1))}</span></li>`).join('');
+  const links = healthLinks(h);
   return `<div class="h-money-health${h.stale ? ' stale' : ''}"><div class="h-mh-h">Data health</div><ul class="h-mh-rows">${rows}</ul><div class="h-dhealth-a">${links}</div></div>`;
 }
 
@@ -1620,9 +1621,10 @@ function draw() {
   page.innerHTML = html;
   // On a narrow screen the sub-nav scrolls inside itself; keep the active link in view.
   const navOn = page.querySelector('.h-subnav a.on');
-  if (navOn) {
-    const over = navOn.getBoundingClientRect().right - navOn.parentElement.getBoundingClientRect().right;
-    if (over > 0) navOn.parentElement.scrollLeft = over;
+  const navEl = navOn?.parentElement;
+  if (navEl && navEl.scrollWidth > navEl.clientWidth) {
+    const over = navOn.getBoundingClientRect().right - navEl.getBoundingClientRect().right;
+    if (over > 0) navEl.scrollLeft = over;
   }
   page.querySelectorAll('.h-tl-scroll').forEach((el, i) => {
     if (!routeChanged && scrollers[i] != null) el.scrollLeft = scrollers[i];
