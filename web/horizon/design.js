@@ -437,10 +437,10 @@ function whoLine() {
   return `<div class="h-who">Signed in as ${esc(who)}${role ? `<span>${role}</span>` : ''}</div>`;
 }
 
-// The route the tabs read: the page under the rec dialog when one is open.
+// The route the tabs read: the page under a dialog (rec, account, P&L rows) when one is open.
 function navRoute() {
   const r = routeNow();
-  return r.name === 'rec' ? underRoute() : r;
+  return isDlgRoute(r.name) ? underRoute(r.name) : r;
 }
 const tabOf = (name) => TAB_OF[name] || 'home';
 const onAttr = (on) => (on ? ' class="on" aria-current="page"' : '');
@@ -1990,14 +1990,15 @@ function onboardStep() {
   return Number.isFinite(v) ? v : 0;
 }
 
-// The dialog routes: a recommendation and an account share one host, chrome and history rule.
-const isDlgRoute = (name) => name === 'rec' || name === 'account';
+// The dialog routes: a recommendation, an account and a P&L cell's rows share one host, chrome and
+// history rule.
+const isDlgRoute = (name) => name === 'rec' || name === 'account' || name === 'pnlrows';
 
 // The page under an open dialog. After a deep link or reload there is none remembered: a rec falls
-// back to Plan and an account to Accounts.
+// back to Plan, an account to Accounts and P&L rows to the P&L.
 function underRoute(dlgName = 'rec') {
   const u = ui.under;
-  return u && !isDlgRoute(u.name) && u.name !== 'onboarding' ? u : { name: dlgName === 'account' ? 'accounts' : 'plan', params: {} };
+  return u && !isDlgRoute(u.name) && u.name !== 'onboarding' ? u : { name: dlgName === 'account' ? 'accounts' : dlgName === 'pnlrows' ? 'pnl' : 'plan', params: {} };
 }
 
 function lockBody(on) {
@@ -2042,6 +2043,7 @@ function syncDialog(r, page) {
   const host = root.querySelector('.h-dlg-host');
   const isRec = isDlgRoute(r.name);
   const isAcct = r.name === 'account';
+  const isRows = r.name === 'pnlrows';
   const wasOpen = !host.hidden;
   if (isRec) {
     const id = String(r.params?.id || '');
@@ -2052,7 +2054,7 @@ function syncDialog(r, page) {
     const sig = wasOpen && active && host.contains(active) ? focusSig(active) : null;
     const caret = sig && active.selectionStart != null ? active.selectionStart : null;
     host.classList.toggle('enter', !wasOpen);
-    host.innerHTML = isAcct ? accountScreen.html(id) : dlgHtml(id);
+    host.innerHTML = isAcct ? accountScreen.html(id) : isRows ? pnlScreen.dialogHtml(id) : dlgHtml(id);
     host.dataset.id = id;
     host.dataset.kind = r.name;
     host.hidden = false;
@@ -2061,7 +2063,7 @@ function syncDialog(r, page) {
     const body = host.querySelector('.h-dlg-body');
     if (body) body.scrollTop = top;
     // Messages of the rec's attached thread: a landed answer scrolls to its question.
-    const rth = isAcct ? null : api.recThread(id);
+    const rth = isAcct || isRows ? null : api.recThread(id);
     const n = rth ? arr(api.conversation(chatScreen.keyOf(rth))).length : 0;
     const prev = ui.msgN[id];
     ui.msgN[id] = n;
@@ -2086,6 +2088,7 @@ function syncDialog(r, page) {
     delete host.dataset.kind;
     // Closing forgets the account dialog's state, so reopening loads it afresh (a failed load included).
     accountScreen.reset();
+    pnlScreen.dialogClosed();
     page.inert = false;
     lockBody(false);
     ui.under = null;
@@ -2293,6 +2296,7 @@ function onClick(e) {
   if (d.go) {
     e.preventDefault();
     if (d.go === 'rec' && d.id) { openRec(d.id, t); return; }
+    if (d.go === 'pnlrows' && d.id) { openDialog('pnlrows', d.id, t); return; }
     const params = {};
     if (d.id) params.id = d.id;
     if (d.name) params.name = d.name;
@@ -2528,6 +2532,7 @@ const KIT = {
   onThread: (thread, host) => askPanel.onThread(thread, host), askPanelBtn: () => askPanel.collapseBtn(),
   askPanelToggle: () => askPanel.toggle(), askModal: () => askPanel.modalOpen(),
   askPanelOpen: () => askPanel.open(), askPanelClose: () => askPanel.close(), askPanelIsOpen: () => askPanel.isOpen(),
+  isDlgRoute: (name) => isDlgRoute(name),
   pageRoute: () => { const r = routeNow(); return isDlgRoute(r.name) ? underRoute(r.name) : r; },
   startTour: (opener) => tour.start(opener),
   newGoal: () => { if (routeNow().name !== 'goals') api.go('goals', {}); openGoalForm(null); }
