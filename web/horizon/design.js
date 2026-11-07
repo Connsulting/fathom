@@ -18,6 +18,7 @@ import * as switcher from './screens/switcher.js';
 import * as simplefin from './screens/simplefin.js';
 import * as recAnswers from './screens/rec-answers.js';
 import * as accountScreen from './screens/account.js';
+import * as pnlScreen from './screens/pnl.js';
 import { createKeys } from './keys.js';
 import { createSwipe } from './screens/swipe.js';
 import { homeModel, homeHeadline, healthChip, healthLine, paceReason, boardCharts, reasonText, servedGoalIds, shortDate, longDate, windowSpan } from './screens/home-model.js';
@@ -43,7 +44,7 @@ const TABS = [['home', 'Home', 'year'], ['plan', 'Plan', 'cal'], ['ask', 'Ask', 
 const SUBNAV = {
   plan: [['plan', 'Plan'], ['yearend', 'Year end'], ['advisor', 'Advisor']],
   ask: [['ask', 'Conversations'], ['wargame', 'What-if'], ['packs', 'Packs']],
-  money: [['money', 'Overview'], ['accounts', 'Accounts'], ['add', 'Files']]
+  money: [['money', 'Overview'], ['accounts', 'Accounts'], ['pnl', 'P&L'], ['add', 'Files']]
 };
 // Routes with no sub-nav are listed by hand; every sub-nav view maps to its tab.
 const TAB_OF = {
@@ -462,7 +463,7 @@ function subNav(tab, route) {
   const views = SUBNAV[tab];
   if (!views) return '';
   const label = TABS.find(([k]) => k === tab)[1];
-  return `<nav class="h-subnav" aria-label="${label} views">${views.map(([k, l]) => `<a href="${href(k)}" data-go="${k}"${onAttr(route === k)}>${l}</a>`).join('')}</nav>`;
+  return `<nav class="h-subnav" aria-label="${label} views">${views.map(([k, l]) => `<a href="${href(k)}" data-go="${k}"${onAttr(route === k)}>${esc(l)}</a>`).join('')}</nav>`;
 }
 
 function shell(inner) {
@@ -1889,6 +1890,7 @@ function draw() {
     case 'goals': html = pGoals(); break;
     case 'money': html = pMoney(); break;
     case 'accounts': html = pAccounts(); break;
+    case 'pnl': html = pnlScreen.render(); break;
     case 'add': html = pAdd(); break;
     case 'confirm': html = ingest.confirmPage(routeChanged); break;
     case 'advisor': html = advisorScreen.render(); break;
@@ -2244,7 +2246,7 @@ function onDocumentKey(e) {
 }
 
 // Helpers the screen modules use. Getters, because api, root and ui change on mount.
-const SCREENS = [switcher, chatScreen, packsScreen, engineScreen, advisorScreen, yearendScreen, simplefin, recAnswers, accountScreen, trendScreen];
+const SCREENS = [switcher, chatScreen, packsScreen, engineScreen, advisorScreen, yearendScreen, simplefin, recAnswers, accountScreen, trendScreen, pnlScreen];
 const KIT = {
   get api() { return api; }, get root() { return root; }, get ui() { return ui; }, get keys() { return keys; }, get ingest() { return ingest; },
   draw: () => draw(),
