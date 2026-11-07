@@ -404,7 +404,7 @@ export const tools = [
       const db = ctx.db;
       const row = recRow(db, args.id);
       const def = parse(row.def, {});
-      if (def.question && args.status === 'done') throw new ToolError('bad_input', 'Save the answers before completing this recommendation.');
+      if (def.question?.primary && args.status === 'done') throw new ToolError('bad_input', 'Save the answers before completing this recommendation.');
       const wake = args.status === 'snoozed' ? (args.wake ? args.wake : 'Next month') : (def.wake != null ? def.wake : null);
       const ts = nowOf(ctx).toISOString();
       tx(db, () => {

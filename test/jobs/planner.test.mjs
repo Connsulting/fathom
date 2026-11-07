@@ -525,7 +525,7 @@ function assertRecShape(rec, scenario, packIds) {
     assert.ok(k.body.length <= 420, `${where}.kb body at most 420 chars`);
   }
   assert.ok(Array.isArray(rec.cross) && rec.cross.length <= 2, `${where}.cross`);
-  if (rec.question) {
+  if (rec.question?.primary) {
     assert.ok(rec.question.fields.length > 0);
     assert.deepEqual(rec.tasks, []);
   } else assert.ok(Array.isArray(rec.tasks) && rec.tasks.length >= 3 && rec.tasks.length <= 6, `${where}.tasks 3..6 (${rec.tasks.length})`);

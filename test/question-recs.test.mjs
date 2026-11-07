@@ -11,7 +11,7 @@ test('every confirm task has a declared, usable answer shape', () => {
     assert.ok(ANSWER_SHAPES[key], key);
     const q = questionFor([key], { accounts, facts: {}, names: {} });
     assert.ok(q.fields.length, key);
-    for (const f of q.fields) assert.ok(['boolean', 'number', 'date', 'choice', 'account'].includes(f.type), key);
+    for (const f of q.fields) assert.ok(['boolean', 'number', 'date', 'choice'].includes(f.type), key);
   }
   assert.throws(() => questionFor(['unknown.key'], { accounts, facts: {} }), /answer shape/i);
 });
@@ -79,6 +79,8 @@ test('trigger question branches carry controls and never a manual replan step', 
   assert.match(va.title, /College fund/);
   assert.equal(va.tasks.length, 0);
   assert.ok(recs.find(r => r.id === 'new-child').question.fields.some(f => f.type === 'date'));
+  assert.equal(recs.find(r => r.id === 'new-child').question.primary, false);
+  assert.ok(recs.find(r => r.id === 'new-child').tasks.some(t => /health coverage/.test(t.t)));
   for (const t of triggers) {
     if (!['va529', 'year-end-retirement', 'solo401k-setup', 'scorp-salary', 'invoice-deferral', 'hsa-room'].includes(t.id)) continue;
     for (const key of Object.keys(CONFIRM_TASKS)) {

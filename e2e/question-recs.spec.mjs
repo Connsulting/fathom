@@ -55,7 +55,7 @@ test.describe('answerable questions on the synthetic planning household', () => 
   });
 
   for (const surface of ['home', 'plan', 'dialog']) {
-    test(`@mobile @qr-ac1 @qr-ac2 @qr-ac4 ${surface} saves the Virginia answers and shows the figured action`, async ({ page }) => {
+    test(`@mobile @qr-ac1 @qr-ac2 @qr-ac4 ${surface} saves the Virginia answers and shows the figured action`, async ({ page, isMobile }) => {
       const errors = [];
       page.on('pageerror', e => errors.push(e.message));
       await page.goto(`${origin}/#/${surface === 'dialog' ? 'rec/va529' : surface}`);
@@ -90,9 +90,18 @@ test.describe('answerable questions on the synthetic planning household', () => 
       expect(action.question).toBeUndefined();
       expect(action.mine.some(m => m.fig === 'va529.deductionLeft')).toBe(true);
       expect(scenario.fig['va529.deductionLeft'].v).toBeGreaterThan(0);
-      await expect(container).toContainText('Use the rest of this year Virginia 529 deduction');
-      await expect(container.locator('.fx-fig').first()).toBeVisible();
-      await expect(container.locator('[data-rec-answers]')).toHaveCount(0);
+      if (surface === 'home' && !isMobile) {
+        await expect(page.locator('article.h-next')).toHaveCount(0);
+        await expect(page.locator('.h-next-hint')).toHaveCount(0);
+        const row = page.locator('.h-due-r[data-rec="va529"]');
+        await expect(row).toContainText('Use the rest of this year Virginia 529 deduction');
+        await row.locator('[data-go="rec"]').click();
+        await expect(page.locator('.h-dlg .fx-fig').first()).toBeVisible();
+      } else {
+        await expect(container).toContainText('Use the rest of this year Virginia 529 deduction');
+        await expect(container.locator('.fx-fig').first()).toBeVisible();
+        await expect(container.locator('[data-rec-answers]')).toHaveCount(0);
+      }
       await page.reload();
       await expect(page.locator('body')).toContainText('Use the rest of this year Virginia 529 deduction');
       expect(errors).toEqual([]);

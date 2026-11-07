@@ -6,6 +6,7 @@ import { isIsoDate } from '../../scenario/build.mjs';
 import { esc } from '../../shared/tokens.mjs';
 import { personOwner } from '../../shared/rec-links.mjs';
 import { accountLabel } from '../../shared/account-label.mjs';
+import { isCollegeAccount } from '../../shared/account-kinds.mjs';
 
 // Data-derived text (entity and account names) as stored rec HTML: escaped, braces included, so it
 // can never carry markup or a scenario token.
@@ -94,15 +95,17 @@ export function answerShape(key) {
   return ANSWER_SHAPES[key];
 }
 
-export function questionFor(keys, { accounts = [], facts = {}, names = {} } = {}) {
+export const acceptsAnswerAccount = (shape, account) => shape.accountKind === '529' ? isCollegeAccount(account) : account.kind === shape.accountKind;
+
+export function questionFor(keys, { accounts = [], facts = {}, names = {}, people } = {}) {
   const fields = [];
   const unique = [...new Set(keys)];
   for (const key of unique) {
     const shape = answerShape(key);
     const groups = shape.scope === 'account'
-      ? accounts.filter(a => a.kind === shape.accountKind).map(a => ({ path: [a.id], account: accountLabel({ ...a, householdNames: names }) }))
+      ? accounts.filter(a => acceptsAnswerAccount(shape, a)).map(a => ({ path: [a.id], account: accountLabel({ ...a, householdNames: names }) }))
       : shape.scope === 'person'
-        ? (facts['household.filingStatus'] === 'mfj' ? ['owner', 'spouse'] : ['owner']).map(p => ({ path: [p], person: p === 'owner' ? 'you' : 'your spouse' }))
+        ? (people || (facts['household.filingStatus'] === 'mfj' ? ['owner', 'spouse'] : ['owner'])).map(p => ({ path: [p], person: p === 'owner' ? 'you' : 'your spouse' }))
         : [{ path: [] }];
     for (const group of groups) {
       const parts = shape.type === 'object' ? Object.entries(shape.fields) : [['', shape]];
@@ -114,9 +117,9 @@ export function questionFor(keys, { accounts = [], facts = {}, names = {} } = {}
       }
     }
   }
-  const labels = unique.includes('accounts.va529') ? accounts.filter(a => a.kind === '529').map(a => accountLabel({ ...a, householdNames: names })) : [];
+  const labels = unique.includes('accounts.va529') ? accounts.filter(isCollegeAccount).map(a => accountLabel({ ...a, householdNames: names })) : [];
   const summary = labels.length ? `For ${labels.map(dataText).join(', ')}, tell us whether it is a Virginia plan. For each Virginia plan, enter the owner age answer and unused deduction carryforward.` : 'Save these answers to update your plan automatically.';
-  return { keys: unique, title: fields[0]?.label || 'Answer the questions for your plan', summary, fields };
+  return { keys: unique, ...(people ? { people } : {}), title: fields[0]?.label || 'Answer the questions for your plan', summary, fields };
 }
 
 export const confirmTask = key => (answerShape(key), CONFIRM_TASKS[key]);
