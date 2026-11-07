@@ -671,6 +671,8 @@ export async function demoReset(ctx) {
     throw e;
   }
   seedDemo(ctx.db);
+  // MCP keys live in the platform api_keys table; a reset leaves none for this household.
+  ctx.platform.prepare('DELETE FROM api_keys WHERE household_id = ?').run(ctx.household.householdId);
   await clearStoredFiles(vault);
   if (ctx.packs) ctx.packs.refresh();
   return { scenario: scenarioOf(ctx) };

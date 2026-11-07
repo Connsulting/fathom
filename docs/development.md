@@ -13,7 +13,7 @@ npm ci && npm start
 # open http://127.0.0.1:8080/
 ```
 
-One process serves the Horizon UI and the JSON API, backed by SQLite in `./data/fathom.sqlite` (financial data) and `./data/platform.sqlite` (accounts).
+One process serves the Horizon UI and the JSON API, backed by SQLite in `./data/platform.sqlite` (accounts, memberships, MCP keys) and one `./data/households/<id>/fathom.sqlite` per household (financial data). CLIs that open a store take `--household <id>`.
 On a data directory with no store it creates a demo store seeded with synthetic data (the
 November state) and keeps its state across restarts.
 
@@ -36,7 +36,7 @@ npm run seed:demo
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `FATHOM_DATA` | `./data` | Data directory holding `fathom.sqlite` and `platform.sqlite`. |
+| `FATHOM_DATA` | `./data` | Data directory holding `platform.sqlite` and `households/<id>/`. |
 | `FATHOM_BACKUP_KEY_FILE` | unset | Path to a private file holding a 32-byte key. Read only by the platform migration and snapshot scripts, never by the server. |
 | `FATHOM_PORT` | `8080` | HTTP port. |
 | `FATHOM_HOST` | `127.0.0.1` | Bind address (the container uses `0.0.0.0`). |
@@ -45,7 +45,9 @@ npm run seed:demo
 | `FATHOM_CLOCK` | unset | ISO date that overrides "today", for demos and tests. |
 | `FATHOM_FAKE_STREAM_MS` | `25` | Fake engine only: milliseconds between streamed answer chunks (0 to 1000). |
 | `FATHOM_CLAUDE_CREDENTIAL_FILE` | unset | Path to the mounted Claude credential. |
-| `FATHOM_DATA_KEY_FILE` | unset | Path to the file encryption key. |
+| `FATHOM_PLATFORM_KEY_FILE` | unset | Path to the platform key that wraps household data keys. Real mode uploads, packets and SimpleFIN refuse without it. |
+| `FATHOM_MCP_SECRET_FILE` | unset | Path to a file of 64 hex characters, the HMAC secret for MCP keys. Real mode key routes refuse without it. |
+| `FATHOM_BACKUP_KEY_FILE` | unset | Path to the key for offline snapshots. |
 | `FATHOM_EMAIL_TRANSPORT` | `dev` | `dev`, `smtp`, `resend`, `postmark` or `agentmail`. |
 | `FATHOM_PUBLIC_URL` | unset | Required on a real store, which refuses to start without a valid one. The origin people and MCP clients use: `https://<dns name>` at the root (no path, credentials, query or fragment, and no IP address), or `http://localhost:<port>` for local tests only. Passkeys bind to its host name, every mutation must carry its exact origin, emailed links start with it and MCP clients use it plus `/mcp`. Optional on a demo. |
 | `FATHOM_ALLOWED_HOSTS` | unset | Comma separated extra host names (`host` or `host:port`) allowed on `/mcp` and every `/api` route besides the `FATHOM_PUBLIC_URL` host. |
@@ -67,7 +69,7 @@ npm run seed:demo
 
 Every key is also listed in [`architecture.md`](architecture.md).
 
-Secret files, never committed: the Claude credential, the 32-byte data key and the email credential. The server also creates `api-key-secret` (64 hex characters, mode 0600) in the data directory on first start and uses it to hash API keys. A demo store creates `files/demo.key` for the vault. Accounts, sessions, passkeys and link tokens live in `platform.sqlite`, hashed where they are secrets. MCP keys stay in `fathom.sqlite`.
+Secret files, never committed: the Claude credential, the 32-byte platform key, the MCP secret (64 hex characters) and the email credential. A demo household generates its own vault key. Accounts, sessions, passkeys and link tokens live in `platform.sqlite`, hashed where they are secrets. MCP keys live in the platform `api_keys` table, bound to a household.
 
 ## Tests
 
@@ -149,10 +151,10 @@ email settings, and the first admin invited with `docker exec fathom npm run use
 The repository only ever contains synthetic demo data. Real household data lives only in a
 deployment's data volume (`FATHOM_DATA`) and is never committed.
 
-Fathom has no built-in backup job. Back up the whole data volume, which holds `fathom.sqlite`, the
-encrypted file vault and `api-key-secret`. Keep the secret files (the Claude credential, the data
-key and the email credential) in your secret store, not only on the host: the vault is unreadable
-without the data key. To restore, put the volume back and start the server with the same data key.
+Fathom has no built-in backup job. Back up the whole data volume, which holds `platform.sqlite` and
+every household's store and encrypted file vault. Keep the secret files (the Claude credential, the
+platform key, the MCP secret and the email credential) in your secret store, not only on the host: the vault is unreadable
+without the platform key. To restore, put the volume back and start the server with the same platform key and MCP secret.
 
 ## Accounts and access
 
@@ -255,7 +257,7 @@ email:test` sends one real test email; every key is listed in [`architecture.md`
 
 Accounts connect read-only through SimpleFIN Bridge. Create a setup token on the SimpleFIN Bridge
 site and paste it under Connect accounts on the Accounts screen (or in onboarding). Fathom claims it
-once, keeps the access URL encrypted with the data key (a real store needs `FATHOM_DATA_KEY_FILE`),
+once, keeps the access URL encrypted with the data key (a real household needs `FATHOM_PLATFORM_KEY_FILE`),
 and syncs daily with the `simplefin-sync` job or on Sync now. The deployment needs outbound HTTPS
 to the hosts in `FATHOM_SIMPLEFIN_ALLOWED_HOSTS`. The demo uses a synthetic bridge and needs no
 network.
@@ -287,8 +289,8 @@ A deployment is one container behind a reverse proxy that terminates HTTPS for t
 
 1. Mount a persistent data volume at `/data` (`FATHOM_DATA`) and back it up as described in Data
    and backups.
-2. Set the real-store environment: `FATHOM_DEMO=0`, `FATHOM_PUBLIC_URL`, `FATHOM_DATA_KEY_FILE`
-   (the vault and SimpleFIN access URLs are encrypted with it),
+2. Set the real-store environment: `FATHOM_DEMO=0`, `FATHOM_PUBLIC_URL`, `FATHOM_PLATFORM_KEY_FILE`
+   (it wraps the household data keys that encrypt the vault and SimpleFIN access URLs), `FATHOM_MCP_SECRET_FILE`,
    the email transport, sender, recipients and credential file, `FATHOM_TRUSTED_PROXIES` for the
    ingress, and `FATHOM_ENGINE=live` with `FATHOM_CLAUDE_CREDENTIAL_FILE` if the engine should run.
    Mount the secret files from your secret store.
