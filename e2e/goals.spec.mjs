@@ -79,7 +79,8 @@ test.describe('goals', TAGS, () => {
     const put = saved(page, '/api/goals/' + (await card.getAttribute('data-goal-id')));
     await form.getByRole('button', { name: 'Save changes' }).click();
     await put;
-    await expect(card.locator('.h-gnone')).toContainText('No target yet.');
+    // No supported kind fits this goal, so instead of a suggested number it asks for one.
+    await expect(card.locator('.h-sugg.ask')).toContainText('What amount would make this real?');
     await expect(card.locator('.h-prog svg')).toHaveCount(0);
 
     // Persisted across a reload.
