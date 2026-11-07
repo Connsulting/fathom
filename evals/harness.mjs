@@ -95,7 +95,7 @@ export async function runCases({ cases, live = false, maxUsd = 100, outDir, scri
     const ledger = createEvalLedger({ db, maxUsd });
     const mode = live ? 'live' : 'fake';
     const inner = createEngine({ mode, ledger, capUsd: maxUsd, credential });
-    const packs = createLivePacks(db, { dataDir: store.dataDir }); packs.refresh();
+    const packs = createLivePacks(db, { dataDir: store.root }); packs.refresh();
     const clock = JSON.parse(db.prepare("SELECT value FROM settings WHERE key='clock'").get().value);
     const figures = Object.fromEntries(db.prepare('SELECT key,v FROM figures').all().map(r => [r.key, r.v]));
     const rows = [];
@@ -120,7 +120,7 @@ export async function runCases({ cases, live = false, maxUsd = 100, outDir, scri
         throw error;
       }
     } };
-    const answerer = createLiveAnswerer({ engine, packs });
+    const answerer = createLiveAnswerer({ engine, packs, root: store.root });
     for (const c of cases) {
       missing = (c.expectedFail?.missingTools ?? []).filter(name => !tools.some(t => t.name === name));
       const beforeCost = ledger.costUsd;
