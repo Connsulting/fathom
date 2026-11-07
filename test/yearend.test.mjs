@@ -342,3 +342,83 @@ test('review fix: payments a pending withholding conflict names, or an unreconci
     assert.match(readZip(res2.body())[0].data.toString('utf8'), /Total federal<\/td><td class="r">\$14,234\.50<\/td><td><small>Sum of 2 payments/);
   } finally { await s.cleanup(); }
 });
+
+function inferenceStore() {
+  const db = realStore();
+  db.prepare("INSERT INTO accounts (id, name, kind) VALUES ('bank', 'Checking', 'checking'), ('hsa', 'HSA', 'hsa')").run();
+  upsertFact(db, { key: 'income.selfEmployed', value: true, confirmed: true });
+  upsertFact(db, { key: 'income.partnership', value: false, confirmed: true });
+  const tx = (account, amount, description, category = '', date = '2026-12-31') => db.prepare('INSERT INTO transactions (account_id, date, amount, description, category, locator) VALUES (?, ?, ?, ?, ?, ?)').run(account, date, amount, description, category, 'synthetic ledger row');
+  tx('bank', 100, 'Client payment', 'income');
+  return { db, tx, item: (key) => yearendChecklist(db, { year: 2026, clock: '2027-03-01' }).items.find(i => i.key === key) };
+}
+
+test('inferred 1099-INT: below threshold with evidence, threshold and other years do not qualify', () => {
+  const { db, tx, item } = inferenceStore();
+  tx('bank', 9.99, 'Interest paid', 'interest');
+  tx('bank', 50, 'Interest paid', 'interest', '2025-12-31');
+  let i = item('1099-int:bank');
+  assert.equal(i.status, 'skipped');
+  assert.equal(i.skip.inferred, true);
+  assert.match(i.skip.reason, /9.99.*10/);
+  assert.ok(i.skip.evidence.some(e => e.table === 'transactions' && e.locator === 'synthetic ledger row'));
+  tx('bank', 0.01, 'Interest paid', 'interest');
+  assert.equal(item('1099-int:bank').status, 'missing');
+  db.close();
+});
+
+test('inferred 1099-SA: no HSA distributions with evidence; an HSA withdrawal prevents inference', () => {
+  const { db, tx, item } = inferenceStore();
+  tx('hsa', 100, 'Contribution');
+  assert.equal(item('hsa:1099-sa').skip.inferred, true);
+  assert.match(item('hsa:1099-sa').skip.reason, /No HSA distributions/);
+  assert.ok(item('hsa:1099-sa').skip.evidence.length);
+  tx('hsa', -20, 'Medical reimbursement');
+  assert.equal(item('hsa:1099-sa').status, 'missing');
+  db.close();
+});
+
+test('inferred 1099-K: no processor deposits with evidence; a processor deposit prevents inference', () => {
+  const { db, tx, item } = inferenceStore();
+  assert.equal(item('1099-k').skip.inferred, true);
+  assert.match(item('1099-k').skip.reason, /No payment-processor deposits/);
+  assert.ok(item('1099-k').skip.evidence.some(e => e.table === 'transactions'));
+  tx('bank', 50, 'Stripe payout', 'income');
+  assert.equal(item('1099-k').status, 'missing');
+  db.close();
+});
+
+test('inferred K-1: stored no-partnership fact with evidence; partnership or unknown stays uninferred', () => {
+  const { db, item } = inferenceStore();
+  assert.equal(item('k1:partnership').skip.inferred, true);
+  assert.match(item('k1:partnership').skip.reason, /No partnership entity/);
+  assert.ok(item('k1:partnership').skip.evidence.some(e => e.table === 'facts' && e.id === 'income.partnership'));
+  upsertFact(db, { key: 'income.partnership', value: true, confirmed: true });
+  assert.equal(item('k1:partnership').status, 'expected');
+  db.prepare("DELETE FROM facts WHERE key = 'income.partnership'").run();
+  assert.equal(item('k1:partnership'), undefined);
+  db.close();
+});
+
+test('inference: Undo and manual not-needed decisions persist across history changes; received still wins', () => {
+  const { db, tx, item } = inferenceStore();
+  assert.equal(item('1099-k').status, 'skipped');
+  setMark(db, { year: 2026, key: '1099-k', reason: null });
+  assert.equal(item('1099-k').status, 'missing');
+  tx('bank', 100, 'Client payment');
+  assert.equal(item('1099-k').status, 'missing');
+  setMark(db, { year: 2026, key: '1099-k', reason: 'Owner decision' });
+  tx('bank', 100, 'Stripe payout');
+  assert.deepEqual(item('1099-k').skip.reason, 'Owner decision');
+  addDoc(db, { id: 'processor-form', name: 'processor.pdf', type: '1099-k' });
+  assert.equal(item('1099-k').status, 'have');
+  db.close();
+});
+
+test('inference: no ledger history is unknown, not zero', () => {
+  const { db, item } = inferenceStore();
+  db.prepare('DELETE FROM transactions').run();
+  assert.equal(item('1099-k').status, 'missing');
+  assert.equal(item('hsa:1099-sa').status, 'missing');
+  db.close();
+});
