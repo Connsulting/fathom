@@ -597,3 +597,21 @@ test('pl-ac4 the module exports the contract, takes one object, never writes, an
   await get(`/api/pnl/rows?entity=${encodeURIComponent(STUDIO)}&section=income&category=Income&month=2032-7`, 400);
   assert.equal(changes(), before, 'the HTTP reads never write the store');
 });
+
+
+test('PN1: P&L lists spending ledgers separately and restores original tab names from locators', t => {
+  const { db } = store(t);
+  file(db);
+  const id = line(db, 'Asters', '2032-03', 'Medical', -120);
+  db.prepare('UPDATE pnl_lines SET locator = ? WHERE id = ?').run(JSON.stringify({ sheet: "Aster's Expenses", cells: ['D2'] }), id);
+  line(db, 'Example Studio', '2032-03', 'Income', 500);
+  fact(db, 'pnl.ledgers', { "Aster's": { kind: 'spending' } });
+  const entities = pnlEntities({ db, clock: CLOCK });
+  assert.equal(entities.find(e => e.key === 'entity:asters').label, "Aster's");
+  assert.equal(entities.find(e => e.key === 'entity:asters').kind, 'spending');
+  assert.equal(entities.find(e => e.key === STUDIO).kind, 'entity');
+  const p = businessPnl({ db, entity: "Aster's", clock: CLOCK });
+  assert.equal(p.entity.kind, 'spending');
+  assert.equal(p.entity.label, "Aster's");
+  assert.equal(p.figures[p.expenses.total].v, 120);
+});

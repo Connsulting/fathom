@@ -14,6 +14,8 @@ import {
 import { recAction, packToggle, threadCreate } from '../../src/api/handlers.mjs';
 import { createLiveAnswerer } from '../../src/api/answerer.mjs';
 import { createRuntimeEngine } from '../../src/engine/runtime.mjs';
+import { answerItem } from '../../src/ingest/confirm.mjs';
+import { answerFacts, FactAnswerError } from '../../src/facts/answers.mjs';
 import { reasonText } from '../../src/jobs/triggers/missing-data.mjs';
 import {
   scratch, createRealStore, addPayroll, w2Doc, paystubDoc, addFact, removeFact, accountIdByMask, figureRow, plannerFigures,
@@ -831,4 +833,84 @@ describe('recs', () => {
     // liveness: with the owner known the base store does not ask
     assert.ok(!recRow(base, 'backdoor-roth').def.tasks.some(t => /whose IRA/i.test(t.t)));
   });
+});
+
+
+test('PN1: a confirmed spending ledger clears the tax block without business figures', async () => {
+  const db = await S.store();
+  db.prepare("INSERT INTO pnl_lines (entity, period, category, amount, locator) VALUES ('Asters', '2026-10', 'Groceries', -120, ?)")
+    .run(JSON.stringify({ sheet: "Aster's Expenses", cells: ['D2'] }));
+  await plan(db);
+  assert.equal(figureRow(db, 'agi.est'), null, 'an unmarked unknown ledger still blocks');
+  addFact(db, 'pnl.ledgers', { "Aster's": { kind: 'spending' } });
+  await plan(db);
+  assert.ok(figureRow(db, 'agi.est'), 'tax projection resumes');
+  assert.equal(figureRow(db, 'pnl.asters.net'), null, 'no business tax figures for spending');
+  assert.ok(!JSON.stringify(recRow(db, 'missing-data')?.def).includes('how Aster'));
+});
+
+test('PN1: personal-category inference asks for confirmation, preserves display text and records nothing before yes', async () => {
+  const db = await S.store();
+  for (const [entity, sheet] of [['Asters', "Aster's Expenses"], ['Birchs', "Birch's Expenses"]]) {
+    for (const category of ['Medical', 'Shopping', 'Groceries', 'HSA', 'Dining', 'Software']) {
+      db.prepare('INSERT INTO pnl_lines (entity, period, category, amount, locator) VALUES (?, ?, ?, ?, ?)')
+        .run(entity, '2026-10', category, -100, JSON.stringify({ sheet, cells: ['D2'] }));
+    }
+  }
+  await plan(db);
+  assert.equal(factRow(db, 'pnl.ledgers'), null);
+  assert.equal(figureRow(db, 'agi.est'), null);
+  const rec = recRow(db, 'missing-data').def;
+  assert.match(JSON.stringify(rec), /Aster(?:&#39;|')s looks like card spending/);
+  assert.doesNotMatch(JSON.stringify(rec), /Tell us how Asters is taxed/);
+  const checks = db.prepare("SELECT * FROM confirm_items WHERE kind = 'fact_check' AND status = 'pending'").all()
+    .filter(x => JSON.parse(x.context).key === 'pnl.ledgers');
+  assert.equal(checks.length, 1, 'one confirmation covers the proposed ledger map');
+  assert.match(checks[0].question, /no income, mostly personal categories/);
+  await plan(db);
+  assert.equal(db.prepare("SELECT count(*) n FROM confirm_items WHERE id = ?").get(checks[0].id).n, 1);
+  assert.equal(factRow(db, 'pnl.ledgers'), null, 'replanning does not accept the guess');
+  assert.equal(answerItem(db, checks[0].id, 'yes').factsChanged, true);
+  assert.deepEqual(factRow(db, 'pnl.ledgers').value, { "Aster's": { kind: 'spending' }, "Birch's": { kind: 'spending' } });
+  await plan(db);
+  assert.ok(figureRow(db, 'agi.est'));
+});
+
+test('PN1: income rows, mostly business categories and an explicit business answer suppress the spending guess', async () => {
+  for (const [categories, marked] of [[['Income', 'Medical', 'Groceries'], false], [['Software', 'Contractors', 'Groceries'], false], [['Medical', 'Groceries'], true]]) {
+    const db = await S.store();
+    for (const category of categories) db.prepare("INSERT INTO pnl_lines (entity, period, category, amount) VALUES ('Cedar', '2026-10', ?, ?)")
+      .run(category, category === 'Income' ? 0 : -100);
+    if (marked) addFact(db, 'pnl.ledgers', { Cedar: { kind: 'business' } });
+    await plan(db);
+    assert.equal(figureRow(db, 'agi.est'), null);
+    assert.match(JSON.stringify(recRow(db, 'missing-data').def), /Tell us how Cedar is taxed/);
+    assert.ok(!db.prepare("SELECT context FROM confirm_items WHERE status = 'pending'").all().some(x => JSON.parse(x.context).key === 'pnl.ledgers'));
+  }
+});
+
+test('PN1: declining the spending guess keeps classification unknown and does not ask it again', async () => {
+  const db = await S.store();
+  db.prepare("INSERT INTO pnl_lines (entity, period, category, amount) VALUES ('Cedar', '2026-10', 'Groceries', -100)").run();
+  await plan(db);
+  const q = db.prepare("SELECT id FROM confirm_items WHERE context LIKE '%pnl.ledgers%' AND status = 'pending'").get();
+  answerItem(db, q.id, 'no');
+  await plan(db);
+  assert.equal(factRow(db, 'pnl.ledgers'), null);
+  assert.equal(figureRow(db, 'agi.est'), null);
+  assert.equal(db.prepare("SELECT count(*) n FROM confirm_items WHERE context LIKE '%pnl.ledgers%' AND status = 'pending'").get().n, 0);
+});
+
+test('PN1: ledger answers validate and merge entries, and invalidate a pending guess after an owner correction', async () => {
+  const db = await S.store();
+  db.prepare("INSERT INTO pnl_lines (entity, period, category, amount) VALUES ('Cedar', '2026-10', 'Groceries', -100)").run();
+  await plan(db);
+  const q = db.prepare("SELECT id FROM confirm_items WHERE context LIKE '%pnl.ledgers%' AND status = 'pending'").get();
+  for (const value of [{ Cedar: { kind: 'unknown' } }, { Cedar: { kind: 'spending', extra: true } }, []]) {
+    await assert.rejects(answerFacts(db, [{ key: 'pnl.ledgers', value }], { replan: async () => {} }), FactAnswerError);
+  }
+  await answerFacts(db, [{ key: 'pnl.ledgers', value: { Cedar: { kind: 'business' } } }], { replan: async () => {} });
+  assert.throws(() => answerItem(db, q.id, 'yes'), /stale/);
+  await answerFacts(db, [{ key: 'pnl.ledgers', value: { Elm: { kind: 'spending' } } }], { replan: async () => {} });
+  assert.deepEqual(factRow(db, 'pnl.ledgers').value, { Cedar: { kind: 'business' }, Elm: { kind: 'spending' } });
 });
