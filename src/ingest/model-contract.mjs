@@ -1,6 +1,9 @@
 import Ajv from 'ajv';
 import { isDeepStrictEqual } from 'node:util';
 import { FACT_TYPES, SCHEMAS } from './extract.mjs';
+import { ANSWER_SHAPES } from '../jobs/triggers/common.mjs';
+
+export const FACT_KEYS = Object.freeze([...new Set([...Object.keys(FACT_TYPES), ...Object.keys(ANSWER_SHAPES)])]);
 
 const object = (properties, required = Object.keys(properties)) => ({ type: 'object', properties, required, additionalProperties: false });
 const string = { type: 'string', minLength: 1 };
@@ -46,7 +49,7 @@ export const TARGET_SCHEMAS = Object.freeze({
   transaction: target('transaction', fields(['accountId', 'postedDate', 'amount', 'description'], ['category', 'externalId'])),
   balance: target('balance', fields(['accountId', 'asOf', 'amount']), { basis: choice('running', 'closing'), datePrecision }),
   pnl: target('pnl', fields(['entity', 'period', 'category', 'amount', 'basis'], [], ['basis']), { purpose: choice('business', 'household_spending') }),
-  fact: target('fact', fields(['value', 'asOf', 'subject']), { key: choice(...Object.keys(FACT_TYPES)), scope: choice('household', 'person', 'entity', 'account'), datePrecision }),
+  fact: target('fact', fields(['value', 'asOf', 'subject']), { key: choice(...FACT_KEYS), scope: choice('household', 'person', 'entity', 'account'), datePrecision }),
   tax_payment: target('tax_payment', fields(['jurisdiction', 'payer', 'recipient', 'amount', 'taxYear', 'taxYearBasis', 'paymentDate']),
     { kind: choice('estimate', 'withholding', 'extension', 'return', 'other'), status: choice('paid', 'required'), datePrecision }),
   account_metadata: target('account_metadata', fields(['alias', 'institution', 'mask', 'kind', 'holder', 'accountId'])),
