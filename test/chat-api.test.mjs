@@ -11,6 +11,8 @@ import { SERVER_TIMEOUT, withServer, postJson, getScenario, openStore } from './
 const T = { timeout: SERVER_TIMEOUT };
 const FAKE = { FATHOM_ENGINE: 'fake' };
 const INVENTED = '$987,654';
+const INVENTED_2 = '$876,543';
+const UNCHECKED = '<span class="fx-checking fx-unchecked" title="Not checked against your data">';
 
 async function ok(resPromise) {
   const r = await resPromise;
@@ -64,14 +66,34 @@ test('unmatched free text gets a grounded answer from the household summary with
   assert.deepEqual(m.refs, []);
 }));
 
-test('free text with an invented amount is retried and stored with the amount marked unverified', T, () => withServer({ env: FAKE }, async s => {
+// The fake engine echoes the owner's amounts next to the household summary count, which grounds.
+test('free text with one invented amount is stored once with the amount unchecked in place, no regeneration', T, () => withServer({ env: FAKE }, async s => {
   const r = await askNew(s, `Could we spend ${INVENTED} on a sailboat`);
   const m = r.message;
   assert.equal(m.notice, false);
-  assert.ok(m.text.includes(`<span class="fx-unverified" title="Not found in your data or tool results">${INVENTED}</span>`), m.text);
+  assert.ok(m.text.includes(`${UNCHECKED}${INVENTED}</span>`), m.text);
+  assert.ok(!m.text.includes('fx-unverified'), m.text);
+  assert.equal(m.provenance.grounding.ok, false);
+  assert.equal(m.provenance.grounding.retried, false);
+  assert.equal(m.provenance.grounding.revised, undefined);
+  assert.deepEqual(m.provenance.grounding.unverified, [INVENTED]);
+  assert.equal(m.provenance.work.items.some(x => x.draft || (x.k === 'step' && /^Revised/.test(x.label))), false);
+}));
+
+test('free text with two invented amounts is regenerated once and stored with both unchecked and one revision step', T, () => withServer({ env: FAKE }, async s => {
+  const r = await askNew(s, `Could we spend ${INVENTED} or ${INVENTED_2} on a sailboat`);
+  const m = r.message;
+  assert.equal(m.notice, false);
+  // The fake engine repeats the same answer, so both amounts are still unchecked after the regeneration.
+  for (const amount of [INVENTED, INVENTED_2]) assert.ok(m.text.includes(`${UNCHECKED}${amount}</span>`), m.text);
   assert.equal(m.provenance.grounding.ok, false);
   assert.equal(m.provenance.grounding.retried, true);
-  assert.ok(m.provenance.grounding.unverified.includes(INVENTED));
+  assert.equal(m.provenance.grounding.revised, 2);
+  const { items } = m.provenance.work;
+  assert.deepEqual(items.filter(x => x.k === 'step' && /^Revised/.test(x.label)), [{ k: 'step', label: 'Revised to remove 2 unchecked figures' }]);
+  assert.equal(items.some(x => x.draft), false, 'no draft note');
+  const conv = r.scenario.live.conversations[r.thread.key];
+  assert.deepEqual(conv.map(x => x.role), ['me', 'fathom'], 'one answer for the turn');
 }));
 
 test('a rec thread question answers with the rec as its ref and provenance', T, () => withServer({ env: FAKE }, async s => {

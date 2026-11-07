@@ -692,7 +692,7 @@ test('AC4 purgeTrash deletes threads trashed 30 or more days ago and their messa
 const QUARTERLY = 'How should we think about the quarterly estimates';
 const QUARTERLY_FALLBACK = 'How should we think about the quarterly';
 
-test('AC3 the fake engine names a thread once after the first turn', T, () => withServer({ env: FAKE }, async s => {
+test('AC3 the fake engine names a thread after the first turn and retries once after the second', T, () => withServer({ env: FAKE }, async s => {
   const first = await newThread(s, { text: QUARTERLY });
   assert.equal(first.thread.title, QUARTERLY_FALLBACK, 'the response of the first answer already carries the title');
   assert.equal(first.thread.titleSource, 'auto');
@@ -702,12 +702,12 @@ test('AC3 the fake engine names a thread once after the first turn', T, () => wi
   const named = (await openThread(s, first.thread.id)).thread;
   assert.equal(named.title, QUARTERLY_FALLBACK, 'the fake title is the fallback of the first question');
   assert.equal(named.titleSource, 'auto');
-  assert.equal(await titleSpend(s.dbFile), 1, 'the title call is recorded with purpose title');
+  assert.equal(await titleSpend(s.dbFile), 2, 'the title calls are recorded with purpose title: the first and the one retry (the fake title is the fallback)');
   const sc = await s.getScenario();
   assert.equal(sc.live.threads.find(x => x.id === first.thread.id).title, QUARTERLY_FALLBACK);
 
   await ask(s, first.thread.key, 'Synthetic third question');
-  assert.equal(await titleSpend(s.dbFile), 1, 'named once');
+  assert.equal(await titleSpend(s.dbFile), 2, 'no title call after the third turn');
   assert.equal((await openThread(s, first.thread.id)).thread.title, QUARTERLY_FALLBACK);
 }));
 
