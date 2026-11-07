@@ -92,6 +92,13 @@ function openRec(id, ret) {
   H.openRec(id, trigger);
 }
 
+function openAccount(id, ret) {
+  const trigger = ret && H.root?.querySelector('.h-root')?.contains(ret) ? ret : null;
+  H.openAccount(id, trigger);
+}
+
+const isDialog = (name) => name === 'rec' || name === 'account';
+
 function goSource() {
   const row = (route, label, hint) => ({ key: `go:${route}`, title: label, group: 'Go to', sub: 'Screen', hint, run: () => go(route) });
   return [
@@ -157,7 +164,7 @@ function accountSource() {
     return {
       key: `acc:${a.id}`, title: a.imported === false ? plain(a.name) : String(a.name ?? ''), group: 'Accounts',
       sub: digits ? `ending ${digits.slice(-4)}` : 'Account', hint: '',
-      run: () => go('accounts')
+      run: (ret) => openAccount(a.id, ret)
     };
   });
 }
@@ -531,7 +538,7 @@ const SCREEN_TABLES = {
 };
 
 function onEscape() {
-  if (H.api.route?.name === 'rec') { H.closeRec(); return; }
+  if (isDialog(H.api.route?.name)) { H.closeRec(); return; }
   if (ringIdx() >= 0) clearRing();
 }
 
@@ -599,7 +606,7 @@ export function afterDraw(name) {
     const from = S.screen;
     if (S.offScreen) { S.offScreen(); S.offScreen = null; }
     // Opening and closing the rec modal keeps the page's ring; arriving from another page starts fresh.
-    if (from !== 'rec' && name !== 'rec') S.ring[name] = -1;
+    if (!isDialog(from) && !isDialog(name)) S.ring[name] = -1;
     S.screen = name;
     const table = SCREEN_TABLES[name];
     if (table) S.offScreen = H.keys.register(name, table());
