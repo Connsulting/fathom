@@ -295,6 +295,16 @@ test('demo: the seeded store builds the year-end section through the same tables
     assert.deepEqual(ye.unmatched.map((u) => u.name), ['property-tax-receipt-2026.pdf']);
     assert.ok(ye.docs.every((d) => !/\{[a-z]+:/.test(d.t)), 'demo tokens are resolved to plain text');
     assert.ok(ye.decisions.some((d) => d.kind === 'decision') && ye.decisions.some((d) => d.kind === 'rec'));
+    const inferred = ye.docs.find(d => d.key === '1099-k');
+    assert.equal(inferred.skip.inferred, true);
+    assert.match(inferred.skip.reason, /No payment-processor deposits/);
+    assert.ok(inferred.skip.evidence[0].locator);
+    const undo = await fetch(`${srv.baseUrl}/api/yearend/marks`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ year: 2026, key: '1099-k', reason: null }) });
+    assert.equal(undo.status, 200);
+    assert.equal((await undo.json()).scenario.yearend.docs.find(d => d.key === '1099-k').status, 'expected');
+    const refreshed = await (await fetch(`${srv.baseUrl}/api/scenario`)).json();
+    assert.equal(refreshed.yearend.docs.find(d => d.key === '1099-k').status, 'expected');
+
     const res = await fetch(`${srv.baseUrl}/api/yearend/packet`);
     assert.equal(res.status, 200);
     const names = readZip(Buffer.from(await res.arrayBuffer())).map((e) => e.name);
