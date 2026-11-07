@@ -34,6 +34,7 @@ import { clockNow } from './scenario/build.mjs';
 import { createTransport } from './email/transport.mjs';
 import { createScheduler, defaultHandlers } from './jobs/scheduler.mjs';
 import { seedDemo } from '../demo/seed.mjs';
+import { backfillMergedIdentity } from './ingest/account-merge.mjs';
 
 export class StartupError extends Error {}
 
@@ -67,6 +68,16 @@ const codeOf = err => [err && err.code, err && err.name].find(v => typeof v === 
 // Real stores rebuild pack definitions from the pack manifests and the stored facts at startup
 // (demo pack definitions are the seeded scenario; a demo store only gains a row for a Your plans
 // pack no row backs). A pack load failure never stops startup.
+// Survivors of merges made before the carry-over existed get their institution and last 4 from
+// their SimpleFIN snapshot. A failure never stops startup.
+function backfillMerged(db) {
+  try {
+    backfillMergedIdentity(db);
+  } catch (err) {
+    console.error('fathom: merged account backfill failed', codeOf(err));
+  }
+}
+
 function refreshPacks(packs) {
   try {
     packs.refresh();
@@ -108,6 +119,7 @@ export async function startServer(config = loadConfig()) {
   let engine;
   let packs;
   try {
+    backfillMerged(db);
     packs = createLivePacks(db, { dataDir: config.dataDir });
     refreshPacks(packs);
     engine = createRuntimeEngine({ db, config, now: () => new Date(clockNow(db, config.clock)) });

@@ -63,6 +63,9 @@ import { signInTarget } from '../auth/return-path.js';
 //    { q, from, to, limit, cursor }) resolves one page { items, next, total } (newest first) or null; each item's
 //    fig and its source are registered, so api.fig(item.fig) and the figure popover work for it. Neither touches
 //    the scenario or the error line.
+//  - api.accountMask(id, mask), api.accountOwner(id, { owner } | { undo }), api.accountKind(id, { kind } |
+//    { undo }) and api.accountMerge(id, withId) resolve { data } (the reply, scenario applied) or
+//    { error, status } without the error line. api.accountMergeCandidates(id) resolves { items } or null.
 //  - api.packEntry(packId, entryId) GETs one pack entry and resolves { id, title, body, cites } or
 //    null; it never touches the scenario or the error line.
 //  - api.reviseAnswer(id, optionId) and api.reopenAnswer(id) resolve { item }, or { final: message }
@@ -961,6 +964,57 @@ async function accountTransactions(id, opts) {
   return page;
 }
 
+// An account dialog edit: resolves { data } with the whole reply (its scenario applied) or
+// { error: message, status } on a refusal or failure. The dialog shows the error inline, so the
+// page's error line stays hidden.
+function sendAccountEdit(path, body) {
+  const run = () => postJson(path, body).then(
+    data => {
+      applyScenario(data.scenario);
+      hideError();
+      notify();
+      return { data };
+    },
+    err => ({ error: (err && err.message) || 'The server could not complete that.', status: (err && err.status) || 0 })
+  );
+  const p = queue.then(run);
+  queue = p;
+  return p;
+}
+
+const accountPath = (id, tail) => '/api/accounts/' + encodeURIComponent(id) + '/' + tail;
+const noAccount = () => done({ error: 'No account was given.', status: 0 });
+
+// The account's last 4 digits (exactly four, checked again on the server).
+function accountMask(id, mask) {
+  if (id == null || id === '') return noAccount();
+  return sendAccountEdit(accountPath(id, 'mask'), { mask: String(mask ?? '') });
+}
+
+// Owner or kind: body is { owner } or { kind }, or { undo: before } from an earlier reply.
+function accountOwner(id, body) {
+  if (id == null || id === '' || !body || typeof body !== 'object') return noAccount();
+  return sendAccountEdit(accountPath(id, 'owner'), body);
+}
+
+function accountKind(id, body) {
+  if (id == null || id === '' || !body || typeof body !== 'object') return noAccount();
+  return sendAccountEdit(accountPath(id, 'kind'), body);
+}
+
+// The accounts this one could merge with, each with what a merge would keep and move, or null.
+function accountMergeCandidates(id) {
+  if (id == null || id === '') return Promise.resolve(null);
+  return getRead(accountPath(id, 'merge-candidates'));
+}
+
+// Merge another account into this pair; the reply names the survivor and the confirm item whose
+// reopen undoes it.
+function accountMerge(id, withId) {
+  if (id == null || id === '' || withId == null || withId === '') return noAccount();
+  return sendAccountEdit(accountPath(id, 'merge'), { withId: String(withId) });
+}
+
 async function packEntry(packId, entryId) {
   if (packId == null || entryId == null || packId === '' || entryId === '') return null;
   try {
@@ -1209,6 +1263,11 @@ const api = {
   preferenceSave,
   preferenceDelete,
   actionUndo,
+  accountMask,
+  accountOwner,
+  accountKind,
+  accountMergeCandidates,
+  accountMerge,
   goalCreate,
   goalUpdate,
   goalSuggestion,
