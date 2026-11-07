@@ -1,6 +1,7 @@
 // Chat over the data (item 6): every Fathom answer carries a Sources disclosure listing the tools
 // it read and the figures it used, grounded answers say so, numbers nothing supports are marked
-// unverified, and a switched-off engine answers with a notice instead of making anything up.
+// unchecked in place (neutral, "Not checked against your data"), and a switched-off engine answers
+// with a notice instead of making anything up.
 // Demo mode runs the live pipeline with the deterministic fake answer source.
 
 import { test, expect, S, resetDemo, visibleRecs, plain, gotoRoute, expectH1, recDialog, bareDollarNodes, rec, liveStatus, ASK_HELLO, ASK_THREAD_URL, askOnAsk } from './helpers.mjs';
@@ -88,7 +89,7 @@ test('a free text question with no canned match gets a grounded answer', async (
   await expect(answers(page)).toHaveCount(1);
   await expect(msg).not.toHaveClass(/\bnotice\b/);
   await expect(msg.locator('.h-msg-b')).toContainText('need you right now');
-  await expect(msg.locator('.fx-unverified')).toHaveCount(0);
+  await expect(msg.locator('.fx-unverified, .fx-unchecked')).toHaveCount(0);
   // R9: a literal number grounded by a tool result is bound to its source.
   await expect(msg.locator('.h-msg-b .fx-src').first()).toBeVisible();
 
@@ -98,7 +99,7 @@ test('a free text question with no canned match gets a grounded answer', async (
   await expect(src.locator('p.h-src-warn')).toHaveCount(0);
 });
 
-test('a free text question naming an invented amount marks it unverified', async ({ page }) => {
+test('a free text question naming an invented amount marks it unchecked in place', async ({ page }) => {
   const text = `Can I put ${INVENTED_AMOUNT} in my HSA?`;
 
   await gotoRoute(page, 'ask');
@@ -106,10 +107,12 @@ test('a free text question naming an invented amount marks it unverified', async
   const msg = answers(page).last();
   await expect(answers(page)).toHaveCount(1);
   await expect(msg).not.toHaveClass(/\bnotice\b/);
-  const marked = msg.locator('.h-msg-b .fx-unverified');
+  const marked = msg.locator('.h-msg-b .fx-unchecked');
   await expect(marked.first()).toBeVisible();
   await expect(marked.filter({ hasText: '987,654' })).toHaveCount(1);
-  await expect(marked.first()).toHaveAttribute('title', 'Not found in your data or tool results');
+  await expect(marked.first()).toHaveAttribute('title', 'Not checked against your data');
+  await expect(marked.first()).toHaveClass(/\bfx-checking\b/);
+  await expect(msg.locator('.fx-unverified')).toHaveCount(0);
 
   const src = await openSources(msg);
   await expect(src.locator('p.h-src-warn')).toHaveText(UNVERIFIED);

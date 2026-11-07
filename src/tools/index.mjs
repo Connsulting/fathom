@@ -247,7 +247,9 @@ export const tools = [
   },
   {
     name: 'query_transactions',
-    description: 'Search transactions by exact ids, account, date range (inclusive, YYYY-MM-DD), amount range, category or description text. Returns at most `limit` rows (default 50, max 200; with ids every matching id is returned), newest first, with the total match count.',
+    description: 'Search transactions by exact ids, account, date range (inclusive, YYYY-MM-DD), amount range, category or description text. ' +
+      'Without accountId it covers every account, credit cards included. Each row has accountId, date, a signed amount (money out is negative, money in positive), description and category; ' +
+      'credit card rows carry the budgeting app category, so group spending by it. Returns at most `limit` rows (default 50, max 200; with ids every matching id is returned), newest first, with the total match count.',
     inputSchema: obj({
       ids: { type: 'array', items: { type: 'string', minLength: 1 }, minItems: 1, maxItems: 50 },
       accountId: { type: 'string' },
@@ -296,7 +298,7 @@ export const tools = [
   },
   {
     name: 'pnl_by_month',
-    description: 'Business profit and loss by month (YYYY-MM) and category, with a total per month. Optionally one entity and a month range.',
+    description: 'Business profit and loss by month (YYYY-MM) and category, with a total per month: use it for business income, expenses and profit, not household spending. Optionally one entity and a month range.',
     inputSchema: obj({ entity: { type: 'string' }, from: { type: 'string', pattern: MONTH }, to: { type: 'string', pattern: MONTH } }),
     scope: 'read',
     handler(args, ctx) {

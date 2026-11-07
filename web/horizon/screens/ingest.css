@@ -68,6 +68,7 @@
 .d-horizon .h-deck { max-width: 680px; }
 .d-horizon .h-deck-top { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; }
 .d-horizon .h-deck-pos { font: 12.5px var(--mono); color: var(--mu); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.d-horizon .h-deck-ans { font: 12.5px var(--mono); color: var(--mu); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .d-horizon .h-deck-bar { flex: 1; min-width: 0; height: 3px; border-radius: 2px; background: var(--line2); overflow: hidden; }
 .d-horizon .h-deck-bar i { display: block; height: 100%; background: var(--ac); transition: width 0.2s ease; }
 .d-horizon .h-deck-top .h-btn { height: 28px; padding: 0 10px; }
@@ -184,6 +185,7 @@
 .d-horizon .h-cf-ropts { display: flex; flex-wrap: wrap; gap: 6px; }
 .d-horizon .h-deck-card .h-cf-ropts .h-btn { display: inline-flex; width: auto; min-height: 32px; padding: 5px 11px; font-size: 13px; }
 .d-horizon .h-cf-rwhy, .d-horizon .h-cf-rstate { margin-top: 6px; font-size: 12.5px; color: var(--mu); }
+.d-horizon .h-cf-rstate .h-btn { height: 26px; padding: 0 9px; margin-left: 8px; vertical-align: middle; }
 .d-horizon .h-cf-rwhy b { color: var(--ac); font-weight: 500; }
 .d-horizon .h-cf-group tr.done td[data-col] { opacity: 0.7; }
 .d-horizon .h-cf-gx details { margin-top: 4px; }
@@ -212,6 +214,7 @@
 .d-horizon .h-decided-l li > .h-btn { flex: none; height: 28px; }
 .d-horizon .h-decided-final { flex: 0 1 200px; font-size: 12px; color: var(--fa); text-align: right; }
 
+.d-horizon .h-empty .h-btn { margin-top: 6px; }
 .d-horizon .h-deck-top + .h-empty { border: 1px solid var(--line2); border-radius: 12px; padding: 24px; }
 .d-horizon .h-deck-nav { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 18px; }
 .d-horizon .h-deck-nav .h-btn { flex: none; }

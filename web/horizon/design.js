@@ -61,6 +61,7 @@ let ui = null;
 let ingest = null;
 let email = null;
 let lastKey = '';
+let lastRoute = null;
 let resizeTimer = 0;
 let onResize = null;
 let onDocKey = null;
@@ -1869,6 +1870,11 @@ function draw() {
   const r = isDlgRoute(rr.name) ? underRoute(rr.name) : rr;
   const key = `${r.name}/${r.params?.id ?? r.params?.name ?? r.params?.step ?? ''}`;
   const routeChanged = key !== lastKey;
+  // Confirm remembers the screen it was opened from so Done and Back return there.
+  if (routeChanged && r.name === 'confirm') {
+    const from = lastRoute;
+    ingest.setOrigin(from && from.name !== 'confirm' && from.name !== 'onboarding' ? { name: from.name, params: from.params } : null);
+  }
   if (r.name !== 'onboarding' || (r.name === 'onboarding' && routeChanged && Number(r.params?.step ?? onboardStep()) !== 5)) {
     if (ui.buildTimer) { clearTimeout(ui.buildTimer); ui.buildTimer = 0; }
     if (routeChanged) ui.build = 0;
@@ -1918,7 +1924,7 @@ function draw() {
     const el = page.querySelector(`[data-draft="${CSS.escape(focusDraft)}"]`);
     if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
   }
-  if (routeChanged) { lastKey = key; ui.y = 0; window.scrollTo(0, 0); }
+  if (routeChanged) { lastKey = key; lastRoute = r; ui.y = 0; window.scrollTo(0, 0); }
   else if (Math.abs(window.scrollY - ui.y) > 1) window.scrollTo(0, ui.y);
   const { wasOpen, isRec } = syncDialog(rr, page);
   if (wasOpen && !isRec && ui.ret) {
@@ -2293,7 +2299,7 @@ const KIT = {
 SCREENS.forEach((s) => s.bind(KIT));
 
 function mount(r, a) {
-  api = a; root = r; ui = freshUi(); lastKey = ''; connectOn = false;
+  api = a; root = r; ui = freshUi(); lastKey = ''; lastRoute = null; connectOn = false;
   SCREENS.forEach((s) => s.reset?.());
   ingest = ingestScreens({ api, shell, section, pageHead, btn, icon, esc, T, X, draw, goA, addBtn, getUi: () => ui });
   email = emailScreen({ shell, section, pageHead, btn, esc, draw });

@@ -1,7 +1,9 @@
 // The work block on Ask answers, at desktop and 390px (every title carries @mobile). While an answer
 // is in flight a block row ("Working…", "N steps") sits above the streamed text: open while nothing
-// streams, collapsed once text streams, and every text streamed in a tool round (or by a first
-// attempt the number check replaced) moves into the block as a note instead of vanishing. The
+// streams, collapsed once text streams, and every text streamed in a tool round moves into the block
+// as a note instead of vanishing. A first attempt the number check replaces (most of its figures
+// unchecked) is never kept: one "Revised to remove N unchecked figures" step shows before its text
+// clears, so nothing leaves the screen without a step saying why. The
 // finished message keeps the block ("Worked for Ns", "N steps"), collapsed by default, stored with
 // the message so a reload shows the same notes and steps.
 //
@@ -20,13 +22,17 @@ const STORE = fileURLToPath(new URL('../.e2e-data/fathom.sqlite', import.meta.ur
 
 const SHOW = 'Show your work: where does the household stand?';
 const QUICK = 'Give me a quick read on where the household stands right now';
-// An invented amount: the number check fails on the first attempt and forces one retry.
-const INVENTED = 'Is 4,321 the right amount for this?';
+// Two invented amounts: the fake engine echoes both next to one grounded count, so two of three
+// figures are unchecked and the answer is regenerated once.
+const INVENTED = 'Is 4,321 or 5,432 the right amount for this?';
 const NOTE1 = 'Let me start with your household summary.';
 const NOTE2 = 'Now the details this rests on.';
 const STEP_GOALS = 'Looking at your goals';
 const STEP_REC = 'Reading the recommendation';
 const STEP_CHECK = 'Checking every number against your data';
+const STEP_REVISED = 'Revised to remove 2 unchecked figures';
+const REVISED = /^Revised to remove \d+ unchecked figures?$/;
+// Retired by AQ1: no new answer shows these.
 const STEP_RETRY = 'Rechecking the numbers';
 const DRAFT_TAG = 'Earlier draft, replaced after the number check';
 
@@ -164,6 +170,26 @@ function expectNothingLost(snaps) {
     expect(cur.open, `the block reopens when text moves into it: ${ctx}`).toBe('true');
     expect(norm(cur.notes.map((n) => n.t).join(' ')), `streamed text moved into the block in the same frame: ${ctx}`).toContain(was);
   }
+}
+
+// A regeneration clears the streamed text without a note, but only once the revision step is in
+// the block: the snapshot that shows the text gone shows the open block with that step. Any other
+// clear is an interim move (expectNothingLost). Returns how many clears were regenerations.
+function expectNoSilentClear(snaps) {
+  let revisions = 0;
+  for (let i = 1; i < snaps.length; i++) {
+    const prev = snaps[i - 1];
+    const cur = snaps[i];
+    if (!prev.pend || !cur.pend) continue;
+    const was = norm(prev.stream);
+    if (!was || norm(cur.stream).startsWith(was)) continue;
+    const ctx = JSON.stringify({ prev, cur });
+    if (norm(cur.notes.map((n) => n.t).join(' ')).includes(was)) continue;
+    expect(cur.open, `the block opens when the streamed text clears: ${ctx}`).toBe('true');
+    expect(cur.steps.some((x) => REVISED.test(x)), `a revision step explains the cleared text: ${ctx}`).toBe(true);
+    revisions++;
+  }
+  return revisions;
 }
 
 // The old pending markup is gone, and every live snapshot shows the block with a live row.
@@ -494,10 +520,12 @@ test('@mobile @wb-ac2 @wb-ac4 a plain question shows a work block with steps onl
   await expectPhoneFit(page, answer.locator('.h-work'));
 });
 
-/* ---------- 4: the grounding retry ---------- */
+/* ---------- 4: the regeneration ---------- */
 
-test('@mobile @wb-ac1 @wb-ac2 @wb-ac4 a forced number check retry moves the first attempt into the block as an earlier draft, never hiding it', async ({ page, request }) => {
+test('@mobile @wb-ac1 @wb-ac2 @wb-ac4 a forced regeneration shows one revision step before the first attempt clears, and keeps no draft', async ({ page, request }) => {
   test.setTimeout(120_000);
+  // One event per task, so the reset that clears the first attempt is its own snapshot.
+  await installPacer(page);
   await gotoRoute(page, 'ask');
   await record(page, 'section.h-askx-main');
   await sendOnAsk(page, INVENTED);
@@ -506,39 +534,42 @@ test('@mobile @wb-ac1 @wb-ac2 @wb-ac4 a forced number check retry moves the firs
   const answer = askMain(page).locator('.h-askx-msgs .h-msg.fathom').last();
   await expect(answer).toBeVisible({ timeout: 30_000 });
   await expect(askMain(page).locator('.h-askx-pend')).toHaveCount(0);
+  await expect(askMain(page).locator('.h-msg.fathom')).toHaveCount(1);
 
   const { snaps } = await wbLog(page);
   expectLiveRows(snaps);
   expectAutoRule(snaps);
-  expectNothingLost(snaps);
-  // The retry happened: the first attempt's text left the stream and became a draft note.
-  const drafted = snaps.find((s) => s.notes.some((n) => n.draft));
-  expect(drafted, 'a draft note appeared while the answer was in flight').toBeTruthy();
-  const draft = drafted.notes.find((n) => n.draft);
-  expect(draft.tag).toBe(DRAFT_TAG);
-  expect(norm(draft.t)).toContain('4321');
-  expect(snaps.some((s) => s.steps.includes(STEP_RETRY)), 'the retry step showed live').toBe(true);
-  // The progress list never stood in for text that was on screen: before the draft note existed,
-  // no snapshot dropped the stream without it being in the block.
-  const at = snaps.indexOf(drafted);
-  const before = snaps[at - 1];
-  expect(before && before.pend && norm(before.stream).length > 0, 'the first attempt was streaming right before it moved').toBe(true);
-  expect(norm(draft.t)).toContain(norm(before.stream));
+  // The first attempt streamed, then cleared once, with the revision step already in the block.
+  expect(expectNoSilentClear(snaps), 'one regeneration cleared the stream').toBe(1);
+  const at = snaps.findIndex((s, i) => i > 0 && s.pend && snaps[i - 1].pend && norm(snaps[i - 1].stream) && !norm(s.stream));
+  expect(at, 'the stream cleared while the answer was in flight').toBeGreaterThan(0);
+  expect(norm(snaps[at - 1].stream)).toContain('4321');
+  expect(snaps[at].steps).toContain(STEP_REVISED);
+  // No draft note, no draft tag, and no retired retry step, at any point.
+  expect(snaps.some((s) => s.notes.some((n) => n.draft || n.tag)), 'no draft note while in flight').toBe(false);
+  expect(snaps.some((s) => s.steps.includes(STEP_RETRY))).toBe(false);
+  expect(snaps.every((s) => s.steps.filter((x) => REVISED.test(x)).length <= 1), 'one revision step').toBe(true);
 
   const stored = await lastAnswer(request, id);
   const got = await expectFinished(answer, stored);
-  const notes = got.notes.filter((n) => n.draft);
-  expect(notes).toHaveLength(1);
-  expect(notes[0].tag).toBe(DRAFT_TAG);
-  expect(norm(notes[0].t)).toBe(norm(draft.t));
-  expect(got.steps).toContain(STEP_RETRY);
-  expect(stored.provenance.work.items.filter((x) => x.k === 'note' && x.draft)).toHaveLength(1);
+  expect(got.notes).toEqual([]);
+  expect(got.steps.filter((x) => x === STEP_REVISED)).toHaveLength(1);
+  expect(got.steps.filter((x) => REVISED.test(x))).toHaveLength(1);
+  expect(got.steps).not.toContain(STEP_RETRY);
+  expect(stored.provenance.work.items.some((x) => x.draft)).toBe(false);
+  expect(stored.provenance.grounding.revised).toBe(2);
+  await expect(answer.getByText(DRAFT_TAG)).toHaveCount(0);
+  // The fake engine repeats its answer, so both amounts stay unchecked in place.
+  for (const n of ['4,321', '5,432']) {
+    await expect(answer.locator('.h-msg-b .fx-unchecked').filter({ hasText: n })).toHaveCount(1);
+  }
 
   await page.reload();
   const again = page.locator('section.h-askx-main .h-askx-msgs .h-msg.fathom').last();
   await expect(again).toBeVisible();
   const after = await expectFinished(again, stored);
   expect(after.notes).toEqual(got.notes);
+  expect(after.steps).toEqual(got.steps);
   await expectPhoneFit(page, again.locator('.h-work'));
 });
 
