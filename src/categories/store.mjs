@@ -19,7 +19,9 @@ export function loadCategoryInputs(db) {
     i.file_id AS category_file_id, i.locator AS category_locator, coalesce(i.updated_at,f.uploaded_at,t.date) AS category_at
     FROM transactions t LEFT JOIN transaction_category_imports i ON i.transaction_id=t.id
     LEFT JOIN files f ON f.id=t.file_id ORDER BY t.date,t.id`).all();
-  return { accounts,transactions,corrections:db.prepare(`SELECT c.*, a.evidence AS auto_evidence FROM transaction_category_corrections c
+  return { accounts,transactions,declinedTransactionIds:db.prepare(`SELECT cast(i.subject AS INTEGER) AS id FROM confirm_items i
+      JOIN confirm_auto_declined d ON d.item_id=i.id WHERE i.kind='transaction_category'`).all().map(r=>r.id),
+    corrections:db.prepare(`SELECT c.*, a.evidence AS auto_evidence FROM transaction_category_corrections c
       LEFT JOIN confirm_items i ON i.kind='transaction_category' AND i.subject=cast(c.transaction_id AS TEXT)
       LEFT JOIN confirm_auto a ON a.item_id=i.id AND a.rule='jev_category'`).all().map(r=>({...r,auto:parseJson(r.auto_evidence,null)})),
     merchantRules:db.prepare('SELECT * FROM category_merchant_rules').all(), sourceRules:db.prepare('SELECT * FROM category_source_rules').all(),

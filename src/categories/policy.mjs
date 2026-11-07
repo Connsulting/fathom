@@ -6,4 +6,4 @@ export function confidenceBand(confidence, policy = CONFIDENCE_POLICY) {
   if (policy.review != null && confidence >= policy.review) return 'review';
   return 'uncategorized';
 }
-export const jevEvidence = confidence => `Jev guess, ${Math.round(confidence * 100)}% confident`;
+export const jevEvidence = () => "Fathom's categorization";
