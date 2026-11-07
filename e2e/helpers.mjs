@@ -362,7 +362,8 @@ export function mainRoutes() {
     ['connect', 'Bring your own AI'],
     ['engine', 'Running'],
     ['email', 'Monthly digest'],
-    ['packs', 'What Fathom knows']
+    ['packs', 'What Fathom knows'],
+    ['memories', 'Memories']
   ];
 }
 
