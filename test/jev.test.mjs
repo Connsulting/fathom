@@ -65,3 +65,16 @@ test('timeout is bounded, charged, and a later valid request remains live',async
   await assert.rejects(jev.choose(questions()),/jev_unavailable/); hanging=false;
   assert.equal((await jev.choose(questions())).length,1); assert.ok(jev.stats().costUsd>0);
 });
+
+test('admission runs before every dispatch, retries included, and a refusal sends nothing',async t=>{
+  const {keyFile}=setup(t); let calls=0, refusal=null; const entries=[];
+  const jev=await createJev({keyFile,admit:()=>refusal,sleep:async()=>{},ledger:{record:e=>entries.push(e),monthSpendUsd:()=>0},
+    transport:async()=>{calls++; refusal='engine_paused'; return new Response('',{status:503});}});
+  await assert.rejects(jev.choose(questions()),e=>e.code==='engine_paused');
+  assert.equal(calls,1,'the retry after a pause is never sent'); assert.equal(entries.length,1);
+  refusal='funding_unavailable';
+  await assert.rejects(jev.choose(questions()),e=>e.code==='funding_unavailable'); assert.equal(calls,1);
+  refusal=null; const ok=await createJev({keyFile,admit:()=>null,transport:async(_,o)=>Response.json(response(JSON.parse(o.body)))});
+  assert.equal((await ok.choose(questions()))[0].choice,'Groceries');
+  await assert.rejects(createJev({keyFile,admit:'yes'}),/jev_bad_options/);
+});

@@ -10,6 +10,8 @@ import { rmSync } from 'node:fs';
 import { loadConfig } from '../src/config.mjs';
 import { createHandler } from '../src/api/router.mjs';
 import { createAuthService } from '../src/auth/service.mjs';
+import { createRuntimeRegistry } from '../src/platform/runtime.mjs';
+import { createKeyService } from '../src/mcp/keys.mjs';
 import { setSetting } from '../src/store/db.mjs';
 import { createSessionFixture, freePort, postJson, request, tempInstance } from './helpers/server.mjs';
 import { createAuthenticator } from './helpers/webauthn.mjs';
@@ -50,7 +52,11 @@ async function fixture(t) {
     },
   };
   const auth = createAuthService({ platform: temp.platform, config, transport, now });
-  server = http.createServer(createHandler({ db: temp.db, platform: temp.platform, config, auth, transport }));
+  // The router serves the instance's household through a runtime registry over temp.db.
+  const household = await temp.household(config, { transport });
+  const runtimes = createRuntimeRegistry({ platform: temp.platform, config, secrets: temp.secrets, build: () => household });
+  const keys = createKeyService({ platform: temp.platform, secret: () => temp.secrets.mcpSecret(), creatorActive: auth.creatorActive });
+  server = http.createServer(createHandler({ platform: temp.platform, config, runtimes, auth, keys }));
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); });
   return {
     db: temp.db, platform: temp.platform, auth, store: auth.store, hh: auth.store.servedHousehold().id, sent, state, baseUrl, now,

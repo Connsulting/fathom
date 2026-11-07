@@ -1,16 +1,19 @@
-import { resolve, basename, dirname } from 'node:path';
-import { openServedStore } from '../src/platform/ready.mjs';
-import { DB_FILE } from '../src/store/db.mjs';
+// node scripts/category-coverage.mjs --household <id>: category coverage counts of one household of
+// the instance in $FATHOM_DATA, as one JSON line. A refusal prints a fixed code.
+import { loadConfig } from '../src/config.mjs';
+import { openCliHousehold } from '../src/platform/cli.mjs';
 import { categoryCoverage } from '../src/categories/store.mjs';
 
-const path=process.argv[2];
-if(!path) { console.error('Usage: node scripts/category-coverage.mjs <store-directory-or-file>'); process.exitCode=2; }
-else {
-  let store;
-  try {
-    const absolute=resolve(path);
-    store=openServedStore({dataDir:basename(absolute)===DB_FILE ? dirname(absolute) : absolute});
-    console.log(JSON.stringify(categoryCoverage(store.db)));
-  } catch(error) { console.error(error?.code ?? 'category_coverage_failed'); process.exitCode=1; }
-  finally { store?.db.close(); store?.platform.close(); }
+let cli;
+try {
+  cli = await openCliHousehold(loadConfig(), process.argv.slice(2));
+  if (cli.argv.length) {
+    console.error('Usage: node scripts/category-coverage.mjs --household <id>');
+    process.exitCode = 2;
+  } else console.log(JSON.stringify(categoryCoverage(cli.household.db)));
+} catch (error) {
+  console.error(typeof error?.code === 'string' && /^[a-z_]{1,64}$/.test(error.code) ? error.code : 'category_coverage_failed');
+  process.exitCode = 1;
+} finally {
+  await cli?.close();
 }

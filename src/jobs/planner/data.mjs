@@ -10,6 +10,7 @@
 // ownerOf(value) -> 'owner' | 'spouse' | 'joint' | 'business' | null (ingest stores option labels)
 
 import { parseJson, cents } from '../../store/db.mjs';
+import { accountNaming } from '../../accounts/naming.mjs';
 import { addDays, daysBetween } from '../../scenario/build.mjs';
 import { monthEnd } from '../../ingest/format.mjs';
 import { ledgerDisplayName, ledgerKind } from '../../pnl/ledgers.mjs';
@@ -104,12 +105,13 @@ export function loadPlanningData(db, clock) {
     .filter(n => typeof n === 'string' && normalizeName(n) && ledgerKind(ledgerFacts, n, pnl.filter(l => sameName(l.entity, n))) !== 'spending').map(n => [normalizeName(n), n.trim()])).values()];
   const householdNames = parseJson(db.prepare("SELECT value FROM facts WHERE key = 'household.names'").get()?.value, {}) || {};
   const holders = new Map(db.prepare('SELECT account_id, holder FROM account_holders').all().map((r) => [r.account_id, r.holder]));
+  const naming = accountNaming(db);
   const accounts = db.prepare('SELECT * FROM accounts ORDER BY sort, id').all().map(a => {
     const kind = String(a.kind || '').toLowerCase();
     const stated = typeof byAccount[a.id] === 'string' && byAccount[a.id].trim() ? byAccount[a.id].trim() : null;
     return {
       id: a.id, inst: a.inst, mask: a.mask, name: a.name || '', display_name: a.display_name || null,
-      holder: holders.get(a.id) || null, householdNames, owner: ownerOf(a.owner), kind,
+      holder: holders.get(a.id) || null, householdNames, ...naming.hint(a.id), owner: ownerOf(a.owner), kind,
       fileId: a.file_id, entity: stated ?? (kind === 'business' && businessNames.length === 1 ? businessNames[0] : null),
       latest: latestBalance(db, a.id, clock),
     };

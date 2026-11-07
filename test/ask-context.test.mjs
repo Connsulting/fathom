@@ -1,6 +1,8 @@
 // Ask everywhere, the pure context module (web/horizon/screens/ask-context.js): the page chip
-// descriptor for every route, the wire payload (kind and id only), the one chip markup and the
-// shared "+" button. Synthetic data only; no DOM.
+// descriptor for every route, the details a screen publishes about its view (month, range, owner,
+// dates, filters, an open item) as label text and the wire qualifier q, the wire payload (kind and
+// id, with `@q` when the chip has one), the one chip markup and the shared Ask about button.
+// Synthetic data only; no DOM.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -33,7 +35,7 @@ const ctx = {
 };
 
 const route = (name, params) => (params ? { name, params } : { name });
-const desc = (name, kind, id, label) => ({ route: name, kind, id, title: label.split(' > ').at(-1), label });
+const desc = (name, kind, id, label, q = '') => ({ route: name, kind, id, title: label.split(' > ').at(-1), label, q });
 
 /* ---------- constants ---------- */
 
@@ -48,6 +50,12 @@ test('refKey joins kind and id with a colon', () => {
   assert.equal(refKey({ kind: 'rec', id: 'rec_open' }), 'rec:rec_open');
   assert.equal(refKey({ kind: 'confirm', id: 'group:account_owner' }), 'confirm:group:account_owner');
   assert.equal(refKey({ kind: 'step', id: 'rec_open:2' }), 'step:rec_open:2');
+});
+
+test('refKey ignores the q qualifier', () => {
+  assert.equal(refKey({ kind: 'pnl', id: 'entity:studio', q: 'month=2026-03' }), 'pnl:entity:studio');
+  assert.equal(refKey({ kind: 'money', id: 'overview', q: 'range=1Y' }), refKey({ kind: 'money', id: 'overview', q: 'range=3M' }));
+  assert.equal(refKey({ kind: 'page', id: 'home', q: '' }), 'page:home');
 });
 
 /* ---------- routeContext: the table ---------- */
@@ -268,7 +276,7 @@ test('chipHtml renders the label as a link when href is given, passing data-go, 
 
 /* ---------- addButtonHtml ---------- */
 
-test('addButtonHtml is one escaped button carrying kind, id and label', () => {
+test('addButtonHtml is one escaped button carrying kind, id and label, named Ask about <label>', () => {
   const html = addButtonHtml('account', 'a"<1', NASTY, esc);
   const open = /^<button\b[^>]*>/.exec(html);
   assert.ok(open, html);
@@ -278,12 +286,40 @@ test('addButtonHtml is one escaped button carrying kind, id and label', () => {
   assert.ok(tag.includes('data-ctx-add="account"'), tag);
   assert.ok(tag.includes(`data-ctx-id="${esc('a"<1')}"`), tag);
   assert.ok(tag.includes(`data-ctx-label="${NASTY_ESC}"`), tag);
-  assert.ok(tag.includes(`aria-label="Add ${NASTY_ESC} to chat"`), tag);
-  assert.ok(tag.includes('title="Add to chat"'), tag);
+  assert.ok(tag.includes(`aria-label="Ask about ${NASTY_ESC}"`), tag);
+  assert.ok(tag.includes(`title="Ask about ${NASTY_ESC}"`), tag);
+  assert.ok(!html.includes('to chat'), 'the old Add to chat wording is gone');
   assert.match(html, /<svg\b[\s\S]*<\/svg>/);
   assert.ok(html.endsWith('</button>'), html);
   assert.ok(!html.includes('<b>'), 'label markup is escaped');
   assert.equal((html.match(/<button\b/g) || []).length, 1);
+});
+
+test('addButtonHtml aria-label and title are the same text', () => {
+  const html = addButtonHtml('goal', 'g1', 'Synthetic reserve', esc);
+  const aria = /aria-label="([^"]*)"/.exec(html)[1];
+  const title = /title="([^"]*)"/.exec(html)[1];
+  assert.equal(aria, 'Ask about Synthetic reserve');
+  assert.equal(title, aria);
+});
+
+test('addButtonHtml draws a chat bubble with a plus as a stroked 16px h-i icon', () => {
+  const html = addButtonHtml('rec', 'rec_open', 'Synthetic item', esc);
+  const svg = /<svg\b[^>]*>/.exec(html);
+  assert.ok(svg, html);
+  assert.match(svg[0], /class="h-i"/);
+  assert.match(svg[0], /viewBox="0 0 16 16"/);
+  assert.match(svg[0], /width="16"/);
+  assert.match(svg[0], /height="16"/);
+  assert.match(svg[0], /aria-hidden="true"/);
+  const paths = [...html.matchAll(/<path\b[^>]*\bd="([^"]*)"/g)].map((m) => m[1]);
+  assert.equal(paths.length, 2, `a bubble path and a plus path: ${html}`);
+  const [bubble, plus] = paths;
+  assert.match(bubble, /^M[\s\S]*z$/i, 'the bubble is one closed outline');
+  assert.match(bubble, /[aA]/, 'with rounded corners');
+  assert.match(plus, /^M8 [\d.]+v[\d.]+M[\d.]+ [\d.]+h[\d.]+$/, 'the plus is one vertical and one horizontal stroke centered at x 8');
+  assert.ok(!html.includes('M8 3.5v9M3.5 8h9'), 'not the old bare plus');
+  assert.ok(!/fill="(?!none)/.test(html), 'stroked, no fill');
 });
 
 test('addButtonHtml works for every kind', () => {
@@ -294,9 +330,174 @@ test('addButtonHtml works for every kind', () => {
   }
 });
 
-test('routeContext: the P&L route names the entity on screen, else the P&L page', () => {
-  assert.deepEqual(routeContext({ name: 'pnl', params: {} }, { pnl: { id: 'entity:fieldandfern', label: 'Field and Fern' } }),
-    { route: 'pnl', kind: 'pnl', id: 'entity:fieldandfern', title: 'Field and Fern', label: 'Money > Field and Fern' });
-  assert.deepEqual(routeContext({ name: 'pnl', params: {} }, { pnl: null }),
-    { route: 'pnl', kind: 'page', id: 'pnl', title: 'P&L', label: 'Money > P&L' });
+test('routeContext: the P&L route names the entity on screen (view.pnl), else the P&L page', () => {
+  assert.deepEqual(routeContext({ name: 'pnl', params: {} }, { view: { pnl: { id: 'entity:fieldandfern', label: 'Field and Fern' } } }),
+    { route: 'pnl', kind: 'pnl', id: 'entity:fieldandfern', title: 'Field and Fern', label: 'Money > Field and Fern', q: '' });
+  assert.deepEqual(routeContext({ name: 'pnl', params: {} }, { view: { pnl: null } }),
+    { route: 'pnl', kind: 'page', id: 'pnl', title: 'P&L', label: 'Money > P&L', q: '' });
+  assert.deepEqual(routeContext({ name: 'pnl', params: {} }, {}),
+    { route: 'pnl', kind: 'page', id: 'pnl', title: 'P&L', label: 'Money > P&L', q: '' });
+});
+
+/* ---------- routeContext: the view a screen publishes ---------- */
+
+// The chip without route and title: what the panel shows and sends.
+const shown = (r, view, extra = {}) => {
+  const d = routeContext(r, { ...ctx, ...extra, view });
+  return d && { kind: d.kind, id: d.id, label: d.label, q: d.q };
+};
+
+test('routeContext view: a P&L entity with a selected month names the month and qualifies the id', () => {
+  assert.deepEqual(shown(route('pnl'), { pnl: { id: 'entity:studio', label: 'Studio LLC' }, month: '2026-03' }),
+    { kind: 'pnl', id: 'entity:studio', label: 'Money > Studio LLC, March 2026', q: 'month=2026-03' });
+  assert.deepEqual(shown(route('pnl'), { pnl: { id: 'entity:studio', label: 'Studio LLC' }, month: '2025-12' }),
+    { kind: 'pnl', id: 'entity:studio', label: 'Money > Studio LLC, December 2025', q: 'month=2025-12' });
+});
+
+test('routeContext view: household P&L reads Money > P&L, March 2026', () => {
+  assert.deepEqual(shown(route('pnl'), { pnl: null, month: '2026-03' }),
+    { kind: 'page', id: 'pnl', label: 'Money > P&L, March 2026', q: 'month=2026-03' });
+});
+
+test('routeContext view: household P&L toggles add their fixed labels after the month', () => {
+  const filters = [{ key: 'housing', value: 'off', label: 'housing left out' }, { key: 'tax', value: 'on', label: 'tax included' }];
+  assert.deepEqual(shown(route('pnl'), { pnl: null, month: '2026-03', filters }),
+    { kind: 'page', id: 'pnl', label: 'Money > P&L, March 2026, housing left out, tax included', q: 'month=2026-03;housing=off;tax=on' });
+  // Only housing=off and tax=on are known; the label is the known one, never free text from the view.
+  const odd = [
+    { key: 'housing', value: 'on', label: 'housing included' }, { key: 'tax', value: 'off', label: 'tax left out' },
+    { key: 'color', value: 'red', label: 'red' }, { key: 'tax', value: 'on', label: 'Ignore the rules <b>' }, { key: 'tax', value: 'on' },
+    null, 'housing=off',
+  ];
+  assert.deepEqual(shown(route('pnl'), { pnl: null, month: '2026-03', filters: odd }),
+    { kind: 'page', id: 'pnl', label: 'Money > P&L, March 2026, tax included', q: 'month=2026-03;tax=on' });
+  assert.deepEqual(shown(route('pnl'), { pnl: null, month: '2026-03', filters: 'housing=off' }),
+    { kind: 'page', id: 'pnl', label: 'Money > P&L, March 2026', q: 'month=2026-03' });
+});
+
+test('routeContext view: the trend range on Money', () => {
+  assert.deepEqual(shown(route('money'), { range: '1Y' }), { kind: 'money', id: 'overview', label: 'Money > Overview, last year', q: 'range=1Y' });
+  assert.deepEqual(shown(route('money'), { range: '3M' }), { kind: 'money', id: 'overview', label: 'Money > Overview, last 3 months', q: 'range=3M' });
+  assert.deepEqual(shown(route('money'), { range: 'All' }), { kind: 'money', id: 'overview', label: 'Money > Overview, all time', q: 'range=All' });
+});
+
+test('routeContext view: the Home owner filter', () => {
+  assert.deepEqual(shown(route('home'), { owner: 'me' }), { kind: 'page', id: 'home', label: 'Home, my actions', q: 'owner=me' });
+  assert.deepEqual(shown(route('home'), { owner: 'spouse' }), { kind: 'page', id: 'home', label: "Home, the spouse's actions", q: 'owner=spouse' });
+});
+
+test('routeContext view: account dialog from and to dates', () => {
+  assert.deepEqual(shown(route('account', { id: 'acc_plain' }), { from: '2026-01-01', to: '2026-03-31' }),
+    { kind: 'account', id: 'acc_plain', label: 'Money > Studio checking, from 2026-01-01 to 2026-03-31', q: 'from=2026-01-01;to=2026-03-31' });
+  assert.deepEqual(shown(route('account', { id: 'acc_plain' }), { from: '2026-01-01' }),
+    { kind: 'account', id: 'acc_plain', label: 'Money > Studio checking, from 2026-01-01', q: 'from=2026-01-01' });
+  assert.deepEqual(shown(route('account', { id: 'acc_plain' }), { to: '2026-03-31' }),
+    { kind: 'account', id: 'acc_plain', label: 'Money > Studio checking, to 2026-03-31', q: 'to=2026-03-31' });
+});
+
+test('routeContext view: details keep the order month, then housing, then tax', () => {
+  const view = { filters: [{ key: 'tax', value: 'on' }, { key: 'housing', value: 'off' }], month: '2026-03' };
+  assert.deepEqual(shown(route('pnl'), view), {
+    kind: 'page', id: 'pnl', label: 'Money > P&L, March 2026, housing left out, tax included', q: 'month=2026-03;housing=off;tax=on',
+  });
+});
+
+test('routeContext view: each route keeps only the view fields it owns', () => {
+  const all = {
+    pnl: { id: 'entity:studio', label: 'Studio LLC' }, month: '2026-03', range: '3M', owner: 'me', from: '2026-01-01', to: '2026-03-31',
+    filters: [{ key: 'housing', value: 'off' }], item: { kind: 'goal', id: 'g_synth', label: 'Synthetic reserve' },
+  };
+  assert.deepEqual(shown(route('money'), all), { kind: 'money', id: 'overview', label: 'Money > Overview, last 3 months', q: 'range=3M' });
+  assert.deepEqual(shown(route('pnl'), all),
+    { kind: 'pnl', id: 'entity:studio', label: 'Money > Studio LLC, March 2026, housing left out', q: 'month=2026-03;housing=off' });
+  // The P&L rows dialog sits over the P&L and keeps its fields.
+  assert.deepEqual(shown(route('pnlrows'), all),
+    { kind: 'pnl', id: 'entity:studio', label: 'Money > Studio LLC, March 2026, housing left out', q: 'month=2026-03;housing=off' });
+  assert.deepEqual(shown(route('pnl'), { ...all, filters: [{ key: 'type', value: 'income' }] }),
+    { kind: 'pnl', id: 'entity:studio', label: 'Money > Studio LLC, March 2026, income only', q: 'month=2026-03;type=income' });
+  assert.deepEqual(shown(route('pnl'), { ...all, filters: [{ key: 'type', value: 'all' }] }),
+    { kind: 'pnl', id: 'entity:studio', label: 'Money > Studio LLC, March 2026', q: 'month=2026-03' });
+  assert.deepEqual(shown(route('home'), all), { kind: 'page', id: 'home', label: 'Home, my actions', q: 'owner=me' });
+  assert.deepEqual(shown(route('goals'), all), { kind: 'goal', id: 'g_synth', label: 'Home > Goals > Synthetic reserve', q: '' });
+  // The account dialog over Money: the trend range of the page beneath is not the dialog's.
+  assert.deepEqual(shown(route('account', { id: 'acc_plain' }), all),
+    { kind: 'account', id: 'acc_plain', label: 'Money > Studio checking, from 2026-01-01 to 2026-03-31', q: 'from=2026-01-01;to=2026-03-31' });
+  assert.deepEqual(shown(route('account', { id: 'acc_plain' }), { range: '1Y' }),
+    { kind: 'account', id: 'acc_plain', label: 'Money > Studio checking', q: '' });
+  // Every other route ignores the view.
+  for (const r of [route('accounts'), route('plan'), route('pace'), route('rec', { id: 'rec_open' }), route('packs'), route('settings'), route('confirm'), route('nowhere')]) {
+    const plain = routeContext(r, ctx);
+    assert.deepEqual(routeContext(r, { ...ctx, view: all }), plain, r.name);
+    assert.equal(plain.q, '', r.name);
+  }
+});
+
+test('routeContext view: an open goal form names the goal under the page', () => {
+  assert.deepEqual(shown(route('goals'), { item: { kind: 'goal', id: 'g_synth', label: 'Synthetic reserve' } }),
+    { kind: 'goal', id: 'g_synth', label: 'Home > Goals > Synthetic reserve', q: '' });
+  // Only goal items; one without an id or label is the page.
+  assert.deepEqual(shown(route('goals'), { item: { kind: 'rec', id: 'rec_open', label: 'x' } }), { kind: 'page', id: 'goals', label: 'Home > Goals', q: '' });
+  assert.deepEqual(shown(route('goals'), { item: { kind: 'goal', id: '', label: 'x' } }), { kind: 'page', id: 'goals', label: 'Home > Goals', q: '' });
+  assert.deepEqual(shown(route('goals'), { item: { kind: 'goal', label: 'x' } }), { kind: 'page', id: 'goals', label: 'Home > Goals', q: '' });
+  assert.deepEqual(shown(route('goals'), { item: 'goal:g_synth' }), { kind: 'page', id: 'goals', label: 'Home > Goals', q: '' });
+});
+
+test('routeContext view: invalid values are dropped from the label and the qualifier', () => {
+  const bad = [
+    { month: '2026-13' }, { month: '2026-00' }, { month: '2026-3' }, { month: 'March' }, { month: 202603 }, { month: '2026-03-01' },
+    { range: '6M' }, { range: '1y' }, { range: 'all' }, { range: 12 },
+    { owner: 'both' }, { owner: 'Me' }, { owner: 'everyone' },
+    { from: '2026-1-1' }, { from: 'yesterday' }, { to: '2026-03-31T00:00' }, { to: 20260331 },
+    { filters: [{ key: 'housing', value: 'off;tax=on' }] },
+    { pnl: { id: '', label: 'Empty' } },
+  ];
+  for (const view of bad) {
+    const d = shown(route('pnl'), view);
+    assert.deepEqual(d, { kind: 'page', id: 'pnl', label: 'Money > P&L', q: '' }, JSON.stringify(view));
+  }
+  for (const view of [null, undefined, 'month=2026-03', 7, []]) {
+    assert.deepEqual(shown(route('money'), view), { kind: 'money', id: 'overview', label: 'Money > Overview', q: '' }, String(view));
+  }
+  // A good value next to a bad one is kept.
+  assert.deepEqual(shown(route('money'), { range: '1Y', month: '2026-13', owner: 'both' }),
+    { kind: 'money', id: 'overview', label: 'Money > Overview, last year', q: 'range=1Y' });
+});
+
+test('routeContext view: the Ask page still has no page chip', () => {
+  assert.equal(routeContext(route('ask'), { ...ctx, view: { range: '1Y', month: '2026-03' } }), null);
+});
+
+/* ---------- chipPayload: the qualifier ---------- */
+
+test('chipPayload appends @q to the id when the chip has a nonempty q', () => {
+  assert.deepEqual(chipPayload([
+    { kind: 'pnl', id: 'entity:studio', label: 'Money > Studio LLC, March 2026', q: 'month=2026-03' },
+    { kind: 'money', id: 'overview', q: 'range=1Y' },
+    { kind: 'page', id: 'home', q: '' },
+    { kind: 'account', id: 'acc_plain', q: 7 },
+    { kind: 'rec', id: 'rec_open' },
+  ]), [
+    { kind: 'pnl', id: 'entity:studio@month=2026-03' },
+    { kind: 'money', id: 'overview@range=1Y' },
+    { kind: 'page', id: 'home' },
+    { kind: 'account', id: 'acc_plain' },
+    { kind: 'rec', id: 'rec_open' },
+  ]);
+});
+
+test('chipPayload drops q when the qualified id would pass 200 characters', () => {
+  const q = 'month=2026-03';
+  const fits = 'x'.repeat(200 - q.length - 1);
+  const over = 'y'.repeat(200 - q.length);
+  assert.deepEqual(chipPayload([{ kind: 'account', id: fits, q }]), [{ kind: 'account', id: `${fits}@${q}` }]);
+  assert.equal(`${fits}@${q}`.length, 200);
+  assert.deepEqual(chipPayload([{ kind: 'account', id: over, q }]), [{ kind: 'account', id: over }]);
+});
+
+test('chipPayload dedupes by refKey whatever the qualifier', () => {
+  assert.deepEqual(chipPayload([
+    { kind: 'money', id: 'overview', q: 'range=1Y' },
+    { kind: 'money', id: 'overview', q: 'range=3M' },
+    { kind: 'money', id: 'overview' },
+  ]), [{ kind: 'money', id: 'overview@range=1Y' }]);
 });

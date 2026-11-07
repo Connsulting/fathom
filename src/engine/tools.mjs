@@ -17,12 +17,27 @@ export function createRegistryServer(registry = [], { purpose, ctx } = {}) {
     offered.push({ entry, validate: compileSchema(entry.inputSchema) });
   }
   offered.sort((a, b) => a.entry.name.localeCompare(b.entry.name));
+  if (ctx?.conversationKey && ctx.actorId && typeof ctx.db?.prepare === 'function') {
+    ctx = { ...ctx, evidenceMessageId: ctx.db.prepare('SELECT coalesce(max(id), 0) AS id FROM messages WHERE conversation_key = ?').get(ctx.conversationKey).id };
+  }
   const results = [];
+  const reject = (name, args, error) => {
+    results.push({ name, args: structuredClone(args), isError: true, result: { error } });
+    return { isError: true, content: [{ type: 'text', text: error }] };
+  };
   const invoke = async (name, args) => {
     const found = offered.find(item => item.entry.name === name);
-    if (!found || !found.validate(args)) {
-      results.push({ name, args: structuredClone(args), isError: true, result: { error: 'Tool name or arguments rejected' } });
-      return { isError: true, content: [{ type: 'text', text: 'Tool name or arguments rejected' }] };
+    if (!found) return reject(name, args, 'Tool is not available for this request.');
+    if (!found.validate(args)) {
+      const error = found.validate.errors.map(e => {
+        const path = 'args' + e.instancePath.replaceAll('/', '.')
+          + (e.params.missingProperty ? `.${e.params.missingProperty}` : '')
+          + (e.params.additionalProperty ? `.${e.params.additionalProperty}` : '');
+        const reason = e.keyword === 'enum' ? `must be one of ${e.params.allowedValues.join(', ')}`
+          : e.keyword === 'additionalProperties' ? 'is not a known argument' : e.message;
+        return `${path} ${reason}`;
+      }).join('; ');
+      return reject(name, args, error);
     }
     try {
       const result = await found.entry.handler(args, ctx);
@@ -30,8 +45,7 @@ export function createRegistryServer(registry = [], { purpose, ctx } = {}) {
       results.push({ name, args: structuredClone(args), result: JSON.parse(text) });
       return { content: [{ type: 'text', text }] };
     } catch (err) {
-      results.push({ name, args: structuredClone(args), isError: true, result: null });
-      return { isError: true, content: [{ type: 'text', text: err?.name === 'ToolError' || err?.name === 'FactAnswerError' ? err.message : 'Tool execution failed' }] };
+      return reject(name, args, err?.name === 'ToolError' || err?.name === 'FactAnswerError' ? err.message : 'Tool execution failed');
     }
   };
   const instance = new McpServer({ name: 'fathom', version: '1.0.0' });

@@ -1,13 +1,16 @@
 // Platform database (platform.sqlite): households, accounts, memberships, operator grants,
-// credentials and sessions, beside the financial store (fathom.sqlite) in the data directory.
+// credentials, sessions, MCP keys and outbound flags. Each household's financial store lives in its
+// own root, `<dataDir>/households/<householdId>/fathom.sqlite` (households.storage_root).
 // Migrations are src/platform/migrations/NNN-name.sql, applied by the store's migrate().
 
-import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync } from 'node:fs';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDb, migrate, setSetting, MIGRATIONS_DIR, DB_FILE } from '../store/db.mjs';
 import { fsyncDir } from './fsutil.mjs';
+import { wrapDataKey } from './household-vault.mjs';
+import { initOutbound } from './outbound.mjs';
 
 export const PLATFORM_FILE = 'platform.sqlite';
 export const PLATFORM_MIGRATIONS_DIR = fileURLToPath(new URL('./migrations/', import.meta.url)).replace(/[\\/]$/, '');
@@ -90,22 +93,86 @@ export function createPlatformFile(file, { householdId, mode, operationId = newO
   return openPlatform(file);
 }
 
-// A fresh instance: platform.sqlite with one served household of `mode` and a migrated
-// fathom.sqlite whose store_identity names it, with init(db) run on the store before it is
-// published. Both are built at temporary names; the store is renamed into place first and the
-// platform last (a store with store_identity and no platform is recovered by the platform
-// migration, or automatically for a demo store). Refuses when either file exists. Returns open
-// handles { db, platform, householdId }; the caller closes both.
-export function createInstance(dataDir, { mode, init = () => {} } = {}) {
+export const HOUSEHOLDS_DIR = 'households';
+// The household root relative to the data directory, as households.storage_root records it.
+export const householdRootRel = householdId => `${HOUSEHOLDS_DIR}/${householdId}`;
+
+// A private directory (0700), created when missing; an existing one must be a private directory.
+function privateDir(path) {
+  try {
+    mkdirSync(path, { mode: 0o700 });
+  } catch (e) {
+    if (e?.code !== 'EEXIST') throw codeError('household_root_invalid');
+  }
+  const st = lstatSync(path);
+  if (st.isSymbolicLink() || !st.isDirectory() || (st.mode & 0o077) !== 0) throw codeError('household_root_invalid');
+}
+
+// Wrap a fresh random data key under the platform key and insert it as the household's active
+// version 1 (inside the caller's transaction).
+function insertDataKey(platform, householdId, platformKey, now) {
+  const key = randomBytes(32);
+  try {
+    const wrapped = wrapDataKey(platformKey, { householdId, version: 1, key });
+    platform.prepare(`INSERT INTO household_data_keys (household_id, key_version, wrapped_key, status, created_at)
+      VALUES (?, 1, ?, 'active', ?)`).run(householdId, wrapped, now);
+  } finally {
+    key.fill(0);
+  }
+}
+
+// Build `<root>/fathom.sqlite` at a temporary name inside the root (migrated, settings.mode,
+// init(db), store_identity naming the household) and rename it into place. The root must exist.
+function buildHouseholdStore(rootPath, { householdId, mode, operationId = null, init = () => {} }) {
+  const storeFile = join(rootPath, DB_FILE);
+  if (existsSync(storeFile)) throw codeError('instance_exists');
+  const tmp = `${storeFile}.tmp-${process.pid}`;
+  try {
+    buildTemp(tmp, db => {
+      migrate(db);
+      setSetting(db, 'mode', mode);
+      init(db);
+      db.exec(STORE_IDENTITY_DDL);
+      db.prepare('INSERT INTO store_identity (id, household_id, platform_operation) VALUES (1, ?, ?)').run(householdId, operationId);
+    });
+    renameSync(tmp, storeFile);
+    fsyncDir(storeFile);
+  } finally {
+    for (const f of sideFiles(tmp)) rmSync(f, { force: true });
+  }
+  return storeFile;
+}
+
+// The platform key from `secrets`, or null when none is available (the vault provisions lazily).
+function availableKey(secrets) {
+  try {
+    return secrets ? secrets.platformKey() : null;
+  } catch {
+    return null;
+  }
+}
+
+// A fresh instance: platform.sqlite with one served, active household of `mode` whose root
+// households/<id> (0700) holds a migrated fathom.sqlite bound to it by store_identity, with
+// init(db) run on the store before it is published. The platform row records storage_root and
+// generation 1, an all-enabled household_outbound row (nothing was ever sent from a fresh
+// instance) and, when `platformKey` is given, the household's wrapped data key. The store is
+// renamed into place first and the platform last. Refuses instance_exists when the platform, a
+// root store or any household root already exists. Returns { db, platform, householdId, root }
+// (root: the absolute household root path); the caller closes both handles.
+export function createInstance(dataDir, { mode, init = () => {}, platformKey = null } = {}) {
   if (mode !== 'real' && mode !== 'demo') throw new TypeError('createInstance mode must be real or demo');
   mkdirSync(dataDir, { recursive: true });
-  const storeFile = join(dataDir, DB_FILE);
   const platformFile = join(dataDir, PLATFORM_FILE);
-  if (existsSync(storeFile) || existsSync(platformFile)) throw codeError('instance_exists');
+  const householdsDir = join(dataDir, HOUSEHOLDS_DIR);
+  const occupied = () => existsSync(platformFile) || existsSync(join(dataDir, DB_FILE))
+    || (existsSync(householdsDir) && readdirSync(householdsDir).length > 0);
+  if (occupied()) throw codeError('instance_exists');
   const householdId = newHouseholdId();
   const operationId = newOperationId();
   const now = Date.now();
-  const storeTmp = `${storeFile}.tmp-${process.pid}`;
+  const relativeRoot = householdRootRel(householdId);
+  const root = join(dataDir, relativeRoot);
   const platformTmp = `${platformFile}.tmp-${process.pid}`;
   try {
     buildTemp(platformTmp, db => {
@@ -113,27 +180,25 @@ export function createInstance(dataDir, { mode, init = () => {} } = {}) {
       db.exec('BEGIN');
       try {
         insertServedHousehold(db, { id: householdId, mode, now, operationId, kind: 'create-instance' });
+        db.prepare('UPDATE households SET storage_root = ?, generation = 1 WHERE id = ?').run(relativeRoot, householdId);
+        initOutbound(db, householdId, { enabled: true, now });
+        if (platformKey) insertDataKey(db, householdId, platformKey, now);
         db.exec('COMMIT');
       } catch (e) {
         db.exec('ROLLBACK');
         throw e;
       }
     });
-    buildTemp(storeTmp, db => {
-      migrate(db);
-      setSetting(db, 'mode', mode);
-      init(db);
-      db.exec(STORE_IDENTITY_DDL);
-      db.prepare('INSERT INTO store_identity (id, household_id, platform_operation) VALUES (1, ?, ?)').run(householdId, operationId);
-    });
-    if (existsSync(storeFile) || existsSync(platformFile)) throw codeError('instance_exists');
-    renameSync(storeTmp, storeFile);
+    privateDir(householdsDir);
+    privateDir(root);
+    buildHouseholdStore(root, { householdId, mode, operationId, init });
+    if (existsSync(platformFile)) throw codeError('instance_exists');
     renameSync(platformTmp, platformFile);
     fsyncDir(platformFile);
   } finally {
-    for (const f of [...sideFiles(storeTmp), ...sideFiles(platformTmp)]) rmSync(f, { force: true });
+    for (const f of sideFiles(platformTmp)) rmSync(f, { force: true });
   }
-  const db = openDb(storeFile);
+  const db = openDb(join(root, DB_FILE));
   let platform;
   try {
     platform = openPlatform(platformFile);
@@ -141,7 +206,46 @@ export function createInstance(dataDir, { mode, init = () => {} } = {}) {
     db.close();
     throw e;
   }
-  return { db, platform, householdId };
+  return { db, platform, householdId, root };
+}
+
+// Storage for a household the platform already holds (MT-01 provisioning): its root
+// households/<id> (0700, must not exist yet), a migrated empty store bound to it with
+// settings.mode, then in one platform transaction the data key (when `secrets` yields a platform
+// key; otherwise the vault provisions it lazily on first use), an all-paused outbound row (or
+// all-enabled with `enabled`), storage_root and generation 1. The household keeps its status.
+// Refuses household_unavailable for an unknown, deleted or already rooted household and
+// target_exists when the root directory exists. Returns { householdId, root }.
+export function createHouseholdStorage({ platform, dataDir, householdId, mode, secrets = null, enabled = false, now = Date.now() } = {}) {
+  if (mode !== 'real' && mode !== 'demo') throw new TypeError('createHouseholdStorage mode must be real or demo');
+  const row = typeof householdId === 'string' ? platform.prepare('SELECT status, storage_root FROM households WHERE id = ?').get(householdId) : null;
+  if (!row || row.status === 'deleted' || row.storage_root != null) throw codeError('household_unavailable');
+  const relativeRoot = householdRootRel(householdId);
+  const root = join(dataDir, relativeRoot);
+  if (existsSync(root)) throw codeError('target_exists');
+  privateDir(join(dataDir, HOUSEHOLDS_DIR));
+  privateDir(root);
+  buildHouseholdStore(root, { householdId, mode });
+  const platformKey = availableKey(secrets);
+  platform.exec('BEGIN IMMEDIATE');
+  try {
+    const fresh = platform.prepare('SELECT status, storage_root FROM households WHERE id = ?').get(householdId);
+    if (!fresh || fresh.status === 'deleted' || fresh.storage_root != null) throw codeError('household_unavailable');
+    if (platformKey && !platform.prepare('SELECT 1 AS x FROM household_data_keys WHERE household_id = ?').get(householdId)) {
+      insertDataKey(platform, householdId, platformKey, now);
+    }
+    if (!platform.prepare('SELECT 1 AS x FROM household_outbound WHERE household_id = ?').get(householdId)) {
+      initOutbound(platform, householdId, { enabled, now });
+    }
+    platform.prepare('UPDATE households SET storage_root = ?, generation = 1, updated_at = ? WHERE id = ?').run(relativeRoot, now, householdId);
+    platform.exec('COMMIT');
+  } catch (e) {
+    platform.exec('ROLLBACK');
+    throw e;
+  } finally {
+    platformKey?.fill(0);
+  }
+  return { householdId, root };
 }
 
 // The household the singleton store serves, or null.

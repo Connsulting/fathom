@@ -3,7 +3,8 @@
 //
 // Covers src/platform/household-vault.mjs (per-household wrapped data keys, the FTHM2 envelope,
 // contained household roots), the platform key file loader in src/platform/backup-key.mjs,
-// platform migration 002, and the guarantee that the running server stays on FTHM1 until MT-03.
+// platform migration 002, and the MT-03 cutover: the running server reads and writes FTHM2 only, and
+// FTHM1 is reachable only from the offline tenancy migration.
 // Every household id, key, path and byte here is synthetic. Refusals are asserted on their fixed
 // `.code`, never on message text.
 
@@ -20,7 +21,8 @@ import { basename, dirname, join, relative, resolve } from 'node:path';
 import { ROOT, src } from './helpers/server.mjs';
 import { realStore, aggregatorFile, offEngine } from './helpers/ingest.mjs';
 import { openPlatform, createInstance } from '../src/platform/db.mjs';
-import * as LegacyVault from '../src/ingest/vault.mjs';
+import * as LegacyVault from '../src/platform/legacy-vault.mjs';
+import * as IngestVault from '../src/ingest/vault.mjs';
 
 const A = 'hh-synthetic-a';
 const B = 'hh-synthetic-b';
@@ -570,7 +572,7 @@ test('platform migration 002 gives every fresh platform an empty household_data_
   }
 });
 
-// ---------------------------------------------------------------- 9. the server keeps FTHM1
+// ---------------------------------------------------------------- 9. the server is on FTHM2 only
 
 function mjsFiles(dir) {
   return readdirSync(dir, { recursive: true }).map(String).filter(rel => rel.endsWith('.mjs') && !rel.split(/[\\/]/).includes('node_modules')).map(rel => join(dir, rel));
@@ -579,7 +581,7 @@ function mjsFiles(dir) {
 // Files under src/ and scripts/ whose string literals reference `target` (relative specifiers
 // resolved against the file; bare ones by basename).
 function referencesTo(target) {
-  const literal = /(['"`])([^'"`\n]*(?:household-vault|vault-convert)\.mjs)\1/g;
+  const literal = /(['"`])([^'"`\n]*(?:legacy-vault|vault-convert)\.mjs)\1/g;
   const out = new Set();
   for (const file of [...mjsFiles(join(ROOT, 'src')), ...mjsFiles(join(ROOT, 'scripts'))]) {
     if (resolve(file) === target) continue;
@@ -593,33 +595,29 @@ function referencesTo(target) {
   return [...out].sort();
 }
 
-test('the running server stays on FTHM1: only the conversion module imports the new codec, and ingest still writes FTHM1', async t => {
-  const codec = resolve(ROOT, 'src/platform/household-vault.mjs');
+test('the running server has no FTHM1 path: only the offline migration reaches the legacy codec, and ingest writes FTHM2', async t => {
+  const legacyCodec = resolve(ROOT, 'src/platform/legacy-vault.mjs');
   const convert = resolve(ROOT, 'src/platform/vault-convert.mjs');
-  assert.ok(existsSync(codec) && existsSync(convert), 'both modules exist');
-  assert.deepEqual(referencesTo(codec), ['src/platform/vault-convert.mjs'], 'household-vault.mjs is imported only by vault-convert.mjs');
-  assert.deepEqual(referencesTo(convert), [], 'nothing under src/ or scripts/ imports vault-convert.mjs');
+  assert.deepEqual(referencesTo(legacyCodec), ['src/platform/migrate-tenancy.mjs', 'src/platform/vault-convert.mjs'], 'legacy-vault.mjs is imported only by the migration and its conversion');
+  assert.deepEqual(referencesTo(convert), ['src/platform/migrate-tenancy.mjs'], 'vault-convert.mjs is imported only by the migration');
 
-  // The legacy vault keeps its API and format.
-  assert.deepEqual(Object.keys(LegacyVault).sort(), ['VaultError', 'clearStoredFiles', 'decrypt', 'encrypt', 'loadDataKey', 'readStoredFile', 'storeFile']);
-  const dataDir = await tempDir(t);
-  const key = randomBytes(32);
-  const stored = await LegacyVault.storeFile({ dataDir, key, id: 'f-legacyformat0000000001', bytes: CSV });
-  assert.ok(readFileSync(join(dataDir, stored)).subarray(0, 5).equals(Buffer.from('FTHM1')), 'storeFile writes FTHM1');
-  // No dual reader on the server side: an FTHM2 blob in the legacy files dir does not read.
-  const fthm2Id = 'f-legacyformat0000000002';
-  writeFileSync(join(dataDir, 'files', `${fthm2Id}.bin`), HV.sealObject(HV.dataKeyHandle({ householdId: A, version: 1, key }), { purpose: HV.PURPOSES.upload, objectId: fthm2Id, bytes: CSV }), { mode: 0o600 });
-  await assert.rejects(LegacyVault.readStoredFile({ dataDir, key, id: fthm2Id, storedPath: `files/${fthm2Id}.bin` }), err => err instanceof LegacyVault.VaultError);
+  // The server vault has no FTHM1 encrypt, decrypt or key loader.
+  assert.deepEqual(Object.keys(IngestVault).sort(), ['PURPOSES', 'VaultError', 'clearStoredFiles', 'openAccess', 'openVault', 'readStoredFile', 'sealAccess', 'storeFile', 'workDir']);
 
-  // An upload through the real ingest pipeline is stored FTHM1.
+  // An upload through the real ingest pipeline is stored FTHM2 under the household root.
   const s = await realStore();
   t.after(() => s.close());
   const { ingestFile } = await src('src/ingest/pipeline.mjs');
-  const r = await ingestFile(s.db, aggregatorFile('synthetic-fthm1.csv', [{ date: '2032-02-01', amount: '12.00', description: 'Synthetic row' }]), s.opts(await offEngine()));
-  const row = s.db.prepare('SELECT stored_path FROM files WHERE id = ?').get(r.fileId);
+  const r = await ingestFile(s.db, aggregatorFile('synthetic-fthm2.csv', [{ date: '2032-02-01', amount: '12.00', description: 'Synthetic row' }]), s.opts(await offEngine()));
+  const row = s.db.prepare('SELECT stored_path, sha256 FROM files WHERE id = ?').get(r.fileId);
   assert.equal(row.stored_path, `files/${r.fileId}.bin`);
-  const blob = readFileSync(join(s.dataDir, row.stored_path));
-  assert.ok(blob.subarray(0, 5).equals(Buffer.from('FTHM1')), 'the pipeline stores FTHM1');
-  assert.equal(sha256(await LegacyVault.readStoredFile({ dataDir: s.dataDir, key: s.key, id: r.fileId, storedPath: row.stored_path })),
-    s.db.prepare('SELECT sha256 FROM files WHERE id = ?').get(r.fileId).sha256, 'and the legacy reader opens it');
+  const blob = readFileSync(join(s.root, row.stored_path));
+  assert.ok(blob.subarray(0, 5).equals(Buffer.from('FTHM2')), 'the pipeline stores FTHM2');
+  const vault = await IngestVault.openVault(s.household);
+  const read = await IngestVault.readStoredFile({ vault, id: r.fileId, storedPath: row.stored_path, purpose: IngestVault.PURPOSES.upload });
+  assert.equal(sha256(read), row.sha256, 'and the household vault opens it');
+
+  // No dual reader: an FTHM1 blob under the same id in the household files dir does not read.
+  writeFileSync(join(s.root, row.stored_path), LegacyVault.encrypt(randomBytes(32), CSV, r.fileId), { mode: 0o600 });
+  await assert.rejects(IngestVault.readStoredFile({ vault, id: r.fileId, storedPath: row.stored_path, purpose: IngestVault.PURPOSES.upload }), err => err instanceof IngestVault.VaultError);
 });

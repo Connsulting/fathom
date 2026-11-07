@@ -1,16 +1,14 @@
-// `npm run plan`: one manual planning run over the real store in $FATHOM_DATA, through a scheduler
-// that has only the plan handler (planning runs only through the scheduler, so the run takes the
-// job lease and gets its job_runs row like any other). Prints the run counts as JSON and the
-// warning codes, never amounts. Exit 2 when there is no store or it is a demo store (nothing is
-// created or changed), 3 when another process (the server) holds the job lease, 1 when the run
-// fails. A real store opens only through openServedStore (refusing, for example,
-// platform_migration_required before the store is touched).
+// `npm run plan -- --household <id>`: one manual planning run over that household's store, through
+// a scheduler that has only the plan handler (planning runs only through the scheduler, so the run
+// takes the job lease and gets its job_runs row like any other, and honours the household's
+// outbound jobs flag). Prints the run counts as JSON and the warning codes, never amounts. Exit 2
+// when the household is a demo household (nothing is changed), 3 when another process (the
+// server) holds the job lease or the household's outbound jobs are paused, 1 when the household
+// cannot be opened (a fixed code: household_required, household_unavailable or a readiness code)
+// or the run fails.
 
-import { join } from 'node:path';
 import { loadConfig } from '../config.mjs';
-import { readStoreMode, DB_FILE } from '../store/db.mjs';
-import { openServedStore } from '../platform/ready.mjs';
-import { createRuntimeEngine } from '../engine/runtime.mjs';
+import { openCliHousehold } from '../platform/cli.mjs';
 import { createScheduler, defaultHandlers, SchedulerError } from './scheduler.mjs';
 
 const quiet = { log() {} };
@@ -23,28 +21,20 @@ async function main() {
     console.error(`plan: ${e.message}`);
     return 1;
   }
-  const file = join(config.dataDir, DB_FILE);
-  const mode = readStoreMode(file);
-  if (mode === null) {
-    console.error('plan: no store in FATHOM_DATA; start the server once with FATHOM_DEMO=0 to create one.');
-    return 2;
-  }
-  if (mode === 'demo') {
-    console.error('plan: FATHOM_DATA holds a demo store; planning runs on real stores only.');
-    return 2;
-  }
-  let db;
+  let cli;
   try {
-    const served = openServedStore(config);
-    served.platform.close();
-    db = served.db;
+    cli = await openCliHousehold(config, process.argv.slice(2));
   } catch (e) {
-    console.error(`plan: ${e.name === 'StartupError' ? e.message : 'store_unavailable'}`);
+    console.error(`plan: ${typeof e?.code === 'string' ? e.code : 'store_unavailable'}`);
     return 1;
   }
+  const { household } = cli;
   let scheduler = null;
   try {
-    const engine = createRuntimeEngine({ db, config });
+    if (household.mode === 'demo') {
+      console.error('plan: that household is a demo household; planning runs on real households only.');
+      return 2;
+    }
     const base = defaultHandlers({ publicUrl: config.publicUrl }).plan;
     let planning = null;
     const plan = async (ctx) => {
@@ -52,7 +42,10 @@ async function main() {
       planning = out.planning;
       return out;
     };
-    scheduler = createScheduler({ db, config, engine, handlers: { plan }, log: quiet });
+    scheduler = createScheduler({
+      db: household.db, config, engine: household.engine, handlers: { plan }, log: quiet,
+      allowed: () => household.outbound.enabled('jobs'), household: () => household,
+    });
     const run = await scheduler.runNow('plan');
     if (!run || run.status !== 'ok' || !planning) {
       console.error(`plan: run failed (${(run && run.errorClass) || 'Error'})`);
@@ -66,11 +59,15 @@ async function main() {
       console.error('plan: another Fathom process (likely the running server) holds the job lease; use Run now on the plan job in the app, or POST /api/jobs/plan/run.');
       return 3;
     }
+    if (e instanceof SchedulerError && e.code === 'paused') {
+      console.error('plan: outbound jobs are paused for that household; an admin resumes them in the app.');
+      return 3;
+    }
     console.error(`plan: run failed (${e && e.constructor ? e.constructor.name : 'Error'})`);
     return 1;
   } finally {
     if (scheduler) await scheduler.stop();
-    db.close();
+    await cli.close();
   }
 }
 

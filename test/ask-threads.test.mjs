@@ -18,7 +18,7 @@ import { createLiveAnswerer } from '../src/api/answerer.mjs';
 import { createThread, purgeTrash } from '../src/api/threads.mjs';
 import { defaultHandlers } from '../src/jobs/scheduler.mjs';
 import {
-  SERVER_TIMEOUT, withAuthenticatedServer, withServer, spawnServer, openStore, tempDb, tempDir, migrateLegacyStore,
+  SERVER_TIMEOUT, withAuthenticatedServer, withServer, spawnServer, openStore, tempDb, tempDir, migrateLegacyStore, migrateTenancyStore,
 } from './helpers/server.mjs';
 
 const T = { timeout: SERVER_TIMEOUT };
@@ -346,8 +346,10 @@ test('AC6 the migrated thread is first in the active list of a restarted 007 sto
     setSetting(db, 'mode', 'real');
     addConversation(db, 'ask', OLD_ASK_CREATED, OLD_ASK);
   });
-  // Since MT-01 a real store reaches the new release through the offline platform migration.
+  // Since MT-01 a real store reaches the new release through the offline platform migration, and
+  // since MT-03 through the offline tenancy migration into its household root.
   await migrateLegacyStore(dataDir);
+  await migrateTenancyStore(dataDir);
   await withAuthenticatedServer({ dataDir, env: REAL }, async s => {
     const lists = await listThreads(s);
     assert.equal(lists.active.length, 1);
@@ -395,6 +397,7 @@ test('AC5 the answer request carries this thread history and nothing from anothe
   t.after(async () => { s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
   seedDemo(s.db);
   const runtime = createRuntimeEngine({ db: s.db, config: loadConfig({ FATHOM_DATA: s.dataDir, FATHOM_ENGINE: 'fake' }) });
+  // The temp store's directory stands in as the household root.
   const packs = createLivePacks(s.db, { dataDir: s.dataDir });
   packs.refresh();
   const requests = [];
@@ -415,7 +418,7 @@ test('AC5 the answer request carries this thread history and nothing from anothe
   msg.run(b.key, 'me', 'Synthetic other thread question', '2026-11-05T09:05:01.000Z');
   msg.run(b.key, 'fathom', '<p>Synthetic other thread answer</p>', '2026-11-05T09:05:02.000Z');
 
-  const reply = await createLiveAnswerer({ engine, packs }).answer({ db: s.db, key: a.key, text: 'Synthetic follow up' });
+  const reply = await createLiveAnswerer({ engine, packs, root: s.dataDir }).answer({ db: s.db, key: a.key, text: 'Synthetic follow up' });
   assert.ok(!reply.notice, JSON.stringify(reply.paragraphs));
   assert.ok(requests.length >= 1);
   const req = requests[0];

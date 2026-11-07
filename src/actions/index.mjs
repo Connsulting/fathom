@@ -76,15 +76,10 @@ export function changeGoal(args, ctx, editing = false) {
   const { id, ...fields } = args;
   const current = editing ? ctx.db.prepare('SELECT * FROM goals WHERE id = ?').get(id) : null;
   const old = current ? parse(current.def, {}) : {};
-  let figureValues = null;
-  for (const [path, value, isMoney] of goalEvidence(fields)) {
+  for (const [path, value] of goalEvidence(fields)) {
     const prior = at(old, path);
     const stored = prior !== undefined ? [prior] : [];
-    if (isMoney) {
-      figureValues ??= ctx.db.prepare('SELECT v FROM figures WHERE unavailable_reason IS NULL').all().map(r => r.v);
-      stored.push(...figureValues);
-    }
-    requireEvidence(ctx, value, { stored });
+    requireEvidence(ctx, value, { stored, argument: path.join('.'), household: true });
   }
   let receipt = null;
   const opts = { now: new Date(ctx.now ?? Date.now()).toISOString(), onWrite(before, after) {

@@ -1,7 +1,9 @@
 // Opt-in live email check (`npm run email:test`): with FATHOM_LIVE_EMAIL=1, sends one test email
-// through the configured FATHOM_EMAIL_* transport and prints only the status and a fixed code.
-// Without it, exits 2 and sends nothing. Touches no store; prints no body, address, key or stack.
+// through the configured FATHOM_EMAIL_* transport (the instance transport; the dev transport writes
+// to <dataDir>/outbox) and prints only the status and a fixed code. Without it, exits 2 and sends
+// nothing. Touches no store; prints no body, address, key or stack.
 
+import { join } from 'node:path';
 import { loadConfig, ConfigError } from '../src/config.mjs';
 import { createTransport, EmailError } from '../src/email/transport.mjs';
 import { simpleDarkEmail } from '../src/email/palette.mjs';
@@ -29,7 +31,7 @@ async function main() {
   // Silence the transport's own log line so the output is exactly one status line.
   const log = { info: () => {}, log: () => {}, warn: () => {}, error: () => {} };
   try {
-    const transport = createTransport(config, { log });
+    const transport = createTransport(config, { outboxDir: join(config.dataDir, 'outbox'), log });
     const r = await transport.send({ subject: 'Fathom test email', text: TEXT, html: HTML });
     console.log(`email test: sent via ${transport.name} to ${r.recipients} recipient(s)`);
     return 0;

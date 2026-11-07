@@ -1,5 +1,4 @@
 import { spawn } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
 import { readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -7,7 +6,8 @@ import { test, expect } from '@playwright/test';
 import { openDb } from '../src/store/db.mjs';
 import { digest } from '../src/auth/store.mjs';
 import { ask, OWNER_OPTIONS } from '../src/ingest/confirm.mjs';
-import { createLocalData, localPort, removeLocalData, refuseSuppliedTarget } from './local-store.mjs';
+import { createLocalData, localPort, removeLocalData, refuseSuppliedTarget, householdStoreFile } from './local-store.mjs';
+import { secretEnv, secretsFor } from '../test/helpers/server.mjs';
 
 const REPO = fileURLToPath(new URL('..', import.meta.url));
 const REMOTE = !!(process.env.BASE_URL || process.env.FATHOM_SMOKE_BASE_URL);
@@ -38,12 +38,10 @@ test.describe('passkey accounts through the browser', () => {
     const port = await localPort();
     base = `http://localhost:${port}`;
     const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('FATHOM_')));
-    const keyFile = join(dataDir, 'data.key');
-    writeFileSync(keyFile, randomBytes(32), { mode: 0o600 });
     env = {
       ...inherited, FATHOM_DATA: dataDir, FATHOM_DEMO: '0', FATHOM_ENGINE: 'off',
       FATHOM_HOST: 'localhost', FATHOM_PORT: String(port), FATHOM_PUBLIC_URL: base,
-      FATHOM_DATA_KEY_FILE: keyFile, FATHOM_CLOCK: '2026-11-05',
+      ...secretEnv(secretsFor(dataDir)), FATHOM_CLOCK: '2026-11-05',
       FATHOM_EMAIL_TRANSPORT: 'dev', FATHOM_EMAIL_FROM: 'fathom@example.test', FATHOM_EMAIL_TO: OWNER,
     };
     serverOutput = '';
@@ -721,7 +719,7 @@ async function mailedLink(before, email) {
 }
 
 function emailSendCount() {
-  const db = openDb(join(dataDir, 'fathom.sqlite'));
+  const db = openDb(householdStoreFile(dataDir));
   try { return db.prepare('SELECT count(*) AS n FROM email_sends').get().n; }
   finally { db.close(); }
 }
@@ -809,7 +807,7 @@ async function usedLinkIsDenied(browser, link) {
 }
 
 function seedReturningHousehold() {
-  const db = openDb(join(dataDir, 'fathom.sqlite'));
+  const db = openDb(householdStoreFile(dataDir));
   try {
     db.prepare("INSERT INTO accounts (id, inst, name, owner, kind, mirror, parser) VALUES ('acct-auth-e2e', 'Synthetic Bank', 'Synthetic Checking', NULL, 'checking', 'manual', 'e2e')").run();
     const result = ask(db, {

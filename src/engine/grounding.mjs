@@ -234,7 +234,17 @@ export function findDates(text) {
   return found.sort((a, b) => a.index - b.index);
 }
 
-export function checkGrounding(prose, { toolResults = [], data = [], figures = {} } = {}) {
+function isCount(text, item) {
+  const before = text.slice(0, item.index);
+  const after = text.slice(item.index + item.text.length);
+  if (item.percent || /\$\s*$/.test(before) || /^\s*(?:%|percent\b|dollars?\b|cents?\b|USD\b)/i.test(after)) return false;
+  if (/\b(?:option|step|choice|item)\s+$/i.test(before) && /^\d+(?:st|nd|rd|th)?$/i.test(item.text)) return true;
+  if (!Number.isInteger(item.value) || item.value < 0 || item.value > 20 || !/^(?:\d+|[a-z]+)$/i.test(item.text)) return false;
+  return /^\s+(?:(?:open|closed|relevant|stored|new|other|separate|recent|more)\s+)?(?:goals?|parents?|accounts?|transactions?|payments?|holdings?|positions?|dependents?|children|kids?|options?|steps?|choices?|items?|ways?|reasons?|sources?|recommendations?|people|records?)\b/i.test(after)
+    || /^\s+per\s+parent\b/i.test(after);
+}
+
+export function checkGrounding(prose, { toolResults = [], data = [], figures = {}, allowCounts = false } = {}) {
   if (typeof prose !== 'string') throw new TypeError('Prose must be a string');
   const sources = { number: new Set(), percent: new Set() };
   collect(toolResults, sources);
@@ -248,6 +258,7 @@ export function checkGrounding(prose, { toolResults = [], data = [], figures = {
   const masked = maskContext(tokensMasked, true);
   for (const match of masked.matchAll(numberPattern)) {
     const item = literal(match[0]);
+    if (allowCounts && isCount(masked, { ...item, value: item.value * item.magnitude, text: match[0], index: match.index })) continue;
     if (![...sources[item.percent ? 'percent' : 'number']].some(value => matches(value, item))) {
       violations.push({ text: match[0].trim(), index: match.index, reason: 'number or unit absent from sources' });
     }
@@ -255,6 +266,7 @@ export function checkGrounding(prose, { toolResults = [], data = [], figures = {
   // Numeric expressions were judged whole above, so their magnitude words are not judged again.
   const wordsOnly = masked.replace(numberPattern, match => ' '.repeat(match.length));
   for (const phrase of wordQuantities(wordsOnly)) {
+    if (allowCounts && isCount(masked, phrase)) continue;
     if (!sources[phrase.percent ? 'percent' : 'number'].has(phrase.value) && !isStructural(masked, phrase)) {
       violations.push({ text: phrase.text, index: phrase.index, reason: 'numeric word absent from sources' });
     }

@@ -11,10 +11,13 @@ import { runPlanning, PlannerError, PLAN_JOB_ID } from '../../src/jobs/planner.m
 import { createScheduler, defaultHandlers, JOBS } from '../../src/jobs/scheduler.mjs';
 import { routes } from '../../src/api/router.mjs';
 import { loadConfig } from '../../src/config.mjs';
-import { openStore } from '../../src/server.mjs';
+import { createInstance, PLATFORM_FILE } from '../../src/platform/db.mjs';
 import { openDb, listTables, DB_FILE } from '../../src/store/db.mjs';
-import { runCommand, serveAppFixture } from '../helpers/server.mjs';
-import { scratch, buildRealStore, dumpTables, activeRecIds, parseJson, PACKS_DIR } from '../helpers/real-store.mjs';
+import { seedDemo } from '../../demo/seed.mjs';
+import { runCommand, serveAppFixture, instanceSecretsOf, secretsFor, secretEnv, servedStore } from '../helpers/server.mjs';
+import {
+  scratch, buildRealStore, householdOf, closeRealStore, storeFileOf, dumpTables, activeRecIds, parseJson, PACKS_DIR,
+} from '../helpers/real-store.mjs';
 import { planRun, claimPlanRun } from '../helpers/plan.mjs';
 
 const NOW = '2026-11-05';
@@ -28,9 +31,13 @@ const realConfig = dir => loadConfig({ FATHOM_DATA: dir, FATHOM_DEMO: '0', FATHO
 const AMOUNTS = ['143175', '143,175', '171810', '171,810', '18000', '18,000', '25000', '25,000', '40000', '40,000', '50000', '50,000', '290147', '290,147', '6000', '15000'];
 const leaks = text => AMOUNTS.filter(a => text.includes(a));
 
-function demoStore() {
+// A fresh demo instance, created and seeded as the server creates one on an empty data directory.
+async function demoStore() {
   const dir = S.dir();
-  const { db, platform } = openStore({ dataDir: dir, demo: 'auto' });
+  const { secrets } = await instanceSecretsOf(dir, 'demo');
+  const platformKey = secrets.platformKey();
+  const { db, platform } = createInstance(dir, { mode: 'demo', init: seedDemo, platformKey });
+  platformKey.fill(0);
   S.track(platform);
   return { dir, db: S.track(db) };
 }
@@ -39,11 +46,14 @@ function allTables(db) {
   return dumpTables(db, listTables(db));
 }
 
-// The in-process router with the server's scheduler (default handlers, not started).
+// The in-process router with the server's scheduler (default handlers, not started), running its
+// handlers in the served household's context.
 async function serve(db, config, engine = null) {
-  const scheduler = createScheduler({ db, config, engine, handlers: defaultHandlers({ publicUrl: null }), tickMs: 3600000, log: { log() {} } });
+  const scheduler = household => createScheduler({
+    db, config, engine, handlers: defaultHandlers({ publicUrl: null }), household, tickMs: 3600000, log: { log() {} },
+  });
   const app = await serveAppFixture({ authenticated: true, db, config, engine, scheduler });
-  return { ...app, async close() { await app.close(); await scheduler.stop(); } };
+  return { ...app, async close() { await app.close(); await app.household.scheduler.stop(); } };
 }
 
 describe('runPlanning', () => {
@@ -95,9 +105,9 @@ describe('runPlanning', () => {
 
   test('AC1: a failing run marks its job_runs row error with the class name only, and rethrows', async () => {
     const db = await S.store();
-    // A data directory whose Your plans pack has a broken manifest: loading packs throws.
-    const dataDir = S.dir();
-    const broken = join(dataDir, 'packs', 'your-plans');
+    // A household root whose Your plans pack has a broken manifest: loading packs throws.
+    const { root, config: { dataDir } } = householdOf(db);
+    const broken = join(root, 'packs', 'your-plans');
     mkdirSync(broken, { recursive: true });
     writeFileSync(join(broken, 'manifest.json'), '{ not json');
     await assert.rejects(plan(db, { dataDir }));
@@ -113,7 +123,7 @@ describe('runPlanning', () => {
   });
 
   test('AC1: runPlanning refuses a demo store with PlannerError demo_store and changes nothing', async () => {
-    const { db } = demoStore();
+    const { db } = await demoStore();
     const before = allTables(db);
     // The planner core directly: the refusal comes before any write, and claiming a job_runs row
     // would itself change the store, so the run id here is a placeholder.
@@ -190,7 +200,7 @@ describe('POST /api/jobs/plan/run', () => {
   });
 
   test('AC1: on a demo store the endpoint answers 409 and changes nothing', async () => {
-    const { dir, db } = demoStore();
+    const { dir, db } = await demoStore();
     const before = allTables(db);
     const app = await serve(db, loadConfig({ FATHOM_DATA: dir, FATHOM_ENGINE: 'off' }));
     try {
@@ -205,36 +215,41 @@ describe('POST /api/jobs/plan/run', () => {
 });
 
 describe('npm run plan (src/jobs/plan-cli.mjs)', () => {
-  const cli = env => runCommand(process.execPath, ['src/jobs/plan-cli.mjs'], { env: { FATHOM_ENGINE: 'off', FATHOM_CLOCK: NOW, ...env } });
+  // Since MT-03 the CLI names its household (--household <id>) and reads the instance secrets.
+  const cli = (env, householdId = servedStore(env.FATHOM_DATA)?.householdId) => runCommand(process.execPath, ['src/jobs/plan-cli.mjs', '--household', householdId],
+    { env: { FATHOM_ENGINE: 'off', FATHOM_CLOCK: NOW, ...secretEnv(secretsFor(env.FATHOM_DATA)), ...env } });
 
   test('AC1: the CLI plans a real store, exits 0 and prints counts without amounts', async () => {
     const dir = S.dir();
-    (await buildRealStore(dir)).close();
+    closeRealStore(await buildRealStore(dir));
     const out = await cli({ FATHOM_DATA: dir });
     assert.equal(out.code, 0, out.stderr);
     const counts = out.stdout.split('\n').map(l => parseJson(l.trim(), null)).find(x => x && typeof x === 'object' && x.recs);
     assert.ok(counts, `stdout has the counts JSON: ${out.stdout.slice(0, 300)}`);
     assert.ok(counts.recs.active > 0);
     assert.deepEqual(leaks(out.stdout + out.stderr), [], 'no amounts from the dataset');
-    const db = S.track(openDb(join(dir, DB_FILE)));
+    const db = S.track(openDb(storeFileOf(dir)));
     assert.equal(db.prepare("SELECT count(*) AS n FROM job_runs WHERE job_id = 'plan' AND status = 'ok'").get().n, 1);
   });
 
   test('AC1: the CLI exits 2 on a demo store and leaves it unchanged', async () => {
-    const { dir, db } = demoStore();
+    const { dir, db } = await demoStore();
     const before = allTables(db);
     db.close();
     const out = await cli({ FATHOM_DATA: dir });
     assert.equal(out.code, 2);
-    const again = S.track(openDb(join(dir, DB_FILE)));
+    const again = S.track(openDb(storeFileOf(dir)));
     assert.deepEqual(allTables(again), before);
   });
 
-  test('AC1: the CLI exits 2 when there is no store and does not create one', async () => {
+  // MT-03: an empty data directory has no household to open, the fixed code household_unavailable
+  // and exit 1 (2 is kept for a demo household).
+  test('AC1: the CLI exits 1 with household_unavailable when there is no instance and creates nothing', async () => {
     const dir = S.dir();
-    const out = await cli({ FATHOM_DATA: dir });
-    assert.equal(out.code, 2);
-    assert.equal(existsSync(join(dir, DB_FILE)), false);
+    const out = await cli({ FATHOM_DATA: dir }, 'hh-synthetic-absent');
+    assert.equal(out.code, 1, out.stderr);
+    assert.match(out.stderr, /^plan: household_unavailable$/m);
+    for (const name of [DB_FILE, PLATFORM_FILE, 'households']) assert.equal(existsSync(join(dir, name)), false, `${name} is not created`);
   });
 
   test('the CLI exits 3 while another process holds the job lease, and plans once it is released', async () => {

@@ -19,18 +19,18 @@
 
 import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { test, expect, resetDemo, gotoRoute, attentionHeadline, plain, S, REMOTE } from './helpers.mjs';
+import { householdRootDir, localDataDir } from './local-store.mjs';
 
 const JOB_IDS = ['plan', 'brief-email', 'deadline-alerts', 'freshness', 'trash-purge', 'confirm-guess', 'simplefin-sync'];
 
-// The main e2e server's data directory (playwright.config.mjs runs it on .e2e-data at the repo root).
-const OUTBOX = join(fileURLToPath(new URL('..', import.meta.url)), '.e2e-data', 'outbox');
+// The dev outbox of the main e2e server's household (its root under the E2E_DATA directory).
+const OUTBOX = () => join(householdRootDir(localDataDir()), 'outbox');
 const MASKED = 'o***@e***.invalid';
 
-const outboxFiles = () => (existsSync(OUTBOX) ? readdirSync(OUTBOX).filter((f) => f.endsWith('.json')) : []);
-const outboxSubject = (f) => JSON.parse(readFileSync(join(OUTBOX, f), 'utf8')).subject;
+const outboxFiles = () => (existsSync(OUTBOX()) ? readdirSync(OUTBOX()).filter((f) => f.endsWith('.json')) : []);
+const outboxSubject = (f) => JSON.parse(readFileSync(join(OUTBOX(), f), 'utf8')).subject;
 const history = (page) => page.locator('[data-email-history] tbody tr');
 
 test.beforeEach(async ({ request }) => {
