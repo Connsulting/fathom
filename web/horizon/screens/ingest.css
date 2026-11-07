@@ -41,7 +41,7 @@
   display: inline-flex; align-items: center; gap: 6px; padding: 1px 8px; border-radius: 999px;
   border: 1px solid var(--line2); font-size: 11.5px; line-height: 18px; color: var(--mu); white-space: nowrap;
 }
-.d-horizon .h-fresh::before { content: ''; width: 6px; height: 6px; border-radius: 50%; border: 1.5px solid currentColor; }
+.d-horizon .h-fresh::before { content: ''; flex: none; box-sizing: border-box; width: 6px; height: 6px; aspect-ratio: 1; border-radius: 50%; border: 1.5px solid currentColor; }
 .d-horizon .h-fresh.fresh { color: var(--ac); border-color: var(--acl); }
 .d-horizon .h-fresh.fresh::before { background: var(--ac); }
 .d-horizon .h-fresh.stale { color: var(--tx2); border-style: dashed; }
