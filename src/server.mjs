@@ -136,13 +136,13 @@ export async function startServer(config = loadConfig()) {
     closeStores();
     throw new StartupError(`API key secret: ${e.message}`);
   }
-  const mcp = createMcpHandler({ db, keys, config });
   let scheduler = null;
   try {
     scheduler = createScheduler({ db, config, engine, handlers: defaultHandlers({ publicUrl: config.publicUrl }), transport });
   } catch (err) {
     console.error('fathom: scheduler unavailable', codeOf(err));
   }
+  const mcp = createMcpHandler({ db, keys, config, scheduler });
   const answerer = createLiveAnswerer({ engine, packs });
   const server = http.createServer(createHandler({ db, platform, config, answerer, engine, packs, keys, mcp, auth, scheduler, transport }));
   applyTimeouts(server);

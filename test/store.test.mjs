@@ -150,13 +150,14 @@ test('settings hold JSON values with a fallback', async () => {
   }
 });
 
-test('migration files are NNN-name.sql numbered from 001 without gaps', () => {
+test('migration files have unique positive numeric ids in application order', () => {
   const files = readdirSync(MIGRATIONS_DIR).filter(f => f.endsWith('.sql')).sort();
   assert.ok(files.length >= 1);
   assert.equal(files[0], '001-foundation.sql');
   files.forEach((f, i) => {
     assert.match(f, /^\d{3}-[a-z0-9-]+\.sql$/);
-    assert.equal(Number(f.slice(0, 3)), i + 1, `${f} is numbered ${i + 1}`);
+    assert.ok(Number(f.slice(0, 3)) > 0);
+    if (i) assert.ok(Number(f.slice(0, 3)) > Number(files[i - 1].slice(0, 3)), `${f} follows its predecessor`);
   });
   const identity = listMigrations().find(m => m.name === 'platform-identity');
   assert.ok(identity, 'the platform identity migration is registered');

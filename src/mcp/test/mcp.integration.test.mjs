@@ -122,12 +122,12 @@ describe('write key', () => {
     const recs = JSON.parse(textOf(await client.callTool({ name: 'list_recommendations', arguments: {} })));
     const target = recs.find(r => r.status !== 'doing');
     assert.ok(target, 'a rec to move');
-    const before = await withStore(s.dbFile, db => db.prepare("SELECT count(*) AS n FROM rec_events WHERE actor = 'tool' AND rec_id = ?").get(target.id).n);
+    const before = await withStore(s.dbFile, db => db.prepare("SELECT count(*) AS n FROM rec_events WHERE actor LIKE 'key:%' AND rec_id = ?").get(target.id).n);
     const r = await client.callTool({ name: 'set_recommendation_status', arguments: { id: target.id, status: 'doing' } });
     assert.ok(!r.isError, textOf(r));
     assert.equal(JSON.parse(textOf(r)).status, 'doing');
     const events = await withStore(s.dbFile, db => db.prepare(
-      "SELECT * FROM rec_events WHERE actor = 'tool' AND rec_id = ? ORDER BY id").all(target.id).map(e => ({ ...e })));
+      "SELECT * FROM rec_events WHERE actor LIKE 'key:%' AND rec_id = ? ORDER BY id").all(target.id).map(e => ({ ...e })));
     assert.equal(events.length, before + 1);
     const last = events[events.length - 1];
     assert.equal(last.to_status, 'doing');
