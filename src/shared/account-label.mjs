@@ -141,3 +141,23 @@ export function accountLabel(account) {
   if (custom) return custom;
   return defaultAccountLabel(account);
 }
+
+function sureMask(account) {
+  const mask = String(account?.mask ?? '');
+  if (!/^\d{4}$/.test(mask) || account?.maskSure === false) return '';
+  return mask;
+}
+
+// Trend title: the shared label, with braces and markup stripped, and the mask once.
+export function trendLabel(account) {
+  const plain = String(accountLabel(account)).replace(/[{}<>]/g, '').replace(/\s+/g, ' ').trim();
+  const mask = sureMask(account);
+  return mask && !plain.includes(mask) ? `${plain} ${mask}` : plain;
+}
+
+// Planner source line for one account. The mask is not repeated.
+export function sourceLabel(account) {
+  const shown = accountLabel(account);
+  const mask = sureMask(account);
+  return mask && !shown.includes(mask) ? `${shown} ...${mask}` : shown;
+}

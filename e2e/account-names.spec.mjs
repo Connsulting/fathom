@@ -28,6 +28,10 @@ test.describe('account display names', { tag: '@an-acN' }, () => {
     await gotoRoute(page, 'confirm');
     const card = await deckFind(page, `[data-item="${item.id}"]`);
     await expect(card.locator('[data-field="name"]')).toContainText('Household reserve');
+    await card.locator('[data-field="name"] .h-acc-name').click();
+    await expect(card.locator('[data-acc-name]')).toBeVisible();
+    await card.locator('[data-acc-name]').press('Escape');
+    await expect(card.locator('[data-field="name"]')).toContainText('Household reserve');
   });
 });
 

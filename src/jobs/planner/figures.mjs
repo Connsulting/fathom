@@ -8,7 +8,7 @@
 
 import { estimatedPaymentSafeHarbor, solo401kRoom, sepRoom, hsaLimit, payrollTax, TAX_2026 } from '../../calc/index.mjs';
 import { cents } from '../../store/db.mjs';
-import { accountLabel } from '../../shared/account-label.mjs';
+import { accountLabel, sourceLabel } from '../../shared/account-label.mjs';
 import {
   pnlSums, ytd, dateLabel, monthLabel, cleanLabel, sum, addDays,
 } from './data.mjs';
@@ -123,7 +123,7 @@ export function computeFigures(data, facts, ctx) {
     if (!a.latest) continue;
     const src = `acct:${a.id}`;
     const shown = accountLabel(a);
-    out.source(src, `${shown}${a.mask && !shown.includes(a.mask) ? ` ...${a.mask}` : ''}`, dateLabel(a.latest.date), 'account');
+    out.source(src, sourceLabel(a), dateLabel(a.latest.date), 'account');
     out.put(`bal.${a.id}`, a.latest.amount, 'a', `Balance, ${shown}`, src, rowsLoc(a.latest.source, a.latest.ids), a.latest.fileId);
   }
   const withBal = kinds => accounts.filter(a => a.latest && kinds.includes(a.kind));
