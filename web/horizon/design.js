@@ -2298,6 +2298,7 @@ const KIT = {
   addBtn, ctxChipsHtml: () => askPanel.chipsHtml(), askRefs: (host) => askPanel.refs(host),
   onThread: (thread, host) => askPanel.onThread(thread, host), askPanelBtn: () => askPanel.collapseBtn(),
   askPanelToggle: () => askPanel.toggle(), askModal: () => askPanel.modalOpen(),
+  askPanelOpen: () => askPanel.open(), askPanelClose: () => askPanel.close(), askPanelIsOpen: () => askPanel.isOpen(),
   pageRoute: () => { const r = routeNow(); return isDlgRoute(r.name) ? underRoute(r.name) : r; },
   startTour: (opener) => tour.start(opener),
   newGoal: () => { if (routeNow().name !== 'goals') api.go('goals', {}); openGoalForm(null); }
