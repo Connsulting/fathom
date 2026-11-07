@@ -150,7 +150,7 @@ function build(family, seed, ordinal) {
         row.fields.payer = field('s0:C2'); row.fields.paymentDate = field('s0:A2'); row.held = ['taxYear', 'paymentDate'];
       } else {
         for (const [key, cell] of Object.entries({ jurisdiction: 'A2', taxYear: 'B2', paymentDate: 'C2', payer: 'F2', recipient: 'G2', taxYearBasis: 'H2' })) row.fields[key] = field(ref(0, cell));
-        row.fields.paymentDate = field('s0:C2', { op: 'month_anchor', locale: 'en-US', epoch });
+        row.fields.paymentDate = field(['s0:B2', 's0:C2'], { op: 'month_anchor', locale: 'en-US', epoch });
         row.dateDerivedFrom = ['s0:B2', 's0:C2'];
       }
     }

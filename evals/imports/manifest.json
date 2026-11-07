@@ -5570,7 +5570,7 @@
       "seed": 20320431,
       "format": "xlsx",
       "sourceSha256": "4e2c41b95f050cb89f1c9024bf25ee0f338157f7864c79a8e35076697a262d35",
-      "oracleSha256": "163a9d8604c0fad93ac8294ba81d977002d8c9d126cf6df18565fa23b4b9e1d8",
+      "oracleSha256": "746828a83aba6be3a54597315b39b34f1bb8bc2a28ee50068a2cc4d8a2c388f8",
       "oracle": {
         "records": {
           "entity": "Synthetic Studio",
@@ -5945,6 +5945,7 @@
               },
               "paymentDate": {
                 "refs": [
+                  "s0:B2",
                   "s0:C2"
                 ],
                 "transform": {
@@ -6022,6 +6023,7 @@
               },
               "paymentDate": {
                 "refs": [
+                  "s0:B2",
                   "s0:C2"
                 ],
                 "transform": {
@@ -6075,7 +6077,7 @@
       "seed": 20320432,
       "format": "xlsx",
       "sourceSha256": "11e1a3e36945842070c38cbc3614e40b74f763d9c881b8d771ff5455218605be",
-      "oracleSha256": "86f2405ea977d0661186fb7fb2d3e253f60f53b271b82474f7cc703dac3083df",
+      "oracleSha256": "6b9f494bd255769c844d3a5b93c5630467755b1d37509a37c97293ad195c9ce6",
       "oracle": {
         "records": {
           "entity": "Synthetic Studio",
@@ -6450,6 +6452,7 @@
               },
               "paymentDate": {
                 "refs": [
+                  "s0:B2",
                   "s0:C2"
                 ],
                 "transform": {
@@ -6527,6 +6530,7 @@
               },
               "paymentDate": {
                 "refs": [
+                  "s0:B2",
                   "s0:C2"
                 ],
                 "transform": {
