@@ -1,0 +1,24 @@
+export const headers = [
+  ['household', 'read', 'What Fathom knows about the household.', 'Looking at your household', 'household summary'],
+  ['accounts', 'read', 'Accounts, balances and holdings; masks only.', 'Looking at your accounts', 'your accounts'],
+  ['transactions', 'read', 'Find example transaction rows across cash accounts and credit cards, using categories. Never sum rows.', 'Looking through your transactions', 'your transactions'],
+  ['spending', 'read', 'Household spending and income over periods.', 'Looking at your spending', 'your spending'],
+  ['business', 'read', 'Business income, expenses and profit.', 'Looking at your business', 'monthly income and spending'],
+  ['tax', 'read', 'Tax estimates and contribution room.', 'Looking at your taxes', 'your taxes'],
+  ['retirement', 'read', 'Retirement targets, growth and access.', 'Looking at retirement', 'your retirement'],
+  ['goals', 'read', 'Household goals and their pace.', 'Looking at your goals', 'your goals'],
+  ['recommendations', 'read', 'Recommendations in the plan.', 'Looking at your plan', 'your plan'],
+  ['knowledge', 'read', 'Sourced tax and planning guidance.', 'Checking your knowledge packs', 'knowledge packs'],
+  ['calculate', 'read', 'Arithmetic on returned figures.', 'Working out the numbers', 'calculated figures'],
+  ['update_account', 'write', 'Update account details.', 'Updating your account', 'account changes'],
+  ['categorize', 'write', 'Update transaction categories and merchant rules.', 'Updating categories', 'category changes'],
+  ['answer', 'write', 'Record answers and household facts.', 'Recording what you told Fathom', 'recorded facts'],
+  ['act_on_recommendation', 'write', 'Change a recommendation.', 'Updating a recommendation', 'recommendation changes'],
+  ['advisor_review', 'write', 'Manage advisor reviews.', 'Updating advisor review', 'advisor review changes'],
+  ['update_goal', 'write', 'Create or update a goal.', 'Saving your goal', 'goal changes'],
+  ['update_preferences', 'write', 'Remember household preferences.', 'Remembering your preference', 'your preferences'],
+  ['refresh', 'write', 'Refresh household data and plans.', 'Refreshing your data', 'data refresh'],
+  ['undo', 'write', 'Undo an earlier change by receipt.', 'Undoing your change', 'undone change'],
+].map(([name, kind, purpose, progress, source]) => ({ name, kind, purpose, progress, source, ...(name === 'undo' ? { mcpOnly: true } : {}) }));
+
+export const operationScopes = op => op.scopes || [op.scope];

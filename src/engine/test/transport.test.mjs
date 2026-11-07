@@ -160,7 +160,7 @@ test('a shorter SDK result does not replace text blocks split across a tool', ()
   const tail = 'ifts of appreciated stock" and "Evaluate bunching across tax years."';
   const content = [
     { type: 'text', text: head },
-    { type: 'tool_use', id: 'synthetic', name: 'get_figures', input: {} },
+    { type: 'tool_use', id: 'synthetic', name: 'household', input: {} },
     { type: 'text', text: tail },
   ];
   assert.equal(assistantText(content, tail), head + tail);
@@ -227,7 +227,7 @@ test('the observed is_error flag on a paid max-turn tool boundary still permits 
   const response = normalizeSdkRound(observed, { model: DEFAULT_MODEL, registry: { results: [{ name: 'lookup', result: { value: 42 } }] }, maxTokens: 128, maxBudgetUsd: 1 });
   const engine = createEngine({ mode: 'fake', responses: [{ ...response, toolCalls: [{ name: 'lookup' }] }, { text: '$42', costUsd: 0.001 }] });
   const result = await engine.call({ purpose: 'chat', messages: [{ role: 'user', content: 'Look up the balance' }],
-    tools: [{ name: 'lookup', description: 'Read stored data', scope: 'read', inputSchema: { type: 'object', properties: {}, additionalProperties: false }, handler: async () => ({ value: 42 }) }] });
+    tools: [{ name: 'lookup', description: 'Read stored data', kind: 'read', operations: [{ name: 'read', scope: 'read' }], inputSchema: { type: 'object', properties: {}, additionalProperties: false }, handler: async () => ({ value: 42 }) }] });
   assert.equal(result.text, '$42');
   assert.equal(result.grounding.ok, true);
 });

@@ -319,7 +319,7 @@ describe('ask', () => {
     assert.ok(hit.scenario.live.conversations[key][0].text.includes(q.q.toLowerCase()), 'the owner message is the text sent');
     const miss = await ok(s.postJson('/api/ask', { key, text: 'How tall is the office ficus?' }));
     assert.equal(miss.message.notice, false);
-    assert.ok(miss.message.provenance.tools.some(x => x.name === 'household_summary'));
+    assert.ok(miss.message.provenance.tools.some(x => x.name === 'household'));
     assert.deepEqual(miss.message.refs, []);
     const conv = miss.scenario.live.conversations[key];
     assert.equal(conv.length, 4);

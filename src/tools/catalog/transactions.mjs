@@ -9,13 +9,11 @@ function where(conds) {
   return { clause: used.length ? ' WHERE ' + used.map(c => c[0]).join(' AND ') : '', params: used.flatMap(c => [].concat(c[1])) };
 }
 
-export const tools = [
+export const operations = [
   {
-    name: 'query_transactions',
-    description: 'Search transactions by exact ids, account, date range (inclusive, YYYY-MM-DD), amount range, category or description text. ' +
-      'Without accountId it covers every account, credit cards included. Each row has accountId, date, a signed amount (money out is negative, money in positive), description and category; ' +
-      'credit card rows carry the budgeting app category, so group spending by it. Returns at most `limit` rows (default 50, max 200; with ids every matching id is returned), newest first, with the total match count.',
-    inputSchema: obj({
+    tool: 'transactions', name: 'search',
+    summary: 'Search transaction examples by ids, account, dates, amount, category or text. Never sum rows.', route: 'Example transaction rows', routes: ['GET /api/accounts/:id/transactions'],
+    params: obj({
       ids: { type: 'array', items: { type: 'string', minLength: 1 }, minItems: 1, maxItems: 50 },
       accountId: { type: 'string' },
       from: { type: 'string', pattern: DATE },
@@ -25,8 +23,8 @@ export const tools = [
       category: { type: 'string' },
       text: { type: 'string', minLength: 1, maxLength: 200 },
       limit: { type: 'integer', minimum: 1, maximum: 200 },
-    }),
-    scope: 'read',
+    }).properties,
+    required: [], scope: 'read',
     handler(args, ctx) {
       const { clause, params } = where([
         [`id IN (${(args.ids || []).map(() => '?').join(', ')})`, args.ids],
@@ -49,5 +47,3 @@ export const tools = [
     },
   },
 ];
-
-export const parity = {};

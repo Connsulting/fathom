@@ -60,10 +60,10 @@ test('an Ask answer to a suggested question shows a figure and Sources listing t
 
   const src = await openSources(msg);
   await expect(src.locator('li.h-src-tool').first()).toBeVisible();
-  await expect(tool(src, 'household_summary')).toHaveCount(1);
-  await expect(tool(src, 'household_summary').locator('span')).toHaveText('no arguments');
-  await expect(tool(src, 'get_figures')).toHaveCount(1);
-  await expect(tool(src, 'get_figures').locator('span')).toContainText(key);
+  await expect(tool(src, 'household')).toHaveCount(1);
+  await expect(tool(src, 'household').locator('span')).toHaveText('no arguments');
+  await expect(tool(src, 'household')).toHaveCount(1);
+  await expect(tool(src, 'household').locator('span')).toContainText(key);
   await expect(src.locator(`li.h-src-fig .fx-fig[data-fig="${key}"]`)).toBeVisible();
 
   // Sources keep the provenance rule: amounts there are figures too.
@@ -94,7 +94,7 @@ test('a free text question with no canned match gets a grounded answer', async (
   await expect(msg.locator('.h-msg-b .fx-src').first()).toBeVisible();
 
   const src = await openSources(msg);
-  await expect(tool(src, 'household_summary')).toHaveCount(1);
+  await expect(tool(src, 'household')).toHaveCount(1);
   await expect(src.locator('p.h-src-ok')).toHaveText(GROUNDED);
   await expect(src.locator('p.h-src-warn')).toHaveCount(0);
 });
@@ -132,8 +132,8 @@ test('a rec conversation answer shows Sources naming the recommendation it read'
   await expect(msg).not.toHaveClass(/\bnotice\b/);
 
   const src = await openSources(msg);
-  await expect(tool(src, 'get_recommendation')).toHaveCount(1);
-  await expect(tool(src, 'get_recommendation').locator('span')).toContainText(r.id);
+  await expect(tool(src, 'recommendations')).toHaveCount(1);
+  await expect(tool(src, 'recommendations').locator('span')).toContainText(r.id);
 });
 
 test('with the engine switched off an ask gets the notice message', async ({ page }) => {

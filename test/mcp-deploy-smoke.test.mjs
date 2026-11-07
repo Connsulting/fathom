@@ -59,9 +59,9 @@ test('mcp-key creates a read-only key and mcp-smoke passes against the server', 
     assert.equal(smoke.stderr.includes(created.stdout.trim()), false);
     const rows = smoke.stdout.trim().split('\n');
     assert.ok(rows.some(l => l.startsWith('tools/list pass ')));
-    assert.ok(rows.some(l => l.startsWith('household_summary pass ')));
-    assert.ok(rows.some(l => l.startsWith('set_recommendation_status pass ')));
-    for (const row of rows) assert.match(row, /^[a-z0-9_/]+ (pass|fail) \d+$/);
+    assert.ok(rows.some(l => l.startsWith('household.summary pass ')));
+    assert.ok(rows.some(l => l.startsWith('act_on_recommendation.status pass ')));
+    for (const row of rows) assert.match(row, /^[a-z0-9_/.]+ (pass|fail) \d+$/);
   } finally {
     await s.stop();
   }

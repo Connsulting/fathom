@@ -49,7 +49,7 @@ export function mcpInfo(ctx) {
   return {
     url: mcpUrl(config),
     publicUrlSet: Boolean(ctx.config.publicUrl),
-    tools: tools.map(t => ({ name: t.name, description: t.description, scope: t.scope })),
+    tools: tools.map(t => ({ name: t.name, description: t.description, kind: t.kind })),
     scopes: SCOPE_INFO.map(s => ({ ...s })),
   };
 }
