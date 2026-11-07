@@ -28,7 +28,37 @@ const isoDate = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test
   && Number.isFinite(Date.parse(value + 'T00:00:00Z'))
   && new Date(value + 'T00:00:00Z').toISOString().slice(0, 10) === value;
 
-export function envelope(value, { unit, label, kind = 'e', asOf, window, ref, provenance = {}, gaps = [], unavailable, projection = false }) {
+const MONEY = new Set(['usd', 'usd_per_month', 'usd_per_year']);
+const PER = { usd_per_month: ' a month', usd_per_year: ' a year' };
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+// At most 6 significant digits.
+const significant = n => String(Number(n.toPrecision(6)));
+
+// The figure as the answer must write it (section 3, quote): digits, never words; money unsigned to
+// cents (whole dollars drop .00) with " a month" or " a year" for rates; a ratio as a percent; a
+// date as its ISO value, which grounds against the same-turn row date; a half age as "59 and a half".
+// The caller passes the value already rounded for its unit. null for an unavailable figure.
+export function quoteFor(value, unit) {
+  if (!UNITS.includes(unit)) throw new TypeError(`Unknown figure unit ${unit}`);
+  if (value === null || value === undefined) return null;
+  if (unit === 'date') return value;
+  if (MONEY.has(unit)) {
+    const cents = Math.round(Math.abs(value) * 100);
+    const whole = cents % 100 === 0;
+    const text = (cents / 100).toLocaleString('en-US', { minimumFractionDigits: whole ? 0 : 2, maximumFractionDigits: 2 });
+    return `$${text}${PER[unit] || ''}`;
+  }
+  switch (unit) {
+    case 'ratio': return `${significant(value * 100)}%`;
+    case 'months': return plural(value, 'month');
+    case 'years': return plural(value, 'year');
+    case 'days': return plural(value, 'day');
+    case 'age': return Number.isInteger(value) ? String(value) : `${Math.trunc(value)} and a half`;
+    default: return String(value);
+  }
+}
+
+export function envelope(value, { unit, label, kind = 'e', asOf, window, ref, provenance = {}, gaps = [], unavailable, projection = false, token }) {
   if (!UNITS.includes(unit)) throw new TypeError(`Unknown figure unit ${unit}`);
   for (const gap of gaps) {
     if (!GAP_CODES.includes(gap.code)) throw new TypeError(`Unknown figure gap code ${gap.code}`);
@@ -38,9 +68,16 @@ export function envelope(value, { unit, label, kind = 'e', asOf, window, ref, pr
   } else if (unit === 'date' ? !isoDate(value) : typeof value !== 'number' || !Number.isFinite(value)) {
     throw new TypeError(`Invalid figure value for ${unit}`);
   }
-  return { value: value === null ? null : roundForUnit(value, unit, { projection }), unit, label, kind, asOf, ref,
+  const rounded = value === null ? null : roundForUnit(value, unit, { projection });
+  // quote is what the answer writes; direction 'out' marks money leaving the household, quoted
+  // unsigned. A half age also carries its whole years so "59 and a half" grounds as written.
+  const quote = rounded === null ? null : token ?? quoteFor(rounded, unit);
+  return { value: rounded, unit, label, kind, asOf, ref,
     ...(window === undefined ? {} : { window }), provenance, gaps,
-    ...(unavailable === undefined ? {} : { unavailable }) };
+    ...(unavailable === undefined ? {} : { unavailable }), quote,
+    ...(token === undefined ? {} : { token }),
+    ...(MONEY.has(unit) && rounded < 0 ? { direction: 'out' } : {}),
+    ...(unit === 'age' && rounded !== null && !Number.isInteger(rounded) ? { wholeYears: Math.trunc(rounded) } : {}) };
 }
 
 function locatorOf(value) {
@@ -60,6 +97,7 @@ export function fromStored(row, { ref }) {
   const locator = locatorOf(row.locator);
   const unavailable = row.unavailable_reason || undefined;
   return envelope(unavailable ? null : row.v, { unit: locator?.unit ?? 'usd', label: row.label, kind: row.kind,
+    ...(typeof row.key === 'string' && row.key ? { token: `{f:${row.key}}` } : {}),
     asOf: locator?.computedOn || row.src_as_of || null, window: locator?.window, ref,
     provenance: { ...provenanceOf(locator, row.src), stored: { src: row.src, locator } },
     ...(unavailable ? { unavailable, gaps: [{ code: GAP_CODES.includes(unavailable) ? unavailable : 'missing_fact',
