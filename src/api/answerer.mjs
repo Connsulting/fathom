@@ -18,7 +18,7 @@
 // "$2,400" grounds on an outflow row of -2400. Each grounded literal names its source in plain
 // words, never a tool name; a transaction amount names its row ("your transactions: <account>,
 // <date>, <description>"), and a date in the prose matching a same-turn row date is a literal
-// with that row's label (other dates stay plain text). An unchecked figure stays in place, wrapped
+// with that row's label (other unsourced dates are unchecked, see groundAnswer). An unchecked figure stays in place, wrapped
 // in a neutral .fx-checking .fx-unchecked span titled "Not checked against your data". The answer
 // is regenerated once, with a corrective turn, only when two or more of its figures and more than
 // half of them are unchecked; what is still unchecked after that is neutralized the same way.
@@ -428,6 +428,15 @@ function rowsOf(v, out = []) {
   return out;
 }
 
+// The string leaves of a context datum under data keys (meta keys such as ids and titles skipped).
+function dateStrings(v, key = undefined, out = []) {
+  if (key !== undefined && isMetaKey(key)) return out;
+  if (typeof v === 'string') out.push(v);
+  else if (Array.isArray(v)) for (const x of v) dateStrings(x, key, out);
+  else if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) dateStrings(x, k, out);
+  return out;
+}
+
 // A row's source label: a transaction names its account, date and description; any other row
 // takes its tool's label.
 function rowSource(name, row, accountLabels) {
@@ -458,8 +467,10 @@ const KIND_NAMES = { f: 'figure', fk: 'figure', l: 'law', p: 'percent', n: 'name
 // plain label, see TOOL_SOURCES; a query_transactions literal names the first row that grounds it,
 // with the account label from accountLabels, a Map of account id to label), else a context datum
 // (dataLabels[i], default "your data"). A date in the prose whose month and day (and year, when
-// written) equal a tool result row's `date` is a literal too ({ date: true }) with that row's
-// label; other dates stay plain text. Literals are in text order.
+// written) equal a date in a tool result row (date, asOf) is a literal too ({ date: true }) with that row's
+// label, and one the context data states is a literal with that datum's label; any other date is a
+// violation with { date: true } (neutralized, never counted toward a regeneration). Literals are in
+// text order.
 export function groundAnswer(text, { scenario, toolResults = [], data = [], dataLabels = [], accountLabels } = {}) {
   const prose = String(text ?? '');
   const violations = [];
@@ -526,17 +537,29 @@ function groundMasked(masked, { scenario, toolResults, data, dataLabels, account
 
   // Dates are not checked figures; one matching a date in a same-turn row (a YYYY-MM-DD string
   // under any data key: date, asOf, dataThrough) is sourced to that row.
+  // A date the context data states (an ISO string under a data key, or a date written in its prose:
+  // the household summary's today, a pack entry's deadline) is sourced to that datum. Any other date
+  // is a violation with { date: true }: neutralized in place, never counted toward a regeneration.
   const dates = findDates(masked);
   if (dates.length) {
+    const isoParts = v => { const p = ROW_DATE.exec(v); return p ? { year: Number(p[1]), month: Number(p[2]), day: Number(p[3]) } : null; };
     const dated = raws.filter(r => r && !r.isError).flatMap(r => rowsOf(r.result)
       .flatMap(row => Object.entries(row)
         .filter(([k, v]) => typeof v === 'string' && !isMetaKey(k))
-        .map(([, v]) => ({ name: r.name, row, parts: ROW_DATE.exec(v) }))
+        .map(([, v]) => ({ source: () => rowSource(r.name, row, accountLabels), parts: isoParts(v) }))
         .filter(x => x.parts)));
+    (Array.isArray(data) ? data : [data]).forEach((datum, i) => {
+      const label = String(dataLabels[i] || 'your data');
+      for (const v of dateStrings(datum)) {
+        const parts = /\s/.test(v.trim()) ? findDates(v).map(d => ({ year: d.year, month: d.month, day: d.day })) : [isoParts(v)];
+        for (const p of parts) if (p) dated.push({ source: () => label, parts: p });
+      }
+    });
     for (const d of dates) {
-      const hit = dated.find(({ parts }) => Number(parts[2]) === d.month && Number(parts[3]) === d.day
-        && (d.year === null || Number(parts[1]) === d.year));
-      if (hit) literals.push({ text: d.text, index: d.index, source: rowSource(hit.name, hit.row, accountLabels), date: true });
+      const hit = dated.find(({ parts }) => parts.month === d.month && parts.day === d.day
+        && (d.year === null || parts.year === null || parts.year === d.year));
+      if (hit) literals.push({ text: d.text, index: d.index, source: hit.source(), date: true });
+      else violations.push({ text: d.text, index: d.index, reason: 'date absent from sources', date: true });
     }
     literals.sort((a, b) => a.index - b.index);
   }
@@ -771,11 +794,12 @@ export function createLiveAnswerer({ engine, packs } = {}) {
     const ground = async (res, toolResults) => groundAnswer(textOf(res),
       { scenario, toolResults, data, dataLabels, accountLabels: await labelsFor(toolResults) });
     // Regenerate only when REGEN_MIN or more figures and more than REGEN_SHARE of all figures are
-    // unchecked. Figures: violations, grounded number literals (not dates) and valid figure tokens.
+    // unchecked. Figures: violations, grounded number literals and valid figure tokens, dates excluded.
     const needsRevision = (res, g) => {
       const tokens = [...textOf(res).matchAll(TOKEN_LIKE)].filter(m => m[1] !== 'n' && tokenValid(scenario, m[1], m[2])).length;
-      const figures = g.violations.length + g.literals.filter(l => !l.date).length + tokens;
-      return g.violations.length >= REGEN_MIN && g.violations.length / figures > REGEN_SHARE;
+      const unchecked = g.violations.filter(v => !v.date).length;
+      const figures = unchecked + g.literals.filter(l => !l.date).length + tokens;
+      return unchecked >= REGEN_MIN && unchecked / figures > REGEN_SHARE;
     };
 
     let first;
@@ -790,7 +814,7 @@ export function createLiveAnswerer({ engine, packs } = {}) {
     let costUsd = first.costUsd || 0;
     if (needsRevision(first, grounding)) {
       // The step streams before the reset, so the cleared text has a stated reason.
-      revised = grounding.violations.length;
+      revised = grounding.violations.filter(v => !v.date).length;
       stream.progress(revisedLabel(revised));
       stream.reset();
       work.step(revisedLabel(revised));
