@@ -244,8 +244,8 @@ describe('stale account inside a fresh multi-account export', () => {
     ]), s.opts(await offEngine()));
     assert.equal(r.status, 'imported');
     const sc = B.buildScenario(s.db, { clock: '2032-06-30' });
-    const a = sc.accounts.find((x) => x.name === accountA.account);
-    const b = sc.accounts.find((x) => x.name === accountB.account);
+    const a = sc.accounts.find((x) => x.sourceName === accountA.account);
+    const b = sc.accounts.find((x) => x.sourceName === accountB.account);
     assert.deepEqual([a.asOf, a.fresh], ['2032-01-20', 'stale']);
     assert.deepEqual([b.asOf, b.fresh], ['2032-06-10', 'fresh']);
     const cash = sc.domains.find((d) => d.id === 'cash');
