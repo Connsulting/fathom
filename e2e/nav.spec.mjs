@@ -28,7 +28,7 @@ const ROUTE_MAP = [
   ['ask', 'ask'], ['wargame', 'ask'], ['wargame/salary', 'ask'], ['wargame/deferral', 'ask'],
   ['packs', 'ask'], [`packs/${PACK.id}`, 'ask', plain(PACK.name)],
   ['money', 'money', null], ['accounts', 'money'], ['pnl', 'money', 'P&L'], ['add', 'money', 'Add more files'],
-  ['settings', 'settings', 'Settings'], ['connect', 'settings'], ['engine', 'settings'], ['email', 'settings']
+  ['settings', 'settings', 'Settings'], ['connect', 'settings'], ['engine', 'settings'], ['email', 'settings'], ['memories', 'settings']
 ].map(([route, tab, h]) => {
   const heading = h !== undefined ? h : HEAD.get(route);
   if (heading === undefined) throw new Error(`no heading for #/${route}`);
@@ -44,7 +44,7 @@ const SUBNAV = {
 
 // Every Go to destination in the quick switcher (pinned decision 10).
 const GO_TITLES = ['Home', 'Plan', 'Decide', 'Ask', 'Confirm', 'Packs', 'Files', 'Engine', 'Email', 'Connect',
-  'Money', 'Settings', 'Goals', 'Accounts', 'P&L', 'Advisor', 'Year end'];
+  'Money', 'Settings', 'Goals', 'Accounts', 'P&L', 'Advisor', 'Year end', 'Memories'];
 const G = [['h', 'home'], ['p', 'plan'], ['d', 'wargame'], ['a', 'ask'], ['c', 'confirm'], ['k', 'packs'],
   ['f', 'add'], ['e', 'engine'], ['m', 'email'], ['n', 'connect'], ['o', 'money'], ['s', 'settings']];
 
