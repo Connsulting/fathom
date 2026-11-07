@@ -409,7 +409,7 @@ describe('figures', () => {
   test('AC3: planner sources carry plain labels and as-of dates', () => {
     const src = id => base.prepare('SELECT * FROM sources WHERE id = ?').get(id);
     const chk = src(`acct:${ids.checking}`);
-    assert.equal(chk.label, `${HINTS[`${INST.bank}|${MASKS.checking}`].name} ...${MASKS.checking}`);
+    assert.equal(chk.label, HINTS[`${INST.bank}|${MASKS.checking}`].name);
     assert.equal(chk.as_of, 'Oct 31, 2026');
     assert.equal(src('pnl').label, 'Business profit and loss');
     assert.equal(src('pnl').as_of, 'through Oct 2026');

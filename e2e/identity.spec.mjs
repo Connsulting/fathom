@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test, expect } from '@playwright/test';
 import { openDb } from '../src/store/db.mjs';
+import { digest } from '../src/auth/store.mjs';
 import { ask, OWNER_OPTIONS } from '../src/ingest/confirm.mjs';
 import { createLocalData, localPort, removeLocalData, refuseSuppliedTarget } from './local-store.mjs';
 
@@ -77,6 +78,7 @@ test.describe('passkey accounts through the browser', () => {
     const client = await browserClient(browser);
     expect((await client.context.request.get('/healthz')).status()).toBe(200);
     expect((await client.context.request.head('/healthz')).status()).toBe(200);
+    expect((await client.context.request.get('/auth/return-path.js')).status()).toBe(200);
     const session = await client.context.request.get('/api/auth/session');
     expect(await session.json()).toEqual({ identity: null, demo: false });
     expect(session.headers()['cache-control']).toContain('no-store');
@@ -86,13 +88,19 @@ test.describe('passkey accounts through the browser', () => {
     await expect(client.page.getByRole('button', { name: 'Email recovery link', exact: true })).toBeVisible();
     expect(client.scenarioRequests).toEqual([]);
     for (const headers of [{}, { 'Tailscale-User-Login': OWNER, 'Tailscale-User-Name': 'Synthetic Administrator' }]) {
-      for (const path of ['/', '/account', '/admin/users', '/api/scenario', '/api/identity', '/api/files', '/api/keys', '/unknown']) {
+      for (const path of ['/api/scenario', '/api/identity', '/api/files', '/api/keys']) {
         expect((await client.context.request.get(path, { headers })).status(), `unsigned GET ${path}`).toBe(401);
       }
+      for (const path of ['/', '/account', '/admin/users', '/unknown']) {
+        const redirected = await client.context.request.get(path, { headers, maxRedirects: 0 });
+        expect(redirected.status(), `unsigned GET ${path}`).toBe(303);
+        expect(redirected.headers().location).toBe(path === '/' ? '/signin' : `/signin?next=${encodeURIComponent(path)}`);
+      }
     }
-    const denied = await client.page.goto(`${base}/`);
-    expect(denied.status()).toBe(401);
-    await expect(client.page.getByRole('link', { name: /sign in/i })).toBeVisible();
+    const deep = await client.page.goto(`${base}/#/plan`);
+    expect(deep.status()).toBe(200);
+    await expect(client.page).toHaveURL(`${base}/signin#/plan`);
+    await expect(client.page.getByRole('button', { name: 'Sign in with a passkey', exact: true })).toBeVisible();
     expect(client.scenarioRequests).toEqual([]);
     expect((await client.context.request.get('/healthz')).status()).toBe(200);
   });
@@ -436,6 +444,22 @@ test.describe('passkey accounts through the browser', () => {
       otherOwner = returning;
     });
 
+    await test.step('a signed-out deep link returns through sign-in, and an expired session keeps the route', async () => {
+      const returning = await browserClient(browser, { authenticator: true, credentials: await otherOwner.auth.credentials() });
+      await returning.auth.presence(false);
+      await returning.page.goto(`${base}/#/plan`);
+      await expect(returning.page).toHaveURL(`${base}/signin#/plan`);
+      await signin(returning, 200, '#/plan');
+      await expect(returning.page).toHaveURL(/#\/plan$/);
+      const raw = (await returning.context.cookies(base)).find((item) => item.name === '__Host-fathom-session').value;
+      const db = openDb(join(dataDir, 'fathom.sqlite'));
+      try { db.prepare('DELETE FROM auth_sessions WHERE hash = ?').run(digest(raw)); }
+      finally { db.close(); }
+      await returning.page.evaluate(() => window.Fathom.api.goalCreate({ name: 'Synthetic' })).catch(() => {});
+      await expect(returning.page).toHaveURL(/\/signin#\/plan$/);
+      expect((await returning.context.request.get('/api/scenario')).status()).toBe(401);
+    });
+
     await test.step('revoking the final passkey signs out every session and explains email recovery', async () => {
       await admin.page.goto(`${base}/account`);
       const revoked = admin.page.waitForResponse((response) => response.request().method() === 'POST' && /\/api\/auth\/passkeys\/[^/]+\/revoke$/.test(new URL(response.url()).pathname));
@@ -558,7 +582,7 @@ async function register(client, name, button = 'Create passkey') {
   return { options, identity, credentialId: submitted.response.id };
 }
 
-async function signin(client, expectedStatus = 200) {
+async function signin(client, expectedStatus = 200, hash = '#/home') {
   client.observations.length = 0;
   const optionsResponses = [];
   const observationStart = client.observations.length;
@@ -569,7 +593,7 @@ async function signin(client, expectedStatus = 200) {
   client.page.on('response', capture);
   try {
     await client.auth.presence(false);
-    await client.page.goto(`${base}/signin`);
+    await client.page.goto(`${base}/signin${hash === '#/home' ? '' : hash}`);
     await expect(client.page.getByRole('button', { name: 'Sign in with a passkey', exact: true })).toBeVisible();
     await expect.poll(() => client.page.evaluate(() => window.authProbe.checks), { message: 'conditional mediation capability was checked' }).toBeGreaterThan(0);
     await expect.poll(() => client.page.evaluate(() => typeof window.authProbe.available), { message: 'conditional mediation capability resolved' }).toBe('boolean');
@@ -599,7 +623,7 @@ async function signin(client, expectedStatus = 200) {
       expect(body.options.allowCredentials).toBeUndefined();
     }
     if (expectedStatus === 200) {
-      await expect(client.page).toHaveURL(/#\/home$/);
+      await expect(client.page).toHaveURL((url) => url.hash === hash);
       expect((await sessionIdentity(client)).email).toBe(OWNER);
       await assertAuthenticatedBoot(client);
     } else {

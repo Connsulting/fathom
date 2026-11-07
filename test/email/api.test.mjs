@@ -191,7 +191,7 @@ describe('ingest triggers the plan job (in-process router, fake scheduler)', () 
     return { status: res.status, json: await res.json() };
   }
 
-  const AFTER_IMPORT = [['confirm-guess', 'ingest'], ['plan', 'ingest']];
+  const AFTER_IMPORT = [['confirm-guess', 'ingest'], ['freshness', 'ingest'], ['plan', 'ingest']];
   const sorted = (calls) => [...calls].sort((a, b) => a[0].localeCompare(b[0]));
 
   test('imported upload and successful retry trigger plan and confirm-guess once each; nothing imported triggers nothing', T, async () => {
@@ -210,19 +210,19 @@ describe('ingest triggers the plan job (in-process router, fake scheduler)', () 
       assert.equal(waiting.status, 200);
       const file = waiting.json.files[0];
       assert.equal(file.status, 'needs_mapping');
-      assert.equal(scheduler.calls.length, 2, 'an upload that imports nothing does not trigger');
+      assert.equal(scheduler.calls.length, 3, 'an upload that imports nothing does not trigger');
 
       const stillWaiting = await server.postJson(`/api/files/${file.fileId}/retry`, {});
       assert.equal(stillWaiting.status, 200);
       assert.equal(stillWaiting.json.file.status, 'needs_mapping');
-      assert.equal(scheduler.calls.length, 2, 'an unsuccessful retry does not trigger');
+      assert.equal(scheduler.calls.length, 3, 'an unsuccessful retry does not trigger');
 
       st.db.prepare("INSERT INTO column_mappings (signature, mapping, src, created_at, uses) VALUES (?, ?, 'test', '2032-03-10T12:00:00.000Z', 0)")
         .run(headerSignature(HEADERS), JSON.stringify(MAPPING));
       const done = await server.postJson(`/api/files/${file.fileId}/retry`, {});
       assert.equal(done.status, 200);
       assert.equal(done.json.file.status, 'imported');
-      assert.deepEqual(sorted(scheduler.calls.slice(2)), AFTER_IMPORT, 'a successful retry triggers plan and confirm-guess');
+      assert.deepEqual(sorted(scheduler.calls.slice(3)), AFTER_IMPORT, 'a successful retry triggers plan, freshness and confirm-guess');
     } finally {
       await server.close();
       st.close();

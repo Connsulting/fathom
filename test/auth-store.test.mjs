@@ -444,7 +444,7 @@ test('the accounts migration preserves existing MCP bearers as ownerless and is 
   db.prepare('INSERT INTO api_keys (id, name, key_hash, scopes, created_at) VALUES (?, ?, ?, ?, ?)')
     .run('legacy-key', 'Existing synthetic household key', 'a'.repeat(64), '["read"]', '2032-03-10T12:00:00.000Z');
   const before = { ...db.prepare('SELECT * FROM api_keys WHERE id = ?').get('legacy-key') };
-  // Through 021: a store with no users passes the platform-identity guard and keeps api_keys rows.
+  // Through 022: a store with no users passes the platform-identity guard and keeps api_keys rows.
   migrate(db);
   const after = { ...db.prepare('SELECT * FROM api_keys WHERE id = ?').get('legacy-key') };
   assert.deepEqual(after, { ...before, user_id: null });

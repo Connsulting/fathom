@@ -303,9 +303,14 @@ export function createAuthService({ platform, config, transport, now = () => Dat
       return { ...GENERIC_MAIL };
     },
     signout({ req, res }) {
-      requireUser(req);
-      store.revokeSession(currentSession(req));
-      store.revokeChallenge(readCookie(req, CEREMONY_COOKIE));
+      const user = requireUser(req);
+      const session = currentSession(req);
+      const ceremony = readCookie(req, CEREMONY_COOKIE);
+      store.transaction(() => {
+        store.revokeSession(session);
+        store.clearAddPasskey(user.id);
+        store.revokeChallenge(ceremony);
+      });
       setCookie(res, SESSION_COOKIE, null);
       setCookie(res, CEREMONY_COOKIE, null);
       return { signedOut: true };

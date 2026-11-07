@@ -14,12 +14,12 @@ export const PLATFORM_MIGRATIONS_DIR = fileURLToPath(new URL('./migrations/', im
 export const LOCK_FILE = 'platform-migration.lock';
 export const JOURNAL_FILE = 'platform-migration.json';
 
-// The store_identity DDL, read from migration 021 so the offline migration's marker and the
+// The store_identity DDL, read from migration 022 so the offline migration's marker and the
 // migration create the table with identical text.
 export const STORE_IDENTITY_DDL = (() => {
-  const sql = readFileSync(join(MIGRATIONS_DIR, '021-platform-identity.sql'), 'utf8');
+  const sql = readFileSync(join(MIGRATIONS_DIR, '022-platform-identity.sql'), 'utf8');
   const m = /^CREATE TABLE IF NOT EXISTS store_identity [^;]*;/m.exec(sql);
-  if (!m) throw new Error('migration 021 has no store_identity DDL');
+  if (!m) throw new Error('migration 022 has no store_identity DDL');
   return m[0];
 })();
 

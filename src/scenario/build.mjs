@@ -7,11 +7,13 @@
 
 import { getSetting, cents, parseJson as parse } from '../store/db.mjs';
 import { resolveTokens } from '../shared/tokens.mjs';
-import { ingestState, applyFreshness } from '../ingest/freshness.mjs';
+import { ingestState, applyFreshness, householdDataThrough } from '../ingest/freshness.mjs';
 import { MODEL_PURPOSES, modelFor } from '../engine/pricing.mjs';
 import { factEventTitle } from '../shared/event-labels.mjs';
 import { buildYearend } from '../yearend/expected.mjs';
 import { CURVE_AXES, KNOWN_FIGURES, curvePosition, servesGoals } from '../shared/goals.mjs';
+import { accountLabel, accountSubtitle } from '../shared/account-label.mjs';
+import { applyNaming } from '../accounts/naming.mjs';
 import { deriveHeard } from '../onboarding/heard.mjs';
 import { withAdvisor, advisorSection } from '../advisor/index.mjs';
 import { buildPace, indexPaceFigures } from '../pace/build.mjs';
@@ -20,6 +22,28 @@ const DAY = 86400000;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+// 'Aug 30, 2026' to '2026-08-30', or null. Matches the planner's dateLabel.
+function isoOfLabel(label) {
+  const m = /^([A-Za-z]{3}) (\d{1,2}), (\d{4})$/.exec(String(label || '').trim());
+  if (!m) return null;
+  const month = MONTHS.indexOf(m[1]);
+  if (month < 0) return null;
+  return `${m[3]}-${String(month + 1).padStart(2, '0')}-${String(Number(m[2])).padStart(2, '0')}`;
+}
+
+function labelOfIso(iso) {
+  const month = MONTHS[Number(iso.slice(5, 7)) - 1];
+  return `${month} ${Number(iso.slice(8, 10))}, ${iso.slice(0, 4)}`;
+}
+
+// Keep a stored label when it is the same day or later. Otherwise the newest row date.
+function newerThrough(stored, iso) {
+  if (!iso) return stored || '';
+  const prior = isoOfLabel(stored);
+  if (prior && prior >= iso) return stored;
+  return labelOfIso(iso);
+}
 
 export const DEFAULT_CAP_USD = 200;
 
@@ -463,7 +487,7 @@ export function loadGoals(db, { fig = {}, accounts = [] } = {}) {
       g.trackLabel = known ? known.label : tr.figure;
     } else if (tr && Array.isArray(tr.accounts) && tr.accounts.length) {
       const accts = tr.accounts.map(id => accounts.find(a => a.id === id)).filter(Boolean);
-      g.trackLabel = accts.map(a => a.name).join(', ');
+      g.trackLabel = accts.map(a => accountLabel(a)).join(', ');
       const figs = accts.map(a => (a.fig_key && currentFig(fig[a.fig_key]) ? fig[a.fig_key] : null));
       if (accts.length && accts.length === tr.accounts.length && figs.every(Boolean)) {
         if (accts.length === 1) cur = accts[0].fig_key;
@@ -513,6 +537,7 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
 
   const src = loadSources(db, clk);
   const fig = loadFigures(db);
+  const naming = applyNaming(db, { series, src, fig });
 
   const recs = loadRecs(db, clk);
   const recsById = new Map(recs.map(r => [r.id, r]));
@@ -543,10 +568,17 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
   const picks = { ...defaultPicks(wargame), ...(getSetting(db, 'wargame.picks', null) || {}) };
   const engineOn = getSetting(db, 'engine', { on: true });
   const ingest = ingestState(db, { clock: clk });
+  const dataThrough = householdDataThrough(db, clk);
   const ingestAccounts = ingest.accounts || {};
   const accountRows = db.prepare('SELECT * FROM accounts ORDER BY sort, id').all();
+  const householdNames = naming.householdNames;
   const goals = loadGoals(db, { fig, accounts: accountRows });
   const pace = buildPace(db, { clock: clk });
+  // The rollup date is the newest stored row when that is later than the oldest goal input.
+  // Home reads this field; Money reads meta.dataThrough. Both follow the same ISO day.
+  if (dataThrough && pace.rollup && (!pace.rollup.dataThrough || dataThrough > pace.rollup.dataThrough)) {
+    pace.rollup.dataThrough = dataThrough;
+  }
   Object.assign(fig, indexPaceFigures(pace));
   src['calc:pace'] = { label: 'Goal pace calculator', asOf: clk };
   const curve = loadCurve(db, content);
@@ -558,7 +590,7 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
       product: metaC.product || 'Fathom',
       clock: clk,
       clockLabel: clockLabel(clk),
-      dataThrough: metaC.dataThrough || '',
+      dataThrough: newerThrough(metaC.dataThrough, dataThrough),
       household: metaC.household || '',
     },
     names,
@@ -586,8 +618,12 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
     ask: section(content, 'ask'),
     accounts: accountRows.map(a => {
       const f = Object.hasOwn(ingestAccounts, a.id) ? ingestAccounts[a.id] : {};
+      const named = naming.byId.get(a.id) || { ...a, householdNames };
+      const label = accountLabel(named);
       return {
-        id: a.id, inst: a.inst, name: a.name, owner: a.owner, kind: a.kind, fig: a.fig_key, mirror: a.mirror, note: a.note || '', mask: a.mask,
+        id: a.id, inst: a.inst, name: label, sourceName: a.name, displayName: a.display_name || null,
+        subtitle: accountSubtitle(a),
+        owner: a.owner, kind: a.kind, fig: a.fig_key, mirror: a.mirror, note: a.note || '', mask: a.mask,
         asOf: f.asOf || '', fresh: f.fresh || 'unknown', sourceId: f.sourceId || null,
         // Text that came from an uploaded file: render as plain text, never as tokens or markup.
         imported: a.parser !== 'demo-seed',

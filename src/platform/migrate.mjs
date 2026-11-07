@@ -1,6 +1,6 @@
 // Offline platform migration (MT-01): moves accounts, credentials, links, sessions, challenges and
 // rate limits out of a real fathom.sqlite into a new platform.sqlite, then marks the store with
-// store_identity and applies migration 021, which drops the account tables.
+// store_identity and applies migration 022, which drops the account tables.
 //
 // Exclusion: the store is opened on one connection holding SQLite's exclusive lock for the whole
 // run (source_in_use when any other process has it open), and every source read and write goes
@@ -10,11 +10,11 @@
 // regenerated once the journal exists.
 //
 // Phases (onPhase(name) is awaited after each): preflight, snapshot (snapshot-partial and
-// snapshot-published inside it), source-020, stage, verify, publish, mark, cleanup, complete.
+// snapshot-published inside it), source-schema, stage, verify, publish, mark, cleanup, complete.
 // A rerun resumes from observed state checked against the journal: account tables already gone
 // means only the mark/cleanup checks apply; a published platform.sqlite is never rebuilt and is
 // re-verified against the still-present source rows; a store changed between runs before staging
-// gets a new snapshot. Source account rows are dropped only by 021, after the platform database
+// gets a new snapshot. Source account rows are dropped only by 022, after the platform database
 // has been verified and published and the store marked.
 
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statfsSync, statSync } from 'node:fs';
@@ -31,12 +31,12 @@ import { rowsDigest, tableRows, logicalDigest } from './digest.mjs';
 import { createSourceSnapshot, openSourceExclusive, readSnapshotFile, partialName, sha256File, SNAPSHOT_EXT } from './snapshot.mjs';
 import { fsyncDir, fsyncFile, writeAll, writeFileAtomic } from './fsutil.mjs';
 
-export const PHASES = Object.freeze(['preflight', 'snapshot-partial', 'snapshot-published', 'snapshot', 'source-020', 'stage',
+export const PHASES = Object.freeze(['preflight', 'snapshot-partial', 'snapshot-published', 'snapshot', 'source-schema', 'stage',
   'verify', 'publish', 'mark', 'cleanup', 'complete']);
 export const STAGING_FILE = `${PLATFORM_FILE}.staging`;
 export const SNAPSHOT_DIR = 'snapshots';
 const OPERATION_KIND = 'platform-migration';
-const LEGACY_SCHEMA = 20;
+const LEGACY_SCHEMA = 21;
 const INVITE_TTL = 20 * 60 * 1000;
 const LEGACY_AUTH_TABLES = ['users', 'households', 'passkeys', 'auth_tokens', 'auth_sessions', 'auth_challenges', 'auth_rate_limits'];
 const SOURCE_TABLES = ['users', 'passkeys', 'auth_tokens', 'auth_sessions', 'auth_challenges', 'auth_rate_limits'];
@@ -366,7 +366,7 @@ export async function migratePlatform({ dataDir, backupKeyFile, onPhase = async 
     writeJournal(journalFile, journal);
     await onPhase('snapshot');
 
-    // ---- source-020
+    // ---- source-schema
     if (!bound && !hasTable(db, 'store_identity')) {
       const { applied } = migrate(db, { through: LEGACY_SCHEMA });
       if (applied.length) {
@@ -374,7 +374,7 @@ export async function migratePlatform({ dataDir, backupKeyFile, onPhase = async 
         writeJournal(journalFile, journal);
       }
     }
-    await onPhase('source-020');
+    await onPhase('source-schema');
 
     // ---- stage, verify, publish
     const accountsPresent = hasTable(db, 'users');
@@ -430,7 +430,7 @@ export async function migratePlatform({ dataDir, backupKeyFile, onPhase = async 
     writeJournal(journalFile, journal);
     await onPhase('mark');
 
-    // ---- cleanup: 021 drops the account tables (and later migrations apply).
+    // ---- cleanup: 022 drops the account tables (and later migrations apply).
     migrate(db);
     if (LEGACY_AUTH_TABLES.some(t => hasTable(db, t))) throw refuse('store_identity_mismatch');
     journal.phase = 'cleanup';

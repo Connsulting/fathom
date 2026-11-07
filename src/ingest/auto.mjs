@@ -12,6 +12,7 @@
 // declined (undid an auto answer) are never answered again.
 
 import { parseJson } from '../store/db.mjs';
+import { accountLabel } from '../shared/account-label.mjs';
 import {
   pendingItems, getItem, recordAutoAnswer, autoInfo, normalizeName, ConfirmError, KIND_OPTIONS,
 } from './confirm.mjs';
@@ -74,7 +75,7 @@ function evidence(db, text, basis, refs) {
 
 const accountOf = (db, id) => db.prepare('SELECT id, inst, mask, name, kind, identity FROM accounts WHERE id = ?').get(id) ?? null;
 const holderOf = (db, id) => db.prepare('SELECT holder FROM account_holders WHERE account_id = ?').get(id)?.holder ?? null;
-const describe = (a) => [`"${a.name ?? 'Imported account'}"`, a.inst ? `at ${a.inst}` : '', a.mask ? `ending ${a.mask}` : ''].filter(Boolean).join(' ');
+const describe = (a) => accountLabel(a);
 const bridged = (a) => String(a?.identity ?? '').startsWith('simplefin:');
 
 const OWNER_TEXT = { owner: 'yours', spouse: "your spouse's", joint: 'joint', business: 'a business account' };
