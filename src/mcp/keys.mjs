@@ -79,7 +79,11 @@ function cleanName(name) {
   return trimmed;
 }
 
-export function createKeyService({ db, serverSecret, now = () => new Date() }) {
+// creatorActive(userId) -> boolean answers whether a key's creator is still an active member of
+// the served household (the platform's answer); api_keys has no users foreign key, so a key whose
+// creator is not active fails closed here. Ownerless keys (user_id NULL) do not depend on it.
+export function createKeyService({ db, serverSecret, creatorActive, now = () => new Date() }) {
+  if (typeof creatorActive !== 'function') throw new TypeError('createKeyService needs creatorActive');
   const byId = db.prepare('SELECT * FROM api_keys WHERE id = ?');
   const all = db.prepare('SELECT * FROM api_keys ORDER BY created_at, id');
   const owned = db.prepare('SELECT * FROM api_keys WHERE user_id = ? ORDER BY created_at, id');
@@ -122,6 +126,7 @@ export function createKeyService({ db, serverSecret, now = () => new Date() }) {
         if (same && match === null) match = row;
       }
       if (!match || match.revoked_at !== null) return null;
+      if (match.user_id !== null && !creatorActive(match.user_id)) return null;
       return toRecord(match);
     },
 

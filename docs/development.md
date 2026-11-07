@@ -13,7 +13,7 @@ npm ci && npm start
 # open http://127.0.0.1:8080/
 ```
 
-One process serves the Horizon UI and the JSON API, backed by SQLite in `./data/fathom.sqlite`.
+One process serves the Horizon UI and the JSON API, backed by SQLite in `./data/fathom.sqlite` (financial data) and `./data/platform.sqlite` (accounts).
 On a data directory with no store it creates a demo store seeded with synthetic data (the
 November state) and keeps its state across restarts.
 
@@ -36,7 +36,8 @@ npm run seed:demo
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `FATHOM_DATA` | `./data` | Data directory holding `fathom.sqlite`. |
+| `FATHOM_DATA` | `./data` | Data directory holding `fathom.sqlite` and `platform.sqlite`. |
+| `FATHOM_BACKUP_KEY_FILE` | unset | Path to a private file holding a 32-byte key. Read only by the platform migration and snapshot scripts, never by the server. |
 | `FATHOM_PORT` | `8080` | HTTP port. |
 | `FATHOM_HOST` | `127.0.0.1` | Bind address (the container uses `0.0.0.0`). |
 | `FATHOM_DEMO` | unset | `1` requires a demo store, `0` requires a real store (a new one starts empty); unset follows the store, and a new store is a demo. A mismatch refuses to start and changes nothing. |
@@ -66,7 +67,7 @@ npm run seed:demo
 
 Every key is also listed in [`architecture.md`](architecture.md).
 
-Secret files, never committed: the Claude credential, the 32-byte data key and the email credential. The server also creates `api-key-secret` (64 hex characters, mode 0600) in the data directory on first start and uses it to hash API keys. A demo store creates `files/demo.key` for the vault. Sessions, passkeys and link tokens live in the store, hashed where they are secrets.
+Secret files, never committed: the Claude credential, the 32-byte data key and the email credential. The server also creates `api-key-secret` (64 hex characters, mode 0600) in the data directory on first start and uses it to hash API keys. A demo store creates `files/demo.key` for the vault. Accounts, sessions, passkeys and link tokens live in `platform.sqlite`, hashed where they are secrets. MCP keys stay in `fathom.sqlite`.
 
 ## Tests
 
@@ -158,8 +159,8 @@ without the data key. To restore, put the volume back and start the server with 
 A real store has household accounts. Everything but `/healthz`, the sign-in pages and `/mcp`
 needs a signed-in session; demo stores stay open with no accounts.
 
-1. One household, shared. Every account sees and changes the same household data; this is access
-   control for one household, not multi-tenancy. Roles are admin and member. Members use the whole
+1. One served household, shared. Accounts live in `platform.sqlite` and join the household through a membership. Every active member sees and changes the same household data. A user
+   can also be an instance operator (`node scripts/operator.mjs grant <email>`), which may provision further households only while the platform setting `multi_household_enabled` is on. Roles are admin and member. Members use the whole
    app; admins also invite people, change roles, remove people and revoke anyone's passkeys on the
    Household page (`/admin/users`). The last enrolled admin cannot be demoted or removed. Inviting
    someone whose invitation is still pending sends a fresh link with the role just chosen; inviting
@@ -218,6 +219,28 @@ Upgrading an existing deployment: set `FATHOM_PUBLIC_URL`, remove the former own
 configuration and Secret, and invite the first admin. Retire the old exposure only after the owner
 has signed in with a passkey on their own devices.
 
+### Upgrading an existing real store
+
+A real store from before the platform database needs a one-time offline migration. A new release
+refuses to start on it with `platform_migration_required`.
+
+1. Stop the service, so nothing holds the store open.
+2. Provide a private file holding a 32-byte backup key and point `FATHOM_BACKUP_KEY_FILE` at it.
+3. Run `node scripts/migrate-platform.mjs` with `FATHOM_DATA` set to the data directory. It refuses
+   with `source_in_use` while anything holds the store open, writes an encrypted snapshot under the
+   data directory's `snapshots` folder, and prints `migrate-platform: complete`. After an
+   interruption, run it again; it resumes or verifies. While it is unfinished the server refuses to
+   start with `platform_migration_in_progress`.
+4. Start the new release.
+5. Verify: sign in with an existing passkey, confirm existing sessions and MCP keys still work, and
+   check `/healthz`.
+6. Optional: `node scripts/operator.mjs grant <email>` for an enrolled user.
+
+Rollback: `node scripts/source-snapshot.mjs rollback --snapshot <file> --from <data dir> --out <new data dir>`
+(with `FATHOM_BACKUP_KEY_FILE` set) builds a data directory for the previous release from the
+snapshot, leaving the current one untouched. Start the previous release on the new directory. This
+is valid only until the new release has taken writes; later changes are not in the snapshot.
+
 ## Email
 
 Fathom sends a monthly brief and short deadline alerts. The default `dev` transport writes each
@@ -243,7 +266,8 @@ history and goal links. Undo restores the pair until a later import uses the mer
 Money warns while a duplicate pair is waiting for an answer.
 
 Operators can run `node scripts/merge-accounts.mjs` with the server's environment to inspect only
-counts by confidence class. This default opens the store read-only and does not migrate it.
+counts by confidence class. Like the server, it opens a real store through the platform
+readiness check, which applies pending store migrations; it changes no account data.
 After deployment, `node scripts/merge-accounts.mjs --apply-sure` merges only unambiguous pairs
 with reliable last four digits, matching known institutions, compatible kinds and no conflicting
 same-day balance. It records normal Confirm answers with undo and replans; every uncertain pair

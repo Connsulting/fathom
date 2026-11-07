@@ -11,7 +11,7 @@ import { loadConfig } from '../src/config.mjs';
 import { createHandler } from '../src/api/router.mjs';
 import { createAuthService } from '../src/auth/service.mjs';
 import { setSetting } from '../src/store/db.mjs';
-import { createSessionFixture, freePort, postJson, request, tempDb } from './helpers/server.mjs';
+import { createSessionFixture, freePort, postJson, request, tempInstance } from './helpers/server.mjs';
 import { createAuthenticator } from './helpers/webauthn.mjs';
 
 const START = Date.parse('2032-03-10T12:34:56.789Z');
@@ -24,14 +24,13 @@ const SESSION = '__Host-fathom-session';
 const EXPIRED = { error: 'link expired or already used' };
 
 async function fixture(t) {
-  const temp = await tempDb();
+  const temp = await tempInstance({ mode: 'real', init: db => setSetting(db, 'mode', 'real') });
   let server;
   t.after(async () => {
     if (server?.listening) await new Promise(resolve => { server.close(resolve); server.closeAllConnections(); });
     temp.close();
     rmSync(temp.dataDir, { recursive: true, force: true });
   });
-  setSetting(temp.db, 'mode', 'real');
   const port = await freePort();
   const baseUrl = `http://localhost:${port}`;
   const config = loadConfig({
@@ -50,15 +49,15 @@ async function fixture(t) {
       return { id: 'synthetic-send', recipients: 1 };
     },
   };
-  const auth = createAuthService({ db: temp.db, config, transport, now });
-  server = http.createServer(createHandler({ db: temp.db, config, auth, transport }));
+  const auth = createAuthService({ platform: temp.platform, config, transport, now });
+  server = http.createServer(createHandler({ db: temp.db, platform: temp.platform, config, auth, transport }));
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); });
   return {
-    db: temp.db, auth, store: auth.store, sent, state, baseUrl, now,
+    db: temp.db, platform: temp.platform, auth, store: auth.store, hh: auth.store.servedHousehold().id, sent, state, baseUrl, now,
     advance: ms => { clock += ms; },
     // A trusted session fixture for an existing or new user (signed in now).
     async sessionFor(email, role = 'member') {
-      const session = await createSessionFixture(temp.db, { email, role, now });
+      const session = await createSessionFixture(temp.platform, { email, role, now });
       return browser(this, session.token);
     },
   };
@@ -102,10 +101,10 @@ async function register(app, client, device, extra, name) {
   return { options, verify, response };
 }
 
-// An enrolled user with a real passkey: invited, then registered through the invite link.
+// An enrolled user with a real passkey: invited to the served household, then registered through
+// the invitation link.
 async function enrolled(app, email, role = 'member') {
-  const invited = app.store.inviteUser(email, { role });
-  const { token } = app.store.createToken(invited.id, 'invite');
+  const { user: invited, token } = app.store.invite(app.hh, email, { role });
   const device = createAuthenticator();
   const client = browser(app);
   const { options, verify } = await register(app, client, device, { token }, 'First synthetic device');
@@ -126,10 +125,11 @@ async function signIn(app, device, credentialId) {
   return { client, verify };
 }
 
-const tokenRows = (app, userId) => app.db.prepare('SELECT * FROM auth_tokens WHERE user_id = ? ORDER BY purpose, hash').all(userId).map(row => ({ ...row }));
+const tokenRows = (app, userId) => app.platform.prepare('SELECT * FROM auth_tokens WHERE user_id = ? ORDER BY purpose, hash').all(userId).map(row => ({ ...row }));
+const invitationRows = (app, userId) => app.platform.prepare('SELECT * FROM household_invitations WHERE user_id = ? ORDER BY hash').all(userId).map(row => ({ ...row }));
 const addRows = (app, userId) => tokenRows(app, userId).filter(row => row.purpose === 'add-passkey');
 const otherRows = (app, userId) => tokenRows(app, userId).filter(row => row.purpose !== 'add-passkey');
-const sessionCount = (app, userId) => app.db.prepare('SELECT count(*) AS n FROM auth_sessions WHERE user_id = ?').get(userId).n;
+const sessionCount = (app, userId) => app.platform.prepare('SELECT count(*) AS n FROM auth_sessions WHERE user_id = ?').get(userId).n;
 const passkeyIds = (app, userId) => app.store.listPasskeys(userId).map(item => item.id);
 const recipients = mail => [mail.to].flat();
 
@@ -181,10 +181,13 @@ test('a signed-in browser with a recent sign-in gets an add-passkey link mailed 
   const app = await fixture(t);
   const owner = await enrolled(app, 'owner@example.test', 'admin');
   const other = await enrolled(app, 'other@example.test');
-  app.store.createToken(owner.user.id, 'invite');
+  // Was an invite token plus a recovery token: invite links are household invitations now, so the
+  // owner's consumed invitation row stands in for the other link kind.
   app.store.createToken(owner.user.id, 'recovery');
   const kept = otherRows(app, owner.user.id);
-  assert.equal(kept.length, 2);
+  assert.equal(kept.length, 1);
+  const invitations = invitationRows(app, owner.user.id);
+  assert.equal(invitations.length, 1);
   const mark = app.sent.length;
   const response = await owner.client.post(LINK, { email: other.user.email, userId: other.user.id });
   assert.equal(response.status, 200);
@@ -196,7 +199,8 @@ test('a signed-in browser with a recent sign-in gets an add-passkey link mailed 
   const issued = app.store.token(token);
   assert.deepEqual(issued, { userId: owner.user.id, purpose: 'add-passkey', expiresAt: START + TTL });
   assert.equal(addRows(app, owner.user.id).length, 1);
-  assert.deepEqual(otherRows(app, owner.user.id), kept, 'invite and recovery tokens are untouched');
+  assert.deepEqual(otherRows(app, owner.user.id), kept, 'the recovery token is untouched');
+  assert.deepEqual(invitationRows(app, owner.user.id), invitations, 'the invitation is untouched');
   assert.deepEqual(tokenRows(app, other.user.id), [], 'the address in the body gets nothing');
   assert.equal(app.db.prepare('SELECT count(*) AS n FROM email_sends').get().n, 0, 'auth mail stays out of email_sends');
 });
@@ -403,18 +407,18 @@ test('the link is bound to its user and never reaches another account or a pendi
   assert.equal((await identityOf(member.client)).id, owner.user.id, 'the redeeming browser is signed in as the token user');
   assert.ok(app.store.token(memberToken), "the other user's link is unaffected");
 
-  const pending = app.store.inviteUser('pending@example.test');
-  const invite = app.store.createToken(pending.id, 'invite');
+  const { user: pending, token: invite } = app.store.invite(app.hh, 'pending@example.test');
   const pendingAdd = app.store.createToken(pending.id, 'add-passkey');
   const refused = await register(app, browser(app), createAuthenticator(), { token: pendingAdd.token }, 'Pending device');
   assert.equal(refused.options.status, 410);
   assert.deepEqual(refused.options.json, EXPIRED);
   assert.equal(app.store.getUser(pending.id).enrolledAt, null);
   assert.deepEqual(passkeyIds(app, pending.id), []);
-  assert.equal(app.store.token(invite.token)?.purpose, 'invite');
+  assert.equal(app.store.membership(pending.id, app.hh), null);
+  assert.equal(app.store.invitation(invite)?.userId, pending.id, 'the invitation stays live');
 });
 
-test('add-passkey tokens are independent of invite and recovery tokens', async t => {
+test('add-passkey tokens are independent of invitations and recovery tokens', async t => {
   const app = await fixture(t);
   const owner = await enrolled(app, 'owner@example.test');
   const recovery = app.store.createToken(owner.user.id, 'recovery');
@@ -432,13 +436,15 @@ test('add-passkey tokens are independent of invite and recovery tokens', async t
   const stale = await browser(app).post('/api/auth/register/options', { token: first, name: 'Old link' });
   assert.equal(stale.status, 410);
 
-  const pending = app.store.inviteUser('pending@example.test');
-  const invite = app.store.createToken(pending.id, 'invite');
+  const invited = app.store.invite(app.hh, 'pending@example.test');
+  const pending = invited.user;
   const add = app.store.createToken(pending.id, 'add-passkey');
-  assert.equal(app.store.token(invite.token)?.purpose, 'invite');
+  assert.equal(app.store.invitation(invited.token)?.userId, pending.id);
   assert.equal(app.store.token(add.token)?.purpose, 'add-passkey');
-  app.store.createToken(pending.id, 'invite');
-  assert.equal(app.store.token(add.token)?.purpose, 'add-passkey', 'reissuing an invite keeps add-passkey');
+  const reissued = app.store.invite(app.hh, 'pending@example.test');
+  assert.equal(app.store.invitation(invited.token), null);
+  assert.ok(app.store.invitation(reissued.token));
+  assert.equal(app.store.token(add.token)?.purpose, 'add-passkey', 'reissuing an invitation keeps add-passkey');
   assert.equal(add.expiresAt, START + TTL);
 });
 

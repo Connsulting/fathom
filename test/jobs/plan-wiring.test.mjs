@@ -34,7 +34,9 @@ async function realStore() {
 
 function demoStore() {
   const dir = S.dir();
-  return { dir, db: S.track(openStore({ dataDir: dir, demo: 'auto' })) };
+  const { db, platform } = openStore({ dataDir: dir, demo: 'auto' });
+  S.track(platform);
+  return { dir, db: S.track(db) };
 }
 
 function schedulerOn(db, config, { now = () => new Date(), holder } = {}) {
