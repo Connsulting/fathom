@@ -2,14 +2,20 @@
 // housekeeping, next actions, collapse rules, pace chips, the health chip, the pace board reason
 // and charts, pace bars, reason text and the data-health line. The module is pure ESM with no DOM
 // work at import, so node imports it directly. Fixtures are synthetic and built inline; pace goal
-// entries follow the shape of src/calc/pace.mjs goalPace output.
+// entries follow the shape of src/calc/pace.mjs goalPace output, and rec fixtures carry the shape
+// loadLinkedRecs gives (owner, housekeeping, serves). One test builds them from a seeded demo store.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { rmSync } from 'node:fs';
 import {
-  OWNERS, ownerOf, ownerMatches, servedGoalIds, isHousekeeping, isOpen, goalChip, healthChip,
+  ownerMatches, servedGoalIds, isHousekeepingItem, isOpen, goalChip, healthChip,
   paceReason, paceBar, REASON_TEXT, reasonText, homeModel, healthLine, boardCharts
 } from '../web/horizon/screens/home-model.js';
+import { OWNERS } from '../src/shared/rec-links.mjs';
+import { seedDemo } from '../demo/seed.mjs';
+import { buildScenario, loadLinkedRecs } from '../src/scenario/build.mjs';
+import { tempDb } from './helpers/server.mjs';
 
 /* ---------- fixtures ---------- */
 
@@ -65,13 +71,14 @@ function paceOf(goals, o = {}) {
   };
 }
 
-// A rec as api.recs() returns it. `serves` is a list of goal ids, turned into seed objects.
+// A rec as loadLinkedRecs returns it: an owner, the open goals it serves as { id, title, origin },
+// and housekeeping exactly when it serves none. `o.serves` lists goal ids.
 function rec(id, o = {}) {
-  const r = { id, title: o.title ?? `Task ${id}`, status: o.status ?? 'proposed', window: { days: o.days ?? 30 } };
-  if (o.serves) r.serves = o.serves.map((g) => (typeof g === 'string' ? { id: g, title: `Goal ${g}`, origin: 'seed' } : g));
-  if (o.owner !== undefined) r.owner = o.owner;
-  if (o.housekeeping !== undefined) r.housekeeping = o.housekeeping;
-  return r;
+  const serves = (o.serves ?? []).map((g) => ({ id: g, title: `Goal ${g}`, origin: 'seed' }));
+  return {
+    id, title: o.title ?? `Task ${id}`, status: o.status ?? 'proposed', window: { days: o.days ?? 30 },
+    owner: o.owner ?? 'both', housekeeping: serves.length === 0, serves
+  };
 }
 
 const goal = (id, o = {}) => ({ id, title: `Goal ${id}`, status: o.status ?? 'on track', archived: o.archived ?? false });
@@ -81,59 +88,42 @@ const near = (a, b, msg) => assert.ok(Math.abs(a - b) < 1e-9, `${msg}: ${a} is n
 
 /* ---------- owners ---------- */
 
-test('OWNERS lists the five owner values in order', () => {
-  assert.deepEqual(OWNERS, ['you', 'spouse', 'both', 'advisor', 'automatic']);
-});
-
-test('ownerOf keeps a known owner and defaults a missing or unknown one to both', () => {
-  for (const o of OWNERS) assert.equal(ownerOf({ owner: o }), o, o);
-  assert.equal(ownerOf({}), 'both');
-  assert.equal(ownerOf({ owner: null }), 'both');
-  assert.equal(ownerOf({ owner: '' }), 'both');
-  assert.equal(ownerOf({ owner: 'neighbor' }), 'both');
-  assert.equal(ownerOf({ owner: 'You' }), 'both', 'owner values are exact');
-});
-
 test('ownerMatches: Both matches every action, Me is you or both, Spouse is spouse or both', () => {
-  const recs = Object.fromEntries([...OWNERS.map((o) => [o, { owner: o }]), ['missing', {}]]);
   const expect = {
-    both: ['you', 'spouse', 'both', 'advisor', 'automatic', 'missing'],
-    me: ['you', 'both', 'missing'],
-    spouse: ['spouse', 'both', 'missing']
+    both: ['you', 'spouse', 'both', 'advisor', 'automatic'],
+    me: ['you', 'both'],
+    spouse: ['spouse', 'both']
   };
   for (const [filter, yes] of Object.entries(expect)) {
-    for (const [k, r] of Object.entries(recs)) {
-      assert.equal(ownerMatches(r, filter), yes.includes(k), `filter ${filter}, owner ${k}`);
-    }
+    for (const o of OWNERS) assert.equal(ownerMatches(rec('r', { owner: o }), filter), yes.includes(o), `filter ${filter}, owner ${o}`);
   }
 });
 
 test('ownerMatches treats an unknown filter like Both', () => {
-  for (const o of [...OWNERS, undefined]) {
-    assert.equal(ownerMatches(o ? { owner: o } : {}, 'everyone'), true, String(o));
-    assert.equal(ownerMatches(o ? { owner: o } : {}, undefined), true, String(o));
+  for (const o of OWNERS) {
+    assert.equal(ownerMatches(rec('r', { owner: o }), 'everyone'), true, o);
+    assert.equal(ownerMatches(rec('r', { owner: o }), undefined), true, o);
   }
 });
 
 /* ---------- goal links and housekeeping ---------- */
 
-test('servedGoalIds reads objects and plain ids, dedupes, and is empty when serves is missing', () => {
-  assert.deepEqual(servedGoalIds({}), []);
-  assert.deepEqual(servedGoalIds({ serves: [] }), []);
-  assert.deepEqual(servedGoalIds({ serves: null }), []);
-  assert.deepEqual(servedGoalIds({ serves: [{ id: 'a', title: 'A', origin: 'seed' }, { id: 'b' }] }), ['a', 'b']);
-  assert.deepEqual(servedGoalIds({ serves: ['a', 'b'] }), ['a', 'b']);
-  assert.deepEqual(servedGoalIds({ serves: [{ id: 'a' }, 'b', 'a', { id: 'b' }] }), ['a', 'b']);
+test('servedGoalIds maps the served goal objects to their ids', () => {
+  assert.deepEqual(servedGoalIds(rec('r')), []);
+  assert.deepEqual(servedGoalIds(rec('r', { serves: ['a', 'b'] })), ['a', 'b']);
+  assert.deepEqual(servedGoalIds({ serves: [{ id: 'a', title: 'A', origin: 'seed' }, { id: 7, title: 'Seven', origin: 'owner' }] }), ['a', '7']);
 });
 
-test('isHousekeeping falls back to having no goal links, and an explicit boolean wins', () => {
-  assert.equal(isHousekeeping({}), true, 'no serves');
-  assert.equal(isHousekeeping({ serves: [] }), true, 'empty serves');
-  assert.equal(isHousekeeping({ serves: [{ id: 'a' }] }), false, 'serves a goal');
-  assert.equal(isHousekeeping({ serves: [{ id: 'a' }], housekeeping: true }), true, 'explicit true beats serves');
-  assert.equal(isHousekeeping({ housekeeping: false }), false, 'explicit false beats missing serves');
-  assert.equal(isHousekeeping({ serves: [], housekeeping: 'yes' }), true, 'a non-boolean is ignored');
-  assert.equal(isHousekeeping({ serves: [{ id: 'a' }], housekeeping: 1 }), false, 'a non-boolean is ignored');
+test('isHousekeepingItem counts open, waiting and snoozed housekeeping, not closed recs or goal work', () => {
+  for (const status of ['proposed', 'doing', 'waiting', 'snoozed']) {
+    assert.equal(isHousekeepingItem(rec('r', { status })), true, status);
+  }
+  for (const status of ['done', 'dismissed', 'hidden']) {
+    assert.equal(isHousekeepingItem(rec('r', { status })), false, status);
+  }
+  for (const status of ['proposed', 'doing', 'waiting', 'snoozed']) {
+    assert.equal(isHousekeepingItem(rec('r', { status, serves: ['g'] })), false, `${status} serving a goal`);
+  }
 });
 
 test('isOpen is proposed or doing only', () => {
@@ -305,7 +295,8 @@ test('reasonText falls back for an unknown code', () => {
 /* ---------- home model ---------- */
 
 // One household: goals in a different order than pace.goals, a done and an archived goal, a goal
-// without a pace entry, recs for every owner, a rec serving two goals, ties and housekeeping.
+// without a pace entry, recs for every owner, a rec serving two goals, ties, and housekeeping in
+// open, waiting, snoozed and hidden states.
 function household() {
   const goals = [goal('g_extra'), goal('g_on'), goal('g_done', { status: 'done' }), goal('g_behind'), goal('g_arch', { archived: true }),
     goal('g_stale'), goal('g_none', { status: 'open' }), goal('g_ahead')];
@@ -323,7 +314,7 @@ function household() {
     rec('r3', { serves: ['g_on'], days: 30, title: 'Fund account', status: 'doing', owner: 'you' }),
     rec('r4', { serves: ['g_ahead'], days: 8, status: 'waiting' }),
     rec('r5', { days: 3, title: 'Renew policy' }),
-    rec('r7', { days: 12, title: 'Unlinked', status: 'doing', owner: 'automatic', housekeeping: false }),
+    rec('r7', { days: 12, title: 'Automatic chore', status: 'doing', owner: 'automatic' }),
     rec('r8', { serves: ['g_stale'], days: 1, status: 'done' }),
     rec('r9', { serves: ['g_stale'], days: 10, title: 'Same title' }),
     rec('r10', { serves: ['g_extra'], days: 40, title: 'Extra work' }),
@@ -331,7 +322,10 @@ function household() {
     rec('r12', { serves: ['g_on'], days: 2, status: 'snoozed' }),
     rec('r14', { days: -2, title: 'Late fee' }),
     rec('r15', { days: 20, title: 'Spouse chore', owner: 'spouse' }),
-    rec('r16', { serves: ['g_arch'], days: 4, title: 'Archived goal work', status: 'dismissed' })
+    rec('r16', { serves: ['g_arch'], days: 4, title: 'Archived goal work', status: 'dismissed' }),
+    rec('r17', { days: 6, title: 'Waiting chore', status: 'waiting', owner: 'you' }),
+    rec('r18', { days: 1, title: 'Hidden chore', status: 'hidden' }),
+    rec('r19', { days: 25, title: 'Snoozed chore', status: 'snoozed', owner: 'spouse' })
   ];
   return { goals, pace, recs };
 }
@@ -371,7 +365,7 @@ test('homeModel queue holds every open filtered rec once, sorted, with the next 
   assert.deepEqual(ids(m.queue), ['r14', 'r5', 'r2', 'r1', 'r9', 'r7', 'r15', 'r3', 'r10', 'r11']);
   assert.equal(m.nextThing.id, 'r14');
   assert.deepEqual(ids(m.afterThat), ['r5', 'r2', 'r1']);
-  assert.deepEqual(ids(m.housekeeping), ['r14', 'r5', 'r15'], 'r7 says housekeeping false; serves-less r5, r14, r15 fall back to true');
+  assert.deepEqual(ids(m.housekeeping), ['r14', 'r5', 'r17', 'r7', 'r15', 'r19'], 'waiting r17 and snoozed r19 count; hidden r18 does not');
   assert.deepEqual(m.counts, { both: 10, me: 7, spouse: 8 });
 });
 
@@ -389,7 +383,7 @@ test('homeModel Me keeps you and both actions; Spouse keeps spouse and both; the
   assert.deepEqual(ids(me.queue), ['r14', 'r5', 'r1', 'r9', 'r3', 'r10', 'r11']);
   assert.deepEqual(ids(cardOf(me, 'g_behind').actions), ['r1'], 'spouse r2 is hidden for Me');
   assert.equal(cardOf(me, 'g_on').collapsed, false, 'on pace with your action stays a card');
-  assert.deepEqual(ids(me.housekeeping), ['r14', 'r5']);
+  assert.deepEqual(ids(me.housekeeping), ['r14', 'r5', 'r17'], 'your waiting r17 shows for Me; automatic r7 and spouse r15, r19 do not');
   assert.deepEqual(ids(me.afterThat), ['r5', 'r1', 'r9']);
 
   const sp = homeModel({ ...household(), filter: 'spouse' });
@@ -397,7 +391,7 @@ test('homeModel Me keeps you and both actions; Spouse keeps spouse and both; the
   assert.deepEqual(ids(cardOf(sp, 'g_on').actions), [], 'your r3 is hidden for Spouse');
   assert.equal(cardOf(sp, 'g_on').collapsed, true, 'on pace with nothing due for this filter collapses');
   assert.equal(cardOf(sp, 'g_on').next, null);
-  assert.deepEqual(ids(sp.housekeeping), ['r14', 'r5', 'r15']);
+  assert.deepEqual(ids(sp.housekeeping), ['r14', 'r5', 'r15', 'r19'], 'spouse snoozed r19 shows for Spouse; your r17 does not');
   // Counts do not depend on the active filter.
   assert.deepEqual(me.counts, { both: 10, me: 7, spouse: 8 });
   assert.deepEqual(sp.counts, { both: 10, me: 7, spouse: 8 });
@@ -427,14 +421,30 @@ test('homeModel: on pace with an open action stays a card, and ahead with nothin
   assert.equal(cardOf(without, 'on').chip.label, 'On pace');
 });
 
-test('homeModel with recs that carry no owner treats every action as both', () => {
-  const goals = [goal('g')];
-  const pace = paceOf([pg('g', 'behind')]);
-  const recs = [rec('a', { serves: ['g'], days: 3 }), rec('b', { days: 1 })];
-  for (const filter of ['both', 'me', 'spouse']) {
-    const m = homeModel({ goals, pace, recs, filter });
-    assert.deepEqual(ids(m.queue), ['b', 'a'], filter);
-    assert.equal(cardOf(m, 'g').next.id, 'a', filter);
+test('homeModel over the seeded demo store matches the server housekeeping count and goal links', async () => {
+  const t = await tempDb();
+  try {
+    seedDemo(t.db);
+    const sc = buildScenario(t.db);
+    const recs = loadLinkedRecs(t.db, sc.live.clock);
+    assert.ok(recs.length > 0, 'the demo seeds recs');
+    for (const r of recs) {
+      assert.ok(OWNERS.includes(r.owner), `${r.id} owner ${r.owner}`);
+      assert.equal(typeof r.housekeeping, 'boolean', r.id);
+      assert.ok(Array.isArray(r.serves), r.id);
+      assert.equal(r.housekeeping, r.serves.length === 0, r.id);
+      for (const g of r.serves) assert.deepEqual(Object.keys(g).sort(), ['id', 'origin', 'title'], r.id);
+    }
+    const m = homeModel({ goals: sc.goals, pace: sc.pace, recs, filter: 'both' });
+    assert.ok(sc.live.housekeeping > 0, 'the demo has housekeeping');
+    assert.equal(m.housekeeping.length, sc.live.housekeeping);
+    assert.ok(m.cards.some((c) => c.actions.length > 0), 'some goal has an open action');
+    for (const c of m.cards) {
+      for (const r of c.actions) assert.ok(servedGoalIds(r).includes(String(c.id)), `${r.id} serves ${c.id}`);
+    }
+  } finally {
+    t.close();
+    rmSync(t.dataDir, { recursive: true, force: true });
   }
 });
 

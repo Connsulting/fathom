@@ -6,6 +6,9 @@ import { padTasks, dataText, confirmTask } from './common.mjs';
 
 export const id = 'missing-data';
 export const domain = 'data';
+// Goal kinds this rec serves (resolved to open goals at read time) and its default action owner.
+export const goalKinds = Object.freeze([]);
+export const owner = 'you';
 export const trigger = 'calendar';
 export const packs = [];
 export const gate = { all: [] };

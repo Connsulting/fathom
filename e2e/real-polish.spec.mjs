@@ -4,21 +4,18 @@
 // More menu. Runs at desktop and at 390px (every test carries @mobile). Skipped against a remote
 // server.
 
-import { rmSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { test, expect, expectPopoverSource } from './helpers.mjs';
+import { createLocalData, removeLocalData, startEnrolledServer } from './local-store.mjs';
 
-const DIR = fileURLToPath(new URL('../.e2e-data-polish/', import.meta.url));
+let DIR;
 const CLOCK = '2026-11-05';
-const REMOTE = !!process.env.BASE_URL;
-const OWNER = 'owner@example.test';
-const AUTH = Object.freeze({ 'Tailscale-User-Login': OWNER });
+const REMOTE = !!(process.env.BASE_URL || process.env.FATHOM_SMOKE_BASE_URL);
 
 let app = null;
 let base = '';
 
 async function fetchScenario() {
-  const res = await fetch(`${base}/api/scenario`, { headers: AUTH });
+  const res = await fetch(`${base}/api/scenario`, { headers: app.headers });
   expect(res.status).toBe(200);
   return res.json();
 }
@@ -31,8 +28,8 @@ async function go(page, route) {
 test.describe('real-mode polish', () => {
   test.skip(REMOTE, 'needs a local real-mode server; BASE_URL targets a remote one');
   test.describe.configure({ mode: 'serial' });
-  test.use({ extraHTTPHeaders: AUTH });
   test.beforeEach(async ({ context }) => {
+    await app.authenticate(context);
     await context.route(/^https:\/\/fonts\.(googleapis|gstatic)\.com\//, (route) => route.fulfill({
       status: 200, body: '', headers: { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*' },
     }));
@@ -42,10 +39,8 @@ test.describe('real-mode polish', () => {
     test.setTimeout(240_000);
     const { buildRealStore } = await import('../test/helpers/real-store.mjs');
     const { planRun } = await import('../test/helpers/plan.mjs');
-    const { startServer } = await import('../src/server.mjs');
-    const { loadConfig } = await import('../src/config.mjs');
 
-    rmSync(DIR, { recursive: true, force: true });
+    DIR = createLocalData('real-polish');
     const db = await buildRealStore(DIR, { clock: CLOCK });
     try {
       // Three months of balances for the two first accounts so trend lines have something to draw.
@@ -60,14 +55,14 @@ test.describe('real-mode polish', () => {
     } finally {
       db.close();
     }
-    app = await startServer({ ...loadConfig({ FATHOM_DATA: DIR, FATHOM_DEMO: '0', FATHOM_ENGINE: 'off', FATHOM_CLOCK: CLOCK, FATHOM_OWNER_LOGINS: OWNER }), port: 0 });
+    app = await startEnrolledServer({ dataDir: DIR, clock: CLOCK });
     base = app.url;
   });
 
   test.afterAll(async () => {
     if (app) await app.close();
     app = null;
-    rmSync(DIR, { recursive: true, force: true });
+    removeLocalData(DIR);
   });
 
   test('@mobile Accounts draws a trend line per account and for net worth, from uploaded balances', async ({ page }) => {

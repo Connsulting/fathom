@@ -4,7 +4,8 @@
 // Year banner and the Confirm badge, and the phone next-thing card with Done, Later, Ask and
 // swipes. Domain cards, What changed and the timeline now live on Plan.
 // Expected values come from GET /api/scenario (its pace block) at test time; amounts are never
-// hard-coded. A small oracle below mirrors the plan's collapse, ordering and owner rules.
+// hard-coded. A small oracle below mirrors the plan's collapse, ordering and owner rules over the
+// stored rec shape: owner, housekeeping and serves ([{ id, title, origin }]) on every rec.
 
 import {
   test, expect, S, resetDemo, gotoRoute, plain, money, fetchScenario, recDialog, openRecFromPage,
@@ -14,16 +15,16 @@ import {
 /* ---------- oracle ---------- */
 
 const OPEN = ['proposed', 'doing'];
-const OWNERS = ['you', 'spouse', 'both', 'advisor', 'automatic'];
+const CLOSED = ['hidden', 'done', 'dismissed'];
 const WHO = { you: 'You', spouse: 'Spouse', both: 'Both', advisor: 'Advisor', automatic: 'Auto' };
 const FILTER_OK = {
   both: () => true,
   me: (o) => o === 'you' || o === 'both',
   spouse: (o) => o === 'spouse' || o === 'both'
 };
-const ownerOf = (r) => (OWNERS.includes(r.owner) ? r.owner : 'both');
-const servedIds = (r) => [...new Set((r.serves || []).map((g) => (typeof g === 'string' ? g : g && g.id)).filter(Boolean))];
-const isHousekeeping = (r) => (typeof r.housekeeping === 'boolean' ? r.housekeeping : servedIds(r).length === 0);
+const servedIds = (r) => r.serves.map((g) => g.id);
+// Counted like the server's live.housekeeping: housekeeping and not hidden, done or dismissed.
+const isHousekeepingItem = (r) => r.housekeeping === true && !CLOSED.includes(r.status);
 const daysOf = (r) => Number(r.window?.days ?? 9999);
 const byWindow = (a, b) => daysOf(a) - daysOf(b) || String(a.title).localeCompare(String(b.title)) || String(a.id).localeCompare(String(b.id));
 
@@ -56,7 +57,7 @@ function healthChip(pace) {
 }
 
 function model(s, filter = 'both') {
-  const recs = s.recs.filter((r) => OPEN.includes(r.status) && FILTER_OK[filter](ownerOf(r))).sort(byWindow);
+  const recs = s.recs.filter((r) => OPEN.includes(r.status) && FILTER_OK[filter](r.owner)).sort(byWindow);
   const goals = s.goals.filter((g) => !g.archived && g.status !== 'done');
   const inPace = s.pace.goals.map((p) => goals.find((g) => g.id === p.id)).filter(Boolean);
   const order = [...inPace, ...goals.filter((g) => !inPace.includes(g))];
@@ -67,13 +68,13 @@ function model(s, filter = 'both') {
     const collapsed = !pace || pace.status === 'no target' || (['on pace', 'ahead'].includes(pace.status) && !actions.length);
     return { id: g.id, goal: g, pace, paceIndex, actions, next: actions[0] || null, collapsed };
   });
-  const counts = Object.fromEntries(Object.keys(FILTER_OK).map((f) => [f, s.recs.filter((r) => OPEN.includes(r.status) && FILTER_OK[f](ownerOf(r))).length]));
+  const counts = Object.fromEntries(Object.keys(FILTER_OK).map((f) => [f, s.recs.filter((r) => OPEN.includes(r.status) && FILTER_OK[f](r.owner)).length]));
   const yearEnd = daysToYearEnd(s);
   return {
     cards, counts, queue: recs,
     expanded: cards.filter((c) => !c.collapsed),
     collapsed: cards.filter((c) => c.collapsed),
-    housekeeping: recs.filter(isHousekeeping),
+    housekeeping: s.recs.filter((r) => isHousekeepingItem(r) && FILTER_OK[filter](r.owner)).sort(byWindow),
     beforeYearEnd: recs.filter((r) => daysOf(r) <= yearEnd).length
   };
 }
@@ -86,7 +87,7 @@ const chip = (page) => page.locator('a.h-hchip');
 // A full goal card (the quiet row's body is not a full card).
 const fullCards = (page) => page.locator('section.h-home article.h-gcard[data-goal-card]:not(details.h-quiet *)');
 const card = (page, id) => page.locator(`section.h-home article.h-gcard[data-goal-card="${id}"]:not(details.h-quiet *)`);
-const ownerBtn = (page, f) => page.locator(`div.h-owner[role="group"][aria-label="Whose actions"] button[data-owner="${f}"]`);
+const ownerBtn = (page, f) => page.locator(`div.h-ownerf[role="group"][aria-label="Whose actions"] button[data-owner="${f}"]`);
 const quiet = (page) => page.locator('details.h-quiet[data-det="home-quiet"]');
 const hk = (page) => page.locator('details.h-hk[data-det="home-hk"]');
 const nextCard = (page) => page.locator('article.h-next');
@@ -99,6 +100,11 @@ async function openDetails(det) {
 
 async function statusOf(request, id) {
   return (await fetchScenario(request)).recs.find((r) => r.id === id)?.status;
+}
+
+async function setOwner(request, id, owner) {
+  const res = await request.post(`/api/recs/${encodeURIComponent(id)}/action`, { headers: { 'content-type': 'application/json' }, data: { action: 'owner', arg: owner } });
+  expect(res.status(), `owner ${id} -> ${owner}`).toBe(200);
 }
 
 /* ---------- desktop ---------- */
@@ -203,7 +209,7 @@ test.describe('Home', () => {
         await expect(row).toHaveCount(1);
         await expect(row.locator('b').first()).toHaveText(String(Math.abs(daysOf(c.next))));
         await expect(row.locator(`a[data-go="rec"][data-id="${c.next.id}"]`)).toHaveText(plain(S.recs.find((r) => r.id === c.next.id)?.title ?? c.next.title));
-        await expect(row.locator('span.h-who')).toHaveText(WHO[ownerOf(c.next)]);
+        await expect(row.locator('span.h-who')).toHaveText(WHO[c.next.owner]);
       } else {
         await expect(el.locator('p.h-gnext-none')).toContainText('Nothing due for');
       }
@@ -264,10 +270,12 @@ test.describe('Home', () => {
   });
 
   test('the housekeeping row counts the actions that serve no goal and expands to list them', { tag: ['@ac1'] }, async ({ page, request }) => {
-    const m = model(await fetchScenario(request));
+    const s = await fetchScenario(request);
+    const m = model(s);
     expect(m.housekeeping.length, 'the demo has housekeeping actions').toBeGreaterThan(0);
+    expect(m.housekeeping.length, 'the oracle agrees with the server count').toBe(s.live.housekeeping);
     await gotoRoute(page, 'home');
-    await expect(hk(page).locator('summary')).toContainText(`Housekeeping, serves no goal: ${m.housekeeping.length}`);
+    await expect(hk(page).locator('summary'), 'the Both count is the server count').toContainText(`Housekeeping, serves no goal: ${s.live.housekeeping}`);
     await openDetails(hk(page));
     const rows = hk(page).locator('.h-gnext[data-rec]');
     await expect(rows).toHaveCount(m.housekeeping.length);
@@ -276,73 +284,70 @@ test.describe('Home', () => {
       const row = hk(page).locator(`.h-gnext[data-rec="${r.id}"]`);
       await expect(row.locator('b').first()).toHaveText(String(Math.abs(daysOf(r))));
       await expect(row.locator(`a[data-go="rec"][data-id="${r.id}"]`)).toBeVisible();
-      await expect(row.locator('span.h-who')).toHaveText(WHO[ownerOf(r)]);
+      await expect(row.locator('span.h-who')).toHaveText(WHO[r.owner]);
     }
   });
 
   test('the owner filter: Me hides the spouse-only action, Spouse hides the you-only one, counts match', { tag: ['@ac1'] }, async ({ page, request }) => {
-    // Owners are stubbed on the scenario until the goal-links change stores them.
-    const real = await fetchScenario(request);
-    const linked = real.recs.filter((r) => OPEN.includes(r.status) && servedIds(r).length).sort(byWindow);
+    // Real owner writes: one open goal-linked rec goes to the spouse, another serving a different goal to you.
+    const before = await fetchScenario(request);
+    const linked = before.recs.filter((r) => OPEN.includes(r.status) && servedIds(r).length).sort(byWindow);
     const spouseRec = linked[0];
     const youRec = linked.find((r) => !servedIds(r).some((g) => servedIds(spouseRec).includes(g)));
     expect(spouseRec && youRec, 'two open recs serving different goals').toBeTruthy();
-    const stub = (s) => {
-      for (const r of s.recs) {
-        if (r.id === spouseRec.id) r.owner = 'spouse';
-        else if (r.id === youRec.id) r.owner = 'you';
-        else delete r.owner;
+    try {
+      await setOwner(request, spouseRec.id, 'spouse');
+      await setOwner(request, youRec.id, 'you');
+      const s = await fetchScenario(request);
+      expect(s.recs.find((r) => r.id === spouseRec.id).owner).toBe('spouse');
+      expect(s.recs.find((r) => r.id === youRec.id).owner).toBe('you');
+      const mm = { both: model(s, 'both'), me: model(s, 'me'), spouse: model(s, 'spouse') };
+      expect(mm.both.counts.both).toBe(model(before).counts.both);
+      expect(mm.me.queue.map((r) => r.id)).not.toContain(spouseRec.id);
+      expect(mm.spouse.queue.map((r) => r.id)).not.toContain(youRec.id);
+
+      await gotoRoute(page, 'home');
+      for (const f of ['both', 'me', 'spouse']) {
+        await expect(ownerBtn(page, f)).toContainText({ both: 'Both', me: 'Me', spouse: 'Spouse' }[f]);
+        await expect(ownerBtn(page, f).locator('span')).toHaveText(String(mm.both.counts[f]));
       }
-      return s;
-    };
-    await page.route('**/api/scenario', async (route) => {
-      const res = await route.fetch();
-      await route.fulfill({ response: res, json: stub(await res.json()) });
-    });
-    const s = stub(structuredClone(real));
-    const mm = { both: model(s, 'both'), me: model(s, 'me'), spouse: model(s, 'spouse') };
-    expect(mm.both.counts.me).toBe(mm.both.counts.both - 1);
-    expect(mm.both.counts.spouse).toBe(mm.both.counts.both - 1);
+      await expect(ownerBtn(page, 'both')).toHaveAttribute('aria-pressed', 'true');
+      await expect(ownerBtn(page, 'me')).toHaveAttribute('aria-pressed', 'false');
 
-    await gotoRoute(page, 'home');
-    for (const f of ['both', 'me', 'spouse']) {
-      await expect(ownerBtn(page, f)).toContainText({ both: 'Both', me: 'Me', spouse: 'Spouse' }[f]);
-      await expect(ownerBtn(page, f).locator('span')).toHaveText(String(mm.both.counts[f]));
+      const shown = async (id) => {
+        await openDetails(quiet(page));
+        await openDetails(hk(page));
+        return home(page).locator(`.h-gnext[data-rec="${id}"]`).count();
+      };
+      const spouseGoal = servedIds(spouseRec)[0];
+      expect(await shown(spouseRec.id), 'Both shows the spouse action').toBeGreaterThan(0);
+      expect(await shown(youRec.id), 'Both shows your action').toBeGreaterThan(0);
+      await expect(page.locator('p.h-home-sub')).toContainText(thingsLabel(mm.both.beforeYearEnd));
+
+      await ownerBtn(page, 'me').click();
+      await expect(ownerBtn(page, 'me')).toHaveAttribute('aria-pressed', 'true');
+      await expect(ownerBtn(page, 'both')).toHaveAttribute('aria-pressed', 'false');
+      await expect.poll(() => shown(spouseRec.id), 'Me hides the spouse-only action').toBe(0);
+      expect(await shown(youRec.id), 'Me keeps your action').toBeGreaterThan(0);
+      await expect(page.locator('p.h-home-sub')).toContainText(thingsLabel(mm.me.beforeYearEnd));
+      const spouseCard = mm.me.cards.find((c) => c.id === spouseGoal);
+      if (!spouseCard.collapsed && !spouseCard.next) await expect(card(page, spouseGoal).locator('p.h-gnext-none')).toContainText('Nothing due for');
+      // Counts stay the same whichever filter is active.
+      for (const f of ['both', 'me', 'spouse']) await expect(ownerBtn(page, f).locator('span')).toHaveText(String(mm.both.counts[f]));
+
+      await ownerBtn(page, 'spouse').click();
+      await expect(ownerBtn(page, 'spouse')).toHaveAttribute('aria-pressed', 'true');
+      await expect(ownerBtn(page, 'me')).toHaveAttribute('aria-pressed', 'false');
+      await expect.poll(() => shown(youRec.id), 'Spouse hides the you-only action').toBe(0);
+      expect(await shown(spouseRec.id), 'Spouse keeps the spouse action').toBeGreaterThan(0);
+      await expect(page.locator('p.h-home-sub')).toContainText(thingsLabel(mm.spouse.beforeYearEnd));
+
+      await ownerBtn(page, 'both').click();
+      await expect(ownerBtn(page, 'both')).toHaveAttribute('aria-pressed', 'true');
+      await expect.poll(() => shown(youRec.id)).toBeGreaterThan(0);
+    } finally {
+      await resetDemo(request);
     }
-    await expect(ownerBtn(page, 'both')).toHaveAttribute('aria-pressed', 'true');
-    await expect(ownerBtn(page, 'me')).toHaveAttribute('aria-pressed', 'false');
-
-    const shown = async (id) => {
-      await openDetails(quiet(page));
-      await openDetails(hk(page));
-      return home(page).locator(`.h-gnext[data-rec="${id}"]`).count();
-    };
-    const spouseGoal = servedIds(spouseRec)[0];
-    expect(await shown(spouseRec.id), 'Both shows the spouse action').toBeGreaterThan(0);
-    expect(await shown(youRec.id), 'Both shows your action').toBeGreaterThan(0);
-    await expect(page.locator('p.h-home-sub')).toContainText(thingsLabel(mm.both.beforeYearEnd));
-
-    await ownerBtn(page, 'me').click();
-    await expect(ownerBtn(page, 'me')).toHaveAttribute('aria-pressed', 'true');
-    await expect(ownerBtn(page, 'both')).toHaveAttribute('aria-pressed', 'false');
-    await expect.poll(() => shown(spouseRec.id), 'Me hides the spouse-only action').toBe(0);
-    expect(await shown(youRec.id), 'Me keeps your action').toBeGreaterThan(0);
-    await expect(page.locator('p.h-home-sub')).toContainText(thingsLabel(mm.me.beforeYearEnd));
-    const spouseCard = mm.me.cards.find((c) => c.id === spouseGoal);
-    if (!spouseCard.collapsed && !spouseCard.next) await expect(card(page, spouseGoal).locator('p.h-gnext-none')).toContainText('Nothing due for');
-    // Counts stay the same whichever filter is active.
-    for (const f of ['both', 'me', 'spouse']) await expect(ownerBtn(page, f).locator('span')).toHaveText(String(mm.both.counts[f]));
-
-    await ownerBtn(page, 'spouse').click();
-    await expect(ownerBtn(page, 'spouse')).toHaveAttribute('aria-pressed', 'true');
-    await expect(ownerBtn(page, 'me')).toHaveAttribute('aria-pressed', 'false');
-    await expect.poll(() => shown(youRec.id), 'Spouse hides the you-only action').toBe(0);
-    expect(await shown(spouseRec.id), 'Spouse keeps the spouse action').toBeGreaterThan(0);
-    await expect(page.locator('p.h-home-sub')).toContainText(thingsLabel(mm.spouse.beforeYearEnd));
-
-    await ownerBtn(page, 'both').click();
-    await expect(ownerBtn(page, 'both')).toHaveAttribute('aria-pressed', 'true');
-    await expect.poll(() => shown(youRec.id)).toBeGreaterThan(0);
   });
 
   test('the data-health line states the data date and staleness, with Confirm and Files links', { tag: ['@ac4'] }, async ({ page, request }) => {
@@ -469,7 +474,7 @@ test.describe('Home on a phone', { tag: ['@mobile', '@mobile-only'] }, () => {
 
     // Phone order: owner filter, headline, next thing, After that, data-health line, goal cards.
     const tops = [];
-    for (const loc of [page.locator('div.h-owner'), h1(page), nextCard(page), after, dataHealth(page), fullCards(page).first()]) {
+    for (const loc of [page.locator('div.h-ownerf'), h1(page), nextCard(page), after, dataHealth(page), fullCards(page).first()]) {
       tops.push((await loc.boundingBox()).y);
     }
     for (let i = 1; i < tops.length; i++) expect(tops[i], `element ${i} sits below element ${i - 1}: ${tops.join(', ')}`).toBeGreaterThan(tops[i - 1]);

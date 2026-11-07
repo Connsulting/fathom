@@ -38,7 +38,7 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: npm run e2e
-      - name: real-mode smoke against a store past first-run
+      - name: signed-out real-mode auth smoke
         run: |
           set -euo pipefail
           data="$(mktemp -d)"
@@ -59,9 +59,9 @@ jobs:
           }
           trap cleanup EXIT
           port="$(node -e 'const s=require("node:net").createServer();s.listen(0,"127.0.0.1",()=>{process.stdout.write(String(s.address().port));s.close();});')"
-          base="http://127.0.0.1:${port}"
+          base="http://localhost:${port}"
           node --input-type=module -e 'import { createRealStore } from "./test/helpers/real-store.mjs"; const db = await createRealStore(process.argv[1], { clock: "2026-11-05" }); db.close();' "$data"
-          FATHOM_DATA="$data" FATHOM_PORT="$port" FATHOM_DEMO=0 FATHOM_ENGINE=off FATHOM_OWNER_LOGINS=owner@example.test node src/server.mjs >"$log" 2>&1 &
+          FATHOM_DATA="$data" FATHOM_HOST=localhost FATHOM_PORT="$port" FATHOM_PUBLIC_URL="$base" FATHOM_DEMO=0 FATHOM_ENGINE=off node src/server.mjs >"$log" 2>&1 &
           pid=$!
           ready=""
           for _ in $(seq 1 60); do
@@ -79,7 +79,7 @@ jobs:
             echo "real smoke: server not healthy after 30s" >&2
             exit 1
           fi
-          FATHOM_SMOKE_TARGET=real FATHOM_SMOKE_BASE_URL="$base" FATHOM_SMOKE_HEADERS='{"Tailscale-User-Login":"owner@example.test"}' npm run e2e:smoke
+          FATHOM_SMOKE_TARGET=real FATHOM_SMOKE_BASE_URL="$base" npx playwright test --grep @auth-smoke
       - if: failure()
         uses: actions/upload-artifact@v4
         with:

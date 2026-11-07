@@ -15,6 +15,7 @@ import { buildLedger, isoFromLabel } from './ledger.mjs';
 import { openMigrated, getSetting, setSetting, listTables, readStoreMode, createStoreFile, tx, cents, DB_FILE } from '../src/store/db.mjs';
 import { addDays, defaultPicks, BUILTIN_SOURCES, DEFAULT_CAP_USD } from '../src/scenario/build.mjs';
 import { loadConfig } from '../src/config.mjs';
+import { createAuthStore } from '../src/auth/store.mjs';
 import { REASON_TEXT } from '../src/ingest/guess.mjs';
 import { ask, canonicalJson, OWNER_OPTIONS, KIND_OPTIONS, FACT_CHECK_OPTIONS, taxYearOptions } from '../src/ingest/confirm.mjs';
 
@@ -64,11 +65,12 @@ const FACTS = {
 
 // Children before parents so foreign keys hold while clearing.
 const CLEAR_ORDER = [
+  'auth_challenges', 'auth_tokens', 'auth_sessions', 'auth_rate_limits', 'passkeys', 'api_keys', 'users',
   'advisor_reviews', 'advisor_checkin', 'advisor_packets', 'messages', 'conversations', 'rec_events', 'job_runs', 'jobs', 'superseded_rows', 'confirm_undo', 'confirm_guesses', 'confirm_items',
   'ingest_epoch', 'held_facts',
   'column_mappings', 'entity_aliases', 'transactions', 'balances', 'positions',
   'pnl_lines', 'tax_payments', 'documents', 'figures', 'accounts', 'facts', 'sources', 'recs', 'goals',
-  'deadlines', 'events', 'packs_state', 'decisions', 'api_keys', 'spend_ledger', 'content', 'settings', 'files',
+  'deadlines', 'events', 'packs_state', 'decisions', 'spend_ledger', 'content', 'settings', 'files',
 ];
 
 // Synthetic pending confirm questions so the demo shows the confirm deck: one per kind below, on
@@ -148,10 +150,11 @@ function seedAdvisor(db, S, clock) {
     .run(DEMO_CHECKIN.date, DEMO_CHECKIN.time, DEMO_CHECKIN.lengthMin, `${clock}T08:00:00.000Z`);
 }
 
-const LIVE_REC_FIELDS = ['status', 'statusByDemo', 'window', 'waitingOn'];
+// Fields held in recs columns, not in the def (owner and goalKinds are recs.owner and recs.goal_kinds).
+const LIVE_REC_FIELDS = ['status', 'statusByDemo', 'window', 'waitingOn', 'owner', 'goalKinds'];
 
 function clearStore(db) {
-  const tables = listTables(db).filter(t => t !== 'schema_migrations');
+  const tables = listTables(db).filter(t => t !== 'schema_migrations' && t !== 'households');
   const rest = tables.filter(t => !CLEAR_ORDER.includes(t));
   for (const t of [...rest, ...CLEAR_ORDER.filter(t => tables.includes(t))]) db.prepare(`DELETE FROM "${t}"`).run();
 }
@@ -159,7 +162,7 @@ function clearStore(db) {
 // Rebuild the demo content in a migrated store that is empty or already a demo store. A store
 // with no mode setting but any rows is treated as real, so this refuses it and changes nothing.
 function isEmptyStore(db) {
-  return listTables(db).filter(t => t !== 'schema_migrations')
+  return listTables(db).filter(t => t !== 'schema_migrations' && t !== 'households')
     .every(t => db.prepare(`SELECT 1 FROM "${t}" LIMIT 1`).get() === undefined);
 }
 
@@ -233,8 +236,9 @@ export function seedDemo(db) {
     const taxp = db.prepare('INSERT INTO tax_payments (jurisdiction, tax_year, date, amount, kind, file_id, parser, locator) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
     for (const p of ledger.taxPayments) taxp.run(p.jurisdiction, p.taxYear, p.date, p.amount, p.kind, ...prov(p.locator));
 
-    const rec = db.prepare(`INSERT INTO recs (id, def, status, waiting_on, wake, tasks_done, window_close, window_label, pack_id, sort, updated_at, file_id, parser, locator)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    const rec = db.prepare(`INSERT INTO recs (id, def, status, waiting_on, wake, tasks_done, window_close, window_label, pack_id, sort, updated_at, file_id, parser, locator,
+                              owner, goal_kinds)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
     S.recs.forEach((r, i) => {
       const def = { ...r, tasks: (r.tasks || []).map(({ done, ...t }) => t) };
       for (const k of LIVE_REC_FIELDS) delete def[k];
@@ -244,7 +248,7 @@ export function seedDemo(db) {
       const pack = S.packs.find(p => (p.recIds || []).includes(r.id));
       rec.run(r.id, JSON.stringify(def), status, r.waitingOn || null, r.wake || null,
         JSON.stringify((r.tasks || []).map(t => !!t.done)), days == null ? null : addDays(clock, days),
-        r.window ? r.window.label : null, pack ? pack.id : null, i, now, ...prov(`recs[${i}]`));
+        r.window ? r.window.label : null, pack ? pack.id : null, i, now, ...prov(`recs[${i}]`), r.owner, JSON.stringify(r.goalKinds));
     });
 
     const goal = db.prepare('INSERT INTO goals (id, def, sort) VALUES (?, ?, ?)');
@@ -290,6 +294,7 @@ export function seedDemo(db) {
     setSetting(db, 'cap', { usd: typeof S.engine.budget.monthly === 'number' ? S.engine.budget.monthly : DEFAULT_CAP_USD });
     setSetting(db, 'wargame.picks', defaultPicks(S.wargame));
     setSetting(db, 'seeded', { at: now, scenario_sha: sha });
+    createAuthStore(db).ensureHousehold();
   });
 }
 

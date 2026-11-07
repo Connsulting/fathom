@@ -11,7 +11,8 @@ browser or MCP client
         |  HTTP (pages, /api, POST /mcp)
         v
    src/server.mjs
-        |-- owner gate (real store: Tailscale-User-Login)
+        |-- /mcp: bearer keys only
+        |-- session gate (real store: __Host-fathom-session cookie, exact Origin on mutations)
         |-- router (JSON, uploads, SSE for Ask)
         |-- scheduler tick (in process)
                 |-- plan, brief-email, deadline-alerts
@@ -39,7 +40,7 @@ An upload commits rows, then the scheduler is asked to plan and to guess confirm
 9. MCP and keys: MCP server.
 10. Packs and Your plans: Live pack state, Your plans.
 11. Email: Email.
-12. Owner gate: Owner identity.
+12. Accounts, passkeys and sessions: Accounts and sessions.
 13. Onboarding: Onboarding.
 14. Goals: Goals and the tradeoff curve.
 15. Advisor: Advisor workflow.
@@ -60,12 +61,13 @@ over every module's test directory (`npm test`), end-to-end tests with Playwrigh
 
 | Path | Owner and purpose |
 |---|---|
-| `package.json` | Scripts `start`, `test`, `seed:demo`, `e2e`, `e2e:smoke` (names are frozen), plus `plan` (`npm run plan`, one planning run over the real store) and `confirm:guess` (`npm run confirm:guess`, one run of the `confirm-guess` job: engine guesses for pending confirm questions). |
+| `package.json` | Scripts `start`, `test`, `seed:demo`, `e2e`, `e2e:smoke` (names are frozen), plus `plan` (`npm run plan`, one planning run over the real store), `confirm:guess` (`npm run confirm:guess`, one run of the `confirm-guess` job: engine guesses for pending confirm questions) and `user:invite` (`npm run user:invite -- <email> --admin`, the first admin's invitation; see Accounts and sessions). |
 | `src/server.mjs` | HTTP entry: store mode rules, then serves the UI, `/shared/` and the API. |
 | `src/config.mjs` | `loadConfig(env)`: every environment key, paths only. |
 | `src/store/` | `db.mjs` plus `migrations/NNN-name.sql`. Owned by the foundation item. |
 | `src/scenario/build.mjs` | Store to CONTRACT.md scenario object (`buildScenario`). |
 | `src/api/` | Router, handlers, HTTP guards, static serving, the live answerer and its fake answer source. |
+| `src/auth/` | Accounts: the auth store (users, passkeys, tokens, sessions, challenges, rate limits), the WebAuthn service and the auth and admin handlers. |
 | `src/shared/` | Browser-safe logic used by the server and the UI (`rules.mjs`, `tokens.mjs`). |
 | `src/tools/` | Tool registry shared by the chat engine and the MCP server. |
 | `src/calc/` | Deterministic calculators (tax, payroll, retirement room, cash). |
@@ -75,7 +77,7 @@ over every module's test directory (`npm test`), end-to-end tests with Playwrigh
 | `src/mcp/` | MCP server over the tool registry. |
 | `src/jobs/` | In-process scheduler and proactive jobs. |
 | `src/email/` | Email transports, send history and the monthly brief. |
-| `web/` | The Horizon UI (`index.html`, `core/core.js`, `horizon/design.js`, `horizon/design.css`). |
+| `web/` | The Horizon UI (`index.html`, `core/core.js`, `horizon/design.js`, `horizon/design.css`) and the account pages (`auth/index.html`, `auth/auth.js`, `auth/auth.css`). |
 | `demo/` | Synthetic demo scenario, seed and ledger. |
 | `packs/<id>/` | Pack content. |
 | `e2e/` | Playwright specs. |
@@ -103,8 +105,8 @@ older email links keep working) is goals first. Its headline and health chip com
 `scenario.pace.rollup`; each goal with a target gets a card with its pace chip, a bar of actual
 against target with a plan-today tick, and its next open action. Stale or otherwise unknown
 pace is never shown as on pace: the chip says "Data stale" or "Pace unknown". Goals with no
-target, and on-pace or ahead goals with nothing due, collapse into one quiet row; open actions
-that serve no goal sit in a housekeeping row. An owner filter (Both, Me, Spouse) narrows every
+target, and on-pace or ahead goals with nothing due, collapse into one quiet row; actions that
+serve no goal sit in a housekeeping row. An owner filter (Both, Me, Spouse) narrows every
 action list, and one data-health line (data through date, stale accounts or goals, Confirm
 questions, failed files) replaces the Confirm banner and nav badge. On a phone the first card
 is the single next thing, with Done, Later and Ask and a swipe (right is Done, left is Later)
@@ -116,11 +118,12 @@ is a `pace.*` figure with its provenance popover. The view model is the pure mod
 `web/horizon/screens/home-model.js`. Domain cards (Covered), What changed and the monthly email
 note moved to Plan, whose timeline also draws past What-changed events.
 
-Owner defaults until the goal-links change lands: a recommendation with no `owner` belongs to
-both, and one with no `serves` is housekeeping. The spouse is a filter until auth lands, not a
-signed-in member: Me shows owners you and both, Spouse shows spouse and both, Both shows every
-action. Health is per goal and the household headline is derived from it; goals without targets
-are not counted.
+Owners and goal links come from the recs themselves (`loadLinkedRecs`): every rec has an
+`owner`, `serves` (its open goals) and `housekeeping`. The housekeeping row lists housekeeping
+recs that are not done, dismissed or hidden, so under Both its count equals
+`live.housekeeping`. The spouse is a filter, not yet the signed-in member: Me shows owners you
+and both, Spouse shows spouse and both, Both shows every action. Health is per goal and the
+household headline is derived from it; goals without targets are not counted.
 
 ### 5. Facts
 
@@ -204,8 +207,9 @@ constraint on `accounts.mask` enforces exactly four digits or NULL).
 Shared by the chat engine and the MCP server. `src/tools/index.mjs` exports `tools`, a registry
 of `{name, description, inputSchema (JSON Schema), scope: 'read'|'write:recs', handler(args, ctx)}`
 with `ctx = {db, now}`, plus `getTool(name)`, `callTool(name, args, ctx)` (validates args against
-`inputSchema`) and `ToolError` with `code` `'bad_input'` or `'not_found'`. The only write scope is
-recommendation status.
+`inputSchema`) and `ToolError` with `code` `'bad_input'` or `'not_found'`. The only write scope,
+`write:recs`, covers recommendation status (`set_recommendation_status`) and action owner
+(`set_recommendation_owner`).
 
 | Tool | Scope | Input | Output |
 |---|---|---|---|
@@ -215,14 +219,15 @@ recommendation status.
 | `query_transactions` | read | `accountId?, from?, to?, minAmount?, maxAmount?, category?, text?, limit? (1..200, default 50)` | `{rows: [{id, accountId, date, amount, description, category}], truncated, total}` |
 | `list_positions` | read | `accountId?` | `[{accountId, symbol, name, quantity, price, value, costBasis, asOf}]` |
 | `pnl_by_month` | read | `entity?, from?: 'YYYY-MM', to?` | `{rows: [{period, category, amount}], totals: {period: n}}` |
-| `list_recommendations` | read | `status?: string or string[]` | live recs, never hidden |
-| `get_recommendation` | read | `id` | the live rec |
+| `list_recommendations` | read | `status?: string or string[]` | live recs, never hidden, each with `owner`, `ownerOverride`, `goalKinds`, `serves: [{id, title, origin}]` and `housekeeping` |
+| `get_recommendation` | read | `id` | the live rec, linked the same way |
 | `list_deadlines` | read | `from?, to?` | `[{date, label, title, recId, hard}]` sorted by date |
 | `list_goals` | read | none | goals |
 | `get_figures` | read | `keys?: string[]` | `[{key, v, kind, label, source: {id, label, asOf}}]` |
 | `packs_status` | read | none | `[{id, name, status, why}]` |
 | `advisor_status` | read | none | `{advisor, nextCheckin: {date, time, lengthMin, label} or null, waiting: [{recId, title, sentOn}], reviewed: [{recId, title, sentOn, verdict, note, reviewedOn, recordedOn}], history (closed reviews with closedOn, closedReason), packets: [{id, date, recIds}]}` (see "Advisor workflow") |
-| `set_recommendation_status` | write:recs | `id, status: doing, done, dismissed, snoozed or proposed, wake?` | the rec; writes `rec_events` with actor `tool` |
+| `set_recommendation_status` | write:recs | `id, status: doing, done, dismissed, snoozed or proposed, wake?` | the linked rec; writes `rec_events` with actor `tool` |
+| `set_recommendation_owner` | write:recs | `id, owner: you, spouse, both, advisor or automatic` | the linked rec; sets `owner` and `owner_override = 1`, writes `rec_events` action `set_owner`, actor `tool`, from and to the current status |
 | `list_packs` | read | none | `[{id, name, status, why, version, taxYear, reviewed, covers, entries: [{file, title}]}]` sorted by id |
 | `get_pack_entry` | read | `packId, file` (the manifest file or the entry id) | `{packId, packName, file, id, title, markdown, citations: [{label, url}], version, taxYear, reviewed}`; any loaded pack, active or not |
 | `search_pack_entries` | read | `query (2..200 chars), packId?, limit? (1..20, default 10)` | `{results: [{packId, file, id, title, score, snippet}], total, truncated}` over active packs only (the query is not echoed) |
@@ -289,15 +294,14 @@ secrets are read there.
 | `FATHOM_EMAIL_SMTP_HOST` | `smtp.gmail.com` | SMTP host for `smtp`. |
 | `FATHOM_EMAIL_SMTP_PORT` | `465` | `465` (TLS) or `587` (STARTTLS, TLS required); anything else is a config error. |
 | `FATHOM_LIVE_EMAIL` | unset | `1` lets `npm run email:test` send a real email (see Email); read only by that script. |
-| `FATHOM_PUBLIC_URL` | unset | The URL MCP clients reach this server at (an `http` or `https` URL with no credentials, query or fragment; anything else refuses to start). Emails link into the app from it. Its host is allowed on `/mcp` and every `/api` route, and `GET /api/mcp` advertises it with `/mcp` appended. |
+| `FATHOM_PUBLIC_URL` | unset | The origin people and MCP clients reach this server at. Required on a real store (startup refuses a missing or invalid one); optional on a demo. `https://` with a DNS host name at the root, or `http://localhost:<port>` for local tests only (no bypass flag); IP literals, paths, credentials, queries and fragments refuse to start. It is the WebAuthn relying party (its host name is the RP ID, its origin the expected origin), the exact `Origin` every real-store mutation must carry, the base of emailed links, and with `/mcp` appended the MCP URL `GET /api/mcp` advertises. Its host is allowed on `/mcp` and every `/api` route. |
 | `FATHOM_ALLOWED_HOSTS` | unset | Comma separated extra `Host` names allowed on `/mcp` and every `/api` route: `host` (any port) or `host:port`. |
-| `FATHOM_OWNER_LOGINS` | unset | Comma or newline separated Tailscale logins admitted on a real store (trimmed, case-insensitive). Unset or blank on a real store fails closed: every page and `/api` route answers 401. See "Owner identity". |
+| `FATHOM_TRUSTED_PROXIES` | none (`[]`, no proxies trusted) | Comma separated CIDRs (explicit IPv4 or IPv6 ranges, such as `10.0.0.0/8` or `fd00::/8`) of the reverse proxies whose `X-Forwarded-For` the rate limits may read. Anything that is not a valid CIDR refuses to start with a fixed message. Empty means the socket address is the client. |
 | `FATHOM_SIMPLEFIN_ALLOWED_HOSTS` | `bridge.simplefin.org,beta-bridge.simplefin.org` | Comma separated host names the SimpleFIN client may call (no scheme, port or path; anything else refuses to start). Claim and access URLs on any other host are refused. |
-| `FATHOM_OWNER_LOGINS_FILE` | unset | Path to a file holding the same list (comma or newline separated). Use instead of `FATHOM_OWNER_LOGINS`; setting both, or an unreadable file, fails closed. |
 | `FATHOM_LIVE` | unset | Read only by `npm run smoke:live`. `1` plus `FATHOM_CLAUDE_CREDENTIAL_FILE` runs the opt-in live engine smoke. |
 | `FATHOM_SMOKE_BASE_URL` | unset | With `BASE_URL`, points Playwright smoke at a server you already started. |
-| `FATHOM_SMOKE_TARGET` | `demo` | `real` swaps scenario assertions for shell, empty-state and provenance checks, and aborts any app request that is not GET or HEAD. |
-| `FATHOM_SMOKE_HEADERS` | unset | JSON object of extra request headers for a real-store smoke (the owner login header). |
+| `FATHOM_SMOKE_TARGET` | `demo` | `real` runs the signed-out `@auth-smoke` checks, or with a storage state swaps scenario assertions for shell, empty-state and provenance checks; it aborts any app request that is not GET or HEAD. |
+| `FATHOM_SMOKE_STORAGE_STATE` | unset | Path to a Playwright storage-state file with a signed-in session for the supplied smoke server; becomes `use.storageState`. Refused without `FATHOM_SMOKE_BASE_URL` or `BASE_URL`. |
 
 ## Store
 
@@ -347,7 +351,7 @@ Money columns are dollars rounded to cents; JSON columns hold JSON text. The pro
 | `tax_payments` | `id` PK, `jurisdiction`, `tax_year`, `date`, `amount`, `kind` (the row's payment kind), `dedupe_key` (unique when set), `source_slot`, `payer`, `date_precision`, `tax_year_basis`, `recipient` (withholding: `owner`, `spouse` or `unknown`, the last segment of its `wh:` slot; NULL for workbook rows), provenance |
 | `documents` | `id` PK, `doc_type`, `tax_year`, `fields` JSON (extracted values only; a `notes` document holds the reference `{ref, sha256, chars, lines}`, never the text), `dedupe_key` (unique when set), provenance |
 | `figures` | `key` PK, `v`, `src` (references `sources.id`), `kind` in a, p, e, m, `label`, provenance, `updated_at` |
-| `recs` | `id` PK, `def` JSON (the CONTRACT rec minus live fields), `status`, `waiting_on`, `wake`, `tasks_done` JSON, `window_close` ISO date, `window_label`, `pack_id`, `sort`, `updated_at`, provenance |
+| `recs` | `id` PK, `def` JSON (the CONTRACT rec minus live fields), `status`, `waiting_on`, `wake`, `tasks_done` JSON, `window_close` ISO date, `window_label`, `pack_id`, `sort`, `updated_at`, provenance, `owner` (`you`, `spouse`, `both`, `advisor` or `automatic`, default `you`), `owner_override` (0 or 1: 1 once the owner set it), `goal_kinds` JSON array of goal topics (default `[]`); see "Rec owner and goal links" |
 | `rec_events` | `id` PK, `rec_id`, `ts`, `action`, `arg`, `from_status`, `to_status`, `actor` (`ui`, `tool`, ...) |
 | `conversations` | `key` PK (an Ask thread `ask:<12 lowercase hex>` or `pack:<id>`), `created_at`, `last_at` (newest message time, else `created_at`), and for Ask threads `title` (NULL until named), `title_source` (NULL, `auto` or `manual`), `archived_at`, `trashed_at` (migration 008; app clock ISO times), `rec_id` (the rec a thread was asked from, a context reference, never a foreign key) and `rec_detached_at` (set by Start over) (migration 016) |
 | `messages` | `id` PK, `conversation_key`, `role` in me, fathom, advisor, claude, `text` (token-bearing HTML), `refs` JSON, `notice`, `ts`, `provenance` JSON or NULL (migration 006; see "Answer provenance") |
@@ -361,7 +365,14 @@ Money columns are dollars rounded to cents; JSON columns hold JSON text. The pro
 | `job_lock` | `id` PK (always 1), `holder`, `expires_at`: the scheduler lease |
 | `email_sends` | `id` PK, `ts`, `kind` in brief, alert, test, `subject`, `status` in sent, failed, `error_code`, `transport`, `recipients` (a count), `message_id`, `job_run_id`. No bodies and no addresses. |
 | `deadline_alerts` | `key`, `threshold` (14, 7 or 1), `deadline_date`, `sent_at`, `send_id`; PK (`key`, `threshold`) |
-| `api_keys` | `id` PK, `name`, `key_hash`, `scopes` JSON, `created_at`, `last_used_at`, `revoked_at` |
+| `api_keys` | `id` PK, `name`, `key_hash`, `scopes` JSON, `created_at`, `last_used_at`, `revoked_at`, `user_id` (references `users.id`, cascade delete; the creator, NULL for keys made before accounts) |
+| `households` | `id` PK, always 1: the one household. Created on demand before the first user. |
+| `users` | `id` PK (UUID), `household_id` (references `households.id`), `email` (canonical, unique), `role` in admin, member, `user_handle` (random, the WebAuthn user handle), `created_at`, `enrolled_at` (NULL until the first passkey verifies) |
+| `passkeys` | `id` PK (credential id), `user_id` (references `users.id`, cascade delete), `public_key` BLOB, `counter`, `transports` JSON, `name`, `created_at` |
+| `auth_tokens` | SHA-256 digest of an enrollment or recovery token PK, `user_id` (cascade delete), purpose `invite` or `recovery`, expiry. Never the token. |
+| `auth_sessions` | SHA-256 digest of a session cookie PK, `user_id` (cascade delete), `signed_in_at` (wall-clock milliseconds of the sign-in or link registration that created it, NOT NULL), expiry. Never the cookie. |
+| `auth_challenges` | digest of the ceremony cookie PK, ceremony, `user_id` (NULL for sign-in), the token and session digests it was issued for (NULL when none), the challenge, expiry. Used once. |
+| `auth_rate_limits` | hashed bucket key PK, window, attempts. No raw email or address. |
 | `spend_ledger` | `id` PK, `ts`, `yyyymm` `'YYYY-MM'`, `purpose`, `cost_usd` (full precision), `model`, `tokens` JSON (usage counts only, never prompt text) |
 | `superseded_rows` | `id` PK, `table_name`, `dedupe_key`, `row` JSON (the archived row), `file_id`, `superseded_by` (references `files.id`), `reason` (`revised`, `removed`, `older_snapshot`, `alias_merged`, `duplicate_confirmed`, `duplicate_cross_format`, `duplicate`, `summarized`), `at`, `survivor_key` (for `duplicate_confirmed`, the dedupe key of the row it was confirmed against) |
 | `confirm_items` | `id` PK, `kind`, `subject`, `question`, `options` JSON `[{id, label}]`, `context` JSON, `status` in pending, answered, `answer`, `file_id`, `created_at`, `answered_at`; unique (`kind`, `subject`) |
@@ -438,6 +449,22 @@ Migration 017 (`017-confirm-context.sql`) creates `account_holders`, `confirm_au
 `confirm_auto_declined` and `simplefin_snapshots` (see "Confirm queue"). It adds tables only: a
 new column on `accounts` or `confirm_items` would make every stored undo log, which holds
 whole-row images, fail its revert.
+
+Migration 018 (`018-accounts.sql`) creates `households`, `users`, `passkeys`, `auth_tokens`,
+`auth_sessions`, `auth_challenges` and `auth_rate_limits`, and adds `api_keys.user_id` (existing
+keys keep NULL). It changes no household data table. The household row is created lazily by the
+auth store before the first user, so the demo seed's empty-store check and clear order are
+unchanged (see Accounts and sessions).
+
+Migration 019 (`019-rec-owner-goal-links.sql`) adds `recs.owner`, `recs.owner_override` and
+`recs.goal_kinds` with `ALTER TABLE ADD COLUMN` (constant defaults and CHECKs, no rebuild).
+The backfill is deterministic: a planner rec (in `planner_recs`) takes its trigger's static
+`goalKinds` and `owner`, a demo seed rec (parser `demo-seed`, not planner) takes the demo
+scenario's, anything else keeps the defaults (housekeeping, owner `you`). SQL cannot run a
+trigger's `ownerFor`, so a contextual owner (for example the spouse's solo plan) settles at the next
+planning run, which applies it because `owner_override` stays 0. Statuses, defs, tasks, events,
+planner bookkeeping and advisor rows are untouched. `test/store-rec-owner-migration.test.mjs`
+checks the SQL against the trigger modules and the demo scenario.
 
 ### Adding a migration
 
@@ -523,6 +550,7 @@ live = {
   yourPlans: { sources: [ { fileId, name, docType } ], files: [ { id, name } ], built: settings.yourPlans | null },
   clock: 'YYYY-MM-DD',
   heard: { sections: [ { id, title, items: [ heard item ] } ], deadlines: int, pending: int, empty: boolean },  // see Onboarding below
+  housekeeping: int,                    // recs with housekeeping true that are not hidden, done or dismissed
   ingest: {
     pending: int,                       // pending confirm items
     items: [ confirm item ],            // pending items, shape below, plus fileName (string or null) and
@@ -623,11 +651,11 @@ Onboarding is six steps (Sign in, Tell us, Accounts, Confirm, Priorities, First 
 it is fake or hand-written any more except the Accounts (connections) and Priorities steps, which
 other items own.
 
-Sign in. There is no passkey and no form. Identity is the owner gate (Owner identity above). The
-demo build, which has no gate, shows step 0 as a line: "Signed in through your private network"
-with the identity `GET /api/identity` reports, or "Reached through your private network" with a
-note that the demo signs no one in. A real store skips step 0 (the first step is 1) and shows the
-signed-in name in the page header; More shows it too.
+Sign in. A real store signs people in before the app loads, on the account pages (see Accounts and
+sessions), so it skips step 0 (the first step is 1) and shows the signed-in email in the page
+header; More shows it too, with Account and, for admins, Household. The demo build has no accounts
+and shows step 0 as a line, "Reached through your private network", with a note that the demo
+signs no one in.
 
 Tell us. The text is saved by `POST /api/onboarding/notes` (`src/api/onboarding-handlers.mjs`) as a
 file named `Setup notes <date>.md` (type `text/markdown`) through `ingestFile`, exactly the path of
@@ -664,25 +692,46 @@ and `(s === 4)` branches of `pOnboarding` in `web/horizon/design.js`; the Confir
 
 ## API
 
-All JSON. On a real store every path except `/healthz` and `/mcp` first passes the owner identity
-gate (see "Owner identity"), before the Host allowlist, route matching and static files. Every `/api` route (any path equal to `/api` or under `/api/`, including unknown paths,
-wrong methods and the ingest upload and confirm routes) first passes the Host allowlist described
-under "MCP server": a foreign `Host` gets 403 `{error: 'forbidden host'}` before route matching.
-`/healthz` and static files are exempt. A deployment reached by a DNS name must set
-`FATHOM_PUBLIC_URL` or `FATHOM_ALLOWED_HOSTS`. Every POST except `POST /api/files` requires
-`content-type: application/json` (charset allowed), else 415; when an `Origin` header is present its
-host must equal the `Host` header, else 403; bodies are capped at 64 KiB (413); malformed JSON or a
-non-object body is 400. Errors are `{error: '<message>'}`. Unknown
-paths under `/api` are a JSON 404 and a known path with the wrong method is 405. Every action
-response is `{scenario, ...}` with the fresh scenario.
+All JSON. On a real store every path except `/mcp` and the public paths listed under "Accounts and
+sessions" first needs a session, before route matching and static files. Every `/api` route (any
+path equal to `/api` or under `/api/`, including unknown paths, wrong methods and the ingest upload
+and confirm routes) passes the Host allowlist described under "MCP server", decided on the
+canonical (percent-decoded, normalized) path so an encoded alias cannot skip it: a foreign `Host`
+gets 403 `{error: 'forbidden host'}` before route matching. `/healthz` and static files are exempt.
+Every POST except `POST /api/files` requires `content-type: application/json` (charset allowed),
+else 415. Origin: on a real store every POST, uploads and the public auth routes included, needs an
+`Origin` header exactly equal to the `FATHOM_PUBLIC_URL` origin, else 403 (a missing header is
+refused too); a demo store keeps the earlier rule, where an `Origin`, when present, must have the
+`Host` header's host. Bodies are capped at 64 KiB (413); malformed JSON or a non-object body is
+400. Errors are `{error: '<message>'}`. Signed in, unknown paths under `/api` are a JSON 404 and a
+known path with the wrong method is 405; signed out, both are 401. Every action response is
+`{scenario, ...}` with the fresh scenario.
 
 | Method and path | Body | Response |
 |---|---|---|
 | `GET /healthz` | | `{ok: true, schema: <latest migration id>}` |
 | `GET /api/scenario` | | the scenario with `live` |
-| `GET /api/identity` | | `{identity: {login, name} or null}`. The admitted owner: `login` is the trimmed `Tailscale-User-Login`, `name` the trimmed `Tailscale-User-Name` or else the login. Always `null` on a demo store. |
+| `GET /api/identity` | | `{identity: {id, email, name, login, householdId, role} or null}`. The signed-in user (`name` and `login` are the email). Always `null` on a demo store. |
+| `GET /signin` | | Public page: `web/auth/index.html` (sign in with a passkey, email recovery link). Loads only `/auth/auth.js`, `/auth/auth.css` and `/favicon.svg`; never the scenario. |
+| `GET /enroll` | | Public page: the same file. Reads the token from the `#` fragment of an emailed link, removes it from history at once, and creates a passkey. |
+| `GET /account` | | Signed-in page: the same file. Passkeys (add, revoke) and sign out. |
+| `GET /admin/users` | | Admin page: the same file. People, roles, invitations, removal and passkey revocation. A member gets a 403 page. |
+| `GET /api/auth/session` | | `{identity, demo}`. Public; `identity` as for `GET /api/identity` or null; no household data. A demo store answers `{identity: null, demo: true}`. Every other auth and admin route is 404 on a demo store. |
+| `POST /api/auth/signin/options` | `{}` | `{options}`: WebAuthn request options for a discoverable sign-in (no `allowCredentials`, `userVerification: required`). Sets the ceremony cookie. Public, rate limited (429). |
+| `POST /api/auth/signin/verify` | `{response}` (the credential as WebAuthn JSON) | `{identity}` and the session cookie. 400 for any failed verification, an unknown or revoked credential, or a user handle that does not match. |
+| `POST /api/auth/register/options` | `{token?, name?}` | `{options}`: WebAuthn creation options (resident key required, user verification required, attestation `none`, `credProps` requested, `excludeCredentials` for the user's passkeys). With `token` it is an enrollment or recovery link (public; 410 for an expired or used link); without, it adds a passkey for the signed-in user (401 signed out; 403 with `code: 'recent_signin_required'` and a fixed message to sign in again when the session's sign-in is 10 minutes old or older). |
+| `POST /api/auth/register/verify` | `{response, token?, name?}` | `{identity}` and the session cookie. 400 when verification fails or `clientExtensionResults.credProps.rk` is not exactly `true`; 410 for an expired or used link; without a token, the same 403 `recent_signin_required` as options, checked again after verification. A recovery link replaces the user's passkeys and sessions only here, after the new passkey verifies. After the commit it sends the security notice (see Accounts and sessions); the response is the same whether that send succeeds. |
+| `POST /api/auth/recover` | `{email}` | The same fixed 200 body for every address, known or not, valid or not. An enrolled account gets a recovery email; nothing else does. Rate limited (429). |
+| `POST /api/auth/signout` | `{}` | 200. Deletes the current session and clears the cookie. |
+| `GET /api/auth/passkeys` | | `{passkeys: [{id, name, createdAt, transports}]}` for the signed-in user; never key bytes or counters. |
+| `POST /api/auth/passkeys/:id/revoke` | `{}` | 200. Deletes one of the signed-in user's passkeys and every session of that user, the current one included. The last passkey may be revoked. The user's MCP keys stay live. |
+| `GET /api/admin/users` | | `{users}`: every user with `enrolledAt` (NULL while the invitation is pending). Admins only, 403 for members. |
+| `POST /api/admin/users/invite` | `{email, role}` | A generic 200 that never includes the link. Creates the user if new, or for a pending invitation sets the requested role, and emails a fresh enrollment link, revoking older ones. 409 for an enrolled address, even with the same role: change its role with the role action instead. Rate limited (429). Admins only. |
+| `POST /api/admin/users/:id/role` | `{role}` | 200. `admin` or `member`. 409 when it would leave no enrolled admin. Admins only. |
+| `POST /api/admin/users/:id/remove` | `{}` | 200. Deletes the user with their passkeys, sessions, tokens and the MCP keys they created. 409 for the last enrolled admin. Admins only. |
+| `POST /api/admin/users/:id/passkeys/:keyId/revoke` | `{}` | 200. Deletes that passkey and every session of its user; their MCP keys stay live. Admins only. |
 | `POST /api/recs/:id/start-over` | `{}` | `{scenario}`. Detaches every thread asked from the rec that is still attached (sets `recDetachedAt` to the app clock time), so the rec dialog opens a fresh composer; an already detached thread keeps its time. Threads, messages, titles, archive and trash are untouched. 404 unknown or hidden rec. |
-| `POST /api/recs/:id/action` | `{action: start, snooze, dismiss, complete, reopen or task, arg?}` | `{scenario}`. `task` toggles task `arg`; `snooze` takes a wake label (default "Next month"). 400 bad action or task index, 404 unknown or hidden rec. Writes `rec_events` (actor `ui`). |
+| `POST /api/recs/:id/action` | `{action: start, snooze, dismiss, complete, reopen, task or owner, arg?}` | `{scenario}`. `task` toggles task `arg`; `snooze` takes a wake label (default "Next month"); `owner` sets the action owner to `arg` (one of `you`, `spouse`, `both`, `advisor`, `automatic`, case sensitive) with `owner_override = 1`, status unchanged. 400 bad action, task index or owner, 404 unknown or hidden rec. Writes `rec_events` (actor `ui`; for `owner` action `owner`, arg the owner, from and to the current status). |
 | `POST /api/wargame/:name/pick` | `{index}` (an index or an option id) | `{scenario}`. `name` is salary or deferral (404 otherwise); 400 out of range. |
 | `POST /api/decisions/:id/decide` | `{index?}` (a point index or id; default the stored pick) | `{scenario}`. Decide on the picked point of an open salary or deferral decision: status becomes decided and `decided_line` is built from the point's own label plus `{f:...}` tokens for the `wg.*` figures the registry holds (provenance stays on the figures). Records the pick in `wargame.picks`, writes the owner-stated assumption fact (`business.salaryDecided` = `{entity, salary}`, the S corp the game was built for and the point's `wg.salary.<id>.salary` value, or `business.deferralDecided` = `{option, amount}`; src `decide:salary` or `decide:deferral`, confirmed, locator names the decision and the figure), logs a `decide` rec event on the linked rec and schedules the plan job (trigger `decide`) on a real store. 404 unknown id, 400 no war game or bad index, 409 already decided, not open, upcoming or unavailable. |
 | `POST /api/decisions/:id/revisit` | `{}` | `{scenario}`. Reopens a decision decided that way: status open, `decided_line` cleared, the assumption fact deleted, a `revisit` rec event, plan job scheduled. 409 for a decision that is not decided with a stored choice. |
@@ -710,10 +759,10 @@ response is `{scenario, ...}` with the fresh scenario.
 | `POST /api/onboarding` | `{step}` | `{scenario}`. 0 to 5 set the step, 6 completes onboarding; anything else 400. |
 | `POST /api/onboarding/notes` | `{text}` | `{scenario, file, understood}`. Saves the Tell us note as a notes document through the ingest pipeline (see Onboarding below). 400 for a missing, empty or control-character text, 413 over 30000 bytes, 409 without a data key on a real store, 422 when the note could not be stored. The text never appears in an error, a log or the database. |
 | `POST /api/demo/reset` | `{}` | `{scenario}`. Rebuilds the demo store and removes stored uploads (`$FATHOM_DATA/files/*.bin`); 404 unless the store is a demo store. Clears `api_keys`; the server secret file survives. |
-| `GET /api/keys` | | `{keys: [{id, name, scopes, createdAt, lastUsedAt, revokedAt}]}` ordered by creation; never a key or hash. |
-| `POST /api/keys` | `{name, scopes?: ('read' or 'write:recs')[]}` | `{key, record, keys}`. The only time the key is shown. Name trimmed, 1 to 80 characters, no control characters; scopes always include `read`; else 400. |
-| `POST /api/keys/:id/revoke` | `{}` | `{record, keys}`. Sets `revokedAt` once (a second revoke keeps it); 404 unknown id. |
-| `GET /api/mcp` | | `{url, publicUrlSet, tools: [{name, description, scope}], scopes: [{id, label, access}]}`. `url` is `FATHOM_PUBLIC_URL` with `/mcp` appended unless it already ends in it, else `<proto>://<Host>/mcp` with proto from `X-Forwarded-Proto` (http or https only), then the socket. |
+| `GET /api/keys` | | `{keys: [{id, name, scopes, createdAt, lastUsedAt, revokedAt}]}` ordered by creation; never a key or hash. A member sees the keys they created; an admin sees every key, including keys with no creator. A demo store lists every key. |
+| `POST /api/keys` | `{name, scopes?: ('read' or 'write:recs')[]}` | `{key, record, keys}`. The only time the key is shown. Name trimmed, 1 to 80 characters, no control characters; scopes always include `read`; else 400. Any signed-in user may create one; the creator comes from the session, never the body. |
+| `POST /api/keys/:id/revoke` | `{}` | `{record, keys}`. Sets `revokedAt` once (a second revoke keeps it); 404 unknown id. A member may revoke only keys they created (403 otherwise); an admin may revoke any. |
+| `GET /api/mcp` | | `{url, publicUrlSet, tools: [{name, description, scope}], scopes: [{id, label, access}]}`. `url` is the `FATHOM_PUBLIC_URL` origin with `/mcp` appended. |
 | `POST /api/files` | multipart/form-data, field `files` (one or more) | `{scenario, files: [result], pending}`. A result is `{fileId, name, status, sourceKind, parser, counts, duplicateOf?}` with status `imported`, `duplicate`, `needs_mapping`, `needs_extraction`, `unsupported`, `too_large` (past a parse limit, see Ingest) or `failed`. 400 no files or malformed body, 409 a real store without `FATHOM_DATA_KEY_FILE` (nothing stored), 413 over a size cap, 415 not multipart with a boundary. |
 | `GET /api/files` | | `{files: [{id, name, status, sourceKind, parser, counts, uploadedAt}]}`, newest first. |
 | `POST /api/files/:id/retry` | `{}` | `{scenario, file: result}`. Routes a `needs_mapping` or `needs_extraction` file again under the same id; 404 unknown file, 409 a file that is not waiting. |
@@ -762,42 +811,213 @@ never inject a scenario token or markup.
 
 `web/` is served at `/` and `src/shared/` at `/shared/`. Paths resolve inside those directories
 only: any `.` or `..` segment (raw or percent-encoded), dotfile, backslash or symlink escape is a
-404. Unknown extensionless paths fall back to `web/index.html`. Every response sets
+404. Unknown extensionless paths fall back to `web/index.html`, except the account pages
+(`/signin`, `/enroll`, `/account`, `/admin/users`), which serve `web/auth/index.html`; the main
+app shell is never served as a sign-in page. Signed out on a real store, the only static files
+served are `/auth/auth.js`, `/auth/auth.css` and `/favicon.svg`. Every response sets
 `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY` and this
 CSP: `default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com;
 style-src-attr 'unsafe-inline'; font-src https://fonts.gstatic.com; img-src 'self' data:;
 connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'`.
 API responses also set `Cache-Control: no-store`.
 
-### Owner identity
+### Accounts and sessions
 
-Trust model. The app is reached through `tailscale serve`, which proxies each request and adds
-`Tailscale-User-Login` and `Tailscale-User-Name` for the signed-in tailnet user. On a real store
-(`settings.mode` is not `demo`, so a store with no mode row is real) every page, static file and
-`/api` route requires a `Tailscale-User-Login` listed in `FATHOM_OWNER_LOGINS` or
-`FATHOM_OWNER_LOGINS_FILE`, compared trimmed and case-insensitively; a header Node joined from
-duplicates never matches. `src/api/identity.mjs` holds the check and the router runs it once, first,
-for every path except exactly `/healthz` (open for probes) and `/mcp` (bearer keys only; it never
-reads the identity header). Demo stores are open. With no usable list (unset, blank, both keys set,
-an unreadable file) the gate fails closed: startup logs one `fathom:` line naming the problem (never
-the file contents, path or error) and every gated request is 401. A refused `/api` request gets
-`{error: 'unauthorized'}`; any other path gets a static Not authorized page with
-`Cache-Control: no-store` (no body for HEAD). Neither echoes the header. Handlers see the admitted
-identity as `ctx.identity` (null on a demo store).
+A real store has accounts for one household; a demo store has none and stays open. `src/auth/`
+holds the store (`createAuthStore`), the WebAuthn service (`createAuthService`, on
+`@simplewebauthn/server`) and the handlers; `src/api/identity.mjs` resolves the session and serves
+the unauthorized page; the router runs the gate once per request. Handlers see the signed-in user
+as `ctx.identity` (null on a demo store).
 
-`tailscale serve` strips any client-supplied `Tailscale-User-*` headers, whatever their case, before
-adding its own, so a tailnet client cannot forge them through it. Tagged nodes (every agent host)
-get no login header, so only the owner's own devices pass the gate.
+Model.
 
-Limit. The header is trustworthy only when the sole path to the app is `tailscale serve`. Anything
-that reaches the pod, its Service or a port-forward directly could forge it. The homelab deployment
-keeps ingress default-deny and binds its port-forward to loopback only; a misconfigured Service or a
-second ingress would break this. Known limit, with no code fix: any local process on the serving
-host can reach that loopback port-forward directly and send a forged header. It is recommended for
-acceptance; the owner has not decided yet. The Host allowlist still applies after the gate, so the tailnet
-name must be allowed through `FATHOM_PUBLIC_URL` or `FATHOM_ALLOWED_HOSTS`. Scripts that post
-without the header (such as `scripts/dump.mjs`) get 401 from a real-mode server unless they go
-through `tailscale serve`.
+1. One household (`households`, a single row with id 1). Every user belongs to it with role
+   `admin` or `member`. Household data is not scoped by user: every signed-in person reads and
+   changes the same store. This is access control for one household, not multi-tenancy.
+2. Members have the whole app, including MCP keys of their own. Admins also invite people, change
+   roles, remove people, revoke anyone's passkeys, and list or revoke every MCP key. Admin routes
+   answer 403 to members, and `/admin/users` is a 403 page for them, whatever the URL.
+3. The last enrolled admin cannot be demoted or removed (409); the check runs inside one
+   transaction. Pending invitations do not count as admins.
+4. The email is the username. Its canonical form: outer whitespace trimmed, ASCII only, lowercased
+   whole, at most 254 bytes with a local part of at most 64, one `@`, safe unquoted local
+   characters and a DNS-style domain of letters, digits and hyphens. No Unicode or IDN, quoted
+   local parts, comments, lists or plus-tag stripping. Lookup, uniqueness and delivery all use the
+   stored canonical address.
+5. The user projection is `{id, email, name, login, householdId, role}` with `name` and `login`
+   equal to the email, so the UI's identity shape is unchanged.
+
+Passkeys.
+
+1. WebAuthn only, no passwords. The RP ID is the `FATHOM_PUBLIC_URL` host name and the expected
+   origin is its origin; forwarded host or origin headers are never trusted. Changing that host
+   name invalidates every passkey, and everyone re-enrolls through recovery links.
+2. Registration requires a discoverable credential (`residentKey: required`, `requireResidentKey`),
+   user verification and attestation `none`, and requests `credProps`. A response whose
+   `credProps.rk` is not exactly `true`, absent included, is refused with 400: a browser or provider
+   that does not report it cannot enroll. `credentialDeviceType` is not taken as proof of
+   discoverability. `excludeCredentials` lists the user's existing passkeys.
+3. Sign-in is discoverable: options omit `allowCredentials` and require user verification, and the
+   verified user handle must match the user's stored random handle. An unknown email cannot be
+   probed through sign-in.
+4. Verification errors become fixed 400 messages; payloads are never logged. A challenge is used
+   once, and the user, passkey and token are checked again after the awaited verification, before
+   anything is written.
+5. A user may hold several passkeys. Adding one from a live session binds the challenge to that
+   user and keeps the others. Revoking any passkey, by its owner or an admin, deletes every session
+   of that user, the current one included, and leaves the MCP keys that user created live. Revoking
+   the last passkey is allowed; the pages say an email recovery link is then the way back in.
+6. Adding a passkey from a session, with no link token, needs a recent sign-in: the session's
+   `signed_in_at` must be less than 10 minutes old at options, at verify and again after the awaited
+   verification. At 10 minutes or more the answer is 403 with the stable code
+   `recent_signin_required` and a fixed message to sign in again; nothing is stored. Account shows a
+   Sign in again link to `/signin`, which accepts a new sign-in from a signed-in browser; the person
+   then comes back to Account. Enrollment and recovery links carry their own token and need no prior
+   session, so the rule does not apply to them.
+
+Sessions and challenges.
+
+1. Sign-in and enrollment set `__Host-fathom-session`: 32 random bytes, `HttpOnly; Secure;
+   SameSite=Lax; Path=/`, host only. `auth_sessions` keeps only its SHA-256 digest and
+   `signed_in_at`, the wall time of the sign-in or link registration that created it; the public
+   identity and session shapes do not expose it. A session lasts seven days from creation, with no
+   sliding renewal. Signing in again from a signed-in browser replaces only that browser's session,
+   with a new `signed_in_at`.
+2. A ceremony cookie with the same attributes ties each WebAuthn challenge (five minutes, single
+   use) to the browser that asked for it. The server manages it.
+3. Sign out deletes the current session only. Removing a user deletes their passkeys, sessions,
+   tokens and the MCP keys they created, so their bearer keys fail at once.
+4. Expired token, session, challenge and rate-limit rows are deleted lazily when the auth service
+   handles a request and when the CLI runs. Nothing unexpired and no household data is touched.
+5. Clocks are wall time. Chromium treats `http://localhost` as secure, so local tests get the
+   Secure cookie over plain HTTP.
+
+Enrollment and recovery links.
+
+1. A link is `<FATHOM_PUBLIC_URL origin>/enroll#<token>`: 32 random bytes, base64url, in the
+   fragment only, so it never reaches a request line, a server log or a Referer. The page reads it
+   into memory and replaces the history entry at once; it is never stored or logged. The store
+   keeps only the digest. A token lasts 20 minutes and works once; a new token for the same user
+   and purpose revokes the older ones. An expired or used link is 410.
+2. Invitations come from an admin on the Household page (Email, Role, Invite user). The response is
+   generic and never carries the link, not even for the admin. Inviting a pending address again
+   sets the role just requested, keeping its id, address and user handle, and issues a fresh link.
+   Inviting an enrolled address is 409, even with the same role; its role changes only through the
+   role action. Auth mail goes through the
+   configured transport directly, not through `email_sends`, whose kinds are financial mail. A
+   failed send revokes the token and logs a fixed code, never the address or the link.
+3. Recovery: `POST /api/auth/recover` answers the same 200 for known, unknown, invalid and pending
+   addresses. An enrolled account gets a recovery mail, sent in process without awaiting the
+   transport so timing does not reveal the account; there is no durable queue, so if the process
+   stops before the send nothing retries and the person asks again. A pending account gets nothing;
+   an admin reissues its invitation.
+4. A recovery link replaces credentials only after the new passkey verifies: consuming the token,
+   deleting the old passkeys and sessions and storing the new passkey happen in one transaction.
+5. Rate limits (429) count by client address, by hashed canonical email, and in a global bucket.
+   Bucket keys are hashed. Anonymous options generation is capped the same way. Invitations have
+   their own `invite` global and per-client buckets with the recovery limits (120 a window
+   globally, 60 per client, 10-minute windows), separate from recovery's, so one never spends the
+   other's quota; recovery keeps its per-email bucket and generic answer.
+6. The client address comes from `createClientAddressResolver` in `src/auth/client-ip.mjs` (on
+   `proxy-addr`), built from `FATHOM_TRUSTED_PROXIES`. That setting is the `X-Forwarded-For` trust
+   boundary. When the socket address is not in a trusted CIDR, `X-Forwarded-For` is ignored and the
+   socket address is the client. When it is, the chain is read right to left and the client is the
+   right-most address outside the trusted CIDRs (the left-most entry when every hop is trusted). A
+   malformed header falls back to the socket address. IPv4-mapped IPv6 sockets match IPv4 CIDRs.
+   The default trusts no proxy, which is safe but puts everyone behind a proxy in one per-client
+   bucket.
+7. Mail needs a real transport in production (`FATHOM_EMAIL_TRANSPORT` and its settings; the
+   existing `FATHOM_EMAIL_TO` setup is assumed). `dev` writes the message, link included, to
+   `outbox/` in the data directory.
+
+Security notices.
+
+1. After a passkey registration commits, the service sends a fixed security email straight through
+   the configured transport, outside the transaction and before the response returns. These
+   notices never go through `email_sends`, which records financial mail only, and add no durable
+   queue or retry.
+2. `Fathom passkey added` goes to the user when an invitation link or a signed-in session adds a
+   passkey.
+3. `Fathom account recovered` goes to the recovered user and to every enrolled admin, each address
+   once. It says recovery completed and a new passkey was added.
+4. Each notice is a separate message to one recipient, so no recipient sees another's address.
+   Notices carry no link, token, session or key material.
+5. A failed send logs only the fixed code `security_notice_failed`, never the address or the error.
+   The new passkey and session stay in place and the response is unchanged.
+
+Bootstrap.
+
+1. `npm run user:invite -- <email> --admin` (`scripts/user-invite.mjs`, exported `main(argv, env)`)
+   invites the first admin of an existing real store. It refuses a demo store, a missing store, an
+   invalid `FATHOM_PUBLIC_URL`, unknown arguments and a missing `--admin`, and opens the migrated
+   database without reading household tables.
+2. It emails the link through the configured transport first, then prints it to the operator's
+   stdout only after the send succeeded. A failed send prints no link. Errors are fixed lines on stderr. Neither the address nor the
+   link is logged.
+3. It works only while nobody has enrolled; run again before that, it reissues the pending
+   invitation and revokes the older link. After the first enrollment it refuses, and admins invite
+   from the app.
+4. A sole admin who loses every passkey and the mailbox too cannot get back in through the app or
+   the CLI. That needs trusted offline database work, outside these tools. There is no
+   hidden recovery path.
+
+Gate and origins.
+
+1. `/mcp` (exactly that path) is handled first and only with bearer keys; it never reads cookies.
+2. Public without a session: `GET` and `HEAD /healthz`; `GET /signin` and `GET /enroll`;
+   `/auth/auth.js`, `/auth/auth.css` and `/favicon.svg`; `GET /api/auth/session` (no household
+   data); and the sign-in, link registration and recovery POSTs.
+3. Everything else needs a session. Signed out, an `/api` path, unknown paths included, is 401
+   `{error: 'unauthorized'}` and any other path is a 401 page with a Sign in link and
+   `Cache-Control: no-store`. Signed in, unknown `/api` paths keep 404 and wrong methods 405.
+4. Every POST on a real store needs `Origin` exactly equal to the `FATHOM_PUBLIC_URL` origin: JSON
+   routes, uploads and the public auth routes. Browsers send it. Scripts must send a session cookie
+   and that header; `scripts/dump.mjs` sends neither and is unsupported against a real store (see
+   known limits).
+5. Sensitive auth responses are `Cache-Control: no-store`.
+6. Demo stores: no accounts, `GET /api/auth/session` is `{identity: null, demo: true}`, every other
+   auth and admin route is 404, and the UI shows no sign-in, account or household links. The
+   earlier mutation guard applies (an `Origin`, when present, must match the `Host`).
+
+UI.
+
+1. `web/auth/` holds the account pages; they load nothing else and never request the scenario. The
+   sign-in page puts the Email field first with `autocomplete="username webauthn"`. It calls
+   `PublicKeyCredential.isConditionalMediationAvailable()` and, when true, starts a conditional
+   request so the browser can offer a passkey from that field. Sign in with a passkey aborts the
+   pending conditional request first, then runs a normal request with fresh options. A conditional
+   request is replaced before its challenge expires, at most six times while the page is visible,
+   then waits for the field to be focused or the page shown again; a failed passive request is not
+   retried. Email recovery link uses the same field.
+2. Options and responses are converted between base64url JSON and `ArrayBuffer`s in
+   `web/auth/auth.js`, with no browser library. Responses include `getClientExtensionResults()`
+   (so `credProps` reaches the server), the user handle, the authenticator attachment and the
+   transports.
+3. `web/core/core.js` reads `GET /api/auth/session` before anything else; a real store with no
+   identity goes to `/signin` without requesting the scenario. `api.identity()` returns
+   `{id, email, role, login, name}`, or null on a demo. A later 401 from any core request clears
+   the scenario from memory and the page and goes to `/signin`.
+4. More shows the email and role, an Account link and, for admins, Household.
+
+MCP keys.
+
+1. Bearer keys stay independent of sessions: a session never authorizes `/mcp` and a key never
+   opens a page. Bearer verification is unchanged.
+2. A new key records its creator in `api_keys.user_id`, from the session. Members list and revoke
+   their own keys (403 for anyone else's); admins list and revoke every key. Keys created before
+   accounts have no creator, stay valid as household keys, and only admins manage them. Removing a
+   user deletes the keys they created; demotion keeps them, because members keep the same data and
+   recommendation access. Revoking a passkey, even the last one, leaves the user's MCP keys live;
+   only removing the user or revoking the key ends them. No MCP tool manages users. Demo key
+   behavior is unchanged.
+
+Deployment. The container sits behind a reverse proxy that terminates HTTPS for the
+`FATHOM_PUBLIC_URL` host, serves the app at the root path, and passes `Cookie` and `Origin`
+unchanged. Only the rate limits read `X-Forwarded-For`, and only from proxies listed in
+`FATHOM_TRUSTED_PROXIES`; host, origin and every other forwarded header are never trusted. The
+default trusts no proxy. A deployment sets the setting from the ingress addresses it has verified
+on the live cluster (for example the ingress pod CIDR), supplied through the environment; nothing
+in the repository names a deployment's ranges.
 
 ### MCP server
 
@@ -821,7 +1041,7 @@ and JSON responses, closed when the response closes. Checks run in this order:
 5. The key's `last_used_at` is stamped, then the request runs with
    `ctx = {db, now, dataDir, clock}`.
 
-Scopes: `read` (every read tool) and `write:recs` (adds `set_recommendation_status`); every key
+Scopes: `read` (every read tool) and `write:recs` (adds `set_recommendation_status` and `set_recommendation_owner`); every key
 has `read`. `tools/list` returns only the key's tools, annotated `readOnlyHint` for read tools and
 `destructiveHint: false`, `openWorldHint: false`. Calling a registry tool outside the key's scopes
 returns an `isError` result `Permission denied: <name> needs the <scope> scope, which this key
@@ -1533,7 +1753,10 @@ after facts change.
 `node scripts/dump.mjs <baseUrl> <files or dirs...>` uploads files to `POST /api/files` in batches
 under 200 MB, skipping dotfiles and reporting files over 50 MB, and prints one line per file
 (status, rows by kind, `dup=`, `warn=` and the base name, no values); it exits 1 when a request
-fails. `node scripts/ingest-check.mjs <dir>` imports a directory twice into a throwaway real store
+fails. It sends no session cookie and no `Origin`, so it works against a demo store only; a real
+store refuses it until it gains an operator-provided session in a separate change (known limit).
+`node scripts/user-invite.mjs` is the bootstrap CLI (see Accounts and sessions).
+`node scripts/ingest-check.mjs <dir>` imports a directory twice into a throwaway real store
 in the OS temp dir (engine off unless `FATHOM_ENGINE=fake`; `.key`, `.json` and dotfiles
 skipped), prints totals only, and always deletes its temp dir.
 
@@ -1605,8 +1828,9 @@ non-root `node` user (uid 1000) with `/data` owned by it, sets `FATHOM_DATA=/dat
 `FATHOM_PORT=8080` and `FATHOM_HOST=0.0.0.0`, exposes 8080, and health checks `GET /healthz` with
 node's `fetch`. It copies `src`, `web`, `demo` and `packs` (the pack tools read the repo packs at
 runtime). Mount a named volume at `/data`; a host bind mount directory must be writable by
-uid 1000. `scripts/docker-smoke.sh` builds, runs and smoke tests the image with whatever docker CLI
-configuration the caller has.
+uid 1000. Because `scripts` is in the image, `npm run user:invite -- <email> --admin` runs inside
+the container against its store. `scripts/docker-smoke.sh` builds, runs and smoke tests the image
+with whatever docker CLI configuration the caller has.
 
 ## Planner
 
@@ -2020,13 +2244,81 @@ November demo unknown because its actuals are stale; an August clock exercises k
 
 Goals and positions feed the planner and chat. `servesGoals` matches a rec to open goals by topic
 (retirement, education, cash, tax, giving, health, home) from the goal's words, kind and tracked
-sources and the rec's domain, value classes and id; the scenario sets `rec.serves` and the rec
-shows "Serves: <goal>". The planner ranks recs that tie on window close by whether they serve a
+sources and the rec's `goalKinds` (see "Rec owner and goal links"); the scenario sets `rec.serves`
+and the rec shows "Serves: <goal>". The planner ranks recs that tie on window close by whether they serve a
 goal, then by the owner's curve lean. `household_summary` and `list_goals` give the model the open
 goals (title, horizon, typed target with source `you`, tracked current value) and each curve's lean.
 In an Ask thread with no rec context the answerer also offers `propose_goal`; its last successful call becomes
 `provenance.goalProposal`, a target survives only when the owner's own message states it, and the
 chat card saves it through `POST /api/goals` when the owner taps Save. Chat never writes.
+
+## Rec owner and goal links
+
+Every rec has an action owner and either serves at least one open goal or is housekeeping
+(`recLinkError` in `src/shared/rec-links.mjs` is the rule; `OWNERS` and `OWNER_LABEL` live there too).
+
+Links are stored as goal kinds (`recs.goal_kinds`, the goal topics) and resolved at read time:
+`linkRecs` in `src/scenario/build.mjs` sets `rec.serves` (always an array, from `servesGoals` over
+the current open goals, specific topics before tax, at most three) and `rec.housekeeping`
+(`serves` is empty) on every rec. Adding or archiving a goal relinks at once, with no planning
+run. A rec's topics are exactly its `goalKinds`; a done goal does not link. `recFromRow` adds
+`owner`, `ownerOverride` (boolean) and `goalKinds`. `live.housekeeping` and `household_summary`
+`housekeepingCount` count open housekeeping recs (not hidden, done or dismissed). MCP rec tools
+return linked recs; an owner goal's title in `serves` stays literal (seed titles are resolved),
+as in `list_goals`.
+
+Planner recs take `goalKinds` and `owner` from their trigger (`src/jobs/triggers/*.mjs` exports
+`goalKinds`, `owner` and, where the owner depends on the household, `ownerFor(ctx, hit)`; `recOf`
+applies them). `applyRecs` rewrites `goal_kinds` every run and `owner` only while
+`owner_override = 0`, so an owner-set owner survives every later run, including retire then
+revive and block then unblock.
+
+| Trigger | Goal kinds | Static owner | `ownerFor` |
+|---|---|---|---|
+| fed-q4-estimate | tax | you | none |
+| va-q4-estimate | tax | you | none |
+| year-end-retirement | retirement, tax | you | the solo plan person (`info.solo.person`); none: static |
+| solo401k-setup | retirement | you | the solo plan person (`info.solo.person`); none: static |
+| scorp-salary | tax, retirement | you | the S corp owner the salary war game models (`model.salary.person`); the confirm form: static |
+| invoice-deferral | tax | you | the business owner the deferral war game models (`model.deferral.person`); the confirm form: static |
+| hsa-room | health, retirement, tax | you | none |
+| va529 | education, tax | both | none |
+| charitable-bunching | giving, tax | both | none |
+| backdoor-roth | retirement | you | people with room or basis: both is `both`, only the spouse is `spouse`, else `you` |
+| dependent-care-fsa | tax, cash | both | none |
+| new-child | cash, health | both | none |
+| missing-data | none (always housekeeping) | you | none |
+
+A person maps to an owner with `personOwner`: `spouse` is `spouse`, anyone else `you`.
+
+Demo recs name `goalKinds` and `owner` in `demo/scenario.mjs` (and the mock scenario); the seed
+writes them to the columns, not the def.
+
+| Demo rec | Goal kinds | Owner |
+|---|---|---|
+| offcycle | retirement, tax | you |
+| deferral | tax, cash | you |
+| dcfsa | tax | both |
+| va529 | education, tax | both |
+| vaq4 | tax | you |
+| reserve | cash, tax | automatic |
+| spsep | retirement, tax | spouse |
+| hsa | health, retirement, tax | you |
+| backdoor | retirement | you |
+| spouseentity | tax | spouse |
+| babyprep | cash, health | both |
+| umbrella | none | both |
+| compmemo | tax | advisor |
+| filingplan | none | both |
+| mortgage | home | both |
+| q3 | tax | automatic |
+| megabackdoor | retirement | advisor |
+| daf | giving, tax | both |
+
+The owner changes it through `POST /api/recs/:id/action` `{action: 'owner', arg}` (the rec
+dialog's "Action owner" select in the meta row) or the MCP `set_recommendation_owner` tool. The
+dialog reads "Serves: <goals>" or, for a housekeeping rec, "Housekeeping"; plan rows show the
+serves line only.
 
 ## Bank connections
 
@@ -2040,8 +2332,11 @@ files still import the same way.
 
 Horizon is static files under `web/horizon/`, served by the same process as the API. Hash routes
 are the screens (`#/year`, `#/confirm`, `#/plan`, `#/ask`, and the rest registered in
-`web/horizon/design.js`). The scenario payload from `GET /api/scenario` is what the screens render.
-Demo stores resolve scenario tokens; a real store shows stored text as stored.
+`web/horizon/design.js`). The scenario payload from `GET /api/scenario` is what the screens render,
+requested only after `GET /api/auth/session` returns a signed-in user (or a demo store). Demo
+stores resolve scenario tokens; a real store shows stored text as stored. The account pages
+(`/signin`, `/enroll`, `/account`, `/admin/users`) are a separate page, `web/auth/`, in the same
+Horizon tokens; see Accounts and sessions.
 
 ## Keyboard registry and switcher
 
@@ -2072,16 +2367,41 @@ pointer readout, so the phone pass does not add touch drag on the curve.
 a demo and is seeded once. `FATHOM_ENGINE` defaults to `fake` on a demo and `off` on a real store.
 The fake engine answers from `src/api/fake-answers.mjs` through the same grounding path as live.
 `POST /api/demo/reset` rebuilds a demo store only. `npm run seed:demo` refuses a real store.
-`FATHOM_CLOCK` overrides today for demos and tests and is never written to the store.
+`FATHOM_CLOCK` overrides today for demos and tests and is never written to the store. A demo has
+no accounts: no session is needed, `api.identity()` is null, the auth and admin APIs are 404, and
+no sign-in, account or household page or link appears. It needs no secrets, no
+`FATHOM_PUBLIC_URL` and no network.
 
 ## Testing and real-mode smoke
 
 `npm test` runs `node --test` over `test/**/*.test.mjs`, `src/packs/test`, `src/engine/test`,
 `src/calc/test` and `src/mcp/test`. `npm run e2e` is Playwright against demo servers the config
 starts. `npm run e2e:smoke` is the `@smoke` subset. Against a server you already started, set
-`FATHOM_SMOKE_BASE_URL` or `BASE_URL`. For a real store that has finished first run, set
-`FATHOM_SMOKE_TARGET=real` and, when the gate is on, `FATHOM_SMOKE_HEADERS` to a JSON object.
-Real mode checks shells, empty states and provenance, and aborts any request to the app that is
-not GET or HEAD. `npm run smoke:live` is separate: it calls the live model only when `FATHOM_LIVE=1`
+`FATHOM_SMOKE_BASE_URL` or `BASE_URL`. For a real store set `FATHOM_SMOKE_TARGET=real`, which
+aborts any request to the app that is not GET or HEAD:
+
+1. Signed out, `@auth-smoke` (`e2e/auth-smoke.spec.mjs`) checks that `/healthz` and `/signin` are
+   public, the sign-in page loads no household data, and pages and APIs answer 401 with and
+   without a forged identity header. It resets its own storage state. CI runs it against a
+   real-mode server at `http://localhost:<port>`.
+2. Signed in, `FATHOM_SMOKE_STORAGE_STATE` names a Playwright storage-state file for that server,
+   saved after a passkey sign-in, and the `@smoke` subset checks shells, empty states and
+   provenance. Nothing injects headers or sessions into a supplied server.
+
+`e2e/identity.spec.mjs` exercises accounts through the browser on its own `http://localhost`
+server, with synthetic data in the OS temp directory: the packaged bootstrap CLI and the dev
+outbox, enrollment, discoverable sign-in, a second passkey, revocation, member denial, last-admin
+refusal, removal with its MCP key, sign-out, recovery, the security notices in the dev outbox and
+expired or used links. Ceremonies run
+against the real server verifier through Chromium's CDP virtual authenticator. That proves the
+button path and that conditional mediation is set up; it does not prove a particular password
+manager offers passkeys in the Email field. Other real-mode specs use `startEnrolledServer` in
+`e2e/local-store.mjs`, a test-only fixture that creates a synthetic enrolled user and session in
+its own temporary store; auth specs never inject sessions. The three demo servers the config
+starts are unchanged.
+
+Changes run focused tests locally; CI runs the full unit and Playwright suites and is the gate.
+
+`npm run smoke:live` is separate: it calls the live model only when `FATHOM_LIVE=1`
 and `FATHOM_CLAUDE_CREDENTIAL_FILE` is set. `scripts/e2e-all.sh` runs the full Playwright suite and
 then smoke against a server. `scripts/docker-smoke.sh` builds the image and smokes a container.

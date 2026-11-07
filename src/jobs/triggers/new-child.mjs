@@ -5,6 +5,9 @@ import { dayLabel } from '../planner/data.mjs';
 
 export const id = 'new-child';
 export const domain = 'family';
+// Goal kinds this rec serves (resolved to open goals at read time) and its default action owner.
+export const goalKinds = Object.freeze(['cash', 'health']);
+export const owner = 'both';
 export const trigger = 'life';
 export const packs = ['kids-dependents'];
 export const gate = isTrue('household.expectingChild');

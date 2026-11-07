@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { spawnServer, request, postJson, openStore, src, tempDb, SERVER_TIMEOUT, TEST_OWNER, IDENTITY_HEADER } from '../helpers/server.mjs';
+import { spawnServer, request, postJson, openStore, src, tempDb, SERVER_TIMEOUT, serveAppFixture } from '../helpers/server.mjs';
 import { seedDemo } from '../../demo/seed.mjs';
 import { fixturePath, textFile, realStore, offEngine } from '../helpers/ingest.mjs';
 
@@ -154,7 +154,7 @@ describe('GET /api/email preview (in-process router, fake engine)', () => {
     const server = http.createServer(createHandler({ db: t.db, config, engine, transport }));
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
     try {
-      const r = await request(`http://127.0.0.1:${server.address().port}`, { path: '/api/email' });
+      const r = await request(`http://localhost:${server.address().port}`, { path: '/api/email' });
       assert.equal(r.status, 200, r.text.slice(0, 300));
       assert.equal(calls, 0, 'the engine was not called');
       assert.equal(r.json.preview.summarySrc, 'template');
@@ -185,11 +185,10 @@ describe('ingest triggers the plan job (in-process router, fake scheduler)', () 
     };
   }
 
-  async function upload(base, files) {
+  async function upload(app, files) {
     const fd = new FormData();
     for (const f of files) fd.append('files', new Blob([f.bytes], { type: f.mime || 'text/csv' }), f.name);
-    // Real mode: the owner identity header, as every real-mode request carries.
-    const res = await fetch(`${base}/api/files`, { method: 'POST', body: fd, headers: { [IDENTITY_HEADER]: TEST_OWNER } });
+    const res = await fetch(`${app.baseUrl}/api/files`, { method: 'POST', body: fd, headers: app.headers });
     return { status: res.status, json: await res.json() };
   }
 
@@ -198,40 +197,35 @@ describe('ingest triggers the plan job (in-process router, fake scheduler)', () 
 
   test('imported upload and successful retry trigger plan and confirm-guess once each; nothing imported triggers nothing', T, async () => {
     const st = await realStore();
-    const { createHandler } = await src('src/api/router.mjs');
     const { headerSignature } = await src('src/ingest/mapping.mjs');
     const scheduler = fakeScheduler();
     const transport = { name: 'capture', async send() { return { id: 'unused' }; } };
-    const server = http.createServer(createHandler({
-      db: st.db, config: { ...st.config, ownerLogins: TEST_OWNER, ownerLoginsFile: null }, engine: await offEngine(), scheduler, transport,
-    }));
-    await new Promise((r) => server.listen(0, '127.0.0.1', r));
-    const base = `http://127.0.0.1:${server.address().port}`;
+    const server = await serveAppFixture({ authenticated: true, db: st.db, config: st.config, engine: await offEngine(), scheduler, transport });
     try {
-      const imported = await upload(base, [{ name: 'aggregator.csv', bytes: readFileSync(fixturePath('aggregator.csv')) }]);
+      const imported = await upload(server, [{ name: 'aggregator.csv', bytes: readFileSync(fixturePath('aggregator.csv')) }]);
       assert.equal(imported.status, 200);
       assert.equal(imported.json.files[0].status, 'imported');
       assert.deepEqual(sorted(scheduler.calls), AFTER_IMPORT, 'an imported upload triggers plan and confirm-guess');
 
-      const waiting = await upload(base, [textFile('novel-export.csv', novelCsv(), 'text/csv')]);
+      const waiting = await upload(server, [textFile('novel-export.csv', novelCsv(), 'text/csv')]);
       assert.equal(waiting.status, 200);
       const file = waiting.json.files[0];
       assert.equal(file.status, 'needs_mapping');
       assert.equal(scheduler.calls.length, 2, 'an upload that imports nothing does not trigger');
 
-      const stillWaiting = await postJson(base, `/api/files/${file.fileId}/retry`, {});
+      const stillWaiting = await server.postJson(`/api/files/${file.fileId}/retry`, {});
       assert.equal(stillWaiting.status, 200);
       assert.equal(stillWaiting.json.file.status, 'needs_mapping');
       assert.equal(scheduler.calls.length, 2, 'an unsuccessful retry does not trigger');
 
       st.db.prepare("INSERT INTO column_mappings (signature, mapping, src, created_at, uses) VALUES (?, ?, 'test', '2032-03-10T12:00:00.000Z', 0)")
         .run(headerSignature(HEADERS), JSON.stringify(MAPPING));
-      const done = await postJson(base, `/api/files/${file.fileId}/retry`, {});
+      const done = await server.postJson(`/api/files/${file.fileId}/retry`, {});
       assert.equal(done.status, 200);
       assert.equal(done.json.file.status, 'imported');
       assert.deepEqual(sorted(scheduler.calls.slice(2)), AFTER_IMPORT, 'a successful retry triggers plan and confirm-guess');
     } finally {
-      await new Promise((r) => { server.close(r); server.closeAllConnections(); });
+      await server.close();
       st.close();
     }
   });

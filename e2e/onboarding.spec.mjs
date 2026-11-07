@@ -2,24 +2,22 @@
 // "what we heard" step derived from stored facts. Two parts.
 //
 // 1. The demo build (the shared demo server), served as a fresh store on each step.
-// 2. A real-mode store past first run, on its own server (FATHOM_DEMO=0, engine off, one allowed
-//    login), where Setup in More lands on Tell us and the heard step lists the stored household
+// 2. A real-mode store past first run, on its own server (FATHOM_DEMO=0, engine off, synthetic enrolled
+//    user session), where Setup in More lands on Tell us and the heard step lists the stored household
 //    with provenance and edit links.
 //
 // Desktop and 390px. Real-mode URLs are absolute to its own server, so the configured baseURL is
 // ignored there.
 
-import { spawn } from 'node:child_process';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { test, expect, expectH1, REMOTE, resetDemo } from './helpers.mjs';
 import { openDb } from '../src/store/db.mjs';
+import { createLocalData, removeLocalData, startEnrolledServer } from './local-store.mjs';
 import { upsertFact } from '../src/store/facts.mjs';
 import { ask, FACT_CHECK_OPTIONS } from '../src/ingest/confirm.mjs';
 
-const REPO = fileURLToPath(new URL('..', import.meta.url));
 const NOTE = 'We file jointly in Virginia, I run an S corporation and my spouse freelances. Two kids.';
 
 test.describe.configure({ mode: 'serial' });
@@ -104,24 +102,10 @@ test.describe('demo build', () => {
 
 /* ---------- part 2: a real store past first run ---------- */
 
-const PORT = Number(process.env.E2E_PORT || 4173) + 10;
-const BASE = `http://127.0.0.1:${PORT}`;
-const DATA_DIR = join(REPO, '.e2e-data-onboarding');
-const DB_FILE = join(DATA_DIR, 'fathom.sqlite');
-const KEY_FILE = join(DATA_DIR, 'data.key');
-const OWNER = 'owner@example.test';
-let child = null;
-let output = '';
-
-async function waitHealthy(ms) {
-  const deadline = Date.now() + ms;
-  for (;;) {
-    if (child.exitCode !== null || child.signalCode !== null) throw new Error(`onboarding server exited early:\n${output}`);
-    try { if ((await fetch(`${BASE}/healthz`)).status === 200) return; } catch { /* not listening yet */ }
-    if (Date.now() > deadline) throw new Error(`onboarding server not healthy after ${ms} ms:\n${output}`);
-    await new Promise((r) => setTimeout(r, 100));
-  }
-}
+let BASE;
+let DATA_DIR;
+let DB_FILE;
+let app;
 
 // A returning owner: one note file with facts (one of them asked), an entity, an account.
 function seedHousehold() {
@@ -145,43 +129,28 @@ function seedHousehold() {
 test.describe('real store past first run', () => {
   test.beforeAll(async () => {
     test.setTimeout(180_000); // a busy runner can take a while to start a server
-    rmSync(DATA_DIR, { recursive: true, force: true });
-    mkdirSync(DATA_DIR, { recursive: true });
-    writeFileSync(KEY_FILE, randomBytes(32), { mode: 0o600 });
-    const env = {};
-    for (const [k, v] of Object.entries(process.env)) if (!k.startsWith('FATHOM_')) env[k] = v;
-    child = spawn(process.execPath, ['src/server.mjs'], {
-      cwd: REPO,
-      env: { ...env, FATHOM_DEMO: '0', FATHOM_ENGINE: 'off', FATHOM_DATA: DATA_DIR, FATHOM_DATA_KEY_FILE: KEY_FILE, FATHOM_PORT: String(PORT), FATHOM_OWNER_LOGINS: OWNER },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    child.stdout.on('data', (d) => { output += d; });
-    child.stderr.on('data', (d) => { output += d; });
-    await waitHealthy(150_000);
+    DATA_DIR = createLocalData('onboarding');
+    DB_FILE = join(DATA_DIR, 'fathom.sqlite');
+    const keyFile = join(DATA_DIR, 'data.key');
+    writeFileSync(keyFile, randomBytes(32), { mode: 0o600 });
+    app = await startEnrolledServer({ dataDir: DATA_DIR, dataKeyFile: keyFile });
+    BASE = app.url;
     seedHousehold();
   });
 
   test.afterAll(async () => {
-    if (child && child.exitCode === null && child.signalCode === null) {
-      const gone = new Promise((r) => child.once('exit', r));
-      child.kill('SIGTERM');
-      const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* gone */ } }, 5000);
-      await gone;
-      clearTimeout(timer);
-    }
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    if (app) await app.close();
+    removeLocalData(DATA_DIR);
   });
 
-  test.use({ extraHTTPHeaders: { 'Tailscale-User-Login': OWNER, 'Tailscale-User-Name': 'Test Owner' } });
-  // The browser sends the identity header on every request, including cross-origin fonts, whose
-  // preflight would refuse it; serve the font hosts locally (empty).
   test.beforeEach(async ({ context }) => {
+    await app.authenticate(context);
     await context.route(/^https:\/\/fonts\.(googleapis|gstatic)\.com\//, (route) => route.fulfill({
       status: 200, body: '', headers: { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*' },
     }));
   });
 
-  test('Setup in More opens Tell us; the note is saved while the engine is off; the heard step lists the household @mobile', async ({ page, request }) => {
+  test('Setup in More opens Tell us; the note is saved while the engine is off; the heard step lists the household @mobile', async ({ page, context }) => {
     await page.goto(`${BASE}/`);
     await expect(page).toHaveURL(/#\/home$/);
     await page.locator('.h-more-btn').click();
@@ -204,7 +173,7 @@ test.describe('real store past first run', () => {
     const panel = page.locator('[data-understood]');
     await expect(panel).toContainText('The engine is off');
     await expect(panel).not.toContainText('Virginia');
-    const files = await (await request.get(`${BASE}/api/files`)).json();
+    const files = await (await context.request.get(`${BASE}/api/files`)).json();
     const note = files.files.find((f) => /^Setup notes /.test(f.name));
     expect(note && note.status).toBe('needs_extraction');
 

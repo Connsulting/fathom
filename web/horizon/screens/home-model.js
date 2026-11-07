@@ -20,30 +20,24 @@ export function shortDate(iso) {
 
 /* ---------- owners and goal links ---------- */
 
-export const OWNERS = ['you', 'spouse', 'both', 'advisor', 'automatic'];
-
-export function ownerOf(rec) {
-  return OWNERS.includes(rec?.owner) ? rec.owner : 'both';
-}
+// Every rec carries owner (one of OWNERS in /shared/rec-links.mjs), housekeeping (boolean) and
+// serves (the open goals it is linked to, [{ id, title, origin }]); see loadLinkedRecs.
 
 export function ownerMatches(rec, filter) {
-  const o = ownerOf(rec);
+  const o = rec?.owner;
   if (filter === 'me') return o === 'you' || o === 'both';
   if (filter === 'spouse') return o === 'spouse' || o === 'both';
   return true;
 }
 
 export function servedGoalIds(rec) {
-  const out = [];
-  arr(rec?.serves).forEach((s) => {
-    const id = s && typeof s === 'object' ? s.id : s;
-    if (id != null && id !== '' && !out.includes(String(id))) out.push(String(id));
-  });
-  return out;
+  return arr(rec?.serves).map((g) => String(g.id));
 }
 
-export function isHousekeeping(rec) {
-  return typeof rec?.housekeeping === 'boolean' ? rec.housekeeping : servedGoalIds(rec).length === 0;
+// Counted like the server's live.housekeeping: housekeeping and not hidden, done or dismissed.
+const CLOSED = ['hidden', 'done', 'dismissed'];
+export function isHousekeepingItem(rec) {
+  return rec?.housekeeping === true && !CLOSED.includes(rec.status);
 }
 
 export function isOpen(rec) {
@@ -171,7 +165,7 @@ export function homeModel({ goals, pace, recs, filter } = {}) {
     filter: f, counts, cards,
     expanded: cards.filter((c) => !c.collapsed),
     collapsed: cards.filter((c) => c.collapsed),
-    housekeeping: queue.filter(isHousekeeping),
+    housekeeping: arr(recs).filter((r) => isHousekeepingItem(r) && ownerMatches(r, f)).sort(byWindow),
     queue,
     nextThing: queue[0] || null,
     afterThat: queue.slice(1, 4)

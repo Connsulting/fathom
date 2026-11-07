@@ -1,19 +1,16 @@
 // Merge-gate fix round, the human-visible outcomes on a real-mode store. beforeAll builds the
-// synthetic household in .e2e-data-planner-mg with an advisor name that carries markup and an
+// synthetic household in an owned temporary store with an advisor name that carries markup and an
 // ampersand, plans it, adds an advisor message to a rec conversation, then leaves the Virginia
 // 529 answers incomplete and plans again, so both war games and the Virginia targets go
-// unavailable while staying on file. The server runs in process on an ephemeral port (port 0),
+// unavailable while staying on file. The server runs in process on a reserved localhost port,
 // so it never collides with another spec's server. Skipped when BASE_URL targets a remote server.
 
-import { rmSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { test, expect } from './helpers.mjs';
+import { createLocalData, removeLocalData, startEnrolledServer } from './local-store.mjs';
 
-const DIR = fileURLToPath(new URL('../.e2e-data-planner-mg/', import.meta.url));
+let DIR;
 const CLOCK = '2026-11-05';
-const REMOTE = !!process.env.BASE_URL;
-const OWNER = 'owner@example.test';
-const AUTH = Object.freeze({ 'Tailscale-User-Login': OWNER });
+const REMOTE = !!(process.env.BASE_URL || process.env.FATHOM_SMOKE_BASE_URL);
 const ADVISOR = 'Lee & Park <img src=x onerror=alert(1)>';
 const THREAD_REC = 'fed-q4-estimate';
 const THREAD_KEY = 'ask:0f0e0d0c0b0a';
@@ -41,11 +38,8 @@ function recWithFigure(want) {
 
 test.skip(REMOTE, 'needs a local real-mode server; BASE_URL targets a remote one');
 test.describe.configure({ mode: 'serial' });
-// Real mode admits only FATHOM_OWNER_LOGINS: every request carries the matching identity header
-// (as e2e/identity.spec.mjs does). The browser sends it on cross-origin font requests too, whose
-// CORS preflight would refuse it, so the font hosts are served locally (empty).
-test.use({ extraHTTPHeaders: AUTH });
 test.beforeEach(async ({ context }) => {
+  await app.authenticate(context);
   await context.route(/^https:\/\/fonts\.(googleapis|gstatic)\.com\//, (route) => route.fulfill({
     status: 200, body: '', headers: { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*' },
   }));
@@ -54,11 +48,9 @@ test.beforeEach(async ({ context }) => {
 test.beforeAll(async () => {
   const { buildRealStore, addFact, accountIdByMask, MASKS } = await import('../test/helpers/real-store.mjs');
   const { planRun } = await import('../test/helpers/plan.mjs');
-  const { startServer } = await import('../src/server.mjs');
-  const { loadConfig } = await import('../src/config.mjs');
   const { resolveTokens } = await import('../src/shared/tokens.mjs');
 
-  rmSync(DIR, { recursive: true, force: true });
+  DIR = createLocalData('planner-mg');
   const db = await buildRealStore(DIR, { clock: CLOCK, variant: { facts: { 'household.names': { advisor: ADVISOR } } } });
   try {
     expect((await planRun(db, { now: CLOCK, dataDir: DIR })).status).toBe('ok');
@@ -74,9 +66,9 @@ test.beforeAll(async () => {
   } finally {
     db.close();
   }
-  app = await startServer({ ...loadConfig({ FATHOM_DATA: DIR, FATHOM_DEMO: '0', FATHOM_ENGINE: 'off', FATHOM_CLOCK: CLOCK, FATHOM_OWNER_LOGINS: OWNER }), port: 0 });
+  app = await startEnrolledServer({ dataDir: DIR, clock: CLOCK });
   base = app.url;
-  const res = await fetch(`${base}/api/scenario`, { headers: AUTH });
+  const res = await fetch(`${base}/api/scenario`, { headers: app.headers });
   expect(res.status).toBe(200);
   scenario = await res.json();
   plain = (s) => resolveTokens(scenario, s, false);
@@ -85,7 +77,7 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   if (app) await app.close();
   app = null;
-  rmSync(DIR, { recursive: true, force: true });
+  removeLocalData(DIR);
 });
 
 test('MG14: markup and an ampersand in the advisor name show as literal text in a rec conversation', async ({ page }) => {
@@ -120,7 +112,7 @@ test('MG12: an unavailable war game is listed as history on Decide and cannot be
   await expect(row.getByRole('link', { name: 'War game', exact: true })).toHaveCount(0);
 
   const pick = await fetch(`${base}/api/wargame/salary/pick`, {
-    method: 'POST', headers: { ...AUTH, 'content-type': 'application/json' }, body: JSON.stringify({ index: 0 }),
+    method: 'POST', headers: { ...app.headers, 'content-type': 'application/json' }, body: JSON.stringify({ index: 0 }),
   });
   expect(pick.status).toBe(409);
 });

@@ -17,8 +17,9 @@ import * as switcher from './screens/switcher.js';
 import * as simplefin from './screens/simplefin.js';
 import { createKeys } from './keys.js';
 import { createSwipe } from './screens/swipe.js';
-import { homeModel, healthChip, healthLine, paceReason, boardCharts, reasonText, servedGoalIds, isHousekeeping, ownerOf, shortDate } from './screens/home-model.js';
+import { homeModel, healthChip, healthLine, paceReason, boardCharts, reasonText, servedGoalIds, shortDate } from './screens/home-model.js';
 import { KNOWN_FIGURES } from '/shared/goals.mjs';
+import { OWNERS, OWNER_LABEL } from '/shared/rec-links.mjs';
 
 const MS = 864e5;
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -376,8 +377,19 @@ function windowStrip(r) {
 function whoLine() {
   const id = api.identity?.();
   if (!id) return '';
-  const name = id.name || id.login;
-  return `<div class="h-who">Signed in as ${esc(name)}${id.login && id.login !== name ? `<span>${esc(id.login)}</span>` : ''}</div>`;
+  const who = id.email || id.login || id.name;
+  const role = id.role === 'admin' ? 'Household admin' : id.role === 'member' ? 'Household member' : '';
+  return `<div class="h-who">Signed in as ${esc(who)}${role ? `<span>${role}</span>` : ''}</div>`;
+}
+
+// Real accounts only (a demo has no identity): Account for everyone signed in, Household for
+// admins. Plain links: they leave the hash router for the server's account pages. Not an
+// .h-more-g, so the screen groups below keep their order and count.
+function accountLinks() {
+  const id = api.identity?.();
+  if (!id) return '';
+  const admin = id.role === 'admin' ? '<a href="/admin/users" title="People, roles and invitations">Household</a>' : '';
+  return `<div class="h-more-acct" style="margin-bottom:6px;padding-bottom:6px;border-bottom:1px solid var(--line2)"><a href="/account" title="Passkeys and sign out">Account</a>${admin}</div>`;
 }
 
 // Phone-width bottom tab bar: the NAV entries in TAB_ICON, hidden above 720px by CSS.
@@ -400,7 +412,7 @@ function shell(inner, active) {
   const setup = api.s?.live?.mode === 'real' ? [['onboarding', 'Setup']] : [];
   const groups = screens + MORE.map(([title, items]) => `<div class="h-more-g"><div class="h-more-h">${title}</div>${(title === 'System' ? [...items, ...setup] : items).map(([k, l]) => link(k, l)).join('')}</div>`).join('');
   const more = `<div class="h-more-wrap"><button type="button" class="h-more-btn${moreOn ? ' on' : ''}" data-more="toggle" aria-expanded="${ui.more}" aria-controls="h-more-p">More${icon('chev')}</button>
-    <div class="h-more-p" id="h-more-p" aria-label="More"${ui.more ? '' : ' hidden'}>${whoLine()}${groups}</div></div>`;
+    <div class="h-more-p" id="h-more-p" aria-label="More"${ui.more ? '' : ' hidden'}>${whoLine()}${accountLinks()}${groups}</div></div>`;
   const off = api.engineOn() ? '' : `<div class="h-engine-off">${icon('clock')}Engine off. Proactive jobs are paused. ${goA('engine', 'Engine settings')}</div>`;
   return `<header class="h-top"><div class="h-top-in">
     <a class="h-mark" href="${href('home')}" data-go="home" aria-label="${esc(api.s.meta.product || 'Fathom')}">${MARK}<span>${esc(api.s.meta.product || 'Fathom')}</span></a>
@@ -424,7 +436,7 @@ const isPhone = () => typeof window.matchMedia === 'function' && window.matchMed
 const WHO = { you: 'You', spouse: 'Spouse', both: 'Both', advisor: 'Advisor', automatic: 'Auto' };
 const SUBJECT = { both: 'either of you', me: 'you', spouse: 'your spouse' };
 const chipHtml = (c, cls) => `<span class="${cls} ${c.tone}">${esc(c.label)}</span>`;
-const whoTag = (r) => `<span class="h-who">${WHO[ownerOf(r)]}</span>`;
+const whoTag = (r) => `<span class="h-who">${WHO[r.owner] || ''}</span>`;
 const recLink = (r, cls = '') => `<a${cls ? ` class="${cls}"` : ''} href="${href('rec', { id: r.id })}" data-go="rec" data-id="${esc(r.id)}">${T(r.title)}</a>`;
 const pct = (v) => Math.round(v * 1000) / 10;
 
@@ -487,9 +499,9 @@ function hkHtml(list) {
   return `<details class="h-hk" data-det="home-hk"${ui.det['home-hk'] ? ' open' : ''}><summary><span>Housekeeping, serves no goal: <b>${list.length}</b></span>${icon('chev')}</summary><div class="h-hk-b">${list.map(gnextHtml).join('')}</div></details>`;
 }
 
-function ownerHtml(m) {
+function ownerFilterHtml(m) {
   const b = (k, l) => `<button type="button" data-owner="${k}" aria-pressed="${m.filter === k}">${l} <span>${m.counts[k]}</span></button>`;
-  return `<div class="h-owner" role="group" aria-label="Whose actions">${b('both', 'Both')}${b('me', 'Me')}${b('spouse', 'Spouse')}</div>`;
+  return `<div class="h-ownerf" role="group" aria-label="Whose actions">${b('both', 'Both')}${b('me', 'Me')}${b('spouse', 'Spouse')}</div>`;
 }
 
 function dhealthHtml(h) {
@@ -509,7 +521,7 @@ function nextHtml(m, subject) {
   const first = arr(r.why)[0];
   const why = first ? T(first) : T(r.summary);
   const ids = servedGoalIds(r);
-  const serves = ids.length && !isHousekeeping(r)
+  const serves = ids.length && !r.housekeeping
     ? `Serves ${ids.map((id) => `<a href="${href('goals')}" data-go="goals">${servedTitle(r, id)}</a>`).join(', ')}`
     : 'Housekeeping, serves no goal';
   const cd = countdown(r);
@@ -548,8 +560,8 @@ function pHome() {
   const goalsH = `<div class="h-home-sec"><h2>Goals</h2>${goA('goals', 'All goals')}</div>`;
   const rest = `${goalsH}${cards}${empty}${quietHtml(m.collapsed)}${hkHtml(m.housekeeping)}`;
   const inner = isPhone()
-    ? `${ownerHtml(m)}${head}${nextHtml(m, subject)}${afterHtml(m)}${health}${rest}`
-    : `<header class="h-home-top">${head}${ownerHtml(m)}</header>${health}${rest}`;
+    ? `${ownerFilterHtml(m)}${head}${nextHtml(m, subject)}${afterHtml(m)}${health}${rest}`
+    : `<header class="h-home-top">${head}${ownerFilterHtml(m)}</header>${health}${rest}`;
   return shell(`<section class="h-home">${inner}</section>`, 'home');
 }
 
@@ -784,7 +796,7 @@ function dlgHtml(id) {
   return frame(`${T(TRIGGER[r.trigger] || r.trigger || '')}<span>${T(r.triggerText)}</span>`, `<div class="h-rec-head">
       <h1 id="h-dlg-t" class="h-dlg-title">${T(r.title)}</h1>
       <p class="h-lede">${T(r.summary)}</p>
-      <div class="h-meta"><span class="h-st ${r.status}">${statusText(r)}</span>${isNeeds(r, ny) ? '<span class="h-acc">Needs you</span>' : ''}${r.effort ? `<span>${T(r.effort)}</span>` : ''}${values(r) ? `<span>${values(r)}</span>` : ''}${servesHtml(r)}</div>
+      <div class="h-meta"><span class="h-st ${r.status}">${statusText(r)}</span>${ownerHtml(r)}${isNeeds(r, ny) ? '<span class="h-acc">Needs you</span>' : ''}${r.effort ? `<span>${T(r.effort)}</span>` : ''}${values(r) ? `<span>${values(r)}</span>` : ''}${servesHtml(r, { dialog: true })}</div>
     </div>
     ${windowStrip(r)}
     <div class="h-acts big">${actionsFor(r, false).join('')}</div>
@@ -1015,10 +1027,18 @@ function pWargame(name) {
 const gText = (g, s) => (g && g.origin === 'owner' ? esc(s) : T(s));
 const goalTitle = (g) => gText(g, g.title);
 
-function servesHtml(r) {
+// The goals a rec serves. In the dialog a rec that serves no open goal reads Housekeeping; plan
+// rows show nothing for it.
+function servesHtml(r, { dialog = false } = {}) {
   const list = arr(r.serves);
-  if (!list.length) return '';
+  if (!list.length) return dialog && r.housekeeping ? '<span class="h-serves h-hk">Housekeeping</span>' : '';
   return `<span class="h-serves">Serves: ${list.map((g) => `<a href="${href('goals')}" data-go="goals">${g.origin === 'owner' ? esc(g.title) : T(g.title)}</a>`).join(', ')}</span>`;
+}
+
+// Who acts on the rec: a select in the dialog's meta row; a change saves it as an owner override.
+function ownerHtml(r) {
+  const opts = OWNERS.map((o) => `<option value="${o}"${o === r.owner ? ' selected' : ''}>${OWNER_LABEL[o]}</option>`).join('');
+  return `<label class="h-owner"><span>Owner</span><select data-recowner="${esc(r.id)}" aria-label="Action owner">${opts}</select></label>`;
 }
 
 const emptyDraft = (horizon = 'now') => ({ title: '', note: '', horizon, target: '', targetDate: '', trackKind: 'none', accounts: [], figure: '' });
@@ -1429,6 +1449,7 @@ function focusSig(el) {
   const a = (n) => el.getAttribute(n);
   if (a('data-dlg')) return `[data-dlg="${a('data-dlg')}"].h-dlg-x`;
   if (a('data-act')) return `[data-act="${a('data-act')}"][data-rec="${CSS.escape(a('data-rec') || '')}"]${a('data-arg') != null ? `[data-arg="${CSS.escape(a('data-arg'))}"]` : ''}`;
+  if (a('data-recowner') != null) return `[data-recowner="${CSS.escape(a('data-recowner'))}"]`;
   if (a('data-askrec') != null) return '[data-draft]';
   if (a('data-draft')) return `[data-draft="${CSS.escape(a('data-draft'))}"]`;
   return null;
@@ -1767,6 +1788,7 @@ function onInput(e) {
 function onChange(e) {
   const t = e.target;
   if (t?.dataset?.gf === 'track' || t?.dataset?.gf === 'acct') { goalInput(t); return; }
+  if (t?.dataset?.recowner) { api.act(t.dataset.recowner, 'owner', t.value); return; }
   if (t?.dataset?.curve) { api.setCurve(t.dataset.curve, Number(t.value) / 100); return; }
   if (t?.dataset?.prio) { api.setCurve(t.dataset.prio, Number(t.value) / 100); return; }
   ingest?.handleChange(e);

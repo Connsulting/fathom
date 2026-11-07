@@ -4,6 +4,9 @@ import { isTrue, mineOf, padTasks, confirmTasks, yearOf, dataText, positive } fr
 
 export const id = 'va529';
 export const domain = 'family';
+// Goal kinds this rec serves (resolved to open goals at read time) and its default action owner.
+export const goalKinds = Object.freeze(['education', 'tax']);
+export const owner = 'both';
 export const trigger = 'calendar';
 export const packs = ['virginia-resident', 'kids-dependents'];
 export const gate = { all: [isTrue('accounts.has529'), { fact: 'household.state', op: 'eq', value: 'VA' }] };

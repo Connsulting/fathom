@@ -139,6 +139,10 @@ export const test = base.extend({
 
 // POST /api/demo/reset with a JSON content type. `baseURL` targets another server (January).
 export async function resetDemo(request, baseURL) {
+  if (REMOTE || SMOKE_REAL) throw new Error('Refusing to reset a supplied server');
+  if (baseURL && !['localhost', '127.0.0.1', '[::1]'].includes(new URL(baseURL).hostname)) {
+    throw new Error('Demo reset requires a local test server');
+  }
   const url = baseURL ? new URL('/api/demo/reset', baseURL).href : '/api/demo/reset';
   const res = await request.post(url, { headers: { 'content-type': 'application/json' }, data: {} });
   expect(res.status(), `POST ${url}`).toBe(200);

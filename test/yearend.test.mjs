@@ -1,10 +1,10 @@
 // Year end: expected documents per fact combination, matching received documents, not-needed
 // marks, the packet zip (index plus documents only, temp directory removed) and provenance in its
-// index, and the HTTP routes behind the owner gate.
+// index, and the HTTP routes behind the session gate.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import http from 'node:http';
+import { serveAppFixture } from './helpers/server.mjs';
 import { randomBytes } from 'node:crypto';
 import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -16,7 +16,6 @@ import { storeFile } from '../src/ingest/vault.mjs';
 import { expectedItems, matchDocuments, yearendChecklist, setMark, taxYearFor, buildYearend } from '../src/yearend/expected.mjs';
 import { buildPacket, streamPacket, TEMP_PREFIX } from '../src/yearend/packet.mjs';
 import { readZip, writeZip } from '../src/yearend/zip.mjs';
-import { createHandler } from '../src/api/router.mjs';
 import { seedDemo } from '../demo/seed.mjs';
 
 const keys = (items) => items.map((i) => i.key);
@@ -245,23 +244,20 @@ test('packet: imported text is escaped in the index', async () => {
 });
 
 async function serve(db, config) {
-  const server = http.createServer(createHandler({ db, config, answerer: null, owners: { logins: new Set(['owner@example.test']) } }));
-  await new Promise((r) => server.listen(0, '127.0.0.1', r));
-  const url = `http://127.0.0.1:${server.address().port}`;
-  return { url, close: () => new Promise((r) => server.close(r)) };
+  return serveAppFixture({ authenticated: true, db, config, answerer: null });
 }
 
-test('API: marks validate input; the packet streams behind the owner gate in a real store', async () => {
+test('API: marks validate input; the packet streams behind the session gate in a real store', async () => {
   const s = await packetStore();
   const key = join(s.dataDir, 'k.key');
   const { writeFile } = await import('node:fs/promises');
   await writeFile(key, s.key, { mode: 0o600 });
   setSetting(s.db, 'clock', '2027-02-20');
   const srv = await serve(s.db, { dataDir: s.dataDir, dataKeyFile: key });
-  const owner = { 'tailscale-user-login': 'owner@example.test' };
-  const post = (body, headers = owner) => fetch(`${srv.url}/api/yearend/marks`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) });
+  const sessionHeaders = srv.headers;
+  const post = (body, headers = sessionHeaders) => fetch(`${srv.baseUrl}/api/yearend/marks`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) });
   try {
-    assert.equal((await fetch(`${srv.url}/api/yearend/packet`)).status, 401, 'no identity, no packet');
+    assert.equal((await fetch(`${srv.baseUrl}/api/yearend/packet`)).status, 401, 'no identity, no packet');
     assert.equal((await post({ key: 'k1:partnership', reason: 'x' }, {})).status, 401);
     assert.equal((await post({ key: 'k1:partnership', reason: '' })).status, 400);
     assert.equal((await post({ key: 'k1:partnership', reason: 'x'.repeat(301) })).status, 400);
@@ -272,13 +268,13 @@ test('API: marks validate input; the packet streams behind the owner gate in a r
     const sc = (await ok.json()).scenario;
     assert.equal(sc.yearend.year, 2026);
     assert.deepEqual(sc.yearend.docs.find((d) => d.key === 'k1:partnership').skip.reason, 'Partnership closed last year');
-    const res = await fetch(`${srv.url}/api/yearend/packet?year=2026`, { headers: owner });
+    const res = await fetch(`${srv.baseUrl}/api/yearend/packet?year=2026`, { headers: sessionHeaders });
     assert.equal(res.status, 200);
     assert.match(res.headers.get('content-disposition'), /attachment; filename="tax-packet-2026\.zip"/);
     const entries = readZip(Buffer.from(await res.arrayBuffer()));
     assert.equal(entries[0].name, 'index.html');
     assert.match(entries[0].data.toString(), /K-1 from each partnership<\/td><td>Not needed<\/td><td>Not needed: Partnership closed last year/);
-    assert.equal((await fetch(`${srv.url}/api/yearend/packet?year=19`, { headers: owner })).status, 400);
+    assert.equal((await fetch(`${srv.baseUrl}/api/yearend/packet?year=19`, { headers: sessionHeaders })).status, 400);
   } finally { await srv.close(); await s.cleanup(); }
 });
 
@@ -289,7 +285,7 @@ test('demo: the seeded store builds the year-end section through the same tables
   seedDemo(db);
   const srv = await serve(db, { dataDir });
   try {
-    const sc = await (await fetch(`${srv.url}/api/scenario`)).json();
+    const sc = await (await fetch(`${srv.baseUrl}/api/scenario`)).json();
     const ye = sc.yearend;
     assert.equal(ye.year, 2026);
     assert.ok(ye.docs.find((d) => d.key === 'w2:brightline'));
@@ -297,7 +293,7 @@ test('demo: the seeded store builds the year-end section through the same tables
     assert.deepEqual(ye.unmatched.map((u) => u.name), ['property-tax-receipt-2026.pdf']);
     assert.ok(ye.docs.every((d) => !/\{[a-z]+:/.test(d.t)), 'demo tokens are resolved to plain text');
     assert.ok(ye.decisions.some((d) => d.kind === 'decision') && ye.decisions.some((d) => d.kind === 'rec'));
-    const res = await fetch(`${srv.url}/api/yearend/packet`);
+    const res = await fetch(`${srv.baseUrl}/api/yearend/packet`);
     assert.equal(res.status, 200);
     const names = readZip(Buffer.from(await res.arrayBuffer())).map((e) => e.name);
     assert.deepEqual(names, ['index.html', 'documents/01-1098-Harbor-Bank-2026.txt', 'documents/02-Document-County-treasurer-2026.txt']);

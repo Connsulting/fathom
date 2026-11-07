@@ -10,6 +10,8 @@
 // exactly as for JSON. `raw: true` routes write the response themselves (the packet zip).
 
 import { fileURLToPath } from 'node:url';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { HttpError, setSecurityHeaders, sendJson, sendError, guardPost, readJsonBody, createEventStream, wantsEventStream } from './http.mjs';
 import { guardUpload, readMultipart } from './upload.mjs';
 import { createStatic } from './static.mjs';
@@ -25,11 +27,27 @@ import * as yh from './yearend-handlers.mjs';
 import * as gh from './goals.mjs';
 import * as oh from './onboarding-handlers.mjs';
 import * as ah from './advisor-handlers.mjs';
-import { loadOwnerLogins, identityOf, sendUnauthorized } from './identity.mjs';
+import { identityOf, sendUnauthorized } from './identity.mjs';
+import { createAuthService } from '../auth/service.mjs';
+import * as authHandlers from '../auth/handlers.mjs';
 import { getSetting } from '../store/db.mjs';
 
 const TABLE = [
-  { method: 'GET', path: '/healthz', handler: h.healthz },
+  { method: 'GET', path: '/healthz', handler: h.healthz, public: true },
+  { method: 'GET', path: '/api/auth/session', handler: authHandlers.session, public: true, quiet: true, auth: true },
+  { method: 'POST', path: '/api/auth/register/options', handler: authHandlers.registerOptions, public: true, quiet: true, auth: true },
+  { method: 'POST', path: '/api/auth/register/verify', handler: authHandlers.registerVerify, public: true, quiet: true, auth: true },
+  { method: 'POST', path: '/api/auth/signin/options', handler: authHandlers.signinOptions, public: true, quiet: true, auth: true },
+  { method: 'POST', path: '/api/auth/signin/verify', handler: authHandlers.signinVerify, public: true, quiet: true, auth: true },
+  { method: 'POST', path: '/api/auth/recover', handler: authHandlers.recover, public: true, quiet: true, auth: true },
+  { method: 'POST', path: '/api/auth/signout', handler: authHandlers.signout, quiet: true, auth: true },
+  { method: 'GET', path: '/api/auth/passkeys', handler: authHandlers.passkeys, quiet: true, auth: true },
+  { method: 'POST', path: '/api/auth/passkeys/:id/revoke', handler: authHandlers.revokePasskey, quiet: true, auth: true },
+  { method: 'GET', path: '/api/admin/users', handler: authHandlers.users, quiet: true, auth: true, admin: true },
+  { method: 'POST', path: '/api/admin/users/invite', handler: authHandlers.invite, quiet: true, auth: true, admin: true },
+  { method: 'POST', path: '/api/admin/users/:id/role', handler: authHandlers.setRole, quiet: true, auth: true, admin: true },
+  { method: 'POST', path: '/api/admin/users/:id/remove', handler: authHandlers.removeUser, quiet: true, auth: true, admin: true },
+  { method: 'POST', path: '/api/admin/users/:id/passkeys/:keyId/revoke', handler: authHandlers.adminRevokePasskey, quiet: true, auth: true, admin: true },
   { method: 'GET', path: '/api/scenario', handler: h.getScenario },
   { method: 'GET', path: '/api/pace', handler: gh.getPace },
   { method: 'GET', path: '/api/identity', handler: h.getIdentity },
@@ -113,13 +131,7 @@ function matchPath(parts, segments) {
   return params;
 }
 
-function findRoute(method, rawPath) {
-  let segments;
-  try {
-    segments = rawPath.split('/').slice(1).map(decodeURIComponent);
-  } catch {
-    throw new HttpError(404, 'not found');
-  }
+function findRoute(method, segments) {
   const hits = compiled.map(r => ({ r, params: matchPath(r.parts, segments) })).filter(x => x.params);
   if (!hits.length) throw new HttpError(404, 'not found');
   const hit = hits.find(x => x.r.method === method || (method === 'HEAD' && x.r.method === 'GET'));
@@ -127,19 +139,24 @@ function findRoute(method, rawPath) {
   return hit;
 }
 
+function normalizePath(rawPath) {
+  if (!rawPath.startsWith('/')) throw new HttpError(404, 'not found');
+  let segments;
+  try { segments = rawPath.split('/').slice(1).map(decodeURIComponent); }
+  catch { throw new HttpError(404, 'not found'); }
+  if (segments.some(segment => segment === '.' || segment === '..' || /[/\\\u0000-\u001f\u007f]/.test(segment))) {
+    throw new HttpError(404, 'not found');
+  }
+  return { segments, path: '/' + segments.join('/') };
+}
+
 // A log-safe error code: the error's code or class name when it is a plain identifier.
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 const safeCode = err => [err && err.code, err && err.name].find(v => typeof v === 'string' && IDENT.test(v)) || 'unknown';
 
-// engine, packs and answerer are optional for static-only fixtures: handlers that need them answer
-// 503, and scenarios carry no manifest fields without packs. `keys` (key service) and `mcp` (the
-// /mcp handler) are built from config.dataDir on first use when not passed in. `owners` is the
-// loadOwnerLogins result; computed from config when omitted. A real store (any mode but demo,
-// decided once here) gates every path except /healthz and /mcp on the owner identity, before the
-// Host allowlist, route matching and static serving.
-export function createHandler({ db, config, answerer, engine = null, packs = null, scheduler = null, transport = null, keys, mcp, owners, webDir = WEB_DIR, sharedDir = SHARED_DIR }) {
+export function createHandler({ db, config, answerer, engine = null, packs = null, scheduler = null, transport = null, keys, mcp, auth, webDir = WEB_DIR, sharedDir = SHARED_DIR }) {
   const gated = getSetting(db, 'mode', null) !== 'demo';
-  const ownerList = gated ? (owners ?? loadOwnerLogins(config)) : null;
+  const authService = auth ?? createAuthService({ db, config, transport });
   const serveStatic = createStatic({ webDir, sharedDir });
   let keyService = keys;
   let mcpHandler = mcp;
@@ -151,42 +168,49 @@ export function createHandler({ db, config, answerer, engine = null, packs = nul
     const q = url.indexOf('?');
     const rawPath = q >= 0 ? url.slice(0, q) : url;
     let route = null;
+    let authPath = false;
     try {
+      authService.sweep();
       if (rawPath === '/mcp') {
         await getMcp()(req, res);
         return;
       }
-      const isApi = rawPath === '/api' || rawPath.startsWith('/api/');
-      let identity = null;
-      if (gated && rawPath !== '/healthz') {
-        identity = identityOf(req, ownerList.logins);
-        if (!identity) {
-          sendUnauthorized(req, res, isApi);
-          return;
-        }
+      const { segments, path } = normalizePath(rawPath);
+      const isApi = segments[0] === 'api';
+      authPath = isApi && (segments[1] === 'auth' || segments[1] === 'admin');
+      const read = req.method === 'GET' || req.method === 'HEAD';
+      const candidate = compiled.find(r => (r.method === req.method || (req.method === 'HEAD' && r.method === 'GET')) && matchPath(r.parts, segments));
+      route = candidate || null;
+      const publicPage = read && ['/signin', '/enroll', '/auth/auth.js', '/auth/auth.css', '/favicon.svg'].includes(path);
+      let identity = gated ? identityOf(req, authService) : null;
+      if (gated && !candidate?.public && !publicPage && !identity) {
+        sendUnauthorized(req, res, isApi);
+        return;
       }
-      if (isApi || rawPath === '/healthz') {
-        // Every /api path gets the DNS-rebinding Host allowlist (as /mcp does), decided on the raw
-        // path before route matching so encoded spellings, unknown paths and wrong methods are covered.
-        // /healthz stays open for container probes.
-        if (isApi && !isAllowedHost(req.headers.host, config)) {
-          throw new HttpError(403, 'forbidden host');
-        }
-        const { r, params } = findRoute(req.method, rawPath);
+      if (!gated && authPath && path !== '/api/auth/session') throw new HttpError(404, 'not found');
+      if (isApi || path === '/healthz') {
+        if (isApi && !isAllowedHost(req.headers.host, config)) throw new HttpError(403, 'forbidden host');
+        const { r, params } = findRoute(req.method, segments);
         route = r;
+        if (gated && r.admin && identity?.role !== 'admin') throw new HttpError(403, 'administrator required');
         let body = {};
         let readUpload = null;
         if (r.upload) {
-          guardUpload(req);
+          guardUpload(req, { origin: gated ? new URL(config.publicUrl).origin : null });
           readUpload = () => readMultipart(req);
         } else if (r.method === 'POST') {
-          guardPost(req);
+          guardPost(req, { origin: gated ? new URL(config.publicUrl).origin : null });
           body = await readJsonBody(req);
+        }
+        if (gated && !r.public) {
+          identity = identityOf(req, authService);
+          if (!identity) throw new HttpError(401, 'unauthorized');
+          if (r.admin && identity.role !== 'admin') throw new HttpError(403, 'administrator required');
         }
         const events = r.stream && wantsEventStream(req) ? createEventStream(req, res) : null;
         let out;
         try {
-          out = await r.handler({ db, config, answerer, engine, packs, identity, scheduler, transport, params, body, readUpload, req, res,
+          out = await r.handler({ db, config, answerer, engine, packs, identity, scheduler, transport, auth: authService, params, body, readUpload, req, res,
             ...(events ? { onEvent: events.send } : {}), get keys() { return getKeys(); } });
         } catch (err) {
           // Once the event stream has started, an error is its last event.
@@ -212,10 +236,20 @@ export function createHandler({ db, config, answerer, engine = null, packs = nul
       if (req.method !== 'GET' && req.method !== 'HEAD') {
         throw new HttpError(405, 'method not allowed', { Allow: 'GET, HEAD' });
       }
-      await serveStatic(req, res, rawPath);
+      if (gated && path === '/admin/users' && identity.role !== 'admin') throw new HttpError(403, 'administrator required');
+      if (['/signin', '/enroll'].includes(path) || (gated && ['/account', '/admin/users'].includes(path))) {
+        let page;
+        try { page = await readFile(join(webDir, 'auth', 'index.html')); }
+        catch { throw new HttpError(404, 'not found'); }
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Length': page.length, 'Cache-Control': 'no-store' });
+        res.end(req.method === 'HEAD' ? undefined : page);
+        return;
+      }
+      await serveStatic(req, res, '/' + segments.map(encodeURIComponent).join('/'));
     } catch (err) {
       if (!(err instanceof HttpError)) {
-        if (route && route.ingest) console.error('fathom: ingest request failed', safeCode(err));
+        if (authPath) console.error('fathom: authentication request failed', 'internal_error');
+        else if (route && route.ingest) console.error('fathom: ingest request failed', safeCode(err));
         else if (route && route.quiet) console.error('fathom: request failed', safeCode(err));
         else console.error(err);
       }

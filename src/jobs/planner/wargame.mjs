@@ -185,6 +185,8 @@ function salaryGame(data, out, ctx) {
   const rothNote = catchOff && rothFact == null && age >= R.catchUpAge ? ' Catch-up room is left out until you confirm your plan offers Roth deferrals.' : '';
   return {
     entity: slug,
+    // The S corp owner whose salary this models ('owner' | 'spouse'): the rec's action owner.
+    person: corp.person,
     title: `What should you pay yourself in ${data.taxYear}?`,
     question: {
       in: 'Each point trades payroll tax against retirement room. The current salary is marked.',
@@ -328,6 +330,8 @@ function deferralModel(data, out, ctx, valid) {
     };
   });
   return {
+    // The owner of the business whose invoices this models ('owner' | 'spouse'): the rec's action owner.
+    person: b.person,
     title: 'Invoice now or in January?',
     question: 'Moving December invoices into January shifts tax a year and leaves less business cash for December.',
     options,
