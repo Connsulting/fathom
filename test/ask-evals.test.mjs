@@ -67,8 +67,8 @@ test('numeric grader distinguishes returned, unsourced and self-computed amounts
   assert.equal(gradeFigures('Available: $1,200.', [result(1200)]).ok, true);
   assert.equal(gradeFigures('Available: $1.2k.', [result(1200)]).ok, true);
   assert.equal(gradeFigures('Available: $333.', [result(1200)]).ok, false);
-  for (const text of ['$150', '$50', '$5,000', '2', '50%']) {
-    const grade = gradeFigures(text, [result(100), result(50)]);
+  for (const text of ['$140', '$60', '$4,000', '2.5', '250%']) {
+    const grade = gradeFigures(text, [result(100), result(40)]);
     assert.equal(grade.ok, false, text);
     assert.equal(grade.selfComputed.length, 1, text);
   }
@@ -76,6 +76,7 @@ test('numeric grader distinguishes returned, unsourced and self-computed amounts
   assert.equal(gradeFigures('1. Available: $100.\n2. Available: $50.', [result(100), result(50)]).ok, true);
   assert.equal(gradeFigures('$100', [result(100, { isError: true })]).ok, false);
   assert.equal(gradeFigures('Rate: four percent.', [result(4)]).ok, true);
+  assert.equal(gradeFigures('$150', [result('$150')]).ok, true);
 });
 
 test('args, result echoes, identifiers, keys, labels and dates cannot source figures', () => {
@@ -84,6 +85,7 @@ test('args, result echoes, identifiers, keys, labels and dates cannot source fig
     { name: 'read', args: { minAmount: 150 }, result: { minAmount: 150 } },
     { name: 'read', args: { minAmount: 150 }, result: { total: 150 } },
     { name: 'read', args: {}, result: { id: 150 } },
+    { name: 'read', args: {}, result: { body: 'Publication 150' } },
     { name: 'read', args: {}, result: { label: '$150', key: '150', asOf: '2032-01-01' } },
   ]) assert.equal(gradeFigures('$150', [call]).ok, false);
 });

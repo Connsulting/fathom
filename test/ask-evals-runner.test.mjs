@@ -43,12 +43,17 @@ test('filters select exact cases and reject unknown filters or invalid budget', 
 test('arithmetic transcript fails through real Ask and corrected retries cannot hide it', async () => {
   const cases = await loadCases();
   const c = cases.find(c => c.id === 'retirement-hsa-room');
-  const r = await runCases({ cases: [c], scripts: () => [
-    { toolCalls: [{ name: 'get_figures', args: { keys: ['hsa_left'] } }], costUsd: 0 },
-    { text: '$987654321', costUsd: 0 },
-  ] });
+  const r = await runCases({ cases: [c], scripts: ({ db, attempt }) => {
+    if (attempt) return [{ text: '{f:hsa_left}', costUsd: 0 }];
+    const values = db.prepare("SELECT v FROM figures WHERE key IN ('hsa_left','hsa_paid')").all();
+    return [
+      { toolCalls: [{ name: 'get_figures', args: { keys: ['hsa_left', 'hsa_paid'] } }], costUsd: 0 },
+      { text: String(values[0].v + values[1].v), costUsd: 0 },
+    ];
+  } });
   assert.equal(r.cases[0].status, 'fail');
-  assert.ok(r.cases[0].turns[0].attempts.some(a => a.figures.unsourced.length));
+  assert.ok(r.cases[0].turns[0].attempts.some(a => a.figures.selfComputed.length));
+  assert.ok(r.cases[0].turns[0].attempts.length > 1, 'production retried the arithmetic answer');
 });
 
 test('follow-up uses production history and real tools, system prompt and grounding', async () => {
@@ -105,4 +110,13 @@ test('budget and unknown accounting stop on their originating case and start no 
   assert.equal(unknown.cases.length, 1);
   assert.equal(unknown.cases[0].status, 'accounting-stopped');
   assert.ok(unknown.costUsd > 0);
+});
+
+
+test('a corrective Ask retry receives fresh budget admission and stops before a second charge', async () => {
+  const c = (await loadCases()).find(c => c.id === 'retirement-hsa-room');
+  const r = await runCases({ cases: [c], maxUsd: 1, scripts: () => [{ text: '$987654321', costUsd: 0.99 }] });
+  assert.equal(r.cases[0].status, 'budget-stopped');
+  assert.equal(r.costUsd, 0.99);
+  assert.equal(r.cases[0].turns[0].attempts.length, 2);
 });

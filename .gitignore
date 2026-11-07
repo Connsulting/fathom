@@ -23,3 +23,5 @@ packs/your-plans/
 .e2e-data*/
 test-results/
 playwright-report/
+
+/evals/out/
