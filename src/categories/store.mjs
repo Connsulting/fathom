@@ -64,8 +64,14 @@ function checks(db,{clock = getSetting(db,'clock',new Date().toISOString().slice
   const ranked=[...list,...unknown.values()].sort(order);
   return [...ranked.filter(c=>c.jev),...ranked.filter(c=>!c.jev).slice(0,CATEGORY_LIMIT)].sort(order);
 }
-export function categoryOptions(context) {
-  const names=[...new Set([context.guess,...Object.values(DEFAULT_CATEGORY)].filter(Boolean))];
+export function categoryNames(input) {
+  return [...new Set([...input.transactions.flatMap(t=>{
+    const c=importedCategory(t); return sourceBucket(c.parser,c.category) ? [c.category] : [];
+  }),...input.corrections.map(r=>r.category),...input.sourceRules.map(r=>r.category),...input.merchantRules.map(r=>r.category)])].sort();
+}
+export function categoryOptions(input) {
+  const standing=Object.values(DEFAULT_CATEGORY), extra=new Set([...categoryNames(input),...input.guesses.filter(isJevProposal).map(g=>g.category)]);
+  const names=[...standing,...[...extra].filter(c=>!standing.includes(c)).sort()];
   return names.flatMap(category=>[{id:category,label:category},{id:'always:'+category,label:category}]);
 }
 export function queueCategoryChecks(db,options={}) {
@@ -74,9 +80,12 @@ export function queueCategoryChecks(db,options={}) {
     if(!active.has(JSON.stringify([r.kind,r.subject]))) db.prepare('DELETE FROM confirm_items WHERE id=?').run(r.id);
   }
   const now=nowOf(options.now);
+  const choices=categoryOptions(loadCategoryInputs(db)), serializedChoices=JSON.stringify(choices);
+  db.prepare("UPDATE confirm_items SET options=? WHERE kind='transaction_category' AND status='pending' AND options!=?")
+    .run(serializedChoices,serializedChoices);
   for(const c of candidates) {
     const question=c.kind==='category_mapping' ? `Treat ${c.category} as ...` : 'Check this transaction category';
-    const opts=c.kind==='category_mapping' ? BUCKETS.map(id=>({id,label:labels[id]})) : categoryOptions(c);
+    const opts=c.kind==='category_mapping' ? BUCKETS.map(id=>({id,label:labels[id]})) : choices;
     const prior=db.prepare('SELECT id,status FROM confirm_items WHERE kind=? AND subject=?').get(c.kind,c.subject);
     if(prior?.status==='answered') continue;
     if(prior) db.prepare('UPDATE confirm_items SET context=?,options=? WHERE id=? AND (context!=? OR options!=?)')

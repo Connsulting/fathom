@@ -102,12 +102,15 @@ test('processor business deposits, card payments and own-account transfers are u
 
 test('generated evidence uses the product label without vendors or percentages',()=>{
   const texts=[jevEvidence(.99),historyDecision(row(8),{accounts,transactions:history()}).evidence.text,
-    ...resolveCategories({accounts,transactions:[row(1,{account_id:'b',amount:99,description:'PayPal payout'}),row(2,{account_id:'c',amount:34,description:'Payment received'})]}).values()].map(v=>typeof v==='string'?v:JSON.stringify(v.evidence));
+    ...[...resolveCategories({accounts,transactions:[row(1,{account_id:'b',amount:99,description:'PayPal payout'}),row(2,{account_id:'c',amount:34,description:'Payment received'})]}).values()].map(v=>v.evidence.text)];
   for(const text of texts) assert.doesNotMatch(text,/jev|typesafe|anthropic|openai|claude|gpt|gemini|\d+\s*%/i);
   for(const text of texts) assert.equal(plainEvidence(text),text);
   assert.match(jevEvidence(.99),/Fathom's categorization/);
   const serviceHistory=history().map(t=>({...t,description:'OpenAI 20% invoice'}));
   assert.doesNotMatch(historyDecision(row(8,{description:'OpenAI 20% invoice'}),{accounts,transactions:serviceHistory}).evidence.text,/openai|%/i);
+  const percentHistory=history().map(t=>({...t,description:'Synthetic percent supplies'}));
+  const text=historyDecision(row(8,{description:'Synthetic percent supplies'}),{accounts,transactions:percentHistory}).evidence.text;
+  assert.equal(plainEvidence(text),text);
 });
 
 test('one categorization run attempts all open transactions under its cost cap',async t=>{
@@ -201,6 +204,6 @@ test('stored category choices use the full household list in one order on every 
   assert.deepEqual(items[0].options,items[1].options);
   const ids=items[0].options.filter(o=>!o.id.startsWith('always:')).map(o=>o.id);
   assert.deepEqual(ids,['Shopping','Business','Income','Internal Transfers','Taxes','Investment','Ignore','Dining & Drinks','Groceries']);
-  assert.deepEqual(categoryOptions(db),items[0].options);
+  assert.deepEqual(categoryOptions(loadCategoryInputs(db)),items[0].options);
   assert.equal(items[0].options.some(o=>o.guess),false);
 });

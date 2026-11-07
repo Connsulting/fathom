@@ -1,27 +1,22 @@
 import { tx, parseJson, getSetting } from '../store/db.mjs';
-import { resolveCategories, importedCategory, sourceBucket, historyExamples, createHistoryIndex } from './resolve.mjs';
-import { loadCategoryInputs, queueCategoryChecks, categoryOptions, isJevProposal } from './store.mjs';
+import { resolveCategories, importedCategory, historyExamples, createHistoryIndex } from './resolve.mjs';
+import { loadCategoryInputs, queueCategoryChecks, categoryOptions, categoryNames, isJevProposal } from './store.mjs';
 import { categoryQuestions, JEV_MODEL } from './jev.mjs';
 import { confidenceBand, jevEvidence } from './policy.mjs';
 import { ask, getItem, recordAutoAnswer } from '../ingest/confirm.mjs';
 
-export function categoryNames(input) {
-  return [...new Set([...input.transactions.flatMap(t=>{
-    const c=importedCategory(t); return sourceBucket(c.parser,c.category) ? [c.category] : [];
-  }),...input.corrections.map(r=>r.category),...input.sourceRules.map(r=>r.category),...input.merchantRules.map(r=>r.category)])].sort();
-}
 export const householdNames = db => parseJson(db.prepare("SELECT value FROM facts WHERE key='household.names'").get()?.value,{});
 
-function categoryItem(db,t,resolution,at,prediction) {
+function categoryItem(db,options,t,resolution,at,prediction) {
   const context={kind:'transaction_category',subject:String(t.id),transactionId:t.id,amount:t.amount,date:t.date,
     description:t.description,category:'Uncategorized',bucket:t.amount>0?'income':'household',layer:'uncategorized',
     guess:resolution.category,...(prediction?{jev:prediction}:{})};
   const prior=db.prepare("SELECT id,status FROM confirm_items WHERE kind='transaction_category' AND subject=?").get(String(t.id));
   if(prior?.status==='answered') return null;
-  const item=prior ?? ask(db,{kind:'transaction_category',subject:String(t.id),question:'Check this transaction category',options:categoryOptions(context),context,now:at});
+  const item=prior ?? ask(db,{kind:'transaction_category',subject:String(t.id),question:'Check this transaction category',options,context,now:at});
   const pending=getItem(db,item.id);
   if(pending?.status!=='pending') return null;
-  db.prepare('UPDATE confirm_items SET context=?,options=? WHERE id=?').run(JSON.stringify(context),JSON.stringify(categoryOptions(context)),pending.id);
+  db.prepare('UPDATE confirm_items SET context=?,options=? WHERE id=?').run(JSON.stringify(context),JSON.stringify(options),pending.id);
   return pending;
 }
 
@@ -30,11 +25,11 @@ export async function guessCategories(db, jev, { now, batchSize = 10, maxBatches
   const stats=()=>jev?.stats?.().costUsd??0;
   const at=now ?? new Date().toISOString();
   try {
-    const initial=loadCategoryInputs(db), deterministic=resolveCategories(initial);
+    const initial=loadCategoryInputs(db), deterministic=resolveCategories(initial), localChoices=categoryOptions(initial);
     for(const t of initial.transactions) {
       const c=deterministic.get(t.id);
       if(!['merchant','structural'].includes(c.layer) || c.evidence.imported) continue;
-      const item=categoryItem(db,t,c,at);
+      const item=categoryItem(db,localChoices,t,c,at);
       if(!item || db.prepare('SELECT 1 FROM confirm_auto_declined WHERE item_id=?').get(item.id)) continue;
       // The category auto rule keeps the existing cross-import undo and duplicate-move contract.
       recordAutoAnswer(db,item.id,c.category,{rule:'jev_category',evidence:{text:c.evidence.text,
@@ -53,7 +48,7 @@ export async function guessCategories(db, jev, { now, batchSize = 10, maxBatches
       const rows=input.transactions.filter(t=>resolved.get(t.id)?.layer==='uncategorized' && !attempted.has(t.id)
         && (!importedCategory(t).category || importedCategory(t).category==='Uncategorized')).slice(0,batchSize);
       if(!rows.length) break;
-      const index=createHistoryIndex(input);
+      const index=createHistoryIndex(input), choices=categoryOptions(input);
       const answers=await jev.choose(categoryQuestions(rows,{accounts:input.accounts,householdNames:householdNames(db),categories:names,
         examples:rows.map(t=>historyExamples(t,input,index))}));
       const current=resolveCategories(loadCategoryInputs(db));
@@ -66,7 +61,7 @@ export async function guessCategories(db, jev, { now, batchSize = 10, maxBatches
             .run(t.id,JSON.stringify(prediction),JEV_MODEL,at);
           const band=confidenceBand(a.confidence,policy);
           if(band==='uncategorized') continue;
-          const item=categoryItem(db,t,{category:a.choice},at,prediction);
+          const item=categoryItem(db,choices,t,{category:a.choice},at,prediction);
           if(!item) continue;
           guessed++;
           const declined=db.prepare('SELECT 1 FROM confirm_auto_declined WHERE item_id=?').get(item.id);
