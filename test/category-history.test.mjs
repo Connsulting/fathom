@@ -5,13 +5,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInstance } from '../src/platform/db.mjs';
 import { setSetting } from '../src/store/db.mjs';
-import { loadCategoryInputs, queueCategoryChecks } from '../src/categories/store.mjs';
+import { loadCategoryInputs, queueCategoryChecks, categoryOptions } from '../src/categories/store.mjs';
 import { resolveCategories, historyExamples, historyDecision } from '../src/categories/resolve.mjs';
 import { guessCategories } from '../src/categories/guess.mjs';
 import { categoryQuestions, createJev, JEV_MODEL } from '../src/categories/jev.mjs';
 import { jevEvidence } from '../src/categories/policy.mjs';
 import { answerItem, pendingItems, autoInfo, reopenItem } from '../src/ingest/confirm.mjs';
 import { spendingInputs } from '../src/calc/targets.mjs';
+import { plainEvidence } from '../src/categories/display.mjs';
 
 const accounts = [{id:'a',kind:'checking'}, {id:'b',kind:'business'}, {id:'c',kind:'card'}, {id:'d',kind:'savings'}];
 const row = (id, patch={}) => ({id,account_id:'a',date:`2032-01-${String(id).padStart(2,'0')}`,description:'Cobalt Market',amount:-36,...patch});
@@ -103,6 +104,7 @@ test('generated evidence uses the product label without vendors or percentages',
   const texts=[jevEvidence(.99),historyDecision(row(8),{accounts,transactions:history()}).evidence.text,
     ...resolveCategories({accounts,transactions:[row(1,{account_id:'b',amount:99,description:'PayPal payout'}),row(2,{account_id:'c',amount:34,description:'Payment received'})]}).values()].map(v=>typeof v==='string'?v:JSON.stringify(v.evidence));
   for(const text of texts) assert.doesNotMatch(text,/jev|typesafe|anthropic|openai|claude|gpt|gemini|\d+\s*%/i);
+  for(const text of texts) assert.equal(plainEvidence(text),text);
   assert.match(jevEvidence(.99),/Fathom's categorization/);
   const serviceHistory=history().map(t=>({...t,description:'OpenAI 20% invoice'}));
   assert.doesNotMatch(historyDecision(row(8,{description:'OpenAI 20% invoice'}),{accounts,transactions:serviceHistory}).evidence.text,/openai|%/i);
@@ -185,4 +187,20 @@ test('undoing a learned business category restores spending through the calculat
   const item=db.prepare("SELECT id FROM confirm_items WHERE kind='transaction_category' AND subject=?").get(String(target));
   reopenItem(db,item.id);
   assert.ok(spend().spendIds.includes(target));
+});
+
+test('stored category choices use the full household list in one order on every card',async t=>{
+  const db=store(t);
+  insert(db,row(1,{description:'Historical food',category:'Groceries',parser:'aggregator'}));
+  insert(db,row(2,{description:'Historical meal',category:'Dining & Drinks',parser:'aggregator'}));
+  const first=insert(db,row(8,{description:'New merchant alpha'})),second=insert(db,row(9,{description:'New merchant beta'}));
+  const provider={isOn:()=>true,stats:()=>({costUsd:0}),choose:async qs=>qs.map((q,i)=>({choice:i?'Dining & Drinks':'Groceries',confidence:.85,probabilities:{Groceries:.5,'Dining & Drinks':.5}}))};
+  await guessCategories(db,provider);
+  const items=pendingItems(db).filter(q=>q.kind==='transaction_category' && [String(first),String(second)].includes(q.subject));
+  assert.equal(items.length,2);assert.notEqual(items[0].context.guess,items[1].context.guess);
+  assert.deepEqual(items[0].options,items[1].options);
+  const ids=items[0].options.filter(o=>!o.id.startsWith('always:')).map(o=>o.id);
+  assert.deepEqual(ids,['Shopping','Business','Income','Internal Transfers','Taxes','Investment','Ignore','Dining & Drinks','Groceries']);
+  assert.deepEqual(categoryOptions(db),items[0].options);
+  assert.equal(items[0].options.some(o=>o.guess),false);
 });
