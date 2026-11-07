@@ -568,3 +568,26 @@ test('stop() with nothing running resolves promptly and releases the lease', asy
     assert.equal(lockRow(t.db), undefined);
   } finally { t.done(); }
 });
+
+test('a paused household: ticks and the job listing write nothing; resumed, the next tick runs the due job', async () => {
+  const t = await store();
+  try {
+    const { logicalDigest } = await import('../../src/platform/digest.mjs');
+    let enabled = false;
+    const h = counter();
+    const s = createScheduler({
+      db: t.db, config: configOf(t.dataDir), engine: null, handlers: { 'brief-email': h }, transport: captureTransport(),
+      now: clockAt('2026-12-01T12:00:00Z').now, tickMs: 3600000, holder: 'test-holder', allowed: () => enabled,
+    });
+    const before = logicalDigest(t.db);
+    await s.tick();
+    s.jobs();
+    assert.equal(logicalDigest(t.db), before, 'no job rows, labels, lease or runs written while paused');
+    assert.equal(h.calls.length, 0);
+    enabled = true;
+    await s.tick();
+    assert.equal(h.calls.length, 1, 'the resumed tick runs the due job');
+    assert.notEqual(logicalDigest(t.db), before);
+    await s.stop();
+  } finally { t.done(); }
+});

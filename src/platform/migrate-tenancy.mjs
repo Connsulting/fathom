@@ -30,7 +30,10 @@
 //                  active admin, else is revoked with migration_no_creator), an all-paused
 //                  household_outbound row, every session, challenge and link token deleted, live
 //                  invitations revoked, storage_root and generation set, the operation row recorded;
-//                  checked by digest before COMMIT. This is the single publication point.
+//                  checked by digest before COMMIT. This is the single publication point. Before it
+//                  and again before COMMIT the passkeys must equal the journal's fingerprint
+//                  (passkeys_changed otherwise), and the source must equal its journaled digest
+//                  (source_changed otherwise).
 //   retire         root store (+ side files), api-key-secret, files/, packs/, outbox/ renamed into
 //                  legacy-<op>/ (renames only)
 //   complete       the operation marked done, the lock removed
@@ -46,9 +49,9 @@
 
 import { createHash, timingSafeEqual } from 'node:crypto';
 import {
-  chmodSync, constants, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statfsSync,
+  chmodSync, constants, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statfsSync,
 } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { DB_FILE, listTables, migrate, openDb } from '../store/db.mjs';
 import {
@@ -80,6 +83,20 @@ const TREES = Object.freeze(['packs', 'outbox']);
 // Retired from the data root, in this order. The store's side files travel with it.
 const RETIRED = Object.freeze([DB_FILE, `${DB_FILE}-wal`, `${DB_FILE}-shm`, `${DB_FILE}-journal`, SECRET_FILE, 'files', 'packs', 'outbox']);
 const MOVED_TABLE = 'api_keys';
+
+// The server reads these two files after the migration; one inside an entry the retire phase
+// renames away would vanish under the running server, so it refuses before any change.
+function refuseRetiredSecrets(dataDir, files) {
+  const real = p => { try { return realpathSync(p); } catch { return resolve(p); } };
+  for (const file of files) {
+    if (typeof file !== 'string' || !file) continue;
+    const target = real(file);
+    for (const name of RETIRED) {
+      const rel = relative(real(join(dataDir, name)), target);
+      if (rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))) throw refuse('secret_in_retired_entry');
+    }
+  }
+}
 const MIB = 1024 * 1024;
 
 const refuse = code => codeError(code);
@@ -489,12 +506,33 @@ function platformKeys(platform, journal, rows) {
   });
 }
 
+// No passkey may be lost. The journal records, before any change, the passkey count, a digest of
+// the set of credential ids and a digest of every row byte for byte (credential id, user, public
+// key, sign counter, transports, name, times). Publication checks the platform against it before
+// the manifest transaction and again inside it before COMMIT; any difference refuses
+// passkeys_changed with nothing published.
+function passkeyFingerprint(platform) {
+  const rows = platform.prepare('SELECT * FROM passkeys').all();
+  return { count: rows.length, ids: sha256(rows.map(r => r.id).sort().join('\n')), rows: rowsDigest(rows).sha256 };
+}
+
+function checkPasskeys(platform, journal) {
+  const was = journal.passkeys;
+  if (!was || !Number.isInteger(was.count) || typeof was.ids !== 'string' || typeof was.rows !== 'string') throw refuse('journal_invalid');
+  const now = passkeyFingerprint(platform);
+  if (now.count !== was.count || now.ids !== was.ids || now.rows !== was.rows) throw refuse('passkeys_changed');
+}
+
 const KEY_COLUMNS = ['id', 'household_id', 'user_id', 'name', 'key_hash', 'scopes', 'created_at', 'last_used_at', 'revoked_at', 'revoked_code'];
 
 function publishManifest(ctx) {
   const { platform, source, journal } = ctx;
+  // The published root was verified against the journal; a source that changed since the journal
+  // recorded it (a write between a crash and this rerun) refuses rather than being retired unseen.
+  if (!journal.sourceDigest || logicalDigest(source) !== journal.sourceDigest) throw refuse('source_changed');
   const rows = hasTable(source, MOVED_TABLE) ? keyRows(source) : [];
   if (!sameDigest(keyDigest(rows), journal.apiKeys)) throw refuse('source_changed');
+  checkPasskeys(platform, journal);
   const keys = platformKeys(platform, journal, rows);
   const now = Date.now();
   const hh = journal.householdId;
@@ -519,6 +557,7 @@ function publishManifest(ctx) {
     const live = platform.prepare(`SELECT (SELECT count(*) FROM auth_sessions) + (SELECT count(*) FROM auth_challenges)
       + (SELECT count(*) FROM auth_tokens) + (SELECT count(*) FROM household_invitations WHERE consumed_at IS NULL AND revoked_at IS NULL) AS n`).get();
     if (!sameDigest(rowsDigest(written), rowsDigest(keys)) || outbound?.n !== 0 || live.n !== 0) throw refuse('manifest_invalid');
+    checkPasskeys(platform, journal);
     platform.exec('COMMIT');
   } catch (e) {
     platform.exec('ROLLBACK');
@@ -567,6 +606,7 @@ export async function migrateTenancy({
   const lockFile = join(root, LOCK_FILE);
   if (existsSync(join(root, PLATFORM_LOCK_FILE))) throw refuse('platform_migration_in_progress');
   if (!existsSync(platformFile)) throw refuse('platform_migration_required');
+  refuseRetiredSecrets(root, [mcpSecretFile, platformKeyFile]);
 
   const journal = readJson(journalFile, 'journal_invalid');
   const lock = readJson(lockFile, 'stale_lock_mismatch');
@@ -592,7 +632,10 @@ export async function migrateTenancy({
     }
     ctx.source = openSourceExclusive(join(root, DB_FILE));
     preflight({ dataDir: root, platform: ctx.platform, source: ctx.source, legacyKey, mcpSecret, diskFree });
-    ctx.journal = { version: 1, operationId: newOperationId(), householdId: hh.id, startedAt: Date.now(), phase: 'preflight' };
+    ctx.journal = {
+      version: 1, operationId: newOperationId(), householdId: hh.id, startedAt: Date.now(), phase: 'preflight',
+      passkeys: passkeyFingerprint(ctx.platform),
+    };
     writeJournal(journalFile, ctx.journal);
     writeLock(lockFile, ctx.journal.operationId);
     await onPhase('preflight');
