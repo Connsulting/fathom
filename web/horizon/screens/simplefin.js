@@ -30,6 +30,9 @@ const PROBLEM = {
 
 const state = () => H.api.s?.live?.simplefin || { connected: false };
 
+// What a sync in flight and its last result look like, for other screens that offer Sync now.
+export const status = () => ({ busy: S.busy, notice: S.notice });
+
 function form(sf, reconnect) {
   const { esc, btn } = H;
   return `<form class="h-sf-form" data-sf-form novalidate>
