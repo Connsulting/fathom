@@ -25,7 +25,8 @@ import { ask, FACT_CHECK_OPTIONS } from '../src/ingest/confirm.mjs';
 const NOTE = 'We file jointly in Virginia, I run an S corporation and my spouse freelances. Two kids.';
 
 // The main demo server's store (playwright.config.mjs runs it on .e2e-data at the repo root).
-const DEMO_STORE = fileURLToPath(new URL('../.e2e-data/fathom.sqlite', import.meta.url));
+// The main demo server's store: the E2E_DATA directory playwright.config.mjs gives it.
+const DEMO_STORE = fileURLToPath(new URL(`../${process.env.E2E_DATA || '.e2e-data'}/fathom.sqlite`, import.meta.url));
 
 // The Goals step copy and its starter cards (pinned by the design).
 const GOALS_H1 = 'What is the money for?';
