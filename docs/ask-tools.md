@@ -1414,6 +1414,7 @@ lands the covering operation.
 | `POST /api/goals/:id/suggestion` | `update_goal.suggestion` | C9 |  |
 | `POST /api/curve` | `update_preferences.curve` | C9 |  |
 | `POST /api/onboarding` | excluded: onboarding wizard | | |
+| `POST /api/tour/seen` | excluded: guided tour state | | |
 | `POST /api/onboarding/notes` | `refresh.import_file` | C10 | a `text/markdown` note |
 | `POST /api/demo/reset` | excluded: demo reset | | |
 | `GET /api/keys` | excluded: API keys | | |

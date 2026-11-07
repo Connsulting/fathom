@@ -1071,8 +1071,17 @@ const SENTINEL_TEXT = 'zq7sentinel93';
 const SENTINEL_AMOUNT = 987654.31;
 const SENTINEL_STRINGS = [SENTINEL_TEXT, `zq7 ${SENTINEL_AMOUNT} sentinel`];
 const SENTINEL_DATES = ['2091-07-23', '2091-07'];
-const SENTINEL_MARKS = ['zq7', '987654', '987,654', '2091'];
+// A digit-free sentinel for text arguments whose pattern refuses digits (a calculate label).
+const SENTINEL_WORD = 'zqxsentinel';
+const SENTINEL_MARKS = ['zq7', '987654', '987,654', '2091', SENTINEL_WORD];
 const IDENTIFIER_KEY = /^(?:id|ids|key|keys)$|(?:Id|Ids|_id|_ids)$/;
+// A calculate label names the figure it returns: it is echoed under `label`, a key the evidence
+// sanitizer drops at any depth, so it never grounds a number.
+const LABEL_KEY = 'label';
+// A real stored figure an Operand can reference; a sentinel Operand is an owner assumption with a
+// sentinel amount, which a context without the owner's statements refuses.
+const figureOperand = { ref: { tool: 'household', args: { operation: 'figures', keys: ['biz_cash'] }, path: '0' } };
+const sentinelOperand = { assumption: { name: 'synthetic', value: SENTINEL_AMOUNT, unit: 'usd', source: 'owner', evidence: SENTINEL_TEXT } };
 
 // Every tool the answerer offers in an ask and a rec conversation, read from its own requests.
 async function offeredTools(s) {
@@ -1101,7 +1110,7 @@ function candidates(schema, name, intSentinel) {
   const type = [].concat(schema.type)[0];
   if (type === 'string') {
     if (schema.pattern) {
-      const date = SENTINEL_DATES.find(d => new RegExp(schema.pattern).test(d));
+      const date = [...SENTINEL_DATES, SENTINEL_WORD].find(d => new RegExp(schema.pattern).test(d));
       assert.ok(date, `extend the contract test: no sentinel matches ${name} pattern ${schema.pattern}`);
       return [{ value: date, sentinel: true }];
     }
@@ -1117,6 +1126,7 @@ function candidates(schema, name, intSentinel) {
   }
   if (type === 'array') return candidates(schema.items || { type: 'string' }, name, intSentinel).map(c => ({ value: [c.value], sentinel: c.sentinel }));
   if (type === 'boolean') return [{ value: true, sentinel: false }];
+  if (type === 'object' && ['ref', 'assumption', 'expr'].every(k => schema.properties?.[k])) return [{ value: sentinelOperand, sentinel: true }];
   return assert.fail(`extend the contract test: ${name} has type ${type}`);
 }
 
@@ -1147,12 +1157,20 @@ test('R3 A contract: no tool the answerer offers returns a sentinel argument out
       else if (name === 'file') base[name] = realPack.entries[0].file;
       else if (name === 'query') base[name] = 'tax';
       else if (name === 'title') base[name] = 'Synthetic goal';
+      else if (name === 'operands') base[name] = [figureOperand, figureOperand];
+      else if (name === 'rate' || name === 'years') base[name] = figureOperand;
+      else if (name === 'label') base[name] = 'Synthetic figure';
       else assert.fail(`extend the contract test: ${tool.name} requires ${name}`);
     }
     // An integer sentinel in range that the tool never returns for real arguments at their widest.
     const widest = { ...base };
     for (const [name, schema] of Object.entries(props)) if (schema.type === 'integer' && schema.maximum != null) widest[name] = schema.maximum;
-    const seen = JSON.stringify(await tool.handler(widest, ctx));
+    // A calculate operation whose unit algebra refuses the base operands (multiply on two money
+    // figures) is a refusal, not a result: it probes no numbers.
+    const seen = JSON.stringify(await tool.handler(widest, ctx).catch(e => {
+      if (tool.name === 'calculate' && e?.code === 'bad_input') return null;
+      throw e;
+    }));
     const numbers = new Set(leaves(JSON.parse(seen)).map(l => l.value).filter(v => typeof v === 'number'));
     const intProp = Object.values(props).find(p => p.type === 'integer');
     let intSentinel;
@@ -1192,6 +1210,7 @@ test('R3 A contract: no tool the answerer offers returns a sentinel argument out
     const { intSentinel } = plan.get(`${r.name}.${r.args.operation}`);
     for (const leaf of leaves(r.result)) {
       if (!leaf.isKey && leaf.key !== undefined && IDENTIFIER_KEY.test(leaf.key)) continue;
+      if (!leaf.isKey && leaf.key === LABEL_KEY && r.name === 'calculate' && leaf.value === r.args.label) continue;
       const where = `${r.name}(${JSON.stringify(r.args)}) ${leaf.isKey ? 'key' : `under ${leaf.key}`}: ${JSON.stringify(leaf.value)}`;
       if (typeof leaf.value === 'number') {
         assert.ok(Math.abs(leaf.value) !== SENTINEL_AMOUNT, where);

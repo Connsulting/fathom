@@ -92,7 +92,7 @@ import { needsYou as needsYouOf, packStatus } from '/shared/rules.mjs';
 import { isOwner } from '/shared/rec-links.mjs';
 
 const ROUTES = new Set(['onboarding', 'home', 'pace', 'brief', 'plan', 'rec', 'ask', 'wargame', 'goals', 'accounts',
-  'advisor', 'yearend', 'connect', 'engine', 'email', 'packs', 'confirm', 'add', 'money', 'settings', 'account', 'pnl', 'pnlrows']);
+  'advisor', 'yearend', 'connect', 'engine', 'email', 'packs', 'confirm', 'add', 'money', 'settings', 'memories', 'account', 'pnl', 'pnlrows']);
 const PARAM_KEY = { rec: 'id', onboarding: 'step', wargame: 'name', packs: 'id', ask: 'id', account: 'id', pnl: 'state', pnlrows: 'id' };
 // Routes whose param is a URLSearchParams string: kept as written in the hash ('=', '&' and the
 // string's own percent escapes literal), never decoded as one value.
@@ -876,6 +876,11 @@ function accountRename(id, displayName) {
   return send('/api/accounts/' + encodeURIComponent(id) + '/name', { displayName: displayName ?? '' }, d => d.account || null, null, 'Could not rename that account. ');
 }
 
+// The signed-in user finished or dismissed the guided tour: clear their server-side flag.
+function tourSeen() {
+  return send('/api/tour/seen', {}, null, null, 'Could not save that the tour is done. ');
+}
+
 function preferenceSave(id, text) {
   return send('/api/preferences' + (id ? '/' + encodeURIComponent(id) : ''), { text });
 }
@@ -1352,6 +1357,7 @@ const api = {
   spending,
   spendingRows,
   preferenceSave,
+  tourSeen,
   preferenceDelete,
   actionUndo,
   accountMask,
