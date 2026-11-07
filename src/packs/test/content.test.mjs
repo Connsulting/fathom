@@ -151,9 +151,10 @@ test('business income activates retirement planning before a plan has been selec
 
 test('expanded tax coverage retains verified figures, exact limit definitions and primary citations', () => {
   const packs = Object.fromEntries(loadPacks([root]).map((pack) => [pack.id, pack]));
-  for (const id of ['charitable-giving', 'w2-benefits', 'advanced-retirement', 'virginia-resident']) {
+  for (const id of ['charitable-giving', 'advanced-retirement', 'virginia-resident']) {
     assert.equal(packs[id].version, '1.1.0', id);
   }
+  assert.equal(packs['w2-benefits'].version, '1.2.0');
   const entry = (pack, file) => packs[pack].entries.find((item) => item.file === file).body;
   const bunching = entry('charitable-giving', 'bunching.md');
   for (const amount of ['$32,200', '$24,150', '$16,100']) assert.ok(bunching.includes(amount));
