@@ -3,7 +3,9 @@
 // buckets and data gaps.
 //
 // householdSpending({db, from, to, include, exclude, clock}) -> see docs/architecture.md
-// householdSpendingRows({db, from, to, include, exclude, bucket, category, month, clock}) -> {items, total, figures, sources, note}
+// householdSpendingRows({db, from, to, include, exclude, bucket, category, month, clock}) -> {items, total, sum, figures, sources, note}
+//   sum: a figure over every matching row (not just the capped items), equal to the cell it opens from.
+//   Each item: amount (raw signed), value (counted: the outflow positive, a refund negative) and fig (at value).
 
 import { spendingAccount } from '../categories/resolve.mjs';
 import {
@@ -205,5 +207,6 @@ export function householdSpendingRows({ bucket, category, month, ...opts } = {})
     account: a.labels.get(row.accountId)?.label ?? row.accountId, category, label: `Transaction on ${row.date}`,
   }));
   const where = month ? spanLabel(month, month) : spanLabel(a.from, a.to);
-  return { items, total: rows.length, ...reg.done(), note: `Rows behind ${category}, ${where}.` };
+  const sum = reg.add(`${keyBase(a)}.rows.${bucket}.${enc(category)}.${month ?? 'total'}`, { v: sumOf(rows), label: `${category}, ${where}`, rows, counted: true, notes: SPEND_NOTE });
+  return { items, total: rows.length, sum, ...reg.done(), note: `Rows behind ${category}, ${where}.` };
 }
