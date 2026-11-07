@@ -92,6 +92,7 @@ const inFlight = new Set();
 
 // file = {name, bytes, mime}. Returns {fileId, name, status, sourceKind, parser, counts, duplicateOf?}.
 export async function ingestFile(db, file, opts = {}) {
+  db.prepare("DELETE FROM settings WHERE key = 'synthetic_demo'").run();
   const now = opts.now || new Date().toISOString();
   const bytes = toBytes(file.bytes);
   const name = baseName(file.name);

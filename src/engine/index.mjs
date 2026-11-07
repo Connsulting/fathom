@@ -173,7 +173,8 @@ export function fakeChunks(text) {
 const pause = ms => (ms > 0 ? new Promise(resolve => setTimeout(resolve, ms)) : Promise.resolve());
 
 export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger = createMemoryLedger(), capUsd = 200,
-  credential, responses = [], now = () => new Date(), toolContext = {}, streamDelayMs = 0 } = {}) {
+  credential, responses = [], now = () => new Date(), toolContext = {}, streamDelayMs = 0,
+  modelOverride, maxRounds = 8, admitRound = null, roundRunner = sdkRound } = {}) {
   if (!['live', 'fake', 'off'].includes(mode)) throw new TypeError('Invalid engine mode');
   if (!Number.isFinite(capUsd) || capUsd < 0) throw new TypeError('Invalid monthly cap');
   if (typeof ledger.monthSpendUsd !== 'function' || typeof ledger.record !== 'function') throw new TypeError('Invalid ledger adapter');
@@ -215,7 +216,7 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
       roundStream = '';
     };
     if (!PURPOSES.includes(purpose)) throw new TypeError('Invalid call purpose');
-    const model = modelFor(purpose);
+    const model = modelOverride ?? modelFor(purpose);
     if (typeof system !== 'string' || typeof systemDynamic !== 'string' || !Array.isArray(messages) || messages.length === 0 || !Number.isInteger(maxTokens) || maxTokens <= 0 || maxTokens > 128000) {
       throw new TypeError('Invalid model request');
     }
@@ -226,7 +227,7 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
     const rounds = [];
     const toolRounds = [];
     let cost = 0;
-    for (let roundIndex = 0; roundIndex < 8; roundIndex++) {
+    for (let roundIndex = 0; roundIndex < maxRounds; roundIndex++) {
       let round;
       const afterTools = [];
       answer.beginRound();
@@ -236,6 +237,7 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
         const spend = await ledger.monthSpendUsd(monthKey(ts));
         if (!Number.isFinite(spend) || spend < 0) throw new ModelAccountingError();
         if (spend >= capUsd) { const error = new BudgetExceededError(); error.toolResults = allResults; throw error; }
+        if (admitRound) await admitRound({ purpose, system, systemDynamic, messages: transcript, tools, maxTokens });
         const auth = mode === 'live' ? explicitCredential(credential) : undefined;
         const context = callContext ?? toolContext;
         const registry = createRegistryServer(tools, { purpose, ctx: { ...context, db: context.db, now: context.now ?? ts,
@@ -271,8 +273,8 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
               content: Array.isArray(script.content) ? script.content : [{ type: 'text', text }], details: { maxBudgetUsd: capUsd - spend } };
           } else {
             try {
-              round = await (SINGLE_ROUND.includes(purpose) ? messagesRound : sdkRound)({ credential: auth, system, systemDynamic,
-                messages: transcript, maxTokens, maxBudgetUsd: capUsd - spend, model, registry, schema, ...(emit ? { onEvent: emit } : {}) });
+              round = await (SINGLE_ROUND.includes(purpose) ? messagesRound : roundRunner)({ credential: auth, system, systemDynamic,
+                messages: transcript, tools, maxTokens, maxBudgetUsd: capUsd - spend, model, registry, schema, ...(emit ? { onEvent: emit } : {}) });
             } catch {
               round = { text: '', content: [], status: 'transport_error', is_error: true,
                 accountingUnknown: true, model, tokens: {}, toolResults: registry.results, details: {} };

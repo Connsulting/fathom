@@ -35,12 +35,14 @@ import { createTransport } from './email/transport.mjs';
 import { createScheduler, defaultHandlers } from './jobs/scheduler.mjs';
 import { seedDemo } from '../demo/seed.mjs';
 import { backfillMergedIdentity } from './ingest/account-merge.mjs';
+import { assertSyntheticStore, createPublicDemoHandler } from './public-demo/runtime.mjs';
 
 export class StartupError extends Error {}
 
 // Open (or create) the instance at config.dataDir following the store mode rules. Returns
 // { db, platform }: the financial store and the platform DB; the caller closes both.
 export function openStore(config) {
+  if (config.publicDemo) assertSyntheticStore(join(config.dataDir, DB_FILE));
   mkdirSync(config.dataDir, { recursive: true });
   const file = join(config.dataDir, DB_FILE);
   const mode = readStoreMode(file);
@@ -105,6 +107,29 @@ export async function startServer(config = loadConfig()) {
     try { db.close(); } catch { /* already closed */ }
     try { platform.close(); } catch { /* already closed */ }
   };
+  if (config.publicDemo) {
+    let demo;
+    try { demo = createPublicDemoHandler(config, db); }
+    catch (err) { closeStores(); throw err; }
+    const server = applyTimeouts(http.createServer(demo.handle));
+    try {
+      await new Promise((done, reject) => {
+        server.once('error', reject);
+        server.listen(config.port, config.host, () => { server.off('error', reject); done(); });
+      });
+    } catch (err) { demo.close(); closeStores(); throw err; }
+    let closed = false;
+    return { server, db, platform, url: `http://${config.host.includes(':') ? `[${config.host}]` : config.host}:${server.address().port}`,
+      close() {
+        if (closed) return Promise.resolve();
+        closed = true;
+        return new Promise(done => {
+          server.close(() => { demo.close(); closeStores(); done(); });
+          server.closeAllConnections();
+        });
+      },
+    };
+  }
   let transport;
   let auth;
   try {

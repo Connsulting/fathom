@@ -288,6 +288,7 @@ export function seedDemo(db) {
     if (chat > 0) spend.run(`${clock}T07:30:00.000Z`, month, 'chat', chat);
 
     setSetting(db, 'mode', 'demo');
+    setSetting(db, 'synthetic_demo', 'synthetic-v1');
     setSetting(db, 'clock', clock);
     setSetting(db, 'onboarding', { done: true, step: 6 });
     setSetting(db, 'engine', { on: true });
