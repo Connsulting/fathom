@@ -168,10 +168,19 @@ function frame(kick, body) {
   return `<div class="h-dlg-back" data-dlg="close"></div><div class="h-dlg h-ad" role="dialog" aria-modal="true" aria-labelledby="h-dlg-t" tabindex="-1"><div class="h-dlg-bar"><div class="h-kicker">${kick}</div><button type="button" class="h-dlg-x" data-dlg="close" aria-label="Close">${icon('x')}</button></div><div class="h-dlg-body">${body}</div></div>`;
 }
 
+// The whole label as the typed name would show it: owner prefix, the name, the sure last 4.
+function previewText(a, value) {
+  const d = S.detail?.account;
+  const prefix = d?.labelPrefix ?? a.labelPrefix ?? '';
+  const last4 = d?.labelMask ?? a.labelMask ?? '';
+  const text = H.composeLabel(a.imported === false ? H.api.txt(String(prefix)) : prefix, String(value ?? '').trim() || (a.imported === false ? H.api.txt(String(a.baseName ?? '')) : String(a.baseName ?? '')), last4);
+  return text;
+}
+
 function titleHtml(a) {
   const { esc, icon } = H;
   if (S.edit) {
-    return `<h1 id="h-dlg-t" class="h-dlg-title h-ad-title"><input class="h-acc-edit h-ad-edit" data-dlg-name="${esc(a.id)}" value="${esc(S.edit.value)}" maxlength="120" aria-label="Account name" autocomplete="off"></h1>`;
+    return `<h1 id="h-dlg-t" class="h-dlg-title h-ad-title"><input class="h-acc-edit h-ad-edit" data-dlg-name="${esc(a.id)}" value="${esc(S.edit.value)}" maxlength="120" aria-label="Account name" autocomplete="off"></h1><p class="h-mute sm h-ad-preview" aria-live="polite">Shown as <b data-ad-preview="">${esc(previewText(a, S.edit.value))}</b></p>`;
   }
   return `<div class="h-ad-titlerow"><h1 id="h-dlg-t" class="h-dlg-title h-ad-title">${a.displayName ? esc(a.name) : lbl(a, a.name)}</h1><button type="button" class="h-acc-pen h-ad-pen" data-dlg-rename="${esc(a.id)}" aria-label="Rename account">${icon('pen')}</button>${H.addBtn('account', a.id, a.displayName ? a.name : (a.imported === false ? H.api.txt(String(a.name ?? '')) : String(a.name ?? '')))}</div>`;
 }
@@ -392,8 +401,8 @@ const inDialog = (el) => !!el?.closest?.('.h-dlg-host');
 function beginRename(id) {
   const a = accountOf(id);
   if (!a) return;
-  // A custom name starts from the name as typed, without the "(1234)" a duplicate name gets.
-  S.edit = { value: a.displayName ? String(a.displayName) : (a.imported === false ? H.api.txt(String(a.name ?? '')) : String(a.name ?? '')) };
+  // The field edits the bare name: the custom name as typed, else the default name, with no owner prefix or last 4.
+  S.edit = { value: a.displayName ? String(a.displayName) : (a.imported === false ? H.api.txt(String(a.baseName ?? a.name ?? '')) : String(a.baseName ?? a.name ?? '')) };
   H.draw();
   const el = H.root?.querySelector('.h-dlg-host [data-dlg-name]');
   if (el) { el.focus(); el.select(); }
@@ -609,7 +618,15 @@ export function onClick(e) {
 export function onInput(e) {
   const t = e.target;
   if (!inDialog(t)) return false;
-  if (t.dataset?.dlgName != null) { if (S.edit) S.edit.value = t.value; return true; }
+  if (t.dataset?.dlgName != null) {
+    if (S.edit) {
+      S.edit.value = t.value;
+      const out = H.root?.querySelector('.h-dlg-host [data-ad-preview]');
+      const a = accountOf(t.dataset.dlgName);
+      if (out && a) out.textContent = previewText(a, t.value);
+    }
+    return true;
+  }
   if (t.dataset?.adMask != null) { if (S.mask) S.mask.value = t.value; return true; }
   // The selects save on change.
   if (t.dataset?.adOwner != null || t.dataset?.adKind != null) return true;

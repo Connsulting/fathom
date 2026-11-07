@@ -106,12 +106,12 @@ export function accountLabels(db) {
   const naming = accountNaming(db);
   const out = new Map();
   rows.forEach((a, i) => {
-    let row = a;
+    let label = accountLabel({ ...a, ...naming.hint(a.id) });
     if (a.parser === 'demo-seed') {
       if (!plain) { const scope = tokenScope(db); plain = (s) => resolveTokens(scope, s, false); }
-      row = { ...a, inst: plain(a.inst || ''), name: plain(a.name || ''), owner: plain(a.owner || '') };
+      label = plain(label);
     }
-    out.set(a.id, { label: accountLabel({ ...row, ...naming.hint(a.id) }), order: i });
+    out.set(a.id, { label, order: i });
   });
   return out;
 }

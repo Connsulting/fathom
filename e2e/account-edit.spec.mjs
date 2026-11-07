@@ -105,12 +105,12 @@ async function addLastFour(page, request) {
   const saved = posted(page, `/api/accounts/${A}/mask`);
   await dlg.locator('[data-ad="mask-save"]').click();
   expect((await saved).status()).toBe(200);
-  await expect(dlg.locator('#h-dlg-t')).toHaveText(A_NAME);
+  await expect(dlg.locator('#h-dlg-t')).toHaveText(`${A_NAME} (1234)`);
   await expect(dlg.locator('.h-ad-last4')).toHaveText('Last 4 1234');
   await expect(dlg.locator('[data-ad="mask-open"]')).toHaveCount(0);
-  await expect(accountRow(page, A).locator('.h-acc-name')).toHaveText(A_NAME);
+  await expect(accountRow(page, A).locator('.h-acc-name')).toHaveText(`${A_NAME} (1234)`);
   await gotoRoute(page, 'accounts');
-  await expect(accountRow(page, A).locator('.h-acc-name')).toHaveText(A_NAME);
+  await expect(accountRow(page, A).locator('.h-acc-name')).toHaveText(`${A_NAME} (1234)`);
 }
 
 // An imported account and a connected copy of it, seeded the way account-dialog.spec.mjs does.
@@ -181,7 +181,7 @@ test.describe('account dialog edits', { tag: '@ade-ac' }, () => {
     await changeKind(page, request);
   });
 
-  test('Add last 4 refuses bad input and the name stays and the dialog shows Last 4 1234', { tag: '@acctnames-ac3' }, async ({ page, request }) => {
+  test('Add last 4 refuses bad input and the label ends in (1234) and the dialog shows Last 4 1234', { tag: '@acctnames-ac3' }, async ({ page, request }) => {
     await addLastFour(page, request);
   });
 

@@ -83,8 +83,7 @@ export function expectedItems({ facts, accounts, year, active, deposits, employe
   }
   for (const a of accounts) {
     if (!active(a.id)) continue;
-    const same = accounts.filter((b) => b.inst === a.inst && b.name === a.name).length > 1;
-    const label = accountLabel(a) + (same && a.owner ? ` (${a.owner})` : '');
+    const label = accountLabel(a);
     // Which documents are required follows the imported name, not the owner's display name.
     const imported = `${a.name || ''}`;
     const inst = normalizeName(a.inst);
@@ -182,7 +181,11 @@ export function yearendChecklist(db, { year, clock, plain = (s) => s }) {
   const hints = accountNaming(db);
   const accounts = db.prepare('SELECT * FROM accounts ORDER BY sort, id').all()
     .map((a) => (a.parser === 'demo-seed' ? { ...a, inst: plain(a.inst || ''), name: plain(a.name || ''), owner: plain(a.owner || '') } : a))
-    .map((a) => ({ ...a, householdNames, holder: holders.get(a.id) || null, ...hints.hint(a.id) }));
+    .map((a) => {
+      const hint = hints.hint(a.id);
+      // The owner prefix of a demo account is a name token; the rest of the row is already plain.
+      return { ...a, householdNames, holder: holders.get(a.id) || null, ...hint, ...(a.parser === 'demo-seed' ? { labelPrefix: plain(hint.labelPrefix ?? '') } : {}) };
+    });
   const { active, deposits } = activeAccounts(db, year);
   const all = yearDocuments(db, year);
   const docs = all.filter((d) => RECEIVABLE.includes(d.doc_type) && d.file_id);

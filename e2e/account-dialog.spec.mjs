@@ -10,9 +10,9 @@ import { seedDuplicate as seedDuplicateRows } from '../test/helpers/account-merg
 import { refreshMergedAccounts } from '../src/ingest/account-merge.mjs';
 
 const ID = 'a_biz';
-// The demo's business checking account is connected with a synthetic four digit mask. Its label is
-// its name; the mask is its own field in the dialog.
-const BIZ_LABEL = 'Business checking';
+// The demo's business checking account is connected with a synthetic four digit mask. Its label is the
+// business's name, its name and the mask; the mask is also its own field in the dialog.
+const BIZ_LABEL = /^Northbeam Labs Business checking \(\d{4}\)$/;
 
 // Every transaction of the account, newest first, read through the paged API.
 async function firstTransactions(request) {
@@ -77,9 +77,9 @@ test.describe('account dialog', { tag: '@ad-acN' }, () => {
     await dlg.locator('[data-dlg-rename]').first().click();
     await dlg.locator('[data-dlg-name]').fill('Studio operating');
     await page.keyboard.press('Enter');
-    await expect(dlg.locator('#h-dlg-t')).toHaveText('Studio operating');
+    await expect(dlg.locator('#h-dlg-t')).toHaveText(/^Northbeam Labs Studio operating \(\d{4}\)$/);
     await closeDialogWithX(page);
-    await expect(page.locator(`[data-account="${ID}"] .h-acc-name`)).toHaveText('Studio operating');
+    await expect(page.locator(`[data-account="${ID}"] .h-acc-name`)).toHaveText(/^Northbeam Labs Studio operating \(\d{4}\)$/);
   });
 
   test('transactions: newest first, filter by text and by date range, amounts carry a source', async ({ page, request }) => {
