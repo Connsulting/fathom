@@ -166,7 +166,7 @@ menu. Every route maps to one tab or to the gear (`TAB_OF` in `web/horizon/desig
 lit tab comes from the current route, or for `#/rec/<id>` from the page under the dialog. Home
 holds Home, the pace board, Goals and Confirm (reached from goal cards and the data-health line).
 Plan holds Plan, Year end and Advisor. Ask holds conversations, Decide (the What-if view,
-`#/wargame`) and Packs. Money (`#/money`) holds an overview, Accounts and Files (`#/add`). The
+`#/wargame`) and Packs. Money (`#/money`) holds an overview, Accounts, P&L (`#/pnl`, each business and household spending) and Files (`#/add`). The
 gear opens `#/settings`, which lists Connect, Engine, Email, Setup (real stores only), and on a
 real store the signed-in line, Account and, for admins, Household. Plan, Ask and Money show a
 sub-nav of their views at the top of each of those pages. The Money overview spells out the
@@ -690,14 +690,18 @@ after its first answer. The engine gets one
 thread's non-notice messages as plain text, newest last, at most 12 messages and 6000 characters.
 The model title is trimmed, loses one pair of quotes and a trailing period, and is refused when
 empty, over 60 characters or 8 words, with a line break, control character, `< > { }` or backtick,
-or any digit, currency or percent sign, or spelled-out number or money word, or any word
-(lowercased, with a plural `s`/`es` and a possessive `'s` folded) that is not a function word and
-was not used in this thread's owner messages. Engine off, over the cap, any error or a
-refused title uses the fallback: the first owner message as plain text (figure tokens removed,
-other tokens resolved, tags stripped, entities decoded) cut to 48 characters at a word boundary.
-The fake engine returns the fallback as its title. Writes only land while `title_source` is NULL,
-so an owner rename (`manual`, 1 to 60 characters, digits allowed) always wins. Titles render
-escaped.
+or any digit, currency or percent sign, or spelled-out number or money word, or when none of its
+non-function words (lowercased, with a plural `s`/`es` and a possessive `'s` folded) appears in
+the thread's messages, owner or reply. Each refusal adds one to its reason code (`not_text`,
+`empty`, `too_long`, `markup`, `too_many_words`, `number`, `money_word`, `off_topic`,
+`unparsable`, `call_failed`) in the `ask.titleRejects` setting and logs the code, never the
+title. Engine off, over the cap, any error or a refused title uses the fallback: the first owner
+message as plain text (figure tokens removed, other tokens resolved, tags stripped, entities
+decoded) cut to 48 characters at a word boundary. A thread still carrying that fallback gets one
+more title call after its second completed turn. The fake engine returns the fallback as its
+title. The first write only lands while `title_source` is NULL and the retry only while the
+fallback is unchanged, so an owner rename (`manual`, 1 to 60 characters, digits allowed) always
+wins. Titles render escaped.
 
 `live.askStarters` lists, in this order and only when its condition holds: `attention` "What needs
 my attention right now?" (a visible rec proposed or doing), `taxes` "How are our tax
@@ -846,6 +850,10 @@ known path with the wrong method is 405; signed out, both are 401. Every action 
 | `POST /api/your-plans/build` | `{fileIds?: string[]}` (at most 50) | `{scenario, result: {written, entries, sources, warnings, dropped}}`. Builds the Your plans pack (`dropped` counts the extracted sections that did not match their document); 400 for a bad body; 409 while the engine is off, over the cap, or when the data directory is inside the repository. |
 | `GET /api/accounts/:id` | none | `{account, fresh, asOf, balance: {asOf}, trendKey, txn: {count, from, to}, feeds, syncable}` for the account dialog. `balance.asOf` is the newest balance or positions date, which can be older than `asOf` (the newest row of any kind). `fresh` and `asOf` are the account's entry in `live.ingest.accounts` (the rule the Home health line counts). Each feed is a file source or SimpleFIN with its last data date, freshness state, cadence and how to refresh it; a SimpleFIN feed adds `lastSyncAt` and `balanceDate`. `syncable` is true when SimpleFIN is connected, maps this account and does not need a reconnect. `account` also carries the edit controls: `maskEditable`, `ownerKey` and `kindKey` (confirm option ids or null) and `ownerOptions` and `kindOptions`. 400 for a missing id, 404 unknown. Read-only. |
 | `GET /api/accounts/:id/transactions` | query `q` (at most 100 characters, matched against description and category), `from` and `to` (YYYY-MM-DD, `from` not after `to`), `limit` (1 to 200, default 50), `cursor` (the previous page's `next`) | `{items, next, total, figures, sources}`. Newest first, only this account's rows. `next` is null on the last page; `total` counts every row the filters match. Each item names a figure in `figures` whose source is in `sources`. 400 for any bad parameter, 404 unknown. Read-only. |
+| `GET /api/pnl` | query `entity` (a key from `entities` or a plain entity name; default the first entry), `from` and `to` (YYYY-MM, `from` not after `to`, at most 36 months; default January to the entity's latest month with data) | `{entities, pnl, figures, sources}`. `entities` is `pnlEntities`; `pnl` is `businessPnl` without its `figures` and `sources` (those are top level), or null when there are no entities. 400 for a bad range, 404 unknown entity. Read-only, no model calls. |
+| `GET /api/pnl/rows` | query `entity`, `from`, `to` as above, `section` (`income` or `expenses`), `category`, optional `month` (inside the range) | `businessPnlRows`: `{items, total, figures, sources, note}`, exactly the workbook lines or transactions behind that cell, newest first, at most 500 items (`total` counts all). 400 for any bad parameter, 404 unknown entity. Read-only. |
+| `GET /api/spending` | query `from` and `to` (YYYY-MM; default the trailing twelve months ending at the latest complete month), `include` (comma separated, only `tax`), `exclude` (comma separated, only `housing`) | `{spending, figures, sources}`. `spending` is `householdSpending` without its `figures` and `sources`. 400 for a bad range or option. Read-only, no model calls. |
+| `GET /api/spending/rows` | query `from`, `to`, `include`, `exclude` as above, `bucket` (`household` or `tax`), `category`, optional `month` (inside the range) | `householdSpendingRows`: `{items, total, figures, sources, note}`, exactly the transactions behind that cell, newest first, at most 500 items. 400 for any bad parameter. Read-only. |
 | `POST /api/accounts/:id/name` | `{displayName}` | `{scenario, account}`. Sets the owner's display name for that account (trimmed, at most 120 characters, no line breaks or control characters). Empty or null clears it and the screens use the default label. 400 for a bad name, 404 unknown. Imports and SimpleFIN refreshes do not write this column. |
 | `POST /api/accounts/:id/mask` | `{mask}` (exactly four digits) | `{scenario, account}`. Stores the last 4 on an account with none and no SimpleFIN identity, then asks any "Same account?" question the new mask makes detectable. 400 for a bad mask, 404 unknown, 409 when the account already has a mask or is connected. |
 | `POST /api/accounts/:id/owner` | `{owner}` (a confirm option id) or `{undo: before}` | `{scenario, account, before}`. Records the value as the account's `account_owner` confirm answer (asked, answered, revised, or restated when final), so a later import keeps it; schedules a replan like a Confirm answer. `{undo: before}` sets the prior answer back, reopens a question that was pending, or removes one the edit created. 400 for a bad value, 404 unknown, 409 when the answer can no longer be undone. |
@@ -1584,11 +1592,19 @@ process, so accounting poison lasts for the process, and awaits `init()` once at
    both sides, so it needs percent evidence, not number evidence. Number-word phrases (`two million`)
    are still read word by word, and one followed by a percent sign (with or without a space) or the
    word `percent` (`one thousand %`) is likewise a percent quantity that needs percent evidence.
-5. One corrective retry (same `system`, the first answer plus a corrective user turn). An answer
-   still ungrounded is stored with each violation in `<span class="fx-unverified" title="Not found
-   in your data or tool results">`. If the retry call itself fails, the answer is the matching
+5. Same-turn sourcing and in-place neutralization. A query_transactions row's negative amount also
+   grounds its unsigned form, and the literal names that row ("your transactions: account label,
+   date, description"); other tool literals carry a plain label, never the tool name. A date that
+   matches a date in a same-turn tool row or in the context data is sourced to it (a stated year
+   must match). Every remaining violation, dates included, is stored in place as
+   `<span class="fx-checking fx-unchecked" title="Not checked against your data">`. Only when two
+   or more figures and more than half of the answer's figures (dates excluded) are unchecked is
+   the answer regenerated once, with a corrective user turn; the stream and the work block then
+   show one step "Revised to remove N unchecked figures" before the reset, never the earlier
+   draft, and `provenance.grounding.revised` is N. If that call fails, the answer is the matching
    notice (engine off, over the cap, model error), never the first ungrounded text; the spend the
-   engine recorded for each completed round stays in the ledger.
+   engine recorded for each completed round stays in the ledger. Answers stored before this rule
+   keep their `.fx-unverified` spans and draft notes.
 6. Rendering (`renderAnswer`): model text is untrusted. Everything is HTML-escaped (quotes and
    apostrophes included) with `{` and `}` as `&#123;` and `&#125;`, except valid tokens; bound
    literals are wrapped in `<span class="fx-src" data-src="<literal index>" title="From <source>">`;
@@ -2757,3 +2773,15 @@ Category persistence uses `transaction_category_corrections` for personal transa
 | `POST /api/preferences` | `{text}` | save a preference and return the scenario |
 | `POST /api/preferences/:id` | `{text}` | edit a preference and return the scenario |
 | `POST /api/preferences/:id/delete` | `{}` | delete a preference and return the scenario |
+
+### P&L and household spending
+
+`src/pnl/` (`index.mjs` re-exports `shared.mjs`, `business.mjs` and `spending.mjs`) holds two deterministic, read-only aggregations over the categorized store. Every function is synchronous, takes one object, never writes, and takes an optional `clock` (YYYY-MM-DD, default `resolveClock(db)`); rows after the clock never count. Errors are `PnlError` with `code` `unknown_entity`, `bad_range`, `bad_option` or `bad_input`.
+
+`pnlEntities({db, clock})` lists the business P&Ls: every business name (the owner's `business.entities`, `pnl_lines.entity`, `accounts.businessEntity` values, merged by normalized name and `entity_aliases`) with data, keyed `entity:<normalized name>`, then each business account tied to no entity as `account:<id>`. A business account belongs to its stated entity, else to the only business name when there is exactly one.
+
+`businessPnl({db, entity, from, to, clock})` returns `{entity, from, to, months, monthSources, income, expenses, net, prior, leftOut, uncategorized, notes, figures, sources}`. Per month, at least one workbook line means the month uses the workbook; otherwise it uses the entity's business-account transactions by resolved bucket (`income` to income, `business` to expenses, layer `uncategorized` to `Uncategorized`, every other bucket left out). The two are never added for one month; transactions in a workbook month are reported in `monthSources[i].covered`. `businessPnlRows({db, entity, from, to, section, category, month, clock})` lists the rows behind one cell.
+
+`householdSpending({db, from, to, include, exclude, clock})` returns `{from, to, months, include, exclude, total, monthlyAverage, monthTotals, buckets, leftOut, gaps, notes, figures, sources}`: household-bucket outflows on spending accounts (never business accounts), housing toggled by `exclude: ['housing']` and tax payments by `include: ['tax']`. `householdSpendingRows({db, from, to, include, exclude, bucket, category, month, clock})` lists the rows behind one cell.
+
+Every number is a figure key into `figures`: `{v, src, kind: 'a', label, notes, detail, sums?, provenance: {source, accounts, months, rows, files}}`, with `src` one of `pnl:workbook`, `pnl:transactions`, `pnl:mixed` or `spend:transactions` in `sources` (`{label, asOf}`, the newest counted row). The routes are `GET /api/pnl`, `GET /api/pnl/rows`, `GET /api/spending` and `GET /api/spending/rows` (`src/api/pnl-handlers.mjs`).
