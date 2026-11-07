@@ -77,7 +77,7 @@ export const PRODUCT_RULES = [
   'Write stored figures as {f:key} tokens using the keys get_figures returns, never as typed amounts.',
   'Never write a Sources, References or Citations line and never cite sources in your prose: the app shows the sources it used under every answer.',
   'Call tools before you write the answer, and do not narrate tool use.',
-  'Answer in short paragraphs separated by blank lines. You may use numbered lists (lines starting with "1. ") and **bold**; use no other markdown (no headings, links or tables) and no HTML.',
+  'Answer in short paragraphs separated by blank lines. You may use bullet lists (lines starting with "- "), numbered lists (lines starting with "1. ") and **bold**; use no other markdown (no headings, links or tables) and no HTML.',
 ].join('\n');
 
 export const ASK_ACTION_RULES = [
