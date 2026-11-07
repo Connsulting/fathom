@@ -1,6 +1,7 @@
 // The goals-first Home view model (web/horizon/screens/home-model.js): owner filter, goal links,
-// housekeeping, next actions, collapse rules, pace chips, the health chip, the pace board reason
-// and charts, pace bars, reason text and the data-health line. The module is pure ESM with no DOM
+// housekeeping, next actions, one card per live goal with its suggested target, the due list before
+// Dec 31, the headline, pace chips, the health chip, the pace board reason and charts, pace bars,
+// reason text and the data-health line. The module is pure ESM with no DOM
 // work at import, so node imports it directly. Fixtures are synthetic and built inline; pace goal
 // entries follow the shape of src/calc/pace.mjs goalPace output, and rec fixtures carry the shape
 // loadLinkedRecs gives (owner, housekeeping, serves). One test builds them from a seeded demo store.
@@ -10,7 +11,7 @@ import assert from 'node:assert/strict';
 import { rmSync } from 'node:fs';
 import {
   ownerMatches, servedGoalIds, isHousekeepingItem, isOpen, goalChip, healthChip,
-  paceReason, paceBar, REASON_TEXT, reasonText, homeModel, healthLine, boardCharts
+  paceReason, paceBar, REASON_TEXT, reasonText, homeModel, homeHeadline, healthLine, boardCharts
 } from '../web/horizon/screens/home-model.js';
 import { OWNERS } from '../src/shared/rec-links.mjs';
 import { seedDemo } from '../demo/seed.mjs';
@@ -138,6 +139,7 @@ test('goalChip maps each pace status to a tone and label', () => {
   const cases = [
     [pg('a', 'ahead', { timeGap: '3 weeks ahead' }), { tone: 'ok', label: '3 weeks ahead' }],
     [pg('a', 'ahead'), { tone: 'ok', label: 'Ahead' }],
+    [pg('a', 'ahead', { timeGap: 'Reached' }), { tone: 'ok', label: 'Reached' }],
     [pg('a', 'on pace', { timeGap: 'On pace' }), { tone: 'ok', label: 'On pace' }],
     [pg('a', 'on pace'), { tone: 'ok', label: 'On pace' }],
     [pg('a', 'behind', { timeGap: '5 weeks behind' }), { tone: 'warn', label: '5 weeks behind' }],
@@ -294,6 +296,31 @@ test('reasonText falls back for an unknown code', () => {
 
 /* ---------- home model ---------- */
 
+// The scenario clock the household fixtures use: Nov 5, 56 days before Dec 31.
+const CLOCK = '2026-11-05';
+const TO_YEAR_END = 56;
+
+// A suggestion record in the contract shape (only the fields the Home model reads matter here).
+function sugg(goalId, state = 'suggested', o = {}) {
+  const asks = state === 'question';
+  return {
+    goalId, title: `Goal ${goalId}`, kind: o.kind ?? (asks ? null : 'cushion'), state,
+    targetDate: asks ? null : '2027-06-30', dateSource: asks ? null : 'projected', horizonLabel: 'This year',
+    track: asks ? null : { accounts: ['acct'] }, trackLabel: asks ? null : 'Synthetic checking',
+    accept: asks ? null : { target: 1000, targetDate: '2027-06-30', track: { accounts: ['acct'] } },
+    figures: asks ? {} : { target: `suggest.${goalId}.target` },
+    window: asks ? null : { from: '2026-02', to: '2026-07', months: 6 },
+    params: {}, editable: [], covered: false, why: 'Synthetic reason.',
+    missing: asks ? ['unsupported_goal'] : [], ask: asks ? 'What amount would make this real?' : null,
+    fingerprint: 'f'.repeat(64)
+  };
+}
+
+// The contract calls `pending` the suggested records among the cards; homeHeadline compares it to 2.
+// Read either an array of records or a count, so the test pins the number, not the container.
+const pendingCount = (p) => (Array.isArray(p) ? p.length : p);
+const pendingIds = (p) => (Array.isArray(p) ? p.map((r) => r.goalId ?? r.id) : null);
+
 // One household: goals in a different order than pace.goals, a done and an archived goal, a goal
 // without a pace entry, recs for every owner, a rec serving two goals, ties, and housekeeping in
 // open, waiting, snoozed and hidden states.
@@ -327,7 +354,7 @@ function household() {
     rec('r18', { days: 1, title: 'Hidden chore', status: 'hidden' }),
     rec('r19', { days: 25, title: 'Snoozed chore', status: 'snoozed', owner: 'spouse' })
   ];
-  return { goals, pace, recs };
+  return { goals, pace, recs, clock: CLOCK, suggestions: [] };
 }
 
 test('homeModel orders cards by pace.goals then the remaining goals, skipping done and archived', () => {
@@ -360,36 +387,100 @@ test('homeModel groups a rec that serves two goals under both, ordered by window
   assert.deepEqual(ids(cardOf(m, 'g_extra').actions), ['r10']);
 });
 
-test('homeModel queue holds every open filtered rec once, sorted, with the next thing and three after it', () => {
+test('homeModel has no quiet grouping: every live goal is a card, with no collapsed or expanded lists', () => {
+  const m = homeModel({ ...household(), filter: 'both' });
+  assert.equal('collapsed' in m, false, 'no collapsed list');
+  assert.equal('expanded' in m, false, 'no expanded list');
+  for (const c of m.cards) assert.equal('collapsed' in c, false, `${c.id} carries no collapsed flag`);
+  // No target, no pace entry, and on pace or ahead with nothing due are all still cards.
+  for (const id of ['g_none', 'g_extra', 'g_ahead']) assert.ok(cardOf(m, id), id);
+  for (const key of ['filter', 'counts', 'cards', 'queue', 'due', 'nextThing', 'afterThat', 'housekeeping', 'pending']) {
+    assert.ok(key in m, `homeModel returns ${key}`);
+  }
+});
+
+test('homeModel queue holds every open filtered rec once; due drops housekeeping; next and after come from due', () => {
   const m = homeModel({ ...household(), filter: 'both' });
   assert.deepEqual(ids(m.queue), ['r14', 'r5', 'r2', 'r1', 'r9', 'r7', 'r15', 'r3', 'r10', 'r11']);
-  assert.equal(m.nextThing.id, 'r14');
-  assert.deepEqual(ids(m.afterThat), ['r5', 'r2', 'r1']);
+  assert.deepEqual(ids(m.due), ['r2', 'r1', 'r9', 'r3', 'r10', 'r11'], 'housekeeping r14, r5, r7 and r15 are not due items');
+  assert.equal(m.nextThing.id, 'r2', 'earlier housekeeping r14 and r5 do not take the next slot');
+  assert.deepEqual(ids(m.afterThat), ['r1', 'r9', 'r3']);
   assert.deepEqual(ids(m.housekeeping), ['r14', 'r5', 'r17', 'r7', 'r15', 'r19'], 'waiting r17 and snoozed r19 count; hidden r18 does not');
   assert.deepEqual(m.counts, { both: 10, me: 7, spouse: 8 });
 });
 
-test('homeModel collapse: no target, no pace entry, and on pace or ahead with nothing due collapse', () => {
-  const m = homeModel({ ...household(), filter: 'both' });
-  const want = { g_behind: false, g_on: false, g_stale: false, g_none: true, g_ahead: true, g_extra: true };
-  for (const [id, collapsed] of Object.entries(want)) assert.equal(cardOf(m, id).collapsed, collapsed, id);
-  assert.deepEqual(ids(m.expanded), ['g_behind', 'g_on', 'g_stale']);
-  assert.deepEqual(ids(m.collapsed), ['g_none', 'g_ahead', 'g_extra']);
+test('homeModel due: earlier housekeeping cannot displace three qualifying goal actions', () => {
+  const goals = [goal('g1'), goal('g2')];
+  const pace = paceOf([pg('g1', 'behind'), pg('g2', 'no target')]);
+  const recs = [
+    rec('h1', { days: 1, title: 'Chore one' }),
+    rec('h2', { days: 2, title: 'Chore two' }),
+    rec('h3', { days: 3, title: 'Chore three' }),
+    rec('a1', { serves: ['g1'], days: 10 }),
+    rec('a2', { serves: ['g2'], days: 11 }),
+    rec('a3', { serves: ['g1'], days: 12 }),
+    rec('a4', { serves: ['g2'], days: 13 })
+  ];
+  const m = homeModel({ goals, pace, recs, filter: 'both', clock: CLOCK, suggestions: [] });
+  assert.deepEqual(ids(m.due), ['a1', 'a2', 'a3', 'a4']);
+  assert.equal(m.nextThing.id, 'a1');
+  assert.deepEqual(ids(m.afterThat), ['a2', 'a3', 'a4']);
+  assert.deepEqual(ids(m.housekeeping), ['h1', 'h2', 'h3'], 'housekeeping stays in its own row');
+  for (const r of [m.nextThing, ...m.afterThat]) assert.equal(r.housekeeping, false, r.id);
 });
 
-test('homeModel Me keeps you and both actions; Spouse keeps spouse and both; the filter changes collapse', () => {
+test('homeModel due stops at Dec 31 of the clock year, inclusive, sorted by window', () => {
+  const goals = [goal('g1')];
+  const pace = paceOf([pg('g1', 'behind')]);
+  const recs = [
+    rec('late', { serves: ['g1'], days: TO_YEAR_END + 1, title: 'After the year ends' }),
+    rec('edge', { serves: ['g1'], days: TO_YEAR_END, title: 'On Dec 31' }),
+    rec('soon', { serves: ['g1'], days: 7 }),
+    rec('over', { serves: ['g1'], days: -3, title: 'Overdue' })
+  ];
+  const m = homeModel({ goals, pace, recs, filter: 'both', clock: CLOCK, suggestions: [] });
+  assert.deepEqual(ids(m.queue), ['over', 'soon', 'edge', 'late'], 'the queue keeps everything open');
+  assert.deepEqual(ids(m.due), ['over', 'soon', 'edge'], 'an item due after Dec 31 is not in the due list');
+  assert.equal(m.nextThing.id, 'over');
+  assert.deepEqual(ids(m.afterThat), ['soon', 'edge']);
+
+  // The clock decides the year end: in late December only the next few days qualify.
+  const dec = homeModel({ goals, pace, recs, filter: 'both', clock: '2026-12-20', suggestions: [] });
+  assert.deepEqual(ids(dec.due), ['over', 'soon'], 'eleven days to Dec 31');
+});
+
+test('homeModel next thing falls back to the first goal action past Dec 31, never to housekeeping', () => {
+  const goals = [goal('g1')];
+  const pace = paceOf([pg('g1', 'behind')]);
+  const recs = [rec('chore', { days: 2, title: 'Chore' }), rec('far', { serves: ['g1'], days: 120 }), rec('farther', { serves: ['g1'], days: 200 })];
+  const m = homeModel({ goals, pace, recs, filter: 'both', clock: CLOCK, suggestions: [] });
+  assert.deepEqual(m.due, []);
+  assert.equal(m.nextThing.id, 'far');
+  assert.deepEqual(m.afterThat, []);
+
+  const onlyChores = homeModel({ goals, pace, recs: [rec('chore', { days: 2 })], filter: 'both', clock: CLOCK, suggestions: [] });
+  assert.equal(onlyChores.nextThing, null, 'housekeeping alone leaves no next thing');
+  assert.deepEqual(onlyChores.afterThat, []);
+  assert.deepEqual(ids(onlyChores.housekeeping), ['chore']);
+});
+
+test('homeModel Me keeps you and both actions; Spouse keeps spouse and both; due follows the filter', () => {
   const me = homeModel({ ...household(), filter: 'me' });
   assert.equal(me.filter, 'me');
   assert.deepEqual(ids(me.queue), ['r14', 'r5', 'r1', 'r9', 'r3', 'r10', 'r11']);
+  assert.deepEqual(ids(me.due), ['r1', 'r9', 'r3', 'r10', 'r11'], 'spouse r2 is not due for Me');
+  assert.equal(me.nextThing.id, 'r1');
+  assert.deepEqual(ids(me.afterThat), ['r9', 'r3', 'r10']);
   assert.deepEqual(ids(cardOf(me, 'g_behind').actions), ['r1'], 'spouse r2 is hidden for Me');
-  assert.equal(cardOf(me, 'g_on').collapsed, false, 'on pace with your action stays a card');
   assert.deepEqual(ids(me.housekeeping), ['r14', 'r5', 'r17'], 'your waiting r17 shows for Me; automatic r7 and spouse r15, r19 do not');
-  assert.deepEqual(ids(me.afterThat), ['r5', 'r1', 'r9']);
 
   const sp = homeModel({ ...household(), filter: 'spouse' });
   assert.deepEqual(ids(sp.queue), ['r14', 'r5', 'r2', 'r1', 'r9', 'r15', 'r10', 'r11']);
+  assert.deepEqual(ids(sp.due), ['r2', 'r1', 'r9', 'r10', 'r11'], 'your r3 is not due for Spouse; spouse chore r15 is housekeeping');
+  assert.equal(sp.nextThing.id, 'r2');
+  assert.deepEqual(ids(sp.afterThat), ['r1', 'r9', 'r10']);
   assert.deepEqual(ids(cardOf(sp, 'g_on').actions), [], 'your r3 is hidden for Spouse');
-  assert.equal(cardOf(sp, 'g_on').collapsed, true, 'on pace with nothing due for this filter collapses');
+  assert.ok(cardOf(sp, 'g_on'), 'on pace with nothing due for this filter is still a card');
   assert.equal(cardOf(sp, 'g_on').next, null);
   assert.deepEqual(ids(sp.housekeeping), ['r14', 'r5', 'r15', 'r19'], 'spouse snoozed r19 shows for Spouse; your r17 does not');
   // Counts do not depend on the active filter.
@@ -397,31 +488,101 @@ test('homeModel Me keeps you and both actions; Spouse keeps spouse and both; the
   assert.deepEqual(sp.counts, { both: 10, me: 7, spouse: 8 });
 });
 
-test('homeModel never collapses unknown or behind goals, even with nothing due', () => {
+test('homeModel with nothing open: cards for every goal, an empty queue, due list and next thing', () => {
   const goals = [goal('u1'), goal('u2'), goal('b1')];
   const pace = paceOf([pg('u1', 'unknown'), pg('u2', 'unknown', { reason: 'undated_actual', stale: false }), pg('b1', 'behind')]);
-  const m = homeModel({ goals, pace, recs: [], filter: 'both' });
-  for (const c of m.cards) assert.equal(c.collapsed, false, c.id);
+  const m = homeModel({ goals, pace, recs: [], filter: 'both', clock: CLOCK, suggestions: [] });
+  assert.deepEqual(ids(m.cards), ['u1', 'u2', 'b1']);
   assert.equal(m.nextThing, null);
   assert.deepEqual(m.afterThat, []);
   assert.deepEqual(m.queue, []);
+  assert.deepEqual(m.due, []);
   assert.deepEqual(m.housekeeping, []);
   assert.deepEqual(m.counts, { both: 0, me: 0, spouse: 0 });
+  assert.equal(pendingCount(m.pending), 0);
 });
 
-test('homeModel: on pace with an open action stays a card, and ahead with nothing due collapses', () => {
-  const goals = [goal('on'), goal('ah')];
-  const pace = paceOf([pg('on', 'on pace', { timeGap: 'On pace' }), pg('ah', 'ahead', { timeGap: '1 week ahead' })]);
-  const withAction = homeModel({ goals, pace, recs: [rec('x', { serves: ['on'] })], filter: 'both' });
-  assert.equal(cardOf(withAction, 'on').collapsed, false);
-  assert.equal(cardOf(withAction, 'ah').collapsed, true);
-  // Liveness of the collapse rule: on pace with nothing due does collapse.
-  const without = homeModel({ goals, pace, recs: [], filter: 'both' });
-  assert.equal(cardOf(without, 'on').collapsed, true);
-  assert.equal(cardOf(without, 'on').chip.label, 'On pace');
+test('homeModel cards carry their suggestion record or null, and pending counts the suggested ones', () => {
+  const h = household();
+  const records = [
+    sugg('g_none'),
+    sugg('g_extra', 'question'),
+    sugg('g_ahead', 'dismissed'),
+    sugg('g_arch'),            // archived goal: no card, so not pending
+    sugg('g_gone')             // no such goal
+  ];
+  const m = homeModel({ ...h, filter: 'both', suggestions: records });
+  for (const c of m.cards) {
+    const want = records.find((r) => r.goalId === c.id) || null;
+    assert.deepEqual(c.suggestion ?? null, want, c.id);
+  }
+  assert.equal(cardOf(m, 'g_behind').suggestion ?? null, null);
+  assert.equal(pendingCount(m.pending), 1, 'only the suggested record on a live card is pending');
+  const pids = pendingIds(m.pending);
+  if (pids) assert.deepEqual(pids, ['g_none']);
+
+  const none = homeModel({ ...h, filter: 'both', suggestions: undefined });
+  for (const c of none.cards) assert.equal(c.suggestion ?? null, null, `${c.id} without suggestions`);
+  assert.equal(pendingCount(none.pending), 0);
 });
 
-test('homeModel over the seeded demo store matches the server housekeeping count and goal links', async () => {
+/* ---------- headline ---------- */
+
+const headline = (m, pace) => homeHeadline({ cards: m.cards, pace, pending: m.pending });
+
+test('homeHeadline: any goal with a target keeps the pace headline, and bulk needs two pending', () => {
+  const goals = [goal('t'), goal('a'), goal('b')];
+  const pace = paceOf([pg('t', 'on pace', { timeGap: 'On pace' }), pg('a', 'no target'), pg('b', 'no target')], { headline: 'Pace headline' });
+  const two = homeModel({ goals, pace, recs: [], filter: 'both', clock: CLOCK, suggestions: [sugg('a'), sugg('b')] });
+  assert.deepEqual(headline(two, pace), { title: 'Pace headline', bulk: true });
+  const one = homeModel({ goals, pace, recs: [], filter: 'both', clock: CLOCK, suggestions: [sugg('a'), sugg('b', 'question')] });
+  assert.deepEqual(headline(one, pace), { title: 'Pace headline', bulk: false });
+  // A stale or unknown targeted goal still has a target: the pace headline stays.
+  const stalePace = paceOf([pg('t', 'unknown'), pg('a', 'no target')], { headline: 'Stale headline' });
+  const stale = homeModel({ goals: goals.slice(0, 2), pace: stalePace, recs: [], filter: 'both', clock: CLOCK, suggestions: [sugg('a')] });
+  assert.equal(headline(stale, stalePace).title, 'Stale headline');
+});
+
+test('homeHeadline: no targets and pending suggestions say how many goals have a suggested target', () => {
+  const goals = [goal('a'), goal('b'), goal('c')];
+  const pace = paceOf([pg('a', 'no target'), pg('b', 'no target'), pg('c', 'no target')], { headline: 'No goals with targets' });
+  const two = homeModel({ goals, pace, recs: [], filter: 'both', clock: CLOCK, suggestions: [sugg('a'), sugg('b'), sugg('c', 'question')] });
+  assert.equal(pendingCount(two.pending), 2);
+  assert.deepEqual(headline(two, pace), { title: 'Suggested targets for 2 goals', bulk: true });
+  const one = homeModel({ goals, pace, recs: [], filter: 'both', clock: CLOCK, suggestions: [sugg('a'), sugg('b', 'question'), sugg('c', 'dismissed')] });
+  assert.equal(pendingCount(one.pending), 1);
+  assert.deepEqual(headline(one, pace), { title: 'Suggested targets for 1 goal', bulk: false });
+});
+
+test('homeHeadline: questions or dismissals only say how many goals need a target', () => {
+  const goals = [goal('a'), goal('b'), goal('c')];
+  const pace = paceOf([pg('a', 'no target'), pg('b', 'no target'), pg('c', 'no target')], { headline: 'No goals with targets' });
+  const asks = homeModel({ goals, pace, recs: [], filter: 'both', clock: CLOCK, suggestions: [sugg('a', 'question'), sugg('b', 'question'), sugg('c', 'question')] });
+  assert.deepEqual(headline(asks, pace), { title: '3 goals need a target', bulk: false });
+  const mixed = homeModel({ goals, pace, recs: [], filter: 'both', clock: CLOCK, suggestions: [sugg('a', 'question'), sugg('b', 'dismissed'), sugg('c', 'dismissed')] });
+  assert.deepEqual(headline(mixed, pace), { title: '3 goals need a target', bulk: false });
+  // Seed goals carry no records at all and still count.
+  const bare = homeModel({ goals, pace, recs: [], filter: 'both', clock: CLOCK, suggestions: [] });
+  assert.equal(headline(bare, pace).title, '3 goals need a target');
+  // Singular: "1 goal", never "1 goals". The verb form is the implementer's (the contract pins only the noun).
+  const single = homeModel({ goals: [goal('a')], pace: paceOf([pg('a', 'no target')]), recs: [], filter: 'both', clock: CLOCK, suggestions: [sugg('a', 'question')] });
+  const t = headline(single, paceOf([pg('a', 'no target')])).title;
+  assert.match(t, /^1 goal \S+ a target$/, t);
+  assert.doesNotMatch(t, /1 goals/, t);
+});
+
+test('homeHeadline never says No goals with targets', () => {
+  const pace = paceOf([pg('a', 'no target'), pg('b', 'no target')], { headline: 'No goals with targets' });
+  const goals = [goal('a'), goal('b')];
+  for (const records of [[], [sugg('a')], [sugg('a'), sugg('b')], [sugg('a', 'question')], [sugg('a', 'dismissed'), sugg('b', 'question')]]) {
+    const m = homeModel({ goals, pace, recs: [], filter: 'both', clock: CLOCK, suggestions: records });
+    const h = headline(m, pace);
+    assert.notEqual(h.title, 'No goals with targets', JSON.stringify(records.map((r) => r.state)));
+    assert.ok(typeof h.title === 'string' && h.title.length > 0);
+  }
+});
+
+test('homeModel over the seeded demo store matches the server housekeeping count, goal links and suggestions', async () => {
   const t = await tempDb();
   try {
     seedDemo(t.db);
@@ -435,13 +596,20 @@ test('homeModel over the seeded demo store matches the server housekeeping count
       assert.equal(r.housekeeping, r.serves.length === 0, r.id);
       for (const g of r.serves) assert.deepEqual(Object.keys(g).sort(), ['id', 'origin', 'title'], r.id);
     }
-    const m = homeModel({ goals: sc.goals, pace: sc.pace, recs, filter: 'both' });
+    assert.ok(Array.isArray(sc.suggestions), 'the scenario carries suggestions');
+    const m = homeModel({ goals: sc.goals, pace: sc.pace, recs, filter: 'both', suggestions: sc.suggestions, clock: sc.meta.clock });
     assert.ok(sc.live.housekeeping > 0, 'the demo has housekeeping');
     assert.equal(m.housekeeping.length, sc.live.housekeeping);
+    assert.equal(m.cards.length, sc.goals.filter((g) => !g.archived && g.status !== 'done').length, 'every live goal is a card');
     assert.ok(m.cards.some((c) => c.actions.length > 0), 'some goal has an open action');
     for (const c of m.cards) {
       for (const r of c.actions) assert.ok(servedGoalIds(r).includes(String(c.id)), `${r.id} serves ${c.id}`);
+      assert.equal(c.suggestion ?? null, null, `seed goal ${c.id} gets no suggestion`);
     }
+    assert.equal(pendingCount(m.pending), 0);
+    for (const r of m.due) assert.equal(r.housekeeping, false, `${r.id} in due is not housekeeping`);
+    // Seed goals with targets exist on the demo, so Home keeps the pace headline.
+    assert.equal(headline(m, sc.pace).title, sc.pace.rollup.headline);
   } finally {
     t.close();
     rmSync(t.dataDir, { recursive: true, force: true });

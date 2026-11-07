@@ -17,7 +17,7 @@ import * as switcher from './screens/switcher.js';
 import * as simplefin from './screens/simplefin.js';
 import { createKeys } from './keys.js';
 import { createSwipe } from './screens/swipe.js';
-import { homeModel, healthChip, healthLine, paceReason, boardCharts, reasonText, servedGoalIds, shortDate } from './screens/home-model.js';
+import { homeModel, homeHeadline, healthChip, healthLine, paceReason, boardCharts, reasonText, servedGoalIds, shortDate, longDate, windowSpan } from './screens/home-model.js';
 import { STARTERS, existingStarterIds, otherGoals, goalsToCreate, inviteLine } from './screens/onboard-model.js';
 import { KNOWN_FIGURES } from '/shared/goals.mjs';
 import { OWNERS, OWNER_LABEL } from '/shared/rec-links.mjs';
@@ -353,36 +353,66 @@ function timeline(mode) {
     + `<div class="h-tl-key"><span><i class="k needs"></i>Needs you</span><span><i class="k open"></i>In motion</span><span><i class="k idle"></i>Waiting or snoozed</span><span><i class="k done"></i>Done</span><span><i class="k dia"></i>Deadline</span>${evs.length ? '<span><i class="k ev"></i>What changed</span>' : ''}</div></div>`;
 }
 
+// The narrowest a window strip's plot gets, in px (a 320px phone dialog), for label room checks.
+const STRIP_PX = 260;
+
 function windowStrip(r) {
-  // A close-up of the rec's own window: today to close, with neighbouring deadlines.
+  // A close-up of the rec's own window: today to close, with neighbouring deadlines. Positioned by
+  // percent so the marker stays round at any width. Today and the close label share the top row:
+  // one merged label when the dates coincide, flared apart when they sit close, otherwise centered.
   const c = clock();
   const d = days(r);
   const close = recDate(r);
   const span = Math.max(45, d + 21);
-  const s = addDays(c, -10);
+  const s = addDays(c, Math.min(-10, d - 14));
   const e = addDays(c, span);
-  const W = 640, H = 64, pad = 14;
-  const x = (t) => pad + ((t.getTime() - s.getTime()) / (e.getTime() - s.getTime())) * (W - pad * 2);
-  const mons = [];
-  let g = `<svg class="h-strip" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">`;
-  g += `<line class="h-strip-ax" x1="${pad}" x2="${W - pad}" y1="34" y2="34"/>`;
-  for (let k = new Date(s); k <= e; k = addDays(k, 1)) {
-    if (k.getUTCDate() === 1) {
-      g += `<line class="h-strip-m" x1="${x(k)}" x2="${x(k)}" y1="26" y2="42"/>`;
-      mons.push(`<span class="mon" style="left:${(x(k) / W) * 100}%">${MON[k.getUTCMonth()]}</span>`);
-    }
-  }
+  const pct = (t) => ((t.getTime() - s.getTime()) / (e.getTime() - s.getTime())) * 100;
+  const at = (cls, t, extra = '') => `<i class="${cls}" style="left:${pct(t).toFixed(2)}%${extra}"></i>`;
+  let g = '<i class="h-strip-ax"></i>';
+  const firsts = [];
+  for (let k = new Date(s); k <= e; k = addDays(k, 1)) if (k.getUTCDate() === 1) firsts.push(k);
+  firsts.forEach((k) => { g += at('h-strip-m', k); });
+  // A month name needs about 34px. Plots are never narrower than STRIP_PX, so name every nth month
+  // when the months sit closer than that.
+  const gapPct = firsts.length > 1 ? pct(firsts[1]) - pct(firsts[0]) : 100;
+  const nth = Math.max(1, Math.ceil(34 / ((gapPct / 100) * STRIP_PX)));
+  // A name also needs room to its right: drop one that would run past the plot's side padding.
+  const mons = firsts.filter((k, i) => i % nth === 0 && pct(k) <= 100 - (17 / STRIP_PX) * 100)
+    .map((k) => `<span class="mon" style="left:${pct(k).toFixed(2)}%">${MON[k.getUTCMonth()]}</span>`);
   arr(api.s.deadlines).forEach((dl) => {
-    const at = parseISO(dl.date);
-    if (!at || at < s || at > e || dl.recId === r.id) return;
-    g += `<rect class="h-tl-dia" x="${x(at) - 3}" y="31" width="6" height="6" transform="rotate(45 ${x(at)} 34)"/>`;
+    const when = parseISO(dl.date);
+    if (!when || when < s || when > e || dl.recId === r.id) return;
+    g += at('h-tl-dia', when);
   });
-  if (d >= 0) g += `<line class="h-strip-win" x1="${x(c)}" x2="${x(close)}" y1="34" y2="34"/>`;
-  g += `<line class="h-tl-now" x1="${x(c)}" x2="${x(c)}" y1="12" y2="46"/>`;
-  g += `<circle class="h-strip-close" cx="${x(close)}" cy="34" r="5"/>`;
-  g += '</svg>';
+  if (d >= 0) g += `<i class="h-strip-win" style="left:${pct(c).toFixed(2)}%;width:${(pct(close) - pct(c)).toFixed(2)}%"></i>`;
+  g += at('h-strip-now', c) + at('h-strip-close', close);
+  // Today and the close label share the top row. Each sits beside its marker, on the side with room,
+  // and a label squeezed between the two markers is cut with an ellipsis at the gap, so two labels
+  // never meet at any text length. Widths are estimated; STRIP_PX is the narrowest plot.
+  const estW = (text) => String(text).replace(/<[^>]*>/g, '').length * 6.6 + 4;
+  const endText = T(r.window?.label || fmt(close));
+  const place = (cls, t, text, dir, maxPct, inward = false) => `<span class="${cls} ${dir}" style="left:${pct(t).toFixed(2)}%;max-width:${inward ? `max(0px, calc(${maxPct.toFixed(2)}% - 14px))` : `calc(${maxPct.toFixed(2)}% - 2px)`}" title="${esc(String(text).replace(/<[^>]*>/g, ''))}">${text}</span>`;
+  let labs;
+  if (d === 0) labs = place('now', c, `Today, ${fmt(c)}`, 'r', 100 - pct(c));
+  else {
+    const todayFirst = d > 0;
+    const A = todayFirst ? { cls: 'now', t: c, text: 'Today' } : { cls: 'end', t: close, text: endText };
+    const B = todayFirst ? { cls: 'end', t: close, text: endText } : { cls: 'now', t: c, text: 'Today' };
+    const pa = pct(A.t), pb = pct(B.t), gap = pb - pa;
+    // The left label prefers the side left of its marker, the right one the right side. A label
+    // with no room on its preferred side goes between the markers when the whole text fits there,
+    // otherwise it stays outside and is cut with an ellipsis.
+    const gapPx = (gap / 100) * STRIP_PX - 14;
+    const da = pa / 100 * STRIP_PX >= estW(A.text) + 8 ? 'l' : (gapPx >= estW(A.text) ? 'r' : 'l');
+    let db = (100 - pb) / 100 * STRIP_PX >= estW(B.text) + 8 ? 'r' : (gapPx >= estW(B.text) ? 'l' : 'r');
+    if (da === 'r' && db === 'l' && estW(A.text) + estW(B.text) + 14 > gapPx) db = 'r';
+    const inward = (da === 'r') + (db === 'l');
+    const share = gap / Math.max(1, inward);
+    labs = place(A.cls, A.t, A.text, da, da === 'l' ? pa : share, da === 'r')
+      + place(B.cls, B.t, B.text, db, db === 'r' ? 100 - pb : share, db === 'l');
+  }
   const cd = countdown(r);
-  return `<div class="h-strip-wrap">${g}<div class="h-strip-labs"><span style="left:${(x(c) / W) * 100}%">Today</span><span class="end" style="left:${(x(close) / W) * 100}%">${T(r.window?.label || fmt(close))}</span>${mons.join('')}</div>`
+  return `<div class="h-strip-wrap"><div class="h-strip-plot"><div class="h-strip">${g}<div class="h-strip-labs">${labs}${mons.join('')}</div></div></div>`
     + `<div class="h-strip-cd"><b>${cd.n}</b> ${cd.u}</div></div>`;
 }
 
@@ -495,25 +525,17 @@ function goalCardHome(c, subject) {
     const asOf = c.bar.muted && p.dataThrough ? `<em>as of ${esc(shortDate(p.dataThrough))}</em>` : '';
     bar = `<div class="h-pbar ${c.chip.tone}${c.bar.muted ? ' muted' : ''}" aria-hidden="true"><i class="fill" style="width:${pct(c.bar.fill)}%"></i><i class="tick" style="left:${pct(c.bar.tick)}%"></i></div>`
       + `<div class="h-pbar-l"><span>${figHtml(fk('actual'), { k: true })} of ${figHtml(fk('target'), { k: true })}</span><span>plan today ${figHtml(fk('expected'), { k: true })}${asOf}</span></div>`;
+  } else if (c.suggestion) {
+    bar = suggestHtml(c.suggestion);
+  } else if (c.goal.origin === 'owner' && Number.isFinite(c.goal.target) && !c.goal.track) {
+    // A target with nothing tracked: say so rather than the pace reason for a missing plan start.
+    bar = `<p class="h-gwhy">${esc(reasonText('missing_actual'))}</p>`;
   } else if (p && p.reason) {
     bar = `<p class="h-gwhy">${esc(reasonText(p.reason))}</p>`;
   }
   const next = c.next ? gnextHtml(c.next) : `<p class="h-gnext-none">Nothing due for ${subject}</p>`;
   const more = c.actions.length > 1 ? `<a class="h-gmore" href="${href('plan')}" data-go="plan">${plural(c.actions.length - 1, 'more action')} on the plan</a>` : '';
   return `<article class="h-gcard" data-goal-card="${esc(c.id)}"><div class="h-gcard-h"><a class="h-gcard-t" href="${href('goals')}" data-go="goals">${goalTitle(c.goal)}</a>${chipHtml(c.chip, 'h-pchip')}</div>${bar}${next}${more}</article>`;
-}
-
-function quietHtml(list) {
-  if (!list.length) return '';
-  // One chip per distinct status: "A, B, C [No target]" rather than a chip after every title.
-  const groups = [];
-  list.forEach((c) => {
-    const g = groups.find((x) => x.chip.label === c.chip.label && x.chip.tone === c.chip.tone);
-    if (g) g.titles.push(goalTitle(c.goal)); else groups.push({ chip: c.chip, titles: [goalTitle(c.goal)] });
-  });
-  const sum = groups.map((g) => `<span class="h-qi">${g.titles.join(', ')} ${chipHtml(g.chip, 'h-pchip')}</span>`).join('');
-  const body = list.map((c) => `<li data-quiet-goal="${esc(c.id)}"><a class="h-gcard-t" href="${href('goals')}" data-go="goals">${goalTitle(c.goal)}</a>${c.next ? gnextHtml(c.next) : '<p class="h-gnext-none">Nothing due</p>'}</li>`).join('');
-  return `<details class="h-quiet" data-det="home-quiet"${ui.det['home-quiet'] ? ' open' : ''}><summary><span class="h-quiet-l">${sum}</span>${icon('chev')}</summary><ul class="h-quiet-b">${body}</ul></details>`;
 }
 
 function hkHtml(list) {
@@ -566,29 +588,151 @@ function afterHtml(m) {
   return `<div class="h-after"><div class="h-after-l">After that</div>${m.afterThat.map((r) => `<div class="h-after-r" data-rec="${esc(r.id)}"><span class="h-after-d">${fmt(recDate(r))}</span>${recLink(r)}${whoTag(r)}</div>`).join('')}</div>`;
 }
 
+/* ---------- suggested targets (Home cards and Goals) ---------- */
+
+// The suggestion record for a goal, from scenario.suggestions; null when it has none.
+const suggOf = (id) => arr(api.s.suggestions).find((r) => r && String(r.goalId) === String(id)) || null;
+
+// The end-of-horizon note on a date that is not a projection.
+const horizonNote = (label) => (label === 'This year' ? ' (the end of the year you picked)' : ` (the end of the ${esc(label)} you picked)`);
+
+// One goal's suggested target: the line, why, what it comes from, the withdrawal rate when it can
+// be changed, and Accept, Edit, Dismiss. A question asks for an amount; a dismissed one offers Add one.
+// Every amount is a calc:targets figure; the rate is a parameter in percent.
+function suggestHtml(s) {
+  const id = esc(s.goalId);
+  const edit = (label, cls) => btn(label, `data-sugg-act="edit" data-id="${id}"`, cls);
+  if (s.state === 'dismissed') {
+    return `<p class="h-gnone">No target yet. <button type="button" class="h-link" data-sugg-act="edit" data-id="${id}">Add one</button></p>`;
+  }
+  if (s.state !== 'suggested') {
+    return `<div class="h-sugg ask" data-sugg="${id}"><p class="h-sugg-q">${esc(s.ask)}</p>`
+      + `<p class="h-sugg-why">${esc(s.why)}</p><div class="h-sugg-acts">${edit('Edit goal', '')}</div></div>`;
+  }
+  const f = s.figures || {};
+  const amt = (k) => (k ? figHtml(k, { k: true }) : '');
+  const nAccts = arr(s.track?.accounts).length;
+  const trackAccts = arr(s.track?.accounts).map((tid) => arr(api.s.accounts).find((a) => String(a.id) === String(tid)));
+  const trackNames = trackAccts.every(Boolean)
+    ? trackAccts.map((a) => (a.imported ? esc(a.name) : T(a.name))).join(', ')
+    : esc(s.trackLabel || '');
+  const tracks = !s.track ? ', tracks nothing automatically: contributions are not measured yet'
+    : s.trackLabel && nAccts <= 3 ? `, tracks ${trackNames}`
+      : `, tracks ${plural(nAccts, s.kind === 'independence' ? 'investment account' : s.kind === 'cushion' ? 'cash account' : 'account')}`;
+  let head;
+  if (s.covered) {
+    head = `Already covered: ${f.current ? `${amt(f.current)} against ${amt(f.target)}` : amt(f.target)}`;
+  } else {
+    const when = longDate(s.targetDate);
+    head = `Suggested: ${amt(f.target)}${when ? ` by ${when}` : ''}${when && s.dateSource === 'horizon' && s.horizonLabel ? horizonNote(s.horizonLabel) : ''}`;
+  }
+  const win = windowSpan(s.window);
+  const src = [];
+  if (s.kind === 'cushion' && f.monthlySpend) {
+    const n = Number(s.params?.cushionMonths);
+    src.push(`From ${amt(f.monthlySpend)} a month of spending${win ? `, ${win}` : ''}${Number.isFinite(n) && n > 0 ? `, times ${plural(n, 'month')}` : ''}`);
+  } else if (s.kind === 'independence' && f.annualSpend) {
+    src.push(`From ${amt(f.annualSpend)} a year of spending${win ? `, ${win}` : ''}, over the withdrawal rate`);
+  } else if (s.kind === 'tax' && arr(f.rooms).length) {
+    src.push(`From this year's unused room: ${arr(f.rooms).map((k) => `${esc(api.fig(k)?.label || 'Room')} ${amt(k)}`).join(', ')}`);
+  } else if (win) {
+    src.push(`Spending ${win}`);
+  }
+  if (f.monthlySavings && s.dateSource === 'projected') src.push(`Saving ${amt(f.monthlySavings)} a month`);
+  let rate = '';
+  if (arr(s.editable).includes('withdrawalRate')) {
+    const r = Number(s.params?.withdrawalRate);
+    const pv = Math.round((Number.isFinite(r) ? r : 0.04) * 10000) / 100;
+    rate = `<label class="h-sugg-rate">Withdrawal rate <input type="number" data-sugg-rate="${id}" min="2" max="6" step="0.25" inputmode="decimal" value="${pv}"><span>%</span></label>`;
+  }
+  return `<div class="h-sugg" data-sugg="${id}"><p class="h-sugg-l">${head}${tracks}</p>`
+    + `${s.why ? `<p class="h-sugg-why">${T(s.why)}</p>` : ''}`
+    + `${src.length ? `<p class="h-sugg-src">${src.join('. ')}.</p>` : ''}${rate}`
+    + `<div class="h-sugg-acts">${btn('Accept', `data-sugg-act="accept" data-id="${id}"`, 'pri')}${edit('Edit', '')}${btn('Dismiss', `data-sugg-act="dismiss" data-id="${id}"`, 'ghost')}</div></div>`;
+}
+
+// Edit from Home or Goals: the goal form on #/goals, prefilled from the suggestion's accept body;
+// a question or a dismissed suggestion opens it with the goal's own values. Nothing is saved.
+function openSuggForm(id) {
+  const g = arr(api.s.goals).find((x) => String(x.id) === String(id));
+  if (!g) return;
+  const s = suggOf(id);
+  const draft = draftOf(g);
+  const a = s && s.state === 'suggested' ? s.accept : null;
+  if (a) {
+    if (Number.isFinite(a.target)) draft.target = String(a.target);
+    if (a.targetDate) draft.targetDate = a.targetDate;
+    if (a.track && Array.isArray(a.track.accounts)) { draft.trackKind = 'accounts'; draft.accounts = a.track.accounts.slice(); draft.figure = ''; }
+    else if (a.track === null) { draft.trackKind = 'none'; draft.accounts = []; draft.figure = ''; }
+  }
+  if (routeNow().name !== 'goals') api.go('goals', {});
+  openGoalForm(g.id, draft);
+}
+
+// Accept, Edit, Dismiss and Accept all. Accept posts the record's accept body as the goal update;
+// Accept all posts each pending one in card order and redraws once.
+function suggClick(e) {
+  const t = e.target.closest('[data-sugg-act],[data-sugg-all]');
+  if (!t || !root.contains(t)) return false;
+  e.preventDefault();
+  if (t.dataset.suggAll != null) {
+    const list = homeModelNow().pending.filter((s) => s.accept).map((s) => ({ id: s.goalId, fields: s.accept }));
+    if (list.length) api.goalsAccept(list);
+    return true;
+  }
+  const id = t.dataset.id;
+  const act = t.dataset.suggAct;
+  const s = suggOf(id);
+  if (act === 'edit') openSuggForm(id);
+  else if (act === 'accept' && s?.accept) api.goalUpdate(id, s.accept);
+  else if (act === 'dismiss' && s) api.goalSuggestion(id, { action: 'dismiss' });
+  return true;
+}
+
+// The withdrawal rate input commits on change, as a fraction, clamped to the calculator's range.
+function suggRate(t) {
+  const v = Number(t.value);
+  if (t.value === '' || !Number.isFinite(v)) { draw(); return; }
+  const pv = Math.max(2, Math.min(6, v));
+  api.goalSuggestion(t.dataset.suggRate, { withdrawalRate: Math.round(pv * 100) / 10000 });
+}
+
+// Desktop: the next goal actions due before Dec 31, up to five, each with date, title and owner.
+function dueHtml(m) {
+  const list = m.due.slice(0, 5);
+  if (!list.length) return '';
+  const row = (r) => `<div class="h-due-r" data-rec="${esc(r.id)}"><span class="h-due-d${days(r) < 0 ? ' late' : ''}">${fmt(recDate(r))}</span>${recLink(r)}${whoTag(r)}</div>`;
+  return `<div class="h-due"><div class="h-due-l">Due before Dec 31</div>${list.map(row).join('')}</div>`;
+}
+
+const homeModelNow = () => homeModel({
+  goals: api.s.goals, pace: api.s.pace || null, recs: api.recs(), filter: ui.owner,
+  suggestions: api.s.suggestions, clock: api.s.meta?.clock
+});
+
 function pHome() {
   const pace = api.s.pace || null;
-  const m = homeModel({ goals: api.s.goals, pace, recs: api.recs(), filter: ui.owner });
+  const m = homeModelNow();
   // No open goals: Home is the Goals step (kept while its save runs), with the data-health line.
   if (!m.cards.length || ui.goalsBusy === 'home') {
     return shell(`<section class="h-home h-home-gs">${goalsStartHtml('home')}${dhealthHtml(homeHealth())}</section>`);
   }
   const subject = SUBJECT[m.filter];
-  const c = clock();
-  const ye = daysBetween(c, new Date(Date.UTC(c.getUTCFullYear(), 11, 31)));
-  const before = m.queue.filter((r) => days(r) <= ye).length;
+  const hd = homeHeadline({ cards: m.cards, pace, pending: m.pending });
   const hc = healthChip(pace);
+  const due = m.due.length;
+  const bulk = hd.bulk ? `<div class="h-home-bulk">${btn('Accept all', 'data-sugg-all="1"', 'pri')}${goA('goals', 'Review targets', {}, 'h-home-rev')}</div>` : '';
   const head = `<div class="h-home-head"><div class="h-home-k">${T(api.s.meta.clockLabel)}</div>`
     + `<a class="h-hchip ${hc.tone}" href="${href('pace')}" data-go="pace">${esc(hc.label)}${icon('arrow')}</a>`
-    + `<h1 class="h-home-h">${esc(pace?.rollup?.headline || 'No goals with targets')}</h1>`
-    + `<p class="h-home-sub">${plural(before, 'thing')} before Dec 31</p></div>`;
+    + `<h1 class="h-home-h">${esc(hd.title)}</h1>`
+    + `<p class="h-home-sub">${due ? `${plural(due, 'thing')} before Dec 31` : 'Nothing due before Dec 31'}</p>${bulk}</div>`;
   const health = dhealthHtml(homeHealth());
-  const cards = m.expanded.length ? `<div class="h-gcards">${m.expanded.map((x) => goalCardHome(x, subject)).join('')}</div>` : '';
+  const cards = `<div class="h-gcards">${m.cards.map((x) => goalCardHome(x, subject)).join('')}</div>`;
   const goalsH = `<div class="h-home-sec"><h2>Goals</h2>${goA('goals', 'All goals')}</div>`;
-  const rest = `${goalsH}${cards}${quietHtml(m.collapsed)}${hkHtml(m.housekeeping)}`;
+  const rest = `${goalsH}${cards}${hkHtml(m.housekeeping)}`;
   const inner = isPhone()
     ? `${ownerFilterHtml(m)}${head}${nextHtml(m, subject)}${afterHtml(m)}${health}${rest}`
-    : `<header class="h-home-top">${head}${ownerFilterHtml(m)}</header>${health}${rest}`;
+    : `<header class="h-home-top">${head}${ownerFilterHtml(m)}</header>${dueHtml(m)}${health}${rest}`;
   return shell(`<section class="h-home">${inner}</section>`);
 }
 
@@ -755,7 +899,7 @@ function thread(msgs, selfId = '') {
   return `<div class="h-thread">${msgs.map((m) => {
     const who = m.role === 'me' ? 'You' : m.role === 'advisor' ? (api.s.advisor?.name ? T(api.s.advisor.name) : esc(api.s.names?.advisor || 'Advisor')) : m.role === 'claude' ? 'Claude' : esc(api.s.meta.product || 'Fathom');
     const refs = arr(m.refs).filter((id) => id !== selfId).map((id) => recById(id)).filter(Boolean);
-    return `<div class="h-msg ${esc(m.role)}${m.notice ? ' notice' : ''}"><div class="h-msg-who">${who}${m.ts ? `<time>${X(m.ts)}</time>` : ''}</div><div class="h-msg-b">${m.html || ''}</div>`
+    return `<div class="h-msg ${esc(m.role)}${m.notice ? ' notice' : ''}"><div class="h-msg-who">${who}${m.ts ? `<time>${X(m.ts)}</time>` : ''}</div>${chatScreen.workHtml(m)}<div class="h-msg-b">${m.html || ''}</div>`
       + (refs.length ? `<div class="h-refs">${refs.map((r) => `<a href="${href('rec', { id: r.id })}" data-go="rec" data-id="${esc(r.id)}"><span>${T(r.title)}</span><em>${T(r.window?.label || '')}</em>${icon('arrow')}</a>`).join('')}</div>` : '')
       + chatScreen.proposalHtml(m)
       + chatScreen.goalProposalHtml(m)
@@ -1080,9 +1224,9 @@ function draftOf(g) {
   };
 }
 
-function openGoalForm(id) {
+function openGoalForm(id, draft) {
   const g = id ? arr(api.s.goals).find((x) => x.id === id) : null;
-  ui.goalForm = { id: g ? g.id : null, draft: g ? draftOf(g) : emptyDraft(), err: '' };
+  ui.goalForm = { id: g ? g.id : null, draft: g ? (draft || draftOf(g)) : emptyDraft(), err: '' };
   ui.goalDel = null;
   draw();
   const el = root?.querySelector('.h-gform [data-gf="title"]');
@@ -1098,18 +1242,20 @@ function goalFormHtml() {
   const accts = arr(api.s.accounts).filter((a) => a.fig);
   const figs = trackFigures();
   const chip = (h) => `<button type="button" class="h-chip${d.horizon === h[0] ? ' on' : ''}" data-goal-h="${h[0]}" aria-pressed="${d.horizon === h[0]}">${h[1]}</button>`;
+  // One label line: the text, then a muted "optional" on the same line when the field is optional.
+  const gl = (text, optional = false) => `<span class="h-gl">${text}${optional ? '<span class="h-opt">optional</span>' : ''}</span>`;
   const opt = (v, l) => `<option value="${esc(v)}"${(d.trackKind === 'figure' ? d.figure : d.trackKind) === v ? ' selected' : ''}>${esc(l)}</option>`;
   const acctList = d.trackKind === 'accounts' ? `<div class="h-gaccts">${accts.length ? accts.map((a) => `<label class="h-gacct"><input type="checkbox" data-gf="acct" value="${esc(a.id)}"${d.accounts.includes(a.id) ? ' checked' : ''}><span>${a.imported ? esc(a.name) : T(a.name)}</span><small>${a.imported ? esc(a.inst) : T(a.inst)}</small></label>`).join('') : '<p class="h-mute sm">No accounts with a balance yet.</p>'}</div>` : '';
   return `<form class="h-gform" data-goalform="1" aria-label="${f.id ? 'Edit goal' : 'New goal'}" novalidate>
     <h2>${f.id ? 'Edit goal' : 'New goal'}</h2>
-    <label class="h-gf">Your goal, in your own words<input type="text" data-gf="title" maxlength="120" value="${esc(d.title)}" placeholder="For example, a year of cash in the bank" autocomplete="off"></label>
-    <label class="h-gf">A short note <span class="h-mute">optional</span><textarea data-gf="note" maxlength="500" rows="2">${esc(d.note)}</textarea></label>
-    <div class="h-gf"><span>When</span><div class="h-chips" role="group" aria-label="Horizon">${GOAL_BANDS.map(chip).join('')}</div></div>
+    <label class="h-gf">${gl('Your goal, in your own words')}<input type="text" data-gf="title" maxlength="120" value="${esc(d.title)}" placeholder="For example, a year of cash in the bank" autocomplete="off"></label>
+    <label class="h-gf">${gl('A short note', true)}<textarea data-gf="note" maxlength="500" rows="2">${esc(d.note)}</textarea></label>
+    <div class="h-gf">${gl('When')}<div class="h-chips" role="group" aria-label="Horizon">${GOAL_BANDS.map(chip).join('')}</div></div>
     <div class="h-gf2">
-      <label class="h-gf">Target amount <span class="h-mute">optional</span><input type="number" data-gf="target" min="0" step="any" inputmode="decimal" value="${esc(d.target)}" placeholder="0"></label>
-      <label class="h-gf">Target date <span class="h-mute">optional</span><input type="date" data-gf="targetDate" value="${esc(d.targetDate)}"></label>
+      <label class="h-gf">${gl('Target amount', true)}<input type="number" data-gf="target" min="0" step="any" inputmode="decimal" value="${esc(d.target)}" placeholder="0"></label>
+      <label class="h-gf">${gl('Target date', true)}<input type="date" data-gf="targetDate" value="${esc(d.targetDate)}"></label>
     </div>
-    <label class="h-gf">Track with <span class="h-mute">optional</span><select data-gf="track">${opt('none', 'Nothing yet')}${accts.length ? opt('accounts', 'One or more accounts') : ''}${figs.map((k) => opt(k.key, k.label)).join('')}</select></label>
+    <label class="h-gf">${gl('Track with', true)}<select data-gf="track">${opt('none', 'Nothing yet')}${accts.length ? opt('accounts', 'One or more accounts') : ''}${figs.map((k) => opt(k.key, k.label)).join('')}</select></label>
     ${acctList}
     ${f.err ? `<p class="h-gerr" role="alert">${esc(f.err)}</p>` : ''}
     <div class="h-ob-nav">${btn('Cancel', 'data-goal="cancel"', 'ghost')}<button type="submit" class="h-btn pri">${f.id ? 'Save changes' : 'Save goal'}</button></div>
@@ -1157,7 +1303,9 @@ function goalCard(g) {
       prog = `<div class="h-prog"><svg viewBox="0 0 100 4" preserveAspectRatio="none" aria-hidden="true"><rect class="bg" width="100" height="4" rx="2"/><rect class="fg" width="${p * 100}" height="4" rx="2"/></svg><span>${figHtml(g.progress.cur, { k: true })} of ${figHtml(g.progress.target, { k: true })}</span></div>`;
     }
   }
-  if (!prog && owner) {
+  const sugg = owner && !g.archived ? suggOf(g.id) : null;
+  if (!prog && sugg) prog = suggestHtml(sugg);
+  else if (!prog && owner) {
     const tKey = `goal.${g.id}.target`;
     if (!(api.s.fig && api.s.fig[tKey])) prog = `<p class="h-gnone">No target yet. <button type="button" class="h-link" data-goal="edit" data-id="${esc(g.id)}">Add one</button></p>`;
     else if (g.trackWaiting) prog = `<p class="h-gnone">Target ${figHtml(tKey, { k: true })}. Waiting on a balance for what it tracks.</p>`;
@@ -1279,7 +1427,7 @@ function accountsBody() {
       ${ingest.accountMeta(a)}${a.note ? `<p>${lbl(a, a.note)}</p>` : ''}</div>`).join('')}</div>`)).join('');
   const series = Object.entries(api.s.series || {});
   const evs = arr(api.s.events).filter((e) => ['income', 'account'].includes(e.kind));
-  return `<div class="h-ro">${icon('lock')}<span>Read-only. ${esc(api.s.meta.product || 'Fathom')} can see balances and transactions. It cannot move, delete or change anything.</span></div>${ingest.pendingBanner()}
+  return `<div class="h-ro">${icon('lock')}<span>Read-only. ${esc(api.s.meta.product || 'Fathom')} can see balances and transactions. It cannot move, delete or change anything.</span></div>${ingest.pendingBanner()}${ingest.accountRepairs()}
     ${series.length ? section('Trend', `<div class="h-sparks">${series.map(spark).join('')}</div>`, 'Solid is actual, dashed is projected') : ''}
     <div class="h-cols"><div class="h-col-main">${list}</div>
     <div class="h-col-side">${section('Connect accounts', simplefin.block(), 'Read-only, through SimpleFIN Bridge')}${ingest.addFiles('accounts')}${ingest.sourcesSection()}${section('Detected', evs.length ? `<ol class="h-evs">${evs.map((e) => `<li><time>${T(e.date)}</time><div><b>${T(e.title)}</b><p>${T(e.body)}</p></div></li>`).join('')}</ol>` : '<p class="h-mute">Nothing unusual detected.</p>')}</div></div>`;
@@ -1326,7 +1474,7 @@ function pSettings() {
   let list = rows.map(([k, l, d]) => row(goA(k, l), d)).join('');
   if (id) list += row('<a href="/account">Account</a>', 'Passkeys and sign out.');
   if (id?.role === 'admin') list += row('<a href="/admin/users">Household</a>', 'People, roles and invitations.');
-  return shell(`<section class="h-settings">${pageHead('System', 'Settings')}${whoLine()}<ul class="h-set">${list}</ul></section>`);
+  return shell(`<section class="h-settings h-narrow">${pageHead('System', 'Settings')}${whoLine()}<ul class="h-set">${list}</ul></section>`);
 }
 
 /* ---------- advisor ---------- */
@@ -1816,6 +1964,7 @@ function onClick(e) {
   if (ingest.handleClick(e)) return;
   if (email.handleClick(e)) return;
   if (goalsStartClick(e)) return;
+  if (suggClick(e)) return;
   const gt = e.target.closest('[data-goal],[data-goal-h]');
   if (gt && root.contains(gt)) {
     e.preventDefault();
@@ -1993,6 +2142,7 @@ function onInput(e) {
 function onChange(e) {
   const t = e.target;
   if (t?.dataset?.gf === 'track' || t?.dataset?.gf === 'acct') { goalInput(t); return; }
+  if (t?.dataset?.suggRate) { suggRate(t); return; }
   if (t?.dataset?.recowner) { api.act(t.dataset.recowner, 'owner', t.value); return; }
   if (t?.dataset?.curve) { api.setCurve(t.dataset.curve, Number(t.value) / 100); return; }
   if (t?.dataset?.prio) { api.setCurve(t.dataset.prio, Number(t.value) / 100); return; }

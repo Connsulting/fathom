@@ -1,3 +1,8 @@
+import { accountNaming } from '../accounts/naming.mjs';
+import { accountLabel } from '../shared/account-label.mjs';
+import { queueAccountPairs } from './account-merge.mjs';
+import { lastFour, accountMask, compatibleKind, compatibleInstitution, sameInstitution, accountKind } from './account-match.mjs';
+export { lastFour } from './account-match.mjs';
 // Read-only bank and brokerage connections through SimpleFIN Bridge (simplefin.org protocol).
 // The owner pastes a one-time setup token; the server decodes it to a claim URL, refuses any URL
 // that is not https on an allowed host (the token is user input: SSRF guard), claims it and gets
@@ -17,7 +22,7 @@ import { ingestFile, accountIdOf } from './pipeline.mjs';
 import { identifyAccountRows } from './dedupe.mjs';
 import { ask, normalizeName, ACCOUNT_MATCH_OPTIONS } from './confirm.mjs';
 import { autoResolve } from './auto.mjs';
-import { institution, cents } from './format.mjs';
+import { cents } from './format.mjs';
 import { DEFAULT_HOSTS, parseAllowedHosts } from './simplefin-hosts.mjs';
 
 export { DEFAULT_HOSTS, parseAllowedHosts };
@@ -139,14 +144,6 @@ export async function fetchAccounts(access, { hosts, fetch: fetchImpl, startDate
 
 // Last four digits from an account name ("Checking x1234", "Card (1234)", "Savings ...1234") or an
 // id that is all digits; never more. Longer digit runs in a name are masked to their last four.
-export function lastFour(name, id) {
-  const n = String(name ?? '');
-  const m = /(?:x+|\*+|#|ending(?: in)?|\.{2,}|-)\s*(\d{4})\s*\)?\s*$/i.exec(n) ?? /\((\d{4})\)\s*$/.exec(n) ?? /(?:^|\s)(\d{4})\s*$/.exec(n);
-  if (m) return m[1];
-  const i = String(id ?? '');
-  const digits = i.replace(/\D/g, '');
-  return /^[\d\s-]+$/.test(i) && digits.length >= 4 ? digits.slice(-4) : null;
-}
 const maskName = (name) => clean(name, 120).replace(/\d{5,}/g, (run) => `...${run.slice(-4)}`);
 
 // Bridge account set (protocol v2 connections/errlist, or v1 org/errors) to plain accounts.
@@ -247,12 +244,11 @@ export function disconnectSimplefin(db) {
 // candidate shares the mask (or, with no mask, the name) and no stored balance on the bridge's
 // balance date contradicts it. Otherwise the closest candidate by recent balance is asked about.
 export function matchAccount(db, acct) {
-  const inst = normalizeName(institution(acct.inst));
-  const pool = db.prepare(`SELECT id, inst, mask, name FROM accounts WHERE coalesce(mirror, '') != 'connected'
+  const pool = db.prepare(`SELECT id, inst, mask, name, kind FROM accounts WHERE coalesce(mirror, '') != 'connected'
                            AND id NOT IN (SELECT account_id FROM simplefin_accounts WHERE account_id IS NOT NULL)
                            AND id NOT IN (SELECT candidate_id FROM simplefin_accounts WHERE status = 'pending_match' AND candidate_id IS NOT NULL)
                            ORDER BY id`)
-    .all().filter((a) => normalizeName(institution(a.inst)) === inst);
+    .all().filter(a => compatibleInstitution(a.inst, acct.inst) && compatibleKind(a, acct));
   if (!pool.length) return {};
   const balOn = db.prepare('SELECT amount FROM balances WHERE account_id = ? AND date = ?');
   const latest = db.prepare('SELECT amount FROM balances WHERE account_id = ? ORDER BY date DESC LIMIT 1');
@@ -264,17 +260,19 @@ export function matchAccount(db, acct) {
   const distance = (c) => { const b = latest.get(c.id); return b && acct.balance != null ? Math.abs(b.amount - acct.balance) : Infinity; };
   const closest = (list) => [...list].sort((a, b) => distance(a) - distance(b))[0].id;
   if (acct.mask) {
-    const same = pool.filter((c) => c.mask === acct.mask);
-    if (same.length === 1 && acct.maskSure && !contradicts(same[0])) return { sure: same[0].id };
+    const same = pool.filter((c) => accountMask(c) === acct.mask);
+    if (same.length === 1 && acct.maskSure && /^\d{4}$/.test(same[0].mask ?? '') && sameInstitution(same[0].inst, acct.inst) && accountKind(same[0]) && accountKind(acct) && !contradicts(same[0])) return { sure: same[0].id };
     if (same.length) return { candidate: closest(same) };
-    const unmasked = pool.filter((c) => !c.mask);
+    const unmasked = pool.filter((c) => sameInstitution(c.inst, acct.inst) && !accountMask(c));
     return unmasked.length ? { candidate: closest(unmasked) } : {};
   }
-  const named = pool.filter((c) => normalizeName(c.name) === normalizeName(acct.name));
+  const known = pool.filter(c => sameInstitution(c.inst, acct.inst));
+  if (!known.length) return {};
+  const named = known.filter((c) => normalizeName(c.name) === normalizeName(acct.name));
   if (named.length === 1 && !named[0].mask && !contradicts(named[0])) return { sure: named[0].id };
   if (named.length) return { candidate: closest(named) };
-  const near = pool.filter((c) => distance(c) <= Math.max(1, Math.abs(acct.balance ?? 0) * 0.05));
-  return { candidate: closest(near.length ? near : pool) };
+  const near = known.filter((c) => distance(c) <= Math.max(1, Math.abs(acct.balance ?? 0) * 0.05));
+  return { candidate: closest(near.length ? near : known) };
 }
 
 // The account a bridge account writes into, or null while a match question is pending.
@@ -287,10 +285,10 @@ function resolveAccount(db, acct, { now, counts }) {
     if (match.candidate) {
       db.prepare("INSERT INTO simplefin_accounts (sf_key, account_id, candidate_id, status, name, created_at) VALUES (?, NULL, ?, 'pending_match', ?, ?)")
         .run(acct.key, match.candidate, acct.name, now);
-      const cand = db.prepare('SELECT name, inst FROM accounts WHERE id = ?').get(match.candidate);
+      const cand = accountNaming(db).byId.get(match.candidate);
       const out = ask(db, {
         kind: 'account_match', subject: `sf:${acct.key}`,
-        question: `Is ${acct.name} at ${acct.inst} from SimpleFIN the same account as ${cand?.name ?? 'an account'} you imported from a file?`,
+        question: `Is ${accountLabel(acct)} at ${acct.inst} from SimpleFIN the same account as ${accountLabel(cand)} you imported from a file?`,
         options: ACCOUNT_MATCH_OPTIONS, context: { sfKey: acct.key, candidateId: match.candidate, ownId: own }, now,
       });
       if (out.queued) counts.queued += 1;
@@ -420,6 +418,7 @@ export async function syncSimplefin(db, { config = {}, hosts, fetch: fetchImpl, 
   } catch (e) {
     console.error('fathom: auto-resolve failed', e?.code ?? e?.name ?? 'error');
   }
+  queueAccountPairs(db, { now: stamp });
   return { status: authError ? 'reconnect' : 'ok', code: authError ? 'auth' : undefined, changed, counts };
 }
 

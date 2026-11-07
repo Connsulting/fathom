@@ -6,6 +6,8 @@
 // POST /api/goals/:id/archive  {archived?: boolean, default true}                   -> {scenario, goal}
 // POST /api/goals/:id/delete   {}                                                   -> {scenario}
 // POST /api/curve              {id, value} or {positions: {id: value}}              -> {scenario}
+// GET  /api/goals/suggestions                                                     -> {clock, suggestions}
+// POST /api/goals/:id/suggestion  {action: 'dismiss'|'restore'} or {withdrawalRate}  -> {scenario}
 //
 // Owner goal text is stored as typed (trimmed) and rendered escaped, never token-resolved. A seed
 // goal (the demo's) can be archived or deleted, not edited: its text carries scenario tokens.
@@ -17,6 +19,8 @@ import { HttpError } from './http.mjs';
 import { scenarioOf } from './handlers.mjs';
 import { clockNow, loadContent, loadCurve, loadFigures } from '../scenario/build.mjs';
 import { captureGoalPath, goalPathChanged } from '../pace/build.mjs';
+import { buildSuggestions, SUGGEST_SETTING } from '../suggest/build.mjs';
+import { TARGET_PARAMETERS } from '../calc/targets.mjs';
 
 const MAX_GOALS = 200;
 
@@ -116,5 +120,42 @@ export function curveSet(ctx) {
   const next = { ...cur };
   for (const [id, v] of changes) next[id] = Math.round(v * 100) / 100;
   setSetting(db, 'curve.positions', next);
+  return { scenario: scenarioOf(ctx) };
+}
+
+// Suggested targets (src/suggest/build.mjs): the same records the scenario carries.
+export function goalSuggestions(ctx) {
+  const { clock, suggestions } = buildSuggestions(ctx.db, { clock: ctx.config && ctx.config.clock });
+  return { clock, suggestions };
+}
+
+// Dismiss or restore a goal's suggestion, or set its withdrawal rate. A dismissal stores the
+// record's fingerprint, so a change to the goal text or the inputs brings the suggestion back.
+export function goalSuggestion(ctx) {
+  const { db } = ctx;
+  const row = goalRow(db, ctx.params.id);
+  if (row.origin !== 'owner') throw new HttpError(409, 'this goal came with the demo and has no suggested target');
+  const body = ctx.body;
+  if (!body || typeof body !== 'object' || Array.isArray(body)) throw new HttpError(400, 'send an action or a withdrawal rate');
+  const hasAction = Object.hasOwn(body, 'action');
+  const hasRate = Object.hasOwn(body, 'withdrawalRate');
+  if (hasAction === hasRate) throw new HttpError(400, 'send either an action or a withdrawal rate');
+  if (hasAction && !['dismiss', 'restore'].includes(body.action)) throw new HttpError(400, 'action must be dismiss or restore');
+  const { withdrawalRateMin: min, withdrawalRateMax: max } = TARGET_PARAMETERS;
+  if (hasRate && (typeof body.withdrawalRate !== 'number' || !Number.isFinite(body.withdrawalRate) || body.withdrawalRate < min || body.withdrawalRate > max)) {
+    throw new HttpError(400, `withdrawalRate must be a number from ${min} to ${max}`);
+  }
+  const record = buildSuggestions(db, { clock: ctx.config && ctx.config.clock }).suggestions.find(s => s.goalId === row.id);
+  if (!record) throw new HttpError(409, 'this goal has a target or is not active, so it has no suggestion');
+  if (hasRate && record.kind !== 'independence') throw new HttpError(400, 'only a work-optional goal has a withdrawal rate');
+  const stored = getSetting(db, SUGGEST_SETTING, null);
+  const ids = new Set(db.prepare('SELECT id FROM goals').all().map(r => r.id));
+  const next = Object.fromEntries(Object.entries(stored && typeof stored === 'object' ? stored : {}).filter(([id]) => ids.has(id)));
+  const entry = { dismissed: null, ...(next[row.id] || {}) };
+  if (body.action === 'dismiss') entry.dismissed = record.fingerprint;
+  else if (body.action === 'restore') entry.dismissed = null;
+  else entry.withdrawalRate = Math.round(body.withdrawalRate * 10000) / 10000;
+  next[row.id] = entry;
+  setSetting(db, SUGGEST_SETTING, next);
   return { scenario: scenarioOf(ctx) };
 }

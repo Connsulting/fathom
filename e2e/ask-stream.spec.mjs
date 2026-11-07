@@ -23,10 +23,10 @@ async function record(page) {
     const look = () => {
       const pend = document.querySelector('.h-askx-pend');
       if (!pend) return;
-      for (const li of pend.querySelectorAll('.h-askx-steps li span')) {
+      for (const li of pend.querySelectorAll('.h-work-items li.step span')) {
         if (!log.steps.includes(li.textContent)) log.steps.push(li.textContent);
       }
-      if (pend.querySelector('.h-askx-steps') && !log.order.includes('steps')) log.order.push('steps');
+      if (pend.querySelector('.h-work-items') && !log.order.includes('steps')) log.order.push('steps');
       const st = pend.querySelector('.h-askx-stream');
       if (!st) return;
       if (!log.order.includes('text')) {
