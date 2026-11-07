@@ -4,7 +4,7 @@ const DAY = 86400000;
 const MONTH_DAYS = 365.2425 / 12;
 export const PACE_PARAMETERS = Object.freeze({ toleranceDays: 7, minimumToleranceUsd: 1, daysPerMonth: MONTH_DAYS });
 export const finite = v => typeof v === 'number' && Number.isFinite(v);
-const round = v => Math.round((v + Number.EPSILON) * 100) / 100;
+export const round = v => Math.round((v + Number.EPSILON) * 100) / 100;
 const day = date => Date.parse(date + 'T00:00:00Z') / DAY;
 export const isoDate = date => typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date)
   && Number.isFinite(day(date)) && new Date(day(date) * DAY).toISOString().slice(0, 10) === date;

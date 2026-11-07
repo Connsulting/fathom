@@ -8,6 +8,8 @@
 // contribution room from the planner's stored room figures). Anything else is a question.
 
 import { createHash } from 'node:crypto';
+import { finite, round } from './pace.mjs';
+import { HORIZON_IDS, horizonLabel } from '../shared/goals.mjs';
 
 export const TARGET_PARAMETERS = Object.freeze({
   cushionMonths: 6, withdrawalRate: 0.04, withdrawalRateMin: 0.02, withdrawalRateMax: 0.06, realReturn: 0.04,
@@ -30,8 +32,6 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', '
 const NUMBER_WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
 const DAY = 86400000;
 
-const finite = v => typeof v === 'number' && Number.isFinite(v);
-const round = v => Math.round((v + Number.EPSILON) * 100) / 100;
 const cents = v => Math.round(v * 100);
 const day = iso => Date.parse(iso + 'T00:00:00Z') / DAY;
 const word = n => NUMBER_WORDS[n] ?? String(n);
@@ -47,12 +47,10 @@ const monthName = ym => `${MONTHS[Number(ym.slice(5, 7)) - 1]} ${ym.slice(0, 4)}
 const isoOf = date => date.toISOString().slice(0, 10);
 // The last day of the month n months after the clock's month.
 export const monthEndAfter = (clock, n) => isoOf(new Date(Date.UTC(Number(clock.slice(0, 4)), Number(clock.slice(5, 7)) + n, 0)));
-const dateText = iso => `${MONTHS[Number(iso.slice(5, 7)) - 1]} ${Number(iso.slice(8, 10))}, ${iso.slice(0, 4)}`;
 
 const HORIZON_YEARS = { now: 0, '1-3y': 3, '3-10y': 10 };
-const HORIZON_LABELS = { now: 'This year', '1-3y': 'Next few years', '3-10y': 'Long range' };
-export const horizonOf = h => Object.hasOwn(HORIZON_YEARS, h) ? h : 'now';
-export const horizonLabelOf = h => HORIZON_LABELS[horizonOf(h)];
+export const horizonOf = h => HORIZON_IDS.includes(h) ? h : 'now';
+export const horizonLabelOf = h => horizonLabel(horizonOf(h));
 // Dec 31 of the clock year plus the horizon's years.
 export const horizonEnd = (horizon, clock) => `${Number(clock.slice(0, 4)) + HORIZON_YEARS[horizonOf(horizon)]}-12-31`;
 
@@ -110,11 +108,19 @@ export const plainAccountName = a => typeof a?.name === 'string' && a.name.trim(
 function matchTransfers(sources, candidates, days) {
   const used = new Set();
   const matched = new Set();
+  const byCents = new Map();
+  for (const c of candidates) {
+    const k = cents(c.amount);
+    const list = byCents.get(k);
+    const entry = { c, d: day(c.date) };
+    if (list) list.push(entry); else byCents.set(k, [entry]);
+  }
   for (const s of sources) {
     let best = null;
-    for (const c of candidates) {
-      if (used.has(c.id) || c.account_id === s.account_id || cents(c.amount) !== -cents(s.amount)) continue;
-      const gap = Math.abs(day(c.date) - day(s.date));
+    const sd = day(s.date);
+    for (const { c, d } of byCents.get(-cents(s.amount)) || []) {
+      if (used.has(c.id) || c.account_id === s.account_id) continue;
+      const gap = Math.abs(d - sd);
       if (gap > days) continue;
       if (!best || gap < best.gap || (gap === best.gap && c.id < best.c.id)) best = { c, gap };
     }
@@ -359,5 +365,3 @@ const canonical = v => Array.isArray(v) ? v.map(canonical)
     : typeof v === 'number' ? round(v) : v;
 // sha256 hex of the canonical JSON of the record's semantic inputs.
 export const suggestionFingerprint = parts => createHash('sha256').update(JSON.stringify(canonical(parts))).digest('hex');
-
-export { word as numberWord, dateText };
