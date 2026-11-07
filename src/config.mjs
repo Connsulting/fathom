@@ -4,6 +4,7 @@
 import { resolve } from 'node:path';
 import { isIP } from 'node:net';
 import { parseAllowedHosts } from './ingest/simplefin-hosts.mjs';
+import { publicDemoConfig } from './public-demo/config.mjs';
 
 const ENGINES = ['live', 'fake', 'off'];
 const TRANSPORTS = ['dev', 'smtp', 'resend', 'postmark', 'agentmail'];
@@ -66,6 +67,7 @@ function smtpPort(v) {
 
 
 export function loadConfig(env = process.env) {
+  const publicMode = publicDemoConfig(env);
   const demoRaw = env.FATHOM_DEMO;
   let demo;
   if (blank(demoRaw)) demo = 'auto';
@@ -113,7 +115,7 @@ export function loadConfig(env = process.env) {
   const [emailFrom, emailFromFile] = valueOrFile(env, 'FATHOM_EMAIL_FROM');
   const [emailTo, emailToFile] = valueOrFile(env, 'FATHOM_EMAIL_TO');
 
-  const publicUrl = validatePublicUrl(opt(env.FATHOM_PUBLIC_URL));
+  const publicUrl = validatePublicUrl(opt(env.FATHOM_PUBLIC_URL), { required: publicMode.publicDemo });
   const trustedProxies = trustedProxyCidrs(env.FATHOM_TRUSTED_PROXIES);
 
   const allowedHosts = blank(env.FATHOM_ALLOWED_HOSTS) ? []
@@ -123,14 +125,16 @@ export function loadConfig(env = process.env) {
   if (!simplefinHosts) throw new ConfigError('FATHOM_SIMPLEFIN_ALLOWED_HOSTS must be comma separated host names with no scheme, port or path');
 
   return {
-    dataDir: resolve(blank(env.FATHOM_DATA) ? 'data' : env.FATHOM_DATA),
+    ...publicMode,
+    dataDir: publicMode.publicDemo ? publicMode.demoDataDir : resolve(blank(env.FATHOM_DATA) ? 'data' : env.FATHOM_DATA),
     port,
     host: blank(env.FATHOM_HOST) ? '127.0.0.1' : env.FATHOM_HOST,
-    demo,
+    demo: publicMode.publicDemo ? true : demo,
     engine,
     fakeStreamMs,
     clock,
     claudeCredentialFile: blank(env.FATHOM_CLAUDE_CREDENTIAL_FILE) ? null : env.FATHOM_CLAUDE_CREDENTIAL_FILE,
+    typesafeKeyFile: opt(env.FATHOM_TYPESAFE_KEY_FILE),
     dataKeyFile: blank(env.FATHOM_DATA_KEY_FILE) ? null : env.FATHOM_DATA_KEY_FILE,
     emailTransport,
     emailFrom,

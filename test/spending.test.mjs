@@ -14,6 +14,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInstance } from '../src/platform/db.mjs';
 import { setSetting } from '../src/store/db.mjs';
+import { ask, recordAutoAnswer } from '../src/ingest/confirm.mjs';
+import { JEV_MODEL } from '../src/categories/jev.mjs';
 import { resolveCategories } from '../src/categories/resolve.mjs';
 import { loadCategoryInputs } from '../src/categories/store.mjs';
 import { serveAppFixture, tempDb } from './helpers/server.mjs';
@@ -77,7 +79,11 @@ function household(db) {
   ids.excluded = txn(db, 'chk', '2032-08-12', -55, 'Ignored adjustment', 'Ignore');
   ids.uncat = txn(db, 'chk', '2032-09-14', -333.33, 'Unknown shop');
   ids.guess = txn(db, 'chk', '2032-10-11', -120, 'Mystery merchant');
-  db.prepare("INSERT INTO transaction_category_guesses (transaction_id, category, model, updated_at) VALUES (?, 'Shopping', 'synthetic', '2032-10-12T00:00:00Z')").run(ids.guess);
+  const proposal={category:'Shopping',confidence:.99,probabilities:{Shopping:.99,Groceries:.01}};
+  db.prepare('INSERT INTO transaction_category_guesses VALUES (?,?,?,?)').run(ids.guess,JSON.stringify(proposal),JEV_MODEL,'2032-10-12T00:00:00Z');
+  const item=ask(db,{kind:'transaction_category',subject:String(ids.guess),question:'Check this transaction category',
+    options:[{id:'Shopping',label:'Shopping'},{id:'Groceries',label:'Groceries'}],context:{transactionId:ids.guess,guess:'Shopping',jev:proposal}});
+  recordAutoAnswer(db,item.id,'Shopping',{rule:'jev_category',evidence:{text:'Jev guess, 99% confident',refs:{confidence:.99,model:JEV_MODEL}}});
   txn(db, 'sav', '2032-10-31', 1.23, 'Interest', 'Income');
   ids.old = [1, 2, 3, 4, 5].map((m) => txn(db, 'old', `2032-${pad(m)}-20`, -90, 'Old account fee', 'Bills & Utilities'));
   // Never household spending: a brokerage fee and a business account's purchases.

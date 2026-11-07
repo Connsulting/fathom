@@ -1,3 +1,6 @@
+import { createJev } from '../categories/jev.mjs';
+import { createSpendLedger } from '../engine/runtime.mjs';
+import { guessClosedOptions } from '../ingest/jev.mjs';
 import { guessCategories } from '../categories/guess.mjs';
 // Job scheduler. Rules:
 // 1. Period keys come from the owner's local time (settings.timezone, default America/New_York; an
@@ -530,17 +533,22 @@ export function defaultHandlers({ publicUrl = null, simplefinFetch = null } = {}
       };
     },
     async 'confirm-guess'(ctx) {
-      const categories = await guessCategories(ctx.db, ctx.engine, { now: ctx.now });
+      const enabled=getSetting(ctx.db,'mode',null)==='real' && ctx.config?.engine!=='off' && getSetting(ctx.db,'engine',{on:true})?.on!==false;
+      const cap=getSetting(ctx.db,'cap',{usd:200})?.usd;
+      const jev=await createJev({keyFile:enabled ? ctx.config?.typesafeKeyFile : null,ledger:createSpendLedger(ctx.db),
+        monthlyCapUsd:Number.isFinite(cap)&&cap>=0?cap:0});
+      const categories = await guessCategories(ctx.db, jev, { now: ctx.now });
+      const closed = await guessClosedOptions(ctx.db, jev, { now: ctx.now });
       const out = await guessPending(ctx.db, ctx.engine, { now: ctx.now });
-      if (categories.costUsd) out.costUsd = (out.costUsd ?? 0) + categories.costUsd;
-      if (out.skipped && !categories.guessed && !categories.costUsd && !categories.stopped) {
+      out.costUsd = (out.costUsd ?? 0) + jev.stats().costUsd;
+      if (out.skipped && !categories.guessed && !closed.guessed && !jev.stats().costUsd && !categories.stopped && !closed.stopped) {
         const pending = ctx.db.prepare("SELECT count(*) AS n FROM confirm_items WHERE status = 'pending'").get().n;
         return { status: 'skipped', note: { pending } };
       }
       const sum = (key) => (out.batches ?? []).reduce((n, b) => n + (Number(b[key]) || 0), 0);
       return {
         costUsd: out.costUsd,
-        note: { batches: (out.batches ?? []).length, items: sum('items'), guessed: sum('guessed') + (categories.guessed ?? 0), stopped: Boolean(out.stopped || categories.stopped) },
+        note: { batches: (out.batches ?? []).length, items: sum('items'), guessed: sum('guessed') + (categories.guessed ?? 0) + closed.guessed, stopped: Boolean(out.stopped || categories.stopped || closed.stopped) },
       };
     },
   };
