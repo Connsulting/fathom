@@ -341,7 +341,7 @@ test.describe('tour on the private demo, desktop', () => {
     await page.keyboard.press('Control+K');
     const input = page.locator('input.h-qs-in');
     await expect(input).toBeFocused({ timeout: STEP_WAIT });
-    await page.keyboard.type('tour');
+    await page.keyboard.type('take the tour');
     const row = page.locator('#h-qs-list li.h-qs-o[data-qs-key="act:tour"]');
     await expect(row).toBeVisible();
     await expect(row).toHaveAttribute('aria-selected', 'true');
