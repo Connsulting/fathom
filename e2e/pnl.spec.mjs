@@ -249,7 +249,7 @@ test('PN1 @mobile confirmed spending ledgers appear apart from businesses with t
     const dir = state.dir();
     const db = state.track(await buildRealStore(dir));
     db.prepare("INSERT INTO pnl_lines (entity, period, category, amount, locator) VALUES ('Asters', '2026-10', 'Groceries', -120, ?)")
-      .run(JSON.stringify({ sheet: "Aster's Expenses", cells: ['D2'] }));
+      .run(JSON.stringify({ sheet: "Aster's - (Actual Expenses)", cells: ['D2'] }));
     await planRun(db);
     const q = db.prepare("SELECT id FROM confirm_items WHERE context LIKE '%pnl.ledgers%' AND status = 'pending'").get();
     answerItem(db, q.id, 'yes');

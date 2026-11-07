@@ -4,7 +4,7 @@ import { parseJson } from '../store/db.mjs';
 export function ledgerDisplayName(line) {
   const locator = typeof line.locator === 'string' ? parseJson(line.locator, {}) : line.locator;
   const sheet = locator?.sheet;
-  return String((typeof sheet === 'string' ? sheet.replace(/[\s:._-]+(?:actual[\s:._-]+)?(?:income|expenses?)[\s)\]}]*$/iu, '').trim() : '') || line.entity).trim();
+  return String((typeof sheet === 'string' ? sheet.replace(/[\s:._()[\]{}-]+(?:actual[\s:._()[\]{}-]+)?(?:income|expenses?)[\s)\]}]*$/iu, '').trim() : '') || line.entity).trim();
 }
 
 export function ledgerKind(facts, name, lines = []) {

@@ -604,7 +604,7 @@ test('PN1: P&L lists spending ledgers separately and restores original tab names
   const { db } = store(t);
   file(db);
   const id = line(db, 'Asters', '2032-03', 'Medical', -120);
-  db.prepare('UPDATE pnl_lines SET locator = ? WHERE id = ?').run(JSON.stringify({ sheet: "Aster's Expenses", cells: ['D2'] }), id);
+  db.prepare('UPDATE pnl_lines SET locator = ? WHERE id = ?').run(JSON.stringify({ sheet: "Aster's - (Actual Expenses)", cells: ['D2'] }), id);
   line(db, 'Example Studio', '2032-03', 'Income', 500);
   fact(db, 'pnl.ledgers', { "Aster's": { kind: 'spending' } });
   const entities = pnlEntities({ db, clock: CLOCK });
