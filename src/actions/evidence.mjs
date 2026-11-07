@@ -29,20 +29,29 @@ function dates(text) {
   return out;
 }
 
-function stated(value, text) {
+function stated(value, text, shape) {
   if (value === null) return /\b(clear|remove|unset|no target|no date)\b/i.test(text);
   if (typeof value === 'number') return statedAmounts(text).includes(value);
-  if (typeof value === 'boolean') return new RegExp(`\\b${value}\\b`, 'i').test(text);
+  if (typeof value === 'boolean') {
+    if (new RegExp(`\\b${value}\\b`, 'i').test(text)) return true;
+    const yes = /\byes\b/i.test(text), no = /\bno\b/i.test(text);
+    return value ? yes && !no : no && !yes;
+  }
+  if (shape?.type === 'choice') {
+    const escape = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const matches = shape.choices.filter(c => [c.value, c.label].some(label => new RegExp(`\\b${escape(label)}\\b`, 'i').test(text)));
+    return matches.length === 1 && matches[0].value === value;
+  }
   if (typeof value === 'string') return /^\d{4}-\d{2}-\d{2}$/.test(value)
     ? dates(text).includes(value) : text.toLowerCase().includes(value.toLowerCase());
-  if (value && typeof value === 'object') return Object.values(value).every(v => stated(v, text));
+  if (value && typeof value === 'object') return Object.entries(value).every(([k, v]) => stated(v, text, shape?.fields?.[k]));
   return false;
 }
 
-export function requireEvidence(ctx, value, { evidence, stored = [] } = {}) {
+export function requireEvidence(ctx, value, { evidence, stored = [], shape } = {}) {
   const statements = ownerStatements(ctx);
   const words = evidence ? statements.filter(s => s.includes(evidence)).map(() => evidence) : statements;
   const same = v => JSON.stringify(v) === JSON.stringify(value);
-  if (stored.some(same) || words.some(text => stated(value, text))) return;
+  if (stored.some(same) || words.some(text => stated(value, text, shape))) return;
   throw new ToolError('bad_input', 'Use a value you stated in this conversation or a stored value. Include the exact words as evidence.');
 }

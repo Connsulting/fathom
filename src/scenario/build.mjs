@@ -1,5 +1,5 @@
 import { listPreferences } from '../actions/preferences.mjs';
-import { window as childWindow } from '../jobs/triggers/new-child.mjs';
+import { expectedChildWindow } from '../shared/child-window.mjs';
 import { receiptMessages } from '../actions/receipts.mjs';
 // Store to scenario: assembles the CONTRACT.md scenario object from the store, with live state
 // merged in, plus the `live` key (see docs/architecture.md). Pure reads; never writes.
@@ -200,7 +200,7 @@ export function loadRecs(db, clock) {
   const accounts = db.prepare('SELECT * FROM accounts').all();
   const recs = db.prepare('SELECT * FROM recs ORDER BY sort, id').all().map(r => recFromRow(r, clock));
   if (getSetting(db, 'mode', null) === 'demo') {
-    const window = childWindow({ facts });
+    const window = expectedChildWindow(facts);
     const rec = recs.find(r => r.id === 'babyprep');
     if (rec && window) rec.window = { ...window, days: daysBetween(clock, window.close) };
   }

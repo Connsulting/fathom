@@ -2706,7 +2706,7 @@ hydrate beside the answer's work block, including notice or missing replies, and
 reachable. Undo restores the prior value and provenance, refuses another actor or a later conflicting
 edit, and replans facts. MCP-only undo tools use the matching scope. Ask gets the Undo button through
 `POST /api/actions/:id/undo`. A busy planner preserves the fact and receipt, reports planning pending,
-and queues planning again. Demo baby dates use the same deterministic new-child window calculation.
+and queues planning again. Ask queues replanning until the paid model round releases its engine lock, then drains that work before continuing; planner prose may safely call the same engine. Demo baby dates use the same deterministic new-child window calculation.
 
 `remember_preference` stores a short verbatim preference or definition. Settings shows it and allows
 editing or deletion through the same validation. Preferences enter the dynamic Ask prompt as household
@@ -2726,3 +2726,9 @@ Check these reuses Confirm cards and undo. Uncategorized and guessed transaction
 `node scripts/category-coverage.mjs <store-directory-or-file>` opens an existing instance through `openServedStore`, including its platform readiness gate and migrations, and prints counts only: rows per layer and bucket, Uncategorized rows and current queue size. It never prints transaction, account or merchant values.
 
 Category persistence uses `transaction_category_corrections` for personal transaction answers, `category_merchant_rules` for explicit merchant choices, `category_source_rules` for source-name bucket mappings, `transaction_category_guesses` for model attempts and `transaction_category_imports` for export enrichment evidence. These are additive tables; migration 023 does not rewrite transaction rows or existing undo logs.
+
+| Preference API | Input | Result |
+| --- | --- | --- |
+| `POST /api/preferences` | `{text}` | save a preference and return the scenario |
+| `POST /api/preferences/:id` | `{text}` | edit a preference and return the scenario |
+| `POST /api/preferences/:id/delete` | `{}` | delete a preference and return the scenario |

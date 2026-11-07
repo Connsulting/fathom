@@ -87,6 +87,14 @@ export async function undoAction(ctx, id, scope) {
 }
 
 export async function replanAction(ctx, receipt) {
+  if (typeof ctx.queueAfterTools === 'function') {
+    if (receipt) {
+      receipt.planningPending = true;
+      ctx.db.prepare('UPDATE action_receipts SET planning_pending = 1 WHERE id = ?').run(receipt.id);
+    }
+    ctx.queueAfterTools(() => replanAction({ ...ctx, queueAfterTools: null }, receipt));
+    return true;
+  }
   let pending = false;
   try {
     if (typeof ctx.replan !== 'function') throw new Error('planning unavailable');

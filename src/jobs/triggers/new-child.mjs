@@ -1,7 +1,7 @@
 // New child: an expected child, with the expected date as the window when the household gave one.
 
 import { isTrue, mineOf, padTasks, factDate } from './common.mjs';
-import { dayLabel } from '../planner/data.mjs';
+import { expectedChildWindow } from '../../shared/child-window.mjs';
 
 export const id = 'new-child';
 export const domain = 'family';
@@ -15,8 +15,7 @@ export const calcs = [];
 export const kb = [{ pack: 'kids-dependents', entry: 'expected-child' }, { pack: 'kids-dependents', entry: 'child-tax-credit' }];
 
 export function window(ctx) {
-  const due = factDate(ctx, 'household.expectedDate');
-  return due ? { close: due, label: dayLabel(due), hard: false } : null;
+  return expectedChildWindow(ctx.facts);
 }
 
 export function evaluate(ctx) {

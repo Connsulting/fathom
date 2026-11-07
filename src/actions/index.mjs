@@ -19,7 +19,7 @@ export async function recordFact(args, ctx) {
   const actorId = requireActor(ctx);
   const shape = answerShape(args.key);
   const prior = ctx.db.prepare('SELECT value FROM facts WHERE key = ?').get(args.key);
-  requireEvidence(ctx, args.value, { evidence: args.evidence, stored: prior ? [parse(prior.value, null)] : [] });
+  requireEvidence(ctx, args.value, { evidence: args.evidence, shape, stored: prior ? [parse(prior.value, null)] : [] });
   let receipt = null;
   await answerFacts(ctx.db, [{ key: args.key, value: args.value }], { now: new Date(ctx.now ?? Date.now()).toISOString(),
     channel: ctx.channel === 'mcp' ? 'mcp' : 'ask', actorId,
