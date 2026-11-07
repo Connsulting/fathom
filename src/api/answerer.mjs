@@ -8,14 +8,22 @@ import { listPreferences } from '../actions/preferences.mjs';
 // paragraphs are paragraph inner HTML (the handler wraps each in <p>); null means questionId
 // names no question in that conversation.
 //
-// Prompt assembly (buildChatPrompt): the static product rules plus the active packs' context go
-// in `system` (before the SDK dynamic boundary, prompt cached, no household data); the household
-// summary, the conversation context and today go in `systemDynamic`.
+// Prompt assembly (buildChatPrompt): the static product rules, then the answer style and the
+// spending guide (a separate section), plus the active packs' context go in `system` (before the
+// SDK dynamic boundary, prompt cached, no household data); the household summary, the
+// conversation context and today go in `systemDynamic`.
 //
 // Model output is untrusted. groundAnswer validates every scenario token itself, masks it, and
 // checks every remaining number against tool results and context data only (stored figures may
-// appear only as tokens). One corrective retry; what is still ungrounded is stored wrapped in
-// .fx-unverified. renderAnswer escapes everything except valid tokens and the spans it adds.
+// appear only as tokens). A negative number in a tool result also grounds its unsigned form, so
+// "$2,400" grounds on an outflow row of -2400. Each grounded literal names its source in plain
+// words, never a tool name; a transaction amount names its row ("your transactions: <account>,
+// <date>, <description>"), and a date in the prose matching a same-turn row date is a literal
+// with that row's label (other unsourced dates are unchecked, see groundAnswer). An unchecked figure stays in place, wrapped
+// in a neutral .fx-checking .fx-unchecked span titled "Not checked against your data". The answer
+// is regenerated once, with a corrective turn, only when two or more of its figures and more than
+// half of them are unchecked; what is still unchecked after that is neutralized the same way.
+// renderAnswer escapes everything except valid tokens and the spans it adds.
 // Every grounding source (the household summary, the conversation context, pack entry bodies and
 // each tool result) goes through one evidence sanitizer: identifier, label and citation keys are
 // dropped (ids, keys, names, titles, versions, curators, account masks and numbers, figure
@@ -36,18 +44,19 @@ import { listPreferences } from '../actions/preferences.mjs';
 // { type: 'text', text } (raw model text deltas, untrusted: the client escapes them and shows every
 // number as still being checked), { type: 'interim', text } (the text streamed so far in a tool
 // round, sent before that round's tools: it is working text, not the answer, and moves into the
-// work block) and { type: 'reset', draft?: true } (drop the streamed text: with draft set the answer
-// is being redone after a failed grounding check and the replaced text is kept as a draft note;
-// without it the engine restreams after the SDK superseded refused frames; a tool call does not
-// reset it). The returned reply is the only grounded result; nothing streamed is stored. A throwing
-// onEvent never fails the answer.
+// work block) and { type: 'reset' } (drop the streamed text: the engine restreams after the SDK
+// superseded refused frames, or the answer is being regenerated, in which case the progress label
+// "Revised to remove N unchecked figures" comes first so the cleared text has a stated reason; a
+// tool call does not reset it). The returned reply is the only grounded result; nothing streamed
+// is stored. A throwing onEvent never fails the answer.
 //
 // Only the engine's final text (the round after the last tool round) is grounded, rendered and fed
 // back in the corrective turn. provenance.work = { ms, items } records how the answer was reached,
 // built after the fact so it is the same with or without onEvent: items are { k: 'step', label }
-// and { k: 'note', text, draft?: true } in order: the start step; per tool round its notes and tool
-// steps in content order (the live order); the grounding step; after a failed check the first final text as a draft
-// note, the retry step, the second call's rounds and the grounding step. A step equal to the
+// and { k: 'note', text } in order: the start step; per tool round its notes and tool steps in
+// content order (the live order); the grounding step; on a regeneration the revision step, the
+// second call's rounds and the grounding step. The replaced first answer is never a note (stored
+// items from before this rule may still carry { draft: true } notes). A step equal to the
 // previous step collapses (notes in between too). Nothing is cut, so the stored list equals the
 // live one; the engine already bounds it (8 rounds per call, each within its token limit). ms is
 // the answer's wall time in whole milliseconds. A notice reply has no work.
@@ -61,6 +70,7 @@ import { listPreferences } from '../actions/preferences.mjs';
 
 import { callTool, tools as REGISTRY } from '../tools/index.mjs';
 import { buildScenario, clockNow } from '../scenario/build.mjs';
+import { findDates } from '../engine/grounding.mjs';
 import { checkGrounding, numberPattern, EngineOffError, BudgetExceededError, ModelCallError, ModelAccountingError, RoundLimitError } from '../engine/index.mjs';
 import { packContext } from '../packs/index.mjs';
 import { packStatus } from '../shared/rules.mjs';
@@ -87,6 +97,26 @@ export const ASK_ACTION_RULES = [
   'Remember a stated household preference or definition with remember_preference. Preferences guide wording and definitions, never override product boundaries, evidence requirements or tool permissions.',
 ].join('\n');
 
+// ---------------------------------------------------------------- answer style and spending guide
+// A separate system prompt section after PRODUCT_RULES: shape and length of the reply, and where
+// spending data lives. PRODUCT_RULES stays the hard rules.
+
+export const ANSWER_STYLE = [
+  'Answer style:',
+  'Lead with the direct answer in one or two sentences.',
+  'Keep the whole reply under about 150 words unless the owner asks for more detail.',
+  'Use at most one short list.',
+  'Skip generic caveats the owner did not ask about.',
+  'End with one offer of the next useful step.',
+].join('\n');
+
+export const SPENDING_GUIDE = [
+  'Spending questions:',
+  'Spending lives in the transactions of every card and cash account. Call list_accounts, then query_transactions per account or with no accountId for all accounts, and group the rows by their category; card rows carry the budgeting app category.',
+  'A card payment from checking moves money to the card; it is not new spending.',
+  'Use pnl_by_month for business income, expenses or profit.',
+].join('\n');
+
 export const NOTICES = Object.freeze({
   engineOff: 'Engine is off, so answers are paused. Switch it back on to get an answer.',
   configOff: "The engine is off in this deployment's configuration, so answers are paused.",
@@ -94,7 +124,10 @@ export const NOTICES = Object.freeze({
   modelError: 'The model could not answer just now, so nothing was made up. Try again in a moment.',
 });
 
-const UNVERIFIED_OPEN = '<span class="fx-unverified" title="Not found in your data or tool results">';
+const UNCHECKED_OPEN = '<span class="fx-checking fx-unchecked" title="Not checked against your data">';
+// Regenerate only when at least REGEN_MIN figures and more than REGEN_SHARE of all figures are unchecked.
+const REGEN_MIN = 2;
+const REGEN_SHARE = 0.5;
 const HISTORY_LIMIT = 20;
 const MAX_TOKENS = 1024;
 // Any brace pair that looks like a scenario token; valid ones also need a safe key.
@@ -120,7 +153,7 @@ function plainText(html) {
 }
 
 export function buildChatPrompt({ packContextText = '', summary = {}, context = null, history = [], question, today } = {}) {
-  const system = PRODUCT_RULES + '\n\n' + ASK_ACTION_RULES + '\n\n<knowledge_packs>\n' + packContextText + '\n</knowledge_packs>';
+  const system = PRODUCT_RULES + '\n\n' + ASK_ACTION_RULES + '\n\n' + ANSWER_STYLE + '\n\n' + SPENDING_GUIDE + '\n\n<knowledge_packs>\n' + packContextText + '\n</knowledge_packs>';
   let systemDynamic = '<household_summary>\n' + JSON.stringify(summary ?? {}) + '\n</household_summary>';
   if (context) systemDynamic += '\n<conversation_context>\n' + JSON.stringify(context) + '\n</conversation_context>';
   if (today) systemDynamic += `\nToday is ${today}.`;
@@ -276,11 +309,78 @@ function scrub(v, echoes = NO_ECHOES, key = undefined) {
 // Any grounding datum (household summary, conversation context, pack entry bodies) as evidence.
 const evidence = v => scrub(v);
 
-// A tool result as grounding evidence: the evidence sanitizer plus argument echoes (see isEcho).
-// Error results pass through (checkGrounding ignores them).
+// A query_transactions row's negative amount v becomes [v, -v], so an unsigned prose amount grounds
+// on an outflow row. No other value is mirrored: a loss never grounds the same amount as a profit.
+// It runs after scrub, so an identifier never grounds this way.
+function unsigned(v, key = undefined) {
+  if (typeof v === 'number') return key === 'amount' && v < 0 ? [v, -v] : v;
+  if (Array.isArray(v)) return v.map(x => unsigned(x, key));
+  if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, unsigned(x, k)]));
+  return v;
+}
+
+// A tool result as grounding evidence: the evidence sanitizer plus argument echoes (see isEcho),
+// then, for transactions, unsigned outflow amounts (see unsigned). Error results pass through
+// (checkGrounding ignores them).
 function groundingResult(r) {
   if (!r || typeof r !== 'object' || r.isError) return r;
-  return { name: r.name, result: scrub(r.result ?? null, argEchoes(r.args)) };
+  const result = scrub(r.result ?? null, argEchoes(r.args));
+  return { name: r.name, result: r.name === 'query_transactions' ? unsigned(result) : result };
+}
+
+// ---------------------------------------------------------------- source labels
+
+// Plain source labels by tool name, for literals a tool result grounds. Never the tool name itself.
+const TOOL_SOURCES = Object.freeze({
+  household_summary: 'your household summary',
+  get_facts: 'your stored facts',
+  list_accounts: 'your accounts',
+  query_transactions: 'your transactions',
+  list_positions: 'your holdings',
+  pnl_by_month: 'your monthly income and spending',
+  list_recommendations: 'your plan',
+  get_recommendation: 'the recommendation',
+  list_deadlines: 'your deadlines',
+  list_goals: 'your goals',
+  get_pace: 'your goal pace',
+  get_figures: 'your stored figures',
+  packs_status: 'your knowledge packs',
+  advisor_status: 'your advisor status',
+  list_packs: 'your knowledge packs',
+  get_pack_entry: 'a knowledge pack entry',
+  search_pack_entries: 'your knowledge packs',
+});
+const toolSource = name => (Object.hasOwn(TOOL_SOURCES, name) ? TOOL_SOURCES[name] : 'your data');
+
+const ROW_DATE = /^(\d{4})-(\d{2})-(\d{2})/;
+const oneLine = s => String(s ?? '').replace(/\s+/g, ' ').trim();
+
+// The plain objects in a raw tool result, depth first: its rows (and the result itself).
+function rowsOf(v, out = []) {
+  if (Array.isArray(v)) for (const x of v) rowsOf(x, out);
+  else if (v && typeof v === 'object') {
+    out.push(v);
+    for (const x of Object.values(v)) if (x && typeof x === 'object') rowsOf(x, out);
+  }
+  return out;
+}
+
+// The string leaves of a context datum under data keys (meta keys such as ids and titles skipped).
+function dateStrings(v, key = undefined, out = []) {
+  if (key !== undefined && isMetaKey(key)) return out;
+  if (typeof v === 'string') out.push(v);
+  else if (Array.isArray(v)) for (const x of v) dateStrings(x, key, out);
+  else if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) dateStrings(x, k, out);
+  return out;
+}
+
+// A row's source label: a transaction names its account, date and description; any other row
+// takes its tool's label.
+function rowSource(name, row, accountLabels) {
+  if (name !== 'query_transactions' || !row || typeof row.date !== 'string') return toolSource(name);
+  const account = accountLabels && row.accountId != null ? accountLabels.get(row.accountId) : undefined;
+  const parts = [account, row.date, row.description].map(oneLine).filter(Boolean);
+  return `${toolSource(name)}: ${parts.join(', ')}`;
 }
 
 function tokenValid(scenario, kind, key) {
@@ -294,15 +394,21 @@ function tokenValid(scenario, kind, key) {
 
 const KIND_NAMES = { f: 'figure', fk: 'figure', l: 'law', p: 'percent', n: 'name' };
 
-// groundAnswer(text, { scenario, toolResults, data, dataLabels? }) ->
-//   { ok, violations: [{text, index, reason}], figureKeys, literals: [{text, index, source}] }
+// groundAnswer(text, { scenario, toolResults, data, dataLabels?, accountLabels? }) ->
+//   { ok, violations: [{text, index, reason}], figureKeys, literals: [{text, index, source, date?}] }
 // Every token is validated here and masked with equal-length spaces (invalid ones are recorded
 // once as violations), then checkGrounding sees only tool results and context data, never the
 // stored figures, so a stored value typed as a literal is a violation. Tool results and every
-// datum go through the evidence sanitizer first, so identifiers and labels never ground. Each grounded literal is
-// attributed to the first single source that grounds it: a tool result (by tool name), else a
-// context datum (dataLabels[i], default "your data").
-export function groundAnswer(text, { scenario, toolResults = [], data = [], dataLabels = [] } = {}) {
+// datum go through the evidence sanitizer first, so identifiers and labels never ground. Each
+// grounded literal is attributed to the first single source that grounds it: a tool result (a
+// plain label, see TOOL_SOURCES; a query_transactions literal names the first row that grounds it,
+// with the account label from accountLabels, a Map of account id to label), else a context datum
+// (dataLabels[i], default "your data"). A date in the prose whose month and day (and year, when
+// written) equal a date in a tool result row (date, asOf) is a literal too ({ date: true }) with that row's
+// label, and one the context data states is a literal with that datum's label; any other date is a
+// violation with { date: true } (neutralized, never counted toward a regeneration). Literals are in
+// text order.
+export function groundAnswer(text, { scenario, toolResults = [], data = [], dataLabels = [], accountLabels } = {}) {
   const prose = String(text ?? '');
   const violations = [];
   const figureKeys = new Set();
@@ -320,11 +426,12 @@ export function groundAnswer(text, { scenario, toolResults = [], data = [], data
   for (const m of listMarkerSpans(masked)) {
     unlisted = unlisted.slice(0, m.index) + '•' + ' '.repeat(m.length - 1) + unlisted.slice(m.index + m.length);
   }
-  return groundMasked(unlisted, { scenario, toolResults, data, dataLabels, violations, figureKeys });
+  return groundMasked(unlisted, { scenario, toolResults, data, dataLabels, accountLabels, violations, figureKeys });
 }
 
-function groundMasked(masked, { scenario, toolResults, data, dataLabels, violations, figureKeys }) {
-  const results = (Array.isArray(toolResults) ? toolResults : []).map(groundingResult);
+function groundMasked(masked, { scenario, toolResults, data, dataLabels, accountLabels, violations, figureKeys }) {
+  const raws = Array.isArray(toolResults) ? toolResults : [];
+  const results = raws.map(groundingResult);
   const values = (Array.isArray(data) ? data : [data]).map(evidence);
   const unsupported = checkGrounding(masked, { toolResults: results, data: values }).violations;
   if (unsupported.length) {
@@ -340,16 +447,58 @@ function groundMasked(masked, { scenario, toolResults, data, dataLabels, violati
   const spans = checkGrounding(masked, {}).violations.filter(v => !unsupportedAt.has(v.index));
   if (spans.length) {
     const sources = [
-      ...results.map(r => ({ label: String((r && r.name) || 'a tool'), check: () => checkGrounding(masked, { toolResults: [r] }) })),
+      ...results.map(r => ({ label: toolSource(r && r.name), check: () => checkGrounding(masked, { toolResults: [r] }) })),
       ...values.map((d, i) => ({ label: String(dataLabels[i] || 'your data'), check: () => checkGrounding(masked, { data: [d] }) })),
     ];
     const misses = sources.map(() => null);
+    // Per transaction result, its dated rows with the prose offsets each one leaves unsupported.
+    const rowChecks = [];
+    const sourceOf = (i, span) => {
+      const raw = raws[i];
+      if (!(i < results.length) || !raw || raw.isError || raw.name !== 'query_transactions') return sources[i].label;
+      rowChecks[i] ??= rowsOf(raw.result).filter(row => typeof row.date === 'string').map(row => ({ row, misses: null }));
+      const echoes = argEchoes(raw.args);
+      for (const c of rowChecks[i]) {
+        c.misses ??= new Set(checkGrounding(masked, { toolResults: [unsigned(scrub(c.row, echoes))] }).violations.map(v => v.index));
+        if (!c.misses.has(span.index)) return rowSource(raw.name, c.row, accountLabels);
+      }
+      return sources[i].label;
+    };
     for (const span of spans) {
       for (let i = 0; i < sources.length; i++) {
         misses[i] ??= new Set(sources[i].check().violations.map(v => v.index));
-        if (!misses[i].has(span.index)) { literals.push({ text: span.text, index: span.index, source: sources[i].label }); break; }
+        if (!misses[i].has(span.index)) { literals.push({ text: span.text, index: span.index, source: sourceOf(i, span) }); break; }
       }
     }
+  }
+
+  // Dates are not checked figures; one matching a date in a same-turn row (a YYYY-MM-DD string
+  // under any data key: date, asOf, dataThrough) is sourced to that row.
+  // A date the context data states (an ISO string under a data key, or a date written in its prose:
+  // the household summary's today, a pack entry's deadline) is sourced to that datum. Any other date
+  // is a violation with { date: true }: neutralized in place, never counted toward a regeneration.
+  const dates = findDates(masked);
+  if (dates.length) {
+    const isoParts = v => { const p = ROW_DATE.exec(v); return p ? { year: Number(p[1]), month: Number(p[2]), day: Number(p[3]) } : null; };
+    const dated = raws.filter(r => r && !r.isError).flatMap(r => rowsOf(r.result)
+      .flatMap(row => Object.entries(row)
+        .filter(([k, v]) => typeof v === 'string' && !isMetaKey(k))
+        .map(([, v]) => ({ source: () => rowSource(r.name, row, accountLabels), parts: isoParts(v) }))
+        .filter(x => x.parts)));
+    (Array.isArray(data) ? data : [data]).forEach((datum, i) => {
+      const label = String(dataLabels[i] || 'your data');
+      for (const v of dateStrings(datum)) {
+        const parts = /\s/.test(v.trim()) ? findDates(v).map(d => ({ year: d.year, month: d.month, day: d.day })) : [isoParts(v)];
+        for (const p of parts) if (p) dated.push({ source: () => label, parts: p });
+      }
+    });
+    for (const d of dates) {
+      const hit = dated.find(({ parts }) => parts.month === d.month && parts.day === d.day
+        && (d.year === null || parts.year === d.year));
+      if (hit) literals.push({ text: d.text, index: d.index, source: hit.source(), date: true });
+      else violations.push({ text: d.text, index: d.index, reason: 'date absent from sources', date: true });
+    }
+    literals.sort((a, b) => a.index - b.index);
   }
 
   const seen = new Set();
@@ -373,23 +522,25 @@ function escapeKeepingTokens(segment) {
 
 // renderAnswer(text, violations, literals = []) -> [block]: paragraph inner HTML, or a complete
 // <ul>/<ol> list block (markdownBlocks).
-// Violations are wrapped in .fx-unverified (an invalid token is escaped inside it, so it never
-// resolves); bound literals in .fx-src with data-src the literal's index and a "From" title.
+// Violations are neutralized in place: wrapped in .fx-checking .fx-unchecked, the neutral style
+// streamed numbers use, titled "Not checked against your data" (an invalid token is escaped inside
+// it, so it never resolves); bound literals in .fx-src with data-src the literal's index and a
+// "From" title. Stored answers from before this rule keep their .fx-unverified spans.
 export function renderAnswer(text, violations = [], literals = []) {
   const prose = String(text ?? '');
   const marks = [
-    ...violations.map(v => ({ start: v.index, end: v.index + v.text.length, kind: 'unverified' })),
+    ...violations.map(v => ({ start: v.index, end: v.index + v.text.length, kind: 'unchecked' })),
     ...literals.map((l, n) => ({ start: l.index, end: l.index + l.text.length, kind: 'src', n, source: l.source })),
   ].filter(m => Number.isInteger(m.start) && m.start >= 0 && m.end <= prose.length && m.end > m.start)
-    .sort((a, b) => a.start - b.start || (a.kind === 'unverified' ? -1 : 1));
+    .sort((a, b) => a.start - b.start || (a.kind === 'unchecked' ? -1 : 1));
   let html = '';
   let at = 0;
   for (const m of marks) {
     if (m.start < at) continue;
     html += escapeKeepingTokens(prose.slice(at, m.start));
     const inner = escapeUserText(prose.slice(m.start, m.end));
-    html += m.kind === 'unverified'
-      ? `${UNVERIFIED_OPEN}${inner}</span>`
+    html += m.kind === 'unchecked'
+      ? `${UNCHECKED_OPEN}${inner}</span>`
       : `<span class="fx-src" data-src="${m.n}" title="From ${escapeUserText(m.source)}">${inner}</span>`;
     at = m.end;
   }
@@ -426,17 +577,17 @@ export const PROGRESS_LABELS = Object.freeze({
 });
 export const PROGRESS_START = 'Reading your household summary';
 export const PROGRESS_GROUNDING = 'Checking every number against your data';
-export const PROGRESS_RETRY = 'Rechecking the numbers';
 const PROGRESS_OTHER = 'Looking at your data';
+// The one step a regeneration shows, before the replaced text clears.
+const revisedLabel = n => `Revised to remove ${n} unchecked figure${n === 1 ? '' : 's'}`;
 
 export const progressLabel = name => (Object.hasOwn(PROGRESS_LABELS, name) ? PROGRESS_LABELS[name] : PROGRESS_OTHER);
 
 // A safe emitter: progress labels deduplicated in a row, a reset only after text, a throwing
 // listener ignored. Engine events ({ type: 'tool', name } / { type: 'text', text } /
 // { type: 'interim', text } / { type: 'reset' }) go through engineEvent. A tool call does not reset
-// streamed text; an interim event moves it into the work block. reset({ draft: true }) is the
-// grounding retry (the client keeps the replaced text as a draft note); the engine's restream after
-// superseded frames resets without the flag.
+// streamed text; an interim event moves it into the work block. A reset is always plain: the
+// engine's restream after superseded frames, or a regeneration right after its revision step.
 function streamer(onEvent) {
   if (typeof onEvent !== 'function') return { progress() {}, reset() {}, engineEvent: undefined };
   let lastLabel = null;
@@ -444,7 +595,7 @@ function streamer(onEvent) {
   const send = e => { try { onEvent(e); } catch { /* the stream never fails an answer */ } };
   const out = {
     progress(label) { if (label !== lastLabel) { lastLabel = label; send({ type: 'progress', label }); } },
-    reset({ draft = false } = {}) { if (texted) { texted = false; send(draft ? { type: 'reset', draft: true } : { type: 'reset' }); } },
+    reset() { if (texted) { texted = false; send({ type: 'reset' }); } },
     engineEvent(e) {
       if (!e || typeof e !== 'object') return;
       if (e.type === 'tool') out.progress(progressLabel(String(e.name || '')));
@@ -470,9 +621,9 @@ function workList() {
     step(label) {
       if (label !== lastStep) { lastStep = label; items.push({ k: 'step', label }); }
     },
-    note(text, draft = false) {
+    note(text) {
       const t = String(text ?? '').trim();
-      if (t) items.push({ k: 'note', text: t, ...(draft ? { draft: true } : {}) });
+      if (t) items.push({ k: 'note', text: t });
     },
     // Each tool round of an engine result: its notes and tool steps in content order (parts), so
     // the stored order equals the live order.
@@ -545,7 +696,8 @@ export function whatIfOwnerText(def) {
 export function createLiveAnswerer({ engine, packs } = {}) {
   if (!engine || typeof engine.call !== 'function') throw new TypeError('createLiveAnswerer needs an engine');
 
-  // One grounded model answer: call, ground, retry once with a corrective turn, render.
+  // One grounded model answer: call, ground, regenerate once with a corrective turn when most
+  // figures are unchecked (needsRevision), render.
   async function run({ db, scenario, now, question, context, history, baseRefs, fakeArgs, actions = false, onEvent, actionContext = null }) {
     if (!engine.isOn()) return offNotice(engine);
     const t0 = performance.now();
@@ -571,7 +723,25 @@ export function createLiveAnswerer({ engine, packs } = {}) {
     const dataLabels = ['household summary', 'conversation context', 'knowledge pack entries'];
     const resultsOf = res => (res && Array.isArray(res.toolResults) ? res.toolResults : []);
     const textOf = res => stripSources(res.text);
-    const ground = (res, toolResults) => groundAnswer(textOf(res), { scenario, toolResults, data, dataLabels });
+    // Account labels for transaction literals, read the way list_accounts names them, once.
+    let accountLabels;
+    const labelsFor = async toolResults => {
+      if (accountLabels || !toolResults.some(r => r && !r.isError && r.name === 'query_transactions')) return accountLabels;
+      try {
+        accountLabels = new Map((await callTool('list_accounts', {}, { db, now })).map(a => [a.id, a.name]));
+      } catch { accountLabels = new Map(); }
+      return accountLabels;
+    };
+    const ground = async (res, toolResults) => groundAnswer(textOf(res),
+      { scenario, toolResults, data, dataLabels, accountLabels: await labelsFor(toolResults) });
+    // Regenerate only when REGEN_MIN or more figures and more than REGEN_SHARE of all figures are
+    // unchecked. Figures: violations, grounded number literals and valid figure tokens, dates excluded.
+    const needsRevision = (res, g) => {
+      const tokens = [...textOf(res).matchAll(TOKEN_LIKE)].filter(m => m[1] !== 'n' && tokenValid(scenario, m[1], m[2])).length;
+      const unchecked = g.violations.filter(v => !v.date).length;
+      const figures = unchecked + g.literals.filter(l => !l.date).length + tokens;
+      return unchecked >= REGEN_MIN && unchecked / figures > REGEN_SHARE;
+    };
 
     const actionReply = reply => actionContext?.turnId ? { ...reply, provenance: { ...reply.provenance, actionTurn: actionContext.turnId } } : reply;
     let first;
@@ -581,15 +751,15 @@ export function createLiveAnswerer({ engine, packs } = {}) {
     work.step(PROGRESS_GROUNDING);
     let chosen = first;
     let toolResults = resultsOf(first);
-    let grounding = ground(first, toolResults);
-    let retried = false;
+    let grounding = await ground(first, toolResults);
+    let revised = 0;
     let costUsd = first.costUsd || 0;
-    if (!grounding.ok) {
-      retried = true;
-      stream.reset({ draft: true });
-      stream.progress(PROGRESS_RETRY);
-      work.note(first.text, true);
-      work.step(PROGRESS_RETRY);
+    if (needsRevision(first, grounding)) {
+      // The step streams before the reset, so the cleared text has a stated reason.
+      revised = grounding.violations.filter(v => !v.date).length;
+      stream.progress(revisedLabel(revised));
+      stream.reset();
+      work.step(revisedLabel(revised));
       const list = grounding.violations.map(v => v.text).join(', ');
       const earlier = resultsOf(first).map(r => ({ name: r.name, args: r.args ?? {}, result: r.result ?? null,
         ...(r.isError ? { isError: true } : {}) }));
@@ -604,7 +774,7 @@ export function createLiveAnswerer({ engine, packs } = {}) {
         costUsd += second.costUsd || 0;
         chosen = second;
         toolResults = [...resultsOf(first), ...resultsOf(second)];
-        grounding = ground(second, toolResults);
+        grounding = await ground(second, toolResults);
       } catch (e) {
         // Never the first, ungrounded answer: the engine recorded each completed round's spend.
         return actionReply(noticeFor(e, engine));
@@ -630,7 +800,8 @@ export function createLiveAnswerer({ engine, packs } = {}) {
           ...(context && Array.isArray(context.entries) ? context.entries.map(e => e.title) : [])]
           .filter(title => lower.includes(title.toLowerCase()))),
         literals: grounding.literals.map(l => ({ text: l.text, source: l.source })),
-        grounding: { ok: grounding.ok, retried, unverified: grounding.violations.map(v => v.text) },
+        grounding: { ok: grounding.ok, retried: revised > 0, unverified: grounding.violations.map(v => v.text),
+          ...(revised ? { revised } : {}) },
         costUsd: Number(costUsd.toFixed(6)),
         work: { ms: Math.max(0, Math.round(performance.now() - t0)), items: work.items },
       },
