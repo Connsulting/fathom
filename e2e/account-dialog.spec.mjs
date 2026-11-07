@@ -2,16 +2,16 @@
 // same dialog style as a recommendation. Rename in place, sources and freshness, balance, and a
 // read-only transaction list with a text filter and a date range. #/account/<id> survives reload.
 
-import { resolve } from 'node:path';
 import { test, expect, resetDemo, gotoRoute, recDialog, closeDialogWithX, REMOTE } from './helpers.mjs';
-import { openDb, setSetting, DB_FILE } from '../src/store/db.mjs';
-import { dataKeyFor } from '../src/ingest/simplefin.mjs';
+import { setSetting } from '../src/store/db.mjs';
+import { withLocalHousehold } from './local-store.mjs';
 import { seedDuplicate as seedDuplicateRows } from '../test/helpers/account-merge.mjs';
 import { refreshMergedAccounts } from '../src/ingest/account-merge.mjs';
 
 const ID = 'a_biz';
-// The demo's business checking account is connected with a synthetic four digit mask.
-const BIZ_LABEL = /^Business checking ending \d{4}$/;
+// The demo's business checking account is connected with a synthetic four digit mask. Its label is the
+// business's name, its name and the mask; the mask is also its own field in the dialog.
+const BIZ_LABEL = /^Northbeam Labs Business checking \(\d{4}\)$/;
 
 // Every transaction of the account, newest first, read through the paged API.
 async function firstTransactions(request) {
@@ -42,11 +42,12 @@ test.describe('account dialog', { tag: '@ad-acN' }, () => {
     await resetDemo(request);
   });
 
-  test('opens from Accounts and Money, with the header facts, sources and balance', async ({ page }) => {
+  test('opens from Accounts and Money, with the header facts, sources and balance', { tag: '@acctnames-ac3' }, async ({ page }) => {
     await openFromAccounts(page);
     const dlg = recDialog(page);
     await expect(dlg).toHaveAttribute('aria-modal', 'true');
     await expect(dlg.locator('#h-dlg-t')).toHaveText(BIZ_LABEL);
+    await expect(dlg.locator('.h-ad-last4')).toHaveText(/^Last 4 \d{4}$/);
     await expect(dlg.locator('.h-ad-facts')).toContainText('Mirrored');
     await expect(dlg.locator('.h-ad-sources')).toBeVisible();
     await expect(dlg.locator('.h-ad-sources li').first()).toBeVisible();
@@ -75,9 +76,9 @@ test.describe('account dialog', { tag: '@ad-acN' }, () => {
     await dlg.locator('[data-dlg-rename]').first().click();
     await dlg.locator('[data-dlg-name]').fill('Studio operating');
     await page.keyboard.press('Enter');
-    await expect(dlg.locator('#h-dlg-t')).toHaveText(/^Studio operating ending \d{4}$/);
+    await expect(dlg.locator('#h-dlg-t')).toHaveText(/^Northbeam Labs Studio operating \(\d{4}\)$/);
     await closeDialogWithX(page);
-    await expect(page.locator(`[data-account="${ID}"] .h-acc-name`)).toHaveText(/^Studio operating ending \d{4}$/);
+    await expect(page.locator(`[data-account="${ID}"] .h-acc-name`)).toHaveText(/^Northbeam Labs Studio operating \(\d{4}\)$/);
   });
 
   test('transactions: newest first, filter by text and by date range, amounts carry a source', async ({ page, request }) => {
@@ -167,16 +168,12 @@ test.describe('account dialog', { tag: '@ad-acN' }, () => {
 // A connected account that looks like one already imported from a file, as the merge change seeds it.
 async function seedDuplicate(request) {
   await resetDemo(request);
-  const dataDir = resolve(process.env.E2E_DATA || '.e2e-data');
-  const db = openDb(resolve(dataDir, DB_FILE));
-  try {
-    setSetting(db, 'clock', '2032-03-10');
-    const key = await dataKeyFor(db, { dataDir });
-    const s = { db, config: { dataDir }, key, opts: (engine, extra = {}) => ({ config: { dataDir }, key, engine, now: '2032-03-10T12:00:00.000Z', ...extra }) };
+  return withLocalHousehold('2032-03-10T12:00:00.000Z', async s => {
+    setSetting(s.db, 'clock', '2032-03-10');
     const pair = await seedDuplicateRows(s, { sure: true });
-    refreshMergedAccounts(db, { now: '2032-03-10T12:00:00.000Z' });
+    refreshMergedAccounts(s.db, { now: '2032-03-10T12:00:00.000Z' });
     return pair;
-  } finally { db.close(); }
+  });
 }
 
 test.describe('account dialog and duplicates', { tag: '@ad-acN' }, () => {

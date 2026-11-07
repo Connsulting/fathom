@@ -9,7 +9,9 @@ import { planRun } from '../helpers/plan.mjs';
 import { buildScenario, loadRecs, loadContent } from '../../src/scenario/build.mjs';
 import { needsYou } from '../../src/shared/rules.mjs';
 import { solo401kRoom, payrollTax } from '../../src/calc/index.mjs';
-import { openStore } from '../../src/server.mjs';
+import { createInstance } from '../../src/platform/db.mjs';
+import { seedDemo } from '../../demo/seed.mjs';
+import { instanceSecretsOf } from '../helpers/server.mjs';
 import demo from '../../demo/scenario.mjs';
 import {
   scratch, addFact, contentValue, figureRow, recRow, activeRecIds, SCORP, SYNTH,
@@ -252,8 +254,12 @@ describe('war games', () => {
   });
 
   test('AC6: a stored war-game figure wins over the derived value, and the demo store is unchanged (R17)', async () => {
+    // A fresh demo instance, created and seeded as the server creates one on an empty data directory.
     const dir = S.dir();
-    const { db: demoDb, platform } = openStore({ dataDir: dir, demo: 'auto' });
+    const { secrets } = await instanceSecretsOf(dir, 'demo');
+    const platformKey = secrets.platformKey();
+    const { db: demoDb, platform } = createInstance(dir, { mode: 'demo', init: seedDemo, platformKey });
+    platformKey.fill(0);
     S.track(platform);
     S.track(demoDb);
     assert.equal(demoDb.prepare("SELECT count(*) AS n FROM figures WHERE key LIKE 'wg.%'").get().n, 0, 'demo stores no wg rows');

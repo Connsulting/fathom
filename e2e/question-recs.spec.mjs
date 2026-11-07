@@ -3,12 +3,13 @@ import { mkdirSync, rmSync, existsSync } from 'node:fs';
 import { resolve, basename, dirname } from 'node:path';
 import { createServer } from 'node:net';
 import { buildRealStore } from '../test/helpers/real-store.mjs';
+import { secretEnv, secretsFor } from '../test/helpers/server.mjs';
 import { planRun } from '../test/helpers/plan.mjs';
 import { startServer } from '../src/server.mjs';
 import { loadConfig } from '../src/config.mjs';
 import { createAuthStore } from '../src/auth/store.mjs';
 
-let app, session, origin, dataDir;
+let app, session, origin, dataDir, store;
 const supplied = !!(process.env.BASE_URL || process.env.FATHOM_SMOKE_BASE_URL);
 const ownLocal = process.env.QRECS_LOCAL === '1';
 const clock = '2026-11-05';
@@ -36,21 +37,23 @@ test.describe('answerable questions on the synthetic planning household', () => 
     const port = socket.address().port;
     await new Promise(done => socket.close(done));
     origin = `http://localhost:${port}`;
-    app = await startServer(loadConfig({ FATHOM_DATA: dataDir, FATHOM_DEMO: '0', FATHOM_ENGINE: 'off', FATHOM_HOST: 'localhost', FATHOM_PORT: String(port), FATHOM_PUBLIC_URL: origin, FATHOM_CLOCK: clock }));
+    app = await startServer(loadConfig({ FATHOM_DATA: dataDir, FATHOM_DEMO: '0', FATHOM_ENGINE: 'off', FATHOM_HOST: 'localhost', FATHOM_PORT: String(port), FATHOM_PUBLIC_URL: origin, FATHOM_CLOCK: clock, ...secretEnv(secretsFor(dataDir)) }));
     const auth = createAuthStore(app.platform);
     const { user, token } = auth.invite(auth.servedHousehold().id, 'owner@example.test', { role: 'admin' });
     auth.consumeInvitation(token, user.id);
     auth.markEnrolled(user.id);
     session = auth.createSession(user.id);
+    // The served household's own store, through the server's runtime registry.
+    store = app.runtimes.get(auth.servedHousehold().id).db;
   });
   test.afterAll(async () => {
     if (app) await app.close();
     if (app && dataDir) rmSync(dataDir, { recursive: true, force: true });
   });
   test.beforeEach(async ({ context }) => {
-    app.db.prepare("DELETE FROM facts WHERE key = 'accounts.va529'").run();
+    store.prepare("DELETE FROM facts WHERE key = 'accounts.va529'").run();
     expect((await post('/api/jobs/plan/run', {})).status).toBe(200);
-    app.db.prepare("UPDATE recs SET status = CASE WHEN id = 'va529' THEN 'proposed' ELSE 'dismissed' END").run();
+    store.prepare("UPDATE recs SET status = CASE WHEN id = 'va529' THEN 'proposed' ELSE 'dismissed' END").run();
     await context.addCookies([{ name: '__Host-fathom-session', value: session.token, domain: 'localhost', path: '/', secure: true, httpOnly: true, sameSite: 'Lax' }]);
     await context.route(/^https:\/\/fonts\.(googleapis|gstatic)\.com\//, route => route.fulfill({ status: 200, body: '' }));
   });
@@ -63,12 +66,12 @@ test.describe('answerable questions on the synthetic planning household', () => 
       const container = surface === 'home' ? page.locator('article.h-next') : surface === 'dialog' ? page.locator('.h-dlg') : page.locator('article.h-row').filter({ has: page.locator('[data-go="rec"][data-id="va529"]') });
       const form = container.locator('[data-rec-answers="va529"]');
       await expect(form).toBeVisible();
-      await expect(container).toContainText('Is College fund ending 3333 a Virginia plan?');
+      await expect(container).toContainText('Is College fund (3333) a Virginia plan?');
       await expect(container.getByRole('button', { name: 'Done', exact: true })).toHaveCount(0);
       await expect(form.getByRole('button', { name: 'Not now', exact: true })).toBeVisible();
       await expect(form.getByRole('button', { name: 'Ask', exact: true })).toBeVisible();
-      await form.getByRole('group', { name: 'Is College fund ending 3333 a Virginia plan?', exact: true }).getByLabel('Yes', { exact: true }).check();
-      await form.getByRole('group', { name: 'Is the owner of College fund ending 3333 age 70 or older?', exact: true }).getByLabel('No', { exact: true }).check();
+      await form.getByRole('group', { name: 'Is College fund (3333) a Virginia plan?', exact: true }).getByLabel('Yes', { exact: true }).check();
+      await form.getByRole('group', { name: 'Is the owner of College fund (3333) age 70 or older?', exact: true }).getByLabel('No', { exact: true }).check();
       await form.getByRole('spinbutton').fill('0');
       await expect(form.getByRole('spinbutton')).toHaveAttribute('step', '0.01');
       await expect(form).toContainText('USD');
@@ -118,7 +121,7 @@ test.describe('answerable questions on the synthetic planning household', () => 
     expect(refused.status).toBe(409);
     await form.getByRole('button', { name: 'Not now', exact: true }).click();
     await expect(page.locator('article.h-next [data-rec-answers="va529"]')).toHaveCount(0);
-    expect(app.db.prepare("SELECT value FROM facts WHERE key = 'accounts.va529'").get()).toBeUndefined();
+    expect(store.prepare("SELECT value FROM facts WHERE key = 'accounts.va529'").get()).toBeUndefined();
     await page.goto(`${origin}/#/rec/va529`);
     await expect(page.locator('.h-dlg [data-rec-answers="va529"]')).toBeVisible();
   });

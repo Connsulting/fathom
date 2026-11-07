@@ -32,6 +32,13 @@ import { guessCategories } from '../categories/guess.mjs';
 // 9. soon(jobId, reason, {immediate}) debounces triggers: each call restarts a debounceMs timer
 //    (default 30 s) and the job is triggered once when it fires, or at once when immediate. stop()
 //    drops a pending one. Confirm answers use it so a burst of answers plans once.
+// 10. allowed() (the household's outbound jobs flag) is checked in the single claim path, before
+//    the job_runs row is claimed, so ticks, triggers, debounced and pending reruns and runNow all
+//    pass it: while it is false nothing is claimed or run, ticks and triggers do nothing and runNow
+//    throws SchedulerError('paused'). Ticks skip before any write (job rows, labels, the lease),
+//    and jobs() lists without refreshing job rows while paused.
+// 11. Handlers get ctx.household, the household context (household() at run time), beside db,
+//    config, engine and transport, all of that one household.
 
 import { getSetting } from '../store/db.mjs';
 import { isIsoDate } from '../scenario/build.mjs';
@@ -64,7 +71,7 @@ const JOB_SORT = 100;
 
 export class SchedulerError extends Error {
   constructor(code) {
-    super({ unknown_job: 'No such job', running: 'That job is already running', locked: 'Another scheduler holds the job lock' }[code] || 'Scheduler error');
+    super({ unknown_job: 'No such job', running: 'That job is already running', locked: 'Another scheduler holds the job lock', paused: 'Outbound jobs are paused' }[code] || 'Scheduler error');
     this.name = 'SchedulerError';
     this.code = code;
   }
@@ -224,10 +231,11 @@ const isUniqueViolation = (e) => e && (e.errcode === 2067 || e.errcode === 1555 
 // ---------------------------------------------------------------- scheduler
 
 export function createScheduler({
-  db, config = {}, engine = null, handlers = {}, transport = null, now = () => new Date(),
+  db, config = {}, engine = null, handlers = {}, transport = null, now = () => new Date(), allowed = () => true, household = () => null,
   tickMs = 60000, leaseMs = 300000, drainMs = 30000, debounceMs = 30000, holder = `fathom-${process.pid}`, log = console,
 } = {}) {
   if (!db) throw new TypeError('A store is required');
+  if (typeof allowed !== 'function' || typeof household !== 'function') throw new TypeError('Invalid scheduler admission');
   const handled = JOBS.filter((j) => typeof handlers[j.id] === 'function');
   const byId = new Map(handled.map((j) => [j.id, j]));
   const fixed = config && isIsoDate(config.clock) ? config.clock : null;
@@ -307,6 +315,7 @@ export function createScheduler({
 
   // Claims (jobId, key) and runs the handler. Returns the finished run, or null when already claimed.
   async function executeOnce(job, { key, trigger, t, zone }) {
+    if (allowed() !== true) throw new SchedulerError('paused');
     let id;
     try {
       id = q.claim.get(job.id, t.toISOString(), key, trigger).id;
@@ -325,7 +334,7 @@ export function createScheduler({
     let cost = null;
     let note = null;
     try {
-      const ctx = { db, config, engine, transport, now: t.toISOString(), clock: clockFor(t, zone), periodKey: key, trigger, jobRunId: id, triggerJob: (jobId) => triggerJob(jobId, 'ingest') };
+      const ctx = { db, config, engine, transport, household: household(), now: t.toISOString(), clock: clockFor(t, zone), periodKey: key, trigger, jobRunId: id, triggerJob: (jobId) => triggerJob(jobId, 'ingest') };
       const out = (await handlers[job.id](ctx)) || {};
       if (out.status === 'skipped') status = 'skipped';
       if (Number.isFinite(out.costUsd) && out.costUsd >= 0) cost = out.costUsd;
@@ -346,7 +355,7 @@ export function createScheduler({
     if (again && !stopping) {
       pending.delete(job.id);
       // Not awaited: the finished run's caller must not wait on the rerun.
-      runOff(job.id, again).catch(() => { log.log(`fathom: job ${job.id} error store`); });
+      runOff(job.id, again).catch((e) => { if (!(e instanceof SchedulerError)) log.log(`fathom: job ${job.id} error store`); });
     }
     return result;
   }
@@ -354,6 +363,7 @@ export function createScheduler({
   async function tickOnce() {
     if (stopping) return;
     const t = at();
+    if (allowed() !== true) return;
     ensureJobs(t);
     if (!lease(t)) return;
     const zone = tz();
@@ -362,7 +372,8 @@ export function createScheduler({
       if (running.has(job.id)) continue;
       try {
         await execute(job, { key: periodKey(job.schedule, partsAt(t, zone)), trigger: 'scheduled', t, zone });
-      } catch {
+      } catch (e) {
+        if (e instanceof SchedulerError && e.code === 'paused') break;
         log.log(`fathom: job ${job.id} error store`);
       }
     }
@@ -379,6 +390,7 @@ export function createScheduler({
     if (!job) throw new SchedulerError('unknown_job');
     if (running.has(jobId)) throw new SchedulerError('running');
     const t = at();
+    if (allowed() !== true) throw new SchedulerError('paused');
     if (stopping || !lease(t)) throw new SchedulerError('locked');
     ensureJobs(t);
     const zone = tz();
@@ -457,7 +469,8 @@ export function createScheduler({
     jobs() {
       const t = at();
       const zone = tz();
-      try { ensureJobs(t); } catch { /* listing does not depend on the rows */ }
+      // A paused household's store is never written, not even job labels.
+      if (allowed() === true) { try { ensureJobs(t); } catch { /* listing does not depend on the rows */ } }
       return handled.map((j) => {
         const nextAt = nextRunAt(j.schedule, t, zone, fixed);
         return { id: j.id, name: j.name, cadence: j.cadence, does: j.does, lastRun: runOut(q.last.get(j.id)), next: timeLabel(nextAt, zone), nextAt: nextAt.toISOString() };
@@ -472,22 +485,25 @@ export function createScheduler({
 
 // ---------------------------------------------------------------- default handlers
 
-// The server's handlers. `plan` is the only path that plans: on a real store it runs the planner
+// The server's handlers; every one runs on ctx.household (its db, root and runtime). `plan` is the
+// only path that plans: on a real store it runs the planner over the household's packs
 // with this run's id and the run's clock, and returns the planner's counts as the note plus the
 // whole planner result as `planning` (the scheduler ignores it; npm run plan prints its warning
 // codes). On a demo store it plans nothing and the run is recorded skipped. `confirm-guess` runs
 // guessPending until nothing is left: skipped with the pending count when it skips (engine off,
 // not live, nothing pending), else ok with the run's confirm ledger spend, also when an engine error stopped it.
-// `simplefin-sync` reads the SimpleFIN connection (skipped when there is none); a demo store uses
+// `simplefin-sync` is skipped with note { paused: true } while the household's outbound SimpleFIN
+// flag is off; otherwise it reads the SimpleFIN connection (skipped when there is none); a demo store uses
 // the synthetic fake bridge, a real one `simplefinFetch` (default global fetch). It returns counts
 // only, fails with the bridge code when access needs a reconnect, and triggers the after-import
 // planning run when it wrote rows.
 export function defaultHandlers({ publicUrl = null, simplefinFetch = null } = {}) {
   return {
     async 'simplefin-sync'(ctx) {
+      if (!ctx.household || !ctx.household.outbound.enabled('simplefin')) return { status: 'skipped', note: { paused: true } };
       const demo = getSetting(ctx.db, 'mode', null) === 'demo';
       const out = await syncSimplefin(ctx.db, {
-        config: ctx.config, hosts: ctx.config?.simplefinHosts, now: ctx.now, clock: ctx.clock, engine: ctx.engine,
+        household: ctx.household, config: ctx.config, hosts: ctx.config?.simplefinHosts, now: ctx.now, clock: ctx.clock, engine: ctx.engine,
         fetch: demo ? createFakeSimplefin({ today: () => ctx.clock }) : (simplefinFetch ?? globalThis.fetch),
       });
       if (out.status === 'skipped') return { status: 'skipped', note: { connected: false } };
@@ -499,7 +515,7 @@ export function defaultHandlers({ publicUrl = null, simplefinFetch = null } = {}
     async plan(ctx) {
       if (getSetting(ctx.db, 'mode', null) === 'demo') return { status: 'skipped' };
       const planning = await runPlanning(ctx.db, ctx.engine || null, {
-        now: ctx.clock, packDirs: defaultPackDirs(ctx.config && ctx.config.dataDir), runId: ctx.jobRunId,
+        now: ctx.clock, packDirs: defaultPackDirs(ctx.household.root), runId: ctx.jobRunId,
       });
       ctx.db.prepare('UPDATE action_receipts SET planning_pending = 0 WHERE planning_pending = 1').run();
       return { costUsd: planning.costUsd, note: planning.counts, planning };
@@ -533,11 +549,15 @@ export function defaultHandlers({ publicUrl = null, simplefinFetch = null } = {}
       };
     },
     async 'confirm-guess'(ctx) {
-      const enabled=getSetting(ctx.db,'mode',null)==='real' && ctx.config?.engine!=='off' && getSetting(ctx.db,'engine',{on:true})?.on!==false;
+      // Jev is a model call outside the engine, so it takes the engine's admission: the household's
+      // outbound engine flag and instance funding, checked at start and again before every dispatch.
+      const admit=()=>ctx.household?.outbound?.enabled('engine')!==true ? 'engine_paused'
+        : ctx.household?.funded?.()!==true ? 'funding_unavailable' : null;
+      const enabled=getSetting(ctx.db,'mode',null)==='real' && ctx.config?.engine!=='off' && getSetting(ctx.db,'engine',{on:true})?.on!==false
+        && admit()===null;
       const cap=getSetting(ctx.db,'cap',{usd:200})?.usd;
       const jev=await createJev({keyFile:enabled ? ctx.config?.typesafeKeyFile : null,ledger:createSpendLedger(ctx.db),
-        monthlyCapUsd:Number.isFinite(cap)&&cap>=0?cap:0,
-        canSend:()=>getSetting(ctx.db,'engine',{on:true})?.on!==false});
+        monthlyCapUsd:Number.isFinite(cap)&&cap>=0?cap:0,admit});
       const categories = await guessCategories(ctx.db, jev, { now: ctx.now });
       const closed = await guessClosedOptions(ctx.db, jev, { now: ctx.now });
       const out = await guessPending(ctx.db, ctx.engine, { now: ctx.now });

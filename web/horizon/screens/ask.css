@@ -309,15 +309,17 @@
 .d-horizon .h-ctx-x .h-i { width: 11px; height: 11px; stroke-width: 1.8; }
 .d-horizon .h-ctx-x:hover { color: var(--tx); background: var(--s2); }
 .d-horizon .h-ctx-x:focus-visible { outline: 2px solid var(--ac); outline-offset: 0; }
+/* Under the chip row when the panel shows a thread from another page. */
+.d-horizon .h-ctx-note { margin: -2px 0 8px; font-size: 12px; line-height: 1.35; color: var(--mu); }
 
-/* The "+": a small round ghost button, shown when its row is hovered or it has keyboard focus,
+/* The Ask about button (a chat bubble with a plus): a small round ghost button, shown when its row is hovered or it has keyboard focus,
    always shown on touch screens. */
 .d-horizon .h-add {
   all: unset; box-sizing: border-box; cursor: pointer; flex: none; align-self: center;
   width: 24px; height: 24px; display: inline-grid; place-items: center; border-radius: 50%;
   border: 1px solid var(--line2); color: var(--mu); opacity: 0; transition: opacity 0.12s, color 0.12s, border-color 0.12s;
 }
-.d-horizon .h-add .h-i { width: 13px; height: 13px; stroke-width: 1.8; vertical-align: 0; }
+.d-horizon .h-add .h-i { width: 15px; height: 15px; stroke-width: 1.5; vertical-align: 0; }
 /* Card rules style any svg inside them (.h-next progress bars: min-width 160px, flex 1); the icon keeps its size. */
 .d-horizon .h-add svg.h-i { min-width: 0; flex: none; margin: 0; }
 .d-horizon .h-add:hover { color: var(--ac); border-color: var(--acl); background: var(--acd); }

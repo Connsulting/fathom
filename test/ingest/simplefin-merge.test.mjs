@@ -28,7 +28,7 @@ test('parser-shaped unknown institutions ask on the same last four; sure, uncert
 
 test('fresh sync asks for the positions account and autoResolve leaves it pending', () => withStore(async s => {
   await P.ingestFile(s.db, positionsFile(), s.opts(null));
-  const options = { config: s.config, key: s.key, now: NOW, clock: '2032-03-10' };
+  const options = { config: s.config, household: s.household, now: NOW, clock: '2032-03-10' };
   await S.connectSimplefin(s.db, S.fakeToken(), { ...options, fetch: S.createFakeSimplefin() });
   const fetch = async () => new Response(JSON.stringify({ accounts: [{ id: 'opaque', name: acct.name, org: { name: acct.inst }, currency: 'USD', balance: '1200', 'balance-date': 1961668800, transactions: [] }] }));
   await S.syncSimplefin(s.db, { ...options, fetch });
@@ -124,7 +124,7 @@ test('repair HTTP answers do not sync; repeated scenario reads leave Keep both a
 }));
 
 test('reverse-order resync remembers removed external ids and keeps history', () => withStore(async s => {
-  const opts={config:s.config,key:s.key,now:NOW,clock:'2032-03-10'};
+  const opts={config:s.config,household:s.household,now:NOW,clock:'2032-03-10'};
   const bridge={id:'opaque',conn_id:'synthetic',name:'Synthetic checking x6294',balance:'1200','balance-date':Date.parse('2032-02-29T12:00:00Z')/1000,currency:'USD',transactions:[
     {id:'bridge-posting',posted:Date.parse('2032-02-29T12:00:00Z')/1000,amount:'-10',description:'Bridge posting'},
     {id:'bridge-posting-2',posted:Date.parse('2032-02-29T12:00:00Z')/1000,amount:'-10',description:'Other posting'},
@@ -147,7 +147,7 @@ test('reverse-order resync remembers removed external ids and keeps history', ()
 test('connect, sync and later positions upload expose repair through the real HTTP boundary', () => withStore(async s => {
   const {serveAppFixture}=await import('../helpers/server.mjs');
   const {offEngine}=await import('../helpers/ingest.mjs');
-  const opts={config:s.config,key:s.key,now:NOW,clock:'2032-03-10'};
+  const opts={config:s.config,household:s.household,now:NOW,clock:'2032-03-10'};
   await S.connectSimplefin(s.db,S.fakeToken(),{...opts,fetch:S.createFakeSimplefin()});
   const body={accounts:[{id:'synthetic-brokerage',name:acct.name,org:{name:acct.inst},balance:'1200','balance-date':Date.parse('2032-02-29T12:00:00Z')/1000,currency:'USD',transactions:[]}]};
   await S.syncSimplefin(s.db,{...opts,fetch:async()=>new Response(JSON.stringify(body))});

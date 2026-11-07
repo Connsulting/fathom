@@ -1,14 +1,15 @@
-// node scripts/user-invite.mjs <email> --admin: bootstrap the first admin of the served household.
-// Real instances only, opened through openServedStore (a real store without platform.sqlite
-// refuses platform_migration_required). Refuses once any member of the served household has
-// enrolled. Prints the enrollment link only after the email is sent; a failed send revokes it.
+// node scripts/user-invite.mjs <email> --admin: bootstrap the first admin of the instance's
+// original household (households.serves_store). Real instances only, opened through openInstance
+// (an unmigrated layout refuses with its readiness code); touches only platform.sqlite. Refuses once
+// any member of that household has enrolled. Prints the enrollment link only after the email is
+// sent (auth mail: the instance transport, dev outbox <dataDir>/outbox); a failed send revokes it.
 // Errors print a fixed line (or a readiness code), never the address or the link.
 
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig, validatePublicUrl } from '../src/config.mjs';
-import { DB_FILE, readStoreMode } from '../src/store/db.mjs';
-import { openServedStore } from '../src/platform/ready.mjs';
+import { openInstance } from '../src/platform/ready.mjs';
+import { servedHousehold } from '../src/platform/db.mjs';
 import { createAuthStore, normalizeEmail } from '../src/auth/store.mjs';
 import { authLinkMail } from '../src/auth/mail.mjs';
 import { createTransport } from '../src/email/transport.mjs';
@@ -16,7 +17,7 @@ import { createTransport } from '../src/email/transport.mjs';
 const quiet = { info() {}, log() {}, warn() {}, error() {} };
 
 export async function main(argv = process.argv.slice(2), env = process.env) {
-  let served;
+  let opened;
   let store;
   let issued;
   try {
@@ -24,19 +25,21 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     const email = normalizeEmail(argv[0]);
     const config = loadConfig(env);
     validatePublicUrl(config.publicUrl, { required: true });
-    const file = join(config.dataDir, DB_FILE);
-    if (config.demo === true || readStoreMode(file) !== 'real') throw new Error();
-    served = openServedStore(config);
-    store = createAuthStore(served.platform);
+    if (config.demo === true) throw new Error();
+    opened = openInstance(config);
+    if (!opened || opened.mode !== 'real') throw new Error();
+    store = createAuthStore(opened.platform);
     store.sweep();
+    const household = servedHousehold(opened.platform);
+    if (!household || household.status === 'deleted') throw new Error();
     issued = store.transaction(() => {
-      const hh = served.householdId;
+      const hh = household.id;
       const enrolled = store.listPeople(hh).some(person => person.enrolledAt !== null && store.membership(person.id, hh)?.status === 'active');
       if (enrolled) throw new Error();
       return store.invite(hh, email, { role: 'admin' });
     });
     const { link, message } = authLinkMail(config, issued.user, issued.token, 'invite');
-    const transport = createTransport(config, { log: quiet });
+    const transport = createTransport(config, { outboxDir: join(config.dataDir, 'outbox'), log: quiet });
     await transport.send(message);
     console.log(link);
     return 0;
@@ -47,8 +50,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     console.error(`user invite: ${err?.name === 'StartupError' ? err.code : 'bootstrap failed'}`);
     return 1;
   } finally {
-    served?.db.close();
-    served?.platform.close();
+    opened?.platform.close();
   }
 }
 

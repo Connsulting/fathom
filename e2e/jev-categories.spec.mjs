@@ -1,15 +1,15 @@
 import { test, expect, resetDemo, gotoRoute, deckCard, deckTo, deckOrder } from './helpers.mjs';
-import { resolve } from 'node:path';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { openDb, DB_FILE } from '../src/store/db.mjs';
+import { openDb } from '../src/store/db.mjs';
+import { householdStoreFile, localDataDir } from './local-store.mjs';
 import { guessCategories } from '../src/categories/guess.mjs';
 import { createJev, JEV_MODEL } from '../src/categories/jev.mjs';
 
 test('Jev review confidence appears in Confirm and an accepted guess can be undone',async ({page,request})=>{
   await resetDemo(request);
-  const db=openDb(resolve(process.env.E2E_DATA||'.e2e-data',DB_FILE));
+  const db=openDb(householdStoreFile(localDataDir()));
   const dir=mkdtempSync(join(tmpdir(),'jev-e2e-'));
   let id;
   try {

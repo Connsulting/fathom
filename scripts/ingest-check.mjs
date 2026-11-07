@@ -1,19 +1,20 @@
 #!/usr/bin/env node
 // Dry run of the ingest pipeline over a directory of exports: node scripts/ingest-check.mjs <dir>
 //
-// Builds a throwaway real store under the OS temp dir with a random 32 byte data key, imports
+// Builds a throwaway real household under the OS temp dir (households/<id> with its own store and
+// a random in-memory data key, so uploads go through the household vault as on a server), imports
 // every non-dot file in <dir> (recursively; .key and .json files are local keys and credentials,
 // not exports, and are skipped), then imports the same files again to show re-import dedupe.
 // The engine is off unless FATHOM_ENGINE=fake. Prints totals only (files by status, rows by kind,
 // duplicates, revised, superseded, warnings by code, pending questions by kind), never file names
 // or values. The temp dir is always deleted.
 
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { basename, extname, join, resolve } from 'node:path';
 import { createStoreFile, setSetting, DB_FILE } from '../src/store/db.mjs';
-import { loadDataKey } from '../src/ingest/vault.mjs';
+import { householdRoot, dataKeyHandle } from '../src/platform/household-vault.mjs';
 import { ingestFiles } from '../src/ingest/pipeline.mjs';
 import { createRuntimeEngine } from '../src/engine/runtime.mjs';
 
@@ -27,6 +28,18 @@ const MIME = {
 };
 const IDENT = /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/;
 const label = v => (typeof v === 'string' && IDENT.test(v) ? v : 'other');
+const HOUSEHOLD = 'hh-ingest-check';
+
+// The pipeline's view of a household: its store (in its root), in-flight set and vault.
+async function throwawayHousehold(tmp) {
+  const root = await householdRoot({ dataRoot: tmp, householdId: HOUSEHOLD, relativeRoot: `households/${HOUSEHOLD}`, create: true });
+  const db = createStoreFile(join(root.path, DB_FILE), d => setSetting(d, 'mode', 'real'));
+  const key = randomBytes(32);
+  const handle = dataKeyHandle({ householdId: HOUSEHOLD, version: 1, key });
+  key.fill(0);
+  const vault = Object.freeze({ root, handle });
+  return Object.freeze({ householdId: HOUSEHOLD, db, root: root.path, inFlight: new Set(), vault: async () => vault });
+}
 
 function listFiles(dir, out = []) {
   for (const name of readdirSync(dir).sort()) {
@@ -95,18 +108,16 @@ async function main(argv) {
   const tmp = mkdtempSync(join(tmpdir(), 'fathom-ingest-check-'));
   let db;
   try {
-    const keyFile = join(tmp, 'data.key');
-    writeFileSync(keyFile, randomBytes(32), { mode: 0o600 });
-    db = createStoreFile(join(tmp, DB_FILE), d => setSetting(d, 'mode', 'real'));
+    const household = await throwawayHousehold(tmp);
+    db = household.db;
     const engineMode = process.env.FATHOM_ENGINE === 'fake' ? 'fake' : 'off';
     const config = {
       dataDir: tmp, port: 0, host: '127.0.0.1', demo: false, engine: engineMode, clock: null,
-      claudeCredentialFile: null, dataKeyFile: keyFile, emailTransport: 'dev',
+      claudeCredentialFile: null, emailTransport: 'dev',
     };
-    const key = await loadDataKey({ dataDir: tmp, keyFile, mode: 'real' });
     const engine = await createRuntimeEngine({ db, config });
     for (const pass of [1, 2]) {
-      const { results } = await ingestFiles(db, readFiles(paths), { engine, config, now: new Date().toISOString(), key });
+      const { results } = await ingestFiles(db, readFiles(paths), { household, engine, config, now: new Date().toISOString() });
       print(pass, totals(results, db));
     }
     return 0;

@@ -2,10 +2,9 @@
 // panel, each with Undo. One synthetic manual account with no mask is written into the served
 // store after the demo reset, the same way account-dialog.spec.mjs seeds its duplicate pair.
 
-import { resolve } from 'node:path';
 import { test, expect, resetDemo, gotoRoute, recDialog, REMOTE } from './helpers.mjs';
-import { openDb, setSetting, DB_FILE } from '../src/store/db.mjs';
-import { dataKeyFor } from '../src/ingest/simplefin.mjs';
+import { openDb, setSetting } from '../src/store/db.mjs';
+import { householdStoreFile, localDataDir, withLocalHousehold } from './local-store.mjs';
 import { seedDuplicate as seedDuplicateRows } from '../test/helpers/account-merge.mjs';
 import { refreshMergedAccounts } from '../src/ingest/account-merge.mjs';
 
@@ -14,7 +13,7 @@ const A_NAME = 'Reserve savings';
 
 async function seed(request) {
   await resetDemo(request);
-  const db = openDb(resolve(process.env.E2E_DATA || '.e2e-data', DB_FILE));
+  const db = openDb(householdStoreFile(localDataDir()));
   try {
     const acct = db.prepare(`INSERT INTO accounts (id, inst, mask, name, owner, kind, mirror, note, sort)
       VALUES (?, 'Sample Bank', NULL, ?, 'You', 'cash', 'manual', '', ?)`);
@@ -105,27 +104,24 @@ async function addLastFour(page, request) {
   const saved = posted(page, `/api/accounts/${A}/mask`);
   await dlg.locator('[data-ad="mask-save"]').click();
   expect((await saved).status()).toBe(200);
-  await expect(dlg.locator('#h-dlg-t')).toHaveText(`${A_NAME} ending 1234`);
+  await expect(dlg.locator('#h-dlg-t')).toHaveText(`${A_NAME} (1234)`);
+  await expect(dlg.locator('.h-ad-last4')).toHaveText('Last 4 1234');
   await expect(dlg.locator('[data-ad="mask-open"]')).toHaveCount(0);
-  await expect(accountRow(page, A).locator('.h-acc-name')).toHaveText(`${A_NAME} ending 1234`);
+  await expect(accountRow(page, A).locator('.h-acc-name')).toHaveText(`${A_NAME} (1234)`);
   await gotoRoute(page, 'accounts');
-  await expect(accountRow(page, A).locator('.h-acc-name')).toHaveText(`${A_NAME} ending 1234`);
+  await expect(accountRow(page, A).locator('.h-acc-name')).toHaveText(`${A_NAME} (1234)`);
 }
 
 // An imported account and a connected copy of it, seeded the way account-dialog.spec.mjs does.
 // Two imported accounts cannot be merged, so the merge runs on this pair.
 async function seedPair(request) {
   await resetDemo(request);
-  const dataDir = resolve(process.env.E2E_DATA || '.e2e-data');
-  const db = openDb(resolve(dataDir, DB_FILE));
-  try {
-    setSetting(db, 'clock', '2032-03-10');
-    const key = await dataKeyFor(db, { dataDir });
-    const s = { db, config: { dataDir }, key, opts: (engine, extra = {}) => ({ config: { dataDir }, key, engine, now: '2032-03-10T12:00:00.000Z', ...extra }) };
+  return withLocalHousehold('2032-03-10T12:00:00.000Z', async s => {
+    setSetting(s.db, 'clock', '2032-03-10');
     const pair = await seedDuplicateRows(s, { sure: true });
-    refreshMergedAccounts(db, { now: '2032-03-10T12:00:00.000Z' });
+    refreshMergedAccounts(s.db, { now: '2032-03-10T12:00:00.000Z' });
     return pair;
-  } finally { db.close(); }
+  });
 }
 
 // from: which account's dialog starts the merge. The imported one survives either way.
@@ -180,7 +176,7 @@ test.describe('account dialog edits', { tag: '@ade-ac' }, () => {
     await changeKind(page, request);
   });
 
-  test('Add last 4 refuses bad input and the label and row say ending 1234', async ({ page, request }) => {
+  test('Add last 4 refuses bad input and the label ends in (1234) and the dialog shows Last 4 1234', { tag: '@acctnames-ac3' }, async ({ page, request }) => {
     await addLastFour(page, request);
   });
 

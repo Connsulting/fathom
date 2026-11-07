@@ -6,8 +6,7 @@ import { tx } from '../store/db.mjs';
 import { clockNow } from '../scenario/build.mjs';
 import { sendToAdvisor, recordVerdict, setCheckin, AdvisorError, VETO_REASON } from '../advisor/index.mjs';
 import { buildPacketHtml, storePacket, readPacket, contentSources } from '../advisor/packet.mjs';
-import { loadDataKey, VaultError } from '../ingest/vault.mjs';
-import { getSetting } from '../store/db.mjs';
+import { openVault, VaultError } from '../ingest/vault.mjs';
 import { HttpError } from './http.mjs';
 import { scenarioOf, applyStatusAction } from './handlers.mjs';
 
@@ -23,9 +22,10 @@ function guard(fn) {
   }
 }
 
-async function dataKey(ctx) {
+// The household vault; a refusal (missing platform or data key) is 409 naming FATHOM_PLATFORM_KEY_FILE.
+async function householdVault(ctx) {
   try {
-    return await loadDataKey({ dataDir: ctx.config.dataDir, keyFile: ctx.config.dataKeyFile, mode: getSetting(ctx.db, 'mode', null) === 'demo' ? 'demo' : 'real' });
+    return await openVault(ctx.household);
   } catch (err) {
     if (err instanceof VaultError) throw new HttpError(409, err.message);
     throw err;
@@ -61,11 +61,11 @@ export async function createPacket(ctx) {
   const s = scenarioOf(ctx);
   const recIds = s.advisor.pending;
   if (!recIds.length) throw new HttpError(409, 'nothing is waiting on review');
-  const key = await dataKey(ctx);
+  const vault = await householdVault(ctx);
   const html = buildPacketHtml(s, { generatedOn: s.meta.clock, sources: contentSources(ctx.db) });
   let id;
   try {
-    id = await storePacket(ctx.db, { dataDir: ctx.config.dataDir, key, html, clock: s.meta.clock, recIds, now: stamp(ctx) });
+    id = await storePacket(ctx.db, { vault, html, clock: s.meta.clock, recIds, now: stamp(ctx) });
   } catch (err) {
     if (err instanceof VaultError) throw new HttpError(500, 'the packet could not be stored');
     throw err;
@@ -75,10 +75,10 @@ export async function createPacket(ctx) {
 
 // GET /api/advisor/packets/:id: the stored packet as an HTML attachment.
 export async function downloadPacket(ctx) {
-  const key = await dataKey(ctx);
+  const vault = await householdVault(ctx);
   let got;
   try {
-    got = await readPacket(ctx.db, { dataDir: ctx.config.dataDir, key, id: ctx.params.id });
+    got = await readPacket(ctx.db, { vault, id: ctx.params.id });
   } catch (err) {
     if (err instanceof VaultError) throw new HttpError(500, 'the packet could not be read');
     throw err;

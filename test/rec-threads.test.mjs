@@ -298,9 +298,10 @@ async function demoCtx(t) {
   seedDemo(s.db);
   const config = loadConfig({ FATHOM_DATA: s.dataDir, FATHOM_ENGINE: 'fake', FATHOM_FAKE_STREAM_MS: '0' });
   const engine = createRuntimeEngine({ db: s.db, config });
+  // The temp store's directory stands in as the household root.
   const packs = createLivePacks(s.db, { dataDir: s.dataDir });
   packs.refresh();
-  const answerer = createLiveAnswerer({ engine, packs });
+  const answerer = createLiveAnswerer({ engine, packs, root: s.dataDir });
   const ctx = (body = {}, extra = {}) => ({ db: s.db, config, engine, packs, answerer, params: {}, body, ...extra });
   return { ...s, config, engine, packs, answerer, ctx };
 }
