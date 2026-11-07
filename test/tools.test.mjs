@@ -64,11 +64,11 @@ describe('registry', () => {
       assert.equal(typeof x.name, 'string');
       assert.ok(typeof x.description === 'string' && x.description.length > 0, `${x.name} description`);
       assert.equal(x.inputSchema && x.inputSchema.type, 'object', `${x.name} inputSchema`);
-      assert.ok(['read', 'write:recs'].includes(x.scope), `${x.name} scope`);
+      assert.ok(['read', 'write:recs', 'write:facts', 'write:steps', 'write:goals', 'write:preferences'].includes(x.scope), `${x.name} scope`);
       assert.equal(typeof x.handler, 'function');
     }
     const writes = tools.filter(x => x.scope === 'write:recs').map(x => x.name);
-    assert.deepEqual(writes, ['set_recommendation_status', 'set_recommendation_owner']);
+    assert.deepEqual(writes, ['set_recommendation_status', 'set_recommendation_owner', 'undo_recommendation_action']);
   });
 
   test('getTool finds by name; unknown tools are not_found', async () => {
@@ -293,7 +293,7 @@ describe('set_recommendation_status', () => {
     assert.equal(r.status, 'done');
     assert.equal(t.db.prepare("SELECT status FROM recs WHERE id = 'dcfsa'").get().status, 'done');
     const ev = t.db.prepare("SELECT action, from_status, to_status, actor FROM rec_events WHERE rec_id = 'dcfsa' ORDER BY id DESC LIMIT 1").get();
-    assert.deepEqual({ from: ev.from_status, to: ev.to_status, actor: ev.actor }, { from: 'proposed', to: 'done', actor: 'tool' });
+    assert.deepEqual({ from: ev.from_status, to: ev.to_status, actor: ev.actor }, { from: 'proposed', to: 'done', actor: 'demo' });
     assert.equal((await call('get_recommendation', { id: 'dcfsa' })).status, 'done');
   });
 
@@ -419,13 +419,13 @@ describe('engine compatibility', () => {
 
   test('createRegistryServer accepts the registry; the job purpose drops the write tools', () => {
     const chat = createRegistryServer(tools, { purpose: 'chat', ctx: engineCtx() });
-    for (const x of tools) assert.ok(chat.names.includes(x.name), `chat offers ${x.name}`);
+    for (const x of tools.filter(t => !t.mcpOnly)) assert.ok(chat.names.includes(x.name), `chat offers ${x.name}`);
     assert.ok(chat.names.includes('set_recommendation_status'));
     assert.ok(chat.names.includes('set_recommendation_owner'));
     const job = createRegistryServer(tools, { purpose: 'job', ctx: engineCtx() });
     assert.ok(!job.names.includes('set_recommendation_status'));
     assert.ok(!job.names.includes('set_recommendation_owner'));
-    assert.equal(job.names.length, tools.length - 2);
+    assert.equal(job.names.length, tools.filter(t => t.scope === 'read').length);
   });
 
   test('invoke matches callTool, rejects bad input and fetches a real rec', async () => {

@@ -304,7 +304,11 @@ test('the static system prompt carries PRODUCT_RULES, then the answer style and 
 // The registry as of this change: descriptions changed, no tool added or removed.
 const TOOL_NAMES = ['household_summary', 'get_facts', 'list_accounts', 'query_transactions', 'list_positions', 'pnl_by_month',
   'list_recommendations', 'get_recommendation', 'list_deadlines', 'list_goals', 'get_pace', 'get_figures', 'packs_status',
-  'set_recommendation_status', 'set_recommendation_owner', 'advisor_status', 'list_packs', 'get_pack_entry', 'search_pack_entries'];
+  'set_recommendation_status', 'set_recommendation_owner', 'advisor_status',
+  // The Ask action tools merged from main (feat/ask-actions); this branch adds none.
+  'get_fact_answer_shapes', 'remember_preference', 'record_household_fact', 'set_recommendation_step', 'create_goal', 'edit_goal',
+  'undo_preference_action', 'undo_fact_action', 'undo_step_action', 'undo_goal_action', 'undo_recommendation_action',
+  'list_packs', 'get_pack_entry', 'search_pack_entries'];
 
 test('query_transactions names credit cards and categories, pnl_by_month names business, and no tool is added', () => {
   const byName = new Map(REGISTRY.map(x => [x.name, x]));

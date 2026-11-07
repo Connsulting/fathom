@@ -28,9 +28,9 @@ const FIGURE_TOKEN = /\{(?:fk|f):([A-Za-z0-9_.-]+)\}/g;
 const OWNER_NUMBER = /-?\$?\d(?:[\d,]*\d)?(?:\.\d+)?%?/g;
 const YEAR = /\b(?:19|20|21)\d{2}\b/g;
 const COMMAND = /^(?:please\s+)?(start|complete|dismiss|snooze|reopen)\b/i;
-const CONFIRM = 'Nothing has changed yet. You can confirm this change below.';
+const CONFIRM = 'The recommendation is updated. You can undo the change below.';
 const GOAL_COMMAND = /^(?:please\s+)?add (?:a |another |new |a new )?goal\s*[:,-]?\s*(\S[\s\S]*)$/i;
-const GOAL_CONFIRM = 'Nothing is saved yet. You can save this goal below.';
+const GOAL_CONFIRM = 'The goal is saved. You can undo the change below.';
 const HORIZON_WORDS = [['1-3y', /next few years/i], ['3-10y', /long range|long term/i], ['now', /this year/i]];
 const GOAL_AMOUNT = /\$(\d[\d,]*(?:\.\d+)?)\s*(k|m)?\b/i;
 const SHOW_WORK = /\bshow your work\b/i;
@@ -40,7 +40,7 @@ const SHOW_NOTE_2 = 'Now the details this rests on.';
 // propose_goal args for an "add a goal" command in an Ask thread, else null. A thread asked from a
 // rec gets none: the live answerer offers no goal tool in rec context.
 function goalCommandOf(scenario, key, text) {
-  if (!isThreadKey(key) || recForKey(scenario, key)) return null;
+  if (!isThreadKey(key)) return null;
   const m = GOAL_COMMAND.exec(String(text ?? '').trim());
   if (!m) return null;
   const title = m[1].trim().slice(0, 120);
@@ -84,10 +84,16 @@ function commandOf(scenario, key, text) {
 }
 
 export function fakeAnswerScript({ scenario, key, questionId, text, whatIfPack, summary, propose = false } = {}) {
-  const command = propose && typeof text === 'string' ? commandOf(scenario, key, text) : null;
+  const preference = propose && typeof text === 'string' ? /^(?:please )?remember(?: this)?(?: preference)?[: ,]+(.+)$/i.exec(text)?.[1] : null;
+  const date = !preference && propose && typeof text === 'string' && /(?:expected|due) date|baby.*due/i.test(text) ? /\b\d{4}-\d{2}-\d{2}\b/.exec(text)?.[0] : null;
+  const command = !date && propose && typeof text === 'string' ? commandOf(scenario, key, text) : null;
   const goal = propose && !command && typeof text === 'string' ? goalCommandOf(scenario, key, text) : null;
   let paragraphs;
-  if (whatIfPack) {
+  if (preference) {
+    paragraphs = ['Your preference is saved. You can edit it in Settings or undo it below.'];
+  } else if (date) {
+    paragraphs = ['The expected date is saved. You can undo the change below.'];
+  } else if (whatIfPack) {
     paragraphs = whatIfParagraphs(scenario, whatIfPack);
   } else if (questionId !== undefined && questionId !== null) {
     paragraphs = list(findQuestion(scenario, key, questionId)?.a);
@@ -104,7 +110,7 @@ export function fakeAnswerScript({ scenario, key, questionId, text, whatIfPack, 
       ? 'From your household summary, the items that need you are on your plan.'
       : `From your household summary, ${count} items need you right now.`];
   }
-  if (typeof text === 'string' && !goal) {
+  if (typeof text === 'string' && !goal && !date && !preference) {
     const numbers = text.replace(YEAR, ' ').match(OWNER_NUMBER);
     if (numbers && numbers.length) paragraphs = [`You asked about ${[...new Set(numbers)].join(', ')}.`, ...paragraphs];
   }
@@ -114,8 +120,10 @@ export function fakeAnswerScript({ scenario, key, questionId, text, whatIfPack, 
   if (keys.length) toolCalls.push({ name: 'get_figures', args: { keys } });
   const rec = recForKey(scenario, key);
   if (rec) toolCalls.push({ name: 'get_recommendation', args: { id: rec.id } });
-  if (command) toolCalls.push({ name: 'propose_recommendation_action', args: command });
-  if (goal) toolCalls.push({ name: 'propose_goal', args: goal });
+  if (command) toolCalls.push({ name: 'set_recommendation_status', args: { id: command.id, status: { start: 'doing', complete: 'done', dismiss: 'dismissed', snooze: 'snoozed', reopen: 'proposed' }[command.action] } });
+  if (goal) toolCalls.push({ name: 'create_goal', args: goal });
+  if (preference) toolCalls.push({ name: 'remember_preference', args: { text: preference, evidence: preference } });
+  if (date) toolCalls.push({ name: 'record_household_fact', args: { key: 'household.expectedDate', value: date, evidence: text } });
   if (typeof text === 'string' && SHOW_WORK.test(text)) {
     const rest = toolCalls.slice(1);
     return [

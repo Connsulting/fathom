@@ -228,6 +228,7 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
     let cost = 0;
     for (let roundIndex = 0; roundIndex < 8; roundIndex++) {
       let round;
+      const afterTools = [];
       answer.beginRound();
       await serial(ledger, async () => {
         if (poisoned) throw new ModelAccountingError();
@@ -237,7 +238,8 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
         if (spend >= capUsd) { const error = new BudgetExceededError(); error.toolResults = allResults; throw error; }
         const auth = mode === 'live' ? explicitCredential(credential) : undefined;
         const context = callContext ?? toolContext;
-        const registry = createRegistryServer(tools, { purpose, ctx: { db: context.db, now: context.now ?? ts } });
+        const registry = createRegistryServer(tools, { purpose, ctx: { ...context, db: context.db, now: context.now ?? ts,
+          ...(purpose === 'chat' && typeof context.replan === 'function' ? { queueAfterTools: task => afterTools.push(task) } : {}) } });
         try {
           if (mode === 'fake') {
             if (!queue.length) throw new ModelCallError('Fake engine has no scripted response');
@@ -261,7 +263,7 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
                 for (const item of script.toolCalls ?? []) { emit({ type: 'tool', name: item.name }); await pause(streamDelayMs); }
               }
             }
-            await Promise.all((script.toolCalls ?? []).map(item => registry.invoke(item.name, item.args ?? {})));
+            for (const item of script.toolCalls ?? []) await registry.invoke(item.name, item.args ?? {});
             round = { text, costUsd: Object.hasOwn(script, 'costUsd') ? script.costUsd : 0.001, model: 'fake', tokens: script.tokens ?? {},
               status: script.status ?? (script.toolCalls?.length ? 'error_max_turns' : 'success'),
               is_error: script.is_error === true, api_error_status: script.api_error_status ?? null,
@@ -295,7 +297,7 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
             throw new ModelAccountingError();
           }
         } finally { await registry.instance.close(); }
-      });
+      }).finally(async () => { for (const task of afterTools) await task(); });
       cost += round.costUsd;
       rounds.push(round.details);
       allResults.push(...round.toolResults);
