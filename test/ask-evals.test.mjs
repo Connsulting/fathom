@@ -119,6 +119,8 @@ test('dates, years, plan and form identifiers and idiomatic one are not financia
     'One of your goals needs attention.', 'The next one can wait.', 'No one has confirmed it.',
   ]) assert.equal(gradeFigures(text, []).ok, true, text);
   assert.equal(gradeFigures('$2032', []).ok, false);
+  assert.equal(gradeFigures('$2032', [result(2032)]).ok, true);
+  assert.equal(gradeExpected('{f:sample}', [2032], { figures: { sample: 2032 } }).ok, true);
   assert.equal(gradeFigures('one dollar', []).ok, false);
   for (const text of ['1', '0', '100%']) {
     const g = gradeFigures(text, [result(37)]);
