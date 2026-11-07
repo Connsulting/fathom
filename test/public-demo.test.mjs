@@ -238,6 +238,26 @@ test('route documentation assigns every server route a demo behavior', () => {
   for (const route of routes) assert.ok(docs.includes(`| ${route.method} | \`${route.path}\` |`));
   assert.ok(docs.trimEnd().endsWith('provider key provisioning and external spend limits.'));
 });
+test('per-IP turn quota applies across visitors and persisted control handles', t => {
+  const c = config(directory(t), { FATHOM_PUBLIC_DEMO_TURNS_PER_IP_PER_DAY: '1' });
+  const first = createDemoControl(c), second = createDemoControl(c);
+  try {
+    assert.equal(first.reserveTurn('one', 'same-ip'), true);
+    assert.equal(second.reserveTurn('two', 'same-ip'), false);
+    assert.equal(second.reserveTurn('two', 'other-ip'), true);
+  } finally { first.close(); second.close(); }
+});
+test('an existing cookie reopens only its own sandbox after a server restart', async t => {
+  const s = await app(t);
+  const v = visitor(s);
+  await v('/api/goals', { title: 'Persistent visitor goal', horizon: 'now' });
+  await s.close();
+  const reopened = await startServer(s.config);
+  t.after(() => reopened.close());
+  s.url = reopened.url;
+  assert.ok((await v('/api/scenario')).body.goals.some(g => g.title === 'Persistent visitor goal'));
+  assert.ok(!(await visitor(reopened)('/api/scenario')).body.goals.some(g => g.title === 'Persistent visitor goal'));
+});
 test('global USD reservations, sandbox TTL/cap and per-IP creation cap are enforced', t => {
   const dir = directory(t);
   let time = Date.parse('2026-11-07T00:00:00Z');
