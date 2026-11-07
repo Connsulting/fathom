@@ -1,4 +1,4 @@
-// Confirm deck on the demo build: no nav badge, Home's data-health line with its Confirm link and
+// Confirm deck on the demo build: Confirm is not a nav tab and no badge, Home's data-health line with its Confirm link and
 // question count, the card anatomy,
 // the screen keys (pick, guess, next, prev, undo, leave), revisiting and changing an answer,
 // Fathom's stored guess, keys ignored in text inputs, the All caught up state and touch swipes.
@@ -22,7 +22,9 @@ const KIND = {
 
 const reEsc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const confirmPost = (r, id, verb) => r.request().method() === 'POST' && new URL(r.url()).pathname === `/api/confirm/${id}/${verb}`;
-const navConfirm = (page) => page.locator('.h-nav a[data-go="confirm"]');
+// Confirm is not a tab (Home's data-health line reaches it); no nav carries a link or a badge.
+const navConfirm = (page) => page.locator('nav.h-nav a[data-go="confirm"], nav.h-tabs a[data-go="confirm"]');
+const navBadge = (page) => page.locator('header.h-top .h-nav-n, nav.h-tabs .h-nav-n');
 const option = (page, id, optionId) => page.locator(`button[data-answer="${id}"][data-option="${optionId}"]`);
 const caughtUp = (page) => page.locator('.h-empty', { hasText: 'All caught up' });
 const sheet = (page) => page.getByRole('dialog', { name: 'Keyboard shortcuts' });
@@ -105,21 +107,20 @@ test.beforeEach(async ({ request }) => {
   await resetDemo(request);
 });
 
-test('the Confirm nav link carries no count; Home counts the questions and drops the link at zero', async ({ page, request }) => {
+test('the nav has no Confirm tab and no count; Home counts the questions and drops the link at zero', async ({ page, request }) => {
   const items = await pending(request);
   expect(items.length).toBeGreaterThanOrEqual(4);
   await gotoRoute(page, 'home');
-  await expect(navConfirm(page)).toHaveCount(1);
-  await expect(navConfirm(page)).toHaveText('Confirm');
-  await expect(navConfirm(page).locator('.h-nav-n')).toHaveCount(0);
+  await expect(navConfirm(page)).toHaveCount(0);
+  await expect(navBadge(page)).toHaveCount(0);
   await expect(dataHealth(page)).toContainText(questionsToConfirm(items.length));
   await expect(healthConfirm(page)).toHaveCount(1);
 
   await answerAllViaApi(request);
   await page.reload();
   await expect(page.locator('header.h-top')).toBeVisible();
-  await expect(navConfirm(page)).toHaveCount(1);
-  await expect(navConfirm(page).locator('.h-nav-n')).toHaveCount(0);
+  await expect(navConfirm(page)).toHaveCount(0);
+  await expect(navBadge(page)).toHaveCount(0);
   await expect(dataHealth(page)).toBeVisible();
   await expect(dataHealth(page)).not.toContainText('to confirm');
   await expect(healthConfirm(page)).toHaveCount(0);
@@ -342,7 +343,7 @@ test('answering every card from the keyboard ends at All caught up and clears th
   }
   await expect(caughtUp(page)).toBeVisible();
   await expect(deckCard(page)).toHaveCount(0);
-  await expect(navConfirm(page).locator('.h-nav-n')).toHaveCount(0);
+  await expect(navBadge(page)).toHaveCount(0);
   expect(await pending(request)).toEqual([]);
 
   // Prev from the empty state returns to the last card.
