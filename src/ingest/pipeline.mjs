@@ -24,7 +24,7 @@ import {
 import { storeFile, readStoredFile, openVault } from './vault.mjs';
 import { recordSource } from './freshness.mjs';
 import { autoResolve } from './auto.mjs';
-import { defaultAccountLabel } from '../shared/account-label.mjs';
+import { accountLabel } from '../shared/account-label.mjs';
 
 export const STATUSES = Object.freeze(['imported', 'duplicate', 'needs_mapping', 'needs_extraction', 'unsupported', 'too_large', 'failed']);
 const WAITING = ['needs_mapping', 'needs_extraction'];
@@ -390,7 +390,7 @@ function upsertAccounts(ctx, accountRows) {
     }
     const account = row.account;
     const name = accountName(account);
-    const shown = defaultAccountLabel(account);
+    const shown = accountLabel(account);
     const kind = kindOf(account.kind);
     const mask = /^\d{4}$/.test(account.mask ?? '') ? account.mask : null;
     db.prepare(`INSERT INTO accounts (id, inst, mask, name, owner, kind, mirror, file_id, parser, locator, identity, source_id)
