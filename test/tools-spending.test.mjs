@@ -214,3 +214,25 @@ test('large grouped comparisons stay bounded while groups still sum to the total
   assert.equal(Math.round(r.groups.reduce((n, g) => n + g.difference.value, 0) * 100) / 100, r.difference.value);
   await assertRefsResolve(await s.call('total', { ...custom, groupBy: 'merchant', limit: 2 }), s.ctx);
 });
+
+test('period gaps expose pre-history and missing months without counting investment accounts as silent', async t => {
+  const s=await spendingStore(t);s.account('brokerage','taxable');
+  const before=await s.call('total',{window:'calendar_year',year:2025});
+  assert.ok(before.gaps.some(g=>g.code==='incomplete_month' && g.count===12));
+  const compare=await s.call('compare',{a:{from:'2025-01',to:'2025-02'},b:custom});
+  assert.ok(compare.a.total.gaps.some(g=>g.code==='incomplete_month'));
+  const all=await s.call('total',{...custom,scope:'all'});
+  assert.equal(all.gaps.find(g=>g.code==='account_no_history').count,2);
+  s.db.prepare("DELETE FROM transactions WHERE account_id='card' AND date LIKE '2026-04%'").run();
+  const missing=await s.call('total',custom);
+  assert.equal(missing.gaps.find(g=>g.code==='incomplete_month').count,1);
+  assert.equal((await s.call('total',{from:'2026-03',to:'2026-03'})).gaps.some(g=>g.code==='incomplete_month'),false);
+});
+
+test('merchant selectors normalize names and excluded figures share annual units', async t => {
+  const s=await spendingStore(t);
+  assert.equal((await s.call('total',{...custom,include:{merchants:['MARKET 123']}})).total.value,300);
+  const r=await s.call('total',{...custom,annualize:true,exclude:{merchants:['Mortgage']}});
+  assert.equal(r.excluded[0].matched.value,3600);
+  assert.equal(r.excluded[0].matched.unit,r.excluded[0].removed.unit);
+});

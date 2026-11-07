@@ -520,3 +520,10 @@ test('resolved transaction filters and keyset pages preserve every tied real-sto
   assert.equal(seen.length,450); assert.equal(new Set(seen).size,450);
   await assert.rejects(callTool('transactions',{operation:'search',cursor:'invalid'},s.ctx),e=>e.code==='bad_input');
 });
+
+test('transaction text search skips null descriptions and keeps matching neighbors', async t => {
+  const {spendingStore}=await import('./helpers/spending.mjs');const s=await spendingStore(t);
+  s.tx('checking','2026-04-01',-1,'Groceries',null);
+  const r=await callTool('transactions',{operation:'search',text:'market'},s.ctx);
+  assert.equal(r.total,10);assert.ok(r.rows.every(row=>row.description==='Market'));
+});
