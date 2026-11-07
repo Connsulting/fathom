@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import { loadConfig } from '../src/config.mjs';
 import { startServer } from '../src/server.mjs';
 
-const port = Number(process.env.E2E_PORT || 5031);
+const port = Number(process.env.E2E_PUBLIC_DEMO_PORT || 5031);
 const origin = `http://localhost:${port}`;
 const data = resolve('.e2e-data-pubdemo');
 let app;
