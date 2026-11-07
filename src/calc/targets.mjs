@@ -145,7 +145,7 @@ export function resolveSpendingWindow({ accounts, monthsOf, clock, parameters = 
     if (!run) { incomplete.push(a); continue; }
     let lastTx = -Infinity;
     for (const m of months) if (m > lastTx) lastTx = m;
-    runs.push({ account: a, run, lastTx });
+    runs.push({ account: a, run, lastTx, months });
   }
   const out = {
     window: null, months: 0, counted: [], silent, incomplete, closed: [], limitedBy: [],
@@ -159,8 +159,14 @@ export function resolveSpendingWindow({ accounts, monthsOf, clock, parameters = 
   out.closed = closedRuns.map(r => r.account);
   if (!openRuns.length) { out.missing.push('no_spending_history'); return out; }
   const to = Math.min(...openRuns.map(r => r.run.to), monthIndex(clock.slice(0, 7)) - 1);
-  const earliest = Math.min(...openRuns.map(r => r.run.from));
-  const from = Math.max(earliest, to - parameters.maxWindowMonths + 1);
+  // A gap means months exist before the latest run. That run still sets the start.
+  // An account with no earlier months opened then, and does not push the start later.
+  const openedThen = r => [...r.months].some(m => m < r.run.from - 1);
+  const gapFroms = openRuns.filter(openedThen).map(r => r.run.from);
+  const wholeFroms = openRuns.filter(r => !openedThen(r)).map(r => r.run.from);
+  let from = to - parameters.maxWindowMonths + 1;
+  if (gapFroms.length) from = Math.max(from, ...gapFroms);
+  if (wholeFroms.length) from = Math.max(from, Math.min(...wholeFroms));
   const span = to - from + 1;
   if (span < parameters.minWindowMonths) { out.missing.push('no_spending_history'); return out; }
   out.window = { from: monthOf(from), to: monthOf(to), months: span };
@@ -250,9 +256,9 @@ export function spendingFigures(sp, { clock, parameters = TARGET_PARAMETERS }) {
     ? `The window ends in ${endName} because ${listText(sp.limitedBy.map(accountLabel))} ${sp.limitedBy.length === 1 ? 'has' : 'have'} no later complete month.`
     : `The window ends in ${endName}, the latest complete month on file.`;
   const windowNote = `Spending window: ${windowText(sp.window)}. ${limitNote}`;
-  const countedNote = `Spending accounts counted: ${listText(sp.counted.map(plainAccountName))}.`;
+  const countedNote = `Spending accounts counted: ${listText(sp.counted.map(accountLabel))}.`;
   const leftOut = [];
-  if (sp.silent.length) leftOut.push(`No transactions on file for ${listText(sp.silent.map(plainAccountName))}`);
+  if (sp.silent.length) leftOut.push(`No transactions on file for ${listText(sp.silent.map(accountLabel))}`);
   if (sp.incomplete?.length) leftOut.push(`No complete month on file for ${listText(sp.incomplete.map(accountLabel))}`);
   const leftCount = sp.silent.length + (sp.incomplete?.length || 0);
   const silentNote = leftOut.length

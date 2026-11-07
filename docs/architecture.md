@@ -2380,10 +2380,11 @@ Computations (`TARGET_PARAMETERS`).
    month before its last, split at a month with no transaction, latest run kept. An account with no complete
    month is left out and named. An account whose last transaction is at least `closedAfterMonths` (6) before
    the newest complete month on file is closed: it does not set the window, and its spending counts only
-   inside its own run. The window ends at the earliest open run, and before the clock month, and covers at
-   most 12 months. An account that opens inside that window counts as zero before its first complete month
-   instead of moving the start later. Under 3 months is `no_spending_history`. The spending-figure note names
-   the ending month and the accounts that limited it. An outflow matched to an inflow on another household
+   inside its own run. A gap keeps the latest run, and that run still sets the start. The window ends at
+   the earliest open run, and before the clock month, and covers at most 12 months. An account whose only
+   run opens inside that window counts as zero before its first complete month instead of moving the start
+   later. Under 3 months is `no_spending_history`. The spending-figure note names the ending month and the
+   accounts that limited it, using each account's stored label, including a display name. An outflow matched to an inflow on another household
    account (same cents, within 5 days, nearest date) is a transfer, not spending. An inflow is income unless
    matched to an outflow on another non-business account, so business transfers in count. Spending accounts
    with no transactions are named in the figure notes and not counted.
