@@ -77,8 +77,8 @@ async function recordDialog(page) {
       }
       const me = pend.querySelector('.h-msg.me.pending');
       if (me && log.me == null) log.me = me.textContent;
-      if (pend.querySelector('.h-askx-live .h-askx-steps, .h-askx-live .h-askx-wait') && !log.order.includes('steps') && !pend.querySelector('.h-askx-stream')) log.order.push('steps');
-      for (const li of pend.querySelectorAll('.h-askx-steps li span')) if (!log.steps.includes(li.textContent)) log.steps.push(li.textContent);
+      if (pend.querySelector('.h-askx-live .h-work') && !log.order.includes('steps') && !pend.querySelector('.h-askx-stream')) log.order.push('steps');
+      for (const li of pend.querySelectorAll('.h-work-items li.step span')) if (!log.steps.includes(li.textContent)) log.steps.push(li.textContent);
       const st = pend.querySelector('.h-askx-stream');
       if (!st) return;
       if (!log.order.includes('text')) log.order.push('text');
