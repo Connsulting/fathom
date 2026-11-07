@@ -276,3 +276,58 @@ test('over the seeded demo store each kind goal card has a kind line whose figur
     rmSync(t.dataDir, { recursive: true, force: true });
   }
 });
+
+/* ---------- entered progress draft and fields (regression: saving an unrelated edit kept progress) ---------- */
+
+const PEOPLE = { asOf: '2026-11-01', people: [{ person: 'owner', amount: 1500 }, { person: 'spouse', amount: 1000 }] };
+const TOTAL = { asOf: '2026-11-01', total: 2500 };
+const SPLIT = [{ person: 'owner', amount: 3000 }, { person: 'spouse', amount: 3000 }];
+const blank = { enteredTotal: '', enteredOwner: '', enteredSpouse: '', enteredAsOf: '' };
+
+test('enteredDraft turns the stored progress into string fields', () => {
+  assert.deepEqual(H.enteredDraft(null), { enteredTotal: '', enteredOwner: '', enteredSpouse: '', enteredAsOf: '' });
+  assert.deepEqual(H.enteredDraft(PEOPLE), { enteredTotal: '', enteredOwner: '1500', enteredSpouse: '1000', enteredAsOf: '2026-11-01' });
+  assert.deepEqual(H.enteredDraft(TOTAL), { enteredTotal: '2500', enteredOwner: '', enteredSpouse: '', enteredAsOf: '2026-11-01' });
+});
+
+test('enteredFields round trips every stored shape, with or without a split', () => {
+  assert.deepEqual(H.enteredFields(H.enteredDraft(PEOPLE), null, 'x'), { entered: PEOPLE }, 'people and no split');
+  assert.deepEqual(H.enteredFields(H.enteredDraft(TOTAL), SPLIT, 'x'), { entered: TOTAL }, 'total and a two-person split');
+  assert.deepEqual(H.enteredFields(H.enteredDraft(PEOPLE), SPLIT, 'x'), { entered: PEOPLE }, 'people and a matching split');
+  assert.deepEqual(H.enteredFields(H.enteredDraft(TOTAL), null, 'x'), { entered: TOTAL }, 'total and no split');
+  assert.deepEqual(H.enteredFields(H.enteredDraft(null), null, 'x'), { entered: null });
+  assert.deepEqual(H.enteredFields(H.enteredDraft(null), SPLIT, 'x'), { entered: null });
+});
+
+test('enteredFields keeps only non-blank people in owner then spouse order and defaults asOf', () => {
+  assert.deepEqual(H.enteredFields({ ...blank, enteredSpouse: '40' }, null, '2026-11-08'), { entered: { asOf: '2026-11-08', people: [{ person: 'spouse', amount: 40 }] } });
+  assert.deepEqual(H.enteredFields({ ...blank, enteredOwner: '10', enteredSpouse: '40', enteredAsOf: '2026-10-01' }, null, 'x'),
+    { entered: { asOf: '2026-10-01', people: [{ person: 'owner', amount: 10 }, { person: 'spouse', amount: 40 }] } });
+  assert.deepEqual(H.enteredFields({ ...blank, enteredTotal: '75', enteredAsOf: '  ' }, [], '2026-11-08'), { entered: { asOf: '2026-11-08', total: 75 } });
+  assert.deepEqual(H.enteredFields({ ...blank, enteredOwner: '0' }, null, 'x'), { entered: { asOf: 'x', people: [{ person: 'owner', amount: 0 }] } });
+  assert.deepEqual(H.enteredFields({ ...blank, enteredOwner: '  ', enteredTotal: '5' }, null, 'x'), { entered: { asOf: 'x', total: 5 } }, 'a whitespace amount is blank');
+});
+
+test('enteredFields rejects bad amounts and amounts for a person with no share', () => {
+  const NO_SHARE = 'Contributed amounts are only for people with a share.';
+  const BAD = 'What was contributed must be zero or more.';
+  assert.deepEqual(H.enteredFields({ ...blank, enteredSpouse: '5' }, [{ person: 'owner', amount: 100 }], 'x'), { err: NO_SHARE });
+  assert.deepEqual(H.enteredFields({ ...blank, enteredOwner: '5' }, [{ person: 'spouse', amount: 100 }], 'x'), { err: NO_SHARE });
+  assert.ok(H.enteredFields({ ...blank, enteredOwner: '5' }, null, 'x').entered, 'no split means no share check');
+  assert.ok(H.enteredFields({ ...blank, enteredOwner: '5' }, [], 'x').entered, 'an empty split means no share check');
+  for (const bad of ['-1', 'abc', '1e', '-0.5']) {
+    assert.deepEqual(H.enteredFields({ ...blank, enteredOwner: bad }, null, 'x'), { err: BAD }, `owner ${bad}`);
+    assert.deepEqual(H.enteredFields({ ...blank, enteredSpouse: bad }, SPLIT, 'x'), { err: BAD }, `spouse ${bad}`);
+    assert.deepEqual(H.enteredFields({ ...blank, enteredTotal: bad }, null, 'x'), { err: BAD }, `total ${bad}`);
+  }
+});
+
+test('enteredInputs shows the inputs for the stored representation', () => {
+  assert.deepEqual(H.enteredInputs(blank, null), { people: false, total: true });
+  assert.deepEqual(H.enteredInputs(blank, []), { people: false, total: true });
+  assert.deepEqual(H.enteredInputs(blank, SPLIT), { people: true, total: false });
+  assert.deepEqual(H.enteredInputs(H.enteredDraft(PEOPLE), null), { people: true, total: true }, 'people stored with no split');
+  assert.deepEqual(H.enteredInputs(H.enteredDraft(TOTAL), SPLIT), { people: true, total: true }, 'total stored with a split');
+  assert.deepEqual(H.enteredInputs(H.enteredDraft(TOTAL), null), { people: false, total: true });
+  assert.deepEqual(H.enteredInputs(H.enteredDraft(PEOPLE), SPLIT), { people: true, total: false });
+});
