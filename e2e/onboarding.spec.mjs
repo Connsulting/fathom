@@ -514,11 +514,12 @@ test.describe('real store past first run', () => {
     await expect(page.locator('.h-ob-card h1')).toBeVisible();
     await page.getByRole('button', { name: /Back to my brief/ }).click({ timeout: 15_000 });
     await expect(page).toHaveURL(/#\/home$/);
-    // Completing onboarding on a signed-in instance starts the guided tour once; dismissing it
+    // Completing onboarding on a signed-in instance starts the guided tour (it may still be
+    // waiting for a stop's anchor on this sparse store); Escape dismisses it either way, and that
     // clears the user's flag on the server.
-    await expect(page.locator('.h-tour[role="dialog"]')).toBeVisible({ timeout: 15_000 });
     await page.keyboard.press('Escape');
     await expect(page.locator('.h-tour')).toHaveCount(0);
+    await expect.poll(async () => (await realGet('/api/scenario')).live.tourPending, { timeout: 15_000 }).toBe(false);
     await page.goto(`${BASE}/#/onboarding`);
     await expect(page).toHaveURL(/#\/onboarding\/1$/);
     await page.getByRole('link', { name: 'Back to the app' }).click();
