@@ -586,7 +586,8 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
   const ingestAccounts = ingest.accounts || {};
   const accountRows = db.prepare('SELECT * FROM accounts ORDER BY sort, id').all();
   const householdNames = naming.householdNames;
-  const goals = loadGoals(db, { fig, accounts: accountRows });
+  // Goal labels read the naming rows, so an uncertain connected mask is not shown as an account number.
+  const goals = loadGoals(db, { fig, accounts: accountRows.map(a => naming.byId.get(a.id) ?? a) });
   const pace = buildPace(db, { clock: clk });
   // The rollup date is the newest stored row when that is later than the oldest goal input.
   // Home reads this field; Money reads meta.dataThrough. Both follow the same ISO day.
