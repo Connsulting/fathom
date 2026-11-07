@@ -260,21 +260,25 @@ test('an engine restream reset carries no draft flag', async t => {
   assert.deepEqual(seen.filter(e => e.type === 'reset'), [{ type: 'reset' }]);
 });
 
-test('work is bounded to 40 items and 2000 characters per note', async t => {
+test('stored work is never capped: a 5000 character note and 60 tool steps stay whole, identical to the live items', async t => {
   const s = await demoStore(t);
-  const long = 'Let me look at this part of the plan. '.repeat(70).trim();
-  assert.ok(long.length > 2000);
-  const many = Array.from({ length: 24 }, (_, i) => ({ name: i % 2 ? 'list_goals' : 'list_accounts', args: {} }));
-  const { reply } = await askScripted(s, [[
-    { text: long, toolCalls: many }, { text: 'More.', toolCalls: many }, { text: 'Keep a reserve.' },
-  ]]);
+  const long = 'Let me look at this part of the plan. '.repeat(140).trim().slice(0, 5000);
+  assert.equal(long.length, 5000);
+  assert.equal(long, long.trim());
+  // Alternating labels never repeat in a row, so none of the 60 steps collapse.
+  const many = Array.from({ length: 60 }, (_, i) => ({ name: i % 2 ? 'list_goals' : 'list_accounts', args: {} }));
+  const seen = [];
+  const { reply } = await askScripted(s, [[{ text: long, toolCalls: many }, { text: 'Keep a reserve.' }]], { onEvent: e => seen.push(e) });
   const { items } = reply.provenance.work;
-  assert.equal(items.length, 40);
-  assert.deepEqual(items[0], step(PROGRESS_START));
-  const first = items.find(x => x.k === 'note');
-  assert.equal(first.text.length, 2000);
-  assert.ok(long.startsWith(first.text.slice(0, 1900)), 'the note is the start of the interim text');
-  for (const x of items) if (x.k === 'note') assert.ok(x.text.length <= 2000);
+  assert.deepEqual(items, [
+    step(PROGRESS_START),
+    note(long),
+    ...many.map(c => step(PROGRESS_LABELS[c.name])),
+    step(PROGRESS_GROUNDING),
+  ]);
+  assert.equal(items.find(x => x.k === 'note').text, long, 'the note is kept byte for byte');
+  assert.equal(items.filter(x => x.k === 'step').length, 62);
+  assert.deepEqual(liveItems(seen), items, 'the live items and the stored items are identical');
 });
 
 test('a notice reply has no work', async t => {

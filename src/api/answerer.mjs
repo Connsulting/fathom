@@ -47,8 +47,9 @@
 // and { k: 'note', text, draft?: true } in order: the start step; per tool round its notes and tool
 // steps in content order (the live order); the grounding step; after a failed check the first final text as a draft
 // note, the retry step, the second call's rounds and the grounding step. A step equal to the
-// previous step collapses (notes in between too), notes are cut at 2000 characters, the list at 40 items, and ms is the answer's
-// wall time in whole milliseconds. A notice reply has no work.
+// previous step collapses (notes in between too). Nothing is cut, so the stored list equals the
+// live one; the engine already bounds it (8 rounds per call, each within its token limit). ms is
+// the answer's wall time in whole milliseconds. A notice reply has no work.
 //
 // The model's text loses its Source, Reference or Citation lines and sentences (stripSources) before grounding,
 // and the rendered blocks keep a minimal markdown subset (src/shared/answer-text.mjs): paragraphs,
@@ -514,10 +515,9 @@ function streamer(onEvent) {
 
 // provenance.work: the steps and notes of one answer, built after the fact from the engine
 // results, so a streamed and an unstreamed ask store the same list. A step equal to the previous
-// step collapses, notes in between or not (as the live emitter dedupes progress labels); notes are trimmed and cut at
-// WORK_NOTE_CHARS; the list stops at WORK_ITEMS.
-const WORK_ITEMS = 40;
-const WORK_NOTE_CHARS = 2000;
+// step collapses, notes in between or not (as the live emitter dedupes progress labels); notes are
+// trimmed. No note or item cap: the stored list equals the live one, and the engine bounds its
+// size (8 rounds per call, each within the request's token limit).
 function workList() {
   const items = [];
   let lastStep = null;
@@ -529,7 +529,7 @@ function workList() {
     },
     note(text, draft = false) {
       const t = String(text ?? '').trim();
-      if (t) items.push({ k: 'note', text: t.slice(0, WORK_NOTE_CHARS), ...(draft ? { draft: true } : {}) });
+      if (t) items.push({ k: 'note', text: t, ...(draft ? { draft: true } : {}) });
     },
     // Each tool round of an engine result: its notes and tool steps in content order (parts), so
     // the stored order equals the live order.
@@ -697,7 +697,7 @@ export function createLiveAnswerer({ engine, packs } = {}) {
         costUsd: Number(costUsd.toFixed(6)),
         ...(proposal ? { proposal } : {}),
         ...(goalProposal ? { goalProposal } : {}),
-        work: { ms: Math.max(0, Math.round(performance.now() - t0)), items: work.items.slice(0, WORK_ITEMS) },
+        work: { ms: Math.max(0, Math.round(performance.now() - t0)), items: work.items },
       },
     };
   }

@@ -126,20 +126,30 @@ function matches(value, item) {
 }
 
 // A spelled count that names a figure (money, percent, time, or a counted record) is always checked.
-const unitAfter = /^\s*(?:%|(?:\p{L}+\s+)?(?:dollars?|cents?|percent|seconds?|minutes?|hours?|days?|weeks?|months?|quarters?|years?|decades?|accounts?|transactions?|payments?|holdings?|positions?|dependents?|child|children|kids?)\b)/iu;
+const unit = '(?:dollars?|cents?|percent|seconds?|minutes?|hours?|days?|weeks?|months?|quarters?|years?|decades?|accounts?|transactions?|payments?|holdings?|positions?|dependents?|child|children|kids?)\\b';
+const unitWord = new RegExp(`%|\\b${unit}`, 'i');
+const unitAfter = new RegExp(`^\\s*(?:%|(?:\\p{L}+\\s+)?${unit})`, 'iu');
 const listItem = /^ {0,3}(?:[-*•]|\d+[.)])(?:\s|$)/;
-const verbs = 'is|are|was|were|be|am|equals|becomes|remains|means|has|have|had|gets|got';
-const determiner = new RegExp(`\\b(?:a|an|the|this|that|these|those|each|every|any|which|another|no|some|whichever)\\s+(?:(?!(?:${verbs})\\b)\\p{L}+\\s+)?$`, 'iu');
+const determiners = 'a|an|the|this|that|these|those|each|every|any|which|another|no|some|whichever';
+const adjectives = new Set(['next', 'same', 'other', 'first', 'last', 'second', 'third', 'only', 'new', 'old', 'different', 'specific',
+  'particular', 'similar', 'better', 'best', 'right', 'wrong', 'larger', 'smaller', 'earlier', 'later']);
+
+// "one" right after a determiner, or after one allowlisted adjective or capitalized word.
+function afterDeterminer(before) {
+  if (new RegExp(`\\b(?:${determiners})\\s+$`, 'i').test(before)) return true;
+  const between = new RegExp(`\\b(?:${determiners})\\s+(\\p{L}+)\\s+$`, 'iu').exec(before)?.[1];
+  return between !== undefined && (adjectives.has(between.toLowerCase()) || /^\p{Lu}/u.test(between));
+}
 
 // Top-level items in the list block right after the paragraph holding `from` (the end of a count
 // phrase); 0 when no list follows, the phrase is not in the paragraph's last sentence, or the
-// paragraph does not end with a colon.
+// paragraph does not end with a colon, or a unit word follows the phrase within the paragraph.
 function listLength(text, from) {
   const lines = text.slice(from).split('\n');
   let index = 1;
   while (index < lines.length && lines[index].trim() && !listItem.test(lines[index])) index++;
   const tail = lines.slice(0, index).join('\n').trimEnd();
-  if (!tail.endsWith(':') || /[.!?]\s/.test(tail)) return 0;
+  if (!tail.endsWith(':') || /[.!?]\s/.test(tail) || unitWord.test(tail)) return 0;
   let count = 0;
   let gap = false;
   for (const line of lines.slice(index)) {
@@ -159,7 +169,7 @@ function isStructural(text, phrase) {
   const word = phrase.text.toLowerCase();
   if (word === 'one') {
     const lineStart = text.lastIndexOf('\n', phrase.index - 1) + 1;
-    if (determiner.test(text.slice(lineStart, phrase.index)) || /^\s+(?:of|more|another)\b/i.test(rest)) return true;
+    if (afterDeterminer(text.slice(lineStart, phrase.index)) || /^\s+(?:of|more|another)\b/i.test(rest)) return true;
   }
   return phrase.value > 0 && !/hundred|thousand|million|billion/.test(word) && phrase.value === listLength(text, phrase.index + phrase.text.length);
 }
