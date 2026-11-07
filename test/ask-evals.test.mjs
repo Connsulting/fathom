@@ -110,3 +110,40 @@ test('expected values must appear and length budgets are enforced', () => {
   assert.equal(gradeLength('A brief answer.', 3).ok, true);
   assert.equal(gradeLength('A much longer answer.', 3).ok, false);
 });
+
+
+test('dates, years, plan and form identifiers and idiomatic one are not financial figures', () => {
+  for (const text of [
+    'Data through November 15, 2032.', 'Data through 15 November 2032.', 'In 2032, refresh the data.',
+    'Your 401(k), 403(b), 457(b) and 529 plan.', 'Use Form 1040, 1099-R and W-2, plus Schedule K-1.',
+    'One of your goals needs attention.', 'The next one can wait.', 'No one has confirmed it.',
+  ]) assert.equal(gradeFigures(text, []).ok, true, text);
+  assert.equal(gradeFigures('$2032', []).ok, false);
+  assert.equal(gradeFigures('one dollar', []).ok, false);
+  for (const text of ['1', '0', '100%']) {
+    const g = gradeFigures(text, [result(37)]);
+    assert.equal(g.ok, false);
+    assert.equal(g.selfComputed.length, 0);
+  }
+});
+
+test('percent fractions compare at relative tolerance while money permits rounded cents', () => {
+  assert.equal(gradeFigures('4%', [result(0.04)]).ok, true);
+  assert.equal(gradeFigures('4.5%', [result(0.04)]).ok, false);
+  assert.equal(gradeFigures('$10.00', [result(10.004)]).ok, true);
+  assert.equal(gradeFigures('0.045', [result(0.04)]).ok, false);
+});
+
+test('annual expectations use complete covered months rather than a partial last month', async () => {
+  const store = await createEvalStore();
+  try {
+    const meta = JSON.parse(store.db.prepare("SELECT value FROM content WHERE key='meta'").get().value);
+    meta.dataThrough = 'Mar 10, 2026';
+    store.db.prepare("UPDATE content SET value=? WHERE key='meta'").run(JSON.stringify(meta));
+    const covered = store.db.prepare(`SELECT sum(-t.amount) AS v FROM transactions t JOIN accounts a ON a.id=t.account_id
+      WHERE a.kind='checking' AND t.date<'2026-03-01' AND t.amount<0
+      AND t.category NOT IN ('transfer','income','income_tax') AND lower(t.description) NOT LIKE '%mortgage%'
+      AND lower(t.description) NOT LIKE '%income tax%'`).get().v;
+    assert.equal(expectedFigures(store.db, [{ kind: 'annual-spending' }])[0], Math.round(covered * 6 * 100) / 100);
+  } finally { await store.close(); }
+});
