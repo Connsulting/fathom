@@ -170,9 +170,10 @@ describe('figure contract', () => {
 
   test('calculate results and chained refs resolve', async () => {
     const result = await calc('subtract', [{ expr: { operation: 'sum', operands: [F('biz_cash'), F('personal_cash')] } }, F('sp_cash')]);
-    assert.equal(await assertRefsResolve(result, ctx), 1);
+    // The result and every input figure in its provenance resolve.
+    assert.ok(await assertRefsResolve(result, ctx) >= 4);
     const chained = await calc('round_up', [{ ref: result.figure.ref }], { places: 100 });
-    assert.equal(await assertRefsResolve(chained, ctx), 1);
+    assert.ok(await assertRefsResolve(chained, ctx) >= 5);
     assert.equal(getTool('calculate').operations.every(o => o.referenceable), true);
   });
 });
