@@ -1,6 +1,7 @@
 # Model-parsed imports
 
-Status: proposed specification. Repository base: `main` at `8351e0b` (2026-11-07).
+Status: proposed specification. Source snapshot: `main` at `8351e0b` (2026-11-07).
+Remote `main` was `5a7fd22` at final revision; implementation readiness refreshes all probes.
 This change ships documentation only. The ticket bodies below are planning contracts,
 not filed issues or dispatched work. One cross-provider plan review precedes coordinator review.
 
@@ -12,6 +13,9 @@ not filed issues or dispatched work. One cross-provider plan review precedes coo
    `refresh.import_file`, `refresh.retry_import`, and `household.imports`. They are not on this
    base. IMP-7 waits for C10 and uses those operations, rather than creating competing tools.
    The operation-registry consolidation PR #92 is open; workers must refresh its merge state.
+   C2 owns `write:imports` and `registerReceiptKind`; IMP-3, IMP-4 and IMP-5 wait for C2.
+   MT-05 owns transactional engine round reservations and household/instance allocations;
+   IMP-2 waits for MT-05 and attaches file limits to its reservations.
 3. The multi-household document is a specification, but household runtimes, vaults, and outbound
    controls already exist in `src/platform/runtime.mjs` and `src/platform/outbound.mjs`.
    All new state belongs to the captured household database and vault, never platform tables.
@@ -218,6 +222,37 @@ Existing `column_mappings` have no recorded owner approval. Add approval/version
 mark existing entries unapproved, and stage one summary on their next use. Do not rewrite their
 already imported rows or pretend an earlier model decision was owner consent.
 
+### One proposal review interface
+
+IMP-3 delivers the shared review service and authenticated HTTP route
+`POST /api/import-proposals/:proposalId/review`, with body
+`{version, decision, evidence}`. IMP-7 registers exactly that service as
+`refresh.review_import {proposalId, version, decision, evidence}` in C10's existing tool;
+no other approval, correction, or commit operation is introduced. `version` is the positive
+integer proposal version; `decision` is `approve` or `correct`; `evidence` is the exact owner
+statement, bounded to 1 through 4,000 characters. The required scope is `write:imports`, plus
+every underlying action scope when the proposal contains facts, goals, or recommendation edits.
+The HTTP route uses the existing session, Origin and household guards; MCP uses its scoped key.
+Both resolve actor and household from context, never body fields.
+
+For `approve`, match `evidence` to the authenticated actor's current owner statement using
+`src/actions/evidence.mjs`, require unambiguous acceptance of the immediately presented
+proposal/version, and atomically revalidate, commit, approve the mapping, and return
+`{proposalId, version, status, counts, receipt}`. A stale version returns HTTP 409 with
+`proposal_stale`; a foreign id returns 404; missing scope returns 403 with no effects.
+For `correct`, the owner statement becomes cited correction evidence and a new versioned
+proposal. Interpretation requiring the engine returns queued, never commits immediately,
+and cannot reuse approval from an older version. Numeric corrections remain subject to
+shared evidence validation. The revised version must be explicitly accepted.
+
+IMP-3 keeps the new mapping/proposal path internal until IMP-4's atomic routing cutover;
+existing upload behavior does not start staging new layouts on IMP-3's merge. Its HTTP route
+can operate on synthetic seeded proposals in boundary tests. Since C10's refresh registration
+arrives in IMP-7, IMP-3 records this single route/operation pair as planned in C2's explicit
+`PARITY_PENDING` inventory and the tool catalog; IMP-7 removes that pending entry and proves
+actual HTTP/MCP/Ask parity. This is a tracked unbuilt operation, not a second write path.
+All engine work for corrections in Ask uses C10's `queueAfterTools`; MCP/HTTP can run it inline.
+
 ## Free-form updates and shared action writes
 
 A pasted, typed, or uploaded note is encrypted as a source and interpreted into the same staged
@@ -227,16 +262,22 @@ or approval in plain words. Use `src/actions/index.mjs`, `src/actions/evidence.m
 `src/actions/receipts.mjs`, and the shared `undo` dispatcher. There is no note-specific SQL
 writer for facts, goals, rec steps, or expected transactions.
 
-For “payroll true-up done, Gusto pays next Tuesday”, match a unique stored payroll recommendation
-step and propose its completion through `changeRec`; if none exists, retain that clause as a
+For “payroll true-up done, the payroll provider pays next Tuesday”, match a unique stored
+payroll recommendation step and propose its completion through `changeRec`; if none exists, retain that clause as a
 source-linked note rather than inventing a fact key. A recognized typed fact uses `recordFact`,
 and a goal edit uses `changeGoal`. Add one expected-transaction action in `src/actions/` and
 one registered `answer.expected_transaction` operation; no separate import-only action.
-C10 still owns import and retry. Permissions for the expected action are `write:imports`;
-Undo requires that same scope and the receipt's actor, as for other actions.
+C10 still owns import, retry and proposal review. The expected action requires `write:imports`;
+fact writes additionally require `write:facts`, goal writes `write:goals`, recommendation-step
+completion `write:steps`, and recommendation status/owner edits `write:recs`. Import approval
+never grants those scopes. Check all required scopes before applying the group; a missing
+scope leaves that action and the whole note group pending with a permission reason and no
+partial writes. Each child receipt retains its action's scope.
 
-IMP-5 adds a household-local `timezone` setting accepting IANA zone ids, default `UTC`,
-shown in relative-date summaries and configurable through existing household settings.
+Reuse the existing `settings.timezone` through `ownerTimezone(db)` in
+`src/jobs/scheduler.mjs`, including its existing `America/New_York` default and validity checks.
+Do not create a second timezone setting or change the scheduler/email default. Show the
+resolved timezone with relative-date summaries.
 Relative dates are resolved in deterministic code from the source's captured date and household
 timezone: “next Tuesday” means the first Tuesday strictly after that local date. Preserve the
 phrase, anchor, timezone, rule, and resulting ISO date in evidence and show the resolved date
@@ -246,9 +287,13 @@ note without an anchor asks for the date. No amount was stated in the example, s
 payment amount stays unknown; do not borrow gross/net from an unrelated payroll record.
 
 Approval applies all note actions in one outer transaction, defers replanning until commit,
-and groups their existing action receipts into one Undo affordance. Extend the shared receipt
-restoration registry for expected transactions and atomic receipt groups. Undo checks the
-actor, scope, current after-state, and dependent changes; a conflict refuses the whole group.
+and groups their existing action receipts into one Undo affordance. Register expected
+transaction and atomic receipt-group kinds through C2's
+`registerReceiptKind(kind, {restore})`; do not add another fixed-table Undo dispatcher.
+Group metadata retains the child receipt ids and union of their required scopes. Before any
+restore, grouped Undo verifies the actor owns every child receipt and holds every child scope,
+then checks all current after-states and dependent changes. A missing scope or stale child
+refuses the whole group atomically; `write:imports` alone cannot undo fact or goal changes.
 The original encrypted note and audit receipt remain. Do not delete an observed posting when
 undoing an expectation. Linking an expectation to a later observed transaction is explicit and
 never counts the expectation in actuals. No automatic amount-only match in version one.
@@ -283,10 +328,12 @@ still bounds decoding; a file larger than the model envelope waits with `budget_
 Never silently sample away uncovered sheets. A user can supply a smaller file; the agent cannot
 raise a cap. The default file cap also applies to a note treated as a file.
 
-Extend the existing engine request/runtime with a call-level remaining-budget envelope and
-shared ledger reservation rather than creating a second gateway. Use purpose `extract` and
-an import/file correlation id. The provider allowance is the minimum of remaining file cap,
-household monthly cap, and funded allocation. Reserve conservative input/output cost before
+Build on MT-05's merged transactional round-reservation and settlement API in the existing
+engine/runtime. IMP-2 adds a call-level remaining-file-budget envelope and a household-local
+`import_model_spend` correlation ledger linking each file to those same reserved rounds;
+it does not reserve household/instance funding independently or add a second gateway.
+Use purpose `extract` and an import/file correlation id. The provider allowance is the minimum
+of remaining file cap, household monthly cap, and funded allocation. Reserve conservative input/output cost before
 each dispatch, count failed/unknown calls conservatively, reconcile known usage afterward,
 and persist reservations so retry/restart cannot reset the cap. Concurrent files share the
 existing household engine serialization and funding control. Validate ceilings against the
@@ -343,10 +390,13 @@ provenance with synthetic populated stores, not by retaining old parsing impleme
 Run reference searches to distinguish inert historical labels from executable dispatch.
 No dual signature, filename fallback, old-layout special case, or parallel parser path.
 
-Extend the common action receipt registry with model-import batch before/after images, scoped
-`write:imports`, so new model batches and note action groups expose Undo through the shared
-dispatcher. A batch reverts revisions and omission removals only if all affected after-states
-still match. Refuse dependent/stale Undo atomically. Old imports remain subject to their
+IMP-4 registers model-import batch restoration through C2's
+`registerReceiptKind(kind, {restore})`, reusing IMP-5's receipt-group support and preserving
+before/after images. Model-import receipts require `write:imports` plus every child action
+scope when a batch contains facts or other actions; authorization preflight and grouped Undo
+use the same all-scopes rule as notes. Never use an import receipt to bypass a narrower action
+scope. New model batches and note groups expose Undo through the one shared dispatcher.
+A batch reverts revisions and omission removals only if all affected after-states still match. Refuse dependent/stale Undo atomically. Old imports remain subject to their
 existing Confirm Undo rules. This intentionally amends C10's planned “import Undo unavailable”
 for new model batches; standard legacy imports do not acquire fabricated historical receipts.
 The file record and spent model cost survive Undo. Undo of first approval invalidates its
@@ -468,12 +518,14 @@ remain authoritative; only additive tables/columns are introduced.
 ### IMP-2 Big: bounded source interpretation and file budgets
 
 Problem: custom layouts and raw-image extraction cannot meet the new evidence contract.
-Base: `main`. Blocked by: IMP-1 merged.
+Base: `main`. Blocked by: IMP-1 and MT-05 merged.
 Decisions: implement all-sheet source indexing, text/PDF spans, semantic-leaf scrubbing and
-local tokens, engine typed proposals, durable per-file admission in household
-`import_model_spend`, and the call-level engine budget envelope. Expose this service internally;
-route cutover belongs to IMP-4. Size: 500 to 750 production lines plus tests.
-Preconditions: IMP-1 schemas/oracles; existing fake engine and runtime, no credentials.
+local tokens, engine typed proposals, and durable per-file admission in household
+`import_model_spend` linked to MT-05's round reservations and settlements, plus the call-level
+remaining-file-budget envelope. MT-05 retains funding/reservation ownership.
+Expose this service internally; route cutover belongs to IMP-4. Size: 500 to 750 production lines plus tests.
+Preconditions: IMP-1 schemas/oracles and actual merged MT-05 reservation API with
+`test/tenancy-budget.test.mjs` passing; existing fake engine and runtime, no credentials.
 
 1. Every indexed populated region has a disposition, all values resolve locally, and model
    literals, uncached formulas, prompt instructions, and raw scans cannot produce accepted
@@ -486,7 +538,7 @@ Preconditions: IMP-1 schemas/oracles; existing fake engine and runtime, no crede
    Runs in: worker.
 
 Out of scope: replacing parser routing, provider credentials or deployments.
-Readiness: startable no now, IMP-1 absent; finishable yes as a contract.
+Readiness: startable no now, IMP-1 and MT-05 absent; finishable yes as a contract.
 Riskiest step/probe: fail a provider round after admission, restart, then retry with synthetic
 pricing; `model-budget.test.mjs` proves the original reservation still counts.
 Contradiction review: reuse the household engine and `extract` purpose; no separate provider path.
@@ -494,16 +546,20 @@ Contradiction review: reuse the household engine and `extract` purpose; no separ
 ### IMP-3 Big: validated mappings and approval lifecycle
 
 Problem: new mappings currently auto-save and immediately import.
-Base: `main`. Blocked by: IMP-1 and IMP-2 merged.
+Base: `main`. Blocked by: IMP-1, IMP-2 and C2 merged.
 Decisions: stage generic mappings and cited irregular rows; deterministic totals/coverage,
 identity and duplicate previews; header-indexed structural applicability; versioned delta-only
-clarifications and actor-bound approval; no writes from a model response.
+clarifications and actor-bound approval; deliver the shared review service and
+`POST /api/import-proposals/:proposalId/review` contract above. Keep interpretation internal
+until IMP-4; declare the route's C10 review operation in `PARITY_PENDING` until IMP-7 registers
+it. No writes from a model response.
 Size: 450 to 650 production lines plus tests.
 Preconditions: IMP-2 interpreter and IMP-1 versioned schemas.
 
 1. First use waits for explicit approval, mismatched totals fail, no-total summaries tell the
    truth, and stale approvals fail atomically. Verified by:
-   `node --test test/ingest/model-approval.test.mjs test/ingest/model-validation.test.mjs`.
+   `node --test test/ingest/model-approval.test.mjs test/ingest/model-validation.test.mjs test/ingest/model-review-api.test.mjs test/tools-parity.test.mjs`.
+   Route tests cover owner evidence, correction/versioning, guards, foreign ids, and scopes.
    Runs in: worker.
 2. Compatible repeat mappings make zero calls/prompts even with engine off; changed columns,
    signs/units, new sheets and ambiguous same-header contexts preserve bindings and ask only
@@ -519,11 +575,12 @@ interpretation, never a previous file's amounts; irregular new content still nee
 ### IMP-4 Big: atomic cutover, supersession, and shared import Undo
 
 Problem: registry and persistence branch on household-specific parser ids.
-Base: `main`. Blocked by: IMP-1, IMP-2, IMP-3 and IMP-5 merged.
+Base: `main`. Blocked by: IMP-1, IMP-2, IMP-3, IMP-5 and C2 merged.
 Decisions: route all nonstandard files through proposals; remove all five replaced parsers,
 workbook-specific helpers, raw scan dispatch and every executable caller in this PR; generalize
-coverage/authority; add explicit reinterpret mode and extend shared receipt restoration for
-new model batch Undo. Migrate every status/retry/API/scenario consumer atomically with cutover.
+coverage/authority; add explicit reinterpret mode and register model batch Undo through
+C2's `registerReceiptKind`, reusing IMP-5's grouped all-scopes authorization.
+Migrate every status/retry/API/scenario consumer atomically with cutover.
 Size: 700 to 1,000 production changed lines including deletions, plus caller/test migrations.
 Preconditions: common gates and conflict check against concurrent ingest/P&L work.
 
@@ -547,21 +604,26 @@ Contradiction review: no parser compatibility path; frozen semantic identity rul
 ### IMP-5 Big: free-form actions and expected transactions
 
 Problem: notes bypass Ask write evidence, and there is no expected-payment action/store.
-Base: `main`. Blocked by: IMP-1, IMP-2 and IMP-3 merged; operation consolidation C1 merged.
+Base: `main`. Blocked by: IMP-1, IMP-2, IMP-3, C1 and C2 merged.
 Decisions: reuse fact/goal/rec actions, add typed source-span and relative-date evidence to
-`src/actions/evidence.mjs`, expected-transaction action and household table, household timezone setting, grouped receipt
-Undo, and `answer.expected_transaction` with `write:imports`. Migrate all action callers and
+`src/actions/evidence.mjs`, expected-transaction action and household table, existing
+`ownerTimezone(db)` resolution, grouped receipt Undo registered with C2's `registerReceiptKind`,
+and `answer.expected_transaction` with `write:imports`. Enforce existing fact/goal/rec scopes
+per action and the union for grouped Undo. Migrate all action callers and
 the registry in this ticket. Size: 450 to 650 production lines plus migration/tests.
-Preconditions: actual merged C1 operation registry, common offline fixtures, synthetic actor.
+Preconditions: actual merged C1 operation registry and C2 scope/receipt APIs, existing timezone
+setting, common offline fixtures, synthetic actor.
 
 1. The payroll example proposes the existing step and an expectation with null amount and a
    deterministically resolved date; unsupported claims remain notes, guessed values fail,
    and a historical unanchored note asks for the anchor. Verified by:
    `node --test test/model-updates.test.mjs test/ask-actions.test.mjs`. Runs in: worker.
 2. Facts/goals use their shared action handlers and grouped Undo is actor/scoped, atomic, and
-   stale-safe; expectations cannot change observed actuals. Verified by:
-   `node --test test/expected-transactions.test.mjs test/model-update-undo.test.mjs test/tools.test.mjs`.
-   Runs in: worker.
+   stale-safe; an imports-only MCP key cannot apply or undo fact/goal/step actions;
+   expectations cannot change observed actuals. Verified by:
+   `node --test test/expected-transactions.test.mjs test/model-update-undo.test.mjs test/tools.test.mjs test/write-scopes.test.mjs test/tools-registry.test.mjs`.
+   Include the merged Ask context-budget test in `test/tools-registry.test.mjs`; timezone
+   tests cover midnight and DST without changing scheduler/email defaults. Runs in: worker.
 
 Out of scope: automatic expected-to-observed linking, new payroll calculations, auto-paid tax.
 Readiness: startable no now, dependencies absent; finishable yes as a contract.
@@ -596,16 +658,20 @@ Contradiction review: no visual acceptance delegated to the owner.
 Problem: Ask refresh must not await the engine while it holds its own ledger lock.
 Base: `main`. Blocked by: IMP-4, IMP-5, IMP-6 and C10 merged.
 Decisions: adapt C10's existing import/retry operations and `household.imports` to proposal
-statuses, explicit reinterpret mode, batch receipts and notes; retain `queueAfterTools`
-in Ask and inline execution in MCP. Size: 150 to 300 production lines plus tests.
+statuses, explicit reinterpret mode, batch receipts and notes; register
+`refresh.review_import` as the same IMP-3 service, remove its `PARITY_PENDING` entry, and
+retain `queueAfterTools` in Ask and inline execution in MCP.
+Size: 150 to 300 production lines plus tests.
 Preconditions: actual C10 exports and parity gate verified on base; no live engine needed.
 
-1. HTTP/MCP import, retry and reinterpret return equivalent proposals, counts and receipts;
+1. HTTP/MCP import, retry, reinterpret and review (approve/correct) return equivalent
+   versioned proposals, counts and receipts;
    wrong household references refuse without side effects. Verified by:
-   `node --test test/tools-refresh.test.mjs test/model-import-parity.test.mjs test/tools-parity.test.mjs`.
+   `node --test test/tools-refresh.test.mjs test/model-import-parity.test.mjs test/tools-parity.test.mjs test/tools-registry.test.mjs`.
    Runs in: worker.
 2. Ask pasted note/import returns queued and finishes after the tool round within 5 seconds
-   under the scripted engine without recursive ledger waiting. Verified by the same refresh
+   under the scripted engine without recursive ledger waiting, including corrections
+   requested through `review_import`. Verified by the same refresh
    test plus `node --test test/ask-model-imports.test.mjs`. Runs in: worker.
 
 Out of scope: duplicating C10 operations, jobs that send email, engine budget controls in Ask.
@@ -638,6 +704,15 @@ Riskiest step/probe: a failed live-mode call consumes its conservative reservati
 cases stay unrun at cap; exercised by `import-evals-live-cap.test.mjs`.
 Contradiction review: the authorized live command remains a separate coordinator check, never
 an implicit credential/spend gate on this unattended implementation package.
+
+## Plan review disposition
+
+One cross-provider plan review examined `b51a588` and returned five blocking findings. This
+revision resolves them: C2 owns scopes and receipt registration; note approval/Undo require
+all child scopes; the review service/route/tool contract and cutover ownership are pinned;
+relative dates reuse the existing timezone setting; per-file limits depend on MT-05's funding
+reservations. The payroll example is generic and IMP-5 includes the Ask context-budget gate.
+No second review round is requested. The coordinator reviews this final revision.
 
 ## Acceptance outside the ticket runs
 
