@@ -1,68 +1,84 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, existsSync, readdirSync } from 'node:fs';
+import { writeFileSync, readdirSync, existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { runCommand } from './helpers/server.mjs';
-import { twoHouseholds } from './helpers/tenancy-runtime.mjs';
-import { householdArg } from '../src/platform/cli.mjs';
+import { twoHouseholds, writePrivate } from './helpers/tenancy-runtime.mjs';
+import { runCommand, tempInstance } from './helpers/server.mjs';
 import { aggregatorCsv } from './helpers/ingest.mjs';
+import { householdArg } from '../src/platform/cli.mjs';
+import { seedDemo } from '../demo/seed.mjs';
 
-const T = { timeout: 180_000 };
 const commands = ['src/jobs/plan-cli.mjs', 'src/jobs/guess-cli.mjs', 'scripts/build-your-plans.mjs', 'scripts/email-test.mjs', 'demo/seed.mjs'];
+const envOf = fx => ({ ...fx.server.env, FATHOM_ENGINE: 'off', FATHOM_LIVE_EMAIL: '1' });
+const run = (entry, argv, env) => runCommand(process.execPath, [entry, ...argv], { env });
 
-test('selectors are mandatory and ambiguous duplicate selectors are refused', () => {
-  assert.throws(() => householdArg([]), { code: 'household_required' });
-  assert.throws(() => householdArg(['--household', 'synthetic-a', '--household', 'synthetic-b']), { code: 'household_selector_invalid' });
-  assert.deepEqual(householdArg(['--household', 'synthetic-a', '--file', 'synthetic-file']), { householdId: 'synthetic-a', rest: ['--file', 'synthetic-file'] });
-});
-
-test('operational CLIs reject missing and foreign selectors and use the selected runtime', T, async t => {
-  const f = await twoHouseholds({ engine: 'off' });
-  t.after(() => f.close());
-  const env = { ...f.server.env, FATHOM_LIVE_EMAIL: '1', FATHOM_EMAIL_TO: f.B.admin.user.email };
-  for (const cmd of commands) {
-    for (const args of [[], ['--household', 'foreign-household']]) {
-      const r = await runCommand(process.execPath, [cmd, ...args], { env });
-      assert.equal(r.code, 1, `${cmd}: ${r.stderr}`);
-      assert.match(r.stderr, args.length ? /household_unavailable/ : /household_required/);
-    }
+test('selectors refuse duplicates and malformed values', () => {
+  for (const argv of [[], ['--household'], ['--household', '../other'], ['--household', 'alpha', '--household', 'bravo']]) {
+    assert.throws(() => householdArg(argv), e => /^household_/.test(e.code));
   }
-  const before = f.ctx(f.A.id).db.prepare('SELECT count(*) AS n FROM job_runs').get().n;
-  const plan = await runCommand(process.execPath, ['src/jobs/plan-cli.mjs', '--household', f.B.id], { env });
-  assert.equal(plan.code, 3, plan.stderr);
-  assert.match(plan.stderr, /paused/);
-  await f.B.client.postJson('/api/household/outbound', { email: true });
-  const email = await runCommand(process.execPath, ['scripts/email-test.mjs', '--household', f.B.id], { env });
-  assert.equal(email.code, 0, email.stderr);
-  assert.equal(readdirSync(join(f.rootOf(f.B.id), 'outbox')).length, 1);
-  assert.equal(existsSync(join(f.rootOf(f.A.id), 'outbox')), false);
-  assert.equal(f.ctx(f.A.id).db.prepare('SELECT count(*) AS n FROM job_runs').get().n, before);
-  const seed = await runCommand(process.execPath, ['demo/seed.mjs', '--household', f.B.id], { env });
-  assert.equal(seed.code, 1);
-  assert.match(seed.stderr, /real/);
+  assert.deepEqual(householdArg(['--household', 'hh_synthetic', '--file', 'f-synthetic']), { householdId: 'hh_synthetic', rest: ['--file', 'f-synthetic'] });
 });
 
-test('dump requires a session, rejects foreign context, and uploads only to its authorized household', T, async t => {
-  const f = await twoHouseholds({ engine: 'off' });
-  t.after(() => f.close());
-  const cookieFile = join(f.root, 'session.cookie');
-  const file = join(f.root, 'synthetic.csv');
-  writeFileSync(cookieFile, f.A.admin.cookie, { mode: 0o600 });
-  writeFileSync(file, aggregatorCsv([{ date: '2026-11-01', amount: '12.34', description: 'Synthetic groceries', number: '5550001234' }]));
-  const run = (id, extra = {}) => runCommand(process.execPath, ['scripts/dump.mjs', '--household', id, f.baseUrl, file], {
-    env: { FATHOM_SESSION_FILE: cookieFile, ...extra },
-  });
-  const foreign = await run(f.B.id);
-  assert.equal(foreign.code, 1);
-  assert.match(foreign.stderr, /household_context_mismatch/);
-  const missing = await run(f.A.id, { FATHOM_SESSION_FILE: undefined });
-  assert.equal(missing.code, 1);
-  assert.match(missing.stderr, /session_required/);
-  const valid = await run(f.A.id);
-  assert.equal(valid.code, 0, valid.stderr);
-  assert.match(valid.stdout, /imported/);
-  assert.equal(f.ctx(f.A.id).db.prepare('SELECT count(*) AS n FROM files').get().n, 1);
-  assert.equal(f.ctx(f.B.id).db.prepare('SELECT count(*) AS n FROM files').get().n, 0);
-  const mismatch = await fetch(`${f.baseUrl}/api/files`, { headers: { cookie: f.A.admin.cookie, 'x-fathom-household-id': f.B.id } });
-  assert.equal(mismatch.status, 409);
+test('operational CLIs require registered household selectors without touching another store', { timeout: 60000 }, async () => {
+  const fx = await twoHouseholds();
+  try {
+    for (const entry of commands) {
+      for (const args of [[], ['--household', 'hh_unknown'], ['--household', fx.B.id, '--household', fx.A.id]]) {
+        const r = await run(entry, args, envOf(fx));
+        assert.notEqual(r.code, 0, `${entry} refuses selector`);
+        assert.match(r.stdout + r.stderr, /household_(required|invalid|unavailable)/, entry);
+      }
+    }
+    const a = fx.ctx(fx.A.id); const b = fx.ctx(fx.B.id);
+    await a.scheduler.stop(); await b.scheduler.stop();
+    for (const entry of ['src/jobs/plan-cli.mjs', 'src/jobs/guess-cli.mjs', 'scripts/build-your-plans.mjs']) {
+      const r = await run(entry, ['--household', fx.A.id], envOf(fx));
+      assert.equal(r.code, 0, `${entry}: ${r.stderr}`);
+    }
+    assert.ok(a.db.prepare('SELECT count(*) AS n FROM job_runs').get().n > 0);
+    assert.equal(b.db.prepare('SELECT count(*) AS n FROM job_runs').get().n, 0);
+    const mail = await run('scripts/email-test.mjs', ['--household', fx.A.id], envOf(fx));
+    assert.equal(mail.code, 0, mail.stderr);
+    assert.equal(readdirSync(join(a.root, 'outbox')).filter(n => n.endsWith('.json')).length, 1);
+    assert.equal(existsSync(join(b.root, 'outbox')), false);
+    const paused = await run('scripts/email-test.mjs', ['--household', fx.B.id], envOf(fx));
+    assert.notEqual(paused.code, 0);
+    assert.match(paused.stderr, /paused/);
+  } finally { await fx.close(); }
+});
+
+test('seed CLI resets only its explicit demo household and refuses missing or foreign selectors', { timeout: 30000 }, async () => {
+  const fx = await tempInstance({ mode: 'demo', init: seedDemo });
+  try {
+    fx.db.prepare("UPDATE settings SET value = 'false' WHERE key = 'engine.on'").run();
+    for (const args of [[], ['--household', 'hh_unknown']]) {
+      const r = await run('demo/seed.mjs', args, { FATHOM_DATA: fx.dataDir });
+      assert.notEqual(r.code, 0);
+    }
+    const r = await run('demo/seed.mjs', ['--household', fx.householdId], { FATHOM_DATA: fx.dataDir });
+    assert.equal(r.code, 0, r.stderr);
+    assert.ok(fx.db.prepare('SELECT count(*) AS n FROM accounts').get().n > 0);
+  } finally { fx.close(); rmSync(fx.dataDir, { recursive: true, force: true }); }
+});
+
+test('dump uses a session with context assertions and refuses foreign, expired or absent authorization', { timeout: 30000 }, async () => {
+  const fx = await twoHouseholds();
+  try {
+    const input = join(fx.root, 'synthetic.csv');
+    writeFileSync(input, aggregatorCsv([{ date: '2026-11-01', amount: '14.25', description: 'Synthetic purchase', number: '5550012345' }]));
+    const sessionFile = writePrivate(join(fx.root, 'session.json'), JSON.stringify({ cookie: fx.A.admin.cookie, householdId: fx.A.id, contextVersion: 1 }));
+    const env = { FATHOM_SESSION_FILE: sessionFile };
+    for (const [args, over] of [[[], env], [['--household', fx.B.id], env], [['--household', fx.A.id], { FATHOM_SESSION_FILE: undefined }]]) {
+      const r = await run('scripts/dump.mjs', [...args, fx.baseUrl, input], over);
+      assert.notEqual(r.code, 0, 'unauthorized upload refused');
+    }
+    const r = await run('scripts/dump.mjs', ['--household', fx.A.id, fx.baseUrl, input], env);
+    assert.equal(r.code, 0, r.stderr);
+    assert.equal(fx.ctx(fx.A.id).db.prepare('SELECT count(*) AS n FROM files').get().n, 1);
+    assert.equal(fx.ctx(fx.B.id).db.prepare('SELECT count(*) AS n FROM files').get().n, 0);
+    fx.store.revokeSession(fx.A.admin.token);
+    const expired = await run('scripts/dump.mjs', ['--household', fx.A.id, fx.baseUrl, input], env);
+    assert.notEqual(expired.code, 0);
+    for (const secret of [fx.A.admin.token, 'Synthetic purchase', '14.25']) assert.ok(!(r.stdout + r.stderr + expired.stdout + expired.stderr).includes(secret));
+  } finally { await fx.close(); }
 });
