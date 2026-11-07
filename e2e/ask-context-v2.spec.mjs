@@ -73,8 +73,9 @@ async function add(page, btn) {
 }
 
 // Sends a question from the panel composer, returns the request body once the answer lands.
-async function askInPanel(page, text) {
-  const before = await answers(page).count();
+// fresh: the question starts a new thread, so the panel shows its one answer, not one more.
+async function askInPanel(page, text, { fresh = false } = {}) {
+  const before = fresh ? 0 : await answers(page).count();
   const posted = page.waitForRequest(isAskPost);
   await panelInput(page).fill(text);
   await panelInput(page).press('Enter');
@@ -151,7 +152,7 @@ test.describe('ask context v2', () => {
     await expect(pageChip(page)).toHaveAttribute('data-ref', 'money:overview');
     await expect(note(page)).toHaveText(NOTE);
 
-    const second = await askInPanel(page, 'Synthetic question on the money page');
+    const second = await askInPanel(page, 'Synthetic question on the money page', { fresh: true });
     expect(second.path, 'a new thread, not the Home thread').toBe('/api/threads');
     expect(second.body).not.toHaveProperty('key');
     expect(second.body.context).toEqual([{ kind: 'money', id: 'overview@range=1Y' }]);
