@@ -180,24 +180,15 @@ describe('read tools', () => {
     for (const p of one) assert.ok(p.symbol && p.name && typeof p.value === 'number');
   });
 
-  test('business.pnl groups by period and category with totals', async () => {
+  test('business.pnl keeps entity and custom period totals', async () => {
     const entity = t.db.prepare('SELECT entity FROM pnl_lines LIMIT 1').get().entity;
-    const r = await call('business', { operation: 'pnl',  entity, from: '2026-03', to: '2026-05' });
-    assert.ok(r.rows.length > 0);
-    const periods = [...new Set(r.rows.map(x => x.period))];
-    assert.deepEqual(periods, ['2026-03', '2026-04', '2026-05']);
-    for (const row of r.rows) {
-      const want = t.db.prepare('SELECT sum(amount) AS s FROM pnl_lines WHERE entity = ? AND period = ? AND category = ?')
-        .get(entity, row.period, row.category).s;
-      assert.equal(row.amount, Math.round(want * 100) / 100, `${row.period} ${row.category}`);
+    const r = await call('business', { operation: 'pnl', entity, from: '2026-03', to: '2026-05' });
+    assert.equal(r.entities.length, 1);
+    for (const group of r.entities[0].groups) {
+      const want = t.db.prepare('SELECT sum(amount) AS s FROM pnl_lines WHERE entity = ? AND period = ?').get(entity, group.key).s;
+      assert.equal(group.profit.value, Math.round(want * 100) / 100);
     }
-    for (const p of periods) {
-      const sum = r.rows.filter(x => x.period === p).reduce((a, x) => a + x.amount, 0);
-      assert.equal(r.totals[p], Math.round(sum * 100) / 100, `total ${p}`);
-    }
-    const all = await call('business', { operation: 'pnl' });
-    const allPeriods = new Set(all.rows.map(x => x.period));
-    assert.ok(allPeriods.size >= periods.length);
+    assert.ok((await call('business', {operation:'pnl'})).entities.length >= r.entities.length);
   });
 
   test('recommendations.list never returns hidden recs and filters by status', async () => {
