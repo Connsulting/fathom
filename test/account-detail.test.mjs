@@ -72,6 +72,15 @@ test('the balance date is the balance row, not the newest transaction', async ()
     // With no balance row the positions date is used.
     s.db.prepare('DELETE FROM balances WHERE account_id = ?').run(chase);
     assert.equal(accountDetail(ctx(s, chase)).balance.asOf, '2032-02-05');
+    // An empty holdings snapshot dated after the positions makes the balance 0 as of that date.
+    s.db.prepare(`INSERT INTO files (id, name, mime, size, uploaded_at, status, period_to) VALUES ('empty1', 'empty.csv', 'text/csv', 0, '2032-03-01', 'parsed', '2032-03-31')`).run();
+    s.db.prepare(`INSERT INTO figures (key, v, src, kind, label, file_id, locator, updated_at) VALUES (?, 0, NULL, 'a', 'x', 'empty1', ?, '2032-03-31')`)
+      .run(`acct.${chase}.balance`, JSON.stringify({ field: 'holdings' }));
+    s.db.prepare('UPDATE accounts SET fig_key = ? WHERE id = ?').run(`acct.${chase}.balance`, chase);
+    assert.equal(accountDetail(ctx(s, chase)).balance.asOf, '2032-03-31');
+    // Positions dated after that snapshot win again.
+    s.db.prepare('INSERT INTO positions (account_id, as_of, symbol, value) VALUES (?, ?, ?, ?)').run(chase, '2032-04-30', 'XYZ', 60);
+    assert.equal(accountDetail(ctx(s, chase)).balance.asOf, '2032-04-30');
   } finally {
     s.close();
   }
