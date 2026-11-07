@@ -1,9 +1,9 @@
 {
   "id": "advanced-retirement",
   "name": "Advanced retirement planning",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "taxYear": 2026,
-  "reviewed": "2026-11-05",
+  "reviewed": "2026-11-07",
   "curator": "Public primary-source review",
   "covers": [
     "2026 contribution limits",
@@ -14,7 +14,8 @@
     "mega backdoor Roth",
     "Roth catch-ups",
     "plan aggregation and employee eligibility",
-    "rollovers and conversions"
+    "rollovers and conversions",
+    "access and required minimum distributions"
   ],
   "appliesWhen": {
     "any": [
@@ -310,6 +311,16 @@
         {
           "label": "IRS Forms 1099-R and 5498 instructions for 2026",
           "url": "https://www.irs.gov/instructions/i1099r"
+        }
+      ]
+    },
+    {
+      "file": "access-and-rmd-pointer.md",
+      "title": "Access and required minimum distributions",
+      "cites": [
+        {
+          "label": "IRS Publication 590-B: distributions from individual retirement arrangements",
+          "url": "https://www.irs.gov/publications/p590b"
         }
       ]
     }

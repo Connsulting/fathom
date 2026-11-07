@@ -24,7 +24,7 @@ unclassified covers aggregator categories Uncategorized and Cash & Checks, and d
 
 savings covers aggregator categories Investment, Mortgage Principal and HSA. Savings is not spending. The demo seed has no savings category.
 
-taxes covers aggregator categories Income Tax and Taxes. Taxes are not spending. They are estimated payments and balances due. The demo category taxes covers estimated tax payments.
+taxes covers aggregator categories Income Tax and Taxes, and demo-seed category taxes. Taxes are not spending. They are estimated payments and balances due.
 
 business covers aggregator category Business and demo-seed categories payroll, software, contractors and fees. Follow the business bucket.
 

@@ -1,0 +1,99 @@
+{
+  "id": "account-tax-treatment",
+  "name": "Account tax treatment",
+  "version": "1.0.0",
+  "taxYear": 2026,
+  "reviewed": "2026-11-07",
+  "curator": "Public primary-source review",
+  "covers": [
+    "treatment by account type",
+    "penalty-free access",
+    "required minimum distributions",
+    "Roth contribution basis",
+    "HSA and 529 withdrawals",
+    "basis and capital gains"
+  ],
+  "appliesWhen": { "all": [] },
+  "suggestWhen": { "all": [] },
+  "whatIf": {
+    "prompt": "What changes in after-tax value and access if an account is pre-tax, Roth, HSA, 529 or taxable?"
+  },
+  "entries": [
+    {
+      "file": "treatment-by-account-type.md",
+      "title": "Treatment by account type",
+      "cites": [
+        {
+          "label": "IRS Publication 590-A: contributions to individual retirement arrangements",
+          "url": "https://www.irs.gov/publications/p590a"
+        },
+        {
+          "label": "IRS Publication 575: pension and annuity income",
+          "url": "https://www.irs.gov/publications/p575"
+        }
+      ]
+    },
+    {
+      "file": "penalty-free-access.md",
+      "title": "Penalty-free access",
+      "cites": [
+        {
+          "label": "Internal Revenue Code section 72",
+          "url": "https://uscode.house.gov/view.xhtml?req=granuleid:USC-prelim-title26-section72&num=0&edition=prelim"
+        },
+        {
+          "label": "IRS Publication 575: pension and annuity income",
+          "url": "https://www.irs.gov/publications/p575"
+        },
+        {
+          "label": "IRC 457(b) deferred compensation plans",
+          "url": "https://www.irs.gov/retirement-plans/irc-457b-deferred-compensation-plans"
+        }
+      ]
+    },
+    {
+      "file": "required-minimum-distributions.md",
+      "title": "Required minimum distributions",
+      "cites": [
+        {
+          "label": "IRS Publication 590-B: distributions from individual retirement arrangements",
+          "url": "https://www.irs.gov/publications/p590b"
+        }
+      ]
+    },
+    {
+      "file": "roth-contribution-basis.md",
+      "title": "Roth contribution basis",
+      "cites": [
+        {
+          "label": "IRS Publication 590-B: distributions from individual retirement arrangements",
+          "url": "https://www.irs.gov/publications/p590b"
+        }
+      ]
+    },
+    {
+      "file": "hsa-and-529-withdrawals.md",
+      "title": "HSA and 529 withdrawals",
+      "cites": [
+        {
+          "label": "IRS Publication 969: health savings accounts",
+          "url": "https://www.irs.gov/publications/p969"
+        },
+        {
+          "label": "IRS Publication 970: tax benefits for education",
+          "url": "https://www.irs.gov/publications/p970"
+        }
+      ]
+    },
+    {
+      "file": "basis-and-capital-gains.md",
+      "title": "Basis and capital gains",
+      "cites": [
+        {
+          "label": "IRS Publication 550: investment income and expenses",
+          "url": "https://www.irs.gov/publications/p550"
+        }
+      ]
+    }
+  ]
+}
