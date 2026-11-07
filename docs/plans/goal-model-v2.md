@@ -52,8 +52,8 @@ No external services, secrets or network are involved. Everything runs on demo d
    `contributionPace` beside `goalPace`; `buildPace` dispatches by kind, skips done goals, and tags
    each entry with `kind`, `owner`, `priority`. `paceRollup` is unchanged (floor holding counts as
    on pace, breached as behind).
-6. Tools: `create_goal` / `edit_goal` schemas and evidence checks cover the new fields;
-   `list_goals` and `household_summary` (both `goalsForModel`) carry them; `get_pace` returns the
+6. Tools: `update_goal.create` / `update_goal.edit` schemas and evidence checks cover the new fields;
+   `goals.list` and `household.summary` (both `goalsForModel`) carry them; `goals.pace` returns the
    new `buildPace` shape unchanged otherwise.
 7. Demo: three seed-origin goals (range, floor, contribution) inserted by `demo/seed.mjs` after the
    ledger; existing seed goals with targets are the balance examples. `demo/scenario.mjs` and the
@@ -100,7 +100,7 @@ Driver decisions kept unless noted.
    suggestion exclusion working without a second path. The UI labels them "Amount to contribute"
    and "Deadline".
 5. Status is set through the edit body (`status: 'open'|'done'|'archived'`), not a new route.
-   `validateGoal` accepts it (AC1), `edit_goal` takes it (AC4), the editor's Mark done posts it.
+   `validateGoal` accepts it (AC1), `update_goal.edit` takes it (AC4), the editor's Mark done posts it.
    `POST /api/goals/:id/archive` stays. Done goals are excluded from pace, linking, suggestions and
    Home, and stay listed on Goals as done.
 6. Seed goals: `status` stays their display text (`on track`, `done`, `watch`, `open`); a seed row
@@ -216,7 +216,7 @@ test.
 ## Owned streams
 
 Merge order S1, S2, S3. S2 and S3 code against the Interface above and may start in parallel;
-assertions that cross streams (get_pace fields in `test/goal-kinds-api.test.mjs`, demo cards in
+assertions that cross streams (goals.pace fields in `test/goal-kinds-api.test.mjs`, demo cards in
 `test/goal-kinds-home.test.mjs`) pass once the earlier stream is merged into the branch. Demo data
 (the driver's S4) is merged into S1 because its test lives in S1's `test/goal-kinds.test.mjs` and its
 defs must pass S1's validation.
@@ -347,7 +347,7 @@ Edit blocks (each quoted excerpt verified with `grep -cF`, count 1 unless stated
       strings or null), `split` (array of `obj({person: string, amount: number}, ['person','amount'])` or null),
       `entered` (`obj({asOf: string, total: number, people: array of the split item}, ['asOf'])` or null).
       The validator in `src/tools/index.mjs` supports `enum`, `integer` and `anyOf`.
-   2. Descriptions (count 1 each, the `create_goal` and `edit_goal` lines): create: "Create a goal
+   2. Descriptions (count 1 each, the `update_goal.create` and `update_goal.edit` lines): create: "Create a goal
       in the person's words. kind is balance (default), range (targetLow, targetHigh), floor (floor
       and track) or contribution (target is the amount, taxYear, targetDate is the deadline,
       optional accounts, split and entered). owner is whose goal (owner, spouse, joint or a
@@ -369,7 +369,7 @@ Edit blocks (each quoted excerpt verified with `grep -cF`, count 1 unless stated
       `owner`, `priority` and, for range and floor, the same objects with `source: 'plan'`.
    4. Description (count 1) `    description: 'The open household goals in plain language: title, horizon, note, the target the owner typed and the tracked current value from stored data.',`
       add "kind, whose goal, priority, status (open or done) and the kind's amounts as typed; use
-      get_pace for progress."
+      goals.pace for progress."
 9. `src/suggest/build.mjs` (count 1) `export const wantsSuggestion = g => g && g.origin === 'owner' && !g.archived && g.status !== 'done' && !finite(g.target);`
    append `&& (g.kind ?? 'balance') === 'balance'`.
 10. `demo/seed.mjs`
@@ -409,8 +409,8 @@ Edit blocks (each quoted excerpt verified with `grep -cF`, count 1 unless stated
        rewrite the def paragraph: kinds and their fields (the KIND_FIELDS table), whose goal ids and
        label fallbacks, priority, derived status and `done_at`, seed status text, legacy `topic`,
        the new figure keys.
-    3. Goal pace (count 1) ``Existing `list_goals` and `get_figures` keep their contracts. No migration is needed.``
-       replace with: `list_goals` adds the model fields; pace per kind (decisions 7 to 12), the
+    3. Goal pace (count 1) ``Existing `goals.list` and `household.figures` keep their contracts. No migration is needed.``
+       replace with: `goals.list` adds the model fields; pace per kind (decisions 7 to 12), the
        qualifying transaction rule, attribution rule, new reason codes, done goals excluded.
        Known limits: post-year-end prior-year contributions, interest and transfers counted.
     4. API rows: (count 1) the `POST /api/goals` row (``| `POST /api/goals` | `{title, note?, horizon?, target?, targetDate?, track?}` |``)
@@ -419,10 +419,10 @@ Edit blocks (each quoted excerpt verified with `grep -cF`, count 1 unless stated
     5. Home layout first line (count 1, verify) `Home is one `article.h-gcard` per live goal, in pace order, then goals without pace. Each card holds the`
        becomes "in priority order (high, medium, low, unset), then pace order", plus one sentence on
        the owner and priority chips and the kind lines.
-13. `docs/ask-tools.md` (count 1) ```edit_goal`) stay as they are. The feat/ask-actions `undo_<kind>_action` tools change only by``:
+13. `docs/ask-tools.md` (count 1) ```update_goal.edit`) stay as they are. The feat/ask-actions `undo_<kind>_action` tools change only by``:
     add a sentence after the paragraph: "feat/goal-model-v2 adds the goal model fields to
-    `create_goal` and `edit_goal` (kind, owner, priority, status and the kind fields) and to
-    `list_goals`; owner and person ids follow `OWNER_OPTIONS` (`owner`, `spouse`, `joint`) plus
+    `update_goal.create` and `update_goal.edit` (kind, owner, priority, status and the kind fields) and to
+    `goals.list`; owner and person ids follow `OWNER_OPTIONS` (`owner`, `spouse`, `joint`) plus
     dependent keys. T23's `goal_row` restore includes `done_at`."
 
 S1 local test command:
@@ -627,8 +627,8 @@ and tests or docs that pin goal counts or text. Each is either edited above or c
 6. `src/actions/index.mjs` `GOAL_FIELDS`, `goalValue`, `changeGoal` evidence; `src/actions/receipts.mjs`
    undo reads `Object.keys(after)` so old receipts without `done_at` still undo. Edited (S1);
    receipts.mjs unaffected.
-7. `src/tools/actions.mjs` schemas; `src/tools/index.mjs` `goalsForModel` (`list_goals`,
-   `household_summary`), `get_pace` (returns `buildPace`). Edited (S1); get_pace via S2.
+7. `src/tools/actions.mjs` schemas; `src/tools/index.mjs` `goalsForModel` (`goals.list`,
+   `household.summary`), `goals.pace` (returns `buildPace`). Edited (S1); goals.pace via S2.
 8. `src/pace/build.mjs` `buildPace` (def `status !== 'done'` filter for seed, archived filter),
    `captureGoalPath`, `goalPathChanged`; `src/calc/pace.mjs` `goalPace`, `paceRollup`,
    `monthlyPace`, `indexPaceFigures` (recurses into nested figures, so new figure keys index
@@ -645,14 +645,14 @@ and tests or docs that pin goal counts or text. Each is either edited above or c
 12. `src/advisor/packet.mjs` lists goal titles (unaffected).
 13. `demo/seed.mjs` goal insert. Edited (S1).
 14. Tests and specs that pin goal counts or text on the demo:
-    1. `test/tools.test.mjs` list_goals ids. Edited (S1).
+    1. `test/tools.test.mjs` goals.list ids. Edited (S1).
     2. `test/goals.test.mjs` demo reset keeps ids and every goal seed origin (kind goals are seed:
        passes); `rec('va529').serves` is `['kids']` (new goals carry no education topic: passes);
        household summary deepEqual list (same function: passes).
     3. `test/home-model.test.mjs` demo test: every live goal is a card, seed goals get no
        suggestion, pending 0, pace headline (passes; kind goals are seed and non-balance).
     4. `test/pace.test.mjs` demo reserve and port3 figures and `arena` no target (unchanged);
-       `buildScenario(db).pace` equals `get_pace` (same builder).
+       `buildScenario(db).pace` equals `goals.pace` (same builder).
     5. `test/rec-links.test.mjs` demo recs goal kinds and owners (rec rows unchanged); real-store
        count 7 (no demo). Passes.
     6. `test/seed.test.mjs` faithful port (scenario.mjs untouched). Passes.
@@ -827,17 +827,17 @@ accounts, balances and transactions; tool calls with the `test/ask-actions.test.
    clears it; archived sets `archived_at`; a seed goal edit with status answers 409.
 4. `bad kind fields answer 400 with the validation message` (range low above high, floor without
    track, contribution without tax year, a field of another kind).
-5. `create_goal and edit_goal take the new fields and need owner evidence for every amount and date`:
+5. `update_goal.create and update_goal.edit take the new fields and need owner evidence for every amount and date`:
    a floor amount not in the owner text is refused (`/stated|evidence/`); a stated one saves;
-   `edit_goal {status: 'done'}` saves without evidence; `undo_goal_action` restores `done_at` null.
-6. `list_goals carries kind, whose goal with its label, priority, status and kind amounts`: content
+   `update_goal.edit {status: 'done'}` saves without evidence; `undo.undo` restores `done_at` null.
+6. `goals.list carries kind, whose goal with its label, priority, status and kind amounts`: content
    `names` row `{me: 'Ava', spouse: 'Ben'}` (synthetic) gives ownerLabel Ava; floor `{amount,
    source: 'you'}`; a done goal is listed with status done; an archived one is not.
-7. `get_pace carries kind, owner, priority and each kind's result`: range `range.position`, floor
+7. `goals.pace carries kind, owner, priority and each kind's result`: range `range.position`, floor
    `floor.state`, contribution `contribution.basis` transactions and actual equal to the fixture
    sum.
-8. `the goal tool schemas list every new field`: `getTool('create_goal').inputSchema.properties` and
-   edit_goal's include kind, owner, priority, status, targetLow, targetHigh, floor, taxYear,
+8. `the goal tool schemas list every new field`: `getTool('update_goal').inputSchema.properties` and
+   update_goal.edit's include kind, owner, priority, status, targetLow, targetHigh, floor, taxYear,
    accounts, split, entered.
 
 ### test/goal-kinds-home.test.mjs (S3)
@@ -934,13 +934,13 @@ the new kinds (the chat proposal card stays balance only).
 ## Rebase onto origin/main 5e7dae7 (after the worker restart)
 
 1. Migrations on main still end at 025; 026 stays.
-2. `goalsForModel` and `list_goals` moved from `src/tools/index.mjs` to
+2. `goalsForModel` and `goals.list` moved from `src/tools/index.mjs` to
    `src/tools/catalog/figures.mjs` (lines about 75 to 100 and 223). S1 item 8 applies there.
-   `create_goal` and `edit_goal` stay in `src/tools/actions.mjs`. Workers re-locate every anchor in
+   `update_goal.create` and `update_goal.edit` stay in `src/tools/actions.mjs`. Workers re-locate every anchor in
    current source; an anchor that no longer resolves is re-found by its surrounding code, never
    dropped.
 3. Coordinator constraint: a tool-catalog consolidation is being specced. Change only the existing
-   goal tools' input fields (create_goal, edit_goal) and list_goals output; add no new goal tools.
+   goal tools' input fields (update_goal.create, update_goal.edit) and goals.list output; add no new goal tools.
    The docs/ask-tools.md note (S1 item 13) says so.
 4. Host limits: streams run one after another (S1, S2, S3), one local test command at a time,
    Playwright once at the end on new or changed specs only.
@@ -952,8 +952,8 @@ the new kinds (the chat proposal card stays balance only).
    the receipt's fields plus `archived_at` and `done_at`, each compared as `after?.[k] ?? null` (a
    receipt written before migration 026 has no `done_at`, read as null). A goal marked done or
    archived after a receipt therefore refuses undo with the existing conflict message. Test in
-   test/goal-kinds-api.test.mjs: create a goal through `create_goal` (receipt), mark it done through
-   `edit_goal {status:'done'}`, undo the create receipt: refused with conflict, goal row still
+   test/goal-kinds-api.test.mjs: create a goal through `update_goal.create` (receipt), mark it done through
+   `update_goal.edit {status:'done'}`, undo the create receipt: refused with conflict, goal row still
    present. Second test: an old-shape receipt whose after-state lacks `done_at` (insert it directly)
    also refuses after done.
 2. Contribution coverage (finding 2). Replaces S2 item 2.2's basis rule. Transaction basis only
@@ -1019,4 +1019,4 @@ the new kinds (the chat proposal card stays balance only).
    contribution `{taxYear, deadline, accounts, split, entered}` and `target`, with `source: 'plan'`
    for seed values and `'you'` for owner values; `entered` always carries `source: 'you'`
    (an entered amount is a person's statement; for the seed demo goal it is synthetic demo text).
-   test/goal-kinds-api.test.mjs asserts the demo contribution goal's complete `list_goals` entry.
+   test/goal-kinds-api.test.mjs asserts the demo contribution goal's complete `goals.list` entry.

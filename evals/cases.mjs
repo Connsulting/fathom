@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import Ajv from 'ajv';
 import { isoFromLabel } from '../demo/ledger.mjs';
@@ -5,7 +6,7 @@ import { classOf } from '../src/calc/classes.mjs';
 
 const predicate = { type: 'object', additionalProperties: false, required: ['path', 'op'], properties: {
   path: { type: 'string', pattern: '^[A-Za-z][A-Za-z0-9_.]*$' },
-  op: { enum: ['eq', 'includes', 'gte', 'lte', 'exists', 'matches'] }, value: {},
+  op: { enum: ['eq', 'includes', 'includes_or_absent', 'gte', 'lte', 'exists', 'matches'] }, value: {},
 } };
 const expected = { type: 'object', additionalProperties: false, required: ['kind'], properties: {
   kind: { enum: ['figure', 'transaction', 'pnl-month', 'annual-spending', 'portfolio', 'net-worth', 'net-worth-change', 'cash-flow'] },
@@ -20,18 +21,20 @@ export const caseSchema = {
       title: { type: 'string' }, note: { type: 'string' },
     } },
     requires: { type: 'object', additionalProperties: false, properties: {
-      tools: { type: 'array', uniqueItems: true, items: { type: 'string', pattern: '^[a-z][a-z0-9_]+$' } },
-      capabilities: { type: 'array', uniqueItems: true, items: { enum: ['ownerStatements', 'definitions'] } },
+      operations: { type: 'array', uniqueItems: true, items: { type: 'string', pattern: '^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$' } },
+      script: { type: 'boolean' },
+      capabilities: { type: 'array', uniqueItems: true, items: { enum: ['ownerStatements', 'definitions', 'businessPeriods'] } },
     } },
-    expectedFail: { type: 'object', additionalProperties: false, required: ['missingTools'], properties: {
-      missingTools: { type: 'array', uniqueItems: true, items: { type: 'string', pattern: '^[a-z][a-z0-9_]+$' } },
+    expectedFail: { type: 'object', additionalProperties: false, required: ['missingOperations'], properties: {
+      missingOperations: { type: 'array', uniqueItems: true, items: { type: 'string', minLength: 3 } },
+      missingScript: { type: 'string' },
       missingCapabilities: { type: 'array', uniqueItems: true, items: { type: 'string', minLength: 1 } },
     } },
     turns: { type: 'array', minItems: 1, items: { type: 'object', additionalProperties: false,
       required: ['question', 'required', 'forbidden', 'expected', 'maxWords', 'rubric'], properties: {
         question: { type: 'string', minLength: 1, maxLength: 4000 },
-        required: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['name', 'predicates'], properties: {
-          name: { type: 'string', pattern: '^[a-z][a-z0-9_]+$' }, predicates: { type: 'array', items: predicate },
+        required: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['name', 'operation', 'predicates'], properties: {
+          name: { type: 'string', pattern: '^[a-z][a-z0-9_]+$' }, operation: { type: 'string', pattern: '^[a-z][a-z0-9_]*$' }, predicates: { type: 'array', items: predicate },
         } } },
         forbidden: { type: 'array', minItems: 2, maxItems: 3, uniqueItems: true, items: { enum: ['unsourced-figure', 'self-computed-figure', 'owner-assumption-not-in-messages'] } },
         expected: { type: 'array', items: expected }, maxWords: { type: 'integer', minimum: 1, maximum: 1000 },
@@ -46,6 +49,7 @@ export function validateCases(cases) {
   if (!validate(cases)) throw new TypeError(`Invalid eval cases: ${JSON.stringify(validate.errors)}`);
   if (new Set(cases.map(c => c.id)).size !== cases.length) throw new TypeError('Duplicate eval case id');
   for (const c of cases) {
+    if (c.requires?.script && !Array.isArray(c.requires.operations)) throw new TypeError('Scripted case requires operations');
     for (const turn of c.turns) {
       for (const requirement of turn.required) for (const p of requirement.predicates) {
         if (p.op !== 'exists' && !Object.hasOwn(p, 'value')) throw new TypeError('Predicate needs a value');
@@ -62,38 +66,37 @@ export function validateCases(cases) {
       }
     }
     const req = caseRequirements(c);
-    for (const name of req.tools) {
-      if (name && !c.turns.some(t => t.required.some(r => r.name === name))) throw new TypeError('Required tool must be a required call');
+    for (const pair of req.operations) {
+      if (!c.turns.some(t => t.required.some(r => `${r.name}.${r.operation}` === pair))) throw new TypeError('Required operation must be a required call');
     }
-    const missingTools = c.expectedFail?.missingTools ?? [];
-    const missingCapabilities = c.expectedFail?.missingCapabilities ?? [];
-    if (c.expectedFail && !missingTools.length && !missingCapabilities.length) throw new TypeError('Expected fail needs a missing requirement');
-    for (const name of missingTools) {
-      if (!c.turns.some(t => t.required.some(r => r.name === name))) throw new TypeError('Missing tool must be a required call');
-    }
+    const missing = c.expectedFail;
+    if (missing && !missing.missingOperations.length && !missing.missingCapabilities?.length && !missing.missingScript) throw new TypeError('Expected fail needs a missing requirement');
+    for (const pair of missing?.missingOperations || []) if (!req.operations.includes(pair)) throw new TypeError('Missing operation must be a required call');
   }
   return true;
 }
 export function caseRequirements(c) {
-  const fromTurns = [...new Set(c.turns.flatMap(t => t.required.map(r => r.name)))];
-  return { tools: c.requires?.tools?.length ? c.requires.tools : fromTurns, capabilities: c.requires?.capabilities ?? [] };
+  const fromTurns = [...new Set(c.turns.flatMap(t => t.required.map(r => `${r.name}.${r.operation}`)))];
+  return { operations: c.requires?.operations ?? fromTurns, capabilities: c.requires?.capabilities ?? [], script: c.requires?.script === true };
 }
-export function applyAvailability(c, { hasTool, capabilities }) {
+export function applyAvailability(c, { hasOperation, capabilities, hasScript }) {
   const req = caseRequirements(c);
-  const missingTools = req.tools.filter(name => !hasTool(name));
+  const missingOperations = req.operations.filter(pair => !hasOperation(...pair.split('.')));
   const missingCapabilities = req.capabilities.filter(name => !capabilities.includes(name));
+  const missingScript = req.script && !hasScript(c.id) ? `scripts/${c.id}.mjs` : null;
   const next = { ...c };
   delete next.expectedFail;
-  if (missingTools.length || missingCapabilities.length) next.expectedFail = {
-    missingTools, ...(missingCapabilities.length ? { missingCapabilities } : {}),
+  if (missingOperations.length || missingCapabilities.length || missingScript) next.expectedFail = {
+    missingOperations, ...(missingCapabilities.length ? { missingCapabilities } : {}), ...(missingScript ? { missingScript } : {}),
   };
   return next;
 }
 export async function loadCases(file = new URL('./catalog.json', import.meta.url), availability = null) {
   const data = JSON.parse(await readFile(file, 'utf8'));
   if (data.version !== 1) throw new TypeError('Unsupported eval case version');
-  const { getTool, CAPABILITIES } = availability ? { getTool: null, CAPABILITIES: null } : await import('../src/tools/index.mjs');
-  const probe = availability ?? { hasTool: name => Boolean(getTool(name)), capabilities: CAPABILITIES };
+  const { getTool, CAPABILITIES } = availability ? {} : await import('../src/tools/index.mjs');
+  const probe = availability ?? { hasOperation: (name, operation) => Boolean(getTool(name)?.operations.some(o => o.name === operation)), capabilities: CAPABILITIES,
+    hasScript: id => existsSync(new URL(`./scripts/${id}.mjs`, import.meta.url)) };
   const cases = data.cases.map(c => applyAvailability(c, probe));
   validateCases(cases);
   return cases;
@@ -114,7 +117,7 @@ function annualSpending(db) {
   if (!months) throw new TypeError('No spending coverage');
   const spend = covered.filter(r => r.amount < 0 && !['transfer', 'income'].includes(r.category)
     && classOf(r.category) !== 'taxes' && classOf(r.category) !== 'debt_service'
-    && !/mortgage|income tax/i.test(r.description)).reduce((s, r) => s - r.amount, 0);
+    ).reduce((s, r) => s - r.amount, 0);
   return round(spend * 12 / months);
 }
 function netWorth(db, date) {
@@ -128,7 +131,7 @@ export function expectedFigures(db, descriptors) {
     if (e.kind === 'transaction') v = db.prepare('SELECT amount FROM transactions WHERE category=? ORDER BY date DESC,id DESC LIMIT 1').get(e.category)?.amount;
     if (e.kind === 'pnl-month') v = db.prepare('SELECT sum(amount) AS v FROM pnl_lines WHERE period=?').get(e.month).v;
     if (e.kind === 'annual-spending') v = annualSpending(db);
-    if (e.kind === 'portfolio') v = round(annualSpending(db) / e.rate);
+    if (e.kind === 'portfolio') v = Math.ceil(annualSpending(db) / e.rate);
     if (e.kind === 'net-worth') v = netWorth(db, '9999-12-31');
     if (e.kind === 'net-worth-change') {
       const date = db.prepare('SELECT min(date) AS d FROM balances').get().d;

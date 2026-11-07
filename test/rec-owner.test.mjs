@@ -204,16 +204,16 @@ describe('MCP owner tool and linked recs (AC2, AC4)', () => {
   });
   after(async () => { s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
 
-  test('set_recommendation_owner is a write:recs tool taking id and owner', () => {
-    const t = getTool('set_recommendation_owner');
+  test('act_on_recommendation.owner is a write:recs tool taking id and owner', () => {
+    const t = getTool('act_on_recommendation');
     assert.ok(t, 'registered');
-    assert.equal(t.scope, 'write:recs');
-    assert.deepEqual([...t.inputSchema.required].sort(), ['id', 'owner']);
+    assert.equal(t.operations.find(o => o.name === 'owner').scope, 'write:recs');
+    assert.deepEqual([...t.operations.find(o => o.name === 'owner').required].sort(), ['id', 'owner']);
   });
 
-  test('AC4: set_recommendation_owner sets the owner, records set_owner by tool and returns the linked rec', async () => {
+  test('AC4: act_on_recommendation.owner sets the owner, records set_owner by tool and returns the linked rec', async () => {
     const status = s.db.prepare("SELECT status FROM recs WHERE id = 'va529'").get().status;
-    const r = await call('set_recommendation_owner', { id: 'va529', owner: 'spouse' });
+    const r = await call('act_on_recommendation', { operation: 'owner',  id: 'va529', owner: 'spouse' });
     assert.equal(r.id, 'va529');
     assert.equal(r.owner, 'spouse');
     assert.equal(r.ownerOverride, true);
@@ -221,24 +221,24 @@ describe('MCP owner tool and linked recs (AC2, AC4)', () => {
     assert.ok(Array.isArray(r.serves) && r.serves.length > 0);
     assert.deepEqual(ownerOf(s.db, 'va529'), { owner: 'spouse', owner_override: 1 });
     assert.deepEqual(lastEvent(s.db, 'va529'), { action: 'set_owner', arg: 'spouse', from_status: status, to_status: status, actor: 'demo' });
-    assert.equal((await call('get_recommendation', { id: 'va529' })).owner, 'spouse');
+    assert.equal((await call('recommendations', { operation: 'detail',  id: 'va529' })).owner, 'spouse');
   });
 
-  test('set_recommendation_owner accepts every valid owner and refuses a bad owner or a hidden rec', async () => {
-    for (const o of OWNERS) assert.equal((await call('set_recommendation_owner', { id: 'vaq4', owner: o })).owner, o, o);
+  test('act_on_recommendation.owner accepts every valid owner and refuses a bad owner or a hidden rec', async () => {
+    for (const o of OWNERS) assert.equal((await call('act_on_recommendation', { operation: 'owner',  id: 'vaq4', owner: o })).owner, o, o);
     const before = ownerOf(s.db, 'vaq4');
     const events = eventCount(s.db, 'vaq4');
-    for (const bad of ['nobody', 'Spouse', '']) await assert.rejects(call('set_recommendation_owner', { id: 'vaq4', owner: bad }), isCode('bad_input'), bad);
-    await assert.rejects(call('set_recommendation_owner', { id: 'vaq4' }), isCode('bad_input'));
-    await assert.rejects(call('set_recommendation_owner', { id: 'daf', owner: 'spouse' }), isCode('not_found'));
-    await assert.rejects(call('set_recommendation_owner', { id: 'no-such-rec', owner: 'spouse' }), isCode('not_found'));
+    for (const bad of ['nobody', 'Spouse', '']) await assert.rejects(call('act_on_recommendation', { operation: 'owner',  id: 'vaq4', owner: bad }), isCode('bad_input'), bad);
+    await assert.rejects(call('act_on_recommendation', { operation: 'owner',  id: 'vaq4' }), isCode('bad_input'));
+    await assert.rejects(call('act_on_recommendation', { operation: 'owner',  id: 'daf', owner: 'spouse' }), isCode('not_found'));
+    await assert.rejects(call('act_on_recommendation', { operation: 'owner',  id: 'no-such-rec', owner: 'spouse' }), isCode('not_found'));
     assert.deepEqual(ownerOf(s.db, 'vaq4'), before);
     assert.equal(eventCount(s.db, 'vaq4'), events);
     assert.equal(ownerOf(s.db, 'daf').owner_override, 0);
   });
 
-  test('AC4: list_recommendations and get_recommendation expose owner, ownerOverride, housekeeping and serves', async () => {
-    const list = await call('list_recommendations');
+  test('AC4: recommendations.list and recommendations.detail expose owner, ownerOverride, housekeeping and serves', async () => {
+    const list = await call('recommendations', { operation: 'list' });
     assert.ok(list.length > 0);
     for (const r of list) {
       assert.ok(OWNERS.includes(r.owner), `${r.id} owner`);
@@ -246,17 +246,17 @@ describe('MCP owner tool and linked recs (AC2, AC4)', () => {
       assert.equal(typeof r.housekeeping, 'boolean', `${r.id} housekeeping`);
       assert.ok(Array.isArray(r.serves), `${r.id} serves`);
       assert.equal(r.housekeeping, r.serves.length === 0, `${r.id}`);
-      const one = await call('get_recommendation', { id: r.id });
+      const one = await call('recommendations', { operation: 'detail',  id: r.id });
       for (const k of ['owner', 'ownerOverride', 'housekeeping', 'serves']) assert.deepEqual(one[k], r[k], `${r.id} ${k}`);
     }
     assert.equal(list.find(r => r.id === 'umbrella').housekeeping, true);
   });
 
-  test('AC4: household_summary housekeepingCount counts open housekeeping recs', async () => {
-    const list = await call('list_recommendations');
+  test('AC4: household.summary housekeepingCount counts open housekeeping recs', async () => {
+    const list = await call('recommendations', { operation: 'list' });
     const n = list.filter(r => r.housekeeping && OPEN(r.status)).length;
     assert.ok(n > 0);
-    const sum = await call('household_summary');
+    const sum = await call('household', { operation: 'summary' });
     assert.equal(sum.housekeepingCount, n);
     assert.equal(sum.housekeepingCount, buildScenario(s.db, { clock: '2026-11-05' }).live.housekeeping, 'the same definition as the scenario');
   });
@@ -273,9 +273,9 @@ describe('MCP owner tool and linked recs (AC2, AC4)', () => {
       const { serves, ...rest } = r;
       assert.doesNotMatch(JSON.stringify(rest), /\{f:/, `${what}: rec text resolved`);
     };
-    check((await call('list_recommendations')).find(r => r.id === 'backdoor'), 'list_recommendations');
-    check(await call('get_recommendation', { id: 'backdoor' }), 'get_recommendation');
-    check(await call('set_recommendation_status', { id: 'backdoor', status: 'doing' }), 'set_recommendation_status');
-    check(await call('set_recommendation_owner', { id: 'backdoor', owner: 'both' }), 'set_recommendation_owner');
+    check((await call('recommendations', { operation: 'list' })).find(r => r.id === 'backdoor'), 'recommendations');
+    check(await call('recommendations', { operation: 'detail',  id: 'backdoor' }), 'recommendations');
+    check(await call('act_on_recommendation', { operation: 'status',  id: 'backdoor', status: 'doing' }), 'act_on_recommendation');
+    check(await call('act_on_recommendation', { operation: 'owner',  id: 'backdoor', owner: 'both' }), 'act_on_recommendation');
   });
 });

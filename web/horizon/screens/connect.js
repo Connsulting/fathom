@@ -204,7 +204,7 @@ function tools(h) {
   const list = Array.isArray(st.mcp?.tools) ? st.mcp.tools : [];
   if (!list.length) return `<p class="h-mute">${st.loading ? 'Loading tools.' : 'No tools listed.'}</p>`;
   return `<ul class="h-tools cn-tools">${list.map((t) => {
-    const w = t.scope !== 'read';
+    const w = t.kind !== 'read';
     return `<li data-testid="tool-row"><div class="cn-tool-h"><code>${h.esc(t.name)}</code> <span class="cn-scope${w ? ' w' : ''}">${w ? 'write' : 'read'}</span></div> ${t.description ? `<p>${h.esc(t.description)}</p>` : ''}</li>`;
   }).join('')}</ul>`;
 }

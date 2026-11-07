@@ -1,0 +1,100 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { tools, getTool, callTool, buildRegistry, instructions } from '../src/tools/index.mjs';
+import { toolsForScopes, SCOPES } from '../src/mcp/keys.mjs';
+import { createRegistryServer } from '../src/engine/tools.mjs';
+
+const expected = {
+  household: ['summary', 'facts', 'fact_shapes', 'figures', 'deadlines'],
+  accounts: ['list', 'holdings'], transactions: ['search'], business: ['pnl'],
+  goals: ['list', 'pace'], recommendations: ['list', 'detail', 'advisor'],
+  knowledge: ['packs', 'search', 'entry'], answer: ['fact'],
+  act_on_recommendation: ['status', 'owner', 'step'], update_goal: ['create', 'edit'],
+  update_preferences: ['remember'], undo: ['undo'],
+};
+const oldNames = [
+  ['household','summary'], ['get','facts'], ['get','fact','answer','shapes'], ['get','figures'],
+  ['list','deadlines'], ['list','accounts'], ['list','positions'], ['query','transactions'],
+  ['pnl','by','month'], ['list','goals'], ['get','pace'], ['list','recommendations'],
+  ['get','recommendation'], ['advisor','status'], ['list','packs'], ['packs','status'],
+  ['search','pack','entries'], ['get','pack','entry'], ['record','household','fact'],
+  ['set','recommendation','status'], ['set','recommendation','owner'], ['set','recommendation','step'],
+  ['create','goal'], ['edit','goal'], ['remember','preference'],
+  ...['fact','goal','preference','recommendation','step'].map(k => ['undo',k,'action']),
+].map(parts => parts.join('_'));
+
+test('only the twelve operation tools register, with no old aliases', () => {
+  assert.deepEqual(tools.map(t => t.name), Object.keys(expected).sort());
+  for (const tool of tools) {
+    assert.deepEqual(new Set(tool.operations.map(o => o.name)), new Set(expected[tool.name]));
+    assert.deepEqual(tool.inputSchema.required, ['operation']);
+    assert.deepEqual(tool.inputSchema.properties.operation.enum, tool.operations.map(o => o.name));
+    assert.ok(tool.operations.length <= 8);
+    assert.ok(tool.operations.every(o => o.route && Array.isArray(o.routes) && o.summary.length <= 140));
+    assert.ok(tool.operations.every(o => (tool.kind === 'read') === (o.scope === 'read')));
+    if (tool.kind === 'read') assert.deepEqual(tool.operations[0].required, []);
+  }
+  for (const name of oldNames) assert.equal(getTool(name), null);
+  assert.doesNotThrow(() => createRegistryServer(tools, { purpose: 'chat' }));
+});
+
+test('loader rejects duplicate operations, conflicting schemas and invalid scope kinds', () => {
+  const header = [{ name: 'example', kind: 'read', purpose: 'Example.', progress: 'Reading', source: 'example' }];
+  const op = { tool: 'example', name: 'list', scope: 'read', summary: 'List.', route: 'Examples', params: { id: { type: 'string' } }, required: [], routes: [], handler: () => [] };
+  assert.equal(buildRegistry([{ operations: [op] }], header).tools.length, 1);
+  assert.throws(() => buildRegistry([{ operations: [op, op] }], header), /duplicate/i);
+  assert.throws(() => buildRegistry([{ operations: [op, { ...op, name: 'other', params: { id: { type: 'integer' } } }] }], header), /schema/i);
+  assert.throws(() => buildRegistry([{ operations: [{ ...op, scope: 'write:recs' }] }], header), /scope/i);
+});
+
+test('operation-local validation names the operation through direct and Ask boundaries', async () => {
+  const server = createRegistryServer(tools, { purpose: 'chat' });
+  for (const args of [{ operation: 'missing' }, { operation: 'summary', keys: [] }, { operation: 'summary', constructor: {} }]) {
+    await assert.rejects(callTool('household', args, {}), e => e.code === 'bad_input' && e.message.includes(`household.${args.operation}`));
+    const result = await server.invoke('household', args);
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, new RegExp(`household\\.${args.operation}`));
+  }
+  await assert.rejects(callTool('recommendations', { operation: 'detail' }, {}), e => e.code === 'bad_input' && /recommendations.detail/.test(e.message));
+  const missing = await server.invoke('recommendations', { operation: 'detail' });
+  assert.equal(missing.isError, true);
+  assert.match(missing.content[0].text, /recommendations.detail/);
+  assert.equal((await server.invoke('household', { operation: 'fact_shapes' })).isError, undefined);
+});
+
+test('scope filtering narrows operation enums and hides all writes from read-only keys', () => {
+  const read = toolsForScopes(['read']);
+  assert.ok(read.every(t => t.kind === 'read'));
+  const mixed = toolsForScopes(['read', 'write:recs']);
+  const rec = mixed.find(t => t.name === 'act_on_recommendation');
+  assert.deepEqual(rec.inputSchema.properties.operation.enum, ['owner', 'status']);
+  assert.ok(mixed.some(t => t.name === 'undo'));
+  assert.ok(!createRegistryServer(tools, { purpose: 'chat' }).names.includes('undo'));
+});
+
+test('catalog and instructions stay within the context budget', t => {
+  const listed = toolsForScopes(SCOPES).map(({ name, description, inputSchema }) => ({ name, description, inputSchema }));
+  const chars = JSON.stringify(listed).length;
+  const longest = Math.max(...listed.map(t => t.description.length));
+  t.diagnostic(`catalog=${chars} max-description=${longest} instructions=${instructions.length}`);
+  assert.ok(chars <= 30000);
+  assert.ok(longest <= 900);
+  assert.ok(instructions.length <= 8000);
+});
+
+test('tracked callers contain no retired tool names', () => {
+  const paths = execFileSync('git', ['ls-files', '-z'], { encoding: 'utf8' }).split('\0').filter(Boolean);
+  const pattern = new RegExp(`\\b(${oldNames.join('|')})\\b`, 'g');
+  const found = [];
+  for (const path of paths) {
+    if (path === 'docs/ask-tools.md') continue;
+    let body;
+    try { body = readFileSync(path, 'utf8'); } catch { continue; }
+    body = body.replace(new RegExp('<\\/?' + ['household', 'summary'].join('_') + '>', 'g'), '');
+    if (pattern.test(body)) found.push(path);
+    pattern.lastIndex = 0;
+  }
+  assert.deepEqual(found, []);
+});
