@@ -561,7 +561,8 @@ test.describe('ask everywhere', () => {
     await askInPanel(page, 'Synthetic opener before a long question');
     const tid = (await stored(page)).threadId;
     expect(tid).toMatch(/^[a-f0-9]{12}$/);
-    await startInPanel(page, LONG_Q(450, 4000));
+    // Near the 4000-character cap, so the answer is still streaming after Expand on a loaded host.
+    await startInPanel(page, LONG_Q(600, 4000));
     await bar(page, 'expand').click();
     await expect(page).toHaveURL(new RegExp(`#/ask/${tid}$`));
     await expect(askMain(page).locator('.h-askx-pend')).toBeVisible();
