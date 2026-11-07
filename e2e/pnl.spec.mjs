@@ -137,6 +137,14 @@ test.describe('P&L view', () => {
     const base = await getJson(request, '/api/spending');
     await expectTileValue(page, 'total', base, base.spending.total);
     await expectTileValue(page, 'average', base, base.spending.monthlyAverage);
+    // The Monthly average column renders the API's figures on a wide screen (a phone shows the tile instead).
+    if (page.viewportSize().width > 720) {
+      await expect(page.locator('[data-pl-table] thead th.pl-avg')).toContainText('Monthly average');
+      await expect(page.locator('[data-pl-table] tbody.pl-net td.pl-avg .fx-fig')).toHaveAttribute('data-fig', base.spending.monthlyAverage);
+      const first = base.spending.buckets.flatMap((b) => b.categories).find((c) => c.average);
+      expect(first, 'a category has a monthly average').toBeTruthy();
+      await expect(page.locator(`[data-pl-table] tr[data-pl-cat-row="${attr(first.category)}"] td.pl-avg .fx-fig`).first()).toHaveAttribute('data-fig', first.average);
+    }
 
     await housing.click();
     await expect(housing).toHaveAttribute('aria-pressed', 'false');
