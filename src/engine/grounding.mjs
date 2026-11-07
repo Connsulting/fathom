@@ -169,7 +169,9 @@ function isStructural(text, phrase) {
   const word = phrase.text.toLowerCase();
   if (word === 'one') {
     const lineStart = text.lastIndexOf('\n', phrase.index - 1) + 1;
-    if (afterDeterminer(text.slice(lineStart, phrase.index)) || /^\s+(?:of|more|another)\b/i.test(rest)) return true;
+    const sentence = rest.split(/[.!?]|\n\s*\n/)[0];
+    if (afterDeterminer(text.slice(lineStart, phrase.index)) || /^\s+of\b/i.test(rest)
+      || (/^\s+(?:more|another)\b/i.test(rest) && !unitWord.test(sentence))) return true;
   }
   return phrase.value > 0 && !/hundred|thousand|million|billion/.test(word) && phrase.value === listLength(text, phrase.index + phrase.text.length);
 }
