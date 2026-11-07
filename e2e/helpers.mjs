@@ -365,8 +365,16 @@ export async function deckCurrentId(page) {
   return Number(await deckCard(page).getAttribute('data-item'));
 }
 
-// Move the deck to item `id` with the j and k keys. `order` is the session order (pending ids
-// at entry, ascending). Each press waits for the current card to change.
+// Pending item ids in deck order: the order of the scenario's live.ingest.items (impact rank,
+// then id), which is the order the deck walks. GET /api/confirm lists by id and is not the order.
+export async function deckOrder(request) {
+  const res = await request.get('/api/scenario');
+  expect(res.status()).toBe(200);
+  return (await res.json()).live.ingest.items.map((i) => i.id);
+}
+
+// Move the deck to item `id` with the j and k keys. `order` is the session order (deckOrder at
+// entry). Each press waits for the current card to change.
 export async function deckTo(page, order, id) {
   if (!order.includes(id)) throw new Error(`item ${id} is not in the deck order`);
   for (let i = 0; i <= order.length * 2; i++) {
@@ -376,4 +384,46 @@ export async function deckTo(page, order, id) {
     await expect(deckCard(page)).not.toHaveAttribute('data-item', String(at));
   }
   throw new Error(`could not reach item ${id} in the deck`);
+}
+
+// The current card's key: its item id, or g:<kind> for a group card.
+export async function deckKey(page) {
+  const card = deckCard(page);
+  await expect(card).toHaveCount(1);
+  const item = await card.getAttribute('data-item');
+  return item != null ? item : `g:${await card.getAttribute('data-group')}`;
+}
+
+async function deckPress(page, key) {
+  const at = await deckKey(page);
+  await page.keyboard.press(key);
+  await expect.poll(() => deckKey(page), { message: `the deck moves off ${at} with ${key}` }).not.toBe(at);
+}
+
+// Rewind the deck to its first card with k, then call fn(key) on every card while moving forward
+// with j until Next is disabled. Item cards and group cards alike; works without knowing the order.
+export async function deckEach(page, fn) {
+  const prev = page.locator('button[data-deck="prev"]');
+  const next = page.locator('button[data-deck="next"]');
+  await expect(deckCard(page)).toHaveCount(1);
+  await page.evaluate(() => { if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur(); });
+  for (let i = 0; i < 100 && await prev.isEnabled(); i++) await deckPress(page, 'k');
+  for (let i = 0; i < 100; i++) {
+    if ((await fn(await deckKey(page))) === false) return;
+    if (!(await next.isEnabled())) return;
+    await deckPress(page, 'j');
+  }
+}
+
+// Move the deck to the card matching `sel` (appended to article.h-deck-card.cur, for example
+// '[data-group="account_owner"]' or '[data-item="7"]') and return its locator.
+export async function deckFind(page, sel) {
+  const target = page.locator(`article.h-deck-card.cur${sel}`);
+  let found = false;
+  await deckEach(page, async () => {
+    found = (await target.count()) === 1;
+    return !found;
+  });
+  if (!found) throw new Error(`no deck card matches ${sel}`);
+  return target;
 }

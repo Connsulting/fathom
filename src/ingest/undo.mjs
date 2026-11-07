@@ -2,14 +2,20 @@
 // makes, through TEMP triggers on every ordinary main table except the bookkeeping ones, as
 // {table, op, rowid, before, after} with row images as json_object(...) text over the table's
 // columns. revertChanges walks a log backwards, first requiring each touched row to still equal
-// its recorded after image (or to be still absent after a delete), and restores it. Any mismatch
-// throws ConfirmError('final', 'changed_since'); the caller's transaction then rolls back the
-// partial restore. Both run inside the caller's open transaction.
+// its recorded after image (or to be still absent after a delete), and restores it. Updates on a
+// FIELD_LEVEL table are checked and restored column by column: only the columns the update changed
+// must still hold their after values, and only those are restored, so later writes to other
+// columns of the row stay. Any mismatch throws ConfirmError('final', 'changed_since'); the caller's
+// transaction then rolls back the partial restore. Both run inside the caller's open transaction.
 
 import { ConfirmError } from './confirm.mjs';
 
 // Tables never logged: the logs themselves and bookkeeping a revert must not touch.
 export const UNTRACKED = Object.freeze(['confirm_undo', 'confirm_guesses', 'ingest_epoch', 'schema_migrations', 'spend_ledger']);
+
+// Tables whose updates are reverted column by column (accounts: source_id, mirror, fig_key, owner
+// and kind are written by different imports and answers).
+export const FIELD_LEVEL = Object.freeze(['accounts']);
 
 const LOG = 'fathom_change_log';
 const ident = (name) => `"${String(name).replaceAll('"', '""')}"`;
@@ -94,6 +100,10 @@ export function revertChanges(db, changes) {
         .run(c.rowid, ...cols.map(() => c.before));
       continue;
     }
+    if (c.op === 'update' && FIELD_LEVEL.includes(c.table)) {
+      revertColumns(db, c, cols, now);
+      continue;
+    }
     if (now !== c.after) throw changedSince();
     if (c.op === 'insert') {
       db.prepare(`DELETE FROM main.${ident(c.table)} WHERE rowid = ?`).run(c.rowid);
@@ -102,6 +112,22 @@ export function revertChanges(db, changes) {
         .run(...cols.map(() => c.before), c.rowid);
     }
   }
+}
+
+// A FIELD_LEVEL update: the row must still exist with its key, and every column the update changed
+// must hold its after value; those columns get their before values back.
+function revertColumns(db, c, cols, now) {
+  if (now === undefined) throw changedSince();
+  const before = JSON.parse(c.before);
+  const after = JSON.parse(c.after);
+  const current = JSON.parse(now);
+  const same = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+  const changed = Object.keys(after).filter((k) => !same(before[k], after[k]));
+  if ('id' in after && !same(current.id, after.id)) throw changedSince();
+  if (changed.some((k) => !cols.includes(k) || !(k in before) || !same(current[k], after[k]))) throw changedSince();
+  if (!changed.length) return;
+  db.prepare(`UPDATE main.${ident(c.table)} SET ${changed.map((col) => `${ident(col)} = json_extract(?, ${literal(`$."${col}"`)})`).join(', ')} WHERE rowid = ?`)
+    .run(...changed.map(() => c.before), c.rowid);
 }
 
 // Whether a log touched a table.

@@ -844,14 +844,14 @@ async function packEntry(packId, entryId) {
 
 // ---------------------------------------------------------------- ingest
 
-const emptyIngest = () => ({ pending: 0, items: [], files: [], waiting: [], sources: [], accounts: {}, staleNotes: [], formats: [] });
+const emptyIngest = () => ({ pending: 0, items: [], decided: [], files: [], waiting: [], sources: [], accounts: {}, staleNotes: [], formats: [] });
 
 function ingest() {
   const g = live().ingest;
   if (!g || typeof g !== 'object') return emptyIngest();
   const out = emptyIngest();
   out.pending = Number.isFinite(Number(g.pending)) ? Number(g.pending) : 0;
-  ['items', 'files', 'waiting', 'sources', 'staleNotes', 'formats'].forEach(k => { out[k] = arr(g[k]); });
+  ['items', 'decided', 'files', 'waiting', 'sources', 'staleNotes', 'formats'].forEach(k => { out[k] = arr(g[k]); });
   if (g.accounts && typeof g.accounts === 'object') out.accounts = g.accounts;
   return out;
 }
@@ -958,6 +958,52 @@ function reopenAnswer(id) {
   return sendFinal('/api/confirm/' + encodeURIComponent(id) + '/reopen', {});
 }
 
+// A batch confirm POST: resolves { items } on success, { stale: true } when the server refused it
+// as stale or already answered (the scenario is refetched first), { final: message } on any other
+// 409 refusal (an undo that a final answer blocks; no error line) and null on any other failure
+// (error line shown). Never rejects.
+const STALE_CODES = new Set(['stale', 'answered', 'not_found', 'not_answered']);
+function sendMany(path, body) {
+  const run = async () => {
+    let data;
+    try {
+      data = await postJson(path, body);
+    } catch (err) {
+      if (err && err.status === 409 && STALE_CODES.has(err.code)) {
+        hideError();
+        await refetchScenario();
+        return { stale: true };
+      }
+      if (err && err.status === 409) return { final: err.message };
+      showError('Could not save that change. ' + (err && err.message ? err.message : ''));
+      return null;
+    }
+    applyScenario(data.scenario);
+    hideError();
+    notify();
+    return { items: arr(data.items) };
+  };
+  const p = queue.then(run);
+  queue = p;
+  return p;
+}
+
+// Answer several pending questions at once: list is [{ id, answer }]. One transaction on the server.
+function answerMany(list) {
+  const answers = arr(list)
+    .filter(a => a && a.id != null && a.id !== '' && a.answer != null && a.answer !== '')
+    .map(a => ({ id: Number(a.id), answer: String(a.answer) }));
+  if (!answers.length) return done();
+  return sendMany('/api/confirm/answers', { answers });
+}
+
+// Put several answered questions back to pending in one transaction (a group undo).
+function reopenMany(ids) {
+  const list = arr(ids).filter(id => id != null && id !== '').map(Number);
+  if (!list.length) return done();
+  return sendMany('/api/confirm/reopen-many', { ids: list });
+}
+
 // Mark an expected year-end document not needed this year (reason text), or clear the mark (null).
 function yearendMark(year, key, reason) {
   if (!key) return done();
@@ -1046,6 +1092,8 @@ const api = {
   answer,
   reviseAnswer,
   reopenAnswer,
+  answerMany,
+  reopenMany,
   retryFile,
   yearendMark,
   refresh: refetchScenario,

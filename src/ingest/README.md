@@ -47,6 +47,13 @@ unknown CSVs and broken workbooks return null for model extraction.
    not extract facts or financial figures. The pipeline never stores that text:
    it replaces the fields with a reference, `{ref, sha256, chars, lines}` (`ref`
    is the file id of the encrypted upload), before the dedupe key and insert.
+8. Aggregator and brokerage-positions files may carry the holder or owner name the
+   source itself writes for an account: the first present of the columns
+   `account holder`, `account owner`, `owner`, `holder`, trimmed, becomes
+   `account.holder` (absent when empty). A mapped file does the same through the
+   optional mapping field `accountHolder`; the model sees only the header name and
+   redacted samples, as for every column. The holder is never part of the account
+   key, so dedupe keys are unchanged.
 
 Parsing is bounded (`format.mjs` `LIMITS`): at most 200000 rows, 512 columns per
 record, 2000000 cells in total and 32768 characters per cell. Workbooks keep
@@ -129,7 +136,9 @@ bytes; a concurrent upload of bytes being ingested is a `duplicate`.
    its encrypted bytes stay and nothing else is stored.
 3. Accounts upsert by identity (`inst|mask:`, `inst|name:` or `source:`), id
    `acct-` plus 16 hex of its SHA256, mirror `manual`. A new account asks for its
-   owner, and for its kind when the export does not name a known one.
+   owner, and for its kind when the export does not name a known one. A row's
+   holder name is kept in `account_holders` for new and existing accounts; the
+   first source to name one wins and a later file never replaces it.
 4. Transactions skip a confirmed duplicate key. A stored key from another file
    is compared by normalized description (lowercase letters and digits): equal is
    a duplicate. From another parser, equal normalized descriptions or a shared
@@ -198,6 +207,81 @@ bytes; a concurrent upload of bytes being ingested is a `duplicate`.
    do; `both` keeps both). An explicit zero federal withholding field is a row
    (a correction to zero meets this rule); an absent one is not. Answers are remembered by kind and subject
    and apply at import; a remembered `first` or `second` keeps the row whose dedupe key and amount it kept, not a position.
+
+   Cards show their evidence, not only the question (`context.mjs` `cardDetail`,
+   read from stored rows, every figure with its file and date; no account number
+   beyond the 4-digit mask and no SimpleFIN id). Account questions show the
+   account (institution, mask, holder, source files, date range, row counts,
+   latest balance with date and every file it sums, three latest transactions) beside every
+   account with the same name, and list the fields that differ, because the owner
+   and spouse can hold same-named accounts. `near_duplicate`,
+   `withholding_conflict` and `account_match` show the entries side by side with
+   the differing fields marked; `account_match` compares the candidate with the
+   snapshot the last SimpleFIN sync stored (`simplefin_snapshots`), balance date
+   included, and below it shows the candidate's full account view, its same-named
+   accounts and the snapshot's three newest postings. Other kinds
+   show their file and the values asked about.
+
+   Best guess (`bestguess.mjs`): a deterministic rule guess (kind from the account
+   name, `same` for equal date and amount, `joint` when a multi-holder name matches
+   both household members) or the stored engine guess. The rule wins. Evidence is
+   always rendered from stored values and quotes the field or document it came
+   from (account name, institution and mask, source file, document type); engine
+   prose never reaches the card. Guesses never answer.
+
+   Auto-resolution (`auto.mjs` `autoResolve`) answers a pending question before
+   it is asked, only when stored rows settle it, through the normal answer path
+   (own transaction, undo log, `confirm_auto` row with rule and evidence inside the
+   log). Rules:
+   a. `cross_format_duplicate` (`near_duplicate`, option `same`): same account,
+      date and cents, different parsers and files, not two different reference
+      numbers, and either a key collision pair or the only row of its kind in each
+      file, so the match is one to one and multiplicity is kept. A pair asked only
+      by the three-day window is never resolved.
+   b. `holder_match` (`account_owner`): the account's holder is a single name (no
+      `&`, `+`, `/`, `,`, `and`, `or`) and matches exactly one household member,
+      either by the `household.names` fact (every word of the stored name appears
+      in the holder) or by an account with the same holder that you answered
+      `owner` or `spouse`. A holder matching both members, or sources that
+      disagree, asks.
+   c. `shared_mask` (`account_owner`, `account_kind`): every answered account with
+      the same 4-digit mask at a compatible institution (equal, or either empty)
+      agrees. For `account_kind` a sibling whose kind came from its export counts.
+      Bridge accounts, pairs answered `different` in an `account_match`, and pairs
+      with two known, different holders are ignored. An `account_owner` whose
+      holder names several people, or whose holder sources disagree, is never
+      answered this way; an account with no holder can be.
+   Safeguards: evidence lists the answers it rests on (`basis`) and their whole
+   ancestry (`ancestors`), and no answer is ever used to support one it rests on.
+   An item the owner reopened is declined and never auto-answered again. An auto
+   owner or kind answer stays undoable after a later import (it is exempt from
+   `imported_since`; `used_since` and `changed_since` still make it final), because
+   undo restores only the account columns that answer changed. `autoResolve` runs
+   once at the end of `ingestFiles`, `retryFile` and a SimpleFIN sync, and after an
+   answer, a batch answer, a reopen or a revise, so rules b and c pick up answers
+   as they land. A failure logs a code and never changes a file result or fails
+   the request.
+
+   Undo and dependents: reopening or revising an item first reverts, newest first,
+   each auto answer whose ancestors include it (each in a savepoint; a final one
+   stays, a failed revert rolls back alone). Reopening any answer, the owner's
+   or Fathom's, marks the item declined, so Fathom always asks it again. A batch
+   answer (`answerItems`) and a batch reopen (`reopenItems`) run in one transaction
+   with an undo log per item, and any refusal changes nothing.
+
+   Decided for you lists the answered items that have a `confirm_auto` row, newest
+   first, each with its rule, evidence and Undo (a final one shows why it is final).
+   In the Confirm deck an account question shows a Best guess tag on the guessed
+   option with a Use best guess button, and when two or more account_owner or
+   account_kind questions are pending they fold into one grouped card with a row
+   per account, the guess preselected, and Use best guesses for all.
+
+   Rank and group: `ingestState` sorts pending items by impact and the deck walks
+   them in that order. Rank 0 tax_year, employer_relation, employer_recipient,
+   document_recipient, withholding_conflict; 1 fact_check; 2 account_kind and
+   account_owner (larger absolute latest balance first within); 3 account_match,
+   entity_alias; 4 near_duplicate. `group` is the kind for account_owner and
+   account_kind, else null.
 7. `counts` is `{rows: {kind: n}, duplicates, crossFormat, revised, superseded,
    incomplete, warnings, warningCodes: {code: n}, queued}`, plus `extractPath`
    when extraction ran: `text`, `pdf_text_layer`, `pdf_document` or `pdf_withheld`.

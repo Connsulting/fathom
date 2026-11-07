@@ -6,7 +6,8 @@
 import { getSetting } from '../store/db.mjs';
 import { loadDataKey, VaultError } from '../ingest/vault.mjs';
 import { ingestFiles, retryFile as retryIngest } from '../ingest/pipeline.mjs';
-import { answerItem, reviseItem, reopenItem, finalReason, getItem, pendingItems, listItems, ConfirmError } from '../ingest/confirm.mjs';
+import { answerItem, answerItems, reviseItem, reopenItem, reopenItems, finalReason, getItem, pendingItems, listItems, ConfirmError } from '../ingest/confirm.mjs';
+import { autoResolve } from '../ingest/auto.mjs';
 import { fileOf } from '../ingest/freshness.mjs';
 import { refreshPackState } from '../packs/state.mjs';
 import { HttpError } from './http.mjs';
@@ -124,8 +125,9 @@ const itemId = raw => {
   return Number(raw);
 };
 
-// Run a confirm action and answer {scenario, item} with item.final, refreshing pack state when
-// facts changed. ConfirmErrors map to their fixed messages.
+// Run a confirm action, then auto-resolution over what the answer settled, and answer
+// {scenario, item} (or {scenario, items}) with item.final, refreshing pack state when facts
+// changed. ConfirmErrors map to their fixed messages.
 function confirmAction(ctx, fn) {
   let out;
   try {
@@ -139,10 +141,26 @@ function confirmAction(ctx, fn) {
     }
     throw err;
   }
+  resolveAfterAnswer(ctx);
   if (out.factsChanged) {
     try { refreshPackState(ctx.db, { dataDir: ctx.config && ctx.config.dataDir }); } catch (err) { console.error('fathom: pack refresh failed', err && err.name); }
   }
-  return { scenario: scenarioOf(ctx), item: { ...out.item, final: finalReason(ctx.db, out.item) } };
+  const withFinal = item => {
+    const now = getItem(ctx.db, item.id) || item;
+    return { ...now, final: finalReason(ctx.db, now) };
+  };
+  if (Array.isArray(out.items)) return { scenario: scenarioOf(ctx), items: out.items.map(withFinal) };
+  return { scenario: scenarioOf(ctx), item: withFinal(out.item) };
+}
+
+// Auto-resolution after the confirm transaction committed: a failure logs a code and never fails
+// the request.
+function resolveAfterAnswer(ctx) {
+  try {
+    autoResolve(ctx.db, { now: nowIso() });
+  } catch (err) {
+    console.error('fathom: auto-resolve failed', safeCode(err));
+  }
 }
 
 // After a confirm answer (or a stale refusal) on a real store, the plan job is scheduled through
@@ -184,4 +202,36 @@ export function answerConfirm(ctx) {
 export function reopenConfirm(ctx) {
   const id = itemId(ctx.params.id);
   return afterAnswer(ctx, () => reopenItem(ctx.db, id, { now: nowIso() }));
+}
+
+// A body item id: a positive integer, as a number or digits.
+const bodyId = raw => {
+  if (Number.isInteger(raw) && raw > 0) return raw;
+  if (typeof raw === 'string' && /^\d{1,15}$/.test(raw) && Number(raw) > 0) return Number(raw);
+  return null;
+};
+const MAX_BATCH = 500;
+
+// {answers: [{id, answer}]} answers every listed pending item in one transaction (a group card).
+export function answerConfirmBatch(ctx) {
+  const list = ctx.body.answers;
+  if (!Array.isArray(list) || !list.length || list.length > MAX_BATCH) throw new HttpError(400, 'answers must be a list of {id, answer}');
+  const answers = list.map(a => {
+    const id = bodyId(a && a.id);
+    const option = a && a.answer;
+    if (id === null || typeof option !== 'string' || !option) throw new HttpError(400, 'answers must be a list of {id, answer}');
+    return { id, option };
+  });
+  const out = afterAnswer(ctx, () => answerItems(ctx.db, answers, { now: nowIso() }));
+  if (out.items.some(i => i.kind === 'account_match')) triggerJob(ctx, 'simplefin-sync');
+  return out;
+}
+
+// {ids: [...]} reopens every listed answered item in one transaction (undo of a group card).
+export function reopenConfirmBatch(ctx) {
+  const raw = ctx.body.ids;
+  if (!Array.isArray(raw) || !raw.length || raw.length > MAX_BATCH) throw new HttpError(400, 'ids must be a list of question ids');
+  const ids = raw.map(bodyId);
+  if (ids.some(id => id === null)) throw new HttpError(400, 'ids must be a list of question ids');
+  return afterAnswer(ctx, () => reopenItems(ctx.db, ids, { now: nowIso() }));
 }

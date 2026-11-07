@@ -50,6 +50,9 @@ One line each, taken from merged pull request bodies and deduplicated. The numbe
 8. One open entity or account question sends every item of that kind to Confirm (#25).
 9. Every unconfirmed fact is labeled to confirm in the understood panel, even when no card was raised (#25).
 10. Text typed while a notes save is in flight is cleared when the save succeeds (#25).
+11. Existing silent cross-format dedupes (a shared distinctive word in the description) are not questions and have no per-row undo; a remedy is a separate archived-rows view.
+12. The SimpleFIN one-for-one pre-filter drops matched bridge postings without archiving them.
+13. Undo logs on `accounts` recorded before migration 017 still compare whole rows, so a later import or SimpleFIN sync that touched the account makes those answers final.
 
 ## Jobs and email
 

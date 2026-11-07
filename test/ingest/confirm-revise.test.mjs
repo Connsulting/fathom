@@ -26,8 +26,10 @@ const SETUP_AT = '2032-03-08T09:00:00.000Z';
 const ANSWER_AT = '2032-03-09T09:00:00.000Z';
 
 // Tables left out of the equivalence dump: bookkeeping that legitimately differs between a revised
-// store and a directly answered one.
-const BOOKKEEPING = ['schema_migrations', 'confirm_undo', 'confirm_guesses', 'ingest_epoch', 'spend_ledger', 'settings'];
+// store and a directly answered one. confirm_auto_declined is the marker a reopen leaves so the item
+// is always asked again and never auto-answered; it is bookkeeping by design, not a row the answer
+// touched, so a reopen is expected to add it.
+const BOOKKEEPING = ['schema_migrations', 'confirm_undo', 'confirm_guesses', 'ingest_epoch', 'spend_ledger', 'settings', 'confirm_auto_declined'];
 const canon = (v) => (Array.isArray(v) ? v.map(canon)
   : v && typeof v === 'object' && !ArrayBuffer.isView(v) ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, canon(v[k])])) : v);
 
@@ -265,6 +267,7 @@ describe('reopen restores the store as it was before the answer', () => {
         assert.equal(typeof out.factsChanged, 'boolean');
         assert.deepEqual(dataDump(s.db), before, 'every row the answer touched is restored');
         assert.deepEqual(one(s.db, 'SELECT status, answer, answered_at FROM confirm_items WHERE id = ?', id), { status: 'pending', answer: null, answered_at: null });
+        assert.equal(one(s.db, 'SELECT count(*) AS n FROM confirm_auto_declined WHERE item_id = ?', id).n, 1, 'the reopen records exactly one auto-decline marker');
         assert.ok(C.pendingItems(s.db).some((i) => i.id === id), 'the item is back in the pending queue');
         assert.equal(C.finalReason(s.db, C.getItem(s.db, id)), null, 'a pending item is not final');
 

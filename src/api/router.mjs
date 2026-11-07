@@ -70,6 +70,8 @@ const TABLE = [
   { method: 'POST', path: '/api/files/:id/retry', handler: ih.retryFile, ingest: true },
   { method: 'GET', path: '/api/confirm', handler: ih.listPendingConfirm, ingest: true },
   { method: 'POST', path: '/api/confirm/list', handler: ih.listConfirm, ingest: true },
+  { method: 'POST', path: '/api/confirm/answers', handler: ih.answerConfirmBatch, ingest: true },
+  { method: 'POST', path: '/api/confirm/reopen-many', handler: ih.reopenConfirmBatch, ingest: true },
   { method: 'GET', path: '/api/confirm/:id', handler: ih.getConfirm, ingest: true },
   { method: 'POST', path: '/api/confirm/:id/answer', handler: ih.answerConfirm, ingest: true },
   { method: 'POST', path: '/api/confirm/:id/reopen', handler: ih.reopenConfirm, ingest: true },

@@ -6,7 +6,7 @@
 // Ids, kinds, options and labels come from GET /api/confirm; answers are verified through
 // POST /api/confirm/list. Nothing is hard-coded beyond the pinned copy.
 
-import { test, expect, resetDemo, gotoRoute, quickChecks, aboutMinutes, yearBanner, bannerStart, deckCard, deckProgress, deckCurrentId, deckTo } from './helpers.mjs';
+import { test, expect, resetDemo, gotoRoute, quickChecks, aboutMinutes, yearBanner, bannerStart, deckCard, deckProgress, deckCurrentId, deckTo, deckOrder } from './helpers.mjs';
 
 // Kind labels shown in the card kicker (Horizon's labels for the confirm kinds).
 const KIND = {
@@ -30,11 +30,14 @@ const qsInput = (page) => page.locator('.h-qs-host input.h-qs-in');
 const qsOptions = (page) => page.locator('#h-qs-list li.h-qs-o[role="option"]');
 const startConfirming = (page) => qsOptions(page).filter({ has: page.locator('.h-qs-t', { hasText: /^Start confirming$/ }) });
 
+// Pending items in deck order (impact rank, then id), the order the deck walks.
 async function pending(request) {
   const res = await request.get('/api/confirm');
   expect(res.status()).toBe(200);
   const { items } = await res.json();
-  return [...items].sort((a, b) => a.id - b.id);
+  const order = await deckOrder(request);
+  expect([...order].sort((a, b) => a - b), 'the deck order lists every pending item').toEqual(items.map((i) => i.id).sort((a, b) => a - b));
+  return [...items].sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
 }
 
 async function allItems(request) {
@@ -266,8 +269,7 @@ test("Fathom's guess shows with its reason, never answers by itself, and Enter a
   const guessOption = await guessBtn.getAttribute('data-option');
   const label = g.options.find((o) => o.id === guessOption)?.label;
   expect(label, 'the guess is one of the item options').toBeTruthy();
-  await expect(deckCard(page).locator('.h-cf-guess')).toHaveText(new RegExp(`^Fathom's guess: ${reEsc(label)}`));
-  await expect(deckCard(page).locator('.h-cf-why')).toHaveText(/\S/);
+  await expect(deckCard(page).locator('.h-cf-guess')).toHaveText(new RegExp(`^Best guess: ${reEsc(label)}\\.\\s+\\S`));
   await expectPending(request, g.id);
 
   await page.reload();

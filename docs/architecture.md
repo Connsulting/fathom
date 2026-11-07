@@ -343,6 +343,10 @@ Money columns are dollars rounded to cents; JSON columns hold JSON text. The pro
 | `confirm_items` | `id` PK, `kind`, `subject`, `question`, `options` JSON `[{id, label}]`, `context` JSON, `status` in pending, answered, `answer`, `file_id`, `created_at`, `answered_at`; unique (`kind`, `subject`) |
 | `confirm_undo` | `item_id` PK (references `confirm_items.id`, cascade delete), `ingest_epoch` (the epoch when the answer was recorded), `changes` JSON `[{table, op, rowid, before, after}]` (the answer's change log, row images as JSON text), `created_at`, `used_at` (set when a later import or planning run re-applied the answer). One row per revisable answer (migration 009). |
 | `confirm_guesses` | `item_id` PK (references `confirm_items.id`, cascade delete), `option_id` (NULL when the engine gave no valid guess), `reason`, `model`, `ts`. One row per question sent to the engine, so none is sent twice (migration 009). |
+| `account_holders` | `account_id` PK (references `accounts.id`, cascade delete), `holder` (the holder or owner name the source itself carries, as written), `file_id`, `locator`, `created_at`. The first source to name a holder wins (migration 017). |
+| `confirm_auto` | `item_id` PK (references `confirm_items.id`, cascade delete), `rule` (`cross_format_duplicate`, `holder_match` or `shared_mask`), `evidence` JSON `{text, basis, ancestors, refs?}` (`basis` the answered item ids the rule used, `ancestors` their transitive closure), `created_at`. One row per answer Fathom recorded itself; written inside the captured answer, so reverting the answer deletes it (migration 017). |
+| `confirm_auto_declined` | `item_id` PK (references `confirm_items.id`, cascade delete), `at`. Set when any answer to the item is reopened or revised: Fathom never answers it automatically again (migration 017). |
+| `simplefin_snapshots` | `sf_key` PK (references `simplefin_accounts.sf_key`, cascade delete), `snapshot` JSON `{inst, name, mask, maskSure, balance, balanceDate, from, to, count, recent}` (what the last sync saw of the bridge account; the 3 latest postings; no account or connection ids), `at`. Gives a pending `account_match` card its SimpleFIN side (migration 017). |
 | `ingest_epoch` | `id` PK (always 1), `n`. Bumped by triggers on every `files` insert and update (migration 009); readers treat a missing row as 0. |
 | `column_mappings` | `signature` PK (header signature), `mapping` JSON, `src`, `created_at`, `uses` |
 | `entity_aliases` | `alias` PK (normalized alias name), `entity` (canonical display name), `created_at` |
@@ -405,6 +409,11 @@ Rec actions and their buttons: `start` "Doing it" (-> `doing`), `complete` "Done
 (Reopen, Wake now or Restore, by state). The keys in the Plan list and the rec dialog are D, E, L and
 Shift+X. The `accept` action no longer exists; the MCP `set_recommendation_status` enum drops
 `accepted` with it, a change to that external tool contract.
+
+Migration 017 (`017-confirm-context.sql`) creates `account_holders`, `confirm_auto`,
+`confirm_auto_declined` and `simplefin_snapshots` (see "Confirm queue"). It adds tables only: a
+new column on `accounts` or `confirm_items` would make every stored undo log, which holds
+whole-row images, fail its revert.
 
 ### Adding a migration
 
@@ -689,6 +698,8 @@ response is `{scenario, ...}` with the fresh scenario.
 | `GET /api/confirm/:id` | | `{item}` with `item.final`, pending or answered; 404 unknown item. The Confirm deck reads it after a lost answer reply to retry only an item that is still pending. |
 | `POST /api/confirm/:id/answer` | `{answer: optionId, revise?: true}` | `{scenario, item}` with `item.final` (null or the reason it is final). 404 unknown item, 400 an option not offered, 409 already answered or stale (the value changed since the question was asked). Confirm refusals carry `code` (`stale`, `answered`, `not_answered`, ...) next to `error`. A planner fact check records the notes value it was asked against (`context.stored`) and is stale only when that fact changed. On a real store an answer, a reopen or a stale refusal schedules the plan job (trigger `confirm`): 30 s after the last answer of a burst, or at once when no question is left pending. With `revise: true` it changes an answered item's answer instead: 409 "that question is not answered yet" for a pending item, and 409 with a fixed one-line message when the answer is final (see "Confirm queue"). |
 | `POST /api/confirm/:id/reopen` | `{}` | `{scenario, item}`. Puts an answered item back to pending and restores every row its answer changed. 404 unknown item, 409 not answered, stale or final, as for a revise. |
+| `POST /api/confirm/answers` | `{answers: [{id, answer}]}` | `{scenario, items}`, each item with `final`. Answers every listed pending item in one transaction (one undo log per item); every refusal is checked before any write, so a refusal changes nothing. Errors as the single answer route; 400 for a malformed body. Auto-resolution runs once after it. |
+| `POST /api/confirm/reopen-many` | `{ids: [...]}` | `{scenario, items}`. Reopens every listed answered item in one transaction (the undo of a grouped card); any refusal, including a final item with its reason, changes nothing. Errors as the reopen route. |
 | `GET /api/email` | | `{status: {transport, state, recipient, recipients, detail}, preview: {subject, text, html, summarySrc}, history}`. `recipient` is masked (`o***@e***.invalid`); `history` is `email_sends` rows newest first with no bodies. The preview is the brief composed now over the store with the runtime engine (template summary when the engine cannot answer). |
 | `POST /api/email/test` | `{}` | `{send, history}`. Sends a fixed test email (kind `test`) through the configured transport; a failed send is a 200 with `send.status` `failed` and `send.errorCode`. |
 | `POST /api/email/brief` | `{}` | `{send, history}`. Composes and sends the brief now (kind `brief`); failures as above. |
@@ -1409,6 +1420,54 @@ are "This answer was recorded before answers could be changed, so it is final.",
 imported after this answer, so it is final.", "A later change builds on this answer, so it is
 final." and "A later import used this answer, so it is final.". Pack state refreshes when either
 log touched `facts`.
+
+Card context, best guesses and auto-resolution (migration 017). `src/ingest/context.mjs`
+`cardDetail(db, item)` returns plain JSON for each pending card, every figure with its file name
+and date (an account balance lists every contributing file in `sources: [{fileId, fileName}]`, and
+`fileName` joins them): an account view beside every same-named account with the differing fields listed
+(`type: 'account'`, for `account_owner` and `account_kind`), a side-by-side compare with differing
+fields (`type: 'compare'`, for `near_duplicate`, `withholding_conflict` and `account_match`, the
+last against `simplefin_snapshots` with a `balanceDate` row and, beside the table, the candidate's
+`account` view, its `sameName` views and `snapshot: {recent, balanceDate}`), or the file and the values asked about (`type: 'values'`).
+`src/ingest/bestguess.mjs` gives each card at most one best guess with evidence rendered from
+stored values: a rule guess (kind from the account name, `same` when date and amount match, `joint`
+when a multi-holder name matches both household members) or the stored engine guess, the rule
+winning. Engine prose never reaches a card.
+
+`src/ingest/auto.mjs` `autoResolve(db, {now})` answers a pending question before it is asked, only
+when stored rows settle it, through `recordAutoAnswer` (the same answer path, own transaction and
+undo log, with the `confirm_auto` row inside the log). Rules: `cross_format_duplicate` (one posting
+seen once in each of two formats, one to one), `holder_match` (the source's single holder name is
+exactly one known household member, from the `household.names` fact or from an answered account
+with the same holder) and `shared_mask` (every answered account with the same 4-digit mask at a
+compatible institution agrees; bridge accounts are ignored; an owner question whose holder names
+several people or whose holder sources disagree is left to the owner). It runs at the end of `ingestFiles`,
+`retryFile` and a SimpleFIN sync, and after every answer, batch answer, reopen and revise, so each
+answer propagates. `auto.mjs` imports `confirm.mjs`, never the reverse. Safeguards: evidence
+stores the answers it rests on (`basis`) and their transitive closure (`ancestors`), and no answer
+supports one it rests on; an item whose answer was reopened or revised is in
+`confirm_auto_declined` and is never auto-answered again; an auto `account_owner` or `account_kind`
+answer is exempt from `imported_since`, since undo restores only the account columns that answer
+changed (`FIELD_LEVEL` in `undo.mjs`; other columns keep later data such as `source_id` or the
+SimpleFIN mirror) and a later import does not block it. Reopening or revising an item first
+reverts the auto answers whose `ancestors` include it, newest first, each in a savepoint (a final
+one stays). Reopening any answer, owner or auto, marks the item so Fathom always asks it again.
+`answerItems(db, answers, {now})` and `reopenItems(db, ids, {now})` do the same for a batch in one
+transaction.
+
+`ingestState` (`freshness.mjs`) gives each pending item `detail`, `guess` (`{option, label, reason,
+evidence, source: 'rule' or 'engine'}`, `reason` equal to the evidence), `rank` and `group`, sorted
+by rank then id; rank 0 tax and recipient questions, 1 `fact_check`, 2 account questions (larger
+absolute latest balance first), 3 `account_match` and `entity_alias`, 4 `near_duplicate`. `group`
+is `account_owner` or `account_kind` for account questions. It also returns `decided`: the answered
+items with a `confirm_auto` row, newest first, with rule, evidence and `final`. The Confirm deck
+(`web/horizon/screens/ingest.js`) walks the items in that order. A single card shows the detail
+panel, the guessed option marked Best guess and preselected, and a Use best guess button; two or
+more pending account questions of one kind fold into one grouped card with a row per account (its
+own detail, same-named accounts marked) and Use best guesses for all, which answers through
+`POST /api/confirm/answers`. A Decided for you section lists `decided` with each rule's evidence and
+an Undo (`POST /api/confirm/:id/reopen`, or `reopen-many` for a group); a final answer shows why
+instead.
 
 Engine guesses (`src/ingest/guess.mjs`): `guessPending(db, engine, {now, batchSize = 20,
 maxBatches, fake})` sends pending items with no `confirm_guesses` row in batches, one engine call
