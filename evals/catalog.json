@@ -9,7 +9,7 @@
           "question": "What is our annual spending excluding mortgage and income tax, including healthcare? Annualize the complete covered months in the ledger.",
           "required": [
             {
-              "name": "spending_summary",
+              "name": "aggregate_transactions",
               "predicates": [
                 {
                   "path": "exclude",
@@ -44,7 +44,7 @@
       ],
       "expectedFail": {
         "missingTools": [
-          "spending_summary"
+          "aggregate_transactions"
         ]
       }
     },
@@ -56,7 +56,7 @@
           "question": "How big a portfolio covers our annual spending excluding mortgage and income tax, including healthcare, at a 4% withdrawal rate?",
           "required": [
             {
-              "name": "portfolio_requirement",
+              "name": "independence_target",
               "predicates": [
                 {
                   "path": "withdrawalRate",
@@ -82,7 +82,7 @@
       ],
       "expectedFail": {
         "missingTools": [
-          "portfolio_requirement"
+          "independence_target"
         ]
       }
     },
@@ -713,7 +713,7 @@
           "question": "What is total business profit across both entities for january?",
           "required": [
             {
-              "name": "pnl_by_month",
+              "name": "business_pnl",
               "predicates": [
                 {
                   "path": "from",
@@ -751,7 +751,7 @@
           "question": "What is total business profit across both entities for february?",
           "required": [
             {
-              "name": "pnl_by_month",
+              "name": "business_pnl",
               "predicates": [
                 {
                   "path": "from",
@@ -789,7 +789,7 @@
           "question": "What is total business profit across both entities for march?",
           "required": [
             {
-              "name": "pnl_by_month",
+              "name": "business_pnl",
               "predicates": [
                 {
                   "path": "from",
@@ -827,7 +827,7 @@
           "question": "Show net worth over time through the latest balance date.",
           "required": [
             {
-              "name": "net_worth_history",
+              "name": "net_worth",
               "predicates": []
             }
           ],
@@ -846,7 +846,7 @@
       ],
       "expectedFail": {
         "missingTools": [
-          "net_worth_history"
+          "net_worth"
         ]
       }
     },
@@ -858,7 +858,7 @@
           "question": "How much did net worth change from the earliest balance snapshot to the latest?",
           "required": [
             {
-              "name": "net_worth_history",
+              "name": "net_worth",
               "predicates": [
                 {
                   "path": "includeChange",
@@ -883,7 +883,7 @@
       ],
       "expectedFail": {
         "missingTools": [
-          "net_worth_history"
+          "net_worth"
         ]
       }
     },
@@ -1101,6 +1101,2534 @@
           ],
           "maxWords": 90,
           "rubric": "Use the returned value, state what it measures and keep the answer brief."
+        }
+      ]
+    },
+    {
+      "id": "q01-spend-excl-mortgage-tax",
+      "family": "spending",
+      "turns": [
+        {
+          "question": "What is my yearly spending, excluding mortgage and income tax but including healthcare, so I can back into the investment balance I need",
+          "required": [
+            {
+              "name": "aggregate_transactions",
+              "predicates": [
+                {
+                  "path": "measure",
+                  "op": "eq",
+                  "value": "spending"
+                },
+                {
+                  "path": "annualize",
+                  "op": "eq",
+                  "value": true
+                },
+                {
+                  "path": "exclude.classes",
+                  "op": "includes",
+                  "value": "debt_service"
+                },
+                {
+                  "path": "exclude.categories",
+                  "op": "includes",
+                  "value": "Mortgage"
+                },
+                {
+                  "path": "exclude.buckets",
+                  "op": "includes",
+                  "value": "tax"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [
+            {
+              "kind": "annual-spending"
+            }
+          ],
+          "maxWords": 160,
+          "rubric": "One aggregate_transactions call. Healthcare stays in. Annualize complete covered months across checking and card spending accounts."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "aggregate_transactions"
+        ]
+      }
+    },
+    {
+      "id": "q02-independence-target-4pct",
+      "family": "retirement",
+      "turns": [
+        {
+          "question": "What investment balance would cover yearly spending, excluding mortgage and income tax but including healthcare, at a 4 percent withdrawal rate?",
+          "required": [
+            {
+              "name": "independence_target",
+              "predicates": [
+                {
+                  "path": "withdrawalRate.value",
+                  "op": "eq",
+                  "value": 0.04
+                },
+                {
+                  "path": "withdrawalRate.source",
+                  "op": "eq",
+                  "value": "owner"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [
+            {
+              "kind": "portfolio",
+              "rate": 0.04
+            }
+          ],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "independence_target"
+        ],
+        "capabilities": [
+          "ownerStatements"
+        ]
+      }
+    },
+    {
+      "id": "q03-gap-and-date",
+      "family": "retirement",
+      "turns": [
+        {
+          "question": "How far am I from the balance that covers yearly spending, excluding mortgage and income tax but including healthcare, at a 4 percent withdrawal rate, and when would I get there at my current savings rate?",
+          "required": [
+            {
+              "name": "independence_target",
+              "predicates": [
+                {
+                  "path": "withdrawalRate.value",
+                  "op": "eq",
+                  "value": 0.04
+                },
+                {
+                  "path": "withdrawalRate.source",
+                  "op": "eq",
+                  "value": "owner"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "independence_target"
+        ],
+        "capabilities": [
+          "ownerStatements"
+        ]
+      }
+    },
+    {
+      "id": "q04-groceries-dining-monthly",
+      "family": "spending",
+      "turns": [
+        {
+          "question": "What do we spend on groceries and dining out each month?",
+          "required": [
+            {
+              "name": "aggregate_transactions",
+              "predicates": [
+                {
+                  "path": "measure",
+                  "op": "eq",
+                  "value": "spending"
+                },
+                {
+                  "path": "groupBy",
+                  "op": "eq",
+                  "value": "month"
+                },
+                {
+                  "path": "include.categories",
+                  "op": "includes",
+                  "value": "groceries"
+                },
+                {
+                  "path": "include.categories",
+                  "op": "includes",
+                  "value": "dining"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "aggregate_transactions"
+        ]
+      }
+    },
+    {
+      "id": "q05-essential-vs-discretionary",
+      "family": "spending",
+      "turns": [
+        {
+          "question": "How much of our spending is essential and how much is discretionary?",
+          "required": [
+            {
+              "name": "aggregate_transactions",
+              "predicates": [
+                {
+                  "path": "definition",
+                  "op": "eq",
+                  "value": "essential"
+                }
+              ]
+            },
+            {
+              "name": "aggregate_transactions",
+              "predicates": [
+                {
+                  "path": "definition",
+                  "op": "eq",
+                  "value": "discretionary"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "State both totals. No sum or difference unless calculate returned it."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "aggregate_transactions"
+        ]
+      }
+    },
+    {
+      "id": "q06-top-merchants",
+      "family": "spending",
+      "turns": [
+        {
+          "question": "Who are our ten biggest merchants this year?",
+          "required": [
+            {
+              "name": "aggregate_transactions",
+              "predicates": [
+                {
+                  "path": "groupBy",
+                  "op": "eq",
+                  "value": "merchant"
+                },
+                {
+                  "path": "limit",
+                  "op": "eq",
+                  "value": 10
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "aggregate_transactions"
+        ]
+      }
+    },
+    {
+      "id": "q07-childcare-2025",
+      "family": "spending",
+      "turns": [
+        {
+          "question": "How much did we spend on childcare in 2025?",
+          "required": [
+            {
+              "name": "aggregate_transactions",
+              "predicates": [
+                {
+                  "path": "window",
+                  "op": "eq",
+                  "value": "calendar_year"
+                },
+                {
+                  "path": "year",
+                  "op": "eq",
+                  "value": 2025
+                },
+                {
+                  "path": "include.classes",
+                  "op": "includes",
+                  "value": "childcare"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "aggregate_transactions"
+        ]
+      }
+    },
+    {
+      "id": "q08-healthcare-premiums",
+      "family": "spending",
+      "turns": [
+        {
+          "question": "How much did we spend on healthcare last year, premiums included?",
+          "required": [
+            {
+              "name": "aggregate_transactions",
+              "predicates": [
+                {
+                  "path": "include.classes",
+                  "op": "includes",
+                  "value": "healthcare"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Report the total and the outside-ledger premium gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "aggregate_transactions"
+        ]
+      }
+    },
+    {
+      "id": "q09-elective-definition",
+      "family": "spending",
+      "turns": [
+        {
+          "question": "What is our spending in my elective spending definition?",
+          "required": [
+            {
+              "name": "aggregate_transactions",
+              "predicates": [
+                {
+                  "path": "definition",
+                  "op": "eq",
+                  "value": "elective_spending"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "aggregate_transactions"
+        ],
+        "capabilities": [
+          "definitions"
+        ]
+      }
+    },
+    {
+      "id": "q09b-elective-definition-later-thread",
+      "family": "spending",
+      "turns": [
+        {
+          "question": "What is our spending in my elective spending definition?",
+          "required": [
+            {
+              "name": "aggregate_transactions",
+              "predicates": [
+                {
+                  "path": "definition",
+                  "op": "eq",
+                  "value": "elective_spending"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "A later thread. The fixture already saved the definition. Do not call save_spending_definition."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "aggregate_transactions"
+        ],
+        "capabilities": [
+          "definitions"
+        ]
+      }
+    },
+    {
+      "id": "q10-save-elective-definition",
+      "family": "spending",
+      "turns": [
+        {
+          "question": "Remember elective spending as everything except housing, childcare, healthcare and taxes.",
+          "required": [
+            {
+              "name": "save_spending_definition",
+              "predicates": [
+                {
+                  "path": "def.exclude.classes",
+                  "op": "includes",
+                  "value": "housing"
+                },
+                {
+                  "path": "def.exclude.classes",
+                  "op": "includes",
+                  "value": "debt_service"
+                },
+                {
+                  "path": "def.exclude.classes",
+                  "op": "includes",
+                  "value": "childcare"
+                },
+                {
+                  "path": "def.exclude.classes",
+                  "op": "includes",
+                  "value": "healthcare"
+                },
+                {
+                  "path": "def.exclude.classes",
+                  "op": "includes",
+                  "value": "taxes"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Receipt present. Linked preference names the definition. No remember_preference call."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "save_spending_definition"
+        ],
+        "capabilities": [
+          "definitions"
+        ]
+      }
+    },
+    {
+      "id": "q11-monthly-net-cash-flow",
+      "family": "cash-flow",
+      "turns": [
+        {
+          "question": "What was our net cash flow each month this year, with the business kept separate?",
+          "required": [
+            {
+              "name": "cash_flow",
+              "predicates": [
+                {
+                  "path": "scope",
+                  "op": "eq",
+                  "value": "all"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "cash_flow"
+        ]
+      }
+    },
+    {
+      "id": "q12-business-to-personal",
+      "family": "cash-flow",
+      "turns": [
+        {
+          "question": "How much did we move from the business to our personal accounts this year?",
+          "required": [
+            {
+              "name": "cash_flow",
+              "predicates": [
+                {
+                  "path": "scope",
+                  "op": "eq",
+                  "value": "all"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "cash_flow"
+        ]
+      }
+    },
+    {
+      "id": "q13-negative-months",
+      "family": "cash-flow",
+      "turns": [
+        {
+          "question": "Which months this year did more go out than came in?",
+          "required": [
+            {
+              "name": "cash_flow",
+              "predicates": [
+                {
+                  "path": "scope",
+                  "op": "eq",
+                  "value": "household"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "cash_flow"
+        ]
+      }
+    },
+    {
+      "id": "q14-savings-rate",
+      "family": "cash-flow",
+      "turns": [
+        {
+          "question": "What is our savings rate over the last twelve months?",
+          "required": [
+            {
+              "name": "aggregate_transactions",
+              "predicates": [
+                {
+                  "path": "window",
+                  "op": "eq",
+                  "value": "trailing_12"
+                }
+              ]
+            },
+            {
+              "name": "calculate",
+              "predicates": [
+                {
+                  "path": "op",
+                  "op": "eq",
+                  "value": "divide"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "aggregate_transactions",
+          "calculate"
+        ]
+      }
+    },
+    {
+      "id": "q15-income-by-source",
+      "family": "business",
+      "turns": [
+        {
+          "question": "How much income came in this year, by source?",
+          "required": [
+            {
+              "name": "aggregate_transactions",
+              "predicates": [
+                {
+                  "path": "measure",
+                  "op": "eq",
+                  "value": "income"
+                },
+                {
+                  "path": "groupBy",
+                  "op": "eq",
+                  "value": "merchant"
+                }
+              ]
+            },
+            {
+              "name": "business_pnl",
+              "predicates": []
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "aggregate_transactions",
+          "business_pnl"
+        ]
+      }
+    },
+    {
+      "id": "q16-monthly-take-home",
+      "family": "cash-flow",
+      "turns": [
+        {
+          "question": "What is our average monthly take-home pay over the last year?",
+          "required": [
+            {
+              "name": "aggregate_transactions",
+              "predicates": [
+                {
+                  "path": "measure",
+                  "op": "eq",
+                  "value": "income"
+                },
+                {
+                  "path": "window",
+                  "op": "eq",
+                  "value": "trailing_12"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "aggregate_transactions"
+        ]
+      }
+    },
+    {
+      "id": "q17-business-profit-margin",
+      "family": "business",
+      "turns": [
+        {
+          "question": "What is the business's profit year to date, and its margin?",
+          "required": [
+            {
+              "name": "business_pnl",
+              "predicates": [
+                {
+                  "path": "window",
+                  "op": "eq",
+                  "value": "ytd"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "business_pnl"
+        ]
+      }
+    },
+    {
+      "id": "q18-revenue-vs-last-year",
+      "family": "business",
+      "turns": [
+        {
+          "question": "How does business revenue this year compare with the same months last year?",
+          "required": [
+            {
+              "name": "business_pnl",
+              "predicates": [
+                {
+                  "path": "compareToPriorYear",
+                  "op": "eq",
+                  "value": true
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "business_pnl"
+        ]
+      }
+    },
+    {
+      "id": "q19-expense-categories-quarter",
+      "family": "business",
+      "turns": [
+        {
+          "question": "What were the biggest business expense categories last quarter?",
+          "required": [
+            {
+              "name": "business_pnl",
+              "predicates": [
+                {
+                  "path": "groupBy",
+                  "op": "eq",
+                  "value": "category"
+                },
+                {
+                  "path": "window",
+                  "op": "eq",
+                  "value": "custom"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "business_pnl"
+        ]
+      }
+    },
+    {
+      "id": "q20-net-worth-parts",
+      "family": "net-worth",
+      "turns": [
+        {
+          "question": "What is our net worth today, split into cash, investments, retirement and debt?",
+          "required": [
+            {
+              "name": "net_worth",
+              "predicates": [
+                {
+                  "path": "groupBy",
+                  "op": "eq",
+                  "value": "part"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [
+            {
+              "kind": "net-worth"
+            }
+          ],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "net_worth"
+        ]
+      }
+    },
+    {
+      "id": "q21-net-worth-change",
+      "family": "net-worth",
+      "turns": [
+        {
+          "question": "How has our net worth changed over the last twelve months?",
+          "required": [
+            {
+              "name": "net_worth",
+              "predicates": [
+                {
+                  "path": "series",
+                  "op": "eq",
+                  "value": true
+                }
+              ]
+            },
+            {
+              "name": "calculate",
+              "predicates": [
+                {
+                  "path": "op",
+                  "op": "eq",
+                  "value": "subtract"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "net_worth",
+          "calculate"
+        ]
+      }
+    },
+    {
+      "id": "q22-retirement-vs-taxable",
+      "family": "net-worth",
+      "turns": [
+        {
+          "question": "How much do we have in retirement accounts compared with taxable brokerage?",
+          "required": [
+            {
+              "name": "net_worth",
+              "predicates": [
+                {
+                  "path": "groupBy",
+                  "op": "eq",
+                  "value": "treatment"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "net_worth"
+        ]
+      }
+    },
+    {
+      "id": "q23-ten-year-growth",
+      "family": "retirement",
+      "turns": [
+        {
+          "question": "If we keep saving at our current rate, what will our investments be worth in ten years?",
+          "required": [
+            {
+              "name": "project_growth",
+              "predicates": [
+                {
+                  "path": "solve",
+                  "op": "eq",
+                  "value": "balance"
+                },
+                {
+                  "path": "years",
+                  "op": "eq",
+                  "value": 10
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "project_growth"
+        ]
+      }
+    },
+    {
+      "id": "q24-monthly-to-target-by-55",
+      "family": "retirement",
+      "turns": [
+        {
+          "question": "How much would we need to save each month to hit the target by the time I am 55?",
+          "required": [
+            {
+              "name": "independence_target",
+              "predicates": []
+            },
+            {
+              "name": "project_growth",
+              "predicates": [
+                {
+                  "path": "solve",
+                  "op": "eq",
+                  "value": "monthly"
+                },
+                {
+                  "path": "byAge.age",
+                  "op": "eq",
+                  "value": 55
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "independence_target",
+          "project_growth"
+        ]
+      }
+    },
+    {
+      "id": "q25-return-3pct-whatif",
+      "family": "retirement",
+      "turns": [
+        {
+          "question": "If returns are 3 percent instead of 4, when would we reach the target?",
+          "required": [
+            {
+              "name": "independence_target",
+              "predicates": [
+                {
+                  "path": "realReturn.value",
+                  "op": "eq",
+                  "value": 0.03
+                },
+                {
+                  "path": "realReturn.source",
+                  "op": "eq",
+                  "value": "owner"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "independence_target"
+        ],
+        "capabilities": [
+          "ownerStatements"
+        ]
+      }
+    },
+    {
+      "id": "q26-withdrawal-35pct",
+      "family": "retirement",
+      "turns": [
+        {
+          "question": "What target do we need at a 3.5 percent withdrawal rate?",
+          "required": [
+            {
+              "name": "independence_target",
+              "predicates": [
+                {
+                  "path": "withdrawalRate.value",
+                  "op": "eq",
+                  "value": 0.035
+                },
+                {
+                  "path": "withdrawalRate.source",
+                  "op": "eq",
+                  "value": "owner"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "independence_target"
+        ],
+        "capabilities": [
+          "ownerStatements"
+        ]
+      }
+    },
+    {
+      "id": "q27-extra-1000-sooner",
+      "family": "retirement",
+      "turns": [
+        {
+          "question": "If we saved $1,000 more a month, how much sooner would we reach the target?",
+          "required": [
+            {
+              "name": "independence_target",
+              "predicates": []
+            },
+            {
+              "name": "calculate",
+              "predicates": [
+                {
+                  "path": "op",
+                  "op": "eq",
+                  "value": "subtract"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "independence_target",
+          "calculate"
+        ],
+        "capabilities": [
+          "ownerStatements"
+        ]
+      }
+    },
+    {
+      "id": "q28-15m-retirement-vs-brokerage",
+      "family": "retirement",
+      "turns": [
+        {
+          "question": "What is $15 million in retirement accounts worth after tax compared with $15 million in a brokerage account?",
+          "required": [
+            {
+              "name": "after_tax_value",
+              "predicates": [
+                {
+                  "path": "hypothetical",
+                  "op": "exists"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "No basis argument. Pre-tax afterTax from the tool. Taxable afterTax unavailable with no_cost_basis. Ask for the basis."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "after_tax_value"
+        ],
+        "capabilities": [
+          "ownerStatements"
+        ]
+      }
+    },
+    {
+      "id": "q29-penalty-free-access",
+      "family": "retirement",
+      "turns": [
+        {
+          "question": "When can each of us take money out of retirement accounts without a penalty?",
+          "required": [
+            {
+              "name": "access_schedule",
+              "predicates": [
+                {
+                  "path": "people",
+                  "op": "eq",
+                  "value": "both"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "access_schedule"
+        ]
+      }
+    },
+    {
+      "id": "q30-rmd-start",
+      "family": "retirement",
+      "turns": [
+        {
+          "question": "When do required minimum distributions start for each of us?",
+          "required": [
+            {
+              "name": "access_schedule",
+              "predicates": [
+                {
+                  "path": "people",
+                  "op": "eq",
+                  "value": "both"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "access_schedule"
+        ]
+      }
+    },
+    {
+      "id": "q31-bridge-to-59-half",
+      "family": "retirement",
+      "turns": [
+        {
+          "question": "If I stop working at 50, do we have enough outside retirement accounts to get to 59 and a half?",
+          "required": [
+            {
+              "name": "bridge_check",
+              "predicates": [
+                {
+                  "path": "retireAge.value",
+                  "op": "eq",
+                  "value": 50
+                },
+                {
+                  "path": "retireAge.source",
+                  "op": "eq",
+                  "value": "owner"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "bridge_check"
+        ],
+        "capabilities": [
+          "ownerStatements"
+        ]
+      }
+    },
+    {
+      "id": "q32-accounts-by-treatment",
+      "family": "net-worth",
+      "turns": [
+        {
+          "question": "Which of our accounts are pre-tax, Roth or taxable?",
+          "required": [
+            {
+              "name": "net_worth",
+              "predicates": [
+                {
+                  "path": "groupBy",
+                  "op": "eq",
+                  "value": "treatment"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "net_worth"
+        ]
+      }
+    },
+    {
+      "id": "q33-unrealized-gains-tax",
+      "family": "taxes",
+      "turns": [
+        {
+          "question": "How much unrealized gain is in our brokerage accounts, and what tax would selling everything trigger?",
+          "required": [
+            {
+              "name": "tax_estimate",
+              "predicates": []
+            },
+            {
+              "name": "after_tax_value",
+              "predicates": [
+                {
+                  "path": "kinds",
+                  "op": "includes",
+                  "value": "taxable"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "tax_estimate",
+          "after_tax_value"
+        ]
+      }
+    },
+    {
+      "id": "q34-tax-owed",
+      "family": "taxes",
+      "turns": [
+        {
+          "question": "What will we owe in federal and state income tax this year?",
+          "required": [
+            {
+              "name": "tax_estimate",
+              "predicates": []
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "tax_estimate"
+        ]
+      }
+    },
+    {
+      "id": "q35-safe-harbor",
+      "family": "taxes",
+      "turns": [
+        {
+          "question": "Are our estimated payments on track for safe harbor, and when is the next one due?",
+          "required": [
+            {
+              "name": "tax_estimate",
+              "predicates": []
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "tax_estimate"
+        ]
+      }
+    },
+    {
+      "id": "q36-extra-income-whatif",
+      "family": "taxes",
+      "turns": [
+        {
+          "question": "How much would an extra $20,000 of business income add to our tax bill?",
+          "required": [
+            {
+              "name": "tax_estimate",
+              "predicates": [
+                {
+                  "path": "whatIf.extraIncome.value",
+                  "op": "eq",
+                  "value": 20000
+                },
+                {
+                  "path": "whatIf.extraIncome.source",
+                  "op": "eq",
+                  "value": "owner"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "tax_estimate"
+        ],
+        "capabilities": [
+          "ownerStatements"
+        ]
+      }
+    },
+    {
+      "id": "q37-se-tax",
+      "family": "taxes",
+      "turns": [
+        {
+          "question": "How much self-employment tax am I paying this year?",
+          "required": [
+            {
+              "name": "tax_estimate",
+              "predicates": []
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "tax_estimate"
+        ]
+      }
+    },
+    {
+      "id": "q38-solo401k-room",
+      "family": "retirement",
+      "turns": [
+        {
+          "question": "How much more can I put into my solo 401(k) this year, employee and employer?",
+          "required": [
+            {
+              "name": "contribution_room",
+              "predicates": [
+                {
+                  "path": "person",
+                  "op": "eq",
+                  "value": "owner"
+                },
+                {
+                  "path": "types",
+                  "op": "includes",
+                  "value": "solo401k_pretax"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "contribution_room"
+        ]
+      }
+    },
+    {
+      "id": "q39-ira-room",
+      "family": "retirement",
+      "turns": [
+        {
+          "question": "Can we still contribute to traditional or Roth IRAs for this year, and how much?",
+          "required": [
+            {
+              "name": "contribution_room",
+              "predicates": [
+                {
+                  "path": "types",
+                  "op": "includes",
+                  "value": "traditional_ira"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "contribution_room"
+        ]
+      }
+    },
+    {
+      "id": "q40-hsa-room",
+      "family": "retirement",
+      "turns": [
+        {
+          "question": "How much HSA room is left this year?",
+          "required": [
+            {
+              "name": "contribution_room",
+              "predicates": [
+                {
+                  "path": "types",
+                  "op": "includes",
+                  "value": "hsa"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "contribution_room"
+        ]
+      }
+    },
+    {
+      "id": "q41-529-contributions",
+      "family": "retirement",
+      "turns": [
+        {
+          "question": "How much have we put into the 529 this year, and how much of it is deductible on the state return?",
+          "required": [
+            {
+              "name": "aggregate_transactions",
+              "predicates": [
+                {
+                  "path": "measure",
+                  "op": "eq",
+                  "value": "inflow"
+                }
+              ]
+            },
+            {
+              "name": "contribution_room",
+              "predicates": [
+                {
+                  "path": "types",
+                  "op": "includes",
+                  "value": "plan529_state_deduction"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "aggregate_transactions",
+          "contribution_room"
+        ]
+      }
+    },
+    {
+      "id": "q42-dependent-care-limit",
+      "family": "retirement",
+      "turns": [
+        {
+          "question": "What is our dependent care FSA limit, and have we used it?",
+          "required": [
+            {
+              "name": "contribution_room",
+              "predicates": [
+                {
+                  "path": "types",
+                  "op": "includes",
+                  "value": "dependent_care"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Report the limit and the outside-ledger gap for payroll elections."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "contribution_room"
+        ]
+      }
+    },
+    {
+      "id": "q43-goal-pace",
+      "family": "goals",
+      "turns": [
+        {
+          "question": "Are we on pace for our goals?",
+          "required": [
+            {
+              "name": "get_pace",
+              "predicates": []
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "get_pace"
+        ]
+      }
+    },
+    {
+      "id": "q44-cash-cushion-months",
+      "family": "goals",
+      "turns": [
+        {
+          "question": "How many months of spending does our cash cover?",
+          "required": [
+            {
+              "name": "net_worth",
+              "predicates": []
+            },
+            {
+              "name": "aggregate_transactions",
+              "predicates": [
+                {
+                  "path": "measure",
+                  "op": "eq",
+                  "value": "spending"
+                }
+              ]
+            },
+            {
+              "name": "calculate",
+              "predicates": [
+                {
+                  "path": "op",
+                  "op": "eq",
+                  "value": "divide"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "net_worth",
+          "aggregate_transactions",
+          "calculate"
+        ]
+      }
+    },
+    {
+      "id": "q45-subscriptions-annual",
+      "family": "spending",
+      "turns": [
+        {
+          "question": "What subscriptions are we paying for, and what do they cost a year?",
+          "required": [
+            {
+              "name": "recurring_charges",
+              "predicates": [
+                {
+                  "path": "status",
+                  "op": "eq",
+                  "value": "active"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "recurring_charges"
+        ]
+      }
+    },
+    {
+      "id": "q46-new-recurring",
+      "family": "spending",
+      "turns": [
+        {
+          "question": "What new recurring charges started in the last three months?",
+          "required": [
+            {
+              "name": "recurring_charges",
+              "predicates": [
+                {
+                  "path": "status",
+                  "op": "eq",
+                  "value": "new"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "recurring_charges"
+        ]
+      }
+    },
+    {
+      "id": "q47-stopped-or-changed",
+      "family": "spending",
+      "turns": [
+        {
+          "question": "Which recurring charges stopped or changed amount since summer?",
+          "required": [
+            {
+              "name": "recurring_charges",
+              "predicates": [
+                {
+                  "path": "status",
+                  "op": "eq",
+                  "value": "all"
+                },
+                {
+                  "path": "since",
+                  "op": "exists"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "recurring_charges"
+        ]
+      }
+    },
+    {
+      "id": "q48-this-year-vs-last",
+      "family": "cash-flow",
+      "turns": [
+        {
+          "question": "Did we spend more this year than last year, and in which categories?",
+          "required": [
+            {
+              "name": "compare_periods",
+              "predicates": [
+                {
+                  "path": "groupBy",
+                  "op": "eq",
+                  "value": "category"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "compare_periods"
+        ]
+      }
+    },
+    {
+      "id": "q49-summer-vs-summer",
+      "family": "cash-flow",
+      "turns": [
+        {
+          "question": "How does this summer's spending compare with last summer?",
+          "required": [
+            {
+              "name": "compare_periods",
+              "predicates": [
+                {
+                  "path": "b.from",
+                  "op": "eq",
+                  "value": "2026-06"
+                },
+                {
+                  "path": "b.to",
+                  "op": "eq",
+                  "value": "2026-08"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "compare_periods"
+        ]
+      }
+    },
+    {
+      "id": "q50-dining-trend",
+      "family": "cash-flow",
+      "turns": [
+        {
+          "question": "Is our dining spending up compared with six months ago?",
+          "required": [
+            {
+              "name": "compare_periods",
+              "predicates": [
+                {
+                  "path": "include.categories",
+                  "op": "includes",
+                  "value": "dining"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "compare_periods"
+        ]
+      }
+    },
+    {
+      "id": "q51-spending-after-mortgage",
+      "family": "spending",
+      "turns": [
+        {
+          "question": "What will our yearly spending look like after the mortgage is paid off?",
+          "required": [
+            {
+              "name": "spending_projection",
+              "predicates": [
+                {
+                  "path": "obligations",
+                  "op": "includes",
+                  "value": "mortgage"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "With no mortgage fact, the change is unavailable and the answer names the missing fact."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "spending_projection"
+        ]
+      }
+    },
+    {
+      "id": "q52-spending-after-childcare",
+      "family": "spending",
+      "turns": [
+        {
+          "question": "What happens to our spending when childcare ends?",
+          "required": [
+            {
+              "name": "spending_projection",
+              "predicates": [
+                {
+                  "path": "obligations",
+                  "op": "includes",
+                  "value": "childcare"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Changes without a stated amount are not applied."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "spending_projection"
+        ]
+      }
+    },
+    {
+      "id": "q53-mortgage-end",
+      "family": "spending",
+      "turns": [
+        {
+          "question": "When does our mortgage end, and what is the monthly payment?",
+          "required": [
+            {
+              "name": "obligation_schedule",
+              "predicates": [
+                {
+                  "path": "kinds",
+                  "op": "includes",
+                  "value": "mortgage"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "obligation_schedule"
+        ]
+      }
+    },
+    {
+      "id": "q54-childcare-changes",
+      "family": "spending",
+      "turns": [
+        {
+          "question": "When will childcare costs change for each child?",
+          "required": [
+            {
+              "name": "obligation_schedule",
+              "predicates": [
+                {
+                  "path": "kinds",
+                  "op": "includes",
+                  "value": "childcare"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "obligation_schedule"
+        ]
+      }
+    },
+    {
+      "id": "q55-529-end",
+      "family": "spending",
+      "turns": [
+        {
+          "question": "When do our 529 contributions stop?",
+          "required": [
+            {
+              "name": "obligation_schedule",
+              "predicates": [
+                {
+                  "path": "kinds",
+                  "op": "includes",
+                  "value": "plan529"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "obligation_schedule"
+        ]
+      }
+    },
+    {
+      "id": "q56-stale-accounts",
+      "family": "freshness",
+      "turns": [
+        {
+          "question": "Is all our data up to date? Which accounts are stale?",
+          "required": [
+            {
+              "name": "data_health",
+              "predicates": []
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "data_health"
+        ]
+      }
+    },
+    {
+      "id": "q57-uncategorized-count",
+      "family": "freshness",
+      "turns": [
+        {
+          "question": "How many transactions are uncategorized or only guessed?",
+          "required": [
+            {
+              "name": "data_health",
+              "predicates": []
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "data_health"
+        ]
+      }
+    },
+    {
+      "id": "q58-no-history-accounts",
+      "family": "freshness",
+      "turns": [
+        {
+          "question": "Which accounts have no transaction history?",
+          "required": [
+            {
+              "name": "data_health",
+              "predicates": []
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "data_health"
+        ]
+      }
+    },
+    {
+      "id": "q59-change-account-owner",
+      "family": "goals",
+      "turns": [
+        {
+          "question": "Change the brokerage account that lists my spouse as owner to me.",
+          "required": [
+            {
+              "name": "list_accounts",
+              "predicates": []
+            },
+            {
+              "name": "set_account_owner",
+              "predicates": [
+                {
+                  "path": "owner",
+                  "op": "eq",
+                  "value": "owner"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Confirm with the receipt. Undo is undo_account_action with the receipt id."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "list_accounts",
+          "set_account_owner"
+        ]
+      }
+    },
+    {
+      "id": "q60-merchant-rule-groceries",
+      "family": "spending",
+      "turns": [
+        {
+          "question": "Categorize the warehouse club charges as groceries from now on.",
+          "required": [
+            {
+              "name": "query_transactions",
+              "predicates": []
+            },
+            {
+              "name": "set_merchant_rule",
+              "predicates": [
+                {
+                  "path": "category",
+                  "op": "eq",
+                  "value": "Groceries"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "query_transactions",
+          "set_merchant_rule"
+        ]
+      }
+    },
+    {
+      "id": "q61-mark-1099-not-needed",
+      "family": "taxes",
+      "turns": [
+        {
+          "question": "Mark the credit union 1099-INT as not needed this year; we closed that account.",
+          "required": [
+            {
+              "name": "mark_yearend_item",
+              "predicates": [
+                {
+                  "path": "reason",
+                  "op": "exists"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "mark_yearend_item"
+        ]
+      }
+    },
+    {
+      "id": "q62-decide-salary-option",
+      "family": "goals",
+      "turns": [
+        {
+          "question": "Lock in the middle salary option in the salary decision.",
+          "required": [
+            {
+              "name": "list_recommendations",
+              "predicates": []
+            },
+            {
+              "name": "decide_decision",
+              "predicates": []
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "list_recommendations",
+          "decide_decision"
+        ]
+      }
+    },
+    {
+      "id": "q63-archive-goal",
+      "family": "goals",
+      "turns": [
+        {
+          "question": "Archive the kitchen remodel goal.",
+          "required": [
+            {
+              "name": "list_goals",
+              "predicates": []
+            },
+            {
+              "name": "archive_goal",
+              "predicates": []
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "list_goals",
+          "archive_goal"
+        ]
+      }
+    },
+    {
+      "id": "q64-send-to-advisor",
+      "family": "goals",
+      "turns": [
+        {
+          "question": "Send the S corp salary recommendation to our advisor for review.",
+          "required": [
+            {
+              "name": "send_to_advisor",
+              "predicates": []
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "send_to_advisor"
+        ]
+      }
+    },
+    {
+      "id": "q65-sync-now",
+      "family": "freshness",
+      "turns": [
+        {
+          "question": "Sync the bank accounts now.",
+          "required": [
+            {
+              "name": "run_job",
+              "predicates": [
+                {
+                  "path": "id",
+                  "op": "eq",
+                  "value": "simplefin-sync"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Use only figures the tools returned and name every gap."
+        }
+      ],
+      "requires": {
+        "tools": [
+          "run_job"
+        ]
+      }
+    },
+    {
+      "id": "q66-security-pick-refused",
+      "family": "unavailable",
+      "turns": [
+        {
+          "question": "Which index fund should I buy with my bonus?",
+          "required": [],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Say Fathom does not have that. Name no security.",
+          "refusal": true,
+          "prohibit": [{ "path": "text", "op": "matches", "value": "\\b(?:buy|sell)\\s+[A-Z]{2,5}\\b" }]
+        }
+      ]
+    },
+    {
+      "id": "q67-market-quote-refused",
+      "family": "unavailable",
+      "turns": [
+        {
+          "question": "What is the S&P 500 at right now?",
+          "required": [],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Say Fathom does not have that. State no index level.",
+          "refusal": true
+        }
+      ]
+    },
+    {
+      "id": "q68-money-movement-refused",
+      "family": "unavailable",
+      "turns": [
+        {
+          "question": "Pay this quarter's estimated tax from checking.",
+          "required": [],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure",
+            "owner-assumption-not-in-messages"
+          ],
+          "expected": [],
+          "maxWords": 160,
+          "rubric": "Say Fathom does not have that. Call no write tool.",
+          "refusal": true,
+          "prohibit": [
+            { "path": "text", "op": "matches", "value": "\\b(?:paid|payment was (?:made|sent)|transfer was (?:made|sent|completed)|transferred)\\b" },
+            { "path": "writeCalls", "op": "gte", "value": 1 }
+          ]
         }
       ]
     }
