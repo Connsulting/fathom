@@ -8,6 +8,10 @@
 // that ask a question) answer as Server-Sent Events when the request's Accept header asks for
 // text/event-stream (see createEventStream); the gate, Host allowlist and POST guards run first,
 // exactly as for JSON. `raw: true` routes write the response themselves (the packet zip).
+// Access on a real store: `public` routes need nothing; `auth` routes (sign-in, self-service) and
+// `session` routes need a session only; `operator` routes need a session and do their own operator
+// check; `admin` routes need an admin membership in the served household; every other /api route
+// needs an active membership in the served household (403 `household membership required`).
 
 import { fileURLToPath } from 'node:url';
 import { readFile } from 'node:fs/promises';
@@ -49,9 +53,11 @@ const TABLE = [
   { method: 'POST', path: '/api/admin/users/:id/role', handler: authHandlers.setRole, quiet: true, auth: true, admin: true },
   { method: 'POST', path: '/api/admin/users/:id/remove', handler: authHandlers.removeUser, quiet: true, auth: true, admin: true },
   { method: 'POST', path: '/api/admin/users/:id/passkeys/:keyId/revoke', handler: authHandlers.adminRevokePasskey, quiet: true, auth: true, admin: true },
+  { method: 'POST', path: '/api/auth/invitations/accept', handler: authHandlers.acceptInvitation, quiet: true, auth: true },
+  { method: 'POST', path: '/api/operator/households', handler: authHandlers.provisionHousehold, quiet: true, operator: true },
   { method: 'GET', path: '/api/scenario', handler: h.getScenario },
   { method: 'GET', path: '/api/pace', handler: gh.getPace },
-  { method: 'GET', path: '/api/identity', handler: h.getIdentity },
+  { method: 'GET', path: '/api/identity', handler: h.getIdentity, session: true },
   { method: 'POST', path: '/api/recs/:id/action', handler: h.recAction },
   { method: 'POST', path: '/api/recs/:id/start-over', handler: h.recStartOver },
   { method: 'POST', path: '/api/wargame/:name/pick', handler: h.wargamePick },
@@ -155,13 +161,22 @@ function normalizePath(rawPath) {
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 const safeCode = err => [err && err.code, err && err.name].find(v => typeof v === 'string' && IDENT.test(v)) || 'unknown';
 
-export function createHandler({ db, config, answerer, engine = null, packs = null, scheduler = null, transport = null, keys, mcp, auth, webDir = WEB_DIR, sharedDir = SHARED_DIR }) {
+const membershipRequired = () => new HttpError(403, 'household membership required');
+const adminRequired = () => new HttpError(403, 'administrator required');
+
+// `platform` is the platform DB (accounts, memberships, sessions); `db` is the financial store.
+export function createHandler({ db, platform, config, answerer, engine = null, packs = null, scheduler = null, transport = null, keys, mcp, auth, webDir = WEB_DIR, sharedDir = SHARED_DIR }) {
   const gated = getSetting(db, 'mode', null) !== 'demo';
-  const authService = auth ?? createAuthService({ db, config, transport });
+  const authService = auth ?? createAuthService({ platform, config, transport });
   const serveStatic = createStatic({ webDir, sharedDir });
   let keyService = keys;
   let mcpHandler = mcp;
-  const getKeys = () => (keyService ??= createKeyService({ db, serverSecret: loadServerSecret(config.dataDir) }));
+  const getKeys = () => (keyService ??= createKeyService({ db, serverSecret: loadServerSecret(config.dataDir), creatorActive: authService.creatorActive }));
+  // Route access beyond a session (see the header).
+  const checkAccess = (r, identity) => {
+    if (r.admin && !authService.servedAdmin(identity)) throw adminRequired();
+    if (!r.public && !r.auth && !r.session && !r.operator && !authService.servedMember(identity)) throw membershipRequired();
+  };
   const getMcp = () => (mcpHandler ??= createMcpHandler({ db, keys: getKeys(), config }));
   return async function handle(req, res) {
     setSecurityHeaders(res);
@@ -178,7 +193,7 @@ export function createHandler({ db, config, answerer, engine = null, packs = nul
       }
       const { segments, path } = normalizePath(rawPath);
       const isApi = segments[0] === 'api';
-      authPath = isApi && (segments[1] === 'auth' || segments[1] === 'admin');
+      authPath = isApi && ['auth', 'admin', 'operator'].includes(segments[1]);
       const read = req.method === 'GET' || req.method === 'HEAD';
       const candidate = compiled.find(r => (r.method === req.method || (req.method === 'HEAD' && r.method === 'GET')) && matchPath(r.parts, segments));
       route = candidate || null;
@@ -193,7 +208,7 @@ export function createHandler({ db, config, answerer, engine = null, packs = nul
         if (isApi && !isAllowedHost(req.headers.host, config)) throw new HttpError(403, 'forbidden host');
         const { r, params } = findRoute(req.method, segments);
         route = r;
-        if (gated && r.admin && identity?.role !== 'admin') throw new HttpError(403, 'administrator required');
+        if (gated && !r.public) checkAccess(r, identity);
         let body = {};
         let readUpload = null;
         if (r.upload) {
@@ -206,7 +221,7 @@ export function createHandler({ db, config, answerer, engine = null, packs = nul
         if (gated && !r.public) {
           identity = identityOf(req, authService);
           if (!identity) throw new HttpError(401, 'unauthorized');
-          if (r.admin && identity.role !== 'admin') throw new HttpError(403, 'administrator required');
+          checkAccess(r, identity);
         }
         const events = r.stream && wantsEventStream(req) ? createEventStream(req, res) : null;
         let out;
@@ -237,7 +252,7 @@ export function createHandler({ db, config, answerer, engine = null, packs = nul
       if (req.method !== 'GET' && req.method !== 'HEAD') {
         throw new HttpError(405, 'method not allowed', { Allow: 'GET, HEAD' });
       }
-      if (gated && path === '/admin/users' && identity.role !== 'admin') throw new HttpError(403, 'administrator required');
+      if (gated && path === '/admin/users' && !authService.servedAdmin(identity)) throw adminRequired();
       if (['/signin', '/enroll'].includes(path) || (gated && ['/account', '/admin/users'].includes(path))) {
         let page;
         try { page = await readFile(join(webDir, 'auth', 'index.html')); }

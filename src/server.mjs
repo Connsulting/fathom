@@ -6,20 +6,25 @@
 // ctx.scheduler; the scheduler starts once the server listens and stops before the store closes.
 //
 // Store mode (settings.mode, set when the store is created, never inferred from contents):
-// no store file: create it; demo unless FATHOM_DEMO=0 (then real and empty). Demo stores are
-// seeded once and keep their state across restarts. FATHOM_DEMO=1 refuses a real store and
-// FATHOM_DEMO=0 refuses a demo store, without changing it. A file with no mode is real.
+// no store file: create the instance (platform.sqlite with one served household, and the store
+// bound to it); demo unless FATHOM_DEMO=0 (then real and empty). Demo stores are seeded once and
+// keep their state across restarts. FATHOM_DEMO=1 refuses a real store and FATHOM_DEMO=0 refuses a
+// demo store, without changing it. A file with no mode is real. An existing store opens only
+// through openServedStore (src/platform/ready.mjs): a real store without platform.sqlite refuses
+// platform_migration_required, a migration lock refuses platform_migration_in_progress, and a
+// store bound to another household refuses household_store_mismatch.
 // Ask threads trashed 30 or more days ago (app clock) are purged once the store is open.
 
 import http from 'node:http';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig, validatePublicUrl } from './config.mjs';
-import { openMigrated, readStoreMode, createStoreFile, setSetting, DB_FILE } from './store/db.mjs';
+import { readStoreMode, DB_FILE } from './store/db.mjs';
+import { createInstance, LOCK_FILE } from './platform/db.mjs';
+import { openServedStore, refuse } from './platform/ready.mjs';
 import { createHandler } from './api/router.mjs';
 import { createAuthService } from './auth/service.mjs';
-import { createAuthStore } from './auth/store.mjs';
 import { createLiveAnswerer } from './api/answerer.mjs';
 import { createKeyService, loadServerSecret } from './mcp/keys.mjs';
 import { createMcpHandler } from './mcp/index.mjs';
@@ -32,19 +37,18 @@ import { seedDemo } from '../demo/seed.mjs';
 
 export class StartupError extends Error {}
 
-// Open (or create) the store at config.dataDir following the store mode rules.
+// Open (or create) the instance at config.dataDir following the store mode rules. Returns
+// { db, platform }: the financial store and the platform DB; the caller closes both.
 export function openStore(config) {
   mkdirSync(config.dataDir, { recursive: true });
   const file = join(config.dataDir, DB_FILE);
   const mode = readStoreMode(file);
   if (mode === null) {
-    if (config.demo === false) validatePublicUrl(config.publicUrl, { required: true });
-    return createStoreFile(file, db => {
-      if (config.demo === false) {
-        setSetting(db, 'mode', 'real');
-        createAuthStore(db).ensureHousehold();
-      } else seedDemo(db);
-    });
+    if (existsSync(join(config.dataDir, LOCK_FILE))) throw refuse('platform_migration_in_progress');
+    const real = config.demo === false;
+    if (real) validatePublicUrl(config.publicUrl, { required: true });
+    const { db, platform } = createInstance(config.dataDir, { mode: real ? 'real' : 'demo', init: real ? () => {} : seedDemo });
+    return { db, platform };
   }
   if (config.demo === true && mode !== 'demo') {
     throw new StartupError(`FATHOM_DEMO=1 but ${file} is a real store. Refusing to start; it is unchanged. Point FATHOM_DATA at another directory for the demo.`);
@@ -53,9 +57,8 @@ export function openStore(config) {
     throw new StartupError(`FATHOM_DEMO=0 but ${file} is a demo store. Refusing to start; it is unchanged. Point FATHOM_DATA at the real data directory.`);
   }
   if (mode === 'real') validatePublicUrl(config.publicUrl, { required: true });
-  const db = openMigrated(file);
-  createAuthStore(db).ensureHousehold();
-  return db;
+  const { db, platform } = openServedStore(config);
+  return { db, platform };
 }
 
 // Log-safe code for a startup failure: never the message, which could carry a value.
@@ -86,7 +89,20 @@ export function applyTimeouts(server) {
 }
 
 export async function startServer(config = loadConfig()) {
-  const db = openStore(config);
+  const { db, platform } = openStore(config);
+  const closeStores = () => {
+    try { db.close(); } catch { /* already closed */ }
+    try { platform.close(); } catch { /* already closed */ }
+  };
+  let transport;
+  let auth;
+  try {
+    transport = createTransport(config);
+    auth = createAuthService({ platform, config, transport });
+  } catch (e) {
+    closeStores();
+    throw e;
+  }
   // One runtime engine per process, on the scenario clock so spend lands in the month the Engine
   // screen shows; packs load from the repository and the data volume.
   let engine;
@@ -98,18 +114,17 @@ export async function startServer(config = loadConfig()) {
     await engine.init();
     if (engine.credentialState === 'failed') console.error('fathom: engine credential unavailable');
   } catch (e) {
-    db.close();
+    closeStores();
     throw e;
   }
   let keys;
   try {
-    keys = createKeyService({ db, serverSecret: loadServerSecret(config.dataDir) });
+    keys = createKeyService({ db, serverSecret: loadServerSecret(config.dataDir), creatorActive: auth.creatorActive });
   } catch (e) {
-    db.close();
+    closeStores();
     throw new StartupError(`API key secret: ${e.message}`);
   }
   const mcp = createMcpHandler({ db, keys, config });
-  const transport = createTransport(config);
   let scheduler = null;
   try {
     scheduler = createScheduler({ db, config, engine, handlers: defaultHandlers({ publicUrl: config.publicUrl }), transport });
@@ -117,8 +132,7 @@ export async function startServer(config = loadConfig()) {
     console.error('fathom: scheduler unavailable', codeOf(err));
   }
   const answerer = createLiveAnswerer({ engine, packs });
-  const auth = createAuthService({ db, config, transport });
-  const server = http.createServer(createHandler({ db, config, answerer, engine, packs, keys, mcp, auth, scheduler, transport }));
+  const server = http.createServer(createHandler({ db, platform, config, answerer, engine, packs, keys, mcp, auth, scheduler, transport }));
   applyTimeouts(server);
   try {
     await new Promise((resolveListen, reject) => {
@@ -129,7 +143,7 @@ export async function startServer(config = loadConfig()) {
       });
     });
   } catch (e) {
-    db.close();
+    closeStores();
     if (e && e.code === 'EADDRINUSE') {
       throw new StartupError(`port ${config.port} on ${config.host} is already in use. Set FATHOM_PORT to a free port.`);
     }
@@ -149,6 +163,7 @@ export async function startServer(config = loadConfig()) {
   return {
     server,
     db,
+    platform,
     url: `http://${host}:${port}`,
     close() {
       if (closed) return Promise.resolve();
@@ -158,7 +173,7 @@ export async function startServer(config = loadConfig()) {
         if (scheduler) stopped = Promise.resolve(scheduler.stop()).catch(() => {});
       } catch { /* stop failed; close anyway */ }
       return stopped.then(() => new Promise(done => {
-        server.close(() => { db.close(); done(); });
+        server.close(() => { closeStores(); done(); });
         server.closeAllConnections();
       }));
     },
