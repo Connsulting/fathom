@@ -1,3 +1,4 @@
+import { queueCategoryChecks } from '../categories/store.mjs';
 import { queueAccountPairs } from '../ingest/account-merge.mjs';
 // Ingest API handlers: file uploads, the file list, retries and the confirm queue. Each takes the
 // router ctx ({db, config, engine, scheduler, params, body, readUpload}) and returns the JSON body or
@@ -114,11 +115,13 @@ export function getConfirm(ctx) {
 
 export function listPendingConfirm(ctx) {
   queueAccountPairs(ctx.db);
+  queueCategoryChecks(ctx.db);
   return { items: pendingItems(ctx.db) };
 }
 
 export function listConfirm(ctx) {
   queueAccountPairs(ctx.db);
+  queueCategoryChecks(ctx.db);
   const { status = 'pending' } = ctx.body;
   if (!LIST_STATUSES.includes(status)) throw new HttpError(400, `status must be one of ${LIST_STATUSES.join(', ')}`);
   return { items: listItems(ctx.db, { status }) };
@@ -154,7 +157,7 @@ function confirmAction(ctx, fn) {
     return { ...now, final: finalReason(ctx.db, now) };
   };
   if (Array.isArray(out.items)) return { scenario: scenarioOf(ctx), items: out.items.map(withFinal) };
-  return { scenario: scenarioOf(ctx), item: withFinal(out.item) };
+  return { scenario: scenarioOf(ctx), item: out.item ? withFinal(out.item) : null };
 }
 
 // Auto-resolution after the confirm transaction committed: a failure logs a code and never fails
@@ -180,7 +183,9 @@ export function schedulePlan(ctx) {
   }
 }
 
-function afterAnswer(ctx, fn) {
+// A confirm action with its follow-ups: auto-resolution, the plan schedule and, for an account
+// question, a freshness run. Shared by the account dialog's owner, kind and merge edits.
+export function afterAnswer(ctx, fn) {
   try {
     const out = confirmAction(ctx, fn);
     schedulePlan(ctx);
