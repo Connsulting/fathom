@@ -1,4 +1,4 @@
-// The live answerer: every Ask, rec conversation, pack follow-up and What if goes through the
+// The live answerer: every Ask thread (including one asked from a rec), pack follow-up and What if goes through the
 // runtime engine (live or fake), then through grounding and escaping before it is stored.
 //
 // createLiveAnswerer({ engine, packs }) (packs: the live pack view, src/packs/live.mjs) ->
@@ -43,7 +43,7 @@
 // bullet and numbered lists and bold, over the escaped text. List blocks come back complete
 // (<ul>/<ol>); every other block is paragraph inner HTML.
 //
-// Chat never writes. In Ask threads ('ask:<id>') and rec conversations the model is offered one local, non-writing
+// Chat never writes. In Ask threads ('ask:<id>'), including a thread with a rec reference, the model is offered one local, non-writing
 // tool, propose_recommendation_action; the last successful call becomes provenance.proposal
 // ({recId, action, wake?}) and the owner confirms it through the ordinary rec action endpoint.
 // Ask threads also get propose_goal: the last successful call becomes provenance.goalProposal
@@ -554,8 +554,9 @@ export function createLiveAnswerer({ engine, packs } = {}) {
   if (!engine || typeof engine.call !== 'function') throw new TypeError('createLiveAnswerer needs an engine');
 
   // One grounded model answer: call, ground, retry once with a corrective turn, render.
-  // proposeFor: null (no proposal tool), '*' (any visible rec, an Ask thread) or the rec id
-  // of a rec conversation (proposals for any other rec are ignored).
+  // proposeFor: null (no proposal tool), '*' (any visible rec, an Ask thread with no rec)
+  // or the rec id of an Ask thread asked from that rec (a bare rec id still resolves the same
+  // way). Proposals for any other rec are ignored.
   async function run({ db, scenario, now, question, context, history, baseRefs, fakeArgs, proposeFor = null, onEvent }) {
     if (!engine.isOn()) return offNotice(engine);
     const stream = streamer(onEvent);

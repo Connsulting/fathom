@@ -20,6 +20,11 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # Node stays on the 24 LTS line pinned in package engines, CI and the Dockerfile.
+      - dependency-name: node
+        update-types:
+          - version-update:semver-major
     groups:
       docker:
         patterns:
