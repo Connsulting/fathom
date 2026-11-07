@@ -31,7 +31,7 @@ export function listMigrations(dir = MIGRATIONS_DIR) {
 }
 
 // Apply pending migrations from `dir` with ids up to `through` (the offline platform migration
-// stops the financial store at 020 before extracting accounts).
+// stops the financial store just before the platform migration, 022, extracts accounts).
 export function migrate(db, { dir = MIGRATIONS_DIR, through = Infinity } = {}) {
   db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
     id INTEGER PRIMARY KEY,

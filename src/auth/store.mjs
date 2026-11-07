@@ -184,6 +184,11 @@ export function createAuthStore(platform, { now = () => Date.now() } = {}) {
     });
   }
 
+  function clearAddPasskey(userId) {
+    db.prepare(`DELETE FROM auth_challenges WHERE token_hash IN (
+      SELECT hash FROM auth_tokens WHERE user_id = ? AND purpose = 'add-passkey')`).run(userId);
+    db.prepare("DELETE FROM auth_tokens WHERE user_id = ? AND purpose = 'add-passkey'").run(userId);
+  }
   const store = {
     transaction, userRow, getUser, servedHousehold, membership, isOperator, audit, defaultHousehold,
     findUser(email) {
@@ -339,7 +344,10 @@ export function createAuthStore(platform, { now = () => Date.now() } = {}) {
     revokePasskey(userId, id) {
       return transaction(() => {
         const removed = db.prepare('DELETE FROM passkeys WHERE user_id = ? AND id = ?').run(userId, id).changes > 0;
-        if (removed) revokeUserSessions(userId);
+        if (removed) {
+          revokeUserSessions(userId);
+          clearAddPasskey(userId);
+        }
         return removed;
       });
     },
@@ -389,7 +397,7 @@ export function createAuthStore(platform, { now = () => Date.now() } = {}) {
       return db.prepare(`SELECT s.signed_in_at FROM auth_sessions s JOIN users u ON u.id = s.user_id
         WHERE s.hash = ? AND s.expires_at > ? AND u.enrolled_at IS NOT NULL`).get(digest(raw), now())?.signed_in_at ?? null;
     },
-    revokeSession, revokeUserSessions,
+    revokeSession, revokeUserSessions, clearAddPasskey,
     // A ceremony challenge. A registration bound to an emailed link names it as `token` (recovery or
     // add-passkey) or `invitation` (an invitation link).
     createChallenge({ ceremony, userId = null, token: linkToken = null, invitation = null, session: sessionToken = null, challenge }) {

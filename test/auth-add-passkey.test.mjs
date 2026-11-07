@@ -527,3 +527,29 @@ test('each user may request ten links per twenty minutes', async t => {
   app.advance(1);
   await requestLink(app, await app.sessionFor(owner.user.email), owner.user.email);
 });
+
+test('signing out deletes that person\'s pending add-a-device link', async t => {
+  const app = await fixture(t);
+  const owner = await enrolled(app, 'owner@example.test');
+  const token = await requestLink(app, owner.client, owner.user.email);
+  const started = await browser(app).post('/api/auth/register/options', { token, name: 'Other device' });
+  assert.equal(started.status, 200);
+  const signedOut = await owner.client.post('/api/auth/signout', {});
+  assert.equal(signedOut.status, 200);
+  assert.equal(app.store.token(token), null);
+  const refused = await browser(app).post('/api/auth/register/options', { token, name: 'After sign-out' });
+  assert.equal(refused.status, 410);
+  assert.deepEqual(refused.json, EXPIRED);
+});
+
+test('removing a passkey deletes that person\'s pending add-a-device link', async t => {
+  const app = await fixture(t);
+  const owner = await enrolled(app, 'owner@example.test');
+  const token = await requestLink(app, owner.client, owner.user.email);
+  const revoked = await owner.client.post(`/api/auth/passkeys/${encodeURIComponent(owner.credentialId)}/revoke`, {});
+  assert.equal(revoked.status, 200);
+  assert.equal(app.store.token(token), null);
+  const refused = await browser(app).post('/api/auth/register/options', { token, name: 'After revoke' });
+  assert.equal(refused.status, 410);
+  assert.deepEqual(refused.json, EXPIRED);
+});

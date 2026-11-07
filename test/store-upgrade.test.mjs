@@ -91,8 +91,8 @@ test('MGI3: a 006 store upgraded to 007 keeps its data and gains the planner tab
   assert.deepEqual(migrate(db), { applied: pending });
   assert.equal(schemaVersion(db), pending[pending.length - 1]);
   assert.deepEqual(snapshot(db, cols), before, 'every seeded row keeps its old columns unchanged');
-  // 018 adds the account tables and 021 (platform identity) drops them again: this store never had
-  // users, so the 021 guard lets it through and only the empty store_identity marker table remains.
+  // 018 adds the account tables and 022 (platform identity) drops them again: this store never had
+  // users, so the 022 guard lets it through and only the empty store_identity marker table remains.
   for (const t of ['households', 'users', 'passkeys', 'auth_tokens', 'auth_sessions', 'auth_challenges', 'auth_rate_limits']) {
     assert.ok(!listTables(db).includes(t), `${t} is not in the financial store`);
   }

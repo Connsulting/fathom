@@ -42,7 +42,8 @@ test('build returns every CONTRACT top-level key plus live', () => withSeeded(db
   assert.equal(sc.live.clock, '2026-11-05');
   assert.equal(sc.meta.clock, '2026-11-05');
   assert.equal(sc.meta.clockLabel, demo.meta.clockLabel);
-  assert.equal(sc.meta.dataThrough, demo.meta.dataThrough);
+  // The seeded label says Aug 30. The newest stored row is Aug 31, and the scenario reports that day.
+  assert.equal(sc.meta.dataThrough, 'Aug 31, 2026');
   assert.equal(sc.meta.product, 'Fathom');
   const salaryDefault = demo.wargame.salary.points.findIndex(p => p.current || p.recommended);
   assert.deepEqual(sc.live.picks, { salary: Math.max(0, salaryDefault), deferral: 0 });

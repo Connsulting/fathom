@@ -11,6 +11,8 @@
 // module's memory and removed from history before anything else runs. It is never stored, logged,
 // shown or put in a request URL; it travels only in the JSON body of the two register requests.
 
+import { afterSignIn, signInTarget } from './return-path.js';
+
 const PATH = window.location.pathname;
 
 let enrollToken = null;
@@ -426,7 +428,7 @@ async function startConditional() {
 async function finishSignin(cred) {
   await call('POST', '/api/auth/signin/verify', { response: authenticationJSON(cred) });
   say('signin', 'ok', 'Signed in. Opening Fathom.');
-  leave('/');
+  leave(afterSignIn(window.location));
 }
 
 // The button: abort any pending conditional request first, then a normal (modal) request with
@@ -613,7 +615,7 @@ async function loadKeys() {
     keys = Array.isArray(d.passkeys) ? d.passkeys.filter((k) => k && k.id != null) : [];
     drawKeys();
   } catch (err) {
-    if (err.status === 401) { leave('/signin', 'expired'); return; }
+    if (err.status === 401) { leave(signInTarget(PATH, window.location.hash), 'expired'); return; }
     const box = root.querySelector('[data-keys]');
     if (box) box.innerHTML = `<p class="au-empty">${esc(explain(err, 'load'))}</p>`;
   }
@@ -625,7 +627,7 @@ async function accountView() {
   let s;
   try { s = await loadSession(); } catch (err) { failView(err); return; }
   if (s.demo) { demoView(); return; }
-  if (!s.identity) { leave('/signin', 'expired'); return; }
+  if (!s.identity) { leave(signInTarget(PATH, window.location.hash), 'expired'); return; }
   me = s.identity;
   const role = me.role === 'admin' ? 'a household admin' : 'a household member';
   root.innerHTML = frame('account', `
@@ -685,7 +687,7 @@ async function addPasskey(form) {
     say('add', 'ok', `Added ${name}. Your other passkeys still work.`);
     await loadKeys();
   } catch (err) {
-    if (err && err.status === 401) { leave('/signin', 'expired'); return; }
+    if (err && err.status === 401) { leave(signInTarget(PATH, window.location.hash), 'expired'); return; }
     if (err && err.status === 403 && err.code === 'recent_signin_required') { sayRecentSignin('add'); return; }
     say('add', 'err', explain(err, 'register'));
   } finally {
@@ -716,7 +718,7 @@ async function requestDeviceLink(btn) {
     await call('POST', '/api/auth/passkeys/link', {});
     say('device', 'ok', `A link is on its way to ${me.email}. Open it on the other device within 20 minutes; it works once.`);
   } catch (err) {
-    if (err && err.status === 401) { leave('/signin', 'expired'); return; }
+    if (err && err.status === 401) { leave(signInTarget(PATH, window.location.hash), 'expired'); return; }
     if (err && err.status === 403 && err.code === 'recent_signin_required') { sayRecentSignin('device'); return; }
     if (err && err.status === 503) { say('device', 'err', 'Fathom could not send the email. Try again later.'); return; }
     say('device', 'err', explain(err, 'account'));
@@ -740,7 +742,7 @@ async function revokeOwn(btn) {
     await call('POST', `/api/auth/passkeys/${encodeURIComponent(k.id)}/revoke`, {});
     leave('/signin', last ? 'revoked-last' : 'revoked');
   } catch (err) {
-    if (err.status === 401) { leave('/signin', 'expired'); return; }
+    if (err.status === 401) { leave(signInTarget(PATH, window.location.hash), 'expired'); return; }
     say('keys', 'err', explain(err, 'account'));
   } finally {
     busy = '';
@@ -817,7 +819,7 @@ async function loadUsers() {
     drawUsers();
     return true;
   } catch (err) {
-    if (err.status === 401) { leave('/signin', 'expired'); return false; }
+    if (err.status === 401) { leave(signInTarget(PATH, window.location.hash), 'expired'); return false; }
     if (err.status === 403) { deniedView(); return false; }
     const box = root.querySelector('[data-users]');
     if (box) box.innerHTML = `<p class="au-empty">${esc(explain(err, 'load'))}</p>`;
@@ -831,7 +833,7 @@ async function adminView() {
   let s;
   try { s = await loadSession(); } catch (err) { failView(err); return; }
   if (s.demo) { demoView(); return; }
-  if (!s.identity) { leave('/signin', 'expired'); return; }
+  if (!s.identity) { leave(signInTarget(PATH, window.location.hash), 'expired'); return; }
   me = s.identity;
   if (me.role !== 'admin') { deniedView(); return; }
   root.innerHTML = frame('admin', `
@@ -882,7 +884,7 @@ async function invite(form) {
     say('invite', 'ok', `Invitation sent to ${email} as ${role === 'admin' ? 'an admin' : 'a member'}. The link works once, for 20 minutes.`);
     await loadUsers();
   } catch (err) {
-    if (err.status === 401) { leave('/signin', 'expired'); return; }
+    if (err.status === 401) { leave(signInTarget(PATH, window.location.hash), 'expired'); return; }
     if (err.status === 403) { deniedView(); return; }
     say('invite', 'err', explain(err, 'admin'));
   } finally {
@@ -900,7 +902,7 @@ async function resend(btn) {
     await call('POST', '/api/admin/users/invite', { email: u.email, role: u.role === 'admin' ? 'admin' : 'member' });
     say('users', 'ok', `A new invitation went to ${u.email}. Earlier links for it no longer work.`);
   } catch (err) {
-    if (err.status === 401) { leave('/signin', 'expired'); return; }
+    if (err.status === 401) { leave(signInTarget(PATH, window.location.hash), 'expired'); return; }
     if (err.status === 403) { deniedView(); return; }
     say('users', 'err', explain(err, 'admin'));
   } finally {
@@ -929,7 +931,7 @@ async function changeRole(sel) {
     await loadUsers();
   } catch (err) {
     sel.value = before;
-    if (err.status === 401) { leave('/signin', 'expired'); return; }
+    if (err.status === 401) { leave(signInTarget(PATH, window.location.hash), 'expired'); return; }
     if (err.status === 403) { deniedView(); return; }
     say('users', 'err', explain(err, 'admin'));
   } finally {
@@ -954,7 +956,7 @@ async function removeUser(btn) {
     say('users', 'ok', `Removed ${u.email}.`);
     await loadUsers();
   } catch (err) {
-    if (err.status === 401) { leave('/signin', 'expired'); return; }
+    if (err.status === 401) { leave(signInTarget(PATH, window.location.hash), 'expired'); return; }
     if (err.status === 403) { deniedView(); return; }
     say('users', 'err', explain(err, 'admin'));
   } finally {
@@ -979,7 +981,7 @@ async function revokeUserKey(btn) {
     say('users', 'ok', `Revoked ${k.name} for ${u.email}, and signed that account out everywhere.`);
     await loadUsers();
   } catch (err) {
-    if (err.status === 401) { leave('/signin', 'expired'); return; }
+    if (err.status === 401) { leave(signInTarget(PATH, window.location.hash), 'expired'); return; }
     if (err.status === 403) { deniedView(); return; }
     say('users', 'err', explain(err, 'admin'));
   } finally {

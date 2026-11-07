@@ -1,5 +1,40 @@
 # Fathom architecture
 
+![Fathom architecture: one container serving the Horizon app, the API and MCP over one store](architecture/fathom-architecture.png)
+
+Diagram source: [architecture/fathom-architecture.html](architecture/fathom-architecture.html).
+Regenerate the image with `node scripts/screenshots.mjs --port <n>` (see [development.md](development.md)).
+
+## Overview
+
+Fathom is one Node process in one container. It serves the Horizon app, the JSON API and MCP, runs
+its own jobs, and keeps every piece of state on the `/data` volume.
+
+1. A reverse proxy in front terminates HTTPS for the `FATHOM_PUBLIC_URL` host and forwards plain
+   HTTP to port 8080. Browsers and MCP clients both arrive this way.
+2. `src/server.mjs` opens the store by its mode, builds the runtime engine, the live pack view, the
+   mail transport and the scheduler, then hands every request to the router in `src/api/router.mjs`.
+3. The router applies the session gate in `src/auth/` first: passkeys over WebAuthn, the
+   `__Host-fathom-session` cookie, and an exact Origin on every mutation. On a real store
+   everything sits behind that gate except `/healthz`, the sign-in and enrollment pages, and the
+   public `/api/auth` routes for the session check, sign-in, enrollment and recovery. `/api`
+   requests then pass the Host allowlist.
+4. `POST /mcp` skips the session gate and takes a bearer key instead. Its tools come from the same
+   registry in `src/tools/` that the engine uses, limited by the key's scopes.
+5. The API reads and writes the store. Ask streams its answer as Server-Sent Events from the engine
+   (`src/engine/`), which runs `live`, `fake` or `off` and grounds its answers in tools over the
+   stored data and the knowledge packs.
+6. Calculators in `src/calc/` produce every figure deterministically, called by the planner and
+   pace, and each figure keeps its provenance. The model never states a number it did not get from
+   a calculator or the store.
+7. Ingest (`src/ingest/`) turns uploads into ledger rows through one parser per format, keeps the
+   originals in the encrypted vault, and runs the read-only SimpleFIN sync.
+8. The in-process scheduler (`src/jobs/scheduler.mjs`) runs `plan`, `brief-email`,
+   `deadline-alerts`, `freshness`, `trash-purge`, `confirm-guess` and `simplefin-sync`. Mail leaves
+   through `src/email/` on the configured transport.
+9. `/data` holds `fathom.sqlite`, the vault's `files/`, the Your plans pack and the key secret.
+   Backing it up is the operator's job; the app has no backup job of its own.
+
 This is the architecture every build item works against. The first part is frozen: change it only
 by agreement across items. The rest describes the running app and is updated as items land.
 Known limits from merged pull requests are in [`known-limits.md`](known-limits.md).
@@ -382,7 +417,7 @@ Money columns are dollars rounded to cents; JSON columns hold JSON text. The pro
 | `email_sends` | `id` PK, `ts`, `kind` in brief, alert, test, `subject`, `status` in sent, failed, `error_code`, `transport`, `recipients` (a count), `message_id`, `job_run_id`. No bodies and no addresses. |
 | `deadline_alerts` | `key`, `threshold` (14, 7 or 1), `deadline_date`, `sent_at`, `send_id`; PK (`key`, `threshold`) |
 | `api_keys` | `id` PK, `name`, `key_hash`, `scopes` JSON, `created_at`, `last_used_at`, `revoked_at`, `user_id` (the creator's platform user id, no foreign key; NULL for keys made before accounts). A key whose creator is not an active member of the served household fails closed (`creatorActive` in `src/mcp/keys.mjs`). `/mcp` keys stay in the financial store until a later package. |
-| `store_identity` | `id` PK (always 1), `household_id` (the platform household this store serves), `platform_operation` (the operation that bound it, NULL for a synthetic demo binding). Migration 021 and the offline migration create it with identical DDL. |
+| `store_identity` | `id` PK (always 1), `household_id` (the platform household this store serves), `platform_operation` (the operation that bound it, NULL for a synthetic demo binding). Migration 022 and the offline migration create it with identical DDL. |
 | `spend_ledger` | `id` PK, `ts`, `yyyymm` `'YYYY-MM'`, `purpose`, `cost_usd` (full precision), `model`, `tokens` JSON (usage counts only, never prompt text) |
 | `superseded_rows` | `id` PK, `table_name`, `dedupe_key`, `row` JSON (the archived row), `file_id`, `superseded_by` (references `files.id`), `reason` (`revised`, `removed`, `older_snapshot`, `alias_merged`, `duplicate_confirmed`, `duplicate_cross_format`, `duplicate`, `summarized`), `at`, `survivor_key` (for `duplicate_confirmed`, the dedupe key of the row it was confirmed against) |
 | `confirm_items` | `id` PK, `kind`, `subject`, `question`, `options` JSON `[{id, label}]`, `context` JSON, `status` in pending, answered, `answer`, `file_id`, `created_at`, `answered_at`; unique (`kind`, `subject`) |
@@ -462,7 +497,7 @@ whole-row images, fail its revert.
 
 Migration 018 (`018-accounts.sql`) created `households`, `users`, `passkeys`, `auth_tokens`,
 `auth_sessions`, `auth_challenges` and `auth_rate_limits` in the financial store, and added
-`api_keys.user_id` (existing keys keep NULL); migration 021 moved them out (below). It changes no household data table. The household row is created lazily by the
+`api_keys.user_id` (existing keys keep NULL); migration 022 moved them out (below). It changes no household data table. The household row is created lazily by the
 auth store before the first user, so the demo seed's empty-store check and clear order are
 unchanged (see Accounts and sessions).
 
@@ -471,7 +506,7 @@ purpose CHECK allows `add-passkey` besides `invite` and `recovery`. Rows, the pr
 cascade foreign key to `users`, `UNIQUE (user_id, purpose)`, the `auth_tokens_expiry` index and the
 `auth_challenges.token_hash` reference are preserved; `foreign_key_check` is clean before commit.
 
-Migration 021 (`021-platform-identity.sql`, `-- REBUILDS_TABLE`) ends accounts in the financial store.
+Migration 022 (`022-platform-identity.sql`, `-- REBUILDS_TABLE`) ends accounts in the financial store.
 It creates `store_identity` if absent, then rebuilds `api_keys` without the `users` foreign key (every
 column, row and the `api_keys_user` index stay) and drops `auth_challenges`, `auth_sessions`,
 `auth_tokens`, `passkeys`, `auth_rate_limits`, `users` and `households`. A guard aborts it, keeping
@@ -760,7 +795,7 @@ known path with the wrong method is 405; signed out, both are 401. Every action 
 | `GET /healthz` | | `{ok: true, schema: <latest migration id>}` |
 | `GET /api/scenario` | | the scenario with `live` |
 | `GET /api/identity` | | `{identity: {id, email, name, login, householdId, role, operator, memberships} or null}`. The signed-in user (`name` and `login` are the email). `householdId` is the opaque id of the session's household (null without an active membership there), `role` that membership's role while the household is active (else null), `operator` the instance operator flag, `memberships` the user's own `[{householdId, role}]`. Needs a session only, no membership. Always `null` on a demo store. Every other non-public `/api` route needs an active membership in the served household: 403 `{error: 'household membership required'}` otherwise. |
-| `GET /signin` | | Public page: `web/auth/index.html` (sign in with a passkey, email recovery link). Loads only `/auth/auth.js`, `/auth/auth.css` and `/favicon.svg`; never the scenario. |
+| `GET /signin` | | Public page: `web/auth/index.html` (sign in with a passkey, email recovery link). Loads only `/auth/auth.js`, `/auth/return-path.js`, `/auth/auth.css` and `/favicon.svg`; never the scenario. |
 | `GET /enroll` | | Public page: the same file. Reads the token from the `#` fragment of an emailed link, removes it from history at once, and creates a passkey. |
 | `GET /account` | | Signed-in page: the same file. Passkeys (add, revoke), emailing an add-a-device link, and sign out. |
 | `GET /admin/users` | | Admin page: the same file. People, roles, invitations, removal and passkey revocation. A member gets a 403 page. |
@@ -801,6 +836,7 @@ known path with the wrong method is 405; signed out, both are 401. Every action 
 | `POST /api/threads/:id/restore` | `{}` | `{scenario, thread}`. Clears `trashedAt` when trashed, else `archivedAt`. |
 | `POST /api/threads/:id/delete` | `{}` | `{scenario}`. Deletes the thread and its messages forever; 409 unless it is in Trash. |
 | `POST /api/your-plans/build` | `{fileIds?: string[]}` (at most 50) | `{scenario, result: {written, entries, sources, warnings, dropped}}`. Builds the Your plans pack (`dropped` counts the extracted sections that did not match their document); 400 for a bad body; 409 while the engine is off, over the cap, or when the data directory is inside the repository. |
+| `POST /api/accounts/:id/name` | `{displayName}` | `{scenario, account}`. Sets the owner's display name for that account (trimmed, at most 120 characters, no line breaks or control characters). Empty or null clears it and the screens use the default label. 400 for a bad name, 404 unknown. Imports and SimpleFIN refreshes do not write this column. |
 | `POST /api/goals` | `{title, note?, horizon?, target?, targetDate?, track?}` | `{scenario, goal}`. Creates an owner goal (`origin` owner). `title` 1 to 120 characters, no line breaks; `note` at most 500; `horizon` now, 1-3y or 3-10y (default now); `target` a non-negative number or null; `targetDate` a valid YYYY-MM-DD or null; `track` null, `{accounts: [account ids]}` (at most 20, known ids) or `{figure: key}` (a known figure the store holds). Anything else 400. |
 | `GET /api/pace` | none | Deterministic `clock`, `rollup`, `goals`, `series` and `meters`, identical to `scenario.pace`. Uses the same owner gate as the scenario. No writes or model calls. |
 | `POST /api/goals/:id` | any subset of the create fields | `{scenario, goal}`. Edits an owner goal; 409 for a seed (demo) goal, 404 unknown. |
@@ -865,7 +901,7 @@ only: any `.` or `..` segment (raw or percent-encoded), dotfile, backslash or sy
 404. Unknown extensionless paths fall back to `web/index.html`, except the account pages
 (`/signin`, `/enroll`, `/account`, `/admin/users`), which serve `web/auth/index.html`; the main
 app shell is never served as a sign-in page. Signed out on a real store, the only static files
-served are `/auth/auth.js`, `/auth/auth.css` and `/favicon.svg`. Every response sets
+served are `/auth/auth.js`, `/auth/return-path.js`, `/auth/auth.css` and `/favicon.svg`. Every response sets
 `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY` and this
 CSP: `default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com;
 style-src-attr 'unsafe-inline'; font-src https://fonts.gstatic.com; img-src 'self' data:;
@@ -954,7 +990,7 @@ Startup and the offline migration.
    store offline: it holds the store's exclusive lock (`source_in_use` when anything else has it
    open), writes an encrypted source snapshot to `snapshots/` in the data directory, stages and
    verifies `platform.sqlite` against the source rows, publishes it, writes `store_identity`, then
-   applies migration 021. State is in `platform-migration.json` and `platform-migration.lock`
+   applies migration 022. State is in `platform-migration.json` and `platform-migration.lock`
    (counts and digests, never row values). A rerun resumes an interrupted run or verifies a finished one.
 3. `node scripts/source-snapshot.mjs create|restore|rollback` handles encrypted snapshots. `rollback`
    builds a data directory for the previous release from a snapshot and the current directory,
@@ -1106,7 +1142,7 @@ Gate and origins.
 
 1. `/mcp` (exactly that path) is handled first and only with bearer keys; it never reads cookies.
 2. Public without a session: `GET` and `HEAD /healthz`; `GET /signin` and `GET /enroll`;
-   `/auth/auth.js`, `/auth/auth.css` and `/favicon.svg`; `GET /api/auth/session` (no household
+   `/auth/auth.js`, `/auth/return-path.js`, `/auth/auth.css` and `/favicon.svg`; `GET /api/auth/session` (no household
    data); and the sign-in, link registration and recovery POSTs.
 3. Everything else needs a session. Signed out, an `/api` path, unknown paths included, is 401
    `{error: 'unauthorized'}` and any other path is a 401 page with a Sign in link and

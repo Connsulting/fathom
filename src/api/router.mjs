@@ -29,6 +29,7 @@ import * as eh from './email-handlers.mjs';
 import * as sf from './simplefin-handlers.mjs';
 import * as yh from './yearend-handlers.mjs';
 import * as gh from './goals.mjs';
+import * as accts from './accounts.mjs';
 import * as oh from './onboarding-handlers.mjs';
 import * as ah from './advisor-handlers.mjs';
 import { identityOf, sendUnauthorized } from './identity.mjs';
@@ -78,6 +79,7 @@ const TABLE = [
   { method: 'POST', path: '/api/threads/:id/trash', handler: h.threadTrash },
   { method: 'POST', path: '/api/threads/:id/restore', handler: h.threadRestore },
   { method: 'POST', path: '/api/threads/:id/delete', handler: h.threadDelete },
+  { method: 'POST', path: '/api/accounts/:id/name', handler: accts.accountRename },
   { method: 'POST', path: '/api/goals', handler: gh.goalCreate },
   { method: 'POST', path: '/api/goals/:id', handler: gh.goalUpdate },
   { method: 'POST', path: '/api/goals/:id/archive', handler: gh.goalArchive },
@@ -197,7 +199,7 @@ export function createHandler({ db, platform, config, answerer, engine = null, p
       const read = req.method === 'GET' || req.method === 'HEAD';
       const candidate = compiled.find(r => (r.method === req.method || (req.method === 'HEAD' && r.method === 'GET')) && matchPath(r.parts, segments));
       route = candidate || null;
-      const publicPage = read && ['/signin', '/enroll', '/auth/auth.js', '/auth/auth.css', '/favicon.svg'].includes(path);
+      const publicPage = read && ['/signin', '/enroll', '/auth/auth.js', '/auth/auth.css', '/auth/return-path.js', '/favicon.svg'].includes(path);
       let identity = gated ? identityOf(req, authService) : null;
       if (gated && !candidate?.public && !publicPage && !identity) {
         sendUnauthorized(req, res, isApi);

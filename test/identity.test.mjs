@@ -12,6 +12,7 @@ import { existsSync } from 'node:fs';
 import { createAuthStore } from '../src/auth/store.mjs';
 import { setSetting } from '../src/store/db.mjs';
 import { aggregatorCsv } from './helpers/ingest.mjs';
+import { signInLocation } from '../src/api/identity.mjs';
 
 const T = { timeout: SERVER_TIMEOUT * 3 };
 const REAL = { FATHOM_DEMO: '0', FATHOM_ENGINE: 'off', FATHOM_EMAIL_TRANSPORT: 'dev',
@@ -75,10 +76,17 @@ describe('real HTTP session gate', () => {
   test('anonymous is the request default and every protected read is 401', async () => {
     for (const path of protectedPaths) {
       const r = await request(server.baseUrl, { path });
-      assert.equal(r.status, 401, path);
       assert.ok(!r.text.includes('"accounts":'), path);
-      if (path.startsWith('/api/')) assert.deepEqual(r.json, { error: 'unauthorized' }, path);
-      else if (path === '/') assert.match(r.text, /href=["']\/signin["']/);
+      const api = path.startsWith('/api') || path.startsWith('/%61') || path.includes('%');
+      if (api) {
+        assert.equal(r.status, 401, path);
+        assert.deepEqual(r.json, { error: 'unauthorized' }, path);
+      } else {
+        assert.equal(r.status, 303, path);
+        assert.equal(r.headers.location, signInLocation(path), path);
+        assert.match(r.headers.location, /^\/signin(\?next=|$)/, path);
+        assert.equal(r.text, '', path);
+      }
     }
     for (const path of ['/api/engine', '/api/threads', '/api/files', '/api/auth/signout', '/api/admin/users/invite', '/healthz', '/signin']) {
       const r = await postJson(server.baseUrl, path, {}, { origin: server.baseUrl });
@@ -104,7 +112,7 @@ describe('real HTTP session gate', () => {
   test('health, exact auth pages, narrow auth assets and session are public', async () => {
     for (const method of ['GET', 'HEAD']) {
       assert.equal((await request(server.baseUrl, { path: '/healthz', method })).status, 200);
-      for (const path of ['/signin', '/enroll', '/auth/auth.js', '/auth/auth.css', '/favicon.svg']) {
+      for (const path of ['/signin', '/enroll', '/auth/auth.js', '/auth/auth.css', '/auth/return-path.js', '/favicon.svg']) {
         const r = await request(server.baseUrl, { path, method });
         assert.equal(r.status, 200, `${method} ${path}`);
         if (method === 'GET' && ['/signin', '/enroll'].includes(path)) {
@@ -117,9 +125,13 @@ describe('real HTTP session gate', () => {
     assert.equal(session.status, 200);
     assert.deepEqual(session.json, { identity: null, demo: false });
     assert.match(session.headers['cache-control'], /no-store/);
-    for (const path of ['/healthz/', '/healthz/more', '/signin/', '/enroll/extra', '/auth/other.js', '/api/auth/session/']) {
-      assert.equal((await request(server.baseUrl, { path })).status, 401, path);
+    for (const path of ['/healthz/', '/healthz/more', '/signin/', '/enroll/extra', '/auth/other.js']) {
+      const r = await request(server.baseUrl, { path });
+      assert.equal(r.status, 303, path);
+      assert.equal(r.headers.location, signInLocation(path), path);
     }
+    assert.equal((await request(server.baseUrl, { path: '/api/auth/session/' })).status, 401);
+    assert.equal((await request(server.baseUrl, { path: '/', method: 'HEAD' })).status, 401);
   });
 
   test('session and identity expose only the current user projection; authenticated route errors survive', async () => {

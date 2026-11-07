@@ -30,6 +30,15 @@
 .d-horizon .h-advpk a { display: inline-flex; gap: 8px; align-items: center; }
 .d-horizon .h-advpk a .h-i { color: var(--ac); transform: rotate(90deg); }
 .d-horizon .h-advpk a:hover span { color: var(--ac2); }
+.d-horizon .h-adv-hint, .d-horizon .h-adv-status { margin: 10px 0 0; font-size: 14px; }
+.d-horizon .h-adv-status.err { color: var(--tx); }
+.d-horizon .h-adv-hint a { color: var(--ac); }
+.d-horizon .h-btn.h-adv-prep[disabled] { opacity: 0.55; cursor: not-allowed; background: transparent; color: var(--mu); border-color: var(--line2); }
+.d-horizon .h-spin {
+  width: 12px; height: 12px; border: 2px solid currentColor; border-right-color: transparent;
+  border-radius: 50%; animation: h-adv-spin 0.7s linear infinite; flex: none;
+}
+@keyframes h-adv-spin { to { transform: rotate(360deg); } }
 @media (max-width: 600px) {
   .d-horizon .h-advci-row { grid-template-columns: minmax(0, 1fr); }
 }

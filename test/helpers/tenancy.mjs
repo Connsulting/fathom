@@ -40,9 +40,9 @@ export const PLATFORM_TABLES = Object.freeze(['households', 'users', 'household_
   'auth_tokens', 'household_invitations', 'auth_sessions', 'auth_challenges', 'auth_rate_limits', 'platform_settings',
   'audit_events', 'platform_operations']);
 // onPhase names in contract order.
-export const PHASES = Object.freeze(['preflight', 'snapshot-partial', 'snapshot-published', 'snapshot', 'source-020', 'stage',
+export const PHASES = Object.freeze(['preflight', 'snapshot-partial', 'snapshot-published', 'snapshot', 'source-schema', 'stage',
   'verify', 'publish', 'mark', 'cleanup', 'complete']);
-export const BEFORE_PUBLISH = Object.freeze(['preflight', 'snapshot-partial', 'snapshot-published', 'snapshot', 'source-020', 'stage', 'verify']);
+export const BEFORE_PUBLISH = Object.freeze(['preflight', 'snapshot-partial', 'snapshot-published', 'snapshot', 'source-schema', 'stage', 'verify']);
 
 const RP_ID = 'localhost';
 const handle = () => randomBytes(32).toString('base64url');

@@ -1,8 +1,8 @@
 // Migration 020: auth_tokens is rebuilt so its purpose CHECK also takes 'add-passkey'. A
 // populated store keeps every auth row, the table keeps its keys, index and cascades, and
-// auth_challenges.token_hash still references auth_tokens(hash). Later migrations (021 moves the
+// auth_challenges.token_hash still references auth_tokens(hash). Later migrations (022 moves the
 // auth tables to platform.sqlite) are held back with migrate(db, { through: 020 }), so 020 is
-// proven on its own; the last tests show where 021 takes over.
+// proven on its own; the last tests show where 022 takes over.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -144,7 +144,7 @@ test('migration 020 applies to a fresh store and is a no-op the second time', ()
     assert.deepEqual(migrate(fresh, THROUGH).applied, []);
     assert.equal(fresh.prepare('SELECT count(*) AS n FROM auth_tokens').get().n, 0);
     assert.match(tableSql(fresh, 'auth_tokens'), /'add-passkey'/);
-    // A fresh store has no users, so the later migrations (021 platform identity) apply and the
+    // A fresh store has no users, so the later migrations (022 platform identity) apply and the
     // auth tables leave the financial store.
     const later = listMigrations().filter(m => m.id > TARGET.id).map(m => m.id);
     assert.deepEqual(migrate(fresh).applied, later);
@@ -153,14 +153,14 @@ test('migration 020 applies to a fresh store and is a no-op the second time', ()
   } finally { fresh.close(); }
 });
 
-test('after 020, a populated store without store_identity refuses migration 021 and keeps every auth row', () => {
+test('after 020, a populated store without store_identity refuses migration 022 and keeps every auth row', () => {
   const db = storeBefore();
   migrate(db, THROUGH);
   const before = snapshot(db);
   const identity = listMigrations().find(m => m.name === 'platform-identity');
-  assert.ok(identity && identity.id > TARGET.id, 'migration 021-platform-identity is registered after 020');
+  assert.ok(identity && identity.id > TARGET.id, 'migration 022-platform-identity is registered after 020');
   assert.throws(() => migrate(db), new RegExp(`migration ${identity.id}-platform-identity failed`));
-  assert.equal(db.prepare('SELECT max(id) AS id FROM schema_migrations').get().id, TARGET.id, 'nothing after 020 is recorded');
+  assert.equal(db.prepare('SELECT max(id) AS id FROM schema_migrations').get().id, identity.id - 1, 'only the migrations between 020 and the platform migration are recorded');
   assert.deepEqual(snapshot(db), before, 'the refused migration rolls back');
   assert.equal(db.prepare('PRAGMA foreign_keys').get().foreign_keys, 1);
 });

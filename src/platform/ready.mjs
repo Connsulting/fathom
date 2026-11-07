@@ -71,7 +71,7 @@ export function openServedStore(config) {
     db = openDb(storeFile);
     const before = storeIdentity(db);
     if (before ? before.householdId !== household.id : mode !== 'demo') throw refuse('household_store_mismatch');
-    // A pre-platform demo store gets its marker so migration 021 can drop the empty account tables.
+    // A pre-platform demo store gets its marker so migration 022 can drop the empty account tables.
     if (!before && mode === 'demo') {
       db.exec(STORE_IDENTITY_DDL);
       db.prepare('INSERT INTO store_identity (id, household_id, platform_operation) VALUES (1, ?, NULL)').run(household.id);

@@ -14,7 +14,7 @@ const TABLES = [
   'conversations', 'messages', 'goals', 'deadlines', 'events', 'packs_state', 'decisions', 'jobs',
   'job_runs', 'api_keys', 'spend_ledger', 'store_identity',
 ];
-// Account tables moved to platform.sqlite by migration 021 (platform identity).
+// Account tables moved to platform.sqlite by migration 022 (platform identity).
 const ACCOUNT_TABLES = ['households', 'users', 'passkeys', 'auth_tokens', 'auth_sessions', 'auth_challenges', 'auth_rate_limits'];
 const PROVENANCE_TABLES = [
   'accounts', 'transactions', 'balances', 'positions', 'pnl_lines', 'tax_payments', 'documents', 'facts', 'figures',
@@ -163,13 +163,13 @@ test('migration files are NNN-name.sql numbered from 001 without gaps', () => {
   assert.ok(identity.id > listMigrations().find(m => m.name === 'auth-token-add-passkey').id, 'it follows 020');
 });
 
-// Migration 021 drops the account tables only from a store whose accounts were extracted (it
+// Migration 022 drops the account tables only from a store whose accounts were extracted (it
 // carries a store_identity row) or that never had any (a new store).
 const IDENTITY = listMigrations().find(m => m.name === 'platform-identity');
-const storeAt020 = () => {
+const storeBeforePlatform = () => {
   const db = openDb(':memory:');
-  migrate(db, { through: 20 });
-  assert.equal(db.prepare('SELECT max(id) AS id FROM schema_migrations').get().id, 20);
+  migrate(db, { through: IDENTITY.id - 1 });
+  assert.equal(db.prepare('SELECT max(id) AS id FROM schema_migrations').get().id, IDENTITY.id - 1);
   return db;
 };
 const addUser = db => {
@@ -178,8 +178,8 @@ const addUser = db => {
               VALUES ('user-owner', 1, 'owner@example.test', 'admin', ?, 1900000000000, 1900000000100)`).run('A'.repeat(43));
 };
 
-test('migration 021 refuses a store that still holds account rows and no store_identity', () => {
-  const db = storeAt020();
+test('migration 022 refuses a store that still holds account rows and no store_identity', () => {
+  const db = storeBeforePlatform();
   try {
     addUser(db);
     db.prepare(`INSERT INTO api_keys (id, name, key_hash, scopes, created_at, user_id) VALUES ('key-owner', 'Synthetic key', ?, '["read"]', '2032-03-10T12:00:00.000Z', 'user-owner')`).run('b'.repeat(64));
@@ -188,12 +188,12 @@ test('migration 021 refuses a store that still holds account rows and no store_i
     for (const name of ACCOUNT_TABLES) assert.ok(tables.includes(name), `${name} is kept`);
     assert.equal(db.prepare('SELECT count(*) AS n FROM users').get().n, 1);
     assert.equal(db.prepare('SELECT count(*) AS n FROM api_keys').get().n, 1);
-    assert.equal(db.prepare('SELECT max(id) AS id FROM schema_migrations').get().id, 20);
+    assert.equal(db.prepare('SELECT max(id) AS id FROM schema_migrations').get().id, IDENTITY.id - 1);
   } finally { db.close(); }
 });
 
-test('migration 021 applies to a store without users and drops the account tables', () => {
-  const db = storeAt020();
+test('migration 022 applies to a store without users and drops the account tables', () => {
+  const db = storeBeforePlatform();
   try {
     db.prepare(`INSERT INTO api_keys (id, name, key_hash, scopes, created_at) VALUES ('key-ownerless', 'Synthetic key', ?, '["read"]', '2032-03-10T12:00:00.000Z')`).run('c'.repeat(64));
     const before = { ...db.prepare("SELECT * FROM api_keys WHERE id = 'key-ownerless'").get() };
@@ -206,10 +206,10 @@ test('migration 021 applies to a store without users and drops the account table
   } finally { db.close(); }
 });
 
-// Contradiction 1: 021 rebuilds api_keys without the users foreign key, keeping columns, rows and
+// Contradiction 1: 022 rebuilds api_keys without the users foreign key, keeping columns, rows and
 // the api_keys_user index, so creator-owned keys outlive the users table.
-test('migration 021 on a marked store drops the account tables and keeps creator-owned api_keys rows', () => {
-  const db = storeAt020();
+test('migration 022 on a marked store drops the account tables and keeps creator-owned api_keys rows', () => {
+  const db = storeBeforePlatform();
   try {
     addUser(db);
     db.prepare(`INSERT INTO api_keys (id, name, key_hash, scopes, created_at, user_id) VALUES ('key-owner', 'Synthetic key', ?, '["read"]', '2032-03-10T12:00:00.000Z', 'user-owner')`).run('d'.repeat(64));
@@ -262,7 +262,7 @@ test('a store migrated to exactly 005 upgrades to 006-chat through the platform 
   }
 
   // A real store with no platform.sqlite refuses to start and is left unchanged; the offline
-  // platform migration (migrations through 020, platform.sqlite, then 021) makes it startable.
+  // platform migration (migrations through 021, platform.sqlite, then 022) makes it startable.
   const before = await dumpStore(file);
   const refused = await expectServerExit({ dataDir, env: { FATHOM_DEMO: '0', FATHOM_ENGINE: 'off' } });
   assert.equal(refused.started, false, refused.output);
