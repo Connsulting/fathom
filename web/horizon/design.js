@@ -17,6 +17,7 @@ import { emailScreen } from './screens/email.js';
 import * as switcher from './screens/switcher.js';
 import * as simplefin from './screens/simplefin.js';
 import * as recAnswers from './screens/rec-answers.js';
+import * as recBlocker from './screens/rec-blocker.js';
 import * as accountScreen from './screens/account.js';
 import * as askPanel from './screens/ask-panel.js';
 import { addButtonHtml } from './screens/ask-context.js';
@@ -903,6 +904,7 @@ function recRow(r, ny) {
     <div class="h-row-b">
       <div class="h-row-top"><a href="${href('rec', { id: r.id })}" data-go="rec" data-id="${esc(r.id)}">${T(r.title)}</a><span class="h-st ${r.status}">${statusText(r)}</span>${addBtn('rec', r.id, api.txt(r.title))}</div>
       <p>${T(r.summary)}</p>
+      ${recBlocker.html(r, 'plan')}
       ${recAnswers.html(r, 'plan')}
       <div class="h-meta"><span>${T(r.triggerText || TRIGGER[r.trigger] || '')}</span>${r.status === 'done' || r.status === 'dismissed' ? '' : `<span>${T(r.window?.label || '')}</span>`}${r.effort ? `<span>${T(r.effort)}</span>` : ''}${values(r) ? `<span>${values(r)}</span>` : ''}${r.advisor ? `<span class="h-adv ${r.advisor.verdict}">${advisorText(r)}</span>` : ''}${servesHtml(r)}</div>
     </div>
@@ -1009,7 +1011,7 @@ function dlgHtml(id) {
 
   const pct = tasks.length ? doneN / tasks.length : 0;
   const check = tasks.length ? `<div class="h-prog"><svg viewBox="0 0 100 4" preserveAspectRatio="none" aria-hidden="true"><rect class="bg" width="100" height="4" rx="2"/><rect class="fg" width="${pct * 100}" height="4" rx="2"/></svg><span>${doneN} of ${tasks.length}</span></div>
-    <ul class="h-tasks">${tasks.map((t, i) => `<li><button type="button" class="h-task${t.done ? ' done' : ''}" data-act="task" data-rec="${esc(r.id)}" data-arg="${i}" aria-pressed="${t.done}"><i>${t.done ? icon('check') : ''}</i><span>${T(t.t)}</span></button>${addBtn('step', `${r.id}:${i}`, api.txt(t.t))}</li>`).join('')}</ul>` : '<p class="h-mute">No steps.</p>';
+    <ul class="h-tasks">${tasks.map((t, i) => `<li><button type="button" class="h-task${t.done ? ' done' : ''}" data-act="task" data-rec="${esc(r.id)}" data-arg="${i}" aria-pressed="${t.done}"><i>${t.done ? icon('check') : ''}</i><span>${T(t.t)}</span></button>${t.link ? recBlocker.linkHtml(r.id, t.link, 'h-task-go') : ''}${addBtn('step', `${r.id}:${i}`, api.txt(t.t))}</li>`).join('')}</ul>` : '<p class="h-mute">No steps.</p>';
 
   const adv = advisorScreen.recBox(r);
 
@@ -1028,6 +1030,7 @@ function dlgHtml(id) {
       <div class="h-meta"><span class="h-st ${r.status}">${statusText(r)}</span>${ownerHtml(r)}${isNeeds(r, ny) ? '<span class="h-acc">Needs you</span>' : ''}${r.effort ? `<span>${T(r.effort)}</span>` : ''}${values(r) ? `<span>${values(r)}</span>` : ''}${servesHtml(r, { dialog: true })}</div>
     </div>
     ${windowStrip(r)}
+    ${recBlocker.html(r, 'dialog')}
     ${recAnswers.html(r, 'dialog')}
     <div class="h-acts big">${actionsFor(r, false).join('')}</div>
     <div class="h-dcols">
@@ -2519,7 +2522,7 @@ function trapTab(e) {
 }
 
 // Helpers the screen modules use. Getters, because api, root and ui change on mount.
-const SCREENS = [askPanel, switcher, chatScreen, packsScreen, engineScreen, advisorScreen, yearendScreen, simplefin, recAnswers, accountScreen, trendScreen, pnlScreen, tour];
+const SCREENS = [askPanel, switcher, chatScreen, packsScreen, engineScreen, advisorScreen, yearendScreen, simplefin, recAnswers, recBlocker, accountScreen, trendScreen, pnlScreen, tour];
 const KIT = {
   get api() { return api; }, get root() { return root; }, get ui() { return ui; }, get keys() { return keys; }, get ingest() { return ingest; },
   draw: () => draw(),

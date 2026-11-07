@@ -754,7 +754,7 @@ describe('recs', () => {
   test('AC4: a 529 account whose owner is 70 or older is excluded, leaving no va529 rec (T5)', async () => {
     const db = await S.store();
     const college = accountIdByMask(db, MASKS.college);
-    addFact(db, 'accounts.va529', { [college]: { virginiaPlan: true, ownerAge70Plus: true, carryforward: 0 } });
+    addFact(db, 'accounts.va529', { [college]: { virginiaPlan: true, carryforward: 0 } });
     await plan(db);
     assert.ok(!activeRecIds(db).includes('va529'));
     const left = figureRow(db, 'va529.deductionLeft');

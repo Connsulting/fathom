@@ -78,13 +78,13 @@ export function evaluateCatalog(ctx) {
     // A calculator that threw is missing data, not a closed condition (R14, S12).
     if (!out && t.calcs.some(c => failed.has(c))) {
       ctx.blockedReasons.push({ id: t.id, reason: 'calc_failed' });
-      results.push({ trigger: t, state: 'blocked', reason: 'calc_failed' });
+      results.push({ trigger: t, state: 'blocked', reason: 'calc_failed', blocker: missingData.blockerOf(ctx, 'calc_failed') });
       continue;
     }
     if (!out) { results.push({ trigger: t, state: 'none' }); continue; }
     if (out.blocked) {
       ctx.blockedReasons.push({ id: t.id, reason: out.blocked });
-      results.push({ trigger: t, state: 'blocked', reason: out.blocked });
+      results.push({ trigger: t, state: 'blocked', reason: out.blocked, blocker: missingData.blockerOf(ctx, out.blocked) });
       continue;
     }
     const { grounding = [], ...vars } = out;

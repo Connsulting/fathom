@@ -73,8 +73,8 @@ describe('review fixes', () => {
     const college = accountIdByMask(db, MASKS.college);
     const other = accountIdByMask(db, grand);
     addFact(db, 'accounts.va529', {
-      [college]: { virginiaPlan: true, ownerAge70Plus: false, carryforward: 0 },
-      [other]: { virginiaPlan: true, ownerAge70Plus: true, carryforward: 0 },
+      [college]: { virginiaPlan: true, carryforward: 0 },
+      [other]: { virginiaPlan: true, carryforward: 0 },
     });
     await plan(db);
     assert.ok(activeRecIds(db).includes('va529'));
@@ -212,7 +212,7 @@ describe('review fixes', () => {
     const db = await S.store();
     await plan(db);
     recAction(ctxOf(db, { id: 'hsa-room' }, { action: 'start' }));
-    addFact(db, 'household.ownerAge', 200); // outside the calculator age range
+    addFact(db, 'household.birthYears', { owner: 1900 }); // age outside the calculator range
     await plan(db);
     const row = recRow(db, 'hsa-room');
     assert.equal(row.status, 'waiting');
@@ -220,7 +220,7 @@ describe('review fixes', () => {
     assert.equal(plannerRec(db, 'hsa-room').retired_at, null, 'not retired');
     const ev = recEvents(db, 'hsa-room').at(-1);
     assert.deepEqual([ev.action, ev.actor, ev.from_status, ev.to_status], ['block', 'planner', 'doing', 'waiting']);
-    addFact(db, 'household.ownerAge', 45);
+    addFact(db, 'household.birthYears', { owner: 1981 });
     await plan(db);
     assert.equal(recRow(db, 'hsa-room').status, 'doing', 'back to the prior status');
     assert.equal(recEvents(db, 'hsa-room').at(-1).action, 'unblock');
@@ -288,7 +288,7 @@ describe('review fixes, round two', () => {
     assert.ok(activeRecIds(db).includes('year-end-retirement'));
     assert.ok(figureRow(db, 'room.sep').v > 0, 'the spouse has SEP room');
     const before = recRow(db, 'year-end-retirement').def;
-    addFact(db, 'household.ownerAge', 200); // outside the calculator age range
+    addFact(db, 'household.birthYears', { owner: 1900 }); // age outside the calculator range
     await plan(db);
     const row = recRow(db, 'year-end-retirement');
     assert.equal(row.status, 'waiting');
@@ -297,7 +297,7 @@ describe('review fixes, round two', () => {
     assert.equal(plannerRec(db, 'year-end-retirement').retired_at, null);
     const ev = recEvents(db, 'year-end-retirement').at(-1);
     assert.deepEqual([ev.action, ev.actor, ev.from_status, ev.to_status], ['block', 'planner', 'proposed', 'waiting']);
-    addFact(db, 'household.ownerAge', 45);
+    addFact(db, 'household.birthYears', { owner: 1981 });
     await plan(db);
     assert.equal(recRow(db, 'year-end-retirement').status, 'proposed');
     assert.equal(recEvents(db, 'year-end-retirement').at(-1).action, 'unblock');

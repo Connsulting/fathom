@@ -1044,6 +1044,15 @@ a.h-dec-t:hover { color: var(--ac2); }
 .d-horizon .h-answers { display: grid; gap: 16px; margin: 18px 0; max-width: 660px; min-width: 0; }
 .d-horizon .h-answer-field { border: 0; padding: 0; margin: 0; min-width: 0; }
 .d-horizon .h-answer-field[hidden] { display: none; }
+.d-horizon .h-answer-for { display: block; font-size: 12px; color: var(--tx2); margin-bottom: 4px; overflow-wrap: anywhere; }
+.d-horizon .h-answer-inferred p { margin: 0 0 8px; font-size: 14px; line-height: 1.5; color: var(--tx); overflow-wrap: anywhere; }
+.d-horizon .h-answered { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 14px 0; }
+.d-horizon .h-answered-t { font-size: 14px; color: var(--tx2); }
+.d-horizon .h-blocker { margin: 14px 0; padding: 12px 14px; border: 1px solid var(--line2); border-left: 3px solid var(--ac); border-radius: 8px; max-width: 660px; }
+.d-horizon .h-blocker b { display: block; font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: var(--tx2); margin-bottom: 6px; }
+.d-horizon .h-blocker p { margin: 0 0 6px; font-size: 14px; line-height: 1.5; color: var(--tx); overflow-wrap: anywhere; }
+.d-horizon .h-blocker .h-blocker-do { color: var(--tx2); }
+.d-horizon .h-task-go { flex: none; font-size: 13px; color: var(--ac); margin-left: 8px; white-space: nowrap; }
 .d-horizon .h-answer-field legend { font-size: 13px; line-height: 1.5; color: var(--tx2); margin-bottom: 8px; overflow-wrap: anywhere; }
 .d-horizon .h-answer-toggle { display: flex; gap: 8px; }
 .d-horizon .h-answer-toggle label { position: relative; cursor: pointer; }

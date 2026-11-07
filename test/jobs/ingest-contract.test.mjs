@@ -159,7 +159,7 @@ test('MGI1: code G lowers box 1 but not the 402(g) total', async () => {
 // over 150,000, so the catch-up may be pre-tax, IRC 414(v)(7)). One outside W-2 with D 30,000:
 // regular = min(30,000, 24,500) = 24,500; catch-up = 5,500; catch-up room = 8,000 - 5,500 = 2,500;
 // employee room = 24,500 - 24,500 = 0.
-const AGE52 = Object.freeze({ 'household.ownerAge': 52, 'retirement.priorYearFicaWages': { owner: 60000 } });
+const AGE52 = Object.freeze({ 'household.birthYears': { owner: 1974 }, 'retirement.priorYearFicaWages': { owner: 60000 } });
 
 test('MGI1: catch-up is the excess over 402(g) at one plan', async () => {
   const { db } = await planned({ facts: AGE52, payroll: [W2(OUT_A, { wages: 100000, medicareWages: 130000, federalWithheld: 15000, box12: [{ code: 'D', amount: 30000 }] }, OUTSIDE_OWNER)] });
@@ -333,7 +333,7 @@ test('MGI1: an S corp K-1 alongside the S corp P&L adds nothing', async () => {
 test('MGI1: account owner labels map to people', async () => {
   const { db } = await planned({
     hints: { [`${INST.hsa}|${MASKS.hsa}`]: { kind: 'hsa', owner: 'spouse' }, [`${INST.broker}|${MASKS.ira}`]: { kind: 'retirement', owner: 'spouse' } },
-    facts: { 'household.spouseAge': 56 },
+    facts: { 'household.birthYears': { owner: 1981, spouse: 1970 } },
   });
   const owners = db.prepare('SELECT owner FROM accounts WHERE mask IN (?, ?)').all(MASKS.hsa, MASKS.ira).map(r => r.owner);
   assert.deepEqual(owners, ['Your spouse', 'Your spouse'], 'ingest stores the option label');
