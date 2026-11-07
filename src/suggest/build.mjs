@@ -10,10 +10,10 @@
 import { getSetting, parseJson as parse } from '../store/db.mjs';
 import { accountHistory, paceClock } from '../pace/build.mjs';
 import { loadGoals } from '../scenario/build.mjs';
-import { planningYear } from '../jobs/planner/data.mjs';
+import { planningYear, ownerOf } from '../jobs/planner/data.mjs';
 import {
   TARGET_PARAMETERS, CASH_KINDS, INVESTMENT_KINDS, ROOM_PARTS, ASK,
-  goalKind, spendingInputs, spendingFigures, holdingsTotal, cushionPlan, independencePlan, taxPlan,
+  goalKind, isBusinessAccount, spendingInputs, spendingFigures, holdingsTotal, cushionPlan, independencePlan, taxPlan,
   questionWhy, suggestionFingerprint, horizonOf, horizonLabelOf,
 } from '../calc/targets.mjs';
 
@@ -48,8 +48,21 @@ function currentRooms(db, clock) {
 }
 
 function holdings(db, accounts, kinds, clock) {
-  return accounts.filter(a => kinds.includes(a.kind))
+  return accounts.filter(a => kinds.includes(a.kind) && !isBusinessAccount(a))
     .map(a => ({ id: a.id, kind: a.kind, name: a.name, value: accountHistory(db, a.id, clock).at(-1)?.value ?? null }));
+}
+
+// Accounts with a business flag: kind business, owner business, or named by the owner's
+// accounts.businessEntity fact with a nonblank entity.
+function loadAccounts(db) {
+  const row = db.prepare("SELECT value FROM facts WHERE key = 'accounts.businessEntity' AND (src IS NULL OR src != 'planner')").get();
+  const named = row ? parse(row.value, undefined) : undefined;
+  const byAccount = named && typeof named === 'object' && !Array.isArray(named) ? named : {};
+  return db.prepare('SELECT id, name, kind, owner FROM accounts ORDER BY sort, id').all().map(a => ({
+    id: a.id, name: a.name, kind: a.kind,
+    business: String(a.kind || '').toLowerCase() === 'business' || ownerOf(a.owner) === 'business'
+      || (typeof byAccount[a.id] === 'string' && byAccount[a.id].trim() !== ''),
+  }));
 }
 
 export function buildSuggestions(db, { clock: override, goals } = {}) {
@@ -58,7 +71,7 @@ export function buildSuggestions(db, { clock: override, goals } = {}) {
   const out = { clock, suggestions: [], figures: {} };
   if (!list.length) return out;
   const settings = getSetting(db, SUGGEST_SETTING, null) || {};
-  const accounts = db.prepare('SELECT id, name, kind FROM accounts ORDER BY sort, id').all();
+  const accounts = loadAccounts(db);
   // Each input is read once, and only when some goal needs it.
   const lazy = fn => { let memo; return () => (memo ??= { v: fn() }).v; };
   const spending = lazy(() => spendingInputs({
