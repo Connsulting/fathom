@@ -70,7 +70,7 @@ export function validateGuesses(batchItems, parsed) {
   for (const g of Array.isArray(parsed?.guesses) ? parsed.guesses : []) {
     if (!g || typeof g !== 'object') continue;
     const item = byId.get(g.item);
-    if (!item || seen.has(item.id)) continue;
+    if (!item || seen.has(item.id) || ['transaction_category','category_mapping'].includes(item.kind)) continue;
     if (typeof g.option !== 'string' || !item.options.some((o) => o.id === g.option)) continue;
     if (!REASON_CODES.includes(g.basis)) continue;
     seen.add(item.id);
@@ -84,7 +84,7 @@ function nextBatch(db, limit) {
   return db.prepare(`SELECT ci.id, ci.kind, ci.question, ci.options, ci.context, f.name AS file_name, f.source_kind, f.parser,
                             f.period_from, f.period_to, ci.file_id
                      FROM confirm_items ci LEFT JOIN files f ON f.id = ci.file_id
-                     WHERE ci.status = 'pending' AND NOT EXISTS (SELECT 1 FROM confirm_guesses g WHERE g.item_id = ci.id)
+                     WHERE ci.status = 'pending' AND ci.kind NOT IN ('transaction_category','category_mapping') AND NOT EXISTS (SELECT 1 FROM confirm_guesses g WHERE g.item_id = ci.id)
                      ORDER BY ci.id LIMIT ?`).all(limit).map((r) => ({
     id: r.id,
     kind: r.kind,

@@ -132,8 +132,15 @@ function assertMigrated(fx) {
   assert.equal(identity.length, 1);
   assert.equal(identity[0].household_id, hh, 'store_identity names the platform household');
   const expected = Object.fromEntries(Object.entries(fx.preDump).filter(([t]) => !AUTH_TABLES.includes(t) && t !== 'schema_migrations'));
-  assert.deepEqual(dump(file, { except: ['schema_migrations', 'store_identity'] }), expected,
-    'every financial row and every api_keys row (hash, scopes, creator) is unchanged');
+  const current = dump(file, { except: ['schema_migrations', 'store_identity'] });
+  for (const [table, entries] of Object.entries(current)) {
+    if (!(table in expected)) {
+      assert.deepEqual(entries, [], `new additive table ${table} starts empty`);
+      delete current[table];
+    }
+  }
+  assert.deepEqual(current, expected,
+    'every existing financial row and every api_keys row (hash, scopes, creator) is unchanged');
 
   const journal = join(dataDir, JOURNAL_FILE);
   assert.ok(existsSync(journal), 'the operation journal is kept');
