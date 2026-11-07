@@ -10,7 +10,7 @@ import { resolveClock, tokenScope } from '../scenario/build.mjs';
 import { loadCategoryInputs } from '../categories/store.mjs';
 import { resolveCategories } from '../categories/resolve.mjs';
 
-export const MAX_MONTHS = 36;
+export const MAX_MONTHS = 120;
 export const ROW_IDS = 50;
 export const ITEM_LIMIT = 500;
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -180,7 +180,7 @@ export function figureRegistry({ kind, labels, files }) {
     figures[key] = {
       v: money(v), src, kind: 'a', label, notes: notes.slice(0, 5), detail: [...rowsDetail, ...detail],
       ...(sums ? { sums } : {}),
-      provenance: { source, accounts, months, rows: rowRefs, files: fileRefs },
+      provenance: { source, accounts, months, rows: rowRefs, files: fileRefs, asOf: rows.map(r => r.date).sort().at(-1) ?? null },
     };
     return key;
   };

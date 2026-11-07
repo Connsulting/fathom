@@ -45,7 +45,7 @@ test('Q01 excludes matched mortgage and tax amounts and essential sums five clas
   }
   const five = await s.call('total',{...custom,definition:'essential',groupBy:'class'});
   assert.equal(five.groups.length,5);
-  await assertRefsResolve(r,s.ctx);
+  await assertRefsResolve(await s.call('total',args),s.ctx);
 });
 
 test('uncertain rows, silent cards, unclassified categories and healthcare outside ledger are measured gaps', async t => {
@@ -53,9 +53,9 @@ test('uncertain rows, silent cards, unclassified categories and healthcare outsi
   const id = s.tx('card','2026-04-12',-17,null,'Unknown example');
   const guess = s.tx('card','2026-04-13',-23,null,'Guessed example');
   s.db.prepare("INSERT INTO transaction_category_corrections(transaction_id,category,bucket,updated_at) VALUES (?,'Shopping','household','2026-04-13')").run(guess);
-  s.db.prepare("INSERT INTO confirm_items(kind,subject,question,status,created_at,updated_at) VALUES ('transaction_category',?,'Category?','pending','2026-04-13','2026-04-13')").run(String(guess));
+  s.db.prepare("INSERT INTO confirm_items(kind,subject,question,options,status,created_at) VALUES ('transaction_category',?,'Category?','[]','pending','2026-04-13')").run(String(guess));
   const item = s.db.prepare('SELECT id FROM confirm_items WHERE subject=?').get(String(guess)).id;
-  s.db.prepare("INSERT INTO confirm_auto(item_id,rule,evidence,at) VALUES (?,'jev_category','{}','2026-04-13')").run(item);
+  s.db.prepare("INSERT INTO confirm_auto(item_id,rule,evidence,created_at) VALUES (?,'jev_category','{}','2026-04-13')").run(item);
   s.fact('income.w2',true);
   const r = await s.call('total',custom);
   const gap = code => r.gaps.find(g=>g.code===code);

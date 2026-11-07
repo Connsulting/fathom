@@ -8,7 +8,8 @@ import { createRegistryServer } from '../src/engine/tools.mjs';
 
 const expected = {
   household: ['summary', 'facts', 'fact_shapes', 'figures', 'deadlines'],
-  accounts: ['list', 'holdings'], transactions: ['search'], business: ['pnl'],
+  accounts: ['list', 'holdings'], transactions: ['search'], business: ['pnl', 'rows'],
+  spending: ['total', 'compare', 'definitions', 'cash_flow', 'recurring'],
   goals: ['list', 'pace'], recommendations: ['list', 'detail', 'advisor'],
   knowledge: ['packs', 'search', 'entry'], answer: ['fact'],
   act_on_recommendation: ['status', 'owner', 'step'], update_goal: ['create', 'edit'],
@@ -25,7 +26,7 @@ const oldNames = [
   ...['fact','goal','preference','recommendation','step'].map(k => ['undo',k,'action']),
 ].map(parts => parts.join('_'));
 
-test('only the twelve operation tools register, with no old aliases', () => {
+test('operation tools register, with no old aliases', () => {
   assert.deepEqual(tools.map(t => t.name), Object.keys(expected).sort());
   for (const tool of tools) {
     assert.deepEqual(new Set(tool.operations.map(o => o.name)), new Set(expected[tool.name]));
