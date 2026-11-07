@@ -502,6 +502,29 @@ function mergeDetected(s, m, { file, own }) {
   return q.id;
 }
 
+// The survivor keeps its imported identity, so a later import of its file still lands on it;
+// merging it into another imported account would delete an identity that import recreates.
+test('AC3: a merged survivor is still an imported account, so merging it with another imported account is refused', () => withStore(async (s, m) => {
+  const pair = bareDuplicate(s);
+  mergeDetected(s, m, pair);
+  assert.equal(row(s.db, pair.file).mirror, 'connected');
+  const other = await fileAccount(s, m.P, 'Spending gamma');
+  const before = snapshot(s.db);
+  assert.equal(await status(() => m.A.accountMerge(ctx(s, pair.file, { withId: other }))), 409);
+  assert.equal(await status(() => m.A.accountMerge(ctx(s, other, { withId: pair.file }))), 409);
+  assert.deepEqual(snapshot(s.db), before);
+}));
+
+test('AC1: the last 4 shown is the stored one, not a later snapshot mask the account never took', () => withStore(async (s, m) => {
+  const own = await connectedAccount(s, m, { sfKey: 'synthetic-drift', mask: '1234', name: 'Checking' });
+  s.db.prepare('UPDATE simplefin_snapshots SET snapshot = ? WHERE sf_key = ?')
+    .run(JSON.stringify({ inst: INST, name: 'Checking x9876', mask: '9876', maskSure: true }), 'synthetic-drift');
+  const { accountNaming } = await src('src/accounts/naming.mjs');
+  const { accountLabel } = await src('src/shared/account-label.mjs');
+  assert.equal(row(s.db, own).mask, '1234');
+  assert.doesNotMatch(accountLabel(accountNaming(s.db).byId.get(own)), /ending/);
+}));
+
 const setSnapshot = (db, sfKey, patch) => {
   const cur = JSON.parse(db.prepare('SELECT snapshot FROM simplefin_snapshots WHERE sf_key = ?').get(sfKey).snapshot);
   db.prepare('UPDATE simplefin_snapshots SET snapshot = ? WHERE sf_key = ?').run(JSON.stringify({ ...cur, ...patch }), sfKey);

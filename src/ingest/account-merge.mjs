@@ -266,7 +266,9 @@ export function backfillMergedIdentity(db) {
   return changed;
 }
 
-const isConnected = a => a.mirror === 'connected' || String(a.identity ?? '').startsWith('simplefin:');
+// A merge survivor keeps its imported identity and is mirrored as connected, so only the identity
+// says which account is the feed itself.
+const isConnected = a => String(a.identity ?? '').startsWith('simplefin:');
 
 // Which of two accounts a manual merge keeps. The connected one is removed so the other takes its
 // feed and rows, the way a detected merge does. Two connected accounts are two feeds, and two
