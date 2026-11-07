@@ -93,7 +93,7 @@ const LAYERS = ['.h-root', '.h-dlg-host', '.h-askp-host'];
 const fresh = () => ({
   host: null, open: false, idx: -1, shown: -1, dir: 1, busy: false, nav: false, seq: 0, poll: null,
   skipped: new Set(), opener: null, openerSig: null, start: null, inert: null, mo: null, raf: 0, waitRaf: 0, waitTimer: 0,
-  reshow: false, askOpened: false
+  reshow: false, askOpened: false, watch: 0, last: ''
 });
 let S = fresh();
 let autoTried = false; // once per page load, across remounts
@@ -283,6 +283,7 @@ function position() {
   const size = sizeBox(box, phone, view);
   if (!el) { spot.hidden = true; return; }
   const r = el.getBoundingClientRect();
+  S.last = layoutKey(el, box);
   const p = placeFor(r, size, phone, view);
   box.dataset.side = p.side;
   box.style.left = `${p.left}px`;
@@ -303,6 +304,23 @@ function position() {
 
 function schedule() {
   if (S.open && !S.raf) S.raf = requestAnimationFrame(position);
+}
+
+// The anchor's and callout's boxes, to notice a layout shift that no event reports (a web font
+// arriving and rewrapping text above the anchor).
+function layoutKey(el, box) {
+  const a = el.getBoundingClientRect();
+  return [a.left, a.top, a.width, a.height, box.offsetWidth, box.offsetHeight].map(Math.round).join(',');
+}
+
+// Every frame while open: reposition when the marked anchor or the callout moved or resized.
+function watch() {
+  S.watch = 0;
+  if (!S.open) return;
+  const el = S.busy ? null : H.root.querySelector('[data-tour-on]');
+  const box = S.host.querySelector('.h-tour');
+  if (el && box && layoutKey(el, box) !== S.last) schedule();
+  S.watch = requestAnimationFrame(watch);
 }
 
 /* ---------- walking ---------- */
@@ -479,6 +497,7 @@ export function start(opener) {
   listen(true);
   S.mo = new MutationObserver(onMutate);
   S.mo.observe(H.root, { childList: true, subtree: true, characterData: true });
+  S.watch = requestAnimationFrame(watch);
   show(0, 1);
 }
 
@@ -492,6 +511,9 @@ function teardown() {
   stopWaiting();
   if (S.raf) cancelAnimationFrame(S.raf);
   S.raf = 0;
+  if (S.watch) cancelAnimationFrame(S.watch);
+  S.watch = 0;
+  S.last = '';
   if (S.mo) S.mo.disconnect();
   S.mo = null;
   listen(false);
