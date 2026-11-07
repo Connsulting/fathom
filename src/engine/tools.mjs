@@ -1,6 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { compileSchema } from './schema.mjs';
+import { WRITE_SCOPES } from '../shared/action-scopes.mjs';
 
 export function createRegistryServer(registry = [], { purpose, ctx } = {}) {
   if (!Array.isArray(registry)) throw new TypeError('Tool registry must be an array');
@@ -8,11 +9,11 @@ export function createRegistryServer(registry = [], { purpose, ctx } = {}) {
   const offered = [];
   for (const entry of registry) {
     if (!entry || !/^[a-zA-Z0-9_-]{1,64}$/.test(entry.name) || names.has(entry.name) ||
-      !['read', 'write:recs'].includes(entry.scope) || typeof entry.description !== 'string' || typeof entry.handler !== 'function') {
+      !['read', ...WRITE_SCOPES].includes(entry.scope) || typeof entry.description !== 'string' || typeof entry.handler !== 'function') {
       throw new TypeError('Invalid tool registry entry');
     }
     names.add(entry.name);
-    if (purpose === 'extract' || purpose === 'confirm' || (entry.scope === 'write:recs' && purpose !== 'chat')) continue;
+    if (purpose === 'extract' || purpose === 'confirm' || (entry.scope !== 'read' && purpose !== 'chat') || entry.mcpOnly) continue;
     offered.push({ entry, validate: compileSchema(entry.inputSchema) });
   }
   offered.sort((a, b) => a.entry.name.localeCompare(b.entry.name));
@@ -28,9 +29,9 @@ export function createRegistryServer(registry = [], { purpose, ctx } = {}) {
       const text = JSON.stringify(result ?? null);
       results.push({ name, args: structuredClone(args), result: JSON.parse(text) });
       return { content: [{ type: 'text', text }] };
-    } catch {
+    } catch (err) {
       results.push({ name, args: structuredClone(args), isError: true, result: null });
-      return { isError: true, content: [{ type: 'text', text: 'Tool execution failed' }] };
+      return { isError: true, content: [{ type: 'text', text: err?.name === 'ToolError' || err?.name === 'FactAnswerError' ? err.message : 'Tool execution failed' }] };
     }
   };
   const instance = new McpServer({ name: 'fathom', version: '1.0.0' });

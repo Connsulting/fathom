@@ -25,7 +25,7 @@ function authenticate(req, keys) {
   return m ? keys.verify(m[1]) : null;
 }
 
-export function createMcpHandler({ db, keys, config }) {
+export function createMcpHandler({ db, keys, config, scheduler = null }) {
   return async function handleMcp(req, res) {
     const host = req.headers.host;
     if (!isAllowedHost(host, config)) return refuse(req, res, 403, { error: 'forbidden host' });
@@ -43,7 +43,8 @@ export function createMcpHandler({ db, keys, config }) {
     }
 
     keys.touch(record.id);
-    const ctx = { db, now: new Date(), dataDir: config.dataDir, clock: config.clock };
+    const ctx = { db, now: new Date(), dataDir: config.dataDir, clock: config.clock, channel: 'mcp', actorId: record.userId || `key:${record.id}`, scopes: record.scopes,
+      replan: scheduler ? () => scheduler.runNow('plan') : null, queuePlan: () => scheduler?.soon?.('plan', 'ingest') };
     const server = createToolServer({ scopes: record.scopes, ctx });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     res.on('close', () => {

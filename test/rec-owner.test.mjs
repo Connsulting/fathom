@@ -220,7 +220,7 @@ describe('MCP owner tool and linked recs (AC2, AC4)', () => {
     assert.equal(r.housekeeping, false);
     assert.ok(Array.isArray(r.serves) && r.serves.length > 0);
     assert.deepEqual(ownerOf(s.db, 'va529'), { owner: 'spouse', owner_override: 1 });
-    assert.deepEqual(lastEvent(s.db, 'va529'), { action: 'set_owner', arg: 'spouse', from_status: status, to_status: status, actor: 'tool' });
+    assert.deepEqual(lastEvent(s.db, 'va529'), { action: 'set_owner', arg: 'spouse', from_status: status, to_status: status, actor: 'demo' });
     assert.equal((await call('get_recommendation', { id: 'va529' })).owner, 'spouse');
   });
 

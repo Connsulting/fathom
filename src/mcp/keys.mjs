@@ -11,7 +11,11 @@ import { tools } from '../tools/index.mjs';
 export const KEY_PREFIX = 'fathom_';
 export const SCOPE_INFO = Object.freeze([
   { id: 'read', label: 'Read', access: 'Read household facts, accounts, transactions, recommendations, deadlines, goals, figures and knowledge packs.' },
-  { id: 'write:recs', label: 'Change recommendation status and owner', access: 'Set a recommendation status (doing it, done, later, not for us) with set_recommendation_status, and who acts on it (you, spouse, both, advisor, automatic) with set_recommendation_owner. Nothing else is writable.' },
+  { id: 'write:recs', label: 'Change recommendation status and owner', access: 'Set a recommendation status (doing it, done, later, not for us) with set_recommendation_status, and who acts on it (you, spouse, both, advisor, automatic) with set_recommendation_owner. No outbound actions are available.' },
+  { id: 'write:preferences', label: 'Remember preferences', access: 'Remember your stated household preferences and definitions, edit them and undo your changes.' },
+  { id: 'write:facts', label: 'Record household facts', access: 'Record or correct facts from your typed Ask statements or stored data, and undo your changes.' },
+  { id: 'write:steps', label: 'Check recommendation steps', access: 'Check or uncheck recommendation steps, and undo your changes.' },
+  { id: 'write:goals', label: 'Create and edit goals', access: 'Create or edit goals, target amounts and dates from your statements or stored data, and undo your changes.' },
 ]);
 export const SCOPES = Object.freeze(SCOPE_INFO.map(s => s.id));
 export const SECRET_FILE = 'api-key-secret';
@@ -127,7 +131,7 @@ export function createKeyService({ db, serverSecret, creatorActive, now = () => 
       }
       if (!match || match.revoked_at !== null) return null;
       if (match.user_id !== null && !creatorActive(match.user_id)) return null;
-      return toRecord(match);
+      return { ...toRecord(match), userId: match.user_id };
     },
 
     touch(id) {
