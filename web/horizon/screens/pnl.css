@@ -1,6 +1,6 @@
-/* P&L under Money (screens/pnl.js). Horizon tokens only. The rows panel reuses the account
-   dialog's transaction list (.h-ad-txns, .h-ad-txn in account.css); these rules add the chooser,
-   totals, gaps, month strip and category table. */
+/* P&L under Money (screens/pnl.js). Horizon tokens only. These rules add the chooser, totals,
+   gaps, month strip, the filter row, the month by category table and the rows dialog's body (the
+   dialog chrome is the shared .h-dlg in design.css). */
 
 .d-horizon .pl { min-width: 0; }
 .d-horizon .pl .h-ph { margin-bottom: 28px; }
@@ -58,6 +58,7 @@
 .d-horizon .pl-m:hover { border-color: var(--line2); color: var(--tx); }
 .d-horizon .pl-m.on { border-color: var(--ac); background: var(--acd); color: var(--tx); }
 .d-horizon .pl-m:focus-visible { outline-offset: -2px; }
+.d-horizon .pl-m-all { flex-basis: 96px; }
 .d-horizon .pl-m-n { font-size: 12px; color: var(--mu); display: inline-flex; gap: 5px; align-items: baseline; }
 .d-horizon .pl-m-n em { font-style: normal; color: var(--fa); font-size: 11px; }
 .d-horizon .pl-m b { font-weight: 400; font-size: 13.5px; }
@@ -67,14 +68,32 @@
 .d-horizon .pl-m-s.wb { color: var(--ac2); }
 .d-horizon .pl-m-s.tx { color: var(--mu); }
 
-/* Category table. */
-.d-horizon .pl-tablewrap { overflow-x: auto; min-width: 0; }
+/* Filter row: text, type and hide-zero on one line; wraps on a phone. */
+.d-horizon .pl-filters { display: flex; align-items: center; gap: 8px 12px; margin-bottom: 14px; min-width: 0; }
+.d-horizon .pl-q { flex: 0 1 280px; min-width: 0; height: 36px; padding: 0 14px; font: inherit; font-size: 13.5px; color: var(--tx); background: var(--s1); border: 1px solid var(--line2); border-radius: 18px; box-sizing: border-box; color-scheme: dark; }
+.d-horizon .pl-q::placeholder { color: var(--fa); }
+.d-horizon .pl-q:focus-visible { outline: 2px solid var(--ac); outline-offset: 1px; }
+.d-horizon .pl-fts { display: inline-flex; flex: none; border: 1px solid var(--line2); border-radius: 18px; overflow: hidden; }
+.d-horizon .pl-ft { appearance: none; min-height: 34px; padding: 0 13px; background: none; border: 0; color: var(--mu); font: inherit; font-size: 13px; cursor: pointer; }
+.d-horizon .pl-ft + .pl-ft { border-left: 1px solid var(--line2); }
+.d-horizon .pl-ft:hover { color: var(--tx); }
+.d-horizon .pl-ft.on { color: var(--tx); background: var(--acd); }
+.d-horizon .pl-ft:focus-visible { outline: 2px solid var(--ac); outline-offset: -2px; }
+.d-horizon .pl-zero { flex: none; white-space: nowrap; }
+.d-horizon .pl-filtered { margin: -4px 0 12px; color: var(--fa); font-size: 12.5px; }
+
+/* Category table: Category, one column per month, the range total, then Last year or Monthly
+   average. It scrolls inside its wrapper with the category column held in place. */
+.d-horizon .pl-tablewrap { overflow-x: auto; min-width: 0; overscroll-behavior-x: contain; scrollbar-width: thin; scrollbar-color: var(--line2) transparent; }
 .d-horizon .pl-table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .d-horizon .pl-table th, .d-horizon .pl-table td { padding: 9px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: baseline; font-weight: 400; }
 .d-horizon .pl-table th:first-child, .d-horizon .pl-table td:first-child { padding-left: 0; }
 .d-horizon .pl-table th:last-child, .d-horizon .pl-table td:last-child { padding-right: 0; }
 .d-horizon .pl-table thead th { color: var(--fa); font-size: 12px; font-weight: 500; letter-spacing: 0.04em; padding-top: 0; white-space: nowrap; }
 .d-horizon .pl-table .num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.d-horizon .pl-table .pl-catc { position: sticky; left: 0; z-index: 1; background: var(--bg); min-width: 176px; }
+.d-horizon .pl-table .pl-mc.sel { background: var(--acd); }
+.d-horizon .pl-table .pl-mc + .pl-totc { padding-left: 16px; }
 .d-horizon .pl-table tbody th[scope="row"] { overflow-wrap: anywhere; }
 .d-horizon .pl-table .pl-h th, .d-horizon .pl-table .pl-h td { padding-top: 20px; color: var(--mu); font-size: 12px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.06em; border-bottom-color: var(--line2); }
 .d-horizon .pl-table tbody:first-of-type .pl-h th, .d-horizon .pl-table tbody:first-of-type .pl-h td { padding-top: 12px; }
@@ -85,14 +104,41 @@
 .d-horizon .pl-cat { appearance: none; background: none; border: 0; padding: 0; color: var(--tx); cursor: pointer; text-align: left; font: inherit; overflow-wrap: anywhere; border-bottom: 1px solid transparent; }
 .d-horizon .pl-cat:hover { color: var(--ac2); border-bottom-color: var(--acl); }
 .d-horizon .pl-cat.on { color: var(--ac2); border-bottom-color: var(--ac); }
+/* Header sort buttons read as header text; the sorted one shows its direction. */
+.d-horizon .pl-sort { appearance: none; display: inline-flex; align-items: center; gap: 5px; padding: 0; background: none; border: 0; color: inherit; font: inherit; letter-spacing: inherit; white-space: nowrap; cursor: pointer; }
+.d-horizon .pl-sort:hover { color: var(--tx2); }
+.d-horizon .pl-sort.on { color: var(--tx); }
+.d-horizon .pl-sort:focus-visible { outline: 2px solid var(--ac); outline-offset: 2px; border-radius: 3px; }
+.d-horizon .pl-sort small { margin-left: 3px; color: var(--fa); font-size: 10.5px; font-weight: 400; }
+.d-horizon .pl-sort-i { display: none; width: 0; height: 0; border-left: 4px solid transparent; border-right: 4px solid transparent; }
+.d-horizon .pl-sort.on .pl-sort-i { display: inline-block; }
+.d-horizon .pl-sort.on.asc .pl-sort-i { border-bottom: 5px solid var(--ac); }
+.d-horizon .pl-sort.on.desc .pl-sort-i { border-top: 5px solid var(--ac); }
+/* A month cell opens its rows; it looks like the figure it holds. */
+.d-horizon .pl-cell { appearance: none; padding: 0; background: none; border: 0; color: inherit; font: inherit; cursor: pointer; }
+.d-horizon .pl-cell .fx-fig { cursor: pointer; }
+.d-horizon .pl-cell:hover .fx-fig { color: var(--ac2); }
+.d-horizon .pl-cell:focus-visible { outline: 2px solid var(--ac); outline-offset: 2px; border-radius: 3px; }
 .d-horizon .pl-tag { margin-left: 8px; padding: 1px 6px; border: 1px solid var(--line2); border-radius: 5px; color: var(--fa); font-size: 11px; white-space: nowrap; }
 
-/* Rows behind a category. */
-.d-horizon .pl-rows { scroll-margin-top: calc(var(--top-h) + 16px); }
-.d-horizon .pl-rows:focus { outline: none; }
-.d-horizon .pl-rows .h-sec-h h2 { overflow-wrap: anywhere; min-width: 0; }
-.d-horizon .pl-rows .h-sec-aside .h-btn { height: 30px; }
-.d-horizon .pl-rows-sub { color: var(--fa); font-size: 12.5px; }
+/* Rows dialog (#/pnlrows): the rows behind a category or a month cell, with their total. */
+.d-horizon .h-dlg.pl-dlgw { width: min(900px, 100%); }
+.d-horizon .pl-dlg-h .h-dlg-title { overflow-wrap: anywhere; min-width: 0; }
+.d-horizon .pl-dlg-meta { margin-top: 10px; }
+.d-horizon .pl-dlg .pl-load, .d-horizon .pl-dlg .pl-fail { margin-top: 24px; }
+.d-horizon .pl-dtable { width: 100%; margin-top: 20px; border-collapse: collapse; font-size: 14px; }
+.d-horizon .pl-dtable th, .d-horizon .pl-dtable td { padding: 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: baseline; font-weight: 400; }
+.d-horizon .pl-dtable th:first-child, .d-horizon .pl-dtable td:first-child { padding-left: 0; }
+.d-horizon .pl-dtable th:last-child, .d-horizon .pl-dtable td:last-child { padding-right: 0; }
+.d-horizon .pl-dtable thead th { padding-top: 0; color: var(--fa); font-size: 12px; font-weight: 500; letter-spacing: 0.04em; white-space: nowrap; }
+.d-horizon .pl-dtable .num { text-align: right; }
+.d-horizon .pl-dtable td.pl-d-date { color: var(--mu); font-size: 13px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.d-horizon .pl-dtable td.pl-d-desc { overflow-wrap: anywhere; }
+.d-horizon .pl-dtable td.pl-d-acct { color: var(--mu); font-size: 13px; overflow-wrap: anywhere; }
+.d-horizon .pl-dtable .pl-d-amt { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.d-horizon .pl-dtable .pl-d-none td { color: var(--fa); font-size: 13px; }
+.d-horizon .pl-dtable tfoot th, .d-horizon .pl-dtable tfoot td { padding-top: 14px; border-top: 1px solid var(--line2); border-bottom: 0; color: var(--tx); font-weight: 500; }
+.d-horizon .pl-d-count { margin-left: 8px; color: var(--fa); font-size: 12.5px; font-weight: 400; }
 .d-horizon .pl-note { margin-top: 12px; color: var(--fa); font-size: 12.5px; }
 
 .d-horizon .pl-notes { margin-top: 28px; display: flex; flex-direction: column; gap: 4px; color: var(--fa); font-size: 12.5px; }
@@ -118,5 +164,23 @@
   .d-horizon .pl-table { font-size: 13.5px; }
   .d-horizon .pl-table th, .d-horizon .pl-table td { padding: 9px 6px; }
   .d-horizon .pl-table .pl-ly, .d-horizon .pl-table .pl-avg { display: none; }
+  /* Only the selected month's column, then the total. */
+  .d-horizon .pl-table .pl-mc:not(.sel) { display: none; }
+  .d-horizon .pl-table .pl-catc { position: static; min-width: 0; }
   .d-horizon .pl-tag { display: inline-block; margin: 2px 0 0; }
+  .d-horizon .pl-filters { flex-wrap: wrap; }
+  .d-horizon .pl-q { flex: 1 1 100%; }
+
+  /* The rows dialog fills the screen; each row stacks date and amount over description and account. */
+  .d-horizon .h-dlg-host .h-dlg.pl-dlgw { position: fixed; top: 0; left: 0; width: 100vw; height: 100dvh; max-height: none; border-radius: 0; border-width: 0; box-sizing: border-box; }
+  .d-horizon .pl-dtable, .d-horizon .pl-dtable thead, .d-horizon .pl-dtable tbody, .d-horizon .pl-dtable tfoot { display: block; }
+  .d-horizon .pl-dtable thead tr { display: flex; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); }
+  .d-horizon .pl-dtable thead th { padding: 0 0 8px; border: 0; }
+  .d-horizon .pl-dtable thead th.pl-d-desc, .d-horizon .pl-dtable thead th.pl-d-acct { display: none; }
+  .d-horizon .pl-dtable tbody tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+  .d-horizon .pl-dtable tbody td { padding: 0; border: 0; }
+  .d-horizon .pl-dtable td.pl-d-date, .d-horizon .pl-dtable td.pl-d-desc, .d-horizon .pl-dtable td.pl-d-acct { grid-column: 1; }
+  .d-horizon .pl-dtable td.pl-d-amt { grid-column: 2; grid-row: 1 / span 2; }
+  .d-horizon .pl-dtable tfoot tr { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; border-top: 1px solid var(--line2); padding-top: 12px; }
+  .d-horizon .pl-dtable tfoot th, .d-horizon .pl-dtable tfoot td { padding: 0; border: 0; }
 }

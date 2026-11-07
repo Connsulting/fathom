@@ -1,7 +1,8 @@
 // Business P&L (src/pnl): per-entity income, expenses and net by month from the imported workbook or
 // the entity's categorized business-account transactions, never both for one month; left-out
 // buckets, Uncategorized share, prior-year comparison, figure provenance and the rows behind a cell.
-// Tags: pl-ac1 business behavior, pl-ac3 provenance and rows, pl-ac4 module and HTTP surface.
+// Tags: pl-ac1 business behavior, pl-ac3 provenance and rows, pl-ac4 module and HTTP surface,
+// pnl2-ac2 the rows sum equals the cell it opens from, pnl2-ac3 a month bounds the rows.
 //
 // Synthetic store, clock 2032-11-05. Three business names: Example Studio (workbook 2031-01..06 and
 // 2032-01..06, plus a stated-entity checking account with transactions 2032-01..08), Sample Works
@@ -20,6 +21,7 @@ import { serveAppFixture, tempDb } from './helpers/server.mjs';
 import { seedDemo } from '../demo/seed.mjs';
 import * as PNL from '../src/pnl/index.mjs';
 import { pnlEntities, businessPnl, businessPnlRows, PnlError } from '../src/pnl/index.mjs';
+import { ITEM_LIMIT } from '../src/pnl/shared.mjs';
 
 const CLOCK = '2032-11-05';
 const r2 = (x) => Math.round(x * 100) / 100;
@@ -500,12 +502,14 @@ test('pl-ac3 businessPnlRows lists exactly the rows behind a cell, and their amo
     assert.equal(r.items.length, expect.count);
     const sum = sumItems(r.items);
     assert.equal(opts.section === 'expenses' ? r2(-sum) : sum, val(p, cell), `rows sum to the cell ${JSON.stringify(opts)}`);
+    assert.equal(val(r, r.sum), val(p, cell), `the sum figure is the cell ${JSON.stringify(opts)}`);
     const dates = r.items.map((i) => i.date);
     assert.deepEqual(dates, dates.toSorted().reverse(), 'newest first');
     for (const i of r.items) {
       const f = r.figures[i.fig];
       assert.ok(f, `item figure ${i.fig}`);
-      assert.equal(r2(f.v), r2(i.amount));
+      assert.equal(r2(i.value), opts.section === 'expenses' ? r2(-i.amount) : r2(i.amount), 'the counted value: income as is, expenses negated');
+      assert.equal(r2(f.v), r2(i.value), 'the item figure is the counted value');
       assert.ok(r.sources[f.src], `item source ${f.src}`);
       assert.equal(typeof i.account, 'string');
     }
@@ -532,6 +536,106 @@ test('pl-ac3 businessPnlRows lists exactly the rows behind a cell, and their amo
   assert.deepEqual(biz.items.map((i) => i.id), [ids.txns.refund, ids.txns.hosting]);
   assert.equal(r2(-sumItems(biz.items)), 600);
   assert.deepEqual(bizRows({ section: 'income', category: 'Business' }).items, [], 'a category in the other section has no rows');
+});
+
+/* ---------------------------------------------------------------- pnl2-ac2, pnl2-ac3 */
+
+// For every category of every section of one P&L: the rows for each month with a cell sum (the
+// response's `sum` figure) to that cell and list only that month; the rows for the range sum to the
+// category total; uncapped items add up to the sum; each item's figure is its counted value, and an
+// expense row's value is its amount negated. Returns how many cells it checked.
+function checkRowsMatchCells(db, entity, p) {
+  let cells = 0;
+  const fetch = (section, category, month) => businessPnlRows({ db, entity, from: p.from, to: p.to, section, category, ...(month ? { month } : {}) });
+  const items = (r, section, where) => {
+    for (const i of r.items) {
+      const f = r.figures[i.fig];
+      assert.ok(f, `${where}: item figure ${i.fig}`);
+      assert.equal(typeof i.value, 'number', `${where}: item ${i.id} has a value`);
+      assert.equal(r2(i.value), section === 'expenses' ? r2(-i.amount) : r2(i.amount), `${where}: item ${i.id} counted value sign`);
+      assert.equal(r2(f.v), r2(i.value), `${where}: item ${i.id} figure is its counted value`);
+    }
+    if (r.total <= ITEM_LIMIT) {
+      assert.equal(r.items.length, r.total, `${where}: uncapped`);
+      assert.equal(r2(r.items.reduce((a, i) => a + i.value, 0)), val(r, r.sum), `${where}: the items add up to the sum`);
+    }
+  };
+  for (const section of ['income', 'expenses']) {
+    for (const c of p[section].categories) {
+      for (const m of p.months) {
+        const where = `${entity} ${section} ${c.category} ${m}`;
+        if (!c.months[m]) continue;
+        const r = fetch(section, c.category, m);
+        assert.ok(r.sum, `${where}: the response has a sum figure`);
+        assert.equal(val(r, r.sum), val(p, c.months[m]), `${where}: sum equals the cell`);
+        assert.ok(r.items.length > 0, `${where}: a cell has rows`);
+        for (const i of r.items) assert.equal(String(i.date).slice(0, 7), m, `${where}: item ${i.id} date ${i.date} is in the month`);
+        items(r, section, where);
+        cells++;
+      }
+      const where = `${entity} ${section} ${c.category} range`;
+      const r = fetch(section, c.category, null);
+      assert.ok(r.sum, `${where}: the response has a sum figure`);
+      assert.equal(val(r, r.sum), val(p, c.total), `${where}: sum equals the category total`);
+      for (const i of r.items) assert.ok(String(i.date).slice(0, 7) >= p.from && String(i.date).slice(0, 7) <= p.to, `${where}: item ${i.id} is in the range`);
+      items(r, section, where);
+    }
+  }
+  return cells;
+}
+
+test('pnl2-ac2 pnl2-ac3 business rows: for every category and every month cell the rows sum to the cell, only that month, items carry their counted value', (t) => {
+  const { db } = store(t);
+  const ids = business(db);
+  let cells = 0;
+  for (const [entity, opts] of [[STUDIO, {}], [STUDIO, { from: '2032-02', to: '2032-07' }], [WORKS, {}], [BIZ, {}]]) {
+    const p = businessPnl({ db, entity, ...opts });
+    cells += checkRowsMatchCells(db, entity, p);
+  }
+  assert.ok(cells > 30, `checked ${cells} cells`);
+
+  // The refund is a negative expense value; the chargeback is a negative income value.
+  const biz = businessPnlRows({ db, entity: BIZ, section: 'expenses', category: 'Business', month: '2032-04' });
+  assert.deepEqual(biz.items.map((i) => [i.id, i.amount, i.value]), [[ids.txns.refund, 100, -100]]);
+  assert.equal(val(biz, biz.sum), -100);
+  const mar = businessPnlRows({ db, entity: STUDIO, section: 'income', category: 'Consulting revenue', month: '2032-03' });
+  const cb = mar.items.find((i) => i.id === ids.lines['rev:3b']);
+  assert.equal(cb.value, -500);
+  assert.equal(val(mar, mar.sum), 8500);
+
+  // An empty month of a real category: no items and a zero sum.
+  const none = businessPnlRows({ db, entity: STUDIO, section: 'expenses', category: 'Refunds and fees', month: '2032-03' });
+  assert.deepEqual(none.items, []);
+  assert.equal(none.total, 0);
+  assert.equal(val(none, none.sum), 0);
+});
+
+test('pnl2-ac2 business rows on the demo store: every month cell and every total matches its rows sum', async (t) => {
+  const s = await tempDb();
+  t.after(() => s.close());
+  seedDemo(s.db);
+  let cells = 0;
+  for (const e of pnlEntities({ db: s.db })) cells += checkRowsMatchCells(s.db, e.key, businessPnl({ db: s.db, entity: e.key }));
+  assert.ok(cells > 0, 'the demo has month cells');
+});
+
+test('pnl2-ac2 a capped rows read still sums every matching row, not just the listed items', (t) => {
+  const { db } = store(t);
+  account(db, 'busy', 'business', 'Busy checking');
+  fact(db, 'business.entities', [{ name: 'Busy Example Co', type: 'llc' }]);
+  const n = ITEM_LIMIT + 25;
+  for (let i = 0; i < n; i++) txn(db, 'busy', `2032-05-${pad((i % 28) + 1)}`, -(1 + (i % 7)), `Synthetic tool ${i}`, 'Business');
+  txn(db, 'busy', '2032-06-02', 900, 'Synthetic invoice', 'Income');
+  const entity = pnlEntities({ db })[0].key;
+  const p = businessPnl({ db, entity });
+  const c = cat(p.expenses, 'Business');
+  const r = businessPnlRows({ db, entity, section: 'expenses', category: 'Business', month: '2032-05' });
+  assert.equal(r.total, n);
+  assert.equal(r.items.length, ITEM_LIMIT, 'items are capped');
+  assert.equal(val(r, r.sum), val(p, c.months['2032-05']), 'the sum counts every row');
+  assert.notEqual(r2(r.items.reduce((a, i) => a + i.value, 0)), val(r, r.sum), 'the listed items alone fall short');
+  const all = businessPnlRows({ db, entity, section: 'expenses', category: 'Business' });
+  assert.equal(val(all, all.sum), val(p, c.total));
 });
 
 /* ---------------------------------------------------------------- pl-ac4 */

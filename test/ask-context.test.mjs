@@ -410,6 +410,13 @@ test('routeContext view: each route keeps only the view fields it owns', () => {
   assert.deepEqual(shown(route('money'), all), { kind: 'money', id: 'overview', label: 'Money > Overview, last 3 months', q: 'range=3M' });
   assert.deepEqual(shown(route('pnl'), all),
     { kind: 'pnl', id: 'entity:studio', label: 'Money > Studio LLC, March 2026, housing left out', q: 'month=2026-03;housing=off' });
+  // The P&L rows dialog sits over the P&L and keeps its fields.
+  assert.deepEqual(shown(route('pnlrows'), all),
+    { kind: 'pnl', id: 'entity:studio', label: 'Money > Studio LLC, March 2026, housing left out', q: 'month=2026-03;housing=off' });
+  assert.deepEqual(shown(route('pnl'), { ...all, filters: [{ key: 'type', value: 'income' }] }),
+    { kind: 'pnl', id: 'entity:studio', label: 'Money > Studio LLC, March 2026, income only', q: 'month=2026-03;type=income' });
+  assert.deepEqual(shown(route('pnl'), { ...all, filters: [{ key: 'type', value: 'all' }] }),
+    { kind: 'pnl', id: 'entity:studio', label: 'Money > Studio LLC, March 2026', q: 'month=2026-03' });
   assert.deepEqual(shown(route('home'), all), { kind: 'page', id: 'home', label: 'Home, my actions', q: 'owner=me' });
   assert.deepEqual(shown(route('goals'), all), { kind: 'goal', id: 'g_synth', label: 'Home > Goals > Synthetic reserve', q: '' });
   // The account dialog over Money: the trend range of the page beneath is not the dialog's.
