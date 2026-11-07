@@ -843,10 +843,11 @@ Inputs and what happens without them:
    every milestone date is unavailable.
 2. `rule_of_55` applies per account and only when both facts show it: `accounts.planType` is an
    employer plan (`401k`, `roth_401k`, `solo_401k`, `403b`, `457b`), and
-   `accounts.separationYear` (the year the person left or will leave the employer that sponsors
-   that plan) is on or after the year the person turns 55. IRA types never qualify. An employer
-   plan with no separation year, or an account with no plan type, is not listed and is named in a
-   `missing_fact` gap. The milestone date is January 1 of the separation year.
+   `accounts.separationDate` (the day the person left or will leave the employer that sponsors
+   that plan) falls in or after the calendar year the person turns 55. IRA types never qualify.
+   An employer plan with no separation date, or an account with no plan type, is not listed and
+   is named in a `missing_fact` gap. The exception applies only after separation (IRS Publication
+   575), so the milestone date is the separation date itself.
 3. `roth_earnings_qualified` needs `accounts.rothFirstContributionYear` per Roth account; without
    it the milestone date is unavailable for that account with a gap.
 4. `rmd_start` excludes Roth IRA and Roth 401(k) accounts (no lifetime RMD for the owner).
@@ -874,10 +875,12 @@ Inputs and what happens without them:
 1. `accessible.rothContributions` is the sum of `accounts.rothBasis`; a Roth account without it
    adds nothing and is named in a `missing_fact` gap.
 2. `accessible.ruleOf55` counts an employer-plan balance only for an account that qualifies
-   under `access_schedule`'s rule (employer plan type and `accounts.separationYear` on or after the
-   year the person turns 55); a retirement age of 55 or more is not enough by itself. Every other
-   employer-plan balance stays out of accessible money, and each one missing a plan type or a
-   separation year is named in a `missing_fact` gap.
+   under `access_schedule`'s rule (employer plan type and `accounts.separationDate` in or after
+   the calendar year the person turns 55), and only from its separation date: a qualifying balance
+   whose separation date is after the bridge's start (the date the person reaches `retireAge`)
+   is excluded until that date, with a note. A retirement age of 55 or more is not enough by
+   itself. Every other employer-plan balance stays out of accessible money, and each one missing a
+   plan type or a separation date is named in a `missing_fact` gap.
 3. `accessible.taxable` is the market value (selling has a tax cost; the note points at
    `after_tax_value`).
 4. Exceptions listed as text with pack refs: substantially equal periodic payments and HSA
@@ -1625,7 +1628,7 @@ Household facts the tools need:
 | `accounts.planType` | per account choice: `traditional_ira`, `roth_ira`, `sep_ira`, `401k`, `roth_401k`, `solo_401k`, `403b`, `457b`, `hsa`, `529`, `taxable` | no | after T19 (account scope, kinds retirement, roth, ira, taxable, brokerage) |
 | `accounts.rothFirstContributionYear` | per account year (1975 to the current year) | no | after T19 (account scope, kind roth, or plan type roth_ira or roth_401k) |
 | `accounts.rothBasis` | per account dollars | no | after T19 (account scope, kind roth) |
-| `accounts.separationYear` | per account year (1975 to 2100): the year the person left or will leave the plan's sponsoring employer | no | after T19 (account scope, accounts whose plan type is an employer plan; the owner states it, never inferred from a retirement age) |
+| `accounts.separationDate` | per account date: the day the person left or will leave the plan's sponsoring employer | no | after T19 (account scope, `date` answer shape, accounts whose plan type is an employer plan; the owner states it, never inferred from a retirement age) |
 
 `accounts.planType` replaces the `accounts.taxTreatment` key an earlier draft named: one fact
 gives the treatment, the employer-plan status rule of 55 needs, and the Roth IRA or Roth 401(k)
@@ -1816,7 +1819,7 @@ Waves (dependency graph). A ticket starts when everything in its Depends on line
 |---|---|---|
 | 1 | now | T1, T2 |
 | 2 | T1 merges (T3 needs T2, T6 needs T2) | T3, T4, T5, T6, T8, T9, T10, T11, T12 |
-| 3 | its wave 2 inputs merge | T7 (T3), T13 (T6), T14 (T5, T6), T15 (T3, T5) |
+| 3 | its wave 2 inputs merge | T7 (T3), T13 (T6), T14 (T5, T6), T15 (T3, T5, T10) |
 | Sibling-gated | feat/ask-evals merges | T16 |
 | Sibling-gated | feat/ask-actions merges | T17 (also T8), T19 |
 | 4 | T17 or T19 merges | T18 (T6, T8, T17), T20 (T5, T6, T19) |
@@ -1834,7 +1837,9 @@ tickets marked parallel share no file.
 
 How tools register. T1 turns `src/tools/index.mjs` into a loader: it imports every module in
 `src/tools/catalog/` (sorted by file name, top-level `await`), concatenates their `tools`
-exports into the sorted `tools` array and their `parity` exports into the route map. A tool ticket
+exports into the sorted `tools` array, their `parity` exports into the route map, and their
+optional `capabilities` exports (string names) into `CAPABILITIES`, which the eval loader reads
+(T16). A tool ticket
 adds its own catalog module and never edits `src/tools/index.mjs` or `src/tools/parity.mjs`. Write
 tickets register their receipt kinds from their own module through `registerReceiptKind` (T17).
 No ticket edits this file.
@@ -2236,7 +2241,7 @@ Evals: `q02-independence-target-4pct`, `q03-gap-and-date`, `q23-ten-year-growth`
 
 Size: about 190 production lines, 200 test lines.
 
-Depends on: T3, T5.
+Depends on: T3, T5, T10 (refs to `tax_estimate` marginal rates).
 
 Files: `src/tools/catalog/after-tax.mjs` (new), `test/tools-after-tax.test.mjs` (new).
 
@@ -2256,7 +2261,7 @@ Acceptance:
 
 Test command: `node --test test/tools-after-tax.test.mjs`
 
-Parallel: beside T7, T13, T14.
+Parallel: beside T7, T13, T14 once T10 has merged.
 
 Evals: `q28-15m-retirement-vs-brokerage`, `q33-unrealized-gains-tax`.
 
@@ -2275,14 +2280,19 @@ Acceptance:
    argument predicates, forbidden behavior (unsourced figure, self-computed figure, an assumption
    with source `owner` whose value is not in the owner's messages), expected figures computed at
    run time from the demo store by the named deterministic call, and a word budget.
-2. Expectation is availability-based and computed at run time, never written into a case: the
-   case loader reads each case's required tool names and checks them against the registry
-   (`getTool`). A case with any required tool absent is expected-fail and reports the missing
-   tools; a case whose required tools are all registered is a required pass. No later ticket edits
-   `evals/cases/`; registering a tool is what turns its cases into required passes.
-3. `npm run eval:ask` passes on main with the absent-tool cases reported as expected failures, and
-   a test of the loader shows a case flipping to required when a stub tool with its name is added to
-   the registry.
+2. Expectation is availability-based and computed at run time, never written into a case: each
+   case lists `requires`, its tool names plus named capabilities, and the case loader checks the
+   tools against the registry (`getTool`) and the capabilities against `CAPABILITIES` (exported by
+   `src/tools/index.mjs`, collected by T1's loader from each catalog module's `capabilities`
+   export). A case with any requirement absent is expected-fail and reports what is missing; a
+   case with every requirement present is a required pass. No later ticket edits `evals/cases/`;
+   registering a tool or a capability is what turns its cases into required passes.
+3. Capabilities and the tickets that register them: `ownerStatements` (T17, from
+   `src/tools/catalog/undo.mjs`: owner assumptions are checkable in Ask) and `definitions` (T18,
+   from `src/tools/catalog/definitions.mjs`: saved definitions resolve in `aggregate_transactions`).
+4. `npm run eval:ask` passes on main with the cases missing a requirement reported as expected
+   failures, and a test of the loader shows a case flipping to required only when both a stub tool
+   with its name and a stub capability it requires are added.
 
 Test command: `npm run eval:ask`
 
@@ -2301,7 +2311,7 @@ Depends on: feat/ask-actions merged, T1, T8 (serialized on `src/api/answerer.mjs
 Files: `src/shared/action-scopes.mjs`, `src/mcp/keys.mjs` (`SCOPE_INFO`),
 `src/actions/receipts.mjs` (`registerReceiptKind` replaces the fixed `TABLES`, kind `setting`),
 `src/tools/catalog/undo.mjs` (new: `undo_account_action`, `undo_category_action`,
-`undo_confirm_action`, `undo_decision_action`), `src/tools/actions.mjs` (removes `mcpOnly` from
+`undo_confirm_action`, `undo_decision_action`, and `capabilities: ['ownerStatements']`), `src/tools/actions.mjs` (removes `mcpOnly` from
 the five feat/ask-actions undo tools), `src/server.mjs` (one `services` object),
 `src/mcp/index.mjs` (`ctx.services`, `ctx.ownerStatements` from the request evidence),
 `src/api/answerer.mjs` (`createLiveAnswerer` accepts `services` and puts it, with
@@ -2350,7 +2360,7 @@ Files: `src/store/migrations/<next>-spending-definitions.sql` (number set at mer
 `src/actions/preferences.mjs` (refuse editing a linked preference, delete both on forget,
 `listPreferences` returns `definitionId`), `src/tools/catalog/definitions.mjs` (new:
 `list_spending_definitions`, `save_spending_definition`, `delete_spending_definition`,
-`forget_preference`, receipt kind `spending_definition`), `docs/architecture.md` (Tables),
+`forget_preference`, receipt kind `spending_definition`, and `capabilities: ['definitions']`), `docs/architecture.md` (Tables),
 `test/tools-definitions.test.mjs` (new).
 
 Acceptance:
@@ -2393,8 +2403,8 @@ Acceptance:
    evidence, and refuses an invalid one.
 3. `accounts.planType` is offered only for retirement, roth, ira, taxable and brokerage accounts;
    `accounts.rothFirstContributionYear` and `accounts.rothBasis` only for Roth accounts;
-   `accounts.separationYear` only for accounts whose stored plan type is an employer plan, as a
-   year from 1975 to 2100.
+   `accounts.separationDate` only for accounts whose stored plan type is an employer plan, as a
+   `date` answer shape.
 
 Test command: `node --test test/fact-shapes.test.mjs test/fact-answers.test.mjs`
 
@@ -2445,16 +2455,19 @@ Acceptance:
 1. Milestone ages and dates follow `ACCESS_RULES` and `rmdStartAge` from birth date facts for both
    people; with only ages, dates fall at year precision with a gap; with neither, dates are
    unavailable.
-2. `rule_of_55` lists only an employer-plan account whose `accounts.separationYear` is on or after
-   the year the person turns 55; an employer plan with no separation year, one with an earlier
-   separation year, and an account with no plan type are not listed, and the first and last are
-   named in a gap; Roth accounts are absent from `rmd_start`; a Roth account without a
+2. `rule_of_55` lists only an employer-plan account whose `accounts.separationDate` falls in or
+   after the calendar year the person turns 55, dated on the separation date; a December
+   separation in the year the person turns 55 qualifies and its milestone date is that December
+   day, not January 1; an employer plan with no separation date, one separated in an earlier
+   year, and an account with no plan type are not listed, and the first and last are named in a
+   gap; Roth accounts are absent from `rmd_start`; a Roth account without a
    first contribution year has an unavailable `roth_earnings_qualified` date.
 3. `bridge_check` spending until access equals the annual figure times the years, and accessible
    money equals taxable plus cash plus stated Roth contributions plus only the balances of
    employer plans that qualify under the rule above (a test with `retireAge` 56 and no separation
-   year counts none of them and reports the gap; the bare age is never enough), recomputed in
-   the test.
+   date counts none of them and reports the gap; the bare age is never enough; a qualifying plan
+   whose separation date is after the bridge's start date is excluded until that date), recomputed
+   in the test.
 4. Results contain no recommendation wording (a test scans for "should").
 
 Test command: `node --test test/tools-access.test.mjs`
@@ -2663,9 +2676,10 @@ expected figures computed at run time from the demo store, and a word budget. Ti
 eval:ask`) runs in CI over scripted transcripts; tier 2 (`npm run eval:ask:live`) runs a live model
 and never runs in CI. The branch has published no case names, so the IDs below are proposals, one
 per question, `qNN-short-slug`, plus one cross-conversation case. T16 writes them once.
-Expectation is availability-based: at run time a case whose required tools are not all in the
-registry is expected-fail and names the missing tools; once every required tool is registered it
-is a required pass. No ticket edits a case file. The Ticket column names the ticket that supplies
+Expectation is availability-based: each case lists `requires`, its tool names plus named
+capabilities (`ownerStatements` from T17, `definitions` from T18; see T16). At run time a case
+missing any of them is expected-fail and names what is missing; once every requirement is present
+it is a required pass. Rows below name a capability where a case needs one. No ticket edits a case file. The Ticket column names the ticket that supplies
 the case's main tool; where a case also needs a tool from an independent ticket (marked "with Tn"
 in the Evals lines), it becomes a required pass when the second of them merges, whichever that
 is. Every case forbids an unsourced figure, a self-computed figure, and an assumption with
@@ -2674,16 +2688,16 @@ source `owner` whose value does not appear in the owner's messages of that conve
 | Case ID | Question | Required tools (key predicates) | Expected figures (deterministic call) | Ticket |
 |---|---|---|---|---|
 | q01-spend-excl-mortgage-tax | Q01 | `aggregate_transactions` measure spending, annualize true, exclude has debt_service or Mortgage, tax bucket excluded or absent, healthcare not excluded; exactly one call | the same call's `total` | T6 |
-| q02-independence-target-4pct | Q02 | `independence_target` with spending ref to Q01 and withdrawalRate 0.04 source owner | that call's `target` | T14 |
-| q03-gap-and-date | Q03 | `independence_target` same args | `gap`, `projectedDate` | T14 |
+| q02-independence-target-4pct | Q02 | `independence_target` with spending ref to Q01 and withdrawalRate 0.04 source owner; requires capability `ownerStatements` | that call's `target` | T14 |
+| q03-gap-and-date | Q03 | `independence_target` same args; requires capability `ownerStatements` | `gap`, `projectedDate` | T14 |
 | q04-groceries-dining-monthly | Q04 | `aggregate_transactions` include categories groceries and dining, groupBy month | the call's groups | T6 |
 | q05-essential-vs-discretionary | Q05 | two `aggregate_transactions` calls, definition essential and definition discretionary | each call's `total`; the answer states both totals and no number that is their sum or difference unless a `calculate` call returned it | T6 |
 | q06-top-merchants | Q06 | `aggregate_transactions` groupBy merchant, limit 10 | the ten groups | T6 |
 | q07-childcare-2025 | Q07 | `aggregate_transactions` calendar_year 2025, include class childcare | `total` | T6 |
 | q08-healthcare-premiums | Q08 | `aggregate_transactions` include class healthcare | `total`; answer mentions the outside-ledger gap | T6 |
-| q09-elective-definition | Q09 | `aggregate_transactions` with definition elective_spending | `total` | T18 |
-| q09b-elective-definition-later-thread | Q09 asked in a new thread after Q10 was saved in an earlier one (the fixture saves the definition, then opens a fresh conversation) | `aggregate_transactions` with definition elective_spending; no `save_spending_definition` call | `total` | T18 |
-| q10-save-elective-definition | Q10 | `save_spending_definition` exclude classes housing, debt_service, childcare, healthcare, taxes; no `remember_preference` call | receipt present; linked preference names the definition | T18 |
+| q09-elective-definition | Q09 | `aggregate_transactions` with definition elective_spending; requires capability `definitions` | `total` | T18 |
+| q09b-elective-definition-later-thread | Q09 asked in a new thread after Q10 was saved in an earlier one (the fixture saves the definition, then opens a fresh conversation) | `aggregate_transactions` with definition elective_spending; no `save_spending_definition` call; requires capability `definitions` | `total` | T18 |
+| q10-save-elective-definition | Q10 | `save_spending_definition` exclude classes housing, debt_service, childcare, healthcare, taxes; no `remember_preference` call; requires capability `definitions` | receipt present; linked preference names the definition | T18 |
 | q11-monthly-net-cash-flow | Q11 | `cash_flow` scope all | monthly nets | T13 |
 | q12-business-to-personal | Q12 | `cash_flow` | `totals.transfersBusinessToHousehold` | T13 |
 | q13-negative-months | Q13 | `cash_flow` scope household | months with negative net | T13 |
@@ -2698,18 +2712,18 @@ source `owner` whose value does not appear in the owner's messages of that conve
 | q22-retirement-vs-taxable | Q22 | `net_worth` groupBy treatment | groups | T7 |
 | q23-ten-year-growth | Q23 | `project_growth` solve balance, years 10 | the figure | T14 |
 | q24-monthly-to-target-by-55 | Q24 | `independence_target`, `project_growth` solve monthly byAge 55 | the figure | T14 |
-| q25-return-3pct-whatif | Q25 | `independence_target` realReturn 0.03 source owner | months, date | T14 |
-| q26-withdrawal-35pct | Q26 | `independence_target` withdrawalRate 0.035 | target | T14 |
-| q27-extra-1000-sooner | Q27 | two `independence_target` calls, `calculate` subtract | the calculate figure | T14 |
-| q28-15m-retirement-vs-brokerage | Q28 | `after_tax_value` hypothetical pretax and taxable with owner evidence, rate refs, no `basis` argument | pre-tax `afterTax`; taxable `afterTax` unavailable with `no_cost_basis`; the answer asks for the basis and states no taxable after-tax number | T15 |
+| q25-return-3pct-whatif | Q25 | `independence_target` realReturn 0.03 source owner; requires capability `ownerStatements` | months, date | T14 |
+| q26-withdrawal-35pct | Q26 | `independence_target` withdrawalRate 0.035; requires capability `ownerStatements` | target | T14 |
+| q27-extra-1000-sooner | Q27 | two `independence_target` calls, `calculate` subtract; requires capability `ownerStatements` | the calculate figure | T14 |
+| q28-15m-retirement-vs-brokerage | Q28 | `after_tax_value` hypothetical pretax and taxable with owner evidence, rate refs, no `basis` argument; requires capability `ownerStatements` | pre-tax `afterTax`; taxable `afterTax` unavailable with `no_cost_basis`; the answer asks for the basis and states no taxable after-tax number | T15 |
 | q29-penalty-free-access | Q29 | `access_schedule` both | milestones | T21 |
 | q30-rmd-start | Q30 | `access_schedule` | rmd_start milestones | T21 |
-| q31-bridge-to-59-half | Q31 | `bridge_check` retireAge 50 source owner | shortfall or surplus | T21 |
+| q31-bridge-to-59-half | Q31 | `bridge_check` retireAge 50 source owner; requires capability `ownerStatements` | shortfall or surplus | T21 |
 | q32-accounts-by-treatment | Q32 | `net_worth` groupBy treatment | groups | T7 |
 | q33-unrealized-gains-tax | Q33 | `tax_estimate`, `after_tax_value` taxable kinds with rate refs | unrealizedGain, taxOnWithdrawal | T15 |
 | q34-tax-owed | Q34 | `tax_estimate` | federal and state projected | T10 |
 | q35-safe-harbor | Q35 | `tax_estimate` | safeHarbor fields | T10 |
-| q36-extra-income-whatif | Q36 | `tax_estimate` whatIf extraIncome 20000 source owner | `whatIf.totalDelta` | T10 |
+| q36-extra-income-whatif | Q36 | `tax_estimate` whatIf extraIncome 20000 source owner; requires capability `ownerStatements` | `whatIf.totalDelta` | T10 |
 | q37-se-tax | Q37 | `tax_estimate` | `federal.selfEmployment` | T10 |
 | q38-solo401k-room | Q38 | `contribution_room` owner, solo 401(k) types | remaining per type | T9 |
 | q39-ira-room | Q39 | `contribution_room` IRA types | remaining | T9 |
