@@ -96,7 +96,7 @@ export default defineConfig({
   webServer: BASE_URL
     ? undefined
     : [
-        demoServer(PORT, '.e2e-data'),
+        demoServer(PORT, process.env.E2E_DATA || '.e2e-data'),
         demoServer(JAN_PORT, '.e2e-data-jan', { FATHOM_CLOCK: '2027-01-05' }),
         demoServer(YP_PORT, ypDataDirLocal, { E2E_EXTERNAL: '1' })
       ]

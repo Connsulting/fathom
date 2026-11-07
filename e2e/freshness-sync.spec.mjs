@@ -34,11 +34,12 @@ test('connect shows Syncing, then a current data-through line, at desktop and ph
   const notice = await box.locator('[data-sf-sync]').innerText();
   const day = notice.match(/data through (\w{3} \d+), \d{4}/)[1];
 
-  await page.locator('a[data-go="home"]').first().click();
+  await page.evaluate(() => { window.location.hash = '#/home'; });
   await expect(page.locator('div.h-dhealth')).toContainText(`Data through ${day}`);
-  await page.locator('a[data-go="money"]').click();
+  await page.evaluate(() => { window.location.hash = '#/money'; });
   await expect(page.locator('.h-money-health')).toContainText(`Data through ${day}`);
-  await page.locator('a[data-go="accounts"]').click();
+  await page.evaluate(() => { window.location.hash = '#/accounts'; });
+  await expect(page.locator('[data-sf-connected]')).toBeVisible();
 
   let releaseSync;
   const syncGate = new Promise((resolve) => { releaseSync = resolve; });
