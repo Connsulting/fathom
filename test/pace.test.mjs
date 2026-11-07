@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { rm } from 'node:fs/promises';
-import { tempInstance, spawnAuthenticatedServer, request } from './helpers/server.mjs';
+import { tempDb, tempInstance, spawnAuthenticatedServer, request } from './helpers/server.mjs';
 import { seedDemo } from '../demo/seed.mjs';
 import demo from '../demo/scenario.mjs';
 import { setSetting } from '../src/store/db.mjs';
@@ -10,6 +10,7 @@ import { buildScenario } from '../src/scenario/build.mjs';
 import { buildPace } from '../src/pace/build.mjs';
 import { goalCreate, goalUpdate } from '../src/api/goals.mjs';
 import { callTool } from '../src/tools/index.mjs';
+import { assertRefsResolve } from './helpers/figures.mjs';
 
 const clock = '2032-06-29';
 // A real instance (store plus its synthetic platform.sqlite), so the server can start on it.
@@ -30,6 +31,9 @@ function putGoal(db, overrides = {}) {
   return g;
 }
 const ctx = (db, body = {}, id = 'goal') => ({ db, body, params: { id }, config: { clock } });
+const withoutEnvelopes = value => Array.isArray(value) ? value.map(withoutEnvelopes)
+  : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value)
+    .filter(([key]) => key !== 'envelope').map(([key, child]) => [key, withoutEnvelopes(child)])) : value;
 
 test('account pace uses complete stored balances, bounds the clock and retains the oldest dependency date', async t => {
   const { db } = await store(t);
@@ -140,7 +144,7 @@ test('income meter uses current-year actual income, explicit plan and nested sou
   upsertFact(db, { key: 'pace.income.2032', value: { annualPlan: 36600, asOf: clock }, src: 'you', confirmed: true, asOf: clock });
   let m = buildPace(db, { clock }).meters.income;
   assert.equal(m.meter.used.v, 18000);
-  assert.equal(m.meter.ratio.v, 0.49);
+  assert.equal(m.meter.ratio.v, m.meter.used.v / m.meter.limit.v);
   assert.equal(m.dataThrough, '2032-05-31');
   assert.equal(m.reason, null);
   db.prepare("UPDATE pnl_lines SET period = '2031-05'").run();
@@ -157,7 +161,9 @@ test('GET pace, scenario and MCP share the deterministic read-only result, inclu
   const before = db.prepare('SELECT total_changes() AS n').get().n;
   const direct = buildPace(db, { clock });
   assert.deepEqual(buildScenario(db).pace, direct);
-  assert.deepEqual(await callTool('get_pace', {}, { db, clock }), direct);
+  const toolResult = await callTool('get_pace', {}, { db, clock });
+  assert.deepEqual(withoutEnvelopes(toolResult), direct);
+  await assertRefsResolve(toolResult, { db, clock });
   assert.equal(db.prepare('SELECT total_changes() AS n').get().n, before);
   s = await spawnAuthenticatedServer({ dataDir, env: { FATHOM_DEMO: '0', FATHOM_ENGINE: 'off', FATHOM_CLOCK: clock } });
   const response = await s.request({ path: '/api/pace' });
@@ -171,6 +177,47 @@ test('GET pace, scenario and MCP share the deterministic read-only result, inclu
   const create = await s.postJson('/api/goals', { title: 'New savings', target: 40000, targetDate: '2033-01-01', track: { accounts: ['a'] } });
   assert.equal(create.status, 200);
   assert.equal(create.json.goal.pace.startValue, 18000);
+});
+
+test('demo pace envelopes preserve every figure, its unit, data date and replayable reference', async t => {
+  const s = await tempDb();
+  t.after(() => s.close());
+  seedDemo(s.db);
+  const demoClock = demo.meta.clock;
+  const year = demoClock.slice(0, 4);
+  upsertFact(s.db, { key: `pace.retirement.${year}`, value: { used: 1, limit: 3, asOf: demoClock },
+    src: 'you', asOf: demoClock, confirmed: true });
+  const context = { db: s.db, clock: demoClock };
+  const direct = buildPace(s.db, { clock: demoClock });
+  const result = await callTool('get_pace', {}, context);
+  assert.deepEqual(withoutEnvelopes(result), direct);
+  const seen = { days: 0, count: 0, ratio: 0, usd: 0, series: 0 };
+  function visit(value, path = '', through = null) {
+    if (!value || typeof value !== 'object') return;
+    if (Object.hasOwn(value, 'dataThrough')) through = value.dataThrough;
+    if (Object.hasOwn(value, 'v') && value.src === 'calc:pace' && value.locator) {
+      const unit = path.endsWith('.gapDays') ? 'days' : path.startsWith('rollup.') ? 'count'
+        : path.endsWith('.ratio') ? 'ratio' : 'usd';
+      seen[unit]++;
+      if (path.startsWith('series.')) seen.series++;
+      assert.equal(value.locator.unit, unit, `${path} producer unit`);
+      assert.equal(value.locator.dataThrough, through, `${path} producer data date`);
+      assert.equal(value.envelope.unit, unit, `${path} envelope unit`);
+      assert.equal(value.envelope.asOf, through, `${path} envelope data date`);
+      assert.equal(value.envelope.value, value.v, `${path} preserves the produced value`);
+      assert.deepEqual(value.envelope.ref, { tool: 'get_pace', args: {}, path: `${path}.envelope` });
+      if (unit === 'count') assert.ok(Number.isInteger(value.v), `${path} is an integer`);
+      if (unit === 'usd' || unit === 'days') assert.equal(value.v, Math.round(value.v * 100) / 100, `${path} rounds to cents`);
+      return;
+    }
+    for (const [key, child] of Object.entries(value)) visit(child, path ? `${path}.${key}` : key, through);
+  }
+  visit(result);
+  for (const [area, count] of Object.entries(seen)) assert.ok(count > 0, `${area} figures were checked`);
+  const meter = result.meters.retirement.meter;
+  assert.equal(meter.ratio.v, meter.used.v / meter.limit.v);
+  assert.equal(meter.ratio.envelope.value, meter.used.v / meter.limit.v);
+  await assertRefsResolve(result, context);
 });
 
 // Suggested goal targets, Revision 1 item 8: a plan that starts at or above its target is a flat

@@ -480,7 +480,7 @@ function shell(inner) {
     <a class="h-mark" href="${href('home')}" data-go="home" aria-label="${esc(api.s.meta.product || 'Fathom')}">${MARK}<span>${esc(api.s.meta.product || 'Fathom')}</span></a>
     <div class="h-navbar"><nav class="h-nav" aria-label="Main">${tabLinks(tab)}</nav></div>
     <div class="h-top-act"><button type="button" class="h-search-btn" data-keys="switcher" aria-label="Search" title="Search (Ctrl+K)">${icon('search')}</button>${gearLink(tab)}</div>
-  </div></header>${off}<main class="h-main">${subNav(tab, r.name)}${inner}</main>${tabBar(tab)}`;
+  </div></header>${api.s.live.publicDemo ? '<div class="h-demo-marker" role="note">Demo with sample data</div>' : ''}${off}<main class="h-main">${subNav(tab, r.name)}${inner}</main>${tabBar(tab)}`;
 }
 
 function section(title, body, aside = '', cls = '') {

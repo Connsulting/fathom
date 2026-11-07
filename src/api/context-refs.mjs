@@ -27,7 +27,7 @@
 
 import { HttpError } from './http.mjs';
 import { resolveTokens } from '../shared/tokens.mjs';
-import { pnlEntities } from '../pnl/business.mjs';
+import { pnlEntities, businessPnl } from '../pnl/business.mjs';
 
 export const REF_KINDS = Object.freeze(['account', 'transaction', 'rec', 'step', 'goal', 'figure', 'pnl', 'spending',
   'confirm', 'money', 'pack', 'page']);
@@ -65,6 +65,25 @@ function transactionRef(db, id) {
   return row ? { kind: 'transaction', id: String(row.id), use: txnHint(row.id) } : null;
 }
 
+// The categories an entity's P&L shows: its default range and the longest range the P&L allows
+// (36 months) ending at the app clock month, income and expenses.
+function pnlCategories(db, entity, clock) {
+  const out = new Set();
+  const month = String(clock || '').slice(0, 7);
+  const ranges = [{}];
+  const m = /^(\d{4})-(\d{2})$/.exec(month);
+  if (m) {
+    const n = Number(m[1]) * 12 + Number(m[2]) - 1 - 35;
+    ranges.push({ from: `${Math.floor(n / 12)}-${String((n % 12) + 1).padStart(2, '0')}`, to: month });
+  }
+  for (const r of ranges) {
+    let p = null;
+    try { p = businessPnl({ db, entity, clock, ...r }); } catch { p = null; }
+    for (const s of ['income', 'expenses']) for (const c of (p && p[s] && Array.isArray(p[s].categories) ? p[s].categories : [])) out.add(c.category);
+  }
+  return out;
+}
+
 // One ref as { kind, id, use } or null when the store does not know it.
 function resolveOne(db, scenario, { kind, id }) {
   const plain = s => resolveTokens(scenario, String(s ?? ''), false);
@@ -95,9 +114,13 @@ function resolveOne(db, scenario, { kind, id }) {
       const bar = id.indexOf('|');
       const key = bar < 0 ? id : id.slice(0, bar);
       const category = bar < 0 ? '' : id.slice(bar + 1);
+      const clock = scenario.meta && scenario.meta.clock;
       let ent = null;
-      try { ent = pnlEntities({ db, clock: scenario.meta && scenario.meta.clock }).find(e => e.key === key) || null; } catch { ent = null; }
+      try { ent = pnlEntities({ db, clock }).find(e => e.key === key) || null; } catch { ent = null; }
       if (!ent) return null;
+      // A category row must be one of this entity's real P&L categories before its name reaches
+      // the prompt: an invented or misspelled category drops the reference.
+      if (category && !pnlCategories(db, key, clock).has(category)) return null;
       return { kind, id, use: `pnl_by_month with entity ${plain(ent.label)}${category ? `, the ${category} lines` : ''}` };
     }
     case 'spending':

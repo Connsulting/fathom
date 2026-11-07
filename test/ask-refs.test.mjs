@@ -427,15 +427,19 @@ test('POST /api/threads with recId (rec thread): malformed context is 400; a val
   expectRefs(finalOf(await stream(s, '/api/threads', { recId: 'dcfsa', text: 'Synthetic rec question', context: GOOD }), 'stream').message, 'stream');
 }));
 
-test('resolveRefs keeps a P&L entity and an entity category row as /api/pnl keys them, and drops an unknown entity', async t => {
+test('resolveRefs keeps a P&L entity and a real category row as /api/pnl keys them, and drops an invented category or unknown entity', async t => {
   const s = await demoStore(t);
   const scenario = buildScenario(s.db, { packs: s.packs });
-  const { pnlEntities } = await import('../src/pnl/business.mjs');
+  const { pnlEntities, businessPnl } = await import('../src/pnl/business.mjs');
   const ent = pnlEntities({ db: s.db, clock: scenario.meta.clock }).find(e => e.kind === 'entity');
   assert.ok(ent, 'the demo store has a business entity');
+  const real = businessPnl({ db: s.db, entity: ent.key, clock: scenario.meta.clock }).expenses.categories[0].category;
   const out = resolveRefs(s.db, scenario, [
-    { kind: 'pnl', id: ent.key }, { kind: 'pnl', id: `${ent.key}|Payroll` }, { kind: 'pnl', id: 'entity:nosuchbusiness' }, { kind: 'page', id: 'pnl' },
+    { kind: 'pnl', id: ent.key }, { kind: 'pnl', id: `${ent.key}|${real}` }, { kind: 'pnl', id: `${ent.key}|Synthetic invented category` },
+    { kind: 'pnl', id: 'entity:nosuchbusiness' }, { kind: 'page', id: 'pnl' },
   ]);
-  assert.deepEqual(out.map(r => `${r.kind}:${r.id}`), [`pnl:${ent.key}`, `pnl:${ent.key}|Payroll`, 'page:pnl']);
+  assert.deepEqual(out.map(r => `${r.kind}:${r.id}`), [`pnl:${ent.key}`, `pnl:${ent.key}|${real}`, 'page:pnl']);
   for (const r of out.filter(x => x.kind === 'pnl')) assert.match(r.use, /pnl_by_month/);
+  assert.ok(out[1].use.includes(real), 'the hint names the real category');
+  assert.ok(!JSON.stringify(out).includes('Synthetic invented category'), 'an invented category never reaches the prompt');
 });

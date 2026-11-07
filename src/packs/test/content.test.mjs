@@ -6,7 +6,7 @@ import { loadPacks, activePacks } from '../index.mjs';
 
 const root = fileURLToPath(new URL('../../../packs/', import.meta.url));
 const ids = ['s-corp-owner', 'self-employed-partnership', 'w2-benefits', 'virginia-resident',
-  'kids-dependents', 'advanced-retirement', 'charitable-giving'].sort();
+  'kids-dependents', 'advanced-retirement', 'charitable-giving', 'spending-and-obligations'].sort();
 const domains = new Set(['irs.gov', 'www.irs.gov', 'tax.virginia.gov', 'www.tax.virginia.gov',
   'law.lis.virginia.gov', 'budget.lis.virginia.gov', 'virginia529.com', 'www.virginia529.com', 'invest529.com', 'www.invest529.com', 'uscode.house.gov']);
 const frozenKeys = new Set(['household.state', 'household.filingStatus', 'household.dependents',
@@ -24,7 +24,7 @@ function realDate(value) {
     && new Date(value).toISOString().slice(0, 10) === value;
 }
 
-test('seven public packs have substantive entry counts and complete sourced editorial metadata', () => {
+test('eight public packs have substantive entry counts and complete sourced editorial metadata', () => {
   const packs = loadPacks([root]);
   assert.deepEqual(packs.map((p) => p.id).sort(), ids);
   for (const pack of packs) {
@@ -68,6 +68,12 @@ test('public entries cover the frozen required subjects without imposing file st
   for (const pattern of [/bunch/i, /donor.advised|\bDAFs?\b/i, /qualified charitable distribution|\bQCDs?\b/i, /appreciated stock/i]) {
     assert.match(body('charitable-giving'), pattern);
   }
+  for (const pattern of [/debt_service/, /essential_other/, /age 5/, /age 13/, /age 18/, /escrow/i]) {
+    assert.match(body('spending-and-obligations'), pattern);
+  }
+  assert.match(body('kids-dependents'), /care cost by age/i);
+  assert.match(body('w2-benefits'), /premiums through payroll/i);
+  assert.match(body('self-employed-partnership'), /premiums paid by the business/i);
 });
 
 test('frozen synthetic facts activate relevant packs and suggest giving for high AGI without giving', () => {
@@ -145,9 +151,10 @@ test('business income activates retirement planning before a plan has been selec
 
 test('expanded tax coverage retains verified figures, exact limit definitions and primary citations', () => {
   const packs = Object.fromEntries(loadPacks([root]).map((pack) => [pack.id, pack]));
-  for (const id of ['charitable-giving', 'w2-benefits', 'advanced-retirement', 'virginia-resident']) {
+  for (const id of ['charitable-giving', 'advanced-retirement', 'virginia-resident']) {
     assert.equal(packs[id].version, '1.1.0', id);
   }
+  assert.equal(packs['w2-benefits'].version, '1.2.0');
   const entry = (pack, file) => packs[pack].entries.find((item) => item.file === file).body;
   const bunching = entry('charitable-giving', 'bunching.md');
   for (const amount of ['$32,200', '$24,150', '$16,100']) assert.ok(bunching.includes(amount));
