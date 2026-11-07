@@ -61,9 +61,11 @@ const byWindow = (a, b) => (recDays(a) - recDays(b)) || cmpStr(a.title, b.title)
 
 export function goalChip(p) {
   if (!p || p.status === 'no target') return { tone: 'mute', label: 'No target' };
-  if (p.status === 'ahead') return { tone: 'ok', label: p.timeGap || 'Ahead' };
+  // Only the status says On pace; a time gap label never stands in for it.
+  const gap = p.timeGap && p.timeGap !== 'On pace' ? p.timeGap : null;
+  if (p.status === 'ahead') return { tone: 'ok', label: gap || 'Ahead' };
   if (p.status === 'on pace') return { tone: 'ok', label: 'On pace' };
-  if (p.status === 'behind') return { tone: 'warn', label: p.timeGap || 'Behind' };
+  if (p.status === 'behind') return { tone: 'warn', label: gap || 'Behind' };
   if (p.reason === 'stale_data') return { tone: 'bad', label: 'Data stale' };
   return { tone: 'mute', label: 'Pace unknown' };
 }

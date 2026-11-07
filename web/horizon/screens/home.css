@@ -180,8 +180,8 @@
 .d-horizon .h-pc-zero { stroke: var(--mu); stroke-width: 1; }
 .d-horizon .h-pc-t, .d-horizon .h-pc-m { fill: var(--fa); font: 10px var(--mono); }
 .d-horizon .h-pc-m.cur { fill: var(--tx2); }
-.d-horizon .h-pc-end { stroke: var(--mu); stroke-width: 1; stroke-dasharray: 3 3; }
-.d-horizon .h-pc-endl { fill: var(--mu); font: 10px var(--mono); }
+.d-horizon .h-pc-end { stroke: var(--mu); stroke-width: 1; stroke-dasharray: 3 3; pointer-events: none; }
+.d-horizon .h-pc-endl { fill: var(--mu); font: 10px var(--mono); pointer-events: none; }
 .d-horizon rect.h-pbar-m { cursor: pointer; outline: none; border: 0; }
 .d-horizon rect.h-pbar-m.pos { fill: var(--ac); }
 .d-horizon rect.h-pbar-m.neg { fill: var(--warn); }

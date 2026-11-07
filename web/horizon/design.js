@@ -598,7 +598,7 @@ function paceChart(ch, ci) {
   g += `<defs><clipPath id="${cid}-p"><rect x="0" y="0" width="${W}" height="${zy}"/></clipPath><clipPath id="${cid}-n"><rect x="0" y="${zy}" width="${W}" height="${H - zy}"/></clipPath></defs>`;
   yt.forEach((v) => {
     if (v !== 0) g += `<line class="h-pc-grid" x1="${L}" x2="${W - R}" y1="${sy(v)}" y2="${sy(v)}"/>`;
-    g += `<text class="h-pc-t" x="${L - 7}" y="${sy(v) + 3.5}" text-anchor="end">${esc(api.money(v, { k: true, sign: v !== 0 }))}</text>`;
+    g += `<text class="h-pc-t h-sc-t" x="${L - 7}" y="${sy(v) + 3.5}" text-anchor="end">${esc(api.money(v, { k: true, sign: v !== 0 }))}</text>`;
   });
   let pos = '', neg = '';
   ser.forEach((m, i) => {
