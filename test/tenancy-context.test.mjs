@@ -146,7 +146,7 @@ test('concurrent equal-byte uploads in two households both import, into separate
 
 describe('household A sees only its own data on every financial route', T, () => {
   const EXCLUDED = p => p === '/healthz' || p === '/api/identity' || /^\/api\/(auth|admin|operator)\//.test(p);
-  // path template -> { path (A's concrete path), own (A's canary must appear), zip }
+  // path template -> { path (A's concrete path), own (A's canary must appear), zip, status (expected, default 200) }
   const classify = A => ({
     '/api/scenario': { own: true },
     '/api/pace': {},
@@ -155,6 +155,13 @@ describe('household A sees only its own data on every financial route', T, () =>
     '/api/threads/:id': { path: `/api/threads/${A.threadId}`, own: true },
     '/api/accounts/:id': { path: `/api/accounts/${encodeURIComponent(A.accountId)}`, own: true },
     '/api/accounts/:id/transactions': { path: `/api/accounts/${encodeURIComponent(A.accountId)}/transactions`, own: true },
+    '/api/accounts/:id/merge-candidates': { path: `/api/accounts/${encodeURIComponent(A.accountId)}/merge-candidates` },
+    '/api/pnl': {},
+    // These synthetic households hold no business entity, so the drill-down refuses with a fixed
+    // 400 after the household gate; the body must still carry none of B's data.
+    '/api/pnl/rows': { path: '/api/pnl/rows?section=expenses&category=Travel', status: 400 },
+    '/api/spending': {},
+    '/api/spending/rows': { path: '/api/spending/rows?bucket=household&category=Groceries' },
     '/api/goals/suggestions': {},
     '/api/keys': { own: true },
     '/api/mcp': {},
@@ -187,7 +194,7 @@ describe('household A sees only its own data on every financial route', T, () =>
         text = entries.map(e => `${e.name}\n${e.data.toString('latin1')}`).join('\n');
       } else {
         const r = await h.A.client.request({ path });
-        assert.equal(r.status, 200, `${path}: ${r.status} ${r.text.slice(0, 200)}`);
+        assert.equal(r.status, spec.status ?? 200, `${path}: ${r.status} ${r.text.slice(0, 200)}`);
         text = r.text;
       }
       for (const foreign of bIds()) assert.ok(!text.includes(foreign), `${path} leaks B (${foreign === B_CANARY ? 'canary' : 'an id'})`);
