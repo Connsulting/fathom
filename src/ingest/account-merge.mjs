@@ -40,16 +40,27 @@ export function detectAccountPairs(db, { includeAnswered = false } = {}) {
     && pairs.filter(x => x.ownId === p.ownId).length === 1 && pairs.filter(x => x.candidateId === p.candidateId).length === 1 ? 'sure' : 'likely' }));
 }
 
-export function queueAccountPairs(db, { now } = {}) {
+export function queueAccountPairs(db, { now = new Date().toISOString() } = {}) {
   const pairs = detectAccountPairs(db);
-  const exists = db.prepare("SELECT id FROM confirm_items WHERE kind='account_match' AND subject=?");
+  const current = new Set(pairs.map(p => subjectOf(p.candidateId,p.ownId)));
+  for (const item of db.prepare("SELECT id,subject,context FROM confirm_items WHERE kind='account_match' AND status='pending'").all()) {
+    if (parseJson(item.context,{})?.repair && !current.has(item.subject))
+      db.prepare("UPDATE confirm_items SET status='answered',answer='superseded',answered_at=? WHERE id=?").run(now,item.id);
+  }
+  const priorOf = db.prepare("SELECT id,answer FROM confirm_items WHERE kind='account_match' AND subject=?");
   for (const pair of pairs) {
     const subject = subjectOf(pair.candidateId, pair.ownId);
-    if (exists.get(subject)) continue;
+    const prior = priorOf.get(subject);
+    if (prior && prior.answer !== 'superseded') continue;
     const keep = db.prepare('SELECT name FROM accounts WHERE id=?').get(pair.candidateId);
     const own = db.prepare('SELECT name FROM accounts WHERE id=?').get(pair.ownId);
-    ask(db, { kind:'account_match', subject, question:`Same account? ${own.name} from SimpleFIN and ${keep.name} from a file.`,
-      options:OPTIONS, context:{ ...pair, repair:true }, now });
+    const question = `Same account? ${own.name} from SimpleFIN and ${keep.name} from a file.`;
+    const context = { ...pair, repair:true };
+    if (prior) {
+      db.prepare("UPDATE confirm_items SET status='pending',answer=NULL,answered_at=NULL,question=?,context=?,created_at=? WHERE id=?")
+        .run(question,JSON.stringify(context),now,prior.id);
+      db.prepare('DELETE FROM confirm_guesses WHERE item_id=?').run(prior.id);
+    } else ask(db, { kind:'account_match', subject, question, options:OPTIONS, context, now });
   }
   return pairs;
 }

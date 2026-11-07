@@ -203,3 +203,47 @@ test('stale repair answers refuse without changing the store; valid repairs rema
   C.reviseItem(s.db,q.id,'same',{now:NOW});
   assert.equal(s.db.prepare('SELECT count(*) n FROM accounts').get().n,1);
 }));
+
+test('queue retires stale repair signals and reopens the same subject if evidence returns', () => withStore(async s => {
+  const p=await seedDuplicate(s,{sure:true});
+  s.db.prepare('UPDATE accounts SET mask=NULL,name=? WHERE id=?').run('Connected reserve',p.own);
+  s.db.prepare('UPDATE accounts SET mask=NULL,name=? WHERE id=?').run('Imported reserve',p.keep);
+  M.queueAccountPairs(s.db,{now:NOW}); const q=pending(s.db)[0]; assert.ok(q);
+  s.db.prepare('UPDATE balances SET amount=1800 WHERE account_id=? AND date=?').run(p.own,'2032-02-29');
+  M.queueAccountPairs(s.db,{now:NOW});
+  assert.equal(pending(s.db).length,0);
+  assert.equal(C.getItem(s.db,q.id).answer,'superseded');
+  s.db.prepare('UPDATE balances SET amount=1200 WHERE account_id=? AND date=?').run(p.own,'2032-02-29');
+  M.queueAccountPairs(s.db,{now:NOW});
+  assert.equal(pending(s.db)[0].id,q.id);
+  assert.equal(pending(s.db)[0].answer,null);
+  C.answer(s.db,q.id,'different',{now:NOW});
+  M.queueAccountPairs(s.db,{now:NOW});
+  assert.equal(C.getItem(s.db,q.id).answer,'different');
+  assert.equal(C.finalReason(s.db,C.getItem(s.db,q.id)),null);
+}));
+
+test('Keep both remains answerable when a repair becomes stale before the next read', () => withStore(async s => {
+  const p=await seedDuplicate(s,{sure:true});
+  M.queueAccountPairs(s.db,{now:NOW});const q=pending(s.db)[0];
+  s.db.prepare("UPDATE accounts SET kind='card' WHERE id=?").run(p.own);
+  C.answer(s.db,q.id,'different',{now:NOW});
+  assert.equal(C.getItem(s.db,q.id).answer,'different');
+  assert.equal(s.db.prepare('SELECT count(*) n FROM accounts').get().n,2);
+}));
+
+test('HTTP reads remove stale type questions and Chase bank-name variants share existing normalization', () => withStore(async s => {
+  const {serveAppFixture}=await import('../helpers/server.mjs');
+  const p=await seedDuplicate(s,{sure:true});
+  s.db.prepare("UPDATE accounts SET inst='Chase' WHERE id=?").run(p.keep);
+  s.db.prepare("UPDATE accounts SET inst='Chase Bank' WHERE id=?").run(p.own);
+  assert.equal(M.detectAccountPairs(s.db)[0].confidence,'sure');
+  M.queueAccountPairs(s.db,{now:NOW});
+  s.db.prepare("UPDATE accounts SET kind='card' WHERE id=?").run(p.own);
+  const app=await serveAppFixture({db:s.db,config:s.config,authenticated:true});
+  try {
+    const res=await app.request({path:'/api/confirm'});
+    assert.equal(res.json.items.filter(i=>i.context.repair).length,0);
+    assert.equal((await app.getScenario()).live.ingest.items.filter(i=>i.context.repair).length,0);
+  } finally {await app.close();}
+}));
