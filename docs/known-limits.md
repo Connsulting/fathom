@@ -7,7 +7,7 @@ One line each, taken from merged pull request bodies and deduplicated. The numbe
 1. Workbook income and expense tabs can stay distinct after suffix normalization until an alias maps them (#1).
 2. Consumers must keep occurrence and locator source before dedupe, and a workbook reimport must supersede coverage so removed slots do not survive (#1).
 3. Tax year versus payment year is still an assumption taken from sheet labels (#1).
-4. On a real store, `list_packs` `why` can show HTML-escaped characters from a pack def (#5).
+4. On a real store, `knowledge.packs` `why` can show HTML-escaped characters from a pack def (#5).
 5. Pack tools read pack files on every call; there is no cache (#5).
 6. Packs that are no longer loaded stay in `packs_state` (#8).
 
@@ -99,7 +99,7 @@ The header-based owner gate (#11) and its limits are gone; these replace them.
 3. The year-end zip is buffered to a temp file before streaming, bounded by document size (#23).
 4. A template version bump changes the grounding hash and lifts an advisor veto the same way an input change does (#26).
 5. A confirmed advisor verdict stays confirmed when the recommendation's inputs later change; there is no staleness marker (#26).
-6. Owner notes on a review are stored HTML-escaped, so `advisor_status` returns entity-escaped note text (#26).
+6. Owner notes on a review are stored HTML-escaped, so `recommendations.advisor` returns entity-escaped note text (#26).
 7. A store upgraded from before migration 011 shows the old check-in label without a date until the owner sets one (#26).
 8. Packet percentage and statutory notes cite the content row's source as a whole, not a per-value derivation (#26).
 

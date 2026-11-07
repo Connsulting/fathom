@@ -11,12 +11,12 @@ function where(conds) {
   return { clause: used.length ? ' WHERE ' + used.map(c => c[0]).join(' AND ') : '', params: used.map(c => c[1]) };
 }
 
-export const tools = [
+export const operations = [
   {
-    name: 'pnl_by_month',
-    description: 'Business profit and loss by month (YYYY-MM) and category, with a total per month: use it for business income, expenses and profit, not household spending. Optionally one entity and a month range.',
-    inputSchema: obj({ entity: { type: 'string' }, from: { type: 'string', pattern: MONTH }, to: { type: 'string', pattern: MONTH } }),
-    scope: 'read',
+    tool: 'business', name: 'pnl',
+    summary: 'Business profit and loss by month and category.', route: 'Business income, expenses and profit', routes: [],
+    params: obj({ entity: { type: 'string' }, from: { type: 'string', pattern: MONTH }, to: { type: 'string', pattern: MONTH } }).properties,
+    required: [], scope: 'read',
     handler(args, ctx) {
       const names = args.entity === undefined ? null : [...new Set(ctx.db.prepare('SELECT entity, locator FROM pnl_lines').all()
         .filter(l => [l.entity, ledgerDisplayName(l)].some(name => normalizeName(name) === normalizeName(args.entity))).map(l => l.entity))];
@@ -32,5 +32,3 @@ export const tools = [
     },
   },
 ];
-
-export const parity = {};

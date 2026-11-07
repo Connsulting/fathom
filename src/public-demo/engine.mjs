@@ -66,7 +66,7 @@ export function createPublicDemoEngine({ db, config, control, visitorId }) {
       await init();
       if (credentialState === 'failed') throw new ModelCallError('engine credential unavailable');
       return inner.call({ ...request, maxTokens: Math.min(request.maxTokens ?? limits.maxTokens, limits.maxTokens),
-        tools: (request.tools || []).filter(tool => tool.scope === 'read') });
+        tools: (request.tools || []).filter(tool => tool.kind === 'read') });
     },
     async extract() { throw new ModelCallError('File import is disabled in public demo mode'); },
   };
