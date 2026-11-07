@@ -4,6 +4,11 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # pdfjs-dist 6.5 changes how corrupt and oversized streams fail; a future bump must adapt the ingest tests for those streams.
+      - dependency-name: pdfjs-dist
+        versions:
+          - ">= 6.5"
     groups:
       npm:
         patterns:
