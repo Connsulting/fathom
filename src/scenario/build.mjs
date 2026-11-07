@@ -485,8 +485,8 @@ function plainEventTitle(e) {
 // Every goal row (archived included) as {...def, id, origin, archived, kind, owner, priority,
 // status, doneAt, statusLabel?, topic?, accountsLabel?, progress?}. kind is the goal model kind
 // (balance when the def has none), owner whose goal (null when unset), priority null when unset.
-// status is canonical for every goal: archived when archived_at, done when done_at (or a seed def
-// whose display status is 'done'), else open; a seed goal's display text is statusLabel. A legacy
+// status is canonical for every goal: archived when archived_at, done when done_at (or a def whose
+// stored status is 'done', as seed goals carry), else open; a seed goal's display text is statusLabel. A legacy
 // def kind that names a topic reads as `topic`. accountsLabel names a contribution's destination
 // accounts. Owner goals get
 // derived figures in `fig`: goal.<id>.target (the typed target, src 'goal-target', kind 't') and
@@ -510,7 +510,7 @@ export function loadGoals(db, { fig = {}, accounts = [] } = {}) {
     g.priority = PRIORITIES.includes(def.priority) ? def.priority : null;
     g.doneAt = r.done_at ?? null;
     if (origin !== 'owner' && typeof def.status === 'string') g.statusLabel = def.status;
-    g.status = origin !== 'owner' && !r.archived_at && def.status === 'done' ? 'done' : goalStatusOf(r);
+    g.status = !r.archived_at && def.status === 'done' ? 'done' : goalStatusOf(r);
     if (g.kind === 'contribution' && Array.isArray(def.accounts) && def.accounts.length) {
       const dest = def.accounts.map(id => accounts.find(a => a.id === id)).filter(Boolean);
       if (dest.length) g.accountsLabel = dest.map(a => accountLabel(a)).join(', ');
