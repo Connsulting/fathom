@@ -65,7 +65,7 @@ test('merchant count excludes individual corrections and repeat rules change no 
 
 test('Confirm always answers retain long merchants while the tool enforces its input limit',async t=>{
  const s=await setup(t),description='Long synthetic merchant '.repeat(12),merchant=normalizeMerchant(description);
- const id=Number((await s.db.prepare("INSERT INTO transactions (account_id,date,amount,description) VALUES ('card','2032-02-02',-175,?)").run(description)).lastInsertRowid);
+ const id=Number((await s.db.prepare("INSERT INTO transactions (account_id,date,amount,description) VALUES ('card','2032-02-02',-175,?) RETURNING id").get(description)).id);
  const q=await ask(s.db,{kind:'transaction_category',subject:String(id),question:'Category?',options:[{id:'always:Groceries',label:'Groceries'}],context:{transactionId:id},now:NOW});
  await answerItem(s.db,q.id,'always:Groceries',{now:NOW});
  assert.equal((await s.db.prepare('SELECT category FROM category_merchant_rules WHERE merchant=?').get(merchant)).category,'Groceries');

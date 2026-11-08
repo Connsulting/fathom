@@ -308,7 +308,7 @@ async function recordReject(db, reason) {
   console.info(`fathom: model title rejected (${reason})`);
 }
 
-const engineOn = engine => !!(engine && typeof engine.isOn === 'function' && engine.isOn());
+const engineOn = async engine => !!(engine && typeof engine.isOn === 'function' && await engine.isOn());
 
 export async function nameThread({ db, engine = null, key } = {}) {
   const row = isThreadKey(key) ? await db.prepare('SELECT title, title_source FROM conversations WHERE key = ?').get(key) : null;
@@ -319,7 +319,7 @@ export async function nameThread({ db, engine = null, key } = {}) {
   const scope = await tokenScope(db);
   const fallback = fallbackTitle(scope, messages.find(m => m.role === 'me').text);
   if (row.title_source != null) {
-    if (row.title_source !== 'auto' || row.title == null || row.title !== fallback || !engineOn(engine)
+    if (row.title_source !== 'auto' || row.title == null || row.title !== fallback || !await engineOn(engine)
       || await getSetting(db, retrySetting(key), false)) return null;
     await setSetting(db, retrySetting(key), true);
     const got = await askTitle(db, engine, scope, messages, fallback);
@@ -329,7 +329,7 @@ export async function nameThread({ db, engine = null, key } = {}) {
     return r.changes ? { title: got.title, titleSource: 'auto', from: 'model' } : null;
   }
   let title = null;
-  if (engineOn(engine)) {
+  if (await engineOn(engine)) {
     const got = await askTitle(db, engine, scope, messages, fallback);
     if (got.title) title = got.title;
   }

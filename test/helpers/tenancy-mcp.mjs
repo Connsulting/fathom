@@ -35,7 +35,7 @@ export const expectedTransactionFixture = household => ({ operation: 'expected_t
   evidence: `${household.canary} pays on 2032-06-19` });
 
 export async function accountCategoryFixtures(household) {
-  const transactionId = Number((await household.db.prepare("INSERT INTO transactions (account_id,date,amount,description) VALUES ('colliding-account','2026-11-01',-25,'Synthetic store')").run()).lastInsertRowid);
+  const transactionId = Number((await household.db.prepare("INSERT INTO transactions (account_id,date,amount,description) VALUES ('colliding-account','2026-11-01',-25,'Synthetic store') RETURNING id").get()).id);
   return {
     categorize: { operation: 'transaction', transactionId, category: 'Groceries' },
     update_account: { operation: 'rename', id: 'colliding-account', displayName: household.canary + ' reserve' },

@@ -115,7 +115,7 @@ async function storeBatch(db, items, accepted, { model, ts }) {
 // costUsd, model}], costUsd, stopped?: code}. costUsd is the run spend: the larger of the confirm
 // ledger rows added during the run (failed calls included) and the completed batch costs. `fake` is one per-call fake script per batch (tests).
 export async function guessPending(db, engine, { now, batchSize = 20, maxBatches = Infinity, fake } = {}) {
-  if (!engine || !engine.isOn()) return { skipped: 'engine_off' };
+  if (!engine || !await engine.isOn()) return { skipped: 'engine_off' };
   if (fake === undefined && engine.mode !== 'live') return { skipped: 'not_live' };
   const size = Number.isInteger(batchSize) && batchSize > 0 ? batchSize : 20;
   const batches = [];

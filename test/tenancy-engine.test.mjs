@@ -120,7 +120,7 @@ test('a held household refuses while the other keeps answering and settling on u
 
 test('a principal revoked between rounds refuses the next round with authorization_revoked', T, async () => withLive({}, async ({ two, emulator, A }) => {
   const { runWithPrincipal, withoutPrincipal } = await src('src/platform/model-budget.mjs');
-  const engine = two.ctx(A).engine;
+  const engine = (await two.ctx(A)).engine;
   let authorized = true;
   emulator.script([{ toolUse: { input: {} } }]);
   await assert.rejects(runWithPrincipal({ check: () => authorized }, () => engine.call({ purpose: 'chat', messages: QUESTION, maxTokens: 64,
@@ -178,7 +178,7 @@ test('over HTTP, a session deleted or a membership removed mid-Ask stops the nex
 }));
 
 test('a bumped generation or a suspended household refuses before dispatch; restored, it answers', T, async () => withLive({}, async ({ two, emulator, A }) => {
-  const ctx = two.ctx(A);
+  const ctx = (await two.ctx(A));
   const bump = async d => await two.platform.prepare('UPDATE households SET generation = generation + ? WHERE id = ?').run(d, A);
   await bump(1);
   try {

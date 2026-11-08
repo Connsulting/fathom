@@ -34,8 +34,8 @@ async function account(db, id, name) {
   return await question(db, 'account_kind', id, KIND_OPTIONS);
 }
 async function transaction(db, description, category = null) {
-  const id = Number((await db.prepare("INSERT INTO transactions (account_id,date,amount,description,category,parser) VALUES ('cash','2026-10-15',-150,?,?, 'simplefin')")
-    .run(description, category)).lastInsertRowid);
+  const id = Number((await db.prepare("INSERT INTO transactions (account_id,date,amount,description,category,parser) VALUES ('cash','2026-10-15',-150,?,?, 'simplefin') RETURNING id")
+    .get(description, category)).id);
   await db.prepare('INSERT INTO transaction_category_guesses VALUES (?,?,?,?)').run(id, JSON.stringify({ category: 'Shopping', confidence: 0.85 }), JEV_MODEL, NOW);
   const item = await question(db, 'transaction_category', String(id), categoryOptions(await loadCategoryInputs(db)), { transactionId: id, merchant: description });
   return { id, item };

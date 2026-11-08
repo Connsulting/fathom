@@ -100,7 +100,7 @@ export async function createRuntimeEngine({ db, config = {}, now, allowed = () =
   }
   // Mirror this household's final platform rounds of the funding month into spend_ledger.
   async function syncMirror() {
-    for (const row of platformLedger.rounds(month())) {
+    for (const row of await platformLedger.rounds(month())) {
       await ledger.record({ ts: row.reserved_at, purpose: row.purpose, costUsd: committedOf(row), model: row.model,
         tokens: { input_tokens: row.input_tokens, output_tokens: row.output_tokens }, roundId: row.id });
     }
@@ -187,7 +187,7 @@ export async function createRuntimeEngine({ db, config = {}, now, allowed = () =
       const base = { mode, on: mode !== 'off' && await settingOn(db), credentialState: state.credentialState, funded: mode !== 'live' || await funded() === true };
       if (platformLedger) {
         await syncMirror();
-        const s = platformLedger.status(month());
+        const s = await platformLedger.status(month());
         return { ...base, capUsd: Math.min(await capOf(db), s.allocationUsd), spentUsd: s.committedUsd };
       }
       const at = new Date(now ? now() : Date.now());

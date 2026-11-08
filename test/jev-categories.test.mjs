@@ -22,8 +22,8 @@ async function store(t) {
   return s.db;
 }
 async function transaction(db,description='Synthetic Shop',patch={}) {
-  return Number((await db.prepare('INSERT INTO transactions (account_id,date,amount,description,category,parser) VALUES (?,?,?,?,?,?)')
-    .run(patch.account_id??'a',patch.date??'2032-10-03',patch.amount??-20,description,patch.category??null,patch.parser??'simplefin')).lastInsertRowid);
+  return Number((await db.prepare('INSERT INTO transactions (account_id,date,amount,description,category,parser) VALUES (?,?,?,?,?,?) RETURNING id')
+    .get(patch.account_id??'a',patch.date??'2032-10-03',patch.amount??-20,description,patch.category??null,patch.parser??'simplefin')).id);
 }
 const provider=(confidence)=>({isOn:()=>true,stats:()=>({costUsd:0}),choose:async qs=>qs.map(()=>({choice:'Groceries',confidence,probabilities:{Groceries:.9,Business:.1}}))});
 const resolutions=async db=>resolveCategories(await loadCategoryInputs(db));

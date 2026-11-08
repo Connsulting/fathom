@@ -26,8 +26,8 @@ async function store(t) {
   return s.db;
 }
 async function insert(db,t) {
-  return Number((await db.prepare('INSERT INTO transactions (account_id,date,description,amount,category,parser) VALUES (?,?,?,?,?,?)')
-    .run(t.account_id,t.date,t.description,t.amount,t.category??null,t.parser??'simplefin')).lastInsertRowid);
+  return Number((await db.prepare('INSERT INTO transactions (account_id,date,description,amount,category,parser) VALUES (?,?,?,?,?,?) RETURNING id')
+    .get(t.account_id,t.date,t.description,t.amount,t.category??null,t.parser??'simplefin')).id);
 }
 const off={isOn:()=>false,stats:()=>({costUsd:0})};
 

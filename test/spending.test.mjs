@@ -48,9 +48,9 @@ async function account(db, id, kind, name, extra = {}) {
 
 let dedupe = 0;
 async function txn(db, account_id, date, amount, description, category = null) {
-  const q = await db.prepare('INSERT INTO transactions (account_id, date, amount, description, category, parser, dedupe_key) VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .run(account_id, date, amount, description, category, 'aggregator', `spend-test:${++dedupe}`);
-  return Number(q.lastInsertRowid);
+  const q = await db.prepare('INSERT INTO transactions (account_id, date, amount, description, category, parser, dedupe_key) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id')
+    .get(account_id, date, amount, description, category, 'aggregator', `spend-test:${++dedupe}`);
+  return Number(q.id);
 }
 
 async function household(db) {

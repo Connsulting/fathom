@@ -280,7 +280,7 @@ export function createHandler({ platform, config, runtimes, auth, keys, backups 
     let cancelStream = null;
     let streamEntry = null;
     try {
-      auth.sweep();
+      await auth.sweep();
       if (rawPath === '/mcp') {
         if (!mcpHandler) throw demoOff();
         await mcpHandler(req, res);

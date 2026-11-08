@@ -22,8 +22,8 @@ async function fixture(t) {
     const result = await callTool(spec.source.tool, spec.source.args, { db: s.db, clock });
     const block = { id: 'b1', op, spec, calls: [{ tool: spec.source.tool, args: spec.source.args }],
       snapshot: buildSnapshot(op, spec, [{ name: spec.source.tool, args: spec.source.args, result }]), asOf: clock, builtAt: `${clock}T00:00:00Z` };
-    const id = (await s.db.prepare("INSERT INTO messages (conversation_key, role, text, ts, provenance) VALUES (?, 'fathom', 'Stored answer', ?, ?)")
-      .run(thread.key, `${clock}T00:00:00Z`, JSON.stringify({ blocks: [block] }))).lastInsertRowid;
+    const id = (await s.db.prepare("INSERT INTO messages (conversation_key, role, text, ts, provenance) VALUES (?, 'fathom', 'Stored answer', ?, ?) RETURNING id")
+      .get(thread.key, `${clock}T00:00:00Z`, JSON.stringify({ blocks: [block] }))).id;
     return { block, id: `m${id}` };
   }
   const dump = async () => JSON.stringify(await mapSeries((await s.db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all()), async ({ name }) => [name, await s.db.prepare(`SELECT * FROM "${name}"`).all()]));

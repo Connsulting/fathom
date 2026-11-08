@@ -339,7 +339,7 @@ async function main() {
     const vault = await household.vault();
     await seedDemo(household.db);
     await clearStoredFiles(vault);
-    household.packs.refresh();
+    await household.packs.refresh();
     console.log('seed:demo: demo household rebuilt');
     return 0;
   } catch (e) {

@@ -90,7 +90,7 @@ async function interpretBound({ ctx, file, fake, correction = null, retry = fals
   const { db, engine, generation } = household, limits = loweredLimits(overrides);
   const now = () => new Date(typeof ctx.now === 'function' ? ctx.now() : ctx.now ?? Date.now());
   const started = Date.now();
-  const live = async () => household.generation === generation && await household.isCurrent() === true && await household.outbound.enabled('engine') === true && await household.funded() === true && engine.isOn() === true && engine.credentialStateFor?.('extract') !== 'failed';
+  const live = async () => household.generation === generation && await household.isCurrent() === true && await household.outbound.enabled('engine') === true && await household.funded() === true && await engine.isOn() === true && engine.credentialStateFor?.('extract') !== 'failed';
   if (!await live()) return code('waiting_for_engine', 'engine_unavailable');
   const source = await indexSource(file, { accounts: await db.prepare('SELECT * FROM accounts').all(), householdNames: await householdNames(db), entityNames: (await db.prepare('SELECT alias, entity FROM entity_aliases').all()).flatMap(r => [r.alias, r.entity]) });
   if (source.status !== 'indexed') return code('needs_source_text', 'no_safe_source_text');
@@ -103,7 +103,7 @@ async function interpretBound({ ctx, file, fake, correction = null, retry = fals
   if (remainingOutput <= 0) return code('budget_exhausted', 'output_limit');
   const messages = [{ role: 'user', content: JSON.stringify({ ...source.envelope, ...(correction ? { correction: scrubDescription(correction, { accounts: await db.prepare('SELECT * FROM accounts').all(), householdNames: await householdNames(db) }) } : {}) }) }];
   const estimate = estimateCompletion({ purpose: 'extract', maxTokens: remainingOutput, system: SYSTEM, messages, tools: [], schema: INTERPRETATION_SCHEMA }, engine.modelConfig);
-  const status = engine.status();
+  const status = await engine.status();
   const allowance = Math.min(limits.costUsd - used.costUsd, status.capUsd - status.spentUsd);
   if (estimate.costUsd > allowance || used.inputTokens + estimate.inputTokens > limits.inputTokens || Date.now() - started >= limits.timeoutMs) return code('budget_exhausted', 'request_does_not_fit');
   const correlationId = `import:${file.fileId}:${randomUUID()}`;

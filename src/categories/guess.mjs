@@ -71,7 +71,7 @@ export async function guessCategories(db, jev, { now, batchSize = 10, maxBatches
   try {
     applied=await autoDecideCategories(db,{now:at});
     guessed=applied;
-    if(!jev?.isOn() || (await getSetting(db,'engine',{on:true}))?.on===false) {
+    if(!await jev?.isOn() || (await getSetting(db,'engine',{on:true}))?.on===false) {
       await queueCategoryChecks(db,{now,policy});
       return {guessed,applied,costUsd:stats(),...(!guessed?{skipped:'provider_off'}:{})};
     }

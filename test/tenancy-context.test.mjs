@@ -61,7 +61,7 @@ async function ok(promise, label) {
 // route creates directly: a rec to send to review and a pending Confirm question).
 async function seed(side, canary, number) {
   const hh = h[side];
-  const ctx = h.ctx(hh.id);
+  const ctx = await h.ctx(hh.id);
   const s = { canary };
   const up = await uploadFiles(h.baseUrl, hh.admin, [{ name: `${canary}-checking.csv`, bytes: Buffer.from(canaryCsv(canary, number)) }]);
   assert.equal(up.status, 200, up.text.slice(0, 300));
@@ -71,7 +71,7 @@ async function seed(side, canary, number) {
   s.threadId = (await ok(hh.client.postJson('/api/threads', { text: `How is the ${canary} plan going?` }), `${side} thread`)).thread.id;
   s.goalId = (await ok(hh.client.postJson('/api/goals', { title: `${canary} cushion`, horizon: '1-3y' }), `${side} goal`)).goal.id;
   writePlansPack(h.rootOf(hh.id), canary);
-  ctx.packs.refresh();
+  await ctx.packs.refresh();
   const key = await ok(hh.client.postJson('/api/keys', { name: `${canary} agent`, scopes: ['read'] }), `${side} key`);
   s.key = key.key;
   s.keyId = key.record.id;
@@ -82,8 +82,8 @@ async function seed(side, canary, number) {
   s.packetId = (await ok(hh.client.postJson('/api/advisor/packets', {}), `${side} packet`)).packetId;
   const factKey = `synthetic.${canary.toLowerCase()}`;
   s.confirmId = Number((await ctx.db.prepare(`INSERT INTO confirm_items (kind, subject, question, options, context, status, created_at)
-    VALUES ('fact_check', ?, ?, ?, ?, 'pending', ?)`).run(factKey, `Is the ${canary} fact right?`, OPTIONS,
-    JSON.stringify({ key: factKey, value: `${canary} value` }), NOW)).lastInsertRowid);
+    VALUES ('fact_check', ?, ?, ?, ?, 'pending', ?) RETURNING id`).get(factKey, `Is the ${canary} fact right?`, OPTIONS,
+    JSON.stringify({ key: factKey, value: `${canary} value` }), NOW)).id);
   s.accountId = (await ctx.db.prepare('SELECT id FROM accounts WHERE name LIKE ?').get(`%${canary}%`)).id;
   await ok(hh.client.postJson('/api/email/test', {}), `${side} test email`);
   seeds[side] = s;
@@ -218,7 +218,7 @@ describe('household A sees only its own data on every financial route', T, () =>
 
   test('a foreign-only id behaves like a nonexistent one and leaves B unchanged', async () => {
     const { logicalDigest } = await src('src/platform/digest.mjs');
-    const bDb = h.ctx(h.B.id).db;
+    const bDb = (await h.ctx(h.B.id)).db;
     const before = await logicalDigest(bDb);
     const B = seeds.B;
     const pairs = [
@@ -253,8 +253,8 @@ test('a scripted tool round reads the private pack entry of its own household on
   const { tools } = await src('src/tools/index.mjs');
   const spend = async db => (await db.prepare('SELECT count(*) AS n FROM spend_ledger').get()).n;
   for (const [hh, own, other] of [[h.A, A_CANARY, B_CANARY], [h.B, B_CANARY, A_CANARY]]) {
-    const ctx = h.ctx(hh.id);
-    const otherCtx = h.ctx(hh === h.A ? h.B.id : h.A.id);
+    const ctx = await h.ctx(hh.id);
+    const otherCtx = await h.ctx(hh === h.A ? h.B.id : h.A.id);
     const [mine, theirs] = [await spend(ctx.db), await spend(otherCtx.db)];
     const res = await ctx.engine.call({
       purpose: 'chat', messages: [{ role: 'user', content: 'Synthetic question' }], tools: tools.filter(t => t.kind === 'read'),

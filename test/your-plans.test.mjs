@@ -154,9 +154,9 @@ test('extra file ids, a text-only document row, unknown ids and escaping paths a
   // A real file just outside the household root, which the escaping stored path names.
   writeFileSync(join(dirname(household.root), 'outside.md'), '# Outside entry\n\nSYNTHETIC-OUTSIDE-TEXT must never be read.\n');
   await addPlanFile(db, household, { id: 'file-escaping', name: 'escaping.md', storedPath: '../outside.md' });
-  const doc = await db.prepare("INSERT INTO documents (doc_type, tax_year, fields, file_id, parser, locator) VALUES ('benefits', 2026, ?, NULL, 'synthetic', 'note')")
-    .run(JSON.stringify({ text: '# Wellness stipend\n\nThe synthetic benefits note describes a wellness stipend.\n' }));
-  const docName = `document-${Number(doc.lastInsertRowid)}`;
+  const doc = await db.prepare("INSERT INTO documents (doc_type, tax_year, fields, file_id, parser, locator) VALUES ('benefits', 2026, ?, NULL, 'synthetic', 'note') RETURNING id")
+    .get(JSON.stringify({ text: '# Wellness stipend\n\nThe synthetic benefits note describes a wellness stipend.\n' }));
+  const docName = `document-${Number(doc.id)}`;
 
   const result = await buildYourPlans({ db, engine: await engineFor(db, household), household, clock: CLOCK,
     fileIds: ['file-synthetic-notes', 'no-such-file'] });

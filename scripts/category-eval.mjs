@@ -53,7 +53,7 @@ export async function evaluateCategories(db,jev,{sampleSize=1000}={}) {
     }
   }
   let stopped;
-  if(jev?.isOn?.()!==false) for(let i=0;i<pending.length;i+=10) {
+  if(await jev?.isOn?.()!==false) for(let i=0;i<pending.length;i+=10) {
     const batch=pending.slice(i,i+10);
     try {
       const answers=await jev.choose(batch.map(b=>b.question));
@@ -98,7 +98,7 @@ export async function main(argv=process.argv.slice(2)) {
     const engine=await createRuntimeEngine({db:accountingDb,platform:accountingPlatform,householdId,generation:household.generation,config,
       allowed:async ()=>await evalAdmission(accountingPlatform,householdId)==null,funded:async ()=>await instanceFunded(accountingPlatform)});
     const jev=await createJev({maxCostUsd,admit,complete:engine.complete});
-    if(!jev.isOn()) throw new Error();
+    if(!await jev.isOn()) throw new Error();
     const result=await evaluateCategories(store.db,jev,{sampleSize});
     console.log(JSON.stringify(result)); return result.stopped?1:0;
   } catch {console.error('category_eval_failed');return 1;}

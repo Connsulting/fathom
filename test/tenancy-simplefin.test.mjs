@@ -48,7 +48,7 @@ test('HTTP connect, sync, matching, watermark, dedupe and disconnect isolate col
       assert.equal(connected.json.connected, true);
       assert.equal(connected.json.run.status, 'ok', connected.text);
     }
-    const a = fx.ctx(fx.A.id), b = fx.ctx(fx.B.id);
+    const a = (await fx.ctx(fx.A.id)), b = (await fx.ctx(fx.B.id));
     const conn = async hh => ({ ...await hh.db.prepare('SELECT * FROM simplefin_connection').get() });
     const transactions = async hh => (await hh.db.prepare('SELECT amount, description FROM transactions').all()).map(r => ({ ...r }));
     assert.notEqual((await conn(a)).access_blob, (await conn(b)).access_blob);

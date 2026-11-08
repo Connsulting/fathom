@@ -36,7 +36,7 @@ export async function seedHousehold(f, hh) {
     .run(JSON.stringify({ id: 'colliding-rec', title: hh.canary, summary: hh.canary, domain: 'data' }), now);
   await hh.db.prepare("INSERT INTO recs(id,def,status,updated_at) VALUES (?,?,'proposed',?)")
     .run(hh.canary + '-only', JSON.stringify({ title: hh.canary }), now);
-  writePlansPack(hh.ctx.root, hh.canary); hh.ctx.packs.refresh();
+  writePlansPack(hh.ctx.root, hh.canary); await hh.ctx.packs.refresh();
   hh.key = ok(await hh.admin.client.post('/api/keys', { name: hh.canary, scopes: SCOPES }));
   hh.thread = ok(await hh.admin.client.post('/api/threads', { text: hh.canary + ' plan' })).thread;
   hh.packet = ok(await hh.admin.client.post('/api/advisor/packets', {})).packetId;
@@ -61,13 +61,13 @@ export async function financialCases(f, hh) {
   const result = await callTool('recommendations', args, { db, clock: '2026-11-05' });
   const spec = { source: { tool: 'recommendations', args, path: 'deferral.options' }, fields: ['figures.amount'] };
   const snapshot = buildSnapshot('compare', spec, [{ name: 'recommendations', args, result }]);
-  const msg = (await db.prepare("INSERT INTO messages(conversation_key,role,text,ts,provenance) VALUES (?,'fathom',?,?,?)")
-    .run(thread.key, canary, now, JSON.stringify({ blocks: [{ id: 'b1', op: 'compare', spec, snapshot }] }))).lastInsertRowid;
+  const msg = (await db.prepare("INSERT INTO messages(conversation_key,role,text,ts,provenance) VALUES (?,'fathom',?,?,?) RETURNING id")
+    .get(thread.key, canary, now, JSON.stringify({ blocks: [{ id: 'b1', op: 'compare', spec, snapshot }] }))).id;
   const proposalThread = await createThread(db, now);
-  const proposalMsg = (await db.prepare("INSERT INTO messages(conversation_key,role,text,ts,provenance) VALUES (?,'fathom',?,?,?)")
-    .run(proposalThread.key, canary, now, JSON.stringify({ pendingAction: { tool: 'act_on_recommendation', operation: 'status', args: { id: 'colliding-rec', status: 'done' } } }))).lastInsertRowid;
-  const confirm = Number((await db.prepare("INSERT INTO confirm_items(kind,subject,question,options,context,status,created_at) VALUES ('fact_check',?,?,?,?,'pending',?)")
-    .run('synthetic.' + canary, canary, JSON.stringify([{ id: 'yes', label: 'Yes' }, { id: 'no', label: 'No' }]), JSON.stringify({ key: 'synthetic.' + canary, value: canary }), now)).lastInsertRowid);
+  const proposalMsg = (await db.prepare("INSERT INTO messages(conversation_key,role,text,ts,provenance) VALUES (?,'fathom',?,?,?) RETURNING id")
+    .get(proposalThread.key, canary, now, JSON.stringify({ pendingAction: { tool: 'act_on_recommendation', operation: 'status', args: { id: 'colliding-rec', status: 'done' } } }))).id;
+  const confirm = Number((await db.prepare("INSERT INTO confirm_items(kind,subject,question,options,context,status,created_at) VALUES ('fact_check',?,?,?,?,'pending',?) RETURNING id")
+    .get('synthetic.' + canary, canary, JSON.stringify([{ id: 'yes', label: 'Yes' }, { id: 'no', label: 'No' }]), JSON.stringify({ key: 'synthetic.' + canary, value: canary }), now)).id);
   const review = ok(await hh.admin.client.post('/api/advisor/reviews', { recId: 'colliding-rec' })).reviewId;
   const entity = (await db.prepare('SELECT entity FROM pnl_lines LIMIT 1').get())?.entity;
   const whatif = (await db.prepare('SELECT id FROM packs_state WHERE json_extract(def,\'$.whatIf\') IS NOT NULL LIMIT 1').get())?.id;

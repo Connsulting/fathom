@@ -27,8 +27,8 @@ async function account(db, id, kind) {
   await db.prepare('INSERT INTO accounts (id,kind,name) VALUES (?,?,?)').run(id, kind, 'Synthetic ' + id);
 }
 async function row(db, accountId, description, { guess = 'Investment', date = '2026-10-15', amount = -127 } = {}) {
-  const id = Number((await db.prepare('INSERT INTO transactions (account_id,date,description,amount,parser) VALUES (?,?,?,?,?)')
-    .run(accountId, date, description, amount, 'simplefin')).lastInsertRowid);
+  const id = Number((await db.prepare('INSERT INTO transactions (account_id,date,description,amount,parser) VALUES (?,?,?,?,?) RETURNING id')
+    .get(accountId, date, description, amount, 'simplefin')).id);
   if (guess) await db.prepare('INSERT INTO transaction_category_guesses VALUES (?,?,?,?)')
     .run(id, JSON.stringify({ category: guess, confidence: .85 }), 'jev-1.14.0', clock);
   const item = await ask(db, { kind: 'transaction_category', subject: String(id), question: 'Check this transaction category',

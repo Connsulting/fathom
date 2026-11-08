@@ -193,7 +193,7 @@ export async function resumeImports(db, opts = {}) {
 }
 
 export async function retryIncompletePaystubs(db, { household, engine, now, taxYear }) {
-  if (!household?.vault || household.db !== db || !engine?.isOn?.()) return;
+  if (!household?.vault || household.db !== db || !await engine?.isOn?.()) return;
   const docs = await db.prepare("SELECT d.*, f.name, f.mime, f.stored_path FROM documents d JOIN files f ON f.id = d.file_id WHERE d.doc_type = 'paystub' AND f.removed_at IS NULL").all();
   for (const doc of docs) {
     const fields = parseJson(doc.fields, {}), locator = parseJson(doc.locator, {});

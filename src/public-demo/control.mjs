@@ -102,7 +102,7 @@ export async function createDemoControl(config, { now = Date.now } = {}) {
     },
     async cleanup(remove = () => true) {
       for (const row of await db.prepare('SELECT id FROM sandboxes WHERE expires <= ?').all(now())) {
-        if (remove(row.id) !== false) await db.prepare('DELETE FROM sandboxes WHERE id = ?').run(row.id);
+        if (await remove(row.id) !== false) await db.prepare('DELETE FROM sandboxes WHERE id = ?').run(row.id);
       }
       await db.prepare('DELETE FROM rates WHERE minute < ?').run(Math.floor(now() / 60000));
       await db.prepare('DELETE FROM usage WHERE day < ?').run(day());

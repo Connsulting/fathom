@@ -22,9 +22,9 @@ export async function spendingStore(t) {
   const tx = async (accountId, date, amount, category = null, description = `Synthetic merchant ${++n}`) =>
     (await db
       .prepare(
-        'INSERT INTO transactions(account_id,date,amount,category,description,parser,dedupe_key) VALUES (?,?,?,?,?,?,?)',
+        'INSERT INTO transactions(account_id,date,amount,category,description,parser,dedupe_key) VALUES (?,?,?,?,?,?,?) RETURNING id',
       )
-      .run(accountId, date, amount, category, description, 'aggregator', `synthetic-${++n}`)).lastInsertRowid;
+      .get(accountId, date, amount, category, description, 'aggregator', `synthetic-${++n}`)).id;
   await account('checking');
   await account('card', 'card');
   await account('silent', 'card');

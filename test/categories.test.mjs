@@ -35,9 +35,9 @@ async function account(db, id = 'checking', kind = 'checking') {
 }
 async function txn(db, patch = {}) {
   const r = row(0, patch);
-  const q = await db.prepare('INSERT INTO transactions (account_id,date,amount,description,category,parser,dedupe_key,external_id) VALUES (?,?,?,?,?,?,?,?)')
-    .run(r.account_id, r.date, r.amount, r.description, r.category ?? null, r.parser ?? 'simplefin', r.dedupe_key ?? null, r.external_id ?? null);
-  return Number(q.lastInsertRowid);
+  const q = await db.prepare('INSERT INTO transactions (account_id,date,amount,description,category,parser,dedupe_key,external_id) VALUES (?,?,?,?,?,?,?,?) RETURNING id')
+    .get(r.account_id, r.date, r.amount, r.description, r.category ?? null, r.parser ?? 'simplefin', r.dedupe_key ?? null, r.external_id ?? null);
+  return Number(q.id);
 }
 async function history(db) {
   for (let m = 1; m <= 8; m++) for (const amount of [-100, 3000]) await txn(db, { date: `2032-${String(m).padStart(2, '0')}-15`, amount, description: amount < 0 ? 'Household item' : 'Earned deposit', category: amount < 0 ? 'Groceries' : 'Income', parser: 'aggregator' });

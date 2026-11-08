@@ -45,9 +45,9 @@ before(async () => {
   raw = createKeyService({ platform: t.platform, secret: () => SECRET, creatorActive, now: () => clock });
   // The tests below act inside the instance's household unless they say otherwise.
   svc = {
-    create: (opts = {}) => raw.create({ householdId: hh, ...opts }),
-    list: (opts = {}) => raw.list({ householdId: hh, ...opts }),
-    revoke: (id, opts = {}) => raw.revoke(id, { householdId: hh, ...opts }),
+    create: async (opts = {}) => await raw.create({ householdId: hh, ...opts }),
+    list: async (opts = {}) => await raw.list({ householdId: hh, ...opts }),
+    revoke: async (id, opts = {}) => await raw.revoke(id, { householdId: hh, ...opts }),
     verify: async k => await raw.verify(k),
     touch: id => raw.touch(id),
   };
@@ -65,9 +65,9 @@ describe('constants and scopes', () => {
   });
 
   test('keys accept and retain every new write scope without widening older keys', async () => {
-    const old = svc.create({ name: 'Existing', scopes: ['write:recs'] });
+    const old = await svc.create({ name: 'Existing', scopes: ['write:recs'] });
     for (const scope of ['write:accounts', 'write:categories', 'write:confirm', 'write:imports', 'write:jobs', 'write:decisions']) {
-      const created = svc.create({ name: 'Scoped', scopes: [scope] });
+      const created = await svc.create({ name: 'Scoped', scopes: [scope] });
       assert.deepEqual(created.record.scopes, ['read', scope]);
       assert.deepEqual((await svc.verify(created.key)).scopes, ['read', scope]);
     }
@@ -179,7 +179,7 @@ describe('hashing', () => {
 
 describe('key service', () => {
   test('create issues a prefixed 43-char base64url key, shown once, and stores only its hash', async () => {
-    const { key, record } = svc.create({ name: 'Laptop agent' });
+    const { key, record } = await svc.create({ name: 'Laptop agent' });
     assert.match(key, KEY_RE);
     assert.equal(key.length, 50);
     assert.match(record.id, /^key_[0-9a-f]+$/);
@@ -199,11 +199,11 @@ describe('key service', () => {
     tick();
   });
 
-  test('keys are unique across many creations', () => {
+  test('keys are unique across many creations', async () => {
     const seen = new Set();
     const ids = new Set();
     for (let i = 0; i < 25; i++) {
-      const { key, record } = svc.create({ name: `Bulk ${i}` });
+      const { key, record } = await svc.create({ name: `Bulk ${i}` });
       assert.match(key, KEY_RE);
       seen.add(key);
       ids.add(record.id);
@@ -214,27 +214,27 @@ describe('key service', () => {
   });
 
   test('create normalizes scopes and refuses unknown ones', async () => {
-    const w = svc.create({ name: 'Writer', scopes: ['write:recs'] });
+    const w = await svc.create({ name: 'Writer', scopes: ['write:recs'] });
     assert.deepEqual(w.record.scopes, ['read', 'write:recs']);
     const before = (await rows()).length;
-    assert.throws(() => svc.create({ name: 'Bad scope', scopes: ['admin'] }), isCode('bad_input'));
+    await assert.rejects(async () => await svc.create({ name: 'Bad scope', scopes: ['admin'] }), isCode('bad_input'));
     assert.equal((await rows()).length, before, 'nothing stored on bad input');
     tick();
   });
 
   test('name is trimmed, 1 to 80 chars, with no control characters', async () => {
-    assert.equal(svc.create({ name: '  Padded name  ' }).record.name, 'Padded name');
-    assert.equal(svc.create({ name: 'n'.repeat(80) }).record.name, 'n'.repeat(80));
+    assert.equal((await svc.create({ name: '  Padded name  ' })).record.name, 'Padded name');
+    assert.equal((await svc.create({ name: 'n'.repeat(80) })).record.name, 'n'.repeat(80));
     const before = (await rows()).length;
     for (const bad of ['', '   ', 'n'.repeat(81), 'line\nbreak', 'bell\u0007', 'tab\there', 'nul\u0000', undefined, 42, null]) {
-      assert.throws(() => svc.create({ name: bad }), isCode('bad_input'), JSON.stringify(bad));
+      await assert.rejects(async () => await svc.create({ name: bad }), isCode('bad_input'), JSON.stringify(bad));
     }
     assert.equal((await rows()).length, before);
     tick();
   });
 
   test('verify returns the record for a live key and null otherwise', async () => {
-    const { key, record } = svc.create({ name: 'Verify me', scopes: ['write:recs'] });
+    const { key, record } = await svc.create({ name: 'Verify me', scopes: ['write:recs'] });
     const got = await svc.verify(key);
     assert.ok(got);
     assert.equal(got.id, record.id);
@@ -250,18 +250,18 @@ describe('key service', () => {
   });
 
   test('a revoked key no longer verifies; revoke is idempotent and keeps the first timestamp', async () => {
-    const { key, record } = svc.create({ name: 'Short lived' });
+    const { key, record } = await svc.create({ name: 'Short lived' });
     assert.ok(await svc.verify(key));
     tick();
-    const first = svc.revoke(record.id);
+    const first = await svc.revoke(record.id);
     assert.equal(first.id, record.id);
     assert.equal(first.revokedAt, clock.toISOString());
     assert.equal(await svc.verify(key), null);
     const stamp = first.revokedAt;
     tick();
-    const again = svc.revoke(record.id);
+    const again = await svc.revoke(record.id);
     assert.equal(again.revokedAt, stamp, 'second revoke keeps the first timestamp');
-    assert.equal(svc.list().find(k => k.id === record.id).revokedAt, stamp);
+    assert.equal((await svc.list()).find(k => k.id === record.id).revokedAt, stamp);
     assert.equal(await svc.verify(key), null);
   });
 
@@ -269,8 +269,8 @@ describe('key service', () => {
   // active member; ownerless keys do not depend on any member.
   test('a creator-owned key verifies only while its creator is an active member; ownerless keys are unaffected', async () => {
     active.add(users.creator);
-    const owned = svc.create({ name: 'Creator key', userId: users.creator });
-    const ownerless = svc.create({ name: 'Ownerless key' });
+    const owned = await svc.create({ name: 'Creator key', userId: users.creator });
+    const ownerless = await svc.create({ name: 'Ownerless key' });
     assert.equal((await svc.verify(owned.key)).id, owned.record.id);
     assert.equal((await svc.verify(ownerless.key)).id, ownerless.record.id);
     active.delete(users.creator);
@@ -284,12 +284,12 @@ describe('key service', () => {
   });
 
   test('ownerless keys stay manageable by an unscoped (admin) caller and refused to a member caller', async () => {
-    const ownerless = svc.create({ name: 'Admin managed key' });
-    assert.ok(svc.list().some(k => k.id === ownerless.record.id), 'the unscoped listing carries it');
-    assert.ok(!svc.list({ userId: users.member }).some(k => k.id === ownerless.record.id));
-    assert.throws(() => svc.revoke(ownerless.record.id, { userId: users.member }), isCode('forbidden'));
+    const ownerless = await svc.create({ name: 'Admin managed key' });
+    assert.ok((await svc.list()).some(k => k.id === ownerless.record.id), 'the unscoped listing carries it');
+    assert.ok(!(await svc.list({ userId: users.member })).some(k => k.id === ownerless.record.id));
+    await assert.rejects(async () => await svc.revoke(ownerless.record.id, { userId: users.member }), isCode('forbidden'));
     tick();
-    assert.equal(svc.revoke(ownerless.record.id).revokedAt, clock.toISOString());
+    assert.equal((await svc.revoke(ownerless.record.id)).revokedAt, clock.toISOString());
     assert.equal(await svc.verify(ownerless.key), null);
     tick();
   });
@@ -298,17 +298,17 @@ describe('key service', () => {
     assert.throws(() => createKeyService({ platform: t.platform, secret: () => SECRET, now: () => clock }));
   });
 
-  test('revoke of an unknown id is not_found', () => {
-    assert.throws(() => svc.revoke('key_000000000000'), isCode('not_found'));
-    assert.throws(() => svc.revoke(''), isCode('not_found'));
+  test('revoke of an unknown id is not_found', async () => {
+    await assert.rejects(async () => await svc.revoke('key_000000000000'), isCode('not_found'));
+    await assert.rejects(async () => await svc.revoke(''), isCode('not_found'));
   });
 
   test('a key is bound to its household: another household cannot list, revoke or manage it', async () => {
-    const { key, record } = svc.create({ name: 'Bound key' });
+    const { key, record } = await svc.create({ name: 'Bound key' });
     const other = 'hh-synthetic-other';
-    assert.ok(!raw.list({ householdId: other }).some(k => k.id === record.id));
-    assert.throws(() => raw.revoke(record.id, { householdId: other }), isCode('not_found'));
-    assert.throws(() => raw.list({}), isCode('not_found'), 'no household, no listing');
+    assert.ok(!(await raw.list({ householdId: other })).some(k => k.id === record.id));
+    await assert.rejects(async () => await raw.revoke(record.id, { householdId: other }), isCode('not_found'));
+    await assert.rejects(async () => await raw.list({}), isCode('not_found'), 'no household, no listing');
     assert.equal((await raw.verify(key)).householdId, hh);
     tick();
   });
@@ -318,10 +318,10 @@ describe('key service', () => {
     assert.ok(total > 5);
     // The key under test is created first and several rows are created after it, so a verifier
     // that returns on the first match would stop before reaching them.
-    const firstKey = svc.create({ name: 'First of many' });
+    const firstKey = await svc.create({ name: 'First of many' });
     for (let i = 0; i < 5; i++) {
       tick();
-      svc.create({ name: `Later key ${i}` });
+      await svc.create({ name: `Later key ${i}` });
     }
     const all = (await rows()).length;
     assert.ok(all >= total + 6);
@@ -342,10 +342,10 @@ describe('key service', () => {
   });
 
   test('touch sets last_used_at', async () => {
-    const { key, record } = svc.create({ name: 'Touched' });
+    const { key, record } = await svc.create({ name: 'Touched' });
     tick();
     svc.touch(record.id);
-    const listed = svc.list().find(k => k.id === record.id);
+    const listed = (await svc.list()).find(k => k.id === record.id);
     assert.equal(listed.lastUsedAt, clock.toISOString());
     assert.ok(await svc.verify(key));
     tick();
@@ -366,9 +366,9 @@ describe('key service', () => {
     assert.ok(!/fathom_[A-Za-z0-9_-]{43}/.test(text), 'no key in the listing');
   });
 
-  test('a record returned by create has the listing shape', () => {
-    const { record } = svc.create({ name: 'Shape check' });
+  test('a record returned by create has the listing shape', async () => {
+    const { record } = await svc.create({ name: 'Shape check' });
     assert.deepEqual(Object.keys(record).sort(), LIST_FIELDS);
-    assert.deepEqual(svc.list().find(k => k.id === record.id), record);
+    assert.deepEqual((await svc.list()).find(k => k.id === record.id), record);
   });
 });

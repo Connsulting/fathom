@@ -830,7 +830,7 @@ test('B1: a corrective retry refused by the engine switch answers with the engin
 test('B1: a corrective retry refused over the cap the first call exhausted answers with the over-cap notice', async t => {
   const s = await demoStore(t);
   // The cap sits half a dollar above this month's spend; the first call spends a whole dollar.
-  await setSetting(s.db, 'cap', { usd: createSpendLedger(s.db).monthSpendUsd(thisMonth()) + 0.5 });
+  await setSetting(s.db, 'cap', { usd: await createSpendLedger(s.db).monthSpendUsd(thisMonth()) + 0.5 });
   const { engine, requests } = scripted(s.runtime, [
     [{ text: TWO_INVENTED, costUsd: 1 }],
     [{ text: 'must not run' }],

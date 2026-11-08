@@ -8,8 +8,8 @@ export async function requestBackup({ backups, body, query, identity }) {
   catch (err) { throw new HttpError(409, backups.code(err)); }
 }
 
-export function backupStatus({ backups, identity, params }) {
-  const result = backups?.status(identity.householdId, params.id);
+export async function backupStatus({ backups, identity, params }) {
+  const result = await backups?.status(identity.householdId, params.id);
   if (!result) throw new HttpError(404, 'not found');
   return result;
 }

@@ -17,7 +17,7 @@ test('a model categorization appears in Confirm as Fathom\'s categorization, wit
     await db.applySchema("INSERT INTO accounts (id,kind,name) VALUES ('jev-test','checking','Synthetic everyday')");
     for(const [description,category] of [['Historical food','Groceries'],['Historical work','Business']])
       await db.prepare("INSERT INTO transactions (account_id,date,amount,description,category,parser) VALUES ('jev-test','2026-10-01',-30,?,?,'aggregator')").run(description,category);
-    id=Number((await db.prepare("INSERT INTO transactions (account_id,date,amount,description,parser) VALUES ('jev-test','2026-10-02',-25,'Synthetic review merchant','simplefin')").run()).lastInsertRowid);
+    id=Number((await db.prepare("INSERT INTO transactions (account_id,date,amount,description,parser) VALUES ('jev-test','2026-10-02',-25,'Synthetic review merchant','simplefin') RETURNING id").get()).id);
     const jev=await createJev({keyFile:file,transport:async(_,o)=>{
       const body=JSON.parse(o.body);
       return Response.json({model:JEV_MODEL,usage:{input_tokens:120,output_tokens:12},answers:Object.fromEntries(Object.entries(body.questions).map(([id,q])=>{

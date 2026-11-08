@@ -42,7 +42,7 @@ test('account receipts refuse later edits and another actor',async t=>{
 
 test('merge requires confirmation and later owner evidence, then restores moved rows',async t=>{
   const s=await realStore();t.after(async ()=>await s.close());const ids=await seedDuplicate(s,{sure:true});const ctx=context(s);
-  const moved=Number((await s.db.prepare("INSERT INTO transactions (account_id,date,amount,description) VALUES (?,'2032-03-02',-57,'Unique moved row')").run(ids.own)).lastInsertRowid);
+  const moved=Number((await s.db.prepare("INSERT INTO transactions (account_id,date,amount,description) VALUES (?,'2032-03-02',-57,'Unique moved row') RETURNING id").get(ids.own)).id);
   const args={operation:'merge',id:ids.keep,withId:ids.own,evidence:'yes, merge these accounts'};
   await assert.rejects(callTool('update_account',args,ctx),{code:'bad_input'});
   await assert.rejects(callTool('update_account',{...args,confirm:true,evidence:'please merge'},ctx),{code:'bad_input'});
@@ -85,7 +85,7 @@ for (const confirmation of ['yes','Confirmed']) test(`a stored Ask merge proposa
   let pending;const tool=proposalTools(tools).find(t=>t.name==='update_account');
   await tool.handler({operation:'merge',id:ids.keep,withId:ids.own,confirm:true,evidence:'Merge these accounts',propose:true},{...ctx,onProposal:p=>{pending=p;}});
   assert.ok(await s.db.prepare('SELECT 1 FROM accounts WHERE id=?').get(ids.own));
-  const id=Number((await s.db.prepare("INSERT INTO messages (conversation_key,role,text,ts,provenance) VALUES (?,'fathom','Merge these shown candidates?',?,?)").run(key,NOW,JSON.stringify({pendingAction:pending,tools:[{name:'accounts',args:{operation:'merge_candidates',id:ids.keep}}]}))).lastInsertRowid);
+  const id=Number((await s.db.prepare("INSERT INTO messages (conversation_key,role,text,ts,provenance) VALUES (?,'fathom','Merge these shown candidates?',?,?) RETURNING id").get(key,NOW,JSON.stringify({pendingAction:pending,tools:[{name:'accounts',args:{operation:'merge_candidates',id:ids.keep}}]}))).id);
   await api.accountMergeCandidates({...ctx,params:{id:ids.keep}});
   const {scenarioOf}=await import('../src/api/scenario.mjs');await scenarioOf(ctx);
   const claim=await claimProposal(s.db,{key,id,decision:'confirm',scopes:ctx.scopes,at:NOW});assert.equal(claim.status,'confirmed');
@@ -102,7 +102,7 @@ test('source-operation proposals retain the merged catalog scope and durable Und
  await s.db.prepare('INSERT INTO conversations (key,created_at,last_at) VALUES (?,?,?)').run(key,NOW,NOW);
  let pending;await proposalTools(tools).find(t=>t.name==='sources').handler({operation:'archive_account',id:'manual',propose:true},{...ctx,onProposal:p=>{pending=p;}});
  assert.equal((await row(s)).archived_at,null);
- const id=Number((await s.db.prepare("INSERT INTO messages (conversation_key,role,text,ts,provenance) VALUES (?,'fathom','Archive this account?',?,?)").run(key,NOW,JSON.stringify({pendingAction:pending}))).lastInsertRowid);
+ const id=Number((await s.db.prepare("INSERT INTO messages (conversation_key,role,text,ts,provenance) VALUES (?,'fathom','Archive this account?',?,?) RETURNING id").get(key,NOW,JSON.stringify({pendingAction:pending}))).id);
  const claim=await claimProposal(s.db,{key,id,decision:'confirm',scopes:ctx.scopes,at:NOW});assert.equal(claim.status,'confirmed');
  const out=await executeProposal(claim.pending,ctx);assert.ok((await row(s)).archived_at);assert.equal(out.receipt.scope,'write:sources');
  await undo(ctx,out);assert.equal((await row(s)).archived_at,null);

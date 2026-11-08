@@ -64,7 +64,7 @@ export async function receiptMessages(db, key, messages) {
 const KINDS = new Map();
 const IDENTIFIER = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
 
-// restore(ctx, { id, before, after, receipt }) is synchronous and runs in the undo transaction.
+// restore(ctx, { id, before, after, receipt }) may be async and runs in the undo transaction.
 // It must refuse a changed item before applying its domain inverse; throwing rolls back both.
 export function registerReceiptKind(kind, definition) {
   if (typeof kind !== 'string' || !IDENTIFIER.test(kind) || !definition || typeof definition !== 'object') {
@@ -103,8 +103,7 @@ export async function restoreReceipt(ctx, id, scope, checkOnly = false) {
   if (!definition) throw new ToolError('bad_input', 'This receipt kind does not support Undo.');
   let current = ['status', 'owner', 'step'].includes(row.kind) ? await ctx.db.prepare('SELECT * FROM recs WHERE id=?').get(row.entity_id) : null;
   if (definition.restore) {
-    const restored = definition.restore(ctx, { id: row.entity_id, before, after, receipt: receiptOut(row), checkOnly });
-    if (restored && typeof restored.then === 'function') throw new TypeError('Receipt kind restore must be synchronous');
+    await definition.restore(ctx, { id: row.entity_id, before, after, receipt: receiptOut(row), checkOnly });
   } else {
     const { table, pk } = definition;
     current = await ctx.db.prepare(`SELECT * FROM ${table} WHERE ${pk} = ?`).get(row.entity_id);

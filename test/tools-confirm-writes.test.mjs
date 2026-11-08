@@ -148,12 +148,12 @@ for (const kind of ['entity_alias', 'tax_year', 'fact_check', 'near_duplicate', 
   'transaction_category', 'category_mapping', 'resolver_fact']) {
  test(`${kind} proposals ignore unrelated transactions and retain affected rows`, async t => {
   const s = await setup(t), db = s.db;
-  const transaction = async key => Number((await db.prepare("INSERT INTO transactions(account_id,date,amount,description,dedupe_key) VALUES ('manual','2032-03-01',-20,'Synthetic posting',?)").run(key)).lastInsertRowid);
-  const payment = async (payer, slot, key) => Number((await db.prepare("INSERT INTO tax_payments(jurisdiction,tax_year,date,amount,payer,source_slot,dedupe_key,recipient) VALUES ('federal',2031,'2032-01-10',20,?,?,?,'unknown')").run(payer,slot,key)).lastInsertRowid);
+  const transaction = async key => Number((await db.prepare("INSERT INTO transactions(account_id,date,amount,description,dedupe_key) VALUES ('manual','2032-03-01',-20,'Synthetic posting',?) RETURNING id").get(key)).id);
+  const payment = async (payer, slot, key) => Number((await db.prepare("INSERT INTO tax_payments(jurisdiction,tax_year,date,amount,payer,source_slot,dedupe_key,recipient) VALUES ('federal',2031,'2032-01-10',20,?,?,?,'unknown') RETURNING id").get(payer,slot,key)).id);
   let subject = 'synthetic', context = {}, answer = 'yes', change;
   if (kind === 'entity_alias') {
    subject = 'exampleco'; answer = 'entity:Canonical Co';
-   const id = Number((await db.prepare("INSERT INTO pnl_lines(entity,period,category,amount) VALUES ('Example Co','2031-01','Revenue',10)").run()).lastInsertRowid);
+   const id = Number((await db.prepare("INSERT INTO pnl_lines(entity,period,category,amount) VALUES ('Example Co','2031-01','Revenue',10) RETURNING id").get()).id);
    change = async () => await db.prepare('UPDATE pnl_lines SET amount=11 WHERE id=?').run(id);
   } else if (kind === 'tax_year') {
    subject = 'tax:2031'; answer = 'payment_year';
@@ -169,7 +169,7 @@ for (const kind of ['entity_alias', 'tax_year', 'fact_check', 'near_duplicate', 
    change = async () => await db.prepare('UPDATE transactions SET amount=-21 WHERE id=?').run(id);
   } else if (kind === 'employer_relation') {
    subject = 'exampleco'; answer = 'outside';
-   const id = Number((await db.prepare("INSERT INTO held_facts(hold,key,value,confidence,created_at) VALUES ('employer:exampleco','income.w2','true',1,?)").run(NOW)).lastInsertRowid);
+   const id = Number((await db.prepare("INSERT INTO held_facts(hold,key,value,confidence,created_at) VALUES ('employer:exampleco','income.w2','true',1,?) RETURNING id").get(NOW)).id);
    change = async () => await db.prepare("UPDATE held_facts SET value='false' WHERE id=?").run(id);
   } else if (['employer_recipient','document_recipient','withholding_conflict'].includes(kind)) {
    const id = await payment('w2:exampleco:doc:1','wh:exampleco:2031:federal:unknown','withholding-first');
@@ -208,7 +208,7 @@ for (const kind of ['entity_alias', 'tax_year', 'fact_check', 'near_duplicate', 
 test('reopen and revise proposals retain dependent answers and their Undo rows', async t => {
  const s=await setup(t), root=await s.q('account_owner');
  await answerItem(s.db,root,'owner',{now:NOW});
- const transaction=Number((await s.db.prepare("INSERT INTO transactions(account_id,date,amount,description) VALUES ('manual','2032-03-01',-20,'Synthetic market')").run()).lastInsertRowid);
+ const transaction=Number((await s.db.prepare("INSERT INTO transactions(account_id,date,amount,description) VALUES ('manual','2032-03-01',-20,'Synthetic market') RETURNING id").get()).id);
  const dependent=(await ask(s.db,{kind:'transaction_category',subject:String(transaction),question:'Synthetic category',options:[{id:'Groceries',label:'Groceries'}],context:{transactionId:transaction},now:NOW})).id;
  await recordAutoAnswer(s.db,dependent,'Groceries',{rule:'synthetic',evidence:{text:'Synthetic evidence',basis:[root],ancestors:[root]},now:NOW});
  for(const args of [{ids:[root]},{items:[{id:root,answer:'joint'}],revise:true}]){
@@ -226,7 +226,7 @@ test('reopen and revise proposals retain dependent answers and their Undo rows',
 for (const [kind,answer] of [['employer_recipient','both'],['withholding_conflict','both'],['document_recipient','owner']]) {
  test(`${kind} ${answer} basis follows whether the answer closes stale conflicts`,async t=>{
   const s=await setup(t),db=s.db;
-  const payment=async key=>Number((await db.prepare("INSERT INTO tax_payments(jurisdiction,tax_year,date,amount,payer,source_slot,dedupe_key,recipient) VALUES ('federal',2031,'2032-01-10',20,?,'wh:example:2031:federal:unknown',?,'unknown')").run(key,key)).lastInsertRowid);
+  const payment=async key=>Number((await db.prepare("INSERT INTO tax_payments(jurisdiction,tax_year,date,amount,payer,source_slot,dedupe_key,recipient) VALUES ('federal',2031,'2032-01-10',20,?,'wh:example:2031:federal:unknown',?,'unknown') RETURNING id").get(key,key)).id);
   const first=await payment('first'),second=await payment('second'),foreign=await payment('foreign'),foreignSecond=await payment('foreign-second');
   const ref=async id=>({id,key:(await db.prepare('SELECT dedupe_key FROM tax_payments WHERE id=?').get(id)).dedupe_key,fileId:null,cents:2000});
   const unrelated=(await ask(db,{kind:'withholding_conflict',subject:'unrelated',question:'Synthetic conflict',options:[{id:'both',label:'Both'}],context:{first:{...await ref(foreign),cents:1900},second:await ref(foreignSecond)},now:NOW})).id;

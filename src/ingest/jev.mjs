@@ -14,7 +14,7 @@ const match=(name,holder)=>{
   return need.length ? need.filter(w=>have.has(w)).length/need.length : 0;
 };
 export async function guessClosedOptions(db,jev,{now}={}) {
-  if(!jev?.isOn()) return {guessed:0};
+  if(!await jev?.isOn()) return {guessed:0};
   const names=await householdNames(db), accounts=await db.prepare('SELECT id,mask FROM accounts').all();
   const items=await filterSeries((await pendingItems(db)), async item=>['account_kind','account_owner'].includes(item.kind)
     && !await db.prepare('SELECT 1 FROM confirm_guesses WHERE item_id=?').get(item.id)

@@ -108,8 +108,8 @@ function goalDetails(args, before = {}) {
   return details;
 }
 
-function statusText(args, L) {
-  const t = L.rec(args.id);
+async function statusText(args, L) {
+  const t = await L.rec(args.id);
   switch (args.status) {
     case 'dismissed': return `Set aside ${t} as Not for us.`;
     case 'snoozed': { const wake = said(args.wake); return `Move ${t} to Later${wake ? ` until ${wake}` : ''}.`; }
@@ -118,8 +118,8 @@ function statusText(args, L) {
   }
 }
 
-function confirmAnswer(L, item) {
-  const row = L.confirm(item.id);
+async function confirmAnswer(L, item) {
+  const row = await L.confirm(item.id);
   const options = Array.isArray(parse(row?.options, [])) ? parse(row?.options, []) : [];
   const answer = optionLabel(options, item.answer) ?? said(item.answer);
   return { question: row?.question ? said(row.question) : 'a Confirm question', answer };
@@ -135,17 +135,17 @@ async function undoTarget(L, r) {
   return '';
 }
 
-const merge = (args, L) => `Merge ${L.account(args.id)} and ${L.account(args.withId)} into one account. The imported one keeps its history.`;
+const merge = async (args, L) => `Merge ${await L.account(args.id)} and ${await L.account(args.withId)} into one account. The imported one keeps its history.`;
 
 export const DESCRIBERS = Object.freeze({
   'act_on_recommendation.status': statusText,
-  'act_on_recommendation.owner': (a, L) => `Change who acts on ${L.rec(a.id)} to ${OWNER_LABEL[a.owner] || 'someone else'}.`,
+  'act_on_recommendation.owner': async (a, L) => `Change who acts on ${await L.rec(a.id)} to ${OWNER_LABEL[a.owner] || 'someone else'}.`,
   'act_on_recommendation.step': async (a, L) => {
     const step = (await L.recDef(a.id)).tasks?.[a.index];
     const name = step && typeof step.t === 'string' ? `the step ${q(step.t)}` : 'a step';
-    return `Mark ${name} in ${L.rec(a.id)} as ${a.checked ? 'done' : 'not done'}.`;
+    return `Mark ${name} in ${await L.rec(a.id)} as ${a.checked ? 'done' : 'not done'}.`;
   },
-  'act_on_recommendation.start_over': (a, L) => `Start the conversation about ${L.rec(a.id)} over. Earlier conversations stay in Ask.`,
+  'act_on_recommendation.start_over': async (a, L) => `Start the conversation about ${await L.rec(a.id)} over. Earlier conversations stay in Ask.`,
   'act_on_recommendation.decide': async (a, L) => `Settle ${await L.decision(a.decisionId)}${a.point === undefined ? ' with the option picked now' : ' with the option you chose'}.`,
   'act_on_recommendation.revisit': async (a, L) => `Reopen ${await L.decision(a.decisionId)} and remove the assumption it set.`,
   'act_on_recommendation.pick_point': async (a, L) => {
@@ -154,16 +154,16 @@ export const DESCRIBERS = Object.freeze({
   },
   'advisor_review.packet': () => 'Prepare a review packet for your advisor with every waiting review. Nothing leaves Fathom.',
   'advisor_review.checkin': () => 'Set the next check-in with your advisor.',
-  'advisor_review.send': (a, L) => `Send ${L.rec(a.recId)} to your advisor for review.`,
-  'advisor_review.verdict': (a, L) => {
-    const r = L.review(a.reviewId);
-    const name = r?.title ? `the recommendation ${q(r.title)}` : r?.rec_id ? L.rec(r.rec_id) : 'a recommendation';
+  'advisor_review.send': async (a, L) => `Send ${await L.rec(a.recId)} to your advisor for review.`,
+  'advisor_review.verdict': async (a, L) => {
+    const r = await L.review(a.reviewId);
+    const name = r?.title ? `the recommendation ${q(r.title)}` : r?.rec_id ? await L.rec(r.rec_id) : 'a recommendation';
     return a.verdict === 'vetoed'
       ? `Record that your advisor vetoed ${name}. The recommendation is set aside as Not for us.`
       : `Record that your advisor confirmed ${name}.`;
   },
-  'answer.confirm': (a, L) => {
-    const answers = (a.items ?? []).map(i => confirmAnswer(L, i));
+  'answer.confirm': async (a, L) => {
+    const answers = await Promise.all((a.items ?? []).map(i => confirmAnswer(L, i)));
     const verb = a.revise ? 'Change your answer to' : 'Answer';
     if (answers.length === 1) {
       const [{ question, answer }] = answers;
@@ -179,8 +179,8 @@ export const DESCRIBERS = Object.freeze({
   'answer.fact': (a, L) => {
     if (a.key === 'business.entities' && Array.isArray(a.value)) {
       const tax = { s_corp: 'S corp', llc_single: 'single-member LLC taxed on Schedule C', sole_prop: 'sole proprietorship', partnership: 'partnership', c_corp: 'C corp', personal: 'personal summary', income_history: 'income history', inactive: 'inactive', not_mine: 'not mine' };
-      return { text: 'Record household businesses.', details: a.value.slice(0, 4).map(e => ({ label: said(e.name),
-        value: `${tax[e.type] || 'tax type pending'}, ${e.owner === 'spouse' ? 'your spouse' : 'you'}${e.status === 'final_year' ? '; final year, final K-1 expected' : '; active'}${e.accountId ? `; linked business account: ${L.account(e.accountId)}` : ''}`,
+      return { text: 'Record household businesses.', details: a.value.slice(0, 4).map(async e => ({ label: said(e.name),
+        value: `${tax[e.type] || 'tax type pending'}, ${e.owner === 'spouse' ? 'your spouse' : 'you'}${e.status === 'final_year' ? '; final year, final K-1 expected' : '; active'}${e.accountId ? `; linked business account: ${await L.account(e.accountId)}` : ''}`,
       })) };
     }
     const name = factLabel(a.key);
@@ -188,16 +188,16 @@ export const DESCRIBERS = Object.freeze({
     if (!name) return `Save a household detail you told Fathom${value ? `: ${value}` : ''}.`;
     return `Save ${q(name)}${value ? ` as ${value}` : ''}.`;
   },
-  'answer.rec_questions': (a, L) => `Save your answers to the questions on ${L.rec(a.recId)}.`,
-  'answer.reopen': (a, L) => {
+  'answer.rec_questions': async (a, L) => `Save your answers to the questions on ${await L.rec(a.recId)}.`,
+  'answer.reopen': async (a, L) => {
     const ids = a.ids ?? [];
-    if (ids.length === 1) { const row = L.confirm(ids[0]); return `Reopen the Confirm question ${row?.question ? q(said(row.question)) : 'you answered'}.`; }
+    if (ids.length === 1) { const row = await L.confirm(ids[0]); return `Reopen the Confirm question ${row?.question ? q(said(row.question)) : 'you answered'}.`; }
     return `Reopen ${ids.length} Confirm questions you answered.`;
   },
   'answer.yearend_mark': a => (a.reason == null ? 'Clear your mark on an expected tax document so Fathom expects it again.'
     : 'Mark an expected tax document as not coming this year.'),
-  'categorize.transaction': (a, L) => {
-    const t = L.transaction(a.transactionId);
+  'categorize.transaction': async (a, L) => {
+    const t = await L.transaction(a.transactionId);
     const name = t ? `the transaction ${q(t.description)}${date(t.date) ? ` on ${date(t.date)}` : ''}` : 'a transaction';
     return `Categorize ${name} as ${category(a.category)}.`;
   },
@@ -208,26 +208,26 @@ export const DESCRIBERS = Object.freeze({
   },
   'refresh.build_your_plans': () => 'Rebuild Your plans from your imported documents.',
   'refresh.import_file': a => { const name = said(a.name); return `Import ${name ? q(name) : 'the file you shared'}.`; },
-  'refresh.retry_import': (a, L) => `Retry importing ${L.file(a.fileId)}.`,
+  'refresh.retry_import': async (a, L) => `Retry importing ${await L.file(a.fileId)}.`,
   'refresh.review_import': a => a.decision === 'approve' ? 'Approve this import proposal.' : 'Correct this import proposal.',
   'refresh.run_job': a => JOBS[a.job] || 'Refresh your data now.',
-  'sources.archive_account': (a, L) => (a.archived === false ? `Restore ${L.account(a.id)} from the archive.`
-    : `Archive ${L.account(a.id)}. Its history is kept.`),
+  'sources.archive_account': async (a, L) => (a.archived === false ? `Restore ${await L.account(a.id)} from the archive.`
+    : `Archive ${await L.account(a.id)}. Its history is kept.`),
   'sources.merge_accounts': merge,
-  'sources.remove_file': (a, L) => `Remove ${L.file(a.id)} and the rows it added.`,
+  'sources.remove_file': async (a, L) => `Remove ${await L.file(a.id)} and the rows it added.`,
   'undo.undo': async (a, L) => {
     const r = await L.receipt(a.id);
     const target = await undoTarget(L, r);
     const what = r?.label ? q(said(r.label)) : '';
     return `Undo your earlier change${what ? ` ${what}` : ''}${target ? ` to ${target}` : ''}.`;
   },
-  'update_account.kind': (a, L) => `Set the kind of ${L.account(a.id)} to ${optionLabel(KIND_OPTIONS, a.kind) || 'a new kind'}.`,
-  'update_account.mask': (a, L) => `Save the last four digits for ${L.account(a.id)}.`,
+  'update_account.kind': async (a, L) => `Set the kind of ${await L.account(a.id)} to ${optionLabel(KIND_OPTIONS, a.kind) || 'a new kind'}.`,
+  'update_account.mask': async (a, L) => `Save the last four digits for ${await L.account(a.id)}.`,
   'update_account.merge': merge,
-  'update_account.owner': (a, L) => `Set the owner of ${L.account(a.id)} to ${optionLabel(OWNER_OPTIONS, a.owner) || 'someone else'}.`,
-  'update_account.rename': (a, L) => {
+  'update_account.owner': async (a, L) => `Set the owner of ${await L.account(a.id)} to ${optionLabel(OWNER_OPTIONS, a.owner) || 'someone else'}.`,
+  'update_account.rename': async (a, L) => {
     const name = said(a.displayName);
-    return name ? `Rename ${L.account(a.id)} to ${q(name)}.` : `Clear the custom name on ${L.account(a.id)}.`;
+    return name ? `Rename ${await L.account(a.id)} to ${q(name)}.` : `Clear the custom name on ${await L.account(a.id)}.`;
   },
   'update_goal.archive': async (a, L) => `Archive ${await L.goal(a.id)}. Its history is kept.`,
   'update_goal.create': a => {
@@ -273,7 +273,7 @@ export async function describeProposal(db, pending) {
   const args = pending?.args && typeof pending.args === 'object' ? pending.args : {};
   const describer = Object.hasOwn(DESCRIBERS, key) ? DESCRIBERS[key] : null;
   if (describer) {
-    try { return shape(describer(args, lookups(db))); } catch { /* fall back below */ }
+    try { return shape(await describer(args, lookups(db))); } catch { /* fall back below */ }
   }
   let route = null;
   try { route = routeOf(pending?.tool, pending?.operation); } catch { route = null; }

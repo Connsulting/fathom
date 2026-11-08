@@ -21,8 +21,8 @@ async function fixture(t, name = 'deferral', real = false) {
   const spec = { source, fields: [name === 'salary' ? 'figures.salary' : 'figures.amount'] };
   const snapshot = buildSnapshot('compare', spec, [{ name: 'recommendations', args, result }]);
   const thread = (await app.postJson('/api/threads')).json.thread;
-  const id = (await s.db.prepare("INSERT INTO messages (conversation_key, role, text, refs, notice, ts, provenance) VALUES (?, 'fathom', '<p>Options</p>', '[]', 0, ?, ?)")
-    .run(thread.key, '2026-11-05T12:00:00Z', JSON.stringify({ blocks: [{ id: 'b1', op: 'compare', spec, snapshot }] }))).lastInsertRowid;
+  const id = (await s.db.prepare("INSERT INTO messages (conversation_key, role, text, refs, notice, ts, provenance) VALUES (?, 'fathom', '<p>Options</p>', '[]', 0, ?, ?) RETURNING id")
+    .get(thread.key, '2026-11-05T12:00:00Z', JSON.stringify({ blocks: [{ id: 'b1', op: 'compare', spec, snapshot }] }))).id;
   const path = `/api/threads/${thread.id}/messages/m${id}/blocks/b1/act`;
   return { ...s, app, thread, snapshot, path };
 }

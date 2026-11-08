@@ -328,9 +328,9 @@ test('review fix: a client gone before streaming starts still removes the temp d
 test('review fix: payments a pending withholding conflict names, or an unreconciled W-2 and paystub slot, are not totaled', async () => {
   const s = await packetStore();
   try {
-    const ins = s.db.prepare("INSERT INTO tax_payments (jurisdiction, tax_year, date, amount, kind, file_id, parser, locator, source_slot, payer) VALUES (?, 2026, '2026-12-31', ?, 'withholding', 'wb', 'w2', 'box2', ?, ?)");
-    const a = Number((await ins.run('federal', 12000, 'wh:acme:2026:federal:owner', 'w2:acme:2026:1')).lastInsertRowid);
-    const b = Number((await ins.run('federal', 13000, 'wh:acme:2026:federal:owner', 'w2:acme:2026:2')).lastInsertRowid);
+    const ins = s.db.prepare("INSERT INTO tax_payments (jurisdiction, tax_year, date, amount, kind, file_id, parser, locator, source_slot, payer) VALUES (?, 2026, '2026-12-31', ?, 'withholding', 'wb', 'w2', 'box2', ?, ?) RETURNING id");
+    const a = Number((await ins.get('federal', 12000, 'wh:acme:2026:federal:owner', 'w2:acme:2026:1')).id);
+    const b = Number((await ins.get('federal', 13000, 'wh:acme:2026:federal:owner', 'w2:acme:2026:2')).id);
     await s.db.prepare("INSERT INTO confirm_items (kind, subject, question, options, context, status, created_at) VALUES ('withholding_conflict', 'x', 'Which?', '[]', ?, 'pending', '2027-02-01')")
       .run(JSON.stringify({ first: { id: a }, second: { id: b } }));
     await ins.run('ny', 500, 'wh:north:2026:ny:owner', 'w2:north:2026:1');

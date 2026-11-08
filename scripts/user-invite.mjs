@@ -30,7 +30,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     opened = await openInstance(config);
     if (!opened || opened.mode !== 'real') throw new Error();
     store = createAuthStore(opened.platform);
-    store.sweep();
+    await store.sweep();
     const household = await servedHousehold(opened.platform);
     if (!household || household.status === 'deleted') throw new Error();
     issued = await store.transaction(async (store) => {

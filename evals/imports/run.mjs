@@ -252,7 +252,7 @@ export async function main(argv = process.argv.slice(2)) {
         await engine.init();
         options.liveOptions = { ...options, authorized, credentials: engine.credentialStateFor('extract') === 'loaded', funded: await opened.household.funded() === true };
         admitLive(options.liveOptions);
-        if (!engine.isOn() || !await opened.household.outbound.enabled('engine')) throw new Error('engine_unavailable');
+        if (!await engine.isOn() || !await opened.household.outbound.enabled('engine')) throw new Error('engine_unavailable');
         options.liveEngine = engine;
       }
       result = await runEvaluation(options);

@@ -137,8 +137,8 @@ test('missing knowledge cannot turn an empty model response into a successful an
 test('an unreadable text-only document can be removed from the pack without deleting its stored record', async t => {
   const s = await fixture(t);
   const { db, household, runtime } = s;
-  const inserted = await db.prepare("INSERT INTO documents (doc_type,fields) VALUES ('plan',?)").run(JSON.stringify({ text: '' }));
-  const documentId = Number(inserted.lastInsertRowid);
+  const inserted = await db.prepare("INSERT INTO documents (doc_type,fields) VALUES ('plan',?) RETURNING id").get(JSON.stringify({ text: '' }));
+  const documentId = Number(inserted.id);
   const result = await buildYourPlans({ db, household, engine: runtime, clock: CLOCK });
   assert.ok(result.coverage.some(issue => issue.documentId === documentId && issue.action === 'remove'));
   const repaired = await buildYourPlans({ db, household, engine: runtime, clock: CLOCK, excludeDocumentIds: [documentId] });

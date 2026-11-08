@@ -89,7 +89,7 @@ async function withLive(options, fn) {
 // each mirrored once into the household spend_ledger.
 async function assertSettledRounds({ two, emulator, id, from = 0, purposes }) {
   const { pricing } = await mods();
-  const ctx = two.ctx(id);
+  const ctx = (await two.ctx(id));
   await ctx.engine.status();
   const rows = (await roundsOf(two.platform, id)).slice(from);
   const reqs = emulator.requests.slice(from);
@@ -119,7 +119,7 @@ async function assertSettledRounds({ two, emulator, id, from = 0, purposes }) {
 describe('every paid round reserves against both caps', T, () => {
   test('chat, job, extract, confirm and title each reserve, settle and mirror one round', T, async () => withLive({}, async ({ two, emulator, A }) => {
     const { pricing } = await mods();
-    const engine = two.ctx(A).engine;
+    const engine = (await two.ctx(A)).engine;
     const calls = [
       ['chat', () => engine.call({ purpose: 'chat', messages: QUESTION, maxTokens: 64 })],
       ['job', () => engine.call({ purpose: 'job', messages: QUESTION, maxTokens: 64 })],
@@ -154,7 +154,7 @@ describe('every paid round reserves against both caps', T, () => {
     let probed = 0;
     const probe = { ...PROBE('synthetic_probe'), handler: () => { probed += 1; return { ok: true }; } };
     emulator.script([{ toolUse: { id: 'toolu_synthetic_probe', input: {} } }, { text: 'Synthetic final answer.' }]);
-    const engine = two.ctx(A).engine;
+    const engine = (await two.ctx(A)).engine;
     const res = await engine.call({ purpose: 'chat', messages: QUESTION, tools: [probe], maxTokens: 64 });
     assert.equal(res.text, 'Synthetic final answer.');
     assert.equal(probed, 1, 'the tool ran once');
@@ -171,7 +171,7 @@ describe('every paid round reserves against both caps', T, () => {
 
   test('the request max_tokens is the call maxTokens and the reservation is the unknown-cost bound', T, async () => withLive({}, async ({ two, emulator, A }) => {
     const { pricing } = await mods();
-    const engine = two.ctx(A).engine;
+    const engine = (await two.ctx(A)).engine;
     const chat = { purpose: 'chat', system: 'Synthetic static system.', systemDynamic: 'Synthetic dynamic context.', messages: QUESTION,
       tools: [PROBE('synthetic_probe')], maxTokens: 77 };
     await engine.call(chat);
@@ -291,7 +291,7 @@ describe('admission refuses a round whose bound exceeds either remaining budget'
     const { budget, engine: E, pricing } = await mods();
     assert.ok(bound(pricing, CALL) > 0.01);
     await budget.setAllocation(two.platform, A, 0.01);
-    const engine = two.ctx(A).engine;
+    const engine = (await two.ctx(A)).engine;
     await assert.rejects(engine.call(CALL), err => err instanceof E.BudgetExceededError);
     assert.equal(emulator.requests.length, 0, 'nothing dispatched');
     assert.equal((await roundsOf(two.platform, A)).length, 0, 'no round recorded');
@@ -307,7 +307,7 @@ describe('admission refuses a round whose bound exceeds either remaining budget'
   test('an admin cap below the allocation refuses before dispatch; raising it admits', T, async () => withLive({}, async ({ two, emulator, A }) => {
     const { engine: E } = await mods();
     assert.equal((await two.A.client.postJson('/api/engine/cap', { usd: 0.01 })).status, 200);
-    const engine = two.ctx(A).engine;
+    const engine = (await two.ctx(A)).engine;
     await assert.rejects(engine.call(CALL), err => err instanceof E.BudgetExceededError);
     assert.equal(emulator.requests.length, 0);
     assert.equal((await engine.status()).capUsd, 0.01);
@@ -327,9 +327,9 @@ describe('admission refuses a round whose bound exceeds either remaining budget'
     await budget.setInstanceCap(two.platform, cap);
     const g = gate();
     emulator.script([{ wait: g.promise }]);
-    const first = two.ctx(A).engine.call(CALL).then(r => r, e => e);
+    const first = (await two.ctx(A)).engine.call(CALL).then(r => r, e => e);
     await emulator.waitForRequests(1);
-    await assert.rejects(two.ctx(B).engine.call(CALL), err => err instanceof E.BudgetExceededError);
+    await assert.rejects((await two.ctx(B)).engine.call(CALL), err => err instanceof E.BudgetExceededError);
     assert.equal(emulator.requests.length, 1, 'the refused household dispatched nothing');
     assert.ok(await budget.committedUsd(two.platform, { month: month() }) <= cap + 1e-9);
     g.open();
@@ -359,7 +359,7 @@ test('concurrent server and CLI-style calls never commit more than the allocatio
   assert.ok(allocation >= est.costUsd && cost <= est.costUsd && 16 * cost > allocation, 'precondition');
   await budget.setAllocation(two.platform, A, allocation);
   const side = await two.side(A);
-  const server = two.ctx(A).engine;
+  const server = (await two.ctx(A)).engine;
   const N = 16;
   const g = gate();
   emulator.script(Array.from({ length: N }, () => ({ wait: g.promise, usage })));
@@ -399,7 +399,7 @@ test('concurrent server and CLI-style calls never commit more than the allocatio
 
   await server.status();
   await side.engine.status();
-  const mirrors = await mirrorsOf(two.ctx(A).db);
+  const mirrors = await mirrorsOf((await two.ctx(A)).db);
   assert.equal(mirrors.length, rows.length, 'each round mirrored once across both connections');
   assert.equal(new Set(mirrors.map(m => m.round_id)).size, rows.length);
 }));
@@ -413,7 +413,7 @@ describe('crashes and unknown costs keep their reservation', T, () => {
     const { budget, pricing } = await mods();
     assert.equal(budget.RESERVATION_TTL_MS, 10 * 60 * 1000);
     emulator.script([{ hang: true }]);
-    const pending = two.ctx(A).engine.call(CALL).then(r => r, e => e);
+    const pending = (await two.ctx(A)).engine.call(CALL).then(r => r, e => e);
     await emulator.waitForRequests(1);
     const [reserved] = await roundsOf(two.platform, A);
     assert.equal(reserved.state, 'reserved');
@@ -457,7 +457,7 @@ describe('crashes and unknown costs keep their reservation', T, () => {
 
   test('risk probe: a settled round whose mirror was lost is restored once by the next CLI round, with no double count', T, async () => withLive({}, async ({ two, emulator, A }) => {
     const { budget, pricing } = await mods();
-    const ctx = two.ctx(A);
+    const ctx = (await two.ctx(A));
     await ctx.engine.call(CALL);
     await ctx.engine.status();
     const [first] = await roundsOf(two.platform, A);
@@ -492,14 +492,14 @@ describe('crashes and unknown costs keep their reservation', T, () => {
     const { budget, pricing } = await mods();
     const confirm = { purpose: 'confirm', messages: QUESTION, maxTokens: 64 };
     emulator.script([{ destroy: true }]);
-    await assert.rejects(two.ctx(A).engine.call(confirm));
+    await assert.rejects((await two.ctx(A)).engine.call(confirm));
     const [row] = await roundsOf(two.platform, A);
     assert.equal(row.state, 'held');
     assert.equal(row.hold_code, 'cost_unknown');
     near(row.reserved_usd, bound(pricing, confirm), 'full reservation kept');
     near(await budget.committedUsd(two.platform, { householdId: A, month: month() }), row.reserved_usd, 'the hold counts in full');
 
-    await assert.rejects(two.ctx(A).engine.call(confirm), err => err?.name === 'ModelAccountingError');
+    await assert.rejects((await two.ctx(A)).engine.call(confirm), err => err?.name === 'ModelAccountingError');
     const side = await two.side(A);
     await assert.rejects(side.engine.call(confirm), refused('ModelAccountingError', 'accounting_hold'));
     assert.equal(emulator.requests.length, 1, 'no further round dispatched for the held household');
@@ -507,7 +507,7 @@ describe('crashes and unknown costs keep their reservation', T, () => {
 
     // B: an HTTP error is a known zero-cost round and leaves B able to call.
     emulator.script([{ status: 500 }]);
-    await assert.rejects(two.ctx(B).engine.call(confirm), err => err?.name === 'ModelCallError');
+    await assert.rejects((await two.ctx(B)).engine.call(confirm), err => err?.name === 'ModelCallError');
     const [failed] = await roundsOf(two.platform, B);
     assert.equal(failed.state, 'settled');
     assert.equal(failed.cost_usd, 0);
@@ -520,7 +520,7 @@ describe('crashes and unknown costs keep their reservation', T, () => {
     const { budget, pricing } = await mods();
     const usage = { input_tokens: 2_000_000, output_tokens: 10 };
     emulator.script([{ usage }]);
-    await assert.rejects(two.ctx(A).engine.call(CALL));
+    await assert.rejects((await two.ctx(A)).engine.call(CALL));
     const [row] = await roundsOf(two.platform, A);
     const cost = pricing.usageCostUsd(emulator.requests[0].model, usage);
     assert.ok(cost > row.reserved_usd, 'precondition: the usage exceeds the bound');
@@ -571,8 +571,8 @@ describe('funding months and legacy spend', T, () => {
 
   test('pre-MT-05 spend in the funding month counts against the household allocation, carried once', T, async () => withLive({ allocationUsd: 1 }, async ({ two, emulator, A }) => {
     const { budget, engine: E } = await mods();
-    await legacy(two.ctx(A).db, 0.99);
-    await assert.rejects(two.ctx(A).engine.call(CALL), err => err instanceof E.BudgetExceededError);
+    await legacy((await two.ctx(A)).db, 0.99);
+    await assert.rejects((await two.ctx(A)).engine.call(CALL), err => err instanceof E.BudgetExceededError);
     assert.equal(emulator.requests.length, 0);
 
     await budget.setAllocation(two.platform, A, 2);
@@ -598,10 +598,10 @@ describe('funding months and legacy spend', T, () => {
     assert.ok(cap < L + cost + b, 'precondition: after A settles, B no longer fits the instance cap');
     await budget.setInstanceCap(two.platform, cap);
     for (const id of [A, B]) await budget.setAllocation(two.platform, id, cap);
-    await legacy(two.ctx(A).db, L);
+    await legacy((await two.ctx(A)).db, L);
     emulator.script([{ usage }]);
     await two.ctx(A).engine.call(CALL);
-    await assert.rejects(two.ctx(B).engine.call(CALL), err => err instanceof E.BudgetExceededError);
+    await assert.rejects((await two.ctx(B)).engine.call(CALL), err => err instanceof E.BudgetExceededError);
     assert.equal(emulator.requests.length, 1, 'B dispatched nothing');
     await budget.setInstanceCap(two.platform, 3);
     await two.ctx(B).engine.call(CALL);
@@ -613,7 +613,7 @@ describe('funding months and legacy spend', T, () => {
   // reproduce the state before the first post-upgrade construction).
   const upgradedLegacy = async (two, id, usd) => {
     await two.platform.prepare("DELETE FROM model_rounds WHERE household_id = ? AND kind = 'carry'").run(id);
-    await legacy(two.ctx(id).db, usd);
+    await legacy((await two.ctx(id)).db, usd);
   };
 
   test('building a household runtime records its carry, so another household is refused before it ever reserves', T,
@@ -631,7 +631,7 @@ describe('funding months and legacy spend', T, () => {
       assert.equal((await roundsOf(two.platform, A)).length, 0, 'A reserved nothing');
       near(await budget.committedUsd(two.platform, { month: month() }), 9, 'the instance sees A\'s legacy spend');
 
-      await assert.rejects(two.ctx(B).engine.call(big), err => err instanceof E.BudgetExceededError);
+      await assert.rejects((await two.ctx(B)).engine.call(big), err => err instanceof E.BudgetExceededError);
       assert.equal(emulator.requests.length, 0, 'B dispatched nothing');
       assert.equal((await roundsOf(two.platform, B)).length, 0, 'no round recorded for the refusal');
 
@@ -778,7 +778,7 @@ describe('node scripts/model-budget.mjs', T, () => {
     assert.equal(await capValue(), undefined);
     assert.equal(await budget.allocationUsd(two.platform, A), 0);
     assert.equal(await budget.allocationUsd(two.platform, B), 0);
-    await assert.rejects(two.ctx(A).engine.call(CALL), refused('ModelCallError', 'funding_unavailable'));
+    await assert.rejects((await two.ctx(A)).engine.call(CALL), refused('ModelCallError', 'funding_unavailable'));
     assert.equal(emulator.requests.length, 0);
   });
 
@@ -833,7 +833,7 @@ describe('node scripts/model-budget.mjs', T, () => {
     assert.equal(settled.state, 'settled');
     no(await run('--household', A, '--allocation-usd', '0'), 'below_committed');
     emulator.script([{ hang: true }]);
-    const pending = two.ctx(A).engine.call(CALL).then(r => r, e => e);
+    const pending = (await two.ctx(A)).engine.call(CALL).then(r => r, e => e);
     await emulator.waitForRequests(2);
     const reservation = bound(pricing, CALL);
     const between = Math.ceil((settled.cost_usd + 0.001) * 100) / 100;

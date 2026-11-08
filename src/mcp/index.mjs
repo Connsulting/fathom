@@ -72,7 +72,7 @@ export function createMcpHandler({ keys, runtimes, config }) {
       return undefined;
     }
 
-    keys.touch(record.id);
+    await keys.touch(record.id);
     const principal = { async check() {
       const fresh = await authenticate(req, keys);
       return Boolean(fresh) && fresh.id === record.id && fresh.householdId === record.householdId

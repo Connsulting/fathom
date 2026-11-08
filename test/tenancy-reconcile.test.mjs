@@ -80,7 +80,7 @@ async function noReceiptInAudit(platform, ...texts) {
 // A held cost_unknown round of `id`: its live round's socket is destroyed.
 async function heldRound(two, emulator, id) {
   emulator.script([{ destroy: true }]);
-  await assert.rejects(two.ctx(id).engine.call(CALL));
+  await assert.rejects((await two.ctx(id)).engine.call(CALL));
   const row = (await roundsOf(two.platform, id)).at(-1);
   assert.equal(row.state, 'held');
   assert.equal(row.hold_code, 'cost_unknown');
@@ -174,7 +174,7 @@ describe('node scripts/reconcile-spend.mjs', T, () => {
     // A round whose provider usage exceeded its bound is refused the same way.
     const usage = { input_tokens: 2_000_000, output_tokens: 10 };
     emulator.script([{ usage }]);
-    await assert.rejects(two.ctx(B).engine.call(CALL));
+    await assert.rejects((await two.ctx(B)).engine.call(CALL));
     const over = (await roundsOf(two.platform, B)).at(-1);
     assert.equal(over.state, 'held');
     assert.equal(over.hold_code, 'reservation_bound_exceeded');
@@ -191,17 +191,17 @@ describe('node scripts/reconcile-spend.mjs', T, () => {
     assert.equal((await two.server.app.runtimes.get(A)).engine, serving, 'the same serving engine');
     const sent = emulator.requests.length;
     await assert.rejects(serving.call(CALL), refused('ModelAccountingError'));
-    assert.equal(serving.isOn(), false, 'off while the platform hold lasts');
+    assert.equal(await serving.isOn(), false, 'off while the platform hold lasts');
     assert.equal(emulator.requests.length, sent, 'nothing dispatched while held');
 
     ok(await reconcile(two, { household: A, round: held.id, cost: '0.01', receipt: RECEIPT }), 'settled');
     assert.equal((await two.server.app.runtimes.get(A)).engine, serving, 'still the same serving engine');
-    assert.equal(serving.isOn(), true, 'on again once the hold is settled');
+    assert.equal(await serving.isOn(), true, 'on again once the hold is settled');
     const res = await serving.call(CALL);
     assert.equal(res.text, 'Synthetic answer with no figures.');
     assert.equal(emulator.requests.length, sent + 1, 'the serving engine dispatched the round');
     assert.equal((await roundsOf(two.platform, A)).at(-1).state, 'settled');
-    assert.equal(serving.isOn(), true);
+    assert.equal(await serving.isOn(), true);
     assert.deepEqual(await outboundRows(two.platform), flags, 'household_outbound unchanged');
   }));
 
@@ -211,14 +211,14 @@ describe('node scripts/reconcile-spend.mjs', T, () => {
     no(await reconcile(two, { household: A, round: held.id, cost: '5', receipt: RECEIPT }), 'reservation_bound_exceeded');
     const sent = emulator.requests.length;
     await assert.rejects(serving.call(CALL), refused('ModelAccountingError'));
-    assert.equal(serving.isOn(), false);
+    assert.equal(await serving.isOn(), false);
     assert.equal(emulator.requests.length, sent, 'nothing dispatched');
   }));
 
   test('a round still in flight is refused; an expired reservation is reconciled', T, async () => withLive({}, async ({ two, emulator, B }) => {
     const budget = await src('src/platform/model-budget.mjs');
     emulator.script([{ hang: true }, { hang: true }]);
-    const inFlight = two.ctx(B).engine.call(CALL).then(r => r, e => e);
+    const inFlight = (await two.ctx(B)).engine.call(CALL).then(r => r, e => e);
     await emulator.waitForRequests(1);
     const [live] = await roundsOf(two.platform, B);
     assert.equal(live.state, 'reserved');
@@ -346,7 +346,7 @@ describe('the normal bootstrap cannot redirect the credential through the test h
           return new Response(JSON.stringify({ type: 'error', error: { type: 'authentication_error', message: 'Synthetic refusal' } }),
             { status: 401, headers: { 'content-type': 'application/json' } });
         };
-        await assert.rejects(two.ctx(two.A.id).engine.call(CALL));
+        await assert.rejects((await two.ctx(two.A.id)).engine.call(CALL));
       });
     } finally {
       globalThis.fetch = realFetch;

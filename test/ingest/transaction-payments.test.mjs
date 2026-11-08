@@ -313,7 +313,7 @@ test('the existing federal trigger emits payment metadata and retains its comple
   assert.deepEqual(task.payment, { jurisdiction: 'federal', taxYear: 2026, quarter: 4, amount: 1800 });
   await syncSimplefin(s.db, opts);
   await s.db.prepare("INSERT INTO jobs(id,name) VALUES ('plan','Plan')").run();
-  const run = Number((await s.db.prepare("INSERT INTO job_runs(job_id,started_at,status) VALUES ('plan',?,'running')").run(NOW)).lastInsertRowid);
+  const run = Number((await s.db.prepare("INSERT INTO job_runs(job_id,started_at,status) VALUES ('plan',?,'running') RETURNING id").get(NOW)).id);
   const hit = amount => ({ state: 'hit', trigger: { id: 'test-q3', domain: 'tax' }, hit: { packId: null, rec: {
     id: 'test-q3', title: 'Pay the federal estimate', domain: 'tax', owner: 'you', goalKinds: ['tax'],
     tasks: [taxTask({ payment: { jurisdiction: 'federal', taxYear: 2026, quarter: 3, amount } })], mine: [], cross: [], kb: [], value: [] } } });

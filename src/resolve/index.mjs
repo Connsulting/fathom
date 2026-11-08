@@ -213,7 +213,7 @@ export async function resolvePending(db, engine, { now = new Date().toISOString(
   const admission = async () => {
     if (allowed() !== true) return 'engine_paused';
     if (funded() !== true) return 'funding_unavailable';
-    if (!engine?.isOn() || (await getSetting(db, 'engine', { on: true }))?.on === false) return 'engine_off';
+    if (!await engine?.isOn() || (await getSetting(db, 'engine', { on: true }))?.on === false) return 'engine_off';
     return null;
   };
   await queueRecQuestions(db, now, await admission() === null);

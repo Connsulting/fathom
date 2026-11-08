@@ -22,7 +22,7 @@ async function store() {
 }
 
 async function addDeadline(db, { date, title, recId = null, hard = 0 }) {
-  return (await db.prepare('INSERT INTO deadlines (date, label, title, rec_id, hard) VALUES (?, ?, ?, ?, ?)').run(date, date, title, recId, hard)).lastInsertRowid;
+  return (await db.prepare('INSERT INTO deadlines (date, label, title, rec_id, hard) VALUES (?, ?, ?, ?, ?) RETURNING id').get(date, date, title, recId, hard)).id;
 }
 
 async function addRec(db, { id, status = 'proposed', close = null, title = `Synthetic rec ${id}` }) {

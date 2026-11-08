@@ -53,7 +53,7 @@ async function seedAccounts(db) {
 }
 
 const txn = async (db, account, date, amount, description = 'Deposit') =>
-  Number((await db.prepare('INSERT INTO transactions (account_id, date, amount, description) VALUES (?, ?, ?, ?)').run(account, date, amount, description)).lastInsertRowid);
+  Number((await db.prepare('INSERT INTO transactions (account_id, date, amount, description) VALUES (?, ?, ?, ?) RETURNING id').get(account, date, amount, description)).id);
 
 const rejects = (fn, status, re) => assert.throws(fn, e => e instanceof HttpError && e.status === status && (!re || re.test(e.message)),
   `expected ${status}${re ? ` matching ${re}` : ''}`);

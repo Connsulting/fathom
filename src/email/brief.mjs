@@ -268,7 +268,7 @@ function summaryInput(model) {
 export async function briefSummary(model, { engine } = {}) {
   const template = { text: templateSummary(model), src: 'template', costUsd: 0 };
   if (!engine || typeof engine.call !== 'function') return template;
-  if (typeof engine.isOn === 'function' && !engine.isOn()) return template;
+  if (typeof engine.isOn === 'function' && !await engine.isOn()) return template;
   let res;
   try {
     res = await engine.call({ purpose: 'job', system: SYSTEM, messages: [{ role: 'user', content: summaryInput(model) }], maxTokens: 400 });

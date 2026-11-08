@@ -723,7 +723,7 @@ export function createLiveAnswerer({ engine, packs, root, services, onRead } = {
 
   // One grounded model answer with at most one corrective call through the same engine.
   async function run({ db, scenario, now, question, context, history, baseRefs, references = [], fakeArgs, actions = false, onEvent, actionContext = null }) {
-    if (!engine.isOn()) return offNotice(engine);
+    if (!await engine.isOn()) return offNotice(engine);
     const t0 = performance.now();
     const stream = streamer(onEvent);
     const work = workList();

@@ -206,7 +206,7 @@ describe('the migrated household starts paused and resumes only explicitly', T, 
     const spend = await spendRows();
     assert.equal((await ask('Synthetic funding question')).notice, true);
     const engine = (await server.app.runtimes.get(hh)).engine;
-    assert.equal(engine.isOn(), false, 'live mode without funding is off');
+    assert.equal(await engine.isOn(), false, 'live mode without funding is off');
     await assert.rejects(engine.call({ purpose: 'chat', messages: [{ role: 'user', content: 'Synthetic' }] }), err => {
       assert.equal(err.name, 'ModelCallError');
       assert.equal(err.code, 'funding_unavailable');

@@ -26,7 +26,7 @@ function moduleFiles() {
 const CONSUMED = new Set(['await', 'return', 'void', 'chain', 'all', 'value']);
 // Authorization and admission entry points: these must be awaited (or returned) outright, never held
 // in a variable, so a pending or rejected decision can never be read as an allow.
-const GUARDS = /^(require\w*|authorize\w*|authenticate\w*|admit\w*|reserve\w*|checkAccess|currentSession|session|identity\w*|resolveSession|verify\w*|assert\w*Access|canAct|ownerOf|membership|lastAdmin\w*|removeMember|revoke\w*|guard\w*|outboundGuard|allowed\w*|ensureFunded|instanceFunded|funded\w*|admission\w*|begin\w*Round|engineAllowed)$/;
+const GUARDS = /^(isOn|monthSpendUsd|require\w*|authorize\w*|authenticate\w*|admit\w*|reserve\w*|checkAccess|currentSession|session|identity\w*|resolveSession|verify\w*|assert\w*Access|canAct|ownerOf|membership|lastAdmin\w*|removeMember|revoke\w*|guard\w*|outboundGuard|allowed\w*|ensureFunded|instanceFunded|funded\w*|admission\w*|begin\w*Round|engineAllowed)$/;
 
 function problems(files) {
   const g = analyze(files.map(f => join(ROOT, f)), {

@@ -61,8 +61,8 @@ const jobOut = j => ({ id: j.id, name: j.name, cadence: j.cadence, does: j.does,
 async function jobsBody(ctx) {
   const s = ctx.scheduler;
   return {
-    jobs: s ? s.jobs().map(jobOut) : [],
-    runs: s ? s.runs({ limit: RUNS_LIMIT }) : [],
+    jobs: s ? (await s.jobs()).map(jobOut) : [],
+    runs: s ? await s.runs({ limit: RUNS_LIMIT }) : [],
     timezone: await ownerTimezone(ctx.db),
     services: await servicesOf(ctx),
   };

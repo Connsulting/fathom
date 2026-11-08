@@ -35,12 +35,12 @@ async function simplefinReason(ctx) {
 async function engineReason(ctx) {
   const engine = ctx.household.engine;
   await engine.init();
-  const s = engine.status();
+  const s = await engine.status();
   if (!s.on) return 'not_configured';
   if (s.mode === 'live' && s.credentialState !== 'loaded') return 'credential_unavailable';
   if (!s.funded) return 'funding_unavailable';
   if (!(s.spentUsd < s.capUsd)) return 'funding_exhausted';
-  return engine.isOn() ? null : 'not_configured';
+  return await engine.isOn() ? null : 'not_configured';
 }
 
 async function outboundBody(ctx) {

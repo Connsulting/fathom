@@ -25,15 +25,15 @@ async function store(t) {
   await db.prepare("INSERT INTO goals (id, def, sort, origin, created_at) VALUES (?, ?, 100, 'owner', ?)")
     .run(GOAL, JSON.stringify({ id: GOAL, title: 'Rainy day cushion', horizon: 'now', target: 9000, track: null }), now);
   await db.prepare("INSERT INTO accounts (id, inst, name, kind, parser) VALUES (?, 'Synthetic Credit Union', 'Everyday checking', 'checking', 'test')").run(ACCOUNT);
-  const tx = await db.prepare("INSERT INTO transactions (account_id, date, amount, description, category, parser) VALUES (?, '2026-10-14', -42.5, 'Corner Bakery Cafe', 'Uncategorized', 'test')").run(ACCOUNT);
+  const tx = await db.prepare("INSERT INTO transactions (account_id, date, amount, description, category, parser) VALUES (?, '2026-10-14', -42.5, 'Corner Bakery Cafe', 'Uncategorized', 'test') RETURNING id").get(ACCOUNT);
   const item = await db.prepare(`INSERT INTO confirm_items (kind, subject, question, options, context, status, created_at)
-    VALUES ('account_owner', ?, 'Whose account is the Everyday checking account?', ?, '{}', 'pending', ?)`)
-    .run(ACCOUNT, JSON.stringify([{ id: 'owner', label: 'You' }, { id: 'spouse', label: 'Your spouse' }, { id: 'joint', label: 'Joint' }]), now);
+    VALUES ('account_owner', ?, 'Whose account is the Everyday checking account?', ?, '{}', 'pending', ?) RETURNING id`)
+    .get(ACCOUNT, JSON.stringify([{ id: 'owner', label: 'You' }, { id: 'spouse', label: 'Your spouse' }, { id: 'joint', label: 'Joint' }]), now);
   await db.prepare('INSERT INTO preferences (id, text, actor_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
     .run(PREF, 'Keep travel spending modest', 'demo', now, now);
   await db.prepare(`INSERT INTO action_receipts (id, scope, kind, entity_id, actor_id, label, before_state, after_state, before_value, after_value, created_at)
     VALUES (?, 'write:recs', 'status', ?, 'demo', 'Status', '{}', '{}', '{}', '{}', ?)`).run(RECEIPT, REC, now);
-  return { db, transactionId: Number(tx.lastInsertRowid), confirmId: Number(item.lastInsertRowid) };
+  return { db, transactionId: Number(tx.id), confirmId: Number(item.id) };
 }
 
 // No raw id, enum code or "name:" argument line in a description or its details.

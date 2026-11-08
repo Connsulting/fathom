@@ -49,7 +49,7 @@ async function execute(name, args, ctx) {
       return { file: fileOut(file), ...(name === 'import_file' ? { pending: (await pendingItems(ctx.db)).length } : {}) };
     }
     if (name === 'build_your_plans') {
-      if (!api.engine?.isOn()) refusal('The engine is off, so Your plans cannot be built. Switch it on first.');
+      if (!await api.engine?.isOn()) refusal('The engine is off, so Your plans cannot be built. Switch it on first.');
       const result = await buildYourPlans({ db: ctx.db, engine: api.engine, household: api.household, fileIds: args.fileIds ?? [], clock: api.config?.clock });
       if (result.written) await refreshLivePacks(ctx.db, { dataDir: api.household.root });
       const { written, entries, sources, warnings, dropped } = result;

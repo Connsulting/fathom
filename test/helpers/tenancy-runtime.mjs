@@ -413,6 +413,7 @@ async function populateLegacy(dataDir, legacyKey) {
   let confirmItemId;
   try {
     const run = async (sql, ...args) => await db.prepare(sql).run(...args);
+    const insert = async (sql, ...args) => (await db.prepare(`${sql} RETURNING id`).get(...args)).id;
     await setSetting(db, 'clock', CLOCK);
     await setSetting(db, 'onboarding', { done: true, step: 6 });
     await run("INSERT INTO content (key, value, src, updated_at) VALUES ('synthetic.note', '\"Synthetic content\"', 'you', ?)", T0);
@@ -436,9 +437,9 @@ async function populateLegacy(dataDir, legacyKey) {
     await run("INSERT INTO account_holders (account_id, holder, file_id, locator, created_at) VALUES ('acct-syn-check', 'Synthetic Holder', ?, 'row:1', ?)", f1, T0);
     await run("INSERT INTO balances (account_id, date, amount, file_id, parser, locator, dedupe_key) VALUES ('acct-syn-check', '2026-10-31', 5400.25, ?, 'aggregator', 'row:1', 'bal:1')", f1);
     await run("INSERT INTO balances (account_id, date, amount, file_id, parser, locator, dedupe_key) VALUES ('acct-syn-save', '2026-10-31', 12000, ?, 'aggregator', 'row:2', 'bal:2')", f1);
-    const tx = async (n, amount, description) => Number((await run(
+    const tx = async (n, amount, description) => Number(await insert(
       `INSERT INTO transactions (account_id, date, amount, description, category, external_id, dedupe_key, file_id, parser, locator, occurrence)
-       VALUES ('acct-syn-check', ?, ?, ?, 'Other', NULL, ?, ?, 'aggregator', ?, 1)`, `2026-10-0${n}`, amount, description, `tx:${n}`, f1, `row:${n}`)).lastInsertRowid);
+       VALUES ('acct-syn-check', ?, ?, ?, 'Other', NULL, ?, ?, 'aggregator', ?, 1)`, `2026-10-0${n}`, amount, description, `tx:${n}`, f1, `row:${n}`));
     const t1 = await tx(1, -42.17, 'Synthetic grocer');
     const t2 = await tx(2, -18.5, 'Synthetic gap row');
     const t3 = await tx(3, -27.4, 'Synthetic diner');
@@ -479,8 +480,8 @@ async function populateLegacy(dataDir, legacyKey) {
       JSON.stringify({ id: 'g000000000002', title: 'Synthetic finished goal', note: '', horizon: 'now' }), T0, T0, DONE_AT);
 
     await run("INSERT INTO jobs (id, name, cadence, does, cost, next_label, last_label, enabled, sort) VALUES ('plan', 'Plan', 'nightly', 'Synthetic planning', NULL, NULL, NULL, 1, 0)");
-    const jobRun = async (note, period) => Number((await run(`INSERT INTO job_runs (job_id, started_at, finished_at, status, cost_usd, note, period_key, trigger, duration_ms)
-      VALUES ('plan', ?, ?, 'ok', 0, ?, ?, 'schedule', 1000)`, T0, T0, note, period)).lastInsertRowid);
+    const jobRun = async (note, period) => Number(await insert(`INSERT INTO job_runs (job_id, started_at, finished_at, status, cost_usd, note, period_key, trigger, duration_ms)
+      VALUES ('plan', ?, ?, 'ok', 0, ?, ?, 'schedule', 1000)`, T0, T0, note, period));
     const run1 = await jobRun('synthetic first', '2026-09-30');
     const runGap = await jobRun('synthetic gap', '2026-10-01');
     const run2 = await jobRun('synthetic second', '2026-10-02');
@@ -488,8 +489,8 @@ async function populateLegacy(dataDir, legacyKey) {
       VALUES ('syn-rec-beta', 'trigger-synthetic', 'hash-synthetic', 'template', ?, ?)`, run1, run2);
     await run("INSERT INTO job_lock (id, holder, expires_at) VALUES (1, 'synthetic-holder', '2026-10-01T09:05:00.000Z')");
     await run("INSERT INTO spend_ledger (ts, yyyymm, purpose, cost_usd, model, tokens) VALUES (?, '2026-10', 'chat', 0.01, 'fake', '{}')", T0);
-    const send = Number((await run(`INSERT INTO email_sends (ts, kind, subject, status, error_code, transport, recipients, message_id, job_run_id)
-      VALUES (?, 'test', 'Fathom test email', 'sent', NULL, 'dev', 1, 'msg-synthetic-1', NULL)`, T0)).lastInsertRowid);
+    const send = Number(await insert(`INSERT INTO email_sends (ts, kind, subject, status, error_code, transport, recipients, message_id, job_run_id)
+      VALUES (?, 'test', 'Fathom test email', 'sent', NULL, 'dev', 1, 'msg-synthetic-1', NULL)`, T0));
     await run("INSERT INTO deadline_alerts (key, threshold, deadline_date, sent_at, send_id) VALUES ('syn-deadline', 7, '2027-01-15', ?, ?)", T0, send);
 
     await run("INSERT INTO conversations (key, created_at, title, title_source, last_at) VALUES ('ask:0a1b2c3d4e5f', ?, 'Synthetic thread', 'auto', ?)", T0, T1);
@@ -522,9 +523,9 @@ async function populateLegacy(dataDir, legacyKey) {
     const pending = await confirm.ask(db, { kind: 'account_owner', subject: 'acct-syn-broker', question: 'Whose account is Synthetic brokerage?',
       options: confirm.OWNER_OPTIONS, context: {}, fileId: f1, now: T0 });
     await run("INSERT INTO confirm_guesses (item_id, option_id, reason, model, ts) VALUES (?, 'owner', 'Synthetic reason', 'fake', ?)", pending.id, T0);
-    const rawItem = async (subject) => Number((await run(`INSERT INTO confirm_items (kind, subject, question, options, context, status, answer, file_id, created_at, answered_at)
+    const rawItem = async (subject) => Number(await insert(`INSERT INTO confirm_items (kind, subject, question, options, context, status, answer, file_id, created_at, answered_at)
       VALUES ('fact_check', ?, 'Is the synthetic fact right?', '[{"id":"yes","label":"Yes"},{"id":"no","label":"No"}]', '{}', 'answered', 'yes', ?, ?, ?)`,
-    subject, f2, T0, T0)).lastInsertRowid);
+    subject, f2, T0, T0));
     await run("INSERT INTO confirm_auto (item_id, rule, evidence, created_at) VALUES (?, 'holder_match', '{\"text\":\"Synthetic evidence\",\"basis\":[],\"ancestors\":[]}', ?)", await rawItem('synthetic.auto'), T0);
     await run('INSERT INTO confirm_auto_declined (item_id, at) VALUES (?, ?)', await rawItem('synthetic.declined'), T0);
 

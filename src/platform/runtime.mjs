@@ -165,9 +165,9 @@ function createVaultAccessor({ platform, secrets, db, config, householdId, relat
 }
 
 // Pack load failures never stop a household from being served.
-function refreshPacks(packs) {
+async function refreshPacks(packs) {
   try {
-    packs.refresh();
+    await packs.refresh();
   } catch (err) {
     console.error('fathom: pack state refresh failed', codeOf(err));
   }
@@ -272,8 +272,8 @@ export function createRuntimeRegistry({ platform, config, secrets, transportOpti
     context.close().catch(() => {});
   }
 
-  function startHousehold(context) {
-    if (context.packs) refreshPacks(context.packs);
+  async function startHousehold(context) {
+    if (context.packs) await refreshPacks(context.packs);
     try {
       const out = context.scheduler?.start();
       if (out && typeof out.then === 'function') out.then(null, err => console.error('fathom: scheduler start failed', codeOf(err)));
@@ -310,7 +310,7 @@ export function createRuntimeRegistry({ platform, config, secrets, transportOpti
           return null;
         }
         entries.set(householdId, { context, generation });
-        if (started) startHousehold(context);
+        if (started) await startHousehold(context);
         return context;
       })().finally(() => building.delete(key)));
     }
@@ -368,7 +368,7 @@ export function createRuntimeRegistry({ platform, config, secrets, transportOpti
       if (started) return;
       for (const id of (await servable.all()).map(r => r.id)) {
         const context = await get(id);
-        if (context) startHousehold(context);
+        if (context) await startHousehold(context);
       }
       started = true;
     },

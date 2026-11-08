@@ -52,9 +52,9 @@ async function account(db, id, kind, name, extra = {}) {
 
 let dedupe = 0;
 async function txn(db, account_id, date, amount, description, category = null) {
-  const q = await db.prepare('INSERT INTO transactions (account_id, date, amount, description, category, parser, dedupe_key) VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .run(account_id, date, amount, description, category, 'aggregator', `pnl-test:${++dedupe}`);
-  return Number(q.lastInsertRowid);
+  const q = await db.prepare('INSERT INTO transactions (account_id, date, amount, description, category, parser, dedupe_key) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id')
+    .get(account_id, date, amount, description, category, 'aggregator', `pnl-test:${++dedupe}`);
+  return Number(q.id);
 }
 
 async function file(db, f = WB_FILE) {
@@ -62,9 +62,9 @@ async function file(db, f = WB_FILE) {
 }
 
 async function line(db, entity, period, category, amount, fileId = WB_FILE.id) {
-  const q = await db.prepare("INSERT INTO pnl_lines (entity, period, category, amount, file_id, parser, locator) VALUES (?, ?, ?, ?, ?, 'pnl-workbook', ?)")
-    .run(entity, period, category, amount, fileId, `sheet:${period}:${category}`);
-  return Number(q.lastInsertRowid);
+  const q = await db.prepare("INSERT INTO pnl_lines (entity, period, category, amount, file_id, parser, locator) VALUES (?, ?, ?, ?, ?, 'pnl-workbook', ?) RETURNING id")
+    .get(entity, period, category, amount, fileId, `sheet:${period}:${category}`);
+  return Number(q.id);
 }
 
 // The shared business fixture. Returns ids the tests need.

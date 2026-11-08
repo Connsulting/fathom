@@ -185,13 +185,13 @@ async function jobService(db, job, sched, ctx) {
   return { ...base, ...verdict, since: iso(since), nextAttemptAt };
 }
 
-function engineService(engine, db, flags) {
+async function engineService(engine, db, flags) {
   const base = { key: 'engine', label: 'Engine', go: 'engine', lastSuccessAt: null, nextAttemptAt: null };
   const out = (state, code, control) => ({ ...base, state, code, cause: CAUSES[code], since: null, control });
   if (!flags.engine) return { ...out('paused', 'paused', C.resume('engine')), cause: CAUSES.engine_flag_paused };
   if (!engine) return out('paused', 'not_configured', C.refresh());
   let s;
-  try { s = typeof engine.status === 'function' ? engine.status() : null; } catch { s = null; }
+  try { s = typeof engine.status === 'function' ? await engine.status() : null; } catch { s = null; }
   if (!s || typeof s !== 'object') return out('needs_you', 'status_unavailable', C.refresh());
   if (s.mode === 'off') return out('paused', 'not_configured', C.refresh());
   if (!s.on) return out('paused', 'engine_off', C.engineOn());
@@ -273,11 +273,11 @@ export async function serviceStatus({ db, outbound = {}, engine = null, schedule
   const at = new Date(now);
   const flags = Object.fromEntries(['jobs', 'email', 'simplefin', 'engine'].map((k) => [k, outbound?.[k] !== false]));
   // The engine service first: whether an engine stop on a job is still current depends on it.
-  const engineSvc = engineService(engine, db, flags);
+  const engineSvc = await engineService(engine, db, flags);
   const ctx = { flags, engine: engineSvc };
   const jobs = {};
   if (scheduler && typeof scheduler.schedule === 'function') {
-    const byId = new Map(scheduler.schedule().map((x) => [x.id, x]));
+    const byId = new Map((await scheduler.schedule()).map((x) => [x.id, x]));
     for (const job of JOBS) if (byId.has(job.id)) jobs[job.id] = await jobService(db, job, byId.get(job.id), ctx);
   }
   const out = {

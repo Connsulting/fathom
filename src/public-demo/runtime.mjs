@@ -45,10 +45,10 @@ export async function createPublicDemoHandler(config, { platform: basePlatform }
     if (!/^[a-f0-9]{64}$/.test(id)) throw new Error('Invalid sandbox identity');
     return join(config.dataDir, 'sandboxes', id);
   };
-  const cleanup = async () => await control.cleanup(id => {
+  const cleanup = async () => await control.cleanup(async id => {
     const runtime = runtimes.get(id);
     if (runtime?.active) return false;
-    runtime?.close();
+    await runtime?.close();
     runtimes.delete(id);
     rmSync(sandboxDir(id), { recursive: true, force: true });
     return true;

@@ -218,8 +218,8 @@ test('real server state renders without a vendor name or a percentage', async (t
   const db = s.db;
   await db.applySchema("INSERT INTO accounts (id,kind,name,mask) VALUES ('a','checking','Everyday','3456')");
   await setSetting(db, 'clock', '2032-11-05');
-  const tx = async (description, patch = {}) => Number((await db.prepare('INSERT INTO transactions (account_id,date,amount,description,category,parser) VALUES (?,?,?,?,?,?)')
-    .run('a', patch.date ?? '2032-10-03', patch.amount ?? -20, description, patch.category ?? null, patch.parser ?? 'simplefin')).lastInsertRowid);
+  const tx = async (description, patch = {}) => Number((await db.prepare('INSERT INTO transactions (account_id,date,amount,description,category,parser) VALUES (?,?,?,?,?,?) RETURNING id')
+    .get('a', patch.date ?? '2032-10-03', patch.amount ?? -20, description, patch.category ?? null, patch.parser ?? 'simplefin')).id);
   await tx('Different historical merchant', { category: 'Groceries', parser: 'aggregator' });
   await tx('Historical service', { category: 'Business', parser: 'aggregator' });
   const review = await tx('SQ *SAMPLE COFFEE #0412', { amount: -25 });

@@ -95,7 +95,7 @@ function quotedFrom(text, words) {
   return false;
 }
 
-function ownerWords(assumption, path, ctx) {
+async function ownerWords(assumption, path, ctx) {
   const { value, evidence } = assumption;
   if (typeof evidence !== 'string' || !evidence.trim()) {
     throw new ToolError('bad_input', `${path}: source owner needs evidence, the owner's own words that state the value.`);
@@ -107,7 +107,7 @@ function ownerWords(assumption, path, ctx) {
     if (typeof ctx?.ownerStatements !== 'function') {
       throw new ToolError('bad_input', `${path}: an owner assumption needs the owner's messages in this conversation, which are not available here. Ask the owner, or use a fact, preference or default.`);
     }
-    const statements = ctx.ownerStatements() || [];
+    const statements = await ctx.ownerStatements() || [];
     if (!statements.some(text => quotedFrom(text, evidence))) {
       throw new ToolError('bad_input', `${path}: the evidence is not in the owner's messages of this conversation. Quote the owner's exact words.`);
     }
@@ -134,7 +134,7 @@ export async function checkAssumption(assumption, { name, unit, default: fallbac
   const record = { name, value, unit, source, stated: statedText(value, unit), ...(note === undefined ? {} : { note }) };
 
   if (source === 'owner') {
-    record.evidence = ownerWords(assumption, path, ctx);
+    record.evidence = await ownerWords(assumption, path, ctx);
     if (!assumptionStated(value, unit, [record.evidence])) {
       throw new ToolError('bad_input', `${path}: the owner's words "${record.evidence}" do not state ${record.stated}.`);
     }

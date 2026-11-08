@@ -272,7 +272,7 @@ export async function yourPlansBuild(ctx) {
   if (!Array.isArray(excludeDocumentIds) || excludeDocumentIds.length > MAX_FILE_IDS || !excludeDocumentIds.every(id => Number.isSafeInteger(id) && id > 0)) {
     throw new HttpError(400, 'excludeDocumentIds must be positive document ids.');
   }
-  if (!engine.isOn()) throw new HttpError(409, 'The engine is off, so Your plans cannot be built. Switch it on first.');
+  if (!await engine.isOn()) throw new HttpError(409, 'The engine is off, so Your plans cannot be built. Switch it on first.');
   let result;
   try {
     result = await buildYourPlans({ db: ctx.db, engine, household: ctx.household, fileIds, excludeDocumentIds,
@@ -546,7 +546,8 @@ async function threadCreateFromRec(ctx, empty, refs) {
     mine = escapeUserText(clean);
   }
   const key = await newThreadKey(db);
-  await tx(db, async (db) => await insertThread(db, key, await stamp(ctx), { recId }));
+  const at = await stamp(ctx);
+  await tx(db, async (db) => await insertThread(db, key, at, { recId }));
   let reply;
   try {
     streamStart(ctx, key);
@@ -641,7 +642,7 @@ export async function demoReset(ctx) {
   // MCP keys live in the platform api_keys table; a reset leaves none for this household.
   await ctx.platform.prepare('DELETE FROM api_keys WHERE household_id = ?').run(ctx.household.householdId);
   await clearStoredFiles(vault);
-  if (ctx.packs) ctx.packs.refresh();
+  if (ctx.packs) await ctx.packs.refresh();
   return { scenario: await scenarioOf(ctx) };
 }
 

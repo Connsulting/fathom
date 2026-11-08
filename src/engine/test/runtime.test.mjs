@@ -57,15 +57,15 @@ test('runtime exposes the configured mode and the switch; off by configuration r
   const s = await store(t);
   const rt = await runtimeFor(s);
   assert.equal(rt.mode, 'fake');
-  assert.equal(rt.isOn(), true, 'no engine setting reads on');
+  assert.equal(await rt.isOn(), true, 'no engine setting reads on');
   await setSetting(s.db, 'engine', { on: false });
-  assert.equal(rt.isOn(), false, 'switch is re-read');
+  assert.equal(await rt.isOn(), false, 'switch is re-read');
   await setSetting(s.db, 'engine', { on: true });
-  assert.equal(rt.isOn(), true);
+  assert.equal(await rt.isOn(), true);
 
   const off = await runtimeFor(s, { FATHOM_ENGINE: 'off' });
   assert.equal(off.mode, 'off');
-  assert.equal(off.isOn(), false, 'off by configuration even with the switch on');
+  assert.equal(await off.isOn(), false, 'off by configuration even with the switch on');
   await assert.rejects(off.call(ask({ fake: [{ text: 'must not run' }] })), EngineOffError);
 });
 
@@ -84,7 +84,7 @@ test('fake calls take request.fake and record spend in the month of the passed c
   assert.equal(rows[1].purpose, 'chat');
   assert.equal(rows[1].model, 'fake');
   assert.equal(rows[1].cost_usd, 0.02);
-  assert.equal(createSpendLedger(s.db).monthSpendUsd('202701'), 0.02);
+  assert.equal(await createSpendLedger(s.db).monthSpendUsd('202701'), 0.02);
 
   await assert.rejects(rt.call(ask()), ModelCallError, 'a fake call with no script fails');
 
@@ -123,7 +123,7 @@ test('the default cap is 200: spend just below it is allowed, spend at it is ref
   const rt = await runtimeFor(s);
   createSpendLedger(s.db).record({ ts: `${CLOCK}T07:00:00.000Z`, purpose: 'job', costUsd: 199.5, model: 'fake', tokens: {} });
   assert.equal((await rt.call(ask({ fake: [{ text: 'under the cap', costUsd: 0.5 }] }))).text, 'under the cap');
-  assert.equal(createSpendLedger(s.db).monthSpendUsd('202701'), 200);
+  assert.equal(await createSpendLedger(s.db).monthSpendUsd('202701'), 200);
   await assert.rejects(rt.call(ask({ fake: [{ text: 'must not run' }] })), BudgetExceededError);
 });
 
@@ -152,10 +152,10 @@ test('unknown accounting with is_error poisons the process engine: a later call 
   const rows = await spendRows(s.db);
   assert.equal(rows.length, 2, 'a conservative estimate is recorded');
   assert.equal(JSON.parse(rows[1].tokens).estimated, true);
-  assert.ok(createSpendLedger(s.db).monthSpendUsd('202701') < 200, 'spend is still below the cap');
+  assert.ok(await createSpendLedger(s.db).monthSpendUsd('202701') < 200, 'spend is still below the cap');
   await assert.rejects(rt.call(ask({ fake: [{ text: 'must not run' }] })), ModelAccountingError);
   await assert.rejects(rt.extract({ document: { type: 'text', text: 'Synthetic' }, schema: rowsSchema,
     fake: [{ text: '{"rows":[]}' }] }), ModelAccountingError);
-  assert.equal(rt.isOn(), false, 'a poisoned runtime reads off');
+  assert.equal(await rt.isOn(), false, 'a poisoned runtime reads off');
   assert.equal((await spendRows(s.db)).length, 2, 'nothing further is spent');
 });

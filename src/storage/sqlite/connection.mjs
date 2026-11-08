@@ -26,7 +26,7 @@ export async function openConnection({ path, readOnly = false, journal = 'wal', 
       db.exec('COMMIT');
     }
     if (journal && !readOnly) db.exec(`PRAGMA journal_mode = ${journal.toUpperCase()}`);
-    if (foreignKeys) db.exec('PRAGMA foreign_keys = ON');
+    db.exec(`PRAGMA foreign_keys = ${foreignKeys ? 'ON' : 'OFF'}`);
     if (queryOnly) db.exec('PRAGMA query_only = ON');
   } catch (error) {
     try { db?.close(); } catch { /* not open */ }

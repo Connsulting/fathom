@@ -36,6 +36,6 @@ export async function saveNotes(ctx) {
     triggerPlan(ctx);
     triggerGuesses(ctx);
   }
-  const engineOn = !!(ctx.engine && typeof ctx.engine.isOn === 'function' && ctx.engine.isOn());
+  const engineOn = !!(ctx.engine && typeof ctx.engine.isOn === 'function' && await ctx.engine.isOn());
   return { scenario: await scenarioOf(ctx), file, understood: await understoodOf(ctx.db, file, { engineOn }) };
 }

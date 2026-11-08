@@ -50,7 +50,7 @@ async function loan(db, { months = 12, matched = true, escrow = 0 } = {}) {
   let balance = 20000;
   const rate = 0.048, payment = 900;
   const snapshot = db.prepare('INSERT INTO balances(account_id,date,amount) VALUES (?,?,?)');
-  const tx = db.prepare('INSERT INTO transactions(account_id,date,amount,category,description) VALUES (?,?,?,?,?)');
+  const tx = db.prepare('INSERT INTO transactions(account_id,date,amount,category,description) VALUES (?,?,?,?,?) RETURNING id');
   const classify = async id => await db.prepare("INSERT INTO transaction_category_corrections(transaction_id,category,bucket,updated_at) VALUES (?,'Mortgage','household',?)").run(id, now);
   await snapshot.run('loan', '2025-10-31', -balance);
   for (let m = 0; m < months; m++) {
@@ -59,10 +59,10 @@ async function loan(db, { months = 12, matched = true, escrow = 0 } = {}) {
     await snapshot.run('loan', end, -balance);
     const date = `${end.slice(0, 7)}-15`;
     if (matched) {
-      await classify((await tx.run('cash', date, -payment - escrow, 'Mortgage', 'Example home mortgage payment')).lastInsertRowid);
+      await classify((await tx.get('cash', date, -payment - escrow, 'Mortgage', 'Example home mortgage payment')).id);
       await tx.run('loan', date, payment, 'Internal Transfers', 'Loan payment');
     }
-    await classify((await tx.run('cash', date, -2100, 'Mortgage', 'Credit card payment')).lastInsertRowid);
+    await classify((await tx.get('cash', date, -2100, 'Mortgage', 'Credit card payment')).id);
     await tx.run('card', date, 2100, 'Credit Card Payment', 'Card payment');
   }
   return { balance, payment, rate };

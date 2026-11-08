@@ -242,7 +242,7 @@ test('account numbers are masked in questions, context, detail and household row
 async function categoryTransaction(db, category) {
   await setSetting(db, 'clock', '2032-03-10');
   await db.prepare("INSERT INTO accounts (id,name,kind,owner) VALUES ('synthetic-spending','Synthetic spending','cash','You')").run();
-  return Number((await db.prepare("INSERT INTO transactions (account_id,date,amount,description,category,parser) VALUES ('synthetic-spending','2032-03-09',-150,'Synthetic market',?,'aggregator')").run(category)).lastInsertRowid);
+  return Number((await db.prepare("INSERT INTO transactions (account_id,date,amount,description,category,parser) VALUES ('synthetic-spending','2032-03-09',-150,'Synthetic market',?,'aggregator') RETURNING id").get(category)).id);
 }
 test('remaining transaction choices use the resolver without learning automatic answers as personal history', async () => store(async db => {
   const transactionId = await categoryTransaction(db, 'Uncategorized');

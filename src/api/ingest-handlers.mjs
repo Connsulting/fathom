@@ -127,7 +127,7 @@ const itemId = raw => {
 async function confirmAction(ctx, fn) {
   let out;
   try {
-    out = fn();
+    out = await fn();
   } catch (err) {
     if (err instanceof ConfirmError && err.code === 'final' && Object.hasOwn(FINAL_MESSAGE, err.reason)) {
       throw Object.assign(new HttpError(err.status, FINAL_MESSAGE[err.reason]), { reason: err.reason });
