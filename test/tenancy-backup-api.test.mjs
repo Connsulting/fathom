@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { existsSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { backupFixture, marker } from './helpers/tenancy-backup.mjs';
+import { backupFixture, backup, marker } from './helpers/tenancy-backup.mjs';
 import { openPlatform } from '../src/platform/db.mjs';
 import { startRuntime } from './helpers/tenancy-runtime.mjs';
 import { demoRouteBehavior } from '../src/public-demo/control.mjs';
@@ -16,6 +16,7 @@ test('real passkey sessions authorize only the household admin and never accept 
     for (const body of [{ householdId: f.B.id }, { destination: f.destination }, { keyFile: f.keys.backupKeyFile }, { path: '../foreign' }]) {
       assert.equal((await f.A.admin.client.post('/api/household/backups', body)).status, 400);
     }
+    assert.equal((await f.A.admin.client.post(`/api/household/backups?householdId=${f.B.id}`)).status, 400);
     assert.equal(count(), 0);
     const queued = await f.A.admin.client.post('/api/household/backups');
     assert.equal(queued.status, 200, queued.text);
@@ -65,8 +66,15 @@ test('the OS commands use the same configured destination and exact household co
   const f = await backupFixture();
   let server;
   try {
-    await f.server.close();
+    const snap = await backup(f);
+    assert.equal((await f.A.admin.client.get('/api/scenario')).status, 200);
     const options = { env: { ...process.env, ...f.server.env }, encoding: 'utf8', timeout: 30000 };
+    const count = f.platform.prepare('SELECT count(*) AS n FROM household_backup_operations').get().n;
+    const active = spawnSync(process.execPath, ['scripts/restore-household.mjs', '--household', f.A.id, '--confirm', f.A.id, '--bundle', snap.file], options);
+    assert.equal(active.status, 1); assert.match(active.stderr, /source_in_use/);
+    assert.equal(f.platform.prepare('SELECT count(*) AS n FROM household_backup_operations').get().n, count);
+    assert.equal((await f.A.admin.client.get('/api/scenario')).status, 200, 'a running service is never suspended by a refused offline command');
+    await f.server.close();
     const made = spawnSync(process.execPath, ['scripts/backup-household.mjs', '--household', f.A.id], options);
     assert.equal(made.status, 0, made.stderr);
     const status = JSON.parse(made.stdout);

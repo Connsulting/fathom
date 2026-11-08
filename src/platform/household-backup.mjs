@@ -18,7 +18,8 @@ const instanceId = platform => JSON.parse(platform.prepare("SELECT value FROM pl
 const operation = (p, id) => p.prepare('SELECT * FROM household_backup_operations WHERE id = ?').get(id);
 const household = (p, id) => p.prepare('SELECT * FROM households WHERE id = ?').get(id);
 const memberships = (p, id) => p.prepare('SELECT user_id AS userId, role, status, version FROM household_memberships WHERE household_id = ? ORDER BY user_id').all(id).map(r => ({ ...r }));
-const safeFile = path => path === DB_FILE || /^(files|packs|outbox)\/(?!.*(?:^|\/)\.{1,2}(?:\/|$))[A-Za-z0-9._/-]+$/.test(path);
+const safeFile = path => path === DB_FILE || (typeof path === 'string' && TREES.includes(path.split('/')[0])
+  && path.split('/').length > 1 && path.split('/').every(part => /^[A-Za-z0-9._-]+$/.test(part) && part !== '.' && part !== '..'));
 const inDir = (parent, path) => { const r = relative(parent, path); return r === '' || (!r.startsWith('..') && !isAbsolute(r)); };
 const assert = (ok, code) => { if (!ok) throw codeError(code); };
 const transaction = (p, fn) => {
@@ -138,14 +139,14 @@ function readVault(root) {
   return new Map(readdirSync(path).map(n => [`files/${n}`, readRegularFile(join(path, n))]));
 }
 
-function preflight(platform, config, row) {
+function preflight(platform, config, row, { verifyObjects = true } = {}) {
   const root = checkHouseholdRoot(config.dataDir, row.storage_root);
   const db = new DatabaseSync(join(root, DB_FILE), { readOnly: true });
   try {
     const keys = keyMetadata(platform, row.id);
     const version = listMigrations().at(-1).id;
     validateStore(db, row.id, row.mode, version);
-    validateVault(db, readVault(root), keyHandles(platform, config, row.id, keys));
+    if (verifyObjects) validateVault(db, readVault(root), keyHandles(platform, config, row.id, keys));
     const bytes = Number(db.prepare('PRAGMA page_count').get().page_count) * Number(db.prepare('PRAGMA page_size').get().page_size)
       + TREES.reduce((n, name) => n + treeBytes(root, join(root, name)), 0);
     return { root, bytes, metadata: { format: FORMAT, instanceId: instanceId(platform), householdId: row.id,
@@ -324,7 +325,11 @@ export async function restoreHousehold({ platform, config, runtimes = null, hous
   }
   const row = activeHousehold(platform, householdId);
   const bundle = openBundle(platform, config, householdId, file);
-  const source = preflight(platform, config, row);
+  const source = preflight(platform, config, row, { verifyObjects: false });
+  if (!runtimes) {
+    const lock = openSourceExclusive(join(source.root, DB_FILE));
+    lock.close();
+  }
   const bytes = [...bundle.files.values()].reduce((n, b) => n + b.length, 0);
   spaceFor(config.dataDir, bytes * 2 + source.bytes + 1048576, space);
   const id = newOperationId();

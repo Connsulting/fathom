@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { startRuntime } from './helpers/tenancy-runtime.mjs';
@@ -113,5 +113,21 @@ test('backup drains an acquired request while B continues serving', async () => 
     const snap = await pending;
     await restore(f, snap.file);
     assert.equal(marker(f.context(f.A.id)), 'alpha-drained');
+  } finally { await f.close(); }
+});
+
+test('a verified bundle repairs a damaged live vault while preserving the readable current store', async () => {
+  const f = await backupFixture();
+  try {
+    const snap = await backup(f);
+    const path = join(f.A.root, 'files', 'synthetic-file.bin');
+    const bytes = readFileSync(path); bytes[bytes.length - 1] ^= 1;
+    writeFileSync(path, bytes);
+    changeMarker(f.context(f.A.id), 'alpha-damaged-vault');
+    await restore(f, snap.file);
+    assert.equal(marker(f.context(f.A.id)), 'alpha');
+    const { root, handle } = await f.context(f.A.id).vault();
+    const { readObject, PURPOSES } = await import('../src/platform/household-vault.mjs');
+    assert.equal((await readObject({ root, handle, purpose: PURPOSES.upload, objectId: 'synthetic-file', storedPath: 'files/synthetic-file.bin' })).toString(), 'Synthetic alpha upload');
   } finally { await f.close(); }
 });

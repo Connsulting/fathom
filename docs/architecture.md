@@ -1178,7 +1178,7 @@ The offline command requires the target store to be closed; use the admin reques
 server is running. `node scripts/restore-household.mjs --household <id> --confirm <id> --bundle
 <file>` replaces that exact registered household on the same instance. Stop the service for the
 operator restore command. Rerun the identical command after interruption, or start the server
-to finish its journal. A blocked recovery keeps that household unavailable while others serve.
+to finish its journal. Recovery blocked after suspension keeps that household unavailable while others serve.
 
 Restore authenticates bundle hashes, schema, identity and every vault object, verifies current
 key availability, checks free space and stages a new private root before suspending the target.
