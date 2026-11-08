@@ -23,14 +23,14 @@ test('populated additive upgrade preserves financial rows and provenance; old ma
   const db = legacy();
   try {
     const before = snapshot(db); const old = db.prepare('SELECT * FROM column_mappings').get();
-    assert.deepEqual(migrate(db).applied, [29, 30]);
+    assert.deepEqual(migrate(db, { through: 30 }).applied, [29, 30]);
     assert.deepEqual(snapshot(db), before);
     const mapping = db.prepare('SELECT * FROM column_mappings').get();
     for (const k of Object.keys(old)) assert.deepEqual(mapping[k], old[k]);
     assert.equal(mapping.approval_status, 'unapproved'); assert.equal(mapping.mapping_version, 1);
     assert.equal(mapping.schema_version, 1); assert.equal(mapping.approved_by, null); assert.equal(mapping.approved_at, null);
     assert.equal(mapping.structural_context, null);
-    assert.deepEqual(migrate(db).applied, []);
+    assert.deepEqual(migrate(db, { through: 29 }).applied, []);
     assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), []);
     assert.throws(() => db.prepare("UPDATE column_mappings SET approval_status = 'guessed'").run());
     assert.throws(() => db.prepare('UPDATE column_mappings SET mapping_version = 0').run());

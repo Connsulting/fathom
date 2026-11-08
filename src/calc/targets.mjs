@@ -8,7 +8,7 @@
 // contribution room from the planner's stored room figures). Anything else is a question.
 
 import { createHash } from 'node:crypto';
-import { resolveCategories } from '../categories/resolve.mjs';
+import { selectSpendingRows } from './aggregate.mjs';
 import { finite, round } from './pace.mjs';
 import { figure, rowsSource, mergeSources } from './figure.mjs';
 import { HORIZON_IDS, horizonLabel } from '../shared/goals.mjs';
@@ -157,18 +157,7 @@ export const isBusinessAccount = a => !!a && (a.business === true || a.kind === 
 
 export function spendingInputs({ accounts, transactions, corrections = [], merchantRules = [], sourceRules = [], guesses = [], clock, parameters = TARGET_PARAMETERS }) {
   const P = parameters;
-  const byId = new Map(accounts.map(a => [a.id, a]));
-  const isSpending = a => SPENDING_KINDS.includes(a.kind) && !isBusinessAccount(a);
-  const spending = accounts.filter(isSpending);
-  const rows = transactions.filter(t => byId.has(t.account_id) && finite(t.amount) && typeof t.date === 'string' && t.date <= clock);
-  const monthsOf = new Map();
-  for (const t of rows) {
-    if (!isSpending(byId.get(t.account_id))) continue;
-    const set = monthsOf.get(t.account_id) || new Set();
-    set.add(monthIndex(t.date.slice(0, 7)));
-    monthsOf.set(t.account_id, set);
-  }
-  const resolved = resolveSpendingWindow({ accounts: spending, monthsOf, clock, parameters: P });
+  const { resolved, onSpending, categories, spend, income } = selectSpendingRows({ accounts, transactions, corrections, merchantRules, sourceRules, guesses, clock, parameters: P });
   const out = {
     window: resolved.window, months: resolved.months, counted: resolved.counted, silent: resolved.silent,
     incomplete: resolved.incomplete, closed: resolved.closed, limitedBy: resolved.limitedBy,
@@ -176,19 +165,7 @@ export function spendingInputs({ accounts, transactions, corrections = [], merch
   };
   if (!resolved.window) return out;
 
-  const inWindow = t => {
-    const range = resolved.ranges.get(t.account_id);
-    if (!range) return false;
-    const m = monthIndex(t.date.slice(0, 7));
-    return m >= range.from && m <= range.to;
-  };
-  const ordered = rows.toSorted((a, b) => a.date.localeCompare(b.date) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-  const onSpending = ordered.filter(t => isSpending(byId.get(t.account_id)) && inWindow(t));
   out.windowTransactionIds = onSpending.map(t => t.id);
-  const categories = resolveCategories({ accounts, transactions: ordered, corrections, merchantRules, sourceRules, guesses,
-    transferSourceIds: onSpending.map(t => t.id), transferDays: P.transferDays });
-  const spend = onSpending.filter(t => t.amount < 0 && categories.get(t.id).bucket === 'household');
-  const income = onSpending.filter(t => t.amount > 0 && categories.get(t.id).bucket === 'income');
   for (const [layer, prefix] of [['guess', 'guessed'], ['uncategorized', 'uncategorized']]) {
     const uncertainSpend = spend.filter(t => categories.get(t.id).layer === layer);
     const uncertainIncome = income.filter(t => categories.get(t.id).layer === layer);
