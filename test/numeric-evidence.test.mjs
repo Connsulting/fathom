@@ -5,6 +5,8 @@ import { statedAmounts, requireEvidence } from '../src/actions/evidence.mjs';
 test('SEC2: numeric evidence excludes identifier and date spans', () => {
   for (const text of [
     'account ending in 4821', 'account ending 4821', 'account last four 4821',
+    'card ending with 4821', 'account ends in 4821', 'account ends with 4821',
+    'the last four digits are 4821', 'the last 4 digits is 4821',
     'account 4821 (last4)', 'account (last4) 4821', 'account x4821',
     'account xx4821', 'account ****4821', 'account ...4821', 'account …4821',
     'account number 4821', 'routing number 4821', 'reference #4821',
