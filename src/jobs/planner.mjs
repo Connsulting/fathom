@@ -22,6 +22,7 @@ import { computeFigures } from './planner/figures.mjs';
 import { writeProse } from './planner/prose.mjs';
 import { applyRecs } from './planner/recs.mjs';
 import { writeBrief, namesOf, upsertContent } from './planner/brief.mjs';
+import { adoptSuggestions } from '../goals/write.mjs';
 import { evaluateCatalog } from './triggers/index.mjs';
 import { reasonText } from './triggers/missing-data.mjs';
 import { wargameFigurePrefixes } from './planner/wargame.mjs';
@@ -200,6 +201,8 @@ async function plan(db, engine, { clock, runId, packDirs }) {
     return { factsWritten, changes };
   });
 
+  // Fathom sets the calculator's target on every goal that has none and has not declined it.
+  adoptSuggestions(db, { now, clock });
   const active = db.prepare('SELECT count(*) AS n FROM planner_recs WHERE retired_at IS NULL').get().n;
   const warningList = [...warnings].sort();
   const counts = {

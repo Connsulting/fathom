@@ -66,7 +66,8 @@ export function goalsForModel(db) {
   const scope = tokenScope(db);
   const fig = loadFigures(db);
   const accounts = withLabelHints(db, db.prepare('SELECT * FROM accounts').all());
-  return loadGoals(db, { fig, accounts }).filter(g => !g.archived).map(g => {
+  // A done goal archives itself; the model still sees it, as done.
+  return loadGoals(db, { fig, accounts }).filter(g => !g.archived || g.status === 'done').map(g => {
     const owner = g.origin === 'owner';
     const source = owner ? 'you' : 'plan';
     const text = v => (owner ? String(v ?? '') : resolveTokens(scope, String(v ?? ''), false));
@@ -79,7 +80,8 @@ export function goalsForModel(db) {
     out.kind = g.kind;
     if (g.owner) { out.owner = g.owner; out.ownerLabel = personLabel(g.owner, scope.names); }
     if (g.priority) out.priority = g.priority;
-    if (owner && typeof g.target === 'number') out.target = { amount: g.target, source: 'you' };
+    // A target Fathom set came from the calculator, not the owner.
+    if (owner && typeof g.target === 'number') out.target = { amount: g.target, source: g.adopted ? 'fathom' : 'you' };
     if (owner && g.targetDate) out.targetDate = g.targetDate;
     if (g.kind === 'range' && amount(g.targetLow) && amount(g.targetHigh)) out.range = { low: amount(g.targetLow), high: amount(g.targetHigh) };
     if (g.kind === 'floor' && amount(g.floor)) out.floor = amount(g.floor);

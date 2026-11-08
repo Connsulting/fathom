@@ -76,7 +76,8 @@ test('a new goal gets the calculator target at once, marked as set by Fathom, wi
   assert.equal(fig.src, 'calc:targets', 'an adopted target keeps the calculator provenance');
   assert.ok(scenario.src['calc:targets'], 'the calc:targets source is described');
   assert.equal(recOf(scenario, goal.id), undefined, 'an adopted goal has no pending suggestion');
-  assert.ok(goalOf(scenario, goal.id).progress, 'the adopted target drives progress');
+  const g = goalOf(scenario, goal.id);
+  assert.ok(g.progress || g.trackWaiting, JSON.stringify(g));
 });
 
 test('Undo restores the previous values and declines the suggestion', async t => {

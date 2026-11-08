@@ -1,6 +1,6 @@
 import { parseJson as parse } from '../store/db.mjs';
 import { answerFacts } from '../facts/answers.mjs';
-import { createGoal, updateGoal } from '../goals/write.mjs';
+import { createGoal, updateGoal, adoptSuggestions } from '../goals/write.mjs';
 import { writeRec } from '../store/recs.mjs';
 import { requireActor, saveReceipt, replanAction } from './receipts.mjs';
 import { requireEvidence } from './evidence.mjs';
@@ -86,7 +86,9 @@ export function changeGoal(args, ctx, editing = false) {
     receipt = saveReceipt(ctx, { scope: 'write:goals', kind: 'goal', id: after.id, label: 'Goal',
       before: select(before, GOAL_FIELDS), after: select(after, GOAL_FIELDS), from: goalValue(before), to: goalValue(after) });
   } };
-  const row = editing ? updateGoal(ctx.db, id, fields, opts) : createGoal(ctx.db, fields, opts);
+  let row = editing ? updateGoal(ctx.db, id, fields, opts) : createGoal(ctx.db, fields, opts);
   ctx.onReceipt?.(receipt);
+  // Fathom sets the calculator's target on a goal that has none (src/goals/write.mjs).
+  if (adoptSuggestions(ctx.db, { now: opts.now, clock: ctx.config?.clock }).includes(row.id)) row = ctx.db.prepare('SELECT * FROM goals WHERE id = ?').get(row.id);
   return { goal: { ...parse(row.def, {}), status: goalStatusOf(row) }, receipt };
 }
