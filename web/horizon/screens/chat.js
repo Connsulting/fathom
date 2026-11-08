@@ -166,6 +166,7 @@ export function goalProposalHtml(m) {
     + '</div>';
 }
 
+const ENTITY_TAX_LABEL = { s_corp: 'S corp', llc_single: 'single-member LLC taxed on Schedule C', sole_prop: 'sole proprietorship', partnership: 'partnership', c_corp: 'C corp', personal: 'personal summary', income_history: 'income history', inactive: 'inactive', not_mine: 'not mine' };
 const PENDING_LABEL = { 'update_goal.create': 'Create goal', 'update_goal.edit': 'Edit goal' };
 const RESOLVED_LABEL = { confirmed: 'Confirmed', declined: 'Not now', stale: 'Out of date' };
 const pendingLabel = (p) => PENDING_LABEL[`${p.tool}.${p.operation}`]
@@ -181,10 +182,13 @@ export function pendingActionHtml(m, { latest = true } = {}) {
   if (!H || !m || m.role !== 'fathom' || m.notice || !isObj(m.provenance) || !isObj(m.provenance.pendingAction)) return '';
   const { esc } = H;
   const p = m.provenance.pendingAction;
-  const args = isObj(p.args) ? Object.entries(p.args).filter(shownArg) : [];
+  const entities = p.tool === 'answer' && p.operation === 'fact' && p.args?.key === 'business.entities' && Array.isArray(p.args.value) ? p.args.value : null;
+  const args = entities ? [] : isObj(p.args) ? Object.entries(p.args).filter(shownArg) : [];
+  const entityRows = entities ? `<ul class="h-pending-args">${entities.map(e => `<li>${esc(e.name)}: ${esc(ENTITY_TAX_LABEL[e.type] || e.type)}, ${e.owner === 'spouse' ? 'your spouse' : 'you'}${e.status === 'final_year' ? ', final year; final K-1 expected' : ', active'}${e.accountId ? '; linked business account' : ''}</li>`).join('')}</ul>` : '';
   const status = isObj(p.resolved) ? p.resolved.status : latest ? null : 'stale';
   const id = esc(m.id);
-  return `<div class="h-proposal h-pending-action"><p><span class="h-proposal-k">Proposed:</span> <b>${esc(pendingLabel(p))}</b></p>`
+  return `<div class="h-proposal h-pending-action"><p><span class="h-proposal-k">Proposed:</span> <b>${esc(entities ? 'Record household businesses' : pendingLabel(p))}</b></p>`
+    + entityRows
     + (args.length ? `<ul class="h-pending-args">${args.map(([k, v]) => `<li>${esc(k)}: ${esc(v)}</li>`).join('')}</ul>` : '')
     + (status
       ? `<span class="h-proposal-done">${esc(RESOLVED_LABEL[status] || 'Out of date')}</span>`

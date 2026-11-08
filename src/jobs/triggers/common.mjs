@@ -74,13 +74,16 @@ const dollars = label => ({ type: 'number', unit: 'USD', min: 0, label });
 const birthYear = label => ({ type: 'number', unit: 'year', min: MIN_BIRTH_YEAR, max: 2200, integer: true, label });
 
 export const ANSWER_SHAPES = Object.freeze({
-  'business.entities': { scope: 'household', type: 'array', minItems: 1, maxItems: 100, label: 'Business entity classifications', items: { type: 'object', fields: {
+  'business.entities': { scope: 'household', type: 'array', minItems: 1, maxItems: 100, label: 'Business entity classifications', guidance: 'Record multiple businesses in one answer.fact proposal. Use known employer and business names, never personal summary tab names. Link the owner S corp to its business account. For unnamed spouse businesses use Spouse LLC and Spouse partnership as provisional labels. LLC means single-member LLC taxed on Schedule C unless multiple members or a corporate election is unclear. Record a departing partnership as final_year with finalYear; this year uses the household clock. The final K-1 remains expected.', items: { type: 'object', fields: {
     name: { type: 'string', label: 'Entity name', maxLength: 200 },
-    type: { type: 'choice', label: 'Entity classification', choices: [
+    type: { type: 'choice', ownerInterpreted: true, label: 'Entity classification', choices: [
       ['s_corp', 'S corp'], ['sole_prop', 'sole proprietorship'], ['llc_single', 'single member LLC'], ['partnership', 'partnership'],
       ['c_corp', 'C corp'], ['personal', 'personal summary'], ['income_history', 'income history'], ['inactive', 'inactive past business'], ['not_mine', 'not mine'],
     ].map(([value, label]) => ({ value, label })) },
-    owner: { type: 'choice', optional: true, label: 'Person or business owner', choices: [{ value: 'owner', label: 'you' }, { value: 'spouse', label: 'your spouse' }] },
+    owner: { type: 'choice', ownerInterpreted: true, optional: true, label: 'Person or business owner', choices: [{ value: 'owner', label: 'you' }, { value: 'spouse', label: 'your spouse' }] },
+    status: { type: 'choice', ownerInterpreted: true, optional: true, label: 'Business status', choices: [{ value: 'active', label: 'active' }, { value: 'final_year', label: 'final year' }] },
+    finalYear: { type: 'number', unit: 'year', integer: true, min: 1900, max: 2200, optional: true, label: 'Final tax year' },
+    accountId: { type: 'string', maxLength: 200, optional: true, label: 'Linked business account ID' },
     sstb: { ...yesNo('Specified service trade or business'), optional: true },
   } } },
   'business.entityInference': { scope: 'household', type: 'map', label: 'Undo an inferred entity classification', values: { type: 'object', fields: { undone: yesNo('Undo this inferred classification?') } } },

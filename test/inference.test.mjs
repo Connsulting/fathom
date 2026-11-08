@@ -491,11 +491,50 @@ test('AC15-AC19: one missing-data Ask proposal records owner S corp, spouse LLC 
 test('entity status and account links validate atomically without accepting missing final years or personal accounts', async t => {
   const { db } = await store(t);
   budgetAndBusiness(db);
+  db.prepare("INSERT INTO accounts(id,name,kind) VALUES ('personal-account','Personal checking','checking')").run();
   for (const entry of [
+    { name: 'Current Studio', type: 's_corp', accountId: 'personal-account' },
     { name: 'Past partnership', type: 'partnership', status: 'final_year' },
     { name: 'Past partnership', type: 'partnership', status: 'active', finalYear: 2026 },
     { name: 'Current Studio', type: 's_corp', accountId: 'missing-account' },
   ]) assert.throws(() => recordFactAnswers(db, [{ key: 'business.entities', value: [entry] }], { now }), FactAnswerError);
   recordFactAnswers(db, [{ key: 'business.entities', value: [{ name: 'Past partnership', type: 'partnership', owner: 'spouse', status: 'final_year', finalYear: 2025 }] }], { now });
   assert.ok(!resolveEntities(loadPlanningData(db, '2026-11-05'), getFacts(db)).some(e => e.name === 'Past partnership'), 'prior final years do not enter current business calculations');
+  recordFactAnswers(db, [{ key: 'business.entities', value: [{ name: 'Final partnership', type: 'partnership', owner: 'spouse', status: 'final_year', finalYear: 2026 }] }], { now });
+  assert.ok(resolveEntities(loadPlanningData(db, '2027-01-10'), getFacts(db)).some(e => e.name === 'Final partnership'), 'the final tax year remains in the filing-season plan');
+});
+
+
+test('an expense-only unmatched business account does not invent a second business or block a classified business', async t => {
+  const { db } = await store(t);
+  budgetAndBusiness(db);
+  db.prepare("DELETE FROM transactions WHERE amount > 0").run();
+  addFact(db, 'business.entities', [{ name: 'Actual Studio', type: 's_corp', owner: 'owner' }]);
+  await planRun(db);
+  const resolved = resolveEntities(loadPlanningData(db, '2026-11-05'), getFacts(db));
+  assert.deepEqual(resolved.map(e => e.name), ['Actual Studio']);
+});
+
+
+test('synthetic household variants keep their account-backed ledger attached to the selected business', async t => {
+  const s = scratch('inference-variant-');
+  t.after(() => s.cleanup());
+  const db = await s.store({ variant: { entities: [{ name: 'Replacement Studio', type: 'sole_prop', owner: 'owner', income: 5000, expenses: {} }] } });
+  await planRun(db);
+  const resolved = resolveEntities(loadPlanningData(db, '2026-11-05'), getFacts(db));
+  assert.deepEqual(resolved.map(e => e.name), ['Replacement Studio']);
+  assert.equal(resolved[0].type, 'sole_prop');
+});
+
+
+test('business evidence accepts stored ledger names but refuses invented names and final-year dates', async t => {
+  const { db, ctx } = await store(t);
+  budgetAndBusiness(db);
+  const evidence = "mine is an S-Corp, the spouse's is an LLC; the spouse left a K-1 partnership this year and has to file a final K-1.";
+  for (const value of [
+    [{ name: 'Invented corporation', type: 's_corp', owner: 'owner' }],
+    [{ name: 'Spouse partnership', type: 'partnership', owner: 'spouse', status: 'final_year', finalYear: 2027 }],
+  ]) await assert.rejects(callTool('answer', { operation: 'fact', key: 'business.entities', value, evidence }, { ...ctx, channel: 'mcp', scopes: ['write:facts'], ownerText: evidence }), e => e.code === 'bad_input');
+  const saved = await callTool('answer', { operation: 'fact', key: 'business.entities', value: [{ name: 'Current Studio', type: 's_corp', owner: 'owner', status: 'active', accountId: 'business-cash' }], evidence }, { ...ctx, channel: 'mcp', scopes: ['write:facts'], ownerText: evidence });
+  assert.ok(saved.receipt);
 });

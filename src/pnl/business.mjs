@@ -61,7 +61,7 @@ function loadBusiness(db, clock) {
   const only = businessNames.length === 1 ? businessNames[0] : null;
   const owner = new Map();
   for (const a of base.accounts.filter(businessAccount)) {
-    const entityName = stated[a.id] || a.entity || (Array.isArray(listed) ? listed.find(e => e?.accountIds?.includes(a.id))?.name : null);
+    const entityName = (Array.isArray(listed) ? listed.find(e => e?.accountId === a.id)?.name : null) || stated[a.id] || a.entity || (Array.isArray(listed) ? listed.find(e => e?.accountIds?.includes(a.id))?.name : null);
     const named = typeof entityName === 'string' && entityName.trim() ? canon(entityName).norm : null;
     owner.set(a.id, named && !businessNames.includes(named) ? null : named ?? only);
   }

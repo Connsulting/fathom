@@ -148,24 +148,20 @@ test('shutdown of work queued behind occupied dispatcher slots is bounded and ne
   await live.stop();
 });
 
-test('the first planner run links a newly created ledger confirmation and readback follows replacements', async t => {
+test('the first planner run classifies a personal summary without creating a ledger confirmation', async t => {
   const { db } = await store(t);
   for (const category of ['Medical', 'Shopping', 'Groceries', 'HSA', 'Dining']) {
     db.prepare('INSERT INTO pnl_lines (entity, period, category, amount) VALUES (?, ?, ?, ?)').run('Synthetic ledger', '2026-10', category, -100);
   }
   await planRun(db, { now: clock });
   const item = db.prepare("SELECT id FROM confirm_items WHERE kind = 'fact_check' AND status = 'pending'").get();
-  assert.ok(item);
-  let sc = buildScenario(db, { clock });
-  const step = () => sc.recs.find(r => r.id === 'missing-data').tasks.find(t => t.kind === 'confirm');
-  assert.equal(step().confirmId, item.id);
-  assert.equal(step().link, 'confirm');
-  const old = db.prepare('SELECT * FROM confirm_items WHERE id = ?').get(item.id);
-  db.prepare("UPDATE confirm_items SET status = 'answered', answer = 'superseded' WHERE id = ?").run(item.id);
-  const replacement = db.prepare("INSERT INTO confirm_items (kind, subject, question, options, context, status, created_at) VALUES (?, ?, ?, ?, ?, 'pending', ?) RETURNING id")
-    .get(old.kind, 'replacement-ledger', old.question, old.options, old.context, old.created_at);
-  sc = buildScenario(db, { clock });
-  assert.equal(step().confirmId, replacement.id);
+  assert.equal(item, undefined);
+  const fact = JSON.parse(db.prepare("SELECT value FROM facts WHERE key='business.entities'").get().value);
+  assert.equal(fact.find(e => e.name === 'Synthetic ledger').type, 'personal');
+  const sc = buildScenario(db, { clock });
+  assert.ok(!sc.recs.find(r => r.id === 'missing-data').tasks.some(t => t.kind === 'confirm'));
+  assert.ok(sc.recs.some(r => r.assumptions?.some(a => a.key === 'business.entities' && a.path[0] === 'Synthetic ledger')));
+
 });
 
 test('a connection mapping without newer account data cannot make that account fresh', async t => {

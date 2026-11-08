@@ -303,6 +303,6 @@ test('INF1: HTTP planning infers personal ledgers and P&L reads preserve spendin
     const undone = await app.postJson(`/api/recs/${rec.id}/answers`, { answers: [{ key: 'business.entityInference', value: { Asters: { undone: true } } }] });
     assert.equal(undone.status, 200, undone.text);
     assert.ok(!JSON.parse(db.prepare("SELECT value FROM facts WHERE key='business.entities'").get().value).some(e => e.name === 'Asters'));
-    assert.ok(undone.json.scenario.recs.find(r => r.id === 'missing-data').tasks.some(t => /classify.*Aster/.test(t.t)));
+    assert.ok(undone.json.scenario.recs.find(r => r.id === 'missing-data').tasks.some(t => t.code?.startsWith('entity_unclassified:') && /Aster/.test(t.t)));
   } finally { await app.close(); }
 });

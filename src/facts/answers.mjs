@@ -78,9 +78,17 @@ export function recordFactAnswers(db, answers, { now = new Date().toISOString(),
       }
       validate(value, shape, year);
       if (a.key === 'business.entities') {
+        const links = value.map(e => e.accountId).filter(Boolean);
+        if (new Set(links).size !== links.length) fail();
+        for (const entry of value) {
+          if ((entry.status === 'final_year') !== (entry.finalYear !== undefined)) fail();
+          if (entry.accountId && (!['s_corp', 'sole_prop', 'llc_single', 'partnership', 'c_corp'].includes(entry.type)
+            || !db.prepare("SELECT id FROM accounts WHERE id=? AND kind='business' AND archived_at IS NULL").get(entry.accountId))) fail();
+        }
         const prior = parseJson(db.prepare('SELECT value FROM facts WHERE key = ?').get(a.key)?.value, []);
         const names = new Set(value.map(e => normalizeName(e.name)));
-        value = [...(Array.isArray(prior) ? prior : []).filter(e => !names.has(normalizeName(e?.name))), ...value];
+        value = [...(Array.isArray(prior) ? prior : []).filter(e => !names.has(normalizeName(e?.name))
+          && !(e?.inferred && e.accountIds?.some(id => links.includes(id)))), ...value];
       }
       if (shape.type === 'map') {
         const prior = parseJson(db.prepare('SELECT value FROM facts WHERE key = ?').get(a.key)?.value, {});

@@ -888,7 +888,7 @@ test('PN1: income rows, mostly business categories and an explicit business answ
     if (marked) addFact(db, 'pnl.ledgers', { Cedar: { kind: 'business' } });
     await plan(db);
     assert.equal(figureRow(db, 'agi.est'), null);
-    assert.match(JSON.stringify(recRow(db, 'missing-data').def), /classify Cedar/);
+    assert.match(JSON.stringify(recRow(db, 'missing-data').def), /Cedar.*(?:S corp|taxed)/);
     assert.ok(!db.prepare("SELECT context FROM confirm_items WHERE status = 'pending'").all().some(x => JSON.parse(x.context).key === 'pnl.ledgers'));
   }
 });
@@ -899,8 +899,8 @@ test('INF1: undoing a spending classification keeps it unknown on later planning
   await plan(db);
   await answerFacts(db, [{ key: 'business.entityInference', value: { Cedar: { undone: true } } }], { replan: () => plan(db) });
   assert.ok(!factRow(db, 'business.entities').value.some(e => e.name === 'Cedar'));
-  assert.match(figureRow(db, 'agi.est').unavailable_reason, /classify Cedar/);
-  assert.match(JSON.stringify(recRow(db, 'missing-data').def), /classify Cedar/);
+  assert.match(figureRow(db, 'agi.est').unavailable_reason, /Cedar.*(?:S corp|taxed)/);
+  assert.match(JSON.stringify(recRow(db, 'missing-data').def), /Cedar.*(?:S corp|taxed)/);
   await plan(db);
   assert.ok(!factRow(db, 'business.entities').value.some(e => e.name === 'Cedar'));
 });
@@ -914,7 +914,7 @@ test('PN1: ledger answers validate and merge entries, and override an inferred c
   }
   await answerFacts(db, [{ key: 'pnl.ledgers', value: { Cedar: { kind: 'business' } } }], { replan: async () => {} });
   await plan(db);
-  assert.match(JSON.stringify(recRow(db, 'missing-data').def), /classify Cedar/);
+  assert.match(JSON.stringify(recRow(db, 'missing-data').def), /Cedar.*(?:S corp|taxed)/);
   await answerFacts(db, [{ key: 'pnl.ledgers', value: { Elm: { kind: 'spending' } } }], { replan: async () => {} });
   assert.deepEqual(factRow(db, 'pnl.ledgers').value, { Cedar: { kind: 'business' }, Elm: { kind: 'spending' } });
   await answerFacts(db, [{ key: 'pnl.ledgers', value: { CEDAR: { kind: 'spending' } } }], { replan: async () => {} });

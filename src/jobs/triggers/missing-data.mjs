@@ -2,7 +2,7 @@
 // tax inputs (R1, R14, R19, T9.5). Evaluated last so it sees every other trigger's block.
 
 import { normalizeName } from '../../ingest/confirm.mjs';
-import { ledgerDisplayName, summaryPerson } from '../../pnl/ledgers.mjs';
+import { ledgerDisplayName, summaryPerson, looksLikeSpending } from '../../pnl/ledgers.mjs';
 import { ADVISOR_KEYS } from '../../facts/derive.mjs';
 import { addDays } from '../planner/data.mjs';
 import { confirmItemFor } from '../../shared/rec-steps.mjs';
@@ -115,7 +115,9 @@ function rawReasonItem(ctx, reason, name) {
     const names = unclassified.length ? unclassified.map(x => name(x.displayName || x.name))
       : [...new Set((ctx.data?.pnl || []).map(ledgerDisplayName))].map(name);
     const who = names.length ? names.join(', ') : e ? name(e.displayName || e.name) : 'a business in your profit and loss';
-    const task = `Tell Fathom how to classify ${who}: S corp, sole proprietorship, partnership, personal spending, or not mine?`;
+    const task = unclassified.some(x => summaryPerson(x, ctx.facts) || looksLikeSpending(x, ctx.facts))
+      ? `Tell Fathom how to classify ${who}: personal spending summary, S corp, sole proprietorship, partnership, or not mine?`
+      : `How is ${who} taxed? Tell Fathom: S corp, sole proprietorship, partnership, personal spending, or not mine.`;
     return { code: reason, tax: true, text: task, task };
   }
   if (reason === 'partnership_incomplete') {
@@ -178,6 +180,10 @@ export function items(ctx) {
   }
   if (ctx.mortgage?.present && ctx.mortgage.missing.length) out.push({ code: 'obligations.mortgage', tax: false,
     text: `Mortgage: tell Fathom only the missing ${ctx.mortgage.missing.join(', ')}.`, task: 'Tell Fathom the missing mortgage terms', kind: 'question', link: 'ask' });
+  for (const entity of ctx.entities || []) if (entity.type === 'partnership' && entity.status === 'final_year' && entity.finalYear === ctx.data.year) {
+    const text = `Expect a final K-1 for ${dataText(entity.name)} for its final tax year.`;
+    out.push({ code: `final_k1:${entity.slug}`, tax: true, text, task: text, kind: 'check', link: 'ask' });
+  }
   const summaries = (Array.isArray(ctx.facts['business.entities']) ? ctx.facts['business.entities'] : []).filter(e => e?.type === 'personal').map(e => {
     const line = (ctx.data?.pnlHistory || ctx.data?.pnl || []).find(l => normalizeName(l.entity) === normalizeName(e.name));
     return { ...e, displayName: line ? ledgerDisplayName(line) : e.name };

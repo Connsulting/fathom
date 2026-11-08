@@ -207,12 +207,12 @@ export function resolveEntities(data, facts) {
   const TYPES = ['s_corp', 'sole_prop', 'llc_single', 'partnership', 'c_corp'];
   const out = [];
   const add = e => {
-    if (!e || typeof e.name !== 'string' || !e.name.trim()) return;
+    if (!e || typeof e.name !== 'string' || !e.name.trim() || (e.status === 'final_year' && e.finalYear < data.year)) return;
     if (out.some(x => sameName(x.name, e.name))) return;
     out.push({
       name: e.name.trim(), slug: slugOf(e.name), type: TYPES.includes(e.type) ? e.type : null,
       owner: e.owner === 'spouse' ? 'spouse' : 'owner', sstb: typeof e.sstb === 'boolean' ? e.sstb : null,
-      docId: null, fileId: null, classified: TYPES.includes(e.type), lines: [], accountIds: [],
+      docId: null, fileId: null, status: e.status || 'active', finalYear: e.finalYear, classified: TYPES.includes(e.type), lines: [], accountIds: [],
     });
   };
   const listed = facts['business.entities'];
@@ -229,10 +229,10 @@ export function resolveEntities(data, facts) {
   for (const activity of data.businessActivity || []) {
     if (!activity.rows.length) continue;
     const account = data.accounts.find(a => a.id === activity.accountId);
-    const name = facts['accounts.businessEntity']?.[account.id] || account.entity || ownerNames.find(e => e.accountIds?.includes(account.id))?.name || (ownerNames.length === 1 ? ownerNames[0].name : null);
+    const name = ownerNames.find(e => e.accountId === account.id)?.name || facts['accounts.businessEntity']?.[account.id] || account.entity || ownerNames.find(e => e.accountIds?.includes(account.id))?.name || (ownerNames.length === 1 ? ownerNames[0].name : null);
     const candidate = activity.rows.some(r => r.section === 'income') && activity.rows.some(r => r.section === 'expenses');
-    if (!name && !candidate) continue;
     let e = name ? out.find(e => sameName(e.name, name)) : null;
+    if (!e && !candidate) continue;
     if (!e) {
       const label = name || `account:${account.id}`;
       add({ name: label, owner: account.owner });
@@ -248,7 +248,8 @@ export function resolveEntities(data, facts) {
     e.displayName = e.accountLabel || (e.lines.length && e.lines[0].sourceTable !== 'transactions' ? ledgerDisplayName(e.lines[0]) : e.name);
     e.months = e.lines.length ? Math.max(...e.lines.map(l => monthOf(l.period))) : 0;
   }
-  return out.filter(e => !['spending', 'inactive', 'income_history'].includes(ledgerKind(facts, e.name, e.lines)));
+  return out.filter(e => !['spending', 'inactive', 'income_history'].includes(ledgerKind(facts, e.name, e.lines))
+    && !(Array.isArray(listed) && listed.some(prior => sameName(prior?.name, e.name) && prior.status === 'final_year' && prior.finalYear < data.year)));
 }
 
 export function inferEntities(data, facts) {

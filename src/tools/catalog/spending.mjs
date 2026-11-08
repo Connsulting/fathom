@@ -143,4 +143,4 @@ export const operations = [
     (args, ctx) => recurring(readInput(ctx), args),
   ),
 ];
-export const rules = ['Use spending.total for totals and transactions.search for examples; never sum transaction rows. debt_service is all debt payments, never the mortgage payment; use spending.obligations.'];
+export const rules = ['Use spending.total for spending totals and transactions.search for recent purchases; never sum transaction rows. debt_service is all debt payments, never the mortgage payment; use spending.obligations.'];
