@@ -91,7 +91,10 @@ test('declarations match what each action reads', () => {
 
 test('figure inputs: each household figure reads only what it is computed from; an unknown key reads everything', () => {
   const fig = key => figureInputs(key);
-  assert.deepEqual([...fig('room.hsa')].sort(), ['ages', 'hsa']);
+  assert.deepEqual([...fig('room.hsa')].sort(), ['ages', 'filing', 'hsa']);
+  // Employer HSA contributions count by filing unit, so an assumed filing status stays on HSA room.
+  assert.ok(inputsOf('filing_status_assumed').some(i => fig('room.hsa').includes(i)), 'room.hsa keeps the filing status gap');
+  assert.ok(!inputsOf('paystub_ytd_missing').some(i => fig('room.hsa').includes(i)), 'room.hsa never carries a wage gap');
   for (const key of ['room.solo401k', 'room.solo401k.employee', 'room.sep']) assert.deepEqual([...fig(key)].sort(), ['ages', 'income', 'retirement'], key);
   assert.ok(fig('room.ira.owner').includes('filing'));
   assert.deepEqual([...fig('inc.ytd.w2')], ['income']);

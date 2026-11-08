@@ -35,7 +35,7 @@ export const TRIGGER_INPUTS = Object.freeze({
   'solo401k-setup': f('income', 'retirement', 'ages'),
   'scorp-salary': f('income', 'retirement', 'filing', 'va'),
   'invoice-deferral': f('income', 'retirement', 'filing', 'va'),
-  'hsa-room': f('hsa', 'ages'),
+  'hsa-room': f('hsa', 'ages', 'filing'),
   va529: f('income', 'retirement', 'filing', 'va', 'ages'),
   'charitable-bunching': f('filing'),
   'backdoor-roth': f('income', 'retirement', 'filing', 'ages'),
@@ -119,7 +119,7 @@ export function blockedFor(ctx, trigger) {
 // payments; room figures read the plan inputs and the catch-up age; AGI reads income, retirement
 // deductions and which people are in the filing unit.
 const FIGURE_INPUTS = Object.freeze([
-  [/^room\.hsa$/, f('hsa', 'ages')],
+  [/^room\.hsa$/, f('hsa', 'ages', 'filing')],
   [/^room\.(solo401k|sep)(\.|$)/, f('income', 'retirement', 'ages')],
   [/^room\.ira\./, f('income', 'retirement', 'filing', 'ages')],
   [/^inc\.ytd\./, f('income')],
