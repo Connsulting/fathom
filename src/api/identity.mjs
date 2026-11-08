@@ -1,7 +1,17 @@
-import { sendJson } from './http.mjs';
+import { HttpError, sendJson } from './http.mjs';
 import { safePath } from '../../web/auth/return-path.js';
 
 export const identityOf = (req, auth) => auth.identity(req);
+
+export function revalidateRequest({ authenticate, checkAccess, household, runtimes }) {
+  const identity = authenticate();
+  if (!identity) throw new HttpError(401, 'unauthorized');
+  checkAccess?.(identity);
+  if (household && (identity.householdId !== household.householdId || runtimes.get(household.householdId) !== household)) {
+    throw new HttpError(403, 'household membership required');
+  }
+  return identity;
+}
 
 export const UNAUTHORIZED_PAGE = '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Not authorized</title></head><body><h1>Not authorized</h1><p><a href="/signin">Sign in</a> to open Fathom.</p></body></html>';
 

@@ -429,7 +429,7 @@ never inferred from what the store contains.
    created by another tool) is `real`. `FATHOM_DEMO=1` against a real store and `FATHOM_DEMO=0`
    against a demo store both refuse to start with a clear error and leave the file unchanged.
 3. A demo store is never reseeded on restart: its state persists.
-4. `npm run seed:demo` rebuilds a demo store or creates a missing one, and refuses a real store
+4. `npm run seed:demo -- --household <id>` rebuilds the selected existing demo household and refuses a real store
    (exit 1, data untouched). `POST /api/demo/reset` does the same rebuild in place and is a 404
    unless the store's mode is `demo`.
 5. Real household data lives only in the data volume, never in the repository.
@@ -1286,8 +1286,8 @@ Gate and origins.
    `Cache-Control: no-store`. Signed in, unknown `/api` paths keep 404 and wrong methods 405.
 4. Every POST on a real store needs `Origin` exactly equal to the `FATHOM_PUBLIC_URL` origin: JSON
    routes, uploads and the public auth routes. Browsers send it. Scripts must send a session cookie
-   and that header; `scripts/dump.mjs` sends neither and is unsupported against a real store (see
-   known limits).
+   and that header; `scripts/dump.mjs` reads its session from an operator-provided private file
+   and checks the selected household before every batch.
 5. Sensitive auth responses are `Cache-Control: no-store`.
 6. Demo stores: no accounts, `GET /api/auth/session` is `{identity: null, demo: true}`, every other
    auth and admin route is 404, and the UI shows no sign-in, account or household links. The
@@ -1484,7 +1484,9 @@ serves) and stops it before closing the store.
    Answers use `recordAutoAnswer`, including `resolver_fact` Confirm items that use the shared
    fact-answer writer with channel `resolver`. The normal evidence and Undo ledger applies;
    Undo restores pending state and declines the item permanently. Recommendation facts re-plan
-   deterministically after a run, without another model call. Evidence uses fixed plain language,
+   deterministically after a run, without another model call. The resolver queues a separate
+   household-local `plan` claim with trigger `resolve`; that plan disables model prose. The CLI
+   handles both jobs and drains the follow-up before exiting. Evidence uses fixed plain language,
    without categorization provider names, model names or confidence percentages.
 
    Household outbound engine pause, engine off and unavailable instance funding stop external
@@ -1594,7 +1596,7 @@ and `maskAddress`. `src/email/send.mjs` sends and records every attempt in `emai
 6. The Email screen (`web/horizon/screens/email.js`) shows the transport state and masked
    recipient, Send test email and Send brief now, the brief preview in an iframe with an empty
    `sandbox` attribute filled through `srcdoc`, the send history and the jobs with Run now.
-7. Live check: `FATHOM_LIVE_EMAIL=1 npm run email:test` sends one test email through the
+7. Live check: `FATHOM_LIVE_EMAIL=1 npm run email:test -- --household <id>` sends one test email through the
    configured transport and prints only the status and code; without `FATHOM_LIVE_EMAIL=1` it
    refuses (exit 2). Never run it in CI.
 
@@ -2046,12 +2048,16 @@ absolute latest balance first), 3 `account_match` and `entity_alias`, 4 `near_du
 is `account_owner` or `account_kind` for account questions. It also returns `decided`: the answered
 items with a `confirm_auto` row, newest first, with rule, evidence and `final`. The Confirm deck
 (`web/horizon/screens/ingest.js`) walks the items in that order. A single card shows the detail
-panel, the guessed option marked Best guess and preselected, and a Use best guess button; two or
-more pending account questions of one kind fold into one grouped card with a row per account (its
-own detail, same-named accounts marked) and Use best guesses for all, which answers through
-`POST /api/confirm/answers`. A Decided for you section lists `decided` with each rule's evidence and
-an Undo (`POST /api/confirm/:id/reopen`, or `reopen-many` for a group); a final answer shows why
-instead.
+panel and its options. The guessed option is marked Best guess where it already sits and is never
+preselected or moved up: nothing is answered until the owner picks an option or presses Use best
+guess. A category card lists the categories in one fixed order, so a number key names the same
+category on every card. Two or more pending account questions of one kind fold into one grouped
+card with a row per account (its own detail, same-named accounts marked) and an
+"Accept N best guesses" button that takes the guess of every unanswered row through
+`POST /api/confirm/answers`. A category is decided in order: the owner's labeled history first,
+then rules, then the model; an answer Fathom settles on its own goes to the Decided for you
+section, which lists `decided` with each rule's evidence and an Undo (`POST /api/confirm/:id/reopen`,
+or `reopen-many` for a group); a final answer shows why instead.
 
 Engine guesses (`src/ingest/guess.mjs`): `guessPending(db, engine, {now, batchSize = 20,
 maxBatches, fake})` sends pending items with no `confirm_guesses` row in batches, one engine call
@@ -2090,11 +2096,13 @@ after facts change.
 
 ### Scripts
 
-`node scripts/dump.mjs <baseUrl> <files or dirs...>` uploads files to `POST /api/files` in batches
+`node scripts/dump.mjs --household <id> <baseUrl> <files or dirs...>` uploads files to `POST /api/files` in batches
 under 200 MB, skipping dotfiles and reporting files over 50 MB, and prints one line per file
 (status, rows by kind, `dup=`, `warn=` and the base name, no values); it exits 1 when a request
-fails. It sends no session cookie and no `Origin`, so it works against a demo store only; a real
-store refuses it until it gains an operator-provided session in a separate change (known limit).
+fails. `FATHOM_SESSION_FILE` names a private JSON file containing `cookie`, `householdId` and
+`contextVersion`. The cookie is an existing authenticated session cookie. Before every batch the
+script checks that session's active household and sends `Origin`, `X-Fathom-Household` and
+`X-Fathom-Context-Version`. It cannot select a household outside that session's membership.
 `node scripts/user-invite.mjs` is the bootstrap CLI (see Accounts and sessions).
 `node scripts/ingest-check.mjs <dir>` imports a directory twice into a throwaway real store
 in the OS temp dir (engine off unless `FATHOM_ENGINE=fake`; `.key`, `.json` and dotfiles
@@ -2885,7 +2893,7 @@ pointer readout, so the phone pass does not add touch drag on the curve.
 `main` runs end to end on synthetic data with no secrets. A new store with `FATHOM_DEMO` unset is
 a demo and is seeded once. `FATHOM_ENGINE` defaults to `fake` on a demo and `off` on a real store.
 The fake engine answers from `src/api/fake-answers.mjs` through the same grounding path as live.
-`POST /api/demo/reset` rebuilds a demo store only. `npm run seed:demo` refuses a real store.
+`POST /api/demo/reset` rebuilds a demo store only. `npm run seed:demo -- --household <id>` refuses a real household.
 `FATHOM_CLOCK` overrides today for demos and tests and is never written to the store. A demo has
 no accounts: no session is needed, `api.identity()` is null, the auth and admin APIs are 404, and
 no sign-in, account or household page or link appears. It needs no secrets, no
@@ -3013,6 +3021,9 @@ Every number is a figure key into `figures`: `{v, src, kind: 'a', label, notes, 
 `beforeDispatch` after platform admission. Results include content, tool results or choices,
 input and output token counts, actual USD cost, and accounting metadata. Errors use the fixed
 codes exported as `MODEL_ERROR_CODES`; provider response bodies never become product errors.
+Admission preserves existing refusal objects, and `modelErrorCode` provides a normalized code
+without changing those objects. Every outbound adapter body uses the shared
+`redactProviderText` scrub, including JSON-schema prompts, tool arguments and tool-result replay.
 
 The engine admits every household response before calling an adapter. It checks the outbound
 engine pause, instance funding and the request budget, then reserves in the platform ledger
