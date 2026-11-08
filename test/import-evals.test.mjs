@@ -50,10 +50,11 @@ test('offline CLI runs all real API lifecycles and refuses unsafe injected resul
 });
 
 test('uncited cells, wrong accounts, wrong totals and cell instructions cannot silently pass the oracle', async () => {
-  for (const injectUnsafe of ['reference', 'account', 'total', 'instruction']) {
-    const report = await runEvaluation({ offline: true, caseIds: ['pnl_ledgers_refunds-1'], injectUnsafe });
+  for (const injectUnsafe of ['reference', 'account', 'total', 'instruction', 'exclusion']) {
+    const report = await runEvaluation({ offline: true, caseIds: [injectUnsafe === 'account' ? 'reordered_sheets-1' : 'pnl_ledgers_refunds-1'], injectUnsafe });
     assert.equal(report.ok, false, injectUnsafe);
     assert.equal(report.failed, 1, injectUnsafe);
-    assert.equal(report.safety.unsafeAccepted, 0, injectUnsafe);
+    if (injectUnsafe === 'account') assert.ok(report.safety.unsafeAccepted > 0, 'a valid but wrongly bound posting must fail quality admission');
+    else assert.equal(report.safety.unsafeAccepted, 0, injectUnsafe);
   }
 });

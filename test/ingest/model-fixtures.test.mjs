@@ -32,6 +32,7 @@ test('oracles preserve blank versus zero, formulas, hidden regions, both epochs 
   const refs = cases.flatMap(c => c.oracle.source.refs);
   assert.ok(refs.some(r => r.value === 0)); assert.ok(refs.some(r => r.valueType === 'empty'));
   assert.ok(refs.some(r => r.formula && r.cached)); assert.ok(refs.some(r => r.formula && !r.cached));
+  assert.ok(cases.some(c => c.oracle.expected.some(row => row.fields?.amount?.transform.op === 'sign')));
   assert.ok(refs.some(r => r.hidden)); assert.ok(refs.some(r => r.mergedAnchor));
   assert.deepEqual([...new Set(cases.filter(c => c.format === 'xlsx').map(c => c.oracle.source.epoch))].sort(), ['1900', '1904']);
   for (const c of cases.filter(c => c.format === 'text')) {

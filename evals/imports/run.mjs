@@ -57,8 +57,9 @@ function scripted(c, envelope, injectUnsafe) {
     delete response.layout;
     if (injectUnsafe === 'literal') response.rows[0].fields.amount = 999;
     if (injectUnsafe === 'reference') response.rows[0].fields.amount.refs = ['missing-reference'];
-    if (injectUnsafe === 'account') { response.rows = [{ target: 'transaction', fields: { accountId: { refs: [envelope.values.find(v => v.type === 'text').id], transform: { op: 'trim' } }, postedDate: response.rows[0].fields.period, amount: response.rows[0].fields.amount, description: response.rows[0].fields.category } }]; }
+    if (injectUnsafe === 'account') response.rows[0].fields.accountId = structuredClone(response.rows[1].fields.accountId);
     if (injectUnsafe === 'instruction') response.rows[0].fields.amount.transform = { op: 'execute', code: 'untrusted' };
+    if (injectUnsafe === 'exclusion') response.coverage[0].disposition = 'forecast';
     if (injectUnsafe === 'total') {
       const id = response.rows[0].fields.amount.refs[0];
       response.coverage.find(region => region.refs.includes(id)).disposition = 'control_total';
@@ -73,7 +74,7 @@ function expectedRows(c) {
   const refs = new Map(c.oracle.source.refs.map(ref => [ref.id, ref]));
   if (c.family === 'january_tax_year') return [];
   return typedRows(c).map(row => ({ ...attributes(row), fields: Object.fromEntries(Object.entries(row.fields).map(([key, value]) => [key, value === null ? null : {
-    ...value, value: key === 'dueDate' ? 'next Tuesday' : key === 'statement' ? refs.get(value.refs[0]).value.trim() : key === 'actor' ? 'owner' : row[key] ?? refs.get(value.refs[0])?.value,
+    ...value, value: key === 'dueDate' ? refs.get(value.refs[0]).value.trim() : key === 'statement' ? refs.get(value.refs[0]).value.trim() : key === 'actor' ? 'owner' : row[key] ?? refs.get(value.refs[0])?.value,
   }])) }));
 }
 async function observedRows(c, x, file) {
@@ -83,6 +84,13 @@ async function observedRows(c, x, file) {
   return JSON.parse(record.proposal).rows.map(row => ({ ...attributes(row), fields: Object.fromEntries(Object.entries(row.fields).map(([key, value]) => [key, value === null ? null : {
     ...value, refs: value.refs.map(id => coordinate(source.refs[id])), value: resolveField(source, value),
   }])) }));
+}
+async function contextMatches(c, x, file) {
+  const record = x.db.prepare('SELECT proposal FROM import_proposals WHERE file_id=? ORDER BY version DESC LIMIT 1').get(file.fileId);
+  if (!record) return false;
+  const proposal = JSON.parse(record.proposal), source = await indexSource({ fileId: file.fileId, bytes: c.bytes, format: c.format });
+  const actual = new Map(proposal.coverage.flatMap(region => region.refs.map(id => [coordinate(source.refs[id]), region.disposition])));
+  return Object.entries(c.oracle.dispositions).every(([id, disposition]) => actual.get(id) === disposition) && proposal.completeness === (c.family === 'january_tax_year' ? 'incomplete' : 'complete');
 }
 const tables = ['transactions', 'balances', 'pnl_lines', 'tax_payments', 'positions', 'facts', 'expected_transactions'];
 const snapshot = x => stable(tables.map(table => x.db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()));
@@ -131,6 +139,7 @@ export async function runEvaluation({ offline = false, seed = SEED, caseIds, inj
   if (!cases.length) throw new Error('no_cases');
   const report = { mode: offline ? 'offline' : 'live', seed, passed: 0, failed: 0, unrun: 0, cases: [], safety: { unsafeAccepted: 0, lostDuplicates: 0, unsupportedFigures: 0, crossHouseholdWrites: 0 }, lifecycle: { approvals: 0, retries: 0, undos: 0, foreignRefusals: 0, zeroCallRepeats: 0, changedApprovals: 0 } };
   const gate = offline ? null : cappedEngine(liveEngine, liveOptions);
+  let contextErrors = 0;
   let current, calls = 0, expectedCount = 0, actualCount = 0, matchedCount = 0;
   const factory = inner => offline ? { ...inner, call(request) {
     if (request.purpose !== 'extract') return inner.call({ ...request, fake: [{ text: '{}', costUsd: 0 }] });
@@ -160,9 +169,14 @@ export async function runEvaluation({ offline = false, seed = SEED, caseIds, inj
         const scored = scoreRows(expectedRows(c), await observedRows(c, x, file));
         expectedCount += scored.expected; actualCount += scored.actual; matchedCount += scored.matched;
         if (scored.f1 !== 1) errors.push('typed_rows_or_references');
-        const retry = await x.app.postJson(`/api/files/${file.fileId}/retry`, { mode: 'retry' });
-        report.lifecycle.retries++;
-        if (retry.status !== (auto ? 409 : 200) || calls !== beforeCalls + (auto ? 0 : 1)) errors.push('retry_dispatched');
+        if (!await contextMatches(c, x, file)) { errors.push('coverage_or_exclusions'); contextErrors++; }
+        if (file.fileId !== c.oracle.source.fileId || x.db.prepare('SELECT sha256 FROM files WHERE id=?').get(file.fileId)?.sha256 !== c.oracle.source.sha256) errors.push('source_identity');
+        if (offline) {
+          const retry = await x.app.postJson(`/api/files/${file.fileId}/retry`, { mode: 'retry' });
+          report.lifecycle.retries++;
+          if (retry.status !== (auto ? 409 : 200) || calls !== beforeCalls + (auto ? 0 : 1)) errors.push('retry_dispatched');
+        }
+        if (file.status === 'needs_confirmation' && c.oracle.outcome === 'needs_clarification') { errors.push('unsafe_status'); report.safety.unsafeAccepted++; }
         if (auto) { if (calls !== beforeCalls) errors.push('repeat_dispatched'); else report.lifecycle.zeroCallRepeats++; }
         const foreignReview = await review(foreign, file);
         if (foreignReview.status !== 404) errors.push('foreign_reference_accepted'); else report.lifecycle.foreignRefusals++;
@@ -171,6 +185,10 @@ export async function runEvaluation({ offline = false, seed = SEED, caseIds, inj
           const approved = auto ? { status: 200, json: file } : await review(x, file); if (!auto) report.lifecycle.approvals++;
           if (approved.status !== 200 || approved.json.status !== 'imported') errors.push('approval_failed');
           else if ((await persistedScore(c, x, file)).f1 !== 1) { errors.push('persisted_rows_or_references'); report.safety.unsafeAccepted++; }
+          if (c.family === 'relative_notes') {
+            const expected = c.oracle.expected[0], actual = x.db.prepare('SELECT subject,direction,due_date,date_precision,amount,status FROM expected_transactions WHERE file_id=?').all(file.fileId);
+            if (!isDeepStrictEqual(actual.map(row => ({ ...row })), [{ subject: expected.subject, direction: expected.direction, due_date: expected.dueDate, date_precision: expected.datePrecision, amount: null, status: 'expected' }])) { errors.push('unsupported_expectation'); report.safety.unsafeAccepted++; }
+          }
           if (c.family === 'reordered_sheets') {
             const occurrences = x.db.prepare('SELECT account_id,count(*) n FROM transactions WHERE amount=? GROUP BY account_id ORDER BY account_id').all(c.oracle.expected[0].amount);
             if (!isDeepStrictEqual(occurrences.map(r => r.n), [1, 2])) { errors.push('lost_duplicates'); report.safety.lostDuplicates++; }
@@ -192,7 +210,7 @@ export async function runEvaluation({ offline = false, seed = SEED, caseIds, inj
   } finally { await x?.close(); await foreign?.close(); }
   report.f1 = expectedCount + actualCount ? 2 * matchedCount / (expectedCount + actualCount) : 1;
   if (gate) report.spend = gate.report();
-  report.ok = (offline ? report.failed === 0 : true) && report.unrun === 0 && report.f1 >= (offline ? 1 : 0.9) && Object.values(report.safety).every(n => n === 0);
+  report.ok = (offline ? report.failed === 0 : true) && report.unrun === 0 && contextErrors === 0 && report.f1 >= (offline ? 1 : 0.9) && Object.values(report.safety).every(n => n === 0);
   return report;
 }
 
@@ -210,7 +228,7 @@ export async function main(argv = process.argv.slice(2)) {
       else if (argv[i] === '--max-calls') options.maxCalls = Number(argv[++i]);
       else throw new Error('invalid_arguments');
     }
-    if (options.offline === !!options.live || !Number.isInteger(options.seed) || options.injectUnsafe && !['literal', 'reference', 'account', 'total', 'instruction'].includes(options.injectUnsafe)) throw new Error('invalid_arguments');
+    if (!options.offline && options.injectUnsafe || options.offline === !!options.live || !Number.isInteger(options.seed) || options.injectUnsafe && !['literal', 'reference', 'account', 'total', 'instruction', 'exclusion'].includes(options.injectUnsafe)) throw new Error('invalid_arguments');
     let opened;
     let result;
     try {
