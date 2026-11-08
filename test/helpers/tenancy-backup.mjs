@@ -47,10 +47,10 @@ export async function backupFixture() {
       const path = await storeObject({ root: vaultRoot, handle, purpose: PURPOSES.upload, objectId: 'synthetic-file', bytes });
       const { createHash } = await import('node:crypto');
       const hash = createHash('sha256').update(bytes).digest('hex');
-      ctx.db.prepare("INSERT INTO files (id, name, mime, size, sha256, stored_path, status, created_at) VALUES ('synthetic-file', 'synthetic.txt', 'text/plain', ?, ?, ?, 'imported', '2026-11-01')").run(bytes.length, hash, path);
+      ctx.db.prepare("INSERT INTO files (id, name, mime, size, sha256, stored_path, status, uploaded_at) VALUES ('synthetic-file', 'synthetic.txt', 'text/plain', ?, ?, ?, 'imported', '2026-11-01')").run(bytes.length, hash, path);
       const packet = Buffer.from(`Synthetic ${marker} packet`);
       const packetPath = await storeObject({ root: vaultRoot, handle, purpose: PURPOSES.advisorPacket, objectId: 'synthetic-packet', bytes: packet });
-      ctx.db.prepare("INSERT INTO advisor_packets (id, kind, created_at, title, stored_path, sha256, bytes) VALUES ('synthetic-packet', 'accountant', '2026-11-01', 'Synthetic packet', ?, ?, ?)")
+      ctx.db.prepare("INSERT INTO advisor_packets (id, created_at, clock, rec_ids, stored_path, sha256, bytes) VALUES ('synthetic-packet', '2026-11-01', '2026-11-01', '[]', ?, ?, ?)")
         .run(packetPath, createHash('sha256').update(packet).digest('hex'), packet.length);
       ctx.db.prepare("INSERT INTO simplefin_connection (id, access_blob, status, connected_at) VALUES (1, ?, 'ok', '2026-11-01')")
         .run(sealConnectionSecret(handle, 'https://synthetic:synthetic@sfin.example.invalid/simplefin'));
