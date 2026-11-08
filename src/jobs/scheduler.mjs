@@ -22,7 +22,7 @@ import { guessCategories } from '../categories/guess.mjs';
 // 5. job_runs rows record status (ok, skipped, error), duration, trigger, cost and a counts-only
 //    note (numbers and booleans, top level or one object deep); error_class is an identifier (the
 //    error's code, else its class name), never a message. Logs are only
-//    `fathom: job <id> <status> [error_class]`.
+//    `fathom: job <id> <status> [error_class]`, plus one info-level lock refusal per job and household.
 // 6. stop() is graceful and never rejects: it clears the timers, then ticks run nothing, runNow is
 //    `locked` and pending reruns are dropped; it waits for active runs up to drainMs (default 30 s)
 //    and then releases the lease.
