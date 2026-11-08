@@ -48,25 +48,30 @@ async function started(rt) {
   else if (rt.ready) await rt.ready;
 }
 
+// MT-05: a live runtime engine reserves every round in the platform ledger, so the fixture is a
+// real instance (platform plus its household store) built by createInstance.
 async function withFixture(fn) {
-  const store = await tempDb();
+  const { createInstance } = await src('src/platform/db.mjs');
+  const dataDir = await tempDir('fathom-cred-data-');
+  const made = createInstance(dataDir, { mode: 'demo' });
   const dir = await tempDir('fathom-cred-');
   const credFile = join(dir, 'credential');
   const reads = countReads(credFile);
   try {
-    return await fn({ db: store.db, credFile, reads });
+    return await fn({ db: made.db, platform: made.platform, householdId: made.householdId, credFile, reads });
   } finally {
     reads.restore();
-    store.close();
-    rmSync(store.dataDir, { recursive: true, force: true });
+    made.db.close();
+    made.platform.close();
+    rmSync(dataDir, { recursive: true, force: true });
     rmSync(dir, { recursive: true, force: true });
   }
 }
 
-test('live mode reads a missing credential once at start; a file created later is never read and live calls fail', () => withFixture(async ({ db, credFile, reads }) => {
+test('live mode reads a missing credential once at start; a file created later is never read and live calls fail', () => withFixture(async ({ db, platform, householdId, credFile, reads }) => {
   const { createRuntimeEngine } = await src('src/engine/runtime.mjs');
   const { ModelCallError } = await src('src/engine/index.mjs');
-  const rt = createRuntimeEngine({ db, config: { engine: 'live', claudeCredentialFile: credFile } });
+  const rt = createRuntimeEngine({ db, config: { engine: 'live', claudeCredentialFile: credFile }, platform, householdId, generation: 1 });
   assert.ok(typeof rt.init === 'function' || (rt.ready && typeof rt.ready.then === 'function'), 'the runtime exposes init() or a ready promise');
   await started(rt);
   assert.equal(reads.n, 1, 'the credential file is read once, at start');
@@ -92,6 +97,19 @@ test('fake and off modes never touch the credential file', () => withFixture(asy
   }
   assert.equal(reads.n, 0);
 }));
+
+test('a live runtime engine without a platform ledger is refused (no unreserved live path)', async () => {
+  const { createRuntimeEngine } = await src('src/engine/runtime.mjs');
+  const store = await tempDb();
+  try {
+    assert.throws(() => createRuntimeEngine({ db: store.db, config: { engine: 'live' } }), TypeError);
+    // Liveness: fake mode needs no platform.
+    assert.doesNotThrow(() => createRuntimeEngine({ db: store.db, config: { engine: 'fake' } }));
+  } finally {
+    store.close();
+    rmSync(store.dataDir, { recursive: true, force: true });
+  }
+});
 
 // G9: the same through a real server started in live mode with a missing credential file. A preload
 // counts every open of the file. Extraction calls fail (the files wait as needs_extraction), and a

@@ -13,7 +13,7 @@
    value by unit, label, source, as-of date and gaps.
 
    Renderers export render(snapshot, ctx) -> html and bind(root, snapshot, ctx). ctx carries the
-   escaper, fig(cell) for a figure span, the block's view state (sort, filter, all) and ctl(name)
+   escaper, fig(cell) for a figure span, figKey(holder) for its blk: key, the block's view state (sort, filter, all) and ctl(name)
    for a control's data-blk-ctl value "<messageId>:<blockId>:<name>", the key the Ask panel's
    focus signature restores focus by. bind wires the block's controls; the shell calls it for each
    drawn block (a MutationObserver finds blocks a screen inserts) and gives it ctx.redraw(), which
@@ -24,8 +24,10 @@
 
 import * as table from './ask-block-table.js';
 import * as compare from './ask-block-compare.js';
+import * as chart from './ask-block-chart.js';
+import * as timeline from './ask-block-timeline.js';
 
-export const RENDERERS = { table, compare };
+export const RENDERERS = { table, compare, chart, timeline };
 
 const OP_NOUN = { chart: 'A chart', table: 'A table', compare: 'A comparison', timeline: 'A timeline' };
 export const dropNote = (op) => `${OP_NOUN[op] || 'A block'} was left out because its data did not check out.`;
@@ -88,6 +90,10 @@ function figureList(snapshot) {
       }
     }
   }
+  // Chart points (a scatter point's x and y) and timeline values register by the figure itself.
+  for (const s of arr(snapshot.series)) for (const p of arr(s && s.points)) if (isObj(p)) add(p, p);
+  for (const p of arr(snapshot.points)) for (const f of isObj(p) ? [p.x, p.y] : []) if (isObj(f)) add(f, f);
+  for (const e of arr(snapshot.events)) if (isObj(e) && isObj(e.value)) add(e.value, e.value);
   return out;
 }
 
@@ -122,6 +128,8 @@ function ctxFor(messageId, block) {
   };
   return {
     key, esc: K.esc, fig, formatByUnit,
+    figKey: (holder) => (index.has(holder) ? `blk:${key}:${index.get(holder)}` : ''),
+    builtAt: typeof block.builtAt === 'string' ? block.builtAt : '',
     state: blockState(messageId, block.id),
     ctl: (name) => `${key}:${name}`,
   };

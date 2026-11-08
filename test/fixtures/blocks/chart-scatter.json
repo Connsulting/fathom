@@ -1,0 +1,293 @@
+{
+  "id": "c4",
+  "op": "chart",
+  "after": 1,
+  "spec": {
+    "kind": "scatter",
+    "source": {
+      "tool": "recommendations.wargame",
+      "args": {
+        "game": "salary"
+      },
+      "path": "points"
+    },
+    "x": "salary",
+    "series": [
+      {
+        "path": "totalTax"
+      }
+    ]
+  },
+  "calls": [
+    {
+      "tool": "recommendations.wargame",
+      "args": {
+        "game": "salary"
+      }
+    }
+  ],
+  "snapshot": {
+    "title": "Salary against total tax",
+    "kind": "scatter",
+    "xLabel": "Salary",
+    "yLabel": "Total tax",
+    "xUnit": "usd",
+    "yUnit": "usd",
+    "points": [
+      {
+        "id": "p1",
+        "label": "Salary A",
+        "x": {
+          "value": 60000,
+          "unit": "usd",
+          "label": "Salary",
+          "kind": "p",
+          "asOf": "2026-10-31",
+          "gaps": [],
+          "provenance": {
+            "calc": "recommendations.wargame",
+            "assumptions": [
+              {
+                "name": "filing",
+                "stated": "Filing jointly"
+              }
+            ]
+          },
+          "source": "Your war games"
+        },
+        "y": {
+          "value": 31250,
+          "unit": "usd",
+          "label": "Total tax",
+          "kind": "p",
+          "asOf": "2026-10-31",
+          "gaps": [],
+          "provenance": {
+            "calc": "recommendations.wargame",
+            "assumptions": [
+              {
+                "name": "filing",
+                "stated": "Filing jointly"
+              }
+            ]
+          },
+          "source": "Your war games"
+        },
+        "frontier": false,
+        "current": false
+      },
+      {
+        "id": "p2",
+        "label": "Salary B",
+        "x": {
+          "value": 75000,
+          "unit": "usd",
+          "label": "Salary",
+          "kind": "p",
+          "asOf": "2026-10-31",
+          "gaps": [],
+          "provenance": {
+            "calc": "recommendations.wargame",
+            "assumptions": [
+              {
+                "name": "filing",
+                "stated": "Filing jointly"
+              }
+            ]
+          },
+          "source": "Your war games"
+        },
+        "y": {
+          "value": 29800,
+          "unit": "usd",
+          "label": "Total tax",
+          "kind": "p",
+          "asOf": "2026-10-31",
+          "gaps": [],
+          "provenance": {
+            "calc": "recommendations.wargame",
+            "assumptions": [
+              {
+                "name": "filing",
+                "stated": "Filing jointly"
+              }
+            ]
+          },
+          "source": "Your war games"
+        },
+        "frontier": true,
+        "current": false
+      },
+      {
+        "id": "p3",
+        "label": "Salary C",
+        "x": {
+          "value": 90000,
+          "unit": "usd",
+          "label": "Salary",
+          "kind": "p",
+          "asOf": "2026-10-31",
+          "gaps": [],
+          "provenance": {
+            "calc": "recommendations.wargame",
+            "assumptions": [
+              {
+                "name": "filing",
+                "stated": "Filing jointly"
+              }
+            ]
+          },
+          "source": "Your war games"
+        },
+        "y": {
+          "value": 29150,
+          "unit": "usd",
+          "label": "Total tax",
+          "kind": "p",
+          "asOf": "2026-10-31",
+          "gaps": [],
+          "provenance": {
+            "calc": "recommendations.wargame",
+            "assumptions": [
+              {
+                "name": "filing",
+                "stated": "Filing jointly"
+              }
+            ]
+          },
+          "source": "Your war games"
+        },
+        "frontier": true,
+        "current": true
+      },
+      {
+        "id": "p4",
+        "label": "Salary D",
+        "x": {
+          "value": 105000,
+          "unit": "usd",
+          "label": "Salary",
+          "kind": "p",
+          "asOf": "2026-10-31",
+          "gaps": [],
+          "provenance": {
+            "calc": "recommendations.wargame",
+            "assumptions": [
+              {
+                "name": "filing",
+                "stated": "Filing jointly"
+              }
+            ]
+          },
+          "source": "Your war games"
+        },
+        "y": {
+          "value": 29600,
+          "unit": "usd",
+          "label": "Total tax",
+          "kind": "p",
+          "asOf": "2026-10-31",
+          "gaps": [],
+          "provenance": {
+            "calc": "recommendations.wargame",
+            "assumptions": [
+              {
+                "name": "filing",
+                "stated": "Filing jointly"
+              }
+            ]
+          },
+          "source": "Your war games"
+        },
+        "frontier": true,
+        "current": false
+      },
+      {
+        "id": "p5",
+        "label": "Salary E",
+        "x": {
+          "value": 120000,
+          "unit": "usd",
+          "label": "Salary",
+          "kind": "p",
+          "asOf": "2026-10-31",
+          "gaps": [],
+          "provenance": {
+            "calc": "recommendations.wargame",
+            "assumptions": [
+              {
+                "name": "filing",
+                "stated": "Filing jointly"
+              }
+            ]
+          },
+          "source": "Your war games"
+        },
+        "y": {
+          "value": 30900,
+          "unit": "usd",
+          "label": "Total tax",
+          "kind": "p",
+          "asOf": "2026-10-31",
+          "gaps": [],
+          "provenance": {
+            "calc": "recommendations.wargame",
+            "assumptions": [
+              {
+                "name": "filing",
+                "stated": "Filing jointly"
+              }
+            ]
+          },
+          "source": "Your war games"
+        },
+        "frontier": false,
+        "current": false
+      },
+      {
+        "id": "p6",
+        "label": "Salary F",
+        "x": {
+          "value": 135000,
+          "unit": "usd",
+          "label": "Salary",
+          "kind": "p",
+          "asOf": "2026-10-31",
+          "gaps": [],
+          "provenance": {
+            "calc": "recommendations.wargame",
+            "assumptions": [
+              {
+                "name": "filing",
+                "stated": "Filing jointly"
+              }
+            ]
+          },
+          "source": "Your war games"
+        },
+        "y": {
+          "value": 32775.5,
+          "unit": "usd",
+          "label": "Total tax",
+          "kind": "p",
+          "asOf": "2026-10-31",
+          "gaps": [],
+          "provenance": {
+            "calc": "recommendations.wargame",
+            "assumptions": [
+              {
+                "name": "filing",
+                "stated": "Filing jointly"
+              }
+            ]
+          },
+          "source": "Your war games"
+        },
+        "frontier": false,
+        "current": false
+      }
+    ]
+  },
+  "asOf": "2026-10-31",
+  "builtAt": "2026-11-01T12:00:00.000Z"
+}
