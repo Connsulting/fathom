@@ -53,9 +53,7 @@ export function decisionState(db, id) {
   const decision = db.prepare('SELECT * FROM decisions WHERE id = ?').get(id) ?? null;
   const key = DECIDED_FACT[decision?.wargame];
   return { decision, fact: key ? db.prepare('SELECT * FROM facts WHERE key = ?').get(key) ?? null : null,
-    picks: db.prepare("SELECT * FROM settings WHERE key = 'wargame.picks'").get() ?? null,
-    game: db.prepare("SELECT * FROM content WHERE key = 'wargame'").get() ?? null,
-    figures: db.prepare("SELECT * FROM figures WHERE key LIKE 'wg.%' ORDER BY key").all() };
+    picks: db.prepare("SELECT * FROM settings WHERE key = 'wargame.picks'").get() ?? null };
 }
 
 export function pickWargame(db, name, point, { onWrite } = {}) {

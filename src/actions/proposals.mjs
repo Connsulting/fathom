@@ -56,19 +56,30 @@ export function proposalBasis(db, tool, scopes, args = {}) {
     parts.push(['wargame_picks', db.prepare("SELECT * FROM settings WHERE key = 'wargame.picks'").all()]);
     if (args.decisionId) parts.push(['decision_rec', db.prepare('SELECT * FROM recs WHERE id = (SELECT rec_id FROM decisions WHERE id = ?)').all(args.decisionId)]);
   }
+  const settings = keys => parts.push(['settings', db.prepare(`SELECT * FROM settings WHERE key IN (${keys.map(() => '?').join(',')}) ORDER BY key`).all(...keys)]);
+  const content = keys => parts.push(['content', db.prepare(`SELECT * FROM content WHERE key IN (${keys.map(() => '?').join(',')}) ORDER BY key`).all(...keys)]);
   if (tool === 'advisor_review') {
-    for (const [table, order] of [['advisor_reviews', 'id'], ['advisor_checkin', 'id'], ['advisor_packets', 'id'],
-      ['planner_recs', 'rec_id'], ['decisions', 'id'], ['content', 'key'], ['sources', 'id'], ['accounts', 'id'],
-      ['balances', 'account_id, date'], ['positions', 'id'], ['preferences', 'id'], ['settings', 'key']]) rows(table, order);
+    if (args.recId) parts.push(['advisor_reviews', db.prepare('SELECT * FROM advisor_reviews WHERE rec_id = ? ORDER BY id').all(args.recId)]);
+    else if (args.reviewId) {
+      parts.push(['advisor_reviews', db.prepare('SELECT * FROM advisor_reviews WHERE id = ?').all(args.reviewId)]);
+      parts.push(['planner_recs', db.prepare('SELECT * FROM planner_recs WHERE rec_id = (SELECT rec_id FROM advisor_reviews WHERE id = ?)').all(args.reviewId)]);
+    } else if (args.date) rows('advisor_checkin', 'id');
+    else {
+      for (const [table, order] of [['advisor_reviews', 'id'], ['advisor_checkin', 'id'], ['advisor_packets', 'id'],
+        ['planner_recs', 'rec_id'], ['decisions', 'id'], ['sources', 'id'], ['accounts', 'id'],
+        ['balances', 'account_id, date'], ['positions', 'id']]) rows(table, order);
+      settings(['clock', 'mode', 'goals.suggestions', 'curve.positions', 'wargame.picks', 'planner.snapshot']);
+      content(['meta', 'names', 'law', 'pct', 'advisor', 'wargame']);
+    }
   }
-  if (tool === 'update_goal') {
-    rows('settings', 'key');
+  if (tool === 'update_goal' && (args.action !== undefined || args.withdrawalRate !== undefined)) {
+    settings(['goals.suggestions']);
     for (const [table, order] of [['accounts', 'id'], ['balances', 'account_id, date'], ['positions', 'id'], ['transactions', 'id'],
       ['transaction_category_corrections', 'transaction_id'], ['category_merchant_rules', 'merchant']]) rows(table, order);
   }
   if (tool === 'update_preferences' && args.positions) {
-    rows('settings', 'key');
-    rows('content', 'key');
+    settings(['curve.positions']);
+    content(['curve', 'onboarding']);
   }
   // Sources a proposed value may come from: goal notes and targets, facts and stored figures.
   parts.push(['goals', db.prepare('SELECT * FROM goals ORDER BY id').all()]);
