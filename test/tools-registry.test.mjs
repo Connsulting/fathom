@@ -9,7 +9,7 @@ import { createRegistryServer } from '../src/engine/tools.mjs';
 const expected = {
   household: ['summary', 'facts', 'fact_shapes', 'figures', 'deadlines'],
   accounts: ['list', 'holdings'], transactions: ['search'], business: ['pnl'],
-  goals: ['list', 'pace'], recommendations: ['list', 'detail', 'advisor'],
+  goals: ['list', 'pace'], recommendations: ['list', 'detail', 'advisor', 'wargame'],
   knowledge: ['packs', 'search', 'entry'], answer: ['fact'],
   act_on_recommendation: ['status', 'owner', 'step'], update_goal: ['create', 'edit'],
   update_preferences: ['remember'], undo: ['undo'],
