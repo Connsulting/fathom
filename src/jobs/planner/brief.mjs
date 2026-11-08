@@ -93,6 +93,20 @@ export function writeBrief(db, ctx, { hits }) {
   for (const name of ['salary', 'deferral']) if (!wargame[name] && invalid[name]) notBuilt[name] = notBuiltReason(name, invalid[name], reasonEntities);
   if (Object.keys(notBuilt).length) wargame.notBuilt = notBuilt;
   upsertContent(db, 'wargame', wargame, now);
+  // Picks are stored by position. A rebuilt game can drop or add entries (H3: an over-limit point is
+  // left out), so each stored pick follows its entry by id, or goes back to the default once gone.
+  const picks = getSetting(db, 'wargame.picks', null);
+  if (picks && typeof picks === 'object') {
+    const listOf = (g, name) => (Array.isArray(g?.[name === 'salary' ? 'points' : 'options']) ? g[name === 'salary' ? 'points' : 'options'] : []);
+    const next = { ...picks };
+    for (const name of ['salary', 'deferral']) {
+      if (!ctx.model[name] || !Number.isInteger(picks[name])) continue;
+      const id = listOf(prev[name], name)[picks[name]]?.id;
+      const at = id == null ? -1 : listOf(wargame[name], name).findIndex(x => x?.id === id);
+      if (at >= 0) next[name] = at; else delete next[name];
+    }
+    if (JSON.stringify(next) !== JSON.stringify(picks)) setSetting(db, 'wargame.picks', next);
+  }
 
   writeDeadlines(db, ctx, hits);
   writeDecisions(db, ctx, hits, wargame);

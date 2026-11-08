@@ -322,9 +322,16 @@ function pruneFigures(db, produced, ctx) {
   for (const r of db.prepare('SELECT text FROM messages').all()) scan(r.text);
   for (const r of db.prepare('SELECT note, decided_line FROM decisions').all()) { scan(r.note); scan(r.decided_line); }
   const prefixes = [];
+  // H3: a point or option left out of a current game gives its own figures its reason and fix.
+  const excluded = [];
   for (const r of db.prepare('SELECT key, value FROM content').all()) {
     scan(r.value);
-    if (r.key === 'wargame') prefixes.push(...wargameFigurePrefixes(parseJson(r.value, {})));
+    if (r.key !== 'wargame') continue;
+    const wg = parseJson(r.value, {}) || {};
+    prefixes.push(...wargameFigurePrefixes(wg));
+    for (const name of ['salary', 'deferral']) for (const e of Array.isArray(wg[name]?.excluded) ? wg[name].excluded : []) {
+      if (e && typeof e.invalid === 'string') excluded.push({ prefix: `wg.${name}.${e.id}.`, text: e.invalid, fix: e.fix || null });
+    }
   }
   const info = ctx.info || {};
   const withheld = info.withheld || {};
@@ -336,7 +343,7 @@ function pruneFigures(db, produced, ctx) {
       // war-game figure takes its game's reason.
       const game = ['salary', 'deferral'].find(n => key.startsWith(`wg.${n}.`) && info.wargameInvalid?.[n]);
       const code = withheld[key] || (info.blocked || [])[0] || null;
-      const why = game ? notBuiltReason(game, info.wargameInvalid[game]) : null;
+      const why = game ? notBuiltReason(game, info.wargameInvalid[game]) : excluded.find(e => key.startsWith(e.prefix)) || null;
       const reason = why ? why.text : reasonText(ctx, code);
       const fix = why ? why.fix : code ? fixOrNull(code) : null;
       const { unavailableFix, ...loc } = parseJson(locator, {}) || {};

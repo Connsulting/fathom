@@ -133,7 +133,14 @@ function assertExcluded(game, id, what) {
 test('AC2: a salary point over its contribution limit is dropped alone and the comparison still shows', async () => {
   const db = await S.store({ variant: { facts: { 'retirement.contributions': [ownPlan('employer', 12000)] } } });
   await planRun(db, { now: NOW });
-  assert.ok(contentValue(db, 'wargame').salary.points.some(p => p.id === 's50'), 'precondition: s50 is offered when valid');
+  const before = contentValue(db, 'wargame').salary.points;
+  assert.ok(before.some(p => p.id === 's50'), 'precondition: s50 is offered when valid');
+  // Review F1: a pick after s50 must follow its point when s50 is left out.
+  const picked = before[before.findIndex(p => p.id === 's50') + 1].id;
+  wargamePick(api(db, { name: 'salary' }, { index: picked }));
+  // Review F4: a message still quoting a figure of the left-out point.
+  db.prepare("INSERT INTO conversations (key, created_at) VALUES ('h3-review', ?)").run(NOW);
+  db.prepare("INSERT INTO messages (conversation_key, role, text, ts) VALUES ('h3-review', 'fathom', 'Tax {f:wg.salary.s50.tax}.', ?)").run(NOW);
   addFact(db, 'retirement.contributions', [ownPlan('employer', 14000)]);
   await planRun(db, { now: NOW });
   const stored = contentValue(db, 'wargame').salary;
@@ -145,6 +152,10 @@ test('AC2: a salary point over its contribution limit is dropped alone and the c
   const scenario = getScenario(api(db));
   assert.notEqual(scenario.wargame.salary.status, 'unavailable');
   assert.ok(scenario.fig['wg.salary.s50.salary'], 'the dropped point keeps its salary figure for its label');
+  assert.equal(scenario.wargame.salary.points[scenario.live.picks.salary].id, picked, 'the stored pick follows its point');
+  const quoted = scenario.fig['wg.salary.s50.tax'];
+  assert.match(quoted.unavailable, /limit/i, 'a quoted figure of the left-out point says why');
+  assert.equal(quoted.unavailableFix?.key, 'retirement.contributions', 'and carries its fix');
   assert.throws(() => wargamePick(api(db, { name: 'salary' }, { index: 's50' })), e => e.status >= 400 && e.status < 500);
 });
 
@@ -173,4 +184,30 @@ test('AC1: a child tax credit limited to income tax is an assumption, not a dead
   assert.ok(wg.deferral.options.length >= 2);
   const scenario = getScenario(api(db));
   assert.ok(scenario.fig[`wg.deferral.${wg.deferral.options[0].id}.tax2026`].notes.some(n => /child tax credit/i.test(n)), 'the comparison says what it leaves out');
+});
+
+// Review F2: a middle of the range over its limit is not a reference; the allowed point nearest it is.
+test('AC2: an over-limit middle of the range measures against the nearest allowed salary', async () => {
+  const db = await S.store({ variant: { facts: { 'business.salaryRange': { min: 70000, max: 130000 }, 'retirement.contributions': [ownPlan('employer', 27000)] } } });
+  await planRun(db, { now: NOW });
+  const wg = contentValue(db, 'wargame');
+  assert.ok(wg.salary, `the salary game is built: ${JSON.stringify(wg.notBuilt)} ${wg.salary?.unavailable}`);
+  assert.equal(wg.salary.unavailable, undefined);
+  assert.deepEqual(wg.salary.points.map(p => p.id), ['s115', 's130']);
+  assert.ok(wg.salary.excluded.some(e => e.id === 's100'));
+  assert.equal(wg.salary.points.find(p => p.id === 's115').y, 0, 'the nearest allowed salary is the reference');
+  assert.match(wg.salary.yLabel, /nearest the middle/);
+  assert.match(wg.salary.question, /nearest the middle/);
+});
+
+// Review F3: an advisor wait shows beside optional estimate improvements, not under them.
+test('AC1: advisor waits stay visible on a rec that also has estimate gaps', async () => {
+  const blocker = await import('../web/horizon/screens/rec-blocker.js');
+  blocker.bind(kit);
+  const r = { id: 'r', status: 'waiting', waitingOn: 'advisor', advisorWaits: [advisorWait('retirement.planTermsConfirmed')],
+    gaps: [{ message: 'A gap.', action: { screen: 'upload', kind: 'taxforms', label: 'Upload a clearer tax form' } }] };
+  const html = blocker.html(r, 'plan');
+  assert.match(html, /Waiting on your advisor/);
+  assert.match(html, /Optional estimate improvements/);
+  assert.deepEqual(controls(html).map(c => c.fix.key || c.fix.kind), ['retirement.planTermsConfirmed', 'taxforms']);
 });

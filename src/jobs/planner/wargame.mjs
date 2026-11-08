@@ -147,7 +147,12 @@ function salaryGame(data, out, ctx) {
   let ref = inRange ? points.find(p => p.s === current) : null;
   if (!ref) ref = evaluate(clamp(round1000((lo + hi) / 2)));
   if (!ref) return invalid('salary_points_unavailable');
+  // A middle of the range over its contribution limit is not a reference; the allowed point nearest
+  // it is (H3), and the labels say so.
+  const mid = ref.s;
+  if (ref.blocked === OVER_LIMIT) ref = [...points].sort((a, b) => Math.abs(a.s - mid) - Math.abs(b.s - mid) || a.s - b.s)[0];
   if (ref.blocked) return invalid(blockedCode(ref.blocked));
+  const middle = !inRange && ref.s !== mid ? 'the allowed salary nearest the middle of the range' : 'the middle of the range';
 
   const pending = [
     ...(retireMissing.includes('retirement.planTermsConfirmed') ? ['plan_terms_pending'] : []),
@@ -201,11 +206,11 @@ function salaryGame(data, out, ctx) {
     title: `What should you pay yourself in ${data.taxYear}?`,
     question: {
       in: 'Each point trades payroll tax against retirement room. The current salary is marked.',
-      out: 'Each point trades payroll tax against retirement room. Your current salary is outside the approved range, so changes are measured against the middle of the range.',
-      none: 'Each point trades payroll tax against retirement room. You have no officer salary yet this year, so changes are measured against the middle of the range.',
+      out: `Each point trades payroll tax against retirement room. Your current salary is outside the approved range, so changes are measured against ${middle}.`,
+      none: `Each point trades payroll tax against retirement room. You have no officer salary yet this year, so changes are measured against ${middle}.`,
     }[outside],
     xLabel: 'Pre-tax retirement room',
-    yLabel: inRange ? 'Tax change vs your current salary' : 'Tax change vs the middle of the range',
+    yLabel: inRange ? 'Tax change vs your current salary' : `Tax change vs ${middle}`,
     points: content,
     ...(excluded.length ? { excluded } : {}),
     ...(advisorWaits.length ? { advisorWaits } : {}),
