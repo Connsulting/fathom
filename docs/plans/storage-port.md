@@ -186,8 +186,8 @@ roll back; abandoned clients are destroyed. Await startup and graceful shutdown.
 ### Scope, identity and filesystem
 
 Postgres instance control uses `fathom_platform`. Household schema names are
-`hh_` plus the full lowercase SHA-256 hex of the immutable household id, shortened
-to a 60-hex suffix to fit the 63-byte identifier limit; the platform registry
+`hh_` plus the first 60 lowercase hex characters of the SHA-256 of the immutable
+household id, fitting the 63-byte identifier limit; the platform registry
 stores the exact mapping with a UNIQUE constraint. A collision fails provisioning,
 never shares storage. Add a storage descriptor per registry row (backend, schema,
 generation) while retaining storage_root for files/packs/outbox/work on disk.
@@ -199,7 +199,7 @@ and a trusted SET LOCAL search_path for exactly its schema and pg_catalog. Use
 separate NOLOGIN platform and household roles, no PUBLIC schema CREATE privileges,
 no household cross-schema grants, no SECURITY DEFINER functions. The runtime
 login can SET the provisioned roles without inheriting all their privileges.
-Only a separate migration/provisioning connection can CREATE schemas/roles.
+Only a separate migration/provisioning connection can CREATE/DROP schemas/roles.
 Registry-issued schema names are validated and quoted; never use a request id as
 an identifier. App queries cannot explicitly qualify another schema or manipulate
 roles/search_path. Rollback/reset before returning a client; failed reset destroys
@@ -207,8 +207,36 @@ it. Recheck store_identity before migration and after opening; generation change
 fence writes. This is protection against wrong scope selection, not against an
 operator or arbitrary SQL execution by the shared trusted process.
 
-Public-demo control gets its own schema. Each demo sandbox has a generated,
-registry-owned platform namespace and household schema; no shared sandbox rows.
+The Postgres server also loads FATHOM_POSTGRES_PROVISION_URL_FILE, a separate
+mounted credential used only by migration, createHouseholdStorage, sandbox
+createInstance and sandbox cleanup. It is never handed to request/tool contexts
+or a runtime pool. These entrypoints call the storage provisioning operation,
+not arbitrary privileged SQL. PG startup requires both credential files; CI
+creates synthetic runtime/provisioner roles without repository secrets. The
+provisioner must be able to create/drop scopes and roles and grant runtime SET
+ROLE privileges; preflight probes this on disposable synthetic objects.
+
+Household provisioning first reserves an operation id, household/schema mapping
+and provisioning phase in the platform operation journal. It then creates the
+unserved schema, immutable identity, role and contained files, marking resources
+ready before publishing the registry row/generation. The create transaction
+records its operation id inside the schema. On restart, recognize the journal
+before fresh-target checks: adopt the complete unpublished schema only when
+operation id, household identity, artifact checks and root match; otherwise
+remove only verified incomplete resources owned by that operation and rebuild.
+An unknown/conflicting existing schema always refuses. A crash after publication
+resumes the published operation rather than recreating its schema. No active
+household schema is deleted by provisioning cleanup.
+
+Public-demo control uses fathom_demo_control. Each sandbox platform schema is
+`dp_` plus the first 60 hex characters of SHA-256 of its server-issued visitor id;
+its own generated household receives the ordinary hh_ mapping. Thus fathom_platform
+is the normal instance platform name, not the name of every sandbox platform.
+The control registry journals sandbox creation/publication/deletion and stores
+both exact schema mappings. Namespace collisions refuse. Cleanup blocks new
+admission, drains active requests, records delete_pending, then uses the
+provisioning connection to drop only that sandbox's verified schemas/roles and
+remove its contained root; mark complete after both. A crash resumes deletion.
 Synthetic template creation/reset uses this port on both backends. Files remain
 private and contained in each existing sandbox/household root. No control handle
 can be used as a financial handle. Reads never default to a served household.
@@ -299,14 +327,18 @@ Compare sequence high-water marks separately. Exclude only backend artifact
 metadata, with an explicit manifest list. Keep the existing digest version for
 legacy tenancy snapshots; never compare unlike digest versions as equal.
 
-A backend-neutral logical household bundle contains typed rows, schema history,
+PG-5 upgrades MT-08's single household bundle format to a new typed version,
+reusing its backup runner, request/status APIs and restore command. It does not
+introduce a parallel household backup subsystem. The backend-neutral logical
+household bundle contains typed rows, schema history,
 sequence/ordinal state, store_identity, relative-root file hashes and encrypted
 vault/files/packs/outbox/work bytes, plus the platform slice required by the
 multi-tenancy backup contract. Wrap it in authenticated encryption with the
 existing separately supplied backup key, fsync a private partial file and publish
-without overwrite only after verification. A new explicit bundle format/command
-distinguishes it from existing FTHMSNAP1 SQLite safety snapshots; those snapshots
-retain their explicit offline restore tool. No silent format fallback.
+without overwrite only after verification. The versioned MT-08 bundle header
+distinguishes these archives from existing FTHMSNAP1 SQLite safety snapshots;
+those snapshots retain their explicit offline restore tool. The runner chooses
+the declared bundle version, never guesses a format or uses silent fallback.
 
 Quiesce the selected household: block admission, stop scheduling, drain in-flight
 work and fence generation before taking database/filesystem state. SQLite uses
@@ -404,7 +436,8 @@ requires the current household layout and does not reinterpret legacy vault data
    container, ephemeral synthetic database and health check. Install exact
    dependencies and run the same npm test command with backend/DSN environment
    provided by CI. A missing/unhealthy service fails the job. Concurrent test
-   files get isolated schemas, deterministic cleanup and bounded clients.
+   files get isolated databases, each representing one synthetic instance with
+   isolated platform/household schemas, deterministic cleanup and bounded clients.
 3. Add a CI storage integration job on the same service: actual SQL, independent
    clients/processes, pool reuse, FK/unique/check failures, two-household canaries,
    serialized last-admin removal/rate limits/job leases/model reservations,
@@ -548,7 +581,8 @@ service starts in this PR, no repository secret required. Scope: 1200 to 2200
 production lines plus migration SQL and workflow, one run.
 
 1. Every migration and populated upgrade, query normalization, nested rollback,
-   role/search_path reset, failed pool client, two-household isolation and concurrent
+   role/search_path reset, failed pool client, createHouseholdStorage provisioning,
+   sandbox create/cleanup crash recovery, two-household isolation and concurrent
    auth/lease/reservation write test passes on an actual Postgres service. Verified
    by: CI unit-postgres (`FATHOM_STORAGE=postgres npm test`) and storage-postgres
    (`node test/storage/postgres-integration.test.mjs`). Runs in: PR CI.
@@ -567,8 +601,10 @@ migration numbers and all future IMP migrations; choose numbers at merge time.
 ### PG-5 Big: typed bundles, digests and backend-neutral restore
 
 Problem: physical SQLite archives cannot restore into Postgres. Base: main.
-Blocked by PG-4. Decisions: typed bundle format, verified quiesced export, staged
-same-id restore and reverse importer; preserve explicit old snapshot operations.
+Blocked by PG-4 and MT-08 merged. Decisions: upgrade MT-08's one bundle format
+to typed rows under a new version, reuse its runner/APIs/restore command, verified
+quiesced export, staged same-id restore and reverse importer; preserve explicit
+old snapshot operations. No second household backup command is introduced.
 Preconditions: real CI database and synthetic keys/trees from helpers. Scope:
 800 to 1300 production lines, one run.
 
@@ -585,8 +621,9 @@ Preconditions: real CI database and synthetic keys/trees from helpers. Scope:
 Out of scope: PITR automation, destructive cleanup, deployment. Readiness:
 no/contract yes. Risk probe: crash immediately after registry publication then
 restart twice. Contradiction review: multi-tenancy backup/restore semantics.
-Conflicts: eventual MT-08 backup runner, which is outside the named in-flight
-range; coordinate its ownership before dispatch rather than building two runners.
+Conflicts: MT-08 owns the backup runner and is an explicit merged blocker;
+PG-5 adapts its shipped implementation. If MT-08 lands after PG-2, it must use
+the async port already on main; if before, PG-2 includes its caller migration.
 
 ### PG-6 Big: offline conversion, reverse conversion and backend selection
 
@@ -594,8 +631,9 @@ Problem: an existing instance cannot safely select Postgres. Base: main.
 Blocked by PG-5. Decisions: stopped whole-instance conversion, explicit journal
 phases, verification-only admission, guarded enable-writes and safe rollback;
 reverse export after target writes. Add FATHOM_STORAGE=sqlite|postgres (default
-sqlite) and FATHOM_POSTGRES_URL_FILE for a mounted DSN; the driver receives TLS
-configuration explicitly and never logs it. No environment-driven auto fallback.
+sqlite), FATHOM_POSTGRES_URL_FILE for the runtime DSN and
+FATHOM_POSTGRES_PROVISION_URL_FILE for the restricted provisioning entrypoints;
+the driver receives TLS configuration explicitly and never logs it. No environment-driven auto fallback.
 Preconditions: CI Postgres, synthetic passkeys/keys and writable test roots;
 new production secrets are outside acceptance. Scope: 700 to 1200 lines, one run.
 
@@ -656,7 +694,21 @@ Service hosting, production conversion approval, online migration, replication,
 separate database-per-household isolation, RLS and physical disaster-recovery
 infrastructure remain outside these tickets.
 
-One cross-provider plan review round, capped at 20 minutes, is required for this
-PR. Record findings and their disposition here after review; no second round.
-This documentation PR runs docs checks and source-inventory verification, not
-implementation tests for a storage port that does not yet exist.
+One cross-provider plan review round completed against b8567d6e within the
+20-minute deadline. The reviewer returned REQUEST CHANGES with two blockers.
+Both are resolved in the follow-up revision; no second round was requested.
+
+1. Schema creation during admin provisioning and public-demo creation lacked a
+   serving-process credential, namespace and crash-recovery contract. Added the
+   separate provisioning credential/entrypoints, journaled adoption/publication,
+   explicit sandbox names and resumable deletion, with PG-4 acceptance coverage.
+2. PG-5 could duplicate MT-08 backup/restore. MT-08 is now a merged blocker and
+   PG-5 versions its existing bundle and reuses its runner/APIs/restore command.
+3. Clarified the exact 60-character schema hash prefix and isolated synthetic
+   database per test file so fixed platform names cannot collide in CI.
+
+Validation: node test/docs.test.mjs passed all nine tests; git diff --check and
+inline public-content/ticket-structure checks passed. Source inventory was
+reviewed against the inspected base. These checks validate this documentation,
+not an implementation of the port. The review findings were fixed by the author;
+there is no claim of independent approval of the amended head.
