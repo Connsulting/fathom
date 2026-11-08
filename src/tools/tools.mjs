@@ -1,7 +1,7 @@
 export const headers = [
-  ['household', 'read', 'For stored figures, call household.figures and write its returned {f:key} token; never restate numbers from the summary.', 'Looking at your household', 'household summary'],
+  ['household', 'read', 'Call household.figures; quote {f:key} tokens, never summary amounts.', 'Looking at your household', 'household summary'],
   ['accounts', 'read', 'Accounts, balances and holdings; masks only.', 'Looking at your accounts', 'your accounts'],
-  ['transactions', 'read', 'Call transactions.search for recent purchases across cash accounts and credit cards, using categories. Never sum rows.', 'Looking through your transactions', 'your transactions'],
+  ['transactions', 'read', 'Call transactions.search for recent purchases in cash accounts and credit cards by category.', 'Looking through your transactions', 'your transactions'],
   ['spending', 'read', 'Call spending.total for spending totals or breakdowns and transactions.search for recent purchases.', 'Looking at your spending', 'your spending'],
   ['business', 'read', 'Business income, expenses and profit.', 'Looking at your business', 'monthly income and spending'],
   ['tax', 'read', 'Tax estimates and contribution room.', 'Looking at your taxes', 'your taxes'],
