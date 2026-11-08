@@ -1796,7 +1796,7 @@ test('Ask keeps original tax identifiers locally and scrubs current and prior tu
     return { text: 'Keep a reserve.', content: [{ type: 'text', text: 'Keep a reserve.' }], costUsd: 0.001, model: 'synthetic', status: 'success', toolResults: [] };
   } });
   const engine = { mode: 'live', isOn: () => true, call: live.call };
-  const answerer = createLiveAnswerer({ engine, packs: s.packs, root: s.root });
+  const answerer = createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } });
   const original = 'Synthetic SSN 900-12-3456 and EIN 90-1234567.';
   const { threadCreate, ask } = await import('../src/api/handlers.mjs');
   const ctx = { db: s.db, config: s.config, packs: s.packs, answerer };
