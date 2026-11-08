@@ -640,7 +640,8 @@ export function computeFigures(data, facts, ctx) {
     // on file the salary game's missing input is the S corp itself, whatever else blocks tax.
     const code = out.info.blocked[0] || vaBlocked || 'inputs_changed';
     const unclassified = pnlEntities.find(e => !e.classified);
-    out.info.wargameInvalid.salary = unclassified ? `entity_unclassified:${unclassified.slug}` : corps.length ? code : 'inputs_changed';
+    out.info.wargameInvalid.salary = unclassified ? `entity_unclassified:${unclassified.slug}` : corps.length ? code
+      : facts['income.sCorp'] === true && data.pnl.length ? 'scorp_identity_missing' : 'inputs_changed';
     out.info.wargameInvalid.deferral = code;
   }
 

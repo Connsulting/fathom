@@ -21,7 +21,7 @@ function validate(value, shape, year) {
     if (!object(value) || !Object.keys(value).length || Object.keys(value).some(k => !normalizeName(k)) || new Set(Object.keys(value).map(normalizeName)).size !== Object.keys(value).length) fail();
     for (const entry of Object.values(value)) validate(entry, shape.values, year);
   } else if (shape.type === 'object') {
-    if (!object(value) || !Object.keys(value).length || Object.keys(value).some(k => !Object.hasOwn(shape.fields, k))) fail();
+    if (!object(value) || Object.keys(value).some(k => !Object.hasOwn(shape.fields, k))) fail();
     for (const [key, field] of Object.entries(shape.fields)) {
       const needed = !field.optional && (!field.when || Object.entries(field.when).every(([k, v]) => value[k] === v));
       if (needed || Object.hasOwn(value, key)) validate(value[key], field, year);
@@ -89,7 +89,7 @@ export function recordFactAnswers(db, answers, { now = new Date().toISOString(),
         value = { ...Object.fromEntries(keep), ...value };
       }
     }
-    if (a.key === 'obligations.mortgage' && value.escrowMonthly >= value.monthlyPayment) fail();
+    if (a.key === 'obligations.mortgage' && (!Object.keys(value).length || value.escrowMonthly >= value.monthlyPayment)) fail();
     if (/^household\.(owner|spouse)BirthDate$/.test(a.key) && value > date) fail();
     if (a.key === 'business.salaryRange' && value.min > value.max) fail();
     // A birth year in the future is a typo, not an answer.

@@ -119,6 +119,7 @@ for (const count of [0, 2]) test(`AC5: ${count} S corp candidates produce one cl
   for (const text of ['S corp', 'sole proprietorship', 'partnership', 'personal spending', 'not mine']) assert.ok(task[0].t.includes(text), text);
   assert.ok(task[0].t.includes(count ? 'Example Studio' : 'Family card'));
   if (count) assert.ok(task[0].t.includes('Second Studio'));
+  if (!count) assert.match(scenario.wargame.notBuilt.salary.text, /identify the S corp.*Family card/);
 });
 
 test('AC2: scripted Ask records an S corp classification with a receipt and exact Undo', async t => {
@@ -148,6 +149,8 @@ test('AC3/AC4: mortgage uses matched payments and balance snapshots, infers rate
   const row = out.obligations[0];
   assert.equal(row.observedMonthly.value, fixture.payment);
   assert.equal(row.monthly.value, fixture.payment);
+  const debt = await callTool('spending', { operation: 'total', include: { classes: ['debt_service'] } }, ctx);
+  assert.match(debt.perMonth.label, /All debt payments/);
   assert.ok(Math.abs(row.terms.rate.value - fixture.rate) < 0.00002, row.terms.rate.value);
   assert.equal(row.terms.balance.value, fixture.balance);
   assert.match(row.endDate.value, /^202[67]-/);
@@ -161,6 +164,7 @@ test('AC3/AC4: mortgage uses matched payments and balance snapshots, infers rate
   const question = buildScenario(db).recs.find(r => r.id === 'missing-data').question;
   const missingFields = question.fields.filter(f => f.key === 'obligations.mortgage' && f.value === undefined);
   assert.deepEqual(missingFields.map(f => f.path), [['escrowMonthly']]);
+  assert.deepEqual(question.fields.filter(f => f.key === 'obligations.mortgage').map(f => f.path), [['escrowMonthly']], 'inferred values cannot be silently confirmed by submitting the missing escrow');
   recordFactAnswers(db, [{ key: 'obligations.mortgage', value: { escrowMonthly: 0 } }], { now });
   const complete = await callTool('spending', { operation: 'obligations', obligations: ['mortgage'] }, ctx);
   assert.deepEqual(complete.obligations[0].missing, []);
@@ -187,4 +191,25 @@ test('projection removes only the mortgage portion, preserves other debts, and h
   const selected = await callTool('spending', { operation: 'total', annualize: true, include: { merchants: ['Credit card payment'] } }, ctx);
   const excluding = await callTool('spending', { operation: 'projection', base: selected.total.ref, years: 3, obligations: ['mortgage'] }, ctx);
   assert.equal(excluding.years[2].spending.value, selected.total.value);
+});
+
+test('stated escrow and payment corrections override inferred mortgage terms and an ambiguous loan match asks instead', async t => {
+  const { db, ctx } = await store(t);
+  const fixture = loan(db, { escrow: 120 });
+  recordFactAnswers(db, [{ key: 'obligations.mortgage', value: { escrowMonthly: 120 } }], { now });
+  let row = (await callTool('spending', { operation: 'obligations', obligations: ['mortgage'] }, ctx)).obligations[0];
+  assert.equal(row.monthly.value, fixture.payment + 120);
+  assert.ok(Math.abs(row.terms.rate.value - fixture.rate) < 0.00002);
+  assert.equal(row.changes[0].newMonthly.value, 120);
+  recordFactAnswers(db, [{ key: 'obligations.mortgage', value: { monthlyPayment: 1200, rate: 0.03, balance: 12000 } }], { now });
+  row = (await callTool('spending', { operation: 'obligations', obligations: ['mortgage'] }, ctx)).obligations[0];
+  assert.equal(row.monthly.value, 1200);
+  assert.equal(row.terms.rate.value, 0.03);
+  assert.equal(row.terms.balance.value, 12000);
+  db.prepare("DELETE FROM facts WHERE key='obligations.mortgage'").run();
+  db.prepare("INSERT INTO accounts(id,name,kind) VALUES ('second-loan','Other home mortgage','loan')").run();
+  row = (await callTool('spending', { operation: 'obligations', obligations: ['mortgage'] }, ctx)).obligations[0];
+  assert.equal(row.monthly.value, null);
+  assert.equal(row.observedMonthly.value, null);
+  assert.equal(row.endDate.value, null);
 });

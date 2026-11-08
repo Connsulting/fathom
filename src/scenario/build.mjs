@@ -217,6 +217,7 @@ export function loadRecs(db, clock) {
   if (mortgage.present) facts['obligations.mortgage'] = mortgage.values;
   const accounts = withLabelHints(db, db.prepare('SELECT * FROM accounts').all());
   const env = stepEnvOf(db);
+  env.facts = facts;
   const recs = db.prepare('SELECT * FROM recs ORDER BY sort, id').all().map(r => recFromRow(r, clock, env));
   if (getSetting(db, 'mode', null) === 'demo') {
     const window = expectedChildWindow(facts);
@@ -227,7 +228,7 @@ export function loadRecs(db, clock) {
   const blockers = parse(db.prepare("SELECT value FROM content WHERE key = 'rec.blockers'").get()?.value, null) || {};
   for (const r of recs) if (r.status === 'waiting' && Object.hasOwn(blockers, r.id)) r.blocker = blockers[r.id];
   for (const r of recs) if (r.question) {
-    r.question = { ...questionFor(r.question.keys, { accounts, facts, names: facts['household.names'], people: r.question.people }), primary: r.question.primary };
+    r.question = { ...questionFor(r.question.keys, { accounts, facts, names: facts['household.names'], people: r.question.people, mortgage }), primary: r.question.primary };
     if (r.question.primary && !LISTED_RECS.has(r.id)) {
       r.title = dataText(r.question.title);
       r.summary = r.question.summary;

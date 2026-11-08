@@ -20,6 +20,7 @@ export function buildWargames(data, out, ctx) {
   const model = {};
   const salary = salaryGame(data, out, ctx);
   if (salary) model.salary = salary;
+  else if (out.info.wargameInvalid.salary === 'inputs_changed' && ctx.facts?.['income.sCorp'] === true && !ctx.entities.some(e => e.type === 's_corp') && data.pnl.length) out.info.wargameInvalid.salary = 'scorp_identity_missing';
   const deferral = deferralGame(data, out, ctx);
   if (deferral) model.deferral = deferral;
   return model;
@@ -62,6 +63,10 @@ export function notBuiltReason(name, code, entities = []) {
   if (String(code).startsWith('entity_unclassified:')) {
     const entity = entities.find(e => e.slug === code.slice('entity_unclassified:'.length));
     return { code, text: `${GAME_NAME[name]} needs you to classify ${entity?.displayName || entity?.name || 'the imported business'} as an S corp, sole proprietorship, partnership, personal spending, or not yours.`, unlock: 'answers' };
+  }
+  if (name === 'salary' && code === 'scorp_identity_missing') {
+    const names = [...new Set(entities.map(e => e.displayName || e.name))];
+    return { code, text: `Salary war game needs you to identify the S corp among ${names.join(', ') || 'the imported ledgers'}.`, unlock: 'answers' };
   }
   const known = (NEEDS[name] || {})[code];
   const [needs, unlock] = known

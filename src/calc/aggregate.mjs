@@ -322,11 +322,12 @@ export function aggregate(input, args = {}, definition = null) {
       ],
       ...extra,
     });
-  const total = f(window ? raw * scale : null, 'Selected total', counted, {
+  const allDebt = selectors.include.classes?.length === 1 && selectors.include.classes[0] === 'debt_service';
+  const total = f(window ? raw * scale : null, allDebt ? 'All debt payments' : 'Selected total', counted, {
     unit: args.annualize ? 'usd_per_year' : 'usd',
     unavailable: window ? undefined : 'incomplete_month',
   });
-  const perMonth = f(window ? raw / window.months : null, 'Monthly average', counted, {
+  const perMonth = f(window ? raw / window.months : null, allDebt ? 'All debt payments per month' : 'Monthly average', counted, {
     unit: 'usd_per_month',
     formula: 'selected total divided by calendar months',
     unavailable: window ? undefined : 'incomplete_month',

@@ -162,7 +162,7 @@ const asked = (def, facts) => def.ask !== false && (!def.requires || facts[def.r
 // A Virginia plan field with no saved answer takes the answer inferred from the account's
 // institution (`inferred` holds the evidence and the account, for Undo). `answered` is true when
 // every active field holds a value, so the rec shows Answered instead of the questions.
-export function questionFor(keys, { accounts = [], facts = {}, names = {}, people } = {}) {
+export function questionFor(keys, { accounts = [], facts = {}, names = {}, people, mortgage } = {}) {
   const fields = [];
   const unique = [...new Set(keys)].filter(key => !ADVISOR_KEYS.has(key));
   for (const key of unique) {
@@ -175,6 +175,7 @@ export function questionFor(keys, { accounts = [], facts = {}, names = {}, peopl
     for (const group of groups) {
       const parts = shape.type === 'object' ? Object.entries(shape.fields).filter(([, def]) => asked(def, facts)) : [['', shape]];
       for (const [part, def] of parts) {
+        if (key === 'obligations.mortgage' && mortgage?.inferred[part]) continue;
         const path = [...group.path, ...(part ? [part] : [])];
         let value = path.reduce((v, p) => v && typeof v === 'object' && Object.hasOwn(v, p) ? v[p] : undefined, facts[key]);
         const inference = key === 'accounts.va529' && part === 'virginiaPlan' && value === undefined ? activeInference(group.record, facts) : null;
@@ -198,7 +199,7 @@ export function questionFor(keys, { accounts = [], facts = {}, names = {}, peopl
   const years = unique.includes('household.birthYears') ? ' Tell us your birth year, and your spouse\'s when you file jointly; every age comes from it.' : '';
   const summary = labels.length
     ? `For ${labels.map(dataText).join(', ')}, tell us whether it is Virginia's own 529 program. For each Virginia plan, enter the unused deduction carryforward.${years}`
-    : years ? years.trim() : 'Save these answers to update your plan automatically.';
+    : years ? years.trim() : unique.includes('obligations.mortgage') ? 'Tell Fathom only the missing mortgage terms. The other terms are inferred from loan data; correct them in Ask.' : 'Save these answers to update your plan automatically.';
   const first = fields[0];
   const title = first ? (first.group ? `${first.group}: ${first.label}` : first.label) : 'Answer the questions for your plan';
   return { keys: unique, ...(people ? { people } : {}), title, summary, answered, fields };
