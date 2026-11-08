@@ -3,7 +3,7 @@
 A year-round financial co-pilot for households of independent professionals: it tells you when
 it's covered, and when something needs you before a window closes.
 
-![A 35-second tour of Fathom on synthetic demo data: Home, a recommendation, Ask with a sourced figure and a one-tap confirm](docs/images/demo.gif)
+![A 36-second tour of Fathom on synthetic demo data: Home, a recommendation, Ask with a sourced figure and a one-tap confirm](docs/images/demo.gif)
 
 The same tour as an [MP4](docs/images/demo.mp4). Re-record it with `npm run demo:gif -- --port <n>`.
 

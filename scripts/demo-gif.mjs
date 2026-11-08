@@ -466,17 +466,17 @@ async function story(page, d) {
   await input.waitFor({ state: 'visible' });
   await d.caption(CAPTIONS.ask);
   await d.click(input, 'ask input', 650, 0.3);
-  await input.pressSequentially('Can we push the fixed-fee invoices into January?', { delay: 45 });
+  await input.pressSequentially('Can we push the fixed-fee invoices into January?', { delay: 32 });
   await d.hold(250);
   await input.press('Enter');
   const answer = page.locator('.h-askx-msgs .h-msg.fathom').last();
   await page.locator('.h-askx-pend').waitFor({ state: 'detached' });
   const fig = answer.locator('.fx-fig').first();
   await fig.waitFor({ state: 'visible' });
-  await d.hold(1100);
+  await d.hold(600);
   await d.click(fig, 'answer figure', 700);
   await page.locator('.fx-pop').waitFor({ state: 'visible' });
-  await d.hold(2800);
+  await d.hold(1700);
   await page.keyboard.press('Escape');
   await page.locator('.fx-pop').waitFor({ state: 'hidden' });
   d.assertClean('ask');
@@ -504,8 +504,8 @@ async function story(page, d) {
   await d.click(page.locator('header.h-top a.h-mark'), 'Fathom wordmark', 700);
   await page.locator('section.h-home h1').waitFor({ state: 'visible' });
   await d.caption(CAPTIONS.end);
-  await d.glide(900, 470, 700);
-  await d.hold(1800);
+  await d.glide(900, 470, 900);
+  await d.hold(4200);
   d.assertClean('end');
 }
 
