@@ -3,7 +3,7 @@
 // before each month end; an account whose data stopped carries its last balance forward and is
 // counted as carried at every point after its last balance. Debt (cards, loans) is negative.
 // Business cash is its own part and counts in the household total, as the net worth series that
-// preceded this did. Accounts merged as duplicates are one row already, so they count once.
+// preceded this did. An archived account counts in past points only (see counts below). Accounts merged as duplicates are one row already, so they count once.
 //
 // buildTrend(db, clock) -> null | { trend, figures, source }
 //   trend: { end, includesBusiness, note, parts, groups, points, fig }
@@ -11,7 +11,7 @@
 //            the accounts, balances and dates each one adds up.
 
 import { cents } from '../store/db.mjs';
-import { accountFreshness } from '../ingest/freshness.mjs';
+import { sourceStates } from '../ingest/coverage.mjs';
 import { monthlyReadings, trendLabels } from '../jobs/planner/series.mjs';
 
 export const TREND_SRC = 'trend';
@@ -71,11 +71,11 @@ function carriedNote(carried) {
 
 export function buildTrend(db, clock) {
   const labels = trendLabels(db);
-  const rows = db.prepare('SELECT id, kind FROM accounts ORDER BY sort, id').all();
+  const rows = db.prepare('SELECT id, kind, archived_at FROM accounts ORDER BY sort, id').all();
   const stored = rows.map(a => {
     const readings = monthlyReadings(db, a.id, clock);
     const months = [...readings.keys()].sort();
-    return { id: a.id, label: labels.get(a.id), group: groupOfKind(a.kind), readings, months, last: readings.get(months.at(-1))?.date };
+    return { id: a.id, label: labels.get(a.id), group: groupOfKind(a.kind), readings, months, last: readings.get(months.at(-1))?.date, archived: !!a.archived_at };
   }).filter(x => x.months.length);
   // An account counts from its first balance on and adds nothing before it.
   const counted = stored;
@@ -89,10 +89,14 @@ export function buildTrend(db, clock) {
 
   // Freshness decides whether an account at the end is still current, not only whether it has a
   // row in the final month.
-  const freshOf = new Map(counted.map(x => [x.id, accountFreshness(db, x.id, { clock }).fresh]));
+  const states = sourceStates(db, clock).accounts;
+  const freshOf = new Map(counted.map(x => [x.id, states.get(x.id)?.state ?? 'unknown']));
   const carriedAt = (x, m) => (m === endMonth ? x.months.at(-1) < endMonth || freshOf.get(x.id) === 'stale' : m > x.months.at(-1));
   // The reading an account contributes at month m: its newest one on or before it.
   const readingAt = (x, m) => x.readings.get(x.months.filter(k => k <= m).at(-1));
+  // An archived account keeps its history: it adds its own readings to the points before the last
+  // one, is never carried forward, and leaves the current point and every current figure.
+  const counts = (x, m) => x.months[0] <= m && (!x.archived || (m < endMonth && m <= x.months.at(-1)));
   const valueAt = (x, m) => {
     const v = readingAt(x, m).v;
     return x.group === 'Debt' ? -Math.abs(v) : v;
@@ -105,7 +109,7 @@ export function buildTrend(db, clock) {
     const sum = { total: 0, parts: Object.fromEntries(partIds.map(p => [p, 0])), groups: Object.fromEntries(groupIds.map(g => [g, 0])) };
     const car = { total: 0, parts: {}, groups: {} };
     for (const x of counted) {
-      if (x.months[0] > m) continue;
+      if (!counts(x, m)) continue;
       const part = PART_OF.get(x.group);
       const v = valueAt(x, m);
       sum.total += v;
@@ -125,7 +129,8 @@ export function buildTrend(db, clock) {
   });
 
   const sums = x => ({ id: x.id, label: x.label, v: cents(valueAt(x, endMonth)), asOf: readingAt(x, endMonth).date, fresh: freshOf.get(x.id), carried: carriedAt(x, endMonth), group: x.group });
-  const all = counted.map(sums);
+  const current = counted.filter(x => !x.archived);
+  const all = current.map(sums);
   const last = points.at(-1);
   const fig = { total: 'trend.total', parts: {}, groups: {} };
   const figures = { 'trend.total': { v: last.total, src: TREND_SRC, kind: 'a', label: 'Net worth, all accounts', sums: all.map(({ group, ...s }) => s) } };
@@ -139,7 +144,7 @@ export function buildTrend(db, clock) {
     figures[fig.groups[g]] = { v: last.groups[g], src: TREND_SRC, kind: 'a', label: g, sums: all.filter(s => s.group === g).map(({ group, ...s }) => s) };
   }
 
-  const carriedNow = counted.filter(x => carriedAt(x, endMonth)).map(x => ({ lastDate: x.last }));
+  const carriedNow = current.filter(x => carriedAt(x, endMonth)).map(x => ({ lastDate: x.last }));
   const trend = {
     end: last.date,
     includesBusiness: true,
