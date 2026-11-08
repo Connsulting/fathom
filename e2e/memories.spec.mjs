@@ -1,14 +1,15 @@
 import { test, expect } from '@playwright/test';
 
-// The Memories page (#/memories): what Fathom remembers, as rows with Add, Edit in place, Delete
-// with Undo and a filter once the list is long. Every memory here is synthetic.
+// The What Fathom knows page (#/memories): what Fathom remembers, as rows with Add, Edit in place,
+// Delete with Undo and a filter once the list is long, then the packs that are on and Decided for
+// you. Every memory here is synthetic.
 
 const reset = async (request) => expect((await request.post('/api/demo/reset', { data: {} })).ok()).toBeTruthy();
 const remember = async (request, text) => expect((await request.post('/api/preferences', { data: { text } })).ok()).toBeTruthy();
 const list = (page) => page.getByRole('list', { name: 'Memories' });
 const row = (page, text) => list(page).locator('li.h-mem-r').filter({ hasText: text });
 
-test('@mobile Settings summarizes memories and links the Memories page', async ({ page, request }) => {
+test('@mobile Settings summarizes memories and links the What Fathom knows page', async ({ page, request }) => {
   await reset(request);
   await page.goto('/#/settings');
   await expect(page.locator('.h-set')).toContainText('Fathom does not remember anything yet');
@@ -16,9 +17,9 @@ test('@mobile Settings summarizes memories and links the Memories page', async (
   await page.reload();
   await expect(page.locator('.h-set')).toContainText('Fathom remembers 1 thing');
   await expect(page.getByText('Remembered preferences')).toHaveCount(0);
-  await page.locator('.h-set').getByRole('link', { name: 'Memories', exact: true }).click();
+  await page.locator('.h-set').getByRole('link', { name: 'What Fathom knows', exact: true }).click();
   await expect(page).toHaveURL(/#\/memories$/);
-  await expect(page.locator('h1')).toHaveText('Memories');
+  await expect(page.locator('h1')).toHaveText('What Fathom knows');
   await expect(row(page, 'Keep answers short')).toContainText('Added by you');
   await expect(row(page, 'Keep answers short')).toContainText('Remembered');
 });
@@ -101,4 +102,26 @@ test('@mobile the search box stays while a query is active after a delete shorte
   await expect(search).toBeVisible();
   await search.fill('');
   await expect(list(page).locator('li.h-mem-r:visible')).toHaveCount(5);
+});
+
+test('@mobile What Fathom knows lists the packs that are on in plain words and the Decided for you log', async ({ page, request }) => {
+  await reset(request);
+  const sc = await (await request.get('/api/scenario')).json();
+  const decided = sc.live?.ingest?.decided || [];
+  await page.goto('/#/memories');
+  await expect(page.locator('h1')).toHaveText('What Fathom knows');
+  const packs = page.locator('section.h-know-packs');
+  await expect(packs).toBeVisible();
+  const shown = await packs.locator('li.h-know-p').count();
+  // No developer rule text such as "income.sCorp is true (eq true: true)".
+  await expect(packs).not.toContainText('Matching');
+  await expect(packs).not.toContainText(/\(eq [^)]*\)/);
+  await expect(page.locator('section.h-cf-decided')).toHaveCount(decided.length ? 1 : 0);
+  await packs.getByRole('link', { name: 'All packs' }).click();
+  await expect(page).toHaveURL(/#\/packs$/);
+  await expect(page.locator('h1')).toHaveText('Knowledge packs');
+  // The same packs as the list's On group.
+  await expect(page.locator('article.h-pack.active')).toHaveCount(shown);
+  await expect(page.locator('main')).not.toContainText(/\(eq [^)]*\)/);
+  await expect(page.locator('header.h-top a.h-gear')).toHaveAttribute('aria-current', 'page');
 });

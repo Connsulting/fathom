@@ -1,13 +1,14 @@
-// Onboarding, goals first: 0 the demo sign-in line, 1 Goals (starter cards, write your own, the
-// Add your spouse line), 2 Where on the curve, 3 Tell us (the note saved through ingest, files and
-// connections), 4 Here is what we heard (derived from stored facts), 5 Building your year. Home on a
-// store with no open goals shows the same Goals block. Two parts.
+// Onboarding in three steps: 0 the demo sign-in line, then 3 Tell us (the note saved through ingest,
+// files and connections), 4 Here is what we heard (derived from stored facts), 5 Building your
+// year. The Goals (1) and Curve (2) steps were cut (SX5); their links land on Tell us. Home on a
+// store with no open goals shows the Goals block (starter cards, write your own, the Add your
+// spouse line). Two parts.
 //
 // 1. The demo build (the shared demo server), served as a fresh store on each step, or with every
 //    goal deleted for the Home empty state, or made genuinely fresh in its store for the full path.
 // 2. A real-mode store past first run, on its own server (FATHOM_DEMO=0, engine off, synthetic enrolled
-//    admin session), where Setup on the Settings page lands on Goals, the heard step lists the stored
-//    household with provenance and edit links, and finishing Setup keeps every goal and file.
+//    admin session), where Setup on the Settings page lands on Tell us, the heard step lists the
+//    stored household with provenance and edit links, and finishing Setup keeps every goal and file.
 //
 // Desktop and 390px. Real-mode URLs are absolute to its own server, so the configured baseURL is
 // ignored there.
@@ -31,7 +32,7 @@ const STARTER_CARDS = [
 ];
 const STARTER = Object.fromEntries(STARTER_CARDS.map((s) => [s.id, s]));
 const INVITE_SENTENCE = 'They see their own actions and the same goals.';
-const RAIL = ['Goals', 'Curve', 'Tell us'];
+const RAIL = ['Tell us', 'What we understood', 'Build'];
 
 test.describe.configure({ mode: 'serial' });
 test.skip(REMOTE, 'starts its own local server and writes notes; not part of a remote smoke run');
@@ -116,7 +117,8 @@ test.describe('demo build', () => {
     await expect(page.locator('input[type=email]')).toHaveCount(0);
     await expect(page.locator('form[data-signin]')).toHaveCount(0);
     await continueBtn(page).click();
-    await expectH1(page, GOALS_H1);
+    await expect(page).toHaveURL(/#\/onboarding\/3$/);
+    await expectH1(page, 'Dump everything in');
   });
 
   test('Tell us: the note is saved through ingest and what was understood is shown @mobile', async ({ page, request }) => {
@@ -165,49 +167,45 @@ test.describe('demo build', () => {
       await page.goto(`/#/onboarding/${step}`);
       await expect(page.locator('.h-ob-card h1')).toBeVisible();
     }
+    // The cut Goals and Curve steps land on Tell us.
+    for (const step of [1, 2]) {
+      await page.goto(`/#/onboarding/${step}`);
+      await expect(page).toHaveURL(/#\/onboarding\/3$/);
+      await expectH1(page, 'Dump everything in');
+    }
   });
 
-  test('goals first: Goals, Curve and Tell us, each with its kicker, then the rail completes', { tag: ['@ob-ac1', '@mobile'] }, async ({ page, hasTouch }) => {
-    await forceFresh(page, 1);
-    await page.goto('/#/onboarding/1');
+  test('three steps: Tell us, What we understood and Build, each lighting its rail stop', { tag: ['@ob-ac1', '@mobile'] }, async ({ page, hasTouch }) => {
+    await forceFresh(page, 3);
+    await page.goto('/#/onboarding/3');
 
-    // Step 1: Goals.
+    // Step 1: Tell us, with files and connections. No goals and no curve before it.
     await expect(kicker(page)).toHaveText('Step 1 of 3');
-    await expectH1(page, GOALS_H1);
-    await expect(goalsStart(page)).toBeVisible();
-    await expectRail(page);
-    await press(continueBtn(page), hasTouch);
-
-    // Step 2: Where on the curve.
-    await expect(page).toHaveURL(/#\/onboarding\/2$/);
-    await expect(kicker(page)).toHaveText('Step 2 of 3');
-    await expectH1(page, 'Where on the curve');
-    expect(await page.locator('input[type=range][data-prio]').count()).toBeGreaterThan(0);
-    await expectRail(page);
-    await press(continueBtn(page), hasTouch);
-
-    // Step 3: Tell us, with files and connections.
-    await expect(page).toHaveURL(/#\/onboarding\/3$/);
-    await expect(kicker(page)).toHaveText('Step 3 of 3');
     await expectH1(page, 'Dump everything in');
     await expect(page.locator('textarea[data-dump]')).toBeVisible();
     await expect(page.locator('input[type=file][data-upload]')).toHaveCount(1);
     await expect(page.locator('[data-sf-box]')).toBeVisible();
     await expect(page.getByText('Already in Fathom, not mirrored')).toBeVisible();
+    await expect(page.locator('input[type=range]')).toHaveCount(0);
     await expectRail(page);
+    await expect(page.locator('.h-ob-rail circle')).toHaveCount(RAIL.length);
+    await expect(page.locator('.h-ob-rail circle.cur')).toHaveCount(1);
+    await expect(page.locator('.h-ob-rail circle.done')).toHaveCount(0);
     await press(continueBtn(page), hasTouch);
 
-    // Step 4: what we heard, with the rail complete.
+    // Step 2: what we understood.
     await expect(page).toHaveURL(/#\/onboarding\/4$/);
+    await expect(kicker(page)).toHaveText('Step 2 of 3');
     await expectH1(page, 'Here is what we heard');
-    await expect(page.locator('.h-ob-rail circle')).toHaveCount(RAIL.length);
-    await expect(page.locator('.h-ob-rail circle.done')).toHaveCount(RAIL.length);
+    await expectRail(page);
+    await expect(page.locator('.h-ob-rail circle.done')).toHaveCount(1);
     await press(page.getByRole('button', { name: 'Looks right' }), hasTouch);
 
-    // Step 5: building the year, rail still complete.
+    // Step 3: building the year.
     await expect(page).toHaveURL(/#\/onboarding\/5$/);
     await expect(page.locator('.h-ob-card h1')).toBeVisible();
-    await expect(page.locator('.h-ob-rail circle.done')).toHaveCount(RAIL.length);
+    await expect(page.locator('.h-ob-rail circle.done')).toHaveCount(2);
+    await expect(page.locator('.h-ob-rail circle.cur')).toHaveCount(1);
   });
 
   test('starters and own goals become goals, with only the targets Fathom sets, on Home and on Goals', { tag: ['@ob-ac2', '@mobile'] }, async ({ page, request, hasTouch }) => {
@@ -315,9 +313,9 @@ test.describe('demo build', () => {
     }
   });
 
-  test('demo: the Add your spouse line explains, with no link', { tag: ['@ob-ac3', '@mobile'] }, async ({ page }) => {
-    await forceFresh(page, 1);
-    await page.goto('/#/onboarding/1');
+  test('demo: the Add your spouse line explains, with no link', { tag: ['@ob-ac3', '@mobile'] }, async ({ page, request }) => {
+    await deleteAllGoals(request);
+    await gotoRoute(page, 'home');
     await expectH1(page, GOALS_H1);
     const invite = page.locator('[data-ob-invite]');
     await expect(invite).toBeVisible();
@@ -358,14 +356,6 @@ test.describe('demo build', () => {
     await expect(page.locator('[data-ob-who]')).toBeVisible();
     await press(continueBtn(page), hasTouch);
 
-    await expect(page).toHaveURL(/#\/onboarding\/1$/);
-    await expectH1(page, GOALS_H1);
-    await press(continueBtn(page), hasTouch);
-
-    await expect(page).toHaveURL(/#\/onboarding\/2$/);
-    await expectH1(page, 'Where on the curve');
-    await press(continueBtn(page), hasTouch);
-
     await expect(page).toHaveURL(/#\/onboarding\/3$/);
     await expectH1(page, 'Dump everything in');
     await press(continueBtn(page), hasTouch);
@@ -383,7 +373,7 @@ test.describe('demo build', () => {
 
     const sc = await fetchScenario(request);
     expect(sc.live.demo).toBe('november');
-    // Continuing with nothing selected created nothing and removed nothing.
+    // Onboarding asks for no goals: it created nothing and removed nothing.
     expect(posts).toEqual([]);
     expect(sc.goals.map((g) => g.id).sort()).toEqual(goalsBefore);
   });
@@ -434,10 +424,10 @@ async function openSetup(page) {
   await expect(page).toHaveURL(/#\/settings$/);
   const setup = page.locator('section.h-settings a[data-go="onboarding"]', { hasText: 'Setup' });
   await expect(setup).toBeVisible();
-  await expect(page.locator('section.h-settings li.h-set-r', { has: page.locator('a[data-go="onboarding"]', { hasText: 'Setup' }) })).toContainText('Goals, priorities, notes and files.');
+  await expect(page.locator('section.h-settings li.h-set-r', { has: page.locator('a[data-go="onboarding"]', { hasText: 'Setup' }) })).toContainText('Tell Fathom more about the household, in notes and files.');
   await setup.click();
-  await expect(page).toHaveURL(/#\/onboarding\/1$/);
-  await expectH1(page, GOALS_H1);
+  await expect(page).toHaveURL(/#\/onboarding\/3$/);
+  await expectH1(page, 'Dump everything in');
 }
 
 test.describe('real store past first run', () => {
@@ -462,20 +452,14 @@ test.describe('real store past first run', () => {
     }));
   });
 
-  test('Setup on the Settings page opens Goals; the note is saved while the engine is off; the heard step lists the household @mobile', async ({ page, context }) => {
+  test('Setup on the Settings page opens Tell us; the note is saved while the engine is off; the heard step lists the household @mobile', async ({ page, context }) => {
     await openSetup(page);
     await expect(kicker(page)).toHaveText('Step 1 of 3');
     await expect(page.locator('.h-ob-steps')).not.toContainText('Sign in');
     await expect(page.locator('body')).not.toContainText('passkey');
     await expect(page.getByRole('link', { name: 'Back to the app' })).toBeVisible();
-
-    // Goals and the curve: nothing to change here.
-    await continueBtn(page).click();
-    await expect(page).toHaveURL(/#\/onboarding\/2$/);
-    await expectH1(page, 'Where on the curve');
-    await continueBtn(page).click();
-    await expect(page).toHaveURL(/#\/onboarding\/3$/);
-    await expectH1(page, 'Dump everything in');
+    // A real store has no welcome step to go back to.
+    await expect(page.getByRole('button', { name: 'Back', exact: true })).toHaveCount(0);
 
     // Tell us: saved encrypted, waiting for the engine.
     await page.locator('textarea[data-dump]').fill(NOTE);
@@ -526,13 +510,14 @@ test.describe('real store past first run', () => {
     await expect(page.locator('.h-tour')).toHaveCount(0);
     await expect.poll(async () => (await realGet('/api/scenario')).live.tourPending, { timeout: 15_000 }).toBe(false);
     await page.goto(`${BASE}/#/onboarding`);
-    await expect(page).toHaveURL(/#\/onboarding\/1$/);
+    await expect(page).toHaveURL(/#\/onboarding\/3$/);
     await page.getByRole('link', { name: 'Back to the app' }).click();
     await expect(page).toHaveURL(/#\/home$/);
   });
 
+  // The spouse line sits in the Goals block, which a store shows on Home while it has no open goals.
   test('real store admin: Add your spouse links to the household page', { tag: ['@ob-ac3', '@mobile'] }, async ({ page }) => {
-    await page.goto(`${BASE}/#/onboarding/1`);
+    await page.goto(`${BASE}/#/home`);
     await expectH1(page, GOALS_H1);
     const invite = page.locator('[data-ob-invite]');
     await expect(invite).toBeVisible();
@@ -542,11 +527,9 @@ test.describe('real store past first run', () => {
     await expect(link).toHaveAttribute('href', '/admin/users');
   });
 
-  test('Setup on a store with goals keeps them, preselects a matching starter and adds only what is new', { tag: ['@ob-ac5', '@mobile'] }, async ({ page, hasTouch }) => {
-    // An owner goal that matches a starter (other case, padded) and one that does not.
-    const matching = (await realPost('/api/goals', { title: '  a Cash CUSHION ', horizon: 'now' })).goal;
+  test('Setup on a store with goals keeps them and every file, and asks for no goals', { tag: ['@ob-ac5', '@mobile'] }, async ({ page, hasTouch }) => {
+    const cushion = (await realPost('/api/goals', { title: 'A cash cushion', horizon: 'now' })).goal;
     const roof = (await realPost('/api/goals', { title: 'Replace the roof', note: 'Before the rainy season', horizon: '1-3y' })).goal;
-    expect(matching.title).toBe('a Cash CUSHION');
     const filesBefore = (await realGet('/api/files')).files.map((f) => f.name);
     expect(filesBefore).toContain('earlier-notes.md');
 
@@ -558,32 +541,7 @@ test.describe('real store past first run', () => {
 
     const posts = recordGoalPosts(page);
     await openSetup(page);
-    await expect(goalsStart(page)).toBeVisible();
-
-    // The matching starter is preselected and cannot be cleared.
-    const cushion = starterCard(page, 'cushion');
-    await expect(cushion).toHaveAttribute('aria-pressed', 'true');
-    await expect(cushion).toHaveAttribute('aria-disabled', 'true');
-    // aria-disabled fails Playwright's enabled check, so the press is forced.
-    if (hasTouch) await cushion.tap({ force: true });
-    else await cushion.click({ force: true });
-    await expect(cushion).toHaveAttribute('aria-pressed', 'true');
-
-    // The other goal is listed as already chosen; the matching one is not listed twice.
-    const existing = page.locator('[data-goals-existing]');
-    await expect(existing).toContainText('Already your goals');
-    await expect(existing.locator('li', { hasText: 'Replace the roof' })).toHaveCount(1);
-    await expect(existing).not.toContainText('a Cash CUSHION');
-
-    // One more starter, then through every step to the end.
-    await press(starterCard(page, 'family'), hasTouch);
-    await expect(starterCard(page, 'family')).toHaveAttribute('aria-pressed', 'true');
-    await press(continueBtn(page), hasTouch);
-    await expect(page).toHaveURL(/#\/onboarding\/2$/);
-    await expectH1(page, 'Where on the curve');
-    expect(posts).toEqual([{ title: STARTER.family.title, note: STARTER.family.sub, horizon: STARTER.family.horizon }]);
-    await press(continueBtn(page), hasTouch);
-    await expect(page).toHaveURL(/#\/onboarding\/3$/);
+    await expect(goalsStart(page)).toHaveCount(0);
     await press(continueBtn(page), hasTouch);
     await expect(page).toHaveURL(/#\/onboarding\/4$/);
     await press(page.getByRole('button', { name: 'Looks right' }), hasTouch);
@@ -593,15 +551,11 @@ test.describe('real store past first run', () => {
     await press(back, hasTouch);
     await expect(page).toHaveURL(/#\/home$/);
 
-    // Every earlier goal is still there and open, the new one was added once, no file was lost.
+    // Every goal is still there and open, none was added, no file was lost.
+    expect(posts).toEqual([]);
     const sc = await realGet('/api/scenario');
     const open = sc.goals.filter((g) => !g.archived);
-    expect(open.map((g) => g.id)).toEqual(expect.arrayContaining([matching.id, roof.id]));
-    expect(open.filter((g) => g.title.trim().toLowerCase() === 'a cash cushion')).toHaveLength(1);
-    const family = open.filter((g) => g.title === STARTER.family.title);
-    expect(family).toHaveLength(1);
-    expect(family[0]).toMatchObject({ target: null, targetDate: null, horizon: STARTER.family.horizon });
-    expect(sc.goals).toHaveLength(3);
+    expect(open.map((g) => g.id).sort()).toEqual([cushion.id, roof.id].sort());
     const filesAfter = (await realGet('/api/files')).files.map((f) => f.name);
     expect(filesAfter).toEqual(expect.arrayContaining(filesBefore));
   });

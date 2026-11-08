@@ -1,5 +1,5 @@
 // Four-tab navigation: Home, Plan, Ask and Money as the only tabs, the gear for the Settings
-// page, sub-navs on the Plan, Ask and Money groups, active marking derived from the current
+// page, sub-navs on the Plan and Money groups (Ask has none), active marking derived from the current
 // route, the switcher and G sequences, and the phone bottom bar. Runs in both projects (desktop
 // 1440px, mobile 390px) unless a test says otherwise: tests tagged @mobile run on both, tests
 // without it are desktop only, and @mobile-only tests run on the phone only.
@@ -26,25 +26,27 @@ const ROUTE_MAP = [
   ['home', 'home'], ['pace', 'home'], ['goals', 'home'], ['confirm', 'home', 'Confirm'],
   ['plan', 'plan'], ['yearend', 'plan'], ['advisor', 'plan'],
   ['ask', 'ask'], ['wargame', 'ask'], ['wargame/salary', 'ask'], ['wargame/deferral', 'ask'],
-  ['packs', 'ask'], [`packs/${PACK.id}`, 'ask', plain(PACK.name)],
-  ['money', 'money', null], ['accounts', 'money'], ['pnl', 'money', 'P&L'], ['add', 'money', 'Add more files'],
-  ['settings', 'settings', 'Settings'], ['connect', 'settings'], ['engine', 'settings'], ['email', 'settings'], ['memories', 'settings']
+  ['money', 'money', null], ['pnl', 'money', 'P&L'], ['add', 'money', 'Add more files'],
+  ['settings', 'settings', 'Settings'], ['connect', 'settings'], ['engine', 'settings'], ['email', 'settings'], ['memories', 'settings'],
+  ['packs', 'settings'], [`packs/${PACK.id}`, 'settings', plain(PACK.name)]
 ].map(([route, tab, h]) => {
   const heading = h !== undefined ? h : HEAD.get(route);
   if (heading === undefined) throw new Error(`no heading for #/${route}`);
   return { route, tab, heading };
 });
 
-// Sub-navs: tab -> [aria-label, [[route, label]]].
+// Sub-navs: tab -> [aria-label, [[route, label]]]. Ask has none: no Packs, no What-if (SX5).
 const SUBNAV = {
   plan: ['Plan views', [['plan', 'Plan'], ['yearend', 'Year end'], ['advisor', 'Advisor']]],
-  ask: ['Ask views', [['ask', 'Conversations'], ['wargame', 'What-if'], ['packs', 'Packs']]],
-  money: ['Money views', [['money', 'Overview'], ['accounts', 'Accounts'], ['pnl', 'P&L'], ['add', 'Files']]]
+  money: ['Money views', [['money', 'Overview'], ['pnl', 'P&L'], ['add', 'Files']]]
 };
+
+// Old routes and where they land now.
+const MOVED = [['brief', 'home'], ['accounts', 'money']];
 
 // Every Go to destination in the quick switcher (pinned decision 10).
 const GO_TITLES = ['Home', 'Plan', 'Decide', 'Ask', 'Confirm', 'Packs', 'Files', 'Engine', 'Email', 'Connect',
-  'Money', 'Settings', 'Goals', 'Accounts', 'P&L', 'Advisor', 'Year end', 'Memories'];
+  'Money', 'Settings', 'Goals', 'P&L', 'Advisor', 'Year end', 'What Fathom knows'];
 const G = [['h', 'home'], ['p', 'plan'], ['d', 'plan'], ['a', 'ask'], ['c', 'confirm'], ['k', 'packs'],
   ['f', 'add'], ['e', 'engine'], ['m', 'email'], ['n', 'connect'], ['o', 'money'], ['s', 'settings']];
 
@@ -235,7 +237,7 @@ test.describe('reachable destinations', () => {
     await expect(money.getByRole('heading', { level: 1 })).toBeVisible();
     const health = money.locator('.h-money-health');
     await expect(health).toBeVisible();
-    for (const k of ['confirm', 'add', 'accounts']) await expect(health.locator(`a[data-go="${k}"]`).first(), k).toBeVisible();
+    for (const k of ['confirm', 'add', 'money']) await expect(health.locator(`a[data-go="${k}"]`).first(), k).toBeVisible();
     await expect(money.locator('.h-accs').first()).toBeVisible();
     await expect(money.getByRole('button', { name: 'Add files', exact: true })).toBeVisible();
     await expect(money.locator('input[type=file][data-upload]')).toHaveCount(1);
@@ -268,10 +270,20 @@ test.describe('active marking', () => {
     });
   }
 
-  test('#/brief resolves to Home and lights the Home tab', { tag: ['@nav-ac3', BOTH] }, async ({ page }) => {
-    await gotoRoute(page, 'brief');
-    await expectOn(page, 'home');
-    await expectLit(page, 'home');
+  for (const [from, to] of MOVED) {
+    test(`#/${from} resolves to #/${to} and lights the ${to} tab`, { tag: ['@nav-ac3', BOTH] }, async ({ page }) => {
+      await gotoRoute(page, from);
+      await expectOn(page, to);
+      await expectLit(page, to);
+      await expectSubnav(page, to, to);
+    });
+  }
+
+  test('the switcher has no Accounts destination', { tag: ['@nav-ac3', BOTH] }, async ({ page }) => {
+    await gotoRoute(page, 'home');
+    await searchBtn(page).click();
+    await expect(switcher(page)).toBeVisible();
+    await expect(goOption(page, 'accounts')).toHaveCount(0);
   });
 
   test('a rec opened from Plan keeps the Plan tab lit', { tag: ['@nav-ac3', BOTH] }, async ({ page }) => {
