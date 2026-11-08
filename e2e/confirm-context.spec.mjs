@@ -62,7 +62,7 @@ function itemForAccount(ing, kind, name) {
 
 // Upload the three household files in one batch through the Accounts Add files input.
 async function uploadHousehold(page) {
-  await gotoRoute(page, 'accounts');
+  await gotoRoute(page, 'money');
   const uploaded = page.waitForResponse((r) => isPost(r, '/api/files'));
   await page.locator('input[type=file][data-upload]').setInputFiles([AGG, BANK, POS].map(fixture));
   const res = await uploaded;

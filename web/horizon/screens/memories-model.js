@@ -14,9 +14,28 @@ export function summaryLine(n) {
   return `Fathom remembers ${k} ${k === 1 ? 'thing' : 'things'}`;
 }
 
-// The Settings row for the Memories page: route, link label and the one-line summary.
+// The Settings row for the What Fathom knows page: route, link label and the one-line summary.
 export function settingsRow(memories) {
-  return { route: 'memories', label: 'Memories', desc: summaryLine(arr(memories).length) };
+  return { route: 'memories', label: 'What Fathom knows', desc: summaryLine(arr(memories).length) };
+}
+
+// The packs that are on, in the order given.
+export const activePacks = (packs) => arr(packs).filter((p) => p && p.status === 'active');
+
+// A pack's status line in plain words. The server explains a status with the rule it matched
+// ("Matching activation rule: income.sCorp is true (eq true: true)."); that sentence is for
+// developers, so it is dropped and any plain sentence after it is kept.
+const RULE = /^(Matching (activation|suggestion) rule\b.*?|No matching activation or suggestion rule)\.(\s+|$)/;
+const STATUS_LINE = {
+  active: 'On because it applies to your household.',
+  suggested: 'Might apply to your household.',
+  exploring: 'You are exploring this with a what-if.',
+  available: 'Not on for your household. Ask a what-if to explore it.'
+};
+export function packLine(pack) {
+  const why = String(pack?.why ?? '').trim();
+  const plain = RULE.test(why) ? why.replace(RULE, '').trim() : why;
+  return plain || STATUS_LINE[pack?.status] || '';
 }
 
 // Case-insensitive substring match on the memory text; an empty query keeps every memory.

@@ -5,7 +5,7 @@ export const operations = [{
   tool: 'answer', name: 'fact', scope: 'write:facts',
   summary: 'Record a typed household fact using exact owner words or stored data; include evidence.',
   route: 'Record or correct a household fact', routes: [],
-  params: { key: { type: 'string', minLength: 1 }, value: {}, evidence: { type: 'string', minLength: 1, maxLength: 4000 }, conversationKey: { type: 'string' } },
+  params: { key: { type: 'string', minLength: 1 }, value: {}, evidence: { type: 'string', minLength: 1 }, conversationKey: { type: 'string' } },
   required: ['key', 'value', 'evidence'],
   async handler(args, ctx) {
     const out = recordFact(args, ctx.channel === 'mcp' ? { ...ctx, conversationKey: args.conversationKey } : ctx);
@@ -18,7 +18,7 @@ export const operations = [{
   params: { subject: { type: 'string', minLength: 1, maxLength: 200 }, direction: { enum: ['inflow', 'outflow'] },
     dueDate: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' }, datePrecision: { enum: ['day', 'month', 'year'] },
     amount: { anyOf: [{ type: 'number', minimum: 0 }, { type: 'null' }] }, accountId: { anyOf: [{ type: 'string' }, { type: 'null' }] },
-    evidence: { type: 'string', minLength: 1, maxLength: 4000 }, relativeDate: { type: 'string', maxLength: 30 }, conversationKey: { type: 'string' } },
+    evidence: { type: 'string', minLength: 1 }, relativeDate: { type: 'string', maxLength: 30 }, conversationKey: { type: 'string' } },
   required: ['subject', 'direction', 'dueDate', 'datePrecision', 'amount', 'evidence'],
   handler: (args, ctx) => expectedTransaction(args, ctx.channel === 'mcp' ? { ...ctx, conversationKey: args.conversationKey } : ctx),
 }];

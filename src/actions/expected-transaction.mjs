@@ -13,6 +13,7 @@ export const expectedOut = row => ({ id: row.id, subject: row.subject, direction
 export function expectedTransaction(args, ctx) {
   requireScope(ctx, 'write:imports');
   const actor = requireActor(ctx);
+  if (typeof args.evidence !== 'string' || !args.evidence.trim() || args.evidence.length > 4000) throw new ToolError('bad_input', 'Use evidence between one and 4000 characters.');
   if (isoDate(args.dueDate) !== args.dueDate || !['day', 'month', 'year'].includes(args.datePrecision) ||
     !['inflow', 'outflow'].includes(args.direction) || typeof args.subject !== 'string' || !args.subject.trim() ||
     args.amount !== null && (typeof args.amount !== 'number' || !Number.isFinite(args.amount) || args.amount < 0)) throw new ToolError('bad_input', 'Invalid expected transaction.');

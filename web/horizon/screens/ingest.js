@@ -1170,5 +1170,5 @@ export function ingestScreens(h) {
     st.origin = o && o.name ? { name: o.name, params: o.params } : null;
   }
 
-  return { setOrigin, confirmPage, pendingBanner, accountRepairs, accountRepairsFor, addFiles, accountMeta, sourcesSection, handleClick, handleChange, deckAction, handlePointer };
+  return { setOrigin, confirmPage, pendingBanner, accountRepairs, accountRepairsFor, addFiles, accountMeta, sourcesSection, decidedSection, handleClick, handleChange, deckAction, handlePointer };
 }

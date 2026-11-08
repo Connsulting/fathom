@@ -19,6 +19,14 @@ export const expectedTransactionFixture = household => ({ operation: 'expected_t
   direction: 'inflow', dueDate: '2032-06-19', datePrecision: 'day', amount: null,
   evidence: `${household.canary} pays on 2032-06-19` });
 
+export function accountCategoryFixtures(household) {
+  const transactionId = Number(household.db.prepare("INSERT INTO transactions (account_id,date,amount,description) VALUES ('colliding-account','2026-11-01',-25,'Synthetic store')").run().lastInsertRowid);
+  return {
+    categorize: { operation: 'transaction', transactionId, category: 'Groceries' },
+    update_account: { operation: 'rename', id: 'colliding-account', displayName: household.canary + ' reserve' },
+  };
+}
+
 export async function mcpHouseholds() {
   const root = await tempDir('fathom-mt06-');
   let server;
@@ -60,6 +68,11 @@ export async function mcpHouseholds() {
       hh.db.prepare('INSERT INTO recs (id, def, status, updated_at) VALUES (?, ?, ?, ?)')
         .run(`${hh.canary}-only`, JSON.stringify({ title: hh.canary }), 'proposed', '2026-11-05');
       hh.db.prepare('INSERT INTO accounts (id, name, kind) VALUES (?, ?, ?)').run('colliding-account', hh.canary, 'checking');
+      hh.retirementBalance = hh === A ? 12345 : 67890;
+      hh.db.prepare('INSERT INTO balances (account_id, date, amount) VALUES (?, ?, ?)')
+        .run('colliding-account', '2026-11-05', hh.retirementBalance);
+      hh.retirement = { operation: 'growth', solve: 'balance', years: 0,
+        balance: { ref: { tool: 'accounts', args: { operation: 'detail', id: 'colliding-account' }, path: 'balance' } } };
       writeSyntheticPack(hh.ctx.root, { id: 'your-plans', appliesWhen: ALWAYS, entries: [
         { file: 'shared.md', title: hh.canary, body: `# ${hh.canary}\n\n${hh.canary} private guidance.\n` },
         { file: `${hh.canary}.md`, title: hh.canary, body: `# ${hh.canary}\n\n${hh.canary} private guidance.\n` },

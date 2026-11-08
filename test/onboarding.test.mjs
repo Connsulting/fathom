@@ -191,7 +191,7 @@ describe('what we heard (deriveHeard)', () => {
     assert.equal(entity.prov, 'From books.xlsx');
     assert.equal(item('accounts', 'accounts:checking').value, '2');
     assert.equal(item('accounts', 'accounts:checking').prov, 'From books.xlsx');
-    assert.deepEqual(item('accounts', 'accounts:checking').edit, { route: 'accounts', label: 'Edit in Accounts' });
+    assert.deepEqual(item('accounts', 'accounts:checking').edit, { route: 'money', label: 'Edit in Accounts' });
     assert.equal(item('accounts', 'accounts:taxable').prov, 'Stored accounts');
   }));
 
