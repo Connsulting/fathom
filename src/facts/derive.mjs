@@ -68,7 +68,7 @@ export function deriveRecFacts(data, facts = {}, { entities = [] } = {}) {
   const eligible = txs.filter(t => /^(charitable?( donations?| contributions?)?|donations?|mortgage interest|real estate tax(?:es)?|property tax(?:es)?|personal property tax(?:es)?)$/i.test(String(t.category || '').trim()));
   if (facts['household.state'] === 'VA' && eligible.length) {
     const value = Math.max(0, cents(-eligible.reduce((s, t) => s + t.amount, 0)));
-    out['tax.vaItemizedEstimate'] = sourceFact(data, value, 'Virginia estimate: net categorized charitable gifts, mortgage interest and property taxes paid this year; state income tax and mortgage principal excluded', eligible.map(t => ({ table: 'transactions', id: t.id, fileId: t.file_id ?? null })), true);
+    out['tax.vaItemizedEstimate'] = sourceFact(data, value, 'Virginia estimate: net categorized charitable gifts, mortgage interest and property taxes paid year to date; state income tax and mortgage principal excluded', eligible.map(t => ({ table: 'transactions', id: t.id, fileId: t.file_id ?? null })), true);
   }
 
   const hsaAccounts = (data.accounts || []).filter(a => a.kind === 'hsa');

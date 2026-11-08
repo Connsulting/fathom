@@ -165,6 +165,7 @@ test('a derived fact is refreshed and removed with its evidence, while an owner 
 import { scratch, addFact, recRow } from './helpers/real-store.mjs';
 import { planRun } from './helpers/plan.mjs';
 import { buildScenario } from '../src/scenario/build.mjs';
+import { recordVerdict } from '../src/advisor/index.mjs';
 import { buildPacketHtml } from '../src/advisor/packet.mjs';
 import { recAnswers as answerRec } from '../src/api/fact-answers.mjs';
 import * as recAnswerView from '../web/horizon/screens/rec-answers.js';
@@ -184,6 +185,14 @@ test('planner routes professional judgments to waiting advisor packets and retai
       assert.ok(scenario.advisor.pending.includes(rec.id));
       assert.ok(!rec.question?.fields.some(f => ['business.salaryRange', 'retirement.planTermsConfirmed', 'retirement.aggregationConfirmed'].includes(f.key)));
     }
+    assert.equal(new Set(waiting.map(r => r.title)).size, waiting.length);
+    const reviewed = waiting[0];
+    const review = db.prepare('SELECT * FROM advisor_reviews WHERE rec_id = ? AND closed_at IS NULL').get(reviewed.id);
+    recordVerdict(db, review.id, { verdict: 'confirmed', note: 'Synthetic confirmation', date, now: `${date}T12:00:00Z` });
+    await planRun(db);
+    assert.equal(db.prepare('SELECT count(*) AS n FROM advisor_reviews WHERE rec_id = ?').get(reviewed.id).n, 1);
+    assert.equal(db.prepare('SELECT closed_at FROM advisor_reviews WHERE id = ?').get(review.id).closed_at, null);
+    assert.ok(!buildScenario(db).advisor.pending.includes(reviewed.id));
     const packet = buildPacketHtml(scenario);
     assert.match(packet, /annual salary range is reasonable/);
     assert.match(packet, /related businesses share retirement plan limits/);
@@ -194,6 +203,8 @@ test('planner routes professional judgments to waiting advisor packets and retai
     addFact(db, 'retirement.aggregationConfirmed', true);
     await planRun(db);
     assert.notEqual(recRow(db, 'scorp-salary').status, 'waiting');
+    assert.ok(!buildScenario(db).advisor.pending.includes('scorp-salary'));
+    assert.ok(db.prepare("SELECT id FROM rec_events WHERE action = 'advisor_ready'").get());
   } finally { s.cleanup(); }
 });
 
