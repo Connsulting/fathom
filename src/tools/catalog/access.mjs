@@ -154,6 +154,6 @@ async function bridge(args,ctx) {
 }
 
 export const operations=[
- {name:'access',params:{people:{type:'string',enum:['owner','spouse','both']}},handler:access,route:'Access and RMDs',summary:'Per-person access milestones, account eligibility and missing facts.'},
- {name:'bridge',params:{retireAge:assumption,person:{type:'string',enum:['owner','spouse']},spending:{type:'object'},definition:{type:'string'},realReturn:assumption},handler:bridge,route:'Early retirement',summary:'Spending until standard access against cash, taxable, Roth basis and eligible employer money.'},
+ {name:'access',params:{people:{enum:['owner','spouse','both']}},handler:access,route:'Access and RMDs',summary:'Access milestones.'},
+ {name:'bridge',params:{retireAge:{type:'object'},person:{enum:['owner','spouse']},spending:{type:'object'},definition:{type:'string'},realReturn:assumption},handler:bridge,route:'Early retirement',summary:'Bridge coverage.'},
 ].map(op=>({...op,tool:'retirement',scope:'read',required:[],routes:[],referenceable:true,handler:async(args,ctx)=>bounded(bindFigures(await op.handler(args,ctx),'retirement',{operation:op.name,...args}))}));

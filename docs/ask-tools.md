@@ -128,10 +128,10 @@ beside C1 and merges before any live run is used to judge a tool ticket. Section
    `calculate`), so the MCP smoke can call every read tool.
 
 Context budget. Every tool's name, description and input schema together, as `tools/list`
-returns them to a key holding every scope, stay under about 8,000 tokens. The measure is a
+returns them to a key holding every scope, stay within the cached system-context budget. The measure is a
 character count as a proxy: `test/tools-registry.test.mjs` (C1) builds the tool list for a key
 with every scope through `toolsForScopes`, serializes `[{ name, description, inputSchema }]` with
-`JSON.stringify`, and fails above 34,000 characters (8,000 tokens at 3.75 characters per token, a
+`JSON.stringify`, and fails above 34,000 characters (about 9,100 tokens at 3.75 characters per token, a
 conservative ratio for JSON schema text). The same test fails on a description over 900
 characters, and on the assembled routing and rule text (section 4) over 8,000 characters. It
 prints the measured totals so a ticket's PR can quote them. Today's 30 tools measure 12,633

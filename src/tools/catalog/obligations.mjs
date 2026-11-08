@@ -10,10 +10,10 @@ import { ToolError } from '../errors.mjs';
 
 const bad = message => { throw new ToolError('bad_input',message); };
 const gap = message => ({code:'missing_fact',message});
-const choice = values => ({type:'string',enum:values});
+const choice = values => ({enum:values});
 const kinds = ['mortgage','childcare','plan529'];
 const obligations = {type:'array',maxItems:3,items:choice(kinds)};
-const changes = {type:'array',maxItems:10,items:{type:'object',properties:{kind:choice(kinds),stage:choice(['school_age','after_care_end']),newMonthly:{type:'object'}},required:['kind','newMonthly'],additionalProperties:false}};
+const changes = {type:'array',maxItems:10,items:{type:'object',properties:{kind:choice(kinds),stage:choice(['school_age','after_care_end']),newMonthly:{type:'object'}},required:['kind','newMonthly']}};
 const pack = kind => { const r=OBLIGATION_RULES[kind].packRef; return {packId:r.pack,entryId:r.entry}; };
 const latest = dates => dates.filter(Boolean).sort().at(-1) ?? null;
 const factSources = (ctx,keys) => keys.flatMap(key=>ctx.db.prepare('SELECT key,as_of FROM facts WHERE key=?').all(key));
@@ -22,6 +22,7 @@ const figure = (value,unit,label,asOf,provenance,gaps) => envelope(value,{unit,l
 
 async function schedule(args,ctx) {
   const {clock,facts,accounts}=readInput(ctx), horizon=addMonths(clock,(args.horizonYears ?? 30)*12);
+  for(const change of args.changes ?? [])if(Object.keys(change).some(k=>!['kind','stage','newMonthly'].includes(k)))bad('Unknown change field');
   const assumptions=(args.changes ?? []).map(c=>({...c,record:checkAssumption(c.newMonthly,{name:`${c.kind} ${c.stage ?? 'change'}`,unit:'usd_per_month',min:0},ctx)}));
   const seen=new Set();
   for (const a of assumptions) { const key=`${a.kind}:${a.stage ?? ''}`; if(seen.has(key))bad('Duplicate change assumption');seen.add(key); }
@@ -116,6 +117,6 @@ async function projection(args,ctx) {
 }
 
 export const operations=[
-  {name:'obligations',params:{obligations,horizonYears:{type:'integer',minimum:1,maximum:40},changes},handler:schedule,route:'Obligation dates',summary:'Obligation amounts, change dates, sources and missing facts.'},
-  {name:'projection',params:{base:{type:'object'},definition:{type:'string'},years:{type:'integer',minimum:1,maximum:40},obligations,changes},handler:projection,route:'Future spending',summary:'Annual spending with dated changes capped to amounts inside the base.'},
+  {name:'obligations',params:{obligations,horizonYears:{type:'integer',minimum:1,maximum:40},changes},handler:schedule,route:'Obligation dates',summary:'Dates and amounts.'},
+  {name:'projection',params:{base:{type:'object'},definition:{type:'string'},years:{type:'integer',minimum:1,maximum:40},obligations,changes},handler:projection,route:'Future spending',summary:'Annual projection.'},
 ].map(op=>({...op,tool:'spending',scope:'read',required:[],routes:[],referenceable:true,handler:async(args,ctx)=>bounded(bindFigures(await op.handler(args,ctx),'spending',{operation:op.name,...args}))}));

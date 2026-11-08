@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mcpHouseholds, mcp, toolText, result, digest, refreshImportFixture, c7ReadFixtures } from './helpers/tenancy-mcp.mjs';
+import { mcpHouseholds, mcp, toolText, result, digest, refreshImportFixture, accountCategoryFixtures, c7ReadFixtures } from './helpers/tenancy-mcp.mjs';
 import { tools } from '../src/tools/index.mjs';
 import { isMcpTool } from '../src/mcp/keys.mjs';
 
@@ -48,6 +48,7 @@ test('each registered MCP tool executes with only its bearer household context',
         business: { operation: 'pnl' }, calculate: { operation: 'sum', operands: [{ ref: { tool: 'accounts', args: { operation: 'net_worth' }, path: 'total' } }], label: 'Synthetic balance' },
         goals: { operation: 'list' }, household: { operation: 'summary' }, knowledge: { operation: 'packs' },
         recommendations: { operation: 'list' }, refresh: refreshImportFixture(own), retirement: own.retirement, sources: { operation: 'archive_account', id: 'colliding-account' }, spending: { operation: 'total' }, tax: { operation: 'estimate' }, transactions: { operation: 'search' },
+        ...accountCategoryFixtures(own),
         update_goal: { operation: 'create', title: 'Synthetic reserve' },
         update_preferences: { operation: 'remember', text: 'Prefer a steady reserve', evidence: 'Prefer a steady reserve' },
       };
