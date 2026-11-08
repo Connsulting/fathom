@@ -5,7 +5,8 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createEngine, BudgetExceededError } from '../src/engine/index.mjs';
-import { estimateUnknownCost, DEFAULT_MODEL, TITLE_MODEL } from '../src/engine/pricing.mjs';
+import { DEFAULT_MODEL, TITLE_MODEL } from '../src/engine/pricing.mjs';
+import { estimateEvalCost } from '../evals/reservation.mjs';
 import { createEvalStore, createEvalLedger, runCases } from '../evals/harness.mjs';
 import { loadCases } from '../evals/cases.mjs';
 import { gradeThreadTitle } from '../evals/graders.mjs';
@@ -42,7 +43,7 @@ test('filters select exact cases and reject unknown filters or invalid budget', 
   assert.equal((await cli(['--help'])).status, 0);
 });
 
-test('arithmetic transcript fails through real Ask and corrected retries cannot hide it', async () => {
+test('arithmetic drafts remain report-only when real Ask delivers a corrected answer', async () => {
   const cases = await loadCases();
   const c = cases.find(c => c.id === 'retirement-hsa-room');
   const r = await runCases({ cases: [c], scripts: ({ db, attempt }) => {
@@ -55,7 +56,8 @@ test('arithmetic transcript fails through real Ask and corrected retries cannot 
       { text: `${values[0].v + values[1].v}, or ${2 * (values[0].v + values[1].v)} over two years`, costUsd: 0 },
     ];
   } });
-  assert.equal(r.cases[0].status, 'fail');
+  assert.equal(r.cases[0].status, 'pass');
+  assert.equal(r.failedDrafts, 1);
   assert.ok(r.cases[0].turns[0].attempts.some(a => a.figures.selfComputed.length));
   assert.ok(r.cases[0].turns[0].attempts.length > 1, 'production retried the arithmetic answer');
 });
@@ -145,6 +147,12 @@ test('CLI entrypoint exits nonzero and writes evidence for a self-computed answe
     const report = JSON.parse(await readFile(join(dir, 'scorecard.json'), 'utf8'));
     assert.equal(report.cases[0].status, 'fail');
     assert.ok(report.cases[0].turns[0].attempts[0].figures.selfComputed.length);
+    const logged = r.stdout.trim().split('\n').map(line => JSON.parse(line));
+    const summary = logged.at(-1);
+    assert.equal(summary.scorecard[0].id, 'retirement-hsa-room');
+    assert.ok(summary.scorecard[0].failingChecks.includes('figures.self-computed'));
+    assert.ok(logged.some(line => line.type === 'round' && line.estimateUsd === 0 && line.actualUsd === 0 && line.remainingUsd === 100));
+    assert.ok(summary.scorecard.every(row => !Object.hasOwn(row, 'delivered') && !Object.hasOwn(row, 'figures')));
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
@@ -168,7 +176,7 @@ test('unavailable cases accept a clear refusal in ordinary wording', async () =>
 
 const budgetCatalog = n => Array.from({ length: n }, (_, i) => ({
   id: `budget-case-${i}`, family: 'goals', turns: [{ question: 'Discuss education savings.', required: [],
-    forbidden: ['unsourced-figure', 'self-computed-figure'], expected: [], maxWords: 100,
+    forbidden: ['unsourced-figure', 'self-computed-figure'], expected: [], maxWords: 100, wordLimitReason: 'Keep budget fixtures brief.',
     rubric: 'Stay qualitative.', scriptedReply: 'Education savings can support the goal.' }],
 }));
 const paidReply = () => [{ text: 'Education savings can support the goal.', costUsd: 0.05 }];
@@ -193,10 +201,10 @@ test('an unaffordable round dispatches nothing and reports every remaining case 
   } });
   assert.equal(r.costUsd, 0.1);
   assert.ok(r.costUsd <= r.maxUsd);
-  assert.deepEqual(r.cases.map(c => c.status), ['pass', 'pass', 'budget-stopped', 'unrun', 'unrun']);
+  assert.deepEqual(r.cases.map(c => c.status), ['pass', 'pass', 'budget-stopped', 'budget-stopped', 'budget-stopped']);
   assert.equal(r.completed, 2);
-  assert.equal(r.attempted, 3);
-  assert.equal(dispatched, 3);
+  assert.equal(r.attempted, 5);
+  assert.equal(dispatched, 5);
   assert.ok(r.cases.slice(2).every(c => /budget/.test(c.reason)));
   assert.equal(r.outstandingReservedUsd, 0);
 });
@@ -206,9 +214,8 @@ test('budget admission bounds a cost spike before spend can exceed the cap', asy
   const r = await runCases({ cases: budgetCatalog(4), maxUsd: 0.12, scripts: () => [
     { text: 'Education savings can support the goal.', costUsd: ++i === 2 ? 0.2 : 0.05 },
   ] });
-  assert.equal(r.costUsd, 0.05);
-  assert.equal(r.cases[1].status, 'budget-stopped');
-  assert.ok(r.cases.slice(2).every(c => c.status === 'unrun'));
+  assert.equal(r.costUsd, 0.1);
+  assert.deepEqual(r.cases.map(c => c.status), ['pass', 'budget-stopped', 'pass', 'budget-stopped']);
 });
 
 test('stored conversation title uses a model title without amounts and permits 529', async () => {
@@ -243,19 +250,19 @@ test('live reservation uses the actual transcript, output limit and purpose mode
       maxTokens: 128, messages: [{ role: 'user', content: 'Discuss education savings.' }] };
     ledger.begin(request);
     ledger.admitRound(request);
-    const first = estimateUnknownCost({ model: DEFAULT_MODEL, maxTokens: 128,
+    const first = estimateEvalCost({ model: DEFAULT_MODEL, maxTokens: 128,
       system: 'Use tools.\nCurrent context.', messages: request.messages, tools: [] }).costUsd;
     assert.equal(ledger.reserves[0], first);
     ledger.record({ ts: new Date().toISOString(), purpose: 'chat', model: DEFAULT_MODEL, costUsd: 0.001, tokens: {} });
     assert.equal(ledger.outstandingReservedUsd, 0);
     const next = { ...request, messages: [...request.messages, { role: 'assistant', content: 'A short reply.' }] };
     ledger.admitRound(next);
-    assert.equal(ledger.reserves[1], estimateUnknownCost({ model: DEFAULT_MODEL, maxTokens: 128,
+    assert.equal(ledger.reserves[1], estimateEvalCost({ model: DEFAULT_MODEL, maxTokens: 128,
       system: 'Use tools.\nCurrent context.', messages: next.messages, tools: [] }).costUsd);
     ledger.end();
     ledger.begin({ ...request, purpose: 'title' });
     ledger.admitRound({ ...request, purpose: 'title' });
-    assert.equal(ledger.reserves[2], estimateUnknownCost({ model: TITLE_MODEL, maxTokens: 128,
+    assert.equal(ledger.reserves[2], estimateEvalCost({ model: TITLE_MODEL, maxTokens: 128,
       system: 'Use tools.\nCurrent context.', messages: request.messages, tools: [] }).costUsd);
     assert.ok(ledger.reserves[2] < first);
     ledger.end();
@@ -263,7 +270,7 @@ test('live reservation uses the actual transcript, output limit and purpose mode
   } finally { await store.close(); }
 });
 
-test('title calls share the cap and an unaffordable title stops the catalog cleanly', async () => {
+test('title calls share the cap and later unaffordable cases are reported', async () => {
   const c = (await loadCases()).find(c => c.id === 'goals-conversation-title-529');
   const r = await runCases({ cases: [c, ...budgetCatalog(1)], maxUsd: 0.06, scripts: ({ purpose }) => [
     { text: purpose === 'title' ? JSON.stringify({ title: '529 education savings' }) : 'Education savings can support the goal.', costUsd: 0.04 },
@@ -271,6 +278,6 @@ test('title calls share the cap and an unaffordable title stops the catalog clea
   assert.equal(r.costUsd, 0.04);
   assert.equal(r.cases[0].status, 'budget-stopped');
   assert.match(r.cases[0].reason, /title/);
-  assert.equal(r.cases[1].status, 'unrun');
+  assert.equal(r.cases[1].status, 'budget-stopped');
   assert.equal(r.outstandingReservedUsd, 0);
 });
