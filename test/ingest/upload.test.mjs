@@ -275,7 +275,17 @@ describe('POST /api/files on a demo server', () => {
     assert.equal((await postJson(s.baseUrl, '/api/engine', { on: true })).status, 200);
   });
 
+
+  test('server logs carry no cell values or file contents', () => {
+    const log = s.output();
+    for (const v of CANARIES) assert.ok(!log.includes(v), `${v} not in server output`);
+    assert.ok(!log.includes('DUMP-CANARY'));
+  });
+});
+
+describe('POST /api/files in real mode', () => {
   test('scripts/dump.mjs uploads a directory, skips dotfiles and prints statuses only', T, async () => {
+    const s = await spawnAuthenticatedServer({ env: { FATHOM_DEMO: '0', FATHOM_ENGINE: 'off' } });
     const dir = await tempDir('fathom-dump-');
     try {
       mkdirSync(join(dir, 'nested'));
@@ -298,7 +308,7 @@ describe('POST /api/files on a demo server', () => {
       const all = out.stdout + out.stderr;
       assert.ok(!all.includes('.hidden-dump.csv'), 'dotfiles skipped');
       for (const v of ['DUMP-CANARY', '6420.13', '5310.24', '7070707070', '6060606060']) assert.ok(!all.includes(v), `${v} not printed`);
-      const list = await request(s.baseUrl, { path: '/api/files' });
+      const list = await s.request({ path: '/api/files' });
       const names = list.json.files.map((f) => f.name);
       assert.ok(names.includes('first-dump.csv') && names.includes('second-dump.csv'));
       assert.ok(!names.includes('.hidden-dump.csv'));
@@ -307,18 +317,12 @@ describe('POST /api/files on a demo server', () => {
       const fail = await runCommand(process.execPath, ['scripts/dump.mjs', '--household', s.session.householdId, `http://127.0.0.1:${closed}`, dir], { env: dumpEnv });
       assert.equal(fail.code, 1, 'a failed request exits 1');
     } finally {
+      await s.stop();
+      rmSync(s.dataDir, { recursive: true, force: true });
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  test('server logs carry no cell values or file contents', () => {
-    const log = s.output();
-    for (const v of CANARIES) assert.ok(!log.includes(v), `${v} not in server output`);
-    assert.ok(!log.includes('DUMP-CANARY'));
-  });
-});
-
-describe('POST /api/files in real mode', () => {
   test('without FATHOM_PLATFORM_KEY_FILE: 409 naming the variable, and nothing stored', T, async () => {
     const s = await spawnAuthenticatedServer({ env: { FATHOM_DEMO: '0', FATHOM_ENGINE: 'off', FATHOM_PLATFORM_KEY_FILE: undefined } });
     try {
