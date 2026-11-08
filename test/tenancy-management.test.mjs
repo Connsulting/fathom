@@ -173,7 +173,7 @@ before(async () => {
   const A = (await platform.prepare('SELECT id FROM households WHERE serves_store = 1').get()).id;
   f = { root, dataDir, keys, server, app: server.app, baseUrl: server.baseUrl, platform, store, A };
   // Bootstrap: the operator's user-invite command issues the first admin's invitation.
-  const boot = store.invite(A, 'alpha-admin@example.test', { role: 'admin' });
+  const boot = await store.invite(A, 'alpha-admin@example.test', { role: 'admin' });
   f.alpha = await enrollByLink(boot.token);
   await store.grantOperator(f.alpha.identity.id);
   await store.setPlatformSetting('multi_household_enabled', true);

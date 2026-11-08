@@ -173,7 +173,7 @@ async function demoAnswerer(t) {
 test('a regeneration streams its revision step and no text or reset events', async t => {
   const { s, engine, packs, root } = await demoAnswerer(t);
   let n = 0;
-  const wrapped = { ...engine, mode: engine.mode, isOn: () => engine.isOn(), call: req => engine.call({ ...req,
+  const wrapped = { ...engine, mode: engine.mode, isOn: async () => await engine.isOn(), call: async req => await engine.call({ ...req,
     fake: n++ === 0 ? [{ text: 'You owe $987,654 this year and $876,543 next year.' }] : [{ toolCalls: [{ name: 'household', args: { operation: 'summary', } }] }, { text: 'Nothing to add.' }] }) };
   const seen = [];
   const reply = await createLiveAnswerer({ engine: wrapped, packs, root, services: { engine: wrapped, config: { dataDir: root } } }).answer({ db: s.db, key: 'ask:0123456789ab', text: 'How much?', onEvent: e => seen.push(e) });

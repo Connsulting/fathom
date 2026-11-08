@@ -33,7 +33,7 @@ test.describe('tax precision gaps on a synthetic household', () => {
     origin = `http://localhost:${port}`;
     app = await startServer(loadConfig({ FATHOM_DATA: dataDir, FATHOM_DEMO: '0', FATHOM_ENGINE: 'off', FATHOM_HOST: 'localhost', FATHOM_PORT: String(port), FATHOM_PUBLIC_URL: origin, FATHOM_CLOCK: '2026-11-05', ...secretEnv(secretsFor(dataDir)) }));
     const auth = createAuthStore(app.platform);
-    const { user, token } = auth.invite((await auth.servedHousehold()).id, 'owner@example.test', { role: 'admin' });
+    const { user, token } = await auth.invite((await auth.servedHousehold()).id, 'owner@example.test', { role: 'admin' });
     await auth.consumeInvitation(token, user.id);
     await auth.markEnrolled(user.id);
     session = await auth.createSession(user.id);

@@ -37,7 +37,7 @@ before(async () => {
   // Real platform users, so the api_keys.user_id foreign key holds.
   const store = createAuthStore(t.platform);
   for (const name of ['creator', 'member']) {
-    const invited = store.invite(hh, `${name}@example.test`);
+    const invited = await store.invite(hh, `${name}@example.test`);
     await store.consumeInvitation(invited.token, invited.user.id);
     users[name] = invited.user.id;
   }

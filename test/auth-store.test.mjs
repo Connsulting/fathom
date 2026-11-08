@@ -25,7 +25,7 @@ async function fixture(t) {
   const store = createAuthStore(platform, { now });
   const household = await store.servedHousehold();
   const hh = household.id;
-  const invite = async (email, role = 'member') => store.invite(hh, email, { role });
+  const invite = async (email, role = 'member') => await store.invite(hh, email, { role });
   const enroll = async (email, role = 'member') => {
     const { user, token } = await invite(email, role);
     await store.consumeInvitation(token, user.id);
@@ -121,9 +121,9 @@ test('reinviting an active member directs callers to role changes without changi
       assert.deepEqual(await store.membership(user.id, hh), membership);
       assert.deepEqual(await platform.prepare('SELECT * FROM auth_tokens WHERE user_id = ? ORDER BY hash').all(user.id), tokens);
       assert.deepEqual(await platform.prepare('SELECT * FROM household_invitations ORDER BY hash').all(), invitations);
-      assert.ok(store.token(recovery.token));
-      assert.ok(store.token(add.token));
-      assert.equal(store.session(session.token).id, user.id);
+      assert.ok(await store.token(recovery.token));
+      assert.ok(await store.token(add.token));
+      assert.equal((await store.session(session.token)).id, user.id);
       assert.equal(await roleOf(user.id), initial);
     }
   }
@@ -173,15 +173,15 @@ test('tokens contain 32 random bytes, persist only a digest, expire at 20 minute
   assert.ok(!stored.includes(issued.token));
   assert.ok(stored.includes(digest(issued.token)));
   const expected = { userId: user.id, purpose: 'recovery', expiresAt: issued.expiresAt };
-  assert.deepEqual(store.token(issued.token), expected);
+  assert.deepEqual(await store.token(issued.token), expected);
   assert.deepEqual(await store.consumeToken(issued.token), expected);
   assert.equal(await store.consumeToken(issued.token), null);
-  assert.equal(store.token(issued.token), null);
+  assert.equal(await store.token(issued.token), null);
   const later = await store.createToken(user.id, 'recovery');
   advance(TOKEN_TTL - 1);
-  assert.ok(store.token(later.token));
+  assert.ok(await store.token(later.token));
   advance(1);
-  assert.equal(store.token(later.token), null);
+  assert.equal(await store.token(later.token), null);
   assert.equal(await store.consumeToken(later.token), null);
   await assert.rejects(async () => await store.createToken(user.id, 'invite'), status(400), 'invite is no longer an auth token purpose');
 });
@@ -217,13 +217,13 @@ test('reissue invalidates every prior same-purpose token and leaves the other pu
   const recovery = await store.createToken(user.id, 'recovery');
   const second = await store.createToken(user.id, 'add-passkey');
   assert.notEqual(first.token, second.token);
-  assert.equal(store.token(first.token), null);
-  assert.ok(store.token(second.token));
-  assert.ok(store.token(recovery.token));
+  assert.equal(await store.token(first.token), null);
+  assert.ok(await store.token(second.token));
+  assert.ok(await store.token(recovery.token));
   const nextRecovery = await store.createToken(user.id, 'recovery');
-  assert.equal(store.token(recovery.token), null);
-  assert.ok(store.token(nextRecovery.token));
-  assert.ok(store.token(second.token));
+  assert.equal(await store.token(recovery.token), null);
+  assert.ok(await store.token(nextRecovery.token));
+  assert.ok(await store.token(second.token));
 });
 
 test('malformed bearer input never resolves while a valid token, invitation and session still resolve', async t => {
@@ -234,14 +234,14 @@ test('malformed bearer input never resolves while a valid token, invitation and 
   const session = await store.createSession(user.id);
   for (const raw of [undefined, null, {}, [], '', 'a', 'A'.repeat(42), 'A'.repeat(44), ' '.repeat(43),
     token.token + '=', '\n' + token.token, invited.token + '=', randomBytes(32).toString('base64url')]) {
-    assert.equal(store.token(raw), null);
+    assert.equal(await store.token(raw), null);
     assert.equal(await store.consumeToken(raw), null);
     assert.equal(await store.invitation(raw), null);
-    assert.equal(store.session(raw), null);
+    assert.equal(await store.session(raw), null);
   }
-  assert.ok(store.token(token.token));
+  assert.ok(await store.token(token.token));
   assert.ok(await store.invitation(invited.token));
-  assert.equal(store.session(session.token).id, user.id);
+  assert.equal((await store.session(session.token)).id, user.id);
 });
 
 test('sessions require enrollment, store only a digest and use seven-day absolute expiry', async t => {
@@ -256,9 +256,9 @@ test('sessions require enrollment, store only a digest and use seven-day absolut
   assert.ok(!stored.includes(session.token));
   assert.ok(stored.includes(digest(session.token)));
   advance(SESSION_TTL - 1);
-  assert.equal(store.session(session.token).id, user.id);
+  assert.equal((await store.session(session.token)).id, user.id);
   advance(1);
-  assert.equal(store.session(session.token), null);
+  assert.equal(await store.session(session.token), null);
 });
 
 // The merged test compared store.session() to the user projection; the contract leaves the session
@@ -282,7 +282,7 @@ test('sessions record their actual creation wall time without exposing it as use
   assert.deepEqual({ ...await row(second.token) }, { signed_in_at: secondAt, expires_at: secondAt + SESSION_TTL });
   assert.notEqual(firstAt, user.enrolledAt);
   for (const [token, at] of [[first.token, firstAt], [second.token, secondAt]]) {
-    const resolved = store.session(token);
+    const resolved = await store.session(token);
     assert.equal(resolved.id, user.id);
     assert.equal(resolved.email, user.email);
     for (const key of ['signedInAt', 'signed_in_at']) assert.equal(key in resolved, false, key);
@@ -299,11 +299,11 @@ test('revoking one session preserves another and revoking user sessions preserve
   const second = await store.createSession(a.id);
   const other = await store.createSession(b.id);
   await store.revokeSession(first.token);
-  assert.equal(store.session(first.token), null);
-  assert.ok(store.session(second.token));
+  assert.equal(await store.session(first.token), null);
+  assert.ok(await store.session(second.token));
   await store.revokeUserSessions(a.id);
-  assert.equal(store.session(second.token), null);
-  assert.equal(store.session(other.token).id, b.id);
+  assert.equal(await store.session(second.token), null);
+  assert.equal((await store.session(other.token)).id, b.id);
 });
 
 // Contradiction 3: removal removes the membership; the account goes only when nothing else holds it.
@@ -356,7 +356,7 @@ test('role changes bump the membership version and a second enrolled admin permi
   await store.setRole(hh, a.id, 'member');
   assert.equal(await roleOf(a.id), 'member');
   assert.ok((await store.membership(a.id, hh)).version > v0, 'a role change bumps the membership version');
-  assert.equal(store.session(live.token).id, a.id, 'a role change keeps the session; the role is read per request');
+  assert.equal((await store.session(live.token)).id, a.id, 'a role change keeps the session; the role is read per request');
   await store.setRole(hh, a.id, 'admin');
   assert.equal(await roleOf(a.id), 'admin');
   await store.removeMember(hh, b.id);
@@ -378,11 +378,11 @@ test('passkey metadata hides material and revoking any credential invalidates ev
   const second = await store.createSession(a.id);
   const other = await store.createSession(b.id);
   assert.equal(await store.revokePasskey(a.id, 'credential-b'), false);
-  assert.ok(store.session(first.token));
+  assert.ok(await store.session(first.token));
   assert.equal(await store.revokePasskey(a.id, 'credential-a'), true);
-  assert.equal(store.session(first.token), null);
-  assert.equal(store.session(second.token), null);
-  assert.equal(store.session(other.token).id, b.id);
+  assert.equal(await store.session(first.token), null);
+  assert.equal(await store.session(second.token), null);
+  assert.equal((await store.session(other.token)).id, b.id);
   assert.equal(await store.revokePasskey(a.id, 'credential-a2'), true, 'final credential can be revoked');
   assert.deepEqual(await store.listPasskeys(a.id), []);
   assert.deepEqual((await store.listPasskeys(b.id)).map(x => x.id), ['credential-b']);
@@ -397,12 +397,12 @@ test('removal cascades tokens, credentials and sessions while unrelated users re
   const session = await store.createSession(a.id);
   const kept = await store.createSession(b.id);
   await store.removeMember(hh, a.id);
-  assert.equal(store.token(token.token), null);
+  assert.equal(await store.token(token.token), null);
   assert.equal(await store.consumeToken(token.token), null);
-  assert.equal(store.session(session.token), null);
+  assert.equal(await store.session(session.token), null);
   assert.deepEqual(await store.listPasskeys(a.id), []);
   assert.equal(await store.getUser(a.id), null);
-  assert.equal(store.session(kept.token).id, b.id);
+  assert.equal((await store.session(kept.token)).id, b.id);
   assert.ok(!(await store.listPeople(hh)).some(person => person.id === a.id));
 });
 
@@ -425,7 +425,7 @@ test('removing a member who is also an operator removes only the membership and 
   assert.ok(await store.getUser(operator.id), 'the operator account remains');
   assert.ok(await store.isOperator(operator.id));
   assert.deepEqual((await store.listPasskeys(operator.id)).map(item => item.id), ['operator-key']);
-  assert.equal(store.session(session.token), null, 'the removed member is signed out');
+  assert.equal(await store.session(session.token), null, 'the removed member is signed out');
   assert.equal(await store.invitation(issued.token), null, 'invitations the removed member issued in this household are revoked');
   assert.deepEqual(await store.activeMemberships(operator.id), []);
   assert.ok(!(await store.listPeople(hh)).some(person => person.id === operator.id));

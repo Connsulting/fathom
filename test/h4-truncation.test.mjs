@@ -46,7 +46,7 @@ async function ask(t, call, mark) {
   const { s, engine, packs, root } = await demo(t);
   const results = [];
   let n = 0;
-  const wrapped = { ...engine, mode: engine.mode, isOn: () => engine.isOn(), call: async req => {
+  const wrapped = { ...engine, mode: engine.mode, isOn: async () => await engine.isOn(), call: async req => {
     const tools = mark ? req.tools.map(tool => tool.kind !== 'read' ? tool : { ...tool,
       async handler(args, ctx) { return mark(tool.name, await tool.handler(args, ctx), args); } }) : req.tools;
     const fake = n++ === 0 ? [{ toolCalls: [call] }, { text: ANSWER }] : [{ text: ANSWER }];

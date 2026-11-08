@@ -148,7 +148,7 @@ test('soon debounces a burst of triggers into one run recorded with its trigger'
   const db = S.track(await createRealStore(S.dir(), { clock: NOW }));
   const { s, runs } = countingScheduler(db, { debounceMs: 80 });
   try {
-    for (let i = 0; i < 5; i++) { assert.equal(s.soon('plan', 'confirm'), true); await wait(10); }
+    for (let i = 0; i < 5; i++) { assert.equal(await s.soon('plan', 'confirm'), true); await wait(10); }
     assert.equal(runs.length, 0, 'nothing runs during the burst');
     await wait(250);
     assert.deepEqual(runs, ['confirm'], 'one run after the burst');
@@ -165,8 +165,8 @@ test('soon with immediate runs at once and cancels a pending debounce', async ()
   const db = S.track(await createRealStore(S.dir(), { clock: NOW }));
   const { s, runs } = countingScheduler(db, { debounceMs: 80 });
   try {
-    s.soon('plan', 'confirm');
-    s.soon('plan', 'confirm', { immediate: true });
+    await s.soon('plan', 'confirm');
+    await s.soon('plan', 'confirm', { immediate: true });
     await wait(30);
     assert.deepEqual(runs, ['confirm']);
     await wait(150);
@@ -179,11 +179,11 @@ test('soon with immediate runs at once and cancels a pending debounce', async ()
 test('stop drops a pending debounced trigger', async () => {
   const db = S.track(await createRealStore(S.dir(), { clock: NOW }));
   const { s, runs } = countingScheduler(db, { debounceMs: 50 });
-  s.soon('plan', 'confirm');
+  await s.soon('plan', 'confirm');
   await s.stop();
   await wait(120);
   assert.deepEqual(runs, []);
-  assert.equal(s.soon('plan', 'confirm'), false, 'nothing is scheduled after stop');
+  assert.equal(await s.soon('plan', 'confirm'), false, 'nothing is scheduled after stop');
 });
 
 test('a confirm answer schedules the plan debounced, and immediately once the queue is empty', async () => {

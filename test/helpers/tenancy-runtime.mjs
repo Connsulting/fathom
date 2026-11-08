@@ -137,7 +137,7 @@ export async function enrollSession(platform, householdId, email, role = 'member
   const store = createAuthStore(platform);
   let user = await store.findUser(email);
   if (!user || (await store.membership(user.id, householdId))?.status !== 'active') {
-    const invited = store.invite(householdId, email, { role });
+    const invited = await store.invite(householdId, email, { role });
     await store.consumeInvitation(invited.token, invited.user.id);
     user = invited.user;
   }

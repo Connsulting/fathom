@@ -97,12 +97,12 @@ test('ST2-AC1 a first draft the corrective round replaces never streams: only pr
 
 test('ST2-AC1 an engine restream (text, reset, text) reaches the listener as nothing', async t => {
   const { s, engine, packs, root } = await demoAnswerer(t);
-  const restream = { ...engine, mode: engine.mode, isOn: () => engine.isOn(), call: async req => {
+  const restream = { ...engine, mode: engine.mode, isOn: async () => await engine.isOn(), call: async req => {
     const { onEvent, ...rest } = req;
     onEvent?.({ type: 'text', text: 'Refused draft.' });
     onEvent?.({ type: 'reset' });
     onEvent?.({ type: 'text', text: 'Keep a reserve.' });
-    return engine.call({ ...rest, fake: [{ text: 'Keep a reserve.' }] });
+    return await engine.call({ ...rest, fake: [{ text: 'Keep a reserve.' }] });
   } };
   const seen = [];
   const reply = await createLiveAnswerer({ engine: restream, packs, root, services: { engine: restream, config: { dataDir: root } } })

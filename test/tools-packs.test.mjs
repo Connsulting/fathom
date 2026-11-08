@@ -726,5 +726,5 @@ test('merged pack listing preserves every scenario pack id and live status', asy
       assert.equal(result.find(p => p.id === row.id)?.status, expected, row.id);
     }
     for (const row of result.filter(p => !p.entries)) assert.deepEqual(Object.keys(row).sort(), ['id', 'name', 'status', 'why']);
-  } finally { t.close(); }
+  } finally { await t.close(); }
 });

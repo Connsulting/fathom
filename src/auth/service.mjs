@@ -45,7 +45,7 @@ export async function createAuthService({ platform, config, transport, secrets =
   const origin = publicUrl ? new URL(publicUrl).origin : null;
   const rpID = origin ? new URL(origin).hostname : null;
   const currentSession = req => readCookie(req, SESSION_COOKIE);
-  const currentUser = req => store.session(currentSession(req));
+  const currentUser = async req => await store.session(currentSession(req));
   async function identityFor(user) {
     if (!user) return null;
     const memberships = await store.activeMemberships(user.id);
@@ -60,7 +60,7 @@ export async function createAuthService({ platform, config, transport, secrets =
   }
   const identityOfUser = async id => await identityFor(await store.getUser(id));
   // The identity of a session token's user, with that session's household and context version.
-  const identityOfSession = async token => await identityFor(store.session(token));
+  const identityOfSession = async token => await identityFor(await store.session(token));
   // Listeners told the session key (sha256 of the session token) whose household context ended:
   // a switch or a sign-out. The router ends that session's streams.
   const contextListeners = new Set();
@@ -78,7 +78,7 @@ export async function createAuthService({ platform, config, transport, secrets =
   }
   const servedAdmin = async identity => await servedMember(identity) && identity.role === 'admin';
   async function requireUser(req, { admin = false } = {}) {
-    const identity = await identityFor(currentUser(req));
+    const identity = await identityFor(await currentUser(req));
     if (!identity) throw unauthorized();
     if (admin && !await servedAdmin(identity)) throw new HttpError(403, 'administrator required');
     return identity;
@@ -117,7 +117,7 @@ export async function createAuthService({ platform, config, transport, secrets =
         if (!user || user.enrolled_at !== null) throw expiredLink();
         return { user, token: body.token, purpose: 'invite', session: null };
       }
-      const token = store.token(body.token);
+      const token = await store.token(body.token);
       if (!token) throw expiredLink();
       const user = await store.userRow(token.userId);
       if (!user || user.enrolled_at === null) throw expiredLink();
@@ -141,7 +141,7 @@ export async function createAuthService({ platform, config, transport, secrets =
   async function consumeChallenge(req, res, ceremony, token) {
     const challenge = await store.consumeChallenge(readCookie(req, CEREMONY_COOKIE));
     setCookie(res, CEREMONY_COOKIE, null);
-    if (token !== undefined && !store.token(token) && !await store.invitation(token)) throw expiredLink();
+    if (token !== undefined && !await store.token(token) && !await store.invitation(token)) throw expiredLink();
     if (!challenge || challenge.ceremony !== ceremony) throw badVerification();
     return challenge;
   }
@@ -188,15 +188,15 @@ export async function createAuthService({ platform, config, transport, secrets =
   }
   return {
     store, demo, requireUser, servedMember, servedAdmin, creatorActive,
-    sweep: () => store.sweep(),
+    sweep: async () => await store.sweep(),
     // The request's session key (sha256 of its session token), or null.
     sessionKey(req) {
       const raw = currentSession(req);
       return validHandle(raw) ? digest(raw) : null;
     },
     onContextEnded(listener) { contextListeners.add(listener); return () => contextListeners.delete(listener); },
-    identity: async req => demo ? null : await identityFor(currentUser(req)),
-    async session({ req }) { return { identity: demo ? null : await identityFor(currentUser(req)), demo }; },
+    identity: async req => demo ? null : await identityFor(await currentUser(req)),
+    async session({ req }) { return { identity: demo ? null : await identityFor(await currentUser(req)), demo }; },
     async registerOptions({ req, res, body }) {
       await rate(req, 'ceremony');
       passkeyName(body.name);
@@ -360,7 +360,7 @@ export async function createAuthService({ platform, config, transport, secrets =
     async invite({ req, body }) {
       const admin = await requireUser(req, { admin: true });
       await rate(req, 'invite');
-      const issued = store.invite(adminHousehold(admin), body.email, { role: body.role, inviterId: admin.id });
+      const issued = await store.invite(adminHousehold(admin), body.email, { role: body.role, inviterId: admin.id });
       await sendLink(issued.user, issued.token, 'invite');
       return { ...GENERIC_MAIL };
     },
@@ -413,7 +413,7 @@ export async function createAuthService({ platform, config, transport, secrets =
       const user = await requireUser(req);
       await rate(req, 'ceremony');
       await store.acceptInvitation(body.token, user.id);
-      return { identity: await identityFor(currentUser(req)) };
+      return { identity: await identityFor(await currentUser(req)) };
     },
     // An operator provisions another household; the gate refuses it with 409 multi_household_gated.
     // Its storage (root, empty store, data key when available, all-paused outbound) is created

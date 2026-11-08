@@ -317,7 +317,7 @@ export async function createSessionFixture(platform, { email = 'admin@example.te
   let user = await store.findUser(email);
   let membership = user ? await store.membership(user.id, household.id) : null;
   if (membership?.status !== 'active') {
-    const invited = store.invite(household.id, email, { role });
+    const invited = await store.invite(household.id, email, { role });
     await store.consumeInvitation(invited.token, invited.user.id);
     user = invited.user;
     membership = await store.membership(user.id, household.id);

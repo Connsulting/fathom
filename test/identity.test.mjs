@@ -257,7 +257,7 @@ test('registration links expire or consume once while fresh invitations produce 
     const enrolledUser = await clientFor(server, { email: 'enrolled@example.test', role: 'member' });
     const issued = await authCall(server, async (platform, store, hh) => {
       const expiredStore = createAuthStore(platform, { now: () => Date.now() - 21 * 60 * 1000 });
-      const expired = expiredStore.invite(hh, 'expired@example.test', { role: 'member' });
+      const expired = await expiredStore.invite(hh, 'expired@example.test', { role: 'member' });
       const usedInvite = store.invite(hh, 'used@example.test', { role: 'member' });
       await store.consumeInvitation(usedInvite.token, usedInvite.user.id);
       const used = await store.createToken(enrolledUser.fixture.user.id, 'recovery');
@@ -715,17 +715,17 @@ test('recovery does not await mail latency, sanitizes send failures and revokes 
     rejectMail(new Error('synthetic-provider-private-diagnostic latency@example.test'));
     completed = true;
     const store = createAuthStore(temp.platform);
-    for (let i = 0; store.token(token) && i < 100; i++) await new Promise(resolve => setTimeout(resolve, 10));
-    assert.equal(store.token(token), null);
+    for (let i = 0; await store.token(token) && i < 100; i++) await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(await store.token(token), null);
     const logged = logs.join('\n');
     for (const value of [token, 'latency@example.test', 'synthetic-provider-private-diagnostic']) assert.ok(!logged.includes(value));
-    assert.equal(store.session(fixture.token).id, fixture.user.id);
+    assert.equal((await store.session(fixture.token)).id, fixture.user.id);
     const retry = await postJson(app.baseUrl, '/api/auth/recover', { email: 'latency@example.test' }, { origin: app.baseUrl });
     assert.equal(retry.status, 200);
     assert.deepEqual(retry.json, response.json);
     for (let i = 0; sent.length < 2 && i < 100; i++) await new Promise(resolve => setTimeout(resolve, 10));
     assert.equal(sent.length, 2);
-    assert.ok(store.token(linkFrom(sent[1].text).token));
+    assert.ok(await store.token(linkFrom(sent[1].text).token));
     assert.equal((await temp.db.prepare('SELECT count(*) AS n FROM email_sends').get()).n, 0);
   } finally {
     clearTimeout(timer);
@@ -748,7 +748,7 @@ test('bootstrap CLI refuses after any member has enrolled and preserves that acc
     assert.deepEqual((await store.listPeople(member.householdId)).map(person => person.id), [member.user.id]);
     assert.equal((await store.membership(member.user.id, member.householdId)).role, 'member');
     assert.equal(await store.findUser('new-admin@example.test'), null);
-    assert.equal(store.session(member.token).id, member.user.id);
+    assert.equal((await store.session(member.token)).id, member.user.id);
     assert.deepEqual(await financialDump(temp.db), initial);
   } finally { temp.close(); rmSync(temp.dataDir, { recursive: true, force: true }); }
 });

@@ -51,7 +51,7 @@ export async function mcpHouseholds() {
     const platform = app.platform;
     const store = createAuthStore(platform);
     const enroll = async (id, email, role) => {
-      const invitation = store.invite(id, email, { role });
+      const invitation = await store.invite(id, email, { role });
       const client = browser(baseUrl);
       const device = createAuthenticator();
       const result = await register(baseUrl, client, device, { token: invitation.token });

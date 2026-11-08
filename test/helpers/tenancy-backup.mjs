@@ -23,7 +23,7 @@ export async function backupFixture({ engine = 'off', engineOptions = null } = {
   const platform = server.app.platform;
   const store = createAuthStore(platform);
   const enroll = async (id, email, role = 'admin') => {
-    const invitation = store.invite(id, email, { role });
+    const invitation = await store.invite(id, email, { role });
     const client = browser(server.baseUrl);
     const device = createAuthenticator();
     const result = await register(server.baseUrl, client, device, { token: invitation.token });

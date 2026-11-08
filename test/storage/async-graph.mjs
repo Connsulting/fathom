@@ -256,8 +256,13 @@ export function analyze(files, { roots = () => false, root = null } = {}) {
     const out = new Map();
     returned.set(info, out);
     const objects = [];
-    const take = n => {
+    const take = (n, hop = 0) => {
       n = unwrap(n);
+      if (n?.type === 'Identifier' && hop < 2) {
+        const b = lookup(info.mod, n.name, [info.mod.ast, info.node, info.node.body]);
+        if (b?.kind === 'value' && b.init) take(b.init, hop + 1);
+        return;
+      }
       if (n?.type === 'CallExpression' && n.callee.type === 'MemberExpression' && propName(n.callee.property) === 'freeze') n = n.arguments[0];
       if (n?.type === 'ObjectExpression') objects.push(n);
     };
@@ -267,17 +272,37 @@ export function analyze(files, { roots = () => false, root = null } = {}) {
       if (anc.some(a => isFunction(a))) return;
       take(n.argument);
     });
+    out.values = new Map();
     for (const o of objects) {
       for (const p of o.properties) {
         if (p.type !== 'Property') continue;
         const name = propName(p.key);
         if (!name) continue;
+        out.values.set(name, p.value);
         if (isFunction(p.value)) out.set(name, fnOf.get(p.value));
         else if (p.value.type === 'Identifier') {
           const b = lookup(info.mod, p.value.name, [info.mod.ast, info.node, info.node.body]);
           if (b?.kind === 'fn' && b.info) out.set(name, b.info);
         }
       }
+    }
+    return out;
+  }
+
+  // The factory functions whose returned object a binding holds (through destructuring and
+  // properties of other factories' results).
+  function factoriesOf(mod, b, ancestors, depth) {
+    if (depth > 4 || b?.kind !== 'value') return [];
+    const init = unwrap(b.init);
+    if (init?.type !== 'CallExpression') return [];
+    const made = classify({ mod, node: init, ancestors }, depth + 1).targets;
+    if (!b.prop) return made;
+    const out = [];
+    for (const f of made) {
+      const v = unwrap(returnedMethods(f).values?.get(b.prop));
+      if (!v) continue;
+      if (v.type === 'CallExpression') out.push(...classify({ mod: f.mod, node: v, ancestors: [f.mod.ast, f.node, f.node.body] }, depth + 1).targets);
+      else if (v.type === 'Identifier') out.push(...factoriesOf(f.mod, lookup(f.mod, v.name, [f.mod.ast, f.node, f.node.body]), [f.mod.ast, f.node, f.node.body], depth + 1));
     }
     return out;
   }
@@ -332,12 +357,8 @@ export function analyze(files, { roots = () => false, root = null } = {}) {
         return { targets: e?.kind === 'fn' && e.info ? [e.info] : [] };
       }
       // A receiver made by a factory call: the factory's returned method of that name.
-      const init = b?.kind === 'value' ? unwrap(b.init) : null;
-      if (init?.type === 'CallExpression' && depth < 3) {
-        const made = classify({ mod, node: init, ancestors }, depth + 1).targets;
-        const found = made.map(f => returnedMethods(f).get(name)).filter(Boolean);
-        if (found.length) return { targets: found };
-      }
+      const found = factoriesOf(mod, b, ancestors, depth).map(f => returnedMethods(f).get(name)).filter(Boolean);
+      if (found.length) return { targets: found };
     }
     if (name && !GENERIC.has(name) && methods.has(name)) return { targets: methods.get(name), byName: true };
     return { targets: [] };
