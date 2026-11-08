@@ -58,3 +58,28 @@ test('long semantic leaves split without losing covered bytes; invalid formats r
   await assert.rejects(indexSource(file('a,"unterminated', 'csv')));
   await assert.rejects(indexSource(file('x', 'unsupported')));
 });
+
+test('readable PDF text has page/span references; raw scans have no interpretation envelope', async () => {
+  const { textPdf, imagePdf, multiPagePdf } = await import('../helpers/pdf.mjs');
+  const readable = await indexSource(file(textPdf(['Synthetic amount $12.34']), 'pdf'));
+  assert.equal(readable.status, 'indexed');
+  assert.ok(Object.values(readable.refs).every(ref => ref.page === 1));
+  const pages = await indexSource(file(multiPagePdf(2), 'pdf'));
+  assert.ok(Object.values(pages.refs).some(ref => ref.page === 2));
+  const scan = await indexSource(file(imagePdf(), 'pdf'));
+  assert.equal(scan.status, 'needs_source_text');
+  assert.equal(Object.keys(scan.refs).length, 0);
+});
+
+test('deterministic sums, signs, USD and date transforms reject invalid source values', async () => {
+  const s = await indexSource(file(writeXlsx([{ name: 'Synthetic', rows: [[0.1, 0.2, '17/04/2032', 'bad date', '2032-04']] }])));
+  const ids = Object.keys(s.refs);
+  assert.equal(resolveField(s, field(ids.slice(0, 2), { op: 'sum' })), 0.3);
+  assert.equal(resolveField(s, field([ids[1]], { op: 'sign', mode: 'negate' })), -0.2);
+  assert.equal(resolveField(s, field([ids[2]], { op: 'date_decode', locale: 'en-GB', epoch: '1900' })), '2032-04-17');
+  assert.equal(resolveField(s, field([ids[4]], { op: 'month_anchor', locale: 'iso', epoch: '1900' })), '2032-04-01');
+  assert.throws(() => resolveField(s, field([ids[3]], { op: 'date_decode', locale: 'iso', epoch: '1900' })));
+  assert.throws(() => resolveField(s, field([ids[0]], { op: 'currency_decode', currency: 'EUR' })));
+  s.values[ids[0]] = 99;
+  assert.throws(() => resolveField(s, field([ids[0]])), /changed/);
+});
