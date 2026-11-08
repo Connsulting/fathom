@@ -51,7 +51,11 @@ export function createRecipientPolicy({ platform, householdId, generation, mode,
     householdId, generation,
     async resolve() {
       if (!current()) throw new EmailError('paused');
-      if (mode === 'demo') return (await configuredRecipients(config, readFile ? { readFile } : {})).map(email => ({ email }));
+      if (mode === 'demo') {
+        const addresses = await configuredRecipients(config, readFile ? { readFile } : {});
+        if (!addresses.length) throw new EmailError('missing_config');
+        return addresses.map(email => ({ email }));
+      }
       await initialize();
       const recipients = subscribed();
       if (!recipients.length) throw new EmailError('recipient_unverified');

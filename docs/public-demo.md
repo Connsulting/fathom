@@ -127,6 +127,8 @@ Invalid or nonpositive values refuse startup. An IP request limit returns HTTP 4
 | GET | `/api/confirm/:id` | Visitor sandbox |
 | POST | `/api/confirm/:id/answer` | Visitor sandbox |
 | POST | `/api/confirm/:id/reopen` | Visitor sandbox |
+| GET | `/api/email/subscriptions` | Off, HTTP 403 |
+| POST | `/api/email/subscriptions` | Off, HTTP 403 |
 | GET | `/api/email` | Off, HTTP 403 |
 | POST | `/api/email/test` | Off, HTTP 403 |
 | POST | `/api/email/brief` | Off, HTTP 403 |
