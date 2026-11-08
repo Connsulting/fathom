@@ -247,6 +247,14 @@ test.describe('ask blocks', () => {
       await page.keyboard.press('ArrowDown');
       await expect(read).toContainText(s.series[1].label);
       await expect(read).toContainText(s.x[1].text);
+      await page.keyboard.press('ArrowLeft');
+      await expect(read).toContainText(s.x[0].text);
+      await page.keyboard.press('ArrowUp');
+      await expect(read).toContainText(s.series[0].label);
+      await page.keyboard.press('ArrowDown');
+      await page.keyboard.press('ArrowRight');
+      await expect(read).toContainText(s.series[1].label);
+      await expect(read).toContainText(s.x[1].text);
       await expect(plot).toBeFocused();
 
       const target = s.series[1].points[1];

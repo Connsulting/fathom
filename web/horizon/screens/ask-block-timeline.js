@@ -1,7 +1,8 @@
 /* Horizon Ask blocks: the timeline renderer (docs/plans/rich-ask-answers.md section 2, Timeline).
    A vertical list on a date rail, in the snapshot's order: each event's date (a <time>), its label
    and, when it has one, its value as a registered figure (Unavailable with its gap when null).
-   The list carries an aria-label summary built from the data. The Table button swaps in the same
+   The list carries an aria-label summary built from the data. A timeline with no figures (plain
+   dates) shows "As of <the date the block was built>" (section 5), from ctx.builtAt. The Table button swaps in the same
    events as a sortable table (the date column sorts by date). */
 
 import { toggleHtml, tableHtml, bindToggle } from './ask-block-chart.js';
@@ -46,7 +47,10 @@ export function render(snapshot, ctx) {
     const v = isObj(e.value) ? `<span class="h-blk-ev-v">${ctx.fig(e.value)}</span>` : '';
     return `<li class="h-blk-ev"><time datetime="${esc(d)}">${esc(ctx.formatByUnit(d, 'date'))}</time><span class="h-blk-ev-l">${esc(e.label)}</span>${v}</li>`;
   }).join('');
-  return toggleHtml(ctx) + `<ol class="h-blk-tl" aria-label="${esc(summary(snapshot, ctx))}">${items}</ol>`;
+  const day = /^\d{4}-\d{2}-\d{2}/.exec(ctx.builtAt || '');
+  const asOf = day && !events(snapshot).some((e) => isObj(e.value))
+    ? `<p class="h-blk-asof">As of ${esc(ctx.formatByUnit(day[0], 'date'))}</p>` : '';
+  return toggleHtml(ctx) + `<ol class="h-blk-tl" aria-label="${esc(summary(snapshot, ctx))}">${items}</ol>${asOf}`;
 }
 
 export function bind(root, snapshot, ctx) {

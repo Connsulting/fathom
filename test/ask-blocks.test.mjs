@@ -375,9 +375,22 @@ test('a missing point and an unavailable figure leave a gap in the line', () => 
   const block = fx('chart-line');
   const svg = svgOf(messageBodyHtml(msg([block])));
   block.snapshot.series.forEach((ser, j) => {
+    // One run per stretch of points that have a value.
+    const has = ser.points.map((p) => !!p && p.value !== null);
+    const runs = has.filter((h, i) => h && (i === 0 || !has[i - 1])).length;
+    assert.ok(has.includes(false), `${ser.label} has a gap in the fixture`);
     const d = attr(svg, new RegExp(`<path class="h-blk-ln[^"]*" data-s="${j}" d="([^"]*)"`));
-    assert.equal((d.match(/M/g) || []).length, 2, `${ser.label} draws as two runs`);
+    assert.equal((d.match(/M/g) || []).length, runs, `${ser.label} draws as ${runs} runs`);
   });
+});
+
+test('a timeline with no figures reads as of the day its block was built', () => {
+  const block = fx('timeline');
+  assert.doesNotMatch(messageBodyHtml(msg([block])), /As of /, 'a timeline with values has its figures as-of dates');
+  block.snapshot.events = block.snapshot.events.map(({ date, label }) => ({ date, label }));
+  const html = messageBodyHtml(msg([block]));
+  assert.ok(strip(html).includes(`As of ${formatByUnit(block.builtAt.slice(0, 10), 'date')}`), 'as of builtAt');
+  assert.equal(figKeys(html).length, 0);
 });
 
 test('bars stand on a zero baseline; the scatter draws its frontier and marks the current point', () => {

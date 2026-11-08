@@ -129,6 +129,7 @@ function ctxFor(messageId, block) {
   return {
     key, esc: K.esc, fig, formatByUnit,
     figKey: (holder) => (index.has(holder) ? `blk:${key}:${index.get(holder)}` : ''),
+    builtAt: typeof block.builtAt === 'string' ? block.builtAt : '',
     state: blockState(messageId, block.id),
     ctl: (name) => `${key}:${name}`,
   };
