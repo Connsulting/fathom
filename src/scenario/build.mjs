@@ -591,13 +591,20 @@ export function loadCurve(db, content) {
 
 // {axisId: 0 | 1} from the newest remembered preference that names exactly one end of the axis by
 // its label (any case): 0 the left end, 1 the right. The label match is plain text, not a model call.
+// A label with a negation shortly before it ("I do not want to optimize everything") is not a
+// choice of that end, so that preference is skipped rather than read either way.
+const NEGATED = /\b(?:not|no|never|don'?t|without|stop|less|rather than|instead of|over)\b[^.;]{0,30}$/;
+const names = (t, label) => {
+  const i = label ? t.indexOf(label) : -1;
+  return i >= 0 && !NEGATED.test(t.slice(Math.max(0, i - 40), i));
+};
 export function rememberedCurve(db, axes) {
   const texts = db.prepare('SELECT text FROM preferences ORDER BY updated_at DESC, created_at DESC, id').all().map(r => String(r.text).toLowerCase());
   const out = {};
   for (const a of axes) {
     const [l, r] = [a.left, a.right].map(x => String(x ?? '').trim().toLowerCase());
     for (const t of texts) {
-      const hasL = !!l && t.includes(l), hasR = !!r && t.includes(r);
+      const hasL = names(t, l), hasR = names(t, r);
       if (hasL !== hasR) { out[a.id] = hasL ? 0 : 1; break; }
     }
   }

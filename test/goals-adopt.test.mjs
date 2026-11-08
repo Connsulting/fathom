@@ -237,3 +237,13 @@ test('a remembered preference that names one end of a tradeoff moves that axis',
   assert.equal(at('effort'), 0);
   assert.equal(at('human'), 0.5, 'an axis no memory names keeps its position');
 });
+
+test('a negated tradeoff end is not read as a choice of that end', async t => {
+  const srv = await serve(t);
+  remember(srv.db, 'I do not want to optimize everything');
+  remember(srv.db, 'Max retirement room over lifestyle now');
+  const sc = await scenarioOf(srv);
+  const at = id => sc.curve.find(c => c.id === id).value;
+  assert.equal(at('effort'), 1, 'the default stays: the negated end is skipped');
+  assert.equal(at('ret_life'), 0, 'the end the owner chose wins; the one after "over" is not a choice');
+});
