@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { requireActor, undoAction, ensureActionConversation, receiptsFor, receiptMessages } from '../actions/receipts.mjs';
 import { writeRec, detachRecThreads } from '../store/recs.mjs';
 import { latestProposal, claimProposal, markProposal, executeProposal, isPlainConfirmation } from '../actions/proposals.mjs';
+import { describeProposal, withDescriptions } from '../actions/describe.mjs';
 import { ownerStatements } from '../actions/evidence.mjs';
 import { ToolError } from '../tools/errors.mjs';
 import { queueAccountPairs } from '../ingest/account-merge.mjs';
@@ -414,6 +415,9 @@ async function decideProposal(ctx, key, id, decision, ownerText) {
   else if (claim.status === 'confirmed') {
     const run = streaming(turn);
     const { pending } = claim;
+    // The receipt reads like the card: the description stored with the proposal, or one built now,
+    // before the write renames or removes what it names.
+    const description = typeof pending.description === 'string' ? pending.description : describeProposal(db, pending).text;
     try {
       const afterTools = [];
       const toolContext = { queueAfterTools: task => afterTools.push(task), db, now: stamp(ctx), dataDir: ctx.household?.root, actorId: run.actorId,
@@ -423,7 +427,7 @@ async function decideProposal(ctx, key, id, decision, ownerText) {
       toolContext.ownerStatements = () => ownerStatements(toolContext);
       const result = await executeProposal(pending, toolContext);
       for (const task of afterTools) await task();
-      reply = { paragraphs: [result?.undo?.available === false ? 'The refresh is queued. Its receipt records the outcome.' : CONFIRMED_TEXT], refs: [], provenance: { actionTurn: run.turnId, confirmedProposal: 'm' + id,
+      reply = { paragraphs: [result?.undo?.available === false ? 'The refresh is queued. Its receipt records the outcome.' : CONFIRMED_TEXT], refs: [], provenance: { actionTurn: run.turnId, confirmedProposal: 'm' + id, description,
         tools: [{ name: pending.tool, args: { operation: pending.operation, ...pending.args }, result: JSON.parse(JSON.stringify(result ?? null)) }] } };
     } catch (e) {
       markProposal(db, id, 'stale', stamp(ctx));
@@ -477,7 +481,7 @@ export async function threadGet(ctx) {
   const opened = threadOrThrow(ctx.db, ctx.params.id);
   await maybeName(ctx, opened.key);
   const thread = threadOrThrow(ctx.db, ctx.params.id);
-  const messages = receiptMessages(ctx.db, thread.key, ctx.db.prepare('SELECT * FROM messages WHERE conversation_key = ? ORDER BY id').all(thread.key).map(messageOut));
+  const messages = withDescriptions(ctx.db, receiptMessages(ctx.db, thread.key, ctx.db.prepare('SELECT * FROM messages WHERE conversation_key = ? ORDER BY id').all(thread.key).map(messageOut)));
   return { thread, messages };
 }
 

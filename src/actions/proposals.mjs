@@ -1,6 +1,7 @@
 // Stored proposals for Ask. In Ask chat every offered write tool takes `propose: true`, which
 // validates and records the operation (ctx.onProposal) instead of writing. The answerer stores it
-// on the reply as provenance.pendingAction { tool, operation, args, scopes, basis }; a typed
+// on the reply as provenance.pendingAction { tool, operation, args, scopes, basis, description,
+// details? } (description and details from describe.mjs, for the card and its receipt); a typed
 // explicit yes or the Confirm control runs it through the registry with no model call.
 //
 // basis is a sha256 hex digest of the rows the operation and its sources depend on: its target row
@@ -20,6 +21,7 @@ import { getTool, callTool } from '../tools/index.mjs';
 import { operationScopes } from '../tools/tools.mjs';
 import { WRITE_SCOPES } from '../shared/action-scopes.mjs';
 import { requireActor, receiptScopes } from './receipts.mjs';
+import { describedFields, describeProposal, useRouteLabels } from './describe.mjs';
 
 // The reply rule lives in evidence.mjs (confirmedProposal uses it); the tool catalog imports
 // evidence.mjs, so it cannot import this module without a cycle through the registry.
@@ -202,11 +204,16 @@ async function propose(tool, args, ctx) {
     queueAccountPairs(ctx.db);
     queueCategoryChecks(ctx.db, { clock: resolveClock(ctx.db, ctx.clock ?? ctx.services?.config?.clock ?? ctx.config?.clock) });
   }
-  ctx.onProposal({ tool: tool.name, operation, args: params, scopes, basis: proposalBasis(ctx.db, tool.name, scopes, params) });
+  ctx.onProposal({ tool: tool.name, operation, args: params, scopes, basis: proposalBasis(ctx.db, tool.name, scopes, params),
+    ...describedFields(describeProposal(ctx.db, { tool: tool.name, operation, args: params })) });
   // No argument values in the result: a tool result is grounding evidence, and a proposal must
   // never source its own amounts or dates.
   return { proposed: true, pending: { tool: tool.name, operation }, note: 'Stored for the owner to confirm. Nothing is saved yet.' };
 }
+
+// describe.mjs cannot import the registry (the scenario builder imports it, and the registry's
+// catalog imports the scenario builder), so the registry hands it the route labels here.
+useRouteLabels((name, operation) => getTool(name)?.operations.find(o => o.name === operation)?.route ?? null);
 
 // Registry tools for Ask: each write tool (not MCP only) takes `propose`. Copies; the registry
 // entries and their MCP schemas are unchanged.
