@@ -1,4 +1,5 @@
 import { gapControl } from '../../core/gap-control.js';
+import { advisorWaitsHtml } from './unlocks.js';
 // What a waiting recommendation is waiting on, in plain words, with the action that clears it and a
 // link to where it is done. The planner stores the blocker on the rec while it waits; it is gone
 // the moment the rec is no longer blocked. Pure markup: the click handling lives in design.js.
@@ -17,7 +18,12 @@ export function linkHtml(recId, link, cls = 'h-btn') {
 }
 
 export function html(r, surface) {
-  if (r.gaps?.length) return `<div class="h-blocker h-blocker-${H.esc(surface)}" role="note"><b>Optional estimate improvements</b>${r.gaps.map(g => `<p>${H.esc(g.message)} ${gapControl(g.action, H.esc)}</p>`).join('')}</div>`;
+  // H3: waiting on the advisor names each answer and the control that records it, first, beside any
+  // optional estimate improvements.
+  const advisor = r.status === 'waiting' && r.waitingOn === 'advisor' && r.advisorWaits?.length
+    ? advisorWaitsHtml(r.advisorWaits, H).replace('class="h-blocker ', `class="h-blocker h-blocker-${H.esc(surface)} `) : '';
+  if (r.gaps?.length) return advisor + `<div class="h-blocker h-blocker-${H.esc(surface)}" role="note"><b>Optional estimate improvements</b>${r.gaps.map(g => `<p>${H.esc(g.message)} ${gapControl(g.action, H.esc)}</p>`).join('')}</div>`;
+  if (advisor) return advisor;
   if (r.status !== 'waiting' || !r.blocker) return '';
   const { esc } = H;
   const b = r.blocker;

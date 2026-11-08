@@ -25,8 +25,9 @@ import { applyRecs } from './planner/recs.mjs';
 import { writeBrief, namesOf, upsertContent } from './planner/brief.mjs';
 import { adoptSuggestions } from '../goals/write.mjs';
 import { evaluateCatalog } from './triggers/index.mjs';
-import { reasonText, items as missingItems } from './triggers/missing-data.mjs';
+import { reasonText, fixForCode, items as missingItems } from './triggers/missing-data.mjs';
 import { wargameFigurePrefixes } from './planner/wargame.mjs';
+import { notBuiltReason } from './planner/unlocks.mjs';
 import { prepareRecFacts } from '../facts/derive.mjs';
 import { sendToAdvisor } from '../advisor/index.mjs';
 import { liftStaleVetoes } from '../advisor/index.mjs';
@@ -306,8 +307,10 @@ function writeFigures(db, figures, now) {
 // point or option; otherwise it is deleted. A kept figure is marked unavailable with the readable
 // reason it was not produced (R2-9): the withheld code, else the run's first block, else a generic
 // "no longer computed" line. Triggers never read it: they see only this run's figures.
+const fixOrNull = code => { try { return fixForCode(code); } catch { return null; } };
+
 function pruneFigures(db, produced, ctx) {
-  const stale = db.prepare('SELECT key, unavailable_reason FROM figures WHERE parser = ?').all(PLANNER_SRC).filter(r => !produced[r.key]);
+  const stale = db.prepare('SELECT key, unavailable_reason, locator FROM figures WHERE parser = ?').all(PLANNER_SRC).filter(r => !produced[r.key]);
   if (!stale.length) return;
   const refs = new Set();
   const scan = text => { for (const [, , key] of String(text ?? '').matchAll(TOKEN)) refs.add(key); };
@@ -319,18 +322,34 @@ function pruneFigures(db, produced, ctx) {
   for (const r of db.prepare('SELECT text FROM messages').all()) scan(r.text);
   for (const r of db.prepare('SELECT note, decided_line FROM decisions').all()) { scan(r.note); scan(r.decided_line); }
   const prefixes = [];
+  // H3: a point or option left out of a current game gives its own figures its reason and fix.
+  const excluded = [];
   for (const r of db.prepare('SELECT key, value FROM content').all()) {
     scan(r.value);
-    if (r.key === 'wargame') prefixes.push(...wargameFigurePrefixes(parseJson(r.value, {})));
+    if (r.key !== 'wargame') continue;
+    const wg = parseJson(r.value, {}) || {};
+    prefixes.push(...wargameFigurePrefixes(wg));
+    for (const name of ['salary', 'deferral']) for (const e of Array.isArray(wg[name]?.excluded) ? wg[name].excluded : []) {
+      if (e && typeof e.invalid === 'string') excluded.push({ prefix: `wg.${name}.${e.id}.`, text: e.invalid, fix: e.fix || null });
+    }
   }
   const info = ctx.info || {};
   const withheld = info.withheld || {};
   const del = db.prepare('DELETE FROM figures WHERE key = ? AND parser = ?');
-  const mark = db.prepare('UPDATE figures SET unavailable_reason = ? WHERE key = ? AND parser = ?');
-  for (const { key, unavailable_reason: was } of stale) {
+  const mark = db.prepare('UPDATE figures SET unavailable_reason = ?, locator = ? WHERE key = ? AND parser = ?');
+  for (const { key, unavailable_reason: was, locator } of stale) {
     if (refs.has(key) || prefixes.some(p => key.startsWith(p))) {
-      const reason = reasonText(ctx, withheld[key] || (info.blocked || [])[0] || null);
-      if (was !== reason) mark.run(reason, key, PLANNER_SRC);
+      // H3: the reason's fix rides in the locator, so the figure shows it beside the reason. A
+      // war-game figure takes its game's reason.
+      const game = ['salary', 'deferral'].find(n => key.startsWith(`wg.${n}.`) && info.wargameInvalid?.[n]);
+      const code = withheld[key] || (info.blocked || [])[0] || null;
+      const why = game ? notBuiltReason(game, info.wargameInvalid[game]) : excluded.find(e => key.startsWith(e.prefix)) || null;
+      const reason = why ? why.text : reasonText(ctx, code);
+      const fix = why ? why.fix : code ? fixOrNull(code) : null;
+      const { unavailableFix, ...loc } = parseJson(locator, {}) || {};
+      void unavailableFix;
+      const next = JSON.stringify(fix ? { ...loc, unavailableFix: fix } : loc);
+      if (was !== reason || next !== locator) mark.run(reason, next, key, PLANNER_SRC);
       continue;
     }
     del.run(key, PLANNER_SRC);

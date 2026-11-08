@@ -28,6 +28,8 @@ import { questionFor, dataText, LISTED_RECS } from '../jobs/triggers/common.mjs'
 import { getFacts } from '../store/facts.mjs';
 import { inferMortgage } from '../calc/mortgage-inference.mjs';
 import { deriveSteps } from '../shared/rec-steps.mjs';
+import { advisorWait } from '../shared/advisor-waits.mjs';
+import { ADVISOR_KEYS } from '../facts/derive.mjs';
 import { observedPayments } from '../ingest/transaction-payments.mjs';
 
 const DAY = 86400000;
@@ -177,7 +179,11 @@ export function loadFigures(db) {
       f.notes = (f.notes || []).filter(n => !f.gaps.some(g => g.message === n));
       f.detail = [{ k: 'Completeness', v: `${loc.rough ? 'Rough ' : ''}${loc.completeness}` }];
     }
-    if (typeof r.unavailable_reason === 'string' && r.unavailable_reason) f.unavailable = r.unavailable_reason;
+    if (typeof r.unavailable_reason === 'string' && r.unavailable_reason) {
+      f.unavailable = r.unavailable_reason;
+      // H3: the fix for that reason, shown beside it.
+      if (loc?.unavailableFix && typeof loc.unavailableFix === 'object') f.unavailableFix = loc.unavailableFix;
+    }
     fig[r.key] = f;
   }
   return fig;
@@ -237,6 +243,8 @@ export function loadRecs(db, clock) {
   // A rec waiting on the planner names its blocker (stored with the last run, gone once it is unblocked).
   const blockers = parse(db.prepare("SELECT value FROM content WHERE key = 'rec.blockers'").get()?.value, null) || {};
   for (const r of recs) if (r.status === 'waiting' && Object.hasOwn(blockers, r.id)) r.blocker = blockers[r.id];
+  // H3: a rec waiting on the advisor names each answer it needs and the control that records it.
+  for (const r of recs) if (Array.isArray(r.advisorQuestions) && r.advisorQuestions.length) r.advisorWaits = r.advisorQuestions.filter(k => ADVISOR_KEYS.has(k)).map(advisorWait);
   for (const r of recs) if (r.question) {
     if (mortgage.status === 'paid_off') {
       r.question.keys = r.question.keys.filter(key => key !== 'obligations.mortgage');

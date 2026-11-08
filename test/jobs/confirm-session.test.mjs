@@ -117,9 +117,10 @@ test('a war game the planner could not build is recorded with a plain reason and
   assert.ok(wg && !wg.salary, 'no salary war game without an S corp');
   const nb = wg.notBuilt && wg.notBuilt.salary;
   assert.ok(nb, `salary not-built reason stored: ${JSON.stringify(wg)}`);
-  assert.equal(nb.code, 'inputs_changed');
+  assert.equal(nb.code, 'scorp_missing');
   assert.equal(nb.text, 'Salary war game needs an S corp with profit on file.');
   assert.equal(nb.unlock, 'files');
+  assert.deepEqual(nb.fix, { screen: 'upload', kind: 'pnl', label: 'Upload the S corp profit and loss' });
   for (const r of Object.values(wg.notBuilt)) assert.doesNotMatch(r.text, /\d/, 'no figures in the reason');
 });
 
