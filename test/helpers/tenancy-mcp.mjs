@@ -1,0 +1,82 @@
+import assert from 'node:assert/strict';
+import { rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tempDir } from './server.mjs';
+import { browser, register } from './tenancy.mjs';
+import { createAuthenticator } from './webauthn.mjs';
+import { startRuntime, writeInstanceKeys, toolText } from './tenancy-runtime.mjs';
+import { mcpPost } from '../../src/mcp/test/helpers.mjs';
+import { createAuthStore } from '../../src/auth/store.mjs';
+import { SCOPES } from '../../src/mcp/keys.mjs';
+import { writeSyntheticPack, ALWAYS } from './packs.mjs';
+
+export { toolText };
+export const mcp = (baseUrl, key, method, params = {}, headers = {}) => mcpPost(baseUrl, { auth: key ? `Bearer ${key}` : undefined, method, params, headers });
+
+export async function mcpHouseholds() {
+  const root = await tempDir('fathom-mt06-');
+  let server;
+  try {
+    server = await startRuntime({ dataDir: join(root, 'data'), keys: writeInstanceKeys(join(root, 'keys')), engine: 'off' });
+    const { app, baseUrl } = server;
+    const platform = app.platform;
+    const store = createAuthStore(platform);
+    const enroll = async (id, email, role) => {
+      const invitation = store.invite(id, email, { role });
+      const client = browser(baseUrl);
+      const device = createAuthenticator();
+      const result = await register(baseUrl, client, device, { token: invitation.token });
+      assert.equal(result.options.status, 200, result.options.text);
+      assert.equal(result.verify?.status, 200, result.verify?.text);
+      assert.ok(client.session());
+      return { userId: invitation.user.id, client, device, cookie: `__Host-fathom-session=${client.session()}` };
+    };
+    const A = { id: platform.prepare('SELECT id FROM households WHERE serves_store = 1').get().id, canary: 'SyntheticAlphaCanary' };
+    A.admin = await enroll(A.id, 'alpha@example.test', 'admin');
+    store.grantOperator(A.admin.userId);
+    store.setPlatformSetting('multi_household_enabled', true);
+    const made = await A.admin.client.post('/api/operator/households', { displayName: 'Synthetic second household', adminEmail: 'bravo@example.test' });
+    assert.equal(made.status, 200, made.text);
+    const B = { id: made.json.household.id, canary: 'SyntheticBravoCanary' };
+    B.admin = await enroll(B.id, 'bravo@example.test', 'admin');
+    const member = await enroll(A.id, 'member@example.test', 'admin');
+    const create = async (household, client = household.admin.client, scopes = SCOPES) => {
+      const response = await client.post('/api/keys', { name: 'Synthetic integration key', scopes, householdId: household === A ? B.id : A.id, userId: 'foreign-user' });
+      assert.equal(response.status, 200, response.text);
+      return response.json;
+    };
+    for (const hh of [A, B]) {
+      hh.ctx = app.runtimes.get(hh.id);
+      hh.db = hh.ctx.db;
+      hh.db.prepare('INSERT INTO facts (key, value, updated_at) VALUES (?, ?, ?)').run('synthetic.canary', JSON.stringify(hh.canary), '2026-11-05');
+      hh.db.prepare('INSERT INTO recs (id, def, status, updated_at) VALUES (?, ?, ?, ?)')
+        .run('colliding-rec', JSON.stringify({ id: 'colliding-rec', title: hh.canary, tasks: ['Synthetic task'] }), 'proposed', '2026-11-05');
+      hh.db.prepare('INSERT INTO recs (id, def, status, updated_at) VALUES (?, ?, ?, ?)')
+        .run(`${hh.canary}-only`, JSON.stringify({ title: hh.canary }), 'proposed', '2026-11-05');
+      hh.db.prepare('INSERT INTO accounts (id, name, kind) VALUES (?, ?, ?)').run('colliding-account', hh.canary, 'checking');
+      writeSyntheticPack(hh.ctx.root, { id: 'your-plans', appliesWhen: ALWAYS, entries: [
+        { file: 'shared.md', title: hh.canary, body: `# ${hh.canary}\n\n${hh.canary} private guidance.\n` },
+        { file: `${hh.canary}.md`, title: hh.canary, body: `# ${hh.canary}\n\n${hh.canary} private guidance.\n` },
+      ] });
+      hh.key = await create(hh);
+    }
+    const call = async (hh, name, args, extra = {}) => mcp(baseUrl, hh.key.key, 'tools/call', { name, arguments: args }, extra);
+    return { A, B, member, platform, store, app, baseUrl, create, call, enroll, env: server.env,
+      async close() { await server.close(); rmSync(root, { recursive: true, force: true }); } };
+  } catch (err) {
+    await server?.close();
+    rmSync(root, { recursive: true, force: true });
+    throw err;
+  }
+}
+
+export function result(response) {
+  assert.equal(response.status, 200, response.text);
+  assert.notEqual(response.json?.result?.isError, true, toolText(response));
+  return JSON.parse(toolText(response));
+}
+
+export function digest(db) {
+  const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all();
+  return JSON.stringify(tables.map(({ name }) => [name, db.prepare(`SELECT * FROM "${name}" ORDER BY rowid`).all()]));
+}

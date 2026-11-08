@@ -251,7 +251,8 @@ needs a signed-in session; demo stores stay open with no accounts.
    message, carries no link or secret, and goes straight through the email transport, so it is not
    in the Email screen's history. A failed notice is logged and the passkey still works.
 7. MCP keys stay separate bearer credentials for `/mcp`. Members manage their own keys; admins see
-   and revoke every key, including keys created before accounts existed.
+   and revoke every key in their household. Role changes invalidate the creator's existing keys;
+   create a fresh key after the change. A household restore invalidates its old keys as well.
 
 First admin, once per store, inside the container or with the same environment as the server:
 
