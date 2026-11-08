@@ -7,6 +7,7 @@ import { loadPlanningData, resolveEntities, planningYear } from '../../jobs/plan
 import { deriveFacts, mergeFacts, ownerFactsOf } from '../../jobs/planner/facts.mjs';
 import { parseJson } from '../../store/db.mjs';
 import { clockOf } from './figures.mjs';
+import { ageAtYearEnd } from '../../shared/ages.mjs';
 import { householdDataThrough } from '../../ingest/freshness.mjs';
 import { checkAssumption } from '../assumption-evidence.mjs';
 import { makeFigure, uniqueGaps, bounded } from './balances.mjs';
@@ -144,9 +145,9 @@ function whatIf(args,ctx,computed,make) {
   }));
 }
 
-function contributionLimit(type,person,facts,row) {
+function contributionLimit(type,person,facts,row,year) {
   const inputs = row?.locator.inputs || {};
-  const age = facts[person === 'owner' ? 'household.ownerAge' : 'household.spouseAge'];
+  const age = ageAtYearEnd(facts['household.birthYears'],person,year);
   const f = facts['household.filingStatus'];
   if (type === 'employee_deferral') return TAX_2026.retirement.employeeDeferral;
   if (type === 'traditional_ira' || type === 'roth_ira') return law('iraLimit') + (typeof age === 'number' && age >= 50 ? law('iraCatchUp') : 0);
@@ -189,7 +190,7 @@ function room(args, ctx) {
     const i = rows.length;
     const fig = (field,value,label,gaps = []) => makeFigure('tax',refArgs,`rows.${i}.${field}`,value,field === 'deadline' ? 'date' : 'usd',label,row?.locator.computedOn || null,provenance,gaps,'m');
     const usageGap = { code: ['employee_deferral','dependent_care'].includes(type) ? 'outside_household_ledger' : 'missing_fact', message: `Contribution usage and eligibility for ${person} ${type} need current records; payroll elections may be outside household transactions.` };
-    const limit = contributionLimit(type,person,facts,row);
+    const limit = contributionLimit(type,person,facts,row,year);
     let remaining = row ? storedFigure(row,'tax',refArgs,`rows.${i}.remaining`) : null;
     let used = null;
     const inputs = row?.locator.inputs;
@@ -202,7 +203,7 @@ function room(args, ctx) {
       else if (type === 'plan529_state_deduction' && limit !== null) used = Math.max(0,limit-row.v);
     }
     const extraGaps = [];
-    if (type.includes('ira') && typeof facts[person === 'owner' ? 'household.ownerAge' : 'household.spouseAge'] !== 'number') extraGaps.push(missing('Age is unknown; the statutory IRA limit excludes catch up contributions.'));
+    if (type.includes('ira') && ageAtYearEnd(facts['household.birthYears'],person,year) === null) extraGaps.push(missing('Age is unknown; the statutory IRA limit excludes catch up contributions.'));
     if (type === 'dependent_care') extraGaps.push(missing('The statutory dependent care ceiling may be reduced by earned income, qualifying expenses and employer plan eligibility.'));
     if (!row || used === null) extraGaps.push(usageGap);
     if (type === 'roth_ira') {
@@ -212,7 +213,7 @@ function room(args, ctx) {
     }
     const due = ['employee_deferral','solo401k_pretax','dependent_care','plan529_state_deduction'].includes(type) ? `${year}-12-31`
       : ['solo401k_employer','sep'].includes(type) ? null : `${year+1}-04-15`;
-    rows.push({ person: ['sep','dependent_care','plan529_state_deduction'].includes(type) && (args.person === undefined || args.person === 'both') ? 'both' : person, type, limit: fig('limit',limit,type === 'dependent_care' ? 'Statutory dependent care ceiling' : 'Contribution limit',limit === null ? [missing(`Eligibility and plan inputs are needed for ${type} limit.`)] : []),
+    rows.push({ person: ['sep','dependent_care','plan529_state_deduction'].includes(type) && (args.person === undefined || args.person === 'both') ? 'both' : person, type, limit: fig('limit',limit,type === 'dependent_care' ? 'Statutory dependent care ceiling' : type === 'employee_deferral' ? 'Regular employee deferral limit excluding catch up' : 'Contribution limit',limit === null ? [missing(`Eligibility and plan inputs are needed for ${type} limit.`)] : []),
       used: used === null ? null : fig('used',used,'Recorded contributions'), remaining,
       deadline: fig('deadline',due,'Contribution deadline',due === null ? [missing('Employer contribution deadline depends on entity return and extension status.')] : []), basis: row ? 'planner' : 'calculator', packRefs, gaps: extraGaps });
   }

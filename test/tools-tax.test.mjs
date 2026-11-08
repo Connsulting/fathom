@@ -135,3 +135,31 @@ test('missing and withheld tax inputs stay unavailable, including what-if totals
     assert.ok(out.gaps.some(g => g.code === 'missing_fact'));
   } finally { db.prepare("UPDATE figures SET unavailable_reason=? WHERE key='tax.fed.proj'").run(row.unavailable_reason); }
 });
+
+test('birth years drive IRA catch-up limits and calculator HSA limits', async () => {
+  const keys = ['household.birthYears','benefits.hsaEligible','benefits.hsaCoverage'];
+  const originals = keys.map(key => db.prepare('SELECT key,value FROM facts WHERE key=?').get(key));
+  try {
+    const set = db.prepare("INSERT INTO facts (key,value,confirmed,updated_at) VALUES (?,?,1,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value");
+    set.run(keys[0],JSON.stringify({ owner: 1966, spouse: 1976 }),clock);
+    set.run(keys[1],'true',clock);
+    set.run(keys[2],JSON.stringify('family'),clock);
+    const out = await callTool('tax', { operation: 'room', person: 'both', types: ['traditional_ira','hsa'], year: 2026 }, { ...ctx, clock: '2028-11-05' });
+    for (const row of out.rows.filter(r => r.type === 'traditional_ira')) {
+      assert.equal(row.limit.value,8600);
+      assert.ok(!row.gaps.some(g => g.message.startsWith('Age is unknown')));
+    }
+    const hsa = out.rows.find(r => r.type === 'hsa');
+    assert.equal(hsa.basis,'calculator');
+    assert.equal(hsa.limit.value,hsaLimit({ coverage: 'family', age: 60, eligibleMonths: 12, eligibilityConfirmed: true }).value.limit);
+    assert.equal(hsa.used,null);
+    assert.equal(hsa.remaining,null);
+    const regular = await callTool('tax', { operation: 'room', person: 'owner', types: ['employee_deferral'] },ctx);
+    assert.match(regular.rows[0].limit.label,/excluding catch up/);
+  } finally {
+    for (const [i,key] of keys.entries()) {
+      if (originals[i]) db.prepare('UPDATE facts SET value=? WHERE key=?').run(originals[i].value,key);
+      else db.prepare('DELETE FROM facts WHERE key=?').run(key);
+    }
+  }
+});

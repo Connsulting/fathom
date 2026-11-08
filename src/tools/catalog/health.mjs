@@ -41,7 +41,7 @@ function health(args, ctx) {
   const byKind = {};
   for (const kind of [...new Set(pending.map(p => p.kind))].sort()) {
     const items = pending.filter(p => p.kind === kind);
-    byKind[kind] = figure(`pendingConfirm.byKind.${kind}`, items.length, 'Pending confirmations', items.map(p => p.createdAt).filter(Boolean).sort().at(-1)?.slice(0,10) || null, source('confirm_items',items.map(p => p.id)));
+    byKind[kind] = figure(`pendingConfirm.byKind.${kind}`, items.length, 'Household pending confirmations', items.map(p => p.createdAt).filter(Boolean).sort().at(-1)?.slice(0,10) || null, source('confirm_items',items.map(p => p.id)));
   }
   const file = db.prepare('SELECT id,name,uploaded_at,status FROM files WHERE stored_path IS NOT NULL ORDER BY uploaded_at DESC,rowid DESC LIMIT 1').get();
   const year = taxYearFor(clock), checklist = yearendChecklist(db, { year, clock, plain });
@@ -50,8 +50,8 @@ function health(args, ctx) {
     return { id: j.id, lastRun: run?.finished_at || run?.started_at || null, status: run?.status || null };
   });
   return { accounts, lastImport: file ? { fileId: file.id, name: file.name, at: file.uploaded_at, status: file.status } : null,
-    categories, unavailableFigures: db.prepare('SELECT key,label,unavailable_reason AS reason FROM figures WHERE unavailable_reason IS NOT NULL ORDER BY key').all().map(f => ({ ...f, label: plain(f.label) })),
-    pendingConfirm: { total: figure('pendingConfirm.total', pending.length, 'Pending confirmations', null, source('confirm_items',pending.map(p => p.id))), byKind },
+    categories, unavailableFiguresScope: 'household', unavailableFigures: db.prepare('SELECT key,label,unavailable_reason AS reason FROM figures WHERE unavailable_reason IS NOT NULL ORDER BY key').all().map(f => ({ ...f, label: plain(f.label) })),
+    pendingConfirm: { scope: 'household', total: figure('pendingConfirm.total', pending.length, 'Household pending confirmations', null, source('confirm_items',pending.map(p => p.id))), byKind },
     yearend: { year, items: checklist.items.map(i => ({ key: i.key, form: i.form, issuer: i.t, status: i.status === 'have' ? 'received' : i.status === 'skipped' ? 'marked' : 'missing' })) }, jobs, gaps: uniqueGaps(gaps) };
 }
 
