@@ -17,7 +17,8 @@ function sortKey(cell) {
   if (!isObj(cell)) return null;
   if (cell.t === 'fig') return isObj(cell.fig) && cell.fig.value != null ? cell.fig.value : null;
   if (cell.t === 'row') return cell.value ?? null;
-  if (cell.t === 'text') return typeof cell.text === 'string' ? cell.text : null;
+  // A text cell may carry its own sort key (a chart's x order, a timeline's ISO date).
+  if (cell.t === 'text') return cell.sort ?? (typeof cell.text === 'string' ? cell.text : null);
   return null;
 }
 
