@@ -97,7 +97,7 @@ test.describe('goals', TAGS, () => {
     await expect(card.getByRole('button', { name: 'Delete' })).toHaveCount(0);
 
     // Archive from the edit view; restore from the archived list.
-    await card.getByRole('button', { name: 'Edit' }).click();
+    await card.getByRole('button', { name: 'Edit', exact: true }).click();
     const form = page.locator('form.h-gform');
     await expect(form.getByRole('heading', { name: 'Edit goal' })).toBeVisible();
     await form.getByRole('button', { name: 'Archive' }).click();
@@ -116,7 +116,7 @@ test.describe('goals', TAGS, () => {
     await expect(page.locator('details.h-garch')).toHaveCount(0);
 
     // Delete asks first, in the edit view.
-    await goalCard(page, title).getByRole('button', { name: 'Edit' }).click();
+    await goalCard(page, title).getByRole('button', { name: 'Edit', exact: true }).click();
     await form.getByRole('button', { name: 'Delete' }).click();
     await expect(form).toContainText('Delete for good?');
     await form.getByRole('button', { name: 'Delete', exact: true }).click();
@@ -148,6 +148,7 @@ test.describe('goals', TAGS, () => {
     await slider.fill('15');
     await post;
     await page.unroute('**/api/**');
+    await page.reload();
     // Goals has no curve sliders; the saved position feeds the planner.
     const sc = await (await page.request.get('/api/scenario')).json();
     expect(sc.curve.find((c) => c.id === 'tax_cash').value).toBe(0.15);

@@ -64,7 +64,7 @@ async function openNewGoal(page) {
   const { goal } = await res.json();
   await page.reload();
   await expectH1(page, 'Where you are headed');
-  await goalsCard(page, goal.id).getByRole('button', { name: 'Edit' }).click();
+  await goalsCard(page, goal.id).getByRole('button', { name: 'Edit', exact: true }).click();
   await expect(form(page)).toBeVisible();
   return goal.id;
 }
