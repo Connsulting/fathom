@@ -436,3 +436,40 @@ test('MCP advertised tool metadata is sanitized without changing local schemas',
     assert.equal(inputSchema.description, TAX_TEXT);
   } finally { await client.close(); await registry.instance.close(); }
 });
+
+
+test('public demo scrubs the serialized provider request including raw tool result replay', async () => {
+  const { publicDemoRound } = await import('../../public-demo/engine.mjs');
+  const stub = stubFetch([{ status: 200, body: OK_MESSAGE('Synthetic response.') }]);
+  const id = '0f8e2c1a-4b7d-4e2a-9f12-3456789abcde';
+  const result = { filename: `synthetic_${TAX_TEXT}.pdf`, receipt: { id }, amount: 123456789, date: '2032-03-05' };
+  const messages = [
+    { role: 'user', content: TAX_TEXT },
+    { role: 'assistant', content: [{ type: 'tool_use', id, name: 'synthetic', input: { note: TAX_TEXT } }] },
+    { role: 'tool', content: [{ result }] },
+  ];
+  const tools = [{ name: 'synthetic', description: TAX_TEXT, inputSchema: { type: 'object', description: TAX_TEXT, properties: { amount: { type: 'number' } }, additionalProperties: false } }];
+  const original = structuredClone({ messages, tools });
+  try {
+    await publicDemoRound({ credential: { value: 'synthetic-key' }, system: TAX_TEXT, systemDynamic: TAX_TEXT, messages, tools, maxTokens: 64, model: DEFAULT_MODEL, registry: { results: [] } });
+    assertNoTaxIds(stub.bodies[0]);
+    assert.deepEqual({ messages, tools }, original);
+    const replay = stub.bodies[0].messages[2].content[0];
+    assert.equal(replay.tool_use_id, id);
+    const sent = JSON.parse(replay.content);
+    assert.equal(sent.receipt.id, id);
+    assert.equal(sent.amount, result.amount);
+    assert.equal(sent.date, result.date);
+    assert.deepEqual(stub.bodies[0].tools[0].input_schema.properties, tools[0].inputSchema.properties);
+  } finally { stub.restore(); }
+});
+
+test('tax identifier boundaries preserve UUID receipt and preference IDs and still scrub underscore filenames', async () => {
+  const { redactTaxIdentifiers, redactProviderText } = await import('../../ingest/redact.mjs');
+  const id = '0f8e2c1a-4b7d-4e2a-9f12-3456789abcde';
+  const evidence = { receipt: { id }, preference: { id }, refs: [id, id.toUpperCase()] };
+  assert.deepEqual(redactProviderText(evidence), evidence);
+  assert.equal(encodeTranscript([{ role: 'tool', content: evidence }]), JSON.stringify([{ role: 'tool', content: evidence }]));
+  for (const text of ['a900-12-3456', '900-12-3456f', 'a90-1234567', '90-1234567F']) assert.equal(redactTaxIdentifiers(text), text);
+  assert.equal(redactTaxIdentifiers('synthetic_900-12-3456_90-1234567.pdf'), 'synthetic_XXX-XX-XXXX_XX-XXXXXXX.pdf');
+});
