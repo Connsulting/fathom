@@ -12,7 +12,7 @@ import { ledgerDisplayName, ledgerKind } from './ledgers.mjs';
 import { normalizeName } from '../ingest/confirm.mjs';
 import { businessAccount } from '../categories/resolve.mjs';
 import {
-  PnlError, ITEM_LIMIT, accountLabels, addMonths, byDateDesc, checkDb, checkMonth, checkRange, classified, clockOf, enc,
+  PnlError, ITEM_LIMIT, boundedRows, accountLabels, addMonths, byDateDesc, checkDb, checkMonth, checkRange, classified, clockOf, enc,
   figureRegistry, fileNames, lineRow, monthSums, ownerFact, rowItem, runsLabel, spanLabel, sumOf, txnRow,
 } from './shared.mjs';
 
@@ -387,5 +387,5 @@ export function businessPnlRows({ db, entity, from, to, section, category, month
   const covered = a.perMonth.some((p) => p.source === 'workbook' && p.txns.length && (!month || p.month === month));
   const note = `Rows behind ${category} ${section === 'income' ? 'income' : 'expenses'}, ${where}.`
     + (covered ? ' Transactions in months that use the imported workbook are not counted and not listed.' : '');
-  return { items, total: rows.length, sum, ...reg.done(), note };
+  return boundedRows({ items, total: rows.length, sum, ...reg.done(), note });
 }
