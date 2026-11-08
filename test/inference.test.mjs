@@ -593,6 +593,12 @@ for (const scorp of [true, false]) test(`an owner account assignment replaces pa
   assert.ok(!buildScenario(db).recs.find(r => r.id === 'missing-data')?.tasks.some(t => t.kind === 'classify' && !t.done));
   await planRun(db);
   assert.deepEqual(resolveEntities(loadPlanningData(db, '2026-11-05'), getFacts(db)).find(e => e.name === 'Current Studio').accountIds, ['business-cash']);
+  const correction = 'Corrected Studio is my S corp, paid from business checking';
+  const corrected = await callTool('answer', { operation: 'fact', key: 'business.entities', value: [{ name: 'Corrected Studio', type: 's_corp', owner: 'owner', accountId: 'business-cash' }], evidence: correction }, { ...ctx, channel: 'mcp', scopes: ['write:facts'], ownerText: correction });
+  assert.deepEqual(resolveEntities(loadPlanningData(db, '2026-11-05'), getFacts(db)).find(e => e.name === 'Corrected Studio').accountIds, ['business-cash']);
+  assert.equal(getFacts(db)['business.entities'].find(e => e.name === 'Current Studio').accountId, undefined);
+  await callTool('undo', { operation: 'undo', id: corrected.receipt.id }, { ...ctx, channel: 'mcp', scopes: ['write:facts'] });
+  assert.equal(getFacts(db)['business.entities'].find(e => e.name === 'Current Studio').accountId, 'business-cash');
   await callTool('undo', { operation: 'undo', id: out.receipt.id }, { ...ctx, channel: 'mcp', scopes: ['write:facts'] });
   assert.equal(getFacts(db)['business.entities'].find(e => e.name === 'Payroll Studio').accountId, 'business-cash');
 });
