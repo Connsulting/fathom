@@ -5,6 +5,8 @@ import { expectedChildWindow } from '../../shared/child-window.mjs';
 
 export const id = 'new-child';
 export const domain = 'family';
+// Inputs the action reads (src/shared/rec-inputs.mjs): the expected child joins the dependents whose ages come from birth years.
+export const inputs = Object.freeze(['ages']);
 // Goal kinds this rec serves (resolved to open goals at read time) and its default action owner.
 export const goalKinds = Object.freeze(['cash', 'health']);
 export const owner = 'both';

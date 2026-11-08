@@ -236,6 +236,18 @@ export function loadRecs(db, clock) {
   // A rec waiting on the planner names its blocker (stored with the last run, gone once it is unblocked).
   const blockers = parse(db.prepare("SELECT value FROM content WHERE key = 'rec.blockers'").get()?.value, null) || {};
   for (const r of recs) if (r.status === 'waiting' && Object.hasOwn(blockers, r.id)) r.blocker = blockers[r.id];
+  // A rec done by its answer carries the live receipts of its latest answer: its Undo (RQ2).
+  const lastStatus = db.prepare('SELECT action, to_status FROM rec_events WHERE rec_id = ? AND from_status IS NOT to_status ORDER BY id DESC LIMIT 1');
+  const lastAnswer = db.prepare("SELECT arg FROM rec_events WHERE rec_id = ? AND action = 'answer' ORDER BY id DESC LIMIT 1");
+  const live = db.prepare('SELECT id FROM action_receipts WHERE id = ? AND undone_at IS NULL');
+  for (const r of recs) {
+    if (r.status !== 'done') continue;
+    const last = lastStatus.get(r.id);
+    if (!last || last.to_status !== 'done' || !['answer', 'answered'].includes(last.action)) continue;
+    const ids = parse(lastAnswer.get(r.id)?.arg, null);
+    const receipts = Array.isArray(ids) ? ids.filter(id => typeof id === 'string' && live.get(id)) : [];
+    if (receipts.length) r.answerReceipts = receipts;
+  }
   for (const r of recs) if (r.question) {
     if (mortgage.status === 'paid_off') {
       r.question.keys = r.question.keys.filter(key => key !== 'obligations.mortgage');

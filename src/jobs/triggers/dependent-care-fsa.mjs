@@ -4,6 +4,8 @@ import { isTrue, mineOf, padTasks, yearOf, factDate } from './common.mjs';
 
 export const id = 'dependent-care-fsa';
 export const domain = 'family';
+// Inputs the action reads (src/shared/rec-inputs.mjs): outside employer wages this year.
+export const inputs = Object.freeze(['income']);
 // Goal kinds this rec serves (resolved to open goals at read time) and its default action owner.
 export const goalKinds = Object.freeze(['tax', 'cash']);
 export const owner = 'both';

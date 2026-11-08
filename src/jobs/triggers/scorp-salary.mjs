@@ -1,9 +1,12 @@
 // S corp salary: the salary war game over the owner-approved range (S3, R6).
 
 import { isTrue, lastPayroll, mineOf, padTasks, confirmTasks, salaryProjKey, salaryKey, modelPersonOwner } from './common.mjs';
+import { blockedFor } from '../../shared/rec-inputs.mjs';
 
 export const id = 'scorp-salary';
 export const domain = 'business';
+// Inputs the action reads (src/shared/rec-inputs.mjs): the salary war game reruns household and Virginia tax.
+export const inputs = Object.freeze(['income', 'retirement', 'filing', 'va']);
 // Goal kinds this rec serves (resolved to open goals at read time) and its default action owner.
 export const goalKinds = Object.freeze(['tax', 'retirement']);
 export const owner = 'you';
@@ -20,7 +23,8 @@ export function window(ctx) {
 }
 
 export function evaluate(ctx) {
-  if (ctx.info.blocked.length) return { blocked: ctx.info.blocked[0] };
+  const held = blockedFor(ctx, { inputs });
+  if (held) return { blocked: held };
   // The war game needs Virginia tax too; a Virginia gap is missing data, not a closed condition (S12).
   if (ctx.info.vaBlocked) return { blocked: ctx.info.vaBlocked };
   if (ctx.model.salary) return { person: ctx.model.salary.person, grounding: [salaryProjKey(ctx), 'scorp.profitProj', 'room.solo401k.employee', 'room.solo401k.employer'].filter(Boolean) };

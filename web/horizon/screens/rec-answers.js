@@ -15,6 +15,16 @@ function draftFor(r) {
   return draft;
 }
 
+// A saved answer in words: Yes or No, a choice by its label, years as plain numbers.
+function answerText(f) {
+  const v = f.value;
+  if (typeof v === 'boolean') return v ? 'Yes' : 'No';
+  if (f.type === 'choice') return (f.choices || []).find(c => c.value === v)?.label ?? String(v);
+  if (Array.isArray(v)) return v.join(', ');
+  if (typeof v === 'number' && f.unit && f.unit !== 'year') return `${v} ${f.unit}`;
+  return String(v);
+}
+
 function active(field, draft) {
   return !field.when || draft.get(JSON.stringify([field.key, ...field.when.path])) === field.when.value;
 }
@@ -23,9 +33,15 @@ export function html(r, surface) {
   const { esc } = H;
   const assumptions = (r.assumptions || []).map((a, i) => `<div class="h-answer-inferred"><p>${esc(a.evidence)}</p><button type="button" class="h-btn ghost" data-default-undo="${i}" data-rec="${esc(r.id)}"${busy.has(r.id) ? ' disabled' : ''}>Undo</button></div>`).join('');
   if (!r.question) return assumptions;
-  // Every answer is saved: say so and keep the questions out of the way (Edit answers reopens them).
+  // Every answer is saved: say so, show what was answered, and keep the questions out of the way
+  // (Edit answers reopens them; Undo drops the answer through its receipts and asks again).
   if (r.question.answered && !editing.has(r.id)) {
-    return assumptions + `<div class="h-answered" data-rec-answered="${esc(r.id)}"><span class="h-answered-t">Answered</span><button type="button" class="h-btn ghost" data-qr-edit="${esc(r.id)}">Edit answers</button></div>`;
+    const fields = r.question.fields;
+    const byId = new Map(fields.map(f => [f.id, f]));
+    const shown = fields.filter(f => f.value !== undefined && (!f.when || byId.get(JSON.stringify([f.key, ...f.when.path]))?.value === f.when.value));
+    const list = shown.length ? `<dl class="h-answered-l">${shown.map(f => `<div><dt>${f.group ? `${esc(f.group)}: ` : ''}${esc(f.label)}</dt><dd>${esc(answerText(f))}</dd></div>`).join('')}</dl>` : '';
+    const undo = r.answerReceipts?.length ? `<button type="button" class="h-btn ghost" data-answer-undo="${esc(r.id)}"${busy.has(r.id) ? ' disabled' : ''}>Undo</button>` : '';
+    return assumptions + `<div class="h-answered" data-rec-answered="${esc(r.id)}"><span class="h-answered-t">Answered</span>${list}<button type="button" class="h-btn ghost" data-qr-edit="${esc(r.id)}">Edit answers</button>${undo}</div>`;
   }
   const draft = draftFor(r);
   const pending = busy.has(r.id);
@@ -101,8 +117,9 @@ export function onSubmit(e) {
   return true;
 }
 
-// Edit answers opens the saved questions; Undo drops an inferred Virginia plan answer so the
-// account is asked. Returns true when the click was one of these.
+// Edit answers opens the saved questions; Undo of an answer undoes its receipts, newest first, so
+// the rec asks again; Undo of an inferred Virginia plan answer asks about the account. Returns true
+// when the click was one of these.
 export function onClick(e) {
   const defaultUndo = e.target.closest?.('[data-default-undo]');
   if (defaultUndo) {
@@ -116,6 +133,21 @@ export function onClick(e) {
     const value = a.path.length ? { [a.path[0]]: { undone: true } } : true;
     Promise.resolve(H.api.answerRec(id, [{ key: a.undoKey, value }])).finally(() => {
       busy.delete(id); drafts.delete(id); H.draw();
+    });
+    return true;
+  }
+  const answerUndo = e.target.closest?.('[data-answer-undo]');
+  if (answerUndo) {
+    e.preventDefault();
+    const id = answerUndo.dataset.answerUndo;
+    const ids = [...(H.recById(id)?.answerReceipts || [])].reverse();
+    if (busy.has(id) || !ids.length) return true;
+    busy.add(id);
+    H.draw();
+    (async () => {
+      for (const receipt of ids) if (!(await H.api.actionUndo(receipt))) break;
+    })().finally(() => {
+      busy.delete(id); drafts.delete(id); editing.delete(id); H.draw();
     });
     return true;
   }

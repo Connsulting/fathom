@@ -1,9 +1,12 @@
 // Virginia 529 deduction: deduction room left on Virginia plan accounts before Dec 31 (S8, T5).
 
 import { isTrue, mineOf, padTasks, confirmTasks, yearOf, dataText, positive } from './common.mjs';
+import { blockedFor } from '../../shared/rec-inputs.mjs';
 
 export const id = 'va529';
 export const domain = 'family';
+// Inputs the action reads (src/shared/rec-inputs.mjs): the Virginia deduction is worth Virginia tax, which starts from federal AGI; the age rule reads birth years.
+export const inputs = Object.freeze(['income', 'retirement', 'filing', 'va', 'ages']);
 // Goal kinds this rec serves (resolved to open goals at read time) and its default action owner.
 export const goalKinds = Object.freeze(['education', 'tax']);
 export const owner = 'both';
@@ -25,7 +28,8 @@ export function evaluate(ctx) {
   const confirm = [...(info.answersMissing ?? info.missing).length ? ['accounts.va529'] : [], ...(info.ageMissing || []).length ? ['household.birthYears'] : []];
   if (confirm.length) return { confirm, grounding: ['va529.contrib.ytd'] };
   if (!info.eligible) return null;
-  if (ctx.info.blocked.length) return { blocked: ctx.info.blocked[0] };
+  const held = blockedFor(ctx, { inputs });
+  if (held) return { blocked: held };
   if (ctx.info.vaBlocked) return { blocked: ctx.info.vaBlocked };
   if (!positive(ctx, 'va529.deductionLeft')) return null;
   return { grounding: ['va529.deductionLeft', 'va529.taxSaved', 'va529.contrib.ytd'], age70: info.age70 };

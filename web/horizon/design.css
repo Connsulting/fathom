@@ -1069,6 +1069,10 @@ a.h-dec-t:hover { color: var(--ac2); }
 .d-horizon .h-answer-inferred p { margin: 0 0 8px; font-size: 14px; line-height: 1.5; color: var(--tx); overflow-wrap: anywhere; }
 .d-horizon .h-answered { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 14px 0; }
 .d-horizon .h-answered-t { font-size: 14px; color: var(--tx2); }
+.d-horizon .h-answered-l { flex-basis: 100%; margin: 0; display: grid; gap: 4px; font-size: 14px; line-height: 1.5; min-width: 0; }
+.d-horizon .h-answered-l div { display: flex; flex-wrap: wrap; gap: 6px; }
+.d-horizon .h-answered-l dt { color: var(--tx2); overflow-wrap: anywhere; }
+.d-horizon .h-answered-l dd { margin: 0; color: var(--tx); font-weight: 500; }
 .d-horizon .h-blocker { margin: 14px 0; padding: 12px 14px; border: 1px solid var(--line2); border-left: 3px solid var(--ac); border-radius: 8px; max-width: 660px; }
 .d-horizon .h-blocker b { display: block; font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: var(--tx2); margin-bottom: 6px; }
 .d-horizon .h-blocker p { margin: 0 0 6px; font-size: 14px; line-height: 1.5; color: var(--tx); overflow-wrap: anywhere; }

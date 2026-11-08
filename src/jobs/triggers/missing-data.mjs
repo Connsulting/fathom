@@ -12,6 +12,8 @@ import { dataText, confirmTask, ANSWER_SHAPES, questionFor } from './common.mjs'
 
 export const id = 'missing-data';
 export const domain = 'data';
+// Missing data lists every gap and hold itself, so it declares no inputs of its own.
+export const inputs = Object.freeze([]);
 // Goal kinds this rec serves (resolved to open goals at read time) and its default action owner.
 export const goalKinds = Object.freeze([]);
 export const owner = 'you';

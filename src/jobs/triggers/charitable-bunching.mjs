@@ -4,6 +4,8 @@ import { isTrue, mineOf, padTasks, yearOf, positive } from './common.mjs';
 
 export const id = 'charitable-bunching';
 export const domain = 'giving';
+// Inputs the action reads (src/shared/rec-inputs.mjs): itemizing against the standard deduction for the filing status.
+export const inputs = Object.freeze(['income', 'filing']);
 // Goal kinds this rec serves (resolved to open goals at read time) and its default action owner.
 export const goalKinds = Object.freeze(['giving', 'tax']);
 export const owner = 'both';

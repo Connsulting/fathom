@@ -10,6 +10,8 @@ import { isTrue, absentOrFalse, mineOf, padTasks, confirmTasks, firstYearStatus,
 
 export const id = 'solo401k-setup';
 export const domain = 'retirement';
+// Inputs the action reads (src/shared/rec-inputs.mjs): solo 401(k) room from business earnings and recorded contributions.
+export const inputs = Object.freeze(['income', 'retirement']);
 // Goal kinds this rec serves (resolved to open goals at read time) and its default action owner.
 export const goalKinds = Object.freeze(['retirement']);
 export const owner = 'you';
