@@ -265,6 +265,13 @@
 .d-horizon .h-mem-gone .h-mem-b { color: var(--ac); }
 .d-horizon .h-mem-none, .d-horizon .h-mem-empty { margin-top: 24px; font-size: 14px; }
 .d-horizon .h-action-receipt .h-mem-all { margin-left: 6px; white-space: nowrap; }
+.d-horizon .h-mem .h-sec { margin-top: 34px; }
+.d-horizon .h-know-l { list-style: none; margin: 0; padding: 0; }
+.d-horizon .h-know-p { padding: 14px 2px; border-bottom: 1px solid var(--line); }
+.d-horizon .h-know-p > a { display: inline-flex; align-items: center; gap: 6px; color: var(--tx); text-decoration: none; }
+.d-horizon .h-know-p > a:hover { color: var(--ac); }
+.d-horizon .h-know-p > a svg { width: 14px; height: 14px; }
+.d-horizon .h-know-p p { margin: 4px 0 2px; color: var(--tx2); font-size: 14px; line-height: 1.5; }
 @media (max-width: 720px) {
   .d-horizon .h-mem-line { flex-direction: column; align-items: stretch; }
   .d-horizon .h-mem input { height: 44px; font-size: 16px; }

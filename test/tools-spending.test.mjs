@@ -8,7 +8,7 @@ import { spendingInputs } from '../src/calc/targets.mjs';
 import { loadCategoryInputs } from '../src/categories/store.mjs';
 import { resolveCategories } from '../src/categories/resolve.mjs';
 import { classOf, BUILTIN_DEFINITIONS } from '../src/calc/classes.mjs';
-import { callTool, getTool } from '../src/tools/index.mjs';
+import { callTool, tools, getTool } from '../src/tools/index.mjs';
 import { assertRefsResolve } from './helpers/figures.mjs';
 
 const sum = (xs) => Math.round(xs.reduce((s, x) => s + x, 0) * 100) / 100;
@@ -190,7 +190,6 @@ test('available eval scripts call valid operations through the Ask tool boundary
   t.after(() => store.close());
   const { tools } = await import('../src/tools/index.mjs');
   const { proposalTools } = await import('../src/actions/proposals.mjs');
-  const server = createRegistryServer(proposalTools(tools), { purpose: 'chat', ctx: { db: store.db, dataDir: store.root, clock: '2026-11-05', now: '2026-11-05T00:00:00.000Z', actorId: 'demo', onProposal() {}, onBlock() {} } });
   for (const c of await loadCases()) {
     if (!c.requires?.script || c.expectedFail || c.requires.operations.some(pair => getTool(pair.split('.')[0])?.kind === 'write')) continue;
     const { script, setup } = await import(`../evals/scripts/${c.id}.mjs`);
@@ -198,6 +197,7 @@ test('available eval scripts call valid operations through the Ask tool boundary
     for (const turn of c.turns) {
       const frames = await script({ turn, db: store.db, clock: '2026-11-05' });
       assert.ok(frames[0].toolCalls.length, c.id);
+      const server = createRegistryServer(proposalTools(tools), { purpose: 'chat', ctx: { db: store.db, dataDir: store.root, clock: '2026-11-05', now: '2026-11-05T00:00:00.000Z', actorId: 'demo', channel: 'ask', ownerStatements: () => [turn.question], onProposal() {}, onBlock() {} } });
       for (const call of frames[0].toolCalls) {
         const result = await server.invoke(call.name, call.args);
         assert.notEqual(result.isError, true, `${c.id}: ${result.content[0].text}`);

@@ -31,6 +31,9 @@ async function gotoDecide(page) {
 
 async function actOnRec(page, recId, action) {
   await gotoRoute(page, 'plan');
+  // A done or dismissed rec sits in Plan's Done group, collapsed until opened.
+  const done = page.locator('details[data-plan-group="done"]', { has: page.locator(`a[data-go="rec"][data-id="${recId}"]`) });
+  if (await done.count() && !(await done.evaluate((d) => d.open))) await done.locator('summary').click();
   await openRecFromPage(page, recId);
   const dlg = recDialog(page);
   await dlg.locator(`.h-acts.big [data-act="${action}"]`).click();

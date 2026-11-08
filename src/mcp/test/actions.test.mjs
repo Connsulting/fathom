@@ -15,6 +15,10 @@ test('MCP action scopes deny before validation and permit only matching writes a
       ...['curve', 'forget', 'save_definition', 'delete_definition', 'pack'].map(operation => ['write:preferences', 'update_preferences', operation]),
       ...['import_file', 'retry_import', 'build_your_plans'].map(operation => ['write:imports', 'refresh', operation]),
       ['write:jobs', 'refresh', 'run_job'],
+      ...['rename', 'mask', 'owner', 'kind', 'merge'].map(operation => ['write:accounts', 'update_account', operation]),
+      ...['transaction', 'merchant_rule'].map(operation => ['write:categories', 'categorize', operation]),
+      ['write:facts', 'answer', 'rec_questions'],
+      ...['confirm', 'reopen', 'yearend_mark'].map(operation => ['write:confirm', 'answer', operation]),
     ];
     for (const [scope, tool, operation] of scopes) {
       const denied = rpcResult(await callToolRpc(s.baseUrl, read, tool, { operation, malformed: true }));

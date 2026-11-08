@@ -78,3 +78,14 @@ test('additive expected-payment migration preserves populated financial state an
     assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), []);
   } finally { db.close(); }
 });
+
+test('the shared answer schema preserves each operation while expected-payment evidence stays bounded', async () => {
+  const x = await updateFixture();
+  try {
+    const evidence = args.evidence + ' '.repeat(4001 - args.evidence.length);
+    const ctx = { ...x.ctx, now: '2032-03-02T14:00:00Z', ownerText: evidence };
+    await assert.rejects(callTool('answer', { ...args, evidence }, ctx), /4000/);
+    await callTool('answer', { ...args, evidence: evidence.slice(0, 4000) }, { ...ctx, ownerText: evidence.slice(0, 4000) });
+    assert.equal(x.db.prepare('SELECT count(*) n FROM expected_transactions').get().n, 1);
+  } finally { x.close(); }
+});

@@ -69,7 +69,7 @@ test('a plan document builds the Your plans pack, and entries cite file and page
   await addPlanDocument(dataDir);
 
   await gotoYp(page, base, 'packs');
-  await expect(page.getByRole('heading', { level: 1, name: 'What Fathom knows', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 1, name: 'Knowledge packs', exact: true })).toBeVisible();
   const card = page.locator('.h-yp');
   await expect(card).toBeVisible();
   const box = card.locator(`input[data-yp-file="${FILE_ID}"]`);
