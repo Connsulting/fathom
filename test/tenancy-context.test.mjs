@@ -153,6 +153,7 @@ describe('household A sees only its own data on every financial route', T, () =>
     '/api/packs/:id/entries/:entryId': { path: `/api/packs/your-plans/entries/${PLAN_ENTRY}`, own: true },
     '/api/threads': { own: true },
     '/api/threads/:id': { path: `/api/threads/${A.threadId}`, own: true },
+    '/api/threads/:id/blocks': { path: `/api/threads/${A.threadId}/blocks` },
     '/api/accounts/:id': { path: `/api/accounts/${encodeURIComponent(A.accountId)}`, own: true },
     '/api/accounts/:id/transactions': { path: `/api/accounts/${encodeURIComponent(A.accountId)}/transactions`, own: true },
     '/api/accounts/:id/merge-candidates': { path: `/api/accounts/${encodeURIComponent(A.accountId)}/merge-candidates` },
@@ -221,6 +222,7 @@ describe('household A sees only its own data on every financial route', T, () =>
     const B = seeds.B;
     const pairs = [
       ['GET', `/api/threads/${B.threadId}`, '/api/threads/0123456789ab'],
+      ['GET', `/api/threads/${B.threadId}/blocks`, '/api/threads/0123456789ab/blocks'],
       ['GET', `/api/accounts/${encodeURIComponent(B.accountId)}`, '/api/accounts/acct-synthetic-none'],
       ['GET', `/api/advisor/packets/${B.packetId}`, '/api/advisor/packets/advpkt-0000000000000000'],
       ['POST', `/api/files/${B.fileId}/retry`, '/api/files/f-000000000000000000000000/retry'],

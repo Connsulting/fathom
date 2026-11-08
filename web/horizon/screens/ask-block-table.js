@@ -79,10 +79,19 @@ export function render(snapshot, ctx) {
     const num = c.type !== 'text';
     return `<th scope="col" aria-sort="${aria}"${num ? ' class="n"' : ''}><button type="button" class="h-blk-sort" data-blk-ctl="${esc(ctx.ctl(`sort-${i}`))}">${esc(c.label)}<i aria-hidden="true">${on ? (sort.dir === 'desc' ? '↓' : '↑') : ''}</i></button></th>`;
   }).join('');
-  const body = rows.map((r) => `<tr>${cols.map((c, i) => {
+  const body = rows.map((r) => {
+    const index = all.indexOf(r);
+    const drills = arr(r.cells).map((c, i) => c?.drill ? { i, drill: c.drill } : null).filter(Boolean);
+    const buttons = drills.map(({ i }) => `<button type="button" class="h-btn ghost" aria-expanded="${state.drill === `${index}-${i}`}" data-blk-ctl="${esc(ctx.ctl(`drill-${index}-${i}`))}">Show rows${drills.length > 1 ? `: ${esc(cols[i].label)}` : ''}</button>`).join('');
+    const expanded = drills.find(({ i }) => state.drill === `${index}-${i}`);
+    const detail = expanded ? `<tr><td colspan="${cols.length}"><section role="region" aria-label="Rows behind this figure"><h4 tabindex="-1" data-blk-drill-heading>Rows behind this figure</h4><p>Block figure ${cellHtml(r.cells[expanded.i], ctx)}</p>${state.drillData
+      ? `<p>Rows sum ${ctx.rowFigure ? ctx.rowFigure(state.drillData.sum) : ''}</p><ul>${arr(state.drillData.items).map(item => `<li>${esc(item.date)} ${esc(item.account)} ${esc(item.description)} ${ctx.rowFigure ? ctx.rowFigure(item.fig) : ''}</li>`).join('')}</ul>`
+      : `<p role="status">${state.drillError ? 'Rows could not be loaded.' : 'Loading rows'}</p>`}</section></td></tr>` : '';
+    return `<tr>${cols.map((c, i) => {
     const num = c.type !== 'text';
-    return `<td${num ? ' class="n"' : ''}>${cellHtml(arr(r.cells)[i], ctx)}</td>`;
-  }).join('')}</tr>`).join('');
+    return `<td${num ? ' class="n"' : ''}>${cellHtml(arr(r.cells)[i], ctx)}${i === 0 ? buttons : ''}</td>`;
+  }).join('')}</tr>${detail}`;
+  }).join('');
   const empty = !rows.length ? `<p class="h-blk-empty">No rows match.</p>` : '';
   const more = !state.all && shown.length > PAGE
     ? `<button type="button" class="h-btn ghost h-blk-more" data-blk-ctl="${esc(ctx.ctl('all'))}">Show all ${shown.length} rows</button>`
@@ -92,12 +101,38 @@ export function render(snapshot, ctx) {
 }
 
 export function bind(root, snapshot, ctx) {
-  root.addEventListener('click', (e) => {
+  const host = root.parentElement;
+  const focusHeading = () => host?.querySelector(`[data-blk="${CSS.escape(root.getAttribute('data-blk'))}"] [data-blk-drill-heading]`)?.focus();
+  root.addEventListener('keydown', e => {
+    if (e.key !== 'Escape' || !e.target.closest?.('section[aria-label="Rows behind this figure"]')) return;
+    if (root.ownerDocument.querySelector('.fx-pop')) return;
+    e.preventDefault(); e.stopPropagation();
+    const ctl = `${root.getAttribute('data-blk')}:drill-${ctx.state.drill}`;
+    ctx.state.drill = null; ctx.redraw();
+    host?.querySelector(`[data-blk-ctl="${CSS.escape(ctl)}"]`)?.focus();
+  });
+  root.addEventListener('click', async (e) => {
     const b = e.target.closest && e.target.closest('button[data-blk-ctl]');
     if (!b || !root.contains(b)) return;
     const name = b.getAttribute('data-blk-ctl').split(':').pop();
     const st = ctx.state;
-    if (name === 'all') {
+    if (name.startsWith('drill-')) {
+      e.preventDefault();
+      const selected = name.slice(6);
+      if (st.drill === selected) { st.drill = null; ctx.redraw(); return; }
+      const [row, column] = selected.split('-').map(Number);
+      const drill = snapshot.rows[row]?.cells[column]?.drill;
+      if (!drill || !ctx.rows) return;
+      st.drill = selected; st.drillData = null; st.drillError = false;
+      ctx.redraw(); focusHeading();
+      const data = await ctx.rows(drill);
+      if (st.drill !== selected) return;
+      st.drillData = data; st.drillError = !data;
+      const active = root.ownerDocument.activeElement?.hasAttribute('data-blk-drill-heading');
+      ctx.redraw();
+      if (active) focusHeading();
+      return;
+    } else if (name === 'all') {
       st.all = true;
     } else if (name.startsWith('sort-')) {
       const column = Number(name.slice(5));
