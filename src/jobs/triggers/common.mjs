@@ -79,6 +79,9 @@ export const ANSWER_SHAPES = Object.freeze({
   'household.filingStatusDefault': { scope: 'household', ...yesNo('Undo the joint filing assumption?') },
   'business.cashBasisDefault': { scope: 'household', ...yesNo('Undo the cash-basis assumption?') },
   'accounts.va529CarryforwardDefault': { scope: 'account', accountKind: '529', type: 'object', fields: { undone: yesNo('Undo the carryforward assumption?') } },
+  'pnl.ledgers': { scope: 'household', type: 'map', label: 'Which imported ledgers are spending or businesses?', values: {
+    type: 'object', fields: { kind: { type: 'choice', ownerInterpreted: true, label: 'What does this ledger track?', choices: [{ value: 'spending', label: 'Spending ledger' }, { value: 'business', label: 'Business' }] } },
+  } },
   'retirement.planTermsConfirmed': { scope: 'household', ...yesNo('Has your advisor confirmed your retirement plan terms and eligibility?') },
   'retirement.aggregationConfirmed': { scope: 'household', ...yesNo('Has your advisor confirmed no related business shares your plan limits?') },
   'benefits.hsaEligible': { scope: 'household', ...yesNo('Is your health plan HSA eligible for the whole year?') },
