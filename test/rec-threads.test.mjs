@@ -301,7 +301,7 @@ async function demoCtx(t) {
   // The temp store's directory stands in as the household root.
   const packs = createLivePacks(s.db, { dataDir: s.dataDir });
   packs.refresh();
-  const answerer = createLiveAnswerer({ engine, packs, root: s.dataDir });
+  const answerer = createLiveAnswerer({ engine, packs, root: s.dataDir, services: { engine, config: { dataDir: s.dataDir } } });
   const ctx = (body = {}, extra = {}) => ({ db: s.db, config, engine, packs, answerer, params: {}, body, ...extra });
   return { ...s, config, engine, packs, answerer, ctx };
 }

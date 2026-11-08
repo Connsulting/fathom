@@ -7,8 +7,8 @@ import { toolsForScopes, SCOPES } from '../src/mcp/keys.mjs';
 import { createRegistryServer } from '../src/engine/tools.mjs';
 
 const expected = {
-  household: ['summary', 'facts', 'fact_shapes', 'figures', 'deadlines'],
-  accounts: ['list', 'holdings'], transactions: ['search'], business: ['pnl', 'rows'],
+  household: ['summary', 'facts', 'fact_shapes', 'figures', 'deadlines', 'health'],
+  accounts: ['list', 'holdings', 'detail', 'net_worth'], tax: ['estimate', 'room'], transactions: ['search'], business: ['pnl', 'rows'],
   spending: ['total', 'compare', 'definitions', 'cash_flow', 'recurring'],
   goals: ['list', 'pace'], recommendations: ['list', 'detail', 'advisor', 'wargame'],
   knowledge: ['packs', 'search', 'entry'], answer: ['fact'],
@@ -27,7 +27,7 @@ const oldNames = [
   ...['fact','goal','preference','recommendation','step'].map(k => ['undo',k,'action']),
 ].map(parts => parts.join('_'));
 
-test('operation tools register, with no old aliases', () => {
+test('only the declared operation tools register, with no old aliases', () => {
   assert.deepEqual(tools.map(t => t.name), Object.keys(expected).sort());
   for (const tool of tools) {
     assert.deepEqual(new Set(tool.operations.map(o => o.name)), new Set(expected[tool.name]));
@@ -73,7 +73,8 @@ test('scope filtering narrows operation enums and hides all writes from read-onl
   const rec = mixed.find(t => t.name === 'act_on_recommendation');
   assert.deepEqual(rec.inputSchema.properties.operation.enum, ['owner', 'status']);
   assert.ok(mixed.some(t => t.name === 'undo'));
-  assert.ok(!createRegistryServer(tools, { purpose: 'chat' }).names.includes('undo'));
+  assert.ok(createRegistryServer(tools, { purpose: 'chat' }).names.includes('undo'));
+  assert.ok(!createRegistryServer(tools, { purpose: 'plan' }).names.includes('undo'));
 });
 
 test('catalog and instructions stay within the context budget', t => {

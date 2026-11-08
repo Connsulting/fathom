@@ -104,8 +104,8 @@ export function householdTax(parts) {
   const dhTotal = cents(Object.values(se).reduce((s, v) => s + v.deductibleHalf, 0));
   const retire = cents(sum(biz.map(b => b.retire)));
   if (retire > 0) steps.push({ label: 'Self-employed retirement deduction', formula: 'deductible plan contributions for self-employed businesses', value: retire });
-  const agi = cents(sum(parts.w2.map(w => w.agi)) + sum(biz.map(b => b.agi)) - dhTotal - retire - (parts.hsaPersonal || 0));
-  steps.push({ label: 'Adjusted gross income', formula: 'wages + business income - deductible half of SE tax - self-employed retirement deduction - personal HSA contributions', value: agi });
+  const agi = cents(sum(parts.w2.map(w => w.agi)) + sum(biz.map(b => b.agi)) + (parts.otherIncome || 0) - dhTotal - retire - (parts.hsaPersonal || 0));
+  steps.push({ label: 'Adjusted gross income', formula: 'wages + business income + other ordinary income - deductible half of SE tax - self-employed retirement deduction - personal HSA contributions', value: agi });
   const deduction = Math.max(stdDeduction(f), parts.itemized || 0);
   const pre = Math.max(0, cents(agi - deduction));
   steps.push({ label: 'Deduction', formula: 'greater of the standard deduction and your itemized estimate', value: deduction });

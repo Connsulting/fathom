@@ -14,6 +14,7 @@ import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { defineConfig } from '@playwright/test';
+import { dataName, mainDataName } from './e2e/data-dir.mjs';
 
 function portFrom(value, fallback) {
   if (value == null || value === '') return fallback;
@@ -97,9 +98,9 @@ export default defineConfig({
   ],
   webServer: BASE_URL
     ? undefined
-    : SINGLE_SERVER ? [demoServer(PORT, process.env.E2E_DATA || '.e2e-data')] : [
-        demoServer(PORT, process.env.E2E_DATA || '.e2e-data'),
-        demoServer(JAN_PORT, '.e2e-data-jan', { FATHOM_CLOCK: '2027-01-05' }),
+    : SINGLE_SERVER ? [demoServer(PORT, mainDataName())] : [
+        demoServer(PORT, mainDataName()),
+        demoServer(JAN_PORT, dataName('jan'), { FATHOM_CLOCK: '2027-01-05' }),
         demoServer(YP_PORT, ypDataDirLocal, { E2E_EXTERNAL: '1' })
       ]
 });

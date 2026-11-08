@@ -1,5 +1,5 @@
 // `npm run confirm:guess -- --household <id>`: one manual run of the confirm-guess job over that
-// household's store, through a scheduler that has only the confirm-guess handler (resolution runs only
+// household's store, through a scheduler with the resolver and its follow-up plan handler (resolution runs only
 // through the scheduler, so the run takes the job lease, gets its job_runs row like any other and
 // honours the household's outbound jobs flag). Prints one JSON line {status, note} (counts only,
 // never a question or a value). Exit 0 when the run is ok or skipped, 1 when the household cannot
@@ -32,7 +32,8 @@ async function main() {
   let scheduler = null;
   try {
     await household.engine.init();
-    const handlers = { [JOB]: defaultHandlers({ publicUrl: config.publicUrl })[JOB] };
+    const defaults = defaultHandlers({ publicUrl: config.publicUrl });
+    const handlers = { [JOB]: defaults[JOB], plan: defaults.plan };
     scheduler = createScheduler({
       db: household.db, config, engine: household.engine, handlers, log: quiet,
       allowed: () => household.outbound.enabled('jobs'), household: () => household,

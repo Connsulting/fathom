@@ -180,6 +180,28 @@ test.describe('account dialog edits', { tag: '@ade-ac' }, () => {
     await addLastFour(page, request);
   });
 
+  test('Add last 4 has an Undo that removes it and offers Add last 4 again', async ({ page, request }) => {
+    await seed(request);
+    await openFromAccounts(page, A);
+    const dlg = recDialog(page);
+    await dlg.locator('[data-ad="mask-open"]').click();
+    await dlg.locator('input[data-ad-mask]').fill('1234');
+    const saved = posted(page, `/api/accounts/${A}/mask`);
+    await dlg.locator('[data-ad="mask-save"]').click();
+    expect((await saved).status()).toBe(200);
+    await expect(dlg.locator('#h-dlg-t')).toHaveText(`${A_NAME} (1234)`);
+
+    const undo = dlg.locator('.h-ad-undo [data-ad="undo"]');
+    await expect(undo).toBeVisible();
+    const undone = posted(page, `/api/accounts/${A}/mask`);
+    await undo.click();
+    expect((await undone).status()).toBe(200);
+    await expect(dlg.locator('#h-dlg-t')).toHaveText(A_NAME);
+    await expect(dlg.locator('.h-ad-last4')).toHaveCount(0);
+    await expect(dlg.locator('[data-ad="mask-open"]')).toBeVisible();
+    expect((await scenarioAccount(request, A)).mask).toBeNull();
+  });
+
   test('Merge with... names the survivor and what moves, merges, and Undo brings both back', async ({ page, request }) => {
     await mergeWith(page, request);
   });
