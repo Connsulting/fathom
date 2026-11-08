@@ -403,3 +403,36 @@ test('MCP replies scrub success and error text while local evidence keeps origin
   const invalid = await registry.invoke('synthetic', { operation: TAX_TEXT, [TAX_TEXT]: 'invalid' });
   assertNoTaxIds(invalid);
 });
+
+
+test('tax identifier sanitization preserves financial values and documents identifier-shaped false positives', async () => {
+  const { redactTaxIdentifiers, redactProviderText } = await import('../../ingest/redact.mjs');
+  const safe = { amount: 123456789, text: '$123456789 and $123,456.78 on 2032-03-05', evidence: 'synthetic-evidence-20320305', schema: { type: 'number', minimum: 123456789 } };
+  assert.deepEqual(redactProviderText(safe), safe);
+  assert.deepEqual(redactProviderText({ ssn: '900123456', nested: { ITIN: '900701234', EIN: '901234567' } }), { ssn: 'XXXXXXXXX', nested: { ITIN: 'XXXXXXXXX', EIN: 'XXXXXXXXX' } });
+  const forms = ['900-12-3456', '900 12 3456', '900_12_3456', '900\u201112\u20113456', '90-1234567', '90 1234567', '90_1234567', 'SSN 900123456', 'ITIN: 900701234', 'EIN=901234567', 'tax identification number: 900123456'];
+  for (const form of forms) {
+    const masked = redactTaxIdentifiers(`synthetic_${form}.pdf`);
+    assert.ok(!masked.includes(form), `supported form ${form}`);
+    assert.equal(redactTaxIdentifiers(masked), masked, 'idempotent');
+  }
+  assert.equal(redactTaxIdentifiers('Amount code 900-12-3456'), 'Amount code XXX-XX-XXXX', 'identifier-shaped non-identifiers are the accepted false positive');
+});
+
+test('MCP advertised tool metadata is sanitized without changing local schemas', async () => {
+  const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+  const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
+  const { createRegistryServer } = await import('../tools.mjs');
+  const inputSchema = { type: 'object', description: TAX_TEXT, properties: { amount: { type: 'number', minimum: 0 } }, additionalProperties: false };
+  const registry = createRegistryServer([{ name: 'synthetic', kind: 'read', operations: [{ name: 'read', scope: 'read' }], description: TAX_TEXT, inputSchema, handler: async () => ({ ok: true }) }], { purpose: 'chat' });
+  const client = new Client({ name: 'synthetic', version: '1.0.0' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  try {
+    await registry.instance.connect(serverTransport);
+    await client.connect(clientTransport);
+    const advertised = await client.listTools();
+    assertNoTaxIds(advertised);
+    assert.deepEqual(advertised.tools[0].inputSchema.properties, inputSchema.properties);
+    assert.equal(inputSchema.description, TAX_TEXT);
+  } finally { await client.close(); await registry.instance.close(); }
+});
