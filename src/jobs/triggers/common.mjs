@@ -92,7 +92,7 @@ export const ANSWER_SHAPES = Object.freeze({
   'accounts.planType': { scope: 'account', accountKinds: ['retirement','roth','ira','taxable','brokerage'], type: 'choice', label: 'Plan type for {account}',
     choices: ['traditional_ira','roth_ira','sep_ira','401k','roth_401k','solo_401k','403b','457b','hsa','529','taxable'].map(value => ({value,label:value})) },
   'accounts.rothFirstContributionYear': { scope: 'account', accountEligibility: 'roth', type: 'number', min: 1975, currentYear: true, integer: true, unit: 'year', label: 'First Roth contribution year for {account}' },
-  'accounts.rothBasis': { scope: 'account', accountKind: 'roth', ...dollars('Roth contribution basis for {account}') },
+  'accounts.rothBasis': { scope: 'account', accountEligibility: 'roth', ...dollars('Roth contribution basis for {account}') },
   'accounts.separationDate': { scope: 'account', accountEligibility: 'employer', type: 'date', label: 'Separation date for {account}' },
 
   'household.filingStatusDefault': { scope: 'household', ...yesNo('Undo the joint filing assumption?') },
