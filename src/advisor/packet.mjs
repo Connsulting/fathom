@@ -11,6 +11,8 @@ import { createHash, randomBytes } from 'node:crypto';
 import { TOKEN, KIND_WORDS, money, pct, esc } from '../shared/tokens.mjs';
 import { storeFile, readStoredFile } from '../ingest/vault.mjs';
 import { dayLabel } from './index.mjs';
+import { AdvisorError } from './index.mjs';
+import { buildScenario } from '../scenario/build.mjs';
 
 const ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
 
@@ -218,6 +220,16 @@ export async function storePacket(db, { vault, html, clock, recIds, now }) {
   db.prepare('INSERT INTO advisor_packets (id, created_at, clock, rec_ids, stored_path, bytes, sha256) VALUES (?, ?, ?, ?, ?, ?, ?)')
     .run(id, now, clock, JSON.stringify(recIds), storedPath, bytes.length, createHash('sha256').update(bytes).digest('hex'));
   return id;
+}
+
+export async function buildAndStorePacket(db, { vault, clock, now, scenario } = {}) {
+  const s = scenario ?? buildScenario(db, { clock });
+  const recIds = s.advisor.pending;
+  if (!recIds.length) throw new AdvisorError(409, 'nothing is waiting on review');
+  const html = buildPacketHtml(s, { generatedOn: s.meta.clock, sources: contentSources(db) });
+  const packetId = await storePacket(db, { vault: typeof vault === 'function' ? await vault() : vault,
+    html, clock: s.meta.clock, recIds, now });
+  return { packetId, recIds };
 }
 
 export async function readPacket(db, { vault, id }) {

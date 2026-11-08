@@ -110,6 +110,9 @@ test('retirement validates typed inputs and checks owner statements at the Ask b
   const s = await setup(t);
   for (const args of [
     { withdrawalRate:rate(0.01) }, { realReturn:rate(0.11) }, { monthlySavings:50 },
+    { monthlySavings:{ value:'50',source:'owner',evidence:'$50' } },
+    { monthlySavings:{ value:50,source:12,evidence:'$50' } },
+    { monthlySavings:{ value:50,source:'owner',evidence:{ amount:50 } } },
     { definition:'core_living',spending:{ tool:'spending',args:{operation:'total',annualize:true},path:'total' } },
     { invested:{accounts:['missing']} },
   ]) await assert.rejects(s.retirement('target',args),e => ['bad_input','not_found'].includes(e.code));
@@ -120,7 +123,7 @@ test('retirement validates typed inputs and checks owner statements at the Ask b
   const good = await s.retirement('target',{ withdrawalRate:rate(0.04) },{ ...s.ctx,channel:'ask',ownerStatements:()=>['4 percent'] });
   assert.ok(good.target.value > 0);
   assert.ok(server.names.includes('retirement'));
-  assert.match(instructions,/Comparisons by account type.*where tax shows up.*never say which to choose/);
+  assert.match(instructions,/Compare tax and access, never which to choose/);
 });
 
 test('C6 scripted questions run through Ask with validated calls, grounding and no paid engine',async () => {

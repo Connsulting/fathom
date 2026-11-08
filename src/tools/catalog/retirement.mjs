@@ -20,9 +20,9 @@ const gap = message => ({ code:'missing_fact', message });
 const latest = dates => dates.filter(Boolean).sort().at(-1) ?? null;
 const isoDate = d => typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d) && Number.isFinite(Date.parse(d)) && new Date(d).toISOString().slice(0,10) === d;
 const packRef = r => ({ packId:r.pack,entryId:r.entry });
-const assumption = { type:'object',properties:{ value:{type:'number'},source:{type:'string',enum:['owner','preference','fact','default']},evidence:{type:'string'},factKey:{type:'string'},preferenceId:{type:'string'},note:{type:'string',maxLength:200} },required:['value','source'],additionalProperties:false };
-const operand = { type:'object',properties:{ ref:{type:'object'},assumption:{type:'object'},expr:{type:'object'} },additionalProperties:false };
-const inputSchema = { type:'object',properties:{ ...assumption.properties,...operand.properties,note:{type:'string'} },additionalProperties:false };
+const assumption = { type:'object',properties:{ value:{},source:{},evidence:{},factKey:{},preferenceId:{},note:{} },required:['value','source'],additionalProperties:false };
+const operand = { type:'object',properties:{ ref:{},assumption:{},expr:{} },additionalProperties:false };
+const inputSchema = { type:'object',properties:{ ...assumption.properties,...operand.properties },additionalProperties:false };
 const choice = values => ({type:'string',enum:values});
 const treatments = ['pretax','roth','roth_ira','roth_401k','taxable','hsa','cash'];
 
@@ -252,10 +252,10 @@ const params = {
   after_tax:{accounts:accountIds,kinds:accountIds,hypothetical:{type:'array',minItems:1,maxItems:10,items:{type:'object',properties:{treatment:choice(treatments),value:assumption,basis:assumption,contributions:assumption},required:['treatment','value'],additionalProperties:false}},ordinaryRate:inputSchema,capitalGainsRate:inputSchema,stateRate:inputSchema},
 };
 export const operations = [
-  ['target',target,[],'How much invested is enough, how far away, when','Independence target, investment gap and savings projection.'],
-  ['growth',growth,['solve','balance'],'Growth, months to a target, saving needed by a date','Solve future balance, months to target or monthly savings needed.'],
-  ['after_tax',afterTax,['ordinaryRate','capitalGainsRate','stateRate'],'After-tax value by account type','Withdrawal tax by treatment with explicit rates and missing-basis gaps.'],
+  ['target',target,[],'Target and date','Independence target, gap and date.'],
+  ['growth',growth,['solve','balance'],'Growth','Future balance, months or required savings.'],
+  ['after_tax',afterTax,['ordinaryRate','capitalGainsRate','stateRate'],'After-tax value','After-tax values by treatment; unknown basis stays unavailable.'],
 ].map(([name,handler,required,route,summary])=>({tool:'retirement',name,scope:'read',referenceable:true,params:params[name],required,route,summary,routes:[],
   async handler(args,ctx) { return bounded(bindFigures(await handler(args,ctx),'retirement',{operation:name,...args})); } }));
 
-export const rules = ['Explain, do not advise on securities. Comparisons by account type describe where tax shows up and when money can come out; they never say which to choose.'];
+export const rules = ['Compare tax and access, never which to choose.'];

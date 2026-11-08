@@ -90,6 +90,37 @@ export function updateGoal(db, id, fields, { now, clock, onWrite } = {}) {
   });
 }
 
+function goalRow(db, id) {
+  const row = typeof id === 'string' ? db.prepare('SELECT * FROM goals WHERE id = ?').get(id) : null;
+  if (!row) throw new ToolError('not_found', 'no such goal');
+  return row;
+}
+
+export function archiveGoal(db, id, { archived = true, now, clock, onWrite } = {}) {
+  if (typeof archived !== 'boolean') throw new ToolError('bad_input', 'archived must be true or false');
+  return tx(db, () => {
+    const before = goalRow(db, id);
+    if (archived) db.prepare('UPDATE goals SET archived_at = ?, updated_at = ? WHERE id = ?').run(before.archived_at || now, now, id);
+    else {
+      db.prepare('UPDATE goals SET archived_at = NULL, done_at = NULL, updated_at = ? WHERE id = ?').run(now, id);
+      adoptIn(db, { now, clock, only: id });
+    }
+    const after = goalRow(db, id);
+    onWrite?.(before, after);
+    return after;
+  });
+}
+
+export function deleteGoal(db, id, { ownerOnly = false, onWrite } = {}) {
+  return tx(db, () => {
+    const before = goalRow(db, id);
+    if (ownerOnly && before.origin !== 'owner') throw new ToolError('conflict', 'only your own goals can be deleted with this tool');
+    db.prepare('DELETE FROM goals WHERE id = ?').run(id);
+    onWrite?.(before, null);
+    return before;
+  });
+}
+
 // ---------------------------------------------------------------- adopted targets
 // Fathom sets a suggested target by itself (src/suggest/build.mjs). The goal def records it as
 // adopted = {at, previous: {target, targetDate, track}, figure, kept?}: previous is what the owner
@@ -157,12 +188,14 @@ function adoptIn(db, { now, clock, only = null }) {
 }
 
 // Undo: the goal's values from before Fathom set its target, and the suggestion declined.
-export function undoAdoption(db, id, { now } = {}) {
+export function undoAdoption(db, id, { now, onWrite } = {}) {
   return tx(db, () => {
     const row = db.prepare('SELECT * FROM goals WHERE id = ?').get(id);
     if (!row) throw new ToolError('not_found', 'no such goal');
     const previous = parse(row.def, {});
     if (!previous.adopted) throw new ToolError('conflict', 'Fathom did not set this target, so there is nothing to undo');
+    const setting = () => db.prepare('SELECT * FROM settings WHERE key = ?').get(SUGGEST_SETTING) ?? null;
+    const before = { goal: row, setting: setting() };
     const p = previous.adopted.previous || {};
     // A date or tracking the owner changed after adoption stays theirs.
     const kept = Array.isArray(previous.adopted.kept) ? previous.adopted.kept : [];
@@ -172,6 +205,8 @@ export function undoAdoption(db, id, { now } = {}) {
     for (const k of ['target', 'targetDate', 'track']) if (def[k] === null) delete def[k];
     writeDef(db, row, previous, def, now);
     declineSuggestion(db, id);
-    return db.prepare('SELECT * FROM goals WHERE id = ?').get(id);
+    const after = db.prepare('SELECT * FROM goals WHERE id = ?').get(id);
+    onWrite?.(before, { goal: after, setting: setting() });
+    return after;
   });
 }
