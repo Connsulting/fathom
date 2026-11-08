@@ -610,6 +610,9 @@ function workList() {
 
 const unique = list => [...new Set(list.filter(Boolean))];
 const plain = (scenario, s) => resolveTokens(scenario, s, false);
+const orderedArgs = value => Array.isArray(value) ? value.map(orderedArgs)
+  : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, orderedArgs(value[key])])) : value;
+const readIdentity = ({ name, args }) => JSON.stringify([name, orderedArgs(args ?? {})]);
 
 function noticeReply(text) {
   return { paragraphs: [text], refs: [], notice: true };
@@ -680,13 +683,19 @@ export function createLiveAnswerer({ engine, packs, root, onRead } = {}) {
     stream.progress(PROGRESS_START);
     work.step(PROGRESS_START);
     const summary = await read('household', { operation: 'summary' }, toolCtx(db, now));
+    const sourceReads = [{ name: 'household', args: { operation: 'summary' }, result: summary },
+      ...(context?.recommendation ? [{ name: 'recommendations', args: { operation: 'detail', id: context.recommendation.id }, result: context.recommendation }] : [])];
     const active = activeManifestPacks(db, packs);
     const packIds = active.map(a => a.pack.id).sort();
     const packContextText = packContext(active.map(({ pack }) => ({ pack, status: 'active' })));
     const prompt = buildChatPrompt({ packContextText, summary, context, history, question, today: scenario.meta && scenario.meta.clock });
     prompt.systemDynamic += '\n<household_preferences>\n' + JSON.stringify(listPreferences(db)) + '\n</household_preferences>';
     const writes = !!actionContext?.actorId;
-    const offered = writes ? proposalTools(REGISTRY.filter(t => !t.mcpOnly)) : REGISTRY.filter(t => !t.mcpOnly && t.kind === 'read');
+    const available = writes ? proposalTools(REGISTRY.filter(t => !t.mcpOnly)) : REGISTRY.filter(t => !t.mcpOnly && t.kind === 'read');
+    const offered = available.map(tool => tool.kind !== 'read' ? tool : { ...tool, async handler(args, ctx) {
+      const cached = sourceReads.find(r => readIdentity(r) === readIdentity({ name: tool.name, args }));
+      return cached ? structuredClone(cached.result) : tool.handler(args, ctx);
+    } });
     if (writes) prompt.system += '\n\n' + PROPOSE_RULE;
     // The one operation this turn may propose (provenance.pendingAction), recorded by a propose call.
     let pendingAction = null;
@@ -719,8 +728,6 @@ export function createLiveAnswerer({ engine, packs, root, onRead } = {}) {
     const ground = async (res, toolResults) => groundAnswer(textOf(res),
       { scenario, toolResults, data, dataLabels, accountLabels: await labelsFor(toolResults) });
     const figures = Object.fromEntries(Object.entries(scenario.fig || {}).map(([key, f]) => [key, f.v]));
-    const sourceReads = [{ name: 'household', args: { operation: 'summary' }, result: summary },
-      ...(context?.recommendation ? [{ name: 'recommendations', args: { operation: 'detail', id: context.recommendation.id }, result: context.recommendation }] : [])];
     const moreDetail = /\b(?:(?:more|greater) detail|in detail|detailed (?:answer|explanation|breakdown)|(?:explain|walk me through) (?:it |this )?(?:fully|thoroughly|step by step))\b/i.test(question);
     const disciplineOf = (res, toolResults, g) => {
       const check = checkAnswerDiscipline(textOf(res), [...sourceReads, ...toolResults],
@@ -776,6 +783,14 @@ export function createLiveAnswerer({ engine, packs, root, onRead } = {}) {
     const paragraphs = renderAnswer(text, grounding.violations, grounding.literals);
     if (!paragraphs.length) return noticeReply(NOTICES.modelError);
     const lower = text.toLowerCase();
+    const seenReads = new Set();
+    const sources = [...sourceReads, ...toolResults].filter(r => {
+      if (getTool(r.name)?.kind !== 'read') return true;
+      const key = JSON.stringify([readIdentity(r), !!r.isError]);
+      if (seenReads.has(key)) return false;
+      seenReads.add(key);
+      return true;
+    });
     return {
       paragraphs,
       refs: unique([...baseRefs, ...recReads]),
@@ -783,7 +798,7 @@ export function createLiveAnswerer({ engine, packs, root, onRead } = {}) {
         ...(actionContext?.turnId ? { actionTurn: actionContext.turnId } : {}),
         engine: engine.mode,
         model: chosen.model,
-        tools: toolResults.map(r => ({ name: r.name, args: r.args ?? {}, ...(r.isError ? { isError: true, result: r.result } : {}) })),
+        tools: sources.map(r => ({ name: r.name, args: r.args ?? {}, ...(r.isError ? { isError: true, result: r.result } : {}) })),
         figures: grounding.figureKeys,
         packIds,
         packEntries: unique([...active.flatMap(({ pack }) => pack.entries.map(e => e.title)),
