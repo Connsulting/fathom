@@ -20,7 +20,7 @@ test('catalog validates at least thirty cases and all question families', async 
   assert.equal(cases.find(c => c.id === 'spending-annual-exclusions').expectedFail, undefined);
   for (const id of ['spending-portfolio-withdrawal']) {
     const c = cases.find(c => c.id === id);
-    assert.ok(c.expectedFail.missingOperations.length);
+    assert.equal(c.expectedFail, undefined);
     assert.ok(c.turns[0].expected.length);
   }
   for (const c of cases) for (const turn of c.turns) {

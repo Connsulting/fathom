@@ -194,7 +194,7 @@ test('C4 eval scripts call valid operations', async (t) => {
       const frames = await script({ turn, db: store.db, clock: '2026-11-05' });
       assert.ok(frames[0].toolCalls.length, c.id);
       for (const call of frames[0].toolCalls)
-        await callTool(call.name, call.args, { db: store.db, dataDir: store.root, clock: '2026-11-05' });
+        await callTool(call.name, call.args, { db: store.db, dataDir: store.root, clock: '2026-11-05', channel: 'ask', ownerStatements: () => [turn.question] });
     }
   }
 });
