@@ -28,7 +28,7 @@ async function setup() {
   return { db, now, actorId: 'person-a', household, services, channel: 'mcp' };
 }
 async function client(ctx, scopes = SCOPES) {
-  const server = createToolServer({ scopes, ctx, authorize: () => true });
+  const server = createToolServer({ scopes, ctx, authorize: () => true, runTool: fn => fn() });
   const c = new Client({ name: 'synthetic-test', version: '1' });
   const [a,b] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(a), c.connect(b)]);

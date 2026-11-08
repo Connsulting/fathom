@@ -84,6 +84,7 @@ test('disconnecting an in-flight MCP tool cannot leak its request or abandon its
     const status = await f.A.admin.client.get(`/api/household/backups/${queued.json.operationId}/status`);
     assert.equal(status.json.status, 'done', status.text);
     assert.equal(f.platform.prepare('SELECT status FROM households WHERE id = ?').get(f.A.id).status, 'active');
+    assert.equal(f.context(f.A.id).db.prepare("SELECT count(*) AS n FROM action_receipts WHERE scope = 'write:imports' AND json_extract(after_state, '$.status') = 'built'").get().n, 1);
   } finally {
     clearTimeout(timer); response.open(); client?.destroy();
     if (f && ctx && !finished) f.server.app.runtimes.release(ctx);
