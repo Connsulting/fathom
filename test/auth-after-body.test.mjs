@@ -66,7 +66,7 @@ function refuse(r, status) {
   assert.match(r.headers['cache-control'], /no-store/);
 }
 async function mutate(f, reason) {
-  if (reason === 'revocation') f.app.keys.revoke(f.key.record.id, { householdId: f.householdId });
+  if (reason === 'revocation') await f.app.keys.revoke(f.key.record.id, { householdId: f.householdId });
   else if (reason === 'session revocation') await f.store.revokeSession(f.session.token);
   else if (reason === 'membership removal') {
     await f.platform.prepare("UPDATE household_memberships SET status = 'removed' WHERE user_id = ? AND household_id = ?").run(f.session.user.id, f.householdId);

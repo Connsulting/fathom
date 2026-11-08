@@ -31,7 +31,7 @@ const GENERIC = new Set([
   'error', 'warn', 'info', 'debug', 'abort', 'destroy', 'pipe', 'setHeader', 'writeHead', 'listen',
 ]);
 // Guard and liveness callbacks a context or principal carries.
-export const CHECKS = /^(check|isCurrent|isOn|monthSpendUsd|funded|enabled|allowed|held|live|authorize\w*|authenticate\w*|require\w*|admit\w*|reserve\w*|verify\w*|membership|session|identity\w*|servedMember|servedAdmin|isOperator|creatorActive|outboundGuard|guard)$/;
+export const CHECKS = /^(check|isCurrent|isOn|monthSpendUsd|admission|funded|enabled|allowed|held|live|authorize\w*|authenticate\w*|require\w*|admit\w*|reserve\w*|verify\w*|membership|session|identity\w*|servedMember|servedAdmin|isOperator|creatorActive|outboundGuard|guard)$/;
 export const ARRAY_CALLBACKS = new Set(['map', 'filter', 'forEach', 'some', 'every', 'find', 'findIndex', 'flatMap', 'reduce']);
 // Callees that consume a Promise returned by their callback.
 const PROMISE_AWARE = new Set(['test', 'it', 'describe', 'before', 'after', 'beforeEach', 'afterEach', 'then', 'catch', 'finally', 'step', 'all', 'allSettled', 'race', 'any', 'waitFor', 'run', 'withResolvers', 'route', 'expect', 'poll', 'mock']);

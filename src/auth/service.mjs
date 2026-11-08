@@ -10,6 +10,7 @@ import { readCookie, setCookie, SESSION_COOKIE, CEREMONY_COOKIE } from './cookie
 import { createClientAddressResolver } from './client-ip.mjs';
 import { createHouseholdStorage } from '../platform/db.mjs';
 import { mapSeries } from '../shared/series.mjs';
+import { currentHandle } from '../storage/index.mjs';
 
 const badVerification = () => new HttpError(400, 'passkey verification failed');
 const expiredLink = () => new HttpError(410, 'link expired or already used');
@@ -37,7 +38,8 @@ function passkeyName(value) {
 // operator route create a provisioned household's storage (createHouseholdStorage).
 export async function createAuthService({ platform, config, transport, secrets = null, now = () => Date.now() }) {
   if (!platform) throw new TypeError('createAuthService needs the platform database');
-  const db = platform;
+  // Statements follow the caller's open platform transaction, if any.
+  const db = { prepare: text => currentHandle(platform).prepare(text) };
   const store = createAuthStore(platform, { now });
   const clientAddress = createClientAddressResolver(config.trustedProxies ?? []);
   const demo = (await store.servedHousehold())?.mode === 'demo';
@@ -240,7 +242,7 @@ export async function createAuthService({ platform, config, transport, secrets =
       } catch { throw badVerification(); }
       if (!verified.verified || !verified.registrationInfo?.userVerified) throw badVerification();
       const credential = verified.registrationInfo.credential;
-      const result = await store.transaction(async (store) => {
+      const result = await store.transaction(async () => {
         freshChallenge(challenge);
         const fresh = await recheckRegistration(req, body, context);
         if (await db.prepare('SELECT 1 FROM passkeys WHERE id = ?').get(credential.id)) throw badVerification();
@@ -302,7 +304,7 @@ export async function createAuthService({ platform, config, transport, secrets =
           credential: { id: credential.id, publicKey: credential.public_key, counter: credential.counter, transports: JSON.parse(credential.transports) } });
       } catch { throw badVerification(); }
       if (!verified.verified || !verified.authenticationInfo?.userVerified) throw badVerification();
-      const result = await store.transaction(async (store) => {
+      const result = await store.transaction(async () => {
         freshChallenge(challenge);
         const current = await db.prepare('SELECT * FROM passkeys WHERE id = ?').get(credential.id);
         const fresh = await store.userRow(user.id);
@@ -333,7 +335,7 @@ export async function createAuthService({ platform, config, transport, secrets =
       const user = await requireUser(req);
       const session = currentSession(req);
       const ceremony = readCookie(req, CEREMONY_COOKIE);
-      await store.transaction(async (store) => {
+      await store.transaction(async () => {
         await store.revokeSession(session);
         await store.clearAddPasskey(user.id);
         await store.revokeChallenge(ceremony);

@@ -33,7 +33,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     await store.sweep();
     const household = await servedHousehold(opened.platform);
     if (!household || household.status === 'deleted') throw new Error();
-    issued = await store.transaction(async (store) => {
+    issued = await store.transaction(async () => {
       const hh = household.id;
       const enrolled = await someSeries((await store.listPeople(hh)), async person => person.enrolledAt !== null && (await store.membership(person.id, hh))?.status === 'active');
       if (enrolled) throw new Error();

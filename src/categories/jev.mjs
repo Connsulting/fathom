@@ -57,7 +57,7 @@ export async function createJev({ keyFile = process.env.FATHOM_TYPESAFE_KEY_FILE
     }
     for (let attempt=0; attempt<=retries; attempt++) {
       // Admission runs before every dispatch, retries included: a refusal code stops the call unsent.
-      const refused=admit();
+      const refused=await admit();
       if (refused!=null) throw fail(typeof refused==='string' && refused ? refused : 'jev_refused');
       const reservedCost=reserve*JEV_INPUT_USD, timestamp=now().toISOString();
       const monthSpend=await ledger?.monthSpendUsd(timestamp.slice(0,7)) ?? 0;
@@ -70,7 +70,7 @@ export async function createJev({ keyFile = process.env.FATHOM_TYPESAFE_KEY_FILE
           if (complete) {
             const result = await complete({ purpose: 'categorize', messages: [{ role: 'user', content: 'Choose only from the supplied options.' }],
               choices: qs, maxTokens: 4096, budget: { maxCostUsd: maxCostUsd - (costUsd - reservedCost), timeoutMs },
-              beforeDispatch: () => { const code = admit(); if (code != null) throw fail(code); } });
+              beforeDispatch: async () => { const code = await admit(); if (code != null) throw fail(code); } });
             model = result.model;
             return { model: JEV_MODEL, answers: Object.fromEntries(result.choices.map((a, i) => [keys[i], { ...a, type: 'choice' }])),
               usage: { input_tokens: result.accounting?.tokens?.input_tokens, output_tokens: result.accounting?.tokens?.output_tokens },

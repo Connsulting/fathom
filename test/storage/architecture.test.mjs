@@ -48,6 +48,20 @@ function problems(files) {
       out.push(`${rel(c.mod.file)}:${line(c.mod, c.node.start)} ${how} ${c.mod.src.slice(c.node.start, Math.min(c.node.end, c.node.start + 60)).replace(/\s+/g, ' ')}`);
     }
   }
+  // A guard reached through an option or callback the graph cannot resolve is still a guard: a call
+  // named like one must be awaited or returned unless every resolved definition is synchronous.
+  const byName = new Map();
+  for (const fn of g.fns) for (const n of new Set([...fn.names, fn.method].filter(Boolean))) byName.set(n, [...(byName.get(n) ?? []), fn]);
+  for (const c of g.calls) {
+    if (c.reaches) continue;
+    const callee = g.unwrap(c.node.callee);
+    const name = callee.type === 'Identifier' ? callee.name : callee.type === 'MemberExpression' && !callee.computed ? g.propName(callee.property) : null;
+    if (!name || name === 'require' || !GUARDS.test(name)) continue;
+    const defs = c.targets.length ? c.targets : byName.get(name) ?? [];
+    if (defs.length && defs.every(t => !t.async)) continue;
+    const how = consumption(c);
+    if (!['await', 'return'].includes(how)) out.push(`${rel(c.mod.file)}:${line(c.mod, c.node.start)} ${how} guard ${name}()`);
+  }
   return { g, out };
 }
 
@@ -98,7 +112,7 @@ test('every storage-reaching function is async and every call of one is consumed
   assert.deepEqual(out, []);
 });
 
-test('the check rejects an un-awaited authorization and admission call', () => {
+test('the check rejects an un-awaited authorization and admission call, including one passed as an option', () => {
   const dir = mkdtempSync(join(ROOT, 'test', 'storage', '.arch-'));
   try {
     const store = join(dir, 'store.mjs');
@@ -123,10 +137,13 @@ export async function fine(db, id) {
   await requireMember(db, id);
   return admitRound(db, { maxCostUsd: 1 });
 }
+export async function viaOption({ admit }) {
+  return admit() ? 'allowed' : 'refused';
+}
 `);
     const { out } = problems([rel(store), rel(guard)]);
     const at = out.map(o => o.replace(/^.*guard\.mjs:/, '').split(' ').slice(0, 2).join(' '));
-    assert.deepEqual(at, ['3 floating', '4 condition', '5 value']);
+    assert.deepEqual(at, ['3 floating', '4 condition', '5 value', '13 condition']);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

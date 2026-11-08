@@ -72,7 +72,7 @@ test('each household\'s model requests carry only its own stored context', T, as
   for (const [key, client, other] of [['A', two.A.client, 'B'], ['B', two.B.client, 'A']]) {
     const from = emulator.requests.length;
     const message = await ask(client, `Synthetic ${key === 'A' ? 'alpha' : 'bravo'} isolation question`);
-    assert.ok(!message.notice, `${key} answered`);
+    assert.ok(!message.notice, `${key} answered: ${message.text}`);
     slices[key] = emulator.requests.slice(from);
     const chats = chatRequests(emulator, from);
     assert.ok(chats.length >= 1, `${key} made a chat round`);

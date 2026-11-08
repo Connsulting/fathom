@@ -211,8 +211,8 @@ export async function resolvePending(db, engine, { now = new Date().toISOString(
     return Number.isFinite(value) && value >= 0 ? value : 0;
   };
   const admission = async () => {
-    if (allowed() !== true) return 'engine_paused';
-    if (funded() !== true) return 'funding_unavailable';
+    if (await allowed() !== true) return 'engine_paused';
+    if (await funded() !== true) return 'funding_unavailable';
     if (!await engine?.isOn() || (await getSetting(db, 'engine', { on: true }))?.on === false) return 'engine_off';
     return null;
   };
