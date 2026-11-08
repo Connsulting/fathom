@@ -51,3 +51,11 @@ test('category scopes and proposal basis cover rules and transaction changes',as
  const basis=pending.basis;s.db.prepare("UPDATE transactions SET description='Different'").run();
  assert.notEqual(proposalBasis(s.db,'categorize',pending.scopes,pending.args),basis);
 });
+
+test('merchant count excludes individual corrections and repeat rules change no categories',async t=>{
+ const s=await setup(t),merchant=normalizeMerchant('Warehouse Club #1'),id=s.db.prepare('SELECT id FROM transactions ORDER BY id LIMIT 1').get().id;
+ await callTool('categorize',{operation:'transaction',transactionId:id,category:'Shopping'},s.ctx);
+ const r=await callTool('categorize',{operation:'merchant_rule',merchant,category:'Groceries'},s.ctx);
+ assert.equal(r.affected.value,1);assert.equal(resolveCategories(loadCategoryInputs(s.db)).get(id).category,'Shopping');
+ const again=await callTool('categorize',{operation:'merchant_rule',merchant,category:'Groceries'},s.ctx);assert.equal(again.affected.value,0);
+});

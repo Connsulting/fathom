@@ -61,14 +61,8 @@ const TOGGLE_NOTE = 'Recommendations update on the next planning run.';
 const paragraphs = list => wrapBlocks(Array.isArray(list) ? list : []);
 const nowIso = () => new Date().toISOString();
 
-export function scenarioOf(ctx) {
-  queueAccountPairs(ctx.db);
-  const scenario = buildScenario(ctx.db, { clock: ctx.config && ctx.config.clock, engineMode: ctx.config && ctx.config.engine, packs: ctx.packs || null });
-  scenario.live.publicDemo = ctx.config?.publicDemo === true;
-  // The signed-in user's own tour flag; false for a demo or any caller without an identity.
-  scenario.live.tourPending = tourPending(ctx);
-  return scenario;
-}
+export { scenarioOf } from './scenario.mjs';
+import { scenarioOf } from './scenario.mjs';
 
 // The current "today" for message timestamps: the scenario clock's date at the current time.
 const stamp = ctx => clockNow(ctx.db, ctx.config && ctx.config.clock);

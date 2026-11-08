@@ -2,30 +2,17 @@
 // Stores the owner's display name. Empty clears it, and the screens fall back to the default label.
 // The imported name, source_id and mirror are left alone.
 
-import { tx, parseJson } from '../store/db.mjs';
-import { validateDisplayName, accountLabel } from '../shared/account-label.mjs';
-import { HttpError } from './http.mjs';
-import { scenarioOf } from './handlers.mjs';
+import { accountLabel } from '../shared/account-label.mjs';
+import { scenarioOf } from './scenario.mjs';
 import { afterAnswer } from './ingest-handlers.mjs';
 import { accountNaming } from '../accounts/naming.mjs';
-import { setAccountAnswer, undoAccountAnswer, OWNER_OPTIONS, KIND_OPTIONS } from '../ingest/confirm.mjs';
-import { queueAccountPairs, mergePlan, manualMerge } from '../ingest/account-merge.mjs';
+import { accountOf as storedAccount, renameAccount, setAccountMask, restoreAccountMask, writeAccountAnswer, mergeAccountPair } from '../accounts/write.mjs';
+import { mergePlan } from '../ingest/account-merge.mjs';
 
 export function accountRename(ctx) {
-  const id = ctx.params?.id;
-  if (typeof id !== 'string' || !id) throw new HttpError(400, 'missing account');
-  const row = ctx.db.prepare('SELECT * FROM accounts WHERE id = ?').get(id);
-  if (!row) throw new HttpError(404, 'no such account');
-  const body = ctx.body && typeof ctx.body === 'object' ? ctx.body : {};
-  if (!Object.hasOwn(body, 'displayName')) throw new HttpError(400, 'display name is required');
-  const res = validateDisplayName(body.displayName);
-  if (!res.ok) throw new HttpError(400, res.error);
-  tx(ctx.db, () => {
-    ctx.db.prepare('UPDATE accounts SET display_name = ? WHERE id = ?').run(res.value, id);
-  });
+  const row = renameAccount(ctx.db, ctx.params?.id, ctx.body?.displayName);
   const scenario = scenarioOf(ctx);
-  const account = scenario.accounts.find((a) => a.id === id) || null;
-  return { scenario, account, label: accountNaming(ctx.db).label({ ...row, display_name: res.value }) };
+  return { scenario, account: scenario.accounts.find(a => a.id === row.id) || null, label: accountNaming(ctx.db).label(row) };
 }
 
 // POST /api/accounts/:id/mask  {mask: "NNNN"} or {undo: before} -> {scenario, account, before}
@@ -38,83 +25,32 @@ export function accountRename(ctx) {
 // GET  /api/accounts/:id/merge-candidates -> {items: [{id, label, inst, kind, mask, lastDataDate, mirror, plan, refused?}]}
 // POST /api/accounts/:id/merge {withId} -> {scenario, survivorId, itemId}; undo is POST /api/confirm/:itemId/reopen.
 
-function accountOf(ctx, id = ctx.params?.id) {
-  if (typeof id !== 'string' || !id) throw new HttpError(400, 'missing account');
-  const row = ctx.db.prepare('SELECT * FROM accounts WHERE id = ?').get(id);
-  if (!row) throw new HttpError(404, 'no such account');
-  return row;
-}
+const accountOf = (ctx, id = ctx.params?.id) => storedAccount(ctx.db, id);
 
 const bodyOf = (ctx) => (ctx.body && typeof ctx.body === 'object' && !Array.isArray(ctx.body) ? ctx.body : {});
 const withAccount = (scenario, id) => ({ scenario, account: scenario.accounts.find((a) => a.id === id) || null });
 
 export function accountMask(ctx) {
-  const row = accountOf(ctx);
-  const body = bodyOf(ctx);
-  if (Object.hasOwn(body, 'undo')) return undoAccountMask(ctx, row, body.undo);
-  const mask = body.mask;
-  if (typeof mask !== 'string' || !/^\d{4}$/.test(mask)) throw new HttpError(400, 'last 4 must be exactly four digits');
-  if ((row.mask != null && row.mask !== '') || String(row.identity ?? '').startsWith('simplefin:')) {
-    throw new HttpError(409, 'this account already has its last 4');
-  }
-  tx(ctx.db, () => {
-    ctx.db.prepare('UPDATE accounts SET mask = ? WHERE id = ?').run(mask, row.id);
-    queueAccountPairs(ctx.db);
-  });
-  // The receipt for Undo: the last 4 that was stored (an account only takes one while it has none).
-  return { ...withAccount(scenarioOf(ctx), row.id), before: { set: mask } };
-}
-
-// {undo: {set}} takes back the last 4 an earlier save stored. It is refused when that last 4 is no
-// longer the account's, when the bridge owns it, or when an answered Same account? question for the
-// account built on it. Pairs only the last 4 proposed are withdrawn with it.
-function undoAccountMask(ctx, row, undo) {
-  if (!undo || typeof undo !== 'object' || Array.isArray(undo) || typeof undo.set !== 'string' || !/^\d{4}$/.test(undo.set)) {
-    throw new HttpError(400, 'undo must be the before value an edit returned');
-  }
-  if (row.mask !== undo.set || String(row.identity ?? '').startsWith('simplefin:')) {
-    throw new HttpError(409, 'the last 4 changed since, so it cannot be undone');
-  }
-  const answered = ctx.db.prepare("SELECT context FROM confirm_items WHERE kind = 'account_match' AND status = 'answered' AND answer IS NOT 'superseded'").all()
-    .some((i) => { const c = parseJson(i.context, {}) || {}; return c.candidateId === row.id || c.ownId === row.id; });
-  if (answered) throw new HttpError(409, 'a later answer builds on this last 4, so it is final');
-  tx(ctx.db, () => {
-    ctx.db.prepare('UPDATE accounts SET mask = NULL WHERE id = ?').run(row.id);
-    queueAccountPairs(ctx.db);
-  });
-  return { ...withAccount(scenarioOf(ctx), row.id), before: null };
+  const row = accountOf(ctx), body = bodyOf(ctx);
+  const before = Object.hasOwn(body, 'undo') ? (restoreAccountMask(ctx.db, row.id, body.undo), null) : setAccountMask(ctx.db, row.id, body.mask);
+  return { ...withAccount(scenarioOf(ctx), row.id), before };
 }
 
 const nowIso = () => new Date().toISOString();
 
-function accountAnswer(ctx, kind, field, options) {
+function accountAnswer(ctx, field) {
   const row = accountOf(ctx);
-  const body = bodyOf(ctx);
-  let before = null;
-  let fn;
-  if (Object.hasOwn(body, 'undo')) {
-    const undo = body.undo;
-    if (!undo || typeof undo !== 'object' || Array.isArray(undo) || (undo.answer != null && typeof undo.answer !== 'string')) {
-      throw new HttpError(400, 'undo must be the before value an edit returned');
-    }
-    fn = () => undoAccountAnswer(ctx.db, kind, row.id, undo, { now: nowIso() });
-  } else {
-    const value = body[field];
-    if (typeof value !== 'string' || !options.some((o) => o.id === value)) {
-      throw new HttpError(400, `${field} must be one of ${options.map((o) => o.id).join(', ')}`);
-    }
-    fn = () => {
-      const out = setAccountAnswer(ctx.db, kind, row.id, value, { now: nowIso() });
-      before = out.before;
-      return out;
-    };
-  }
-  const out = afterAnswer(ctx, fn);
+  let before;
+  const out = afterAnswer(ctx, () => {
+    const result = writeAccountAnswer(ctx.db, row.id, field, bodyOf(ctx), { now: nowIso() });
+    before = result.before;
+    return result;
+  });
   return { ...withAccount(out.scenario, row.id), before };
 }
 
-export const accountOwner = (ctx) => accountAnswer(ctx, 'account_owner', 'owner', OWNER_OPTIONS);
-export const accountKind = (ctx) => accountAnswer(ctx, 'account_kind', 'kind', KIND_OPTIONS);
+export const accountOwner = (ctx) => accountAnswer(ctx, 'owner');
+export const accountKind = (ctx) => accountAnswer(ctx, 'kind');
 
 const lastDataDate = (db, id) => db.prepare(`SELECT max(d) AS d FROM (SELECT max(date) AS d FROM transactions WHERE account_id = ?1
   UNION ALL SELECT max(date) FROM balances WHERE account_id = ?1 UNION ALL SELECT max(as_of) FROM positions WHERE account_id = ?1)`).get(id).d || null;
@@ -135,18 +71,11 @@ export function accountMergeCandidates(ctx) {
 }
 
 export function accountMerge(ctx) {
-  const row = accountOf(ctx);
-  const withId = bodyOf(ctx).withId;
-  if (typeof withId !== 'string' || !withId) throw new HttpError(400, 'withId must name the other account');
-  if (withId === row.id) throw new HttpError(400, 'an account cannot be merged with itself');
-  accountOf(ctx, withId);
-  const plan = mergePlan(ctx.db, row.id, withId);
-  if (plan.refused) throw new HttpError(409, plan.refused);
-  let survivorId = null;
+  let survivorId;
   const out = afterAnswer(ctx, () => {
-    const merged = manualMerge(ctx.db, row.id, withId, { now: nowIso() });
-    survivorId = merged.survivorId;
-    return merged;
+    const result = mergeAccountPair(ctx.db, ctx.params?.id, bodyOf(ctx).withId, { now: nowIso() });
+    survivorId = result.survivorId;
+    return result;
   });
   return { scenario: out.scenario, survivorId, itemId: out.item.id };
 }

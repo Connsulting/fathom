@@ -38,10 +38,20 @@ export const allowedScopes = scopes => (Array.isArray(scopes) ? WRITE_SCOPES.fil
 const TABLES = { 'write:goals': ['goals', 'id'], 'write:facts': ['facts', 'key'], 'write:recs': ['recs', 'id'],
   'write:steps': ['recs', 'id'], 'write:preferences': ['preferences', 'id'] };
 
+const DOMAIN_TABLES = {
+  'write:accounts': ['accounts','transactions','balances','positions','simplefin_accounts','simplefin_snapshots','confirm_items','confirm_undo','confirm_auto','confirm_auto_declined','ingest_epoch','sources','superseded_rows','transaction_category_corrections','transaction_category_imports','transaction_category_guesses'],
+  'write:categories': ['accounts','transactions','transaction_category_corrections','category_merchant_rules','category_source_rules','confirm_items','confirm_undo','confirm_auto'],
+  'write:confirm': ['accounts','transactions','balances','positions','documents','tax_payments','pnl_lines','sources','files','confirm_items','confirm_undo','confirm_auto','confirm_auto_declined','ingest_epoch','held_facts','entity_aliases','category_source_rules','category_merchant_rules','transaction_category_corrections','yearend_marks'],
+};
+
 export function proposalBasis(db, tool, scopes, args = {}) {
   const parts = [];
   if (tool === 'undo') parts.push(['action_receipts', db.prepare('SELECT * FROM action_receipts WHERE id = ?').all(args.id)]);
   else for (const scope of scopes) {
+    if (DOMAIN_TABLES[scope]) {
+      for (const table of DOMAIN_TABLES[scope]) parts.push([table, db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()]);
+      continue;
+    }
     const [table, pk] = TABLES[scope];
     if (table === 'goals') continue;
     const target = args[pk] ?? args.id ?? args.key;
@@ -49,6 +59,7 @@ export function proposalBasis(db, tool, scopes, args = {}) {
       ? db.prepare(`SELECT * FROM ${table} WHERE ${pk} = ?`).all(target)
       : db.prepare(`SELECT * FROM ${table} ORDER BY ${pk}`).all()]);
   }
+  if (args.recId) parts.push(['recs', db.prepare('SELECT * FROM recs WHERE id=?').all(args.recId)]);
   // Sources a proposed value may come from: goal notes and targets, facts and stored figures.
   parts.push(['goals', db.prepare('SELECT id, def, origin, archived_at, done_at FROM goals ORDER BY id').all()]);
   parts.push(['facts', db.prepare('SELECT * FROM facts ORDER BY key').all()]);
@@ -135,7 +146,7 @@ export function claimProposal(db, { key, id, decision, scopes, at }) {
     if (decision === 'confirm') {
       const latest = db.prepare('SELECT max(id) AS id FROM messages WHERE conversation_key = ?').get(key).id;
       status = latest === row.id && !refusal(pending, scopes) && Array.isArray(pending.scopes)
-        && pending.scopes.every(s => pending.tool === 'undo' ? WRITE_SCOPES.includes(s) : TABLES[s])
+        && pending.scopes.every(s => pending.tool === 'undo' ? WRITE_SCOPES.includes(s) : TABLES[s] || DOMAIN_TABLES[s])
         && pending.basis === proposalBasis(db, pending.tool, pending.scopes, pending.args ?? {}) ? 'confirmed' : 'stale';
     }
     markProposal(db, row.id, status, at);
@@ -149,5 +160,7 @@ export function claimProposal(db, { key, id, decision, scopes, at }) {
 export async function executeProposal(pending, ctx) {
   const reason = refusal(pending, ctx.scopes);
   if (reason) throw new ToolError('forbidden', reason);
-  return callTool(pending.tool, { operation: pending.operation, ...(pending.args ?? {}) }, ctx);
+  const args = { operation: pending.operation, ...(pending.args ?? {}) };
+  if (pending.tool === 'update_account' && pending.operation === 'merge' && isExplicitYes(ctx.ownerText)) args.evidence = ctx.ownerText;
+  return callTool(pending.tool, args, ctx);
 }

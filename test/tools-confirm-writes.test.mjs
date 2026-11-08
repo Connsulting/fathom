@@ -66,7 +66,7 @@ test('rec_questions checks question keys and evidence, matches route values and 
 });
 
 test('yearend mark and clear match route validation and undo prior reasons',async t=>{
- const s=await setup(t),year=2031,key=yearendChecklist(s.db,{year,clock:'2032-03-10'}).items[0].key;
+ const s=await setup(t);s.db.prepare("INSERT INTO transactions (account_id,date,amount,description) VALUES ('manual','2031-05-01',20,'Interest')").run();const year=2031,key=yearendChecklist(s.db,{year,clock:'2032-03-10'}).items[0].key;
  const args={operation:'yearend_mark',year,itemKey:key,reason:'Account closed'};
  const r=await callTool('answer',args,s.ctx);assert.deepEqual(r.item,{key,marked:true,reason:'Account closed'});
  const clear=await callTool('answer',{...args,reason:null},s.ctx);assert.equal(clear.item.marked,false);
