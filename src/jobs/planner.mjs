@@ -88,8 +88,7 @@ async function plan(db, engine, { clock, runId, packDirs }) {
     else stored[key] = { ...stored[key], value };
   }
   const owner = ownerFactsOf(stored);
-  const storedValues = Object.fromEntries(Object.entries(stored).map(([k, r]) => [k, r.value]));
-  const entities = resolveEntities(data, storedValues);
+  const entities = resolveEntities(data, recFacts.values);
 
   // Facts from the data, then figures over the merged facts, then the facts read off figures.
   const dataFacts = deriveFacts(data, { entities });

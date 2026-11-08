@@ -133,7 +133,7 @@ test('SUM1b amendment: two unknown positive categories keep one classification q
   db.prepare("UPDATE pnl_lines SET period='2025-01' WHERE entity=?").run(tabs[1][0]);
   await planRun(db);
   assert.ok(!getFacts(db)['business.entities'].some(e => e.name === tabs[1][0]));
-  assert.equal(questions(db).length, 1);
+  assert.equal(questions(db).length, 0, 'a classification step clears when the ledger leaves the current business inputs');
 });
 
 test('SUM1b amendment: transfer buckets and transfer-name variants do not consume the unknown-income allowance', async t => {
