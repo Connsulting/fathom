@@ -119,8 +119,11 @@ async function plan(db, engine, { clock, runId, packDirs }) {
     assumptions: recFacts.assumptions, info: computed.info, freshness: data.freshness, warnings: [...warnings], entities, goals: prefs.goals, curve: prefs.curve,
   };
   const results = evaluateCatalog(ctx);
-  // The missing-data codes still open after this run: a step naming a code no longer here reads done.
-  const openData = [...new Set(missingItems(ctx).map(i => i.code))];
+  // The data codes still open after this run: every missing-data item and every verifiable step a
+  // trigger emitted (a trigger emits one only while its gap holds). A step naming a code no longer
+  // here reads done.
+  const openData = [...new Set([...missingItems(ctx).map(i => i.code),
+    ...results.filter(r => r.state === 'hit').flatMap(r => r.hit.rec.tasks || []).map(t => t.code).filter(c => typeof c === 'string')])];
 
   // Prose, outside the write transaction (it may call the engine).
   const recRows = new Map(db.prepare('SELECT id, def FROM recs').all().map(r => [r.id, r]));

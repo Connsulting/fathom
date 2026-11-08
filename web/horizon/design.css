@@ -358,6 +358,10 @@
 .d-horizon .h-step-undo { all: unset; cursor: pointer; font-size: 13px; color: var(--mu); padding: 4px 2px; }
 .d-horizon .h-step-undo:hover { color: var(--tx); text-decoration: underline; }
 .d-horizon .h-step-undo:focus-visible { outline: 2px solid var(--ac); outline-offset: 2px; border-radius: 4px; }
+.d-horizon .h-step-next { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line); font-size: 14px; color: var(--tx2); }
+.d-horizon .h-step-next-k { flex-basis: 100%; font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: var(--mu); }
+.d-horizon .h-step-next-k em { font-style: normal; text-transform: none; letter-spacing: 0; margin-left: 6px; font-family: var(--mono); }
+.d-horizon .h-step-next .h-step-t { flex: 1 1 200px; min-width: 0; }
 @media (max-width: 520px) {
   .d-horizon .h-step { flex-wrap: wrap; }
   .d-horizon .h-step-c { flex-basis: 100%; padding-left: 30px; }
