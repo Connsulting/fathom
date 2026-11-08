@@ -13,6 +13,7 @@ import { loadConfig } from '../../config.mjs';
 import { seedDemo } from '../../../demo/seed.mjs';
 import { createInstance } from '../../platform/db.mjs';
 import { createInstanceSecrets } from '../../platform/secrets.mjs';
+import { setAllocation } from '../../platform/model-budget.mjs';
 import { createHouseholdContext, FUNDING_SETTING } from '../../platform/runtime.mjs';
 import { createAuthStore } from '../../auth/store.mjs';
 import { createThread } from '../../api/threads.mjs';
@@ -22,7 +23,7 @@ export const SMOKE_QUESTION = 'How many of my recommendations need me right now?
 
 // The demo instance is a disposable one in a temp directory; its household context (engine, packs,
 // answerer) is built the way the server builds it (src/platform/runtime.mjs). Live mode needs the
-// instance funding authority, seeded here only in this disposable platform DB.
+// instance funding authority and a household allocation, seeded here only in this disposable platform DB.
 export async function runAskSmoke({ mode = 'fake', credentialFile = null } = {}) {
   const dataDir = await mkdtemp(join(tmpdir(), 'fathom-smoke-'));
   const env = { FATHOM_DATA: dataDir, FATHOM_ENGINE: mode };
@@ -40,6 +41,7 @@ export async function runAskSmoke({ mode = 'fake', credentialFile = null } = {})
   let household = null;
   try {
     createAuthStore(platform).setPlatformSetting(FUNDING_SETTING, 25);
+    setAllocation(platform, householdId, 25);
     household = createHouseholdContext({ householdId, mode: 'demo', db, config, platform, secrets });
     const lastId = db.prepare('SELECT coalesce(max(id), 0) AS id FROM spend_ledger').get().id;
     const { key } = createThread(db, clockNow(db));

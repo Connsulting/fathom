@@ -162,7 +162,9 @@ async function startPublicDemo(config, platform) {
   };
 }
 
-export async function startServer(config = loadConfig()) {
+// options.engineOptions ({ testTransport, fundingNow }) is programmatic only, for tests: the
+// `node src/server.mjs` entry passes none and no config or environment key sets it.
+export async function startServer(config = loadConfig(), { engineOptions = {} } = {}) {
   const { platform, mode, secrets } = openOrCreateInstance(config);
   if (config.publicDemo) return startPublicDemo(config, platform);
   let runtimes = null;
@@ -174,7 +176,7 @@ export async function startServer(config = loadConfig()) {
   try {
     const transport = createTransport(config, { outboxDir: join(config.dataDir, 'outbox') });
     const auth = createAuthService({ platform, config, transport, secrets });
-    runtimes = createRuntimeRegistry({ platform, config, secrets });
+    runtimes = createRuntimeRegistry({ platform, config, secrets, engineOptions });
     backfillMerged(runtimes);
     const keys = createKeyService({ platform, secret: () => secrets.mcpSecret(), creatorActive: auth.creatorActive });
     const mcp = createMcpHandler({ keys, runtimes, config });
