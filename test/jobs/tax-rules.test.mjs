@@ -785,6 +785,18 @@ describe('MG9 Virginia529', () => {
     return { db, info: computeFor(db).info };
   };
 
+  test('MG9: the accounts the planner names for the owner carry the shared account label, not the imported name', async () => {
+    const db = await S.store();
+    const id = accountIdByMask(db, MASKS.college);
+    db.prepare("UPDATE accounts SET display_name = 'Kid college fund' WHERE id = ?").run(id);
+    addFact(db, 'accounts.va529', { [id]: { virginiaPlan: true, ownerAge70Plus: true, carryforward: 0 } });
+    await plan(db);
+    assert.deepEqual(computeFor(db).info.va529.age70, ['Kid college fund'], 'an age-70 account is named by its label');
+    addFact(db, 'accounts.va529', { [id]: { virginiaPlan: true } });
+    await plan(db);
+    assert.deepEqual(computeFor(db).info.va529.missing, ['Kid college fund'], 'an account with answers missing is named by its label');
+  });
+
   test('MG9: an age-70 owner deducts this year\'s contributions plus carryforward in full', async () => {
     // Uncapped: 1,000 + 5,000 = 6,000. Baseline (capped, carryforward 0): min(4,000, 1,000) = 1,000.
     // Both Virginia taxable incomes are above 17,000, so tax.va.proj falls by 5,000 x 5.75% = 287.50.

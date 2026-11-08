@@ -463,8 +463,8 @@ export function computeFigures(data, facts, ctx) {
   const va529Deduction = cents(sum(college.map(c => c.deduction)));
   out.info.va529 = {
     accounts: college.length,
-    missing: college.filter(c => !c.complete).map(c => c.account.name),
-    age70: college.filter(c => c.age70).map(c => c.account.name),
+    missing: college.filter(c => !c.complete).map(c => accountLabel(c.account)),
+    age70: college.filter(c => c.age70).map(c => accountLabel(c.account)),
     eligible: college.filter(c => c.capped).length,
     age70Count: college.filter(c => c.age70).length,
     deduction: va529Deduction,
