@@ -428,9 +428,9 @@ const PLANNER = 'planner';
 // stale; the next planning run asks it again with the field.
 function factIsStale(db, item) {
   const current = db.prepare('SELECT value FROM facts WHERE key = ?').get(item.context.key);
-  if (item.context.src === PLANNER) {
-    if (!Object.hasOwn(item.context, 'stored') || !current) return true;
-    return canonicalJson(parseJson(current.value, null)) !== canonicalJson(item.context.stored);
+  if (item.context.src === PLANNER || item.context.src === 'ledger-confirm') {
+    if (!Object.hasOwn(item.context, 'stored') || (!current && item.context.src === PLANNER)) return true;
+    return canonicalJson(current ? parseJson(current.value, null) : null) !== canonicalJson(item.context.stored);
   }
   if (!current) return false;
   return canonicalJson(parseJson(current.value, null)) !== canonicalJson(item.context.value);
