@@ -65,7 +65,7 @@ export function recOutById(db, clock, id) {
 export function goalsForModel(db) {
   const scope = tokenScope(db);
   const fig = loadFigures(db);
-  const accounts = withLabelHints(db, db.prepare('SELECT * FROM accounts').all());
+  const accounts = withLabelHints(db, db.prepare('SELECT * FROM accounts WHERE archived_at IS NULL').all());
   // A done goal archives itself; the model still sees it, as done.
   return loadGoals(db, { fig, accounts }).filter(g => !g.archived || g.status === 'done').map(g => {
     const owner = g.origin === 'owner';

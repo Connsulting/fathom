@@ -63,7 +63,7 @@ export function trendLabels(db) {
 }
 
 export function buildSeries(db, clock) {
-  const accounts = db.prepare('SELECT id FROM accounts ORDER BY sort, id').all();
+  const accounts = db.prepare('SELECT id FROM accounts WHERE archived_at IS NULL ORDER BY sort, id').all();
   const labels = trendLabels(db);
   const stored = accounts.map(a => ({ a, values: monthlyValues(db, a.id, clock) })).filter(x => x.values.size);
   if (!stored.length) return {};
