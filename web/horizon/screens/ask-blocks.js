@@ -179,11 +179,15 @@ function topLevel(html) {
 }
 
 // The "What this leaves out" note: truncated reads first, then gaps, each with its fix control.
+const SHOWN = 7;
 function leftOutNote(entries) {
   if (!entries.length) return '';
   const ordered = [...entries.filter((e) => e.code === 'truncated'), ...entries.filter((e) => e.code !== 'truncated')];
   const line = (e) => `<p data-left-out-code="${K.esc(e.code)}">${K.esc(e.text)}${e.fix ? ' ' + gapControl(e.fix, K.esc) : ''}</p>`;
-  return `<div class="h-leftout" data-left-out role="note"><b>What this leaves out</b>${ordered.map(line).join('')}</div>`;
+  // Past SHOWN lines the rest fold into a disclosure, each still with its control.
+  const rest = ordered.slice(SHOWN);
+  const more = rest.length ? `<details class="h-leftout-more"><summary>${rest.length} more</summary>${rest.map(line).join('')}</details>` : '';
+  return `<div class="h-leftout" data-left-out role="note"><b>What this leaves out</b>${ordered.slice(0, SHOWN).map(line).join('')}${more}</div>`;
 }
 
 export function messageBodyHtml(m) {

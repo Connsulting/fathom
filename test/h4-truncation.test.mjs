@@ -167,10 +167,15 @@ test('H4-AC2 leftOutOf names each truncated result, skips errors and collapses r
   assert.equal(leftOutOf([tx, structuredClone(tx)]).length, 1, 'the same line once');
   const many = Array.from({ length: 12 }, (_, i) => ({ ...tx, result: { rows: [{ id: i }], total: 100 + i, truncated: true } }));
   assert.equal(leftOutOf(many).length, 12, 'every truncation is named');
-  // Past eight gaps, seven show and one line counts the rest; the truncation still leads.
-  const gaps = Array.from({ length: 10 }, (_, i) => ({ code: 'missing_fact', message: `Synthetic account ${i} has no balance on file.` }));
+  // Every gap is kept and the truncation leads; the note folds lines past seven into a disclosure,
+  // each folded line still with its text and control.
+  const gaps = Array.from({ length: 10 }, (_, i) => ({ code: 'stale_account', message: `Synthetic account ${i} has not updated recently.` }));
   const crowded = leftOutOf([tx, { name: 'accounts', args: {}, result: { gaps } }]);
   assert.equal(crowded[0].code, 'truncated', 'the truncation is listed first');
-  assert.equal(crowded.length, 9);
-  assert.deepEqual(crowded.at(-1), { code: 'more', text: '3 more gaps are not listed here.', fix: null });
+  assert.equal(crowded.length, 11, 'no gap is dropped');
+  const html = messageBodyHtml({ id: 'm3', html: '<p>x</p>', provenance: { leftOut: crowded } });
+  const folded = /<details class="h-leftout-more"><summary>4 more<\/summary>([\s\S]*?)<\/details>/.exec(html);
+  assert.ok(folded, `the rest fold into a disclosure: ${html}`);
+  assert.equal((folded[1].match(/data-tax-gap-fix/g) || []).length, 4, 'each folded gap keeps its control');
+  assert.ok(html.includes('Synthetic account 9 has not updated recently.'), 'the last gap is disclosed');
 });

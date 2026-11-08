@@ -217,6 +217,12 @@ test('H4-AC1a plainGap keeps a plain message, uses tax rules for a tax code, and
   assert.deepEqual(fromTax.fix, TAX_GAP_RULES.filing_status_assumed.fix);
   const keptTax = plainGap({ code: 'missing_fact', taxCode: 'filing_status_assumed', message: 'Filing status was assumed.' });
   assert.equal(keptTax.text, 'Filing status was assumed.');
+  // A stored tax gap keeps its employer and its own action instead of a rebuilt generic one.
+  const withEmployer = plainGap({ code: 'missing_fact', taxCode: 'paystub_ytd_missing', employer: 'Cedar Labs', message: 'Needs income.payrollYtd.' });
+  assert.match(withEmployer.fix.prompt, /Cedar Labs/, 'the prompt names the employer');
+  assert.match(withEmployer.text, /Cedar Labs/, 'the text names the employer');
+  const own = { screen: 'ask', key: 'income.payrollYtd', label: 'Enter year-to-date pay', prompt: 'Record my year-to-date gross pay for Birch Studio.' };
+  assert.deepEqual(plainGap({ code: 'missing_fact', taxCode: 'paystub_ytd_missing', action: own, message: 'x' }).fix, own, 'the gap action wins');
 
   for (const s of ['Needs accounts.planType.', 'missing_fact', 'Rows flagged uncategorized_rows.', 'See obligations.mortgage.balance'])
     assert.equal(hasInternalName(s), true, `internal: ${s}`);

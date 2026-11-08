@@ -83,8 +83,10 @@ export function plainGap(gap) {
   if (named) gap = { ...gap, fact: named, message: message.replaceAll(named, FACT_LABELS[named].replace(/^its /, 'the ')) };
   const own = gap.message && !hasInternalName(gap.message) ? gap.message : null;
   if (gap.taxCode && Object.hasOwn(TAX_GAP_RULES, String(gap.taxCode).split(':')[0])) {
-    const tax = taxGap(gap.taxCode);
-    return { code: gap.code, text: own ?? tax.message, fix: tax.action };
+    // The stored gap's own action and employer win; the rule only fills what the gap lacks.
+    const tax = taxGap(gap.taxCode, typeof gap.employer === 'string' && gap.employer ? { employer: gap.employer } : {});
+    const action = gap.action && typeof gap.action === 'object' ? gap.action : tax.action;
+    return { code: gap.code, text: own ?? tax.message, fix: action };
   }
   const rule = FIGURE_GAP_RULES[gap.code] ?? FIGURE_GAP_RULES.missing_fact;
   return { code: gap.code, text: own ?? rule.text, fix: (gap.fact && factFix(gap.fact)) || rule.fix };
