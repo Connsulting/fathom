@@ -117,7 +117,7 @@ test('every write scope lists undo and restores a receipt through MCP and Ask', 
         const transport = createEngine({ mode: 'fake' });
         let chats = 0;
         const engine = { mode: 'live', isOn: () => true, async call(request) {
-          if (request.purpose === 'title') return { text: 'Synthetic undo', toolResults: [] };
+          if (request.purpose === 'title') return { text: JSON.stringify({ title: 'Synthetic undo' }), toolResults: [] };
           chats++;
           const response = await transport.call({ ...request, fake: [
             { toolCalls: [{ name: 'undo', args: { operation: 'undo', id: r.id, propose: true } }] }, { text: 'Undo your change? Confirm below.' },
