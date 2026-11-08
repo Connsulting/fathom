@@ -261,8 +261,16 @@ required `operation` enum. The shared schema contains all parameters, and dispat
 parameter unused by the selected operation or a missing required parameter as `bad_input`.
 Each operation declares its scope, summary, routing line and API routes. Headers in
 `src/tools/tools.mjs` own purpose, progress and source labels. Generated routing and rules are
-shared by Ask and MCP instructions. `getTool`, `callTool`, `tools`, `parity`, `CAPABILITIES` and
-`instructions` expose the registry. There are no retired-name aliases.
+shared by Ask and MCP instructions, except for Ask-only routing and rules. `getTool`, `callTool`, `tools`, `parity`, `CAPABILITIES` and
+`instructions` expose the registry; `mcpInstructions` excludes Ask-only rules. There are no retired-name aliases.
+
+Ask offers the read-only `show` tool with `chart`, `table`, `compare` and `timeline` operations.
+Its sources must match successful reads from this answer, including a corrective retry's earlier
+attempt. A shared turn collector supplies those results to deterministic block validation and
+snapshot building. The message stores `provenance.blocks` and `blockNotes`; placement markers
+are removed before grounding and become paragraph offsets. Reopening draws stored snapshots
+without re-reading tools. Streaming markers show a preparation placeholder. MCP never lists or
+calls `show`, which is not referenceable by calculations or blocks.
 
 The twelve registered tools and their operations are shown below. Dot notation means a call to
 the tool before the dot with the `operation` after it; it is not a dotted MCP tool name.
@@ -393,8 +401,8 @@ secrets are read there.
 | `FATHOM_EMAIL_TRANSPORT` | `dev` | `dev`, `smtp`, `resend`, `postmark` or `agentmail` (see Email). |
 | `FATHOM_EMAIL_FROM` | unset (`dev` uses `fathom@example.invalid`) | Sender address; for `agentmail` the inbox id. Not with `FATHOM_EMAIL_FROM_FILE`. |
 | `FATHOM_EMAIL_FROM_FILE` | unset | Path to a file holding the sender address. Not with `FATHOM_EMAIL_FROM`. |
-| `FATHOM_EMAIL_TO` | unset (`dev` uses `owner@example.invalid`) | Recipient addresses, comma separated. Not with `FATHOM_EMAIL_TO_FILE`. |
-| `FATHOM_EMAIL_TO_FILE` | unset | Path to a file of recipient addresses (comma or newline separated). Not with `FATHOM_EMAIL_TO`. |
+| `FATHOM_EMAIL_TO` | unset (`dev` uses `owner@example.invalid`) | Original-household recipient migration input, comma separated. Financial delivery then uses verified member subscriptions. Not with `FATHOM_EMAIL_TO_FILE`. |
+| `FATHOM_EMAIL_TO_FILE` | unset | Original-household recipient migration input file (comma or newline separated). Not with `FATHOM_EMAIL_TO`. |
 | `FATHOM_EMAIL_CREDENTIAL_FILE` | unset | Path to the mounted email credential (API key or SMTP password); must not be readable by other users; mount the secret with mode 0400 or 0440 (with fsGroup) or 0600. Required by every transport but `dev`. |
 | `FATHOM_EMAIL_SMTP_USER` | unset | SMTP user name for `smtp`. |
 | `FATHOM_EMAIL_SMTP_HOST` | `smtp.gmail.com` | SMTP host for `smtp`. |
@@ -972,7 +980,9 @@ known path with the wrong method is 405; signed out, both are 401. Every action 
 | `POST /api/confirm/:id/reopen` | `{}` | `{scenario, item}`. Puts an answered item back to pending and restores every row its answer changed. 404 unknown item, 409 not answered, stale or final, as for a revise. |
 | `POST /api/confirm/answers` | `{answers: [{id, answer}]}` | `{scenario, items}`, each item with `final`. Answers every listed pending item in one transaction (one undo log per item); every refusal is checked before any write, so a refusal changes nothing. Errors as the single answer route; 400 for a malformed body. Auto-resolution runs once after it. |
 | `POST /api/confirm/reopen-many` | `{ids: [...]}` | `{scenario, items}`. Reopens every listed answered item in one transaction (the undo of a grouped card); any refusal, including a final item with its reason, changes nothing. Errors as the reopen route. |
-| `GET /api/email` | | `{status: {transport, state, recipient, recipients, detail}, preview: {subject, text, html, summarySrc}, history}`. `recipient` is masked (`o***@e***.invalid`); `history` is `email_sends` rows newest first with no bodies. The preview is the brief composed now over the store with the runtime engine (template summary when the engine cannot answer). |
+| `GET /api/email/subscriptions` | | Admin only. `{subscriptions: [{userId, subscribed}]}` for verified active household members. |
+| `POST /api/email/subscriptions` | `{subscriptions: [{userId, subscribed}]}` | Admin only. Replaces the subscriber set; omitted members are unsubscribed. Foreign and pending members refuse. |
+| `GET /api/email` | | `{status: {transport, state, recipient, recipients, skippedRecipients, detail}, preview: {subject, text, html, summarySrc}, history}`. `recipient` is masked (`o***@e***.invalid`); `skippedRecipients` counts configured recipients excluded from the original one-time member import, without addresses; `history` is `email_sends` rows newest first with no bodies. The preview is the brief composed now over the store with the runtime engine (template summary when the engine cannot answer). |
 | `POST /api/email/test` | `{}` | `{send, history}`. Sends a fixed test email (kind `test`) through the configured transport; a failed send is a 200 with `send.status` `failed` and `send.errorCode`. |
 | `POST /api/email/brief` | `{}` | `{send, history}`. Composes and sends the brief now (kind `brief`); failures as above. |
 | `POST /api/advisor/reviews` | `{recId}` | `{scenario, reviewId}`. Sends the rec to the advisor (idempotent while it waits; a reviewed rec sent again closes the old verdict). 404 unknown or hidden rec. |
@@ -1224,9 +1234,12 @@ Enrollment, recovery and add-a-device links.
    malformed header falls back to the socket address. IPv4-mapped IPv6 sockets match IPv4 CIDRs.
    The default trusts no proxy, which is safe but puts everyone behind a proxy in one per-client
    bucket.
-7. Mail needs a real transport in production (`FATHOM_EMAIL_TRANSPORT` and its settings; the
-   existing `FATHOM_EMAIL_TO` setup is assumed). `dev` writes the message, link included, to
-   `outbox/` in the data directory.
+7. Enrollment mail needs a real transport in production (`FATHOM_EMAIL_TRANSPORT`, sender and
+   credential settings), with an explicit invitee recipient independent of financial subscriptions.
+   `dev` writes the message, link included, to platform-private `outbox/` in the data directory.
+   Financial messages use platform `notification_subscriptions` and `notification_policy` records
+   for verified household members, plus household-private outboxes; see
+   [Email](development.md#email).
 8. Add-a-device: a signed-in user with a recent sign-in requests `POST /api/auth/passkeys/link`,
    which issues an `add-passkey` token for that user only and emails the link to the user's own
    address. Limits: `device` global 120 and per client 60 per 10 minutes, and 10 per user per 20

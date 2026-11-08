@@ -5,7 +5,7 @@
 
 import { HttpError } from './http.mjs';
 import { tools } from '../tools/index.mjs';
-import { KeyError, SCOPE_INFO } from '../mcp/keys.mjs';
+import { KeyError, SCOPE_INFO, isMcpTool } from '../mcp/keys.mjs';
 
 const KEY_STATUS = { not_found: 404, forbidden: 403, unavailable: 503 };
 
@@ -56,7 +56,7 @@ export function mcpInfo(ctx) {
   return {
     url: mcpUrl(config),
     publicUrlSet: Boolean(ctx.config.publicUrl),
-    tools: tools.map(t => ({ name: t.name, description: t.description, kind: t.kind })),
+    tools: tools.filter(isMcpTool).map(t => ({ name: t.name, description: t.description, kind: t.kind })),
     scopes: SCOPE_INFO.map(s => ({ ...s })),
   };
 }

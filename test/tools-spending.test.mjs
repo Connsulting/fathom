@@ -1,3 +1,4 @@
+import { createRegistryServer } from '../src/engine/tools.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { seedDemo } from '../demo/seed.mjs';
@@ -7,7 +8,6 @@ import { spendingInputs } from '../src/calc/targets.mjs';
 import { loadCategoryInputs } from '../src/categories/store.mjs';
 import { resolveCategories } from '../src/categories/resolve.mjs';
 import { classOf, BUILTIN_DEFINITIONS } from '../src/calc/classes.mjs';
-import { proposalTools } from '../src/actions/proposals.mjs';
 import { callTool, tools, getTool } from '../src/tools/index.mjs';
 import { assertRefsResolve } from './helpers/figures.mjs';
 
@@ -195,9 +195,10 @@ test('C4 eval scripts call valid operations', async (t) => {
     for (const turn of c.turns) {
       const frames = await script({ turn, db: store.db, clock: '2026-11-05' });
       assert.ok(frames[0].toolCalls.length, c.id);
+      const registry = createRegistryServer(tools, { purpose: 'chat', ctx: { db: store.db, dataDir: store.root, clock: '2026-11-05', now: '2026-11-05T00:00:00.000Z', onBlock() {} } });
       for (const call of frames[0].toolCalls) {
-        const tool = proposalTools(tools).find(t => t.name === call.name);
-        await tool.handler(call.args, { db: store.db, dataDir: store.root, clock: '2026-11-05', actorId: 'demo', onProposal() {} });
+        const result = await registry.invoke(call.name, call.args);
+        assert.equal(result.isError, undefined, `${c.id}: ${result.content[0].text}`);
       }
     }
   }
