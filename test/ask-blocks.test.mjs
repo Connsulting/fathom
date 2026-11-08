@@ -33,6 +33,20 @@ function msg(blocks, extra = {}) {
 
 const figKeys = (html) => [...html.matchAll(/<span class="fx-fig[^"]*"[^>]*data-fig="([^"]+)"/g)].map((x) => x[1]);
 const decode = (s) => s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&');
+
+test('stale and unavailable states keep stored values and mark their provenance', () => {
+  const block = fx('table'), message = msg([block]);
+  blockState(message.id, block.id).status = 'stale';
+  const stale = messageBodyHtml(message);
+  assert.match(stale, /Stale/); assert.match(stale, /Ask again/);
+  assert.match(stale, /Your data changed after this answer/);
+  assert.ok(figKeys(stale).every(key => registered.get(key).stale));
+  blockState(message.id, block.id).status = 'unavailable';
+  const unavailable = messageBodyHtml(message);
+  assert.match(unavailable, /This data is no longer available/);
+  assert.match(unavailable, /h-blk-unavailable/);
+  assert.deepEqual(figKeys(unavailable), figKeys(stale));
+});
 const strip = (s) => decode(s.replace(/<[^>]+>/g, '')).replace(/\s+/g, ' ').trim();
 const between = (html, open, close) => [...html.matchAll(new RegExp(`${open}([\\s\\S]*?)${close}`, 'g'))].map((x) => x[1]);
 const headers = (html) => between(html, '<th[^>]*>', '</th>').map(strip);

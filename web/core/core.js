@@ -765,6 +765,10 @@ function threads() {
   return threadList().slice();
 }
 
+function blockStatus(id) {
+  return getRead('/api/threads/' + encodeURIComponent(id) + '/blocks');
+}
+
 async function refreshThreadTitle(id) {
   const before = rawThread(id);
   const data = await getRead('/api/threads/' + encodeURIComponent(id));
@@ -1357,6 +1361,7 @@ const api = {
   askStream,
   conversation,
   threads,
+  blockStatus,
   askStarters,
   newThread,
   newThreadStream,

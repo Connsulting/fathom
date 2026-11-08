@@ -25,6 +25,7 @@ export const PARITY_EXCLUDED = Object.freeze({
   "GET /api/threads": "conversation chrome",
   "POST /api/threads": "conversation chrome",
   "GET /api/threads/:id": "conversation chrome",
+  "GET /api/threads/:id/blocks": "conversation chrome",
   "POST /api/threads/:id/rename": "conversation chrome",
   "POST /api/threads/:id/archive": "conversation chrome",
   "POST /api/threads/:id/trash": "conversation chrome",

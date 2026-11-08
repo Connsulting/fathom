@@ -1398,6 +1398,7 @@ lands the covering operation.
 | `GET /api/threads` | excluded: conversation chrome | | |
 | `POST /api/threads` | excluded: conversation chrome | | |
 | `GET /api/threads/:id` | excluded: conversation chrome | | |
+| `GET /api/threads/:id/blocks` | excluded: conversation chrome | | read-only status of stored answer blocks |
 | `POST /api/threads/:id/rename` | excluded: conversation chrome | | |
 | `POST /api/threads/:id/archive` | excluded: conversation chrome | | |
 | `POST /api/threads/:id/trash` | excluded: conversation chrome | | |

@@ -72,7 +72,7 @@ export function bindToggle(root, tsnap, ctx) {
   });
 }
 
-const figCell = (f) => (isObj(f) ? { t: f.value === null ? 'none' : 'fig', fig: f } : { t: 'none' });
+const figCell = (f) => (isObj(f) ? { t: f.value === null ? 'none' : 'fig', fig: f, ...(f.drill ? { drill: f.drill } : {}) } : { t: 'none' });
 
 /* ---------- the same data as a table ---------- */
 
