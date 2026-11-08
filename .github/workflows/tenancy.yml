@@ -30,6 +30,13 @@ jobs:
         env:
           FATHOM_FUZZ_SEEDS: '2'
           FATHOM_FUZZ_BUDGET_MS: '600000'
+          FATHOM_FUZZ_REPRO_DIR: ${{ runner.temp }}/isolation-repros
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: isolation-repros
+          path: ${{ runner.temp }}/isolation-repros/
+          if-no-files-found: ignore
 
   isolation-nightly:
     if: github.event_name == 'schedule'
@@ -46,3 +53,10 @@ jobs:
         env:
           FATHOM_FUZZ_SEEDS: '100'
           FATHOM_FUZZ_BUDGET_MS: '3600000'
+          FATHOM_FUZZ_REPRO_DIR: ${{ runner.temp }}/isolation-repros
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: isolation-nightly-repros
+          path: ${{ runner.temp }}/isolation-repros/
+          if-no-files-found: ignore

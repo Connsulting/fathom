@@ -30,7 +30,8 @@ export async function seedHousehold(f, hh) {
   hh.db.prepare("UPDATE content SET value=? WHERE key='meta'").run(JSON.stringify({ household: hh.canary }));
   hh.db.prepare("INSERT OR REPLACE INTO facts(key,value,updated_at) VALUES ('synthetic.canary',?,?)").run(JSON.stringify(hh.canary), now);
   hh.db.prepare("INSERT OR REPLACE INTO accounts(id,name,kind) VALUES ('colliding-account',?,'checking')").run(hh.canary);
-  hh.db.prepare("INSERT INTO balances(account_id,date,amount) VALUES ('colliding-account','2026-11-05',12345)").run();
+  hh.retirementBalance = hh === f.A ? 12345 : 67890;
+  hh.db.prepare("INSERT INTO balances(account_id,date,amount) VALUES ('colliding-account','2026-11-05',?)").run(hh.retirementBalance);
   hh.db.prepare("INSERT OR REPLACE INTO recs(id,def,status,updated_at) VALUES ('colliding-rec',?,'proposed',?)")
     .run(JSON.stringify({ id: 'colliding-rec', title: hh.canary, summary: hh.canary, domain: 'data' }), now);
   hh.db.prepare("INSERT INTO recs(id,def,status,updated_at) VALUES (?,?,'proposed',?)")
@@ -68,9 +69,6 @@ export async function financialCases(f, hh) {
   const confirm = Number(db.prepare("INSERT INTO confirm_items(kind,subject,question,options,context,status,created_at) VALUES ('fact_check',?,?,?,?,'pending',?)")
     .run('synthetic.' + canary, canary, JSON.stringify([{ id: 'yes', label: 'Yes' }, { id: 'no', label: 'No' }]), JSON.stringify({ key: 'synthetic.' + canary, value: canary }), now).lastInsertRowid);
   const review = ok(await hh.admin.client.post('/api/advisor/reviews', { recId: 'colliding-rec' })).reviewId;
-  const archive = ok(await hh.admin.client.post('/api/accounts/colliding-account/archive', { archived: true }));
-  ok(await hh.admin.client.post('/api/accounts/colliding-account/archive', { archived: false }));
-  const file = db.prepare("SELECT id FROM files WHERE id='demo-scenario'").get() ?? db.prepare('SELECT id FROM files LIMIT 1').get();
   const entity = db.prepare('SELECT entity FROM pnl_lines LIMIT 1').get()?.entity;
   const whatif = db.prepare('SELECT id FROM packs_state WHERE json_extract(def,\'$.whatIf\') IS NOT NULL LIMIT 1').get()?.id;
   const mark = yearendChecklist(db, { year: 2026, clock: '2026-11-05' }).items[0].key;
@@ -80,7 +78,7 @@ export async function financialCases(f, hh) {
     'GET /api/pace': basic('/api/pace'),
     'POST /api/tour/seen': basic('/api/tour/seen'),
     'POST /api/recs/:id/action': basic('/api/recs/colliding-rec/action', { action: 'reopen' }),
-    'POST /api/actions/:id/undo': basic(`/api/actions/${archive.receipt.id}/undo`, {}, { async prepare() {
+    'POST /api/actions/:id/undo': basic('/api/actions/pending/undo', {}, { async prepare() {
       const made = ok(await hh.admin.client.post('/api/preferences', { text: canary + ' temporary reserve' }));
       return { path: `/api/actions/${made.receipt.id}/undo` };
     } }),
@@ -147,7 +145,7 @@ export async function financialCases(f, hh) {
     'POST /api/files': basic('/api/files', {}, { multipart: true }),
     'GET /api/files': basic('/api/files'),
     'POST /api/files/:id/retry': basic(`/api/files/${hh.upload}/retry`, {}, { before() { db.prepare("UPDATE files SET status='pending' WHERE id=?").run(hh.upload); } }),
-    'POST /api/import-proposals/:proposalId/review': basic('/api/import-proposals/pending/review', { version: 1, decision: 'reject', evidence: 'Reject this import' }, { async prepare() {
+    'POST /api/import-proposals/:proposalId/review': basic('/api/import-proposals/pending/review', { version: 1, decision: 'correct', evidence: 'The state should be MD instead.' }, { async prepare() {
       const p = await importProposedRows({ db, platform: f.platform, household: hh.ctx }, [{ target: 'fact', fields: { key: 'household.state', value: 'VA' } }], { approve: false, marker: canary });
       db.prepare('UPDATE import_proposals SET actor_id=? WHERE id=?').run(hh.admin.identity.id, p.proposalId);
       return { path: `/api/import-proposals/${p.proposalId}/review`, body: { version: p.version, decision: 'correct', evidence: 'The state should be MD instead.' } };

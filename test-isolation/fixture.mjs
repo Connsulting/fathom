@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tempDir } from '../test/helpers/server.mjs';
-import { startRuntime, writeInstanceKeys } from '../test/helpers/tenancy-runtime.mjs';
+import { startRuntime, writeInstanceKeys, writePrivate } from '../test/helpers/tenancy-runtime.mjs';
 import { browser, register, signIn } from '../test/helpers/tenancy.mjs';
 import { createAuthenticator } from '../test/helpers/webauthn.mjs';
 import { createAuthStore } from '../src/auth/store.mjs';
@@ -22,8 +22,10 @@ export async function isolationFixture({ engine = 'fake', extra = {}, engineOpti
   let server;
   try {
     mkdirSync(join(root, 'backups'), { mode: 0o700 });
+    const credentialFile = engine === 'live' ? writePrivate(join(root, 'keys', 'synthetic-credential'), 'synthetic-isolation-credential\n') : null;
     server = await startRuntime({ dataDir, keys, engine, extra: {
-      FATHOM_BACKUP_KEY_FILE: keys.backupKeyFile, FATHOM_BACKUP_DESTINATION: join(root, 'backups'), ...extra,
+      FATHOM_BACKUP_KEY_FILE: keys.backupKeyFile, FATHOM_BACKUP_DESTINATION: join(root, 'backups'),
+      ...(credentialFile ? { FATHOM_CLAUDE_CREDENTIAL_FILE: credentialFile } : {}), ...extra,
     }, engineOptions });
     const { app, baseUrl } = server;
     const store = createAuthStore(app.platform);

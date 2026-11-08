@@ -1,10 +1,13 @@
 # Multi-household Fathom
 
-Status: proposed specification, reviewed against `main` at
-`4b800d2da3caa06f4653d2171b8c10482bac1a17` on 2026-11-06. This document ships no
-implementation and does not enable multi-tenancy. The [vision](vision.md)
-still lists it as deferred. The [architecture](architecture.md) describes the
-current application, and [known limits](known-limits.md) remain applicable.
+Status: implementation contract for MT-01 through MT-10. Platform release migration
+009 enables explicit operator provisioning after the isolation gate passes. It
+creates no household, changes no user or passkey table, and adds no UI. Deployment
+and provisioning a second real household remain separate operator actions.
+
+The design review and readiness observations below describe the pre-implementation
+base. The ordered ticket contracts remain the acceptance criteria; current proof
+comes from the route isolation, unit, browser and real-session CI gates.
 
 ## Risks and external dependencies
 

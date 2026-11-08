@@ -1082,7 +1082,7 @@ CLIs.
 | `auth_sessions` | digest of a session cookie PK, `user_id` (cascade delete), `signed_in_at`, `expires_at`, `household_id` (the session's household), `context_version`. Never the cookie. |
 | `auth_challenges` | digest of the ceremony cookie PK, ceremony `register` or `signin`, `user_id`, the token, session and invitation digests it was issued for (each NULL when none), the challenge, expiry. Used once. |
 | `auth_rate_limits` | hashed bucket key PK, window, attempts. No raw email or address. |
-| `platform_settings` | `key` PK, `value` JSON, `updated_at`. `multi_household_enabled` (boolean, false when absent). |
+| `platform_settings` | `key` PK, `value` JSON, `updated_at`. `multi_household_enabled` (boolean, false when absent). Platform release migration 009 sets it to true on upgrades and new instances; no household is created by the migration. |
 | `audit_events` | `id` PK, `at`, `actor_user_id`, `household_id`, `target_user_id`, fixed `action` and `outcome` codes. No payloads, emails or tokens. |
 | `platform_operations` | `id` PK, `kind`, `phase`, `status` in running, done, `started_at`, `updated_at`, `detail` JSON (counts and hashes only) |
 | `household_data_keys` | (`household_id`, `key_version`) PK, `wrapped_key` BLOB (the household data key wrapped under the platform key, never raw), `status` in active, retired (a unique partial index allows one active key per household), `created_at`. Written only by `provisionDataKey` (`src/platform/household-vault.mjs`); the server does not read it before MT-03. |
@@ -1130,7 +1130,9 @@ Memberships and invitations.
    address enrolls through the emailed `/enroll` link first. At most 20 invitations per household per hour.
 3. `POST /api/operator/households` creates a household in `provisioning` and emails its first admin
    an invitation. While `multi_household_enabled` is off and a non-deleted real household exists,
-   it answers 409 `multi_household_gated`; demo instances are exempt.
+   it answers 409 `multi_household_gated`; demo instances are exempt. Release migration 009
+   enables the setting. A second real household still requires this explicit operator operation;
+   there is no automatic provisioning or additional UI.
 4. Household context (MT-09). A session has one household and a context version. A new session
    enters the user's only membership; with several it has none (financial routes 403) until
    `POST /api/auth/household` selects one, which rotates the version. On a real store every
