@@ -40,7 +40,7 @@ function paymentEvidence(t, env) {
   const j = value => /^(va|virginia|state)$/i.test(value) ? 'state' : value;
   const matches = (env.payments ?? []).filter(p => j(p.jurisdiction) === j(t.payment.jurisdiction)
     && p.taxYear === t.payment.taxYear && p.quarter === t.payment.quarter
-    && Math.round(p.amount * 100) === Math.round(t.payment.amount * 100));
+    && Math.round(p.amount * 100) >= Math.round(t.payment.amount * 100));
   return matches.length === 1 ? matches[0] : null;
 }
 

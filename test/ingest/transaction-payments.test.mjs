@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { realStore, textFile } from '../helpers/ingest.mjs';
 import { connectSimplefin, syncSimplefin, createFakeSimplefin, fakeToken, fakeAccountSet } from '../../src/ingest/simplefin.mjs';
-import { ingestFile } from '../../src/ingest/pipeline.mjs';
+import { ingestFile, persistImport } from '../../src/ingest/pipeline.mjs';
+import { actionTx } from '../../src/store/db.mjs';
 import { answer, pendingItems, autoInfo, reopenItem, finalReason, getItem } from '../../src/ingest/confirm.mjs';
 import { loadCategoryInputs } from '../../src/categories/store.mjs';
 import { resolveCategories } from '../../src/categories/resolve.mjs';
@@ -139,6 +140,21 @@ test('a revised payment log no longer suppresses an observed payment of a differ
   await syncSimplefin(s.db, opts);
   await uploadLog(s, '2026-06-12', 1300);
   assert.equal(projectedFederalPaid(s.db), 4300);
+  assert.ok(payments(s.db).some(r => r.parser === 'transaction-payment' && r.amount === 1200));
+}));
+
+test('a complete log snapshot omitting a payment restores the connected payment', () => fixture(async (s, opts) => {
+  const log = await uploadLog(s);
+  const old = payments(s.db)[0];
+  await syncSimplefin(s.db, opts);
+  const parser = { id: 'synthetic-payment-log', sourceKind: 'tax_payments', label: 'Payment log',
+    parse: () => ({ rows: [], warnings: [], period: { from: '2026-06-01', to: '2026-06-30' } }) };
+  const file = textFile('complete-log.csv', 'No estimated tax payments in June');
+  const next = await ingestFile(s.db, file, s.opts(null, { parser, now: NOW }));
+  actionTx(s.db, () => persistImport(s.db, next.fileId, file, { status: 'imported', parser: parser.id, sourceKind: parser.sourceKind,
+    label: parser.label, parsed: parser.parse(), coverage: [{ table: 'tax_payments', slot: old.source_slot, period: '2026-06', complete: true, authority: '2026-06-30' }] }, { now: NOW }));
+  assert.equal(payments(s.db).filter(r => r.file_id === log.fileId).length, 0);
+  assert.equal(projectedFederalPaid(s.db), 3000);
   assert.ok(payments(s.db).some(r => r.parser === 'transaction-payment' && r.amount === 1200));
 }));
 

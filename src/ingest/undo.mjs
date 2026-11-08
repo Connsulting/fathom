@@ -17,7 +17,7 @@ export const UNTRACKED = Object.freeze(['confirm_undo', 'confirm_guesses', 'inge
 // and kind are written by different imports and answers).
 export const FIELD_LEVEL = Object.freeze(['accounts']);
 
-const LOG = 'fathom_change_log';
+let captureSequence = 0;
 const ident = (name) => `"${String(name).replaceAll('"', '""')}"`;
 const literal = (text) => `'${String(text).replaceAll("'", "''")}'`;
 
@@ -27,32 +27,32 @@ const columnsOf = (db, table) => db.prepare(`PRAGMA main.table_info(${ident(tabl
 // The row image: the same expression in the triggers and in revert's checks, so equal rows give
 // equal text.
 const image = (alias, columns) => `json_object(${columns.map((c) => `${literal(c)}, ${alias}.${ident(c)}`).join(', ')})`;
-const trigger = (i, op) => ident(`${LOG}_${i}_${op}`);
+const trigger = (log, i, op) => ident(`${log}_${i}_${op}`);
 
-function dropLog(db, count) {
-  for (let i = 0; i < count; i++) for (const op of ['insert', 'update', 'delete']) db.exec(`DROP TRIGGER IF EXISTS temp.${trigger(i, op)}`);
-  db.exec(`DROP TABLE IF EXISTS temp.${LOG}`);
+function dropLog(db, count, log) {
+  for (let i = 0; i < count; i++) for (const op of ['insert', 'update', 'delete']) db.exec(`DROP TRIGGER IF EXISTS temp.${trigger(log, i, op)}`);
+  db.exec(`DROP TABLE IF EXISTS temp.${log}`);
 }
 
 // Run fn() and return {result, changes}. The triggers and the temp log are dropped before
 // returning, also when fn throws (the caller's rollback would undo them too).
 export function captureChanges(db, fn) {
   const tables = tablesOf(db);
-  dropLog(db, tables.length);
-  db.exec(`CREATE TEMP TABLE ${LOG} (seq INTEGER PRIMARY KEY, tbl TEXT NOT NULL, op TEXT NOT NULL, rowid_was INTEGER, rowid_now INTEGER, before TEXT, after TEXT)`);
+  const log = `fathom_change_log_${++captureSequence}`;
+  db.exec(`CREATE TEMP TABLE ${log} (seq INTEGER PRIMARY KEY, tbl TEXT NOT NULL, op TEXT NOT NULL, rowid_was INTEGER, rowid_now INTEGER, before TEXT, after TEXT)`);
   try {
     tables.forEach((table, i) => {
       const cols = columnsOf(db, table);
-      const into = `INSERT INTO temp.${LOG} (tbl, op, rowid_was, rowid_now, before, after) VALUES (${literal(table)}`;
-      db.exec(`CREATE TEMP TRIGGER ${trigger(i, 'insert')} AFTER INSERT ON main.${ident(table)} BEGIN
+      const into = `INSERT INTO temp.${log} (tbl, op, rowid_was, rowid_now, before, after) VALUES (${literal(table)}`;
+      db.exec(`CREATE TEMP TRIGGER ${trigger(log, i, 'insert')} AFTER INSERT ON main.${ident(table)} BEGIN
         ${into}, 'insert', NULL, NEW.rowid, NULL, ${image('NEW', cols)}); END`);
-      db.exec(`CREATE TEMP TRIGGER ${trigger(i, 'update')} AFTER UPDATE ON main.${ident(table)} BEGIN
+      db.exec(`CREATE TEMP TRIGGER ${trigger(log, i, 'update')} AFTER UPDATE ON main.${ident(table)} BEGIN
         ${into}, 'update', OLD.rowid, NEW.rowid, ${image('OLD', cols)}, ${image('NEW', cols)}); END`);
-      db.exec(`CREATE TEMP TRIGGER ${trigger(i, 'delete')} AFTER DELETE ON main.${ident(table)} BEGIN
+      db.exec(`CREATE TEMP TRIGGER ${trigger(log, i, 'delete')} AFTER DELETE ON main.${ident(table)} BEGIN
         ${into}, 'delete', OLD.rowid, NULL, ${image('OLD', cols)}, NULL); END`);
     });
     const result = fn();
-    const changes = db.prepare(`SELECT tbl, op, rowid_was, rowid_now, before, after FROM temp.${LOG} ORDER BY seq`).all().map((r) => ({
+    const changes = db.prepare(`SELECT tbl, op, rowid_was, rowid_now, before, after FROM temp.${log} ORDER BY seq`).all().map((r) => ({
       table: r.tbl,
       op: r.op,
       rowid: r.op === 'delete' ? r.rowid_was : r.rowid_now,
@@ -63,7 +63,7 @@ export function captureChanges(db, fn) {
     }));
     return { result, changes };
   } finally {
-    dropLog(db, tables.length);
+    dropLog(db, tables.length, log);
   }
 }
 

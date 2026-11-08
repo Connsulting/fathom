@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { actionTx, parseJson } from '../store/db.mjs';
 import { ask, archive, recordAutoAnswer, ConfirmError } from './confirm.mjs';
+import { captureChanges } from './undo.mjs';
 
 const PARSER = 'transaction-payment';
 const cents = value => Math.round(Number(value) * 100);
@@ -85,6 +86,18 @@ export function reconcileTransactionPayments(db, { now = new Date().toISOString(
       archive(db, 'tax_payments', { ...payment }, { by: log?.file_id ?? null, reason: log ? 'duplicate' : 'revised', now });
       db.prepare('DELETE FROM tax_payments WHERE id=?').run(payment.id);
     }
+    for (const row of contexts.values()) {
+      if (row.status !== 'answered' || ['not_estimate', 'superseded'].includes(row.answer)) continue;
+      const context = parseJson(row.context, {}), t = context.transaction && current(db, context.transaction);
+      if (!t || db.prepare('SELECT 1 FROM tax_payments WHERE parser=? AND dedupe_key=?').get(PARSER, `transaction-payment:${t.dedupe_key}`)) continue;
+      const choice = row.answer.split(':')[0];
+      const j = ['estimate', 'logged', 'separate'].includes(choice) ? context.jurisdiction : choice;
+      if (logsFor(db, t, j).length) continue;
+      const undo = db.prepare('SELECT changes FROM confirm_undo WHERE item_id=?').get(row.id);
+      const { changes } = captureChanges(db, () => applyTransactionPayment(db, { ...row, context }, choice === 'logged' ? 'estimate' : row.answer));
+      db.prepare('UPDATE confirm_undo SET changes=? WHERE item_id=?')
+        .run(JSON.stringify([...JSON.parse(undo.changes).filter(c => c.table !== 'tax_payments'), ...changes]), row.id);
+    }
     for (const t of rows) {
       const c = classify(t);
       if (!c) continue;
@@ -126,7 +139,7 @@ export function observedPayments(db) {
     const taxYear = choice !== 'logged' && value ? Number(value) : c.taxYear;
     const own = db.prepare('SELECT * FROM tax_payments WHERE parser=? AND dedupe_key=?').get(PARSER, `transaction-payment:${t.dedupe_key}`);
     const logs = logsFor(db, t, j);
-    const payment = own ?? (choice === 'logged' ? logs.find(r => r.id === Number(value)) : logs.length === 1 ? logs[0] : null);
+    const payment = own ?? (choice === 'logged' ? logs.find(r => r.id === Number(value)) : null) ?? (logs.length === 1 ? logs[0] : null);
     if (!payment) continue;
     const month = Number(t.date.slice(5, 7));
     const quarter = c.quarter ?? (Number(t.date.slice(0, 4)) > taxYear ? 4 : month <= 4 ? 1 : month <= 6 ? 2 : month <= 9 ? 3 : 4);
