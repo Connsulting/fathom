@@ -48,9 +48,9 @@ export function recordFactAnswers(db, answers, { now = new Date().toISOString(),
   if (!Array.isArray(answers) || !answers.length || answers.length > 50) fail();
   const date = now.slice(0, 10);
   if (isoDate(date) !== date) fail();
-  const priorPlans = getFacts(db)['accounts.planType'] || {};
+  const priorPlans = parseJson(db.prepare("SELECT value FROM facts WHERE key='accounts.planType'").get()?.value, {});
   const planAnswer = answers.find(a => a?.key === 'accounts.planType');
-  const facts = { 'accounts.planType': { ...priorPlans, ...(object(planAnswer?.value) ? planAnswer.value : {}) } };
+  const eligibility = { 'accounts.planType': { ...getFacts(db)['accounts.planType'], ...(object(planAnswer?.value) ? planAnswer.value : {}) } };
   const year = Number(date.slice(0,4));
   const keys = new Set();
   const writes = answers.map(a => {
@@ -64,11 +64,12 @@ export function recordFactAnswers(db, answers, { now = new Date().toISOString(),
       for (const [id, entry] of Object.entries(value)) {
         if (shape.scope === 'account') {
           const account = db.prepare('SELECT id, kind, name FROM accounts WHERE id = ?').get(id);
-          if (!account || !acceptsAnswerAccount(shape, account, facts)) fail();
+          if (!account || !acceptsAnswerAccount(shape, account, eligibility)) fail();
         } else if (!['owner', 'spouse'].includes(id)) fail();
         validate(entry, shape, year);
       }
-      const prior = parseJson(db.prepare('SELECT value FROM facts WHERE key = ?').get(a.key)?.value, {});
+      const prior = a.key === 'accounts.planType' ? priorPlans
+        : parseJson(db.prepare('SELECT value FROM facts WHERE key = ?').get(a.key)?.value, {});
       value = { ...(object(prior) ? prior : {}), ...value };
     } else {
       // Birth years are told a person at a time: a later answer keeps the years it does not name.

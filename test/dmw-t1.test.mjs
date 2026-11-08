@@ -53,6 +53,23 @@ test('account plan inference is stored with evidence, refreshes, and Undo preser
   assert.equal(prepare(db, data).values['accounts.planType'].solo, '401k');
 });
 
+test('answering another account stores only owner answers and leaves inferred plan Undo effective', async t => {
+  const db = openDb(':memory:'); migrate(db); t.after(() => db.close());
+  db.prepare("INSERT INTO accounts (id,kind,name) VALUES ('a','retirement','Solo 401(k)'), ('b','retirement','Retirement savings')").run();
+  const data = base();
+  data.accounts = db.prepare('SELECT * FROM accounts').all();
+  prepare(db, data);
+  assert.equal(getFacts(db)['accounts.planType'].a, 'solo_401k');
+  await answer(db, 'accounts.planType', { b: '401k' });
+  const stored = db.prepare("SELECT value,confirmed FROM facts WHERE key='accounts.planType'").get();
+  assert.deepEqual(JSON.parse(stored.value), { b: '401k' });
+  assert.equal(stored.confirmed, 1);
+  await answer(db, 'accounts.planTypeInference', { a: { undone: true } });
+  assert.deepEqual(getFacts(db)['accounts.planType'], { b: '401k' });
+  prepare(db, data);
+  assert.deepEqual(getFacts(db)['accounts.planType'], { b: '401k' });
+});
+
 test('recognizable plan names infer plain choices while ambiguous accounts remain gaps', t => {
   const db = openDb(':memory:'); migrate(db); t.after(() => db.close());
   const data = base();
