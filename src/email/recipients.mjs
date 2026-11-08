@@ -7,8 +7,13 @@ const verifiedMembers = (platform, householdId) => platform.prepare(`SELECT u.id
   WHERE m.household_id = ? AND m.status = 'active' AND u.enrolled_at IS NOT NULL`).all(householdId);
 
 export function createRecipientPolicy({ platform, householdId, generation, mode, config, readFile } = {}) {
-  const initialized = () => Boolean(platform.prepare('SELECT 1 FROM notification_policy WHERE household_id = ?').get(householdId));
-  const mark = () => platform.prepare('INSERT OR IGNORE INTO notification_policy (household_id, initialized_at) VALUES (?, ?)').run(householdId, Date.now());
+  const policyRow = () => platform.prepare('SELECT initialized_at, skipped_recipients FROM notification_policy WHERE household_id = ?').get(householdId);
+  const initialized = () => policyRow()?.initialized_at != null;
+  const skippedRecipients = () => policyRow()?.skipped_recipients ?? 0;
+  const mark = (skipped = skippedRecipients(), initializedAt = Date.now()) => platform.prepare(`INSERT INTO notification_policy
+    (household_id, initialized_at, skipped_recipients) VALUES (?, ?, ?)
+    ON CONFLICT(household_id) DO UPDATE SET initialized_at = excluded.initialized_at, skipped_recipients = excluded.skipped_recipients
+      WHERE notification_policy.initialized_at IS NULL`).run(householdId, initializedAt, skipped);
   const current = () => {
     const row = platform.prepare('SELECT status, generation FROM households WHERE id = ?').get(householdId);
     return row?.status === 'active' && Number(row.generation) === generation;
@@ -30,12 +35,14 @@ export function createRecipientPolicy({ platform, householdId, generation, mode,
       let canonical;
       try { canonical = normalizeEmail(address); } catch { return null; }
       return members.find(m => m.email === canonical);
-    });
-    if (!selected.length || selected.some(m => !m)) throw new EmailError('recipient_unverified');
+    }).filter(Boolean);
     platform.exec('BEGIN IMMEDIATE');
     try {
-      for (const m of selected) save(m.id, true, m.version);
-      mark(); platform.exec('COMMIT');
+      if (!initialized()) {
+        for (const m of selected) save(m.id, true, m.version);
+        mark(addresses.length - selected.length, selected.length ? Date.now() : null);
+      }
+      platform.exec('COMMIT');
     } catch (err) { platform.exec('ROLLBACK'); throw err; }
   }
 
@@ -65,9 +72,10 @@ export function createRecipientPolicy({ platform, householdId, generation, mode,
       let selected;
       try { selected = await policy.resolve(); } catch (err) {
         if (!(err instanceof EmailError)) throw err;
-        return { transport: config.emailTransport ?? 'dev', state: err.code, recipient: null, recipients: 0, detail: err.message };
+        return { transport: config.emailTransport ?? 'dev', state: err.code, recipient: null, recipients: 0, skippedRecipients: skippedRecipients(), detail: err.message };
       }
-      return emailStatus({ ...config, emailTo: selected.map(r => r.email).join(','), emailToFile: null });
+      const status = await emailStatus({ ...config, emailTo: selected.map(r => r.email).join(','), emailToFile: null });
+      return { ...status, skippedRecipients: skippedRecipients() };
     },
     authorize(recipient) {
       if (!current()) throw new EmailError('paused');
