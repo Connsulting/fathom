@@ -14,6 +14,7 @@ import {
 const T = { timeout: SERVER_TIMEOUT };
 const PUBLIC_HOST = 'fathom.example.test';
 const EXTRA_HOST = 'agent.example.test';
+const BUILD_SHA = '0123456789abcdef0123456789abcdef01234567';
 const PACK_TOOLS = ['knowledge', 'knowledge', 'knowledge'];
 
 let s;
@@ -25,7 +26,7 @@ const seenResults = [];
 
 before(async () => {
   s = await spawnServer({
-    env: { FATHOM_ENGINE: 'fake', FATHOM_PUBLIC_URL: `https://${PUBLIC_HOST}`, FATHOM_ALLOWED_HOSTS: `${EXTRA_HOST},box.example.test:7000` },
+    env: { FATHOM_ENGINE: 'fake', FATHOM_BUILD_SHA: BUILD_SHA, FATHOM_PUBLIC_URL: `https://${PUBLIC_HOST}`, FATHOM_ALLOWED_HOSTS: `${EXTRA_HOST},box.example.test:7000` },
   });
   readKey = await createKey(s.baseUrl, 'Read agent');
   writeKey = await createKey(s.baseUrl, 'Write agent', ['write:recs']);
@@ -173,6 +174,7 @@ describe('protocol', () => {
     const r = await mcpPost(s.baseUrl, { auth: bearer(readKey.key), method: 'initialize', params: initializeParams() });
     const result = rpcResult(r);
     assert.ok(result.serverInfo && typeof result.serverInfo.name === 'string');
+    assert.equal(result.serverInfo.version, BUILD_SHA, 'the server reports the git SHA of the build');
     assert.ok(result.capabilities && result.capabilities.tools);
     assert.equal(typeof result.protocolVersion, 'string');
     assert.equal(result.instructions, instructions);

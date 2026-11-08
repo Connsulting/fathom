@@ -29,6 +29,8 @@ jobs:
         with:
           context: .
           platforms: linux/amd64
+          build-args: |
+            FATHOM_BUILD_SHA=${{ github.event.pull_request.head.sha || github.sha }}
           load: true
           push: false
           tags: fathom:ci
@@ -68,6 +70,8 @@ jobs:
         with:
           context: .
           platforms: linux/amd64
+          build-args: |
+            FATHOM_BUILD_SHA=${{ github.event.pull_request.head.sha || github.sha }}
           load: true
           push: false
           tags: fathom:ci

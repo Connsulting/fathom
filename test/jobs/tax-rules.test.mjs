@@ -8,6 +8,7 @@
 import test, { after, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { planRun } from '../helpers/plan.mjs';
+import { accountNaming } from '../../src/accounts/naming.mjs';
 import * as H from '../../src/jobs/planner/household.mjs';
 import { computeFigures } from '../../src/jobs/planner/figures.mjs';
 import { loadPlanningData, resolveEntities } from '../../src/jobs/planner/data.mjs';
@@ -790,6 +791,19 @@ describe('MG9 Virginia529', () => {
     return { db, info: computeFor(db).info };
   };
 
+  test('MG9: the accounts the planner names for the owner carry the shared account label, not the imported name', async () => {
+    const { db } = await va529({ virginiaPlan: true, carryforward: 0 }, { older: true });
+    const id = accountIdByMask(db, MASKS.college);
+    db.prepare("UPDATE accounts SET display_name = 'Kid college fund' WHERE id = ?").run(id);
+    await plan(db);
+    const shared = accountNaming(db).label(db.prepare('SELECT * FROM accounts WHERE id = ?').get(id));
+    assert.match(shared, /^Kid college fund/, 'the shared label follows the owner\'s name');
+    assert.deepEqual(computeFor(db).info.va529.age70, [shared], 'an age-70 account is named by the shared label');
+    addFact(db, 'accounts.va529', { [id]: { virginiaPlan: true } });
+    await plan(db);
+    assert.deepEqual(computeFor(db).info.va529.missing, [shared], 'an account with answers missing is named by the shared label');
+  });
+
   test('MG9: an age-70 owner deducts this year\'s contributions plus carryforward in full', async () => {
     // Uncapped: 1,000 + 5,000 = 6,000. Baseline (capped, carryforward 0): min(4,000, 1,000) = 1,000.
     // Both Virginia taxable incomes are above 17,000, so tax.va.proj falls by 5,000 x 5.75% = 287.50.
@@ -821,7 +835,7 @@ describe('MG9 Virginia529', () => {
     // Without the carryforward the subtraction, and so Virginia taxable income, is unknown.
     const { db, info } = await va529({ virginiaPlan: true });
     assert.equal(info.vaBlocked, 'va529_answers_missing');
-    assert.ok(info.va529.missing.includes('College 529'), `missing: ${info.va529.missing}`);
+    assert.ok(info.va529.missing.some(n => n.startsWith('College 529')), `missing: ${info.va529.missing}`);
     for (const k of ['tax.va.proj', 'sh.va.required', 'sh.va.remaining', 'va529.deduction', 'va529.deductionLeft', 'va529.taxSaved']) absent(db, k);
     assert.equal(db.prepare("SELECT count(*) AS n FROM figures WHERE key LIKE 'wg.salary.%' OR key LIKE 'wg.deferral.%'").get().n, 0, 'no war-game figures');
     assert.ok(figureRow(db, 'tax.fed.proj'), 'federal tax is still produced');
