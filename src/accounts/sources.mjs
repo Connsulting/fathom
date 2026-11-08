@@ -19,6 +19,7 @@ import { captureChanges, revertChanges } from '../ingest/undo.mjs';
 import { connectedAccountIds } from '../ingest/coverage.mjs';
 import { ConfirmError, reopenItem } from '../ingest/confirm.mjs';
 import { mergePlan, manualMerge } from '../ingest/account-merge.mjs';
+import { refreshFigures } from '../ingest/pipeline.mjs';
 import { accountNaming } from './naming.mjs';
 import { accountLabel } from '../shared/account-label.mjs';
 
@@ -87,6 +88,12 @@ export function removeFile(ctx, id) {
         const r = db.prepare('UPDATE accounts SET archived_at = ? WHERE id = ? AND archived_at IS NULL').run(stamp, account);
         if (r.changes) archived.push(account);
       }
+      // Figures read from this file go; each fed account's balance figure is recomputed from the
+      // rows that remain, and an account with none left has no balance figure.
+      db.prepare('DELETE FROM figures WHERE file_id = ?').run(id);
+      refreshFigures({ db, now: stamp, emptySnapshots: new Map() }, fed);
+      const unset = db.prepare('UPDATE accounts SET fig_key = NULL WHERE id = ? AND fig_key IS NOT NULL AND fig_key NOT IN (SELECT key FROM figures)');
+      for (const account of fed) unset.run(account);
       db.prepare('UPDATE files SET removed_at = ? WHERE id = ?').run(stamp, id);
     });
     const receipt = saveReceipt(ctx, { scope: SOURCES_SCOPE, kind: 'file', id, label: `Remove ${file.name}`, before: { removed_at: null }, after: { removed_at: stamp } });

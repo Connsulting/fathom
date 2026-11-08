@@ -33,7 +33,8 @@ const AT = new Date(`${CLOCK}T12:00:00.000Z`);
 const INST = 'Example Bank';
 
 const listOf = (body) => (Array.isArray(body) ? body : body?.sources);
-const totalOf = (scenario) => scenario.trend.points.at(-1).total;
+// Household total: the sum of each current account's balance figure, as the Money list adds them.
+const totalOf = (scenario) => scenario.accounts.reduce((sum, a) => sum + Number(scenario.fig[a.fig]?.v ?? 0), 0);
 const idsOf = (scenario) => scenario.accounts.map((a) => a.id);
 const toolCtx = (s, extra = {}) => ({ db: s.db, now: AT, actorId: 'person-a', ...extra });
 const isCode = (code) => (e) => e?.code === code;
