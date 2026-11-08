@@ -20,6 +20,7 @@ export function householdArg(argv) {
   const i = argv.indexOf('--household');
   const id = i >= 0 ? argv[i + 1] : undefined;
   if (typeof id !== 'string' || !id || id.startsWith('--')) throw codeError('household_required');
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(id) || argv.indexOf('--household', i + 1) >= 0) throw codeError('household_invalid');
   return { householdId: id, rest: [...argv.slice(0, i), ...argv.slice(i + 2)] };
 }
 

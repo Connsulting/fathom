@@ -1,7 +1,7 @@
 import { queueCategoryChecks } from '../categories/store.mjs';
 import { queueAccountPairs } from '../ingest/account-merge.mjs';
 // Ingest API handlers: file uploads, the file list, retries and the confirm queue. Each takes the
-// router ctx ({household, db, config, engine, scheduler, params, body, readUpload}, db and engine
+// router ctx ({household, db, config, engine, scheduler, params, body, uploads}, db and engine
 // taken from the household) and returns the JSON body or
 // throws HttpError. A request that imports a file triggers the plan and confirm-guess jobs through ctx.scheduler. Pipeline, vault and confirm errors map to statuses here with fixed messages, so no
 // file name contents or row values reach a response or a log.
@@ -69,7 +69,7 @@ export const ingestOpts = ctx => ({ household: ctx.household, engine: ctx.engine
 
 export async function uploadFiles(ctx) {
   await householdVault(ctx);
-  const parts = (await ctx.readUpload()).filter(p => p.field === UPLOAD_FIELD);
+  const parts = ctx.uploads.filter(p => p.field === UPLOAD_FIELD);
   if (!parts.length) throw new HttpError(400, `the upload has no files in the "${UPLOAD_FIELD}" field`);
   const files = parts.map(p => ({ name: p.name, bytes: p.bytes, mime: p.mime }));
   let results;
