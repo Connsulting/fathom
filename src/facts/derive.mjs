@@ -6,6 +6,7 @@ import { docRecipient, payrollRecords, sameEmployer } from '../jobs/planner/payr
 import { TAX_2026 } from '../calc/index.mjs';
 import { activeInference } from '../shared/va529-plan.mjs';
 import { isCollegeAccount } from '../shared/account-kinds.mjs';
+import { ownerEntityIdentity } from '../pnl/ledgers.mjs';
 
 export const ADVISOR_KEYS = new Set(['retirement.planTermsConfirmed', 'retirement.aggregationConfirmed', 'business.salaryRange']);
 export const DEFAULT_UNDO = Object.freeze({
@@ -140,7 +141,7 @@ export function prepareRecFacts(db, data) {
   const assumptions = defaults.filter(a => a.path.length ? !values[a.undoKey]?.[a.path[0]]?.undone : values[a.undoKey] !== true);
   for (const entity of entityInference.value.filter(e => e?.inferred)) assumptions.push({
     key: 'business.entities', path: [entity.name], value: entity.type, undoKey: 'business.entityInference',
-    evidence: `${entity.name}: inferred ${entity.type === 'personal' ? 'personal spending' : 'S corp'} from imported ledger categories. Not right? Tell Fathom which one is the S corp.`,
+    evidence: `${entity.name}: inferred ${entity.type === 'personal' ? 'personal spending' : entity.type === 'inactive' ? 'inactive past business' : 'S corp'} from stored ledger activity. Not right? Tell Fathom which one is the S corp.`,
   });
   return { values, assumptions, writes, deletes, mortgage, write() {
     let changed = 0;
@@ -165,7 +166,8 @@ export function undoDefault(db, key, value) {
     const prior = parseJson(row?.value, []);
     if (Array.isArray(prior)) {
       const names = new Set(Object.entries(value).filter(([, flag]) => flag.undone).map(([name]) => name.trim().toLowerCase()));
-      db.prepare("UPDATE facts SET value=? WHERE key='business.entities'").run(JSON.stringify(prior.filter(e => !e.inferred || !names.has(e.name.trim().toLowerCase()))));
+      db.prepare("UPDATE facts SET value=? WHERE key='business.entities'").run(JSON.stringify(prior.flatMap(e => !e?.inferred || !names.has(e.name.trim().toLowerCase()) ? [e]
+        : e.nameSource === 'owner' ? [ownerEntityIdentity(e)] : [])));
     }
     return;
   }

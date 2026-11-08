@@ -68,9 +68,9 @@ function loan(db, { months = 12, matched = true, escrow = 0 } = {}) {
   return { balance, payment, rate };
 }
 
-function budgetAndBusiness(db, { named = true } = {}) {
+function budgetAndBusiness(db, { named = true, knownPeople = true } = {}) {
   addFact(db, 'income.sCorp', true);
-  addFact(db, 'household.names', { owner: 'Aster', spouse: 'Birch' });
+  if (knownPeople) addFact(db, 'household.names', { owner: 'Aster', spouse: 'Birch' });
   addFact(db, 'household.filingStatus', 'single');
   addFact(db, 'household.state', 'VA');
   addFact(db, 'tax.vaItemizedEstimate', 0);
@@ -88,6 +88,8 @@ function budgetAndBusiness(db, { named = true } = {}) {
     line.run('Former Studio', period, 'Income', 4000, 'retired-format', null);
     line.run('Former Studio', period, 'Software', -200, null, null);
   }
+  db.prepare("INSERT INTO files(id,name,uploaded_at,status) VALUES ('budget-current','Synthetic household budget.xlsx',?,'imported'),('budget-history','Synthetic personal budget history.xlsx',?,'imported')").run(now, now);
+  db.prepare("UPDATE pnl_lines SET file_id=CASE WHEN period<'2026-01' THEN 'budget-history' ELSE 'budget-current' END").run();
   db.prepare("INSERT INTO accounts(id,name,kind,parser) VALUES ('business-cash','Business checking','business','aggregator')").run();
   if (named) addFact(db, 'accounts.businessEntity', { 'business-cash': 'Current Studio' });
   for (let m = 1; m <= 10; m++) {
@@ -99,7 +101,7 @@ function budgetAndBusiness(db, { named = true } = {}) {
 
 test('AC9/AC10/AC11: personal budget tabs and an inactive past business leave the account-backed S corp as the current business', async t => {
   const { db, ctx } = await store(t);
-  budgetAndBusiness(db);
+  budgetAndBusiness(db, { knownPeople: false });
   await planRun(db);
   const listed = getFacts(db)['business.entities'];
   assert.equal(listed.find(e => e.name === 'Aster').type, 'personal');
@@ -123,6 +125,12 @@ test('AC9/AC10/AC11: personal budget tabs and an inactive past business leave th
   assert.equal(scenario.wargame.notBuilt.salary.code, 'business.salaryRange');
   const rec = scenario.recs.find(r => r.assumptions?.some(a => a.key === 'business.entities' && a.path[0] === 'Former Studio'));
   assert.ok(rec);
+  recordFactAnswers(db, [{ key: 'business.entityInference', value: { 'Current Studio': { undone: true } } }], { now });
+  await planRun(db);
+  assert.ok(!getFacts(db)['business.entities'].some(e => e.name === 'Current Studio'), 'account-backed S corp inference is undoable');
+  recordFactAnswers(db, [{ key: 'business.entities', value: [{ name: 'Current Studio', type: 's_corp' }] }], { now });
+  await planRun(db);
+  assert.equal(getFacts(db)['business.entities'].find(e => e.name === 'Current Studio').inferred, undefined, 'owner classification wins after Undo');
   recordFactAnswers(db, [{ key: 'business.entityInference', value: { 'Former Studio': { undone: true } } }], { now });
   await planRun(db);
   assert.ok(!getFacts(db)['business.entities'].some(e => e.name === 'Former Studio'));
@@ -150,6 +158,19 @@ test('an unnamed account-backed S corp asks once for its business name, then use
   await callTool('undo', { operation: 'undo', id: out.receipt.id }, { ...ctx, scopes: ['write:facts'], channel: 'mcp' });
   assert.ok(!getFacts(db)['accounts.businessEntity']);
   assert.ok(buildScenario(db).recs.find(r => r.id === 'missing-data').question.keys.includes('accounts.businessEntity'));
+});
+
+test('an owner-provided entity name grounds the account-backed business name across replanning and classification Undo', async t => {
+  const { db } = await store(t);
+  budgetAndBusiness(db, { named: false });
+  addFact(db, 'business.entities', [{ name: 'Known Studio', owner: 'owner' }]);
+  await planRun(db);
+  await planRun(db);
+  assert.equal(getFacts(db)['business.entities'].find(e => e.name === 'Known Studio')?.type, 's_corp');
+  assert.ok(!buildScenario(db).recs.some(r => r.question?.keys.includes('accounts.businessEntity')));
+  recordFactAnswers(db, [{ key: 'business.entityInference', value: { 'Known Studio': { undone: true } } }], { now });
+  await planRun(db);
+  assert.deepEqual(getFacts(db)['business.entities'].find(e => e.name === 'Known Studio'), { name: 'Known Studio', owner: 'owner' });
 });
 
 test('AC1: planner infers personal ledgers and the sole S corp with evidence, Undo and the real salary unlock', async t => {

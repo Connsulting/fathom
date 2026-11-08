@@ -106,6 +106,11 @@ function rawReasonItem(ctx, reason, name) {
   if (reason.startsWith('entity_unclassified:')) {
     const slug = reason.slice('entity_unclassified:'.length);
     const e = (ctx.entities || []).find(x => x.slug === slug);
+    const unnamed = (ctx.entities || []).filter(x => x.needsName);
+    if (unnamed.length) {
+      const who = unnamed.map(x => name(x.displayName)).join(', ');
+      return { code: 'accounts.businessEntity', tax: true, text: `What is the business name for ${who}?`, task: `Tell Fathom the business name for ${who}` };
+    }
     const unclassified = (ctx.entities || []).filter(x => !x.classified);
     const names = unclassified.length ? unclassified.map(x => name(x.displayName || x.name))
       : [...new Set((ctx.data?.pnl || []).map(ledgerDisplayName))].map(name);

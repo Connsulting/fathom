@@ -152,16 +152,20 @@ export function computeFigures(data, facts, ctx) {
     const proj = x => cents(x * 12 / m);
     e.sums = s;
     e.proj = proj;
-    const loc = ids => rowsLoc('pnl_lines', ids);
-    out.put(`pnl.${e.slug}.income`, s.income, 'a', `${e.displayName || e.name} income, year to date`, 'pnl', loc(s.ids.income), s.fileId);
-    out.put(`pnl.${e.slug}.expenses`, s.expenses, 'a', `${e.displayName || e.name} expenses, year to date`, 'pnl', loc(s.ids.all), s.fileId);
-    out.put(`pnl.${e.slug}.net`, s.net, 'a', `${e.displayName || e.name} net profit, year to date`, 'pnl', loc(s.ids.all), s.fileId);
-    out.put(`inc.ytd.${e.slug}`, s.income, 'a', `${e.displayName || e.name} income received this year`, 'pnl', loc(s.ids.income), s.fileId);
+    const loc = rows => {
+      const sources = [...new Set(rows.map(r => r.sourceTable || 'pnl_lines'))].map(table => ({ table, ids: rows.filter(r => (r.sourceTable || 'pnl_lines') === table).map(r => r.id) }));
+      return sources.length <= 1 ? rowsLoc(sources[0]?.table || 'pnl_lines', sources[0]?.ids || [])
+        : { sources: sources.map(s => ({ table: s.table, ids: s.ids.slice(0, 50), count: s.ids.length })) };
+    };
+    out.put(`pnl.${e.slug}.income`, s.income, 'a', `${e.displayName || e.name} income, year to date`, 'pnl', loc(s.rows.income), s.fileId);
+    out.put(`pnl.${e.slug}.expenses`, s.expenses, 'a', `${e.displayName || e.name} expenses, year to date`, 'pnl', loc(s.rows.all), s.fileId);
+    out.put(`pnl.${e.slug}.net`, s.net, 'a', `${e.displayName || e.name} net profit, year to date`, 'pnl', loc(s.rows.all), s.fileId);
+    out.put(`inc.ytd.${e.slug}`, s.income, 'a', `${e.displayName || e.name} income received this year`, 'pnl', loc(s.rows.income), s.fileId);
     const projLoc = (what, value) => ({ calc: 'straightLineProjection', inputs: { ytd: value, months: m }, steps: [{ label: what, formula: 'year to date * twelve / months of data', value: proj(value) }] });
     out.put(`pnl.${e.slug}.netProj`, proj(s.net), 'p', `${e.displayName || e.name} net profit, projected for the year`, 'plan-projection', projLoc('Projected net', s.net));
     if (e.classified && e.type === 's_corp') {
-      out.put(`pnl.${e.slug}.salary`, s.salary, 'a', `${e.displayName || e.name} officer salary, year to date`, 'pnl', loc(s.ids.salary), s.fileId);
-      out.put(`pnl.${e.slug}.payrollTax`, s.payrollTax, 'a', `${e.displayName || e.name} employer payroll tax, year to date`, 'pnl', loc(s.ids.payrollTax), s.fileId);
+      out.put(`pnl.${e.slug}.salary`, s.salary, 'a', `${e.displayName || e.name} officer salary, year to date`, 'pnl', loc(s.rows.salary), s.fileId);
+      out.put(`pnl.${e.slug}.payrollTax`, s.payrollTax, 'a', `${e.displayName || e.name} employer payroll tax, year to date`, 'pnl', loc(s.rows.payrollTax), s.fileId);
       // A salary the owner decided in Decide is the payroll assumption: it replaces the straight-line
       // P&L projection. The second pass below drops it when a W-2 exists or the salary leaves no
       // distributions; profit before salary still comes from the P&L.
@@ -180,7 +184,7 @@ export function computeFigures(data, facts, ctx) {
     }
   }
   if (pnlEntities.length) {
-    const lastPeriod = data.pnl.map(l => l.period).sort().at(-1);
+    const lastPeriod = pnlEntities.flatMap(e => e.lines.map(l => l.period)).sort().at(-1);
     out.source('pnl', SOURCES.pnl.label, `through ${monthLabel(lastPeriod)}`, SOURCES.pnl.kind);
   } else if (TY) {
     out.warn('no_pnl');

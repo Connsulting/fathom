@@ -62,6 +62,7 @@ const NEEDS = Object.freeze({
 export function notBuiltReason(name, code, entities = []) {
   if (String(code).startsWith('entity_unclassified:')) {
     const entity = entities.find(e => e.slug === code.slice('entity_unclassified:'.length));
+    if (entity?.needsName) return { code, text: `Salary war game needs the business name for ${entity.displayName}.`, unlock: 'answers' };
     return { code, text: `${GAME_NAME[name]} needs you to classify ${entity?.displayName || entity?.name || 'the imported business'} as an S corp, sole proprietorship, partnership, personal spending, or not yours.`, unlock: 'answers' };
   }
   if (name === 'salary' && code === 'scorp_identity_missing') {

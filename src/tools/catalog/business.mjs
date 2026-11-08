@@ -16,6 +16,7 @@ const pnlCall = (fn, args) => {
 };
 function requireBusiness(entity) {
   if (entity.kind === 'spending') throw new ToolError('bad_input', 'A spending ledger is not a business entity.');
+  if (entity.kind === 'inactive') throw new ToolError('bad_input', 'An inactive ledger is not a current business entity.');
 }
 function pnl(args, ctx) {
   const clock = clockOf(ctx),
