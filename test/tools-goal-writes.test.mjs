@@ -39,7 +39,7 @@ test('archive matches HTTP and Undo preserves completion and all goal fields', a
 
 test('delete restores every column and refuses a later row or a seed goal', async t => {
   const ctx = await store();
-  const row = add(ctx, { title: 'Reserve floor', kind: 'floor', floor: 9000, track: { figure: 'cash.personal' }, status: 'done' });
+  const row = add(ctx, { title: 'Reserve floor', kind: 'floor', floor: 9000, track: { accounts: [ctx.db.prepare('SELECT id FROM accounts LIMIT 1').get().id] }, status: 'done' });
   const result = await call(ctx, 'delete', { id: row.id });
   assert.equal(result.deleted, row.id);
   assert.equal(ctx.db.prepare('SELECT * FROM goals WHERE id = ?').get(row.id), undefined);

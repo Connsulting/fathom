@@ -76,11 +76,12 @@ for (const [kind, table, pk] of [
 export async function undoAction(ctx, id, scope) {
   const actor = requireActor(ctx);
   if (ctx.scopes && !ctx.scopes.includes(scope)) throw new ToolError('forbidden', `Permission denied: Undo needs ${scope}.`);
-  let receipt;
+  let receipt, decisionChanged = false;
   tx(ctx.db, () => {
     const row = ctx.db.prepare('SELECT * FROM action_receipts WHERE id = ?').get(id);
     if (!row || row.actor_id !== actor || row.scope !== scope) throw new ToolError('forbidden', 'This change is not available to you.');
     if (row.undone_at) throw new ToolError('bad_input', 'This change was already undone.');
+    decisionChanged = row.kind === 'decision_decide' || row.kind === 'decision_revisit';
     const before = parse(row.before_state, null), after = parse(row.after_state, null);
     const definition = KINDS.get(row.kind);
     if (!definition) throw new ToolError('bad_input', 'This receipt kind does not support Undo.');
@@ -115,7 +116,7 @@ export async function undoAction(ctx, id, scope) {
       current.status, before.status ?? current.status, actor);
     receipt = receiptOut(ctx.db.prepare('SELECT * FROM action_receipts WHERE id = ?').get(id));
   });
-  if (scope === 'write:facts') await replanAction(ctx, receipt);
+  if (scope === 'write:facts' || decisionChanged) await replanAction(ctx, receipt);
   return { receipt };
 }
 
