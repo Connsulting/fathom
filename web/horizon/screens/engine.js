@@ -6,7 +6,47 @@ let H = null;
 
 export function bind(kit) { H = kit; }
 
-const S = { cap: null }; // unsaved cap input text
+const S = { cap: null, plan: { phase: 'idle', text: '' } }; // unsaved cap input text; the Run plan now state
+
+/* ---------- Run plan now ---------- */
+
+// Server refusals of POST /api/jobs/plan/run, in plain words. A demo household never plans.
+const PLAN_REFUSED = [
+  [/real stores only/, 'skipped', 'Planning runs on real households. This demo household skips it.'],
+  [/already running/, 'failed', 'A plan is already running. Try again when it finishes.'],
+  [/lock/, 'failed', 'Another process is running jobs right now. Try again in a minute.'],
+  [/paused/, 'failed', 'Jobs are paused for this household, so the plan did not run.'],
+];
+
+// The phase and line for a finished request: `res` is the run response, or null with the server's
+// message in `error`.
+export function planOutcome(res, error) {
+  if (res) {
+    const status = res.run?.status;
+    if (status === 'ok') return { phase: 'done', text: 'Plan finished. Recommendations and figures are up to date.' };
+    if (status === 'skipped') return { phase: 'skipped', text: 'The plan had nothing to run.' };
+    return { phase: 'failed', text: 'The plan run failed. The Jobs list below shows the last run.' };
+  }
+  const msg = String(error || '');
+  for (const [re, phase, text] of PLAN_REFUSED) if (re.test(msg)) return { phase, text };
+  return { phase: 'failed', text: `The plan did not run. ${msg}`.trim() };
+}
+
+export function setPlanState(p) { S.plan = { phase: p.phase, text: p.text || '' }; }
+
+const PLAN_IDLE = 'Re-plans recommendations and deadlines from the latest data.';
+
+// The Run plan now button and its status line, shown above the jobs table.
+export function planControl() {
+  const { esc } = H;
+  const { phase, text } = S.plan;
+  const running = phase === 'running';
+  const line = running ? 'Running the plan.' : text || PLAN_IDLE;
+  return `<div class="h-plan-run">
+      <button type="button" class="h-btn" data-fx-plan-run${running ? ' disabled' : ''}>Run plan now</button>
+      <p class="h-mute sm" role="status" aria-live="polite" data-plan-status data-plan-phase="${esc(phase)}">${esc(line)}</p>
+    </div>`;
+}
 
 function capForm(b) {
   const { esc } = H;
@@ -77,7 +117,7 @@ export function render() {
     : on ? 'Proactive jobs run on schedule and stay inside the monthly budget.' : 'Proactive jobs are paused. Chat answers only from what is on file. Turn it back on here.')}
     <div class="h-card">${summary}</div>
     ${ledgerHtml(en)}
-    ${section('Jobs', table, `${jobsList.length} scheduled`)}`);
+    ${section('Jobs', planControl() + table, `${jobsList.length} scheduled`)}`);
 }
 
 /* ---------- events ---------- */
@@ -103,4 +143,18 @@ export function onInput(e) {
   return true;
 }
 
-export function reset() { S.cap = null; }
+export function onClick(e) {
+  const t = e.target?.closest?.('[data-fx-plan-run]');
+  if (!t || !H.root?.contains(t)) return false;
+  e.preventDefault();
+  if (S.plan.phase === 'running') return true;
+  setPlanState({ phase: 'running' });
+  H.draw();
+  H.api.runPlan().then(({ res, error }) => {
+    setPlanState(planOutcome(res, error));
+    H.draw();
+  });
+  return true;
+}
+
+export function reset() { S.cap = null; S.plan = { phase: 'idle', text: '' }; }
