@@ -1,9 +1,5 @@
-// Engine best guesses for pending confirm questions (plan D6, D7). guessPending sends pending
-// questions with no guess row in batches, one engine call each (purpose 'confirm'), and stores a
-// row for every question sent: the option when the guess passes validateGuesses, else NULL, so a
-// question is never sent twice. A guess never answers anything. Only a live engine, or a per-call
-// fake script (tests), is called; engine errors stop the run and are returned as `stopped`. The
-// scheduler job 'confirm-guess' (src/jobs/scheduler.mjs) is the only caller outside tests.
+// Legacy stored suggestion format used by card evidence and its focused tests. The scheduler
+// now calls the resolver, which may answer grounded fixed choices (superseding plan D6/D7).
 
 import { parseJson, tx } from '../store/db.mjs';
 

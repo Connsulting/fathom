@@ -151,9 +151,9 @@ export function wireSchema(schema) {
   return out;
 }
 
-export async function messagesRound({ credential, system, systemDynamic, messages, maxTokens, model, schema }) {
+export async function messagesRound({ credential, system, systemDynamic, messages, maxTokens, model, schema, timeoutMs = 120000 }) {
   const client = new Anthropic({ apiKey: credential.value, authToken: null,
-    baseURL: 'https://api.anthropic.com', maxRetries: 0, timeout: 120000 });
+    baseURL: 'https://api.anthropic.com', maxRetries: 0, timeout: timeoutMs });
   let response;
   try {
     response = await client.messages.create({ model, max_tokens: maxTokens,

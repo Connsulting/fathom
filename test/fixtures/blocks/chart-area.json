@@ -1,0 +1,136 @@
+{
+  "id": "c3",
+  "op": "chart",
+  "after": 1,
+  "spec": {
+    "kind": "area",
+    "source": {
+      "tool": "household.figures",
+      "args": {
+        "series": "savingsRate"
+      },
+      "path": "years"
+    },
+    "x": "year",
+    "series": [
+      {
+        "path": "rate"
+      }
+    ]
+  },
+  "calls": [
+    {
+      "tool": "household.figures",
+      "args": {
+        "series": "savingsRate"
+      }
+    }
+  ],
+  "snapshot": {
+    "title": "Savings rate by year",
+    "kind": "area",
+    "stacked": false,
+    "x": [
+      {
+        "text": "2021"
+      },
+      {
+        "text": "2022"
+      },
+      {
+        "text": "2023"
+      },
+      {
+        "text": "2024"
+      },
+      {
+        "text": "2025"
+      },
+      {
+        "text": "2026"
+      }
+    ],
+    "series": [
+      {
+        "label": "Savings rate",
+        "unit": "ratio",
+        "points": [
+          {
+            "value": 0.112,
+            "unit": "ratio",
+            "label": "Savings rate",
+            "kind": "m",
+            "asOf": "2026-10-31",
+            "gaps": [],
+            "provenance": {
+              "calc": "household.figures"
+            },
+            "source": "Your household"
+          },
+          {
+            "value": 0.138,
+            "unit": "ratio",
+            "label": "Savings rate",
+            "kind": "m",
+            "asOf": "2026-10-31",
+            "gaps": [],
+            "provenance": {
+              "calc": "household.figures"
+            },
+            "source": "Your household"
+          },
+          {
+            "value": 0.095,
+            "unit": "ratio",
+            "label": "Savings rate",
+            "kind": "m",
+            "asOf": "2026-10-31",
+            "gaps": [],
+            "provenance": {
+              "calc": "household.figures"
+            },
+            "source": "Your household"
+          },
+          {
+            "value": 0.164,
+            "unit": "ratio",
+            "label": "Savings rate",
+            "kind": "m",
+            "asOf": "2026-10-31",
+            "gaps": [],
+            "provenance": {
+              "calc": "household.figures"
+            },
+            "source": "Your household"
+          },
+          {
+            "value": 0.181,
+            "unit": "ratio",
+            "label": "Savings rate",
+            "kind": "m",
+            "asOf": "2026-10-31",
+            "gaps": [],
+            "provenance": {
+              "calc": "household.figures"
+            },
+            "source": "Your household"
+          },
+          {
+            "value": 0.207,
+            "unit": "ratio",
+            "label": "Savings rate",
+            "kind": "m",
+            "asOf": "2026-10-31",
+            "gaps": [],
+            "provenance": {
+              "calc": "household.figures"
+            },
+            "source": "Your household"
+          }
+        ]
+      }
+    ]
+  },
+  "asOf": "2026-10-31",
+  "builtAt": "2026-11-01T12:00:00.000Z"
+}

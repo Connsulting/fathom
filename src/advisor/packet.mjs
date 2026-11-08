@@ -141,7 +141,8 @@ export function buildPacketHtml(S, { generatedOn, sources = {} } = {}) {
     for (const m of arr(r.mine)) for (const note of arr(S.fig?.[m.fig]?.notes)) assumptions.add(plain(note));
     const kb = arr(r.kb).map(k => `<li><b>${R(k.title)}</b>${k.cite ? `, ${R(k.cite)}` : ''}</li>`).join('');
     const tasks = arr(r.tasks).map(t => `<li>${R(t.t)}</li>`).join('');
-    const qs = [`Do you confirm "${R(r.title)}" as written, or should we drop it?`, ...arr(r.qa).map(q => R(q.q))];
+    const advisorLabels = { 'retirement.planTermsConfirmed': 'Please confirm the retirement plan terms and eligibility.', 'retirement.aggregationConfirmed': 'Please confirm whether related businesses share retirement plan limits.', 'business.salaryRange': 'What annual salary range is reasonable for the work performed?' };
+    const qs = [...arr(r.advisorQuestions).map(key => advisorLabels[key]).filter(Boolean), `Do you confirm "${R(r.title)}" as written, or should we drop it?`, ...arr(r.qa).map(q => R(q.q))];
     const w = waiting.get(r.id);
     return `<section class="rec" id="rec-${esc(r.id)}">
 <h3>${i + 1}. ${R(r.title)}</h3>

@@ -179,6 +179,7 @@ describe('an owner override survives planning (AC2)', () => {
     const db = await S.store();
     await plan(db);
     act(db, 'va-q4-estimate', 'owner', 'automatic');
+    db.prepare("UPDATE transactions SET category = 'Uncategorized' WHERE lower(category) LIKE '%charit%' OR lower(category) LIKE '%donat%'").run();
     addFact(db, 'tax.itemizedEstimate', 40000);
     await plan(db, '2026-11-20');
     assert.equal(recRow(db, 'va-q4-estimate').status, 'waiting', 'precondition: blocked');
