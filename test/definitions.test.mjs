@@ -96,3 +96,20 @@ test('plain forget is reversible and proposals cover both linked tables without 
   await callTool('update_preferences', args, ctx);
   assert.notEqual(proposal.basis, proposalBasis(db, proposal.tool, proposal.scopes, proposal.args));
 });
+
+test('migration preserves existing preferences and demo reset clears linked rows in foreign-key order', async () => {
+  const { openDb, migrate, setSetting } = await import('../src/store/db.mjs');
+  const { join } = await import('node:path');
+  const { seedDemo } = await import('../demo/seed.mjs');
+  const db = s.track(openDb(join(s.dir(), 'migration.sqlite')));
+  migrate(db, { through: 31 });
+  db.prepare("INSERT INTO preferences(id,text,actor_id,created_at,updated_at) VALUES ('old','Synthetic legacy preference','person-a','2026-01-01','2026-01-01')").run();
+  migrate(db);
+  assert.deepEqual({ ...db.prepare("SELECT * FROM preferences WHERE id='old'").get() }, { id: 'old', text: 'Synthetic legacy preference', actor_id: 'person-a', created_at: '2026-01-01', updated_at: '2026-01-01', origin: null, conversation_key: null, definition_id: null });
+  await callTool('update_preferences', args, context(db));
+  assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), []);
+  setSetting(db, 'mode', 'demo');
+  seedDemo(db);
+  assert.equal(db.prepare('SELECT count(*) n FROM spending_definitions').get().n, 0);
+  assert.equal(db.prepare('SELECT count(*) n FROM preferences').get().n, 0);
+});

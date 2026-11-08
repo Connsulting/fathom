@@ -11,7 +11,8 @@ export function requireActor(ctx) {
 
 export function receiptOut(r) {
   return { id: r.id, scope: r.scope, label: r.label, before: parse(r.before_value, null), after: parse(r.after_value, null),
-    actorId: r.actor_id, ts: r.created_at, undone: !!r.undone_at, planningPending: !!r.planning_pending };
+    actorId: r.actor_id, ts: r.created_at, undone: !!r.undone_at, planningPending: !!r.planning_pending,
+    ...(r.kind === 'refresh' ? { undo: { available: false, reason: 'This refresh cannot be undone here.' } } : {}) };
 }
 
 export function receiptsFor(db, key) {

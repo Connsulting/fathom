@@ -465,7 +465,7 @@ export function workHtml(m) {
   const { esc } = H;
   const actions = H.arr(m.provenance.actions).map(a => `<div class="h-action-receipt" data-receipt="${esc(a.id)}" role="status">${receiptLine(a)}`
     + (a.planningPending ? '<p class="h-mute">Saved. Planning is pending.</p>' : '')
-    + (a.undone ? '<span class="h-mute">Undone</span>' : `<button type="button" class="h-btn" data-undo-action="${esc(a.id)}">Undo</button>`) + '</div>').join('');
+    + (a.undo?.available === false ? `<span class="h-mute">${esc(a.undo.reason)}</span>` : a.undone ? '<span class="h-mute">Undone</span>' : `<button type="button" class="h-btn" data-undo-action="${esc(a.id)}">Undo</button>`) + '</div>').join('');
   if (m.notice || !isObj(m.provenance.work)) return actions;
   const w = m.provenance.work;
   const ms = Number(w.ms);

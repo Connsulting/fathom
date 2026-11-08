@@ -485,6 +485,7 @@ Money columns are dollars rounded to cents; JSON columns hold JSON text. The pro
 | `goals` | `id` PK, `def` JSON, `sort`, `origin` (`seed` or `owner`), `archived_at`, `created_at`, `updated_at` (migration 012), `done_at` (migration 026: app clock ISO time a goal was marked done); see "Goals and the tradeoff curve" |
 | `deadlines` | `id` PK, `date`, `label`, `title`, `rec_id`, `hard` |
 | `events` | `id` PK, `date` (label as in the scenario), `kind`, `title`, `body`, `sort` |
+| `spending_definitions` | `id` PK (slug), `name`, `def` JSON selectors, `updated_at`; migration 033 links exactly one preference through nullable unique `preferences.definition_id`. Save, delete, forget and Undo update both rows atomically. |
 | `packs_state` | `id` PK, `def` JSON (the pack with its base status, plus an optional `manifest` tag naming the repo pack manifest the row stands for, and on demo rows a `label` keeping the demo name; migration 005 tags the demo rows with `manifest`, migration 006 adds `label`, real rows link by their own id), `active` (NULL means no override), `exploring`, `what_if_asked`, `what_if_done`, `unhid` JSON, `sort`, `updated_at` |
 | `decisions` | `id` PK, `title`, `status` in open, decided, upcoming, `wargame`, `rec_id`, `opens_on`, `when_label`, `note`, `decided_line`, `sort` |
 | `jobs` | `id` PK, `name`, `cadence`, `does`, `cost`, `next_label`, `last_label`, `enabled`, `sort` |
@@ -2959,12 +2960,14 @@ Migration 025 adds durable `action_receipts` and `preferences`. Each receipt com
 transaction as its write and records actor, conversation, changed fields and prior values. Receipts
 hydrate beside the answer's work block, including notice or missing replies, and keep their conversation
 reachable. Undo restores the prior value and provenance, refuses another actor or a later conflicting
-edit, and replans facts. The MCP-only undo operation checks the loaded receipt scope against the key scopes. Ask gets the Undo button through
+edit, and replans facts. The undo operation checks the loaded receipt scope against the key scopes. Ask gets the Undo button through
 `POST /api/actions/:id/undo`. A busy planner preserves the fact and receipt, reports planning pending,
 and queues planning again. Ask queues replanning until the paid model round releases its engine lock, then drains that work before continuing; planner prose may safely call the same engine. Demo baby dates use the same deterministic new-child window calculation.
 
-`update_preferences.remember` stores a short verbatim preference or definition. The Memories page (`#/memories`, linked from Settings) lists it with its source (`origin` and `conversation_key`, migration 028) and allows adding, editing or deletion through the same validation. Preferences enter the dynamic Ask prompt as household
+`update_preferences.remember` stores a short verbatim preference. `update_preferences.save_definition` stores a named selector and exactly one linked preference atomically (migration 033). Linked preferences expose `definitionId` to Ask, refuse ordinary edits, and are removed together with their saved definition by forget or delete; Undo restores both rows. Built-in selections cannot be overwritten. The Memories page (`#/memories`, linked from Settings) lists it with its source (`origin` and `conversation_key`, migration 028) and allows adding, editing or deletion through the same validation. Preferences enter the dynamic Ask prompt as household
 data; they never override product boundaries, evidence requirements or permissions.
+
+`refresh` imports files, retries extraction, rebuilds Your plans and runs the four allowed jobs through the same household pipeline and scheduler as the API. Engine-using refreshes in Ask wait in the round-end queue until the model ledger is released; MCP awaits completion inline. A refresh receipt records its eventual result, including the file id or failure status. These receipts expose `undo.available: false` and the chat receipt omits Undo. Imported facts are changed through Confirm.
 
 
 ## Transaction categories
