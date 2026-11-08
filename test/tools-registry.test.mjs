@@ -13,8 +13,8 @@ const expected = {
   show: ['chart', 'table', 'compare', 'timeline'],
   household: ['summary', 'facts', 'fact_shapes', 'figures', 'deadlines', 'health', 'confirm_items', 'imports'],
   accounts: ['list', 'holdings', 'detail', 'net_worth', 'merge_candidates', 'sources'], sources: ['archive_account', 'remove_file', 'merge_accounts'], tax: ['estimate', 'room'], transactions: ['search'], business: ['pnl', 'rows'],
-  retirement: ['target', 'growth', 'after_tax'],
-  spending: ['total', 'compare', 'definitions', 'cash_flow', 'recurring'],
+  retirement: ['target', 'growth', 'after_tax', 'access', 'bridge'],
+  spending: ['total', 'compare', 'definitions', 'cash_flow', 'recurring', 'obligations', 'projection'],
   goals: ['list', 'pace', 'suggestions'], recommendations: ['list', 'detail', 'advisor', 'wargame'],
   knowledge: ['packs', 'search', 'entry'], answer: ['fact', 'expected_transaction', 'rec_questions', 'confirm', 'reopen', 'yearend_mark'],
   act_on_recommendation: ['status', 'owner', 'step', 'start_over', 'decide', 'revisit', 'pick_point'], update_goal: ['create', 'edit', 'archive', 'delete', 'suggestion'],
@@ -162,4 +162,25 @@ test('show schema accepts only paths and references, with numeric values confine
     if (schema.items) inspect(schema.items, [...path, 'items']);
   };
   inspect(getTool('show').inputSchema);
+});
+
+
+test('compact descriptions retain literal wording, required argument boundaries and shared MCP output', () => {
+  const header = [{ name: 'sample', kind: 'read', purpose: 'Exact purpose.' }];
+  const shared = { tool: 'sample', scope: 'read', route: 'Sample', routes: [], handler: () => null };
+  const operations = [
+    { ...shared, name: 'list', summary: 'Exact list summary.', params: { first: { type: 'string' }, second: { type: 'string' } }, required: [] },
+    { ...shared, name: 'detail', summary: 'Exact detail summary.', params: { id: { type: 'string' }, kind: { type: 'string' }, limit: { type: 'integer' } }, required: ['id', 'kind'] },
+    { ...shared, name: 'count', summary: 'Exact count summary.', params: {}, required: [] },
+  ];
+  const description = buildRegistry([{ operations }], header).tools[0].description;
+  assert.ok(description.startsWith(header[0].purpose));
+  assert.ok(description.includes('list(first?second?)'));
+  assert.ok(description.includes('detail(id,kind,limit?)'));
+  assert.ok(description.includes('count()'));
+  for (const operation of operations) assert.ok(description.includes(operation.summary));
+  for (const listed of toolsForScopes(SCOPES)) {
+    assert.equal(listed.description, getTool(listed.name).description);
+    assert.deepEqual(listed.inputSchema, getTool(listed.name).inputSchema);
+  }
 });

@@ -310,6 +310,14 @@ test('transactions.search names credit cards and categories, business.pnl names 
 });
 
 
+test('C7 reads are offered through the shared Ask tool registry', () => {
+  const byName = new Map(REGISTRY.map(tool => [tool.name, tool]));
+  for (const [name, operations] of [['spending',['obligations','projection']],['retirement',['access','bridge']]]) {
+    for (const operation of operations) assert.ok(byName.get(name).operations.some(op => op.name === operation && op.scope === 'read'));
+  }
+});
+
+
 for (const [rule, names, pattern] of [
   ['stored figures', ['household'], /call household\.figures[^\n]*\{f:key\}[^\n]*summary/i],
   ['arithmetic', ['calculate'], /(?:call|use) calculate[^\n]*sum[^\n]*difference[^\n]*ratio[^\n]*change/i],

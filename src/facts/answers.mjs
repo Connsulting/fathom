@@ -10,16 +10,19 @@ export class FactAnswerError extends Error {}
 const object = v => !!v && typeof v === 'object' && !Array.isArray(v);
 const fail = () => { throw new FactAnswerError('Check the answer type, required fields and units.'); };
 
-function validate(value, shape) {
+function validate(value, shape, year) {
   if (shape.type === 'map') {
     if (!object(value) || !Object.keys(value).length || Object.keys(value).some(k => !normalizeName(k)) || new Set(Object.keys(value).map(normalizeName)).size !== Object.keys(value).length) fail();
-    for (const entry of Object.values(value)) validate(entry, shape.values);
+    for (const entry of Object.values(value)) validate(entry, shape.values, year);
   } else if (shape.type === 'object') {
     if (!object(value) || Object.keys(value).some(k => !Object.hasOwn(shape.fields, k))) fail();
     for (const [key, field] of Object.entries(shape.fields)) {
       const needed = !field.optional && (!field.when || Object.entries(field.when).every(([k, v]) => value[k] === v));
-      if (needed || Object.hasOwn(value, key)) validate(value[key], field);
+      if (needed || Object.hasOwn(value, key)) validate(value[key], field, year);
     }
+  } else if (shape.type === 'dates') {
+    if (!Array.isArray(value) || !value.length || value.length > shape.maxItems
+      || value.some(d => typeof d !== 'string' || isoDate(d) !== d || d > `${year}-12-31`)) fail();
   } else if (shape.type === 'years') {
     if (!Array.isArray(value) || !value.length || value.length > shape.maxItems
       || value.some(y => !Number.isInteger(y) || y < shape.min || y > shape.max)) fail();
@@ -27,7 +30,7 @@ function validate(value, shape) {
     if (typeof value !== 'boolean') fail();
   } else if (shape.type === 'number') {
     if (typeof value !== 'number' || !Number.isFinite(value) || value < shape.min || (shape.max != null && value > shape.max)
-      || (shape.exclusiveMin != null && value <= shape.exclusiveMin) || (shape.integer && !Number.isInteger(value))) fail();
+      || (shape.exclusiveMin != null && value <= shape.exclusiveMin) || (shape.integer && !Number.isInteger(value)) || (shape.half && !Number.isInteger(value * 2)) || (shape.currentYear && value > year)) fail();
   } else if (shape.type === 'date') {
     if (typeof value !== 'string' || isoDate(value) !== value) fail();
   } else if (shape.type === 'choice') {
@@ -39,6 +42,10 @@ export function recordFactAnswers(db, answers, { now = new Date().toISOString(),
   if (!Array.isArray(answers) || !answers.length || answers.length > 50) fail();
   const date = now.slice(0, 10);
   if (isoDate(date) !== date) fail();
+  const priorPlans = parseJson(db.prepare("SELECT value FROM facts WHERE key='accounts.planType'").get()?.value, {});
+  const planAnswer = answers.find(a => a?.key === 'accounts.planType');
+  const facts = { 'accounts.planType': { ...priorPlans, ...(object(planAnswer?.value) ? planAnswer.value : {}) } };
+  const year = Number(date.slice(0,4));
   const keys = new Set();
   const writes = answers.map(a => {
     if (!object(a) || typeof a.key !== 'string' || keys.has(a.key)) fail();
@@ -50,10 +57,10 @@ export function recordFactAnswers(db, answers, { now = new Date().toISOString(),
       if (!object(value) || !Object.keys(value).length) fail();
       for (const [id, entry] of Object.entries(value)) {
         if (shape.scope === 'account') {
-          const account = db.prepare('SELECT kind, name FROM accounts WHERE id = ?').get(id);
-          if (!account || !acceptsAnswerAccount(shape, account)) fail();
+          const account = db.prepare('SELECT id, kind, name FROM accounts WHERE id = ?').get(id);
+          if (!account || !acceptsAnswerAccount(shape, account, facts)) fail();
         } else if (!['owner', 'spouse'].includes(id)) fail();
-        validate(entry, shape);
+        validate(entry, shape, year);
       }
       const prior = parseJson(db.prepare('SELECT value FROM facts WHERE key = ?').get(a.key)?.value, {});
       value = { ...(object(prior) ? prior : {}), ...value };
@@ -63,7 +70,7 @@ export function recordFactAnswers(db, answers, { now = new Date().toISOString(),
         const prior = parseJson(db.prepare('SELECT value FROM facts WHERE key = ?').get(a.key)?.value, {});
         value = { ...(object(prior) ? prior : {}), ...value };
       }
-      validate(value, shape);
+      validate(value, shape, year);
       if (shape.type === 'map') {
         const prior = parseJson(db.prepare('SELECT value FROM facts WHERE key = ?').get(a.key)?.value, {});
         const changed = new Set(Object.keys(value).map(normalizeName));
@@ -71,6 +78,8 @@ export function recordFactAnswers(db, answers, { now = new Date().toISOString(),
         value = { ...Object.fromEntries(keep), ...value };
       }
     }
+    if (a.key === 'obligations.mortgage' && value.escrowMonthly >= value.monthlyPayment) fail();
+    if (/^household\.(owner|spouse)BirthDate$/.test(a.key) && value > date) fail();
     if (a.key === 'business.salaryRange' && value.min > value.max) fail();
     // A birth year in the future is a typo, not an answer.
     if (a.key === 'household.birthYears' && [value.owner, value.spouse, ...(value.dependents || [])].some(y => y > Number(date.slice(0, 4)))) fail();

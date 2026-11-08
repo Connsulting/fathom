@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mcpHouseholds, mcp, toolText, result, digest, expectedTransactionFixture, refreshImportFixture, accountCategoryFixtures } from './helpers/tenancy-mcp.mjs';
+import { mcpHouseholds, mcp, toolText, result, digest, expectedTransactionFixture, refreshImportFixture, accountCategoryFixtures, c7ReadFixtures } from './helpers/tenancy-mcp.mjs';
 import { callTool, tools } from '../src/tools/index.mjs';
 import { isMcpTool } from '../src/mcp/keys.mjs';
 
@@ -93,6 +93,24 @@ test('exact MCP transport retains bearer-only auth, stateless responses and Host
     const listed = await mcp(f.baseUrl, f.A.key.key, 'tools/list');
     assert.equal(listed.status, 200);
     assert.deepEqual(listed.json.result.tools.map(t => t.name), mcpTools.map(t => t.name));
+  } finally { await f.close(); }
+});
+
+
+test('C7 obligation and access operations use only the bearer household facts and balances', async () => {
+  const f = await mcpHouseholds();
+  try {
+    const fixtures = new Map([[f.A,c7ReadFixtures(f.A)],[f.B,c7ReadFixtures(f.B)]]);
+    for (const [own,other] of [[f.A,f.B],[f.B,f.A]]) {
+      const before=digest(other.db);
+      for (const fixture of fixtures.get(own)) {
+        const response=await f.call(own,fixture.tool,fixture.args,{cookie:other.admin.cookie,'x-fathom-household':other.id});
+        const data=result(response);
+        assert.equal(fixture.path.split('.').reduce((v,k)=>v?.[k],data),fixture.expected);
+        assert.ok(!toolText(response).includes(other.canary));
+      }
+      assert.equal(digest(other.db),before);
+    }
   } finally { await f.close(); }
 });
 

@@ -96,7 +96,12 @@ export function buildRegistry(modules, toolHeaders = headers) {
       if (Object.hasOwn(properties, key) && !isDeepStrictEqual(properties[key], schema)) throw new TypeError(`Conflicting parameter schema: ${header.name}.${key}`);
       properties[key] = schema;
     }
-    const description = [header.purpose, ...operations.map(o => `${o.name} (${Object.keys(o.params).map(k => k + (o.required.includes(k) ? '' : '?')).join(', ')}): ${o.summary}`)].join('\n');
+    const descriptionParts = [header.purpose, ...operations.map(o => {
+      const keys = Object.keys(o.params);
+      const args = keys.map((key, i) => key + (o.required.includes(key) ? (i < keys.length - 1 ? ',' : '') : '?')).join('');
+      return `${o.name}(${args})${o.summary}`;
+    })].filter(Boolean);
+    const description = descriptionParts.map((part, i) => i && !/[.!?;:]$/.test(descriptionParts[i - 1]) ? `;${part}` : part).join('');
     if (description.length > 900) throw new TypeError(`Description too long: ${header.name}`);
     const inputSchema = { type: 'object', properties, required: ['operation'], additionalProperties: false };
     // validateArgs(args) -> the operation: registry validation of { operation, ...params }.

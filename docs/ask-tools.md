@@ -64,7 +64,7 @@ beside C1 and merges before any live run is used to judge a tool ticket. Section
    and `transactions.search` carries `ids` if #76 is on main when C1 starts. PR #79 (bounded
    category and Confirm suggestions) edits `src/categories/store.mjs` and `src/ingest/confirm.mjs`,
    which C8 also edits; the second to merge rebases.
-4. Context budget. The estimate for the full design here is about 26,000 of the 30,000-character
+4. Context budget. The estimate for the full design here is about 26,000 of the 34,000-character
    ceiling (section "Design rule"), after declaring the shared Ref, Assumption and Operand shapes
    loosely in schemas and fully in the handlers and rules. Every ticket after C1 runs the budget
    test. A ticket that would cross the ceiling shortens descriptions or schema text inside its own
@@ -128,10 +128,10 @@ beside C1 and merges before any live run is used to judge a tool ticket. Section
    `calculate`), so the MCP smoke can call every read tool.
 
 Context budget. Every tool's name, description and input schema together, as `tools/list`
-returns them to a key holding every scope, stay under about 8,000 tokens. The measure is a
+returns them to a key holding every scope, stay within the cached system-context budget. The measure is a
 character count as a proxy: `test/tools-registry.test.mjs` (C1) builds the tool list for a key
 with every scope through `toolsForScopes`, serializes `[{ name, description, inputSchema }]` with
-`JSON.stringify`, and fails above 30,000 characters (8,000 tokens at 3.75 characters per token, a
+`JSON.stringify`, and fails above 34,000 characters (about 9,100 tokens at 3.75 characters per token, a
 conservative ratio for JSON schema text). The same test fails on a description over 900
 characters, and on the assembled routing and rule text (section 4) over 8,000 characters. It
 prints the measured totals so a ticket's PR can quote them. Today's 30 tools measure 12,633
@@ -457,7 +457,7 @@ MCP is stateless per request, so references are re-evaluable, not session handle
    total.
 4. Periods: at most 120 months (`MAX_MONTHS` in `src/accounts/trend.mjs`).
 5. A tool description is at most 900 characters, an operation summary at most 140, and the whole
-   listed catalog at most 30,000 characters (Design rule).
+   listed catalog at most 34,000 characters (Design rule).
 6. A tool result is at most 256 KB of JSON; past that the tool truncates its longest list and sets
    `truncated: true`.
 
@@ -816,8 +816,9 @@ source. Rules and missing inputs:
 `bridge`: retiring at a stated age before access age, spending until access age against money
 reachable without penalty.
 
-1. `accessible.rothContributions` is the sum of `accounts.rothBasis`; a Roth account without it
-   adds nothing and is named in a `missing_fact` gap.
+1. `accessible.rothContributions` sums `accounts.rothBasis`, capped at each account's current
+   value. A Roth account without basis adds nothing and is named in a `missing_fact` gap; a
+   missing balance leaves accessible contributions unavailable.
 2. `accessible.ruleOf55` counts an employer-plan balance only for an account that qualifies under
    `access`'s rule, and only from its separation date: a qualifying balance whose separation date
    is after the bridge's start (the date the person reaches `retireAge`) is excluded until that
@@ -1318,7 +1319,7 @@ Household facts the tools need:
 | `obligations.childcareChangeDate` | date | no | after C7 |
 | `accounts.planType` | per account choice: `traditional_ira`, `roth_ira`, `sep_ira`, `401k`, `roth_401k`, `solo_401k`, `403b`, `457b`, `hsa`, `529`, `taxable` | no | after C7 (account scope, kinds retirement, roth, ira, taxable, brokerage) |
 | `accounts.rothFirstContributionYear` | per account year (1975 to the current year) | no | after C7 (account scope, kind roth, or plan type roth_ira or roth_401k) |
-| `accounts.rothBasis` | per account dollars | no | after C7 (account scope, kind roth) |
+| `accounts.rothBasis` | per account dollars | no | after C7 (account scope, kind roth, or plan type roth_ira or roth_401k) |
 | `accounts.separationDate` | per account date: the day the person left or will leave the plan's sponsoring employer | no | after C7 (account scope, `date` answer shape, accounts whose plan type is an employer plan; the owner states it, never inferred from a retirement age) |
 
 `accounts.planType` replaces the `accounts.taxTreatment` key an earlier draft named: one fact
