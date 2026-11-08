@@ -56,7 +56,8 @@ const ACCOUNT_KIND = {
 
 const EDIT_NOTES = { route: 'onboarding', step: 3, label: 'Correct in notes' };
 const EDIT_CONFIRM = { route: 'confirm', label: 'Review in Confirm' };
-const EDIT_ACCOUNTS = { route: 'accounts', label: 'Edit in Accounts' };
+// The account list lives on the Money overview (#/accounts lands there too).
+const EDIT_ACCOUNTS = { route: 'money', label: 'Edit in Accounts' };
 
 function fileNames(db, ids) {
   const out = [];
