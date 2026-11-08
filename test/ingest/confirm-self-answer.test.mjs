@@ -1,0 +1,177 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { realStore } from '../helpers/ingest.mjs';
+import { importProposedRows } from '../helpers/import-proposal-fixture.mjs';
+import { planRun } from '../helpers/plan.mjs';
+import { setSetting } from '../../src/store/db.mjs';
+import { upsertFact } from '../../src/store/facts.mjs';
+import { autoResolve } from '../../src/ingest/auto.mjs';
+import { resolvePending } from '../../src/resolve/index.mjs';
+import { categoryOptions, loadCategoryInputs, setTransactionCategory } from '../../src/categories/store.mjs';
+import { KINDS, KIND_OPTIONS, EMPLOYER_OPTIONS, EMPLOYER_RECIPIENT_OPTIONS, DOCUMENT_RECIPIENT_OPTIONS,
+  FACT_CHECK_OPTIONS, ask, getItem, pendingItems, autoInfo, answerItem, reopenItem, recordFact } from '../../src/ingest/confirm.mjs';
+import { ANSWER_SHAPES } from '../../src/jobs/triggers/common.mjs';
+import { SCHEMAS } from '../../src/ingest/extract.mjs';
+import { ingestScreens } from '../../web/horizon/screens/ingest.js';
+
+const NOW = '2026-11-05T12:00:00.000Z';
+const names = { me: 'Avery Example', spouse: 'Blair Example' };
+const fact = (db, key, value) => upsertFact(db, { key, value, src: 'you', confirmed: true, now: NOW });
+async function store(t) {
+  const s = await realStore();
+  t.after(() => s.close());
+  setSetting(s.db, 'clock', NOW.slice(0, 10));
+  return s;
+}
+const question = (db, kind, subject, options, context = {}) => ask(db, { kind, subject, options, context,
+  question: 'Which answer is right?', now: NOW }).id;
+function account(db, id, name) {
+  db.prepare('INSERT INTO accounts (id,name,inst,owner) VALUES (?,?,?,?)').run(id, name, 'Example Bank', 'You');
+  return question(db, 'account_kind', id, KIND_OPTIONS);
+}
+function transaction(db, description, category = null) {
+  const id = Number(db.prepare("INSERT INTO transactions (account_id,date,amount,description,category,parser) VALUES ('cash','2026-10-15',-150,?,?, 'simplefin')")
+    .run(description, category).lastInsertRowid);
+  const item = question(db, 'transaction_category', String(id), categoryOptions(loadCategoryInputs(db)), { transactionId: id, merchant: description });
+  return { id, item };
+}
+function assertAuto(db, id, option) {
+  assert.equal(getItem(db, id).answer, option);
+  assert.ok(autoInfo(db, id)?.evidence.text);
+  assert.ok(db.prepare('SELECT 1 FROM confirm_undo WHERE item_id=?').get(id));
+}
+
+test('AC1: business aliases, exact payroll names and clear account kinds answer with evidence and Undo', async t => {
+  const s = await store(t), db = s.db;
+  fact(db, 'household.names', names);
+  fact(db, 'business.entities', [{ name: 'Example Studio', type: 's_corp', owner: 'owner' }]);
+  db.prepare('INSERT INTO entity_aliases VALUES (?,?,?)').run('examplestudiopayroll', 'Example Studio', NOW);
+  const relation = question(db, 'employer_relation', 'examplestudiopayroll', EMPLOYER_OPTIONS, { employer: 'Example Studio Payroll' });
+  const checking = account(db, 'cash', 'Everyday Checking');
+  const savings = account(db, 'reserve', 'Emergency Savings');
+  const ambiguous = account(db, 'other', 'Flexible Account');
+  await importProposedRows(s, [{ target: 'document', docType: 'w2', fields: {
+    taxYear: 2026, employerName: 'Example Outside One', employeeName: names.me, wages: 70000, federalWithheld: 5000, confidence: 1,
+  } }], { name: 'synthetic-owner-w2.xlsx', now: NOW });
+  await importProposedRows(s, [{ target: 'document', docType: 'w2', fields: {
+    taxYear: 2026, employerName: 'Example Outside Two', employeeName: names.spouse, wages: 65000, federalWithheld: 4500, confidence: 1,
+  } }], { name: 'synthetic-spouse-w2.xlsx', now: NOW });
+  autoResolve(db, { now: NOW });
+  assertAuto(db, relation, 'household');
+  assertAuto(db, checking, 'checking');
+  assertAuto(db, savings, 'cash');
+  for (const [employer, person] of [['exampleoutsideone', 'owner'], ['exampleoutsidetwo', 'spouse']]) {
+    const item = db.prepare("SELECT id FROM confirm_items WHERE kind='employer_recipient' AND subject=?").get(employer);
+    assert.ok(item, 'payroll import queued a recipient');
+    assertAuto(db, item.id, person);
+  }
+  assert.equal(getItem(db, ambiguous).status, 'pending');
+  reopenItem(db, checking, { now: NOW });
+  autoResolve(db, { now: NOW });
+  assert.equal(getItem(db, checking).status, 'pending');
+  assert.equal(db.prepare("SELECT kind FROM accounts WHERE id='cash'").get().kind, null);
+  assert.ok(SCHEMAS.w2.properties.employeeName);
+  assert.ok(SCHEMAS.paystub.properties.employeeName);
+});
+
+test('AC1: missing or conflicting recipients stay pending and owner answers survive', async t => {
+  const { db } = await store(t);
+  fact(db, 'household.names', names);
+  const id = question(db, 'employer_recipient', 'exampleboth', EMPLOYER_RECIPIENT_OPTIONS, { employer: 'Example Both' });
+  for (const employeeName of [names.me, names.spouse]) db.prepare('INSERT INTO documents (doc_type,tax_year,fields) VALUES (?,?,?)')
+    .run('w2', 2026, JSON.stringify({ employerName: 'Example Both', employeeName, taxYear: 2026, wages: 60000 }));
+  const missing = question(db, 'document_recipient', 'w2:unknown:2026:0:doc:missing', DOCUMENT_RECIPIENT_OPTIONS);
+  autoResolve(db, { now: NOW });
+  assert.equal(getItem(db, id).status, 'pending');
+  assert.equal(getItem(db, missing).status, 'pending');
+  answerItem(db, id, 'spouse', { now: NOW });
+  autoResolve(db, { now: NOW });
+  assert.equal(getItem(db, id).answer, 'spouse');
+  assert.equal(autoInfo(db, id), null);
+});
+
+test('AC2: model mappings need at least 0.90 confidence and remain undoable', async t => {
+  const { db } = await store(t);
+  account(db, 'cash', 'Flexible Account');
+  const ids = [0.92, 0.85].map((confidence, i) => {
+    transaction(db, 'Example Mapping ' + i, 'Custom source ' + i);
+    return { confidence, category: 'Custom source ' + i };
+  });
+  let calls = 0;
+  const engine = { isOn: () => true, async call(req) {
+    calls++;
+    const payload = JSON.parse(req.messages[0].content);
+    return { text: JSON.stringify({ answers: payload.items.filter(i => i.kind === 'category_mapping').map(i => ({
+      item: i.id, option: 'household', confidence: ids.find(r => r.category === i.context.category).confidence,
+      basis: 'imported_values', refs: payload.rows.filter(r => r.ref.startsWith('transactions:')).map(r => r.ref),
+    })) }), costUsd: 0 };
+  } };
+  await resolvePending(db, engine, { now: NOW, packDirs: [] });
+  assert.equal(calls, 1);
+  const mappings = db.prepare("SELECT id,context FROM confirm_items WHERE kind='category_mapping' ORDER BY id").all();
+  const high = mappings.find(i => JSON.parse(i.context).category === ids[0].category);
+  const low = mappings.find(i => JSON.parse(i.context).category === ids[1].category);
+  assertAuto(db, high.id, 'household');
+  assert.equal(getItem(db, low.id).status, 'pending');
+  reopenItem(db, high.id, { now: NOW });
+  assert.equal(db.prepare('SELECT count(*) n FROM category_source_rules').get().n, 0);
+  await resolvePending(db, engine, { now: NOW, packDirs: [] });
+  assert.equal(getItem(db, high.id).status, 'pending');
+});
+
+test('AC3: a merchant answer covers pending siblings, protects owner labels, and has one Undo', async t => {
+  const { db } = await store(t);
+  account(db, 'cash', 'Flexible Account');
+  const a = transaction(db, 'Example Merchant'), b = transaction(db, 'EXAMPLE MERCHANT'),
+    labeled = transaction(db, 'Example Merchant'), other = transaction(db, 'Different Merchant');
+  setTransactionCategory(db, labeled.id, 'Business', { now: NOW });
+  answerItem(db, a.item, 'always:Shopping', { now: NOW });
+  assert.equal(getItem(db, b.item).status, 'answered');
+  assert.equal(getItem(db, other.item).status, 'pending');
+  assert.equal(db.prepare('SELECT category FROM transaction_category_corrections WHERE transaction_id=?').get(labeled.id).category, 'Business');
+  assert.equal(db.prepare('SELECT category FROM transaction_category_corrections WHERE transaction_id=?').get(b.id).category, 'Shopping');
+  reopenItem(db, a.item, { now: NOW });
+  for (const id of [a.item, b.item]) assert.equal(getItem(db, id).status, 'pending');
+  assert.equal(db.prepare('SELECT count(*) n FROM transaction_category_corrections').get().n, 1);
+  assert.equal(db.prepare('SELECT count(*) n FROM category_merchant_rules').get().n, 0);
+});
+
+test('AC4: every Confirm kind uses a plain question and fact questions use answer labels', async t => {
+  const { db } = await store(t);
+  for (const kind of KINDS) {
+    const key = 'retirement.planOffersRoth';
+    const context = { key, value: true };
+    const id = ask(db, { kind, subject: 'synthetic:' + kind, question: kind === 'fact_check'
+      ? `An import says ${key} is true. Is that right?` : kind === 'resolver_fact' ? key : 'Which answer is right?',
+      options: FACT_CHECK_OPTIONS, context, now: NOW }).id;
+    const text = getItem(db, id).question;
+    assert.doesNotMatch(text, /[a-z]+[._:][a-zA-Z]|s_corp|mfj/);
+    if (['fact_check', 'resolver_fact'].includes(kind)) assert.ok(text.includes(ANSWER_SHAPES[key].label));
+  }
+  recordFact(db, { key: 'household.filingStatus', value: 'mfj', confidence: 0.5, now: NOW });
+  const item = pendingItems(db).find(i => i.context.key === 'household.filingStatus');
+  assert.match(item.question, /Married filing jointly/);
+  assert.doesNotMatch(item.question, /mfj|household[.]filingStatus/);
+});
+
+test('AC5: production-shaped planning keeps the pending Confirm count within the recorded ceiling', async t => {
+  const { db } = await store(t);
+  fact(db, 'household.names', names);
+  fact(db, 'business.entities', [{ name: 'Example Studio', type: 's_corp', owner: 'owner' }]);
+  db.prepare('INSERT INTO entity_aliases VALUES (?,?,?)').run('examplealias', 'Example Studio', NOW);
+  for (const employer of ['Example Alias', 'Example Outside One', 'Example Outside Two']) question(db, 'employer_relation', employer.toLowerCase().replaceAll(' ', ''), EMPLOYER_OPTIONS, { employer });
+  account(db, 'cash', 'Everyday Checking');
+  account(db, 'reserve', 'Emergency Savings');
+  account(db, 'ambiguous', 'Flexible Account');
+  for (const [employerName, employeeName] of [['Example Outside One', names.me], ['Example Outside Two', names.spouse]]) {
+    db.prepare('INSERT INTO documents (doc_type,tax_year,fields) VALUES (?,?,?)').run('w2', 2026, JSON.stringify({ employerName, employeeName, taxYear: 2026, wages: 60000 }));
+    question(db, 'employer_recipient', employerName.toLowerCase().replaceAll(' ', ''), EMPLOYER_RECIPIENT_OPTIONS, { employer: employerName });
+  }
+  for (let i = 0; i < 7; i++) transaction(db, 'Example Unfamiliar ' + String.fromCharCode(65 + i));
+  assert.equal(pendingItems(db).length, 15);
+  await planRun(db, { now: NOW.slice(0, 10) });
+  const RECORDED_PENDING_CEILING = 8;
+  assert.ok(pendingItems(db).length <= RECORDED_PENDING_CEILING,
+    `Confirm ceiling ${RECORDED_PENDING_CEILING}; actual ${pendingItems(db).length}`);
+  assert.equal(pendingItems(db).filter(i => i.kind === 'account_kind').length, 1);
+});
