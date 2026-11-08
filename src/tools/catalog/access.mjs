@@ -23,7 +23,7 @@ const figure = (value,unit,label,asOf,provenance,gaps=[]) => envelope(value,{uni
 
 function birthOf(facts,person) {
   const key=`household.${person}BirthDate`,born=facts[key];
-  if(typeof born==='string')return {born,precise:true,keys:[key],gaps:[]};
+  if(typeof born==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(born)&&Number.isFinite(Date.parse(born))&&new Date(born).toISOString().slice(0,10)===born)return {born,precise:true,keys:[key],gaps:[]};
   const year=facts['household.birthYears']?.[person];
   if(Number.isInteger(year))return {born:`${year}-12-31`,precise:false,keys:['household.birthYears'],gaps:[gap(`${person} has year precision only; a birth date is missing and dates use year end.`)]};
   return {born:null,precise:false,keys:[key],gaps:[gap(`${person} needs ${key} or household.birthYears.`)]};
@@ -70,8 +70,9 @@ function access(args,ctx) {
       if(qualifying(r,birth,gaps))event('rule_of_55',ACCESS_RULES.ruleOf55.years,r.separation,[r],ACCESS_RULES.ruleOf55.packRef);
       if(r.treatment.startsWith('roth')) {
         const first=data.facts['accounts.rothFirstContributionYear']?.[r.a.id];
-        const missing=Number.isInteger(first)?[]:[gap(`${r.label} needs accounts.rothFirstContributionYear.`)];gaps.push(...missing);
-        const ageDate=dateAt(birth,ageAccess),five=Number.isInteger(first)?`${first+ACCESS_RULES.fiveYear.years}-01-01`:null;
+        const validFirst=Number.isInteger(first)&&first>=1975&&first<=Number(data.clock.slice(0,4));
+        const missing=validFirst?[]:[gap(`${r.label} needs accounts.rothFirstContributionYear.`)];gaps.push(...missing);
+        const ageDate=dateAt(birth,ageAccess),five=validFirst?`${first+ACCESS_RULES.fiveYear.years}-01-01`:null;
         event('roth_earnings_qualified',ageAccess,ageDate&&five?latest([ageDate,five]):null,[r],ACCESS_RULES.fiveYear.packRef,missing);
       }
     }
@@ -102,8 +103,12 @@ async function bridge(args,ctx) {
   const sums={taxable:0,cash:0,rothContributions:0,ruleOf55:0},inputs={taxable:[],cash:[],rothContributions:[],ruleOf55:[]};
   const records=accountRecords(ctx,data);
   for(const r of records) {
-    const belongs=r.person===person||r.person==='joint';
-    if(!belongs)continue;
+    const shared=r.person==='joint'&&['cash','taxable'].includes(r.treatment);
+    const belongs=r.person===person||shared;
+    if(!belongs) {
+      if(r.person===null&&['cash','taxable','pretax','roth','roth_ira','roth_401k','needs plan type'].includes(r.treatment))gaps.push(gap(`${r.label} needs a known account owner before bridge funds can be assigned.`));
+      continue;
+    }
     const snapshot=accountHistory(ctx.db,r.a.id,data.clock).at(-1);
     const value=snapshot?.value?.v ?? null,asOf=snapshot?.date ?? null;
     const eligible=qualifying(r,birth,gaps);
@@ -123,13 +128,14 @@ async function bridge(args,ctx) {
     if(key) {
       if(value===null){gaps.push(gap(`${r.label} has no stored balance; accessible money is unavailable.`));sums[key]=null;}
       else if(sums[key]!==null)sums[key]+=value;
-      inputs[key].push({value,unit:'usd',label:r.label,asOf,account:r.ref});
+      inputs[key].push({value,unit:'usd',label:r.label,asOf,account:r.ref,provenance:{sources:(snapshot?.value?.locator?.sources ?? []).map(s=>s.rows)}});
     }
   }
   const n=years===null?null:years*12,r=rr.value/12;
   const needed=n===null||spending.value===null?null:r===0?spending.value/12*n:spending.value/12*(-Math.expm1(-n*Math.log1p(r)))/r;
   const accessibleTotal=Object.values(sums).some(v=>v===null)?null:Object.values(sums).reduce((a,b)=>a+b,0);
-  const allInputs=[spending,...Object.values(inputs).flat()],factRows=ctx.db.prepare('SELECT key,as_of FROM facts').all();
+  const relevant=new Set([...birth.keys,'household.retireAge','accounts.planType','accounts.separationDate','accounts.rothBasis']);
+  const allInputs=[spending,...Object.values(inputs).flat()],factRows=ctx.db.prepare('SELECT key,as_of FROM facts').all().filter(f=>relevant.has(f.key));
   const asOf=latest([...allInputs.map(i=>i.asOf),...factRows.map(f=>f.as_of)]);
   const prov={calc:'retirementBridge',formula:'Present value of monthly spending until standard access age, compared with stored accessible assets at retirement',inputs:allInputs,assumptions,
     sources:factRows.map(f=>({table:'facts',ids:[f.key],count:1})),packRefs:[pack(ACCESS_RULES.penaltyFreeAge.packRef),pack(ACCESS_RULES.fiveYear.packRef)]};

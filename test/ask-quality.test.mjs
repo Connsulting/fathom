@@ -308,3 +308,11 @@ test('transactions.search names credit cards and categories, business.pnl names 
   assert.match(byName.get('business').description, /business/i);
   assert.deepEqual(REGISTRY.map(x => x.name), TOOL_NAMES.toSorted());
 });
+
+
+test('C7 reads are offered through the shared Ask tool registry', () => {
+  const byName = new Map(REGISTRY.map(tool => [tool.name, tool]));
+  for (const [name, operations] of [['spending',['obligations','projection']],['retirement',['access','bridge']]]) {
+    for (const operation of operations) assert.ok(byName.get(name).operations.some(op => op.name === operation && op.scope === 'read'));
+  }
+});

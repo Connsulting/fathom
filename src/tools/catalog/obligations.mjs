@@ -27,7 +27,7 @@ async function schedule(args,ctx) {
   for (const a of assumptions) { const key=`${a.kind}:${a.stage ?? ''}`; if(seen.has(key))bad('Duplicate change assumption');seen.add(key); }
   const rows=[];
   for (const kind of [...new Set(args.obligations ?? kinds)]) {
-    const key=`obligations.${kind}`, missing=[], gaps=[], keys=[key];
+    const key=`obligations.${kind}`, missing=[], gaps=[], keys=[key], balanceInputs=[];
     let observed;
     if(kind==='plan529') observed=await total(ctx,{measure:'inflow',scope:'all',include:{accounts:accounts.filter(a=>a.kind==='529'&&!a.archived_at).map(a=>a.id)}});
     else observed=await total(ctx,{include:{classes:[kind==='mortgage'?'debt_service':'childcare']}});
@@ -40,8 +40,8 @@ async function schedule(args,ctx) {
         let balance=stored.balance;
         const loans=accounts.filter(a=>a.kind==='loan'&&!a.archived_at && /mortgage/i.test(a.name));
         if(loans.length===1) {
-          const row=ctx.db.prepare('SELECT amount,date FROM balances WHERE account_id=? AND date<=? ORDER BY date DESC LIMIT 1').get(loans[0].id,clock);
-          if(row) {balance=Math.abs(row.amount); keys.push(`account:${loans[0].id}`);}
+          const row=ctx.db.prepare('SELECT id,amount,date FROM balances WHERE account_id=? AND date<=? ORDER BY date DESC LIMIT 1').get(loans[0].id,clock);
+          if(row) {balance=Math.abs(row.amount); balanceInputs.push({value:balance,unit:'usd',label:'Mirrored mortgage balance',asOf:row.date,provenance:{sources:[{table:'balances',ids:[row.id],count:1}]}});}
         }
         date=mortgagePayoff({...stored,balance},clock,(args.horizonYears ?? 30)*12);derivedFrom='amortization';
       }
@@ -66,8 +66,8 @@ async function schedule(args,ctx) {
           assumption:stored?.[field]===undefined?override?.record:null,reason:kind==='plan529'?'Contributions stop at the default college age.':e.stage==='school_age'?'School begins at the pack entry age and cutoff.':'After-school care ends at the pack age.'};
       });
     }
-    const sources=factSources(ctx,keys),asOf=latest([observed.perMonth.asOf,...sources.map(s=>s.as_of)]);
-    const prov={calc:'obligationSchedule',formula:'Stored obligation amounts and dates, amortization or dependent age rules',inputs:[observed.perMonth],sources:sources.map(s=>({table:'facts',ids:[s.key],count:1})),packRefs:[pack(kind)]};
+    const sources=factSources(ctx,keys),asOf=latest([observed.perMonth.asOf,...sources.map(s=>s.as_of),...balanceInputs.map(b=>b.asOf)]);
+    const prov={calc:'obligationSchedule',formula:'Stored obligation amounts and dates, amortization or dependent age rules',inputs:[observed.perMonth,...balanceInputs],sources:sources.map(s=>({table:'facts',ids:[s.key],count:1})),packRefs:[pack(kind)]};
     const f=(value,unit,label,extra={})=>figure(value,unit,label,asOf,{...prov,...extra},gaps);
     const eventRows=events.map(e=>({stage:e.stage,...(e.dependent===undefined?{}:{dependent:e.dependent}),date:f(e.date,'date','Obligation change date'),
       newMonthly:f(e.newValue,'usd_per_month','New monthly obligation',{assumptions:e.assumption?[e.assumption]:[]}),reason:e.reason,derivedFrom:e.derivedFrom,amountSource:e.amountSource ?? 'fact'}));
@@ -98,12 +98,14 @@ async function projection(args,ctx) {
     const applied=[];
     for(const {state,change} of events.filter(e=>Number(e.change.date.value.slice(0,4))===year)) {
       const amount=change.newMonthly.value,old=state.remaining;
-      const available=amount!==null&&old!==null&&annual!==null;
-      const next=available?Math.min(old,amount):old;
+      const unattributed=state.row.kind==='childcare'&&change.stage==='after_care_end'&&state.row.changes.some(c=>c.stage==='after_care_end'&&c.date.value>change.date.value);
+      if(unattributed)gaps.push(gap('Childcare is a household total with no per-dependent allocation; an earlier child leaving care cannot remove the remaining household amount.'));
+      const available=amount!==null&&old!==null&&annual!==null&&!unattributed;
+      const next=available&&old>0?(state.row.kind==='mortgage'?Math.min(old,amount):amount):old;
       const delta=available?(next-old)*12:null;
       const span=(Date.parse(end)-Date.parse(change.date.value))/(Date.parse(end)-Date.parse(`${year}-01-01`));
       if(available){state.remaining=next;annual+=delta;adjustment+=delta*span;}
-      applied.push({kind:state.row.kind,stage:change.stage,date:change.date,delta:figure(delta,'usd_per_year','Annual spending change',base.asOf,{calc:'spendingProjection',inputs:[base,change.newMonthly],packRefs:[pack(state.row.kind)]},gaps),applied:available&&delta!==0,
+      applied.push({kind:state.row.kind,stage:change.stage,...(change.dependent===undefined?{}:{dependent:change.dependent}),date:change.date,delta:figure(delta,'usd_per_year','Annual spending change',base.asOf,{calc:'spendingProjection',inputs:[base,change.newMonthly],packRefs:[pack(state.row.kind)]},gaps),applied:available&&delta!==0,
         note:old===0?'This obligation is outside the base selection; no spending drop.':change.reason});
     }
     if(value!==null)value+=adjustment;

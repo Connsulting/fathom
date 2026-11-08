@@ -42,7 +42,9 @@ export function recordFactAnswers(db, answers, { now = new Date().toISOString(),
   if (!Array.isArray(answers) || !answers.length || answers.length > 30) fail();
   const date = now.slice(0, 10);
   if (isoDate(date) !== date) fail();
-  const facts = Object.fromEntries(db.prepare('SELECT key,value FROM facts').all().map(r => [r.key, parseJson(r.value, null)]));
+  const priorPlans = parseJson(db.prepare("SELECT value FROM facts WHERE key='accounts.planType'").get()?.value, {});
+  const planAnswer = answers.find(a => a?.key === 'accounts.planType');
+  const facts = { 'accounts.planType': { ...priorPlans, ...(object(planAnswer?.value) ? planAnswer.value : {}) } };
   const year = Number(date.slice(0,4));
   const keys = new Set();
   const writes = answers.map(a => {
