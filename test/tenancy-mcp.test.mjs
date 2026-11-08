@@ -42,7 +42,7 @@ test('each registered MCP tool executes with only its bearer household context',
         answer: { operation: 'fact', key: 'household.expectedDate', value: '2027-03-19', evidence: 'Set the expected date to 2027-03-19' },
         business: { operation: 'pnl' }, calculate: { operation: 'sum', operands: [{ ref: { tool: 'accounts', args: { operation: 'net_worth' }, path: 'total' } }], label: 'Synthetic balance' },
         goals: { operation: 'list' }, household: { operation: 'summary' }, knowledge: { operation: 'packs' },
-        recommendations: { operation: 'list' }, spending: { operation: 'total' }, tax: { operation: 'estimate' }, transactions: { operation: 'search' },
+        recommendations: { operation: 'list' }, refresh: { operation: 'import_file', name: 'Synthetic note.md', mime: 'text/markdown', text: '# Synthetic note\n\nKeep answers short.' }, spending: { operation: 'total' }, tax: { operation: 'estimate' }, transactions: { operation: 'search' },
         update_goal: { operation: 'create', title: 'Synthetic reserve' },
         update_preferences: { operation: 'remember', text: 'Prefer a steady reserve', evidence: 'Prefer a steady reserve' },
       };

@@ -28,7 +28,7 @@ async function setup() {
   return { db, now, actorId: 'person-a', household, services, channel: 'mcp' };
 }
 async function client(ctx, scopes = SCOPES) {
-  const server = createToolServer({ scopes, ctx });
+  const server = createToolServer({ scopes, ctx, authorize: () => true });
   const c = new Client({ name: 'synthetic-test', version: '1' });
   const [a,b] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(a), c.connect(b)]);
@@ -191,7 +191,7 @@ test('HTTP proposal confirmation executes a pasted-note refresh and persisted re
   assert.equal(receipt.after.file.status, 'imported');
   assert.equal(receipt.undo.available, false);
   assert.ok(!confirmed.json.message.text.includes('undo it below'));
-  const { key } = app.keys.create({ householdId: instance.householdId, name: 'Synthetic importer', scopes: ['read','write:imports'] });
+  const { key } = app.keys.create({ householdId: instance.householdId, name: 'Synthetic importer', scopes: ['read','write:imports'], userId: app.session.user.id });
   const imports = rpcResult(await callToolRpc(app.baseUrl, key, 'household', { operation: 'imports' }));
   assert.deepEqual(JSON.parse(imports.content[0].text), (await app.request({ path: '/api/files' })).json);
   const result = rpcResult(await callToolRpc(app.baseUrl, key, 'refresh', { operation: 'import_file', name: 'Other notes.md', mime: note.mime,
