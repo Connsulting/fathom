@@ -7,11 +7,12 @@
 // stays at Apr 15, so it never closes in December while the answer is pending.
 
 import { isTrue, absentOrFalse, mineOf, padTasks, confirmTasks, firstYearStatus, deferralDeadline, deadlineWindow, soloPlanOwner } from './common.mjs';
+import { TRIGGER_INPUTS } from '../../shared/rec-inputs.mjs';
 
 export const id = 'solo401k-setup';
 export const domain = 'retirement';
-// Inputs the action reads (src/shared/rec-inputs.mjs): solo 401(k) room from business earnings and recorded contributions.
-export const inputs = Object.freeze(['income', 'retirement']);
+// Inputs the action reads (src/shared/rec-inputs.mjs): room.solo401k.* from business earnings and recorded contributions; its catch-up part follows birth years.
+export const inputs = TRIGGER_INPUTS['solo401k-setup'];
 // Goal kinds this rec serves (resolved to open goals at read time) and its default action owner.
 export const goalKinds = Object.freeze(['retirement']);
 export const owner = 'you';

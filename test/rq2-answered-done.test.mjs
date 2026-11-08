@@ -14,6 +14,7 @@ import { buildScenario } from '../src/scenario/build.mjs';
 import { saveRecAnswers } from '../src/api/fact-answers.mjs';
 import { actionUndo } from '../src/api/handlers.mjs';
 import { callTool } from '../src/tools/index.mjs';
+import { taxGap } from '../src/shared/tax-gaps.mjs';
 import * as recAnswers from '../web/horizon/screens/rec-answers.js';
 import * as recBlocker from '../web/horizon/screens/rec-blocker.js';
 
@@ -183,4 +184,54 @@ test('the MCP rec_questions path completes the rec and its answer event carries 
   const rec = scenarioRec(db, 'va529');
   assert.deepEqual(rec.answerReceipts, r.receipts.map(x => x.id));
   assert.equal(rec.blocker, undefined);
+});
+
+// ---------------------------------------------------------------- rows stored before RQ2
+
+const setDefGaps = (db, id, gaps) => {
+  const def = recRow(db, id).def;
+  db.prepare('UPDATE recs SET def = ? WHERE id = ?').run(JSON.stringify({ ...def, gaps }), id);
+};
+const cedarGap = () => taxGap('paystub_ytd_missing', { employer: 'Cedar Labs' });
+
+test('a legacy question row carrying the household gap list, parked by the planner and answered, is done with no unrelated gap', async () => {
+  const db = await heldQuestion();
+  // The pre-RQ2 shape: every household gap stored on the question rec, parked on the hold.
+  setDefGaps(db, 'va529', [cedarGap(), taxGap('va529_answers_missing')]);
+  addFact(db, 'household.birthYears', { owner: 1981 });
+  db.prepare("UPDATE recs SET status = 'waiting', waiting_on = 'data' WHERE id = 'va529'").run();
+  db.prepare("INSERT INTO rec_events (rec_id, ts, action, arg, from_status, to_status, actor) VALUES ('va529', ?, 'block', 'mfs_unsupported', 'proposed', 'waiting', 'planner')").run(STAMP);
+  db.prepare("UPDATE planner_recs SET held_from = 'proposed' WHERE rec_id = 'va529'").run();
+  // Even before the next run, a question rec shows no stored gap.
+  recBlocker.bind(kit);
+  assert.equal(scenarioRec(db, 'va529').gaps, undefined);
+  await planRun(db, { now: NOW });
+  const row = recRow(db, 'va529');
+  assert.equal(row.status, 'done');
+  assert.equal(row.def.gaps, undefined, 'the completed def no longer stores the household gaps');
+  assert.equal(row.def.question?.primary, true, 'the answered question stays on the def');
+  const rec = scenarioRec(db, 'va529');
+  assert.equal(rec.status, 'done');
+  assert.equal(rec.gaps, undefined);
+  for (const surface of ['plan', 'dialog']) assert.equal(recBlocker.html(rec, surface), '');
+  assertAnsweredHtml({ ...rec, answerReceipts: ['synthetic-receipt'] }, 1981);
+});
+
+test('a legacy action row carrying out-of-scope gaps shows only the gaps on its own inputs', async () => {
+  const db = await S.store();
+  await planRun(db, { now: NOW });
+  assert.ok(recRow(db, 'hsa-room'), 'hsa-room is on the plan');
+  recBlocker.bind(kit);
+  // HSA room reads HSA deferrals and ages: the box twelve gap applies, the wage gap does not.
+  setDefGaps(db, 'hsa-room', [cedarGap(), taxGap('w2_box12_unreadable', { employer: 'Juniper Studio' })]);
+  const rec = scenarioRec(db, 'hsa-room');
+  assert.deepEqual(rec.gaps.map(g => g.code), ['w2_box12_unreadable']);
+  const html = recBlocker.html(rec, 'plan');
+  assert.match(html, /Juniper Studio/);
+  assert.doesNotMatch(html, /Cedar Labs/);
+  // Only out-of-scope gaps stored: the field is gone and nothing renders.
+  setDefGaps(db, 'hsa-room', [cedarGap()]);
+  const bare = scenarioRec(db, 'hsa-room');
+  assert.equal(bare.gaps, undefined);
+  assert.equal(recBlocker.html(bare, 'plan'), '');
 });

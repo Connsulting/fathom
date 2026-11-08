@@ -1,11 +1,12 @@
 // Dependent care FSA: an outside employer and a child in care, before open enrollment closes.
 
 import { isTrue, mineOf, padTasks, yearOf, factDate } from './common.mjs';
+import { TRIGGER_INPUTS } from '../../shared/rec-inputs.mjs';
 
 export const id = 'dependent-care-fsa';
 export const domain = 'family';
 // Inputs the action reads (src/shared/rec-inputs.mjs): outside employer wages this year.
-export const inputs = Object.freeze(['income']);
+export const inputs = TRIGGER_INPUTS['dependent-care-fsa'];
 // Goal kinds this rec serves (resolved to open goals at read time) and its default action owner.
 export const goalKinds = Object.freeze(['tax', 'cash']);
 export const owner = 'both';

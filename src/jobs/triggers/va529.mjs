@@ -1,12 +1,12 @@
 // Virginia 529 deduction: deduction room left on Virginia plan accounts before Dec 31 (S8, T5).
 
 import { isTrue, mineOf, padTasks, confirmTasks, yearOf, dataText, positive } from './common.mjs';
-import { blockedFor } from '../../shared/rec-inputs.mjs';
+import { blockedFor, TRIGGER_INPUTS } from '../../shared/rec-inputs.mjs';
 
 export const id = 'va529';
 export const domain = 'family';
 // Inputs the action reads (src/shared/rec-inputs.mjs): the Virginia deduction is worth Virginia tax, which starts from federal AGI; the age rule reads birth years.
-export const inputs = Object.freeze(['income', 'retirement', 'filing', 'va', 'ages']);
+export const inputs = TRIGGER_INPUTS['va529'];
 // Goal kinds this rec serves (resolved to open goals at read time) and its default action owner.
 export const goalKinds = Object.freeze(['education', 'tax']);
 export const owner = 'both';

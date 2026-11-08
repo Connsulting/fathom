@@ -1,12 +1,12 @@
 // Fourth-quarter Virginia estimate: the Virginia target still to pay before Jan 15.
 
 import { BUSINESS, has, mineOf, padTasks, positive } from './common.mjs';
-import { blockedFor } from '../../shared/rec-inputs.mjs';
+import { blockedFor, TRIGGER_INPUTS } from '../../shared/rec-inputs.mjs';
 
 export const id = 'va-q4-estimate';
 export const domain = 'tax';
 // Inputs the action reads (src/shared/rec-inputs.mjs): Virginia tax starts from the household tax run's federal AGI, less the Virginia payments.
-export const inputs = Object.freeze(['income', 'retirement', 'filing', 'payments', 'va']);
+export const inputs = TRIGGER_INPUTS['va-q4-estimate'];
 // Goal kinds this rec serves (resolved to open goals at read time) and its default action owner.
 export const goalKinds = Object.freeze(['tax']);
 export const owner = 'you';

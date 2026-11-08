@@ -186,8 +186,12 @@ export function applyRecs(db, results, ctx) {
     if (!pr || pr.retired_at) continue;
     // RQ2: a question rec whose question is answered is done, whether its trigger is now held or
     // no longer applies; it never waits on a hold and is never dismissed for being answered.
-    if (completable(rr) && answered(parseJson(rr.def, {}))) {
-      db.prepare("UPDATE recs SET status = 'done', waiting_on = NULL, wake = NULL, updated_at = ? WHERE id = ?").run(now, id);
+    const storedDef = parseJson(rr.def, {});
+    if (completable(rr) && answered(storedDef)) {
+      // A row stored before RQ2 may carry the household gap list; an answered question reads none.
+      const answeredDef = { ...storedDef };
+      delete answeredDef.gaps;
+      db.prepare("UPDATE recs SET status = 'done', waiting_on = NULL, wake = NULL, def = ?, updated_at = ? WHERE id = ?").run(JSON.stringify(answeredDef), now, id);
       record(id, 'answered', null, rr.status, 'done');
       if (res.state === 'blocked') db.prepare('UPDATE planner_recs SET held_from = NULL, last_run = ? WHERE rec_id = ?').run(runId, id);
       else {

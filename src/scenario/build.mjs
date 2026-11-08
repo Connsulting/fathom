@@ -28,6 +28,7 @@ import { questionFor, dataText, LISTED_RECS } from '../jobs/triggers/common.mjs'
 import { getFacts } from '../store/facts.mjs';
 import { inferMortgage } from '../calc/mortgage-inference.mjs';
 import { deriveSteps } from '../shared/rec-steps.mjs';
+import { gapsFor, TRIGGER_INPUTS } from '../shared/rec-inputs.mjs';
 
 const DAY = 86400000;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -211,6 +212,14 @@ export function recFromRow(row, clock, env = {}) {
     tasks: deriveSteps(def.tasks, done, { ...env, marks: env.marks?.get(row.id) }),
   };
   if (row.wake != null) rec.wake = row.wake; else delete rec.wake;
+  // Gaps show only where they apply (RQ2), also on rows stored before the planner scoped them: a
+  // primary question reads only its question, and a trigger's rec only the gaps on its inputs.
+  if (rec.gaps) {
+    const inputs = Object.hasOwn(TRIGGER_INPUTS, row.id) ? TRIGGER_INPUTS[row.id] : null;
+    const gaps = def.question?.primary ? [] : inputs ? gapsFor({ inputs }, rec.gaps) : rec.gaps;
+    if (gaps.length) rec.gaps = gaps;
+    else delete rec.gaps;
+  }
   if (row.waiting_on != null) rec.waitingOn = row.waiting_on; else delete rec.waitingOn;
   rec.owner = row.owner;
   rec.ownerOverride = row.owner_override === 1;

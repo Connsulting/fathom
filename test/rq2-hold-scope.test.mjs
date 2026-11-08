@@ -9,11 +9,11 @@ import assert from 'node:assert/strict';
 import { triggers } from '../src/jobs/triggers/index.mjs';
 import { evaluate as evaluateRule } from '../src/packs/index.mjs';
 import { TAX_GAP_RULES, taxGap } from '../src/shared/tax-gaps.mjs';
-import { inputsOf, reads, gapsFor, blockedFor } from '../src/shared/rec-inputs.mjs';
+import { inputsOf, reads, gapsFor, blockedFor, figureInputs, INPUTS, TRIGGER_INPUTS } from '../src/shared/rec-inputs.mjs';
 import * as recBlocker from '../web/horizon/screens/rec-blocker.js';
 import { planRun } from './helpers/plan.mjs';
 import { buildScenario } from '../src/scenario/build.mjs';
-import { scratch, paystubDoc } from './helpers/real-store.mjs';
+import { scratch, paystubDoc, figureRow } from './helpers/real-store.mjs';
 
 const NOW = '2026-11-05';
 const S = scratch('fathom-rq2-scope-');
@@ -38,13 +38,18 @@ recBlocker.bind(kit);
 
 // ---------------------------------------------------------------- AC3: declared inputs, table over every trigger
 
-test('every trigger but missing-data declares frozen inputs from the known set', () => {
-  for (const t of DECLARING) {
+test('every trigger declares frozen inputs from the known set, from the one shared map', () => {
+  for (const t of triggers) {
     assert.ok(Array.isArray(t.inputs), `${t.id} declares inputs`);
     assert.ok(Object.isFrozen(t.inputs), `${t.id} inputs are frozen`);
-    assert.ok(t.inputs.length > 0, `${t.id} reads something`);
+    assert.equal(t.inputs, TRIGGER_INPUTS[t.id], `${t.id} exports its shared declaration`);
     for (const name of t.inputs) assert.ok(KNOWN.has(name), `${t.id}: ${name} is a known input`);
   }
+  assert.deepEqual(Object.keys(TRIGGER_INPUTS).sort(), triggers.map(t => t.id).sort());
+  assert.deepEqual([...INPUTS].sort(), [...KNOWN].sort());
+  // Missing data lists every gap itself; a new child reads cash and a date, no tax input.
+  assert.deepEqual(byId('missing-data').inputs, []);
+  assert.deepEqual(byId('new-child').inputs, []);
 });
 
 test('every tax gap rule and every blocking code maps to known inputs; suffixed codes map like their base', () => {
@@ -77,6 +82,26 @@ test('declarations match what each action reads', () => {
     if (t.id !== 'fed-q4-estimate') lacks(t.id, 'credits');
   }
   lacks('hsa-room', 'income');
+  // Bunching compares recorded gifts with the filing-status standard deduction; it reads no income.
+  assert.deepEqual(byId('charitable-bunching').inputs, ['filing']);
+  // IRA and solo 401(k) catch-up room follow birth years.
+  has('backdoor-roth', 'ages');
+  has('solo401k-setup', 'income', 'retirement', 'ages');
+});
+
+test('figure inputs: each household figure reads only what it is computed from; an unknown key reads everything', () => {
+  const fig = key => figureInputs(key);
+  assert.deepEqual([...fig('room.hsa')].sort(), ['ages', 'hsa']);
+  for (const key of ['room.solo401k', 'room.solo401k.employee', 'room.sep']) assert.deepEqual([...fig(key)].sort(), ['ages', 'income', 'retirement'], key);
+  assert.ok(fig('room.ira.owner').includes('filing'));
+  assert.deepEqual([...fig('inc.ytd.w2')], ['income']);
+  assert.deepEqual([...fig('va529.deductionLeft')].sort(), ['ages', 'va']);
+  assert.ok(fig('va529.taxSaved').includes('va') && fig('va529.taxSaved').includes('income'));
+  for (const key of ['tax.fed.proj', 'sh.fed.required', 'agi.est', 'tax.va.proj', 'wg.salary.s50.x']) assert.ok(fig(key).includes('income'), key);
+  assert.ok(fig('tax.fed.proj').includes('credits') && !fig('tax.fed.proj').includes('payments') && !fig('tax.fed.proj').includes('va'));
+  assert.ok(fig('sh.fed.required').includes('payments') && fig('sh.va.required').includes('payments'));
+  assert.ok(fig('tax.va.proj').includes('va') && !fig('tax.va.proj').includes('credits'));
+  assert.equal(fig('some.future.key'), INPUTS);
 });
 
 test('for every trigger and code: gaps and blocks apply exactly when the code affects a declared input', () => {
@@ -190,4 +215,28 @@ test('AC2: recs that read a gapped input show it once with its fix; a rec that d
     assert.doesNotMatch(html, /Waiting on/, `${r.id} shows no hold`);
   }
   assert.match(JSON.stringify(scenario.recs.find(r => r.id === 'missing-data')), /income\.payrollYtd/, 'missing-data still lists every gap');
+
+  // R1-3: charitable bunching reads gifts and the filing status, so the wage gap is not on it.
+  const bunching = present.find(r => r.id === 'charitable-bunching');
+  assert.ok(bunching, `charitable-bunching is on the plan (${ids})`);
+  assert.equal(bunching.gaps, undefined);
+  assert.equal(recBlocker.html(bunching, 'plan'), '');
+  assert.equal(recBlocker.html(bunching, 'dialog'), '');
+
+  // R1-2: figures too. HSA room is computed from HSA inputs only: complete, no gap, no partial
+  // label. Federal tax reads wages and carries the gap.
+  const hsa = figureRow(db, 'room.hsa');
+  assert.ok(hsa, 'room.hsa is produced');
+  assert.equal(hsa.locator.completeness, 'complete');
+  assert.deepEqual(hsa.locator.gaps, []);
+  assert.equal(hsa.locator.partial, false);
+  assert.equal(hsa.locator.rough, false);
+  assert.doesNotMatch(hsa.label, /partial/i);
+  assert.ok(!(hsa.locator.notes || []).some(n => /Cedar Labs/.test(n)));
+  const fed = figureRow(db, 'tax.fed.proj');
+  assert.ok(fed.locator.gaps.some(g => g.code.startsWith(code)));
+  assert.equal(fed.locator.partial, true);
+  assert.match(fed.label, /partial/i);
+  assert.match(fed.locator.completeness, /^estimate with/);
+  assert.equal(scenario.fig['room.hsa'].partial ?? false, false, 'the scenario figure is not partial');
 });

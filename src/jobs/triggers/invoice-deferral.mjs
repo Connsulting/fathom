@@ -1,12 +1,12 @@
 // Invoice deferral: moving December invoices into January (S13, R16).
 
 import { isTrue, mineOf, padTasks, confirmTasks, keyMatching, modelPersonOwner } from './common.mjs';
-import { blockedFor } from '../../shared/rec-inputs.mjs';
+import { blockedFor, TRIGGER_INPUTS } from '../../shared/rec-inputs.mjs';
 
 export const id = 'invoice-deferral';
 export const domain = 'business';
 // Inputs the action reads (src/shared/rec-inputs.mjs): the deferral war game reruns household and Virginia tax.
-export const inputs = Object.freeze(['income', 'retirement', 'filing', 'va']);
+export const inputs = TRIGGER_INPUTS['invoice-deferral'];
 // Goal kinds this rec serves (resolved to open goals at read time) and its default action owner.
 export const goalKinds = Object.freeze(['tax']);
 export const owner = 'you';

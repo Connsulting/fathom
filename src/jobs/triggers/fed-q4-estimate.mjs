@@ -5,12 +5,12 @@
 // 6654(b)(2), (b)(3)).
 
 import { BUSINESS, has, mineOf, padTasks, positive } from './common.mjs';
-import { blockedFor } from '../../shared/rec-inputs.mjs';
+import { blockedFor, TRIGGER_INPUTS } from '../../shared/rec-inputs.mjs';
 
 export const id = 'fed-q4-estimate';
 export const domain = 'tax';
 // Inputs the action reads (src/shared/rec-inputs.mjs): the household tax run, the payments logged against it and the child tax credit.
-export const inputs = Object.freeze(['income', 'retirement', 'filing', 'payments', 'credits']);
+export const inputs = TRIGGER_INPUTS['fed-q4-estimate'];
 // Goal kinds this rec serves (resolved to open goals at read time) and its default action owner.
 export const goalKinds = Object.freeze(['tax']);
 export const owner = 'you';

@@ -18,6 +18,7 @@ import { createLiveAnswerer } from '../../src/api/answerer.mjs';
 import { threadCreate } from '../../src/api/handlers.mjs';
 import { nameKey } from '../../src/ingest/extract.mjs';
 import { callTool } from '../../src/tools/index.mjs';
+import { figureInputs, inputsOf } from '../../src/shared/rec-inputs.mjs';
 
 const s = scratch('fathom-tax-partial-');
 after(() => s.cleanup());
@@ -244,11 +245,20 @@ test('every former payroll and income block produces federal and state estimates
     const computed = computeFigures(data, facts, { clock: now, entities: resolveEntities(data, facts), owner: facts });
     const gap = computed.info.gaps.find(g => g.code.split(':')[0] === code);
     assert.ok(gap, `${code} scenario actually triggered`);
-    for (const key of ['tax.fed.proj', 'tax.va.proj']) {
-      assert.ok(Number.isFinite(computed.figures[key]?.v), key);
-      assert.ok(computed.figures[key].locator.gaps.some(g => g.code === gap.code), key);
-      assert.match(computed.figures[key].locator.completeness, /^estimate with \d+ gaps?$/);
+    for (const key of ['tax.fed.proj', 'tax.va.proj']) assert.ok(Number.isFinite(computed.figures[key]?.v), key);
+    // RQ2: a dependent figure carries the gap exactly when it is computed from the gapped input
+    // (payment gaps reach the safe-harbor targets, not the projections; Virginia gaps stay off
+    // federal figures), and every gap reaches at least one tax figure.
+    const affected = inputsOf(gap.code);
+    let carried = 0;
+    for (const key of ['tax.fed.proj', 'tax.va.proj', 'sh.fed.required', 'sh.fed.remaining', 'sh.va.required', 'sh.va.remaining']) {
+      const figure = computed.figures[key];
+      if (!figure) continue;
+      const reads = figureInputs(key).some(i => affected.includes(i));
+      assert.equal(figure.locator.gaps.some(g => g.code === gap.code), reads, `${key} carries ${code}: ${reads}`);
+      if (reads) { carried += 1; assert.match(figure.locator.completeness, /^estimate with \d+ gaps?$/); }
     }
+    assert.ok(carried > 0, `${code} reaches a tax figure`);
     if (['withholding_conflict_pending', 'tax_year_unconfirmed', 'estimated_payer_unknown'].includes(code)) {
       const payment = code === 'withholding_conflict_pending' ? 'tax.fed.withheld' : 'tax.fed.paid';
       assert.equal(computed.figures[payment]?.v, 0, 'ambiguous credits are excluded');

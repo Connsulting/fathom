@@ -2,11 +2,12 @@
 
 import { isTrue, mineOf, padTasks, factDate } from './common.mjs';
 import { expectedChildWindow } from '../../shared/child-window.mjs';
+import { TRIGGER_INPUTS } from '../../shared/rec-inputs.mjs';
 
 export const id = 'new-child';
 export const domain = 'family';
-// Inputs the action reads (src/shared/rec-inputs.mjs): the expected child joins the dependents whose ages come from birth years.
-export const inputs = Object.freeze(['ages']);
+// Inputs the action reads (src/shared/rec-inputs.mjs): cash.personal, cash.monthlyOut and the expected date, none of them a tax input.
+export const inputs = TRIGGER_INPUTS['new-child'];
 // Goal kinds this rec serves (resolved to open goals at read time) and its default action owner.
 export const goalKinds = Object.freeze(['cash', 'health']);
 export const owner = 'both';

@@ -1,12 +1,12 @@
 // S corp salary: the salary war game over the owner-approved range (S3, R6).
 
 import { isTrue, lastPayroll, mineOf, padTasks, confirmTasks, salaryProjKey, salaryKey, modelPersonOwner } from './common.mjs';
-import { blockedFor } from '../../shared/rec-inputs.mjs';
+import { blockedFor, TRIGGER_INPUTS } from '../../shared/rec-inputs.mjs';
 
 export const id = 'scorp-salary';
 export const domain = 'business';
 // Inputs the action reads (src/shared/rec-inputs.mjs): the salary war game reruns household and Virginia tax.
-export const inputs = Object.freeze(['income', 'retirement', 'filing', 'va']);
+export const inputs = TRIGGER_INPUTS['scorp-salary'];
 // Goal kinds this rec serves (resolved to open goals at read time) and its default action owner.
 export const goalKinds = Object.freeze(['tax', 'retirement']);
 export const owner = 'you';
