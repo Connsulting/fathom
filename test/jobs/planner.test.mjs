@@ -38,7 +38,10 @@ function fig(db, key) {
 }
 // Ask goes through main's live answerer on the fake engine, as the server wires it: per household,
 // with that household's root.
-const answererFor = db => createLiveAnswerer({ engine: createRuntimeEngine({ db, config: { engine: 'fake' } }), root: householdOf(db).root });
+const answererFor = db => {
+  const engine = createRuntimeEngine({ db, config: { engine: 'fake' } });
+  return createLiveAnswerer({ engine, root: householdOf(db).root, services: { ...householdOf(db).services, engine } });
+};
 const ctxOf = (db, params = {}, body = {}) => ({ db, config: { clock: NOW }, answerer: answererFor(db), params, body });
 
 // ---------------------------------------------------------------- expected values (hand check)

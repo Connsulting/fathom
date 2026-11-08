@@ -38,9 +38,10 @@ export const allowedScopes = scopes => (Array.isArray(scopes) ? WRITE_SCOPES.fil
 const TABLES = { 'write:goals': ['goals', 'id'], 'write:facts': ['facts', 'key'], 'write:recs': ['recs', 'id'],
   'write:steps': ['recs', 'id'], 'write:preferences': ['preferences', 'id'] };
 
-export function proposalBasis(db, scopes, args = {}) {
+export function proposalBasis(db, tool, scopes, args = {}) {
   const parts = [];
-  for (const scope of scopes) {
+  if (tool === 'undo') parts.push(['action_receipts', db.prepare('SELECT * FROM action_receipts WHERE id = ?').all(args.id)]);
+  else for (const scope of scopes) {
     const [table, pk] = TABLES[scope];
     if (table === 'goals') continue;
     const target = args[pk] ?? args.id ?? args.key;
@@ -61,22 +62,29 @@ function refusal(pending, scopes) {
   const op = tool?.operations.find(o => o.name === pending.operation);
   if (!tool || tool.kind !== 'write' || tool.mcpOnly || !op) return 'This change is no longer available.';
   const allowed = allowedScopes(scopes);
-  const missing = operationScopes(op).find(s => !allowed.includes(s));
+  const needed = tool.name === 'undo' ? pending.scopes : operationScopes(op);
+  if (!Array.isArray(needed) || !needed.length || (tool.name === 'undo' && (needed.length !== 1 || !operationScopes(op).includes(needed[0])))) return 'This change is no longer available.';
+  const missing = needed.find(s => !allowed.includes(s));
   return missing ? `Permission denied: this change needs ${missing}.` : null;
 }
 
 async function propose(tool, args, ctx) {
-  requireActor(ctx);
+  const actor = requireActor(ctx);
   if (typeof ctx.onProposal !== 'function') throw new ToolError('forbidden', 'Proposals are only available in Ask.');
   const { propose: _propose, ...input } = args;
   const op = tool.validateArgs(input);
-  const scopes = operationScopes(op);
+  let scopes = operationScopes(op);
+  if (tool.name === 'undo') {
+    const receipt = ctx.db.prepare('SELECT scope, actor_id FROM action_receipts WHERE id = ?').get(input.id);
+    if (!receipt || receipt.actor_id !== actor) throw new ToolError('forbidden', 'This change is not available to you.');
+    scopes = [receipt.scope];
+  }
   const allowed = allowedScopes(ctx.scopes);
   const missing = scopes.find(s => !allowed.includes(s));
   if (missing) throw new ToolError('forbidden', `Permission denied: ${tool.name}.${op.name} needs ${missing}.`);
   const { operation, ...params } = input;
   await op.preflight?.(params, ctx);
-  ctx.onProposal({ tool: tool.name, operation, args: params, scopes, basis: proposalBasis(ctx.db, scopes, params) });
+  ctx.onProposal({ tool: tool.name, operation, args: params, scopes, basis: proposalBasis(ctx.db, tool.name, scopes, params) });
   // No argument values in the result: a tool result is grounding evidence, and a proposal must
   // never source its own amounts or dates.
   return { proposed: true, pending: { tool: tool.name, operation }, note: 'Stored for the owner to confirm. Nothing is saved yet.' };
@@ -127,7 +135,8 @@ export function claimProposal(db, { key, id, decision, scopes, at }) {
     if (decision === 'confirm') {
       const latest = db.prepare('SELECT max(id) AS id FROM messages WHERE conversation_key = ?').get(key).id;
       status = latest === row.id && !refusal(pending, scopes) && Array.isArray(pending.scopes)
-        && pending.scopes.every(s => TABLES[s]) && pending.basis === proposalBasis(db, pending.scopes, pending.args ?? {}) ? 'confirmed' : 'stale';
+        && pending.scopes.every(s => pending.tool === 'undo' ? WRITE_SCOPES.includes(s) : TABLES[s])
+        && pending.basis === proposalBasis(db, pending.tool, pending.scopes, pending.args ?? {}) ? 'confirmed' : 'stale';
     }
     markProposal(db, row.id, status, at);
     return { status, pending };
