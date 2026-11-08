@@ -49,6 +49,8 @@ test('real API router and registry meet parity with explicit exclusions and pend
   assert.deepEqual(parityErrors(routes, tools), []);
 });
 
-test('import proposal review has one explicit pending operation until IMP-7 registers it', () => {
-  assert.deepEqual(PARITY_PENDING['POST /api/import-proposals/:proposalId/review'], { ticket: 'IMP-7', operations: ['refresh.review_import'] });
+test('import proposal review is registered once and no longer pending', () => {
+  const route = 'POST /api/import-proposals/:proposalId/review';
+  assert.equal(PARITY_PENDING[route], undefined);
+  assert.deepEqual(tools.flatMap(t => t.operations.filter(o => o.routes.includes(route)).map(o => `${t.name}.${o.name}`)), ['refresh.review_import']);
 });
