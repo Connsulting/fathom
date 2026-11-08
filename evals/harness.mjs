@@ -8,6 +8,7 @@ import { createSpendLedger } from '../src/engine/runtime.mjs';
 import { modelFor } from '../src/engine/pricing.mjs';
 import { figureViolationKinds as figureCheckNames } from '../src/shared/answer-discipline.mjs';
 import { ANSWER_MAX_WORDS } from '../src/shared/answer-contract.mjs';
+import { plainAnswerText as plain } from '../src/shared/answer-text.mjs';
 import { estimateEvalCost } from './reservation.mjs';
 import { createLiveAnswerer } from '../src/api/answerer.mjs';
 import { threadCreate, ask } from '../src/api/handlers.mjs';
@@ -95,10 +96,6 @@ function scriptedAnswer(turn, expected, missing) {
   if (turn.scriptedReply) return turn.scriptedReply;
   if (expected.length) return 'The stored result is ' + turn.expected.map((e, i) => e.kind === 'figure' ? `{f:${e.key}}` : String(expected[i])).join(', ') + '.';
   return 'The requested information is available in the returned tool data.';
-}
-function plain(html) {
-  return String(html ?? '').replace(/<[^>]*>/g, ' ').replace(/&#123;/g, '{').replace(/&#125;/g, '}')
-    .replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim();
 }
 export async function runCases({ cases, live = false, maxUsd = 100, outDir, scripts, onRound } = {}) {
   validateCases(cases);

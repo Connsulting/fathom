@@ -194,6 +194,16 @@ test('ordinary answers pass grounding and the shared discipline check as Ask app
   });
 });
 
+test('a known account suffix is an identifier and never sources a balance', async () => {
+  const { checkAnswerForDelivery } = await import('../src/api/answerer.mjs');
+  const scenario = { fig: {} };
+  const toolResults = ORDINARY[0].calls;
+  const text = 'The balance is $4,321.';
+  const grounding = groundAnswer(text, { scenario, toolResults });
+  assert.equal(grounding.ok, false);
+  assert.deepEqual(checkAnswerForDelivery(text, { scenario, toolResults, grounding }).violations, ['figures.unsourced']);
+});
+
 test('pack figures from active entries and a pack conversation need no correction', async t => {
   for (const active of [true, false]) await t.test(active ? 'active entry' : 'pack conversation', async sub => {
     const { reply, calls } = await ask(sub, [[{ text: 'The synthetic allowance is $6,175 per year.' }]], 'Explain the allowance.', {
@@ -222,10 +232,12 @@ test('a bulleted answer at the word limit counts the same plain text as the eval
 
 test('a correction keeps an offered proposal and drops a proposal absent from the delivered answer', async t => {
   const proposal = { name: 'update_goal', args: { operation: 'create', title: 'Synthetic savings', propose: true } };
-  for (const keep of [true, false]) await t.test(keep ? 'retained offer' : 'dropped offer', async sub => {
+  for (const [label, keep, correction] of [['retained offer', true], ['dropped offer', false, CLEAN],
+    ['unrelated offer', false, 'I can update your forecast. Confirm below.'],
+    ['explanation only', false, 'I can explain the savings goal.']]) await t.test(label, async sub => {
     const offered = 'I can create the synthetic savings goal. Confirm below.';
     const { reply, calls } = await ask(sub, [[{ toolCalls: [proposal] }, { text: `${LONG} ${offered}` }],
-      [{ text: keep ? offered : CLEAN }]], 'Describe the plan.', { actorId: 'demo' });
+      [{ text: correction ?? offered }]], 'Describe the plan.', { actorId: 'demo' });
     assert.equal(calls.length, 2);
     assert.match(calls[1].messages.at(-1).content, /keep any proposal sentence/i);
     assert.equal(Boolean(reply.provenance.pendingAction), keep);
