@@ -165,16 +165,27 @@ async function plan(db, engine, { clock, runId, packDirs }) {
     const changes = applyRecs(db, results, {
       clock, now, runId, prose, packOverride: id => overrides[id] ?? null, warn: code => warnings.add(code), prefs,
     });
-    for (const r of results.filter(r => r.state === 'hit' && r.hit.rec.advisorQuestions?.length)) {
+    for (const r of results.filter(r => r.state === 'hit')) {
       const id = r.trigger.id;
-      const row = db.prepare('SELECT status FROM recs WHERE id = ?').get(id);
-      if (row && ['proposed', 'doing', 'waiting'].includes(row.status)) {
-        db.prepare("UPDATE recs SET status = 'waiting', waiting_on = 'advisor' WHERE id = ?").run(id);
-        sendToAdvisor(db, id, { now });
+      const row = db.prepare('SELECT status, waiting_on FROM recs WHERE id = ?').get(id);
+      if (!row) continue;
+      if (r.hit.rec.advisorQuestions?.length) {
+        if (!['proposed', 'doing', 'waiting'].includes(row.status)) continue;
+        if (row.status !== 'waiting') {
+          db.prepare("UPDATE recs SET status = 'waiting', waiting_on = 'advisor', updated_at = ? WHERE id = ?").run(now, id);
+          db.prepare("INSERT INTO rec_events (rec_id, ts, action, arg, from_status, to_status, actor) VALUES (?, ?, 'advisor_wait', ?, ?, 'waiting', 'planner')")
+            .run(id, now, row.status, row.status);
+        }
+        if (!db.prepare('SELECT id FROM advisor_reviews WHERE rec_id = ? AND closed_at IS NULL').get(id)) sendToAdvisor(db, id, { now });
+      } else if (row.status === 'waiting' && row.waiting_on === 'advisor') {
+        const last = db.prepare('SELECT action, arg, actor FROM rec_events WHERE rec_id = ? AND from_status IS NOT to_status ORDER BY id DESC LIMIT 1').get(id);
+        if (last?.actor !== 'planner' || last.action !== 'advisor_wait') continue;
+        const status = last.arg === 'doing' ? 'doing' : 'proposed';
+        db.prepare('UPDATE recs SET status = ?, waiting_on = NULL, updated_at = ? WHERE id = ?').run(status, now, id);
+        db.prepare("INSERT INTO rec_events (rec_id, ts, action, from_status, to_status, actor) VALUES (?, ?, 'advisor_ready', 'waiting', ?, 'planner')")
+          .run(id, now, status);
+        db.prepare("UPDATE advisor_reviews SET closed_at = ?, closed_reason = 'questions answered' WHERE rec_id = ? AND closed_at IS NULL AND verdict IS NULL").run(now, id);
       }
-    }
-    for (const r of results.filter(r => r.state === 'hit' && !r.hit.rec.advisorQuestions?.length)) {
-      db.prepare("UPDATE recs SET status = 'proposed', waiting_on = NULL WHERE id = ? AND status = 'waiting' AND waiting_on = 'advisor'").run(r.trigger.id);
     }
     // What each blocked rec is waiting on (plain reason, the task that clears it, where it is done),
     // read back by the scenario for recs in the waiting status.

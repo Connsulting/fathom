@@ -57,7 +57,6 @@ function recOf(ctx, t, hit, window) {
   if (ctx.assumptions?.length) rec.assumptions = ctx.assumptions;
   if (advisorQuestions.length) {
     rec.advisorQuestions = advisorQuestions;
-    rec.title = 'Waiting for your advisor';
     rec.tasks = [];
     const salary = ctx.fig && Object.keys(ctx.fig).find(k => /^pnl\.[^.]+\.salaryProj$/.test(k));
     if (salary && advisorQuestions.includes('business.salaryRange')) rec.mine = [{ label: 'Salary of record, assumed for planning', fig: salary }];
