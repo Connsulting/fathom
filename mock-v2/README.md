@@ -1,6 +1,6 @@
 # Fathom mock v2
 
-A clickable, canned mock of the product defined in [`docs/vision-v2.md`](../docs/vision-v2.md).
+A clickable, canned mock of the product defined in [`docs/vision.md`](../docs/vision.md).
 Four dark, minimalist designs over one shared core and one scenario. No backend, no auth, no model
 calls. The bar at the top is a review harness, not product UI.
 

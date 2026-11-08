@@ -2,7 +2,7 @@
 
 Status: proposed specification, reviewed against `main` at
 `4b800d2da3caa06f4653d2171b8c10482bac1a17` on 2026-11-06. This document ships no
-implementation and does not enable multi-tenancy. The [vision](vision-v2.md)
+implementation and does not enable multi-tenancy. The [vision](vision.md)
 still lists it as deferred. The [architecture](architecture.md) describes the
 current application, and [known limits](known-limits.md) remain applicable.
 

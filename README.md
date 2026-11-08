@@ -69,7 +69,7 @@ To test delivery for a configured household, run
 
 1. [Development](docs/development.md): running, configuring, testing, deploying and operating.
 2. [Architecture](docs/architecture.md): how the pieces fit together.
-3. [Product definition](docs/vision-v2.md), with a Status section for built versus deferred.
+3. [Product definition](docs/vision.md), with a Status section for built versus deferred.
 4. [Known limits](docs/known-limits.md).
 5. [Releasing](docs/releasing.md).
 

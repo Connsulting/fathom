@@ -1,7 +1,7 @@
 # Development
 
 Everything a developer or operator needs to run, configure, test, deploy and operate Fathom. The
-product definition is [`vision-v2.md`](vision-v2.md); the system design is
+product definition is [`vision.md`](vision.md); the system design is
 [`architecture.md`](architecture.md); known gaps are in [`known-limits.md`](known-limits.md).
 
 ## Run locally

@@ -1,7 +1,7 @@
 # Fathom agent instructions
 
 Fathom is a year-round financial co-pilot for a household of independent professionals. The
-product definition is [`docs/vision-v2.md`](docs/vision-v2.md). The clickable mock in
+product definition is [`docs/vision.md`](docs/vision.md). The clickable mock in
 [`mock-v2/`](mock-v2/) is the design reference; the Horizon design is the chosen direction.
 
 The project is in the build phase: a standalone, self-hosted app that runs as one container in the
