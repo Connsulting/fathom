@@ -393,8 +393,8 @@ secrets are read there.
 | `FATHOM_EMAIL_TRANSPORT` | `dev` | `dev`, `smtp`, `resend`, `postmark` or `agentmail` (see Email). |
 | `FATHOM_EMAIL_FROM` | unset (`dev` uses `fathom@example.invalid`) | Sender address; for `agentmail` the inbox id. Not with `FATHOM_EMAIL_FROM_FILE`. |
 | `FATHOM_EMAIL_FROM_FILE` | unset | Path to a file holding the sender address. Not with `FATHOM_EMAIL_FROM`. |
-| `FATHOM_EMAIL_TO` | unset (`dev` uses `owner@example.invalid`) | Recipient addresses, comma separated. Not with `FATHOM_EMAIL_TO_FILE`. |
-| `FATHOM_EMAIL_TO_FILE` | unset | Path to a file of recipient addresses (comma or newline separated). Not with `FATHOM_EMAIL_TO`. |
+| `FATHOM_EMAIL_TO` | unset (`dev` uses `owner@example.invalid`) | Original-household recipient migration input, comma separated. Financial delivery then uses verified member subscriptions. Not with `FATHOM_EMAIL_TO_FILE`. |
+| `FATHOM_EMAIL_TO_FILE` | unset | Original-household recipient migration input file (comma or newline separated). Not with `FATHOM_EMAIL_TO`. |
 | `FATHOM_EMAIL_CREDENTIAL_FILE` | unset | Path to the mounted email credential (API key or SMTP password); must not be readable by other users; mount the secret with mode 0400 or 0440 (with fsGroup) or 0600. Required by every transport but `dev`. |
 | `FATHOM_EMAIL_SMTP_USER` | unset | SMTP user name for `smtp`. |
 | `FATHOM_EMAIL_SMTP_HOST` | `smtp.gmail.com` | SMTP host for `smtp`. |
@@ -1218,9 +1218,11 @@ Enrollment, recovery and add-a-device links.
    malformed header falls back to the socket address. IPv4-mapped IPv6 sockets match IPv4 CIDRs.
    The default trusts no proxy, which is safe but puts everyone behind a proxy in one per-client
    bucket.
-7. Mail needs a real transport in production (`FATHOM_EMAIL_TRANSPORT` and its settings; the
-   existing `FATHOM_EMAIL_TO` setup is assumed). `dev` writes the message, link included, to
-   `outbox/` in the data directory.
+7. Enrollment mail needs a real transport in production (`FATHOM_EMAIL_TRANSPORT`, sender and
+   credential settings), with an explicit invitee recipient independent of financial subscriptions.
+   `dev` writes the message, link included, to platform-private `outbox/` in the data directory.
+   Financial messages use household member subscriptions and household-private outboxes; see
+   [Email](development.md#email).
 8. Add-a-device: a signed-in user with a recent sign-in requests `POST /api/auth/passkeys/link`,
    which issues an `add-passkey` token for that user only and emails the link to the user's own
    address. Limits: `device` global 120 and per client 60 per 10 minutes, and 10 per user per 20

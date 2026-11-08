@@ -533,7 +533,7 @@ export function defaultHandlers({ publicUrl = null, simplefinFetch = null } = {}
       return { costUsd: planning.costUsd, note: planning.counts, planning };
     },
     async 'brief-email'(ctx) {
-      const brief = await composeBrief(ctx.db, { clock: ctx.clock, publicUrl, engine: ctx.engine });
+      const brief = await composeBrief(ctx.db, { clock: ctx.clock, publicUrl, engine: ctx.engine, householdId: ctx.household.householdId });
       const send = await sendEmail(ctx.db, {
         transport: ctx.transport, kind: 'brief', subject: brief.subject, text: brief.text, html: brief.html, now: ctx.now, jobRunId: ctx.jobRunId,
       });
@@ -541,7 +541,7 @@ export function defaultHandlers({ publicUrl = null, simplefinFetch = null } = {}
       return { costUsd: brief.costUsd, note: { sent: 1, figures: brief.model.figures.length, modelSummary: brief.summarySrc === 'model' } };
     },
     async 'deadline-alerts'(ctx) {
-      const out = await runDeadlineAlerts(ctx.db, { clock: ctx.clock, transport: ctx.transport, publicUrl, now: ctx.now, jobRunId: ctx.jobRunId });
+      const out = await runDeadlineAlerts(ctx.db, { clock: ctx.clock, transport: ctx.transport, publicUrl, householdId: ctx.household.householdId, now: ctx.now, jobRunId: ctx.jobRunId });
       if (out.send && out.send.status !== 'sent') throw new JobFailure(`email_${out.send.errorCode || 'other'}`);
       return { costUsd: 0, note: { alerts: out.alerts, sent: out.send ? 1 : 0 } };
     },

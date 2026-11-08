@@ -137,6 +137,8 @@ const TABLE = [
   { method: 'GET', path: '/api/confirm/:id', handler: ih.getConfirm, ingest: true },
   { method: 'POST', path: '/api/confirm/:id/answer', handler: ih.answerConfirm, ingest: true },
   { method: 'POST', path: '/api/confirm/:id/reopen', handler: ih.reopenConfirm, ingest: true },
+  { method: 'GET', path: '/api/email/subscriptions', handler: eh.getSubscriptions, quiet: true, admin: true },
+  { method: 'POST', path: '/api/email/subscriptions', handler: eh.setSubscriptions, quiet: true, admin: true },
   { method: 'GET', path: '/api/email', handler: eh.getEmail, quiet: true },
   { method: 'POST', path: '/api/email/test', handler: eh.sendTestEmail, quiet: true },
   { method: 'POST', path: '/api/email/brief', handler: eh.sendBriefEmail, quiet: true },

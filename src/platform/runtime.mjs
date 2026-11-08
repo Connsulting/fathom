@@ -42,7 +42,7 @@ import { join } from 'node:path';
 import { openDb, migrate, DB_FILE } from '../store/db.mjs';
 import { codeError, householdRootRel, storeIdentity } from './db.mjs';
 import { householdRoot, unwrapDataKey, provisionDataKey } from './household-vault.mjs';
-import { outboundGuard, recipientsVerified } from './outbound.mjs';
+import { outboundGuard } from './outbound.mjs';
 import { VaultError } from '../ingest/vault.mjs';
 import { clockNow } from '../scenario/build.mjs';
 import { createLivePacks } from '../packs/live.mjs';
@@ -50,6 +50,7 @@ import { createRuntimeEngine } from '../engine/runtime.mjs';
 import { createLiveAnswerer } from '../api/answerer.mjs';
 import { createScheduler, defaultHandlers } from '../jobs/scheduler.mjs';
 import { createJobDispatcher } from '../jobs/dispatch.mjs';
+import { createRecipientPolicy } from '../email/recipients.mjs';
 import { createHouseholdTransport } from '../email/transport.mjs';
 import { FUNDING_SETTING, instanceCapUsd } from './model-budget.mjs';
 
@@ -187,9 +188,10 @@ export function createHouseholdContext({
     return row?.status === 'active' && Number(row.generation) === generation && outbound.enabled('jobs');
   };
   const vault = createVaultAccessor({ platform, secrets, db, config, householdId, relativeRoot });
+  const emailRecipients = createRecipientPolicy({ platform, householdId, generation, mode, config, readFile: transportOptions.readFile });
   const householdTransport = transport ?? createHouseholdTransport(config, {
     ...transportOptions, outboxDir: join(root, 'outbox'), outbound,
-    verifyRecipients: mode === 'real' ? addresses => recipientsVerified(platform, householdId, addresses) : null,
+    recipients: emailRecipients,
   });
   // Packs load lazily on read; the pack state refresh (a store write) runs when the household
   // starts serving (startAll, or a later build once started), never on a read path.
@@ -221,7 +223,7 @@ export function createHouseholdContext({
   let closing = null;
   context = Object.freeze({
     householdId, generation, mode, db, root, config, inFlight: new Set(), vault, packs: livePacks, engine: householdEngine,
-    answerer: householdAnswerer, scheduler: householdScheduler, transport: householdTransport, outbound, services,
+    answerer: householdAnswerer, scheduler: householdScheduler, transport: householdTransport, emailRecipients, outbound, services,
     funded: () => instanceFunded(platform),
     isCurrent: () => { const row = platform.prepare('SELECT status, generation FROM households WHERE id = ?').get(householdId); return row?.status === 'active' && Number(row.generation) === generation; },
     close() {

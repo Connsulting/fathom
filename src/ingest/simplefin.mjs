@@ -214,7 +214,7 @@ const ownIdentity = (sfKey) => `simplefin:${sfKey}`;
 export const connection = (db) => db.prepare('SELECT * FROM simplefin_connection WHERE id = 1').get() ?? null;
 
 function householdOf(db, household) {
-  if (!household || typeof household.vault !== 'function' || typeof household.outbound?.enabled !== 'function') {
+  if (!household || typeof household.vault !== 'function' || typeof household.outbound?.enabled !== 'function' || typeof household.isCurrent !== 'function') {
     throw new TypeError('SimpleFIN needs the household context');
   }
   if (household.db !== db) throw new TypeError('SimpleFIN household must own the db');
@@ -225,11 +225,13 @@ function householdOf(db, household) {
 // (VaultError) without spending the one-time token.
 export async function connectSimplefin(db, token, { household, hosts, fetch: fetchImpl, now } = {}) {
   householdOf(db, household);
-  if (!household.outbound.enabled('simplefin')) throw new SimplefinError('paused');
+  if (!household.outbound.enabled('simplefin') || !household.isCurrent()) throw new SimplefinError('paused');
   db.prepare("DELETE FROM settings WHERE key = 'synthetic_demo'").run();
   if (connection(db)?.status === 'ok') throw new SimplefinError('already_connected');
   const vault = await openVault(household);
+  if (!household.outbound.enabled('simplefin') || !household.isCurrent()) throw new SimplefinError('paused');
   const access = await claimToken(token, { hosts, fetch: fetchImpl });
+  if (!household.outbound.enabled('simplefin') || !household.isCurrent()) throw new SimplefinError('paused');
   const blob = sealAccess(vault, access);
   db.prepare(`INSERT INTO simplefin_connection (id, access_blob, connected_at, status) VALUES (1, ?, ?, 'ok')
               ON CONFLICT(id) DO UPDATE SET access_blob = excluded.access_blob, connected_at = excluded.connected_at,
@@ -358,6 +360,7 @@ export async function syncSimplefin(db, { household, config = {}, hosts, fetch: 
   householdOf(db, household);
   const row = connection(db);
   const counts = { accounts: 0, transactions: 0, balances: 0, duplicates: 0, matched: 0, pending: 0, queued: 0, skipped: 0 };
+  if (!household.outbound.enabled('simplefin') || !household.isCurrent()) return { status: 'skipped', code: 'paused', changed: false, counts };
   if (!row) return { status: 'skipped', changed: false, counts };
   const stamp = now || new Date().toISOString();
   const today = clock || stamp.slice(0, 10);
@@ -366,6 +369,7 @@ export async function syncSimplefin(db, { household, config = {}, hosts, fetch: 
   const full = start === addDays(today, -FIRST_DAYS);
   let set;
   try {
+    if (!household.outbound.enabled('simplefin') || !household.isCurrent()) return { status: 'skipped', code: 'paused', changed: false, counts };
     const access = openAccess(vault, row.access_blob);
     set = normalizeAccountSet(await fetchAccounts(access, { hosts, fetch: fetchImpl, startDate: start }));
   } catch (e) {
@@ -373,6 +377,7 @@ export async function syncSimplefin(db, { household, config = {}, hosts, fetch: 
     setStatus(db, RECONNECT.has(code) ? 'reconnect' : 'error', code, null);
     return { status: RECONNECT.has(code) ? 'reconnect' : 'error', code, changed: false, counts };
   }
+  if (!household.outbound.enabled('simplefin') || !household.isCurrent() || connection(db)?.access_blob !== row.access_blob) return { status: 'skipped', code: 'paused', changed: false, counts };
   counts.accounts = set.accounts.length;
   counts.skipped = set.skipped;
   const docAccounts = [];

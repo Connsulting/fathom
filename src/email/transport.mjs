@@ -4,10 +4,8 @@
 // EmailError with a fixed code and message: no key, body, address or provider response reaches an
 // error or a log.
 //
-// createTransport(config, { outboxDir }) is the instance transport (auth mail; its dev outbox is
-// platform-private). createHouseholdTransport wraps it for one household's financial mail: the dev
-// outbox is the household's own, a paused household refuses 'paused', and a recipient that is not
-// an enrolled, active member of the household refuses 'recipient_unverified' (real households).
+// Financial mail uses the household recipient policy; enrollment requires explicit recipients.
+// The provider client has no captured financial message or recipient state.
 
 import { constants } from 'node:fs';
 import { chmod, mkdir, open, rename, rm } from 'node:fs/promises';
@@ -31,7 +29,7 @@ const MESSAGES = {
   network: 'Email provider could not be reached',
   other: 'Email send failed',
   paused: 'Outbound email is paused for this household',
-  recipient_unverified: 'An email recipient is not an enrolled member of this household',
+  recipient_unverified: 'Financial email requires verified subscribed members of this household',
 };
 
 export class EmailError extends Error {
@@ -116,7 +114,7 @@ export function maskAddress(address) {
 const DETAIL = {
   dev: 'Development transport: messages are written to the outbox in the data volume, nothing is sent.',
   configured: 'Sender, recipients and credential are configured.',
-  missing_config: 'Set FATHOM_EMAIL_FROM and FATHOM_EMAIL_TO (or their _FILE paths) to valid addresses.',
+  missing_config: 'Configure a valid email sender and recipients for this delivery policy.',
   missing_credential: 'Mount a non-empty credential file that other users cannot read and set FATHOM_EMAIL_CREDENTIAL_FILE.',
 };
 
@@ -144,7 +142,7 @@ export async function emailStatus(config, { readFile = readRegular } = {}) {
 
 // Dev: one JSON file per message in `dir` (0700, file 0600), written atomically.
 let devSeq = 0;
-async function devSend(dir, settings, msg, log) {
+async function devSend(dir, settings, msg, log, authorize) {
   await mkdir(dir, { recursive: true, mode: 0o700 });
   await chmod(dir, 0o700);
   const date = new Date().toISOString();
@@ -154,17 +152,20 @@ async function devSend(dir, settings, msg, log) {
   let handle;
   try {
     handle = await open(tmp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+    authorize?.();
     await handle.writeFile(body);
     await handle.sync();
     await handle.close();
     handle = null;
+    authorize?.();
     await rename(tmp, join(dir, `${stem}.json`));
-  } catch {
+  } catch (err) {
     await handle?.close().catch(() => {});
     await rm(tmp, { force: true });
+    if (err instanceof EmailError) throw err;
     throw new EmailError('other');
   }
-  log.info(`fathom: email (dev) ${msg.subject} to ${msg.to.length} recipient(s)`);
+  log.info(`fathom: email (dev) recipients=${msg.to.length}`);
   return { id: stem };
 }
 
@@ -206,7 +207,7 @@ async function agentmailSend(fetch, settings, msg) {
 // 422 validation, 429 rate limit).
 const RESEND_CODES = { 400: 'invalid', 401: 'auth', 403: 'auth', 404: 'not_found', 422: 'invalid', 429: 'rate_limited' };
 async function resendSend(fetch, settings, msg) {
-  const r = await postJson(fetch, 'https://api.resend.com/emails', { Authorization: `Bearer ${settings.credential}` },
+  const r = await postJson(fetch, 'https://api.resend.com/emails', { Authorization: `Bearer ${settings.credential}`, ...(msg.idempotencyKey ? { 'Idempotency-Key': msg.idempotencyKey } : {}) },
     { from: settings.from, to: msg.to, subject: msg.subject, text: msg.text, html: msg.html });
   if (!r.ok) throw new EmailError(RESEND_CODES[r.status] ?? 'other');
   return idOf(r.data.id);
@@ -260,17 +261,19 @@ async function smtpSend(createSmtpTransport, settings, msg) {
 // {name, send({to?, subject, text, html}) -> {id, recipients}}; send throws EmailError. The dev
 // transport writes to `outboxDir`, which it requires.
 export function createTransport(config, {
-  outboxDir, fetch = globalThis.fetch, createSmtpTransport = nodemailer.createTransport.bind(nodemailer), log = console, readFile,
+  outboxDir, fetch = globalThis.fetch, createSmtpTransport = nodemailer.createTransport.bind(nodemailer), log = console, readFile, authorize = null,
 } = {}) {
   const name = config.emailTransport ?? 'dev';
   if (name === 'dev' && (typeof outboxDir !== 'string' || !outboxDir)) throw new TypeError('the dev email transport needs an outboxDir');
-  async function send({ to, subject, text, html }) {
-    const settings = await loadEmailSettings(config, readFile ? { readFile } : {});
+  async function send({ to, subject, text, html, idempotencyKey }) {
+    const routing = to == null ? config : { ...config, emailTo: [to].flat().join(','), emailToFile: null };
+    const settings = await loadEmailSettings(routing, readFile ? { readFile } : {});
     const recipients = to == null ? settings.to : [to].flat();
     if (!recipients.length || recipients.some((a) => !ADDRESS.test(a))) throw new EmailError('missing_config');
-    const msg = { to: recipients, subject: String(subject ?? ''), text: String(text ?? ''), html: String(html ?? '') };
+    const msg = { to: recipients, subject: String(subject ?? ''), text: String(text ?? ''), html: String(html ?? ''), idempotencyKey };
+    authorize?.(msg);
     let result;
-    if (name === 'dev') result = await devSend(outboxDir, settings, msg, log);
+    if (name === 'dev') result = await devSend(outboxDir, settings, msg, log, () => authorize?.(msg));
     else if (name === 'agentmail') result = await agentmailSend(fetch, settings, msg);
     else if (name === 'resend') result = await resendSend(fetch, settings, msg);
     else if (name === 'postmark') result = await postmarkSend(fetch, settings, msg);
@@ -284,30 +287,48 @@ export function createTransport(config, {
 // The configured recipients, or [] when they cannot be read.
 export async function configuredRecipients(config, { readFile = readRegular } = {}) {
   try {
-    return (await loadEmailSettings(config, { readFile })).to;
+    const { to } = await readAddresses(config, readFile);
+    return to.length || config.emailTransport !== 'dev' ? to : [DEV_TO];
   } catch (err) {
     if (!(err instanceof EmailError)) throw err;
     return [];
   }
 }
 
-// One household's financial transport: { name, send } over createTransport(config, { outboxDir,
-// ...options }) with the household's outbox. Before every send: outbound.enabled('email') false
-// refuses 'paused'; then, when `verifyRecipients` is given, every recipient (the explicit `to`, else
-// the configured list) must pass it or the send refuses 'recipient_unverified'. Nothing is written
-// or sent on a refusal.
-export function createHouseholdTransport(config, { outboxDir, outbound, verifyRecipients = null, ...options } = {}) {
-  if (!outbound || typeof outbound.enabled !== 'function') throw new TypeError('createHouseholdTransport needs the outbound guard');
-  const inner = createTransport(config, { outboxDir, ...options });
+export function createHouseholdTransport(config, { outboxDir, outbound, recipients, ...options } = {}) {
+  if (!outbound || typeof outbound.enabled !== 'function' || !recipients) throw new TypeError('financial mail needs a household recipient policy');
+  const check = recipient => {
+    if (!outbound.enabled('email')) throw new EmailError('paused');
+    recipients.authorize(recipient);
+  };
+  const name = config.emailTransport ?? 'dev';
   return {
-    name: inner.name,
+    name,
     async send(message = {}) {
       if (!outbound.enabled('email')) throw new EmailError('paused');
-      const recipients = message.to == null
-        ? (await loadEmailSettings(config, options.readFile ? { readFile: options.readFile } : {})).to
-        : [message.to].flat();
-      if (verifyRecipients && (!recipients.length || !verifyRecipients(recipients))) throw new EmailError('recipient_unverified');
-      return inner.send({ ...message, to: recipients });
+      const selected = await recipients.resolve();
+      if (message.to != null) throw new EmailError('recipient_unverified');
+      let result;
+      for (const recipient of selected) {
+        const inner = createTransport({ ...config, emailTo: recipient.email, emailToFile: null }, {
+          ...options, outboxDir, authorize: () => check(recipient),
+        });
+        result = await inner.send({ ...message, to: [recipient.email],
+          idempotencyKey: `fathom:${recipients.householdId}:${recipients.generation}:${randomBytes(16).toString('hex')}`,
+        });
+      }
+      return { id: result.id, recipients: selected.length };
+    },
+  };
+}
+
+export function createEnrollmentTransport(config, options) {
+  const transport = createTransport(config, options);
+  return {
+    name: transport.name,
+    send(message) {
+      if (message?.to == null) throw new EmailError('missing_config');
+      return transport.send(message);
     },
   };
 }
