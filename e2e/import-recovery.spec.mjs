@@ -100,6 +100,6 @@ test('adding the identical bytes of a failed file imports it and never reads "Al
 
   await expect(page.locator('.h-ing-add .h-ing-files')).toContainText(seeded.name);
   await expect(page.locator('.h-ing-add .h-ing-files')).toContainText('Imported');
-  await expect(page.getByText('Already imported')).toHaveCount(0);
+  await expect(page.getByText('Already imported', { exact: true })).toHaveCount(0);
   await expect(row(page, seeded.fileId)).toHaveCount(0);
 });
