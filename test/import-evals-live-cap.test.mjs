@@ -91,3 +91,14 @@ test('per-file cumulative output, input and unknown-success accounting stop befo
   await assert.rejects(unknown.call(request), /file_cap/);
   assert.equal(unknown.report().estimatedCostUsd, 0.5);
 });
+
+test('completion uses the same cap and other engine entry points cannot dispatch outside the evaluation', async () => {
+  let calls = 0;
+  const engine = { call: async () => { calls++; return { text: '{}', accounting: actual }; }, complete: async () => { throw new Error('unguarded'); }, extract: async () => { throw new Error('unguarded'); } };
+  const gate = cappedEngine(engine, { ...options, maxCalls: 1 }, () => estimate);
+  await gate.complete(request);
+  await assert.rejects(gate.complete(request), /evaluation_cap/);
+  await assert.rejects(gate.extract({}), /evaluation_purpose/);
+  await assert.rejects(gate.call({ ...request, purpose: 'categorize' }), /evaluation_purpose/);
+  assert.equal(calls, 1);
+});

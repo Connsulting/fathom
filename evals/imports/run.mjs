@@ -9,6 +9,7 @@ import { serveAppFixture } from '../../test/helpers/server.mjs';
 import { createRuntimeEngine } from '../../src/engine/runtime.mjs';
 import { createAuthStore } from '../../src/auth/store.mjs';
 import { indexSource, resolveField } from '../../src/ingest/model-source.mjs';
+import { selectionFor } from '../../src/models/config.mjs';
 import { loadConfig } from '../../src/config.mjs';
 import { openCliHousehold } from '../../src/platform/cli.mjs';
 import { setSetting } from '../../src/store/db.mjs';
@@ -92,7 +93,7 @@ async function contextMatches(c, x, file) {
   const actual = new Map(proposal.coverage.flatMap(region => region.refs.map(id => [coordinate(source.refs[id]), region.disposition])));
   return Object.entries(c.oracle.dispositions).every(([id, disposition]) => actual.get(id) === disposition) && proposal.completeness === (c.family === 'january_tax_year' ? 'incomplete' : 'complete');
 }
-const tables = ['transactions', 'balances', 'pnl_lines', 'tax_payments', 'positions', 'facts', 'expected_transactions'];
+const tables = ['transactions', 'balances', 'pnl_lines', 'tax_payments', 'positions', 'facts', 'expected_transactions', 'accounts'];
 const snapshot = x => stable(tables.map(table => x.db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()));
 async function persistedScore(c, x, file) {
   const target = { transaction: ['transactions', ['account_id', 'date', 'amount', 'description']], balance: ['balances', ['account_id', 'date', 'amount']], pnl: ['pnl_lines', ['entity', 'period', 'category', 'amount']] };
@@ -237,6 +238,8 @@ export async function main(argv = process.argv.slice(2)) {
         admitLive({ ...options, authorized, credentials: true, funded: true });
         const config = loadConfig();
         if (config.engine !== 'live') throw new Error('live_engine_required');
+        const selection = selectionFor(config.modelPorts, 'extract');
+        if (!(selection.keyFile || selection.adapter === 'claude' && config.claudeCredentialFile)) throw new Error('credentials_required');
         opened = await openCliHousehold(config, ['--household', process.env.FATHOM_IMPORT_EVAL_HOUSEHOLD]);
         const engine = opened.household.engine;
         await engine.init();

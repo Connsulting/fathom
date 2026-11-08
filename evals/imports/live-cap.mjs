@@ -11,9 +11,12 @@ export function cappedEngine(engine, options, estimate = request => estimateComp
   const files = new Map(), models = new Map();
   const state = { calls: 0, failedCalls: 0, costUsd: 0, actualCostUsd: 0, estimatedCostUsd: 0, stopReason: null };
   const stop = reason => { state.stopReason = reason; throw new Error('evaluation_cap'); };
-  return { ...engine,
+  const guarded = { ...engine,
+    complete: request => guarded.call(request),
+    extract: async () => { throw new Error('evaluation_purpose'); },
     report: () => ({ ...state, models: Object.fromEntries(models) }),
     async call(request) {
+      if (request.purpose !== 'extract') throw new Error('evaluation_purpose');
       if (state.stopReason) throw new Error('evaluation_cap');
       if (state.calls >= options.maxCalls) stop('call_cap');
       const bound = estimate(request), fileId = /^import:([^:]+):/.exec(request.budget?.correlationId ?? '')?.[1];
@@ -52,4 +55,5 @@ export function cappedEngine(engine, options, estimate = request => estimateComp
       }
     },
   };
+  return guarded;
 }
