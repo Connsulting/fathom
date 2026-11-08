@@ -288,17 +288,17 @@ const base = {
 };
 const SUMMARIES = {
   add: ['Add figures in one unit.', 'Add figures'],
-  subtract: ['The first figure minus the rest.', 'Subtract figures'],
+  subtract: ['First minus the rest.', 'Subtract figures'],
   multiply: ['Two figures; usd times ratio, months times usd_per_month.', 'Multiply figures'],
   divide: ['Two figures; equal units give a ratio.', 'Divide figures'],
-  sum: ['Sum figures or a ref to a figure list.', 'Total several figures'],
-  min: ['The smallest figure.', 'Smallest of figures'],
-  max: ['The largest figure.', 'Largest of figures'],
-  negate: ['The figure with its sign flipped.', 'Flip a sign'],
+  sum: ['Sum figures or a referenced list.', 'Total several figures'],
+  min: ['Smallest figure.', 'Smallest of figures'],
+  max: ['Largest figure.', 'Largest of figures'],
+  negate: ['Flip the sign.', 'Flip a sign'],
   annualize: ['usd_per_month to usd_per_year.', 'A monthly figure as a year'],
   monthly: ['usd_per_year to usd_per_month.', 'A yearly figure as a month'],
-  percent_of: ['A ratio of a base: the ratio first.', 'A share of a figure'],
-  round_up: ['Up to the next 1, 100 or 1000.', 'Round a figure up'],
+  percent_of: ['Share of a base; ratio first.', 'A share of a figure'],
+  round_up: ['Round up to 1, 100 or 1000.', 'Round a figure up'],
   compound: ['Future value, compounded monthly.', 'Grow a figure at a rate'],
 };
 const PARAMS = {
