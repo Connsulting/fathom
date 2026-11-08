@@ -5,7 +5,9 @@ import { createInstance } from '../src/platform/db.mjs';
 import { seedDemo } from '../demo/seed.mjs';
 import { createEngine, loadCredential, BudgetExceededError, ModelAccountingError } from '../src/engine/index.mjs';
 import { createSpendLedger } from '../src/engine/runtime.mjs';
-import { estimateUnknownCost, modelFor } from '../src/engine/pricing.mjs';
+import { modelFor } from '../src/engine/pricing.mjs';
+import { ANSWER_MAX_WORDS } from '../src/shared/answer-contract.mjs';
+import { estimateEvalCost } from './reservation.mjs';
 import { createLiveAnswerer } from '../src/api/answerer.mjs';
 import { threadCreate, ask } from '../src/api/handlers.mjs';
 import { fallbackTitle } from '../src/api/threads.mjs';
@@ -25,7 +27,7 @@ export async function createEvalStore() {
   } };
 }
 const rounded = value => Number(value.toFixed(12));
-export function createEvalLedger({ db, maxUsd }) {
+export function createEvalLedger({ db, maxUsd, onRound }) {
   if (!Number.isFinite(maxUsd) || maxUsd < 0) throw new TypeError('Invalid eval budget');
   const start = db.prepare('SELECT coalesce(max(id),0) AS id FROM spend_ledger').get().id;
   const base = createSpendLedger(db);
@@ -40,9 +42,12 @@ export function createEvalLedger({ db, maxUsd }) {
     get outstandingReservedUsd() { return outstanding; },
     begin(request) { current = request; roundIndex = 0; return request; },
     end() { outstanding = 0; current = null; },
+    continueBudget() {
+      if (state.stopped === 'budget' && cost() < maxUsd) { state.stopped = null; state.reason = null; }
+    },
     monthSpendUsd() { return state.stopped ? maxUsd : cost(); },
     admitRound(request) {
-      const estimate = estimateUnknownCost({ model: modelFor(request.purpose), maxTokens: request.maxTokens,
+      const estimate = estimateEvalCost({ model: modelFor(request.purpose), maxTokens: request.maxTokens,
         system: [request.system, request.systemDynamic].filter(Boolean).join('\n'),
         messages: request.messages, tools: request.tools });
       const scripted = current?.fake?.[roundIndex++];
@@ -53,6 +58,8 @@ export function createEvalLedger({ db, maxUsd }) {
       if (rounded(cost() + reserve) > maxUsd) {
         state.stopped = 'budget';
         state.reason = `budget: next ${request.purpose} round needs $${reserve.toFixed(6)}; $${rounded(maxUsd - cost()).toFixed(6)} remains`;
+        onRound?.({ round: reserves.length, purpose: request.purpose, estimateUsd: reserve, actualUsd: 0,
+          remainingUsd: rounded(maxUsd - cost()), admitted: false });
         throw new BudgetExceededError();
       }
       outstanding = reserve;
@@ -60,6 +67,8 @@ export function createEvalLedger({ db, maxUsd }) {
     },
     record(entry) {
       base.record(entry);
+      onRound?.({ round: reserves.length, purpose: entry.purpose, estimateUsd: outstanding,
+        actualUsd: entry.costUsd, remainingUsd: rounded(maxUsd - cost()), admitted: true });
       outstanding = 0;
       if (entry.tokens?.estimated) {
         state.stopped = 'accounting';
@@ -90,7 +99,7 @@ function plain(html) {
   return String(html ?? '').replace(/<[^>]*>/g, ' ').replace(/&#123;/g, '{').replace(/&#125;/g, '}')
     .replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim();
 }
-export async function runCases({ cases, live = false, maxUsd = 100, outDir, scripts } = {}) {
+export async function runCases({ cases, live = false, maxUsd = 100, outDir, scripts, onRound } = {}) {
   validateCases(cases);
   if (!Number.isFinite(maxUsd) || maxUsd < 0) throw new TypeError('Invalid eval budget');
   if (live && process.env.CI) throw new TypeError('Live evals never run in CI');
@@ -98,14 +107,14 @@ export async function runCases({ cases, live = false, maxUsd = 100, outDir, scri
   const store = await createEvalStore();
   const { db } = store;
   try {
-    const ledger = createEvalLedger({ db, maxUsd });
+    const ledger = createEvalLedger({ db, maxUsd, onRound });
     const mode = live ? 'live' : 'fake';
     const inner = createEngine({ mode, ledger, capUsd: maxUsd, credential, admitRound: request => ledger.admitRound(request) });
     const packs = createLivePacks(db, { dataDir: store.root }); packs.refresh();
     const clock = JSON.parse(db.prepare("SELECT value FROM settings WHERE key='clock'").get().value);
     const figures = Object.fromEntries(db.prepare('SELECT key,v FROM figures').all().map(r => [r.key, r.v]));
     const rows = [];
-    let attempts = [], turn, missing = [], expected = [], requestLengths = [], caseScript = null, scriptMissing = false, capabilitiesMissing = false;
+    let attempts = [], reads = [], turn, missing = [], expected = [], requestLengths = [], caseScript = null, scriptMissing = false, capabilitiesMissing = false;
     const engine = { mode, isOn: () => true, async call(request) {
       const calls = scriptMissing || capabilitiesMissing ? [] : turn.required.filter(r => tools.some(t => t.name === r.name && t.operations.some(o => o.name === r.operation))).map(r => ({ name: r.name, args: { operation: r.operation, ...scriptArgs(r.predicates) } }));
       const supplied = scripts ? await scripts({ turn, expected, db, purpose: request.purpose, attempt: attempts.length }) : caseScript ? await caseScript({ turn, expected, db, purpose: request.purpose, attempt: attempts.length, clock, tools }) : [
@@ -127,8 +136,9 @@ export async function runCases({ cases, live = false, maxUsd = 100, outDir, scri
         throw error;
       } finally { ledger.end(); }
     } };
-    const answerer = createLiveAnswerer({ engine, packs, root: store.root });
+    const answerer = createLiveAnswerer({ engine, packs, root: store.root, onRead: call => reads.push(call) });
     for (const c of cases) {
+      ledger.continueBudget();
       if (ledger.state.stopped) {
         rows.push({ id: c.id, family: c.family, status: 'unrun', turns: [], costUsd: 0, reservedUsd: 0,
           reason: `${ledger.state.reason ?? ledger.state.stopped}; run stopped before this case` });
@@ -148,32 +158,43 @@ export async function runCases({ cases, live = false, maxUsd = 100, outDir, scri
       const result = { id: c.id, family: c.family, status: 'pass', missingOperations: missing, missingCapabilities, ...(scriptMissing ? { missingScript: c.expectedFail.missingScript } : {}), turns: [] };
       let key;
       for (turn of c.turns) {
-        attempts = []; requestLengths = [];
+        attempts = []; reads = []; requestLengths = [];
         expected = expectedFigures(db, turn.expected);
         const ctx = { db, packs, answerer, ...(c.checkTitle ? { engine } : {}), config: { clock, engine: mode }, body: key ? { key, text: turn.question } : { text: turn.question } };
         const response = key ? await ask(ctx) : await threadCreate(ctx);
         key ??= response.thread.key;
         const delivered = plain(response.message?.text);
-        const calls = attempts.flatMap(a => a.toolResults);
+        const calls = [...reads, ...attempts.flatMap(a => a.toolResults)];
         const contextNumbers = evidenceNumbers([{ name: 'context', args: {}, result: { figures: Object.values(figures) } }]);
         const gradedAttempts = attempts.map((a, i) => ({ text: a.text, error: a.error ?? null,
-          figures: gradeFigures(a.text, attempts.slice(0, i + 1).flatMap(r => r.toolResults), { figures, contextNumbers }),
-          length: gradeLength(a.text, turn.maxWords),
+          figures: gradeFigures(a.text, [...reads, ...attempts.slice(0, i + 1).flatMap(r => r.toolResults)], { figures, contextNumbers }),
+          length: gradeLength(a.text, turn.maxWords ?? ANSWER_MAX_WORDS),
           prohibited: gradeProhibited(turn.prohibit, { text: a.text ?? '', writeCalls: 0 }) }));
         const required = gradeRequiredTools(turn.required, calls);
         const numeric = gradeFigures(delivered, calls, { figures, contextNumbers });
-        const length = gradeLength(delivered, turn.maxWords);
+        const length = gradeLength(delivered, turn.maxWords ?? ANSWER_MAX_WORDS);
         const expectedGrade = gradeExpected(delivered, expected, { figures });
         const refusal = !turn.refusal || /\b(?:don't|doesn't|do not|does not|cannot|can't|not available|not stored|not tracked|no access)\b/i.test(delivered);
         const prohibited = gradeProhibited(turn.prohibit, { text: delivered, writeCalls: calls.filter(c => tools.some(t => t.name === c.name && t.kind !== 'read')).length });
         const scriptForTurn = (scriptMissing || capabilitiesMissing) && turn.required.some(r => c.requires?.operations?.includes(`${r.name}.${r.operation}`));
-        const existingToolsOk = scriptForTurn || required.checks.filter(r => !missing.includes(`${r.name}.${r.operation}`)).every(r => r.ok);
-        const safe = numeric.ok && length.ok && refusal && prohibited.ok && gradedAttempts.every(a => a.figures.ok && a.length.ok && a.prohibited.ok && !a.error);
+        const existingToolsOk = required.checks.filter(r => !missing.includes(`${r.name}.${r.operation}`))
+          .every(r => r.ok || (scriptForTurn && r.status === 'missing'));
+        const safe = numeric.ok && length.ok && refusal && prohibited.ok;
         const ok = safe && required.ok && expectedGrade.ok && !response.message?.notice;
         const turnMissing = scriptForTurn || turn.required.some(r => missing.includes(`${r.name}.${r.operation}`));
         const gapOnly = turnMissing && safe && existingToolsOk && !response.message?.notice;
+        const failingChecks = [
+          ...required.checks.filter(r => !r.ok).map(r => `required.${r.name}.${r.operation}`),
+          ...figureCheckNames(numeric),
+          ...(!length.ok ? ['length'] : []),
+          ...expectedGrade.checks.flatMap((e, i) => e.ok ? [] : [`expected[${i}]`]),
+          ...(!refusal ? ['refusal'] : []), ...(!prohibited.ok ? ['prohibited'] : []),
+          ...(response.message?.notice ? ['notice'] : []),
+        ];
+        const failedDrafts = gradedAttempts.slice(0, -1).filter(a => !a.figures.ok || !a.length.ok || !a.prohibited.ok || a.error).length;
         result.turns.push({ question: turn.question, rubric: turn.rubric, delivered, tools: calls, required,
-          figures: numeric, expected: expectedGrade, length, refusal, attempts: gradedAttempts,
+          figures: numeric, expected: expectedGrade, length, refusal, prohibited, failingChecks, failedDrafts, attempts: gradedAttempts,
+          blockedBy: gapOnly ? missing.filter(pair => turn.required.some(r => `${r.name}.${r.operation}` === pair)) : [],
           grounding: response.message?.provenance?.grounding ?? null, historyMessages: Math.max(0, ...requestLengths), ok });
         if (ledger.state.stopped) { result.status = `${ledger.state.stopped}-stopped`; break; }
         if (!ok && !gapOnly) result.status = 'fail';
@@ -189,32 +210,41 @@ export async function runCases({ cases, live = false, maxUsd = 100, outDir, scri
       result.costUsd = rounded(ledger.costUsd - beforeCost);
       result.reservedUsd = rounded(ledger.reservedUsd - beforeReserved);
       if (ledger.state.stopped) result.reason = ledger.state.reason ?? `${ledger.state.stopped}: no remaining budget for another round`;
+      result.failingChecks = [...new Set([...result.turns.flatMap(t => t.failingChecks), ...(result.title && !result.title.ok ? ['title'] : [])])];
+      result.failedDrafts = result.turns.reduce((sum, t) => sum + t.failedDrafts, 0);
       rows.push(result);
       if (c.storedGoal) db.prepare('DELETE FROM goals WHERE id = ?').run(goalId);
     }
     const scorecard = { version: 2, live, generatedAt: new Date().toISOString(), maxUsd, costUsd: ledger.costUsd,
       reservedUsd: ledger.reservedUsd, outstandingReservedUsd: ledger.outstandingReservedUsd,
       releasedUsd: rounded(ledger.reservedUsd - ledger.costUsd),
-      stopped: ledger.state.stopped, selected: cases.length,
+      stopped: ledger.state.stopped ?? (rows.some(r => r.status === 'budget-stopped') ? 'budget' : null), selected: cases.length,
+      failedDrafts: rows.reduce((sum, c) => sum + (c.failedDrafts ?? 0), 0),
       attempted: rows.filter(r => r.status !== 'unrun').length,
       completed: rows.filter(r => !['unrun', 'budget-stopped', 'accounting-stopped'].includes(r.status)).length, cases: rows };
     if (outDir) await writeScorecard(outDir, scorecard);
     return scorecard;
   } finally { await store.close(); }
 }
+function figureCheckNames(grade) {
+  return [['unsourced', 'unsourced'], ['selfComputed', 'self-computed'], ['rounded', 'rounded'],
+    ['spelledOut', 'spelled_out'], ['contextOnly', 'context-only']]
+    .filter(([key]) => grade[key]?.length).map(([, name]) => `figures.${name}`);
+}
 export async function writeScorecard(dir, scorecard) {
   await mkdir(dir, { recursive: true });
   const lines = ['# Ask evals', '', `Tier: ${scorecard.live ? 'live' : 'scripted'}. Cost: $${scorecard.costUsd.toFixed(6)}. Stop: ${scorecard.stopped ?? 'none'}.`, '', `Reserved (cumulative, reused after each round): $${scorecard.reservedUsd.toFixed(6)}. Spent: $${scorecard.costUsd.toFixed(6)}. Outstanding: $${scorecard.outstandingReservedUsd.toFixed(6)}.`, '',
-    '| Case | Result | Tools called / required | unsourced / self-computed / rounded / spelled_out / context-only | Words / budget | Actual cost | Reserved | Reason |',
-    '| --- | --- | --- | --- | --- | --- | --- | --- |'];
+    `Failed superseded drafts (report only): ${scorecard.failedDrafts ?? 0}.`, '',
+    '| Case | Result | Tools called / required | unsourced / self-computed / rounded / spelled_out / context-only | Words / budget | Actual cost | Reserved | Missing operations | Failing checks | Reason |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'];
   const kindCount = (grade, kind) => (grade?.[kind === 'self-computed' ? 'selfComputed' : kind === 'spelled_out' ? 'spelledOut' : kind === 'context-only' ? 'contextOnly' : kind] ?? []).length;
   for (const c of scorecard.cases) {
     const names = c.turns.flatMap(t => t.tools.map(r => r.name)).join(', ');
     const required = c.turns.flatMap(t => t.required.checks.map(r => `${r.name}.${r.operation}:${r.status}`)).join(', ');
-    const grades = c.turns.flatMap(t => [t.figures, ...t.attempts.map(a => a.figures)]);
+    const grades = c.turns.map(t => t.figures);
     const counts = ['unsourced', 'self-computed', 'rounded', 'spelled_out', 'context-only']
       .map(kind => grades.reduce((s, grade) => s + kindCount(grade, kind), 0));
-    lines.push(`| ${c.id} | ${c.status} | ${names || 'none'} / ${required} | ${counts.join(' / ')} | ${c.turns.map(t => `${t.length.words}/${t.length.maxWords}`).join(', ')} | $${c.costUsd.toFixed(6)} | $${c.reservedUsd.toFixed(6)} | ${(c.reason ?? '').replaceAll('|', '/')} |`);
+    lines.push(`| ${c.id} | ${c.status} | ${names || 'none'} / ${required} | ${counts.join(' / ')} | ${c.turns.map(t => `${t.length.words}/${t.length.maxWords}`).join(', ')} | $${c.costUsd.toFixed(6)} | $${c.reservedUsd.toFixed(6)} | ${(c.missingOperations ?? []).join(', ')} | ${(c.failingChecks ?? []).join(', ')} | ${(c.reason ?? '').replaceAll('|', '/')} |`);
   }
   await writeFile(join(dir, 'scorecard.json'), JSON.stringify(scorecard, null, 2) + '\n');
   await writeFile(join(dir, 'summary.md'), lines.join('\n') + '\n');
