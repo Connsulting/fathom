@@ -62,9 +62,11 @@ test('missing, absent and unrelated refs are rejected while the item stays pendi
 
 test('engine off still applies deterministic account-name rules without calls', () => store(async db => {
   const id = account(db, 'Synthetic Checking');
+  rec(db, ['benefits.hsaEligible']);
   const engine = { isOn: () => false, call() { assert.fail('engine called'); } };
   await resolvePending(db, engine, options);
   assert.equal(getItem(db, id).answer, 'cash');
+  assert.equal(db.prepare("SELECT count(*) AS n FROM confirm_items WHERE kind='resolver_fact'").get().n, 0);
   reopenItem(db, id, { now: NOW });
   await resolvePending(db, engine, options);
   assert.equal(getItem(db, id).status, 'pending');
