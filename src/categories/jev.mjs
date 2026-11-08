@@ -63,11 +63,10 @@ export async function createJev({ keyFile = process.env.FATHOM_TYPESAFE_KEY_FILE
       const monthSpend=ledger?.monthSpendUsd(timestamp.slice(0,7)) ?? 0;
       if (tokens+reserve>maxTokens || costUsd+reservedCost>maxCostUsd || monthSpend+reservedCost>monthlyCapUsd) throw fail('jev_budget');
       tokens+=reserve; costUsd+=reservedCost;
-      let data, response, timer;
-      const controller=new AbortController(), started=performance.now();
+      let data, response;
+      const started=performance.now();
       try {
-        const timeout=new Promise((_,reject)=>{timer=setTimeout(()=>{controller.abort();reject(fail('jev_timeout'));},timeoutMs);});
-        data=await Promise.race([(async()=>{
+        data=await (async()=>{
           if (complete) {
             const result = await complete({ purpose: 'categorize', messages: [{ role: 'user', content: 'Choose only from the supplied options.' }],
               choices: qs, maxTokens: 4096, budget: { maxCostUsd: maxCostUsd - (costUsd - reservedCost), timeoutMs },
@@ -78,28 +77,28 @@ export async function createJev({ keyFile = process.env.FATHOM_TYPESAFE_KEY_FILE
               portCostUsd: result.costUsd };
           }
           const result = await port.complete({ choices: qs, maxTokens: 4096, timeoutMs });
-          response = result.httpStatus ? { status: result.httpStatus } : null;
+          response = result.httpStatus ? { status: result.httpStatus, retryAfterMs: result.retryAfterMs } : null;
           if (!result.data) throw fail(result.errorCode ?? 'jev_unavailable');
           return result.data;
-        })(),timeout]);
+        })();
       } catch (error) {
         if (complete) {
           const charged = error.accounting?.costUsd ?? 0;
           tokens -= reserve; costUsd += charged - reservedCost;
           if (attempt<retries && ['rate_limit','unavailable'].includes(error.code) && error.accounting?.estimated===false && charged===0) {
-            await sleep(Math.min(10_000,250*2**attempt));
+            await sleep(Math.min(10_000,Math.max(250*2**attempt,error.retryAfterMs??0)));
             continue;
           }
           throw error;
         }
         ledger?.record({ts:timestamp,purpose:'categorize',costUsd:reservedCost,model:JEV_MODEL,tokens:{input:reserve,estimated:true}});
         if (attempt<retries && (!response || response.status===429 || response.status>=500)) {
-          const retryAfter=Number(response?.headers?.get('retry-after'));
-          await sleep(Math.min(10_000,Math.max(250*2**attempt,Number.isFinite(retryAfter)?retryAfter*1000:0)));
+          const retryAfter=response?.retryAfterMs??0;
+          await sleep(Math.min(10_000,Math.max(250*2**attempt,retryAfter)));
           continue;
         }
         throw fail('jev_unavailable');
-      } finally { clearTimeout(timer); latenciesMs.push(performance.now()-started); }
+      } finally { latenciesMs.push(performance.now()-started); }
       const input=data?.usage?.input_tokens, output=data?.usage?.output_tokens;
       const accounted=Number.isSafeInteger(input) && input>=0 && (complete || input<=reserve) && Number.isSafeInteger(output) && output>=0;
       const actual=accounted ? input : reserve;

@@ -1,4 +1,4 @@
-import { DEFAULT_MODEL, TITLE_MODEL } from '../engine/pricing.mjs';
+import { DEFAULT_MODEL, TITLE_MODEL, PRICING } from '../engine/pricing.mjs';
 
 export const MODEL_PURPOSES = Object.freeze(['ask', 'title', 'categorize', 'import']);
 const ADAPTERS = ['claude', 'jev', 'openai', 'ollama'];
@@ -25,6 +25,8 @@ export function loadModelConfig(env = process.env) {
     const baseUrl = env[`${prefix}BASE_URL`] || null;
     if (adapter === 'jev' && model !== 'jev-1.14.0') throw new TypeError('Invalid choice model');
     if (!model || (custom && !baseUrl)) throw new TypeError('Model and base URL are required');
+    if (adapter === 'claude' && !PRICING[model]) throw new TypeError('No verified model pricing');
+    if (baseUrl && !custom) throw new TypeError('This adapter has a fixed endpoint');
     if (baseUrl) {
       const url = new URL(baseUrl);
       if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new TypeError('Invalid model base URL');

@@ -30,6 +30,7 @@
 // reservation) throws ModelAccountingError without latching: the platform hold is the authority,
 // so once node scripts/reconcile-spend.mjs settles it the same engine admits the next call.
 
+import { modelErrorCode } from '../models/port.mjs';
 import { selectionFor } from '../models/config.mjs';
 import { getSetting } from '../store/db.mjs';
 import { createEngine, loadCredential, EngineOffError, ModelAccountingError, ModelCallError } from './index.mjs';
@@ -82,7 +83,7 @@ function capOf(db) {
 const settingOn = (db) => getSetting(db, 'engine', { on: true })?.on !== false;
 
 export function createRuntimeEngine({ db, config = {}, now, allowed = () => true, funded = () => false, platform = null, householdId,
-  generation = 1, fundingNow = Date.now, testTransport = null } = {}) {
+  generation = 1, fundingNow = Date.now, testTransport = null, modelTransport } = {}) {
   if (!db) throw new TypeError('A store is required');
   if (typeof allowed !== 'function' || typeof funded !== 'function' || typeof fundingNow !== 'function') throw new TypeError('Invalid engine admission');
   const mode = config.engine ?? 'off';
@@ -129,7 +130,7 @@ export function createRuntimeEngine({ db, config = {}, now, allowed = () => true
       const loaded = new Map();
       for (const purpose of ['chat', 'job', 'confirm', 'extract', 'title', 'categorize']) {
         const selection = selectionFor(config.modelPorts, purpose);
-        const file = selection.keyFile || (selection.adapter === 'claude' ? config.claudeCredentialFile : selection.adapter === 'jev' ? config.typesafeKeyFile : null);
+        const file = selection.keyFile || (selection.adapter === 'claude' ? config.claudeCredentialFile : selection.adapter === 'jev' ? config.typesafeKeyFile : null) || null;
         if (!file && !['claude', 'jev'].includes(selection.adapter)) continue;
         if (!loaded.has(file)) {
           try { loaded.set(file, await loadCredential(file)); } catch { loaded.set(file, null); }
@@ -150,9 +151,9 @@ export function createRuntimeEngine({ db, config = {}, now, allowed = () => true
     if (!settingOn(db) || allowed() !== true) throw new EngineOffError();
     const cap = capOf(db);
     await init();
-    if (failedCredentials.has(purpose)) throw new ModelCallError('engine credential unavailable');
+    if (failedCredentials.has(purpose)) throw Object.assign(new ModelCallError('engine credential unavailable'), {code:'authentication'});
     if (!inner || cap !== innerCap) {
-      inner = createEngine({ mode, ledger, capUsd: cap, credential: auth ?? undefined, modelConfig: config.modelPorts, modelCredentials, ...(now ? { now } : {}), allowed, funded,
+      inner = createEngine({ mode, ledger, capUsd: cap, credential: auth ?? undefined, modelConfig: config.modelPorts, modelCredentials, modelTransport, ...(now ? { now } : {}), allowed, funded,
         ...(reservations ? { reservations, testTransport } : {}),
         streamDelayMs: mode === 'fake' && Number.isInteger(config.fakeStreamMs) ? config.fakeStreamMs : 0 });
       innerCap = cap;
@@ -168,6 +169,7 @@ export function createRuntimeEngine({ db, config = {}, now, allowed = () => true
       // latches. Fake and off: any accounting failure latches.
       if (error instanceof ModelAccountingError
         && (platformLedger ? error.code === 'accounting_unrecorded' : error.code !== 'accounting_hold')) refused = true;
+      error.code = modelErrorCode(error);
       throw error;
     }
   }

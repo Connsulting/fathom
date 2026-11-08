@@ -227,3 +227,20 @@ export async function messagesToolRound({ credential, system, systemDynamic, mes
     status: registry.results.length ? 'error_max_turns' : 'success', is_error: false, api_error_status: null,
     accountingUnknown: costUsd === undefined, details: { maxTokens }, toolResults: registry.results };
 }
+
+export async function demoRound({ credential, system, systemDynamic, messages, tools, maxTokens, model, registry, onEvent }) {
+  const client = new Anthropic({ apiKey: credential.value, authToken: null,
+    baseURL: ANTHROPIC_BASE_URL, maxRetries: 0, timeout: 30000 });
+  const response = await client.messages.create({ model, max_tokens: maxTokens,
+    system: `${system}\n${systemDynamic}`, messages: wireMessages(messages),
+    ...(tools.length ? { tools: tools.map(tool => ({ name: tool.name, description: tool.description, input_schema: tool.inputSchema })) } : {}) });
+  for (const block of response.content) {
+    if (block.type === 'tool_use') {
+      onEvent?.({ type: 'tool', name: block.name });
+      await registry.invoke(block.name, block.input);
+    } else if (block.type === 'text') onEvent?.({ type: 'text', text: block.text });
+  }
+  return { text: response.content.filter(b => b.type === 'text').map(b => b.text).join(''), content: response.content,
+    tokens: response.usage, model, costUsd: usageCostUsd(model, response.usage), toolResults: registry.results,
+    status: response.stop_reason === 'tool_use' ? 'error_max_turns' : 'success', details: {} };
+}

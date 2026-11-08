@@ -160,3 +160,128 @@ test('reported aggregator cost settles exactly and an underpriced bound holds', 
   await assert.rejects(engine.call({ purpose: 'chat', messages }), e => e.code === 'accounting_hold');
   assert.equal(reservations.events.at(-1)[2].costUsd, 10); assert.equal(entries[0].costUsd, 10);
 });
+
+// Claude response and error envelopes follow the Messages API reference; the shared emulator
+// also exercises the production SDK client rather than a replacement SDK implementation.
+import { startModelEmulator } from './helpers/model-emulator.mjs';
+import { DEFAULT_MODEL, TITLE_MODEL, usageCostUsd } from '../src/engine/pricing.mjs';
+import { JEV_MODEL, JEV_INPUT_USD } from '../src/models/adapters/jev.mjs';
+
+test('Claude structured completion preserves the Messages API shape and usage', async t => {
+  const emulator = await startModelEmulator(); t.after(() => emulator.close());
+  const port = createModelPort({ selection: { adapter: 'claude', model: TITLE_MODEL }, purpose: 'title',
+    credential: { type: 'api-key', value: 'synthetic-key' }, testTransport: { baseURL: emulator.baseURL } });
+  const schema = { type: 'object', properties: { title: { type: 'string' } }, required: ['title'], additionalProperties: false };
+  const r = await port.complete({ messages, system: 'Synthetic system', maxTokens: 64, schema });
+  const body = emulator.requests[0].body;
+  assert.equal(body.model, TITLE_MODEL); assert.equal(body.max_tokens, 64);
+  assert.deepEqual(body.output_config.format.schema, schema);
+  assert.equal(body.system[0].text, 'Synthetic system');
+  assert.equal(JSON.parse(r.text).title, 'Synthetic thread title');
+  assert.equal(r.tokens.input_tokens, 120); assert.equal(r.costUsd, usageCostUsd(TITLE_MODEL, r.tokens));
+  for (const [status, code] of [[401, 'authentication'], [429, 'rate_limit'], [400, 'invalid_request'], [503, 'unavailable']]) {
+    emulator.script([{ status }]);
+    const failed = await port.complete({ messages, maxTokens: 64 });
+    assert.equal(failed.errorCode, code); assert.equal(failed.costUsd, 0);
+  }
+});
+
+test('Claude tool continuations use registered tools and per-response admission', async t => {
+  const emulator = await startModelEmulator(); t.after(() => emulator.close());
+  emulator.script([{ toolUse: { name: tool.name, input: { key: 'synthetic' }, id: 'synthetic-tool' } }, { text: 'Synthetic answer.' }]);
+  let enabled = false, funded = true;
+  const reservations = admitted();
+  const engine = createEngine({ mode: 'live', credential: { type: 'api-key', value: 'synthetic-key' },
+    testTransport: { baseURL: emulator.baseURL }, reservations, allowed: () => enabled, funded: () => funded });
+  await assert.rejects(engine.call({ purpose: 'chat', messages }), e => e.code === 'paused');
+  enabled = true; funded = false;
+  await assert.rejects(engine.call({ purpose: 'chat', messages }), e => e.code === 'funding_unavailable');
+  funded = true;
+  await assert.rejects(engine.call({ purpose: 'chat', messages, budget: { maxCostUsd: 0 } }), e => e.code === 'budget');
+  assert.equal(emulator.requests.length, 0);
+  const r = await engine.call({ purpose: 'chat', messages, tools: [tool], maxTokens: 64 });
+  assert.equal(r.text, 'Synthetic answer.'); assert.equal(r.toolResults.length, 1);
+  assert.equal(emulator.requests[0].body.tools[0].input_schema.properties.key.type, 'string');
+  assert.equal(emulator.requests[1].body.messages.at(-1).content[0].tool_use_id, 'synthetic-tool');
+  assert.deepEqual(reservations.events.map(e => e[0]), ['reserve', 'settle', 'reserve', 'settle']);
+});
+
+test('Claude SDK uses the original round runner with twice the response bound', async () => {
+  const reservations = admitted(); let observed;
+  const engine = createEngine({ mode: 'live', credential: { type: 'api-key', value: 'synthetic-key' }, reservations,
+    roundRunner: async req => { observed = req; return { text: 'Synthetic', content: [{ type: 'text', text: 'Synthetic' }],
+      tokens: { input_tokens: 4, output_tokens: 2 }, costUsd: .001, model: DEFAULT_MODEL, status: 'success', details: {}, toolResults: [] }; } });
+  await engine.call({ purpose: 'chat', messages, maxTokens: 64 });
+  assert.equal(observed.model, DEFAULT_MODEL);
+  assert.equal(reservations.events[0][1].boundUsd, 2 * observed.maxBudgetUsd);
+});
+
+const choiceQuestions = [{ state: { description: 'Synthetic grocery store' }, instructions: 'Choose a category', options: ['Groceries', 'Business'] }];
+const jevResponse = (bad = false) => ({ model: JEV_MODEL, answers: { q0: { type: 'choice', choice: bad ? 'Unknown' : 'Groceries',
+  confidence: .9, probabilities: { Groceries: .9, Business: .1 } } }, usage: { input_tokens: 120, output_tokens: 12 } });
+
+test('typed-choice adapter request, usage, errors, invalid response and recovery', async () => {
+  let mode = 'valid', body;
+  const port = createModelPort({ selection: { adapter: 'jev' }, credential: { type: 'api-key', value: 'synthetic-key' },
+    transport: async (url, opts) => {
+      assert.equal(url, 'https://api.typesafe.ai/v1/systemone'); assert.equal(opts.headers.Authorization, 'Bearer synthetic-key');
+      body = JSON.parse(opts.body);
+      if (typeof mode === 'number') return new Response('', { status: mode });
+      return Response.json(jevResponse(mode === 'invalid'));
+    } });
+  const req = { messages, choices: choiceQuestions, maxTokens: 128 };
+  const r = await port.complete(req);
+  assert.deepEqual(body.state.q0, choiceQuestions[0].state); assert.equal(body.questions.q0.type, 'choice');
+  assert.deepEqual(Object.keys(body.questions.q0.criteria), choiceQuestions[0].options);
+  assert.equal(r.choices[0].choice, 'Groceries'); assert.equal(r.tokens.input_tokens, 120); assert.equal(r.costUsd, 120 * JEV_INPUT_USD);
+  for (const [status, code] of [[401, 'authentication'], [429, 'rate_limit'], [400, 'invalid_request'], [503, 'unavailable']]) {
+    mode = status; const failed = await port.complete(req); assert.equal(failed.errorCode, code); assert.equal(failed.costUsd, 0);
+  }
+  mode = 'invalid'; const failed = await port.complete(req); assert.equal(failed.errorCode, 'invalid_response'); assert.ok(failed.costUsd > 0);
+  mode = 'valid'; assert.equal((await port.complete(req)).choices[0].choice, 'Groceries');
+});
+
+test('typed-choice adapter passes pause, funding, budget and reservation checks', async () => {
+  let enabled = false, funded = true, calls = 0;
+  const reservations = admitted();
+  const engine = createEngine({ mode: 'live', credential: { type: 'api-key', value: 'synthetic-key' }, reservations,
+    allowed: () => enabled, funded: () => funded, modelTransport: async () => { calls++; return Response.json(jevResponse()); } });
+  const req = { purpose: 'categorize', messages, choices: choiceQuestions, maxTokens: 128 };
+  await assert.rejects(engine.call(req), e => e.code === 'paused');
+  enabled = true; funded = false; await assert.rejects(engine.call(req), e => e.code === 'funding_unavailable');
+  funded = true; await assert.rejects(engine.call({ ...req, budget: { maxCostUsd: 0 } }), e => e.code === 'budget');
+  assert.equal(calls, 0);
+  assert.equal((await engine.call(req)).choices[0].choice, 'Groceries'); assert.equal(calls, 1);
+  assert.deepEqual(reservations.events.map(e => e[0]), ['reserve', 'settle']);
+});
+
+test('Claude and typed-choice transports report unknown usage and bounded failures', async () => {
+  const claude = createModelPort({ selection: { adapter: 'claude', model: DEFAULT_MODEL },
+    roundRunner: async () => { throw Object.assign(new Error('synthetic'), { name: 'TimeoutError' }); } });
+  assert.equal((await claude.complete({ messages, maxTokens: 64 })).errorCode, 'timeout');
+  const jev = createModelPort({ selection: { adapter: 'jev' }, credential: { value: 'synthetic-key' }, transport: async () => new Promise(() => {}) });
+  assert.equal((await jev.complete({ messages, choices: choiceQuestions, maxTokens: 64, timeoutMs: 5 })).errorCode, 'timeout');
+  const reservations = admitted();
+  const engine = createEngine({ mode: 'live', credential: { type: 'api-key', value: 'synthetic-key' }, reservations,
+    modelTransport: async () => Response.json({ ...jevResponse(), usage: {} }) });
+  await assert.rejects(engine.call({ purpose: 'categorize', messages, choices: choiceQuestions, maxTokens: 64 }), e => e.code === 'accounting_hold');
+  assert.deepEqual(reservations.events.map(e => e[0]), ['reserve', 'hold']);
+});
+
+test('per-purpose configuration requires explicit remote pricing and refuses malformed selection', () => {
+  const base = { FATHOM_MODEL_ASK_ADAPTER: 'openai', FATHOM_MODEL_ASK_MODEL: 'synthetic-model', FATHOM_MODEL_ASK_BASE_URL: 'https://example.invalid/v1' };
+  assert.throws(() => loadModelConfig(base), /pricing/);
+  const configured = loadModelConfig({ ...base, FATHOM_MODEL_ASK_INPUT_USD_PER_MILLION: '1', FATHOM_MODEL_ASK_OUTPUT_USD_PER_MILLION: '2' });
+  assert.equal(selectionFor(configured, 'job').model, 'synthetic-model');
+  assert.equal(selectionFor(configured, 'title').model, TITLE_MODEL);
+  assert.throws(() => loadModelConfig({ ...base, FATHOM_MODEL_ASK_BASE_URL: 'file:///synthetic' }));
+  assert.throws(() => loadModelConfig({ FATHOM_MODEL_TITLE_ADAPTER: 'jev' }));
+  assert.throws(() => loadModelConfig({ FATHOM_MODEL_ASK_MODEL: 'unpriced-model' }));
+});
+
+test('typed-choice service refuses unsupported tools without dispatch', async () => {
+  let calls = 0;
+  const port = createModelPort({ selection: { adapter: 'jev' }, transport: async () => { calls++; } });
+  assert.equal((await port.complete({ messages, choices: choiceQuestions, tools: [tool], maxTokens: 64 })).errorCode, 'invalid_request');
+  assert.equal(calls, 0);
+});

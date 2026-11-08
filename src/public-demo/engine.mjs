@@ -1,14 +1,12 @@
 import { createEngine, loadCredential, BudgetExceededError, ModelCallError } from '../engine/index.mjs';
 import { createSpendLedger } from '../engine/runtime.mjs';
-import { messagesToolRound } from '../engine/live.mjs';
+import { demoRound } from '../engine/live.mjs';
 import { PRICING } from '../engine/pricing.mjs';
 import { DEMO_LIMIT_MESSAGE } from './control.mjs';
 
 export class DemoLimitError extends BudgetExceededError {
   constructor() { super(); this.demoLimit = true; }
 }
-
-export const publicDemoRound = request => messagesToolRound({ ...request, timeoutMs: 30000 });
 
 export function createPublicDemoEngine({ db, config, control, visitorId }) {
   const limits = config.publicDemoLimits;
@@ -23,7 +21,7 @@ export function createPublicDemoEngine({ db, config, control, visitorId }) {
     }
     inner = createEngine({ mode: config.engine, credential, ledger: createSpendLedger(db), capUsd: Number.MAX_SAFE_INTEGER,
       modelOverride: limits.model, maxRounds: 2, streamDelayMs: config.fakeStreamMs,
-      roundRunner: publicDemoRound,
+      roundRunner: demoRound,
       admitRound(request) {
         const definitions = request.tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema }));
         const input = Buffer.byteLength(JSON.stringify({ system: request.system, systemDynamic: request.systemDynamic,
