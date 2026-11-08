@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { twoHouseholds, enrollSession, writePrivate } from './helpers/tenancy-runtime.mjs';
+import { twoHouseholds, enrollSession, writePrivate, sideHousehold } from './helpers/tenancy-runtime.mjs';
 import { createHouseholdTransport, createEnrollmentTransport } from '../src/email/transport.mjs';
 import { JOBS } from '../src/jobs/scheduler.mjs';
 
@@ -160,6 +160,9 @@ test('unverified legacy recipients pause delivery with an admin-visible code, th
     await enable(fx.A);
     const status = await fx.A.client.request({ path: '/api/household/outbound' });
     assert.equal(status.json.outbound.email.reason, 'recipient_unverified');
+    const email = await fx.A.client.request({ path: '/api/email' });
+    assert.equal(email.json.status.state, 'recipient_unverified');
+    assert.equal(email.json.status.skippedRecipients, 1);
     const refused = await fx.A.client.postJson('/api/email/brief', {});
     assert.equal(refused.json.send.errorCode, 'recipient_unverified');
     assert.equal((await messages(fx.rootOf(fx.A.id))).length, 0);
@@ -167,4 +170,35 @@ test('unverified legacy recipients pause delivery with an admin-visible code, th
     assert.equal((await fx.A.client.postJson('/api/email/brief', {})).json.send.status, 'sent');
     assert.deepEqual((await messages(fx.rootOf(fx.A.id)))[0].to, [fx.A.admin.user.email]);
   } finally { await fx.close(); }
+});
+
+test('legacy import subscribes matching members, reports skipped recipients and runs once', options, async () => {
+  const fx = await twoHouseholds({ extra: { FATHOM_EMAIL_TO: 'alpha-admin@example.test,outsider@example.test' } });
+  let reopened;
+  try {
+    await fx.ctx(fx.A.id).scheduler.tick();
+    await enable(fx.A);
+    const before = (await messages(fx.rootOf(fx.A.id))).length;
+    const sent = await fx.A.client.postJson('/api/email/brief', {});
+    assert.equal(sent.json.send.status, 'sent', sent.text);
+    assert.equal(sent.json.send.recipients, 1);
+    const mail = await messages(fx.rootOf(fx.A.id));
+    assert.equal(mail.length, before + 1);
+    assert.ok(mail.every(m => m.to.length === 1 && m.to[0] === fx.A.admin.user.email));
+    const email = await fx.A.client.request({ path: '/api/email' });
+    assert.equal(email.json.status.state, 'dev');
+    assert.equal(email.json.status.recipients, 1);
+    assert.equal(email.json.status.skippedRecipients, 1);
+    assert.ok(!JSON.stringify(email.json.status).includes('outsider@example.test'));
+    const outsider = await enrollSession(fx.platform, fx.A.id, 'outsider@example.test');
+    const subscriptions = await fx.A.client.request({ path: '/api/email/subscriptions' });
+    assert.equal(subscriptions.json.subscriptions.find(r => r.userId === outsider.user.id).subscribed, false);
+    reopened = await sideHousehold({ dataDir: fx.dataDir, env: { ...fx.server.env, FATHOM_EMAIL_TO: 'outsider@example.test' }, householdId: fx.A.id });
+    const status = await reopened.household.emailRecipients.status();
+    assert.equal(status.skippedRecipients, 1, 'the skipped count survives a fresh runtime');
+    assert.equal(status.recipients, 1);
+    assert.deepEqual((await reopened.household.emailRecipients.resolve()).map(r => r.email), [fx.A.admin.user.email]);
+    assert.equal((await fx.A.client.postJson('/api/email/test', {})).json.send.recipients, 1);
+    assert.ok((await messages(fx.rootOf(fx.A.id))).every(m => m.to[0] === fx.A.admin.user.email));
+  } finally { await reopened?.close(); await fx.close(); }
 });
